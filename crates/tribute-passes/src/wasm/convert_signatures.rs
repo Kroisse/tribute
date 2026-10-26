@@ -16,17 +16,31 @@ use trunk_ir::op_interface::DynIndirectCallLike;
 use trunk_ir::ops::DialectType;
 use trunk_ir::refs::OpRef;
 use trunk_ir::rewrite::{
-    FuncSignatureConversionPattern, Module, PatternApplicator, PatternRewriter, RewritePattern,
+    ConversionTarget, FuncSignatureConversionPattern, Module, PatternApplicator, PatternRewriter,
+    RewritePattern,
 };
 use trunk_ir_wasm_backend::passes::signature_conversion::WasmFuncSignatureConversionPattern;
 
 /// Convert function and indirect-call signatures to their Wasm types.
 ///
 /// This pass should run early in the WASM pipeline, before target operation lowering.
-pub fn lower(ctx: &mut IrContext, module: Module) {
+pub(crate) fn lower(ctx: &mut IrContext, module: Module) {
     let type_converter = crate::wasm::type_converter::wasm_type_converter(ctx);
 
+    // The operations whose signatures this pass converts follow their
+    // converted operands. A retyped parameter that an operation not yet
+    // lowered uses, such as an `adt.array_get` of an array parameter, is cast
+    // back to the type that operation's schema requires; target lowering
+    // consumes the cast.
     let applicator = PatternApplicator::new(type_converter)
+        .with_target(
+            ConversionTarget::new()
+                .illegal_op("func.func")
+                .illegal_op("wasm.func")
+                .illegal_op("func.call_indirect")
+                .illegal_op("func.tail_call_indirect"),
+        )
+        .with_auto_type_conversion(true)
         .add_pattern(FuncSignatureConversionPattern)
         .add_pattern(WasmFuncSignatureConversionPattern)
         .add_pattern(IndirectCallSignaturePattern);

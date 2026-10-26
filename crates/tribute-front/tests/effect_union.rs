@@ -7,7 +7,7 @@ use tribute_front::{SourceCst, ast::TypeKind, typeck::TypeCheckOutput};
 fn checked(db: &dyn salsa::Database, source: SourceCst) -> TypeCheckOutput<'_> {
     let parsed = tribute_front::query::parsed_ast(db, source).unwrap();
     let spans = parsed.span_map(db);
-    let resolved = tribute_front::resolve::resolve_module(db, parsed.module(db), spans.clone());
+    let resolved = tribute_front::resolve::resolve_module(db, parsed.module(db), spans);
     tribute_front::typeck::typecheck_module(db, &resolved, spans)
 }
 
@@ -26,7 +26,7 @@ fn combine(left: fn() ->{e1} Nil, right: fn() ->{e2} Nil) ->{e1, e2} Nil {
     let output = checked(db, source);
     let errors = checked::accumulated::<Diagnostic>(db, source);
     assert!(errors.is_empty(), "{errors:?}");
-    let scheme = output.function_types(db)[0].1;
+    let scheme = output.declarations(db).function_types[0].1;
     let TypeKind::Func { params, effect, .. } = scheme.body(db).kind(db) else {
         panic!()
     };
@@ -66,7 +66,8 @@ fn local(left: fn() ->{e1} Nil, right: fn() ->{e2} Nil) ->{e1, e2} Nil {
     let errors = checked::accumulated::<Diagnostic>(db, source);
     assert!(errors.is_empty(), "{errors:?}");
     let scheme = output
-        .function_types(db)
+        .declarations(db)
+        .function_types
         .iter()
         .find(|(name, _)| name == ["local"])
         .unwrap()
@@ -83,7 +84,10 @@ fn local(left: fn() ->{e1} Nil, right: fn() ->{e2} Nil) ->{e1, e2} Nil {
     let TypeKind::Func {
         params: local_params,
         ..
-    } = output.lambda_signatures(db)[0].1.function_type.kind(db)
+    } = output.expression_types(db).lambda_signatures[0]
+        .1
+        .function_type
+        .kind(db)
     else {
         panic!("lambda")
     };
@@ -180,7 +184,8 @@ fn main() ->{{}} Nil {{ handled({callback}) }}
         let errors = checked::accumulated::<Diagnostic>(db, source);
         assert_eq!(errors.is_empty(), valid, "{callback}: {errors:?}");
         let scheme = output
-            .function_types(db)
+            .declarations(db)
+            .function_types
             .iter()
             .find(|(name, _)| name == ["handled"])
             .unwrap()
@@ -281,7 +286,8 @@ fn main() -> Nil { print(run_writer(fn() { relay(use_writer) })) }
     let errors = checked::accumulated::<Diagnostic>(db, source);
     assert!(errors.is_empty(), "{errors:?}");
     let main = output
-        .function_types(db)
+        .declarations(db)
+        .function_types
         .iter()
         .find(|(name, _)| name == ["main"])
         .unwrap()

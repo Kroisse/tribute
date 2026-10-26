@@ -4,8 +4,8 @@ use tree_sitter::Node;
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::{
-    Arm, BinOpKind, CallSyntax, Expr, ExprKind, FieldInit, FloatBits, HandlerArm, HandlerKind,
-    Param, Pattern, Stmt, UnresolvedName,
+    Arm, BinOpKind, CallSyntax, Candidates, Expr, ExprKind, FieldInit, FloatBits, HandlerArm,
+    HandlerKind, Param, Pattern, Stmt, UnresolvedName,
 };
 
 use super::context::AstLoweringCtx;
@@ -270,7 +270,7 @@ fn method_call(
         ctx.fresh_id_with_span(method_node),
         ExprKind::Functions {
             name: method,
-            candidates: Vec::new(),
+            candidates: Candidates::default(),
         },
     );
     args.insert(0, receiver);
@@ -293,9 +293,7 @@ fn lower_constructor_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<
         return ExprKind::Error;
     };
 
-    let sym = ctx.node_path(&name_node);
-    let name_id = ctx.fresh_id_with_span(&name_node);
-    let ctor = UnresolvedName::new(sym, name_id);
+    let ctor = ctx.constructor_name(&name_node);
 
     let args = args_node
         .map(|args| lower_argument_list(ctx, args))
@@ -312,9 +310,7 @@ fn lower_record_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<Unres
         return ExprKind::Error;
     };
 
-    let type_name_sym = ctx.node_path(&type_node);
-    let type_name_id = ctx.fresh_id_with_span(&type_node);
-    let type_name = UnresolvedName::new(type_name_sym, type_name_id);
+    let type_name = ctx.constructor_name(&type_node);
 
     let mut fields = Vec::new();
     let mut spread = None;
@@ -353,7 +349,8 @@ fn lower_field_initializer(
     node: Node,
 ) -> Option<FieldInit<UnresolvedName>> {
     let name_node = node.child_by_field_name("name")?;
-    let value_node = node.child_by_field_name("value")?;
+    // Shorthand `Name { field }` reads the variable named `field`.
+    let value_node = node.child_by_field_name("value").unwrap_or(name_node);
 
     let name = ctx.node_symbol(&name_node);
     let id = ctx.fresh_id_with_span(&name_node);

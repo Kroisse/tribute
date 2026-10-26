@@ -5,11 +5,11 @@ use std::ops::ControlFlow;
 
 use rustc_hash::FxHashMap as HashMap;
 
-use tribute_core::calling_convention::{
+use tribute_ir::calling_convention::{CallingConvention, ConventionBearing, physical_closure_type};
+use tribute_ir::calling_convention::{
     cps_closure_function_type, cps_resume_exact_type, cps_resume_type,
     physical_closure_function_type,
 };
-use tribute_core::{CallingConvention, physical_closure_type, set_calling_convention};
 use tribute_ir::dialect::ability::{HandlerBinding, OperationKind};
 use tribute_ir::dialect::{ability, adt, effect, tribute_control, tribute_rt};
 use trunk_ir::context::IrContext;
@@ -158,7 +158,7 @@ fn direct_function(
         .r#type(signature)
         .regions(region)
         .build(ctx, location);
-    set_calling_convention(ctx, function.op_ref(), CallingConvention::Direct);
+    function.set_calling_convention(ctx, CallingConvention::Direct);
     function.op_ref()
 }
 
@@ -220,7 +220,7 @@ fn push_layer_frame(
         .callee(SymbolPath::new([layer.dispatch_factory.clone()]))
         .results([value.dispatch])
         .build(ctx, location);
-    set_calling_convention(ctx, dispatch.op_ref(), CallingConvention::Direct);
+    dispatch.set_calling_convention(ctx, CallingConvention::Direct);
     ctx.push_op(block, dispatch.op_ref());
     Ok(pack_frame(
         ctx,
@@ -370,7 +370,7 @@ fn call_layer_resume_factory(
         .callee(SymbolPath::new([symbol]))
         .results([resume_type])
         .build(ctx, location);
-    set_calling_convention(ctx, resume.op_ref(), CallingConvention::Direct);
+    resume.set_calling_convention(ctx, CallingConvention::Direct);
     ctx.push_op(block, resume.op_ref());
     resume.result(ctx)
 }
@@ -685,7 +685,7 @@ fn build_tail_dispatcher(
         let call = func::CallIndirect::operands(arm_value, call_args)
             .signature(signature)
             .build(ctx, location);
-        set_calling_convention(ctx, call.op_ref(), CallingConvention::EvidenceDirect);
+        call.set_calling_convention(ctx, CallingConvention::EvidenceDirect);
         ctx.push_op(case_block, call.op_ref());
         let erased = tribute_rt::convert_value(ctx, location, call.result(ctx), anyref);
         ctx.push_op(case_block, erased);

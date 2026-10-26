@@ -137,7 +137,7 @@ fn sample() -> Module<u32> {
                                 63,
                                 ExprKind::Functions {
                                     name: SymbolPath::new(["m"]),
-                                    candidates: vec![],
+                                    candidates: crate::ast::Candidates::default(),
                                 },
                             ),
                             args: vec![leaf(15), leaf(16)],
@@ -251,11 +251,11 @@ struct Record {
 
 impl<'ast> Visit<'ast, u32> for Record {
     fn visit_ref(&mut self, site: RefSite, node: NodeId, value: &'ast u32) {
-        self.refs.push((site, node.raw(), *value));
+        self.refs.push((site, node.index() as usize, *value));
     }
 
     fn visit_node_id(&mut self, id: NodeId) {
-        self.ids.push(id.raw());
+        self.ids.push(id.index() as usize);
     }
 }
 
@@ -300,12 +300,12 @@ struct Shift;
 impl VisitMut<u32> for Shift {
     fn visit_ref_mut(&mut self, _site: RefSite, node: NodeId, value: &mut u32) {
         // The identity is already rewritten when the phase value is visited.
-        assert!(node.raw() >= 100);
+        assert!(node.index() as usize >= 100);
         *value += 10;
     }
 
     fn visit_node_id_mut(&mut self, id: &mut NodeId) {
-        *id = NodeId::from_raw(id.raw() + 100);
+        *id = NodeId::from_raw(id.index() as usize + 100);
     }
 }
 
@@ -375,7 +375,8 @@ fn for_each_visits_expressions_in_pre_order() {
         unreachable!()
     };
     let mut ids = Vec::new();
-    func.body.for_each(|expr| ids.push(expr.id.raw()));
+    func.body
+        .for_each(|expr| ids.push(expr.id.index() as usize));
     let mut expected = record(&module).ids;
     // Only expressions: drop the function, statements, arms, and patterns.
     expected.retain(|id| {

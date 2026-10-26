@@ -1,10 +1,12 @@
 ---
 source: crates/tribute-front/tests/record_field_type.rs
-assertion_line: 934
+assertion_line: 931
 expression: ir_text
 ---
 core.module @test {
   !Pair = adt.struct<Pair(first: tribute_rt.anyref, second: tribute_rt.anyref)>
+  !"Pair$Int$Bool" = adt.struct<"Pair$Int$Bool"(first: core.i32, second: core.i1)>
+  !"Pair$Int$Bool_1" = adt.typeref<{name = "Pair$Int$Bool"}>
   !Pair_1 = adt.typeref<{name = "Pair"}>
   !t1 = tribute_control.func_sig<(!Pair_1, tribute_rt.anyref) -> !Pair_1>
   !t2 = tribute_control.func_sig<(tribute_rt.anyref) -> tribute_rt.anyref, {ability_row = {tail = 0}}>
@@ -43,10 +45,42 @@ core.module @test {
       %5 = adt.struct_new %4, %3 {type = !Pair} : !Pair_1
       tribute_control.return %5
   }
-  tribute_control.func @make_pair['a0]() -> !Pair_1 row(| 'a0) inferred {
+  tribute_control.func @make_pair['a0]() -> !"Pair$Int$Bool_1" row(| 'a0) inferred {
       %0 = arith.const {value = 42} : core.i32
       %1 = arith.const {value = true} : core.i1
-      %2 = adt.struct_new %0, %1 {type = !Pair} : !Pair_1
+      %2 = adt.struct_new %0, %1 {type = !"Pair$Int$Bool"} : !"Pair$Int$Bool_1"
       tribute_control.return %2
+  }
+  tribute_control.func @"Pair$Int$Bool::first"(%0: !"Pair$Int$Bool_1") -> core.i32 {
+      %1 = adt.struct_get %0 {field = 0, type = !"Pair$Int$Bool"} : core.i32
+      tribute_control.return %1
+  }
+  tribute_control.func @"Pair$Int$Bool::first::set"(%0: !"Pair$Int$Bool_1", %1: core.i32) -> !"Pair$Int$Bool_1" {
+      %2 = adt.struct_get %0 {field = 1, type = !"Pair$Int$Bool"} : core.i1
+      %3 = adt.struct_new %1, %2 {type = !"Pair$Int$Bool"} : !"Pair$Int$Bool_1"
+      tribute_control.return %3
+  }
+  tribute_control.func @"Pair$Int$Bool::first::modify"['a0](%0: !"Pair$Int$Bool_1", %1: tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>) -> !"Pair$Int$Bool_1" row(| 'a0) {
+      %2 = adt.struct_get %0 {field = 0, type = !"Pair$Int$Bool"} : core.i32
+      %3 = tribute_control.call_indirect %1, %2 : core.i32
+      %4 = adt.struct_get %0 {field = 1, type = !"Pair$Int$Bool"} : core.i1
+      %5 = adt.struct_new %3, %4 {type = !"Pair$Int$Bool"} : !"Pair$Int$Bool_1"
+      tribute_control.return %5
+  }
+  tribute_control.func @"Pair$Int$Bool::second"(%0: !"Pair$Int$Bool_1") -> core.i1 {
+      %1 = adt.struct_get %0 {field = 1, type = !"Pair$Int$Bool"} : core.i1
+      tribute_control.return %1
+  }
+  tribute_control.func @"Pair$Int$Bool::second::set"(%0: !"Pair$Int$Bool_1", %1: core.i1) -> !"Pair$Int$Bool_1" {
+      %2 = adt.struct_get %0 {field = 0, type = !"Pair$Int$Bool"} : core.i32
+      %3 = adt.struct_new %2, %1 {type = !"Pair$Int$Bool"} : !"Pair$Int$Bool_1"
+      tribute_control.return %3
+  }
+  tribute_control.func @"Pair$Int$Bool::second::modify"['a0](%0: !"Pair$Int$Bool_1", %1: tribute_control.func_sig<(core.i1) -> core.i1, {ability_row = {tail = 0}}>) -> !"Pair$Int$Bool_1" row(| 'a0) {
+      %2 = adt.struct_get %0 {field = 1, type = !"Pair$Int$Bool"} : core.i1
+      %3 = tribute_control.call_indirect %1, %2 : core.i1
+      %4 = adt.struct_get %0 {field = 0, type = !"Pair$Int$Bool"} : core.i32
+      %5 = adt.struct_new %4, %3 {type = !"Pair$Int$Bool"} : !"Pair$Int$Bool_1"
+      tribute_control.return %5
   }
 }

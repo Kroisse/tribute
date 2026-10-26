@@ -46,8 +46,8 @@ fn a_pure_callback_selects_the_direct_instance() {
 }"#,
     );
     for expected in [
-        "tribute_control.func @app['a0](%0: core.i32, %1: tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}, tribute.calling_convention = 2}>) -> core.i32 row(| 'a0) convention(cps) {",
-        "tribute_control.func @\"app$9D\"['a0](%0: core.i32, %1: tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}, tribute.calling_convention = 0}>) -> core.i32 row(| 'a0) convention(direct) {",
+        "tribute_control.func @app['a0](%0: core.i32, %1: tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}, tribute.calling_convention = \"cps\"}>) -> core.i32 row(| 'a0) convention(cps) {",
+        "tribute_control.func @\"app$9D\"['a0](%0: core.i32, %1: tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}, tribute.calling_convention = \"direct\"}>) -> core.i32 row(| 'a0) convention(direct) {",
         "tribute_control.func @bang(%0: core.i32) -> core.i32 convention(direct) {",
         "%2 = tribute_control.call %0, %1 {callee = @\"app$9D\", row_args = [{}]} : core.i32",
     ] {
@@ -168,8 +168,8 @@ fn a_layout_takes_the_convention_of_its_callable_field() {
     assert_contains(
         &printed,
         &[
-            "!Holder = adt.struct<Holder(callback: tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 0}>)>",
-            "!t0 = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 0}>",
+            "!Holder = adt.struct<Holder(callback: tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = \"direct\"}>)>",
+            "!t0 = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = \"direct\"}>",
             "%1 = adt.struct_get %0 {field = 0, type = !Holder} : !t0",
             "%3 = adt.struct_new %1 {type = !Holder} : !HolderRef",
         ],
@@ -337,6 +337,98 @@ fn each_instance_copies_its_lambdas_with_the_lambdas_inside() {
     );
 }
 
+/// A lambda that uses a copied lambda captures the copy in the original's
+/// place, and keeps the original too while its body still uses both.
+#[test]
+fn a_lambda_using_a_copy_captures_the_copy() {
+    let printed = specialized(
+        r#"core.module @m {
+  !l0 = tribute_control.func_sig<(core.i32) -> core.i32>
+  !lc = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {instances = [@Ctl]}}>
+  !hc = tribute_control.func_sig<() -> core.i32, {ability_row = {instances = [@Ctl]}}>
+  ability.decl {sym_name = "Ctl"} {
+    ability.operation {kind = "op", op_name = "ctl", param_types = [], result_type = core.i32}
+  }
+  tribute_control.func @f[local 'a0](%x: core.i32) -> core.i32 row(@Ctl) {
+    %g = tribute_control.lambda['a0](%y: core.i32) -> core.i32 row(| 'a0) captures [] {
+      tribute_control.return %y
+    }
+    %a = tribute_control.instantiate %g {row_args = [{}]} : !l0
+    %r = tribute_control.call_indirect %a, %x : core.i32
+    %h = tribute_control.lambda() -> core.i32 row(@Ctl) captures [%g, %r] {
+      %s = tribute_control.instantiate %g {row_args = [{instances = [@Ctl]}]} : !lc
+      %v = tribute_control.call_indirect %s, %r : core.i32
+      tribute_control.return %v
+    }
+    %k = tribute_control.lambda() -> core.i32 row(@Ctl) captures [%g, %r] {
+      %p = tribute_control.instantiate %g {row_args = [{}]} : !l0
+      %q = tribute_control.instantiate %g {row_args = [{instances = [@Ctl]}]} : !lc
+      %u = tribute_control.call_indirect %p, %r : core.i32
+      %w = tribute_control.call_indirect %q, %u : core.i32
+      tribute_control.return %w
+    }
+    %b = tribute_control.call_indirect %h : core.i32
+    %c = tribute_control.call_indirect %k : core.i32
+    tribute_control.return %c
+  }
+}"#,
+    );
+    assert_contains(
+        &printed,
+        &[
+            "%1 = tribute_control.lambda['a0](%2: core.i32) -> core.i32 row(| 'a0) convention(direct) captures [] {",
+            "%3 = tribute_control.lambda['a1](%4: core.i32) -> core.i32 row(| 'a1) convention(cps) captures [] {",
+            "convention(cps) captures [%3, %6] {",
+            "convention(cps) captures [%1, %3, %6] {",
+        ],
+    );
+}
+
+/// A lambda with no row binder of its own is one value: passed both to a
+/// pure consumer and to an open one at the closed row, it stays a single
+/// `Direct` lambda, and the open consumer is its `Direct` instance.
+#[test]
+fn a_lambda_without_binders_is_shared_by_its_consumers() {
+    let printed = specialized(
+        r#"core.module @m {
+  !cb = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>
+  !pure = tribute_control.func_sig<(core.i32) -> core.i32>
+  tribute_control.func @pure(%f: !pure, %x: core.i32) -> core.i32 {
+    %r = tribute_control.call_indirect %f, %x : core.i32
+    tribute_control.return %r
+  }
+  tribute_control.func @open['a0](%f: !cb, %x: core.i32) -> core.i32 row(| 'a0) {
+    %r = tribute_control.call_indirect %f, %x : core.i32
+    tribute_control.return %r
+  }
+  tribute_control.func @main(%x: core.i32) -> core.i32 {
+    %l = tribute_control.lambda(%y: core.i32) -> core.i32 captures [] {
+      tribute_control.return %y
+    }
+    %a = tribute_control.call %l, %x {callee = @pure} : core.i32
+    %b = tribute_control.call %l, %a {callee = @open, row_args = [{}]} : core.i32
+    tribute_control.return %b
+  }
+}"#,
+    );
+    let main = &printed[printed
+        .find("tribute_control.func @main")
+        .expect("main is printed")..];
+    assert_eq!(
+        main.matches("tribute_control.lambda").count(),
+        1,
+        "{printed}"
+    );
+    assert_contains(
+        main,
+        &[
+            "%1 = tribute_control.lambda(%2: core.i32) -> core.i32 convention(direct) captures [] {",
+            "%3 = tribute_control.call %1, %0 {callee = @pure} : core.i32",
+            "%4 = tribute_control.call %1, %3 {callee = @\"open$9D\", row_args = [{}]} : core.i32",
+        ],
+    );
+}
+
 /// Types outside definitions take the conventions of their abilities, a
 /// bodyless definition has no class variables, a reference to root `main`
 /// stays on it, and an instance of the last definition follows it.
@@ -366,7 +458,7 @@ fn module_level_types_and_references_to_main_keep_their_shape() {
         &printed,
         &[
             "ability.operation {kind = \"fn\", op_name = \"map\", param_types = [!t0], result_type = core.i32}",
-            "!t0 = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 0}>",
+            "!t0 = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = \"direct\"}>",
             "tribute_control.func @ext(%arg0: core.i32) -> core.i32 convention(direct) attributes {abi = \"C\"}",
             "%1 = tribute_control.func_ref {func_ref = @main} : !t0",
             "callee = @\"app$9D\"",

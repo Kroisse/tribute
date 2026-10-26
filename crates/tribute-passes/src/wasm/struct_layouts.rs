@@ -7,7 +7,7 @@
 //! fields are therefore one GC type, whatever their source names. Builtin layouts keep their identifier and reserved index.
 //!
 //! `adt_to_wasm` builds variant types here. After every `adt` operation is
-//! lowered, [`convert`] replaces each user `adt.struct` with its
+//! lowered, `convert` replaces each user `adt.struct` with its
 //! `wasm_gc.struct` wherever it occurs. An `adt.typeref` becomes the
 //! structural type of the struct it names, or the abstract struct reference
 //! when it names an enum, whose variants have different types.
@@ -66,7 +66,7 @@ pub fn variant_type(ctx: &mut IrContext, enum_ty: TypeRef, tag: StringRef) -> Op
 
 /// Replace each user `adt.struct` in `module` with its `wasm_gc.struct`, and
 /// each `adt.typeref` with the type of the layout it names.
-pub fn convert(ctx: &mut IrContext, module: Module) {
+pub(crate) fn convert(ctx: &mut IrContext, module: Module) {
     crate::closure_lower::substitute_module_types(ctx, module, |ctx, ty| {
         if ctx.get_type(ty).name == tribute_ir::dialect::adt::Typeref::NAME {
             return Some(reference_type(ctx, ty));
@@ -106,13 +106,18 @@ fn described_struct(ctx: &mut IrContext, fields: impl IntoIterator<Item = TypeRe
 /// The Wasm storage representation of a source field of type `ty`.
 ///
 /// Bool storage is `i32`. A recursive reference is the abstract struct
-/// supertype, and an enum value is the erased reference it is emitted as. A
-/// nested user struct is its own structural type; any other field keeps its
-/// type.
+/// supertype, an array the abstract array supertype, and an enum value the
+/// erased reference it is emitted as; a read casts each back to its value's
+/// type. Structural types cannot refer to themselves, and an array field may
+/// hold its own struct, as a marker's `outer` evidence does. A nested user
+/// struct is its own structural type; any other field keeps its type.
 fn field_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     let data = ctx.get_type(ty);
     if data.name == core::I1::NAME {
         return core::I32::type_ref(ctx);
+    }
+    if tribute_ir::dialect::adt::Array::matches(ctx, ty) {
+        return wasm::Arrayref::params().intern(ctx).as_type_ref();
     }
     if data.name == tribute_ir::dialect::adt::Typeref::NAME {
         return wasm::Structref::params().intern(ctx).as_type_ref();

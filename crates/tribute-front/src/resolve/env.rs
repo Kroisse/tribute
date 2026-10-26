@@ -1,19 +1,19 @@
-//! Module environment for name resolution.
+//! The name-resolution environment of a package.
 //!
 //! This module provides structures for tracking definitions and looking up names
 //! during the name resolution phase.
 
 use rustc_hash::FxHashMap as HashMap;
-use rustc_hash::FxHashSet as HashSet;
 
 use trunk_ir::{Symbol, SymbolPath};
 
+use super::package::{IdentityPath, Location, PackageName};
 use crate::ast::{AbilityId, CtorId, FuncDefId, OpDeclKind, TypeDefId, Visibility};
 
 /// Information about a resolved name binding.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum Binding<'db> {
-    /// A function defined in this module or imported.
+    /// A function the package declares or imports.
     Function { id: FuncDefId<'db> },
 
     /// A type constructor (struct or enum variant).
@@ -34,7 +34,14 @@ pub enum Binding<'db> {
 
     /// A module or namespace binding.
     Module {
-        /// The namespace path.
+        /// The namespace's identity path.
+        path: IdentityPath,
+    },
+
+    /// A `use` whose target is not resolved yet: the path it imports, as
+    /// written or expanded from its path keywords.
+    Import {
+        /// The imported path.
         path: Vec<Symbol>,
     },
 
@@ -66,9 +73,11 @@ pub enum Binding<'db> {
 /// Where a binding or module that is not public is visible.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct Restriction {
-    /// The module whose descendants, itself included, see it. `None` when it
-    /// is visible only in another package.
-    pub within: Option<SymbolPath>,
+    /// The package that declares it. Another package never sees it.
+    pub package: PackageName,
+    /// The module of that package whose descendants, itself included, see
+    /// it.
+    pub within: SymbolPath,
     /// The declaration whose visibility restricts it: its own, or that of a
     /// module around it.
     pub declaration: SymbolPath,
@@ -92,11 +101,9 @@ impl std::fmt::Display for Restriction {
 }
 
 impl Restriction {
-    /// Whether `module`, a module of this package, sees it.
-    pub fn is_visible_from(&self, module: &[Symbol]) -> bool {
-        self.within
-            .as_ref()
-            .is_some_and(|within| module.starts_with(within))
+    /// Whether `module`, a module of `package`, sees it.
+    pub fn is_visible_from(&self, package: &PackageName, module: &[Symbol]) -> bool {
+        self.package == *package && module.starts_with(&self.within)
     }
 
     /// The narrower of `self` and `outer`, the restriction of a module
@@ -104,12 +111,7 @@ impl Restriction {
     /// declaration, so the longer path is the narrower one.
     pub fn within_module(self, outer: Option<&Restriction>) -> Restriction {
         match outer {
-            Some(outer)
-                if outer.within.as_ref().map(|path| path.len())
-                    > self.within.as_ref().map(|path| path.len()) =>
-            {
-                outer.clone()
-            }
+            Some(outer) if outer.within.len() > self.within.len() => outer.clone(),
             _ => self,
         }
     }
@@ -129,54 +131,69 @@ pub struct Export {
     pub restriction: Option<Restriction>,
 }
 
-/// Module environment for name resolution.
+/// The name-resolution environment of one package's module tree.
 ///
-/// Tracks all names visible in the current module.
+/// Holds the root module's names and every module's namespace, read from
+/// the package root.
 #[derive(Clone, Debug, Default, PartialEq, Eq, salsa::SalsaValue)]
-pub struct ModuleEnv<'db> {
-    /// Names defined in this module (simple name → binding).
+pub struct PackageEnv<'db> {
+    /// The package whose module tree this environment holds.
+    package: PackageName,
+    /// The names the package root declares (simple name → binding).
     definitions: HashMap<Symbol, Binding<'db>>,
-    /// Names imported via `use` statements (simple name → binding).
+    /// The names the package root's `use`s import, and its inline modules
+    /// (simple name → binding).
     imports: HashMap<Symbol, Binding<'db>>,
-    /// Qualified paths (namespace → name → binding).
-    namespaces: HashMap<SymbolPath, HashMap<Symbol, Binding<'db>>>,
-    /// Original paths for resolved `use` imports (import name → original path).
-    /// Used to rewrite ability annotations from imported names to qualified paths.
-    use_paths: HashMap<Symbol, Vec<Symbol>>,
+    /// The entries of each namespace below the package root: modules,
+    /// types, and abilities (namespace → name → binding).
+    namespaces:
+        crate::collections::HashMap<SymbolPath, crate::collections::HashMap<Symbol, Binding<'db>>>,
+    /// The locations the package root's resolved `use`s import (import
+    /// name → location). Used to rewrite ability annotations from imported
+    /// names to qualified paths.
+    use_paths: HashMap<Symbol, Location>,
     /// The paths of the names that several `use`s import, in declaration
     /// order.
     repeated_uses: HashMap<Symbol, Vec<Vec<Symbol>>>,
     /// The functions a name imports when several `use`s give it different
     /// ones. A call selects one by the type of its first argument.
     imported_functions: HashMap<Symbol, Vec<FuncDefId<'db>>>,
-    /// Names the prelude and the compiler supply, visible in every module.
-    library: HashMap<Symbol, Binding<'db>>,
-    /// First segments of the namespaces the prelude and the compiler supply.
-    library_roots: HashSet<Symbol>,
-    /// The package path of each library name, e.g. `Option` → `std::Option`.
-    library_paths: HashMap<Symbol, Vec<Symbol>>,
-    /// Library namespaces under their short first segment, e.g. `Option` →
-    /// `std::Option` and `List` → `std::collections::List`.
-    library_namespaces: HashMap<Symbol, SymbolPath>,
     /// The bindings that are not public, each with the modules that see it.
     restrictions: HashMap<Binding<'db>, Restriction>,
     /// The modules that are not public, by package-root path.
     module_restrictions: HashMap<SymbolPath, Restriction>,
     /// The re-exports that inline modules declare.
     exports: Vec<Export>,
+    /// The location each resolved re-export names, by namespace and name,
+    /// e.g. `prelude::v0`, `List` → `collections::List` in package `std`.
+    export_targets: HashMap<(SymbolPath, Symbol), Location>,
     /// The `use`s of each inline module: the imported name and the path as
     /// written.
     module_uses: HashMap<(SymbolPath, Symbol), Vec<Symbol>>,
     /// The namespace entries re-exports add that are not public, by
     /// namespace and name. Such an entry is visible where its `use` makes
-    /// it, not where its binding is.
-    entry_restrictions: HashMap<(SymbolPath, Symbol), Restriction>,
+    /// it, not where its binding is, and only where every one of its
+    /// restrictions does.
+    entry_restrictions: HashMap<(SymbolPath, Symbol), Vec<Restriction>>,
 }
 
-impl<'db> ModuleEnv<'db> {
-    /// Create a new empty module environment.
+impl<'db> PackageEnv<'db> {
+    /// Create a new empty environment of the package being compiled.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Create a new empty environment of `package`'s module tree.
+    pub fn for_package(package: PackageName) -> Self {
+        Self {
+            package,
+            ..Self::default()
+        }
+    }
+
+    /// The package whose module tree this environment holds.
+    pub fn package(&self) -> &PackageName {
+        &self.package
     }
 
     /// Add a function definition.
@@ -221,7 +238,7 @@ impl<'db> ModuleEnv<'db> {
 
     /// Add the placeholder of a `use` that imports `path` as `name`.
     pub fn add_use(&mut self, name: Symbol, path: Vec<Symbol>) {
-        if let Some(Binding::Module { path: earlier }) = self.imports.get(&name)
+        if let Some(Binding::Import { path: earlier }) = self.imports.get(&name)
             && *earlier != path
         {
             let paths = self
@@ -232,7 +249,7 @@ impl<'db> ModuleEnv<'db> {
                 paths.push(path.clone());
             }
         }
-        self.add_import(name, Binding::Module { path });
+        self.add_import(name, Binding::Import { path });
     }
 
     /// Take the paths of the names that several `use`s import, to put back
@@ -259,57 +276,43 @@ impl<'db> ModuleEnv<'db> {
         self.imported_functions.get(name).map(Vec::as_slice)
     }
 
-    /// Add an import only if no binding exists for that name.
-    ///
-    /// This is used to expose prelude definitions at the top level
-    /// without overriding user-defined names.
-    pub fn add_import_if_absent(&mut self, name: Symbol, binding: Binding<'db>) {
-        if !self.definitions.contains_key(&name) && !self.imports.contains_key(&name) {
-            self.imports.insert(name, binding);
-        }
+    /// The item `name` of the package root, as another package sees it:
+    /// a definition, what the root re-exports, or a module.
+    pub fn root_item(&self, name: &Symbol) -> Option<&Binding<'db>> {
+        self.definitions
+            .get(name)
+            .or_else(|| self.lookup_qualified(&[], name))
+            .or_else(|| match self.imports.get(name) {
+                Some(binding @ Binding::Module { path })
+                    if path[..] == self.package.identity_path(std::slice::from_ref(name))[..] =>
+                {
+                    Some(binding)
+                }
+                _ => None,
+            })
     }
 
-    /// Add a name the prelude or the compiler supplies to every module,
-    /// declared at the package path `path`.
-    pub fn add_library(&mut self, name: Symbol, binding: Binding<'db>, path: Vec<Symbol>) {
-        self.library.entry(name.clone()).or_insert(binding.clone());
-        self.library_paths.entry(name.clone()).or_insert(path);
-        self.add_import_if_absent(name, binding);
-    }
-
-    /// Let `alias` start a path into the library namespace `namespace`.
-    pub fn add_library_namespace(&mut self, alias: Symbol, namespace: SymbolPath) {
-        self.library_namespaces.entry(alias).or_insert(namespace);
-    }
-
-    /// The package path a library name is declared at.
-    pub fn library_path(&self, name: &Symbol) -> Option<&[Symbol]> {
-        self.library_paths.get(name).map(Vec::as_slice)
-    }
-
-    /// The library namespace a path starting with `alias` continues in.
-    pub fn library_namespace(&self, alias: &Symbol) -> Option<&SymbolPath> {
-        self.library_namespaces.get(alias)
-    }
-
-    /// Mark the namespaces under `root` as supplied to every module.
-    pub fn add_library_root(&mut self, root: Symbol) {
-        self.library_roots.insert(root);
-    }
-
-    /// A name the prelude or the compiler supplies to every module.
-    pub fn lookup_library(&self, name: &Symbol) -> Option<&Binding<'db>> {
-        self.library.get(name)
-    }
-
-    /// The names the prelude and the compiler supply to every module.
-    pub fn iter_library_names(&self) -> impl Iterator<Item = Symbol> + '_ {
-        self.library.keys().cloned()
-    }
-
-    /// Whether namespaces under `root` are supplied to every module.
-    pub fn is_library_root(&self, root: &Symbol) -> bool {
-        self.library_roots.contains(root)
+    /// The items of the package root, as another package sees them.
+    pub fn root_items(&self) -> impl Iterator<Item = (Symbol, &Binding<'db>)> {
+        let mut names: Vec<Symbol> = self
+            .definitions
+            .keys()
+            .chain(
+                self.namespaces
+                    .get(&SymbolPath::root())
+                    .into_iter()
+                    .flat_map(|n| n.keys()),
+            )
+            .chain(self.imports.keys())
+            .cloned()
+            .collect();
+        names.sort();
+        names.dedup();
+        names
+            .into_iter()
+            .filter_map(|name| Some((name.clone(), self.root_item(&name)?)))
+            .collect::<Vec<_>>()
+            .into_iter()
     }
 
     /// Restrict where `binding` is visible.
@@ -328,14 +331,18 @@ impl<'db> ModuleEnv<'db> {
         self.restrictions.get(binding)
     }
 
+    /// The bindings that are not public, with where each is visible.
+    pub fn restrictions(&self) -> impl Iterator<Item = (&Binding<'db>, &Restriction)> {
+        self.restrictions.iter()
+    }
+
     /// Where the module at the package-root path `module` is visible, if it
     /// is not public.
     pub fn module_restriction(&self, module: &[Symbol]) -> Option<&Restriction> {
         self.module_restrictions.get(module)
     }
 
-    /// Record a re-export, to resolve with
-    /// [`crate::resolve::resolve_exports`].
+    /// Record a re-export, to resolve once the package is collected.
     pub fn add_export(&mut self, export: Export) {
         self.exports.push(export);
     }
@@ -357,32 +364,50 @@ impl<'db> ModuleEnv<'db> {
         self.module_uses.len()
     }
 
+    /// Record that the re-export `name` of `namespace` names `target`.
+    pub fn set_export_target(&mut self, namespace: SymbolPath, name: Symbol, target: Location) {
+        self.export_targets.insert((namespace, name), target);
+    }
+
+    /// The location the re-export `name` of `namespace` names.
+    pub fn export_target(&self, namespace: &SymbolPath, name: &Symbol) -> Option<&Location> {
+        self.export_targets.get(&(namespace.clone(), name.clone()))
+    }
+
     /// Take the re-exports recorded so far.
     pub fn take_exports(&mut self) -> Vec<Export> {
         std::mem::take(&mut self.exports)
     }
 
-    /// Restrict where the entry `name` of `namespace` is visible.
+    /// Restrict where the entry `name` of `namespace` is visible, besides
+    /// any restriction it already has.
     pub fn restrict_entry(
         &mut self,
         namespace: SymbolPath,
         name: Symbol,
         restriction: Restriction,
     ) {
-        self.entry_restrictions
-            .insert((namespace, name), restriction);
+        let restrictions = self
+            .entry_restrictions
+            .entry((namespace, name))
+            .or_default();
+        if !restrictions.contains(&restriction) {
+            restrictions.push(restriction);
+        }
     }
 
-    /// Where the entry `name` of `namespace` is visible, if a re-export
-    /// added it and it is not public.
-    pub fn entry_restriction(&self, namespace: &[Symbol], name: &Symbol) -> Option<&Restriction> {
+    /// The restrictions of the entry `name` of `namespace`, if a re-export
+    /// added it and it is not public. It is visible only where every one of
+    /// them is.
+    pub fn entry_restrictions(&self, namespace: &[Symbol], name: &Symbol) -> &[Restriction] {
         self.entry_restrictions
             .get(&(SymbolPath::new(namespace.iter().cloned()), name.clone()))
+            .map_or(&[], Vec::as_slice)
     }
 
     /// Take the restrictions of `other`, an environment of the same
     /// package.
-    pub fn absorb_restrictions(&mut self, other: &ModuleEnv<'db>) {
+    pub fn absorb_restrictions(&mut self, other: &PackageEnv<'db>) {
         self.restrictions.extend(
             other
                 .restrictions
@@ -404,21 +429,31 @@ impl<'db> ModuleEnv<'db> {
         );
     }
 
-    /// Add a qualified name to a namespace only if it doesn't already exist.
+    /// Add a qualified name to a namespace only if it doesn't already
+    /// exist, and say whether it was added.
     pub fn add_to_namespace_if_absent(
         &mut self,
-        namespace: SymbolPath,
-        name: Symbol,
+        namespace: &SymbolPath,
+        name: &Symbol,
         binding: Binding<'db>,
-    ) {
-        self.namespaces
-            .entry(namespace)
+    ) -> bool {
+        use hashbrown::hash_map::EntryRef;
+
+        match self
+            .namespaces
+            .entry_ref(namespace)
             .or_default()
-            .entry(name)
-            .or_insert(binding);
+            .entry_ref(name)
+        {
+            EntryRef::Occupied(_) => false,
+            EntryRef::Vacant(entry) => {
+                entry.insert_with_key(name.clone(), binding);
+                true
+            }
+        }
     }
 
-    /// Look up an unqualified name.
+    /// Look up a name the package root declares or imports.
     pub fn lookup(&self, name: &Symbol) -> Option<&Binding<'db>> {
         // First check local definitions
         if let Some(b) = self.definitions.get(name) {
@@ -428,12 +463,12 @@ impl<'db> ModuleEnv<'db> {
         self.imports.get(name)
     }
 
-    /// Check whether a name is defined locally, excluding imports.
+    /// Whether the package root declares `name`, apart from its imports.
     pub fn has_definition(&self, name: &Symbol) -> bool {
         self.definitions.contains_key(name)
     }
 
-    /// Look up a qualified path (e.g., "List::map").
+    /// Look up `name` in the namespace `namespace` (e.g. `List::map`).
     pub fn lookup_qualified(&self, namespace: &[Symbol], name: &Symbol) -> Option<&Binding<'db>> {
         self.namespaces.get(namespace)?.get(name)
     }
@@ -472,31 +507,37 @@ impl<'db> ModuleEnv<'db> {
     pub fn declares(&self, name: Symbol) -> bool {
         self.has_definition(&name)
             || self.has_namespace(std::slice::from_ref(&name))
-            || matches!(self.imports.get(&name), Some(Binding::Module { path }) if path[..] == [name])
+            || match self.imports.get(&name) {
+                Some(Binding::Module { path }) => {
+                    path[..] == self.package.identity_path(std::slice::from_ref(&name))[..]
+                }
+                Some(Binding::Import { path }) => path[..] == [name],
+                _ => false,
+            }
     }
 
-    /// Iterate over all imports.
+    /// The names the package root imports.
     pub fn iter_imports(&self) -> impl Iterator<Item = (Symbol, &Binding<'db>)> {
         self.imports.iter().map(|(k, v)| (k.clone(), v))
     }
 
-    /// Replace an import binding, recording the original path.
-    pub fn replace_import(&mut self, name: Symbol, binding: Binding<'db>, path: Vec<Symbol>) {
-        self.use_paths.insert(name.clone(), path);
+    /// Replace an import binding, recording the location it imports.
+    pub fn replace_import(&mut self, name: Symbol, binding: Binding<'db>, location: Location) {
+        self.use_paths.insert(name.clone(), location);
         self.imports.insert(name, binding);
     }
 
-    /// Get the original `use` path for an import name.
-    pub fn get_use_path(&self, name: &Symbol) -> Option<&Vec<Symbol>> {
+    /// The location the package root's `use` of `name` imports.
+    pub fn get_use_path(&self, name: &Symbol) -> Option<&Location> {
         self.use_paths.get(name)
     }
 
-    /// Iterate over all definitions in this environment.
+    /// The names the package root declares.
     pub fn iter_definitions(&self) -> impl Iterator<Item = (Symbol, &Binding<'db>)> {
         self.definitions.iter().map(|(k, v)| (k.clone(), v))
     }
 
-    /// Iterate over all namespaces in this environment.
+    /// The package's namespaces.
     pub fn iter_namespaces(
         &self,
     ) -> impl Iterator<Item = (SymbolPath, impl Iterator<Item = (Symbol, &Binding<'db>)>)> {
@@ -505,69 +546,11 @@ impl<'db> ModuleEnv<'db> {
             .map(|(ns, bindings)| (ns.clone(), bindings.iter().map(|(k, v)| (k.clone(), v))))
     }
 
-    /// Iterate over all names visible via unqualified lookup (definitions + imports).
+    /// The names the package root declares or imports.
     pub fn iter_all_names(&self) -> impl Iterator<Item = Symbol> + '_ {
         self.definitions
             .keys()
             .cloned()
             .chain(self.imports.keys().cloned())
-    }
-
-    /// Merge another environment into this one.
-    ///
-    /// Self takes precedence: user definitions shadow prelude.
-    /// This is used to inject prelude bindings into user code's environment.
-    ///
-    /// `other` declares the library package `package`, whose root items every
-    /// module sees under their short names, and whose namespaces a path may
-    /// enter by their first segment below the package root.
-    pub fn merge(&mut self, other: &ModuleEnv<'db>, package: &Symbol) {
-        // What another package restricts, this one never sees.
-        let foreign = |restriction: &Restriction| Restriction {
-            within: None,
-            ..restriction.clone()
-        };
-        for (binding, restriction) in &other.restrictions {
-            self.restrictions
-                .entry(binding.clone())
-                .or_insert_with(|| foreign(restriction));
-        }
-        for (module, restriction) in &other.module_restrictions {
-            self.module_restrictions
-                .entry(module.clone())
-                .or_insert_with(|| foreign(restriction));
-        }
-        for (entry, restriction) in &other.entry_restrictions {
-            self.entry_restrictions
-                .entry(entry.clone())
-                .or_insert_with(|| foreign(restriction));
-        }
-        for (name, binding) in other.iter_namespace(std::slice::from_ref(package)) {
-            // A re-export the package restricts is no name of another one.
-            if other
-                .entry_restriction(std::slice::from_ref(package), &name)
-                .is_some()
-            {
-                continue;
-            }
-            self.add_library(name.clone(), binding.clone(), vec![package.clone(), name]);
-        }
-
-        for (ns, bindings) in other.iter_namespaces() {
-            if let Some(root) = ns.first() {
-                self.add_library_root(root.clone());
-            }
-            if let [root, alias, ..] = &ns[..]
-                && root == package
-            {
-                self.add_library_namespace(
-                    alias.clone(),
-                    SymbolPath::new([package.clone(), alias.clone()]),
-                );
-            }
-            for (name, binding) in bindings {
-                self.add_to_namespace_if_absent(ns.clone(), name, binding.clone());
-            }
-        }
     }
 }

@@ -99,10 +99,10 @@ Compiler는 builtin/source origin을 포함한 identity로 이를 구분하고,
 `std::io::Io`를 resolver namespace에 virtual export로 주입한다. 사용자 AST에
 synthetic ability declaration을 추가하지 않는다.
 
-Ambient는 "CPS를 사용하지 않는다"는 뜻이 아니다. 현재 ABI에서 `Io`만
-요구하는 함수는 evidence를 전달받되 continuation을 받지 않는
-`EvidenceDirect` 호출 규약을 사용한다. `Io`와 `Throw(Error)`처럼 general
-operation effect가 함께 있으면 더 강한 CPS 호출 규약을 사용한다.
+Ambient는 evidence가 필요 없다는 뜻이 아니다. `Io`만 요구하는 함수도 evidence를
+받지만, `Io`에는 `op` operation이 없으므로 중단되지 않는다. `Io`와 `Throw(Error)`처럼
+`op` operation을 가진 ability가 함께 있으면 중단될 수 있다. 각 경우의 호출 규약은
+[CPS 전략](cps-effects.md#호출-규약)이 정한다.
 
 ## 함수 정의 문법
 
@@ -174,8 +174,8 @@ opt.or_else(fn() fallback())
 ```rust
 fn or_else(opt: Option(a), fallback: fn() ->{e} a) ->{e} a {
     case opt {
-        Some(x) -> x
-        None -> fallback()
+        .Some(x) -> x
+        .None -> fallback()
     }
 }
 ```
@@ -223,8 +223,7 @@ Ability operation은 두 종류로 선언한다:
 - **`op`**: General operation. Handler에서 `resume` 키워드를 통해
   resume 여부와 시점을 제어한다. `-> Never`를 반환하면 절대 resume하지 않는
   abort/exception 패턴을 표현한다.
-  `op`으로 선언된 operation은 handler에서 `fn`으로도 구현할 수 있다
-  (tail-resumptive가 충분한 경우).
+  `op`으로 선언된 operation은 handler에서 반드시 `op`으로 구현한다.
 
 ```rust
 ability Http {
@@ -283,7 +282,6 @@ ability Reporter {
 // handler가 Io effect를 사용하여 구현
 fn run_reporter(comp: fn() ->{e, Reporter} a) ->{e, Io} a {
     handle comp() {
-        do result { result }
         fn Reporter::report(message) { print_line(message) }
     }
 }
@@ -315,20 +313,40 @@ computation의 실행 결과는 두 가지 중 하나:
 - **완료**: computation이 값을 반환함 → `do value { expr }` 매칭
 - **Suspend**: ability operation에서 멈춤 → `fn`/`op` handler arm 매칭
 
+`do` arm은 생략할 수 있다. 생략하면 `do value { value }`, 즉 body의 결과를 그대로
+handle의 결과로 내는 identity completion을 쓴다:
+
+```rust
+handle computation() {
+    fn Logger::log(msg) { print_line(msg) }
+}
+```
+
 ### Handler Arm 종류
 
 | arm | 대상 | 의미 |
 | --- | ---- | ---- |
-| `do value { expr }` | completion | Computation 완료, 결과값 바인딩 |
-| `fn Op(args) { body }` | `fn`/`op` operation | Tail-resumptive: body의 반환값이 resume 값 |
+| `do value { expr }` | completion | Computation 완료, 결과값 바인딩 (생략 시 identity) |
+| `fn Op(args) { body }` | `fn` operation만 | Tail-resumptive: body의 반환값이 resume 값 |
 | `op Op(args) { body }` | `op` operation만 | body에서 `resume`으로 명시적 resume |
 
 Handler arm은 `handle` 표현식 내에서만 사용할 수 있다.
 
+**`do` arm 생략:**
+
+- `handle`의 `do` arm은 없거나 하나다. 둘 이상이면 typechecking 단계의 컴파일 에러다.
+- `do` arm이 없는 `handle`의 결과 타입은 body의 결과 타입이다. 따라서 값을 내는
+  `op` arm, 곧 `resume`하지 않고 끝나는 arm의 결과도 body의 결과 타입이어야 한다.
+  `resume`의 결과도 같은 타입이다.
+- 생략은 결과를 바꾸지 않는 completion에 한한다. Body의 결과를 다른 타입이나 값으로
+  바꾸려면 `do` arm을 적는다.
+
 **Handler arm과 선언의 관계:**
 
 - `fn`으로 선언된 operation → handler에서 반드시 `fn`으로 구현 (`op`으로 구현 시 컴파일 에러)
-- `op`으로 선언된 operation → handler에서 `op` 또는 `fn`으로 구현 가능
+- `op`으로 선언된 operation → handler에서 반드시 `op`으로 구현 (`fn`으로 구현 시 컴파일 에러)
+- Arm의 종류는 선언의 종류와 같다. 꼬리에서 바로 `resume`하는 `op` arm을 빠른 경로로
+  내리는 것은 최적화가 정하며, 언어 계약에 속하지 않는다.
 
 **Handler arm의 완전성:**
 
@@ -337,6 +355,8 @@ Handler arm은 `handle` 표현식 내에서만 사용할 수 있다.
   typechecking 단계의 컴파일 에러이며, 진단은 ability와 빠진 operation을 모두
   나열한다. Parametrized ability(`State(s)`)는 ability 선언 단위로 판단하고,
   이름이 같아도 다른 module의 ability는 서로 다른 ability로 판단한다.
+- 한 `handle`은 operation마다 arm을 최대 하나 가진다. 같은 operation의 arm이 둘
+  이상이면 typechecking 단계의 컴파일 에러다.
 - 빠진 arm은 암묵적으로 바깥 handler로 전달(forward)되거나 계산을 중단(abort)하거나
   trap하지 않는다. 일부 operation만 처리하는 handler는 허용되지 않는다.
 - Arm이 하나도 없는 ability는 그 `handle`이 처리하지 않는다. 그 label은 결과
@@ -357,13 +377,49 @@ ability Logger {
 // handler (구현)
 fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Io} a {
     handle comp() {
-        do result { result }
         fn Logger::log(msg) { print_line(msg) } // Nil 반환 → resume Nil
     }
 }
 ```
 
 `fn` handler arm에서는 `resume`을 사용할 수 **없다** (컴파일 에러).
+
+`fn` handler arm은 계산을 멈추거나(suspend) 버릴(abort) 수 없다. `fn` operation은
+어떤 handler 아래에서도 continuation을 handler에 넘기지 않고 perform 지점으로
+반환한다고 선언이 보증하고, `fn` arm은 그 operation의 구현이기 때문이다. 따라서 `fn`
+arm 본문은 다음을 할 수 없다. `Throw`와 `-> Never` operation도 포함한다.
+
+- `op` operation을 직접 perform한다.
+- Ability row에 `op` operation을 선언한 ability가 있는 callable을 호출한다. 그런
+  callable은 호출 도중 멈출 수 있다.
+
+직접 perform은 operation 단위로 판단하므로, `fn`과 `op`를 함께 선언한 ability의 `fn`
+operation은 직접 perform할 수 있다. 호출은 callee의 ability row로 판단하므로 그 ability를
+요구하는 함수는 호출할 수 없다. Arm 안의 `handle`이 처리하는 label은 그 handle 안에서
+제한을 받지 않는다. Lambda 본문은 lambda를 호출하는 곳에서 그 타입의 row로 판단한다.
+Arm 정의의 타입에 드러나는 위반은 typechecking 단계의 컴파일 에러이며, 진단은 arm이
+처리하는 operation과 arm이 닿는 금지된 ability를 나열한다.
+
+계산을 멈추거나 중단해야 하는 handler는 그 operation을 `op`으로 선언하고 `op` arm으로
+처리한다. 이 보증을 구현하는 방법, 곧 `fn` perform 지점이 continuation frame을 만들지
+않는 dispatch는 [CPS 전략](cps-effects.md#fn-operation-direct-dispatch)이 정한다.
+
+Row 변수로 들어오는 label도 같은 규칙을 따른다. `fn` arm이 effect-polymorphic
+callable을 호출하면, 그 row 변수를 고정한 인스턴스의 label에도 `op` operation을
+선언한 ability가 올 수 없다. 이 위반은 arm의 정의만으로는 드러나지 않는다. 정의에서는 그
+row가 row를 생략한 순수 함수의 호출과 같은 열린 row이기 때문이다. 그래서 인스턴스마다
+callee의 호출 규약을 정한 뒤 그 호출을 컴파일 에러로 거부한다
+([`fn` arm 호출 검사](cps-effects.md#fn-arm-호출-검사)).
+
+```rust
+ability Stop { op stop() -> Never }
+
+fn limited(comp: fn() ->{e, Counter} Int) ->{e, Stop} Int {
+    handle comp() {
+        fn Counter::next() { Stop::stop() } // ❌ 컴파일 에러: `fn` arm에서 `op` 수행
+    }
+}
+```
 
 ### `op` Operation Handler와 `resume`
 
@@ -406,7 +462,6 @@ operation은 그 handle 바깥의 handler가 처리한다. 재개된 계산의 h
 ```rust
 fn counter(comp: fn() ->{e, State(Nat)} a) ->{e, State(Nat)} a {
     handle comp() {
-        do result { result }
         // State::get()은 바깥 State로 간다. resume 뒤의 State는 이 handler가 받는다.
         op State::get() { resume State::get() + 1 }
         op State::set(v) { resume Nil }
@@ -422,7 +477,6 @@ fn counter(comp: fn() ->{e, State(Nat)} a) ->{e, State(Nat)} a {
 ```rust
 fn run_state(comp: fn() ->{e, State(s)} a, state: s) ->{e} a {
     handle comp() {
-        do result { result }
         op State::get() { run_state(fn() resume state, state) }
         op State::set(v) { run_state(fn() resume Nil, v) }
     }
@@ -441,8 +495,8 @@ ability Fail {
 
 fn run_maybe(comp: fn() ->{e, Fail} a) ->{e} Option(a) {
     handle comp() {
-        do result { Some(result) }
-        op Fail::fail(msg) { None }   // resume 없음, drop 불필요
+        do result { .Some(result) }
+        op Fail::fail(msg) { .None }   // resume 없음, drop 불필요
     }
 }
 ```
@@ -454,7 +508,6 @@ fn run_maybe(comp: fn() ->{e, Fail} a) ->{e} Option(a) {
 ```rust
 fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Io} a {
     handle comp() {
-        do result { result }
         fn Logger::log(msg) { print_line(msg) }
     }
 }
@@ -482,7 +535,6 @@ fn counter() ->{Logger, State(Int)} Nil {
 
 fn run_state(comp: fn() ->{e, State(s)} a, state: s) ->{e} a {
     handle comp() {
-        do result { result }
         op State::get() { run_state(fn() resume state, state) }
         op State::set(v) { run_state(fn() resume Nil, v) }
     }
@@ -490,7 +542,6 @@ fn run_state(comp: fn() ->{e, State(s)} a, state: s) ->{e} a {
 
 fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Io} a {
     handle comp() {
-        do result { result }
         fn Logger::log(msg) { print_line(msg) }
     }
 }
@@ -513,8 +564,8 @@ fn main() ->{Io} Nil {
 | 선언 | resume | continuation 캡처 | handler arm | 용례 |
 | ---- | ------ | ----------------- | ----------- | ---- |
 | `fn log(msg: String) -> Nil` | 1회, 암시적 | 없음 | `fn`만 가능 | Reader, Logger |
-| `op get() -> s` | 0~1회, `resume` (affine) | 있음 | `op` 또는 `fn` | State, Stream, Coroutine |
-| `op fail(msg: String) -> Never` | 0회 | 없음 | `op` 또는 `fn` | Fail, Exception |
+| `op get() -> s` | 0~1회, `resume` (affine) | 있음 | `op`만 가능 | State, Stream, Coroutine |
+| `op fail(msg: String) -> Never` | 0회 | 없음 | `op`만 가능 | Fail, Exception |
 
 ### Operation 규칙
 
@@ -523,8 +574,8 @@ fn main() ->{Io} Nil {
 | 암시적 effect | Operation은 자신이 속한 ability의 effect를 암시적으로 수행 |
 | ability annotation 금지 | Operation 시그니처에 ability annotation을 적을 수 없음 |
 | 다른 effect 필요 시 | Handler 구현부에서 처리 |
-| `fn` 선언 보증 | `fn`으로 선언 → 모든 handler에서 `fn`으로 구현 필수 |
-| `op` handler 유연성 | `op`으로 선언 → handler에서 `fn` 또는 `op`으로 구현 가능 |
+| 선언과 arm 일치 | `fn`/`op`으로 선언 → 모든 handler에서 같은 키워드로 구현 |
+| `fn` arm의 effect | `fn` arm 본문은 `op` operation을 perform하거나 그런 ability를 요구하는 callable을 호출할 수 없음 |
 
 ### 전체 문법 요약
 
@@ -538,7 +589,7 @@ fn main() ->{Io} Nil {
 | `{ ... }` | block expression |
 | `fn(x) expr` | 람다 |
 | `handle expr { ... }` | effect handling |
-| `do value { expr }` | completion arm (handle 내) |
+| `do value { expr }` | completion arm (handle 내, 생략 시 identity) |
 | `fn Op(args) { body }` | `fn` operation handler (handle 내) |
 | `op Op(args) { body }` | `op` operation handler (handle 내) |
 

@@ -23,10 +23,9 @@ use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
-use tribute_core::calling_convention::get_physical_closure_environment_index;
-use tribute_core::{
-    CALLING_CONVENTION_ATTR, CallingConvention, get_calling_convention,
-    get_physical_closure_convention,
+use tribute_ir::calling_convention::get_physical_closure_environment_index;
+use tribute_ir::calling_convention::{
+    CallingConvention, ConventionBearing, DynConventionBearing, get_physical_closure_convention,
 };
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::closure;
@@ -49,8 +48,7 @@ use trunk_ir::walk::{WalkAction, walk_op, walk_region};
 /// The closure base: `{ code: i32 }`. Every closure value has this storage
 /// type, and a capture-free closure is allocated with it.
 pub fn closure_struct_type_ref(ctx: &mut IrContext) -> TypeRef {
-    let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
-    closure_base_layout(ctx, i32_ty)
+    runtime_layout::closure_base(ctx)
 }
 
 /// The closure layout holding `captures` after the base's code field, with
@@ -62,12 +60,7 @@ pub fn closure_captures_type_ref(ctx: &mut IrContext, captures: &[TypeRef]) -> T
 
 /// The closure base whose code field has the representation `code`.
 pub(crate) fn closure_base_layout(ctx: &mut IrContext, code: TypeRef) -> TypeRef {
-    let mut attrs = AttributeMap::new();
-    let layout = ctx.string_attr(runtime_layout::CLOSURE);
-    attrs
-        .view_mut(ctx)
-        .insert(runtime_layout::LAYOUT_ATTR, layout);
-    adt::Struct::from_fields(ctx, "_closure", [("code", code)], attrs).as_type_ref()
+    runtime_layout::closure_base_layout(ctx, code)
 }
 
 /// The closure layout of `base` holding `captures` after the base's fields.
@@ -264,7 +257,7 @@ impl RewritePattern for LowerClosureCallArena {
         let caller_results = ctx.op_result_types(op).to_vec();
 
         let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
-        let Some(convention) = get_calling_convention(ctx, op) else {
+        let Some(convention) = DynConventionBearing::of(ctx, op) else {
             return false;
         };
         if caller_results.len() != usize::from(convention != CallingConvention::Cps) {
@@ -294,7 +287,7 @@ impl RewritePattern for LowerClosureCallArena {
         let new_call = func::CallIndirect::operands(table_idx, new_args)
             .signature(contract.signature)
             .build(ctx, loc);
-        copy_indirect_call_attributes(ctx, op, new_call.op_ref());
+        copy_indirect_call_attributes(ctx, op, new_call);
 
         rewriter.insert_op(table_idx_op.op_ref());
 
@@ -326,7 +319,7 @@ impl RewritePattern for LowerClosureTailCallArena {
         let Some((&callee, args)) = operands.split_first() else {
             return false;
         };
-        let Some(convention) = get_calling_convention(ctx, op) else {
+        let Some(convention) = DynConventionBearing::of(ctx, op) else {
             return false;
         };
         if physical_closure_type_for_callee(ctx, callee).is_none() {
@@ -357,7 +350,7 @@ impl RewritePattern for LowerClosureTailCallArena {
         let tail = func::TailCallIndirect::operands(func_ref.result(ctx), args)
             .signature(contract.signature)
             .build(ctx, location);
-        copy_indirect_call_attributes(ctx, op, tail.op_ref());
+        copy_indirect_call_attributes(ctx, op, tail);
 
         rewriter.insert_op(func_ref.op_ref());
         rewriter.replace_op(tail.op_ref());
@@ -373,11 +366,15 @@ impl RewritePattern for LowerClosureTailCallArena {
 ///
 /// The semantic calling convention is consumed here: the lowered call's
 /// physical signature carries the contract it was validated against.
-fn copy_indirect_call_attributes(ctx: &mut IrContext, source: OpRef, destination: OpRef) {
+fn copy_indirect_call_attributes(
+    ctx: &mut IrContext,
+    source: OpRef,
+    destination: impl ConventionBearing,
+) {
     let mut attributes = ctx.op(source).attributes.clone();
     func::remove_indirect_call_signature(ctx, &mut attributes);
-    attributes.view_mut(ctx).remove(CALLING_CONVENTION_ATTR);
-    ctx.op_attrs_mut(destination).extend(attributes);
+    ctx.op_attrs_mut(destination.op_ref()).extend(attributes);
+    destination.remove_calling_convention(ctx);
 }
 
 pub(crate) fn physical_closure_type_for_callee(
@@ -411,7 +408,8 @@ fn exact_tail_results(
         let owner = ctx.region(ctx.block(parent).parent_region?).parent_op?;
         if let Ok(function) = func::Func::from_op(ctx, owner) {
             let caller = func::FuncSig::from_type_ref(ctx, function.r#type(ctx))?;
-            let caller_is_cps = get_calling_convention(ctx, owner) == Some(CallingConvention::Cps);
+            let caller_is_cps =
+                DynConventionBearing::of(ctx, owner) == Some(CallingConvention::Cps);
             return ((convention == CallingConvention::Cps) == caller_is_cps
                 && caller.results(ctx) == results)
                 .then(|| results.to_vec());
@@ -536,7 +534,7 @@ fn tagged_closure_transfers_are_legal(ctx: &mut IrContext, func_op: func::Func) 
         if physical_closure_type_for_callee(ctx, callee).is_none() {
             return true;
         }
-        let Some(convention) = get_calling_convention(ctx, op) else {
+        let Some(convention) = DynConventionBearing::of(ctx, op) else {
             return false;
         };
         if func::CallIndirect::matches(ctx, op) {
@@ -591,8 +589,7 @@ pub fn lower_prepared_closures(ctx: &mut IrContext, module: Module) -> PassRunRe
         for func_op in discovered.into_iter().rev() {
             rewrite_validated_closures_in_func(ctx, func_op, functions.clone());
             // Closure lowering is the last reader of a function's convention.
-            ctx.op_attrs_mut(func_op.op_ref())
-                .remove(CALLING_CONVENTION_ATTR);
+            func_op.remove_calling_convention(ctx);
         }
     }
     Ok(())
@@ -703,11 +700,38 @@ fn rewrite_validated_closures_in_func(
 /// attributes, results, and block arguments before applying any update. The
 /// casts that kept lowered closure packs at their semantic closure type become
 /// identities and are removed.
-pub fn finalize_closure_storage_layout(ctx: &mut IrContext, module: Module) {
+pub(crate) fn finalize_closure_storage_layout(ctx: &mut IrContext, module: Module) {
     let closure_struct = closure_struct_type_ref(ctx);
     substitute_module_types(ctx, module, move |ctx, ty| {
         closure::Closure::matches(ctx, ty).then_some(closure_struct)
     });
+}
+
+/// Select the canonical `_closure` storage type after all semantic consumers
+/// have validated the exact convention-proven callable type.
+///
+/// The plan covers aliases, nested type parameters, type-bearing operation
+/// attributes, results, and block arguments before applying any update. The
+/// casts that kept lowered closure packs at their semantic closure type become
+/// identities and are removed.
+pub struct FinalizeClosureStorageLayout;
+
+impl Pass for FinalizeClosureStorageLayout {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "finalize-closure-storage-layout"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        finalize_closure_storage_layout(ctx, target.into());
+        Ok(())
+    }
 }
 
 /// Replace every type `substitute` maps, wherever it occurs in `module`:
@@ -963,7 +987,7 @@ mod tests {
     }
 
     fn evidence_type_str() -> &'static str {
-        "adt.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = \"evidence_marker\"}>, {layout = \"evidence\"}>"
+        "adt.array<adt.typeref<{name = \"std::runtime::evidence::Marker\"}>>"
     }
 
     fn closure_test_module(ctx: &mut IrContext) -> Module {
@@ -972,7 +996,7 @@ mod tests {
             ctx,
             &format!(
                 r#"core.module @test {{
-  !closure = closure.closure<func.func_sig<({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref>, {{tribute.calling_convention = 1, tribute.closure_environment_index = 1}}>
+  !closure = closure.closure<func.func_sig<({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref>, {{tribute.calling_convention = "evidence_direct", tribute.closure_environment_index = 1}}>
 
   func.func @callee(%ev: {ev_ty}, %env: !closure, %arg: tribute_rt.anyref) -> tribute_rt.anyref {{
       func.return %arg
@@ -980,13 +1004,13 @@ mod tests {
 
   func.func @selected(%ev: {ev_ty}, %payload: tribute_rt.anyref) -> tribute_rt.anyref {{
       %closure = closure.new {{func_ref = @callee}} : !closure
-      %result = func.call_indirect %closure, %ev, %payload {{tribute.calling_convention = 1, signature = func.func_sig<({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref>}} : tribute_rt.anyref
+      %result = func.call_indirect %closure, %ev, %payload {{tribute.calling_convention = "evidence_direct", signature = func.func_sig<({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref>}} : tribute_rt.anyref
       func.return %result
   }}
 
   func.func @untouched(%ev: {ev_ty}, %payload: tribute_rt.anyref) -> tribute_rt.anyref {{
       %closure = closure.new {{func_ref = @callee}} : !closure
-      %result = func.call_indirect %closure, %ev, %payload {{tribute.calling_convention = 1, signature = func.func_sig<({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref>}} : tribute_rt.anyref
+      %result = func.call_indirect %closure, %ev, %payload {{tribute.calling_convention = "evidence_direct", signature = func.func_sig<({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref>}} : tribute_rt.anyref
       func.return %result
   }}
 }}"#
@@ -1041,7 +1065,7 @@ mod tests {
             ctx,
             &format!(
                 r#"core.module @test {{
-  !closure = closure.closure<func.func_sig<({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref>, {{tribute.calling_convention = 1, tribute.closure_environment_index = 1}}>
+  !closure = closure.closure<func.func_sig<({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref>, {{tribute.calling_convention = "evidence_direct", tribute.closure_environment_index = 1}}>
 
   func.func @callee(%ev: {ev_ty}, %env: !closure, %arg: tribute_rt.anyref) -> tribute_rt.anyref {{
       func.return %arg
@@ -1050,7 +1074,7 @@ mod tests {
   func.func @outer(%outer_ev: {ev_ty}, %payload: tribute_rt.anyref) -> tribute_rt.anyref {{
       func.func @inner(%inner_ev: {ev_ty}, %inner_payload: tribute_rt.anyref) -> tribute_rt.anyref {{
           %closure = closure.new {{func_ref = @callee}} : !closure
-          %result = func.call_indirect %closure, %inner_ev, %inner_payload {{tribute.calling_convention = 1, signature = func.func_sig<({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref>}} : tribute_rt.anyref
+          %result = func.call_indirect %closure, %inner_ev, %inner_payload {{tribute.calling_convention = "evidence_direct", signature = func.func_sig<({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref>}} : tribute_rt.anyref
           func.return %result
       }}
       func.return %payload
@@ -1145,8 +1169,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-            !Cps = closure.closure<func.func_sig<(core.i32) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
-            func.func @invalid(%callee: !Cps, %value: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+            !Cps = closure.closure<func.func_sig<(core.i32) -> core.never>, {tribute.calling_convention = "cps", tribute.closure_environment_index = 0}>
+            func.func @invalid(%callee: !Cps, %value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
                 func.tail_call_indirect %callee, %value
             }
             func.func @otherwise_lowerable(%callee: !Cps) -> core.i32 {
@@ -1167,22 +1191,22 @@ mod tests {
         for (signature_results, call, supported) in [
             (
                 "core.i32",
-                "func.call_indirect %callee {tribute.calling_convention = 0}",
+                "func.call_indirect %callee {tribute.calling_convention = \"direct\"}",
                 false,
             ),
             (
                 "core.i32",
-                "%first, %extra = func.call_indirect %callee {tribute.calling_convention = 0} : core.i32, core.i32",
+                "%first, %extra = func.call_indirect %callee {tribute.calling_convention = \"direct\"} : core.i32, core.i32",
                 false,
             ),
             (
                 "()",
-                "func.call_indirect %callee {tribute.calling_convention = 0}",
+                "func.call_indirect %callee {tribute.calling_convention = \"direct\"}",
                 false,
             ),
             (
                 "core.i32",
-                "%result = func.call_indirect %callee {tribute.calling_convention = 0} : core.i32",
+                "%result = func.call_indirect %callee {tribute.calling_convention = \"direct\"} : core.i32",
                 true,
             ),
         ] {
@@ -1191,7 +1215,7 @@ mod tests {
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
-            !Callback = closure.closure<func.func_sig<() -> {signature_results}>, {{tribute.calling_convention = 0, tribute.closure_environment_index = 0}}>
+            !Callback = closure.closure<func.func_sig<() -> {signature_results}>, {{tribute.calling_convention = "direct", tribute.closure_environment_index = 0}}>
             func.func @invalid(%callee: !Callback) -> core.i32 {{
                 {call}
                 %zero = arith.constant {{value = 0}} : core.i32
@@ -1258,7 +1282,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !closure = closure.closure<func.func_sig<(core.i32) -> core.i32>, {tribute.calling_convention = 0}>
+  !closure = closure.closure<func.func_sig<(core.i32) -> core.i32>, {tribute.calling_convention = "direct"}>
   !nested = core.tuple<!closure>
   func.func @run(%callback: !closure) -> !nested {
     %created = closure.new {func_ref = @callback} : !closure
@@ -1302,9 +1326,9 @@ mod tests {
             &mut ctx,
             &format!(
                 r#"core.module @test {{
-  !cps = closure.closure<func.func_sig<({ev}, core.i32, core.i32, core.i32) -> core.never>, {{tribute.calling_convention = 2, tribute.closure_environment_index = 1}}>
-  func.func @run(%callee: !cps, %evidence: {ev}, %done: core.i32, %dispatch: core.i32, %value: core.i32) -> core.never attributes {{tribute.calling_convention = 2}} {{
-    func.tail_call_indirect %callee, %evidence, %done, %dispatch, %value {{tribute.calling_convention = 2, signature = func.func_sig<({ev}, core.i32, core.i32, core.i32) -> core.never>}}
+  !cps = closure.closure<func.func_sig<({ev}, core.i32, core.i32, core.i32) -> core.never>, {{tribute.calling_convention = "cps", tribute.closure_environment_index = 1}}>
+  func.func @run(%callee: !cps, %evidence: {ev}, %done: core.i32, %dispatch: core.i32, %value: core.i32) -> core.never attributes {{tribute.calling_convention = "cps"}} {{
+    func.tail_call_indirect %callee, %evidence, %done, %dispatch, %value {{tribute.calling_convention = "cps", signature = func.func_sig<({ev}, core.i32, core.i32, core.i32) -> core.never>}}
   }}
 }}"#
             ),
@@ -1369,11 +1393,11 @@ mod tests {
             &mut ctx,
             &format!(
                 r#"core.module @test {{
-  !cps = closure.closure<func.func_sig<({evidence}, core.i32) -> core.never>, {{tribute.calling_convention = 2}}>
-  func.func @callee(%evidence: {evidence}, %env: !cps, %done: core.i32) -> core.never attributes {{tribute.calling_convention = 2}} {{
+  !cps = closure.closure<func.func_sig<({evidence}, core.i32) -> core.never>, {{tribute.calling_convention = "cps"}}>
+  func.func @callee(%evidence: {evidence}, %env: !cps, %done: core.i32) -> core.never attributes {{tribute.calling_convention = "cps"}} {{
     func.unreachable
   }}
-  func.func @run(%evidence: {evidence}, %done: core.i32) -> core.never attributes {{tribute.calling_convention = 2}} {{
+  func.func @run(%evidence: {evidence}, %done: core.i32) -> core.never attributes {{tribute.calling_convention = "cps"}} {{
     %callee = closure.new {{func_ref = @callee}} : !cps
     func.tail_call_indirect %callee, %evidence, %done
   }}
@@ -1430,8 +1454,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @caller(%callee: func.func_sig<(core.i32) -> core.i32>, %value: core.i32) -> core.i32 attributes {tribute.calling_convention = 0} {
-    %result = func.call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> core.i32>, tribute.calling_convention = 0} : core.i32
+  func.func @caller(%callee: func.func_sig<(core.i32) -> core.i32>, %value: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
+    %result = func.call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> core.i32>, tribute.calling_convention = "direct"} : core.i32
     func.return %result
   }
 }"#,
@@ -1441,13 +1465,13 @@ mod tests {
         // Closure lowering leaves a non-closure transfer alone and consumes
         // only the enclosing function's convention.
         let caller = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
-        assert_eq!(get_calling_convention(&ctx, caller.op_ref()), None);
+        assert_eq!(DynConventionBearing::of(&ctx, caller.op_ref()), None);
         let call = collect_ops(&ctx, caller.op_ref())
             .into_iter()
             .find(|&op| func::CallIndirect::matches(&ctx, op))
             .unwrap();
         assert_eq!(
-            get_calling_convention(&ctx, call),
+            DynConventionBearing::of(&ctx, call),
             Some(CallingConvention::Direct)
         );
     }
@@ -1458,7 +1482,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !closure = closure.closure<func.func_sig<(core.i64) -> core.i64>, {tribute.calling_convention = 0, tribute.closure_environment_index = 0}>
+  !closure = closure.closure<func.func_sig<(core.i64) -> core.i64>, {tribute.calling_convention = "direct", tribute.closure_environment_index = 0}>
   func.func @code(%env: !closure, %value: core.i64) -> core.i64 {
     %first, %second = closure.unpack %env : core.i64, core.i32
     func.return %first
@@ -1557,7 +1581,7 @@ mod tests {
         let source = |reference: &str| {
             format!(
                 r#"core.module @test {{
-  !closure = closure.closure<func.func_sig<(core.i32) -> core.i32>, {{tribute.calling_convention = 0}}>
+  !closure = closure.closure<func.func_sig<(core.i32) -> core.i32>, {{tribute.calling_convention = "direct"}}>
   core.module @left {{
     func.func @helper(%env: !closure, %value: core.i32) -> core.i32 {{
       func.return %value
@@ -1607,19 +1631,19 @@ mod tests {
             &format!(
                 r#"core.module @test {{
   !_closure = adt.struct<_closure(func_ptr: core.i32, env: tribute_rt.anyref)>
-  !expected = closure.closure<func.func_sig<({evidence}, core.i32, core.i32) -> core.never>, {{tribute.calling_convention = 2}}>
-  !actual = closure.closure<func.func_sig<({evidence}, core.i32, core.i1) -> core.never>, {{tribute.calling_convention = 2}}>
-  !outer = closure.closure<func.func_sig<({evidence}, core.i32, !expected) -> core.never>, {{tribute.calling_convention = 2}}>
+  !expected = closure.closure<func.func_sig<({evidence}, core.i32, core.i32) -> core.never>, {{tribute.calling_convention = "cps"}}>
+  !actual = closure.closure<func.func_sig<({evidence}, core.i32, core.i1) -> core.never>, {{tribute.calling_convention = "cps"}}>
+  !outer = closure.closure<func.func_sig<({evidence}, core.i32, !expected) -> core.never>, {{tribute.calling_convention = "cps"}}>
 
-  func.func @actual_fn(%evidence: {evidence}, %done: core.i32, %value: core.i1) -> core.never attributes {{tribute.calling_convention = 2}} {{
+  func.func @actual_fn(%evidence: {evidence}, %done: core.i32, %value: core.i1) -> core.never attributes {{tribute.calling_convention = "cps"}} {{
     func.unreachable
   }}
-  func.func @run(%callee: !outer, %evidence: {evidence}, %done: core.i32) -> core.never attributes {{tribute.calling_convention = 2}} {{
+  func.func @run(%callee: !outer, %evidence: {evidence}, %done: core.i32) -> core.never attributes {{tribute.calling_convention = "cps"}} {{
     %function = func.constant {{func_ref = @actual_fn}} : func.func_sig<({evidence}, core.i32, core.i1) -> core.never>
     %environment = adt.ref_null {{type = tribute_rt.anyref}} : tribute_rt.anyref
     %pack = adt.struct_new %function, %environment {{type = !_closure}} : !_closure
     %argument = core.unrealized_conversion_cast %pack : !actual
-    func.tail_call_indirect %callee, %evidence, %done, %argument {{tribute.calling_convention = 2}}
+    func.tail_call_indirect %callee, %evidence, %done, %argument {{tribute.calling_convention = "cps"}}
   }}
 }}"#
             ),

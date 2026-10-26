@@ -12,7 +12,10 @@ use std::fmt::{self, Display, Formatter};
 
 use trunk_ir::{Symbol, SymbolPath};
 
+use crate::resolve::PackageName;
+
 use super::decl::OpDeclKind;
+use super::expr::Candidates;
 use super::node_id::NodeId;
 use super::types::Type;
 
@@ -36,12 +39,28 @@ pub struct UnresolvedName {
     pub path: SymbolPath,
     /// Node ID for looking up the span in SpanMap.
     pub id: NodeId,
+    /// Whether the name is an implicit constructor `.Name`, whose type its
+    /// context gives (`new-plans/type-inference.md` § 암묵적 생성자).
+    pub implicit: bool,
 }
 
 impl UnresolvedName {
     /// Create a new name reference (simple or qualified).
     pub fn new(path: SymbolPath, id: NodeId) -> Self {
-        Self { path, id }
+        Self {
+            path,
+            id,
+            implicit: false,
+        }
+    }
+
+    /// Create the implicit constructor `.name`.
+    pub fn implicit(name: Symbol, id: NodeId) -> Self {
+        Self {
+            path: SymbolPath::new([name]),
+            id,
+            implicit: true,
+        }
     }
 
     /// Returns true if this is a simple (unqualified) name.
@@ -65,6 +84,9 @@ impl UnresolvedName {
 
 impl Display for UnresolvedName {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        if self.implicit {
+            f.write_str(".")?;
+        }
         Display::fmt(&self.path, f)
     }
 }
@@ -75,9 +97,11 @@ impl Display for UnresolvedName {
 
 /// A unique identifier for a local variable binding.
 ///
-/// LocalIds are unique within a function scope and are assigned
-/// during name resolution. They provide stable identity for
-/// variables even if the same name is shadowed.
+/// LocalIds are assigned during name resolution and are unique within one
+/// module-level function, including its lambdas and handler arms. Each such
+/// function numbers its own, so an edit to one function leaves the others'
+/// LocalIds unchanged. They provide stable identity for variables even if
+/// the same name is shadowed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct LocalId(u32);
 
@@ -141,13 +165,19 @@ pub enum BuiltinType {
     List,
     /// The runtime module's fixed-size immutable array `Slots(a)`.
     Slots,
+    /// The runtime module's handler dispatch closure `Dispatch`.
+    Dispatch,
 }
 
 /// The origin of a nominal type definition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TypeOrigin {
-    /// A source declaration, identified independently of its spelling.
-    Source(NodeId),
+    /// A source declaration, identified by its path and by how many type
+    /// declarations of the same name precede it in its module. The path
+    /// includes the declaring package. Reparsing the same declaration, or
+    /// editing another, gives the same identity unless the edit changes
+    /// the declaration's path or the same-named declarations before it.
+    Source { disambiguator: u32 },
     /// A compiler-owned nominal type.
     Builtin(BuiltinType),
     /// A synthetic identity used by isolated tests and pre-resolution helpers.
@@ -170,8 +200,16 @@ pub struct TypeDefId<'db> {
 }
 
 impl<'db> TypeDefId<'db> {
-    pub fn source(db: &'db dyn salsa::Database, path: SymbolPath, declaration: NodeId) -> Self {
-        Self::new(db, TypeOrigin::Source(declaration), path)
+    /// The source declaration at `path` that `disambiguator` type
+    /// declarations of the same name precede.
+    pub fn declared(db: &'db dyn salsa::Database, path: SymbolPath, disambiguator: u32) -> Self {
+        Self::new(db, TypeOrigin::Source { disambiguator }, path)
+    }
+
+    /// The source type a name at `path` refers to: the first declaration
+    /// there.
+    pub fn source(db: &'db dyn salsa::Database, path: SymbolPath) -> Self {
+        Self::declared(db, path, 0)
     }
 
     pub fn synthetic(db: &'db dyn salsa::Database, path: SymbolPath) -> Self {
@@ -190,7 +228,15 @@ impl<'db> TypeDefId<'db> {
         Self::new(
             db,
             TypeOrigin::Builtin(BuiltinType::Slots),
-            SymbolPath::new(["std", "runtime", "Slots"]),
+            PackageName::std().identity_path_of(&["runtime", "Slots"]),
+        )
+    }
+
+    pub fn builtin_dispatch(db: &'db dyn salsa::Database) -> Self {
+        Self::new(
+            db,
+            TypeOrigin::Builtin(BuiltinType::Dispatch),
+            PackageName::std().identity_path_of(&["runtime", "Dispatch"]),
         )
     }
 
@@ -210,6 +256,10 @@ impl<'db> TypeDefId<'db> {
 
     pub fn is_builtin_slots(self, db: &'db dyn salsa::Database) -> bool {
         self.origin(db) == TypeOrigin::Builtin(BuiltinType::Slots)
+    }
+
+    pub fn is_builtin_dispatch(self, db: &'db dyn salsa::Database) -> bool {
+        self.origin(db) == TypeOrigin::Builtin(BuiltinType::Dispatch)
     }
 
     /// Returns the unqualified type name (last segment).
@@ -274,8 +324,10 @@ pub struct AbilityId<'db> {
     pub path: SymbolPath,
 }
 
-/// The path of the compiler-owned `Io` ability.
-const BUILTIN_IO: [&str; 3] = ["std", "io", "Io"];
+/// The identity path of the compiler-owned `Io` ability.
+fn builtin_io_path() -> SymbolPath {
+    PackageName::std().identity_path_of(&["io", "Io"])
+}
 
 impl<'db> AbilityId<'db> {
     pub fn source(db: &'db dyn salsa::Database, path: SymbolPath) -> Self {
@@ -286,16 +338,13 @@ impl<'db> AbilityId<'db> {
         Self::new(
             db,
             AbilityOrigin::Builtin(BuiltinAbility::Io),
-            SymbolPath::new(BUILTIN_IO),
+            builtin_io_path(),
         )
     }
 
     /// Look up a compiler-owned ability by its source path segments.
     pub fn builtin_from_path(db: &'db dyn salsa::Database, path: &[Symbol]) -> Option<Self> {
-        path.iter()
-            .map(Symbol::as_str)
-            .eq(BUILTIN_IO)
-            .then(|| Self::builtin_io(db))
+        (*path == *builtin_io_path()).then(|| Self::builtin_io(db))
     }
 
     /// Resolve a fully-qualified source path through the builtin registry.
@@ -348,6 +397,18 @@ pub enum ResolvedRef<'db> {
         id: CtorId<'db>,
         /// The variant name (for enum variants) or type name (for structs).
         variant: Symbol,
+    },
+
+    /// An implicit constructor `.Name`, which type checking resolves to a
+    /// [`Constructor`](Self::Constructor) of the type its context gives,
+    /// falling back to `candidates`: the constructors `Name` of the types in
+    /// scope, by rank (`new-plans/modules.md` § 암묵적 생성자의 후보).
+    ImplicitConstructor {
+        name: Symbol,
+        candidates: Candidates<CtorId<'db>>,
+        /// The constructors `Name` the current module does not see, with
+        /// why, which its context's type may not name either.
+        hidden: Vec<(CtorId<'db>, String)>,
     },
 
     /// Reference to a type definition (struct or enum).
@@ -445,7 +506,7 @@ impl<'db> TypedRef<'db> {
 // Generator for LocalIds
 // ============================================================================
 
-/// Generator for unique LocalIds within a scope.
+/// Generator for the LocalIds of one module-level function.
 #[derive(Debug, Default)]
 pub struct LocalIdGen(u32);
 

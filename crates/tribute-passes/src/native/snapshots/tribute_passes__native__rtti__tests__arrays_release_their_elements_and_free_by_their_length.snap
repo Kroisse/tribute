@@ -2,7 +2,7 @@
 source: crates/tribute-passes/src/native/rtti.rs
 expression: "format!(\"{}\\n{}\", release_function(RTTI_USER_START),\nrelease_function(RTTI_USER_START + 1))"
 ---
-sym_name = "__tribute_release_7", type = !t0} {
+sym_name = "__tribute_release_5", type = !t0} {
     ^bb0(%0: core.ptr):
       %1 = clif.load %0 {offset = 0} : core.i64
       %2 = clif.iconst {value = 0} : core.i64
@@ -32,7 +32,7 @@ sym_name = "__tribute_release_7", type = !t0} {
       %17 = clif.call %16, %14 {callee = @__tribute_dealloc} : core.nil
       clif.return
   }
-sym_name = "__tribute_release_8", type = !t0} {
+sym_name = "__tribute_release_6", type = !t0} {
     ^bb0(%0: core.ptr):
       %1 = clif.iconst {value = 8} : core.i64
       %2 = clif.isub %0, %1 : core.ptr

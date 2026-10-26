@@ -72,6 +72,57 @@ Variant patterns preserve the constructor type constrained against the matched
 value. This applies to let destructuring as well as case arms: conversion must
 not instantiate a fresh constructor after the pattern has been solved.
 
+### 암묵적 생성자
+
+암묵적 생성자 `.Name`, `.Name(args)`, `.Name { fields }`
+([syntax.md](syntax.md#암묵적-생성자))는 생성자를 그 자리의 타입으로 정한다.
+표현식에서는 그 표현식의 타입이고, 패턴에서는 그 패턴이 매칭하는 값의 타입이다.
+`case`의 arm 패턴은 scrutinee의 타입, 하위 패턴은 상위 패턴이 정한 필드나 원소의
+타입, `let` 패턴은 값의 타입이다.
+
+1. **타입의 namespace.** 그 타입이 nominal 타입 `T`로 정해지면 생성자는 `T`의
+   생성자 중 이름이 `Name`인 것이다. Enum의 생성자는 variant이고, struct의 생성자는
+   타입과 이름이 같은 struct 자신이다. `T`는 스코프에 없어도 되지만, 생성자는 쓰는
+   자리에서 [보여야](modules.md#가시성-visibility) 한다. 인자 없이 쓴
+   `.Name`을 함수 값으로 쓰면 그 함수 타입의 결과가 `T`다(`xs.map(.Some)`).
+2. **스코프의 타입.** 타입이 아직 정해지지 않았으면 스코프의 타입 `T`마다 `T`의
+   생성자 `Name`을 후보로 모은다
+   ([암묵적 생성자의 후보](modules.md#암묵적-생성자의-후보)). 후보는
+   [후보 선택](modules.md#후보-선택) 규칙으로 고른다. 생성자의 필드가 매개변수이고,
+   인자나 하위 패턴이 인자이며, `T`의 인스턴스가 결과다. 맞는 후보가 여럿이면 타입이
+   더 정해질 때까지 기다린다. 기다리는 동안 그 자리의 타입이 nominal 타입 `T`로
+   정해지면 1번 규칙으로 `T`에서 찾는다.
+
+해석한 생성자는 경로로 쓴 생성자와 같다. 같은 노드의 constructor 인스턴스 규칙
+([레코드 생성 검사](#레코드-생성-검사))과 필드 검증을 그대로 적용한다. Typed AST에는
+해석한 생성자만 남으며, 망라성 검사와 이후 단계는 경로로 쓴 생성자와 구분하지 않는다.
+생성자는 effect를 수행하지 않으므로, 해석을 기다리는 암묵적 생성자는
+[지연된 호출](#지연된-호출의-effect)과 달리 row에 기여하지 않는다.
+
+진단은 다음과 같다.
+
+- 타입 `T`에 생성자 `Name`이 없으면 오류다. 진단은 `T`를 식별 경로로 보인다.
+- 타입 `T`의 생성자 `Name`이 쓰는 자리에서 보이지 않으면 오류다.
+- 그 자리의 타입이 생성자를 가진 nominal 타입이 아니면(함수, tuple, `Nil`) 오류다.
+- 스코프의 어느 타입에도 생성자 `Name`이 없으면 오류다.
+- 함수 본문을 다 푼 뒤에도 맞는 후보가 여럿이면 모호성 오류다. 진단은 맞는
+  후보를 나열하고 경로로 쓰도록 안내한다. 맞는 후보가 하나도 없으면 오류다.
+- 해석한 생성자의 인자 수, 필드, 하위 패턴 수 오류는 경로로 쓴 생성자와 같은
+  규칙으로 진단한다.
+
+```rust
+fn parse(s: String) -> Result(Int, String) {
+    case s {
+        "" -> .Error { error: "empty" }     // Result의 namespace
+        _ -> .Ok { value: 0 }
+    }
+}
+
+let x = .Some(1)        // 스코프의 타입 중 Option만 Some을 가지면 Option(Int)
+let y = .Leaf(1)        // 스코프의 Tree(a)와 Heap(a)가 둘 다 Leaf(a)를 가지면 y가
+                        // 쓰이는 자리의 타입을 기다린다. 끝내 정해지지 않으면 모호성 오류
+```
+
 ### Equality, 표현식 검사, 공통 결과 타입
 
 제약 solver는 다음 세 관계를 구별한다.
@@ -459,7 +510,9 @@ Handle body는 처리하는 label을 새 handler에 묶고 나머지 label은 �
 label을 먼저 가린다. 바깥 row가 그 label을 tail로만 가지면 가리지 않는다.
 Handler arm과 `do` arm은 처리한 label이 빠진 row로 검사되므로, arm의
 operation과 호출은 handle 바깥의 handler를 본다. `resume`의 handler 선택은
-[abilities.md](abilities.md#resume과-handler-선택)를 따른다.
+[abilities.md](abilities.md#resume과-handler-선택)를 따른다. `fn` arm 본문의
+perform과 호출은 solving이 끝난 뒤 검사하며, `op` operation을 수행하거나 그런
+ability를 요구하는 callable을 호출할 수 없다([abilities.md](abilities.md#fn-operation-handler)).
 
 Row 단일화는 시그니처 row 변수를 별칭의 대표로 유지한다. 열린 두 row를 맞출 때
 한쪽이 시그니처 row이고 다른 쪽이 label을 더하지 않으면, 새 변수를 만들지 않고
@@ -576,6 +629,12 @@ Row 변수에 대해서도 occurs check 필요:
 unify(e, {State(Int) | e})  -- 에러: e가 자기 자신을 포함
 ```
 
+Occurs check는 현재 타입 대입과 row 대입을 모두 적용한 결과에서 변수를 찾는다.
+Row 대입을 거쳐 드러난 effect 인자 안의 타입 변수도 이미 바인딩되어 있으면 그
+바인딩을 따라간다. 그래서 `c`를 `fn() ->{e} Int`에 바인딩하려 할 때 `e := {State(d)}`이고
+`d := #(c, Int)`이면 occurs check 에러다. 대입은 항상 순환이 없어야 하며, 대입
+적용은 그 전제에서 종료한다.
+
 ---
 
 ## Handler와 Effect 소비
@@ -659,9 +718,9 @@ concrete effect만 보존하고, 람다가 검사된 문맥의 callable signatur
 open tail만 다시 붙인다. 따라서 문맥이 없는 local lambda가
 새로운 open tail을 본문 효과의 무조건적인 기본값으로 만들지 않는다. 반환되거나
 escaping 값에 저장되거나 open-effect consumer에 전달되어 open callable contract를
-받은 람다와, 본문에서 effect를 수행한 람다의 convention은 이 결과에서 그대로
-계산한다. 본문의 `handle`은 람다의 convention을 바꾸지 않는다
-([cps-effects.md](cps-effects.md#row와-호출-규약)).
+받은 람다와, 본문에서 effect를 수행한 람다의 row는 이 결과 그대로다. 본문의
+`handle`이 처리한 ability는 이 row에 남지 않는다. 실행 전략이 정하는 호출 규약은 이
+남은 row에서만 나온다([cps-effects.md](cps-effects.md#row와-호출-규약)).
 
 #### 함수 적용 (Infer)
 

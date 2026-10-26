@@ -69,6 +69,8 @@ pub struct AstDefinitionEntry {
     pub kind: DefinitionKind,
     /// The LocalId for local bindings (enables shadowed variable disambiguation).
     pub local_id: Option<LocalId>,
+    /// The module-level function whose body numbers `local_id`.
+    pub owner: Option<NodeId>,
 }
 
 /// Entry representing a reference to a definition.
@@ -89,7 +91,13 @@ pub struct AstReferenceEntry {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ResolvedTarget {
     /// Reference to a local variable.
-    Local { id: LocalId, name: Symbol },
+    ///
+    /// `LocalId`s are unique only within the module-level function `owner`.
+    Local {
+        owner: Option<NodeId>,
+        id: LocalId,
+        name: Symbol,
+    },
     /// Reference to a function.
     Function { name: Symbol },
     /// Reference to a constructor.
@@ -122,21 +130,6 @@ impl ResolvedTarget {
             ResolvedTarget::Unresolved { name } => name.clone(),
             ResolvedTarget::Field { name, .. } => name.clone(),
             ResolvedTarget::Other { name } => name.clone(),
-        }
-    }
-
-    /// Get the LocalId if this is a local reference.
-    pub fn local_id(&self) -> Option<LocalId> {
-        match self {
-            ResolvedTarget::Local { id, .. } => Some(*id),
-            ResolvedTarget::Field { .. }
-            | ResolvedTarget::Function { .. }
-            | ResolvedTarget::Constructor { .. }
-            | ResolvedTarget::Type { .. }
-            | ResolvedTarget::Ability { .. }
-            | ResolvedTarget::AbilityOp { .. }
-            | ResolvedTarget::Unresolved { .. }
-            | ResolvedTarget::Other { .. } => None,
         }
     }
 }
@@ -241,11 +234,11 @@ impl<'db> AstDefinitionIndex<'db> {
         target: &ResolvedTarget,
     ) -> Option<&AstDefinitionEntry> {
         match target {
-            ResolvedTarget::Local { id, name } => {
-                // For locals, match by LocalId for precise scoping
+            ResolvedTarget::Local { owner, id, name } => {
+                // For locals, match by owner and LocalId for precise scoping
                 self.definitions(db)
                     .iter()
-                    .find(|d| d.name == *name && d.local_id == Some(*id))
+                    .find(|d| d.name == *name && d.owner == *owner && d.local_id == Some(*id))
             }
             ResolvedTarget::Constructor { type_name, variant } => {
                 // Match by variant name AND owner type for precise disambiguation
@@ -309,11 +302,11 @@ impl<'db> AstDefinitionIndex<'db> {
         target: &ResolvedTarget,
     ) -> Vec<&AstReferenceEntry> {
         match target {
-            ResolvedTarget::Local { id, name } => {
-                // For locals, match by LocalId for precise scoping
+            ResolvedTarget::Local { .. } => {
+                // For locals, match by owner and LocalId for precise scoping
                 self.references(db)
                     .iter()
-                    .filter(|r| r.target.name() == *name && r.target.local_id() == Some(*id))
+                    .filter(|r| r.target == *target)
                     .collect()
             }
             ResolvedTarget::Constructor { type_name, variant } => {
@@ -411,6 +404,7 @@ impl<'db> AstDefinitionIndex<'db> {
             DefinitionKind::Local | DefinitionKind::Parameter => {
                 if let Some(local_id) = def.local_id {
                     ResolvedTarget::Local {
+                        owner: def.owner,
                         id: local_id,
                         name: def.name.clone(),
                     }
@@ -480,6 +474,8 @@ struct DefinitionCollector<'a, 'db> {
     span_map: &'a SpanMap,
     definitions: Vec<AstDefinitionEntry>,
     references: Vec<AstReferenceEntry>,
+    /// The module-level function being visited.
+    current_func: Option<NodeId>,
 }
 
 impl<'a, 'db> DefinitionCollector<'a, 'db> {
@@ -489,6 +485,7 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
             span_map,
             definitions: Vec::new(),
             references: Vec::new(),
+            current_func: None,
         }
     }
 
@@ -520,6 +517,7 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
             name,
             kind,
             local_id,
+            owner: self.current_func,
         });
     }
 
@@ -616,6 +614,7 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
     fn resolve_resolved_ref(&self, resolved: &ResolvedRef<'db>) -> ResolvedTarget {
         match resolved {
             ResolvedRef::Local { id, name } => ResolvedTarget::Local {
+                owner: self.current_func,
                 id: *id,
                 name: name.clone(),
             },
@@ -632,6 +631,10 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
             ResolvedRef::Module { .. } => ResolvedTarget::Other {
                 name: Symbol::new("module"),
             },
+            // Left after a reported error: type checking selects a constructor.
+            ResolvedRef::ImplicitConstructor { name, .. } => {
+                ResolvedTarget::Other { name: name.clone() }
+            }
             ResolvedRef::AbilityOp { ability, op, .. } => ResolvedTarget::AbilityOp {
                 ability: ability.name(self.db),
                 op: op.clone(),
@@ -657,10 +660,12 @@ impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for DefinitionCollector<'_, 'db
 
     fn visit_func_decl(&mut self, func: &'ast FuncDecl<TypedRef<'db>>) {
         self.add_definition(func.id, func.name.clone(), DefinitionKind::Function, None);
+        self.current_func = Some(func.id);
         for param in &func.params {
             self.collect_param(param);
         }
         walk_func_decl(self, func);
+        self.current_func = None;
     }
 
     fn visit_expr(&mut self, expr: &'ast Expr<TypedRef<'db>>) {
@@ -769,7 +774,7 @@ pub fn definition_index<'db>(
     let module = tribute::parse_and_lower_ast(db, source)?.module(db);
     let span_map = ast_query::span_map(db, source)?;
 
-    Some(AstDefinitionIndex::build(db, module, &span_map))
+    Some(AstDefinitionIndex::build(db, module, span_map))
 }
 
 // =============================================================================
@@ -1117,8 +1122,8 @@ mod tests {
 
 fn unwrap(opt: Option) -> Int {
     case opt {
-        Some(v) -> v
-        None -> 0
+        .Some(v) -> v
+        .None -> 0
     }
 }"#,
         );
@@ -1235,6 +1240,7 @@ fn unwrap(opt: Option) -> Int {
         for def in &x_defs {
             if let Some(local_id) = def.local_id {
                 let target = ResolvedTarget::Local {
+                    owner: def.owner,
                     id: local_id,
                     name: x_sym.clone(),
                 };
@@ -1730,6 +1736,39 @@ enum Result(T, E) {
             );
         } else {
             panic!("Expected local reference target");
+        }
+    }
+
+    #[test]
+    fn test_same_local_id_in_different_functions_stays_apart() {
+        let db = salsa::DatabaseImpl::default();
+        let text = "fn f(x: Int) -> Int { x }\nfn g(x: Int) -> Int { x }";
+        let source = make_source(&db, text);
+        let index = definition_index(&db, source).unwrap();
+
+        for func in ["fn f", "fn g"] {
+            let start = text.find(func).unwrap();
+            let end = text[start..].find('}').unwrap() + start;
+            let body_x = text[start..end].rfind('x').unwrap() + start;
+            let param_x = text[start..].find("x:").unwrap() + start;
+
+            let (target, refs) = index.references_at(&db, body_x).unwrap();
+            assert_eq!(refs.len(), 1, "{func}: one reference stays in the function");
+            assert!(
+                (start..end).contains(&refs[0].span.start),
+                "{func}: reference crossed functions"
+            );
+
+            let def = index.definition_of_target(&db, &target).unwrap();
+            assert!(
+                (start..end).contains(&def.span.start),
+                "{func}: definition crossed functions"
+            );
+            assert_eq!(def.span.start, param_x);
+
+            let (_, from_def) = index.references_at(&db, param_x).unwrap();
+            assert_eq!(from_def.len(), 1);
+            assert_eq!(from_def[0].span.start, body_x);
         }
     }
 

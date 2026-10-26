@@ -135,8 +135,9 @@ pub fn parsed_module(
 ///
 /// The SpanMap maps NodeId → Span for looking up source locations.
 /// Use together with `parsed_module` - both are derived from the same parse.
-#[salsa::tracked(returns(clone))]
-pub fn span_map(db: &dyn salsa::Database, source: SourceCst) -> Option<SpanMap> {
+/// Like [`parsed_module`], this borrows the field of the cached
+/// [`parsed_ast`] result.
+pub fn span_map(db: &dyn salsa::Database, source: SourceCst) -> Option<&SpanMap> {
     parsed_ast(db, source).map(|parsed| parsed.span_map(db))
 }
 
@@ -194,7 +195,7 @@ pub fn function_schemes<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Option<&'db [(SymbolPath, TypeScheme<'db>)]> {
-    type_check_output(db, source).map(|o| o.function_types(db))
+    type_check_output(db, source).map(|o| o.declarations(db).function_types.as_slice())
 }
 
 // =============================================================================
@@ -231,7 +232,7 @@ pub fn parsed_func<'db>(
 
 /// Resolve a single function by name.
 ///
-/// The function is resolved in the context of the full module environment.
+/// The function is resolved in the context of the full package environment.
 pub fn resolved_func<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
@@ -458,7 +459,7 @@ fn explicit() ->{} Nil { Nil }
         );
 
         // function_types should be a valid Vec (possibly empty for simple cases)
-        let _ft = output.function_types(&db);
+        let _ft = &output.declarations(&db).function_types;
     }
 
     /// Recursively check if a type contains any unresolved UniVar.
@@ -489,9 +490,6 @@ fn explicit() ->{} Nil { Nil }
                 args.iter().any(|a| contains_univar(db, *a))
             }
             crate::ast::TypeKind::Tuple(elems) => elems.iter().any(|e| contains_univar(db, *e)),
-            crate::ast::TypeKind::App { ctor, args } => {
-                contains_univar(db, *ctor) || args.iter().any(|a| contains_univar(db, *a))
-            }
             crate::ast::TypeKind::Continuation {
                 arg,
                 result,

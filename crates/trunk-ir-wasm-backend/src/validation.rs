@@ -99,10 +99,38 @@ fn validate_operation(
     }
     validate_return_call_indirect(ctx, op, errors);
     validate_direct_callable_contracts(ctx, op, symbols, errors);
+    validate_ref_upcast(ctx, op, errors);
 
     // Recursively validate nested regions
     for region in ctx.op_regions(op) {
         validate_region(ctx, region, depth + 1, symbols, errors);
+    }
+}
+
+/// A `wasm.ref_upcast` must satisfy its definition and widen its operand
+/// without a runtime cast.
+fn validate_ref_upcast(ctx: &IrContext, op: OpRef, errors: &mut Vec<String>) {
+    let Ok(upcast) = wasm_dialect::RefUpcast::from_op(ctx, op) else {
+        return;
+    };
+    // The assignability check below reads the declared operand and result.
+    let violations = <wasm_dialect::RefUpcast as DialectOp>::DEF.verify(ctx, op);
+    if !violations.is_empty() {
+        errors.extend(
+            violations
+                .iter()
+                .map(|violation| format!("wasm.ref_upcast: {violation}")),
+        );
+        return;
+    }
+    let operand = ctx.value_ty(upcast.r#ref(ctx));
+    let result = upcast.result_ty(ctx);
+    if !crate::is_wasm_physical_argument_assignable(ctx, operand, result) {
+        errors.push(format!(
+            "wasm.ref_upcast from {} does not widen to {} without a cast",
+            ctx.get_type(operand).name.display(ctx),
+            ctx.get_type(result).name.display(ctx)
+        ));
     }
 }
 
@@ -541,22 +569,60 @@ mod tests {
         parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Marker = test.layout<{layout = "evidence_marker"}>
-  !Evidence = wasm_gc.array<!Marker, {layout = "evidence"}>
-  !Plain = wasm_gc.array<!Marker>
+  !Data = wasm_gc.array<core.i8, {layout = "bytes_data"}>
+  !Plain = wasm_gc.array<core.i8>
 }"#,
         );
         let alias = |ctx: &IrContext, name: &str| ctx.type_alias_by_text(name).unwrap();
-        let evidence = alias(&ctx, "Evidence");
+        let data = alias(&ctx, "Data");
         let plain = alias(&ctx, "Plain");
         let arrayref = wasm_dialect::Arrayref::params()
             .intern(&mut ctx)
             .as_type_ref();
 
         assert!(is_wasm_physical_result_assignable(&ctx, arrayref, plain));
-        assert!(!is_wasm_physical_result_assignable(
-            &ctx, arrayref, evidence
-        ));
+        assert!(!is_wasm_physical_result_assignable(&ctx, arrayref, data));
+    }
+
+    #[test]
+    fn ref_upcast_widens_only_without_a_cast() {
+        let validate = |operand: &str, result: &str| {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(
+                &mut ctx,
+                &format!(
+                    r#"core.module @test {{
+  !Leaf = wasm_gc.struct<core.i32>
+  wasm.func @widen(%value: {operand}) -> {result} {{
+    %wide = wasm.ref_upcast %value : {result}
+    wasm.return %wide
+  }}
+}}"#
+                ),
+            );
+            validate_wasm_ir(&ctx, module)
+        };
+
+        validate("!Leaf", "wasm.structref").expect("a registered struct widens to structref");
+        validate("wasm.structref", "wasm.anyref").expect("structref widens to anyref");
+        let error = validate("wasm.anyref", "wasm.structref").expect_err("a downcast needs a cast");
+        assert!(error.to_string().contains("does not widen to"), "{error}");
+    }
+
+    #[test]
+    fn rejects_a_malformed_ref_upcast_before_reading_it() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.func @widen() -> core.nil {
+    %wide = wasm.ref_upcast : wasm.structref
+    wasm.return
+  }
+}"#,
+        );
+        let error = validate_wasm_ir(&ctx, module).expect_err("an upcast needs an operand");
+        assert!(error.to_string().contains("wasm.ref_upcast:"), "{error}");
     }
 
     #[test]
@@ -567,18 +633,15 @@ mod tests {
             r#"core.module @test {
   !Leaf = wasm_gc.struct<core.i32>
   !Closure = test.layout<{layout = "closure"}>
-  !Marker = test.layout<{layout = "evidence_marker"}>
-  !Evidence = wasm_gc.array<!Marker, {layout = "evidence"}>
   !Data = wasm_gc.array<core.i8, {layout = "bytes_data"}>
   !Bytes = test.layout<!Data, core.i32, core.i32, {layout = "bytes"}>
   wasm.func @byRef(%value: wasm.structref) -> core.nil { wasm.return }
   wasm.func @byArray(%value: wasm.arrayref) -> core.nil { wasm.return }
-  wasm.func @caller(%leaf: !Leaf, %bytes: !Bytes, %closure: !Closure, %marker: !Marker, %evidence: !Evidence) -> core.nil {
+  wasm.func @caller(%leaf: !Leaf, %bytes: !Bytes, %closure: !Closure, %data: !Data) -> core.nil {
     wasm.call %leaf {callee = @byRef}
     wasm.call %bytes {callee = @byRef}
     wasm.call %closure {callee = @byRef}
-    wasm.call %marker {callee = @byRef}
-    wasm.call %evidence {callee = @byArray}
+    wasm.call %data {callee = @byArray}
     wasm.return
   }
 }"#,
@@ -594,15 +657,13 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Marker = test.layout<{layout = "evidence_marker"}>
-  !Evidence = wasm_gc.array<!Marker, {layout = "evidence"}>
   !Array = wasm_gc.array<core.i32>
   !Data = wasm_gc.array<core.i8, {layout = "bytes_data"}>
   !Bytes = test.layout<!Data, core.i32, core.i32, {layout = "bytes"}>
   wasm.func @byAny(%value: wasm.anyref) -> core.nil { wasm.return }
-  wasm.func @caller(%bytes: !Bytes, %evidence: !Evidence, %array: !Array, %structural: wasm_gc.struct<core.i32>) -> core.nil {
+  wasm.func @caller(%bytes: !Bytes, %data: !Data, %array: !Array, %structural: wasm_gc.struct<core.i32>) -> core.nil {
     wasm.call %bytes {callee = @byAny}
-    wasm.call %evidence {callee = @byAny}
+    wasm.call %data {callee = @byAny}
     wasm.call %array {callee = @byAny}
     wasm.call %structural {callee = @byAny}
     wasm.return

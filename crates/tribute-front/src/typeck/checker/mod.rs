@@ -29,7 +29,9 @@ mod diagnostics;
 mod exhaustiveness;
 mod expr;
 mod finalize;
+mod fn_arm_check;
 mod func_check;
+mod implicit_ctor;
 
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
@@ -42,11 +44,10 @@ use crate::ast::{
     Decl, DeclEntry, DeclTable, FuncDefId, NodeId, ResolvedRef, SpanMap, Type, TypeScheme,
     TypedRef, UniVarId,
 };
+use crate::resolve::PackageName;
 
 use super::context::ModuleTypeEnv;
-use super::{
-    DefinitionIdentity, PreludeExports, StringType, WellKnownType, WellKnownTypeKey, WellKnownTypes,
-};
+use super::{PreludeExports, StringType, WellKnownType, WellKnownTypeKey, WellKnownTypes};
 
 /// Result of module type checking.
 pub struct ModuleCheckResult<'db> {
@@ -125,7 +126,7 @@ pub struct TypeChecker<'db> {
     /// Current module prefix for qualified function names (e.g., "foo::bar").
     pub(crate) prefix: SymbolPath,
     /// Span map for converting NodeId to Span in diagnostics.
-    pub(crate) span_map: SpanMap,
+    pub(crate) span_map: &'db SpanMap,
     /// Accumulated node types from all functions.
     /// Collects NodeId → Type mappings during type checking.
     node_types: HashMap<NodeId, Type<'db>>,
@@ -147,35 +148,35 @@ pub struct TypeChecker<'db> {
 }
 
 impl<'db> TypeChecker<'db> {
-    /// The module whose items the prelude declares at its root: its package.
-    fn prelude_root() -> SymbolPath {
-        SymbolPath::new([crate::resolve::LIBRARY_PACKAGE])
-    }
-
     fn prelude_well_known_type(
         &self,
         module: &DeclTable<ResolvedRef<'db>>,
         key: impl WellKnownTypeKey,
     ) -> Option<WellKnownType<'db>> {
         let name = key.name();
-        let root = Self::prelude_root();
-        let declaration = module
+        let root = PackageName::std().identity_path(&[]);
+        let disambiguator = module
             .entries
             .iter()
             .filter(|entry| entry.module == root)
             .find_map(|entry| match &entry.decl {
-                Decl::Struct(decl) if decl.name == name => Some(decl.id),
-                Decl::Enum(decl) if decl.name == name => Some(decl.id),
+                Decl::Struct(crate::ast::StructDecl {
+                    name: declared,
+                    disambiguator,
+                    ..
+                })
+                | Decl::Enum(crate::ast::EnumDecl {
+                    name: declared,
+                    disambiguator,
+                    ..
+                }) if *declared == name => Some(*disambiguator),
                 _ => None,
             })?;
         let qualified = root.child(name.clone());
         let ty = self.env.lookup_type_def(&qualified)?.body(self.db());
         Some(WellKnownType {
             ty,
-            definition: DefinitionIdentity::new(
-                declaration,
-                self.span_map.get_or_default(declaration),
-            ),
+            definition: crate::ast::TypeDefId::declared(self.db(), qualified, disambiguator),
         })
     }
 
@@ -188,7 +189,7 @@ impl<'db> TypeChecker<'db> {
         let string = self.prelude_well_known_type(module, StringType);
         // `==` of a prelude type is the function of that name in the type's
         // module.
-        let root = Self::prelude_root();
+        let root = PackageName::std().identity_path(&[]);
         let equality = |type_name: &str| {
             let function = FuncDefId::new(self.db(), root.child(type_name).child("=="));
             self.env.lookup_function(function).map(|_| function)
@@ -201,7 +202,7 @@ impl<'db> TypeChecker<'db> {
     }
 
     /// Create a new type checker with the given span map.
-    pub fn new(db: &'db dyn salsa::Database, span_map: SpanMap) -> Self {
+    pub fn new(db: &'db dyn salsa::Database, span_map: &'db SpanMap) -> Self {
         Self {
             env: ModuleTypeEnv::new(db),
             prefix: SymbolPath::root(),
@@ -241,12 +242,11 @@ impl<'db> TypeChecker<'db> {
         self.env.db()
     }
 
-    /// Inject prelude's resolved type information before type checking.
-    ///
-    /// This makes prelude's types (Option, Some, None, etc.) available
-    /// to user code without sharing a ModuleTypeEnv, avoiding UniVar conflicts.
-    pub fn inject_prelude(&mut self, exports: &PreludeExports<'db>) {
-        self.env.inject_prelude(exports);
+    /// Check against the declarations package `std` exports, read through
+    /// the dependency table. They resolve without sharing a `ModuleTypeEnv`,
+    /// so no unification variable crosses the package boundary.
+    pub fn depend_on(&mut self, exports: &PreludeExports<'db>) {
+        self.env.depend_on(exports);
     }
 
     /// Type check a module.
@@ -258,7 +258,8 @@ impl<'db> TypeChecker<'db> {
 
     /// Type check the prelude module once.
     ///
-    /// Returns the typed prelude, and the exports that user modules inject:
+    /// Returns the typed prelude, and the exports that user modules read
+    /// through the dependency table:
     /// function types, constructors, and type definitions.
     pub fn check_prelude(
         mut self,
@@ -320,7 +321,7 @@ impl<'db> TypeChecker<'db> {
         let function_types = self.env.export_function_types();
         let constructor_types = self.env.export_constructor_types();
         let ability_definitions = self.env.export_ability_defs();
-        let well_known_types = self.env.well_known_types();
+        let well_known_types = self.env.own_well_known_types();
 
         self.exhaustive_cases.sort();
 

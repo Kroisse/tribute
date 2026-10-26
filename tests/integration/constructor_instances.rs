@@ -16,16 +16,16 @@ fn enum_constructor_instances_survive_conversion_and_specialization(db: &salsa::
 extern "C" fn consume_int(value: Int) -> Nil
 extern "C" fn consume_bool(value: Bool) -> Nil
 enum Boxed(a) { Box(a), Empty }
-fn int_box() -> Boxed(Int) { Box(+42) }
-fn bool_box() -> Boxed(Bool) { Box(True) }
+fn int_box() -> Boxed(Int) { .Box(+42) }
+fn bool_box() -> Boxed(Bool) { .Box(True) }
 fn main() -> Nil {
-    case Box(+42) {
-        Box(value) -> consume_int(value)
-        Empty -> Nil
+    case .Box(+42) {
+        .Box(value) -> consume_int(value)
+        .Empty -> Nil
     }
-    case Box(True) {
-        Box(value) -> consume_bool(value)
-        Empty -> Nil
+    case .Box(True) {
+        .Box(value) -> consume_bool(value)
+        .Empty -> Nil
     }
 }
 "#,
@@ -33,10 +33,12 @@ fn main() -> Nil {
     let typed = parse_and_lower_ast(db, source).unwrap();
     assert!(parse_and_lower_ast::accumulated::<Diagnostic>(db, source).is_empty());
     let prepared = prepare_frontend_for_lowering(db, typed, source).unwrap();
-    for output in [typed, prepared] {
+    for (module, expressions) in [
+        (typed.module(db), typed.expression_types(db)),
+        (prepared.module(db), prepared.expression_types(db)),
+    ] {
         for (name, payload) in [("int_box", TypeKind::Int), ("bool_box", TypeKind::Bool)] {
-            let function = output
-                .module(db)
+            let function = module
                 .decls()
                 .find_map(|decl| match decl {
                     Decl::Function(function) if function.name == name => Some(function),
@@ -57,8 +59,7 @@ fn main() -> Nil {
                 &[Type::new(db, payload)],
                 "{name}: constructor argument"
             );
-            let node_ty = output
-                .expression_types(db)
+            let node_ty = expressions
                 .node_types
                 .iter()
                 .find_map(|(id, ty)| (*id == value.id).then_some(*ty))
@@ -92,14 +93,13 @@ fn let_variant_pattern_preserves_its_constrained_constructor(db: &salsa::Databas
     let source = SourceCst::from_source_str(
         db,
         "let_constructor.trb",
-        "enum Wrapped(a) { Wrapped(a) }\nfn unpack() -> Int { let Wrapped(value) = Wrapped(+42)\nvalue }\nfn main() -> Nil { Nil }",
+        "enum Wrapped(a) { Wrapped(a) }\nfn unpack() -> Int { let .Wrapped(value) = .Wrapped(+42)\nvalue }\nfn main() -> Nil { Nil }",
     );
     let typed = parse_and_lower_ast(db, source).unwrap();
     assert!(parse_and_lower_ast::accumulated::<Diagnostic>(db, source).is_empty());
     let prepared = prepare_frontend_for_lowering(db, typed, source).unwrap();
-    for output in [typed, prepared] {
-        let function = output
-            .module(db)
+    for module in [typed.module(db), prepared.module(db)] {
+        let function = module
             .decls()
             .find_map(|decl| match decl {
                 Decl::Function(function) if function.name == "unpack" => Some(function),

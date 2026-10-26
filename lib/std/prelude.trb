@@ -4,7 +4,7 @@
 use collections::List
 
 /// A type that represents an optional value.
-/// Either contains `Some(value)` or `None`.
+/// Either contains `.Some(value)` or `.None`.
 pub enum Option(a) {
     None,
     Some(a),
@@ -15,8 +15,8 @@ pub mod Option {
     /// If the Option is None, returns None.
     pub fn map(opt: Option(a), f: fn(a) ->{eff} b) ->{eff} Option(b) {
         case opt {
-            Some(x) -> Some(f(x))
-            None -> None
+            .Some(x) -> .Some(f(x))
+            .None -> .None
         }
     }
 
@@ -24,32 +24,32 @@ pub mod Option {
     /// If the Option is None, returns None without calling f.
     pub fn and_then(opt: Option(a), f: fn(a) ->{eff} Option(b)) ->{eff} Option(b) {
         case opt {
-            Some(x) -> f(x)
-            None -> None
+            .Some(x) -> f(x)
+            .None -> .None
         }
     }
 
     /// Extract the value from an Option, or return a default.
     pub fn unwrap_or(opt: Option(a), default: a) -> a {
         case opt {
-            Some(x) -> x
-            None -> default
+            .Some(x) -> x
+            .None -> default
         }
     }
 
     /// Check if an Option contains a value.
     pub fn is_some(opt: Option(a)) -> Bool {
         case opt {
-            Some(_) -> True
-            None -> False
+            .Some(_) -> True
+            .None -> False
         }
     }
 
     /// Check if an Option is None.
     pub fn is_none(opt: Option(a)) -> Bool {
         case opt {
-            Some(_) -> False
-            None -> True
+            .Some(_) -> False
+            .None -> True
         }
     }
 }
@@ -66,8 +66,8 @@ pub mod Result {
     /// If the Result is Error, returns the error unchanged.
     pub fn map(res: Result(a, e), f: fn(a) ->{eff} b) ->{eff} Result(b, e) {
         case res {
-            Ok(x) -> Ok(f(x))
-            Error(e) -> Error(e)
+            .Ok(x) -> .Ok(f(x))
+            .Error(e) -> .Error(e)
         }
     }
 
@@ -75,8 +75,8 @@ pub mod Result {
     /// If the Result is Ok, returns the success value unchanged.
     pub fn map_err(res: Result(a, e), f: fn(e) ->{eff} f) ->{eff} Result(a, f) {
         case res {
-            Ok(x) -> Ok(x)
-            Error(e) -> Error(f(e))
+            .Ok(x) -> .Ok(x)
+            .Error(e) -> .Error(f(e))
         }
     }
 
@@ -84,32 +84,32 @@ pub mod Result {
     /// If the Result is Error, returns the error without calling f.
     pub fn and_then(res: Result(a, e), f: fn(a) ->{eff} Result(b, e)) ->{eff} Result(b, e) {
         case res {
-            Ok(x) -> f(x)
-            Error(e) -> Error(e)
+            .Ok(x) -> f(x)
+            .Error(e) -> .Error(e)
         }
     }
 
     /// Extract the success value from a Result, or return a default.
     pub fn unwrap_or(res: Result(a, e), default: a) -> a {
         case res {
-            Ok(x) -> x
-            Error(_) -> default
+            .Ok(x) -> x
+            .Error(_) -> default
         }
     }
 
     /// Check if a Result is Ok.
     pub fn is_ok(res: Result(a, e)) -> Bool {
         case res {
-            Ok(_) -> True
-            Error(_) -> False
+            .Ok(_) -> True
+            .Error(_) -> False
         }
     }
 
     /// Check if a Result is Error.
     pub fn is_error(res: Result(a, e)) -> Bool {
         case res {
-            Ok(_) -> False
-            Error(_) -> True
+            .Ok(_) -> False
+            .Error(_) -> True
         }
     }
 }
@@ -121,7 +121,7 @@ pub mod Result {
 // These are resolved via TDNR and lowered to arith dialect operations.
 
 pub mod Int {
-    use super::{Result, Ok, Error, String, Nat, Bytes}
+    use super::{Result, String, Nat, Bytes}
 
     /// Errors returned by decimal integer parsing.
     pub enum ParseError {
@@ -185,13 +185,13 @@ pub mod Int {
     ) -> Result(Int, ParseError) {
         case index == bytes.len() {
             True -> case overflowed {
-                True -> Error(ParseError::OutOfRange)
-                False -> Ok(value)
+                True -> .Error(ParseError::OutOfRange)
+                False -> .Ok(value)
             }
             False -> {
                 let digit = decimal_digit_or_invalid(bytes.get_or_panic(index))
                 case digit < +0 {
-                    True -> Error(ParseError::InvalidSyntax)
+                    True -> .Error(ParseError::InvalidSyntax)
                     False -> case overflowed {
                         True -> parse_digits(bytes, index + 1, value, negative, True)
                         False -> case decimal_step_overflows(value, digit, negative) {
@@ -212,7 +212,7 @@ pub mod Int {
 
     fn parse_after_sign(bytes: Bytes, index: Nat, negative: Bool) -> Result(Int, ParseError) {
         case index == bytes.len() {
-            True -> Error(ParseError::InvalidSyntax)
+            True -> .Error(ParseError::InvalidSyntax)
             False -> parse_digits(bytes, index, +0, negative, False)
         }
     }
@@ -221,7 +221,7 @@ pub mod Int {
     pub fn parse(input: String) -> Result(Int, ParseError) {
         let bytes = input.to_bytes()
         case bytes.len() == 0 {
-            True -> Error(ParseError::InvalidSyntax)
+            True -> .Error(ParseError::InvalidSyntax)
             False -> case bytes.get_or_panic(0) {
                 43 -> parse_after_sign(bytes, 1, False)
                 45 -> parse_after_sign(bytes, 1, True)
@@ -291,6 +291,8 @@ pub mod Int {
 }
 
 pub mod Nat {
+    use super::{String}
+
     pub extern "intrinsic" fn (+)(left: Nat, right: Nat) -> Nat
     pub extern "intrinsic" fn (-)(left: Nat, right: Nat) -> Nat
     pub extern "intrinsic" fn (*)(left: Nat, right: Nat) -> Nat
@@ -302,6 +304,31 @@ pub mod Nat {
     pub extern "intrinsic" fn (<=)(left: Nat, right: Nat) -> Bool
     pub extern "intrinsic" fn (>)(left: Nat, right: Nat) -> Bool
     pub extern "intrinsic" fn (>=)(left: Nat, right: Nat) -> Bool
+
+    fn digit_string(digit: Nat) -> String {
+        case digit {
+            0 -> "0",
+            1 -> "1",
+            2 -> "2",
+            3 -> "3",
+            4 -> "4",
+            5 -> "5",
+            6 -> "6",
+            7 -> "7",
+            8 -> "8",
+            _ -> "9",
+        }
+    }
+
+    /// Format a natural number as canonical ASCII decimal text.
+    pub fn to_string(value: Nat) -> String {
+        let quotient = value / 10
+        let digit = digit_string(value % 10)
+        case quotient == 0 {
+            True -> digit
+            False -> to_string(quotient) <> digit
+        }
+    }
 }
 
 pub mod Float {
@@ -322,7 +349,7 @@ pub mod Float {
 // =============================================================================
 
 /// A Unicode text type using a rope data structure for efficient concatenation.
-/// String literals `"..."` produce `Leaf(bytes)` values.
+/// String literals `"..."` produce `.Leaf(bytes)` values.
 pub enum String {
     Leaf(Bytes),
     Branch(String, String, Nat),
@@ -341,22 +368,22 @@ pub mod String {
     }
 
     /// Create an empty string.
-    pub fn empty() -> String { Leaf(b"") }
+    pub fn empty() -> String { .Leaf(b"") }
 
     /// Create a string from a byte sequence (assumed UTF-8).
-    pub fn from_bytes(bytes: Bytes) -> String { Leaf(bytes) }
+    pub fn from_bytes(bytes: Bytes) -> String { .Leaf(bytes) }
 
     /// Get the byte length of a string.
     pub fn len(s: String) -> Nat {
         case s {
-            Leaf(bytes) -> bytes.len()
-            Branch(_, _, cached_len) -> cached_len
+            .Leaf(bytes) -> bytes.len()
+            .Branch(_, _, cached_len) -> cached_len
         }
     }
 
     /// Concatenate two strings.
     pub fn concat(left: String, right: String) -> String {
-        Branch(left, right, left.len() + right.len())
+        .Branch(left, right, left.len() + right.len())
     }
 
     /// Concatenation operator for strings.
@@ -367,8 +394,8 @@ pub mod String {
     /// Convert a string to its underlying bytes (flattened).
     pub fn to_bytes(s: String) -> Bytes {
         case s {
-            Leaf(bytes) -> bytes
-            Branch(left, right, _) -> __tribute_bytes_concat(left.to_bytes(), right.to_bytes())
+            .Leaf(bytes) -> bytes
+            .Branch(left, right, _) -> __tribute_bytes_concat(left.to_bytes(), right.to_bytes())
         }
     }
 
@@ -376,14 +403,14 @@ pub mod String {
         case cursor {
             Cursor::CursorDone -> Cursor::CursorDone
             Cursor::CursorPending(string, rest) -> case string {
-                Leaf(bytes) -> {
+                .Leaf(bytes) -> {
                     let len = bytes.len()
                     case len == 0 {
                         True -> next_cursor(rest)
                         False -> Cursor::CursorChunk(bytes, 0, len, rest)
                     }
                 }
-                Branch(left, right, _) -> next_cursor(
+                .Branch(left, right, _) -> next_cursor(
                     Cursor::CursorPending(
                         left,
                         Cursor::CursorPending(right, rest)
@@ -480,17 +507,17 @@ pub mod String {
         let len = left.len()
         case len == right.len() {
             True -> case left {
-                Leaf(left_bytes) -> case right {
-                    Leaf(right_bytes) -> __tribute_bytes_range_equal(
+                .Leaf(left_bytes) -> case right {
+                    .Leaf(right_bytes) -> __tribute_bytes_range_equal(
                         left_bytes,
                         0,
                         right_bytes,
                         0,
                         len
                     )
-                    Branch(_, _, _) -> rope_equal(left, right)
+                    .Branch(_, _, _) -> rope_equal(left, right)
                 }
-                Branch(_, _, _) -> rope_equal(left, right)
+                .Branch(_, _, _) -> rope_equal(left, right)
             }
             False -> False
         }
@@ -535,7 +562,7 @@ extern "C" fn __tribute_bytes_slice_or_panic(bytes: Bytes, start: Nat, end: Nat)
 
 /// Bytes module with operations for byte sequences.
 pub mod Bytes {
-    use super::{Nat, Option, None, Some, __bytes_get_or_panic, __tribute_bytes_len, __tribute_bytes_concat, __tribute_bytes_range_equal, __tribute_bytes_slice_or_panic}
+    use super::{Nat, Option, __bytes_get_or_panic, __tribute_bytes_len, __tribute_bytes_concat, __tribute_bytes_range_equal, __tribute_bytes_slice_or_panic}
 
     /// Create an empty byte sequence.
     pub fn empty() -> Bytes { b"" }
@@ -588,8 +615,8 @@ pub mod Bytes {
     /// Returns None if index is out of bounds.
     pub fn get(bytes: Bytes, index: Nat) -> Option(Nat) {
         case index < bytes.len() {
-            True -> Some(bytes.get_or_panic(index))
-            False -> None
+            True -> .Some(bytes.get_or_panic(index))
+            False -> .None
         }
     }
 
@@ -704,6 +731,21 @@ pub mod io {
 }
 
 // =============================================================================
+// Prelude
+// =============================================================================
+
+// Every module, including those of package `std`, sees the `pub` items of
+// `prelude::v0` under their short names (`new-plans/modules.md`). Its paths
+// start with `pkg` so that the prelude does not rely on itself.
+pub mod prelude {
+    pub mod v0 {
+        pub use pkg::{Option, Result, String}
+        pub use pkg::{Int, Nat, Float, Bytes}
+        pub use pkg::collections::List
+    }
+}
+
+// =============================================================================
 // Compiler-owned Runtime
 // =============================================================================
 
@@ -722,5 +764,153 @@ pub(pkg) mod runtime {
         pub(pkg) extern "intrinsic" fn insert(slots: Slots(a), at: Nat, value: a) -> Slots(a)
         pub(pkg) extern "intrinsic" fn remove(slots: Slots(a), at: Nat) -> Slots(a)
         pub(pkg) extern "intrinsic" fn replace(slots: Slots(a), at: Nat, value: a) -> Slots(a)
+    }
+
+    // The evidence runtime both targets call by canonical path
+    // (`new-plans/cps-effects.md`). Evidence is `Slots(Marker)` sorted by
+    // `ability_id`, one slot per ability holding its top marker. Every
+    // operation builds a new evidence and leaves its arguments as they were.
+    // A missing ability is a compiler bug; reading it ends the execution with
+    // the trap of a `Slots` position past the end.
+    pub(pkg) mod evidence {
+        use pkg::{Int, Nat, Option}
+        use super::{Slots, Dispatch}
+
+        pub(pkg) struct Marker {
+            ability_id: Int,
+            prompt_tag: Nat,
+            tr_dispatch_fn: Option(Dispatch),
+            shadowed: Option(Marker),
+            outer: Slots(Marker),
+        }
+
+        // The first position in `[low, high)` whose marker's ability is not
+        // below `ability_id`.
+        fn search(ev: Slots(Marker), ability_id: Int, low: Nat, high: Nat) ->{} Nat {
+            case low < high {
+                True -> {
+                    let half = high - low
+                    let middle = low + half / 2
+                    case ev.get(middle).ability_id < ability_id {
+                        True -> ev.search(ability_id, middle + 1, high)
+                        False -> ev.search(ability_id, low, middle)
+                    }
+                }
+                False -> low
+            }
+        }
+
+        // The slot of `ability_id`: where its marker is, or would be inserted.
+        fn find(ev: Slots(Marker), ability_id: Int) ->{} Nat {
+            ev.search(ability_id, 0, ev.len)
+        }
+
+        fn holds(ev: Slots(Marker), at: Nat, ability_id: Int) ->{} Bool {
+            case at < ev.len {
+                True -> ev.get(at).ability_id == ability_id
+                False -> False
+            }
+        }
+
+        // Always traps: it reads the position past the end of `ev`. It stands
+        // where a missing ability's marker would be, which is a compiler bug.
+        fn trap_missing_ability(ev: Slots(Marker)) ->{} Marker {
+            ev.get(ev.len)
+        }
+
+        // The top marker of `ability_id`.
+        fn top(ev: Slots(Marker), ability_id: Int) ->{} Marker {
+            let at = ev.find(ability_id)
+            case ev.holds(at, ability_id) {
+                True -> ev.get(at)
+                False -> ev.trap_missing_ability
+            }
+        }
+
+        // `ev` with a new marker on top of the slot of `ability_id`, which
+        // shadows the marker it replaces.
+        fn install(
+            ev: Slots(Marker),
+            ability_id: Int,
+            prompt_tag: Nat,
+            tr_dispatch_fn: Option(Dispatch),
+            outer: Slots(Marker),
+        ) ->{} Slots(Marker) {
+            let at = ev.find(ability_id)
+            case ev.holds(at, ability_id) {
+                True -> ev.replace(at, Marker {
+                    ability_id,
+                    prompt_tag,
+                    tr_dispatch_fn,
+                    shadowed: .Some(ev.get(at)),
+                    outer,
+                })
+                False -> ev.insert(at, Marker {
+                    ability_id,
+                    prompt_tag,
+                    tr_dispatch_fn,
+                    shadowed: .None,
+                    outer,
+                })
+            }
+        }
+
+        pub(pkg) fn lookup(ev: Slots(Marker), ability_id: Int) ->{} Nat {
+            ev.top(ability_id).prompt_tag
+        }
+
+        pub(pkg) fn lookup_tr(ev: Slots(Marker), ability_id: Int) ->{} Dispatch {
+            case ev.top(ability_id).tr_dispatch_fn {
+                .Some(dispatch) -> dispatch
+                .None -> ev.remove(ev.len).lookup_tr(ability_id)
+            }
+        }
+
+        pub(pkg) fn extend(
+            ev: Slots(Marker),
+            ability_id: Int,
+            prompt_tag: Nat,
+            tr_dispatch_fn: Option(Dispatch),
+            outer: Slots(Marker),
+        ) ->{} Slots(Marker) {
+            ev.install(ability_id, prompt_tag, tr_dispatch_fn, outer)
+        }
+
+        pub(pkg) fn mask(ev: Slots(Marker), ability_id: Int) ->{} Slots(Marker) {
+            let at = ev.find(ability_id)
+            case ev.holds(at, ability_id) {
+                True -> case ev.get(at).shadowed {
+                    .Some(below) -> ev.replace(at, below)
+                    .None -> ev.remove(at)
+                }
+                False -> ev.replace(at, ev.trap_missing_ability)
+            }
+        }
+
+        pub(pkg) fn dup(ev: Slots(Marker), ability_id: Int) ->{} Slots(Marker) {
+            let marker = ev.top(ability_id)
+            ev.install(ability_id, marker.prompt_tag, marker.tr_dispatch_fn, marker.outer)
+        }
+
+        pub(pkg) fn outer(ev: Slots(Marker), ability_id: Int) ->{} Slots(Marker) {
+            ev.top(ability_id).outer
+        }
+
+        pub(pkg) fn tail(ev: Slots(Marker), slot: Int) ->{} Slots(Marker) {
+            let at = ev.find(slot)
+            case ev.holds(at, slot) {
+                True -> ev.get(at).outer
+                False -> ev
+            }
+        }
+
+        pub(pkg) fn with_tail(ev: Slots(Marker), slot: Int, tail: Slots(Marker)) ->{} Slots(Marker) {
+            ev.install(slot, 0, .None, tail)
+        }
+
+        pub(pkg) fn push(ev: Slots(Marker), source: Slots(Marker), ability_id: Int) ->{} Slots(Marker) {
+            let marker = source.top(ability_id)
+            ev.install(ability_id, marker.prompt_tag, marker.tr_dispatch_fn, marker.outer)
+        }
     }
 }

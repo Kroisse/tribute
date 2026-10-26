@@ -47,9 +47,10 @@ function creation or deletion, cross-function call rewrites, global DCE, and
 pipeline-boundary conversion checks.
 
 `PatternApplicator` and local region transforms support `func.func`-anchored
-application for these passes. For example, `canonicalize_pass()` and
-`dce_pass(DceConfig::default())` run cleanup under one `func.func` scope, and
-`scf_to_cf_pass()` lowers structured control flow inside one function.
+application for these passes. For example, `Canonicalize` and
+`EliminateDeadCode::<func::Func>::new()` run cleanup under one `func.func`
+scope, and `ScfToCf` lowers structured control flow inside one
+function.
 Module-wide entry points explicitly apply the same transform to all functions.
 Production scheduling uses nested function passes when the transform does not
 create functions, delete functions, or rewrite cross-function symbols.
@@ -157,7 +158,7 @@ intrinsic_to_wasm
 wasm_lowerer
 convert_struct_layouts
 verify_wasm_backend_ready
-cast legalization + reference upcast elision + ReconcileUnrealizedCasts
+cast legalization + wasm.ref_upcast for reference upcasts + ReconcileUnrealizedCasts
 finalize_wasm_gc_types
 verify_wasm_emission_ready
 ```
@@ -202,7 +203,7 @@ consumes only its exit contract:
 target ABI validation + CPS signature physicalization
 root and entry bridge composition
 closure lowering
-prepare_native_evidence_runtime + evidence_to_native
+evidence_lowering
 finalize_closure_storage_layout + boundary exit verification
 native String/Bytes/I/O/List lowering
 scf_to_cf

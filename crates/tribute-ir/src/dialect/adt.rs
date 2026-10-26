@@ -179,7 +179,9 @@ impl TypeAliasHint for Variant {
 
 use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
+use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::ops::DialectOp;
+use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{OpRef, TypeRef, ValueDef, ValueRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
@@ -202,19 +204,34 @@ use trunk_ir::walk::{WalkAction, walk_op};
 ///
 /// This is a module-level pass rather than a per-op canonicalize fold so the
 /// written layouts are collected once per run instead of once per candidate.
-/// Returns the number of forwarded reads.
-pub fn forward_struct_gets(ctx: &mut IrContext, root: Module) -> usize {
-    let mut written = HashSet::default();
-    let _ = walk_op::<()>(ctx, root.op(), &mut |op| {
-        if let Ok(set) = StructSet::from_op(ctx, op) {
-            written.insert(set.r#type(ctx));
-        }
-        ControlFlow::Continue(WalkAction::Advance)
-    });
-    PatternApplicator::new(TypeConverter::new())
-        .add_pattern(ForwardStructGet { written })
-        .apply_partial(ctx, root)
-        .total_changes
+pub struct ForwardStructGets;
+
+impl Pass for ForwardStructGets {
+    type Target = trunk_ir::dialect::core::Module;
+
+    fn name(&self) -> &'static str {
+        "forward-struct-gets"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: trunk_ir::dialect::core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        let root = Module::from(target);
+        let mut written = HashSet::default();
+        let _ = walk_op::<()>(ctx, root.op(), &mut |op| {
+            if let Ok(set) = StructSet::from_op(ctx, op) {
+                written.insert(set.r#type(ctx));
+            }
+            ControlFlow::Continue(WalkAction::Advance)
+        });
+        PatternApplicator::new(TypeConverter::new())
+            .add_pattern(ForwardStructGet { written })
+            .apply_partial(ctx, root);
+        Ok(())
+    }
 }
 
 struct ForwardStructGet {
@@ -1286,23 +1303,35 @@ mod tests {
 
 #[cfg(test)]
 mod canonicalize_tests {
-    use super::forward_struct_gets;
+    use super::ForwardStructGets;
     use trunk_ir::IrContext;
+    use trunk_ir::dialect::{core, func};
+    use trunk_ir::ops::DialectOp;
     use trunk_ir::parser::parse_test_module;
+    use trunk_ir::pass::PassManager;
     use trunk_ir::printer::print_module;
     use trunk_ir::rewrite::Module;
-    use trunk_ir::transforms::canonicalize::canonicalize;
+    use trunk_ir::transforms::Canonicalize;
 
     fn count(ctx: &IrContext, module: Module, name: &str) -> usize {
         print_module(ctx, module.op()).matches(name).count()
     }
 
-    fn fold(input: &str) -> (IrContext, Module, usize) {
+    /// Forward struct reads and canonicalize; the flag tells whether the IR
+    /// changed.
+    fn fold(input: &str) -> (IrContext, Module, bool) {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, input);
-        let changes =
-            forward_struct_gets(&mut ctx, module) + canonicalize(&mut ctx, module).total_changes;
-        (ctx, module, changes)
+        let before = print_module(&ctx, module.op());
+        let root = core::Module::from_op(&ctx, module.op()).expect("core.module");
+        let mut pm = PassManager::new();
+        pm.add_pass(ForwardStructGets)
+            .nest::<func::Func>()
+            .add_pass(Canonicalize);
+        pm.run(&mut ctx, root, &mut Default::default())
+            .expect("fold passes");
+        let changed = print_module(&ctx, module.op()) != before;
+        (ctx, module, changed)
     }
 
     const PAIR: &str = r#"core.module @test {
@@ -1316,15 +1345,15 @@ mod canonicalize_tests {
 
     #[test]
     fn struct_get_of_struct_new_forwards_the_field() {
-        let (ctx, module, changes) = fold(PAIR);
-        assert!(changes >= 1);
+        let (ctx, module, changed) = fold(PAIR);
+        assert!(changed);
         assert_eq!(count(&ctx, module, "adt.struct_get"), 0);
         assert!(print_module(&ctx, module.op()).contains("func.return %1"));
     }
 
     #[test]
     fn struct_get_of_a_block_argument_is_not_folded() {
-        let (ctx, module, changes) = fold(
+        let (ctx, module, changed) = fold(
             r#"core.module @test {
   !pair = adt.struct<Pair(a: core.i32, b: core.i64)>
   func.func @f(%p: !pair) -> core.i64 {
@@ -1333,13 +1362,13 @@ mod canonicalize_tests {
   }
 }"#,
         );
-        assert_eq!(changes, 0);
+        assert!(!changed);
         assert_eq!(count(&ctx, module, "adt.struct_get"), 1);
     }
 
     #[test]
     fn struct_get_with_a_different_layout_type_is_not_folded() {
-        let (ctx, module, changes) = fold(
+        let (ctx, module, changed) = fold(
             r#"core.module @test {
   !pair = adt.struct<Pair(a: core.i32, b: core.i64)>
   !other = adt.struct<Other(a: core.i32, b: core.i64)>
@@ -1350,13 +1379,13 @@ mod canonicalize_tests {
   }
 }"#,
         );
-        assert_eq!(changes, 0);
+        assert!(!changed);
         assert_eq!(count(&ctx, module, "adt.struct_get"), 1);
     }
 
     #[test]
     fn struct_get_with_a_mismatched_result_type_is_not_folded() {
-        let (ctx, module, changes) = fold(
+        let (ctx, module, changed) = fold(
             r#"core.module @test {
   !pair = adt.struct<Pair(a: core.i32, b: core.i64)>
   func.func @f(%x: core.i32, %y: core.i64) -> core.i32 {
@@ -1366,13 +1395,13 @@ mod canonicalize_tests {
   }
 }"#,
         );
-        assert_eq!(changes, 0);
+        assert!(!changed);
         assert_eq!(count(&ctx, module, "adt.struct_get"), 1);
     }
 
     #[test]
     fn struct_get_out_of_range_field_is_not_folded() {
-        let (ctx, module, changes) = fold(
+        let (ctx, module, changed) = fold(
             r#"core.module @test {
   !pair = adt.struct<Pair(a: core.i32, b: core.i64)>
   func.func @f(%x: core.i32, %y: core.i64) -> core.i64 {
@@ -1382,13 +1411,13 @@ mod canonicalize_tests {
   }
 }"#,
         );
-        assert_eq!(changes, 0);
+        assert!(!changed);
         assert_eq!(count(&ctx, module, "adt.struct_get"), 1);
     }
 
     #[test]
     fn struct_get_of_a_struct_mutated_through_an_alias_is_not_folded() {
-        let (ctx, module, changes) = fold(
+        let (ctx, module, changed) = fold(
             r#"core.module @test {
   !pair = adt.struct<Pair(a: core.i32, b: core.i64)>
   func.func @f(%x: core.i32, %y: core.i64, %z: core.i64) -> core.i64 {
@@ -1401,13 +1430,13 @@ mod canonicalize_tests {
   }
 }"#,
         );
-        assert_eq!(changes, 0);
+        assert!(!changed);
         assert_eq!(count(&ctx, module, "adt.struct_get"), 1);
     }
 
     #[test]
     fn struct_get_is_not_folded_when_another_function_writes_the_layout() {
-        let (ctx, module, changes) = fold(
+        let (ctx, module, changed) = fold(
             r#"core.module @test {
   !pair = adt.struct<Pair(a: core.i32, b: core.i64)>
   func.func @write(%p: !pair, %z: core.i64) {
@@ -1421,13 +1450,13 @@ mod canonicalize_tests {
   }
 }"#,
         );
-        assert_eq!(changes, 0);
+        assert!(!changed);
         assert_eq!(count(&ctx, module, "adt.struct_get"), 1);
     }
 
     #[test]
     fn struct_get_of_a_mutated_struct_is_not_folded() {
-        let (ctx, module, changes) = fold(
+        let (ctx, module, changed) = fold(
             r#"core.module @test {
   !pair = adt.struct<Pair(a: core.i32, b: core.i64)>
   func.func @f(%x: core.i32, %y: core.i64, %z: core.i64) -> core.i64 {
@@ -1438,13 +1467,13 @@ mod canonicalize_tests {
   }
 }"#,
         );
-        assert_eq!(changes, 0);
+        assert!(!changed);
         assert_eq!(count(&ctx, module, "adt.struct_get"), 1);
     }
 
     #[test]
     fn struct_get_of_a_struct_with_explicit_ownership_is_not_folded() {
-        let (ctx, module, changes) = fold(
+        let (ctx, module, changed) = fold(
             r#"core.module @test {
   !pair = adt.struct<Pair(a: core.i32, b: core.i64)>
   func.func @f(%x: core.i32, %y: core.i64) -> core.i64 {
@@ -1455,13 +1484,13 @@ mod canonicalize_tests {
   }
 }"#,
         );
-        assert_eq!(changes, 0);
+        assert!(!changed);
         assert_eq!(count(&ctx, module, "adt.struct_get"), 1);
     }
 
     #[test]
     fn ref_cast_to_the_operand_type_is_forwarded() {
-        let (ctx, module, changes) = fold(
+        let (ctx, module, changed) = fold(
             r#"core.module @test {
   !pair = adt.struct<Pair(a: core.i32, b: core.i64)>
   func.func @f(%p: !pair) -> !pair {
@@ -1470,13 +1499,13 @@ mod canonicalize_tests {
   }
 }"#,
         );
-        assert!(changes >= 1);
+        assert!(changed);
         assert_eq!(count(&ctx, module, "adt.ref_cast"), 0);
     }
 
     #[test]
     fn ref_cast_to_another_type_is_not_folded() {
-        let (ctx, module, changes) = fold(
+        let (ctx, module, changed) = fold(
             r#"core.module @test {
   !pair = adt.struct<Pair(a: core.i32, b: core.i64)>
   func.func @f(%p: !pair) -> tribute_rt.anyref {
@@ -1485,7 +1514,7 @@ mod canonicalize_tests {
   }
 }"#,
         );
-        assert_eq!(changes, 0);
+        assert!(!changed);
         assert_eq!(count(&ctx, module, "adt.ref_cast"), 1);
     }
 }

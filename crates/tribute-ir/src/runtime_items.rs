@@ -36,8 +36,48 @@ pub enum RuntimeItemKind {
     Struct,
 }
 
+/// The evidence runtime module (`new-plans/cps-effects.md`).
+pub mod evidence {
+    pub const MARKER: &[&str] = &["std", "runtime", "evidence", "Marker"];
+    pub const LOOKUP: &[&str] = &["std", "runtime", "evidence", "lookup"];
+    pub const LOOKUP_TR: &[&str] = &["std", "runtime", "evidence", "lookup_tr"];
+    pub const EXTEND: &[&str] = &["std", "runtime", "evidence", "extend"];
+    pub const MASK: &[&str] = &["std", "runtime", "evidence", "mask"];
+    pub const DUP: &[&str] = &["std", "runtime", "evidence", "dup"];
+    pub const OUTER: &[&str] = &["std", "runtime", "evidence", "outer"];
+    pub const TAIL: &[&str] = &["std", "runtime", "evidence", "tail"];
+    pub const WITH_TAIL: &[&str] = &["std", "runtime", "evidence", "with_tail"];
+    pub const PUSH: &[&str] = &["std", "runtime", "evidence", "push"];
+
+    /// The evidence functions.
+    pub const FUNCTIONS: [&[&str]; 9] = [
+        LOOKUP, LOOKUP_TR, EXTEND, MASK, DUP, OUTER, TAIL, WITH_TAIL, PUSH,
+    ];
+}
+
+const fn function(path: &'static [&'static str]) -> RuntimeItem {
+    RuntimeItem {
+        path,
+        kind: RuntimeItemKind::Function,
+    }
+}
+
 /// The runtime items lowering uses.
-pub const RUNTIME_ITEMS: &[RuntimeItem] = &[];
+pub const RUNTIME_ITEMS: &[RuntimeItem] = &[
+    RuntimeItem {
+        path: evidence::MARKER,
+        kind: RuntimeItemKind::Struct,
+    },
+    function(evidence::LOOKUP),
+    function(evidence::LOOKUP_TR),
+    function(evidence::EXTEND),
+    function(evidence::MASK),
+    function(evidence::DUP),
+    function(evidence::OUTER),
+    function(evidence::TAIL),
+    function(evidence::WITH_TAIL),
+    function(evidence::PUSH),
+];
 
 /// The compiler intrinsic identities of the runtime array `Slots(a)`
 /// (`new-plans/types.md`, "Slots").
@@ -65,6 +105,19 @@ pub fn function_entry_points(items: &[RuntimeItem]) -> Vec<SymbolPath> {
         .filter(|item| item.kind == RuntimeItemKind::Function)
         .map(|item| SymbolPath::new([runtime_symbol(item.path)]))
         .collect()
+}
+
+/// Global DCE configuration that roots every function of `runtime`.
+///
+/// A runtime function is a root until the target lowering stages that call
+/// it have run (`new-plans/modules.md`, "생존 범위"). Every runtime function
+/// is called by target evidence lowering or earlier; the cleanup DCE after
+/// it removes the ones nothing calls.
+pub fn kept_alive(runtime: &[RuntimeItem]) -> trunk_ir::transforms::GlobalDceConfig {
+    trunk_ir::transforms::GlobalDceConfig {
+        extra_entry_points: function_entry_points(runtime),
+        ..Default::default()
+    }
 }
 
 /// The runtime type at `path`, published in the prelude type dictionary.

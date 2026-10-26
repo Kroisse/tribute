@@ -12,14 +12,14 @@ use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::{
-    AbilityId, AbilityInstance, AbilityRow, Arm, BinOpKind, Expr, ExprKind, FieldInit,
+    AbilityId, AbilityInstance, AbilityRow, Arm, BinOpKind, Candidates, Expr, ExprKind, FieldInit,
     FieldPattern, HandlerArm, HandlerKind, LiteralPattern, LocalId, ModulePath, NodeId, OpDeclKind,
     Pattern, PatternKind, ResolvedRef, Stmt, Type, TypeKind, TypeScheme, TypedRef,
     collect_row_vars,
 };
 
 use super::super::constraint::ConstraintOriginKind;
-use super::super::func_context::{FunctionInferenceContext, LetSchemeBinding};
+use super::super::func_context::{ConstructorShape, FunctionInferenceContext, LetSchemeBinding};
 use super::super::solver::{RowSubst, TypeSolver, TypeSubst};
 use super::super::subst;
 use super::{Mode, TypeChecker};
@@ -46,7 +46,8 @@ struct PatternBinding<'db> {
 /// The function a method call selects for its receiver's type.
 pub(crate) enum MethodSelection<'db> {
     One(crate::typeck::MethodEntry<'db>),
-    /// Several functions a path may name take the receiver.
+    /// Several functions a path may name take the call, so it waits for
+    /// more of its types.
     Ambiguous(Vec<crate::ast::FuncDefId<'db>>),
     None,
 }
@@ -59,6 +60,10 @@ pub(crate) struct CallTypes<'a, 'db> {
     pub args: &'a [Type<'db>],
     pub arity: usize,
     pub result: Option<Type<'db>>,
+    /// Whether the types are as determined as they will be. Until then, a
+    /// function that fits is selected only when no function of a lower rank
+    /// fits, since a type determined later may rule it out.
+    pub settled: bool,
 }
 
 impl<'db> CallTypes<'_, 'db> {
@@ -89,15 +94,12 @@ impl<'db> CallTypes<'_, 'db> {
 
 /// The functions name resolution found for a call's callee.
 pub(crate) fn candidate_functions<'db>(
-    candidates: &[ResolvedRef<'db>],
-) -> Vec<crate::ast::FuncDefId<'db>> {
-    candidates
-        .iter()
-        .filter_map(|candidate| match candidate {
-            ResolvedRef::Function { id } => Some(*id),
-            _ => None,
-        })
-        .collect()
+    candidates: &Candidates<ResolvedRef<'db>>,
+) -> Candidates<crate::ast::FuncDefId<'db>> {
+    candidates.filter_map(|candidate| match candidate {
+        ResolvedRef::Function { id } => Some(*id),
+        _ => None,
+    })
 }
 
 /// Check if a type contains any unification variables (UniVar).
@@ -120,9 +122,6 @@ fn type_contains_univar<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> boo
                 || ability_row_contains_univar(db, *effect)
         }
         TypeKind::Tuple(elems) => elems.iter().any(|e| type_contains_univar(db, *e)),
-        TypeKind::App { ctor, args } => {
-            type_contains_univar(db, *ctor) || args.iter().any(|a| type_contains_univar(db, *a))
-        }
         TypeKind::Continuation {
             arg,
             result,
@@ -266,21 +265,20 @@ impl<'db> TypeChecker<'db> {
                 result
             }
             ExprKind::Cons { ctor, args } => {
-                let ctor_ty = self.infer_var_with_ctx(ctx, Some(expr.id), ctor);
-                if args.is_empty() {
-                    // Unit constructor (e.g., None) - just return the constructor type
-                    ctor_ty
-                } else {
-                    // Constructor with arguments (e.g., Some(x)) - treat as function call
-                    let arg_types = self.infer_call_args_with_ctx(ctx, ctor_ty, args);
-                    self.infer_call_with_ctx(ctx, ctor_ty, &arg_types, expr.id)
-                }
+                self.infer_constructor_with_ctx(ctx, expr.id, ctor, args, lambda_expected)
             }
             ExprKind::Record {
                 type_name,
                 fields,
                 spread,
-            } => self.infer_record_type_with_ctx(ctx, expr.id, type_name, fields, spread.as_ref()),
+            } => self.infer_record_type_with_ctx(
+                ctx,
+                expr.id,
+                type_name,
+                fields,
+                spread.as_ref(),
+                lambda_expected,
+            ),
             ExprKind::Functions { candidates, name } => {
                 self.infer_function_value_with_ctx(ctx, expr.id, name, candidates)
             }
@@ -315,7 +313,8 @@ impl<'db> TypeChecker<'db> {
                 let result_ty = ctx.begin_result_join(expr.id);
                 for arm in arms {
                     ctx.push_scope();
-                    let pattern_ty = self.infer_pattern_type_with_ctx(ctx, &arm.pattern);
+                    let pattern_ty =
+                        self.infer_pattern_type_with_ctx(ctx, &arm.pattern, Some(scrutinee_ty));
                     ctx.constrain_eq(pattern_ty, scrutinee_ty);
                     self.bind_pattern_vars_with_ctx(ctx, &arm.pattern, scrutinee_ty);
                     let arm_ty = self.infer_expr_type_with_ctx(ctx, &arm.body);
@@ -536,6 +535,7 @@ impl<'db> TypeChecker<'db> {
                     }
                 }
                 self.report_missing_handler_arms(ctx, expr.id, handlers, &handled_ability_ids);
+                self.report_duplicate_handler_arms(ctx, handlers);
 
                 // Get the body's effect after checking (may have effects added)
                 let body_effect_after = ctx.current_effect();
@@ -550,7 +550,8 @@ impl<'db> TypeChecker<'db> {
                         return None;
                     };
                     Some(ctx.with_scope(|ctx| {
-                        let pattern_ty = self.infer_pattern_type_with_ctx(ctx, binding);
+                        let pattern_ty =
+                            self.infer_pattern_type_with_ctx(ctx, binding, Some(body_ty));
                         ctx.constrain_eq(pattern_ty, body_ty);
                         self.bind_pattern_vars_with_ctx(ctx, binding, body_ty);
                         self.infer_expr_type_with_ctx(ctx, &handler.body)
@@ -773,7 +774,7 @@ impl<'db> TypeChecker<'db> {
         call_ty
     }
 
-    fn infer_expr_type_with_ctx(
+    pub(super) fn infer_expr_type_with_ctx(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
         expr: &Expr<ResolvedRef<'db>>,
@@ -843,21 +844,20 @@ impl<'db> TypeChecker<'db> {
                 result
             }
             ExprKind::Cons { ctor, args } => {
-                let ctor_ty = self.infer_var_with_ctx(ctx, Some(expr.id), ctor);
-                if args.is_empty() {
-                    // Unit constructor (e.g., None) - just return the constructor type
-                    ctor_ty
-                } else {
-                    // Constructor with arguments (e.g., Some(x)) - treat as function call
-                    let arg_types = self.infer_call_args_with_ctx(ctx, ctor_ty, args);
-                    self.infer_call_with_ctx(ctx, ctor_ty, &arg_types, expr.id)
-                }
+                self.infer_constructor_with_ctx(ctx, expr.id, ctor, args, None)
             }
             ExprKind::Record {
                 type_name,
                 fields,
                 spread,
-            } => self.infer_record_type_with_ctx(ctx, expr.id, type_name, fields, spread.as_ref()),
+            } => self.infer_record_type_with_ctx(
+                ctx,
+                expr.id,
+                type_name,
+                fields,
+                spread.as_ref(),
+                None,
+            ),
             ExprKind::Block { stmts, value } => {
                 ctx.push_scope();
                 for stmt in stmts {
@@ -872,7 +872,8 @@ impl<'db> TypeChecker<'db> {
                 let result_ty = ctx.begin_result_join(expr.id);
                 for arm in arms {
                     ctx.push_scope();
-                    let pattern_ty = self.infer_pattern_type_with_ctx(ctx, &arm.pattern);
+                    let pattern_ty =
+                        self.infer_pattern_type_with_ctx(ctx, &arm.pattern, Some(scrutinee_ty));
                     ctx.constrain_eq(pattern_ty, scrutinee_ty);
                     self.bind_pattern_vars_with_ctx(ctx, &arm.pattern, scrutinee_ty);
                     let arm_ty = self.infer_expr_type_with_ctx(ctx, &arm.body);
@@ -937,7 +938,27 @@ impl<'db> TypeChecker<'db> {
             ctx.get_node_type(expr.id)
                 .expect("checked expression has a type")
         } else {
-            self.infer_expr_type_with_ctx(ctx, expr)
+            // An implicit constructor takes its constructor from the type
+            // expected of it.
+            match &*expr.kind {
+                ExprKind::Cons {
+                    ctor: ctor @ ResolvedRef::ImplicitConstructor { .. },
+                    args,
+                } => self.infer_constructor_with_ctx(ctx, expr.id, ctor, args, Some(expected)),
+                ExprKind::Record {
+                    type_name: type_name @ ResolvedRef::ImplicitConstructor { .. },
+                    fields,
+                    spread,
+                } => self.infer_record_type_with_ctx(
+                    ctx,
+                    expr.id,
+                    type_name,
+                    fields,
+                    spread.as_ref(),
+                    Some(expected),
+                ),
+                _ => self.infer_expr_type_with_ctx(ctx, expr),
+            }
         }
     }
 
@@ -1006,6 +1027,10 @@ impl<'db> TypeChecker<'db> {
         if let Some(ty) = ctx.get_constructor_reference_type(node_id) {
             return ty;
         }
+        if let Some(deferred) = self.deferred_constructor(ctx, node_id) {
+            return deferred.ctor_ty;
+        }
+        let resolved = &self.constructor_reference(ctx, node_id, resolved);
         let ty = match resolved {
             ResolvedRef::Module { path } => {
                 self.report_module_reference(ctx, node_id, *path, "a constructor")
@@ -1016,7 +1041,31 @@ impl<'db> TypeChecker<'db> {
         ty
     }
 
-    /// Infer a record literal's nominal type and constrain its fields and spread.
+    /// Infer a constructor application's type: `Some(x)`, `None`, or the
+    /// implicit `.Some(x)`, whose constructor `expected` may give.
+    fn infer_constructor_with_ctx(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        node: NodeId,
+        ctor: &ResolvedRef<'db>,
+        args: &[Expr<ResolvedRef<'db>>],
+        expected: Option<Type<'db>>,
+    ) -> Type<'db> {
+        let shape = ConstructorShape::of_arity(args.len());
+        let ctor = &self.decide_constructor(ctx, node, ctor, expected, shape, false);
+        let ctor_ty = self.infer_var_with_ctx(ctx, Some(node), ctor);
+        if args.is_empty() {
+            // Unit constructor (e.g., None) - just return the constructor type
+            ctor_ty
+        } else {
+            // Constructor with arguments (e.g., Some(x)) - treat as function call
+            let arg_types = self.infer_call_args_with_ctx(ctx, ctor_ty, args);
+            self.infer_call_with_ctx(ctx, ctor_ty, &arg_types, node)
+        }
+    }
+
+    /// Infer a record literal's nominal type and constrain its fields and
+    /// spread. An implicit constructor's type is `expected`, where known.
     fn infer_record_type_with_ctx(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
@@ -1024,7 +1073,23 @@ impl<'db> TypeChecker<'db> {
         type_name: &ResolvedRef<'db>,
         fields: &[FieldInit<ResolvedRef<'db>>],
         spread: Option<&Expr<ResolvedRef<'db>>>,
+        expected: Option<Type<'db>>,
     ) -> Type<'db> {
+        let written: Vec<Symbol> = fields.iter().map(|f| f.name.clone()).collect();
+        let type_name = &self.decide_constructor(
+            ctx,
+            record_id,
+            type_name,
+            expected,
+            ConstructorShape::Fields {
+                names: written,
+                rest: spread.is_some(),
+            },
+            false,
+        );
+        if let Some(result) = self.infer_deferred_record_with_ctx(ctx, record_id, fields, spread) {
+            return result;
+        }
         let ctor_ty = self.instantiate_value_constructor_with_ctx(ctx, record_id, type_name);
         let struct_ty = if let TypeKind::Func { result, .. } = ctor_ty.kind(self.db()) {
             *result
@@ -1128,7 +1193,7 @@ impl<'db> TypeChecker<'db> {
             self.report_type_error(
                 record_id,
                 format!(
-                    "`{qualified}` has positional fields; construct it with `{}(...)`",
+                    "`{qualified}` has positional fields; construct it with `.{}(...)`",
                     id.name(self.db())
                 ),
             );
@@ -1154,7 +1219,7 @@ impl<'db> TypeChecker<'db> {
     /// Report written field names that do not fit the declared ones: unknown
     /// and duplicate fields in source order, then the first missing field in
     /// declaration order unless the rest are omitted explicitly.
-    fn report_field_shape(
+    pub(super) fn report_field_shape(
         &self,
         node: NodeId,
         owner: std::fmt::Arguments<'_>,
@@ -1247,6 +1312,11 @@ impl<'db> TypeChecker<'db> {
         type_name: &ResolvedRef<'db>,
         written: &[Symbol],
     ) -> (Type<'db>, Type<'db>, Vec<Option<Type<'db>>>) {
+        if let Some(deferred) = self.deferred_constructor(ctx, pattern_id) {
+            let field_tys = deferred.field_types.iter().copied().map(Some).collect();
+            return (deferred.ctor_ty, deferred.result_ty, field_tys);
+        }
+        let type_name = &self.constructor_reference(ctx, pattern_id, type_name);
         let ctor_ty = self.instantiate_value_constructor_with_ctx(ctx, pattern_id, type_name);
         let (params, result) = match ctor_ty.kind(self.db()) {
             TypeKind::Func { params, result, .. } => (params.as_slice(), *result),
@@ -1291,7 +1361,7 @@ impl<'db> TypeChecker<'db> {
             self.report_type_error(
                 pattern_id,
                 format!(
-                    "`{qualified}` has positional fields; match it with `{}(...)`",
+                    "`{qualified}` has positional fields; match it with `.{}(...)`",
                     id.name(self.db())
                 ),
             );
@@ -1365,6 +1435,18 @@ impl<'db> TypeChecker<'db> {
                     .instantiate_constructor(*id)
                     .unwrap_or_else(|| ctx.fresh_type_var()),
             },
+            ResolvedRef::ImplicitConstructor { .. } => {
+                let Some(node) = node else {
+                    return ctx.fresh_type_var();
+                };
+                if let Some(deferred) = self.deferred_constructor(ctx, node) {
+                    return deferred.ctor_ty;
+                }
+                match self.constructor_reference(ctx, node, resolved) {
+                    ResolvedRef::ImplicitConstructor { .. } => ctx.fresh_type_var(),
+                    decided => self.infer_var_with_ctx(ctx, Some(node), &decided),
+                }
+            }
             ResolvedRef::Module { path } => match node {
                 // Name resolution accepts a module path in value position (an
                 // unresolved `use` leaves one behind), but no value has a
@@ -1504,6 +1586,7 @@ impl<'db> TypeChecker<'db> {
                 args: first_ty.as_slice(),
                 arity,
                 result: None,
+                settled: false,
             },
         );
         if let MethodSelection::One(entry) = selection {
@@ -1536,6 +1619,7 @@ impl<'db> TypeChecker<'db> {
                 args: &arg_types,
                 arity,
                 result: None,
+                settled: false,
             },
         );
         if let MethodSelection::One(entry) = selection {
@@ -1583,7 +1667,7 @@ impl<'db> TypeChecker<'db> {
         ctx: &mut FunctionInferenceContext<'_, 'db>,
         node: NodeId,
         name: &SymbolPath,
-        candidates: &[ResolvedRef<'db>],
+        candidates: &Candidates<ResolvedRef<'db>>,
     ) -> Type<'db> {
         let result_ty = ctx.fresh_type_var();
         let effect = ctx
@@ -1775,7 +1859,7 @@ impl<'db> TypeChecker<'db> {
 
     /// Extract struct declaration identity and type arguments from a type.
     ///
-    /// Returns (Some(struct_id), type_args) if the type is a Named or App type,
+    /// Returns (Some(struct_id), type_args) if the type is a Named type,
     /// otherwise (None, empty vec).
     fn extract_struct_info(
         &self,
@@ -1783,13 +1867,6 @@ impl<'db> TypeChecker<'db> {
     ) -> (Option<crate::ast::TypeDefId<'db>>, Vec<Type<'db>>) {
         match ty.kind(self.db()) {
             TypeKind::Named { id, args, .. } => (Some(*id), args.clone()),
-            TypeKind::App { ctor, args } => {
-                if let TypeKind::Named { id, .. } = ctor.kind(self.db()) {
-                    (Some(*id), args.clone())
-                } else {
-                    (None, vec![])
-                }
-            }
             _ => (None, vec![]),
         }
     }
@@ -1807,14 +1884,6 @@ impl<'db> TypeChecker<'db> {
                 if id.is_builtin_list(self.db()) && args.len() == 1 =>
             {
                 args[0]
-            }
-            TypeKind::App { ctor, args } if args.len() == 1 => {
-                if let TypeKind::Named { id, .. } = ctor.kind(self.db())
-                    && id.is_builtin_list(self.db())
-                {
-                    return args[0];
-                }
-                ctx.fresh_type_var()
             }
             _ => ctx.fresh_type_var(),
         }
@@ -1849,11 +1918,11 @@ impl<'db> TypeChecker<'db> {
     }
 
     /// Select the function a call names among the functions name resolution
-    /// found for it in the call's scope: the one whose signature takes the
-    /// call.
+    /// found for it in the call's scope, by rank: the one whose signature
+    /// takes the call.
     pub(crate) fn select_method(
         &self,
-        candidates: &[crate::ast::FuncDefId<'db>],
+        candidates: &Candidates<crate::ast::FuncDefId<'db>>,
         call: CallTypes<'_, 'db>,
     ) -> MethodSelection<'db> {
         match self.select_function(candidates, call) {
@@ -1864,62 +1933,97 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
-    /// The function among `candidates` whose whole signature takes `call`,
-    /// and, where none does, the one function whose parameters take the
-    /// arguments the call has, whatever their number and its result.
+    /// The function whose whole signature takes `call` in the highest rank
+    /// of `candidates` that has one, and, where no rank does, the one function of
+    /// any rank whose parameters take the arguments the call has, whatever
+    /// their number and its result. Before `call` is settled, a function
+    /// that lower ranks compete with is not selected yet.
     pub(crate) fn select_function(
         &self,
-        candidates: &[crate::ast::FuncDefId<'db>],
+        candidates: &Candidates<crate::ast::FuncDefId<'db>>,
         call: CallTypes<'_, 'db>,
     ) -> (
         MethodSelection<'db>,
         Option<crate::typeck::MethodEntry<'db>>,
     ) {
-        let candidates: Vec<crate::typeck::MethodEntry<'db>> = candidates
-            .iter()
-            .filter_map(|candidate| {
-                let (scheme, _) = self.env.function_scheme(*candidate)?;
-                Some(crate::typeck::MethodEntry {
-                    func_id: *candidate,
-                    func_ty: scheme.body(self.db()),
-                })
-            })
-            .collect();
-        let signatures: Vec<_> = candidates
-            .iter()
-            .filter_map(|entry| match entry.func_ty.kind(self.db()) {
-                TypeKind::Func { params, result, .. } => Some((entry, &params[..], *result)),
-                _ => None,
-            })
-            .collect();
-        let select = |matches: &dyn Fn(&[Type<'db>], Type<'db>) -> bool| {
-            let mut matching = signatures
-                .iter()
-                .filter(|(_, params, result)| matches(params, *result))
-                .map(|(entry, ..)| *entry);
-            match (matching.next(), matching.next()) {
-                (Some(entry), None) => MethodSelection::One(*entry),
-                (Some(first), Some(second)) => MethodSelection::Ambiguous(
-                    [first, second]
-                        .into_iter()
-                        .chain(matching)
-                        .map(|entry| entry.func_id)
-                        .collect(),
-                ),
-                (None, _) => MethodSelection::None,
+        let fits = |params: &[Type<'db>], result| call.matches(self.db(), params, result);
+        let ranks = candidates.ranks();
+        for (index, rank) in ranks.iter().enumerate() {
+            match self.select_matching(rank, fits) {
+                MethodSelection::None => {}
+                MethodSelection::One(entry) if !call.settled => {
+                    let lower: Vec<_> = ranks[index + 1..]
+                        .iter()
+                        .copied()
+                        .flatten()
+                        .copied()
+                        .filter(|function| {
+                            self.method_entry(*function).is_some_and(|entry| {
+                                matches!(
+                                    entry.func_ty.kind(self.db()),
+                                    TypeKind::Func { params, result, .. } if fits(params, *result)
+                                )
+                            })
+                        })
+                        .collect();
+                    if lower.is_empty() {
+                        return (MethodSelection::One(entry), None);
+                    }
+                    return (
+                        MethodSelection::Ambiguous(
+                            std::iter::once(entry.func_id).chain(lower).collect(),
+                        ),
+                        None,
+                    );
+                }
+                selection => return (selection, None),
             }
-        };
-        match select(&|params, result| call.matches(self.db(), params, result)) {
-            MethodSelection::None => {
-                let by_arguments =
-                    match select(&|params, _| call.arguments_match(self.db(), params)) {
-                        MethodSelection::One(entry) => Some(entry),
-                        _ => None,
-                    };
-                (MethodSelection::None, by_arguments)
-            }
-            selection => (selection, None),
         }
+        let all: Vec<_> = candidates.iter().copied().collect();
+        let by_arguments =
+            match self.select_matching(&all, |params, _| call.arguments_match(self.db(), params)) {
+                MethodSelection::One(entry) => Some(entry),
+                _ => None,
+            };
+        (MethodSelection::None, by_arguments)
+    }
+
+    /// The functions among `candidates` whose signatures `matches`.
+    fn select_matching(
+        &self,
+        candidates: &[crate::ast::FuncDefId<'db>],
+        matches: impl Fn(&[Type<'db>], Type<'db>) -> bool,
+    ) -> MethodSelection<'db> {
+        let mut matching = candidates.iter().filter_map(|candidate| {
+            let entry = self.method_entry(*candidate)?;
+            match entry.func_ty.kind(self.db()) {
+                TypeKind::Func { params, result, .. } if matches(params, *result) => Some(entry),
+                _ => None,
+            }
+        });
+        match (matching.next(), matching.next()) {
+            (Some(entry), None) => MethodSelection::One(entry),
+            (Some(first), Some(second)) => MethodSelection::Ambiguous(
+                [first, second]
+                    .into_iter()
+                    .chain(matching)
+                    .map(|entry| entry.func_id)
+                    .collect(),
+            ),
+            (None, _) => MethodSelection::None,
+        }
+    }
+
+    /// `function` with the body of its type scheme.
+    pub(crate) fn method_entry(
+        &self,
+        function: crate::ast::FuncDefId<'db>,
+    ) -> Option<crate::typeck::MethodEntry<'db>> {
+        let (scheme, _) = self.env.function_scheme(function)?;
+        Some(crate::typeck::MethodEntry {
+            func_id: function,
+            func_ty: scheme.body(self.db()),
+        })
     }
 
     /// Look up a struct field type from the receiver type.
@@ -1934,13 +2038,6 @@ impl<'db> TypeChecker<'db> {
         // Extract struct declaration identity from receiver type.
         let struct_id = match receiver_ty.kind(self.db()) {
             TypeKind::Named { id, .. } => *id,
-            TypeKind::App { ctor, .. } => {
-                // Recursively extract from constructor
-                match ctor.kind(self.db()) {
-                    TypeKind::Named { id, .. } => *id,
-                    _ => return None,
-                }
-            }
             TypeKind::UniVar { .. } => {
                 // Type not yet known - can't resolve field
                 return None;
@@ -1954,7 +2051,6 @@ impl<'db> TypeChecker<'db> {
         // Substitute BoundVars with actual type arguments if any
         let actual_args: Vec<Type<'db>> = match receiver_ty.kind(self.db()) {
             TypeKind::Named { args, .. } => args.clone(),
-            TypeKind::App { args, .. } => args.clone(),
             _ => vec![],
         };
 
@@ -2085,7 +2181,11 @@ impl<'db> TypeChecker<'db> {
                 }
             }
             ExprKind::Cons { ctor, args } => ExprKind::Cons {
-                ctor: self.convert_ref_with_ctx(ctx, Some(expr_id), ctor),
+                ctor: self.convert_ref_with_ctx(
+                    ctx,
+                    Some(expr_id),
+                    &self.constructor_reference(ctx, expr_id, ctor),
+                ),
                 args: args
                     .iter()
                     .map(|a| self.check_expr_with_ctx(ctx, a, Mode::Infer))
@@ -2098,7 +2198,7 @@ impl<'db> TypeChecker<'db> {
             } => ExprKind::Record {
                 type_name: TypedRef {
                     ty: self.instantiate_value_constructor_with_ctx(ctx, expr_id, type_name),
-                    resolved: type_name.clone(),
+                    resolved: self.constructor_reference(ctx, expr_id, type_name),
                 },
                 fields: fields
                     .iter()
@@ -2115,13 +2215,10 @@ impl<'db> TypeChecker<'db> {
             ExprKind::Functions { name, candidates } => ExprKind::Functions {
                 name: name.clone(),
                 // Unselected, so the candidates have no type.
-                candidates: candidates
-                    .iter()
-                    .map(|candidate| TypedRef {
-                        resolved: candidate.clone(),
-                        ty: ctx.error_type(),
-                    })
-                    .collect(),
+                candidates: candidates.map(|candidate| TypedRef {
+                    resolved: candidate.clone(),
+                    ty: ctx.error_type(),
+                }),
             },
             ExprKind::BinOp { op, lhs, rhs } => ExprKind::BinOp {
                 op: *op,
@@ -2157,7 +2254,8 @@ impl<'db> TypeChecker<'db> {
                         // Each arm gets its own scope for pattern bindings
                         ctx.push_scope();
 
-                        let pattern_ty = self.infer_pattern_type_with_ctx(ctx, &arm.pattern);
+                        let pattern_ty =
+                            self.infer_pattern_type_with_ctx(ctx, &arm.pattern, Some(scrutinee_ty));
                         ctx.constrain_eq(pattern_ty, scrutinee_ty);
                         self.bind_pattern_vars_with_ctx(ctx, &arm.pattern, scrutinee_ty);
                         let converted = self.convert_arm_with_scrutinee_ctx(ctx, arm, scrutinee_ty);
@@ -2311,9 +2409,10 @@ impl<'db> TypeChecker<'db> {
         resolved: &ResolvedRef<'db>,
     ) -> TypedRef<'db> {
         let ty = match (node_id, resolved) {
-            (Some(_), ResolvedRef::Constructor { .. }) => {
-                self.infer_var_with_ctx(ctx, node_id, resolved)
-            }
+            (
+                Some(_),
+                ResolvedRef::Constructor { .. } | ResolvedRef::ImplicitConstructor { .. },
+            ) => self.infer_var_with_ctx(ctx, node_id, resolved),
             (Some(node), ResolvedRef::Local { id, name }) => ctx
                 .lookup_local_reference(node, *id, name)
                 .unwrap_or_else(|| ctx.fresh_type_var()),
@@ -2355,7 +2454,7 @@ impl<'db> TypeChecker<'db> {
                 ctx.set_current_effect(outer_effect);
                 ctx.merge_effect(evaluation_effect);
                 // Constrain pattern type to match value type
-                let pattern_ty = self.infer_pattern_type_with_ctx(ctx, pattern);
+                let pattern_ty = self.infer_pattern_type_with_ctx(ctx, pattern, Some(value_ty));
                 ctx.constrain_eq(pattern_ty, value_ty);
                 self.generalize_and_bind_pattern_with_ctx(
                     ctx,
@@ -2403,7 +2502,7 @@ impl<'db> TypeChecker<'db> {
                 ctx.merge_effect(evaluation_effect);
 
                 // Constrain pattern type to match value type
-                let pattern_ty = self.infer_pattern_type_with_ctx(ctx, pattern);
+                let pattern_ty = self.infer_pattern_type_with_ctx(ctx, pattern, Some(value_ty));
                 ctx.constrain_eq(pattern_ty, value_ty);
 
                 self.generalize_and_bind_pattern_with_ctx(
@@ -2441,7 +2540,8 @@ impl<'db> TypeChecker<'db> {
     ) -> bool {
         let mut resolved = false;
         for call in ctx.deferred_methods().to_vec() {
-            let MethodSelection::One(entry) = self.select_deferred_method(solver, &call) else {
+            let MethodSelection::One(entry) = self.select_deferred_method(solver, &call, false)
+            else {
                 continue;
             };
             let Some(callee_ty) = ctx.instantiate_function_reference(call.callee, entry.func_id)
@@ -2495,6 +2595,9 @@ impl<'db> TypeChecker<'db> {
                     method.arg_types.clone(),
                     method.effect,
                 );
+            }
+            for constructor in ctx.deferred_constructors() {
+                constructor.defer_in(self.db(), &mut solver);
             }
             let solved = solver
                 .solve(ctx.constraints_snapshot())
@@ -2752,11 +2855,14 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
-    /// Infer the type that a pattern matches against.
+    /// Infer the type that a pattern matches against. `expected` is the
+    /// type of the value it matches, where known, which an implicit
+    /// constructor takes its constructor from.
     fn infer_pattern_type_with_ctx(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
         pattern: &Pattern<ResolvedRef<'db>>,
+        expected: Option<Type<'db>>,
     ) -> Type<'db> {
         let ty = match &*pattern.kind {
             PatternKind::Wildcard | PatternKind::Bind { .. } => ctx.fresh_type_var(),
@@ -2771,11 +2877,18 @@ impl<'db> TypeChecker<'db> {
                 LiteralPattern::Nil => ctx.nil_type(),
             },
             PatternKind::Variant { ctor, fields } => {
+                let shape = ConstructorShape::of_arity(fields.len());
+                let ctor = &self.decide_constructor(ctx, pattern.id, ctor, expected, shape, true);
                 let ctor_ty = match ctor {
                     ResolvedRef::Module { path } => {
                         self.report_module_reference(ctx, pattern.id, *path, "a constructor")
                     }
-                    _ => self.infer_var_with_ctx(ctx, None, ctor),
+                    ResolvedRef::ImplicitConstructor { .. } => {
+                        self.infer_var_with_ctx(ctx, Some(pattern.id), ctor)
+                    }
+                    _ => ctx
+                        .get_constructor_reference_type(pattern.id)
+                        .unwrap_or_else(|| self.infer_var_with_ctx(ctx, None, ctor)),
                 };
                 ctx.record_node_type(pattern.id, ctor_ty);
                 self.validate_variant_pattern_with_ctx(
@@ -2789,7 +2902,8 @@ impl<'db> TypeChecker<'db> {
                 match ctor_ty.kind(self.db()) {
                     TypeKind::Func { params, result, .. } => {
                         for (field_pat, param_ty) in fields.iter().zip(params.iter()) {
-                            let field_ty = self.infer_pattern_type_with_ctx(ctx, field_pat);
+                            let field_ty =
+                                self.infer_pattern_type_with_ctx(ctx, field_pat, Some(*param_ty));
                             ctx.constrain_eq(field_ty, *param_ty);
                         }
                         *result
@@ -2798,16 +2912,26 @@ impl<'db> TypeChecker<'db> {
                 }
             }
             PatternKind::Tuple(pats) => {
+                let expected_elems = match expected.map(|ty| ty.kind(self.db())) {
+                    Some(TypeKind::Tuple(elems)) if elems.len() == pats.len() => {
+                        Some(elems.clone())
+                    }
+                    _ => None,
+                };
                 let elem_tys: Vec<_> = pats
                     .iter()
-                    .map(|p| self.infer_pattern_type_with_ctx(ctx, p))
+                    .enumerate()
+                    .map(|(index, p)| {
+                        let expected = expected_elems.as_ref().map(|elems| elems[index]);
+                        self.infer_pattern_type_with_ctx(ctx, p, expected)
+                    })
                     .collect();
                 ctx.tuple_type(elem_tys)
             }
             PatternKind::List(pats) => {
                 let elem_ty = ctx.fresh_type_var();
                 for pat in pats {
-                    let pat_ty = self.infer_pattern_type_with_ctx(ctx, pat);
+                    let pat_ty = self.infer_pattern_type_with_ctx(ctx, pat, None);
                     ctx.constrain_eq(pat_ty, elem_ty);
                 }
                 ctx.canonical_list_type(elem_ty)
@@ -2815,7 +2939,7 @@ impl<'db> TypeChecker<'db> {
             PatternKind::ListRest { head, .. } => {
                 let elem_ty = ctx.fresh_type_var();
                 for pat in head {
-                    let pat_ty = self.infer_pattern_type_with_ctx(ctx, pat);
+                    let pat_ty = self.infer_pattern_type_with_ctx(ctx, pat, None);
                     ctx.constrain_eq(pat_ty, elem_ty);
                 }
                 ctx.canonical_list_type(elem_ty)
@@ -2826,6 +2950,17 @@ impl<'db> TypeChecker<'db> {
                 rest,
             } => {
                 let written: Vec<Symbol> = fields.iter().map(|field| field.name.clone()).collect();
+                let type_name = &self.decide_constructor(
+                    ctx,
+                    pattern.id,
+                    type_name,
+                    expected,
+                    ConstructorShape::Fields {
+                        names: written.clone(),
+                        rest: *rest,
+                    },
+                    true,
+                );
                 let (_, result, field_tys) =
                     self.constructor_field_shape(ctx, pattern.id, type_name, &written);
                 self.validate_record_pattern_with_ctx(
@@ -2833,7 +2968,7 @@ impl<'db> TypeChecker<'db> {
                 );
                 for (field, field_ty) in fields.iter().zip(field_tys) {
                     if let Some(sub) = &field.pattern {
-                        let sub_ty = self.infer_pattern_type_with_ctx(ctx, sub);
+                        let sub_ty = self.infer_pattern_type_with_ctx(ctx, sub, field_ty);
                         if let Some(field_ty) = field_ty {
                             ctx.constrain_eq(sub_ty, field_ty);
                         }
@@ -2841,7 +2976,9 @@ impl<'db> TypeChecker<'db> {
                 }
                 result
             }
-            PatternKind::As { pattern, .. } => self.infer_pattern_type_with_ctx(ctx, pattern),
+            PatternKind::As { pattern, .. } => {
+                self.infer_pattern_type_with_ctx(ctx, pattern, expected)
+            }
             PatternKind::Error => ctx.error_type(),
         };
 
@@ -2968,7 +3105,7 @@ impl<'db> TypeChecker<'db> {
                     ty: ctx
                         .get_node_type(pattern.id)
                         .unwrap_or_else(|| self.infer_var_with_ctx(ctx, None, ctor)),
-                    resolved: ctor.clone(),
+                    resolved: self.constructor_reference(ctx, pattern.id, ctor),
                 },
                 fields: fields
                     .iter()
@@ -3052,7 +3189,7 @@ impl<'db> TypeChecker<'db> {
     ) -> TypedRef<'db> {
         let ty = self.instantiate_value_constructor_with_ctx(ctx, pattern_id, resolved);
         TypedRef {
-            resolved: resolved.clone(),
+            resolved: self.constructor_reference(ctx, pattern_id, resolved),
             ty,
         }
     }
@@ -3127,6 +3264,7 @@ impl<'db> TypeChecker<'db> {
                 let ctor_ty = ctx
                     .get_node_type(pattern.id)
                     .unwrap_or_else(|| self.infer_var_with_ctx(ctx, None, ctor));
+                let ctor = &self.constructor_reference(ctx, pattern.id, ctor);
 
                 match ctor_ty.kind(self.db()) {
                     TypeKind::Func { params, result, .. } => {
@@ -3262,7 +3400,8 @@ impl<'db> TypeChecker<'db> {
     ) -> HandlerArm<TypedRef<'db>> {
         let (kind, body_mode) = match &arm.kind {
             HandlerKind::Do { binding } => {
-                let pattern_ty = self.infer_pattern_type_with_ctx(ctx, binding);
+                let pattern_ty =
+                    self.infer_pattern_type_with_ctx(ctx, binding, Some(handle_ctx.body_ty));
                 ctx.constrain_eq(pattern_ty, handle_ctx.body_ty);
                 self.bind_pattern_vars_with_ctx(ctx, binding, handle_ctx.body_ty);
                 let binding =
@@ -3460,6 +3599,9 @@ impl<'db> TypeChecker<'db> {
                 method.effect,
             );
         }
+        for constructor in ctx.deferred_constructors() {
+            constructor.defer_in(self.db(), &mut solver);
+        }
         let _ = solver.solve(ctx.constraints_snapshot());
         ctx.reserve_row_vars(solver.next_row_var());
         let body_row = solver.row_subst().apply(self.db(), handle_ctx.body_effect);
@@ -3586,7 +3728,7 @@ impl<'db> TypeChecker<'db> {
 
         // Infer, constrain, and bind each pattern to the corresponding op param type
         for (pattern, op_ty) in params.iter().zip(op_param_types.iter()) {
-            let pattern_ty = self.infer_pattern_type_with_ctx(ctx, pattern);
+            let pattern_ty = self.infer_pattern_type_with_ctx(ctx, pattern, Some(*op_ty));
             ctx.constrain_eq(pattern_ty, *op_ty);
             self.bind_pattern_vars_with_ctx(ctx, pattern, *op_ty);
         }
@@ -3759,6 +3901,49 @@ impl<'db> TypeChecker<'db> {
     /// an arm for every declared operation; a missing arm is never an
     /// implicit forward. Abilities without arms are not handled and need no
     /// check. Missing operations are listed in name order.
+    /// Report every `do` arm after the first, and every arm for an
+    /// operation that an earlier arm of the same `handle` already handles.
+    fn report_duplicate_handler_arms(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        handlers: &[HandlerArm<ResolvedRef<'db>>],
+    ) {
+        let mut seen_do = false;
+        let mut seen_ops = HashSet::default();
+        for handler in handlers {
+            let message = match &handler.kind {
+                HandlerKind::Do { .. } => {
+                    if !std::mem::replace(&mut seen_do, true) {
+                        continue;
+                    }
+                    "`handle` may have at most one `do` arm".to_owned()
+                }
+                HandlerKind::Fn { ability, op, .. } | HandlerKind::Op { ability, op, .. } => {
+                    let Some(ability_id) = self.extract_ability_id_from_ref(ability) else {
+                        continue;
+                    };
+                    if seen_ops.insert((ability_id, op)) {
+                        continue;
+                    }
+                    format!(
+                        "`handle` has more than one arm for `{}::{op}`",
+                        ability_id.name(self.db())
+                    )
+                }
+            };
+            if !ctx.mark_handler_error(handler.id, "duplicate arm") {
+                continue;
+            }
+            Diagnostic::new(
+                message,
+                self.get_span(handler.id),
+                DiagnosticSeverity::Error,
+                CompilationPhase::TypeChecking,
+            )
+            .accumulate(self.db());
+        }
+    }
+
     fn report_missing_handler_arms(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
@@ -3822,7 +4007,10 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
-    fn extract_ability_id_from_ref(&self, resolved: &ResolvedRef<'db>) -> Option<AbilityId<'db>> {
+    pub(super) fn extract_ability_id_from_ref(
+        &self,
+        resolved: &ResolvedRef<'db>,
+    ) -> Option<AbilityId<'db>> {
         match resolved {
             ResolvedRef::AbilityOp { ability, .. } => Some(*ability),
             ResolvedRef::Ability { id } => Some(*id),
@@ -3880,7 +4068,7 @@ mod tests {
 
     /// Helper to create a TypeChecker for testing.
     fn make_test_checker(db: &dyn salsa::Database) -> TypeChecker<'_> {
-        TypeChecker::new(db, SpanMap::default())
+        TypeChecker::new(db, SpanMap::empty())
     }
 
     /// Helper to create a FunctionInferenceContext for testing.
@@ -4436,17 +4624,6 @@ mod tests {
         let cases = [
             ("List<Int>", list_int, int_ty),
             ("List<String>", list_of(vec![string_ty]), string_ty),
-            (
-                "App(List, [Int])",
-                Type::new(
-                    db,
-                    TypeKind::App {
-                        ctor: list_of(vec![]),
-                        args: vec![int_ty],
-                    },
-                ),
-                int_ty,
-            ),
             ("List<List<Int>>", list_of(vec![list_int]), list_int),
         ];
 

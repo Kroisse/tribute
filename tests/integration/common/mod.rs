@@ -253,17 +253,15 @@ pub fn compile_and_run_native_with_closed_stdin(source_name: &str, source_code: 
     )
 }
 
-/// Extern declarations for print intrinsics, prepended to test source code.
+/// Extern declaration for the float print intrinsic, prepended to test source code.
 pub const PRINT_EXTERNS: &str = "\
-extern \"C\" fn __tribute_print_nat(value: Nat) -> Nil
-extern \"C\" fn __tribute_print_int(value: Int) -> Nil
 extern \"C\" fn __tribute_print_float(value: Float) -> Nil
 ";
 
 /// Run a native test and assert that stdout matches the expected output.
 ///
-/// Automatically prepends extern declarations for `__tribute_print_nat`
-/// and `__tribute_print_int`.
+/// Automatically prepends the extern declaration for
+/// `__tribute_print_float`.
 #[allow(dead_code)]
 pub fn assert_native_output(source_name: &str, source_code: &str, expected_stdout: &str) {
     let full_source = format!("{PRINT_EXTERNS}\n{source_code}");
@@ -491,35 +489,6 @@ fn compile_native_test_binary_impl(
     })
 }
 
-/// Tribute source defining `print_nat`, which prints a `Nat` in decimal
-/// followed by a newline on every target, unlike the native-only
-/// `__tribute_print_nat` intrinsic.
-#[allow(dead_code)]
-pub const PRINT_NAT: &str = r#"
-fn nat_text(n: Nat) -> String {
-    let digit = case n % 10 {
-        0 -> "0"
-        1 -> "1"
-        2 -> "2"
-        3 -> "3"
-        4 -> "4"
-        5 -> "5"
-        6 -> "6"
-        7 -> "7"
-        8 -> "8"
-        _ -> "9"
-    }
-    case n < 10 {
-        True -> digit
-        False -> nat_text(n / 10) <> digit
-    }
-}
-
-fn print_nat(n: Nat) ->{std::io::Io} Nil {
-    std::io::print_line(nat_text(n))
-}
-"#;
-
 /// Compile Tribute source code to a Wasm module and run it with wasmtime.
 ///
 /// Panics if compilation fails or the module is not valid Wasm.
@@ -684,4 +653,37 @@ fn assert_target_outputs(source_name: &str, expected_stdout: &str, native: Outpu
             "{target}: stdout mismatch for {source_name}"
         );
     }
+}
+
+/// The frontend's source-logical IR after class specialization, printed: what
+/// CPS legalization reads, except that every definition stays, so a test can
+/// inspect one nothing calls.
+pub fn specialized_frontend_ir(db: &dyn salsa::Database, source: SourceCst) -> String {
+    use itertools::Itertools;
+    use trunk_ir::analysis::AnalysisCache;
+    use trunk_ir::dialect::core;
+    use trunk_ir::ops::DialectOp;
+    use trunk_ir::pass::PassManager;
+
+    let Some((mut ctx, module)) = tribute::pipeline::compile_frontend(db, source) else {
+        let diagnostics = tribute::pipeline::compile_with_diagnostics(db, source).diagnostics;
+        panic!(
+            "the frontend rejects the source: {}",
+            diagnostics
+                .iter()
+                .format_with("; ", |diagnostic, f| f(&diagnostic.inner.message))
+        );
+    };
+    let core_module =
+        core::Module::from_op(&ctx, module.op()).expect("frontend output must be a core.module");
+    let mut passes = PassManager::new();
+    passes
+        .add_pass(trunk_ir::transforms::EliminateDeadCode::<core::Module>::new())
+        .add_pass(tribute_passes::specialize_convention_classes::SpecializeConventionClasses);
+    passes
+        .run(&mut ctx, core_module, &mut AnalysisCache::new())
+        .expect("class specialization accepts frontend output");
+    let disagreements = tribute_passes::check_convention_classes::check(&ctx, module);
+    assert!(disagreements.is_empty(), "{disagreements:?}");
+    trunk_ir::printer::print_module(&ctx, module.op())
 }

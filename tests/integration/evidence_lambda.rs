@@ -60,10 +60,8 @@ fn function_abi(ctx: &IrContext, module: &Module, target: &str) -> (usize, bool,
     let has_evidence = params
         .first()
         .is_some_and(|ty| tribute_ir::dialect::ability::is_evidence_type_ref(ctx, *ty));
-    let is_cps = ctx
-        .op_attrs(func_op.op_ref())
-        .get("tribute.calling_convention")
-        .is_some_and(|attr| *attr == trunk_ir::Attribute::Int(2));
+    let is_cps = tribute_ir::calling_convention::DynConventionBearing::of(ctx, func_op.op_ref())
+        == Some(tribute_ir::calling_convention::CallingConvention::Cps);
     let hidden_count = usize::from(has_evidence) + usize::from(has_evidence && is_cps);
     let has_done_k = is_cps;
     let returns_anyref = function.single_result(ctx).is_some_and(|result| {
@@ -401,6 +399,10 @@ fn main() -> Nil { }
         for &op in module.ops(&ctx) {
             if let Ok(func_op) = func::Func::from_op(&ctx, op) {
                 let name = func_op.sym_name(&ctx).to_string();
+                // The evidence runtime takes evidence as ordinary values.
+                if name.starts_with("std::runtime::evidence::") {
+                    continue;
+                }
                 let CallableBody::Definition { entry, .. } =
                     classify_callable_body(&ctx, op).expect("well-formed frontend callable")
                 else {

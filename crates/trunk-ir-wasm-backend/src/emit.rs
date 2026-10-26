@@ -1092,6 +1092,11 @@ fn emit_op_nested(
         handle_ref_cast(ctx, op, emit_ctx, module_info, function)
     } else if wasm_dialect::RefTest::matches(ctx, op) {
         handle_ref_test(ctx, op, emit_ctx, module_info, function)
+    } else if wasm_dialect::RefUpcast::matches(ctx, op) {
+        // WasmGC has no upcast instruction: the operand's reference is the
+        // result at the wider type.
+        emit_operands(ctx, operands, emit_ctx, function)?;
+        set_result_local(ctx, op, emit_ctx, function)
     } else if let Ok(bytes_op) = wasm_dialect::BytesFromData::from_op(ctx, op) {
         handle_bytes_from_data(ctx, bytes_op, emit_ctx, function)
     } else if let Ok(mem_size_op) = wasm_dialect::MemorySize::from_op(ctx, op) {
@@ -1248,6 +1253,34 @@ mod tests {
   wasm.export_func {name = "caller", func = @caller}
 }"#,
         )
+    }
+
+    #[test]
+    fn arrayref_struct_field_holds_and_recovers_a_concrete_array() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !Items = wasm_gc.array<core.i32>
+  !Holder = wasm_gc.struct<wasm.arrayref>
+
+  wasm.func @main() -> core.i32 {
+    %zero = wasm.i32_const {value = 0} : core.i32
+    %items = wasm_gc.array_new_default %zero {type = !Items} : !Items
+    %holder = wasm_gc.struct_new %items {type = !Holder} : !Holder
+    %field = wasm_gc.struct_get %holder {type = !Holder, field_idx = 0} : !Items
+    %len = wasm.array_len %field : core.i32
+    wasm.return %len
+  }
+}"#,
+        );
+        crate::passes::wasm_gc_to_wasm::lower(&mut ctx, module);
+        let bytes = crate::emit_module_to_wasm(&mut ctx, module)
+            .expect("an arrayref field must accept and recover a concrete array")
+            .bytes;
+        Validator::new()
+            .validate_all(&bytes)
+            .expect("the read must cast the arrayref field to the concrete array");
     }
 
     #[test]
@@ -1427,6 +1460,52 @@ mod tests {
             })
             .collect::<Vec<_>>();
         itertools::assert_equal(declared, 0..8);
+    }
+
+    #[test]
+    fn emits_ref_upcast_as_no_instruction() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !Leaf = wasm_gc.struct<core.i32>
+  wasm.func @widen(%leaf: !Leaf) -> wasm.structref {
+    %wide = wasm.ref_upcast %leaf : wasm.structref
+    wasm.return %wide
+  }
+}"#,
+        );
+
+        crate::passes::wasm_gc_to_wasm::lower(&mut ctx, module);
+        let bytes = crate::emit_module_to_wasm(&mut ctx, module)
+            .expect("wasm.ref_upcast must emit")
+            .bytes;
+        Validator::new_with_features(wasmparser::WasmFeatures::all())
+            .validate_all(&bytes)
+            .expect("an upcast without an instruction must validate");
+        let casts = Parser::new(0)
+            .parse_all(&bytes)
+            .filter_map(Result::ok)
+            .filter_map(|payload| match payload {
+                Payload::CodeSectionEntry(body) => Some(body),
+                _ => None,
+            })
+            .map(|body| {
+                body.get_operators_reader()
+                    .expect("operators")
+                    .into_iter()
+                    .map(|operator| operator.expect("operator"))
+                    .filter(|operator| {
+                        matches!(
+                            operator,
+                            wasmparser::Operator::RefCastNullable { .. }
+                                | wasmparser::Operator::RefCastNonNull { .. }
+                        )
+                    })
+                    .count()
+            })
+            .sum::<usize>();
+        assert_eq!(casts, 0);
     }
 
     #[test]

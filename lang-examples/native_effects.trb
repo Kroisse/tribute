@@ -1,4 +1,4 @@
-use abilities::Throw
+use std::abilities::Throw
 use std::io::{Io, print_line}
 
 fn fail() ->{Throw(String)} String {

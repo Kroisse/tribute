@@ -944,8 +944,8 @@ fn test_case_with_patterns() {
     let source = r#"
             fn main() -> Nil {
                 case opt {
-                    Some(x) -> x
-                    None -> 0
+                    .Some(x) -> x
+                    .None -> 0
                 }
             }
         "#;
@@ -1260,8 +1260,8 @@ fn test_constructor_pattern() {
     let source = r#"
             fn main() -> Nil {
                 case x {
-                    Some(value) -> value
-                    None() -> 0
+                    .Some(value) -> value
+                    .None() -> 0
                 }
             }
         "#;
@@ -2523,6 +2523,37 @@ fn test_record_with_spread() {
 }
 
 #[test]
+fn test_record_field_shorthand() {
+    let source = r#"
+            struct Point { x: Nat, y: Nat }
+
+            fn make(x: Nat, y: Nat) -> Point {
+                Point { x, y: y }
+            }
+        "#;
+    let module = parse_and_lower(source);
+
+    let ModuleItem::Decl(Decl::Function(func)) = &module.decls[1] else {
+        panic!("Expected function");
+    };
+    let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
+        panic!("Expected block");
+    };
+    let ExprKind::Record { fields, spread, .. } = value.kind.as_ref() else {
+        panic!("Expected record expression, got {:?}", value.kind);
+    };
+    assert!(spread.is_none());
+    assert_eq!(fields.len(), 2, "Expected both fields");
+    for (field, expected) in fields.iter().zip(["x", "y"]) {
+        assert_eq!(field.name, expected);
+        let ExprKind::Var(reference) = field.value.kind.as_ref() else {
+            panic!("Expected variable reference, got {:?}", field.value.kind);
+        };
+        assert_eq!(reference.path, [expected]);
+    }
+}
+
+#[test]
 fn test_as_pattern() {
     let source = r#"
             enum Option(a) {
@@ -2532,8 +2563,8 @@ fn test_as_pattern() {
 
             fn test(opt: Option(Nat)) -> Nat {
                 case opt {
-                    Some(x) as whole -> x
-                    None -> 0
+                    .Some(x) as whole -> x
+                    .None -> 0
                 }
             }
         "#;

@@ -11,6 +11,7 @@ use trunk_ir::op_flag::Pure;
 use trunk_ir::op_interface::CallableExit;
 
 use super::ability::{CpsClosure, Evidence};
+use super::tribute_rt::Anyref;
 use crate::continuation_frame::FrameRef;
 
 #[trunk_ir::dialect]
@@ -24,7 +25,7 @@ mod effect {
     /// Operands are semantic ABI values:
     /// - `evidence`: current evidence value.
     /// - `prompt_tag`: runtime tag associated with the handler installation.
-    /// - `tr_dispatch_fn`: tail-resumptive dispatch closure, or null.
+    /// - `tr_dispatch_fn`: tail-resumptive dispatch closure.
     /// - `outer`: the evidence the handler is installed on, before the
     ///   installation's selection.
     #[flags(Pure)]
@@ -74,20 +75,22 @@ mod effect {
     ///
     /// The operation carries ability identity and operation name as attributes,
     /// while the backend chooses the concrete lookup and callable layout.
+    /// `payload` is the packed operation argument erased to `anyref`, and the
+    /// result is the operation's result erased the same way.
     fn dispatch_tail<E: Evidence>(
         ability: Attr<SymbolRef>,
         op_name: Attr<String>,
         evidence: Value<E>,
-        payload: Value<_>,
-    ) -> Value<_> {
+        payload: Value<Anyref>,
+    ) -> Value<Anyref> {
     }
 
     /// Dispatch a general CPS `op` ability operation.
     ///
     /// `dispatch` and `resume` retain their exact result-indexed CPS closure
-    /// types. `payload` is the single packed operation argument value. The
-    /// operation is resultless: backend lowering performs the final proper tail
-    /// transfer.
+    /// types. `payload` is the single packed operation argument value, erased
+    /// to `anyref`. The operation is resultless: backend lowering performs the
+    /// final proper tail transfer.
     #[implements(CallableExit)]
     fn dispatch_cps<E: Evidence>(
         ability: Attr<SymbolRef>,
@@ -96,7 +99,7 @@ mod effect {
         evidence: Value<E>,
         dispatch: Value<_>,
         resume: Value<_>,
-        payload: Value<_>,
+        payload: Value<Anyref>,
     ) {
     }
 
@@ -215,10 +218,10 @@ mod tests {
         let errors = |body_type: &str, result: &str| {
             let text = format!(
                 r#"core.module @test {{
-  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {{layout = "evidence_marker"}}>
-  !ev = adt.array<!marker, {{layout = "evidence"}}>
+  !marker = adt.typeref<{{name = "std::runtime::evidence::Marker"}}>
+  !ev = adt.array<!marker>
   !frame = adt.typeref<{{name = "frame_i32", tribute.cps_continuation_frame_result = core.i32}}>
-  !body = closure.closure<func.func_sig<{body_type} -> core.never>, {{tribute.calling_convention = 2, tribute.closure_environment_index = 0}}>
+  !body = closure.closure<func.func_sig<{body_type} -> core.never>, {{tribute.calling_convention = "cps", tribute.closure_environment_index = 0}}>
   func.func @run(%ev: !ev, %body: !body) -> {result} {{
     %answer = effect.delimit %body, %ev : {result}
     func.return %answer
@@ -274,6 +277,35 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_payloads_are_anyref() {
+        let mut ctx = IrContext::new();
+        let loc = dummy_location();
+        let i32_ty = trunk_ir::dialect::core::I32::type_ref(&mut ctx);
+        let anyref_ty = crate::dialect::tribute_rt::Anyref::params()
+            .intern(&mut ctx)
+            .as_type_ref();
+        let evidence_ty = crate::dialect::ability::evidence_adt_type_ref(&mut ctx);
+        let ability = ability(&mut ctx, "Console");
+        let evidence = const_i32(&mut ctx, loc, evidence_ty, 0);
+        let closure = const_i32(&mut ctx, loc, anyref_ty, 1);
+        let unboxed = const_i32(&mut ctx, loc, i32_ty, 2);
+
+        let tail = super::DispatchTail::operands(evidence, unboxed)
+            .ability(ability.clone())
+            .op_name("print")
+            .build(&mut ctx, loc);
+        assert!(!violations(&ctx, tail.op_ref()).is_empty());
+        assert_eq!(ctx.value_ty(tail.result(&ctx)), anyref_ty);
+
+        let cps = super::DispatchCps::operands(evidence, closure, closure, unboxed)
+            .ability(ability)
+            .op_name("get")
+            .answer_type(i32_ty)
+            .build(&mut ctx, loc);
+        assert!(!violations(&ctx, cps.op_ref()).is_empty());
+    }
+
+    #[test]
     fn dispatch_ops_round_trip_and_print_generically() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
@@ -290,7 +322,6 @@ mod tests {
         let tail = super::DispatchTail::operands(evidence, payload)
             .ability(ability.clone())
             .op_name("print")
-            .results(anyref_ty)
             .build(&mut ctx, loc);
         let cps = super::DispatchCps::operands(evidence, dispatch, resume, payload)
             .ability(ability.clone())

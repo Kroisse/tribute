@@ -9,8 +9,10 @@
 
 use tribute_ir::dialect::adt;
 use tribute_ir::runtime_layout::{BYTES, BYTES_DATA, LAYOUT_ATTR};
+use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{arith, core};
+use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::Module;
 use trunk_ir::types::{AttributeMap, TypeDataBuilder};
@@ -59,8 +61,30 @@ pub fn bytes_struct_type(ctx: &mut IrContext) -> TypeRef {
 
 /// Lower calls to the bytes element read intrinsic to `adt` operations on
 /// the Wasm bytes layout.
-pub fn lower(ctx: &mut IrContext, module: Module) -> Result<(), BytesIntrinsicError> {
+fn lower(ctx: &mut IrContext, module: Module) -> Result<(), BytesIntrinsicError> {
     bytes_intrinsic::lower_get_or_panic(ctx, module, lower_call)
+}
+
+/// Lower calls to the bytes element read intrinsic to `adt` operations on
+/// the Wasm bytes layout.
+pub struct LowerBytesIntrinsics;
+
+impl Pass for LowerBytesIntrinsics {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "wasm-bytes-intrinsics"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        lower(ctx, target.into())?;
+        Ok(())
+    }
 }
 
 /// Rewrite one bytes element read into reads of the bytes layout.

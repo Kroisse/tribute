@@ -37,12 +37,16 @@ fn generic_callback_selects_a_direct_instance_and_executes_wasm(db: &salsa::Data
     };
     assert_eq!(
         convention(&|name| name == "main"),
-        Some(Some(tribute_control::CallingConvention::EvidenceDirect)),
+        Some(Some(
+            tribute_ir::calling_convention::CallingConvention::EvidenceDirect
+        )),
         "a pure callback leaves the Io root as it is"
     );
     assert_eq!(
         convention(&|name| name.starts_with("apply_open$") && name.ends_with("$9D")),
-        Some(Some(tribute_control::CallingConvention::Direct)),
+        Some(Some(
+            tribute_ir::calling_convention::CallingConvention::Direct
+        )),
         "a pure callback selects the Direct instance"
     );
 
@@ -64,7 +68,7 @@ fn a_pure_prelude_callback_selects_the_direct_instance(db: &salsa::DatabaseImpl)
         db,
         "test.trb",
         r#"
-fn pure() ->{} Option(Int) { Option::map(Some(+1), fn(n) n + +1) }
+fn pure() ->{} Option(Int) { Option::map(.Some(+1), fn(n) n + +1) }
 
 fn main() -> Nil {
     let _ = pure()
@@ -92,7 +96,7 @@ fn main() -> Nil {
         instances,
         [(
             "D".to_owned(),
-            Some(tribute_control::CallingConvention::Direct)
+            Some(tribute_ir::calling_convention::CallingConvention::Direct)
         )]
     );
 }
@@ -108,8 +112,8 @@ fn calls_in_one_body_select_instances_independently(db: &salsa::DatabaseImpl) {
 use std::io::{Io, print_line}
 
 fn main() ->{Io} Nil {
-    let _ = Option::map(Some(+1), fn(n) n + +1)
-    let _ = Option::map(Some("io"), fn(s) print_line(s))
+    let _ = Option::map(.Some(+1), fn(n) n + +1)
+    let _ = Option::map(.Some("io"), fn(s) print_line(s))
     Nil
 }
 "#,
@@ -135,7 +139,7 @@ fn main() ->{Io} Nil {
         })
         .collect();
     functions.sort();
-    use tribute_control::CallingConvention::{Direct, EvidenceDirect};
+    use tribute_ir::calling_convention::CallingConvention::{Direct, EvidenceDirect};
     assert_eq!(
         functions,
         [

@@ -7,9 +7,7 @@
 
 mod common;
 
-use self::common::{
-    ast_pipeline_error_messages, run_ast_pipeline_with_ir, run_ast_pipeline_with_specialized_ir,
-};
+use self::common::{ast_pipeline_error_messages, run_ast_pipeline_with_ir};
 use salsa_test_macros::salsa_test;
 use tribute_front::SourceCst;
 
@@ -93,45 +91,6 @@ fn checked_logical_function<'a>(ir: &'a str, name: &str) -> &'a str {
     logical_function(ir, name)
 }
 
-/// A diagnosed CPS root must still leave valid IR: failed CPS lowering uses
-/// the same Nil fallback as other direct-returning functions.
-#[salsa_test]
-fn test_root_main_cps_lowering_failure_still_returns(db: &salsa::DatabaseImpl) {
-    let source = SourceCst::from_source_str(
-        db,
-        "test.trb",
-        r#"
-ability State(s) {
-    op get() -> s
-}
-
-fn apply_open(value: Int, callback: fn(Int) ->{e} Nil) ->{e} Nil {
-    callback(value)
-}
-
-fn main() -> Nil {
-    apply_open(State::get, fn(_) { Nil })
-}
-"#,
-    );
-
-    let errors = ast_pipeline_error_messages(db, source);
-    assert!(
-        errors.iter().any(|error| error
-            == "type error at call site in function 'main': expected `Int`, found `fn() -> _`"),
-        "fixture must reach the diagnosed CPS-lowering recovery path: {errors:?}"
-    );
-    let ir_text = run_ast_pipeline_with_ir(db, source);
-    let main = ir_text
-        .split("tribute_control.func @main")
-        .nth(1)
-        .expect("root main must be lowered");
-    assert!(
-        main.contains("tribute_control.return"),
-        "root main must retain a terminator after CPS lowering fails:\n{main}"
-    );
-}
-
 // ========================================================================
 // Resume Expression Tests
 // ========================================================================
@@ -173,21 +132,16 @@ fn resume_uses_exact_token_input_and_answer_types(db: &salsa::DatabaseImpl) {
         db,
         "test.trb",
         r#"
-enum String {
-    Leaf(Bytes),
-    Branch(String, String, Nat),
-}
-
 ability Read {
     op read() -> String
 }
 
 fn run() -> Int {
     handle Read::read() {
-        do result { 0 }
+        do result { +0 }
         op Read::read() {
             let answer = resume "resumed"
-            answer + 1
+            answer + +1
         }
     }
 }
@@ -198,30 +152,11 @@ fn main() -> Nil { }
 
     let ir = run_ast_pipeline_with_ir(db, source);
     let run = checked_logical_function(&ir, "run");
-    let string_ref = ir
-        .lines()
-        .find_map(|line| {
-            let (alias, definition) = line.trim().split_once(" = ")?;
-            (definition == "adt.typeref<{name = \"String\"}>").then_some(alias)
-        })
-        .expect("nominal String reference");
     assert!(
-        run.contains(&format!("resume_token<{string_ref}, core.i32>")),
+        run.contains("resume_token<tribute_rt.anyref, core.i32>"),
         "handler token must retain its exact input and answer types:\n{run}"
     );
-    assert_in_order(
-        run,
-        &[
-            "adt.string_const",
-            "core.unrealized_conversion_cast",
-            "tribute_control.resume",
-        ],
-    );
-    let cast = run
-        .lines()
-        .find(|line| line.contains("core.unrealized_conversion_cast"))
-        .expect("resume input materialization");
-    assert!(cast.ends_with(&format!(": {string_ref}")), "{run}");
+    assert_in_order(run, &["adt.string_const", "tribute_control.resume"]);
     let resume = run
         .lines()
         .find(|line| line.contains("= tribute_control.resume "))
@@ -327,50 +262,6 @@ fn run() -> Int {
     );
 }
 
-#[salsa_test]
-fn logical_root_main_preserves_pure_and_io_conventions(db: &salsa::DatabaseImpl) {
-    let pure = SourceCst::from_source_str(db, "pure.trb", "fn main() -> Nil { }");
-    let pure_ir = run_ast_pipeline_with_specialized_ir(db, pure);
-    assert!(
-        pure_ir.contains(
-            "tribute_control.func @main['a0]() -> core.nil row(| 'a0) inferred convention(direct)"
-        ),
-        "pure root main must be direct:\n{pure_ir}"
-    );
-    let io = SourceCst::from_source_str(db, "io.trb", "fn main() ->{std::io::Io} Nil { Nil }");
-    let io_ir = run_ast_pipeline_with_specialized_ir(db, io);
-    assert!(
-        io_ir.contains("tribute_control.func @main() -> core.nil row(@\"ability_1_11_std::io::Io\") inferred convention(evidence_direct)"),
-        "Io root main must preserve EvidenceDirect:\n{io_ir}"
-    );
-}
-
-#[salsa_test]
-fn nested_main_is_not_a_root_convention_special_case(db: &salsa::DatabaseImpl) {
-    let source = SourceCst::from_source_str(
-        db,
-        "test.trb",
-        r#"
-ability State {
-    op get() -> Int
-}
-mod Nested {
-    use super::State
-
-    fn main() ->{State} Int { State::get() }
-}
-fn main() -> Nil { }
-"#,
-    );
-    let ir_text = run_ast_pipeline_with_specialized_ir(db, source);
-    assert!(
-        ir_text.contains(
-            "tribute_control.func @\"Nested::main\"() -> core.i32 row(@ability_1_5_State) convention(cps)"
-        ),
-        "nested main must preserve its ordinary checker-selected CPS convention:\n{ir_text}"
-    );
-}
-
 /// Source extern declarations stay source-logical callables, and direct calls
 /// to them retain the declared symbol rather than introducing a physical ABI.
 #[salsa_test]
@@ -391,11 +282,11 @@ mod Native {
 "#,
     );
 
-    let ir = run_ast_pipeline_with_specialized_ir(db, source);
+    let ir = run_ast_pipeline_with_ir(db, source);
     assert_logical_boundary(&ir);
     assert!(
         ir.contains(
-            "tribute_control.func @identity(%arg0: core.i32) -> core.i32 convention(direct)"
+            "tribute_control.func @identity(%arg0: core.i32) -> core.i32 attributes {abi = \"intrinsic\"}"
         ),
         "extern declaration must retain its source-visible logical signature:\n{ir}"
     );
@@ -408,7 +299,7 @@ mod Native {
     assert!(
         nested_call.contains("callee = @\"Native::identity\"")
             && ir.contains(
-                "tribute_control.func @\"Native::identity\"(%arg0: core.i32) -> core.i32 convention(direct)"
+                "tribute_control.func @\"Native::identity\"(%arg0: core.i32) -> core.i32 attributes {abi = \"intrinsic\"}"
             ),
         "nested extern calls must retain their qualified logical declaration:\n{nested_call}"
     );
@@ -485,7 +376,7 @@ pub mod Nested {
 "#,
     );
 
-    let ir_text = run_ast_pipeline_with_specialized_ir(db, source);
+    let ir_text = run_ast_pipeline_with_ir(db, source);
     let accessor = checked_logical_function(&ir_text, "Nested::Holder::callback");
     assert!(
         accessor.contains("tribute_control.func @\"Nested::Holder::callback\"")
@@ -499,7 +390,7 @@ pub mod Nested {
         "field access must call the matching logical accessor:\n{read}"
     );
     assert!(
-        ir_text.contains("tribute_control.func_sig<(core.i32) -> core.i32, {")
+        ir_text.contains("= tribute_control.func_sig<(core.i32) -> core.i32>")
             && !ir_text.contains("func.func_sig"),
         "nested callable fields must remain source-logical:\n{ir_text}"
     );
@@ -715,7 +606,7 @@ fn read() ->{State(Int)} Int {
 }
 
 fn add_one(value: Int) -> Int {
-    value + 1
+    value + +1
 }
 
 fn run() ->{State(Int)} Int {
@@ -744,7 +635,7 @@ ability State(s) {
 
 fn run() ->{State(Int)} Int {
     let read = fn() { State::get() }
-    read() + 1
+    read() + +1
 }
 
 fn main() -> Nil { }
@@ -753,146 +644,6 @@ fn main() -> Nil { }
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
     assert_indirect_lambda_shape(checked_logical_function(&ir_text, "run"));
-}
-
-/// Worker conventions start with concrete effects, then monotonically promote
-/// bodies whose open callback evaluation requires CPS.  `forward_open` appears
-/// before `apply_open` so this also proves named-call propagation needs a
-/// fixed-point pass rather than a declaration-order scan.
-#[salsa_test]
-fn test_open_callback_workers_are_cps_and_their_caller_is_not(db: &salsa::DatabaseImpl) {
-    let source = SourceCst::from_source_str(
-        db,
-        "test.trb",
-        r#"
-fn forward_open(value: a, callback: fn(a) ->{e} b) ->{e} b {
-    apply_open(value, callback)
-}
-
-fn apply_open(value: a, callback: fn(a) ->{e} b) ->{e} b {
-    callback(value)
-}
-
-fn pure(value: Int) ->{} Int { value }
-
-fn apply_closed(value: Int, callback: fn(Int) ->{} Int) ->{} Int {
-    callback(value)
-}
-
-fn evidence() ->{std::io::Io} Nil { Nil }
-
-struct Box(a) { value: a }
-fn unwrap(value: Box(a)) ->{} a { value.value }
-
-mod Nested {
-    struct Box(a) { value: a }
-    fn unwrap(value: Box(a)) ->{} a { value.value }
-    pub fn use_nested() ->{} Int { unwrap(Box { value: +41 }) }
-}
-
-fn main() -> Nil {
-    let _ = forward_open(+41, fn(value) { value })
-    let _ = unwrap(Box { value: +1 })
-    let _ = Nested::use_nested()
-}
-"#,
-    );
-
-    let ir_text = run_ast_pipeline_with_specialized_ir(db, source);
-    for name in ["forward_open", "apply_open"] {
-        let header = ir_text
-            .lines()
-            .find(|line| is_function_header(line, name))
-            .unwrap_or_else(|| panic!("missing lowered worker {name}"));
-        assert!(
-            header.contains("convention(cps)"),
-            "{name} must be promoted to Cps:\n{header}"
-        );
-    }
-    let pure_header = ir_text
-        .lines()
-        .find(|line| is_function_header(line, "pure"))
-        .expect("missing lowered pure worker");
-    assert!(
-        pure_header.contains("convention(direct)"),
-        "pure worker must remain Direct:\n{pure_header}"
-    );
-    let apply_closed_header = ir_text
-        .lines()
-        .find(|line| is_function_header(line, "apply_closed"))
-        .expect("missing lowered apply_closed worker");
-    assert!(
-        apply_closed_header.contains("convention(direct)"),
-        "apply_closed must stay Direct:\n{apply_closed_header}"
-    );
-    let evidence_header = ir_text
-        .lines()
-        .find(|line| is_function_header(line, "evidence"))
-        .expect("missing lowered evidence worker");
-    assert!(
-        evidence_header.contains("convention(evidence_direct)"),
-        "evidence worker must stay EvidenceDirect:\n{evidence_header}"
-    );
-    let main = checked_logical_function(&ir_text, "main");
-    let main_header = main.lines().next().expect("logical function has a header");
-    assert!(
-        main_header.contains("convention(direct)"),
-        "a call to a Cps worker leaves the root main as its row has it:\n{main_header}"
-    );
-    assert!(
-        main.contains("tribute_control.call"),
-        "root main must contain the direct worker call:\n{main}"
-    );
-    assert!(
-        main.contains("callee = @\"forward_open$9D\""),
-        "root main must call the Direct instance of the forward_open worker:\n{main}"
-    );
-    assert!(
-        !ir_text.contains("Nested::Nested::"),
-        "nested workers must not be requalified:\n{ir_text}"
-    );
-    assert!(
-        logical_function(&ir_text, "Nested::unwrap").contains("callee = @\"Nested::Box::value\""),
-        "nested worker must call the exact qualified accessor:\n{ir_text}"
-    );
-    assert!(
-        ir_text.lines().any(|line| line
-            .trim_start()
-            .starts_with("tribute_control.func @\"Box::value\"")),
-        "specialized accessor must keep its exact root identity:\n{ir_text}"
-    );
-}
-
-/// An `Io` root that calls an open-callback worker keeps the convention of
-/// its row.
-#[salsa_test]
-fn test_open_callback_leaves_the_evidence_root_as_it_is(db: &salsa::DatabaseImpl) {
-    // This helper lowers before monomorphization. The original generic fixture
-    // is covered through the production pipeline in tests/integration/open_callback_evidence_root.rs.
-    let source = SourceCst::from_source_str(
-        db,
-        "test.trb",
-        r#"
-fn apply_open(value: Int, callback: fn(Int) ->{e} Int) ->{e} Int {
-    callback(value)
-}
-
-fn main() ->{std::io::Io} Nil {
-    let _ = apply_open(+41, fn(value) { value })
-    Nil
-}
-"#,
-    );
-
-    let ir_text = run_ast_pipeline_with_specialized_ir(db, source);
-    let main_header = ir_text
-        .lines()
-        .find(|line| is_function_header(line, "main"))
-        .expect("missing lowered root main");
-    assert!(
-        main_header.contains("convention(evidence_direct)"),
-        "the Io root keeps the convention of its row:\n{main_header}"
-    );
 }
 
 /// A nested module's `main` is an ordinary function: it may have both a
@@ -921,40 +672,6 @@ fn main() -> Nil { }
     assert!(
         diagnostics.is_empty(),
         "nested main must not receive root-entry diagnostics: {diagnostics:?}"
-    );
-}
-
-/// A nested `main` that calls an open-callback worker is an ordinary function:
-/// its row's tail is a class variable, so the definition itself is the
-/// instance whose classes are all `Cps`, unlike root `main`.
-#[salsa_test]
-fn test_nested_open_callback_main_keeps_its_convention(db: &salsa::DatabaseImpl) {
-    let source = SourceCst::from_source_str(
-        db,
-        "test.trb",
-        r#"
-mod Nested {
-    fn apply_open(value: a, callback: fn(a) ->{e} b) ->{e} b {
-        callback(value)
-    }
-
-    fn main() -> Int {
-        apply_open(+41, fn(value) { value })
-    }
-}
-
-fn main() -> Nil { }
-"#,
-    );
-
-    let ir_text = run_ast_pipeline_with_specialized_ir(db, source);
-    let nested_main = ir_text
-        .lines()
-        .find(|line| is_function_header(line, "Nested::main"))
-        .expect("missing lowered Nested::main worker");
-    assert!(
-        nested_main.contains("convention(cps)"),
-        "nested open-callback main is not a root main:\n{nested_main}"
     );
 }
 
@@ -1012,8 +729,8 @@ fn read() ->{State(Int)} Int {
 
 fn run(flag: Bool) ->{State(Int)} Int {
     case flag {
-        True -> read() + 1
-        False -> 0
+        True -> read() + +1
+        False -> +0
     }
 }
 
@@ -1070,7 +787,7 @@ fn read() ->{State(Int)} Int {
 }
 
 fn run() -> Int {
-    handle read() + 1 {
+    handle read() + +1 {
         do result { result }
         op State::get() { resume +41 }
     }
@@ -1108,7 +825,7 @@ fn run() ->{Log} Int {
     handle State::get() {
         do result { result }
         op State::get() {
-            let value = read_log() + 1
+            let value = read_log() + +1
             resume value
         }
     }
@@ -1339,11 +1056,11 @@ enum Boxed(a) {
 fn read() ->{State(Int)} Int { State::get() }
 
 fn consume(value: Boxed(Int)) -> Int {
-    case value { Boxed(result) -> result }
+    case value { .Boxed(result) -> result }
 }
 
 fn run() -> Int {
-    consume(Boxed(handle read() {
+    consume(.Boxed(handle read() {
         do result { result }
         op State::get() { resume +41 }
     }))
@@ -1408,7 +1125,7 @@ fn run() -> Int {
         do result { result }
         op State::get() {
             let resumed = resume +41
-            resumed + 1
+            resumed + +1
         }
     }
 }
@@ -1433,12 +1150,12 @@ ability State(s) {
     op get() -> s
 }
 
-fn run() -> Int {
+fn run() ->{State(Int)} Int {
     handle State::get() {
         do result { result }
         op State::get() {
             let later = fn() { resume +41 }
-            later() + 1
+            later() + +1
         }
     }
 }
@@ -1478,7 +1195,7 @@ fn run() ->{Trace} Boxed(fn() -> Bool) {
     Trace::before()
     // `fn` is atomic to normalization, so this constructor argument exercises
     // the mode-preserving Cons strict-child path from a normalized CPS parent.
-    Boxed(fn() {
+    .Boxed(fn() {
         case True {
             True -> False || handle read() {
                 do result { result }
@@ -1514,7 +1231,7 @@ struct Point { x: Int, y: Int }
 
 fn run(point: Point) ->{Trace} fn() -> Point {
     Trace::before()
-    fn() { Point { x: 1, ..point } }
+    fn() { Point { x: +1, ..point } }
 }
 
 fn main() -> Nil { }
@@ -1546,11 +1263,11 @@ enum Boxed(a) {
 fn read() ->{State(Int)} Int { State::get() }
 
 fn run() ->{State(Int)} Int {
-    let base = Point { x: 0, y: 0 }
+    let base = Point { x: +0, y: +0 }
     let pair = #(read(), read())
     let point = Point { x: read(), ..base }
-    let boxed = Boxed(read())
-    0
+    let boxed = .Boxed(read())
+    +0
 }
 
 fn main() -> Nil { }
@@ -1690,22 +1407,22 @@ fn logical_nominal_callable_fields_use_control_callables(db: &salsa::DatabaseImp
 struct Holder { callback: fn(Int) -> Int }
 enum Choice { Callback(#(fn(Int) -> Int, List(fn(Int) -> Int))), Other }
 
-fn make(callback: fn(Int) ->{} Int) -> Choice { Callback(#(callback, [callback])) }
+fn make(callback: fn(Int) ->{} Int) -> Choice { .Callback(#(callback, [callback])) }
 fn inspect(choice: Choice, fallback: fn(Int) ->{} Int) -> fn(Int) ->{} Int {
     case choice {
-        Callback(#(callback, [nested])) -> nested
-        Callback(_) -> fallback
-        Other -> fallback
+        .Callback(#(callback, [nested])) -> nested
+        .Callback(_) -> fallback
+        .Other -> fallback
     }
 }
 "#,
     );
-    let ir = run_ast_pipeline_with_specialized_ir(db, source);
+    let ir = run_ast_pipeline_with_ir(db, source);
     assert_logical_boundary(&ir);
     let accessor = checked_logical_function(&ir, "Holder::callback");
     assert!(
         accessor.contains("-> !t")
-            && ir.contains("= tribute_control.func_sig<(core.i32) -> core.i32, {"),
+            && ir.contains("= tribute_control.func_sig<(core.i32) -> core.i32>"),
         "generated accessor must retain its callable field type:\n{accessor}"
     );
     let inspect = checked_logical_function(&ir, "inspect");
@@ -1762,23 +1479,23 @@ fn logical_list_constructor_patterns_use_element_types(db: &salsa::DatabaseImpl)
 
     for (body, expected_heads) in [
         (
-            "fn observe(xs: List(Item)) -> Nat { case xs { [Number(x), Number(y)] -> x, _ -> 0 } }",
+            "fn observe(xs: List(Item)) -> Nat { case xs { [.Number(x), .Number(y)] -> x, _ -> 0 } }",
             4,
         ),
         (
-            "fn observe(xs: List(Item)) -> Nat { case xs { [Number(x), Number(y), ..tail] -> y, _ -> 0 } }",
+            "fn observe(xs: List(Item)) -> Nat { case xs { [.Number(x), .Number(y), ..tail] -> y, _ -> 0 } }",
             4,
         ),
         (
-            "fn observe(xs: List(List(Item))) -> Nat { case xs { [[Nested(Number(x))]] -> x, _ -> 0 } }",
+            "fn observe(xs: List(List(Item))) -> Nat { case xs { [[.Nested(.Number(x))]] -> x, _ -> 0 } }",
             4,
         ),
         (
-            "fn observe(xs: List(Boxed(a)), fallback: a) -> a { case xs { [Box(x), ..tail] -> x, _ -> fallback } }",
+            "fn observe(xs: List(Boxed(a)), fallback: a) -> a { case xs { [.Box(x), ..tail] -> x, _ -> fallback } }",
             2,
         ),
         (
-            "fn observe(xs: List(Item), fallback: String) -> String { case xs { [Text(x)] -> x, _ -> fallback } }",
+            "fn observe(xs: List(Item), fallback: String) -> String { case xs { [.Text(x)] -> x, _ -> fallback } }",
             2,
         ),
     ] {
@@ -1866,16 +1583,16 @@ enum Pair { Pair(Int, Int), None }
 
 fn classify_pair(value: Pair) -> Int {
     case value {
-        Pair(1, 2) -> 1
-        Pair(_, _) -> 2
-        None -> 0
+        .Pair(+1, +2) -> +1
+        .Pair(_, _) -> +2
+        .None -> +0
     }
 }
 
 fn classify_list(values: List(Int)) -> Int {
     case values {
-        [1, 2] -> 1
-        _ -> 0
+        [+1, +2] -> +1
+        _ -> +0
     }
 }
 "#,

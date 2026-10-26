@@ -34,10 +34,7 @@ trunk-ir-wasm-backend/    # trunk-ir만 의존
 
 tribute-passes/           # tribute-ir 의존
 ├── wasm/lower.rs         # Wasm lowering pipeline orchestration
-├── wasm/evidence_to_wasm.rs
-│                         # 경계 안: effect.* → helper 호출 + call/tail_call
-│                         # 출구 뒤: helper 선언을 GC 배열 구현과
-│                         #          prompt tag 카운터로 바인딩
+├── wasm/prompt_tag.rs    # 출구 뒤: prompt tag 할당 선언을 카운터로 바인딩
 ├── wasm/tribute_rt_to_wasm.rs
 ├── wasm/const_to_wasm.rs
 ├── wasm/adt_to_wasm.rs   # adt.* → wasm_gc.*
@@ -90,11 +87,10 @@ trunk-ir (Mid-level)
 WebAssembly Binary
 ```
 
-Effect lowering은 target별로 수행한다. Shared ability lowering은 `effect.*`를
-만들며 Marker field 번호나 closure layout을 검사하지 않는다.
-`wasm/evidence_to_wasm`은 [representation/ABI 경계](ir.md#representationabi-경계)
-안에서 `effect.*`를 공유 value/control dialect로 낮춘다. Evidence 조회와 확장은
-native와 같은
+Shared ability lowering은 `effect.*`를 만들며 Marker field 번호나 closure layout을
+검사하지 않는다. 두 target이 공유하는 evidence lowering(`evidence_lowering`)이
+[representation/ABI 경계](ir.md#representationabi-경계) 안에서 `effect.*`를 공유
+value/control dialect로 낮춘다. Evidence 조회와 확장은
 [evidence runtime 항목](cps-effects.md#handle-evidence-extension--handler-closures)을
 `func.call`로 호출한다. Canonical closure layout은 `adt.struct_get`으로
 풀고, semantic role에 맞게 `func.call_indirect` 또는 `call_conv = "tail"`
@@ -102,7 +98,9 @@ signature의 proper-tail `func.tail_call_indirect`를 만든다. 이 lowering은
 operation을 만들지 않고 `tribute.calling_convention`을 읽거나 쓰지 않는다.
 
 Runtime 항목은 다른 source 함수처럼 compile되며, marker와 evidence는 일반 GC
-struct와 배열이다. Marker 생성과 field 접근은 runtime 항목 안에만 있다. Wasm
+struct와 배열이다. 재귀 marker 타입을 위한 저장 형식은
+[WasmGC evidence](cps-effects.md#wasmgc)를 따른다. Marker 생성과 field 접근은
+runtime 항목 안에만 있다. Wasm
 dialect lowering은 `effect.*`를 보지 않는다.
 
 ### Wasm 결과 슬롯

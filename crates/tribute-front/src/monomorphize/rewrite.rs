@@ -29,7 +29,7 @@ pub fn rewrite_module<'db>(
     db: &'db dyn salsa::Database,
     module: &mut DeclTable<TypedRef<'db>>,
     rewrite_map: &RewriteMap<'db>,
-    instances: &HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
+    instances: &crate::SortedMap<NodeId, crate::typeck::FunctionInstance<'db>>,
 ) {
     rewrite_decls(db, &mut module.entries, rewrite_map, instances);
 }
@@ -39,7 +39,7 @@ pub fn rewrite_decls<'db>(
     db: &'db dyn salsa::Database,
     decls: &mut [DeclEntry<TypedRef<'db>>],
     rewrite_map: &RewriteMap<'db>,
-    instances: &HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
+    instances: &crate::SortedMap<NodeId, crate::typeck::FunctionInstance<'db>>,
 ) {
     for entry in decls {
         let mut rewrite = Refs(|site, node, value: &mut TypedRef<'db>| {
@@ -111,7 +111,7 @@ pub fn rewrite_field_function_refs<'db>(
     db: &'db dyn salsa::Database,
     module: &mut DeclTable<TypedRef<'db>>,
     type_rewrite_map: &TypeRewriteMap<'db>,
-    instances: &mut HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
+    instances: &mut crate::SortedMap<NodeId, crate::typeck::FunctionInstance<'db>>,
 ) {
     for entry in &mut module.entries {
         let mut rewrite = Refs(|site, node, value: &mut TypedRef<'db>| {
@@ -228,20 +228,6 @@ pub fn rewrite_type<'db>(
                 return ty;
             }
             Type::new(db, TypeKind::Tuple(new_elems))
-        }
-        TypeKind::App { ctor, args } => {
-            let new_ctor = rewrite_type(db, *ctor, map);
-            let new_args: Vec<_> = args.iter().map(|a| rewrite_type(db, *a, map)).collect();
-            if new_ctor == *ctor && new_args == *args {
-                return ty;
-            }
-            Type::new(
-                db,
-                TypeKind::App {
-                    ctor: new_ctor,
-                    args: new_args,
-                },
-            )
         }
         TypeKind::Continuation {
             arg,
@@ -437,26 +423,20 @@ mod tests {
     fn test_type_rewrite_map_keeps_same_spelled_types_distinct() {
         let db = TestDb::default();
         let int = Type::new(&db, TypeKind::Int);
-        let source = |name: &str, node| {
-            TypeDefId::source(
-                &db,
-                trunk_ir::SymbolPath::new([name]),
-                crate::ast::NodeId::from_raw(node),
-            )
-        };
+        let source = |name: &str| TypeDefId::source(&db, trunk_ir::SymbolPath::new([name]));
         let cases = [
             (
                 "builtin and source List",
                 [
                     (TypeDefId::builtin_list(&db), "5$List$Int"),
-                    (source("List", 1), "List$Int"),
+                    (source("List"), "List$Int"),
                 ],
             ),
             (
                 "same-spelled source types",
                 [
-                    (source("A::Thing", 1), "A::Thing$Int"),
-                    (source("B::Thing", 2), "B::Thing$Int"),
+                    (source("A::Thing"), "A::Thing$Int"),
+                    (source("B::Thing"), "B::Thing$Int"),
                 ],
             ),
         ];

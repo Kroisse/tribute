@@ -6,28 +6,18 @@
 //! Wasm implementation, and the boundary exit verifier rejects a reference to
 //! any other.
 
-use tribute_ir::dialect::ability::evidence_abi;
 use trunk_ir::context::IrContext;
 use trunk_ir::refs::OpRef;
 use trunk_ir::symbol_table::{SymbolTable, link_name};
 use trunk_ir::{Symbol, SymbolPath};
 
-use super::evidence_to_wasm::NEXT_TAG;
 use super::intrinsic_to_wasm::{BYTES_CONCAT, BYTES_LEN, BYTES_RANGE_EQUAL, BYTES_SLICE_OR_PANIC};
+use super::prompt_tag::NEXT_TAG;
 
-/// Every C helper with a Wasm implementation: the evidence and prompt tag
-/// helpers `evidence_to_wasm` binds and the bytes helpers `intrinsic_to_wasm`
-/// binds.
+/// Every C helper with a Wasm implementation: the prompt tag allocator
+/// `prompt_tag` binds and the bytes helpers `intrinsic_to_wasm` binds.
+/// The evidence runtime is Tribute source, compiled like any other function.
 pub const PROVIDED: &[&str] = &[
-    evidence_abi::LOOKUP,
-    evidence_abi::LOOKUP_TR,
-    evidence_abi::EXTEND,
-    evidence_abi::MASK,
-    evidence_abi::DUP,
-    evidence_abi::OUTER,
-    evidence_abi::TAIL,
-    evidence_abi::WITH_TAIL,
-    evidence_abi::PUSH,
     NEXT_TAG,
     BYTES_LEN,
     BYTES_CONCAT,

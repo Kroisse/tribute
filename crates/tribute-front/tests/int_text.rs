@@ -34,7 +34,7 @@ fn format(value: Int) -> String {
 }
 
 #[salsa_test]
-fn generic_constructor_boxes_int_for_its_specialized_layout(db: &salsa::DatabaseImpl) {
+fn generic_constructor_stores_int_in_its_specialized_layout(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
         "generic_constructor_int.trb",
@@ -45,47 +45,43 @@ enum Boxed(a) {
 }
 
 fn format_box(value: Int) -> String {
-    case Box(value) {
-        Box(inner) -> Int::to_string(inner)
-        Empty -> "empty"
+    case Boxed::Box(value) {
+        .Box(inner) -> Int::to_string(inner)
+        .Empty -> "empty"
     }
 }
 "#,
     );
 
     let ir = run_ast_pipeline_with_ir(db, source);
+    assert!(
+        ir.contains(r#"!"Boxed$Int" = adt.enum<"Boxed$Int" { Empty(), Box(core.i32) }>"#),
+        "Boxed(Int) must be specialized to a layout with an Int field:\n{ir}"
+    );
     let format_box = ir
         .split("tribute_control.func @format_box")
         .nth(1)
         .expect("format_box function must be lowered");
-    let layout_cast = format_box
-        .find("tribute_rt.box_int")
-        .expect("generic constructor field must be boxed to its erased layout type");
     let construct = format_box
-        .find("adt.variant_new")
-        .expect("generic constructor must construct Box");
+        .find(r#"adt.variant_new %0 {tag = "Box", type = !"Boxed$Int"}"#)
+        .expect("Box(value) must construct the specialized Boxed$Int");
     let int_to_string = format_box
         .find("callee = @\"std::Int::to_string\"")
         .expect("Box payload must be passed to Int::to_string");
-    let payload_recovery = format_box[..int_to_string]
-        .rfind("tribute_rt.unbox_int")
-        .expect("erased Box payload must be unboxed before Int::to_string");
     assert!(
-        format_box[layout_cast..construct].contains(": tribute_rt.anyref"),
-        "generic Box field must be converted to its erased layout type before construction:\n{format_box}"
+        format_box[construct..int_to_string].contains(
+            r#"adt.variant_get %9 {field = 0, tag = "Box", type = !"Boxed$Int"} : core.i32"#
+        ),
+        "pattern use must read the Int payload from the specialized layout:\n{format_box}"
     );
     assert!(
-        format_box[payload_recovery..int_to_string].contains(": core.i32"),
-        "pattern use must recover the erased Box payload as Int before Int::to_string:\n{format_box}"
-    );
-    assert!(
-        layout_cast < construct && construct < payload_recovery && payload_recovery < int_to_string,
-        "generic Box construction and pattern use must cross distinct layout and recovery boundaries:\n{format_box}"
+        !format_box.contains("tribute_rt.box_int") && !format_box.contains("tribute_rt.unbox_int"),
+        "a specialized layout must hold Int without boxing:\n{format_box}"
     );
 }
 
 #[salsa_test]
-fn generic_result_constructor_boxes_int_for_its_specialized_layout(db: &salsa::DatabaseImpl) {
+fn generic_result_constructor_stores_int_in_its_specialized_layout(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
         "generic_result_constructor_int.trb",
@@ -96,7 +92,7 @@ enum Result(a, e) {
 }
 
 fn ok_int(value: Int) -> Result(Int, String) {
-    Ok(value)
+    .Ok(value)
 }
 "#,
     );
@@ -106,19 +102,13 @@ fn ok_int(value: Int) -> Result(Int, String) {
         .split("tribute_control.func @ok_int")
         .nth(1)
         .expect("ok_int function must be lowered");
-    let construct = ok_int
-        .find("adt.variant_new")
-        .expect("generic Result constructor must construct Ok");
-    let cast = ok_int
-        .find("tribute_rt.box_int")
-        .expect("generic Result field must be boxed to its erased layout type");
     assert!(
-        ok_int[cast..construct].contains(": tribute_rt.anyref"),
-        "generic Result field must be converted to the resolved erased layout type:\n{ok_int}"
+        ok_int.contains(r#"adt.variant_new %0 {tag = "Ok", type = !"Result$Int$std::String"}"#),
+        ".Ok(value) must construct the specialized Result(Int, String) from the Int directly:\n{ok_int}"
     );
     assert!(
-        cast < construct,
-        "logical generic construction must convert its Int field before adt.variant_new:\n{ok_int}"
+        !ok_int.contains("tribute_rt.box_int"),
+        "a specialized layout must hold Int without boxing:\n{ok_int}"
     );
 }
 
@@ -133,7 +123,7 @@ enum IntBox {
 }
 
 fn box_int(value: Int) -> IntBox {
-    IntBox(value)
+    .IntBox(value)
 }
 "#,
     );
@@ -203,88 +193,30 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
         &tribute_front::resolve::resolve_with_env(
             db,
             ast,
-            tribute_front::resolve::build_env(db, ast),
+            tribute_front::resolve::build_env(
+                db,
+                ast,
+                &tribute_front::resolve::Dependencies::none(),
+            ),
+            &tribute_front::resolve::Dependencies::none(),
             parsed.span_map(db),
         ),
         parsed.span_map(db),
     );
-    let typed = checked.module(db).clone();
     let mono = tribute_front::monomorphize::monomorphize_functions(
         db,
-        typed,
-        checked.function_types(db).iter().cloned().collect(),
-        tribute_front::monomorphize::MonomorphizeMetadata {
-            constructor_types: checked
-                .constructor_types(db)
-                .schemes
-                .iter()
-                .cloned()
-                .collect(),
-            specialized_enum_variants: checked
-                .constructor_types(db)
-                .specialized_enum_variants
-                .iter()
-                .cloned()
-                .collect(),
-            local_instances: checked
-                .expression_types(db)
-                .local_instances
-                .iter()
-                .cloned()
-                .collect(),
-            evidence_plans: checked
-                .expression_types(db)
-                .evidence_plans
-                .iter()
-                .cloned()
-                .collect(),
-            function_instances: checked
-                .expression_types(db)
-                .function_instances
-                .iter()
-                .cloned()
-                .collect(),
-            node_types: checked
-                .expression_types(db)
-                .node_types
-                .iter()
-                .cloned()
-                .collect(),
-            handler_operations: checked.handler_operations(db).iter().cloned().collect(),
-            perform_operations: checked.perform_operations(db).iter().cloned().collect(),
-            lambda_signatures: checked.lambda_signatures(db).iter().cloned().collect(),
-            exhaustive_cases: checked.exhaustive_cases(db).iter().copied().collect(),
-            compiler_intrinsics: HashMap::default(),
-        },
+        tribute_front::monomorphize::SpecializationInput::new(db, checked, None),
     )
     .expect("checked instances must specialize");
     let mut ir = IrContext::new();
-    let output = tribute_front::ast_to_ir::TypedModule {
-        ast: mono.module,
-        span_map: checked.span_map(db),
-        function_types: mono.function_types.into_iter().collect(),
-        constructor_types: mono.metadata.constructor_types,
-        specialized_enum_variants: mono
-            .metadata
-            .specialized_enum_variants
-            .into_iter()
-            .collect(),
-        node_types: mono.metadata.node_types.into_iter().collect(),
-        local_instances: mono.metadata.local_instances.into_iter().collect(),
-        function_instances: mono.metadata.function_instances.into_iter().collect(),
-        ability_definitions: tribute_front::typeck::ability_definitions_from_schemas(
-            checked.ability_definitions(db),
-        ),
-        handler_operations: mono.metadata.handler_operations.into_iter().collect(),
-        perform_operations: mono.metadata.perform_operations.into_iter().collect(),
-        lambda_signatures: mono.metadata.lambda_signatures.into_iter().collect(),
-        exhaustive_cases: mono.metadata.exhaustive_cases,
-        evidence_plans: mono.metadata.evidence_plans.into_iter().collect(),
-        well_known_types: *checked.well_known_types(db),
-        compiler_intrinsics: HashMap::default(),
-        runtime_types: Default::default(),
-        merged_sources: Vec::new(),
-    }
+    let output = tribute_front::ast_to_ir::LoweringInput::from_specialization(
+        db,
+        mono,
+        tribute_front::ast_to_ir::LoweringEnvironment {
+            span_map: tribute_front::ast::SpanMaps::new([parsed.span_map(db)]),
+            ..Default::default()
+        },
+    )
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());
     let ir_text = print_module(&ir, output.module.op());
     assert!(
@@ -294,7 +226,7 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
 }
 
 // The callers supply the tracked accumulator context.
-fn lower_specialized_source(
+fn lower_monomorphized_source(
     db: &dyn salsa::Database,
     source: SourceCst,
 ) -> (IrContext, tribute_front::ast_to_ir::FrontendIrModule) {
@@ -305,91 +237,31 @@ fn lower_specialized_source(
         &tribute_front::resolve::resolve_with_env(
             db,
             ast,
-            tribute_front::resolve::build_env(db, ast),
+            tribute_front::resolve::build_env(
+                db,
+                ast,
+                &tribute_front::resolve::Dependencies::none(),
+            ),
+            &tribute_front::resolve::Dependencies::none(),
             parsed.span_map(db),
         ),
         parsed.span_map(db),
     );
-    let typed = checked.module(db).clone();
     let mono = tribute_front::monomorphize::monomorphize_functions(
         db,
-        typed,
-        checked.function_types(db).iter().cloned().collect(),
-        tribute_front::monomorphize::MonomorphizeMetadata {
-            constructor_types: checked
-                .constructor_types(db)
-                .schemes
-                .iter()
-                .cloned()
-                .collect(),
-            specialized_enum_variants: checked
-                .constructor_types(db)
-                .specialized_enum_variants
-                .iter()
-                .cloned()
-                .collect(),
-            local_instances: checked
-                .expression_types(db)
-                .local_instances
-                .iter()
-                .cloned()
-                .collect(),
-            evidence_plans: checked
-                .expression_types(db)
-                .evidence_plans
-                .iter()
-                .cloned()
-                .collect(),
-            function_instances: checked
-                .expression_types(db)
-                .function_instances
-                .iter()
-                .cloned()
-                .collect(),
-            node_types: checked
-                .expression_types(db)
-                .node_types
-                .iter()
-                .cloned()
-                .collect(),
-            handler_operations: checked.handler_operations(db).iter().cloned().collect(),
-            perform_operations: checked.perform_operations(db).iter().cloned().collect(),
-            lambda_signatures: checked.lambda_signatures(db).iter().cloned().collect(),
-            exhaustive_cases: checked.exhaustive_cases(db).iter().copied().collect(),
-            compiler_intrinsics: HashMap::default(),
-        },
+        tribute_front::monomorphize::SpecializationInput::new(db, checked, None),
     )
     .expect("checked instances must specialize");
     let mut ir = IrContext::new();
-    let output = tribute_front::ast_to_ir::TypedModule {
-        ast: mono.module,
-        span_map: checked.span_map(db),
-        function_types: mono.function_types.into_iter().collect(),
-        constructor_types: mono.metadata.constructor_types,
-        specialized_enum_variants: mono
-            .metadata
-            .specialized_enum_variants
-            .into_iter()
-            .collect(),
-        node_types: mono.metadata.node_types.into_iter().collect(),
-        local_instances: mono.metadata.local_instances.into_iter().collect(),
-        function_instances: mono.metadata.function_instances.into_iter().collect(),
-        ability_definitions: tribute_front::typeck::ability_definitions_from_schemas(
-            checked.ability_definitions(db),
-        ),
-        handler_operations: mono.metadata.handler_operations.into_iter().collect(),
-        perform_operations: mono.metadata.perform_operations.into_iter().collect(),
-        lambda_signatures: mono.metadata.lambda_signatures.into_iter().collect(),
-        exhaustive_cases: mono.metadata.exhaustive_cases,
-        evidence_plans: mono.metadata.evidence_plans.into_iter().collect(),
-        well_known_types: *checked.well_known_types(db),
-        compiler_intrinsics: HashMap::default(),
-        runtime_types: Default::default(),
-        merged_sources: Vec::new(),
-    }
+    let output = tribute_front::ast_to_ir::LoweringInput::from_specialization(
+        db,
+        mono,
+        tribute_front::ast_to_ir::LoweringEnvironment {
+            span_map: tribute_front::ast::SpanMaps::new([parsed.span_map(db)]),
+            ..Default::default()
+        },
+    )
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());
-    tribute_passes::specialize_convention_classes::specialize(&mut ir, output.module)
-        .expect("class specialization accepts frontend output");
     (ir, output)
 }
 
@@ -398,7 +270,7 @@ fn generic_specialization_transports_direct_callee_metadata_inner(
     db: &dyn salsa::Database,
     source: SourceCst,
 ) -> String {
-    let (ir, output) = lower_specialized_source(db, source);
+    let (ir, output) = lower_monomorphized_source(db, source);
     let ir_text = print_module(&ir, output.module.op());
     assert!(
         ir_text.contains("tribute_control.func @\"apply$Int\""),
@@ -417,59 +289,25 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
     let resolved = tribute_front::resolve::resolve_with_env(
         db,
         ast,
-        tribute_front::resolve::build_env(db, ast),
+        tribute_front::resolve::build_env(db, ast, &tribute_front::resolve::Dependencies::none()),
+        &tribute_front::resolve::Dependencies::none(),
         span_map,
     );
-    let checked = tribute_front::typeck::typecheck_module(db, &resolved, parsed.span_map(db));
-    let typed = checked.module(db).clone();
+    let checked = tribute_front::typeck::typecheck_module(db, &resolved, span_map);
+    let mono = tribute_front::monomorphize::monomorphize_functions(
+        db,
+        tribute_front::monomorphize::SpecializationInput::new(db, checked, None),
+    )
+    .expect("checked instances must specialize");
     let mut ir = IrContext::new();
-    let output = tribute_front::ast_to_ir::TypedModule {
-        ast: typed,
-        local_instances: checked
-            .expression_types(db)
-            .local_instances
-            .iter()
-            .cloned()
-            .collect(),
-        function_instances: checked.expression_types(db).function_instances.clone(),
-        span_map: checked.span_map(db),
-        function_types: checked.function_types(db).iter().cloned().collect(),
-        constructor_types: checked
-            .constructor_types(db)
-            .schemes
-            .iter()
-            .cloned()
-            .collect(),
-        specialized_enum_variants: checked
-            .constructor_types(db)
-            .specialized_enum_variants
-            .iter()
-            .cloned()
-            .collect(),
-        node_types: checked
-            .expression_types(db)
-            .node_types
-            .iter()
-            .cloned()
-            .collect(),
-        ability_definitions: tribute_front::typeck::ability_definitions_from_schemas(
-            checked.ability_definitions(db),
-        ),
-        handler_operations: checked.handler_operations(db).iter().cloned().collect(),
-        perform_operations: checked.perform_operations(db).iter().cloned().collect(),
-        lambda_signatures: checked.lambda_signatures(db).iter().cloned().collect(),
-        exhaustive_cases: checked.exhaustive_cases(db).iter().copied().collect(),
-        evidence_plans: checked
-            .expression_types(db)
-            .evidence_plans
-            .iter()
-            .cloned()
-            .collect(),
-        well_known_types: *checked.well_known_types(db),
-        compiler_intrinsics: HashMap::default(),
-        runtime_types: Default::default(),
-        merged_sources: Vec::new(),
-    }
+    let output = tribute_front::ast_to_ir::LoweringInput::from_specialization(
+        db,
+        mono,
+        tribute_front::ast_to_ir::LoweringEnvironment {
+            span_map: tribute_front::ast::SpanMaps::new([span_map]),
+            ..Default::default()
+        },
+    )
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());
     let declarations =
         &tribute_ir::dialect::tribute_control::operation_declarations(&ir, output.module);
@@ -599,11 +437,11 @@ fn use_bool() ->{} Bool { apply(True) }
 #[salsa::tracked]
 fn assert_outer_local_signatures(db: &dyn salsa::Database, source: SourceCst) {
     use std::ops::ControlFlow;
-    use tribute_ir::dialect::tribute_control::{Call, CallingConvention, Func, FuncSig, Lambda};
+    use tribute_ir::dialect::tribute_control::{Call, Func, FuncSig, Lambda};
     use trunk_ir::ops::{DialectOp, DialectType};
     use trunk_ir::walk::{WalkAction, walk_typed};
 
-    let (ir, output) = lower_specialized_source(db, source);
+    let (ir, output) = lower_monomorphized_source(db, source);
     let validation = tribute_ir::dialect::tribute_control::validate(
         &ir,
         output.module,
@@ -648,7 +486,6 @@ fn assert_outer_local_signatures(db: &dyn salsa::Database, source: SourceCst) {
         let signature = FuncSig::from_type_ref(&ir, ir.value_ty(value)).unwrap();
         assert_eq!(signature.inputs(&ir), [data_type]);
         assert_eq!(signature.result(&ir), data_type);
-        assert_eq!(signature.convention(&ir), CallingConvention::Direct);
         assert_eq!(calls[0].callee(&ir), [consumer.sym_name(&ir)]);
         assert_eq!(
             calls[0].args(&ir)[0],

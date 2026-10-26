@@ -12,11 +12,13 @@
 pub mod abi_boundary;
 pub mod bytes_intrinsic;
 pub mod check_convention_classes;
+pub mod check_fn_arm_calls;
 pub mod closure_lower;
 mod collections;
 mod convention_classes;
 mod cps_builders;
 mod effect_dispatch;
+pub mod evidence_lowering;
 pub mod intrinsic_to_arith;
 pub mod io_lowering;
 pub mod list_intrinsics;

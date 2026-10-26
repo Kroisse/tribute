@@ -14,7 +14,7 @@ use trunk_ir::SymbolPath;
 
 use crate::ast::visit::{Visit, walk_expr};
 use crate::ast::{
-    Decl, DeclTable, Expr, ExprKind, FuncDecl, NodeId, ResolvedRef, SpanMap, TypeKind, TypeScheme,
+    Decl, DeclTable, Expr, ExprKind, FuncDecl, NodeId, ResolvedRef, SpanMaps, TypeKind, TypeScheme,
     TypedRef,
 };
 
@@ -35,7 +35,7 @@ pub struct RuntimeItemError {
 
 impl RuntimeItemError {
     /// The source diagnostic of this error, at its declaration.
-    pub fn diagnostic(&self, spans: &SpanMap) -> Diagnostic {
+    pub fn diagnostic(&self, spans: &SpanMaps<'_>) -> Diagnostic {
         Diagnostic::new(
             self.to_string(),
             spans.get_or_default(self.node),

@@ -2,11 +2,13 @@
 
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# core.hooksPath may point at another checkout's hooks, so lint the work tree
+# being committed rather than the one that holds this script.
+WORK_TREE="$(git rev-parse --show-toplevel)"
 
 echo "Running pre-commit checks..."
 
 git diff --cached --check
-"$SCRIPT_DIR/../../.ci/lint.sh" --quick
+"$WORK_TREE/.ci/lint.sh" --quick
 
 echo "✅ All pre-commit checks passed!"

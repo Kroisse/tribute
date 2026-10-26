@@ -2,6 +2,7 @@
 //! references, and direct calls.
 
 use super::*;
+use tribute_ir::calling_convention::{ConventionBearing, DynConventionBearing};
 
 impl Converter<'_> {
     pub(super) fn lower_lambda(
@@ -12,8 +13,7 @@ impl Converter<'_> {
         let location = self.ctx.op(source).location;
         let logical_ty = self.ctx.op_result_types(source)[0];
         let callable = tribute_control::FuncSig::from_type_ref(self.ctx, logical_ty).unwrap();
-        let convention =
-            convert_convention(tribute_control::func_sig_convention(self.ctx, logical_ty).unwrap());
+        let convention = tribute_control::func_sig_convention(self.ctx, logical_ty).unwrap();
         let source_result = callable.result(self.ctx);
         let source_params = callable.inputs(self.ctx).to_vec();
         let result = self.convert_type(source_result);
@@ -81,12 +81,9 @@ impl Converter<'_> {
         self.copy_extra_attrs(
             source,
             lambda.op_ref(),
-            &[
-                CALLING_CONVENTION_ATTR,
-                tribute_control::QUANTIFIED_ROWS_ATTR,
-            ],
+            &[tribute_control::QUANTIFIED_ROWS_ATTR],
         );
-        set_calling_convention(self.ctx, lambda.op_ref(), convention);
+        lambda.set_calling_convention(self.ctx, convention);
         Ok(lambda.op_ref())
     }
 
@@ -113,7 +110,7 @@ impl Converter<'_> {
             .callee(self.written_callee(source))
             .results([result_ty])
             .build(self.ctx, location);
-        set_calling_convention(self.ctx, call.op_ref(), target.convention);
+        call.set_calling_convention(self.ctx, target.convention);
         if target.convention.needs_evidence() {
             carry_evidence_plan(self.ctx, source, call.op_ref());
         }
@@ -146,7 +143,6 @@ impl Converter<'_> {
             .expect("pre-CPS validation resolved func_ref target in this module");
         let result_logical_ty = self.ctx.op_result_types(source)[0];
         let result_convention = tribute_control::func_sig_convention(self.ctx, result_logical_ty)
-            .map(convert_convention)
             .expect("pre-CPS validation checked func_ref convention");
         debug_assert!(
             !target.convention.needs_continuation_frame()
@@ -192,7 +188,7 @@ impl Converter<'_> {
             let tail = func::TailCall::operands(target_args)
                 .callee(target_symbol.clone())
                 .build(self.ctx, location);
-            set_calling_convention(self.ctx, tail.op_ref(), CallingConvention::Cps);
+            tail.set_calling_convention(self.ctx, CallingConvention::Cps);
             self.ctx.push_op(block, tail.op_ref());
         } else if result_convention != CallingConvention::Cps
             && !target.platform
@@ -204,14 +200,14 @@ impl Converter<'_> {
             let tail = func::TailCall::operands(target_args)
                 .callee(target_symbol.clone())
                 .build(self.ctx, location);
-            set_calling_convention(self.ctx, tail.op_ref(), target.convention);
+            tail.set_calling_convention(self.ctx, target.convention);
             self.ctx.push_op(block, tail.op_ref());
         } else {
             let call = func::Call::operands(target_args)
                 .callee(target_symbol.clone())
                 .results([target_result])
                 .build(self.ctx, location);
-            set_calling_convention(self.ctx, call.op_ref(), target.convention);
+            call.set_calling_convention(self.ctx, target.convention);
             self.ctx.push_op(block, call.op_ref());
             if result_convention == CallingConvention::Cps {
                 let exit = ability::Exit::operands(args[frame_offset], call.result(self.ctx))
@@ -229,14 +225,14 @@ impl Converter<'_> {
             .r#type(adapter_ty)
             .regions(region)
             .build(self.ctx, location);
-        set_calling_convention(self.ctx, adapter.op_ref(), result_convention);
+        adapter.set_calling_convention(self.ctx, result_convention);
         self.ctx.push_op(self.module_block, adapter.op_ref());
 
         let closure_new = closure::New::operands(std::iter::empty::<ValueRef>())
             .func_ref(trunk_ir::SymbolPath::new([adapter_symbol]))
             .results(closure_ty)
             .build(self.ctx, location);
-        set_calling_convention(self.ctx, closure_new.op_ref(), result_convention);
+        closure_new.set_calling_convention(self.ctx, result_convention);
         Ok((vec![closure_new.op_ref()], closure_new.result(self.ctx)))
     }
 
@@ -283,7 +279,7 @@ impl Converter<'_> {
             }
             let data = builder.build(self.ctx);
             let declaration = self.ctx.create_op(data);
-            set_calling_convention(self.ctx, declaration, info.convention);
+            DynConventionBearing::set(self.ctx, declaration, info.convention);
             return Ok(declaration);
         }
 
@@ -352,13 +348,12 @@ impl Converter<'_> {
             &[
                 "sym_name",
                 "type",
-                CALLING_CONVENTION_ATTR,
                 tribute_control::ROW_BINDERS_ATTR,
                 tribute_control::ROW_UNIONS_ATTR,
                 tribute_control::INFERRED_ROW_ATTR,
             ],
         );
-        set_calling_convention(self.ctx, function.op_ref(), info.convention);
+        function.set_calling_convention(self.ctx, info.convention);
         Ok(function.op_ref())
     }
 
@@ -402,7 +397,7 @@ impl Converter<'_> {
             let tail = func::TailCall::operands(args)
                 .callee(target_symbol)
                 .build(self.ctx, location);
-            set_calling_convention(self.ctx, tail.op_ref(), CallingConvention::Cps);
+            tail.set_calling_convention(self.ctx, CallingConvention::Cps);
             carry_evidence_plan(self.ctx, source, tail.op_ref());
             self.ctx.push_op(block, tail.op_ref());
             return Ok(ControlFlow::Break(()));
@@ -468,7 +463,7 @@ impl Converter<'_> {
                 let tail = func::TailCall::operands(args)
                     .callee(target_symbol)
                     .build(self.ctx, location);
-                set_calling_convention(self.ctx, tail.op_ref(), CallingConvention::Cps);
+                tail.set_calling_convention(self.ctx, CallingConvention::Cps);
                 carry_evidence_plan(self.ctx, source, tail.op_ref());
                 self.ctx.push_op(block, tail.op_ref());
             }
@@ -489,7 +484,7 @@ impl Converter<'_> {
                 let tail = func::TailCall::operands(args)
                     .callee(self.written_callee(source))
                     .build(self.ctx, location);
-                set_calling_convention(self.ctx, tail.op_ref(), target.convention);
+                tail.set_calling_convention(self.ctx, target.convention);
                 if target.convention.needs_evidence() {
                     carry_evidence_plan(self.ctx, source, tail.op_ref());
                 }
@@ -512,7 +507,6 @@ impl Converter<'_> {
         let source_callee = self.ctx.op_operands(source)[0];
         let logical_type = self.ctx.value_ty(source_callee);
         let convention = tribute_control::func_sig_convention(self.ctx, logical_type)
-            .map(convert_convention)
             .expect("pre-CPS validation checked indirect tail callee convention");
         let callee = mapping
             .get(&source_callee)
@@ -557,7 +551,7 @@ impl Converter<'_> {
             let call = func::CallIndirect::operands(callee, args)
                 .signature(signature)
                 .build(self.ctx, location);
-            set_calling_convention(self.ctx, call.op_ref(), convention);
+            call.set_calling_convention(self.ctx, convention);
             if convention.needs_evidence() {
                 carry_evidence_plan(self.ctx, source, call.op_ref());
             }
@@ -569,7 +563,7 @@ impl Converter<'_> {
         let tail = func::TailCallIndirect::operands(callee, args)
             .signature(signature)
             .build(self.ctx, location);
-        set_calling_convention(self.ctx, tail.op_ref(), convention);
+        tail.set_calling_convention(self.ctx, convention);
         if convention.needs_evidence() {
             carry_evidence_plan(self.ctx, source, tail.op_ref());
         }
@@ -591,7 +585,6 @@ impl Converter<'_> {
         let source_callee = self.ctx.op_operands(source)[0];
         let logical_type = self.ctx.value_ty(source_callee);
         let convention = tribute_control::func_sig_convention(self.ctx, logical_type)
-            .map(convert_convention)
             .expect("pre-CPS validation checked indirect callee convention");
         let callee = mapping
             .get(&source_callee)
@@ -642,7 +635,7 @@ impl Converter<'_> {
         let call = func::CallIndirect::operands(callee, args)
             .signature(signature)
             .build(self.ctx, location);
-        set_calling_convention(self.ctx, call.op_ref(), convention);
+        call.set_calling_convention(self.ctx, convention);
         if convention.needs_evidence() {
             carry_evidence_plan(self.ctx, source, call.op_ref());
         }

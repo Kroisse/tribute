@@ -9,7 +9,8 @@ use trunk_ir::printer::print_module;
 use super::common::assert_native_output;
 
 const PROGRAM: &str = r#"
-use io::{Io, print_line}
+// The package root's `mod std` hides package `std`; `::std` reaches it.
+use ::std::io::{Io, print_line}
 
 mod std {
     pub mod Int {
@@ -50,4 +51,87 @@ fn a_user_std_module_has_its_own_symbols(db: &salsa::DatabaseImpl) {
 #[test]
 fn a_user_std_module_runs_its_own_functions() {
     assert_native_output("package_identity.trb", PROGRAM, "103");
+}
+
+/// A leading `::` reaches package `std` past a user module named `std`.
+#[test]
+fn a_leading_separator_runs_the_package_past_a_user_std_module() {
+    assert_native_output(
+        "leading_separator.trb",
+        r#"
+use ::std::io::{Io, print_line}
+
+mod std {
+    pub mod Int {
+        pub fn probe(value: Int) ->{} Int { value + +100 }
+    }
+}
+
+fn main() ->{Io} Nil {
+    print_line(::std::Int::to_string(std::Int::probe(+1)))
+}
+"#,
+        "101",
+    );
+}
+
+/// Package `std` is resolved from its own root: a `pub use` at its root
+/// exports a name, which other packages see under `std`. It is not a short
+/// name, as `std::prelude::v0` does not re-export it.
+#[test]
+fn a_std_root_re_export_is_visible_to_users() {
+    super::common::assert_output_in_std_on_both_targets_with_native_asan(
+        "std_root_re_export.trb",
+        r#"
+pub mod extras {
+    pub fn seven() ->{} Int { +7 }
+}
+
+pub use pkg::extras::seven
+"#,
+        r#"
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
+    print_line(Int::to_string(std::extras::seven() + std::seven()))
+}
+"#,
+        "14",
+    );
+}
+
+/// A module of package `std` sees the items of `std::prelude::v0` under
+/// their short names, as every module does, and its own names win over them.
+#[test]
+fn a_std_module_sees_the_prelude() {
+    super::common::assert_output_in_std_on_both_targets_with_native_asan(
+        "std_module_prelude.trb",
+        r#"
+pub mod extras {
+    enum Shadow { Some(Int) }
+
+    fn own() ->{} Int {
+        case Shadow::Some(+3) {
+            .Some(n) -> n
+        }
+    }
+
+    pub fn total() ->{} Int {
+        let found = case Option::Some(+4) {
+            Option::Some(n) -> n
+            .None -> +0
+        }
+        found + own()
+    }
+}
+"#,
+        r#"
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
+    print_line(Int::to_string(std::extras::total()))
+}
+"#,
+        "7",
+    );
 }

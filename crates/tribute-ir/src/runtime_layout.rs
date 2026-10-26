@@ -19,10 +19,6 @@ pub const CLOSURE_CAPTURES: &str = "closure_captures";
 /// The type attribute naming the closure base of a [`CLOSURE_CAPTURES`] layout,
 /// whose fields are a prefix of the capture layout's fields.
 pub const CLOSURE_BASE_ATTR: &str = "closure_base";
-/// An evidence marker: one handler's ability id, prompt, and dispatch closures.
-pub const EVIDENCE_MARKER: &str = "evidence_marker";
-/// The evidence array: markers sorted by ability id.
-pub const EVIDENCE: &str = "evidence";
 /// Wasm `Bytes` storage: a backing array, a start offset, and a length.
 pub const BYTES: &str = "bytes";
 /// The byte array a Wasm `Bytes` points into.
@@ -34,6 +30,21 @@ pub const BOXED_F64: &str = "boxed_f64";
 /// descriptor field alone. Builtin layouts, arrays, and boxed scalars are not
 /// its subtypes.
 pub const DESCRIBED: &str = "described";
+
+/// The closure base whose code field has the representation `code`.
+pub fn closure_base_layout(ctx: &mut IrContext, code: TypeRef) -> TypeRef {
+    let mut attrs = trunk_ir::types::AttributeMap::new();
+    let layout = ctx.string_attr(CLOSURE);
+    attrs.view_mut(ctx).insert(LAYOUT_ATTR, layout);
+    crate::dialect::adt::Struct::from_fields(ctx, "_closure", [("code", code)], attrs).as_type_ref()
+}
+
+/// The closure base of the source-logical and target-neutral IR, whose code
+/// field is a function table index.
+pub fn closure_base(ctx: &mut IrContext) -> TypeRef {
+    let code = trunk_ir::types::TypeDataBuilder::new("core.i32").intern(ctx);
+    closure_base_layout(ctx, code)
+}
 
 /// Whether `ty` carries the runtime layout identifier `layout`.
 pub fn has_runtime_layout(ctx: &IrContext, ty: TypeRef, layout: &str) -> bool {

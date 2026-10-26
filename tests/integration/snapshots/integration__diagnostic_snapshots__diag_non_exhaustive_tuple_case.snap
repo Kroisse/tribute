@@ -2,7 +2,7 @@
 source: tests/integration/diagnostic_snapshots.rs
 expression: result.diagnostics
 ---
-- message: "non-exhaustive case expression: missing patterns: #(False, False)"
+- message: "non-exhaustive case expression on `#(Bool, Bool)`: missing patterns: #(False, False)"
   span:
     start: 45
     end: 52

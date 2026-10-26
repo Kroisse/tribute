@@ -35,7 +35,7 @@ fn format_solve_error_describes_builtin_actual_against_source_expected(db: &dyn 
     let source = Type::new(
         db,
         TypeKind::Named {
-            id: TypeDefId::source(db, trunk_ir::SymbolPath::new(["List"]), NodeId::from_raw(1)),
+            id: TypeDefId::source(db, trunk_ir::SymbolPath::new(["List"])),
             name: Symbol::new("List"),
             args: vec![int_ty],
         },
@@ -99,7 +99,7 @@ fn collect_deferred_resolution_univars_includes_callee_type(db: &salsa::Database
         ),
     );
 
-    let checker = TypeChecker::new(db, SpanMap::default());
+    let checker = TypeChecker::new(db, SpanMap::empty());
     let mut collected = Vec::new();
     checker.collect_univars_from_deferred_resolutions(
         &deferred_resolutions,

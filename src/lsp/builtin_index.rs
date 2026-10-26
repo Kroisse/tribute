@@ -27,7 +27,7 @@ pub fn builtin_symbols(db: &dyn salsa::Database, source: SourceCst) -> Vec<Built
     };
 
     let mut entries = Vec::new();
-    collect_module(db, module, &span_map, &mut entries);
+    collect_module(db, module, span_map, &mut entries);
     entries.sort_by_key(|entry| (entry.span.start, entry.span.end));
     entries
 }

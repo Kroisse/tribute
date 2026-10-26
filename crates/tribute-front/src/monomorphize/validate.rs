@@ -1,28 +1,82 @@
 //! Validate checker-selected instances on executable reference paths before erasure.
 use super::{MonomorphizeMetadata, collect::is_concrete_type};
 use crate::ast::{
-    Decl, DeclTable, ExprKind, FuncDecl, FuncDefId, NodeId, ResolvedRef, Type, TypeScheme, TypedRef,
+    Decl, DeclTable, ExprKind, FuncDecl, FuncDefId, NodeId, ResolvedRef, SpanMaps, Type,
+    TypeScheme, TypedRef,
 };
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
+use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::SymbolPath;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum InstanceErrorKind {
     MissingInstance,
     WrongDeclaration,
-    TypeArgumentArity { expected: usize, found: usize },
-    RowArgumentArity { expected: usize, found: usize },
+    TypeArgumentArity {
+        expected: usize,
+        found: usize,
+    },
+    RowArgumentArity {
+        expected: usize,
+        found: usize,
+    },
     IncompleteTypeArgument,
     IncompleteAbilityArgument,
     InconsistentCallable,
+    /// A backstop for runaway expansion that polymorphic recursion
+    /// rejection does not catch.
     ExpansionLimit,
+    /// A reference to a function of the caller's own recursive group at
+    /// type arguments that strictly contain the caller's type parameters,
+    /// spelled with the caller's parameter names. `callee` is `None` when
+    /// the caller references itself.
+    PolymorphicRecursion {
+        caller: String,
+        callee: Option<String>,
+        instantiation: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct InstanceError {
     pub node: NodeId,
     pub kind: InstanceErrorKind,
+}
+
+impl InstanceError {
+    /// The source diagnostic of this error, at the reference whose instance
+    /// is invalid.
+    pub fn diagnostic(&self, spans: &SpanMaps<'_>) -> Diagnostic {
+        let message = match &self.kind {
+            InstanceErrorKind::ExpansionLimit => "specialization did not terminate: generic \
+                 definitions keep requiring instances at new type arguments"
+                .to_owned(),
+            InstanceErrorKind::PolymorphicRecursion {
+                caller,
+                callee: None,
+                instantiation,
+            } => format!(
+                "`{caller}` calls itself at `{instantiation}`; polymorphic recursion is not \
+                 supported"
+            ),
+            InstanceErrorKind::PolymorphicRecursion {
+                caller,
+                callee: Some(callee),
+                instantiation,
+            } => format!(
+                "`{caller}` calls `{callee}` of its own recursive group at `{instantiation}`; \
+                 polymorphic recursion is not supported"
+            ),
+            kind => format!("invalid specialization instance at {}: {kind:?}", self.node),
+        };
+        Diagnostic::new(
+            message,
+            spans.get_or_default(self.node),
+            DiagnosticSeverity::Error,
+            CompilationPhase::TypeChecking,
+        )
+    }
 }
 
 fn substitute<'db>(
@@ -52,7 +106,7 @@ pub(super) fn validate<'db>(
             }
             Decl::Struct(decl) => {
                 let name = entry.module.child(decl.name.clone());
-                let owner = crate::ast::TypeDefId::source(db, name, decl.id);
+                let owner = crate::ast::TypeDefId::declared(db, name, decl.disambiguator);
                 for field in &decl.fields {
                     if let Some(name) = field.name.clone() {
                         fields.insert((owner, name));
@@ -92,7 +146,7 @@ pub(super) fn validate<'db>(
         let mut nodes = Vec::new();
         func.body.for_each(|node| nodes.push(node));
         for expr in nodes {
-            if let Some(op) = metadata.perform_operations.get(&expr.id)
+            if let Some(op) = metadata.expressions.perform_operations.get(&expr.id)
                 && op.ability_args.iter().any(|ty| {
                     substitute(db, *ty, &arguments).is_none_or(|ty| !is_concrete_type(db, ty))
                 })
@@ -104,7 +158,7 @@ pub(super) fn validate<'db>(
             }
             if let ExprKind::Handle { handlers, .. } = expr.kind.as_ref() {
                 for arm in handlers {
-                    if let Some(op) = metadata.handler_operations.get(&arm.id)
+                    if let Some(op) = metadata.expressions.handler_operations.get(&arm.id)
                         && op.ability_args.iter().any(|ty| {
                             substitute(db, *ty, &arguments)
                                 .is_none_or(|ty| !is_concrete_type(db, ty))
@@ -128,7 +182,7 @@ pub(super) fn validate<'db>(
                 node: expr.id,
                 kind,
             };
-            let Some(instance) = metadata.function_instances.get(&expr.id) else {
+            let Some(instance) = metadata.expressions.function_instances.get(&expr.id) else {
                 errors.push(fail(InstanceErrorKind::MissingInstance));
                 continue;
             };

@@ -6,7 +6,9 @@
 //! own item set.
 
 use super::*;
+use crate::frontend::frontend_spans;
 use rustc_hash::FxHashMap as HashMap;
+use tribute_front::ast_to_ir;
 use tribute_front::ast_to_ir::runtime_items::{RuntimeInputs, RuntimeItemErrorKind, check_runtime};
 use tribute_ir::runtime_items::{RuntimeFunction, RuntimeItem, RuntimeItemKind, runtime_type};
 use tribute_passes::abi_boundary::TargetKind;
@@ -54,7 +56,7 @@ fn definition(ctx: &IrContext, m: Module, path: &[&str]) -> Option<OpRef> {
 /// still present; the target entry is the first DCE it meets.
 fn shared_output(db: &salsa::DatabaseImpl) -> (IrContext, Module) {
     salsa::Database::attach(db, |db| {
-        check_shared_pipeline(db, source(db, PROGRAM))
+        compile_ast(db, source(db, PROGRAM))
             .expect("shared middle-end")
             .expect("frontend output")
     })
@@ -81,16 +83,18 @@ fn call_probe_from_main(ctx: &mut IrContext, m: Module) -> OpRef {
     call.op_ref()
 }
 
-fn lower_runtime_calls(
+/// Run `stages` for `target` with the test runtime items.
+fn run_target_stages(
     ctx: &mut IrContext,
     m: Module,
-    analyses: &mut AnalysisCache,
     target: TargetKind,
-) -> Result<(), DumpIrError> {
-    match target {
-        TargetKind::Native => lower_native_runtime_calls(ctx, m, analyses),
-        TargetKind::Wasm => lower_wasm_runtime_calls(ctx, m, analyses),
-    }
+    stages: std::ops::RangeInclusive<Stage>,
+) -> PassResult {
+    let config = StageConfig {
+        runtime: ITEMS,
+        ..StageConfig::target(target)
+    };
+    run_stages(ctx, m, config, stages)
 }
 
 #[test]
@@ -102,19 +106,36 @@ fn frontend_publishes_runtime_types_with_the_prelude_types() {
         // The prepared metadata is checked against the compiler's own item
         // set under `std::runtime`, which has no `rt` items; check the test
         // set here instead.
-        merge_and_lower_to_ir_with(db, &typed, source, |mut typed, db, ir, uri| {
-            typed.runtime_types = check_runtime(
-                db,
-                &RuntimeInputs {
-                    module: &typed.ast,
-                    function_types: &typed.function_types,
-                },
-                RUNTIME,
-                ITEMS,
-            )
-            .expect("runtime items");
-            typed.lower_to_ir(db, ir, uri)
-        })
+        let specialized =
+            prepare_frontend_for_lowering(db, typed, source).expect("specialized frontend");
+        let function_types: HashMap<_, _> = specialized
+            .declarations(db)
+            .function_types
+            .iter()
+            .cloned()
+            .collect();
+        let runtime_types = check_runtime(
+            db,
+            &RuntimeInputs {
+                module: specialized.module(db),
+                function_types: &function_types,
+            },
+            RUNTIME,
+            ITEMS,
+        )
+        .expect("runtime items");
+        let mut ctx = IrContext::new();
+        let frontend = ast_to_ir::LoweringInput::from_specialization(
+            db,
+            specialized,
+            ast_to_ir::LoweringEnvironment {
+                span_map: frontend_spans(db, source),
+                runtime_types,
+                merged_sources: vec![crate::prelude::PRELUDE_URI.to_owned()],
+            },
+        )
+        .lower_to_ir(db, &mut ctx, source.uri(db).as_str());
+        (ctx, frontend)
     });
     let m = frontend.module;
 
@@ -150,19 +171,64 @@ fn source_dce_keeps_runtime_functions() {
 }
 
 #[test]
+fn source_dce_keeps_the_evidence_runtime_only_where_effects_lower_to_it() {
+    const HANDLED: &str = r#"
+ability Ask {
+    fn ask() -> Nat
+}
+
+fn use_ask() ->{Ask} Nat {
+    Ask::ask()
+}
+
+fn main() -> Nil {
+    let _ = handle use_ask() {
+        do result { result }
+        fn Ask::ask() { 42 }
+    }
+}
+"#;
+    for (program, kept) in [(PROGRAM, false), (HANDLED, true)] {
+        let db = salsa::DatabaseImpl::default();
+        let (ctx, m) = salsa::Database::attach(&db, |db| {
+            let frontend = compile_frontend_for_shared_route(db, source(db, program))
+                .expect("frontend output");
+            run_shared_middle_end(frontend).expect("shared middle-end")
+        });
+        assert_eq!(
+            definition(&ctx, m, tribute_ir::runtime_items::evidence::LOOKUP).is_some(),
+            kept,
+            "{program}"
+        );
+    }
+}
+
+#[test]
 fn unused_runtime_functions_do_not_reach_the_boundary_exit() {
     for target in [TargetKind::Native, TargetKind::Wasm] {
         let db = salsa::DatabaseImpl::default();
         let (mut ctx, m) = shared_output(&db);
-        let mut analyses = AnalysisCache::new();
-        enter_target_lowering(&mut ctx, m, &mut analyses, "test", ITEMS).expect("target entry");
+        run_target_stages(&mut ctx, m, target, Stage::EnterTarget..=Stage::EnterTarget)
+            .expect("target entry");
         assert!(
             RuntimeFunction::lookup(&ctx, m, PROBE).is_ok(),
             "{target:?}: the target entry keeps the probe"
         );
 
-        lower_runtime_calls(&mut ctx, m, &mut analyses, target).expect("runtime calls");
-        finish_target_lowering(&mut ctx, m, &mut analyses, target).expect("boundary exit");
+        run_target_stages(
+            &mut ctx,
+            m,
+            target,
+            Stage::LowerRuntimeCalls..=Stage::LowerRuntimeCalls,
+        )
+        .expect("runtime calls");
+        run_target_stages(
+            &mut ctx,
+            m,
+            target,
+            Stage::ExitBoundary..=Stage::ExitBoundary,
+        )
+        .expect("boundary exit");
         assert_eq!(
             definition(&ctx, m, PROBE),
             None,
@@ -176,11 +242,23 @@ fn target_lowering_calls_runtime_functions_by_path() {
     for target in [TargetKind::Native, TargetKind::Wasm] {
         let db = salsa::DatabaseImpl::default();
         let (mut ctx, m) = shared_output(&db);
-        let mut analyses = AnalysisCache::new();
-        enter_target_lowering(&mut ctx, m, &mut analyses, "test", ITEMS).expect("target entry");
+        run_target_stages(&mut ctx, m, target, Stage::EnterTarget..=Stage::EnterTarget)
+            .expect("target entry");
         let call = call_probe_from_main(&mut ctx, m);
-        lower_runtime_calls(&mut ctx, m, &mut analyses, target).expect("runtime calls");
-        finish_target_lowering(&mut ctx, m, &mut analyses, target).expect("boundary exit");
+        run_target_stages(
+            &mut ctx,
+            m,
+            target,
+            Stage::LowerRuntimeCalls..=Stage::LowerRuntimeCalls,
+        )
+        .expect("runtime calls");
+        run_target_stages(
+            &mut ctx,
+            m,
+            target,
+            Stage::ExitBoundary..=Stage::ExitBoundary,
+        )
+        .expect("boundary exit");
 
         let probe = RuntimeFunction::lookup(&ctx, m, PROBE)
             .unwrap_or_else(|error| panic!("{target:?}: {error}"));
@@ -287,7 +365,12 @@ fn main() -> Nil { }
             let typed = parse_and_lower_ast(db, source).expect("typechecked source");
             let diagnostics = parse_and_lower_ast::accumulated::<Diagnostic>(db, source);
             assert!(diagnostics.is_empty(), "{diagnostics:?}");
-            let function_types: HashMap<_, _> = typed.function_types(db).iter().cloned().collect();
+            let function_types: HashMap<_, _> = typed
+                .declarations(db)
+                .function_types
+                .iter()
+                .cloned()
+                .collect();
             let inputs = RuntimeInputs {
                 module: typed.module(db),
                 function_types: &function_types,
@@ -345,13 +428,19 @@ fn main() -> Nil { }
         salsa::Database::attach(&db, |db| {
             let source = source(db, REJECTED);
             let typed = parse_and_lower_ast(db, source).expect("typechecked source");
-            let function_types: HashMap<_, _> = typed.function_types(db).iter().cloned().collect();
+            let function_types: HashMap<_, _> = typed
+                .declarations(db)
+                .function_types
+                .iter()
+                .cloned()
+                .collect();
             let inputs = RuntimeInputs {
                 module: typed.module(db),
                 function_types: &function_types,
             };
             let errors = check_runtime(db, &inputs, RUNTIME, &[]).expect_err("rejected");
-            let diagnostic = errors[0].diagnostic(&typed.span_map(db));
+            let span_map = tribute_front::query::span_map(db, source).expect("parsed source");
+            let diagnostic = errors[0].diagnostic(&tribute_front::ast::SpanMaps::new([span_map]));
             assert_eq!(
                 diagnostic.inner.message,
                 "runtime `rt::inferred` must have an empty ability row, written `->{}`"

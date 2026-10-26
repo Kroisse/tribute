@@ -12,6 +12,7 @@ fluent-uri.workspace = true
 itertools.workspace = true
 salsa.workspace = true
 ropey.workspace = true
+hashbrown.workspace = true
 rustc-hash.workspace = true
 smallvec.workspace = true
 strsim.workspace = true
@@ -24,7 +25,6 @@ trunk-ir = { workspace = true, features = ["salsa"] }
 winnow.workspace = true
 
 [dev-dependencies]
-tribute-passes.workspace = true
 insta.workspace = true
 proptest.workspace = true
 proptest-state-machine.workspace = true

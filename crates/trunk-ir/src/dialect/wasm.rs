@@ -261,6 +261,26 @@ mod wasm {
     fn ref_cast(target_type: Attr<Type>, type_idx: Option<Attr<u32>>, r#ref: Value<_>) -> Value<_> {
     }
 
+    /// Widen a GC reference to the abstract heap type `wasm.anyref`,
+    /// `wasm.structref`, or `wasm.arrayref` that its result declares.
+    /// WasmGC accepts a subtype reference where a supertype is declared and
+    /// has no upcast instruction, so emission produces no instruction for it:
+    /// the result is the operand's reference at the wider type. Operation
+    /// schemas compare types exactly, so a widening the target relies on is
+    /// written with this operation rather than by using the narrower value
+    /// directly.
+    ///
+    /// Verification checks that the result type is one of the three abstract
+    /// heap types. Whether the operand widens to it without a runtime cast is
+    /// the target's physical assignability rule, which the Wasm backend checks
+    /// before emission.
+    ///
+    /// ```text
+    /// %wide = wasm.ref_upcast %narrow : wasm.structref
+    /// ```
+    #[verify]
+    fn ref_upcast(r#ref: Value<_>) -> Value<_> {}
+
     fn ref_test(target_type: Attr<Type>, type_idx: Option<Attr<u32>>, r#ref: Value<_>) -> Value<_> {
     }
 
@@ -774,12 +794,44 @@ pub fn set_indirect_call_signature(
     true
 }
 
+impl crate::ops::Verify for RefUpcast {
+    fn verify(&self, ctx: &IrContext) -> Result<(), crate::ops::VerificationError> {
+        let result = ctx.get_type(self.result_ty(ctx)).name;
+        if [Anyref::NAME, Structref::NAME, Arrayref::NAME].contains(&result) {
+            Ok(())
+        } else {
+            Err(format!(
+                "wasm.ref_upcast result must be wasm.anyref, wasm.structref, or wasm.arrayref, found {}",
+                result.display(ctx)
+            )
+            .into())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::op_interface::DynIndirectCallLike;
     use crate::parser::parse_test_module;
     use crate::printer::print_module;
+
+    #[test]
+    fn ref_upcast_result_is_an_abstract_gc_reference() {
+        let verifies = |result: &str| {
+            let mut ctx = crate::IrContext::new();
+            let module = parse_test_module(
+                &mut ctx,
+                &format!(
+                    "core.module @test {{\n  func.func @f(%s: wasm.structref) -> core.nil {{\n    %w = wasm.ref_upcast %s : {result}\n    func.return\n  }}\n}}"
+                ),
+            );
+            crate::validation::validate_operation_verifiers(&ctx, module).is_ok()
+        };
+        assert!(verifies("wasm.anyref"));
+        assert!(verifies("wasm.structref"));
+        assert!(!verifies("core.i32"));
+    }
 
     #[test]
     fn gc_array_indices_and_lengths_are_i32() {

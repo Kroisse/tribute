@@ -10,8 +10,8 @@
 use itertools::Itertools;
 use std::error::Error;
 use std::fmt;
+use tribute_ir::calling_convention::DynConventionBearing;
 
-use tribute_core::get_calling_convention;
 use tribute_ir::dialect::ability;
 use tribute_ir::dialect::effect;
 use tribute_ir::dialect::tribute_control::{EVIDENCE_PLAN_ATTR, EvidenceStep};
@@ -334,7 +334,7 @@ fn call_evidence_operand(ctx: &IrContext, op: OpRef) -> Option<u32> {
     } else {
         return None;
     };
-    let passes_evidence = get_calling_convention(ctx, op)
+    let passes_evidence = DynConventionBearing::of(ctx, op)
         .is_some_and(|convention| convention.needs_evidence())
         && ctx
             .op_operands(op)
@@ -484,8 +484,8 @@ mod tests {
     fn final_dispatch_fixture(operation: &str) -> String {
         format!(
             r#"core.module @test {{
-  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {{layout = "evidence_marker"}}>
-  !evidence = adt.array<!marker, {{layout = "evidence"}}>
+  !marker = adt.typeref<{{name = "std::runtime::evidence::Marker"}}>
+  !evidence = adt.array<!marker>
   func.func @test(%ev: !evidence, %prompt: core.i32, %tr: core.ptr, %tr2: core.ptr) -> core.never {{
     {operation}
   }}
@@ -506,16 +506,6 @@ mod tests {
         resolve_evidence_dispatch(&mut ctx, module).unwrap();
         let resolved = print_module(&ctx, module.op());
         assert_eq!(resolved.matches("effect.extend").count(), 2);
-        for name in [ability::evidence_abi::LOOKUP, ability::evidence_abi::EXTEND] {
-            assert!(
-                module
-                    .ops(&ctx)
-                    .iter()
-                    .copied()
-                    .all(|op| { ctx.op_attrs(op).get_str("sym_name") != Some(name) }),
-                "shared resolution must not fabricate target helper {name}"
-            );
-        }
         assert_eq!(resolved.matches("func.call").count(), 0);
         assert!(!resolved.contains("__tribute_next_tag"));
         assert!(resolved.contains("ability.handle_dispatch"));
@@ -583,8 +573,8 @@ mod tests {
     #[test]
     fn call_selections_apply_in_order_to_the_passed_evidence() {
         let input = final_dispatch_fixture(
-            r#"%direct = func.call %ev, %prompt {callee = @callee, tribute.calling_convention = 1, evidence_plan = [{mask = @State}, {dup = @Console}]} : core.i32
-    func.tail_call_indirect %tr, %ev, %direct {signature = func.func_sig<(!evidence, core.i32) -> core.never>, tribute.calling_convention = 2, evidence_plan = [{dup = @State}]}"#,
+            r#"%direct = func.call %ev, %prompt {callee = @callee, tribute.calling_convention = "evidence_direct", evidence_plan = [{mask = @State}, {dup = @Console}]} : core.i32
+    func.tail_call_indirect %tr, %ev, %direct {signature = func.func_sig<(!evidence, core.i32) -> core.never>, tribute.calling_convention = "cps", evidence_plan = [{dup = @State}]}"#,
         );
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, &input);
@@ -597,9 +587,9 @@ mod tests {
             [
                 r#"%4 = effect.mask %0 {ability = @State} : !evidence"#,
                 r#"%5 = effect.dup %4 {ability = @Console} : !evidence"#,
-                r#"%6 = func.call %5, %1 {callee = @callee, tribute.calling_convention = 1} : core.i32"#,
+                r#"%6 = func.call %5, %1 {callee = @callee, tribute.calling_convention = "evidence_direct"} : core.i32"#,
                 r#"%7 = effect.dup %0 {ability = @State} : !evidence"#,
-                r#"func.tail_call_indirect %2, %7, %6 {signature = func.func_sig<(!evidence, core.i32) -> core.never>, tribute.calling_convention = 2}"#,
+                r#"func.tail_call_indirect %2, %7, %6 {signature = func.func_sig<(!evidence, core.i32) -> core.never>, tribute.calling_convention = "cps"}"#,
             ],
             "{body:#?}"
         );
@@ -608,8 +598,8 @@ mod tests {
     #[test]
     fn row_tail_selections_read_the_evidence_the_call_starts_from() {
         let input = final_dispatch_fixture(
-            r#"%direct = func.call %ev, %prompt {callee = @callee, tribute.calling_convention = 1, evidence_plan = [{select = 1}, {push = @State}]} : core.i32
-    func.tail_call_indirect %tr, %ev, %direct {signature = func.func_sig<(!evidence, core.i32) -> core.never>, tribute.calling_convention = 2, evidence_plan = [{dup = @State}, {tails = [[], [{mask = @State}]]}]}"#,
+            r#"%direct = func.call %ev, %prompt {callee = @callee, tribute.calling_convention = "evidence_direct", evidence_plan = [{select = 1}, {push = @State}]} : core.i32
+    func.tail_call_indirect %tr, %ev, %direct {signature = func.func_sig<(!evidence, core.i32) -> core.never>, tribute.calling_convention = "cps", evidence_plan = [{dup = @State}, {tails = [[], [{mask = @State}]]}]}"#,
         );
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, &input);
@@ -622,12 +612,12 @@ mod tests {
             [
                 r#"%4 = effect.tail %0 {index = 1} : !evidence"#,
                 r#"%5 = effect.push %4, %0 {ability = @State} : !evidence"#,
-                r#"%6 = func.call %5, %1 {callee = @callee, tribute.calling_convention = 1} : core.i32"#,
+                r#"%6 = func.call %5, %1 {callee = @callee, tribute.calling_convention = "evidence_direct"} : core.i32"#,
                 r#"%7 = effect.dup %0 {ability = @State} : !evidence"#,
                 r#"%8 = effect.with_tail %7, %0 {index = 0} : !evidence"#,
                 r#"%9 = effect.mask %0 {ability = @State} : !evidence"#,
                 r#"%10 = effect.with_tail %8, %9 {index = 1} : !evidence"#,
-                r#"func.tail_call_indirect %2, %10, %6 {signature = func.func_sig<(!evidence, core.i32) -> core.never>, tribute.calling_convention = 2}"#,
+                r#"func.tail_call_indirect %2, %10, %6 {signature = func.func_sig<(!evidence, core.i32) -> core.never>, tribute.calling_convention = "cps"}"#,
             ],
             "{body:#?}"
         );
@@ -636,7 +626,7 @@ mod tests {
     #[test]
     fn selection_on_a_call_that_passes_no_evidence_is_rejected() {
         let input = final_dispatch_fixture(
-            r#"%direct = func.call %prompt {callee = @callee, tribute.calling_convention = 0, evidence_plan = [{mask = @State}]} : core.i32
+            r#"%direct = func.call %prompt {callee = @callee, tribute.calling_convention = "direct", evidence_plan = [{mask = @State}]} : core.i32
     func.unreachable"#,
         );
         let mut ctx = IrContext::new();
@@ -831,8 +821,8 @@ mod tests {
     #[test]
     fn bodyless_declarations_are_preserved_during_evidence_resolution() {
         let input = r#"core.module @test {
-  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>
-  !evidence = adt.array<!marker, {layout = "evidence"}>
+  !marker = adt.typeref<{name = "std::runtime::evidence::Marker"}>
+  !evidence = adt.array<!marker>
   func.func @plain_external() -> core.i32
   func.func @evidence_external(%ev: !evidence) -> !marker
   func.func @body(%ev: !evidence, %prompt: core.i32) -> core.never {

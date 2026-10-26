@@ -1,4 +1,4 @@
-use abilities::Throw
+use std::abilities::Throw
 use std::io::{Error as IoError, Io, print_line, read_line}
 
 enum Input {
@@ -87,10 +87,10 @@ fn print_calculation(operator: String, left: Int, right: Int) ->{Io} Bool {
 
 fn execute_calculation(operator: String, left: String, right: String) ->{Io} Bool {
     case Int::parse(left) {
-        Error(error) -> invalid_integer(error)
-        Ok(left_value) -> case Int::parse(right) {
-            Error(error) -> invalid_integer(error)
-            Ok(right_value) -> print_calculation(operator, left_value, right_value)
+        .Error(error) -> invalid_integer(error)
+        .Ok(left_value) -> case Int::parse(right) {
+            .Error(error) -> invalid_integer(error)
+            .Ok(right_value) -> print_calculation(operator, left_value, right_value)
         }
     }
 }
@@ -117,12 +117,12 @@ fn execute(tokens: List(String)) ->{Io} Bool {
 
 fn next_input() ->{Io} Input {
     handle read_line() {
-        do line { Line(line) }
+        do line { .Line(line) }
         op Throw::throw(error) {
             case error {
-                IoError::EndOfFile -> EndOfInput
-                IoError::InvalidEncoding -> InputFailure
-                IoError::System(_) -> InputFailure
+                IoError::EndOfFile -> .EndOfInput
+                IoError::InvalidEncoding -> .InputFailure
+                IoError::System(_) -> .InputFailure
             }
         }
     }
@@ -130,12 +130,12 @@ fn next_input() ->{Io} Input {
 
 fn read_commands() ->{Io} Nil {
     case next_input() {
-        Line(line) -> case execute(tokenize(line)) {
+        .Line(line) -> case execute(tokenize(line)) {
             True -> read_commands()
             False -> Nil
         }
-        EndOfInput -> Nil
-        InputFailure -> print_line("error: input failure")
+        .EndOfInput -> Nil
+        .InputFailure -> print_line("error: input failure")
     }
 }
 

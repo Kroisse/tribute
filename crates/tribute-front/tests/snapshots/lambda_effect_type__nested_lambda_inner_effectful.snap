@@ -28,7 +28,7 @@ core.module @test {
       %1 = tribute_control.call_indirect %0 : core.i32
       tribute_control.return %1
   }
-  tribute_control.func @main['a0]() -> core.i32 row(| 'a0) inferred {
+  tribute_control.func @read_state['a0]() -> core.i32 row(| 'a0) inferred {
       %0 = tribute_control.lambda() -> core.i32 row(| 'a0) captures [] {
           %1 = tribute_control.lambda() -> core.i32 row(@ability_2_5_State_3_int) captures [] {
               %2 = tribute_control.perform {ability = @ability_2_5_State_3_int, op_name = "get", operation_kind = "op"} : core.i32

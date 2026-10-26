@@ -1,3 +1,5 @@
+use std::io::{Io, print_line}
+
 ability State(s) {
     op get() -> s
     op set(value: s) -> Nil
@@ -40,11 +42,11 @@ fn run_writer(comp: fn() ->{e, Writer(w)} a) ->{e} a {
     }
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = run_reader(fn() {
         run_writer(fn() {
             run_state(fn() { use_all() }, 0)
         })
     }, 5)
-    __tribute_print_nat(result)
+    print_line(result.to_string)
 }

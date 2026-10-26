@@ -7,7 +7,7 @@
 //! `func.call_indirect` or a proper-tail `func.tail_call_indirect`. Only how
 //! evidence runtime values are typed differs per target; callers supply those.
 
-use tribute_core::CallingConvention;
+use tribute_ir::calling_convention::CallingConvention;
 use tribute_ir::dialect::ability::{self, compute_op_idx};
 
 use crate::target_abi::physical_parameter_attrs;
@@ -18,7 +18,7 @@ use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{arith, core, func};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
-use trunk_ir::rewrite::{PatternRewriter, TypeConverter};
+use trunk_ir::rewrite::PatternRewriter;
 use trunk_ir::types::{Attribute, AttributeMap, Location, StringRef, TypeDataBuilder};
 
 pub(crate) fn i32_type(ctx: &mut IrContext) -> TypeRef {
@@ -92,13 +92,9 @@ fn canonical_closure(
     cast.result(ctx)
 }
 
-/// Whether `op` is a well-formed tail dispatch for a target whose converter
-/// is `converter`: evidence and payload operands, one `anyref` result.
-pub(crate) fn is_valid_tail_dispatch(
-    ctx: &mut IrContext,
-    op: OpRef,
-    converter: &TypeConverter,
-) -> bool {
+/// Whether `op` is a well-formed tail dispatch: evidence and `anyref`
+/// payload operands, one `anyref` result.
+pub(crate) fn is_valid_tail_dispatch(ctx: &mut IrContext, op: OpRef) -> bool {
     let evidence_ty = ability::evidence_adt_type_ref(ctx);
     let anyref_ty = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
     let operands = ctx.op_operands(op).to_vec();
@@ -110,13 +106,9 @@ pub(crate) fn is_valid_tail_dispatch(
     {
         return false;
     }
-    let same = |ctx: &mut IrContext, actual: TypeRef, expected: TypeRef| {
-        converter.convert_type_or_identity(ctx, actual)
-            == converter.convert_type_or_identity(ctx, expected)
-    };
-    same(ctx, ctx.value_ty(operands[0]), evidence_ty)
-        && same(ctx, ctx.value_ty(operands[1]), anyref_ty)
-        && same(ctx, results[0], anyref_ty)
+    ctx.value_ty(operands[0]) == evidence_ty
+        && ctx.value_ty(operands[1]) == anyref_ty
+        && results[0] == anyref_ty
 }
 
 /// Replace a tail dispatch with an ordinary indirect call through the
@@ -181,14 +173,10 @@ pub(crate) fn cps_dispatch_signature(ctx: &mut IrContext) -> TypeRef {
     .as_type_ref()
 }
 
-/// Whether `op` is a well-formed final CPS dispatch for a target whose
-/// converter is `converter`. A malformed one is left for the conversion
-/// target to report, before any helper op is inserted.
-pub(crate) fn is_valid_cps_dispatch(
-    ctx: &mut IrContext,
-    op: OpRef,
-    converter: &TypeConverter,
-) -> bool {
+/// Whether `op` is a well-formed final CPS dispatch: evidence, two closures,
+/// and an `anyref` payload. A malformed one is left for the conversion target
+/// to report, before any helper op is inserted.
+pub(crate) fn is_valid_cps_dispatch(ctx: &mut IrContext, op: OpRef) -> bool {
     if !ctx.op_result_types(op).is_empty()
         || ctx.op_attrs(op).get_type("answer_type").is_none()
         || ctx.op_attrs(op).get_symbol_ref("ability").is_none()
@@ -200,15 +188,16 @@ pub(crate) fn is_valid_cps_dispatch(
     let evidence_ty = ability::evidence_adt_type_ref(ctx);
     let anyref_ty = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
     let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
-    let expected = [evidence_ty, closure_ty, closure_ty, anyref_ty];
-    ctx.op_operands(op)
-        .to_vec()
-        .into_iter()
-        .zip(expected)
-        .all(|(value, expected)| {
-            converter.convert_type_or_identity(ctx, ctx.value_ty(value))
-                == converter.convert_type_or_identity(ctx, expected)
-        })
+    let [evidence, dispatch, resume, payload] = ctx.op_operands(op)[..] else {
+        return false;
+    };
+    // Closure lowering keeps a packed closure at its semantic closure type
+    // until storage finalization.
+    let is_closure = |ty: TypeRef| ty == closure_ty || closure::Closure::matches(ctx, ty);
+    ctx.value_ty(evidence) == evidence_ty
+        && is_closure(ctx.value_ty(dispatch))
+        && is_closure(ctx.value_ty(resume))
+        && ctx.value_ty(payload) == anyref_ty
 }
 
 /// Replace a final CPS dispatch with a proper-tail transfer to its handler

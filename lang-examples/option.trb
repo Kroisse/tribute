@@ -9,42 +9,42 @@ use std::io::{Io, print_line}
 // A function that may or may not return a value
 fn find_value(id: Int) -> Option(Int) {
     case id {
-        +1 -> Some(+100),
-        +2 -> Some(+200),
-        +3 -> Some(+300),
-        _ -> None
+        +1 -> .Some(+100),
+        +2 -> .Some(+200),
+        +3 -> .Some(+300),
+        _ -> .None
     }
 }
 
 // Pattern matching on Option - the core way to handle optionality
 fn get_or_zero(id: Int) -> Int {
     case find_value(id) {
-        Some(n) -> n
-        None -> +0
+        .Some(n) -> n
+        .None -> +0
     }
 }
 
 // Check if a value exists
 fn value_exists(id: Int) -> Bool {
     case find_value(id) {
-        Some(_) -> True
-        None -> False
+        .Some(_) -> True
+        .None -> False
     }
 }
 
 // Double the value if it exists
 fn double_if_present(id: Int) -> Option(Int) {
     case find_value(id) {
-        Some(n) -> Some(n * +2)
-        None -> None
+        .Some(n) -> .Some(n * +2)
+        .None -> .None
     }
 }
 
 // Transform the value if it exists
 fn add_bonus(id: Int, bonus: Int) -> Option(Int) {
     case find_value(id) {
-        Some(n) -> Some(n + bonus)
-        None -> None
+        .Some(n) -> .Some(n + bonus)
+        .None -> .None
     }
 }
 
@@ -62,12 +62,12 @@ fn main() ->{Io} Nil {
         False -> print_line("99 is missing")
     }
 
-    case double_if_present(+2) {                        // Some(400)
-        Some(n) -> print_line(Int::to_string(n))
-        None -> print_line("none")
+    case double_if_present(+2) {                        // .Some(400)
+        .Some(n) -> print_line(Int::to_string(n))
+        .None -> print_line("none")
     }
     case add_bonus(+3, +5) {                            // Some(305)
-        Some(n) -> print_line(Int::to_string(n))
-        None -> print_line("none")
+        .Some(n) -> print_line(Int::to_string(n))
+        .None -> print_line("none")
     }
 }

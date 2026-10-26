@@ -11,6 +11,7 @@ use tribute::pipeline::{
     dump_native_ir_at_stage,
 };
 use tribute_front::SourceCst;
+use tribute_ir::calling_convention::DynConventionBearing;
 use tribute_ir::continuation_frame;
 use trunk_ir::printer::print_module;
 
@@ -105,7 +106,7 @@ fn assert_native_delimiter_contract(ir_text: &str) {
 fn pipeline_contract_summary(ir_text: &str, native: bool) -> String {
     use std::collections::BTreeMap;
     use std::ops::ControlFlow;
-    use tribute_core::calling_convention::{CallingConvention, get_calling_convention};
+    use tribute_ir::calling_convention::CallingConvention;
     use trunk_ir::dialect::func;
     use trunk_ir::ops::{DialectOp, DialectType};
     use trunk_ir::walk::{WalkAction, walk_op};
@@ -150,7 +151,7 @@ fn pipeline_contract_summary(ir_text: &str, native: bool) -> String {
         };
         let signature = func::FuncSig::from_type_ref(&ctx, function.r#type(&ctx))
             .expect("exact callable signature");
-        let convention = get_calling_convention(&ctx, op);
+        let convention = DynConventionBearing::of(&ctx, op);
         if native {
             // The boundary consumes the semantic convention; a proper tail
             // transfer is what represents CPS past its exit.

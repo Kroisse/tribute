@@ -29,7 +29,7 @@ pub(crate) mod prop;
 mod solver;
 pub mod subst;
 
-pub use checker::{Mode, TypeChecker};
+pub use checker::{Mode, ModuleCheckResult, TypeChecker};
 pub use constraint::{Constraint, ConstraintSet};
 pub use context::{AbilityInfo, AbilityOpInfo, MethodEntry, ModuleTypeEnv, parameter_type_matches};
 
@@ -37,6 +37,7 @@ use crate::SortedMap;
 use crate::ast::SpanMap;
 pub use func_context::FunctionInferenceContext;
 use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 pub use solver::{RowSubst, SolveError, TypeSolver, TypeSubst};
 use trunk_ir::SymbolPath;
 
@@ -130,28 +131,10 @@ pub fn ability_definitions_from_schemas<'db>(
 }
 
 /// Semantic identities supplied by the prelude and required downstream.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct DefinitionIdentity {
-    pub source: u64,
-    pub start: usize,
-    pub end: usize,
-}
-
-impl DefinitionIdentity {
-    pub fn new(declaration: NodeId, span: trunk_ir::Span) -> Self {
-        Self {
-            source: declaration.source(),
-            start: span.start,
-            end: span.end,
-        }
-    }
-}
-
-/// Semantic identities supplied by the prelude and required downstream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct WellKnownType<'db> {
     pub ty: Type<'db>,
-    pub definition: DefinitionIdentity,
+    pub definition: TypeDefId<'db>,
 }
 
 /// Semantic identities supplied by the prelude and required downstream.
@@ -189,12 +172,6 @@ impl WellKnownTypes<'_> {
     }
 }
 
-/// Salsa-tracked struct holding the complete type checking output.
-///
-/// Bundles the typed AST module with function type schemes so that
-/// both can be derived from a single type checking invocation.
-/// Also stores the SpanMap so that downstream stages (e.g., ast_to_ir)
-/// can look up source spans without a separate plumbing path.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum FunctionInstanceOrigin<'db> {
     Declaration,
@@ -334,6 +311,8 @@ impl<'db> EvidenceStep<'db> {
     }
 }
 
+/// What type checking fixed for each expression and reference, keyed by
+/// node.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct ExpressionTypeMetadata<'db> {
     pub node_types: SortedMap<NodeId, Type<'db>>,
@@ -342,6 +321,47 @@ pub struct ExpressionTypeMetadata<'db> {
     /// Non-identity evidence selections of calls, resumes, and handle
     /// installations, keyed by their expressions.
     pub evidence_plans: SortedMap<NodeId, Vec<EvidenceStep<'db>>>,
+    /// Exact semantic operation instances for handler arms.
+    pub handler_operations: SortedMap<NodeId, InstantiatedHandlerOperation<'db>>,
+    /// Exact semantic operation instances for ability-operation calls.
+    pub perform_operations: SortedMap<NodeId, InstantiatedPerformOperation<'db>>,
+    /// Fully solved callable signatures for lambda expressions.
+    pub lambda_signatures: SortedMap<NodeId, LambdaSignature<'db>>,
+    /// Case expressions which type checking proved exhaustive.
+    pub exhaustive_cases: Vec<NodeId>,
+}
+
+impl<'db> ExpressionTypeMetadata<'db> {
+    /// This metadata after that of the package it depends on, as one table:
+    /// an entry here replaces the dependency's for the same node.
+    pub fn after_dependency(&self, dependency: &Self) -> Self {
+        fn layered<V: Clone>(
+            dependency: &SortedMap<NodeId, V>,
+            own: &SortedMap<NodeId, V>,
+        ) -> SortedMap<NodeId, V> {
+            let mut layered = dependency.clone();
+            layered.extend(own.iter().cloned());
+            layered
+        }
+        let mut exhaustive_cases: Vec<_> = dependency
+            .exhaustive_cases
+            .iter()
+            .chain(&self.exhaustive_cases)
+            .copied()
+            .collect();
+        exhaustive_cases.sort();
+        exhaustive_cases.dedup();
+        Self {
+            node_types: layered(&dependency.node_types, &self.node_types),
+            function_instances: layered(&dependency.function_instances, &self.function_instances),
+            local_instances: layered(&dependency.local_instances, &self.local_instances),
+            evidence_plans: layered(&dependency.evidence_plans, &self.evidence_plans),
+            handler_operations: layered(&dependency.handler_operations, &self.handler_operations),
+            perform_operations: layered(&dependency.perform_operations, &self.perform_operations),
+            lambda_signatures: layered(&dependency.lambda_signatures, &self.lambda_signatures),
+            exhaustive_cases,
+        }
+    }
 }
 
 /// Constructor declarations and exact schemes for cloned enum variants.
@@ -360,37 +380,114 @@ impl<'db> From<Vec<(CtorId<'db>, TypeScheme<'db>)>> for ConstructorTypeMetadata<
     }
 }
 
-#[salsa::tracked]
-pub struct TypeCheckOutput<'db> {
-    /// The type-checked AST module.
-    pub module: DeclTable<TypedRef<'db>>,
-    /// Function type schemes collected during type checking.
-    /// Stored as Vec<(Symbol, TypeScheme)> because FuncDefId doesn't implement Ord.
-    #[returns(deref)]
+/// What type checking fixed for the module's declarations. A module's
+/// output holds only its own package's declarations; the dependency's join
+/// them in specialization (`DeclarationTypeMetadata::after_dependency`).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+pub struct DeclarationTypeMetadata<'db> {
+    /// Function type schemes, keyed by path because `FuncDefId` does not
+    /// implement `Ord`.
     pub function_types: Vec<(SymbolPath, TypeScheme<'db>)>,
     /// Constructor schemes used to build logical nominal layouts without
     /// reinterpreting source annotations.
     pub constructor_types: ConstructorTypeMetadata<'db>,
-    /// Exact expression types and callee instantiations.
-    pub expression_types: ExpressionTypeMetadata<'db>,
     /// Deterministic ability schemas required by the public logical-lowering
     /// boundary. This preserves semantic declarations without re-inspection.
-    #[returns(deref)]
     pub ability_definitions: Vec<AbilitySchema<'db>>,
-    /// Exact semantic operation instances for handler arms.
-    pub handler_operations: SortedMap<NodeId, InstantiatedHandlerOperation<'db>>,
-    /// Exact semantic operation instances for ability-operation calls.
-    pub perform_operations: SortedMap<NodeId, InstantiatedPerformOperation<'db>>,
-    /// Fully solved callable signatures for lambda expressions.
-    pub lambda_signatures: SortedMap<NodeId, LambdaSignature<'db>>,
-    /// Case expressions which type checking proved exhaustive.
-    #[returns(deref)]
-    pub exhaustive_cases: Vec<NodeId>,
-    /// Prelude-defined semantic type identities.
+    /// The well-known identities the package declares; empty for any package
+    /// but `std`.
     pub well_known_types: WellKnownTypes<'db>,
-    /// Source span information for AST nodes.
-    #[returns(clone)]
-    pub span_map: SpanMap,
+}
+
+impl<'db> DeclarationTypeMetadata<'db> {
+    /// These declarations after those of the package they depend on, as
+    /// one table: a declaration here replaces the dependency's with the same
+    /// identity, and the well-known identities come from whichever package
+    /// declares them.
+    pub fn after_dependency(&self, dependency: &Self) -> Self {
+        fn layered<K: Eq + std::hash::Hash, V: Clone>(
+            dependency: &[V],
+            own: &[V],
+            key: impl Fn(&V) -> K,
+        ) -> Vec<V> {
+            let own_keys: HashSet<K> = own.iter().map(&key).collect();
+            dependency
+                .iter()
+                .filter(|entry| !own_keys.contains(&key(entry)))
+                .chain(own)
+                .cloned()
+                .collect()
+        }
+        let constructor_types = ConstructorTypeMetadata {
+            schemes: layered(
+                &dependency.constructor_types.schemes,
+                &self.constructor_types.schemes,
+                |(id, _)| *id,
+            ),
+            specialized_enum_variants: dependency
+                .constructor_types
+                .specialized_enum_variants
+                .iter()
+                .chain(&self.constructor_types.specialized_enum_variants)
+                .map(|(node, scheme)| (*node, *scheme))
+                .collect(),
+        };
+        Self {
+            function_types: layered(
+                &dependency.function_types,
+                &self.function_types,
+                |(path, _)| path.clone(),
+            ),
+            constructor_types,
+            ability_definitions: layered(
+                &dependency.ability_definitions,
+                &self.ability_definitions,
+                |(id, ..)| *id,
+            ),
+            well_known_types: if self.well_known_types == WellKnownTypes::empty() {
+                dependency.well_known_types
+            } else {
+                self.well_known_types
+            },
+        }
+    }
+}
+
+/// The complete output of type checking one module: the typed AST with
+/// the metadata of its declarations and of its expressions. Source
+/// locations stay in the span map of the parse it was checked from.
+#[salsa::tracked]
+pub struct TypeCheckOutput<'db> {
+    /// The type-checked AST module.
+    pub module: DeclTable<TypedRef<'db>>,
+    pub declarations: DeclarationTypeMetadata<'db>,
+    pub expression_types: ExpressionTypeMetadata<'db>,
+}
+
+impl<'db> TypeCheckOutput<'db> {
+    /// The output of a finished module check.
+    pub fn from_check(db: &'db dyn salsa::Database, result: ModuleCheckResult<'db>) -> Self {
+        Self::new(
+            db,
+            result.module,
+            DeclarationTypeMetadata {
+                function_types: result.function_types,
+                constructor_types: result.constructor_types.into(),
+                ability_definitions: ability_schemas(&result.ability_definitions),
+                well_known_types: result.well_known_types,
+            },
+            ExpressionTypeMetadata {
+                node_types: result.node_types,
+                function_instances: result.function_instances,
+                local_instances: result.local_instances,
+                evidence_plans: result.evidence_plans,
+                handler_operations: result.handler_operations,
+                perform_operations: result.perform_operations,
+                lambda_signatures: result.lambda_signatures,
+                exhaustive_cases: result.exhaustive_cases,
+            },
+        )
+    }
 }
 
 /// Prelude's exported type information.
@@ -432,7 +529,7 @@ pub struct PreludeExports<'db> {
     pub constructor_field_names: Vec<(CtorId<'db>, Vec<Symbol>)>,
 
     /// Ability operation schemas exported by the prelude as deterministic
-    /// vectors (the module environment rebuilds its lookup map on injection).
+    /// vectors (a dependent module's environment indexes them for lookup).
     #[returns(deref)]
     pub ability_definitions: Vec<(
         AbilityId<'db>,
@@ -450,27 +547,88 @@ pub struct PreludeExports<'db> {
 pub fn typecheck_module<'db>(
     db: &'db dyn salsa::Database,
     module: &DeclTable<ResolvedRef<'db>>,
-    span_map: SpanMap,
+    span_map: &'db SpanMap,
 ) -> TypeCheckOutput<'db> {
-    let checker = TypeChecker::new(db, span_map.clone());
-    let result = checker.check_module(module);
-    TypeCheckOutput::new(
-        db,
-        result.module,
-        result.function_types,
-        result.constructor_types.into(),
+    let checker = TypeChecker::new(db, span_map);
+    TypeCheckOutput::from_check(db, checker.check_module(module))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::TypeKind;
+
+    fn expressions<'db>(
+        node_types: impl IntoIterator<Item = (NodeId, Type<'db>)>,
+        exhaustive_cases: Vec<NodeId>,
+    ) -> ExpressionTypeMetadata<'db> {
         ExpressionTypeMetadata {
-            node_types: result.node_types,
-            function_instances: result.function_instances,
-            local_instances: result.local_instances,
-            evidence_plans: result.evidence_plans,
-        },
-        ability_schemas(&result.ability_definitions),
-        result.handler_operations,
-        result.perform_operations,
-        result.lambda_signatures,
-        result.exhaustive_cases,
-        result.well_known_types,
-        span_map,
-    )
+            node_types: node_types.into_iter().collect(),
+            function_instances: SortedMap::default(),
+            local_instances: SortedMap::default(),
+            evidence_plans: SortedMap::default(),
+            handler_operations: SortedMap::default(),
+            perform_operations: SortedMap::default(),
+            lambda_signatures: SortedMap::default(),
+            exhaustive_cases,
+        }
+    }
+
+    #[test]
+    fn expression_metadata_layers_over_its_dependency() {
+        let db = salsa::DatabaseImpl::default();
+        let (int, nat) = (Type::new(&db, TypeKind::Int), Type::new(&db, TypeKind::Nat));
+        let [shared, library, own] = [1, 2, 3].map(NodeId::from_raw);
+        let dependency = expressions([(shared, int), (library, int)], vec![library, shared]);
+        let module = expressions([(shared, nat), (own, nat)], vec![own]);
+
+        let layered = module.after_dependency(&dependency);
+        assert_eq!(
+            &*layered.node_types,
+            [(shared, nat), (library, int), (own, nat)]
+        );
+        assert_eq!(layered.exhaustive_cases, [shared, library, own]);
+    }
+
+    #[test]
+    fn declaration_metadata_layers_over_its_dependency() {
+        let db = salsa::DatabaseImpl::default();
+        let scheme = |kind| TypeScheme::mono(&db, Type::new(&db, kind));
+        let declarations = |function_types, well_known_types| DeclarationTypeMetadata {
+            function_types,
+            constructor_types: ConstructorTypeMetadata::default(),
+            ability_definitions: Vec::new(),
+            well_known_types,
+        };
+        let path = |name: &str| SymbolPath::new(["std", name]);
+        let well_known = WellKnownTypes {
+            string_equality: Some(FuncDefId::new(&db, path("eq"))),
+            ..WellKnownTypes::empty()
+        };
+        let dependency = declarations(
+            vec![
+                (path("a"), scheme(TypeKind::Int)),
+                (path("b"), scheme(TypeKind::Int)),
+            ],
+            well_known,
+        );
+        let module = declarations(
+            vec![
+                (path("b"), scheme(TypeKind::Nat)),
+                (SymbolPath::new(["c"]), scheme(TypeKind::Nat)),
+            ],
+            WellKnownTypes::empty(),
+        );
+
+        let layered = module.after_dependency(&dependency);
+        assert_eq!(
+            layered.function_types,
+            [
+                (path("a"), scheme(TypeKind::Int)),
+                (path("b"), scheme(TypeKind::Nat)),
+                (SymbolPath::new(["c"]), scheme(TypeKind::Nat)),
+            ]
+        );
+        assert_eq!(layered.well_known_types, well_known);
+    }
 }

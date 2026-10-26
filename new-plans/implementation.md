@@ -183,7 +183,7 @@ zero-capture `func.unreachable` adapter를 포함한 conversion 세부는
 
 ## Nominal Type Identity
 
-Prelude 병합은 해석된 선언의 canonical path와 참조를 보존한다. Prelude의
+패키지 `std` 병합은 해석된 선언의 canonical path와 참조를 보존한다. Prelude의
 짧은 이름은 선언을 가리키는 binding이며, AST 병합이나 metadata 조회를 위해
 canonical path를 다시 짧은 이름으로 바꾸지 않는다. 함수 스킴, 특수화 대상,
 생성된 정의와 호출은 동일한 해석 결과를 사용한다.
@@ -210,11 +210,11 @@ Specialization mangle은 type argument의 identity에 대해 단사(injective)�
 다른 type argument 목록은 서로 다른 이름을 얻는다. 함수 타입, 튜플, bound type
 variable, compiler-owned nominal 타입처럼 소스 선언이 이름 짓지 않는 타입은 숫자
 태그로 시작하므로, 같은 철자의 소스 타입 이름과 구분된다. 함수 타입은 parameter와 result
-외에 ability row와 calling-convention 하한을 함께 인코딩한다. Ability row는 각
+외에 ability row를 함께 인코딩한다. Ability row는 각
 ability의 origin과 qualified identity, ability argument를 row에 저장된 순서대로 쓰고,
 열린 row의 row variable은 한 mangle 안에서 처음 나타난 순서로 번호를 매겨 추론
-번호에 의존하지 않는다. Closed 빈 row와 `Direct` 하한을 가진 함수 타입의 mangle은
-parameter와 result만으로 이루어진다.
+번호에 의존하지 않는다. Closed 빈 row를 가진 함수 타입의 mangle은 parameter와
+result만으로 이루어진다.
 
 ---
 
@@ -249,7 +249,7 @@ violates that precondition; they never synthesize a fallback element or tail.
 Source-logical frontend의 원소 타입 선택과 생성자 메타데이터 구분은
 [List IR 계약](ir.md)을 따른다.
 
-The prelude declares `List::prepend(value, tail)` as the minimal public dynamic
+Package `std` declares `List::prepend(value, tail)` as the minimal public dynamic
 construction API. Its source wrapper delegates to a private compiler intrinsic,
 and the shared pipeline replaces only that registry-verified private call with
 `list.prepend`. An ordinary source function with the same public qualified name
@@ -450,36 +450,12 @@ Row에서 callable의 호출 규약을 정하는 규칙은
 [CPS 전략](cps-effects.md#row와-호출-규약)에 있다. Typechecking은 규약을 계산하지
 않는다.
 
-### 변환 범위
+### 변환 범위와 ability polymorphism
 
-모든 함수를 Cps convention으로 바꾸지는 않는다. `Cps` callable 호출과
-typechecked `operation_kind = "op"` 지점은 남은 계산을 continuation으로 전달한다:
-
-```text
-생략 annotation의 semantic type       → open row, indirect call은 Cps
-concrete residual effect 없는 worker  → Direct
-명시적 빈 effect (fn(a) ->{} b)      → Direct
-Ambient/fn effect                    → EvidenceDirect
-General op/Throw effect              → Cps, effect point만 continuation 처리
-Cps가 아닌 정의 안의 handle          → 값 delimiter, 정의의 convention은 그대로
-```
-
-### Ability Polymorphism 처리
-
-```rust
-fn map(xs: List(a), f: fn(a) ->{e} b) ->{e} List(b)
-```
-
-`f`가 순수인지 effectful인지 컴파일 타임에 모를 수 있다. 전략:
-
-1. **Class 특수화**: `e`는 매개변수의 함수 타입에 나타나므로 class 변수다. 호출
-   지점의 row 인자가 정한 class마다 인스턴스를 만들고, `f`의 convention과 `map`의
-   worker convention을 그 class에서 정한다.
-2. **열린 row는 Cps**: class가 정해지지 않은 row 변수는 더 강한 convention을 요구할
-   가능성을 배제할 수 없으므로 `ContinuationFrame<R>`를 포함하는 ABI를 사용한다
-3. **Evidence 전달**: effectful polymorphic 호출은 동일한 evidence를 전달한다.
-4. **Operation kind 보존**: 구체적인 `fn` operation call-site는 continuation을
-   capture하지 않고 `ability.call`을 사용한다.
+어떤 callable이 continuation을 받는지, 열린 row와 class 변수를 어떻게 다루는지, `Cps`가
+아닌 정의 안의 CPS 제어를 어떻게 감싸는지는 [CPS 전략](cps-effects.md)이 정한다.
+어느 경우든 effectful polymorphic 호출은 같은 evidence를 전달하고, 구체적인 `fn`
+operation 호출 지점은 continuation을 capture하지 않는다.
 
 ### Operation kind와 dispatch
 
@@ -595,9 +571,9 @@ WasmGC는 native와 같은 shared middle-end의 tail-call CPS / effect ABI 결�
 입력으로 받는다.
 
 [Representation/ABI 경계](ir.md#representationabi-경계) 안의 Wasm evidence
-lowering은 `effect.extend`, `effect.dispatch_tail`, `effect.dispatch_cps`를 evidence
-helper 호출, closure unpacking, `func.call_indirect` 또는 `func.tail_call`/
-`func.tail_call_indirect`로 낮춘다. 그 뒤 Wasm dialect lowering이 이를
+lowering은 `effect.*`를 `std::runtime::evidence` runtime 항목 호출, closure
+unpacking, `func.call_indirect` 또는 `func.tail_call`/`func.tail_call_indirect`로
+낮춘다. 그 뒤 Wasm dialect lowering이 이를
 `wasm.call_indirect`, `wasm.return_call`, `wasm.return_call_indirect`로 바꾼다.
 
 Ownership planning과 target emission은 [공통 callable 본문 구조](ir.md#callable-본문-구조)를
@@ -615,7 +591,7 @@ Effect handling은 tail-call CPS로 구현한다.
 `lower_handle_dispatch`는 evidence 인자의 모든 사용이 치환된 resultless body를
 바깥 block에 옮기고 delimiter를 제거한다. 정상 완료와 resume하지 않는 handler exit의
 transfer는 shared CPS legalization이 구성한다. Backend-specific lowering이 이후 `effect.*`를
-native runtime call 또는 Wasm evidence helper와 indirect call로 제거한다.
+evidence runtime 항목 호출과 indirect call로 제거한다.
 
 내부 ContinuationFrame dispatcher와 resultless `effect.dispatch_cps`, target handler
 tail ABI의 구분과 순서는 [cps-effects.md](cps-effects.md#dispatch-layers)를 따른다.
@@ -636,13 +612,11 @@ exact root contract에 따라 생성하며 별도의 호환 lowering 경로를 �
       → effect ABI verification → target ABI validation
       → CPS signature physicalization
       → value delimiter and root entry bridge composition
+      → lower_closures_in_func → evidence_lowering
+      → finalize_closure_storage_layout → boundary exit verification
 
-WASM:   → lower_closures_in_func → evidence_to_wasm
-        → finalize_closure_storage_layout → boundary exit verification
-        → lower_to_wasm → backend-ready verification → emit_wasm
-Native: → lower_closures_in_func → evidence_to_native
-        → finalize_closure_storage_layout → boundary exit verification
-        → lower_to_clif → backend-ready verification → emit_native
+WASM:   → lower_to_wasm → backend-ready verification → emit_wasm
+Native: → lower_to_clif → backend-ready verification → emit_native
 ```
 
 Target ABI validation부터 boundary exit verification까지가
@@ -707,19 +681,28 @@ managed-field bitmap을 함께 결정한다. Plan 생성은 IR을 변경하지 �
 Frontend의 Salsa query와 arena IR 변환은 수명이 다르다. Parse, resolve,
 typecheck는 source와 선언 환경을 입력으로 하는 모듈 단위 query이며, IR pass는
 `IrContext`를 명시적으로 변경한다. Pass 연결과 target 분기는 `src/pipeline.rs`가
-소유하고 각 pass는 자신이 선언한 입력·출력 invariant를 검증한다. 변환 전에 검증하는
+소유하고 각 pass는 자신이 선언한 입력·출력 invariant를 검증한다. Frontend 이후의
+pass는 순서가 고정된 하나의 단계 체인을 이루며, 각 진입점은 그 체인의 연속 구간을
+하나의 pass manager로 실행한다. 단계 사이에 pass manager 밖의 연결 코드를 두지
+않는다. 변환 전에 검증하는
 계약과 실패 시 mutation 보장도 pass 경계에 명시한다.
 
-Prelude의 well-known type은 typechecking 결과의 별도 metadata로 보존한다.
-`WellKnownTypes`는 prelude `String`의 semantic type과 stable declaration identity를
+패키지 `std`의 well-known type은 typechecking 결과의 별도 metadata로 보존한다.
+`WellKnownTypes`는 `std::String`의 semantic type과 stable declaration identity를
 frontend 경계까지 전달한다. AST-to-IR은 declaration identity로 exact TrunkIR
 `TypeRef`를 구해 root module의 `tribute.types` attribute에 `std::String` 항목으로
 기록한다. Native/Wasm constant lowering은 이 항목만 사용하며 이름이나 layout으로
 복구하지 않는다. Textual IR에서 attribute가 유실되면 string constant lowering은
 실패한다.
 
-Prelude source는 compilation 입력이다. 테스트는 그 뒤에 덧붙인 source를 패키지
-`std`의 일부로 compile해, 사용자 패키지가 가리킬 수 없는 패키지 내부 항목
+표준 라이브러리 source(패키지 `std`의 루트 모듈)는 compilation 입력이다. 이름
+해석은 패키지마다 자기 루트에서 하며, 사용자 패키지의 해석은 의존 패키지 `std`의
+해석 결과를 의존성 표로 참조한다. 타입 검사도 패키지마다 하며, 사용자 패키지의
+검사는 의존 패키지 `std`의 검사 결과를 같은 의존성 표로 조회한다. 한 패키지의 타입
+검사 결과는 그 패키지가 선언한 항목만 담고 의존 패키지의 선언을 복사하지 않는다.
+`std`의 해석과 타입 검사 결과는 사용자 source에 의존하지 않으므로, 사용자 source를
+고쳐도 다시 계산하지 않는다. 테스트는 표준
+라이브러리 source 뒤에 덧붙인 source를 패키지 `std`의 일부로 compile해, 사용자 패키지가 가리킬 수 없는 패키지 내부 항목
 (`std::runtime`)을 사용자 프로그램이 부를 수 있는 함수로 감싸 시험한다.
 
 ### 파이프라인 구조
@@ -803,7 +786,7 @@ flowchart TB
 | `global_dce` | module symbols | reachable symbols; module-wide |
 
 Case pattern lowering은 `ast_to_ir`의 일부이며 별도 pass가 아니다. Native의
-structured-to-CFG 변환은 `func.func`에 nested된 `scf_to_cf_pass()`가 소유한다.
+structured-to-CFG 변환은 `func.func`에 nested된 `ScfToCf` pass가 소유한다.
 
 `typecheck` solves function-local unification variables where constraints make
 them concrete and generalizes remaining polymorphic variables into stable
@@ -851,8 +834,8 @@ keep the origin recorded at their shared annotation-to-row conversion point.
 | --- | --- |
 | 구문 분석 | unresolved AST, 원본 위치, 구문 진단 |
 | 이름 해석 | 선언과 참조의 identity, lexical binding, 선언 테이블 |
-| 타입 검사 | typed 선언 테이블, type schemes, 표현식 타입, 선택된 callable과 operation 인스턴스 |
-| 특수화 | 구체 인스턴스를 더한 선언 테이블, 함께 치환된 메타데이터, 원본 위치 대응 |
+| 타입 검사 | 자기 패키지의 typed 선언 테이블, type schemes, 표현식 타입, 선택된 callable과 operation 인스턴스 |
+| 특수화 | 구체 인스턴스를 더한 선언 테이블, 함께 치환된 메타데이터, compiler intrinsic identity, 원본 위치 대응 |
 | 논리 IR 생성 | source-logical callable/control IR, 검증에 필요한 선언 메타데이터 |
 
 모듈 계층은 구문 분석과 이름 해석에서만 의미를 가진다. Scope, `use`,
@@ -873,6 +856,20 @@ path를 가지며, 모듈 path는 선언 identity의 path에서 마지막 compon
 인스턴스, constructor scheme, handler/perform/lambda 정보, coverage 증명,
 nominal identity와 intrinsic provenance가 누락되지 않게 한다. 이 계약은
 동일한 정보를 여러 결과 객체에 중복 저장하도록 요구하지 않는다.
+
+Lowering 입력을 만드는 경로는 특수화 결과에서 출발하는 하나뿐이며, 타입 검사
+결과는 lowering 입력이 될 수 없다. 테스트도 같은 경로를 거친다. 특수화는 하나의
+선언 테이블을 대상으로 한다. 의존 패키지의 선언 메타데이터(function·constructor
+scheme, ability 정의, well-known identity)는 조회로 받고, 의존 패키지의 본문과
+표현식·참조별 메타데이터는 사용자 패키지의 것보다 앞에 쌓아 병합한다. 의존
+패키지의 본문을 병합하지 않은 특수화는 사용자 패키지의 선언만 특수화한다. 현재
+compilation 단위는 하나의 module이므로 의존 패키지 generic의 인스턴스도 그
+module에 둔다. Separate compilation에서 그 소유권을 정하는 조건은
+[Linking — Separate Compilation의 요구 조건](linking.md#separate-compilation의-요구-조건)을
+따른다.
+
+Compiler intrinsic 선언의 identity는 특수화 결과가 함께 가진다. Runtime item
+검사와 병합된 source 목록은 root crate의 준비 단계가 lowering에 공급하는 환경이다.
 
 Nominal 선언 인덱스와 치환된 constructor 스킴은 frontend 준비 단계가 소유한다.
 Lowering은 준비에 성공한 AST와 대응 스킴을 함께 소비한다. 인스턴스 수집,
@@ -899,10 +896,19 @@ row 관계도 포함한다.
 변수를 downstream 의미 정보로 내보내지 않는다.
 
 CLI, LSP와 테스트는 같은 분석 의미를 사용하며 source와 외부 선언 환경을
-명시적으로 전달한다. Prelude 로딩과 타깃·공유 패스 조합은 root crate의
+명시적으로 전달한다. 패키지 `std` 로딩과 타깃·공유 패스 조합은 root crate의
 책임이다. 오류가 있는 분석 결과를 조회하는 것과 IR 생성을 허용하는 것은
 구분한다. LSP는 부분 결과를 사용할 수 있지만 컴파일 경로는 frontend 오류가
 있으면 lowering을 시작하지 않는다.
+
+진단만 내는 컴파일은 frontend, 논리 IR 생성, class 특수화를 거쳐
+[`fn` arm 호출 검사](cps-effects.md#fn-arm-호출-검사)에서 멈춘다. Source 규칙
+위반은 모두 이 지점까지 드러나므로, 이 컴파일은 frontend 진단과 `fn` arm 호출
+진단을 모두 보고한다. 이 컴파일은 도달 가능성으로 함수를 거르지 않아, 도달할 수
+없는 함수도 class 특수화를 거친다. `fn` arm 호출 검사는 자기 규칙대로 root에서
+닿는 인스턴스만 검사한다. 그 뒤 단계(CPS 적법화, evidence와 handler lowering,
+representation/ABI 경계)의 실패는 source 진단이 아니라 compiler 내부 불일치이며,
+산출물을 만드는 컴파일이 보고한다.
 
 ### 모듈 단위 캐싱과 함수 결과 조회
 
@@ -911,6 +917,27 @@ query는 모듈 결과에서 해당 함수를 선택한다. 함수 이름으로 
 사실은 함수 본문별로 독립적인 추론 query가 존재한다는 뜻이 아니다. 같은
 입력에 대한 모듈 결과 재사용과, 입력 변경 후 함수별 재검사 생략은 서로
 다른 보장이다.
+
+### 편집 위치와 무관한 frontend identity
+
+Frontend가 AST와 분석 결과에 담는 identity는 source 위치에 의존하지 않는다. 한
+item을 편집해도 다른 item의 resolved·typed 선언은 바뀌지 않으며, 이것이 결과를
+item 단위로 재사용하기 위한 전제이다.
+
+- **AST 노드:** `NodeId`는 노드를 소유한 item과 그 item 안에서 astgen이 매긴
+  순번으로 정해진다. Item은 module path, 종류, 이름, 같은 module에서 그 item보다
+  앞선 같은 종류·이름의 item 수로 식별한다. Module 자신과 `mod`·`use` 선언처럼
+  item에 속하지 않는 노드는 그 module이 소유한다. 바뀌지 않은 item은 다른 item이
+  추가·삭제되거나 위치가 옮겨져도 같은 `NodeId`를 갖는다. 예외는 편집이 그 item보다
+  앞선 같은 종류·이름의 item 수를 바꿀 때뿐이다.
+- **지역 변수:** `LocalId`는 module 수준 함수 하나 안에서만 유일하며, 각 함수가
+  자기 번호를 매긴다.
+- **선언:** 함수와 타입 선언의 identity는 package를 포함한 path로 정해진다.
+  타입 선언 규칙은 `types.md`의 Nominal Identity를 따른다.
+- **위치:** Source 위치는 `NodeId`에서 절대 span으로 가는 별도 span map에만 있고,
+  AST와 분석 결과는 위치를 담지 않는다. 진단처럼 위치가 필요한 출력만 span map을
+  읽는다. Item 단위로 결과를 재사용하려면 그 결과가 내보내는 진단도 소유 item 기준의
+  상대 위치로 표현해, 결과를 다시 계산하지 않고도 절대 위치로 옮길 수 있어야 한다.
 
 ---
 

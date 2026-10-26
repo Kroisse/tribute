@@ -4,12 +4,12 @@ expression: result.diagnostics
 ---
 - message: "function 'test' declares duplicate ability: Throw(Int), Throw(Int)"
   span:
-    start: 37
-    end: 58
+    start: 42
+    end: 68
   severity: Error
   labels:
     - span:
         start: 14
-        end: 35
+        end: 40
       message: first matching ability annotation is here
   phase: TypeChecking

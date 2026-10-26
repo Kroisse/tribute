@@ -165,13 +165,14 @@ String::compare(a: String, b: String) -> Ordering
 ```
 
 String equality는 cached rope metadata, variant identity, 또는 pointer identity가
-아니라 전체 logical UTF-8 byte sequence를 비교한다. 따라서 `Leaf(b"ab")`와
-`Branch(Leaf(b"a"), Leaf(b"b"), 2)`는 같다. Flattening, traversal, allocation
-전략은 일반적으로 library implementation detail이지만, canonical prelude 구현은
-equality를 위해 전체 rope를 flatten하지 않는다. 양쪽 rope의 leaf를 순서대로
-lockstep 순회하면서 현재 leaf의 남은 길이 중 더 짧은 연속 byte span을 비교하고,
-소진된 쪽 cursor를 다음 non-empty leaf로 전진시킨다. 연속 span 비교는 target
-primitive로 lowering되어 Tribute-level byte별 함수 호출을 만들지 않는다.
+아니라 전체 logical UTF-8 byte sequence를 비교한다. 따라서 `String::Leaf(b"ab")`와
+`String::Branch(String::Leaf(b"a"), String::Leaf(b"b"), 2)`는 같다.
+Flattening, traversal, allocation 전략은 일반적으로 library implementation
+detail이지만, canonical prelude 구현은 equality를 위해 전체 rope를 flatten하지
+않는다. 양쪽 rope의 leaf를 순서대로 lockstep 순회하면서 현재 leaf의 남은 길이
+중 더 짧은 연속 byte span을 비교하고, 소진된 쪽 cursor를 다음 non-empty leaf로
+전진시킨다. 연속 span 비교는 target primitive로 lowering되어 Tribute-level
+byte별 함수 호출을 만들지 않는다.
 
 먼저 root의 cached byte length를 비교하여 길이가 다르면 O(1)에 실패할 수 있다.
 길이가 같고 양쪽 root가 모두 `Leaf`이면 전체 leaf를 하나의 연속 span으로 정확히 한
@@ -252,8 +253,8 @@ Handler가 `resume` 여부를 선택할 수 있으므로 early termination도 �
 pub fn runes(s: String) ->{Stream(Rune)} Nil {
     // 각 leaf의 UTF-8 bytes를 디코딩하며 emit
     case s {
-        Leaf(bytes) -> emit_runes_from_bytes(bytes)
-        Branch(left, right, _) -> {
+        .Leaf(bytes) -> emit_runes_from_bytes(bytes)
+        .Branch(left, right, _) -> {
             left.runes()
             right.runes()
         }
@@ -412,7 +413,7 @@ adt.string_const(text)
 있다. Constant lowering은 자신이 참조하는 data segment를 같은 단계에서 모듈에
 선언한다([모듈 수준 자원의 선언][wasm-resources]). `String::Leaf` 생성은 target의
 일반 enum/variant lowering보다 먼저 일어나고, 그 이후에는 source에서 작성한
-`Leaf(bytes)`와 똑같은 ADT 경로를 따른다.
+`.Leaf(bytes)`와 똑같은 ADT 경로를 따른다.
 
 [wasm-resources]: wasm-backend.md#모듈-수준-자원의-선언
 

@@ -65,53 +65,6 @@ pub trait Pass {
     ) -> PassRunResult;
 }
 
-/// [`Pass`] adapter for a named function or closure.
-pub struct FnPass<T, F> {
-    name: &'static str,
-    f: F,
-    _target: std::marker::PhantomData<fn(T)>,
-}
-
-impl<T, F> FnPass<T, F> {
-    pub fn new(name: &'static str, f: F) -> Self {
-        Self {
-            name,
-            f,
-            _target: std::marker::PhantomData,
-        }
-    }
-}
-
-impl<T, F> Pass for FnPass<T, F>
-where
-    T: DialectOp,
-    F: FnMut(&mut IrContext, T, &mut AnalysisCache) -> PassRunResult,
-{
-    type Target = T;
-
-    fn name(&self) -> &'static str {
-        self.name
-    }
-
-    fn run(
-        &mut self,
-        ctx: &mut IrContext,
-        target: T,
-        analyses: &mut AnalysisCache,
-    ) -> PassRunResult {
-        (self.f)(ctx, target, analyses)
-    }
-}
-
-/// Build a named [`Pass`] from a function or closure.
-pub fn pass_fn<T, F>(name: &'static str, f: F) -> FnPass<T, F>
-where
-    T: DialectOp,
-    F: FnMut(&mut IrContext, T, &mut AnalysisCache) -> PassRunResult,
-{
-    FnPass::new(name, f)
-}
-
 /// Object-safe view of [`Pass`] used inside [`PassManager`] storage.
 trait ErasedPass<T: DialectOp> {
     fn name(&self) -> &'static str;
@@ -817,30 +770,6 @@ mod tests {
     }
 
     #[test]
-    fn pass_fn_registers_named_closure_pass() {
-        let (mut ctx, loc) = test_ctx();
-        let module = empty_module(&mut ctx, loc);
-
-        let count = Rc::new(Cell::new(0));
-        let count_clone = count.clone();
-        let seen_name = Rc::new(RefCell::new(String::new()));
-        let seen_name_clone = seen_name.clone();
-
-        let mut pm = PassManager::new();
-        pm.add_pass(pass_fn("closure-pass", move |_ctx, _target, _analyses| {
-            count_clone.set(count_clone.get() + 1);
-            Ok(())
-        }));
-        pm.with_instrumentation(move |_ctx, name, _op| {
-            seen_name_clone.replace(name.to_string());
-        });
-        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
-
-        assert_eq!(count.get(), 1);
-        assert_eq!(&*seen_name.borrow(), "closure-pass");
-    }
-
-    #[test]
     fn passes_share_the_run_analysis_cache() {
         use crate::rewrite::Module;
         use crate::symbol_table::SymbolTable;
@@ -851,28 +780,54 @@ mod tests {
 
         let observed = Rc::new(Cell::new(0));
         let observed_in_pass = observed.clone();
-        let mut pm = PassManager::new();
-        pm.add_pass(pass_fn(
-            "compute-symbols",
-            |ctx: &mut IrContext, target: core::Module, analyses: &mut AnalysisCache| {
+        struct ComputeSymbols;
+        impl Pass for ComputeSymbols {
+            type Target = core::Module;
+            fn name(&self) -> &'static str {
+                "compute-symbols"
+            }
+            fn run(
+                &mut self,
+                ctx: &mut IrContext,
+                target: core::Module,
+                analyses: &mut AnalysisCache,
+            ) -> PassRunResult {
                 let module = Module::new(ctx, target.op_ref()).expect("module target");
                 analyses.require::<SymbolTable>(ctx, module.op());
                 Ok(())
-            },
-        ));
-        pm.nest::<func::Func>().add_pass(pass_fn(
-            "observe-symbols",
-            move |ctx: &mut IrContext, target: func::Func, analyses: &mut AnalysisCache| {
+            }
+        }
+
+        struct ObserveSymbols {
+            observed: Rc<Cell<i32>>,
+        }
+        impl Pass for ObserveSymbols {
+            type Target = func::Func;
+            fn name(&self) -> &'static str {
+                "observe-symbols"
+            }
+            fn run(
+                &mut self,
+                ctx: &mut IrContext,
+                target: func::Func,
+                analyses: &mut AnalysisCache,
+            ) -> PassRunResult {
                 let module = ctx
                     .op(target.op_ref())
                     .parent_block
                     .and_then(|block| ctx.region(ctx.block(block).parent_region?).parent_op);
                 let cached = analyses.get_cached::<SymbolTable>(ctx, module.expect("module"));
                 assert!(cached.is_some(), "unchanged IR keeps the earlier analysis");
-                observed_in_pass.set(observed_in_pass.get() + 1);
+                self.observed.set(self.observed.get() + 1);
                 Ok(())
-            },
-        ));
+            }
+        }
+
+        let mut pm = PassManager::new();
+        pm.add_pass(ComputeSymbols);
+        pm.nest::<func::Func>().add_pass(ObserveSymbols {
+            observed: observed_in_pass,
+        });
         let mut analyses = AnalysisCache::new();
         pm.run(&mut ctx, module, &mut analyses).unwrap();
 
@@ -895,23 +850,48 @@ mod tests {
 
         let observed = Rc::new(Cell::new(0));
         let observed_in_pass = observed.clone();
-        let mut pm = PassManager::new();
-        pm.add_pass(pass_fn(
-            "change",
-            |ctx: &mut IrContext, target: core::Module, _analyses: &mut AnalysisCache| {
+        struct Change;
+        impl Pass for Change {
+            type Target = core::Module;
+            fn name(&self) -> &'static str {
+                "change"
+            }
+            fn run(
+                &mut self,
+                ctx: &mut IrContext,
+                target: core::Module,
+                _analyses: &mut AnalysisCache,
+            ) -> PassRunResult {
                 touch(ctx, target.op_ref());
                 Ok(())
-            },
-        ))
-        .add_pass(pass_fn(
-            "observe-symbols",
-            move |ctx: &mut IrContext, target: core::Module, analyses: &mut AnalysisCache| {
+            }
+        }
+
+        struct ObserveSymbols {
+            observed: Rc<Cell<i32>>,
+        }
+        impl Pass for ObserveSymbols {
+            type Target = core::Module;
+            fn name(&self) -> &'static str {
+                "observe-symbols"
+            }
+            fn run(
+                &mut self,
+                ctx: &mut IrContext,
+                target: core::Module,
+                analyses: &mut AnalysisCache,
+            ) -> PassRunResult {
                 let cached = analyses.get_cached::<SymbolTable>(ctx, target.op_ref());
                 assert!(cached.is_some(), "the verifier's analysis is still cached");
-                observed_in_pass.set(observed_in_pass.get() + 1);
+                self.observed.set(self.observed.get() + 1);
                 Ok(())
-            },
-        ));
+            }
+        }
+
+        let mut pm = PassManager::new();
+        pm.add_pass(Change).add_pass(ObserveSymbols {
+            observed: observed_in_pass,
+        });
         pm.with_verifier(|ctx, analyses, op| {
             let module = Module::new(ctx, op).expect("module target");
             analyses.require::<SymbolTable>(ctx, module.op());
@@ -1423,15 +1403,29 @@ mod tests {
 
         let verified: Rc<RefCell<Vec<OpRef>>> = Rc::new(RefCell::new(Vec::new()));
         let verified_clone = verified.clone();
+        /// A pass that leaves the IR as it is.
+        struct Unchanged<T>(&'static str, std::marker::PhantomData<T>);
+        impl<T: DialectOp> Pass for Unchanged<T> {
+            type Target = T;
+            fn name(&self) -> &'static str {
+                self.0
+            }
+            fn run(
+                &mut self,
+                _ctx: &mut IrContext,
+                _target: T,
+                _analyses: &mut AnalysisCache,
+            ) -> PassRunResult {
+                Ok(())
+            }
+        }
+
         let mut pm = PassManager::new();
-        pm.add_pass(pass_fn(
-            "unchanged",
-            |_ctx: &mut IrContext, _target: core::Module, _analyses: &mut AnalysisCache| Ok(()),
-        ))
-        .add_pass(recorder::<core::Module>("change", Rc::default()));
-        pm.nest::<func::Func>().add_pass(pass_fn(
+        pm.add_pass(Unchanged::<core::Module>("unchanged", Default::default()))
+            .add_pass(recorder::<core::Module>("change", Rc::default()));
+        pm.nest::<func::Func>().add_pass(Unchanged::<func::Func>(
             "unchanged-func",
-            |_ctx: &mut IrContext, _target: func::Func, _analyses: &mut AnalysisCache| Ok(()),
+            Default::default(),
         ));
         pm.with_verifier(move |_ctx, _analyses, op| {
             verified_clone.borrow_mut().push(op);

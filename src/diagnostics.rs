@@ -75,7 +75,7 @@ pub fn print_diagnostics(
     file_path: &str,
     diags: &mut [&Diagnostic],
 ) {
-    diags.sort_by(|left, right| tribute::pipeline::compare_diagnostics(left, right));
+    diags.sort_by(|left, right| tribute_core::diagnostic::compare_diagnostics(left, right));
     for diag in diags.iter() {
         print_diagnostic(diag, source.text(db), file_path);
     }

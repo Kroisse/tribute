@@ -21,7 +21,6 @@ derive_more = { version = "2.0", features = ["display", "error", "from"] }
 fluent-uri = "0.1.4"
 insta = { version = "1.48", features = ["yaml"] }
 itertools = "0.14"
-itoa = "1"
 inventory = "0.3"
 lasso = "0.7"
 string_cache = { version = "0.11", default-features = false }
@@ -40,7 +39,7 @@ proc-macro2 = "1.0"
 quote = "1.0"
 ropey = "1.6"
 rustc-hash = "2.1"
-hashbrown = { version = "0.16", default-features = false }
+hashbrown = { version = "0.17", default-features = false }
 salsa = "0.28.4"
 salsa-test-macros = { path = "crates/salsa-test-macros" }
 serde = { version = "1.0", features = ["derive"] }
@@ -53,7 +52,7 @@ trybuild = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tree-sitter = "0.27.0"
-tree-sitter-tribute = { git = "https://github.com/Kroisse/tree-sitter-tribute", tag = "v0.15.0" }
+tree-sitter-tribute = { git = "https://github.com/Kroisse/tree-sitter-tribute", tag = "v0.17.0" }
 tribute-core = { path = "crates/tribute-core" }
 tribute-rc = { path = "crates/tribute-rc" }
 tribute-front = { path = "crates/tribute-front" }

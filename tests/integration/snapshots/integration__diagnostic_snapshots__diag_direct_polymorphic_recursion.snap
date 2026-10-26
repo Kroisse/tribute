@@ -1,0 +1,10 @@
+---
+source: tests/integration/diagnostic_snapshots.rs
+expression: result.diagnostics
+---
+- message: "`depth` calls itself at `Pair(a)`; polymorphic recursion is not supported"
+  span:
+    start: 128
+    end: 133
+  severity: Error
+  phase: TypeChecking

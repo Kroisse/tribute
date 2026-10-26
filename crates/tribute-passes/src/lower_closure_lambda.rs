@@ -24,11 +24,10 @@
 
 use crate::collections::HashMap;
 
-use tribute_core::calling_convention::{
-    CLOSURE_ENVIRONMENT_INDEX_ATTR, get_physical_closure_environment_index,
-};
-use tribute_core::{
-    get_calling_convention, get_physical_closure_convention, set_calling_convention,
+use tribute_ir::calling_convention::get_physical_closure_convention;
+use tribute_ir::calling_convention::{
+    CLOSURE_ENVIRONMENT_INDEX_ATTR, ConventionBearing, DynConventionBearing,
+    get_physical_closure_environment_index,
 };
 use trunk_ir::Symbol;
 use trunk_ir::analysis::AnalysisCache;
@@ -158,7 +157,7 @@ fn lower_single_lambda(
 
     // Convention-proven physical closures define the only legal environment
     // insertion slot. Do not recover hidden operands from a lambda's shape.
-    let convention = get_calling_convention(ctx, lambda_ref);
+    let convention = DynConventionBearing::of(ctx, lambda_ref);
     let environment_index = match (convention, get_physical_closure_convention(ctx, result_ty)) {
         (Some(convention), Some(provenance)) if provenance == convention => {
             let Some(index) = get_physical_closure_environment_index(ctx, result_ty) else {
@@ -211,7 +210,7 @@ fn lower_single_lambda(
         .regions(func_body_region)
         .build(ctx, location);
     if let Some(convention) = convention {
-        set_calling_convention(ctx, func_op.op_ref(), convention);
+        func_op.set_calling_convention(ctx, convention);
         ctx.op_attrs_mut(func_op.op_ref()).insert(
             CLOSURE_ENVIRONMENT_INDEX_ATTR,
             Attribute::Int(environment_index as i128),
@@ -231,7 +230,7 @@ fn lower_single_lambda(
         .results(result_ty)
         .build(ctx, location);
     if let Some(convention) = convention {
-        set_calling_convention(ctx, closure_new_op.op_ref(), convention);
+        closure_new_op.set_calling_convention(ctx, convention);
     }
     ctx.insert_op_before(parent_block, lambda_ref, closure_new_op.op_ref());
 
@@ -425,7 +424,7 @@ fn make_bind_name_attrs(ctx: &mut IrContext, name: &str) -> AttributeMap {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tribute_core::CallingConvention;
+    use tribute_ir::calling_convention::CallingConvention;
     use tribute_ir::dialect::tribute_rt;
     use trunk_ir::SymbolPath;
     use trunk_ir::context::RegionData;
@@ -519,15 +518,18 @@ mod tests {
             AttributeMap::new(),
         )
         .as_type_ref();
-        let closure_ty =
-            tribute_core::physical_closure_type(&mut ctx, func_ty, CallingConvention::Direct);
+        let closure_ty = tribute_ir::calling_convention::physical_closure_type(
+            &mut ctx,
+            func_ty,
+            CallingConvention::Direct,
+        );
 
         // closure.lambda [] { ... } -> closure_ty
         let lambda_op = closure::Lambda::operands(Vec::<ValueRef>::new())
             .results(closure_ty)
             .regions(lambda_body_region)
             .build(&mut ctx, loc);
-        set_calling_convention(&mut ctx, lambda_op.op_ref(), CallingConvention::Direct);
+        lambda_op.set_calling_convention(&mut ctx, CallingConvention::Direct);
 
         // Wrap in a func.func
         let outer_entry = ctx.create_block(BlockData {
@@ -641,7 +643,7 @@ mod tests {
                 TypeDataBuilder::new("closure.closure").param(lambda_func_ty.as_type_ref());
             if let Some(provenance) = provenance {
                 closure_type = closure_type.attr(
-                    tribute_core::CALLING_CONVENTION_ATTR,
+                    tribute_ir::calling_convention::CALLING_CONVENTION_ATTR,
                     Attribute::Int(provenance as i128),
                 );
             }
@@ -654,7 +656,7 @@ mod tests {
                 .results(lambda_ty)
                 .regions(lambda_body)
                 .build(&mut ctx, loc);
-            set_calling_convention(&mut ctx, lambda.op_ref(), CallingConvention::Cps);
+            lambda.set_calling_convention(&mut ctx, CallingConvention::Cps);
             ctx.push_op(outer_entry, lambda.op_ref());
 
             let outer_body = ctx.create_region(RegionData {
@@ -732,15 +734,18 @@ mod tests {
         });
 
         let func_ty = func::func_sig(&mut ctx, [i32_ty], [i32_ty]).as_type_ref();
-        let closure_ty =
-            tribute_core::physical_closure_type(&mut ctx, func_ty, CallingConvention::Direct);
+        let closure_ty = tribute_ir::calling_convention::physical_closure_type(
+            &mut ctx,
+            func_ty,
+            CallingConvention::Direct,
+        );
 
         // closure.lambda [%a] { ... }
         let lambda_op = closure::Lambda::operands(vec![a_val])
             .results(closure_ty)
             .regions(lambda_body_region)
             .build(&mut ctx, loc);
-        set_calling_convention(&mut ctx, lambda_op.op_ref(), CallingConvention::Direct);
+        lambda_op.set_calling_convention(&mut ctx, CallingConvention::Direct);
         ctx.push_op(outer_entry, lambda_op.op_ref());
 
         let outer_body = ctx.create_region(RegionData {

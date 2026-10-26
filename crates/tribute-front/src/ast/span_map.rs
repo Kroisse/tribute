@@ -8,9 +8,7 @@
 //! - Span changes don't invalidate Salsa caches
 //! - Additional metadata can be added using the same pattern
 
-use rustc_hash::FxHashMap as HashMap;
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use rustc_hash::{FxBuildHasher, FxHashMap as HashMap};
 
 use trunk_ir::Span;
 
@@ -38,51 +36,23 @@ impl SpanMapBuilder {
 
     /// Create a SpanMap from this builder.
     pub fn finish(self) -> SpanMap {
-        SpanMap(Arc::new(self.spans))
+        SpanMap(self.spans)
     }
 }
 
-/// NodeId → Span mapping.
+/// NodeId → Span mapping of one parsed source.
 ///
-/// Uses `Arc<HashMap>` internally for efficient sharing and cheap cloning.
-/// The SpanMap is immutable once created.
-///
-/// This is embedded in `ParsedAst` (a Salsa tracked struct) which handles
-/// the incremental caching. SpanMap itself is not a Salsa type.
-///
-/// Note: `Hash` is implemented using Arc pointer identity for Salsa compatibility.
-/// Two SpanMaps hash the same only if they point to the same underlying data.
-#[derive(Clone, Debug)]
-pub struct SpanMap(Arc<HashMap<NodeId, Span>>);
-
-impl PartialEq for SpanMap {
-    fn eq(&self, other: &Self) -> bool {
-        // Compare by Arc pointer identity for efficiency
-        Arc::ptr_eq(&self.0, &other.0) || self.0 == other.0
-    }
-}
-
-impl Eq for SpanMap {}
-
-impl Hash for SpanMap {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        // Hash by Arc pointer address for Salsa compatibility
-        // This means two SpanMaps with the same content but different Arc instances
-        // will have different hashes, but Salsa will fall back to equality check
-        std::ptr::hash(Arc::as_ptr(&self.0), state);
-    }
-}
+/// The map belongs to the parse that built it (`ParsedAst`, a Salsa tracked
+/// struct); later stages borrow it rather than copy it. It compares by
+/// content, so a reparse that moves no node leaves it unchanged.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct SpanMap(HashMap<NodeId, Span>);
 
 impl SpanMap {
-    /// Merge another SpanMap into this one, returning a new SpanMap.
-    ///
-    /// Entries from `other` are included first, then entries from `self`
-    /// override any conflicting keys (in practice NodeIds don't collide
-    /// across separate parse trees).
-    pub fn merge(&self, other: &SpanMap) -> SpanMap {
-        let mut merged = other.0.as_ref().clone();
-        merged.extend(self.0.iter().map(|(&k, &v)| (k, v)));
-        SpanMap(Arc::new(merged))
+    /// The map of no nodes, for checking code that has no source.
+    pub fn empty() -> &'static SpanMap {
+        static EMPTY: SpanMap = SpanMap(HashMap::with_hasher(FxBuildHasher));
+        &EMPTY
     }
 
     /// Look up a span by NodeId.
@@ -105,17 +75,32 @@ impl SpanMap {
     }
 
     /// Check if this NodeId has a recorded span.
-    ///
-    /// This is useful for reverse lookup: given a CST node, check if it
-    /// corresponds to an AST node by checking if its ID is in the SpanMap.
     pub fn contains(&self, id: NodeId) -> bool {
         self.0.contains_key(&id)
     }
 }
 
-impl Default for SpanMap {
-    fn default() -> Self {
-        Self(Arc::new(HashMap::default()))
+/// The span maps of several parsed sources, looked up as one, such as a
+/// module's and those of the packages it depends on.
+///
+/// NodeIds carry their source's hash, so a node is in at most one of them.
+#[derive(Clone, Debug, Default)]
+pub struct SpanMaps<'a>(Vec<&'a SpanMap>);
+
+impl<'a> SpanMaps<'a> {
+    /// Look up spans in `maps`.
+    pub fn new(maps: impl IntoIterator<Item = &'a SpanMap>) -> Self {
+        Self(maps.into_iter().collect())
+    }
+
+    /// Look up a span by NodeId in each map in turn.
+    pub fn get(&self, id: NodeId) -> Option<Span> {
+        self.0.iter().find_map(|map| map.get(id))
+    }
+
+    /// Look up a span by NodeId, returning a default span if not found.
+    pub fn get_or_default(&self, id: NodeId) -> Span {
+        self.get(id).unwrap_or(Span::new(0, 0))
     }
 }
 
@@ -155,18 +140,18 @@ mod tests {
     }
 
     #[test]
-    fn test_span_map_clone() {
-        let mut builder = SpanMapBuilder::new();
-        builder.insert(NodeId::from_raw(0), Span::new(10, 20));
+    fn test_span_maps_look_up_each_map() {
+        let mut user = SpanMapBuilder::new();
+        user.insert(NodeId::from_raw(0), Span::new(10, 20));
+        let user = user.finish();
+        let mut dependency = SpanMapBuilder::new();
+        dependency.insert(NodeId::new(1, 0, 0), Span::new(30, 40));
+        let dependency = dependency.finish();
 
-        let span_map1 = builder.finish();
-        let span_map2 = span_map1.clone();
-
-        // Both should refer to the same data (Arc)
-        assert_eq!(
-            span_map1.get(NodeId::from_raw(0)),
-            span_map2.get(NodeId::from_raw(0))
-        );
+        let spans = SpanMaps::new([&user, &dependency]);
+        assert_eq!(spans.get(NodeId::from_raw(0)), Some(Span::new(10, 20)));
+        assert_eq!(spans.get(NodeId::new(1, 0, 0)), Some(Span::new(30, 40)));
+        assert_eq!(spans.get_or_default(NodeId::from_raw(9)), Span::new(0, 0));
     }
 
     #[test]

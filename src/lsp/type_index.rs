@@ -116,12 +116,6 @@ pub fn print_ast_type(db: &dyn salsa::Database, ty: Type<'_>) -> String {
             format!("({})", elems_str.join(", "))
         }
 
-        TypeKind::App { ctor, args } => {
-            let ctor_str = print_ast_type(db, *ctor);
-            let args_str: Vec<String> = args.iter().map(|t| print_ast_type(db, *t)).collect();
-            format!("{}({})", ctor_str, args_str.join(", "))
-        }
-
         TypeKind::Error => "<error>".to_string(),
 
         // Primitives are handled by early return above
@@ -271,7 +265,7 @@ pub fn type_index<'db>(
     let module = tribute::parse_and_lower_ast(db, source)?.module(db);
     let span_map = ast_query::span_map(db, source)?;
 
-    Some(AstTypeIndex::build(db, module, &span_map))
+    Some(AstTypeIndex::build(db, module, span_map))
 }
 
 #[cfg(test)]
@@ -352,7 +346,7 @@ mod tests {
     #[test]
     fn test_type_index_uses_prelude() {
         let db = salsa::DatabaseImpl::default();
-        let text = "fn f(error: Int::ParseError) -> Nat {\n    let value = case error {\n        Int::ParseError::InvalidSyntax -> Some(1)\n        Int::ParseError::OutOfRange -> None\n    }\n    let other = value\n    0\n}\n";
+        let text = "fn f(error: Int::ParseError) -> Nat {\n    let value = case error {\n        Int::ParseError::InvalidSyntax -> .Some(1)\n        Int::ParseError::OutOfRange -> .None\n    }\n    let other = value\n    0\n}\n";
         let source = make_source(&db, text);
         let index = type_index(&db, source).expect("type index");
         let offset = text.rfind("value").unwrap();
@@ -460,29 +454,6 @@ mod tests {
     }
 
     #[test]
-    fn test_print_ast_type_app() {
-        let db = salsa::DatabaseImpl::default();
-
-        let int_ty = Type::new(&db, TypeKind::Int);
-        let ctor_ty = Type::new(
-            &db,
-            TypeKind::Named {
-                id: TypeDefId::builtin_list(&db),
-                name: trunk_ir::Symbol::new("List"),
-                args: vec![],
-            },
-        );
-        let app_ty = Type::new(
-            &db,
-            TypeKind::App {
-                ctor: ctor_ty,
-                args: vec![int_ty],
-            },
-        );
-        assert_eq!(print_ast_type(&db, app_ty), "List(Int)");
-    }
-
-    #[test]
     fn test_print_ast_type_error() {
         let db = salsa::DatabaseImpl::default();
 
@@ -540,8 +511,8 @@ mod tests {
 
 fn test(opt: Option) -> Int {
     case opt {
-        Some(v) -> v
-        None -> 0
+        .Some(v) -> v
+        .None -> 0
     }
 }"#,
         );

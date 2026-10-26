@@ -12,7 +12,7 @@ use common::{
 
 fn cps_control_read_outcome_program() -> &'static str {
     r#"
-use abilities::Throw
+use std::abilities::Throw
 use std::io::{Error, Io, print_line, read_line}
 
 // `Line` intentionally owns public enum tag zero. The normal path pattern
@@ -550,7 +550,9 @@ fn main() -> Nil {
 /// it returns a default value directly, short-circuiting the computation.
 #[test]
 fn test_handler_early_return() {
-    let code = r#"ability Fail {
+    let code = r#"use std::io::{Io, print_line}
+
+ability Fail {
     op fail() -> Nat
 }
 
@@ -559,12 +561,12 @@ fn might_fail() ->{Fail} Nat {
     x + 100
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = handle might_fail() {
         do result { result }
         op Fail::fail() { 99 }
     }
-    __tribute_print_nat(result)
+    print_line(result.to_string)
 }
 "#;
     // Handler returns 99 directly without calling resume, so x + 100 is never reached
@@ -578,7 +580,9 @@ fn main() -> Nil {
 /// non-resuming type-checking and lowering path.
 #[test]
 fn test_handler_op_never_abort() {
-    let code = r#"ability FailNever {
+    let code = r#"use std::io::{Io, print_line}
+
+ability FailNever {
     op fail() -> Never
 }
 
@@ -586,12 +590,12 @@ fn might_fail() ->{FailNever} Nat {
     FailNever::fail()
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = handle might_fail() {
         do result { result }
         op FailNever::fail() { 99 }
     }
-    __tribute_print_nat(result)
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("handler_op_never_abort.trb", code, "99");
@@ -603,7 +607,9 @@ fn main() -> Nil {
 /// as an alternative result.
 #[test]
 fn test_abort_with_payload() {
-    let code = r#"ability Abort {
+    let code = r#"use std::io::{Io, print_line}
+
+ability Abort {
     op abort(code: Nat) -> Never
 }
 
@@ -611,12 +617,12 @@ fn do_abort() ->{Abort} Nat {
     Abort::abort(99)
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = handle do_abort() {
         do result { result }
         op Abort::abort(code) { code }
     }
-    __tribute_print_nat(result)
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("abort_with_payload.trb", code, "99");
@@ -627,7 +633,9 @@ fn main() -> Nil {
 /// Two separate handle expressions each handle their own abort independently.
 #[test]
 fn test_abort_multiple_handles() {
-    let code = r#"ability Abort {
+    let code = r#"use std::io::{Io, print_line}
+
+ability Abort {
     op abort() -> Never
 }
 
@@ -635,7 +643,7 @@ fn always_abort() ->{Abort} Nat {
     Abort::abort()
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let a = handle always_abort() {
         do result { result }
         op Abort::abort() { 10 }
@@ -644,7 +652,7 @@ fn main() -> Nil {
         do result { result }
         op Abort::abort() { 20 }
     }
-    __tribute_print_nat(a + b)
+    print_line({ a + b }.to_string)
 }
 "#;
     assert_native_output("abort_multiple_handles.trb", code, "30");
@@ -653,7 +661,9 @@ fn main() -> Nil {
 /// Test conditional abort with case branches returning `Never` and `Nat`.
 #[test]
 fn test_abort_conditional() {
-    let code = r#"ability Abort {
+    let code = r#"use std::io::{Io, print_line}
+
+ability Abort {
     op abort() -> Never
 }
 
@@ -664,7 +674,7 @@ fn might_abort(should_abort: Bool) ->{Abort} Nat {
     }
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let a = handle might_abort(True) {
         do result { result }
         op Abort::abort() { 0 }
@@ -673,8 +683,8 @@ fn main() -> Nil {
         do result { result }
         op Abort::abort() { 0 }
     }
-    __tribute_print_nat(a)
-    __tribute_print_nat(b)
+    print_line(a.to_string)
+    print_line(b.to_string)
 }
 "#;
     let reversed = code.replace(
@@ -699,7 +709,9 @@ fn main() -> Nil {
 /// to reference the operation.
 #[test]
 fn test_handler_ability_in_module() {
-    let code = r#"mod MyMod {
+    let code = r#"use std::io::{Io, print_line}
+
+mod MyMod {
     pub ability Counter {
         op inc() -> Nat
     }
@@ -711,12 +723,12 @@ fn count() ->{MyMod::Counter} Nat {
     a + b
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = handle count() {
         do result { result }
         op MyMod::Counter::inc() { resume 1 }
     }
-    __tribute_print_nat(result)
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("handler_ability_in_module.trb", code, "2");
@@ -733,7 +745,9 @@ fn main() -> Nil {
 /// This test verifies that path through parsing, resolution, and lowering.
 #[test]
 fn test_fn_handler_arm() {
-    let code = r#"ability Ask {
+    let code = r#"use std::io::{Io, print_line}
+
+ability Ask {
     fn ask() -> Nat
 }
 
@@ -741,12 +755,12 @@ fn use_ask() ->{Ask} Nat {
     Ask::ask()
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = handle use_ask() {
         do result { result }
         fn Ask::ask() { 42 }
     }
-    __tribute_print_nat(result)
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("fn_handler_arm.trb", code, "42");
@@ -758,27 +772,29 @@ fn main() -> Nil {
 #[test]
 fn test_source_logical_fn_handler_observes_terminal_order_and_result() {
     let code = r#"
+use std::io::{Io, print_line}
+
 ability Ask {
     fn ask() -> Int
 }
 
-fn use_ask() ->{Ask} Int {
-    __tribute_print_int(+10)
+fn use_ask() ->{Ask, Io} Int {
+    print_line(+10.to_string)
     Ask::ask()
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = handle use_ask() {
         do result {
-            __tribute_print_int(+30)
+            print_line(+30.to_string)
             result
         }
         fn Ask::ask() {
-            __tribute_print_int(+20)
+            print_line(+20.to_string)
             +41
         }
     }
-    __tribute_print_int(result)
+    print_line(result.to_string)
 }
 "#;
     assert_native_output(
@@ -798,7 +814,9 @@ fn main() -> Nil {
 /// just returns result unchanged.
 #[test]
 fn test_handler_result_identity() {
-    let code = r#"ability Ask {
+    let code = r#"use std::io::{Io, print_line}
+
+ability Ask {
     op ask() -> Nat
 }
 
@@ -806,12 +824,12 @@ fn pure_value() ->{Ask} Nat {
     10
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = handle pure_value() {
         do result { result }
         op Ask::ask() { resume 0 }
     }
-    __tribute_print_nat(result)
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("handler_result_identity.trb", code, "10");
@@ -820,7 +838,9 @@ fn main() -> Nil {
 /// Test handler result arm that returns a constant.
 #[test]
 fn test_handler_result_constant() {
-    let code = r#"ability Ask {
+    let code = r#"use std::io::{Io, print_line}
+
+ability Ask {
     op ask() -> Nat
 }
 
@@ -828,12 +848,12 @@ fn pure_value() ->{Ask} Nat {
     10
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = handle pure_value() {
         do result { 42 }
         op Ask::ask() { resume 0 }
     }
-    __tribute_print_nat(result)
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("handler_result_constant.trb", code, "42");
@@ -845,7 +865,9 @@ fn main() -> Nil {
 /// doubles it: result + result = 20.
 #[test]
 fn test_handler_transforms_result() {
-    let code = r#"ability State(s) {
+    let code = r#"use std::io::{Io, print_line}
+
+ability State(s) {
     op get() -> s
     op set(value: s) -> Nil
 }
@@ -854,13 +876,13 @@ fn pure_value() ->{State(Nat)} Nat {
     10
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = handle pure_value() {
         do result { result + result }
         op State::get() { resume 0 }
         op State::set(v) { resume Nil }
     }
-    __tribute_print_nat(result)
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("handler_transforms_result.trb", code, "20");
@@ -873,7 +895,9 @@ fn main() -> Nil {
 /// and the final value, then verifies result TDNR and native execution.
 #[test]
 fn test_handler_transforms_resumed_result() {
-    let code = r#"ability State(s) {
+    let code = r#"use std::io::{Io, print_line}
+
+ability State(s) {
     op get() -> s
 }
 
@@ -882,12 +906,12 @@ fn effectful_value() ->{State(Nat)} Nat {
     first + State::get()
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = handle effectful_value() {
         do result { result + result }
         op State::get() { resume 10 }
     }
-    __tribute_print_nat(result)
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("handler_transforms_resumed_result.trb", code, "42");
@@ -903,7 +927,9 @@ fn main() -> Nil {
 /// Starting from 0: counter()=0 (state→1). Returns 0.
 #[test]
 fn test_counter_returns_correct_value() {
-    let code = r#"ability State(s) {
+    let code = r#"use std::io::{Io, print_line}
+
+ability State(s) {
     op get() -> s
     op set(value: s) -> Nil
 }
@@ -922,9 +948,9 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     }
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = run_state(fn() { counter() }, 0)
-    __tribute_print_nat(result)
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("counter_value.trb", code, "0");
@@ -935,7 +961,9 @@ fn main() -> Nil {
 /// Starting from 10: counter()=10 (state→11). Returns 10.
 #[test]
 fn test_counter_nonzero_initial() {
-    let code = r#"ability State(s) {
+    let code = r#"use std::io::{Io, print_line}
+
+ability State(s) {
     op get() -> s
     op set(value: s) -> Nil
 }
@@ -954,9 +982,9 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     }
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = run_state(fn() { counter() }, 10)
-    __tribute_print_nat(result)
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("counter_nonzero.trb", code, "10");
@@ -971,7 +999,9 @@ fn main() -> Nil {
 /// Performs: set(3), set(get()+10) → set(13), get() → 13.
 #[test]
 fn test_state_multiple_mutations() {
-    let code = r#"ability State(s) {
+    let code = r#"use std::io::{Io, print_line}
+
+ability State(s) {
     op get() -> s
     op set(value: s) -> Nil
 }
@@ -991,9 +1021,9 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     }
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = run_state(fn() { mutate() }, 0)
-    __tribute_print_nat(result)
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("state_multiple_mutations.trb", code, "13");
@@ -1005,7 +1035,9 @@ fn main() -> Nil {
 /// Handler result arm adds 1: 10 + 1 = 11.
 #[test]
 fn test_handler_result_receives_body_value() {
-    let code = r#"ability State(s) {
+    let code = r#"use std::io::{Io, print_line}
+
+ability State(s) {
     op get() -> s
     op set(value: s) -> Nil
 }
@@ -1017,13 +1049,13 @@ fn compute() ->{State(Nat)} Nat {
     a + b
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = handle compute() {
         do result { result + 1 }
         op State::get() { resume 5 }
         op State::set(v) { resume Nil }
     }
-    __tribute_print_nat(result)
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("handler_result_body_value.trb", code, "11");
@@ -1041,7 +1073,9 @@ fn main() -> Nil {
 /// must have their operands correctly updated.
 #[test]
 fn test_multiple_effectful_calls_then_pure_call() {
-    let code = r#"ability State(s) {
+    let code = r#"use std::io::{Io, print_line}
+
+ability State(s) {
     op get() -> s
     op set(value: s) -> Nil
 }
@@ -1054,13 +1088,13 @@ fn compute() ->{State(Nat)} Nat {
     add(a, b)
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = handle compute() {
         do result { result }
         op State::get() { resume 5 }
         op State::set(v) { resume Nil }
     }
-    __tribute_print_nat(result)
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("multiple_effectful_then_pure_call.trb", code, "10");
@@ -1072,7 +1106,9 @@ fn main() -> Nil {
 /// Exercises the `remaining_are_dead_code` check on a direct call.
 #[test]
 fn test_non_effectful_call_in_nested_region() {
-    let code = r#"ability State(s) {
+    let code = r#"use std::io::{Io, print_line}
+
+ability State(s) {
     op get() -> s
     op set(value: s) -> Nil
 }
@@ -1084,13 +1120,13 @@ fn compute() ->{State(Nat)} Nat {
     identity(n)
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = handle compute() {
         do result { result }
         op State::get() { resume 7 }
         op State::set(v) { resume Nil }
     }
-    __tribute_print_nat(result)
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("non_effectful_call_in_nested_region.trb", code, "7");
@@ -1109,7 +1145,9 @@ fn main() -> Nil {
 /// are used directly in arith.add without unbox_int, causing type mismatch.
 #[test]
 fn test_handler_multi_param_op() {
-    let code = r#"ability Multi {
+    let code = r#"use std::io::{Io, print_line}
+
+ability Multi {
     op combine(x: Nat, y: Nat, z: Nat) -> Nat
 }
 
@@ -1117,12 +1155,12 @@ fn use_multi() ->{Multi} Nat {
     Multi::combine(10, 20, 30)
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = handle use_multi() {
         do result { result }
         op Multi::combine(x, y, z) { resume x + y + z }
     }
-    __tribute_print_nat(result)
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("handler_multi_param_op.trb", code, "60");
@@ -1131,7 +1169,9 @@ fn main() -> Nil {
 /// Test two-parameter ability op handler (simplest multi-param case).
 #[test]
 fn test_handler_two_param_op() {
-    let code = r#"ability Pair {
+    let code = r#"use std::io::{Io, print_line}
+
+ability Pair {
     op make(a: Nat, b: Nat) -> Nat
 }
 
@@ -1139,12 +1179,12 @@ fn use_pair() ->{Pair} Nat {
     Pair::make(3, 7)
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = handle use_pair() {
         do result { result }
         op Pair::make(a, b) { resume a + b }
     }
-    __tribute_print_nat(result)
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("handler_two_param_op.trb", code, "10");
@@ -1153,7 +1193,9 @@ fn main() -> Nil {
 /// Test multi-param op where handler only uses one parameter.
 #[test]
 fn test_handler_multi_param_partial_use() {
-    let code = r#"ability Pick {
+    let code = r#"use std::io::{Io, print_line}
+
+ability Pick {
     op choose(a: Nat, b: Nat, c: Nat) -> Nat
 }
 
@@ -1161,12 +1203,12 @@ fn use_pick() ->{Pick} Nat {
     Pick::choose(100, 200, 300)
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = handle use_pick() {
         do result { result }
         op Pick::choose(a, _, c) { resume a + c }
     }
-    __tribute_print_nat(result)
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("handler_multi_param_partial.trb", code, "400");
@@ -1175,7 +1217,9 @@ fn main() -> Nil {
 /// Test multi-param ability op with `fn` (tail-resumptive) handler.
 #[test]
 fn test_handler_multi_param_fn_arm() {
-    let code = r#"ability Arith {
+    let code = r#"use std::io::{Io, print_line}
+
+ability Arith {
     fn add(a: Nat, b: Nat) -> Nat
 }
 
@@ -1183,12 +1227,12 @@ fn use_arith() ->{Arith} Nat {
     Arith::add(15, 27)
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = handle use_arith() {
         do result { result }
         fn Arith::add(a, b) { a + b }
     }
-    __tribute_print_nat(result)
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("handler_multi_param_fn.trb", code, "42");
@@ -1197,7 +1241,9 @@ fn main() -> Nil {
 /// Test multi-param op called multiple times within a handler.
 #[test]
 fn test_handler_multi_param_repeated_calls() {
-    let code = r#"ability Math {
+    let code = r#"use std::io::{Io, print_line}
+
+ability Math {
     op mul(a: Nat, b: Nat) -> Nat
 }
 
@@ -1207,12 +1253,12 @@ fn computation() ->{Math} Nat {
     y
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = handle computation() {
         do result { result }
         op Math::mul(a, b) { resume a * b }
     }
-    __tribute_print_nat(result)
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("handler_multi_param_repeated.trb", code, "60");
@@ -1221,7 +1267,7 @@ fn main() -> Nil {
 // =============================================================================
 // Throw(e) Ability Tests (#193)
 //
-// These tests use the prelude-defined abilities (abilities::Abort, abilities::Throw).
+// These tests use the prelude-defined abilities (std::abilities::Abort, std::abilities::Throw).
 // =============================================================================
 
 /// Test basic Throw(e) ability from prelude.
@@ -1230,16 +1276,18 @@ fn main() -> Nil {
 /// type (like Abort). The handler catches the thrown error value.
 #[test]
 fn test_throw_basic() {
-    let code = r#"fn do_throw() ->{abilities::Throw(Nat)} Nat {
-    abilities::Throw::throw(42)
+    let code = r#"use std::io::{Io, print_line}
+
+fn do_throw() ->{std::abilities::Throw(Nat)} Nat {
+    std::abilities::Throw::throw(42)
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = handle do_throw() {
         do result { result }
-        op abilities::Throw::throw(error) { error }
+        op std::abilities::Throw::throw(error) { error }
     }
-    __tribute_print_nat(result)
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("throw_basic.trb", code, "42");
@@ -1251,16 +1299,18 @@ fn main() -> Nil {
 /// an alternative result.
 #[test]
 fn test_throw_with_payload() {
-    let code = r#"fn throw_with_offset(x: Nat) ->{abilities::Throw(Nat)} Nat {
-    abilities::Throw::throw(x + 100)
+    let code = r#"use std::io::{Io, print_line}
+
+fn throw_with_offset(x: Nat) ->{std::abilities::Throw(Nat)} Nat {
+    std::abilities::Throw::throw(x + 100)
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = handle throw_with_offset(5) {
         do result { result }
-        op abilities::Throw::throw(error) { error }
+        op std::abilities::Throw::throw(error) { error }
     }
-    __tribute_print_nat(result)
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("throw_with_payload.trb", code, "105");
@@ -1272,26 +1322,28 @@ fn main() -> Nil {
 /// the second throws, and the handler catches the error.
 #[test]
 fn test_throw_multiple_operations() {
-    let code = r#"fn no_throw() ->{abilities::Throw(Nat)} Nat {
+    let code = r#"use std::io::{Io, print_line}
+
+fn no_throw() ->{std::abilities::Throw(Nat)} Nat {
     10
 }
 
-fn must_throw() ->{abilities::Throw(Nat)} Nat {
-    abilities::Throw::throw(77)
+fn must_throw() ->{std::abilities::Throw(Nat)} Nat {
+    std::abilities::Throw::throw(77)
 }
 
-fn do_work() ->{abilities::Throw(Nat)} Nat {
+fn do_work() ->{std::abilities::Throw(Nat)} Nat {
     let a = no_throw()
     let b = must_throw()
     a + b
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = handle do_work() {
         do result { result }
-        op abilities::Throw::throw(error) { error }
+        op std::abilities::Throw::throw(error) { error }
     }
-    __tribute_print_nat(result)
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("throw_multiple_ops.trb", code, "77");
@@ -1300,16 +1352,18 @@ fn main() -> Nil {
 /// Test Abort ability from prelude.
 #[test]
 fn test_prelude_abort() {
-    let code = r#"fn do_abort() ->{abilities::Abort} Nat {
-    abilities::Abort::abort()
+    let code = r#"use std::io::{Io, print_line}
+
+fn do_abort() ->{std::abilities::Abort} Nat {
+    std::abilities::Abort::abort()
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = handle do_abort() {
         do result { result }
-        op abilities::Abort::abort() { 99 }
+        op std::abilities::Abort::abort() { 99 }
     }
-    __tribute_print_nat(result)
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("prelude_abort.trb", code, "99");
@@ -1322,16 +1376,18 @@ fn main() -> Nil {
 /// Test effect-directed resolution: `abort()` resolves from ability row.
 #[test]
 fn test_effect_directed_abort() {
-    let code = r#"fn do_abort() ->{abilities::Abort} Nat {
+    let code = r#"use std::io::{Io, print_line}
+
+fn do_abort() ->{std::abilities::Abort} Nat {
     abort()
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = handle do_abort() {
         do result { result }
-        op abilities::Abort::abort() { 99 }
+        op std::abilities::Abort::abort() { 99 }
     }
-    __tribute_print_nat(result)
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("effect_directed_abort.trb", code, "99");
@@ -1340,16 +1396,18 @@ fn main() -> Nil {
 /// Test effect-directed resolution: `throw(x)` resolves from ability row.
 #[test]
 fn test_effect_directed_throw() {
-    let code = r#"fn do_throw() ->{abilities::Throw(Nat)} Nat {
+    let code = r#"use std::io::{Io, print_line}
+
+fn do_throw() ->{std::abilities::Throw(Nat)} Nat {
     throw(42)
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = handle do_throw() {
         do result { result }
-        op abilities::Throw::throw(error) { error }
+        op std::abilities::Throw::throw(error) { error }
     }
-    __tribute_print_nat(result)
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("effect_directed_throw.trb", code, "42");
@@ -1357,20 +1415,22 @@ fn main() -> Nil {
 
 /// Test that a local variable shadows an effect-injected operation.
 ///
-/// The parameter `abort` shadows `abilities::Abort::abort`, so calling
+/// The parameter `abort` shadows `std::abilities::Abort::abort`, so calling
 /// `abort()` invokes the parameter (a function), not the ability operation.
 #[test]
 fn test_effect_directed_local_shadows_op() {
-    let code = r#"fn use_local(abort: fn() ->{} Nat) ->{abilities::Abort} Nat {
+    let code = r#"use std::io::{Io, print_line}
+
+fn use_local(abort: fn() ->{} Nat) ->{std::abilities::Abort} Nat {
     abort()
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = handle use_local(fn() 77) {
         do result { result }
-        op abilities::Abort::abort() { 0 }
+        op std::abilities::Abort::abort() { 0 }
     }
-    __tribute_print_nat(result)
+    print_line(result.to_string)
 }
 "#;
     // abort() calls the parameter (returns 77), not the ability op (would return 0)
@@ -1381,41 +1441,45 @@ fn main() -> Nil {
 // Use Import Tests (#631)
 // =============================================================================
 
-/// Test `use abilities::Abort` makes Abort usable without qualification.
+/// Test `use std::abilities::Abort` makes Abort usable without qualification.
 #[test]
 fn test_use_import_abort() {
-    let code = r#"use abilities::Abort
+    let code = r#"use std::io::{Io, print_line}
+
+use std::abilities::Abort
 
 fn do_abort() ->{Abort} Nat {
     abort()
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = handle do_abort() {
         do result { result }
         op Abort::abort() { 99 }
     }
-    __tribute_print_nat(result)
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("use_import_abort.trb", code, "99");
 }
 
-/// Test `use abilities::Throw` makes Throw(e) usable without qualification.
+/// Test `use std::abilities::Throw` makes Throw(e) usable without qualification.
 #[test]
 fn test_use_import_throw() {
-    let code = r#"use abilities::Throw
+    let code = r#"use std::io::{Io, print_line}
+
+use std::abilities::Throw
 
 fn do_throw() ->{Throw(Nat)} Nat {
     throw(42)
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let result = handle do_throw() {
         do result { result }
         op Throw::throw(error) { error }
     }
-    __tribute_print_nat(result)
+    print_line(result.to_string)
 }
 "#;
     assert_native_output("use_import_throw.trb", code, "42");
@@ -1429,7 +1493,7 @@ fn test_cps_consumed_parameters_receive_one_unit_each() {
     let output = common::compile_and_run_native_asan(
         "cps_consumed_duplicate_arguments.trb",
         r#"
-use abilities::Throw
+use std::abilities::Throw
 use std::io::{Io, print_line}
 
 fn both(left: String, right: String) ->{Throw(String)} String {
@@ -1754,4 +1818,264 @@ fn main() ->{Io} Nil {
 }
 "#;
     assert_output_on_both_targets("handle_resume_return_callable.trb", source, "42\n42");
+}
+
+/// A `fn` handler arm may perform `fn` operations of an outer handler, use
+/// the ambient `Io`, and call helpers whose rows stay without `op` abilities.
+#[test]
+fn test_fn_arm_performs_outer_fn_operation() {
+    let source = r#"
+use std::io::{Io, print_line}
+
+ability Counter {
+    fn next() -> Int
+}
+
+ability Tick {
+    fn tick() -> Int
+}
+
+fn sum(n: Int, acc: Int) ->{Counter} Int {
+    case n == +0 {
+        True -> acc
+        False -> sum(n - +1, acc + Counter::next())
+    }
+}
+
+fn double(x: Int) -> Int { x * +2 }
+
+fn counted(comp: fn() ->{e, Counter} Int) ->{e, Tick, Io} Int {
+    handle comp() {
+        do result { result }
+        fn Counter::next() {
+            print_line("next")
+            double(Tick::tick())
+        }
+    }
+}
+
+fn main() ->{Io} Nil {
+    let total = handle counted(fn() sum(+3, +0)) {
+        do result { result }
+        fn Tick::tick() { +5 }
+    }
+    print_line(Int::to_string(total))
+}
+"#;
+    assert_output_on_both_targets(
+        "fn_arm_performs_outer_fn_operation.trb",
+        source,
+        "next\nnext\nnext\n30",
+    );
+}
+
+/// A `fn` arm may perform the `fn` operation of an ability that also
+/// declares an `op` operation, and may call a suspending helper inside a
+/// `handle` of its own.
+#[test]
+fn test_fn_arm_performs_mixed_fn_operation_and_handles_op_locally() {
+    let source = r#"
+use std::io::{Io, print_line}
+
+ability Counter {
+    fn next() -> Int
+}
+
+ability Mixed {
+    fn ping() -> Int
+    op bail() -> Never
+}
+
+ability Stop {
+    op stop() -> Never
+}
+
+fn sum(n: Int, acc: Int) ->{Counter} Int {
+    case n == +0 {
+        True -> acc
+        False -> sum(n - +1, acc + Counter::next())
+    }
+}
+
+fn halt() ->{Stop} Int {
+    Stop::stop()
+}
+
+fn counted(comp: fn() ->{e, Counter} Int) ->{e, Mixed} Int {
+    handle comp() {
+        do result { result }
+        fn Counter::next() {
+            let local = handle halt() {
+                do value { value }
+                op Stop::stop() { +1 }
+            }
+            Mixed::ping() + local
+        }
+    }
+}
+
+fn main() ->{Io} Nil {
+    let total = handle counted(fn() sum(+3, +0)) {
+        do result { result }
+        fn Mixed::ping() { +5 }
+        op Mixed::bail() { -1 }
+    }
+    print_line(Int::to_string(total))
+}
+"#;
+    assert_output_on_both_targets("fn_arm_performs_mixed_fn_operation.trb", source, "18");
+}
+
+/// A `handle` without a `do` arm completes with the body's result. An `op`
+/// arm that finishes without resuming produces that same type.
+#[test]
+fn test_handle_without_do_arm_is_identity_completion() {
+    let source = r#"
+use std::io::{Io, print_line}
+
+ability Counter {
+    fn next() -> Int
+}
+
+ability Ask {
+    op ask() -> Int
+}
+
+ability Stop {
+    op stop() -> Never
+}
+
+fn count() ->{Counter} Int {
+    Counter::next() + Counter::next()
+}
+
+fn ask_twice() ->{Ask} Int {
+    Ask::ask() * +10 + Ask::ask()
+}
+
+fn stop_early() ->{Stop} Int {
+    Stop::stop()
+}
+
+fn main() ->{Io} Nil {
+    let counted = handle count() {
+        fn Counter::next() { +3 }
+    }
+    print_line(Int::to_string(counted))
+    let asked = handle ask_twice() {
+        op Ask::ask() { resume +4 }
+    }
+    print_line(Int::to_string(asked))
+    let stopped = handle stop_early() {
+        op Stop::stop() { -1 }
+    }
+    print_line(Int::to_string(stopped))
+}
+"#;
+    assert_output_on_both_targets("handle_without_do_arm.trb", source, "6\n44\n-1");
+}
+
+/// A `fn` arm may call an effect-polymorphic callable when the instance fixes
+/// its row to `fn` operations only, and may call a pure helper in an instance
+/// whose row is `Cps`.
+#[test]
+fn test_fn_arm_calls_through_row_variables_that_do_not_suspend() {
+    let source = r#"
+use std::io::{Io, print_line}
+
+ability Counter {
+    fn next() -> Int
+}
+
+ability Tick {
+    fn tick() -> Int
+}
+
+ability Stop {
+    op stop() -> Never
+}
+
+fn sum(n: Int, acc: Int) ->{Counter} Int {
+    case n == +0 {
+        True -> acc
+        False -> sum(n - +1, acc + Counter::next())
+    }
+}
+
+fn one(x: Int) -> Int { x - x + +1 }
+
+fn limited(f: fn() ->{e} Int, comp: fn() ->{e, Counter} Int) ->{e} Int {
+    handle comp() {
+        fn Counter::next() { f() }
+    }
+}
+
+fn counted(comp: fn() ->{e, Counter} Int) ->{e} Int {
+    handle comp() {
+        fn Counter::next() { one(+1) }
+    }
+}
+
+fn main() ->{Io} Nil {
+    let ticked = handle limited(fn() Tick::tick(), fn() sum(+3, +0)) {
+        fn Tick::tick() { +3 }
+    }
+    print_line(Int::to_string(ticked))
+    let stopped = handle counted(fn() { Stop::stop() }) {
+        op Stop::stop() { -1 }
+    }
+    print_line(Int::to_string(stopped))
+}
+"#;
+    assert_output_on_both_targets("fn_arm_row_variable_calls.trb", source, "9\n-1");
+}
+
+/// A `fn` arm may call a `Cps` callable inside a `handle` of its own when the
+/// handle handles the concrete label and the instance fixes the rest of the
+/// row to `fn` operations.
+#[test]
+fn test_fn_arm_handles_concrete_label_of_row_variable_callable() {
+    let source = r#"
+use std::io::{Io, print_line}
+
+ability Counter {
+    fn next() -> Int
+}
+
+ability Stop {
+    op stop() -> Never
+}
+
+ability Tick {
+    fn tick() -> Int
+}
+
+fn sum(n: Int, acc: Int) ->{Counter} Int {
+    case n == +0 {
+        True -> acc
+        False -> sum(n - +1, acc + Counter::next())
+    }
+}
+
+fn limited(g: fn() ->{Stop, e} Int, comp: fn() ->{e, Counter} Int) ->{e} Int {
+    handle comp() {
+        fn Counter::next() {
+            handle g() {
+                op Stop::stop() { +2 }
+            }
+        }
+    }
+}
+
+fn main() ->{Io} Nil {
+    let total = handle limited(fn() {
+        let _ = Tick::tick()
+        Stop::stop()
+    }, fn() sum(+3, +0)) {
+        fn Tick::tick() { +1 }
+    }
+    print_line(Int::to_string(total))
+}
+"#;
+    assert_output_on_both_targets("fn_arm_handles_row_variable_label.trb", source, "6");
 }

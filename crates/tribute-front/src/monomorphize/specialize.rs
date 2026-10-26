@@ -79,7 +79,7 @@ pub(super) fn generate_specializations<'db>(
     module: &DeclTable<TypedRef<'db>>,
     instantiations: &HashMap<FuncDefId<'db>, HashSet<InstanceKey<'db>>>,
     function_types: &[(SymbolPath, TypeScheme<'db>)],
-    compiler_intrinsics: &HashMap<NodeId, Symbol>,
+    compiler_intrinsics: &crate::SortedMap<NodeId, Symbol>,
 ) -> GeneratedSpecializations<'db> {
     let func_decls = collect_func_decls(module);
     let extern_functions = collect_extern_function_decls(module);
@@ -89,6 +89,9 @@ pub(super) fn generate_specializations<'db>(
     let mut extern_function_types = Vec::new();
     let mut specialized_extern_declarations = Vec::new();
     let mut compiler_intrinsic_specializations = Vec::new();
+    // Keys that differ only in how a type is spelled, such as a nominal type
+    // named by its short or its qualified name, mangle to one instance.
+    let mut generated = HashSet::default();
 
     for (func_id, keys) in instantiations {
         let path = func_id.path(db);
@@ -106,6 +109,9 @@ pub(super) fn generate_specializations<'db>(
         for key in keys {
             let type_args = key.type_args.as_slice();
             let mangled_path = mangle_instance_path(db, path, key);
+            if !generated.insert(mangled_path.clone()) {
+                continue;
+            }
             let mangled = mangled_path.to_symbol();
             let placement = Placement::at(mangled_path.clone());
             let specialized_scheme = scheme
@@ -281,6 +287,7 @@ fn specialize_struct_decl<'db>(
         id: decl.id.with_variant(variant),
         visibility: crate::ast::Visibility::Private,
         name: mangled_name,
+        disambiguator: decl.disambiguator,
         type_params: vec![],
         fields: decl
             .fields
@@ -309,6 +316,7 @@ fn specialize_enum_decl<'db>(
         id: decl.id.with_variant(variant),
         visibility: crate::ast::Visibility::Private,
         name: mangled_name,
+        disambiguator: decl.disambiguator,
         type_params: vec![],
         variants: decl
             .variants
@@ -786,7 +794,7 @@ mod tests {
         let bv0 = Type::new(&db, TypeKind::BoundVar { index: 0 });
         let int = Type::new(&db, TypeKind::Int);
 
-        // Build a simple generic function: fn identity(a)(x: a) -> a { x }
+        // Build a simple generic function: fn identity(x: a) -> a { x }
         let body_ref = TypedRef::new(
             ResolvedRef::Local {
                 id: crate::ast::LocalId::new(0),
@@ -903,7 +911,7 @@ mod tests {
             &module,
             &instantiations,
             &function_types,
-            &HashMap::default(),
+            &crate::SortedMap::default(),
         );
 
         assert_eq!(specializations.specialized_declarations.len(), 2);
@@ -1109,6 +1117,7 @@ mod tests {
             id: node_id(1),
             visibility: crate::ast::Visibility::Public,
             name: Symbol::new("Pair"),
+            disambiguator: 0,
             type_params: vec![
                 crate::ast::TypeParamDecl {
                     id: node_id(2),
@@ -1178,6 +1187,7 @@ mod tests {
             id: node_id(1),
             visibility: crate::ast::Visibility::Public,
             name: Symbol::new("Option"),
+            disambiguator: 0,
             type_params: vec![crate::ast::TypeParamDecl {
                 id: node_id(2),
                 name: Symbol::new("a"),

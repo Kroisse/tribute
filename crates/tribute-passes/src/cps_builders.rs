@@ -2,8 +2,8 @@
 //! share.
 
 use rustc_hash::FxHashSet as HashSet;
-use tribute_core::calling_convention::cps_closure_function_type;
-use tribute_core::{CallingConvention, set_calling_convention};
+use tribute_ir::calling_convention::cps_closure_function_type;
+use tribute_ir::calling_convention::{CallingConvention, ConventionBearing};
 use tribute_ir::dialect::{closure, tribute_control};
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
@@ -68,7 +68,7 @@ pub(crate) fn closure_over(
         .results(closure_type)
         .regions(region)
         .build(ctx, location);
-    set_calling_convention(ctx, lambda.op_ref(), convention);
+    lambda.set_calling_convention(ctx, convention);
     lambda
 }
 
@@ -114,7 +114,7 @@ pub(crate) fn emit_cps_tail_call_indirect(
     let tail = func::TailCallIndirect::operands(callee, args)
         .signature(signature)
         .build(ctx, location);
-    set_calling_convention(ctx, tail.op_ref(), CallingConvention::Cps);
+    tail.set_calling_convention(ctx, CallingConvention::Cps);
     ctx.push_op(block, tail.op_ref());
     Ok(tail.op_ref())
 }

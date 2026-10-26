@@ -12,9 +12,9 @@ use super::super::{
 use super::*;
 
 const MODULE: &str = r#"core.module @test {
-  !open = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}, tribute.calling_convention = 2}>
-  !closed = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {instances = [@A, @B]}, tribute.calling_convention = 2}>
-  !applied = tribute_control.func_sig<(!closed, core.i32) -> core.i32, {ability_row = {instances = [@A, @B]}, tribute.calling_convention = 2}>
+  !open = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}, tribute.calling_convention = "cps"}>
+  !closed = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {instances = [@A, @B]}, tribute.calling_convention = "cps"}>
+  !applied = tribute_control.func_sig<(!closed, core.i32) -> core.i32, {ability_row = {instances = [@A, @B]}, tribute.calling_convention = "cps"}>
 
   ability.decl {sym_name = "A"} {
     ability.operation {kind = "fn", op_name = "get", param_types = [], result_type = core.i32}
@@ -454,7 +454,7 @@ fn a_function_reference_may_widen_the_row_of_its_target() {
     );
     let narrowed = input.replace(
         "!applied = tribute_control.func_sig<(!closed, core.i32) -> core.i32, {ability_row = {instances = [@A, @B]}",
-        "!narrow = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {instances = [@A]}, tribute.calling_convention = 2}>\n  !applied = tribute_control.func_sig<(!narrow, core.i32) -> core.i32, {ability_row = {instances = [@A, @B]}",
+        "!narrow = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {instances = [@A]}, tribute.calling_convention = \"cps\"}>\n  !applied = tribute_control.func_sig<(!narrow, core.i32) -> core.i32, {ability_row = {instances = [@A, @B]}",
     );
     let (ctx, module) = parse(&narrowed);
     let result = validate(&ctx, module);
@@ -462,8 +462,8 @@ fn a_function_reference_may_widen_the_row_of_its_target() {
 
     assert_rejects(
         &narrowed.replace(
-            "-> core.i32, {ability_row = {instances = [@A, @B]}, tribute.calling_convention = 2}>\n\n",
-            "-> core.i32, {ability_row = {instances = [@B]}, tribute.calling_convention = 2}>\n\n",
+            "-> core.i32, {ability_row = {instances = [@A, @B]}, tribute.calling_convention = \"cps\"}>\n\n",
+            "-> core.i32, {ability_row = {instances = [@B]}, tribute.calling_convention = \"cps\"}>\n\n",
         ),
         "func_ref result source signature does not match its target",
     );
@@ -482,8 +482,8 @@ fn row_inclusion_counts_instances_and_keeps_the_tail() {
 }
 
 const LOCALS: &str = r#"core.module @test {
-  !step = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 1}, tribute.calling_convention = 0}>
-  !step0 = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}, tribute.calling_convention = 0}>
+  !step = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 1}, tribute.calling_convention = "direct"}>
+  !step0 = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}, tribute.calling_convention = "direct"}>
   ability.decl {sym_name = "A"} {
   }
   tribute_control.func @f['a0, local 'a1](%x: core.i32) -> core.i32 row(| 'a0) convention(direct) {
@@ -526,7 +526,7 @@ fn instantiate_substitutes_only_the_quantified_binders() {
     // The lambda's own binder becomes `@A`; the enclosing `'a0` stays.
     let input = locals("{instances = [@A]}", "!closed").replace(
         "  ability.decl",
-        "  !closed = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {instances = [@A]}, tribute.calling_convention = 0}>\n  ability.decl",
+        "  !closed = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {instances = [@A]}, tribute.calling_convention = \"direct\"}>\n  ability.decl",
     );
     let (ctx, module) = parse(&input);
     let result = validate(&ctx, module);

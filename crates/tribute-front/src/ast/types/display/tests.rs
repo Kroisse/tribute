@@ -76,20 +76,6 @@ fn examples(db: &dyn salsa::Database) -> Vec<(Type<'_>, &'static str)> {
             "fn(Int, Bool) -> Int",
         ),
         (
-            TypeKind::App {
-                ctor: int,
-                args: vec![],
-            },
-            "Int()",
-        ),
-        (
-            TypeKind::App {
-                ctor: int,
-                args: vec![bool_ty],
-            },
-            "Int(Bool)",
-        ),
-        (
             TypeKind::Continuation {
                 arg: int,
                 result: bool_ty,
@@ -120,17 +106,13 @@ fn ability_row_display_preserves_distinct_identities(db: &salsa::DatabaseImpl) {
     let int = Type::new(db, TypeKind::Int);
     let pure = AbilityRow::pure(db);
     let open = AbilityRow::open(db, RowVar { id: 987 });
-    let named = |declaration| TypeKind::Named {
-        id: TypeDefId::source(
-            db,
-            trunk_ir::SymbolPath::new(["T"]),
-            NodeId::from_raw(declaration),
-        ),
+    let named = |module| TypeKind::Named {
+        id: TypeDefId::source(db, trunk_ir::SymbolPath::new([module, "T"])),
         name: Symbol::new("T"),
         args: vec![],
     };
     let pairs = [
-        (named(1), named(2)),
+        (named("A"), named("B")),
         (
             TypeKind::UniVar {
                 id: UniVarId::new(db, UniVarSource::Anonymous(1), 0),

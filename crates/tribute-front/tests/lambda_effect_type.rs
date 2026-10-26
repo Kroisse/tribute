@@ -8,9 +8,7 @@
 
 mod common;
 
-use self::common::{
-    ast_pipeline_error_messages, run_ast_pipeline_with_ir, run_ast_pipeline_with_specialized_ir,
-};
+use self::common::{ast_pipeline_error_messages, run_ast_pipeline_with_ir};
 use insta::assert_snapshot;
 use salsa_test_macros::salsa_test;
 use tribute_front::SourceCst;
@@ -28,8 +26,8 @@ fn test_pure_lambda_no_effect(db: &salsa::DatabaseImpl) {
         r#"
 fn apply(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(x) }
 
-fn main() -> Int {
-    apply(fn(n) { n + 1 }, 41)
+fn answer() -> Int {
+    apply(fn(n) { n + +1 }, +41)
 }
 "#,
     );
@@ -47,9 +45,9 @@ fn test_pure_lambda_with_capture_no_effect(db: &salsa::DatabaseImpl) {
         r#"
 fn apply(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(x) }
 
-fn main() -> Int {
-    let offset = 10
-    apply(fn(n) { n + offset }, 32)
+fn answer() -> Int {
+    let offset = +10
+    apply(fn(n) { n + offset }, +32)
 }
 "#,
     );
@@ -80,12 +78,12 @@ ability State(s) {
 fn run_with_state(f: fn() ->{State(Int)} Int) -> Int {
     handle f() {
         do result { result }
-        op State::get() { resume 42 }
+        op State::get() { resume +42 }
         op State::set(v) { resume Nil }
     }
 }
 
-fn main() -> Int {
+fn read_state() -> Int {
     run_with_state(fn() { State::get() })
 }
 "#,
@@ -112,19 +110,19 @@ ability State(s) {
 
 fn counter() ->{State(Int)} Int {
     let n = State::get()
-    State::set(n + 1)
+    State::set(n + +1)
     n
 }
 
 fn run_with_state(f: fn() ->{State(Int)} Int) -> Int {
     handle f() {
         do result { result }
-        op State::get() { resume 0 }
+        op State::get() { resume +0 }
         op State::set(v) { resume Nil }
     }
 }
 
-fn main() -> Int {
+fn read_state() -> Int {
     run_with_state(fn() { counter() })
 }
 "#,
@@ -149,15 +147,15 @@ ability State(s) {
 fn run_with_state(f: fn() ->{State(Int)} Int) -> Int {
     handle f() {
         do result { result }
-        op State::get() { resume 0 }
+        op State::get() { resume +0 }
         op State::set(v) { resume Nil }
     }
 }
 
-fn main() -> Int {
+fn read_state() -> Int {
     run_with_state(fn() {
         let n = State::get()
-        State::set(n + 1)
+        State::set(n + +1)
         n
     })
 }
@@ -229,7 +227,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     }
 }
 
-fn main() -> Int { 0 }
+fn zero() -> Int { +0 }
 "#,
     );
 
@@ -251,7 +249,7 @@ ability State(s) {
 
 fn counter() ->{State(Int)} Int {
     let n = State::get()
-    State::set(n + 1)
+    State::set(n + +1)
     n
 }
 
@@ -263,12 +261,12 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     }
 }
 
-fn main() -> Int {
+fn count_three() -> Int {
     run_state(fn() {
         counter()
         counter()
         counter()
-    }, 0)
+    }, +0)
 }
 "#,
     );
@@ -297,13 +295,13 @@ ability State(s) {
 fn run_with_state(f: fn() ->{State(Int)} Int) -> Int {
     handle f() {
         do result { result }
-        op State::get() { resume 99 }
+        op State::get() { resume +99 }
     }
 }
 
 fn apply_thunk(f: fn() ->{e} Int) ->{e} Int { f() }
 
-fn main() -> Int {
+fn read_state() -> Int {
     apply_thunk(fn() {
         run_with_state(fn() { State::get() })
     })
@@ -342,7 +340,7 @@ fn with_state(f: fn() ->{e, State(s)} a, init: s) ->{e} a {
     }
 }
 
-fn main() -> Nat {
+fn read_state() -> Nat {
     with_state(fn() {
         State::get()
     }, 42)
@@ -352,61 +350,4 @@ fn main() -> Nat {
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
     assert_snapshot!(ir_text);
-}
-
-/// Contextual generic rows must retain one solved logical signature regardless
-/// of harmless body wrapping.  In particular, lowering must not recover a
-/// lambda result by recognizing a perform-shaped AST body.
-#[salsa_test]
-fn test_generic_effect_lambda_wrappers_share_signature(db: &salsa::DatabaseImpl) {
-    let source = SourceCst::from_source_str(
-        db,
-        "test.trb",
-        r#"
-ability State(s) {
-    op get() -> s
-}
-
-fn with_state(f: fn() ->{e, State(s)} a, init: s) ->{e} a {
-    handle f() {
-        do result { result }
-        op State::get() { with_state(fn() { resume init }, init) }
-    }
-}
-
-fn main() -> Nat {
-    let direct = with_state(fn() { State::get() }, 42)
-    let empty_block = with_state(fn() { { State::get() } }, 42)
-    let let_wrapped = with_state(fn() {
-        let value = State::get()
-        value
-    }, 42)
-    let case_wrapped = with_state(fn() {
-        case State::get() {
-            value -> value
-        }
-    }, 42)
-    direct + empty_block + let_wrapped + case_wrapped
-}
-"#,
-    );
-
-    let ir_text = run_ast_pipeline_with_specialized_ir(db, source);
-    assert_eq!(
-        ir_text
-            .match_indices(
-                "tribute_control.lambda() -> core.i32 row(@ability_2_5_State_3_nat | 'a0) convention(cps)"
-            )
-            .count(),
-        4,
-        "every direct or wrapped generic State operation lambda must retain the same solved signature:\n{ir_text}"
-    );
-    let main = ir_text
-        .split("tribute_control.func @main")
-        .nth(1)
-        .expect("fixture must lower root main");
-    assert!(
-        !main.contains("tribute_control.lambda() -> tribute_rt.anyref"),
-        "the four main lambdas must not erase their result:\n{main}"
-    );
 }

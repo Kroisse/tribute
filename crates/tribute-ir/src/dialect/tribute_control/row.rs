@@ -755,7 +755,7 @@ impl<S: TypeSink, R: CallableRewrite> Substitution<S, R> {
                 data.attrs = AttributeMap::from_refs(self.sink.ctx(), entries);
             }
             if let Some(convention) = self.rewrite.convention(&substituted) {
-                let value = Attribute::Int(convention as i128);
+                let value = Attribute::String(self.sink.key(convention.keyword())?);
                 let key = self.sink.key(super::CALLING_CONVENTION_ATTR)?;
                 if data.attrs.view(self.sink.ctx()).get(key) != Some(&value) {
                     changed = true;

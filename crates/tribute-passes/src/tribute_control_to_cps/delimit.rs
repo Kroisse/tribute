@@ -23,7 +23,7 @@ impl Converter<'_> {
         if tribute_control::CallIndirect::matches(self.ctx, source) {
             let callee = self.ctx.value_ty(self.ctx.op_operands(source)[0]);
             return tribute_control::func_sig_convention(self.ctx, callee)
-                == Some(tribute_control::CallingConvention::Cps);
+                == Some(CallingConvention::Cps);
         }
         false
     }

@@ -2,12 +2,14 @@
 
 use std::borrow::Cow;
 
+use rustc_hash::FxHashMap as HashMap;
+
 use ropey::Rope;
 use salsa::Accumulator;
 use tree_sitter::Node;
 use trunk_ir::{Span, Symbol, SymbolPath};
 
-use crate::ast::{NodeId, SpanMapBuilder};
+use crate::ast::{NodeId, SpanMapBuilder, UnresolvedName, owner_hash};
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 
 /// Context for lowering CST to AST.
@@ -20,6 +22,14 @@ pub struct AstLoweringCtx<'db> {
     /// Salsa database for accumulating diagnostics directly.
     /// `None` in test-only paths where diagnostics are discarded.
     db: Option<&'db dyn salsa::Database>,
+    /// The inline modules around the items being lowered.
+    module_path: Vec<Symbol>,
+    /// The item that owns the nodes being lowered.
+    owner: u64,
+    /// How many nodes each owner has numbered so far.
+    next_index: HashMap<u64, u32>,
+    /// How many items of each kind and name each module has entered so far.
+    item_counts: HashMap<(u64, &'static str, String), u32>,
 }
 
 impl<'db> AstLoweringCtx<'db> {
@@ -34,6 +44,10 @@ impl<'db> AstLoweringCtx<'db> {
             source_hash,
             span_builder: SpanMapBuilder::new(),
             db: None,
+            module_path: Vec::new(),
+            owner: module_owner(&[]),
+            next_index: HashMap::default(),
+            item_counts: HashMap::default(),
         }
     }
 
@@ -42,23 +56,54 @@ impl<'db> AstLoweringCtx<'db> {
     /// Diagnostics are accumulated directly into Salsa via the database.
     pub fn with_db(db: &'db dyn salsa::Database, source: Rope, source_hash: u64) -> Self {
         Self {
-            source,
-            source_hash,
-            span_builder: SpanMapBuilder::new(),
             db: Some(db),
+            ..Self::new(source, source_hash)
         }
     }
 
-    /// Generate a NodeId from a CST node and record its span.
-    ///
-    /// Uses the CST node's `id()` directly, enabling reverse lookup:
-    /// given a byte offset, Tree-sitter can find the CST node, and if
-    /// that node's ID is in the SpanMap, it corresponds to an AST node.
+    /// Generate the NodeId of the next node of the current owner and record
+    /// the CST node's span for it.
     pub fn fresh_id_with_span(&mut self, node: &Node) -> NodeId {
-        let id = NodeId::from_cst(node, self.source_hash);
+        let next = self.next_index.entry(self.owner).or_default();
+        let id = NodeId::new(self.source_hash, self.owner, *next);
+        *next += 1;
         let span = Span::new(node.start_byte(), node.end_byte());
         self.span_builder.insert(id, span);
         id
+    }
+
+    /// Lower the body of the inline module `name` with its module-level nodes
+    /// owned by that module.
+    pub fn in_module<T>(&mut self, name: Symbol, lower: impl FnOnce(&mut Self) -> T) -> T {
+        self.module_path.push(name);
+        let outer = std::mem::replace(&mut self.owner, module_owner(&self.module_path));
+        let lowered = lower(self);
+        self.owner = outer;
+        self.module_path.pop();
+        lowered
+    }
+
+    /// Lower the item of `kind` named `name` with its nodes owned by that
+    /// item. Items of one kind and name in one module are told apart by how
+    /// many of them precede the item.
+    pub fn in_item<T>(
+        &mut self,
+        kind: &'static str,
+        name: &str,
+        lower: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let module = module_owner(&self.module_path);
+        let count = self
+            .item_counts
+            .entry((module, kind, name.to_owned()))
+            .or_default();
+        let occurrence = *count;
+        *count += 1;
+        let item = owner_hash((path_text(&self.module_path), kind, name, occurrence));
+        let outer = std::mem::replace(&mut self.owner, item);
+        let lowered = lower(self);
+        self.owner = outer;
+        lowered
     }
 
     /// Emit a diagnostic error.
@@ -121,7 +166,11 @@ impl<'db> AstLoweringCtx<'db> {
             .filter(|child| {
                 matches!(
                     child.kind(),
-                    "path_segment" | "path_keyword" | "identifier" | "type_identifier"
+                    "path_root"
+                        | "path_segment"
+                        | "path_keyword"
+                        | "identifier"
+                        | "type_identifier"
                 )
             })
             .map(|child| self.node_symbol(&child))
@@ -138,8 +187,33 @@ impl<'db> AstLoweringCtx<'db> {
         SymbolPath::new([self.node_symbol(node)])
     }
 
+    /// The constructor a `type_path` or an `implicit_constructor` node names.
+    pub fn constructor_name(&mut self, node: &Node) -> UnresolvedName {
+        let path = self.node_path(node);
+        let id = self.fresh_id_with_span(node);
+        if node.kind() == "implicit_constructor" {
+            let name = path.leaf().expect("a constructor has a name").clone();
+            UnresolvedName::implicit(name, id)
+        } else {
+            UnresolvedName::new(path, id)
+        }
+    }
+
     /// Get a Symbol from a node's text, without the `r#` of raw identifiers.
     pub fn node_symbol(&self, node: &Node) -> Symbol {
+        if node.kind() == "path_root" {
+            return Symbol::new(crate::keywords::PATH_ROOT);
+        }
         Symbol::new(&crate::keywords::unraw(&self.node_text(node)))
     }
+}
+
+/// The owner of the module-level nodes of the module at `path`.
+fn module_owner(path: &[Symbol]) -> u64 {
+    owner_hash(("mod", path_text(path)))
+}
+
+/// The text of a module path, which owner hashes are computed from.
+fn path_text(path: &[Symbol]) -> Vec<&str> {
+    path.iter().map(Symbol::as_str).collect()
 }

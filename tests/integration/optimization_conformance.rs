@@ -29,13 +29,14 @@ const TEMPORARY_FIELD_BORROWS: &str =
 const TEMPORARY_FIELD_BORROWS_EFFECTS: &str =
     include_str!("../fixtures/optimizations/temporary_field_borrows_effects.trb");
 const BOXED_DYNAMIC_PRIMITIVES: &str = r#"
-extern "C" fn __tribute_print_int(value: Int) -> Nil
+use std::io::{Io, print_line}
+
 extern "C" fn __tribute_print_float(value: Float) -> Nil
 
 fn identity(value: a) -> a { value }
 
-fn main() -> Nil {
-    __tribute_print_int(identity(+7))
+fn main() ->{Io} Nil {
+    print_line(identity(+7).to_string)
     __tribute_print_float(identity(3.5))
 }
 "#;
@@ -99,42 +100,98 @@ fn focused_rc_ops(ir: &str) -> String {
     output
 }
 
-fn generated_rtti_field_releases(ir: &str) -> String {
-    let mut function = None;
-    let mut count = 0;
-    let mut releases = String::new();
-    for line in ir.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("clif.func ") {
-            if let Some(function) = function.take()
-                && count > 0
-            {
-                if !releases.is_empty() {
-                    releases.push(',');
-                }
-                write!(&mut releases, "{function}={count}")
-                    .expect("writing to a String cannot fail");
+/// Whether a `clif.func` belongs to the fixture rather than to the prelude
+/// (`std::`), the generated native entry `main`, or the RTTI releases.
+fn is_fixture_function(symbol: &str) -> bool {
+    symbol != "@main" && !symbol.starts_with("@std::") && !symbol.starts_with("@__tribute_release_")
+}
+
+/// [`focused_rc_ops`] restricted to the fixture's own functions, so the
+/// prelude code that formats the printed result does not enter the
+/// comparison.
+fn fixture_rc_ops(ir: &str) -> String {
+    let mut keep = false;
+    let mut output = String::new();
+    for line in focused_rc_ops(ir).lines() {
+        if !line.starts_with("tribute_rt.") {
+            keep = is_fixture_function(line.trim_end_matches(':'));
+        }
+        if keep {
+            writeln!(&mut output, "{line}").expect("writing to a String cannot fail");
+        }
+    }
+    output.truncate(output.len().saturating_sub(1));
+    output
+}
+
+/// For each distinct RTTI index that the fixture's own functions store in an
+/// allocation header, the number of fields its release function releases,
+/// sorted. Generated numbering is not a contract.
+fn fixture_allocation_field_releases(ir: &str) -> Vec<usize> {
+    use std::collections::BTreeSet;
+    use std::ops::ControlFlow;
+    use tribute_ir::dialect::tribute_rt;
+    use trunk_ir::IrContext;
+    use trunk_ir::ValueDef;
+    use trunk_ir::dialect::clif;
+    use trunk_ir::ops::DialectOp;
+    use trunk_ir::walk::{WalkAction, walk_op};
+
+    let mut ctx = IrContext::new();
+    let module = trunk_ir::parser::parse_module(&mut ctx, ir).expect("native stage IR round trip");
+    let mut functions = Vec::new();
+    let _ = walk_op::<()>(&ctx, module, &mut |op| {
+        if let Ok(function) = clif::Func::from_op(&ctx, op) {
+            functions.push(function);
+        }
+        ControlFlow::Continue(WalkAction::Advance)
+    });
+    let mut indices = BTreeSet::new();
+    for function in &functions {
+        if !is_fixture_function(&format!("@{}", function.sym_name(&ctx))) {
+            continue;
+        }
+        let mut ops = Vec::new();
+        let _ = walk_op::<()>(&ctx, function.op_ref(), &mut |op| {
+            ops.push(op);
+            ControlFlow::Continue(WalkAction::Advance)
+        });
+        for &op in &ops {
+            let Ok(call) = clif::Call::from_op(&ctx, op) else {
+                continue;
+            };
+            if call.callee(&ctx) != ["__tribute_alloc"] {
+                continue;
             }
-            count = 0;
-            // The reserved indices have builtin releases in every module.
-            function = clif_func_symbol(trimmed).filter(|symbol| {
-                symbol
-                    .strip_prefix("@__tribute_release_")
-                    .and_then(|index| index.parse::<u32>().ok())
-                    .is_some_and(|index| index >= 7)
+            let allocation = ctx.op_results(op)[0];
+            let header = ops
+                .iter()
+                .filter_map(|&op| clif::Store::from_op(&ctx, op).ok())
+                .find(|store| store.addr(&ctx) == allocation && store.offset(&ctx) == 4)
+                .expect("allocation RTTI header");
+            let ValueDef::OpResult(index, _) = ctx.value_def(header.value(&ctx)) else {
+                panic!("constant RTTI index");
+            };
+            indices.insert(clif::Iconst::from_op(&ctx, index).unwrap().value(&ctx));
+        }
+    }
+    let mut releases: Vec<usize> = indices
+        .into_iter()
+        .map(|index| {
+            let symbol = format!("{}{index}", tribute_passes::native::rtti::RELEASE_FN_PREFIX);
+            let release = functions
+                .iter()
+                .find(|function| function.sym_name(&ctx) == symbol.as_str())
+                .unwrap_or_else(|| panic!("missing release function for RTTI index {index}"));
+            let mut count = 0;
+            let _ = walk_op::<()>(&ctx, release.op_ref(), &mut |op| {
+                count += usize::from(tribute_rt::Release::matches(&ctx, op));
+                ControlFlow::Continue(WalkAction::Advance)
             });
-        } else if function.is_some() && trimmed.contains("tribute_rt.release") {
-            count += 1;
-        }
-    }
-    if let Some(function) = function
-        && count > 0
-    {
-        if !releases.is_empty() {
-            releases.push(',');
-        }
-        write!(&mut releases, "{function}={count}").expect("writing to a String cannot fail");
-    }
+            count
+        })
+        .collect();
+    releases.sort();
     releases
 }
 
@@ -531,12 +588,12 @@ fn trusted_ownership_forwarding_has_focused_ir(db: &salsa::DatabaseImpl) {
         ),
     )
     .expect("elided forwarding IR should be available");
-    // The fixture allocates only `Boxed(Nat)`, whose descriptor has no
-    // managed field to release.
-    assert_eq!(generated_rtti_field_releases(preserved), "");
-    assert_eq!(generated_rtti_field_releases(elided), "");
-    let preserved = focused_rc_ops(preserved);
-    let elided = focused_rc_ops(elided);
+    // The fixture's own functions allocate only `Boxed(Nat)`, whose
+    // descriptor has no managed field to release.
+    assert_eq!(fixture_allocation_field_releases(preserved), [0]);
+    assert_eq!(fixture_allocation_field_releases(elided), [0]);
+    let preserved = fixture_rc_ops(preserved);
+    let elided = fixture_rc_ops(elided);
     assert_eq!(
         preserved, elided,
         "physical CPS functions are conservatively consumed; typed-plan policy coverage lives with the pre-erasure action planner"
@@ -777,15 +834,15 @@ fn borrowed_parameters_have_focused_before_after_ir(db: &salsa::DatabaseImpl) {
     )
     .expect("preserved parameter RC IR should be available");
 
-    // The fixture allocates only `Boxed(Nat)`, whose descriptor has no
-    // managed field to release.
-    assert_eq!(generated_rtti_field_releases(before), "");
-    assert_eq!(generated_rtti_field_releases(after), "");
-    assert_eq!(generated_rtti_field_releases(preserved_after), "");
+    // The fixture's own functions allocate only `Boxed(Nat)`, whose
+    // descriptor has no managed field to release.
+    assert_eq!(fixture_allocation_field_releases(before), [0]);
+    assert_eq!(fixture_allocation_field_releases(after), [0]);
+    assert_eq!(fixture_allocation_field_releases(preserved_after), [0]);
 
-    let before = focused_rc_ops(before);
-    let after = focused_rc_ops(after);
-    let preserved_after = focused_rc_ops(preserved_after);
+    let before = fixture_rc_ops(before);
+    let after = fixture_rc_ops(after);
+    let preserved_after = fixture_rc_ops(preserved_after);
 
     assert_eq!(before, preserved_after);
     assert_eq!(before, after, "recursive summaries must fail closed");
@@ -819,21 +876,14 @@ fn temporary_field_borrows_have_focused_before_after_ir(db: &salsa::DatabaseImpl
         temporary_borrow_options(TemporaryBorrowPolicy::Preserve),
     )
     .expect("preserved temporary-borrow stage IR should be available");
-    assert_eq!(
-        generated_rtti_field_releases(before),
-        "@__tribute_release_8=1"
-    );
-    assert_eq!(
-        generated_rtti_field_releases(after),
-        "@__tribute_release_8=1"
-    );
-    assert_eq!(
-        generated_rtti_field_releases(preserved_after),
-        "@__tribute_release_8=1"
-    );
-    let before = focused_rc_ops(before);
-    let after = focused_rc_ops(after);
-    let preserved_after = focused_rc_ops(preserved_after);
+    // `Value(Nat)` releases nothing and `Wrapped(Inner)` releases its one
+    // managed field.
+    assert_eq!(fixture_allocation_field_releases(before), [0, 1]);
+    assert_eq!(fixture_allocation_field_releases(after), [0, 1]);
+    assert_eq!(fixture_allocation_field_releases(preserved_after), [0, 1]);
+    let before = fixture_rc_ops(before);
+    let after = fixture_rc_ops(after);
+    let preserved_after = fixture_rc_ops(preserved_after);
     assert_eq!(before, preserved_after);
     let before_retain = before.matches("tribute_rt.retain").count();
     let before_release = before.matches("tribute_rt.release").count();

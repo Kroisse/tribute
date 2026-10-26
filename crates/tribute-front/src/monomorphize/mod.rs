@@ -7,6 +7,7 @@ pub(crate) use instance::{
 pub mod mangle;
 mod nominal;
 mod nominal_index;
+mod recursion;
 mod rewrite;
 mod validate;
 pub(crate) use collect::is_concrete_type;
@@ -19,54 +20,181 @@ use rustc_hash::FxHashSet as HashSet;
 use trunk_ir::{Symbol, SymbolPath};
 
 use self::instance::InstanceKey;
+use crate::SortedMap;
 use crate::ast::{
     AbilityRow, CtorId, Decl, DeclTable, FuncDefId, NodeId, Type, TypeScheme, TypedRef,
 };
 use crate::typeck::subst::{BoundVarOutOfBounds, substitute_ability_row, substitute_bound_vars};
 use crate::typeck::{
-    EvidenceStep, InstantiatedHandlerOperation, InstantiatedPerformOperation, LambdaSignature,
+    ConstructorTypeMetadata, DeclarationTypeMetadata, ExpressionTypeMetadata,
+    InstantiatedHandlerOperation, InstantiatedPerformOperation, LambdaSignature, TypeCheckOutput,
 };
 
 const MAX_TRANSITIVE_SPECIALIZATION_ROUNDS: usize = 64;
 
-/// Exact typechecking metadata keyed by source NodeId.
-pub struct MonomorphizeMetadata<'db> {
-    pub constructor_types: HashMap<CtorId<'db>, TypeScheme<'db>>,
-    pub specialized_enum_variants: HashMap<NodeId, TypeScheme<'db>>,
-    pub node_types: HashMap<NodeId, Type<'db>>,
-    pub function_instances: HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
-    pub local_instances: HashMap<NodeId, crate::typeck::LocalCallableInstance<'db>>,
-    pub evidence_plans: HashMap<NodeId, Vec<EvidenceStep<'db>>>,
-    pub handler_operations: HashMap<NodeId, InstantiatedHandlerOperation<'db>>,
-    pub perform_operations: HashMap<NodeId, InstantiatedPerformOperation<'db>>,
-    pub lambda_signatures: HashMap<NodeId, LambdaSignature<'db>>,
-    pub exhaustive_cases: HashSet<NodeId>,
-    /// Exact base identities transported to generated generic extern declarations.
-    ///
-    /// This is specialization metadata, not source-provenance or ownership data.
-    pub compiler_intrinsics: HashMap<NodeId, Symbol>,
+/// What specialization reads: one checked module, with the declarations of
+/// the package it depends on for lookup and, when merged, that package's
+/// bodies and per-expression metadata ahead of its own
+/// (`new-plans/implementation.md`, "프론트엔드 단계 경계와 정보 소유권").
+pub struct SpecializationInput<'db> {
+    module: DeclTable<TypedRef<'db>>,
+    declarations: DeclarationTypeMetadata<'db>,
+    expressions: ExpressionTypeMetadata<'db>,
+    compiler_intrinsics: SortedMap<NodeId, Symbol>,
 }
 
-/// Result of monomorphization: updated module + function types.
-pub struct MonomorphizeResult<'db> {
+impl<'db> SpecializationInput<'db> {
+    /// The checked module, with the declarations of `dependency` under its
+    /// own.
+    pub fn new(
+        db: &'db dyn salsa::Database,
+        checked: TypeCheckOutput<'db>,
+        dependency: Option<TypeCheckOutput<'db>>,
+    ) -> Self {
+        let declarations = match dependency {
+            Some(dependency) => checked
+                .declarations(db)
+                .after_dependency(dependency.declarations(db)),
+            None => checked.declarations(db).clone(),
+        };
+        Self {
+            module: checked.module(db).clone(),
+            declarations,
+            expressions: checked.expression_types(db).clone(),
+            compiler_intrinsics: SortedMap::default(),
+        }
+    }
+
+    /// Specialize `dependency`'s bodies too: its declarations come first in
+    /// the module, and its per-expression metadata under this module's.
+    pub fn merge_bodies(
+        mut self,
+        db: &'db dyn salsa::Database,
+        dependency: TypeCheckOutput<'db>,
+    ) -> Self {
+        let mut entries = dependency.module(db).entries.clone();
+        entries.append(&mut self.module.entries);
+        self.module.entries = entries;
+        self.expressions = self
+            .expressions
+            .after_dependency(dependency.expression_types(db));
+        self
+    }
+
+    /// Carry the compiler intrinsic identities of the module's declarations.
+    pub fn with_compiler_intrinsics(
+        mut self,
+        intrinsics: impl IntoIterator<Item = (NodeId, Symbol)>,
+    ) -> Self {
+        self.compiler_intrinsics = intrinsics.into_iter().collect();
+        self
+    }
+
+    /// The declaration table specialization starts from.
+    pub fn module(&self) -> &DeclTable<TypedRef<'db>> {
+        &self.module
+    }
+
+    pub fn declarations(&self) -> &DeclarationTypeMetadata<'db> {
+        &self.declarations
+    }
+}
+
+/// The specialization result, the only input the lowering input is built
+/// from: the declaration table with the concrete instances added, the
+/// metadata substituted with it, and the compiler intrinsic identities.
+#[salsa::tracked]
+pub struct SpecializationOutput<'db> {
     pub module: DeclTable<TypedRef<'db>>,
-    pub function_types: Vec<(SymbolPath, TypeScheme<'db>)>,
-    pub metadata: MonomorphizeMetadata<'db>,
+    pub declarations: DeclarationTypeMetadata<'db>,
+    pub expression_types: ExpressionTypeMetadata<'db>,
+    /// Exact base identities transported to generated generic extern
+    /// declarations. This is specialization metadata, not source-provenance
+    /// or ownership data.
+    pub compiler_intrinsics: SortedMap<NodeId, Symbol>,
 }
 
-/// Run monomorphization on a typed module.
-///
-/// This is the main entry point that:
-/// 1. Collects all generic function/type instantiations
-/// 2. Generates specialized copies with concrete types
-/// 3. Rewrites call sites and type references to use specialized versions
-/// 4. Appends specialized functions/types to the module
+/// The metadata specialization reads and extends.
+struct MonomorphizeMetadata<'db> {
+    constructor_types: ConstructorTypeMetadata<'db>,
+    expressions: ExpressionTypeMetadata<'db>,
+    compiler_intrinsics: SortedMap<NodeId, Symbol>,
+}
+
+/// Specialize `input`: collect every generic function and type
+/// instantiation it reaches, generate concrete copies, rewrite call sites
+/// and type references to them, and append them to the module.
 pub fn monomorphize_functions<'db>(
+    db: &'db dyn salsa::Database,
+    input: SpecializationInput<'db>,
+) -> Result<SpecializationOutput<'db>, Vec<InstanceError>> {
+    let SpecializationInput {
+        module,
+        declarations,
+        expressions,
+        compiler_intrinsics,
+    } = input;
+    let DeclarationTypeMetadata {
+        function_types,
+        constructor_types,
+        ability_definitions,
+        well_known_types,
+    } = declarations;
+    let Monomorphized {
+        module,
+        function_types,
+        metadata,
+    } = monomorphize(
+        db,
+        module,
+        function_types.into_iter().collect(),
+        MonomorphizeMetadata {
+            constructor_types,
+            expressions,
+            compiler_intrinsics,
+        },
+    )?;
+    Ok(SpecializationOutput::new(
+        db,
+        module,
+        DeclarationTypeMetadata {
+            function_types,
+            constructor_types: metadata.constructor_types,
+            ability_definitions,
+            well_known_types,
+        },
+        metadata.expressions,
+        metadata.compiler_intrinsics,
+    ))
+}
+
+/// The specialized module, with every function's scheme and the metadata
+/// substituted with it.
+struct Monomorphized<'db> {
+    module: DeclTable<TypedRef<'db>>,
+    function_types: Vec<(SymbolPath, TypeScheme<'db>)>,
+    metadata: MonomorphizeMetadata<'db>,
+}
+
+fn monomorphize<'db>(
     db: &'db dyn salsa::Database,
     module: DeclTable<TypedRef<'db>>,
     function_types: HashMap<SymbolPath, TypeScheme<'db>>,
     mut metadata: MonomorphizeMetadata<'db>,
-) -> Result<MonomorphizeResult<'db>, Vec<InstanceError>> {
+) -> Result<Monomorphized<'db>, Vec<InstanceError>> {
+    // Cloning finds exhaustive cases by binary search.
+    metadata.expressions.exhaustive_cases.sort();
+    metadata.expressions.exhaustive_cases.dedup();
+    let mut errors = recursion::check(
+        db,
+        &module,
+        &function_types,
+        &metadata.expressions.function_instances,
+    );
+    if !errors.is_empty() {
+        errors.sort_by_key(|error| error.node);
+        return Err(errors);
+    }
     let errors = validate::validate(db, &module, &function_types, &metadata);
     if !errors.is_empty() {
         return Err(errors);
@@ -91,7 +219,7 @@ pub fn monomorphize_functions<'db>(
             db,
             &module,
             &source_function_types,
-            &metadata.function_instances,
+            &metadata.expressions.function_instances,
         );
         let mut new_instantiations: HashMap<_, HashSet<_>> = HashMap::default();
         for (func_id, discovered) in discovered {
@@ -121,15 +249,22 @@ pub fn monomorphize_functions<'db>(
             metadata_origins,
             compiler_intrinsic_specializations,
         } = specializations;
+        let mut clones = MetadataClones::default();
         for (key, origins) in metadata_origins {
-            specialize_metadata(db, &mut metadata, &key, &origins);
+            clones.clone_instance(db, &metadata.expressions, &key, &origins);
         }
+        clones.add_to(&mut metadata.expressions);
         metadata
             .compiler_intrinsics
             .extend(compiler_intrinsic_specializations);
 
         let rewrite_map = build_rewrite_map(db, &instantiations, &source_function_types);
-        rewrite::rewrite_module(db, &mut module, &rewrite_map, &metadata.function_instances);
+        rewrite::rewrite_module(
+            db,
+            &mut module,
+            &rewrite_map,
+            &metadata.expressions.function_instances,
+        );
         let mut specialized_decls: Vec<_> = specialized_declarations
             .into_iter()
             .map(|(placement, declaration)| placement.place(Decl::Function(declaration)))
@@ -138,7 +273,7 @@ pub fn monomorphize_functions<'db>(
             db,
             &mut specialized_decls,
             &rewrite_map,
-            &metadata.function_instances,
+            &metadata.expressions.function_instances,
         );
 
         module.entries.extend(specialized_decls);
@@ -164,12 +299,24 @@ pub fn monomorphize_functions<'db>(
     for scheme in fn_types_vec
         .iter()
         .map(|(_, scheme)| *scheme)
-        .chain(metadata.constructor_types.values().copied())
-        .chain(metadata.specialized_enum_variants.values().copied())
+        .chain(
+            metadata
+                .constructor_types
+                .schemes
+                .iter()
+                .map(|(_, scheme)| *scheme),
+        )
+        .chain(
+            metadata
+                .constructor_types
+                .specialized_enum_variants
+                .values()
+                .copied(),
+        )
     {
         scheme.for_each_type(db, |ty| extra_types.push(ty));
     }
-    for instance in metadata.function_instances.values() {
+    for instance in metadata.expressions.function_instances.values() {
         extra_types.push(instance.callable);
         extra_types.extend(instance.type_arguments.iter().copied());
         for row in &instance.row_arguments {
@@ -178,7 +325,7 @@ pub fn monomorphize_functions<'db>(
             }
         }
     }
-    for instance in metadata.local_instances.values() {
+    for instance in metadata.expressions.local_instances.values() {
         instance.scheme.for_each_type(db, |ty| extra_types.push(ty));
         extra_types.push(instance.callable);
         for row in &instance.row_arguments {
@@ -189,40 +336,43 @@ pub fn monomorphize_functions<'db>(
             );
         }
     }
-    extra_types.extend(metadata.node_types.values().copied());
+    extra_types.extend(metadata.expressions.node_types.values().copied());
     extra_types.extend(
         metadata
+            .expressions
             .lambda_signatures
             .values()
             .map(|sig| sig.function_type),
     );
-    for op in metadata.handler_operations.values() {
+    for op in metadata.expressions.handler_operations.values() {
         extra_types.extend(op.ability_args.iter().copied());
         extra_types.extend(op.params.iter().copied());
         extra_types.push(op.result);
     }
-    for op in metadata.perform_operations.values() {
+    for op in metadata.expressions.perform_operations.values() {
         extra_types.extend(op.ability_args.iter().copied());
         extra_types.extend(op.params.iter().copied());
         extra_types.push(op.result);
     }
-    for step in metadata.evidence_plans.values().flatten() {
+    for step in metadata.expressions.evidence_plans.values().flatten() {
         step.for_each_instance(|instance| extra_types.extend(instance.args.iter().copied()));
     }
     let nominal_index = nominal_index::NominalIndex::new(db, &module);
     let seeds =
         collect::collect_type_instantiations_with_index(db, &module, extra_types, &nominal_index);
-    let nominal = nominal::collect(db, &nominal_index, &metadata.constructor_types, seeds)?;
+    let constructor_schemes: HashMap<_, _> =
+        metadata.constructor_types.schemes.iter().copied().collect();
+    let nominal = nominal::collect(db, &nominal_index, &constructor_schemes, seeds)?;
     let type_instantiations = nominal.instances;
-    for (node, scheme) in nominal.enum_variants {
-        assert!(
-            metadata
-                .specialized_enum_variants
-                .insert(node, scheme)
-                .is_none(),
-            "specialized enum variant schema already exists"
-        );
-    }
+    let enum_variants = &mut metadata.constructor_types.specialized_enum_variants;
+    assert!(
+        nominal
+            .enum_variants
+            .keys()
+            .all(|node| !enum_variants.contains_key(node)),
+        "specialized enum variant schema already exists"
+    );
+    enum_variants.extend(nominal.enum_variants);
 
     let module = if !type_instantiations.is_empty() {
         // Generate specialized struct/enum declarations
@@ -244,9 +394,12 @@ pub fn monomorphize_functions<'db>(
             })
             .collect();
         struct_constructors.sort_by_key(|(id, _)| id.path(db));
-        for (ctor, scheme) in struct_constructors {
-            metadata.constructor_types.entry(ctor).or_insert(scheme);
-        }
+        struct_constructors.dedup_by_key(|(id, _)| *id);
+        metadata.constructor_types.schemes.extend(
+            struct_constructors
+                .into_iter()
+                .filter(|(ctor, _)| !constructor_schemes.contains_key(ctor)),
+        );
         let specialized_enums = specialize::generate_enum_specializations_with_index(
             db,
             &nominal_index,
@@ -259,7 +412,7 @@ pub fn monomorphize_functions<'db>(
             db,
             &mut module,
             &type_rewrite_map,
-            &mut metadata.function_instances,
+            &mut metadata.expressions.function_instances,
         );
         let rewrite_ty = |ty| rewrite::rewrite_type(db, ty, &type_rewrite_map);
         let rewrite_scheme =
@@ -267,16 +420,20 @@ pub fn monomorphize_functions<'db>(
         for (_, scheme) in &mut fn_types_vec {
             *scheme = rewrite_scheme(*scheme);
         }
-        for scheme in metadata.constructor_types.values_mut() {
+        for (_, scheme) in &mut metadata.constructor_types.schemes {
             *scheme = rewrite_scheme(*scheme);
         }
-        for scheme in metadata.specialized_enum_variants.values_mut() {
+        for scheme in metadata
+            .constructor_types
+            .specialized_enum_variants
+            .values_mut()
+        {
             *scheme = rewrite_scheme(*scheme);
         }
-        for ty in metadata.node_types.values_mut() {
+        for ty in metadata.expressions.node_types.values_mut() {
             *ty = rewrite_ty(*ty);
         }
-        for instance in metadata.function_instances.values_mut() {
+        for instance in metadata.expressions.function_instances.values_mut() {
             instance.callable = rewrite_ty(instance.callable);
             for ty in &mut instance.type_arguments {
                 *ty = rewrite_ty(*ty);
@@ -285,29 +442,29 @@ pub fn monomorphize_functions<'db>(
                 *row = rewrite::rewrite_row(db, *row, &type_rewrite_map);
             }
         }
-        for instance in metadata.local_instances.values_mut() {
+        for instance in metadata.expressions.local_instances.values_mut() {
             instance.scheme = rewrite_scheme(instance.scheme);
             instance.callable = rewrite_ty(instance.callable);
             for row in &mut instance.row_arguments {
                 *row = rewrite::rewrite_row(db, *row, &type_rewrite_map);
             }
         }
-        for signature in metadata.lambda_signatures.values_mut() {
+        for signature in metadata.expressions.lambda_signatures.values_mut() {
             signature.function_type = rewrite_ty(signature.function_type);
         }
-        for op in metadata.handler_operations.values_mut() {
+        for op in metadata.expressions.handler_operations.values_mut() {
             for ty in op.ability_args.iter_mut().chain(op.params.iter_mut()) {
                 *ty = rewrite_ty(*ty);
             }
             op.result = rewrite_ty(op.result);
         }
-        for op in metadata.perform_operations.values_mut() {
+        for op in metadata.expressions.perform_operations.values_mut() {
             for ty in op.ability_args.iter_mut().chain(op.params.iter_mut()) {
                 *ty = rewrite_ty(*ty);
             }
             op.result = rewrite_ty(op.result);
         }
-        for step in metadata.evidence_plans.values_mut().flatten() {
+        for step in metadata.expressions.evidence_plans.values_mut().flatten() {
             *step = step.map_types(rewrite_ty);
         }
         rewrite::rewrite_types_in_module(db, &mut module, &type_rewrite_map);
@@ -329,201 +486,183 @@ pub fn monomorphize_functions<'db>(
             db,
             &mut module,
             &rewrite::TypeRewriteMap::default(),
-            &mut metadata.function_instances,
+            &mut metadata.expressions.function_instances,
         );
         module
     };
 
-    Ok(MonomorphizeResult {
+    Ok(Monomorphized {
         module,
         function_types: fn_types_vec,
         metadata,
     })
 }
 
-fn specialize_metadata<'db>(
-    db: &'db dyn salsa::Database,
-    metadata: &mut MonomorphizeMetadata<'db>,
-    key: &InstanceKey<'db>,
-    origins: &HashSet<NodeId>,
-) {
-    clone_metadata(db, metadata, key.variant(), &key.type_args, origins);
+/// The metadata cloned for one round of instances. A clone reads only the
+/// nodes of the generic declaration it copies, which no clone writes, so the
+/// round's clones are added to each table at once.
+#[derive(Default)]
+struct MetadataClones<'db> {
+    node_types: Vec<(NodeId, Type<'db>)>,
+    function_instances: Vec<(NodeId, crate::typeck::FunctionInstance<'db>)>,
+    local_instances: Vec<(NodeId, crate::typeck::LocalCallableInstance<'db>)>,
+    handler_operations: Vec<(NodeId, InstantiatedHandlerOperation<'db>)>,
+    perform_operations: Vec<(NodeId, InstantiatedPerformOperation<'db>)>,
+    evidence_plans: Vec<(NodeId, Vec<crate::typeck::EvidenceStep<'db>>)>,
+    lambda_signatures: Vec<(NodeId, LambdaSignature<'db>)>,
+    exhaustive_cases: Vec<NodeId>,
 }
 
-/// Copy the metadata of `origins` to the nodes of the same identity with
-/// `variant`, with `type_args` substituted.
-fn clone_metadata<'db>(
-    db: &'db dyn salsa::Database,
-    metadata: &mut MonomorphizeMetadata<'db>,
-    variant: std::num::NonZero<u64>,
-    type_args: &[Type<'db>],
-    origins: &HashSet<NodeId>,
-) {
-    clone_type_table(db, &mut metadata.node_types, variant, type_args, origins);
-    let instances: Vec<_> = origins
-        .iter()
-        .filter_map(|id| {
-            metadata
-                .function_instances
-                .get(id)
-                .map(|instance| (*id, instance.clone()))
-        })
-        .collect();
-    for (id, mut instance) in instances {
-        instance.callable = substitute_type(db, instance.callable, type_args);
-        instance.type_arguments = instance
-            .type_arguments
-            .into_iter()
-            .map(|ty| substitute_type(db, ty, type_args))
-            .collect();
-        instance.row_arguments = instance
-            .row_arguments
-            .into_iter()
-            .map(|row| substitute_row(db, row, type_args))
-            .collect();
-        metadata
+impl<'db> MetadataClones<'db> {
+    /// Clone the metadata of `origins`, the nodes of the generic declaration
+    /// `key` instantiates, to the instance's nodes, with `key`'s type
+    /// arguments substituted.
+    fn clone_instance(
+        &mut self,
+        db: &'db dyn salsa::Database,
+        expressions: &ExpressionTypeMetadata<'db>,
+        key: &InstanceKey<'db>,
+        origins: &HashSet<NodeId>,
+    ) {
+        let (variant, type_args) = (key.variant(), key.type_args.as_slice());
+        let substitute = |ty| substitute_type(db, ty, type_args);
+        clone_entries(
+            &expressions.node_types,
+            origins,
+            variant,
+            substitute,
+            &mut self.node_types,
+        );
+        clone_entries(
+            &expressions.function_instances,
+            origins,
+            variant,
+            |mut instance| {
+                instance.callable = substitute(instance.callable);
+                instance.type_arguments = instance
+                    .type_arguments
+                    .into_iter()
+                    .map(substitute)
+                    .collect();
+                instance.row_arguments = instance
+                    .row_arguments
+                    .into_iter()
+                    .map(|row| substitute_row(db, row, type_args))
+                    .collect();
+                instance
+            },
+            &mut self.function_instances,
+        );
+        clone_entries(
+            &expressions.local_instances,
+            origins,
+            variant,
+            |mut instance| {
+                instance.binding = instance.binding.with_variant(variant);
+                instance.callable = substitute(instance.callable);
+                instance.scheme = instance
+                    .scheme
+                    .to_builder(db)
+                    .map_types(db, substitute)
+                    .build(db);
+                for row in &mut instance.row_arguments {
+                    *row = substitute_row(db, *row, type_args);
+                }
+                instance
+            },
+            &mut self.local_instances,
+        );
+        clone_entries(
+            &expressions.handler_operations,
+            origins,
+            variant,
+            |operation| InstantiatedHandlerOperation {
+                ability: operation.ability,
+                ability_args: operation.ability_args.into_iter().map(substitute).collect(),
+                kind: operation.kind,
+                params: operation.params.into_iter().map(substitute).collect(),
+                result: substitute(operation.result),
+            },
+            &mut self.handler_operations,
+        );
+        clone_entries(
+            &expressions.perform_operations,
+            origins,
+            variant,
+            |operation| InstantiatedPerformOperation {
+                ability: operation.ability,
+                ability_args: operation.ability_args.into_iter().map(substitute).collect(),
+                kind: operation.kind,
+                params: operation.params.into_iter().map(substitute).collect(),
+                result: substitute(operation.result),
+            },
+            &mut self.perform_operations,
+        );
+        clone_entries(
+            &expressions.evidence_plans,
+            origins,
+            variant,
+            |plan| {
+                plan.into_iter()
+                    .map(|step| step.map_types(substitute))
+                    .collect()
+            },
+            &mut self.evidence_plans,
+        );
+        clone_entries(
+            &expressions.lambda_signatures,
+            origins,
+            variant,
+            |signature| LambdaSignature {
+                function_type: substitute(signature.function_type),
+            },
+            &mut self.lambda_signatures,
+        );
+        self.exhaustive_cases.extend(
+            origins
+                .iter()
+                .filter(|id| expressions.exhaustive_cases.binary_search(id).is_ok())
+                .map(|id| id.with_variant(variant)),
+        );
+    }
+
+    /// Add the clones to their tables, one merge per table.
+    fn add_to(self, expressions: &mut ExpressionTypeMetadata<'db>) {
+        expressions.node_types.extend(self.node_types);
+        expressions
             .function_instances
-            .insert(id.with_variant(variant), instance);
-    }
-    let locals: Vec<_> = origins
-        .iter()
-        .filter_map(|id| {
-            metadata
-                .local_instances
-                .get(id)
-                .map(|instance| (*id, instance.clone()))
-        })
-        .collect();
-    for (id, mut instance) in locals {
-        instance.binding = instance.binding.with_variant(variant);
-        instance.callable = substitute_type(db, instance.callable, type_args);
-        instance.scheme = instance
-            .scheme
-            .to_builder(db)
-            .map_types(db, |ty| substitute_type(db, ty, type_args))
-            .build(db);
-        for row in &mut instance.row_arguments {
-            *row = substitute_row(db, *row, type_args);
+            .extend(self.function_instances);
+        expressions.local_instances.extend(self.local_instances);
+        expressions
+            .handler_operations
+            .extend(self.handler_operations);
+        expressions
+            .perform_operations
+            .extend(self.perform_operations);
+        expressions.evidence_plans.extend(self.evidence_plans);
+        expressions.lambda_signatures.extend(self.lambda_signatures);
+        if !self.exhaustive_cases.is_empty() {
+            expressions.exhaustive_cases.extend(self.exhaustive_cases);
+            expressions.exhaustive_cases.sort();
+            expressions.exhaustive_cases.dedup();
         }
-        metadata
-            .local_instances
-            .insert(id.with_variant(variant), instance);
     }
-    let handlers: Vec<_> = origins
-        .iter()
-        .filter_map(|id| {
-            metadata
-                .handler_operations
-                .get(id)
-                .map(|operation| (*id, operation.clone()))
-        })
-        .collect();
-    for (id, operation) in handlers {
-        metadata.handler_operations.insert(
-            id.with_variant(variant),
-            InstantiatedHandlerOperation {
-                ability: operation.ability,
-                ability_args: operation
-                    .ability_args
-                    .into_iter()
-                    .map(|ty| substitute_type(db, ty, type_args))
-                    .collect(),
-                kind: operation.kind,
-                params: operation
-                    .params
-                    .into_iter()
-                    .map(|ty| substitute_type(db, ty, type_args))
-                    .collect(),
-                result: substitute_type(db, operation.result, type_args),
-            },
-        );
-    }
-    let performs: Vec<_> = origins
-        .iter()
-        .filter_map(|id| {
-            metadata
-                .perform_operations
-                .get(id)
-                .map(|operation| (*id, operation.clone()))
-        })
-        .collect();
-    for (id, operation) in performs {
-        metadata.perform_operations.insert(
-            id.with_variant(variant),
-            InstantiatedPerformOperation {
-                ability: operation.ability,
-                ability_args: operation
-                    .ability_args
-                    .into_iter()
-                    .map(|ty| substitute_type(db, ty, type_args))
-                    .collect(),
-                kind: operation.kind,
-                params: operation
-                    .params
-                    .into_iter()
-                    .map(|ty| substitute_type(db, ty, type_args))
-                    .collect(),
-                result: substitute_type(db, operation.result, type_args),
-            },
-        );
-    }
-    let plans: Vec<_> = origins
-        .iter()
-        .filter_map(|id| {
-            metadata
-                .evidence_plans
-                .get(id)
-                .map(|plan| (*id, plan.clone()))
-        })
-        .collect();
-    for (id, plan) in plans {
-        let plan = plan
-            .into_iter()
-            .map(|step| step.map_types(|ty| substitute_type(db, ty, type_args)))
-            .collect();
-        metadata
-            .evidence_plans
-            .insert(id.with_variant(variant), plan);
-    }
-    let lambdas: Vec<_> = origins
-        .iter()
-        .filter_map(|id| {
-            metadata
-                .lambda_signatures
-                .get(id)
-                .map(|signature| (*id, signature.clone()))
-        })
-        .collect();
-    for (id, signature) in lambdas {
-        let function_type = substitute_type(db, signature.function_type, type_args);
-        metadata
-            .lambda_signatures
-            .insert(id.with_variant(variant), LambdaSignature { function_type });
-    }
-    let exhaustive: Vec<_> = origins
-        .iter()
-        .copied()
-        .filter(|id| metadata.exhaustive_cases.contains(id))
-        .collect();
-    metadata
-        .exhaustive_cases
-        .extend(exhaustive.into_iter().map(|id| id.with_variant(variant)));
 }
 
-fn clone_type_table<'db>(
-    db: &'db dyn salsa::Database,
-    table: &mut HashMap<NodeId, Type<'db>>,
-    variant: std::num::NonZero<u64>,
-    type_args: &[Type<'db>],
+/// Add to `clones` the entry of each origin `table` holds, at the node with
+/// `variant`, as `clone` makes it from the origin's value.
+fn clone_entries<V: Clone>(
+    table: &SortedMap<NodeId, V>,
     origins: &HashSet<NodeId>,
+    variant: std::num::NonZero<u64>,
+    clone: impl Fn(V) -> V,
+    clones: &mut Vec<(NodeId, V)>,
 ) {
-    let source: Vec<_> = origins
-        .iter()
-        .filter_map(|id| table.get(id).map(|ty| (*id, *ty)))
-        .collect();
-    for (id, ty) in source {
-        table.insert(id.with_variant(variant), substitute_type(db, ty, type_args));
-    }
+    clones.extend(origins.iter().filter_map(|id| {
+        table
+            .get(id)
+            .map(|value| (id.with_variant(variant), clone(value.clone())))
+    }));
 }
 
 fn substitute_type<'db>(
@@ -618,65 +757,68 @@ mod tests {
             result: bound,
         };
         let mut metadata = MonomorphizeMetadata {
-            constructor_types: HashMap::default(),
-            specialized_enum_variants: HashMap::default(),
-            node_types: [(origin, bound)].into_iter().collect::<HashMap<_, _>>(),
-            function_instances: HashMap::default(),
-            evidence_plans: [(
-                origin,
-                vec![EvidenceStep::Mask(crate::ast::AbilityInstance {
-                    ability_id: ability,
-                    args: vec![bound],
-                })],
-            )]
-            .into_iter()
-            .collect::<HashMap<_, _>>(),
-            local_instances: [(
-                origin,
-                crate::typeck::LocalCallableInstance {
-                    binding: NodeId::from_raw(2),
-                    local: crate::ast::LocalId::new(7),
-                    scheme: TypeScheme::mono(&db, function),
-                    callable: function,
-                    row_arguments: vec![],
-                },
-            )]
-            .into_iter()
-            .collect::<HashMap<_, _>>(),
-            handler_operations: [(origin, operation(OpDeclKind::Op))]
+            constructor_types: ConstructorTypeMetadata::default(),
+            expressions: ExpressionTypeMetadata {
+                node_types: [(origin, bound)].into_iter().collect(),
+                function_instances: SortedMap::default(),
+                evidence_plans: [(
+                    origin,
+                    vec![crate::typeck::EvidenceStep::Mask(
+                        crate::ast::AbilityInstance {
+                            ability_id: ability,
+                            args: vec![bound],
+                        },
+                    )],
+                )]
                 .into_iter()
-                .collect::<HashMap<_, _>>(),
-            perform_operations: [(
-                origin,
-                InstantiatedPerformOperation {
-                    ability,
-                    ability_args: vec![bound],
-                    kind: OpDeclKind::Op,
-                    params: vec![bound],
-                    result: bound,
-                },
-            )]
-            .into_iter()
-            .collect::<HashMap<_, _>>(),
-            lambda_signatures: [(
-                origin,
-                LambdaSignature {
-                    function_type: function,
-                },
-            )]
-            .into_iter()
-            .collect::<HashMap<_, _>>(),
-            exhaustive_cases: [origin].into_iter().collect::<HashSet<_>>(),
-            compiler_intrinsics: HashMap::default(),
+                .collect(),
+                local_instances: [(
+                    origin,
+                    crate::typeck::LocalCallableInstance {
+                        binding: NodeId::from_raw(2),
+                        local: crate::ast::LocalId::new(7),
+                        scheme: TypeScheme::mono(&db, function),
+                        callable: function,
+                        row_arguments: vec![],
+                    },
+                )]
+                .into_iter()
+                .collect(),
+                handler_operations: [(origin, operation(OpDeclKind::Op))].into_iter().collect(),
+                perform_operations: [(
+                    origin,
+                    InstantiatedPerformOperation {
+                        ability,
+                        ability_args: vec![bound],
+                        kind: OpDeclKind::Op,
+                        params: vec![bound],
+                        result: bound,
+                    },
+                )]
+                .into_iter()
+                .collect(),
+                lambda_signatures: [(
+                    origin,
+                    LambdaSignature {
+                        function_type: function,
+                    },
+                )]
+                .into_iter()
+                .collect(),
+                exhaustive_cases: vec![origin],
+            },
+            compiler_intrinsics: SortedMap::default(),
         };
         let key = InstanceKey::of_types([int]);
         let origins = [origin].into_iter().collect::<HashSet<_>>();
 
-        specialize_metadata(&db, &mut metadata, &key, &origins);
+        let mut clones = MetadataClones::default();
+        clones.clone_instance(&db, &metadata.expressions, &key, &origins);
+        clones.add_to(&mut metadata.expressions);
 
         let clone = origin.with_variant(key.variant());
-        assert_eq!(metadata.node_types.get(&clone), Some(&int));
-        let local = &metadata.local_instances[&clone];
+        assert_eq!(metadata.expressions.node_types.get(&clone), Some(&int));
+        let local = metadata.expressions.local_instances.get(&clone).unwrap();
         assert_eq!(
             local.binding,
             NodeId::from_raw(2).with_variant(key.variant())
@@ -684,9 +826,18 @@ mod tests {
         assert_eq!(local.local, crate::ast::LocalId::new(7));
         assert_eq!(local.callable, specialized_function);
         assert_eq!(local.scheme.body(&db), specialized_function);
-        assert_eq!(metadata.local_instances[&origin].callable, function);
         assert_eq!(
             metadata
+                .expressions
+                .local_instances
+                .get(&origin)
+                .unwrap()
+                .callable,
+            function
+        );
+        assert_eq!(
+            metadata
+                .expressions
                 .handler_operations
                 .get(&clone)
                 .unwrap()
@@ -694,12 +845,26 @@ mod tests {
             [int]
         );
         assert_eq!(
-            metadata.handler_operations.get(&clone).unwrap().params,
+            metadata
+                .expressions
+                .handler_operations
+                .get(&clone)
+                .unwrap()
+                .params,
             [int]
         );
-        assert_eq!(metadata.handler_operations.get(&clone).unwrap().result, int);
         assert_eq!(
             metadata
+                .expressions
+                .handler_operations
+                .get(&clone)
+                .unwrap()
+                .result,
+            int
+        );
+        assert_eq!(
+            metadata
+                .expressions
                 .perform_operations
                 .get(&clone)
                 .unwrap()
@@ -707,26 +872,47 @@ mod tests {
             [int]
         );
         assert_eq!(
-            metadata.perform_operations.get(&clone).unwrap().params,
+            metadata
+                .expressions
+                .perform_operations
+                .get(&clone)
+                .unwrap()
+                .params,
             [int]
-        );
-        assert_eq!(metadata.perform_operations.get(&clone).unwrap().result, int);
-        assert_eq!(
-            metadata.evidence_plans[&clone],
-            [EvidenceStep::Mask(crate::ast::AbilityInstance {
-                ability_id: ability,
-                args: vec![int],
-            })]
         );
         assert_eq!(
             metadata
+                .expressions
+                .perform_operations
+                .get(&clone)
+                .unwrap()
+                .result,
+            int
+        );
+        assert_eq!(
+            metadata.expressions.evidence_plans.get(&clone).unwrap(),
+            &[crate::typeck::EvidenceStep::Mask(
+                crate::ast::AbilityInstance {
+                    ability_id: ability,
+                    args: vec![int],
+                }
+            )]
+        );
+        assert_eq!(
+            metadata
+                .expressions
                 .lambda_signatures
                 .get(&clone)
                 .unwrap()
                 .function_type,
             specialized_function
         );
-        assert!(metadata.exhaustive_cases.contains(&clone));
-        assert!(metadata.handler_operations.contains_key(&origin));
+        assert!(metadata.expressions.exhaustive_cases.contains(&clone));
+        assert!(
+            metadata
+                .expressions
+                .handler_operations
+                .contains_key(&origin)
+        );
     }
 }

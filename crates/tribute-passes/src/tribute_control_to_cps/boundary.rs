@@ -2,6 +2,7 @@
 //! and whole-graph verification.
 
 use super::*;
+use tribute_ir::calling_convention::DynConventionBearing;
 
 pub const PRE_CPS_BOUNDARY: &str = "tribute-control-pre-cps";
 pub const POST_CPS_BOUNDARY: &str = "tribute-control-post-cps";
@@ -232,7 +233,7 @@ fn verify_final_handle_dispatch_types(ctx: &IrContext, module: Module) -> Vec<Bo
                 message: "tail-resumptive dispatcher has the wrong typed closure ABI".into(),
             });
         }
-        let expected = CallingConvention::EvidenceDirect as i64;
+        let expected = CallingConvention::EvidenceDirect;
         let trunk_ir::ValueDef::OpResult(def, _) = ctx.value_def(value) else {
             failures.push(BoundaryFailure {
                 op: Some(owner),
@@ -242,7 +243,7 @@ fn verify_final_handle_dispatch_types(ctx: &IrContext, module: Module) -> Vec<Bo
             });
             return;
         };
-        if ctx.op_attrs(def).get_i64(CALLING_CONVENTION_ATTR) != Ok(Some(expected)) {
+        if DynConventionBearing::of(ctx, def) != Some(expected) {
             failures.push(BoundaryFailure {
                 op: Some(def),
                 location: Some(ctx.op(def).location),
@@ -305,23 +306,12 @@ fn verify_physical_callable_graph(
         ctx: &IrContext,
         op: OpRef,
         symbols: &SymbolTable,
-        signatures: &HashMap<OpRef, (TypeRef, Option<i64>)>,
+        signatures: &HashMap<OpRef, (TypeRef, Option<CallingConvention>)>,
         failures: &mut Vec<BoundaryFailure>,
     ) {
         let data = ctx.op(op);
-        let op_convention = ctx
-            .op_attrs(op)
-            .get_i64(CALLING_CONVENTION_ATTR)
-            .ok()
-            .flatten();
-        let requires_convention = func::Func::matches(ctx, op)
-            || func::Call::matches(ctx, op)
-            || func::CallIndirect::matches(ctx, op)
-            || func::TailCall::matches(ctx, op)
-            || func::TailCallIndirect::matches(ctx, op)
-            || closure::Lambda::matches(ctx, op)
-            || closure::New::matches(ctx, op);
-        if requires_convention && !matches!(op_convention, Some(0..=2)) {
+        let op_convention = DynConventionBearing::of(ctx, op);
+        if DynConventionBearing::is_implemented(ctx, op) && op_convention.is_none() {
             failures.push(BoundaryFailure {
                 op: Some(op),
                 location: Some(data.location),
@@ -352,7 +342,7 @@ fn verify_physical_callable_graph(
                 return;
             };
             let function = func::FuncSig::from_type_ref(ctx, *func_ty);
-            let is_cps = op_convention == Some(CallingConvention::Cps as i64);
+            let is_cps = op_convention == Some(CallingConvention::Cps);
             let valid_never = function
                 .and_then(|function| function.single_result(ctx))
                 .is_some_and(|result| trunk_ir::dialect::core::Never::matches(ctx, result));
@@ -427,7 +417,7 @@ fn verify_physical_callable_graph(
                 }
             }
         } else if data.name.is(ctx, "func.call_indirect")
-            && op_convention == Some(CallingConvention::Cps as i64)
+            && op_convention == Some(CallingConvention::Cps)
         {
             failures.push(BoundaryFailure {
                 op: Some(op),
@@ -445,20 +435,15 @@ fn verify_physical_callable_graph(
     }
 
     // A callee resolves in the module nearest to the call.
-    let signatures: HashMap<OpRef, (TypeRef, Option<i64>)> = symbols
+    let signatures: HashMap<OpRef, (TypeRef, Option<CallingConvention>)> = symbols
         .symbols()
         .iter()
         .filter_map(|&op| {
             if !func::Func::matches(ctx, op) {
                 return None;
             }
-            let attributes = &ctx.op(op).attributes;
-            let convention = attributes
-                .view(ctx)
-                .get_i64(CALLING_CONVENTION_ATTR)
-                .ok()
-                .flatten();
-            Some((op, (attributes.view(ctx).get_type("type")?, convention)))
+            let convention = DynConventionBearing::of(ctx, op);
+            Some((op, (ctx.op_attrs(op).get_type("type")?, convention)))
         })
         .collect();
     let mut failures = Vec::new();
@@ -654,6 +639,19 @@ pub fn verify_tribute_control_post_cps(
         });
     }
     failures.extend(verify_final_handle_dispatch_types(ctx, module));
+    failures.extend(
+        tribute_ir::calling_convention::verify_conventions(ctx, module.op())
+            .into_iter()
+            .map(|violation| BoundaryFailure {
+                op: Some(violation.op),
+                location: Some(ctx.op(violation.op).location),
+                message: format!(
+                    "{}: {}",
+                    ctx.op(violation.op).name.display(ctx),
+                    violation.error
+                ),
+            }),
+    );
     let symbols = analyses.require::<SymbolTable>(ctx, module.op());
     failures.extend(verify_physical_callable_graph(ctx, module, &symbols));
     failures.extend(

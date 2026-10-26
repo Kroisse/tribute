@@ -12,8 +12,6 @@ use tribute_front::{
 fn prepare_damaged(db: &dyn salsa::Database, source: SourceCst, damage: u8) -> bool {
     let typed = parse_and_lower_ast(db, source).unwrap();
     let mut metadata = typed.expression_types(db).clone();
-    let mut handlers = typed.handler_operations(db).clone();
-    let mut performs = typed.perform_operations(db).clone();
     let target = if damage >= 6 { "hidden" } else { "identity" };
     let node = metadata
         .function_instances
@@ -33,14 +31,16 @@ fn prepare_damaged(db: &dyn salsa::Database, source: SourceCst, damage: u8) -> b
             5 => instance.callable = Type::new(db, TypeKind::Bool),
             6 => instance.type_arguments[0] = Type::new(db, TypeKind::Bool),
             7 => {
-                let (_, handler) = handlers
+                let (_, handler) = metadata
+                    .handler_operations
                     .iter_mut()
                     .find(|(_, operation)| operation.ability.qualified(db) == "Writer")
                     .unwrap();
                 handler.ability_args[0] = Type::new(db, TypeKind::BoundVar { index: 999 });
             }
             8 => {
-                let (_, perform) = performs
+                let (_, perform) = metadata
+                    .perform_operations
                     .iter_mut()
                     .find(|(_, operation)| operation.ability.qualified(db) == "Writer")
                     .unwrap();
@@ -52,16 +52,8 @@ fn prepare_damaged(db: &dyn salsa::Database, source: SourceCst, damage: u8) -> b
     let damaged = TypeCheckOutput::new(
         db,
         typed.module(db).clone(),
-        typed.function_types(db).to_vec(),
-        typed.constructor_types(db).clone(),
+        typed.declarations(db).clone(),
         metadata,
-        typed.ability_definitions(db).to_vec(),
-        handlers,
-        performs,
-        typed.lambda_signatures(db).clone(),
-        typed.exhaustive_cases(db).to_vec(),
-        *typed.well_known_types(db),
-        typed.span_map(db),
     );
     prepare_frontend_for_lowering(db, damaged, source).is_some()
 }
@@ -154,14 +146,16 @@ fn effect_only_nominal_instance_matches_handlers_and_performs(db: &salsa::Databa
     let argument = instance.type_arguments[0];
     assert!(matches!(argument.kind(db), TypeKind::Named { args, .. } if args.is_empty()));
     let handlers: Vec<_> = prepared
-        .handler_operations(db)
+        .expression_types(db)
+        .handler_operations
         .iter()
         .filter(|(_, operation)| {
             operation.ability.qualified(db) == "Writer" && operation.ability_args == vec![argument]
         })
         .collect();
     let performs: Vec<_> = prepared
-        .perform_operations(db)
+        .expression_types(db)
+        .perform_operations
         .iter()
         .filter(|(_, operation)| {
             operation.ability.qualified(db) == "Writer" && operation.ability_args == vec![argument]

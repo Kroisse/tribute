@@ -10,8 +10,8 @@ use tribute_front::{
 #[salsa::tracked(returns(copy))]
 fn checked(db: &dyn salsa::Database, source: SourceCst) -> TypeCheckOutput<'_> {
     let parsed = tribute_front::query::parsed_ast(db, source).unwrap();
-    let spans = parsed.span_map(db).clone();
-    let resolved = tribute_front::resolve::resolve_module(db, parsed.module(db), spans.clone());
+    let spans = parsed.span_map(db);
+    let resolved = tribute_front::resolve::resolve_module(db, parsed.module(db), spans);
     tribute_front::typeck::typecheck_module(db, &resolved, spans)
 }
 
@@ -37,7 +37,7 @@ fn plans(db: &dyn salsa::Database, text: &str) -> Vec<String> {
     let output = checked(db, source);
     let errors = checked::accumulated::<Diagnostic>(db, source);
     assert!(errors.is_empty(), "{errors:?}");
-    let spans = output.span_map(db);
+    let spans = tribute_front::query::span_map(db, source).expect("parsed source");
     let mut plans: Vec<_> = output
         .expression_types(db)
         .evidence_plans

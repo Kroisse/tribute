@@ -1,5 +1,6 @@
 //! CST to AST lowering for declarations.
 
+use rustc_hash::FxHashMap as HashMap;
 use tree_sitter::Node;
 use trunk_ir::Symbol;
 
@@ -12,6 +13,22 @@ use crate::ast::{
 use super::context::AstLoweringCtx;
 use super::expressions::lower_expr;
 use super::helpers::is_comment;
+
+/// Number the type declarations of a module that share a name, in order, so
+/// that each has its own identity even when the module redeclares the name.
+fn assign_type_disambiguators(items: &mut [ModuleItem<UnresolvedName>]) {
+    let mut seen: HashMap<Symbol, u32> = HashMap::default();
+    for item in items {
+        let (name, disambiguator) = match item {
+            ModuleItem::Decl(Decl::Struct(decl)) => (&decl.name, &mut decl.disambiguator),
+            ModuleItem::Decl(Decl::Enum(decl)) => (&decl.name, &mut decl.disambiguator),
+            _ => continue,
+        };
+        let count = seen.entry(name.clone()).or_default();
+        *disambiguator = *count;
+        *count += 1;
+    }
+}
 
 /// Lower a CST source file to an AST Module.
 ///
@@ -39,6 +56,7 @@ pub fn lower_module(
 
         decls.extend(lower_decl(ctx, child));
     }
+    assign_type_disambiguators(&mut decls);
 
     Module { id, name, decls }
 }
@@ -46,6 +64,27 @@ pub fn lower_module(
 /// Lower a CST declaration node to module items.
 /// Returns a Vec because use declarations can expand to multiple items.
 fn lower_decl(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<ModuleItem<UnresolvedName>> {
+    if let Some((kind, name)) = item_key(ctx, node) {
+        return ctx.in_item(kind, &name, |ctx| lower_item(ctx, node));
+    }
+    lower_item(ctx, node)
+}
+
+/// The kind and name that identify the item `node` declares, which owns the
+/// nodes inside it. Module-level declarations without a body of their own
+/// (`mod`, `use`) have none: their module owns their nodes.
+fn item_key(ctx: &AstLoweringCtx<'_>, node: Node) -> Option<(&'static str, String)> {
+    let (kind, declaration) = match node.kind() {
+        "function_definition" => ("fn", node.named_child(0)?),
+        "struct_declaration" | "enum_declaration" => ("type", node),
+        "ability_declaration" => ("ability", node),
+        _ => return None,
+    };
+    let name = declaration.child_by_field_name("name")?;
+    Some((kind, ctx.node_text_owned(&name)))
+}
+
+fn lower_item(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<ModuleItem<UnresolvedName>> {
     let decls: Vec<Decl<UnresolvedName>> = match node.kind() {
         "function_definition" => lower_function(ctx, node).into_iter().collect(),
         "struct_declaration" => lower_struct(ctx, node)
@@ -431,7 +470,7 @@ fn lower_type_path(ctx: &mut AstLoweringCtx<'_>, node: Node) -> TypeAnnotation {
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
         match child.kind() {
-            "path_segment" | "path_keyword" | "type_identifier" => {
+            "path_root" | "path_segment" | "path_keyword" | "type_identifier" => {
                 segments.push(ctx.node_symbol(&child));
             }
             _ => {}
@@ -492,6 +531,7 @@ fn lower_struct(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<StructDecl> 
         id,
         visibility: lower_visibility(ctx, node),
         name,
+        disambiguator: 0,
         type_params,
         fields,
     })
@@ -568,6 +608,7 @@ fn lower_enum(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<EnumDecl> {
         id,
         visibility: lower_visibility(ctx, node),
         name,
+        disambiguator: 0,
         type_params,
         variants,
     })
@@ -754,8 +795,13 @@ fn lower_use(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<UseDecl> {
 
     let visibility = lower_visibility(ctx, node);
 
-    // Expand the use tree into multiple (path, alias) pairs
-    let expanded = expand_use_tree(ctx, tree_node, &[]);
+    // Expand the use tree into multiple (path, alias) pairs, after the
+    // leading `::` if the declaration has one.
+    let root: Vec<Symbol> = find_child_by_kind(node, "path_root")
+        .map(|root| ctx.node_symbol(&root))
+        .into_iter()
+        .collect();
+    let expanded = expand_use_tree(ctx, tree_node, &root);
 
     expanded
         .into_iter()
@@ -840,21 +886,21 @@ fn lower_mod(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<ModuleDecl<Unre
     let name = ctx.node_symbol(&name_node);
     let visibility = lower_visibility(ctx, node);
 
-    // Check for inline module body
-    let body = if let Some(body_node) = node.child_by_field_name("body") {
-        let mut decls = Vec::new();
-        let mut cursor = body_node.walk();
-        for child in body_node.named_children(&mut cursor) {
-            if is_comment(child.kind()) {
-                continue;
+    // An external (file-based) module has no inline body.
+    let body = node.child_by_field_name("body").map(|body_node| {
+        ctx.in_module(name.clone(), |ctx| {
+            let mut decls = Vec::new();
+            let mut cursor = body_node.walk();
+            for child in body_node.named_children(&mut cursor) {
+                if is_comment(child.kind()) {
+                    continue;
+                }
+                decls.extend(lower_decl(ctx, child));
             }
-            decls.extend(lower_decl(ctx, child));
-        }
-        Some(decls)
-    } else {
-        // External module (file-based) - no inline body
-        None
-    };
+            assign_type_disambiguators(&mut decls);
+            decls
+        })
+    });
 
     Some(ModuleDecl {
         id,

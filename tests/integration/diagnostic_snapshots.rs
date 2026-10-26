@@ -150,7 +150,7 @@ enum List(a) {
 }
 
 fn source_value() -> List(Nat) {
-    UserList(1)
+    .UserList(1)
 }
 
 fn value() -> Nat {
@@ -215,8 +215,8 @@ fn diag_non_exhaustive_nested_variant(db: &salsa::DatabaseImpl) {
         r#"
 fn pick(o: Option(Bool)) -> Nat {
     case o {
-        None -> 0
-        Some(True) -> 1
+        .None -> 0
+        .Some(True) -> 1
     }
 }
 "#,
@@ -273,8 +273,8 @@ fn diag_constructor_pattern_arity(db: &salsa::DatabaseImpl) {
         r#"
 fn get(o: Option(Nat)) -> Nat {
     case o {
-        Some(a, b) -> a
-        None -> 0
+        .Some(a, b) -> a
+        .None -> 0
     }
 }
 "#,
@@ -540,7 +540,7 @@ fn diag_duplicate_effect_in_annotation(db: &salsa::DatabaseImpl) {
         db,
         "test.trb",
         r#"
-fn test() ->{abilities::Throw(Int), abilities::Throw(Int)} Nil {
+fn test() ->{std::abilities::Throw(Int), std::abilities::Throw(Int)} Nil {
     Nil
 }
 "#,
@@ -558,11 +558,11 @@ fn diag_effects_that_type_arguments_can_merge(db: &salsa::DatabaseImpl) {
         db,
         "test.trb",
         r#"
-fn distinct() ->{abilities::Throw(Int), abilities::Throw(Bool)} Nil {
+fn distinct() ->{std::abilities::Throw(Int), std::abilities::Throw(Bool)} Nil {
     Nil
 }
 
-fn merge(x: a) ->{abilities::Throw(a), abilities::Throw(Int)} Nil {
+fn merge(x: a) ->{std::abilities::Throw(a), std::abilities::Throw(Int)} Nil {
     Nil
 }
 "#,
@@ -580,15 +580,15 @@ fn diag_unsettled_ambiguous_effect_equality(db: &salsa::DatabaseImpl) {
         db,
         "test.trb",
         r#"
-fn one() ->{abilities::Throw(a)} Nil {
+fn one() ->{std::abilities::Throw(a)} Nil {
     Nil
 }
 
-fn take(f: fn() ->{abilities::Throw(Int), abilities::Throw(Bool)} Nil) ->{abilities::Throw(Int), abilities::Throw(Bool)} Nil {
+fn take(f: fn() ->{std::abilities::Throw(Int), std::abilities::Throw(Bool)} Nil) ->{std::abilities::Throw(Int), std::abilities::Throw(Bool)} Nil {
     f()
 }
 
-fn caller() ->{abilities::Throw(Int), abilities::Throw(Bool)} Nil {
+fn caller() ->{std::abilities::Throw(Int), std::abilities::Throw(Bool)} Nil {
     take(one)
 }
 "#,
@@ -818,6 +818,379 @@ fn test() -> Nat {
     insta::assert_yaml_snapshot!(result.diagnostics);
 }
 
+/// A `fn` arm runs without a continuation frame, so it cannot perform an
+/// `op` operation of an outer handler.
+#[salsa_test]
+fn diag_fn_arm_performs_op_operation(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability Counter {
+    fn next() -> Int
+}
+
+ability Stop {
+    op stop() -> Never
+}
+
+fn limited(comp: fn() ->{e, Counter} Int) ->{e, Stop} Int {
+    handle comp() {
+        do result { result }
+        fn Counter::next() { Stop::stop() }
+    }
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+/// A call to a function whose row names an ability with an `op` operation
+/// is rejected in a `fn` arm like a direct perform.
+#[salsa_test]
+fn diag_fn_arm_calls_op_effect(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability Counter {
+    fn next() -> Int
+}
+
+ability Stop {
+    op stop() -> Never
+}
+
+fn halt() ->{Stop} Int {
+    Stop::stop()
+}
+
+fn limited(comp: fn() ->{e, Counter} Int) ->{e, Stop} Int {
+    handle comp() {
+        do result { result }
+        fn Counter::next() { halt() }
+    }
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+/// A `fn` arm may perform the `fn` operation of a mixed ability directly,
+/// but not call a function that requires that ability, since such a
+/// function may perform its `op` operation.
+#[salsa_test]
+fn diag_fn_arm_calls_mixed_ability_helper(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability Counter {
+    fn next() -> Int
+}
+
+ability Mixed {
+    fn ping() -> Int
+    op bail() -> Never
+}
+
+fn pinger() ->{Mixed} Int {
+    Mixed::ping()
+}
+
+fn counted(comp: fn() ->{e, Counter} Int) ->{e, Mixed} Int {
+    handle comp() {
+        do result { result }
+        fn Counter::next() { Mixed::ping() + pinger() }
+    }
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+/// Without a `do` arm the handle completes with the body's result, so an
+/// `op` arm that returns another type is a type error.
+#[salsa_test]
+fn diag_handle_without_do_arm_op_arm_type_mismatch(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability Stop {
+    op stop() -> Never
+}
+
+fn halt() ->{Stop} Int {
+    Stop::stop()
+}
+
+fn test() -> Int {
+    handle halt() {
+        op Stop::stop() { "stopped" }
+    }
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+/// A `handle` has at most one `do` arm.
+#[salsa_test]
+fn diag_handle_with_two_do_arms(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability Stop {
+    op stop() -> Never
+}
+
+fn halt() ->{Stop} Int {
+    +1
+}
+
+fn test() -> Int {
+    handle halt() {
+        do value { value }
+        do value { value + +1 }
+        op Stop::stop() { +0 }
+    }
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+/// A `handle` has at most one arm for each operation.
+#[salsa_test]
+fn diag_handle_with_two_arms_for_one_operation(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability Counter {
+    fn next() -> Int
+}
+
+fn count() ->{Counter} Int {
+    Counter::next()
+}
+
+fn test() -> Int {
+    handle count() {
+        fn Counter::next() { +1 }
+        fn Counter::next() { +2 }
+    }
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+/// A `fn` arm that calls an effect-polymorphic callable is rejected at the
+/// call when an instance fixes the callable's row to one with an `op`
+/// operation.
+#[salsa_test]
+fn diag_fn_arm_calls_op_effect_through_row_variable(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability Counter {
+    fn next() -> Int
+}
+
+ability Stop {
+    op stop() -> Never
+}
+
+fn count() ->{Counter} Int {
+    Counter::next()
+}
+
+fn limited(f: fn() ->{e} Int, comp: fn() ->{e, Counter} Int) ->{e} Int {
+    handle comp() {
+        fn Counter::next() { f() }
+    }
+}
+
+fn main() -> Nil {
+    let _ = handle limited(fn() Stop::stop(), fn() count()) {
+        op Stop::stop() { +0 }
+    }
+    Nil
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+/// A `handle` inside a `fn` arm that handles the callable's concrete label
+/// does not cover an `op` operation the instance passes through the row
+/// variable.
+#[salsa_test]
+fn diag_fn_arm_inner_handle_leaves_row_variable_op(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability Counter {
+    fn next() -> Int
+}
+
+ability Stop {
+    op stop() -> Never
+}
+
+ability Halt {
+    op halt() -> Never
+}
+
+fn count() ->{Counter} Int {
+    Counter::next()
+}
+
+fn limited(g: fn() ->{Stop, e} Int, comp: fn() ->{e, Counter} Int) ->{e} Int {
+    handle comp() {
+        fn Counter::next() {
+            handle g() {
+                op Stop::stop() { +2 }
+            }
+        }
+    }
+}
+
+fn main() -> Nil {
+    let _ = handle limited(fn() Halt::halt(), fn() count()) {
+        op Halt::halt() { +0 }
+    }
+    Nil
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+/// Instances that differ only in another class variable report a call in a
+/// `fn` arm once.
+#[salsa_test]
+fn diag_fn_arm_row_variable_call_reported_once(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability Counter {
+    fn next() -> Int
+}
+
+ability Stop {
+    op stop() -> Never
+}
+
+ability Tick {
+    fn tick() -> Int
+}
+
+fn count() ->{Counter} Int {
+    Counter::next()
+}
+
+fn limited(
+    f: fn() ->{e} Int,
+    h: fn() ->{d} Int,
+    comp: fn() ->{e, Counter} Int,
+) ->{e, d} Int {
+    let _ = h()
+    handle comp() {
+        fn Counter::next() { f() }
+    }
+}
+
+fn main() -> Nil {
+    let _ = handle limited(fn() Stop::stop(), fn() +1, fn() count()) {
+        op Stop::stop() { +0 }
+    }
+    let _ = handle limited(fn() Stop::stop(), fn() Tick::tick(), fn() count()) {
+        op Stop::stop() { +0 }
+        fn Tick::tick() { +1 }
+    }
+    Nil
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+/// The diagnostic labels the use that passes the `op` effect, through the
+/// definitions that pass the row variable on, and not a use that passes only
+/// `fn` operations.
+#[salsa_test]
+fn diag_fn_arm_row_variable_call_labels_origin_through_definitions(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability Counter {
+    fn next() -> Int
+}
+
+ability Stop {
+    op stop() -> Never
+}
+
+ability Tick {
+    fn tick() -> Int
+}
+
+fn count() ->{Counter} Int {
+    Counter::next()
+}
+
+fn wrap(f: fn() ->{e} Int, comp: fn() ->{e, Counter} Int) ->{e} Int {
+    inner(f, comp)
+}
+
+fn inner(f: fn() ->{e} Int, comp: fn() ->{e, Counter} Int) ->{e} Int {
+    handle comp() {
+        fn Counter::next() { f() }
+    }
+}
+
+fn main() -> Nil {
+    let _ = handle wrap(fn() Tick::tick(), fn() count()) {
+        fn Tick::tick() { +1 }
+    }
+    let _ = handle wrap(fn() Stop::stop(), fn() count()) {
+        op Stop::stop() { +0 }
+    }
+    Nil
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
 #[salsa_test]
 fn diag_effect_arg_arity_mismatch(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
@@ -864,9 +1237,190 @@ fn diag_open_callback_in_pure_field(db: &salsa::DatabaseImpl) {
         r#"
 enum Choice { Callback(fn(Int) -> Int), Other }
 
-fn make(callback: fn(Int) ->{e} Int) -> Choice { Callback(callback) }
+fn make(callback: fn(Int) ->{e} Int) -> Choice { .Callback(callback) }
 
 fn main() -> Nil { Nil }
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+// =============================================================================
+// Polymorphic recursion
+// =============================================================================
+
+#[salsa_test]
+fn diag_direct_polymorphic_recursion(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+struct Pair(a) { left: a, right: a }
+
+fn depth(n: Nat, x: a) -> Nat {
+    case n == 0 {
+        True -> 0
+        False -> 1 + depth(n - 1, Pair { left: x, right: x })
+    }
+}
+
+fn main() -> Nil { let _ = depth(3, 7) }
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+#[salsa_test]
+fn diag_mutual_polymorphic_recursion(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+struct Pair(a) { left: a, right: a }
+
+fn even(n: Nat, x: a) -> Nat {
+    case n == 0 {
+        True -> 0
+        False -> odd(n - 1, Pair { left: x, right: x })
+    }
+}
+
+fn odd(n: Nat, y: b) -> Nat {
+    case n == 0 {
+        True -> 1
+        False -> even(n - 1, y)
+    }
+}
+
+fn main() -> Nil { let _ = even(4, 7) }
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+/// Unreached generic definitions are checked too.
+#[salsa_test]
+fn diag_unreached_polymorphic_recursion(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn nest(n: Nat, x: a) -> Nat {
+    case n == 0 {
+        True -> 0
+        False -> nest(n - 1, #(x, x))
+    }
+}
+
+fn main() -> Nil { Nil }
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+/// The instantiation is spelled with the caller's parameter names inside
+/// function types too.
+#[salsa_test]
+fn diag_polymorphic_recursion_through_a_function_type(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn thunks(n: Nat, x: a) -> Nat {
+    case n == 0 {
+        True -> 0
+        False -> thunks(n - 1, fn() { x })
+    }
+}
+
+fn main() -> Nil { let _ = thunks(2, 7) }
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+/// Recursion that keeps the caller's type parameters, permutes them, uses
+/// unrelated arguments, or reaches a non-recursive helper at a larger type
+/// specializes to finitely many instances.
+#[salsa_test]
+fn finite_generic_recursion_is_accepted(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+struct Pair(a) { left: a, right: a }
+
+fn same(n: Nat, x: a) -> a {
+    case n == 0 {
+        True -> x
+        False -> same(n - 1, x)
+    }
+}
+
+fn swap(n: Nat, x: a, y: b) -> Nat {
+    case n == 0 {
+        True -> 0
+        False -> swap(n - 1, y, x)
+    }
+}
+
+fn reset(n: Nat, x: a) -> Nat {
+    case n == 0 {
+        True -> 0
+        False -> reset(n - 1, 5)
+    }
+}
+
+fn wrap(x: a) -> Pair(a) { Pair { left: x, right: x } }
+
+fn repeat(n: Nat, x: a) -> Nat {
+    case n == 0 {
+        True -> 0
+        False -> {
+            let _ = wrap(x)
+            repeat(n - 1, x)
+        }
+    }
+}
+
+fn main() -> Nil {
+    let _ = same(2, True)
+    let _ = swap(3, 1, False) + reset(2, True) + repeat(2, 7)
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(result.diagnostics.is_empty(), "{:#?}", result.diagnostics);
+    assert!(result.produced_module);
+}
+
+/// A nested datatype is not polymorphic recursion of a function; the
+/// expansion limit stops its specialization.
+#[salsa_test]
+fn diag_specialization_expansion_limit(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+struct Pair(a) { left: a, right: a }
+
+enum Nest(a) { Leaf(a), Deeper(Nest(Pair(a))) }
+
+fn leaf(x: a) -> Nest(a) { .Leaf(x) }
+
+fn main() -> Nil {
+    let _ = leaf(1)
+}
 "#,
     );
     let result = compile_with_diagnostics(db, source);

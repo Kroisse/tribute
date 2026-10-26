@@ -39,10 +39,11 @@ use rustc_hash::FxHashSet as HashSet;
 use trunk_ir_macros::op_interface;
 
 use crate::OpName;
+use crate::analysis::AnalysisCache;
 use crate::context::IrContext;
 use crate::dialect::{arith, func};
 use crate::ops::DialectOp;
-use crate::pass::{Pass, pass_fn};
+use crate::pass::{Pass, PassRunResult};
 use crate::refs::{OpRef, ValueRef};
 use crate::rewrite::{
     PatternApplicator, PatternRewriter, RewritePattern, RewriteScope, TypeConverter,
@@ -244,7 +245,7 @@ pub(crate) fn fold_ops_for_dialect(dialect: &'static str) -> impl Iterator<Item 
 /// or explicitly `let _ = ...` to opt out).
 #[must_use]
 #[derive(Debug, Clone, Copy)]
-pub struct CanonicalizeResult {
+struct CanonicalizeResult {
     pub iterations: usize,
     pub total_changes: usize,
     pub reached_fixpoint: bool,
@@ -264,13 +265,26 @@ fn result_from_apply(result: crate::rewrite::ApplyResult) -> CanonicalizeResult 
 }
 
 /// Run canonicalization to a fixed point within one rewrite scope.
-pub fn canonicalize<S: RewriteScope>(ctx: &mut IrContext, scope: S) -> CanonicalizeResult {
+fn canonicalize<S: RewriteScope>(ctx: &mut IrContext, scope: S) -> CanonicalizeResult {
     result_from_apply(canonicalize_applicator().apply_partial(ctx, scope))
 }
 
-/// Build a function-anchored canonicalization pass.
-pub fn canonicalize_pass() -> impl Pass<Target = func::Func> {
-    pass_fn("canonicalize-func", |ctx, target, _analyses| {
+/// Function-anchored canonicalization to a fixed point.
+pub struct Canonicalize;
+
+impl Pass for Canonicalize {
+    type Target = func::Func;
+
+    fn name(&self) -> &'static str {
+        "canonicalize-func"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: func::Func,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
         let result = canonicalize(ctx, target);
         if !result.reached_fixpoint {
             tracing::warn!(
@@ -280,7 +294,7 @@ pub fn canonicalize_pass() -> impl Pass<Target = func::Func> {
             );
         }
         Ok(())
-    })
+    }
 }
 
 // =========================================================================
@@ -519,7 +533,7 @@ mod tests {
         // iteration with zero changes. Capping the budget at 1
         // forces the run to terminate as non-fixpoint with at
         // least one fold applied — the exact case
-        // `run_cleanup_passes` now logs about.
+        // `Canonicalize` logs about.
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
     %z = arith.const {value = 0} : core.i32
