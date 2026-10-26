@@ -493,7 +493,9 @@ layout들로 이루어진다.
   아니다. Entries 필드는 immutable이며 closure function table 안의
   [entry table](ir.md#callable-entry) 시작 index다. 한 entry 함수 목록은 function
   table에서 `Direct`, `EvidenceDirect`, `Cps` 순서로 연속한 세 칸을 차지한다. 채울
-  수 없는 칸은 공용 trap entry다.
+  수 없는 칸은 그 칸의 entry signature를 가진 trap 함수이며, 본문은 `unreachable`
+  하나다. Signature가 같은 칸은 trap 함수 하나를 공유하므로 `call_indirect`의 타입
+  검사가 아니라 이 함수가 trap한다.
 - 사용자 `adt.struct`를 `wasm_gc.struct`로 바꾸는 단계가 capture layout
   (`layout = "closure_captures"`)도 `wasm_gc.struct`로 바꾼다. 필드는 base의 entries
   필드 뒤에 capture의 Wasm 저장 표현을 순서대로 두고, `closure_base`가 가리키는
@@ -515,7 +517,8 @@ layout들로 이루어진다.
   environment 입력이 `$closure_S`이므로 타입들은 서로를 가리킨다. 모든 GC 타입이
   rec group 하나에 들어 있으므로 이 재귀를 그대로 선언할 수 있다. 호출은
   `call_ref`, proper tail transfer는 `return_call_ref`가 되고 closure function
-  table은 필요 없다. Handler dispatch는 signature가 하나로 고정되어 있으므로
+  table은 필요 없다. 필드는 null을 허용하지 않으며, 채울 수 없는 칸은 위와 같은
+  signature별 trap 함수의 참조를 담는다. Handler dispatch는 signature가 하나로 고정되어 있으므로
   evidence runtime의 `Dispatch`는 그 signature의 base다. Capture layout, entry 함수의
   downcast, storage surface의 규칙은 같다.
 

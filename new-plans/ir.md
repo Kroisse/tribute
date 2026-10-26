@@ -777,9 +777,10 @@ convention을 쓴다.
 - `call_indirect`와 `tail_call_indirect`는 callee를 부르는 convention을 가진다.
 - `func_ref`는 entry마다 그 entry로 들어갈 대상 인스턴스를 가진다.
 
-상태는 module 전체의 성질이다. 위 자리 가운데 일부만 convention을 가지면 invalid이고,
-하나라도 없으면 convention이 없는 상태다. Legalization은 convention을 가진 상태만
-받는다. Callable 값의 type(`func_sig`)은 두 상태 모두에서 convention이 없다.
+상태는 module 전체의 성질이다. 위 자리가 모두 convention을 갖지 않으면 convention이
+없는 상태, 모두 가지면 convention을 가진 상태이며, 일부만 가지면 invalid다.
+Legalization은 convention을 가진 상태만 받는다. Callable 값의 type(`func_sig`)은
+두 상태 모두에서 convention이 없다.
 
 Convention에 관한 규칙은 convention을 가진 상태에서만 적용한다.
 
@@ -821,7 +822,9 @@ Capture는 closure 하나에 한 번만 담긴다.
   `EvidenceDirect` adapter는 evidence를 받고 쓰지 않으며, `Cps` adapter는 본문의
   결과를 `Done<R>`로 넘긴다. 이 adapter는 본문을 한 번 부르고 끝나며 CPS 제어를
   만들지 않는다.
-- `k`보다 약한 본문도 없으면 공용 trap entry다.
+- `k`보다 약한 본문도 없으면 trap entry다. Trap entry는 그 칸의 entry signature를
+  가지고 들어오자마자 trap하는 함수이며, target은 같은 signature의 칸들이 하나를
+  공유하게 한다.
 
 `func_ref`는 `row_args`가 고르는 대상의 class 인스턴스 하나를 본문으로 삼아 같은
 규칙으로 채운다. 대상이 class 없는 tail 때문에 그 값의 row가 요구하는 것보다 강한
@@ -1868,7 +1871,8 @@ capture를 읽는 일은 closure의 필드 접근 하나다. Closure의 의미�
 
 - `closure.new`는 entry 함수 목록과 capture 값을 순서대로 받아 closure를 만든다.
   Entry 함수 목록은 `Direct`, `EvidenceDirect`, `Cps` 순서의 셋이며, 채울 수 없는
-  칸은 공용 trap entry다. 같은 목록을 가진 `closure.new`들은 entry table 하나를 공유한다.
+  칸은 [trap entry](#callable-entry)다. 같은 목록을 가진 `closure.new`들은 entry
+  table 하나를 공유한다.
   Capture 목록은 비어 있을 수 있다. Environment를 따로 받지 않는다.
 - Entry 함수의 environment 입력은 그 closure 자신이다. 입력의 타입은
   `closure.new` 결과의 closure 타입이고, 위치는 그 entry의 바깥 convention이 정한
