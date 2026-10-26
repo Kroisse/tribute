@@ -2266,7 +2266,11 @@ fn types_surviving_wasm_lowering(
         tribute_passes::abi_boundary::TargetKind::Wasm,
     )
     .expect("Wasm boundary");
-    run_pass(&mut ctx, module, tribute_passes::wasm::lower::LowerToWasm).expect("Wasm lowering");
+    let root = core_module(&ctx, module);
+    let mut pm = PassManager::new();
+    tribute_passes::wasm::lower::add_lowering_passes(&mut pm);
+    pm.run(&mut ctx, root, &mut AnalysisCache::new())
+        .expect("Wasm lowering");
 
     let mut sites = std::collections::BTreeSet::new();
     for (name, ty) in ctx.type_aliases().iter().cloned() {
@@ -2411,7 +2415,11 @@ fn wasm_lowering_carries_only_preserved_language_metadata(db: &salsa::DatabaseIm
         tribute_passes::abi_boundary::TargetKind::Wasm,
     )
     .expect("Wasm boundary");
-    run_pass(&mut ctx, module, tribute_passes::wasm::lower::LowerToWasm).expect("Wasm lowering");
+    let root = core_module(&ctx, module);
+    let mut pm = PassManager::new();
+    tribute_passes::wasm::lower::add_lowering_passes(&mut pm);
+    pm.run(&mut ctx, root, &mut AnalysisCache::new())
+        .expect("Wasm lowering");
 
     // Wasm lowering copies operation attributes without interpreting
     // them, so what it carries is exactly what the boundary let through.

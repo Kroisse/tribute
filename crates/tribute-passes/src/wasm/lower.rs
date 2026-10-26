@@ -4,17 +4,14 @@
 //! wasm dialect operations. Uses arena IR for in-place mutation within a
 //! single arena session.
 
-use std::fmt;
-
 use tracing::{error, warn};
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::conversion::UnrealizedCastConversionPattern;
 use trunk_ir::dialect::core;
-use trunk_ir::dialect::func;
 use trunk_ir::dialect::wasm as wasm_dialect;
-use trunk_ir::ops::{DialectOp, DialectType};
-use trunk_ir::pass::{Pass, PassError, PassManager, PassRunResult};
+use trunk_ir::ops::DialectOp;
+use trunk_ir::pass::{Pass, PassManager, PassRunResult};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef};
 use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, Module, PatternApplicator, TypeConverter,
@@ -27,42 +24,6 @@ use super::type_converter::wasm_type_converter;
 use trunk_ir::SymbolPath;
 
 const WASM_BACKEND_READY_BOUNDARY: &str = "wasm-backend-ready";
-
-#[derive(Debug)]
-pub enum WasmLowerError {
-    Conversion(ConversionError),
-    Pass(PassError),
-}
-
-impl fmt::Display for WasmLowerError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Conversion(error) => error.fmt(f),
-            Self::Pass(error) => error.fmt(f),
-        }
-    }
-}
-
-impl std::error::Error for WasmLowerError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Conversion(error) => Some(error),
-            Self::Pass(error) => Some(error),
-        }
-    }
-}
-
-impl From<ConversionError> for WasmLowerError {
-    fn from(error: ConversionError) -> Self {
-        Self::Conversion(error)
-    }
-}
-
-impl From<PassError> for WasmLowerError {
-    fn from(error: PassError) -> Self {
-        Self::Pass(error)
-    }
-}
 
 /// Conversion target for IR after Wasm-specific lowering has removed shared
 /// ability/effect ABI operations.
@@ -82,34 +43,14 @@ pub fn wasm_emission_ready_target() -> ConversionTarget {
         .illegal_op("core.unrealized_conversion_cast")
 }
 
-/// Run the full WASM lowering pipeline on arena IR.
+/// Append the Wasm lowering steps, in order, to `pm`.
 ///
-/// The structured-control boundary check runs first, before any mutation.
-/// The lowering steps then run as passes of one [`PassManager`], so a debug
-/// build verifies IR invariants after every step that changed the IR, and
-/// every step shares `analyses`. Each step reads only its input IR: a step
-/// that relies on a module-level resource, such as a data segment, an import,
-/// or linear memory, declares it in the IR.
-pub(crate) fn lower_to_wasm(
-    ctx: &mut IrContext,
-    module: Module,
-    analyses: &mut AnalysisCache,
-) -> Result<(), WasmLowerError> {
-    trunk_ir_wasm_backend::passes::scf_to_wasm::validate_lowerable_structured_control(
-        ctx, module, analyses,
-    )?;
-
-    let core_module =
-        core::Module::from_op(ctx, module.op()).expect("Wasm lowering requires a core.module");
-    wasm_lowering_passes().run(ctx, core_module, analyses)?;
-
-    verify_wasm_backend_ready(ctx, module)?;
-    Ok(())
-}
-
-/// The Wasm lowering steps, in order.
-fn wasm_lowering_passes() -> PassManager {
-    let mut pm = PassManager::new();
+/// The structured-control boundary check runs first, before any mutation,
+/// and the backend-ready boundary check last. Each step reads only its input
+/// IR: a step that relies on a module-level resource, such as a data segment,
+/// an import, or linear memory, declares it in the IR.
+pub fn add_lowering_passes(pm: &mut PassManager) {
+    pm.add_pass(CheckLowerableStructuredControl);
     pm.add_pass(ConvertBuiltinLayouts)
         .add_pass(IoToWasm)
         // Pattern-based lowering (trunk-ir-wasm-backend).
@@ -146,14 +87,74 @@ fn wasm_lowering_passes() -> PassManager {
         .add_pass(LowerWasmModule)
         // Replace user struct layouts with their structural GC types once no
         // `adt` operation reads a nominal layout.
-        .add_pass(ConvertStructLayouts);
-    pm.with_debug_verifier()
-        .with_instrumentation(|ctx, name, op| {
-            if let Some(module) = Module::new(ctx, op) {
-                debug_func_params(ctx, module, name);
-            }
-        });
-    pm
+        .add_pass(ConvertStructLayouts)
+        .add_pass(VerifyWasmBackendReady);
+}
+
+/// Reject structured control the Wasm lowering cannot express, before any
+/// lowering step mutates the module.
+pub struct CheckLowerableStructuredControl;
+
+impl Pass for CheckLowerableStructuredControl {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "check-lowerable-structured-control"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        trunk_ir_wasm_backend::passes::scf_to_wasm::validate_lowerable_structured_control(
+            ctx,
+            target.into(),
+            analyses,
+        )?;
+        Ok(())
+    }
+}
+
+/// Check the partial Wasm backend boundary after the lowering steps.
+///
+/// Unknown operations are still allowed because unrealized casts and backend
+/// infrastructure may remain for later stages, but residual `ability.*` and
+/// `effect.*` operations are compiler bugs at this point.
+pub struct VerifyWasmBackendReady;
+
+impl Pass for VerifyWasmBackendReady {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "verify-wasm-backend-ready"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        verify_wasm_backend_ready(ctx, target.into())?;
+        Ok(())
+    }
+}
+
+/// Run the Wasm lowering steps on `module` with the debug verifier.
+#[cfg(test)]
+pub(crate) fn lower_to_wasm(
+    ctx: &mut IrContext,
+    module: Module,
+    analyses: &mut AnalysisCache,
+) -> Result<(), trunk_ir::pass::PassError> {
+    let root =
+        core::Module::from_op(ctx, module.op()).expect("Wasm lowering requires a core.module");
+    let mut pm = PassManager::new();
+    add_lowering_passes(&mut pm);
+    pm.with_debug_verifier();
+    pm.run(ctx, root, analyses)
 }
 
 struct ConvertBuiltinLayouts;
@@ -481,34 +482,6 @@ pub(crate) fn finalize_wasm_gc_types(
     Ok(())
 }
 
-/// Run the full WASM lowering pipeline on arena IR.
-///
-/// The structured-control boundary check runs first, before any mutation.
-/// The lowering steps then run as passes of one [`PassManager`], so a debug
-/// build verifies IR invariants after every step that changed the IR, and
-/// every step shares the run's analyses. Each step reads only its input IR:
-/// a step that relies on a module-level resource, such as a data segment, an
-/// import, or linear memory, declares it in the IR.
-pub struct LowerToWasm;
-
-impl Pass for LowerToWasm {
-    type Target = core::Module;
-
-    fn name(&self) -> &'static str {
-        "lower-to-wasm"
-    }
-
-    fn run(
-        &mut self,
-        ctx: &mut IrContext,
-        target: core::Module,
-        analyses: &mut AnalysisCache,
-    ) -> PassRunResult {
-        lower_to_wasm(ctx, target.into(), analyses)?;
-        Ok(())
-    }
-}
-
 /// A module pass that legalizes the `unrealized_conversion_cast` operations
 /// left after Wasm lowering with the Wasm type converter: it converts their
 /// result types, materializes real representation changes, and writes WasmGC
@@ -570,10 +543,7 @@ impl Pass for FinalizeWasmGcTypes {
 /// Unknown operations are still allowed because unrealized casts and backend
 /// infrastructure may remain for later pipeline stages, but residual
 /// `ability.*` and `effect.*` operations are compiler bugs at this point.
-pub fn verify_wasm_backend_ready(
-    ctx: &mut IrContext,
-    module: Module,
-) -> Result<(), ConversionError> {
+fn verify_wasm_backend_ready(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError> {
     PatternApplicator::new(TypeConverter::new())
         .with_target(wasm_backend_ready_target())
         .apply_partial_conversion(ctx, module, WASM_BACKEND_READY_BOUNDARY)?;
@@ -593,51 +563,6 @@ fn check_all_wasm_dialect(ctx: &IrContext, module: Module) {
         for &op in ctx.block(block).ops.iter() {
             if wasm_dialect::Func::matches(ctx, op) {
                 check_function_body(ctx, op);
-            }
-        }
-    }
-}
-
-/// Debug helper to trace function parameter types through the pipeline.
-fn debug_func_params(ctx: &IrContext, module: Module, phase: &str) {
-    let Some(body) = module.body(ctx) else {
-        return;
-    };
-    for &block in ctx.region(body).blocks.iter() {
-        for &op in ctx.block(block).ops.iter() {
-            // Check for func.func or wasm.func operations
-            if func::Func::matches(ctx, op) {
-                if let Some(fn_ty) = ctx.op_attrs(op).get_type("type") {
-                    let Some(function) = func::FuncSig::from_type_ref(ctx, fn_ty) else {
-                        continue;
-                    };
-                    let params: Vec<_> = function
-                        .inputs(ctx)
-                        .iter()
-                        .map(|t| {
-                            let td = ctx.get_type(*t);
-                            format!("{}", td.name.display(ctx))
-                        })
-                        .collect();
-                    let sym_name = ctx.op_attrs(op).get_str("sym_name").unwrap_or_default();
-                    tracing::debug!("[{phase}] func.func {sym_name}: params={params:?}");
-                }
-            } else if wasm_dialect::Func::matches(ctx, op)
-                && let Some(fn_ty) = ctx.op_attrs(op).get_type("type")
-            {
-                let Some(function) = wasm_dialect::FuncSig::from_type_ref(ctx, fn_ty) else {
-                    continue;
-                };
-                let params: Vec<_> = function
-                    .inputs(ctx)
-                    .iter()
-                    .map(|t| {
-                        let td = ctx.get_type(*t);
-                        format!("{}", td.name.display(ctx))
-                    })
-                    .collect();
-                let sym_name = ctx.op_attrs(op).get_str("sym_name").unwrap_or_default();
-                tracing::debug!("[{phase}] wasm.func {sym_name}: params={params:?}");
             }
         }
     }
@@ -809,6 +734,7 @@ mod tests {
     use trunk_ir::SymbolPath;
     use trunk_ir::context::{BlockData, RegionData};
     use trunk_ir::dialect::core;
+    use trunk_ir::ops::DialectType;
     use trunk_ir::refs::TypeRef;
     use trunk_ir::smallvec::smallvec;
 
@@ -1098,28 +1024,10 @@ mod tests {
     }
 
     #[test]
-    fn debug_func_params_accepts_source_functions_with_parameters() {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  func.func @identity(%value: core.i32) -> core.i32 {
-    func.return %value
-  }
-}"#,
-        );
-
-        debug_func_params(&ctx, module, "test");
-
-        assert_eq!(module.ops(&ctx).len(), 1);
-    }
-
-    #[test]
     fn module_lowerer_ignores_modules_without_a_body() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, "core.module @test {}");
         check_all_wasm_dialect(&ctx, module);
-        debug_func_params(&ctx, module, "test");
         let mut lowerer = WasmLowerer::new();
 
         lowerer.lower_module(&mut ctx, module);
@@ -1260,7 +1168,7 @@ mod tests {
         let before = print_module(&ctx, module.op());
         let error = lower_to_wasm(&mut ctx, module, &mut Default::default())
             .expect_err("used Never must reject");
-        assert!(matches!(error, WasmLowerError::Conversion(_)), "{error}");
+        assert_eq!(error.pass_name(), "check-lowerable-structured-control");
         assert!(error.to_string().contains("scf-to-wasm"), "{error}");
         assert!(
             error.to_string().contains("Never control requires"),
@@ -1291,7 +1199,7 @@ mod tests {
         let error = lower_to_wasm(&mut ctx, module, &mut Default::default())
             .expect_err("nonlowerable switch must fail the wasm lowering boundary");
 
-        assert!(matches!(error, WasmLowerError::Conversion(_)), "{error}");
+        assert_eq!(error.pass_name(), "check-lowerable-structured-control");
         assert!(error.to_string().contains("scf-to-wasm"), "{error}");
         assert!(
             error.to_string().contains(
@@ -1328,14 +1236,5 @@ mod tests {
         assert_eq!(output.matches("wasm.export_memory").count(), 1, "{output}");
         assert_eq!(output.matches("wasm.data").count(), 2, "{output}");
         assert!(!output.contains("tribute_io.write"), "{output}");
-    }
-
-    #[test]
-    fn wasm_lower_error_wraps_conversion_error() {
-        let conversion = ConversionError::new(WASM_BACKEND_READY_BOUNDARY, vec![]);
-        let error = WasmLowerError::from(conversion);
-
-        assert!(error.to_string().contains(WASM_BACKEND_READY_BOUNDARY));
-        assert!(std::error::Error::source(&error).is_some());
     }
 }

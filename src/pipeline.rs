@@ -71,7 +71,7 @@
 //!     │
 //!     ├─── After the Boundary Exit (emit_from_boundary_exit) ──┤
 //!     ▼ LowerTarget
-//!     ├─► [wasm]   lower_to_wasm → cast legalization (reference upcasts as
+//!     ├─► [wasm]   wasm dialect lowering → cast legalization (reference upcasts as
 //!     │            wasm.ref_upcast) → reconcile → GC index assignment
 //!     └─► [native] entrypoint, clif lowering, RTTI/RC, cast legalization
 //!                  (◄── dump_native_ir_at_stage)
@@ -585,8 +585,8 @@ fn add_canonicalize_passes(pm: &mut PassManager) {
 ///    materialization introduced, and check that the module is ready for
 ///    emission
 fn add_wasm_lowering_passes(pm: &mut PassManager) {
-    pm.add_pass(tribute_passes::wasm::lower::LowerToWasm)
-        .add_pass(tribute_passes::wasm::lower::LegalizeUnrealizedCasts)
+    tribute_passes::wasm::lower::add_lowering_passes(pm);
+    pm.add_pass(tribute_passes::wasm::lower::LegalizeUnrealizedCasts)
         .add_pass(ReconcileUnrealizedCasts)
         .add_pass(tribute_passes::wasm::lower::FinalizeWasmGcTypes);
 }
