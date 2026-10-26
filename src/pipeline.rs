@@ -650,8 +650,15 @@ pub fn run_shared_middle_end(frontend: FrontendCompilation) -> PassResult<(IrCon
     .into_result()
 }
 
-/// Run the stages [`compile_with_diagnostics`] runs after the frontend, on
-/// every function of a frontend result, reachable or not.
+/// Run the stages [`compile_with_diagnostics`] runs after the frontend.
+///
+/// Specializes convention classes without filtering out unreachable functions,
+/// then checks `fn` arm calls in instances reachable from the program's roots.
+/// Stops before CPS legalization and returns the resulting arena IR.
+///
+/// Propagates pass failures, including invalid `fn` arm calls, as errors.
+/// Diagnostics emitted into the IR context are returned with it on success;
+/// this function does not accumulate diagnostics in Salsa.
 pub fn run_diagnostic_stages(frontend: FrontendCompilation) -> PassResult<(IrContext, Module)> {
     run_stages_from_frontend(
         frontend,
@@ -959,7 +966,8 @@ fn report_pass_error(db: &dyn salsa::Database, error: &PassError) {
 ///
 /// This is a `#[salsa::tracked]` function so that diagnostics accumulated
 /// during compilation can be collected via `compile_ast_tracked::accumulated`.
-/// Returns whether those stages produced a module.
+/// Returns `false` if the frontend fails or a pass fails; pass failures are
+/// converted to accumulated diagnostics. Otherwise returns `true`.
 #[salsa::tracked(returns(copy))]
 fn compile_ast_tracked(db: &dyn salsa::Database, source: SourceCst) -> bool {
     // Diagnostics are accumulated as side effects

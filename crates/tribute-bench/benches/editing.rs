@@ -46,6 +46,11 @@ fn frontend(session: &EditSession) {
     });
 }
 
+/// Benchmark diagnostic collection for an edit, using `workload` in its name.
+///
+/// Times error introduction and repair separately when `edit.breaks` is set.
+/// For the body edit, also times the frontend, lowering, and IR checks separately.
+/// Source changes and prerequisite stages run outside each timed region.
 fn bench_edit(group: &mut BenchmarkGroup<'_, WallTime>, workload: &str, edit: &Edit) {
     let name = |stage: &str| format!("{workload}/{}/{stage}", edit.name);
     let session = RefCell::new(EditSession::new(edit));
