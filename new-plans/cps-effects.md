@@ -244,14 +244,14 @@ row와 [row binder](ir.md#row-binder), 참조의 `row_args`, 지역 람다의
   apply_twice + [Direct]           → apply_twice$9D
   ```
 
-- 인스턴스 안의 람다마다 [entry](ir.md#callable-entry)를 정한다. 람다 자신의 row가
-  요구하는 convention 이상의 convention마다 entry 하나를 두고, 그 convention으로
-  다시 읽은 class 조합이 같은 entry끼리 본문 하나를 공유한다. 본문은 그 조합의
-  class로 다시 읽은 람다 본문의 복사이며, 그 안에서 row를 양화하는 람다는 정의의
+- 인스턴스 안의 람다마다 [entry](ir.md#callable-entry)를 정한다. 람다의 사용이
+  고르는 class마다 본문 하나를 두고, 나머지 칸은 더 약한 본문을 부르는 adapter나
+  trap entry로 채운다. 본문은 그 class로 다시 읽은 람다 본문의 복사이며, 그 안에서 row를 양화하는 람다는 정의의
   binder 목록 끝에 새 `local` binder를 받는다. 람다 op, 결과 값, capture 목록,
   `instantiate`는 하나로 남으므로 사용처를 다시 연결하지 않는다. Capture 목록은 모든
-  entry 본문의 외부 참조와 같게 다시 계산한다. 람다마다 entry는 셋을 넘지 않으므로
-  다른 람다의 entry를 기다리지 않는다.
+  본문의 외부 참조와 같게 다시 계산한다. 본문 안의 사용이 바깥 람다에 새 class를
+  고를 수 있으므로, 새 본문이 없을 때까지 지역 class를 다시 정한다. 람다마다 본문은
+  셋을 넘지 않으므로 이 반복은 끝난다.
 - `func_ref`마다 entry의 대상 인스턴스를 `row_args`의 class 인자로 정하고, 그
   인스턴스를 인스턴스 수집에 더한다.
 - 정의, entry, 간접 이전에 convention을 쓴다. 값과 block 인자의 타입, 참조의 결과,

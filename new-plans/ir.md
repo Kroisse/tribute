@@ -798,36 +798,43 @@ Type의 일치를 요구하는 규칙은 두 상태에서 같고, convention을 
 정한다. 간접 이전은 자기 convention의 entry로 들어가며, 실행 중에 entry를 고르지
 않는다. 그래서 값마다 entry는 `Direct`, `EvidenceDirect`, `Cps` 셋을 넘지 않는다.
 
-**Entry 본문.** 람다의 entry 본문은 그 entry의 convention `c`로 람다를 다시 읽은
-것이다.
+**Entry 본문.** 람다는 본문을 class마다 하나씩, 그 람다의 사용이 고르는 class에
+대해서만 가진다. 사용의 class는 그 사용의 `instantiate`가 람다 자신의 row에 넘기는
+row의 class다. Row를 양화하지 않는 람다는 사용이 하나의 class만 고르므로 본문이
+하나다. Class `c`의 본문은 람다를 다음처럼 다시 읽은 것이다.
 
 - 람다가 양화한 `local` binder 가운데 람다 자신의 row에 나타나는 것은 class `c`로
   읽는다. Row의 class는 그 tail들의 class를 합친 값이므로 tail마다 `c` 이하이고,
   더 강한 class로 읽은 callable 인자도 그 class의 entry를 가진다(아래 채우기).
-- 자기 row에 나타나지 않고 입력이나 결과의 callable type에만 나타나는 binder는
-  `Cps`로 읽는다. Entry의 convention이 그 class를 알려 주지 않기 때문이다.
+- 자기 row에 나타나지 않고 입력이나 결과의 callable type에만 나타나는 binder는,
+  class `c`를 고르는 사용들이 그 binder에 모두 같은 class를 넘기면 그 class로
+  읽는다. 넘기는 class가 엇갈리면 `Cps`로 읽는다.
 - 둘러싼 인스턴스의 binder는 그 인스턴스가 고정한 class로 읽는다.
 
-이렇게 읽은 class 조합이 같은 entry는 본문 하나를 공유하며, 바깥 convention만 더
-강한 entry는 그 본문을 부르는 adapter다. 람다의 capture 목록은 하나이며, 모든 entry
-본문이 실제 사용하는 외부 SSA 값과 일치한다. Capture는 closure 하나에 한 번만
-담긴다.
+람다의 capture 목록은 하나이며, 모든 본문이 실제 사용하는 외부 SSA 값과 일치한다.
+Capture는 closure 하나에 한 번만 담긴다.
 
-`func_ref`는 convention마다 `row_args`가 고르는 대상의 class 인스턴스를 entry로
-둔다. 인스턴스의 convention이 entry의 convention과 다르면 그 entry는
-[`func_ref` adapter](cps-effects.md#cps-변환의-호출-대상-형상)다.
+**채우기.** Class `k`의 entry는 다음과 같다.
 
-**채우기.** 값은 자기 row가 요구하는 convention 이상의 entry를 모두 가진다. 더 강한
-entry는 언제나 만들 수 있다. `EvidenceDirect` entry는 evidence를 받고 쓰지 않으며,
-`Cps` entry는 결과를 `Done<R>`로 넘기거나 더 약한 본문을
-[값 delimiter](cps-effects.md#값-delimiter) 안에서 부른다. 더 약한 entry는 만들 수
-없으며 공용 trap entry가 그 칸을 채운다. 어떤 값이 놓이는 자리의 class는 그 값을
-만든 인스턴스가 고정한 class보다 약하지 않다. Class는 row의 tail에서 계산하고, 값이
-tail의 정체를 잃는 자리(별칭, class 없는 tail)는 `Cps`로만 읽기 때문이다. 그래서
-trap entry는 실행되지 않는다. Class 특수화는 확인할 수 있는 것을 확인한다. 모든
-간접 이전의 convention은 그 이전을 담은 인스턴스와 entry의 class 표로 callee type을
-읽은 값과 같아야 하며, 다르면 컴파일 오류다. Trap entry는 값의 흐름을 따라가야만
-드러나는 위반을 실행 중에 멈추게 하는 안전망이다.
+- 람다에 class `k`의 본문이 있으면 그 본문이다.
+- 없으면 `k`보다 약한 본문 가운데 가장 강한 것을 부르는 adapter다.
+  `EvidenceDirect` adapter는 evidence를 받고 쓰지 않으며, `Cps` adapter는 본문의
+  결과를 `Done<R>`로 넘긴다. 이 adapter는 본문을 한 번 부르고 끝나며 CPS 제어를
+  만들지 않는다.
+- `k`보다 약한 본문도 없으면 공용 trap entry다.
+
+`func_ref`는 `row_args`가 고르는 대상의 class 인스턴스 하나를 본문으로 삼아 같은
+규칙으로 채운다. 대상이 class 없는 tail 때문에 그 값의 row가 요구하는 것보다 강한
+`Cps` 인스턴스이면, 더 약한 entry는 [값 delimiter](cps-effects.md#값-delimiter)로
+worker를 부르는 [`func_ref` adapter](cps-effects.md#cps-변환의-호출-대상-형상)다.
+
+Trap entry는 실행되지 않는다. 값은 사용을 거쳐서만 다른 자리로 가고, 어떤 값이
+놓이는 자리의 class는 그 값을 만든 사용의 class보다 약하지 않기 때문이다. Class는
+row의 tail에서 계산하고, 값이 tail의 정체를 잃는 자리(별칭, class 없는 tail)는
+`Cps`로만 읽는다. Class 특수화는 확인할 수 있는 것을 확인한다. 모든 간접 이전의
+convention은 그 이전을 담은 인스턴스와 entry의 class 표로 callee type을 읽은 값과
+같아야 하며, 다르면 컴파일 오류다. Trap entry는 값의 흐름을 따라가야만 드러나는
+위반을 실행 중에 멈추게 하는 안전망이다.
 
 **Entry table.** Closure 값은 entry table 참조 하나와 capture로 이루어진다
 ([closure 저장 layout](#closure-저장-layout)). Entry table은 closure를 만드는 code
@@ -846,8 +853,8 @@ operation의 convention으로 round trip한다. Callable type에는 convention�
 
 `lambda`는 convention이 없는 상태에서 본문 하나를 가진다. Class 특수화 뒤에는
 `captures [...]` 뒤에 `entries`와 entry 목록을 쓰며, 본문을 가진 entry는 convention
-keyword 뒤에 본문을 쓴다. 다른 entry의 본문을 adapter로 부르는 entry는
-`cps = direct`처럼 그 entry를 적고 본문이 없다. 채울 수 없는 entry는 쓰지 않는다.
+keyword 뒤에 본문을 쓴다. 더 약한 본문을 adapter로 부르는 entry는
+`cps = direct`처럼 그 본문의 class를 적고 본문이 없다. Trap entry는 쓰지 않는다.
 
 ```text
 tribute_control.func @f(%x: T) -> R convention(cps)
