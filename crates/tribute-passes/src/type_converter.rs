@@ -208,14 +208,8 @@ mod tests {
                 // call's signature, so the debug verifier rejects the input
                 // before any lowering step runs.
                 let error = lowered.expect_err("erased argument must not fill the closure slot");
-                let crate::wasm::lower::WasmLowerError::Pass(pass_error) = &error else {
-                    panic!("expected a pass-manager error: {error}");
-                };
                 assert!(
-                    matches!(
-                        pass_error.kind(),
-                        trunk_ir::pass::PassErrorKind::InvalidInput(_)
-                    ),
+                    matches!(error.kind(), trunk_ir::pass::PassErrorKind::InvalidInput(_)),
                     "{error}"
                 );
                 assert!(
