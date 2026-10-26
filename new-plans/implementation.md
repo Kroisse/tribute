@@ -901,6 +901,15 @@ CLI, LSP와 테스트는 같은 분석 의미를 사용하며 source와 외부 �
 구분한다. LSP는 부분 결과를 사용할 수 있지만 컴파일 경로는 frontend 오류가
 있으면 lowering을 시작하지 않는다.
 
+진단만 내는 컴파일은 frontend, 논리 IR 생성, class 특수화를 거쳐
+[`fn` arm 호출 검사](cps-effects.md#fn-arm-호출-검사)에서 멈춘다. Source 규칙
+위반은 모두 이 지점까지 드러나므로, 이 컴파일은 frontend 진단과 `fn` arm 호출
+진단을 모두 보고한다. 이 컴파일은 도달 가능성으로 함수를 거르지 않아, 도달할 수
+없는 함수도 class 특수화를 거친다. `fn` arm 호출 검사는 자기 규칙대로 root에서
+닿는 인스턴스만 검사한다. 그 뒤 단계(CPS 적법화, evidence와 handler lowering,
+representation/ABI 경계)의 실패는 source 진단이 아니라 compiler 내부 불일치이며,
+산출물을 만드는 컴파일이 보고한다.
+
 ### 모듈 단위 캐싱과 함수 결과 조회
 
 현재 parse, resolve, typecheck는 모듈 단위 Salsa query이다. 함수별 조회

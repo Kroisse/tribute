@@ -17,8 +17,9 @@
 //! - For the `body` edit, its parts:
 //!   - `frontend`: parsing to the specialization result, which Salsa caches;
 //!   - `lowering`: lowering the cached frontend result to source-logical IR;
-//!   - `middle_end`: the shared middle-end over every function, as
-//!     diagnostics run it.
+//!   - `ir_checks`: the stages after lowering that diagnostics run: class
+//!     specialization over every function, then the `fn` arm call check over
+//!     the instances the roots reach.
 
 use std::cell::RefCell;
 use std::time::Duration;
@@ -29,7 +30,7 @@ use salsa::Database;
 use tribute::compile_with_diagnostics;
 use tribute::parse_and_lower_ast;
 use tribute::pipeline::{
-    check_shared_middle_end, compile_frontend_for_shared_route, prepare_frontend_for_lowering,
+    compile_frontend_for_shared_route, prepare_frontend_for_lowering, run_diagnostic_stages,
 };
 use tribute_bench::editing::{Edit, EditSession, workloads};
 
@@ -45,6 +46,11 @@ fn frontend(session: &EditSession) {
     });
 }
 
+/// Benchmark diagnostic collection for an edit, using `workload` in its name.
+///
+/// Times error introduction and repair separately when `edit.breaks` is set.
+/// For the body edit, also times the frontend, lowering, and IR checks separately.
+/// Source changes and prerequisite stages run outside each timed region.
 fn bench_edit(group: &mut BenchmarkGroup<'_, WallTime>, workload: &str, edit: &Edit) {
     let name = |stage: &str| format!("{workload}/{}/{stage}", edit.name);
     let session = RefCell::new(EditSession::new(edit));
@@ -103,7 +109,7 @@ fn bench_edit(group: &mut BenchmarkGroup<'_, WallTime>, workload: &str, edit: &E
                 BatchSize::PerIteration,
             )
         });
-        group.bench_function(name("middle_end"), |b| {
+        group.bench_function(name("ir_checks"), |b| {
             b.iter_batched(
                 || {
                     toggle();
@@ -113,7 +119,7 @@ fn bench_edit(group: &mut BenchmarkGroup<'_, WallTime>, workload: &str, edit: &E
                         .attach(|db| compile_frontend_for_shared_route(db, session.source()))
                         .expect("the program lowers")
                 },
-                |frontend| check_shared_middle_end(frontend).expect("the middle-end succeeds"),
+                |frontend| run_diagnostic_stages(frontend).expect("the checks pass"),
                 BatchSize::PerIteration,
             )
         });
