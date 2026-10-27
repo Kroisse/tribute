@@ -2921,15 +2921,11 @@ fn main() -> Nil {
             partial_result_params: Default::default(),
             context: None,
         };
-        match harness.request::<Completion>(params) {
-            Some(lsp_types::CompletionResponse::List(list)) => {
-                list.items.into_iter().map(|item| item.label).collect()
-            }
-            Some(lsp_types::CompletionResponse::Array(items)) => {
-                items.into_iter().map(|item| item.label).collect()
-            }
-            None => Vec::new(),
-        }
+        let response = harness.request::<Completion>(params);
+        let Some(lsp_types::CompletionResponse::List(list)) = response else {
+            panic!("expected a completion list, got {response:?}");
+        };
+        list.items.into_iter().map(|item| item.label).collect()
     }
 
     /// Open `source`, which has errors, and return its diagnostics' messages.
