@@ -18,7 +18,7 @@ use std::fmt::Write;
 use std::ops::ControlFlow;
 
 use super::context::IrContext;
-use super::ops::{DialectOp, DialectType};
+use super::ops::DialectOp;
 use super::refs::*;
 use super::types::*;
 use super::walk::{WalkAction, walk_region};
@@ -108,9 +108,6 @@ impl<'a> PrintState<'a> {
         if let Some(alias_name) = self.type_alias_names.get(&ty) {
             return write_type_alias_name(f, alias_name);
         }
-        if let Some((inputs, results)) = func_sig_parts(self.ctx, ty) {
-            return self.write_func_sig_type(f, ty, inputs, results);
-        }
         let data = self.ctx.get_type(ty);
         if let Some(hooks) = data.name.def().and_then(|def| def.asm_format)
             && let Some(result) = (hooks.print)(&mut TypePrintHelper { state: self, f }, ty)
@@ -134,54 +131,6 @@ impl<'a> PrintState<'a> {
             if !data.params.is_empty() {
                 f.write_str(", ")?;
             }
-            self.write_attr_dict(f, attrs)?;
-        }
-        f.write_char('>')
-    }
-
-    fn write_func_sig_type(
-        &self,
-        f: &mut dyn Write,
-        ty: TypeRef,
-        inputs: &[TypeRef],
-        results: &[TypeRef],
-    ) -> fmt::Result {
-        let data = self.ctx.get_type(ty);
-        let inline_param_attrs = data.validate_param_attrs(self.ctx).is_ok();
-        write!(f, "{}<(", data.name.display(self.ctx))?;
-        for (index, &input) in inputs.iter().enumerate() {
-            if index > 0 {
-                f.write_str(", ")?;
-            }
-            self.write_param(f, data, inline_param_attrs, index, input)?;
-        }
-        f.write_str(") -> ")?;
-        let first_result = inputs.len();
-        if results.len() == 1 {
-            self.write_param(f, data, inline_param_attrs, first_result, results[0])?;
-        } else {
-            f.write_char('(')?;
-            for (index, &result) in results.iter().enumerate() {
-                if index > 0 {
-                    f.write_str(", ")?;
-                }
-                self.write_param(f, data, inline_param_attrs, first_result + index, result)?;
-            }
-            f.write_char(')')?;
-        }
-
-        let mut attrs = visible_type_attrs(
-            self.ctx,
-            data,
-            inline_param_attrs,
-            &[
-                crate::dialect::func::NUM_INPUTS_ATTR,
-                crate::dialect::func::NUM_RESULTS_ATTR,
-            ],
-        )
-        .peekable();
-        if attrs.peek().is_some() {
-            f.write_str(", ")?;
             self.write_attr_dict(f, attrs)?;
         }
         f.write_char('>')
@@ -284,46 +233,6 @@ fn visible_type_attrs<'b>(
         let key = ctx.str(key);
         !(inline_param_attrs && key == PARAM_ATTRS_ATTR) && !hidden.contains(&key)
     })
-}
-
-/// Return the delimiter-sliced storage only for a complete `*.func_sig` shape.
-/// Other types, including malformed count-shaped data, retain concrete printing.
-fn func_sig_parts(ctx: &IrContext, ty: TypeRef) -> Option<(&[TypeRef], &[TypeRef])> {
-    let data = ctx.get_type(ty);
-    if data.name.strip_dialect(ctx) != "func_sig" {
-        return None;
-    }
-    let malformed = if crate::dialect::func::FuncSig::matches(ctx, ty) {
-        crate::dialect::func::FuncSig::from_type_ref(ctx, ty).is_none()
-    } else if crate::dialect::wasm::FuncSig::matches(ctx, ty) {
-        crate::dialect::wasm::FuncSig::from_type_ref(ctx, ty).is_none()
-    } else if crate::dialect::clif::FuncSig::matches(ctx, ty) {
-        crate::dialect::clif::FuncSig::from_type_ref(ctx, ty).is_none()
-    } else {
-        false
-    };
-    if malformed {
-        return None;
-    }
-    let num_inputs = match ctx
-        .type_attrs(ty)
-        .get(crate::dialect::func::NUM_INPUTS_ATTR)
-    {
-        Some(Attribute::Int(value)) => usize::try_from(u32::try_from(*value).ok()?).ok()?,
-        _ => return None,
-    };
-    let num_results = match ctx
-        .type_attrs(ty)
-        .get(crate::dialect::func::NUM_RESULTS_ATTR)
-    {
-        Some(Attribute::Int(value)) => usize::try_from(u32::try_from(*value).ok()?).ok()?,
-        _ => return None,
-    };
-    let end = num_inputs.checked_add(num_results)?;
-    if end != data.params.len() {
-        return None;
-    }
-    Some((&data.params[..num_inputs], &data.params[num_inputs..]))
 }
 
 // ============================================================================

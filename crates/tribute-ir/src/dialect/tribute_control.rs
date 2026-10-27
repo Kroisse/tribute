@@ -980,10 +980,25 @@ pub enum FuncSigTypeError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FuncSig(TypeRef);
 
-static FUNC_SIG_DEF: trunk_ir::TypeDef =
-    trunk_ir::TypeDef::new("tribute_control.func_sig").with_verifier::<FuncSig>();
+static FUNC_SIG_DEF: trunk_ir::TypeDef = trunk_ir::TypeDef::new("tribute_control.func_sig")
+    .with_verifier::<FuncSig>()
+    .with_asm_format::<FuncSig>();
 
 trunk_ir::register_type_def!(&FUNC_SIG_DEF);
+
+/// The `func.func_sig` syntax, with exactly one result.
+impl trunk_ir::asm_format::TypeAsmFormat for FuncSig {
+    fn print(&self, h: &mut trunk_ir::printer::TypePrintHelper<'_, '_>) -> fmt::Result {
+        trunk_ir::dialect::func::print_signature_type(h, self.0)
+    }
+
+    fn parse<'a>(
+        input: &mut &'a str,
+        name: &'a str,
+    ) -> winnow::ModalResult<trunk_ir::parser::raw::RawType<'a>> {
+        trunk_ir::dialect::func::parse_signature_type(input, name, Some(1))
+    }
+}
 
 impl DialectType for FuncSig {
     const DEF: &'static trunk_ir::TypeDef = &FUNC_SIG_DEF;
@@ -1807,7 +1822,7 @@ fn func_sig_raw_type<'a>(
     row: Option<trunk_ir::parser::raw::RawAttribute<'a>>,
     convention: Option<CallingConvention>,
 ) -> trunk_ir::parser::raw::RawType<'a> {
-    use trunk_ir::parser::raw::{RawAttribute, RawType};
+    use trunk_ir::parser::raw::RawAttribute;
     let mut attrs: Vec<_> = convention
         .map(|convention| {
             (
@@ -1820,12 +1835,12 @@ fn func_sig_raw_type<'a>(
     if let Some(row) = row {
         attrs.push((ABILITY_ROW_ATTR.into(), row));
     }
-    RawType::Function {
-        name: "tribute_control.func_sig",
-        inputs: params.iter().map(|(_, ty)| ty.clone().into()).collect(),
-        results: vec![result.into()],
+    trunk_ir::dialect::func::signature_raw_type(
+        "tribute_control.func_sig",
+        params.iter().map(|(_, ty)| ty.clone().into()).collect(),
+        vec![result.into()],
         attrs,
-    }
+    )
 }
 
 /// Whether an operation's attributes repeat metadata its signature type owns.

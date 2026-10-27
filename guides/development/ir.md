@@ -171,6 +171,13 @@ where
   the type when it generates aliases; a hand-written `TypeDef` adds it with
   `with_alias_hint`. `#[implements(..)]` on a type registers the wrapper's
   [type interfaces](#type-interfaces).
+- The function syntax `<(inputs) -> results, {attrs}>` belongs to the
+  signature types that register it: their `TypeAsmFormat` calls
+  `func::print_signature_type` and `func::parse_signature_type`, which
+  map it to the generic form with `num_inputs`/`num_results`. The core
+  printer and parser have no function syntax of their own, so another
+  dialect's `*.func_sig` uses the generic form unless it registers the same
+  hooks.
 - A hand-written `TypeDef` is a `static` registered with
   `trunk_ir::register_type_def!(&DEF)`. Dialect crates never use
   `inventory` directly; registration goes through `#[dialect]` and these
