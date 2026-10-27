@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 use ropey::Rope;
 use salsa::Database;
 use tribute::TributeDatabaseImpl;
-use tribute_core::diagnostic::Diagnostic;
 use tribute_front::SourceCst;
 use tribute_front::source_file::parse_rope;
 
@@ -47,7 +46,7 @@ fn frontend_messages(path: &Path, text: &str) -> Vec<String> {
     TributeDatabaseImpl::default().attach(|db| {
         let tree = parse_rope(&source_code, None);
         let source = SourceCst::from_path(db, path, source_code.clone(), tree);
-        tribute::pipeline::parse_and_lower_ast::accumulated::<Diagnostic>(db, source)
+        tribute::pipeline::frontend_diagnostics(db, source)
             .into_iter()
             .map(|diagnostic| diagnostic.inner.message.clone())
             .collect()

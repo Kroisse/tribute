@@ -173,11 +173,8 @@ pub fn resolved_module<'db>(
     Some(crate::resolve::resolve_module(db, module, sm))
 }
 
-/// Base query: run type checking once (cached by Salsa).
-///
-/// Returns a `TypeCheckOutput` containing both the typed AST module
-/// and function type schemes.
-#[salsa::tracked(returns(copy))]
+/// Type check the source alone: [`crate::analysis::analyze`] in the
+/// builtin environment.
 pub fn type_check_output<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,

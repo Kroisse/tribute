@@ -9,6 +9,7 @@
 //! caller's decision: the compilation route lowers only a source whose
 //! analysis reported no error.
 
+use tribute_core::diagnostic::Diagnostic;
 use trunk_ir::Symbol;
 
 use crate::astgen::ParsedAst;
@@ -103,4 +104,15 @@ pub fn analyze<'db>(
         db,
         checker.check_module(&resolved),
     ))
+}
+
+/// The diagnostics [`analyze`] reports for `source` in `environment`,
+/// including those of package `std`'s own analysis.
+pub fn diagnostics(
+    db: &dyn salsa::Database,
+    source: SourceCst,
+    environment: Environment,
+) -> Vec<&Diagnostic> {
+    analyze(db, source, environment);
+    analyze::accumulated::<Diagnostic>(db, source, environment)
 }

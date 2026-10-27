@@ -24,12 +24,16 @@ use trunk_ir::{IrContext, Module};
 /// Returns the typed AST, even when the analysis reports errors; returns
 /// `None` only if the source does not parse. Does NOT call `ast_to_ir` —
 /// that is the caller's responsibility.
-#[salsa::tracked(returns(copy))]
-pub fn parse_and_lower_ast<'db>(
-    db: &'db dyn salsa::Database,
+pub fn parse_and_lower_ast(
+    db: &dyn salsa::Database,
     source: SourceCst,
-) -> Option<ast_typeck::TypeCheckOutput<'db>> {
+) -> Option<ast_typeck::TypeCheckOutput<'_>> {
     analysis::analyze(db, source, crate::prelude::frontend_environment(db))
+}
+
+/// The diagnostics [`parse_and_lower_ast`] reports for `source`.
+pub fn frontend_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<&Diagnostic> {
+    analysis::diagnostics(db, source, crate::prelude::frontend_environment(db))
 }
 
 /// Merge prelude decls into user's typed AST and lower to arena IR.
@@ -173,7 +177,7 @@ pub fn compile_frontend_for_shared_route(
     source: SourceCst,
 ) -> Option<FrontendCompilation> {
     let typed = parse_and_lower_ast(db, source)?;
-    let has_frontend_errors = parse_and_lower_ast::accumulated::<Diagnostic>(db, source)
+    let has_frontend_errors = frontend_diagnostics(db, source)
         .iter()
         .any(|diagnostic| diagnostic.inner.severity == DiagnosticSeverity::Error);
     if has_frontend_errors {
@@ -327,9 +331,9 @@ fn main() ->{Io} Nil {
 "#,
         );
         assert!(
-            parse_and_lower_ast::accumulated::<Diagnostic>(db, source).is_empty(),
+            frontend_diagnostics(db, source).is_empty(),
             "{:?}",
-            parse_and_lower_ast::accumulated::<Diagnostic>(db, source)
+            frontend_diagnostics(db, source)
         );
         assert!(assert_continues_merged(db, "continued.trb", source) > 0);
     }
@@ -356,7 +360,7 @@ fn main() ->{Io} Nil {
             let text = Rope::from_str(&std::fs::read_to_string(file).expect("example source"));
             let tree = parse_rope(&text, None);
             let source = SourceCst::from_path(db, file, text, tree);
-            let has_errors = parse_and_lower_ast::accumulated::<Diagnostic>(db, source)
+            let has_errors = frontend_diagnostics(db, source)
                 .iter()
                 .any(|diagnostic| diagnostic.inner.severity == DiagnosticSeverity::Error);
             if !has_errors {

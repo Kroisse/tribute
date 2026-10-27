@@ -363,7 +363,7 @@ fn main() -> Nil { }
         salsa::Database::attach(&db, |db| {
             let source = source(db, text);
             let typed = parse_and_lower_ast(db, source).expect("typechecked source");
-            let diagnostics = parse_and_lower_ast::accumulated::<Diagnostic>(db, source);
+            let diagnostics = frontend_diagnostics(db, source);
             assert!(diagnostics.is_empty(), "{diagnostics:?}");
             let function_types: HashMap<_, _> = typed
                 .declarations(db)

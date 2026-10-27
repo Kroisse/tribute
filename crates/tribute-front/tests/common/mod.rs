@@ -70,12 +70,6 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
 }
 
 #[salsa::tracked]
-fn run_frontend_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) {
-    let checked = analysis::analyze(db, source, environment(db));
-    assert!(checked.is_some(), "Should parse successfully");
-}
-
-#[salsa::tracked]
 fn tdnr_function_summary_inner(
     db: &dyn salsa::Database,
     source: SourceCst,
@@ -272,8 +266,7 @@ pub fn run_ast_pipeline(db: &dyn salsa::Database, source: SourceCst) {
 
 /// Run the frontend through TDNR, without lowering invalid ASTs to IR.
 pub fn ast_pipeline_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<Diagnostic> {
-    run_frontend_pipeline_inner(db, source);
-    run_frontend_pipeline_inner::accumulated::<Diagnostic>(db, source)
+    analysis::diagnostics(db, source, environment(db))
         .into_iter()
         .cloned()
         .collect()

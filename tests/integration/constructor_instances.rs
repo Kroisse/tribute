@@ -1,7 +1,8 @@
 //! Constructor evidence agrees with the value and pattern specialization.
 use salsa_test_macros::salsa_test;
-use tribute::pipeline::{compile_frontend, parse_and_lower_ast, prepare_frontend_for_lowering};
-use tribute_core::Diagnostic;
+use tribute::pipeline::{
+    compile_frontend, frontend_diagnostics, parse_and_lower_ast, prepare_frontend_for_lowering,
+};
 use tribute_front::{
     SourceCst,
     ast::{Decl, ExprKind, PatternKind, Stmt, Type, TypeKind},
@@ -31,7 +32,7 @@ fn main() -> Nil {
 "#,
     );
     let typed = parse_and_lower_ast(db, source).unwrap();
-    assert!(parse_and_lower_ast::accumulated::<Diagnostic>(db, source).is_empty());
+    assert!(frontend_diagnostics(db, source).is_empty());
     let prepared = prepare_frontend_for_lowering(db, typed, source).unwrap();
     for (module, expressions) in [
         (typed.module(db), typed.expression_types(db)),
@@ -96,7 +97,7 @@ fn let_variant_pattern_preserves_its_constrained_constructor(db: &salsa::Databas
         "enum Wrapped(a) { Wrapped(a) }\nfn unpack() -> Int { let .Wrapped(value) = .Wrapped(+42)\nvalue }\nfn main() -> Nil { Nil }",
     );
     let typed = parse_and_lower_ast(db, source).unwrap();
-    assert!(parse_and_lower_ast::accumulated::<Diagnostic>(db, source).is_empty());
+    assert!(frontend_diagnostics(db, source).is_empty());
     let prepared = prepare_frontend_for_lowering(db, typed, source).unwrap();
     for module in [typed.module(db), prepared.module(db)] {
         let function = module
