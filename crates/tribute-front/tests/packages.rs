@@ -4,7 +4,7 @@
 use salsa::Setter;
 use tribute_core::diagnostic::Diagnostic;
 use tribute_front::SourceCst;
-use tribute_front::analysis::{self, DependencyTable, Environment, Package};
+use tribute_front::analysis::{self, DependencyTable, Package};
 use tribute_front::resolve::PackageName;
 use tribute_front::testing::{Executed, LoggingDb};
 use trunk_ir::Symbol;
@@ -30,7 +30,7 @@ struct Build {
     lib: Package,
     lib_source: SourceCst,
     app: SourceCst,
-    environment: Environment,
+    environment: DependencyTable,
 }
 
 impl Build {
@@ -50,7 +50,7 @@ impl Build {
             DependencyTable::new(&db, vec![std]),
         );
         let app = db.source("app.trb", APP);
-        let environment = Environment::Packages(DependencyTable::new(&db, vec![lib, std]));
+        let environment = DependencyTable::new(&db, vec![lib, std]);
         Self {
             db,
             lib,
@@ -141,7 +141,7 @@ fn a_package_that_depends_on_itself_is_rejected() {
 fn lowered_with_library(
     db: &dyn salsa::Database,
     app: SourceCst,
-    environment: Environment,
+    environment: DependencyTable,
     std: Package,
     lib: Package,
 ) -> String {
@@ -235,7 +235,7 @@ fn type_checking_reads_the_exports_of_indirect_dependencies() {
         "app.trb",
         "fn run() -> Nat {\n    case outer::mode() {\n        .Fast -> 1\n        .Slow -> 2\n    }\n}\n",
     );
-    let environment = Environment::Packages(DependencyTable::new(&db, vec![outer, std]));
+    let environment = DependencyTable::new(&db, vec![outer, std]);
     let messages: Vec<_> = analysis::diagnostics(&db, app, environment)
         .into_iter()
         .map(|diagnostic| diagnostic.inner.message.clone())

@@ -36,11 +36,6 @@ impl<'db> Dependencies<'db> {
         }
     }
 
-    /// The dependency on package `std`, whose environment is `std`.
-    pub fn std(std: &'db PackageEnv<'db>) -> Self {
-        Self::new([(Symbol::new(STD_PACKAGE), std)])
-    }
-
     /// The environment of the dependency named `name`.
     pub fn get(&self, name: &Symbol) -> Option<&'db PackageEnv<'db>> {
         self.packages

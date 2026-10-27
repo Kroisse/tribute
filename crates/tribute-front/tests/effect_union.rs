@@ -1,15 +1,15 @@
 //! Semantic effect unions survive declaration collection and generalization.
 use salsa_test_macros::salsa_test;
 use tribute_core::diagnostic::Diagnostic;
-use tribute_front::analysis::{self, Environment};
+use tribute_front::analysis;
 use tribute_front::{SourceCst, ast::TypeKind, typeck::TypeCheckOutput};
 
 fn checked(db: &dyn salsa::Database, source: SourceCst) -> TypeCheckOutput<'_> {
-    analysis::analyze(db, source, Environment::Builtins).unwrap()
+    analysis::analyze(db, source, analysis::builtins(db)).unwrap()
 }
 
 fn diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<&Diagnostic> {
-    analysis::diagnostics(db, source, Environment::Builtins)
+    analysis::diagnostics(db, source, analysis::builtins(db))
 }
 
 #[salsa_test]

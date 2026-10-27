@@ -61,17 +61,11 @@ pub fn std_package(db: &dyn salsa::Database) -> analysis::Package {
     )
 }
 
-/// The dependency table of the user sources the root crate analyzes:
-/// package `std`.
+/// The dependency table the root crate analyzes user sources against:
+/// package `std` from the prelude source.
 #[salsa::tracked(returns(copy))]
-fn user_dependencies(db: &dyn salsa::Database) -> analysis::DependencyTable {
+pub fn frontend_environment(db: &dyn salsa::Database) -> analysis::DependencyTable {
     analysis::DependencyTable::new(db, vec![std_package(db)])
-}
-
-/// The environment the root crate analyzes user sources in: package `std`
-/// from the prelude source.
-pub fn frontend_environment(db: &dyn salsa::Database) -> analysis::Environment {
-    analysis::Environment::Packages(user_dependencies(db))
 }
 
 /// Package `std` specialized alone, with the runtime types its runtime

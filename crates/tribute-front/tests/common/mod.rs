@@ -4,7 +4,7 @@
 use itertools::Itertools;
 use tribute_core::diagnostic::Diagnostic;
 use tribute_front::SourceCst;
-use tribute_front::analysis::{self, Environment};
+use tribute_front::analysis;
 use tribute_front::ast::{Decl, DeclTable, Expr, ExprKind, ResolvedRef, Stmt, TypedRef};
 use trunk_ir::context::IrContext;
 use trunk_ir::printer::print_module;
@@ -29,15 +29,12 @@ fn std_package(db: &dyn salsa::Database) -> analysis::Package {
     )
 }
 
+/// The dependency table the sources under test are analyzed against:
+/// package `std` from the prelude, which declares the operators
+/// (`Int::(+)` etc.).
 #[salsa::tracked(returns(copy))]
-fn std_dependency(db: &dyn salsa::Database) -> analysis::DependencyTable {
+fn environment(db: &dyn salsa::Database) -> analysis::DependencyTable {
     analysis::DependencyTable::new(db, vec![std_package(db)])
-}
-
-/// The environment the sources under test are analyzed in: package `std`
-/// from the prelude, which declares the operators (`Int::(+)` etc.).
-fn environment(db: &dyn salsa::Database) -> Environment {
-    Environment::Packages(std_dependency(db))
 }
 
 /// Inner tracked function that runs the full pipeline.

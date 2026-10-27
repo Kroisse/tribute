@@ -173,7 +173,7 @@ fn phase_errors(
     phase: CompilationPhase,
 ) -> Vec<String> {
     let _ = tribute_front::query::type_check_output(db, source);
-    tribute_front::analysis::diagnostics(db, source, tribute_front::analysis::Environment::Builtins)
+    tribute_front::analysis::diagnostics(db, source, tribute_front::analysis::builtins(db))
         .into_iter()
         .filter(|diagnostic| {
             diagnostic.inner.severity == DiagnosticSeverity::Error && diagnostic.phase == phase
@@ -698,11 +698,8 @@ fn make() ->{} fn(a) ->{} a {
 "#,
     );
     let output = tribute_front::query::type_check_output(db, source).unwrap();
-    let errors = tribute_front::analysis::diagnostics(
-        db,
-        source,
-        tribute_front::analysis::Environment::Builtins,
-    );
+    let errors =
+        tribute_front::analysis::diagnostics(db, source, tribute_front::analysis::builtins(db));
     assert!(errors.is_empty(), "{errors:?}");
     let scheme = output
         .declarations(db)

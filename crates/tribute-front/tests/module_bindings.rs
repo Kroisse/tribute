@@ -3,7 +3,7 @@
 
 use salsa_test_macros::salsa_test;
 use tribute_front::SourceCst;
-use tribute_front::resolve::{Binding, Dependencies, PackageName, build_env, build_library_env};
+use tribute_front::resolve::{Binding, Dependencies, PackageName, build_env, build_package_env};
 use trunk_ir::{Symbol, SymbolPath};
 
 fn module_path(binding: Option<&Binding<'_>>) -> Vec<String> {
@@ -51,7 +51,7 @@ fn nested_modules_are_bound_by_identity(db: &salsa::DatabaseImpl) {
 fn library_modules_are_bound_under_the_package(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(db, "library.trb", TREE);
     let parsed = tribute_front::query::parsed_ast(db, source).unwrap();
-    let env = build_library_env(
+    let env = build_package_env(
         db,
         parsed.module(db),
         &PackageName::std(),
@@ -68,7 +68,7 @@ fn any_library_is_bound_under_its_name(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(db, "lib.trb", TREE);
     let parsed = tribute_front::query::parsed_ast(db, source).unwrap();
     let lib = PackageName::library(Symbol::new("lib"));
-    let env = build_library_env(db, parsed.module(db), &lib, &Dependencies::none());
+    let env = build_package_env(db, parsed.module(db), &lib, &Dependencies::none());
     assert_eq!(env.package(), &lib);
 
     // The paths are those its dependents see: they start with its name.
@@ -143,7 +143,7 @@ fn library_module_reference(db: &dyn salsa::Database, source: SourceCst) -> Vec<
 
     let parsed = tribute_front::query::parsed_ast(db, source).unwrap();
     let module = parsed.module(db);
-    let env = build_library_env(db, module, &PackageName::std(), &Dependencies::none());
+    let env = build_package_env(db, module, &PackageName::std(), &Dependencies::none());
     let resolved = tribute_front::resolve::resolve_library_with_env(
         db,
         module,

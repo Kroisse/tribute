@@ -1,9 +1,9 @@
 //! Frontend analysis of a package source against the packages it depends on.
 //!
 //! The CLI, the language server, and tests analyze a source through these
-//! queries, passing the environment it is analyzed in explicitly. The caller
-//! owns where each library package's source comes from and builds the
-//! [`Package`] inputs.
+//! queries, passing the dependency table it is analyzed against explicitly.
+//! The caller owns where each library package's source comes from and builds
+//! the [`Package`] inputs.
 //!
 //! [`analyze`] returns its result even when it reports errors, so editor
 //! features can read a partial result. Whether a result may be lowered is the
@@ -39,15 +39,6 @@ pub struct Package {
 pub struct DependencyTable {
     #[returns(ref)]
     pub packages: Vec<Package>,
-}
-
-/// The environment a source is analyzed in.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
-pub enum Environment {
-    /// A package `std` that declares only the compiler-owned names.
-    Builtins,
-    /// The library packages of this dependency table.
-    Packages(DependencyTable),
 }
 
 /// A library package type checked on its own: the typed module, and the
@@ -88,11 +79,11 @@ pub fn package_env<'db>(db: &'db dyn salsa::Database, package: Package) -> Optio
         return None;
     }
     let parsed = parsed_package(db, package)?;
-    Some(resolve::build_library_env(
+    Some(resolve::build_package_env(
         db,
         parsed.module(db),
         package.name(db),
-        &table_dependencies(db, package.dependencies(db)),
+        &dependencies(db, package.dependencies(db)),
     ))
 }
 
@@ -107,7 +98,7 @@ pub fn checked_package<'db>(
     let parsed = parsed_package(db, package)?;
     let span_map = parsed.span_map(db);
     let table = package.dependencies(db);
-    let dependencies = table_dependencies(db, table);
+    let dependencies = dependencies(db, table);
     let resolved =
         resolve::resolve_library_with_env(db, parsed.module(db), env, &dependencies, span_map);
     let mut checker = TypeChecker::new(db, span_map, package_names(db, package));
@@ -119,8 +110,25 @@ pub fn checked_package<'db>(
     })
 }
 
+/// A dependency table of one package `std` whose root module is empty, so
+/// that it declares only the compiler-owned names: for analyzing a source
+/// without the prelude.
+#[salsa::tracked(returns(copy))]
+pub fn builtins(db: &dyn salsa::Database) -> DependencyTable {
+    let text = ropey::Rope::new();
+    let tree = crate::source_file::parse_rope(&text, None);
+    let uri = fluent_uri::Uri::parse_from("builtins:///std".to_owned()).expect("valid URI");
+    let std = Package::new(
+        db,
+        PackageName::std(),
+        SourceCst::new(db, uri, text, tree),
+        DependencyTable::new(db, Vec::new()),
+    );
+    DependencyTable::new(db, vec![std])
+}
+
 /// The packages of `table` with their environments, for name resolution.
-fn table_dependencies(db: &dyn salsa::Database, table: DependencyTable) -> Dependencies<'_> {
+pub fn dependencies(db: &dyn salsa::Database, table: DependencyTable) -> Dependencies<'_> {
     Dependencies::new(table.packages(db).iter().filter_map(|&package| {
         Some((package_name(db, package).clone(), package_env(db, package)?))
     }))
@@ -198,58 +206,52 @@ pub fn package_names(db: &dyn salsa::Database, package: Package) -> NameDisplay 
     )
 }
 
-/// The packages a source analyzed in `environment` depends on.
-pub fn dependencies(db: &dyn salsa::Database, environment: Environment) -> Dependencies<'_> {
-    match environment {
-        Environment::Builtins => Dependencies::std(resolve::builtin_library_env(db)),
-        Environment::Packages(table) => table_dependencies(db, table),
-    }
-}
-
 /// How diagnostics spell declarations while the executable root package is
-/// compiled in `environment`.
-pub fn root_names(db: &dyn salsa::Database, environment: Environment) -> NameDisplay {
+/// compiled against `table`.
+pub fn root_names(db: &dyn salsa::Database, table: DependencyTable) -> NameDisplay {
     NameDisplay::new(
         &PackageName::executable_root(),
-        dependencies(db, environment).names(),
+        table
+            .packages(db)
+            .iter()
+            .map(|&package| package_name(db, package)),
     )
 }
 
-/// Parse, resolve, and type check `source` in `environment`.
+/// Parse, resolve, and type check `source` against the packages `table`
+/// names.
 ///
 /// Returns `None` only if `source` does not parse. Errors are reported as
 /// accumulated diagnostics, and the result is returned with them. The result
-/// holds only `source`'s declarations; package `std`'s are read through the
-/// dependency table.
+/// holds only `source`'s declarations; its dependencies' are read through
+/// the dependency table.
 #[salsa::tracked(returns(copy))]
 pub fn analyze<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
-    environment: Environment,
+    table: DependencyTable,
 ) -> Option<TypeCheckOutput<'db>> {
     let parsed = query::parsed_ast(db, source)?;
     let module = parsed.module(db);
     let span_map = parsed.span_map(db);
-    let scope = resolve::build_env(db, module, dependencies(db, environment));
+    let scope = resolve::build_env(db, module, dependencies(db, table));
     let resolved = resolve::resolve_with_env(db, module, &scope, span_map);
 
-    let mut checker = TypeChecker::new(db, span_map, root_names(db, environment));
-    if let Environment::Packages(table) = environment {
-        depend_on_table(db, &mut checker, table);
-    }
+    let mut checker = TypeChecker::new(db, span_map, root_names(db, table));
+    depend_on_table(db, &mut checker, table);
     Some(TypeCheckOutput::from_check(
         db,
         checker.check_module(&resolved),
     ))
 }
 
-/// The diagnostics [`analyze`] reports for `source` in `environment`,
-/// including those of package `std`'s own analysis.
+/// The diagnostics [`analyze`] reports for `source` against `table`,
+/// including those of its dependencies' own analyses.
 pub fn diagnostics(
     db: &dyn salsa::Database,
     source: SourceCst,
-    environment: Environment,
+    table: DependencyTable,
 ) -> Vec<&Diagnostic> {
-    analyze(db, source, environment);
-    analyze::accumulated::<Diagnostic>(db, source, environment)
+    analyze(db, source, table);
+    analyze::accumulated::<Diagnostic>(db, source, table)
 }

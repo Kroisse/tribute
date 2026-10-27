@@ -805,7 +805,7 @@ fn only(value: Nil) -> Nat {
 /// Error messages from checking `source` alone, without the prelude.
 fn errors_without_prelude(db: &salsa::DatabaseImpl, source: &str) -> Vec<String> {
     let source = SourceCst::from_source_str(db, "test.trb", source);
-    tribute_front::analysis::diagnostics(db, source, tribute_front::analysis::Environment::Builtins)
+    tribute_front::analysis::diagnostics(db, source, tribute_front::analysis::builtins(db))
         .into_iter()
         .filter(|diagnostic| {
             diagnostic.inner.severity == tribute_core::diagnostic::DiagnosticSeverity::Error
