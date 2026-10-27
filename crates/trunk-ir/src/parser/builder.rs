@@ -27,11 +27,6 @@ use crate::types::*;
 use crate::{BlockArgData, BlockData, RegionData};
 use crate::{OpName, Symbol, SymbolPath, TypeName};
 
-/// The types of `params`, without their attributes.
-fn param_types(params: &[(TypeRef, AttributeMap)]) -> impl ExactSizeIterator<Item = TypeRef> + '_ {
-    params.iter().map(|&(ty, _)| ty)
-}
-
 // ============================================================================
 // ArenaIrBuilder (Raw -> Arena IR)
 // ============================================================================
@@ -97,15 +92,6 @@ impl<'a> ArenaIrBuilder<'a> {
                 }
                 Ok(builder.intern(self.ctx))
             }
-            RawType::Function {
-                name,
-                inputs,
-                results,
-                attrs,
-            } => {
-                let name = TypeName::intern(self.ctx.strings_mut(), name);
-                self.build_function_type(name, inputs, results, attrs)
-            }
         }
     }
 
@@ -153,203 +139,6 @@ impl<'a> ArenaIrBuilder<'a> {
             });
         }
         self.build_attr_dict(attrs)
-    }
-
-    /// Build a function type's attributes, storing the attributes written on
-    /// its inputs and results in canonical [`PARAM_ATTRS_ATTR`] form.
-    fn build_function_type_attrs(
-        &mut self,
-        type_name: TypeName,
-        attrs: &RawAttrDict<'_>,
-        inputs: &[(TypeRef, AttributeMap)],
-        results: &[(TypeRef, AttributeMap)],
-    ) -> Result<AttributeMap, ParseError> {
-        let mut attrs = self.build_type_attrs(type_name, attrs)?;
-        let param_attrs = inputs.iter().chain(results).map(|(_, attrs)| attrs.clone());
-        if let Some(value) = param_attrs_attribute(param_attrs) {
-            attrs.view_mut(self.ctx).insert(PARAM_ATTRS_ATTR, value);
-        }
-        Ok(attrs)
-    }
-
-    fn build_function_type(
-        &mut self,
-        name: TypeName,
-        inputs: &[RawParam<'_>],
-        results: &[RawParam<'_>],
-        attrs: &RawAttrDict<'_>,
-    ) -> Result<TypeRef, ParseError> {
-        if name == <crate::dialect::func::FuncSig as DialectType>::NAME {
-            return self.build_shared_function_type(inputs, results, attrs);
-        }
-        if name == <crate::dialect::wasm::FuncSig as DialectType>::NAME {
-            return self.build_wasm_function_type(inputs, results, attrs);
-        }
-        if name == <crate::dialect::clif::FuncSig as DialectType>::NAME {
-            return self.build_clif_function_type(inputs, results, attrs);
-        }
-        self.build_foreign_function_type(name, inputs, results, attrs)
-    }
-
-    fn build_wasm_function_type(
-        &mut self,
-        inputs: &[RawParam<'_>],
-        results: &[RawParam<'_>],
-        attrs: &RawAttrDict<'_>,
-    ) -> Result<TypeRef, ParseError> {
-        if let Some((name, _)) = attrs.iter().find(|(name, _)| {
-            matches!(
-                name.as_ref(),
-                crate::dialect::wasm::NUM_INPUTS_ATTR | crate::dialect::wasm::NUM_RESULTS_ATTR
-            )
-        }) {
-            return Err(ParseError {
-                message: format!("`{name}` is reserved by wasm.func_sig"),
-                offset: 0,
-            });
-        }
-        let inputs = self.build_params(inputs)?;
-        let results = self.build_params(results)?;
-        let attrs = self.build_function_type_attrs(
-            <crate::dialect::wasm::FuncSig as DialectType>::NAME,
-            attrs,
-            &inputs,
-            &results,
-        )?;
-        let (inputs, results) = (param_types(&inputs), param_types(&results));
-        Ok(
-            crate::dialect::wasm::func_sig_with_attrs(self.ctx, inputs, results, attrs)
-                .as_type_ref(),
-        )
-    }
-
-    /// Build the native target signature through its owning validated API.
-    fn build_clif_function_type(
-        &mut self,
-        inputs: &[RawParam<'_>],
-        results: &[RawParam<'_>],
-        attrs: &RawAttrDict<'_>,
-    ) -> Result<TypeRef, ParseError> {
-        if let Some((name, _)) = attrs.iter().find(|(name, _)| {
-            matches!(
-                name.as_ref(),
-                crate::dialect::clif::NUM_INPUTS_ATTR | crate::dialect::clif::NUM_RESULTS_ATTR
-            )
-        }) {
-            return Err(ParseError {
-                message: format!("`{name}` is reserved by clif.func_sig"),
-                offset: 0,
-            });
-        }
-        let inputs = self.build_params(inputs)?;
-        let results = self.build_params(results)?;
-        let attrs = self.build_function_type_attrs(
-            <crate::dialect::clif::FuncSig as DialectType>::NAME,
-            attrs,
-            &inputs,
-            &results,
-        )?;
-        let (inputs, results) = (param_types(&inputs), param_types(&results));
-        Ok(
-            crate::dialect::clif::func_sig_with_attrs(self.ctx, inputs, results, attrs)
-                .as_type_ref(),
-        )
-    }
-
-    /// Build the existing shared signature through its owning validated API.
-    fn build_shared_function_type(
-        &mut self,
-        inputs: &[RawParam<'_>],
-        results: &[RawParam<'_>],
-        attrs: &RawAttrDict<'_>,
-    ) -> Result<TypeRef, ParseError> {
-        if results.len() > 1 {
-            return Err(ParseError {
-                message: format!(
-                    "func.func_sig currently does not support multiple results (found {})",
-                    results.len()
-                ),
-                offset: 0,
-            });
-        }
-        if let Some((name, _)) = attrs.iter().find(|(name, _)| {
-            matches!(
-                name.as_ref(),
-                crate::dialect::func::NUM_INPUTS_ATTR | crate::dialect::func::NUM_RESULTS_ATTR
-            )
-        }) {
-            return Err(ParseError {
-                message: format!("`{name}` is reserved by func.func_sig"),
-                offset: 0,
-            });
-        }
-
-        let inputs = self.build_params(inputs)?;
-        let results = self.build_params(results)?;
-        let attrs = self.build_function_type_attrs(
-            <crate::dialect::func::FuncSig as DialectType>::NAME,
-            attrs,
-            &inputs,
-            &results,
-        )?;
-        let (inputs, results) = (param_types(&inputs), param_types(&results));
-        Ok(
-            crate::dialect::func::func_sig_with_attrs(self.ctx, inputs, results, attrs)
-                .as_type_ref(),
-        )
-    }
-
-    /// Build a non-shared qualified `*.func_sig` as opaque dialect-owned storage.
-    /// Semantic result cardinality remains the owning dialect's responsibility.
-    fn build_foreign_function_type(
-        &mut self,
-        type_name: TypeName,
-        inputs: &[RawParam<'_>],
-        results: &[RawParam<'_>],
-        attrs: &RawAttrDict<'_>,
-    ) -> Result<TypeRef, ParseError> {
-        if let Some((reserved, _)) = attrs.iter().find(|(key, _)| {
-            matches!(
-                key.as_ref(),
-                crate::dialect::func::NUM_INPUTS_ATTR | crate::dialect::func::NUM_RESULTS_ATTR
-            )
-        }) {
-            return Err(ParseError {
-                message: format!(
-                    "`{reserved}` is reserved by {}",
-                    type_name.display(self.ctx)
-                ),
-                offset: 0,
-            });
-        }
-        let inputs = self.build_params(inputs)?;
-        let results = self.build_params(results)?;
-        let attrs = self.build_function_type_attrs(type_name, attrs, &inputs, &results)?;
-        let (inputs, results) = (param_types(&inputs), param_types(&results));
-        let num_inputs = u32::try_from(inputs.len()).map_err(|_| ParseError {
-            message: format!("{} input count exceeds u32", type_name.display(self.ctx)),
-            offset: 0,
-        })?;
-        let num_results = u32::try_from(results.len()).map_err(|_| ParseError {
-            message: format!("{} result count exceeds u32", type_name.display(self.ctx)),
-            offset: 0,
-        })?;
-        let mut builder = TypeDataBuilder::new(type_name)
-            .params(inputs)
-            .params(results);
-        for (key, value) in attrs {
-            builder = builder.attr(key, value);
-        }
-        Ok(builder
-            .attr(
-                crate::dialect::func::NUM_INPUTS_ATTR,
-                Attribute::from(num_inputs),
-            )
-            .attr(
-                crate::dialect::func::NUM_RESULTS_ATTR,
-                Attribute::from(num_results),
-            )
-            .intern(self.ctx))
     }
 
     fn build_attribute(&mut self, raw: &RawAttribute<'_>) -> Result<Attribute, ParseError> {
@@ -1732,7 +1521,7 @@ core.module @test {
         )
         .expect_err("target count delimiters are constructor-owned");
         assert!(
-            error.message.contains("reserved by clif.func_sig"),
+            error.message.contains("`num_inputs` or `num_results`"),
             "{error}"
         );
     }
@@ -1765,7 +1554,7 @@ core.module @test {
             let mut ctx = IrContext::new();
             let error = parse_module(&mut ctx, &input).expect_err("reserved key must be rejected");
             assert!(
-                error.message.contains("reserved by func.func_sig"),
+                error.message.contains("`num_inputs` or `num_results`"),
                 "{error}"
             );
         }
@@ -1776,39 +1565,31 @@ core.module @test {
         let input = "core.module @test { !bad = func.func_sig<() -> (core.i32, core.i64)> }";
         let mut ctx = IrContext::new();
         let error = parse_module(&mut ctx, input).expect_err("multi-result must be rejected");
-        assert!(error.message.contains("multiple results"), "{error}");
+        assert!(
+            error
+                .message
+                .contains("results than the signature type allows"),
+            "{error}"
+        );
     }
 
     #[test]
-    fn foreign_func_sig_roundtrips_without_changing_shared_contracts() {
+    fn unregistered_func_sig_uses_generic_syntax() {
         let input = r#"core.module @test {
-  !foreign = foreign.func_sig<(core.i32, core.i64) -> (core.i1, core.i32), {nested = core.array<core.i32>}>
-  !unrelated = foreign.record<core.i32, {num_inputs = 1, num_results = 0}>
+  !foreign = foreign.func_sig<core.i32, core.i64, core.i1, core.i32, {nested = core.array<core.i32>, num_inputs = 2, num_results = 2}>
 }"#;
         let mut ctx = IrContext::new();
-        let module = parse_module(&mut ctx, input).expect("foreign signature should parse");
+        let module = parse_module(&mut ctx, input).expect("generic storage should parse");
         let printed = print_module(&ctx, module);
-        assert!(printed.contains("!foreign = foreign.func_sig<(core.i32, core.i64) -> (core.i1, core.i32), {nested = core.array<core.i32>}>"), "{printed}");
-        assert!(
-            printed.contains(
-                "!unrelated = foreign.record<core.i32, {num_inputs = 1, num_results = 0}>"
-            ),
-            "{printed}"
-        );
+        assert!(printed.contains("!foreign = foreign.func_sig<core.i32, core.i64, core.i1, core.i32, {nested = core.array<core.i32>, num_inputs = 2, num_results = 2}>"), "{printed}");
         assert_roundtrip(&ctx, module);
 
-        for reserved in [func::NUM_INPUTS_ATTR, func::NUM_RESULTS_ATTR] {
-            let mut rejected = IrContext::new();
-            let error = parse_module(
-                &mut rejected,
-                &format!("core.module @test {{ !bad = foreign.func_sig<() -> core.i32, {{{reserved} = 0}}> }}"),
-            )
-            .expect_err("foreign signature delimiters remain reserved");
-            assert!(
-                error.message.contains("reserved by foreign.func_sig"),
-                "{error}"
-            );
-        }
+        let mut rejected = IrContext::new();
+        parse_module(
+            &mut rejected,
+            "core.module @test { !bad = foreign.func_sig<(core.i32) -> core.i32> }",
+        )
+        .expect_err("a type without a registered format has no signature syntax");
     }
 
     #[test]

@@ -1715,10 +1715,14 @@ func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> core.i64, {call_con
   dictionary다. `{`로 시작하는 원소가 type 속성이며, 마지막에 한 번만 올 수 있다.
   매개변수 바로 뒤의 dictionary는 그 매개변수의
   [매개변수 속성](#타입-매개변수-속성)이다.
-- `<` 바로 다음이 `(`이면 함수 형태다:
-  `<(inputs...) -> results[, {type 속성}]>`. 입력과 결과도 각각 매개변수 속성을
-  가질 수 있다. 결과 목록 규칙은
-  [`func.func_sig`](#funcfunc_sig-function-type)를 따른다.
+- 함수 형태 `<(inputs...) -> results[, {type 속성}]>`는 `func` dialect가 정의하는
+  전용 문법이다. 입력과 결과도 각각 매개변수 속성을 가질 수 있고, 저장 표현은
+  [`func.func_sig`](#funcfunc_sig-function-type)의 평탄한 매개변수 벡터와 두
+  count다. 같은 저장 표현을 쓰는 signature 타입(`func.func_sig`,
+  `wasm.func_sig`, `clif.func_sig`, `tribute_control.func_sig`)은 각자의
+  dialect가 이 문법을 type assembly format으로 등록하고, 허용하는 결과 개수를
+  함께 정한다. 이름이 `func_sig`라는 사실만으로는 이 문법을 얻지 않으며,
+  등록하지 않은 타입은 일반 형식으로 읽고 쓴다.
 - 이 규칙은 일반 형태와 전용 문법에 똑같이 적용된다. 전용 문법을 가진 타입도
   모든 내용을 `<…>` 안에 둔다. 타입 안의 `(…)`는 함수 입력·결과처럼 위치가 있는
   목록에만 쓴다.

@@ -302,10 +302,25 @@ impl FuncSig {
     }
 }
 
-static FUNC_SIG_DEF: crate::type_def::TypeDef =
-    crate::type_def::TypeDef::new("clif.func_sig").with_verifier::<FuncSig>();
+static FUNC_SIG_DEF: crate::type_def::TypeDef = crate::type_def::TypeDef::new("clif.func_sig")
+    .with_verifier::<FuncSig>()
+    .with_asm_format::<FuncSig>();
 
 crate::register_type_def!(&FUNC_SIG_DEF);
+
+/// The `func.func_sig` syntax, with any number of results.
+impl crate::asm_format::TypeAsmFormat for FuncSig {
+    fn print(&self, h: &mut crate::printer::TypePrintHelper<'_, '_>) -> std::fmt::Result {
+        super::func::print_signature_type(h, self.0)
+    }
+
+    fn parse<'a>(
+        input: &mut &'a str,
+        name: &'a str,
+    ) -> winnow::ModalResult<crate::parser::raw::RawType<'a>> {
+        super::func::parse_signature_type(input, name, None)
+    }
+}
 
 impl DialectType for FuncSig {
     const DEF: &'static crate::type_def::TypeDef = &FUNC_SIG_DEF;

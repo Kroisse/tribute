@@ -7,6 +7,7 @@ use crate::op_interface::{
     self, CallableExit, CallableOwner, ControlFlowInterfaceError, IndirectCallLike,
 };
 use crate::ops::{DialectOp, DialectType};
+use crate::parser::raw::{RawAttrDict, RawAttribute, RawParam, RawType};
 use crate::{Attribute, AttributeMap, IrContext, SymbolPath, TypeDataBuilder, TypeRef};
 
 /// The exact callable signature retained after a typed indirect callee becomes
@@ -329,10 +330,172 @@ impl FuncSig {
     }
 }
 
-static FUNC_SIG_DEF: crate::type_def::TypeDef =
-    crate::type_def::TypeDef::new("func.func_sig").with_verifier::<FuncSig>();
+static FUNC_SIG_DEF: crate::type_def::TypeDef = crate::type_def::TypeDef::new("func.func_sig")
+    .with_verifier::<FuncSig>()
+    .with_asm_format::<FuncSig>();
 
 crate::register_type_def!(&FUNC_SIG_DEF);
+
+impl crate::asm_format::TypeAsmFormat for FuncSig {
+    fn print(&self, h: &mut crate::printer::TypePrintHelper<'_, '_>) -> std::fmt::Result {
+        print_signature_type(h, self.0)
+    }
+
+    fn parse<'a>(input: &mut &'a str, name: &'a str) -> winnow::ModalResult<RawType<'a>> {
+        parse_signature_type(input, name, Some(1))
+    }
+}
+
+/// Print a validated signature type as `name<(inputs) -> results, {attrs}>`.
+///
+/// The type stores its inputs then its results as parameters, delimited by
+/// [`NUM_INPUTS_ATTR`] and [`NUM_RESULTS_ATTR`], which the syntax implies and
+/// does not print. One result is written bare, any other count in
+/// parentheses. Parameter attributes follow their parameter. Signature types
+/// of other dialects that share this layout reuse it with
+/// [`parse_signature_type`] in their
+/// [`TypeAsmFormat`](crate::asm_format::TypeAsmFormat).
+pub fn print_signature_type(
+    h: &mut crate::printer::TypePrintHelper<'_, '_>,
+    ty: TypeRef,
+) -> std::fmt::Result {
+    use std::fmt::Write;
+
+    let ctx = h.ctx();
+    let data = ctx.get_type(ty);
+    let num_inputs = read_count(ctx, &data.attrs, NUM_INPUTS_ATTR)
+        .expect("a validated signature type stores its input count") as usize;
+    let (inputs, results) = data.params.split_at(num_inputs);
+    let inline_param_attrs = data.validate_param_attrs(ctx).is_ok();
+    let write_param = |h: &mut crate::printer::TypePrintHelper<'_, '_>, index: usize| {
+        h.write_type(data.params[index])?;
+        let attrs = data.param_attrs(ctx, index);
+        if inline_param_attrs && !attrs.is_empty() {
+            h.write_char(' ')?;
+            h.write_attr_dict(attrs.iter())?;
+        }
+        Ok(())
+    };
+
+    write!(h, "{}<(", data.name.display(ctx))?;
+    for index in 0..inputs.len() {
+        if index > 0 {
+            h.write_str(", ")?;
+        }
+        write_param(h, index)?;
+    }
+    h.write_str(") -> ")?;
+    if results.len() == 1 {
+        write_param(h, num_inputs)?;
+    } else {
+        h.write_char('(')?;
+        for index in 0..results.len() {
+            if index > 0 {
+                h.write_str(", ")?;
+            }
+            write_param(h, num_inputs + index)?;
+        }
+        h.write_char(')')?;
+    }
+
+    let mut attrs = data
+        .attrs
+        .iter()
+        .filter(|&(key, _)| {
+            let key = ctx.str(key);
+            key != NUM_INPUTS_ATTR
+                && key != NUM_RESULTS_ATTR
+                && !(inline_param_attrs && key == crate::types::PARAM_ATTRS_ATTR)
+        })
+        .peekable();
+    if attrs.peek().is_some() {
+        h.write_str(", ")?;
+        h.write_attr_dict(attrs)?;
+    }
+    h.write_char('>')
+}
+
+/// Parse the rest of `name<(inputs) -> results, {attrs}>` after its opening
+/// bracket into the generic form [`signature_raw_type`] builds.
+///
+/// A list that does not start with `(` backtracks to generic parsing. The
+/// syntax owns the delimiter counts, so an attribute dictionary that writes
+/// them is rejected, as is a result count above `max_results`.
+pub fn parse_signature_type<'a>(
+    input: &mut &'a str,
+    name: &'a str,
+    max_results: Option<usize>,
+) -> winnow::ModalResult<RawType<'a>> {
+    use crate::parser::raw::{raw_attr_dict, raw_param, raw_param_list, ws};
+    use winnow::combinator::{opt, preceded};
+    use winnow::error::{ContextError, ErrMode, StrContext, StrContextValue};
+    use winnow::prelude::*;
+
+    let cut = |description: &'static str| {
+        let mut error = ContextError::new();
+        error.push(StrContext::Expected(StrContextValue::Description(
+            description,
+        )));
+        ErrMode::Cut(error)
+    };
+    if !input.starts_with('(') {
+        return Err(ErrMode::Backtrack(ContextError::new()));
+    }
+    let inputs = raw_param_list.parse_next(input)?;
+    ws.parse_next(input)?;
+    "->".parse_next(input)?;
+    ws.parse_next(input)?;
+    let results = if input.starts_with('(') {
+        raw_param_list.parse_next(input)?
+    } else {
+        vec![raw_param.parse_next(input)?]
+    };
+    ws.parse_next(input)?;
+    let attrs = opt(preceded((',', ws), raw_attr_dict))
+        .parse_next(input)?
+        .unwrap_or_default();
+    ws.parse_next(input)?;
+    '>'.parse_next(input)?;
+
+    if max_results.is_some_and(|max| results.len() > max) {
+        return Err(cut("no more results than the signature type allows"));
+    }
+    if attrs
+        .iter()
+        .any(|(key, _)| key == NUM_INPUTS_ATTR || key == NUM_RESULTS_ATTR)
+    {
+        return Err(cut(
+            "signature attributes without `num_inputs` or `num_results`, which the syntax implies",
+        ));
+    }
+    Ok(signature_raw_type(name, inputs, results, attrs))
+}
+
+/// The generic raw form of a signature type: its inputs then its results as
+/// parameters, with [`NUM_INPUTS_ATTR`] and [`NUM_RESULTS_ATTR`] added to
+/// `attrs`.
+pub fn signature_raw_type<'a>(
+    name: &'a str,
+    inputs: Vec<RawParam<'a>>,
+    results: Vec<RawParam<'a>>,
+    mut attrs: RawAttrDict<'a>,
+) -> RawType<'a> {
+    attrs.push((
+        NUM_INPUTS_ATTR.into(),
+        RawAttribute::Int(inputs.len() as i128),
+    ));
+    attrs.push((
+        NUM_RESULTS_ATTR.into(),
+        RawAttribute::Int(results.len() as i128),
+    ));
+    let mut params = inputs;
+    params.extend(results);
+    RawType::Concrete {
+        name,
+        params,
+        attrs,
+    }
+}
 
 impl DialectType for FuncSig {
     const DEF: &'static crate::type_def::TypeDef = &FUNC_SIG_DEF;
@@ -875,6 +1038,80 @@ mod tests {
     use crate::ops::DialectOp;
     use crate::parser::parse_test_module;
     use crate::printer::print_module;
+
+    fn parse_raw_signature(text: &str) -> RawType<'_> {
+        use winnow::prelude::*;
+        let mut input = text;
+        let raw = crate::parser::raw::raw_type
+            .parse_next(&mut input)
+            .expect("signature should parse");
+        assert!(input.is_empty(), "unparsed: {input}");
+        raw
+    }
+
+    fn raw_count(attrs: &RawAttrDict<'_>, key: &str) -> i128 {
+        match attrs.iter().find(|(k, _)| k == key) {
+            Some((_, RawAttribute::Int(count))) => *count,
+            other => panic!("expected integer `{key}`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn signature_syntax_parses_into_the_generic_form() {
+        let raw = parse_raw_signature(
+            "func.func_sig<(core.i32 {a = @x}, core.ptr) -> core.i64 {b = @y}, {call_conv = \"tail\"}>",
+        );
+        let RawType::Concrete {
+            name,
+            params,
+            attrs,
+        } = raw
+        else {
+            panic!("expected the generic form")
+        };
+        assert_eq!(name, "func.func_sig");
+        assert_eq!(params.len(), 3);
+        assert_eq!(params[0].attrs.len(), 1);
+        assert!(params[1].attrs.is_empty());
+        assert_eq!(params[2].attrs.len(), 1);
+        assert_eq!(raw_count(&attrs, NUM_INPUTS_ATTR), 2);
+        assert_eq!(raw_count(&attrs, NUM_RESULTS_ATTR), 1);
+        assert_eq!(attrs.len(), 3);
+    }
+
+    #[test]
+    fn signature_syntax_counts_empty_and_multiple_results() {
+        let RawType::Concrete { params, attrs, .. } =
+            parse_raw_signature("func.func_sig<(core.i32) -> ()>")
+        else {
+            panic!("expected the generic form")
+        };
+        assert_eq!(params.len(), 1);
+        assert_eq!(raw_count(&attrs, NUM_RESULTS_ATTR), 0);
+
+        let RawType::Concrete { params, attrs, .. } =
+            parse_raw_signature("wasm.func_sig<() -> (core.i32, core.i64)>")
+        else {
+            panic!("expected the generic form")
+        };
+        assert_eq!(params.len(), 2);
+        assert_eq!(raw_count(&attrs, NUM_INPUTS_ATTR), 0);
+        assert_eq!(raw_count(&attrs, NUM_RESULTS_ATTR), 2);
+    }
+
+    #[test]
+    fn signature_generic_spelling_round_trips_to_the_custom_syntax() {
+        let input = r#"core.module @test {
+  !generic = func.func_sig<core.i32 {a = 1}, core.i64, {num_inputs = 1, num_results = 1}>
+}"#;
+        let mut ctx = crate::IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+        let printed = print_module(&ctx, module.op());
+        assert!(
+            printed.contains("!generic = func.func_sig<(core.i32 {a = 1}) -> core.i64>"),
+            "{printed}"
+        );
+    }
 
     #[test]
     fn call_conv_is_a_signature_attribute_that_round_trips() {

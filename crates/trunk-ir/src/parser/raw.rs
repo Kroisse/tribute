@@ -93,14 +93,6 @@ pub enum RawType<'a> {
         params: Vec<RawParam<'a>>,
         attrs: RawAttrDict<'a>,
     },
-    /// Function syntax `dialect.name<(inputs...) -> results, {attrs}>`.
-    Function {
-        /// The type's `dialect.name`.
-        name: &'a str,
-        inputs: Vec<RawParam<'a>>,
-        results: Vec<RawParam<'a>>,
-        attrs: RawAttrDict<'a>,
-    },
     /// Type alias reference: `!name` or `!"quoted name"`
     Alias(String),
 }
@@ -314,13 +306,13 @@ pub fn type_alias_ref<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
 /// ```text
 /// dialect.name
 /// dialect.name<param {param attrs}, param, {type attrs}>
-/// dialect.name<(input {attrs}, ...) -> result {attrs}, {type attrs}>
-/// dialect.name<(inputs...) -> (results...)>
 /// ```
 ///
 /// An element that starts with `{` holds the type's own attributes and must
 /// come last. A dictionary directly after a parameter holds that parameter's
-/// attributes. A list that starts with `(` is function syntax.
+/// attributes. A type whose definition registers a
+/// [`TypeAsmFormat`](crate::asm_format::TypeAsmFormat) parses its own syntax
+/// inside the brackets first.
 pub fn raw_type<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
     // Check for alias reference first
     if input.starts_with('!') {
@@ -346,30 +338,6 @@ pub fn raw_type<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
             Err(winnow::error::ErrMode::Backtrack(_)) => *input = checkpoint,
             Err(error) => return Err(error),
         }
-    }
-
-    if input.starts_with('(') {
-        let inputs = raw_param_list.parse_next(input)?;
-        ws.parse_next(input)?;
-        "->".parse_next(input)?;
-        ws.parse_next(input)?;
-        let results = if input.starts_with('(') {
-            raw_param_list.parse_next(input)?
-        } else {
-            vec![raw_param.parse_next(input)?]
-        };
-        ws.parse_next(input)?;
-        let attrs = opt(preceded((',', ws), raw_attr_dict))
-            .parse_next(input)?
-            .unwrap_or_default();
-        ws.parse_next(input)?;
-        '>'.parse_next(input)?;
-        return Ok(RawType::Function {
-            name,
-            inputs,
-            results,
-            attrs,
-        });
     }
 
     let mut params = Vec::new();
@@ -408,7 +376,7 @@ pub fn raw_param<'a>(input: &mut &'a str) -> ModalResult<RawParam<'a>> {
 }
 
 /// Parse a parenthesized parameter list: `(type {attrs}, type, ...)`.
-fn raw_param_list<'a>(input: &mut &'a str) -> ModalResult<Vec<RawParam<'a>>> {
+pub fn raw_param_list<'a>(input: &mut &'a str) -> ModalResult<Vec<RawParam<'a>>> {
     delimited(
         ('(', ws),
         separated(0.., (ws, raw_param, ws).map(|(_, param, _)| param), ','),
@@ -871,54 +839,8 @@ mod tests {
     fn unwrap_concrete<'a, 'b>(ty: &'b RawType<'a>) -> (&'a str, &'b [RawParam<'a>]) {
         match ty {
             RawType::Concrete { name, params, .. } => (name, params),
-            RawType::Function { .. } => panic!("expected Concrete, got Function"),
             RawType::Alias(name) => panic!("expected Concrete, got Alias(!{name})"),
         }
-    }
-
-    #[test]
-    fn test_parse_canonical_function_type() {
-        let mut input = "func.func_sig<(core.i32, core.i64) -> core.never>";
-        let raw = raw_type.parse_next(&mut input).expect("should parse type");
-        let RawType::Function {
-            inputs,
-            results,
-            attrs,
-            ..
-        } = raw
-        else {
-            panic!("expected canonical Function")
-        };
-        assert_eq!(inputs.len(), 2);
-        assert_eq!(results.len(), 1);
-        assert!(attrs.is_empty());
-        assert!(input.is_empty());
-    }
-
-    #[test]
-    fn test_parse_canonical_function_type_with_empty_results() {
-        let mut input = "func.func_sig<(core.i32) -> ()>";
-        let raw = raw_type.parse_next(&mut input).expect("should parse type");
-        let RawType::Function {
-            inputs, results, ..
-        } = raw
-        else {
-            panic!("expected canonical Function")
-        };
-        assert_eq!(inputs.len(), 1);
-        assert!(results.is_empty());
-        assert!(input.is_empty());
-    }
-
-    #[test]
-    fn test_parse_canonical_function_type_recognizes_multiple_results() {
-        let mut input = "func.func_sig<() -> (core.i32, core.i64)>";
-        let raw = raw_type.parse_next(&mut input).expect("should parse type");
-        let RawType::Function { results, .. } = raw else {
-            panic!("expected canonical Function")
-        };
-        assert_eq!(results.len(), 2);
-        assert!(input.is_empty());
     }
 
     #[test]
@@ -1098,7 +1020,6 @@ mod tests {
                 assert_eq!(attrs.len(), 1);
                 assert_eq!(attrs[0].0, "tag");
             }
-            RawType::Function { .. } => panic!("expected Concrete, got Function"),
             RawType::Alias(n) => panic!("expected Concrete, got Alias(!{n})"),
         }
         // A dictionary after the closing bracket is not the type's.
@@ -1133,28 +1054,14 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_function_type_parameter_attributes() {
-        let mut input = "func.func_sig<(core.i32 {a = @x}, core.ptr) -> core.i64 {b = @y}, {call_conv = \"tail\"}>";
-        let raw = raw_type.parse_next(&mut input).expect("should parse");
-        let RawType::Function {
-            inputs,
-            results,
-            attrs,
-            ..
-        } = raw
-        else {
-            panic!("expected Function")
-        };
-        assert_eq!(inputs[0].attrs.len(), 1);
-        assert!(inputs[1].attrs.is_empty());
-        assert_eq!(results[0].attrs.len(), 1);
-        assert_eq!(attrs.len(), 1);
-        assert!(input.is_empty());
+    fn test_type_attributes_must_come_last() {
+        let mut input = "core.tuple<{tag = 1}, core.i32>";
+        assert!(raw_type.parse_next(&mut input).is_err());
     }
 
     #[test]
-    fn test_type_attributes_must_come_last() {
-        let mut input = "core.tuple<{tag = 1}, core.i32>";
+    fn test_unregistered_type_has_no_function_syntax() {
+        let mut input = "foreign.func_sig<(core.i32) -> core.i32>";
         assert!(raw_type.parse_next(&mut input).is_err());
     }
 
