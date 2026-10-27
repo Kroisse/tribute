@@ -2,7 +2,7 @@
 source: tests/integration/diagnostic_snapshots.rs
 expression: result.diagnostics
 ---
-- message: "`even` calls `odd` of its own recursive group at `Pair(a)`; polymorphic recursion is not supported"
+- message: "`pkg::even` calls `pkg::odd` of its own recursive group at `pkg::Pair(a)`; polymorphic recursion is not supported"
   span:
     start: 123
     end: 126

@@ -4,7 +4,7 @@ assertion_line: 81
 expression: ir_text
 ---
 core.module @test {
-  tribute_control.func @nothing['a0]() -> core.nil row(| 'a0) inferred {
+  tribute_control.func @"pkg::nothing"['a0]() -> core.nil row(| 'a0) inferred {
       %0 = core.nil_value : core.nil
       tribute_control.return %0
   }

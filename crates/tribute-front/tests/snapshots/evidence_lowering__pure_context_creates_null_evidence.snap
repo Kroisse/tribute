@@ -3,20 +3,20 @@ source: crates/tribute-front/tests/evidence_lowering.rs
 assertion_line: 92
 expression: ir_text
 ---
-core.module @test {tribute.entry = @main} {
-  tribute_control.func @use_ask() -> core.i32 row(@ability_1_3_Ask) {
-      %0 = tribute_control.perform {ability = @ability_1_3_Ask, op_name = "ask", operation_kind = "op"} : core.i32
+core.module @test {tribute.entry = @"pkg::main"} {
+  tribute_control.func @"pkg::use_ask"() -> core.i32 row(@"ability_1_8_pkg::Ask") {
+      %0 = tribute_control.perform {ability = @"ability_1_8_pkg::Ask", op_name = "ask", operation_kind = "op"} : core.i32
       tribute_control.return %0
   }
-  tribute_control.func @main['a0]() -> core.nil row(| 'a0) inferred {
+  tribute_control.func @"pkg::main"['a0]() -> core.nil row(| 'a0) inferred {
       %0 = tribute_control.handle : core.i32 {
-          %1 = tribute_control.call {callee = @use_ask} : core.i32
+          %1 = tribute_control.call {callee = @"pkg::use_ask"} : core.i32
           tribute_control.yield %1
       } {
         ^bb2(%2: core.i32):
           tribute_control.yield %2
       } {
-          tribute_control.handler {ability = @ability_1_3_Ask, kind = "op", op_name = "ask", operation_result_type = core.i32} {
+          tribute_control.handler {ability = @"ability_1_8_pkg::Ask", kind = "op", op_name = "ask", operation_result_type = core.i32} {
             ^bb4(%3: tribute_control.resume_token<core.i32, core.i32>):
               %4 = arith.const {value = 42} : core.i32
               %5 = tribute_control.resume %3, %4 : core.i32
@@ -26,7 +26,7 @@ core.module @test {tribute.entry = @main} {
       %6 = core.nil_value : core.nil
       tribute_control.return %6
   }
-  ability.decl {sym_name = "ability_1_3_Ask"} {
+  ability.decl {sym_name = "ability_1_8_pkg::Ask"} {
       ability.operation {kind = "op", op_name = "ask", param_types = [], result_type = core.i32}
   }
 }

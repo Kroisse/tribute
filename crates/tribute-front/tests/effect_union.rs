@@ -69,7 +69,7 @@ fn local(left: fn() ->{e1} Nil, right: fn() ->{e2} Nil) ->{e1, e2} Nil {
         .declarations(db)
         .function_types
         .iter()
-        .find(|(name, _)| name == ["local"])
+        .find(|(name, _)| name == ["pkg", "local"])
         .unwrap()
         .1;
     let TypeKind::Func { params, .. } = scheme.body(db).kind(db) else {
@@ -187,7 +187,7 @@ fn main() ->{{}} Nil {{ handled({callback}) }}
             .declarations(db)
             .function_types
             .iter()
-            .find(|(name, _)| name == ["handled"])
+            .find(|(name, _)| name == ["pkg", "handled"])
             .unwrap()
             .1;
         assert!(scheme.row_removals(db).is_empty());
@@ -289,7 +289,7 @@ fn main() -> Nil { print(run_writer(fn() { relay(use_writer) })) }
         .declarations(db)
         .function_types
         .iter()
-        .find(|(name, _)| name == ["main"])
+        .find(|(name, _)| name == ["pkg", "main"])
         .unwrap()
         .1;
     assert!(
@@ -301,7 +301,7 @@ fn main() -> Nil { print(run_writer(fn() { relay(use_writer) })) }
         references
             .iter()
             .any(|(_, instance)| instance.function.qualified(db)
-                == trunk_ir::Symbol::new("run_writer")
+                == trunk_ir::Symbol::new("pkg::run_writer")
                 && instance
                     .type_arguments
                     .iter()

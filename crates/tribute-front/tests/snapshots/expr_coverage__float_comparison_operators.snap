@@ -14,7 +14,7 @@ core.module @test {
   tribute_control.func @"std::Float::<="(%arg0: core.f64, %arg1: core.f64) -> core.i1
   tribute_control.func @"std::Float::>"(%arg0: core.f64, %arg1: core.f64) -> core.i1
   tribute_control.func @"std::Float::>="(%arg0: core.f64, %arg1: core.f64) -> core.i1
-  tribute_control.func @comparisons['a0](%0: core.f64, %1: core.f64) -> !__logical_tuple_tuple_6_9_coreZ2ei1_9_coreZ2ei1_9_coreZ2ei1_9_coreZ2ei1_9_coreZ2ei1_9_coreZ2ei1_1 row(| 'a0) inferred {
+  tribute_control.func @"pkg::comparisons"['a0](%0: core.f64, %1: core.f64) -> !__logical_tuple_tuple_6_9_coreZ2ei1_9_coreZ2ei1_9_coreZ2ei1_9_coreZ2ei1_9_coreZ2ei1_9_coreZ2ei1_1 row(| 'a0) inferred {
       %2 = tribute_control.call %0, %1 {callee = @"std::Float::=="} : core.i1
       %3 = tribute_control.call %0, %1 {callee = @"std::Float::!="} : core.i1
       %4 = tribute_control.call %0, %1 {callee = @"std::Float::<"} : core.i1

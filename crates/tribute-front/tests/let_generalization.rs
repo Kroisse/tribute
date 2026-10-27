@@ -228,7 +228,7 @@ fn pass(value: a) -> a {
             .declarations(db)
             .function_types
             .iter()
-            .find_map(|(candidate, scheme)| (candidate == [name]).then_some(*scheme))
+            .find_map(|(candidate, scheme)| (candidate == ["pkg", name]).then_some(*scheme))
             .unwrap_or_else(|| panic!("missing function scheme for {name}"))
     };
 
@@ -398,7 +398,7 @@ fn pair() -> Nil {
     let effect = AbilityRow::single(
         db,
         AbilityInstance {
-            ability_id: AbilityId::source(db, trunk_ir::SymbolPath::new(["Source"])),
+            ability_id: AbilityId::source(db, trunk_ir::SymbolPath::new(["pkg", "Source"])),
             args: vec![local, univar],
         },
     );
@@ -461,7 +461,7 @@ fn run_writer(comp: fn() ->{e, Writer(w)} a) ->{e, Audit} a {
         .declarations(db)
         .function_types
         .iter()
-        .find_map(|(name, scheme)| (name == ["run_writer"]).then_some(*scheme))
+        .find_map(|(name, scheme)| (name == ["pkg", "run_writer"]).then_some(*scheme))
         .expect("run_writer scheme should be present");
     let TypeKind::Func { params, .. } = run_writer.body(db).kind(db) else {
         panic!("run_writer scheme must be callable");
@@ -492,14 +492,14 @@ fn run_writer(comp: fn() ->{e, Writer(w)} a) ->{e, Audit} a {
         .instances(db)
         .iter()
         .find(|effect| {
-            effect.ability_id == AbilityId::source(db, trunk_ir::SymbolPath::new(["Writer"]))
+            effect.ability_id == AbilityId::source(db, trunk_ir::SymbolPath::new(["pkg", "Writer"]))
         })
         .expect("the enclosing computation must retain Writer(w)");
     let lambda_writer = lambda_effect
         .instances(db)
         .iter()
         .find(|effect| {
-            effect.ability_id == AbilityId::source(db, trunk_ir::SymbolPath::new(["Writer"]))
+            effect.ability_id == AbilityId::source(db, trunk_ir::SymbolPath::new(["pkg", "Writer"]))
         })
         .expect("the resume lambda must retain Writer(w)");
     assert_eq!(
@@ -511,7 +511,7 @@ fn run_writer(comp: fn() ->{e, Writer(w)} a) ->{e, Audit} a {
             .instances(db)
             .iter()
             .any(|effect| effect.ability_id
-                == AbilityId::source(db, trunk_ir::SymbolPath::new(["Audit"]))),
+                == AbilityId::source(db, trunk_ir::SymbolPath::new(["pkg", "Audit"]))),
         "the resume lambda must retain its independently performed Audit effect"
     );
 }
@@ -704,7 +704,7 @@ fn make() ->{} fn(a) ->{} a {
         .declarations(db)
         .function_types
         .iter()
-        .find(|(name, _)| name == ["make"])
+        .find(|(name, _)| name == ["pkg", "make"])
         .unwrap()
         .1;
     assert_eq!(scheme.type_params(db).len(), 1);

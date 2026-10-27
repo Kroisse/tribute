@@ -72,23 +72,23 @@ fn main() -> Nil {
     );
     assert_hidden(
         &errors,
-        "`m::hidden` is not visible here: `m::hidden` is private",
+        "`m::hidden` is not visible here: `pkg::m::hidden` is private",
     );
     assert_hidden(
         &errors,
-        "`m::Secret` is not visible here: `m::Secret` is private",
+        "`pkg::m::Secret` is not visible here: `pkg::m::Secret` is private",
     );
     assert_hidden(
         &errors,
-        "`m::Mode` is not visible here: `m::Mode` is private",
+        "`pkg::m::Mode` is not visible here: `pkg::m::Mode` is private",
     );
     assert_hidden(
         &errors,
-        "`m::Mode::Quiet` is not visible here: `m::Mode` is private",
+        "`m::Mode::Quiet` is not visible here: `pkg::m::Mode` is private",
     );
     assert_hidden(
         &errors,
-        "`m::Mode::Quiet` is not visible here: `m::Mode` is private",
+        "`m::Mode::Quiet` is not visible here: `pkg::m::Mode` is private",
     );
 }
 
@@ -112,7 +112,7 @@ fn main() -> Nil {
     );
     assert_hidden(
         &errors,
-        "`outer::inner::shown` is not visible here: `outer::inner` is private",
+        "`outer::inner::shown` is not visible here: `pkg::outer::inner` is private",
     );
 }
 
@@ -138,7 +138,7 @@ fn main() -> Nil {
     assert_eq!(
         errors,
         [
-            "`outer::inner::parent` is not visible here: `outer::inner::parent` is declared `pub(super)`"
+            "`outer::inner::parent` is not visible here: `pkg::outer::inner::parent` is declared `pub(super)`"
         ]
     );
 }
@@ -166,8 +166,8 @@ fn main() -> Nil {
     assert_eq!(
         errors,
         [
-            "`outer::inner::in_outer` is not visible here: `outer::inner::in_outer` is declared `pub(pkg::outer)`",
-            "`outer::inner::in_inner` is not visible here: `outer::inner::in_inner` is declared `pub(self)`",
+            "`outer::inner::in_outer` is not visible here: `pkg::outer::inner::in_outer` is declared `pub(pkg::outer)`",
+            "`outer::inner::in_inner` is not visible here: `pkg::outer::inner::in_inner` is declared `pub(self)`",
         ]
     );
 }
@@ -224,7 +224,7 @@ fn main() -> Nil {
     );
     assert_eq!(
         errors,
-        ["`api::T::hidden` is not visible here: `api::T` is private"]
+        ["`api::T::hidden` is not visible here: `pkg::api::T` is private"]
     );
 }
 
@@ -251,11 +251,11 @@ fn main() -> Nil {
     );
     assert_hidden(
         &errors,
-        "`fx::Tick` is not visible here: `fx::Tick` is private",
+        "`fx::Tick` is not visible here: `pkg::fx::Tick` is private",
     );
     assert_hidden(
         &errors,
-        "`fx::Tick::tick` is not visible here: `fx::Tick` is private",
+        "`fx::Tick::tick` is not visible here: `pkg::fx::Tick` is private",
     );
 }
 
@@ -279,7 +279,7 @@ fn main() -> Nil {
     );
     assert_eq!(
         errors,
-        ["`bump` is not visible here: `Counter::bump` is private"]
+        ["`bump` is not visible here: `pkg::Counter::bump` is private"]
     );
 }
 
@@ -301,7 +301,7 @@ fn main() -> Nil {}
     assert_eq!(
         errors,
         [
-            "`outer::internal` cannot be re-exported as `pub`: `outer::internal` is declared `pub(pkg)`"
+            "`outer::internal` cannot be re-exported as `pub`: `pkg::outer::internal` is declared `pub(pkg)`"
         ]
     );
 }
@@ -347,7 +347,7 @@ fn main() -> Nil {
     );
     assert_eq!(
         errors,
-        ["`outer::hidden::f` is not visible here: `outer::hidden` is private"]
+        ["`outer::hidden::f` is not visible here: `pkg::outer::hidden` is private"]
     );
 }
 
@@ -409,8 +409,8 @@ fn later() -> Nat {
     assert_eq!(
         errors,
         [
-            "`m::Mode::Quiet` is not visible here: `m::Mode` is private",
-            "`m::Mode::Loud` is not visible here: `m::Mode` is private",
+            "`pkg::m::Mode::Quiet` is not visible here: `pkg::m::Mode` is private",
+            "`pkg::m::Mode::Loud` is not visible here: `pkg::m::Mode` is private",
         ]
     );
 }
@@ -439,8 +439,8 @@ fn value() -> Option(Nat) { a::m::Opt::Some(1) }
     assert_eq!(
         errors,
         [
-            "`a::m::internal::Option` is not visible here: `a::m::internal` is declared `pub(super)`",
-            "`a::m::Opt::Some` is not visible here: `a::m::Opt` is declared `pub(super)`",
+            "`pkg::a::m::internal::Option` is not visible here: `pkg::a::m::internal` is declared `pub(super)`",
+            "`a::m::Opt::Some` is not visible here: `pkg::a::m::Opt` is declared `pub(super)`",
         ]
     );
 }
@@ -467,7 +467,7 @@ fn visible() -> Nat { facade::alias::open() }
     );
     assert_eq!(
         errors,
-        ["`facade::alias::secret` is not visible here: `source::secret` is private"]
+        ["`facade::alias::secret` is not visible here: `pkg::source::secret` is private"]
     );
 }
 
@@ -494,8 +494,8 @@ pub mod facade {
     assert_eq!(
         errors,
         [
-            "`pkg::facade::alias::secret` is not visible here: `facade::alias` is declared `pub(self)`",
-            "`alias::secret` is not visible here: `source::inner::secret` is private",
+            "`pkg::facade::alias::secret` is not visible here: `pkg::facade::alias` is declared `pub(self)`",
+            "`alias::secret` is not visible here: `pkg::source::inner::secret` is private",
         ]
     );
 }

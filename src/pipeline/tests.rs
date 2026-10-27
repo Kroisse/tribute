@@ -1657,7 +1657,7 @@ fn main() -> Nil {}
     }
     assert_eq!(seen.len(), schemas.len());
     for (id, source_scheme) in &typed.declarations(db).constructor_types.schemes {
-        if id.qualified(db) == "Box" {
+        if id.qualified(db) == "pkg::Box" {
             let retained = prepared
                 .declarations(db)
                 .constructor_types
@@ -1691,10 +1691,11 @@ fn main() -> Nil {}
         }
         use trunk_ir::dialect::core::{I1, I32};
         for (suffix, primitive) in [("Int", I32::NAME), ("Bool", I1::NAME)] {
-            let inner = alias(&ir, &format!("Inner${suffix}"));
+            let inner = alias(&ir, &format!("pkg::Inner${suffix}"));
             let value = get_struct_fields(&ir, inner).unwrap()[0].1;
             assert_eq!(ir.get_type(value).name, primitive);
-            let outer = get_enum_variants(&ir, alias(&ir, &format!("Outer${suffix}"))).unwrap();
+            let outer =
+                get_enum_variants(&ir, alias(&ir, &format!("pkg::Outer${suffix}"))).unwrap();
             assert_eq!(ir.str(outer[0].0), "Wrap");
             assert_eq!(target(&ir, outer[0].1[0]), inner);
             assert!(outer[2].1.is_empty());
@@ -1714,22 +1715,29 @@ fn main() -> Nil {}
                     "tribute_control"
                 }
             );
-            let boxed = get_enum_variants(&ir, alias(&ir, &format!("Boxed${suffix}"))).unwrap();
+            let boxed =
+                get_enum_variants(&ir, alias(&ir, &format!("pkg::Boxed${suffix}"))).unwrap();
             assert_eq!(boxed[0].1, vec![value]);
         }
-        let envelope = get_struct_fields(&ir, alias(&ir, "Envelope$Int")).unwrap();
-        assert_eq!(target(&ir, envelope[0].1), alias(&ir, "Outer$Int"));
-        let link = get_struct_fields(&ir, alias(&ir, "Link$Int")).unwrap();
-        assert_eq!(target(&ir, link[0].1), alias(&ir, "Loop$Int"));
-        let recursive = get_enum_variants(&ir, alias(&ir, "Loop$Int")).unwrap();
-        assert_eq!(target(&ir, recursive[0].1[0]), alias(&ir, "Link$Int"));
-        for (name, primitive) in [("A::Token$Int", I32::NAME), ("B::Token$Bool", I1::NAME)] {
+        let envelope = get_struct_fields(&ir, alias(&ir, "pkg::Envelope$Int")).unwrap();
+        assert_eq!(target(&ir, envelope[0].1), alias(&ir, "pkg::Outer$Int"));
+        let link = get_struct_fields(&ir, alias(&ir, "pkg::Link$Int")).unwrap();
+        assert_eq!(target(&ir, link[0].1), alias(&ir, "pkg::Loop$Int"));
+        let recursive = get_enum_variants(&ir, alias(&ir, "pkg::Loop$Int")).unwrap();
+        assert_eq!(target(&ir, recursive[0].1[0]), alias(&ir, "pkg::Link$Int"));
+        for (name, primitive) in [
+            ("pkg::A::Token$Int", I32::NAME),
+            ("pkg::B::Token$Bool", I1::NAME),
+        ] {
             let variants = get_enum_variants(&ir, alias(&ir, name)).unwrap();
             assert_eq!(ir.str(variants[0].0), "Item");
             assert_eq!(ir.get_type(variants[0].1[0]).name, primitive);
         }
         let output = trunk_ir::printer::print_module(&ir, module.op());
-        for (name, primitive) in [("Boxed$Int", "core.i32"), ("Boxed$Bool", "core.i1")] {
+        for (name, primitive) in [
+            ("pkg::Boxed$Int", "core.i32"),
+            ("pkg::Boxed$Bool", "core.i1"),
+        ] {
             assert!(
                 output.lines().any(|line| line.contains("adt.variant_get")
                     && line.contains(name)
@@ -1825,9 +1833,9 @@ fn main() -> Nil {}
             .expect("CPS converts published layout fields");
         }
         for (function, nominal, kind) in [
-            ("keep_a", "A::Token$Nat", STRUCT),
-            ("keep_b", "B::Token$Nat", STRUCT),
-            ("keep_choice", "Choice$Nat", ENUM),
+            ("pkg::keep_a", "pkg::A::Token$Nat", STRUCT),
+            ("pkg::keep_b", "pkg::B::Token$Nat", STRUCT),
+            ("pkg::keep_choice", "pkg::Choice$Nat", ENUM),
         ] {
             let parameter = module
                 .ops(&ir)
@@ -1856,17 +1864,21 @@ fn main() -> Nil {}
             layout(&ir, &name, kind);
         }
         assert_ne!(
-            layout(&ir, &Symbol::new("A::Token$Nat"), STRUCT),
-            layout(&ir, &Symbol::new("B::Token$Nat"), STRUCT)
+            layout(&ir, &Symbol::new("pkg::A::Token$Nat"), STRUCT),
+            layout(&ir, &Symbol::new("pkg::B::Token$Nat"), STRUCT)
         );
-        for (owner, target) in [("Node", "Node"), ("First", "Second"), ("Second", "First")] {
+        for (owner, target) in [
+            ("pkg::Node", "pkg::Node"),
+            ("pkg::First", "pkg::Second"),
+            ("pkg::Second", "pkg::First"),
+        ] {
             let owner = layout(&ir, &Symbol::new(owner), STRUCT);
             let field = get_struct_fields(&ir, owner).unwrap()[0].1;
             let name = reference_name(&ir, field);
             assert_eq!(name, Symbol::new(target));
             layout(&ir, &name, STRUCT);
         }
-        let holder = layout(&ir, &Symbol::new("Holder"), STRUCT);
+        let holder = layout(&ir, &Symbol::new("pkg::Holder"), STRUCT);
         let pair = get_struct_fields(&ir, holder).unwrap()[0].1;
         let tuple = layout(&ir, &reference_name(&ir, pair), STRUCT);
         let fields = get_struct_fields(&ir, tuple).unwrap();
@@ -1951,7 +1963,7 @@ fn main() -> Nil {
         );
         let monomorphized =
             prepare_frontend_for_lowering(db, typed, source).expect("specialized frontend");
-        let specialized = SymbolPath::new(["run_state$Nat$Nat"]);
+        let specialized = SymbolPath::new(["pkg", "run_state$Nat$Nat"]);
         let scheme = monomorphized
             .declarations(db)
             .function_types
@@ -1965,9 +1977,12 @@ fn main() -> Nil {
         );
         let specialized_body = monomorphized
             .module(db)
-            .decls()
-            .find_map(|decl| match decl {
-                tribute_front::ast::Decl::Function(function) if specialized == [&function.name] => {
+            .entries
+            .iter()
+            .find_map(|entry| match &entry.decl {
+                tribute_front::ast::Decl::Function(function)
+                    if entry.module.child(function.name.clone()) == specialized =>
+                {
                     Some(function)
                 }
                 _ => None,
@@ -2036,7 +2051,7 @@ mod Nested {
     assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
     for (diagnostic, identity) in diagnostics
         .iter()
-        .zip(["user_intrinsic", "Nested::unused_generic"])
+        .zip(["pkg::user_intrinsic", "pkg::Nested::unused_generic"])
     {
         assert_eq!(
             diagnostic.inner.message,
@@ -2087,7 +2102,7 @@ fn user_declaration_cannot_claim_a_library_intrinsic(db: &salsa::DatabaseImpl) {
         diagnostics
             .iter()
             .map(|diagnostic| diagnostic.inner.message.as_str()),
-        ["unsupported compiler intrinsic directive `__bytes_get_or_panic`"],
+        ["unsupported compiler intrinsic directive `pkg::__bytes_get_or_panic`"],
     );
 }
 
@@ -2189,7 +2204,7 @@ fn type_check_output_holds_only_its_package_declarations(db: &salsa::DatabaseImp
     assert!(
         own.function_types
             .iter()
-            .any(|(path, _)| *path == ["helper"])
+            .any(|(path, _)| *path == ["pkg", "helper"])
     );
     assert!(
         own.constructor_types
@@ -2517,7 +2532,7 @@ fn main() -> String { "hello" }
     let user_lookalike = ctx.types().iter().find_map(|(ty, data)| {
         (ty != string_ty
             && data.name.is(&ctx, "adt.enum")
-            && data.attrs.view(&ctx).get_str("name") == Some("String"))
+            && data.attrs.view(&ctx).get_str("name") == Some("pkg::String"))
         .then_some(ty)
     });
     assert!(

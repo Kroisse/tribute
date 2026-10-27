@@ -412,7 +412,7 @@ fn named_function(ctx: &IrContext, module: Module, name: &str) -> func::Func {
         .filter_map(|&op| {
             func::Func::from_op(ctx, op)
                 .ok()
-                .filter(|f| f.sym_name(ctx) == name)
+                .filter(|f| f.sym_name(ctx) == name || f.sym_name(ctx) == format!("pkg::{name}"))
         })
         .collect();
     assert_eq!(functions.len(), 1, "expected one physical function {name}");
@@ -645,7 +645,7 @@ fn test_higher_order_function_ir() {
         let apply = named_function(&ctx, module, "apply");
         assert_indirect_signature(&ctx, apply, only_indirect_call(&ctx, apply));
         let compute = named_function(&ctx, module, "compute");
-        let call = function_ops::<func::TailCall>(&ctx, compute).into_iter().find(|call| call.callee(&ctx) == ["apply"]).expect("source apply call");
+        let call = function_ops::<func::TailCall>(&ctx, compute).into_iter().find(|call| call.callee(&ctx) == ["pkg::apply"]).expect("source apply call");
         let argument = call.args(&ctx).iter().find_map(|&value| match ctx.value_def(value) { ValueDef::OpResult(op, _) => closure::New::from_op(&ctx, op).ok(), _ => None }).expect("source lambda argument");
         let lifted = named_function(&ctx, module, &argument.entries(&ctx).next().expect("one entry").to_string());
         let additions = function_ops::<arith::Addi>(&ctx, lifted);
@@ -690,7 +690,7 @@ fn test_closure_lowering() {
         assert!(function_ops::<closure::Entry>(&ctx, apply).is_empty());
         assert!(function_ops::<closure::Unpack>(&ctx, apply).is_empty());
         let compute = named_function(&ctx, module, "compute");
-        let source_call = function_ops::<func::TailCall>(&ctx, compute).into_iter().find(|call| call.callee(&ctx) == ["apply"]).unwrap();
+        let source_call = function_ops::<func::TailCall>(&ctx, compute).into_iter().find(|call| call.callee(&ctx) == ["pkg::apply"]).unwrap();
         let pack = source_call.args(&ctx).iter().find_map(|&value| {
             let ValueDef::OpResult(cast, _) = ctx.value_def(value) else { return None };
             let cast = core::UnrealizedConversionCast::from_op(&ctx, cast).ok()?;

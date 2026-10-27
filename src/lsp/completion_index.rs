@@ -656,6 +656,10 @@ mod tests {
         SourceCst::from_source_str(db, "test.trb", text)
     }
 
+    fn root() -> SymbolPath {
+        tribute_front::resolve::PackageName::executable_root().identity_path(&[])
+    }
+
     // Completion tests
 
     #[test]
@@ -681,7 +685,7 @@ mod tests {
         };
         let pair = |name: &str, detail: &str| (name.to_owned(), detail.to_owned());
         assert_eq!(
-            at(&[]),
+            at(&["pkg"]),
             [
                 pair("Dot", "Shape::Dot"),
                 pair("Line", "Shape::Line"),
@@ -691,7 +695,7 @@ mod tests {
         // An alias names the type, but not a struct's own constructor; a
         // variant named like its enum is still a variant.
         assert_eq!(
-            at(&["inner"]),
+            at(&["pkg", "inner"]),
             [
                 pair("Dot", "S::Dot"),
                 pair("Empty", "Q::Empty"),
@@ -714,11 +718,11 @@ mod tests {
                 .and_then(|item| item.detail.clone())
         };
         assert_eq!(
-            detail_at(&SymbolPath::root(), "EndOfFile").as_deref(),
+            detail_at(&root(), "EndOfFile").as_deref(),
             Some("Error::EndOfFile")
         );
         assert_eq!(
-            detail_at(&SymbolPath::new(["inner"]), "EndOfFile").as_deref(),
+            detail_at(&root().child(Symbol::new("inner")), "EndOfFile").as_deref(),
             Some("IoError::EndOfFile")
         );
     }
@@ -736,7 +740,7 @@ mod tests {
                 .map(|item| (item.name.to_string(), item.detail.clone()))
                 .collect()
         };
-        let root = at(&SymbolPath::root());
+        let root = at(&root());
         for (name, detail) in [
             ("Red", "Color::Red"),
             ("Green", "Color::Green"),
@@ -860,7 +864,7 @@ mod tests {
         let db = salsa::DatabaseImpl::default();
         let source = make_source(&db, "enum Option { Some, Empty }\nfn main() -> Nil {}\n");
         let items = completion_items(&db, source);
-        let root = SymbolPath::root();
+        let root = root();
         let named: Vec<_> = completions_in(items, &root)
             .filter(|item| item.name == "Option" || item.name == "Some")
             .collect();

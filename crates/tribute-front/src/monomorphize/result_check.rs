@@ -338,11 +338,11 @@ mod tests {
         output
             .declarations
             .function_types
-            .retain(|(path, _)| *path != ["identity$Nat"]);
+            .retain(|(path, _)| *path != ["pkg", "identity$Nat"]);
         let violations = violations(&db, &output);
         assert!(
             violations.contains(&SpecializationInvariant::UnresolvedReference {
-                path: "identity$Nat".to_owned()
+                path: "pkg::identity$Nat".to_owned()
             }),
             "{violations:?}"
         );

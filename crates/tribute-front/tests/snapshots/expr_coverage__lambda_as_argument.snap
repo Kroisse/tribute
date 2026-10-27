@@ -6,16 +6,16 @@ expression: ir_text
 core.module @test {
   !t0 = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>
 
-  tribute_control.func @apply['a0](%0: !t0, %1: core.i32) -> core.i32 row(| 'a0) {
+  tribute_control.func @"pkg::apply"['a0](%0: !t0, %1: core.i32) -> core.i32 row(| 'a0) {
       %2 = tribute_control.call_indirect %0, %1 : core.i32
       tribute_control.return %2
   }
-  tribute_control.func @test_lambda['a0]() -> core.i32 row(| 'a0) inferred {
+  tribute_control.func @"pkg::test_lambda"['a0]() -> core.i32 row(| 'a0) inferred {
       %0 = tribute_control.lambda(%1: core.i32) -> core.i32 row(| 'a0) captures [] {
           tribute_control.return %1
       }
       %2 = arith.const {value = 1} : core.i32
-      %3 = tribute_control.call %0, %2 {callee = @apply, row_args = [{tail = 0}]} : core.i32
+      %3 = tribute_control.call %0, %2 {callee = @"pkg::apply", row_args = [{tail = 0}]} : core.i32
       tribute_control.return %3
   }
 }

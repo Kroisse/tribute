@@ -99,7 +99,7 @@ fn main() -> Nil {
 }
 "#,
     );
-    assert_eq!(errors, ["expected a value, found module `basic`"]);
+    assert_eq!(errors, ["expected a value, found module `pkg::basic`"]);
 }
 
 /// A `use` path may start with a path keyword.
@@ -144,7 +144,7 @@ fn g(e: E) -> Nat {{
         );
         assert_eq!(
             errors,
-            ["expected a constructor, found module `M`"],
+            ["expected a constructor, found module `pkg::M`"],
             "{name}"
         );
     }
@@ -163,7 +163,7 @@ fn main() -> Nil {
 }
 "#,
     );
-    assert_eq!(errors, ["expected a constructor, found module `M`"]);
+    assert_eq!(errors, ["expected a constructor, found module `pkg::M`"]);
 }
 
 /// A type imported by a path written relative to the enclosing inline module
@@ -448,7 +448,9 @@ mod outer {
         .entries
         .iter()
         .find_map(|entry| match &entry.decl {
-            Decl::Function(function) if entry.module == ["outer"] && function.name == "noop" => {
+            Decl::Function(function)
+                if entry.module == ["pkg", "outer"] && function.name == "noop" =>
+            {
                 function.effects.clone()
             }
             _ => None,
@@ -611,7 +613,7 @@ fn a_function_value_is_selected_by_the_type_it_is_used_at(db: &salsa::DatabaseIm
         ),
         (
             "fn main() -> Nil {\n    let _ = size\n}\n",
-            "ambiguous path `size` used as a value: it names `a::size`, `b::size`",
+            "ambiguous path `size` used as a value: it names `pkg::a::size`, `pkg::b::size`",
         ),
         // The result has to fit too; no function is picked by its
         // parameters alone.
@@ -625,12 +627,12 @@ fn a_function_value_is_selected_by_the_type_it_is_used_at(db: &salsa::DatabaseIm
             "fn any(f: fn(t) ->{e} Nat) -> Nat { 0 }\n\
              fn main() -> Nil {\n    let _ = any(size)\n}\n",
             "ambiguous path `size` used as a value of type `fn(_) -> Nat`: \
-             it names `a::size`, `b::size`",
+             it names `pkg::a::size`, `pkg::b::size`",
         ),
         // A local is one function, selected by its first use.
         (
             "fn main() -> Nil {\n    let f = size\n    let _ = f(A { n: 1 }) + f(B { n: 2 })\n}\n",
-            "type error at call site in function 'main': expected `A`, found `B`",
+            "type error at call site in function 'main': expected `pkg::A`, found `pkg::B`",
         ),
     ] {
         assert_eq!(
@@ -649,12 +651,12 @@ fn an_unselected_imported_function_is_reported(db: &salsa::DatabaseImpl) {
         (
             "use a::make\nuse b::make\n\
              fn main() -> Nil {\n    let _ = make()\n}\n",
-            "ambiguous path `make` for no arguments: it names `a::make`, `b::make`",
+            "ambiguous path `make` for no arguments: it names `pkg::a::make`, `pkg::b::make`",
         ),
         (
             "use a::size\nuse b::size\n\
              fn main() -> Nil {\n    let _ = size\n}\n",
-            "ambiguous path `size` used as a value: it names `a::size`, `b::size`",
+            "ambiguous path `size` used as a value: it names `pkg::a::size`, `pkg::b::size`",
         ),
         // A call with the wrong number of arguments still names the function
         // its arguments select.
@@ -723,11 +725,11 @@ fn a_call_its_types_do_not_decide_is_reported(db: &salsa::DatabaseImpl) {
     for (body, expected) in [
         (
             "let _ = pick(1)",
-            "ambiguous path `pick` for arguments of types (`Nat`): it names `a::pick`, `b::pick`",
+            "ambiguous path `pick` for arguments of types (`Nat`): it names `pkg::a::pick`, `pkg::b::pick`",
         ),
         (
             "let _ = pair(A { n: 1 }, True)",
-            "unresolved path `pair`: no function it names takes arguments of types (`A`, `Bool`)",
+            "unresolved path `pair`: no function it names takes arguments of types (`pkg::A`, `Bool`)",
         ),
     ] {
         assert_eq!(
@@ -850,7 +852,7 @@ fn shown(name: Name) -> String { name.text }
              }\n\
              fn main() -> Nil { }\n",
         ),
-        ["function `Name::text` is already declared by field `text` of struct `Name`"],
+        ["function `pkg::Name::text` is already declared by field `text` of struct `Name`"],
     );
     // Another module's function is another name. Where it takes the struct
     // too, a path says which of the two a read means.

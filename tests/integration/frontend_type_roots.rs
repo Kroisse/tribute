@@ -38,7 +38,10 @@ fn prepare_root<'db>(
     let packet = Type::new(
         db,
         TypeKind::Named {
-            id: TypeDefId::source(db, trunk_ir::SymbolPath::new([packet_decl.name.clone()])),
+            id: TypeDefId::source(
+                db,
+                trunk_ir::SymbolPath::new(["pkg".into(), packet_decl.name.clone()]),
+            ),
             name: packet_decl.name.clone(),
             args: vec![Type::new(db, TypeKind::Nat)],
         },
@@ -46,7 +49,7 @@ fn prepare_root<'db>(
     let row = AbilityRow::single(
         db,
         AbilityInstance {
-            ability_id: AbilityId::source(db, trunk_ir::SymbolPath::new(["Marker"])),
+            ability_id: AbilityId::source(db, trunk_ir::SymbolPath::new(["pkg", "Marker"])),
             args: vec![packet],
         },
     );
@@ -59,12 +62,12 @@ fn prepare_root<'db>(
     let mut metadata = typed.expression_types(db).clone();
     let (_, scheme) = functions
         .iter_mut()
-        .find(|(name, _)| name == ["marker"])
+        .find(|(name, _)| name == ["pkg", "marker"])
         .unwrap();
     let instance = &mut metadata
         .function_instances
         .iter_mut()
-        .find(|(_, instance)| instance.function.qualified(db) == "marker")
+        .find(|(_, instance)| instance.function.qualified(db) == "pkg::marker")
         .unwrap()
         .1;
 
@@ -100,7 +103,7 @@ fn prepare_root<'db>(
             let (_, constructor) = constructors
                 .schemes
                 .iter_mut()
-                .find(|(id, _)| id.qualified(db) == "Packet")
+                .find(|(id, _)| id.qualified(db) == "pkg::Packet")
                 .unwrap();
             *constructor = constructor.to_builder(db).row_unions(vec![union]).build(db);
         }
@@ -153,7 +156,7 @@ fn main() -> Nil { marker() }
             .declarations(db)
             .function_types
             .iter()
-            .find(|(name, _)| name == ["marker"])
+            .find(|(name, _)| name == ["pkg", "marker"])
             .unwrap()
             .1
     };
@@ -161,7 +164,7 @@ fn main() -> Nil { marker() }
         .expression_types(db)
         .function_instances
         .iter()
-        .find(|(_, instance)| instance.function.qualified(db) == "marker")
+        .find(|(_, instance)| instance.function.qualified(db) == "pkg::marker")
         .unwrap()
         .1;
     let ty = match root {
@@ -175,7 +178,7 @@ fn main() -> Nil { marker() }
                 .constructor_types
                 .schemes
                 .iter()
-                .find(|(id, _)| id.qualified(db) == "Packet")
+                .find(|(id, _)| id.qualified(db) == "pkg::Packet")
                 .unwrap()
                 .1
                 .row_unions(db)[0]
@@ -188,7 +191,7 @@ fn main() -> Nil { marker() }
         panic!("nominal type")
     };
     assert!(args.is_empty(), "{root:?} retained generic arguments");
-    assert_eq!(id.qualified(db), declaration.name);
+    assert_eq!(id.qualified(db), *format!("pkg::{}", declaration.name));
     let original = prepared
         .module(db)
         .decls()
@@ -199,7 +202,11 @@ fn main() -> Nil { marker() }
         .unwrap();
     assert_eq!(
         id.origin(db),
-        TypeDefId::source(db, trunk_ir::SymbolPath::new([original.name.clone()])).origin(db)
+        TypeDefId::source(
+            db,
+            trunk_ir::SymbolPath::new(["pkg".into(), original.name.clone()])
+        )
+        .origin(db)
     );
 }
 

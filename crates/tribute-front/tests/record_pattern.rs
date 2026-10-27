@@ -125,7 +125,7 @@ fn missing(p: Point) -> Nat {
     assert_eq!(
         errors(db, &source),
         [
-            "unknown field `z` for struct `Point`",
+            "unknown field `z` for struct `pkg::Point`",
             "duplicate field `x`",
             "missing field: y",
         ]
@@ -153,8 +153,8 @@ fn size(shape: Shape) -> Nat {
     assert_eq!(
         errors,
         [
-            "unknown field `size` for variant `Shape::Circle`",
-            "`Shape::Dot` has positional fields; match it with `.Dot(...)`",
+            "unknown field `size` for variant `pkg::Shape::Circle`",
+            "`pkg::Shape::Dot` has positional fields; match it with `.Dot(...)`",
         ]
     );
 }
@@ -184,10 +184,10 @@ fn size(shape: Shape) -> Nat {
     assert_eq!(
         errors,
         [
-            "constructor `Shape::Dot` expects 1 field, but the pattern has 2",
-            "constructor `Shape::Line` expects 2 fields, but the pattern has 1",
-            "constructor `Shape::Empty` expects 0 fields, but the pattern has 1",
-            "constructor `Shape::Dot` expects 1 field, but the pattern has 0",
+            "constructor `pkg::Shape::Dot` expects 1 field, but the pattern has 2",
+            "constructor `pkg::Shape::Line` expects 2 fields, but the pattern has 1",
+            "constructor `pkg::Shape::Empty` expects 0 fields, but the pattern has 1",
+            "constructor `pkg::Shape::Dot` expects 1 field, but the pattern has 0",
         ]
     );
 }
@@ -209,7 +209,7 @@ fn size(shape: Shape) -> Nat {
 "#,
     );
     assert!(
-        errors.contains(&"`Shape` is not a constructor".to_owned()),
+        errors.contains(&"`pkg::Shape` is not a constructor".to_owned()),
         "{errors:?}"
     );
 }

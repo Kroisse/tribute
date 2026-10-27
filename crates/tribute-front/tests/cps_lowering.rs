@@ -63,6 +63,7 @@ fn is_function_header(line: &str, name: &str) -> bool {
     [
         format!("tribute_control.func @{name}"),
         format!("tribute_control.func @\"{name}\""),
+        format!("tribute_control.func @\"pkg::{name}\""),
     ]
     .iter()
     .any(|prefix| {
@@ -286,20 +287,20 @@ mod Native {
     assert_logical_boundary(&ir);
     assert!(
         ir.contains(
-            "tribute_control.func @identity(%arg0: core.i32) -> core.i32 attributes {abi = \"intrinsic\"}"
+            "tribute_control.func @\"pkg::identity\"(%arg0: core.i32) -> core.i32 attributes {abi = \"intrinsic\"}"
         ),
         "extern declaration must retain its source-visible logical signature:\n{ir}"
     );
     let call = checked_logical_function(&ir, "call");
     assert!(
-        call.contains("tribute_control.call %0 {callee = @identity} : core.i32"),
+        call.contains("tribute_control.call %0 {callee = @\"pkg::identity\"} : core.i32"),
         "direct source call must target the logical extern declaration:\n{call}"
     );
     let nested_call = checked_logical_function(&ir, "Native::call");
     assert!(
-        nested_call.contains("callee = @\"Native::identity\"")
+        nested_call.contains("callee = @\"pkg::Native::identity\"")
             && ir.contains(
-                "tribute_control.func @\"Native::identity\"(%arg0: core.i32) -> core.i32 attributes {abi = \"intrinsic\"}"
+                "tribute_control.func @\"pkg::Native::identity\"(%arg0: core.i32) -> core.i32 attributes {abi = \"intrinsic\"}"
             ),
         "nested extern calls must retain their qualified logical declaration:\n{nested_call}"
     );
@@ -379,13 +380,13 @@ pub mod Nested {
     let ir_text = run_ast_pipeline_with_ir(db, source);
     let accessor = checked_logical_function(&ir_text, "Nested::Holder::callback");
     assert!(
-        accessor.contains("tribute_control.func @\"Nested::Holder::callback\"")
+        accessor.contains("tribute_control.func @\"pkg::Nested::Holder::callback\"")
             && accessor.contains("tribute_control.return"),
         "nested accessor must use its qualified logical symbol:\n{accessor}"
     );
     let read = checked_logical_function(&ir_text, "Nested::read");
     assert!(
-        read.contains("callee = @\"Nested::Holder::callback\"")
+        read.contains("callee = @\"pkg::Nested::Holder::callback\"")
             && read.contains("tribute_control.call"),
         "field access must call the matching logical accessor:\n{read}"
     );
@@ -491,7 +492,7 @@ fn main() -> Nil { }
     );
     let phantom_ir = run_ast_pipeline_with_ir(db, phantom);
     assert!(
-        phantom_ir.contains("@ability_2_7_Phantom_4_bool"),
+        phantom_ir.contains("@\"ability_2_12_pkg::Phantom_4_bool"),
         "perform must retain the phantom ability argument from its typed effect:\n{phantom_ir}"
     );
     let conflicting = SourceCst::from_source_str(
@@ -698,7 +699,7 @@ fn main() -> Nil { }
     let ir = run_ast_pipeline_with_ir(db, source);
     assert_logical_boundary(&ir);
     assert!(
-        ir.contains("tribute_control.func @\"Nested::apply\""),
+        ir.contains("tribute_control.func @\"pkg::Nested::apply\""),
         "nested declaration must be present:\n{ir}"
     );
     assert!(
@@ -706,7 +707,7 @@ fn main() -> Nil { }
         "shadowing local must stay an indirect call:\n{ir}"
     );
     assert!(
-        !ir.contains("tribute_control.call {callee = @\"Nested::apply\"}"),
+        !ir.contains("tribute_control.call {callee = @\"pkg::Nested::apply\"}"),
         "lowering must not reinterpret the local as the nested function:\n{ir}"
     );
 }
@@ -1667,7 +1668,7 @@ fn run() ->{Flag} Nat {
         &[
             "tribute_control.handler",
             "scf.if",
-            "callee = @allowed",
+            "callee = @\"pkg::allowed\"",
             "tribute_control.resume",
         ],
     );
@@ -1679,7 +1680,7 @@ fn run() ->{Flag} Nat {
             "op_name = \"choose\"",
             "adt.struct_get",
             "list.head",
-            "callee = @allowed",
+            "callee = @\"pkg::allowed\"",
             "tribute_control.resume",
         ],
     );
@@ -1710,9 +1711,9 @@ fn keep_first(first: First) -> First { first }
     let ir = run_ast_pipeline_with_ir(db, source);
     assert_logical_boundary(&ir);
     for field in [
-        "!Node = adt.struct<Node(next: adt.typeref<{name = \"Node\"}>)>",
-        "!First = adt.struct<First(second: adt.typeref<{name = \"Second\"}>)>",
-        "!Second = adt.struct<Second(first: adt.typeref<{name = \"First\"}>)>",
+        "!\"pkg::Node\" = adt.struct<\"pkg::Node\"(next: adt.typeref<{name = \"pkg::Node\"}>)>",
+        "!\"pkg::First\" = adt.struct<\"pkg::First\"(second: adt.typeref<{name = \"pkg::Second\"}>)>",
+        "!\"pkg::Second\" = adt.struct<\"pkg::Second\"(first: adt.typeref<{name = \"pkg::First\"}>)>",
     ] {
         assert!(
             ir.contains(field),
@@ -1773,7 +1774,10 @@ fn assert_sequential_performs_shape(function: &str) {
     assert_in_order(function, &["op_name = \"set\"", "op_name = \"get\""]);
 }
 fn assert_nested_argument_shape(function: &str) {
-    assert_in_order(function, &["callee = @read", "callee = @add_one"]);
+    assert_in_order(
+        function,
+        &["callee = @\"pkg::read\"", "callee = @\"pkg::add_one\""],
+    );
 }
 fn assert_exact_integer_addition(function: &str) -> &'static str {
     let callee = ["callee = @\"std::Int::+\"", "callee = @\"std::Nat::+\""]
@@ -1802,17 +1806,17 @@ fn assert_indirect_lambda_shape(function: &str) {
 }
 fn assert_case_arm_shape(function: &str) {
     let callee = assert_exact_integer_addition(function);
-    assert_in_order(function, &["scf.if", "callee = @read", callee]);
+    assert_in_order(function, &["scf.if", "callee = @\"pkg::read\"", callee]);
 }
 fn assert_short_circuit_shape(function: &str) {
-    assert_in_order(function, &["scf.if", "callee = @read"]);
+    assert_in_order(function, &["scf.if", "callee = @\"pkg::read\""]);
 }
 fn assert_handle_body_shape(function: &str) {
     assert_in_order(
         function,
         &[
             "tribute_control.handle",
-            "callee = @read",
+            "callee = @\"pkg::read\"",
             "tribute_control.resume",
         ],
     );
@@ -1822,7 +1826,7 @@ fn assert_handler_arm_shape(function: &str) {
         function,
         &[
             "tribute_control.handler",
-            "callee = @read_log",
+            "callee = @\"pkg::read_log\"",
             "tribute_control.resume",
         ],
     );
@@ -1830,17 +1834,25 @@ fn assert_handler_arm_shape(function: &str) {
 fn assert_case_scrutinee_shape(function: &str) {
     assert_in_order(
         function,
-        &["callee = @effectful", "scf.if", "callee = @after"],
+        &[
+            "callee = @\"pkg::effectful\"",
+            "scf.if",
+            "callee = @\"pkg::after\"",
+        ],
     );
 }
 fn assert_short_circuit_consumer_shape(function: &str) {
     assert_in_order(
         function,
-        &["scf.if", "callee = @effectful", "callee = @after"],
+        &[
+            "scf.if",
+            "callee = @\"pkg::effectful\"",
+            "callee = @\"pkg::after\"",
+        ],
     );
 }
 fn assert_case_guard_shape(function: &str) {
-    assert_in_order(function, &["scf.if", "callee = @effectful"]);
+    assert_in_order(function, &["scf.if", "callee = @\"pkg::effectful\""]);
 }
 fn assert_handler_case_resume_shape(function: &str) {
     assert_occurrences(function, "tribute_control.resume %", 2);
@@ -1904,7 +1916,7 @@ fn assert_record_spread_shape(function: &str) {
     );
 }
 fn assert_aggregate_shape(function: &str) {
-    assert_occurrences(function, "callee = @read", 4);
+    assert_occurrences(function, "callee = @\"pkg::read\"", 4);
     assert_in_order(
         function,
         &["adt.struct_new", "adt.struct_new", "adt.variant_new"],

@@ -55,22 +55,22 @@ fn format_box(value: Int) -> String {
 
     let ir = run_ast_pipeline_with_ir(db, source);
     assert!(
-        ir.contains(r#"!"Boxed$Int" = adt.enum<"Boxed$Int" { Empty(), Box(core.i32) }>"#),
+        ir.contains(r#"!"pkg::Boxed$Int" = adt.enum<"pkg::Boxed$Int" { Empty(), Box(core.i32) }>"#),
         "Boxed(Int) must be specialized to a layout with an Int field:\n{ir}"
     );
     let format_box = ir
-        .split("tribute_control.func @format_box")
+        .split("tribute_control.func @\"pkg::format_box\"")
         .nth(1)
         .expect("format_box function must be lowered");
     let construct = format_box
-        .find(r#"adt.variant_new %0 {tag = "Box", type = !"Boxed$Int"}"#)
-        .expect("Box(value) must construct the specialized Boxed$Int");
+        .find(r#"adt.variant_new %0 {tag = "Box", type = !"pkg::Boxed$Int"}"#)
+        .expect("Box(value) must construct the specialized pkg::Boxed$Int");
     let int_to_string = format_box
         .find("callee = @\"std::Int::to_string\"")
         .expect("Box payload must be passed to Int::to_string");
     assert!(
         format_box[construct..int_to_string].contains(
-            r#"adt.variant_get %9 {field = 0, tag = "Box", type = !"Boxed$Int"} : core.i32"#
+            r#"adt.variant_get %9 {field = 0, tag = "Box", type = !"pkg::Boxed$Int"} : core.i32"#
         ),
         "pattern use must read the Int payload from the specialized layout:\n{format_box}"
     );
@@ -99,11 +99,12 @@ fn ok_int(value: Int) -> Result(Int, String) {
 
     let ir = run_ast_pipeline_with_ir(db, source);
     let ok_int = ir
-        .split("tribute_control.func @ok_int")
+        .split("tribute_control.func @\"pkg::ok_int\"")
         .nth(1)
         .expect("ok_int function must be lowered");
     assert!(
-        ok_int.contains(r#"adt.variant_new %0 {tag = "Ok", type = !"Result$Int$std::String"}"#),
+        ok_int
+            .contains(r#"adt.variant_new %0 {tag = "Ok", type = !"pkg::Result$Int$std::String"}"#),
         ".Ok(value) must construct the specialized Result(Int, String) from the Int directly:\n{ok_int}"
     );
     assert!(
@@ -130,7 +131,7 @@ fn box_int(value: Int) -> IntBox {
 
     let ir = run_ast_pipeline_with_ir(db, source);
     let box_int = ir
-        .split("tribute_control.func @box_int")
+        .split("tribute_control.func @\"pkg::box_int\"")
         .nth(1)
         .expect("box_int function must be lowered");
     assert!(box_int.contains("adt.variant_new"), "{box_int}");
@@ -271,7 +272,7 @@ fn generic_specialization_transports_direct_callee_metadata_inner(
     let (ir, output) = lower_monomorphized_source(db, source);
     let ir_text = print_module(&ir, output.module.op());
     assert!(
-        ir_text.contains("tribute_control.func @\"apply$Int\""),
+        ir_text.contains("tribute_control.func @\"pkg::apply$Int\""),
         "the specialized generic function must preserve its checked concrete call type:\n{ir_text}"
     );
     ir_text
@@ -459,8 +460,8 @@ fn assert_outer_local_signatures(db: &dyn salsa::Database, source: SourceCst) {
         ("Int", trunk_ir::dialect::core::I32::NAME),
         ("Bool", trunk_ir::dialect::core::I1::NAME),
     ] {
-        let parent = functions[format!("apply${argument}").as_str()];
-        let consumer = functions[format!("pure${argument}").as_str()];
+        let parent = functions[format!("pkg::apply${argument}").as_str()];
+        let consumer = functions[format!("pkg::pure${argument}").as_str()];
         let parent_signature = FuncSig::from_type_ref(&ir, parent.r#type(&ir)).unwrap();
         let data_type = parent_signature.result(&ir);
         assert_eq!(parent_signature.inputs(&ir), [data_type]);

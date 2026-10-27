@@ -13,6 +13,7 @@ fn is_function_header(line: &str, name: &str) -> bool {
     [
         format!("tribute_control.func @{name}"),
         format!("tribute_control.func @\"{name}\""),
+        format!("tribute_control.func @\"pkg::{name}\""),
     ]
     .iter()
     .any(|prefix| {
@@ -71,7 +72,11 @@ fn named_function_header<'a>(ir: &'a str, name: &str) -> &'a str {
     ir.lines()
         .find(|line| {
             line.trim_start()
-                .strip_prefix(&format!("tribute_control.func @{name}"))
+                .strip_prefix(&format!("tribute_control.func @\"pkg::{name}\""))
+                .or_else(|| {
+                    line.trim_start()
+                        .strip_prefix(&format!("tribute_control.func @{name}"))
+                })
                 .is_some_and(|rest| rest.starts_with(['(', '[']))
         })
         .unwrap_or_else(|| panic!("missing lowered function @{name}:\n{ir}"))
@@ -118,7 +123,10 @@ fn callable_convention<'a>(ir: &'a str, callable_ty: &'a str) -> &'a str {
 
 fn named_ref_lines<'a>(ir: &'a str, name: &str) -> Vec<&'a str> {
     ir.lines()
-        .filter(|line| line.contains(&format!("func_ref = @{name}")))
+        .filter(|line| {
+            line.contains(&format!("func_ref = @\"pkg::{name}\""))
+                || line.contains(&format!("func_ref = @{name}"))
+        })
         .collect()
 }
 
@@ -275,14 +283,14 @@ fn logical_root_main_preserves_pure_and_io_conventions(db: &salsa::DatabaseImpl)
     let pure_ir = common::specialized_frontend_ir(db, pure);
     assert!(
         pure_ir.contains(
-            "tribute_control.func @main['a0]() -> core.nil row(| 'a0) inferred convention(direct)"
+            "tribute_control.func @\"pkg::main\"['a0]() -> core.nil row(| 'a0) inferred convention(direct)"
         ),
         "pure root main must be direct:\n{pure_ir}"
     );
     let io = SourceCst::from_source_str(db, "io.trb", "fn main() ->{std::io::Io} Nil { Nil }");
     let io_ir = common::specialized_frontend_ir(db, io);
     assert!(
-        io_ir.contains("tribute_control.func @main() -> core.nil row(@\"ability_1_11_std::io::Io\") inferred convention(evidence_direct)"),
+        io_ir.contains("tribute_control.func @\"pkg::main\"() -> core.nil row(@\"ability_1_11_std::io::Io\") inferred convention(evidence_direct)"),
         "Io root main must preserve EvidenceDirect:\n{io_ir}"
     );
 }
@@ -307,7 +315,7 @@ fn main() -> Nil { }
     let ir_text = common::specialized_frontend_ir(db, source);
     assert!(
         ir_text.contains(
-            "tribute_control.func @\"Nested::main\"() -> core.i32 row(@ability_1_5_State) convention(cps)"
+            "tribute_control.func @\"pkg::Nested::main\"() -> core.i32 row(@\"ability_1_10_pkg::State\") convention(cps)"
         ),
         "nested main must preserve its ordinary checker-selected CPS convention:\n{ir_text}"
     );
@@ -402,7 +410,7 @@ fn main() -> Nil {
         "root main must contain the direct worker call:\n{main}"
     );
     assert!(
-        main.contains("callee = @\"forward_open$Int$Int$9D\""),
+        main.contains("callee = @\"pkg::forward_open$Int$Int$9D\""),
         "root main must call the Direct instance of the monomorphized forward_open worker:\n{main}"
     );
     assert!(
@@ -410,14 +418,14 @@ fn main() -> Nil {
         "nested workers must not be requalified:\n{ir_text}"
     );
     assert!(
-        logical_function(&ir_text, "Nested::unwrap$Int")
-            .contains("callee = @\"Nested::Box$Int::value\""),
+        logical_function(&ir_text, "pkg::Nested::unwrap$Int")
+            .contains("callee = @\"pkg::Nested::Box$Int::value\""),
         "nested worker must call the exact qualified accessor:\n{ir_text}"
     );
     assert!(
         ir_text.lines().any(|line| line
             .trim_start()
-            .starts_with("tribute_control.func @\"Box$Int::value\"")),
+            .starts_with("tribute_control.func @\"pkg::Box$Int::value\"")),
         "specialized accessor must keep its exact root identity:\n{ir_text}"
     );
 }
@@ -527,7 +535,7 @@ fn main() -> Nil {{
         let mut conventions = Vec::new();
         let _ = walk_op::<()>(&ir, module.op(), &mut |op| {
             if let Ok(call) = tribute_control::Call::from_op(&ir, op)
-                && ["pure", "open$9D"]
+                && ["pkg::pure", "pkg::open$9D"]
                     .iter()
                     .any(|name| call.callee(&ir) == [*name])
             {
@@ -644,7 +652,7 @@ fn main() -> Nil {}
     let ir = common::specialized_frontend_ir(db, source);
     assert!(
         logical_function(&ir, "entry").contains(
-            "tribute_control.lambda() -> core.i32 row(@ability_2_5_State_3_int) convention(cps)"
+            "tribute_control.lambda() -> core.i32 row(@\"ability_2_10_pkg::State_3_int\") convention(cps)"
         ),
         "a lambda that performs an effect must remain CPS:\n{ir}"
     );
@@ -673,7 +681,7 @@ fn main() -> Nil {{}}
         // type is the one `pure` takes.
         let entry = logical_function(&ir, "entry");
         assert_eq!(entry.matches("tribute_control.lambda").count(), 1, "{ir}");
-        assert!(entry.contains("callee = @\"open$9D\""), "{ir}");
+        assert!(entry.contains("callee = @\"pkg::open$9D\""), "{ir}");
         assert!(!entry.contains("unrealized_conversion_cast"), "{ir}");
     }
 }
@@ -698,7 +706,8 @@ fn main() -> Nil {}
     let conventions: Vec<_> = logical_function(&ir, "entry")
         .lines()
         .filter(|line| {
-            line.contains("tribute_control.func @entry") || line.contains("tribute_control.lambda")
+            line.contains("tribute_control.func @\"pkg::entry\"")
+                || line.contains("tribute_control.lambda")
         })
         .map(|line| line.contains("convention(cps)"))
         .collect();
@@ -771,7 +780,7 @@ fn main() -> Nil {}
     assert_eq!(
         total
             .match_indices(
-                "tribute_control.lambda() -> core.i32 row(@ability_2_5_State_3_nat | 'a0) convention(cps)"
+                "tribute_control.lambda() -> core.i32 row(@\"ability_2_10_pkg::State_3_nat\" | 'a0) convention(cps)"
             )
             .count(),
         4,
@@ -804,7 +813,7 @@ fn main() -> Nil {
     let ir = common::specialized_frontend_ir(db, source);
     let main = ir
         .lines()
-        .find(|line| line.contains("func @main(") || line.contains("func @main["))
+        .find(|line| line.contains("func @\"pkg::main\"(") || line.contains("func @\"pkg::main\"["))
         .expect("IR must contain main");
     assert!(
         main.contains("convention(direct)"),

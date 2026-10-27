@@ -12,7 +12,11 @@ use tribute_front::{
 fn prepare_damaged(db: &dyn salsa::Database, source: SourceCst, damage: u8) -> bool {
     let typed = parse_and_lower_ast(db, source).unwrap();
     let mut metadata = typed.expression_types(db).clone();
-    let target = if damage >= 6 { "hidden" } else { "identity" };
+    let target = if damage >= 6 {
+        "pkg::hidden"
+    } else {
+        "pkg::identity"
+    };
     let node = metadata
         .function_instances
         .iter()
@@ -34,7 +38,7 @@ fn prepare_damaged(db: &dyn salsa::Database, source: SourceCst, damage: u8) -> b
                 let (_, handler) = metadata
                     .handler_operations
                     .iter_mut()
-                    .find(|(_, operation)| operation.ability.qualified(db) == "Writer")
+                    .find(|(_, operation)| operation.ability.qualified(db) == "pkg::Writer")
                     .unwrap();
                 handler.ability_args[0] = Type::new(db, TypeKind::BoundVar { index: 999 });
             }
@@ -42,7 +46,7 @@ fn prepare_damaged(db: &dyn salsa::Database, source: SourceCst, damage: u8) -> b
                 let (_, perform) = metadata
                     .perform_operations
                     .iter_mut()
-                    .find(|(_, operation)| operation.ability.qualified(db) == "Writer")
+                    .find(|(_, operation)| operation.ability.qualified(db) == "pkg::Writer")
                     .unwrap();
                 perform.ability_args[0] = Type::new(db, TypeKind::BoundVar { index: 999 });
             }
@@ -138,7 +142,7 @@ fn effect_only_nominal_instance_matches_handlers_and_performs(db: &salsa::Databa
         .expression_types(db)
         .function_instances
         .iter()
-        .find(|(_, instance)| instance.function.qualified(db) == "hidden")
+        .find(|(_, instance)| instance.function.qualified(db) == "pkg::hidden")
         .unwrap()
         .1
         .clone();
@@ -150,7 +154,8 @@ fn effect_only_nominal_instance_matches_handlers_and_performs(db: &salsa::Databa
         .handler_operations
         .iter()
         .filter(|(_, operation)| {
-            operation.ability.qualified(db) == "Writer" && operation.ability_args == vec![argument]
+            operation.ability.qualified(db) == "pkg::Writer"
+                && operation.ability_args == vec![argument]
         })
         .collect();
     let performs: Vec<_> = prepared
@@ -158,7 +163,8 @@ fn effect_only_nominal_instance_matches_handlers_and_performs(db: &salsa::Databa
         .perform_operations
         .iter()
         .filter(|(_, operation)| {
-            operation.ability.qualified(db) == "Writer" && operation.ability_args == vec![argument]
+            operation.ability.qualified(db) == "pkg::Writer"
+                && operation.ability_args == vec![argument]
         })
         .collect();
     assert!(!handlers.is_empty());

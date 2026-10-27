@@ -4,7 +4,7 @@ assertion_line: 81
 expression: ir_text
 ---
 core.module @test {
-  tribute_control.func @data['a0]() -> core.bytes row(| 'a0) inferred {
+  tribute_control.func @"pkg::data"['a0]() -> core.bytes row(| 'a0) inferred {
       %0 = adt.bytes_const {value = b"payload"} : core.bytes
       tribute_control.return %0
   }

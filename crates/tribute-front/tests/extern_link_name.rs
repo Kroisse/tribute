@@ -30,11 +30,11 @@ fn main() -> Nil {
     for module in ["a", "b"] {
         let declaration = ir
             .lines()
-            .find(|line| line.contains(&format!("func @\"{module}::abs\"")))
+            .find(|line| line.contains(&format!("func @\"pkg::{module}::abs\"")))
             .unwrap_or_else(|| panic!("{module}::abs is declared by its path:\n{ir}"));
         assert!(declaration.contains("link_name = \"abs\""), "{declaration}");
         assert!(
-            ir.contains(&format!("callee = @\"{module}::abs\"")),
+            ir.contains(&format!("callee = @\"pkg::{module}::abs\"")),
             "calls name {module}::abs by its path:\n{ir}"
         );
     }

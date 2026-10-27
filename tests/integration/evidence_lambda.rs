@@ -50,7 +50,7 @@ fn function_abi(ctx: &IrContext, module: &Module, target: &str) -> (usize, bool,
         .copied()
         .find_map(|op| {
             let func_op = func::Func::from_op(ctx, op).ok()?;
-            (func_op.sym_name(ctx) == target).then_some(func_op)
+            (func_op.sym_name(ctx) == format!("pkg::{target}")).then_some(func_op)
         })
         .unwrap_or_else(|| panic!("missing function '{target}'"));
     let func_ty = func_op.r#type(ctx);
@@ -83,7 +83,7 @@ fn function_param_types(ctx: &IrContext, module: &Module, target: &str) -> Vec<t
         .copied()
         .find_map(|op| {
             let func_op = func::Func::from_op(ctx, op).ok()?;
-            (func_op.sym_name(ctx) == target).then_some(func_op)
+            (func_op.sym_name(ctx) == format!("pkg::{target}")).then_some(func_op)
         })
         .unwrap_or_else(|| panic!("missing function '{target}'"));
     func::FuncSig::from_type_ref(ctx, func_op.r#type(ctx))
@@ -348,7 +348,7 @@ fn main() -> Nil { }
         // counter should have evidence
         let counter_has_evidence = functions
             .iter()
-            .any(|(name, has_ev)| name == "counter" && *has_ev);
+            .any(|(name, has_ev)| name == "pkg::counter" && *has_ev);
         assert!(counter_has_evidence, "counter() should have evidence");
 
         // The lambda calling counter() should also have evidence
@@ -443,7 +443,7 @@ fn main() -> Nil { }
             .copied()
             .find_map(|op| {
                 let function = func::Func::from_op(&ctx, op).ok()?;
-                (function.sym_name(&ctx) == "foreign").then_some(function)
+                (function.sym_name(&ctx) == "pkg::foreign").then_some(function)
             })
             .expect("external declaration");
         assert_eq!(
