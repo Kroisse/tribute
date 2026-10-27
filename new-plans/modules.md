@@ -762,12 +762,14 @@ my_app/
 
 `lib.trb`와 `main.trb`가 동시에 존재하면 라이브러리와 실행 파일을 모두 제공하는 패키지가 된다.
 
-### 매니페스트 (`Tribute.toml`)
+### 매니페스트 (`tribute.toml`)
 
-패키지는 매니페스트 `Tribute.toml`을 담은 디렉토리다. 매니페스트는 패키지 이름과
+패키지는 매니페스트 `tribute.toml`을 담은 디렉토리다. 매니페스트는 패키지 이름과
 [의존성 표](#prelude와-패키지-std)를 정한다. 루트 파일은 매니페스트에 적지 않고,
 매니페스트 옆 `src/` 아래의 `lib.trb`와 `main.trb`로 정한다
-([최상위 모듈](#최상위-모듈-root-module)). 둘 다 없으면 패키지 오류다.
+([최상위 모듈](#최상위-모듈-root-module)). 둘 다 없으면 패키지 오류다. 파일 이름은
+대소문자까지 `tribute.toml`이어야 하며, 대소문자를 구분하지 않는 파일 시스템에서도
+다른 철자의 파일은 매니페스트로 읽지 않는다.
 
 ```toml
 [package]
@@ -780,7 +782,7 @@ geometry = { path = "../geometry" }
 - `[package]`의 `name`은 필수다. 이름은 소문자 모듈 이름과 같은 식별자이며, 경로
   키워드(`pkg`, `super`, `self`)와 `std`는 쓸 수 없다.
 - `[dependencies]`의 각 항목은 이름 → `{ path = "…" }`다. `path`는 의존 패키지의
-  `Tribute.toml`을 담은 디렉토리이고, 그 패키지는 `lib.trb`를 가져야 한다. 항목의
+  `tribute.toml`을 담은 디렉토리이고, 그 패키지는 `lib.trb`를 가져야 한다. 항목의
   이름은 의존 패키지의 `[package] name`과 같아야 하며, 그 이름이 의존 패키지 경로의
   첫 segment가 된다(`geometry::area`, `::geometry::area`). 버전과 registry는 이
   표의 형식에 포함하지 않는다.
