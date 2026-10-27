@@ -308,6 +308,21 @@ impl<'db> TypeChecker<'db> {
         let func_ty = self.env.func_type(param_types, return_ty, effect);
 
         let type_params = vars.type_params();
+        // One external symbol cannot serve instances of different
+        // representations (`new-plans/modules.md`, "모듈 선언과 Use").
+        if !type_params.is_empty() && func.abi != "intrinsic" {
+            Diagnostic::new(
+                format!(
+                    "extern function `{}` cannot be generic; only `extern \"intrinsic\"` \
+                     functions may have type parameters",
+                    func.name
+                ),
+                self.get_span(func.id),
+                DiagnosticSeverity::Error,
+                CompilationPhase::TypeChecking,
+            )
+            .accumulate(self.db());
+        }
 
         let mut effect_params = collect_row_vars(self.db(), func_ty);
         for union in &vars.unions {
