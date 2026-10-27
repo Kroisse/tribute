@@ -10,16 +10,6 @@ use rustc_hash::FxHashMap as HashMap;
 use crate::ast::fold::{TypeFoldable, TypeFolder};
 use crate::ast::{AbilityRow, RowVar, Type, TypeKind, TypeScheme};
 
-/// Result of BoundVar substitution, for callers that have not moved to
-/// [`BoundVarSubst`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SubstResult<'db> {
-    /// Substitution succeeded.
-    Ok(Type<'db>),
-    /// BoundVar index was out of bounds.
-    OutOfBounds { index: u32, max: usize },
-}
-
 /// A BoundVar index past the substitution arguments.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BoundVarOutOfBounds {
@@ -27,38 +17,6 @@ pub struct BoundVarOutOfBounds {
     pub index: u32,
     /// The number of substitution arguments.
     pub max: usize,
-}
-
-impl<'db> SubstResult<'db> {
-    /// Returns the substituted type, or calls the fallback function if out of bounds.
-    pub fn unwrap_or_else(self, fallback: impl FnOnce(u32, usize) -> Type<'db>) -> Type<'db> {
-        match self {
-            SubstResult::Ok(ty) => ty,
-            SubstResult::OutOfBounds { index, max } => fallback(index, max),
-        }
-    }
-
-    /// Returns the substituted type, or returns the given fallback type if out of bounds.
-    pub fn unwrap_or(self, fallback: Type<'db>) -> Type<'db> {
-        match self {
-            SubstResult::Ok(ty) => ty,
-            SubstResult::OutOfBounds { .. } => fallback,
-        }
-    }
-
-    /// Returns true if substitution was successful.
-    pub fn is_ok(&self) -> bool {
-        matches!(self, SubstResult::Ok(_))
-    }
-}
-
-impl<'db> From<Result<Type<'db>, BoundVarOutOfBounds>> for SubstResult<'db> {
-    fn from(result: Result<Type<'db>, BoundVarOutOfBounds>) -> Self {
-        match result {
-            Ok(ty) => SubstResult::Ok(ty),
-            Err(BoundVarOutOfBounds { index, max }) => SubstResult::OutOfBounds { index, max },
-        }
-    }
 }
 
 /// Replaces scheme `BoundVar(i)` with `args[i]`, without folding into the
@@ -101,13 +59,13 @@ impl<'db> TypeFolder<'db> for BoundVarSubst<'_, 'db> {
 
 /// Substitute BoundVars in a type with the given substitution types.
 ///
-/// Returns `SubstResult::OutOfBounds` if a BoundVar's index exceeds `subst.len()`.
+/// Returns [`BoundVarOutOfBounds`] if a BoundVar index exceeds `subst.len()`.
 pub fn substitute_bound_vars<'db>(
     db: &'db dyn salsa::Database,
     ty: Type<'db>,
     subst: &[Type<'db>],
-) -> SubstResult<'db> {
-    ty.try_fold_with(&mut BoundVarSubst::new(db, subst)).into()
+) -> Result<Type<'db>, BoundVarOutOfBounds> {
+    ty.try_fold_with(&mut BoundVarSubst::new(db, subst))
 }
 
 /// Substitute BoundVars within an ability row.
@@ -414,55 +372,6 @@ mod tests {
         assert_ne!(first_tails[0], second_tails[0]);
         assert_ne!(first_tails[0], quantified_row);
         assert!(first_tails[0].id > quantified_row.id);
-    }
-
-    // =========================================================================
-    // SubstResult helper method tests
-    // =========================================================================
-
-    #[salsa_test]
-    fn test_subst_result_unwrap_or_else(db: &dyn salsa::Database) {
-        let int_ty = Type::new(db, TypeKind::Int);
-        let error_ty = Type::new(db, TypeKind::Error);
-
-        // Ok case
-        let ok_result = SubstResult::Ok(int_ty);
-        let unwrapped = ok_result.unwrap_or_else(|_, _| error_ty);
-        assert_eq!(unwrapped, int_ty);
-
-        // OutOfBounds case
-        let err_result = SubstResult::OutOfBounds { index: 5, max: 1 };
-        let unwrapped = err_result.unwrap_or_else(|index, max| {
-            assert_eq!(index, 5);
-            assert_eq!(max, 1);
-            error_ty
-        });
-        assert_eq!(unwrapped, error_ty);
-    }
-
-    #[salsa_test]
-    fn test_subst_result_unwrap_or(db: &dyn salsa::Database) {
-        let int_ty = Type::new(db, TypeKind::Int);
-        let error_ty = Type::new(db, TypeKind::Error);
-
-        // Ok case
-        let ok_result = SubstResult::Ok(int_ty);
-        assert_eq!(ok_result.unwrap_or(error_ty), int_ty);
-
-        // OutOfBounds case
-        let err_result: SubstResult<'_> = SubstResult::OutOfBounds { index: 5, max: 1 };
-        assert_eq!(err_result.unwrap_or(error_ty), error_ty);
-    }
-
-    #[salsa_test]
-    fn test_subst_result_is_ok(db: &dyn salsa::Database) {
-        let int_ty = Type::new(db, TypeKind::Int);
-
-        let ok_result = SubstResult::Ok(int_ty);
-        assert!(ok_result.is_ok());
-
-        let err_result: SubstResult<'_> = SubstResult::OutOfBounds { index: 0, max: 0 };
-        assert!(!err_result.is_ok());
     }
 }
 

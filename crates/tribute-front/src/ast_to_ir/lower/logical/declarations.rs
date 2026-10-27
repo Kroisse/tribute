@@ -105,8 +105,8 @@ pub(super) fn instance_operations<'db>(
 ) -> Vec<OperationDeclaration> {
     let instantiate = |ty, arguments: &[crate::ast::Type<'db>]| {
         match crate::typeck::subst::substitute_bound_vars(ctx.db, ty, arguments) {
-            crate::typeck::subst::SubstResult::Ok(ty) => ty,
-            crate::typeck::subst::SubstResult::OutOfBounds { .. } => {
+            Ok(ty) => ty,
+            Err(_) => {
                 panic!("ability operation substitution failed")
             }
         }

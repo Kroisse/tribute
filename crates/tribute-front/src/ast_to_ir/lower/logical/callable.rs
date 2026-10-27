@@ -533,12 +533,7 @@ pub(super) fn call_operation_metadata<'db>(
     let expected_params = operation_schema
         .param_types
         .iter()
-        .map(
-            |ty| match crate::typeck::subst::substitute_bound_vars(builder.db(), *ty, &args) {
-                crate::typeck::subst::SubstResult::Ok(ty) => Some(ty),
-                crate::typeck::subst::SubstResult::OutOfBounds { .. } => None,
-            },
-        )
+        .map(|ty| crate::typeck::subst::substitute_bound_vars(builder.db(), *ty, &args).ok())
         .collect::<Option<Vec<_>>>()
         .unwrap_or_else(|| panic!("perform parameter substitution failed"));
     let expected_result = match crate::typeck::subst::substitute_bound_vars(
@@ -546,8 +541,8 @@ pub(super) fn call_operation_metadata<'db>(
         operation_schema.return_type,
         &args,
     ) {
-        crate::typeck::subst::SubstResult::Ok(ty) => ty,
-        crate::typeck::subst::SubstResult::OutOfBounds { .. } => {
+        Ok(ty) => ty,
+        Err(_) => {
             panic!("perform result substitution failed")
         }
     };
@@ -1229,8 +1224,8 @@ pub(super) fn lower_handler<'db>(
         .iter()
         .map(
             |ty| match crate::typeck::subst::substitute_bound_vars(ctx.db, *ty, &arguments) {
-                crate::typeck::subst::SubstResult::Ok(ty) => ty,
-                crate::typeck::subst::SubstResult::OutOfBounds { .. } => {
+                Ok(ty) => ty,
+                Err(_) => {
                     panic!("handler parameter substitution failed")
                 }
             },
@@ -1241,8 +1236,8 @@ pub(super) fn lower_handler<'db>(
         operation_schema.return_type,
         &arguments,
     ) {
-        crate::typeck::subst::SubstResult::Ok(ty) => ty,
-        crate::typeck::subst::SubstResult::OutOfBounds { .. } => {
+        Ok(ty) => ty,
+        Err(_) => {
             panic!("handler result substitution failed")
         }
     };
