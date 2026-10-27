@@ -81,7 +81,10 @@ mod closure {
     #[asm_format]
     #[implements(CallableOwner, ConventionBearing)]
     #[flags(Pure)]
-    fn lambda<S: FuncSig>(signature: Attr<TypeOf<S>>, captures: Variadic<_>) -> Value<_> {
+    fn lambda<S: FuncSig>(
+        signature: Attr<TypeOf<S>>,
+        captures: Variadic<_>,
+    ) -> Value<impl Closure> {
         #[region(body)]
         {}
     }
@@ -629,6 +632,39 @@ mod tests {
             assert_roundtrip(&printed);
             assert_eq!(printed.contains(" -> "), result.is_some());
         }
+    }
+
+    #[test]
+    fn a_lambda_whose_closure_is_not_its_signature_prints_the_closure() {
+        use trunk_ir::ops::DialectType;
+        let text = r#"core.module @test {
+  %f = closure.lambda(%ev: core.i64, %x: core.i32) -> core.i32 : closure.closure<func.func_sig<(core.i32) -> core.i32>> {
+    func.return %x
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(&mut ctx, text);
+        let lambda = super::Lambda::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
+        let signature =
+            trunk_ir::dialect::func::FuncSig::from_type_ref(&ctx, lambda.signature(&ctx))
+                .expect("the parameters and result spell the signature");
+        assert_eq!(signature.inputs(&ctx).len(), 2);
+        let printed = trunk_ir::printer::print_module(&ctx, module.op());
+        assert!(printed.contains(" : closure.closure<"), "{printed}");
+        assert_roundtrip(&printed);
+    }
+
+    #[test]
+    fn a_lambda_result_must_be_a_closure() {
+        let text = r#"core.module @test {
+  %f = closure.lambda(%x: core.i32) -> core.i32 : core.i32 {
+    func.return %x
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(&mut ctx, text);
+        let result = trunk_ir::validation::validate_op_schemas(&ctx, module.op());
+        assert!(!result.is_ok(), "{result}");
     }
 
     #[test]
