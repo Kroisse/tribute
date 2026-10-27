@@ -901,6 +901,14 @@ CLI, LSP와 테스트는 같은 분석 의미를 사용하며 source와 외부 �
 구분한다. LSP는 부분 결과를 사용할 수 있지만 컴파일 경로는 frontend 오류가
 있으면 lowering을 시작하지 않는다.
 
+정의가 지켜야 하는 source 규칙은 타입 검사가 정의마다 진단한다. 그 정의가
+인스턴스화되는지와 상관없이, 도달하지 않는 generic 함수 본문에서도 같은 진단이
+나온다. 리터럴 패턴이 자기 타입의 `==`를 요구하는 규칙, ability operation 호출의
+인자 개수가 그 예다. 특수화와 IR lowering은 이 규칙들이 이미 지켜졌다고 보고,
+위반을 만나면 source 진단이 아니라 compiler 내부 불일치로 취급한다. Lowering이
+내는 진단은 타깃 표현의 구현 한계뿐이며, 이 한계는 실제로 생성되는 코드에만
+적용된다.
+
 진단만 내는 컴파일은 frontend, 논리 IR 생성, class 특수화를 거쳐
 [`fn` arm 호출 검사](cps-effects.md#fn-arm-호출-검사)에서 멈춘다. Source 규칙
 위반은 모두 이 지점까지 드러나므로, 이 컴파일은 frontend 진단과 `fn` arm 호출
