@@ -151,7 +151,7 @@ impl<'a> Instance<'a> {
         requirements: &'a HashMap<SymbolPath, CallingConvention>,
     ) -> Self {
         let variables = positions.get(&function.base).map_or(&[][..], Vec::as_slice);
-        let claimed = if function.is_root_main() {
+        let claimed = if function.root_entry {
             vec![CallingConvention::Direct; variables.len()]
         } else {
             function

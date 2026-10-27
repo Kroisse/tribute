@@ -1,4 +1,7 @@
+use trunk_ir::SymbolPath;
 use trunk_ir::context::IrContext;
+use trunk_ir::dialect::core;
+use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::types::{Attribute, AttributeMap};
 
@@ -27,6 +30,49 @@ pub fn publish_prelude_type(ctx: &mut IrContext, module: OpRef, path: &str, ty: 
         .insert(path.to_owned(), Attribute::Type(ty));
     ctx.op_attrs_mut(module)
         .insert(PRELUDE_TYPES_ATTR, Attribute::Dict(types));
+}
+
+/// The root-module reference to the function the root package of an
+/// executable build declares as its entry point (`new-plans/ir.md`).
+pub const ROOT_ENTRY_ATTR: &str = "tribute.entry";
+
+/// The entry function the root module `module` names, if any.
+pub fn root_entry(ctx: &IrContext, module: OpRef) -> Option<&SymbolPath> {
+    ctx.op_attrs(module).get_symbol_ref(ROOT_ENTRY_ATTR)
+}
+
+/// Name `entry` as the entry function of the root module `module`.
+pub fn set_root_entry(ctx: &mut IrContext, module: OpRef, entry: SymbolPath) {
+    ctx.op_attrs_mut(module)
+        .insert(ROOT_ENTRY_ATTR, Attribute::SymbolRef(entry));
+}
+
+/// Remove the entry reference of the root module `module`, once the root
+/// entry bridge has consumed it.
+pub fn take_root_entry(ctx: &mut IrContext, module: OpRef) -> Option<SymbolPath> {
+    match ctx.op_attrs_mut(module).remove(ROOT_ENTRY_ATTR) {
+        Some(Attribute::SymbolRef(entry)) => Some(entry),
+        _ => None,
+    }
+}
+
+/// Whether `op` is the definition its root module names as the entry
+/// function.
+pub fn is_root_entry(ctx: &IrContext, op: OpRef) -> bool {
+    let Some(module) = ctx
+        .op(op)
+        .parent_block
+        .and_then(|block| ctx.block(block).parent_region)
+        .and_then(|region| ctx.region(region).parent_op)
+    else {
+        return false;
+    };
+    let is_root = core::Module::matches(ctx, module) && ctx.op(module).parent_block.is_none();
+    is_root
+        && root_entry(ctx, module)
+            .and_then(SymbolPath::as_simple)
+            .zip(ctx.op_attrs(op).get_str("sym_name"))
+            .is_some_and(|(entry, name)| *entry == *name)
 }
 
 /// Tribute semantic type identities attached to a root IR module.

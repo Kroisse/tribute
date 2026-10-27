@@ -3,7 +3,7 @@ source: crates/tribute-front/tests/evidence_lowering.rs
 assertion_line: 64
 expression: ir_text
 ---
-core.module @test {
+core.module @test {tribute.entry = @main} {
   !t0 = tribute_control.func_sig<() -> core.i32, {ability_row = {instances = [@ability_1_7_Counter]}}>
 
   tribute_control.func @get_count() -> core.i32 row(@ability_1_7_Counter) {

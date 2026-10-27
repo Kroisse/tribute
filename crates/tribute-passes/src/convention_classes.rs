@@ -104,6 +104,8 @@ pub(crate) struct Function {
     pub(crate) binders: Vec<RowBinder>,
     pub(crate) ty: TypeRef,
     pub(crate) inferred: bool,
+    /// Whether the root module names this function as its entry point.
+    pub(crate) root_entry: bool,
     /// Tails that select a class variable without looking at callees.
     pub(crate) selecting: HashSet<u32>,
     pub(crate) references: Vec<Reference>,
@@ -124,6 +126,7 @@ impl Function {
             ctx.op_attrs(op).get(tribute_control::INFERRED_ROW_ATTR),
             Some(Attribute::Bool(true))
         );
+        let root_entry = tribute_ir::metadata::is_root_entry(ctx, op);
         let mut selecting = HashSet::default();
         let mut tail_of = |ty: TypeRef| {
             tribute_control::visit_rows(ctx, ty, &mut |row| {
@@ -167,6 +170,7 @@ impl Function {
             binders,
             ty,
             inferred,
+            root_entry,
             selecting,
             references,
             selected: Vec::new(),
@@ -179,10 +183,6 @@ impl Function {
             .ok()
             .and_then(|index| self.binders.get(index))
             == Some(&RowBinder::Param)
-    }
-
-    pub(crate) fn is_root_main(&self) -> bool {
-        self.name == "main"
     }
 }
 

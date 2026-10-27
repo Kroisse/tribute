@@ -1338,6 +1338,22 @@ reject `adt.string_const` when the `std::String` entry is absent, and a pass
 that builds evidence types or lowers `effect.*` must reject the module when the
 `std::runtime::evidence::Marker` entry is absent.
 
+### Root entry 참조
+
+실행 파일 빌드의 root 패키지가 진입점을 선언하면, frontend는 root `core.module`의
+`tribute.entry` attribute에 그 함수의 `SymbolRef`를 담는다. 진입점은 언어 규칙이
+정한다(root 모듈의 `main`). 이후 단계는 symbol 철자가 아니라 이 참조로 진입점을
+찾는다.
+
+- Class 특수화, `fn` arm 호출 검사, root bridge 합성처럼 bridge 전에 root worker를
+  다루는 단계는 이 참조가 가리키는 정의를 root worker로 읽는다. 참조는 module
+  수준의 symbol 참조이므로, 참조되지 않는 정의 제거는 이 정의를 root로 남긴다.
+- 참조가 root module의 정의 하나로 해석되지 않으면 bridge 합성은 오류로 거부한다.
+  참조가 없으면 진입점이 없는 module이며 bridge를 합성하지 않는다.
+- Root bridge 합성은 참조를 소비한다. Root worker로 이름을 바꾸고 모듈 안의 참조를
+  옮긴 뒤 attribute를 제거한다. 그 뒤의 진입점은 bridge가 만든 root `main` wrapper이고,
+  target은 이 target ABI symbol로 진입점을 찾는다([출구 계약](#representationabi-경계)).
+
 ## Mid-Level Dialects
 
 `func.*` represents function definitions, direct calls, indirect calls, function

@@ -114,6 +114,7 @@ pub(super) fn lower_module<'db>(
         local_callables: local_callables::Plan::default(),
         function_local_callables: HashMap::default(),
         local_uses: Vec::new(),
+        root_entry: None,
     };
     prescan_row_binders(&mut ctx, &ast.entries, &declarations);
     let row_effects = row_effects(&ctx, &ast.entries, &declarations);
@@ -152,6 +153,9 @@ pub(super) fn lower_module<'db>(
         .regions(region)
         .build(ir, location);
     well_known_types.attach(ir, module.op_ref());
+    if let Some(entry) = declarations.root_entry.take() {
+        tribute_ir::metadata::set_root_entry(ir, module.op_ref(), SymbolPath::new([entry]));
+    }
     for (path, layout) in published_runtime_types {
         tribute_ir::metadata::publish_prelude_type(ir, module.op_ref(), &path.to_string(), layout);
     }

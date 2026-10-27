@@ -403,8 +403,8 @@ pub(super) fn lower_function<'db>(
     let location = ctx.location(function.id);
     let signature = function_signature(ctx, ir, &function);
     let callable = signature.callable_type(ir);
-    let inferred_row = function.effects.is_none()
-        || crate::is_root_main(&function.name, ctx.module_path().is_root());
+    let root_entry = crate::is_root_main(&function.name, ctx.module_path().is_root());
+    let inferred_row = function.effects.is_none() || root_entry;
     let args = function
         .params
         .iter()
@@ -467,6 +467,9 @@ pub(super) fn lower_function<'db>(
         parent_op: None,
     });
     let name = ctx.qualify_name(&function.name).to_symbol();
+    if root_entry {
+        declarations.root_entry = Some(name.clone());
+    }
     let function = tribute_control::func_declaration(ir, location, &name, callable);
     signature.attach_rows(ir, function.op_ref());
     if inferred_row {

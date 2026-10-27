@@ -62,7 +62,7 @@ fn declaration_with_name<'a, 'db>(
 
 fn source_logical_cps_root_module(body: &str) -> (IrContext, Module) {
     let mut ctx = IrContext::new();
-    let source = r#"core.module @test {
+    let source = r#"core.module @test {tribute.entry = @main} {
             !"std::runtime::evidence::Marker" = adt.struct<"std::runtime::evidence::Marker"(ability_id: core.i32, prompt_tag: core.i32)>
             !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
             !Frame = adt.typeref<{name = "__tribute_continuation_frame_root_nil", tribute.cps_continuation_frame_result = core.nil}>
@@ -394,7 +394,7 @@ fn boundary_exit_enforcement_rejects_any_violation() {
     let mut ctx = IrContext::new();
     let module = trunk_ir::parser::parse_test_module(
         &mut ctx,
-        r#"core.module @test {
+        r#"core.module @test {tribute.entry = @main} {
   func.func @main() -> core.nil attributes {tribute.calling_convention = "direct"} {
     %nil = core.nil_value : core.nil
     func.return %nil
@@ -747,7 +747,7 @@ fn main() ->{Io} Nil {
 fn native_one_shot_wrapper_traps_on_second_invocation() {
     use std::os::unix::process::ExitStatusExt;
 
-    let input = r#"core.module @one_shot {
+    let input = r#"core.module @one_shot {tribute.entry = @main} {
   !state = adt.struct<OneShotState(consumed: core.i1)>
 
   func.func @one_shot_wrapper(%state: !state, %value: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
@@ -798,7 +798,7 @@ fn native_one_shot_wrapper_traps_on_second_invocation() {
 /// no semantic calling convention, root, or frame metadata is present.
 fn physical_tail_chain_module(done_call_conv: &str, reference_call_conv: &str) -> String {
     format!(
-        r#"core.module @physical {{
+        r#"core.module @physical {{tribute.entry = @main}} {{
   func.func @fail() {{
     func.unreachable
   }}
