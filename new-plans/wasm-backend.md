@@ -360,7 +360,7 @@ user-defined type은 그 뒤에 배치된다:
 | 0 | `BoxedF64` |
 | 1 | `BytesArray` |
 | 2 | `BytesStruct` |
-| 3 | `_closure { code: i32 }`, 모든 closure 값의 base |
+| 3 | `_closure { entries: i32 }`, 모든 closure 값의 base |
 | 4 | `Described { descriptor: i32 }`, 사용자 struct와 variant의 공통 supertype |
 | 5+ | user-defined structs, arrays, variants, closure capture layouts |
 
@@ -489,29 +489,37 @@ WasmGC subtype 관계는 `wasm_gc.struct`의 type 속성 `supertype`으로만 �
 [Closure 저장 layout](ir.md#closure-저장-layout)은 closure base 하나와 capture
 layout들로 이루어진다.
 
-- Closure base(`layout = "closure"`)는 예약 index 3의 `{ code: i32 }`이며 final이
-  아니다. Code 필드는 immutable이며 closure function table의 index다.
+- Closure base(`layout = "closure"`)는 예약 index 3의 `{ entries: i32 }`이며 final이
+  아니다. Entries 필드는 immutable이며 closure function table 안의
+  [convention table](ir.md#convention-entry) 시작 index다. 한 entry 함수 목록은 function
+  table에서 `Direct`, `EvidenceDirect`, `Cps` 순서로 연속한 세 칸을 차지한다. 본문도
+  adapter도 없는 칸은 그 convention entry의 signature를 가진 trap 함수이며, 본문은 `unreachable`
+  하나다. Signature가 같은 칸들은 trap 함수 하나를 공유하므로 `call_indirect`의 타입
+  검사가 아니라 이 함수가 trap한다.
 - 사용자 `adt.struct`를 `wasm_gc.struct`로 바꾸는 단계가 capture layout
-  (`layout = "closure_captures"`)도 `wasm_gc.struct`로 바꾼다. 필드는 base의 code
+  (`layout = "closure_captures"`)도 `wasm_gc.struct`로 바꾼다. 필드는 base의 entries
   필드 뒤에 capture의 Wasm 저장 표현을 순서대로 두고, `closure_base`가 가리키는
   base를 [`supertype`](#wasm-gc-subtype)으로 가진다. Descriptor 필드는 두지 않는다.
   Capture 타입 목록이 같은 closure는 같은 GC 타입을 쓰고, 필드가 같은 사용자
   struct와는 supertype이 달라 다른 GC 타입이다.
 - Closure는 `Described`의 subtype이 아니다. 그 뒤의 backend는 capture layout을
   일반 `wasm_gc.struct`로 다루며 closure인지 알 필요가 없다.
-- Code 함수는 environment 입력으로 base 참조를 받아 자기 capture layout으로
-  `ref.cast`한 뒤 capture를 `struct.get`으로 읽는다. Capture 없는 closure의 code
+- Entry 함수는 environment 입력으로 base 참조를 받아 자기 capture layout으로
+  `ref.cast`한 뒤 capture를 `struct.get`으로 읽는다. Capture 없는 closure의 entry
   함수는 base 객체를 그대로 받고 cast하지 않는다.
-- Closure 호출은 base에서 code 필드를 읽고 closure 참조 자체를 environment 인자로
-  넘긴다. Ordinary 호출은 `call_indirect`, proper tail transfer는
-  `return_call_indirect`이며 exact `wasm.func_sig`를 명시한다.
-- Code 필드를 typed 함수 참조로 표현하는 경우에는 base를 closure의 exact
-  signature `S`마다 둔다. `$closure_S`는 `{ code: (ref $code_S) }`이고, `$code_S`의
-  environment 입력이 `$closure_S`이므로 두 타입은 서로를 가리킨다. 모든 GC 타입이
+- Closure 호출은 base에서 entries 필드를 읽고 convention의 위치를 더한 function table
+  index를 호출하며, closure 참조 자체를 environment 인자로 넘긴다. Ordinary
+  호출은 `call_indirect`, proper tail transfer는 `return_call_indirect`이며 exact
+  `wasm.func_sig`를 명시한다.
+- Entry를 typed 함수 참조로 표현하는 경우에는 base를 closure의 callable type `S`마다 두고,
+  convention table을 convention entry마다 typed 함수 참조 필드를 가진 immutable GC struct로 둔다.
+  `$closure_S`는 `{ entries: (ref $entries_S) }`이고, 각 entry 함수 타입의
+  environment 입력이 `$closure_S`이므로 타입들은 서로를 가리킨다. 모든 GC 타입이
   rec group 하나에 들어 있으므로 이 재귀를 그대로 선언할 수 있다. 호출은
   `call_ref`, proper tail transfer는 `return_call_ref`가 되고 closure function
-  table은 필요 없다. Handler dispatch는 signature가 하나로 고정되어 있으므로
-  evidence runtime의 `Dispatch`는 그 signature의 base다. Capture layout, code 함수의
+  table은 필요 없다. 필드는 null을 허용하지 않으며, 본문도 adapter도 없는 convention entry는 위와 같은
+  signature별 trap 함수의 참조를 담는다. Handler dispatch는 signature가 하나로 고정되어 있으므로
+  evidence runtime의 `Dispatch`는 그 signature의 base다. Capture layout, entry 함수의
   downcast, storage surface의 규칙은 같다.
 
 ### GC 인덱스 등록의 소유권

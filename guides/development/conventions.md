@@ -82,8 +82,9 @@ for joining; keep collections needed for sorting or reuse.
 
 Typechecked source callable metadata includes its parameter/result types and
 ability row. Source-logical IR preserves that signature, including the effect
-row, and the calling convention computed from the row. Shared CPS legalization
-alone adds hidden callable parameters.
+row, and carries no calling convention; the CPS strategy's class specialization
+assigns conventions to definitions, convention entries, and indirect transfers.
+Shared CPS legalization alone adds hidden callable parameters.
 Do not infer operation kind, ownership, or callable ABI from symbol spelling,
 body shape, or an erased pointer type.
 

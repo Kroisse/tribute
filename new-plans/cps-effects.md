@@ -99,29 +99,29 @@ fn(a) -> b ≡ fn(a) ->{e} b
 바뀌지 않는다. Row의 tail은 다음과 같이 읽는다.
 
 ```text
-class 변수인 tail                                  → 그 인스턴스에 고정된 class
-추론된 row인 정의 자신의 tail 중 class 변수가 아닌 것 → 요구 없음
-그 밖의 tail                                       → Cps
+class 변수인 tail                       → 그 인스턴스에 고정된 class
+정의 자신의 tail 중 class 변수가 아닌 것 → 요구 없음
+그 밖의 tail                            → Cps
 ```
 
 [Class 변수](#row-변수의-convention-class)의 requirement는 인스턴스가
 고정한다. Class가 전부 `Cps`인 인스턴스, 곧 특수화하지 않은 정의에서는 class 변수인
 tail이 `Cps`를 요구한다.
 
-둘째 줄은 annotation을 생략한 정의([추론된 row](ir.md#추론된-row)) 자신의 row에서
-생긴 tail 중 정의 안의 어떤 callable에도 닿지 않는 것이다. 그런 tail은 정의의 코드를
-바꾸지 않는다. 그러므로 effect-polymorphic `add`는 Direct이고, 명시적인 `->{}`도
-닫힌 빈 row이므로 Direct다. 마지막 줄에는 ability 인자에 나타난 tail, 어느 scheme도
-양화하지 않은 tail, 그리고 명시적으로 적은 열린 row의 tail 중 class 변수가 아닌 것이
-들어간다.
+둘째 줄은 정의 자신의 row tail 중 정의 안의 어떤 callable에도 닿지 않는 것이다.
+Annotation을 생략한 정의와 열린 row를 적은 정의가 같다. 그런 tail은 정의의 코드를
+바꾸지 않는다. 그러므로 effect-polymorphic `add`와 `fn f() ->{e} Int`는 Direct이고,
+명시적인 `->{}`도 닫힌 빈 row이므로 Direct다. 마지막 줄에는 ability 인자에 나타난
+tail, 어느 scheme도 양화하지 않은 tail, 그리고 정의 자신의 row가 아닌 자리에 적은
+열린 row의 tail 중 class 변수가 아닌 것이 들어간다.
 
 정의가 `Cps`가 아니면 그 row에는 `op`를 가진 ability도 class 없는 tail도 없다.
 본문의 `handle`, `resume`, `Cps` 호출은
 [값 delimiter](#값-delimiter) 안에서 실행한다. 호출자의 convention은
 호출 대상의 본문 때문에 달라지지 않는다.
 
-`let`으로 묶인 람다도 같은 규칙을 따른다. Class 특수화 pass가 한 람다를 쓰이는
-class 조합마다 한 번씩 만든다.
+`let`으로 묶인 람다도 같은 규칙을 따른다
+([`let`에 묶인 람다](#row-변수의-convention-class)).
 
 여기서 `Cps`는 source result를 직접 반환하지 않고 ContinuationFrame의 `Done<R>`으로
 전달한다는 논리적 convention이다. Lowering은 `core.never`를 empty-result proper tail
@@ -159,9 +159,9 @@ Ability row는 타입 인자처럼 치환하지 않는다. Row의 내용은 실�
 - 본문이 참조하는 정의의 class 변수 자리에 넘기는 row의 tail
 - 본문이 `let`에 묶인 람다의 row 변수 자리에 넘기는 row의 tail
 
-결과 타입의 함수 타입도 정의의 코드를 바꾼다. 정의가 돌려주는 callable의
-convention이 그 row의 class이고, 호출한 쪽은 그 결과를 자기가 고정한 row의
-class로 읽기 때문이다. 이름 붙은 함수를 그대로 돌려주는 정의는 본문에 람다가 없어도
+결과 타입의 함수 타입도 정의의 코드를 바꾼다. 정의가 돌려주는 callable이 채울 수
+있는 [convention entry](ir.md#convention-entry)가 그 row의 class에 달려 있고, 호출한 쪽은 그
+결과를 자기가 고정한 row의 class로 부르기 때문이다. 이름 붙은 함수를 그대로 돌려주는 정의는 본문에 람다가 없어도
 이 조건으로 class 변수를 가진다.
 
 셋째 조건은 참조되는 정의의 class 변수에 의존하므로, 모든 정의에 대한 최소
@@ -179,11 +179,10 @@ class 변수를 갖지 않는다.
 **`let`에 묶인 람다.** 지역 스킴이 양화한 row 변수의 class는 사용처마다 row
 인자에서 계산한다. IR에서 그 row 인자는 사용처의
 [`instantiate`](../crates/tribute-ir/src/dialect/tribute_control.rs)가
-가진다. 람다는 그것을 묶은
-인스턴스 안에서 쓰이는 class 조합마다 한 번 생성하고, 각 사용처는 자기 class의 생성물을 읽는다. 생성물마다 람다 자신의
-convention과 본문의 참조를 그 class로 읽으므로, 본문이 참조하는 정의도 생성물마다
-따로 인스턴스를 고른다. 다른 지역 람다의 본문 안에 있는 사용처는 그 람다의
-class가 정해진 뒤에 계산한다.
+가진다. 람다의 본문과 값 나누기는 [convention entry](ir.md#convention-entry)를
+따른다. 본문마다 본문의 참조를 그 class로 읽으므로, 본문이 참조하는 정의도 본문마다
+따로 인스턴스를 고른다. 다른 지역 람다의 본문 안에 있는 사용처는 그 람다의 본문이
+정해진 뒤에 계산한다.
 
 **Class 인자.** 참조 지점의 class 인자는 참조가 넘기는 row 인자(`row_args`)에서
 계산한다. Callable 타입에서 역추론하지 않는다.
@@ -232,7 +231,7 @@ row와 [row binder](ir.md#row-binder), 참조의 `row_args`, 지역 람다의
 
 - 위 규칙으로 정의마다 class 변수를 정하고, root `main`과 참조의 class 인자에서 필요한
   인스턴스를 모은다.
-- 정의를 인스턴스마다 복제한다. Class 인자가 모두 `Cps`가 아닌 인스턴스의 이름은 정의
+- 정의를 인스턴스마다 `tribute_cps.func`로 복제한다. Class 인자가 모두 `Cps`가 아닌 인스턴스의 이름은 정의
   이름 뒤에 `$9`와 class 변수마다 `D`(`Direct`), `E`(`EvidenceDirect`), `C`(`Cps`) 한
   글자를 붙인 것이다. 타입 인자 조각은 숫자로 시작하지 않으므로 이 접미사와 섞이지
   않는다. 참조는 자기 class 인자의 인스턴스를 가리키도록 바꾼다.
@@ -244,56 +243,77 @@ row와 [row binder](ir.md#row-binder), 참조의 `row_args`, 지역 람다의
   apply_twice + [Direct]           → apply_twice$9D
   ```
 
-- 인스턴스 안에서 `let`에 묶인 람다를 그 `instantiate`들이 고르는 class 조합마다
-  복제하고 각 `instantiate`를 자기 조합의 복사본으로 연결한다. 본문 순서로 처음
-  나오는 `instantiate`의 조합이 원래 람다를 갖고, 다른 조합의 복사본은 원래 람다
-  바로 뒤에 놓인다. 다시 연결한 `instantiate`가 다른 람다의 본문 안에 있으면 그
-  람다의 capture도 본문의 외부 참조와 같게 고친다. 복사본은 capture 순서에서 원래
-  람다의 자리를 잇는다. 복사본과 그 안에서 row를 양화하는 람다는 정의의 binder 목록
-  끝에 새 `local` binder를 받는다. 복사본 안의 `instantiate`가 바깥 람다에 새 조합을
-  넘길 수 있으므로, 복제할 람다가 없을 때까지 지역 class를 다시 정하고 복제한다.
-  `instantiate`의 row가 다른 람다의 binder를 가리키면 그 람다들이 모두 조합 하나씩만
-  가진 뒤에 복제하므로, 한 람다가 같은 조합의 복사본을 둘 갖지 않는다.
-- 모든 `func_sig`에 convention을 쓴다. 정의, 람다, 값과 block 인자의 타입, 참조의 결과,
-  `ability.operation`의 타입, tuple layout의 원소, 그리고 operation이 이름을 쓰지 않아도
-  context가 type alias로 게시하는 nominal layout의 필드가 모두 포함된다.
-  [추론된 row](ir.md#추론된-row)인 정의 자신의 convention은 tail이 class 변수일 때만
-  tail을 읽는다.
+- 인스턴스 안의 람다마다 [convention entry](ir.md#convention-entry)를 정해
+  `tribute_cps.lambda`로 바꾼다.
+  1. 람다의 사용이 고르는 class마다 본문 하나를 둔다. 본문은 그 class로 다시 읽은
+     람다 본문의 복사이며, 그 안에서 row를 양화하는 람다는 정의의 binder 목록 끝에
+     새 `local` binder를 받는다.
+  2. 본문이 없는 convention entry는 더 약한 본문을 부르는 adapter나 trap entry로 채운다.
+  3. 값을 나누지 않는 한 람다 op, 결과 값, capture 목록, `instantiate`는 하나로
+     남으므로 사용처를 다시 연결하지 않는다. Capture 목록은 모든 본문의 외부 참조와
+     같게 다시 계산한다.
+  4. 같은 class를 고르는 사용들이 양화한 binder에 서로 다른 class 조합을 넘기면
+     ([값 나누기](ir.md#convention-entry)), 넘기는 조합마다 람다를 복제해 값을 나누고
+     각 사용을 자기 조합의 복사본으로 연결한다. 본문 순서로 처음 나오는 사용의
+     조합이 원래 람다를 갖고, 다른 조합의 복사본은 원래 람다 바로 뒤에 놓인다. 다시
+     연결한 `instantiate`가 다른 람다의 본문 안에 있으면 그 람다의 capture도 본문의
+     외부 참조와 같게 고치며, 복사본은 capture 순서에서 원래 람다의 자리를 잇는다.
+  5. 본문 안의 사용이 바깥 람다에 새 class를 고를 수 있으므로, 새 본문과 새 복사본이
+     없을 때까지 지역 class를 다시 정한다. 람다마다 본문은 셋을 넘지 않고 조합은
+     유한하므로 이 반복은 끝난다.
+- `func_ref`마다 `tribute_cps.func_ref`로 바꾸며 entry의 대상 인스턴스를
+  `row_args`의 class 인자로 정하고, 그 인스턴스를 인스턴스 수집에 더한다.
+- 간접 이전을 `tribute_cps.call_indirect`와 `tribute_cps.tail_call_indirect`로 바꾸며
+  [convention을 갖는 자리](ir.md#convention과-class-특수화)에 convention을 쓴다. 정의
+  자신의 convention은 [tail 규칙](#row와-호출-규약)으로 읽는다.
 
 참조되지 않게 된 정의는 pass가 지우지 않으며, 뒤따르는 참조되지 않는 정의 제거가
-지운다. Pass의 결과는 convention을 가진 source-logical IR이고, 적법화는 이 상태만
-받는다.
+지운다. Pass의 결과는 convention을 가진 callable이 모두 `tribute_cps` operation인
+source-logical IR이고, 적법화는 이 IR만 받는다.
 
 ### `fn` arm 호출 검사
 
-Class 특수화가 convention을 정한 뒤, 적법화 전에 `fn` handler arm의 호출을 검사한다.
-`fn` arm은 continuation frame 없이 실행되므로 그 안의 호출이 `Cps` callee에 닿으면
-[abilities.md](abilities.md#fn-operation-handler)의 보증을 어긴다. Arm의 정의에
-드러나는 위반은 typechecking이 거부하므로, 이 검사가 맡는 것은 row 변수의 class가
-인스턴스에서 정해져야 드러나는 위반이다.
+[abilities.md](abilities.md#fn-operation-handler)의 `fn` arm 규칙 가운데 인스턴스에서야
+드러나는 위반은 class 특수화가 인스턴스를 만든 뒤, 적법화 전에 검사한다. Row 인자가
+닿는 인스턴스가 이 pass에서 처음 생기기 때문이다. 판정 기준은 그 규칙의 row 조건이며,
+pass가 정한 convention이 아니다. Arm의 정의에 드러나는 위반은 typechecking이 거부한다.
 
 - 검사 대상은 참조되지 않는 정의 제거와 같은 root, 곧 root `main`, `_start`, 외부
   ABI를 가진 정의, runtime 함수, 함수 밖의 operation이 참조하는 정의에서 참조로 닿는
   인스턴스다. Root가 없는 compile은 이 검사를 하지 않는다.
-- 한 정의에서 복제된 인스턴스 여럿이 같은 호출에서 위반하면 그 호출을 한 번 보고한다. 특수화가 정의마다 만드는 class가
-  모두 `Cps`인 인스턴스는 그 class로 참조될 때만 검사한다.
-- Callee의 convention은 특수화가 쓴 값을 읽는다. 직접 호출은 callee 정의의
-  convention을, 간접 호출은 callee 값 타입의 convention을 쓴다. Row의 tail을 다시
-  읽지 않으므로, row를 생략한 순수 정의의 `Direct` worker 호출은 위반이 아니다.
-- `Cps` callee 호출은 arm 안의 `handle` body 밖에서는 위반이다. `handle` body 안에서는
-  그 호출의 row에서 둘러싼 `handle`들이 처리하는 label을 뺀 나머지의 class를 인스턴스의
-  class 표로 계산하고, 그 class가 `Cps`이면 위반이다.
-- Arm 안의 lambda 본문은 검사하지 않는다. Lambda는 호출될 때 그 타입의 convention으로
-  검사된다. 안쪽 `fn` arm은 따로 검사하고, 안쪽 `handle`의 completion과 `op` arm은 바깥
-  arm의 일부로 검사한다.
+- 한 정의에서 복제된 인스턴스 여럿이 같은 호출에서 위반하면 그 호출을 한 번
+  보고한다. 특수화가 정의마다 만드는 class가 모두 `Cps`인 인스턴스는 그 class로
+  참조될 때만 검사한다.
+- 인스턴스마다, class 변수와 같은 조건으로 고른 binder에 그 인스턴스가 넘기는 row가
+  `op`를 선언한 ability를 담는지를 class와 같은 방식으로 계산한다. `ability_arg`
+  binder도 이 조건으로 고르고, `local` binder는 본문마다 그 본문을 고른 사용의
+  `instantiate`가 넘기는 row로 읽는다. 선언을 읽을 수 없는 ability는 `op`를 선언한
+  것으로 본다.
+- [abilities.md](abilities.md#fn-operation-handler)의 tail 예외 가운데 `body`
+  tail은 이렇게 읽는다. `body` tail은 callee 값 type의 어느 매개변수 타입에도 나타나지 않으면 ability를 더하지
+  않고, 나타나면 `op`를 선언한 ability를 담을 수 있다고 본다. 별칭과 일반화된 계산
+  결과의 사용에는 `instantiate`가 없어서 인자의 row를 그 tail에 이어 읽을 수 없기
+  때문이다.
+- 직접 호출은 callee 인스턴스의 row를, 간접 호출은 callee 값 type의 row를 이 표로
+  읽는다. Arm 안의 `handle` body에 있는 호출은 그 row에서 둘러싼 `handle`들이 처리하는
+  label을 뺀다. 남은 row가 `op`를 선언한 ability를 담으면 위반이다.
+- Arm 안의 lambda 본문은 검사하지 않는다. Lambda는 호출될 때 그 호출의 row로
+  검사된다. 안쪽 `fn` arm은 따로 검사하고, 안쪽 `handle`의 completion과 `op` arm은
+  바깥 arm의 일부로 검사한다.
 
-위반은 그 호출의 source 위치를 가진 컴파일 에러다. 진단은 arm이 처리하는 operation과,
-호출을 담은 정의를 그 class로 쓰는 인스턴스에서 callee가 멈출 수 있다는 사실을 밝힌다.
-호출을 `Cps`로 만드는 것이 인스턴스의 class 변수이면, 진단은 그 class를 정한 참조를
-보조 위치로 가리킨다. 참조가 넘기는 row가 `op`를 가진 ability나 class 없는 tail을 담은
-곳이 그 참조이며, 넘기는 row의 `Cps`가 다시 참조하는 쪽 인스턴스의 class 변수에서 오면
-그 class 변수를 정한 참조를 같은 방식으로 따라간다. 복제된 인스턴스들의 같은 호출은 한
-진단으로 합치고, 각 인스턴스의 참조를 모두 가리킨다.
+이 검사가 받아들인 호출의 convention은 `Cps`가 아니다. `fn` arm은 continuation frame
+없이 실행되기 때문이다. 정의 자신의 tail 가운데 어떤 callable에도 닿지 않는 것은
+[tail 규칙](#row와-호출-규약)이 요구 없음으로 읽으므로 convention을 강하게 하지
+않는다. Class 특수화가 `Cps`로 읽는 그 밖의 class 없는 tail(`body`, `ability_arg`)을
+거치는 호출도 검사를 통과하면, class 특수화는 그 호출을 `Cps`가 아닌 convention으로
+부를 수 있어야 한다.
+
+위반은 그 호출의 source 위치를 가진 컴파일 에러다. 진단은 arm이 처리하는 operation과
+callee가 닿는 `op` ability를 밝힌다. 그 ability가 인스턴스의 row 인자에서 오면, 진단은
+그 ability를 row 인자에 넣은 참조를 보조 위치로 가리킨다. 그 row 인자의 ability가 다시
+참조하는 쪽 인스턴스의 row 인자에서 오면 그 row 인자를 정한 참조를 같은 방식으로
+따라간다. 복제된 인스턴스들의 같은 호출은 한 진단으로 합치고, 각 인스턴스의 참조를
+모두 가리킨다.
 
 <!-- markdownlint-disable-next-line MD033 -->
 <a id="direct-style-control-boundary"></a>
@@ -301,9 +321,11 @@ Class 특수화가 convention을 정한 뒤, 적법화 전에 `fn` handler arm�
 ## 직접형 호출 대상과 제어 경계
 
 모든 ability operation invocation은 typechecking이 확정한
-`operation_kind = "fn" | "op"`를 가진 `tribute_control.perform`이다. 일반 callable도
-`tribute_control.func`, `lambda`, `func_ref`, `call`, `call_indirect`, `return`을
-사용한다. Operation kind는 typechecking 결과이고 callable convention은
+`operation_kind = "fn" | "op"`를 가진 `tribute_control.perform`이다. 일반 callable은
+frontend에서 `tribute_control`의 `func`, `lambda`, `func_ref`, `call`,
+`call_indirect`, `return`을 사용하고, class 특수화 뒤에는 `func`, `lambda`,
+`func_ref`, `call_indirect`가 [`tribute_cps`](ir.md#convention과-class-특수화)
+operation이 된다. Operation kind는 typechecking 결과이고 callable convention은
 [row에서 계산한 값](#row와-호출-규약)이며, frontend나 conversion이 body 형상에서
 추론하거나 재분류하지 않는다.
 
@@ -327,16 +349,15 @@ ability는 row에 남으며 그 ability의 convention lower bound를 적용한�
 읽는다. `let`에 묶인 람다가 양화한 tail은 그 binding의 class로 읽는다. Class가 없는
 tail만 `Cps`를 요구한다.
 
-한 람다 식은 쓰이는 convention마다 한 번씩 생성한다. 이는 이미 생성된 Cps 값을
-Direct로 cast하는 것이 아니다. Named callable은 정확한 target identity를 가진
-`func_ref`의 adapter로 더 강한 convention의 자리에 들어간다. 정의가 더 약한
-convention의 자리에 들어가는 경우는 class 없는 tail 때문에 `Cps`인 정의를 닫힌 row로
-쓸 때뿐이다. 그 adapter는 [값 delimiter](#값-delimiter)로 worker를 호출한다.
+한 람다 식은 쓰이는 convention마다 [convention entry](ir.md#convention-entry)를 가진다. 이는
+이미 생성된 Cps 값을 Direct로 cast하는 것이 아니다. Named callable은 정확한
+target identity를 가진 `func_ref`의 convention entry로 각 convention의 자리에
+들어가며, 그 entry를 채우는 규칙은 [함수 참조](ir.md#convention-entry)가 정한다.
 
-Lambda capture 목록은 생성된 body가 실제 사용하는 외부 SSA 값과 일치해야 한다.
-Named reference를 새 `func_ref`로 대체하여 사라진 capture는 제거하고, 남는 값은
-lexical scope와 dominance를 유지하여 중복 없이 전달한다. 이 변환은 RHS 평가를
-복제하거나 resume token의 affine capture 경로를 늘려서는 안 된다.
+Lambda capture 목록은 [capture 규칙](ir.md#convention-entry)을 따른다. Named
+reference를 새 `func_ref`로 대체하여 사라진 capture는 제거하고, 남는 값은 lexical
+scope와 dominance를 유지하여 중복 없이 전달한다. 이 변환은 RHS 평가를 복제하거나 resume token의 affine capture
+경로를 늘려서는 안 된다.
 
 Source 타입 검사는 정확한 equality, `Never` 표현식의 방향성 있는 제거, 공통 source
 결과 추론을 구별한다. 분기의 answer를 맞추기 위해 정상 source 값을 `Never`로
@@ -347,7 +368,7 @@ target이 담당하는 물리적인 빈 결과 표현을 변경하지 않는다.
 ### Source proper tail call의 적법화
 
 Source `become`인 [`tribute_control.tail_call`](../crates/tribute-ir/src/dialect/tribute_control.rs)과
-[`tribute_control.tail_call_indirect`](../crates/tribute-ir/src/dialect/tribute_control.rs)는
+`tribute_cps.tail_call_indirect`는
 `tribute_control_to_cps`가 모든 convention 조합에서 proper tail transfer로 바꾼다.
 Callee convention은 caller convention보다 강할 수 없으므로(`Direct < EvidenceDirect <
 Cps`, callee ability row는 caller row에 포함) 조합은 다음 셋이다:
@@ -373,11 +394,11 @@ arm의 `scf.yield`)를 arm 안으로 복제해 이어 legalize하고, tail call�
 뒤에 operation이 남지 않는다. Suffix에 넘길 evidence와 `ContinuationFrame<R>`는
 arm이 감싼 callable의 것을 그대로 쓴다.
 
-`Direct`/`EvidenceDirect` callable을 값으로 쓰려고 만드는 `func_ref` adapter는
-target이 platform `abi`를 유지하지 않고 target 결과가 adapter 결과와 같으면
+`func_ref`가 `Direct`/`EvidenceDirect` entry마다 만드는 entry 함수는
+target이 platform `abi`를 유지하지 않고 target 결과가 entry 결과와 같으면
 target을 `func.tail_call`로 부른다. 이 경우 callable value를 통한 `become`은
-adapter frame을 남기지 않는다. Platform `abi` target의 adapter는 일반 호출 뒤
-반환하므로 adapter frame 하나가 남는다.
+entry frame을 남기지 않는다. Platform `abi` target의 entry 함수는 일반 호출 뒤
+반환하므로 entry frame 하나가 남는다.
 
 `become`이 아닌 `Direct`/`EvidenceDirect` 호출은 꼬리 위치에 있어도 legalization이
 `func.call`과 `func.call_indirect`로 만든다. Target lowering은 최적화로 이 호출을
@@ -395,9 +416,10 @@ proper tail transfer로 내린다. Native의 호출 규약과 소유권 조건�
 ### CPS 변환의 호출 대상 형상
 
 입력 형상은 [ir.md](ir.md#direct-style-control)의 operation/type 계약을 따른다.
-모든 callable은 exact `tribute.calling_convention` keyword를 가진 logical
-type과 source parameter/result만 사용하며 evidence, environment, `ContinuationFrame<R>`는
-아직 없다.
+입력은 [`tribute_cps`](ir.md#convention과-class-특수화) callable과 남은
+`tribute_control` operation이다. Callable 값의
+logical type은 source parameter/result만 사용하며 evidence, environment,
+`ContinuationFrame<R>`는 아직 없다.
 
 `tribute_control_to_cps`는 closure extraction 전에 전체 callable graph를 하나의
 단위로 변환한다:
@@ -419,24 +441,25 @@ Conversion은 먼저 모든 logical callable type, definition, lambda, `func_ref
 direct/indirect call, return의 대응 관계를 검증하고 physical symbol과 type을
 계산한 뒤 함께 rewrite한다:
 
-- `tribute_control.func`는 `func.func`와 physical `func.func_sig`를 만든다.
-- `tribute_control.lambda`는 physical `closure.lambda`와
-  `closure.closure<func.func_sig<...>>`를 만든다. 이 단계의 signature에는
-  `CallableAbi` hidden parameter가 있지만 environment는 없으며, 기존 closure
-  lowering이 environment를 interpose한다.
-- `tribute_control.func_ref`는 capture 없는 `closure.new`와 env-bearing
-  adapter `func.func`를 만든다. Adapter는 result callable의 같거나 더 강한
-  convention을 사용하고 필요한 hidden operand와 source argument를 대상 physical
-  worker에 전달하므로 named function도 다른 closure와 같은 `call_indirect` ABI를
-  갖는다. 기존 closure lowering은 이 `closure.new`를 `func.constant`와 closure
-  base 할당으로 바꾼다.
-- `Direct`/`EvidenceDirect`의 `tribute_control.call`과 `call_indirect`는 각각
-  physical `func.call`과 `func.call_indirect`가 된다. `Cps` call은 suffix를
-  담은 `ContinuationFrame<R>`를 전달하고 named target에는 `func.tail_call`, dynamic target에는
-  `func.tail_call_indirect`를 쓴다. Evidence, ContinuationFrame과 environment는 `CallableAbi`
-  순서로 삽입한다. `call_indirect`의 callee는 logical callable type에 exact contract를
-  보존하므로 변환된 `func.call_indirect`는 그 converted closure contract에서 유도한 exact
-  `signature`를 싣는다. environment는 여기서 아직 interpose하지 않는다.
+- `tribute_cps.func`는 `func.func`와 physical `func.func_sig`를 만든다.
+- `tribute_cps.lambda`는 physical `closure.lambda`와 convention 없는
+  `closure.closure`를 만든다. `closure.lambda`는 entry마다 본문이나 adapter를
+  가지며, 각 entry의 signature에는 그 바깥 convention의 `CallableAbi` hidden
+  parameter가 있지만 environment는 없다. 기존 closure lowering이 entry마다
+  environment를 interpose한다.
+- `tribute_cps.func_ref`는 capture 없는 `closure.new`와 entry마다 env-bearing
+  `func.func`를 만든다. Entry 함수는 그 entry의 convention을 사용하고 필요한 hidden
+  operand와 source argument를 대상 physical worker에 전달하므로 named function도
+  다른 closure와 같은 entry ABI를 갖는다. 기존 closure lowering은 이 `closure.new`를
+  convention table과 closure base 할당으로 바꾼다.
+- `Direct`/`EvidenceDirect`의 `tribute_control.call`과
+  `tribute_cps.call_indirect`는 각각 physical `func.call`과 `func.call_indirect`가
+  된다. `Cps` call은 suffix를 담은 `ContinuationFrame<R>`를 전달하고 named target에는
+  `func.tail_call`, dynamic target에는 `func.tail_call_indirect`를 쓴다. Evidence,
+  ContinuationFrame과 environment는 `CallableAbi` 순서로 삽입한다. `call_indirect`의
+  convention은 그 이전이 가진 convention이며, 변환된 `func.call_indirect`는 callee type과 그
+  convention에서 유도한 entry의 exact `signature`를 싣는다. environment는 여기서 아직
+  interpose하지 않는다.
 - `tribute_control.return`은 `Direct`/`EvidenceDirect`에서 `func.return`이 된다.
   `Cps`에서는 `ability.exit`로 ContinuationFrame의 `Done<R>`에 `value`를 이전하며 뒤에
   `func.return`이나 result가 없다.
@@ -456,14 +479,15 @@ vector는 비어 있어야 한다.
 안에서 소비되며, 경계 이후에는 signature의 `call_conv`와 proper-tail operation만
 남는다.
 
-기존 `CallableAbi::interpose_environment`에 따라 extracted lambda와 `func_ref`
-adapter의 최종 parameter 순서는 `Direct`에서 `environment, source...`,
+기존 `CallableAbi::interpose_environment`에 따라 extracted lambda entry와 `func_ref`
+entry 함수의 최종 parameter 순서는 `Direct`에서 `environment, source...`,
 `EvidenceDirect`에서 `evidence, environment, source...`, `Cps`에서
 `evidence, environment, ContinuationFrame<R>, source...`다. `call_indirect`도 같은 순서로
 environment를 삽입한다.
 
-Convention-proven physical `closure.closure` type은 outer type에 exact
-`tribute.closure_environment_index`도 기록한다. 일반 callable과 생성된
+Closure의 environment index는 entry마다 그 바깥 convention이 정한다. 간접 이전은
+자기 convention에서 index를 얻고, entry 함수는 그 index를
+`tribute.closure_environment_index`로 기록한다. 일반 callable과 생성된
 continuation은 `CallableAbi`가 정한 Evidence와 ContinuationFrame entry parameter를 사용한다.
 따라서 producer가
 실제 physical entry slot을 type provenance에 명시하고 lambda lifting과 indirect
@@ -474,13 +498,14 @@ operand를 복원하는 것은 illegal이다.
 Environment-bearing `func.func`는 zero-based physical slot을
 `tribute.closure_environment_index`로 기록한다. Bodyless declaration은 이
 function-level provenance가 필수이며, definition은 entry block의 `__env` marker와
-같은 slot이어야 한다. Slot은 outer convention-proven closure type이 기록한 exact
-physical order와 일치하고, slot의 type은 그 closure의 exact closure type이어야
+같은 slot이어야 한다. Slot은 그 entry의 바깥 convention이 정한 exact physical
+order와 일치하고, slot의 type은 그 closure의 exact closure type이어야
 한다([closure 저장 layout](ir.md#closure-저장-layout)). Type이나 arity로 slot을
 추측하지 않는다. 이 function-level provenance의 마지막 독자는 물리화 검증이다.
 
-생성한 physical definition, lambda, adapter, direct/indirect call에는 logical
-type의 convention을 기존 `tribute.calling_convention` attribute로 복사한다.
+생성한 physical definition, lambda entry, `func_ref` entry 함수, direct/indirect
+call에는 그 정의, entry, 이전이 가진 convention을 기존
+`tribute.calling_convention` attribute로 복사한다.
 Metadata/type/symbol 불일치는 conversion failure이며 hidden operand를 추측하지
 않는다. TrunkIR의 `TypeConverter`, function signature conversion, dialect
 builder를 재사용하되 `tribute_control` 전용 graph pattern은
@@ -489,20 +514,19 @@ builder를 재사용하되 `tribute_control` 전용 graph pattern은
 Operation의 convention은 tribute-ir의 `ConventionBearing` operation interface가
 소유한다. 이 interface를 구현하는 `func.func`, `func.call`, `func.call_indirect`,
 `func.tail_call`, `func.tail_call_indirect`, `closure.lambda`, `closure.new`만
-convention을 가질 수 있다. Pass는 attribute key를 직접 읽거나 쓰지 않고 이
-interface로 convention을 읽고, 쓰고, 소비한다. Attribute 철자는 tribute-ir의 저장,
-출력, 파싱, 검증만 다룬다. 읽기는 convention이 없는 경우와 값이 잘못된 경우를
-구분한다.
+convention을 가질 수 있다. `tribute_cps` operation의 convention은 그 operation이 선언한 속성이며
+이 interface에 속하지 않는다. Pass는 attribute key를 직접 읽거나 쓰지 않고 이 interface로 convention을
+읽고, 쓰고, 소비한다. Attribute 철자는 tribute-ir의 저장, 출력, 파싱, 검증만 다룬다. 읽기는 convention이 없는
+경우와 값이 잘못된 경우를 구분한다.
 
 Legalization 출구 검증과 물리화 입구는 module 전체의 convention을 검증하며, 다음을
 거부한다.
 
 - 이 interface를 구현하지 않는 operation에 붙은 convention
 - Keyword가 아닌 convention 값
-- 같은 callable의 convention을 함께 기록한 type과 다른 operation의 convention.
-  그런 type은 `closure.new`와 `closure.lambda`의 결과 type, 그리고 indirect
-  transfer가 직접 받는 callee의 type이며, convention-proven `closure.closure`일
-  때만 convention을 기록한다.
+- `closure.lambda`나 `closure.new`의 entry 함수의 convention이 그 함수가 채우는
+  convention entry의 convention과 다른 경우. Closure type은 convention을 기록하지
+  않는다.
 
 같은 legalization에서 각 `tribute_control.perform`을 typecheck된
 `operation_kind`에 따라 변환한다. `"fn"`은 suffix를 capture하지 않고
@@ -612,7 +636,7 @@ location에서 conversion failure가 된다. 이 경계에는 일관된 physical
 logical `ability.*` dispatch 표면만 남는다. `lower_continuation_frames`가
 추상 frame 표면을 모두 제거한 뒤 `lower_closure_lambda`가 이 shared graph의
 lambda를 추출하지만
-`closure.new`, `closure.func`, `closure.unpack`과 convention-proven closure type은
+`closure.new`, `closure.entry`, `closure.unpack`과 `closure.closure` type은
 target ABI validation까지 유지한다. `lower_ability_call`,
 `resolve_evidence`, `lower_handle_dispatch`가 `ability.*`를 `effect.*`까지 낮춘 뒤,
 target pipeline의 closure storage finalization과 Native/Wasm evidence pass가
@@ -643,7 +667,7 @@ provenance가 남아 있으면 거부한다. 물리화 이후에 합성되는 �
 
 `tribute.calling_convention`도 operation 종류마다 마지막으로 읽는 단계가 소비하며,
 경계 출구에서 일괄로 지우지 않는다. 물리화는 직접 `func.call`/`func.tail_call`과
-callee가 convention-proven closure가 아닌 indirect transfer의 convention을 callee
+callee가 closure가 아닌 indirect transfer의 convention을 callee
 계약과 대조한 뒤 지운다. Root bridge 합성은 source `main`의 convention을 읽어
 wrapper 입력을 만들고, 자신이 만드는 호출에는 이 속성을 기록하지 않는다. Closure
 lowering은 closure transfer의 convention과 그것을 감싼 `func.func`의 convention으로
@@ -1039,10 +1063,10 @@ Handler와 evidence의 연결은 다음과 같다.
 - **Handler arm, `do` arm:** handle을 설치한 층의 바깥 evidence로 실행한다.
   General arm은 handle 층의 dispatcher에게서 이 evidence와 exit frame을 받고,
   `fn` arm은 층의 `tr_dispatch_fn`이 capture한 evidence를 받는다. Perform 지점
-  evidence는 arm에 전달하지 않는다. `tr_dispatch_fn`은 non-CPS callable이고 `fn`
-  perform 지점은 continuation frame을 만들지 않으므로, `fn` arm 본문은 CPS 규약을
-  요구하는 effect를 수행할 수 없다. Frontend가 이 arm의 perform과 호출을 제한한다
-  ([abilities.md](abilities.md#fn-operation-handler)).
+  evidence는 arm에 전달하지 않는다. 언어는 `fn` arm 본문이 `op`를 선언한 ability에
+  닿지 않음을 보증하므로([abilities.md](abilities.md#fn-operation-handler)),
+  `tr_dispatch_fn`은 non-CPS callable이고 `fn` perform 지점은 continuation frame을
+  만들지 않는다.
 - **Arm 안의 `resume`:** [abilities.md](abilities.md#resume과-handler-선택)에 따라
   arm 본문의 resume은 자기 handle body의 evidence를, arm 안 lambda의 resume은 그
   lambda가 받은 evidence를 continuation에 넘긴다. Arm 본문의 resume은 resume하는
@@ -1143,7 +1167,7 @@ Callable/control과 effect 관련 pass의 순서는 다음과 같다:
 ast_to_ir (tribute_control callable/control + ordinary value IR, convention 없음)
 → 참조되지 않는 정의 제거
 → 쓰이지 않는 순수 operation 제거
-→ class 특수화
+→ class 특수화 (convention을 가진 callable을 tribute_cps로)
 → 참조되지 않는 정의 제거
 → tribute_control_to_cps
 → lower_continuation_frames
@@ -1168,7 +1192,7 @@ ast_to_ir (tribute_control callable/control + ordinary value IR, convention 없�
 추상 frame 표면, logical `ability.*` dispatch 표면이다. `lower_continuation_frames`의
 출력에는 추상 frame 표면 대신 nominal frame layout, frame closure, `effect.dispatch_cps`,
 `ability.handle_dispatch`가 있다. Shared ability/evidence pass와 strict target
-ABI validation은 convention-proven `closure.closure` callable type을 그대로
+ABI validation은 `closure.closure` type과 closure transfer의 convention을 그대로
 소비한다. 그 뒤 경계 안에서 closure operation과 모든 type-bearing storage
 surface를 [closure 저장 layout](ir.md#closure-저장-layout)으로 함께 바꾸고 target evidence/runtime
 lowering이 이를 소비한다. 경계 이후의 proper tail transfer lowering은 이 layout을

@@ -315,6 +315,9 @@ Ability row는 타입 인자처럼 치환하지 않는다. Row의 내용은 실�
 [convention class](cps-effects.md#row-변수의-convention-class)라 한다. Class마다
 인스턴스를 만드는 일은 frontend의 특수화가 아니라 CPS 전략의
 [class 특수화 pass](cps-effects.md#class-특수화-pass)가 source-logical IR에서 한다.
+이름 있는 정의는 class 인자마다 인스턴스 하나가 되고, 람다와 함수 참조는 class마다
+[convention entry](ir.md#convention-entry)를 가진 값이 된다. 따라서 callable 값의 타입은 class에
+따라 갈라지지 않으며, 같은 값을 다른 class의 자리에서 그대로 쓴다.
 
 ### Nominal 타입 수집과 재작성
 

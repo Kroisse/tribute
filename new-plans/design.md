@@ -253,6 +253,7 @@ MLIR의 dialect 개념을 차용하여 여러 수준의 연산이 한 모듈 내
 | ---- | ------- | ---- |
 | Infrastructure | `core` | 모듈, 일반 값 타입과 conversion cast |
 | Source-logical control | `tribute_control` | source callable, handle, perform, resume |
+| CPS 전략의 source-logical callable | `tribute_cps` | class 특수화가 convention을 정한 callable 정의, 람다, 함수 참조, 간접 이전 |
 | Shared value/control | `func`, `closure`, `ability`, `effect`, `scf`, `cf`, `arith`, `adt`, `list`, `tribute_rt`, `tribute_io` | CPS callable, 명시적 evidence와 dispatch, 일반 값 연산 |
 | Target | `wasm`, `wasm_gc`, `clif` | target ABI, 저장소와 명령어 |
 
@@ -263,7 +264,7 @@ Source → CST → AST
     → 이름 해석·타입 추론·TDNR
     → 패키지 std 병합·intrinsic 검증·monomorphization
     → source-logical tribute_control IR
-    → pre-CPS 검증·tribute_control_to_cps
+    → class 특수화(tribute_cps)·pre-CPS 검증·tribute_control_to_cps
     → lambda lifting·intrinsic lowering
     → ability dispatch·evidence resolution·handle delimiter 제거
     → target ABI 검증·물리 CPS signature·root/entry bridge
@@ -354,6 +355,12 @@ trunk-ir-cranelift-backend/      언어 독립적 Cranelift codegen
 - `trunk-ir-cranelift-backend`은 `trunk-ir`만 의존 (Tribute 독립적)
 
 ### Effect 구현 전략: Tail-Call CPS
+
+Effect의 실행 전략은 구현 세부다. 표면 언어, AST, 타입 검사와 source-logical IR
+생성은 실행 전략에 의존하지 않으며, 어떤 프로그램을 받아들이는지는 row와 ability
+선언만으로 정한다. 경계는 source-logical IR이고, 실행 전략은 그 뒤의 target
+pipeline이 고른다. 지금 두 target은 모두 shared middle-end의 tail-call CPS를
+고른다.
 
 Shared CPS legalization이 continuation을 typed closure로 명시화한다. Native backend는
 검증된 callable ABI를 받아 evidence lookup과 dispatch를 lowering한다.

@@ -66,11 +66,12 @@ in verifier tests and are rejected by whole-IR validation.
 The source-logical callable type is independently owned as
 `tribute_control.func_sig`. It uses the same flat input-first storage and
 mandatory u32 delimiters, but its validated API requires exactly one source
-result (including `core.nil` and `core.never`) and owns the Direct,
+result (including `core.nil` and `core.never`). It carries no calling
+convention: definitions, lambda entries, and indirect transfers own the Direct,
 EvidenceDirect, and Cps convention metadata. Its codec retains the qualified
 type identity, so source arrow text is never interned as `func.func_sig`;
 malformed raw source signatures are rejected before conversion mutates IR.
-Custom `tribute_control.func` and `tribute_control.lambda` assembly keeps
+Custom `func` and `lambda` assembly of `tribute_control` and `tribute_cps` keeps
 non-reserved source-signature metadata on the complete
 `tribute_control.func_sig` type expression or alias definition, distinct from
 operation `attributes`. Their concise custom form is used only when it can
@@ -166,7 +167,10 @@ Private target runtime helper는 source callable origin이 아니며 physical AB
 
 논리 CPS 결과는 `core.never`이고, 최종 물리적 CPS ABI의 결과 목록은 비어 있다.
 Frontend 진입점은 source-logical IR만 생성하며 physical CPS 생성 옵션이나
-별도의 호환 lowering 경로를 제공하지 않는다. Worker convention은 CPS 전략의
+별도의 호환 lowering 경로를 제공하지 않는다. Frontend는 convention, class, convention
+entry를 계산하거나 기록하지 않는다. 언어 문서는 어떤 보증을 실행 전략이 어떻게
+구현하는지 [CPS 전략](cps-effects.md)을 가리킬 수 있지만, 어떤 프로그램을 받아들이는지는
+가리키지 않는다. Worker convention은 CPS 전략의
 [class 특수화 pass](cps-effects.md#class-특수화-pass)가 row와 operation kind에서
 계산하며, 이 pass는 continuation을 생성하거나 ability operation kind를 재분류하지
 않는다. Continuation 생성과 제어 이전의
