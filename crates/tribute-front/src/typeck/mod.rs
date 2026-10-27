@@ -344,7 +344,7 @@ impl<'db> From<Vec<(CtorId<'db>, TypeScheme<'db>)>> for ConstructorTypeMetadata<
 /// What type checking fixed for the module's declarations. A module's
 /// output holds only its own package's declarations; the dependency's join
 /// them in specialization (`DeclarationTypeMetadata::after_dependency`).
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct DeclarationTypeMetadata<'db> {
     /// Function type schemes, keyed by path because `FuncDefId` does not
     /// implement `Ord`.

@@ -73,13 +73,12 @@ impl<'db> SpecializationInput<'db> {
         dependencies: impl IntoIterator<Item = TypeCheckOutput<'db>>,
         names: NameDisplay,
     ) -> Self {
-        let dependencies: Vec<_> = dependencies.into_iter().collect();
-        let declarations = dependencies
-            .iter()
-            .rev()
-            .fold(checked.declarations(db).clone(), |own, dependency| {
-                own.after_dependency(dependency.declarations(db))
+        let below = dependencies
+            .into_iter()
+            .fold(DeclarationTypeMetadata::default(), |below, dependency| {
+                dependency.declarations(db).after_dependency(&below)
             });
+        let declarations = checked.declarations(db).after_dependency(&below);
         Self {
             module: checked.module(db).clone(),
             declarations,
@@ -122,19 +121,17 @@ impl<'db> SpecializationInput<'db> {
         db: &'db dyn salsa::Database,
         dependencies: impl IntoIterator<Item = TypeCheckOutput<'db>>,
     ) -> Self {
-        let dependencies: Vec<_> = dependencies.into_iter().collect();
-        let mut entries: Vec<_> = dependencies
-            .iter()
-            .flat_map(|dependency| dependency.module(db).entries.iter().cloned())
-            .collect();
+        let mut entries = Vec::new();
+        let below = dependencies.into_iter().fold(
+            ExpressionTypeMetadata::default(),
+            |below, dependency| {
+                entries.extend(dependency.module(db).entries.iter().cloned());
+                dependency.expression_types(db).after_dependency(&below)
+            },
+        );
         entries.append(&mut self.module.entries);
         self.module.entries = entries;
-        self.expressions = dependencies
-            .iter()
-            .rev()
-            .fold(self.expressions, |own, dependency| {
-                own.after_dependency(dependency.expression_types(db))
-            });
+        self.expressions = self.expressions.after_dependency(&below);
         self
     }
 
