@@ -379,7 +379,7 @@ pub fn module_at(db: &dyn salsa::Database, source: SourceCst, offset: usize) -> 
             &mut path,
         );
     }
-    tribute_front::resolve::PackageName::compiled().identity_path(&path)
+    tribute_front::resolve::PackageName::executable_root().identity_path(&path)
 }
 
 /// The items of `items` the body of `module` names. A declaration of the

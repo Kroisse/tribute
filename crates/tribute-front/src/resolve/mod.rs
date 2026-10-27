@@ -165,28 +165,29 @@ pub(crate) fn root_location(scope: Scope<'_, '_>, path: &[Symbol]) -> Option<Loc
     Some(scope.at_root(SymbolPath::new(path.iter().cloned())))
 }
 
-/// Build the environment of the package being compiled from its AST, with
-/// the packages it depends on.
+/// Build the environment of the root package of an executable build from
+/// its AST, with the packages it depends on.
 pub fn build_env<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<UnresolvedName>,
     dependencies: &Dependencies<'db>,
 ) -> PackageEnv<'db> {
-    build_package_env(db, &module.decls, &PackageName::compiled(), dependencies)
-}
-
-/// Build the environment of the library package whose root module is
-/// `module`.
-pub fn build_library_env<'db>(
-    db: &'db dyn salsa::Database,
-    module: &Module<UnresolvedName>,
-) -> PackageEnv<'db> {
     build_package_env(
         db,
         &module.decls,
-        &PackageName::std(),
-        &Dependencies::none(),
+        &PackageName::executable_root(),
+        dependencies,
     )
+}
+
+/// Build the environment of the library package `package` whose root
+/// module is `module`.
+pub fn build_library_env<'db>(
+    db: &'db dyn salsa::Database,
+    module: &Module<UnresolvedName>,
+    package: &PackageName,
+) -> PackageEnv<'db> {
+    build_package_env(db, &module.decls, package, &Dependencies::none())
 }
 
 /// The environment of a package `std` that declares nothing but the
@@ -224,7 +225,7 @@ fn build_package_env<'db>(
         }
     }
 
-    if package.is_library() {
+    if package.is_std() {
         inject_builtin_bindings(db, &mut env);
         inject_runtime_bindings(db, &mut env);
     }
@@ -420,15 +421,17 @@ pub const LIBRARY_PACKAGE: &str = "std";
 /// under their short names.
 pub const PRELUDE_MODULE: [&str; 2] = ["prelude", "v0"];
 
-/// Resolve the library package whose root module is `module`.
+/// Resolve the library package whose root module is `module`, in the
+/// environment `build_library_env` built for it.
 pub fn resolve_library_with_env<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<UnresolvedName>,
     env: PackageEnv<'db>,
     span_map: &'db SpanMap,
 ) -> DeclTable<ResolvedRef<'db>> {
+    let package = env.package().clone();
     Resolver::new(db, env, &Dependencies::none(), span_map)
-        .with_package(PackageName::std())
+        .with_package(package)
         .resolve_module(module)
 }
 
@@ -707,8 +710,8 @@ fn collect_definition<'db>(
                     .flatten()
                     .unwrap_or_else(|| u.path.clone());
                 // An inline module's re-export joins its namespace, and a
-                // library package root's joins what the package exports; the
-                // compiled package root's imports are already seen
+                // library package root's joins what the package exports; an
+                // executable root package's imports are already seen
                 // package-wide.
                 let exports = !prefix.is_root() || scope.package.is_library();
                 if exports {

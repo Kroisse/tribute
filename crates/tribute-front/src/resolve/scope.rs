@@ -207,7 +207,7 @@ impl<'s, 'db> Scope<'s, 'db> {
     /// The package that holds the prelude module, if it is a dependency,
     /// and its environment. Package `std` sees its own prelude module.
     fn prelude(&self) -> Option<(Option<&'s Symbol>, &'s PackageEnv<'db>)> {
-        if self.own.package().is_library() {
+        if self.own.package().is_std() {
             return Some((None, self.own));
         }
         self.dependencies

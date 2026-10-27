@@ -157,7 +157,7 @@ impl<'db> Resolver<'db> {
             module_imports: Vec::new(),
             module_imported_functions: Vec::new(),
             redefinitions: Vec::new(),
-            package: PackageName::compiled(),
+            package: PackageName::executable_root(),
         }
     }
 

@@ -41,6 +41,7 @@ fn prelude_env(db: &dyn salsa::Database) -> Option<tribute_front::resolve::Packa
     Some(tribute_front::resolve::build_library_env(
         db,
         parsed.module(db),
+        &tribute_front::resolve::PackageName::std(),
     ))
 }
 

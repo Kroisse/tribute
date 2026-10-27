@@ -5,23 +5,24 @@ use trunk_ir::{Symbol, SymbolPath};
 
 use super::LIBRARY_PACKAGE;
 
-/// Which package a module tree is: a library package another one depends
-/// on, by its name, or the package being compiled. Every module path of the
-/// tree is read from its root; this name spells its identity paths.
+/// Which package a module tree is: a library package, by its name, or the
+/// root package of an executable build. Every module path of the tree is
+/// read from its root; this name spells its identity paths.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct PackageName {
-    /// The package's name, for a library package another one depends on.
-    /// `None` for the package being compiled.
+    /// The library package's name. `None` for the root package of an
+    /// executable build, whose identity paths omit it.
     name: Option<Symbol>,
 }
 
 impl PackageName {
-    /// The package being compiled, also the default.
-    pub fn compiled() -> Self {
+    /// The root package of an executable build, also the default.
+    pub fn executable_root() -> Self {
         Self { name: None }
     }
 
-    /// The library package `name`.
+    /// The library package `name`, whether it is compiled alone or as a
+    /// dependency.
     pub fn library(name: Symbol) -> Self {
         Self { name: Some(name) }
     }
@@ -36,13 +37,20 @@ impl PackageName {
         self.name.is_some()
     }
 
+    /// Whether this is package `std`.
+    pub fn is_std(&self) -> bool {
+        self.name
+            .as_ref()
+            .is_some_and(|name| name == LIBRARY_PACKAGE)
+    }
+
     /// The identity path of `module`, a path of this package's module tree
     /// from its root.
     ///
-    /// A library package's paths start with its name. The package being
-    /// compiled omits its own, unless the path would then start with a
-    /// library package's name: such a path starts with `pkg`, which names no
-    /// module.
+    /// A library package's paths start with its name, wherever it is
+    /// compiled. The root package of an executable build omits its own,
+    /// unless the path would then start with a library package's name: such
+    /// a path starts with `pkg`, which names no module.
     pub fn identity_path(&self, module: &[Symbol]) -> SymbolPath {
         let package = match &self.name {
             Some(name) => Some(name.clone()),
@@ -129,8 +137,8 @@ impl Location {
 }
 
 /// The path that identifies a declaration or module across packages: a
-/// library package's paths start with its name, the compiled package's
-/// omit theirs (`std::Option`, `geometry::area`, `pkg::std::f`).
+/// library package's paths start with its name, an executable root
+/// package's omit theirs (`std::Option`, `geometry::area`, `pkg::std::f`).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, salsa::SalsaValue)]
 pub struct IdentityPath(SymbolPath);
 
@@ -171,24 +179,39 @@ mod tests {
     }
 
     #[test]
-    fn the_compiled_package_omits_its_name() {
-        let compiled = PackageName::compiled();
+    fn any_library_keeps_its_name() {
+        let lib = PackageName::library(Symbol::new("lib"));
+        assert!(!lib.is_std());
         assert_eq!(
-            compiled.identity_path(&path("geometry::area")),
+            lib.identity_path(&path("geometry::area")),
+            path("lib::geometry::area")[..]
+        );
+        // A library's own module `std` needs no `pkg` prefix.
+        assert_eq!(lib.identity_path(&path("std::f")), path("lib::std::f")[..]);
+        assert_eq!(
+            lib.module_path(&path("lib::geometry::area")),
+            Some(&path("geometry::area")[..])
+        );
+        assert_eq!(lib.module_path(&path("geometry::area")), None);
+        assert_eq!(lib.module_path(&path("std::io::print")), None);
+    }
+
+    #[test]
+    fn an_executable_root_omits_its_name() {
+        let root = PackageName::executable_root();
+        assert_eq!(
+            root.identity_path(&path("geometry::area")),
             path("geometry::area")[..]
         );
+        assert_eq!(root.identity_path(&path("std::f")), path("pkg::std::f")[..]);
         assert_eq!(
-            compiled.identity_path(&path("std::f")),
-            path("pkg::std::f")[..]
-        );
-        assert_eq!(
-            compiled.module_path(&path("pkg::std::f")),
+            root.module_path(&path("pkg::std::f")),
             Some(&path("std::f")[..])
         );
         assert_eq!(
-            compiled.module_path(&path("geometry::area")),
+            root.module_path(&path("geometry::area")),
             Some(&path("geometry::area")[..])
         );
-        assert_eq!(compiled.module_path(&path("std::io::print")), None);
+        assert_eq!(root.module_path(&path("std::io::print")), None);
     }
 }
