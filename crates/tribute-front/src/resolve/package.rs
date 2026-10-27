@@ -1,7 +1,8 @@
 //! The name of the package a module tree belongs to, and the two ways a
 //! path names a place in a package: by identity, and from its root.
 
-use itertools::Itertools;
+use std::fmt;
+
 use trunk_ir::{Symbol, SymbolPath};
 
 use super::STD_PACKAGE;
@@ -142,14 +143,28 @@ impl NameDisplay {
     }
 
     /// The spelling of the identity path whose joined text is `name`.
-    pub fn symbol(&self, name: &Symbol) -> String {
-        name.with_str(|text| self.text(text).to_owned())
+    pub fn symbol<'a>(&'a self, name: &'a Symbol) -> impl fmt::Display + 'a {
+        fmt::from_fn(move |f| name.with_str(|text| f.write_str(self.text(text))))
     }
 
     /// The spelling of the identity path `path`.
-    pub fn path(&self, path: &[Symbol]) -> String {
-        let text = path.iter().join("::");
-        self.text(&text).to_owned()
+    pub fn path<'a>(&self, path: &'a [Symbol]) -> impl fmt::Display + 'a {
+        let own = match path {
+            [first, second, ..] => {
+                self.own.as_ref() == Some(first) && !self.dependencies.contains(second)
+            }
+            _ => false,
+        };
+        let shown = &path[usize::from(own)..];
+        fmt::from_fn(move |f| {
+            for (index, component) in shown.iter().enumerate() {
+                if index > 0 {
+                    f.write_str("::")?;
+                }
+                component.with_str(|text| f.write_str(text))?;
+            }
+            Ok(())
+        })
     }
 }
 
@@ -263,7 +278,10 @@ mod tests {
         assert_eq!(root.text("pkg::stdlib::f"), "stdlib::f");
         assert_eq!(root.text("pkg::std::f"), "pkg::std::f");
         assert_eq!(root.text("std::Option"), "std::Option");
-        assert_eq!(root.path(&path("pkg::main")), "main");
+        assert_eq!(root.path(&path("pkg::main")).to_string(), "main");
+        assert_eq!(root.path(&path("pkg::std::f")).to_string(), "pkg::std::f");
+        assert_eq!(root.path(&path("std::Option")).to_string(), "std::Option");
+        assert_eq!(root.symbol(&Symbol::new("pkg::a::f")).to_string(), "a::f");
 
         let lib = NameDisplay::new(&PackageName::library(Symbol::new("lib")), [&std]);
         assert_eq!(lib.text("lib::area"), "area");

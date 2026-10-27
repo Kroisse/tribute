@@ -318,7 +318,7 @@ impl<'db> TypeChecker<'db> {
             }
             TypeConstructor::Hidden(ctor, reason) => format!(
                 "`{}` is not visible here: {reason}",
-                self.names().symbol(&ctor.qualified(self.db()))
+                self.names().path(ctor.path(self.db()))
             ),
             TypeConstructor::Found(_) | TypeConstructor::Unknown => return,
         };
@@ -471,7 +471,7 @@ impl<'db> TypeChecker<'db> {
                 Constraint::TypeCoerce(actual, declared, origin)
             }
         };
-        let qualified = self.names().symbol(&id.qualified(db));
+        let qualified = self.names().path(id.path(db));
         let mut constraints = Vec::new();
         match &deferred.shape {
             // A unit expression is the constructor itself, a function for
@@ -576,7 +576,7 @@ impl<'db> TypeChecker<'db> {
                 .format_with(", ", |ctor, f| {
                     f(&format_args!(
                         "`{}`",
-                        self.names().symbol(&ctor.qualified(self.db()))
+                        self.names().path(ctor.path(self.db()))
                     ))
                 })
                 .to_string()

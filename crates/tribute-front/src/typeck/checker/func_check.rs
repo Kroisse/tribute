@@ -902,7 +902,7 @@ impl<'db> TypeChecker<'db> {
                 .format_with(", ", |function, f| {
                     f(&format_args!(
                         "`{}`",
-                        self.names().symbol(&function.qualified(self.db()))
+                        self.names().path(function.path(self.db()))
                     ))
                 })
                 .to_string()

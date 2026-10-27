@@ -82,9 +82,9 @@ pub(super) fn check<'db>(
             errors.push(InstanceError {
                 node: reference.node,
                 kind: InstanceErrorKind::PolymorphicRecursion {
-                    caller: names.path(caller.path(db)),
+                    caller: names.path(caller.path(db)).to_string(),
                     callee: (reference.callee != caller)
-                        .then(|| names.path(reference.callee.path(db))),
+                        .then(|| names.path(reference.callee.path(db)).to_string()),
                     instantiation: reference
                         .type_arguments
                         .iter()

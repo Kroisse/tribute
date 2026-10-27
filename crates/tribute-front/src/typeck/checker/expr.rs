@@ -1162,7 +1162,7 @@ impl<'db> TypeChecker<'db> {
             .collect();
         self.report_field_shape(
             record_id,
-            format_args!("struct `{}`", self.names().symbol(&id.qualified(self.db()))),
+            format_args!("struct `{}`", self.names().path(id.path(self.db()))),
             &declared,
             fields.iter().map(|f| f.name.clone()),
             has_spread,
@@ -1188,7 +1188,7 @@ impl<'db> TypeChecker<'db> {
         if !is_variant || !ctx.mark_record_shape_checked(record_id) {
             return;
         }
-        let qualified = self.names().symbol(&id.qualified(self.db()));
+        let qualified = self.names().path(id.path(self.db()));
         let Some(declared) = self.env.lookup_constructor_field_names(id) else {
             self.report_type_error(
                 record_id,
@@ -1274,7 +1274,7 @@ impl<'db> TypeChecker<'db> {
                         pattern_id,
                         format!(
                             "constructor `{}` expects {declared} field{plural}, but the pattern has {written}",
-                            self.names().symbol(&id.qualified(self.db()))
+                            self.names().path(id.path(self.db()))
                         ),
                     );
                 }
@@ -1293,7 +1293,7 @@ impl<'db> TypeChecker<'db> {
         resolved: &ResolvedRef<'db>,
     ) {
         let name = match resolved {
-            ResolvedRef::TypeDef { id } => self.names().symbol(&id.qualified(self.db())),
+            ResolvedRef::TypeDef { id } => self.names().path(id.path(self.db())).to_string(),
             ResolvedRef::Local { id, name } if !id.is_unresolved() => name.to_string(),
             _ => return,
         };
@@ -1356,7 +1356,7 @@ impl<'db> TypeChecker<'db> {
         {
             return;
         }
-        let qualified = self.names().symbol(&id.qualified(self.db()));
+        let qualified = self.names().path(id.path(self.db()));
         let Some(declared) = self.env.lookup_constructor_field_names(*id) else {
             self.report_type_error(
                 pattern_id,
