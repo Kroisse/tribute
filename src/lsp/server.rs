@@ -37,14 +37,15 @@ use super::completion_index::{
 };
 use super::definition_index::{definition_index, validate_identifier};
 use super::type_index::{AstTypeIndex, print_ast_type, type_index as ast_type_index};
-use tribute::{TributeDatabaseImpl, database::parse_with_thread_local};
+use tribute::TributeDatabaseImpl;
 use tribute_front::keywords::unraw;
-use tribute_front::source_file::apply_edit;
+use tribute_front::source_file::{apply_edit, new_parser, parse_with_rope};
 
 /// Main LSP server state.
 struct LspServer {
     connection: Connection,
     db: TributeDatabaseImpl,
+    parser: tree_sitter::Parser,
 }
 
 impl LspServer {
@@ -52,6 +53,7 @@ impl LspServer {
         Self {
             connection,
             db: TributeDatabaseImpl::default(),
+            parser: new_parser(),
         }
     }
 
@@ -882,13 +884,19 @@ impl LspServer {
                 let end = offset_from_position(text, range.end.line, range.end.character).ok_or(
                     io::Error::new(io::ErrorKind::InvalidInput, "invalid end position"),
                 )?;
-                apply_edit(&mut self.db, doc, start..end, &change.text);
+                apply_edit(
+                    &mut self.db,
+                    &mut self.parser,
+                    doc,
+                    start..end,
+                    &change.text,
+                );
             }
             None => {
                 let rope = Rope::from_str(&change.text);
                 doc.set_text(&mut self.db).to(rope.clone());
                 doc.set_tree(&mut self.db)
-                    .to(parse_with_thread_local(&rope, None));
+                    .to(parse_with_rope(&mut self.parser, &rope, None));
             }
         }
         Ok(())

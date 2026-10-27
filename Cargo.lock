@@ -1852,6 +1852,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tribute",
+ "tribute-front",
  "tribute-passes",
  "trunk-ir",
  "wasmparser",

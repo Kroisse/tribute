@@ -90,7 +90,7 @@ fn main() ->{Io} Nil {
 /// This verifies issue #52 (Float boxing for generic type parameters).
 #[test]
 fn test_generic_float_identity() {
-    use tribute::database::parse_with_thread_local;
+    use tribute_front::source_file::parse_rope;
 
     // Generic identity function that boxes Float to anyref and unboxes back
     let source_code = Rope::from_str(
@@ -102,7 +102,7 @@ fn main() -> Nil { }
     );
 
     TributeDatabaseImpl::default().attach(|db| {
-        let tree = parse_with_thread_local(&source_code, None);
+        let tree = parse_rope(&source_code, None);
         let source_file = SourceCst::from_path(db, "float_identity.trb", source_code.clone(), tree);
 
         let _native_binary = compile_native_or_panic(db, source_file);
@@ -277,8 +277,8 @@ fn main() ->{Io} Nil {
 /// Function that takes a function returning a function.
 #[test]
 fn test_nested_function_type() {
-    use tribute::database::parse_with_thread_local;
     use tribute::pipeline::compile_with_diagnostics;
+    use tribute_front::source_file::parse_rope;
 
     let source_code = Rope::from_str(
         r#"
@@ -297,7 +297,7 @@ fn main() -> Nil { }
     );
 
     TributeDatabaseImpl::default().attach(|db| {
-        let tree = parse_with_thread_local(&source_code, None);
+        let tree = parse_rope(&source_code, None);
         let source_file =
             SourceCst::from_path(db, "nested_function_type.trb", source_code.clone(), tree);
 
@@ -319,8 +319,8 @@ fn main() -> Nil { }
 /// Function type with type variables: `fn(a) -> b`
 #[test]
 fn test_generic_function_type() {
-    use tribute::database::parse_with_thread_local;
     use tribute::pipeline::compile_with_diagnostics;
+    use tribute_front::source_file::parse_rope;
 
     let source_code = Rope::from_str(
         r#"
@@ -340,7 +340,7 @@ fn main() -> Nil { }
     );
 
     TributeDatabaseImpl::default().attach(|db| {
-        let tree = parse_with_thread_local(&source_code, None);
+        let tree = parse_rope(&source_code, None);
         let source_file =
             SourceCst::from_path(db, "generic_function_type.trb", source_code.clone(), tree);
 

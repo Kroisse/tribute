@@ -466,12 +466,12 @@ fn compile_native_test_binary_impl(
     test_optimizations: NativeTestOptimizations,
     prelude_extension: Option<&str>,
 ) -> NativeTestBinary {
-    use tribute::database::parse_with_thread_local;
+    use tribute_front::source_file::parse_rope;
 
     let source_rope = Rope::from_str(source_code);
 
     database(prelude_extension).attach(|db| {
-        let tree = parse_with_thread_local(&source_rope, None);
+        let tree = parse_rope(&source_rope, None);
         let source_file = SourceCst::from_path(db, source_name, source_rope.clone(), tree);
 
         let optimizations = OptimizationOptions {

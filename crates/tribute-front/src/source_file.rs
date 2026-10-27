@@ -1,4 +1,3 @@
-use std::cell::RefCell;
 use std::ops::Range;
 use std::path::Path;
 
@@ -33,11 +32,9 @@ impl SourceCst {
     /// Convenience for tests that need a fully parsed source.
     pub fn from_source_str(db: &dyn salsa::Database, path: &str, text: &str) -> Self {
         let rope = Rope::from_str(text);
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_tribute::LANGUAGE.into())
-            .expect("Failed to set tree-sitter language");
-        let tree = parser.parse(text, None).expect("Failed to parse source");
+        let tree = new_parser()
+            .parse(text, None)
+            .expect("Failed to parse source");
         Self::from_path(db, path, rope, Some(tree))
     }
 }
@@ -60,22 +57,18 @@ pub fn parse_with_rope(parser: &mut Parser, rope: &Rope, old_tree: Option<&Tree>
     parser.parse_with_options(&mut callback, old_tree, None)
 }
 
-thread_local! {
-    static PARSER: RefCell<Parser> = {
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_tribute::LANGUAGE.into())
-            .expect("Failed to set language");
-        RefCell::new(parser)
-    };
+/// A parser for Tribute source.
+pub fn new_parser() -> Parser {
+    let mut parser = Parser::new();
+    parser
+        .set_language(&tree_sitter_tribute::LANGUAGE.into())
+        .expect("Failed to set tree-sitter language");
+    parser
 }
 
-/// Parse a text rope with this thread's parser.
-pub fn parse_with_thread_local(rope: &Rope, old_tree: Option<&Tree>) -> Option<Tree> {
-    PARSER.with(|parser| {
-        let mut parser = parser.borrow_mut();
-        parse_with_rope(&mut parser, rope, old_tree)
-    })
+/// Parse a text rope with a new parser.
+pub fn parse_rope(rope: &Rope, old_tree: Option<&Tree>) -> Option<Tree> {
+    parse_with_rope(&mut new_parser(), rope, old_tree)
 }
 
 /// Replace the bytes `range` of `source`'s text with `text`, and reparse it
@@ -84,6 +77,7 @@ pub fn parse_with_thread_local(rope: &Rope, old_tree: Option<&Tree>) -> Option<T
 /// `range` must lie within the text on character boundaries.
 pub fn apply_edit(
     db: &mut dyn salsa::Database,
+    parser: &mut Parser,
     source: SourceCst,
     range: Range<usize>,
     text: &str,
@@ -111,9 +105,9 @@ pub fn apply_edit(
                 old_end_position,
                 new_end_position,
             });
-            parse_with_thread_local(&rope, Some(&tree))
+            parse_with_rope(parser, &rope, Some(&tree))
         }
-        None => parse_with_thread_local(&rope, None),
+        None => parse_with_rope(parser, &rope, None),
     };
     source.set_text(db).to(rope);
     source.set_tree(db).to(tree);
@@ -235,5 +229,13 @@ mod tests {
             let point = byte_point(&rope, offset);
             assert_eq!((point.row, point.column), expected, "at byte {offset}");
         }
+    }
+
+    #[test]
+    fn parse_rope_parses_and_reparses_with_an_old_tree() {
+        let tree = parse_rope(&Rope::from_str("fn foo() { 1 }"), None).expect("a tree");
+        assert_eq!(tree.root_node().kind(), "source_file");
+        let tree = parse_rope(&Rope::from_str("fn foo() { 2 }"), Some(&tree));
+        assert!(tree.is_some(), "reparses with the old tree");
     }
 }

@@ -7,9 +7,9 @@ use std::path::{Path, PathBuf};
 use ropey::Rope;
 use salsa::Database;
 use tribute::TributeDatabaseImpl;
-use tribute::database::parse_with_thread_local;
 use tribute_core::diagnostic::Diagnostic;
 use tribute_front::SourceCst;
+use tribute_front::source_file::parse_rope;
 
 /// Examples that must fail, each with a message its diagnostics contain.
 const EXPECTED_FAILURES: &[(&str, &str)] = &[
@@ -45,7 +45,7 @@ fn examples(dir: &Path, root: &Path, out: &mut Vec<PathBuf>) {
 fn frontend_messages(path: &Path, text: &str) -> Vec<String> {
     let source_code = Rope::from_str(text);
     TributeDatabaseImpl::default().attach(|db| {
-        let tree = parse_with_thread_local(&source_code, None);
+        let tree = parse_rope(&source_code, None);
         let source = SourceCst::from_path(db, path, source_code.clone(), tree);
         tribute::pipeline::parse_and_lower_ast::accumulated::<Diagnostic>(db, source)
             .into_iter()

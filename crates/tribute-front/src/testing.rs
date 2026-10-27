@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use ropey::Rope;
 use salsa::{EventKind, Setter};
 
-use crate::source_file::{apply_edit, parse_with_thread_local};
+use crate::source_file::{apply_edit, new_parser, parse_rope};
 use crate::{SourceCst, path_to_uri};
 
 /// A database that records the name of every query it executes.
@@ -39,14 +39,14 @@ impl LoggingDb {
     /// A source at `path` with `text`, parsed with tree-sitter.
     pub fn source(&self, path: &str, text: &str) -> SourceCst {
         let rope = Rope::from_str(text);
-        let tree = parse_with_thread_local(&rope, None);
+        let tree = parse_rope(&rope, None);
         SourceCst::new(self, path_to_uri(path.as_ref()), rope, tree)
     }
 
     /// Replace the whole text of `source`, and its tree with a fresh parse.
     pub fn edit(&mut self, source: SourceCst, text: &str) {
         let rope = Rope::from_str(text);
-        let tree = parse_with_thread_local(&rope, None);
+        let tree = parse_rope(&rope, None);
         source.set_text(self).to(rope);
         source.set_tree(self).to(tree);
     }
@@ -63,7 +63,13 @@ impl LoggingDb {
             matches.next().is_none(),
             "{old:?} occurs more than once in the source"
         );
-        apply_edit(self, source, start..start + old.len(), new);
+        apply_edit(
+            self,
+            &mut new_parser(),
+            source,
+            start..start + old.len(),
+            new,
+        );
     }
 
     /// Run `f`, recording the queries it executes.
