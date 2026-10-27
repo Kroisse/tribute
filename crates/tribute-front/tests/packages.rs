@@ -203,3 +203,42 @@ fn the_program_specializes_the_library_bodies() {
         );
     }
 }
+
+/// A package reads the exports of a package it depends on only through
+/// another: `app` matches on a value of an enum of `inner`, whose variants
+/// it finds by the expected type, although its table names only `outer`.
+#[test]
+fn type_checking_reads_the_exports_of_indirect_dependencies() {
+    let db = LoggingDb::default();
+    let std = Package::new(
+        &db,
+        PackageName::std(),
+        db.source("prelude:///std/prelude", PRELUDE),
+        DependencyTable::new(&db, Vec::new()),
+    );
+    let inner = Package::new(
+        &db,
+        PackageName::library(Symbol::new("inner")),
+        db.source("inner:///inner.trb", "pub enum Mode { Fast, Slow }\n"),
+        DependencyTable::new(&db, vec![std]),
+    );
+    let outer = Package::new(
+        &db,
+        PackageName::library(Symbol::new("outer")),
+        db.source(
+            "outer:///outer.trb",
+            "pub fn mode() -> inner::Mode { inner::Mode::Slow }\n",
+        ),
+        DependencyTable::new(&db, vec![inner, std]),
+    );
+    let app = db.source(
+        "app.trb",
+        "fn run() -> Nat {\n    case outer::mode() {\n        .Fast -> 1\n        .Slow -> 2\n    }\n}\n",
+    );
+    let environment = Environment::Packages(DependencyTable::new(&db, vec![outer, std]));
+    let messages: Vec<_> = analysis::diagnostics(&db, app, environment)
+        .into_iter()
+        .map(|diagnostic| diagnostic.inner.message.clone())
+        .collect();
+    assert_eq!(messages, Vec::<String>::new());
+}
