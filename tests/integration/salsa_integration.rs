@@ -74,9 +74,7 @@ fn compile_frontend_with_diagnostics(
     db: &dyn salsa::Database,
     source: SourceCst,
 ) -> Result<(IrContext, Module), Vec<&Diagnostic>> {
-    compile_frontend(db, source).ok_or_else(|| {
-        tribute::pipeline::parse_and_lower_ast::accumulated::<Diagnostic>(db, source)
-    })
+    compile_frontend(db, source).ok_or_else(|| tribute::pipeline::frontend_diagnostics(db, source))
 }
 
 fn expect_compilation_success(db: &dyn salsa::Database, source: SourceCst) -> (IrContext, Module) {

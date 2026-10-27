@@ -1,6 +1,6 @@
 //! The tracked public specialization query rejects damaged instance evidence.
 use salsa_test_macros::salsa_test;
-use tribute::pipeline::{parse_and_lower_ast, prepare_frontend_for_lowering};
+use tribute::pipeline::{frontend_diagnostics, parse_and_lower_ast, prepare_frontend_for_lowering};
 use tribute_core::diagnostic::Diagnostic;
 use tribute_front::{
     SourceCst,
@@ -135,7 +135,7 @@ fn inconsistent_effect_instances_block_lowering(db: &salsa::DatabaseImpl) {
 fn effect_only_nominal_instance_matches_handlers_and_performs(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(db, "effect_only.trb", EFFECT_ONLY_NOMINAL);
     let typed = parse_and_lower_ast(db, source).unwrap();
-    let errors = parse_and_lower_ast::accumulated::<Diagnostic>(db, source);
+    let errors = frontend_diagnostics(db, source);
     assert!(errors.is_empty(), "{errors:?}");
     let prepared = prepare_frontend_for_lowering(db, typed, source).unwrap();
     let instance = prepared

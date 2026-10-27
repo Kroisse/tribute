@@ -122,7 +122,7 @@ fn main() -> Nil { }
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_resume_shape(checked_logical_function(&ir_text, "run"));
+    assert_resume_shape(checked_logical_function(ir_text, "run"));
 }
 
 /// Resume materializes an erased literal to the token input and returns the
@@ -152,7 +152,7 @@ fn main() -> Nil { }
     );
 
     let ir = run_ast_pipeline_with_ir(db, source);
-    let run = checked_logical_function(&ir, "run");
+    let run = checked_logical_function(ir, "run");
     assert!(
         run.contains("resume_token<tribute_rt.anyref, core.i32>"),
         "handler token must retain its exact input and answer types:\n{run}"
@@ -284,19 +284,19 @@ mod Native {
     );
 
     let ir = run_ast_pipeline_with_ir(db, source);
-    assert_logical_boundary(&ir);
+    assert_logical_boundary(ir);
     assert!(
         ir.contains(
             "tribute_control.func @\"pkg::identity\"(%arg0: core.i32) -> core.i32 attributes {abi = \"intrinsic\"}"
         ),
         "extern declaration must retain its source-visible logical signature:\n{ir}"
     );
-    let call = checked_logical_function(&ir, "call");
+    let call = checked_logical_function(ir, "call");
     assert!(
         call.contains("tribute_control.call %0 {callee = @\"pkg::identity\"} : core.i32"),
         "direct source call must target the logical extern declaration:\n{call}"
     );
-    let nested_call = checked_logical_function(&ir, "Native::call");
+    let nested_call = checked_logical_function(ir, "Native::call");
     assert!(
         nested_call.contains("callee = @\"pkg::Native::identity\"")
             && ir.contains(
@@ -321,7 +321,7 @@ fn scalars() -> #(Float, Bytes, Rune, Nil) {
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    let scalars = checked_logical_function(&ir_text, "scalars");
+    let scalars = checked_logical_function(ir_text, "scalars");
     assert!(
         scalars.contains("adt.struct_new")
             && scalars.contains("core.f64")
@@ -351,7 +351,7 @@ fn terminate() ->{Abort} Never {
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    let terminate = checked_logical_function(&ir_text, "terminate");
+    let terminate = checked_logical_function(ir_text, "terminate");
     assert!(
         terminate.contains("tribute_control.perform") && terminate.contains(": core.never"),
         "a Never perform must retain its logical result type:\n{terminate}"
@@ -378,13 +378,13 @@ pub mod Nested {
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    let accessor = checked_logical_function(&ir_text, "Nested::Holder::callback");
+    let accessor = checked_logical_function(ir_text, "Nested::Holder::callback");
     assert!(
         accessor.contains("tribute_control.func @\"pkg::Nested::Holder::callback\"")
             && accessor.contains("tribute_control.return"),
         "nested accessor must use its qualified logical symbol:\n{accessor}"
     );
-    let read = checked_logical_function(&ir_text, "Nested::read");
+    let read = checked_logical_function(ir_text, "Nested::read");
     assert!(
         read.contains("callee = @\"pkg::Nested::Holder::callback\"")
             && read.contains("tribute_control.call"),
@@ -418,7 +418,7 @@ fn run() -> Int {
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    let run = checked_logical_function(&ir_text, "run");
+    let run = checked_logical_function(ir_text, "run");
     assert!(
         run.contains("tribute_control.handle")
             && run.contains("kind = \"fn\"")
@@ -457,7 +457,7 @@ fn main() -> Nil { }
     );
     let ir_text = run_ast_pipeline_with_ir(db, source);
     let instance = |name: &str| {
-        let function = logical_function(&ir_text, name);
+        let function = logical_function(ir_text, name);
         let start = function
             .find("ability = @")
             .unwrap_or_else(|| panic!("{name} performs an ability:\n{function}"))
@@ -536,7 +536,7 @@ fn main() -> Nil { }
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_single_perform_shape(checked_logical_function(&ir_text, "get_state"));
+    assert_single_perform_shape(checked_logical_function(ir_text, "get_state"));
 }
 
 /// An ability call followed by a pure expression must return only after the
@@ -562,7 +562,7 @@ fn main() -> Nil { }
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_perform_then_value_shape(checked_logical_function(&ir_text, "get_value"));
+    assert_perform_then_value_shape(checked_logical_function(ir_text, "get_value"));
 }
 
 /// Two sequential ability calls must stay in source evaluation order.
@@ -587,7 +587,7 @@ fn main() -> Nil { }
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_sequential_performs_shape(checked_logical_function(&ir_text, "set_and_get"));
+    assert_sequential_performs_shape(checked_logical_function(ir_text, "set_and_get"));
 }
 
 /// An effectful named call nested inside another call must be lifted into a
@@ -619,7 +619,7 @@ fn main() -> Nil { }
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_nested_argument_shape(checked_logical_function(&ir_text, "run"));
+    assert_nested_argument_shape(checked_logical_function(ir_text, "run"));
 }
 
 /// Local closures use the CPS calling convention even when the call is nested
@@ -644,7 +644,7 @@ fn main() -> Nil { }
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_indirect_lambda_shape(checked_logical_function(&ir_text, "run"));
+    assert_indirect_lambda_shape(checked_logical_function(ir_text, "run"));
 }
 
 /// A nested module's `main` is an ordinary function: it may have both a
@@ -697,7 +697,7 @@ fn main() -> Nil { }
 "#,
     );
     let ir = run_ast_pipeline_with_ir(db, source);
-    assert_logical_boundary(&ir);
+    assert_logical_boundary(ir);
     assert!(
         ir.contains("tribute_control.func @\"pkg::Nested::apply\""),
         "nested declaration must be present:\n{ir}"
@@ -740,7 +740,7 @@ fn main() -> Nil { }
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_case_arm_shape(checked_logical_function(&ir_text, "run"));
+    assert_case_arm_shape(checked_logical_function(ir_text, "run"));
 }
 
 /// Short-circuit RHS lowering must keep the effectful call inside the selected
@@ -768,7 +768,7 @@ fn main() -> Nil { }
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_short_circuit_shape(checked_logical_function(&ir_text, "run"));
+    assert_short_circuit_shape(checked_logical_function(ir_text, "run"));
 }
 
 /// A nested effectful call in a handle body must use the handle body's local
@@ -799,7 +799,7 @@ fn main() -> Nil { }
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_handle_body_shape(checked_logical_function(&ir_text, "run"));
+    assert_handle_body_shape(checked_logical_function(ir_text, "run"));
 }
 
 /// Handler operation arms use a region-local identity continuation for nested
@@ -837,7 +837,7 @@ fn main() -> Nil { }
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_handler_arm_shape(checked_logical_function(&ir_text, "run"));
+    assert_handler_arm_shape(checked_logical_function(ir_text, "run"));
 }
 
 // ========================================================================
@@ -871,7 +871,7 @@ fn main() -> Nil { }
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_case_scrutinee_shape(checked_logical_function(&ir_text, "run"));
+    assert_case_scrutinee_shape(checked_logical_function(ir_text, "run"));
 }
 
 /// The right side of `||` is a selected strict region, but its resulting value
@@ -896,7 +896,7 @@ fn main() -> Nil { }
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_short_circuit_consumer_shape(checked_logical_function(&ir_text, "run"));
+    assert_short_circuit_consumer_shape(checked_logical_function(ir_text, "run"));
 }
 
 /// Guards are evaluated only after their pattern matches and inside that arm's
@@ -926,7 +926,7 @@ fn main() -> Nil { }
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_case_guard_shape(checked_logical_function(&ir_text, "run"));
+    assert_case_guard_shape(checked_logical_function(ir_text, "run"));
 }
 
 /// A computation inside a selected case arm of an `op` handler must preserve
@@ -964,7 +964,7 @@ fn main() -> Nil { }
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_handler_case_resume_shape(checked_logical_function(&ir_text, "run"));
+    assert_handler_case_resume_shape(checked_logical_function(ir_text, "run"));
 }
 
 // ========================================================================
@@ -1001,7 +1001,7 @@ fn main() -> Nil { }
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_op_handler_shape(checked_logical_function(&ir_text, "run"));
+    assert_op_handler_shape(checked_logical_function(ir_text, "run"));
 }
 
 /// A handle expression with an `fn` (tail-resumptive) handler arm
@@ -1034,7 +1034,7 @@ fn main() -> Nil { }
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_fn_handler_shape(checked_logical_function(&ir_text, "run"));
+    assert_fn_handler_shape(checked_logical_function(ir_text, "run"));
 }
 
 /// A Direct parent consumes a handled result as an ordinary source value, even
@@ -1072,7 +1072,7 @@ fn main() -> Nil { }
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_handle_strict_value_shape(checked_logical_function(&ir_text, "run"));
+    assert_handle_strict_value_shape(checked_logical_function(ir_text, "run"));
 }
 
 /// A normalized CPS parent does not normalize an already isolated handle
@@ -1106,7 +1106,7 @@ fn main() -> Nil { }
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_nested_handle_shape(checked_logical_function(&ir_text, "run"));
+    assert_nested_handle_shape(checked_logical_function(ir_text, "run"));
 }
 
 /// A handler arm may continue after `resume`: the delimited answer becomes the
@@ -1136,7 +1136,7 @@ fn main() -> Nil { }
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_resume_then_suffix_shape(checked_logical_function(&ir_text, "run"));
+    assert_resume_then_suffix_shape(checked_logical_function(ir_text, "run"));
 }
 
 /// A lambda created in an `op` arm captures the tagged resume local and still
@@ -1166,7 +1166,7 @@ fn main() -> Nil { }
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_resume_capture_shape(checked_logical_function(&ir_text, "run"));
+    assert_resume_capture_shape(checked_logical_function(ir_text, "run"));
 }
 
 /// A CPS parent normalizes the nested direct case, short-circuit RHS, and
@@ -1212,7 +1212,7 @@ fn main() -> Nil { }
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_normalized_region_shape(checked_logical_function(&ir_text, "run"));
+    assert_normalized_region_shape(checked_logical_function(ir_text, "run"));
 }
 
 /// Closure capture analysis must include a record spread base after a CPS
@@ -1240,7 +1240,7 @@ fn main() -> Nil { }
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_record_spread_shape(checked_logical_function(&ir_text, "run"));
+    assert_record_spread_shape(checked_logical_function(ir_text, "run"));
 }
 
 /// One compact aggregate regression covers CPS values in tuple, record, and
@@ -1276,7 +1276,7 @@ fn main() -> Nil { }
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_aggregate_shape(checked_logical_function(&ir_text, "run"));
+    assert_aggregate_shape(checked_logical_function(ir_text, "run"));
 }
 
 /// Record spreads evaluate their base before explicit fields, even though the
@@ -1305,7 +1305,7 @@ fn run() ->{Trace} Pair {
         "record spread fixture must type-check: {errors:?}"
     );
     let ir = run_ast_pipeline_with_ir(db, source);
-    let run = checked_logical_function(&ir, "run");
+    let run = checked_logical_function(ir, "run");
     assert_in_order(
         run,
         &[
@@ -1358,11 +1358,11 @@ fn from_list(callback: fn(Int) ->{e} Int) ->{e} Int {
         "callable aggregate fixture must resolve: {errors:?}"
     );
     let ir = run_ast_pipeline_with_ir(db, source);
-    assert_logical_boundary(&ir);
+    assert_logical_boundary(ir);
     assert!(ir.contains("tribute_control.func_sig<(core.i32) -> core.i32, {"));
     assert!(ir.contains("tribute_control.func_sig<(core.i1) -> core.i1, {"));
     let tuple_layout = |function: &str| {
-        logical_function(&ir, function)
+        logical_function(ir, function)
             .split("adt.struct_new")
             .nth(1)
             .and_then(|line| line.split("{type = !").nth(1))
@@ -1419,14 +1419,14 @@ fn inspect(choice: Choice, fallback: fn(Int) ->{} Int) -> fn(Int) ->{} Int {
 "#,
     );
     let ir = run_ast_pipeline_with_ir(db, source);
-    assert_logical_boundary(&ir);
-    let accessor = checked_logical_function(&ir, "Holder::callback");
+    assert_logical_boundary(ir);
+    let accessor = checked_logical_function(ir, "Holder::callback");
     assert!(
         accessor.contains("-> !t")
             && ir.contains("= tribute_control.func_sig<(core.i32) -> core.i32>"),
         "generated accessor must retain its callable field type:\n{accessor}"
     );
-    let inspect = checked_logical_function(&ir, "inspect");
+    let inspect = checked_logical_function(ir, "inspect");
     assert!(
         inspect.contains("adt.variant_get")
             && inspect.contains("list.head")
@@ -1456,7 +1456,7 @@ fn first_or(values: List(fn(Int) ->{e} Int), fallback: fn(Int) ->{e} Int) -> fn(
     );
 
     let ir = run_ast_pipeline_with_ir(db, source);
-    let first_or = checked_logical_function(&ir, "first_or");
+    let first_or = checked_logical_function(ir, "first_or");
     assert!(
         first_or.contains("list.is_empty")
             && first_or.contains("list.head")
@@ -1509,9 +1509,9 @@ fn logical_list_constructor_patterns_use_element_types(db: &salsa::DatabaseImpl)
         );
         assert!(ast_pipeline_error_messages(db, source).is_empty());
         let text = run_ast_pipeline_with_ir(db, source);
-        assert_logical_boundary(&text);
+        assert_logical_boundary(text);
         let mut ir = IrContext::new();
-        let module = parse_test_module(&mut ir, &text);
+        let module = parse_test_module(&mut ir, text);
         let mut heads = 0;
         let _ = walk_op::<()>(&ir, module.op(), &mut |op| {
             if let Ok(head) = list::Head::from_op(&ir, op) {
@@ -1554,7 +1554,7 @@ fn choose_pair(pair: #(fn(Int) ->{e} Int, Bool), fallback: fn(Int) ->{e} Int) ->
     );
 
     let ir = run_ast_pipeline_with_ir(db, source);
-    let list_case = checked_logical_function(&ir, "first_nonempty");
+    let list_case = checked_logical_function(ir, "first_nonempty");
     assert!(
         list_case.contains("list.is_empty")
             && list_case.contains("list.head")
@@ -1562,7 +1562,7 @@ fn choose_pair(pair: #(fn(Int) ->{e} Int, Bool), fallback: fn(Int) ->{e} Int) ->
             && list_case.contains("scf.if"),
         "nonempty callable list check must stay structured and evaluate once:\n{list_case}"
     );
-    let tuple_case = checked_logical_function(&ir, "choose_pair");
+    let tuple_case = checked_logical_function(ir, "choose_pair");
     assert!(
         tuple_case.contains("adt.struct_get")
             && tuple_case.contains("arith.and")
@@ -1600,7 +1600,7 @@ fn classify_list(values: List(Int)) -> Int {
     );
 
     let ir = run_ast_pipeline_with_ir(db, source);
-    let pair = checked_logical_function(&ir, "classify_pair");
+    let pair = checked_logical_function(ir, "classify_pair");
     assert!(
         pair.contains("adt.variant_is")
             && pair.contains("adt.variant_cast")
@@ -1609,7 +1609,7 @@ fn classify_list(values: List(Int)) -> Int {
     );
     assert_occurrences(pair, "adt.variant_get", 8);
 
-    let list = checked_logical_function(&ir, "classify_list");
+    let list = checked_logical_function(ir, "classify_list");
     assert!(
         list.contains("list.is_empty")
             && list.contains("list.head")
@@ -1662,7 +1662,7 @@ fn run() ->{Flag} Nat {
     );
 
     let ir = run_ast_pipeline_with_ir(db, source);
-    let run = checked_logical_function(&ir, "run");
+    let run = checked_logical_function(ir, "run");
     assert_in_order(
         run,
         &[
@@ -1709,7 +1709,7 @@ fn keep_first(first: First) -> First { first }
         "recursive nominal fixture must typecheck: {errors:?}"
     );
     let ir = run_ast_pipeline_with_ir(db, source);
-    assert_logical_boundary(&ir);
+    assert_logical_boundary(ir);
     for field in [
         "!\"pkg::Node\" = adt.struct<\"pkg::Node\"(next: adt.typeref<{name = \"pkg::Node\"}>)>",
         "!\"pkg::First\" = adt.struct<\"pkg::First\"(second: adt.typeref<{name = \"pkg::Second\"}>)>",
@@ -1753,7 +1753,7 @@ fn main() -> Nil { }
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_multi_argument_shape(checked_logical_function(&ir_text, "store"));
+    assert_multi_argument_shape(checked_logical_function(ir_text, "store"));
 }
 
 /// Named semantic assertions replace the former physical-CPS snapshots. Each

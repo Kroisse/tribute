@@ -4,6 +4,7 @@
 use itertools::Itertools;
 use tribute_core::diagnostic::Diagnostic;
 use tribute_front::SourceCst;
+use tribute_front::analysis::{self, Environment};
 use tribute_front::ast::{Decl, DeclTable, Expr, ExprKind, ResolvedRef, Stmt, TypedRef};
 use trunk_ir::context::IrContext;
 use trunk_ir::printer::print_module;
@@ -11,124 +12,38 @@ use trunk_ir::printer::print_module;
 /// Prelude source, loaded at compile time relative to this file.
 const PRELUDE_SOURCE: &str = include_str!("../../../../lib/std/prelude.trb");
 
-/// Result of loading and type-checking the prelude.
-struct PreludeData<'db> {
-    exports: tribute_front::typeck::PreludeExports<'db>,
-    env: &'db tribute_front::resolve::PackageEnv<'db>,
-    checked: tribute_front::typeck::TypeCheckOutput<'db>,
-}
-
 #[salsa::tracked(returns(copy))]
 fn prelude_source(db: &dyn salsa::Database) -> SourceCst {
     SourceCst::from_source_str(db, "prelude:///std/prelude", PRELUDE_SOURCE)
 }
 
-fn parsed_prelude(db: &dyn salsa::Database) -> Option<tribute_front::astgen::ParsedAst<'_>> {
-    tribute_front::query::parsed_ast_with_module_path(
-        db,
-        prelude_source(db),
-        trunk_ir::Symbol::new("prelude"),
-    )
-}
-
-/// The environment of package `std`, which the packages under test depend
-/// on.
-#[salsa::tracked]
-fn prelude_env(db: &dyn salsa::Database) -> Option<tribute_front::resolve::PackageEnv<'_>> {
-    let parsed = parsed_prelude(db)?;
-    Some(tribute_front::resolve::build_library_env(
-        db,
-        parsed.module(db),
-        &tribute_front::resolve::PackageName::std(),
-    ))
-}
-
-/// Load and type-check the prelude so tests can use arithmetic operators.
-///
-/// Operators like `+`, `*`, `==` are declared as `extern "intrinsic" fn` in
-/// the prelude for Int, Nat, and Float. Without the prelude, no function
-/// is in scope for them.
-fn load_prelude(db: &dyn salsa::Database) -> Option<PreludeData<'_>> {
-    let parsed = parsed_prelude(db)?;
-
-    let prelude_ast = parsed.module(db);
-    let prelude_span_map = parsed.span_map(db);
-    let env = prelude_env(db).as_ref()?;
-
-    // Resolve prelude with its own env
-    let resolved_prelude =
-        tribute_front::resolve::resolve_library_with_env(db, prelude_ast, env, prelude_span_map);
-
-    // Type-check once for both the exports user modules depend on and the
-    // declarations specialization looks up.
-    let checker = tribute_front::typeck::TypeChecker::new(db, prelude_span_map);
-    let (result, exports) = checker.check_prelude(&resolved_prelude);
-    let checked = tribute_front::typeck::TypeCheckOutput::from_check(db, result);
-
-    Some(PreludeData {
-        exports,
-        env,
-        checked,
-    })
-}
-
-/// `ast` resolved against package `std`, and a type checker that knows the
-/// prelude's exports.
-fn resolve_with_prelude<'db>(
-    db: &'db dyn salsa::Database,
-    ast: &tribute_front::ast::Module<tribute_front::ast::UnresolvedName>,
-    span_map: &'db tribute_front::ast::SpanMap,
-    prelude: Option<&PreludeData<'db>>,
-) -> (
-    DeclTable<ResolvedRef<'db>>,
-    tribute_front::typeck::TypeChecker<'db>,
-) {
-    let dependencies = prelude
-        .map(|p| tribute_front::resolve::Dependencies::std(p.env))
-        .unwrap_or_default();
-    let env = tribute_front::resolve::build_env(db, ast, dependencies);
-    let resolved = tribute_front::resolve::resolve_with_env(db, ast, &env, span_map);
-    let mut checker = tribute_front::typeck::TypeChecker::new(db, span_map);
-    if let Some(p) = prelude {
-        checker.depend_on(&p.exports);
-    }
-    (resolved, checker)
+/// The environment the sources under test are analyzed in: package `std`
+/// from the prelude, which declares the operators (`Int::(+)` etc.).
+fn environment(db: &dyn salsa::Database) -> Environment {
+    Environment::Std(prelude_source(db))
 }
 
 /// Inner tracked function that runs the full pipeline.
 ///
 /// Diagnostics emitted during the pipeline are accumulated as Salsa
 /// accumulators and can be collected by the caller.
-#[salsa::tracked(returns(clone))]
+#[salsa::tracked(returns(deref))]
 fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String {
     let parsed = tribute_front::query::parsed_ast(db, source);
     assert!(parsed.is_some(), "Should parse successfully");
 
-    let parsed = parsed.unwrap();
-    let ast = parsed.module(db);
-    let span_map = parsed.span_map(db);
+    let span_map = parsed.unwrap().span_map(db);
 
-    // Load prelude for operator declarations (Int::(+) etc.)
-    let prelude = load_prelude(db);
-
-    let (resolved, checker) = resolve_with_prelude(db, ast, span_map, prelude.as_ref());
-    let checked =
-        tribute_front::typeck::TypeCheckOutput::from_check(db, checker.check_module(&resolved));
+    let checked = analysis::analyze(db, source, environment(db)).expect("the source parses");
     // Specialization looks package std's declarations up but specializes only
     // the module under test, so its output holds no prelude bodies.
-    let compiler_intrinsics = prelude
-        .as_ref()
-        .map(|prelude| {
-            tribute_front::ast_to_ir::registered_compiler_intrinsics(prelude.checked.module(db))
-                .expect("prelude intrinsic directives must be supported")
-        })
-        .unwrap_or_default();
-    let input = tribute_front::monomorphize::SpecializationInput::new(
-        db,
-        checked,
-        prelude.as_ref().map(|prelude| prelude.checked),
-    )
-    .with_compiler_intrinsics(compiler_intrinsics);
+    let prelude = analysis::checked_std(db, prelude_source(db)).expect("the prelude parses");
+    let compiler_intrinsics =
+        tribute_front::ast_to_ir::registered_compiler_intrinsics(prelude.checked.module(db))
+            .expect("prelude intrinsic directives must be supported");
+    let input =
+        tribute_front::monomorphize::SpecializationInput::new(db, checked, Some(prelude.checked))
+            .with_compiler_intrinsics(compiler_intrinsics);
     let specialized = tribute_front::monomorphize::monomorphize_functions(db, input)
         .expect("checked instances must specialize");
     let mut ir = IrContext::new();
@@ -154,45 +69,6 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
     print_module(&ir, module.module.op())
 }
 
-#[salsa::tracked]
-fn run_frontend_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) {
-    let parsed = tribute_front::query::parsed_ast(db, source);
-    assert!(parsed.is_some(), "Should parse successfully");
-
-    let parsed = parsed.unwrap();
-    let ast = parsed.module(db);
-    let span_map = parsed.span_map(db);
-    let prelude = load_prelude(db);
-
-    let (resolved, checker) = resolve_with_prelude(db, ast, span_map, prelude.as_ref());
-    let _ = checker.check_module(&resolved);
-}
-
-#[salsa::tracked(returns(clone))]
-fn tdnr_function_summary_inner(
-    db: &dyn salsa::Database,
-    source: SourceCst,
-    function_name: String,
-) -> TdnrSummary {
-    let parsed = tribute_front::query::parsed_ast(db, source);
-    assert!(parsed.is_some(), "Should parse successfully");
-
-    let parsed = parsed.unwrap();
-    let ast = parsed.module(db);
-    let span_map = parsed.span_map(db);
-
-    let prelude = load_prelude(db);
-
-    let (resolved, checker) = resolve_with_prelude(db, ast, span_map, prelude.as_ref());
-    let result = checker.check_module(&resolved);
-
-    let module = result.module;
-    let body = function_body(&module, &function_name);
-    let mut summary = TdnrSummary::default();
-    collect_tdnr_summary(db, body, &mut summary);
-    summary
-}
-
 /// Run the AST pipeline through TDNR and summarize one function body.
 ///
 /// This intentionally stops before IR lowering so tests can inspect calls
@@ -202,7 +78,12 @@ pub fn tdnr_function_summary(
     source: SourceCst,
     function_name: &str,
 ) -> TdnrSummary {
-    tdnr_function_summary_inner(db, source, function_name.to_owned())
+    let checked =
+        analysis::analyze(db, source, environment(db)).expect("Should parse successfully");
+    let body = function_body(checked.module(db), function_name);
+    let mut summary = TdnrSummary::default();
+    collect_tdnr_summary(db, body, &mut summary);
+    summary
 }
 
 fn function_body<'db>(
@@ -323,7 +204,7 @@ fn collect_tdnr_summary<'db>(
 ///
 /// Uses `parsed_ast` to check only the test source for parse errors,
 /// avoiding false positives from prelude diagnostics.
-pub fn run_ast_pipeline_with_ir(db: &dyn salsa::Database, source: SourceCst) -> String {
+pub fn run_ast_pipeline_with_ir(db: &dyn salsa::Database, source: SourceCst) -> &str {
     // Check for parse errors in the test source (not prelude)
     let parse_diagnostics = tribute_front::query::parsed_ast::accumulated::<Diagnostic>(db, source);
     let parse_errors: Vec<_> = parse_diagnostics
@@ -376,8 +257,7 @@ pub fn run_ast_pipeline(db: &dyn salsa::Database, source: SourceCst) {
 
 /// Run the frontend through TDNR, without lowering invalid ASTs to IR.
 pub fn ast_pipeline_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<Diagnostic> {
-    run_frontend_pipeline_inner(db, source);
-    run_frontend_pipeline_inner::accumulated::<Diagnostic>(db, source)
+    analysis::diagnostics(db, source, environment(db))
         .into_iter()
         .cloned()
         .collect()

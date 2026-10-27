@@ -2,8 +2,7 @@
 use crate::common;
 
 use salsa_test_macros::salsa_test;
-use tribute::pipeline::{parse_and_lower_ast, prepare_frontend_for_lowering};
-use tribute_core::Diagnostic;
+use tribute::pipeline::{frontend_diagnostics, parse_and_lower_ast, prepare_frontend_for_lowering};
 use tribute_front::{SourceCst, ast::TypeKind};
 
 const NESTED: &str = include_str!("../fixtures/three_abilities_nested.trb");
@@ -13,7 +12,7 @@ fn nested_writer_instance_is_concrete_before_erasure(db: &salsa::DatabaseImpl) {
     let text = format!("{}\n{NESTED}", common::PRINT_EXTERNS);
     let source = SourceCst::from_source_str(db, "nested_instances.trb", &text);
     let typed = parse_and_lower_ast(db, source).unwrap();
-    assert!(parse_and_lower_ast::accumulated::<Diagnostic>(db, source).is_empty());
+    assert!(frontend_diagnostics(db, source).is_empty());
     let main = typed
         .declarations(db)
         .function_types

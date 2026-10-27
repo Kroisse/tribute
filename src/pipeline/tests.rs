@@ -1521,7 +1521,7 @@ fn main() -> Nil {
 "#,
     );
     let typed = parse_and_lower_ast(db, source).expect("frontend output");
-    let diagnostics = parse_and_lower_ast::accumulated::<Diagnostic>(db, source);
+    let diagnostics = frontend_diagnostics(db, source);
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     let instances = &typed.expression_types(db).function_instances;
     let canonical = Symbol::new("std::collections::List::prepend");
@@ -1812,7 +1812,7 @@ fn main() -> Nil {}
 "#,
     );
     let typed = parse_and_lower_ast(db, source).expect("frontend output");
-    let diagnostics = parse_and_lower_ast::accumulated::<Diagnostic>(db, source);
+    let diagnostics = frontend_diagnostics(db, source);
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     let FrontendCompilation {
         context: mut ir,
@@ -1956,7 +1956,7 @@ fn main() -> Nil {
 "#,
         );
         let typed = parse_and_lower_ast(db, source).expect("frontend output");
-        let diagnostics = parse_and_lower_ast::accumulated::<Diagnostic>(db, source);
+        let diagnostics = frontend_diagnostics(db, source);
         assert!(
             diagnostics.is_empty(),
             "recursive handler fixture must type-check without diagnostics: {diagnostics:#?}"
@@ -2045,7 +2045,7 @@ mod Nested {
 }"#,
     );
     let typed = parse_and_lower_ast(db, source).expect("frontend output");
-    assert!(parse_and_lower_ast::accumulated::<Diagnostic>(db, source).is_empty());
+    assert!(frontend_diagnostics(db, source).is_empty());
     assert!(prepare_frontend_for_lowering(db, typed, source).is_none());
     let diagnostics = prepare_frontend_for_lowering::accumulated::<Diagnostic>(db, typed, source);
     assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
@@ -2095,7 +2095,7 @@ fn user_declaration_cannot_claim_a_library_intrinsic(db: &salsa::DatabaseImpl) {
         r#"extern "intrinsic" fn __bytes_get_or_panic(bytes: Bytes, index: Nat) -> Nat"#,
     );
     let typed = parse_and_lower_ast(db, source).expect("frontend output");
-    assert!(parse_and_lower_ast::accumulated::<Diagnostic>(db, source).is_empty());
+    assert!(frontend_diagnostics(db, source).is_empty());
     assert!(prepare_frontend_for_lowering(db, typed, source).is_none());
     let diagnostics = prepare_frontend_for_lowering::accumulated::<Diagnostic>(db, typed, source);
     itertools::assert_equal(
@@ -2555,11 +2555,7 @@ fn test_ast_pipeline_let_binding(db: &salsa::DatabaseImpl) {
     );
 
     let result = compile_frontend(db, source);
-    assert!(
-        result.is_some(),
-        "{:?}",
-        parse_and_lower_ast::accumulated::<Diagnostic>(db, source)
-    );
+    assert!(result.is_some(), "{:?}", frontend_diagnostics(db, source));
     let (ctx, m) = result.unwrap();
     assert_eq!(m.name(&ctx), Some("test"));
 }

@@ -2,17 +2,18 @@
 use itertools::Itertools;
 use salsa_test_macros::salsa_test;
 use tribute_core::diagnostic::Diagnostic;
+use tribute_front::analysis::{self, Environment};
 use tribute_front::{
     SourceCst,
     typeck::{EvidenceStep, TypeCheckOutput},
 };
 
-#[salsa::tracked(returns(copy))]
 fn checked(db: &dyn salsa::Database, source: SourceCst) -> TypeCheckOutput<'_> {
-    let parsed = tribute_front::query::parsed_ast(db, source).unwrap();
-    let spans = parsed.span_map(db);
-    let resolved = tribute_front::resolve::resolve_module(db, parsed.module(db), spans);
-    tribute_front::typeck::typecheck_module(db, &resolved, spans)
+    analysis::analyze(db, source, Environment::Builtins).unwrap()
+}
+
+fn diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<&Diagnostic> {
+    analysis::diagnostics(db, source, Environment::Builtins)
 }
 
 fn describe(db: &dyn salsa::Database, step: &EvidenceStep<'_>) -> String {
@@ -35,7 +36,7 @@ fn describe(db: &dyn salsa::Database, step: &EvidenceStep<'_>) -> String {
 fn plans(db: &dyn salsa::Database, text: &str) -> Vec<String> {
     let source = SourceCst::from_source_str(db, "plans.trb", text);
     let output = checked(db, source);
-    let errors = checked::accumulated::<Diagnostic>(db, source);
+    let errors = diagnostics(db, source);
     assert!(errors.is_empty(), "{errors:?}");
     let spans = tribute_front::query::span_map(db, source).expect("parsed source");
     let mut plans: Vec<_> = output

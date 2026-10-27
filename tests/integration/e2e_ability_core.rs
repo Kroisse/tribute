@@ -40,15 +40,13 @@ fn compile_and_check(code: &str, name: &str) -> Vec<tribute_core::diagnostic::Di
 /// Use this instead of `compile_and_check` when testing for frontend errors that would
 /// cause later pipeline stages to panic.
 fn compile_frontend_and_check(code: &str, name: &str) -> Vec<tribute_core::diagnostic::Diagnostic> {
-    use tribute_core::diagnostic::Diagnostic;
-
     let source_code = Rope::from_str(code);
 
     TributeDatabaseImpl::default().attach(|db| {
         let tree = parse_rope(&source_code, None);
         let source_file = SourceCst::from_path(db, name, source_code.clone(), tree);
 
-        tribute::pipeline::parse_and_lower_ast::accumulated::<Diagnostic>(db, source_file)
+        tribute::pipeline::frontend_diagnostics(db, source_file)
             .into_iter()
             .cloned()
             .collect()
