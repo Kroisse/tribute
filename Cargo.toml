@@ -106,6 +106,7 @@ trunk-ir-cranelift-backend.workspace = true
 trunk-ir-wasm-backend.workspace = true
 
 [dev-dependencies]
+tribute-front = { workspace = true, features = ["testing"] }
 trunk-ir = { workspace = true, features = ["salsa", "symbol-stats"] }
 wasmparser.workspace = true
 insta.workspace = true

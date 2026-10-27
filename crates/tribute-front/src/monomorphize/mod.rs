@@ -23,7 +23,9 @@ use crate::SortedMap;
 use std::ops::ControlFlow;
 
 use crate::ast::fold::{ForEachType, TypeFoldable, TypeVisitable};
-use crate::ast::{CtorId, Decl, DeclTable, FuncDefId, NodeId, TypeScheme, TypedRef};
+use crate::ast::{
+    CtorId, Decl, DeclTable, FuncDefId, NodeId, Type, TypeDefId, TypeScheme, TypedRef,
+};
 use crate::typeck::subst::{BoundVarOutOfBounds, BoundVarSubst};
 use crate::typeck::{
     ConstructorTypeMetadata, DeclarationTypeMetadata, ExpressionTypeMetadata, TypeCheckOutput,
@@ -40,6 +42,19 @@ pub struct SpecializationInput<'db> {
     declarations: DeclarationTypeMetadata<'db>,
     expressions: ExpressionTypeMetadata<'db>,
     compiler_intrinsics: SortedMap<NodeId, Symbol>,
+    continued: Option<Continued<'db>>,
+}
+
+/// The dependency specialization a module's specialization continues.
+struct Continued<'db> {
+    /// The module's own declarations, which its result adds to the
+    /// dependency's.
+    declarations: DeclarationTypeMetadata<'db>,
+    /// The dependency's checked result, whose generic bodies and metadata
+    /// instances at the module's types are cloned from.
+    checked: TypeCheckOutput<'db>,
+    /// The specialization of the dependency alone.
+    specialized: SpecializationOutput<'db>,
 }
 
 impl<'db> SpecializationInput<'db> {
@@ -61,7 +76,30 @@ impl<'db> SpecializationInput<'db> {
             declarations,
             expressions: checked.expression_types(db).clone(),
             compiler_intrinsics: SortedMap::default(),
+            continued: None,
         }
+    }
+
+    /// The checked module, continuing `specialized`, the specialization of
+    /// `dependency` alone. Only the instances that depend on this module are
+    /// specialized; the dependency's own are reused from `specialized`. The
+    /// result has the sources, instances, and metadata `merge_bodies` gives,
+    /// with the instances ordered by package: the dependency's, then this
+    /// module's.
+    pub fn continuing(
+        db: &'db dyn salsa::Database,
+        checked: TypeCheckOutput<'db>,
+        dependency: TypeCheckOutput<'db>,
+        specialized: SpecializationOutput<'db>,
+    ) -> Self {
+        let mut input = Self::new(db, checked, Some(dependency));
+        input.compiler_intrinsics = specialized.compiler_intrinsics(db).clone();
+        input.continued = Some(Continued {
+            declarations: checked.declarations(db).clone(),
+            checked: dependency,
+            specialized,
+        });
+        input
     }
 
     /// Specialize `dependency`'s bodies too: its declarations come first in
@@ -85,7 +123,7 @@ impl<'db> SpecializationInput<'db> {
         mut self,
         intrinsics: impl IntoIterator<Item = (NodeId, Symbol)>,
     ) -> Self {
-        self.compiler_intrinsics = intrinsics.into_iter().collect();
+        self.compiler_intrinsics.extend(intrinsics);
         self
     }
 
@@ -102,6 +140,9 @@ impl<'db> SpecializationInput<'db> {
 /// The specialization result, the only input the lowering input is built
 /// from: the declaration table with the concrete instances added, the
 /// metadata substituted with it, and the compiler intrinsic identities.
+///
+/// It also carries what a module's specialization needs to continue it
+/// (`SpecializationInput::continuing`).
 #[salsa::tracked]
 pub struct SpecializationOutput<'db> {
     pub module: DeclTable<TypedRef<'db>>,
@@ -111,6 +152,22 @@ pub struct SpecializationOutput<'db> {
     /// declarations. This is specialization metadata, not source-provenance
     /// or ownership data.
     pub compiler_intrinsics: SortedMap<NodeId, Symbol>,
+    /// How many of the module's entries, from the start, are source
+    /// declarations; the instances follow them.
+    pub source_entries: usize,
+    /// The path of every generated function instance, sorted.
+    pub function_instances: Vec<SymbolPath>,
+    /// Every nominal instance, sorted by path.
+    pub nominal_instances: Vec<NominalInstance<'db>>,
+}
+
+/// A generic nominal declaration at concrete type arguments, and the path of
+/// its specialization.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+pub struct NominalInstance<'db> {
+    pub owner: TypeDefId<'db>,
+    pub arguments: Vec<Type<'db>>,
+    pub path: SymbolPath,
 }
 
 /// The metadata specialization reads and extends.
@@ -118,6 +175,78 @@ struct MonomorphizeMetadata<'db> {
     constructor_types: ConstructorTypeMetadata<'db>,
     expressions: ExpressionTypeMetadata<'db>,
     compiler_intrinsics: SortedMap<NodeId, Symbol>,
+}
+
+/// What a continued specialization reads from the dependency: its checked
+/// bodies and metadata to clone, and the instances its result already has.
+struct Dependency<'db> {
+    module: &'db DeclTable<TypedRef<'db>>,
+    expressions: &'db ExpressionTypeMetadata<'db>,
+    exhaustive_cases: Vec<NodeId>,
+    function_instances: HashSet<SymbolPath>,
+    nominal_instances: HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
+    type_rewrites: rewrite::TypeRewriteMap<'db>,
+}
+
+impl<'db> Dependency<'db> {
+    fn new(db: &'db dyn salsa::Database, continued: &Continued<'db>) -> Self {
+        let expressions = continued.checked.expression_types(db);
+        let mut exhaustive_cases = expressions.exhaustive_cases.clone();
+        exhaustive_cases.sort();
+        let mut nominal_instances: HashMap<_, HashSet<_>> = HashMap::default();
+        let mut type_rewrites = rewrite::TypeRewriteMap::default();
+        for instance in continued.specialized.nominal_instances(db) {
+            nominal_instances
+                .entry(instance.owner)
+                .or_default()
+                .insert(instance.arguments.clone());
+            type_rewrites
+                .entry(instance.owner)
+                .or_default()
+                .push((instance.arguments.clone(), instance.path.clone()));
+        }
+        Self {
+            module: continued.checked.module(db),
+            expressions,
+            exhaustive_cases,
+            function_instances: continued
+                .specialized
+                .function_instances(db)
+                .iter()
+                .cloned()
+                .collect(),
+            nominal_instances,
+            type_rewrites,
+        }
+    }
+}
+
+/// The per-expression metadata a specialization reads: the module's own,
+/// over that of the dependency whose bodies it clones.
+#[derive(Clone, Copy)]
+struct Expressions<'a, 'db> {
+    own: &'a ExpressionTypeMetadata<'db>,
+    dependency: Option<&'a Dependency<'db>>,
+}
+
+impl<'a, 'db> Expressions<'a, 'db> {
+    fn get<V>(
+        self,
+        table: fn(&'a ExpressionTypeMetadata<'db>) -> &'a SortedMap<NodeId, V>,
+        id: &NodeId,
+    ) -> Option<&'a V> {
+        table(self.own).get(id).or_else(|| {
+            self.dependency
+                .and_then(|dependency| table(dependency.expressions).get(id))
+        })
+    }
+
+    fn is_exhaustive(self, id: &NodeId) -> bool {
+        self.own.exhaustive_cases.binary_search(id).is_ok()
+            || self
+                .dependency
+                .is_some_and(|dependency| dependency.exhaustive_cases.binary_search(id).is_ok())
+    }
 }
 
 /// Specialize `input`: collect every generic function and type
@@ -132,38 +261,84 @@ pub fn monomorphize_functions<'db>(
         declarations,
         expressions,
         compiler_intrinsics,
+        continued,
     } = input;
+    let source_entries = module.entries.len();
+    let schemes: HashMap<_, _> = declarations.function_types.iter().cloned().collect();
+    let constructor_schemes: HashMap<_, _> = declarations
+        .constructor_types
+        .schemes
+        .iter()
+        .copied()
+        .collect();
+    let dependency = continued
+        .as_ref()
+        .map(|continued| Dependency::new(db, continued));
     let DeclarationTypeMetadata {
         function_types,
         constructor_types,
         ability_definitions,
         well_known_types,
-    } = declarations;
+    } = match &continued {
+        Some(continued) => continued.declarations.clone(),
+        None => declarations,
+    };
     let Monomorphized {
-        module,
+        mut module,
         function_types,
         metadata,
+        mut function_instances,
+        mut nominal_instances,
     } = monomorphize(
         db,
         module,
-        function_types.into_iter().collect(),
+        &schemes,
+        function_types,
+        &constructor_schemes,
         MonomorphizeMetadata {
             constructor_types,
             expressions,
             compiler_intrinsics,
         },
+        dependency.as_ref(),
     )?;
+    let mut declarations = DeclarationTypeMetadata {
+        function_types,
+        constructor_types: metadata.constructor_types,
+        ability_definitions,
+        well_known_types,
+    };
+    let mut expressions = metadata.expressions;
+    let mut source_entries = source_entries;
+    if let Some(Continued { specialized, .. }) = continued {
+        // The dependency's sources, then the module's, then the dependency's
+        // instances and the module's.
+        let dependency = specialized.module(db);
+        let dependency_sources = *specialized.source_entries(db);
+        let instances = module.entries.split_off(source_entries);
+        let mut entries =
+            Vec::with_capacity(dependency.entries.len() + module.entries.len() + instances.len());
+        entries.extend_from_slice(&dependency.entries[..dependency_sources]);
+        entries.append(&mut module.entries);
+        entries.extend_from_slice(&dependency.entries[dependency_sources..]);
+        entries.extend(instances);
+        module.entries = entries;
+        source_entries += dependency_sources;
+        declarations = declarations.after_dependency(specialized.declarations(db));
+        expressions = expressions.after_dependency(specialized.expression_types(db));
+        nominal_instances.extend(specialized.nominal_instances(db).iter().cloned());
+        nominal_instances.sort_by(|left, right| left.path.cmp(&right.path));
+    }
+    function_instances.sort();
     Ok(SpecializationOutput::new(
         db,
         module,
-        DeclarationTypeMetadata {
-            function_types,
-            constructor_types: metadata.constructor_types,
-            ability_definitions,
-            well_known_types,
-        },
-        metadata.expressions,
+        declarations,
+        expressions,
         metadata.compiler_intrinsics,
+        source_entries,
+        function_instances,
+        nominal_instances,
     ))
 }
 
@@ -173,13 +348,23 @@ struct Monomorphized<'db> {
     module: DeclTable<TypedRef<'db>>,
     function_types: Vec<(SymbolPath, TypeScheme<'db>)>,
     metadata: MonomorphizeMetadata<'db>,
+    /// Every generated function instance's path, the dependency's included.
+    function_instances: Vec<SymbolPath>,
+    /// The nominal instances this specialization generated.
+    nominal_instances: Vec<NominalInstance<'db>>,
 }
 
+/// Specialize `module`. `schemes` and `constructor_schemes` look every
+/// declaration up, the dependency's included; `function_types` and
+/// `metadata` are the module's own, which the result extends.
 fn monomorphize<'db>(
     db: &'db dyn salsa::Database,
     module: DeclTable<TypedRef<'db>>,
-    function_types: HashMap<SymbolPath, TypeScheme<'db>>,
+    schemes: &HashMap<SymbolPath, TypeScheme<'db>>,
+    function_types: Vec<(SymbolPath, TypeScheme<'db>)>,
+    constructor_schemes: &HashMap<CtorId<'db>, TypeScheme<'db>>,
     mut metadata: MonomorphizeMetadata<'db>,
+    dependency: Option<&Dependency<'db>>,
 ) -> Result<Monomorphized<'db>, Vec<InstanceError>> {
     // Cloning finds exhaustive cases by binary search.
     metadata.expressions.exhaustive_cases.sort();
@@ -187,28 +372,40 @@ fn monomorphize<'db>(
     let mut errors = recursion::check(
         db,
         &module,
-        &function_types,
+        schemes,
         &metadata.expressions.function_instances,
     );
     if !errors.is_empty() {
         errors.sort_by_key(|error| error.node);
         return Err(errors);
     }
-    let errors = validate::validate(db, &module, &function_types, &metadata);
+    let errors = validate::validate(
+        db,
+        &module,
+        dependency,
+        schemes,
+        Expressions {
+            own: &metadata.expressions,
+            dependency,
+        },
+    );
     if !errors.is_empty() {
         return Err(errors);
     }
-    let fn_types_vec: Vec<(SymbolPath, TypeScheme<'db>)> = function_types
-        .iter()
-        .map(|(k, v)| (k.clone(), *v))
-        .collect();
 
     // === Function monomorphization ===
 
-    let source_function_types = fn_types_vec.clone();
+    let source_function_types: Vec<(SymbolPath, TypeScheme<'db>)> = schemes
+        .iter()
+        .map(|(path, scheme)| (path.clone(), *scheme))
+        .collect();
     let mut module = module;
-    let mut all_function_types = fn_types_vec;
+    let mut all_function_types = function_types;
     let mut instantiations: HashMap<_, HashSet<_>> = HashMap::default();
+    // An instance the dependency's result has is not generated again.
+    let mut generated = dependency
+        .map(|dependency| dependency.function_instances.clone())
+        .unwrap_or_default();
     let mut reached_fixpoint = false;
 
     // A concrete clone can reveal direct calls that were abstract in its
@@ -237,9 +434,11 @@ fn monomorphize<'db>(
         let specializations = specialize::generate_specializations(
             db,
             &module,
+            dependency.map(|dependency| dependency.module),
             &new_instantiations,
             &source_function_types,
             &metadata.compiler_intrinsics,
+            &mut generated,
         );
         let specialize::GeneratedSpecializations {
             specialized_declarations,
@@ -248,9 +447,13 @@ fn monomorphize<'db>(
             metadata_origins,
             compiler_intrinsic_specializations,
         } = specializations;
+        let expressions = Expressions {
+            own: &metadata.expressions,
+            dependency,
+        };
         let clones: Vec<_> = metadata_origins
             .into_iter()
-            .map(|(key, origins)| clone_instance(db, &metadata.expressions, &key, &origins))
+            .map(|(key, origins)| clone_instance(db, expressions, &key, &origins))
             .collect();
         metadata.expressions.extend(clones);
         metadata
@@ -290,6 +493,7 @@ fn monomorphize<'db>(
         }]);
     }
     let mut fn_types_vec = all_function_types;
+    let function_instances = generated.into_iter().collect();
 
     // === Type monomorphization (struct/enum) ===
 
@@ -304,13 +508,43 @@ fn monomorphize<'db>(
     }
     let ControlFlow::Continue(()) = metadata.constructor_types.visit_types(&mut seeds);
     let ControlFlow::Continue(()) = metadata.expressions.visit_types(&mut seeds);
-    let nominal_index = nominal_index::NominalIndex::new(db, &module);
+    let nominal_index = nominal_index::NominalIndex::new(
+        db,
+        &module,
+        dependency.map(|dependency| dependency.module),
+    );
     let seeds =
         collect::collect_type_instantiations_with_index(db, &module, extra_types, &nominal_index);
-    let constructor_schemes: HashMap<_, _> =
-        metadata.constructor_types.schemes.iter().copied().collect();
-    let nominal = nominal::collect(db, &nominal_index, &constructor_schemes, seeds)?;
+    let nominal = nominal::collect(
+        db,
+        &nominal_index,
+        constructor_schemes,
+        seeds,
+        dependency.map(|dependency| &dependency.nominal_instances),
+    )?;
     let type_instantiations = nominal.instances;
+    let mut nominal_instances: Vec<_> = type_instantiations
+        .iter()
+        .flat_map(|(owner, argument_sets)| {
+            argument_sets.iter().map(|arguments| NominalInstance {
+                owner: *owner,
+                arguments: arguments.clone(),
+                path: mangle::mangle_type_path(db, *owner, arguments),
+            })
+        })
+        .collect();
+    nominal_instances.sort_by(|left, right| left.path.cmp(&right.path));
+    // Types the dependency's result specialized are rewritten to its
+    // instances too.
+    let mut type_rewrite_map = dependency
+        .map(|dependency| dependency.type_rewrites.clone())
+        .unwrap_or_default();
+    for instance in &nominal_instances {
+        type_rewrite_map
+            .entry(instance.owner)
+            .or_default()
+            .push((instance.arguments.clone(), instance.path.clone()));
+    }
     let enum_variants = &mut metadata.constructor_types.specialized_enum_variants;
     assert!(
         nominal
@@ -321,7 +555,7 @@ fn monomorphize<'db>(
     );
     enum_variants.extend(nominal.enum_variants);
 
-    let module = if !type_instantiations.is_empty() {
+    let module = if !type_rewrite_map.is_empty() {
         // Generate specialized struct/enum declarations
         let specialized_structs = specialize::generate_struct_specializations_with_index(
             db,
@@ -353,8 +587,7 @@ fn monomorphize<'db>(
             &type_instantiations,
         );
 
-        // Build type rewrite map and rewrite Named types throughout the module
-        let type_rewrite_map = rewrite::build_type_rewrite_map(db, &type_instantiations);
+        // Rewrite Named types throughout the module
         rewrite::rewrite_field_function_refs(
             db,
             &mut module,
@@ -398,6 +631,8 @@ fn monomorphize<'db>(
         module,
         function_types: fn_types_vec,
         metadata,
+        function_instances,
+        nominal_instances,
     })
 }
 
@@ -407,41 +642,32 @@ fn monomorphize<'db>(
 /// which no clone writes, so a round's clones are merged at once.
 fn clone_instance<'db>(
     db: &'db dyn salsa::Database,
-    expressions: &ExpressionTypeMetadata<'db>,
+    expressions: Expressions<'_, 'db>,
     key: &InstanceKey<'db>,
     origins: &HashSet<NodeId>,
 ) -> ExpressionTypeMetadata<'db> {
-    let ExpressionTypeMetadata {
-        node_types,
-        function_instances,
-        local_instances,
-        evidence_plans,
-        handler_operations,
-        perform_operations,
-        lambda_signatures,
-        exhaustive_cases,
-    } = expressions;
     let variant = key.variant();
     let mut clone = EntryClone {
+        expressions,
         origins,
         variant,
         substitution: BoundVarSubst::new(db, &key.type_args),
     };
-    let mut local_instances = clone.entries(local_instances);
+    let mut local_instances = clone.entries(|table| &table.local_instances);
     for instance in local_instances.values_mut() {
         instance.binding = instance.binding.with_variant(variant);
     }
     ExpressionTypeMetadata {
-        node_types: clone.entries(node_types),
-        function_instances: clone.entries(function_instances),
+        node_types: clone.entries(|table| &table.node_types),
+        function_instances: clone.entries(|table| &table.function_instances),
         local_instances,
-        evidence_plans: clone.entries(evidence_plans),
-        handler_operations: clone.entries(handler_operations),
-        perform_operations: clone.entries(perform_operations),
-        lambda_signatures: clone.entries(lambda_signatures),
+        evidence_plans: clone.entries(|table| &table.evidence_plans),
+        handler_operations: clone.entries(|table| &table.handler_operations),
+        perform_operations: clone.entries(|table| &table.perform_operations),
+        lambda_signatures: clone.entries(|table| &table.lambda_signatures),
         exhaustive_cases: origins
             .iter()
-            .filter(|id| exhaustive_cases.binary_search(id).is_ok())
+            .filter(|id| expressions.is_exhaustive(id))
             .map(|id| id.with_variant(variant))
             .collect(),
     }
@@ -450,20 +676,25 @@ fn clone_instance<'db>(
 /// Copies the entries of a declaration's nodes to one instance's nodes,
 /// substituting the instance's type arguments as it copies each value once.
 struct EntryClone<'a, 'db> {
+    expressions: Expressions<'a, 'db>,
     origins: &'a HashSet<NodeId>,
     variant: std::num::NonZero<u64>,
     substitution: BoundVarSubst<'a, 'db>,
 }
 
-impl<'db> EntryClone<'_, 'db> {
+impl<'a, 'db> EntryClone<'a, 'db> {
     fn entries<V: TypeFoldable<'db> + Clone>(
         &mut self,
-        table: &SortedMap<NodeId, V>,
+        table: fn(&'a ExpressionTypeMetadata<'db>) -> &'a SortedMap<NodeId, V>,
     ) -> SortedMap<NodeId, V> {
-        let (origins, variant) = (self.origins, self.variant);
+        let (expressions, origins, variant) = (self.expressions, self.origins, self.variant);
         origins
             .iter()
-            .filter_map(|id| table.get(id).map(|value| (id.with_variant(variant), value)))
+            .filter_map(|id| {
+                expressions
+                    .get(table, id)
+                    .map(|value| (id.with_variant(variant), value))
+            })
             .map(|(id, value)| {
                 let value = value
                     .clone()
@@ -607,7 +838,15 @@ mod tests {
         let key = InstanceKey::of_types([int]);
         let origins = [origin].into_iter().collect::<HashSet<_>>();
 
-        let clone = clone_instance(&db, &metadata.expressions, &key, &origins);
+        let clone = clone_instance(
+            &db,
+            Expressions {
+                own: &metadata.expressions,
+                dependency: None,
+            },
+            &key,
+            &origins,
+        );
         metadata.expressions.extend([clone]);
 
         let clone = origin.with_variant(key.variant());
