@@ -55,6 +55,31 @@ impl<'db> Dependencies<'db> {
     }
 }
 
+/// A package's environment with the dependencies it was built against,
+/// which resolution reads it with. Only [`build_env`](super::build_env)
+/// pairs them, so they cannot disagree.
+#[derive(Debug)]
+pub struct PackageScope<'db> {
+    env: PackageEnv<'db>,
+    dependencies: Dependencies<'db>,
+}
+
+impl<'db> PackageScope<'db> {
+    pub(super) fn new(env: PackageEnv<'db>, dependencies: Dependencies<'db>) -> Self {
+        Self { env, dependencies }
+    }
+
+    /// The package's own environment, without its dependencies.
+    pub fn into_env(self) -> PackageEnv<'db> {
+        self.env
+    }
+
+    /// The names the package and its dependencies give.
+    pub(super) fn view(&self) -> Scope<'_, 'db> {
+        Scope::new(&self.env, &self.dependencies)
+    }
+}
+
 /// A package's view of names: its own environment, then its dependencies'.
 ///
 /// Its places are [`Location`]s: a path from the root of the package

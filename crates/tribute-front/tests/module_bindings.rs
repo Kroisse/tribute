@@ -33,7 +33,7 @@ mod std {
 fn nested_modules_are_bound_by_identity(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(db, "modules.trb", TREE);
     let parsed = tribute_front::query::parsed_ast(db, source).unwrap();
-    let env = build_env(db, parsed.module(db), &Dependencies::none());
+    let env = build_env(db, parsed.module(db), Dependencies::none()).into_env();
     assert_eq!(env.package(), &PackageName::executable_root());
 
     let c = env.lookup_qualified(&SymbolPath::new(["a", "b"]), &Symbol::new("c"));
@@ -94,7 +94,7 @@ use nowhere
 "#,
     );
     let parsed = tribute_front::query::parsed_ast(db, source).unwrap();
-    let env = build_env(db, parsed.module(db), &Dependencies::none());
+    let env = build_env(db, parsed.module(db), Dependencies::none()).into_env();
 
     let b = env.lookup_qualified(&SymbolPath::new(["facade"]), &Symbol::new("b"));
     assert_eq!(module_path(b), ["a", "b"]);
@@ -124,7 +124,7 @@ pub mod outer {
 "#,
     );
     let parsed = tribute_front::query::parsed_ast(db, source).unwrap();
-    let env = build_env(db, parsed.module(db), &Dependencies::none());
+    let env = build_env(db, parsed.module(db), Dependencies::none()).into_env();
 
     let b = env.lookup_qualified(&SymbolPath::new(["outer"]), &Symbol::new("b"));
     assert_eq!(module_path(b), ["a", "b"]);

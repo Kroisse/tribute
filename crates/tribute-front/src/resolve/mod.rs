@@ -23,7 +23,7 @@ mod scope;
 pub use env::{Binding, Export, PackageEnv, Restriction};
 pub use package::{IdentityPath, Location, PackageName};
 pub use resolver::Resolver;
-pub use scope::{Dependencies, Scope};
+pub use scope::{Dependencies, PackageScope, Scope};
 
 use rustc_hash::FxHashMap as HashMap;
 use trunk_ir::Symbol;
@@ -44,24 +44,19 @@ pub fn resolve_module<'db>(
 ) -> DeclTable<ResolvedRef<'db>> {
     // Build the package environment from declarations. Without the prelude,
     // package `std` holds only the compiler-owned names.
-    let dependencies = Dependencies::std(builtin_library_env(db));
-    let env = build_env(db, module, &dependencies);
-
-    // Create resolver and process the module
-    let mut resolver = Resolver::new(db, &env, dependencies, span_map);
-    resolver.resolve_module(module)
+    let package = build_env(db, module, Dependencies::std(builtin_library_env(db)));
+    resolve_with_env(db, module, &package, span_map)
 }
 
-/// Resolve names in a module with a pre-built environment, which
-/// [`build_env`] built against the same `dependencies`.
+/// Resolve names in a module with the environment [`build_env`] built for
+/// it.
 pub fn resolve_with_env<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<UnresolvedName>,
-    env: &PackageEnv<'db>,
-    dependencies: Dependencies<'db>,
+    package: &PackageScope<'db>,
     span_map: &'db SpanMap,
 ) -> DeclTable<ResolvedRef<'db>> {
-    let mut resolver = Resolver::new(db, env, dependencies, span_map);
+    let mut resolver = Resolver::new(db, package.view(), span_map);
     resolver.resolve_module(module)
 }
 
@@ -170,14 +165,15 @@ pub(crate) fn root_location(scope: Scope<'_, '_>, path: &[Symbol]) -> Option<Loc
 pub fn build_env<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<UnresolvedName>,
-    dependencies: &Dependencies<'db>,
-) -> PackageEnv<'db> {
-    build_package_env(
+    dependencies: Dependencies<'db>,
+) -> PackageScope<'db> {
+    let env = build_package_env(
         db,
         &module.decls,
         &PackageName::executable_root(),
-        dependencies,
-    )
+        &dependencies,
+    );
+    PackageScope::new(env, dependencies)
 }
 
 /// Build the environment of the library package `package` whose root
@@ -430,7 +426,7 @@ pub fn resolve_library_with_env<'db>(
     env: &PackageEnv<'db>,
     span_map: &'db SpanMap,
 ) -> DeclTable<ResolvedRef<'db>> {
-    Resolver::new(db, env, Dependencies::none(), span_map)
+    Resolver::new(db, Scope::new(env, &Dependencies::none()), span_map)
         .with_package(env.package().clone())
         .resolve_module(module)
 }
@@ -837,7 +833,7 @@ mod tests {
 
     #[salsa::tracked]
     fn verify_module_function_namespace(db: &dyn salsa::Database, input: TestModuleInput) {
-        let env = build_env(db, input.module(db), &Dependencies::none());
+        let env = build_env(db, input.module(db), Dependencies::none()).into_env();
 
         // Math::add should be accessible
         let math_add = env.lookup_qualified(&SymbolPath::new(["Math"]), &Symbol::new("add"));
@@ -865,7 +861,7 @@ mod tests {
 
     #[salsa::tracked]
     fn verify_module_struct_namespace(db: &dyn salsa::Database, input: TestModuleInput) {
-        let env = build_env(db, input.module(db), &Dependencies::none());
+        let env = build_env(db, input.module(db), Dependencies::none()).into_env();
 
         // Types::Point should be accessible as a constructor
         let types_point = env.lookup_qualified(&SymbolPath::new(["Types"]), &Symbol::new("Point"));
@@ -881,7 +877,7 @@ mod tests {
 
     #[salsa::tracked]
     fn verify_module_enum_namespace(db: &dyn salsa::Database, input: TestModuleInput) {
-        let env = build_env(db, input.module(db), &Dependencies::none());
+        let env = build_env(db, input.module(db), Dependencies::none()).into_env();
 
         // Types::Color should be accessible
         let types_color = env.lookup_qualified(&SymbolPath::new(["Types"]), &Symbol::new("Color"));
@@ -913,7 +909,7 @@ mod tests {
 
     #[salsa::tracked]
     fn verify_module_multiple_definitions(db: &dyn salsa::Database, input: TestModuleInput) {
-        let env = build_env(db, input.module(db), &Dependencies::none());
+        let env = build_env(db, input.module(db), Dependencies::none()).into_env();
 
         // All should be accessible via Utils::
         assert!(
@@ -937,7 +933,7 @@ mod tests {
 
     #[salsa::tracked]
     fn verify_multiple_modules_namespaces(db: &dyn salsa::Database, input: TestModuleInput) {
-        let env = build_env(db, input.module(db), &Dependencies::none());
+        let env = build_env(db, input.module(db), Dependencies::none()).into_env();
 
         // Both A::foo and B::foo should exist
         let a_foo = env.lookup_qualified(&SymbolPath::new(["A"]), &Symbol::new("foo"));
@@ -956,7 +952,7 @@ mod tests {
 
     #[salsa::tracked]
     fn verify_nested_module_enum_namespace(db: &dyn salsa::Database, input: TestModuleInput) {
-        let env = build_env(db, input.module(db), &Dependencies::none());
+        let env = build_env(db, input.module(db), Dependencies::none()).into_env();
 
         // Outer::Inner should exist
         assert!(
@@ -983,7 +979,7 @@ mod tests {
 
     #[salsa::tracked]
     fn verify_module_no_override_parent(db: &dyn salsa::Database, input: TestModuleInput) {
-        let env = build_env(db, input.module(db), &Dependencies::none());
+        let env = build_env(db, input.module(db), Dependencies::none()).into_env();
 
         // foo should still be directly accessible
         assert!(
@@ -1215,7 +1211,7 @@ mod tests {
             ))],
         );
 
-        let env = build_env(db, &module, &Dependencies::none());
+        let env = build_env(db, &module, Dependencies::none()).into_env();
         assert!(matches!(
             env.lookup_qualified(&SymbolPath::new(["std", "io"]), &Symbol::new("SystemError")),
             Some(Binding::Constructor { .. })
@@ -1248,7 +1244,7 @@ mod tests {
 
     #[salsa::tracked]
     fn verify_extern_function_registered(db: &dyn salsa::Database, input: TestModuleInput) {
-        let env = build_env(db, input.module(db), &Dependencies::none());
+        let env = build_env(db, input.module(db), Dependencies::none()).into_env();
 
         let binding = env.lookup(&Symbol::new("__bytes_len"));
         assert!(binding.is_some(), "__bytes_len should be registered");
@@ -1293,7 +1289,7 @@ mod tests {
         db: &dyn salsa::Database,
         input: TestModuleInput,
     ) {
-        let env = build_env(db, input.module(db), &Dependencies::none());
+        let env = build_env(db, input.module(db), Dependencies::none()).into_env();
 
         // Point::x should be registered as a function
         let point_x = env.lookup_qualified(&SymbolPath::new(["Point"]), &Symbol::new("x"));

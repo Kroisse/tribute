@@ -192,8 +192,7 @@ mod tests {
         let resolved = crate::resolve::resolve_with_env(
             db,
             ast,
-            &crate::resolve::build_env(db, ast, &crate::resolve::Dependencies::none()),
-            crate::resolve::Dependencies::none(),
+            &crate::resolve::build_env(db, ast, crate::resolve::Dependencies::none()),
             parsed.span_map(db),
         );
         crate::typeck::typecheck_module(db, &resolved, parsed.span_map(db))

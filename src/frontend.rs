@@ -46,11 +46,10 @@ pub fn parse_and_lower_ast<'db>(
 
     // Phase 2: Build user env, which depends on package std
     let dependencies = crate::prelude::prelude_dependencies(db);
-    let user_env = ast_resolve::build_env(db, user_ast, &dependencies);
+    let user_env = ast_resolve::build_env(db, user_ast, dependencies);
 
     // Phase 3: Name resolution
-    let resolved_ast =
-        ast_resolve::resolve_with_env(db, user_ast, &user_env, dependencies, span_map);
+    let resolved_ast = ast_resolve::resolve_with_env(db, user_ast, &user_env, span_map);
 
     // Phase 4: Type checking against package std
     let mut checker = ast_typeck::TypeChecker::new(db, span_map);

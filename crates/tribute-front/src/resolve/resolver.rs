@@ -18,10 +18,10 @@ use crate::ast::{
     UseDecl, Visibility,
 };
 
-use super::env::{Binding, PackageEnv, Restriction};
+use super::env::{Binding, Restriction};
 use super::package::{IdentityPath, Location, PackageName};
 use super::path::{PathKeywordError, absolute_path, dependency_path};
-use super::scope::{Dependencies, Scope};
+use super::scope::Scope;
 
 /// Find the best matches from `candidates` by a caller-provided score function.
 ///
@@ -97,10 +97,9 @@ enum MethodCandidates<'db> {
 /// Resolver for transforming unresolved names to resolved references.
 pub struct Resolver<'e, 'db> {
     db: &'db dyn salsa::Database,
-    /// The environment of the package being resolved.
-    env: &'e PackageEnv<'db>,
-    /// The packages it depends on.
-    dependencies: Dependencies<'db>,
+    /// The environment of the package being resolved, with the packages it
+    /// depends on.
+    scope: Scope<'e, 'db>,
     /// Span map for emitting diagnostics with source locations.
     span_map: &'db SpanMap,
     /// Lexical nested-module namespace used for unqualified references in an
@@ -140,18 +139,15 @@ struct FunctionResolver<'r, 'e, 'db> {
 }
 
 impl<'e, 'db> Resolver<'e, 'db> {
-    /// Create a new resolver with the given environment, which was built
-    /// against `dependencies`.
+    /// Create a new resolver reading names through `scope`.
     pub fn new(
         db: &'db dyn salsa::Database,
-        env: &'e PackageEnv<'db>,
-        dependencies: Dependencies<'db>,
+        scope: Scope<'e, 'db>,
         span_map: &'db SpanMap,
     ) -> Self {
         Self {
             db,
-            env,
-            dependencies,
+            scope,
             span_map,
             module_path: Vec::new(),
             module_imports: Vec::new(),
@@ -168,8 +164,8 @@ impl<'e, 'db> Resolver<'e, 'db> {
     }
 
     /// The names the package and its dependencies give.
-    fn view(&self) -> Scope<'_, 'db> {
-        Scope::new(self.env, &self.dependencies)
+    fn view(&self) -> Scope<'e, 'db> {
+        self.scope
     }
 
     /// The reference `name` makes to `binding`, or an unresolved one if the
@@ -341,7 +337,8 @@ impl<'e, 'db> Resolver<'e, 'db> {
         // An inline module sees its companion, not the items of the modules
         // around it; the package root sees its own items too.
         if self.module_path.is_empty() {
-            self.env
+            self.scope
+                .own()
                 .lookup(sym)
                 .filter(|_| !self.view().is_library_only(sym))
         } else {
@@ -654,7 +651,8 @@ impl<'e, 'db> Resolver<'e, 'db> {
     fn names_in_scope(&self) -> Vec<Symbol> {
         if self.module_path.is_empty() {
             return self
-                .env
+                .scope
+                .own()
                 .iter_all_names()
                 .filter(|name| !self.view().is_library_only(name))
                 .collect();
@@ -2325,6 +2323,7 @@ impl<'r, 'e, 'db> FunctionResolver<'r, 'e, 'db> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::{env::PackageEnv, scope::Dependencies};
     use super::*;
     use crate::ast::NodeId;
     use salsa_test_macros::salsa_test;
@@ -2332,7 +2331,8 @@ mod tests {
     #[salsa_test]
     fn test_resolve_local_variable(db: &salsa::DatabaseImpl) {
         let env = PackageEnv::new();
-        let module = Resolver::new(db, &env, Dependencies::none(), SpanMap::empty());
+        let dependencies = Dependencies::none();
+        let module = Resolver::new(db, Scope::new(&env, &dependencies), SpanMap::empty());
         let mut resolver = FunctionResolver::new(&module);
 
         let param_name = Symbol::new("x");
@@ -2360,7 +2360,8 @@ mod tests {
     #[salsa_test]
     fn test_scope_isolation(db: &salsa::DatabaseImpl) {
         let env = PackageEnv::new();
-        let module = Resolver::new(db, &env, Dependencies::none(), SpanMap::empty());
+        let dependencies = Dependencies::none();
+        let module = Resolver::new(db, Scope::new(&env, &dependencies), SpanMap::empty());
         let mut resolver = FunctionResolver::new(&module);
 
         let x = Symbol::new("x");
@@ -2392,7 +2393,8 @@ mod tests {
     #[salsa_test]
     fn test_nested_scopes(db: &salsa::DatabaseImpl) {
         let env = PackageEnv::new();
-        let module = Resolver::new(db, &env, Dependencies::none(), SpanMap::empty());
+        let dependencies = Dependencies::none();
+        let module = Resolver::new(db, Scope::new(&env, &dependencies), SpanMap::empty());
         let mut resolver = FunctionResolver::new(&module);
 
         let x = Symbol::new("x");
@@ -2442,7 +2444,8 @@ mod tests {
         use crate::ast::{Pattern, PatternKind};
 
         let env = PackageEnv::new();
-        let module = Resolver::new(db, &env, Dependencies::none(), SpanMap::empty());
+        let dependencies = Dependencies::none();
+        let module = Resolver::new(db, Scope::new(&env, &dependencies), SpanMap::empty());
         let mut resolver = FunctionResolver::new(&module);
         resolver.push_scope();
 
@@ -2486,7 +2489,8 @@ mod tests {
         use crate::ast::{Pattern, PatternKind};
 
         let env = PackageEnv::new();
-        let module = Resolver::new(db, &env, Dependencies::none(), SpanMap::empty());
+        let dependencies = Dependencies::none();
+        let module = Resolver::new(db, Scope::new(&env, &dependencies), SpanMap::empty());
         let mut resolver = FunctionResolver::new(&module);
         resolver.push_scope();
 
