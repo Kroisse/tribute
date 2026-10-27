@@ -44,7 +44,7 @@ fn test(x: std::Option(Nat)) -> std::Option(Nat) {
     );
 
     assert_eq!(
-        *tdnr_function_summary(db, source, "test"),
+        tdnr_function_summary(db, source, "test"),
         TdnrSummary {
             method_calls: vec![],
             calls: vec![TdnrCall {
@@ -84,7 +84,7 @@ fn test(name: Name) -> String {{ name.text }}
     );
 
     assert_eq!(
-        *tdnr_function_summary(db, source, "test"),
+        tdnr_function_summary(db, source, "test"),
         selected(&["audit::text"])
     );
     let errors = ast_pipeline_error_messages(db, source);
@@ -106,7 +106,7 @@ fn test(name: Name) -> String {{ name.text }}
     );
 
     assert_eq!(
-        *tdnr_function_summary(db, source, "test"),
+        tdnr_function_summary(db, source, "test"),
         TdnrSummary {
             method_calls: vec!["text".to_owned()],
             calls: vec![],
@@ -153,17 +153,17 @@ fn unknown() -> Nil {{
     );
 
     assert_eq!(
-        *tdnr_function_summary(db, source, "by_nat"),
+        tdnr_function_summary(db, source, "by_nat"),
         selected(&["twice", "id"])
     );
     assert_eq!(
-        *tdnr_function_summary(db, source, "by_int"),
+        tdnr_function_summary(db, source, "by_int"),
         selected(&["math::twice", "id"])
     );
     // A receiver no type ever determines leaves the direct function as the
     // highest rank that fits.
     assert_eq!(
-        *tdnr_function_summary(db, source, "unknown"),
+        tdnr_function_summary(db, source, "unknown"),
         selected(&["twice"])
     );
     let errors = ast_pipeline_error_messages(db, source);
@@ -195,7 +195,7 @@ fn test(n: Int) -> Nat {
     );
 
     assert_eq!(
-        *tdnr_function_summary(db, source, "test"),
+        tdnr_function_summary(db, source, "test"),
         selected(&["std::String::len"])
     );
     let errors = ast_pipeline_error_messages(db, source);
@@ -263,11 +263,11 @@ mod inner {
         }],
     };
     assert_eq!(
-        *tdnr_function_summary(db, prelude, "test"),
+        tdnr_function_summary(db, prelude, "test"),
         map("std::Option::map")
     );
     assert_eq!(
-        *tdnr_function_summary(db, declared, "test"),
+        tdnr_function_summary(db, declared, "test"),
         map("Option::map")
     );
     for source in [prelude, declared] {

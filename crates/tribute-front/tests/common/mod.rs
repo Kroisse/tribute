@@ -69,30 +69,21 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
     print_module(&ir, module.module.op())
 }
 
-#[salsa::tracked]
-fn tdnr_function_summary_inner(
-    db: &dyn salsa::Database,
-    source: SourceCst,
-    function_name: String,
-) -> TdnrSummary {
-    let checked =
-        analysis::analyze(db, source, environment(db)).expect("Should parse successfully");
-    let body = function_body(checked.module(db), &function_name);
-    let mut summary = TdnrSummary::default();
-    collect_tdnr_summary(db, body, &mut summary);
-    summary
-}
-
 /// Run the AST pipeline through TDNR and summarize one function body.
 ///
 /// This intentionally stops before IR lowering so tests can inspect calls
 /// left without a selected function.
-pub fn tdnr_function_summary<'db>(
-    db: &'db dyn salsa::Database,
+pub fn tdnr_function_summary(
+    db: &dyn salsa::Database,
     source: SourceCst,
     function_name: &str,
-) -> &'db TdnrSummary {
-    tdnr_function_summary_inner(db, source, function_name.to_owned())
+) -> TdnrSummary {
+    let checked =
+        analysis::analyze(db, source, environment(db)).expect("Should parse successfully");
+    let body = function_body(checked.module(db), function_name);
+    let mut summary = TdnrSummary::default();
+    collect_tdnr_summary(db, body, &mut summary);
+    summary
 }
 
 fn function_body<'db>(
