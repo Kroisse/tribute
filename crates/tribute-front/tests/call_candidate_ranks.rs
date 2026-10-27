@@ -15,7 +15,11 @@ fn selected(targets: &[&str]) -> TdnrSummary {
         calls: targets
             .iter()
             .map(|target| TdnrCall {
-                target: (*target).to_owned(),
+                target: if target.starts_with("std::") {
+                    (*target).to_owned()
+                } else {
+                    format!("pkg::{target}")
+                },
                 arg_count: 1,
             })
             .collect(),
@@ -268,7 +272,7 @@ mod inner {
     );
     assert_eq!(
         tdnr_function_summary(db, declared, "test"),
-        map("Option::map")
+        map("pkg::Option::map")
     );
     for source in [prelude, declared] {
         let errors = ast_pipeline_error_messages(db, source);

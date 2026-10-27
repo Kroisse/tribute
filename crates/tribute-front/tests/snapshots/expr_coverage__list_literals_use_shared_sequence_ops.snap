@@ -4,7 +4,7 @@ assertion_line: 142
 expression: ir_text
 ---
 core.module @test {
-  tribute_control.func @numbers['a0]() -> tribute_rt.anyref row(| 'a0) inferred {
+  tribute_control.func @"pkg::numbers"['a0]() -> tribute_rt.anyref row(| 'a0) inferred {
       %0 = arith.const {value = 1} : core.i32
       %1 = arith.const {value = 2} : core.i32
       %2 = arith.const {value = 3} : core.i32

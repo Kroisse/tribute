@@ -2,7 +2,7 @@
 source: tests/integration/diagnostic_snapshots.rs
 expression: result.diagnostics
 ---
-- message: "`thunks` calls itself at `fn() -> a`; polymorphic recursion is not supported"
+- message: "`pkg::thunks` calls itself at `fn() -> a`; polymorphic recursion is not supported"
   span:
     start: 87
     end: 93

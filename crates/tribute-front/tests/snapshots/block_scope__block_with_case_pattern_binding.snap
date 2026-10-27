@@ -4,14 +4,14 @@ assertion_line: 128
 expression: ir_text
 ---
 core.module @test {
-  !Option = adt.enum<Option { Some(tribute_rt.anyref), None() }>
-  !"Option$Nat" = adt.enum<"Option$Nat" { Some(core.i32), None() }>
+  !"pkg::Option" = adt.enum<"pkg::Option" { Some(tribute_rt.anyref), None() }>
+  !"pkg::Option$Nat" = adt.enum<"pkg::Option$Nat" { Some(core.i32), None() }>
 
-  tribute_control.func @example['a0](%0: adt.typeref<{name = "Option$Nat"}>) -> core.i32 row(| 'a0) inferred {
-      %1 = adt.variant_is %0 {tag = "Some", type = !"Option$Nat"} : core.i1
+  tribute_control.func @"pkg::example"['a0](%0: adt.typeref<{name = "pkg::Option$Nat"}>) -> core.i32 row(| 'a0) inferred {
+      %1 = adt.variant_is %0 {tag = "Some", type = !"pkg::Option$Nat"} : core.i1
       %2 = scf.if %1 : core.i1 {
-          %3 = adt.variant_cast %0 {tag = "Some", type = !"Option$Nat"} : !"Option$Nat"
-          %4 = adt.variant_get %3 {field = 0, tag = "Some", type = !"Option$Nat"} : core.i32
+          %3 = adt.variant_cast %0 {tag = "Some", type = !"pkg::Option$Nat"} : !"pkg::Option$Nat"
+          %4 = adt.variant_get %3 {field = 0, tag = "Some", type = !"pkg::Option$Nat"} : core.i32
           %5 = arith.const {value = true} : core.i1
           scf.yield %5
       } {
@@ -19,11 +19,11 @@ core.module @test {
           scf.yield %6
       }
       %7 = scf.if %2 : core.i32 {
-          %8 = adt.variant_cast %0 {tag = "Some", type = !"Option$Nat"} : !"Option$Nat"
-          %9 = adt.variant_get %8 {field = 0, tag = "Some", type = !"Option$Nat"} : core.i32
+          %8 = adt.variant_cast %0 {tag = "Some", type = !"pkg::Option$Nat"} : !"pkg::Option$Nat"
+          %9 = adt.variant_get %8 {field = 0, tag = "Some", type = !"pkg::Option$Nat"} : core.i32
           scf.yield %9
       } {
-          %10 = adt.variant_cast %0 {tag = "None", type = !"Option$Nat"} : !"Option$Nat"
+          %10 = adt.variant_cast %0 {tag = "None", type = !"pkg::Option$Nat"} : !"pkg::Option$Nat"
           %11 = arith.const {value = 0} : core.i32
           scf.yield %11
       }

@@ -4,11 +4,11 @@ assertion_line: 243
 expression: ir_text
 ---
 core.module @test {
-  tribute_control.func @id['a0](%0: core.i32) -> core.i32 row(| 'a0) inferred {
+  tribute_control.func @"pkg::id"['a0](%0: core.i32) -> core.i32 row(| 'a0) inferred {
       tribute_control.return %0
   }
-  tribute_control.func @test_ref['a0, body 'a1]() -> core.i32 row(| 'a0) inferred {
-      %0 = tribute_control.func_ref {func_ref = @id, row_args = [{tail = 1}]} : tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 1}}>
+  tribute_control.func @"pkg::test_ref"['a0, body 'a1]() -> core.i32 row(| 'a0) inferred {
+      %0 = tribute_control.func_ref {func_ref = @"pkg::id", row_args = [{tail = 1}]} : tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 1}}>
       %1 = arith.const {value = 1} : core.i32
       %2 = tribute_control.call_indirect %0, %1 : core.i32
       tribute_control.return %2

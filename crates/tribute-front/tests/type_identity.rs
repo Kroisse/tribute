@@ -17,7 +17,7 @@ fn first_param_type<'db>(db: &'db dyn salsa::Database, text: &str, name: &str) -
     let schemes = function_schemes(db, source).expect("source should type check");
     let (_, scheme) = schemes
         .iter()
-        .find(|(path, _)| *path == [name])
+        .find(|(path, _)| *path == ["pkg", name])
         .unwrap_or_else(|| panic!("function `{name}` should be declared"));
     let TypeKind::Func { params, .. } = scheme.body(db).kind(db) else {
         panic!("`{name}` should have a function type");
@@ -37,7 +37,10 @@ fn an_edit_elsewhere_keeps_type_identity(db: &salsa::DatabaseImpl) {
     let after = first_param_type(db, &edited, "get_x");
 
     assert_eq!(before, after);
-    assert_eq!(before, TypeDefId::source(db, SymbolPath::new(["Point"])));
+    assert_eq!(
+        before,
+        TypeDefId::source(db, SymbolPath::new(["pkg", "Point"]))
+    );
 }
 
 #[salsa_test]

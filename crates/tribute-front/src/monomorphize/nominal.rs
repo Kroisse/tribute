@@ -228,8 +228,9 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 ("Nested::Choice", true),
                 ("Nested::Plain", false),
             ] {
-                let path =
-                    trunk_ir::SymbolPath::new(std::iter::once(prefix).chain(suffix.split("::")));
+                let path = trunk_ir::SymbolPath::new(
+                    ["pkg", prefix].into_iter().chain(suffix.split("::")),
+                );
                 let name = path.to_symbol();
                 let (id, entry) = index
                     .declarations
@@ -252,7 +253,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                             assert_eq!(
                                 constructor.id.qualified(db),
                                 Symbol::new(&format!(
-                                    "{prefix}::Nested::{}::{}",
+                                    "pkg::{prefix}::Nested::{}::{}",
                                     e.name, variant.name
                                 ))
                             );
@@ -312,7 +313,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
             .iter()
             .copied()
             .collect();
-        let source_ctor = CtorId::new(db, trunk_ir::SymbolPath::new(["nested", "Holder"]));
+        let source_ctor = CtorId::new(db, trunk_ir::SymbolPath::new(["pkg", "nested", "Holder"]));
         let source_scheme = schemas[&source_ctor];
         let seeds = collect::collect_type_instantiations_with_index(
             db,
@@ -341,7 +342,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
             matches!(result.kind(db), TypeKind::Named { id, args, .. } if id == owner && args == &[int])
         );
         let name = super::super::mangle::mangle_type_path(db, *owner, arguments).to_symbol();
-        assert_eq!(name, Symbol::new("nested::Holder$Int"));
+        assert_eq!(name, Symbol::new("pkg::nested::Holder$Int"));
         let declarations = specialize::generate_struct_specializations_with_index(
             db,
             &index,
@@ -372,8 +373,10 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 _ => None,
             })
             .unwrap();
-        let hidden_id =
-            TypeDefId::source(db, trunk_ir::SymbolPath::new([hidden_decl.name.clone()]));
+        let hidden_id = TypeDefId::source(
+            db,
+            trunk_ir::SymbolPath::new([Symbol::new("pkg"), hidden_decl.name.clone()]),
+        );
         let hidden = Type::new(
             db,
             TypeKind::Named {
@@ -385,11 +388,11 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
         let row = AbilityRow::single(
             db,
             AbilityInstance {
-                ability_id: AbilityId::source(db, trunk_ir::SymbolPath::new(["Marker"])),
+                ability_id: AbilityId::source(db, trunk_ir::SymbolPath::new(["pkg", "Marker"])),
                 args: vec![hidden],
             },
         );
-        let ctor = CtorId::new(db, trunk_ir::SymbolPath::new(["Root", "Value"]));
+        let ctor = CtorId::new(db, trunk_ir::SymbolPath::new(["pkg", "Root", "Value"]));
         for removal in [false, true] {
             let mut schemas: HashMap<_, _> = input
                 .declarations(db)
@@ -577,8 +580,11 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
     #[salsa_test]
     fn nominal_dependencies_reject_missing_wrong_owner_and_arity_schemas(db: &salsa::DatabaseImpl) {
         for (declaration, constructor) in [
-            ("enum Cell(a) { Value(a), Empty }", &["Cell", "Value"][..]),
-            ("struct Cell(a) { value: a }", &["Cell"][..]),
+            (
+                "enum Cell(a) { Value(a), Empty }",
+                &["pkg", "Cell", "Value"][..],
+            ),
+            ("struct Cell(a) { value: a }", &["pkg", "Cell"][..]),
         ] {
             let source = crate::SourceCst::from_source_str(
                 db,

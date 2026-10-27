@@ -17,15 +17,15 @@ use trunk_ir::refs::OpRef;
 use trunk_ir::symbol_table::SymbolTable;
 use trunk_ir::types::Attribute;
 
-const RUNTIME: &[&str] = &["rt"];
-const PROBE: &[&str] = &["rt", "probe"];
+const RUNTIME: &[&str] = &["pkg", "rt"];
+const PROBE: &[&str] = &["pkg", "rt", "probe"];
 const ITEMS: &[RuntimeItem] = &[
     RuntimeItem {
         path: PROBE,
         kind: RuntimeItemKind::Function,
     },
     RuntimeItem {
-        path: &["rt", "Cell"],
+        path: &["pkg", "rt", "Cell"],
         kind: RuntimeItemKind::Struct,
     },
 ];
@@ -139,10 +139,10 @@ fn frontend_publishes_runtime_types_with_the_prelude_types() {
     });
     let m = frontend.module;
 
-    let cell = runtime_type(&ctx, m, &["rt", "Cell"]).expect("published runtime type");
+    let cell = runtime_type(&ctx, m, &["pkg", "rt", "Cell"]).expect("published runtime type");
     assert_eq!(
         trunk_ir::printer::print_type(&ctx, cell),
-        r#"adt.struct<"rt::Cell"(value: core.i32)>"#
+        r#"adt.struct<"pkg::rt::Cell"(value: core.i32)>"#
     );
     assert!(
         tribute_ir::metadata::WellKnownTypes::from_module(&ctx, m.op())
@@ -388,9 +388,9 @@ fn main() -> Nil { }
             check(
                 ACCEPTED,
                 &[
-                    item(&["rt", "probe"], Function),
-                    item(&["rt", "read"], Function),
-                    item(&["rt", "Cell"], Struct),
+                    item(&["pkg", "rt", "probe"], Function),
+                    item(&["pkg", "rt", "read"], Function),
+                    item(&["pkg", "rt", "Cell"], Struct),
                 ]
             ),
             Ok(1)
@@ -405,11 +405,11 @@ fn main() -> Nil { }
             check(
                 ACCEPTED,
                 &[
-                    item(&["rt", "absent"], Function),
-                    item(&["rt", "Cell"], Function),
-                    item(&["rt", "probe"], Struct),
-                    item(&["rt", "State"], Function),
-                    item(&["rt", "Boxed"], Struct),
+                    item(&["pkg", "rt", "absent"], Function),
+                    item(&["pkg", "rt", "Cell"], Function),
+                    item(&["pkg", "rt", "probe"], Struct),
+                    item(&["pkg", "rt", "State"], Function),
+                    item(&["pkg", "rt", "Boxed"], Struct),
                 ]
             ),
             Err(vec![
@@ -443,7 +443,7 @@ fn main() -> Nil { }
             let diagnostic = errors[0].diagnostic(&tribute_front::ast::SpanMaps::new([span_map]));
             assert_eq!(
                 diagnostic.inner.message,
-                "runtime `rt::inferred` must have an empty ability row, written `->{}`"
+                "runtime `pkg::rt::inferred` must have an empty ability row, written `->{}`"
             );
             assert_eq!(diagnostic.inner.severity, DiagnosticSeverity::Error);
             assert!(REJECTED[diagnostic.inner.span.start..].starts_with("fn inferred"));

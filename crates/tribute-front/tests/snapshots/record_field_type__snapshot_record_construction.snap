@@ -4,49 +4,49 @@ assertion_line: 896
 expression: ir_text
 ---
 core.module @test {
-  !Point = adt.struct<Point(x: core.i32, y: core.i32)>
-  !Point_1 = adt.typeref<{name = "Point"}>
-  !t1 = tribute_control.func_sig<(!Point_1, core.i32) -> !Point_1>
+  !"pkg::Point" = adt.struct<"pkg::Point"(x: core.i32, y: core.i32)>
+  !"pkg::Point_1" = adt.typeref<{name = "pkg::Point"}>
+  !t1 = tribute_control.func_sig<(!"pkg::Point_1", core.i32) -> !"pkg::Point_1">
   !t2 = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>
-  !t0 = tribute_control.func_sig<(!Point_1, !t2) -> !Point_1, {ability_row = {tail = 0}}>
-  !t3 = tribute_control.func_sig<(!Point_1) -> core.i32>
+  !t0 = tribute_control.func_sig<(!"pkg::Point_1", !t2) -> !"pkg::Point_1", {ability_row = {tail = 0}}>
+  !t3 = tribute_control.func_sig<(!"pkg::Point_1") -> core.i32>
 
-  tribute_control.func @"Point::x"(%0: !Point_1) -> core.i32 {
-      %1 = adt.struct_get %0 {field = 0, type = !Point} : core.i32
+  tribute_control.func @"pkg::Point::x"(%0: !"pkg::Point_1") -> core.i32 {
+      %1 = adt.struct_get %0 {field = 0, type = !"pkg::Point"} : core.i32
       tribute_control.return %1
   }
-  tribute_control.func @"Point::x::set"(%0: !Point_1, %1: core.i32) -> !Point_1 {
-      %2 = adt.struct_get %0 {field = 1, type = !Point} : core.i32
-      %3 = adt.struct_new %1, %2 {type = !Point} : !Point_1
+  tribute_control.func @"pkg::Point::x::set"(%0: !"pkg::Point_1", %1: core.i32) -> !"pkg::Point_1" {
+      %2 = adt.struct_get %0 {field = 1, type = !"pkg::Point"} : core.i32
+      %3 = adt.struct_new %1, %2 {type = !"pkg::Point"} : !"pkg::Point_1"
       tribute_control.return %3
   }
-  tribute_control.func @"Point::x::modify"['a0](%0: !Point_1, %1: !t2) -> !Point_1 row(| 'a0) {
-      %2 = adt.struct_get %0 {field = 0, type = !Point} : core.i32
+  tribute_control.func @"pkg::Point::x::modify"['a0](%0: !"pkg::Point_1", %1: !t2) -> !"pkg::Point_1" row(| 'a0) {
+      %2 = adt.struct_get %0 {field = 0, type = !"pkg::Point"} : core.i32
       %3 = tribute_control.call_indirect %1, %2 : core.i32
-      %4 = adt.struct_get %0 {field = 1, type = !Point} : core.i32
-      %5 = adt.struct_new %3, %4 {type = !Point} : !Point_1
+      %4 = adt.struct_get %0 {field = 1, type = !"pkg::Point"} : core.i32
+      %5 = adt.struct_new %3, %4 {type = !"pkg::Point"} : !"pkg::Point_1"
       tribute_control.return %5
   }
-  tribute_control.func @"Point::y"(%0: !Point_1) -> core.i32 {
-      %1 = adt.struct_get %0 {field = 1, type = !Point} : core.i32
+  tribute_control.func @"pkg::Point::y"(%0: !"pkg::Point_1") -> core.i32 {
+      %1 = adt.struct_get %0 {field = 1, type = !"pkg::Point"} : core.i32
       tribute_control.return %1
   }
-  tribute_control.func @"Point::y::set"(%0: !Point_1, %1: core.i32) -> !Point_1 {
-      %2 = adt.struct_get %0 {field = 0, type = !Point} : core.i32
-      %3 = adt.struct_new %2, %1 {type = !Point} : !Point_1
+  tribute_control.func @"pkg::Point::y::set"(%0: !"pkg::Point_1", %1: core.i32) -> !"pkg::Point_1" {
+      %2 = adt.struct_get %0 {field = 0, type = !"pkg::Point"} : core.i32
+      %3 = adt.struct_new %2, %1 {type = !"pkg::Point"} : !"pkg::Point_1"
       tribute_control.return %3
   }
-  tribute_control.func @"Point::y::modify"['a0](%0: !Point_1, %1: !t2) -> !Point_1 row(| 'a0) {
-      %2 = adt.struct_get %0 {field = 1, type = !Point} : core.i32
+  tribute_control.func @"pkg::Point::y::modify"['a0](%0: !"pkg::Point_1", %1: !t2) -> !"pkg::Point_1" row(| 'a0) {
+      %2 = adt.struct_get %0 {field = 1, type = !"pkg::Point"} : core.i32
       %3 = tribute_control.call_indirect %1, %2 : core.i32
-      %4 = adt.struct_get %0 {field = 0, type = !Point} : core.i32
-      %5 = adt.struct_new %4, %3 {type = !Point} : !Point_1
+      %4 = adt.struct_get %0 {field = 0, type = !"pkg::Point"} : core.i32
+      %5 = adt.struct_new %4, %3 {type = !"pkg::Point"} : !"pkg::Point_1"
       tribute_control.return %5
   }
-  tribute_control.func @make_point['a0]() -> !Point_1 row(| 'a0) inferred {
+  tribute_control.func @"pkg::make_point"['a0]() -> !"pkg::Point_1" row(| 'a0) inferred {
       %0 = arith.const {value = 10} : core.i32
       %1 = arith.const {value = 20} : core.i32
-      %2 = adt.struct_new %0, %1 {type = !Point} : !Point_1
+      %2 = adt.struct_new %0, %1 {type = !"pkg::Point"} : !"pkg::Point_1"
       tribute_control.return %2
   }
 }

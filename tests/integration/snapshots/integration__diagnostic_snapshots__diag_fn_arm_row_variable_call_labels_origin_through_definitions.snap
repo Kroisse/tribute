@@ -2,7 +2,7 @@
 source: tests/integration/diagnostic_snapshots.rs
 expression: result.diagnostics
 ---
-- message: "`fn` handler arm for `next` cannot call a callable that may suspend or abort: in this use of `inner`, the callee's effects include an `op` operation"
+- message: "`fn` handler arm for `next` cannot call a callable that may suspend or abort: in this use of `pkg::inner`, the callee's effects include an `op` operation"
   span:
     start: 387
     end: 390

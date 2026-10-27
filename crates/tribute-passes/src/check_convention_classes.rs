@@ -115,7 +115,7 @@ impl<'a> Instance<'a> {
                 ),
             });
         }
-        let claimed = if function.is_root_main() {
+        let claimed = if function.root_entry {
             vec![CallingConvention::Direct; variables.len()]
         } else {
             match &function.claimed {

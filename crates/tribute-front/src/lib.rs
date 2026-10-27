@@ -36,7 +36,9 @@ pub use source_file::{SourceCst, derive_module_name_from_path, path_to_uri};
 
 use trunk_ir::Symbol;
 
-/// Whether a declaration is the exact root program entrypoint.
-pub(crate) fn is_root_main(name: &Symbol, is_root_module: bool) -> bool {
-    is_root_module && *name == "main"
+/// Whether a declaration named `name` in the module whose identity path is
+/// `module` is the entry point of an executable build: `main` in the root
+/// module of the executable's root package.
+pub(crate) fn is_root_main(name: &Symbol, module: &[Symbol]) -> bool {
+    *name == "main" && module == ["pkg"]
 }

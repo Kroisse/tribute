@@ -341,7 +341,7 @@ fn main() -> Nil { }
         .declarations(db)
         .function_types
         .iter()
-        .find(|(name, _)| name == ["run_state"])
+        .find(|(name, _)| name == ["pkg", "run_state"])
         .unwrap();
     assert_eq!(scheme.effect_params(db).len(), 1);
     assert!(scheme.row_unions(db).is_empty());

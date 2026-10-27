@@ -4,7 +4,7 @@ assertion_line: 118
 expression: ir_text
 ---
 core.module @test {
-  tribute_control.func @logic['a0](%0: core.i1, %1: core.i1) -> core.i1 row(| 'a0) inferred {
+  tribute_control.func @"pkg::logic"['a0](%0: core.i1, %1: core.i1) -> core.i1 row(| 'a0) inferred {
       %2 = scf.if %0 : core.i1 {
           %3 = arith.const {value = true} : core.i1
           scf.yield %3

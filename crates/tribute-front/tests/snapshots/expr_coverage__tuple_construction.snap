@@ -7,7 +7,7 @@ core.module @test {
   !__logical_tuple_tuple_2_10_coreZ2ei32_9_coreZ2ei1 = adt.struct<__logical_tuple_tuple_2_10_coreZ2ei32_9_coreZ2ei1("0": core.i32, "1": core.i1)>
   !__logical_tuple_tuple_2_10_coreZ2ei32_9_coreZ2ei1_1 = adt.typeref<{name = "__logical_tuple_tuple_2_10_coreZ2ei32_9_coreZ2ei1"}>
 
-  tribute_control.func @pair['a0]() -> !__logical_tuple_tuple_2_10_coreZ2ei32_9_coreZ2ei1_1 row(| 'a0) inferred {
+  tribute_control.func @"pkg::pair"['a0]() -> !__logical_tuple_tuple_2_10_coreZ2ei32_9_coreZ2ei1_1 row(| 'a0) inferred {
       %0 = arith.const {value = 42} : core.i32
       %1 = arith.const {value = true} : core.i1
       %2 = adt.struct_new %0, %1 {type = !__logical_tuple_tuple_2_10_coreZ2ei32_9_coreZ2ei1} : !__logical_tuple_tuple_2_10_coreZ2ei32_9_coreZ2ei1_1

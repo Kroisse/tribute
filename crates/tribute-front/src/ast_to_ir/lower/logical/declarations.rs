@@ -50,6 +50,8 @@ pub(super) struct Declarations<'db> {
     pub(super) function_local_callables: HashMap<crate::ast::NodeId, local_callables::Plan<'db>>,
     /// The uses of the let-bound lambdas of the function being lowered.
     pub(super) local_uses: Vec<crate::monomorphize::LocalInstantiation<'db>>,
+    /// The symbol of the root package's entry function, once it is lowered.
+    pub(super) root_entry: Option<Symbol>,
 }
 
 /// Fully typed semantic inputs for one source ability-operation call.

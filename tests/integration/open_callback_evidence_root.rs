@@ -36,14 +36,14 @@ fn generic_callback_selects_a_direct_instance_and_executes_wasm(db: &salsa::Data
         })
     };
     assert_eq!(
-        convention(&|name| name == "main"),
+        convention(&|name| name == "pkg::main"),
         Some(Some(
             tribute_ir::calling_convention::CallingConvention::EvidenceDirect
         )),
         "a pure callback leaves the Io root as it is"
     );
     assert_eq!(
-        convention(&|name| name.starts_with("apply_open$") && name.ends_with("$9D")),
+        convention(&|name| name.starts_with("pkg::apply_open$") && name.ends_with("$9D")),
         Some(Some(
             tribute_ir::calling_convention::CallingConvention::Direct
         )),
@@ -128,8 +128,8 @@ fn main() ->{Io} Nil {
         .filter_map(|op| {
             let function = tribute_control::Func::from_op(&ctx, op).ok()?;
             let name = function.sym_name(&ctx);
-            let name = if name == "main" {
-                name
+            let name = if name == "pkg::main" {
+                "main"
             } else {
                 let rest = name.strip_prefix("std::Option::map$")?;
                 rest.rsplit_once("$9").map_or("", |(_, class)| class)
@@ -172,7 +172,7 @@ fn main() -> Nil {
         .expect("production frontend should lower");
     let ir = trunk_ir::printer::print_module(&ctx, module.op());
     let main = ir
-        .split("tribute_control.func @main")
+        .split("tribute_control.func @\"pkg::main\"")
         .nth(1)
         .and_then(|rest| rest.split("\n  }\n").next())
         .expect("root main");
@@ -180,7 +180,7 @@ fn main() -> Nil {
         main.starts_with("['a0]() -> core.nil row(| 'a0) inferred convention(direct)"),
         "{main}"
     );
-    assert!(main.contains("callee = @\"apply$9D\""), "{main}");
+    assert!(main.contains("callee = @\"pkg::apply$9D\""), "{main}");
     assert!(
         main.contains("tribute_control.lambda") && !main.contains("convention(cps)"),
         "{main}"
@@ -218,17 +218,17 @@ fn main() ->{Io} Nil {
         .expect("production frontend should lower");
     let ir = trunk_ir::printer::print_module(&ctx, module.op());
     let main = ir
-        .split("tribute_control.func @main")
+        .split("tribute_control.func @\"pkg::main\"")
         .nth(1)
         .and_then(|rest| rest.split("\n  }\n").next())
         .expect("root main");
     // `both` is used with a pure and with an `Io` callback.
-    assert!(main.contains("callee = @\"app$9D\""), "{main}");
-    assert!(main.contains("callee = @\"app$9E\""), "{main}");
-    assert!(!main.contains("callee = @app}"), "{main}");
+    assert!(main.contains("callee = @\"pkg::app$9D\""), "{main}");
+    assert!(main.contains("callee = @\"pkg::app$9E\""), "{main}");
+    assert!(!main.contains("callee = @\"pkg::app\"}"), "{main}");
     // `step` is used at an empty row, so it and `each` need no Cps control.
     let each = ir
-        .split("tribute_control.func @each")
+        .split("tribute_control.func @\"pkg::each\"")
         .nth(1)
         .and_then(|rest| rest.split("\n  }\n").next())
         .expect("each");
@@ -271,9 +271,9 @@ fn main() -> Nil {
         .expect("class specialization accepts frontend output")
         .expect("production frontend should lower");
     let ir = trunk_ir::printer::print_module(&ctx, module.op());
-    assert!(ir.contains("callee = @\"countdown$9D\""), "{ir}");
+    assert!(ir.contains("callee = @\"pkg::countdown$9D\""), "{ir}");
     let instance = ir
-        .split("tribute_control.func @\"countdown$9D\"")
+        .split("tribute_control.func @\"pkg::countdown$9D\"")
         .nth(1)
         .and_then(|rest| rest.split("\n  }\n").next())
         .expect("the Direct instance");
@@ -344,11 +344,11 @@ fn main() ->{Io} Nil {
             .and_then(|rest| rest.split("\n  }\n").next())
             .unwrap_or_else(|| panic!("{name} in\n{ir}"))
     };
-    let run = function("m::run");
-    assert!(run.contains("callee = @\"m::app$9D\""), "{run}");
-    assert!(run.contains("callee = @\"m::app$9E\""), "{run}");
-    assert!(!run.contains("callee = @\"m::app\"}"), "{run}");
-    let each = function("m::each");
+    let run = function("pkg::m::run");
+    assert!(run.contains("callee = @\"pkg::m::app$9D\""), "{run}");
+    assert!(run.contains("callee = @\"pkg::m::app$9E\""), "{run}");
+    assert!(!run.contains("callee = @\"pkg::m::app\"}"), "{run}");
+    let each = function("pkg::m::each");
     assert!(
         each.starts_with("['a0](%0: core.i32) -> core.i32 row(| 'a0) inferred convention(direct)"),
         "{each}"
@@ -401,14 +401,14 @@ fn main() ->{Io} Nil {
             .and_then(|rest| rest.split("\n  }\n").next())
             .unwrap_or_else(|| panic!("{name} in\n{ir}"))
     };
-    let countdown = function("@\"countdown$9D\"");
+    let countdown = function("@\"pkg::countdown$9D\"");
     assert!(countdown.starts_with("'a0, local 'a1]"), "{countdown}");
     assert!(
         countdown.contains("tribute_control.lambda['a1](")
             && countdown.contains("tribute_control.instantiate %1 {row_args = [{tail = 0}]}"),
         "{countdown}"
     );
-    let main = function("@main");
+    let main = function("@\"pkg::main\"");
     assert!(main.starts_with("local 'a0, local 'a1]"), "{main}");
     assert!(
         main.contains("%0 = tribute_control.lambda['a0](")
@@ -452,7 +452,7 @@ fn main() ->{Io} Nil {
         .expect("production frontend should lower");
     let ir = trunk_ir::printer::print_module(&ctx, module.op());
     let main = ir
-        .split("tribute_control.func @main[")
+        .split("tribute_control.func @\"pkg::main\"[")
         .nth(1)
         .and_then(|rest| rest.split("\n  }\n").next())
         .expect("root main");
@@ -494,7 +494,7 @@ fn main() -> Nil {
         .expect("production frontend should lower");
     let ir = trunk_ir::printer::print_module(&ctx, module.op());
     let run = ir
-        .split("tribute_control.func @run")
+        .split("tribute_control.func @\"pkg::run\"")
         .nth(1)
         .and_then(|rest| rest.split("\n  }\n").next())
         .expect("run");
@@ -532,9 +532,9 @@ fn main() -> Nil {
         .expect("production frontend should lower");
     let ir = trunk_ir::printer::print_module(&ctx, module.op());
     let run = ir
-        .split("tribute_control.func @\"run$9D\"")
+        .split("tribute_control.func @\"pkg::run$9D\"")
         .nth(1)
-        .or_else(|| ir.split("tribute_control.func @run").nth(1))
+        .or_else(|| ir.split("tribute_control.func @\"pkg::run\"").nth(1))
         .and_then(|rest| rest.split("\n  }\n").next())
         .unwrap_or_else(|| panic!("run in\n{ir}"));
     let inner = run
@@ -637,12 +637,13 @@ fn main() -> Nil {
     );
     let ir = trunk_ir::printer::print_module(&ctx, module.op());
     let after = ir
-        .split("tribute_control.func @\"after$9D\"")
+        .split("tribute_control.func @\"pkg::after$9D\"")
         .nth(1)
         .and_then(|rest| rest.split("\n  }\n").next())
         .unwrap_or_else(|| panic!("after$9D in\n{ir}"));
     assert!(
-        after.contains("callee = @\"app$std::String$9D\"") && !after.contains("convention(cps)"),
+        after.contains("callee = @\"pkg::app$std::String$9D\"")
+            && !after.contains("convention(cps)"),
         "{after}"
     );
 }

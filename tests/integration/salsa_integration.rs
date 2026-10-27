@@ -23,7 +23,7 @@ fn source_function(ctx: &IrContext, module: &Module, name: &str) -> tribute_cont
         .filter_map(|&op| {
             tribute_control::Func::from_op(ctx, op)
                 .ok()
-                .filter(|function| function.sym_name(ctx) == name)
+                .filter(|function| function.sym_name(ctx) == format!("pkg::{name}"))
         })
         .collect();
     assert_eq!(matches.len(), 1, "expected one source function {name}");
@@ -258,17 +258,20 @@ fn record_shape_diagnostics_follow_incremental_declaration_edits_slow() {
     let edit_start = ORIGINAL.find("y: Int").expect("declaration field");
     let record_start = ORIGINAL.find(RECORD).expect("record expression");
     let record_span = Span::new(record_start, record_start + RECORD.len());
-    let changed_diagnostics: Vec<_> = ["missing field: z", "unknown field `y` for struct `Point`"]
-        .into_iter()
-        .map(|message| {
-            Diagnostic::new(
-                message,
-                record_span,
-                DiagnosticSeverity::Error,
-                CompilationPhase::TypeChecking,
-            )
-        })
-        .collect();
+    let changed_diagnostics: Vec<_> = [
+        "missing field: z",
+        "unknown field `y` for struct `pkg::Point`",
+    ]
+    .into_iter()
+    .map(|message| {
+        Diagnostic::new(
+            message,
+            record_span,
+            DiagnosticSeverity::Error,
+            CompilationPhase::TypeChecking,
+        )
+    })
+    .collect();
 
     for (revision, text) in [ORIGINAL, changed.as_str(), ORIGINAL]
         .into_iter()

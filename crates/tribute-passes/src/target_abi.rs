@@ -343,19 +343,7 @@ fn validate_root_entry(
         return Ok(None);
     };
     let top_level_ops = ctx.block(module_block).ops.clone();
-    let roots: Vec<_> = top_level_ops
-        .iter()
-        .copied()
-        .filter(|&op| {
-            func::Func::from_op(ctx, op).is_ok_and(|function| function.sym_name(ctx) == "main")
-        })
-        .collect();
-    if roots.len() > 1 {
-        return Err(TargetAbiError::new(
-            "target root bridge: multiple immediate root `main` definitions",
-        ));
-    }
-    let Some(&worker_op) = roots.first() else {
+    let Some(worker_op) = root_entry_function(ctx, module, &top_level_ops)? else {
         return Ok(None);
     };
 
@@ -413,6 +401,36 @@ fn validate_root_entry(
     }))
 }
 
+/// The definition the root module names as its entry function
+/// (`tribute.entry`), if it names one. A name that resolves to no single
+/// root `func.func` is an error: the bridge must not silently skip it.
+fn root_entry_function(
+    ctx: &IrContext,
+    module: Module,
+    top_level_ops: &[OpRef],
+) -> Result<Option<OpRef>, TargetAbiError> {
+    let Some(entry) = tribute_ir::metadata::root_entry(ctx, module.op()) else {
+        return Ok(None);
+    };
+    let Some(name) = entry.as_simple() else {
+        return Err(TargetAbiError::new(
+            "target root bridge: the root entry must name a root definition",
+        ));
+    };
+    let mut definitions = top_level_ops.iter().copied().filter(|&op| {
+        func::Func::from_op(ctx, op).is_ok_and(|function| *name == *function.sym_name(ctx))
+    });
+    match (definitions.next(), definitions.next()) {
+        (Some(worker), None) => Ok(Some(worker)),
+        (None, _) => Err(TargetAbiError::new(
+            "target root bridge: the root entry names no func.func",
+        )),
+        (Some(_), Some(_)) => Err(TargetAbiError::new(
+            "target root bridge: the root entry names several definitions",
+        )),
+    }
+}
+
 /// Compose the root entry bridge after physicalization.
 ///
 /// The source root `main` becomes the root worker whatever its calling
@@ -426,17 +444,19 @@ fn compose_root_entry_bridge(ctx: &mut IrContext, module: Module) -> Result<(), 
         return Ok(());
     };
     let top_level_ops = ctx.block(module_block).ops.clone();
-    let main = SymbolPath::new(["main"]);
-    let root_main = SymbolPath::new([ROOT_MAIN_SYMBOL]);
-    let mut roots = top_level_ops.iter().copied().filter(|&op| {
-        func::Func::from_op(ctx, op).is_ok_and(|function| function.sym_name(ctx) == "main")
-    });
-    let Some(worker_op) = roots.next() else {
+    let Some(worker_op) = root_entry_function(ctx, module, &top_level_ops)? else {
         return Ok(());
     };
+    let entry = tribute_ir::metadata::take_root_entry(ctx, module.op())
+        .expect("a root entry function is named by the module");
+    let main = SymbolPath::new(["main"]);
+    let root_main = SymbolPath::new([ROOT_MAIN_SYMBOL]);
     if top_level_ops.iter().any(|&op| {
-        func::Func::from_op(ctx, op)
-            .is_ok_and(|function| function.sym_name(ctx) == ROOT_MAIN_SYMBOL)
+        op != worker_op
+            && func::Func::from_op(ctx, op).is_ok_and(|function| {
+                let name = function.sym_name(ctx);
+                name == ROOT_MAIN_SYMBOL || name == "main"
+            })
     }) {
         return Err(TargetAbiError::new(
             "target root bridge: reserved root symbol collision",
@@ -476,7 +496,7 @@ fn compose_root_entry_bridge(ctx: &mut IrContext, module: Module) -> Result<(), 
     ctx.op_attrs_mut(worker_op)
         .insert("sym_name", Attribute::String(root_main_name));
     for &op in &top_level_ops {
-        rewrite_symbol_refs(ctx, op, &main, &root_main);
+        rewrite_symbol_refs(ctx, op, &entry, &root_main);
     }
 
     let entry = ctx.create_block(BlockData {
@@ -2226,7 +2246,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
-            r#"core.module @test {
+            r#"core.module @test {tribute.entry = @main} {
   func.func @main(%evidence: core.i32, %frame: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
     func.unreachable
   }
@@ -2438,7 +2458,7 @@ mod tests {
         assert_eq!(DynConventionBearing::of(ctx, call.op_ref()), None);
     }
 
-    const EVIDENCE_DIRECT_MAIN: &str = r#"core.module @test {
+    const EVIDENCE_DIRECT_MAIN: &str = r#"core.module @test {tribute.entry = @main} {
   !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
   func.func @main(%evidence: !Evidence) -> core.nil attributes {tribute.calling_convention = "evidence_direct"} {
     %nil = core.nil_value : core.nil
@@ -2470,7 +2490,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
-            r#"core.module @test {
+            r#"core.module @test {tribute.entry = @main} {
   func.func @main() -> core.nil attributes {tribute.calling_convention = "direct"} {
     %nil = core.nil_value : core.nil
     func.return %nil
@@ -2515,7 +2535,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
-            r#"core.module @test {
+            r#"core.module @test {tribute.entry = @main} {
   func.func @main() -> core.i32 attributes {tribute.calling_convention = "direct"} {
     %zero = arith.const {value = 0} : core.i32
     func.return %zero
@@ -2535,6 +2555,25 @@ mod tests {
         );
         let error = compose_root_entry_bridge(&mut ctx, module).unwrap_err();
         assert!(error.to_string().contains("reserved root symbol collision"));
+    }
+
+    #[test]
+    fn root_bridge_rejects_an_entry_that_names_no_definition() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            &EVIDENCE_DIRECT_MAIN.replace("tribute.entry = @main", "tribute.entry = @missing"),
+        );
+        let error = compose_root_entry_bridge(&mut ctx, module).unwrap_err();
+        assert!(error.to_string().contains("names no func.func"), "{error}");
+    }
+
+    #[test]
+    fn root_bridge_consumes_the_entry_reference() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, EVIDENCE_DIRECT_MAIN);
+        compose_root_entry_bridge(&mut ctx, module).unwrap();
+        assert!(tribute_ir::metadata::root_entry(&ctx, module.op()).is_none());
     }
 
     #[test]
@@ -2560,7 +2599,7 @@ mod tests {
             let mut ctx = IrContext::new();
             let module = parse_test_module(
                 &mut ctx,
-                r#"core.module @test {
+                r#"core.module @test {tribute.entry = @main} {
   func.func @main(%evidence: core.i32, %frame: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
     func.unreachable
   }
@@ -2609,7 +2648,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
-            r#"core.module @test {
+            r#"core.module @test {tribute.entry = @main} {
   func.func @main(%evidence: core.i32, %frame: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
     func.unreachable
   }
@@ -3024,7 +3063,7 @@ mod tests {
             let module = parse_test_module(
                 &mut ctx,
                 &format!(
-                    r#"core.module @test {{
+                    r#"core.module @test {{tribute.entry = @main}} {{
   !fn = func.func_sig<(core.i32) -> core.i32>
   !direct = closure.closure<!fn, {{tribute.calling_convention = "direct", tribute.closure_environment_index = 0}}>
   func.func @callee(%x: core.i32) -> core.i32 attributes {{tribute.calling_convention = "direct"}} {{

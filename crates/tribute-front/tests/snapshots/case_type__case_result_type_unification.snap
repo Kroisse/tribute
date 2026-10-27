@@ -4,7 +4,7 @@ assertion_line: 128
 expression: ir_text
 ---
 core.module @test {
-  tribute_control.func @to_nat['a0](%0: core.i1) -> core.i32 row(| 'a0) inferred {
+  tribute_control.func @"pkg::to_nat"['a0](%0: core.i1) -> core.i32 row(| 'a0) inferred {
       %1 = arith.const {value = true} : core.i1
       %2 = arith.cmpi %0, %1 {predicate = "eq"} : core.i1
       %3 = scf.if %2 : core.i32 {

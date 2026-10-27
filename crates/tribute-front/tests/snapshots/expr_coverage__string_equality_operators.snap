@@ -10,7 +10,7 @@ core.module @test {
 
   tribute_control.func @"std::String::=="['a0](%arg0: tribute_rt.anyref, %arg1: tribute_rt.anyref) -> core.i1 row(| 'a0)
   tribute_control.func @"std::String::!="['a0](%arg0: tribute_rt.anyref, %arg1: tribute_rt.anyref) -> core.i1 row(| 'a0)
-  tribute_control.func @comparisons['a0](%0: tribute_rt.anyref, %1: tribute_rt.anyref) -> !__logical_tuple_tuple_2_9_coreZ2ei1_9_coreZ2ei1_1 row(| 'a0) inferred {
+  tribute_control.func @"pkg::comparisons"['a0](%0: tribute_rt.anyref, %1: tribute_rt.anyref) -> !__logical_tuple_tuple_2_9_coreZ2ei1_9_coreZ2ei1_1 row(| 'a0) inferred {
       %2 = tribute_control.call %0, %1 {callee = @"std::String::==", row_args = [{tail = 0}]} : core.i1
       %3 = tribute_control.call %0, %1 {callee = @"std::String::!=", row_args = [{tail = 0}]} : core.i1
       %4 = adt.struct_new %2, %3 {type = !__logical_tuple_tuple_2_9_coreZ2ei1_9_coreZ2ei1} : !__logical_tuple_tuple_2_9_coreZ2ei1_9_coreZ2ei1_1

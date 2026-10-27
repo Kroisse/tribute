@@ -37,8 +37,8 @@ fn nested_modules_are_bound_by_identity(db: &salsa::DatabaseImpl) {
     assert_eq!(env.package(), &PackageName::executable_root());
 
     let c = env.lookup_qualified(&SymbolPath::new(["a", "b"]), &Symbol::new("c"));
-    assert_eq!(module_path(c), ["a", "b", "c"]);
-    assert_eq!(module_path(env.lookup(&Symbol::new("a"))), ["a"]);
+    assert_eq!(module_path(c), ["pkg", "a", "b", "c"]);
+    assert_eq!(module_path(env.lookup(&Symbol::new("a"))), ["pkg", "a"]);
 
     // A user module named `std` is not package `std`.
     assert_eq!(module_path(env.lookup(&Symbol::new("std"))), ["pkg", "std"]);
@@ -97,7 +97,7 @@ use nowhere
     let env = build_env(db, parsed.module(db), Dependencies::none()).into_env();
 
     let b = env.lookup_qualified(&SymbolPath::new(["facade"]), &Symbol::new("b"));
-    assert_eq!(module_path(b), ["a", "b"]);
+    assert_eq!(module_path(b), ["pkg", "a", "b"]);
     // A `use` of one segment the package root names declares it there.
     assert!(env.declares(Symbol::new("nowhere")));
 }
@@ -127,7 +127,7 @@ pub mod outer {
     let env = build_env(db, parsed.module(db), Dependencies::none()).into_env();
 
     let b = env.lookup_qualified(&SymbolPath::new(["outer"]), &Symbol::new("b"));
-    assert_eq!(module_path(b), ["a", "b"]);
+    assert_eq!(module_path(b), ["pkg", "a", "b"]);
 }
 
 /// The module path the body of `fn probe` refers to, when `source` is

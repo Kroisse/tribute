@@ -11,7 +11,7 @@ core.module @test {
   tribute_control.func @"std::Int::=="(%arg0: core.i32, %arg1: core.i32) -> core.i1
   tribute_control.func @"std::Int::-"(%arg0: core.i32, %arg1: core.i32) -> core.i32
   tribute_control.func @"std::Int::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32
-  tribute_control.func @sum['a0](%0: core.i32, %1: core.i32) -> core.i32 row(| 'a0) inferred {
+  tribute_control.func @"pkg::sum"['a0](%0: core.i32, %1: core.i32) -> core.i32 row(| 'a0) inferred {
       %2 = arith.const {value = 0} : core.i32
       %3 = tribute_control.call %0, %2 {callee = @"std::Int::=="} : core.i1
       %4 = arith.const {value = true} : core.i1
@@ -23,11 +23,11 @@ core.module @test {
           %8 = tribute_control.call %0, %7 {callee = @"std::Int::-"} : core.i32
           %9 = arith.const {value = 1} : core.i32
           %10 = tribute_control.call %1, %9 {callee = @"std::Int::+"} : core.i32
-          tribute_control.tail_call %8, %10 {callee = @sum, row_args = [{tail = 0}]}
+          tribute_control.tail_call %8, %10 {callee = @"pkg::sum", row_args = [{tail = 0}]}
       }
       tribute_control.return %6
   }
-  tribute_control.func @is_even['a0](%0: core.i32) -> core.i1 row(| 'a0) inferred {
+  tribute_control.func @"pkg::is_even"['a0](%0: core.i32) -> core.i1 row(| 'a0) inferred {
       %1 = arith.const {value = 0} : core.i32
       %2 = tribute_control.call %0, %1 {callee = @"std::Int::=="} : core.i1
       %3 = arith.const {value = true} : core.i1
@@ -38,11 +38,11 @@ core.module @test {
       } {
           %7 = arith.const {value = 1} : core.i32
           %8 = tribute_control.call %0, %7 {callee = @"std::Int::-"} : core.i32
-          tribute_control.tail_call %8 {callee = @is_odd, row_args = [{tail = 0}]}
+          tribute_control.tail_call %8 {callee = @"pkg::is_odd", row_args = [{tail = 0}]}
       }
       tribute_control.return %5
   }
-  tribute_control.func @is_odd['a0](%0: core.i32) -> core.i1 row(| 'a0) inferred {
+  tribute_control.func @"pkg::is_odd"['a0](%0: core.i32) -> core.i1 row(| 'a0) inferred {
       %1 = arith.const {value = 0} : core.i32
       %2 = tribute_control.call %0, %1 {callee = @"std::Int::=="} : core.i1
       %3 = arith.const {value = true} : core.i1
@@ -53,14 +53,14 @@ core.module @test {
       } {
           %7 = arith.const {value = 1} : core.i32
           %8 = tribute_control.call %0, %7 {callee = @"std::Int::-"} : core.i32
-          tribute_control.tail_call %8 {callee = @is_even, row_args = [{tail = 0}]}
+          tribute_control.tail_call %8 {callee = @"pkg::is_even", row_args = [{tail = 0}]}
       }
       tribute_control.return %5
   }
-  tribute_control.func @apply['a0](%0: !t0, %1: core.i32) -> core.i32 row(| 'a0) {
+  tribute_control.func @"pkg::apply"['a0](%0: !t0, %1: core.i32) -> core.i32 row(| 'a0) {
       tribute_control.tail_call_indirect %0, %1
   }
-  tribute_control.func @countdown['a0, local 'a1](%0: core.i32) -> core.i32 row(| 'a0) inferred {
+  tribute_control.func @"pkg::countdown"['a0, local 'a1](%0: core.i32) -> core.i32 row(| 'a0) inferred {
       %1 = tribute_control.lambda['a1](%2: core.i32) -> core.i32 row(| 'a1) captures [] {
           %3 = arith.const {value = 0} : core.i32
           %4 = tribute_control.call %2, %3 {callee = @"std::Int::=="} : core.i1
@@ -71,7 +71,7 @@ core.module @test {
           } {
               %8 = arith.const {value = 1} : core.i32
               %9 = tribute_control.call %2, %8 {callee = @"std::Int::-"} : core.i32
-              tribute_control.tail_call %9 {callee = @countdown, row_args = [{tail = 1}]}
+              tribute_control.tail_call %9 {callee = @"pkg::countdown", row_args = [{tail = 1}]}
           }
           tribute_control.return %7
       }

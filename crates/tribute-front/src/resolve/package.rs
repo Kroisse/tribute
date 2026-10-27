@@ -11,7 +11,7 @@ use super::STD_PACKAGE;
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct PackageName {
     /// The library package's name. `None` for the root package of an
-    /// executable build, whose identity paths omit it.
+    /// executable build, whose identity paths start with `pkg` instead.
     name: Option<Symbol>,
 }
 
@@ -46,18 +46,12 @@ impl PackageName {
     /// from its root.
     ///
     /// A library package's paths start with its name, wherever it is
-    /// compiled. The root package of an executable build omits its own,
-    /// unless the path would then start with a library package's name: such
-    /// a path starts with `pkg`, which names no module.
+    /// compiled. The root package of an executable build has no name a
+    /// dependent could use, and its paths start with `pkg`, which names no
+    /// package or module.
     pub fn identity_path(&self, module: &[Symbol]) -> SymbolPath {
-        let package = match &self.name {
-            Some(name) => Some(name.clone()),
-            None => module
-                .first()
-                .is_some_and(|first| first == STD_PACKAGE)
-                .then(|| Symbol::new("pkg")),
-        };
-        SymbolPath::new(package.into_iter().chain(module.iter().cloned()))
+        let package = self.name.clone().unwrap_or_else(|| Symbol::new("pkg"));
+        SymbolPath::new(std::iter::once(package).chain(module.iter().cloned()))
     }
 
     /// The identity path of the item at `module`, a path of this package's
@@ -70,18 +64,12 @@ impl PackageName {
     /// The module path, from this package's root, of the identity path
     /// `identity`, if it is one of this package's paths.
     pub fn module_path<'a>(&self, identity: &'a [Symbol]) -> Option<&'a [Symbol]> {
-        match (&self.name, identity.split_first()) {
-            (Some(name), Some((first, rest))) if first == name => Some(rest),
-            (Some(_), _) => None,
-            (None, Some((first, rest)))
-                if first == "pkg" && rest.first().is_some_and(|f| f == STD_PACKAGE) =>
-            {
-                Some(rest)
-            }
-            // A library package's paths start with its name.
-            (None, Some((first, _))) if first == STD_PACKAGE => None,
-            (None, _) => Some(identity),
-        }
+        let (first, rest) = identity.split_first()?;
+        let matches = match &self.name {
+            Some(name) => first == name,
+            None => first == "pkg",
+        };
+        matches.then_some(rest)
     }
 
     /// The location of `path`, a path from this package's root.
@@ -136,7 +124,8 @@ impl Location {
 
 /// The path that identifies a declaration or module across packages: a
 /// library package's paths start with its name, an executable root
-/// package's omit theirs (`std::Option`, `geometry::area`, `pkg::std::f`).
+/// package's start with `pkg` (`std::Option`,
+/// `pkg::geometry::area`, `pkg::std::f`).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, salsa::SalsaValue)]
 pub struct IdentityPath(SymbolPath);
 
@@ -195,11 +184,12 @@ mod tests {
     }
 
     #[test]
-    fn an_executable_root_omits_its_name() {
+    fn an_executable_root_starts_with_pkg() {
         let root = PackageName::executable_root();
+        assert_eq!(root.identity_path(&[]), path("pkg")[..]);
         assert_eq!(
             root.identity_path(&path("geometry::area")),
-            path("geometry::area")[..]
+            path("pkg::geometry::area")[..]
         );
         assert_eq!(root.identity_path(&path("std::f")), path("pkg::std::f")[..]);
         assert_eq!(
@@ -207,9 +197,10 @@ mod tests {
             Some(&path("std::f")[..])
         );
         assert_eq!(
-            root.module_path(&path("geometry::area")),
+            root.module_path(&path("pkg::geometry::area")),
             Some(&path("geometry::area")[..])
         );
+        assert_eq!(root.module_path(&path("geometry::area")), None);
         assert_eq!(root.module_path(&path("std::io::print")), None);
     }
 }
