@@ -235,7 +235,7 @@ mod tests {
         let typed = parse_and_lower_ast(db, source)?;
         let prelude = crate::prelude::prelude_module(db)?;
         let input = SpecializationInput::new(db, typed, Some(prelude), diagnostic_names(db))
-            .merge_bodies(db, prelude);
+            .merge_bodies(db, [prelude]);
         let intrinsics = ast_to_ir::registered_compiler_intrinsics(input.module()).ok()?;
         monomorphize_functions(db, input.with_compiler_intrinsics(intrinsics)).ok()
     }
