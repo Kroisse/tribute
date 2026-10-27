@@ -776,10 +776,10 @@ Source-logical IR은 convention에 대해 두 상태를 가진다. Frontend가 �
 convention을 쓴다.
 
 - `tribute_control.func`는 자기 convention을 가진다. 인스턴스마다 하나다.
-- `tribute_control.lambda`는 [entry](#callable-entry)의 본문과 각 entry가 쓰는
-  본문을 가진다.
+- `tribute_control.lambda`는 class마다의 본문과, [칸](#callable-entry)마다 그 칸을
+  채우는 본문을 가진다.
 - `call_indirect`와 `tail_call_indirect`는 callee를 부르는 convention을 가진다.
-- `func_ref`는 entry마다 그 entry로 들어갈 대상 인스턴스를 가진다.
+- `func_ref`는 칸마다 그 칸으로 들어갈 대상 인스턴스를 가진다.
 
 상태는 module 전체의 성질이다. 위 자리가 모두 convention을 갖지 않으면 convention이
 없는 상태, 모두 가지면 convention을 가진 상태이며, 일부만 가지면 invalid다.
@@ -798,59 +798,72 @@ Type의 일치를 요구하는 규칙은 두 상태에서 같고, convention을 
 
 #### Callable entry
 
-**Entry.** Callable 값은 convention마다 entry 하나를 가진다. Entry는 그 convention으로
-들어왔을 때 실행할 물리 callable이며, 물리 ABI(hidden parameter)는 그 convention이
-정한다. 간접 이전은 자기 convention의 entry로 들어가며, 실행 중에 entry를 고르지
-않는다. 그래서 값마다 entry는 `Direct`, `EvidenceDirect`, `Cps` 셋을 넘지 않는다.
+Callable 값과 그 type은 convention을 갖지 않는다. 한 값이 여러 class의 자리에 놓이고
+자리마다 다른 convention으로 불릴 수 있기 때문이다. 호출 지점은 둘러싼 인스턴스의
+class로 정해지는 자기 convention 하나만 정적으로 알며, callee 값이 어느 class에서
+만들어졌는지 묻지 않는다. 그 차이는 값이 가진 entry가 흡수한다.
 
-**Entry 본문.** 람다는 본문을 class마다 하나씩, 그 람다의 사용이 고르는 class에
-대해서만 가진다. 사용의 class는 그 사용의 `instantiate`가 람다 자신의 row에 넘기는
-row의 class다. Row를 양화하지 않는 람다는 사용이 하나의 class만 고르므로 본문이
-하나다. Class `c`의 본문은 람다를 다음처럼 다시 읽은 것이다.
+**칸과 entry.** Callable 값은 convention마다 칸 하나를 가진다. 칸을 채우는 물리
+callable을 entry라 하며, entry는 본문, adapter, trap entry 가운데 하나다. Entry의
+물리 ABI(hidden parameter)는 칸의 convention이 정한다. 간접 이전은 자기 convention의
+칸으로 들어가며, 실행 중에 칸을 고르지 않는다. 그래서 값마다 칸은 `Direct`,
+`EvidenceDirect`, `Cps` 셋을 넘지 않는다.
+
+**본문.** 람다는 그 람다의 사용이 고르는 class마다 본문 하나를 가지며, 다른 class의
+본문은 없다. 사용의 class는 그 사용의 `instantiate`가 람다 자신의 row에 넘기는 row의
+class다. Row를 양화하지 않는 람다는 사용이 하나의 class만 고르므로 본문이 하나다.
+Class `c`의 본문은 람다를 다음처럼 다시 읽은 것이다.
 
 - 람다가 양화한 `local` binder는 class `c`를 고르는 사용들이 그 binder에 넘기는
   row의 class로 읽는다. 람다 자신의 row에 나타나는지와 관계없다.
 - 둘러싼 인스턴스의 binder는 그 인스턴스가 고정한 class로 읽는다.
 
-같은 class `c`를 고르는 사용들이 양화한 binder에 서로 다른 class 조합을 넘기면, 본문
-하나로는 그 사용들을 받을 수 없다. 본문이 그 binder의 row로 만드는 closure는 본문이
-읽은 class를 생성 class로 가지므로, 더 강한 class로 합쳐 읽으면 그 closure를 더 약한
-class로 보는 쪽이 trap entry에 닿는다. Binder가 람다 자신의 row에 있어도 그 row의
-다른 ability 때문에 `c`가 binder의 class보다 강할 수 있으므로 같다. 이때 class
-특수화는 넘기는 class 조합마다 람다를 값 하나씩으로 나누고, 각 사용을 자기 조합의
-값에 연결한다. 나눈 값은 각자 capture 목록과 entry table을 가진다. 한 값 안에서는
-같은 class를 고르는 사용들이 같은 조합을 넘기므로 본문은 class마다 하나다.
+**값 나누기.** 같은 class `c`를 고르는 사용들이 양화한 binder에 서로 다른 class
+조합을 넘기면, class 특수화는 넘기는 조합마다 람다를 값 하나씩으로 나누고 각 사용을
+자기 조합의 값에 연결한다. 나눈 값은 각자 capture 목록과 entry table을 가진다. 그래서
+한 값 안에서는 같은 class를 고르는 사용들이 같은 조합을 넘기며, 본문은 class마다
+하나다.
 
-람다의 capture 목록은 하나이며, 모든 본문이 실제 사용하는 외부 SSA 값과 일치한다.
-Capture는 closure 하나에 한 번만 담긴다.
+조합을 더 강한 class로 합쳐 읽을 수 없는 이유는 본문이 그 binder의 row로 만드는
+closure에 있다. 그 closure는 본문이 읽은 class를 생성 class로 가지므로, 합쳐 읽은
+class보다 약한 class로 그 closure를 부르는 쪽이 trap entry에 닿는다. 예를 들어 두
+사용이 모두 `Cps`를 고르면서 binder 하나에 각각 `Direct`와 `Cps` class의 row를
+넘긴다고 하자. 그 binder를 `Cps`로 읽은 본문이 돌려준 closure를 첫 사용 쪽은
+`Direct`로 부르므로 trap entry에 닿는다. Binder가 람다 자신의 row에 있어도 그 row의
+다른 ability 때문에 `c`가 binder의 class보다 강할 수 있으므로 같다.
 
-**채우기.** Class `k`의 entry는 다음과 같다.
+**Capture.** 람다의 capture 목록은 하나이며, 모든 본문이 실제 사용하는 외부 SSA
+값과 일치한다. Capture는 closure 하나에 한 번만 담긴다.
 
-- 람다에 class `k`의 본문이 있으면 그 본문이다.
-- 없으면 `k`보다 약한 본문 가운데 가장 강한 것을 부르는 adapter다.
-  `EvidenceDirect` adapter는 evidence를 받고 쓰지 않으며, `Cps` adapter는 본문의
-  결과를 `Done<R>`로 넘긴다. 이 adapter는 본문을 한 번 부르고 끝나며 CPS 제어를
-  만들지 않는다. Adapter는 본문을 이름으로 부르지 않는다. Environment 입력으로 받은
-  closure 자신의 entry table에서 본문 class의 칸을 `closure.entry`로 읽고, 같은
-  closure를 넘겨 부른다. 그래서 adapter는 람다나 capture에 매이지 않고 칸의 entry
-  signature와 본문의 class로만 정해지며, target은 둘이 같은 칸들이 adapter 하나를
-  공유하게 할 수 있다.
-- `k`보다 약한 본문도 없으면 trap entry다. Trap entry는 그 칸의 entry signature를
-  가지고 들어오자마자 trap하는 함수이며, target은 같은 signature의 칸들이 하나를
-  공유하게 한다.
+**채우기.** Class `c`의 칸을 채우는 entry는 다음과 같다.
 
-`func_ref`는 `row_args`가 고르는 대상의 class 인스턴스 하나를 본문으로 삼아 같은
-규칙으로 채운다. 대상이 class 없는 tail 때문에 그 값의 row가 요구하는 것보다 강한
-`Cps` 인스턴스이면, 더 약한 entry는 [값 delimiter](cps-effects.md#값-delimiter)로
-worker를 부르는 [`func_ref` adapter](cps-effects.md#cps-변환의-호출-대상-형상)다.
+- 람다에 class `c`의 본문이 있으면 그 본문이다.
+- 없고 `c`보다 약한 본문이 있으면, 그 가운데 가장 강한 본문을 부르는 adapter다.
+- 약한 본문도 없으면 trap entry다.
 
-Trap entry는 실행되지 않는다. 값은 사용을 거쳐서만 다른 자리로 가고, 어떤 값이
-놓이는 자리의 class는 그 값을 만든 사용의 class보다 약하지 않기 때문이다. Class는
-row의 tail에서 계산하고, 값이 tail의 정체를 잃는 자리(별칭, class 없는 tail)는
-`Cps`로만 읽는다. Class 특수화는 확인할 수 있는 것을 확인한다. 모든 간접 이전의
-convention은 그 이전을 담은 인스턴스와 entry의 class 표로 callee type을 읽은 값과
-같아야 하며, 다르면 컴파일 오류다. Trap entry는 값의 흐름을 따라가야만 드러나는
-위반을 실행 중에 멈추게 하는 안전망이다.
+**Adapter.** `EvidenceDirect` 칸의 adapter는 evidence를 받고 쓰지 않으며, `Cps` 칸의
+adapter는 본문의 결과를 `Done<R>`로 넘긴다. Adapter는 본문을 한 번 부르고 끝나며
+CPS 제어를 만들지 않는다. Adapter는 본문을 이름으로 부르지 않는다. Environment
+입력으로 받은 closure 자신의 entry table에서 본문 class의 칸을 `closure.entry`로 읽고,
+같은 closure를 넘겨 부른다. 그래서 adapter는 람다나 capture에 매이지 않고 칸의 entry
+signature와 본문의 class로만 정해지며, target은 둘이 같은 칸들이 adapter 하나를
+공유하게 할 수 있다.
+
+**Trap entry.** Trap entry는 그 칸의 entry signature를 가지고 들어오자마자 trap하는
+함수이며, target은 같은 signature의 칸들이 하나를 공유하게 한다. Trap entry는
+실행되지 않는다. 값은 사용을 거쳐서만 다른 자리로 가고, 어떤 값이 놓이는 자리의
+class는 그 값을 만든 사용의 class보다 약하지 않기 때문이다. Class는 row의 tail에서
+계산하고, 값이 tail의 정체를 잃는 자리(별칭, class 없는 tail)는 `Cps`로만 읽는다.
+Class 특수화는 확인할 수 있는 것을 확인한다. 모든 간접 이전의 convention은 그 이전을
+담은 인스턴스와 entry의 class 표로 callee type을 읽은 값과 같아야 하며, 다르면 컴파일
+오류다. Trap entry는 값의 흐름을 따라가야만 드러나는 위반을 실행 중에 멈추게 하는
+안전망이다.
+
+**함수 참조.** `func_ref`는 `row_args`가 고르는 대상의 class 인스턴스 하나를 본문으로
+삼아 같은 규칙으로 칸을 채운다. 대상이 class 없는 tail 때문에 그 값의 row가 요구하는
+것보다 강한 `Cps` 인스턴스이면, 더 약한 칸의 entry는
+[값 delimiter](cps-effects.md#값-delimiter)로 worker를 부르는
+[`func_ref` adapter](cps-effects.md#cps-변환의-호출-대상-형상)다.
 
 **Entry table.** Closure 값은 entry table 참조 하나와 capture로 이루어진다
 ([closure 저장 layout](#closure-저장-layout)). Entry table은 closure를 만드는 code

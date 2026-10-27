@@ -120,8 +120,8 @@ tail이 `Cps`를 요구한다.
 [값 delimiter](#값-delimiter) 안에서 실행한다. 호출자의 convention은
 호출 대상의 본문 때문에 달라지지 않는다.
 
-`let`으로 묶인 람다도 같은 규칙을 따른다. Class 특수화 pass는 한 람다에 쓰이는
-class 조합마다 [entry](ir.md#callable-entry)를 하나씩 만든다. 람다 값은 하나다.
+`let`으로 묶인 람다도 같은 규칙을 따른다. Class 특수화 pass는 한 람다에 그 사용이
+고르는 class마다 [entry](ir.md#callable-entry) 본문을 하나씩 만든다.
 
 여기서 `Cps`는 source result를 직접 반환하지 않고 ContinuationFrame의 `Done<R>`으로
 전달한다는 논리적 convention이다. Lowering은 `core.never`를 empty-result proper tail
@@ -179,11 +179,12 @@ class 변수를 갖지 않는다.
 **`let`에 묶인 람다.** 지역 스킴이 양화한 row 변수의 class는 사용처마다 row
 인자에서 계산한다. IR에서 그 row 인자는 사용처의
 [`instantiate`](../crates/tribute-ir/src/dialect/tribute_control.rs)가
-가진다. 람다는 하나의 값이며 쓰이는 class 조합마다 [entry](ir.md#callable-entry)
-본문을 하나씩 가지고, 각 호출은 자기 class의 entry로 들어간다. Entry 본문마다 람다
-자신의 convention과 본문의 참조를 그 class로 읽으므로, 본문이 참조하는 정의도
-entry마다 따로 인스턴스를 고른다. 다른 지역 람다의 본문 안에 있는 사용처는 그
-람다의 entry가 정해진 뒤에 계산한다.
+가진다. 람다는 사용이 고르는 class마다 [entry](ir.md#callable-entry) 본문을 하나씩
+가지고, 각 호출은 자기 class의 칸으로 들어간다. 본문마다 람다 자신의 convention과
+본문의 참조를 그 class로 읽으므로, 본문이 참조하는 정의도 본문마다 따로 인스턴스를
+고른다. 같은 class를 고르면서 양화한 row에 다른 class 조합을 넘기는 사용들은 람다를
+값 여럿으로 나눈다. 다른 지역 람다의 본문 안에 있는 사용처는 그 람다의 entry가
+정해진 뒤에 계산한다.
 
 **Class 인자.** 참조 지점의 class 인자는 참조가 넘기는 row 인자(`row_args`)에서
 계산한다. Callable 타입에서 역추론하지 않는다.
@@ -244,22 +245,23 @@ row와 [row binder](ir.md#row-binder), 참조의 `row_args`, 지역 람다의
   apply_twice + [Direct]           → apply_twice$9D
   ```
 
-- 인스턴스 안의 람다마다 [entry](ir.md#callable-entry)를 정한다. 람다의 사용이
-  고르는 class마다 본문 하나를 두고, 나머지 칸은 더 약한 본문을 부르는 adapter나
-  trap entry로 채운다. 본문은 그 class로 다시 읽은 람다 본문의 복사이며, 그 안에서 row를 양화하는 람다는 정의의
-  binder 목록 끝에 새 `local` binder를 받는다. 아래처럼 값을 나누지 않는 한 람다
-  op, 결과 값, capture 목록, `instantiate`는 하나로 남으므로 사용처를 다시 연결하지
-  않는다. Capture 목록은 모든
-  본문의 외부 참조와 같게 다시 계산한다. 같은 class를 고르는 사용들이 양화한
-  binder에 서로 다른 class 조합을 넘기면
-  ([entry 본문](ir.md#callable-entry)), 넘기는 조합마다 람다를 복제해 값을 나누고
-  각 사용을 자기 조합의 복사본으로 연결한다. 본문 순서로 처음 나오는 사용의 조합이
-  원래 람다를 갖고, 다른 조합의 복사본은 원래 람다 바로 뒤에 놓인다. 다시 연결한
-  `instantiate`가 다른 람다의 본문 안에 있으면 그 람다의 capture도 본문의 외부
-  참조와 같게 고치며, 복사본은 capture 순서에서 원래 람다의 자리를 잇는다. 본문 안의
-  사용이 바깥 람다에 새 class를 고를 수 있으므로, 새 본문과 새 복사본이 없을 때까지
-  지역 class를 다시 정한다. 람다마다 본문은 셋을 넘지 않고 조합은 유한하므로 이
-  반복은 끝난다.
+- 인스턴스 안의 람다마다 [entry](ir.md#callable-entry)를 정한다.
+  1. 람다의 사용이 고르는 class마다 본문 하나를 둔다. 본문은 그 class로 다시 읽은
+     람다 본문의 복사이며, 그 안에서 row를 양화하는 람다는 정의의 binder 목록 끝에
+     새 `local` binder를 받는다.
+  2. 본문이 없는 칸은 더 약한 본문을 부르는 adapter나 trap entry로 채운다.
+  3. 값을 나누지 않는 한 람다 op, 결과 값, capture 목록, `instantiate`는 하나로
+     남으므로 사용처를 다시 연결하지 않는다. Capture 목록은 모든 본문의 외부 참조와
+     같게 다시 계산한다.
+  4. 같은 class를 고르는 사용들이 양화한 binder에 서로 다른 class 조합을 넘기면
+     ([값 나누기](ir.md#callable-entry)), 넘기는 조합마다 람다를 복제해 값을 나누고
+     각 사용을 자기 조합의 복사본으로 연결한다. 본문 순서로 처음 나오는 사용의
+     조합이 원래 람다를 갖고, 다른 조합의 복사본은 원래 람다 바로 뒤에 놓인다. 다시
+     연결한 `instantiate`가 다른 람다의 본문 안에 있으면 그 람다의 capture도 본문의
+     외부 참조와 같게 고치며, 복사본은 capture 순서에서 원래 람다의 자리를 잇는다.
+  5. 본문 안의 사용이 바깥 람다에 새 class를 고를 수 있으므로, 새 본문과 새 복사본이
+     없을 때까지 지역 class를 다시 정한다. 람다마다 본문은 셋을 넘지 않고 조합은
+     유한하므로 이 반복은 끝난다.
 - `func_ref`마다 entry의 대상 인스턴스를 `row_args`의 class 인자로 정하고, 그
   인스턴스를 인스턴스 수집에 더한다.
 - 정의, entry, 간접 이전에 convention을 쓴다. 값과 block 인자의 타입, 참조의 결과,
@@ -334,9 +336,9 @@ ability는 row에 남으며 그 ability의 convention lower bound를 적용한�
 읽는다. `let`에 묶인 람다가 양화한 tail은 그 binding의 class로 읽는다. Class가 없는
 tail만 `Cps`를 요구한다.
 
-한 람다 식은 값 하나이고, 쓰이는 convention마다 [entry](ir.md#callable-entry)를
-가진다. 이는 이미 생성된 Cps 값을 Direct로 cast하는 것이 아니다. Named callable은
-정확한 target identity를 가진 `func_ref`의 entry로 각 convention의 자리에 들어간다.
+한 람다 식은 쓰이는 convention마다 [entry](ir.md#callable-entry)를 가진다. 이는
+이미 생성된 Cps 값을 Direct로 cast하는 것이 아니다. Named callable은 정확한
+target identity를 가진 `func_ref`의 entry로 각 convention의 자리에 들어간다.
 Entry가 대상 인스턴스보다 강한 convention이면 그 entry는 adapter다. 정의가 더 약한
 convention의 entry에 들어가는 경우는 class 없는 tail 때문에 `Cps`인 정의를 닫힌 row로
 쓸 때뿐이다. 그 adapter는 [값 delimiter](#값-delimiter)로 worker를 호출한다.
