@@ -134,18 +134,24 @@ CPS 전략이 row 변수의 class마다 만드는 인스턴스는, class가 모�
 
 ### 알고리즘
 
-1. **수집 (Collection)**
+1. **검증 (Validation)**
+   - 다형적 재귀와 타입 검사가 고른 인스턴스를 검사
+
+2. **수집 (Collection)**
    - 타입 추론 완료 후 모듈 순회
    - 모든 제네릭 인스턴스화 수집
    - 재귀 타입은 placeholder로 사이클 처리
 
-2. **생성 (Generation)**
+3. **생성 (Generation)**
    - 각 인스턴스화에 대해 특수화된 타입/함수 정의 생성
    - 타입 파라미터를 구체 타입으로 치환
 
-3. **재작성 (Rewriting)**
+4. **재작성 (Rewriting)**
    - 호출 사이트를 특수화된 버전으로 변환
    - 타입 참조를 맹글된 이름으로 교체
+
+5. **결과 검증 (Result check)**
+   - 출력의 불변식을 확인 ([특수화 결과](#특수화-결과))
 
 ### 예시
 
@@ -285,9 +291,12 @@ ast_to_ir: IR lowering
 
 타입 인자를 갖는 함수를 이 과정으로 특수화한다. 타입 인자가 없는 함수는 정의 하나를
 그대로 쓴다. [Class 변수](#row-변수의-convention-class)에 따른 특수화는 이 과정이 아니라
-source-logical IR의 pass가 맡는다. 도달하지 않는 generic
-template은 허용하되, 도달하는 함수 인스턴스나 ability 인자가 미해결이면 타입 erasure
-전에 거부한다. 다형적 재귀는 정의의 성질이므로 도달하지 않는 template에서도 거부한다.
+source-logical IR의 pass가 맡는다.
+
+인스턴스 검증은 타입 매개변수가 없는 모든 함수에서 출발한다. 이 함수들은 도달
+여부와 상관없이 그대로 lowering되기 때문이다. 이 함수들과 그 함수들이 구체 타입
+인자로 도달하는 인스턴스에서 함수 인스턴스나 ability 인자가 미해결이면 특수화 전에
+거부한다. 다형적 재귀는 정의의 성질이므로 도달하지 않는 template에서도 거부한다.
 
 ### 타입 순회와 binder별 치환
 
@@ -368,6 +377,47 @@ identity와 runtime variant tag는 유지하며, 다른 모듈이나 다른 타�
 진단한다. 한도 초과나 잘못된 constructor 스킴으로 준비가 실패하면 부분 결과를
 IR 생성에 전달하지 않는다. 다형적 재귀는 이 한도에 앞서 [거부한다](#polymorphic-recursion).
 
+### 특수화 결과
+
+특수화는 다섯 단계로 진행한다.
+
+1. 검증: 다형적 재귀와 인스턴스를 검사한다.
+2. 수집: 함수와 nominal 타입의 인스턴스를 고정점까지 수집한다.
+3. 생성: 인스턴스마다 구체 정의를 만든다.
+4. 재작성: 참조와 타입을 구체 정의로 바꾸고, 메타데이터에도 같은 변환을 적용한다.
+5. 결과 검증: 출력이 아래 불변식을 지키는지 확인한다.
+
+타입 매개변수가 있는 함수와 extern 함수는 template이다. Template은 타입 검사와
+다형적 재귀 검사를 통과해야 하지만 특수화 출력에서 제외한다. 그 template의 노드에
+연결된 표현식·참조별 메타데이터와 스킴도 출력에서 제외한다. Generic intrinsic의
+identity는 남긴다. 의존 패키지의 특수화를 이어받는 특수화가 그 intrinsic을 자기
+타입으로 인스턴스화하기 때문이다. Lowering은 구체 함수 정의만 받으며,
+함수의 타입 변수를 표현 하나로 소거하지 않는다. 정의 단위 source 규칙의 진단은
+특수화 전에 끝나므로, template을 제외해도 진단은 인스턴스화 여부와 상관없이 같다.
+제외는 nominal 수집보다 먼저 하므로, template 안에서만 쓰인 nominal 인스턴스는
+생성하지 않는다.
+
+타입 매개변수가 있는 struct와 enum의 원본 선언은 출력에 남는다. Row는 특수화하지
+않으므로, 타입 인자에 열린 ability row가 있는 nominal 인스턴스(예:
+`Boxed(fn() ->{e} Bool)`)는 구체 선언을 얻지 못하고 원본 선언의 표현을 쓴다. 같은
+이유로 원본 struct의 field 함수도 lowering되며, 이것이 타입 변수를 표현 하나로
+소거하는 유일한 함수다.
+
+출력은 다음 불변식을 지킨다.
+
+- 스킴은 자기 binder 밖의 `BoundVar`를 갖지 않는다. 자기 binder를 가진 스킴은
+  struct·enum 원본 선언과 그 field 함수, 본문을 병합하지 않은 의존 패키지 함수의
+  것이다.
+- 함수 선언과 표현식·참조별 메타데이터에는 스킴의 `BoundVar`가 없다. 함수 인스턴스
+  기록의 선언 스킴은 callee의 binder로 쓰였으므로 이 검사 대상이 아니다.
+- AST의 모든 함수 참조는 출력의 함수, extern 함수, struct field 함수, 또는 출력
+  스킴 표에 있는 의존 패키지 함수를 가리킨다.
+- 표현식·참조별 메타데이터와 enum variant 스킴의 key `NodeId`는 출력 AST의 노드를
+  가리킨다.
+
+Body가 소유한 지역 existential `UniVar`와 `LocalBoundVar`는 이 검사 대상이 아니다.
+불변식 위반은 컴파일러 내부 불일치이며 source 진단이 아니다.
+
 ### 이름과 identity
 
 맹글링은 생성된 선언의 이름을 부여한다. 이름으로 선언 identity나 인스턴스 인자를
@@ -420,8 +470,9 @@ residual rows continue to use evidence passing. The recorded row arguments
 become the `row_args` of references in source-logical IR, from which the class
 specialization pass selects each instance's
 [convention classes](#row-변수의-convention-class).
-Unused generic templates are permitted, but incomplete reached instances fail
-before logical lowering.
+Generic function templates are excluded from the specialization output, and
+incomplete instances reached from a monomorphic function fail before logical
+lowering.
 
 Function quantifiers cover the callable interface and retained semantic row
 relations. Inference variables occurring only in the checked body remain

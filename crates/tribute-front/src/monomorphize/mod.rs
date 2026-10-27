@@ -8,7 +8,10 @@ pub mod mangle;
 mod nominal;
 mod nominal_index;
 mod recursion;
+mod result_check;
+pub use result_check::SpecializationInvariant;
 mod rewrite;
+mod templates;
 mod validate;
 pub use validate::{InstanceError, InstanceErrorKind};
 pub mod specialize;
@@ -289,6 +292,7 @@ pub fn monomorphize_functions<'db>(
         metadata,
         mut function_instances,
         mut nominal_instances,
+        removed_templates,
     } = monomorphize(
         db,
         module,
@@ -309,7 +313,7 @@ pub fn monomorphize_functions<'db>(
         well_known_types,
     };
     let mut expressions = metadata.expressions;
-    let mut source_entries = source_entries;
+    let mut source_entries = source_entries - removed_templates;
     if let Some(Continued { specialized, .. }) = continued {
         // The dependency's sources, then the module's, then the dependency's
         // instances and the module's.
@@ -330,6 +334,16 @@ pub fn monomorphize_functions<'db>(
         nominal_instances.sort_by(|left, right| left.path.cmp(&right.path));
     }
     function_instances.sort();
+    let errors = result_check::check(
+        db,
+        &module,
+        &declarations.function_types,
+        &declarations.constructor_types,
+        &expressions,
+    );
+    if !errors.is_empty() {
+        return Err(errors);
+    }
     Ok(SpecializationOutput::new(
         db,
         module,
@@ -352,6 +366,8 @@ struct Monomorphized<'db> {
     function_instances: Vec<SymbolPath>,
     /// The nominal instances this specialization generated.
     nominal_instances: Vec<NominalInstance<'db>>,
+    /// How many source declarations were templates, and left the module.
+    removed_templates: usize,
 }
 
 /// Specialize `module`. `schemes` and `constructor_schemes` look every
@@ -494,6 +510,12 @@ fn monomorphize<'db>(
     }
     let mut fn_types_vec = all_function_types;
     let function_instances = generated.into_iter().collect();
+    let removed_templates = templates::remove_function_templates(
+        db,
+        &mut module,
+        &mut fn_types_vec,
+        &mut metadata.expressions,
+    );
 
     // === Type monomorphization (struct/enum) ===
 
@@ -633,6 +655,7 @@ fn monomorphize<'db>(
         metadata,
         function_instances,
         nominal_instances,
+        removed_templates,
     })
 }
 

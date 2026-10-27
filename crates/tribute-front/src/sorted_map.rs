@@ -123,6 +123,11 @@ impl<K, V> SortedMap<K, V> {
         self.entries.iter_mut().map(|(key, value)| (&*key, value))
     }
 
+    /// Keep only the entries `keep` accepts, in their order.
+    pub fn retain(&mut self, mut keep: impl FnMut(&K, &V) -> bool) {
+        self.entries.retain(|(key, value)| keep(key, value));
+    }
+
     /// The entries in ascending key order.
     pub fn into_vec(self) -> Vec<(K, V)> {
         self.entries

@@ -30,6 +30,9 @@ pub enum InstanceErrorKind {
     /// A backstop for runaway expansion that polymorphic recursion
     /// rejection does not catch.
     ExpansionLimit,
+    /// The specialization output breaks its contract: a compiler
+    /// inconsistency, not a source error.
+    SpecializationInvariant(super::SpecializationInvariant),
     /// A reference to a function of the caller's own recursive group at
     /// type arguments that strictly contain the caller's type parameters,
     /// spelled with the caller's parameter names. `callee` is `None` when
@@ -71,6 +74,11 @@ impl InstanceError {
                 "`{caller}` calls `{callee}` of its own recursive group at `{instantiation}`; \
                  polymorphic recursion is not supported"
             ),
+            InstanceErrorKind::SpecializationInvariant(violation) => format!(
+                "internal compiler error: the specialization output breaks its contract at {}: \
+                 {violation:?}",
+                self.node
+            ),
             kind => format!("invalid specialization instance at {}: {kind:?}", self.node),
         };
         Diagnostic::new(
@@ -91,9 +99,9 @@ fn substitute<'db>(
         .ok()
 }
 
-/// Validate the instances reached from `module`'s entry points. A reference
-/// into `dependency` is followed only to an instance its result does not
-/// have, since its specialization validated those.
+/// Validate the instances reached from every monomorphic function `module`
+/// declares. A reference into `dependency` is followed only to an instance
+/// its result does not have, since its specialization validated those.
 pub(super) fn validate<'db>(
     db: &'db dyn salsa::Database,
     module: &DeclTable<TypedRef<'db>>,
@@ -129,14 +137,14 @@ pub(super) fn validate<'db>(
             _ => {}
         }
     }
+    // Every monomorphic function is lowered whether or not it is reached, so
+    // each one is a root.
     let mut queue: Vec<_> = functions
         .iter()
-        .filter(|(id, (func, own))| {
-            *own && (id.path(db) == ["main"]
-                || (func.visibility == crate::ast::Visibility::Public
-                    && schemes
-                        .get(id.path(db))
-                        .is_some_and(|scheme| scheme.type_params(db).is_empty())))
+        .filter(|(id, (_, own))| {
+            *own && schemes
+                .get(id.path(db))
+                .is_some_and(|scheme| scheme.type_params(db).is_empty())
         })
         .map(|(id, _)| (*id, Vec::new()))
         .collect();

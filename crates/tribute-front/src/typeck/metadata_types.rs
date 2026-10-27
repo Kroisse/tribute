@@ -310,6 +310,28 @@ impl<'db> ExpressionTypeMetadata<'db> {
             exhaustive_cases.dedup();
         }
     }
+
+    /// Keep only the entries of the nodes `keep` accepts, in every table.
+    pub fn retain_nodes(&mut self, keep: impl Fn(&NodeId) -> bool) {
+        let Self {
+            node_types,
+            function_instances,
+            local_instances,
+            evidence_plans,
+            handler_operations,
+            perform_operations,
+            lambda_signatures,
+            exhaustive_cases,
+        } = self;
+        node_types.retain(|node, _| keep(node));
+        function_instances.retain(|node, _| keep(node));
+        local_instances.retain(|node, _| keep(node));
+        evidence_plans.retain(|node, _| keep(node));
+        handler_operations.retain(|node, _| keep(node));
+        perform_operations.retain(|node, _| keep(node));
+        lambda_signatures.retain(|node, _| keep(node));
+        exhaustive_cases.retain(|node| keep(node));
+    }
 }
 
 /// Move the entries of one table out of each of `others`.

@@ -1881,7 +1881,8 @@ fn source_list_does_not_change_logical_prelude_signatures(db: &salsa::DatabaseIm
 
     let source = source_from_str(
         "unused_source_list.trb",
-        "enum List(a) { SourceList(a), }\nfn main() -> Nil {}",
+        "enum List(a) { SourceList(a), }\n\
+         fn main() -> Nil { let _ = std::collections::List::prepend(+1, []) }",
     );
     let typed = parse_and_lower_ast(db, source).expect("frontend output");
     let FrontendCompilation {
@@ -1894,7 +1895,7 @@ fn source_list_does_not_change_logical_prelude_signatures(db: &salsa::DatabaseIm
         let Ok(function) = tribute_control::Func::from_op(&ir, operation) else {
             continue;
         };
-        if function.sym_name(&ir) == "std::collections::List::prepend" {
+        if function.sym_name(&ir) == "std::collections::List::prepend$Int" {
             let signature = tribute_control::FuncSig::from_type_ref(&ir, function.r#type(&ir))
                 .expect("logical signature");
             let result = ir.get_type(signature.result(&ir));
