@@ -4,7 +4,7 @@ use std::ops::ControlFlow;
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 
-use crate::ast::fold::TypeFoldable;
+use crate::ast::fold::TypeVisitable;
 use crate::ast::{CtorId, NodeId, Type, TypeDefId, TypeKind, TypeScheme};
 use crate::typeck::subst::BoundVarSubst;
 

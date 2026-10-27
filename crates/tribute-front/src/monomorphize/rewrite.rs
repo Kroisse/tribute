@@ -158,17 +158,9 @@ pub fn rewrite_type<'db>(
     ty.fold_with(&mut NominalRewrite { db, map })
 }
 
-pub(super) fn rewrite_row<'db>(
-    db: &'db dyn salsa::Database,
-    row: crate::ast::AbilityRow<'db>,
-    map: &TypeRewriteMap<'db>,
-) -> crate::ast::AbilityRow<'db> {
-    row.fold_with(&mut NominalRewrite { db, map })
-}
-
-struct NominalRewrite<'a, 'db> {
-    db: &'db dyn salsa::Database,
-    map: &'a TypeRewriteMap<'db>,
+pub(super) struct NominalRewrite<'a, 'db> {
+    pub(super) db: &'db dyn salsa::Database,
+    pub(super) map: &'a TypeRewriteMap<'db>,
 }
 
 impl<'db> TypeFolder<'db> for NominalRewrite<'_, 'db> {

@@ -8,7 +8,7 @@ use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 use smallvec::SmallVec;
 
-use crate::ast::fold::{TypeFoldable, TypeVisitor};
+use crate::ast::fold::{TypeVisitable, TypeVisitor};
 use crate::ast::{
     AbilityRow, ExprKind, FuncDecl, NodeId, RowVar, Stmt, Type, TypedRef, collect_row_vars,
 };

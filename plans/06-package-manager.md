@@ -18,18 +18,22 @@ Important for ecosystem growth but requires stable language foundation first.
 ```toml
 # tribute.toml
 [package]
-name = "my-lib"
+name = "my_lib"
 version = "1.0.0"
 description = "A sample Tribute library"
 authors = ["John Doe <john@example.com>"]
 
 [dependencies]
-std = "1.0"
 json = "0.5"
 
 [dev-dependencies]
 test-utils = "0.2"
 ```
+
+The current manifest contract in
+[`new-plans/modules.md`](../new-plans/modules.md#매니페스트-tributetoml) defines
+only `[package] name` and `{ path = "..." }` dependencies. The other keys and
+the version requirements above are proposed extensions for registry support.
 
 ### Command Line Interface
 

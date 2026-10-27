@@ -311,6 +311,13 @@ ability row로 내려가며, row 안에서는 각 ability 인자의 타입 인�
 - `LocalBoundVar`는 지역 binder를 소유한 typed-body 메타데이터가 해석한다. 스킴
   인스턴스화와 solver 치환은 이를 바꾸지 않고 통과시킨다.
 
+특수화가 typed 메타데이터에 하는 세 작업, 즉 clone의 타입 인자 치환, nominal
+재작성, nominal 수집 시작점 순회는 모든 메타데이터 표의 타입을 같은 순회로 다룬다.
+함수 인스턴스 기록의 선언 스킴은 callee 자신의 binder로 쓰였으므로 호출자 쪽
+치환·재작성·수집의 대상이 아니다. 이 작업들은 그 기록의 callable, 타입 인자, row
+인자만 다룬다. 지역 callable 인스턴스의 스킴은 감싸는 함수의 binder로 쓰였으므로
+다른 타입과 함께 다룬다.
+
 이름 mangling, 표시 형식, lowering의 identity key처럼 출력 형식이 계약인 변환은
 이 순회와 다른 순서나 정렬을 쓸 수 있으며, 각자의 형식 규칙을 따른다.
 

@@ -8,7 +8,7 @@ use trunk_ir::context::IrContext;
 use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{TypeRef, ValueRef};
 
-use crate::ast::fold::{TypeFoldable, TypeVisitor};
+use crate::ast::fold::{TypeVisitable, TypeVisitor};
 use crate::ast::{
     AbilityRow, Expr, ExprKind, LocalId, NodeId, Pattern, PatternKind, ResolvedRef, Stmt, Type,
     TypeKind, TypedRef,
