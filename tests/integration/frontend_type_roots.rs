@@ -146,13 +146,17 @@ fn main() -> Nil { marker() }
         })
         .unwrap_or_else(|| panic!("{root:?} did not materialize Packet(Nat)"));
     assert!(declaration.type_params.is_empty());
-    let marker = prepared
-        .declarations(db)
-        .function_types
-        .iter()
-        .find(|(name, _)| name == ["marker"])
-        .unwrap()
-        .1;
+    // Under `Root::TypeArgument`, `marker` is generic, so only its instance
+    // remains.
+    let marker = || {
+        prepared
+            .declarations(db)
+            .function_types
+            .iter()
+            .find(|(name, _)| name == ["marker"])
+            .unwrap()
+            .1
+    };
     let instance = &prepared
         .expression_types(db)
         .function_instances
@@ -163,8 +167,8 @@ fn main() -> Nil { marker() }
     let ty = match root {
         Root::TypeArgument => instance.type_arguments[0],
         Root::RowArgument => instance.row_arguments[0].instances(db)[0].args[0],
-        Root::Union => marker.row_unions(db)[0].result.instances(db)[0].args[0],
-        Root::Removal => marker.row_removals(db)[0].removed.instances(db)[0].args[0],
+        Root::Union => marker().row_unions(db)[0].result.instances(db)[0].args[0],
+        Root::Removal => marker().row_removals(db)[0].removed.instances(db)[0].args[0],
         Root::ConstructorUnion => {
             prepared
                 .declarations(db)

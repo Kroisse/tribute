@@ -169,3 +169,84 @@ fn effect_only_nominal_instance_matches_handlers_and_performs(db: &salsa::Databa
             .all(|(_, perform)| handler.ability == perform.ability)
     }));
 }
+
+#[salsa::tracked(returns(copy))]
+fn prepares(db: &dyn salsa::Database, source: SourceCst) -> bool {
+    let typed = parse_and_lower_ast(db, source).unwrap();
+    prepare_frontend_for_lowering(db, typed, source).is_some()
+}
+
+/// Every monomorphic function is lowered, so an incomplete instance in one
+/// is rejected whether or not `main` reaches it.
+#[salsa_test]
+fn incomplete_instances_are_rejected_whether_or_not_reached(db: &salsa::DatabaseImpl) {
+    for main in [
+        "fn main() -> Nil { }",
+        "fn main() -> Nil { let _ = unused() }",
+    ] {
+        let source = SourceCst::from_source_str(
+            db,
+            "incomplete_instance.trb",
+            &format!(
+                "fn count(xs: List(a)) -> Nat {{ 0 }}\nfn unused() -> Nat {{ count([]) }}\n{main}"
+            ),
+        );
+        assert!(!prepares(db, source), "{main}");
+        let messages: Vec<_> = prepares::accumulated::<Diagnostic>(db, source)
+            .iter()
+            .map(|diagnostic| diagnostic.inner.message.to_string())
+            .collect();
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("IncompleteTypeArgument")),
+            "{main}: {messages:?}"
+        );
+    }
+}
+
+/// The specialization output holds a generic function's instances, never
+/// the function itself, nor nominal instances only its body mentions.
+#[salsa_test]
+fn generic_function_templates_leave_the_specialization_output(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "templates.trb",
+        r#"
+struct Packet(a) { value: a }
+fn identity(value: a) -> a { value }
+fn unreached(value: a) -> Packet(Bool) { Packet { value: True } }
+fn main() -> Nil { let _ = identity(5) }
+"#,
+    );
+    let typed = parse_and_lower_ast(db, source).unwrap();
+    let specialized = prepare_frontend_for_lowering(db, typed, source).unwrap();
+    let names: Vec<String> = specialized
+        .module(db)
+        .decls()
+        .filter_map(|decl| match decl {
+            tribute_front::ast::Decl::Function(function) => Some(function.name.to_string()),
+            tribute_front::ast::Decl::Struct(declaration) => Some(declaration.name.to_string()),
+            _ => None,
+        })
+        .collect();
+    for absent in ["identity", "unreached", "Packet$Bool"] {
+        assert!(
+            !names.iter().any(|name| name == absent),
+            "{absent}: {names:?}"
+        );
+    }
+    for present in ["identity$Nat", "main", "Packet"] {
+        assert!(
+            names.iter().any(|name| name == present),
+            "{present}: {names:?}"
+        );
+    }
+    assert!(
+        specialized
+            .declarations(db)
+            .function_types
+            .iter()
+            .all(|(path, _)| *path != ["identity"] && *path != ["unreached"])
+    );
+}

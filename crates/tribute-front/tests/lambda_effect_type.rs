@@ -227,7 +227,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     }
 }
 
-fn zero() -> Int { +0 }
+fn zero() -> Int { run_state(fn() { State::get() }, +0) }
 "#,
     );
 

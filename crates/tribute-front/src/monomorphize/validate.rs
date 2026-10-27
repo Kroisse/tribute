@@ -29,6 +29,9 @@ pub enum InstanceErrorKind {
     /// A backstop for runaway expansion that polymorphic recursion
     /// rejection does not catch.
     ExpansionLimit,
+    /// The specialization output breaks its contract: a compiler
+    /// inconsistency, not a source error.
+    SpecializationInvariant(super::SpecializationInvariant),
     /// A reference to a function of the caller's own recursive group at
     /// type arguments that strictly contain the caller's type parameters,
     /// spelled with the caller's parameter names. `callee` is `None` when
@@ -69,6 +72,11 @@ impl InstanceError {
             } => format!(
                 "`{caller}` calls `{callee}` of its own recursive group at `{instantiation}`; \
                  polymorphic recursion is not supported"
+            ),
+            InstanceErrorKind::SpecializationInvariant(violation) => format!(
+                "internal compiler error: the specialization output breaks its contract at {}: \
+                 {violation:?}",
+                self.node
             ),
             kind => format!("invalid specialization instance at {}: {kind:?}", self.node),
         };
@@ -116,16 +124,16 @@ pub(super) fn validate<'db>(
             _ => {}
         }
     }
+    // Every monomorphic function is lowered whether or not it is reached, so
+    // each one is a root.
     let mut queue: Vec<_> = functions
-        .iter()
-        .filter(|(id, func)| {
-            id.path(db) == ["main"]
-                || (func.visibility == crate::ast::Visibility::Public
-                    && schemes
-                        .get(id.path(db))
-                        .is_some_and(|scheme| scheme.type_params(db).is_empty()))
+        .keys()
+        .filter(|id| {
+            schemes
+                .get(id.path(db))
+                .is_some_and(|scheme| scheme.type_params(db).is_empty())
         })
-        .map(|(id, _)| (*id, Vec::new()))
+        .map(|id| (*id, Vec::new()))
         .collect();
     let mut seen = HashSet::default();
     let mut errors = Vec::new();

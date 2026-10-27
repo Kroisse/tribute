@@ -357,7 +357,7 @@ fn main() -> Nil {
     );
 
     let ir_text = common::specialized_frontend_ir(db, source);
-    for name in ["forward_open", "apply_open"] {
+    for name in ["forward_open$Int$Int", "apply_open$Int$Int"] {
         let header = ir_text
             .lines()
             .find(|line| is_function_header(line, name))
@@ -410,13 +410,14 @@ fn main() -> Nil {
         "nested workers must not be requalified:\n{ir_text}"
     );
     assert!(
-        logical_function(&ir_text, "Nested::unwrap").contains("callee = @\"Nested::Box::value\""),
+        logical_function(&ir_text, "Nested::unwrap$Int")
+            .contains("callee = @\"Nested::Box$Int::value\""),
         "nested worker must call the exact qualified accessor:\n{ir_text}"
     );
     assert!(
         ir_text.lines().any(|line| line
             .trim_start()
-            .starts_with("tribute_control.func @\"Box::value\"")),
+            .starts_with("tribute_control.func @\"Box$Int::value\"")),
         "specialized accessor must keep its exact root identity:\n{ir_text}"
     );
 }

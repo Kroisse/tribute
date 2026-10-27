@@ -8,7 +8,10 @@ pub mod mangle;
 mod nominal;
 mod nominal_index;
 mod recursion;
+mod result_check;
+pub use result_check::SpecializationInvariant;
 mod rewrite;
+mod templates;
 mod validate;
 pub use validate::{InstanceError, InstanceErrorKind};
 pub mod specialize;
@@ -290,6 +293,7 @@ fn monomorphize<'db>(
         }]);
     }
     let mut fn_types_vec = all_function_types;
+    templates::remove_function_templates(db, &mut module, &mut fn_types_vec, &mut metadata);
 
     // === Type monomorphization (struct/enum) ===
 
@@ -394,6 +398,10 @@ fn monomorphize<'db>(
         module
     };
 
+    let errors = result_check::check(db, &module, &fn_types_vec, &metadata);
+    if !errors.is_empty() {
+        return Err(errors);
+    }
     Ok(Monomorphized {
         module,
         function_types: fn_types_vec,

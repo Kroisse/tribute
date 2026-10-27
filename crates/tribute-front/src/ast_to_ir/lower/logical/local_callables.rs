@@ -34,7 +34,6 @@ impl<'db> Plan<'db> {
         ir: &mut IrContext,
         body: &Expr<TypedRef<'db>>,
         declarations: &Declarations<'db>,
-        parent_type_parameters: usize,
     ) -> Self {
         let mut nodes = Vec::new();
         body.for_each(|expr| nodes.push(expr));
@@ -147,23 +146,9 @@ impl<'db> Plan<'db> {
                 || instance.callable != reference.ty
                 || root.is_none_or(|root| {
                     root.scheme.body(ctx.db) != seed.function_type
-                        || !fixed_instance(
-                            ctx,
-                            body,
-                            seed,
-                            root,
-                            declarations,
-                            parent_type_parameters,
-                        )
+                        || !fixed_instance(ctx, body, seed, root, declarations)
                 })
-                || !fixed_instance(
-                    ctx,
-                    body,
-                    seed,
-                    instance,
-                    declarations,
-                    parent_type_parameters,
-                )
+                || !fixed_instance(ctx, body, seed, instance, declarations)
             {
                 unsupported.insert(binding);
                 continue;
@@ -203,12 +188,12 @@ impl<'db> Plan<'db> {
     }
 }
 
-/// Parent-owned variables are fixed within this body, including the retained
-/// generic template. Local quantifiers and unsolved variables are not fixed.
-fn fixed_in_parent<'db>(db: &'db dyn salsa::Database, ty: Type<'db>, parameters: usize) -> bool {
+/// Whether `ty` is fixed within this body. Specialization substituted the
+/// parent's type parameters, so local quantifiers and unsolved variables are
+/// the only variables left, and neither is fixed.
+fn fixed_in_parent<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
     struct Fixed<'db> {
         db: &'db dyn salsa::Database,
-        parameters: usize,
     }
 
     impl<'db> TypeVisitor<'db> for Fixed<'db> {
@@ -220,9 +205,6 @@ fn fixed_in_parent<'db>(db: &'db dyn salsa::Database, ty: Type<'db>, parameters:
 
         fn visit_type(&mut self, ty: Type<'db>) -> ControlFlow<()> {
             match ty.kind(self.db) {
-                TypeKind::BoundVar { index } if (*index as usize) < self.parameters => {
-                    ControlFlow::Continue(())
-                }
                 TypeKind::BoundVar { .. }
                 | TypeKind::LocalBoundVar { .. }
                 | TypeKind::UniVar { .. }
@@ -239,7 +221,7 @@ fn fixed_in_parent<'db>(db: &'db dyn salsa::Database, ty: Type<'db>, parameters:
         }
     }
 
-    ty.visit_with(&mut Fixed { db, parameters }).is_continue()
+    ty.visit_with(&mut Fixed { db }).is_continue()
 }
 
 /// This boundary instantiates only a lambda's latent row. If that row also
@@ -250,7 +232,6 @@ fn fixed_instance<'db>(
     seed: &LambdaSignature<'db>,
     instance: &crate::typeck::LocalCallableInstance<'db>,
     declarations: &Declarations<'db>,
-    parent_type_parameters: usize,
 ) -> bool {
     let db = ctx.db;
     if !instance.scheme.type_params(db).is_empty()
@@ -279,7 +260,7 @@ fn fixed_instance<'db>(
         || !params
             .iter()
             .chain(std::iter::once(result))
-            .all(|ty| fixed_in_parent(db, *ty, parent_type_parameters))
+            .all(|ty| fixed_in_parent(db, *ty))
     {
         return false;
     }

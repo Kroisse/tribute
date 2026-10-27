@@ -859,7 +859,9 @@ path를 가지며, 모듈 path는 선언 identity의 path에서 마지막 compon
 작업으로 취급한다. 선언 정보와 표현식·참조별 정보를 함께 전달하여 함수
 인스턴스, constructor scheme, handler/perform/lambda 정보, coverage 증명,
 nominal identity와 intrinsic provenance가 누락되지 않게 한다. 이 계약은
-동일한 정보를 여러 결과 객체에 중복 저장하도록 요구하지 않는다.
+동일한 정보를 여러 결과 객체에 중복 저장하도록 요구하지 않는다. 특수화 결과에는
+구체 함수 정의만 있으며, generic 함수 template과 그 메타데이터는 제외한다
+([Generics — 특수화 결과](generics.md#특수화-결과)).
 
 Lowering 입력을 만드는 경로는 특수화 결과에서 출발하는 하나뿐이며, 타입 검사
 결과는 lowering 입력이 될 수 없다. 테스트도 같은 경로를 거친다. 특수화는 하나의

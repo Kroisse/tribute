@@ -629,12 +629,12 @@ fn test_nested_effectful_closure_call(db: &salsa::DatabaseImpl) {
         db,
         "test.trb",
         r#"
-ability State(s) {
-    op get() -> s
+ability Counter {
+    op get() -> Int
 }
 
-fn run() ->{State(Int)} Int {
-    let read = fn() { State::get() }
+fn run() ->{Counter} Int {
+    let read = fn() { Counter::get() }
     read() + +1
 }
 
@@ -1491,7 +1491,7 @@ fn logical_list_constructor_patterns_use_element_types(db: &salsa::DatabaseImpl)
             4,
         ),
         (
-            "fn observe(xs: List(Boxed(a)), fallback: a) -> a { case xs { [.Box(x), ..tail] -> x, _ -> fallback } }",
+            "fn observe(xs: List(Boxed(Int)), fallback: Int) -> Int { case xs { [.Box(x), ..tail] -> x, _ -> fallback } }",
             2,
         ),
         (

@@ -381,17 +381,11 @@ pub(super) fn plan_local_callables<'db>(
             continue;
         };
         let name = prefix.child(function.name.clone());
-        let Some(scheme) = ctx.lookup_function_type(&name).copied() else {
+        if ctx.lookup_function_type(&name).is_none() {
             continue;
-        };
+        }
         let outer = ctx.enter_definition(&name);
-        let plan = local_callables::Plan::collect(
-            ctx,
-            ir,
-            &function.body,
-            declarations,
-            scheme.type_params(ctx.db).len(),
-        );
+        let plan = local_callables::Plan::collect(ctx, ir, &function.body, declarations);
         ctx.leave_definition(outer);
         declarations
             .function_local_callables
@@ -407,11 +401,6 @@ pub(super) fn lower_function<'db>(
     declarations: &mut Declarations<'db>,
 ) {
     let location = ctx.location(function.id);
-    let parent_type_parameters = ctx
-        .lookup_function_type(&ctx.qualify_name(&function.name))
-        .expect("function has a typechecked signature")
-        .type_params(ctx.db)
-        .len();
     let signature = function_signature(ctx, ir, &function);
     let callable = signature.callable_type(ir);
     let inferred_row = function.effects.is_none()
@@ -449,13 +438,7 @@ pub(super) fn lower_function<'db>(
             .function_local_callables
             .remove(&function.id)
             .unwrap_or_else(|| {
-                local_callables::Plan::collect(
-                    &mut scope,
-                    ir,
-                    &function.body,
-                    declarations,
-                    parent_type_parameters,
-                )
+                local_callables::Plan::collect(&mut scope, ir, &function.body, declarations)
             });
         let value = lower_expr(
             &mut IrBuilder::new(&mut scope, ir, entry),
