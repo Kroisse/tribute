@@ -99,21 +99,21 @@ fn(a) -> b ≡ fn(a) ->{e} b
 바뀌지 않는다. Row의 tail은 다음과 같이 읽는다.
 
 ```text
-class 변수인 tail                                  → 그 인스턴스에 고정된 class
-추론된 row인 정의 자신의 tail 중 class 변수가 아닌 것 → 요구 없음
-그 밖의 tail                                       → Cps
+class 변수인 tail                       → 그 인스턴스에 고정된 class
+정의 자신의 tail 중 class 변수가 아닌 것 → 요구 없음
+그 밖의 tail                            → Cps
 ```
 
 [Class 변수](#row-변수의-convention-class)의 requirement는 인스턴스가
 고정한다. Class가 전부 `Cps`인 인스턴스, 곧 특수화하지 않은 정의에서는 class 변수인
 tail이 `Cps`를 요구한다.
 
-둘째 줄은 annotation을 생략한 정의([추론된 row](ir.md#추론된-row)) 자신의 row에서
-생긴 tail 중 정의 안의 어떤 callable에도 닿지 않는 것이다. 그런 tail은 정의의 코드를
-바꾸지 않는다. 그러므로 effect-polymorphic `add`는 Direct이고, 명시적인 `->{}`도
-닫힌 빈 row이므로 Direct다. 마지막 줄에는 ability 인자에 나타난 tail, 어느 scheme도
-양화하지 않은 tail, 그리고 명시적으로 적은 열린 row의 tail 중 class 변수가 아닌 것이
-들어간다.
+둘째 줄은 정의 자신의 row tail 중 정의 안의 어떤 callable에도 닿지 않는 것이다.
+Annotation을 생략한 정의와 열린 row를 적은 정의가 같다. 그런 tail은 정의의 코드를
+바꾸지 않는다. 그러므로 effect-polymorphic `add`와 `fn f() ->{e} Int`는 Direct이고,
+명시적인 `->{}`도 닫힌 빈 row이므로 Direct다. 마지막 줄에는 ability 인자에 나타난
+tail, 어느 scheme도 양화하지 않은 tail, 그리고 정의 자신의 row가 아닌 자리에 적은
+열린 row의 tail 중 class 변수가 아닌 것이 들어간다.
 
 정의가 `Cps`가 아니면 그 row에는 `op`를 가진 ability도 class 없는 tail도 없다.
 본문의 `handle`, `resume`, `Cps` 호출은
@@ -266,8 +266,7 @@ row와 [row binder](ir.md#row-binder), 참조의 `row_args`, 지역 람다의
   인스턴스를 인스턴스 수집에 더한다.
 - 정의, entry, 간접 이전에 convention을 쓴다. 값과 block 인자의 타입, 참조의 결과,
   `ability.operation`의 타입, tuple layout의 원소, nominal layout의 필드는 convention을
-  갖지 않는다. [추론된 row](ir.md#추론된-row)인 정의 자신의 convention은 tail이 class
-  변수일 때만 tail을 읽는다.
+  갖지 않는다. 정의 자신의 convention은 tail이 class 변수일 때만 tail을 읽는다.
 
 참조되지 않게 된 정의는 pass가 지우지 않으며, 뒤따르는 참조되지 않는 정의 제거가
 지운다. Pass의 결과는 convention을 가진 source-logical IR이고, 적법화는 이 상태만
@@ -275,34 +274,41 @@ row와 [row binder](ir.md#row-binder), 참조의 `row_args`, 지역 람다의
 
 ### `fn` arm 호출 검사
 
-Class 특수화가 convention을 정한 뒤, 적법화 전에 `fn` handler arm의 호출을 검사한다.
-`fn` arm은 continuation frame 없이 실행되므로 그 안의 호출이 `Cps` callee에 닿으면
-[abilities.md](abilities.md#fn-operation-handler)의 보증을 어긴다. Arm의 정의에
-드러나는 위반은 typechecking이 거부하므로, 이 검사가 맡는 것은 row 변수의 class가
-인스턴스에서 정해져야 드러나는 위반이다.
+[abilities.md](abilities.md#fn-operation-handler)의 `fn` arm 규칙 가운데 인스턴스에서야
+드러나는 위반은 class 특수화가 인스턴스를 만든 뒤, 적법화 전에 검사한다. Row 인자가
+닿는 인스턴스가 이 pass에서 처음 생기기 때문이다. 판정 기준은 그 규칙의 row 조건이며,
+pass가 정한 convention이 아니다. Arm의 정의에 드러나는 위반은 typechecking이 거부한다.
 
 - 검사 대상은 참조되지 않는 정의 제거와 같은 root, 곧 root `main`, `_start`, 외부
   ABI를 가진 정의, runtime 함수, 함수 밖의 operation이 참조하는 정의에서 참조로 닿는
   인스턴스다. Root가 없는 compile은 이 검사를 하지 않는다.
-- 한 정의에서 복제된 인스턴스 여럿이 같은 호출에서 위반하면 그 호출을 한 번 보고한다. 특수화가 정의마다 만드는 class가
-  모두 `Cps`인 인스턴스는 그 class로 참조될 때만 검사한다.
-- Callee의 convention은 특수화가 쓴 값을 읽는다. 직접 호출은 callee 정의의
-  convention을, 간접 호출은 그 이전이 가진 convention을 쓴다. Row의 tail을 다시
-  읽지 않으므로, row를 생략한 순수 정의의 `Direct` worker 호출은 위반이 아니다.
-- `Cps` callee 호출은 arm 안의 `handle` body 밖에서는 위반이다. `handle` body 안에서는
-  그 호출의 row에서 둘러싼 `handle`들이 처리하는 label을 뺀 나머지의 class를 인스턴스의
-  class 표로 계산하고, 그 class가 `Cps`이면 위반이다.
-- Arm 안의 lambda 본문은 검사하지 않는다. Lambda는 호출될 때 그 호출이 가진
-  convention으로 검사된다. 안쪽 `fn` arm은 따로 검사하고, 안쪽 `handle`의 completion과 `op` arm은 바깥
-  arm의 일부로 검사한다.
+- 한 정의에서 복제된 인스턴스 여럿이 같은 호출에서 위반하면 그 호출을 한 번
+  보고한다. 특수화가 정의마다 만드는 class가 모두 `Cps`인 인스턴스는 그 class로
+  참조될 때만 검사한다.
+- 인스턴스마다, class 변수와 같은 조건으로 고른 binder에 그 인스턴스가 넘기는 row가
+  `op`를 선언한 ability를 담는지를 class와 같은 방식으로 계산한다. `ability_arg`
+  binder도 이 조건으로 고른다. 어떤 row 인자로도 정해지지 않는 tail과, 정의 안에서
+  어떤 callable에도 닿지 않는 tail은 ability를 더하지 않는다.
+- 직접 호출은 callee 인스턴스의 row를, 간접 호출은 callee 값 type의 row를 이 표로
+  읽는다. Arm 안의 `handle` body에 있는 호출은 그 row에서 둘러싼 `handle`들이 처리하는
+  label을 뺀다. 남은 row가 `op`를 선언한 ability를 담으면 위반이다.
+- Arm 안의 lambda 본문은 검사하지 않는다. Lambda는 호출될 때 그 호출의 row로
+  검사된다. 안쪽 `fn` arm은 따로 검사하고, 안쪽 `handle`의 completion과 `op` arm은
+  바깥 arm의 일부로 검사한다.
 
-위반은 그 호출의 source 위치를 가진 컴파일 에러다. 진단은 arm이 처리하는 operation과,
-호출을 담은 정의를 그 class로 쓰는 인스턴스에서 callee가 멈출 수 있다는 사실을 밝힌다.
-호출을 `Cps`로 만드는 것이 인스턴스의 class 변수이면, 진단은 그 class를 정한 참조를
-보조 위치로 가리킨다. 참조가 넘기는 row가 `op`를 가진 ability나 class 없는 tail을 담은
-곳이 그 참조이며, 넘기는 row의 `Cps`가 다시 참조하는 쪽 인스턴스의 class 변수에서 오면
-그 class 변수를 정한 참조를 같은 방식으로 따라간다. 복제된 인스턴스들의 같은 호출은 한
-진단으로 합치고, 각 인스턴스의 참조를 모두 가리킨다.
+이 검사가 받아들인 호출의 convention은 `Cps`가 아니다. `fn` arm은 continuation frame
+없이 실행되기 때문이다. 정의 자신의 tail 가운데 어떤 callable에도 닿지 않는 것은
+[tail 규칙](#row와-호출-규약)이 요구 없음으로 읽으므로 convention을 강하게 하지
+않는다. Class 특수화가 `Cps`로 읽는 그 밖의 class 없는 tail(`body`, `ability_arg`)을
+거치는 호출도 검사를 통과하면, class 특수화는 그 호출에 `Cps`가 아닌 convention과 그
+convention의 entry를 마련한다.
+
+위반은 그 호출의 source 위치를 가진 컴파일 에러다. 진단은 arm이 처리하는 operation과
+callee가 닿는 `op` ability를 밝힌다. 그 ability가 인스턴스의 row 인자에서 오면, 진단은
+그 ability를 row 인자에 넣은 참조를 보조 위치로 가리킨다. 그 row 인자의 ability가 다시
+참조하는 쪽 인스턴스의 row 인자에서 오면 그 row 인자를 정한 참조를 같은 방식으로
+따라간다. 복제된 인스턴스들의 같은 호출은 한 진단으로 합치고, 각 인스턴스의 참조를
+모두 가리킨다.
 
 <!-- markdownlint-disable-next-line MD033 -->
 <a id="direct-style-control-boundary"></a>
@@ -1052,10 +1058,10 @@ Handler와 evidence의 연결은 다음과 같다.
 - **Handler arm, `do` arm:** handle을 설치한 층의 바깥 evidence로 실행한다.
   General arm은 handle 층의 dispatcher에게서 이 evidence와 exit frame을 받고,
   `fn` arm은 층의 `tr_dispatch_fn`이 capture한 evidence를 받는다. Perform 지점
-  evidence는 arm에 전달하지 않는다. `tr_dispatch_fn`은 non-CPS callable이고 `fn`
-  perform 지점은 continuation frame을 만들지 않으므로, `fn` arm 본문은 CPS 규약을
-  요구하는 effect를 수행할 수 없다. Frontend가 이 arm의 perform과 호출을 제한한다
-  ([abilities.md](abilities.md#fn-operation-handler)).
+  evidence는 arm에 전달하지 않는다. 언어는 `fn` arm 본문이 `op`를 선언한 ability에
+  닿지 않음을 보증하므로([abilities.md](abilities.md#fn-operation-handler)),
+  `tr_dispatch_fn`은 non-CPS callable이고 `fn` perform 지점은 continuation frame을
+  만들지 않는다.
 - **Arm 안의 `resume`:** [abilities.md](abilities.md#resume과-handler-선택)에 따라
   arm 본문의 resume은 자기 handle body의 evidence를, arm 안 lambda의 resume은 그
   lambda가 받은 evidence를 continuation에 넘긴다. Arm 본문의 resume은 resume하는

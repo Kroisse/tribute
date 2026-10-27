@@ -407,9 +407,18 @@ Arm 정의의 타입에 드러나는 위반은 typechecking 단계의 컴파일 
 Row 변수로 들어오는 label도 같은 규칙을 따른다. `fn` arm이 effect-polymorphic
 callable을 호출하면, 그 row 변수를 고정한 인스턴스의 label에도 `op` operation을
 선언한 ability가 올 수 없다. 이 위반은 arm의 정의만으로는 드러나지 않는다. 정의에서는 그
-row가 row를 생략한 순수 함수의 호출과 같은 열린 row이기 때문이다. 그래서 인스턴스마다
-callee의 호출 규약을 정한 뒤 그 호출을 컴파일 에러로 거부한다
-([`fn` arm 호출 검사](cps-effects.md#fn-arm-호출-검사)).
+row가 row를 생략한 순수 함수의 호출과 같은 열린 row이기 때문이다. 그래서 root에서
+닿는 호출마다 callee의 row를 그 호출까지 넘겨진 row 인자와 ability 인자로 치환하고,
+치환한 row에 `op` operation을 선언한 ability가 있으면 그 호출을 컴파일 에러로
+거부한다. 다음 tail은 label을 더하지 않는다. Callee는 그 tail을 통해 operation을
+수행할 수 없기 때문이다.
+
+- Callee 정의 안에서 어떤 callable에도 닿지 않는 tail
+- 어떤 row 인자로도 정해지지 않는 tail. 람다가 아닌 `let` 값처럼 한 번 계산된 값이
+  일반화한 row 변수가 이렇다.
+
+판정은 row와 ability 선언만으로 하며 실행 전략에 따라 달라지지 않는다. 검사를
+구현하는 방법은 [`fn` arm 호출 검사](cps-effects.md#fn-arm-호출-검사)가 정한다.
 
 ```rust
 ability Stop { op stop() -> Never }

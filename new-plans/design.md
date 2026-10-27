@@ -355,6 +355,12 @@ trunk-ir-cranelift-backend/      언어 독립적 Cranelift codegen
 
 ### Effect 구현 전략: Tail-Call CPS
 
+Effect의 실행 전략은 구현 세부다. 표면 언어, AST, 타입 검사와 source-logical IR
+생성은 실행 전략에 의존하지 않으며, 어떤 프로그램을 받아들이는지는 row와 ability
+선언만으로 정한다. 경계는 source-logical IR이고, 실행 전략은 그 뒤의 target
+pipeline이 고른다. 지금 두 target은 모두 shared middle-end의 tail-call CPS를
+고른다.
+
 Shared CPS legalization이 continuation을 typed closure로 명시화한다. Native backend는
 검증된 callable ABI를 받아 evidence lookup과 dispatch를 lowering한다.
 

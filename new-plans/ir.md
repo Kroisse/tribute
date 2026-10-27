@@ -693,11 +693,12 @@ row 인자의 위치다. 나머지는 정의 안에 처음 나타난 순서로 �
 binder가 없다. `ability_arg`는 ability instance의 symbol이 그 인자를 드러내지
 않으므로 따로 표시한다.
 
-Tail의 class는 binder 종류에 따라 읽는다. `param`은 그 인스턴스가 고정한 class,
-`ability_arg`와 `body`는 `Cps`다. `local`의 class는 그것을 소유한 람다의 entry마다
-다르며, 그 [convention entry](#convention-entry)의 convention이 정한다. 값이 람다가 아닌
-binding은 한 번 계산되어 entry 집합이 하나이므로, 그 지역 scheme의 변수는 class를
-고르지 않는 `body`다.
+값이 람다가 아닌 binding은 한 번 계산되므로 그 지역 scheme의 변수를 인스턴스화하는
+사용이 없고, 그 변수는 `body`다. Binder 종류는 row의 구조만 기록하며 실행 전략을 담지
+않는다. CPS 전략의 class 특수화는 tail의 class를 binder 종류에 따라 읽는다. `param`은
+그 인스턴스가 고정한 class, `ability_arg`와 `body`는 `Cps`다. `local`의 class는 그것을
+소유한 람다의 본문마다 다르며, 그 [convention entry](#convention-entry)의 convention이
+정한다.
 
 정의 안의 모든 tail은 이 목록의 index다. Signature, 중첩된 callable type, block
 인자, operation 결과, tuple layout의 원소가 모두 같다. Type은 binder를 도입하지
@@ -713,14 +714,6 @@ tail을 선언 순서로 담는다. `result`와 같은 tail은 `sources`에 넣�
 이 순서가 evidence tail 칸의 번호다. 정의 안의 [`{select = i}`](#evidence-선택-속성)는
 자기 row tail을 결과로 하는 합집합의 `i`번째 source를 가리키고, 호출의
 `{tails = [...]}`는 callee 합집합의 source마다 선택 하나를 같은 순서로 담는다.
-
-#### 추론된 row
-
-`inferred_row = true`는 effect 주석을 생략한 정의와 root `main`에 붙는다. Class
-특수화가 이런 정의 자신의 convention을 정할 때는 row tail이 그 인스턴스의 class
-변수일 때만 tail을 읽는다
-([cps-effects.md](cps-effects.md#row와-호출-규약)). 정의의 type이 가진 row는
-그대로다.
 
 #### 지역 람다의 양화와 인스턴스화
 
@@ -791,8 +784,8 @@ Convention에 관한 규칙은 convention을 가진 상태에서만 적용한다
 - `tail_call`의 callee 인스턴스와 `tail_call_indirect`의 바깥 convention은 감싼
   callable(정의, 또는 그 이전을 담은 entry)보다 강하지 않다.
 - 정의의 convention과 간접 이전의 convention은 [CPS 전략](cps-effects.md#row와-호출-규약)이
-  그 row와 인스턴스의 class에서 계산한 값이다. 추론된 row인 정의는
-  [위 규칙](#추론된-row)을 따른다.
+  그 row와 인스턴스의 class에서 계산한 값이다. 정의 자신의 convention은 row tail이
+  class 변수일 때만 tail을 읽는다.
 
 Type의 일치를 요구하는 규칙은 두 상태에서 같고, convention을 비교하지 않는다.
 
@@ -941,8 +934,7 @@ binder 이름을 나열할 뿐이며, 종류나 합집합을 쓰지 않고 위�
 
 Row는 convention 앞에 `row(@A, @B | 'a1)` 형식으로 쓴다. Instance 목록과 `|` 뒤의
 tail binder이며, instance가 없으면 `row(| 'a1)`, tail이 없으면 `row(@A)`다. 닫힌 빈
-row는 쓰지 않는다. [추론된 row](#추론된-row)인 정의는 row와 convention 사이에
-`inferred`를 쓰며 이것이 `inferred_row` 속성을 대신한다. `lambda`의 row tail은 둘러싼
+row는 쓰지 않는다. `lambda`의 row tail은 둘러싼
 `func`의 binder 이름을 쓴다. 이름은 위치에서 정해지므로 type alias 안의 tail도 같은
 뜻이다.
 
@@ -953,7 +945,7 @@ tribute_control.func @map['a0](%xs: !List, %f: !F) -> !List row(| 'a0) conventio
 
 tribute_control.func @join['a0 = 'a1 | 'a2, 'a1, 'a2](%x: T) -> T row(| 'a0) convention(cps)
 
-tribute_control.func @main['a0]() -> core.nil row(| 'a0) inferred convention(direct) {
+tribute_control.func @main['a0]() -> core.nil row(| 'a0) convention(direct) {
   ...
 }
 ```
