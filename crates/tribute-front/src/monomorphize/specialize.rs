@@ -73,26 +73,30 @@ struct SpecializationEntry<'db> {
 
 /// Generate specialized copies of generic functions for each instantiation.
 ///
+/// The generic declarations are looked up in `module`, then in
+/// `dependency`. An instance whose path is in `generated` already exists and
+/// is not generated again; each generated path is added to it.
+///
 /// Returns a list of new specialized `FuncDecl`s and their corresponding
 /// `(Symbol, TypeScheme)` entries for `function_types`.
 pub(super) fn generate_specializations<'db>(
     db: &'db dyn salsa::Database,
     module: &DeclTable<TypedRef<'db>>,
+    dependency: Option<&DeclTable<TypedRef<'db>>>,
     instantiations: &HashMap<FuncDefId<'db>, HashSet<InstanceKey<'db>>>,
     function_types: &[(SymbolPath, TypeScheme<'db>)],
     compiler_intrinsics: &crate::SortedMap<NodeId, Symbol>,
+    generated: &mut HashSet<SymbolPath>,
 ) -> GeneratedSpecializations<'db> {
-    let func_decls = collect_func_decls(module);
-    let extern_functions = collect_extern_function_decls(module);
+    let tables = || dependency.into_iter().chain([module]);
+    let func_decls = collect_func_decls(tables());
+    let extern_functions = collect_extern_function_decls(tables());
     let scheme_map: HashMap<SymbolPath, TypeScheme<'db>> = function_types.iter().cloned().collect();
 
     let mut entries: Vec<SpecializationEntry<'db>> = Vec::new();
     let mut extern_function_types = Vec::new();
     let mut specialized_extern_declarations = Vec::new();
     let mut compiler_intrinsic_specializations = Vec::new();
-    // Keys that differ only in how a type is spelled, such as a nominal type
-    // named by its short or its qualified name, mangle to one instance.
-    let mut generated = HashSet::default();
 
     for (func_id, keys) in instantiations {
         let path = func_id.path(db);
@@ -110,6 +114,9 @@ pub(super) fn generate_specializations<'db>(
         for key in keys {
             let type_args = key.type_args.as_slice();
             let mangled_path = mangle_instance_path(db, path, key);
+            // Keys that differ only in how a type is spelled, such as a
+            // nominal type named by its short or its qualified name, mangle
+            // to one instance.
             if !generated.insert(mangled_path.clone()) {
                 continue;
             }
@@ -199,7 +206,7 @@ pub(super) fn generate_struct_specializations<'db>(
     module: &DeclTable<TypedRef<'db>>,
     instantiations: &HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
 ) -> Vec<(Placement, StructDecl)> {
-    let index = NominalIndex::new(db, module);
+    let index = NominalIndex::new(db, module, None);
     generate_struct_specializations_with_index(db, &index, instantiations)
 }
 
@@ -240,7 +247,7 @@ pub(super) fn generate_enum_specializations<'db>(
     module: &DeclTable<TypedRef<'db>>,
     instantiations: &HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
 ) -> Vec<(Placement, EnumDecl)> {
-    let index = NominalIndex::new(db, module);
+    let index = NominalIndex::new(db, module, None);
     generate_enum_specializations_with_index(db, &index, instantiations)
 }
 
@@ -487,12 +494,12 @@ fn type_to_annotation(db: &dyn salsa::Database, ty: Type<'_>, id: NodeId) -> Typ
 // Generic function specialization helpers
 // ============================================================================
 
-fn collect_func_decls<'a, 'db>(
-    module: &'a DeclTable<TypedRef<'db>>,
+fn collect_func_decls<'a, 'db: 'a>(
+    tables: impl IntoIterator<Item = &'a DeclTable<TypedRef<'db>>>,
 ) -> HashMap<SymbolPath, &'a FuncDecl<TypedRef<'db>>> {
-    module
-        .entries
-        .iter()
+    tables
+        .into_iter()
+        .flat_map(|table| &table.entries)
         .filter_map(|entry| match &entry.decl {
             Decl::Function(func) => Some((entry.module.child(func.name.clone()), func)),
             _ => None,
@@ -500,12 +507,12 @@ fn collect_func_decls<'a, 'db>(
         .collect()
 }
 
-fn collect_extern_function_decls<'a, 'db>(
-    module: &'a DeclTable<TypedRef<'db>>,
+fn collect_extern_function_decls<'a, 'db: 'a>(
+    tables: impl IntoIterator<Item = &'a DeclTable<TypedRef<'db>>>,
 ) -> HashMap<SymbolPath, &'a ExternFuncDecl> {
-    module
-        .entries
-        .iter()
+    tables
+        .into_iter()
+        .flat_map(|table| &table.entries)
         .filter_map(|entry| match &entry.decl {
             Decl::ExternFunction(func) => Some((entry.module.child(func.name.clone()), func)),
             _ => None,
@@ -910,9 +917,11 @@ mod tests {
         let specializations = generate_specializations(
             &db,
             &module,
+            None,
             &instantiations,
             &function_types,
             &crate::SortedMap::default(),
+            &mut HashSet::default(),
         );
 
         assert_eq!(specializations.specialized_declarations.len(), 2);

@@ -11,7 +11,6 @@ use ropey::Rope;
 use salsa::Database;
 use std::path::{Path, PathBuf};
 use tracing_subscriber::EnvFilter;
-use tribute::database::parse_with_thread_local;
 use tribute::link::link_native_binary;
 use tribute::pipeline::{
     CompilationConfig, compile_to_native_binary, compile_to_wasm_binary, compile_with_diagnostics,
@@ -21,6 +20,7 @@ use tribute::{SourceCst, TributeDatabaseImpl};
 use tribute_core::diagnostic::{Diagnostic, DiagnosticSeverity};
 use tribute_front::query::parsed_ast;
 use tribute_front::resolve::{Dependencies, build_env};
+use tribute_front::source_file::parse_rope;
 
 fn main() {
     let cli = Cli::parse();
@@ -89,7 +89,7 @@ fn compile_file(
     };
 
     TributeDatabaseImpl::default().attach(|db| {
-        let tree = parse_with_thread_local(&source_code, None);
+        let tree = parse_rope(&source_code, None);
         let source = SourceCst::from_path(db, &input_path, source_code, tree);
 
         if dump_ir {
@@ -241,7 +241,7 @@ fn debug_file(path: std::path::PathBuf, show_env: bool) {
     TributeDatabaseImpl::default().attach(|db| {
         println!("=== Compiling: {} ===\n", path.display());
 
-        let tree = parse_with_thread_local(&source_code, None);
+        let tree = parse_rope(&source_code, None);
         let source = SourceCst::from_path(db, &path, source_code, tree);
         let result = compile_with_diagnostics(db, source);
 

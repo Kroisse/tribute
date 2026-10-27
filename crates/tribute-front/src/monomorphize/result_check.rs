@@ -9,11 +9,11 @@ use rustc_hash::FxHashSet as HashSet;
 use trunk_ir::SymbolPath;
 
 use super::templates::DeclNodes;
-use super::{InstanceError, InstanceErrorKind, MonomorphizeMetadata};
+use super::{InstanceError, InstanceErrorKind};
 use crate::ast::fold::{TypeVisitable, TypeVisitor};
 use crate::ast::visit::{RefSite, Refs, Visit, walk_decl};
 use crate::ast::{Decl, DeclTable, NodeId, ResolvedRef, Type, TypeKind, TypeScheme, TypedRef};
-use crate::typeck::FieldFunctionKind;
+use crate::typeck::{ConstructorTypeMetadata, ExpressionTypeMetadata, FieldFunctionKind};
 
 /// The output contract a specialization result breaks.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -26,13 +26,14 @@ pub enum SpecializationInvariant {
     OrphanMetadata { table: &'static str },
 }
 
-/// Check `module`, its function schemes, and `metadata` against the output
-/// contract.
+/// Check the specialized `module`, its schemes, and its metadata against
+/// the output contract.
 pub(super) fn check<'db>(
     db: &'db dyn salsa::Database,
     module: &DeclTable<TypedRef<'db>>,
     function_types: &[(SymbolPath, TypeScheme<'db>)],
-    metadata: &MonomorphizeMetadata<'db>,
+    constructor_types: &ConstructorTypeMetadata<'db>,
+    expressions: &ExpressionTypeMetadata<'db>,
 ) -> Vec<InstanceError> {
     let mut check = Check {
         db,
@@ -41,13 +42,12 @@ pub(super) fn check<'db>(
     for (path, scheme) in function_types {
         check.scheme(module.id, scheme, || format!("the scheme of `{path}`"));
     }
-    for (ctor, scheme) in &metadata.constructor_types.schemes {
+    for (ctor, scheme) in &constructor_types.schemes {
         check.scheme(module.id, scheme, || {
             format!("the scheme of `{}`", ctor.path(db))
         });
     }
-    let expressions = &metadata.expressions;
-    let variants = &metadata.constructor_types.specialized_enum_variants;
+    let variants = &constructor_types.specialized_enum_variants;
     check.table("node types", &expressions.node_types);
     check.table("function instances", &expressions.function_instances);
     check.table("local instances", &expressions.local_instances);
@@ -247,59 +247,66 @@ impl<'db> TypeVisitor<'db> for BoundVars<'db> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{MonomorphizeMetadata, Monomorphized, monomorphize};
     use super::*;
-    use crate::typeck::{DeclarationTypeMetadata, TypeCheckOutput};
+    use crate::typeck::DeclarationTypeMetadata;
 
+    /// The specialization of a fixture that calls `identity` at `Nat`.
     #[salsa::tracked]
-    fn check_fixture(db: &dyn salsa::Database, source: crate::SourceCst) -> TypeCheckOutput<'_> {
+    fn specialize_fixture(
+        db: &dyn salsa::Database,
+        source: crate::SourceCst,
+    ) -> super::super::SpecializationOutput<'_> {
         use crate::resolve::{Dependencies, build_env, resolve_with_env};
         let parsed = crate::query::parsed_ast(db, source).expect("fixture parses");
         let ast = parsed.module(db);
         let env = build_env(db, ast, &Dependencies::none());
         let resolved = resolve_with_env(db, ast, env, &Dependencies::none(), parsed.span_map(db));
-        crate::typeck::typecheck_module(db, &resolved, parsed.span_map(db))
+        let checked = crate::typeck::typecheck_module(db, &resolved, parsed.span_map(db));
+        super::super::monomorphize_functions(
+            db,
+            super::super::SpecializationInput::new(db, checked, None),
+        )
+        .expect("fixture specializes")
     }
 
-    /// The specialization of a fixture that calls `identity` at `Nat`.
-    fn specialized(db: &salsa::DatabaseImpl) -> Monomorphized<'_> {
+    /// The parts of a specialization output the check reads, to damage.
+    struct Output<'db> {
+        module: DeclTable<TypedRef<'db>>,
+        declarations: DeclarationTypeMetadata<'db>,
+        expressions: ExpressionTypeMetadata<'db>,
+    }
+
+    fn specialized(db: &salsa::DatabaseImpl) -> Output<'_> {
         let source = crate::SourceCst::from_source_str(
             db,
             "result_check.trb",
             "fn identity(value: a) -> a { value }\nfn main() -> Nil { let _ = identity(5) }",
         );
-        let checked = check_fixture(db, source);
-        let DeclarationTypeMetadata {
-            function_types,
-            constructor_types,
-            ..
-        } = checked.declarations(db).clone();
-        let Ok(output) = monomorphize(
-            db,
-            checked.module(db).clone(),
-            function_types.into_iter().collect(),
-            MonomorphizeMetadata {
-                constructor_types,
-                expressions: checked.expression_types(db).clone(),
-                compiler_intrinsics: Default::default(),
-            },
-        ) else {
-            panic!("fixture specializes");
-        };
-        output
+        let output = *specialize_fixture(db, source);
+        Output {
+            module: output.module(db).clone(),
+            declarations: output.declarations(db).clone(),
+            expressions: output.expression_types(db).clone(),
+        }
     }
 
     fn violations<'db>(
         db: &'db dyn salsa::Database,
-        output: &Monomorphized<'db>,
+        output: &Output<'db>,
     ) -> Vec<SpecializationInvariant> {
-        check(db, &output.module, &output.function_types, &output.metadata)
-            .into_iter()
-            .map(|error| match error.kind {
-                InstanceErrorKind::SpecializationInvariant(violation) => violation,
-                kind => panic!("not an output violation: {kind:?}"),
-            })
-            .collect()
+        check(
+            db,
+            &output.module,
+            &output.declarations.function_types,
+            &output.declarations.constructor_types,
+            &output.expressions,
+        )
+        .into_iter()
+        .map(|error| match error.kind {
+            InstanceErrorKind::SpecializationInvariant(violation) => violation,
+            kind => panic!("not an output violation: {kind:?}"),
+        })
+        .collect()
     }
 
     #[test]
@@ -313,13 +320,7 @@ mod tests {
         let db = salsa::DatabaseImpl::new();
         let mut output = specialized(&db);
         let bound = Type::new(&db, TypeKind::BoundVar { index: 0 });
-        let ty = output
-            .metadata
-            .expressions
-            .node_types
-            .values_mut()
-            .next()
-            .unwrap();
+        let ty = output.expressions.node_types.values_mut().next().unwrap();
         *ty = bound;
         assert!(matches!(
             violations(&db, &output)[..],
@@ -335,6 +336,7 @@ mod tests {
             !matches!(&entry.decl, Decl::Function(function) if function.name == "identity$Nat")
         });
         output
+            .declarations
             .function_types
             .retain(|(path, _)| *path != ["identity$Nat"]);
         let violations = violations(&db, &output);
@@ -352,7 +354,6 @@ mod tests {
         let mut output = specialized(&db);
         let nat = Type::new(&db, TypeKind::Nat);
         output
-            .metadata
             .expressions
             .node_types
             .insert(NodeId::from_raw(usize::MAX), nat);

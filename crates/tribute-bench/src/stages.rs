@@ -10,12 +10,12 @@ use std::process::{Command, Output, Stdio};
 
 use itertools::Itertools;
 use salsa::Database;
-use tribute::database::parse_with_thread_local;
 use tribute::pipeline::{
     FrontendCompilation, compile_frontend_for_shared_route, compile_with_diagnostics,
     emit_from_boundary_exit, run_shared_middle_end, run_target_to_boundary_exit,
 };
 use tribute::{Rope, SourceCst, TributeDatabaseImpl};
+use tribute_front::source_file::parse_rope;
 use tribute_passes::abi_boundary::TargetKind;
 use trunk_ir::{IrContext, Module};
 
@@ -34,7 +34,7 @@ pub fn target_name(target: TargetKind) -> &'static str {
 pub fn frontend(program: &Program) -> Result<FrontendCompilation, String> {
     let rope = Rope::from_str(program.source);
     TributeDatabaseImpl::default().attach(|db| {
-        let tree = parse_with_thread_local(&rope, None);
+        let tree = parse_rope(&rope, None);
         let source = SourceCst::from_path(db, program.name, rope.clone(), tree);
         compile_frontend_for_shared_route(db, source).ok_or_else(|| {
             let diagnostics = compile_with_diagnostics(db, source).diagnostics;

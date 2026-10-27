@@ -10,19 +10,22 @@ use rustc_hash::FxHashSet as HashSet;
 
 use trunk_ir::SymbolPath;
 
-use super::MonomorphizeMetadata;
 use crate::ast::visit::Visit;
 use crate::ast::{Decl, DeclTable, NodeId, TypeScheme, TypedRef};
+use crate::typeck::ExpressionTypeMetadata;
 
 /// Remove the function and extern function templates, with their schemes
-/// and the metadata of their nodes. Runs before nominal collection, so a
-/// nominal instance only a template mentions is not generated.
+/// and the expression metadata of their nodes, returning how many were
+/// removed. Runs before nominal collection, so a nominal instance only a
+/// template mentions is not generated. A generic intrinsic keeps its
+/// identity: a specialization that continues this one instantiates it at its
+/// own types.
 pub(super) fn remove_function_templates<'db>(
     db: &'db dyn salsa::Database,
     module: &mut DeclTable<TypedRef<'db>>,
     function_types: &mut Vec<(SymbolPath, TypeScheme<'db>)>,
-    metadata: &mut MonomorphizeMetadata<'db>,
-) {
+    expressions: &mut ExpressionTypeMetadata<'db>,
+) -> usize {
     let generic: HashSet<SymbolPath> = function_types
         .iter()
         .filter(|(_, scheme)| !scheme.type_params(db).is_empty())
@@ -46,12 +49,8 @@ pub(super) fn remove_function_templates<'db>(
     });
     let removed = removed.0;
     function_types.retain(|(path, _)| !removed_paths.contains(path));
-    metadata
-        .expressions
-        .retain_nodes(|node| !removed.contains(node));
-    metadata
-        .compiler_intrinsics
-        .retain(|node, _| !removed.contains(node));
+    expressions.retain_nodes(|node| !removed.contains(node));
+    removed_paths.len()
 }
 
 /// Every node of the declarations it visits, including those of bodiless

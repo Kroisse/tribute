@@ -35,6 +35,7 @@ mod native_multiway_branch;
 mod open_callback_evidence_root;
 mod optimization_conformance;
 mod package_identity;
+mod query_reuse;
 mod row_var_collision;
 mod runtime_slots;
 mod salsa_integration;

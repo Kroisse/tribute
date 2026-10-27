@@ -13,6 +13,7 @@ salsa.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 tribute = { path = "../.." }
+tribute-front.workspace = true
 tribute-passes.workspace = true
 trunk-ir.workspace = true
 wasmparser.workspace = true

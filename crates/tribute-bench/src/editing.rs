@@ -5,8 +5,8 @@
 //! revision changes the input and the database keeps what it cached from the
 //! revision before.
 
-use tribute::database::parse_with_thread_local;
 use tribute::{Rope, SourceCst, TributeDatabaseImpl};
+use tribute_front::source_file::parse_rope;
 
 use salsa::Setter;
 
@@ -188,7 +188,7 @@ impl EditSession {
     pub fn new(edit: &Edit) -> Self {
         let texts = [Rope::from_str(&edit.before), Rope::from_str(&edit.after)];
         let db = TributeDatabaseImpl::default();
-        let tree = parse_with_thread_local(&texts[0], None);
+        let tree = parse_rope(&texts[0], None);
         let source = SourceCst::from_path(&db, edit.name, texts[0].clone(), tree);
         Self {
             db,
@@ -202,7 +202,7 @@ impl EditSession {
     pub fn toggle(&mut self) {
         self.current = 1 - self.current;
         let text = self.texts[self.current].clone();
-        let tree = parse_with_thread_local(&text, None);
+        let tree = parse_rope(&text, None);
         self.source.set_text(&mut self.db).to(text);
         self.source.set_tree(&mut self.db).to(tree);
     }

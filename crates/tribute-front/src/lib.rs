@@ -24,6 +24,8 @@ pub mod query;
 pub mod resolve;
 pub mod sorted_map;
 pub mod source_file;
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
 pub mod typeck;
 
 pub use fluent_uri::Uri;

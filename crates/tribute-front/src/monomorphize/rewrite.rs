@@ -7,7 +7,6 @@
 use std::convert::Infallible;
 
 use rustc_hash::FxHashMap as HashMap;
-use rustc_hash::FxHashSet as HashSet;
 
 use trunk_ir::SymbolPath;
 
@@ -19,7 +18,6 @@ use crate::ast::{
 };
 
 use super::instance::InstanceKey;
-use super::mangle::mangle_type_path;
 
 /// Rewrite map: original FuncDefId → list of (type_args, mangled_name) pairs.
 pub type RewriteMap<'db> = HashMap<FuncDefId<'db>, Vec<(InstanceKey<'db>, SymbolPath)>>;
@@ -85,23 +83,6 @@ fn specialized_callee<'db>(
 // ============================================================================
 // Type rewriting: Named { name, args } → Named { mangled, args: [] }
 // ============================================================================
-
-/// Build a type rewrite map from collected type instantiations.
-pub fn build_type_rewrite_map<'db>(
-    db: &'db dyn salsa::Database,
-    instantiations: &HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
-) -> TypeRewriteMap<'db> {
-    let mut map = TypeRewriteMap::default();
-    for (id, type_arg_sets) in instantiations {
-        let mut entries: Vec<(Vec<Type<'db>>, SymbolPath)> = type_arg_sets
-            .iter()
-            .map(|type_args| (type_args.clone(), mangle_type_path(db, *id, type_args)))
-            .collect();
-        entries.sort_by(|left, right| left.1.cmp(&right.1));
-        map.insert(*id, entries);
-    }
-    map
-}
 
 /// Redirect references to a struct's field functions (`T::f`, `T::f::set`,
 /// `T::f::modify`) to the same function of the struct's specialization for
@@ -287,9 +268,28 @@ fn find_mangled_for_typedef<'db>(
 
 #[cfg(test)]
 mod tests {
+    use super::super::mangle::mangle_type_path;
     use super::*;
     use crate::ast::AbilityRow;
+    use rustc_hash::FxHashSet as HashSet;
     use trunk_ir::Symbol;
+
+    /// Build a type rewrite map from collected type instantiations.
+    fn build_type_rewrite_map<'db>(
+        db: &'db dyn salsa::Database,
+        instantiations: &HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
+    ) -> TypeRewriteMap<'db> {
+        let mut map = TypeRewriteMap::default();
+        for (id, type_arg_sets) in instantiations {
+            let mut entries: Vec<(Vec<Type<'db>>, SymbolPath)> = type_arg_sets
+                .iter()
+                .map(|type_args| (type_args.clone(), mangle_type_path(db, *id, type_args)))
+                .collect();
+            entries.sort_by(|left, right| left.1.cmp(&right.1));
+            map.insert(*id, entries);
+        }
+        map
+    }
 
     #[salsa::db]
     #[derive(Default)]
