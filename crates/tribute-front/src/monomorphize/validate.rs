@@ -132,12 +132,11 @@ pub(super) fn validate<'db>(
     let mut queue: Vec<_> = functions
         .iter()
         .filter(|(id, (func, own))| {
-            *own && id.path(db) == ["main"]
-                || (*own
-                    && func.visibility == crate::ast::Visibility::Public
+            *own && (id.path(db) == ["main"]
+                || (func.visibility == crate::ast::Visibility::Public
                     && schemes
                         .get(id.path(db))
-                        .is_some_and(|scheme| scheme.type_params(db).is_empty()))
+                        .is_some_and(|scheme| scheme.type_params(db).is_empty())))
         })
         .map(|(id, _)| (*id, Vec::new()))
         .collect();

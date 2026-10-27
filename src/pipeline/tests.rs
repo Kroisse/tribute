@@ -2040,6 +2040,29 @@ mod Nested {
     }
 }
 
+/// Package std specializes in its own query; its failures still reach each
+/// user module's preparation, including after that query is memoized.
+#[salsa_test]
+fn std_specialization_failures_reach_user_preparation(db: &salsa::DatabaseImpl) {
+    crate::prelude::PreludeExtension::new(
+        db,
+        r#"extern "intrinsic" fn unsupported_std_intrinsic(value: Int) -> Int"#.to_owned(),
+    );
+    for name in ["first.trb", "second.trb"] {
+        let source = source_from_str(name, "fn main() -> Nil { Nil }");
+        let typed = parse_and_lower_ast(db, source).expect("frontend output");
+        assert!(prepare_frontend_for_lowering(db, typed, source).is_none());
+        let diagnostics =
+            prepare_frontend_for_lowering::accumulated::<Diagnostic>(db, typed, source);
+        itertools::assert_equal(
+            diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.inner.message.as_str()),
+            ["unsupported compiler intrinsic directive `std::unsupported_std_intrinsic`"],
+        );
+    }
+}
+
 /// An intrinsic identity is the declaration's package path, so a user
 /// declaration cannot claim one the `std` package owns.
 #[salsa_test]

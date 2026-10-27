@@ -80,9 +80,11 @@ impl<'db> SpecializationInput<'db> {
     }
 
     /// The checked module, continuing `specialized`, the specialization of
-    /// `dependency` alone. The result is the one `merge_bodies` gives, but
-    /// only the instances that depend on this module are specialized: the
-    /// dependency's own are reused from `specialized`.
+    /// `dependency` alone. Only the instances that depend on this module are
+    /// specialized; the dependency's own are reused from `specialized`. The
+    /// result has the sources, instances, and metadata `merge_bodies` gives,
+    /// with the instances ordered by package: the dependency's, then this
+    /// module's.
     pub fn continuing(
         db: &'db dyn salsa::Database,
         checked: TypeCheckOutput<'db>,
