@@ -1,8 +1,11 @@
+use std::cell::RefCell;
+use std::ops::Range;
 use std::path::Path;
 
 use fluent_uri::Uri;
 use ropey::Rope;
-use tree_sitter::{Parser, Tree};
+use salsa::Setter;
+use tree_sitter::{InputEdit, Parser, Point, Tree};
 use trunk_ir::Symbol;
 
 #[salsa::input(debug)]
@@ -55,6 +58,86 @@ pub fn path_to_uri(path: &Path) -> Uri<String> {
 pub fn parse_with_rope(parser: &mut Parser, rope: &Rope, old_tree: Option<&Tree>) -> Option<Tree> {
     let mut callback = |byte: usize, _| chunk_from_byte(rope, byte);
     parser.parse_with_options(&mut callback, old_tree, None)
+}
+
+thread_local! {
+    static PARSER: RefCell<Parser> = {
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_tribute::LANGUAGE.into())
+            .expect("Failed to set language");
+        RefCell::new(parser)
+    };
+}
+
+/// Parse a text rope with this thread's parser.
+pub fn parse_with_thread_local(rope: &Rope, old_tree: Option<&Tree>) -> Option<Tree> {
+    PARSER.with(|parser| {
+        let mut parser = parser.borrow_mut();
+        parse_with_rope(&mut parser, rope, old_tree)
+    })
+}
+
+/// Replace the bytes `range` of `source`'s text with `text`, and reparse it
+/// incrementally from its edited tree.
+///
+/// `range` must lie within the text on character boundaries.
+pub fn apply_edit(
+    db: &mut dyn salsa::Database,
+    source: SourceCst,
+    range: Range<usize>,
+    text: &str,
+) {
+    let mut rope = source.text(db).clone();
+    let start_byte = range.start;
+    let old_end_byte = range.end;
+    let start_position = byte_point(&rope, start_byte);
+    let old_end_position = byte_point(&rope, old_end_byte);
+    let new_end_position = point_after_text(start_position, text);
+    let new_end_byte = start_byte + text.len();
+
+    let start_char = rope.byte_to_char(start_byte);
+    let old_end_char = rope.byte_to_char(old_end_byte);
+    rope.remove(start_char..old_end_char);
+    rope.insert(start_char, text);
+
+    let tree = match source.tree(db).cloned() {
+        Some(mut tree) => {
+            tree.edit(&InputEdit {
+                start_byte,
+                old_end_byte,
+                new_end_byte,
+                start_position,
+                old_end_position,
+                new_end_position,
+            });
+            parse_with_thread_local(&rope, Some(&tree))
+        }
+        None => parse_with_thread_local(&rope, None),
+    };
+    source.set_text(db).to(rope);
+    source.set_tree(db).to(tree);
+}
+
+fn point_after_text(start: Point, text: &str) -> Point {
+    let mut row = start.row;
+    let mut column = start.column;
+    let mut lines = text.split('\n');
+    if let Some(first) = lines.next() {
+        column += first.len();
+    }
+    for line in lines {
+        row += 1;
+        column = line.len();
+    }
+    Point { row, column }
+}
+
+fn byte_point(rope: &Rope, offset: usize) -> Point {
+    let offset = offset.min(rope.len_bytes());
+    let row = rope.byte_to_line(offset);
+    let column = offset - rope.line_to_byte(row);
+    Point { row, column }
 }
 
 fn chunk_from_byte(rope: &Rope, byte: usize) -> &[u8] {
@@ -129,6 +212,28 @@ mod tests {
             let rope = Rope::from_str(text);
             let chunk = chunk_from_byte(&rope, byte);
             assert_eq!(chunk, expected, "{text:?} at byte {byte}");
+        }
+    }
+
+    #[test]
+    fn point_after_text_advances_by_rows_and_bytes() {
+        for (row, column, text, expected) in [
+            (0, 0, "hello", (0, 5)),
+            (0, 0, "hello\nworld", (1, 5)),
+            (5, 10, "abc", (5, 13)),
+            (0, 0, "a\nb\nc", (2, 1)),
+        ] {
+            let point = point_after_text(Point { row, column }, text);
+            assert_eq!((point.row, point.column), expected, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn byte_point_counts_bytes_from_the_line_start() {
+        let rope = Rope::from_str("hello\nworld");
+        for (offset, expected) in [(0, (0, 0)), (6, (1, 0)), (8, (1, 2)), (100, (1, 5))] {
+            let point = byte_point(&rope, offset);
+            assert_eq!((point.row, point.column), expected, "at byte {offset}");
         }
     }
 }

@@ -1,29 +1,10 @@
-use std::cell::RefCell;
 use std::collections::hash_map::Entry;
 
 use lsp_types::Uri;
 use parking_lot::RwLock;
 use ropey::Rope;
-use tree_sitter::Tree;
-use tribute_front::source_file::parse_with_rope;
+pub use tribute_front::source_file::parse_with_thread_local;
 use tribute_front::{SourceCst, path_to_uri};
-
-thread_local! {
-    static PARSER: RefCell<tree_sitter::Parser> = {
-        let mut parser = tree_sitter::Parser::new();
-        parser
-            .set_language(&tree_sitter_tribute::LANGUAGE.into())
-            .expect("Failed to set language");
-        RefCell::new(parser)
-    };
-}
-
-pub fn parse_with_thread_local(rope: &Rope, old_tree: Option<&Tree>) -> Option<Tree> {
-    PARSER.with(|parser| {
-        let mut parser = parser.borrow_mut();
-        parse_with_rope(&mut parser, rope, old_tree)
-    })
-}
 
 #[derive(Default)]
 #[salsa::db]

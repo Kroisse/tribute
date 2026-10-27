@@ -6,6 +6,10 @@ authors.workspace = true
 license.workspace = true
 description = "Front-end utilities for Tribute (CST parsing and text helpers)"
 
+[features]
+# The query-recording test database in `testing`.
+testing = []
+
 [dependencies]
 derive_more.workspace = true
 fluent-uri.workspace = true
@@ -29,3 +33,4 @@ insta.workspace = true
 proptest.workspace = true
 proptest-state-machine.workspace = true
 salsa-test-macros = { workspace = true }
+tribute-front = { path = ".", features = ["testing"] }

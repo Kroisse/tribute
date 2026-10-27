@@ -29,7 +29,6 @@ use lsp_types::{
 };
 use ropey::Rope;
 use salsa::{Database, Setter};
-use tree_sitter::{InputEdit, Point};
 
 use super::builtin_index::{builtin_at, builtin_symbols};
 use super::completion_index::{
@@ -40,6 +39,7 @@ use super::definition_index::{definition_index, validate_identifier};
 use super::type_index::{AstTypeIndex, print_ast_type, type_index as ast_type_index};
 use tribute::{TributeDatabaseImpl, database::parse_with_thread_local};
 use tribute_front::keywords::unraw;
+use tribute_front::source_file::apply_edit;
 
 /// Main LSP server state.
 struct LspServer {
@@ -874,52 +874,15 @@ impl LspServer {
 
         match change.range {
             Some(range) => {
-                let start = range.start;
-                let end = range.end;
-                let start_byte =
-                    offset_from_position(doc.text(&self.db), start.line, start.character).ok_or(
+                let text = doc.text(&self.db);
+                let start =
+                    offset_from_position(text, range.start.line, range.start.character).ok_or(
                         io::Error::new(io::ErrorKind::InvalidInput, "invalid start position"),
                     )?;
-                let old_end_byte =
-                    offset_from_position(doc.text(&self.db), end.line, end.character).ok_or(
-                        io::Error::new(io::ErrorKind::InvalidInput, "invalid end position"),
-                    )?;
-
-                let (start_row, start_col) = byte_line_col(doc.text(&self.db), start_byte);
-                let (old_end_row, old_end_col) = byte_line_col(doc.text(&self.db), old_end_byte);
-                let start_point = Point {
-                    row: start_row as usize,
-                    column: start_col as usize,
-                };
-                let old_end_point = Point {
-                    row: old_end_row as usize,
-                    column: old_end_col as usize,
-                };
-                let new_end_point = point_after_text(start_point, &change.text);
-                let new_end_byte = start_byte + change.text.len();
-
-                let mut rope = doc.text(&self.db).clone();
-                let start_char = rope.byte_to_char(start_byte);
-                let old_end_char = rope.byte_to_char(old_end_byte);
-                rope.remove(start_char..old_end_char);
-                rope.insert(start_char, &change.text);
-
-                let current_tree = doc.tree(&self.db).cloned();
-                let updated_tree = if let Some(mut tree) = current_tree {
-                    tree.edit(&InputEdit {
-                        start_byte,
-                        old_end_byte,
-                        new_end_byte,
-                        start_position: start_point,
-                        old_end_position: old_end_point,
-                        new_end_position: new_end_point,
-                    });
-                    parse_with_thread_local(&rope, Some(&tree))
-                } else {
-                    parse_with_thread_local(&rope, None)
-                };
-                doc.set_text(&mut self.db).to(rope.clone());
-                doc.set_tree(&mut self.db).to(updated_tree);
+                let end = offset_from_position(text, range.end.line, range.end.character).ok_or(
+                    io::Error::new(io::ErrorKind::InvalidInput, "invalid end position"),
+                )?;
+                apply_edit(&mut self.db, doc, start..end, &change.text);
             }
             None => {
                 let rope = Rope::from_str(&change.text);
@@ -1008,20 +971,6 @@ fn init_lsp_tracing(log_filter: &str, sender: crossbeam_channel::Sender<Message>
         .with(env_filter)
         .with(LspLayer::new(sender))
         .try_init();
-}
-
-fn point_after_text(start: Point, text: &str) -> Point {
-    let mut row = start.row;
-    let mut column = start.column;
-    let mut lines = text.split('\n');
-    if let Some(first) = lines.next() {
-        column += first.len();
-    }
-    for line in lines {
-        row += 1;
-        column = line.len();
-    }
-    Point { row, column }
 }
 
 fn span_to_range(rope: &Rope, span: trunk_ir::Span) -> lsp_types::Range {
@@ -1206,16 +1155,6 @@ fn offset_from_position(rope: &Rope, line: u32, character: u32) -> Option<usize>
     let char_offset = slice.utf16_cu_to_char(utf16_offset);
     let char_index = line_start_char + char_offset;
     Some(rope.char_to_byte(char_index))
-}
-
-fn byte_line_col(rope: &Rope, offset: usize) -> (u32, u32) {
-    let offset = offset.min(rope.len_bytes());
-    let char_index = rope.byte_to_char(offset);
-    let line = rope.char_to_line(char_index);
-    let line_start_char = rope.line_to_char(line);
-    let line_start_byte = rope.char_to_byte(line_start_char);
-    let column = offset - line_start_byte;
-    (line as u32, column as u32)
 }
 
 /// Cast a request to a specific type.
@@ -1451,38 +1390,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_point_after_text_single_line() {
-        let start = Point { row: 0, column: 0 };
-        let result = point_after_text(start, "hello");
-        assert_eq!(result.row, 0);
-        assert_eq!(result.column, 5);
-    }
-
-    #[test]
-    fn test_point_after_text_multiline() {
-        let start = Point { row: 0, column: 0 };
-        let result = point_after_text(start, "hello\nworld");
-        assert_eq!(result.row, 1);
-        assert_eq!(result.column, 5);
-    }
-
-    #[test]
-    fn test_point_after_text_with_offset() {
-        let start = Point { row: 5, column: 10 };
-        let result = point_after_text(start, "abc");
-        assert_eq!(result.row, 5);
-        assert_eq!(result.column, 13);
-    }
-
-    #[test]
-    fn test_point_after_text_multiple_newlines() {
-        let start = Point { row: 0, column: 0 };
-        let result = point_after_text(start, "a\nb\nc");
-        assert_eq!(result.row, 2);
-        assert_eq!(result.column, 1);
-    }
-
-    #[test]
     fn test_position_from_offset_simple() {
         let rope = Rope::from_str("hello\nworld");
         // 'h' is at offset 0
@@ -1522,14 +1429,6 @@ mod tests {
         // Column beyond line length should clamp
         let offset = offset_from_position(&rope, 0, 100);
         assert_eq!(offset, Some(2)); // End of "hi"
-    }
-
-    #[test]
-    fn test_byte_line_col_simple() {
-        let rope = Rope::from_str("hello\nworld");
-        assert_eq!(byte_line_col(&rope, 0), (0, 0));
-        assert_eq!(byte_line_col(&rope, 6), (1, 0));
-        assert_eq!(byte_line_col(&rope, 8), (1, 2));
     }
 
     #[test]

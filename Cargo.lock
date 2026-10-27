@@ -1888,6 +1888,7 @@ dependencies = [
  "tree-sitter",
  "tree-sitter-tribute",
  "tribute-core",
+ "tribute-front",
  "tribute-ir",
  "trunk-ir",
  "winnow",
