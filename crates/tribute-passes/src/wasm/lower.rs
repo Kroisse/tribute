@@ -755,7 +755,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
-  !Closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
+  !Closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
   !Frame = adt.struct<Frame()>
   !Env = adt.struct<Env(closure: !Closure, evidence: !Evidence, frame: !Frame)>
   wasm.func @worker(%evidence: !Evidence, %closure: !Closure, %frame: !Frame) {

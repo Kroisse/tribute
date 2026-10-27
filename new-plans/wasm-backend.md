@@ -490,8 +490,11 @@ WasmGC subtype 관계는 `wasm_gc.struct`의 type 속성 `supertype`으로만 �
 layout들로 이루어진다.
 
 - Closure base(`layout = "closure"`)는 예약 index 3의 `{ entries: i32 }`이며 final이
-  아니다. Entries 필드는 immutable이며 closure function table 안의
-  [convention table](ir.md#convention-entry) 시작 index다. 한 entry 함수 목록은 function
+  아니다. Entries 필드는 immutable이며 function table 안의
+  [convention table](ir.md#convention-entry) 시작 index다. Function table은
+  `func.constant`가 가리키는 함수와 convention table이 함께 쓰는 table 하나이며,
+  `tribute_rt.convention_table` lowering이 entry 함수 목록마다 연속한 칸을 그 element
+  segment 끝에 더한다. 한 entry 함수 목록은 function
   table에서 `Direct`, `EvidenceDirect`, `Cps` 순서로 연속한 세 칸을 차지한다. 본문도
   adapter도 없는 칸은 그 convention entry의 signature를 가진 trap 함수이며, 본문은 `unreachable`
   하나다. Signature가 같은 칸들은 trap 함수 하나를 공유하므로 `call_indirect`의 타입

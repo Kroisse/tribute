@@ -448,7 +448,7 @@ mod tests {
 
     /// The evidence type and stand-ins for the runtime functions.
     const RUNTIME: &str = r#"  !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
-  !Closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
+  !Closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
   !"std::Option$std::runtime::Dispatch" = adt.enum<"std::Option$std::runtime::Dispatch" { None(), Some(!Closure) }>
   !OptionRef = adt.typeref<{name = "std::Option$std::runtime::Dispatch"}>
   func.func @"std::runtime::evidence::lookup"(%ev: !Evidence, %id: core.i32) -> core.i32 {

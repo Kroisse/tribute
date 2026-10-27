@@ -1,6 +1,7 @@
-//! Tribute runtime dialect — boxing, unboxing, and reference counting.
+//! Tribute runtime dialect — boxing, unboxing, reference counting, and closure convention tables.
 
 use crate::dialect::tribute_rtti::{ManagedRef, ManagedRefType};
+use trunk_ir::attr_kind::SymbolRef;
 use trunk_ir::dialect::core::{Bytes, Ptr};
 use trunk_ir::op_flag::Pure;
 
@@ -15,6 +16,13 @@ mod tribute_rt {
     struct Intref;
     #[implements(ManagedRefType)]
     struct Anyref;
+    /// A reference to a static convention table, the type of a closure's
+    /// convention table field. It is unmanaged: the table is never released
+    /// and holds no managed reference. Each target converts it to its own
+    /// table reference, the table's address on native targets and its first
+    /// slot in the function table on Wasm, before it lowers the
+    /// `convention_table` and `convention_entry` operations that use it.
+    struct ConventionTableRef;
 
     #[flags(Pure)]
     fn box_int(value: Value<_>) -> Value<_> {}
@@ -61,6 +69,36 @@ mod tribute_rt {
     /// reference-counted object. The inverse of `into_raw`, and like it not a
     /// pure operation: dropping it would leak the unit.
     fn from_raw(ptr: Value<Ptr>) -> Value<impl ManagedRef> {}
+
+    /// A reference to the static convention table holding the entry
+    /// functions `entries` in order, the value a closure stores in its
+    /// convention table field. The reference is unmanaged and never
+    /// released. Target lowering builds one table per distinct entry list:
+    /// read-only data of function addresses on native targets, and
+    /// consecutive slots of the function table on Wasm, whose start index is
+    /// the reference. See the closure storage layout in `new-plans/ir.md`.
+    ///
+    /// ```text
+    /// %table = tribute_rt.convention_table {entries = [@f]} : tribute_rt.convention_table_ref
+    /// ```
+    ///
+    /// Its result is a `convention_table_ref` until the target converts that
+    /// type, so the schema leaves it unconstrained.
+    #[flags(Pure)]
+    fn convention_table(entries: Attr<[SymbolRef]>) -> Value<_> {}
+
+    /// The entry function at `index` of the convention table `table`, as an
+    /// indirect callee: a load of the function address on native targets,
+    /// and the function table index `table + index` on Wasm.
+    ///
+    /// ```text
+    /// %entry = tribute_rt.convention_entry %table {index = 0} : core.i32
+    /// ```
+    ///
+    /// `table` is a `convention_table_ref` until the target converts that
+    /// type, so the schema leaves it unconstrained.
+    #[flags(Pure)]
+    fn convention_entry(index: Attr<u32>, table: Value<_>) -> Value<_> {}
 }
 
 impl ManagedRefType for Intref {}

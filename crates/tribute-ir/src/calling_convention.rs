@@ -559,9 +559,9 @@ mod tests {
     func.return %x
   }
   func.func @agrees(%x: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
-    %c = closure.new {func_ref = @callee, tribute.calling_convention = "direct"} : !direct
+    %c = closure.new {entries = [@callee], tribute.calling_convention = "direct"} : !direct
     %r = func.call_indirect %c, %x {signature = !fn, tribute.calling_convention = "direct"} : core.i32
-    %p = closure.new {func_ref = @callee, tribute.calling_convention = "cps"} : !plain
+    %p = closure.new {entries = [@callee], tribute.calling_convention = "cps"} : !plain
     func.return %r
   }
 }"#;
@@ -579,8 +579,8 @@ mod tests {
             "%r = func.call_indirect %c, %x {signature = !fn, tribute.calling_convention = \"cps\"}",
         );
         let input = input.replace(
-            "%c = closure.new {func_ref = @callee, tribute.calling_convention = \"direct\"} : !direct",
-            "%c = closure.new {func_ref = @callee, tribute.calling_convention = \"cps\"} : !direct",
+            "%c = closure.new {entries = [@callee], tribute.calling_convention = \"direct\"} : !direct",
+            "%c = closure.new {entries = [@callee], tribute.calling_convention = \"cps\"} : !direct",
         );
         assert_eq!(
             violations(&input),

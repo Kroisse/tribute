@@ -719,12 +719,19 @@ fn main() ->{Io} Nil {
         ctx.value_def(frame),
         trunk_ir::refs::ValueDef::BlockArg(_, 2)
     ));
-    let trunk_ir::refs::ValueDef::OpResult(callee_load, 0) = ctx.value_def(*callee) else {
-        panic!("Done callee must be loaded from the same closure");
+    // The callee is the first entry of the convention table the same
+    // closure holds.
+    let load_of = |value| {
+        let trunk_ir::refs::ValueDef::OpResult(load, 0) = ctx.value_def(value) else {
+            panic!("Done callee must be loaded from the same closure");
+        };
+        clif::Load::from_op(&ctx, load).expect("callee load")
     };
-    let callee_load = clif::Load::from_op(&ctx, callee_load).expect("callee load");
-    assert_eq!(callee_load.offset(&ctx), 0);
-    assert_eq!(ctx.op_operands(callee_load.op_ref()), [done]);
+    let entry_load = load_of(*callee);
+    assert_eq!(entry_load.offset(&ctx), 0);
+    let table_load = load_of(ctx.op_operands(entry_load.op_ref())[0]);
+    assert_eq!(table_load.offset(&ctx), 0);
+    assert_eq!(ctx.op_operands(table_load.op_ref()), [done]);
     assert!(matches!(
         ctx.value_def(*value),
         trunk_ir::refs::ValueDef::OpResult(producer, 0)

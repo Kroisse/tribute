@@ -887,7 +887,7 @@ impl TerminalFunctions {
         ops.push(cell_new.op_ref());
         let mut member = |ctx: &mut IrContext, symbol: &Symbol, captures: &[ValueRef], ty| {
             let closure = closure::New::operands(captures.to_vec())
-                .func_ref(SymbolPath::new([symbol.clone()]))
+                .entries([SymbolPath::new([symbol.clone()])])
                 .results(ty)
                 .build(ctx, location);
             ops.push(closure.op_ref());
@@ -3016,7 +3016,7 @@ mod tests {
                 "arith.const: calling-convention metadata on an operation that cannot carry it",
             ),
             (
-                r#"%c = closure.new {func_ref = @callee, tribute.calling_convention = "cps"} : !direct"#,
+                r#"%c = closure.new {entries = [@callee], tribute.calling_convention = "cps"} : !direct"#,
                 "closure.new: calling convention differs from the one its callable type records",
             ),
         ] {

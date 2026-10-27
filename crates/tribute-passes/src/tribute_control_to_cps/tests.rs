@@ -1730,8 +1730,8 @@ fn parameter_attributes_follow_their_parameters_to_the_physical_abi() {
     assert!(logical.result_attrs(&ctx).all(AttributeMap::is_empty));
 
     // The physical Cps callable has no result and consumes every input,
-    // including the hidden ones. Its definition, the function reference,
-    // and the indirect call all agree on one exact type.
+    // including the hidden ones. Its definition and the indirect call agree
+    // on one exact type, and the closure's convention table holds it.
     crate::lower_closure_lambda::lower_closure_lambda(&mut ctx, module);
     crate::target_abi::lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
     crate::closure_lower::lower_prepared_closures(&mut ctx, module).unwrap();
@@ -1749,10 +1749,12 @@ fn parameter_attributes_follow_their_parameters_to_the_physical_abi() {
     assert!(physical.results(&ctx).is_empty());
     let mut references = Vec::new();
     let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
-        if let Ok(constant) = func::Constant::from_op(&ctx, op)
-            && constant.func_ref(&ctx) == ["__tribute_func_ref_adapter_0"]
+        if let Ok(table) = tribute_ir::dialect::tribute_rt::ConventionTable::from_op(&ctx, op)
+            && table
+                .entries(&ctx)
+                .any(|entry| entry == ["__tribute_func_ref_adapter_0"])
         {
-            references.push(ctx.op_result_types(op)[0]);
+            references.push(physical.as_type_ref());
         }
         if let Ok(call) = func::TailCallIndirect::from_op(&ctx, op)
             && call.signature(&ctx) == physical.as_type_ref()
@@ -1831,7 +1833,11 @@ fn func_ref_in_a_nested_module_is_adapted_in_that_module() {
     let mut adapters = Vec::new();
     let _ = walk_op::<()>(&ctx, module.op(), &mut |op| {
         if let Ok(closure) = closure::New::from_op(&ctx, op) {
-            adapters.push(symbols.resolve(&ctx, op, closure.func_ref(&ctx)));
+            adapters.extend(
+                closure
+                    .entries(&ctx)
+                    .map(|entry| symbols.resolve(&ctx, op, entry)),
+            );
         }
         ControlFlow::Continue(WalkAction::Advance)
     });

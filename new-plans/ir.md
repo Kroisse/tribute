@@ -1957,8 +1957,9 @@ Closure 저장 layout은 두 종류다.
 - Capture layout의 identity는 base와 capture 필드 타입 목록이다. Capture 타입 목록이
   같은 두 closure는 같은 layout을 쓴다. 필드 이름과 struct 이름은 canonical
   생성자가 정하며 의미를 갖지 않는다.
-- Convention table 필드의 타입은 target이 정하는 정적 table 참조 표현이다. 이 필드는
-  managed 참조가 아니며 해제하지 않는다. Target은 closure의 callable type `S`마다 base를
+- Convention table 필드의 타입은 경계 안에서 `tribute_rt.convention_table_ref`이고,
+  target이 자기 정적 table 참조 표현으로 바꾼다. 이 필드는 managed 참조가 아니며
+  해제하지 않는다. Target은 closure의 callable type `S`마다 base를
   정한다. 모든 `S`에 base 하나를 쓸 수도 있고 `S`마다 다른 base를 둘 수도 있다.
   `S`마다 base를 두고 entry를 typed 함수 참조로 표현하면, entry 함수의 environment
   입력이 다시 그 base이므로 base와 entry 함수 타입은 서로를 가리킨다. 이 재귀는
@@ -1971,10 +1972,13 @@ Closure 저장 layout은 두 종류다.
 storage 확정은 다음 변환을 함께 적용한다.
 
 - `closure.new`는 convention table 참조와 capture를 필드로 가진 할당 하나가 된다. 결과는
-  capture layout에서 base로의 upcast다. Convention table은 entry 함수 목록마다 정적
-  data 하나로 한 번 만든다.
-- `closure.entry`는 base의 convention table 필드를 읽고 그 table에서 convention의
-  entry를 읽는 일이 된다. 간접 호출은 closure 필드 하나와 table 원소 하나를 읽는다.
+  capture layout에서 base로의 upcast다. Table 참조는 entry 함수 목록을 담은
+  `tribute_rt.convention_table`이 만든다.
+- `closure.entry`는 base의 convention table 필드를 읽고 그 table에서
+  `tribute_rt.convention_entry`로 convention의 entry를 읽는 일이 된다. 간접 호출은
+  closure 필드 하나와 table 원소 하나를 읽는다.
+- 두 `tribute_rt` operation은 경계 출구를 지나며, target 단계가 convention table을 entry
+  함수 목록마다 정적 data 하나로 한 번 만든다.
 - `closure.unpack`은 environment 입력을 base에서 정확한 capture layout으로 바꾸는
   cast 하나와 capture 필드 읽기가 된다. 이 cast는 `closure.*` dialect 설명의 복원
   규칙을 따르며, Wasm에서는 `ref.cast`, native에서는 pointer 그대로다.

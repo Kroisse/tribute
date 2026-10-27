@@ -1203,7 +1203,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !S = adt.struct<S(value: core.i32)>
-  !Closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
+  !Closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
   !E = adt.enum<E { None(), Some(core.i32) }>
 
   wasm.func @main(%env: wasm.anyref) -> core.nil {

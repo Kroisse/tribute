@@ -46,12 +46,8 @@ use trunk_ir::types::{AttributeMap, Location};
 // ADT type helpers (arena versions)
 // =============================================================================
 
-/// Get the canonical Closure ADT type (arena version).
-///
-/// Layout: (table_idx: i32, env: anyref)
-///
-/// IMPORTANT: Must use wasm.anyref (not tribute_rt.anyref) to ensure consistent
-/// type identity for emit lookups.
+/// The Wasm closure base: the convention table's first slot in the function
+/// table, `{ entries: i32 }`.
 pub fn closure_adt_type(ctx: &mut IrContext) -> TypeRef {
     let i32_ty = core::I32::type_ref(ctx);
     crate::closure_lower::closure_base_layout(ctx, i32_ty)
@@ -268,10 +264,12 @@ pub(crate) fn convert_builtin_layouts(ctx: &mut IrContext, module: trunk_ir::rew
         if trunk_ir::dialect::core::Bytes::matches(ctx, ty) {
             return Some(bytes);
         }
-        use tribute_ir::dialect::tribute_rt::{Anyref, Bool, Float, Int, Intref, Nat};
+        use tribute_ir::dialect::tribute_rt::{
+            Anyref, Bool, ConventionTableRef, Float, Int, Intref, Nat,
+        };
 
         let name = ctx.get_type(ty).name;
-        if [Int::NAME, Nat::NAME, Bool::NAME].contains(&name) {
+        if [Int::NAME, Nat::NAME, Bool::NAME, ConventionTableRef::NAME].contains(&name) {
             Some(i32_ty)
         } else if name == Float::NAME {
             Some(f64_ty)
@@ -330,6 +328,16 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
     // Convert tribute_rt.bool -> core.i32 (boolean as i32)
     tc.add_conversion(move |ctx, ty| {
         if tribute_ir::dialect::tribute_rt::Bool::matches(ctx, ty) {
+            Some(i32_ty)
+        } else {
+            None
+        }
+    });
+
+    // Convert tribute_rt.convention_table_ref -> core.i32 (the table's first
+    // slot in the function table)
+    tc.add_conversion(move |ctx, ty| {
+        if tribute_ir::dialect::tribute_rt::ConventionTableRef::matches(ctx, ty) {
             Some(i32_ty)
         } else {
             None
@@ -667,7 +675,7 @@ mod tests {
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
+  !Closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @f(%c: !Closure) {
     %erased = core.unrealized_conversion_cast %c : tribute_rt.anyref
     func.call %erased {callee = @use}
@@ -826,7 +834,7 @@ mod tests {
             adt::Struct::from_type_ref(&ctx, target)
                 .unwrap()
                 .fields(&ctx),
-            [("code", i32_ty)],
+            [("entries", i32_ty)],
         );
     }
 }

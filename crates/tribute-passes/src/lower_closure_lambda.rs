@@ -16,10 +16,10 @@
 //!   %r = arith.add %x, %param
 //!   func.return %r
 //! }
-//! %k = closure.new @foo::__clam_0, %x, %y
+//! %k = closure.new %x, %y {entries = [@foo::__clam_0]}
 //! ```
 //!
-//! The code function's environment is the closure itself, typed with the
+//! The entry function's environment is the closure itself, typed with the
 //! closure's exact type, and it reads its captures with `closure.unpack`.
 
 use crate::collections::HashMap;
@@ -226,7 +226,7 @@ fn lower_single_lambda(
 
     // Create closure.new holding the captures, replacing the lambda.
     let closure_new_op = closure::New::operands(captures.clone())
-        .func_ref(trunk_ir::SymbolPath::new([lifted_name]))
+        .entries([trunk_ir::SymbolPath::new([lifted_name])])
         .results(result_ty)
         .build(ctx, location);
     if let Some(convention) = convention {
