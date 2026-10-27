@@ -802,16 +802,10 @@ fn only(value: Nil) -> Nat {
 // Literal pattern equality
 // ========================================================================
 
-#[salsa::tracked]
-fn check_without_prelude(db: &dyn salsa::Database, source: SourceCst) {
-    let _ = tribute_front::query::type_check_output(db, source);
-}
-
 /// Error messages from checking `source` alone, without the prelude.
 fn errors_without_prelude(db: &salsa::DatabaseImpl, source: &str) -> Vec<String> {
     let source = SourceCst::from_source_str(db, "test.trb", source);
-    check_without_prelude(db, source);
-    check_without_prelude::accumulated::<tribute_core::diagnostic::Diagnostic>(db, source)
+    tribute_front::analysis::diagnostics(db, source, tribute_front::analysis::Environment::Builtins)
         .into_iter()
         .filter(|diagnostic| {
             diagnostic.inner.severity == tribute_core::diagnostic::DiagnosticSeverity::Error

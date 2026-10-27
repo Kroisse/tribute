@@ -208,13 +208,14 @@ mod tests {
     use super::*;
     use crate::SortedMap;
     use crate::ast_to_ir::lower::IrBuilder;
+    use salsa_test_macros::salsa_test;
     use tribute_ir::dialect::adt;
     use tribute_ir::dialect::tribute_control::OperationDeclaration;
     use trunk_ir::context::BlockData;
     use trunk_ir::location::Span;
 
-    #[salsa::tracked(returns(copy))]
-    fn operation_arguments_use_resolved_parameter_types_inner(db: &dyn salsa::Database) -> bool {
+    #[salsa_test]
+    fn operation_arguments_use_resolved_parameter_types(db: &dyn salsa::Database) {
         let mut ir = IrContext::new();
         let path = ir.intern_path("logical.trb");
         let mut ctx = IrLoweringCtx::new(
@@ -250,12 +251,5 @@ mod tests {
         let mut builder = IrBuilder::new(&mut scope, &mut ir, block);
         let adapted = adapt_operation_arguments(&mut builder, location, vec![value], &declaration);
         assert_eq!(builder.ir.value_ty(adapted[0]), parameter);
-        true
-    }
-
-    #[test]
-    fn operation_arguments_use_resolved_parameter_types() {
-        let db = salsa::DatabaseImpl::new();
-        assert!(operation_arguments_use_resolved_parameter_types_inner(&db));
     }
 }

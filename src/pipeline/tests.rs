@@ -2032,7 +2032,7 @@ mod Nested {
     let typed = parse_and_lower_ast(db, source).expect("frontend output");
     assert!(frontend_diagnostics(db, source).is_empty());
     assert!(prepare_frontend_for_lowering(db, typed, source).is_none());
-    let diagnostics = prepare_frontend_for_lowering::accumulated::<Diagnostic>(db, typed, source);
+    let diagnostics = prepare_frontend_diagnostics(db, typed, source);
     assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
     for (diagnostic, identity) in diagnostics
         .iter()
@@ -2060,8 +2060,7 @@ fn std_specialization_failures_reach_user_preparation(db: &salsa::DatabaseImpl) 
         let source = source_from_str(name, "fn main() -> Nil { Nil }");
         let typed = parse_and_lower_ast(db, source).expect("frontend output");
         assert!(prepare_frontend_for_lowering(db, typed, source).is_none());
-        let diagnostics =
-            prepare_frontend_for_lowering::accumulated::<Diagnostic>(db, typed, source);
+        let diagnostics = prepare_frontend_diagnostics(db, typed, source);
         itertools::assert_equal(
             diagnostics
                 .iter()
@@ -2082,7 +2081,7 @@ fn user_declaration_cannot_claim_a_library_intrinsic(db: &salsa::DatabaseImpl) {
     let typed = parse_and_lower_ast(db, source).expect("frontend output");
     assert!(frontend_diagnostics(db, source).is_empty());
     assert!(prepare_frontend_for_lowering(db, typed, source).is_none());
-    let diagnostics = prepare_frontend_for_lowering::accumulated::<Diagnostic>(db, typed, source);
+    let diagnostics = prepare_frontend_diagnostics(db, typed, source);
     itertools::assert_equal(
         diagnostics
             .iter()

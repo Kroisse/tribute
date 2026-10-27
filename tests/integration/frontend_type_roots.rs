@@ -1,7 +1,8 @@
 //! Valid metadata-only roots must materialize nominal declarations before erasure.
 use salsa_test_macros::salsa_test;
-use tribute::pipeline::{parse_and_lower_ast, prepare_frontend_for_lowering};
-use tribute_core::Diagnostic;
+use tribute::pipeline::{
+    parse_and_lower_ast, prepare_frontend_diagnostics, prepare_frontend_for_lowering,
+};
 use tribute_front::{
     SourceCst,
     ast::{
@@ -117,7 +118,7 @@ fn prepare_root<'db>(
         metadata,
     );
     let prepared = prepare_frontend_for_lowering(db, input, source);
-    let errors = prepare_frontend_for_lowering::accumulated::<Diagnostic>(db, input, source);
+    let errors = prepare_frontend_diagnostics(db, input, source);
     assert!(
         errors.is_empty(),
         "invalid metadata for {root:?}: {errors:?}"
