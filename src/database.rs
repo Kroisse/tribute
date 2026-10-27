@@ -1,29 +1,10 @@
-use std::cell::RefCell;
 use std::collections::hash_map::Entry;
 
 use lsp_types::Uri;
 use parking_lot::RwLock;
 use ropey::Rope;
-use tree_sitter::Tree;
-use tribute_front::source_file::parse_with_rope;
+use tribute_front::source_file::parse_rope;
 use tribute_front::{SourceCst, path_to_uri};
-
-thread_local! {
-    static PARSER: RefCell<tree_sitter::Parser> = {
-        let mut parser = tree_sitter::Parser::new();
-        parser
-            .set_language(&tree_sitter_tribute::LANGUAGE.into())
-            .expect("Failed to set language");
-        RefCell::new(parser)
-    };
-}
-
-pub fn parse_with_thread_local(rope: &Rope, old_tree: Option<&Tree>) -> Option<Tree> {
-    PARSER.with(|parser| {
-        let mut parser = parser.borrow_mut();
-        parse_with_rope(&mut parser, rope, old_tree)
-    })
-}
 
 #[derive(Default)]
 #[salsa::db]
@@ -52,7 +33,7 @@ impl TributeDatabaseImpl {
         } else {
             let file = std::fs::File::open(&path)?;
             let contents = Rope::from_reader(file)?;
-            let tree = parse_with_thread_local(&contents, None);
+            let tree = parse_rope(&contents, None);
             let source_cst = SourceCst::new(self, uri, contents, tree);
             let mut lock = self.documents.write();
             match lock.entry(key) {
@@ -67,7 +48,7 @@ impl TributeDatabaseImpl {
 
     pub fn open_document(&self, uri: &Uri, text: Rope) {
         let key = uri.as_str().to_owned();
-        let tree = parse_with_thread_local(&text, None);
+        let tree = parse_rope(&text, None);
         let source_cst = SourceCst::new(self, (**uri).clone(), text, tree);
         self.documents.write().insert(key, source_cst);
     }
@@ -86,31 +67,6 @@ impl TributeDatabaseImpl {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_parse_with_thread_local() {
-        let source = "fn hello() { 42 }";
-        let rope = Rope::from_str(source);
-        let tree = parse_with_thread_local(&rope, None);
-        assert!(tree.is_some(), "Should successfully parse valid source");
-
-        let tree = tree.unwrap();
-        let root = tree.root_node();
-        assert_eq!(root.kind(), "source_file");
-    }
-
-    #[test]
-    fn test_parse_with_thread_local_incremental() {
-        let source1 = "fn foo() { 1 }";
-        let rope1 = Rope::from_str(source1);
-        let tree1 = parse_with_thread_local(&rope1, None).unwrap();
-
-        // Incremental parse with old tree
-        let source2 = "fn foo() { 2 }";
-        let rope2 = Rope::from_str(source2);
-        let tree2 = parse_with_thread_local(&rope2, Some(&tree1));
-        assert!(tree2.is_some(), "Should successfully parse with old tree");
-    }
 
     #[test]
     fn test_document_lifecycle() {

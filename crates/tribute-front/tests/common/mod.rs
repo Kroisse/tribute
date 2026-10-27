@@ -1,8 +1,6 @@
 //\! Shared test helpers for tribute-front integration tests.
 #![allow(dead_code)]
 
-pub mod execution_log;
-
 use itertools::Itertools;
 use tribute_core::diagnostic::Diagnostic;
 use tribute_front::SourceCst;

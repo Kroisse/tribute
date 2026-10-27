@@ -6,8 +6,8 @@
 use ropey::Rope;
 use salsa::Database;
 use tribute::TributeDatabaseImpl;
-use tribute::database::parse_with_thread_local;
 use tribute_front::SourceCst;
+use tribute_front::source_file::parse_rope;
 use trunk_ir::callable::{CallableBody, classify_callable_body};
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::func;
@@ -17,7 +17,7 @@ use trunk_ir::rewrite::Module;
 /// Helper to compile code through the shared production pipeline and return arena IR.
 fn compile_to_ir(db: &dyn salsa::Database, code: &str, name: &str) -> (IrContext, Module) {
     let source_code = Rope::from_str(code);
-    let tree = parse_with_thread_local(&source_code, None);
+    let tree = parse_rope(&source_code, None);
     let source_file = SourceCst::from_path(db, name, source_code, tree);
     tribute::pipeline::compile_ast(db, source_file)
         .expect("shared production pipeline should succeed")

@@ -13,9 +13,9 @@ use crate::common;
 use ropey::Rope;
 use salsa::Database;
 use tribute::TributeDatabaseImpl;
-use tribute::database::parse_with_thread_local;
 use tribute::pipeline::{CompilationConfig, OptimizationOptions, compile_to_native_binary};
 use tribute_front::SourceCst;
+use tribute_front::source_file::parse_rope;
 
 /// Helper to compile code and collect diagnostics using CLI pipeline.
 fn compile_and_check(code: &str, name: &str) -> Vec<tribute_core::diagnostic::Diagnostic> {
@@ -24,7 +24,7 @@ fn compile_and_check(code: &str, name: &str) -> Vec<tribute_core::diagnostic::Di
     let source_code = Rope::from_str(code);
 
     TributeDatabaseImpl::default().attach(|db| {
-        let tree = parse_with_thread_local(&source_code, None);
+        let tree = parse_rope(&source_code, None);
         let source_file = SourceCst::from_path(db, name, source_code.clone(), tree);
 
         let config = CompilationConfig::new(db, false, OptimizationOptions::production());
@@ -45,7 +45,7 @@ fn compile_frontend_and_check(code: &str, name: &str) -> Vec<tribute_core::diagn
     let source_code = Rope::from_str(code);
 
     TributeDatabaseImpl::default().attach(|db| {
-        let tree = parse_with_thread_local(&source_code, None);
+        let tree = parse_rope(&source_code, None);
         let source_file = SourceCst::from_path(db, name, source_code.clone(), tree);
 
         tribute::pipeline::parse_and_lower_ast::accumulated::<Diagnostic>(db, source_file)
