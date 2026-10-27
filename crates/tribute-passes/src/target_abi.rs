@@ -2558,6 +2558,25 @@ mod tests {
     }
 
     #[test]
+    fn root_bridge_rejects_an_entry_that_names_no_definition() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            &EVIDENCE_DIRECT_MAIN.replace("tribute.entry = @main", "tribute.entry = @missing"),
+        );
+        let error = compose_root_entry_bridge(&mut ctx, module).unwrap_err();
+        assert!(error.to_string().contains("names no func.func"), "{error}");
+    }
+
+    #[test]
+    fn root_bridge_consumes_the_entry_reference() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, EVIDENCE_DIRECT_MAIN);
+        compose_root_entry_bridge(&mut ctx, module).unwrap();
+        assert!(tribute_ir::metadata::root_entry(&ctx, module.op()).is_none());
+    }
+
+    #[test]
     fn root_bridge_creates_no_lambda_for_target_phase() {
         let (ctx, module) = compose_promoted_root();
         let printed = print_module(&ctx, module.op());
