@@ -1199,8 +1199,8 @@ ast_to_ir (tribute_control callable/control + ordinary value IR, convention 없�
 추상 frame 표면, logical `ability.*` dispatch 표면이다. `lower_continuation_frames`의
 출력에는 추상 frame 표면 대신 nominal frame layout, frame closure, `effect.dispatch_cps`,
 `ability.handle_dispatch`가 있다. Shared ability/evidence pass와 strict target
-ABI validation은 `closure.closure` type과 closure transfer의 convention을 그대로
-소비한다. 그 뒤 경계 안에서 closure operation과 모든 type-bearing storage
+ABI validation은 `closure.closure` type의 callable과 closure transfer의 convention을
+그대로 소비한다. 그 뒤 경계 안에서 closure operation과 모든 type-bearing storage
 surface를 [closure 저장 layout](ir.md#closure-저장-layout)으로 함께 바꾸고 target evidence/runtime
 lowering이 이를 소비한다. 경계 이후의 proper tail transfer lowering은 이 layout을
 명시적 layout 식별자로 구별하며 이름으로 판별하지 않는다. Closure lowering이

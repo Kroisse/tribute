@@ -3116,8 +3116,9 @@ mod tests {
                 "arith.const: calling-convention metadata on an operation that cannot carry it",
             ),
             (
-                r#"%c = closure.new {entries = [@callee], tribute.calling_convention = "cps"} : !direct"#,
-                "Cps callable must have logical core.never result",
+                r#"%c = closure.new {entries = [@callee], tribute.calling_convention = "direct"} : !direct
+    %d = closure.new {entries = [@callee], tribute.calling_convention = "evidence_direct"} : !direct"#,
+                "a closure type is entered through two conventions",
             ),
         ] {
             let mut ctx = IrContext::new();
