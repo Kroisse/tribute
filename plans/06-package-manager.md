@@ -16,15 +16,14 @@ Important for ecosystem growth but requires stable language foundation first.
 ### Package Definition
 
 ```toml
-# tribute.toml
+# Tribute.toml
 [package]
-name = "my-lib"
+name = "my_lib"
 version = "1.0.0"
 description = "A sample Tribute library"
 authors = ["John Doe <john@example.com>"]
 
 [dependencies]
-std = "1.0"
 json = "0.5"
 
 [dev-dependencies]
@@ -54,7 +53,7 @@ trb login                 # Authenticate with registry
 
 ### Phase 1: Local Package Management
 
-1. Design package manifest format (tribute.toml)
+1. Design package manifest format (Tribute.toml)
 2. Implement dependency resolution algorithm
 3. Local package cache system
 4. Basic build integration
