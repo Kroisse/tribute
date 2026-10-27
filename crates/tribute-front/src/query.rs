@@ -464,7 +464,7 @@ fn explicit() ->{} Nil { Nil }
 
     /// Recursively check if a type contains any unresolved UniVar.
     fn contains_univar(db: &dyn salsa::Database, ty: crate::ast::Type) -> bool {
-        use crate::ast::fold::{TypeFoldable, TypeVisitor};
+        use crate::ast::fold::{TypeVisitable, TypeVisitor};
         use std::ops::ControlFlow;
 
         struct ContainsUniVar<'db>(&'db dyn salsa::Database);

@@ -6,7 +6,7 @@ use std::ops::ControlFlow;
 use super::{
     AbilityRow, HashMap, RowSubst, RowVar, SmallVec, Type, TypeKind, TypeParam, TypeSubst, UniVarId,
 };
-use crate::ast::fold::{TypeFoldable, TypeFolder, TypeVisitor};
+use crate::ast::fold::{TypeFoldable, TypeFolder, TypeVisitable, TypeVisitor};
 
 impl<'db> TypeSubst<'db> {
     /// Create an empty substitution.

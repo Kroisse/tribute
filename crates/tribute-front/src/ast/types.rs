@@ -20,7 +20,7 @@ use trunk_ir::Symbol;
 
 use super::NodeId;
 use super::phases::{FuncDefId, TypeDefId};
-use fold::{TypeFoldable, TypeVisitor};
+use fold::{TypeVisitable, TypeVisitor};
 
 /// A monomorphic type.
 ///

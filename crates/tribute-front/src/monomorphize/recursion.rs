@@ -3,7 +3,7 @@
 use std::ops::ControlFlow;
 
 use super::validate::{InstanceError, InstanceErrorKind};
-use crate::ast::fold::{TypeFoldable, TypeVisitor};
+use crate::ast::fold::{TypeVisitable, TypeVisitor};
 use crate::ast::{
     Decl, DeclTable, ExprKind, FuncDefId, NodeId, ResolvedRef, Type, TypeKind, TypeScheme, TypedRef,
 };

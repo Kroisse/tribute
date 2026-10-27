@@ -8,7 +8,7 @@ use crate::ast::visit::{RefSite, Refs, walk_decl, walk_decl_table};
 use std::convert::Infallible;
 use std::ops::ControlFlow;
 
-use crate::ast::fold::{TypeFoldable, TypeVisitor};
+use crate::ast::fold::{TypeVisitable, TypeVisitor};
 use crate::ast::{
     AbilityRow, DeclTable, FuncDefId, ResolvedRef, Type, TypeDefId, TypeKind, TypeScheme, TypedRef,
 };
