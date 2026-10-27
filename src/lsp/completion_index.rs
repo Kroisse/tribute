@@ -82,10 +82,11 @@ pub fn complete_keywords(prefix: &str) -> Vec<AstCompletionItem> {
 fn root_decls<'a, 'db>(
     module: &'a DeclTable<TypedRef<'db>>,
 ) -> impl Iterator<Item = &'a Decl<TypedRef<'db>>> {
+    let root = tribute_front::resolve::PackageName::executable_root().identity_path(&[]);
     module
         .entries
         .iter()
-        .filter(|entry| entry.module.is_root())
+        .filter(move |entry| entry.module == root)
         .map(|entry| &entry.decl)
 }
 

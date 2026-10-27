@@ -403,7 +403,7 @@ pub(super) fn lower_function<'db>(
     let location = ctx.location(function.id);
     let signature = function_signature(ctx, ir, &function);
     let callable = signature.callable_type(ir);
-    let root_entry = crate::is_root_main(&function.name, ctx.module_path().is_root());
+    let root_entry = crate::is_root_main(&function.name, ctx.module_path());
     let inferred_row = function.effects.is_none() || root_entry;
     let args = function
         .params

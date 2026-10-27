@@ -215,8 +215,9 @@ fn find_func<'a, V>(module: &'a Module<V>, name: &Symbol) -> Option<&'a FuncDecl
 
 /// Find the function declaration named `name` in the root module of `table`.
 fn find_root_func<'a, V>(table: &'a DeclTable<V>, name: &Symbol) -> Option<&'a FuncDecl<V>> {
+    let root = crate::resolve::PackageName::executable_root().identity_path(&[]);
     table.entries.iter().find_map(|entry| match &entry.decl {
-        Decl::Function(f) if entry.module.is_root() && f.name == *name => Some(f),
+        Decl::Function(f) if entry.module == root && f.name == *name => Some(f),
         _ => None,
     })
 }
