@@ -862,9 +862,14 @@ Lowering 입력을 만드는 경로는 특수화 결과에서 출발하는 하�
 선언 테이블을 대상으로 한다. 의존 패키지의 선언 메타데이터(function·constructor
 scheme, ability 정의, well-known identity)는 조회로 받고, 의존 패키지의 본문과
 표현식·참조별 메타데이터는 사용자 패키지의 것보다 앞에 쌓아 병합한다. 의존
-패키지의 본문을 병합하지 않은 특수화는 사용자 패키지의 선언만 특수화한다. 현재
-compilation 단위는 하나의 module이므로 의존 패키지 generic의 인스턴스도 그
-module에 둔다. Separate compilation에서 그 소유권을 정하는 조건은
+패키지의 본문을 병합하지 않은 특수화는 사용자 패키지의 선언만 특수화한다. 의존
+패키지가 여럿이면 의존 순서(위상 순서)대로 병합하여 각 패키지를 그것이 의존하는
+패키지들 뒤에 두고, 컴파일하는 패키지를 마지막에 둔다. 의존 관계가 순서를 정하지
+않는 패키지 사이에도 순서는 빌드마다 같게 정해진다. 이름 해석과 타입 검사는
+패키지마다 하지만 특수화와 이후 단계는 빌드 전체의 하나의 module에서 실행하므로,
+의존 패키지 generic의 인스턴스도 그 module에 둔다
+([Linking — Compilation Unit](linking.md#compilation-unit)). Backend separate
+compilation에서 인스턴스 소유권을 정하는 조건은
 [Linking — Separate Compilation의 요구 조건](linking.md#separate-compilation의-요구-조건)을
 따른다.
 
