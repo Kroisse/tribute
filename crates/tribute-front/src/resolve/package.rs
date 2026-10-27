@@ -3,7 +3,7 @@
 
 use trunk_ir::{Symbol, SymbolPath};
 
-use super::LIBRARY_PACKAGE;
+use super::STD_PACKAGE;
 
 /// Which package a module tree is: a library package, by its name, or the
 /// root package of an executable build. Every module path of the tree is
@@ -29,7 +29,7 @@ impl PackageName {
 
     /// The library package the prelude is the root of.
     pub fn std() -> Self {
-        Self::library(Symbol::new(LIBRARY_PACKAGE))
+        Self::library(Symbol::new(STD_PACKAGE))
     }
 
     /// Whether this is a library package.
@@ -39,9 +39,7 @@ impl PackageName {
 
     /// Whether this is package `std`.
     pub fn is_std(&self) -> bool {
-        self.name
-            .as_ref()
-            .is_some_and(|name| name == LIBRARY_PACKAGE)
+        self.name.as_ref().is_some_and(|name| name == STD_PACKAGE)
     }
 
     /// The identity path of `module`, a path of this package's module tree
@@ -56,7 +54,7 @@ impl PackageName {
             Some(name) => Some(name.clone()),
             None => module
                 .first()
-                .is_some_and(|first| first == LIBRARY_PACKAGE)
+                .is_some_and(|first| first == STD_PACKAGE)
                 .then(|| Symbol::new("pkg")),
         };
         SymbolPath::new(package.into_iter().chain(module.iter().cloned()))
@@ -76,12 +74,12 @@ impl PackageName {
             (Some(name), Some((first, rest))) if first == name => Some(rest),
             (Some(_), _) => None,
             (None, Some((first, rest)))
-                if first == "pkg" && rest.first().is_some_and(|f| f == LIBRARY_PACKAGE) =>
+                if first == "pkg" && rest.first().is_some_and(|f| f == STD_PACKAGE) =>
             {
                 Some(rest)
             }
             // A library package's paths start with its name.
-            (None, Some((first, _))) if first == LIBRARY_PACKAGE => None,
+            (None, Some((first, _))) if first == STD_PACKAGE => None,
             (None, _) => Some(identity),
         }
     }

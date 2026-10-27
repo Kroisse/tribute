@@ -413,11 +413,12 @@ pub(crate) fn restriction_module(module: &[Symbol], scope: &[Symbol]) -> Option<
     module.starts_with(&named).then(|| SymbolPath::new(named))
 }
 
-/// The package the prelude belongs to. Its declarations' identities and
-/// symbols start with this path.
-pub const LIBRARY_PACKAGE: &str = "std";
+/// The name of package `std`, which the prelude belongs to and every
+/// package depends on. Its declarations' identities and symbols start
+/// with it.
+pub const STD_PACKAGE: &str = "std";
 
-/// The module of [`LIBRARY_PACKAGE`] whose `pub` items every module sees
+/// The module of [`STD_PACKAGE`] whose `pub` items every module sees
 /// under their short names.
 pub const PRELUDE_MODULE: [&str; 2] = ["prelude", "v0"];
 
