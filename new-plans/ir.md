@@ -1971,10 +1971,13 @@ Closure 저장 layout은 두 종류다.
 storage 확정은 다음 변환을 함께 적용한다.
 
 - `closure.new`는 convention table 참조와 capture를 필드로 가진 할당 하나가 된다. 결과는
-  capture layout에서 base로의 upcast다. Convention table은 entry 함수 목록마다 정적
-  data 하나로 한 번 만든다.
-- `closure.entry`는 base의 convention table 필드를 읽고 그 table에서 convention의
-  entry를 읽는 일이 된다. 간접 호출은 closure 필드 하나와 table 원소 하나를 읽는다.
+  capture layout에서 base로의 upcast다. Table 참조는 entry 함수 목록을 담은
+  `tribute_rt.convention_table`이 만든다.
+- `closure.entry`는 base의 convention table 필드를 읽고 그 table에서
+  `tribute_rt.convention_entry`로 convention의 entry를 읽는 일이 된다. 간접 호출은
+  closure 필드 하나와 table 원소 하나를 읽는다.
+- 두 `tribute_rt` operation은 경계 출구를 지나며, target 단계가 convention table을 entry
+  함수 목록마다 정적 data 하나로 한 번 만든다.
 - `closure.unpack`은 environment 입력을 base에서 정확한 capture layout으로 바꾸는
   cast 하나와 capture 필드 읽기가 된다. 이 cast는 `closure.*` dialect 설명의 복원
   규칙을 따르며, Wasm에서는 `ref.cast`, native에서는 pointer 그대로다.
