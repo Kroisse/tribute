@@ -2872,4 +2872,179 @@ fn main() -> Nil {
         let symbol = convert_document_symbol_info(&info, &rope);
         assert_eq!(symbol.kind, lsp_types::SymbolKind::CLASS);
     }
+
+    /// The position of the first occurrence of `needle` in `source`.
+    fn position_of(source: &str, needle: &str) -> lsp_types::Position {
+        let offset = source.find(needle).expect("the needle is in the source");
+        let (line, character) = position_from_offset(&Rope::from_str(source), offset);
+        lsp_types::Position { line, character }
+    }
+
+    /// The type a hover at the last `needle` in the open `source` shows.
+    fn hover_type_at(
+        harness: &mut TestHarness,
+        uri: &Uri,
+        source: &str,
+        needle: &str,
+    ) -> Option<String> {
+        let params = HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+                position: {
+                    let offset = source.rfind(needle).expect("the needle is in the source");
+                    let (line, character) = position_from_offset(&Rope::from_str(source), offset);
+                    lsp_types::Position { line, character }
+                },
+            },
+            work_done_progress_params: Default::default(),
+        };
+        let hover = harness.request::<HoverRequest>(params)?;
+        extract_hover_type(&hover).map(str::to_owned)
+    }
+
+    /// The labels of the completions right after the first `needle` in the
+    /// open `source`.
+    fn completion_labels_after(
+        harness: &mut TestHarness,
+        uri: &Uri,
+        source: &str,
+        needle: &str,
+    ) -> Vec<String> {
+        let mut position = position_of(source, needle);
+        position.character += needle.chars().count() as u32;
+        let params = CompletionParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+                position,
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            context: None,
+        };
+        match harness.request::<Completion>(params) {
+            Some(lsp_types::CompletionResponse::List(list)) => {
+                list.items.into_iter().map(|item| item.label).collect()
+            }
+            Some(lsp_types::CompletionResponse::Array(items)) => {
+                items.into_iter().map(|item| item.label).collect()
+            }
+            None => Vec::new(),
+        }
+    }
+
+    /// Open `source`, which has errors, and return its diagnostics' messages.
+    fn open_erroneous(harness: &mut TestHarness, uri: &Uri, source: &str) -> Vec<String> {
+        let diagnostics = harness.open_document_with_diagnostics(uri, source);
+        let messages: Vec<String> = diagnostics
+            .diagnostics
+            .into_iter()
+            .map(|diagnostic| diagnostic.message)
+            .collect();
+        assert!(!messages.is_empty(), "the source should have errors");
+        messages
+    }
+
+    /// A type error in one call leaves the rest of the module typed.
+    #[test]
+    fn type_error_keeps_partial_results() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("partial_type_error");
+        let source = r#"fn add(x: Int, y: Int) -> Int { x + y }
+
+fn main() -> Nil {
+    let total = add(+1, True)
+    let label = "sum"
+    let next = add(total, +2)
+    next
+    Nil
+}
+"#;
+        let messages = open_erroneous(&mut harness, &uri, source);
+        assert_eq!(messages.len(), 1, "{messages:?}");
+
+        for (needle, ty) in [("\"sum\"", "String"), ("total", "Int"), ("next", "Int")] {
+            assert_eq!(
+                hover_type_at(&mut harness, &uri, source, needle).as_deref(),
+                Some(ty),
+                "{needle}"
+            );
+        }
+        let labels = completion_labels_after(&mut harness, &uri, source, "let next = ad");
+        assert!(labels.iter().any(|label| label == "add"), "{labels:?}");
+    }
+
+    /// A call of a method no type declares is reported, and the other
+    /// expressions keep their types.
+    #[test]
+    fn unresolved_method_keeps_partial_results() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("partial_unresolved_method");
+        let source = r#"fn twice(n: Nat) -> Nat { n + n }
+
+fn main() -> Nil {
+    let count = 2
+    let missing = count.no_such_method()
+    let doubled = twice(count)
+    doubled
+    Nil
+}
+"#;
+        let messages = open_erroneous(&mut harness, &uri, source);
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("no_such_method")),
+            "{messages:?}"
+        );
+
+        assert_eq!(
+            hover_type_at(&mut harness, &uri, source, "count").as_deref(),
+            Some("Nat")
+        );
+        assert_eq!(
+            hover_type_at(&mut harness, &uri, source, "doubled").as_deref(),
+            Some("Nat")
+        );
+        let labels = completion_labels_after(&mut harness, &uri, source, "let doubled = tw");
+        assert!(labels.iter().any(|label| label == "twice"), "{labels:?}");
+    }
+
+    /// A generic call whose type argument an error leaves undetermined is an
+    /// incomplete instance; the module is never lowered, but the rest of it
+    /// keeps its types.
+    #[test]
+    fn incomplete_instance_keeps_partial_results() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("partial_incomplete_instance");
+        let source = r#"fn identity(x: a) -> a { x }
+
+fn main() -> Nil {
+    let unknown = identity(not_declared)
+    let known = identity(+3)
+    known
+    Nil
+}
+"#;
+        let messages = open_erroneous(&mut harness, &uri, source);
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("not_declared")),
+            "{messages:?}"
+        );
+
+        assert_eq!(
+            hover_type_at(&mut harness, &uri, source, "known").as_deref(),
+            Some("Int")
+        );
+        let identity = hover_type_at(&mut harness, &uri, source, "identity(+3)");
+        assert!(
+            identity
+                .as_deref()
+                .is_some_and(|ty| ty.starts_with("fn(Int)")),
+            "{identity:?}"
+        );
+        let labels = completion_labels_after(&mut harness, &uri, source, "let known = iden");
+        assert!(labels.iter().any(|label| label == "identity"), "{labels:?}");
+    }
 }
