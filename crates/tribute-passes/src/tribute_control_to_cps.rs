@@ -14,7 +14,7 @@ use std::ops::ControlFlow;
 use tribute_ir::callable_abi::CallableAbi;
 use tribute_ir::calling_convention::{
     CallingConvention, cps_completion_type, cps_resume_exact_type, physical_closure_function_type,
-    physical_closure_type, physical_closure_type_with_environment_index,
+    physical_closure_type,
 };
 use tribute_ir::dialect::{ability, closure, effect, tribute_control};
 use trunk_ir::OpList;

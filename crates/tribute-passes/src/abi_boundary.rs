@@ -39,7 +39,6 @@ const FORBIDDEN_DIALECTS: &[&str] = &[
 const FORBIDDEN_ATTRIBUTES: &[&str] = &[
     "tribute.calling_convention",
     "tribute.cps_continuation_frame_result",
-    "tribute.closure_environment_index",
     tribute_ir::dialect::tribute_control::ABILITY_ROW_ATTR,
     tribute_ir::dialect::tribute_control::ROW_BINDERS_ATTR,
     tribute_ir::dialect::tribute_control::ROW_UNIONS_ATTR,
@@ -680,12 +679,12 @@ mod tests {
         assert_eq!(
             kinds(
                 r#"core.module @test {
-  func.func @run() attributes {evidence = [func.func_sig<(adt.typeref<{name = "Frame", tribute.closure_environment_index = 0}>) -> ()>]} {
+  func.func @run() attributes {evidence = [func.func_sig<(adt.typeref<{name = "Frame", tribute.cps_continuation_frame_result = core.nil}>) -> ()>]} {
     func.return
   }
 }"#
             ),
-            [attribute("tribute.closure_environment_index")]
+            [attribute("tribute.cps_continuation_frame_result")]
         );
         // Dictionary keys and types nested in dictionary values.
         assert_eq!(
@@ -709,12 +708,12 @@ mod tests {
         assert_eq!(
             kinds(
                 r#"core.module @test {
-  func.func @run() attributes {meta = {ty = adt.typeref<{name = "Frame", tribute.closure_environment_index = 0}>}} {
+  func.func @run() attributes {meta = {ty = adt.typeref<{name = "Frame", tribute.cps_continuation_frame_result = core.nil}>}} {
     func.return
   }
 }"#
             ),
-            [attribute("tribute.closure_environment_index")]
+            [attribute("tribute.cps_continuation_frame_result")]
         );
         // Block argument attribute. Textual IR cannot spell block argument
         // attributes other than names, so attach one directly.

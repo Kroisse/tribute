@@ -313,7 +313,7 @@ impl Converter<'_> {
             self.convert_type(operation_result)
         };
         let function = func::func_sig(self.ctx, params, [result]).as_type_ref();
-        let closure_type = physical_closure_type(self.ctx, function, convention);
+        let closure_type = physical_closure_type(self.ctx, function);
         let lambda = closure_over(self.ctx, location, region, closure_type, convention);
         let binding = ability::HandlerBinding {
             ability,

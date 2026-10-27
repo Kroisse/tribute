@@ -66,9 +66,9 @@ fn source_logical_cps_root_module(body: &str) -> (IrContext, Module) {
             !"std::runtime::evidence::Marker" = adt.struct<"std::runtime::evidence::Marker"(ability_id: core.i32, prompt_tag: core.i32)>
             !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
             !Frame = adt.typeref<{name = "__tribute_continuation_frame_root_nil", tribute.cps_continuation_frame_result = core.nil}>
-            !Done = closure.closure<func.func_sig<(core.nil) -> core.never>, {tribute.calling_convention = "cps", tribute.closure_environment_index = 0}>
-            !Resume = closure.closure<func.func_sig<(!Evidence, !Frame, tribute_rt.anyref) -> core.never>, {tribute.calling_convention = "cps", tribute.closure_environment_index = 0}>
-            !Dispatch = closure.closure<func.func_sig<(!Evidence, !Resume, core.i32, core.i32, core.i32, tribute_rt.anyref) -> core.never>, {tribute.calling_convention = "cps", tribute.closure_environment_index = 1}>
+            !Done = closure.closure<func.func_sig<(core.nil) -> core.never>>
+            !Resume = closure.closure<func.func_sig<(!Evidence, !Frame, tribute_rt.anyref) -> core.never>>
+            !Dispatch = closure.closure<func.func_sig<(!Evidence, !Resume, core.i32, core.i32, core.i32, tribute_rt.anyref) -> core.never>>
             !__tribute_continuation_frame_root_nil = adt.struct<__tribute_continuation_frame_root_nil(done: !Done, dispatch: !Dispatch), {tribute.cps_continuation_frame_result = core.nil}>
             !Payload = adt.struct<__tribute_ability_payload_7590c57e()>
             func.func @main(%evidence: !Evidence, %frame: !Frame) -> core.never attributes {tribute.calling_convention = "cps"} {
@@ -687,7 +687,7 @@ fn main() ->{Io} Nil {
         .filter(|&call| {
             clif::ReturnCallIndirect::matches(&ctx, call)
                 && ctx.op_operands(call).len() == 3
-                && ctx.op_operands(call).last().is_some_and(|&argument| {
+                && ctx.op_operands(call).get(1).is_some_and(|&argument| {
                     matches!(
                         ctx.value_def(argument),
                         trunk_ir::refs::ValueDef::OpResult(producer, _)
@@ -702,8 +702,8 @@ fn main() ->{Io} Nil {
         "the Cps callback fixture must have one CPS call with the addition result"
     );
     let call = calls[0];
-    let [callee, continuation_environment, value] = ctx.op_operands(call) else {
-        panic!("CPS Done tail must have one callee, its environment, and the value");
+    let [callee, value, continuation_environment] = ctx.op_operands(call) else {
+        panic!("CPS Done tail must have one callee, the value, and its environment");
     };
     assert!(clif::ReturnCallIndirect::matches(&ctx, call));
     assert_eq!(ctx.op_attrs(call).get("tribute.calling_convention"), None);
@@ -738,7 +738,7 @@ fn main() ->{Io} Nil {
             if clif::Iadd::matches(&ctx, producer)
     ));
     let signature = clif_indirect_signature(&ctx, call);
-    assert_eq!(signature.inputs(&ctx), [pointer_type, i32_type]);
+    assert_eq!(signature.inputs(&ctx), [i32_type, pointer_type]);
     assert!(signature.results(&ctx).is_empty());
 }
 

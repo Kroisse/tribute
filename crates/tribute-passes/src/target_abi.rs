@@ -1,4 +1,4 @@
-//! Shared target-neutral physicalization of convention-proven CPS signatures.
+//! Shared target-neutral physicalization of CPS signatures.
 //!
 //! The pass consumes exact callable metadata, validates the whole transfer surface, and
 //! only then maps logical CPS `core.never` results to the shared empty-result
@@ -11,11 +11,7 @@ use std::ops::ControlFlow;
 use tribute_ir::continuation_frame;
 
 use tribute_ir::calling_convention::{
-    CLOSURE_ENVIRONMENT_INDEX_ATTR, cps_closure_function_type,
-    get_physical_closure_environment_index,
-};
-use tribute_ir::calling_convention::{
-    CallingConvention, ConventionBearing, DynConventionBearing, get_physical_closure_convention,
+    CallingConvention, ConventionBearing, DynConventionBearing, cps_closure_function_type,
 };
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::{ability, closure, effect, tribute_rt};
@@ -128,14 +124,14 @@ pub(crate) fn lower_cps_signatures_to_physical(
     validate_transfers(ctx, &ops, &functions, never)?;
     validate_dispatch_contracts(ctx, module)?;
     validate_root_entry(ctx, module, ContractPhase::Logical)?;
+    let closures = closure_conventions(ctx, &ops, &functions)?;
 
     let aliases = ctx.type_aliases().to_vec();
-    let mut converter = PhysicalTypeConverter::new(ctx, never);
+    let mut converter = PhysicalTypeConverter::new(ctx, never, closures);
     let mut alias_updates = Vec::new();
     let mut function_types = Vec::new();
     let mut result_types = Vec::new();
     let mut attributes = Vec::new();
-    let mut consumed_attributes = Vec::new();
     let mut consumed_conventions = Vec::new();
     let mut indirect_signatures = Vec::new();
     let mut block_args = Vec::new();
@@ -162,16 +158,6 @@ pub(crate) fn lower_cps_signatures_to_physical(
             };
             if converted != signature {
                 function_types.push((op, converted));
-            }
-            // Environment provenance was validated against the signature
-            // above; the physical signature carries the environment as an
-            // ordinary input, so no later pass reads the recorded position.
-            if converter
-                .ctx
-                .op_attrs(op)
-                .contains_key(CLOSURE_ENVIRONMENT_INDEX_ATTR)
-            {
-                consumed_attributes.push((op, CLOSURE_ENVIRONMENT_INDEX_ATTR));
             }
         }
 
@@ -298,9 +284,6 @@ pub(crate) fn lower_cps_signatures_to_physical(
     }
     for (op, name, value) in attributes {
         ctx.op_attrs_mut(op).insert(name, value);
-    }
-    for (op, name) in consumed_attributes {
-        ctx.op_attrs_mut(op).remove(name);
     }
     for op in consumed_conventions {
         DynConventionBearing::get(ctx, op)
@@ -641,7 +624,6 @@ fn compose_value_delimiters(ctx: &mut IrContext, module: Module) -> Result<(), T
         let answer = delimit.result_ty(ctx);
         let malformed = || TargetAbiError::new("value delimiter: body is not an exact Cps closure");
         let body_ty = crate::closure_lower::physical_closure_type_for_callee(ctx, body)
-            .filter(|ty| get_physical_closure_convention(ctx, *ty) == Some(CallingConvention::Cps))
             .ok_or_else(malformed)?;
         let signature = cps_closure_function_type(ctx, body_ty).ok_or_else(malformed)?;
         let callable = func::FuncSig::from_type_ref(ctx, signature).ok_or_else(malformed)?;
@@ -785,7 +767,7 @@ impl TerminalFunctions {
         // cell and `Dispatch` captures nothing.
         let done_ty = func::func_sig_with_param_attrs(
             ctx,
-            [(frame.done, contract.clone()), (answer, contract)],
+            [(answer, contract.clone()), (frame.done, contract)],
             [],
             AttributeMap::new(),
         )
@@ -798,27 +780,27 @@ impl TerminalFunctions {
             location,
             args: vec![
                 BlockArgData {
-                    ty: frame.done,
-                    attrs: environment_name.clone(),
-                },
-                BlockArgData {
                     ty: answer,
                     attrs: answer_name,
+                },
+                BlockArgData {
+                    ty: frame.done,
+                    attrs: environment_name.clone(),
                 },
             ],
             ops: smallvec![],
             parent_region: None,
         });
         let done_args = ctx.block_args(done_entry).to_vec();
-        let cell = closure::Unpack::operands(done_args[0])
+        let cell = closure::Unpack::operands(done_args[1])
             .results([cell_ty])
             .build(ctx, location);
         ctx.push_op(done_entry, cell.op_ref());
         let cell = cell.results(ctx)[0];
         let stored = if slot == answer {
-            done_args[1]
+            done_args[0]
         } else {
-            let erased = tribute_rt::convert_value(ctx, location, done_args[1], slot);
+            let erased = tribute_rt::convert_value(ctx, location, done_args[0], slot);
             ctx.push_op(done_entry, erased);
             ctx.op_result(erased, 0)
         };
@@ -1133,13 +1115,6 @@ fn validate_root_done_type(
     source_result: TypeRef,
     physical_results: &[TypeRef],
 ) -> Result<(), TargetAbiError> {
-    if get_physical_closure_convention(ctx, done) != Some(CallingConvention::Cps)
-        || get_physical_closure_environment_index(ctx, done) != Some(0)
-    {
-        return Err(TargetAbiError::new(
-            "target root bridge: frame Done must carry exact Cps closure provenance",
-        ));
-    }
     let callable = cps_closure_function_type(ctx, done).ok_or_else(|| {
         TargetAbiError::new("target root bridge: frame Done is not an exact Cps closure")
     })?;
@@ -1161,13 +1136,6 @@ fn validate_root_dispatch_type(
     evidence: TypeRef,
     physical_results: &[TypeRef],
 ) -> Result<(), TargetAbiError> {
-    if get_physical_closure_convention(ctx, dispatch) != Some(CallingConvention::Cps)
-        || get_physical_closure_environment_index(ctx, dispatch) != Some(1)
-    {
-        return Err(TargetAbiError::new(
-            "target root bridge: frame Dispatch must carry exact Cps closure provenance",
-        ));
-    }
     let callable = dispatch_callable_function_type(ctx, dispatch)?;
     let callable =
         func::FuncSig::from_type_ref(ctx, callable).expect("validated dispatch callable");
@@ -1186,13 +1154,6 @@ fn validate_root_dispatch_type(
     {
         return Err(TargetAbiError::new(
             "target root bridge: frame Dispatch operands differ from the exact terminal ABI",
-        ));
-    }
-    if get_physical_closure_convention(ctx, *resume) != Some(CallingConvention::Cps)
-        || get_physical_closure_environment_index(ctx, *resume) != Some(0)
-    {
-        return Err(TargetAbiError::new(
-            "target root bridge: frame Dispatch resume must carry exact Cps closure provenance",
         ));
     }
     let resume = cps_closure_function_type(ctx, *resume).ok_or_else(|| {
@@ -1308,10 +1269,18 @@ fn collect_functions(
             )));
         }
         let key = defined_function_name(ctx, op)?;
+        let environment_index = environment_index(ctx, op, callable.inputs(ctx))?;
+        if environment_index.is_some_and(|index| index != convention.closure_environment_index()) {
+            return Err(TargetAbiError::new(format!(
+                "target ABI: entry function `{}` has its environment outside the slot of its \
+                 convention",
+                function.sym_name(ctx)
+            )));
+        }
         let identity = FunctionIdentity {
             signature,
             convention,
-            environment_index: environment_index(ctx, op, callable.inputs(ctx))?,
+            environment_index,
         };
         if functions.insert(key, identity).is_some() {
             return Err(TargetAbiError::new(
@@ -1407,9 +1376,7 @@ fn validate_transfers(
                 tribute_ir::dialect::closure::Closure::from_type_ref(ctx, closure_type)
                     .unwrap()
                     .func_type(ctx);
-            if closure_signature != signature
-                || get_physical_closure_convention(ctx, closure_type) != Some(convention)
-            {
+            if closure_signature != signature {
                 return Err(TargetAbiError::new(
                     "target ABI: indirect signature differs from exact closure contract",
                 ));
@@ -1448,6 +1415,82 @@ fn validate_transfers(
         }
     }
     Ok(())
+}
+
+/// The convention each closure type is entered through, read from the
+/// operations that record it: the entry functions whose environment has the
+/// type, the `closure.new`s that make it, and the indirect transfers that
+/// enter it. A continuation frame layout records its own: its `Done`, its
+/// `Dispatch`, and the resumption `Dispatch` takes are `Cps`. So are the body
+/// of an `effect.delimit` and the dispatch and resumption of an
+/// `effect.dispatch_cps`, which enter them after physicalization. A closure type
+/// has one convention until a closure holds an entry per convention.
+fn closure_conventions(
+    ctx: &IrContext,
+    ops: &[OpRef],
+    functions: &HashMap<SymbolPath, FunctionIdentity>,
+) -> Result<HashMap<TypeRef, CallingConvention>, TargetAbiError> {
+    let mut conventions = HashMap::default();
+    let mut record = |ty: TypeRef, convention: CallingConvention| {
+        if !tribute_ir::dialect::closure::Closure::matches(ctx, ty) {
+            return Ok(());
+        }
+        match conventions.insert(ty, convention) {
+            Some(known) if known != convention => Err(TargetAbiError::new(
+                "target ABI: a closure type is entered through two conventions",
+            )),
+            _ => Ok(()),
+        }
+    };
+    for identity in functions.values() {
+        if let Some(index) = identity.environment_index {
+            let signature = func::FuncSig::from_type_ref(ctx, identity.signature)
+                .expect("validated function signature");
+            record(signature.inputs(ctx)[index], identity.convention)?;
+        }
+    }
+    for (_, layout) in ctx.type_aliases() {
+        let Some(layout) = adt::Struct::from_type_ref(ctx, *layout)
+            .filter(|_| continuation_frame::result_type(ctx, *layout).is_some())
+        else {
+            continue;
+        };
+        for (name, field) in layout.fields(ctx) {
+            if name != "done" && name != "dispatch" {
+                continue;
+            }
+            record(field, CallingConvention::Cps)?;
+            if name == "dispatch"
+                && let Some(&resume) = cps_closure_function_type(ctx, field)
+                    .and_then(|callable| func::FuncSig::from_type_ref(ctx, callable))
+                    .and_then(|callable| callable.inputs(ctx).get(1))
+            {
+                record(resume, CallingConvention::Cps)?;
+            }
+        }
+    }
+    for &op in ops {
+        if let Ok(delimit) = effect::Delimit::from_op(ctx, op) {
+            record(ctx.value_ty(delimit.body(ctx)), CallingConvention::Cps)?;
+            continue;
+        }
+        if let Ok(dispatch) = effect::DispatchCps::from_op(ctx, op) {
+            record(ctx.value_ty(dispatch.dispatch(ctx)), CallingConvention::Cps)?;
+            record(ctx.value_ty(dispatch.resume(ctx)), CallingConvention::Cps)?;
+            continue;
+        }
+        let Some(convention) = DynConventionBearing::of(ctx, op) else {
+            continue;
+        };
+        if let Ok(new) = tribute_ir::dialect::closure::New::from_op(ctx, op) {
+            record(ctx.value_ty(new.result(ctx)), convention)?;
+        } else if let Some(callee) =
+            DynIndirectCallLike::get(ctx, op).and_then(|call| call.indirect_callee(ctx))
+        {
+            record(ctx.value_ty(callee), convention)?;
+        }
+    }
+    Ok(conventions)
 }
 
 fn is_transfer(ctx: &IrContext, op: OpRef) -> bool {
@@ -1580,40 +1623,18 @@ fn validate_constant(
     Ok(())
 }
 
+/// The slot of the environment `function` takes: the entry block argument
+/// marked `__env`. A function without a body takes none.
 fn environment_index(
     ctx: &IrContext,
     function: OpRef,
     params: &[TypeRef],
 ) -> Result<Option<usize>, TargetAbiError> {
-    let attributes = &ctx.op(function).attributes;
-    let present = attributes
-        .view(ctx)
-        .get(CLOSURE_ENVIRONMENT_INDEX_ATTR)
-        .is_some();
-    let declared = attributes
-        .view(ctx)
-        .get_u32(CLOSURE_ENVIRONMENT_INDEX_ATTR)
-        .ok()
-        .flatten()
-        .map(|index| index as usize);
-    if present && declared.is_none() {
-        return Err(TargetAbiError::new(
-            "target ABI: malformed closure environment index metadata",
-        ));
-    }
-    if let Some(index) = declared {
-        validate_environment_slot(ctx, params, index)?;
-    }
-
     let Some(region) = ctx.op_region(function, 0) else {
-        return Ok(declared);
+        return Ok(None);
     };
     let Some(&entry) = ctx.region(region).blocks.first() else {
-        return declared.map_or(Ok(None), |_| {
-            Err(TargetAbiError::new(
-                "target ABI: closure environment provenance has no entry block",
-            ))
-        });
+        return Ok(None);
     };
     let arguments = &ctx.block(entry).args;
     if arguments.len() != params.len() {
@@ -1629,17 +1650,9 @@ fn environment_index(
         })
         .collect();
     match indices.as_slice() {
-        [] if declared.is_some() => Err(TargetAbiError::new(
-            "target ABI: closure environment provenance has no matching `__env` parameter",
-        )),
         [] => Ok(None),
         [index] => {
             validate_environment_slot(ctx, params, *index)?;
-            if declared.is_some_and(|declared| declared != *index) {
-                return Err(TargetAbiError::new(
-                    "target ABI: closure environment index differs from `__env` parameter",
-                ));
-            }
             Ok(Some(*index))
         }
         _ => Err(TargetAbiError::new(
@@ -1649,7 +1662,7 @@ fn environment_index(
 }
 
 /// A code function's environment is its own closure, so the slot must hold
-/// a convention-proven closure type.
+/// a closure type.
 fn validate_environment_slot(
     ctx: &IrContext,
     params: &[TypeRef],
@@ -1660,9 +1673,9 @@ fn validate_environment_slot(
             "target ABI: closure environment index is outside function signature",
         ));
     };
-    if get_physical_closure_convention(ctx, environment).is_none() {
+    if !tribute_ir::dialect::closure::Closure::matches(ctx, environment) {
         return Err(TargetAbiError::new(
-            "target ABI: closure environment must be a convention-proven closure",
+            "target ABI: closure environment must be a closure",
         ));
     }
     Ok(())
@@ -1679,15 +1692,21 @@ fn parent_op(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
 struct PhysicalTypeConverter<'a> {
     ctx: &'a mut IrContext,
     never: TypeRef,
+    closures: HashMap<TypeRef, CallingConvention>,
     embedded: HashMap<TypeRef, TypeRef>,
     callable: HashMap<(TypeRef, CallingConvention, bool), TypeRef>,
 }
 
 impl<'a> PhysicalTypeConverter<'a> {
-    fn new(ctx: &'a mut IrContext, never: TypeRef) -> Self {
+    fn new(
+        ctx: &'a mut IrContext,
+        never: TypeRef,
+        closures: HashMap<TypeRef, CallingConvention>,
+    ) -> Self {
         Self {
             ctx,
             never,
+            closures,
             embedded: HashMap::default(),
             callable: HashMap::default(),
         }
@@ -1784,9 +1803,13 @@ impl<'a> PhysicalTypeConverter<'a> {
                     "target ABI: closure type must contain one callable",
                 ));
             };
-            let convention = get_physical_closure_convention(self.ctx, ty).ok_or_else(|| {
-                TargetAbiError::new("target ABI: closure callable has no exact convention metadata")
-            })?;
+            // Nothing makes or enters a closure type no operation records a
+            // convention for, so its callable keeps its results.
+            let convention = self
+                .closures
+                .get(&ty)
+                .copied()
+                .unwrap_or(CallingConvention::Direct);
             let mut converted = data.clone();
             converted.params[0] = self.convert_callable(*function, convention)?;
             self.convert_type_attributes(&mut converted)?;
@@ -1939,9 +1962,9 @@ mod tests {
             !Answer = core.{answer_name}
             !Evidence = adt.array<adt.typeref<{{name = "std::runtime::evidence::Marker"}}>>
             !Frame = adt.typeref<{{name = "{frame_name}", tribute.cps_continuation_frame_result = !Answer}}>
-            !Done = closure.closure<func.func_sig<(!Answer) -> core.never>, {{tribute.calling_convention = "cps", tribute.closure_environment_index = 0}}>
-            !Resume = closure.closure<func.func_sig<(!Evidence, !Frame, tribute_rt.anyref) -> core.never>, {{tribute.calling_convention = "cps", tribute.closure_environment_index = 0}}>
-            !Dispatch = closure.closure<func.func_sig<(!Evidence, !Resume, core.i32, core.i32, core.i32, tribute_rt.anyref) -> core.never>, {{tribute.calling_convention = "cps", tribute.closure_environment_index = 1}}>
+            !Done = closure.closure<func.func_sig<(!Answer) -> core.never>>
+            !Resume = closure.closure<func.func_sig<(!Evidence, !Frame, tribute_rt.anyref) -> core.never>>
+            !Dispatch = closure.closure<func.func_sig<(!Evidence, !Resume, core.i32, core.i32, core.i32, tribute_rt.anyref) -> core.never>>
             !{frame_name} = adt.struct<{frame_name}(done: !Done, dispatch: !Dispatch), {{tribute.cps_continuation_frame_result = !Answer}}>
             func.func @run(%ev: !Evidence, %dispatch: !Dispatch, %resume: !Resume, %payload: tribute_rt.anyref) -> core.never attributes {{tribute.calling_convention = "cps"}} {{
                 effect.dispatch_cps %ev, %dispatch, %resume, %payload {{ability = @State, op_name = "get", answer_type = !Answer}}
@@ -2027,7 +2050,7 @@ mod tests {
                     if mutation == 3 || mutation == 4 {
                         ty.attrs
                             .view_mut(&mut ctx)
-                            .insert(CLOSURE_ENVIRONMENT_INDEX_ATTR, Attribute::Int(9));
+                            .insert("test.extra", Attribute::Int(9));
                     } else if mutation == 5 {
                         ty.attrs
                             .view_mut(&mut ctx)
@@ -2088,8 +2111,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
             !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
-            !direct_closure = closure.closure<func.func_sig<() -> ()>, {tribute.calling_convention = "direct"}>
-            !evidence_closure = closure.closure<func.func_sig<(!Evidence) -> ()>, {tribute.calling_convention = "evidence_direct"}>
+            !direct_closure = closure.closure<func.func_sig<() -> ()>>
+            !evidence_closure = closure.closure<func.func_sig<(!Evidence) -> ()>>
             func.func @direct() attributes {tribute.calling_convention = "direct"} { func.return }
             func.func @evidence(%ev: !Evidence) attributes {tribute.calling_convention = "evidence_direct"} { func.return }
             func.func @unit() -> core.nil attributes {tribute.calling_convention = "direct"} {
@@ -2171,7 +2194,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !cps = closure.closure<func.func_sig<(core.i32, core.i32, core.i32, core.i32) -> core.never>, {tribute.calling_convention = "cps"}>
+  !cps = closure.closure<func.func_sig<(core.i32, core.i32, core.i32, core.i32) -> core.never>>
   func.func @direct() -> core.never attributes {tribute.calling_convention = "direct"} { func.unreachable }
   func.func @evidence() -> core.never attributes {tribute.calling_convention = "evidence_direct"} { func.unreachable }
   func.func @cps() -> core.never attributes {tribute.calling_convention = "cps"} { func.unreachable }
@@ -2205,9 +2228,10 @@ mod tests {
             ),
             "{printed}"
         );
+        // Nothing makes or enters `!cps`, so its callable keeps its result.
         assert!(
             printed.contains(
-                "closure.closure<func.func_sig<(core.i32 {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}) -> (), {call_conv = \"tail\"}>"
+                "closure.closure<func.func_sig<(core.i32 {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}) -> core.never, {call_conv = \"tail\"}>"
             ),
             "{printed}"
         );
@@ -2257,12 +2281,7 @@ mod tests {
         let never = core::Never::params().intern(&mut ctx).as_type_ref();
         let evidence = ability::evidence_adt_type_ref(&mut ctx);
         let done_callable = func::func_sig(&mut ctx, [nil], [never]).as_type_ref();
-        let done = tribute_ir::calling_convention::physical_closure_type_with_environment_index(
-            &mut ctx,
-            done_callable,
-            CallingConvention::Cps,
-            0,
-        );
+        let done = tribute_ir::calling_convention::physical_closure_type(&mut ctx, done_callable);
         let frame_name = "__tribute_continuation_frame_root_nil";
         let frame = tribute_ir::continuation_frame::ref_type(&mut ctx, frame_name, nil);
         let anyref = tribute_rt::Anyref::params().intern(&mut ctx).as_type_ref();
@@ -2307,12 +2326,6 @@ mod tests {
                     .unwrap()
                     .results(&ctx)
                     .is_empty()
-            );
-        }
-        for function in [worker, done_k, dispatch] {
-            assert!(
-                !ctx.op_attrs(function.op_ref())
-                    .contains_key(CLOSURE_ENVIRONMENT_INDEX_ATTR)
             );
         }
 
@@ -2735,12 +2748,6 @@ mod tests {
 }"#,
                 "operands differ",
             ),
-            (
-                r#"core.module @test {
-  !ambiguous = closure.closure<func.func_sig<() -> core.never>>
-}"#,
-                "no exact convention metadata",
-            ),
         ] {
             let mut ctx = IrContext::new();
             let module = parse_test_module(&mut ctx, input);
@@ -2757,7 +2764,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !callback = closure.closure<func.func_sig<() -> core.i32>, {tribute.calling_convention = "direct"}>
+  !callback = closure.closure<func.func_sig<() -> core.i32>>
   func.func @run(%callback: !callback) -> core.i32 attributes {tribute.calling_convention = "direct"} {
     %result = func.call_indirect %callback {signature = func.func_sig<() -> core.i32>, tribute.calling_convention = "direct"} : core.i32
     func.return %result
@@ -2788,7 +2795,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !semantic = closure.closure<func.func_sig<() -> core.i32>, {tribute.calling_convention = "direct"}>
+  !semantic = closure.closure<func.func_sig<() -> core.i32>>
   !_closure = adt.struct<_closure(func_ptr: core.i32, env: tribute_rt.anyref)>
   func.func @factory(%callback: !semantic) -> core.i32 attributes {tribute.calling_convention = "direct"} {
     func.unreachable
@@ -2805,18 +2812,16 @@ mod tests {
     }
 
     #[test]
-    fn bodied_and_bodyless_closure_targets_share_environment_provenance() {
+    fn an_entry_function_takes_its_environment_at_its_env_marker() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Env = closure.closure<func.func_sig<(core.i32, core.i32) -> core.never>, {tribute.calling_convention = "cps", tribute.closure_environment_index = 1}>
-  func.func @external(%evidence: core.i32, %environment: !Env, %done: core.i32) -> core.never attributes {tribute.calling_convention = "cps", tribute.closure_environment_index = 1}
-  func.func @defined(%evidence: core.i32, %__env: !Env, %done: core.i32) -> core.never attributes {tribute.calling_convention = "cps", tribute.closure_environment_index = 1} {
+  !Env = closure.closure<func.func_sig<(core.i32, core.i32) -> core.never>>
+  func.func @defined(%evidence: core.i32, %__env: !Env, %done: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
     func.unreachable
   }
   func.func @holder() -> core.i32 {
-    %external = func.constant {func_ref = @external} : func.func_sig<(core.i32, core.i32) -> core.never>
     %defined = func.constant {func_ref = @defined} : func.func_sig<(core.i32, core.i32) -> core.never>
     func.unreachable
   }
@@ -2827,34 +2832,23 @@ mod tests {
 
         let printed = print_module(&ctx, module.op());
         assert!(
-            printed.contains("func.func @external(%arg0: core.i32, %arg1: !Env, %arg2: core.i32)"),
-            "{printed}"
-        );
-        assert!(
-            printed.contains("func.func @defined")
-                && printed.matches("func.constant").count() == 2
-                && printed.contains("!t0 = func.func_sig<(core.i32 {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}) -> (), {call_conv = \"tail\"}>")
-                && printed.matches(": !t0").count() == 2,
+            printed.contains("func.func @defined(%0: core.i32, %1: !Env, %2: core.i32)")
+                && printed.contains("func.constant {func_ref = @defined} : func.func_sig<(core.i32 {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}) -> (), {call_conv = \"tail\"}>"),
             "{printed}"
         );
     }
 
     #[test]
-    fn physicalizes_explicit_generated_cps_environment_slots() {
+    fn physicalizes_a_generated_cps_environment_at_its_convention_slot() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Zero = closure.closure<func.func_sig<() -> core.never>, {tribute.calling_convention = "cps", tribute.closure_environment_index = 0}>
-  !One = closure.closure<func.func_sig<(core.i32) -> core.never>, {tribute.calling_convention = "cps", tribute.closure_environment_index = 0}>
-  func.func @generated_zero(%__env: !Zero) -> core.never attributes {tribute.calling_convention = "cps", tribute.closure_environment_index = 0} {
-    func.unreachable
-  }
-  func.func @generated_one(%__env: !One, %value: core.i32) -> core.never attributes {tribute.calling_convention = "cps", tribute.closure_environment_index = 0} {
+  !One = closure.closure<func.func_sig<(core.i32) -> core.never>>
+  func.func @generated_one(%value: core.i32, %__env: !One) -> core.never attributes {tribute.calling_convention = "cps"} {
     func.unreachable
   }
   func.func @holder() -> core.i32 {
-    %zero = func.constant {func_ref = @generated_zero} : func.func_sig<() -> core.never>
     %one = func.constant {func_ref = @generated_one} : func.func_sig<(core.i32) -> core.never>
     func.unreachable
   }
@@ -2863,24 +2857,75 @@ mod tests {
 
         lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
 
-        for (name, parameter_count) in [("generated_zero", 1), ("generated_one", 2)] {
-            let function = function(&ctx, module, name);
-            let signature = func::FuncSig::from_type_ref(&ctx, function.r#type(&ctx)).unwrap();
-            assert!(signature.results(&ctx).is_empty());
-            assert_eq!(signature.inputs(&ctx).len(), parameter_count);
-            let environment = signature.inputs(&ctx)[0];
-            assert!(get_physical_closure_convention(&ctx, environment).is_some());
-        }
+        let function = function(&ctx, module, "generated_one");
+        let signature = func::FuncSig::from_type_ref(&ctx, function.r#type(&ctx)).unwrap();
+        assert!(signature.results(&ctx).is_empty());
+        assert_eq!(signature.inputs(&ctx).len(), 2);
+        let environment = signature.inputs(&ctx)[1];
+        assert!(tribute_ir::dialect::closure::Closure::matches(
+            &ctx,
+            environment
+        ));
         let printed = print_module(&ctx, module.op());
-        assert!(
-            printed.contains(": func.func_sig<() -> (), {call_conv = \"tail\"}>"),
-            "{printed}"
-        );
         assert!(
             printed.contains(
                 ": func.func_sig<(core.i32 {tribute.ownership = \"consumed\"}) -> (), {call_conv = \"tail\"}>"
             ),
             "{printed}"
+        );
+    }
+
+    #[test]
+    fn a_delimited_body_parameter_is_physicalized_as_cps() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
+  !Frame = adt.typeref<{name = "frame", tribute.cps_continuation_frame_result = core.i32}>
+  !Body = closure.closure<func.func_sig<(!Evidence, !Frame) -> core.never>>
+  func.func @run(%ev: !Evidence, %body: !Body) -> core.i32 attributes {tribute.calling_convention = "direct"} {
+    %answer = effect.delimit %body, %ev : core.i32
+    func.return %answer
+  }
+}"#,
+        );
+
+        lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
+
+        let run = function(&ctx, module, "run");
+        let entry = ctx.region(run.body(&ctx)).blocks[0];
+        let body = ctx.value_ty(ctx.block_args(entry)[1]);
+        let callable = tribute_ir::dialect::closure::Closure::from_type_ref(&ctx, body)
+            .unwrap()
+            .func_type(&ctx);
+        assert!(
+            func::FuncSig::from_type_ref(&ctx, callable)
+                .unwrap()
+                .results(&ctx)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn an_environment_outside_its_convention_slot_fails_before_mutation() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !One = closure.closure<func.func_sig<(core.i32) -> core.never>>
+  func.func @generated_one(%__env: !One, %value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
+    func.unreachable
+  }
+}"#,
+        );
+        let error = assert_unchanged_on_error(&mut ctx, module, lower_cps_signatures_to_physical);
+
+        assert!(
+            error
+                .to_string()
+                .contains("outside the slot of its convention"),
+            "{error}"
         );
     }
 
@@ -2892,20 +2937,8 @@ mod tests {
                 "function reference differs",
             ),
             (
-                "func.func @external(%evidence: core.i32, %environment: tribute_rt.anyref, %done: core.i32) -> core.never attributes {tribute.calling_convention = \"cps\", tribute.closure_environment_index = 3}",
-                "outside function signature",
-            ),
-            (
-                "func.func @external(%evidence: core.i32, %environment: core.i32, %done: core.i32) -> core.never attributes {tribute.calling_convention = \"cps\", tribute.closure_environment_index = 1}",
-                "convention-proven closure",
-            ),
-            (
-                "func.func @external(%evidence: core.i32, %environment: !Env, %done: core.i32) -> core.never attributes {tribute.calling_convention = \"cps\", tribute.closure_environment_index = 1} { func.unreachable }",
-                "no matching `__env`",
-            ),
-            (
-                "func.func @external(%environment: !Env, %__env: !Env, %done: core.i32) -> core.never attributes {tribute.calling_convention = \"cps\", tribute.closure_environment_index = 0} { func.unreachable }",
-                "differs from `__env` parameter",
+                "func.func @external(%evidence: core.i32, %__env: core.i32, %done: core.i32) -> core.never attributes {tribute.calling_convention = \"cps\"} { func.unreachable }",
+                "must be a closure",
             ),
         ] {
             let mut ctx = IrContext::new();
@@ -2913,7 +2946,7 @@ mod tests {
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
-  !Env = closure.closure<func.func_sig<(core.i32, core.i32) -> core.never>, {{tribute.calling_convention = "cps", tribute.closure_environment_index = 1}}>
+  !Env = closure.closure<func.func_sig<(core.i32, core.i32) -> core.never>>
   {function}
   func.func @holder() -> core.i32 {{
     %function = func.constant {{func_ref = @external}} : func.func_sig<(core.i32, core.i32) -> core.never>
@@ -2935,9 +2968,9 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Env2 = closure.closure<func.func_sig<() -> core.never>, {tribute.calling_convention = "cps", tribute.closure_environment_index = 0}>
-  !Env = closure.closure<func.func_sig<(!Env2) -> core.never>, {tribute.calling_convention = "cps", tribute.closure_environment_index = 0}>
-  func.func @external(%__env: !Env, %environment: !Env2) -> core.never attributes {tribute.calling_convention = "cps", tribute.closure_environment_index = 0} {
+  !Env2 = closure.closure<func.func_sig<() -> core.never>>
+  !Env = closure.closure<func.func_sig<(!Env2) -> core.never>>
+  func.func @external(%__env: !Env, %environment: !Env2) -> core.never attributes {tribute.calling_convention = "cps"} {
     func.unreachable
   }
   func.func @holder() -> core.i32 {
@@ -3055,8 +3088,9 @@ mod tests {
                 "arith.const: calling-convention metadata on an operation that cannot carry it",
             ),
             (
-                r#"%c = closure.new {entries = [@callee], tribute.calling_convention = "cps"} : !direct"#,
-                "closure.new: calling convention differs from the one its callable type records",
+                r#"%c = closure.new {entries = [@callee], tribute.calling_convention = "direct"} : !direct
+    %d = closure.new {entries = [@callee], tribute.calling_convention = "evidence_direct"} : !direct"#,
+                "a closure type is entered through two conventions",
             ),
         ] {
             let mut ctx = IrContext::new();
@@ -3065,7 +3099,7 @@ mod tests {
                 &format!(
                     r#"core.module @test {{tribute.entry = @main}} {{
   !fn = func.func_sig<(core.i32) -> core.i32>
-  !direct = closure.closure<!fn, {{tribute.calling_convention = "direct", tribute.closure_environment_index = 0}}>
+  !direct = closure.closure<!fn>
   func.func @callee(%x: core.i32) -> core.i32 attributes {{tribute.calling_convention = "direct"}} {{
     func.return %x
   }}

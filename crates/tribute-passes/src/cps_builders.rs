@@ -88,7 +88,7 @@ pub(crate) fn emit_cps_tail_call_indirect(
     let signature = cps_closure_function_type(ctx, closure_type).ok_or_else(|| {
         TributeControlToCpsError::post_at(
             location,
-            "CPS indirect tail callee has no exact provenance-bearing closure contract",
+            "CPS indirect tail callee has no exact closure contract",
         )
     })?;
     let callable = func::FuncSig::from_type_ref(ctx, signature).ok_or_else(|| {

@@ -467,7 +467,7 @@ mod tests {
     const TYPES: &str = r#"  !marker = adt.typeref<{name = "std::runtime::evidence::Marker"}>
   !ev = adt.array<!marker>
   !frame = ability.frame<core.i32>
-  !resume = closure.closure<func.func_sig<(!ev, !frame, core.i32) -> core.never>, {tribute.calling_convention = "cps", tribute.closure_environment_index = 0}>
+  !resume = closure.closure<func.func_sig<(!ev, !frame, core.i32) -> core.never>>
   !nested = ability.frame<!resume>"#;
 
     /// Parse a module over `TYPES` whose `@run` has `params` and `body`.

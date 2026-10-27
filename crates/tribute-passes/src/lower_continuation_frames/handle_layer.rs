@@ -679,7 +679,7 @@ fn build_tail_dispatcher(
         .ok_or_else(|| {
             TributeControlToCpsError::post_at(
                 location,
-                "fn handler indirect callee has no exact provenance-bearing closure contract",
+                "fn handler indirect callee has no exact closure contract",
             )
         })?;
         let call = func::CallIndirect::operands(arm_value, call_args)
@@ -714,7 +714,7 @@ fn build_tail_dispatcher(
 
     let region = single_block_region(ctx, location, block);
     let function = func::func_sig(ctx, params, [anyref]).as_type_ref();
-    let closure_type = physical_closure_type(ctx, function, CallingConvention::EvidenceDirect);
+    let closure_type = physical_closure_type(ctx, function);
     let lambda = closure_over(
         ctx,
         location,
