@@ -46,11 +46,8 @@ fn generic_intrinsics_are_accepted(db: &salsa::DatabaseImpl) {
         "test.trb",
         "extern \"intrinsic\" fn identity(value: a) -> a\nfn main() -> Nil { }",
     );
-    let errors = ast_pipeline_error_messages(db, source);
-    assert!(
-        errors
-            .iter()
-            .all(|message| !message.contains(GENERIC_EXTERN)),
-        "{errors:?}"
+    assert_eq!(
+        ast_pipeline_error_messages(db, source),
+        Vec::<String>::new()
     );
 }
