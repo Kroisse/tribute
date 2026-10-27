@@ -5,8 +5,11 @@
 
 use super::TypeChecker;
 use crate::ast::NodeId;
-use crate::ast::visit::{RefSite, Refs, VisitMut, walk_expr, walk_expr_mut};
-use crate::ast::{Expr, ExprKind, FuncDefId, ResolvedRef, Type, TypedRef, UniVarId};
+use crate::ast::visit::{RefSite, Refs, VisitMut, walk_expr, walk_expr_mut, walk_pattern_mut};
+use crate::ast::{
+    Expr, ExprKind, FuncDefId, LiteralPattern, Pattern, PatternKind, ResolvedRef, Type, TypedRef,
+    UniVarId,
+};
 use crate::typeck::solver::{RowSubst, TypeSubst};
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
@@ -166,6 +169,26 @@ impl<'db> VisitMut<TypedRef<'db>> for Finalize<'_, 'db> {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn visit_pattern_mut(&mut self, pattern: &mut Pattern<TypedRef<'db>>) {
+        walk_pattern_mut(self, pattern);
+        // A `String` or `Bytes` literal pattern compares through its type's
+        // `==`, which a program without the prelude lacks.
+        let well_known = self.checker.env.well_known_types();
+        let (equality, type_name) = match &*pattern.kind {
+            PatternKind::Literal(LiteralPattern::String(_)) => {
+                (well_known.string_equality, "String")
+            }
+            PatternKind::Literal(LiteralPattern::Bytes(_)) => (well_known.bytes_equality, "Bytes"),
+            _ => return,
+        };
+        if equality.is_none() {
+            self.checker.report_type_error(
+                pattern.id,
+                format!("{type_name} literal patterns need the prelude's `{type_name}::==`"),
+            );
         }
     }
 }

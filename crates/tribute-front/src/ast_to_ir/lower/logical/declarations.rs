@@ -2,8 +2,6 @@
 //! accessors, extern and prelude functions.
 
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
-use salsa::Accumulator;
-use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_ir::dialect::tribute_control::{
     CompilerIntrinsicDeclaration, OperationDeclaration, Row, RowBinder,
 };
@@ -82,26 +80,16 @@ impl<'db> Declarations<'db> {
         declaration: OperationDeclaration,
         ability: crate::ast::AbilityId<'db>,
         arguments: &[crate::ast::Type<'db>],
-        location: Location,
-        db: &dyn salsa::Database,
     ) {
         self.instance(&declaration.ability, ability, arguments);
         if let Some(existing) = self.values.iter().find(|candidate| {
             candidate.ability == declaration.ability && candidate.op_name == declaration.op_name
         }) {
-            if existing != &declaration {
-                Diagnostic::new(
-                    format!(
-                        "conflicting instantiated declaration for ability operation {}",
-                        ir.str(declaration.op_name)
-                    ),
-                    location.span,
-                    DiagnosticSeverity::Error,
-                    CompilationPhase::Lowering,
-                )
-                .accumulate(db);
-                panic!("conflicting source-logical ability operation declaration");
-            }
+            assert!(
+                existing == &declaration,
+                "conflicting instantiated declaration for ability operation {}",
+                ir.str(declaration.op_name)
+            );
             return;
         }
         self.values.push(declaration);

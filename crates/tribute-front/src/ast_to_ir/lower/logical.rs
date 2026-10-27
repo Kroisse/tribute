@@ -204,11 +204,10 @@ fn lower_decl<'db>(
 
 #[cfg(test)]
 mod tests {
-    use super::callable::adapt_operation_arguments_or_recover;
+    use super::callable::adapt_operation_arguments;
     use super::*;
     use crate::SortedMap;
     use crate::ast_to_ir::lower::IrBuilder;
-    use tribute_core::diagnostic::Diagnostic;
     use tribute_ir::dialect::adt;
     use tribute_ir::dialect::tribute_control::OperationDeclaration;
     use trunk_ir::context::BlockData;
@@ -249,35 +248,8 @@ mod tests {
         );
         let mut scope = ctx.scope();
         let mut builder = IrBuilder::new(&mut scope, &mut ir, block);
-        let adapted = adapt_operation_arguments_or_recover(
-            &mut builder,
-            location,
-            vec![value],
-            &declaration,
-            &Symbol::new("Test"),
-            &Symbol::new("throw"),
-        )
-        .expect("matching operation arity should adapt arguments");
+        let adapted = adapt_operation_arguments(&mut builder, location, vec![value], &declaration);
         assert_eq!(builder.ir.value_ty(adapted[0]), parameter);
-
-        let mismatch = OperationDeclaration::new(
-            SymbolPath::new(["Test"]),
-            declaration.op_name,
-            declaration.kind,
-            [],
-            parameter,
-        );
-        let recovered = adapt_operation_arguments_or_recover(
-            &mut builder,
-            location,
-            vec![value],
-            &mismatch,
-            &Symbol::new("Test"),
-            &Symbol::new("throw"),
-        )
-        .expect_err("mismatched operation arity should recover with nil");
-        let nil_type = builder.ctx.nil_type(builder.ir);
-        assert_eq!(builder.ir.value_ty(recovered), nil_type);
         true
     }
 
@@ -285,12 +257,5 @@ mod tests {
     fn operation_arguments_use_resolved_parameter_types() {
         let db = salsa::DatabaseImpl::new();
         assert!(operation_arguments_use_resolved_parameter_types_inner(&db));
-        let diagnostics =
-            operation_arguments_use_resolved_parameter_types_inner::accumulated::<Diagnostic>(&db);
-        assert_eq!(diagnostics.len(), 1);
-        assert_eq!(
-            diagnostics[0].inner.message,
-            "ability operation `Test::throw` has 1 arguments, expected 0"
-        );
     }
 }

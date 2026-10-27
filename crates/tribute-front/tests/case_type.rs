@@ -797,3 +797,73 @@ fn only(value: Nil) -> Nat {
     );
     assert_eq!(exhaustive, 1);
 }
+
+// ========================================================================
+// Literal pattern equality
+// ========================================================================
+
+#[salsa::tracked]
+fn check_without_prelude(db: &dyn salsa::Database, source: SourceCst) {
+    let _ = tribute_front::query::type_check_output(db, source);
+}
+
+/// Error messages from checking `source` alone, without the prelude.
+fn errors_without_prelude(db: &salsa::DatabaseImpl, source: &str) -> Vec<String> {
+    let source = SourceCst::from_source_str(db, "test.trb", source);
+    check_without_prelude(db, source);
+    check_without_prelude::accumulated::<tribute_core::diagnostic::Diagnostic>(db, source)
+        .into_iter()
+        .filter(|diagnostic| {
+            diagnostic.inner.severity == tribute_core::diagnostic::DiagnosticSeverity::Error
+        })
+        .map(|diagnostic| diagnostic.inner.message.clone())
+        .collect()
+}
+
+/// Type checking reports a literal pattern whose type has no `==`, even in a
+/// generic function nothing instantiates.
+#[salsa_test]
+fn literal_patterns_without_equality_are_type_errors(db: &salsa::DatabaseImpl) {
+    let errors = errors_without_prelude(
+        db,
+        r#"
+fn unused(value: a, name: String, data: Bytes) -> Nat {
+    let first = case name {
+        "a" -> 1
+        _ -> 0
+    }
+    case data {
+        b"a" -> first
+        _ -> 0
+    }
+}
+"#,
+    );
+    assert_eq!(
+        errors,
+        [
+            "String literal patterns need the prelude's `String::==`",
+            "Bytes literal patterns need the prelude's `Bytes::==`",
+        ]
+    );
+}
+
+#[salsa_test]
+fn literal_patterns_with_prelude_equality_check(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn unused(value: a, name: String) -> Nat {
+    case name {
+        "a" -> 1
+        _ -> 0
+    }
+}
+"#,
+    );
+    assert_eq!(
+        ast_pipeline_error_messages(db, source),
+        Vec::<String>::new()
+    );
+}

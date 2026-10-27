@@ -4,8 +4,6 @@
 //! pattern checks generating boolean conditions and pattern bindings
 //! extracted inside the matched region.
 
-use salsa::Accumulator;
-use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::adt::layout::{get_enum_variants, get_struct_fields};
 use tribute_ir::dialect::list;
@@ -559,7 +557,9 @@ fn emit_literal_check<'db>(
                 .build(builder.ir, location);
             builder.ir.push_op(builder.block, literal.op_ref());
             let literal = literal.result(builder.ir);
-            emit_equality_call(builder, location, equality, "String", scrutinee, literal)
+            Some(emit_equality_call(
+                builder, location, equality, "String", scrutinee, literal,
+            ))
         }
         LiteralPattern::Bytes(bytes) => {
             let equality = builder.ctx.literal_equalities().bytes;
@@ -570,7 +570,9 @@ fn emit_literal_check<'db>(
                 .build(builder.ir, location);
             builder.ir.push_op(builder.block, literal.op_ref());
             let literal = literal.result(builder.ir);
-            emit_equality_call(builder, location, equality, "Bytes", scrutinee, literal)
+            Some(emit_equality_call(
+                builder, location, equality, "Bytes", scrutinee, literal,
+            ))
         }
         // `Nil` is the only value of its type.
         LiteralPattern::Nil => Some(emit_const(
@@ -610,7 +612,7 @@ fn emit_cmpi_eq(
 }
 
 /// Compare `scrutinee` with `literal` through the prelude's `==` for
-/// `type_name`, which a program without the prelude lacks.
+/// `type_name`. Type checking rejects the pattern when the prelude lacks it.
 fn emit_equality_call(
     builder: &mut IrBuilder<'_, '_>,
     location: Location,
@@ -618,21 +620,14 @@ fn emit_equality_call(
     type_name: &str,
     scrutinee: ValueRef,
     literal: ValueRef,
-) -> Option<ValueRef> {
-    let Some(equality) = equality else {
-        Diagnostic::new(
-            format!("{type_name} literal patterns need the prelude's `{type_name}::==`"),
-            location.span,
-            DiagnosticSeverity::Error,
-            CompilationPhase::Lowering,
-        )
-        .accumulate(builder.db());
-        return None;
-    };
+) -> ValueRef {
+    let equality = equality.unwrap_or_else(|| {
+        panic!("type checking rejects {type_name} literal patterns without `{type_name}::==`")
+    });
     let equal =
         super::logical::emit_named_call(builder, location, equality, vec![scrutinee, literal]);
     let bool_ty = builder.ctx.bool_type(builder.ir);
-    Some(builder.cast_if_needed(location, equal, bool_ty))
+    builder.cast_if_needed(location, equal, bool_ty)
 }
 
 /// Logical counterpart to [`bind_pattern_fields`].  Tuple and list extraction

@@ -1,8 +1,6 @@
 //! Callables and control: functions, calls, `become`, lambdas, handlers,
 //! evidence plans, and row arguments.
 
-use salsa::Accumulator;
-use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_ir::dialect::tribute_control;
 use tribute_ir::dialect::tribute_control::{OperationDeclaration, Row, RowBinder};
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder, RegionData};
@@ -582,52 +580,24 @@ pub(super) fn call_operation_metadata<'db>(
     )
 }
 
+/// Cast each argument to its operation parameter type. Type checking
+/// rejects an operation call whose argument count differs.
 pub(super) fn adapt_operation_arguments(
     builder: &mut IrBuilder<'_, '_>,
     location: Location,
     values: Vec<ValueRef>,
-    parameter_types: &[TypeRef],
-) -> Option<Vec<ValueRef>> {
-    if values.len() != parameter_types.len() {
-        return None;
-    }
-    Some(
-        values
-            .into_iter()
-            .zip(parameter_types.iter().copied())
-            .map(|(value, ty)| builder.cast_if_needed(location, value, ty))
-            .collect(),
-    )
-}
-
-pub(super) fn adapt_operation_arguments_or_recover<'db>(
-    builder: &mut IrBuilder<'_, 'db>,
-    location: Location,
-    values: Vec<ValueRef>,
     declaration: &OperationDeclaration,
-    ability: &Symbol,
-    operation: &Symbol,
-) -> Result<Vec<ValueRef>, ValueRef> {
-    let argument_count = values.len();
-    match adapt_operation_arguments(builder, location, values, &declaration.parameter_types) {
-        Some(values) => Ok(values),
-        None => {
-            Diagnostic::new(
-                format!(
-                    "ability operation `{}::{}` has {} arguments, expected {}",
-                    ability,
-                    operation,
-                    argument_count,
-                    declaration.parameter_types.len()
-                ),
-                location.span,
-                DiagnosticSeverity::Error,
-                CompilationPhase::Lowering,
-            )
-            .accumulate(builder.db());
-            Err(builder.emit_nil(location))
-        }
-    }
+) -> Vec<ValueRef> {
+    assert_eq!(
+        values.len(),
+        declaration.parameter_types.len(),
+        "type checking rejects an operation call with the wrong argument count"
+    );
+    values
+        .into_iter()
+        .zip(declaration.parameter_types.iter().copied())
+        .map(|(value, ty)| builder.cast_if_needed(location, value, ty))
+        .collect()
 }
 
 /// Call the named source function, casting each argument to its parameter
@@ -882,17 +852,7 @@ pub(super) fn lower_call<'db>(
                         semantic,
                     },
                 );
-                values = match adapt_operation_arguments_or_recover(
-                    builder,
-                    location,
-                    values,
-                    &declaration,
-                    &ability.qualified(builder.db()),
-                    &operation,
-                ) {
-                    Ok(values) => values,
-                    Err(nil) => return Some(nil),
-                };
+                values = adapt_operation_arguments(builder, location, values, &declaration);
                 let perform = op(
                     builder.ir,
                     builder.block,
@@ -907,14 +867,7 @@ pub(super) fn lower_call<'db>(
                             .attr("operation_kind", Attribute::String(declaration.kind))
                     },
                 );
-                declarations.record(
-                    builder.ir,
-                    declaration,
-                    ability,
-                    &ability_arguments,
-                    location,
-                    builder.db(),
-                );
+                declarations.record(builder.ir, declaration, ability, &ability_arguments);
                 let value = result(builder.ir, perform);
                 Some(builder.cast_if_needed(location, value, result_ty))
             }
@@ -1314,7 +1267,7 @@ pub(super) fn lower_handler<'db>(
         parameter_types.clone(),
         operation_result,
     );
-    declarations.record(ir, declaration, ability_id, &arguments, location, ctx.db);
+    declarations.record(ir, declaration, ability_id, &arguments);
     let is_never = trunk_ir::dialect::core::Never::matches(ir, operation_result);
     let mut block_args: Vec<_> = parameter_types
         .iter()
