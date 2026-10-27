@@ -4,8 +4,8 @@
 
 **패키지.** 이름 해석과 타입 검사의 단위는 패키지다. 빌드는 패키지 그래프에서
 출발한다. 각 패키지의 검사 결과는 자기 source와 의존 패키지의 검사 결과에만
-의존하며, 그 패키지에 의존하는 패키지나 같은 빌드의 다른 패키지에는 의존하지
-않는다. 따라서 frontend는 검사 결과를 패키지마다 캐시하고, 같은 패키지를 쓰는
+의존하며, 그 패키지에 의존하는 패키지나 같은 빌드의 그 밖의 패키지에는
+의존하지 않는다. 따라서 frontend는 검사 결과를 패키지마다 캐시하고, 같은 패키지를 쓰는
 빌드는 그 결과를 재사용한다. 의존 패키지의 검사 결과는 선언 메타데이터와 generic
 본문을 함께 가진 frontend 결과로 같은 빌드 안에서 전달하며, 이 계약은 그 결과를
 직렬화한 package artifact를 요구하지 않는다. 패키지의 이름 범위, 가시성과 선언
@@ -36,7 +36,7 @@ Wasm backend는 완성된 shared module을 하나의 `.wasm`으로 emit한다. M
 GC type index, recursive type group, function/table index는 emitter가 함께 정한다.
 WASI import는 [wasm-backend.md](wasm-backend.md)의 target ABI 계약을 따른다.
 
-현재 compilation unit 사이에서 GC object나 closure를 주고받는 별도 linker ABI는
+별도 compilation unit 사이에서 GC object나 closure를 주고받는 별도 linker ABI는
 정의하지 않는다. Source nominal identity를 backend type index와 동일시하거나,
 서로 다른 module의 같은 정수 index가 같은 타입이라고 가정해서는 안 된다.
 
