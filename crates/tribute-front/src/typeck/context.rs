@@ -209,11 +209,7 @@ impl<'db> DependencyTypes<'db> {
                 },
             ));
         // Only package `std` publishes well-known identities.
-        let known = exports.well_known_types(db);
-        let own = &mut self.well_known_types;
-        own.string = own.string.or(known.string);
-        own.string_equality = own.string_equality.or(known.string_equality);
-        own.bytes_equality = own.bytes_equality.or(known.bytes_equality);
+        self.well_known_types = self.well_known_types.or(*exports.well_known_types(db));
     }
 }
 

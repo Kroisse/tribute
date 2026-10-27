@@ -172,6 +172,15 @@ impl WellKnownTypes<'_> {
             bytes_equality: None,
         }
     }
+
+    /// Each identity of `self`, or of `other` where `self` has none.
+    pub fn or(self, other: Self) -> Self {
+        Self {
+            string: self.string.or(other.string),
+            string_equality: self.string_equality.or(other.string_equality),
+            bytes_equality: self.bytes_equality.or(other.bytes_equality),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
@@ -396,11 +405,7 @@ impl<'db> DeclarationTypeMetadata<'db> {
                 &self.ability_definitions,
                 |(id, ..)| *id,
             ),
-            well_known_types: if self.well_known_types == WellKnownTypes::empty() {
-                dependency.well_known_types
-            } else {
-                self.well_known_types
-            },
+            well_known_types: self.well_known_types.or(dependency.well_known_types),
         }
     }
 }
@@ -569,7 +574,10 @@ mod tests {
                 (path("b"), scheme(TypeKind::Nat)),
                 (SymbolPath::new(["c"]), scheme(TypeKind::Nat)),
             ],
-            WellKnownTypes::empty(),
+            WellKnownTypes {
+                bytes_equality: Some(FuncDefId::new(&db, path("bytes_eq"))),
+                ..WellKnownTypes::empty()
+            },
         );
 
         let layered = module.after_dependency(&dependency);
@@ -581,6 +589,12 @@ mod tests {
                 (SymbolPath::new(["c"]), scheme(TypeKind::Nat)),
             ]
         );
-        assert_eq!(layered.well_known_types, well_known);
+        assert_eq!(
+            layered.well_known_types,
+            WellKnownTypes {
+                bytes_equality: module.well_known_types.bytes_equality,
+                ..well_known
+            }
+        );
     }
 }
