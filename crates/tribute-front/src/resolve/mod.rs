@@ -56,7 +56,7 @@ pub fn resolve_with_env<'db>(
     scope: &Scope<'db>,
     span_map: &'db SpanMap,
 ) -> DeclTable<ResolvedRef<'db>> {
-    let mut resolver = Resolver::new(db, scope.view(), span_map);
+    let mut resolver = Resolver::new(db, scope.as_ref(), span_map);
     resolver.resolve_module(module)
 }
 

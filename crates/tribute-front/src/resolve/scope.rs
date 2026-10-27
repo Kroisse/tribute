@@ -75,7 +75,7 @@ impl<'db> Scope<'db> {
     }
 
     /// The borrowed view of this scope.
-    pub(super) fn view(&self) -> ScopeRef<'_, 'db> {
+    pub(super) fn as_ref(&self) -> ScopeRef<'_, 'db> {
         ScopeRef::new(&self.env, &self.dependencies)
     }
 }
