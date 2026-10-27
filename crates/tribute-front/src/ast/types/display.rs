@@ -143,12 +143,12 @@ impl<'db> AbilityInstance<'db> {
 
 impl fmt::Display for AbilityInstanceDisplay<'_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let name = self.instance.ability_id.name(self.db);
+        let name = self.names.path(self.instance.ability_id.path(self.db));
         if self.instance.args.is_empty() {
-            name.with_str(|s| f.write_str(s))
+            write!(f, "{name}")
         } else {
             let args = list(self.db, &self.instance.args, &[], self.names);
-            name.with_str(|s| write!(f, "{}({args})", s))
+            write!(f, "{name}({args})")
         }
     }
 }

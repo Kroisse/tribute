@@ -190,7 +190,10 @@ fn ability_row_display_preserves_distinct_identities(db: &salsa::DatabaseImpl) {
     };
     assert_ne!(source, builtin);
     let row = AbilityRow::new(db, vec![source, builtin], None);
-    assert_eq!(row.display(db, &names()).to_string(), "{Io, Io}");
+    assert_eq!(
+        row.display(db, &names()).to_string(),
+        "{std::io::Io, std::io::Io}"
+    );
 }
 
 #[salsa_test]
@@ -302,5 +305,20 @@ fn a_library_prints_its_own_types_without_its_name(db: &salsa::DatabaseImpl) {
         pair.display(db, &NameDisplay::new(&PackageName::std(), []))
             .to_string(),
         "#(Option(lib::geometry::Shape), lib::std::Shape, pkg::Shape)"
+    );
+}
+
+/// Abilities of the same name in different modules print apart, spelled
+/// relative to the compiled package.
+#[salsa_test]
+fn ability_display_keeps_the_module_path(db: &salsa::DatabaseImpl) {
+    let state = |module: &str| AbilityInstance {
+        ability_id: AbilityId::source(db, trunk_ir::SymbolPath::new(["pkg", module, "State"])),
+        args: vec![],
+    };
+    let row = AbilityRow::new(db, vec![state("a"), state("b")], None);
+    assert_eq!(
+        row.display(db, &names()).to_string(),
+        "{a::State, b::State}"
     );
 }
