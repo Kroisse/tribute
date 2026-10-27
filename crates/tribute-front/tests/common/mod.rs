@@ -86,8 +86,8 @@ fn resolve_with_prelude<'db>(
     let dependencies = prelude
         .map(|p| tribute_front::resolve::Dependencies::std(p.env))
         .unwrap_or_default();
-    let env = tribute_front::resolve::build_env(db, ast, &dependencies);
-    let resolved = tribute_front::resolve::resolve_with_env(db, ast, &env, dependencies, span_map);
+    let env = tribute_front::resolve::build_env(db, ast, dependencies);
+    let resolved = tribute_front::resolve::resolve_with_env(db, ast, &env, span_map);
     let mut checker = tribute_front::typeck::TypeChecker::new(db, span_map);
     if let Some(p) = prelude {
         checker.depend_on(&p.exports);
