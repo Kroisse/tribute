@@ -23,7 +23,7 @@ mod scope;
 pub use env::{Binding, Export, PackageEnv, Restriction};
 pub use package::{IdentityPath, Location, PackageName};
 pub use resolver::Resolver;
-pub use scope::{Dependencies, PackageScope, Scope};
+pub use scope::{Dependencies, Scope, ScopeRef};
 
 use rustc_hash::FxHashMap as HashMap;
 use trunk_ir::Symbol;
@@ -44,8 +44,8 @@ pub fn resolve_module<'db>(
 ) -> DeclTable<ResolvedRef<'db>> {
     // Build the package environment from declarations. Without the prelude,
     // package `std` holds only the compiler-owned names.
-    let package = build_env(db, module, Dependencies::std(builtin_library_env(db)));
-    resolve_with_env(db, module, &package, span_map)
+    let scope = build_env(db, module, Dependencies::std(builtin_library_env(db)));
+    resolve_with_env(db, module, &scope, span_map)
 }
 
 /// Resolve names in a module with the environment [`build_env`] built for
@@ -53,10 +53,10 @@ pub fn resolve_module<'db>(
 pub fn resolve_with_env<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<UnresolvedName>,
-    package: &PackageScope<'db>,
+    scope: &Scope<'db>,
     span_map: &'db SpanMap,
 ) -> DeclTable<ResolvedRef<'db>> {
-    let mut resolver = Resolver::new(db, package.view(), span_map);
+    let mut resolver = Resolver::new(db, scope.view(), span_map);
     resolver.resolve_module(module)
 }
 
@@ -80,7 +80,7 @@ fn resolve_use_imports<'db>(env: &mut PackageEnv<'db>, dependencies: &Dependenci
         .collect();
 
     for (import_name, path) in module_imports {
-        let scope = Scope::new(env, dependencies);
+        let scope = ScopeRef::new(env, dependencies);
         let target = match path {
             Some(path) => use_target(scope, &path),
             None => env.get_use_path(&import_name).and_then(|location| {
@@ -108,7 +108,7 @@ fn resolve_use_imports<'db>(env: &mut PackageEnv<'db>, dependencies: &Dependenci
     for (name, paths) in &repeated {
         let mut functions = Vec::new();
         for path in paths {
-            match use_target(Scope::new(env, dependencies), path) {
+            match use_target(ScopeRef::new(env, dependencies), path) {
                 Some((_, Binding::Function { id })) if !functions.contains(&id) => {
                     functions.push(id);
                 }
@@ -128,7 +128,7 @@ fn resolve_use_imports<'db>(env: &mut PackageEnv<'db>, dependencies: &Dependenci
 
 /// The location a `use` of `path` at the package root names and what is
 /// declared there.
-fn use_target<'db>(scope: Scope<'_, 'db>, path: &[Symbol]) -> Option<(Location, Binding<'db>)> {
+fn use_target<'db>(scope: ScopeRef<'_, 'db>, path: &[Symbol]) -> Option<(Location, Binding<'db>)> {
     let location = root_location(scope, path)?;
     let binding = match location.split_last() {
         Some((target_name, namespace)) => scope.lookup_qualified(&namespace, target_name)?.clone(),
@@ -144,7 +144,7 @@ fn use_target<'db>(scope: Scope<'_, 'db>, path: &[Symbol]) -> Option<(Location, 
 /// keywords. Its first segment is a name the package root declares or
 /// imports, then a namespace the prelude supplies, then a dependency; a
 /// dependency whose name the root has is out of reach.
-pub(crate) fn root_location(scope: Scope<'_, '_>, path: &[Symbol]) -> Option<Location> {
+pub(crate) fn root_location(scope: ScopeRef<'_, '_>, path: &[Symbol]) -> Option<Location> {
     if let Some((name, rest)) = path::dependency_path(path) {
         return Some(scope.dependency_root(name)?.join(rest));
     }
@@ -166,14 +166,14 @@ pub fn build_env<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<UnresolvedName>,
     dependencies: Dependencies<'db>,
-) -> PackageScope<'db> {
+) -> Scope<'db> {
     let env = build_package_env(
         db,
         &module.decls,
         &PackageName::executable_root(),
         &dependencies,
     );
-    PackageScope::new(env, dependencies)
+    Scope::new(env, dependencies)
 }
 
 /// Build the environment of the library package `package` whose root
@@ -259,7 +259,7 @@ fn resolve_exports<'db>(env: &mut PackageEnv<'db>, dependencies: &Dependencies<'
 /// import names; `hops` counts the imports followed. A first segment the
 /// module itself has keeps the path in the module's package.
 fn use_candidates(
-    scope: Scope<'_, '_>,
+    scope: ScopeRef<'_, '_>,
     module: &SymbolPath,
     path: &[Symbol],
     hops: usize,
@@ -309,7 +309,7 @@ fn add_export<'db>(
     dependencies: &Dependencies<'db>,
     export: &Export,
 ) -> bool {
-    let scope = Scope::new(env, dependencies);
+    let scope = ScopeRef::new(env, dependencies);
     let candidates = use_candidates(scope, &export.module, &export.path, 0);
     let Some((target, binding)) = candidates.into_iter().find_map(|target| {
         let binding = scope
@@ -426,7 +426,7 @@ pub fn resolve_library_with_env<'db>(
     env: &PackageEnv<'db>,
     span_map: &'db SpanMap,
 ) -> DeclTable<ResolvedRef<'db>> {
-    Resolver::new(db, Scope::new(env, &Dependencies::none()), span_map)
+    Resolver::new(db, ScopeRef::new(env, &Dependencies::none()), span_map)
         .with_package(env.package().clone())
         .resolve_module(module)
 }

@@ -57,14 +57,14 @@ impl<'db> Dependencies<'db> {
 
 /// A package's environment with the dependencies it was built against,
 /// which resolution reads it with. Only [`build_env`](super::build_env)
-/// pairs them, so they cannot disagree.
+/// pairs them, so they cannot disagree. [`ScopeRef`] is its borrowed view.
 #[derive(Debug)]
-pub struct PackageScope<'db> {
+pub struct Scope<'db> {
     env: PackageEnv<'db>,
     dependencies: Dependencies<'db>,
 }
 
-impl<'db> PackageScope<'db> {
+impl<'db> Scope<'db> {
     pub(super) fn new(env: PackageEnv<'db>, dependencies: Dependencies<'db>) -> Self {
         Self { env, dependencies }
     }
@@ -74,24 +74,26 @@ impl<'db> PackageScope<'db> {
         self.env
     }
 
-    /// The names the package and its dependencies give.
-    pub(super) fn view(&self) -> Scope<'_, 'db> {
-        Scope::new(&self.env, &self.dependencies)
+    /// The borrowed view of this scope.
+    pub(super) fn view(&self) -> ScopeRef<'_, 'db> {
+        ScopeRef::new(&self.env, &self.dependencies)
     }
 }
 
 /// A package's view of names: its own environment, then its dependencies'.
+/// It borrows a [`Scope`], or an environment still being built with the
+/// dependencies it is built against.
 ///
 /// Its places are [`Location`]s: a path from the root of the package
 /// itself or of one of its dependencies. Which package a written path
 /// starts in is the resolver's decision, not the scope's.
 #[derive(Clone, Copy)]
-pub struct Scope<'s, 'db> {
+pub struct ScopeRef<'s, 'db> {
     own: &'s PackageEnv<'db>,
     dependencies: &'s Dependencies<'db>,
 }
 
-impl<'s, 'db> Scope<'s, 'db> {
+impl<'s, 'db> ScopeRef<'s, 'db> {
     pub fn new(own: &'s PackageEnv<'db>, dependencies: &'s Dependencies<'db>) -> Self {
         Self { own, dependencies }
     }

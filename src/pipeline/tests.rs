@@ -2629,7 +2629,7 @@ fn test_non_main_returns_int_ok(db: &salsa::DatabaseImpl) {
 fn library_names_are_the_prelude_short_names(db: &crate::TributeDatabaseImpl) {
     let dependencies = prelude_dependencies(db);
     let own = PackageEnv::new();
-    let scope = ast_resolve::Scope::new(&own, &dependencies);
+    let scope = ast_resolve::ScopeRef::new(&own, &dependencies);
     let mut names: Vec<String> = scope
         .iter_library_names()
         .into_iter()

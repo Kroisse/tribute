@@ -262,7 +262,7 @@ pub fn constructor_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<Ast
 fn prelude_names(db: &dyn salsa::Database) -> Vec<(Symbol, Binding<'_>)> {
     let dependencies = tribute::prelude_dependencies(db);
     let own = tribute_front::resolve::PackageEnv::new();
-    let scope = tribute_front::resolve::Scope::new(&own, &dependencies);
+    let scope = tribute_front::resolve::ScopeRef::new(&own, &dependencies);
     scope
         .iter_library_names()
         .into_iter()
@@ -300,7 +300,7 @@ fn dependency_type_constructors(
 ) -> Option<TypeConstructors> {
     let dependencies = tribute::prelude_dependencies(db);
     let own = tribute_front::resolve::PackageEnv::new();
-    let scope = tribute_front::resolve::Scope::new(&own, &dependencies);
+    let scope = tribute_front::resolve::ScopeRef::new(&own, &dependencies);
     let location = scope.locate(identity)?;
     let name = identity.last()?.clone();
     match scope.lookup_path(&location)? {
@@ -325,7 +325,7 @@ fn dependency_type_constructors(
 fn prelude_constructors(db: &dyn salsa::Database) -> Vec<(Symbol, Symbol)> {
     let dependencies = tribute::prelude_dependencies(db);
     let own = tribute_front::resolve::PackageEnv::new();
-    let scope = tribute_front::resolve::Scope::new(&own, &dependencies);
+    let scope = tribute_front::resolve::ScopeRef::new(&own, &dependencies);
     let mut constructors: Vec<_> = prelude_names(db)
         .into_iter()
         .filter(|(_, binding)| matches!(binding, Binding::TypeDef { .. }))
