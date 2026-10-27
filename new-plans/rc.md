@@ -790,7 +790,7 @@ tribute_rt.release(ptr) ->
 
 ### Closure captures
 
-Native closure는 RC header, entry table 주소, capture를 담은 RC 객체 하나다
+Native closure는 RC header, convention table 주소, capture를 담은 RC 객체 하나다
 ([closure 저장 layout](ir.md#closure-저장-layout),
 [native 배치](cranelift-backend.md#메모리-관리-reference-counting)).
 
@@ -806,8 +806,8 @@ Native closure는 RC header, entry table 주소, capture를 담은 RC 객체 하
   projection 규칙을 따른다.
 - Base와 각 capture layout은 서로 다른 할당 descriptor다. 이 layout들은
   `layout`과 `closure_base`로만 식별하며 struct 이름이나 필드 모양으로 판별하지
-  않는다. 각 layout의 release 함수는 entry table 참조를 unmanaged 필드로 두고 plan이
-  managed로 판정한 capture만 release한 뒤 객체를 해제한다. Entry table은 프로그램이
+  않는다. 각 layout의 release 함수는 convention table 참조를 unmanaged 필드로 두고 plan이
+  managed로 판정한 capture만 release한 뒤 객체를 해제한다. Convention table은 프로그램이
   끝날 때까지 남는 정적 data이고 managed 참조를 담지 않으므로 object graph에 간선을
   더하지 않는다. 한 closure의 모든 entry 함수는 같은 environment 입력 계약을 따른다.
 - `closure.new`의 결과는 capture layout 할당에서 base로의 upcast다. Upcast가 그

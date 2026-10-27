@@ -73,7 +73,7 @@ Descriptor는 runtime에 할당되는 값의 종류마다 하나다.
   할당하지 않는 unmanaged 값은 descriptor를 갖지 않는다.
 - Native closure는 [closure 저장 layout](ir.md#closure-저장-layout)마다 하나다.
   Capture 타입 목록이 같은 closure는 layout과 descriptor를 공유하고, capture 없는
-  closure는 base layout의 descriptor를 쓴다. Entry table 필드의 종류는 unmanaged
+  closure는 base layout의 descriptor를 쓴다. Convention table 필드의 종류는 unmanaged
   포인터이고, capture 필드의 종류는 다른 할당 필드처럼 의미 타입에서 정한다. 필드
   이름은 없다.
   Wasm closure의 descriptor는 [Wasm 배치](#wasm-배치)가 정한다.
