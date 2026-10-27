@@ -48,7 +48,7 @@ pub fn resolve_module<'db>(
     let env = build_env(db, module, &dependencies);
 
     // Create resolver and process the module
-    let mut resolver = Resolver::new(db, env, &dependencies, span_map);
+    let mut resolver = Resolver::new(db, &env, dependencies, span_map);
     resolver.resolve_module(module)
 }
 
@@ -57,8 +57,8 @@ pub fn resolve_module<'db>(
 pub fn resolve_with_env<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<UnresolvedName>,
-    env: PackageEnv<'db>,
-    dependencies: &Dependencies<'db>,
+    env: &PackageEnv<'db>,
+    dependencies: Dependencies<'db>,
     span_map: &'db SpanMap,
 ) -> DeclTable<ResolvedRef<'db>> {
     let mut resolver = Resolver::new(db, env, dependencies, span_map);
@@ -427,12 +427,11 @@ pub const PRELUDE_MODULE: [&str; 2] = ["prelude", "v0"];
 pub fn resolve_library_with_env<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<UnresolvedName>,
-    env: PackageEnv<'db>,
+    env: &PackageEnv<'db>,
     span_map: &'db SpanMap,
 ) -> DeclTable<ResolvedRef<'db>> {
-    let package = env.package().clone();
-    Resolver::new(db, env, &Dependencies::none(), span_map)
-        .with_package(package)
+    Resolver::new(db, env, Dependencies::none(), span_map)
+        .with_package(env.package().clone())
         .resolve_module(module)
 }
 

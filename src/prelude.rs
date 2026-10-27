@@ -73,7 +73,7 @@ fn checked_prelude<'db>(
     let prelude_ast = parsed.module(db);
     let span_map = parsed.span_map(db);
     let resolved =
-        ast_resolve::resolve_library_with_env(db, prelude_ast, prelude_env(db)?.clone(), span_map);
+        ast_resolve::resolve_library_with_env(db, prelude_ast, prelude_env(db)?, span_map);
 
     // Typecheck with independent TypeContext (all UniVars resolved)
     let checker = ast_typeck::TypeChecker::new(db, span_map);

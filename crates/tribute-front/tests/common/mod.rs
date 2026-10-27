@@ -58,12 +58,8 @@ fn load_prelude(db: &dyn salsa::Database) -> Option<PreludeData<'_>> {
     let env = prelude_env(db).as_ref()?;
 
     // Resolve prelude with its own env
-    let resolved_prelude = tribute_front::resolve::resolve_library_with_env(
-        db,
-        prelude_ast,
-        env.clone(),
-        prelude_span_map,
-    );
+    let resolved_prelude =
+        tribute_front::resolve::resolve_library_with_env(db, prelude_ast, env, prelude_span_map);
 
     // Type-check once for both the exports user modules depend on and the
     // declarations specialization looks up.
@@ -93,7 +89,7 @@ fn resolve_with_prelude<'db>(
         .map(|p| tribute_front::resolve::Dependencies::std(p.env))
         .unwrap_or_default();
     let env = tribute_front::resolve::build_env(db, ast, &dependencies);
-    let resolved = tribute_front::resolve::resolve_with_env(db, ast, env, &dependencies, span_map);
+    let resolved = tribute_front::resolve::resolve_with_env(db, ast, &env, dependencies, span_map);
     let mut checker = tribute_front::typeck::TypeChecker::new(db, span_map);
     if let Some(p) = prelude {
         checker.depend_on(&p.exports);
