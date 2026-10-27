@@ -25,7 +25,7 @@ impl Converter<'_> {
     }
 
     pub(super) fn generated_continuation_type(&mut self, function: TypeRef) -> TypeRef {
-        physical_closure_type_with_environment_index(self.ctx, function, CallingConvention::Cps, 0)
+        physical_closure_type(self.ctx, function)
     }
 
     pub(super) fn convert_attribute(&mut self, attribute: &Attribute) -> Attribute {
@@ -47,8 +47,8 @@ impl Converter<'_> {
             return *converted;
         }
         if tribute_control::FuncSig::from_type_ref(self.ctx, ty).is_some() {
-            let (function, convention) = self.lower_callable_signature(ty);
-            let converted = physical_closure_type(self.ctx, function, convention);
+            let (function, _) = self.lower_callable_signature(ty);
+            let converted = physical_closure_type(self.ctx, function);
             self.converted_types.insert(ty, converted);
             return converted;
         }

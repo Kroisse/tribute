@@ -485,15 +485,16 @@ entry 함수의 최종 parameter 순서는 `Direct`에서 `environment, source..
 `evidence, environment, ContinuationFrame<R>, source...`다. `call_indirect`도 같은 순서로
 environment를 삽입한다.
 
-Closure의 environment index는 entry마다 그 바깥 convention이 정한다. 간접 이전은
-자기 convention에서 index를 얻고, entry 함수는 그 index를
-`tribute.closure_environment_index`로 기록한다. 일반 callable과 생성된
-continuation은 `CallableAbi`가 정한 Evidence와 ContinuationFrame entry parameter를 사용한다.
-따라서 producer가
-실제 physical entry slot을 type provenance에 명시하고 lambda lifting과 indirect
-call lowering은 그 slot을 그대로 cross-check/consume한다. Consumer가 arity,
-parameter type, body shape, 또는 calling-convention marker만으로 slot이나 hidden
-operand를 복원하는 것은 illegal이다.
+Closure의 environment index는 entry마다 그 바깥 convention 하나로 정해진다.
+`Direct`는 0, `EvidenceDirect`와 `Cps`는 1이다. 생성된 continuation(`Done<R>`,
+`Completion<X, R>`, resume, dispatch)도 예외가 아니다. `Completion<X, R>`의 entry는
+`evidence, environment, ContinuationFrame<R>, X`이고, evidence가 없는 `Done<R>`의
+entry는 `R, environment`다. 따라서 같은 `closure.closure` type의 closure는 같은
+convention에서 언제나 같은 entry ABI를 가진다. `closure.closure` type은 convention도
+environment index도 기록하지 않는다. Lambda lifting은 `closure.lambda`의 convention에서,
+indirect call lowering은 이전이 가진 convention에서 index를 얻고, entry 함수는 그 index를
+`tribute.closure_environment_index`로 기록한다. Consumer가 arity, parameter type,
+body shape로 slot이나 hidden operand를 복원하는 것은 illegal이다.
 
 Environment-bearing `func.func`는 zero-based physical slot을
 `tribute.closure_environment_index`로 기록한다. Bodyless declaration은 이
@@ -656,6 +657,12 @@ exit continuation으로 직접 tail transfer하므로 completion region과 포�
 실패하면 기존 operation, 타입 참조, attribute와 alias를 변경하지 않는다. Alias,
 closure signature, function constant, exact indirect signature, SSA 결과와 block
 argument, 중첩 타입 attribute를 함께 변환한다. 일반 `never`·`nil` 치환은 하지 않는다.
+`closure.closure` type은 convention을 기록하지 않으므로, 물리화는 그 closure를
+만드는 `closure.new`, 그 closure를 environment로 받는 entry 함수, 그 closure로 들어가는
+간접 이전, continuation frame layout이 기록한 convention으로 closure의 callable을
+변환한다. Frame layout의 `Done`과 `Dispatch`, `Dispatch`가 받는 resume은 `Cps`다. 이
+convention들이 서로 다르면 물리화는 실패한다. 어느 것도 기록하지 않은 closure type은
+아무도 만들거나 들어가지 않으므로 callable의 결과를 그대로 둔다.
 Closure tail lowering은 caller·callee·exact indirect signature의 전체 결과 목록을
 비교하여 논리 `[never]`와 물리 `[]`를 각각 지원한다.
 물리화는 검증에 쓴 provenance 중 이후 단계가 읽지 않는 것을 적용 단계에서 소비한다.
@@ -787,7 +794,7 @@ effect.dispatch_cps %ev, %dispatch, %resume, %payload
 물리화 완료 marker 또는 callable provenance가 아니며 `ability.perform`에 중복하지
 않는다. Dispatch가 요구하는 resume과 실제 resume의 exact 타입이 같아야 한다.
 같은 `R`을 가진 서로 다른 nominal frame도 호환되지 않는다. Dispatch와 resume의
-convention은 `Cps`, environment 위치는 각각 1과 0이다. 이미 낮춘 closure는
+convention은 `Cps`이고 environment 위치는 둘 다 1이다. 이미 낮춘 closure는
 기존에 인증된 callable provenance만 사용하며 이름이나 저장 형태에서 추론하지 않는다.
 누락되거나 잘못된 attribute 및 frame·R 불일치는 명시적 lowering 오류다.
 

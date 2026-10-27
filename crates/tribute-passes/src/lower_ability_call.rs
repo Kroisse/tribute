@@ -29,7 +29,7 @@ use trunk_ir::rewrite::{
 };
 
 use crate::effect_dispatch::pack_payload;
-use tribute_ir::calling_convention::{CLOSURE_ENVIRONMENT_INDEX_ATTR, DynConventionBearing};
+use tribute_ir::calling_convention::DynConventionBearing;
 use tribute_ir::dialect::ability;
 use tribute_ir::dialect::effect;
 use tribute_ir::dialect::tribute_rt;
@@ -155,9 +155,8 @@ impl RewritePattern for LowerCallPattern {
 
 /// Read the canonical evidence slot of the nearest callable with a declared ABI.
 ///
-/// A lifted closure whose type records environment index 0 stores that
-/// environment ahead of the hidden evidence parameter, so evidence then
-/// occupies the following slot.
+/// A convention that carries evidence places it first, ahead of any
+/// environment.
 fn enclosing_callable_evidence(ctx: &IrContext, op: OpRef) -> Option<ValueRef> {
     let mut current = op;
     loop {
@@ -168,14 +167,8 @@ fn enclosing_callable_evidence(ctx: &IrContext, op: OpRef) -> Option<ValueRef> {
             if !DynConventionBearing::of(ctx, parent)?.needs_evidence() {
                 return None;
             }
-            let environment_index = ctx
-                .op_attrs(parent)
-                .get_u32(CLOSURE_ENVIRONMENT_INDEX_ATTR)
-                .ok()
-                .flatten();
-            let evidence_index = usize::from(environment_index == Some(0));
             let entry = *ctx.region(ctx.op_region(parent, 0)?).blocks.first()?;
-            let &evidence = ctx.block_args(entry).get(evidence_index)?;
+            let &evidence = ctx.block_args(entry).first()?;
             return ability::is_evidence_type_ref(ctx, ctx.value_ty(evidence)).then_some(evidence);
         }
         current = parent;

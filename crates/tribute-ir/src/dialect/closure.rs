@@ -9,6 +9,16 @@ use trunk_ir::op_interface::CallableOwner;
 #[trunk_ir::dialect]
 mod closure {
     // Types
+    /// A closure whose callable type is `FuncType`, without its environment.
+    ///
+    /// The type records no calling convention and no environment index.
+    /// A closure is entered through the convention of each transfer, and
+    /// that convention alone places the environment in the entry
+    /// (`new-plans/cps-effects.md`, "CPS 변환의 호출 대상 형상").
+    ///
+    /// ```text
+    /// closure.closure<func.func_sig<(core.i32) -> core.i32>>
+    /// ```
     #[implements(ManagedRefType)]
     struct Closure<FuncType>;
 

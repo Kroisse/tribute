@@ -544,7 +544,7 @@ impl Converter<'_> {
                 TributeControlToCpsError::post_op(
                     source,
                     location,
-                    "indirect tail callee has no exact provenance-bearing closure contract",
+                    "indirect tail callee has no exact closure contract",
                 )
             })?;
         if flow.convention == CallingConvention::Cps {
@@ -629,7 +629,7 @@ impl Converter<'_> {
                 TributeControlToCpsError::post_op(
                     source,
                     location,
-                    "indirect callee has no exact provenance-bearing closure contract",
+                    "indirect callee has no exact closure contract",
                 )
             })?;
         let call = func::CallIndirect::operands(callee, args)

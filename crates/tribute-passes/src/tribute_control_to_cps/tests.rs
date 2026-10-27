@@ -263,9 +263,8 @@ fn textual_direct_evidence_and_cps_transfers_preserve_exact_abis() {
     assert!(printed.contains("tribute.calling_convention = \"cps\""));
     assert!(!printed.contains("tribute_control."), "{printed}");
 
-    // `closure.lambda` assembly only preserves its callable shape. The
-    // exact outer closure convention remains canonical type provenance
-    // and is verified above before this printer/parser boundary.
+    // The closure type records no convention; the lambda's own convention
+    // places the environment.
     let mut lambdas = Vec::new();
     collect_lambdas(&ctx, module.op(), &mut lambdas);
     let one_parameter_cps = lambdas.into_iter().find(|lambda| {
@@ -278,10 +277,7 @@ fn textual_direct_evidence_and_cps_transfers_preserve_exact_abis() {
     let lambda =
         one_parameter_cps.expect("conversion should produce a one-parameter CPS continuation");
     let closure_ty = ctx.op_result_types(lambda)[0];
-    assert_eq!(
-        tribute_ir::calling_convention::get_physical_closure_environment_index(&ctx, closure_ty),
-        Some(0)
-    );
+    assert!(ctx.get_type(closure_ty).attrs.is_empty());
     crate::lower_closure_lambda::lower_closure_lambda(&mut ctx, module);
     crate::closure_lower::lower_prepared_closures(&mut ctx, module).unwrap();
     let lowered = print_module(&ctx, module.op());
@@ -1563,10 +1559,7 @@ fn textual_zero_result_cps_and_direct_scf_branches_lower() {
             continue;
         }
         let closure_ty = ctx.op_result_types(lambda)[0];
-        assert_eq!(
-            tribute_ir::calling_convention::get_physical_closure_convention(&ctx, closure_ty),
-            Some(CallingConvention::Cps)
-        );
+        assert!(ctx.get_type(closure_ty).attrs.is_empty());
         let callable = closure::Closure::from_type_ref(&ctx, closure_ty)
             .and_then(|closure| func::FuncSig::from_type_ref(&ctx, closure.func_type(&ctx)))
             .unwrap();
@@ -1611,9 +1604,7 @@ fn cps_indirect_tail_without_a_provenance_bearing_closure_fails_before_insertion
             .unwrap_err();
 
     assert!(
-        error
-            .to_string()
-            .contains("no exact provenance-bearing closure contract"),
+        error.to_string().contains("no exact closure contract"),
         "{error}"
     );
     assert_eq!(ctx.block(module_block).ops.as_slice(), before.as_slice());
