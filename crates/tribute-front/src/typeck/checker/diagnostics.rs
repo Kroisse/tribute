@@ -22,9 +22,8 @@ pub(super) fn format_solve_error<'db>(
     names: &NameDisplay,
     error: &super::super::solver::SolveError<'db>,
 ) -> String {
-    // Whether two types are told apart only by where they are declared is a
-    // question about their identities, not about how this package spells them.
-    let identity = NameDisplay::identity();
+    // Two distinct types that this package spells alike would read as the
+    // same type in a plain mismatch message.
     if let super::super::solver::SolveError::TypeMismatch { expected, actual } = error
         && let (
             TypeKind::Named {
@@ -33,7 +32,7 @@ pub(super) fn format_solve_error<'db>(
             TypeKind::Named { id: actual_id, .. },
         ) = (expected.kind(db), actual.kind(db))
         && expected_id != actual_id
-        && expected.display(db, &identity).to_string() == actual.display(db, &identity).to_string()
+        && expected.display(db, names).to_string() == actual.display(db, names).to_string()
     {
         match (expected_id.origin(db), actual_id.origin(db)) {
             (TypeOrigin::Builtin(_), TypeOrigin::Source { .. }) => {

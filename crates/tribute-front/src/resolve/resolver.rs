@@ -1422,7 +1422,8 @@ impl<'e, 'db> Resolver<'e, 'db> {
     /// Report a `use` of `target` that the current module does not see, or
     /// that re-exports it more widely than it is visible.
     fn check_use_visibility(&self, u: &UseDecl, target: &Location) {
-        let written = self.names().path(&u.path);
+        // The path as written, not an identity path.
+        let written = u.path.iter().format("::");
         if let Some(restriction) = self.hidden_path(target) {
             self.report_hidden(u.id, written, restriction);
             return;

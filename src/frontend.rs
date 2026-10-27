@@ -19,6 +19,13 @@ use tribute_front::resolve::NameDisplay;
 use tribute_front::typeck as ast_typeck;
 use trunk_ir::{IrContext, Module};
 
+/// How diagnostics and editor features spell declarations while a user
+/// source is analyzed in the root crate's environment: as the root package
+/// of an executable build, depending on package `std`.
+pub fn diagnostic_names(db: &dyn salsa::Database) -> NameDisplay {
+    analysis::root_names(db, crate::prelude::frontend_environment(db))
+}
+
 /// Analyze a user source in the root crate's environment, package `std`
 /// from the prelude source (see [`tribute_front::analysis::analyze`]).
 ///
@@ -66,7 +73,7 @@ pub(crate) fn merge_and_lower_to_ir<'db>(
         context,
         module: frontend.module,
         compiler_intrinsics: frontend.compiler_intrinsics,
-        names: analysis::root_names(db, crate::prelude::frontend_environment(db)),
+        names: diagnostic_names(db),
     }
 }
 
@@ -117,7 +124,7 @@ fn prepare_frontend_details<'db>(
         Some(_) => Some(crate::prelude::specialized_prelude(db)?),
         None => None,
     };
-    let names = analysis::root_names(db, crate::prelude::frontend_environment(db));
+    let names = diagnostic_names(db);
     let input = match prelude {
         Some(prelude) => SpecializationInput::continuing(
             db,
@@ -227,13 +234,8 @@ mod tests {
     ) -> Option<SpecializationOutput<'db>> {
         let typed = parse_and_lower_ast(db, source)?;
         let prelude = crate::prelude::prelude_module(db)?;
-        let input = SpecializationInput::new(
-            db,
-            typed,
-            Some(prelude),
-            analysis::root_names(db, crate::prelude::frontend_environment(db)),
-        )
-        .merge_bodies(db, prelude);
+        let input = SpecializationInput::new(db, typed, Some(prelude), diagnostic_names(db))
+            .merge_bodies(db, prelude);
         let intrinsics = ast_to_ir::registered_compiler_intrinsics(input.module()).ok()?;
         monomorphize_functions(db, input.with_compiler_intrinsics(intrinsics)).ok()
     }

@@ -39,6 +39,7 @@ use super::definition_index::{definition_index, validate_identifier};
 use super::type_index::{AstTypeIndex, print_ast_type, type_index as ast_type_index};
 use tribute::TributeDatabaseImpl;
 use tribute_front::keywords::unraw;
+use tribute_front::resolve::NameDisplay;
 use tribute_front::source_file::{apply_edit, new_parser, parse_with_rope};
 
 /// Main LSP server state.
@@ -210,7 +211,10 @@ impl LspServer {
         let (contents, span) = self.db.attach(|db| {
             if let Some(entry) = ast_type_index(db, source_cst)?.type_at(db, offset) {
                 return Some((
-                    format!("```tribute\n{}\n```", print_ast_type(db, entry.ty)),
+                    format!(
+                        "```tribute\n{}\n```",
+                        print_ast_type(db, &tribute::diagnostic_names(db), entry.ty)
+                    ),
                     entry.span,
                 ));
             }
@@ -608,7 +612,9 @@ impl LspServer {
             // Try to find the inferred type at the diagnostic location
             let type_index = type_index?;
             if let Some(entry) = type_index.type_at(db, diag.inner.span.start) {
-                let type_str = print_ast_type(db, entry.ty);
+                // The annotation is inserted into source, where only the full
+                // identity path names the type from every module.
+                let type_str = print_ast_type(db, &NameDisplay::identity(), entry.ty);
 
                 // Find the position after the closing parenthesis of parameters
                 // We need to insert ": Type" before the function body
