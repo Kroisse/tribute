@@ -27,7 +27,7 @@ fn environment(db: &dyn salsa::Database) -> Environment {
 ///
 /// Diagnostics emitted during the pipeline are accumulated as Salsa
 /// accumulators and can be collected by the caller.
-#[salsa::tracked(returns(clone))]
+#[salsa::tracked(returns(deref))]
 fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String {
     let parsed = tribute_front::query::parsed_ast(db, source);
     assert!(parsed.is_some(), "Should parse successfully");
@@ -75,7 +75,7 @@ fn run_frontend_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) {
     assert!(checked.is_some(), "Should parse successfully");
 }
 
-#[salsa::tracked(returns(clone))]
+#[salsa::tracked]
 fn tdnr_function_summary_inner(
     db: &dyn salsa::Database,
     source: SourceCst,
@@ -93,11 +93,11 @@ fn tdnr_function_summary_inner(
 ///
 /// This intentionally stops before IR lowering so tests can inspect calls
 /// left without a selected function.
-pub fn tdnr_function_summary(
-    db: &dyn salsa::Database,
+pub fn tdnr_function_summary<'db>(
+    db: &'db dyn salsa::Database,
     source: SourceCst,
     function_name: &str,
-) -> TdnrSummary {
+) -> &'db TdnrSummary {
     tdnr_function_summary_inner(db, source, function_name.to_owned())
 }
 
@@ -219,7 +219,7 @@ fn collect_tdnr_summary<'db>(
 ///
 /// Uses `parsed_ast` to check only the test source for parse errors,
 /// avoiding false positives from prelude diagnostics.
-pub fn run_ast_pipeline_with_ir(db: &dyn salsa::Database, source: SourceCst) -> String {
+pub fn run_ast_pipeline_with_ir(db: &dyn salsa::Database, source: SourceCst) -> &str {
     // Check for parse errors in the test source (not prelude)
     let parse_diagnostics = tribute_front::query::parsed_ast::accumulated::<Diagnostic>(db, source);
     let parse_errors: Vec<_> = parse_diagnostics

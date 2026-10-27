@@ -141,7 +141,7 @@ fn test() -> Nat {
     );
 
     assert_eq!(
-        tdnr_function_summary(db, source, "test"),
+        *tdnr_function_summary(db, source, "test"),
         TdnrSummary {
             method_calls: vec![],
             calls: vec![
@@ -187,7 +187,7 @@ fn test(n: Int) -> Int {
     };
     let summary = tdnr_function_summary(db, source, "test");
     assert_eq!(summary.method_calls, Vec::<String>::new());
-    let mut calls = summary.calls;
+    let mut calls = summary.calls.clone();
     calls.sort_by(|a, b| (&a.target, a.arg_count).cmp(&(&b.target, b.arg_count)));
     assert_eq!(
         calls,
@@ -247,7 +247,7 @@ fn test(p: Point) -> Nat {
     );
 
     assert_eq!(
-        tdnr_function_summary(db, field_accessor, "test"),
+        *tdnr_function_summary(db, field_accessor, "test"),
         TdnrSummary {
             method_calls: vec![],
             calls: vec![TdnrCall {
@@ -276,7 +276,7 @@ fn test(c: Counter) -> Nat {
     );
 
     assert_eq!(
-        tdnr_function_summary(db, user_defined, "test"),
+        *tdnr_function_summary(db, user_defined, "test"),
         TdnrSummary {
             method_calls: vec![],
             calls: vec![TdnrCall {
@@ -311,7 +311,7 @@ fn test(t: Thing) -> Nat {
     );
 
     assert_eq!(
-        tdnr_function_summary(db, ambiguous, "test"),
+        *tdnr_function_summary(db, ambiguous, "test"),
         TdnrSummary {
             method_calls: vec!["pick".to_owned()],
             calls: vec![],
@@ -339,7 +339,7 @@ fn test(i: Item) -> Nat {
     );
 
     assert_eq!(
-        tdnr_function_summary(db, nested_module, "test"),
+        *tdnr_function_summary(db, nested_module, "test"),
         TdnrSummary {
             method_calls: vec![],
             calls: vec![TdnrCall {
@@ -372,7 +372,7 @@ fn score_b(thing: B::Thing) -> Nat { thing.score() }
     );
 
     assert_eq!(
-        tdnr_function_summary(db, source, "score_a"),
+        *tdnr_function_summary(db, source, "score_a"),
         TdnrSummary {
             method_calls: vec![],
             calls: vec![TdnrCall {
@@ -382,7 +382,7 @@ fn score_b(thing: B::Thing) -> Nat { thing.score() }
         }
     );
     assert_eq!(
-        tdnr_function_summary(db, source, "score_b"),
+        *tdnr_function_summary(db, source, "score_b"),
         TdnrSummary {
             method_calls: vec![],
             calls: vec![TdnrCall {
@@ -418,7 +418,7 @@ fn test() -> #(Nat, Nat) {
     );
 
     assert_eq!(
-        tdnr_function_summary(db, source, "test"),
+        *tdnr_function_summary(db, source, "test"),
         TdnrSummary {
             method_calls: vec![],
             calls: vec![
@@ -456,7 +456,7 @@ fn test() -> Nat {
     );
 
     assert_eq!(
-        tdnr_function_summary(db, source, "test"),
+        *tdnr_function_summary(db, source, "test"),
         TdnrSummary {
             method_calls: vec![],
             calls: vec![TdnrCall {
