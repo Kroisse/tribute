@@ -830,7 +830,11 @@ Capture는 closure 하나에 한 번만 담긴다.
 - 없으면 `k`보다 약한 본문 가운데 가장 강한 것을 부르는 adapter다.
   `EvidenceDirect` adapter는 evidence를 받고 쓰지 않으며, `Cps` adapter는 본문의
   결과를 `Done<R>`로 넘긴다. 이 adapter는 본문을 한 번 부르고 끝나며 CPS 제어를
-  만들지 않는다.
+  만들지 않는다. Adapter는 본문을 이름으로 부르지 않는다. Environment 입력으로 받은
+  closure 자신의 entry table에서 본문 class의 칸을 `closure.entry`로 읽고, 같은
+  closure를 넘겨 부른다. 그래서 adapter는 람다나 capture에 매이지 않고 칸의 entry
+  signature와 본문의 class로만 정해지며, target은 둘이 같은 칸들이 adapter 하나를
+  공유하게 할 수 있다.
 - `k`보다 약한 본문도 없으면 trap entry다. Trap entry는 그 칸의 entry signature를
   가지고 들어오자마자 trap하는 함수이며, target은 같은 signature의 칸들이 하나를
   공유하게 한다.
