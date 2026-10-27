@@ -1,13 +1,14 @@
 //! Type traversal of the metadata type checking records.
 //!
-//! Each table's values implement [`TypeFoldable`], and the metadata structs
-//! visit, fold, and merge every table. They destructure themselves, so a new
-//! table does not compile until each of these handles it.
+//! Each table's values implement [`TypeVisitable`] and [`TypeFoldable`], and
+//! the metadata structs visit, fold, and merge every table. Each of these
+//! destructures its value, so a new field or table does not compile until
+//! both traversals handle it.
 
 use std::ops::ControlFlow;
 
 use crate::SortedMap;
-use crate::ast::fold::{TypeFoldable, TypeFolder, TypeVisitor};
+use crate::ast::fold::{TypeFoldable, TypeFolder, TypeVisitable, TypeVisitor};
 use crate::ast::{AbilityInstance, NodeId};
 
 use super::{
@@ -17,8 +18,24 @@ use super::{
 };
 
 /// The caller-side types of the instance. Its `scheme` is the callee's
-/// declaration under the callee's own binders, so a fold or visit of the
+/// declaration under the callee's own binders, so a visit or fold of the
 /// caller's types leaves it.
+impl<'db> TypeVisitable<'db> for FunctionInstance<'db> {
+    fn visit_with<V: TypeVisitor<'db> + ?Sized>(&self, visitor: &mut V) -> ControlFlow<V::Break> {
+        let Self {
+            origin: _,
+            function: _,
+            scheme: _,
+            type_arguments,
+            row_arguments,
+            callable,
+        } = self;
+        callable.visit_with(visitor)?;
+        type_arguments.visit_with(visitor)?;
+        row_arguments.visit_with(visitor)
+    }
+}
+
 impl<'db> TypeFoldable<'db> for FunctionInstance<'db> {
     fn try_fold_with<F: TypeFolder<'db> + ?Sized>(self, folder: &mut F) -> Result<Self, F::Error> {
         let Self {
@@ -38,16 +55,25 @@ impl<'db> TypeFoldable<'db> for FunctionInstance<'db> {
             row_arguments: row_arguments.try_fold_with(folder)?,
         })
     }
-
-    fn visit_with<V: TypeVisitor<'db> + ?Sized>(&self, visitor: &mut V) -> ControlFlow<V::Break> {
-        self.callable.visit_with(visitor)?;
-        self.type_arguments.visit_with(visitor)?;
-        self.row_arguments.visit_with(visitor)
-    }
 }
 
 /// A local scheme is written under the enclosing function's binders, so it
-/// is folded with the instance's other types.
+/// is visited and folded with the instance's other types.
+impl<'db> TypeVisitable<'db> for LocalCallableInstance<'db> {
+    fn visit_with<V: TypeVisitor<'db> + ?Sized>(&self, visitor: &mut V) -> ControlFlow<V::Break> {
+        let Self {
+            binding: _,
+            local: _,
+            scheme,
+            row_arguments,
+            callable,
+        } = self;
+        scheme.visit_with(visitor)?;
+        callable.visit_with(visitor)?;
+        row_arguments.visit_with(visitor)
+    }
+}
+
 impl<'db> TypeFoldable<'db> for LocalCallableInstance<'db> {
     fn try_fold_with<F: TypeFolder<'db> + ?Sized>(self, folder: &mut F) -> Result<Self, F::Error> {
         let Self {
@@ -65,11 +91,20 @@ impl<'db> TypeFoldable<'db> for LocalCallableInstance<'db> {
             row_arguments: row_arguments.try_fold_with(folder)?,
         })
     }
+}
 
+impl<'db> TypeVisitable<'db> for InstantiatedHandlerOperation<'db> {
     fn visit_with<V: TypeVisitor<'db> + ?Sized>(&self, visitor: &mut V) -> ControlFlow<V::Break> {
-        self.scheme.visit_with(visitor)?;
-        self.callable.visit_with(visitor)?;
-        self.row_arguments.visit_with(visitor)
+        let Self {
+            ability: _,
+            ability_args,
+            kind: _,
+            params,
+            result,
+        } = self;
+        ability_args.visit_with(visitor)?;
+        params.visit_with(visitor)?;
+        result.visit_with(visitor)
     }
 }
 
@@ -90,11 +125,20 @@ impl<'db> TypeFoldable<'db> for InstantiatedHandlerOperation<'db> {
             result: result.try_fold_with(folder)?,
         })
     }
+}
 
+impl<'db> TypeVisitable<'db> for InstantiatedPerformOperation<'db> {
     fn visit_with<V: TypeVisitor<'db> + ?Sized>(&self, visitor: &mut V) -> ControlFlow<V::Break> {
-        self.ability_args.visit_with(visitor)?;
-        self.params.visit_with(visitor)?;
-        self.result.visit_with(visitor)
+        let Self {
+            ability: _,
+            ability_args,
+            kind: _,
+            params,
+            result,
+        } = self;
+        ability_args.visit_with(visitor)?;
+        params.visit_with(visitor)?;
+        result.visit_with(visitor)
     }
 }
 
@@ -115,11 +159,12 @@ impl<'db> TypeFoldable<'db> for InstantiatedPerformOperation<'db> {
             result: result.try_fold_with(folder)?,
         })
     }
+}
 
+impl<'db> TypeVisitable<'db> for LambdaSignature<'db> {
     fn visit_with<V: TypeVisitor<'db> + ?Sized>(&self, visitor: &mut V) -> ControlFlow<V::Break> {
-        self.ability_args.visit_with(visitor)?;
-        self.params.visit_with(visitor)?;
-        self.result.visit_with(visitor)
+        let Self { function_type } = self;
+        function_type.visit_with(visitor)
     }
 }
 
@@ -129,24 +174,10 @@ impl<'db> TypeFoldable<'db> for LambdaSignature<'db> {
             function_type: self.function_type.try_fold_with(folder)?,
         })
     }
-
-    fn visit_with<V: TypeVisitor<'db> + ?Sized>(&self, visitor: &mut V) -> ControlFlow<V::Break> {
-        self.function_type.visit_with(visitor)
-    }
 }
 
 /// The type arguments of each ability instance the step names.
-impl<'db> TypeFoldable<'db> for EvidenceStep<'db> {
-    fn try_fold_with<F: TypeFolder<'db> + ?Sized>(self, folder: &mut F) -> Result<Self, F::Error> {
-        Ok(match self {
-            Self::Mask(instance) => Self::Mask(instance.try_fold_with(folder)?),
-            Self::Dup(instance) => Self::Dup(instance.try_fold_with(folder)?),
-            Self::Push(instance) => Self::Push(instance.try_fold_with(folder)?),
-            Self::Select(index) => Self::Select(index),
-            Self::Tails(plans) => Self::Tails(plans.try_fold_with(folder)?),
-        })
-    }
-
+impl<'db> TypeVisitable<'db> for EvidenceStep<'db> {
     fn visit_with<V: TypeVisitor<'db> + ?Sized>(&self, visitor: &mut V) -> ControlFlow<V::Break> {
         match self {
             Self::Mask(instance) | Self::Dup(instance) | Self::Push(instance) => {
@@ -158,7 +189,19 @@ impl<'db> TypeFoldable<'db> for EvidenceStep<'db> {
     }
 }
 
-fn visit_values<'db, T: TypeFoldable<'db>, V: TypeVisitor<'db> + ?Sized>(
+impl<'db> TypeFoldable<'db> for EvidenceStep<'db> {
+    fn try_fold_with<F: TypeFolder<'db> + ?Sized>(self, folder: &mut F) -> Result<Self, F::Error> {
+        Ok(match self {
+            Self::Mask(instance) => Self::Mask(instance.try_fold_with(folder)?),
+            Self::Dup(instance) => Self::Dup(instance.try_fold_with(folder)?),
+            Self::Push(instance) => Self::Push(instance.try_fold_with(folder)?),
+            Self::Select(index) => Self::Select(index),
+            Self::Tails(plans) => Self::Tails(plans.try_fold_with(folder)?),
+        })
+    }
+}
+
+fn visit_values<'db, T: TypeVisitable<'db>, V: TypeVisitor<'db> + ?Sized>(
     table: &SortedMap<NodeId, T>,
     visitor: &mut V,
 ) -> ControlFlow<V::Break> {

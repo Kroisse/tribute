@@ -22,7 +22,7 @@ use self::instance::InstanceKey;
 use crate::SortedMap;
 use std::ops::ControlFlow;
 
-use crate::ast::fold::{ForEachType, TypeFoldable};
+use crate::ast::fold::{ForEachType, TypeFoldable, TypeVisitable};
 use crate::ast::{CtorId, Decl, DeclTable, FuncDefId, NodeId, TypeScheme, TypedRef};
 use crate::typeck::subst::{BoundVarOutOfBounds, BoundVarSubst};
 use crate::typeck::{

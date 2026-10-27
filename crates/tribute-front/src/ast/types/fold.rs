@@ -1,10 +1,11 @@
 //! Structural traversal of types, ability rows, and type schemes.
 //!
-//! A [`TypeVisitor`] reads and a [`TypeFolder`] rebuilds. Their default
-//! methods recurse structurally; an implementation overrides the method for
-//! the nodes its policy concerns and calls `super_visit_with` or
-//! `try_super_fold_with` to continue into the children. An override that does
-//! not call them skips the subtree.
+//! A [`TypeVisitor`] reads a [`TypeVisitable`] value and a [`TypeFolder`]
+//! rebuilds a [`TypeFoldable`] one. Their default methods recurse
+//! structurally; an implementation overrides the method for the nodes its
+//! policy concerns and calls `super_visit_with` or `try_super_fold_with` to
+//! continue into the children. An override that does not call them skips the
+//! subtree.
 //!
 //! Traversal order is part of the contract (see `new-plans/generics.md`,
 //! "타입 순회와 binder별 치환"):
@@ -59,25 +60,37 @@ pub trait TypeVisitor<'db> {
     }
 }
 
-/// A value that holds types a [`TypeFolder`] or [`TypeVisitor`] reaches.
-pub trait TypeFoldable<'db>: Sized {
+/// A value that holds types a [`TypeVisitor`] reaches.
+pub trait TypeVisitable<'db> {
+    fn visit_with<V: TypeVisitor<'db> + ?Sized>(&self, visitor: &mut V) -> ControlFlow<V::Break>;
+}
+
+/// A value that a [`TypeFolder`] rebuilds. It folds the same types, in the
+/// same order, as its [`TypeVisitable`] implementation visits.
+pub trait TypeFoldable<'db>: TypeVisitable<'db> + Sized {
     fn try_fold_with<F: TypeFolder<'db> + ?Sized>(self, folder: &mut F) -> Result<Self, F::Error>;
 
     fn fold_with<F: TypeFolder<'db, Error = Infallible> + ?Sized>(self, folder: &mut F) -> Self {
         let Ok(folded) = self.try_fold_with(folder);
         folded
     }
+}
 
-    fn visit_with<V: TypeVisitor<'db> + ?Sized>(&self, visitor: &mut V) -> ControlFlow<V::Break>;
+impl<'db> TypeVisitable<'db> for Type<'db> {
+    fn visit_with<V: TypeVisitor<'db> + ?Sized>(&self, visitor: &mut V) -> ControlFlow<V::Break> {
+        visitor.visit_type(*self)
+    }
 }
 
 impl<'db> TypeFoldable<'db> for Type<'db> {
     fn try_fold_with<F: TypeFolder<'db> + ?Sized>(self, folder: &mut F) -> Result<Self, F::Error> {
         folder.fold_type(self)
     }
+}
 
+impl<'db> TypeVisitable<'db> for AbilityRow<'db> {
     fn visit_with<V: TypeVisitor<'db> + ?Sized>(&self, visitor: &mut V) -> ControlFlow<V::Break> {
-        visitor.visit_type(*self)
+        visitor.visit_row(*self)
     }
 }
 
@@ -85,9 +98,11 @@ impl<'db> TypeFoldable<'db> for AbilityRow<'db> {
     fn try_fold_with<F: TypeFolder<'db> + ?Sized>(self, folder: &mut F) -> Result<Self, F::Error> {
         folder.fold_row(self)
     }
+}
 
+impl<'db> TypeVisitable<'db> for AbilityInstance<'db> {
     fn visit_with<V: TypeVisitor<'db> + ?Sized>(&self, visitor: &mut V) -> ControlFlow<V::Break> {
-        visitor.visit_row(*self)
+        self.args.visit_with(visitor)
     }
 }
 
@@ -98,9 +113,12 @@ impl<'db> TypeFoldable<'db> for AbilityInstance<'db> {
             ..self
         })
     }
+}
 
+impl<'db> TypeVisitable<'db> for RowUnion<'db> {
     fn visit_with<V: TypeVisitor<'db> + ?Sized>(&self, visitor: &mut V) -> ControlFlow<V::Break> {
-        self.args.visit_with(visitor)
+        self.sources.visit_with(visitor)?;
+        visitor.visit_row(self.result)
     }
 }
 
@@ -111,10 +129,13 @@ impl<'db> TypeFoldable<'db> for RowUnion<'db> {
             result: folder.fold_row(self.result)?,
         })
     }
+}
 
+impl<'db> TypeVisitable<'db> for RowRemoval<'db> {
     fn visit_with<V: TypeVisitor<'db> + ?Sized>(&self, visitor: &mut V) -> ControlFlow<V::Break> {
-        self.sources.visit_with(visitor)?;
-        visitor.visit_row(self.result)
+        self.rows()
+            .into_iter()
+            .try_for_each(|row| visitor.visit_row(row))
     }
 }
 
@@ -126,24 +147,33 @@ impl<'db> TypeFoldable<'db> for RowRemoval<'db> {
             result: folder.fold_row(self.result)?,
         })
     }
-
-    fn visit_with<V: TypeVisitor<'db> + ?Sized>(&self, visitor: &mut V) -> ControlFlow<V::Break> {
-        self.rows()
-            .into_iter()
-            .try_for_each(|row| visitor.visit_row(row))
-    }
 }
 
 /// An owned vector folds its items in place, without copying them.
+impl<'db, T: TypeVisitable<'db>> TypeVisitable<'db> for Vec<T> {
+    fn visit_with<V: TypeVisitor<'db> + ?Sized>(&self, visitor: &mut V) -> ControlFlow<V::Break> {
+        self.iter().try_for_each(|item| item.visit_with(visitor))
+    }
+}
+
 impl<'db, T: TypeFoldable<'db>> TypeFoldable<'db> for Vec<T> {
     fn try_fold_with<F: TypeFolder<'db> + ?Sized>(self, folder: &mut F) -> Result<Self, F::Error> {
         self.into_iter()
             .map(|item| item.try_fold_with(folder))
             .collect()
     }
+}
 
+impl<'db> TypeVisitable<'db> for TypeScheme<'db> {
     fn visit_with<V: TypeVisitor<'db> + ?Sized>(&self, visitor: &mut V) -> ControlFlow<V::Break> {
-        self.iter().try_for_each(|item| item.visit_with(visitor))
+        let db = visitor.db();
+        visitor.visit_type(self.body(db))?;
+        self.row_unions(db)
+            .iter()
+            .try_for_each(|union| union.visit_with(visitor))?;
+        self.row_removals(db)
+            .iter()
+            .try_for_each(|removal| removal.visit_with(visitor))
     }
 }
 
@@ -165,17 +195,6 @@ impl<'db> TypeFoldable<'db> for TypeScheme<'db> {
             builder.row_removals = Cow::Owned(removals);
         }
         Ok(builder.build(db))
-    }
-
-    fn visit_with<V: TypeVisitor<'db> + ?Sized>(&self, visitor: &mut V) -> ControlFlow<V::Break> {
-        let db = visitor.db();
-        visitor.visit_type(self.body(db))?;
-        self.row_unions(db)
-            .iter()
-            .try_for_each(|union| union.visit_with(visitor))?;
-        self.row_removals(db)
-            .iter()
-            .try_for_each(|removal| removal.visit_with(visitor))
     }
 }
 
