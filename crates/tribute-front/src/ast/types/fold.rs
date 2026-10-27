@@ -376,9 +376,9 @@ impl<'db, M: FnMut(Type<'db>) -> Type<'db>> TypeFolder<'db> for MapTypes<'db, M>
 }
 
 /// Call `visit` on each type the traversal reaches at the top level.
-pub(super) struct ForEachType<'db, V> {
-    pub(super) db: &'db dyn salsa::Database,
-    pub(super) visit: V,
+pub(crate) struct ForEachType<'db, V> {
+    pub(crate) db: &'db dyn salsa::Database,
+    pub(crate) visit: V,
 }
 
 impl<'db, V: FnMut(Type<'db>)> TypeVisitor<'db> for ForEachType<'db, V> {

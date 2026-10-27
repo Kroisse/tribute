@@ -24,6 +24,7 @@ mod constraint;
 mod context;
 mod evidence_plan;
 mod func_context;
+mod metadata_types;
 #[cfg(test)]
 pub(crate) mod prop;
 mod solver;
@@ -261,59 +262,9 @@ pub enum EvidenceStep<'db> {
     Tails(Vec<Vec<EvidenceStep<'db>>>),
 }
 
-impl<'db> EvidenceStep<'db> {
-    /// Call `visit` with each ability instance the plan step names.
-    pub fn for_each_instance(&self, mut visit: impl FnMut(&crate::ast::AbilityInstance<'db>)) {
-        self.visit_instances(&mut visit);
-    }
-
-    // The recursion passes one `&mut dyn` down: a generic parameter would
-    // grow by a reference at each level of `Tails`.
-    fn visit_instances(&self, visit: &mut dyn FnMut(&crate::ast::AbilityInstance<'db>)) {
-        match self {
-            Self::Mask(instance) | Self::Dup(instance) | Self::Push(instance) => visit(instance),
-            Self::Select(_) => {}
-            Self::Tails(plans) => {
-                for step in plans.iter().flatten() {
-                    step.visit_instances(visit);
-                }
-            }
-        }
-    }
-
-    /// Apply `map` to the type arguments of each instance.
-    pub fn map_types(&self, mut map: impl FnMut(Type<'db>) -> Type<'db>) -> Self {
-        self.map_instance_types(&mut map)
-    }
-
-    fn map_instance_types(&self, map: &mut dyn FnMut(Type<'db>) -> Type<'db>) -> Self {
-        let mut instance =
-            |instance: &crate::ast::AbilityInstance<'db>| crate::ast::AbilityInstance {
-                ability_id: instance.ability_id,
-                args: instance.args.iter().map(|ty| map(*ty)).collect(),
-            };
-        match self {
-            Self::Mask(effect) => Self::Mask(instance(effect)),
-            Self::Dup(effect) => Self::Dup(instance(effect)),
-            Self::Push(effect) => Self::Push(instance(effect)),
-            Self::Select(index) => Self::Select(*index),
-            Self::Tails(plans) => Self::Tails(
-                plans
-                    .iter()
-                    .map(|plan| {
-                        plan.iter()
-                            .map(|step| step.map_instance_types(map))
-                            .collect()
-                    })
-                    .collect(),
-            ),
-        }
-    }
-}
-
 /// What type checking fixed for each expression and reference, keyed by
 /// node.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct ExpressionTypeMetadata<'db> {
     pub node_types: SortedMap<NodeId, Type<'db>>,
     pub function_instances: SortedMap<NodeId, FunctionInstance<'db>>,
