@@ -218,10 +218,6 @@ impl<'db> NominalTypes<'db> {
         }
     }
 
-    // This conversion and the identity keys below are structural maps into IR
-    // types and key strings, not folds over `Type`: their output format is the
-    // contract, and the source keys sort a row's effects.
-
     /// Convert a source type at the source-logical `tribute_control` boundary.
     pub(crate) fn convert_logical_type(
         &self,
