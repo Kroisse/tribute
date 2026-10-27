@@ -10,7 +10,7 @@ use tribute_front::astgen::ParsedAst;
 use tribute_front::monomorphize::{self, SpecializationInput, SpecializationOutput};
 use tribute_front::query as ast_query;
 use tribute_front::resolve as ast_resolve;
-use tribute_front::resolve::PackageEnv;
+use tribute_front::resolve::{PackageEnv, PackageName};
 use tribute_front::source_file::parse_with_rope;
 use tribute_front::typeck as ast_typeck;
 use tribute_front::typeck::PreludeExports;
@@ -76,8 +76,8 @@ fn checked_prelude<'db>(
     let (parsed, _) = parse_prelude(db)?;
     let prelude_ast = parsed.module(db);
     let span_map = parsed.span_map(db);
-    let prelude_env = ast_resolve::build_library_env(db, prelude_ast);
-    let resolved = ast_resolve::resolve_library_with_env(db, prelude_ast, prelude_env, span_map);
+    let resolved =
+        ast_resolve::resolve_library_with_env(db, prelude_ast, prelude_env(db)?, span_map);
 
     // Typecheck with independent TypeContext (all UniVars resolved)
     let checker = ast_typeck::TypeChecker::new(db, span_map);
@@ -175,7 +175,11 @@ pub(crate) fn prelude_module(db: &dyn salsa::Database) -> Option<ast_typeck::Typ
 #[salsa::tracked(returns(as_ref))]
 fn prelude_env<'db>(db: &'db dyn salsa::Database) -> Option<PackageEnv<'db>> {
     let (parsed, _) = parse_prelude(db)?;
-    Some(ast_resolve::build_library_env(db, parsed.module(db)))
+    Some(ast_resolve::build_library_env(
+        db,
+        parsed.module(db),
+        &PackageName::std(),
+    ))
 }
 
 /// The packages a user package depends on: package `std`.

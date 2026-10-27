@@ -7,7 +7,7 @@ use std::sync::LazyLock;
 
 use super::env::{Binding, PackageEnv, Restriction};
 use super::package::{IdentityPath, Location, PackageName};
-use super::{LIBRARY_PACKAGE, PRELUDE_MODULE};
+use super::{PRELUDE_MODULE, STD_PACKAGE};
 use crate::ast::FuncDefId;
 
 /// The path of the prelude module from the root of its package.
@@ -31,7 +31,7 @@ impl<'db> Dependencies<'db> {
     /// The dependency on package `std`, whose environment is `std`.
     pub fn std(std: &'db PackageEnv<'db>) -> Self {
         Self {
-            packages: vec![(Symbol::new(LIBRARY_PACKAGE), std)],
+            packages: vec![(Symbol::new(STD_PACKAGE), std)],
         }
     }
 
@@ -46,7 +46,7 @@ impl<'db> Dependencies<'db> {
     fn prelude(&self) -> Option<(&Symbol, &'db PackageEnv<'db>)> {
         self.packages
             .iter()
-            .find(|(name, _)| name == LIBRARY_PACKAGE)
+            .find(|(name, _)| name == STD_PACKAGE)
             .map(|(name, env)| (name, *env))
     }
 
@@ -207,7 +207,7 @@ impl<'s, 'db> Scope<'s, 'db> {
     /// The package that holds the prelude module, if it is a dependency,
     /// and its environment. Package `std` sees its own prelude module.
     fn prelude(&self) -> Option<(Option<&'s Symbol>, &'s PackageEnv<'db>)> {
-        if self.own.package().is_library() {
+        if self.own.package().is_std() {
             return Some((None, self.own));
         }
         self.dependencies

@@ -193,12 +193,12 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
         &tribute_front::resolve::resolve_with_env(
             db,
             ast,
-            tribute_front::resolve::build_env(
+            &tribute_front::resolve::build_env(
                 db,
                 ast,
                 &tribute_front::resolve::Dependencies::none(),
             ),
-            &tribute_front::resolve::Dependencies::none(),
+            tribute_front::resolve::Dependencies::none(),
             parsed.span_map(db),
         ),
         parsed.span_map(db),
@@ -237,12 +237,12 @@ fn lower_monomorphized_source(
         &tribute_front::resolve::resolve_with_env(
             db,
             ast,
-            tribute_front::resolve::build_env(
+            &tribute_front::resolve::build_env(
                 db,
                 ast,
                 &tribute_front::resolve::Dependencies::none(),
             ),
-            &tribute_front::resolve::Dependencies::none(),
+            tribute_front::resolve::Dependencies::none(),
             parsed.span_map(db),
         ),
         parsed.span_map(db),
@@ -289,8 +289,8 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
     let resolved = tribute_front::resolve::resolve_with_env(
         db,
         ast,
-        tribute_front::resolve::build_env(db, ast, &tribute_front::resolve::Dependencies::none()),
-        &tribute_front::resolve::Dependencies::none(),
+        &tribute_front::resolve::build_env(db, ast, &tribute_front::resolve::Dependencies::none()),
+        tribute_front::resolve::Dependencies::none(),
         span_map,
     );
     let checked = tribute_front::typeck::typecheck_module(db, &resolved, span_map);

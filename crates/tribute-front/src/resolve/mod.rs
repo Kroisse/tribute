@@ -48,7 +48,7 @@ pub fn resolve_module<'db>(
     let env = build_env(db, module, &dependencies);
 
     // Create resolver and process the module
-    let mut resolver = Resolver::new(db, env, &dependencies, span_map);
+    let mut resolver = Resolver::new(db, &env, dependencies, span_map);
     resolver.resolve_module(module)
 }
 
@@ -57,8 +57,8 @@ pub fn resolve_module<'db>(
 pub fn resolve_with_env<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<UnresolvedName>,
-    env: PackageEnv<'db>,
-    dependencies: &Dependencies<'db>,
+    env: &PackageEnv<'db>,
+    dependencies: Dependencies<'db>,
     span_map: &'db SpanMap,
 ) -> DeclTable<ResolvedRef<'db>> {
     let mut resolver = Resolver::new(db, env, dependencies, span_map);
@@ -165,28 +165,29 @@ pub(crate) fn root_location(scope: Scope<'_, '_>, path: &[Symbol]) -> Option<Loc
     Some(scope.at_root(SymbolPath::new(path.iter().cloned())))
 }
 
-/// Build the environment of the package being compiled from its AST, with
-/// the packages it depends on.
+/// Build the environment of the root package of an executable build from
+/// its AST, with the packages it depends on.
 pub fn build_env<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<UnresolvedName>,
     dependencies: &Dependencies<'db>,
 ) -> PackageEnv<'db> {
-    build_package_env(db, &module.decls, &PackageName::compiled(), dependencies)
-}
-
-/// Build the environment of the library package whose root module is
-/// `module`.
-pub fn build_library_env<'db>(
-    db: &'db dyn salsa::Database,
-    module: &Module<UnresolvedName>,
-) -> PackageEnv<'db> {
     build_package_env(
         db,
         &module.decls,
-        &PackageName::std(),
-        &Dependencies::none(),
+        &PackageName::executable_root(),
+        dependencies,
     )
+}
+
+/// Build the environment of the library package `package` whose root
+/// module is `module`.
+pub fn build_library_env<'db>(
+    db: &'db dyn salsa::Database,
+    module: &Module<UnresolvedName>,
+    package: &PackageName,
+) -> PackageEnv<'db> {
+    build_package_env(db, &module.decls, package, &Dependencies::none())
 }
 
 /// The environment of a package `std` that declares nothing but the
@@ -224,7 +225,7 @@ fn build_package_env<'db>(
         }
     }
 
-    if package.is_library() {
+    if package.is_std() {
         inject_builtin_bindings(db, &mut env);
         inject_runtime_bindings(db, &mut env);
     }
@@ -412,23 +413,25 @@ pub(crate) fn restriction_module(module: &[Symbol], scope: &[Symbol]) -> Option<
     module.starts_with(&named).then(|| SymbolPath::new(named))
 }
 
-/// The package the prelude belongs to. Its declarations' identities and
-/// symbols start with this path.
-pub const LIBRARY_PACKAGE: &str = "std";
+/// The name of package `std`, which the prelude belongs to and every
+/// package depends on. Its declarations' identities and symbols start
+/// with it.
+pub const STD_PACKAGE: &str = "std";
 
-/// The module of [`LIBRARY_PACKAGE`] whose `pub` items every module sees
+/// The module of [`STD_PACKAGE`] whose `pub` items every module sees
 /// under their short names.
 pub const PRELUDE_MODULE: [&str; 2] = ["prelude", "v0"];
 
-/// Resolve the library package whose root module is `module`.
+/// Resolve the library package whose root module is `module`, in the
+/// environment `build_library_env` built for it.
 pub fn resolve_library_with_env<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<UnresolvedName>,
-    env: PackageEnv<'db>,
+    env: &PackageEnv<'db>,
     span_map: &'db SpanMap,
 ) -> DeclTable<ResolvedRef<'db>> {
-    Resolver::new(db, env, &Dependencies::none(), span_map)
-        .with_package(PackageName::std())
+    Resolver::new(db, env, Dependencies::none(), span_map)
+        .with_package(env.package().clone())
         .resolve_module(module)
 }
 
@@ -707,8 +710,8 @@ fn collect_definition<'db>(
                     .flatten()
                     .unwrap_or_else(|| u.path.clone());
                 // An inline module's re-export joins its namespace, and a
-                // library package root's joins what the package exports; the
-                // compiled package root's imports are already seen
+                // library package root's joins what the package exports; an
+                // executable root package's imports are already seen
                 // package-wide.
                 let exports = !prefix.is_root() || scope.package.is_library();
                 if exports {

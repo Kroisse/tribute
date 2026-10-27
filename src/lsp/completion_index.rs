@@ -149,10 +149,7 @@ pub fn completion_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<AstC
             Binding::Module { .. } | Binding::Import { .. } | Binding::AbilityOp { .. } => continue,
         };
         items.push(AstCompletionItem {
-            detail: Some(format!(
-                "{}::{name}",
-                tribute_front::resolve::LIBRARY_PACKAGE
-            )),
+            detail: Some(format!("{}::{name}", tribute_front::resolve::STD_PACKAGE)),
             name,
             kind,
             module: None,
@@ -250,7 +247,7 @@ pub fn constructor_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<Ast
         items.push(AstCompletionItem {
             detail: Some(format!(
                 "{}::{ty}::{name}",
-                tribute_front::resolve::LIBRARY_PACKAGE
+                tribute_front::resolve::STD_PACKAGE
             )),
             name,
             kind: CompletionKind::Constructor,
@@ -379,7 +376,7 @@ pub fn module_at(db: &dyn salsa::Database, source: SourceCst, offset: usize) -> 
             &mut path,
         );
     }
-    tribute_front::resolve::PackageName::compiled().identity_path(&path)
+    tribute_front::resolve::PackageName::executable_root().identity_path(&path)
 }
 
 /// The items of `items` the body of `module` names. A declaration of the

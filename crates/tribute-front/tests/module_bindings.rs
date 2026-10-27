@@ -34,7 +34,7 @@ fn nested_modules_are_bound_by_identity(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(db, "modules.trb", TREE);
     let parsed = tribute_front::query::parsed_ast(db, source).unwrap();
     let env = build_env(db, parsed.module(db), &Dependencies::none());
-    assert_eq!(env.package(), &PackageName::compiled());
+    assert_eq!(env.package(), &PackageName::executable_root());
 
     let c = env.lookup_qualified(&SymbolPath::new(["a", "b"]), &Symbol::new("c"));
     assert_eq!(module_path(c), ["a", "b", "c"]);
@@ -51,11 +51,27 @@ fn nested_modules_are_bound_by_identity(db: &salsa::DatabaseImpl) {
 fn library_modules_are_bound_under_the_package(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(db, "library.trb", TREE);
     let parsed = tribute_front::query::parsed_ast(db, source).unwrap();
-    let env = build_library_env(db, parsed.module(db));
+    let env = build_library_env(db, parsed.module(db), &PackageName::std());
 
     let c = env.lookup_qualified(&SymbolPath::new(["a", "b"]), &Symbol::new("c"));
     assert_eq!(module_path(c), ["std", "a", "b", "c"]);
     assert!(env.declares(Symbol::new("a")));
+}
+
+#[salsa_test]
+fn any_library_is_bound_under_its_name(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(db, "lib.trb", TREE);
+    let parsed = tribute_front::query::parsed_ast(db, source).unwrap();
+    let lib = PackageName::library(Symbol::new("lib"));
+    let env = build_library_env(db, parsed.module(db), &lib);
+    assert_eq!(env.package(), &lib);
+
+    // The paths are those its dependents see: they start with its name.
+    let c = env.lookup_qualified(&SymbolPath::new(["a", "b"]), &Symbol::new("c"));
+    assert_eq!(module_path(c), ["lib", "a", "b", "c"]);
+    assert_eq!(module_path(env.lookup(&Symbol::new("a"))), ["lib", "a"]);
+    // Only an executable root prefixes its module `std` with `pkg`.
+    assert_eq!(module_path(env.lookup(&Symbol::new("std"))), ["lib", "std"]);
 }
 
 #[salsa_test]
@@ -122,9 +138,9 @@ fn library_module_reference(db: &dyn salsa::Database, source: SourceCst) -> Vec<
 
     let parsed = tribute_front::query::parsed_ast(db, source).unwrap();
     let module = parsed.module(db);
-    let env = build_library_env(db, module);
+    let env = build_library_env(db, module, &PackageName::std());
     let resolved =
-        tribute_front::resolve::resolve_library_with_env(db, module, env, parsed.span_map(db));
+        tribute_front::resolve::resolve_library_with_env(db, module, &env, parsed.span_map(db));
     let body = resolved
         .decls()
         .find_map(|decl| match decl {
