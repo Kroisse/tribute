@@ -287,8 +287,14 @@ pass가 정한 convention이 아니다. Arm의 정의에 드러나는 위반은 
   참조될 때만 검사한다.
 - 인스턴스마다, class 변수와 같은 조건으로 고른 binder에 그 인스턴스가 넘기는 row가
   `op`를 선언한 ability를 담는지를 class와 같은 방식으로 계산한다. `ability_arg`
-  binder도 이 조건으로 고른다. 어떤 row 인자로도 정해지지 않는 tail과, 정의 안에서
-  어떤 callable에도 닿지 않는 tail은 ability를 더하지 않는다.
+  binder도 이 조건으로 고르고, `local` binder는 본문마다 그 본문을 고른 사용의
+  `instantiate`가 넘기는 row로 읽는다. 선언을 읽을 수 없는 ability는 `op`를 선언한
+  것으로 본다.
+- 정의 안에서 어떤 callable에도 닿지 않는 tail은 ability를 더하지 않는다. `body`
+  tail은 callee 값 type의 어느 매개변수 타입에도 나타나지 않으면 ability를 더하지
+  않고, 나타나면 `op`를 선언한 ability를 담을 수 있다고 본다. 별칭과 일반화된 계산
+  결과의 사용에는 `instantiate`가 없어서 인자의 row를 그 tail에 이어 읽을 수 없기
+  때문이다.
 - 직접 호출은 callee 인스턴스의 row를, 간접 호출은 callee 값 type의 row를 이 표로
   읽는다. Arm 안의 `handle` body에 있는 호출은 그 row에서 둘러싼 `handle`들이 처리하는
   label을 뺀다. 남은 row가 `op`를 선언한 ability를 담으면 위반이다.
@@ -300,8 +306,8 @@ pass가 정한 convention이 아니다. Arm의 정의에 드러나는 위반은 
 없이 실행되기 때문이다. 정의 자신의 tail 가운데 어떤 callable에도 닿지 않는 것은
 [tail 규칙](#row와-호출-규약)이 요구 없음으로 읽으므로 convention을 강하게 하지
 않는다. Class 특수화가 `Cps`로 읽는 그 밖의 class 없는 tail(`body`, `ability_arg`)을
-거치는 호출도 검사를 통과하면, class 특수화는 그 호출에 `Cps`가 아닌 convention과 그
-convention의 entry를 마련한다.
+거치는 호출도 검사를 통과하면, class 특수화는 그 호출을 `Cps`가 아닌 convention으로
+부를 수 있어야 한다.
 
 위반은 그 호출의 source 위치를 가진 컴파일 에러다. 진단은 arm이 처리하는 operation과
 callee가 닿는 `op` ability를 밝힌다. 그 ability가 인스턴스의 row 인자에서 오면, 진단은
