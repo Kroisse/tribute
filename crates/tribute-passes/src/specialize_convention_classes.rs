@@ -78,11 +78,6 @@ pub fn specialize(ctx: &mut IrContext, module: Module) -> Result<(), ClassSpecia
     let variables = |name: &str| positions.get(name).map_or(&[][..], Vec::as_slice);
     let by_name: HashMap<&str, &Function> =
         functions.iter().map(|f| (f.name.as_str(), f)).collect();
-    let names: HashSet<&str> = by_name.keys().copied().collect();
-    let entry = functions
-        .iter()
-        .find(|function| function.root_entry)
-        .map(|function| function.name.as_str());
 
     // Instances are cloned from untouched copies, since a primary instance is
     // rewritten in place before every reference to its definition is known.
@@ -114,8 +109,7 @@ pub fn specialize(ctx: &mut IrContext, module: Module) -> Result<(), ClassSpecia
                 .zip(classes)
                 .collect(),
             positions: &positions,
-            names: &names,
-            entry,
+            by_name: &by_name,
             binders: function.binders.clone(),
             locals: HashMap::default(),
         };
@@ -246,9 +240,8 @@ struct Instance<'a> {
     requirements: &'a HashMap<SymbolPath, CallingConvention>,
     params: HashMap<u32, CallingConvention>,
     positions: &'a HashMap<String, Vec<u32>>,
-    names: &'a HashSet<&'a str>,
-    /// The root entry function, which keeps its one Direct instance.
-    entry: Option<&'a str>,
+    /// The module's definitions, by name.
+    by_name: &'a HashMap<&'a str, &'a Function>,
     binders: Vec<RowBinder>,
     locals: HashMap<u32, CallingConvention>,
 }
@@ -492,7 +485,7 @@ impl Instance<'_> {
             .and_then(|path| path.leaf())
             .expect("a reference names a definition")
             .to_string();
-        if !self.names.contains(callee.as_str()) || self.entry == Some(callee.as_str()) {
+        if !self.by_name.contains_key(callee.as_str()) {
             return None;
         }
         let rows = tribute_control::row_args(ctx, op).unwrap_or_default();
