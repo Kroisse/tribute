@@ -250,14 +250,21 @@ Monomorphization은 `tribute-front`의 typed AST와 명시적인 함수 인스�
 `parse_and_lower_ast()`는 이름 해석과 타입 추론·TDNR을 수행하고, 선택된 함수
 인스턴스와 semantic 메타데이터를 반환한다. 타입 검사는 의존 패키지 `std`의
 선언을 의존성 표로 조회하며, 그 결과에는 사용자 패키지의 선언만 담긴다.
-`prepare_frontend_for_lowering()`은 의존 패키지 본문의 병합, 도달하는 인스턴스
-검증, 특수화 및 메타데이터 재작성을 담당한다. IR lowering은 이 준비 단계가 성공한
-결과만 소비하며, 타입 검사 결과로부터 lowering 입력을 만드는 경로는 없다.
+`std`만의 인스턴스는 `std`의 checked 결과에만 의존하는 tracked 결과다. `std`를
+혼자 검증·특수화한 이 결과는 사용자 패키지를 편집해도 다시 계산하지 않는다.
+`prepare_frontend_for_lowering()`은 이 결과에서 이어서 사용자 패키지에서 도달하는
+인스턴스를 검증·특수화하고 메타데이터를 재작성한 뒤, 두 패키지의 결과를 하나의
+특수화 결과로 병합한다. `std` generic의 인스턴스 중 사용자 패키지에 의존하는 타입
+인자의 것만 이 단계가 만든다
+([Implementation — 프론트엔드 단계 경계와 정보 소유권](implementation.md#프론트엔드-단계-경계와-정보-소유권)).
+IR lowering은 이 준비 단계가 성공한 결과만 소비하며, 타입 검사 결과로부터 lowering
+입력을 만드는 경로는 없다.
 
 ```text
 parse_and_lower_ast: 해석·타입 추론·TDNR·인스턴스 기록
-    ↓
-prepare_frontend_for_lowering: 의존 패키지 병합·검증·특수화·메타데이터 재작성
+    ↓                       std 특수화: std만의 검증·특수화 (std의 checked 결과에만 의존)
+    ↓                       ↓
+prepare_frontend_for_lowering: 사용자 패키지의 검증·특수화·메타데이터 재작성, 결과 병합
     ↓
 ast_to_ir: IR lowering
 ```

@@ -1,5 +1,6 @@
 //! Validate checker-selected instances on executable reference paths before erasure.
-use super::{MonomorphizeMetadata, collect::is_concrete_type};
+use super::instance::InstanceKey;
+use super::{Dependency, Expressions, collect::is_concrete_type, mangle::mangle_instance_path};
 use crate::ast::fold::TypeFoldable;
 use crate::ast::{
     Decl, DeclTable, ExprKind, FuncDecl, FuncDefId, NodeId, ResolvedRef, SpanMaps, Type,
@@ -90,19 +91,31 @@ fn substitute<'db>(
         .ok()
 }
 
+/// Validate the instances reached from `module`'s entry points. A reference
+/// into `dependency` is followed only to an instance its result does not
+/// have, since its specialization validated those.
 pub(super) fn validate<'db>(
     db: &'db dyn salsa::Database,
     module: &DeclTable<TypedRef<'db>>,
+    dependency: Option<&Dependency<'db>>,
     schemes: &HashMap<SymbolPath, TypeScheme<'db>>,
-    metadata: &MonomorphizeMetadata<'db>,
+    expressions: Expressions<'_, 'db>,
 ) -> Vec<InstanceError> {
-    let mut functions: HashMap<FuncDefId<'db>, &FuncDecl<TypedRef<'db>>> = HashMap::default();
+    // Each function, and whether `module` declares it.
+    let mut functions: HashMap<FuncDefId<'db>, (&FuncDecl<TypedRef<'db>>, bool)> =
+        HashMap::default();
     let mut fields = HashSet::default();
-    for entry in &module.entries {
+    let tables = dependency
+        .map(|dependency| (dependency.module, false))
+        .into_iter()
+        .chain([(module, true)]);
+    for (entry, own) in
+        tables.flat_map(|(table, own)| table.entries.iter().map(move |entry| (entry, own)))
+    {
         match &entry.decl {
             Decl::Function(func) => {
                 let name = entry.module.child(func.name.clone());
-                functions.insert(FuncDefId::new(db, name), func);
+                functions.insert(FuncDefId::new(db, name), (func, own));
             }
             Decl::Struct(decl) => {
                 let name = entry.module.child(decl.name.clone());
@@ -118,9 +131,10 @@ pub(super) fn validate<'db>(
     }
     let mut queue: Vec<_> = functions
         .iter()
-        .filter(|(id, func)| {
-            id.path(db) == ["main"]
-                || (func.visibility == crate::ast::Visibility::Public
+        .filter(|(id, (func, own))| {
+            *own && id.path(db) == ["main"]
+                || (*own
+                    && func.visibility == crate::ast::Visibility::Public
                     && schemes
                         .get(id.path(db))
                         .is_some_and(|scheme| scheme.type_params(db).is_empty()))
@@ -133,7 +147,7 @@ pub(super) fn validate<'db>(
         if !seen.insert((id, arguments.clone())) {
             continue;
         }
-        let Some(func) = functions.get(&id) else {
+        let Some(&(func, _)) = functions.get(&id) else {
             continue;
         };
         if seen.len() > 4096 {
@@ -146,7 +160,7 @@ pub(super) fn validate<'db>(
         let mut nodes = Vec::new();
         func.body.for_each(|node| nodes.push(node));
         for expr in nodes {
-            if let Some(op) = metadata.expressions.perform_operations.get(&expr.id)
+            if let Some(op) = expressions.get(|table| &table.perform_operations, &expr.id)
                 && op.ability_args.iter().any(|ty| {
                     substitute(db, *ty, &arguments).is_none_or(|ty| !is_concrete_type(db, ty))
                 })
@@ -158,7 +172,7 @@ pub(super) fn validate<'db>(
             }
             if let ExprKind::Handle { handlers, .. } = expr.kind.as_ref() {
                 for arm in handlers {
-                    if let Some(op) = metadata.expressions.handler_operations.get(&arm.id)
+                    if let Some(op) = expressions.get(|table| &table.handler_operations, &arm.id)
                         && op.ability_args.iter().any(|ty| {
                             substitute(db, *ty, &arguments)
                                 .is_none_or(|ty| !is_concrete_type(db, ty))
@@ -182,7 +196,8 @@ pub(super) fn validate<'db>(
                 node: expr.id,
                 kind,
             };
-            let Some(instance) = metadata.expressions.function_instances.get(&expr.id) else {
+            let Some(instance) = expressions.get(|table| &table.function_instances, &expr.id)
+            else {
                 errors.push(fail(InstanceErrorKind::MissingInstance));
                 continue;
             };
@@ -256,6 +271,21 @@ pub(super) fn validate<'db>(
                 || solver.finalize_relations().is_err()
             {
                 errors.push(fail(InstanceErrorKind::InconsistentCallable));
+                continue;
+            }
+            if let Some(dependency) = dependency
+                && functions.get(target).is_some_and(|(_, own)| !own)
+                && (concrete.is_empty()
+                    || dependency
+                        .function_instances
+                        .contains(&mangle_instance_path(
+                            db,
+                            target.path(db),
+                            &InstanceKey {
+                                type_args: concrete.iter().copied().collect(),
+                            },
+                        )))
+            {
                 continue;
             }
             queue.push((*target, concrete));

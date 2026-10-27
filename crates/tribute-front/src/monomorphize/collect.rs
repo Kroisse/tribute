@@ -261,7 +261,7 @@ pub fn collect_type_instantiations<'db>(
     module: &DeclTable<TypedRef<'db>>,
     extra_types: impl IntoIterator<Item = Type<'db>>,
 ) -> HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>> {
-    let index = NominalIndex::new(db, module);
+    let index = NominalIndex::new(db, module, None);
     collect_type_instantiations_with_index(db, module, extra_types, &index)
 }
 
@@ -588,7 +588,7 @@ mod tests {
     fn test_collect_type_instantiations() {
         let db = TestDb::default();
         let module = nominal_module();
-        let index = NominalIndex::new(&db, &module);
+        let index = NominalIndex::new(&db, &module, None);
         let option_id = nominal_id(&index, &db, "Option");
         let result_id = nominal_id(&index, &db, "Result");
         let list_id = nominal_id(&index, &db, "List");
@@ -670,7 +670,7 @@ mod tests {
     fn test_collect_type_ignores_non_generic() {
         let db = TestDb::default();
         let module = nominal_module();
-        let index = NominalIndex::new(&db, &module);
+        let index = NominalIndex::new(&db, &module, None);
         let int = Type::new(&db, TypeKind::Int);
         let mut result = HashMap::default();
         // Neither an unknown type nor an indexed non-generic declaration qualifies,
