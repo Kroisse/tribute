@@ -29,4 +29,4 @@ pub use pipeline::{
     CompilationConfig, CompilationResult, compile_ast, compile_frontend, compile_to_native_binary,
     compile_to_wasm_binary, compile_with_diagnostics, dump_ir, parse_and_lower_ast,
 };
-pub use prelude::prelude_dependencies;
+pub use prelude::{frontend_environment, prelude_dependencies};

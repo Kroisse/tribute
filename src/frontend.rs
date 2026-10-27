@@ -10,62 +10,26 @@
 use crate::SourceCst;
 use salsa::Accumulator;
 use tribute_core::diagnostic::{Diagnostic, DiagnosticSeverity};
+use tribute_front::analysis;
 use tribute_front::ast::SpanMaps;
 use tribute_front::ast_to_ir;
 use tribute_front::monomorphize::{SpecializationInput, SpecializationOutput};
 use tribute_front::query as ast_query;
-use tribute_front::resolve as ast_resolve;
 use tribute_front::typeck as ast_typeck;
 use trunk_ir::{IrContext, Module};
 
-/// Parse source and run the frontend pipeline (parse → resolve → typecheck).
+/// Analyze a user source in the root crate's environment, package `std`
+/// from the prelude source (see [`tribute_front::analysis::analyze`]).
 ///
-/// Returns the typed AST with span map, ready for `ast_to_ir` lowering.
-/// Does NOT call `ast_to_ir` — that is the caller's responsibility.
-///
-/// The user package depends on package `std`:
-/// 1. Parse user code to AST
-/// 2. Build the user's PackageEnv, which depends on package `std`
-/// 3. Resolve names through it and package `std`'s environment
-/// 4. Type check, reading package `std`'s declarations through the
-///    dependency table; the output holds only the user's declarations
+/// Returns the typed AST, even when the analysis reports errors; returns
+/// `None` only if the source does not parse. Does NOT call `ast_to_ir` —
+/// that is the caller's responsibility.
 #[salsa::tracked(returns(copy))]
 pub fn parse_and_lower_ast<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Option<ast_typeck::TypeCheckOutput<'db>> {
-    // Phase 1: Parse user code to AST
-    let parsed = ast_query::parsed_ast(db, source)?;
-
-    let user_ast = parsed.module(db);
-    let span_map = parsed.span_map(db);
-    tracing::debug!(
-        "Phase 1: parsed AST has {} declarations",
-        user_ast.decls.len()
-    );
-
-    // Phase 2: Build user env, which depends on package std
-    let dependencies = crate::prelude::prelude_dependencies(db);
-    let user_env = ast_resolve::build_env(db, user_ast, dependencies);
-
-    // Phase 3: Name resolution
-    let resolved_ast = ast_resolve::resolve_with_env(db, user_ast, &user_env, span_map);
-
-    // Phase 4: Type checking against package std
-    let mut checker = ast_typeck::TypeChecker::new(db, span_map);
-    if let Some(p_exports) = crate::prelude::prelude_exports(db) {
-        checker.depend_on(&p_exports);
-    }
-    let result = checker.check_module(&resolved_ast);
-
-    tracing::debug!(
-        "Phase 4: after typecheck, {} declarations, {} function_types, {} node_types",
-        result.module.entries.len(),
-        result.function_types.len(),
-        result.node_types.len()
-    );
-
-    Some(ast_typeck::TypeCheckOutput::from_check(db, result))
+    analysis::analyze(db, source, crate::prelude::frontend_environment(db))
 }
 
 /// Merge prelude decls into user's typed AST and lower to arena IR.
