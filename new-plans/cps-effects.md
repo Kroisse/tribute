@@ -496,6 +496,25 @@ indirect call lowering은 이전이 가진 convention에서, entry 함수는 자
 index를 얻는다. Consumer가 arity, parameter type, body shape로 slot이나 hidden
 operand를 복원하는 것은 illegal이다.
 
+#### Closure type의 callable
+
+`closure.closure<S>`의 `S`는 closure의 callable 정체성이며 entry ABI가 아니다. 한
+closure는 convention마다 다른 entry ABI로 불리므로 `S`에서 hidden parameter를
+유도하지 않는다.
+
+- Source callable 값의 `S`는 source parameter와 result를 변환한 `func.func_sig`이며
+  evidence, `ContinuationFrame<R>`, environment가 없다. Logical callable type을 변환할
+  때 그 자리의 convention을 묻지 않으므로, 매개변수, data field, ability operation
+  signature의 callable도 같은 규칙으로 변환한다.
+- 적법화가 만드는 continuation(`Done<R>`, `Completion<X, R>`, resume, dispatch)의 `S`는
+  그 continuation의 `Cps` entry에서 environment를 뺀 signature다. 이 형상은
+  continuation을 만들고 소비하는 operation과 frame layout의 자리가 정하며, 형상만 보고
+  continuation임을 판정하지 않는다.
+- Entry ABI는 entry를 가진 것이 싣는다. `closure.lambda`는 environment를 뺀 entry
+  signature를 `signature`로 가지고, entry 함수는 자기 signature를, 간접 이전은 exact
+  `signature`를 가진다. Closure lowering은 이 signature에 environment를 넣으며 `S`와
+  비교하지 않는다.
+
 Environment를 받는 `func.func`는 entry block의 environment 인자에
 `bind_name = "__env"` 표식을 단다. 표식은 함수 하나에 하나이고, 그 위치는 함수
 convention의 environment index와 같으며, 그 인자의 type은 그 closure의 exact closure
@@ -656,14 +675,12 @@ exit continuation으로 직접 tail transfer하므로 completion region과 포�
 실패하면 기존 operation, 타입 참조, attribute와 alias를 변경하지 않는다. Alias,
 closure signature, function constant, exact indirect signature, SSA 결과와 block
 argument, 중첩 타입 attribute를 함께 변환한다. 일반 `never`·`nil` 치환은 하지 않는다.
-`closure.closure` type은 convention을 기록하지 않으므로, 물리화는 그 closure를
-만드는 `closure.new`, 그 closure를 environment로 받는 entry 함수, 그 closure로 들어가는
-간접 이전, continuation frame layout이 기록한 convention으로 closure의 callable을
-변환한다. Frame layout의 `Done`과 `Dispatch`, `Dispatch`가 받는 resume은 `Cps`다.
-물리화 뒤에 들어가는 `effect.delimit`의 body와 `effect.dispatch_cps`의 dispatch,
-resume도 `Cps`다. 이
-convention들이 서로 다르면 물리화는 실패한다. 어느 것도 기록하지 않은 closure type은
-아무도 만들거나 들어가지 않으므로 callable의 결과를 그대로 둔다.
+`closure.closure` type의 callable은 convention과 무관한
+[callable 정체성](#closure-type의-callable)이므로, 물리화는 이를 convention 없이
+변환한다. Component type을 변환하고 논리 결과 `[core.never]`는 물리 결과 `[]`로
+바꾸며, parameter 속성과 기계 호출 규약은 더하지 않는다. Entry 함수, 간접 이전의
+exact signature, `Dispatch`의 terminal entry처럼 entry ABI를 가진 것은 자기
+convention으로 물리화한다.
 Closure tail lowering은 caller·callee·exact indirect signature의 전체 결과 목록을
 비교하여 논리 `[never]`와 물리 `[]`를 각각 지원한다.
 물리화는 검증에 쓴 provenance 중 이후 단계가 읽지 않는 것을 적용 단계에서 소비한다.
