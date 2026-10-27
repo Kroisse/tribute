@@ -40,7 +40,7 @@ mod closure {
     #[flags(Pure)]
     fn entry(index: Attr<u32>, closure: Value<_>) -> Value<_> {}
 
-    /// The captures of `closure`, read by its code function from its
+    /// The captures of `closure`, read by its entry functions from their
     /// environment parameter. Its results are the closure's capture types.
     #[flags(Pure)]
     fn unpack(closure: Value<_>) -> Variadic<_> {}

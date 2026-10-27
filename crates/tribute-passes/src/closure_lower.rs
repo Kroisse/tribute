@@ -1,7 +1,7 @@
 //! Lower closure operations in indirect calls.
 //!
 //! This pass transforms `func.call_indirect` operations when the callee
-//! is a closure. The closure itself is the code function's environment:
+//! is a closure. The closure itself is the entry function's environment:
 //!
 //! Before:
 //! ```text
@@ -1555,7 +1555,7 @@ mod tests {
         assert_eq!(allocation.r#type(&ctx), layout);
         assert_eq!(allocation.fields(&ctx).len(), 3);
 
-        // The code function downcasts its base environment once, then reads
+        // The entry function downcasts its base environment once, then reads
         // each capture after the code field.
         let code = func_by_name(&ctx, module, "code");
         let entry = ctx.region(code.body(&ctx)).blocks[0];

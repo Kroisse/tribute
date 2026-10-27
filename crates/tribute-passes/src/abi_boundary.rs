@@ -113,6 +113,10 @@ pub enum ViolationKind {
     /// A `func.constant` whose type is not its target's exact signature.
     #[display("function reference differs from its target signature")]
     ReferenceSignatureMismatch,
+    /// A `tribute_rt.convention_table` entry that names no function
+    /// definition.
+    #[display("convention table entry names no function")]
+    UnresolvedConventionEntry,
     /// A function definition or indirect call without an exact signature.
     #[display("missing exact callable signature")]
     MissingExactSignature,
@@ -375,6 +379,20 @@ impl<'a> Verifier<'a> {
                     Some(op),
                     format!("{op_name} @{target}"),
                 );
+            }
+        }
+        if let Ok(table) = tribute_ir::dialect::tribute_rt::ConventionTable::from_op(ctx, op) {
+            for entry in table.entries(ctx) {
+                let resolved = functions
+                    .resolve(ctx, op, entry)
+                    .is_some_and(|function| func::Func::matches(ctx, function));
+                if !resolved {
+                    self.report(
+                        ViolationKind::UnresolvedConventionEntry,
+                        Some(op),
+                        format!("{op_name} @{entry}"),
+                    );
+                }
             }
         }
         let has_exact_signature = if let Ok(function) = func::Func::from_op(ctx, op) {
@@ -1022,6 +1040,23 @@ mod tests {
 }"#,
         );
         assert_eq!(violations, [ViolationKind::ReferenceSignatureMismatch]);
+    }
+
+    #[test]
+    fn convention_table_entries_must_name_function_definitions() {
+        let violations = kinds(
+            r#"core.module @test {
+  func.func @target(%value: core.i32) {
+    func.return
+  }
+  func.func @make() {
+    %table = tribute_rt.convention_table {entries = [@target]} : core.i32
+    %missing = tribute_rt.convention_table {entries = [@target, @missing]} : core.i32
+    func.return
+  }
+}"#,
+        );
+        assert_eq!(violations, [ViolationKind::UnresolvedConventionEntry]);
     }
 
     #[test]

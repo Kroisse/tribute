@@ -16,10 +16,10 @@
 //!   %r = arith.add %x, %param
 //!   func.return %r
 //! }
-//! %k = closure.new @foo::__clam_0, %x, %y
+//! %k = closure.new %x, %y {entries = [@foo::__clam_0]}
 //! ```
 //!
-//! The code function's environment is the closure itself, typed with the
+//! The entry function's environment is the closure itself, typed with the
 //! closure's exact type, and it reads its captures with `closure.unpack`.
 
 use crate::collections::HashMap;

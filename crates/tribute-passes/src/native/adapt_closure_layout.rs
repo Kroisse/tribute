@@ -325,6 +325,45 @@ mod tests {
         assert!(!output.contains("type = !Captures}"), "{output}");
     }
 
+    #[test]
+    fn convention_tables_are_shared_per_entry_list_under_fresh_symbols() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  clif.data {align = 1, bytes = b"\0", sym_name = "__tribute_convention_table_0"}
+  func.func @make() -> core.nil {
+    %a = tribute_rt.convention_table {entries = [@first]} : core.i32
+    %b = tribute_rt.convention_table {entries = [@second, @first]} : core.i32
+    %c = tribute_rt.convention_table {entries = [@first]} : core.i32
+    %d = tribute_rt.convention_entry %b {index = 1} : core.i32
+    func.return
+  }
+}"#,
+        );
+        lower(&mut ctx, module);
+        let output = print_module(&ctx, module.op());
+        assert_eq!(output.matches("clif.data").count(), 3, "{output}");
+        assert_eq!(
+            output
+                .matches("clif.symbol_addr {sym = @__tribute_convention_table_1}")
+                .count(),
+            2,
+            "{output}"
+        );
+        assert!(
+            output.contains("clif.symbol_addr {sym = @__tribute_convention_table_2}"),
+            "{output}"
+        );
+        assert!(
+            output.contains("clif.func_reloc {func = @first, offset = 8}"),
+            "{output}"
+        );
+        assert!(output.contains("clif.load %"), "{output}");
+        assert!(output.contains("{offset = 8} : core.i64"), "{output}");
+        assert!(!output.contains("tribute_rt."), "{output}");
+    }
+
     /// Adapt closures, then lower functions as the native pipeline does.
     fn adapt_then_lower_func(ir: &str) -> String {
         let mut ctx = IrContext::new();
