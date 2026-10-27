@@ -13,9 +13,6 @@ use crate::dialect::closure;
 
 /// Exact attribute key of a convention on a callable type or operation.
 pub const CALLING_CONVENTION_ATTR: &str = "tribute.calling_convention";
-/// Attribute key of the environment slot an environment-bearing function
-/// records (`new-plans/cps-effects.md`, "CPS 변환의 호출 대상 형상").
-pub const CLOSURE_ENVIRONMENT_INDEX_ATTR: &str = "tribute.closure_environment_index";
 
 /// The ABI strength required to call a function.
 ///

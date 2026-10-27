@@ -24,9 +24,7 @@
 
 use crate::collections::HashMap;
 
-use tribute_ir::calling_convention::{
-    CLOSURE_ENVIRONMENT_INDEX_ATTR, ConventionBearing, DynConventionBearing,
-};
+use tribute_ir::calling_convention::{ConventionBearing, DynConventionBearing};
 use trunk_ir::Symbol;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
@@ -36,7 +34,7 @@ use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{Module, erase_op};
-use trunk_ir::types::{Attribute, AttributeMap};
+use trunk_ir::types::AttributeMap;
 
 use tribute_ir::dialect::closure;
 
@@ -202,10 +200,6 @@ fn lower_single_lambda(
         .regions(func_body_region)
         .build(ctx, location);
     func_op.set_calling_convention(ctx, convention);
-    ctx.op_attrs_mut(func_op.op_ref()).insert(
-        CLOSURE_ENVIRONMENT_INDEX_ATTR,
-        Attribute::Int(environment_index as i128),
-    );
     ctx.push_op(module_block, func_op.op_ref());
 
     // === Replace closure.lambda at the original site ===

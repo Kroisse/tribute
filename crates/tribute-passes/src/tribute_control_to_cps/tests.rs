@@ -1570,10 +1570,6 @@ fn textual_zero_result_cps_and_direct_scf_branches_lower() {
     crate::lower_closure_lambda::lower_closure_lambda(&mut ctx, module);
     let lifted = print_module(&ctx, module.op());
     assert!(!lifted.contains("closure.lambda"), "{lifted}");
-    assert!(
-        lifted.contains("tribute.closure_environment_index = 0"),
-        "{lifted}"
-    );
     crate::closure_lower::lower_prepared_closures(&mut ctx, module).unwrap();
     let lowered = print_module(&ctx, module.op());
     assert!(!lowered.contains("closure.new"), "{lowered}");

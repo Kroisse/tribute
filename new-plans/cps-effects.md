@@ -492,17 +492,16 @@ Closure의 environment index는 entry마다 그 바깥 convention 하나로 정�
 entry는 `R, environment`다. 따라서 같은 `closure.closure` type의 closure는 같은
 convention에서 언제나 같은 entry ABI를 가진다. `closure.closure` type은 convention도
 environment index도 기록하지 않는다. Lambda lifting은 `closure.lambda`의 convention에서,
-indirect call lowering은 이전이 가진 convention에서 index를 얻고, entry 함수는 그 index를
-`tribute.closure_environment_index`로 기록한다. Consumer가 arity, parameter type,
-body shape로 slot이나 hidden operand를 복원하는 것은 illegal이다.
+indirect call lowering은 이전이 가진 convention에서, entry 함수는 자기 convention에서
+index를 얻는다. Consumer가 arity, parameter type, body shape로 slot이나 hidden
+operand를 복원하는 것은 illegal이다.
 
-Environment-bearing `func.func`는 zero-based physical slot을
-`tribute.closure_environment_index`로 기록한다. Bodyless declaration은 이
-function-level provenance가 필수이며, definition은 entry block의 `__env` marker와
-같은 slot이어야 한다. Slot은 그 entry의 바깥 convention이 정한 exact physical
-order와 일치하고, slot의 type은 그 closure의 exact closure type이어야
-한다([closure 저장 layout](ir.md#closure-저장-layout)). Type이나 arity로 slot을
-추측하지 않는다. 이 function-level provenance의 마지막 독자는 물리화 검증이다.
+Environment를 받는 `func.func`는 entry block의 environment 인자에
+`bind_name = "__env"` 표식을 단다. 표식은 함수 하나에 하나이고, 그 위치는 함수
+convention의 environment index와 같으며, 그 인자의 type은 그 closure의 exact closure
+type이다([closure 저장 layout](ir.md#closure-저장-layout)). 본문이 없는 선언은
+environment를 받을 수 없다. 물리화 검증은 이 표식으로 entry 함수를 알아보고 slot을
+대조하며, type이나 arity로 slot을 추측하지 않는다.
 
 생성한 physical definition, lambda entry, `func_ref` entry 함수, direct/indirect
 call에는 그 정의, entry, 이전이 가진 convention을 기존
@@ -666,11 +665,10 @@ convention들이 서로 다르면 물리화는 실패한다. 어느 것도 기�
 Closure tail lowering은 caller·callee·exact indirect signature의 전체 결과 목록을
 비교하여 논리 `[never]`와 물리 `[]`를 각각 지원한다.
 물리화는 검증에 쓴 provenance 중 이후 단계가 읽지 않는 것을 적용 단계에서 소비한다.
-Continuation frame 타입의 `tribute.cps_continuation_frame_result`를 지우고,
-`func.func`의 `tribute.closure_environment_index`도 지운다. 물리 frame에서 `R`은
-`Done<R>`의 입력 타입이 나타내고, environment는 physical signature의 순서 있는
-입력이다. 값 delimiter 합성은 이렇게 물리화된 frame을 검증하며 frame answer
-provenance가 남아 있으면 거부한다. 물리화 이후에 합성되는 함수는 이 속성들을 기록하지 않는다.
+Continuation frame 타입의 `tribute.cps_continuation_frame_result`를 지운다.
+물리 frame에서 `R`은 `Done<R>`의 입력 타입이 나타내고, environment는 physical
+signature의 순서 있는 입력이다. 값 delimiter 합성은 이렇게 물리화된 frame을 검증하며 frame answer
+provenance가 남아 있으면 거부한다. 물리화 이후에 합성되는 함수는 이 속성을 기록하지 않는다.
 
 `tribute.calling_convention`도 operation 종류마다 마지막으로 읽는 단계가 소비하며,
 경계 출구에서 일괄로 지우지 않는다. 물리화는 직접 `func.call`/`func.tail_call`과

@@ -11,8 +11,7 @@ use std::ops::ControlFlow;
 use tribute_ir::continuation_frame;
 
 use tribute_ir::calling_convention::{
-    CLOSURE_ENVIRONMENT_INDEX_ATTR, CallingConvention, ConventionBearing, DynConventionBearing,
-    cps_closure_function_type,
+    CallingConvention, ConventionBearing, DynConventionBearing, cps_closure_function_type,
 };
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::{ability, closure, effect, tribute_rt};
@@ -133,7 +132,6 @@ pub(crate) fn lower_cps_signatures_to_physical(
     let mut function_types = Vec::new();
     let mut result_types = Vec::new();
     let mut attributes = Vec::new();
-    let mut consumed_attributes = Vec::new();
     let mut consumed_conventions = Vec::new();
     let mut indirect_signatures = Vec::new();
     let mut block_args = Vec::new();
@@ -160,16 +158,6 @@ pub(crate) fn lower_cps_signatures_to_physical(
             };
             if converted != signature {
                 function_types.push((op, converted));
-            }
-            // Environment provenance was validated against the signature
-            // above; the physical signature carries the environment as an
-            // ordinary input, so no later pass reads the recorded position.
-            if converter
-                .ctx
-                .op_attrs(op)
-                .contains_key(CLOSURE_ENVIRONMENT_INDEX_ATTR)
-            {
-                consumed_attributes.push((op, CLOSURE_ENVIRONMENT_INDEX_ATTR));
             }
         }
 
@@ -296,9 +284,6 @@ pub(crate) fn lower_cps_signatures_to_physical(
     }
     for (op, name, value) in attributes {
         ctx.op_attrs_mut(op).insert(name, value);
-    }
-    for (op, name) in consumed_attributes {
-        ctx.op_attrs_mut(op).remove(name);
     }
     for op in consumed_conventions {
         DynConventionBearing::get(ctx, op)
@@ -1627,40 +1612,18 @@ fn validate_constant(
     Ok(())
 }
 
+/// The slot of the environment `function` takes: the entry block argument
+/// marked `__env`. A function without a body takes none.
 fn environment_index(
     ctx: &IrContext,
     function: OpRef,
     params: &[TypeRef],
 ) -> Result<Option<usize>, TargetAbiError> {
-    let attributes = &ctx.op(function).attributes;
-    let present = attributes
-        .view(ctx)
-        .get(CLOSURE_ENVIRONMENT_INDEX_ATTR)
-        .is_some();
-    let declared = attributes
-        .view(ctx)
-        .get_u32(CLOSURE_ENVIRONMENT_INDEX_ATTR)
-        .ok()
-        .flatten()
-        .map(|index| index as usize);
-    if present && declared.is_none() {
-        return Err(TargetAbiError::new(
-            "target ABI: malformed closure environment index metadata",
-        ));
-    }
-    if let Some(index) = declared {
-        validate_environment_slot(ctx, params, index)?;
-    }
-
     let Some(region) = ctx.op_region(function, 0) else {
-        return Ok(declared);
+        return Ok(None);
     };
     let Some(&entry) = ctx.region(region).blocks.first() else {
-        return declared.map_or(Ok(None), |_| {
-            Err(TargetAbiError::new(
-                "target ABI: closure environment provenance has no entry block",
-            ))
-        });
+        return Ok(None);
     };
     let arguments = &ctx.block(entry).args;
     if arguments.len() != params.len() {
@@ -1676,17 +1639,9 @@ fn environment_index(
         })
         .collect();
     match indices.as_slice() {
-        [] if declared.is_some() => Err(TargetAbiError::new(
-            "target ABI: closure environment provenance has no matching `__env` parameter",
-        )),
         [] => Ok(None),
         [index] => {
             validate_environment_slot(ctx, params, *index)?;
-            if declared.is_some_and(|declared| declared != *index) {
-                return Err(TargetAbiError::new(
-                    "target ABI: closure environment index differs from `__env` parameter",
-                ));
-            }
             Ok(Some(*index))
         }
         _ => Err(TargetAbiError::new(
@@ -2084,7 +2039,7 @@ mod tests {
                     if mutation == 3 || mutation == 4 {
                         ty.attrs
                             .view_mut(&mut ctx)
-                            .insert(CLOSURE_ENVIRONMENT_INDEX_ATTR, Attribute::Int(9));
+                            .insert("test.extra", Attribute::Int(9));
                     } else if mutation == 5 {
                         ty.attrs
                             .view_mut(&mut ctx)
@@ -2360,12 +2315,6 @@ mod tests {
                     .unwrap()
                     .results(&ctx)
                     .is_empty()
-            );
-        }
-        for function in [worker, done_k, dispatch] {
-            assert!(
-                !ctx.op_attrs(function.op_ref())
-                    .contains_key(CLOSURE_ENVIRONMENT_INDEX_ATTR)
             );
         }
 
@@ -2852,18 +2801,16 @@ mod tests {
     }
 
     #[test]
-    fn bodied_and_bodyless_closure_targets_share_environment_provenance() {
+    fn an_entry_function_takes_its_environment_at_its_env_marker() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
   !Env = closure.closure<func.func_sig<(core.i32, core.i32) -> core.never>>
-  func.func @external(%evidence: core.i32, %environment: !Env, %done: core.i32) -> core.never attributes {tribute.calling_convention = "cps", tribute.closure_environment_index = 1}
-  func.func @defined(%evidence: core.i32, %__env: !Env, %done: core.i32) -> core.never attributes {tribute.calling_convention = "cps", tribute.closure_environment_index = 1} {
+  func.func @defined(%evidence: core.i32, %__env: !Env, %done: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
     func.unreachable
   }
   func.func @holder() -> core.i32 {
-    %external = func.constant {func_ref = @external} : func.func_sig<(core.i32, core.i32) -> core.never>
     %defined = func.constant {func_ref = @defined} : func.func_sig<(core.i32, core.i32) -> core.never>
     func.unreachable
   }
@@ -2874,14 +2821,8 @@ mod tests {
 
         let printed = print_module(&ctx, module.op());
         assert!(
-            printed.contains("func.func @external(%arg0: core.i32, %arg1: !Env, %arg2: core.i32)"),
-            "{printed}"
-        );
-        assert!(
-            printed.contains("func.func @defined")
-                && printed.matches("func.constant").count() == 2
-                && printed.contains("!t0 = func.func_sig<(core.i32 {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}) -> (), {call_conv = \"tail\"}>")
-                && printed.matches(": !t0").count() == 2,
+            printed.contains("func.func @defined(%0: core.i32, %1: !Env, %2: core.i32)")
+                && printed.contains("func.constant {func_ref = @defined} : func.func_sig<(core.i32 {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}) -> (), {call_conv = \"tail\"}>"),
             "{printed}"
         );
     }
@@ -2893,7 +2834,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !One = closure.closure<func.func_sig<(core.i32) -> core.never>>
-  func.func @generated_one(%value: core.i32, %__env: !One) -> core.never attributes {tribute.calling_convention = "cps", tribute.closure_environment_index = 1} {
+  func.func @generated_one(%value: core.i32, %__env: !One) -> core.never attributes {tribute.calling_convention = "cps"} {
     func.unreachable
   }
   func.func @holder() -> core.i32 {
@@ -2930,7 +2871,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !One = closure.closure<func.func_sig<(core.i32) -> core.never>>
-  func.func @generated_one(%__env: !One, %value: core.i32) -> core.never attributes {tribute.calling_convention = "cps", tribute.closure_environment_index = 0} {
+  func.func @generated_one(%__env: !One, %value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
     func.unreachable
   }
 }"#,
@@ -2953,20 +2894,8 @@ mod tests {
                 "function reference differs",
             ),
             (
-                "func.func @external(%evidence: core.i32, %environment: tribute_rt.anyref, %done: core.i32) -> core.never attributes {tribute.calling_convention = \"cps\", tribute.closure_environment_index = 3}",
-                "outside function signature",
-            ),
-            (
-                "func.func @external(%evidence: core.i32, %environment: core.i32, %done: core.i32) -> core.never attributes {tribute.calling_convention = \"cps\", tribute.closure_environment_index = 1}",
+                "func.func @external(%evidence: core.i32, %__env: core.i32, %done: core.i32) -> core.never attributes {tribute.calling_convention = \"cps\"} { func.unreachable }",
                 "must be a closure",
-            ),
-            (
-                "func.func @external(%evidence: core.i32, %environment: !Env, %done: core.i32) -> core.never attributes {tribute.calling_convention = \"cps\", tribute.closure_environment_index = 1} { func.unreachable }",
-                "no matching `__env`",
-            ),
-            (
-                "func.func @external(%environment: !Env, %__env: !Env, %done: core.i32) -> core.never attributes {tribute.calling_convention = \"cps\", tribute.closure_environment_index = 0} { func.unreachable }",
-                "differs from `__env` parameter",
             ),
         ] {
             let mut ctx = IrContext::new();
@@ -2998,7 +2927,7 @@ mod tests {
             r#"core.module @test {
   !Env2 = closure.closure<func.func_sig<() -> core.never>>
   !Env = closure.closure<func.func_sig<(!Env2) -> core.never>>
-  func.func @external(%__env: !Env, %environment: !Env2) -> core.never attributes {tribute.calling_convention = "cps", tribute.closure_environment_index = 0} {
+  func.func @external(%__env: !Env, %environment: !Env2) -> core.never attributes {tribute.calling_convention = "cps"} {
     func.unreachable
   }
   func.func @holder() -> core.i32 {
