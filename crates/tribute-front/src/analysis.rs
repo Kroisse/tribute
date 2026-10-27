@@ -12,7 +12,7 @@
 use tribute_core::diagnostic::Diagnostic;
 use trunk_ir::Symbol;
 
-use crate::astgen::ParsedAst;
+use crate::astgen::{self, ParsedAst};
 use crate::query;
 use crate::resolve::{self, Dependencies, PackageEnv, PackageName};
 use crate::source_file::SourceCst;
@@ -38,9 +38,8 @@ pub struct CheckedStd<'db> {
 }
 
 /// Parse the root module of package `std`.
-#[salsa::tracked(returns(copy))]
-pub fn parsed_std<'db>(db: &'db dyn salsa::Database, std: SourceCst) -> Option<ParsedAst<'db>> {
-    query::parsed_ast_with_module_path(db, std, Symbol::new("prelude"))
+pub fn parsed_std(db: &dyn salsa::Database, std: SourceCst) -> Option<ParsedAst<'_>> {
+    astgen::lower_source_to_parsed_ast_with_module_path(db, std, Some(Symbol::new("prelude")))
 }
 
 /// The environment of package `std`, built from its declarations alone.

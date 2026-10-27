@@ -86,11 +86,11 @@ pub struct ParsedAst<'db> {
     pub span_map: SpanMap,
 }
 
-/// Parse and lower a source file to AST with span information (Salsa-tracked).
+/// Parse and lower a source file to AST with span information, in the module
+/// its URI names.
 ///
 /// This is the primary entry point for CST → AST conversion.
 /// Returns `ParsedAst` containing both the module and span map.
-#[salsa::tracked(returns(copy))]
 pub fn lower_source_to_parsed_ast<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,

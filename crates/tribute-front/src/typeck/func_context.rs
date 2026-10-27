@@ -1522,6 +1522,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 mod tests {
     use super::*;
     use crate::ast::{TypeDefId, TypeParam};
+    use itertools::Itertools;
     use salsa_test_macros::salsa_test;
 
     /// Create a type parameter with just a name.
@@ -1529,8 +1530,8 @@ mod tests {
         TypeParam { name: Some(name) }
     }
 
-    #[salsa::tracked(returns(copy))]
-    fn test_fresh_type_var_per_function_inner(db: &dyn salsa::Database) -> bool {
+    #[salsa_test]
+    fn test_fresh_type_var_per_function(db: &dyn salsa::Database) {
         let env = ModuleTypeEnv::new(db);
 
         // Two separate FunctionInferenceContexts with different function IDs
@@ -1540,35 +1541,22 @@ mod tests {
         let mut ctx1 = FunctionInferenceContext::new(db, &env, func_id1);
         let mut ctx2 = FunctionInferenceContext::new(db, &env, func_id2);
 
-        let var1_1 = ctx1.fresh_type_var();
-        let var1_2 = ctx1.fresh_type_var();
-        let var2_1 = ctx2.fresh_type_var();
-        let var2_2 = ctx2.fresh_type_var();
+        let vars = [
+            ctx1.fresh_type_var(),
+            ctx1.fresh_type_var(),
+            ctx2.fresh_type_var(),
+            ctx2.fresh_type_var(),
+        ];
 
         // All variables should be different (globally unique due to function IDs)
-        if var1_1 == var1_2 || var1_1 == var2_1 || var1_1 == var2_2 {
-            return false;
-        }
-        if var1_2 == var2_1 || var1_2 == var2_2 {
-            return false;
-        }
-        if var2_1 == var2_2 {
-            return false;
-        }
-
-        true
-    }
-
-    #[salsa_test]
-    fn test_fresh_type_var_per_function(db: &dyn salsa::Database) {
         assert!(
-            test_fresh_type_var_per_function_inner(db),
+            vars.iter().all_unique(),
             "Type variables should be globally unique across all function contexts"
         );
     }
 
-    #[salsa::tracked(returns(copy))]
-    fn test_instantiate_scheme_inner(db: &dyn salsa::Database) -> bool {
+    #[salsa_test]
+    fn test_instantiate_scheme(db: &dyn salsa::Database) {
         let mut env = ModuleTypeEnv::new(db);
 
         // Create a polymorphic function type: forall a. a -> a
@@ -1595,13 +1583,9 @@ mod tests {
         let ty1 = ctx.instantiate_function(func_id).unwrap();
         let ty2 = ctx.instantiate_function(func_id).unwrap();
 
-        // Two instantiations should get different UniVars
-        if ty1 == ty2 {
-            return false;
-        }
-
-        // Both should be function types with UniVar params
-        if let (
+        // Each instantiation gets fresh UniVars: both are `?a -> ?a`, with
+        // different variables.
+        let (
             TypeKind::Func {
                 params: p1,
                 result: r1,
@@ -1613,21 +1597,15 @@ mod tests {
                 ..
             },
         ) = (ty1.kind(db), ty2.kind(db))
-        {
-            p1.len() == 1
-                && p1[0] == *r1
-                && p2[0] == *r2
-                && p1[0] != p2[0] // Different UniVars
-                && matches!(p1[0].kind(db), TypeKind::UniVar { .. })
-        } else {
-            false
-        }
-    }
-
-    #[salsa_test]
-    fn test_instantiate_scheme(db: &dyn salsa::Database) {
-        assert!(
-            test_instantiate_scheme_inner(db),
+        else {
+            panic!("instantiations should be function types: {ty1:?}, {ty2:?}");
+        };
+        assert_eq!(p1.len(), 1);
+        assert_eq!(p1[0], *r1);
+        assert_eq!(p2[0], *r2);
+        assert!(matches!(p1[0].kind(db), TypeKind::UniVar { .. }));
+        assert_ne!(
+            p1[0], p2[0],
             "Each instantiation should produce fresh type variables"
         );
     }
@@ -1807,8 +1785,8 @@ mod tests {
         assert!(empty.is_empty());
     }
 
-    #[salsa::tracked(returns(copy))]
-    fn test_instantiate_constructor_inner(db: &dyn salsa::Database) -> bool {
+    #[salsa_test]
+    fn test_instantiate_constructor(db: &dyn salsa::Database) {
         let mut env = ModuleTypeEnv::new(db);
 
         // Create a polymorphic constructor: forall a. a -> Option(a)
@@ -1843,13 +1821,9 @@ mod tests {
         let ty1 = ctx.instantiate_constructor(ctor_id).unwrap();
         let ty2 = ctx.instantiate_constructor(ctor_id).unwrap();
 
-        // Two instantiations should get different UniVars
-        if ty1 == ty2 {
-            return false;
-        }
-
-        // Both should be function types with UniVar params
-        if let (
+        // Each instantiation gets fresh UniVars: both are `?a -> Option(?a)`,
+        // with different variables.
+        let (
             TypeKind::Func {
                 params: p1,
                 result: r1,
@@ -1861,38 +1835,22 @@ mod tests {
                 ..
             },
         ) = (ty1.kind(db), ty2.kind(db))
-        {
-            // Verify param is UniVar and same as result's type arg
-            if !matches!(p1[0].kind(db), TypeKind::UniVar { .. }) {
-                return false;
-            }
-            if !matches!(p2[0].kind(db), TypeKind::UniVar { .. }) {
-                return false;
-            }
-
-            // Results should be Named types with the UniVar as argument
-            let r1_ok = if let TypeKind::Named { name, args, .. } = r1.kind(db) {
-                *name == type_name && args.len() == 1 && args[0] == p1[0]
-            } else {
-                false
-            };
-            let r2_ok = if let TypeKind::Named { name, args, .. } = r2.kind(db) {
-                *name == type_name && args.len() == 1 && args[0] == p2[0]
-            } else {
-                false
-            };
-
-            // Different UniVars for different instantiations
-            r1_ok && r2_ok && p1[0] != p2[0]
-        } else {
-            false
+        else {
+            panic!("instantiations should be function types: {ty1:?}, {ty2:?}");
+        };
+        for (param, result) in [(p1[0], r1), (p2[0], r2)] {
+            assert!(matches!(param.kind(db), TypeKind::UniVar { .. }));
+            // The result is a Named type with the UniVar as argument.
+            assert!(
+                matches!(
+                    result.kind(db),
+                    TypeKind::Named { name, args, .. } if *name == type_name && args[..] == [param]
+                ),
+                "{result:?}"
+            );
         }
-    }
-
-    #[salsa_test]
-    fn test_instantiate_constructor(db: &dyn salsa::Database) {
-        assert!(
-            test_instantiate_constructor_inner(db),
+        assert_ne!(
+            p1[0], p2[0],
             "Each constructor instantiation should produce fresh type variables"
         );
     }

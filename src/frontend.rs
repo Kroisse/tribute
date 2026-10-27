@@ -76,9 +76,11 @@ struct PreparedFrontend<'db> {
     runtime_types: ast_to_ir::runtime_items::RuntimeTypes,
 }
 
-/// Merge and specialize inside a tracked query so specialization failures
-/// become source diagnostics before either public IR lowering route runs.
-#[salsa::tracked(returns(copy))]
+/// Specialize the checked user module, continuing package std's
+/// specialization.
+///
+/// Returns `None` after reporting why it does not specialize; read those
+/// diagnostics with [`prepare_frontend_diagnostics`].
 pub fn prepare_frontend_for_lowering<'db>(
     db: &'db dyn salsa::Database,
     typed: ast_typeck::TypeCheckOutput<'db>,
@@ -87,6 +89,18 @@ pub fn prepare_frontend_for_lowering<'db>(
     prepare_frontend_details(db, typed, source).map(|prepared| prepared.specialized)
 }
 
+/// The diagnostics [`prepare_frontend_for_lowering`] reports.
+pub fn prepare_frontend_diagnostics<'db>(
+    db: &'db dyn salsa::Database,
+    typed: ast_typeck::TypeCheckOutput<'db>,
+    source: SourceCst,
+) -> Vec<&'db Diagnostic> {
+    prepare_frontend_details(db, typed, source);
+    prepare_frontend_details::accumulated::<Diagnostic>(db, typed, source)
+}
+
+/// Merge and specialize inside a tracked query so specialization failures
+/// become source diagnostics before either public IR lowering route runs.
 #[salsa::tracked(returns(as_ref))]
 fn prepare_frontend_details<'db>(
     db: &'db dyn salsa::Database,
