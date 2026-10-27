@@ -368,7 +368,7 @@ fn main() -> Nil {
                 "nope::set".to_owned()
             ),
             (
-                "type error at call site in function 'main': expected `pkg::User`, found `Int`"
+                "type error at call site in function 'main': expected `User`, found `Int`"
                     .to_owned(),
                 "+1.name::set(\"Jane\")".to_owned()
             ),
@@ -452,8 +452,8 @@ fn main() -> Nil {
     assert_eq!(
         diagnostics,
         [(
-            "ambiguous path `name::set` for arguments of types (`pkg::User`, `std::String`): it names \
-             `pkg::User::name::set`, `pkg::audit::name::set`"
+            "ambiguous path `name::set` for arguments of types (`User`, `std::String`): it names \
+             `User::name::set`, `audit::name::set`"
                 .to_owned(),
             "name::set".to_owned()
         )]
@@ -484,8 +484,8 @@ fn main() -> Nil {
     assert_eq!(
         diagnostics,
         [(
-            "ambiguous path `name` for arguments of types (`pkg::User`): it names `pkg::User::name`, \
-             `pkg::audit::name`"
+            "ambiguous path `name` for arguments of types (`User`): it names `User::name`, \
+             `audit::name`"
                 .to_owned(),
             "name".to_owned()
         )]
@@ -544,8 +544,8 @@ fn main() -> Nil {}
     assert_eq!(
         diagnostics,
         [(
-            "ambiguous path `User::name` for arguments of types (`pkg::model::User`): it names \
-                 `pkg::audit::User::name`, `pkg::model::User::name`"
+            "ambiguous path `User::name` for arguments of types (`model::User`): it names \
+                 `audit::User::name`, `model::User::name`"
                 .to_owned(),
             "User::name".to_owned()
         ),]

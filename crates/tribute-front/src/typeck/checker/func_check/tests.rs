@@ -35,8 +35,8 @@ fn format_solve_error_describes_builtin_actual_against_source_expected(db: &dyn 
     let source = Type::new(
         db,
         TypeKind::Named {
-            id: TypeDefId::source(db, trunk_ir::SymbolPath::new(["List"])),
-            name: Symbol::new("List"),
+            id: TypeDefId::source(db, trunk_ir::SymbolPath::new(["pkg", "List"])),
+            name: Symbol::new("pkg::List"),
             args: vec![int_ty],
         },
     );
@@ -52,6 +52,7 @@ fn format_solve_error_describes_builtin_actual_against_source_expected(db: &dyn 
     assert_eq!(
         format_solve_error(
             db,
+            &crate::resolve::NameDisplay::new(&crate::resolve::PackageName::executable_root(), []),
             &SolveError::TypeMismatch {
                 expected: source,
                 actual: builtin,
@@ -99,7 +100,11 @@ fn collect_deferred_resolution_univars_includes_callee_type(db: &salsa::Database
         ),
     );
 
-    let checker = TypeChecker::new(db, SpanMap::empty());
+    let checker = TypeChecker::new(
+        db,
+        SpanMap::empty(),
+        crate::resolve::NameDisplay::new(&crate::resolve::PackageName::executable_root(), []),
+    );
     let mut collected = Vec::new();
     checker.collect_univars_from_deferred_resolutions(
         &deferred_resolutions,

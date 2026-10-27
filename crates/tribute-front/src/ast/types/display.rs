@@ -1,51 +1,55 @@
 //! Source-oriented type and effect formatting.
+//!
+//! Every formatter spells declaration names relative to the package being
+//! compiled (`new-plans/modules.md`, "진단의 이름 표기"), so each takes the
+//! [`NameDisplay`] of that package.
 
 use std::fmt;
 
 use itertools::Itertools;
 
 use super::{AbilityInstance, AbilityRow, Type, TypeKind, TypeParam};
+use crate::resolve::NameDisplay;
 
-impl fmt::Display for Type<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        salsa::with_attached_database(|db| write!(f, "{}", self.kind(db)))
-            .unwrap_or(Err(fmt::Error))
-    }
-}
-
-impl fmt::Display for TypeKind<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        salsa::with_attached_database(|db| write_kind(db, self, &[], f)).unwrap_or(Err(fmt::Error))
-    }
-}
-
-/// A type whose `BoundVar`s refer to the type parameters of one scheme,
-/// formatted with those parameters' names.
-pub(crate) struct WithTypeParams<'a, 'db> {
+/// A type formatted for a diagnostic, its `BoundVar`s spelled by the names
+/// of the type parameters of one scheme.
+pub struct TypeDisplay<'a, 'db> {
     db: &'db dyn salsa::Database,
     ty: Type<'db>,
     params: &'a [TypeParam],
+    names: &'a NameDisplay,
 }
 
 impl<'db> Type<'db> {
+    /// Format this type for a diagnostic of the package `names` spells.
+    pub fn display<'a>(
+        self,
+        db: &'db dyn salsa::Database,
+        names: &'a NameDisplay,
+    ) -> TypeDisplay<'a, 'db> {
+        self.display_with_params(db, &[], names)
+    }
+
     /// Format this type, spelling each `BoundVar` by the name of the
     /// parameter in `params` it refers to.
-    pub(crate) fn display_with_params<'a>(
+    pub fn display_with_params<'a>(
         self,
         db: &'db dyn salsa::Database,
         params: &'a [TypeParam],
-    ) -> WithTypeParams<'a, 'db> {
-        WithTypeParams {
+        names: &'a NameDisplay,
+    ) -> TypeDisplay<'a, 'db> {
+        TypeDisplay {
             db,
             ty: self,
             params,
+            names,
         }
     }
 }
 
-impl fmt::Display for WithTypeParams<'_, '_> {
+impl fmt::Display for TypeDisplay<'_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write_kind(self.db, self.ty.kind(self.db), self.params, f)
+        write_kind(self.db, self.ty.kind(self.db), self.params, self.names, f)
     }
 }
 
@@ -53,8 +57,10 @@ fn write_kind<'db>(
     db: &'db dyn salsa::Database,
     kind: &TypeKind<'db>,
     params: &[TypeParam],
+    names: &NameDisplay,
     f: &mut fmt::Formatter<'_>,
 ) -> fmt::Result {
+    let display = |ty: &Type<'db>| ty.display_with_params(db, params, names);
     match kind {
         TypeKind::Int => f.write_str("Int"),
         TypeKind::Nat => f.write_str("Nat"),
@@ -65,9 +71,9 @@ fn write_kind<'db>(
         TypeKind::Nil => f.write_str("Nil"),
         TypeKind::Never => f.write_str("Never"),
         TypeKind::Named { name, args, .. } => {
-            name.with_str(|s| f.write_str(s))?;
+            name.with_str(|s| f.write_str(names.text(s)))?;
             if !args.is_empty() {
-                write!(f, "({})", list(db, args, params))
+                write!(f, "({})", list(db, args, params, names))
             } else {
                 Ok(())
             }
@@ -79,10 +85,10 @@ fn write_kind<'db>(
         } => write!(
             f,
             "fn({}) -> {}",
-            list(db, inputs, params),
-            result.display_with_params(db, params)
+            list(db, inputs, params, names),
+            display(result)
         ),
-        TypeKind::Tuple(elems) => write!(f, "#({})", list(db, elems, params)),
+        TypeKind::Tuple(elems) => write!(f, "#({})", list(db, elems, params, names)),
         TypeKind::BoundVar { index } => {
             match params
                 .get(*index as usize)
@@ -94,12 +100,9 @@ fn write_kind<'db>(
         }
         TypeKind::LocalBoundVar { index, .. } => write!(f, "_local{}", index),
         TypeKind::UniVar { .. } => f.write_str("_"),
-        TypeKind::Continuation { arg, result, .. } => write!(
-            f,
-            "Continuation({} -> {})",
-            arg.display_with_params(db, params),
-            result.display_with_params(db, params)
-        ),
+        TypeKind::Continuation { arg, result, .. } => {
+            write!(f, "Continuation({} -> {})", display(arg), display(result))
+        }
         TypeKind::Error => f.write_str("<error>"),
     }
 }
@@ -108,57 +111,87 @@ fn list<'a, 'db: 'a>(
     db: &'db dyn salsa::Database,
     types: &'a [Type<'db>],
     params: &'a [TypeParam],
+    names: &'a NameDisplay,
 ) -> impl fmt::Display + 'a {
     types
         .iter()
-        .map(move |ty| ty.display_with_params(db, params))
+        .map(move |ty| ty.display_with_params(db, params, names))
         .format(", ")
 }
 
-impl fmt::Display for AbilityInstance<'_> {
-    /// Formats this effect for diagnostic messages.
-    ///
-    /// Produces strings like `"State(Int)"` or `"Console"`.
-    ///
-    /// Requires an attached salsa database on the current thread
-    /// (i.e., must be called inside `db.attach()`).
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        salsa::with_attached_database(|db| {
-            let name = self.ability_id.name(db);
-            if self.args.is_empty() {
-                name.with_str(|s| f.write_str(s))
-            } else {
-                let args = self
-                    .args
-                    .iter()
-                    .format_with(", ", |ty, f| f(&format_args!("{}", ty.kind(db))));
-                name.with_str(|s| write!(f, "{}({args})", s))
-            }
-        })
-        .unwrap_or(Err(fmt::Error))
+/// An effect formatted for a diagnostic, such as `State(Int)` or `Console`.
+pub struct AbilityInstanceDisplay<'a, 'db> {
+    db: &'db dyn salsa::Database,
+    instance: &'a AbilityInstance<'db>,
+    names: &'a NameDisplay,
+}
+
+impl<'db> AbilityInstance<'db> {
+    /// Format this effect for a diagnostic of the package `names` spells.
+    pub fn display<'a>(
+        &'a self,
+        db: &'db dyn salsa::Database,
+        names: &'a NameDisplay,
+    ) -> AbilityInstanceDisplay<'a, 'db> {
+        AbilityInstanceDisplay {
+            db,
+            instance: self,
+            names,
+        }
     }
 }
 
-impl fmt::Display for AbilityRow<'_> {
-    /// Format a canonical diagnostic row, hiding internal row-variable IDs.
-    ///
-    /// Open tails use the name `e`. Without an attached Salsa database,
-    /// displays `<ability row>`.
+impl fmt::Display for AbilityInstanceDisplay<'_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        salsa::with_attached_database(|db| {
-            let effects = self.instances(db);
-            // The displayed strings are both the sort keys and the output.
-            let sorted = effects.iter().map(ToString::to_string).sorted();
-            write!(f, "{{{}", sorted.format(", "))?;
-            if self.rest(db).is_some() {
-                if !effects.is_empty() {
-                    f.write_str(", ")?;
-                }
-                f.write_str("e")?;
+        let name = self.names.path(self.instance.ability_id.path(self.db));
+        if self.instance.args.is_empty() {
+            write!(f, "{name}")
+        } else {
+            let args = list(self.db, &self.instance.args, &[], self.names);
+            write!(f, "{name}({args})")
+        }
+    }
+}
+
+/// A canonical ability row formatted for a diagnostic, hiding internal
+/// row-variable IDs. An open tail is named `e`.
+pub struct AbilityRowDisplay<'a, 'db> {
+    db: &'db dyn salsa::Database,
+    row: AbilityRow<'db>,
+    names: &'a NameDisplay,
+}
+
+impl<'db> AbilityRow<'db> {
+    /// Format this row for a diagnostic of the package `names` spells.
+    pub fn display<'a>(
+        self,
+        db: &'db dyn salsa::Database,
+        names: &'a NameDisplay,
+    ) -> AbilityRowDisplay<'a, 'db> {
+        AbilityRowDisplay {
+            db,
+            row: self,
+            names,
+        }
+    }
+}
+
+impl fmt::Display for AbilityRowDisplay<'_, '_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let effects = self.row.instances(self.db);
+        // The displayed strings are both the sort keys and the output.
+        let sorted = effects
+            .iter()
+            .map(|effect| effect.display(self.db, self.names).to_string())
+            .sorted();
+        write!(f, "{{{}", sorted.format(", "))?;
+        if self.row.rest(self.db).is_some() {
+            if !effects.is_empty() {
+                f.write_str(", ")?;
             }
-            f.write_str("}")
-        })
-        .unwrap_or_else(|| f.write_str("<ability row>"))
+            f.write_str("e")?;
+        }
+        f.write_str("}")
     }
 }
 

@@ -17,6 +17,7 @@ use crate::ast::{
     Decl, DeclTable, Expr, ExprKind, FuncDecl, NodeId, ResolvedRef, SpanMaps, TypeKind, TypeScheme,
     TypedRef,
 };
+use crate::resolve::NameDisplay;
 
 /// The runtime structs lowering uses, by declaration ID, with the canonical
 /// path they are published under.
@@ -34,10 +35,11 @@ pub struct RuntimeItemError {
 }
 
 impl RuntimeItemError {
-    /// The source diagnostic of this error, at its declaration.
-    pub fn diagnostic(&self, spans: &SpanMaps<'_>) -> Diagnostic {
+    /// The source diagnostic of this error, at its declaration, naming the
+    /// item as `names` spells it.
+    pub fn diagnostic(&self, spans: &SpanMaps<'_>, names: &NameDisplay) -> Diagnostic {
         Diagnostic::new(
-            self.to_string(),
+            format!("runtime `{}` {}", names.text(&self.path), self.kind),
             spans.get_or_default(self.node),
             DiagnosticSeverity::Error,
             CompilationPhase::Lowering,

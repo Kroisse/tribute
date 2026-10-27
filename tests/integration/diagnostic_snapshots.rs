@@ -377,7 +377,7 @@ fn invalid_record_shapes_block_public_compilation_apis(db: &salsa::DatabaseImpl)
     let cases: &[(&str, &[&str])] = &[
         (
             "Point { x: +1, y: +2, z: +3 }",
-            &["unknown field `z` for struct `pkg::Point`"],
+            &["unknown field `z` for struct `Point`"],
         ),
         ("Point { x: +1, x: +2, y: +3 }", &["duplicate field `x`"]),
         ("Point { x: +1 }", &["missing field: y"]),
@@ -386,7 +386,7 @@ fn invalid_record_shapes_block_public_compilation_apis(db: &salsa::DatabaseImpl)
             &[
                 "duplicate field `x`",
                 "missing field: y",
-                "unknown field `z` for struct `pkg::Point`",
+                "unknown field `z` for struct `Point`",
             ],
         ),
     ];

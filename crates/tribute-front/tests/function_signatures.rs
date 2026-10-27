@@ -231,7 +231,7 @@ fn root_main_reports_unhandled_and_undeclared_effects(db: &salsa::DatabaseImpl) 
     let step = "use std::io::Io\n\nfn step() ->{Io} Nil { step() }\n\n";
     assert_eq!(
         errors(db, &format!("{step}fn main() -> Nil {{\n    step()\n}}\n")),
-        ["function 'main' uses undeclared effects: Io"],
+        ["function 'main' uses undeclared effects: std::io::Io"],
     );
     assert!(
         errors(

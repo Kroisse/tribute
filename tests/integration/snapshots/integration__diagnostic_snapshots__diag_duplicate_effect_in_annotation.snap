@@ -2,7 +2,7 @@
 source: tests/integration/diagnostic_snapshots.rs
 expression: result.diagnostics
 ---
-- message: "function 'test' declares duplicate ability: Throw(Int), Throw(Int)"
+- message: "function 'test' declares duplicate ability: std::abilities::Throw(Int), std::abilities::Throw(Int)"
   span:
     start: 42
     end: 68

@@ -21,7 +21,7 @@ mod resolver;
 mod scope;
 
 pub use env::{Binding, Export, PackageEnv, Restriction};
-pub use package::{IdentityPath, Location, PackageName};
+pub use package::{IdentityPath, Location, NameDisplay, PackageName};
 pub use resolver::Resolver;
 pub use scope::{Dependencies, Scope, ScopeRef};
 

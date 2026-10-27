@@ -261,10 +261,23 @@ mod tests {
         let ast = parsed.module(db);
         let env = build_env(db, ast, Dependencies::none());
         let resolved = resolve_with_env(db, ast, &env, parsed.span_map(db));
-        let checked = crate::typeck::typecheck_module(db, &resolved, parsed.span_map(db));
+        let checked = crate::typeck::typecheck_module(
+            db,
+            &resolved,
+            parsed.span_map(db),
+            crate::resolve::NameDisplay::new(&crate::resolve::PackageName::executable_root(), []),
+        );
         super::super::monomorphize_functions(
             db,
-            super::super::SpecializationInput::new(db, checked, None),
+            super::super::SpecializationInput::new(
+                db,
+                checked,
+                None,
+                crate::resolve::NameDisplay::new(
+                    &crate::resolve::PackageName::executable_root(),
+                    [],
+                ),
+            ),
         )
         .expect("fixture specializes")
     }

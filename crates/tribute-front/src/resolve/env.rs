@@ -7,7 +7,7 @@ use rustc_hash::FxHashMap as HashMap;
 
 use trunk_ir::{Symbol, SymbolPath};
 
-use super::package::{IdentityPath, Location, PackageName};
+use super::package::{IdentityPath, Location, NameDisplay, PackageName};
 use crate::ast::{AbilityId, CtorId, FuncDefId, OpDeclKind, TypeDefId, Visibility};
 
 /// Information about a resolved name binding.
@@ -85,15 +85,21 @@ pub struct Restriction {
     pub visibility: Visibility,
 }
 
+/// A [`Restriction`] formatted for a diagnostic.
+pub struct RestrictionDisplay<'a> {
+    restriction: &'a Restriction,
+    names: &'a NameDisplay,
+}
+
 /// Names the declaration and its visibility, as in "`m::f` is private".
-impl std::fmt::Display for Restriction {
+impl std::fmt::Display for RestrictionDisplay<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "`{}` is ",
-            itertools::Itertools::format(self.declaration.iter(), "::")
+            self.names.path(&self.restriction.declaration)
         )?;
-        match &self.visibility {
+        match &self.restriction.visibility {
             Visibility::Private => f.write_str("private"),
             visibility => write!(f, "declared `{visibility}`"),
         }
@@ -101,6 +107,14 @@ impl std::fmt::Display for Restriction {
 }
 
 impl Restriction {
+    /// This restriction as a diagnostic spells it.
+    pub fn display<'a>(&'a self, names: &'a NameDisplay) -> RestrictionDisplay<'a> {
+        RestrictionDisplay {
+            restriction: self,
+            names,
+        }
+    }
+
     /// Whether `module`, a module of `package`, sees it.
     pub fn is_visible_from(&self, package: &PackageName, module: &[Symbol]) -> bool {
         self.package == *package && module.starts_with(&self.within)

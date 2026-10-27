@@ -19,7 +19,7 @@ use crate::ast::{
 };
 
 use super::env::{Binding, Restriction};
-use super::package::{IdentityPath, Location, PackageName};
+use super::package::{IdentityPath, Location, NameDisplay, PackageName};
 use super::path::{PathKeywordError, absolute_path, dependency_path};
 use super::scope::ScopeRef;
 
@@ -163,6 +163,11 @@ impl<'e, 'db> Resolver<'e, 'db> {
         self
     }
 
+    /// How diagnostics spell declarations of the package being resolved.
+    fn names(&self) -> NameDisplay {
+        NameDisplay::new(&self.package, self.scope.dependency_names())
+    }
+
     /// The names the package and its dependencies give.
     fn view(&self) -> ScopeRef<'e, 'db> {
         self.scope
@@ -303,7 +308,10 @@ impl<'e, 'db> Resolver<'e, 'db> {
         restriction: &Restriction,
     ) {
         Diagnostic::new(
-            format!("`{written}` is not visible here: {restriction}"),
+            format!(
+                "`{written}` is not visible here: {}",
+                restriction.display(&self.names())
+            ),
             self.span_map.get_or_default(node),
             DiagnosticSeverity::Error,
             CompilationPhase::NameResolution,
@@ -574,7 +582,7 @@ impl<'e, 'db> Resolver<'e, 'db> {
                     if id.name(self.db) == ctor
                         && !restriction.is_visible_from(&self.package, &self.module_path) =>
                 {
-                    Some((*id, restriction.to_string()))
+                    Some((*id, restriction.display(&self.names()).to_string()))
                 }
                 _ => None,
             })
@@ -776,7 +784,7 @@ impl<'e, 'db> Resolver<'e, 'db> {
             && let Some(location) = self.view().locate(path)
         {
             if let Some(restriction) = self.hidden_path(&location) {
-                self.report_hidden(ann.id, path.iter().format("::"), restriction);
+                self.report_hidden(ann.id, self.names().path(path), restriction);
                 ann.kind = TypeAnnotationKind::Error;
             } else {
                 // Later phases read an annotation by its identity.
@@ -1414,6 +1422,7 @@ impl<'e, 'db> Resolver<'e, 'db> {
     /// Report a `use` of `target` that the current module does not see, or
     /// that re-exports it more widely than it is visible.
     fn check_use_visibility(&self, u: &UseDecl, target: &Location) {
+        // The path as written, not an identity path.
         let written = u.path.iter().format("::");
         if let Some(restriction) = self.hidden_path(target) {
             self.report_hidden(u.id, written, restriction);
@@ -1445,8 +1454,9 @@ impl<'e, 'db> Resolver<'e, 'db> {
         if let Some(restriction) = wider {
             Diagnostic::new(
                 format!(
-                    "`{written}` cannot be re-exported as `{}`: {restriction}",
-                    u.visibility
+                    "`{written}` cannot be re-exported as `{}`: {}",
+                    u.visibility,
+                    restriction.display(&self.names())
                 ),
                 self.span_map.get_or_default(u.id),
                 DiagnosticSeverity::Error,

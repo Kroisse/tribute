@@ -382,7 +382,10 @@ impl<'db> TypeChecker<'db> {
             && !matches!(result.kind(self.db()), TypeKind::Nil | TypeKind::Error)
         {
             Diagnostic::new(
-                format!("function 'main' must return Nil, but returns `{}`", result),
+                format!(
+                    "function 'main' must return Nil, but returns `{}`",
+                    result.display(self.db(), self.names())
+                ),
                 self.get_span(func.id),
                 DiagnosticSeverity::Error,
                 CompilationPhase::TypeChecking,
@@ -420,7 +423,9 @@ impl<'db> TypeChecker<'db> {
                     Diagnostic::new(
                         format!(
                             "function 'main' has unhandled effects: {}",
-                            unhandled.iter().format(", ")
+                            unhandled.iter().format_with(", ", |effect, f| f(
+                                &effect.display(self.db(), self.names())
+                            ))
                         ),
                         self.get_span(func.id),
                         DiagnosticSeverity::Error,
@@ -730,7 +735,10 @@ impl<'db> TypeChecker<'db> {
                         waiting_errors.push(error);
                     }
                     origin => Diagnostic::new(
-                        format!("type error during UFCS method resolution: {}", error.error),
+                        format!(
+                            "type error during UFCS method resolution: {}",
+                            error.error.display(self.db(), self.names())
+                        ),
                         self.get_span(origin.map_or(func_node_id, |origin| origin.node_id)),
                         DiagnosticSeverity::Error,
                         CompilationPhase::TypeChecking,
@@ -881,7 +889,10 @@ impl<'db> TypeChecker<'db> {
                 call.arg_types
                     .iter()
                     .map(|ty| solver.type_subst().apply(self.db(), *ty))
-                    .format_with(", ", |ty, f| f(&format_args!("`{ty}`")))
+                    .format_with(", ", |ty, f| f(&format_args!(
+                        "`{}`",
+                        ty.display(self.db(), self.names())
+                    )))
             )
         };
         let selection = self.select_deferred_method(solver, call, true);
@@ -889,7 +900,10 @@ impl<'db> TypeChecker<'db> {
             functions
                 .iter()
                 .format_with(", ", |function, f| {
-                    f(&format_args!("`{}`", function.qualified(self.db())))
+                    f(&format_args!(
+                        "`{}`",
+                        self.names().path(function.path(self.db()))
+                    ))
                 })
                 .to_string()
         };
@@ -898,8 +912,9 @@ impl<'db> TypeChecker<'db> {
                 let expected = solver.expected_type(call.result_ty);
                 match expected.kind(self.db()) {
                     TypeKind::Func { .. } => format!(
-                        "ambiguous path `{}` used as a value of type `{expected}`: it names {}",
+                        "ambiguous path `{}` used as a value of type `{}`: it names {}",
                         call.method,
+                        expected.display(self.db(), self.names()),
                         names(&functions),
                     ),
                     _ => format!(
@@ -912,7 +927,9 @@ impl<'db> TypeChecker<'db> {
             (_, true) => format!(
                 "unresolved path `{}`: no function it names has type `{}`",
                 call.method,
-                solver.expected_type(call.result_ty),
+                solver
+                    .expected_type(call.result_ty)
+                    .display(self.db(), self.names()),
             ),
             (super::expr::MethodSelection::Ambiguous(functions), false) => format!(
                 "ambiguous path `{}` for {arguments}: it names {}",
@@ -976,7 +993,9 @@ impl<'db> TypeChecker<'db> {
                 format!(
                     "function '{}' {message}: {}",
                     func.name,
-                    effects.iter().format(", "),
+                    effects.iter().format_with(", ", |effect, f| f(
+                        &effect.display(self.db(), self.names())
+                    )),
                 ),
                 self.get_span(func.id),
                 DiagnosticSeverity::Error,
@@ -1116,7 +1135,11 @@ impl<'db> TypeChecker<'db> {
                     "function '{}' handles {} from {} without its signature determining \
                      which effect instance that is",
                     func.name,
-                    removal.removed.instances(db).iter().format(", "),
+                    removal
+                        .removed
+                        .instances(db)
+                        .iter()
+                        .format_with(", ", |effect, f| f(&effect.display(db, self.names()))),
                     row_name(removal.source.rest(db)),
                 ));
                 continue;
@@ -1125,7 +1148,9 @@ impl<'db> TypeChecker<'db> {
                 "function '{}' handles {} from {} without declaring {} there; \
                  add {} to that ability row",
                 func.name,
-                removed.iter().format(", "),
+                removed
+                    .iter()
+                    .format_with(", ", |effect, f| f(&effect.display(db, self.names()))),
                 row_name(removal.source.rest(db)),
                 if removed.len() == 1 { "it" } else { "them" },
                 if removed.len() == 1 { "it" } else { "them" },
@@ -1190,7 +1215,9 @@ impl<'db> TypeChecker<'db> {
             let message = format!(
                 "function '{}' declares duplicate ability: {}",
                 func.name,
-                duplicate.effects.iter().format(", "),
+                duplicate.effects.iter().format_with(", ", |effect, f| f(
+                    &effect.display(self.db(), self.names())
+                )),
             );
             (duplicate, message)
         } else if let Some(duplicate) =
@@ -1283,7 +1310,7 @@ impl<'db> TypeChecker<'db> {
                     "type variable `{}` in the signature of `{}` is `{}` in its body",
                     type_name(index),
                     func.name,
-                    resolved,
+                    resolved.display(db, self.names()),
                 )),
             }
         }
@@ -1333,7 +1360,10 @@ impl<'db> TypeChecker<'db> {
                     "{} in the signature of `{}` has {} in its body",
                     row_name(index),
                     func.name,
-                    resolved.instances(db).iter().format(", "),
+                    resolved
+                        .instances(db)
+                        .iter()
+                        .format_with(", ", |effect, f| f(&effect.display(db, self.names()))),
                 ));
             }
         }

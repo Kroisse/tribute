@@ -93,9 +93,7 @@ fn never() -> Nil {
     );
     assert_eq!(
         errors,
-        [
-            "ambiguous constructor `.Leaf`: it may be `pkg::Heap::Leaf`, `pkg::Tree::Leaf`; write its type"
-        ]
+        ["ambiguous constructor `.Leaf`: it may be `Heap::Leaf`, `Tree::Leaf`; write its type"]
     );
 }
 
@@ -154,8 +152,8 @@ fn deferred() -> Nil {
     assert_eq!(
         errors,
         [
-            "constructor `pkg::Tree::Leaf` expects 1 field, but the pattern has 2",
-            "constructor `pkg::Heap::Empty` expects 0 fields, but the pattern has 1",
+            "constructor `Tree::Leaf` expects 1 field, but the pattern has 2",
+            "constructor `Heap::Empty` expects 0 fields, but the pattern has 1",
         ]
     );
 }
@@ -188,7 +186,7 @@ fn deferred() -> Nil {
         errors,
         [
             "non-exhaustive case expression on `Tree`: missing patterns: .Node(_, _)",
-            "non-exhaustive case expression on `pkg::Heap`: missing patterns: .Leaf(_)",
+            "non-exhaustive case expression on `Heap`: missing patterns: .Leaf(_)",
         ]
     );
 }
@@ -207,7 +205,7 @@ fn none() -> Option(Int) { None }
 #[salsa_test]
 fn nested_constructors_see_the_field_types_of_the_outer_one(db: &salsa::DatabaseImpl) {
     // `heap::Heap` is not in scope, so only the outer `.Some`'s instance
-    // tells the inner `.Leaf` from the scope's `pkg::Tree::Leaf`.
+    // tells the inner `.Leaf` from the scope's `Tree::Leaf`.
     let errors = errors(
         db,
         r#"
@@ -264,8 +262,8 @@ fn spread(base: Shape) -> Int {
         errors,
         [
             "missing field: y",
-            "unknown field `z` for variant `pkg::other::Shape::Point`",
-            "record spread is not allowed for variant `pkg::other::Shape::Point`; write every field",
+            "unknown field `z` for variant `other::Shape::Point`",
+            "record spread is not allowed for variant `other::Shape::Point`; write every field",
         ]
     );
 }
@@ -353,9 +351,9 @@ fn nothing_fits() -> Nil {
     assert_eq!(
         errors,
         [
-            "constructor `pkg::Tree::Leaf` expects 1 field, but it is given 2",
-            "`pkg::Tree::Leaf` has positional fields; construct it with `.Leaf(...)`",
-            "no constructor `.Leaf` in scope fits here: `pkg::Heap::Leaf`, `pkg::Tree::Leaf`, `std::String::Leaf`",
+            "constructor `Tree::Leaf` expects 1 field, but it is given 2",
+            "`Tree::Leaf` has positional fields; construct it with `.Leaf(...)`",
+            "no constructor `.Leaf` in scope fits here: `Heap::Leaf`, `Tree::Leaf`, `std::String::Leaf`",
         ]
     );
 }

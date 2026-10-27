@@ -1,6 +1,8 @@
 //! The name of the package a module tree belongs to, and the two ways a
 //! path names a place in a package: by identity, and from its root.
 
+use std::fmt;
+
 use trunk_ir::{Symbol, SymbolPath};
 
 use super::STD_PACKAGE;
@@ -78,6 +80,91 @@ impl PackageName {
             package: self.clone(),
             path,
         }
+    }
+}
+
+/// How diagnostics spell identity paths while one package is compiled: its
+/// own declarations without its package component, unless the rest would
+/// then start with a dependency's name (`new-plans/modules.md`, "진단의 이름
+/// 표기").
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NameDisplay {
+    own: Option<Symbol>,
+    dependencies: Vec<Symbol>,
+}
+
+impl NameDisplay {
+    /// The spelling while compiling `package`, which depends on the packages
+    /// named `dependencies`.
+    pub fn new<'a>(
+        package: &PackageName,
+        dependencies: impl IntoIterator<Item = &'a Symbol>,
+    ) -> Self {
+        let own = package
+            .identity_path(&[])
+            .first()
+            .expect("a package's root has its package component")
+            .clone();
+        Self {
+            own: Some(own),
+            dependencies: dependencies.into_iter().cloned().collect(),
+        }
+    }
+
+    /// The spelling that keeps every identity path whole, for comparing
+    /// declarations by what a diagnostic would print.
+    pub fn identity() -> Self {
+        Self {
+            own: None,
+            dependencies: Vec::new(),
+        }
+    }
+
+    /// The spelling of `name`, the text of an identity path.
+    pub fn text<'a>(&self, name: &'a str) -> &'a str {
+        let Some(rest) = self.own.as_ref().and_then(|own| {
+            own.with_str(|own| {
+                name.strip_prefix(own)
+                    .and_then(|rest| rest.strip_prefix("::"))
+            })
+        }) else {
+            return name;
+        };
+        let first = rest.split("::").next().unwrap_or(rest);
+        if self
+            .dependencies
+            .iter()
+            .any(|dependency| *dependency == *first)
+        {
+            name
+        } else {
+            rest
+        }
+    }
+
+    /// The spelling of the identity path whose joined text is `name`.
+    pub fn symbol<'a>(&'a self, name: &'a Symbol) -> impl fmt::Display + 'a {
+        fmt::from_fn(move |f| name.with_str(|text| f.write_str(self.text(text))))
+    }
+
+    /// The spelling of the identity path `path`.
+    pub fn path<'a>(&self, path: &'a [Symbol]) -> impl fmt::Display + 'a {
+        let own = match path {
+            [first, second, ..] => {
+                self.own.as_ref() == Some(first) && !self.dependencies.contains(second)
+            }
+            _ => false,
+        };
+        let shown = &path[usize::from(own)..];
+        fmt::from_fn(move |f| {
+            for (index, component) in shown.iter().enumerate() {
+                if index > 0 {
+                    f.write_str("::")?;
+                }
+                component.with_str(|text| f.write_str(text))?;
+            }
+            Ok(())
+        })
     }
 }
 
@@ -181,6 +268,31 @@ mod tests {
         );
         assert_eq!(lib.module_path(&path("geometry::area")), None);
         assert_eq!(lib.module_path(&path("std::io::print")), None);
+    }
+
+    #[test]
+    fn diagnostics_spell_the_compiled_package_without_its_component() {
+        let std = Symbol::new(STD_PACKAGE);
+        let root = NameDisplay::new(&PackageName::executable_root(), [&std]);
+        assert_eq!(root.text("pkg::geometry::area"), "geometry::area");
+        assert_eq!(root.text("pkg::stdlib::f"), "stdlib::f");
+        assert_eq!(root.text("pkg::std::f"), "pkg::std::f");
+        assert_eq!(root.text("std::Option"), "std::Option");
+        assert_eq!(root.path(&path("pkg::main")).to_string(), "main");
+        assert_eq!(root.path(&path("pkg::std::f")).to_string(), "pkg::std::f");
+        assert_eq!(root.path(&path("std::Option")).to_string(), "std::Option");
+        assert_eq!(root.symbol(&Symbol::new("pkg::a::f")).to_string(), "a::f");
+
+        let lib = NameDisplay::new(&PackageName::library(Symbol::new("lib")), [&std]);
+        assert_eq!(lib.text("lib::area"), "area");
+        assert_eq!(lib.text("library::area"), "library::area");
+        assert_eq!(lib.text("pkg::area"), "pkg::area");
+        assert_eq!(lib.text("std::Option"), "std::Option");
+
+        assert_eq!(NameDisplay::identity().text("pkg::a"), "pkg::a");
+
+        let std_itself = NameDisplay::new(&PackageName::std(), []);
+        assert_eq!(std_itself.text("std::Option"), "Option");
     }
 
     #[test]

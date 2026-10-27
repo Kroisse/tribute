@@ -6,8 +6,14 @@ use self::common::{ast_pipeline_error_messages, run_ast_pipeline, run_ast_pipeli
 use rustc_hash::FxHashMap as HashMap;
 use salsa_test_macros::salsa_test;
 use tribute_front::SourceCst;
+use tribute_front::resolve::{NameDisplay, PackageName};
 use trunk_ir::context::IrContext;
 use trunk_ir::printer::print_module;
+
+/// The spelling of the root package, which these sources depend on nothing.
+fn root_names() -> NameDisplay {
+    NameDisplay::new(&PackageName::executable_root(), [])
+}
 
 #[salsa_test]
 fn canonical_int_text_api_resolves_through_prelude(db: &salsa::DatabaseImpl) {
@@ -202,10 +208,11 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
             parsed.span_map(db),
         ),
         parsed.span_map(db),
+        root_names(),
     );
     let mono = tribute_front::monomorphize::monomorphize_functions(
         db,
-        tribute_front::monomorphize::SpecializationInput::new(db, checked, None),
+        tribute_front::monomorphize::SpecializationInput::new(db, checked, None, root_names()),
     )
     .expect("checked instances must specialize");
     let mut ir = IrContext::new();
@@ -245,10 +252,11 @@ fn lower_monomorphized_source(
             parsed.span_map(db),
         ),
         parsed.span_map(db),
+        root_names(),
     );
     let mono = tribute_front::monomorphize::monomorphize_functions(
         db,
-        tribute_front::monomorphize::SpecializationInput::new(db, checked, None),
+        tribute_front::monomorphize::SpecializationInput::new(db, checked, None, root_names()),
     )
     .expect("checked instances must specialize");
     let mut ir = IrContext::new();
@@ -291,10 +299,10 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
         &tribute_front::resolve::build_env(db, ast, tribute_front::resolve::Dependencies::none()),
         span_map,
     );
-    let checked = tribute_front::typeck::typecheck_module(db, &resolved, span_map);
+    let checked = tribute_front::typeck::typecheck_module(db, &resolved, span_map, root_names());
     let mono = tribute_front::monomorphize::monomorphize_functions(
         db,
-        tribute_front::monomorphize::SpecializationInput::new(db, checked, None),
+        tribute_front::monomorphize::SpecializationInput::new(db, checked, None, root_names()),
     )
     .expect("checked instances must specialize");
     let mut ir = IrContext::new();

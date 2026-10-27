@@ -2,7 +2,7 @@
 source: tests/integration/diagnostic_snapshots.rs
 expression: result.diagnostics
 ---
-- message: "`pkg::nest` calls itself at `#(a, a)`; polymorphic recursion is not supported"
+- message: "`nest` calls itself at `#(a, a)`; polymorphic recursion is not supported"
   span:
     start: 85
     end: 89

@@ -31,15 +31,32 @@ use crate::convention_classes::{
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FnArmCall {
     pub location: Location,
-    pub message: String,
+    /// The operation the arm handles.
+    pub op_name: String,
+    /// The identity text of the function whose use the call is in.
+    pub function: String,
     /// The references that pass an effect with an `op` operation to the
     /// row variable that makes the call `Cps`, in body order.
     pub origins: Vec<Location>,
 }
 
+impl FnArmCall {
+    /// The diagnostic message, naming the function as `spell` spells its
+    /// identity text.
+    pub fn message<'a>(&'a self, spell: impl FnOnce(&'a str) -> &'a str) -> String {
+        format!(
+            "`fn` handler arm for `{}` cannot call a callable that may suspend \
+             or abort: in this use of `{}`, the callee's effects include an `op` \
+             operation",
+            self.op_name,
+            spell(&self.function)
+        )
+    }
+}
+
 /// The calls in `fn` arms that may suspend or abort, as a pass failure.
 #[derive(Debug, Display, Error)]
-#[display("{}", calls.iter().map(|call| &call.message).format("; "))]
+#[display("{}", calls.iter().map(|call| call.message(|name| name)).format("; "))]
 pub struct FnArmCallError {
     #[error(not(source))]
     pub calls: Vec<FnArmCall>,
@@ -115,10 +132,11 @@ pub fn check(ctx: &IrContext, module: Module) -> Vec<FnArmCall> {
     // the uses that select it.
     let mut merged: Vec<FnArmCall> = Vec::new();
     for call in calls {
-        match merged
-            .iter_mut()
-            .find(|known| known.location == call.location && known.message == call.message)
-        {
+        match merged.iter_mut().find(|known| {
+            known.location == call.location
+                && known.op_name == call.op_name
+                && known.function == call.function
+        }) {
             Some(known) => {
                 for origin in call.origins {
                     if !known.origins.contains(&origin) {
@@ -199,12 +217,8 @@ impl<'a> Instance<'a> {
             }
             calls.push(FnArmCall {
                 location: self.ctx.op(call).location,
-                message: format!(
-                    "`fn` handler arm for `{op_name}` cannot call a callable that may suspend \
-                     or abort: in this use of `{}`, the callee's effects include an `op` \
-                     operation",
-                    self.function.base
-                ),
+                op_name: op_name.to_string(),
+                function: self.function.base.clone(),
                 origins,
             });
         });

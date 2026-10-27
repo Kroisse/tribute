@@ -66,11 +66,12 @@ pub(crate) fn specialized_prelude<'db>(
 ) -> Option<SpecializedPrelude<'db>> {
     let checked = prelude_module(db)?;
     let span_map = SpanMaps::new(prelude_span_map(db));
+    let names = analysis::std_names();
     let compiler_intrinsics = match ast_to_ir::registered_compiler_intrinsics(checked.module(db)) {
         Ok(registered) => registered,
         Err(unsupported) => {
             for directive in unsupported {
-                directive.diagnostic(&span_map).accumulate(db);
+                directive.diagnostic(&span_map, &names).accumulate(db);
             }
             return None;
         }
@@ -93,13 +94,13 @@ pub(crate) fn specialized_prelude<'db>(
         Ok(types) => types,
         Err(errors) => {
             for error in errors {
-                error.diagnostic(&span_map).accumulate(db);
+                error.diagnostic(&span_map, &names).accumulate(db);
             }
             return None;
         }
     };
-    let input =
-        SpecializationInput::new(db, checked, None).with_compiler_intrinsics(compiler_intrinsics);
+    let input = SpecializationInput::new(db, checked, None, names.clone())
+        .with_compiler_intrinsics(compiler_intrinsics);
     match monomorphize::monomorphize_functions(db, input) {
         Ok(specialized) => Some(SpecializedPrelude {
             checked,

@@ -24,6 +24,7 @@ pub mod link;
 pub mod pipeline;
 pub mod prelude;
 
+pub use frontend::diagnostic_names;
 pub use link::{LinkError, link_native_binary};
 pub use pipeline::{
     CompilationConfig, CompilationResult, compile_ast, compile_frontend, compile_to_native_binary,

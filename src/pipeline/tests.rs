@@ -1676,6 +1676,7 @@ fn main() -> Nil {}
         context: mut ir,
         module,
         compiler_intrinsics,
+        ..
     } = merge_and_lower_to_ir(db, &typed, source);
     for after_cps in [false, true] {
         if after_cps {
@@ -1818,6 +1819,7 @@ fn main() -> Nil {}
         context: mut ir,
         module,
         compiler_intrinsics,
+        ..
     } = merge_and_lower_to_ir(db, &typed, source);
     let mut source_tuple = None;
     for after_cps in [false, true] {
@@ -1908,6 +1910,7 @@ fn source_list_does_not_change_logical_prelude_signatures(db: &salsa::DatabaseIm
         context: ir,
         module,
         compiler_intrinsics,
+        ..
     } = merge_and_lower_to_ir(db, &typed, source);
     let mut checked = 0;
     for &operation in module.ops(&ir) {
@@ -2051,7 +2054,7 @@ mod Nested {
     assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
     for (diagnostic, identity) in diagnostics
         .iter()
-        .zip(["pkg::user_intrinsic", "pkg::Nested::unused_generic"])
+        .zip(["user_intrinsic", "Nested::unused_generic"])
     {
         assert_eq!(
             diagnostic.inner.message,
@@ -2080,7 +2083,7 @@ fn std_specialization_failures_reach_user_preparation(db: &salsa::DatabaseImpl) 
             diagnostics
                 .iter()
                 .map(|diagnostic| diagnostic.inner.message.as_str()),
-            ["unsupported compiler intrinsic directive `std::unsupported_std_intrinsic`"],
+            ["unsupported compiler intrinsic directive `unsupported_std_intrinsic`"],
         );
     }
 }
@@ -2101,7 +2104,7 @@ fn user_declaration_cannot_claim_a_library_intrinsic(db: &salsa::DatabaseImpl) {
         diagnostics
             .iter()
             .map(|diagnostic| diagnostic.inner.message.as_str()),
-        ["unsupported compiler intrinsic directive `pkg::__bytes_get_or_panic`"],
+        ["unsupported compiler intrinsic directive `__bytes_get_or_panic`"],
     );
 }
 
