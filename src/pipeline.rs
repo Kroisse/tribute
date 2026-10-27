@@ -166,8 +166,8 @@ pub use tribute_passes::native::optimization::{
 };
 
 pub use crate::frontend::{
-    FrontendCompilation, compile_frontend, compile_frontend_for_shared_route, parse_and_lower_ast,
-    prepare_frontend_for_lowering,
+    FrontendCompilation, compile_frontend, compile_frontend_for_shared_route, frontend_diagnostics,
+    parse_and_lower_ast, prepare_frontend_for_lowering,
 };
 use trunk_ir_cranelift_backend::{
     CompilationResult as NativeCompilationResult, emit_module_to_native,

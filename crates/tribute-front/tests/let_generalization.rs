@@ -1,5 +1,5 @@
 use salsa_test_macros::salsa_test;
-use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_core::{CompilationPhase, DiagnosticSeverity};
 use tribute_front::{
     SourceCst,
     ast::{
@@ -173,7 +173,7 @@ fn phase_errors(
     phase: CompilationPhase,
 ) -> Vec<String> {
     let _ = tribute_front::query::type_check_output(db, source);
-    tribute_front::query::type_check_output::accumulated::<Diagnostic>(db, source)
+    tribute_front::analysis::diagnostics(db, source, tribute_front::analysis::Environment::Builtins)
         .into_iter()
         .filter(|diagnostic| {
             diagnostic.inner.severity == DiagnosticSeverity::Error && diagnostic.phase == phase
@@ -698,7 +698,11 @@ fn make() ->{} fn(a) ->{} a {
 "#,
     );
     let output = tribute_front::query::type_check_output(db, source).unwrap();
-    let errors = tribute_front::query::type_check_output::accumulated::<Diagnostic>(db, source);
+    let errors = tribute_front::analysis::diagnostics(
+        db,
+        source,
+        tribute_front::analysis::Environment::Builtins,
+    );
     assert!(errors.is_empty(), "{errors:?}");
     let scheme = output
         .declarations(db)

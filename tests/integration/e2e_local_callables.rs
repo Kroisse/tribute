@@ -8,8 +8,8 @@
 use crate::common;
 
 use salsa_test_macros::salsa_test;
-use tribute::pipeline::parse_and_lower_ast;
-use tribute_core::{Diagnostic, diagnostic::DiagnosticSeverity};
+use tribute::pipeline::frontend_diagnostics;
+use tribute_core::diagnostic::DiagnosticSeverity;
 use tribute_front::SourceCst;
 
 fn assert_native(body: &str, expected: &[u8]) {
@@ -88,8 +88,7 @@ fn invalid() ->{State(Int)} Int {
 fn main() -> Nil {}
 "#,
     );
-    let _ = parse_and_lower_ast(db, source);
-    let errors: Vec<_> = parse_and_lower_ast::accumulated::<Diagnostic>(db, source)
+    let errors: Vec<_> = frontend_diagnostics(db, source)
         .into_iter()
         .filter(|diagnostic| diagnostic.inner.severity == DiagnosticSeverity::Error)
         .collect();

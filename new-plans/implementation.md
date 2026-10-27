@@ -942,6 +942,14 @@ CLI, LSP와 테스트는 같은 분석 의미를 사용하며 source와 외부 �
 구분한다. LSP는 부분 결과를 사용할 수 있지만 컴파일 경로는 frontend 오류가
 있으면 lowering을 시작하지 않는다.
 
+이 공통 분석은 `tribute-front`가 소유하며, source를 분석할 환경을 인자로
+받는다. 환경은 두 가지다. 하나는 compiler 소유 이름만 선언하는 패키지
+`std`이고, 다른 하나는 주어진 prelude source를 root 모듈로 하는 패키지
+`std`이다. 앞의 것은 외부 선언 없이 source만 분석할 때 쓴다. 뒤의 것에서
+prelude는 한 번만 검사되며, 그 결과를 같은 prelude에 의존하는 모든 source의
+분석이 공유한다. Root crate는 prelude source를 공급하고, 같은 분석 결과에서
+lowering을 시작할지 결정한다.
+
 정의가 지켜야 하는 source 규칙은 타입 검사가 정의마다 진단한다. 그 정의가
 인스턴스화되는지와 상관없이, 도달하지 않는 generic 함수 본문에서도 같은 진단이
 나온다. 리터럴 패턴이 자기 타입의 `==`를 요구하는 규칙, ability operation 호출의

@@ -14,6 +14,7 @@
 //! - [`sorted_map`]: Sorted-vector map for deterministic phase results
 //! - [`source_file`]: Source file management and URI handling
 
+pub mod analysis;
 pub mod ast;
 pub mod ast_to_ir;
 pub mod astgen;
