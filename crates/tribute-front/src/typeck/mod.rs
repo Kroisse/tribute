@@ -140,7 +140,7 @@ pub struct WellKnownType<'db> {
 }
 
 /// Semantic identities supplied by the prelude and required downstream.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct WellKnownTypes<'db> {
     pub string: Option<WellKnownType<'db>>,
     /// The `==` that `String` literal patterns compare with.
@@ -442,16 +442,15 @@ impl<'db> TypeCheckOutput<'db> {
     }
 }
 
-/// Prelude's exported type information.
+/// The type information a library package exports to the packages that
+/// depend on it.
 ///
-/// This struct holds type information extracted from the prelude after it has been
-/// fully type-checked. All types are resolved TypeSchemes with no UniVars - only
-/// BoundVars for polymorphic parameters.
-///
-/// This allows user code to use prelude types without sharing a TypeContext,
-/// avoiding UniVar counter conflicts that caused issues in the AST merge approach.
+/// It is extracted after the library is fully type-checked. All types are
+/// resolved TypeSchemes with no UniVars - only BoundVars for polymorphic
+/// parameters - so a dependent package reads them without sharing a
+/// TypeContext with the library.
 #[salsa::tracked]
-pub struct PreludeExports<'db> {
+pub struct PackageExports<'db> {
     /// Function type schemes keyed by FuncDefId.
     #[returns(deref)]
     pub function_types: Vec<(FuncDefId<'db>, TypeScheme<'db>)>,

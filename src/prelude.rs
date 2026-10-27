@@ -146,6 +146,6 @@ pub fn prelude_dependencies<'db>(db: &'db dyn salsa::Database) -> ast_resolve::D
 #[cfg(test)]
 pub(crate) fn prelude_exports(
     db: &dyn salsa::Database,
-) -> Option<tribute_front::typeck::PreludeExports<'_>> {
+) -> Option<tribute_front::typeck::PackageExports<'_>> {
     analysis::checked_std(db, prelude_source(db)).map(|std| std.exports)
 }

@@ -163,23 +163,40 @@ struct DependencyTypes<'db> {
 }
 
 impl<'db> DependencyTypes<'db> {
-    fn new(db: &'db dyn salsa::Database, exports: &super::PreludeExports<'db>) -> Self {
+    fn new() -> Self {
         Self {
-            function_types: exports.function_types(db).iter().copied().collect(),
-            extern_functions: exports.extern_functions(db).iter().copied().collect(),
-            constructor_types: exports.constructor_types(db).iter().copied().collect(),
-            type_defs: exports.type_defs(db).iter().cloned().collect(),
-            struct_fields: exports.struct_fields(db).iter().cloned().collect(),
-            enum_variants: exports.enum_variants(db).iter().cloned().collect(),
-            constructor_field_names: exports
-                .constructor_field_names(db)
-                .iter()
-                .cloned()
-                .collect(),
-            ability_defs: exports
-                .ability_definitions(db)
-                .iter()
-                .map(|(ability, type_params, operations)| {
+            function_types: HashMap::default(),
+            extern_functions: HashSet::default(),
+            constructor_types: HashMap::default(),
+            type_defs: HashMap::default(),
+            struct_fields: HashMap::default(),
+            enum_variants: HashMap::default(),
+            constructor_field_names: HashMap::default(),
+            ability_defs: HashMap::default(),
+            well_known_types: super::WellKnownTypes::default(),
+        }
+    }
+
+    /// Add the declarations one more dependency package exports. Their
+    /// identities are package-qualified, so the packages' entries never
+    /// collide.
+    fn add(&mut self, db: &'db dyn salsa::Database, exports: &super::PackageExports<'db>) {
+        self.function_types
+            .extend(exports.function_types(db).iter().copied());
+        self.extern_functions
+            .extend(exports.extern_functions(db).iter().copied());
+        self.constructor_types
+            .extend(exports.constructor_types(db).iter().copied());
+        self.type_defs.extend(exports.type_defs(db).iter().cloned());
+        self.struct_fields
+            .extend(exports.struct_fields(db).iter().cloned());
+        self.enum_variants
+            .extend(exports.enum_variants(db).iter().cloned());
+        self.constructor_field_names
+            .extend(exports.constructor_field_names(db).iter().cloned());
+        self.ability_defs
+            .extend(exports.ability_definitions(db).iter().map(
+                |(ability, type_params, operations)| {
                     let info = AbilityInfo {
                         id: *ability,
                         type_params: type_params.clone(),
@@ -189,10 +206,14 @@ impl<'db> DependencyTypes<'db> {
                             .collect(),
                     };
                     (*ability, info)
-                })
-                .collect(),
-            well_known_types: *exports.well_known_types(db),
-        }
+                },
+            ));
+        // Only package `std` publishes well-known identities.
+        let known = exports.well_known_types(db);
+        let own = &mut self.well_known_types;
+        own.string = own.string.or(known.string);
+        own.string_equality = own.string_equality.or(known.string_equality);
+        own.bytes_equality = own.bytes_equality.or(known.bytes_equality);
     }
 }
 
@@ -557,10 +578,13 @@ impl<'db> ModuleTypeEnv<'db> {
     // Dependency
     // =========================================================================
 
-    /// Read the declarations package `std` exports after this module's
-    /// own. The module's output holds only its own declarations.
-    pub fn depend_on(&mut self, exports: &super::PreludeExports<'db>) {
-        self.dependency = Some(Box::new(DependencyTypes::new(self.db, exports)));
+    /// Read the declarations one dependency package exports after this
+    /// module's own. Called once per package the module depends on,
+    /// transitively. The module's output holds only its own declarations.
+    pub fn depend_on(&mut self, exports: &super::PackageExports<'db>) {
+        self.dependency
+            .get_or_insert_with(|| Box::new(DependencyTypes::new()))
+            .add(self.db, exports);
     }
 
     /// The struct field declarations of `struct_id`, from this module or its
@@ -607,7 +631,7 @@ impl<'db> ModuleTypeEnv<'db> {
         result
     }
 
-    /// Export function types with FuncDefId (for PreludeExports).
+    /// Export function types with FuncDefId (for PackageExports).
     ///
     /// Results are sorted by fully qualified function name for deterministic output.
     pub fn export_function_types_with_ids(&self) -> Vec<(FuncDefId<'db>, TypeScheme<'db>)> {
@@ -616,7 +640,7 @@ impl<'db> ModuleTypeEnv<'db> {
         result
     }
 
-    /// Export constructor types for PreludeExports.
+    /// Export constructor types for PackageExports.
     ///
     /// Results are sorted by fully qualified constructor name for deterministic output.
     pub fn export_constructor_types(&self) -> Vec<(CtorId<'db>, TypeScheme<'db>)> {
@@ -629,7 +653,7 @@ impl<'db> ModuleTypeEnv<'db> {
         result
     }
 
-    /// Export type definitions for PreludeExports.
+    /// Export type definitions for PackageExports.
     ///
     /// Results are sorted alphabetically by name for deterministic output.
     pub fn export_type_defs(&self) -> Vec<(SymbolPath, TypeScheme<'db>)> {
@@ -642,7 +666,7 @@ impl<'db> ModuleTypeEnv<'db> {
         result
     }
 
-    /// Export struct field definitions for PreludeExports.
+    /// Export struct field definitions for PackageExports.
     ///
     /// Results are sorted alphabetically by struct name for deterministic output.
     pub fn export_struct_fields(&self) -> Vec<(TypeDefId<'db>, StructFieldInfo<'db>)> {
@@ -655,7 +679,7 @@ impl<'db> ModuleTypeEnv<'db> {
         result
     }
 
-    /// Export enum variant information for PreludeExports.
+    /// Export enum variant information for PackageExports.
     ///
     /// Results are sorted alphabetically by enum name for deterministic output.
     pub fn export_enum_variants(&self) -> Vec<(SymbolPath, Vec<Symbol>)> {
@@ -668,7 +692,7 @@ impl<'db> ModuleTypeEnv<'db> {
         result
     }
 
-    /// Export constructor field names for PreludeExports.
+    /// Export constructor field names for PackageExports.
     ///
     /// Results are sorted by constructor name for deterministic output.
     pub fn export_constructor_field_names(&self) -> Vec<(CtorId<'db>, Vec<Symbol>)> {

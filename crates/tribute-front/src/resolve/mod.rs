@@ -177,13 +177,14 @@ pub fn build_env<'db>(
 }
 
 /// Build the environment of the library package `package` whose root
-/// module is `module`.
+/// module is `module`, with the packages its dependency table names.
 pub fn build_library_env<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<UnresolvedName>,
     package: &PackageName,
+    dependencies: &Dependencies<'db>,
 ) -> PackageEnv<'db> {
-    build_package_env(db, &module.decls, package, &Dependencies::none())
+    build_package_env(db, &module.decls, package, dependencies)
 }
 
 /// The environment of a package `std` that declares nothing but the
@@ -419,14 +420,15 @@ pub const STD_PACKAGE: &str = "std";
 pub const PRELUDE_MODULE: [&str; 2] = ["prelude", "v0"];
 
 /// Resolve the library package whose root module is `module`, in the
-/// environment `build_library_env` built for it.
+/// environment `build_library_env` built for it against `dependencies`.
 pub fn resolve_library_with_env<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<UnresolvedName>,
     env: &PackageEnv<'db>,
+    dependencies: &Dependencies<'db>,
     span_map: &'db SpanMap,
 ) -> DeclTable<ResolvedRef<'db>> {
-    Resolver::new(db, ScopeRef::new(env, &Dependencies::none()), span_map)
+    Resolver::new(db, ScopeRef::new(env, dependencies), span_map)
         .with_package(env.package().clone())
         .resolve_module(module)
 }

@@ -28,11 +28,17 @@ impl<'db> Dependencies<'db> {
         Self::default()
     }
 
+    /// The dependencies named in a package's dependency table, each with
+    /// its environment.
+    pub fn new(packages: impl IntoIterator<Item = (Symbol, &'db PackageEnv<'db>)>) -> Self {
+        Self {
+            packages: packages.into_iter().collect(),
+        }
+    }
+
     /// The dependency on package `std`, whose environment is `std`.
     pub fn std(std: &'db PackageEnv<'db>) -> Self {
-        Self {
-            packages: vec![(Symbol::new(STD_PACKAGE), std)],
-        }
+        Self::new([(Symbol::new(STD_PACKAGE), std)])
     }
 
     /// The environment of the dependency named `name`.

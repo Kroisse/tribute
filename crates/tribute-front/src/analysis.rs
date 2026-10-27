@@ -16,7 +16,7 @@ use crate::astgen::{self, ParsedAst};
 use crate::query;
 use crate::resolve::{self, Dependencies, NameDisplay, PackageEnv, PackageName};
 use crate::source_file::SourceCst;
-use crate::typeck::{PreludeExports, TypeCheckOutput, TypeChecker};
+use crate::typeck::{PackageExports, TypeCheckOutput, TypeChecker};
 
 /// The environment a source is analyzed in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
@@ -34,7 +34,7 @@ pub enum Environment {
 #[derive(Clone, Copy, PartialEq, Eq, salsa::SalsaValue)]
 pub struct CheckedStd<'db> {
     pub checked: TypeCheckOutput<'db>,
-    pub exports: PreludeExports<'db>,
+    pub exports: PackageExports<'db>,
 }
 
 /// Parse the root module of package `std`.
@@ -50,6 +50,7 @@ pub fn std_env<'db>(db: &'db dyn salsa::Database, std: SourceCst) -> Option<Pack
         db,
         parsed.module(db),
         &PackageName::std(),
+        &Dependencies::none(),
     ))
 }
 
@@ -58,9 +59,14 @@ pub fn std_env<'db>(db: &'db dyn salsa::Database, std: SourceCst) -> Option<Pack
 pub fn checked_std<'db>(db: &'db dyn salsa::Database, std: SourceCst) -> Option<CheckedStd<'db>> {
     let parsed = parsed_std(db, std)?;
     let span_map = parsed.span_map(db);
-    let resolved =
-        resolve::resolve_library_with_env(db, parsed.module(db), std_env(db, std)?, span_map);
-    let (result, exports) = TypeChecker::new(db, span_map, std_names()).check_prelude(&resolved);
+    let resolved = resolve::resolve_library_with_env(
+        db,
+        parsed.module(db),
+        std_env(db, std)?,
+        &Dependencies::none(),
+        span_map,
+    );
+    let (result, exports) = TypeChecker::new(db, span_map, std_names()).check_library(&resolved);
     Some(CheckedStd {
         checked: TypeCheckOutput::from_check(db, result),
         exports,
