@@ -585,9 +585,9 @@ target-independent 직접형 경계다. Dialect identifier는 정확히
 않는다.
 
 논리 callable type은 `tribute_control.func_sig<(Params...) -> Result>`이며
-calling convention을 갖지 않는다. 한 callable 값은 여러 convention으로 호출될 수
-있으므로 convention은 값의 type이 아니라 정의, 람다의 [convention entry](#convention-entry),
-간접 이전 operation에 둔다([convention과 class 특수화](#convention과-class-특수화)).
+calling convention을 갖지 않는다([convention entry](#convention-entry)). Convention은
+정의, 람다의 convention entry, 간접 이전 operation에
+둔다([convention과 class 특수화](#convention과-class-특수화)).
 It uses flat `[inputs..., results...]` storage with mandatory `num_inputs` and
 `num_results` u32 delimiters; its source-owned validated API requires exactly
 one result. `Result`와 `Params`는 source-logical type이다. Convention은 keyword 문자열
@@ -784,8 +784,7 @@ Convention에 관한 규칙은 convention을 가진 상태에서만 적용한다
 - `tail_call`의 callee 인스턴스와 `tail_call_indirect`의 바깥 convention은 감싼
   callable(정의, 또는 그 이전을 담은 entry)보다 강하지 않다.
 - 정의의 convention과 간접 이전의 convention은 [CPS 전략](cps-effects.md#row와-호출-규약)이
-  그 row와 인스턴스의 class에서 계산한 값이다. 정의 자신의 convention은 row tail이
-  class 변수일 때만 tail을 읽는다.
+  그 row와 인스턴스의 class에서 계산한 값이다.
 
 Type의 일치를 요구하는 규칙은 두 상태에서 같고, convention을 비교하지 않는다.
 
@@ -1889,9 +1888,8 @@ capture를 읽는 일은 closure의 필드 접근 하나다. Closure의 의미�
 #### Shared IR 표현
 
 - `closure.new`는 entry 함수 목록과 capture 값을 순서대로 받아 closure를 만든다.
-  Entry 함수 목록은 `Direct`, `EvidenceDirect`, `Cps` 순서의 셋이며, 본문도 adapter도
-  없는 convention entry는 [trap entry](#convention-entry)다. 같은 목록을 가진
-  `closure.new`들은 convention table 하나를 공유한다.
+  Entry 함수 목록은 [convention table](#convention-entry)의 순서를 따르는 셋이다. 같은
+  목록을 가진 `closure.new`들은 convention table 하나를 공유한다.
   Capture 목록은 비어 있을 수 있다. Environment를 따로 받지 않는다.
 - Entry 함수의 environment 입력은 그 closure 자신이다. 입력의 타입은
   `closure.new` 결과의 closure 타입이고, 위치는 그 entry의 바깥 convention이 정한

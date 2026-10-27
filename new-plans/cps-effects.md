@@ -120,8 +120,8 @@ tail, 어느 scheme도 양화하지 않은 tail, 그리고 정의 자신의 row�
 [값 delimiter](#값-delimiter) 안에서 실행한다. 호출자의 convention은
 호출 대상의 본문 때문에 달라지지 않는다.
 
-`let`으로 묶인 람다도 같은 규칙을 따른다. Class 특수화 pass는 한 람다에 그 사용이
-고르는 class마다 [convention entry](ir.md#convention-entry) 본문을 하나씩 만든다.
+`let`으로 묶인 람다도 같은 규칙을 따른다
+([`let`에 묶인 람다](#row-변수의-convention-class)).
 
 여기서 `Cps`는 source result를 직접 반환하지 않고 ContinuationFrame의 `Done<R>`으로
 전달한다는 논리적 convention이다. Lowering은 `core.never`를 empty-result proper tail
@@ -179,11 +179,9 @@ class 변수를 갖지 않는다.
 **`let`에 묶인 람다.** 지역 스킴이 양화한 row 변수의 class는 사용처마다 row
 인자에서 계산한다. IR에서 그 row 인자는 사용처의
 [`instantiate`](../crates/tribute-ir/src/dialect/tribute_control.rs)가
-가진다. 람다는 사용이 고르는 class마다 [convention entry](ir.md#convention-entry) 본문을 하나씩
-가지고, 각 호출은 자기 class의 convention entry로 들어간다. 본문마다 람다 자신의 convention과
-본문의 참조를 그 class로 읽으므로, 본문이 참조하는 정의도 본문마다 따로 인스턴스를
-고른다. 같은 class를 고르면서 양화한 row에 다른 class 조합을 넘기는 사용들은 람다를
-값 여럿으로 나눈다. 다른 지역 람다의 본문 안에 있는 사용처는 그 람다의 entry가
+가진다. 람다의 본문과 값 나누기는 [convention entry](ir.md#convention-entry)를
+따른다. 본문마다 본문의 참조를 그 class로 읽으므로, 본문이 참조하는 정의도 본문마다
+따로 인스턴스를 고른다. 다른 지역 람다의 본문 안에 있는 사용처는 그 람다의 본문이
 정해진 뒤에 계산한다.
 
 **Class 인자.** 참조 지점의 class 인자는 참조가 넘기는 row 인자(`row_args`)에서
@@ -264,9 +262,8 @@ row와 [row binder](ir.md#row-binder), 참조의 `row_args`, 지역 람다의
      유한하므로 이 반복은 끝난다.
 - `func_ref`마다 entry의 대상 인스턴스를 `row_args`의 class 인자로 정하고, 그
   인스턴스를 인스턴스 수집에 더한다.
-- 정의, entry, 간접 이전에 convention을 쓴다. 값과 block 인자의 타입, 참조의 결과,
-  `ability.operation`의 타입, tuple layout의 원소, nominal layout의 필드는 convention을
-  갖지 않는다. 정의 자신의 convention은 tail이 class 변수일 때만 tail을 읽는다.
+- [Convention을 갖는 자리](ir.md#convention과-class-특수화)에 convention을 쓴다. 정의
+  자신의 convention은 [tail 규칙](#row와-호출-규약)으로 읽는다.
 
 참조되지 않게 된 정의는 pass가 지우지 않으며, 뒤따르는 참조되지 않는 정의 제거가
 지운다. Pass의 결과는 convention을 가진 source-logical IR이고, 적법화는 이 상태만
@@ -290,8 +287,8 @@ pass가 정한 convention이 아니다. Arm의 정의에 드러나는 위반은 
   binder도 이 조건으로 고르고, `local` binder는 본문마다 그 본문을 고른 사용의
   `instantiate`가 넘기는 row로 읽는다. 선언을 읽을 수 없는 ability는 `op`를 선언한
   것으로 본다.
-- 정의 안에서 어떤 callable에도 닿지 않는 tail은 ability를 더하지 않는다. `body`
-  tail은 callee 값 type의 어느 매개변수 타입에도 나타나지 않으면 ability를 더하지
+- [abilities.md](abilities.md#fn-operation-handler)의 tail 예외 가운데 `body`
+  tail은 이렇게 읽는다. `body` tail은 callee 값 type의 어느 매개변수 타입에도 나타나지 않으면 ability를 더하지
   않고, 나타나면 `op`를 선언한 ability를 담을 수 있다고 본다. 별칭과 일반화된 계산
   결과의 사용에는 `instantiate`가 없어서 인자의 row를 그 tail에 이어 읽을 수 없기
   때문이다.
@@ -350,15 +347,12 @@ tail만 `Cps`를 요구한다.
 
 한 람다 식은 쓰이는 convention마다 [convention entry](ir.md#convention-entry)를 가진다. 이는
 이미 생성된 Cps 값을 Direct로 cast하는 것이 아니다. Named callable은 정확한
-target identity를 가진 `func_ref`의 entry로 각 convention의 자리에 들어간다.
-Entry가 대상 인스턴스보다 강한 convention이면 그 entry는 adapter다. 정의가 더 약한
-convention의 entry에 들어가는 경우는 class 없는 tail 때문에 `Cps`인 정의를 닫힌 row로
-쓸 때뿐이다. 그 adapter는 [값 delimiter](#값-delimiter)로 worker를 호출한다.
+target identity를 가진 `func_ref`의 convention entry로 각 convention의 자리에
+들어가며, 그 entry를 채우는 규칙은 [함수 참조](ir.md#convention-entry)가 정한다.
 
-Lambda capture 목록은 모든 entry 본문이 실제 사용하는 외부 SSA 값과 일치해야 한다.
-Named reference를 새 `func_ref`로 대체하여 사라진 capture는 제거하고, 남는 값은
-lexical scope와 dominance를 유지하여 중복 없이 전달한다. Entry를 더해도 capture는
-한 번만 전달한다. 이 변환은 RHS 평가를 복제하거나 resume token의 affine capture
+Lambda capture 목록은 [capture 규칙](ir.md#convention-entry)을 따른다. Named
+reference를 새 `func_ref`로 대체하여 사라진 capture는 제거하고, 남는 값은 lexical
+scope와 dominance를 유지하여 중복 없이 전달한다. 이 변환은 RHS 평가를 복제하거나 resume token의 affine capture
 경로를 늘려서는 안 된다.
 
 Source 타입 검사는 정확한 equality, `Never` 표현식의 방향성 있는 제거, 공통 source
@@ -418,9 +412,9 @@ proper tail transfer로 내린다. Native의 호출 규약과 소유권 조건�
 ### CPS 변환의 호출 대상 형상
 
 입력 형상은 [ir.md](ir.md#direct-style-control)의 operation/type 계약을 따른다.
-모든 정의, [convention entry](ir.md#convention-entry), 간접 이전은 exact convention을 가지고
-callable 값의 logical type은 convention 없이 source parameter/result만 사용하며
-evidence, environment, `ContinuationFrame<R>`는 아직 없다.
+입력은 [convention을 가진 상태](ir.md#convention과-class-특수화)다. Callable 값의
+logical type은 source parameter/result만 사용하며 evidence, environment,
+`ContinuationFrame<R>`는 아직 없다.
 
 `tribute_control_to_cps`는 closure extraction 전에 전체 callable graph를 하나의
 단위로 변환한다:
