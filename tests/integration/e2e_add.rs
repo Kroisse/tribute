@@ -508,7 +508,11 @@ fn source_closure(ctx: &IrContext, module: Module, name: &str) -> (closure::New,
     assert_indirect_signature(ctx, owner, call);
     let closure = closure::New::from_op(ctx, defining_op(ctx, ctx.op_operands(call)[0]))
         .expect("indirect callee must be the source lambda");
-    let lifted = named_function(ctx, module, &closure.func_ref(ctx).to_string());
+    let lifted = named_function(
+        ctx,
+        module,
+        &closure.entries(ctx).next().expect("one entry").to_string(),
+    );
     let closure_ty = ctx.value_ty(closure.result(ctx));
     let callable = closure::Closure::from_type_ref(ctx, closure_ty).expect("typed closure");
     let signature = func::FuncSig::from_type_ref(ctx, callable.func_type(ctx)).unwrap();
@@ -643,7 +647,7 @@ fn test_higher_order_function_ir() {
         let compute = named_function(&ctx, module, "compute");
         let call = function_ops::<func::TailCall>(&ctx, compute).into_iter().find(|call| call.callee(&ctx) == ["apply"]).expect("source apply call");
         let argument = call.args(&ctx).iter().find_map(|&value| match ctx.value_def(value) { ValueDef::OpResult(op, _) => closure::New::from_op(&ctx, op).ok(), _ => None }).expect("source lambda argument");
-        let lifted = named_function(&ctx, module, &argument.func_ref(&ctx).to_string());
+        let lifted = named_function(&ctx, module, &argument.entries(&ctx).next().expect("one entry").to_string());
         let additions = function_ops::<arith::Addi>(&ctx, lifted);
         assert_eq!(additions.len(), 1);
         let constant = arith::Const::from_op(&ctx, defining_op(&ctx, additions[0].rhs(&ctx))).unwrap();
@@ -665,7 +669,9 @@ fn test_closure_lowering() {
         let apply = named_function(&ctx, module, "apply");
         let call = only_indirect_call(&ctx, apply);
         assert_indirect_signature(&ctx, apply, call);
-        let code = adt::StructGet::from_op(&ctx, defining_op(&ctx, ctx.op_operands(call)[0])).expect("projected callback code");
+        let entry = tribute_ir::dialect::tribute_rt::ConventionEntry::from_op(&ctx, defining_op(&ctx, ctx.op_operands(call)[0])).expect("callback entry");
+        assert_eq!(entry.index(&ctx), 0);
+        let code = adt::StructGet::from_op(&ctx, defining_op(&ctx, entry.table(&ctx))).expect("projected callback convention table");
         assert_eq!(code.field(&ctx), 0);
         let callback = code.r#ref(&ctx);
         let closure_ty = ctx.value_ty(callback);
@@ -681,7 +687,7 @@ fn test_closure_lowering() {
         assert!(ctx.block_args(entry).contains(&callback));
         assert_eq!(operands.last(), ctx.block_args(entry).last());
         assert!(function_ops::<closure::New>(&ctx, apply).is_empty());
-        assert!(function_ops::<closure::Func>(&ctx, apply).is_empty());
+        assert!(function_ops::<closure::Entry>(&ctx, apply).is_empty());
         assert!(function_ops::<closure::Unpack>(&ctx, apply).is_empty());
         let compute = named_function(&ctx, module, "compute");
         let source_call = function_ops::<func::TailCall>(&ctx, compute).into_iter().find(|call| call.callee(&ctx) == ["apply"]).unwrap();
@@ -691,10 +697,11 @@ fn test_closure_lowering() {
             (ctx.value_ty(value) == closure_ty).then(|| adt::StructNew::from_op(&ctx, defining_op(&ctx, cast.value(&ctx))).ok()).flatten()
         }).expect("source callback storage kept at its exact callable type");
         let fields = pack.fields(&ctx);
-        let function = func::Constant::from_op(&ctx, defining_op(&ctx, fields[0])).unwrap();
-        let lifted = named_function(&ctx, module, &function.func_ref(&ctx).to_string());
-        assert_eq!(ctx.value_ty(function.result(&ctx)), lifted.r#type(&ctx), "the reference carries the target's exact signature");
-        // The closure holds its capture directly after the code reference.
+        let table = tribute_ir::dialect::tribute_rt::ConventionTable::from_op(&ctx, defining_op(&ctx, fields[0])).unwrap();
+        let entries: Vec<_> = table.entries(&ctx).collect();
+        let [entry] = entries[..] else { panic!("one convention entry") };
+        let lifted = named_function(&ctx, module, &entry.to_string());
+        // The closure holds its capture directly after the convention table reference.
         assert_eq!(fields.len(), 2);
         assert_eq!(arith::Const::from_op(&ctx, defining_op(&ctx, fields[1])).unwrap().value(&ctx), Attribute::Int(1));
         let additions = function_ops::<arith::Addi>(&ctx, lifted);

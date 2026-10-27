@@ -226,7 +226,7 @@ fn lower_single_lambda(
 
     // Create closure.new holding the captures, replacing the lambda.
     let closure_new_op = closure::New::operands(captures.clone())
-        .func_ref(trunk_ir::SymbolPath::new([lifted_name]))
+        .entries([trunk_ir::SymbolPath::new([lifted_name])])
         .results(result_ty)
         .build(ctx, location);
     if let Some(convention) = convention {

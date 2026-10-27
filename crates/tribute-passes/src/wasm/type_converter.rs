@@ -667,7 +667,7 @@ mod tests {
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
+  !Closure = adt.struct<_closure(entries: core.i32), {layout = "closure"}>
   func.func @f(%c: !Closure) {
     %erased = core.unrealized_conversion_cast %c : tribute_rt.anyref
     func.call %erased {callee = @use}
@@ -826,7 +826,7 @@ mod tests {
             adt::Struct::from_type_ref(&ctx, target)
                 .unwrap()
                 .fields(&ctx),
-            [("code", i32_ty)],
+            [("entries", i32_ty)],
         );
     }
 }

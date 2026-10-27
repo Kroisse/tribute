@@ -12,16 +12,33 @@ mod closure {
     #[implements(ManagedRefType)]
     struct Closure<FuncType>;
 
-    /// A closure of the code function `func_ref` holding `captures` in order.
-    /// The code function receives the closure itself as its environment.
-    /// The closure's calling convention is recorded through
+    /// A closure whose convention table holds the entry functions `entries`
+    /// in order, holding `captures` in order. Every entry function receives
+    /// the closure itself as its environment and reads the captures with
+    /// `unpack`. The closure's calling convention is recorded through
     /// `ConventionBearing` until closure lowering consumes it.
+    ///
+    /// Closure lowering makes it one allocation of the convention table
+    /// reference (`tribute_rt.convention_table`) and the captures; see the
+    /// closure storage layout in `new-plans/ir.md`.
+    ///
+    /// ```text
+    /// %c = closure.new %x, %y {entries = [@f]} : closure.closure<S>
+    /// ```
     #[implements(ConventionBearing)]
     #[flags(Pure)]
-    fn new(func_ref: Attr<SymbolRef>, captures: Variadic<_>) -> Value<_> {}
+    fn new(entries: Attr<[SymbolRef]>, captures: Variadic<_>) -> Value<_> {}
 
+    /// The entry function at `index` of the convention table of `closure`,
+    /// as an indirect callee. Closure lowering introduces it for each closure
+    /// call and lowers it in the same step to a read of the closure's
+    /// convention table field and `tribute_rt.convention_entry`.
+    ///
+    /// ```text
+    /// %f = closure.entry %c {index = 0} : core.i32
+    /// ```
     #[flags(Pure)]
-    fn func(closure: Value<_>) -> Value<_> {}
+    fn entry(index: Attr<u32>, closure: Value<_>) -> Value<_> {}
 
     /// The captures of `closure`, read by its code function from its
     /// environment parameter. Its results are the closure's capture types.
@@ -312,9 +329,8 @@ mod tests {
             .build(&mut ctx, loc);
         let env_val = env_op.result(&ctx);
 
-        // Create closure.new with func_ref attribute
         let op = super::New::operands([env_val])
-            .func_ref(SymbolPath::new(["my_func"]))
+            .entries([SymbolPath::new(["my_func"])])
             .results(closure_ty)
             .build(&mut ctx, loc);
 
@@ -322,8 +338,7 @@ mod tests {
         let op2 = super::New::from_op(&ctx, op.op_ref()).expect("should match closure.new");
         assert_eq!(op.op_ref(), op2.op_ref());
 
-        // Verify func_ref attribute
-        assert_eq!(*op.func_ref(&ctx), SymbolPath::new(["my_func"]));
+        itertools::assert_equal(op.entries(&ctx), [&SymbolPath::new(["my_func"])]);
 
         // Verify result type
         let result = op.result(&ctx);
@@ -331,7 +346,7 @@ mod tests {
     }
 
     #[test]
-    fn test_closure_func_round_trip() {
+    fn test_closure_entry_round_trip() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
         let i32_ty = make_i32_type(&mut ctx);
@@ -344,19 +359,19 @@ mod tests {
             .build(&mut ctx, loc);
         let env_val = env_op.result(&ctx);
         let closure_op = super::New::operands([env_val])
-            .func_ref(SymbolPath::new(["f"]))
+            .entries([SymbolPath::new(["f"])])
             .results(closure_ty)
             .build(&mut ctx, loc);
         let closure_val = closure_op.result(&ctx);
 
-        // Create closure.func
-        let func_op = super::Func::operands(closure_val)
+        let func_op = super::Entry::operands(closure_val)
+            .index(0)
             .results(i32_ty)
             .build(&mut ctx, loc);
 
         // Verify from_op round-trip
         let func_op2 =
-            super::Func::from_op(&ctx, func_op.op_ref()).expect("should match closure.func");
+            super::Entry::from_op(&ctx, func_op.op_ref()).expect("should match closure.entry");
         assert_eq!(func_op.op_ref(), func_op2.op_ref());
 
         // Verify operand
@@ -380,7 +395,7 @@ mod tests {
             .build(&mut ctx, loc);
         let capture = capture_op.result(&ctx);
         let closure_op = super::New::operands([capture, capture])
-            .func_ref(SymbolPath::new(["f"]))
+            .entries([SymbolPath::new(["f"])])
             .results(closure_ty)
             .build(&mut ctx, loc);
         assert_eq!(closure_op.captures(&ctx), [capture, capture]);
@@ -481,7 +496,7 @@ mod tests {
             .results(i32_ty)
             .build(&mut ctx, loc);
         assert!(super::New::from_op(&ctx, c.op_ref()).is_err());
-        assert!(super::Func::from_op(&ctx, c.op_ref()).is_err());
+        assert!(super::Entry::from_op(&ctx, c.op_ref()).is_err());
         assert!(super::Unpack::from_op(&ctx, c.op_ref()).is_err());
     }
 
@@ -499,12 +514,12 @@ mod tests {
         let env_val = env_op.result(&ctx);
 
         let closure_new = super::New::operands([env_val])
-            .func_ref(SymbolPath::new(["f"]))
+            .entries([SymbolPath::new(["f"])])
             .results(closure_ty)
             .build(&mut ctx, loc);
 
         assert!(super::New::matches(&ctx, closure_new.op_ref()));
-        assert!(!super::Func::matches(&ctx, closure_new.op_ref()));
+        assert!(!super::Entry::matches(&ctx, closure_new.op_ref()));
         assert!(!super::Unpack::matches(&ctx, closure_new.op_ref()));
     }
 

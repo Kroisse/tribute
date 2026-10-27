@@ -1,6 +1,7 @@
-//! Tribute runtime dialect — boxing, unboxing, and reference counting.
+//! Tribute runtime dialect — boxing, unboxing, reference counting, and closure convention tables.
 
 use crate::dialect::tribute_rtti::{ManagedRef, ManagedRefType};
+use trunk_ir::attr_kind::SymbolRef;
 use trunk_ir::dialect::core::{Bytes, Ptr};
 use trunk_ir::op_flag::Pure;
 
@@ -61,6 +62,30 @@ mod tribute_rt {
     /// reference-counted object. The inverse of `into_raw`, and like it not a
     /// pure operation: dropping it would leak the unit.
     fn from_raw(ptr: Value<Ptr>) -> Value<impl ManagedRef> {}
+
+    /// A reference to the static convention table holding the entry
+    /// functions `entries` in order, the value a closure stores in its
+    /// convention table field. The reference is unmanaged and never
+    /// released. Target lowering builds one table per distinct entry list:
+    /// read-only data of function addresses on native targets, and
+    /// consecutive slots of the function table on Wasm, whose start index is
+    /// the reference. See the closure storage layout in `new-plans/ir.md`.
+    ///
+    /// ```text
+    /// %table = tribute_rt.convention_table {entries = [@f]} : core.i32
+    /// ```
+    #[flags(Pure)]
+    fn convention_table(entries: Attr<[SymbolRef]>) -> Value<_> {}
+
+    /// The entry function at `index` of the convention table `table`, as an
+    /// indirect callee: a load of the function address on native targets,
+    /// and the function table index `table + index` on Wasm.
+    ///
+    /// ```text
+    /// %entry = tribute_rt.convention_entry %table {index = 0} : core.i32
+    /// ```
+    #[flags(Pure)]
+    fn convention_entry(index: Attr<u32>, table: Value<_>) -> Value<_> {}
 }
 
 impl ManagedRefType for Intref {}

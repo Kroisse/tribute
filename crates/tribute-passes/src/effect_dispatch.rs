@@ -55,8 +55,8 @@ fn insert_op_idx(
     constant.result(ctx)
 }
 
-/// Read a canonical closure's function reference. The closure itself is the
-/// function's environment.
+/// Read the entry function of a canonical closure from its convention
+/// table. The closure itself is the function's environment.
 fn insert_closure_function(
     ctx: &mut IrContext,
     loc: Location,
@@ -65,11 +65,16 @@ fn insert_closure_function(
 ) -> ValueRef {
     let i32_ty = i32_type(ctx);
     let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
-    let function = adt::StructGet::operands(closure)
+    let table = adt::StructGet::operands(closure)
         .r#type(closure_ty)
         .field(0)
         .results(i32_ty)
         .build(ctx, loc);
+    let function = tribute_rt::ConventionEntry::operands(table.result(ctx))
+        .index(0)
+        .results(i32_ty)
+        .build(ctx, loc);
+    rewriter.insert_op(table.op_ref());
     rewriter.insert_op(function.op_ref());
     function.result(ctx)
 }

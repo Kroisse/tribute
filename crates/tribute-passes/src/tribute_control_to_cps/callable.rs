@@ -229,7 +229,7 @@ impl Converter<'_> {
         self.ctx.push_op(self.module_block, adapter.op_ref());
 
         let closure_new = closure::New::operands(std::iter::empty::<ValueRef>())
-            .func_ref(trunk_ir::SymbolPath::new([adapter_symbol]))
+            .entries([trunk_ir::SymbolPath::new([adapter_symbol])])
             .results(closure_ty)
             .build(self.ctx, location);
         closure_new.set_calling_convention(self.ctx, result_convention);

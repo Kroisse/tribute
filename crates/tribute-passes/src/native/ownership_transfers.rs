@@ -103,7 +103,7 @@ mod tests {
     fn into_raw_becomes_a_conversion_to_a_raw_pointer() {
         let output = run_pass(
             r#"core.module @test {
-  !_closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
+  !_closure = adt.struct<_closure(entries: core.i32), {layout = "closure"}>
   func.func @f(%closure: !_closure) -> core.ptr {
     %raw = tribute_rt.into_raw %closure : core.ptr
     func.return %raw

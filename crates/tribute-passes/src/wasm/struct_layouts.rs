@@ -210,7 +210,7 @@ mod tests {
         parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
+  !Closure = adt.struct<_closure(entries: core.i32), {layout = "closure"}>
   !Inner = adt.struct<Inner(value: core.i64)>
   !E = adt.enum<E { None() }>
   !Outer = adt.struct<Outer(flag: core.i1, next: adt.typeref<{name = "Outer"}>, e: !E, inner: !Inner, f: !Closure)>

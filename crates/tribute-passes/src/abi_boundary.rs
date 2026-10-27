@@ -626,7 +626,7 @@ mod tests {
         let violations = kinds(
             r#"core.module @test {
   func.func @run(%evidence: core.ptr) {
-    %created = closure.new {func_ref = @run} : core.ptr
+    %created = closure.new {entries = [@run]} : core.ptr
     func.return
   }
 }"#,

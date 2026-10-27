@@ -10,7 +10,7 @@ use trunk_ir::context::IrContext;
 use trunk_ir::refs::TypeRef;
 pub use trunk_ir::types::LAYOUT_ATTR;
 
-/// The closure base: the code reference alone. Every closure value has this
+/// The closure base: the convention table reference alone. Every closure value has this
 /// storage type, and a capture-free closure is allocated with it.
 pub const CLOSURE: &str = "closure";
 /// A closure with captures: the closure base's fields followed by the captures,
@@ -31,19 +31,22 @@ pub const BOXED_F64: &str = "boxed_f64";
 /// its subtypes.
 pub const DESCRIBED: &str = "described";
 
-/// The closure base whose code field has the representation `code`.
-pub fn closure_base_layout(ctx: &mut IrContext, code: TypeRef) -> TypeRef {
+/// The closure base whose convention table field has the representation
+/// `entries`.
+pub fn closure_base_layout(ctx: &mut IrContext, entries: TypeRef) -> TypeRef {
     let mut attrs = trunk_ir::types::AttributeMap::new();
     let layout = ctx.string_attr(CLOSURE);
     attrs.view_mut(ctx).insert(LAYOUT_ATTR, layout);
-    crate::dialect::adt::Struct::from_fields(ctx, "_closure", [("code", code)], attrs).as_type_ref()
+    crate::dialect::adt::Struct::from_fields(ctx, "_closure", [("entries", entries)], attrs)
+        .as_type_ref()
 }
 
-/// The closure base of the source-logical and target-neutral IR, whose code
-/// field is a function table index.
+/// The closure base of the source-logical and target-neutral IR, whose
+/// convention table field is the `core.i32` that `tribute_rt.convention_table`
+/// yields there.
 pub fn closure_base(ctx: &mut IrContext) -> TypeRef {
-    let code = trunk_ir::types::TypeDataBuilder::new("core.i32").intern(ctx);
-    closure_base_layout(ctx, code)
+    let entries = trunk_ir::types::TypeDataBuilder::new("core.i32").intern(ctx);
+    closure_base_layout(ctx, entries)
 }
 
 /// Whether `ty` carries the runtime layout identifier `layout`.
