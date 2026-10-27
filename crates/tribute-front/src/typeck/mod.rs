@@ -36,6 +36,7 @@ pub use context::{AbilityInfo, AbilityOpInfo, MethodEntry, ModuleTypeEnv, parame
 
 use crate::SortedMap;
 use crate::ast::SpanMap;
+use crate::resolve::NameDisplay;
 pub use func_context::FunctionInferenceContext;
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
@@ -499,8 +500,9 @@ pub fn typecheck_module<'db>(
     db: &'db dyn salsa::Database,
     module: &DeclTable<ResolvedRef<'db>>,
     span_map: &'db SpanMap,
+    names: NameDisplay,
 ) -> TypeCheckOutput<'db> {
-    let checker = TypeChecker::new(db, span_map);
+    let checker = TypeChecker::new(db, span_map, names);
     TypeCheckOutput::from_check(db, checker.check_module(module))
 }
 

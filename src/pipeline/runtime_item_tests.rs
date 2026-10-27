@@ -440,10 +440,13 @@ fn main() -> Nil { }
             };
             let errors = check_runtime(db, &inputs, RUNTIME, &[]).expect_err("rejected");
             let span_map = tribute_front::query::span_map(db, source).expect("parsed source");
-            let diagnostic = errors[0].diagnostic(&tribute_front::ast::SpanMaps::new([span_map]));
+            let diagnostic = errors[0].diagnostic(
+                &tribute_front::ast::SpanMaps::new([span_map]),
+                &tribute_front::analysis::root_names(db, crate::prelude::frontend_environment(db)),
+            );
             assert_eq!(
                 diagnostic.inner.message,
-                "runtime `pkg::rt::inferred` must have an empty ability row, written `->{}`"
+                "runtime `rt::inferred` must have an empty ability row, written `->{}`"
             );
             assert_eq!(diagnostic.inner.severity, DiagnosticSeverity::Error);
             assert!(REJECTED[diagnostic.inner.span.start..].starts_with("fn inferred"));

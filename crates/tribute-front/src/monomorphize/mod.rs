@@ -23,6 +23,7 @@ use trunk_ir::{Symbol, SymbolPath};
 
 use self::instance::InstanceKey;
 use crate::SortedMap;
+use crate::resolve::NameDisplay;
 use std::ops::ControlFlow;
 
 use crate::ast::fold::{ForEachType, TypeFoldable, TypeVisitable};
@@ -46,6 +47,7 @@ pub struct SpecializationInput<'db> {
     expressions: ExpressionTypeMetadata<'db>,
     compiler_intrinsics: SortedMap<NodeId, Symbol>,
     continued: Option<Continued<'db>>,
+    names: NameDisplay,
 }
 
 /// The dependency specialization a module's specialization continues.
@@ -62,11 +64,12 @@ struct Continued<'db> {
 
 impl<'db> SpecializationInput<'db> {
     /// The checked module, with the declarations of `dependency` under its
-    /// own.
+    /// own. Diagnostics spell declarations as `names` does.
     pub fn new(
         db: &'db dyn salsa::Database,
         checked: TypeCheckOutput<'db>,
         dependency: Option<TypeCheckOutput<'db>>,
+        names: NameDisplay,
     ) -> Self {
         let declarations = match dependency {
             Some(dependency) => checked
@@ -80,6 +83,7 @@ impl<'db> SpecializationInput<'db> {
             expressions: checked.expression_types(db).clone(),
             compiler_intrinsics: SortedMap::default(),
             continued: None,
+            names,
         }
     }
 
@@ -94,8 +98,9 @@ impl<'db> SpecializationInput<'db> {
         checked: TypeCheckOutput<'db>,
         dependency: TypeCheckOutput<'db>,
         specialized: SpecializationOutput<'db>,
+        names: NameDisplay,
     ) -> Self {
-        let mut input = Self::new(db, checked, Some(dependency));
+        let mut input = Self::new(db, checked, Some(dependency), names);
         input.compiler_intrinsics = specialized.compiler_intrinsics(db).clone();
         input.continued = Some(Continued {
             declarations: checked.declarations(db).clone(),
@@ -265,6 +270,7 @@ pub fn monomorphize_functions<'db>(
         expressions,
         compiler_intrinsics,
         continued,
+        names,
     } = input;
     let source_entries = module.entries.len();
     let schemes: HashMap<_, _> = declarations.function_types.iter().cloned().collect();
@@ -296,9 +302,12 @@ pub fn monomorphize_functions<'db>(
     } = monomorphize(
         db,
         module,
-        &schemes,
+        &names,
+        Declared {
+            functions: &schemes,
+            constructors: &constructor_schemes,
+        },
         function_types,
-        &constructor_schemes,
         MonomorphizeMetadata {
             constructor_types,
             expressions,
@@ -370,15 +379,21 @@ struct Monomorphized<'db> {
     removed_templates: usize,
 }
 
-/// Specialize `module`. `schemes` and `constructor_schemes` look every
-/// declaration up, the dependency's included; `function_types` and
-/// `metadata` are the module's own, which the result extends.
+/// The schemes that look every declaration up, the dependency's included.
+struct Declared<'a, 'db> {
+    functions: &'a HashMap<SymbolPath, TypeScheme<'db>>,
+    constructors: &'a HashMap<CtorId<'db>, TypeScheme<'db>>,
+}
+
+/// Specialize `module`. `declared` looks every declaration up;
+/// `function_types` and `metadata` are the module's own, which the result
+/// extends.
 fn monomorphize<'db>(
     db: &'db dyn salsa::Database,
     module: DeclTable<TypedRef<'db>>,
-    schemes: &HashMap<SymbolPath, TypeScheme<'db>>,
+    names: &NameDisplay,
+    declared: Declared<'_, 'db>,
     function_types: Vec<(SymbolPath, TypeScheme<'db>)>,
-    constructor_schemes: &HashMap<CtorId<'db>, TypeScheme<'db>>,
     mut metadata: MonomorphizeMetadata<'db>,
     dependency: Option<&Dependency<'db>>,
 ) -> Result<Monomorphized<'db>, Vec<InstanceError>> {
@@ -387,8 +402,9 @@ fn monomorphize<'db>(
     metadata.expressions.exhaustive_cases.dedup();
     let mut errors = recursion::check(
         db,
+        names,
         &module,
-        schemes,
+        declared.functions,
         &metadata.expressions.function_instances,
     );
     if !errors.is_empty() {
@@ -399,7 +415,7 @@ fn monomorphize<'db>(
         db,
         &module,
         dependency,
-        schemes,
+        declared.functions,
         Expressions {
             own: &metadata.expressions,
             dependency,
@@ -411,7 +427,8 @@ fn monomorphize<'db>(
 
     // === Function monomorphization ===
 
-    let source_function_types: Vec<(SymbolPath, TypeScheme<'db>)> = schemes
+    let source_function_types: Vec<(SymbolPath, TypeScheme<'db>)> = declared
+        .functions
         .iter()
         .map(|(path, scheme)| (path.clone(), *scheme))
         .collect();
@@ -540,7 +557,7 @@ fn monomorphize<'db>(
     let nominal = nominal::collect(
         db,
         &nominal_index,
-        constructor_schemes,
+        declared.constructors,
         seeds,
         dependency.map(|dependency| &dependency.nominal_instances),
     )?;
@@ -601,7 +618,7 @@ fn monomorphize<'db>(
         metadata.constructor_types.schemes.extend(
             struct_constructors
                 .into_iter()
-                .filter(|(ctor, _)| !constructor_schemes.contains_key(ctor)),
+                .filter(|(ctor, _)| !declared.constructors.contains_key(ctor)),
         );
         let specialized_enums = specialize::generate_enum_specializations_with_index(
             db,

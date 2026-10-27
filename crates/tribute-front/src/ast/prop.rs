@@ -832,7 +832,12 @@ mod tests {
         let module = input.module(db);
         let span_map = SpanMap::empty();
         let resolved = resolve::resolve_module(db, module, span_map);
-        let output = typeck::typecheck_module(db, &resolved, span_map);
+        let output = typeck::typecheck_module(
+            db,
+            &resolved,
+            span_map,
+            resolve::NameDisplay::new(&resolve::PackageName::executable_root(), []),
+        );
         format!(
             "{:#?}\n{:#?}",
             output.module(db),

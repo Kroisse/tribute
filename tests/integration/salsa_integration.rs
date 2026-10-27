@@ -258,20 +258,17 @@ fn record_shape_diagnostics_follow_incremental_declaration_edits_slow() {
     let edit_start = ORIGINAL.find("y: Int").expect("declaration field");
     let record_start = ORIGINAL.find(RECORD).expect("record expression");
     let record_span = Span::new(record_start, record_start + RECORD.len());
-    let changed_diagnostics: Vec<_> = [
-        "missing field: z",
-        "unknown field `y` for struct `pkg::Point`",
-    ]
-    .into_iter()
-    .map(|message| {
-        Diagnostic::new(
-            message,
-            record_span,
-            DiagnosticSeverity::Error,
-            CompilationPhase::TypeChecking,
-        )
-    })
-    .collect();
+    let changed_diagnostics: Vec<_> = ["missing field: z", "unknown field `y` for struct `Point`"]
+        .into_iter()
+        .map(|message| {
+            Diagnostic::new(
+                message,
+                record_span,
+                DiagnosticSeverity::Error,
+                CompilationPhase::TypeChecking,
+            )
+        })
+        .collect();
 
     for (revision, text) in [ORIGINAL, changed.as_str(), ORIGINAL]
         .into_iter()

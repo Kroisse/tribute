@@ -43,6 +43,7 @@ use trunk_ir::{Symbol, SymbolPath};
 use crate::SortedMap;
 use crate::ast::{AbilityId, DeclTable, NodeId, SpanMaps, Type, TypeScheme, TypedRef};
 use crate::monomorphize::SpecializationOutput;
+use crate::resolve::NameDisplay;
 
 pub use context::IrLoweringCtx;
 
@@ -110,12 +111,13 @@ pub struct UnsupportedCompilerIntrinsic {
 }
 
 impl UnsupportedCompilerIntrinsic {
-    /// The source diagnostic of this directive, at its declaration.
-    pub fn diagnostic(&self, spans: &SpanMaps<'_>) -> Diagnostic {
+    /// The source diagnostic of this directive, at its declaration, naming
+    /// it as `names` spells it.
+    pub fn diagnostic(&self, spans: &SpanMaps<'_>, names: &NameDisplay) -> Diagnostic {
         Diagnostic::new(
             format!(
                 "unsupported compiler intrinsic directive `{}`",
-                self.identity
+                names.symbol(&self.identity)
             ),
             spans.get_or_default(self.node),
             DiagnosticSeverity::Error,
@@ -288,10 +290,23 @@ mod tests {
         let ast = parsed.module(db);
         let env = build_env(db, ast, Dependencies::none());
         let resolved = resolve_with_env(db, ast, &env, parsed.span_map(db));
-        let checked = crate::typeck::typecheck_module(db, &resolved, parsed.span_map(db));
+        let checked = crate::typeck::typecheck_module(
+            db,
+            &resolved,
+            parsed.span_map(db),
+            crate::resolve::NameDisplay::new(&crate::resolve::PackageName::executable_root(), []),
+        );
         crate::monomorphize::monomorphize_functions(
             db,
-            crate::monomorphize::SpecializationInput::new(db, checked, None),
+            crate::monomorphize::SpecializationInput::new(
+                db,
+                checked,
+                None,
+                crate::resolve::NameDisplay::new(
+                    &crate::resolve::PackageName::executable_root(),
+                    [],
+                ),
+            ),
         )
         .expect("fixture specializes")
     }

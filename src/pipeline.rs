@@ -93,6 +93,7 @@ use crate::SourceCst;
 use salsa::Accumulator;
 use std::ops::RangeInclusive;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_front::resolve::NameDisplay;
 use trunk_ir::Span;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::conversion::ReconcileUnrealizedCasts;
@@ -544,6 +545,8 @@ struct StagedCompilation {
     context: IrContext,
     module: Module,
     result: PassResult,
+    /// How diagnostics of the compiled package spell declarations.
+    names: NameDisplay,
 }
 
 /// Run the frontend on `source`, then `stages` on its output.
@@ -568,6 +571,7 @@ fn run_stages_from_frontend(
         mut context,
         module,
         compiler_intrinsics,
+        names,
     } = frontend;
     config.compiler_intrinsics = compiler_intrinsics;
     let result = run_stages(&mut context, module, config, stages);
@@ -575,6 +579,7 @@ fn run_stages_from_frontend(
         context,
         module,
         result,
+        names,
     }
 }
 
@@ -591,7 +596,7 @@ impl StagedCompilation {
         match self.result {
             Ok(()) => Some((self.context, self.module)),
             Err(error) => {
-                report_pass_error(db, &error);
+                report_pass_error(db, &self.names, &error);
                 None
             }
         }
@@ -924,7 +929,7 @@ fn report_emission_error(db: &dyn salsa::Database, message: String) {
     .accumulate(db);
 }
 
-fn report_pass_error(db: &dyn salsa::Database, error: &PassError) {
+fn report_pass_error(db: &dyn salsa::Database, names: &NameDisplay, error: &PassError) {
     // A `fn` arm call that may suspend is a source error at that call.
     if let trunk_ir::pass::PassErrorKind::Execution(source) = error.kind()
         && let Some(error) =
@@ -935,7 +940,7 @@ fn report_pass_error(db: &dyn salsa::Database, error: &PassError) {
                 .iter()
                 .fold(
                     Diagnostic::builder(
-                        call.message.clone(),
+                        call.message(|function| names.text(function)),
                         call.location.span,
                         DiagnosticSeverity::Error,
                         CompilationPhase::Lowering,

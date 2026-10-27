@@ -123,7 +123,7 @@ fn record_shape_diagnostic_matrix(db: &salsa::DatabaseImpl) {
     for (fields, messages) in [
         (
             "x: +1, y: +2, z: +3",
-            vec!["unknown field `z` for struct `pkg::Point`"],
+            vec!["unknown field `z` for struct `Point`"],
         ),
         ("x: +1, x: +2, y: +3", vec!["duplicate field `x`"]),
         (
@@ -133,8 +133,8 @@ fn record_shape_diagnostic_matrix(db: &salsa::DatabaseImpl) {
         (
             "x: +1, y: +2, z: +3, z: +4",
             vec![
-                "unknown field `z` for struct `pkg::Point`",
-                "unknown field `z` for struct `pkg::Point`",
+                "unknown field `z` for struct `Point`",
+                "unknown field `z` for struct `Point`",
             ],
         ),
         ("x: +1", vec!["missing field: y"]),
@@ -143,7 +143,7 @@ fn record_shape_diagnostic_matrix(db: &salsa::DatabaseImpl) {
             "x: +1, x: +2, z: +3",
             vec![
                 "duplicate field `x`",
-                "unknown field `z` for struct `pkg::Point`",
+                "unknown field `z` for struct `Point`",
                 "missing field: y",
             ],
         ),
@@ -152,8 +152,8 @@ fn record_shape_diagnostic_matrix(db: &salsa::DatabaseImpl) {
         (
             "z: +1, z: +2, ..base",
             vec![
-                "unknown field `z` for struct `pkg::Point`",
-                "unknown field `z` for struct `pkg::Point`",
+                "unknown field `z` for struct `Point`",
+                "unknown field `z` for struct `Point`",
             ],
         ),
     ] {
@@ -193,7 +193,7 @@ fn record_shape_empty_struct_has_registered_fields(db: &salsa::DatabaseImpl) {
             &text,
             invalid,
             0,
-            "unknown field `extra` for struct `pkg::Empty`"
+            "unknown field `extra` for struct `Empty`"
         )]
     );
 }
@@ -212,7 +212,7 @@ fn record_shape_argument_revisits_preserve_distinct_occurrences(db: &salsa::Data
                     &text,
                     record,
                     occurrence,
-                    "unknown field `z` for struct `pkg::Point`",
+                    "unknown field `z` for struct `Point`",
                 )
             })
             .collect();
@@ -235,7 +235,7 @@ fn record_shape_nested_errors_survive_argument_revisits(db: &salsa::DatabaseImpl
                 &text,
                 &outer,
                 0,
-                "unknown field `extra` for struct `pkg::Wrapper`"
+                "unknown field `extra` for struct `Wrapper`"
             ),
             shape_error(&text, inner, 0, "missing field: y"),
         ]
@@ -245,7 +245,7 @@ fn record_shape_nested_errors_survive_argument_revisits(db: &salsa::DatabaseImpl
 #[salsa_test]
 fn record_shape_unknown_and_duplicate_fields_still_check_nested_rhs(db: &salsa::DatabaseImpl) {
     for (field, message) in [
-        ("extra", "unknown field `extra` for struct `pkg::Wrapper`"),
+        ("extra", "unknown field `extra` for struct `Wrapper`"),
         ("point", "duplicate field `point`"),
     ] {
         let inner = "Point { x: +1 }";
@@ -270,7 +270,7 @@ fn record_shape_errors_preserve_rhs_type_errors(db: &salsa::DatabaseImpl) {
         (
             "extra",
             "need_int(True)",
-            "unknown field `extra` for struct `pkg::Point`",
+            "unknown field `extra` for struct `Point`",
         ),
         ("x", "True", "duplicate field `x`"),
     ] {
@@ -305,19 +305,14 @@ fn record_shape_unknown_field_preserves_nominal_spread_error(db: &salsa::Databas
     assert_eq!(errors.len(), 2, "{errors:#?}");
     assert_eq!(
         errors[0],
-        shape_error(
-            &text,
-            record,
-            0,
-            "unknown field `z` for struct `pkg::Point`"
-        )
+        shape_error(&text, record, 0, "unknown field `z` for struct `Point`")
     );
     assert_eq!(errors[1].phase, CompilationPhase::TypeChecking);
     assert!(
         errors[1]
             .inner
             .message
-            .contains("expected `pkg::Point`, found `Other`"),
+            .contains("expected `Point`, found `Other`"),
         "{errors:#?}"
     );
 }
@@ -332,12 +327,7 @@ fn record_shape_uses_generic_declaration_fields(db: &salsa::DatabaseImpl) {
     assert_eq!(
         diagnostics(db, &text),
         vec![
-            shape_error(
-                &text,
-                record,
-                0,
-                "unknown field `extra` for struct `pkg::Pair`"
-            ),
+            shape_error(&text, record, 0, "unknown field `extra` for struct `Pair`"),
             shape_error(&text, record, 0, "missing field: second"),
         ]
     );
@@ -360,14 +350,14 @@ fn record_shape_uses_qualified_declaration_identity(db: &salsa::DatabaseImpl) {
                 &text,
                 a_record,
                 0,
-                "unknown field `y` for struct `pkg::A::Point`"
+                "unknown field `y` for struct `A::Point`"
             ),
             shape_error(&text, a_record, 0, "missing field: x"),
             shape_error(
                 &text,
                 b_record,
                 0,
-                "unknown field `x` for struct `pkg::B::Point`"
+                "unknown field `x` for struct `B::Point`"
             ),
             shape_error(&text, b_record, 0, "missing field: y"),
         ]
@@ -1076,10 +1066,10 @@ fn positional() -> Shape { .Dot { value: 1 } }
         .map(|diagnostic| diagnostic.inner.message)
         .collect();
     for expected in [
-        "unknown field `depth` for variant `pkg::Shape::Rect`",
+        "unknown field `depth` for variant `Shape::Rect`",
         "missing field: tall",
-        "record spread is not allowed for variant `pkg::Shape::Rect`; write every field",
-        "`pkg::Shape::Dot` has positional fields; construct it with `.Dot(...)`",
+        "record spread is not allowed for variant `Shape::Rect`; write every field",
+        "`Shape::Dot` has positional fields; construct it with `.Dot(...)`",
     ] {
         assert!(
             errors.iter().any(|error| error == expected),

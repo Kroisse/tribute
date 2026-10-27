@@ -306,13 +306,19 @@ impl<'db> TypeChecker<'db> {
         outcome: &TypeConstructor<'db>,
     ) {
         let message = match outcome {
-            TypeConstructor::Missing => format!("type `{ty}` has no constructor `{name}`"),
+            TypeConstructor::Missing => format!(
+                "type `{}` has no constructor `{name}`",
+                ty.display(self.db(), self.names())
+            ),
             TypeConstructor::NotNominal => {
-                format!("`.{name}` needs a type with constructors, found `{ty}`")
+                format!(
+                    "`.{name}` needs a type with constructors, found `{}`",
+                    ty.display(self.db(), self.names())
+                )
             }
             TypeConstructor::Hidden(ctor, reason) => format!(
                 "`{}` is not visible here: {reason}",
-                ctor.qualified(self.db())
+                self.names().symbol(&ctor.qualified(self.db()))
             ),
             TypeConstructor::Found(_) | TypeConstructor::Unknown => return,
         };
@@ -465,7 +471,7 @@ impl<'db> TypeChecker<'db> {
                 Constraint::TypeCoerce(actual, declared, origin)
             }
         };
-        let qualified = id.qualified(db);
+        let qualified = self.names().symbol(&id.qualified(db));
         let mut constraints = Vec::new();
         match &deferred.shape {
             // A unit expression is the constructor itself, a function for
@@ -568,7 +574,10 @@ impl<'db> TypeChecker<'db> {
             ctors
                 .iter()
                 .format_with(", ", |ctor, f| {
-                    f(&format_args!("`{}`", ctor.qualified(self.db())))
+                    f(&format_args!(
+                        "`{}`",
+                        self.names().symbol(&ctor.qualified(self.db()))
+                    ))
                 })
                 .to_string()
         };

@@ -41,9 +41,13 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
     let compiler_intrinsics =
         tribute_front::ast_to_ir::registered_compiler_intrinsics(prelude.checked.module(db))
             .expect("prelude intrinsic directives must be supported");
-    let input =
-        tribute_front::monomorphize::SpecializationInput::new(db, checked, Some(prelude.checked))
-            .with_compiler_intrinsics(compiler_intrinsics);
+    let input = tribute_front::monomorphize::SpecializationInput::new(
+        db,
+        checked,
+        Some(prelude.checked),
+        analysis::root_names(db, environment(db)),
+    )
+    .with_compiler_intrinsics(compiler_intrinsics);
     let specialized = tribute_front::monomorphize::monomorphize_functions(db, input)
         .expect("checked instances must specialize");
     let mut ir = IrContext::new();

@@ -123,7 +123,8 @@ impl<'db> TypeChecker<'db> {
                 self.report_case(
                     span_node_id,
                     &format!(
-                        "non-exhaustive case expression on `{shown_ty}`: missing patterns: {}{more}",
+                        "non-exhaustive case expression on `{}`: missing patterns: {}{more}",
+                        shown_ty.display(self.db(), self.names()),
                         shown.format(", ")
                     ),
                     DiagnosticSeverity::Error,

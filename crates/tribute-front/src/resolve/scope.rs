@@ -50,6 +50,11 @@ impl<'db> Dependencies<'db> {
             .map(|(name, env)| (name, *env))
     }
 
+    /// The names of the dependencies.
+    pub fn names(&self) -> impl Iterator<Item = &Symbol> + '_ {
+        self.packages.iter().map(|(name, _)| name)
+    }
+
     fn iter(&self) -> impl Iterator<Item = &'db PackageEnv<'db>> + '_ {
         self.packages.iter().map(|(_, env)| *env)
     }
@@ -96,6 +101,11 @@ pub struct ScopeRef<'s, 'db> {
 impl<'s, 'db> ScopeRef<'s, 'db> {
     pub fn new(own: &'s PackageEnv<'db>, dependencies: &'s Dependencies<'db>) -> Self {
         Self { own, dependencies }
+    }
+
+    /// The names of the packages the package depends on.
+    pub fn dependency_names(&self) -> impl Iterator<Item = &'s Symbol> + use<'s, 'db> {
+        self.dependencies.names()
     }
 
     /// The package's own environment.

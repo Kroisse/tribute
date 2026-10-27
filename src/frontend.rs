@@ -15,6 +15,7 @@ use tribute_front::ast::SpanMaps;
 use tribute_front::ast_to_ir;
 use tribute_front::monomorphize::{SpecializationInput, SpecializationOutput};
 use tribute_front::query as ast_query;
+use tribute_front::resolve::NameDisplay;
 use tribute_front::typeck as ast_typeck;
 use trunk_ir::{IrContext, Module};
 
@@ -65,6 +66,7 @@ pub(crate) fn merge_and_lower_to_ir<'db>(
         context,
         module: frontend.module,
         compiler_intrinsics: frontend.compiler_intrinsics,
+        names: analysis::root_names(db, crate::prelude::frontend_environment(db)),
     }
 }
 
@@ -115,11 +117,16 @@ fn prepare_frontend_details<'db>(
         Some(_) => Some(crate::prelude::specialized_prelude(db)?),
         None => None,
     };
+    let names = analysis::root_names(db, crate::prelude::frontend_environment(db));
     let input = match prelude {
-        Some(prelude) => {
-            SpecializationInput::continuing(db, typed, prelude.checked, prelude.specialized)
-        }
-        None => SpecializationInput::new(db, typed, None),
+        Some(prelude) => SpecializationInput::continuing(
+            db,
+            typed,
+            prelude.checked,
+            prelude.specialized,
+            names.clone(),
+        ),
+        None => SpecializationInput::new(db, typed, None, names.clone()),
     };
     let span_map = frontend_spans(db, source);
 
@@ -127,7 +134,7 @@ fn prepare_frontend_details<'db>(
         Ok(registered) => registered,
         Err(unsupported) => {
             for directive in unsupported {
-                directive.diagnostic(&span_map).accumulate(db);
+                directive.diagnostic(&span_map, &names).accumulate(db);
             }
             return None;
         }
@@ -169,6 +176,8 @@ pub struct FrontendCompilation {
     pub(crate) module: Module,
     pub(crate) compiler_intrinsics:
         Vec<tribute_ir::dialect::tribute_control::CompilerIntrinsicDeclaration>,
+    /// How diagnostics of the compiled package spell declarations.
+    pub(crate) names: NameDisplay,
 }
 
 /// Run frontend (parse → typecheck) and lower to arena IR.
@@ -218,7 +227,13 @@ mod tests {
     ) -> Option<SpecializationOutput<'db>> {
         let typed = parse_and_lower_ast(db, source)?;
         let prelude = crate::prelude::prelude_module(db)?;
-        let input = SpecializationInput::new(db, typed, Some(prelude)).merge_bodies(db, prelude);
+        let input = SpecializationInput::new(
+            db,
+            typed,
+            Some(prelude),
+            analysis::root_names(db, crate::prelude::frontend_environment(db)),
+        )
+        .merge_bodies(db, prelude);
         let intrinsics = ast_to_ir::registered_compiler_intrinsics(input.module()).ok()?;
         monomorphize_functions(db, input.with_compiler_intrinsics(intrinsics)).ok()
     }

@@ -7,6 +7,7 @@ use crate::ast::fold::{TypeVisitable, TypeVisitor};
 use crate::ast::{
     Decl, DeclTable, ExprKind, FuncDefId, NodeId, ResolvedRef, Type, TypeKind, TypeScheme, TypedRef,
 };
+use crate::resolve::NameDisplay;
 use itertools::Itertools;
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
@@ -24,6 +25,7 @@ struct Reference<'db> {
 /// parameters. Every function of `module` is checked, reached or not.
 pub(super) fn check<'db>(
     db: &'db dyn salsa::Database,
+    names: &NameDisplay,
     module: &DeclTable<TypedRef<'db>>,
     schemes: &HashMap<SymbolPath, TypeScheme<'db>>,
     function_instances: &'db crate::SortedMap<NodeId, crate::typeck::FunctionInstance<'db>>,
@@ -80,13 +82,13 @@ pub(super) fn check<'db>(
             errors.push(InstanceError {
                 node: reference.node,
                 kind: InstanceErrorKind::PolymorphicRecursion {
-                    caller: caller.path(db).to_string(),
+                    caller: names.path(caller.path(db)),
                     callee: (reference.callee != caller)
-                        .then(|| reference.callee.path(db).to_string()),
+                        .then(|| names.path(reference.callee.path(db))),
                     instantiation: reference
                         .type_arguments
                         .iter()
-                        .map(|ty| ty.display_with_params(db, params))
+                        .map(|ty| ty.display_with_params(db, params, names))
                         .join(", "),
                 },
             });

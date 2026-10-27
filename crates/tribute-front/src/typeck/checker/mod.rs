@@ -44,7 +44,7 @@ use crate::ast::{
     Decl, DeclEntry, DeclTable, FuncDefId, NodeId, ResolvedRef, SpanMap, Type, TypeScheme,
     TypedRef, UniVarId,
 };
-use crate::resolve::PackageName;
+use crate::resolve::{NameDisplay, PackageName};
 
 use super::context::ModuleTypeEnv;
 use super::{PreludeExports, StringType, WellKnownType, WellKnownTypeKey, WellKnownTypes};
@@ -127,6 +127,8 @@ pub struct TypeChecker<'db> {
     pub(crate) prefix: SymbolPath,
     /// Span map for converting NodeId to Span in diagnostics.
     pub(crate) span_map: &'db SpanMap,
+    /// How diagnostics spell the declarations of the package being checked.
+    names: NameDisplay,
     /// Accumulated node types from all functions.
     /// Collects NodeId → Type mappings during type checking.
     node_types: HashMap<NodeId, Type<'db>>,
@@ -201,12 +203,14 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
-    /// Create a new type checker with the given span map.
-    pub fn new(db: &'db dyn salsa::Database, span_map: &'db SpanMap) -> Self {
+    /// Create a new type checker with the given span map, whose diagnostics
+    /// spell declarations as `names` does.
+    pub fn new(db: &'db dyn salsa::Database, span_map: &'db SpanMap, names: NameDisplay) -> Self {
         Self {
             env: ModuleTypeEnv::new(db),
             prefix: SymbolPath::root(),
             span_map,
+            names,
             node_types: HashMap::default(),
             function_instances: HashMap::default(),
             local_instances: HashMap::default(),
@@ -235,6 +239,11 @@ impl<'db> TypeChecker<'db> {
     /// Create a FuncDefId from the current prefix and function name.
     pub(crate) fn func_def_id(&self, name: &Symbol) -> FuncDefId<'db> {
         FuncDefId::new(self.db(), self.prefix.child(name.clone()))
+    }
+
+    /// How diagnostics spell declarations of the package being checked.
+    pub(crate) fn names(&self) -> &NameDisplay {
+        &self.names
     }
 
     /// Get the database.

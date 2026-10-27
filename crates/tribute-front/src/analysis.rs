@@ -14,7 +14,7 @@ use trunk_ir::Symbol;
 
 use crate::astgen::{self, ParsedAst};
 use crate::query;
-use crate::resolve::{self, Dependencies, PackageEnv, PackageName};
+use crate::resolve::{self, Dependencies, NameDisplay, PackageEnv, PackageName};
 use crate::source_file::SourceCst;
 use crate::typeck::{PreludeExports, TypeCheckOutput, TypeChecker};
 
@@ -60,7 +60,7 @@ pub fn checked_std<'db>(db: &'db dyn salsa::Database, std: SourceCst) -> Option<
     let span_map = parsed.span_map(db);
     let resolved =
         resolve::resolve_library_with_env(db, parsed.module(db), std_env(db, std)?, span_map);
-    let (result, exports) = TypeChecker::new(db, span_map).check_prelude(&resolved);
+    let (result, exports) = TypeChecker::new(db, span_map, std_names()).check_prelude(&resolved);
     Some(CheckedStd {
         checked: TypeCheckOutput::from_check(db, result),
         exports,
@@ -73,6 +73,21 @@ pub fn dependencies(db: &dyn salsa::Database, environment: Environment) -> Depen
         Environment::Builtins => Dependencies::std(resolve::builtin_library_env(db)),
         Environment::Std(std) => std_env(db, std).map(Dependencies::std).unwrap_or_default(),
     }
+}
+
+/// How diagnostics spell declarations while the executable root package is
+/// compiled in `environment`.
+pub fn root_names(db: &dyn salsa::Database, environment: Environment) -> NameDisplay {
+    NameDisplay::new(
+        &PackageName::executable_root(),
+        dependencies(db, environment).names(),
+    )
+}
+
+/// How diagnostics spell declarations while package `std` is compiled, which
+/// depends on no package.
+pub fn std_names() -> NameDisplay {
+    NameDisplay::new(&PackageName::std(), [])
 }
 
 /// Parse, resolve, and type check `source` in `environment`.
@@ -93,7 +108,7 @@ pub fn analyze<'db>(
     let scope = resolve::build_env(db, module, dependencies(db, environment));
     let resolved = resolve::resolve_with_env(db, module, &scope, span_map);
 
-    let mut checker = TypeChecker::new(db, span_map);
+    let mut checker = TypeChecker::new(db, span_map, root_names(db, environment));
     if let Environment::Std(std) = environment
         && let Some(std) = checked_std(db, std)
     {

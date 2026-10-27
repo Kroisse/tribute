@@ -75,7 +75,7 @@ impl<'db> TypeChecker<'db> {
             Diagnostic::new(
                 format!(
                     "function `{}` is already declared by field `{}` of struct `{}`",
-                    function.qualified(self.db()),
+                    self.names().symbol(&function.qualified(self.db())),
                     getter.field,
                     getter.owner.name(self.db()),
                 ),
