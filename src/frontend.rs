@@ -223,11 +223,11 @@ pub fn compile_frontend_for_shared_route(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::database::parse_with_thread_local;
     use ropey::Rope;
     use rustc_hash::FxHashMap as HashMap;
     use salsa_test_macros::salsa_test;
     use tribute_front::monomorphize::monomorphize_functions;
+    use tribute_front::source_file::parse_rope;
 
     /// Std's bodies merged into the user's and specialized with them.
     #[salsa::tracked(returns(copy))]
@@ -391,7 +391,7 @@ fn main() ->{Io} Nil {
         let mut compared = 0;
         for file in &files {
             let text = Rope::from_str(&std::fs::read_to_string(file).expect("example source"));
-            let tree = parse_with_thread_local(&text, None);
+            let tree = parse_rope(&text, None);
             let source = SourceCst::from_path(db, file, text, tree);
             let has_errors = parse_and_lower_ast::accumulated::<Diagnostic>(db, source)
                 .iter()
