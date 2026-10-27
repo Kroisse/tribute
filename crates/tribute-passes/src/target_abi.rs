@@ -124,10 +124,9 @@ pub(crate) fn lower_cps_signatures_to_physical(
     validate_transfers(ctx, &ops, &functions, never)?;
     validate_dispatch_contracts(ctx, module)?;
     validate_root_entry(ctx, module, ContractPhase::Logical)?;
-    let closures = closure_conventions(ctx, &ops, &functions)?;
 
     let aliases = ctx.type_aliases().to_vec();
-    let mut converter = PhysicalTypeConverter::new(ctx, never, closures);
+    let mut converter = PhysicalTypeConverter::new(ctx, never);
     let mut alias_updates = Vec::new();
     let mut function_types = Vec::new();
     let mut result_types = Vec::new();
@@ -625,8 +624,9 @@ fn compose_value_delimiters(ctx: &mut IrContext, module: Module) -> Result<(), T
         let malformed = || TargetAbiError::new("value delimiter: body is not an exact Cps closure");
         let body_ty = crate::closure_lower::physical_closure_type_for_callee(ctx, body)
             .ok_or_else(malformed)?;
-        let signature = cps_closure_function_type(ctx, body_ty).ok_or_else(malformed)?;
-        let callable = func::FuncSig::from_type_ref(ctx, signature).ok_or_else(malformed)?;
+        let callable = cps_closure_function_type(ctx, body_ty)
+            .and_then(|ty| func::FuncSig::from_type_ref(ctx, ty))
+            .ok_or_else(malformed)?;
         let &[body_evidence, frame_ty] = callable.inputs(ctx) else {
             return Err(malformed());
         };
@@ -672,6 +672,7 @@ fn compose_value_delimiters(ctx: &mut IrContext, module: Module) -> Result<(), T
             ctx.insert_op_before(block, op, new);
         }
         let evidence = delimit.evidence(ctx);
+        let signature = physical_continuation_entry(ctx, callable).as_type_ref();
         let call = func::CallIndirect::operands(body, [evidence, built.frame])
             .signature(signature)
             .build(ctx, location);
@@ -1198,12 +1199,34 @@ fn dispatch_entry_function_type(
     let callable = func::FuncSig::from_type_ref(ctx, callable_ty).ok_or_else(|| {
         TargetAbiError::new("target root bridge: frame Dispatch callable is not func.func_sig")
     })?;
-    let environment_attrs = physical_parameter_attrs(ctx, CallingConvention::Cps);
-    Ok(callable
+    let contract = physical_parameter_attrs(ctx, CallingConvention::Cps);
+    Ok(physical_continuation_entry(ctx, callable)
         .rebuild(ctx, |inputs, _| {
-            inputs.insert(1, (dispatch, environment_attrs));
+            inputs.insert(1, (dispatch, contract));
         })
         .as_type_ref())
+}
+
+/// The physical `Cps` entry of a generated continuation whose physicalized
+/// closure callable is `callable`, without the environment. The closure's
+/// callable is not an entry ABI, so the entry takes the physical Cps contract
+/// on every input and the tail machine convention.
+fn physical_continuation_entry(ctx: &mut IrContext, callable: func::FuncSig) -> func::FuncSig {
+    let contract = physical_parameter_attrs(ctx, CallingConvention::Cps);
+    let mut inputs: Vec<_> = callable
+        .inputs_with_attrs(ctx)
+        .map(|(ty, attrs)| (ty, attrs.clone()))
+        .collect();
+    for (_, attrs) in &mut inputs {
+        attrs.view_mut(ctx).extend(contract.clone());
+    }
+    let attrs = callable
+        .non_reserved_attrs(ctx)
+        .map(|(name, value)| (name, value.clone()))
+        .collect::<Vec<_>>();
+    let attrs = AttributeMap::from_refs(ctx, attrs);
+    func::func_sig_with_param_attrs(ctx, inputs, std::iter::empty(), attrs)
+        .with_call_conv(ctx, func::CallConv::Tail)
 }
 
 fn is_parameterless_type(ctx: &IrContext, ty: TypeRef, name: trunk_ir::TypeName) -> bool {
@@ -1368,22 +1391,10 @@ fn validate_transfers(
         let callee = call
             .indirect_callee(ctx)
             .ok_or_else(|| TargetAbiError::new("target ABI: indirect transfer lacks callee"))?;
+        // A closure callee's type is not its entry ABI, so only a function
+        // pointer's type is compared with the signature.
         let callee_type = ctx.value_ty(callee);
-        if let Some(closure_type) =
-            crate::closure_lower::physical_closure_type_for_callee(ctx, callee)
-        {
-            let closure_signature =
-                tribute_ir::dialect::closure::Closure::from_type_ref(ctx, closure_type)
-                    .unwrap()
-                    .func_type(ctx);
-            if closure_signature != signature {
-                return Err(TargetAbiError::new(
-                    "target ABI: indirect signature differs from exact closure contract",
-                ));
-            }
-        } else if func::FuncSig::from_type_ref(ctx, callee_type).is_some()
-            && callee_type != signature
-        {
+        if func::FuncSig::from_type_ref(ctx, callee_type).is_some() && callee_type != signature {
             return Err(TargetAbiError::new(
                 "target ABI: indirect signature differs from typed callee",
             ));
@@ -1415,82 +1426,6 @@ fn validate_transfers(
         }
     }
     Ok(())
-}
-
-/// The convention each closure type is entered through, read from the
-/// operations that record it: the entry functions whose environment has the
-/// type, the `closure.new`s that make it, and the indirect transfers that
-/// enter it. A continuation frame layout records its own: its `Done`, its
-/// `Dispatch`, and the resumption `Dispatch` takes are `Cps`. So are the body
-/// of an `effect.delimit` and the dispatch and resumption of an
-/// `effect.dispatch_cps`, which enter them after physicalization. A closure type
-/// has one convention until a closure holds an entry per convention.
-fn closure_conventions(
-    ctx: &IrContext,
-    ops: &[OpRef],
-    functions: &HashMap<SymbolPath, FunctionIdentity>,
-) -> Result<HashMap<TypeRef, CallingConvention>, TargetAbiError> {
-    let mut conventions = HashMap::default();
-    let mut record = |ty: TypeRef, convention: CallingConvention| {
-        if !tribute_ir::dialect::closure::Closure::matches(ctx, ty) {
-            return Ok(());
-        }
-        match conventions.insert(ty, convention) {
-            Some(known) if known != convention => Err(TargetAbiError::new(
-                "target ABI: a closure type is entered through two conventions",
-            )),
-            _ => Ok(()),
-        }
-    };
-    for identity in functions.values() {
-        if let Some(index) = identity.environment_index {
-            let signature = func::FuncSig::from_type_ref(ctx, identity.signature)
-                .expect("validated function signature");
-            record(signature.inputs(ctx)[index], identity.convention)?;
-        }
-    }
-    for (_, layout) in ctx.type_aliases() {
-        let Some(layout) = adt::Struct::from_type_ref(ctx, *layout)
-            .filter(|_| continuation_frame::result_type(ctx, *layout).is_some())
-        else {
-            continue;
-        };
-        for (name, field) in layout.fields(ctx) {
-            if name != "done" && name != "dispatch" {
-                continue;
-            }
-            record(field, CallingConvention::Cps)?;
-            if name == "dispatch"
-                && let Some(&resume) = cps_closure_function_type(ctx, field)
-                    .and_then(|callable| func::FuncSig::from_type_ref(ctx, callable))
-                    .and_then(|callable| callable.inputs(ctx).get(1))
-            {
-                record(resume, CallingConvention::Cps)?;
-            }
-        }
-    }
-    for &op in ops {
-        if let Ok(delimit) = effect::Delimit::from_op(ctx, op) {
-            record(ctx.value_ty(delimit.body(ctx)), CallingConvention::Cps)?;
-            continue;
-        }
-        if let Ok(dispatch) = effect::DispatchCps::from_op(ctx, op) {
-            record(ctx.value_ty(dispatch.dispatch(ctx)), CallingConvention::Cps)?;
-            record(ctx.value_ty(dispatch.resume(ctx)), CallingConvention::Cps)?;
-            continue;
-        }
-        let Some(convention) = DynConventionBearing::of(ctx, op) else {
-            continue;
-        };
-        if let Ok(new) = tribute_ir::dialect::closure::New::from_op(ctx, op) {
-            record(ctx.value_ty(new.result(ctx)), convention)?;
-        } else if let Some(callee) =
-            DynIndirectCallLike::get(ctx, op).and_then(|call| call.indirect_callee(ctx))
-        {
-            record(ctx.value_ty(callee), convention)?;
-        }
-    }
-    Ok(conventions)
 }
 
 fn is_transfer(ctx: &IrContext, op: OpRef) -> bool {
@@ -1692,21 +1627,15 @@ fn parent_op(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
 struct PhysicalTypeConverter<'a> {
     ctx: &'a mut IrContext,
     never: TypeRef,
-    closures: HashMap<TypeRef, CallingConvention>,
     embedded: HashMap<TypeRef, TypeRef>,
     callable: HashMap<(TypeRef, CallingConvention, bool), TypeRef>,
 }
 
 impl<'a> PhysicalTypeConverter<'a> {
-    fn new(
-        ctx: &'a mut IrContext,
-        never: TypeRef,
-        closures: HashMap<TypeRef, CallingConvention>,
-    ) -> Self {
+    fn new(ctx: &'a mut IrContext, never: TypeRef) -> Self {
         Self {
             ctx,
             never,
-            closures,
             embedded: HashMap::default(),
             callable: HashMap::default(),
         }
@@ -1792,6 +1721,32 @@ impl<'a> PhysicalTypeConverter<'a> {
         Ok(converted)
     }
 
+    /// Physicalize a closure type's callable. It is the closure's identity,
+    /// not an entry ABI, so it takes no convention: its components are
+    /// converted, and a logical `core.never` result becomes the physical
+    /// empty result (`new-plans/cps-effects.md`, "Closure type의 callable").
+    fn convert_closure_callable(&mut self, ty: TypeRef) -> Result<TypeRef, TargetAbiError> {
+        let callable = func::FuncSig::from_type_ref(self.ctx, ty).ok_or_else(|| {
+            TargetAbiError::new("target ABI: closure callable is not a valid func.func_sig")
+        })?;
+        let inputs = callable
+            .inputs_with_attrs(self.ctx)
+            .map(|(ty, attrs)| (ty, attrs.clone()))
+            .collect();
+        let inputs = self.convert_params(inputs)?;
+        let results = if callable.results(self.ctx) == [self.never] {
+            vec![]
+        } else {
+            let results = callable
+                .results_with_attrs(self.ctx)
+                .map(|(ty, attrs)| (ty, attrs.clone()))
+                .collect();
+            self.convert_params(results)?
+        };
+        let attrs = self.convert_func_attributes(callable)?;
+        Ok(func::func_sig_with_param_attrs(self.ctx, inputs, results, attrs).as_type_ref())
+    }
+
     fn convert_embedded(&mut self, ty: TypeRef) -> Result<TypeRef, TargetAbiError> {
         if let Some(&converted) = self.embedded.get(&ty) {
             return Ok(converted);
@@ -1803,15 +1758,8 @@ impl<'a> PhysicalTypeConverter<'a> {
                     "target ABI: closure type must contain one callable",
                 ));
             };
-            // Nothing makes or enters a closure type no operation records a
-            // convention for, so its callable keeps its results.
-            let convention = self
-                .closures
-                .get(&ty)
-                .copied()
-                .unwrap_or(CallingConvention::Direct);
             let mut converted = data.clone();
-            converted.params[0] = self.convert_callable(*function, convention)?;
+            converted.params[0] = self.convert_closure_callable(*function)?;
             self.convert_type_attributes(&mut converted)?;
             let converted = self.intern_if_changed(ty, converted);
             self.embedded.insert(ty, converted);
@@ -2228,10 +2176,12 @@ mod tests {
             ),
             "{printed}"
         );
-        // Nothing makes or enters `!cps`, so its callable keeps its result.
+        // A closure type's callable takes no convention: its logical
+        // `core.never` result becomes the physical empty result, and it
+        // gains no parameter contract or machine convention.
         assert!(
             printed.contains(
-                "closure.closure<func.func_sig<(core.i32 {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}) -> core.never, {call_conv = \"tail\"}>"
+                "closure.closure<func.func_sig<(core.i32, core.i32, core.i32, core.i32) -> ()>>"
             ),
             "{printed}"
         );
@@ -3082,38 +3032,56 @@ mod tests {
 
     #[test]
     fn convention_violations_are_rejected_before_mutation() {
-        for (body, expected) in [
-            (
-                r#"%c = arith.const {value = 0, tribute.calling_convention = "direct"} : core.i32"#,
-                "arith.const: calling-convention metadata on an operation that cannot carry it",
-            ),
-            (
-                r#"%c = closure.new {entries = [@callee], tribute.calling_convention = "direct"} : !direct
-    %d = closure.new {entries = [@callee], tribute.calling_convention = "evidence_direct"} : !direct"#,
-                "a closure type is entered through two conventions",
-            ),
-        ] {
-            let mut ctx = IrContext::new();
-            let module = parse_test_module(
-                &mut ctx,
-                &format!(
-                    r#"core.module @test {{tribute.entry = @main}} {{
-  !fn = func.func_sig<(core.i32) -> core.i32>
-  !direct = closure.closure<!fn>
-  func.func @callee(%x: core.i32) -> core.i32 attributes {{tribute.calling_convention = "direct"}} {{
-    func.return %x
-  }}
-  func.func @main() -> core.nil attributes {{tribute.calling_convention = "direct"}} {{
-    {body}
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {tribute.entry = @main} {
+  func.func @main() -> core.nil attributes {tribute.calling_convention = "direct"} {
+    %c = arith.const {value = 0, tribute.calling_convention = "direct"} : core.i32
     %n = core.nil_value : core.nil
     func.return %n
-  }}
-}}"#
-                ),
-            );
-            let error =
-                assert_unchanged_on_error(&mut ctx, module, lower_cps_signatures_to_physical);
-            assert!(error.to_string().contains(expected), "{error}");
-        }
+  }
+}"#,
+        );
+        let error = assert_unchanged_on_error(&mut ctx, module, lower_cps_signatures_to_physical);
+        assert!(
+            error.to_string().contains(
+                "arith.const: calling-convention metadata on an operation that cannot carry it"
+            ),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_closure_type_made_through_two_conventions_keeps_its_callable() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {tribute.entry = @main} {
+  !fn = func.func_sig<(core.i32) -> core.i32>
+  !closure = closure.closure<!fn>
+  func.func @callee(%x: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
+    func.return %x
+  }
+  func.func @main() -> core.nil attributes {tribute.calling_convention = "direct"} {
+    %c = closure.new {entries = [@callee], tribute.calling_convention = "direct"} : !closure
+    %d = closure.new {entries = [@callee], tribute.calling_convention = "evidence_direct"} : !closure
+    %n = core.nil_value : core.nil
+    func.return %n
+  }
+}"#,
+        );
+        lower_cps_signatures_to_physical(&mut ctx, module)
+            .expect("a closure type's callable takes no convention");
+        let main = function(&ctx, module, "main");
+        let closures: Vec<_> = collect_ops(&ctx, main.op_ref())
+            .into_iter()
+            .filter(|&op| tribute_ir::dialect::closure::New::matches(&ctx, op))
+            .map(|op| ctx.op_result_types(op)[0])
+            .collect();
+        let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
+        let callable = func::func_sig(&mut ctx, [i32_ty], [i32_ty]).as_type_ref();
+        let expected = tribute_ir::calling_convention::physical_closure_type(&mut ctx, callable);
+        assert_eq!(closures, [expected, expected]);
     }
 }

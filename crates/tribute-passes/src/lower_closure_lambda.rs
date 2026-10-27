@@ -157,12 +157,10 @@ fn lower_single_lambda(
         return false;
     };
     let environment_index = convention.closure_environment_index();
-    let Some(function_ty) =
-        closure::Closure::from_type_ref(ctx, result_ty).map(|closure| closure.func_type(ctx))
-    else {
+    if !closure::Closure::matches(ctx, result_ty) {
         return false;
-    };
-    let Some(callable) = func::FuncSig::from_type_ref(ctx, function_ty) else {
+    }
+    let Some(callable) = func::FuncSig::from_type_ref(ctx, lambda_op.signature(ctx)) else {
         return false;
     };
     if callable.single_result(ctx).is_none() {
@@ -504,6 +502,7 @@ mod tests {
 
         // closure.lambda [] { ... } -> closure_ty
         let lambda_op = closure::Lambda::operands(Vec::<ValueRef>::new())
+            .signature(func_ty)
             .results(closure_ty)
             .regions(lambda_body_region)
             .build(&mut ctx, loc);
@@ -618,6 +617,7 @@ mod tests {
                 lambda_func_ty.as_type_ref(),
             );
             let lambda = closure::Lambda::operands(Vec::<ValueRef>::new())
+                .signature(lambda_func_ty.as_type_ref())
                 .results(lambda_ty)
                 .regions(lambda_body)
                 .build(&mut ctx, loc);
@@ -705,6 +705,7 @@ mod tests {
 
         // closure.lambda [%a] { ... }
         let lambda_op = closure::Lambda::operands(vec![a_val])
+            .signature(func_ty)
             .results(closure_ty)
             .regions(lambda_body_region)
             .build(&mut ctx, loc);

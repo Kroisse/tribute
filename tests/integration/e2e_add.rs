@@ -677,13 +677,16 @@ fn test_closure_lowering() {
         assert_eq!(code.field(&ctx), 0);
         let callback = code.r#ref(&ctx);
         let closure_ty = ctx.value_ty(callback);
-        let callable = closure::Closure::from_type_ref(&ctx, closure_ty).expect("retained callback contract");
+        assert!(closure::Closure::matches(&ctx, closure_ty), "retained callback closure type");
         let operands = &ctx.op_operands(call)[1..];
         assert_eq!(operands[env_index], callback);
-        let signature = func::FuncSig::from_type_ref(&ctx, callable.func_type(&ctx)).unwrap();
-        let mut expected = signature.inputs(&ctx).to_vec();
-        expected.insert(env_index, closure_ty);
-        itertools::assert_equal(expected, operands.iter().map(|&value| ctx.value_ty(value)));
+        // The transfer's signature is the entry ABI, environment included.
+        let signature = trunk_ir::op_interface::DynIndirectCallLike::get(&ctx, call)
+            .and_then(|call| call.exact_signature(&ctx))
+            .and_then(|signature| func::FuncSig::from_type_ref(&ctx, signature))
+            .expect("the callback transfer carries its entry signature");
+        assert_eq!(signature.inputs(&ctx)[env_index], closure_ty);
+        itertools::assert_equal(signature.inputs(&ctx).iter().copied(), operands.iter().map(|&value| ctx.value_ty(value)));
         let entry = ctx.region(apply.body(&ctx)).blocks[0];
         assert!(ctx.block_args(entry).contains(&callback));
         assert_eq!(operands.last(), ctx.block_args(entry).last());

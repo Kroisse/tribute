@@ -154,7 +154,11 @@ fn push_reject_resume(
     let unreachable = func::Unreachable::operands().build(ctx, location);
     ctx.push_op(reject_block, unreachable.op_ref());
     let region = single_block_region(ctx, location, reject_block);
+    let signature = closure::Closure::from_type_ref(ctx, resume_type)
+        .expect("Resume<R> is a closure")
+        .func_type(ctx);
     let lambda = closure::Lambda::operands(std::iter::empty::<ValueRef>())
+        .signature(signature)
         .results(resume_type)
         .regions(region)
         .build(ctx, location);

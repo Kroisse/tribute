@@ -74,7 +74,9 @@ impl Converter<'_> {
             .map(|capture| mapping.get(capture).copied().unwrap_or(*capture))
             .collect();
         let physical_ty = self.convert_type(logical_ty);
+        let signature = self.lower_callable_signature(logical_ty, convention);
         let lambda = closure::Lambda::operands(captures)
+            .signature(signature)
             .results(physical_ty)
             .regions(body)
             .build(self.ctx, location);
@@ -149,14 +151,12 @@ impl Converter<'_> {
                 || result_convention.needs_continuation_frame(),
             "pre-CPS validation rejects a weaker func_ref result convention"
         );
-        // The adapter is the closure's callable with the environment
+        // The adapter is the closure's entry with the environment
         // interposed, so both share parameter attributes and metadata.
         let closure_ty = self.convert_type(result_logical_ty);
-        let function = closure::Closure::from_type_ref(self.ctx, closure_ty)
-            .expect("func_ref result lowers to a closure")
-            .func_type(self.ctx);
+        let function = self.lower_callable_signature(result_logical_ty, result_convention);
         let callable = func::FuncSig::from_type_ref(self.ctx, function)
-            .expect("func_ref result lowers to a func.func_sig callable");
+            .expect("an entry signature is a func.func_sig");
         // The adapter's environment is the capture-free closure itself.
         let adapter = callable.rebuild(self.ctx, |inputs, _| {
             inputs.insert(
@@ -257,7 +257,7 @@ impl Converter<'_> {
             .get(&source)
             .cloned()
             .expect("validated function is present in the callable graph");
-        let physical_type = self.physical_function_type(logical_type);
+        let physical_type = self.lower_callable_signature(logical_type, info.convention);
         if !self.ctx.op_has_regions(source) {
             let mut builder = OperationDataBuilder::new(location, "func.func")
                 .attr(
@@ -529,7 +529,9 @@ impl Converter<'_> {
                 self.tail_frame(source, flow)?,
             ];
             args.extend(source_args);
-            let transfer = emit_cps_tail_call_indirect(self.ctx, block, location, callee, args)?;
+            let signature = self.lower_callable_signature(logical_type, convention);
+            let transfer =
+                emit_cps_entry_transfer(self.ctx, block, location, callee, signature, args)?;
             carry_evidence_plan(self.ctx, source, transfer);
             return Ok(());
         }
@@ -538,15 +540,7 @@ impl Converter<'_> {
             args.push(self.current_evidence(source, flow)?);
         }
         args.extend(source_args);
-        let converted_callee = self.convert_type(logical_type);
-        let signature = physical_closure_function_type(self.ctx, converted_callee, convention)
-            .ok_or_else(|| {
-                TributeControlToCpsError::post_op(
-                    source,
-                    location,
-                    "indirect tail callee has no exact closure contract",
-                )
-            })?;
+        let signature = self.lower_callable_signature(logical_type, convention);
         if flow.convention == CallingConvention::Cps {
             let call = func::CallIndirect::operands(callee, args)
                 .signature(signature)
@@ -607,7 +601,9 @@ impl Converter<'_> {
                     .iter()
                     .map(|arg| mapping.get(arg).copied().unwrap_or(*arg)),
             );
-            let transfer = emit_cps_tail_call_indirect(self.ctx, block, location, callee, args)?;
+            let signature = self.lower_callable_signature(logical_type, convention);
+            let transfer =
+                emit_cps_entry_transfer(self.ctx, block, location, callee, signature, args)?;
             carry_evidence_plan(self.ctx, source, transfer);
             return Ok(ControlFlow::Break(()));
         }
@@ -620,18 +616,9 @@ impl Converter<'_> {
                 .iter()
                 .map(|arg| mapping.get(arg).copied().unwrap_or(*arg)),
         );
-        // The source-data callee keeps its exact callable contract in its
-        // converted closure type. Carry that contract onto the transfer
-        // instead of inferring it from the physical operands later.
-        let converted_callee = self.convert_type(logical_type);
-        let signature = physical_closure_function_type(self.ctx, converted_callee, convention)
-            .ok_or_else(|| {
-                TributeControlToCpsError::post_op(
-                    source,
-                    location,
-                    "indirect callee has no exact closure contract",
-                )
-            })?;
+        // The transfer carries the entry ABI of its convention; the
+        // callee's closure type does not.
+        let signature = self.lower_callable_signature(logical_type, convention);
         let call = func::CallIndirect::operands(callee, args)
             .signature(signature)
             .build(self.ctx, location);

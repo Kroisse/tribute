@@ -272,7 +272,7 @@ impl RewritePattern for LowerClosureCallArena {
             return false;
         }
         let Some(contract) =
-            exact_physical_call_contract(ctx, callee, convention, &args, &caller_results)
+            exact_physical_call_contract(ctx, op, callee, convention, &args, &caller_results)
         else {
             return false;
         };
@@ -337,10 +337,11 @@ impl RewritePattern for LowerClosureTailCallArena {
 
         let location = ctx.op(op).location;
         let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
-        let Some(results) = exact_tail_results(ctx, op, callee, convention) else {
+        let Some(results) = exact_tail_results(ctx, op, convention) else {
             return false;
         };
-        let Some(contract) = exact_physical_call_contract(ctx, callee, convention, args, &results)
+        let Some(contract) =
+            exact_physical_call_contract(ctx, op, callee, convention, args, &results)
         else {
             return false;
         };
@@ -395,22 +396,16 @@ pub(crate) fn physical_closure_type_for_callee(
     closure::Closure::matches(ctx, ty).then_some(ty)
 }
 
-/// The results of a closure tail transfer, when its callee's results are
-/// the enclosing function's: a Cps transfer leaves a Cps function, and a
-/// value transfer (source `become`) returns the callee's result as its own.
+/// The results of a closure tail transfer, when its entry's results are the
+/// enclosing function's: a Cps transfer leaves a Cps function, and a value
+/// transfer (source `become`) returns the callee's result as its own.
 fn exact_tail_results(
     ctx: &IrContext,
     op: OpRef,
-    callee: ValueRef,
     convention: CallingConvention,
 ) -> Option<Vec<TypeRef>> {
-    let closure = physical_closure_type_for_callee(ctx, callee)?;
-    let signature = closure::Closure::from_type_ref(ctx, closure)?.func_type(ctx);
     let exact = DynIndirectCallLike::get(ctx, op).and_then(|call| call.exact_signature(ctx))?;
-    if exact != signature {
-        return None;
-    }
-    let results = func::FuncSig::from_type_ref(ctx, signature)?.results(ctx);
+    let results = func::FuncSig::from_type_ref(ctx, exact)?.results(ctx);
     let mut parent = ctx.op(op).parent_block?;
     loop {
         let owner = ctx.region(ctx.block(parent).parent_region?).parent_op?;
@@ -432,10 +427,12 @@ struct PhysicalCallContract {
     argument_casts: Vec<(usize, TypeRef)>,
 }
 
-/// The physical contract of calling the closure `callee`, whose environment
-/// is the closure itself.
+/// The physical contract of the transfer `op` into the closure `callee`,
+/// whose environment is the closure itself. The transfer's exact signature
+/// is the entry ABI; the closure type's callable is not.
 fn exact_physical_call_contract(
     ctx: &mut IrContext,
+    op: OpRef,
     callee: ValueRef,
     convention: CallingConvention,
     args: &[ValueRef],
@@ -443,7 +440,7 @@ fn exact_physical_call_contract(
 ) -> Option<PhysicalCallContract> {
     let closure_ty = physical_closure_type_for_callee(ctx, callee)?;
     let environment = closure_ty;
-    let function = closure::Closure::from_type_ref(ctx, closure_ty)?.func_type(ctx);
+    let function = DynIndirectCallLike::get(ctx, op).and_then(|call| call.exact_signature(ctx))?;
     let callable = func::FuncSig::from_type_ref(ctx, function)?;
     if callable.results(ctx) != results || callable.inputs(ctx).len() != args.len() {
         return None;
@@ -560,12 +557,13 @@ fn tagged_closure_transfers_are_legal(ctx: &mut IrContext, func_op: func::Func) 
             let results = ctx.op_result_types(op).to_vec();
             let expected = usize::from(convention != CallingConvention::Cps);
             results.len() == expected
-                && exact_physical_call_contract(ctx, callee, convention, &args, &results).is_some()
+                && exact_physical_call_contract(ctx, op, callee, convention, &args, &results)
+                    .is_some()
         } else {
-            let Some(results) = exact_tail_results(ctx, op, callee, convention) else {
+            let Some(results) = exact_tail_results(ctx, op, convention) else {
                 return false;
             };
-            exact_physical_call_contract(ctx, callee, convention, &args, &results).is_some()
+            exact_physical_call_contract(ctx, op, callee, convention, &args, &results).is_some()
         }
     })
 }
@@ -1243,12 +1241,16 @@ mod tests {
                 true,
             ),
         ] {
+            // The transfer carries its entry signature; the closure type's
+            // callable is not one.
+            let call = call.replace("{tribute", "{signature = !Entry, tribute");
             let mut ctx = IrContext::new();
             let module = parse_test_module(
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
-            !Callback = closure.closure<func.func_sig<() -> {signature_results}>>
+            !Entry = func.func_sig<() -> {signature_results}>
+            !Callback = closure.closure<func.func_sig<() -> core.i32>>
             func.func @invalid(%callee: !Callback) -> core.i32 {{
                 {call}
                 %zero = arith.constant {{value = 0}} : core.i32

@@ -279,13 +279,18 @@ pub fn cps_dispatch_type(
     physical_closure_type(ctx, function)
 }
 
-/// The callable type of a closure entered through `Cps`.
+/// The `Cps` entry, without the environment, of a generated continuation
+/// `closure`. Only a generated continuation's callable is its entry; a source
+/// callable value's is not (`new-plans/cps-effects.md`, "Closure type의
+/// callable").
 pub fn cps_closure_function_type(ctx: &IrContext, closure: TypeRef) -> Option<TypeRef> {
     physical_closure_function_type(ctx, closure, CallingConvention::Cps)
 }
 
-/// The callable type of `closure`, when it is a `closure.closure` whose
-/// callable has the environment slot that `convention` places.
+/// The entry, without the environment, of a generated closure entered
+/// through `convention`, when it is a `closure.closure` whose callable has
+/// the environment slot that `convention` places. A source callable value's
+/// closure type is not its entry, so its transfers carry their own signature.
 pub fn physical_closure_function_type(
     ctx: &IrContext,
     closure: TypeRef,
