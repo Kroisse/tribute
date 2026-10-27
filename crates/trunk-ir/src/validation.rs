@@ -1248,9 +1248,9 @@ impl Pass for CheckCallArity {
     }
 }
 
-/// In debug builds, log the [`validate_value_integrity`] errors of the
-/// module, labeled with the pipeline point `boundary`. It never fails the
-/// run and does nothing in release builds.
+/// In debug builds, reject a module with [`validate_value_integrity`]
+/// errors, labeled with the pipeline point `boundary`. It does nothing in
+/// release builds.
 pub struct CheckValueIntegrity {
     pub boundary: &'static str,
 }
@@ -1271,11 +1271,7 @@ impl Pass for CheckValueIntegrity {
         if cfg!(debug_assertions) {
             let result = validate_value_integrity(ctx, target.into());
             if !result.is_ok() {
-                tracing::warn!(
-                    "Value integrity errors {}: {:?}",
-                    self.boundary,
-                    result.errors
-                );
+                return Err(format!("value integrity errors {}: {result}", self.boundary).into());
             }
         }
         Ok(())
@@ -1782,6 +1778,19 @@ mod tests {
         assert_eq!(stale_errors.len(), 1);
         assert_eq!(stale_errors[0].0, "func_b");
         assert!(stale_errors[0].2.contains("arith.const"));
+
+        // In debug builds the check pass rejects the module.
+        if cfg!(debug_assertions) {
+            let error = CheckValueIntegrity {
+                boundary: "at test",
+            }
+            .run(&mut ctx, module_op, &mut AnalysisCache::new())
+            .expect_err("a stale value fails the value integrity check");
+            assert!(
+                error.to_string().contains("value integrity errors at test"),
+                "{error}"
+            );
+        }
     }
 
     #[test]
@@ -2517,7 +2526,7 @@ mod tests {
     }
 
     #[test]
-    fn check_passes_report_through_the_context_and_never_fail() {
+    fn check_passes_accept_valid_ir_and_report_arity_as_a_warning() {
         use crate::pass::PassManager;
         use std::cell::RefCell;
         use std::rc::Rc;
@@ -2546,7 +2555,7 @@ mod tests {
         pm.with_instrumentation(move |_ctx, name, _op| seen.borrow_mut().push(name.to_owned()));
 
         pm.run(&mut ctx, root, &mut AnalysisCache::new())
-            .expect("the checks never fail the run");
+            .expect("valid IR passes both checks; an arity mismatch is only a warning");
 
         assert_eq!(
             *passes.borrow(),
