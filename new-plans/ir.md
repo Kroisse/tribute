@@ -572,8 +572,9 @@ resolution, type checking, TDNR, and AST-to-IR lowering.
 
 ### 직접형 호출 대상과 제어
 
-`tribute_control.*`은 typed frontend lowering과 shared CPS conversion 사이의
-target-independent 직접형 경계다. Dialect identifier는 정확히
+`tribute_control.*`은 typed frontend lowering과 실행 전략 사이의 target-independent
+직접형 경계다. CPS 전략은 이 경계 뒤에서 convention에 따라 뜻이 달라지는 callable
+operation을 [`tribute_cps`](#convention과-class-특수화)로 바꾼다. Dialect identifier는 정확히
 `tribute_control`이다. TrunkIR은 qualified operation을 하나의
 `<dialect>.<operation>` 쌍으로 parse하므로 dialect identifier 안에 점을 넣는
 등 separator를 하나 더 사용하는 표기는 invalid이다.
@@ -585,9 +586,9 @@ target-independent 직접형 경계다. Dialect identifier는 정확히
 않는다.
 
 논리 callable type은 `tribute_control.func_sig<(Params...) -> Result>`이며
-calling convention을 갖지 않는다([convention entry](#convention-entry)). Convention은
-정의, 람다의 convention entry, 간접 이전 operation에
-둔다([convention과 class 특수화](#convention과-class-특수화)).
+calling convention을 갖지 않는다([convention entry](#convention-entry)). 두 dialect가 이
+type을 함께 쓰며, convention은 `tribute_cps`의 정의, 람다의 convention entry, 간접
+이전 operation에 둔다([convention과 class 특수화](#convention과-class-특수화)).
 It uses flat `[inputs..., results...]` storage with mandatory `num_inputs` and
 `num_results` u32 delimiters; its source-owned validated API requires exactly
 one result. `Result`와 `Params`는 source-logical type이다. Convention은 keyword 문자열
@@ -596,7 +597,8 @@ one result. `Result`와 `Params`는 source-logical type이다. Convention은 key
 [CPS 전략](cps-effects.md#row와-호출-규약)이 [ability row](#ability-row)에서 계산한
 값이며 body에서 추론하지 않는다. Legalization은 이를 기존
 `CallableAbi`와 physical `func.func_sig`, `closure.closure` 및
-`tribute.calling_convention` operation attribute로 바꾼다. Operation 쪽 convention은
+`tribute.calling_convention` operation attribute로 바꾼다. `tribute_cps` operation의
+convention은 그 operation이 선언한 속성이고, physical operation의 convention은
 [`ConventionBearing` interface](cps-effects.md#pre-cps-callable-shape)로만 읽고
 쓴다. Type verifier는
 result 하나와 parameter 0개 이상, convention domain, 모든 component type의
@@ -622,11 +624,22 @@ resolution을 검사하며 physical `func.func_sig`나 `closure.closure`를 comp
 | `tribute_control.resume` | resumptive general handler arm에 바인딩된 affine resumption을 소비 |
 | `tribute_control.yield` | 실행 가능한 `tribute_control` region을 logical value로 종료 |
 
+Class 특수화가 만드는 `tribute_cps` operation은 다음과 같다. 각각 같은 이름의
+`tribute_control` operation에 convention을 더한 것이다.
+
+| Operation | 용도 |
+| ---- | ---- |
+| `tribute_cps.func` | convention을 가진 named callable 인스턴스 |
+| `tribute_cps.lambda` | convention entry 목록을 가진 source lambda |
+| `tribute_cps.func_ref` | convention entry마다 대상 인스턴스를 가진 named function 참조 |
+| `tribute_cps.call_indirect` | convention을 가진 callable value 간접 호출 |
+| `tribute_cps.tail_call_indirect` | convention을 가진 callable value 간접 proper tail call |
+
 Operation 하나의 형상, 의미, 검증, 소유권, 위치 계약은 그 operation의
 `#[dialect]` 선언 doc comment가 정한다
 ([`tribute_control`](../crates/tribute-ir/src/dialect/tribute_control.rs),
-[`ability`](../crates/tribute-ir/src/dialect/ability.rs)). 이 문서는 여러
-operation에 걸친 규칙만 다룬다.
+`tribute_cps`, [`ability`](../crates/tribute-ir/src/dialect/ability.rs)). 이 문서는
+여러 operation에 걸친 규칙만 다룬다.
 
 `func.constant`, `func.unreachable`의 logical 복제는 없다. Named function value는
 `func_ref`가 표현한다. Source [`become`](syntax.md#tail-call-become)은
@@ -675,7 +688,7 @@ tribute_control.func_sig<(T) -> R,
 
 #### Row binder
 
-`tribute_control.func`는 자기 row binder를 `row_binders` 속성으로 선언한다. 원소는
+두 dialect의 `func`는 자기 row binder를 `row_binders` 속성으로 선언한다. 원소는
 binder의 종류를 나타내는 문자열이다.
 
 | 종류 | 뜻 |
@@ -718,7 +731,7 @@ tail을 선언 순서로 담는다. `result`와 같은 tail은 `sources`에 넣�
 #### 지역 람다의 양화와 인스턴스화
 
 값이 람다인 `let`의 지역 scheme이 양화한 row 변수는 그 람다가 소유한다.
-`tribute_control.lambda`는 `quantified_rows` 속성에 자기가 양화하는 `local` binder의
+두 dialect의 `lambda`는 `quantified_rows` 속성에 자기가 양화하는 `local` binder의
 index를 인스턴스화 순서로 적는다. 이 binder는 둘러싼 `func`의 binder이며 람다가 새
 binder를 만들지는 않는다. 모든 `local` binder는 정확히 한 람다가 소유하고,
 `quantified_rows`의 원소는 모두 `local` binder다. 람다의 entry 본문들은 같은
@@ -763,30 +776,36 @@ row 인자가 `quantified_rows`의 `i`번째 binder를 대체하며, 치환 규�
 
 #### Convention과 class 특수화
 
-Source-logical IR은 convention에 대해 두 상태를 가진다. Frontend가 내보내는 IR에서는
-정의, 람다, 간접 이전 어디에도 convention이 없다. CPS 전략의
-[class 특수화 pass](cps-effects.md#class-특수화-pass)가 class 인스턴스를 만들고 다음에
-convention을 쓴다.
+Convention은 `tribute_cps` dialect의 operation만 가진다. Frontend는 `tribute_control`만
+내보내며, 그 IR에는 convention이 없다. CPS 전략의
+[class 특수화 pass](cps-effects.md#class-특수화-pass)는 class 인스턴스를 만들면서
+convention에 따라 뜻이 달라지는 operation 다섯을 같은 이름의 `tribute_cps`
+operation으로 바꾼다.
 
-- `tribute_control.func`는 자기 convention을 가진다. 인스턴스마다 하나다.
-- `tribute_control.lambda`는 class마다의 본문과,
+- `tribute_cps.func`는 자기 convention을 가진다. 인스턴스마다 하나다.
+- `tribute_cps.lambda`는 class마다의 본문과,
   [convention entry](#convention-entry)마다 그 entry를 채우는 본문을 가진다.
-- `call_indirect`와 `tail_call_indirect`는 callee를 부르는 convention을 가진다.
-- `func_ref`는 convention entry마다 그 entry로 들어갈 대상 인스턴스를 가진다.
+- `tribute_cps.call_indirect`와 `tribute_cps.tail_call_indirect`는 callee를 부르는
+  convention을 가진다.
+- `tribute_cps.func_ref`는 convention entry마다 그 entry로 들어갈 대상 인스턴스를
+  가진다.
 
-상태는 module 전체의 성질이다. 위 자리가 모두 convention을 갖지 않으면 convention이
-없는 상태, 모두 가지면 convention을 가진 상태이며, 일부만 가지면 invalid다.
-Legalization은 convention을 가진 상태만 받는다. Callable 값의 type(`func_sig`)은
-두 상태 모두에서 convention이 없다.
+나머지 `tribute_control` operation(`call`, `tail_call`, `return`, `instantiate`,
+`perform`, `handle`, `handler`, `resume`, `yield`)은 그대로 남아 `tribute_cps`
+callable의 본문 안에서 쓰인다. 이 변환은 full conversion이다. Class 특수화 뒤에는
+위 다섯 operation의 `tribute_control` 형태가 남지 않으며, legalization의 입력 검증은
+남은 것을 거부한다. 두 dialect의 callable 값은 모두 `tribute_control.func_sig`를
+type으로 쓰며, 이 type은 convention을 갖지 않는다. `tribute_cps`도 row와 logical
+type을 가진 source-logical IR이며 hidden parameter는 아직 없다.
 
-Convention에 관한 규칙은 convention을 가진 상태에서만 적용한다.
+Convention에 관한 규칙은 다음과 같다.
 
-- `tail_call`의 callee 인스턴스와 `tail_call_indirect`의 바깥 convention은 감싼
-  callable(정의, 또는 그 이전을 담은 entry)보다 강하지 않다.
+- `tribute_control.tail_call`의 callee 인스턴스와 `tribute_cps.tail_call_indirect`의
+  convention은 감싼 callable(정의, 또는 그 이전을 담은 entry)보다 강하지 않다.
 - 정의의 convention과 간접 이전의 convention은 [CPS 전략](cps-effects.md#row와-호출-규약)이
   그 row와 인스턴스의 class에서 계산한 값이다.
 
-Type의 일치를 요구하는 규칙은 두 상태에서 같고, convention을 비교하지 않는다.
+Type의 일치를 요구하는 규칙은 두 dialect에서 같고, convention을 비교하지 않는다.
 
 #### Convention entry
 
@@ -867,31 +886,32 @@ code 대상(람다, `func_ref`의 대상과 class 인자)마다 정적으로 하
 
 ### 사용자 정의 어셈블리 형식
 
-`tribute_control.func`와 `tribute_control.lambda`만 custom parse/print를 요구한다.
-Convention이 없는 상태에서는 convention 표기를 생략한다. `func`의 간결한 convention
-문법은 `convention(direct)`, `convention(evidence_direct)`, `convention(cps)`이며 그
-operation의 convention으로 round trip한다. Callable type에는 convention을 쓰지 않는다.
-출력기는 body에서 convention을 추론하지 않는다.
+두 dialect의 `func`와 `lambda`만 custom parse/print를 요구하며, 두 dialect가 같은
+형식을 쓴다. `tribute_control`의 두 operation은 convention을 쓰지 않는다.
+`tribute_cps.func`는 `convention(direct)`, `convention(evidence_direct)`,
+`convention(cps)` 가운데 하나를 반드시 쓰며 그 operation의 convention으로 round
+trip한다. Callable type에는 convention을 쓰지 않는다. 출력기는 body에서 convention을
+추론하지 않는다.
 
-`lambda`는 convention이 없는 상태에서 본문 하나를 가진다. Class 특수화 뒤에는
+`tribute_control.lambda`는 본문 하나를 가진다. `tribute_cps.lambda`는
 `captures [...]` 뒤에 `entries`와 entry 목록을 쓰며, 본문을 가진 entry는 convention
 keyword 뒤에 본문을 쓴다. 더 약한 본문을 adapter로 부르는 entry는
 `cps = direct`처럼 그 본문의 class를 적고 본문이 없다. Trap entry는 쓰지 않는다.
 
 ```text
-tribute_control.func @f(%x: T) -> R convention(cps)
+tribute_cps.func @f(%x: T) -> R convention(cps)
     attributes {visibility = "private"} {
   ...
 }
 
-tribute_control.func @decl(%x: T) -> R convention(direct)
+tribute_cps.func @decl(%x: T) -> R convention(direct)
 
 %f = tribute_control.lambda(%x: T) -> R
     captures [%captured] attributes {debug_name = "apply"} {
   ...
 }
 
-%g = tribute_control.lambda(%k: !K) -> R row(| 'a1) captures [] entries {
+%g = tribute_cps.lambda(%k: !K) -> R row(| 'a1) captures [] entries {
   direct {
     ...
   }
@@ -938,13 +958,13 @@ row는 쓰지 않는다. `lambda`의 row tail은 둘러싼
 뜻이다.
 
 ```text
-tribute_control.func @map['a0](%xs: !List, %f: !F) -> !List row(| 'a0) convention(cps) {
+tribute_cps.func @map['a0](%xs: !List, %f: !F) -> !List row(| 'a0) convention(cps) {
   ...
 }
 
-tribute_control.func @join['a0 = 'a1 | 'a2, 'a1, 'a2](%x: T) -> T row(| 'a0) convention(cps)
+tribute_cps.func @join['a0 = 'a1 | 'a2, 'a1, 'a2](%x: T) -> T row(| 'a0) convention(cps)
 
-tribute_control.func @main['a0]() -> core.nil row(| 'a0) convention(direct) {
+tribute_cps.func @main['a0]() -> core.nil row(| 'a0) convention(direct) {
   ...
 }
 ```
@@ -1011,7 +1031,7 @@ callable producer를 요구한다. Return은 enclosing callable의 logical resul
 
 #### Callable 출처
 
-Whole-IR verifier는 `tribute_control.call_indirect`의 callee가 source signature를
+Whole-IR verifier는 두 dialect의 `call_indirect`의 callee가 source signature를
 선언에서 얻은 값인지 따라간다. 그 판정 규칙은 값을 만든 operation이, block 인자이면
 그 block을 가진 operation이 자기 선언에서 정한다. 규칙은 operation 자신의
 선언·속성이나 해소된 선언과의 일치로 근거를 세우고, 다른 값에 기대는 경우(lambda의

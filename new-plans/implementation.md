@@ -71,7 +71,7 @@ convention: definitions, lambda entries, and indirect transfers own the Direct,
 EvidenceDirect, and Cps convention metadata. Its codec retains the qualified
 type identity, so source arrow text is never interned as `func.func_sig`;
 malformed raw source signatures are rejected before conversion mutates IR.
-Custom `tribute_control.func` and `tribute_control.lambda` assembly keeps
+Custom `func` and `lambda` assembly of `tribute_control` and `tribute_cps` keeps
 non-reserved source-signature metadata on the complete
 `tribute_control.func_sig` type expression or alias definition, distinct from
 operation `attributes`. Their concise custom form is used only when it can
