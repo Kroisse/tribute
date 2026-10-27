@@ -556,9 +556,9 @@ mod tests {
     %r = wasm.ref_func {func_name = @constant} : wasm.funcref
   }
   func.func @f() -> core.nil {
-    %a = tribute_rt.convention_table {entries = [@first, @second]} : core.i32
-    %b = tribute_rt.convention_table {entries = [@third]} : core.i32
-    %c = tribute_rt.convention_table {entries = [@first, @second]} : core.i32
+    %a = tribute_rt.convention_table {entries = [@first, @second]} : tribute_rt.convention_table_ref
+    %b = tribute_rt.convention_table {entries = [@third]} : tribute_rt.convention_table_ref
+    %c = tribute_rt.convention_table {entries = [@first, @second]} : tribute_rt.convention_table_ref
     %d = tribute_rt.convention_entry %a {index = 0} : core.i32
     %e = tribute_rt.convention_entry %c {index = 1} : core.i32
     func.return
@@ -590,7 +590,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f() -> core.nil {
-    %a = tribute_rt.convention_table {entries = [@only]} : core.i32
+    %a = tribute_rt.convention_table {entries = [@only]} : tribute_rt.convention_table_ref
     func.return
   }
 }"#,

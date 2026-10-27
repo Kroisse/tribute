@@ -50,7 +50,8 @@ use trunk_ir::symbol_table::SymbolTable;
 use trunk_ir::types::{Attribute, AttributeMap, TypeDataBuilder};
 use trunk_ir::walk::{WalkAction, walk_op, walk_region};
 
-/// The closure base: `{ entries: i32 }`. Every closure value has this storage
+/// The closure base: `{ entries: tribute_rt.convention_table_ref }`. Every
+/// closure value has this storage
 /// type, and a capture-free closure is allocated with it.
 pub fn closure_struct_type_ref(ctx: &mut IrContext) -> TypeRef {
     runtime_layout::closure_base(ctx)
@@ -149,11 +150,13 @@ impl RewritePattern for LowerClosureNewArena {
         let captures = closure_new.captures(ctx).to_vec();
         let result_ty = ctx.op_result_types(op)[0];
 
-        // %table = tribute_rt.convention_table {entries = [...]} : core.i32
-        let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
+        // %table = tribute_rt.convention_table {entries = [...]}
+        let table_ty = tribute_rt::ConventionTableRef::params()
+            .intern(ctx)
+            .as_type_ref();
         let table_op = tribute_rt::ConventionTable::operands()
             .entries(entries)
-            .results(i32_ty)
+            .results(table_ty)
             .build(ctx, loc);
         let table = table_op.result(ctx);
         rewriter.insert_op(table_op.op_ref());
@@ -502,12 +505,15 @@ impl RewritePattern for LowerClosureEntryArena {
         let index = entry.index(ctx);
         let closure_value = entry.closure(ctx);
         let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
+        let table_ty = tribute_rt::ConventionTableRef::params()
+            .intern(ctx)
+            .as_type_ref();
         let struct_ty = closure_struct_type_ref(ctx);
 
         let get_op = adt::StructGet::operands(closure_value)
             .r#type(struct_ty)
             .field(0)
-            .results(i32_ty)
+            .results(table_ty)
             .build(ctx, loc);
         let read = tribute_rt::ConventionEntry::operands(get_op.result(ctx))
             .index(index)
@@ -1528,6 +1534,9 @@ mod tests {
         let [i32_ty, i64_ty] = [core::I32::type_ref(&mut ctx), core::I64::type_ref(&mut ctx)];
         let layout = closure_captures_type_ref(&mut ctx, &[i64_ty, i32_ty]);
         let base = closure_struct_type_ref(&mut ctx);
+        let table_ty = tribute_rt::ConventionTableRef::params()
+            .intern(&mut ctx)
+            .as_type_ref();
         assert_eq!(
             layout,
             closure_captures_type_ref(&mut ctx, &[i64_ty, i32_ty])
@@ -1541,7 +1550,7 @@ mod tests {
             adt::Struct::from_type_ref(&ctx, layout)
                 .unwrap()
                 .fields(&ctx),
-            [("entries", i32_ty), ("_0", i64_ty), ("_1", i32_ty)],
+            [("entries", table_ty), ("_0", i64_ty), ("_1", i32_ty)],
         );
 
         let make = func_by_name(&ctx, module, "make");
@@ -1633,7 +1642,7 @@ mod tests {
         let ir = print_module(&ctx, module.op());
         assert!(!ir.contains("closure.new"), "{ir}");
         assert!(
-            ir.contains(r#"tribute_rt.convention_table {entries = [@left::@helper]} : core.i32"#),
+            ir.contains(r#"tribute_rt.convention_table {entries = [@left::@helper]} : tribute_rt.convention_table_ref"#),
             "{ir}"
         );
 

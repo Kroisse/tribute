@@ -3,8 +3,8 @@ source: crates/tribute-passes/src/native/adapt_closure_layout.rs
 expression: result
 ---
 core.module @test {
-  !Base = adt.struct<_closure(entries: core.i32), {layout = "closure"}>
-  !Captures = adt.struct<_closure_captures(entries: core.i32, _0: tribute_rt.anyref), {closure_base = !Base, layout = "closure_captures"}>
+  !Base = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
+  !Captures = adt.struct<_closure_captures(entries: tribute_rt.convention_table_ref, _0: tribute_rt.anyref), {closure_base = !Base, layout = "closure_captures"}>
   !_closure_captures = adt.struct<_closure_captures(entries: core.ptr, _0: tribute_rt.anyref), {closure_base = adt.struct<_closure(entries: core.ptr), {layout = "closure"}>, layout = "closure_captures"}>
   !t0 = clif.func_sig<(core.ptr) -> core.i32>
 

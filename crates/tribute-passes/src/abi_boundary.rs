@@ -1050,8 +1050,8 @@ mod tests {
     func.return
   }
   func.func @make() {
-    %table = tribute_rt.convention_table {entries = [@target]} : core.i32
-    %missing = tribute_rt.convention_table {entries = [@target, @missing]} : core.i32
+    %table = tribute_rt.convention_table {entries = [@target]} : tribute_rt.convention_table_ref
+    %missing = tribute_rt.convention_table {entries = [@target, @missing]} : tribute_rt.convention_table_ref
     func.return
   }
 }"#,

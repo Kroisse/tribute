@@ -65,10 +65,13 @@ fn insert_closure_function(
 ) -> ValueRef {
     let i32_ty = i32_type(ctx);
     let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
+    let table_ty = tribute_rt::ConventionTableRef::params()
+        .intern(ctx)
+        .as_type_ref();
     let table = adt::StructGet::operands(closure)
         .r#type(closure_ty)
         .field(0)
-        .results(i32_ty)
+        .results(table_ty)
         .build(ctx, loc);
     let function = tribute_rt::ConventionEntry::operands(table.result(ctx))
         .index(0)

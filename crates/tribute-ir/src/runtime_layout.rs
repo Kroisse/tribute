@@ -42,10 +42,11 @@ pub fn closure_base_layout(ctx: &mut IrContext, entries: TypeRef) -> TypeRef {
 }
 
 /// The closure base of the source-logical and target-neutral IR, whose
-/// convention table field is the `core.i32` that `tribute_rt.convention_table`
-/// yields there.
+/// convention table field is a `tribute_rt.convention_table_ref`.
 pub fn closure_base(ctx: &mut IrContext) -> TypeRef {
-    let entries = trunk_ir::types::TypeDataBuilder::new("core.i32").intern(ctx);
+    let entries = crate::dialect::tribute_rt::ConventionTableRef::params()
+        .intern(ctx)
+        .as_type_ref();
     closure_base_layout(ctx, entries)
 }
 

@@ -275,8 +275,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Base = adt.struct<_closure(entries: core.i32), {layout = "closure"}>
-  !Captures = adt.struct<_closure_captures(entries: core.i32, _0: tribute_rt.anyref), {closure_base = !Base, layout = "closure_captures"}>
+  !Base = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
+  !Captures = adt.struct<_closure_captures(entries: tribute_rt.convention_table_ref, _0: tribute_rt.anyref), {closure_base = !Base, layout = "closure_captures"}>
   !Other = adt.struct<Other(value: tribute_rt.anyref)>
   tribute_rtti.layout {type = !Captures, index = 32, fields = ["raw", "dynamic"]}
   tribute_rtti.layout {type = !Base, index = 33, fields = ["raw"]}
@@ -333,9 +333,9 @@ mod tests {
             r#"core.module @test {
   clif.data {align = 1, bytes = b"\0", sym_name = "__tribute_convention_table_0"}
   func.func @make() -> core.nil {
-    %a = tribute_rt.convention_table {entries = [@first]} : core.i32
-    %b = tribute_rt.convention_table {entries = [@second, @first]} : core.i32
-    %c = tribute_rt.convention_table {entries = [@first]} : core.i32
+    %a = tribute_rt.convention_table {entries = [@first]} : tribute_rt.convention_table_ref
+    %b = tribute_rt.convention_table {entries = [@second, @first]} : tribute_rt.convention_table_ref
+    %c = tribute_rt.convention_table {entries = [@first]} : tribute_rt.convention_table_ref
     %d = tribute_rt.convention_entry %b {index = 1} : core.i32
     func.return
   }
@@ -391,13 +391,13 @@ mod tests {
     fn test_closure_struct_adaptation() {
         let result = adapt_then_lower_func(
             r#"core.module @test {
-  !Base = adt.struct<_closure(entries: core.i32), {layout = "closure"}>
-  !Captures = adt.struct<_closure_captures(entries: core.i32, _0: core.ptr), {closure_base = !Base, layout = "closure_captures"}>
+  !Base = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
+  !Captures = adt.struct<_closure_captures(entries: tribute_rt.convention_table_ref, _0: core.ptr), {closure_base = !Base, layout = "closure_captures"}>
   func.func @test_fn() -> core.i32 {
-    %0 = tribute_rt.convention_table {entries = [@lifted_fn]} : core.i32
+    %0 = tribute_rt.convention_table {entries = [@lifted_fn]} : tribute_rt.convention_table_ref
     %1 = mem.null : core.ptr
     %2 = adt.struct_new %0, %1 {type = !Captures} : !Captures
-    %3 = adt.struct_get %2 {field = 0, type = !Captures} : core.i32
+    %3 = adt.struct_get %2 {field = 0, type = !Captures} : tribute_rt.convention_table_ref
     %4 = adt.struct_get %2 {field = 1, type = !Captures} : core.ptr
     %6 = tribute_rt.convention_entry %3 {index = 0} : core.i32
     %5 = func.call_indirect %6, %4 {signature = func.func_sig<(core.ptr) -> core.i32>} : core.i32
@@ -412,12 +412,12 @@ mod tests {
     fn test_closure_struct_anyref_adaptation() {
         let result = adapt_then_lower_func(
             r#"core.module @test {
-  !Base = adt.struct<_closure(entries: core.i32), {layout = "closure"}>
-  !Captures = adt.struct<_closure_captures(entries: core.i32, _0: tribute_rt.anyref), {closure_base = !Base, layout = "closure_captures"}>
+  !Base = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
+  !Captures = adt.struct<_closure_captures(entries: tribute_rt.convention_table_ref, _0: tribute_rt.anyref), {closure_base = !Base, layout = "closure_captures"}>
   func.func @test_fn(%1: tribute_rt.anyref) -> core.i32 {
-    %0 = tribute_rt.convention_table {entries = [@lifted_fn]} : core.i32
+    %0 = tribute_rt.convention_table {entries = [@lifted_fn]} : tribute_rt.convention_table_ref
     %2 = adt.struct_new %0, %1 {type = !Captures} : !Captures
-    %3 = adt.struct_get %2 {field = 0, type = !Captures} : core.i32
+    %3 = adt.struct_get %2 {field = 0, type = !Captures} : tribute_rt.convention_table_ref
     %4 = adt.struct_get %2 {field = 1, type = !Captures} : tribute_rt.anyref
     %6 = tribute_rt.convention_entry %3 {index = 0} : core.i32
     %5 = func.call_indirect %6, %4 {signature = func.func_sig<(core.ptr) -> core.i32>} : core.i32

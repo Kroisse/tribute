@@ -16,6 +16,13 @@ mod tribute_rt {
     struct Intref;
     #[implements(ManagedRefType)]
     struct Anyref;
+    /// A reference to a static convention table, the type of a closure's
+    /// convention table field. It is unmanaged: the table is never released
+    /// and holds no managed reference. Each target converts it to its own
+    /// table reference, the table's address on native targets and its first
+    /// slot in the function table on Wasm, before it lowers the
+    /// `convention_table` and `convention_entry` operations that use it.
+    struct ConventionTableRef;
 
     #[flags(Pure)]
     fn box_int(value: Value<_>) -> Value<_> {}
@@ -72,8 +79,11 @@ mod tribute_rt {
     /// the reference. See the closure storage layout in `new-plans/ir.md`.
     ///
     /// ```text
-    /// %table = tribute_rt.convention_table {entries = [@f]} : core.i32
+    /// %table = tribute_rt.convention_table {entries = [@f]} : tribute_rt.convention_table_ref
     /// ```
+    ///
+    /// Its result is a `convention_table_ref` until the target converts that
+    /// type, so the schema leaves it unconstrained.
     #[flags(Pure)]
     fn convention_table(entries: Attr<[SymbolRef]>) -> Value<_> {}
 
@@ -84,6 +94,9 @@ mod tribute_rt {
     /// ```text
     /// %entry = tribute_rt.convention_entry %table {index = 0} : core.i32
     /// ```
+    ///
+    /// `table` is a `convention_table_ref` until the target converts that
+    /// type, so the schema leaves it unconstrained.
     #[flags(Pure)]
     fn convention_entry(index: Attr<u32>, table: Value<_>) -> Value<_> {}
 }

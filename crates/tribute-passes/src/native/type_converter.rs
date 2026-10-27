@@ -32,6 +32,7 @@ use tribute_ir::dialect::tribute_rt;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core;
+use trunk_ir::ops::DialectType as _;
 use trunk_ir::refs::{TypeRef, ValueRef};
 use trunk_ir::rewrite::TypeConverter;
 use trunk_ir::types::TypeDataBuilder;
@@ -124,6 +125,10 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
             return Some(r.core_f64);
         }
         if ty == r.tribute_rt_intref {
+            return Some(r.core_ptr);
+        }
+        // A convention table reference is the table's address.
+        if tribute_rt::ConventionTableRef::matches(ctx, ty) {
             return Some(r.core_ptr);
         }
         // Evidence type → ptr

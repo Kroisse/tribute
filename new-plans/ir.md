@@ -1957,8 +1957,9 @@ Closure 저장 layout은 두 종류다.
 - Capture layout의 identity는 base와 capture 필드 타입 목록이다. Capture 타입 목록이
   같은 두 closure는 같은 layout을 쓴다. 필드 이름과 struct 이름은 canonical
   생성자가 정하며 의미를 갖지 않는다.
-- Convention table 필드의 타입은 target이 정하는 정적 table 참조 표현이다. 이 필드는
-  managed 참조가 아니며 해제하지 않는다. Target은 closure의 callable type `S`마다 base를
+- Convention table 필드의 타입은 경계 안에서 `tribute_rt.convention_table_ref`이고,
+  target이 자기 정적 table 참조 표현으로 바꾼다. 이 필드는 managed 참조가 아니며
+  해제하지 않는다. Target은 closure의 callable type `S`마다 base를
   정한다. 모든 `S`에 base 하나를 쓸 수도 있고 `S`마다 다른 base를 둘 수도 있다.
   `S`마다 base를 두고 entry를 typed 함수 참조로 표현하면, entry 함수의 environment
   입력이 다시 그 base이므로 base와 entry 함수 타입은 서로를 가리킨다. 이 재귀는
