@@ -1,9 +1,12 @@
 //! Close nominal instances over their checked constructor schemas before cloning.
+use std::ops::ControlFlow;
+
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 
+use crate::ast::fold::TypeFoldable;
 use crate::ast::{CtorId, NodeId, Type, TypeDefId, TypeKind, TypeScheme};
-use crate::typeck::subst::{SubstResult, substitute_bound_vars};
+use crate::typeck::subst::BoundVarSubst;
 
 use super::nominal_index::{Constructor, Declaration, NominalIndex};
 use super::{InstanceError, InstanceErrorKind, collect, specialize};
@@ -57,22 +60,12 @@ fn instantiate<'db>(
     if !matches!(result.kind(db), TypeKind::Named { id, .. } if *id == owner) {
         return Err(fail(InstanceErrorKind::WrongDeclaration));
     }
-    let mut invalid = false;
-    let specialized = scheme
+    Ok(scheme
         .to_builder(db)
-        .map_types(db, |ty| match substitute_bound_vars(db, ty, arguments) {
-            SubstResult::Ok(ty) => ty,
-            _ => {
-                invalid = true;
-                ty
-            }
-        })
+        .try_fold_types(&mut BoundVarSubst::new(db, arguments))
+        .map_err(|_| fail(InstanceErrorKind::IncompleteTypeArgument))?
         .type_params(Vec::new())
-        .build(db);
-    if invalid {
-        return Err(fail(InstanceErrorKind::IncompleteTypeArgument));
-    }
-    Ok(specialized)
+        .build(db))
 }
 
 pub(super) fn collect<'db>(
@@ -135,9 +128,9 @@ fn close_dependencies<'db>(
                 for constructor in &declaration.constructors {
                     let scheme =
                         instantiate(db, owner, declaration, constructor, schemes, &arguments)?;
-                    scheme.for_each_type(db, |ty| {
-                        collect::collect_from_type(db, ty, index, &mut discovered)
-                    });
+                    let ControlFlow::Continue(()) = scheme.visit_with(
+                        &mut collect::NominalCollector::new(db, index, &mut discovered),
+                    );
                     if declaration.is_enum() {
                         let node = constructor
                             .node

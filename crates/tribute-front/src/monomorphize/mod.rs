@@ -10,7 +10,6 @@ mod nominal_index;
 mod recursion;
 mod rewrite;
 mod validate;
-pub(crate) use collect::is_concrete_type;
 pub use validate::{InstanceError, InstanceErrorKind};
 pub mod specialize;
 
@@ -21,10 +20,9 @@ use trunk_ir::{Symbol, SymbolPath};
 
 use self::instance::InstanceKey;
 use crate::SortedMap;
-use crate::ast::{
-    AbilityRow, CtorId, Decl, DeclTable, FuncDefId, NodeId, Type, TypeScheme, TypedRef,
-};
-use crate::typeck::subst::{BoundVarOutOfBounds, substitute_ability_row, substitute_bound_vars};
+use crate::ast::fold::TypeFoldable;
+use crate::ast::{CtorId, Decl, DeclTable, FuncDefId, NodeId, Type, TypeScheme, TypedRef};
+use crate::typeck::subst::{BoundVarOutOfBounds, BoundVarSubst};
 use crate::typeck::{
     ConstructorTypeMetadata, DeclarationTypeMetadata, ExpressionTypeMetadata,
     InstantiatedHandlerOperation, InstantiatedPerformOperation, LambdaSignature, TypeCheckOutput,
@@ -525,7 +523,7 @@ impl<'db> MetadataClones<'db> {
         origins: &HashSet<NodeId>,
     ) {
         let (variant, type_args) = (key.variant(), key.type_args.as_slice());
-        let substitute = |ty| substitute_type(db, ty, type_args);
+        let substitute = |ty| substitute_types(db, ty, type_args);
         clone_entries(
             &expressions.node_types,
             origins,
@@ -547,7 +545,7 @@ impl<'db> MetadataClones<'db> {
                 instance.row_arguments = instance
                     .row_arguments
                     .into_iter()
-                    .map(|row| substitute_row(db, row, type_args))
+                    .map(|row| substitute_types(db, row, type_args))
                     .collect();
                 instance
             },
@@ -560,13 +558,9 @@ impl<'db> MetadataClones<'db> {
             |mut instance| {
                 instance.binding = instance.binding.with_variant(variant);
                 instance.callable = substitute(instance.callable);
-                instance.scheme = instance
-                    .scheme
-                    .to_builder(db)
-                    .map_types(db, substitute)
-                    .build(db);
+                instance.scheme = substitute_types(db, instance.scheme, type_args);
                 for row in &mut instance.row_arguments {
-                    *row = substitute_row(db, *row, type_args);
+                    *row = substitute_types(db, *row, type_args);
                 }
                 instance
             },
@@ -665,24 +659,16 @@ fn clone_entries<V: Clone>(
     }));
 }
 
-fn substitute_type<'db>(
+fn substitute_types<'db, T: TypeFoldable<'db>>(
     db: &'db dyn salsa::Database,
-    ty: Type<'db>,
+    value: T,
     type_args: &[Type<'db>],
-) -> Type<'db> {
-    substitute_bound_vars(db, ty, type_args).unwrap_or_else(|index, max| {
-        panic!("BoundVar index out of range in specialization metadata: index={index}, subst.len()={max}")
-    })
-}
-
-fn substitute_row<'db>(
-    db: &'db dyn salsa::Database,
-    row: AbilityRow<'db>,
-    type_args: &[Type<'db>],
-) -> AbilityRow<'db> {
-    substitute_ability_row(db, row, type_args).unwrap_or_else(|BoundVarOutOfBounds { index, max }| {
-        panic!("BoundVar index out of range in specialization metadata: index={index}, subst.len()={max}")
-    })
+) -> T {
+    value
+        .try_fold_with(&mut BoundVarSubst::new(db, type_args))
+        .unwrap_or_else(|BoundVarOutOfBounds { index, max }| {
+            panic!("BoundVar index out of range in specialization metadata: index={index}, subst.len()={max}")
+        })
 }
 
 /// Build a map from (original FuncDefId, concrete callee type) → mangled Symbol
@@ -715,7 +701,7 @@ fn build_rewrite_map<'db>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{AbilityId, OpDeclKind, TypeKind};
+    use crate::ast::{AbilityId, AbilityRow, OpDeclKind, TypeKind};
 
     #[salsa::db]
     #[derive(Default)]

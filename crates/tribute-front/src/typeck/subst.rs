@@ -3,11 +3,15 @@
 //! This module provides shared substitution logic for replacing BoundVar types
 //! with actual types during type scheme instantiation.
 
+use std::convert::Infallible;
+
 use rustc_hash::FxHashMap as HashMap;
 
-use crate::ast::{AbilityInstance, AbilityRow, RowVar, Type, TypeKind, TypeScheme};
+use crate::ast::fold::{TypeFoldable, TypeFolder};
+use crate::ast::{AbilityRow, RowVar, Type, TypeKind, TypeScheme};
 
-/// Result of BoundVar substitution.
+/// Result of BoundVar substitution, for callers that have not moved to
+/// [`BoundVarSubst`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SubstResult<'db> {
     /// Substitution succeeded.
@@ -48,6 +52,53 @@ impl<'db> SubstResult<'db> {
     }
 }
 
+impl<'db> From<Result<Type<'db>, BoundVarOutOfBounds>> for SubstResult<'db> {
+    fn from(result: Result<Type<'db>, BoundVarOutOfBounds>) -> Self {
+        match result {
+            Ok(ty) => SubstResult::Ok(ty),
+            Err(BoundVarOutOfBounds { index, max }) => SubstResult::OutOfBounds { index, max },
+        }
+    }
+}
+
+/// Replaces scheme `BoundVar(i)` with `args[i]`, without folding into the
+/// arguments. An index past `args` is reported; the caller decides whether
+/// it is a diagnostic or a broken invariant. `LocalBoundVar` and `UniVar`
+/// pass through unchanged.
+pub struct BoundVarSubst<'a, 'db> {
+    db: &'db dyn salsa::Database,
+    args: &'a [Type<'db>],
+}
+
+impl<'a, 'db> BoundVarSubst<'a, 'db> {
+    pub fn new(db: &'db dyn salsa::Database, args: &'a [Type<'db>]) -> Self {
+        Self { db, args }
+    }
+}
+
+impl<'db> TypeFolder<'db> for BoundVarSubst<'_, 'db> {
+    type Error = BoundVarOutOfBounds;
+
+    fn db(&self) -> &'db dyn salsa::Database {
+        self.db
+    }
+
+    fn fold_type(&mut self, ty: Type<'db>) -> Result<Type<'db>, BoundVarOutOfBounds> {
+        match ty.kind(self.db) {
+            TypeKind::BoundVar { index } => {
+                self.args
+                    .get(*index as usize)
+                    .copied()
+                    .ok_or(BoundVarOutOfBounds {
+                        index: *index,
+                        max: self.args.len(),
+                    })
+            }
+            _ => ty.try_super_fold_with(self),
+        }
+    }
+}
+
 /// Substitute BoundVars in a type with the given substitution types.
 ///
 /// Returns `SubstResult::OutOfBounds` if a BoundVar's index exceeds `subst.len()`.
@@ -56,106 +107,7 @@ pub fn substitute_bound_vars<'db>(
     ty: Type<'db>,
     subst: &[Type<'db>],
 ) -> SubstResult<'db> {
-    match ty.kind(db) {
-        TypeKind::BoundVar { index } => {
-            if let Some(&ty) = subst.get(*index as usize) {
-                SubstResult::Ok(ty)
-            } else {
-                SubstResult::OutOfBounds {
-                    index: *index,
-                    max: subst.len(),
-                }
-            }
-        }
-        TypeKind::Named { id, name, args } => {
-            let mut new_args = Vec::with_capacity(args.len());
-            for arg in args {
-                match substitute_bound_vars(db, *arg, subst) {
-                    SubstResult::Ok(ty) => new_args.push(ty),
-                    err @ SubstResult::OutOfBounds { .. } => return err,
-                }
-            }
-            SubstResult::Ok(Type::new(
-                db,
-                TypeKind::Named {
-                    id: *id,
-                    name: name.clone(),
-                    args: new_args,
-                },
-            ))
-        }
-        TypeKind::Func {
-            params,
-            result,
-            effect,
-        } => {
-            let mut new_params = Vec::with_capacity(params.len());
-            for param in params {
-                match substitute_bound_vars(db, *param, subst) {
-                    SubstResult::Ok(ty) => new_params.push(ty),
-                    err @ SubstResult::OutOfBounds { .. } => return err,
-                }
-            }
-            let new_result = match substitute_bound_vars(db, *result, subst) {
-                SubstResult::Ok(ty) => ty,
-                err @ SubstResult::OutOfBounds { .. } => return err,
-            };
-            let new_effect = match substitute_ability_row(db, *effect, subst) {
-                Ok(row) => row,
-                Err(BoundVarOutOfBounds { index, max }) => {
-                    return SubstResult::OutOfBounds { index, max };
-                }
-            };
-            SubstResult::Ok(Type::new(
-                db,
-                TypeKind::Func {
-                    params: new_params,
-                    result: new_result,
-                    effect: new_effect,
-                },
-            ))
-        }
-        TypeKind::Tuple(elements) => {
-            let mut new_elements = Vec::with_capacity(elements.len());
-            for elem in elements {
-                match substitute_bound_vars(db, *elem, subst) {
-                    SubstResult::Ok(ty) => new_elements.push(ty),
-                    err @ SubstResult::OutOfBounds { .. } => return err,
-                }
-            }
-            SubstResult::Ok(Type::new(db, TypeKind::Tuple(new_elements)))
-        }
-        TypeKind::Continuation {
-            arg,
-            result,
-            effect,
-        } => {
-            let new_arg = match substitute_bound_vars(db, *arg, subst) {
-                SubstResult::Ok(ty) => ty,
-                err @ SubstResult::OutOfBounds { .. } => return err,
-            };
-            let new_result = match substitute_bound_vars(db, *result, subst) {
-                SubstResult::Ok(ty) => ty,
-                err @ SubstResult::OutOfBounds { .. } => return err,
-            };
-            let new_effect = match substitute_ability_row(db, *effect, subst) {
-                Ok(row) => row,
-                Err(BoundVarOutOfBounds { index, max }) => {
-                    return SubstResult::OutOfBounds { index, max };
-                }
-            };
-            SubstResult::Ok(Type::new(
-                db,
-                TypeKind::Continuation {
-                    arg: new_arg,
-                    result: new_result,
-                    effect: new_effect,
-                },
-            ))
-        }
-        // Primitive types and other type variables are unchanged
-        _ => SubstResult::Ok(ty),
-    }
+    ty.try_fold_with(&mut BoundVarSubst::new(db, subst)).into()
 }
 
 /// Substitute BoundVars within an ability row.
@@ -166,34 +118,7 @@ pub fn substitute_ability_row<'db>(
     row: AbilityRow<'db>,
     subst: &[Type<'db>],
 ) -> Result<AbilityRow<'db>, BoundVarOutOfBounds> {
-    let effects = row.instances(db);
-    let mut changed = false;
-
-    let mut new_effects = Vec::with_capacity(effects.len());
-    for effect in effects {
-        let mut new_args = Vec::with_capacity(effect.args.len());
-        for arg in &effect.args {
-            match substitute_bound_vars(db, *arg, subst) {
-                SubstResult::Ok(ty) => new_args.push(ty),
-                SubstResult::OutOfBounds { index, max } => {
-                    return Err(BoundVarOutOfBounds { index, max });
-                }
-            }
-        }
-        if new_args != effect.args {
-            changed = true;
-        }
-        new_effects.push(AbilityInstance {
-            ability_id: effect.ability_id,
-            args: new_args,
-        });
-    }
-
-    if changed {
-        Ok(AbilityRow::new(db, new_effects, row.rest(db)))
-    } else {
-        Ok(row)
-    }
+    row.try_fold_with(&mut BoundVarSubst::new(db, subst))
 }
 
 /// One instantiation mapping is shared by the signature and its retained rows.
@@ -205,6 +130,45 @@ pub struct SchemeInstance<'db> {
     pub row_removals: Vec<crate::ast::RowRemoval<'db>>,
 }
 
+/// Instantiates one scheme: its `BoundVar`s become the type arguments and
+/// its quantified row tails the row arguments. Substituted type arguments
+/// are caller-owned and are not folded, so their rows keep their identities.
+struct Instantiate<'a, 'db> {
+    types: BoundVarSubst<'a, 'db>,
+    rows: HashMap<RowVar, RowVar>,
+}
+
+impl<'db> TypeFolder<'db> for Instantiate<'_, 'db> {
+    type Error = Infallible;
+
+    fn db(&self) -> &'db dyn salsa::Database {
+        self.types.db
+    }
+
+    fn fold_type(&mut self, ty: Type<'db>) -> Result<Type<'db>, Infallible> {
+        match ty.kind(self.types.db) {
+            TypeKind::BoundVar { .. } => {
+                Ok(self
+                    .types
+                    .fold_type(ty)
+                    .unwrap_or_else(|BoundVarOutOfBounds { index, max }| {
+                        panic!("scheme binder {index} out of {max}")
+                    }))
+            }
+            _ => ty.try_super_fold_with(self),
+        }
+    }
+
+    fn fold_row(&mut self, row: AbilityRow<'db>) -> Result<AbilityRow<'db>, Infallible> {
+        let db = self.types.db;
+        let row = row.try_super_fold_with(self)?;
+        Ok(match row.rest(db).and_then(|var| self.rows.get(&var)) {
+            Some(fresh) => AbilityRow::new(db, row.instances(db).to_vec(), Some(*fresh)),
+            None => row,
+        })
+    }
+}
+
 pub fn instantiate_with_arguments<'db>(
     db: &'db dyn salsa::Database,
     scheme: TypeScheme<'db>,
@@ -213,46 +177,18 @@ pub fn instantiate_with_arguments<'db>(
 ) -> SchemeInstance<'db> {
     assert_eq!(scheme.type_params(db).len(), type_args.len());
     assert_eq!(scheme.effect_params(db).len(), row_vars.len());
-    let mut mapping: HashMap<_, _> = scheme
-        .effect_params(db)
-        .iter()
-        .zip(&row_vars)
-        .map(|(old, new)| (old.id, *new))
-        .collect();
-    let mut fresh = || unreachable!("all quantified rows have allocated identities");
-    let mut map_type = |ty| {
-        // Freshen only scheme-owned rows before inserting caller-owned types.
-        let ty = freshen_row_vars_inner(db, ty, scheme.effect_params(db), &mut fresh, &mut mapping);
-        substitute_bound_vars(db, ty, &type_args)
-            .unwrap_or_else(|index, max| panic!("scheme binder {index} out of {max}"))
-    };
-    let ty = map_type(scheme.body(db));
-    let mut map_row = |row: &mut AbilityRow<'db>| {
-        let effects: Vec<_> = row
-            .instances(db)
+    let mut folder = Instantiate {
+        types: BoundVarSubst::new(db, &type_args),
+        rows: scheme
+            .effect_params(db)
             .iter()
-            .map(|effect| AbilityInstance {
-                ability_id: effect.ability_id,
-                args: effect.args.iter().copied().map(&mut map_type).collect(),
-            })
-            .collect();
-        let rest = row.rest(db).map(|var| {
-            scheme
-                .effect_params(db)
-                .iter()
-                .position(|p| *p == var)
-                .map_or(var, |i| row_vars[i])
-        });
-        *row = AbilityRow::new(db, effects, rest);
+            .copied()
+            .zip(row_vars.iter().copied())
+            .collect(),
     };
-    let mut row_unions = scheme.row_unions(db).to_vec();
-    for union in &mut row_unions {
-        union.for_each_row_mut(&mut map_row);
-    }
-    let mut row_removals = scheme.row_removals(db).to_vec();
-    for removal in &mut row_removals {
-        removal.for_each_row_mut(&mut map_row);
-    }
+    let ty = scheme.body(db).fold_with(&mut folder);
+    let row_unions = scheme.row_unions(db).to_vec().fold_with(&mut folder);
+    let row_removals = scheme.row_removals(db).to_vec().fold_with(&mut folder);
     SchemeInstance {
         ty,
         type_args,
@@ -310,130 +246,10 @@ pub fn instantiate_scheme_details_for_solver<'db>(
     instance
 }
 
-fn freshen_row_vars_inner<'db>(
-    db: &'db dyn salsa::Database,
-    ty: Type<'db>,
-    quantified_rows: &[RowVar],
-    fresh_row_var: &mut impl FnMut() -> RowVar,
-    row_vars: &mut HashMap<u64, RowVar>,
-) -> Type<'db> {
-    let freshen_row = |row: AbilityRow<'db>,
-                       fresh_row_var: &mut _,
-                       row_vars: &mut HashMap<u64, RowVar>| {
-        let effects: Vec<_> = row
-            .instances(db)
-            .iter()
-            .map(|effect| AbilityInstance {
-                ability_id: effect.ability_id,
-                args: effect
-                    .args
-                    .iter()
-                    .map(|arg| {
-                        freshen_row_vars_inner(db, *arg, quantified_rows, fresh_row_var, row_vars)
-                    })
-                    .collect(),
-            })
-            .collect();
-        let rest = row.rest(db).map(|var| {
-            if !quantified_rows.contains(&var) {
-                return var;
-            }
-            *row_vars.entry(var.id).or_insert_with(&mut *fresh_row_var)
-        });
-        AbilityRow::new(db, effects, rest)
-    };
-
-    match ty.kind(db) {
-        TypeKind::Named { id, name, args } => Type::new(
-            db,
-            TypeKind::Named {
-                id: *id,
-                name: name.clone(),
-                args: args
-                    .iter()
-                    .map(|arg| {
-                        freshen_row_vars_inner(db, *arg, quantified_rows, fresh_row_var, row_vars)
-                    })
-                    .collect(),
-            },
-        ),
-        TypeKind::Func {
-            params,
-            result,
-            effect,
-        } => Type::new(
-            db,
-            TypeKind::Func {
-                params: params
-                    .iter()
-                    .map(|param| {
-                        freshen_row_vars_inner(db, *param, quantified_rows, fresh_row_var, row_vars)
-                    })
-                    .collect(),
-                result: freshen_row_vars_inner(
-                    db,
-                    *result,
-                    quantified_rows,
-                    fresh_row_var,
-                    row_vars,
-                ),
-                effect: freshen_row(*effect, fresh_row_var, row_vars),
-            },
-        ),
-        TypeKind::Tuple(elements) => Type::new(
-            db,
-            TypeKind::Tuple(
-                elements
-                    .iter()
-                    .map(|element| {
-                        freshen_row_vars_inner(
-                            db,
-                            *element,
-                            quantified_rows,
-                            fresh_row_var,
-                            row_vars,
-                        )
-                    })
-                    .collect(),
-            ),
-        ),
-        TypeKind::Continuation {
-            arg,
-            result,
-            effect,
-        } => Type::new(
-            db,
-            TypeKind::Continuation {
-                arg: freshen_row_vars_inner(db, *arg, quantified_rows, fresh_row_var, row_vars),
-                result: freshen_row_vars_inner(
-                    db,
-                    *result,
-                    quantified_rows,
-                    fresh_row_var,
-                    row_vars,
-                ),
-                effect: freshen_row(*effect, fresh_row_var, row_vars),
-            },
-        ),
-        TypeKind::BoundVar { .. }
-        | TypeKind::LocalBoundVar { .. }
-        | TypeKind::UniVar { .. }
-        | TypeKind::Int
-        | TypeKind::Nat
-        | TypeKind::Float
-        | TypeKind::Bool
-        | TypeKind::Bytes
-        | TypeKind::Rune
-        | TypeKind::Nil
-        | TypeKind::Never
-        | TypeKind::Error => ty,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{AbilityId, AbilityRow};
+    use crate::ast::{AbilityId, AbilityInstance, AbilityRow};
     use crate::typeck::TypeSolver;
     use salsa_test_macros::salsa_test;
 
@@ -510,6 +326,48 @@ mod tests {
                 assert_eq!(row.instances(db)[0].args, vec![callback]);
             }
         }
+    }
+
+    #[salsa_test]
+    fn bound_var_substitution_reaches_retained_row_constraints(db: &dyn salsa::Database) {
+        let tail = RowVar { id: 3 };
+        let int = Type::new(db, TypeKind::Int);
+        let row = |arg, rest| {
+            AbilityRow::new(
+                db,
+                vec![AbilityInstance {
+                    ability_id: test_ability_id(db, "State"),
+                    args: vec![arg],
+                }],
+                rest,
+            )
+        };
+        let scheme = |arg| {
+            TypeScheme::builder(
+                vec![crate::ast::TypeParam::anonymous()],
+                vec![tail],
+                Type::new(db, TypeKind::Nil),
+            )
+            .row_unions(vec![crate::ast::RowUnion {
+                sources: vec![row(arg, None), AbilityRow::open(db, tail)],
+                result: row(arg, Some(tail)),
+            }])
+            .row_removals(vec![crate::ast::RowRemoval {
+                source: row(arg, Some(tail)),
+                removed: row(arg, None),
+                result: AbilityRow::open(db, tail),
+            }])
+            .build(db)
+        };
+        let bound = Type::new(db, TypeKind::BoundVar { index: 0 });
+        assert_eq!(
+            scheme(bound).try_fold_with(&mut BoundVarSubst::new(db, &[int])),
+            Ok(scheme(int))
+        );
+        assert_eq!(
+            scheme(bound).try_fold_with(&mut BoundVarSubst::new(db, &[])),
+            Err(BoundVarOutOfBounds { index: 0, max: 0 })
+        );
     }
 
     #[salsa_test]
@@ -638,6 +496,14 @@ mod laws {
         ARGS.bound_vars(n).continuations(true)
     }
 
+    fn subst<'db>(
+        db: &'db dyn salsa::Database,
+        ty: Type<'db>,
+        args: &[Type<'db>],
+    ) -> Result<Type<'db>, BoundVarOutOfBounds> {
+        ty.try_fold_with(&mut BoundVarSubst::new(db, args))
+    }
+
     fn build_all<'db>(db: &'db dyn salsa::Database, shapes: &[TypeShape]) -> Vec<Type<'db>> {
         shapes.iter().map(|shape| shape.build(db)).collect()
     }
@@ -650,8 +516,8 @@ mod laws {
             let db = salsa::DatabaseImpl::new();
             let expected = ty.substitute_bound(&args).expect("indices in range");
             prop_assert_eq!(
-                substitute_bound_vars(&db, ty.build(&db), &build_all(&db, &args)),
-                SubstResult::Ok(expected.build(&db))
+                subst(&db, ty.build(&db), &build_all(&db, &args)),
+                Ok(expected.build(&db))
             );
         }
 
@@ -665,8 +531,8 @@ mod laws {
             let index = pick.index(args.len());
             let bound = Type::new(&db, TypeKind::BoundVar { index: index as u32 });
             prop_assert_eq!(
-                substitute_bound_vars(&db, bound, &build_all(&db, &args)),
-                SubstResult::Ok(args[index].build(&db))
+                subst(&db, bound, &build_all(&db, &args)),
+                Ok(args[index].build(&db))
             );
         }
 
@@ -681,7 +547,7 @@ mod laws {
             let db = salsa::DatabaseImpl::new();
             let args = build_all(&db, &args);
             let ty = ty.build(&db);
-            prop_assert_eq!(substitute_bound_vars(&db, ty, &args), SubstResult::Ok(ty));
+            prop_assert_eq!(subst(&db, ty, &args), Ok(ty));
             let row = row.build(&db);
             prop_assert_eq!(substitute_ability_row(&db, row, &args), Ok(row));
         }
@@ -694,7 +560,7 @@ mod laws {
                 .map(|index| Type::new(&db, TypeKind::BoundVar { index }))
                 .collect();
             let ty = ty.build(&db);
-            prop_assert_eq!(substitute_bound_vars(&db, ty, &identity), SubstResult::Ok(ty));
+            prop_assert_eq!(subst(&db, ty, &identity), Ok(ty));
         }
 
         /// Substituting in sequence equals substituting once with the first
@@ -712,19 +578,19 @@ mod laws {
             let db = salsa::DatabaseImpl::new();
             let second = build_all(&db, &second);
             let ty = ty.build(&db);
-            let SubstResult::Ok(once) = substitute_bound_vars(&db, ty, &build_all(&db, &first)) else {
+            let Ok(once) = subst(&db, ty, &build_all(&db, &first)) else {
                 panic!("indices in range");
             };
             let composed: Vec<_> = build_all(&db, &first)
                 .into_iter()
-                .map(|arg| match substitute_bound_vars(&db, arg, &second) {
-                    SubstResult::Ok(arg) => arg,
-                    SubstResult::OutOfBounds { .. } => panic!("indices in range"),
+                .map(|arg| match subst(&db, arg, &second) {
+                    Ok(arg) => arg,
+                    Err(_) => panic!("indices in range"),
                 })
                 .collect();
             prop_assert_eq!(
-                substitute_bound_vars(&db, once, &second),
-                substitute_bound_vars(&db, ty, &composed)
+                subst(&db, once, &second),
+                subst(&db, ty, &composed)
             );
         }
 
@@ -740,10 +606,10 @@ mod laws {
             let db = salsa::DatabaseImpl::new();
             let indices = ty.bound_vars();
             let in_range = indices.iter().all(|index| (*index as usize) < args.len());
-            let result = substitute_bound_vars(&db, ty.build(&db), &build_all(&db, &args));
+            let result = subst(&db, ty.build(&db), &build_all(&db, &args));
             match result {
-                SubstResult::Ok(_) => prop_assert!(in_range),
-                SubstResult::OutOfBounds { index, max } => {
+                Ok(_) => prop_assert!(in_range),
+                Err(BoundVarOutOfBounds { index, max }) => {
                     prop_assert!(!in_range);
                     prop_assert_eq!(max, args.len());
                     prop_assert!(index as usize >= max && indices.contains(&index));
@@ -769,8 +635,8 @@ mod laws {
         };
         let int = Type::new(&db, TypeKind::Int);
         assert_eq!(
-            substitute_bound_vars(&db, func.build(&db), &[int]),
-            SubstResult::OutOfBounds { index: 1, max: 1 }
+            subst(&db, func.build(&db), &[int]),
+            Err(BoundVarOutOfBounds { index: 1, max: 1 })
         );
     }
 }

@@ -5,8 +5,12 @@ use rustc_hash::FxHashSet as HashSet;
 use trunk_ir::SymbolPath;
 
 use crate::ast::visit::{RefSite, Refs, walk_decl, walk_decl_table};
+use std::convert::Infallible;
+use std::ops::ControlFlow;
+
+use crate::ast::fold::{TypeFoldable, TypeVisitor};
 use crate::ast::{
-    DeclTable, FuncDefId, ResolvedRef, Type, TypeDefId, TypeKind, TypeScheme, TypedRef,
+    AbilityRow, DeclTable, FuncDefId, ResolvedRef, Type, TypeDefId, TypeKind, TypeScheme, TypedRef,
 };
 
 /// Collect all generic function instantiations from a typed module.
@@ -191,74 +195,55 @@ impl<'a, 'db> InstantiationCollector<'a, 'db> {
 }
 
 pub(crate) fn is_concrete_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
-    is_concrete_type_cached(db, ty, &mut HashMap::default())
+    ty.visit_with(&mut Concrete {
+        db,
+        cache: HashMap::default(),
+    })
+    .is_continue()
 }
 
-fn is_concrete_type_cached<'db>(
+/// Breaks at the first type variable, error type, or open ability row.
+/// Interned types form a DAG, so each type's answer is computed once.
+struct Concrete<'db> {
     db: &'db dyn salsa::Database,
-    ty: Type<'db>,
-    cache: &mut HashMap<Type<'db>, bool>,
-) -> bool {
-    if let Some(concrete) = cache.get(&ty) {
-        return *concrete;
+    cache: HashMap<Type<'db>, bool>,
+}
+
+impl<'db> TypeVisitor<'db> for Concrete<'db> {
+    type Break = ();
+
+    fn db(&self) -> &'db dyn salsa::Database {
+        self.db
     }
-    let concrete = match ty.kind(db) {
-        TypeKind::Named { args, .. } => args
-            .iter()
-            .all(|arg| is_concrete_type_cached(db, *arg, cache)),
-        TypeKind::Func {
-            params,
-            result,
-            effect,
-            ..
-        } => {
-            params
-                .iter()
-                .all(|param| is_concrete_type_cached(db, *param, cache))
-                && is_concrete_type_cached(db, *result, cache)
-                && is_concrete_ability_row_cached(db, *effect, cache)
-        }
-        TypeKind::Tuple(elements) => elements
-            .iter()
-            .all(|element| is_concrete_type_cached(db, *element, cache)),
-        TypeKind::Int
-        | TypeKind::Nat
-        | TypeKind::Float
-        | TypeKind::Bool
-        | TypeKind::Bytes
-        | TypeKind::Rune
-        | TypeKind::Nil
-        | TypeKind::Never => true,
-        TypeKind::BoundVar { .. }
-        | TypeKind::LocalBoundVar { .. }
-        | TypeKind::UniVar { .. }
-        | TypeKind::Error => false,
-        TypeKind::Continuation {
-            arg,
-            result,
-            effect,
-        } => {
-            is_concrete_type_cached(db, *arg, cache)
-                && is_concrete_type_cached(db, *result, cache)
-                && is_concrete_ability_row_cached(db, *effect, cache)
-        }
-    };
-    cache.insert(ty, concrete);
-    concrete
-}
 
-fn is_concrete_ability_row_cached<'db>(
-    db: &'db dyn salsa::Database,
-    row: crate::ast::AbilityRow<'db>,
-    cache: &mut HashMap<Type<'db>, bool>,
-) -> bool {
-    row.rest(db).is_none()
-        && row.instances(db).iter().all(|effect| {
-            effect
-                .args
-                .iter()
-                .all(|arg| is_concrete_type_cached(db, *arg, cache))
-        })
+    fn visit_type(&mut self, ty: Type<'db>) -> ControlFlow<()> {
+        let concrete = match self.cache.get(&ty) {
+            Some(concrete) => *concrete,
+            None => {
+                let concrete = match ty.kind(self.db) {
+                    TypeKind::BoundVar { .. }
+                    | TypeKind::LocalBoundVar { .. }
+                    | TypeKind::UniVar { .. }
+                    | TypeKind::Error => false,
+                    _ => ty.super_visit_with(self).is_continue(),
+                };
+                self.cache.insert(ty, concrete);
+                concrete
+            }
+        };
+        if concrete {
+            ControlFlow::Continue(())
+        } else {
+            ControlFlow::Break(())
+        }
+    }
+
+    fn visit_row(&mut self, row: AbilityRow<'db>) -> ControlFlow<()> {
+        if row.rest(self.db).is_some() {
+            return ControlFlow::Break(());
+        }
+        row.super_visit_with(self)
+    }
 }
 
 // ============================================================================
@@ -310,70 +295,53 @@ pub(super) fn collect_from_type<'db>(
     index: &NominalIndex<'_, 'db>,
     result: &mut HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
 ) {
-    collect_from_type_inner(db, ty, index, result, &mut HashSet::default());
+    let ControlFlow::Continue(()) = ty.visit_with(&mut NominalCollector::new(db, index, result));
 }
 
-// Interned types form a DAG. Visit shared arguments once, including during
-// expanding nominal dependency discovery, so its round limit remains effective.
-fn collect_from_type_inner<'db>(
+/// Records each declaration-backed generic type with concrete arguments.
+pub(super) struct NominalCollector<'a, 'db> {
     db: &'db dyn salsa::Database,
-    ty: Type<'db>,
-    index: &NominalIndex<'_, 'db>,
-    result: &mut HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
-    seen: &mut HashSet<Type<'db>>,
-) {
-    if !seen.insert(ty) {
-        return;
+    index: &'a NominalIndex<'a, 'db>,
+    result: &'a mut HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
+    // Interned types form a DAG. Visit shared arguments once, including during
+    // expanding nominal dependency discovery, so its round limit remains effective.
+    seen: HashSet<Type<'db>>,
+}
+
+impl<'a, 'db> NominalCollector<'a, 'db> {
+    pub(super) fn new(
+        db: &'db dyn salsa::Database,
+        index: &'a NominalIndex<'a, 'db>,
+        result: &'a mut HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
+    ) -> Self {
+        Self {
+            db,
+            index,
+            result,
+            seen: HashSet::default(),
+        }
     }
-    match ty.kind(db) {
-        TypeKind::Named { id, args, .. } => {
-            if !args.is_empty()
-                && index.is_generic(*id)
-                && args.iter().all(|arg| is_concrete_type(db, *arg))
-            {
-                result.entry(*id).or_default().insert(args.clone());
-            }
-            // Recurse into type arguments (e.g., List(Option(Int)) → collect Option(Int))
-            for arg in args {
-                collect_from_type_inner(db, *arg, index, result, seen);
-            }
+}
+
+impl<'db> TypeVisitor<'db> for NominalCollector<'_, 'db> {
+    type Break = Infallible;
+
+    fn db(&self) -> &'db dyn salsa::Database {
+        self.db
+    }
+
+    fn visit_type(&mut self, ty: Type<'db>) -> ControlFlow<Infallible> {
+        if !self.seen.insert(ty) {
+            return ControlFlow::Continue(());
         }
-        TypeKind::Func {
-            params,
-            result: ret,
-            effect,
-            ..
-        } => {
-            for p in params {
-                collect_from_type_inner(db, *p, index, result, seen);
-            }
-            collect_from_type_inner(db, *ret, index, result, seen);
-            for effect in effect.instances(db) {
-                for arg in &effect.args {
-                    collect_from_type_inner(db, *arg, index, result, seen);
-                }
-            }
+        if let TypeKind::Named { id, args, .. } = ty.kind(self.db)
+            && !args.is_empty()
+            && self.index.is_generic(*id)
+            && args.iter().all(|arg| is_concrete_type(self.db, *arg))
+        {
+            self.result.entry(*id).or_default().insert(args.clone());
         }
-        TypeKind::Tuple(elems) => {
-            for e in elems {
-                collect_from_type_inner(db, *e, index, result, seen);
-            }
-        }
-        TypeKind::Continuation {
-            arg,
-            result: ret,
-            effect,
-        } => {
-            collect_from_type_inner(db, *arg, index, result, seen);
-            collect_from_type_inner(db, *ret, index, result, seen);
-            for effect in effect.instances(db) {
-                for arg in &effect.args {
-                    collect_from_type_inner(db, *arg, index, result, seen);
-                }
-            }
-        }
-        // Primitives and variables: no nested Named types
-        _ => {}
+        ty.super_visit_with(self)
     }
 }
 

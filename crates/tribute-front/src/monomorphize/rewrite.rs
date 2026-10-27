@@ -4,11 +4,14 @@
 //! by matching the callee's concrete type against collected instantiations.
 //! Also rewrites Named types with type arguments to their mangled monomorphic versions.
 
+use std::convert::Infallible;
+
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 
 use trunk_ir::SymbolPath;
 
+use crate::ast::fold::{TypeFoldable, TypeFolder};
 use crate::ast::visit::{RefSite, Refs, walk_decl_mut, walk_decl_table_mut};
 use crate::ast::{
     CtorId, DeclEntry, DeclTable, FuncDefId, NodeId, ResolvedRef, Type, TypeDefId, TypeKind,
@@ -171,98 +174,7 @@ pub fn rewrite_type<'db>(
     ty: Type<'db>,
     map: &TypeRewriteMap<'db>,
 ) -> Type<'db> {
-    match ty.kind(db) {
-        TypeKind::Named { id, name, args } if !args.is_empty() => {
-            // The rewrite map is keyed on the original (un-rewritten) args as
-            // collected from the module, so look up using `args` directly —
-            // not the recursively rewritten ones.
-            if let Some(entries) = map.get(id)
-                && let Some((_, mangled)) = entries.iter().find(|(ta, _)| ta == args)
-            {
-                return Type::new(
-                    db,
-                    TypeKind::Named {
-                        id: id.with_path(db, mangled.clone()),
-                        name: mangled.to_symbol(),
-                        args: vec![],
-                    },
-                );
-            }
-            // Not in rewrite map — recurse into args (for nested generics like
-            // List(Option(Int)) where the outer ctor is non-generic but inner
-            // args still need rewriting).
-            let rewritten_args: Vec<Type<'db>> =
-                args.iter().map(|a| rewrite_type(db, *a, map)).collect();
-            Type::new(
-                db,
-                TypeKind::Named {
-                    id: *id,
-                    name: name.clone(),
-                    args: rewritten_args,
-                },
-            )
-        }
-        TypeKind::Func {
-            params,
-            result,
-            effect,
-        } => {
-            let new_params: Vec<_> = params.iter().map(|p| rewrite_type(db, *p, map)).collect();
-            let new_result = rewrite_type(db, *result, map);
-            let new_effect = rewrite_row(db, *effect, map);
-            if new_params == *params && new_result == *result && new_effect == *effect {
-                return ty;
-            }
-            Type::new(
-                db,
-                TypeKind::Func {
-                    params: new_params,
-                    result: new_result,
-                    effect: new_effect,
-                },
-            )
-        }
-        TypeKind::Tuple(elems) => {
-            let new_elems: Vec<_> = elems.iter().map(|e| rewrite_type(db, *e, map)).collect();
-            if new_elems == *elems {
-                return ty;
-            }
-            Type::new(db, TypeKind::Tuple(new_elems))
-        }
-        TypeKind::Continuation {
-            arg,
-            result,
-            effect,
-        } => {
-            let new_arg = rewrite_type(db, *arg, map);
-            let new_result = rewrite_type(db, *result, map);
-            let new_effect = rewrite_row(db, *effect, map);
-            if new_arg == *arg && new_result == *result && new_effect == *effect {
-                return ty;
-            }
-            Type::new(
-                db,
-                TypeKind::Continuation {
-                    arg: new_arg,
-                    result: new_result,
-                    effect: new_effect,
-                },
-            )
-        }
-        TypeKind::Named { .. }
-        | TypeKind::Int
-        | TypeKind::Nat
-        | TypeKind::Float
-        | TypeKind::Bool
-        | TypeKind::Bytes
-        | TypeKind::Rune
-        | TypeKind::Nil
-        | TypeKind::Never
-        | TypeKind::BoundVar { .. }
-        | TypeKind::LocalBoundVar { .. }
-        | TypeKind::UniVar { .. }
-        | TypeKind::Error => ty,
-    }
+    ty.fold_with(&mut NominalRewrite { db, map })
 }
 
 pub(super) fn rewrite_row<'db>(
@@ -270,21 +182,43 @@ pub(super) fn rewrite_row<'db>(
     row: crate::ast::AbilityRow<'db>,
     map: &TypeRewriteMap<'db>,
 ) -> crate::ast::AbilityRow<'db> {
-    crate::ast::AbilityRow::new(
-        db,
-        row.instances(db)
-            .iter()
-            .map(|effect| crate::ast::AbilityInstance {
-                ability_id: effect.ability_id,
-                args: effect
-                    .args
-                    .iter()
-                    .map(|ty| rewrite_type(db, *ty, map))
-                    .collect(),
-            })
-            .collect::<Vec<_>>(),
-        row.rest(db),
-    )
+    row.fold_with(&mut NominalRewrite { db, map })
+}
+
+struct NominalRewrite<'a, 'db> {
+    db: &'db dyn salsa::Database,
+    map: &'a TypeRewriteMap<'db>,
+}
+
+impl<'db> TypeFolder<'db> for NominalRewrite<'_, 'db> {
+    type Error = Infallible;
+
+    fn db(&self) -> &'db dyn salsa::Database {
+        self.db
+    }
+
+    fn fold_type(&mut self, ty: Type<'db>) -> Result<Type<'db>, Infallible> {
+        // The rewrite map is keyed on the original (un-rewritten) args as
+        // collected from the module, so look up using `args` directly —
+        // not the recursively rewritten ones. Types not in the map still
+        // have their arguments rewritten (for nested generics like
+        // List(Option(Int)) where the outer ctor is non-generic).
+        if let TypeKind::Named { id, args, .. } = ty.kind(self.db)
+            && !args.is_empty()
+            && let Some(entries) = self.map.get(id)
+            && let Some((_, mangled)) = entries.iter().find(|(ta, _)| ta == args)
+        {
+            return Ok(Type::new(
+                self.db,
+                TypeKind::Named {
+                    id: id.with_path(self.db, mangled.clone()),
+                    name: mangled.to_symbol(),
+                    args: vec![],
+                },
+            ));
+        }
+        ty.try_super_fold_with(self)
+    }
 }
 
 fn rewrite_typed_ref_type<'db>(

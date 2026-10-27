@@ -1,18 +1,20 @@
 //! Bounded local callable materialization, before any source lambda is emitted.
 
+use std::ops::ControlFlow;
+
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use tribute_ir::dialect::tribute_control;
 use trunk_ir::context::IrContext;
 use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{TypeRef, ValueRef};
 
+use crate::ast::fold::{TypeFoldable, TypeVisitor};
 use crate::ast::{
-    Expr, ExprKind, LocalId, NodeId, Pattern, PatternKind, ResolvedRef, Stmt, Type, TypeKind,
-    TypedRef,
+    AbilityRow, Expr, ExprKind, LocalId, NodeId, Pattern, PatternKind, ResolvedRef, Stmt, Type,
+    TypeKind, TypedRef,
 };
 use crate::ast_to_ir::context::IrLoweringCtx;
 use crate::ast_to_ir::lower::{FuncSignature, IrBuilder};
-use crate::monomorphize::is_concrete_type;
 use crate::typeck::LambdaSignature;
 
 use super::callable::{RowArguments, lower_lambda};
@@ -204,30 +206,40 @@ impl<'db> Plan<'db> {
 /// Parent-owned variables are fixed within this body, including the retained
 /// generic template. Local quantifiers and unsolved variables are not fixed.
 fn fixed_in_parent<'db>(db: &'db dyn salsa::Database, ty: Type<'db>, parameters: usize) -> bool {
-    let fixed = |ty| fixed_in_parent(db, ty, parameters);
-    let fixed_row = |row: crate::ast::AbilityRow<'db>| {
-        row.rest(db).is_none()
-            && row
-                .instances(db)
-                .iter()
-                .all(|effect| effect.args.iter().copied().all(fixed))
-    };
-    match ty.kind(db) {
-        TypeKind::BoundVar { index } => (*index as usize) < parameters,
-        TypeKind::Named { args, .. } | TypeKind::Tuple(args) => args.iter().copied().all(fixed),
-        TypeKind::Func {
-            params,
-            result,
-            effect,
-            ..
-        } => params.iter().copied().all(fixed) && fixed(*result) && fixed_row(*effect),
-        TypeKind::Continuation {
-            arg,
-            result,
-            effect,
-        } => fixed(*arg) && fixed(*result) && fixed_row(*effect),
-        _ => is_concrete_type(db, ty),
+    struct Fixed<'db> {
+        db: &'db dyn salsa::Database,
+        parameters: usize,
     }
+
+    impl<'db> TypeVisitor<'db> for Fixed<'db> {
+        type Break = ();
+
+        fn db(&self) -> &'db dyn salsa::Database {
+            self.db
+        }
+
+        fn visit_type(&mut self, ty: Type<'db>) -> ControlFlow<()> {
+            match ty.kind(self.db) {
+                TypeKind::BoundVar { index } if (*index as usize) < self.parameters => {
+                    ControlFlow::Continue(())
+                }
+                TypeKind::BoundVar { .. }
+                | TypeKind::LocalBoundVar { .. }
+                | TypeKind::UniVar { .. }
+                | TypeKind::Error => ControlFlow::Break(()),
+                _ => ty.super_visit_with(self),
+            }
+        }
+
+        fn visit_row(&mut self, row: AbilityRow<'db>) -> ControlFlow<()> {
+            if row.rest(self.db).is_some() {
+                return ControlFlow::Break(());
+            }
+            row.super_visit_with(self)
+        }
+    }
+
+    ty.visit_with(&mut Fixed { db, parameters }).is_continue()
 }
 
 /// This boundary instantiates only a lambda's latent row. If that row also

@@ -9,14 +9,18 @@
 //! - During type checking, TypeSchemes are instantiated to Types with fresh type variables
 
 mod display;
+pub mod fold;
 
 use std::borrow::Cow;
+use std::convert::Infallible;
+use std::ops::ControlFlow;
 use trunk_ir::SymbolPath;
 
 use trunk_ir::Symbol;
 
 use super::NodeId;
 use super::phases::{FuncDefId, TypeDefId};
+use fold::{TypeFoldable, TypeVisitor};
 
 /// A monomorphic type.
 ///
@@ -285,25 +289,8 @@ impl<'db> TypeScheme<'db> {
 
     /// Visit the body and each type argument in retained row constraints.
     /// The caller owns recursive traversal within each type.
-    pub fn for_each_type(self, db: &'db dyn salsa::Database, mut f: impl FnMut(Type<'db>)) {
-        f(self.body(db));
-        let mut visit_row = |row: AbilityRow<'db>| {
-            for effect in row.instances(db) {
-                for argument in &effect.args {
-                    f(*argument);
-                }
-            }
-        };
-        for union in self.row_unions(db) {
-            for row in union.sources.iter().chain(std::iter::once(&union.result)) {
-                visit_row(*row);
-            }
-        }
-        for removal in self.row_removals(db) {
-            for row in removal.rows() {
-                visit_row(row);
-            }
-        }
+    pub fn for_each_type(self, db: &'db dyn salsa::Database, visit: impl FnMut(Type<'db>)) {
+        let ControlFlow::Continue(()) = self.visit_with(&mut fold::ForEachType { db, visit });
     }
 
     /// Create a monomorphic scheme (no quantified variables).
@@ -351,37 +338,14 @@ impl<'db> TypeSchemeBuilder<'db> {
     /// Transform the body and every type argument in retained constraints.
     /// The callback owns recursive traversal within each type; binder identities
     /// and constraint order remain unchanged. Borrowed constraint lists are
-    /// copied only when they are non-empty; interned rows remain immutable.
+    /// copied only when a row changes; interned rows remain immutable.
     pub fn map_types(
-        mut self,
+        self,
         db: &'db dyn salsa::Database,
-        mut map: impl FnMut(Type<'db>) -> Type<'db>,
+        map: impl FnMut(Type<'db>) -> Type<'db>,
     ) -> Self {
-        self.body = map(self.body);
-        let mut map_row = |row: &mut AbilityRow<'db>| {
-            *row = AbilityRow::new(
-                db,
-                row.instances(db)
-                    .iter()
-                    .map(|effect| AbilityInstance {
-                        ability_id: effect.ability_id,
-                        args: effect.args.iter().copied().map(&mut map).collect(),
-                    })
-                    .collect::<Vec<_>>(),
-                row.rest(db),
-            );
-        };
-        if !self.row_unions.is_empty() {
-            for union in self.row_unions.to_mut() {
-                union.for_each_row_mut(&mut map_row);
-            }
-        }
-        if !self.row_removals.is_empty() {
-            for removal in self.row_removals.to_mut() {
-                removal.for_each_row_mut(&mut map_row);
-            }
-        }
-        self
+        let Ok(builder) = self.try_fold_types(&mut fold::MapTypes { db, map });
+        builder
     }
 
     pub fn build(self, db: &'db dyn salsa::Database) -> TypeScheme<'db> {
@@ -469,58 +433,35 @@ pub struct RowVar {
 
 /// Collect ability-row variables occurring in a type, preserving first appearance.
 pub fn collect_row_vars<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> Vec<RowVar> {
-    fn collect_row<'db>(
+    struct RowVars<'db> {
         db: &'db dyn salsa::Database,
-        row: AbilityRow<'db>,
-        vars: &mut Vec<RowVar>,
-    ) {
-        for effect in row.instances(db) {
-            for arg in &effect.args {
-                collect_type(db, *arg, vars);
-            }
+        vars: Vec<RowVar>,
+    }
+
+    impl<'db> TypeVisitor<'db> for RowVars<'db> {
+        type Break = Infallible;
+
+        fn db(&self) -> &'db dyn salsa::Database {
+            self.db
         }
-        if let Some(var) = row.rest(db)
-            && !vars.contains(&var)
-        {
-            vars.push(var);
+
+        fn visit_row(&mut self, row: AbilityRow<'db>) -> ControlFlow<Infallible> {
+            row.super_visit_with(self)?;
+            if let Some(var) = row.rest(self.db)
+                && !self.vars.contains(&var)
+            {
+                self.vars.push(var);
+            }
+            ControlFlow::Continue(())
         }
     }
 
-    fn collect_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>, vars: &mut Vec<RowVar>) {
-        match ty.kind(db) {
-            TypeKind::Named { args, .. } | TypeKind::Tuple(args) => {
-                for arg in args {
-                    collect_type(db, *arg, vars);
-                }
-            }
-            TypeKind::Func {
-                params,
-                result,
-                effect,
-                ..
-            } => {
-                for param in params {
-                    collect_type(db, *param, vars);
-                }
-                collect_type(db, *result, vars);
-                collect_row(db, *effect, vars);
-            }
-            TypeKind::Continuation {
-                arg,
-                result,
-                effect,
-            } => {
-                collect_type(db, *arg, vars);
-                collect_type(db, *result, vars);
-                collect_row(db, *effect, vars);
-            }
-            _ => {}
-        }
-    }
-
-    let mut vars = Vec::new();
-    collect_type(db, ty, &mut vars);
-    vars
+    let mut collector = RowVars {
+        db,
+        vars: Vec::new(),
+    };
+    let ControlFlow::Continue(()) = ty.visit_with(&mut collector);
+    collector.vars
 }
 
 // =========================================================================

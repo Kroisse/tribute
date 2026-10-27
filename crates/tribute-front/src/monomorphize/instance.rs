@@ -1,14 +1,16 @@
 //! Identity of a specialized function instance: its type arguments.
 
+use std::convert::Infallible;
 use std::num::NonZero;
+use std::ops::ControlFlow;
 
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 use smallvec::SmallVec;
 
+use crate::ast::fold::{TypeFoldable, TypeVisitor};
 use crate::ast::{
-    AbilityRow, ExprKind, FuncDecl, NodeId, RowVar, Stmt, Type, TypeKind, TypedRef,
-    collect_row_vars,
+    AbilityRow, ExprKind, FuncDecl, NodeId, RowVar, Stmt, Type, TypedRef, collect_row_vars,
 };
 use crate::typeck::{FunctionInstance, LambdaSignature, LocalCallableInstance};
 
@@ -110,40 +112,27 @@ pub(crate) fn collect_ability_argument_tails<'db>(
     ty: Type<'db>,
     excluded: &mut HashSet<RowVar>,
 ) {
-    let row = |effect: crate::ast::AbilityRow<'db>, excluded: &mut HashSet<RowVar>| {
-        for ability in effect.instances(db) {
-            for arg in &ability.args {
-                excluded.extend(collect_row_vars(db, *arg));
-            }
-        }
-    };
-    match ty.kind(db) {
-        TypeKind::Named { args, .. } | TypeKind::Tuple(args) => {
-            for arg in args {
-                collect_ability_argument_tails(db, *arg, excluded);
-            }
-        }
-        TypeKind::Func {
-            params,
-            result,
-            effect,
-            ..
-        } => {
-            for param in params {
-                collect_ability_argument_tails(db, *param, excluded);
-            }
-            collect_ability_argument_tails(db, *result, excluded);
-            row(*effect, excluded);
-        }
-        TypeKind::Continuation {
-            arg,
-            result,
-            effect,
-        } => {
-            collect_ability_argument_tails(db, *arg, excluded);
-            collect_ability_argument_tails(db, *result, excluded);
-            row(*effect, excluded);
-        }
-        _ => {}
+    struct ArgumentTails<'a, 'db> {
+        db: &'db dyn salsa::Database,
+        excluded: &'a mut HashSet<RowVar>,
     }
+
+    impl<'db> TypeVisitor<'db> for ArgumentTails<'_, 'db> {
+        type Break = Infallible;
+
+        fn db(&self) -> &'db dyn salsa::Database {
+            self.db
+        }
+
+        fn visit_row(&mut self, row: AbilityRow<'db>) -> ControlFlow<Infallible> {
+            for ability in row.instances(self.db) {
+                for arg in &ability.args {
+                    self.excluded.extend(collect_row_vars(self.db, *arg));
+                }
+            }
+            ControlFlow::Continue(())
+        }
+    }
+
+    let ControlFlow::Continue(()) = ty.visit_with(&mut ArgumentTails { db, excluded });
 }
