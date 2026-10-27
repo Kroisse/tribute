@@ -48,10 +48,30 @@ pub(crate) fn prelude_source(db: &dyn salsa::Database) -> crate::SourceCst {
     crate::SourceCst::new(db, uri, text, tree)
 }
 
+/// Package `std`, whose root module is the prelude source and whose
+/// dependency table is empty.
+#[salsa::tracked(returns(copy))]
+pub fn std_package(db: &dyn salsa::Database) -> analysis::Package {
+    let dependencies = analysis::DependencyTable::new(db, Vec::new());
+    analysis::Package::new(
+        db,
+        ast_resolve::PackageName::std(),
+        prelude_source(db),
+        dependencies,
+    )
+}
+
+/// The dependency table of the user sources the root crate analyzes:
+/// package `std`.
+#[salsa::tracked(returns(copy))]
+fn user_dependencies(db: &dyn salsa::Database) -> analysis::DependencyTable {
+    analysis::DependencyTable::new(db, vec![std_package(db)])
+}
+
 /// The environment the root crate analyzes user sources in: package `std`
 /// from the prelude source.
 pub fn frontend_environment(db: &dyn salsa::Database) -> analysis::Environment {
-    analysis::Environment::Std(prelude_source(db))
+    analysis::Environment::Packages(user_dependencies(db))
 }
 
 /// Package `std` specialized alone, with the runtime types its runtime
@@ -66,7 +86,7 @@ pub(crate) fn specialized_prelude<'db>(
 ) -> Option<SpecializedPrelude<'db>> {
     let checked = prelude_module(db)?;
     let span_map = SpanMaps::new(prelude_span_map(db));
-    let names = analysis::std_names();
+    let names = analysis::package_names(db, std_package(db));
     let compiler_intrinsics = match ast_to_ir::registered_compiler_intrinsics(checked.module(db)) {
         Ok(registered) => registered,
         Err(unsupported) => {
@@ -127,13 +147,13 @@ pub(crate) struct SpecializedPrelude<'db> {
 /// The span map of the prelude's parse, which locates its nodes in a module
 /// merged with it.
 pub(crate) fn prelude_span_map(db: &dyn salsa::Database) -> Option<&SpanMap> {
-    analysis::parsed_std(db, prelude_source(db)).map(|parsed| parsed.span_map(db))
+    analysis::parsed_package(db, std_package(db)).map(|parsed| parsed.span_map(db))
 }
 
 /// The prelude's typed AST (parse → resolve → typecheck), without
 /// lowering to TrunkIR. The caller is responsible for `ast_to_ir`.
 pub(crate) fn prelude_module(db: &dyn salsa::Database) -> Option<ast_typeck::TypeCheckOutput<'_>> {
-    analysis::checked_std(db, prelude_source(db)).map(|std| std.checked)
+    analysis::checked_package(db, std_package(db)).map(|std| std.checked)
 }
 
 /// The packages a user package depends on: package `std`.
@@ -147,5 +167,5 @@ pub fn prelude_dependencies<'db>(db: &'db dyn salsa::Database) -> ast_resolve::D
 pub(crate) fn prelude_exports(
     db: &dyn salsa::Database,
 ) -> Option<tribute_front::typeck::PackageExports<'_>> {
-    analysis::checked_std(db, prelude_source(db)).map(|std| std.exports)
+    analysis::checked_package(db, std_package(db)).map(|std| std.exports)
 }

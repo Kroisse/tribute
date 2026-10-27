@@ -17,10 +17,27 @@ fn prelude_source(db: &dyn salsa::Database) -> SourceCst {
     SourceCst::from_source_str(db, "prelude:///std/prelude", PRELUDE_SOURCE)
 }
 
+/// Package `std`, whose root module is the prelude.
+#[salsa::tracked(returns(copy))]
+fn std_package(db: &dyn salsa::Database) -> analysis::Package {
+    let dependencies = analysis::DependencyTable::new(db, Vec::new());
+    analysis::Package::new(
+        db,
+        tribute_front::resolve::PackageName::std(),
+        prelude_source(db),
+        dependencies,
+    )
+}
+
+#[salsa::tracked(returns(copy))]
+fn std_dependency(db: &dyn salsa::Database) -> analysis::DependencyTable {
+    analysis::DependencyTable::new(db, vec![std_package(db)])
+}
+
 /// The environment the sources under test are analyzed in: package `std`
 /// from the prelude, which declares the operators (`Int::(+)` etc.).
 fn environment(db: &dyn salsa::Database) -> Environment {
-    Environment::Std(prelude_source(db))
+    Environment::Packages(std_dependency(db))
 }
 
 /// Inner tracked function that runs the full pipeline.
@@ -37,7 +54,7 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
     let checked = analysis::analyze(db, source, environment(db)).expect("the source parses");
     // Specialization looks package std's declarations up but specializes only
     // the module under test, so its output holds no prelude bodies.
-    let prelude = analysis::checked_std(db, prelude_source(db)).expect("the prelude parses");
+    let prelude = analysis::checked_package(db, std_package(db)).expect("the prelude parses");
     let compiler_intrinsics =
         tribute_front::ast_to_ir::registered_compiler_intrinsics(prelude.checked.module(db))
             .expect("prelude intrinsic directives must be supported");

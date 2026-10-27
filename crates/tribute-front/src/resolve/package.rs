@@ -39,6 +39,12 @@ impl PackageName {
         self.name.is_some()
     }
 
+    /// The library package's name; `None` for the root package of an
+    /// executable build.
+    pub fn name(&self) -> Option<&Symbol> {
+        self.name.as_ref()
+    }
+
     /// Whether this is package `std`.
     pub fn is_std(&self) -> bool {
         self.name.as_ref().is_some_and(|name| name == STD_PACKAGE)
