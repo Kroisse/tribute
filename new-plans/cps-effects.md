@@ -659,7 +659,9 @@ argument, 중첩 타입 attribute를 함께 변환한다. 일반 `never`·`nil` 
 `closure.closure` type은 convention을 기록하지 않으므로, 물리화는 그 closure를
 만드는 `closure.new`, 그 closure를 environment로 받는 entry 함수, 그 closure로 들어가는
 간접 이전, continuation frame layout이 기록한 convention으로 closure의 callable을
-변환한다. Frame layout의 `Done`과 `Dispatch`, `Dispatch`가 받는 resume은 `Cps`다. 이
+변환한다. Frame layout의 `Done`과 `Dispatch`, `Dispatch`가 받는 resume은 `Cps`다.
+물리화 뒤에 들어가는 `effect.delimit`의 body와 `effect.dispatch_cps`의 dispatch,
+resume도 `Cps`다. 이
 convention들이 서로 다르면 물리화는 실패한다. 어느 것도 기록하지 않은 closure type은
 아무도 만들거나 들어가지 않으므로 callable의 결과를 그대로 둔다.
 Closure tail lowering은 caller·callee·exact indirect signature의 전체 결과 목록을

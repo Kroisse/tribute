@@ -1421,7 +1421,9 @@ fn validate_transfers(
 /// operations that record it: the entry functions whose environment has the
 /// type, the `closure.new`s that make it, and the indirect transfers that
 /// enter it. A continuation frame layout records its own: its `Done`, its
-/// `Dispatch`, and the resumption `Dispatch` takes are `Cps`. A closure type
+/// `Dispatch`, and the resumption `Dispatch` takes are `Cps`. So are the body
+/// of an `effect.delimit` and the dispatch and resumption of an
+/// `effect.dispatch_cps`, which enter them after physicalization. A closure type
 /// has one convention until a closure holds an entry per convention.
 fn closure_conventions(
     ctx: &IrContext,
@@ -1468,6 +1470,15 @@ fn closure_conventions(
         }
     }
     for &op in ops {
+        if let Ok(delimit) = effect::Delimit::from_op(ctx, op) {
+            record(ctx.value_ty(delimit.body(ctx)), CallingConvention::Cps)?;
+            continue;
+        }
+        if let Ok(dispatch) = effect::DispatchCps::from_op(ctx, op) {
+            record(ctx.value_ty(dispatch.dispatch(ctx)), CallingConvention::Cps)?;
+            record(ctx.value_ty(dispatch.resume(ctx)), CallingConvention::Cps)?;
+            continue;
+        }
         let Some(convention) = DynConventionBearing::of(ctx, op) else {
             continue;
         };
@@ -2861,6 +2872,38 @@ mod tests {
                 ": func.func_sig<(core.i32 {tribute.ownership = \"consumed\"}) -> (), {call_conv = \"tail\"}>"
             ),
             "{printed}"
+        );
+    }
+
+    #[test]
+    fn a_delimited_body_parameter_is_physicalized_as_cps() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
+  !Frame = adt.typeref<{name = "frame", tribute.cps_continuation_frame_result = core.i32}>
+  !Body = closure.closure<func.func_sig<(!Evidence, !Frame) -> core.never>>
+  func.func @run(%ev: !Evidence, %body: !Body) -> core.i32 attributes {tribute.calling_convention = "direct"} {
+    %answer = effect.delimit %body, %ev : core.i32
+    func.return %answer
+  }
+}"#,
+        );
+
+        lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
+
+        let run = function(&ctx, module, "run");
+        let entry = ctx.region(run.body(&ctx)).blocks[0];
+        let body = ctx.value_ty(ctx.block_args(entry)[1]);
+        let callable = tribute_ir::dialect::closure::Closure::from_type_ref(&ctx, body)
+            .unwrap()
+            .func_type(&ctx);
+        assert!(
+            func::FuncSig::from_type_ref(&ctx, callable)
+                .unwrap()
+                .results(&ctx)
+                .is_empty()
         );
     }
 
