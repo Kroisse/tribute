@@ -464,43 +464,27 @@ fn explicit() ->{} Nil { Nil }
 
     /// Recursively check if a type contains any unresolved UniVar.
     fn contains_univar(db: &dyn salsa::Database, ty: crate::ast::Type) -> bool {
-        fn effect_contains_univar(
-            db: &dyn salsa::Database,
-            effect: crate::ast::AbilityRow<'_>,
-        ) -> bool {
-            effect
-                .instances(db)
-                .iter()
-                .any(|effect| effect.args.iter().any(|arg| contains_univar(db, *arg)))
+        use crate::ast::fold::{TypeFoldable, TypeVisitor};
+        use std::ops::ControlFlow;
+
+        struct ContainsUniVar<'db>(&'db dyn salsa::Database);
+
+        impl<'db> TypeVisitor<'db> for ContainsUniVar<'db> {
+            type Break = ();
+
+            fn db(&self) -> &'db dyn salsa::Database {
+                self.0
+            }
+
+            fn visit_type(&mut self, ty: crate::ast::Type<'db>) -> ControlFlow<()> {
+                match ty.kind(self.0) {
+                    crate::ast::TypeKind::UniVar { .. } => ControlFlow::Break(()),
+                    _ => ty.super_visit_with(self),
+                }
+            }
         }
 
-        match ty.kind(db) {
-            crate::ast::TypeKind::UniVar { .. } => true,
-            crate::ast::TypeKind::Func {
-                params,
-                result,
-                effect,
-                ..
-            } => {
-                params.iter().any(|p| contains_univar(db, *p))
-                    || contains_univar(db, *result)
-                    || effect_contains_univar(db, *effect)
-            }
-            crate::ast::TypeKind::Named { args, .. } => {
-                args.iter().any(|a| contains_univar(db, *a))
-            }
-            crate::ast::TypeKind::Tuple(elems) => elems.iter().any(|e| contains_univar(db, *e)),
-            crate::ast::TypeKind::Continuation {
-                arg,
-                result,
-                effect,
-            } => {
-                contains_univar(db, *arg)
-                    || contains_univar(db, *result)
-                    || effect_contains_univar(db, *effect)
-            }
-            _ => false,
-        }
+        ty.visit_with(&mut ContainsUniVar(db)).is_break()
     }
 
     #[test]

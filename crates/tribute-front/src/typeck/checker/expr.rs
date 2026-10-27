@@ -1498,7 +1498,7 @@ impl<'db> TypeChecker<'db> {
                         .iter()
                         .map(|ty| {
                             subst::substitute_bound_vars(self.db(), *ty, &ability_args)
-                                .unwrap_or_else(|index, max| {
+                                .unwrap_or_else(|subst::BoundVarOutOfBounds { index, max }| {
                                     panic!(
                                         "AbilityOp param BoundVar index out of range: index={}, subst.len()={}",
                                         index, max
@@ -1508,7 +1508,7 @@ impl<'db> TypeChecker<'db> {
                         .collect();
                     let return_type =
                         subst::substitute_bound_vars(self.db(), op_info.return_type, &ability_args)
-                            .unwrap_or_else(|index, max| {
+                            .unwrap_or_else(|subst::BoundVarOutOfBounds { index, max }| {
                                 panic!(
                                     "AbilityOp return BoundVar index out of range: index={}, subst.len()={}",
                                     index, max
@@ -2066,12 +2066,14 @@ impl<'db> TypeChecker<'db> {
     ///
     /// Panics if a BoundVar index is out of bounds.
     fn substitute_bound_vars(&self, ty: Type<'db>, args: &[Type<'db>]) -> Type<'db> {
-        subst::substitute_bound_vars(self.db(), ty, args).unwrap_or_else(|index, max| {
-            panic!(
-                "BoundVar index out of range: index={}, subst.len()={}",
-                index, max
-            )
-        })
+        subst::substitute_bound_vars(self.db(), ty, args).unwrap_or_else(
+            |subst::BoundVarOutOfBounds { index, max }| {
+                panic!(
+                    "BoundVar index out of range: index={}, subst.len()={}",
+                    index, max
+                )
+            },
+        )
     }
 
     // =========================================================================
@@ -3693,7 +3695,7 @@ impl<'db> TypeChecker<'db> {
             .iter()
             .map(|ty| {
                 subst::substitute_bound_vars(self.db(), *ty, &ability_args).unwrap_or_else(
-                    |index, max| {
+                    |subst::BoundVarOutOfBounds { index, max }| {
                         panic!(
                             "handler param BoundVar index out of range: index={}, subst.len()={}",
                             index, max
@@ -3734,7 +3736,7 @@ impl<'db> TypeChecker<'db> {
         }
         let return_type =
             subst::substitute_bound_vars(self.db(), op_info.return_type, &ability_args)
-                .unwrap_or_else(|index, max| {
+                .unwrap_or_else(|subst::BoundVarOutOfBounds { index, max }| {
                     panic!(
                         "handler return BoundVar index out of range: index={}, subst.len()={}",
                         index, max

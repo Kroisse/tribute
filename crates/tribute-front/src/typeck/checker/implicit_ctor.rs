@@ -214,9 +214,7 @@ impl<'db> TypeChecker<'db> {
         {
             return;
         }
-        if let crate::typeck::subst::SubstResult::Ok(instance) =
-            crate::typeck::subst::substitute_bound_vars(db, body, args)
-        {
+        if let Ok(instance) = crate::typeck::subst::substitute_bound_vars(db, body, args) {
             ctx.record_constructor_reference_type(node, instance);
         }
     }

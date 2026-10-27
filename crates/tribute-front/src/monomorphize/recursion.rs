@@ -1,9 +1,11 @@
 //! Reject polymorphic recursion before specialization
 //! (`new-plans/generics.md`, "Polymorphic Recursion").
+use std::ops::ControlFlow;
+
 use super::validate::{InstanceError, InstanceErrorKind};
+use crate::ast::fold::{TypeFoldable, TypeVisitor};
 use crate::ast::{
-    AbilityRow, Decl, DeclTable, ExprKind, FuncDefId, NodeId, ResolvedRef, Type, TypeKind,
-    TypeScheme, TypedRef,
+    Decl, DeclTable, ExprKind, FuncDefId, NodeId, ResolvedRef, Type, TypeKind, TypeScheme, TypedRef,
 };
 use itertools::Itertools;
 use rustc_hash::FxHashMap as HashMap;
@@ -118,48 +120,30 @@ fn strictly_contains_bound_var<'db>(db: &'db dyn salsa::Database, ty: Type<'db>)
 }
 
 fn mentions_bound_var<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
-    let row = |row: &AbilityRow<'db>| {
-        row.instances(db)
-            .iter()
-            .any(|effect| effect.args.iter().any(|arg| mentions_bound_var(db, *arg)))
-    };
-    match ty.kind(db) {
-        TypeKind::BoundVar { .. } => true,
-        TypeKind::Named { args, .. } | TypeKind::Tuple(args) => {
-            args.iter().any(|arg| mentions_bound_var(db, *arg))
+    struct MentionsBoundVar<'db>(&'db dyn salsa::Database);
+
+    impl<'db> TypeVisitor<'db> for MentionsBoundVar<'db> {
+        type Break = ();
+
+        fn db(&self) -> &'db dyn salsa::Database {
+            self.0
         }
-        TypeKind::Func {
-            params,
-            result,
-            effect,
-        } => {
-            params.iter().any(|param| mentions_bound_var(db, *param))
-                || mentions_bound_var(db, *result)
-                || row(effect)
+
+        fn visit_type(&mut self, ty: Type<'db>) -> ControlFlow<()> {
+            match ty.kind(self.0) {
+                TypeKind::BoundVar { .. } => ControlFlow::Break(()),
+                _ => ty.super_visit_with(self),
+            }
         }
-        TypeKind::Continuation {
-            arg,
-            result,
-            effect,
-        } => mentions_bound_var(db, *arg) || mentions_bound_var(db, *result) || row(effect),
-        TypeKind::Int
-        | TypeKind::Nat
-        | TypeKind::Float
-        | TypeKind::Bool
-        | TypeKind::Bytes
-        | TypeKind::Rune
-        | TypeKind::Nil
-        | TypeKind::Never
-        | TypeKind::LocalBoundVar { .. }
-        | TypeKind::UniVar { .. }
-        | TypeKind::Error => false,
     }
+
+    ty.visit_with(&mut MentionsBoundVar(db)).is_break()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{AbilityId, AbilityInstance, RowVar, TypeDefId};
+    use crate::ast::{AbilityId, AbilityInstance, AbilityRow, RowVar, TypeDefId};
     use salsa_test_macros::salsa_test;
     use trunk_ir::Symbol;
 

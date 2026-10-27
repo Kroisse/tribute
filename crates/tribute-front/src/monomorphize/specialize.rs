@@ -7,13 +7,14 @@ use trunk_ir::SymbolPath;
 
 use trunk_ir::Symbol;
 
+use crate::ast::fold::TypeFoldable;
 use crate::ast::visit::{RefSite, Visit, VisitMut};
 use crate::ast::{
     Decl, DeclEntry, DeclTable, EnumDecl, ExternFuncDecl, FieldDecl, FuncDecl, FuncDefId, NodeId,
     StructDecl, Type, TypeAnnotation, TypeAnnotationKind, TypeDefId, TypeKind, TypeScheme,
     TypedRef, VariantDecl,
 };
-use crate::typeck::subst::substitute_bound_vars;
+use crate::typeck::subst::{BoundVarOutOfBounds, BoundVarSubst};
 
 use super::instance::InstanceKey;
 use super::mangle::{mangle_instance_path, mangle_type_path};
@@ -116,13 +117,12 @@ pub(super) fn generate_specializations<'db>(
             let placement = Placement::at(mangled_path.clone());
             let specialized_scheme = scheme
                 .to_builder(db)
-                .map_types(db, |ty| {
-                    substitute_bound_vars(db, ty, type_args).unwrap_or_else(|index, max| {
-                        panic!(
-                            "BoundVar index out of range in specialization of {}: index={}, subst.len()={}",
-                            qualified, index, max
-                        )
-                    })
+                .try_fold_types(&mut BoundVarSubst::new(db, type_args))
+                .unwrap_or_else(|BoundVarOutOfBounds { index, max }| {
+                    panic!(
+                        "BoundVar index out of range in specialization of {}: index={}, subst.len()={}",
+                        qualified, index, max
+                    )
                 })
                 .type_params(Vec::new())
                 .build(db);
@@ -565,11 +565,12 @@ fn subst_type<'db>(
     ty: Type<'db>,
     type_args: &[Type<'db>],
 ) -> Type<'db> {
-    substitute_bound_vars(db, ty, type_args).unwrap_or_else(|index, max| {
-        panic!(
-            "BoundVar index out of range during monomorphization: index={index}, subst.len()={max}"
-        )
-    })
+    ty.try_fold_with(&mut BoundVarSubst::new(db, type_args))
+        .unwrap_or_else(|BoundVarOutOfBounds { index, max }| {
+            panic!(
+                "BoundVar index out of range during monomorphization: index={index}, subst.len()={max}"
+            )
+        })
 }
 
 /// Substitutes the type arguments into every reference type of a copied

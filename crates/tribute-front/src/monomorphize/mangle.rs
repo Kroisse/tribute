@@ -85,6 +85,9 @@ fn nominal_mangle_base(db: &dyn salsa::Database, id: TypeDefId<'_>, name: Symbol
     }
 }
 
+// The mangled form is a printer rather than a `TypeVisitor`: it brackets each
+// node and writes a function's ability row before its result, an order the
+// shared traversal does not follow.
 fn write_type_mangled(
     db: &dyn salsa::Database,
     ty: Type<'_>,

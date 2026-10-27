@@ -282,6 +282,31 @@ source-logical IR의 pass가 맡는다. 도달하지 않는 generic
 template은 허용하되, 도달하는 함수 인스턴스나 ability 인자가 미해결이면 타입 erasure
 전에 거부한다. 다형적 재귀는 정의의 성질이므로 도달하지 않는 template에서도 거부한다.
 
+### 타입 순회와 binder별 치환
+
+Frontend의 타입 순회와 치환은 하나의 구조적 순회를 공유한다. 순회는 `Named`의
+타입 인자, 함수의 매개변수·결과·ability row, tuple 원소, continuation의 인자·결과·
+ability row로 내려가며, row 안에서는 각 ability 인자의 타입 인자로 내려간다. 스킴을
+순회하면 본문에 이어 보존된 합집합 제약(각 source, 그다음 result)과 차집합 제약
+(source, removed, result)의 row를 같은 규칙으로 순회한다. 순서는 이 나열 순서이며,
+등장 순서로 binder 번호를 정하는 일반화가 이 순서에 의존한다. 순회는 스킴의 binder
+목록 자체를 바꾸지 않는다. 바뀐 부분이 없는 타입과 row는 원래 값을 그대로 쓴다.
+
+치환 주체와 실패 처리는 binder 종류마다 다르다.
+
+- 스킴의 `BoundVar`는 인스턴스의 타입 인자로 치환한다. 인자 범위를 벗어난 index는
+  치환 실패로 돌려주며, 진단으로 보고할지 내부 불변식 위반으로 중단할지는 호출자가
+  정한다. 치환된 인자 안으로는 다시 내려가지 않으므로 호출자의 타입에 있는 row
+  변수는 인스턴스화의 row 변수 재명명을 받지 않는다.
+- `UniVar`는 solver가 자신의 치환으로 해석한다. 치환된 타입은 다시 해석하며, row는
+  solver의 row 치환을 먼저 적용한 뒤 그 ability 인자를 해석한다. 일반화는 남은
+  `UniVar`를 함수 스킴의 `BoundVar` 또는 지역 스킴의 `LocalBoundVar`로 바꾼다.
+- `LocalBoundVar`는 지역 binder를 소유한 typed-body 메타데이터가 해석한다. 스킴
+  인스턴스화와 solver 치환은 이를 바꾸지 않고 통과시킨다.
+
+이름 mangling, 표시 형식, lowering의 identity key처럼 출력 형식이 계약인 변환은
+이 순회와 다른 순서나 정렬을 쓸 수 있으며, 각자의 형식 규칙을 따른다.
+
 ### Row 변수의 convention class
 
 Ability row는 타입 인자처럼 치환하지 않는다. Row의 내용은 실행 중 evidence로

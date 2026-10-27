@@ -1,9 +1,11 @@
 //! Validate checker-selected instances on executable reference paths before erasure.
 use super::{MonomorphizeMetadata, collect::is_concrete_type};
+use crate::ast::fold::TypeFoldable;
 use crate::ast::{
     Decl, DeclTable, ExprKind, FuncDecl, FuncDefId, NodeId, ResolvedRef, SpanMaps, Type,
     TypeScheme, TypedRef,
 };
+use crate::typeck::subst::BoundVarSubst;
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
@@ -84,10 +86,8 @@ fn substitute<'db>(
     ty: Type<'db>,
     arguments: &[Type<'db>],
 ) -> Option<Type<'db>> {
-    match crate::typeck::subst::substitute_bound_vars(db, ty, arguments) {
-        crate::typeck::subst::SubstResult::Ok(ty) => Some(ty),
-        _ => None,
-    }
+    ty.try_fold_with(&mut BoundVarSubst::new(db, arguments))
+        .ok()
 }
 
 pub(super) fn validate<'db>(
@@ -244,8 +244,7 @@ pub(super) fn validate<'db>(
             }
             let mut invalid_row = false;
             for (variable, row) in selected.row_args.iter().zip(&instance.row_arguments) {
-                let Ok(row) = crate::typeck::subst::substitute_ability_row(db, *row, &arguments)
-                else {
+                let Ok(row) = row.try_fold_with(&mut BoundVarSubst::new(db, &arguments)) else {
                     invalid_row = true;
                     break;
                 };
