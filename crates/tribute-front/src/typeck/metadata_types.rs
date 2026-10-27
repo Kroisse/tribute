@@ -167,13 +167,13 @@ fn visit_values<'db, T: TypeFoldable<'db>, V: TypeVisitor<'db> + ?Sized>(
         .try_for_each(|value| value.visit_with(visitor))
 }
 
-fn fold_values<'db, T: TypeFoldable<'db> + Clone, F: TypeFolder<'db> + ?Sized>(
+/// Fold each value of `table` in place, moving it out rather than copying
+/// it. A failed fold leaves the table empty.
+fn fold_values<'db, T: TypeFoldable<'db>, F: TypeFolder<'db> + ?Sized>(
     table: &mut SortedMap<NodeId, T>,
     folder: &mut F,
 ) -> Result<(), F::Error> {
-    for value in table.values_mut() {
-        *value = value.clone().try_fold_with(folder)?;
-    }
+    *table = std::mem::take(table).try_map_values(|value| value.try_fold_with(folder))?;
     Ok(())
 }
 

@@ -411,7 +411,6 @@ fn clone_instance<'db>(
     key: &InstanceKey<'db>,
     origins: &HashSet<NodeId>,
 ) -> ExpressionTypeMetadata<'db> {
-    let variant = key.variant();
     let ExpressionTypeMetadata {
         node_types,
         function_instances,
@@ -422,45 +421,60 @@ fn clone_instance<'db>(
         lambda_signatures,
         exhaustive_cases,
     } = expressions;
-    let mut clone = ExpressionTypeMetadata {
-        node_types: clone_entries(node_types, origins, variant),
-        function_instances: clone_entries(function_instances, origins, variant),
-        local_instances: clone_entries(local_instances, origins, variant),
-        evidence_plans: clone_entries(evidence_plans, origins, variant),
-        handler_operations: clone_entries(handler_operations, origins, variant),
-        perform_operations: clone_entries(perform_operations, origins, variant),
-        lambda_signatures: clone_entries(lambda_signatures, origins, variant),
+    let variant = key.variant();
+    let mut clone = EntryClone {
+        origins,
+        variant,
+        substitution: BoundVarSubst::new(db, &key.type_args),
+    };
+    let mut local_instances = clone.entries(local_instances);
+    for instance in local_instances.values_mut() {
+        instance.binding = instance.binding.with_variant(variant);
+    }
+    ExpressionTypeMetadata {
+        node_types: clone.entries(node_types),
+        function_instances: clone.entries(function_instances),
+        local_instances,
+        evidence_plans: clone.entries(evidence_plans),
+        handler_operations: clone.entries(handler_operations),
+        perform_operations: clone.entries(perform_operations),
+        lambda_signatures: clone.entries(lambda_signatures),
         exhaustive_cases: origins
             .iter()
             .filter(|id| exhaustive_cases.binary_search(id).is_ok())
             .map(|id| id.with_variant(variant))
             .collect(),
-    };
-    clone
-        .try_fold_types(&mut BoundVarSubst::new(db, &key.type_args))
-        .unwrap_or_else(|BoundVarOutOfBounds { index, max }| {
-            panic!("BoundVar index out of range in specialization metadata: index={index}, subst.len()={max}")
-        });
-    for instance in clone.local_instances.values_mut() {
-        instance.binding = instance.binding.with_variant(variant);
     }
-    clone
 }
 
-/// The entry of each origin `table` holds, at the node with `variant`.
-fn clone_entries<V: Clone>(
-    table: &SortedMap<NodeId, V>,
-    origins: &HashSet<NodeId>,
+/// Copies the entries of a declaration's nodes to one instance's nodes,
+/// substituting the instance's type arguments as it copies each value once.
+struct EntryClone<'a, 'db> {
+    origins: &'a HashSet<NodeId>,
     variant: std::num::NonZero<u64>,
-) -> SortedMap<NodeId, V> {
-    origins
-        .iter()
-        .filter_map(|id| {
-            table
-                .get(id)
-                .map(|value| (id.with_variant(variant), value.clone()))
-        })
-        .collect()
+    substitution: BoundVarSubst<'a, 'db>,
+}
+
+impl<'db> EntryClone<'_, 'db> {
+    fn entries<V: TypeFoldable<'db> + Clone>(
+        &mut self,
+        table: &SortedMap<NodeId, V>,
+    ) -> SortedMap<NodeId, V> {
+        let (origins, variant) = (self.origins, self.variant);
+        origins
+            .iter()
+            .filter_map(|id| table.get(id).map(|value| (id.with_variant(variant), value)))
+            .map(|(id, value)| {
+                let value = value
+                    .clone()
+                    .try_fold_with(&mut self.substitution)
+                    .unwrap_or_else(|BoundVarOutOfBounds { index, max }| {
+                        panic!("BoundVar index out of range in specialization metadata: index={index}, subst.len()={max}")
+                    });
+                (id, value)
+            })
+            .collect()
+    }
 }
 
 /// Build a map from (original FuncDefId, concrete callee type) → mangled Symbol

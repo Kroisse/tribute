@@ -104,6 +104,19 @@ impl<K, V> SortedMap<K, V> {
         self.entries.iter_mut().map(|(_, value)| value)
     }
 
+    /// Map each value by `map`, keeping the keys and their order.
+    pub fn try_map_values<W, E>(
+        self,
+        mut map: impl FnMut(V) -> Result<W, E>,
+    ) -> Result<SortedMap<K, W>, E> {
+        let entries = self
+            .entries
+            .into_iter()
+            .map(|(key, value)| Ok((key, map(value)?)))
+            .collect::<Result<_, E>>()?;
+        Ok(SortedMap { entries })
+    }
+
     /// The entries in ascending key order, with mutable values. Keys stay
     /// immutable so the order holds.
     pub fn iter_mut(&mut self) -> impl ExactSizeIterator<Item = (&K, &mut V)> {

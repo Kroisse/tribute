@@ -93,9 +93,9 @@ impl<'db> TypeFoldable<'db> for AbilityRow<'db> {
 
 impl<'db> TypeFoldable<'db> for AbilityInstance<'db> {
     fn try_fold_with<F: TypeFolder<'db> + ?Sized>(self, folder: &mut F) -> Result<Self, F::Error> {
-        Ok(match fold_slice(&self.args, folder)? {
-            Some(args) => Self { args, ..self },
-            None => self,
+        Ok(Self {
+            args: self.args.try_fold_with(folder)?,
+            ..self
         })
     }
 
@@ -134,9 +134,12 @@ impl<'db> TypeFoldable<'db> for RowRemoval<'db> {
     }
 }
 
-impl<'db, T: TypeFoldable<'db> + Clone + PartialEq> TypeFoldable<'db> for Vec<T> {
+/// An owned vector folds its items in place, without copying them.
+impl<'db, T: TypeFoldable<'db>> TypeFoldable<'db> for Vec<T> {
     fn try_fold_with<F: TypeFolder<'db> + ?Sized>(self, folder: &mut F) -> Result<Self, F::Error> {
-        Ok(fold_slice(&self, folder)?.unwrap_or(self))
+        self.into_iter()
+            .map(|item| item.try_fold_with(folder))
+            .collect()
     }
 
     fn visit_with<V: TypeVisitor<'db> + ?Sized>(&self, visitor: &mut V) -> ControlFlow<V::Break> {
