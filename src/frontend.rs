@@ -23,7 +23,7 @@ use trunk_ir::{IrContext, Module};
 /// source is analyzed in the root crate's environment: as the root package
 /// of an executable build, depending on package `std`.
 pub fn diagnostic_names(db: &dyn salsa::Database) -> NameDisplay {
-    analysis::root_names(db, crate::prelude::frontend_environment(db))
+    analysis::root_names(db, *crate::prelude::frontend_environment(db))
 }
 
 /// Analyze a user source in the root crate's environment, package `std`
@@ -36,12 +36,12 @@ pub fn parse_and_lower_ast(
     db: &dyn salsa::Database,
     source: SourceCst,
 ) -> Option<ast_typeck::TypeCheckOutput<'_>> {
-    analysis::analyze(db, source, crate::prelude::frontend_environment(db))
+    *analysis::analyze(db, source, *crate::prelude::frontend_environment(db))
 }
 
 /// The diagnostics [`parse_and_lower_ast`] reports for `source`.
 pub fn frontend_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<&Diagnostic> {
-    analysis::diagnostics(db, source, crate::prelude::frontend_environment(db))
+    analysis::diagnostics(db, source, *crate::prelude::frontend_environment(db))
 }
 
 /// Merge prelude decls into user's typed AST and lower to arena IR.
@@ -121,7 +121,7 @@ fn prepare_frontend_details<'db>(
     // the user's bodies; the result has std's bodies and per-expression
     // metadata ahead of the user's.
     let prelude = match crate::prelude::prelude_module(db) {
-        Some(_) => Some(crate::prelude::specialized_prelude(db)?),
+        Some(_) => Some(crate::prelude::specialized_prelude(db).as_ref()?),
         None => None,
     };
     let names = diagnostic_names(db);

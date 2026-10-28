@@ -157,7 +157,7 @@ pub fn resolved_module<'db>(
 ) -> Option<DeclTable<ResolvedRef<'db>>> {
     let module = parsed_module(db, source)?;
     let sm = span_map(db, source)?;
-    let dependencies = crate::analysis::dependencies(db, crate::analysis::builtins(db));
+    let dependencies = crate::analysis::dependencies(db, *crate::analysis::builtins(db));
     let scope = crate::resolve::build_env(db, module, dependencies);
     Some(crate::resolve::resolve_with_env(db, module, &scope, sm))
 }
@@ -168,7 +168,7 @@ pub fn type_check_output<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Option<TypeCheckOutput<'db>> {
-    crate::analysis::analyze(db, source, crate::analysis::builtins(db))
+    *crate::analysis::analyze(db, source, *crate::analysis::builtins(db))
 }
 
 /// Get function type schemes from type checking.

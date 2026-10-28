@@ -820,7 +820,7 @@ mod tests {
         module: &Module<UnresolvedName>,
         span_map: &'db SpanMap,
     ) -> crate::ast::DeclTable<crate::ast::ResolvedRef<'db>> {
-        let dependencies = crate::analysis::dependencies(db, crate::analysis::builtins(db));
+        let dependencies = crate::analysis::dependencies(db, *crate::analysis::builtins(db));
         let scope = resolve::build_env(db, module, dependencies);
         resolve::resolve_with_env(db, module, &scope, span_map)
     }

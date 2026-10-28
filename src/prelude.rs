@@ -33,7 +33,7 @@ pub struct PreludeExtension {
 /// The prelude source, with any [`PreludeExtension`] appended.
 ///
 /// Tracked so that every query in a revision sees the same source input.
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked]
 pub(crate) fn prelude_source(db: &dyn salsa::Database) -> crate::SourceCst {
     let uri = fluent_uri::Uri::parse_from(PRELUDE_URI.to_owned()).expect("valid prelude URI");
     let text: Rope = match PreludeExtension::try_get(db) {
@@ -50,22 +50,22 @@ pub(crate) fn prelude_source(db: &dyn salsa::Database) -> crate::SourceCst {
 
 /// Package `std`, whose root module is the prelude source and whose
 /// dependency table is empty.
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked]
 pub fn std_package(db: &dyn salsa::Database) -> analysis::Package {
     let dependencies = analysis::DependencyTable::new(db, Vec::new());
     analysis::Package::new(
         db,
         ast_resolve::PackageName::std(),
-        prelude_source(db),
+        *prelude_source(db),
         dependencies,
     )
 }
 
 /// The dependency table the root crate analyzes user sources against:
 /// package `std` from the prelude source.
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked]
 pub fn frontend_environment(db: &dyn salsa::Database) -> analysis::DependencyTable {
-    analysis::DependencyTable::new(db, vec![std_package(db)])
+    analysis::DependencyTable::new(db, vec![*std_package(db)])
 }
 
 /// Package `std` specialized alone, with the runtime types its runtime
@@ -74,13 +74,13 @@ pub fn frontend_environment(db: &dyn salsa::Database) -> analysis::DependencyTab
 ///
 /// Returns `None` without a prelude, or after reporting why `std` does not
 /// specialize.
-#[salsa::tracked(returns(as_ref))]
+#[salsa::tracked]
 pub(crate) fn specialized_prelude<'db>(
     db: &'db dyn salsa::Database,
 ) -> Option<SpecializedPrelude<'db>> {
     let checked = prelude_module(db)?;
     let span_map = SpanMaps::new(prelude_span_map(db));
-    let names = analysis::package_names(db, std_package(db));
+    let names = analysis::package_names(db, *std_package(db));
     let compiler_intrinsics = match ast_to_ir::registered_compiler_intrinsics(checked.module(db)) {
         Ok(registered) => registered,
         Err(unsupported) => {
@@ -141,18 +141,18 @@ pub(crate) struct SpecializedPrelude<'db> {
 /// The span map of the prelude's parse, which locates its nodes in a module
 /// merged with it.
 pub(crate) fn prelude_span_map(db: &dyn salsa::Database) -> Option<&SpanMap> {
-    analysis::parsed_package(db, std_package(db)).map(|parsed| parsed.span_map(db))
+    analysis::parsed_package(db, *std_package(db)).map(|parsed| parsed.span_map(db))
 }
 
 /// The prelude's typed AST (parse → resolve → typecheck), without
 /// lowering to TrunkIR. The caller is responsible for `ast_to_ir`.
 pub(crate) fn prelude_module(db: &dyn salsa::Database) -> Option<ast_typeck::TypeCheckOutput<'_>> {
-    analysis::checked_package(db, std_package(db)).map(|std| std.checked)
+    analysis::checked_package(db, *std_package(db)).map(|std| std.checked)
 }
 
 /// The packages a user package depends on: package `std`.
 pub fn prelude_dependencies<'db>(db: &'db dyn salsa::Database) -> ast_resolve::Dependencies<'db> {
-    analysis::dependencies(db, frontend_environment(db))
+    analysis::dependencies(db, *frontend_environment(db))
 }
 
 /// The prelude's type exports (TypeSchemes only, no UniVars), which user
@@ -161,5 +161,5 @@ pub fn prelude_dependencies<'db>(db: &'db dyn salsa::Database) -> ast_resolve::D
 pub(crate) fn prelude_exports(
     db: &dyn salsa::Database,
 ) -> Option<tribute_front::typeck::PackageExports<'_>> {
-    analysis::checked_package(db, std_package(db)).map(|std| std.exports)
+    analysis::checked_package(db, *std_package(db)).map(|std| std.exports)
 }

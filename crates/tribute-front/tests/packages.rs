@@ -5,9 +5,15 @@ use salsa::Setter;
 use tribute_core::diagnostic::Diagnostic;
 use tribute_front::SourceCst;
 use tribute_front::analysis::{self, DependencyTable, Package};
+use tribute_front::ast::SpanMaps;
+use tribute_front::ast_to_ir::{self, LoweringEnvironment, LoweringInput};
+use tribute_front::monomorphize::{
+    SpecializationInput, SpecializationOutput, monomorphize_functions,
+};
 use tribute_front::resolve::PackageName;
 use tribute_front::testing::{Executed, LoggingDb};
 use trunk_ir::Symbol;
+use trunk_ir::context::IrContext;
 
 const PRELUDE: &str = include_str!("../../../lib/std/prelude.trb");
 
@@ -134,21 +140,17 @@ fn a_package_that_depends_on_itself_is_rejected() {
     );
 }
 
-/// The logical IR of `app` with `lib`'s bodies merged in. Package `std`'s
-/// declarations are looked up but its bodies are not lowered, as the
+/// `app` specialized with `lib`'s bodies merged in. Package `std`'s
+/// declarations are looked up but its bodies are not specialized, as the
 /// frontend test helpers do.
-#[salsa::tracked(returns(clone))]
-fn lowered_with_library(
-    db: &dyn salsa::Database,
+#[salsa::tracked]
+fn specialized_with_library<'db>(
+    db: &'db dyn salsa::Database,
     app: SourceCst,
     environment: DependencyTable,
     std: Package,
     lib: Package,
-) -> String {
-    use tribute_front::ast::SpanMaps;
-    use tribute_front::ast_to_ir::{self, LoweringEnvironment, LoweringInput};
-    use tribute_front::monomorphize::{SpecializationInput, monomorphize_functions};
-
+) -> SpecializationOutput<'db> {
     let checked = analysis::analyze(db, app, environment).expect("app parses");
     let std_checked = analysis::checked_package(db, std)
         .expect("std checks")
@@ -166,12 +168,20 @@ fn lowered_with_library(
     )
     .merge_bodies(db, [lib_checked])
     .with_compiler_intrinsics(intrinsics);
-    let specialized = monomorphize_functions(db, input).expect("the program specializes");
-    let app_spans = tribute_front::query::span_map(db, app).expect("app parses");
-    let lib_spans = analysis::parsed_package(db, lib)
+    monomorphize_functions(db, input).expect("the program specializes")
+}
+
+#[test]
+fn the_program_specializes_the_library_bodies() {
+    let build = Build::new();
+    let db = &build.db;
+    let std = build.lib.dependencies(db).packages(db)[0];
+    let specialized = *specialized_with_library(db, build.app, build.environment, std, build.lib);
+    let app_spans = tribute_front::query::span_map(db, build.app).expect("app parses");
+    let lib_spans = analysis::parsed_package(db, build.lib)
         .expect("lib parses")
         .span_map(db);
-    let mut ir = trunk_ir::context::IrContext::new();
+    let mut ir = IrContext::new();
     let module = LoweringInput::from_specialization(
         db,
         specialized,
@@ -180,7 +190,7 @@ fn lowered_with_library(
             ..Default::default()
         },
     )
-    .lower_to_ir(db, &mut ir, app.uri(db).as_str());
+    .lower_to_ir(db, &mut ir, build.app.uri(db).as_str());
     let validation = tribute_ir::dialect::tribute_control::validate(
         &ir,
         module.module,
@@ -188,14 +198,7 @@ fn lowered_with_library(
         &mut Default::default(),
     );
     assert!(validation.is_ok(), "the program validates: {validation}");
-    trunk_ir::printer::print_module(&ir, module.module.op())
-}
-
-#[test]
-fn the_program_specializes_the_library_bodies() {
-    let build = Build::new();
-    let std = build.lib.dependencies(&build.db).packages(&build.db)[0];
-    let ir = lowered_with_library(&build.db, build.app, build.environment, std, build.lib);
+    let ir = trunk_ir::printer::print_module(&ir, module.module.op());
     for function in ["lib::origin", "lib::x_of", "pkg::run"] {
         assert!(
             ir.contains(&format!("tribute_control.func @\"{function}\"")),

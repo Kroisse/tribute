@@ -25,11 +25,8 @@ use crate::typeck::{PackageExports, TypeCheckOutput, TypeChecker};
 /// Package `std` is one whose table is empty.
 #[salsa::input(debug)]
 pub struct Package {
-    #[returns(ref)]
     pub name: PackageName,
-    #[returns(copy)]
     pub root: SourceCst,
-    #[returns(copy)]
     pub dependencies: DependencyTable,
 }
 
@@ -37,7 +34,6 @@ pub struct Package {
 /// named in it by its package name.
 #[salsa::input(debug)]
 pub struct DependencyTable {
-    #[returns(ref)]
     pub packages: Vec<Package>,
 }
 
@@ -57,13 +53,13 @@ pub fn parsed_package(db: &dyn salsa::Database, package: Package) -> Option<Pars
         .name()
         .expect("a library package has a name")
         .clone();
-    astgen::lower_source_to_parsed_ast_with_module_path(db, package.root(db), Some(module))
+    astgen::lower_source_to_parsed_ast_with_module_path(db, *package.root(db), Some(module))
 }
 
 /// The environment of `package`, built from its declarations and its
 /// dependency table. `None` if its root does not parse or it depends on
 /// itself.
-#[salsa::tracked(returns(as_ref))]
+#[salsa::tracked]
 pub fn package_env<'db>(db: &'db dyn salsa::Database, package: Package) -> Option<PackageEnv<'db>> {
     if depends_on_itself(db, package) {
         Diagnostic::new(
@@ -83,21 +79,21 @@ pub fn package_env<'db>(db: &'db dyn salsa::Database, package: Package) -> Optio
         db,
         parsed.module(db),
         package.name(db),
-        &dependencies(db, package.dependencies(db)),
+        &dependencies(db, *package.dependencies(db)),
     ))
 }
 
 /// Resolve and type check `package` once, against the packages it depends
 /// on.
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked]
 pub fn checked_package<'db>(
     db: &'db dyn salsa::Database,
     package: Package,
 ) -> Option<CheckedPackage<'db>> {
-    let env = package_env(db, package)?;
+    let env = package_env(db, package).as_ref()?;
     let parsed = parsed_package(db, package)?;
     let span_map = parsed.span_map(db);
-    let table = package.dependencies(db);
+    let table = *package.dependencies(db);
     let dependencies = dependencies(db, table);
     let resolved =
         resolve::resolve_library_with_env(db, parsed.module(db), env, &dependencies, span_map);
@@ -113,7 +109,7 @@ pub fn checked_package<'db>(
 /// A dependency table of one package `std` whose root module is empty, so
 /// that it declares only the compiler-owned names: for analyzing a source
 /// without the prelude.
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked]
 pub fn builtins(db: &dyn salsa::Database) -> DependencyTable {
     let text = ropey::Rope::new();
     let tree = crate::source_file::parse_rope(&text, None);
@@ -130,7 +126,10 @@ pub fn builtins(db: &dyn salsa::Database) -> DependencyTable {
 /// The packages of `table` with their environments, for name resolution.
 pub fn dependencies(db: &dyn salsa::Database, table: DependencyTable) -> Dependencies<'_> {
     Dependencies::new(table.packages(db).iter().filter_map(|&package| {
-        Some((package_name(db, package).clone(), package_env(db, package)?))
+        Some((
+            package_name(db, package).clone(),
+            package_env(db, package).as_ref()?,
+        ))
     }))
 }
 
@@ -225,7 +224,7 @@ pub fn root_names(db: &dyn salsa::Database, table: DependencyTable) -> NameDispl
 /// accumulated diagnostics, and the result is returned with them. The result
 /// holds only `source`'s declarations; its dependencies' are read through
 /// the dependency table.
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked]
 pub fn analyze<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
