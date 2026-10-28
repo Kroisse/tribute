@@ -1945,6 +1945,48 @@ mod tests {
         }
     }
 
+    /// An open document is the root of its package: its file modules are
+    /// read from disk, and nothing located in their files lands in it.
+    #[test]
+    fn file_modules_stay_out_of_the_root_document() {
+        let dir = tempfile::tempdir().expect("temporary package directory");
+        std::fs::write(
+            dir.path().join("util.trb"),
+            "pub fn helper() -> Nat { pkg::shared() }\n\nfn broken() -> Nat { missing }\n",
+        )
+        .expect("write util.trb");
+        let root = dir.path().join("main.trb");
+        let uri: Uri = format!("file://{}", root.display()).parse().unwrap();
+        let source = "mod util\n\npub fn shared() -> Nat { 1 }\n\nfn main() -> Nil { let _ = util::helper() }\n";
+
+        let mut harness = TestHarness::new();
+        let published = harness.open_document_with_diagnostics(&uri, source);
+        assert_eq!(published.diagnostics, Vec::new());
+
+        let params = ReferenceParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+                position: lsp_types::Position {
+                    line: 2,
+                    character: 8, // On `shared`
+                },
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            context: lsp_types::ReferenceContext {
+                include_declaration: true,
+            },
+        };
+        let refs = harness
+            .request::<References>(params)
+            .expect("the declaration of `shared`");
+        let lines: Vec<_> = refs
+            .iter()
+            .map(|location| (location.uri == uri, location.range.start.line))
+            .collect();
+        assert_eq!(lines, [(true, 2)]);
+    }
+
     #[test]
     fn test_did_change_via_message() {
         let mut harness = TestHarness::new();

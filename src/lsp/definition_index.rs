@@ -507,7 +507,10 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
         kind: DefinitionKind,
         local_id: Option<LocalId>,
     ) {
-        let span = self.span_map.get_or_default(node_id);
+        // A node without a span here is in a file module's file.
+        let Some(span) = self.span_map.get(node_id) else {
+            return;
+        };
         let name_span = self.span_map.get_or_default(name_id);
         self.definitions.push(AstDefinitionEntry {
             node_id,
@@ -521,7 +524,9 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
     }
 
     fn add_reference(&mut self, node_id: NodeId, target: ResolvedTarget) {
-        let span = self.span_map.get_or_default(node_id);
+        let Some(span) = self.span_map.get(node_id) else {
+            return;
+        };
         self.references.push(AstReferenceEntry {
             node_id,
             span,
@@ -715,7 +720,9 @@ impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for DefinitionCollector<'_, 'db
                     name: field.name.clone(),
                 };
                 if shorthand {
-                    let span = self.span_map.get_or_default(field.id);
+                    let Some(span) = self.span_map.get(field.id) else {
+                        continue;
+                    };
                     self.references.push(AstReferenceEntry {
                         node_id: field.id,
                         span,

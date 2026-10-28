@@ -68,6 +68,8 @@ pub struct FileEntry {
 /// Entries are never removed: a file that disappears keeps its entry with
 /// no source, so the queries that read it stay its dependents.
 pub struct FileProvider {
+    /// Keyed by URI. The URIs are those of a package's root and the files
+    /// its `mod` declarations name, not arbitrary client input.
     entries: Mutex<HashMap<String, FileEntry>>,
     read: Box<ReadFile>,
 }

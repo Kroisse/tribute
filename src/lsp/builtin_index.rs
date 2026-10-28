@@ -68,9 +68,13 @@ fn collect_effect(
         return;
     };
 
+    // An annotation without a span here is in a file module's file.
+    let Some(span) = span_map.get(ability_annotation.id) else {
+        return;
+    };
     if let Some(ability) = AbilityId::builtin_from_path(db, path) {
         entries.push(BuiltinSymbolEntry {
-            span: span_map.get_or_default(ability_annotation.id),
+            span,
             name: ability.name(db),
             qualified: ability.qualified(db).clone(),
         });

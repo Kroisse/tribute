@@ -106,6 +106,8 @@ pub fn print_diagnostics(
     diags: &mut [&Diagnostic],
 ) {
     diags.sort_by(|left, right| tribute_core::diagnostic::compare_diagnostics(left, right));
+    // Keep each file's diagnostics together, the root file's first.
+    diags.sort_by_key(|diag| diag.inner.span.source);
     for diag in diags.iter() {
         print_diagnostic(db, source, file_path, diag);
     }
