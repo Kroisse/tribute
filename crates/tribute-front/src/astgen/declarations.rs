@@ -902,7 +902,9 @@ fn lower_mod(
 ) -> Option<(ModuleDecl<UnresolvedName>, Vec<LoweredItem>)> {
     let name_node = node.child_by_field_name("name")?;
 
-    let id = ctx.module_id_with_span(&node);
+    // The declaration's span is its header, which ends at its name, so that
+    // its items' edits leave it unchanged.
+    let id = ctx.fresh_id_with_range(node.start_byte(), name_node.end_byte());
     let name = ctx.node_symbol(&name_node);
     let visibility = lower_visibility(ctx, node);
 

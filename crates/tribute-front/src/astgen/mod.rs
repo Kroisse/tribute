@@ -92,7 +92,7 @@ pub struct ParsedAst<'db> {
     /// Each item node's span relative to the start of its item.
     #[tracked]
     pub item_spans: ItemSpans,
-    /// Where each item starts, and the spans of module nodes.
+    /// Where each item starts, and the span of the root `Module`.
     #[tracked]
     pub item_layout: ItemLayout,
 }

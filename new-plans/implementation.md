@@ -1008,10 +1008,12 @@ item 단위로 재사용하기 위한 전제이다.
 - **위치:** Source 위치는 `NodeId`에서 절대 span으로 가는 별도 span map에만 있고,
   AST와 분석 결과는 위치를 담지 않는다. 진단처럼 위치가 필요한 출력만 span map을
   읽는다. Parse 결과는 각 노드의 span을 소유 item 시작점 기준의 상대
-  위치로 담고, 각 item의 시작점과 module 노드(root module과 inline `mod`
-  선언)의 span은 별도의 layout에 담는다. Module 노드는 안의 item을 감싸므로,
-  item 길이가 바뀌면 layout도 바뀐다. Span map은 둘을 더해 절대 span을
-  만든다. 따라서 item을 바꾸지 않고 옮기면 layout만 바뀐다.
+  위치로 담고, 각 item의 시작점과 root module의 span은 별도의 layout에
+  담는다. Root module은 파일 전체를 감싸므로 길이가 바뀌는 편집마다 layout도
+  바뀐다. 노드의 span은 자기 item 밖의 item을 덮지 않는다. 그래서 inline
+  `mod` 선언의 span은 이름까지의 header이고, body의 범위는 syntax tree에서
+  얻는다. Span map은 둘을 더해 절대 span을 만든다. 따라서 item을 바꾸지 않고
+  옮기면 layout만 바뀐다.
 - **Item별 parse 결과:** Parse는 파일 전체를 한 번에 lowering하되, 결과를 item
   하나당 tracked struct 하나로 낸다. 그 identity는 item의 owner key이고,
   선언과 상대 span은 tracked field이다. Inline module의 item은 그 module

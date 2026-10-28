@@ -37,9 +37,9 @@ impl SpanMapBuilder {
         self.layout.starts.insert(owner, start);
     }
 
-    /// Record the span of a module's node, which spans the items in it.
+    /// Record the span of the root `Module` node, which no item owns.
     pub fn set_module(&mut self, id: NodeId, span: Span) {
-        self.layout.modules.insert(id, span);
+        self.layout.module = Some((id, span));
     }
 
     /// Insert the source span of a node relative to its item's start. A node
@@ -86,16 +86,16 @@ impl<'a> FromIterator<&'a ItemSpans> for ItemSpans {
     }
 }
 
-/// Where each item of one parsed source starts, and the spans of the nodes
-/// of its modules: the root `Module` and each inline module's declaration.
+/// Where each item of one parsed source starts, and the span of its root
+/// `Module`.
 ///
-/// Moving items changes only this part of a source's spans. A module's node
-/// spans the items in it, so an edit that changes the length of one of them
-/// changes this part too; the root spans the whole source.
+/// Moving items changes only this part of a source's spans. The root spans
+/// the whole source, so any edit that changes the source's length changes it
+/// too.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ItemLayout {
     starts: HashMap<u64, usize>,
-    modules: HashMap<NodeId, Span>,
+    module: Option<(NodeId, Span)>,
 }
 
 /// NodeId → Span mapping of one parsed source.
@@ -122,7 +122,7 @@ impl<'a> SpanMap<'a> {
         static SPANS: ItemSpans = ItemSpans(HashMap::with_hasher(FxBuildHasher));
         static LAYOUT: ItemLayout = ItemLayout {
             starts: HashMap::with_hasher(FxBuildHasher),
-            modules: HashMap::with_hasher(FxBuildHasher),
+            module: None,
         };
         SpanMap::new(&SPANS, &LAYOUT)
     }
@@ -145,7 +145,9 @@ impl<'a> SpanMap<'a> {
             let start = self.layout.starts.get(&id.owner()).copied().unwrap_or(0);
             return Some(Span::new(relative.start + start, relative.end + start));
         }
-        self.layout.modules.get(&id).copied()
+        self.layout
+            .module
+            .and_then(|(module, span)| (module == id).then_some(span))
     }
 
     /// Look up a span by NodeId, returning a default span if not found.

@@ -68,14 +68,19 @@ impl<'db> AstLoweringCtx<'db> {
     /// Generate the NodeId of the next node of the current owner and record
     /// the CST node's span for it.
     pub fn fresh_id_with_span(&mut self, node: &Node) -> NodeId {
+        self.fresh_id_with_range(node.start_byte(), node.end_byte())
+    }
+
+    /// Generate the NodeId of the next node of the current owner and record
+    /// the bytes `start..end` as its span.
+    pub fn fresh_id_with_range(&mut self, start: usize, end: usize) -> NodeId {
         let id = self.next_id();
-        let span = Span::new(node.start_byte(), node.end_byte());
-        self.span_builder.insert(id, span);
+        self.span_builder.insert(id, Span::new(start, end));
         id
     }
 
-    /// Generate the NodeId of a module's node, the root `Module` or an inline
-    /// module's declaration, and record its span in the item layout.
+    /// Generate the NodeId of the root `Module` node and record its span in
+    /// the item layout.
     pub fn module_id_with_span(&mut self, node: &Node) -> NodeId {
         let id = self.next_id();
         let span = Span::new(node.start_byte(), node.end_byte());

@@ -348,10 +348,14 @@ fn prelude_constructors(db: &dyn salsa::Database) -> Vec<(Symbol, Symbol)> {
 
 /// The identity path of the module whose body contains the byte offset
 /// `offset` of `source`, as the module's declarations record it.
+///
+/// A module declaration's span covers only its header, so the extent of its
+/// body comes from the syntax tree.
 pub fn module_at(db: &dyn salsa::Database, source: SourceCst, offset: usize) -> SymbolPath {
     fn descend(
         items: &[ModuleItem<UnresolvedName>],
         span_map: SpanMap<'_>,
+        root: tree_sitter::Node<'_>,
         offset: usize,
         path: &mut SymbolPath,
     ) {
@@ -360,19 +364,31 @@ pub fn module_at(db: &dyn salsa::Database, source: SourceCst, offset: usize) -> 
                 continue;
             };
             let Some(body) = &module.body else { continue };
-            let span = span_map.get_or_default(module.id);
-            if span.start <= offset && offset < span.end {
+            let start = span_map.get_or_default(module.id).start;
+            let declaration = root
+                .descendant_for_byte_range(start, start)
+                .and_then(|node| {
+                    std::iter::successors(Some(node), |node| node.parent())
+                        .find(|node| node.kind() == "mod_declaration")
+                });
+            if let Some(declaration) = declaration
+                && declaration.start_byte() <= offset
+                && offset < declaration.end_byte()
+            {
                 path.push(module.name.clone());
-                return descend(body, span_map, offset, path);
+                return descend(body, span_map, root, offset, path);
             }
         }
     }
 
     let mut path = SymbolPath::root();
-    if let Some(parsed) = ast_query::parsed_ast(db, source) {
+    if let Some(parsed) = ast_query::parsed_ast(db, source)
+        && let Some(tree) = source.tree(db)
+    {
         descend(
             &parsed.module(db).decls,
             parsed.span_map(db),
+            tree.root_node(),
             offset,
             &mut path,
         );
