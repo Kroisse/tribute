@@ -191,7 +191,9 @@ pub struct SpecializationOutput<'db> {
     /// precede them.
     pub own_sources_start: usize,
     /// Where the instances this specialization generated start; the
-    /// dependencies' precede them, after the source declarations.
+    /// dependencies' precede them, after the source declarations. A
+    /// specialization that merged its dependencies' bodies instead of
+    /// continuing their results counts all of its entries as its own.
     pub own_instances_start: usize,
     /// The path of every generated function instance, sorted.
     pub function_instances: Vec<SymbolPath>,
