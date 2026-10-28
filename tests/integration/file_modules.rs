@@ -222,14 +222,17 @@ fn the_cli_compiles_and_runs_a_file_module_package() {
     );
 }
 
-/// `tribute compile` prints a diagnostic in a file module against that file.
+/// `tribute compile` prints a diagnostic in a file module against that file,
+/// in a directory whose name a URI must percent-encode.
 #[test]
 fn the_cli_reports_file_module_errors_against_their_file() {
-    let package = tempfile::tempdir().expect("temporary package directory");
-    let root = package.path().join("main.trb");
+    let temp = tempfile::tempdir().expect("temporary directory");
+    let package = temp.path().join("my pkg%");
+    std::fs::create_dir(&package).expect("create the package directory");
+    let root = package.join("main.trb");
     std::fs::write(&root, "mod util\n\nfn main() -> Nil { }\n").expect("write main.trb");
     std::fs::write(
-        package.path().join("util.trb"),
+        package.join("util.trb"),
         "pub fn run() -> Nat { missing }\n\npub fn run() -> Nat { 1 }\n",
     )
     .expect("write util.trb");
@@ -237,7 +240,7 @@ fn the_cli_reports_file_module_errors_against_their_file() {
         .args(["compile", "--target", "native"])
         .arg(&root)
         .arg("-o")
-        .arg(package.path().join("out"))
+        .arg(package.join("out"))
         .output()
         .expect("invoke tribute compile");
     let stderr = String::from_utf8_lossy(&compiled.stderr);
@@ -246,7 +249,7 @@ fn the_cli_reports_file_module_errors_against_their_file() {
         stderr.contains("unresolved name `missing`"),
         "stderr: {stderr}"
     );
-    assert!(stderr.contains("util.trb:1:"), "stderr: {stderr}");
+    assert!(stderr.contains("my pkg%/util.trb:1:"), "stderr: {stderr}");
     assert!(stderr.contains("first defined here"), "stderr: {stderr}");
 }
 

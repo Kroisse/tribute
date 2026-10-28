@@ -1957,7 +1957,7 @@ mod tests {
         .expect("write util.trb");
         let root = dir.path().join("main.trb");
         let uri: Uri = format!("file://{}", root.display()).parse().unwrap();
-        let source = "mod util\n\npub fn shared() -> Nat { 1 }\n\nfn main() -> Nil { let _ = util::helper() }\n";
+        let source = "mod util\n\npub fn shared() -> Nat { 1 }\n\nfn main() -> Nil { let _ = util::helper() }\n\nfn helper() -> Nat { 2 }\n";
 
         let mut harness = TestHarness::new();
         let published = harness.open_document_with_diagnostics(&uri, source);
@@ -1985,6 +1985,19 @@ mod tests {
             .map(|location| (location.uri == uri, location.range.start.line))
             .collect();
         assert_eq!(lines, [(true, 2)]);
+
+        // A rename would edit only this document, so a name that `util.trb`
+        // also uses is not renamable; one only this document uses is.
+        let mut prepare = |line, character| {
+            harness.request::<PrepareRenameRequest>(TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+                position: lsp_types::Position { line, character },
+            })
+        };
+        assert_eq!(prepare(2, 8), None, "`shared`, called from `util.trb`");
+        assert_eq!(prepare(4, 31), None, "`util::helper`");
+        assert_eq!(prepare(6, 4), None, "`helper`, also defined in `util.trb`");
+        assert!(prepare(4, 4).is_some(), "`main`");
     }
 
     #[test]

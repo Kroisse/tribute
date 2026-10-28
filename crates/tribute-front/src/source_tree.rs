@@ -16,7 +16,7 @@ use trunk_ir::{Span, Symbol};
 use crate::ast::node_id::source_hash;
 use crate::ast::{Module, ModuleItem, SpanMap, UnresolvedName};
 use crate::astgen::{self, ParsedAst};
-use crate::source_file::{SourceCst, source_at};
+use crate::source_file::{SourceCst, push_uri_path, source_at, uri_to_path};
 
 /// A package's AST with each file module's declarations in its body, and
 /// the files they were read from, the root first.
@@ -123,14 +123,17 @@ impl<'db> Loader<'db> {
             let ModuleItem::Module(module) = item else {
                 continue;
             };
-            let path = format!("{dir}{}.trb", module.name);
-            let sub_dir = format!("{dir}{}/", module.name);
+            let mut sub_dir = dir.to_owned();
+            push_uri_path(&mut sub_dir, module.name.as_str());
+            let path = format!("{sub_dir}.trb");
+            sub_dir.push('/');
             let span = spans.get_or_default(module.id);
             let uri = Uri::parse_from(path).ok();
             let found = uri.as_ref().and_then(|uri| source_at(self.db, uri));
             let shown = uri
                 .as_ref()
-                .map_or_else(String::new, |uri| uri.path().as_str().to_owned());
+                .and_then(uri_to_path)
+                .map_or_else(String::new, |path| path.display().to_string());
             if let Some(body) = &mut module.body {
                 if found.is_some() {
                     self.error(

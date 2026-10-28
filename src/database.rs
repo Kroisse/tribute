@@ -4,7 +4,7 @@ use lsp_types::Uri as LspUri;
 use parking_lot::RwLock;
 use ropey::Rope;
 use tribute_front::source_file::{FileProvider, SourceFiles, parse_rope};
-use tribute_front::{SourceCst, Uri, path_to_uri};
+use tribute_front::{SourceCst, Uri, path_to_uri, uri_to_path};
 
 #[salsa::db]
 pub struct TributeDatabaseImpl {
@@ -35,10 +35,7 @@ impl Default for TributeDatabaseImpl {
 /// The file's name must match the URI's exactly, so that a case-insensitive
 /// file system does not find `foo.trb` for `Foo.trb`.
 fn read_file(uri: &Uri<String>) -> Option<Rope> {
-    if uri.scheme().map(|scheme| scheme.as_str()) != Some("file") {
-        return None;
-    }
-    let path = std::path::Path::new(uri.path().as_str());
+    let path = uri_to_path(uri)?;
     let name = path.file_name()?;
     let spelled = std::fs::read_dir(path.parent()?)
         .ok()?
@@ -46,7 +43,7 @@ fn read_file(uri: &Uri<String>) -> Option<Rope> {
     if !spelled {
         return None;
     }
-    Rope::from_reader(std::fs::File::open(path).ok()?).ok()
+    Rope::from_reader(std::fs::File::open(&path).ok()?).ok()
 }
 
 impl TributeDatabaseImpl {

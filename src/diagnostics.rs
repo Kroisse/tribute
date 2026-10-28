@@ -7,6 +7,7 @@ use trunk_ir::diagnostic::DiagnosticSeverity;
 use tribute::SourceCst;
 use tribute::pipeline::compile_with_diagnostics;
 use tribute_front::source_tree::source_tree_of;
+use tribute_front::uri_to_path;
 
 /// Get the display color for a compilation phase.
 pub fn phase_color(phase: &CompilationPhase) -> Color {
@@ -40,7 +41,10 @@ fn span_file(
         .flatten();
     match file {
         Some(file) => (
-            file.uri(db).path().as_str().to_owned(),
+            uri_to_path(file.uri(db)).map_or_else(
+                || file.uri(db).as_str().to_owned(),
+                |path| path.display().to_string(),
+            ),
             file.text(db).to_string(),
         ),
         None => (root_path.to_owned(), root.text(db).to_string()),

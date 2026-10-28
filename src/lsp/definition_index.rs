@@ -3,7 +3,7 @@
 //! Maps names to definitions and references, enabling navigation and
 //! refactoring LSP features.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use trunk_ir::{Span, Symbol};
 
@@ -145,6 +145,9 @@ pub struct AstDefinitionIndex<'db> {
     pub references: Vec<AstReferenceEntry>,
     /// Map from name to definition indices.
     by_name: BTreeMap<Symbol, Vec<usize>>,
+    /// Names that a package-level definition or reference in another file
+    /// of the package (a file module's) also uses.
+    foreign_names: BTreeSet<Symbol>,
 }
 
 impl<'db> AstDefinitionIndex<'db> {
@@ -170,7 +173,13 @@ impl<'db> AstDefinitionIndex<'db> {
             by_name.entry(def.name.clone()).or_default().push(i);
         }
 
-        Self::new(db, definitions, references, by_name)
+        Self::new(
+            db,
+            definitions,
+            references,
+            by_name,
+            collector.foreign_names,
+        )
     }
 
     /// Find the definition at a given offset (when cursor is on a definition).
@@ -442,7 +451,21 @@ impl<'db> AstDefinitionIndex<'db> {
     /// Check if renaming is possible at the given position.
     ///
     /// Uses LocalId-based matching for precise shadowed variable disambiguation.
+    /// A package-level name that another file of the package also defines or
+    /// references is not renamable: the edit would cover only this document.
     pub fn can_rename(
+        &self,
+        db: &'db dyn salsa::Database,
+        offset: usize,
+    ) -> Option<(&AstDefinitionEntry, Span)> {
+        let (def, span) = self.rename_site(db, offset)?;
+        if def.local_id.is_none() && self.foreign_names(db).contains(&def.name) {
+            return None;
+        }
+        Some((def, span))
+    }
+
+    fn rename_site(
         &self,
         db: &'db dyn salsa::Database,
         offset: usize,
@@ -473,6 +496,7 @@ struct DefinitionCollector<'a, 'db> {
     span_map: &'a SpanMap,
     definitions: Vec<AstDefinitionEntry>,
     references: Vec<AstReferenceEntry>,
+    foreign_names: BTreeSet<Symbol>,
     /// The module-level function being visited.
     current_func: Option<NodeId>,
 }
@@ -484,6 +508,7 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
             span_map,
             definitions: Vec::new(),
             references: Vec::new(),
+            foreign_names: BTreeSet::new(),
             current_func: None,
         }
     }
@@ -509,6 +534,9 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
     ) {
         // A node without a span here is in a file module's file.
         let Some(span) = self.span_map.get(node_id) else {
+            if local_id.is_none() {
+                self.foreign_names.insert(name);
+            }
             return;
         };
         let name_span = self.span_map.get_or_default(name_id);
@@ -525,6 +553,9 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
 
     fn add_reference(&mut self, node_id: NodeId, target: ResolvedTarget) {
         let Some(span) = self.span_map.get(node_id) else {
+            if !matches!(target, ResolvedTarget::Local { .. }) {
+                self.foreign_names.insert(target.name());
+            }
             return;
         };
         self.references.push(AstReferenceEntry {

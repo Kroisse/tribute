@@ -1,5 +1,5 @@
 use std::ops::Range;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use fluent_uri::Uri;
@@ -165,16 +165,40 @@ fn new_source(db: &dyn salsa::Database, uri: Uri<String>, text: Rope) -> SourceC
     SourceCst::new(db, uri, text, tree)
 }
 
-/// Convert a filesystem path to a file:// URI.
+/// Convert a filesystem path to a file:// URI, percent-encoding each byte
+/// that a URI path does not allow as is, `%` among them.
 pub fn path_to_uri(path: &Path) -> Uri<String> {
     let path_str = path.to_string_lossy();
-    let uri_string = if path_str.starts_with('/') {
-        format!("file://{}", path_str)
-    } else {
+    let mut uri_string = String::from("file://");
+    if !path_str.starts_with('/') {
         // Relative path - just use as-is for testing
-        format!("file:///{}", path_str)
-    };
+        uri_string.push('/');
+    }
+    push_uri_path(&mut uri_string, &path_str);
     Uri::parse_from(uri_string).expect("valid file URI")
+}
+
+/// Append `text` to a URI path, percent-encoding each byte that a URI path
+/// does not allow as is, `%` among them.
+pub(crate) fn push_uri_path(uri: &mut String, text: &str) {
+    use std::fmt::Write;
+    for &byte in text.as_bytes() {
+        if byte.is_ascii_alphanumeric() || b"/-._~!$&'()*+,;=:@".contains(&byte) {
+            uri.push(char::from(byte));
+        } else {
+            let _ = write!(uri, "%{byte:02X}");
+        }
+    }
+}
+
+/// The filesystem path a `file:` URI names, with its percent-encoding
+/// decoded; the inverse of [`path_to_uri`].
+pub fn uri_to_path(uri: &Uri<String>) -> Option<PathBuf> {
+    if uri.scheme()?.as_str() != "file" {
+        return None;
+    }
+    let path = uri.path().as_estr().decode().into_string().ok()?;
+    Some(PathBuf::from(path.into_owned()))
 }
 
 /// Parse a text rope with a given parser.
@@ -289,6 +313,14 @@ pub fn derive_module_name_from_path(uri_str: &str) -> Symbol {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn path_to_uri_percent_encodes_and_uri_to_path_decodes() {
+        let path = Path::new("/my pkg/100%/main.trb");
+        let uri = path_to_uri(path);
+        assert_eq!(uri.as_str(), "file:///my%20pkg/100%25/main.trb");
+        assert_eq!(uri_to_path(&uri).as_deref(), Some(path));
+    }
 
     #[test]
     fn path_to_uri_prefixes_file_scheme() {
