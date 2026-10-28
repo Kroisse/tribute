@@ -42,6 +42,7 @@ use tribute_front::ast::source_hash;
 use tribute_front::keywords::unraw;
 use tribute_front::resolve::NameDisplay;
 use tribute_front::source_file::{apply_edit, new_parser, parse_with_rope};
+use tribute_front::source_tree::source_tree_of;
 
 /// Main LSP server state.
 struct LspServer {
@@ -161,6 +162,7 @@ impl LspServer {
         self.db.open_document(&uri, rope);
 
         self.publish_diagnostics(&uri)?;
+        self.publish_dependents(&uri)?;
         Ok(())
     }
 
@@ -174,6 +176,7 @@ impl LspServer {
         }
 
         self.publish_diagnostics(&uri)?;
+        self.publish_dependents(&uri)?;
         Ok(())
     }
 
@@ -182,6 +185,9 @@ impl LspServer {
         params: DidCloseTextDocumentParams,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let uri = params.text_document.uri;
+        // The packages that read the buffer read the file on disk once it is
+        // closed, which may be missing, so find them first.
+        let dependents = self.dependent_documents(&uri);
         self.db.close_document(&uri);
 
         // Clear diagnostics
@@ -192,6 +198,39 @@ impl LspServer {
         };
         let notif = Notification::new(PublishDiagnostics::METHOD.to_string(), params);
         self.connection.sender.send(Message::Notification(notif))?;
+        for dependent in dependents {
+            self.publish_diagnostics(&dependent)?;
+        }
+        Ok(())
+    }
+
+    /// The open documents other than `uri` whose packages read `uri`'s
+    /// file as one of their file modules.
+    fn dependent_documents(&self, uri: &Uri) -> Vec<Uri> {
+        let Some(changed) = self.db.source_cst(uri) else {
+            return Vec::new();
+        };
+        let documents = self.db.open_documents();
+        self.db.attach(|db| {
+            documents
+                .into_iter()
+                .filter(|(key, root)| {
+                    key != uri.as_str()
+                        && source_tree_of(db, *root).is_some_and(|tree| {
+                            tree.files().iter().any(|file| file.source == changed)
+                        })
+                })
+                .filter_map(|(key, _)| key.parse().ok())
+                .collect()
+        })
+    }
+
+    /// Publish the diagnostics of the open documents whose packages read
+    /// `uri`'s file, which just changed.
+    fn publish_dependents(&self, uri: &Uri) -> Result<(), Box<dyn Error + Send + Sync>> {
+        for dependent in self.dependent_documents(uri) {
+            self.publish_diagnostics(&dependent)?;
+        }
         Ok(())
     }
 
@@ -1683,6 +1722,36 @@ mod tests {
             }
         }
 
+        /// Send a notification and process it.
+        fn notify<N: lsp_types::notification::Notification>(&mut self, params: N::Params)
+        where
+            N::Params: serde::Serialize,
+        {
+            let notif = Notification::new(N::METHOD.to_string(), params);
+            self.client
+                .sender
+                .send(Message::Notification(notif))
+                .unwrap();
+            let msg = self.server.connection.receiver.recv().unwrap();
+            self.server.process_message(msg).unwrap();
+        }
+
+        /// The next diagnostics the server published.
+        fn next_diagnostics(&mut self) -> PublishDiagnosticsParams {
+            let message = self
+                .client
+                .receiver
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the server published diagnostics");
+            match message {
+                Message::Notification(notif) => {
+                    assert_eq!(notif.method, PublishDiagnostics::METHOD);
+                    serde_json::from_value(notif.params).unwrap()
+                }
+                other => panic!("expected diagnostics notification, got {other:?}"),
+            }
+        }
+
         /// Send a request and get the response.
         fn request<R: lsp_types::request::Request>(&mut self, params: R::Params) -> R::Result
         where
@@ -2057,7 +2126,8 @@ mod tests {
     }
 
     /// A file module open in the editor is the source input its package
-    /// reads, so the root sees the buffer until the file is closed.
+    /// reads: opening, editing, and closing it republishes the diagnostics of
+    /// an open root of that package.
     #[test]
     fn an_open_file_module_buffer_is_what_its_package_reads() {
         let dir = tempfile::tempdir().expect("temporary package directory");
@@ -2081,33 +2151,46 @@ mod tests {
                 .diagnostics,
             Vec::new()
         );
+
+        // Opening the buffer publishes it, then the root that reads it.
         harness.open_document(&util, "pub fn other() -> Nat { 1 }\n");
+        let republished = harness.next_diagnostics();
+        assert_eq!(republished.uri, root);
         assert_ne!(
-            harness
-                .open_document_with_diagnostics(&root, source)
-                .diagnostics,
+            republished.diagnostics,
             Vec::new(),
             "the root reads the buffer, which has no `helper`"
         );
 
-        let close = DidCloseTextDocumentParams {
-            text_document: lsp_types::TextDocumentIdentifier { uri: util.clone() },
-        };
-        let notif = Notification::new(DidCloseTextDocument::METHOD.to_string(), close);
-        harness
-            .client
-            .sender
-            .send(Message::Notification(notif))
-            .unwrap();
-        let msg = harness.server.connection.receiver.recv().unwrap();
-        harness.server.process_message(msg).unwrap();
-        let _cleared = harness.client.receiver.recv().unwrap();
+        // Editing the buffer back republishes the root without errors.
+        harness.notify::<DidChangeTextDocument>(DidChangeTextDocumentParams {
+            text_document: lsp_types::VersionedTextDocumentIdentifier {
+                uri: util.clone(),
+                version: 2,
+            },
+            content_changes: vec![TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: "pub fn helper() -> Nat { 2 }\n".to_owned(),
+            }],
+        });
+        assert_eq!(harness.next_diagnostics().uri, util);
+        let republished = harness.next_diagnostics();
         assert_eq!(
-            harness
-                .open_document_with_diagnostics(&root, source)
-                .diagnostics,
-            Vec::new(),
-            "closing the buffer returns to the file on disk"
+            (republished.uri, republished.diagnostics),
+            (root.clone(), Vec::new())
+        );
+
+        // Closing it clears its diagnostics, then republishes the root
+        // against the file on disk.
+        harness.notify::<DidCloseTextDocument>(DidCloseTextDocumentParams {
+            text_document: lsp_types::TextDocumentIdentifier { uri: util.clone() },
+        });
+        assert_eq!(harness.next_diagnostics().uri, util);
+        let republished = harness.next_diagnostics();
+        assert_eq!(
+            (republished.uri, republished.diagnostics),
+            (root, Vec::new())
         );
     }
 

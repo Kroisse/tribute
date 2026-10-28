@@ -115,7 +115,12 @@ pub fn print_diagnostics(
     let root = source_hash(source.uri(db).as_str());
     diags.sort_by_key(|diag| {
         let source = diag.inner.span.source;
-        (source != root && source != 0, source)
+        // A span in no file is shown against the root, with its diagnostics.
+        if source == root || source == 0 {
+            None
+        } else {
+            Some(source)
+        }
     });
     for diag in diags.iter() {
         print_diagnostic(db, source, file_path, diag);

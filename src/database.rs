@@ -94,6 +94,15 @@ impl TributeDatabaseImpl {
         provider.set(self, &file, read_file(&file));
     }
 
+    /// The URI and source of each open document.
+    pub fn open_documents(&self) -> Vec<(String, SourceCst)> {
+        self.documents
+            .read()
+            .iter()
+            .map(|(uri, source)| (uri.clone(), *source))
+            .collect()
+    }
+
     pub fn source_cst(&self, uri: &LspUri) -> Option<SourceCst> {
         let key = uri.as_str();
         self.documents.read().get(key).copied()
