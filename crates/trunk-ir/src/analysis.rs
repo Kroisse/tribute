@@ -443,7 +443,7 @@ impl AnalysisCache {
             let result = A::compute(&mut computation, target);
             (result, computation.dependencies)
         };
-        let reads = ctx.end_reads(reads_start);
+        let footprint = ctx.end_reads(reads_start);
         assert_eq!(
             ctx.analysis_stamp(),
             revision,
@@ -472,7 +472,7 @@ impl AnalysisCache {
             key,
             Entry {
                 result: analysis.clone(),
-                stamp: Stamp::of(ctx, ctx.read_footprint(&reads)),
+                stamp: Stamp::of(ctx, footprint),
                 version,
                 recompute: recompute_erased::<A>,
             },
@@ -1022,6 +1022,66 @@ mod tests {
             footprint(&cache, AnalysisKey::of::<DependsOnSubtree>(g)),
             anchors(&[])
         );
+    }
+
+    std::thread_local! {
+        static CHAINLESS_READ: std::cell::Cell<Option<OpRef>> = const { std::cell::Cell::new(None) };
+    }
+
+    /// Reads its target and its first region alternately, enough times to
+    /// fill several log segments, after reading the operation in
+    /// `CHAINLESS_READ` if one is set.
+    struct RepeatedReads;
+
+    impl Analysis for RepeatedReads {
+        fn compute(ctx: &mut AnalysisContext<'_>, target: OpRef) -> Result<Self, AnalysisError> {
+            if let Some(op) = CHAINLESS_READ.get() {
+                let _ = ctx.ir().op(op);
+            }
+            let body = ctx.ir().op_region(target, 0).unwrap();
+            for _ in 0..2000 {
+                let _ = ctx.ir().op(target);
+                let _ = ctx.ir().region(body);
+            }
+            Ok(Self)
+        }
+    }
+
+    #[test]
+    fn compacted_reads_keep_their_footprint() {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @f() {
+    func.return
+  }
+}"#,
+        );
+        let body = ctx.op_region(module.op(), 0).unwrap();
+        let f = ctx.block(ctx.region(body).blocks[0]).ops[0];
+        let detached = detached_op(&mut ctx);
+        let stamp = |cache: &AnalysisCache| match &cache.cache[&AnalysisKey::of::<RepeatedReads>(f)]
+            .stamp
+        {
+            Stamp::Revision(_) => None,
+            Stamp::Anchors { anchors, .. } => Some(
+                anchors
+                    .iter()
+                    .map(|&(anchor, _)| anchor)
+                    .collect::<Vec<_>>(),
+            ),
+        };
+
+        let mut cache = AnalysisCache::new();
+        cache.get::<RepeatedReads>(&ctx, f).unwrap();
+        assert_eq!(stamp(&cache), Some(vec![f]));
+
+        CHAINLESS_READ.set(Some(detached));
+        let mut cache = AnalysisCache::new();
+        cache.get::<RepeatedReads>(&ctx, f).unwrap();
+        CHAINLESS_READ.set(None);
+        assert_eq!(stamp(&cache), None);
     }
 
     #[test]

@@ -210,8 +210,9 @@ pub struct IrContext {
 
     /// Entities read while an analysis computation is active.
     reads: ReadRecorder,
-    /// The revision of the last change in each anchor's scope.
-    anchor_revisions: SecondaryMap<OpRef, u64>,
+    /// The revision of the last change in each anchor's scope, for the
+    /// anchors changed since the context was created.
+    anchor_revisions: HashMap<OpRef, u64>,
     /// The revision of the last change whose scope is not classified.
     unclassified_revision: u64,
 }
@@ -223,6 +224,9 @@ pub(crate) enum ReadEntity {
     Block(BlockRef),
     Region(RegionRef),
     Value(ValueRef),
+    /// Reads already known to include one with no anchor chain; a
+    /// compacted segment holds it alone.
+    Chainless,
 }
 
 /// The anchors whose counters cover a computation's reads.
@@ -243,6 +247,9 @@ struct ReadRecorder {
     segment_start: Cell<usize>,
     log: RefCell<Vec<ReadEntity>>,
 }
+
+/// The shortest segment `IrContext::record_read` reduces to its anchors.
+const MIN_COMPACTED_READS: usize = 1024;
 
 /// The log segment of one recorded computation, returned by
 /// `IrContext::begin_reads`.
@@ -350,7 +357,7 @@ impl IrContext {
             type_alias_by_type: HashMap::default(),
             diagnostics: RefCell::new(Vec::new()),
             reads: ReadRecorder::default(),
-            anchor_revisions: SecondaryMap::new(),
+            anchor_revisions: HashMap::default(),
             unclassified_revision: 0,
         }
     }
@@ -381,7 +388,7 @@ impl IrContext {
             type_alias_by_type: self.type_alias_by_type.clone(),
             diagnostics: self.diagnostics.clone(),
             reads: ReadRecorder::default(),
-            anchor_revisions: secondary_with_capacity(&self.anchor_revisions),
+            anchor_revisions: self.anchor_revisions.clone(),
             unclassified_revision: self.unclassified_revision,
         }
     }
@@ -396,7 +403,7 @@ impl IrContext {
 
     /// The revision of the last change in `anchor`'s scope.
     pub(crate) fn anchor_revision(&self, anchor: OpRef) -> u64 {
-        self.anchor_revisions[anchor]
+        self.anchor_revisions.get(&anchor).copied().unwrap_or(0)
     }
 
     /// The revision of the last change whose scope is not classified.
@@ -419,11 +426,10 @@ impl IrContext {
     fn touch_chain(&mut self, op: OpRef) {
         let mut current = Some(op);
         while let Some(op) = current {
-            if self.is_anchor(op) {
-                if self.anchor_revisions[op] == self.revision {
-                    return;
-                }
-                self.anchor_revisions[op] = self.revision;
+            if self.is_anchor(op)
+                && self.anchor_revisions.insert(op, self.revision) == Some(self.revision)
+            {
+                return;
             }
             current = self.parent_op(op);
         }
@@ -453,9 +459,25 @@ impl IrContext {
     #[inline(never)]
     fn record_read(&self, entity: ReadEntity) {
         let mut log = self.reads.log.borrow_mut();
-        if log.len() == self.reads.segment_start.get() || log.last() != Some(&entity) {
-            log.push(entity);
+        let start = self.reads.segment_start.get();
+        let segment = &log[start..];
+        if segment.last() == Some(&entity) || segment == [ReadEntity::Chainless] {
+            return;
         }
+        // Reduce a full segment to its anchors in place, so a computation
+        // that walks a large subtree keeps a log about the size of its
+        // footprint instead of one entry per read.
+        if log.len() == log.capacity() && segment.len() >= MIN_COMPACTED_READS {
+            let footprint = self.read_footprint(segment);
+            log.truncate(start);
+            match footprint {
+                ReadFootprint::WholeContext => log.push(ReadEntity::Chainless),
+                ReadFootprint::Anchors(anchors) => {
+                    log.extend(anchors.into_iter().map(ReadEntity::Op));
+                }
+            }
+        }
+        log.push(entity);
     }
 
     /// Start recording reads for one computation.
@@ -466,14 +488,17 @@ impl IrContext {
         ReadSegment { start, outer_start }
     }
 
-    /// Stop recording the computation `segment` began and return its
-    /// reads, excluding those of computations nested in it.
-    pub(crate) fn end_reads(&self, segment: ReadSegment) -> Vec<ReadEntity> {
+    /// Stop recording the computation `segment` began and return the
+    /// footprint of its reads, excluding those of computations nested in it.
+    pub(crate) fn end_reads(&self, segment: ReadSegment) -> ReadFootprint {
         let depth = self.reads.depth.get();
         assert!(depth != 0, "end_reads without begin_reads");
         self.reads.depth.set(depth - 1);
         self.reads.segment_start.set(segment.outer_start);
-        self.reads.log.borrow_mut().split_off(segment.start)
+        let mut log = self.reads.log.borrow_mut();
+        let footprint = self.read_footprint(&log[segment.start..]);
+        log.truncate(segment.start);
+        footprint
     }
 
     fn block_owner(&self, block: BlockRef) -> Option<OpRef> {
@@ -525,7 +550,7 @@ impl IrContext {
 
     /// Map recorded reads to the outermost anchors that cover them. Reads
     /// fields directly, so an enclosing recording computation is unaffected.
-    pub(crate) fn read_footprint(&self, reads: &[ReadEntity]) -> ReadFootprint {
+    fn read_footprint(&self, reads: &[ReadEntity]) -> ReadFootprint {
         // Operations in one block share the innermost anchor at or above
         // the block's owner, so the walk to the root runs once per block.
         let mut block_anchors: HashMap<BlockRef, Option<OpRef>> = HashMap::default();
@@ -543,6 +568,7 @@ impl IrContext {
                     ValueDef::OpResult(op, _) => (Some(op), self.ops[op].parent_block),
                     ValueDef::BlockArg(block, _) => (None, Some(block)),
                 },
+                ReadEntity::Chainless => return ReadFootprint::WholeContext,
             };
             if let Some(op) = op
                 && self.is_anchor(op)
@@ -1195,7 +1221,7 @@ impl IrContext {
         // lose entries before those entries are cleared.
         for &o in &subtree {
             if self.is_anchor(o) {
-                self.anchor_revisions[o] = self.revision;
+                self.anchor_revisions.insert(o, self.revision);
             }
             let operands: SmallVec<[ValueRef; 8]> =
                 self.ops[o].operands.as_slice(&self.value_pool).into();
