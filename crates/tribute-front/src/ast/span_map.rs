@@ -36,13 +36,15 @@ impl SpanMapBuilder {
         self.layout.starts.insert(owner, start);
     }
 
-    /// Insert the source span of a node: relative to its item's start, or as
-    /// is for a node no item owns.
+    /// Record the span of the root `Module` node, which no item owns.
+    pub fn set_module(&mut self, id: NodeId, span: Span) {
+        self.layout.module = Some((id, span));
+    }
+
+    /// Insert the source span of a node relative to its item's start. A node
+    /// no item owns keeps its span as is.
     pub fn insert(&mut self, id: NodeId, span: Span) {
-        let Some(&start) = self.layout.starts.get(&id.owner()) else {
-            self.layout.unowned.insert(id, span);
-            return;
-        };
+        let start = self.layout.starts.get(&id.owner()).copied().unwrap_or(0);
         debug_assert!(start <= span.start, "a node starts within its item");
         let relative = Span::new(span.start - start, span.end - start);
         self.spans.insert(id, relative);
@@ -61,14 +63,16 @@ impl SpanMapBuilder {
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ItemSpans(HashMap<NodeId, Span>);
 
-/// Where each item of one parsed source starts, and the spans of the nodes
-/// no item owns, such as the root `Module`.
+/// Where each item of one parsed source starts, and the span of its root
+/// `Module`.
 ///
-/// Moving items changes only this part of a source's spans.
+/// Moving items changes only this part of a source's spans. The root spans
+/// the whole source, so any edit that changes the source's length changes it
+/// too.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ItemLayout {
     starts: HashMap<u64, usize>,
-    unowned: HashMap<NodeId, Span>,
+    module: Option<(NodeId, Span)>,
 }
 
 /// NodeId → Span mapping of one parsed source.
@@ -95,7 +99,7 @@ impl<'a> SpanMap<'a> {
         static SPANS: ItemSpans = ItemSpans(HashMap::with_hasher(FxBuildHasher));
         static LAYOUT: ItemLayout = ItemLayout {
             starts: HashMap::with_hasher(FxBuildHasher),
-            unowned: HashMap::with_hasher(FxBuildHasher),
+            module: None,
         };
         SpanMap::new(&SPANS, &LAYOUT)
     }
@@ -118,7 +122,9 @@ impl<'a> SpanMap<'a> {
             let start = self.layout.starts.get(&id.owner()).copied().unwrap_or(0);
             return Some(Span::new(relative.start + start, relative.end + start));
         }
-        self.layout.unowned.get(&id).copied()
+        self.layout
+            .module
+            .and_then(|(module, span)| (module == id).then_some(span))
     }
 
     /// Look up a span by NodeId, returning a default span if not found.
@@ -128,7 +134,7 @@ impl<'a> SpanMap<'a> {
 
     /// Check if this NodeId has a recorded span.
     pub fn contains(&self, id: NodeId) -> bool {
-        self.spans.0.contains_key(&id) || self.layout.unowned.contains_key(&id)
+        self.get_exact(id).is_some()
     }
 }
 
@@ -251,6 +257,7 @@ mod tests {
             builder.insert(NodeId::new(0, 7, 0), Span::new(start, start + 10));
             builder.insert(NodeId::new(0, 7, 1), Span::new(start + 4, start + 6));
             builder.insert(NodeId::new(0, 3, 0), Span::new(0, 2));
+            builder.set_module(NodeId::new(0, 3, 1), Span::new(0, start + 10));
             builder.finish()
         };
         let (spans, layout) = build(20);
@@ -264,5 +271,6 @@ mod tests {
         let span_map = SpanMap::new(&moved_spans, &moved_layout);
         assert_eq!(span_map.get(NodeId::new(0, 7, 1)), Some(Span::new(39, 41)));
         assert_eq!(span_map.get(NodeId::new(0, 3, 0)), Some(Span::new(0, 2)));
+        assert_eq!(span_map.get(NodeId::new(0, 3, 1)), Some(Span::new(0, 45)));
     }
 }

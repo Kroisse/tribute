@@ -83,8 +83,9 @@ positions of several sources, such as lowering the module merged with package
 A parse keeps positions in two tracked fields. `item_spans` holds each node's
 span relative to the start of the item that owns it (a `fn`, a type, an
 ability, a `mod` or a `use` declaration). `item_layout` holds where each item
-starts and the spans of the nodes no item owns, such as the root `Module`.
-Moving items without changing them changes only `item_layout`. `SpanMap`
+starts and the span of the root `Module`, which no item owns. Moving items
+without changing them changes only `item_layout`; since the root spans the
+whole source, so does any edit that changes the source's length. `SpanMap`
 borrows both and computes absolute spans, so a query that reads it still
 reruns when an item moves.
 

@@ -64,11 +64,24 @@ impl<'db> AstLoweringCtx<'db> {
     /// Generate the NodeId of the next node of the current owner and record
     /// the CST node's span for it.
     pub fn fresh_id_with_span(&mut self, node: &Node) -> NodeId {
+        let id = self.next_id();
+        let span = Span::new(node.start_byte(), node.end_byte());
+        self.span_builder.insert(id, span);
+        id
+    }
+
+    /// Generate the NodeId of the root `Module` node and record its span.
+    pub fn module_id_with_span(&mut self, node: &Node) -> NodeId {
+        let id = self.next_id();
+        let span = Span::new(node.start_byte(), node.end_byte());
+        self.span_builder.set_module(id, span);
+        id
+    }
+
+    fn next_id(&mut self) -> NodeId {
         let next = self.next_index.entry(self.owner).or_default();
         let id = NodeId::new(self.source_hash, self.owner, *next);
         *next += 1;
-        let span = Span::new(node.start_byte(), node.end_byte());
-        self.span_builder.insert(id, span);
         id
     }
 

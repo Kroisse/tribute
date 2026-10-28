@@ -39,7 +39,7 @@ pub fn lower_module(
     root: Node,
     module_name: Option<Symbol>,
 ) -> Module<UnresolvedName> {
-    let id = ctx.fresh_id_with_span(&root);
+    let id = ctx.module_id_with_span(&root);
     let name = module_name;
     let mut decls = Vec::new();
 
