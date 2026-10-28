@@ -574,3 +574,60 @@ fn a_dependency_instance_leaves_a_dependent_specialization_unchanged() {
     assert_eq!(own_instances(db, diamond.left), before);
     packaged_app(db, diamond.app, diamond.environment).expect("merging packages specializes");
 }
+
+/// `lib` instantiates its generic at its own type spelled `Token`, and
+/// `app` at the same type spelled `lib::Token`: the merged result keeps one
+/// instance and only that instance's metadata.
+#[test]
+fn merging_keeps_the_metadata_of_the_instance_it_keeps() {
+    let db = LoggingDb::default();
+    let std = Package::new(
+        &db,
+        PackageName::std(),
+        db.source("prelude:///std/prelude", PRELUDE),
+        DependencyTable::new(&db, Vec::new()),
+    );
+    let lib = Package::new(
+        &db,
+        PackageName::library(Symbol::new("lib")),
+        db.source(
+            "lib:///lib.trb",
+            "pub enum Token { A, B }\n\npub fn keep(value: a) -> a { value }\n\npub fn own(token: Token) -> Token { keep(token) }\n",
+        ),
+        DependencyTable::new(&db, vec![std]),
+    );
+    let app = db.source(
+        "app.trb",
+        "fn run() -> lib::Token {\n    lib::own(lib::Token::A)\n    lib::keep(lib::Token::B)\n}\n",
+    );
+    let environment = DependencyTable::new(&db, vec![lib, std]);
+    assert_eq!(
+        analysis::diagnostics(&db, app, environment)
+            .into_iter()
+            .map(|diagnostic: &Diagnostic| diagnostic.inner.message.clone())
+            .collect::<Vec<_>>(),
+        Vec::<String>::new()
+    );
+    // `lib` instantiates `keep` at `Token` as its parameter spells it, and
+    // `app` at `lib::Token`: one path, two spellings.
+    assert!(
+        specialized_package(&db, lib)
+            .expect("the library specializes")
+            .function_instances(&db)
+            .iter()
+            .any(|path| *path == ["lib", "keep$lib::Token"])
+    );
+    let merged = merged_app(&db, app, environment).expect("merging specializes");
+    let packaged = packaged_app(&db, app, environment).expect("merging packages specializes");
+    let sources = *merged.source_entries(&db);
+    let instances = counts(&packaged.module(&db).entries[sources..]);
+    assert_eq!(
+        merged.module(&db).entries.len() - sources,
+        instances.len(),
+        "instances"
+    );
+    assert!(
+        instances.values().all(|&count| count == 1),
+        "duplicate instance"
+    );
+}

@@ -29,6 +29,7 @@ use crate::resolve::NameDisplay;
 use std::ops::ControlFlow;
 
 use crate::ast::fold::{ForEachType, TypeFoldable, TypeVisitable};
+use crate::ast::visit::Visit;
 use crate::ast::{
     CtorId, Decl, DeclEntry, DeclTable, FuncDefId, NodeId, Type, TypeDefId, TypeScheme, TypedRef,
 };
@@ -374,7 +375,8 @@ pub fn monomorphize_functions<'db>(
 /// `results` are given each after the packages it depends on. The merged
 /// table has every result's sources, then every result's instances, each
 /// in that order; an instance more than one result has is kept once, the
-/// first. Metadata of a later result wins, and agrees for a shared key.
+/// first, with only that instance's metadata. Metadata of a later result
+/// wins, and agrees for a shared key.
 pub fn merge_specializations<'db>(
     db: &'db dyn salsa::Database,
     results: impl IntoIterator<Item = SpecializationOutput<'db>>,
@@ -392,19 +394,26 @@ pub fn merge_specializations<'db>(
         entries.extend_from_slice(&result.module(db).entries[..*result.source_entries(db)]);
     }
     let source_entries = entries.len();
+    // A function instance whose type arguments another result spells
+    // differently has the same path but other nodes; the metadata of the
+    // nodes only a dropped copy has leaves with it.
     let mut seen = HashSet::default();
+    let mut kept = templates::DeclNodes::default();
+    let mut dropped = templates::DeclNodes::default();
     for result in &results {
         let instances = &result.module(db).entries[*result.source_entries(db)..];
-        entries.extend(
-            instances
-                .iter()
-                .filter(|entry| {
-                    instance_identity(entry).is_none_or(|identity| seen.insert(identity))
-                })
-                .cloned(),
-        );
+        for entry in instances {
+            if instance_identity(entry).is_none_or(|identity| seen.insert(identity)) {
+                kept.visit_decl(&entry.decl);
+                entries.push(entry.clone());
+            } else {
+                dropped.visit_decl(&entry.decl);
+            }
+        }
     }
     module.entries = entries;
+    let (kept, mut dropped) = (kept.0, dropped.0);
+    dropped.retain(|node| !kept.contains(node));
 
     let first = results[0];
     let mut declarations = first.declarations(db).clone();
@@ -419,6 +428,8 @@ pub fn merge_specializations<'db>(
         function_instances.extend(result.function_instances(db).iter().cloned());
         nominal_instances.extend(result.nominal_instances(db).iter().cloned());
     }
+    expressions.retain_nodes(|node| !dropped.contains(node));
+    compiler_intrinsics.retain(|node, _| !dropped.contains(node));
     function_instances.sort();
     function_instances.dedup();
     let mut seen = HashSet::default();
