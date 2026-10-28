@@ -42,7 +42,7 @@ pub fn builtin_at(entries: &[BuiltinSymbolEntry], offset: usize) -> Option<&Buil
 fn collect_module(
     db: &dyn salsa::Database,
     module: &DeclTable<TypedRef<'_>>,
-    span_map: &SpanMap,
+    span_map: SpanMap<'_>,
     entries: &mut Vec<BuiltinSymbolEntry>,
 ) {
     for decl in module.decls() {
@@ -57,7 +57,7 @@ fn collect_module(
 fn collect_effect(
     db: &dyn salsa::Database,
     annotation: &TypeAnnotation,
-    span_map: &SpanMap,
+    span_map: SpanMap<'_>,
     entries: &mut Vec<BuiltinSymbolEntry>,
 ) {
     let ability_annotation = match &annotation.kind {

@@ -1,7 +1,8 @@
 //! Tests that an edit reruns only the queries whose inputs it changed.
 
 use tribute_front::SourceCst;
-use tribute_front::query::{func_names, resolved_module};
+use tribute_front::ast::{ItemLayout, ItemSpans};
+use tribute_front::query::{func_names, parsed_ast, parsed_module, resolved_module};
 use tribute_front::testing::{Executed, LoggingDb};
 
 const PATH: &str = "reuse.trb";
@@ -77,9 +78,10 @@ fn adding_a_function_reruns_what_depends_on_the_names() {
         .assert_reuse(&baseline, &["func_names", "function_count"], &[]);
 }
 
-/// Name resolution reads the span map to report its diagnostics, so moving
-/// code reruns it although no name changed. Positions relative to their item
-/// would let it be reused; this test then expects `resolved_module` not to run.
+/// Name resolution reads the span map to report its diagnostics, and the span
+/// map reads the item layout, so moving code reruns it although no name
+/// changed. Once resolution reports diagnostics by `NodeId`, this test
+/// expects `resolved_module` not to run.
 #[test]
 fn moving_code_reruns_name_resolution() {
     let (mut db, source, baseline) = computed();
@@ -88,4 +90,61 @@ fn moving_code_reruns_name_resolution() {
         resolved_module(db, source);
     })
     .assert_reuse(&baseline, &["resolved_module"], &[]);
+}
+
+/// A program with every kind of item, including one in an inline module.
+const ITEMS: &str = "\
+use std::io::{Io, print_line}
+
+struct Point { x: Int }
+
+ability Counter {
+    op tick() -> Nil
+}
+
+mod inner {
+    fn h() -> Int { 1 }
+}
+
+fn f(x: Int) -> Int { x }
+";
+
+/// A query that depends on the parse's relative spans only.
+#[salsa::tracked(returns(copy))]
+fn has_item_spans(db: &dyn salsa::Database, source: SourceCst) -> bool {
+    parsed_ast(db, source).is_some_and(|parsed| *parsed.item_spans(db) != ItemSpans::default())
+}
+
+/// A query that depends on the parse's item layout only.
+#[salsa::tracked(returns(copy))]
+fn has_item_layout(db: &dyn salsa::Database, source: SourceCst) -> bool {
+    parsed_ast(db, source).is_some_and(|parsed| *parsed.item_layout(db) != ItemLayout::default())
+}
+
+/// Moving every item without changing it changes only the item layout: the
+/// module and every node's span relative to its item are reused.
+#[test]
+fn moving_items_changes_only_their_layout() {
+    let db = LoggingDb::default();
+    let source = db.source(PATH, ITEMS);
+    let baseline = db.record(|db| {
+        parsed_module(db, source);
+        has_item_spans(db, source);
+        has_item_layout(db, source);
+    });
+    let mut db = db;
+    db.replace(source, "use ", "// A comment moves every item.\n\nuse ");
+    db.record(|db| {
+        parsed_module(db, source);
+        assert!(has_item_spans(db, source));
+        assert!(has_item_layout(db, source));
+    })
+    .assert_reuse(
+        &baseline,
+        &[
+            "lower_source_to_parsed_ast_with_module_path",
+            "has_item_layout",
+        ],
+        &["parsed_ast", "has_item_spans"],
+    );
 }

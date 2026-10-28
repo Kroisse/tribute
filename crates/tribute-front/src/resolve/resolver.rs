@@ -101,7 +101,7 @@ pub struct Resolver<'e, 'db> {
     /// depends on.
     scope: ScopeRef<'e, 'db>,
     /// Span map for emitting diagnostics with source locations.
-    span_map: &'db SpanMap,
+    span_map: SpanMap<'db>,
     /// Lexical nested-module namespace used for unqualified references in an
     /// inline module body.
     module_path: Vec<Symbol>,
@@ -143,7 +143,7 @@ impl<'e, 'db> Resolver<'e, 'db> {
     pub fn new(
         db: &'db dyn salsa::Database,
         scope: ScopeRef<'e, 'db>,
-        span_map: &'db SpanMap,
+        span_map: SpanMap<'db>,
     ) -> Self {
         Self {
             db,

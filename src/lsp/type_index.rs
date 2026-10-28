@@ -168,7 +168,7 @@ impl<'db> AstTypeIndex<'db> {
     pub fn build(
         db: &'db dyn salsa::Database,
         typed: TypeCheckOutput<'db>,
-        span_map: &SpanMap,
+        span_map: SpanMap<'_>,
     ) -> Self {
         let mut collector = TypeCollector::new(span_map, &typed.expression_types(db).node_types);
         walk_decl_table(&mut collector, typed.module(db));
@@ -212,13 +212,13 @@ impl<'db> AstTypeIndex<'db> {
 
 /// Helper struct for collecting type entries from the AST.
 struct TypeCollector<'a, 'db> {
-    span_map: &'a SpanMap,
+    span_map: SpanMap<'a>,
     node_types: &'a SortedMap<NodeId, Type<'db>>,
     entries: Vec<AstTypeEntry<'db>>,
 }
 
 impl<'a, 'db> TypeCollector<'a, 'db> {
-    fn new(span_map: &'a SpanMap, node_types: &'a SortedMap<NodeId, Type<'db>>) -> Self {
+    fn new(span_map: SpanMap<'a>, node_types: &'a SortedMap<NodeId, Type<'db>>) -> Self {
         Self {
             span_map,
             node_types,

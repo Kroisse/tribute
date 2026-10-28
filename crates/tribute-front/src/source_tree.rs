@@ -14,7 +14,7 @@ use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity}
 use trunk_ir::{Span, Symbol};
 
 use crate::ast::node_id::source_hash;
-use crate::ast::{Module, ModuleItem, SpanMap, UnresolvedName};
+use crate::ast::{ItemLayout, ItemSpans, Module, ModuleItem, SpanMap, UnresolvedName};
 use crate::astgen::{self, ParsedAst};
 use crate::source_file::{SourceCst, push_uri_path, source_at, uri_to_path};
 
@@ -89,12 +89,16 @@ pub fn source_tree<'db>(
         name: module.name.clone(),
         decls,
     };
-    let span_map = SpanMap::merged(
-        std::iter::once(parsed.span_map(db))
-            .chain(loader.parsed.iter().map(|file| file.span_map(db))),
+    let item_spans = ItemSpans::merged(
+        std::iter::once(parsed.item_spans(db))
+            .chain(loader.parsed.iter().map(|file| file.item_spans(db))),
+    );
+    let item_layout = ItemLayout::merged(
+        parsed.item_layout(db),
+        loader.parsed.iter().map(|file| file.item_layout(db)),
     );
     Some(SourceTree {
-        parsed: ParsedAst::new(db, module, span_map),
+        parsed: ParsedAst::new(db, module, item_spans, item_layout),
         files: loader.files,
     })
 }
@@ -118,7 +122,7 @@ struct Loader<'db> {
 impl<'db> Loader<'db> {
     /// Fill in the body of each file module among `items`, declared in a
     /// file whose spans are `spans`, with child module files under `dir`.
-    fn splice(&mut self, items: &mut [ModuleItem<UnresolvedName>], dir: &str, spans: &SpanMap) {
+    fn splice(&mut self, items: &mut [ModuleItem<UnresolvedName>], dir: &str, spans: SpanMap<'_>) {
         for item in items {
             let ModuleItem::Module(module) = item else {
                 continue;

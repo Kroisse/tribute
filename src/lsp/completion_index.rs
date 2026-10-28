@@ -351,7 +351,7 @@ fn prelude_constructors(db: &dyn salsa::Database) -> Vec<(Symbol, Symbol)> {
 pub fn module_at(db: &dyn salsa::Database, source: SourceCst, offset: usize) -> SymbolPath {
     fn descend(
         items: &[ModuleItem<UnresolvedName>],
-        span_map: &SpanMap,
+        span_map: SpanMap<'_>,
         offset: usize,
         path: &mut SymbolPath,
     ) {
