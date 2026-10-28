@@ -996,8 +996,9 @@ item 단위로 재사용하기 위한 전제이다.
 - **AST 노드:** `NodeId`는 노드를 소유한 item과 그 item 안에서 astgen이 매긴
   순번으로 정해진다. Item은 module path, 종류, 이름, 같은 module에서 그 item보다
   앞선 같은 종류·이름의 item 수로 식별한다. `fn`, 타입, ability, `mod`, `use`
-  선언이 item이며, `use` 선언은 이름 대신 선언 텍스트로 식별한다. Item에 속하지
-  않는 노드(root module 자신)는 그 module이 소유한다. 바뀌지 않은 item은 다른 item이
+  선언이 item이며, `use` 선언은 이름 대신 선언 텍스트로 식별한다. 이름이 없는
+  선언도 빈 이름의 item이다. Item에 속하지 않는 노드(root module 자신)는 그
+  module이 소유한다. 바뀌지 않은 item은 다른 item이
   추가·삭제되거나 위치가 옮겨져도 같은 `NodeId`를 갖는다. 예외는 편집이 그 item보다
   앞선 같은 종류·이름의 item 수를 바꿀 때뿐이다.
 - **지역 변수:** `LocalId`는 module 수준 함수 하나 안에서만 유일하며, 각 함수가
@@ -1007,9 +1008,18 @@ item 단위로 재사용하기 위한 전제이다.
 - **위치:** Source 위치는 `NodeId`에서 절대 span으로 가는 별도 span map에만 있고,
   AST와 분석 결과는 위치를 담지 않는다. 진단처럼 위치가 필요한 출력만 span map을
   읽는다. Parse 결과는 각 노드의 span을 소유 item 시작점 기준의 상대
-  위치로 담고, 각 item의 시작점과 root module의 span은 별도의 layout에
-  담는다. Span map은 둘을 더해 절대 span을 만든다. 따라서 item을 바꾸지
-  않고 옮기면 layout만 바뀐다. Item 단위로 결과를 재사용하려면 그 결과가 내보내는 진단도 소유 item 기준의
+  위치로 담고, 각 item의 시작점과 module 노드(root module과 inline `mod`
+  선언)의 span은 별도의 layout에 담는다. Module 노드는 안의 item을 감싸므로,
+  item 길이가 바뀌면 layout도 바뀐다. Span map은 둘을 더해 절대 span을
+  만든다. 따라서 item을 바꾸지 않고 옮기면 layout만 바뀐다.
+- **Item별 parse 결과:** Parse는 파일 전체를 한 번에 lowering하되, 결과를 item
+  하나당 tracked struct 하나로 낸다. 그 identity는 item의 owner key이고,
+  선언과 상대 span은 tracked field이다. Inline module의 item은 그 module
+  item의 자식으로 두고, module item의 선언은 body를 담지 않는다. 따라서 한
+  item의 본문을 편집해도 다른 item의 field는 바뀌지 않고, item 목록은 item이
+  추가·삭제되거나 순서가 바뀔 때만 바뀐다. Module 전체 AST와 span map은
+  item들로부터 조립하며, 이를 읽는 쪽은 어느 item이 바뀌어도 다시 실행된다.
+  Item 단위로 결과를 재사용하려면 그 결과가 내보내는 진단도 소유 item 기준의
   상대 위치로 표현해, 결과를 다시 계산하지 않고도 절대 위치로 옮길 수 있어야 한다.
 
 ---
