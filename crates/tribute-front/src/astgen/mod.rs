@@ -144,7 +144,7 @@ pub fn lower_file_module<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
     module_path: Option<trunk_ir::Symbol>,
-    path: Vec<trunk_ir::Symbol>,
+    path: trunk_ir::SymbolPath,
 ) -> Option<ParsedAst<'db>> {
     use crate::ast::node_id::source_hash;
     use crate::query::parse_cst;
@@ -152,7 +152,7 @@ pub fn lower_file_module<'db>(
     let cst = parse_cst(db, source)?;
     let text = source.text(db);
     let sh = source_hash(source.uri(db).as_str());
-    let mut ctx = AstLoweringCtx::with_db(db, text.clone(), sh).in_file_module(path);
+    let mut ctx = AstLoweringCtx::with_db(db, text.clone(), sh).in_file_module(path.to_vec());
     let module = lower_cst_to_ast_internal(&mut ctx, cst, module_path);
     let (item_spans, item_layout) = ctx.finish().finish();
     Some(ParsedAst::new(db, module, item_spans, item_layout))

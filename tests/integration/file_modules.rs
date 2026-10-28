@@ -7,8 +7,9 @@ use std::process::Command;
 use tribute::pipeline::{compile_frontend, compile_with_diagnostics, parse_and_lower_ast};
 use tribute_front::SourceCst;
 use tribute_front::ast::{Decl, ModuleItem, UnresolvedName};
-use tribute_front::source_tree::source_tree_of;
+use tribute_front::source_tree::{PackageFile, source_tree_of};
 use tribute_front::testing::LoggingDb;
+use trunk_ir::SymbolPath;
 use trunk_ir::printer::print_module;
 
 const ROOT: &str = "/pkg/src/main.trb";
@@ -78,7 +79,10 @@ fn located_diagnostics(db: &LoggingDb, root: SourceCst) -> Vec<String> {
         .iter()
         .map(|diagnostic| {
             let span = diagnostic.inner.span;
-            let file = tree.file(db, span.source).expect("a file of the package");
+            let file = tree
+                .file(span.source)
+                .expect("a file of the package")
+                .source;
             format!(
                 "{}:{}..{}: {}",
                 file.uri(db).path(),
@@ -134,7 +138,7 @@ fn file_module_items_are_owned_like_inline_items() {
     let ids = |db: &LoggingDb, root| {
         let tree = source_tree_of(db, root).expect("the root parses");
         let mut ids = Vec::new();
-        function_ids(&tree.parsed.module(db).decls, "", &mut ids);
+        function_ids(&tree.module(db).decls, "", &mut ids);
         ids
     };
     let mut db = LoggingDb::default();
@@ -164,6 +168,38 @@ fn same_named_items_in_two_files_keep_their_own_spans() {
     );
 }
 
+/// The tree lists its files by module path, and a module's subtree is one
+/// run of them.
+#[test]
+fn the_tree_finds_the_files_under_a_module() {
+    let mut db = LoggingDb::default();
+    let root = package(&mut db);
+    let tree = source_tree_of(&db, root).expect("the root parses");
+    let paths = |files: &[PackageFile<'_>]| {
+        files
+            .iter()
+            .map(|file| file.source.uri(&db).path().as_str().to_owned())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        paths(tree.files()),
+        [
+            ROOT,
+            "/pkg/src/math.trb",
+            "/pkg/src/math/ops.trb",
+            "/pkg/src/util/text.trb"
+        ]
+    );
+    assert_eq!(
+        paths(tree.files_under(&SymbolPath::new(["math"]))),
+        ["/pkg/src/math.trb", "/pkg/src/math/ops.trb"]
+    );
+    assert_eq!(
+        paths(tree.files_under(&SymbolPath::new(["util"]))),
+        ["/pkg/src/util/text.trb"]
+    );
+}
+
 #[test]
 fn editing_a_file_module_parses_only_that_file() {
     let mut db = LoggingDb::default();
@@ -185,6 +221,28 @@ fn editing_a_file_module_parses_only_that_file() {
         &baseline,
         &["source_tree"],
         &["lower_source_to_parsed_ast_with_module_path"],
+    );
+}
+
+/// Moving a file module's items changes only that file's spans: the tree
+/// keeps each file's spans in its own parse, so its package AST is equal and
+/// analysis is reused.
+#[test]
+fn moving_items_in_a_file_module_keeps_the_package_ast() {
+    let mut db = LoggingDb::default();
+    let root = package(&mut db);
+    let analyze = |db: &LoggingDb| {
+        parse_and_lower_ast(db, root).expect("the package type checks");
+    };
+    let baseline = db.record(analyze);
+
+    db.file("/pkg/src/math/ops.trb", &format!("\n\n{OPS}"));
+    let edited = db.record(analyze);
+    assert_eq!(edited.count("lower_file_module"), 1, "{edited:?}");
+    edited.assert_reuse(
+        &baseline,
+        &["source_tree"],
+        &["analyze", "lower_source_to_parsed_ast_with_module_path"],
     );
 }
 

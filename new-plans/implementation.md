@@ -1005,16 +1005,21 @@ representation/ABI 경계)의 실패는 source 진단이 아니라 compiler 내�
   모듈의 본문을 비운다. 그래서 이름 해석이 받는 패키지 AST에는 본문 없는 모듈이
   없다.
 
-**Source 위치.** 패키지의 span map은 트리의 모든 파일을 담고, span은 바이트 위치와
-그 위치가 속한 source id를 함께 가진다. Root 파일의 source id는 0이고, 파일 모듈의
-source id는 그 파일 URI의 hash로 `NodeId`의 source hash와 같은 값이다. 파일 모듈의
-구문 진단도 같은 source id를 가진다. 트리의 span map은 각 파일의 상대 span과
-layout을 합친 것이다. 파일 모듈의 파일은 그 모듈의 패키지 안 경로를 module
-path로 lowering하므로, 그 item은 같은 item을 inline으로 선언했을 때와 같은 소유
-item 식별자를 갖고 다른 파일의 item과 겹치지 않는다. 트리 query는 읽은
-파일 목록을 함께 내므로,
-진단을 출력하는 쪽은 source id로 진단의 파일을 찾는다. IR location은 같은 source
-hash에서 파일 경로를 정한다.
+**Source 위치.** 트리는 패키지의 각 파일을 그 파일의 parse 결과와 함께, 패키지
+안 module path 순으로 담는다. Root 파일의 경로는 빈 경로이다. 파일 모듈의 파일은
+그 모듈의 경로를 module path로 lowering하므로, 그 item은 같은 item을 inline으로
+선언했을 때와 같은 소유 item 식별자를 갖고 다른 파일의 item과 겹치지 않는다.
+경로 순서에서 한 모듈과 그 아래 모듈의 파일은 연속 구간이므로, 하위 트리의
+파일은 이진 탐색으로 찾는다.
+
+Span은 바이트 위치와 그 위치가 속한 source id를 함께 가진다. Root 파일의 source
+id는 0이고, 파일 모듈의 source id는 그 파일 URI의 hash로 `NodeId`의 source
+hash와 같은 값이다. 파일 모듈의 구문 진단도 같은 source id를 가진다. 트리의
+span map은 파일들의 span을 하나로 합치지 않는다. 노드의 `NodeId`가 가진 source
+hash로 그 파일을 찾아 그 파일의 상대 span과 layout에서 위치를 읽는다. 따라서 한
+파일의 item을 옮기면 그 파일의 parse 결과만 바뀌고, 트리의 패키지 AST가 같으면
+그 AST와 다른 파일의 위치만 읽는 분석은 다시 실행되지 않는다. 진단을 출력하는 쪽은 source id로
+진단의 파일을 찾는다. IR location은 같은 source hash에서 파일 경로를 정한다.
 
 ### 모듈 단위 캐싱과 함수 결과 조회
 

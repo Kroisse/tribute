@@ -248,8 +248,7 @@ fn debug_file(path: std::path::PathBuf, show_env: bool) {
         if show_env {
             println!("\n=== Package Environment ===");
             if let Some(tree) = source_tree_of(db, source) {
-                let parsed = tree.parsed;
-                let env = build_env(db, parsed.module(db), Dependencies::none()).into_env();
+                let env = build_env(db, tree.module(db), Dependencies::none()).into_env();
                 println!("{:#?}", env);
             } else {
                 println!("(Failed to parse AST)");

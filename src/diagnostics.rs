@@ -37,7 +37,7 @@ fn span_file(
     source: u64,
 ) -> (String, String) {
     let file = (source != 0)
-        .then(|| source_tree_of(db, root)?.file(db, source))
+        .then(|| Some(source_tree_of(db, root)?.file(source)?.source))
         .flatten();
     match file {
         Some(file) => (

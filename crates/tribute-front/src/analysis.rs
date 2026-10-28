@@ -14,7 +14,6 @@ use salsa::Accumulator;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::Symbol;
 
-use crate::astgen::ParsedAst;
 use crate::resolve::{self, Dependencies, NameDisplay, PackageEnv, PackageName};
 use crate::source_file::SourceCst;
 use crate::source_tree::{self, SourceTree};
@@ -45,14 +44,9 @@ pub struct CheckedPackage<'db> {
     pub exports: PackageExports<'db>,
 }
 
-/// Parse `package` from its root file and the files of its file modules.
-/// Its nodes are numbered under its package name, so they never collide
-/// with another package's.
-pub fn parsed_package(db: &dyn salsa::Database, package: Package) -> Option<ParsedAst<'_>> {
-    package_tree(db, package).map(|tree| tree.parsed)
-}
-
-/// The source tree of `package`: its AST and the files it was read from.
+/// The source tree of `package`: its root file and the files of its file
+/// modules, read into one AST. Its nodes are numbered under its package
+/// name, so they never collide with another package's.
 pub fn package_tree(db: &dyn salsa::Database, package: Package) -> Option<&SourceTree<'_>> {
     let module = package_name(db, package).clone();
     source_tree::source_tree(db, *package.root(db), Some(module))
@@ -76,10 +70,10 @@ pub fn package_env<'db>(db: &'db dyn salsa::Database, package: Package) -> Optio
         .accumulate(db);
         return None;
     }
-    let parsed = parsed_package(db, package)?;
+    let tree = package_tree(db, package)?;
     Some(resolve::build_package_env(
         db,
-        parsed.module(db),
+        tree.module(db),
         package.name(db),
         &dependencies(db, *package.dependencies(db)),
     ))
@@ -93,12 +87,12 @@ pub fn checked_package<'db>(
     package: Package,
 ) -> Option<CheckedPackage<'db>> {
     let env = package_env(db, package)?;
-    let parsed = parsed_package(db, package)?;
-    let span_map = parsed.span_map(db);
+    let tree = package_tree(db, package)?;
+    let span_map = tree.span_map(db);
     let table = *package.dependencies(db);
     let dependencies = dependencies(db, table);
     let resolved =
-        resolve::resolve_library_with_env(db, parsed.module(db), env, &dependencies, span_map);
+        resolve::resolve_library_with_env(db, tree.module(db), env, &dependencies, span_map);
     let mut checker = TypeChecker::new(db, span_map, package_names(db, package));
     depend_on_table(db, &mut checker, table);
     let (result, exports) = checker.check_library(&resolved);
@@ -237,9 +231,9 @@ pub fn analyze<'db>(
     source: SourceCst,
     table: DependencyTable,
 ) -> Option<TypeCheckOutput<'db>> {
-    let parsed = source_tree::source_tree_of(db, source)?.parsed;
-    let module = parsed.module(db);
-    let span_map = parsed.span_map(db);
+    let tree = source_tree::source_tree_of(db, source)?;
+    let module = tree.module(db);
+    let span_map = tree.span_map(db);
     let scope = resolve::build_env(db, module, dependencies(db, table));
     let resolved = resolve::resolve_with_env(db, module, &scope, span_map);
 

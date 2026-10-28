@@ -13,6 +13,7 @@ use rustc_hash::{FxBuildHasher, FxHashMap as HashMap};
 use trunk_ir::Span;
 
 use super::NodeId;
+use crate::source_tree::SourceTree;
 
 /// Builder for constructing a SpanMap during AST lowering.
 ///
@@ -68,19 +69,6 @@ impl SpanMapBuilder {
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ItemSpans(HashMap<NodeId, Span>);
 
-impl<'a> FromIterator<&'a ItemSpans> for ItemSpans {
-    /// The spans of several items' nodes in one map.
-    fn from_iter<I: IntoIterator<Item = &'a ItemSpans>>(parts: I) -> Self {
-        Self(
-            parts
-                .into_iter()
-                .flat_map(|part| part.0.iter())
-                .map(|(&id, &span)| (id, span))
-                .collect(),
-        )
-    }
-}
-
 /// Where each item of one parsed source starts, and the span of its root
 /// `Module`.
 ///
@@ -94,45 +82,61 @@ pub struct ItemLayout {
 }
 
 impl ItemLayout {
-    /// The layout of `root` with the item starts of `others`, the files of
-    /// its file modules, whose items are owned by their package paths.
-    pub fn merged<'a>(
-        root: &'a ItemLayout,
-        others: impl IntoIterator<Item = &'a ItemLayout>,
-    ) -> Self {
-        let starts = std::iter::once(root)
-            .chain(others)
-            .flat_map(|layout| layout.starts.iter().map(|(&key, &start)| (key, start)))
-            .collect();
-        Self {
-            starts,
-            module: root.module,
-        }
-    }
-
     /// The start of the item that owns `id`, or `0` for a node no item owns.
     fn start(&self, id: NodeId) -> u32 {
         self.starts.get(&id.owner()).copied().unwrap_or(0)
     }
 }
 
-/// NodeId → Span mapping of one parsed source.
+/// NodeId → Span mapping of one parsed source, or of the files of a
+/// package's source tree.
 ///
 /// The parts belong to the parse that built them (`ParsedAst`, a Salsa
 /// tracked struct); the map borrows them and adds each item node's relative
 /// span to its item's start. They compare by content, so a reparse that
 /// moves no item leaves both unchanged, and one that only moves items leaves
-/// the relative spans unchanged.
-#[derive(Clone, Copy, Debug)]
-pub struct SpanMap<'a> {
-    spans: &'a ItemSpans,
-    layout: &'a ItemLayout,
+/// the relative spans unchanged. A tree's map finds a node's file by the
+/// source hash its `NodeId` carries and reads that file's parts only.
+#[derive(Clone, Copy)]
+pub struct SpanMap<'a>(Parts<'a>);
+
+#[derive(Clone, Copy)]
+enum Parts<'a> {
+    File {
+        spans: &'a ItemSpans,
+        layout: &'a ItemLayout,
+    },
+    Tree {
+        db: &'a dyn salsa::Database,
+        tree: &'a SourceTree<'a>,
+    },
+}
+
+impl std::fmt::Debug for SpanMap<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            Parts::File { spans, layout } => f
+                .debug_struct("SpanMap")
+                .field("spans", spans)
+                .field("layout", layout)
+                .finish(),
+            Parts::Tree { tree, .. } => f
+                .debug_struct("SpanMap")
+                .field("files", &tree.files().len())
+                .finish_non_exhaustive(),
+        }
+    }
 }
 
 impl<'a> SpanMap<'a> {
     /// The map that positions `spans` by `layout`.
     pub fn new(spans: &'a ItemSpans, layout: &'a ItemLayout) -> Self {
-        Self { spans, layout }
+        Self(Parts::File { spans, layout })
+    }
+
+    /// The map of the files of `tree`.
+    pub fn tree(db: &'a dyn salsa::Database, tree: &'a SourceTree<'a>) -> Self {
+        Self(Parts::Tree { db, tree })
     }
 
     /// The map of no nodes, for checking code that has no source.
@@ -159,15 +163,22 @@ impl<'a> SpanMap<'a> {
     }
 
     fn get_exact(&self, id: NodeId) -> Option<Span> {
-        if let Some(relative) = self.spans.0.get(&id) {
-            let start = self.layout.start(id);
+        let (spans, layout) = match self.0 {
+            Parts::File { spans, layout } => (spans, layout),
+            Parts::Tree { db, tree } => {
+                let parsed = tree.file(id.source())?.parsed;
+                (parsed.item_spans(db), parsed.item_layout(db))
+            }
+        };
+        if let Some(relative) = spans.0.get(&id) {
+            let start = layout.start(id);
             return Some(Span {
                 start: relative.start + start,
                 end: relative.end + start,
                 ..*relative
             });
         }
-        self.layout
+        layout
             .module
             .and_then(|(module, span)| (module == id).then_some(span))
     }
@@ -317,29 +328,5 @@ mod tests {
         assert_eq!(span_map.get(NodeId::new(0, 7, 1)), Some(Span::new(39, 41)));
         assert_eq!(span_map.get(NodeId::new(0, 3, 0)), Some(Span::new(0, 2)));
         assert_eq!(span_map.get(NodeId::new(0, 3, 1)), Some(Span::new(0, 45)));
-    }
-
-    /// Merged parts position each source's items, with its source id.
-    #[test]
-    fn test_merged_parts_position_each_source() {
-        let mut root = SpanMapBuilder::new();
-        root.set_start(7, 20);
-        root.insert(NodeId::new(0, 7, 0), Span::new(24, 26));
-        root.set_module(NodeId::new(0, 3, 0), Span::new(0, 40));
-        let (root_spans, root_layout) = root.finish();
-        let mut file = SpanMapBuilder::new();
-        file.set_start(8, 2);
-        file.insert(NodeId::new(5, 8, 0), Span::new(3, 9).in_source(5));
-        let (file_spans, file_layout) = file.finish();
-
-        let spans = [&root_spans, &file_spans].into_iter().collect();
-        let layout = ItemLayout::merged(&root_layout, [&file_layout]);
-        let span_map = SpanMap::new(&spans, &layout);
-        assert_eq!(span_map.get(NodeId::new(0, 7, 0)), Some(Span::new(24, 26)));
-        assert_eq!(
-            span_map.get(NodeId::new(5, 8, 0)),
-            Some(Span::new(3, 9).in_source(5))
-        );
-        assert_eq!(span_map.get(NodeId::new(0, 3, 0)), Some(Span::new(0, 40)));
     }
 }

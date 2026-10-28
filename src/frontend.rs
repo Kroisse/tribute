@@ -173,17 +173,17 @@ fn prepare_frontend_details<'db>(
 /// package std, which locate the nodes of the module merged from both.
 pub(crate) fn frontend_spans(db: &dyn salsa::Database, source: SourceCst) -> SpanMaps<'_> {
     let prelude = crate::prelude::prelude_span_map(db);
-    let package = source_tree_of(db, source).map(|tree| tree.parsed.span_map(db));
+    let package = source_tree_of(db, source).map(|tree| tree.span_map(db));
     SpanMaps::new(package.into_iter().chain(prelude))
 }
 
 /// The sources merged into a user source's module besides itself: the files
 /// of its file modules, and package std.
 fn merged_sources(db: &dyn salsa::Database, source: SourceCst) -> Vec<String> {
-    let files = source_tree_of(db, source).map_or(&[][..], |tree| &tree.files[1..]);
+    let files = source_tree_of(db, source).map_or(&[][..], |tree| &tree.files()[1..]);
     files
         .iter()
-        .map(|file| file.uri(db).as_str().to_owned())
+        .map(|file| file.source.uri(db).as_str().to_owned())
         .chain([crate::prelude::PRELUDE_URI.to_owned()])
         .collect()
 }
