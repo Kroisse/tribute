@@ -27,6 +27,7 @@ mod e2e_records;
 mod evidence_lambda;
 mod evidence_plan_ir;
 mod evidence_runtime;
+mod file_modules;
 mod frontend_instances;
 mod frontend_type_roots;
 mod lang_examples;

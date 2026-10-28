@@ -31,12 +31,22 @@ impl Default for TributeDatabaseImpl {
 }
 
 /// The text of the file a `file:` URI names, if it can be read.
+///
+/// The file's name must match the URI's exactly, so that a case-insensitive
+/// file system does not find `foo.trb` for `Foo.trb`.
 fn read_file(uri: &Uri<String>) -> Option<Rope> {
     if uri.scheme().map(|scheme| scheme.as_str()) != Some("file") {
         return None;
     }
-    let file = std::fs::File::open(uri.path().as_str()).ok()?;
-    Rope::from_reader(file).ok()
+    let path = std::path::Path::new(uri.path().as_str());
+    let name = path.file_name()?;
+    let spelled = std::fs::read_dir(path.parent()?)
+        .ok()?
+        .any(|entry| entry.is_ok_and(|entry| entry.file_name() == name));
+    if !spelled {
+        return None;
+    }
+    Rope::from_reader(std::fs::File::open(path).ok()?).ok()
 }
 
 impl TributeDatabaseImpl {

@@ -57,7 +57,7 @@ pub fn print_diagnostic(
 ) {
     let span = diag.inner.span;
     let (file, text) = span_file(db, root, root_path, span.source);
-    let (start, end) = normalize_span(span.start, span.end);
+    let (start, end) = normalize_span(span.start as usize, span.end as usize);
     let color = phase_color(&diag.phase);
 
     let report_kind = match diag.inner.severity {
@@ -79,7 +79,7 @@ pub fn print_diagnostic(
     // Add secondary labels
     for label in diag.inner.labels.iter() {
         let (label_file, label_text) = span_file(db, root, root_path, label.span.source);
-        let (ls, le) = normalize_span(label.span.start, label.span.end);
+        let (ls, le) = normalize_span(label.span.start as usize, label.span.end as usize);
         report = report.with_label(
             Label::new((label_file.clone(), ls..le))
                 .with_message(label.message.as_ref())

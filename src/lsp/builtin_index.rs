@@ -35,7 +35,7 @@ pub fn builtin_symbols(db: &dyn salsa::Database, source: SourceCst) -> Vec<Built
 pub fn builtin_at(entries: &[BuiltinSymbolEntry], offset: usize) -> Option<&BuiltinSymbolEntry> {
     entries
         .iter()
-        .filter(|entry| entry.span.start <= offset && offset < entry.span.end)
+        .filter(|entry| entry.span.range().contains(&offset))
         .min_by_key(|entry| entry.span.end - entry.span.start)
 }
 

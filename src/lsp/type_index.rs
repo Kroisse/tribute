@@ -200,7 +200,7 @@ impl<'db> AstTypeIndex<'db> {
         let containing: Vec<_> = self
             .entries(db)
             .iter()
-            .filter(|e| e.span.start <= offset && offset < e.span.end)
+            .filter(|e| e.span.range().contains(&offset))
             .collect();
 
         // Return the innermost (smallest span)

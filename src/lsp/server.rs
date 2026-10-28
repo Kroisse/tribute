@@ -412,7 +412,7 @@ impl LspServer {
             // The binding keeps its source spelling (`r#type` stays raw).
             for shorthand in index.shorthand_fields_of_target(db, &target) {
                 let binding = rope
-                    .get_byte_slice(shorthand.span.start..shorthand.span.end)
+                    .get_byte_slice(shorthand.span.range())
                     .map_or_else(|| def.name.to_string(), |s| s.to_string());
                 edits.push(TextEdit {
                     range: span_to_range(&rope, shorthand.span),
@@ -570,8 +570,8 @@ impl LspServer {
             for diag in &result.diagnostics {
                 // Check if diagnostic overlaps with range in this document
                 if diag.inner.span.source != 0
-                    || diag.inner.span.end < start_offset
-                    || diag.inner.span.start > end_offset
+                    || (diag.inner.span.end as usize) < start_offset
+                    || diag.inner.span.start as usize > end_offset
                 {
                     continue;
                 }
@@ -614,7 +614,7 @@ impl LspServer {
         {
             // Try to find the inferred type at the diagnostic location
             let type_index = type_index?;
-            if let Some(entry) = type_index.type_at(db, diag.inner.span.start) {
+            if let Some(entry) = type_index.type_at(db, diag.inner.span.start as usize) {
                 // The annotation is inserted into source, where only the full
                 // identity path names the type from every module.
                 let type_str = print_ast_type(db, &NameDisplay::identity(), entry.ty);
@@ -695,10 +695,10 @@ impl LspServer {
     fn find_return_type_insert_position(&self, rope: &Rope, span: trunk_ir::Span) -> Option<usize> {
         // Search from the start of the function for the closing paren
         let text: String = rope.slice(..).chars().collect();
-        if span.start >= text.len() {
+        if span.start as usize >= text.len() {
             return None;
         }
-        let func_text = &text[span.start..span.end.min(text.len())];
+        let func_text = &text[span.start as usize..(span.end as usize).min(text.len())];
 
         // Find the closing parenthesis of the parameter list
         let mut paren_depth = 0;
@@ -714,13 +714,13 @@ impl LspServer {
                     paren_depth -= 1;
                     if found_open && paren_depth == 0 {
                         // Found the closing paren, return position after it
-                        return Some(span.start + i + 1);
+                        return Some(span.start as usize + i + 1);
                     }
                 }
                 '{' if found_open && paren_depth == 0 => {
                     // Hit function body without finding return type position
                     // Insert before the opening brace
-                    return Some(span.start + i);
+                    return Some(span.start as usize + i);
                 }
                 _ => {}
             }
@@ -995,8 +995,8 @@ fn init_lsp_tracing(log_filter: &str, sender: crossbeam_channel::Sender<Message>
 }
 
 fn span_to_range(rope: &Rope, span: trunk_ir::Span) -> lsp_types::Range {
-    let start = position_from_offset(rope, span.start);
-    let end = position_from_offset(rope, span.end);
+    let start = position_from_offset(rope, span.start as usize);
+    let end = position_from_offset(rope, span.end as usize);
     lsp_types::Range {
         start: lsp_types::Position {
             line: start.0,

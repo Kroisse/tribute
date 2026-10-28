@@ -181,7 +181,7 @@ impl<'db> AstDefinitionIndex<'db> {
     ) -> Option<&AstDefinitionEntry> {
         self.definitions(db)
             .iter()
-            .filter(|e| e.span.start <= offset && offset < e.span.end)
+            .filter(|e| e.span.range().contains(&offset))
             .min_by_key(|e| e.span.end - e.span.start)
     }
 
@@ -193,7 +193,7 @@ impl<'db> AstDefinitionIndex<'db> {
     ) -> Option<&AstReferenceEntry> {
         self.references(db)
             .iter()
-            .filter(|e| e.span.start <= offset && offset < e.span.end)
+            .filter(|e| e.span.range().contains(&offset))
             .min_by_key(|e| e.span.end - e.span.start)
     }
 
@@ -458,8 +458,7 @@ impl<'db> AstDefinitionIndex<'db> {
         // Only the name is renamable, not the rest of the declaration
         // (a field's type annotation, for instance).
         if let Some(def) = self.definition_at_position(db, offset)
-            && def.name_span.start <= offset
-            && offset < def.name_span.end
+            && def.name_span.range().contains(&offset)
         {
             return Some((def, def.name_span));
         }
@@ -1755,20 +1754,20 @@ enum Result(T, E) {
             let (target, refs) = index.references_at(&db, body_x).unwrap();
             assert_eq!(refs.len(), 1, "{func}: one reference stays in the function");
             assert!(
-                (start..end).contains(&refs[0].span.start),
+                (start..end).contains(&(refs[0].span.start as usize)),
                 "{func}: reference crossed functions"
             );
 
             let def = index.definition_of_target(&db, &target).unwrap();
             assert!(
-                (start..end).contains(&def.span.start),
+                (start..end).contains(&(def.span.start as usize)),
                 "{func}: definition crossed functions"
             );
-            assert_eq!(def.span.start, param_x);
+            assert_eq!(def.span.start as usize, param_x);
 
             let (_, from_def) = index.references_at(&db, param_x).unwrap();
             assert_eq!(from_def.len(), 1);
-            assert_eq!(from_def[0].span.start, body_x);
+            assert_eq!(from_def[0].span.start as usize, body_x);
         }
     }
 
@@ -2075,10 +2074,10 @@ struct Rect { x: Int, width: Int }"#,
         let mut spans: Vec<_> = index
             .references_of_target(db, target)
             .iter()
-            .map(|r| (r.span.start, r.span.end))
+            .map(|r| r.span.range())
             .collect();
-        spans.sort();
-        spans.into_iter().map(|(s, e)| &text[s..e]).collect()
+        spans.sort_by_key(|range| (range.start, range.end));
+        spans.into_iter().map(|range| &text[range]).collect()
     }
 
     #[test]
@@ -2112,8 +2111,8 @@ fn main() {
                 owner: trunk_ir::Symbol::new("Point")
             }
         );
-        assert!(text[def.span.start..def.span.end].starts_with("x: Int"));
-        assert!(def.span.end < text.find("struct Rect").unwrap());
+        assert!(text[def.span.range()].starts_with("x: Int"));
+        assert!((def.span.end as usize) < text.find("struct Rect").unwrap());
     }
 
     #[test]
@@ -2171,12 +2170,12 @@ fn sum(p: Point) -> Int {
 
         let x = field_target("Point", "x");
         let def = index.definition_of_target(&db, &x).unwrap();
-        assert_eq!(&text[def.name_span.start..def.name_span.end], "x");
-        assert!(text[def.span.start..def.span.end].starts_with("x: Int"));
+        assert_eq!(&text[def.name_span.range()], "x");
+        assert!(text[def.span.range()].starts_with("x: Int"));
 
         let shorthand = index.shorthand_fields_of_target(&db, &x);
         assert_eq!(shorthand.len(), 1);
-        assert_eq!(&text[shorthand[0].span.start..shorthand[0].span.end], "x");
+        assert_eq!(&text[shorthand[0].span.range()], "x");
         assert!(
             index
                 .shorthand_fields_of_target(&db, &field_target("Point", "y"))

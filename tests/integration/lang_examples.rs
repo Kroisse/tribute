@@ -1,14 +1,12 @@
-//! Every single-file example under `lang-examples/` passes the frontend,
-//! except the ones listed below with the reason they are expected to fail.
-//! `modules_file/` is a multi-file package layout and is not checked here.
+//! Every example under `lang-examples/` passes the frontend, except the ones
+//! listed below with the reason they are expected to fail.
+//! `modules_file/` is one package whose root is `main.trb`; its other files
+//! are its file modules.
 
 use std::path::{Path, PathBuf};
 
-use ropey::Rope;
 use salsa::Database;
 use tribute::TributeDatabaseImpl;
-use tribute_front::SourceCst;
-use tribute_front::source_file::parse_rope;
 
 /// Examples that must fail, each with a message its diagnostics contain.
 const EXPECTED_FAILURES: &[(&str, &str)] = &[
@@ -32,7 +30,14 @@ fn examples(dir: &Path, root: &Path, out: &mut Vec<PathBuf>) {
     for entry in std::fs::read_dir(dir).expect("lang-examples directory") {
         let path = entry.expect("directory entry").path();
         if path.is_dir() {
-            if path.file_name().is_some_and(|name| name != "modules_file") {
+            if path.file_name().is_some_and(|name| name == "modules_file") {
+                out.push(
+                    path.join("main.trb")
+                        .strip_prefix(root)
+                        .unwrap()
+                        .to_path_buf(),
+                );
+            } else {
                 examples(&path, root, out);
             }
         } else if path.extension().is_some_and(|extension| extension == "trb") {
@@ -41,11 +46,10 @@ fn examples(dir: &Path, root: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-fn frontend_messages(path: &Path, text: &str) -> Vec<String> {
-    let source_code = Rope::from_str(text);
-    TributeDatabaseImpl::default().attach(|db| {
-        let tree = parse_rope(&source_code, None);
-        let source = SourceCst::from_path(db, path, source_code.clone(), tree);
+fn frontend_messages(path: &Path) -> Vec<String> {
+    let db = TributeDatabaseImpl::default();
+    let source = db.input(path.to_path_buf()).expect("example source");
+    db.attach(|db| {
         tribute::pipeline::frontend_diagnostics(db, source)
             .into_iter()
             .map(|diagnostic| diagnostic.inner.message.clone())
@@ -64,8 +68,7 @@ fn lang_examples_pass_the_frontend() {
     let mut problems = Vec::new();
     for file in &files {
         let name = file.to_string_lossy().replace('\\', "/");
-        let text = std::fs::read_to_string(root.join(file)).expect("example source");
-        let messages = frontend_messages(file, &text);
+        let messages = frontend_messages(&root.join(file));
         match EXPECTED_FAILURES
             .iter()
             .find(|(expected, _)| *expected == name)

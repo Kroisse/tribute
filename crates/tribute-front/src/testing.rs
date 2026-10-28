@@ -115,6 +115,11 @@ impl Executed {
         self.0.iter().any(|name| name == query)
     }
 
+    /// How many times `query` executed, for any key.
+    pub fn count(&self, query: &str) -> usize {
+        self.0.iter().filter(|name| *name == query).count()
+    }
+
     /// Assert that each of `reran` executed and none of `reused` did.
     ///
     /// Each of `reused` must have executed in `baseline`, the record of the

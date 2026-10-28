@@ -69,8 +69,11 @@ pub struct FileEntry {
 /// no source, so the queries that read it stay its dependents.
 pub struct FileProvider {
     entries: Mutex<HashMap<String, FileEntry>>,
-    read: Box<dyn Fn(&Uri<String>) -> Option<Rope> + Send + Sync>,
+    read: Box<ReadFile>,
 }
+
+/// Reads the text of the file at a URI, if there is one.
+type ReadFile = dyn Fn(&Uri<String>) -> Option<Rope> + Send + Sync;
 
 impl FileProvider {
     /// A provider that reads a file with `read` when it is first requested.

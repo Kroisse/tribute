@@ -338,10 +338,7 @@ fn messages(db: &salsa::DatabaseImpl, code: &str) -> Vec<(String, String)> {
         .into_iter()
         .map(|diagnostic| {
             let span = diagnostic.inner.span;
-            (
-                diagnostic.inner.message,
-                code[span.start..span.end].to_owned(),
-            )
+            (diagnostic.inner.message, code[span.range()].to_owned())
         })
         .collect()
 }
