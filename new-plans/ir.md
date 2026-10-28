@@ -638,8 +638,9 @@ Class 특수화가 만드는 `tribute_cps` operation은 다음과 같다. 각각
 Operation 하나의 형상, 의미, 검증, 소유권, 위치 계약은 그 operation의
 `#[dialect]` 선언 doc comment가 정한다
 ([`tribute_control`](../crates/tribute-ir/src/dialect/tribute_control.rs),
-`tribute_cps`, [`ability`](../crates/tribute-ir/src/dialect/ability.rs)). 이 문서는
-여러 operation에 걸친 규칙만 다룬다.
+[`tribute_cps`](../crates/tribute-ir/src/dialect/tribute_cps.rs),
+[`ability`](../crates/tribute-ir/src/dialect/ability.rs)). 이 문서는 여러
+operation에 걸친 규칙만 다룬다.
 
 `func.constant`, `func.unreachable`의 logical 복제는 없다. Named function value는
 `func_ref`가 표현한다. Source [`become`](syntax.md#tail-call-become)은

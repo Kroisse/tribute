@@ -366,6 +366,23 @@ impl<'a, 'ctx> OpPrintHelper<'a, 'ctx> {
         write!(self.f, "{indent_str}}}")
     }
 
+    /// Print ` {`, a `label { .. }` line for each region one level in, and
+    /// `}`, for an operation whose regions are named. Each region's entry
+    /// block label is elided as [`Self::print_body`] elides it.
+    pub fn print_labelled_bodies<'r>(
+        &mut self,
+        bodies: impl IntoIterator<Item = (&'r str, RegionRef)>,
+    ) -> fmt::Result {
+        self.f.write_str(" {\n")?;
+        let inner = " ".repeat(self.indent + 2);
+        for (label, region) in bodies {
+            writeln!(self.f, "{inner}{label} {{")?;
+            self.print_region_eliding_entry(region, self.indent + 4)?;
+            writeln!(self.f, "{inner}}}")?;
+        }
+        write!(self.f, "{}}}", " ".repeat(self.indent))
+    }
+
     fn print_region_eliding_entry(&mut self, region: RegionRef, indent: usize) -> fmt::Result {
         // The context outlives `self`, so the child lists are read in place
         // while the print state is updated.

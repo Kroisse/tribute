@@ -13,7 +13,7 @@ use trunk_ir::attr_kind::Type;
 use trunk_ir::op_flag::{IsolatedFromAbove, Pure};
 
 use crate::calling_convention::{CALLING_CONVENTION_ATTR, CallingConvention};
-use crate::dialect::adt;
+use crate::dialect::{adt, tribute_cps};
 use itertools::Itertools;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::dialect::core;
@@ -1290,6 +1290,49 @@ pub fn func_sig_convention(ctx: &IrContext, ty: TypeRef) -> Option<CallingConven
     FuncSig::from_type_ref(ctx, ty).and_then(|signature| signature.assigned_convention(ctx))
 }
 
+/// Whether `op` is a source function: a `tribute_control.func`, or the
+/// `tribute_cps.func` class specialization makes of one.
+pub fn is_func(ctx: &IrContext, op: OpRef) -> bool {
+    Func::matches(ctx, op) || tribute_cps::Func::matches(ctx, op)
+}
+
+/// Whether `op` is a source lambda in either dialect.
+pub fn is_lambda(ctx: &IrContext, op: OpRef) -> bool {
+    Lambda::matches(ctx, op) || tribute_cps::Lambda::matches(ctx, op)
+}
+
+/// Whether `op` is a named function reference in either dialect.
+pub fn is_func_ref(ctx: &IrContext, op: OpRef) -> bool {
+    FuncRef::matches(ctx, op) || tribute_cps::FuncRef::matches(ctx, op)
+}
+
+/// Whether `op` is an indirect call in either dialect.
+pub fn is_call_indirect(ctx: &IrContext, op: OpRef) -> bool {
+    CallIndirect::matches(ctx, op) || tribute_cps::CallIndirect::matches(ctx, op)
+}
+
+/// Whether `op` is an indirect proper tail call in either dialect.
+pub fn is_tail_call_indirect(ctx: &IrContext, op: OpRef) -> bool {
+    TailCallIndirect::matches(ctx, op) || tribute_cps::TailCallIndirect::matches(ctx, op)
+}
+
+/// The source signature of a function or lambda in either dialect.
+fn callable_signature(ctx: &IrContext, op: OpRef) -> Option<TypeRef> {
+    if is_func(ctx, op) {
+        ctx.op_attrs(op).get_type("type")
+    } else if is_lambda(ctx, op) {
+        ctx.op_result_types(op).first().copied()
+    } else {
+        None
+    }
+}
+
+/// The convention of `op`, a source callable or transfer: the one it
+/// declares, or else the one its source signature `ty` has.
+fn convention_at(ctx: &IrContext, op: OpRef, ty: TypeRef) -> Option<CallingConvention> {
+    tribute_cps::declared_convention(ctx, op).or_else(|| func_sig_convention(ctx, ty))
+}
+
 /// Read the exact input and answer types carried by a resume token.
 pub fn resume_token_parts(ctx: &IrContext, ty: TypeRef) -> Option<(TypeRef, TypeRef)> {
     if !ResumeToken::matches(ctx, ty) {
@@ -1690,7 +1733,14 @@ fn print_signature_params(
     write!(h, ")")
 }
 
-fn print_func(h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>, op: OpRef) -> fmt::Result {
+/// Print a source function as `name`. `convention` is the one the operation
+/// declares; without it, the signature's convention is printed.
+pub(crate) fn print_func(
+    h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>,
+    op: OpRef,
+    name: &str,
+    convention: Option<CallingConvention>,
+) -> fmt::Result {
     use fmt::Write;
 
     let symbol = h.ctx().op_attrs(op).get_str("sym_name");
@@ -1702,7 +1752,7 @@ fn print_func(h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>, op: OpRef) -> fm
     };
     let parts = callable_ty.and_then(|ty| func_sig_parts(h.ctx(), ty));
 
-    write!(h, "tribute_control.func ")?;
+    write!(h, "{name} ")?;
     if let Some(symbol) = symbol {
         h.write_symbol_text(symbol)?;
     } else {
@@ -1717,7 +1767,7 @@ fn print_func(h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>, op: OpRef) -> fm
         .unwrap_or(&[]);
     print_signature_params(h, region, param_types)?;
 
-    if let Some((result, _, convention)) = parts {
+    if let Some((result, _, signature_convention)) = parts {
         write!(h, " -> ")?;
         h.write_type(result)?;
         if let Some(ty) = callable_ty {
@@ -1726,22 +1776,22 @@ fn print_func(h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>, op: OpRef) -> fm
         if header.inferred {
             write!(h, " inferred")?;
         }
-        if let Some(convention) = convention {
+        if let Some(convention) = convention.or(signature_convention) {
             write!(h, " convention({convention})")?;
         }
     }
-    print_extra_attributes(
-        h,
-        op,
-        &[
-            "sym_name",
-            "type",
-            CALLING_CONVENTION_ATTR,
-            ROW_BINDERS_ATTR,
-            ROW_UNIONS_ATTR,
-            INFERRED_ROW_ATTR,
-        ],
-    )?;
+    let mut excluded = vec![
+        "sym_name",
+        "type",
+        CALLING_CONVENTION_ATTR,
+        ROW_BINDERS_ATTR,
+        ROW_UNIONS_ATTR,
+        INFERRED_ROW_ATTR,
+    ];
+    if convention.is_some() {
+        excluded.push(tribute_cps::CONVENTION_ATTR);
+    }
+    print_extra_attributes(h, op, &excluded)?;
 
     match region {
         Some(region) => h.print_body(region),
@@ -1855,10 +1905,15 @@ fn has_duplicate_convention_attr(
         .any(|(key, _)| key == CALLING_CONVENTION_ATTR || key == ABILITY_ROW_ATTR)
 }
 
-fn parse_func<'a>(
+/// Parse a source function named `name`. With `on_operation`, the operation
+/// declares the convention, which it then requires; otherwise the signature
+/// holds it.
+pub(crate) fn parse_func<'a>(
     input: &mut &'a str,
     results: Vec<&'a str>,
     sym_name: Option<String>,
+    name: &'static str,
+    on_operation: bool,
 ) -> winnow::ModalResult<trunk_ir::parser::raw::RawOperation<'a>> {
     use trunk_ir::parser::raw::*;
     use winnow::combinator::opt;
@@ -1877,6 +1932,11 @@ fn parse_func<'a>(
     let row = parse_row(input)?;
     let inferred = parse_inferred(input)?;
     let convention = parse_convention(input)?;
+    if on_operation && convention.is_none() {
+        return Err(winnow::error::ErrMode::Backtrack(
+            winnow::error::ContextError::new(),
+        ));
+    }
     let attributes = opt((ws, "attributes", ws, raw_attr_dict))
         .parse_next(input)?
         .map(|(_, _, _, attrs)| attrs)
@@ -1886,7 +1946,7 @@ fn parse_func<'a>(
             matches!(
                 key.as_ref(),
                 "sym_name" | "type" | ROW_BINDERS_ATTR | ROW_UNIONS_ATTR | INFERRED_ROW_ATTR
-            )
+            ) || (on_operation && key == tribute_cps::CONVENTION_ATTR)
         })
     {
         return Err(winnow::error::ErrMode::Backtrack(
@@ -1906,9 +1966,19 @@ fn parse_func<'a>(
         regions.push(region);
     }
 
-    let signature = func_sig_raw_type(result, &params, row, convention);
+    let (signature, convention) = if on_operation {
+        (func_sig_raw_type(result, &params, row, None), convention)
+    } else {
+        (func_sig_raw_type(result, &params, row, convention), None)
+    };
     let mut attributes = attributes;
     attributes.extend(binders);
+    if let Some(convention) = convention {
+        attributes.push((
+            tribute_cps::CONVENTION_ATTR.into(),
+            RawAttribute::String(convention.keyword().to_owned()),
+        ));
+    }
     if inferred {
         attributes.push((INFERRED_ROW_ATTR.into(), RawAttribute::Bool(true)));
     }
@@ -1916,7 +1986,7 @@ fn parse_func<'a>(
 
     Ok(RawOperation {
         results,
-        name: "tribute_control.func",
+        name,
         sym_name,
         has_func_signature: false,
         func_params: vec![],
@@ -1931,7 +2001,7 @@ fn parse_func<'a>(
 
 impl trunk_ir::asm_format::OpAsmFormat for Func {
     fn print(&self, h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>) -> std::fmt::Result {
-        print_func(h, self.op_ref())
+        print_func(h, self.op_ref(), "tribute_control.func", None)
     }
 
     fn parse<'a>(
@@ -1939,13 +2009,21 @@ impl trunk_ir::asm_format::OpAsmFormat for Func {
         results: Vec<&'a str>,
         sym_name: Option<String>,
     ) -> winnow::ModalResult<trunk_ir::parser::raw::RawOperation<'a>> {
-        parse_func(input, results, sym_name)
+        parse_func(input, results, sym_name, "tribute_control.func", false)
     }
 }
 
 // === Custom assembly: tribute_control.lambda ===
 
-fn print_lambda(h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>, op: OpRef) -> fmt::Result {
+/// Print a source lambda as `name`. With the convention `entry` the operation
+/// declares, its body is that convention entry's; without it, the body
+/// follows the captures and the signature's convention is printed.
+pub(crate) fn print_lambda(
+    h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>,
+    op: OpRef,
+    name: &str,
+    entry: Option<CallingConvention>,
+) -> fmt::Result {
     use fmt::Write;
 
     let result_types = h.ctx().op_result_types(op);
@@ -1968,7 +2046,7 @@ fn print_lambda(h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>, op: OpRef) -> 
     if let Some(name) = result_name {
         write!(h, "{name} = ")?;
     }
-    write!(h, "tribute_control.lambda")?;
+    write!(h, "{name}")?;
     if !quantified.is_empty() {
         write!(h, "[")?;
         for (index, binder) in quantified.iter().enumerate() {
@@ -1991,7 +2069,7 @@ fn print_lambda(h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>, op: OpRef) -> 
         if let Some(ty) = callable_ty {
             print_row(h, &FuncSig(ty).row(h.ctx()))?;
         }
-        if let Some(convention) = convention {
+        if let Some(convention) = convention.filter(|_| entry.is_none()) {
             write!(h, " convention({convention})")?;
         }
     }
@@ -2009,11 +2087,19 @@ fn print_lambda(h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>, op: OpRef) -> 
         write!(h, "{capture}")?;
     }
     write!(h, "]")?;
-    print_extra_attributes(h, op, &[CALLING_CONVENTION_ATTR, QUANTIFIED_ROWS_ATTR])?;
+    let mut excluded = vec![CALLING_CONVENTION_ATTR, QUANTIFIED_ROWS_ATTR];
+    if entry.is_some() {
+        excluded.push(tribute_cps::CONVENTION_ATTR);
+    }
+    print_extra_attributes(h, op, &excluded)?;
 
-    match region {
-        Some(region) => h.print_body(region),
-        None => Ok(()),
+    match (region, entry) {
+        (Some(region), Some(entry)) => {
+            write!(h, " entries")?;
+            h.print_labelled_bodies([(entry.keyword(), region)])
+        }
+        (Some(region), None) => h.print_body(region),
+        (None, _) => Ok(()),
     }
 }
 
@@ -2033,10 +2119,37 @@ fn parse_captures<'a>(input: &mut &'a str) -> winnow::ModalResult<Vec<&'a str>> 
     .parse_next(input)
 }
 
-fn parse_lambda<'a>(
+/// `entries { <convention> { .. } }`, the one convention entry of a lambda
+/// that declares its convention, and that entry's body.
+fn parse_entry<'a>(
+    input: &mut &'a str,
+) -> winnow::ModalResult<(CallingConvention, trunk_ir::parser::raw::RawRegion<'a>)> {
+    use trunk_ir::parser::raw::{ident, raw_region, ws};
+    use winnow::prelude::*;
+
+    "entries".parse_next(input)?;
+    ws.parse_next(input)?;
+    '{'.parse_next(input)?;
+    ws.parse_next(input)?;
+    let convention = ident
+        .try_map(str::parse::<CallingConvention>)
+        .parse_next(input)?;
+    ws.parse_next(input)?;
+    let region = raw_region.parse_next(input)?;
+    ws.parse_next(input)?;
+    '}'.parse_next(input)?;
+    Ok((convention, region))
+}
+
+/// Parse a source lambda named `name`. With `entries`, the body is written as
+/// the one convention entry the operation declares; otherwise it follows the
+/// captures and the signature holds the convention.
+pub(crate) fn parse_lambda<'a>(
     input: &mut &'a str,
     results: Vec<&'a str>,
     sym_name: Option<String>,
+    name: &'static str,
+    entries: bool,
 ) -> winnow::ModalResult<trunk_ir::parser::raw::RawOperation<'a>> {
     use trunk_ir::parser::raw::*;
     use winnow::combinator::{opt, separated};
@@ -2064,16 +2177,20 @@ fn parse_lambda<'a>(
     let params = func_params.parse_next(input)?;
     let result = return_type.parse_next(input)?;
     let row = parse_row(input)?;
-    let convention = parse_convention(input)?;
+    let convention = if entries {
+        None
+    } else {
+        parse_convention(input)?
+    };
     let captures = parse_captures(input)?;
     let mut attributes = opt((ws, "attributes", ws, raw_attr_dict))
         .parse_next(input)?
         .map(|(_, _, _, attrs)| attrs)
         .unwrap_or_default();
     if has_duplicate_convention_attr(&attributes)
-        || attributes
-            .iter()
-            .any(|(key, _)| key == QUANTIFIED_ROWS_ATTR)
+        || attributes.iter().any(|(key, _)| {
+            key == QUANTIFIED_ROWS_ATTR || (entries && key == tribute_cps::CONVENTION_ATTR)
+        })
     {
         return Err(winnow::error::ErrMode::Backtrack(
             winnow::error::ContextError::new(),
@@ -2092,7 +2209,16 @@ fn parse_lambda<'a>(
     }
 
     ws.parse_next(input)?;
-    let mut region = raw_region.parse_next(input)?;
+    let mut region = if entries {
+        let entry = parse_entry(input)?;
+        attributes.push((
+            tribute_cps::CONVENTION_ATTR.into(),
+            RawAttribute::String(entry.0.keyword().to_owned()),
+        ));
+        entry.1
+    } else {
+        raw_region.parse_next(input)?
+    };
     if !region.blocks.is_empty() {
         let mut merged = params.clone();
         merged.append(&mut region.blocks[0].args);
@@ -2101,7 +2227,7 @@ fn parse_lambda<'a>(
 
     Ok(RawOperation {
         results,
-        name: "tribute_control.lambda",
+        name,
         sym_name,
         has_func_signature: false,
         func_params: vec![],
@@ -2116,7 +2242,7 @@ fn parse_lambda<'a>(
 
 impl trunk_ir::asm_format::OpAsmFormat for Lambda {
     fn print(&self, h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>) -> std::fmt::Result {
-        print_lambda(h, self.op_ref())
+        print_lambda(h, self.op_ref(), "tribute_control.lambda", None)
     }
 
     fn parse<'a>(
@@ -2124,7 +2250,7 @@ impl trunk_ir::asm_format::OpAsmFormat for Lambda {
         results: Vec<&'a str>,
         sym_name: Option<String>,
     ) -> winnow::ModalResult<trunk_ir::parser::raw::RawOperation<'a>> {
-        parse_lambda(input, results, sym_name)
+        parse_lambda(input, results, sym_name, "tribute_control.lambda", false)
     }
 }
 
@@ -2735,16 +2861,20 @@ fn validate_row_declarations(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valida
 
 fn validate_func(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
     validate_row_declarations(ctx, op, errors);
-    let func = Func::from_op(ctx, op).expect("schema-verified tribute_control.func");
+    let ty = ctx
+        .op_attrs(op)
+        .get_type("type")
+        .expect("schema-verified source function");
     if let Some(body) = ctx.op_region(op, 0) {
-        validate_callable_body(ctx, op, func.r#type(ctx), body, errors);
+        validate_callable_body(ctx, op, ty, body, errors);
         validate_func_isolation(ctx, op, body, errors);
     }
 }
 
 fn validate_lambda(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
-    let lambda = Lambda::from_op(ctx, op).expect("schema-verified tribute_control.lambda");
-    validate_callable_body(ctx, op, lambda.result_ty(ctx), lambda.body(ctx), errors);
+    let ty = ctx.op_result_types(op)[0];
+    let body = ctx.op_region(op, 0).expect("schema-verified source lambda");
+    validate_callable_body(ctx, op, ty, body, errors);
 }
 
 fn validate_call(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
@@ -2768,9 +2898,9 @@ fn validate_return(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>
         );
         return;
     };
-    let callable_ty = if Func::matches(ctx, owner) {
+    let callable_ty = if is_func(ctx, owner) {
         ctx.op_attrs(owner).get_type("type")
-    } else if Lambda::matches(ctx, owner) {
+    } else if is_lambda(ctx, owner) {
         ctx.op_result_types(owner).first().copied()
     } else {
         None
@@ -2797,28 +2927,21 @@ fn validate_return(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>
 }
 
 fn is_tail_call(ctx: &IrContext, op: OpRef) -> bool {
-    TailCall::matches(ctx, op) || TailCallIndirect::matches(ctx, op)
+    TailCall::matches(ctx, op) || is_tail_call_indirect(ctx, op)
 }
 
-/// The source signature of the callable whose body contains `op`, or `None`
-/// when a handle or handler lies between them.
-fn tail_call_owner_signature(ctx: &IrContext, op: OpRef) -> Result<TypeRef, &'static str> {
+/// The callable whose body contains `op` and its source signature, or an
+/// error when `op` is not in its tail position or a handle or handler lies
+/// between them.
+fn tail_call_owner(ctx: &IrContext, op: OpRef) -> Result<(OpRef, TypeRef), &'static str> {
     let mut exit = op;
     loop {
         let Some(owner) = parent_op(ctx, exit) else {
             return Err("must be inside a tribute_control.func or lambda body");
         };
-        if Func::matches(ctx, owner) {
-            return ctx
-                .op_attrs(owner)
-                .get_type("type")
-                .ok_or("must be inside a tribute_control.func or lambda body");
-        }
-        if Lambda::matches(ctx, owner) {
-            return ctx
-                .op_result_types(owner)
-                .first()
-                .copied()
+        if is_func(ctx, owner) || is_lambda(ctx, owner) {
+            return callable_signature(ctx, owner)
+                .map(|ty| (owner, ty))
                 .ok_or("must be inside a tribute_control.func or lambda body");
         }
         if Handle::matches(ctx, owner) || Handler::matches(ctx, owner) {
@@ -2867,15 +2990,15 @@ fn validate_tail_call(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationErr
     if has_unresolved_type {
         push_op_error(ctx, op, errors, "operands must be resolved");
     }
-    let owner_ty = match tail_call_owner_signature(ctx, op) {
-        Ok(ty) => ty,
+    let (owner, owner_ty) = match tail_call_owner(ctx, op) {
+        Ok(owner) => owner,
         Err(message) => {
             push_op_error(ctx, op, errors, message);
             return;
         }
     };
-    if let Ok(call) = TailCallIndirect::from_op(ctx, op) {
-        let callee_ty = ctx.value_ty(call.callee(ctx));
+    if is_tail_call_indirect(ctx, op) {
+        let callee_ty = ctx.value_ty(ctx.op_operands(op)[0]);
         let (Some((callee_result, _, _)), Some((owner_result, _, _))) = (
             func_sig_parts(ctx, callee_ty),
             func_sig_parts(ctx, owner_ty),
@@ -2891,8 +3014,8 @@ fn validate_tail_call(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationErr
             );
         }
         if let (Some(callee_cc), Some(owner_cc)) = (
-            func_sig_convention(ctx, callee_ty),
-            func_sig_convention(ctx, owner_ty),
+            convention_at(ctx, op, callee_ty),
+            convention_at(ctx, owner, owner_ty),
         ) && callee_cc > owner_cc
         {
             push_op_error(
@@ -3183,7 +3306,8 @@ fn validate_yield(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>)
 
 fn validate_local_operation(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
     let data = ctx.op(op);
-    if data.name.dialect(ctx) != DIALECT_NAME {
+    let dialect = data.name.dialect(ctx);
+    if dialect != DIALECT_NAME && dialect != tribute_cps::DIALECT_NAME {
         return;
     }
     let Some(def) = OpDef::of(ctx, op) else {
@@ -3192,7 +3316,8 @@ fn validate_local_operation(ctx: &IrContext, op: OpRef, errors: &mut Vec<Validat
             op,
             errors,
             format!(
-                "unsupported tribute_control operation '{}'",
+                "unsupported {} operation '{}'",
+                data.name.dialect(ctx),
                 data.name.strip_dialect(ctx)
             ),
         );
@@ -3211,31 +3336,30 @@ fn validate_local_operation(ctx: &IrContext, op: OpRef, errors: &mut Vec<Validat
         ctx,
         op,
         &def.schema,
-        Func::matches(ctx, op) || Lambda::matches(ctx, op),
+        is_func(ctx, op) || is_lambda(ctx, op),
         errors,
     );
-    let validate: Option<fn(&IrContext, OpRef, &mut Vec<ValidationError>)> =
-        if Func::matches(ctx, op) {
-            Some(validate_func)
-        } else if Lambda::matches(ctx, op) {
-            Some(validate_lambda)
-        } else if Call::matches(ctx, op) {
-            Some(validate_call)
-        } else if Return::matches(ctx, op) {
-            Some(validate_return)
-        } else if TailCall::matches(ctx, op) || TailCallIndirect::matches(ctx, op) {
-            Some(validate_tail_call)
-        } else if Perform::matches(ctx, op) {
-            Some(validate_perform)
-        } else if Handle::matches(ctx, op) {
-            Some(validate_handle)
-        } else if Handler::matches(ctx, op) {
-            Some(validate_handler)
-        } else if Yield::matches(ctx, op) {
-            Some(validate_yield)
-        } else {
-            None
-        };
+    let validate: Option<fn(&IrContext, OpRef, &mut Vec<ValidationError>)> = if is_func(ctx, op) {
+        Some(validate_func)
+    } else if is_lambda(ctx, op) {
+        Some(validate_lambda)
+    } else if Call::matches(ctx, op) {
+        Some(validate_call)
+    } else if Return::matches(ctx, op) {
+        Some(validate_return)
+    } else if TailCall::matches(ctx, op) || is_tail_call_indirect(ctx, op) {
+        Some(validate_tail_call)
+    } else if Perform::matches(ctx, op) {
+        Some(validate_perform)
+    } else if Handle::matches(ctx, op) {
+        Some(validate_handle)
+    } else if Handler::matches(ctx, op) {
+        Some(validate_handler)
+    } else if Yield::matches(ctx, op) {
+        Some(validate_yield)
+    } else {
+        None
+    };
     if let Some(validate) = validate {
         validate(ctx, op, errors);
     }
@@ -3330,7 +3454,7 @@ fn validate_symbol_use(
     errors: &mut Vec<ValidationError>,
 ) {
     {
-        if FuncRef::matches(ctx, op) {
+        if is_func_ref(ctx, op) {
             let Some(symbol) = ctx.op_attrs(op).get_symbol_ref("func_ref") else {
                 return;
             };
@@ -3338,7 +3462,7 @@ fn validate_symbol_use(
                 .definitions(ctx, op, symbol)
                 .first()
                 .copied()
-                .filter(|&target| Func::matches(ctx, target))
+                .filter(|&target| is_func(ctx, target))
             else {
                 push_op_error(
                     ctx,
@@ -3374,8 +3498,8 @@ fn validate_symbol_use(
                     "func_ref result source signature does not match its target",
                 );
             } else if let (Some(target_cc), Some(result_cc)) = (
-                func_sig_convention(ctx, target_ty),
-                func_sig_convention(ctx, result_ty),
+                convention_at(ctx, target, target_ty),
+                convention_at(ctx, op, result_ty),
             ) && result_cc < target_cc
             {
                 push_op_error(
@@ -3393,7 +3517,7 @@ fn validate_symbol_use(
                 .definitions(ctx, op, symbol)
                 .first()
                 .copied()
-                .filter(|&target| Func::matches(ctx, target))
+                .filter(|&target| is_func(ctx, target))
             else {
                 push_op_error(ctx, op, errors, format!("unresolved callee @{symbol}"));
                 return;
@@ -3436,7 +3560,7 @@ fn validate_symbol_use(
                 .definitions(ctx, op, symbol)
                 .first()
                 .copied()
-                .filter(|&target| Func::matches(ctx, target))
+                .filter(|&target| is_func(ctx, target))
             else {
                 push_op_error(ctx, op, errors, format!("unresolved callee @{symbol}"));
                 return;
@@ -3471,7 +3595,7 @@ fn validate_symbol_use(
                     "tail call argument types do not match the logical signature",
                 );
             }
-            let Ok(owner_ty) = tail_call_owner_signature(ctx, op) else {
+            let Ok((owner, owner_ty)) = tail_call_owner(ctx, op) else {
                 return;
             };
             if func_sig_parts(ctx, owner_ty)
@@ -3485,8 +3609,8 @@ fn validate_symbol_use(
                 );
             }
             if let (Some(callee_cc), Some(owner_cc)) = (
-                func_sig_convention(ctx, target_ty),
-                func_sig_convention(ctx, owner_ty),
+                convention_at(ctx, target, target_ty),
+                convention_at(ctx, owner, owner_ty),
             ) && callee_cc > owner_cc
             {
                 push_op_error(
@@ -3534,7 +3658,7 @@ fn collect_external_references(
                     external.insert(operand);
                 }
             }
-            if Func::matches(ctx, op) {
+            if is_func(ctx, op) {
                 continue;
             }
             for nested in ctx.op_regions(op) {
@@ -3546,7 +3670,7 @@ fn collect_external_references(
 
 fn validate_lambda_captures(ctx: &IrContext, body: RegionRef, errors: &mut Vec<ValidationError>) {
     walk_region_ops(ctx, body, &mut |op| {
-        if !Lambda::matches(ctx, op) {
+        if !is_lambda(ctx, op) {
             return;
         }
         let Some(region) = ctx.op_region(op, 0) else {
@@ -3735,6 +3859,32 @@ fn collect_reachable_type(ctx: &IrContext, ty: TypeRef, types: &mut HashSet<Type
 /// argument, or type-bearing attribute must not affect validation of this
 /// module. A reachable `adt.typeref` may resolve one unique layout alias; an
 /// ambiguous nominal name remains invalid.
+/// Whether class specialization has run on `module`: `Some(true)` when its
+/// callables are all `tribute_cps` operations, `Some(false)` when none is,
+/// and `None` when the module holds both forms.
+pub fn specialized(ctx: &IrContext, module: Module) -> Option<bool> {
+    let mut control = false;
+    let mut cps = false;
+    let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
+        let name = ctx.op(op).name;
+        if name.dialect(ctx) == tribute_cps::DIALECT_NAME {
+            cps = true;
+        } else if Func::matches(ctx, op)
+            || Lambda::matches(ctx, op)
+            || FuncRef::matches(ctx, op)
+            || CallIndirect::matches(ctx, op)
+            || TailCallIndirect::matches(ctx, op)
+        {
+            control = true;
+        }
+        ControlFlow::Continue(WalkAction::Advance)
+    });
+    match (control, cps) {
+        (true, true) => None,
+        (_, cps) => Some(cps),
+    }
+}
+
 /// Whether class specialization has assigned calling conventions in
 /// `module`: `Some(true)` when every source signature the module reaches has
 /// one, `Some(false)` when none has, and `None` when only some have.
@@ -3986,10 +4136,10 @@ fn validate_return_contracts(ctx: &IrContext, body: RegionRef, errors: &mut Vec<
                 );
                 return;
             };
-            if Func::matches(ctx, current) {
+            if is_func(ctx, current) {
                 break ctx.op_attrs(current).get_type("type");
             }
-            if Lambda::matches(ctx, current) {
+            if is_lambda(ctx, current) {
                 break ctx.op_result_types(current).first().copied();
             }
             owner = parent_op(ctx, current);
@@ -4103,7 +4253,7 @@ fn direct_call_reenters_enclosing_func(ctx: &IrContext, op: OpRef) -> bool {
     };
     let mut owner = parent_op(ctx, op);
     while let Some(current) = owner {
-        if Func::matches(ctx, current) {
+        if is_func(ctx, current) {
             // The call is looked up in the module enclosing the function,
             // where the function is a symbol under its own name.
             return parent_op(ctx, current)
@@ -4150,9 +4300,9 @@ fn validate_affine_lambda_carrier(
             );
             continue;
         }
-        if Lambda::matches(ctx, use_.user) {
+        if is_lambda(ctx, use_.user) {
             captures.push(use_.user);
-        } else if (CallIndirect::matches(ctx, use_.user) && use_.operand_index == 0)
+        } else if (is_call_indirect(ctx, use_.user) && use_.operand_index == 0)
             // A captured resumption may be passed to the enclosing source
             // function's recursive logical call (for example
             // `run_state(fn() { resume value }, value)`). Other direct calls
@@ -4192,7 +4342,7 @@ fn validate_affine_lambda_carrier(
 
     if !captures.is_empty() {
         for terminal in &terminals {
-            if CallIndirect::matches(ctx, *terminal)
+            if is_call_indirect(ctx, *terminal)
                 && !captures.iter().any(|capture| {
                     ctx.op_region(*capture, 0)
                         .is_some_and(|region| op_is_within_region(ctx, *terminal, region))
@@ -4244,7 +4394,7 @@ fn validate_token_path(
         }
         if Resume::matches(ctx, use_.user) && use_.operand_index == 0 {
             resumes.push(use_.user);
-        } else if Lambda::matches(ctx, use_.user) {
+        } else if is_lambda(ctx, use_.user) {
             captures.push(use_.user);
         } else {
             push_op_error(
@@ -4467,7 +4617,7 @@ fn validate_local_quantification(
     errors: &mut Vec<ValidationError>,
 ) {
     for &func in module.ops(ctx).iter() {
-        if !Func::matches(ctx, func) {
+        if !is_func(ctx, func) {
             continue;
         }
         let (Ok(binders), Some(body)) = (row_binders(ctx, func), ctx.op_region(func, 0)) else {
@@ -4475,7 +4625,7 @@ fn validate_local_quantification(
         };
         let mut owners = HashSet::default();
         walk_region_ops(ctx, body, &mut |op| {
-            if Lambda::matches(ctx, op) {
+            if is_lambda(ctx, op) {
                 let quantified = match quantified_rows(ctx, op) {
                     Ok(quantified) => quantified,
                     Err(message) => return push_op_error(ctx, op, errors, message),
@@ -4506,8 +4656,7 @@ fn validate_local_quantification(
                 let direct_use = !quantified.is_empty()
                     && result.is_some_and(|result| {
                         ctx.uses(result).iter().any(|used| {
-                            !Instantiate::matches(ctx, used.user)
-                                && !Lambda::matches(ctx, used.user)
+                            !Instantiate::matches(ctx, used.user) && !is_lambda(ctx, used.user)
                         })
                     });
                 if direct_use {
@@ -4540,7 +4689,7 @@ fn validate_instantiate(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationE
         .op_operands(op)
         .first()
         .and_then(|&operand| match ctx.value_def(operand) {
-            ValueDef::OpResult(producer, _) if Lambda::matches(ctx, producer) => Some(producer),
+            ValueDef::OpResult(producer, _) if is_lambda(ctx, producer) => Some(producer),
             _ => None,
         });
     let quantified = lambda
@@ -4600,7 +4749,7 @@ fn validate_row_scopes(
             }
             return ControlFlow::Continue(WalkAction::Advance);
         }
-        if !Func::matches(ctx, op) {
+        if !is_func(ctx, op) {
             return ControlFlow::Continue(WalkAction::Advance);
         }
         let Ok(binders) = row_binders(ctx, op) else {
@@ -4650,11 +4799,11 @@ fn enclosing_row_tail(ctx: &IrContext, op: OpRef) -> Option<(Option<u32>, OpRef)
     let mut tail = None;
     loop {
         let owner = parent_op(ctx, current)?;
-        if Lambda::matches(ctx, owner) && tail.is_none() {
+        if is_lambda(ctx, owner) && tail.is_none() {
             let ty = ctx.op_result_types(owner).first().copied()?;
             tail = Some(FuncSig::from_type_ref(ctx, ty)?.row(ctx).tail);
         }
-        if Func::matches(ctx, owner) {
+        if is_func(ctx, owner) {
             let tail = match tail {
                 Some(tail) => tail,
                 None => {
@@ -4735,7 +4884,7 @@ fn validate_evidence_tails(
             .op_attrs(op)
             .get_symbol_ref("callee")
             .and_then(|symbol| symbols.definitions(ctx, op, symbol).first().copied())
-            .filter(|&callee| Func::matches(ctx, callee));
+            .filter(|&callee| is_func(ctx, callee));
         let Some(callee) = callee else {
             return;
         };
@@ -4788,6 +4937,13 @@ fn whole_ir(
     validate_evidence_tails(ctx, body, symbols, &mut errors);
     validate_lambda_captures(ctx, body, &mut errors);
     let declarations = declaration_map(ctx, declarations, &mut errors);
+    if specialized(ctx, module).is_none() {
+        push_type_error(
+            &mut errors,
+            "class specialization replaces every tribute_control func, lambda, func_ref, \
+             call_indirect, and tail_call_indirect with its tribute_cps operation",
+        );
+    }
     if conventions_assigned(ctx, module).is_none() {
         push_type_error(
             &mut errors,

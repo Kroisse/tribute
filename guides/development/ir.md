@@ -25,25 +25,28 @@ Dialects are split across two crates:
   Language-agnostic dialects (core, func, scf, arith, mem, cf, clif,
   wasm)
 - **tribute-ir** (`crates/tribute-ir/src/dialect/`):
-  Tribute-specific dialects (tribute_control, ability, effect, closure, adt,
-  list, tribute_io, tribute_rt)
+  Tribute-specific dialects (tribute_control, tribute_cps, ability, effect,
+  closure, adt, list, tribute_io, tribute_rt)
 
 Dialect levels (high → low):
 
-- **High-level**: tribute_control, ability, effect, closure, adt, list,
-  tribute_io, tribute_rt — Tribute language concepts
+- **High-level**: tribute_control, tribute_cps, ability, effect, closure, adt,
+  list, tribute_io, tribute_rt — Tribute language concepts
 - **Mid-level**: func, scf, arith, mem — structured operations
 - **Low-level**: cf, wasm, clif — target-specific
 
 ## Source-logical Control
 
 The frontend emits `tribute_control` callable/control operations with exact
-source signatures and checked operation kinds. Shared `tribute_control_to_cps`
-legalization alone constructs continuations and the `func`/`closure` graph.
+source signatures and checked operation kinds. Class specialization replaces
+the callables and indirect transfers whose meaning depends on a convention with
+their `tribute_cps` operations. Shared `tribute_control_to_cps` legalization
+alone constructs continuations and the `func`/`closure` graph.
 Target ABI lowering validates that graph before physicalizing CPS results and
 selecting closure storage. Each operation's own contract is the doc comment
 on its declaration in
-[`tribute_control`](../../crates/tribute-ir/src/dialect/tribute_control.rs) and
+[`tribute_control`](../../crates/tribute-ir/src/dialect/tribute_control.rs),
+[`tribute_cps`](../../crates/tribute-ir/src/dialect/tribute_cps.rs), and
 [`ability`](../../crates/tribute-ir/src/dialect/ability.rs). See
 [the IR contract](../../new-plans/ir.md) for the rules that span operations, and
 [the shared pipeline](../../new-plans/cps-effects.md#shared-middle-end-pipeline).

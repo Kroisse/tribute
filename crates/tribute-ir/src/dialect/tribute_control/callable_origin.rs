@@ -12,13 +12,14 @@ use trunk_ir::types::StringRef;
 use trunk_ir::{IrContext, SymbolPath};
 
 use super::{
-    Call, CallIndirect, CallingConvention, CompilerIntrinsicDeclaration, Func, FuncRef, FuncSig,
-    Handle, Handler, Instantiate, Lambda, OperationDeclaration, OperationDeclarationUse, Perform,
-    Resume, TailCallIndirect, ValidationError, Yield, compiler_intrinsic_map, contains_adt_typeref,
-    func_sig_convention, func_sig_parts, nominal_identity, parent_region, push_op_error,
-    push_type_error, walk_region_ops,
+    COMPILER_INTRINSIC_ATTR, Call, CallIndirect, CallingConvention, CompilerIntrinsicDeclaration,
+    Func, FuncRef, FuncSig, Handle, Handler, Instantiate, Lambda, OperationDeclaration,
+    OperationDeclarationUse, Perform, Resume, ValidationError, Yield, compiler_intrinsic_map,
+    contains_adt_typeref, convention_at, func_sig_parts, is_call_indirect, is_func,
+    is_tail_call_indirect, nominal_identity, parent_region, push_op_error, push_type_error,
+    walk_region_ops,
 };
-use crate::dialect::{adt, list};
+use crate::dialect::{adt, list, tribute_cps};
 
 fn adt_projection_has_exact_callable_type(
     ctx: &IrContext,
@@ -207,7 +208,7 @@ impl CallableQuery<'_> {
     fn names_verified_function(&self, ctx: &IrContext, op: OpRef, symbol: &SymbolPath) -> bool {
         self.functions
             .resolve(ctx, op, symbol)
-            .filter(|&function| Func::matches(ctx, function))
+            .filter(|&function| is_func(ctx, function))
             .is_some_and(|function| verified_callable_declaration(ctx, function, self.registered))
     }
 }
@@ -326,6 +327,71 @@ impl CallableResultOrigin for FuncRef {
         ctx.op_attrs(self.op_ref())
             .get_symbol_ref("func_ref")
             .is_some_and(|symbol| query.names_verified_function(ctx, self.op_ref(), symbol))
+    }
+}
+
+impl CallableArgumentOrigin for tribute_cps::Func {
+    fn argument_is_callable_origin<'q>(
+        &self,
+        ctx: &IrContext,
+        region: RegionRef,
+        index: u32,
+        argument: ValueRef,
+        _query: &mut CallableQuery<'q>,
+    ) -> bool {
+        let signature = ctx.op_attrs(self.op_ref()).get_type("type");
+        is_signature_parameter(ctx, self.op_ref(), signature, region, index, argument)
+    }
+}
+
+impl CallableResultOrigin for tribute_cps::Lambda {
+    fn result_is_callable_origin<'q>(
+        &self,
+        _ctx: &IrContext,
+        _result: ValueRef,
+        _query: &mut CallableQuery<'q>,
+    ) -> bool {
+        true
+    }
+}
+
+impl CallableArgumentOrigin for tribute_cps::Lambda {
+    fn argument_is_callable_origin<'q>(
+        &self,
+        ctx: &IrContext,
+        region: RegionRef,
+        index: u32,
+        argument: ValueRef,
+        _query: &mut CallableQuery<'q>,
+    ) -> bool {
+        let signature = ctx.op_result_types(self.op_ref()).first().copied();
+        is_signature_parameter(ctx, self.op_ref(), signature, region, index, argument)
+    }
+}
+
+impl CallableResultOrigin for tribute_cps::FuncRef {
+    fn result_is_callable_origin<'q>(
+        &self,
+        ctx: &IrContext,
+        _result: ValueRef,
+        query: &mut CallableQuery<'q>,
+    ) -> bool {
+        ctx.op_attrs(self.op_ref())
+            .get_symbol_ref("func_ref")
+            .is_some_and(|symbol| query.names_verified_function(ctx, self.op_ref(), symbol))
+    }
+}
+
+impl CallableResultOrigin for tribute_cps::CallIndirect {
+    fn result_is_callable_origin<'q>(
+        &self,
+        ctx: &IrContext,
+        _result: ValueRef,
+        query: &mut CallableQuery<'q>,
+    ) -> bool {
+        ctx.op_operands(self.op_ref())
+            .first()
+            .is_some_and(|&callee| query.accepts(ctx, callee))
     }
 }
 
@@ -547,9 +613,7 @@ fn verified_callable_declaration(
     }
     let (Some(symbol), Some(identity)) = (
         qualified_name(ctx, function),
-        Func::from_op(ctx, function)
-            .ok()
-            .and_then(|function| function.compiler_intrinsic_identity(ctx)),
+        ctx.op_attrs(function).get_str(COMPILER_INTRINSIC_ATTR),
     ) else {
         return false;
     };
@@ -560,7 +624,7 @@ fn verified_callable_declaration(
 
 /// The callee of `op` when it is a source-logical indirect call.
 fn indirect_callee(ctx: &IrContext, op: OpRef) -> Option<ValueRef> {
-    (CallIndirect::matches(ctx, op) || TailCallIndirect::matches(ctx, op))
+    (is_call_indirect(ctx, op) || is_tail_call_indirect(ctx, op))
         .then(|| ctx.op_operands(op).first().copied())
         .flatten()
 }
@@ -596,15 +660,13 @@ pub(super) fn validate_callable_origins(
     query.resolve(ctx);
     let mut seen = HashSet::default();
     walk_region_ops(ctx, body, &mut |op| {
-        if Func::matches(ctx, op) {
+        if is_func(ctx, op) {
             let (Some(symbol), Some(func_sig_type)) =
                 (qualified_name(ctx, op), ctx.op_attrs(op).get_type("type"))
             else {
                 return;
             };
-            let intrinsic_identity = Func::from_op(ctx, op)
-                .ok()
-                .and_then(|function| function.compiler_intrinsic_identity(ctx));
+            let intrinsic_identity = ctx.op_attrs(op).get_str(COMPILER_INTRINSIC_ATTR);
             let bodyless = !ctx.op_has_regions(op);
             if !bodyless && intrinsic_identity.is_some() {
                 push_op_error(
@@ -617,7 +679,7 @@ pub(super) fn validate_callable_origins(
             if bodyless {
                 let exact_intrinsic = match (registered.get(&symbol), intrinsic_identity) {
                     (Some(expected), Some(actual)) if expected.identity == actual => {
-                        if func_sig_convention(ctx, func_sig_type)
+                        if convention_at(ctx, op, func_sig_type)
                             .is_some_and(|convention| convention != CallingConvention::Direct)
                         {
                             push_op_error(
