@@ -361,7 +361,7 @@ pub fn module_at(db: &dyn salsa::Database, source: SourceCst, offset: usize) -> 
             };
             let Some(body) = &module.body else { continue };
             let span = span_map.get_or_default(module.id);
-            if span.start <= offset && offset < span.end {
+            if span.range().contains(&offset) {
                 path.push(module.name.clone());
                 return descend(body, span_map, offset, path);
             }

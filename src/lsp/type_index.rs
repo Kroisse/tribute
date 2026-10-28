@@ -200,7 +200,7 @@ impl<'db> AstTypeIndex<'db> {
         let containing: Vec<_> = self
             .entries(db)
             .iter()
-            .filter(|e| e.span.start <= offset && offset < e.span.end)
+            .filter(|e| e.span.range().contains(&offset))
             .collect();
 
         // Return the innermost (smallest span)
@@ -227,7 +227,10 @@ impl<'a, 'db> TypeCollector<'a, 'db> {
     }
 
     fn add_entry(&mut self, node_id: NodeId, ty: Type<'db>) {
-        let span = self.span_map.get_or_default(node_id);
+        // A node without a span here is in a file module's file.
+        let Some(span) = self.span_map.get(node_id) else {
+            return;
+        };
         self.entries.push(AstTypeEntry { node_id, span, ty });
     }
 }

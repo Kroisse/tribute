@@ -1,8 +1,10 @@
 use std::ops::Range;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use fluent_uri::Uri;
 use ropey::Rope;
+use rustc_hash::FxHashMap as HashMap;
 use salsa::Setter;
 use tree_sitter::{InputEdit, Parser, Point, Tree};
 use trunk_ir::Symbol;
@@ -39,16 +41,164 @@ impl SourceCst {
     }
 }
 
-/// Convert a filesystem path to a file:// URI.
+/// The files a compilation finds by URI, through the database's one
+/// [`FileProvider`] (`new-plans/implementation.md` § 패키지 source 트리와
+/// 파일 입력). Queries take `&dyn salsa::Database`, so the provider is
+/// reached through this singleton input rather than a database trait.
+#[salsa::input(singleton, debug)]
+pub struct SourceFiles {
+    pub provider: Arc<FileProvider>,
+}
+
+/// The file at one URI: its source, or `None` while there is no file.
+///
+/// A query that reads `source` depends on whether the file exists, so
+/// creating a file it looked for invalidates it.
+#[salsa::input(debug)]
+pub struct FileEntry {
+    #[returns(ref)]
+    pub uri: Uri<String>,
+    #[returns(copy)]
+    pub source: Option<SourceCst>,
+}
+
+/// Makes one [`FileEntry`] per URI on its first request, from what its
+/// reader finds there.
+///
+/// Entries are never removed: a file that disappears keeps its entry with
+/// no source, so the queries that read it stay its dependents.
+pub struct FileProvider {
+    /// Keyed by URI. The URIs are those of a package's root and the files
+    /// its `mod` declarations name, not arbitrary client input.
+    entries: Mutex<HashMap<String, FileEntry>>,
+    read: Box<ReadFile>,
+}
+
+/// Reads the text of the file at a URI, if there is one.
+type ReadFile = dyn Fn(&Uri<String>) -> Option<Rope> + Send + Sync;
+
+impl FileProvider {
+    /// A provider that reads a file with `read` when it is first requested.
+    pub fn new(read: impl Fn(&Uri<String>) -> Option<Rope> + Send + Sync + 'static) -> Self {
+        Self {
+            entries: Mutex::default(),
+            read: Box::new(read),
+        }
+    }
+
+    /// A provider that finds only the files given to [`FileProvider::set`].
+    pub fn in_memory() -> Self {
+        Self::new(|_| None)
+    }
+
+    /// The entry of `uri`, created with what the reader finds there if
+    /// this is its first request.
+    pub fn entry(&self, db: &dyn salsa::Database, uri: &Uri<String>) -> FileEntry {
+        let mut entries = self.entries.lock().expect("file entries lock");
+        *entries.entry(uri.as_str().to_owned()).or_insert_with(|| {
+            let source = (self.read)(uri).map(|text| new_source(db, uri.clone(), text));
+            FileEntry::new(db, uri.clone(), source)
+        })
+    }
+
+    /// The entry of `uri` if it was requested or set before.
+    pub fn existing(&self, uri: &Uri<String>) -> Option<FileEntry> {
+        let entries = self.entries.lock().expect("file entries lock");
+        entries.get(uri.as_str()).copied()
+    }
+
+    /// Make `text` the file at `uri`, or remove the file if `text` is
+    /// `None`. A file that exists keeps its source input, with the new text
+    /// and a fresh parse.
+    pub fn set(
+        &self,
+        db: &mut dyn salsa::Database,
+        uri: &Uri<String>,
+        text: Option<Rope>,
+    ) -> Option<SourceCst> {
+        let Some(entry) = self.existing(uri) else {
+            let source = text.map(|text| new_source(db, uri.clone(), text));
+            let entry = FileEntry::new(db, uri.clone(), source);
+            let mut entries = self.entries.lock().expect("file entries lock");
+            entries.insert(uri.as_str().to_owned(), entry);
+            return source;
+        };
+        match (entry.source(db), text) {
+            (Some(source), Some(text)) => {
+                let tree = parse_rope(&text, None);
+                source.set_text(db).to(text);
+                source.set_tree(db).to(tree);
+                Some(source)
+            }
+            (None, Some(text)) => {
+                let source = new_source(db, uri.clone(), text);
+                entry.set_source(db).to(Some(source));
+                Some(source)
+            }
+            (_, None) => {
+                entry.set_source(db).to(None);
+                None
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for FileProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let entries = self.entries.lock().map_or(0, |entries| entries.len());
+        f.debug_struct("FileProvider")
+            .field("entries", &entries)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The source of the file at `uri`, or `None` if there is none or the
+/// database has no [`SourceFiles`]. Inside a query, records a dependency on
+/// whether the file exists.
+pub fn source_at(db: &dyn salsa::Database, uri: &Uri<String>) -> Option<SourceCst> {
+    let files = SourceFiles::try_get(db)?;
+    files.provider(db).entry(db, uri).source(db)
+}
+
+fn new_source(db: &dyn salsa::Database, uri: Uri<String>, text: Rope) -> SourceCst {
+    let tree = parse_rope(&text, None);
+    SourceCst::new(db, uri, text, tree)
+}
+
+/// Convert a filesystem path to a file:// URI, percent-encoding each byte
+/// that a URI path does not allow as is, `%` among them.
 pub fn path_to_uri(path: &Path) -> Uri<String> {
     let path_str = path.to_string_lossy();
-    let uri_string = if path_str.starts_with('/') {
-        format!("file://{}", path_str)
-    } else {
+    let mut uri_string = String::from("file://");
+    if !path_str.starts_with('/') {
         // Relative path - just use as-is for testing
-        format!("file:///{}", path_str)
-    };
+        uri_string.push('/');
+    }
+    push_uri_path(&mut uri_string, &path_str);
     Uri::parse_from(uri_string).expect("valid file URI")
+}
+
+/// Append `text` to a URI path, percent-encoding each byte that a URI path
+/// does not allow as is, `%` among them.
+pub(crate) fn push_uri_path(uri: &mut String, text: &str) {
+    use std::fmt::Write;
+    for &byte in text.as_bytes() {
+        if byte.is_ascii_alphanumeric() || b"/-._~!$&'()*+,;=:@".contains(&byte) {
+            uri.push(char::from(byte));
+        } else {
+            let _ = write!(uri, "%{byte:02X}");
+        }
+    }
+}
+
+/// The filesystem path a `file:` URI names, with its percent-encoding
+/// decoded; the inverse of [`path_to_uri`].
+pub fn uri_to_path(uri: &Uri<String>) -> Option<PathBuf> {
+    if uri.scheme()?.as_str() != "file" {
+        return None;
+    }
+    let path = uri.path().as_estr().decode().into_string().ok()?;
+    Some(PathBuf::from(path.into_owned()))
 }
 
 /// Parse a text rope with a given parser.
@@ -163,6 +313,20 @@ pub fn derive_module_name_from_path(uri_str: &str) -> Symbol {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_provider_debug_shows_its_entry_count() {
+        let provider = FileProvider::in_memory();
+        assert_eq!(format!("{provider:?}"), "FileProvider { entries: 0, .. }");
+    }
+
+    #[test]
+    fn path_to_uri_percent_encodes_and_uri_to_path_decodes() {
+        let path = Path::new("/my pkg/100%/main.trb");
+        let uri = path_to_uri(path);
+        assert_eq!(uri.as_str(), "file:///my%20pkg/100%25/main.trb");
+        assert_eq!(uri_to_path(&uri).as_deref(), Some(path));
+    }
 
     #[test]
     fn path_to_uri_prefixes_file_scheme() {

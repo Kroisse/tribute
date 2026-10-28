@@ -6,11 +6,13 @@ expression: result.diagnostics
   span:
     start: 52
     end: 101
+    source: 9659900100624592365
   severity: Error
   phase: TypeChecking
 - message: "function 'main' must return Nil, but returns `Int`"
   span:
     start: 52
     end: 101
+    source: 9659900100624592365
   severity: Error
   phase: TypeChecking

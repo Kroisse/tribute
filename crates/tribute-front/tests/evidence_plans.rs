@@ -46,10 +46,7 @@ fn plans(db: &dyn salsa::Database, text: &str) -> Vec<String> {
         .map(|(node, plan)| {
             let span = spans.get_or_default(*node);
             let steps = plan.iter().map(|step| describe(db, step)).join(", ");
-            (
-                span.start,
-                format!("{}: {}", &text[span.start..span.end], steps),
-            )
+            (span.start, format!("{}: {}", &text[span.range()], steps))
         })
         .collect();
     plans.sort();

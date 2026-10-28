@@ -15,7 +15,8 @@ use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity}
 /// Context for lowering CST to AST.
 pub struct AstLoweringCtx<'db> {
     pub source: Rope,
-    /// Source hash for distinguishing parse sessions (derived from source URI).
+    /// Source hash for distinguishing parse sessions (derived from source
+    /// URI), stamped on the nodes, spans, and diagnostics of this source.
     source_hash: u64,
     /// Builder for span map.
     span_builder: SpanMapBuilder,
@@ -61,11 +62,21 @@ impl<'db> AstLoweringCtx<'db> {
         }
     }
 
+    /// Lower the file of the file module at `module_path` in its package:
+    /// its items are owned as if the module were declared inline.
+    pub fn in_file_module(self, module_path: Vec<Symbol>) -> Self {
+        Self {
+            owner: module_owner(&module_path),
+            module_path,
+            ..self
+        }
+    }
+
     /// Generate the NodeId of the next node of the current owner and record
     /// the CST node's span for it.
     pub fn fresh_id_with_span(&mut self, node: &Node) -> NodeId {
         let id = self.next_id();
-        let span = Span::new(node.start_byte(), node.end_byte());
+        let span = Span::new(node.start_byte(), node.end_byte()).in_source(self.source_hash);
         self.span_builder.insert(id, span);
         id
     }
@@ -73,7 +84,7 @@ impl<'db> AstLoweringCtx<'db> {
     /// Generate the NodeId of the root `Module` node and record its span.
     pub fn module_id_with_span(&mut self, node: &Node) -> NodeId {
         let id = self.next_id();
-        let span = Span::new(node.start_byte(), node.end_byte());
+        let span = Span::new(node.start_byte(), node.end_byte()).in_source(self.source_hash);
         self.span_builder.set_module(id, span);
         id
     }
@@ -127,7 +138,7 @@ impl<'db> AstLoweringCtx<'db> {
         if let Some(db) = self.db {
             Diagnostic::new(
                 message,
-                span,
+                span.in_source(self.source_hash),
                 DiagnosticSeverity::Error,
                 CompilationPhase::AstGeneration,
             )
@@ -140,7 +151,7 @@ impl<'db> AstLoweringCtx<'db> {
         if let Some(db) = self.db {
             Diagnostic::new(
                 message,
-                span,
+                span.in_source(self.source_hash),
                 DiagnosticSeverity::Error,
                 CompilationPhase::Parsing,
             )

@@ -35,12 +35,17 @@ use super::completion_index::{
     self, complete_keywords, completion_items, completions_in, filter_completions,
     find_callee_signature, function_signatures, module_at,
 };
-use super::definition_index::{definition_index, validate_identifier};
+use super::definition_index::{
+    AstDefinitionEntry, definition_index, package_identifiers, validate_identifier,
+};
 use super::type_index::{AstTypeIndex, print_ast_type, type_index as ast_type_index};
 use tribute::TributeDatabaseImpl;
+use tribute_front::SourceCst;
+use tribute_front::ast::source_hash;
 use tribute_front::keywords::unraw;
 use tribute_front::resolve::NameDisplay;
 use tribute_front::source_file::{apply_edit, new_parser, parse_with_rope};
+use tribute_front::source_tree::source_tree_of;
 
 /// Main LSP server state.
 struct LspServer {
@@ -160,6 +165,7 @@ impl LspServer {
         self.db.open_document(&uri, rope);
 
         self.publish_diagnostics(&uri)?;
+        self.publish_dependents(&uri)?;
         Ok(())
     }
 
@@ -173,6 +179,7 @@ impl LspServer {
         }
 
         self.publish_diagnostics(&uri)?;
+        self.publish_dependents(&uri)?;
         Ok(())
     }
 
@@ -181,6 +188,9 @@ impl LspServer {
         params: DidCloseTextDocumentParams,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let uri = params.text_document.uri;
+        // The packages that read the buffer read the file on disk once it is
+        // closed, which may be missing, so find them first.
+        let dependents = self.dependent_documents(&uri);
         self.db.close_document(&uri);
 
         // Clear diagnostics
@@ -191,6 +201,48 @@ impl LspServer {
         };
         let notif = Notification::new(PublishDiagnostics::METHOD.to_string(), params);
         self.connection.sender.send(Message::Notification(notif))?;
+        for dependent in dependents {
+            self.publish_diagnostics(&dependent)?;
+        }
+        Ok(())
+    }
+
+    /// The open documents other than `uri` whose packages read `uri`'s
+    /// file as one of their file modules.
+    fn dependent_documents(&self, uri: &Uri) -> Vec<Uri> {
+        let Some(changed) = self.db.source_cst(uri) else {
+            return Vec::new();
+        };
+        let documents = self.db.open_documents();
+        self.db.attach(|db| {
+            documents
+                .into_iter()
+                .filter(|(key, root)| {
+                    key != uri.as_str()
+                        && source_tree_of(db, *root).is_some_and(|tree| {
+                            tree.files().iter().any(|file| file.source == changed)
+                        })
+                })
+                .filter_map(|(key, _)| key.parse().ok())
+                .collect()
+        })
+    }
+
+    /// The roots of the open packages that read `uri`'s file as one of
+    /// their file modules.
+    fn containing_packages(&self, uri: &Uri) -> Vec<SourceCst> {
+        self.dependent_documents(uri)
+            .iter()
+            .filter_map(|root| self.db.source_cst(root))
+            .collect()
+    }
+
+    /// Publish the diagnostics of the open documents whose packages read
+    /// `uri`'s file, which just changed.
+    fn publish_dependents(&self, uri: &Uri) -> Result<(), Box<dyn Error + Send + Sync>> {
+        for dependent in self.dependent_documents(uri) {
+            self.publish_diagnostics(&dependent)?;
+        }
         Ok(())
     }
 
@@ -338,12 +390,16 @@ impl LspServer {
         let rope = self.db.source_cst(uri)?.text(&self.db).clone();
         let offset = offset_from_position(&rope, position.line, position.character)?;
         let source_cst = self.db.source_cst(uri)?;
+        let containing = self.containing_packages(uri);
 
         let result = self.db.attach(|db| {
             let index = definition_index(db, source_cst)?;
 
             // Check if rename is possible at this position
             let (def, span) = index.can_rename(db, offset)?;
+            if used_by_containing_packages(db, def, source_cst, &containing) {
+                return None;
+            }
 
             let range = span_to_range(&rope, span);
             let placeholder = def.name.to_string();
@@ -372,12 +428,16 @@ impl LspServer {
         let rope = self.db.source_cst(uri)?.text(&self.db).clone();
         let offset = offset_from_position(&rope, position.line, position.character)?;
         let source_cst = self.db.source_cst(uri)?;
+        let containing = self.containing_packages(uri);
 
         let text_edits = self.db.attach(|db| {
             let index = definition_index(db, source_cst)?;
 
             // Get definition and validate
             let (def, _) = index.can_rename(db, offset)?;
+            if used_by_containing_packages(db, def, source_cst, &containing) {
+                return None;
+            }
 
             // Validate new name
             if validate_identifier(new_name, def.kind.clone()).is_err() {
@@ -412,7 +472,7 @@ impl LspServer {
             // The binding keeps its source spelling (`r#type` stays raw).
             for shorthand in index.shorthand_fields_of_target(db, &target) {
                 let binding = rope
-                    .get_byte_slice(shorthand.span.start..shorthand.span.end)
+                    .get_byte_slice(shorthand.span.range())
                     .map_or_else(|| def.name.to_string(), |s| s.to_string());
                 edits.push(TextEdit {
                     range: span_to_range(&rope, shorthand.span),
@@ -563,13 +623,17 @@ impl LspServer {
         let actions = self.db.attach(|db| {
             let result = tribute::compile_with_diagnostics(db, source_cst);
             let type_index = ast_type_index(db, source_cst);
+            let document = source_hash(source_cst.uri(db).as_str());
 
             let mut actions = Vec::new();
 
             // Find diagnostics that overlap with the requested range
             for diag in &result.diagnostics {
-                // Check if diagnostic overlaps with range
-                if diag.inner.span.end < start_offset || diag.inner.span.start > end_offset {
+                // Check if diagnostic overlaps with range in this document
+                if !in_document(diag.inner.span, document)
+                    || (diag.inner.span.end as usize) < start_offset
+                    || diag.inner.span.start as usize > end_offset
+                {
                     continue;
                 }
 
@@ -611,7 +675,7 @@ impl LspServer {
         {
             // Try to find the inferred type at the diagnostic location
             let type_index = type_index?;
-            if let Some(entry) = type_index.type_at(db, diag.inner.span.start) {
+            if let Some(entry) = type_index.type_at(db, diag.inner.span.start as usize) {
                 // The annotation is inserted into source, where only the full
                 // identity path names the type from every module.
                 let type_str = print_ast_type(db, &NameDisplay::identity(), entry.ty);
@@ -692,10 +756,10 @@ impl LspServer {
     fn find_return_type_insert_position(&self, rope: &Rope, span: trunk_ir::Span) -> Option<usize> {
         // Search from the start of the function for the closing paren
         let text: String = rope.slice(..).chars().collect();
-        if span.start >= text.len() {
+        if span.start as usize >= text.len() {
             return None;
         }
-        let func_text = &text[span.start..span.end.min(text.len())];
+        let func_text = &text[span.start as usize..(span.end as usize).min(text.len())];
 
         // Find the closing parenthesis of the parameter list
         let mut paren_depth = 0;
@@ -711,13 +775,13 @@ impl LspServer {
                     paren_depth -= 1;
                     if found_open && paren_depth == 0 {
                         // Found the closing paren, return position after it
-                        return Some(span.start + i + 1);
+                        return Some(span.start as usize + i + 1);
                     }
                 }
                 '{' if found_open && paren_depth == 0 => {
                     // Hit function body without finding return type position
                     // Insert before the opening brace
-                    return Some(span.start + i);
+                    return Some(span.start as usize + i);
                 }
                 _ => {}
             }
@@ -808,10 +872,13 @@ impl LspServer {
             .db
             .attach(|db| tribute::compile_with_diagnostics(db, source_cst).diagnostics);
 
-        // Convert to LSP diagnostics
+        // Convert to LSP diagnostics. A span in a file module's file rather
+        // than this document is not shown in it.
+        let document = source_hash(source_cst.uri(&self.db).as_str());
         let lsp_uri = uri.clone();
         let diagnostics: Vec<Diagnostic> = diags
             .iter()
+            .filter(|d| in_document(d.inner.span, document))
             .map(|d| {
                 let range = span_to_range(rope, d.inner.span);
 
@@ -823,6 +890,7 @@ impl LspServer {
                         d.inner
                             .labels
                             .iter()
+                            .filter(|label| in_document(label.span, document))
                             .map(|label| DiagnosticRelatedInformation {
                                 location: Location {
                                     uri: lsp_uri.clone(),
@@ -987,9 +1055,30 @@ fn init_lsp_tracing(log_filter: &str, sender: crossbeam_channel::Sender<Message>
         .try_init();
 }
 
+/// Whether another file of a package in `containing` that reads `source`
+/// spells the package-level name `def`, so that a rename editing only
+/// `source` would leave it unresolved.
+fn used_by_containing_packages(
+    db: &dyn salsa::Database,
+    def: &AstDefinitionEntry,
+    source: SourceCst,
+    containing: &[SourceCst],
+) -> bool {
+    def.local_id.is_none()
+        && containing
+            .iter()
+            .any(|root| package_identifiers(db, *root, source).contains(&def.name))
+}
+
+/// Whether `span` is in the document whose source hash is `document`. A span
+/// with no source belongs to the document being analyzed.
+fn in_document(span: trunk_ir::Span, document: u64) -> bool {
+    span.source == document || span.source == 0
+}
+
 fn span_to_range(rope: &Rope, span: trunk_ir::Span) -> lsp_types::Range {
-    let start = position_from_offset(rope, span.start);
-    let end = position_from_offset(rope, span.end);
+    let start = position_from_offset(rope, span.start as usize);
+    let end = position_from_offset(rope, span.end as usize);
     lsp_types::Range {
         start: lsp_types::Position {
             line: start.0,
@@ -1668,6 +1757,36 @@ mod tests {
             }
         }
 
+        /// Send a notification and process it.
+        fn notify<N: lsp_types::notification::Notification>(&mut self, params: N::Params)
+        where
+            N::Params: serde::Serialize,
+        {
+            let notif = Notification::new(N::METHOD.to_string(), params);
+            self.client
+                .sender
+                .send(Message::Notification(notif))
+                .unwrap();
+            let msg = self.server.connection.receiver.recv().unwrap();
+            self.server.process_message(msg).unwrap();
+        }
+
+        /// The next diagnostics the server published.
+        fn next_diagnostics(&mut self) -> PublishDiagnosticsParams {
+            let message = self
+                .client
+                .receiver
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the server published diagnostics");
+            match message {
+                Message::Notification(notif) => {
+                    assert_eq!(notif.method, PublishDiagnostics::METHOD);
+                    serde_json::from_value(notif.params).unwrap()
+                }
+                other => panic!("expected diagnostics notification, got {other:?}"),
+            }
+        }
+
         /// Send a request and get the response.
         fn request<R: lsp_types::request::Request>(&mut self, params: R::Params) -> R::Result
         where
@@ -1936,6 +2055,286 @@ mod tests {
             // Should find: definition (let x) + 2 references (x + x)
             assert!(refs.len() >= 2, "Should find multiple references");
         }
+    }
+
+    /// A diagnostic's labels in the document become related information.
+    #[test]
+    fn diagnostic_labels_become_related_information() {
+        let uri = test_uri("duplicate_definition");
+        let source = "fn f() -> Nat { 1 }\n\nfn f() -> Nat { 2 }\n\nfn main() -> Nil { }\n";
+
+        let mut harness = TestHarness::new();
+        let published = harness.open_document_with_diagnostics(&uri, source);
+        let [diagnostic] = &published.diagnostics[..] else {
+            panic!("one diagnostic: {:?}", published.diagnostics);
+        };
+        assert_eq!(diagnostic.range.start.line, 2);
+        let related: Vec<_> = diagnostic
+            .related_information
+            .iter()
+            .flatten()
+            .map(|info| (info.location.uri == uri, info.location.range.start.line))
+            .collect();
+        assert_eq!(related, [(true, 0)]);
+    }
+
+    /// An open document is the root of its package: its file modules are
+    /// read from disk, and nothing located in their files lands in it.
+    #[test]
+    fn file_modules_stay_out_of_the_root_document() {
+        let dir = tempfile::tempdir().expect("temporary package directory");
+        std::fs::write(
+            dir.path().join("util.trb"),
+            "pub fn helper() -> Nat { pkg::shared() }\n\nfn broken() -> Nat { missing }\n",
+        )
+        .expect("write util.trb");
+        let root = dir.path().join("main.trb");
+        let uri: Uri = format!("file://{}", root.display()).parse().unwrap();
+        let source = "mod util\n\npub fn shared() -> Nat { 1 }\n\nfn main() -> Nil { let _ = util::helper() }\n\nfn helper() -> Nat { 2 }\n";
+
+        let mut harness = TestHarness::new();
+        let published = harness.open_document_with_diagnostics(&uri, source);
+        assert_eq!(published.diagnostics, Vec::new());
+
+        let params = ReferenceParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+                position: lsp_types::Position {
+                    line: 2,
+                    character: 8, // On `shared`
+                },
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            context: lsp_types::ReferenceContext {
+                include_declaration: true,
+            },
+        };
+        let refs = harness
+            .request::<References>(params)
+            .expect("the declaration of `shared`");
+        let lines: Vec<_> = refs
+            .iter()
+            .map(|location| (location.uri == uri, location.range.start.line))
+            .collect();
+        assert_eq!(lines, [(true, 2)]);
+
+        // A rename would edit only this document, so a name that `util.trb`
+        // also uses is not renamable; one only this document uses is.
+        let mut prepare = |line, character| {
+            harness.request::<PrepareRenameRequest>(TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+                position: lsp_types::Position { line, character },
+            })
+        };
+        assert_eq!(prepare(2, 8), None, "`shared`, called from `util.trb`");
+        assert_eq!(prepare(4, 31), None, "`util::helper`");
+        assert_eq!(prepare(6, 4), None, "`helper`, also defined in `util.trb`");
+        assert!(prepare(4, 4).is_some(), "`main`");
+    }
+
+    /// A field that a file module destructures with a shorthand pattern is
+    /// not renamable from the root document.
+    #[test]
+    fn a_field_destructured_in_a_file_module_is_not_renamable() {
+        let dir = tempfile::tempdir().expect("temporary package directory");
+        std::fs::write(
+            dir.path().join("util.trb"),
+            "use pkg::Point\n\npub fn sum(p: Point) -> Int {\n    let Point { x, y } = p\n    x + y\n}\n",
+        )
+        .expect("write util.trb");
+        let root = dir.path().join("main.trb");
+        let uri: Uri = format!("file://{}", root.display()).parse().unwrap();
+        let source = "mod util\n\npub struct Point { x: Int, y: Int }\n\nfn main() -> Nil { }\n";
+
+        let mut harness = TestHarness::new();
+        let published = harness.open_document_with_diagnostics(&uri, source);
+        assert_eq!(published.diagnostics, Vec::new());
+        let prepared = harness.request::<PrepareRenameRequest>(TextDocumentPositionParams {
+            text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+            position: lsp_types::Position {
+                line: 2,
+                character: 19, // On `x`
+            },
+        });
+        assert_eq!(prepared, None);
+    }
+
+    /// An enum whose constructor a file module calls through a qualified
+    /// path is not renamable from the root document.
+    #[test]
+    fn an_enum_constructed_in_a_file_module_is_not_renamable() {
+        let dir = tempfile::tempdir().expect("temporary package directory");
+        std::fs::write(
+            dir.path().join("util.trb"),
+            "pub fn pick() -> pkg::Choice { pkg::Choice::One(1) }\n",
+        )
+        .expect("write util.trb");
+        let root = dir.path().join("main.trb");
+        let uri: Uri = format!("file://{}", root.display()).parse().unwrap();
+        let source = "mod util\n\npub enum Choice { One(Int), Other }\n\nfn main() -> Nil { }\n";
+
+        let mut harness = TestHarness::new();
+        let published = harness.open_document_with_diagnostics(&uri, source);
+        assert_eq!(published.diagnostics, Vec::new());
+        let prepared = harness.request::<PrepareRenameRequest>(TextDocumentPositionParams {
+            text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+            position: lsp_types::Position {
+                line: 2,
+                character: 10, // On `Choice`
+            },
+        });
+        assert_eq!(prepared, None);
+    }
+
+    /// A struct that a file module names only in a type annotation is not
+    /// renamable from the root document.
+    #[test]
+    fn a_struct_annotated_in_a_file_module_is_not_renamable() {
+        let dir = tempfile::tempdir().expect("temporary package directory");
+        std::fs::write(
+            dir.path().join("util.trb"),
+            "pub fn consume(p: pkg::Point) -> Nil { }\n",
+        )
+        .expect("write util.trb");
+        let root = dir.path().join("main.trb");
+        let uri: Uri = format!("file://{}", root.display()).parse().unwrap();
+        let source = "mod util\n\npub struct Point { x: Int }\n\nfn main() -> Nil { }\n";
+
+        let mut harness = TestHarness::new();
+        let published = harness.open_document_with_diagnostics(&uri, source);
+        assert_eq!(published.diagnostics, Vec::new());
+        let mut prepare = |line, character| {
+            harness.request::<PrepareRenameRequest>(TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+                position: lsp_types::Position { line, character },
+            })
+        };
+        assert_eq!(prepare(2, 12), None, "`Point`");
+        assert!(prepare(4, 4).is_some(), "`main`");
+    }
+
+    /// A function that a file module only re-exports is not renamable from
+    /// the root document.
+    #[test]
+    fn a_function_reexported_by_a_file_module_is_not_renamable() {
+        let dir = tempfile::tempdir().expect("temporary package directory");
+        std::fs::write(dir.path().join("util.trb"), "pub use pkg::shared\n")
+            .expect("write util.trb");
+        let root = dir.path().join("main.trb");
+        let uri: Uri = format!("file://{}", root.display()).parse().unwrap();
+        let source = "pub mod util\n\npub fn shared() -> Nat { 1 }\n\nfn main() -> Nil { }\n";
+
+        let mut harness = TestHarness::new();
+        let published = harness.open_document_with_diagnostics(&uri, source);
+        assert_eq!(published.diagnostics, Vec::new());
+        let prepared = harness.request::<PrepareRenameRequest>(TextDocumentPositionParams {
+            text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+            position: lsp_types::Position {
+                line: 2,
+                character: 8, // On `shared`
+            },
+        });
+        assert_eq!(prepared, None);
+    }
+
+    /// A file module open next to the root that reads it cannot rename a
+    /// name the root calls, since the rename edits only the file module.
+    #[test]
+    fn a_file_module_does_not_rename_what_an_open_root_calls() {
+        let dir = tempfile::tempdir().expect("temporary package directory");
+        let util_text = "pub fn helper() -> Nat { 1 }\n\nfn private() -> Nat { 2 }\n";
+        std::fs::write(dir.path().join("util.trb"), util_text).expect("write util.trb");
+        let root: Uri = format!("file://{}", dir.path().join("main.trb").display())
+            .parse()
+            .unwrap();
+        let util: Uri = format!("file://{}", dir.path().join("util.trb").display())
+            .parse()
+            .unwrap();
+        let source = "mod util\n\nfn main() -> Nil { let _ = util::helper() }\n";
+
+        let mut harness = TestHarness::new();
+        harness.open_document(&root, source);
+        harness.open_document(&util, util_text);
+        assert_eq!(harness.next_diagnostics().uri, root);
+
+        let mut prepare = |line, character| {
+            harness.request::<PrepareRenameRequest>(TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri: util.clone() },
+                position: lsp_types::Position { line, character },
+            })
+        };
+        assert_eq!(prepare(0, 8), None, "`helper`, called from `main.trb`");
+        assert!(prepare(2, 4).is_some(), "`private`");
+    }
+
+    /// A file module open in the editor is the source input its package
+    /// reads: opening, editing, and closing it republishes the diagnostics of
+    /// an open root of that package.
+    #[test]
+    fn an_open_file_module_buffer_is_what_its_package_reads() {
+        let dir = tempfile::tempdir().expect("temporary package directory");
+        std::fs::write(
+            dir.path().join("util.trb"),
+            "pub fn helper() -> Nat { 1 }\n",
+        )
+        .expect("write util.trb");
+        let root: Uri = format!("file://{}", dir.path().join("main.trb").display())
+            .parse()
+            .unwrap();
+        let util: Uri = format!("file://{}", dir.path().join("util.trb").display())
+            .parse()
+            .unwrap();
+        let source = "mod util\n\nfn main() -> Nil { let _ = util::helper() }\n";
+
+        let mut harness = TestHarness::new();
+        assert_eq!(
+            harness
+                .open_document_with_diagnostics(&root, source)
+                .diagnostics,
+            Vec::new()
+        );
+
+        // Opening the buffer publishes it, then the root that reads it.
+        harness.open_document(&util, "pub fn other() -> Nat { 1 }\n");
+        let republished = harness.next_diagnostics();
+        assert_eq!(republished.uri, root);
+        assert_ne!(
+            republished.diagnostics,
+            Vec::new(),
+            "the root reads the buffer, which has no `helper`"
+        );
+
+        // Editing the buffer back republishes the root without errors.
+        harness.notify::<DidChangeTextDocument>(DidChangeTextDocumentParams {
+            text_document: lsp_types::VersionedTextDocumentIdentifier {
+                uri: util.clone(),
+                version: 2,
+            },
+            content_changes: vec![TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: "pub fn helper() -> Nat { 2 }\n".to_owned(),
+            }],
+        });
+        assert_eq!(harness.next_diagnostics().uri, util);
+        let republished = harness.next_diagnostics();
+        assert_eq!(
+            (republished.uri, republished.diagnostics),
+            (root.clone(), Vec::new())
+        );
+
+        // Closing it clears its diagnostics, then republishes the root
+        // against the file on disk.
+        harness.notify::<DidCloseTextDocument>(DidCloseTextDocumentParams {
+            text_document: lsp_types::TextDocumentIdentifier { uri: util.clone() },
+        });
+        assert_eq!(harness.next_diagnostics().uri, util);
+        let republished = harness.next_diagnostics();
+        assert_eq!(
+            (republished.uri, republished.diagnostics),
+            (root, Vec::new())
+        );
     }
 
     #[test]

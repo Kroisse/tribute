@@ -30,8 +30,8 @@ pub fn specialized_package<'db>(
         [package]
             .into_iter()
             .chain(analysis::transitive_packages(db, table))
-            .filter_map(|package| analysis::parsed_package(db, package))
-            .map(|parsed| parsed.span_map(db)),
+            .filter_map(|package| analysis::package_tree(db, package))
+            .map(|tree| tree.span_map(db)),
     );
     let compiler_intrinsics = match ast_to_ir::registered_compiler_intrinsics(checked.module(db)) {
         Ok(registered) => registered,

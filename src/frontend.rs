@@ -14,8 +14,8 @@ use tribute_front::analysis;
 use tribute_front::ast::SpanMaps;
 use tribute_front::ast_to_ir;
 use tribute_front::monomorphize::{self, SpecializationInput, SpecializationOutput};
-use tribute_front::query as ast_query;
 use tribute_front::resolve::NameDisplay;
+use tribute_front::source_tree::source_tree_of;
 use tribute_front::typeck as ast_typeck;
 use trunk_ir::{IrContext, Module};
 
@@ -65,7 +65,7 @@ pub(crate) fn merge_and_lower_to_ir<'db>(
         ast_to_ir::LoweringEnvironment {
             span_map: frontend_spans(db, source),
             runtime_types: prepared.runtime_types.clone(),
-            merged_sources: vec![crate::prelude::PRELUDE_URI.to_owned()],
+            merged_sources: merged_sources(db, source),
         },
     )
     .lower_to_ir(db, &mut context, source.uri(db).as_str());
@@ -169,11 +169,23 @@ fn prepare_frontend_details<'db>(
     })
 }
 
-/// The span maps of a user source and of package std, which locate the
-/// nodes of the module merged from both.
+/// The span maps of a user source's package, with its file modules, and of
+/// package std, which locate the nodes of the module merged from both.
 pub(crate) fn frontend_spans(db: &dyn salsa::Database, source: SourceCst) -> SpanMaps<'_> {
     let prelude = crate::prelude::prelude_span_map(db);
-    SpanMaps::new(ast_query::span_map(db, source).into_iter().chain(prelude))
+    let package = source_tree_of(db, source).map(|tree| tree.span_map(db));
+    SpanMaps::new(package.into_iter().chain(prelude))
+}
+
+/// The sources merged into a user source's module besides itself: the files
+/// of its file modules, and package std.
+fn merged_sources(db: &dyn salsa::Database, source: SourceCst) -> Vec<String> {
+    let files = source_tree_of(db, source).map_or(&[][..], |tree| &tree.files()[1..]);
+    files
+        .iter()
+        .map(|file| file.source.uri(db).as_str().to_owned())
+        .chain([crate::prelude::PRELUDE_URI.to_owned()])
+        .collect()
 }
 
 /// Arena IR together with the registered compiler intrinsics the shared CPS

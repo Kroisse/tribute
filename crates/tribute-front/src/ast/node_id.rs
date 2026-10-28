@@ -128,7 +128,7 @@ pub fn owner_hash(key: impl Hash) -> u64 {
 /// This produces a stable `u64` hash used to tag NodeIds so that nodes
 /// from different source files never collide.
 pub fn source_hash(uri: &str) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut hasher = rustc_hash::FxHasher::default();
     uri.hash(&mut hasher);
     hasher.finish()
 }

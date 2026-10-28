@@ -1,0 +1,6 @@
+---
+source: tests/integration/file_modules.rs
+expression: "located_diagnostics(&db, root)"
+---
+- "/pkg/src/main.trb:0..40: module `util` has a body, but the file `/pkg/src/util.trb` also declares it"
+- "/pkg/src/main.trb:61..70: unresolved name `util::run`"

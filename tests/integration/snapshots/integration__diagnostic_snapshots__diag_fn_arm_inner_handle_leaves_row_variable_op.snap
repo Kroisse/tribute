@@ -6,10 +6,12 @@ expression: result.diagnostics
   span:
     start: 324
     end: 327
+    source: 9659900100624592365
   severity: Error
   labels:
     - span:
         start: 440
         end: 480
+        source: 9659900100624592365
       message: "this use passes effects that include an `op` operation"
   phase: Lowering
