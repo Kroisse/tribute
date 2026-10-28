@@ -420,11 +420,15 @@ pass, pass 검증기와 pass 바깥의 분석 소비자가 이를 공유한다. 
 #### 범위 anchor
 
 범위 재사용의 단위는 **anchor**다. Anchor는 `IsolatedFromAbove` flag를 가진
-operation이며, 어떤 operation의 anchor 체인은 그 operation 자신(anchor인 경우)
-부터 루트까지의 모든 anchor 조상이다. `core.module`과 각 dialect의 callable
-정의가 anchor이고, 범위 규칙은 특정 dialect의 operation 이름을 가정하지 않는다.
-Flag는 operation을 정의한 dialect가 선언하므로, anchor 여부는 dialect가
-자신의 operation에 대해 내리는 결정이다.
+operation이다. 어떤 operation의 **루트**는 parent block이 없는 가장 바깥
+조상(또는 자신)이고, anchor 체인은 그 operation 자신(anchor인 경우)부터 루트
+까지의 모든 anchor 조상이다. 루트는 어느 block에도 속하지 않는 것이 정상
+상태이다. 파싱이나 pass manager가 다루는 최상위 `core.module`이 그 예이며,
+그 module과 그 아래의 모든 callable은 module에서 끝나는 anchor 체인을 갖는다.
+`core.module`과 각 dialect의 callable 정의가 anchor이고, 범위 규칙은 특정
+dialect의 operation 이름을 가정하지 않는다. Flag는 operation을 정의한
+dialect가 선언하므로, anchor 여부는 dialect가 자신의 operation에 대해 내리는
+결정이다.
 
 `IsolatedFromAbove`는 SSA 값이 바깥에서 subtree 안으로 흘러들지 않는다는
 사실만 증명한다. Subtree 안의 operation이 symbol reference로 바깥의 정의를
@@ -433,8 +437,13 @@ Flag는 operation을 정의한 dialect가 선언하므로, anchor 여부는 dial
 그 분석의 읽기 범위가 subtree에 국한된다는 증명이 아니다. 읽기 범위는 아래의
 footprint 선언이 정한다.
 
-Block에 붙어 있지 않은 detached operation과 그 subtree는 anchor 체인이 없다.
-Detached 대상에 대한 분석 결과는 context 전체 의존으로 취급한다.
+루트가 anchor가 아닌 subtree는 anchor 체인이 없다. 아직 block에 넣지 않은
+`arith.const` 하나나, callable에서 떼어낸 region이 그 예다. 체인이 없는 대상에
+대한 분석 결과는 context 전체 의존으로 취급한다. 반대로 루트가 anchor인
+subtree는 붙어 있지 않아도 체인을 갖는다. 아직 module에 넣지 않은 함수
+정의의 체인은 그 함수 하나이고, module에 넣는 순간부터 module까지 이어진다.
+이 둘을 구별하는 것은 operation이 어디에 붙어 있는가가 아니라 루트의 flag
+이므로, 최상위 module과 일시적으로 떼어낸 subtree는 같은 규칙으로 다룬다.
 
 #### 읽기 footprint
 
@@ -462,13 +471,24 @@ Detached 대상에 대한 분석 결과는 context 전체 의존으로 취급한
 
 Symbol reference의 해석, module 집계, type alias와 module metadata 읽기는
 view가 제공하지 않는다. 그런 사실이 필요한 분석은 그것을 담은 선행 분석에
-의존한다. 결과적으로 한 결과의 footprint는 **대상의 anchor 체인 가운데 가장
-안쪽 anchor**와 **선행 분석들의 footprint의 합집합**이다. 선행 분석 가운데
-하나라도 context 전체 의존이면 의존 분석도 context 전체 의존을 상속한다.
+의존한다. 결과적으로 한 결과의 footprint는 두 부분으로 나뉜다.
+
+- **직접 footprint**: 대상의 anchor 체인 가운데 가장 안쪽 anchor. 분석이
+  view로 직접 읽은 범위다.
+- **선행 의존**: 조회한 선행 분석 결과들. 선행 분석의 footprint는 의존
+  분석의 직접 footprint에 합쳐지지 않으며, 선행 분석 결과 자체의 신선도로
+  확인한다.
+
+두 부분을 합치지 않는 이유는 아래 신선도 판정에서 드러난다. Module 집계에
+의존하는 함수 범위 결과의 stamp에 module anchor 카운터가 직접 들어가면,
+형제 함수의 변경이 그 카운터를 올려 집계의 재계산 결과가 같아도 함수 결과가
+버려지므로 early cutoff가 성립하지 않는다. 선행 분석이 context 전체 의존인
+경우도 같다. 의존 분석은 전체 의존을 상속하지 않고, 그 선행 분석의 신선도를
+revision으로 확인한 뒤 재계산 결과의 동등성으로 살아남을 수 있다.
 
 Module을 대상으로 subtree 선언을 한 분석은 module 안의 모든 함수 본문을
-읽는 것이므로 그 module anchor를 footprint로 갖고, 어느 함수의 변경에도
-무효화된다. 함수마다 계산되는 결과와 그것을 합치는 module 집계는 서로 다른
+읽는 것이므로 그 module anchor를 직접 footprint로 갖고, 어느 함수의 변경에도
+재계산된다. 함수마다 계산되는 결과와 그것을 합치는 module 집계는 서로 다른
 분석이며, 집계는 함수별 결과를 선행 분석으로 조회한다.
 
 #### 변경 보고
@@ -497,9 +517,11 @@ Module을 대상으로 subtree 선언을 한 분석은 module 안의 모든 함�
 
 Anchor 안에서 정의된 값의 사용자는 그 anchor 안에 있으므로, RAUW와 operand
 교체가 올리는 사용자의 체인은 대개 정의 지점의 체인과 같다. Anchor 자신의
-결과처럼 바깥에서 쓰이는 값은 사용자의 체인을 따로 올린다. Detached
-operation의 체인은 비어 있으므로, detached subtree 안의 변경은 그 operand가
-가리키는 바깥 값의 정의 체인에만 영향을 준다.
+결과처럼 바깥에서 쓰이는 값은 사용자의 체인을 따로 올린다. 체인이 없는
+detached subtree 안의 변경은 그 operand가 가리키는 바깥 값의 정의 체인에만
+영향을 준다. 루트가 anchor인 detached subtree 안의 변경은 그 subtree 안의
+체인을 올리며, 이 체인은 subtree가 module에 붙은 뒤에도 같은 카운터로
+이어진다.
 
 삭제된 anchor의 `OpRef`는 재사용되지 않거나, 재사용되면 그 카운터가 이어진다.
 어느 쪽이든 삭제된 anchor를 footprint로 가진 결과는 삭제가 올린 카운터로
@@ -515,18 +537,21 @@ operation의 체인은 비어 있으므로, detached subtree 안의 변경은 �
 
 - **Context 전체 의존 결과**: 전체 revision. identity와 revision이 모두 같을
   때만 신선하다.
-- **범위 결과**: 미분류 변경 카운터와 footprint의 각 anchor 카운터. identity가
-  같고 기록한 모든 카운터가 그대로일 때만 신선하다. 전체 revision은 대조하지
-  않는다. 그렇지 않으면 다른 함수의 변경이 revision을 올려 재사용이 원리적으로
-  불가능해진다.
+- **범위 결과**: 미분류 변경 카운터와 **직접 footprint**의 anchor 카운터.
+  identity가 같고 기록한 카운터가 그대로일 때만 직접 읽은 범위가 신선하다.
+  전체 revision과 선행 분석의 anchor 카운터는 대조하지 않는다. 전체 revision을
+  대조하면 다른 함수의 변경이 재사용을 막고, 선행 분석의 카운터를 대조하면
+  아래의 early cutoff가 성립하지 않는다.
 
-범위 결과의 신선도는 선행 분석을 포함한다. 의존 분석의 캐시 hit은 반환 전에
-선행 분석의 신선도를 확인한다. 선행 분석이 더 이상 신선하지 않으면 그것을 다시
-계산하고, 분석이 결과 동등성을 선언했고 새 결과가 이전과 같으면 의존 분석을
+범위 결과의 신선도는 직접 읽은 범위의 검사와 선행 의존의 검사, 두 단계로
+이루어진다. 의존 분석의 캐시 hit은 반환 전에 각 선행 분석 결과를 같은 규칙으로
+재귀적으로 확인한다. 선행 분석이 더 이상 신선하지 않으면 그것을 다시 계산하고,
+그 분석이 결과 동등성을 선언했고 새 결과가 이전과 같으면 의존 분석을
 유지한다(early cutoff). 다르면 의존 분석과 그 의존 분석을 모두 무효화한다.
 동등성을 선언하지 않은 선행 분석은 재계산되면 항상 의존 분석을 무효화한다.
 Module 집계 분석은 함수 어느 하나의 변경에도 재계산되지만, 결과가 같으면 그
-집계에 의존하는 함수 범위 결과는 살아남는다.
+집계에 의존하는 함수 범위 결과는 직접 footprint의 anchor가 바뀌지 않은 한
+살아남는다. 직접 읽은 범위의 변경은 선행 분석의 동등성으로 가려지지 않는다.
 
 명시적 무효화와 의존성 전파 규칙은 그대로다: 선행 분석의 무효화는 모든
 전이적 의존 분석을 제거하고, 의존 분석의 무효화는 선행 분석을 유지한다.
@@ -587,8 +612,12 @@ anchor여야 한다는 규칙은 그대로다.
 범위 재사용을 구현하는 변경은 다음을 각각 구별하는 회귀를 갖춘다. 범위 선언이
 없는 분석은 모든 경우에 context 전체 규칙으로 동작해야 한다.
 
+- 최상위 `core.module`(parent block이 없는 루트) 아래 함수의 결과가 그 함수와
+  module로 이어지는 anchor 체인을 갖고, 루트가 anchor가 아닌 detached
+  subtree의 결과만 context 전체 의존이 되는 것.
 - 형제 함수 변경 뒤 함수 범위 결과의 재사용과, 그 변경이 module 집계를
-  무효화하는 것. 집계의 재계산 결과가 같을 때 의존 결과가 살아남는 것.
+  무효화하는 것. 집계의 재계산 결과가 같을 때 그 집계에 의존하는 형제 함수의
+  결과가 살아남고, 직접 읽은 함수의 결과는 집계가 같아도 버려지는 것.
 - 이동(reparenting)이 이전 소유자와 새 소유자 양쪽의 결과를 무효화하는 것.
 - RAUW와 operand 교체가 정의자와 사용자 양쪽의 결과를 무효화하는 것. Anchor의
   결과처럼 바깥에서 쓰이는 값의 경우를 포함한다.
