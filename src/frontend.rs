@@ -1,9 +1,9 @@
 //! Frontend assembly for Tribute.
 //!
 //! Tracked queries take a user source through parsing, name resolution, and
-//! type checking against package std, check compiler intrinsics, continue
-//! std's own specialization with the user's bodies, and lower the result to
-//! source-logical arena IR. Std's specialization and runtime items depend on
+//! type checking against package std, check compiler intrinsics, specialize
+//! the user's package, merge it with std's own specialization, and lower the
+//! result to source-logical arena IR. Std's specialization and runtime items depend on
 //! std alone, so an edit of the user source reuses them. The stage chain in
 //! [`crate::pipeline`] runs on that IR.
 
@@ -13,7 +13,7 @@ use tribute_core::diagnostic::{Diagnostic, DiagnosticSeverity};
 use tribute_front::analysis;
 use tribute_front::ast::SpanMaps;
 use tribute_front::ast_to_ir;
-use tribute_front::monomorphize::{SpecializationInput, SpecializationOutput};
+use tribute_front::monomorphize::{self, SpecializationInput, SpecializationOutput};
 use tribute_front::query as ast_query;
 use tribute_front::resolve::NameDisplay;
 use tribute_front::typeck as ast_typeck;
@@ -85,8 +85,8 @@ struct PreparedFrontend<'db> {
     runtime_types: ast_to_ir::runtime_items::RuntimeTypes,
 }
 
-/// Specialize the checked user module, continuing package std's
-/// specialization.
+/// Specialize the checked user module and merge it with the specializations
+/// of the packages it depends on.
 ///
 /// Returns `None` after reporting why it does not specialize; read those
 /// diagnostics with [`prepare_frontend_diagnostics`].
@@ -117,24 +117,23 @@ fn prepare_frontend_details<'db>(
     source: SourceCst,
 ) -> Option<PreparedFrontend<'db>> {
     // Type checking reads package std's declarations without copying them.
-    // Specialization continues std's own, which depends on std alone, with
-    // the user's bodies; the result has std's bodies and per-expression
-    // metadata ahead of the user's.
-    let prelude = match crate::prelude::prelude_module(db) {
-        Some(_) => Some(crate::prelude::specialized_prelude(db)?),
-        None => None,
+    // The user's package is specialized on its own, cloning the
+    // dependencies' generic bodies, and merged with each dependency's own
+    // specialization; the result has the dependencies' bodies and
+    // per-expression metadata ahead of the user's. Without a prelude there
+    // are no runtime declarations to check.
+    let runtime_types = match crate::prelude::prelude_module(db) {
+        Some(_) => crate::prelude::prelude_runtime_types(db)?.clone(),
+        None => Default::default(),
     };
+    let environment = *crate::prelude::frontend_environment(db);
     let names = diagnostic_names(db);
-    let input = match prelude {
-        Some(prelude) => SpecializationInput::continuing(
-            db,
-            typed,
-            prelude.checked,
-            prelude.specialized,
-            names.clone(),
-        ),
-        None => SpecializationInput::new(db, typed, None, names.clone()),
-    };
+    let input = SpecializationInput::package(
+        db,
+        typed,
+        monomorphize::checked_dependencies(db, environment),
+        names.clone(),
+    );
     let span_map = frontend_spans(db, source);
 
     let compiler_intrinsics = match ast_to_ir::registered_compiler_intrinsics(input.module()) {
@@ -146,14 +145,17 @@ fn prepare_frontend_details<'db>(
             return None;
         }
     };
-    // Without a prelude there are no runtime declarations to check.
-    let runtime_types = prelude
-        .map(|prelude| prelude.runtime_types.clone())
-        .unwrap_or_default();
-
     let input = input.with_compiler_intrinsics(compiler_intrinsics);
-    let specialized = match tribute_front::monomorphize::monomorphize_functions(db, input) {
-        Ok(specialized) => specialized,
+    let specialized = monomorphize::monomorphize_functions(db, input).and_then(|own| {
+        let dependencies = monomorphize::specialized_dependencies(db, environment);
+        // A dependency that does not specialize has reported why.
+        let Some(dependencies) = dependencies else {
+            return Ok(None);
+        };
+        monomorphize::merge_specializations(db, dependencies.into_iter().chain([own])).map(Some)
+    });
+    let specialized = match specialized {
+        Ok(specialized) => specialized?,
         Err(errors) => {
             for error in errors {
                 error.diagnostic(&span_map).accumulate(db);
@@ -249,86 +251,89 @@ mod tests {
         counts
     }
 
-    /// Assert that continuing std's specialization gives the merged result:
-    /// the same sources in order, and the same instances and metadata.
-    /// Returns how many instances the user module adds to std's.
-    fn assert_continues_merged(db: &dyn salsa::Database, name: &str, source: SourceCst) -> usize {
+    /// Assert that merging the per-package specializations gives the result
+    /// of specializing the merged bodies at once: the same sources in order,
+    /// and the same instances and metadata. Returns how many instances the
+    /// merged result has beyond std's.
+    fn assert_packages_merge_like_bodies(
+        db: &dyn salsa::Database,
+        name: &str,
+        source: SourceCst,
+    ) -> usize {
         let typed = parse_and_lower_ast(db, source)
             .unwrap_or_else(|| panic!("{name}: the source does not parse"));
         let merged = merged_specialization(db, source)
             .unwrap_or_else(|| panic!("{name}: the merged specialization fails"));
-        let continued = prepare_frontend_for_lowering(db, typed, source)
-            .unwrap_or_else(|| panic!("{name}: the continued specialization fails"));
+        let packaged = prepare_frontend_for_lowering(db, typed, source)
+            .unwrap_or_else(|| panic!("{name}: the per-package specialization fails"));
         let sources = *merged.source_entries(db);
-        assert_eq!(sources, *continued.source_entries(db), "{name}: sources");
-        let (merged_module, continued_module) = (merged.module(db), continued.module(db));
+        assert_eq!(sources, *packaged.source_entries(db), "{name}: sources");
+        let (merged_module, packaged_module) = (merged.module(db), packaged.module(db));
         assert_eq!(
             merged_module.entries[..sources],
-            continued_module.entries[..sources],
+            packaged_module.entries[..sources],
             "{name}: source entries"
         );
         assert_eq!(
             counts(&merged_module.entries[sources..]),
-            counts(&continued_module.entries[sources..]),
+            counts(&packaged_module.entries[sources..]),
             "{name}: instances"
         );
-        let (merged_decls, continued_decls) = (merged.declarations(db), continued.declarations(db));
+        let (merged_decls, packaged_decls) = (merged.declarations(db), packaged.declarations(db));
         assert_eq!(
             counts(&merged_decls.function_types),
-            counts(&continued_decls.function_types),
+            counts(&packaged_decls.function_types),
             "{name}: function types"
         );
         assert_eq!(
             counts(&merged_decls.constructor_types.schemes),
-            counts(&continued_decls.constructor_types.schemes),
+            counts(&packaged_decls.constructor_types.schemes),
             "{name}: constructor schemes"
         );
         assert_eq!(
             merged_decls.constructor_types.specialized_enum_variants,
-            continued_decls.constructor_types.specialized_enum_variants,
+            packaged_decls.constructor_types.specialized_enum_variants,
             "{name}: enum variants"
         );
         assert_eq!(
-            merged_decls.ability_definitions, continued_decls.ability_definitions,
+            merged_decls.ability_definitions, packaged_decls.ability_definitions,
             "{name}: ability definitions"
         );
         assert_eq!(
-            merged_decls.well_known_types, continued_decls.well_known_types,
+            merged_decls.well_known_types, packaged_decls.well_known_types,
             "{name}: well-known types"
         );
         assert!(
-            merged.expression_types(db) == continued.expression_types(db),
+            merged.expression_types(db) == packaged.expression_types(db),
             "{name}: expression metadata"
         );
         assert_eq!(
             merged.compiler_intrinsics(db),
-            continued.compiler_intrinsics(db),
+            packaged.compiler_intrinsics(db),
             "{name}: compiler intrinsics"
         );
         assert_eq!(
             merged.function_instances(db),
-            continued.function_instances(db),
+            packaged.function_instances(db),
             "{name}: function instances"
         );
         assert_eq!(
             merged.nominal_instances(db),
-            continued.nominal_instances(db),
+            packaged.nominal_instances(db),
             "{name}: nominal instances"
         );
-        let prelude = crate::prelude::specialized_prelude(db)
-            .as_ref()
-            .expect("std specializes")
-            .specialized;
-        continued_module.entries.len()
+        let prelude = *monomorphize::specialized_package(db, *crate::prelude::std_package(db))
+            .expect("std specializes");
+        packaged_module.entries.len()
             - prelude.module(db).entries.len()
             - (sources - *prelude.source_entries(db))
     }
 
     #[salsa_test]
-    fn continuing_std_matches_the_merged_specialization(db: &crate::TributeDatabaseImpl) {
+    fn per_package_specialization_matches_the_merged_one(db: &crate::TributeDatabaseImpl) {
         let source = SourceCst::from_source_str(
             db,
-            "continued.trb",
+            "packaged.trb",
             r#"
 use std::io::{Io, print_line}
 
@@ -366,11 +371,11 @@ fn main() ->{Io} Nil {
             "{:?}",
             frontend_diagnostics(db, source)
         );
-        assert!(assert_continues_merged(db, "continued.trb", source) > 0);
+        assert!(assert_packages_merge_like_bodies(db, "packaged.trb", source) > 0);
     }
 
     #[salsa_test]
-    fn continuing_std_matches_merging_on_examples(db: &crate::TributeDatabaseImpl) {
+    fn per_package_specialization_matches_merging_on_examples(db: &crate::TributeDatabaseImpl) {
         fn examples(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
             for entry in std::fs::read_dir(dir).expect("lang-examples directory") {
                 let path = entry.expect("directory entry").path();
@@ -395,7 +400,7 @@ fn main() ->{Io} Nil {
                 .iter()
                 .any(|diagnostic| diagnostic.inner.severity == DiagnosticSeverity::Error);
             if !has_errors {
-                assert_continues_merged(db, &file.display().to_string(), source);
+                assert_packages_merge_like_bodies(db, &file.display().to_string(), source);
                 compared += 1;
             }
         }

@@ -74,7 +74,7 @@ struct SpecializationEntry<'db> {
 /// Generate specialized copies of generic functions for each instantiation.
 ///
 /// The generic declarations are looked up in `module`, then in
-/// `dependency`. An instance whose path is in `generated` already exists and
+/// `dependencies`. An instance whose path is in `generated` already exists and
 /// is not generated again; each generated path is added to it.
 ///
 /// Returns a list of new specialized `FuncDecl`s and their corresponding
@@ -82,13 +82,13 @@ struct SpecializationEntry<'db> {
 pub(super) fn generate_specializations<'db>(
     db: &'db dyn salsa::Database,
     module: &DeclTable<TypedRef<'db>>,
-    dependency: Option<&DeclTable<TypedRef<'db>>>,
+    dependencies: &[&DeclTable<TypedRef<'db>>],
     instantiations: &HashMap<FuncDefId<'db>, HashSet<InstanceKey<'db>>>,
     function_types: &[(SymbolPath, TypeScheme<'db>)],
     compiler_intrinsics: &crate::SortedMap<NodeId, Symbol>,
     generated: &mut HashSet<SymbolPath>,
 ) -> GeneratedSpecializations<'db> {
-    let tables = || dependency.into_iter().chain([module]);
+    let tables = || dependencies.iter().copied().chain([module]);
     let func_decls = collect_func_decls(tables());
     let extern_functions = collect_extern_function_decls(tables());
     let scheme_map: HashMap<SymbolPath, TypeScheme<'db>> = function_types.iter().cloned().collect();
@@ -206,7 +206,7 @@ pub(super) fn generate_struct_specializations<'db>(
     module: &DeclTable<TypedRef<'db>>,
     instantiations: &HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
 ) -> Vec<(Placement, StructDecl)> {
-    let index = NominalIndex::new(db, module, None);
+    let index = NominalIndex::new(db, module, &[]);
     generate_struct_specializations_with_index(db, &index, instantiations)
 }
 
@@ -247,7 +247,7 @@ pub(super) fn generate_enum_specializations<'db>(
     module: &DeclTable<TypedRef<'db>>,
     instantiations: &HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
 ) -> Vec<(Placement, EnumDecl)> {
-    let index = NominalIndex::new(db, module, None);
+    let index = NominalIndex::new(db, module, &[]);
     generate_enum_specializations_with_index(db, &index, instantiations)
 }
 
@@ -917,7 +917,7 @@ mod tests {
         let specializations = generate_specializations(
             &db,
             &module,
-            None,
+            &[],
             &instantiations,
             &function_types,
             &crate::SortedMap::default(),

@@ -601,8 +601,8 @@ one result. `Result`와 `Params`는 source-logical type이다. Convention은 key
 convention은 그 operation이 선언한 속성이고, physical operation의 convention은
 [`ConventionBearing` interface](cps-effects.md#pre-cps-callable-shape)로만 읽고
 쓴다. Type verifier는
-result 하나와 parameter 0개 이상, convention domain, 모든 component type의
-resolution을 검사하며 physical `func.func_sig`나 `closure.closure`를 component로
+result 하나와 parameter 0개 이상, 모든 component type의 resolution을 검사하며,
+convention 속성과 physical `func.func_sig`나 `closure.closure` component를
 허용하지 않는다. 전체 규칙은
 [cps-effects.md](cps-effects.md#pre-cps-callable-shape)에 있다.
 
@@ -638,8 +638,9 @@ Class 특수화가 만드는 `tribute_cps` operation은 다음과 같다. 각각
 Operation 하나의 형상, 의미, 검증, 소유권, 위치 계약은 그 operation의
 `#[dialect]` 선언 doc comment가 정한다
 ([`tribute_control`](../crates/tribute-ir/src/dialect/tribute_control.rs),
-`tribute_cps`, [`ability`](../crates/tribute-ir/src/dialect/ability.rs)). 이 문서는
-여러 operation에 걸친 규칙만 다룬다.
+[`tribute_cps`](../crates/tribute-ir/src/dialect/tribute_cps.rs),
+[`ability`](../crates/tribute-ir/src/dialect/ability.rs)). 이 문서는 여러
+operation에 걸친 규칙만 다룬다.
 
 `func.constant`, `func.unreachable`의 logical 복제는 없다. Named function value는
 `func_ref`가 표현한다. Source [`become`](syntax.md#tail-call-become)은

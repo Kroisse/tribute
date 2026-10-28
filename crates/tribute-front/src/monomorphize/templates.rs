@@ -18,8 +18,7 @@ use crate::typeck::ExpressionTypeMetadata;
 /// and the expression metadata of their nodes, returning how many were
 /// removed. Runs before nominal collection, so a nominal instance only a
 /// template mentions is not generated. A generic intrinsic keeps its
-/// identity: a specialization that continues this one instantiates it at its
-/// own types.
+/// identity.
 pub(super) fn remove_function_templates<'db>(
     db: &'db dyn salsa::Database,
     module: &mut DeclTable<TypedRef<'db>>,
