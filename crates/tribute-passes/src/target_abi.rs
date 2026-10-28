@@ -29,7 +29,7 @@ use trunk_ir::types::{Attribute, AttributeMap, Location, TypeData};
 use trunk_ir::walk::{WalkAction, walk_op};
 use trunk_ir::{Symbol, SymbolPath};
 
-use crate::convention_table::TrapEntries;
+use crate::convention_table::{ConventionTables, EntryLayout};
 
 const ROOT_MAIN_SYMBOL: &str = "__tribute_main";
 const ROOT_DONE_K_SYMBOL: &str = "__tribute_done_k";
@@ -544,7 +544,9 @@ fn build_cps_root_call(
     } = contract;
     let location = ctx.op(worker_op).location;
 
-    let mut traps = TrapEntries::default();
+    let mut tables = ConventionTables::new(PhysicalValueEntries {
+        evidence: evidence_ty,
+    });
     let terminal = TerminalFunctions::define(
         ctx,
         location,
@@ -553,7 +555,7 @@ fn build_cps_root_call(
         Symbol::new(ROOT_DONE_K_SYMBOL),
         Symbol::new(ROOT_UNHANDLED_SYMBOL),
     )?;
-    let built = terminal.build_frame(ctx, location, evidence_ty, &mut traps, module_block);
+    let built = terminal.build_frame(ctx, location, &mut tables, module_block);
     for &op in &built.ops {
         ctx.push_op(entry, op);
     }
@@ -619,7 +621,9 @@ fn compose_value_delimiters(ctx: &mut IrContext, module: Module) -> Result<(), T
         .filter_map(|op| effect::Delimit::from_op(ctx, op).ok())
         .collect();
     let mut terminals: Vec<(TypeRef, TerminalFunctions)> = Vec::new();
-    let mut traps = TrapEntries::default();
+    let mut tables = ConventionTables::new(PhysicalValueEntries {
+        evidence: evidence_ty,
+    });
     for delimit in delimiters {
         let op = delimit.op_ref();
         let location = ctx.op(op).location;
@@ -671,7 +675,7 @@ fn compose_value_delimiters(ctx: &mut IrContext, module: Module) -> Result<(), T
             .op(op)
             .parent_block
             .ok_or_else(|| TargetAbiError::new("value delimiter: operation is detached"))?;
-        let built = terminal.build_frame(ctx, location, evidence_ty, &mut traps, module_block);
+        let built = terminal.build_frame(ctx, location, &mut tables, module_block);
         for &new in &built.ops {
             ctx.insert_op_before(block, op, new);
         }
@@ -874,14 +878,12 @@ impl TerminalFunctions {
     }
 
     /// Build a fresh cell and the frame whose `Done` writes it. Trap entries
-    /// fill the value slots of its closures in `module_block`, with
-    /// `evidence` as an evidence parameter's type.
+    /// fill the value slots of its closures in `module_block`.
     fn build_frame(
         &self,
         ctx: &mut IrContext,
         location: Location,
-        evidence: TypeRef,
-        traps: &mut TrapEntries,
+        tables: &mut ConventionTables<PhysicalValueEntries>,
         module_block: BlockRef,
     ) -> TerminalFrame {
         let mut ops = Vec::new();
@@ -911,13 +913,12 @@ impl TerminalFunctions {
                 closure.result(ctx)
             };
         let mut table = |ctx: &mut IrContext, entry: &Symbol, closure_ty| {
-            traps.table(
+            tables.table(
                 ctx,
                 module_block,
                 location,
-                CallingConvention::Cps,
-                SymbolPath::new([entry.clone()]),
-                |ctx, slot| physical_value_entry(ctx, closure_ty, slot, evidence),
+                closure_ty,
+                [(CallingConvention::Cps, SymbolPath::new([entry.clone()]))],
             )
         };
         let done_entries = &table(ctx, &self.done, self.frame.done);
@@ -1255,11 +1256,28 @@ fn physical_continuation_entry(ctx: &mut IrContext, callable: func::FuncSig) -> 
         .with_call_conv(ctx, func::CallConv::Tail)
 }
 
+/// The physical entries of the value slots of a generated continuation,
+/// with `evidence` as an evidence parameter's type. A continuation is
+/// entered only through `Cps`, so these slots hold trap entries.
+struct PhysicalValueEntries {
+    evidence: TypeRef,
+}
+
+impl EntryLayout for PhysicalValueEntries {
+    fn entry_signature(
+        &self,
+        ctx: &mut IrContext,
+        closure_ty: TypeRef,
+        convention: CallingConvention,
+    ) -> TypeRef {
+        physical_value_entry(ctx, closure_ty, convention, self.evidence)
+    }
+}
+
 /// The physical signature of the entry through `convention`, a value
 /// convention, of a closure of the physical type `closure_ty`: the closure's
 /// callable laid out by that convention, with the closure as the
-/// environment. A generated continuation is entered only through `Cps`, so
-/// its value entries are trap entries of this signature.
+/// environment.
 fn physical_value_entry(
     ctx: &mut IrContext,
     closure_ty: TypeRef,

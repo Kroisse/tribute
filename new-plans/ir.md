@@ -878,6 +878,13 @@ row가 요구하는 것보다 강한 `Cps` 인스턴스이면, 더 약한 conven
 [값 delimiter](cps-effects.md#값-delimiter)로 worker를 부르는
 [`func_ref` adapter](cps-effects.md#cps-변환의-호출-대상-형상)다.
 
+**생성된 closure.** CPS legalization이 만드는 closure(continuation, handler arm,
+delimiter region)는 source callable 값이 아니다. 그 closure type의 callable은 자기
+convention entry의 signature 자체이며, closure는 자기를 만든 convention으로만
+들어온다. 그래서 다른 convention entry는 모두 trap entry이고 adapter를 두지 않는다.
+Adapter는 source 람다와 `func_ref`에만 있으며, legalization이 만들어
+`closure.lambda`와 `closure.new`에 명시한다.
+
 **Convention table.** Closure 값은 convention table 참조 하나와 capture로 이루어진다
 ([closure 저장 layout](#closure-저장-layout)). Convention table은 closure를 만드는
 code 대상(람다, `func_ref`의 대상과 class 인자)마다 정적으로 하나이고, `Direct`,

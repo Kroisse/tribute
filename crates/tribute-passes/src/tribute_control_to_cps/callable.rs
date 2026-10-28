@@ -75,8 +75,27 @@ impl Converter<'_> {
             .collect();
         let physical_ty = self.convert_type(logical_ty);
         let signature = self.lower_callable_signature(logical_ty, convention);
+        let adapters = self.tables.adapters(
+            self.ctx,
+            self.module_block,
+            location,
+            physical_ty,
+            convention,
+        );
+        let adapters = (!adapters.is_empty()).then(|| {
+            adapters
+                .into_iter()
+                .map(|(convention, adapter)| {
+                    (
+                        convention.keyword().into(),
+                        trunk_ir::SymbolPath::new([adapter]),
+                    )
+                })
+                .collect::<Vec<_>>()
+        });
         let lambda = closure::Lambda::operands(captures)
             .signature(signature)
+            .adapters(adapters)
             .results(physical_ty)
             .regions(body)
             .build(self.ctx, location);
@@ -228,17 +247,21 @@ impl Converter<'_> {
         adapter.set_calling_convention(self.ctx, result_convention);
         self.ctx.push_op(self.module_block, adapter.op_ref());
 
-        let entries = self.traps.table(
+        let adapters = self.tables.adapters(
             self.ctx,
             self.module_block,
             location,
+            closure_ty,
             result_convention,
-            trunk_ir::SymbolPath::new([adapter_symbol]),
-            |ctx, slot| {
-                logical_entry_signature(ctx, closure_ty, slot, |ctx, answer| {
-                    ability::Frame::params(answer).intern(ctx).as_type_ref()
-                })
-            },
+        );
+        let entries = self.tables.table(
+            self.ctx,
+            self.module_block,
+            location,
+            closure_ty,
+            std::iter::once((result_convention, adapter_symbol))
+                .chain(adapters)
+                .map(|(convention, entry)| (convention, trunk_ir::SymbolPath::new([entry]))),
         );
         let closure_new = closure::New::operands(std::iter::empty::<ValueRef>())
             .entries(entries)

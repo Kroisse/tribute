@@ -501,8 +501,9 @@ fn assert_indirect_signature(ctx: &IrContext, owner: func::Func, call: OpRef) {
     }
 }
 
-/// The entry function a convention table implements. The other slots hold
-/// shared trap entries, which are not lifted lambdas.
+/// The entry function that implements a convention table's closure. The
+/// other slots hold shared adapters and trap entries, which are not lifted
+/// lambdas.
 fn implemented_entry<'a>(
     ctx: &IrContext,
     module: Module,
@@ -511,7 +512,10 @@ fn implemented_entry<'a>(
     let entries: Vec<_> = entries
         .into_iter()
         .map(ToString::to_string)
-        .filter(|entry| !entry.starts_with("__tribute_trap_entry_"))
+        .filter(|entry| {
+            !entry.starts_with("__tribute_trap_entry_")
+                && !entry.starts_with("__tribute_entry_adapter_")
+        })
         .collect();
     let [entry] = &entries[..] else {
         panic!("one implemented convention entry, found {entries:?}");
