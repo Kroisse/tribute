@@ -7,7 +7,6 @@ use tree_sitter::Parser;
 use tribute_front::analysis;
 use tribute_front::ast::{SpanMap, SpanMaps};
 use tribute_front::ast_to_ir;
-use tribute_front::monomorphize::{self, SpecializationInput, SpecializationOutput};
 use tribute_front::resolve as ast_resolve;
 use tribute_front::source_file::parse_with_rope;
 use tribute_front::typeck as ast_typeck;
@@ -68,35 +67,23 @@ pub fn frontend_environment(db: &dyn salsa::Database) -> analysis::DependencyTab
     analysis::DependencyTable::new(db, vec![*std_package(db)])
 }
 
-/// Package `std` specialized alone, with the runtime types its runtime
-/// module declares. Both depend only on `std`'s checked result, so a user
-/// package's specialization continues this result without repeating it.
+/// The runtime types package `std`'s runtime module declares. The check
+/// depends only on `std`'s checked result, as `std`'s specialization does.
 ///
-/// Returns `None` without a prelude, or after reporting why `std` does not
-/// specialize.
+/// Returns `None` without a prelude, or after reporting why the runtime
+/// module does not check.
 #[salsa::tracked(returns(as_ref))]
-pub(crate) fn specialized_prelude<'db>(
-    db: &'db dyn salsa::Database,
-) -> Option<SpecializedPrelude<'db>> {
+pub(crate) fn prelude_runtime_types(
+    db: &dyn salsa::Database,
+) -> Option<ast_to_ir::runtime_items::RuntimeTypes> {
     let checked = prelude_module(db)?;
-    let span_map = SpanMaps::new(prelude_span_map(db));
-    let names = analysis::package_names(db, *std_package(db));
-    let compiler_intrinsics = match ast_to_ir::registered_compiler_intrinsics(checked.module(db)) {
-        Ok(registered) => registered,
-        Err(unsupported) => {
-            for directive in unsupported {
-                directive.diagnostic(&span_map, &names).accumulate(db);
-            }
-            return None;
-        }
-    };
     let function_types: HashMap<_, _> = checked
         .declarations(db)
         .function_types
         .iter()
         .cloned()
         .collect();
-    let runtime_types = match ast_to_ir::runtime_items::check_runtime(
+    match ast_to_ir::runtime_items::check_runtime(
         db,
         &ast_to_ir::runtime_items::RuntimeInputs {
             module: checked.module(db),
@@ -105,37 +92,16 @@ pub(crate) fn specialized_prelude<'db>(
         tribute_ir::runtime_items::RUNTIME_MODULE,
         tribute_ir::runtime_items::RUNTIME_ITEMS,
     ) {
-        Ok(types) => types,
+        Ok(types) => Some(types),
         Err(errors) => {
+            let span_map = SpanMaps::new(prelude_span_map(db));
+            let names = analysis::package_names(db, *std_package(db));
             for error in errors {
                 error.diagnostic(&span_map, &names).accumulate(db);
-            }
-            return None;
-        }
-    };
-    let input = SpecializationInput::new(db, checked, None, names.clone())
-        .with_compiler_intrinsics(compiler_intrinsics);
-    match monomorphize::monomorphize_functions(db, input) {
-        Ok(specialized) => Some(SpecializedPrelude {
-            checked,
-            specialized,
-            runtime_types,
-        }),
-        Err(errors) => {
-            for error in errors {
-                error.diagnostic(&span_map).accumulate(db);
             }
             None
         }
     }
-}
-
-/// Package `std`'s checked and specialized results.
-#[derive(Clone, PartialEq, Eq, salsa::SalsaValue)]
-pub(crate) struct SpecializedPrelude<'db> {
-    pub(crate) checked: ast_typeck::TypeCheckOutput<'db>,
-    pub(crate) specialized: SpecializationOutput<'db>,
-    pub(crate) runtime_types: ast_to_ir::runtime_items::RuntimeTypes,
 }
 
 /// The span map of the prelude's parse, which locates its nodes in a module

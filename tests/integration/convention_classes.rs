@@ -11,9 +11,9 @@ use tribute_front::SourceCst;
 fn is_function_header(line: &str, name: &str) -> bool {
     let line = line.trim_start();
     [
-        format!("tribute_control.func @{name}"),
-        format!("tribute_control.func @\"{name}\""),
-        format!("tribute_control.func @\"pkg::{name}\""),
+        format!("tribute_cps.func @{name}"),
+        format!("tribute_cps.func @\"{name}\""),
+        format!("tribute_cps.func @\"pkg::{name}\""),
     ]
     .iter()
     .any(|prefix| {
@@ -25,7 +25,7 @@ fn is_function_header(line: &str, name: &str) -> bool {
 /// Source-logical IR: control callables, none of their physical lowering.
 fn assert_logical_boundary(ir: &str) {
     assert!(
-        ir.contains("tribute_control.func"),
+        ir.contains("tribute_cps.func"),
         "source-logical lowering must define control callables:\n{ir}"
     );
     for forbidden in [
@@ -63,7 +63,7 @@ fn logical_function<'a>(ir: &'a str, name: &str) -> &'a str {
         .unwrap_or_else(|| panic!("missing logical function `{name}` in canonical IR:\n{ir}"));
     let function_and_following = &ir[start..];
     let end = function_and_following[1..]
-        .find("\n  tribute_control.func ")
+        .find("\n  tribute_cps.func ")
         .map_or(function_and_following.len(), |offset| offset + 1);
     &function_and_following[..end]
 }
@@ -72,10 +72,10 @@ fn named_function_header<'a>(ir: &'a str, name: &str) -> &'a str {
     ir.lines()
         .find(|line| {
             line.trim_start()
-                .strip_prefix(&format!("tribute_control.func @\"pkg::{name}\""))
+                .strip_prefix(&format!("tribute_cps.func @\"pkg::{name}\""))
                 .or_else(|| {
                     line.trim_start()
-                        .strip_prefix(&format!("tribute_control.func @{name}"))
+                        .strip_prefix(&format!("tribute_cps.func @{name}"))
                 })
                 .is_some_and(|rest| rest.starts_with(['(', '[']))
         })
@@ -107,18 +107,24 @@ fn without_row(callable_ty: &str) -> String {
     }
 }
 
-fn callable_convention<'a>(ir: &'a str, callable_ty: &'a str) -> &'a str {
-    ir.lines()
-        .find(|line| line.trim_start().starts_with(&format!("{callable_ty} =")))
-        .or_else(|| {
-            callable_ty
-                .contains("tribute.calling_convention")
-                .then_some(callable_ty)
-        })
-        .and_then(|line| line.split("tribute.calling_convention = ").nth(1))
-        .and_then(|suffix| suffix.split('}').next())
+/// The convention a printed `tribute_cps` operation declares, quoted.
+fn declared_convention(line: &str) -> &str {
+    line.split("convention = ")
+        .nth(1)
+        .and_then(|suffix| suffix.split([',', '}']).next())
         .map(str::trim)
-        .unwrap_or_else(|| panic!("missing callable convention for {callable_ty}:\n{ir}"))
+        .unwrap_or_else(|| panic!("missing declared convention in {line}"))
+}
+
+/// Each printed lambda's header line, followed by the line that opens its
+/// convention entry.
+fn lambda_headers(ir: &str) -> Vec<String> {
+    let lines: Vec<&str> = ir.lines().collect();
+    lines
+        .windows(2)
+        .filter(|pair| pair[0].contains("tribute_cps.lambda"))
+        .map(|pair| format!("{} {}", pair[0].trim(), pair[1].trim()))
+        .collect()
 }
 
 fn named_ref_lines<'a>(ir: &'a str, name: &str) -> Vec<&'a str> {
@@ -170,7 +176,7 @@ fn main() -> Nil {}
             .contains(&format!("(%0: {}, ", without_row(callback_ty))),
         "the fresh function reference must have apply's callback type, up to its row:\n{ir}"
     );
-    assert_eq!(callable_convention(&ir, callback_ty), "\"cps\"");
+    assert_eq!(declared_convention(double_ref), "\"cps\"");
     assert!(
         named_function_header(&ir, "double").contains("convention(direct)"),
         "the original named worker must remain Direct:\n{ir}"
@@ -203,7 +209,7 @@ fn main() -> Nil {}
     assert_ne!(reference_values[0], reference_values[1]);
     let conventions = refs
         .iter()
-        .map(|line| callable_convention(&ir, type_after_colon(line)))
+        .map(|line| declared_convention(line))
         .collect::<Vec<_>>();
     assert!(conventions.contains(&"\"direct\""));
     assert!(conventions.contains(&"\"cps\""));
@@ -225,15 +231,15 @@ fn main() -> Nil {}
     );
 
     let ir = common::specialized_frontend_ir(db, source);
-    let lambda = logical_function(&ir, "forward")
-        .lines()
-        .find(|line| line.contains("tribute_control.lambda"))
+    let lambda = lambda_headers(logical_function(&ir, "forward"))
+        .into_iter()
+        .next()
         .expect("logical lowering must materialize the callback lambda");
     assert!(
-        lambda.contains("convention(cps)"),
+        lambda.ends_with(" cps {"),
         "the exact-compatible lambda must be emitted at the CPS callback convention:\n{ir}"
     );
-    assert_not_cast(logical_function(&ir, "forward"), value_name(lambda));
+    assert_not_cast(logical_function(&ir, "forward"), value_name(&lambda));
 }
 
 /// A named function bound by `let` and passed on at another callable type
@@ -261,7 +267,7 @@ fn main() -> Nil {}
     let module = trunk_ir::parser::parse_test_module(&mut ctx, &ir);
     let mut references = 0;
     let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
-        if <tribute_ir::dialect::tribute_control::FuncRef as trunk_ir::ops::DialectOp>::matches(
+        if <tribute_ir::dialect::tribute_cps::FuncRef as trunk_ir::ops::DialectOp>::matches(
             &ctx, op,
         ) {
             references += 1;
@@ -283,14 +289,14 @@ fn logical_root_main_preserves_pure_and_io_conventions(db: &salsa::DatabaseImpl)
     let pure_ir = common::specialized_frontend_ir(db, pure);
     assert!(
         pure_ir.contains(
-            "tribute_control.func @\"pkg::main\"['a0]() -> core.nil row(| 'a0) inferred convention(direct)"
+            "tribute_cps.func @\"pkg::main\"['a0]() -> core.nil row(| 'a0) inferred convention(direct)"
         ),
         "pure root main must be direct:\n{pure_ir}"
     );
     let io = SourceCst::from_source_str(db, "io.trb", "fn main() ->{std::io::Io} Nil { Nil }");
     let io_ir = common::specialized_frontend_ir(db, io);
     assert!(
-        io_ir.contains("tribute_control.func @\"pkg::main\"() -> core.nil row(@\"ability_1_11_std::io::Io\") inferred convention(evidence_direct)"),
+        io_ir.contains("tribute_cps.func @\"pkg::main\"() -> core.nil row(@\"ability_1_11_std::io::Io\") inferred convention(evidence_direct)"),
         "Io root main must preserve EvidenceDirect:\n{io_ir}"
     );
 }
@@ -315,7 +321,7 @@ fn main() -> Nil { }
     let ir_text = common::specialized_frontend_ir(db, source);
     assert!(
         ir_text.contains(
-            "tribute_control.func @\"pkg::Nested::main\"() -> core.i32 row(@\"ability_1_10_pkg::State\") convention(cps)"
+            "tribute_cps.func @\"pkg::Nested::main\"() -> core.i32 row(@\"ability_1_10_pkg::State\") convention(cps)"
         ),
         "nested main must preserve its ordinary checker-selected CPS convention:\n{ir_text}"
     );
@@ -425,7 +431,7 @@ fn main() -> Nil {
     assert!(
         ir_text.lines().any(|line| line
             .trim_start()
-            .starts_with("tribute_control.func @\"pkg::Box$Int::value\"")),
+            .starts_with("tribute_cps.func @\"pkg::Box$Int::value\"")),
         "specialized accessor must keep its exact root identity:\n{ir_text}"
     );
 }
@@ -502,7 +508,7 @@ fn main() -> Nil { }
 fn named_operator_preserves_target_and_consumer_conventions(db: &salsa::DatabaseImpl) {
     use std::ops::ControlFlow;
     use tribute_ir::calling_convention::CallingConvention;
-    use tribute_ir::dialect::tribute_control;
+    use tribute_ir::dialect::{tribute_control, tribute_cps};
     use trunk_ir::SymbolPath;
     use trunk_ir::context::IrContext;
     use trunk_ir::ops::DialectOp;
@@ -543,21 +549,15 @@ fn main() -> Nil {{
                 let ValueDef::OpResult(producer, _) = ir.value_def(callback) else {
                     panic!("expected named callback: {text}");
                 };
-                let reference = tribute_control::FuncRef::from_op(&ir, producer).unwrap();
+                let reference = tribute_cps::FuncRef::from_op(&ir, producer).unwrap();
                 assert_eq!(*reference.func_ref(&ir), SymbolPath::new(["std::Int::+"]));
-                conventions.push(tribute_control::func_sig_convention(
-                    &ir,
-                    ir.value_ty(callback),
-                ));
+                conventions.push(reference.convention(&ir));
             }
             ControlFlow::Continue(WalkAction::Advance)
         });
         assert_eq!(
             conventions,
-            [
-                Some(CallingConvention::Direct),
-                Some(CallingConvention::Direct)
-            ],
+            [CallingConvention::Direct, CallingConvention::Direct],
             "{argument}: {text}"
         );
     }
@@ -579,11 +579,11 @@ fn main() -> Nil {}
     );
     let ir = common::specialized_frontend_ir(db, source);
     let entry = logical_function(&ir, "entry");
-    assert!(entry.contains("tribute_control.lambda"));
+    assert!(entry.contains("tribute_cps.lambda"));
     assert!(
-        entry.lines().any(|line| {
-            line.contains("tribute_control.lambda(") && line.contains("convention(direct)")
-        }),
+        lambda_headers(entry)
+            .iter()
+            .any(|line| line.contains("tribute_cps.lambda(") && line.ends_with(" direct {")),
         "a pure lambda passed to an effect-free consumer must be Direct:\n{ir}"
     );
     assert!(!entry.contains("unrealized_conversion_cast"), "{ir}");
@@ -601,9 +601,9 @@ fn main() -> Nil {}
     );
     let ir = common::specialized_frontend_ir(db, source);
     assert!(
-        logical_function(&ir, "make").lines().any(|line| {
-            line.contains("tribute_control.lambda(") && line.contains("convention(cps)")
-        }),
+        lambda_headers(logical_function(&ir, "make"))
+            .iter()
+            .any(|line| line.contains("tribute_cps.lambda(") && line.ends_with(" cps {")),
         "a returned lambda must retain the open callable contract:\n{ir}"
     );
 }
@@ -621,9 +621,9 @@ fn main() -> Nil {}
     );
     let ir = common::specialized_frontend_ir(db, source);
     assert!(
-        logical_function(&ir, "forward").lines().any(|line| {
-            line.contains("tribute_control.lambda(") && line.contains("convention(cps)")
-        }),
+        lambda_headers(logical_function(&ir, "forward"))
+            .iter()
+            .any(|line| line.contains("tribute_cps.lambda(") && line.ends_with(" cps {")),
         "an open-effect consumer must receive a CPS lambda:\n{ir}"
     );
 }
@@ -651,9 +651,9 @@ fn main() -> Nil {}
     );
     let ir = common::specialized_frontend_ir(db, source);
     assert!(
-        logical_function(&ir, "entry").contains(
-            "tribute_control.lambda() -> core.i32 row(@\"ability_2_10_pkg::State_3_int\") convention(cps)"
-        ),
+        lambda_headers(logical_function(&ir, "entry")).iter().any(|line| line.contains(
+            "tribute_cps.lambda() -> core.i32 row(@\"ability_2_10_pkg::State_3_int\") captures [] entries { cps {"
+        )),
         "a lambda that performs an effect must remain CPS:\n{ir}"
     );
 }
@@ -680,7 +680,7 @@ fn main() -> Nil {{}}
         // `entry` calls the `Direct` instance of `open`, whose callback
         // type is the one `pure` takes.
         let entry = logical_function(&ir, "entry");
-        assert_eq!(entry.matches("tribute_control.lambda").count(), 1, "{ir}");
+        assert_eq!(entry.matches("tribute_cps.lambda").count(), 1, "{ir}");
         assert!(entry.contains("callee = @\"pkg::open$9D\""), "{ir}");
         assert!(!entry.contains("unrealized_conversion_cast"), "{ir}");
     }
@@ -703,15 +703,15 @@ fn main() -> Nil {}
 "#,
     );
     let ir = common::specialized_frontend_ir(db, source);
-    let conventions: Vec<_> = logical_function(&ir, "entry")
-        .lines()
-        .filter(|line| {
-            line.contains("tribute_control.func @\"pkg::entry\"")
-                || line.contains("tribute_control.lambda")
-        })
-        .map(|line| line.contains("convention(cps)"))
-        .collect();
-    assert_eq!(conventions, [false, false, false], "{ir}");
+    let entry = logical_function(&ir, "entry");
+    let header = entry.lines().next().expect("a function has a header");
+    let lambdas = lambda_headers(entry);
+    assert!(!header.contains("convention(cps)"), "{ir}");
+    assert_eq!(lambdas.len(), 2, "{ir}");
+    assert!(
+        lambdas.iter().all(|line| line.ends_with(" direct {")),
+        "{ir}"
+    );
 }
 
 #[salsa_test]
@@ -778,16 +778,17 @@ fn main() -> Nil {}
     let ir_text = common::specialized_frontend_ir(db, source);
     let total = logical_function(&ir_text, "total");
     assert_eq!(
-        total
-            .match_indices(
-                "tribute_control.lambda() -> core.i32 row(@\"ability_2_10_pkg::State_3_nat\" | 'a0) convention(cps)"
-            )
+        lambda_headers(total)
+            .iter()
+            .filter(|line| line.contains(
+                "tribute_cps.lambda() -> core.i32 row(@\"ability_2_10_pkg::State_3_nat\" | 'a0) captures [] entries { cps {"
+            ))
             .count(),
         4,
         "every direct or wrapped generic State operation lambda must retain the same solved signature:\n{ir_text}"
     );
     assert!(
-        !total.contains("tribute_control.lambda() -> tribute_rt.anyref"),
+        !total.contains("tribute_cps.lambda() -> tribute_rt.anyref"),
         "the four lambdas of total must not erase their result:\n{total}"
     );
 }
@@ -822,18 +823,18 @@ fn main() -> Nil {
     // The lambda's row is a body binder of `main` that its closed row does not
     // fix, so its class stays `Cps` while `main` itself is `Direct`.
     let main_body = logical_function(&ir, "main");
-    let lambda = main_body
-        .lines()
-        .find(|line| line.contains("tribute_control.lambda("))
+    let lambda = lambda_headers(main_body)
+        .into_iter()
+        .find(|line| line.contains("tribute_cps.lambda("))
         .expect("IR must contain the callback lambda");
     assert!(
-        lambda.contains("convention(cps)"),
+        lambda.ends_with(" cps {"),
         "the callback lambda must retain its CPS convention:\n{ir}"
     );
     assert!(
         main_body
             .lines()
-            .any(|line| line.contains("tribute_control.call_indirect")),
+            .any(|line| line.contains("tribute_cps.call_indirect")),
         "the returned callback must use an indirect call:\n{ir}"
     );
 }
@@ -859,14 +860,8 @@ fn main() -> Nil {}
     );
     let ir = common::specialized_frontend_ir(db, source);
     for instance in ["apply$Int", "apply$Bool"] {
-        let lambdas: Vec<_> = logical_function(&ir, instance)
-            .lines()
-            .filter(|line| line.contains("tribute_control.lambda("))
-            .collect();
+        let lambdas = lambda_headers(logical_function(&ir, instance));
         assert_eq!(lambdas.len(), 1, "{instance}:\n{ir}");
-        assert!(
-            lambdas[0].contains("convention(direct)"),
-            "{instance}:\n{ir}"
-        );
+        assert!(lambdas[0].ends_with(" direct {"), "{instance}:\n{ir}");
     }
 }

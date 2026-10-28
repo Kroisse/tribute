@@ -156,7 +156,7 @@ fn depend_on_table<'db>(
 
 /// The packages `table` depends on, transitively, each after the packages
 /// it depends on.
-fn transitive_packages(db: &dyn salsa::Database, table: DependencyTable) -> Vec<Package> {
+pub fn transitive_packages(db: &dyn salsa::Database, table: DependencyTable) -> Vec<Package> {
     fn visit(db: &dyn salsa::Database, package: Package, order: &mut Vec<Package>) {
         if order.contains(&package) {
             return;

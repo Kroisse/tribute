@@ -1,6 +1,5 @@
 //! Validate checker-selected instances on executable reference paths before erasure.
-use super::instance::InstanceKey;
-use super::{Dependency, Expressions, collect::is_concrete_type, mangle::mangle_instance_path};
+use super::{Dependency, Expressions, collect::is_concrete_type};
 use crate::ast::fold::TypeFoldable;
 use crate::ast::{
     Decl, DeclTable, ExprKind, FuncDecl, FuncDefId, NodeId, ResolvedRef, SpanMaps, Type,
@@ -101,7 +100,8 @@ fn substitute<'db>(
 
 /// Validate the instances reached from every monomorphic function `module`
 /// declares. A reference into `dependency` is followed only to an instance
-/// its result does not have, since its specialization validated those.
+/// of its generics; the dependency's specialization validates its own
+/// monomorphic functions.
 pub(super) fn validate<'db>(
     db: &'db dyn salsa::Database,
     module: &DeclTable<TypedRef<'db>>,
@@ -114,8 +114,8 @@ pub(super) fn validate<'db>(
         HashMap::default();
     let mut fields = HashSet::default();
     let tables = dependency
-        .map(|dependency| (dependency.module, false))
         .into_iter()
+        .flat_map(|dependency| dependency.modules.iter().map(|&table| (table, false)))
         .chain([(module, true)]);
     for (entry, own) in
         tables.flat_map(|(table, own)| table.entries.iter().map(move |entry| (entry, own)))
@@ -280,19 +280,7 @@ pub(super) fn validate<'db>(
                 errors.push(fail(InstanceErrorKind::InconsistentCallable));
                 continue;
             }
-            if let Some(dependency) = dependency
-                && functions.get(target).is_some_and(|(_, own)| !own)
-                && (concrete.is_empty()
-                    || dependency
-                        .function_instances
-                        .contains(&mangle_instance_path(
-                            db,
-                            target.path(db),
-                            &InstanceKey {
-                                type_args: concrete.iter().copied().collect(),
-                            },
-                        )))
-            {
+            if concrete.is_empty() && functions.get(target).is_some_and(|(_, own)| !own) {
                 continue;
             }
             queue.push((*target, concrete));

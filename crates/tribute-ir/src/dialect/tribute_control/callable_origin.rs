@@ -12,13 +12,13 @@ use trunk_ir::types::StringRef;
 use trunk_ir::{IrContext, SymbolPath};
 
 use super::{
-    Call, CallIndirect, CallingConvention, CompilerIntrinsicDeclaration, Func, FuncRef, FuncSig,
-    Handle, Handler, Instantiate, Lambda, OperationDeclaration, OperationDeclarationUse, Perform,
-    Resume, TailCallIndirect, ValidationError, Yield, compiler_intrinsic_map, contains_adt_typeref,
-    func_sig_convention, func_sig_parts, nominal_identity, parent_region, push_op_error,
-    push_type_error, walk_region_ops,
+    COMPILER_INTRINSIC_ATTR, Call, CallIndirect, CallingConvention, CompilerIntrinsicDeclaration,
+    Func, FuncRef, FuncSig, Handle, Handler, Instantiate, Lambda, OperationDeclaration,
+    OperationDeclarationUse, Perform, Resume, ValidationError, Yield, compiler_intrinsic_map,
+    contains_adt_typeref, func_sig_parts, is_call_indirect, is_func, is_tail_call_indirect,
+    nominal_identity, parent_region, push_op_error, push_type_error, walk_region_ops,
 };
-use crate::dialect::{adt, list};
+use crate::dialect::{adt, list, tribute_cps};
 
 fn adt_projection_has_exact_callable_type(
     ctx: &IrContext,
@@ -118,7 +118,7 @@ impl CallableQuery<'_> {
     /// A value not yet evaluated is taken to be one until its rule is, so a
     /// rule may read an answer that [`Self::resolve`] later withdraws; the
     /// rule is then evaluated again.
-    pub(super) fn accepts(&mut self, _ctx: &IrContext, value: ValueRef) -> bool {
+    pub(crate) fn accepts(&mut self, _ctx: &IrContext, value: ValueRef) -> bool {
         if let Some(dependent) = self.evaluating {
             let dependents = self.dependents.entry(value).or_default();
             if !dependents.contains(&dependent) {
@@ -204,10 +204,15 @@ impl CallableQuery<'_> {
 
     /// Whether `symbol`, referenced from `op`, names a defined function or a
     /// registered intrinsic.
-    fn names_verified_function(&self, ctx: &IrContext, op: OpRef, symbol: &SymbolPath) -> bool {
+    pub(crate) fn names_verified_function(
+        &self,
+        ctx: &IrContext,
+        op: OpRef,
+        symbol: &SymbolPath,
+    ) -> bool {
         self.functions
             .resolve(ctx, op, symbol)
-            .filter(|&function| Func::matches(ctx, function))
+            .filter(|&function| is_func(ctx, function))
             .is_some_and(|function| verified_callable_declaration(ctx, function, self.registered))
     }
 }
@@ -248,7 +253,7 @@ pub trait CallableArgumentOrigin: DialectOp {
 
 /// A parameter of the callable whose only region is `region`, whose
 /// signature is `signature`.
-fn is_signature_parameter(
+pub(crate) fn is_signature_parameter(
     ctx: &IrContext,
     op: OpRef,
     signature: Option<TypeRef>,
@@ -259,7 +264,7 @@ fn is_signature_parameter(
     ctx.op_regions(op).eq([region])
         && signature
             .and_then(|ty| func_sig_parts(ctx, ty))
-            .is_some_and(|(_, parameters, _)| {
+            .is_some_and(|(_, parameters)| {
                 parameters.get(index as usize) == Some(&ctx.value_ty(argument))
             })
 }
@@ -547,9 +552,7 @@ fn verified_callable_declaration(
     }
     let (Some(symbol), Some(identity)) = (
         qualified_name(ctx, function),
-        Func::from_op(ctx, function)
-            .ok()
-            .and_then(|function| function.compiler_intrinsic_identity(ctx)),
+        ctx.op_attrs(function).get_str(COMPILER_INTRINSIC_ATTR),
     ) else {
         return false;
     };
@@ -560,7 +563,7 @@ fn verified_callable_declaration(
 
 /// The callee of `op` when it is a source-logical indirect call.
 fn indirect_callee(ctx: &IrContext, op: OpRef) -> Option<ValueRef> {
-    (CallIndirect::matches(ctx, op) || TailCallIndirect::matches(ctx, op))
+    (is_call_indirect(ctx, op) || is_tail_call_indirect(ctx, op))
         .then(|| ctx.op_operands(op).first().copied())
         .flatten()
 }
@@ -596,15 +599,13 @@ pub(super) fn validate_callable_origins(
     query.resolve(ctx);
     let mut seen = HashSet::default();
     walk_region_ops(ctx, body, &mut |op| {
-        if Func::matches(ctx, op) {
+        if is_func(ctx, op) {
             let (Some(symbol), Some(func_sig_type)) =
                 (qualified_name(ctx, op), ctx.op_attrs(op).get_type("type"))
             else {
                 return;
             };
-            let intrinsic_identity = Func::from_op(ctx, op)
-                .ok()
-                .and_then(|function| function.compiler_intrinsic_identity(ctx));
+            let intrinsic_identity = ctx.op_attrs(op).get_str(COMPILER_INTRINSIC_ATTR);
             let bodyless = !ctx.op_has_regions(op);
             if !bodyless && intrinsic_identity.is_some() {
                 push_op_error(
@@ -617,7 +618,7 @@ pub(super) fn validate_callable_origins(
             if bodyless {
                 let exact_intrinsic = match (registered.get(&symbol), intrinsic_identity) {
                     (Some(expected), Some(actual)) if expected.identity == actual => {
-                        if func_sig_convention(ctx, func_sig_type)
+                        if tribute_cps::declared_convention(ctx, op)
                             .is_some_and(|convention| convention != CallingConvention::Direct)
                         {
                             push_op_error(

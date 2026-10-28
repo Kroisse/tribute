@@ -95,7 +95,7 @@ impl Pass for EliminateUnreferencedSourceFunctions {
                 ctx,
                 target.into(),
                 config,
-                |ctx, op| tribute_control::Func::matches(ctx, op) && ctx.op_has_regions(op),
+                |ctx, op| tribute_control::is_func(ctx, op) && ctx.op_has_regions(op),
             );
         };
         eliminate(ctx, self.runtime);
