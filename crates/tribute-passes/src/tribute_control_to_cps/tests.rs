@@ -1851,13 +1851,16 @@ fn func_ref_in_a_nested_module_is_adapted_in_that_module() {
         }
         ControlFlow::Continue(WalkAction::Advance)
     });
-    let [Some(adapter)] = adapters[..] else {
-        panic!("the closure names its adapter: {adapters:?}");
+    // The adapter fills the Direct slot; trap entries fill the others.
+    let [Some(_), Some(_), Some(_)] = adapters[..] else {
+        panic!("the closure names its adapter and trap entries: {adapters:?}");
     };
     let inner = symbols
         .resolve_in(&ctx, module.op(), &[Symbol::new("inner")])
         .expect("inner module");
-    assert_eq!(nearest_table(&ctx, adapter), Some(inner));
+    for entry in adapters.into_iter().flatten() {
+        assert_eq!(nearest_table(&ctx, entry), Some(inner));
+    }
 }
 
 #[test]

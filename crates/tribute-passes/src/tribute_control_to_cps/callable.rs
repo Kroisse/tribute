@@ -228,11 +228,22 @@ impl Converter<'_> {
         adapter.set_calling_convention(self.ctx, result_convention);
         self.ctx.push_op(self.module_block, adapter.op_ref());
 
+        let entries = self.traps.table(
+            self.ctx,
+            self.module_block,
+            location,
+            result_convention,
+            trunk_ir::SymbolPath::new([adapter_symbol]),
+            |ctx, slot| {
+                logical_entry_signature(ctx, closure_ty, slot, |ctx, answer| {
+                    ability::Frame::params(answer).intern(ctx).as_type_ref()
+                })
+            },
+        );
         let closure_new = closure::New::operands(std::iter::empty::<ValueRef>())
-            .entries([trunk_ir::SymbolPath::new([adapter_symbol])])
+            .entries(entries)
             .results(closure_ty)
             .build(self.ctx, location);
-        closure_new.set_calling_convention(self.ctx, result_convention);
         Ok((vec![closure_new.op_ref()], closure_new.result(self.ctx)))
     }
 

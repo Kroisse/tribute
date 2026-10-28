@@ -55,12 +55,13 @@ fn insert_op_idx(
     constant.result(ctx)
 }
 
-/// Read the entry function of a canonical closure from its convention
-/// table. The closure itself is the function's environment.
+/// Read the entry function through `convention` of a canonical closure from
+/// its convention table. The closure itself is the function's environment.
 fn insert_closure_function(
     ctx: &mut IrContext,
     loc: Location,
     closure: ValueRef,
+    convention: CallingConvention,
     rewriter: &mut PatternRewriter<'_>,
 ) -> ValueRef {
     let i32_ty = i32_type(ctx);
@@ -74,7 +75,7 @@ fn insert_closure_function(
         .results(table_ty)
         .build(ctx, loc);
     let function = tribute_rt::ConventionEntry::operands(table.result(ctx))
-        .index(0)
+        .index(convention.slot())
         .results(i32_ty)
         .build(ctx, loc);
     rewriter.insert_op(table.op_ref());
@@ -133,7 +134,13 @@ pub(crate) fn lower_tail_dispatch(
     let payload = dispatch_op.payload(ctx);
     let ability = dispatch_op.ability(ctx).clone();
     let op_idx = insert_op_idx(ctx, loc, &ability, dispatch_op.op_name_ref(ctx), rewriter);
-    let function = insert_closure_function(ctx, loc, dispatch_closure, rewriter);
+    let function = insert_closure_function(
+        ctx,
+        loc,
+        dispatch_closure,
+        CallingConvention::EvidenceDirect,
+        rewriter,
+    );
     let result_ty = ctx.op_result_types(op)[0];
     let args = [evidence, dispatch_closure, op_idx, payload];
     // The dispatch closure is a module-internal EvidenceDirect callable, so
@@ -224,7 +231,7 @@ pub(crate) fn lower_cps_dispatch(
     // Closure lowering keeps packed closures at their semantic closure type
     // until storage finalization; retype them to the dispatch slots.
     let dispatch = canonical_closure(ctx, loc, dispatch_op.dispatch(ctx), rewriter);
-    let function = insert_closure_function(ctx, loc, dispatch, rewriter);
+    let function = insert_closure_function(ctx, loc, dispatch, CallingConvention::Cps, rewriter);
     let resume = canonical_closure(ctx, loc, dispatch_op.resume(ctx), rewriter);
 
     let signature = cps_dispatch_signature(ctx);

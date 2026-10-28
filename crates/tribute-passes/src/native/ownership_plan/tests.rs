@@ -2554,14 +2554,20 @@ fn closure_release_uses_its_compiler_generated_allocation_layout() {
         &mut ctx,
         r#"core.module @test {
   !Closure = closure.closure<func.func_sig<() -> core.nil>>
-  func.func @target(%environment: !Closure) -> core.nil {
+  func.func @target(%environment: !Closure) -> core.nil attributes {tribute.calling_convention = "direct"} {
     func.return
+  }
+  func.func @trap_evidence_direct(%evidence: core.i32, %environment: !Closure) -> core.nil attributes {tribute.calling_convention = "evidence_direct"} {
+    func.unreachable
+  }
+  func.func @trap_cps(%evidence: core.i32, %environment: !Closure) -> core.never attributes {tribute.calling_convention = "cps"} {
+    func.unreachable
   }
   func.func @consume(%closure: !Closure) -> core.nil {
     func.return
   }
   func.func @main() -> core.nil {
-    %closure = closure.new {entries = [@target]} : !Closure
+    %closure = closure.new {entries = [@target, @trap_evidence_direct, @trap_cps]} : !Closure
     func.call %closure {callee = @consume} : core.nil
     func.return
   }

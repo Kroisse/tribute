@@ -29,6 +29,8 @@ use trunk_ir::types::{Attribute, AttributeMap, Location, TypeDataBuilder};
 use trunk_ir::walk::{WalkAction, walk_op};
 use trunk_ir::{OperationDataBuilder, Symbol, SymbolPath};
 
+use crate::convention_table::{TrapEntries, logical_entry_signature};
+
 mod boundary;
 mod callable;
 mod delimit;
@@ -77,6 +79,7 @@ struct Converter<'a> {
     /// Source operations whose references are looked up in a nested module.
     converted_types: HashMap<TypeRef, TypeRef>,
     helper_index: u32,
+    traps: TrapEntries,
 }
 
 /// How a `resume` in the body of a handler arm reaches its continuation.
@@ -150,6 +153,7 @@ impl<'a> Converter<'a> {
             targets: graph.targets,
             converted_types: HashMap::default(),
             helper_index: 0,
+            traps: TrapEntries::default(),
         }
     }
 

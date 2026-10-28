@@ -532,8 +532,9 @@ builder를 재사용하되 `tribute_control` 전용 graph pattern은
 
 Operation의 convention은 tribute-ir의 `ConventionBearing` operation interface가
 소유한다. 이 interface를 구현하는 `func.func`, `func.call`, `func.call_indirect`,
-`func.tail_call`, `func.tail_call_indirect`, `closure.lambda`, `closure.new`만
-convention을 가질 수 있다. `tribute_cps` operation의 convention은 그 operation이 선언한 속성이며
+`func.tail_call`, `func.tail_call_indirect`, `closure.lambda`만
+convention을 가질 수 있다. `closure.new`는 convention을 기록하지 않으며, entry 목록의 칸이
+곧 각 entry의 convention이다. `tribute_cps` operation의 convention은 그 operation이 선언한 속성이며
 이 interface에 속하지 않는다. Pass는 attribute key를 직접 읽거나 쓰지 않고 이 interface로 convention을
 읽고, 쓰고, 소비한다. Attribute 철자는 tribute-ir의 저장, 출력, 파싱, 검증만 다룬다. 읽기는 convention이 없는
 경우와 값이 잘못된 경우를 구분한다.
@@ -543,8 +544,8 @@ Legalization 출구 검증과 물리화 입구는 module 전체의 convention을
 
 - 이 interface를 구현하지 않는 operation에 붙은 convention
 - Keyword가 아닌 convention 값
-- `closure.lambda`나 `closure.new`의 entry 함수의 convention이 그 함수가 채우는
-  convention entry의 convention과 다른 경우. Closure type은 convention을 기록하지
+- `closure.lambda`의 convention이나 `closure.new`의 칸이 정하는 convention이 그 entry
+  함수의 convention과 다른 경우. Closure type은 convention을 기록하지
   않는다.
 
 같은 legalization에서 각 `tribute_control.perform`을 typecheck된

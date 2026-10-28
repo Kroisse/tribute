@@ -204,6 +204,35 @@ fn frame_layouts(ctx: &mut IrContext, module: Module) -> Vec<(TypeRef, FrameType
     layouts
 }
 
+/// The frame reference of `answer`, an answer whose own frames are already
+/// references: the layout frame expansion registered for it, or one
+/// registered now in the same numbering. A pass after frame expansion that
+/// makes a `Cps` entry signature takes its frame from here.
+pub(crate) fn frame_reference(ctx: &mut IrContext, answer: TypeRef) -> TypeRef {
+    let mut registered = 0;
+    for (name, layout) in ctx.type_aliases().to_vec() {
+        let name = name.to_string();
+        if !name.starts_with(continuation_frame::NAME_PREFIX) {
+            continue;
+        }
+        registered += 1;
+        if continuation_frame::result_type(ctx, layout) == Some(answer) {
+            return continuation_frame::ref_type(ctx, name, answer);
+        }
+    }
+    let name = format!("{}{registered}", continuation_frame::NAME_PREFIX);
+    let reference = continuation_frame::ref_type(ctx, name.clone(), answer);
+    let evidence = ability::evidence_adt_type_ref(ctx);
+    let anyref = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
+    let i32_type = TypeDataBuilder::new("core.i32").intern(ctx);
+    let done = cps_done_type(ctx, answer);
+    let dispatch = cps_dispatch_type(ctx, evidence, reference, anyref, i32_type);
+    let name_ref = ctx.intern_str(&name);
+    let layout = continuation_frame::layout_type(ctx, name_ref, answer, done, dispatch);
+    ctx.register_type_alias(Symbol::new(&name), layout);
+    reference
+}
+
 fn resolve_frame(
     ctx: &mut IrContext,
     answer: TypeRef,

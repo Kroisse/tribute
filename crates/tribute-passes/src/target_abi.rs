@@ -29,6 +29,8 @@ use trunk_ir::types::{Attribute, AttributeMap, Location, TypeData};
 use trunk_ir::walk::{WalkAction, walk_op};
 use trunk_ir::{Symbol, SymbolPath};
 
+use crate::convention_table::TrapEntries;
+
 const ROOT_MAIN_SYMBOL: &str = "__tribute_main";
 const ROOT_DONE_K_SYMBOL: &str = "__tribute_done_k";
 const ROOT_UNHANDLED_SYMBOL: &str = "__tribute_unhandled";
@@ -542,6 +544,7 @@ fn build_cps_root_call(
     } = contract;
     let location = ctx.op(worker_op).location;
 
+    let mut traps = TrapEntries::default();
     let terminal = TerminalFunctions::define(
         ctx,
         location,
@@ -550,7 +553,7 @@ fn build_cps_root_call(
         Symbol::new(ROOT_DONE_K_SYMBOL),
         Symbol::new(ROOT_UNHANDLED_SYMBOL),
     )?;
-    let built = terminal.build_frame(ctx, location);
+    let built = terminal.build_frame(ctx, location, evidence_ty, &mut traps, module_block);
     for &op in &built.ops {
         ctx.push_op(entry, op);
     }
@@ -616,6 +619,7 @@ fn compose_value_delimiters(ctx: &mut IrContext, module: Module) -> Result<(), T
         .filter_map(|op| effect::Delimit::from_op(ctx, op).ok())
         .collect();
     let mut terminals: Vec<(TypeRef, TerminalFunctions)> = Vec::new();
+    let mut traps = TrapEntries::default();
     for delimit in delimiters {
         let op = delimit.op_ref();
         let location = ctx.op(op).location;
@@ -667,7 +671,7 @@ fn compose_value_delimiters(ctx: &mut IrContext, module: Module) -> Result<(), T
             .op(op)
             .parent_block
             .ok_or_else(|| TargetAbiError::new("value delimiter: operation is detached"))?;
-        let built = terminal.build_frame(ctx, location);
+        let built = terminal.build_frame(ctx, location, evidence_ty, &mut traps, module_block);
         for &new in &built.ops {
             ctx.insert_op_before(block, op, new);
         }
@@ -869,8 +873,17 @@ impl TerminalFunctions {
         })
     }
 
-    /// Build a fresh cell and the frame whose `Done` writes it.
-    fn build_frame(&self, ctx: &mut IrContext, location: Location) -> TerminalFrame {
+    /// Build a fresh cell and the frame whose `Done` writes it. Trap entries
+    /// fill the value slots of its closures in `module_block`, with
+    /// `evidence` as an evidence parameter's type.
+    fn build_frame(
+        &self,
+        ctx: &mut IrContext,
+        location: Location,
+        evidence: TypeRef,
+        traps: &mut TrapEntries,
+        module_block: BlockRef,
+    ) -> TerminalFrame {
         let mut ops = Vec::new();
         let anyref_ty = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
         let initial = if Self::slot_type(ctx, self.answer) != anyref_ty {
@@ -888,16 +901,29 @@ impl TerminalFunctions {
             .results(self.cell_ty)
             .build(ctx, location);
         ops.push(cell_new.op_ref());
-        let mut member = |ctx: &mut IrContext, symbol: &Symbol, captures: &[ValueRef], ty| {
-            let closure = closure::New::operands(captures.to_vec())
-                .entries([SymbolPath::new([symbol.clone()])])
-                .results(ty)
-                .build(ctx, location);
-            ops.push(closure.op_ref());
-            closure.result(ctx)
+        let mut member =
+            |ctx: &mut IrContext, entries: &[SymbolPath; 3], captures: &[ValueRef], ty| {
+                let closure = closure::New::operands(captures.to_vec())
+                    .entries(entries.iter().cloned())
+                    .results(ty)
+                    .build(ctx, location);
+                ops.push(closure.op_ref());
+                closure.result(ctx)
+            };
+        let mut table = |ctx: &mut IrContext, entry: &Symbol, closure_ty| {
+            traps.table(
+                ctx,
+                module_block,
+                location,
+                CallingConvention::Cps,
+                SymbolPath::new([entry.clone()]),
+                |ctx, slot| physical_value_entry(ctx, closure_ty, slot, evidence),
+            )
         };
-        let done = member(ctx, &self.done, &[cell_new.result(ctx)], self.frame.done);
-        let dispatch = member(ctx, &self.dispatch, &[], self.frame.dispatch);
+        let done_entries = &table(ctx, &self.done, self.frame.done);
+        let dispatch_entries = &table(ctx, &self.dispatch, self.frame.dispatch);
+        let done = member(ctx, done_entries, &[cell_new.result(ctx)], self.frame.done);
+        let dispatch = member(ctx, dispatch_entries, &[], self.frame.dispatch);
         let frame = adt::StructNew::operands([done, dispatch])
             .r#type(self.frame.layout)
             .results(self.frame.reference)
@@ -1227,6 +1253,41 @@ fn physical_continuation_entry(ctx: &mut IrContext, callable: func::FuncSig) -> 
     let attrs = AttributeMap::from_refs(ctx, attrs);
     func::func_sig_with_param_attrs(ctx, inputs, std::iter::empty(), attrs)
         .with_call_conv(ctx, func::CallConv::Tail)
+}
+
+/// The physical signature of the entry through `convention`, a value
+/// convention, of a closure of the physical type `closure_ty`: the closure's
+/// callable laid out by that convention, with the closure as the
+/// environment. A generated continuation is entered only through `Cps`, so
+/// its value entries are trap entries of this signature.
+fn physical_value_entry(
+    ctx: &mut IrContext,
+    closure_ty: TypeRef,
+    convention: CallingConvention,
+    evidence: TypeRef,
+) -> TypeRef {
+    debug_assert!(!convention.needs_continuation_frame());
+    let callable = closure::Closure::from_type_ref(ctx, closure_ty)
+        .and_then(|closure| func::FuncSig::from_type_ref(ctx, closure.func_type(ctx)))
+        .expect("a physical closure type holds a func.func_sig");
+    let contract = physical_parameter_attrs(ctx, convention);
+    let mut inputs: Vec<_> = callable
+        .inputs(ctx)
+        .iter()
+        .map(|&ty| (ty, contract.clone()))
+        .collect();
+    inputs.insert(0, (closure_ty, contract.clone()));
+    if convention.needs_evidence() {
+        inputs.insert(0, (evidence, contract));
+    }
+    let results: Vec<_> = callable
+        .results(ctx)
+        .iter()
+        .map(|&ty| (ty, AttributeMap::new()))
+        .collect();
+    func::func_sig_with_param_attrs(ctx, inputs, results, AttributeMap::new())
+        .with_call_conv(ctx, func::CallConv::Tail)
+        .as_type_ref()
 }
 
 fn is_parameterless_type(ctx: &IrContext, ty: TypeRef, name: trunk_ir::TypeName) -> bool {
@@ -2381,6 +2442,9 @@ mod tests {
             .copied()
             .filter_map(|op| func::Func::from_op(&ctx, op).ok())
             .map(|function| function.sym_name(&ctx).to_string())
+            // Trap entries fill the unimplemented convention slots of the
+            // root's closures; they are not entries of the root.
+            .filter(|name| !name.starts_with("__tribute_trap_entry_"))
             .collect();
         assert_eq!(
             functions,
@@ -3060,12 +3124,24 @@ mod tests {
             r#"core.module @test {tribute.entry = @main} {
   !fn = func.func_sig<(core.i32) -> core.i32>
   !closure = closure.closure<!fn>
-  func.func @callee(%x: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
+  func.func @callee(%env: !closure, %x: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
     func.return %x
   }
+  func.func @callee_with_evidence(%evidence: core.i32, %env: !closure, %x: core.i32) -> core.i32 attributes {tribute.calling_convention = "evidence_direct"} {
+    func.return %x
+  }
+  func.func @trap_direct(%env: !closure, %x: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
+    func.unreachable
+  }
+  func.func @trap_evidence_direct(%evidence: core.i32, %env: !closure, %x: core.i32) -> core.i32 attributes {tribute.calling_convention = "evidence_direct"} {
+    func.unreachable
+  }
+  func.func @trap_cps(%evidence: core.i32, %env: !closure, %x: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
+    func.unreachable
+  }
   func.func @main() -> core.nil attributes {tribute.calling_convention = "direct"} {
-    %c = closure.new {entries = [@callee], tribute.calling_convention = "direct"} : !closure
-    %d = closure.new {entries = [@callee], tribute.calling_convention = "evidence_direct"} : !closure
+    %c = closure.new {entries = [@callee, @trap_evidence_direct, @trap_cps]} : !closure
+    %d = closure.new {entries = [@trap_direct, @callee_with_evidence, @trap_cps]} : !closure
     %n = core.nil_value : core.nil
     func.return %n
   }
