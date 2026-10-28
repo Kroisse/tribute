@@ -70,7 +70,7 @@ use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
 
-use crate::context::IrContext;
+use crate::context::{IrContext, ReadFootprint};
 use crate::refs::OpRef;
 
 /// Internal IR-analysis failure returned by [`AnalysisCache::get`].
@@ -276,6 +276,8 @@ pub struct AnalysisCache {
     /// Prerequisite -> analyses that directly depend on it.
     dependents: HashMap<AnalysisKey, HashSet<AnalysisKey>>,
     in_progress: Vec<InProgressAnalysis>,
+    /// Anchors covering each computed analysis's own reads.
+    footprints: HashMap<AnalysisKey, ReadFootprint>,
 }
 
 impl AnalysisCache {
@@ -345,6 +347,7 @@ impl AnalysisCache {
             key,
             analysis_type: type_name::<A>(),
         });
+        let reads_start = ctx.begin_reads();
         let (result, dependencies) = {
             let mut computation = AnalysisContext {
                 ir: ctx,
@@ -354,6 +357,7 @@ impl AnalysisCache {
             let result = A::compute(&mut computation, target);
             (result, computation.dependencies)
         };
+        let reads = ctx.end_reads(reads_start);
         let completed = self
             .in_progress
             .pop()
@@ -365,6 +369,7 @@ impl AnalysisCache {
         let analysis = Arc::new(result?);
         let entry: Arc<dyn Any + Send + Sync> = analysis.clone();
         self.replace_dependencies(key, dependencies);
+        self.footprints.insert(key, ctx.read_footprint(&reads));
         self.cache.insert(key, entry);
         Ok(analysis)
     }
@@ -421,6 +426,7 @@ impl AnalysisCache {
         self.dependencies.clear();
         self.dependents.clear();
         self.in_progress.clear();
+        self.footprints.clear();
         self.bound_stamp = None;
     }
 
@@ -493,6 +499,7 @@ impl AnalysisCache {
 
         for key in &invalidated {
             self.cache.remove(key);
+            self.footprints.remove(key);
             self.remove_dependencies(*key);
         }
         for key in invalidated {
@@ -721,6 +728,104 @@ mod tests {
                 .map(|_| Self)
                 .ok_or_else(|| AnalysisError::new::<Self>(target, TestAnalysisError))
         }
+    }
+
+    /// Counts the operations of its target's subtree.
+    struct SubtreeSize;
+
+    impl Analysis for SubtreeSize {
+        fn compute(ctx: &mut AnalysisContext<'_>, target: OpRef) -> Result<Self, AnalysisError> {
+            let _ = crate::walk::walk_op::<()>(ctx.ir(), target, &mut |_| {
+                std::ops::ControlFlow::Continue(crate::walk::WalkAction::Advance)
+            });
+            Ok(Self)
+        }
+    }
+
+    /// Reads the block that holds its target, as structured-control
+    /// analyses do.
+    struct EnclosingBlock;
+
+    impl Analysis for EnclosingBlock {
+        fn compute(ctx: &mut AnalysisContext<'_>, target: OpRef) -> Result<Self, AnalysisError> {
+            if let Some(block) = ctx.ir().op(target).parent_block {
+                let _ = ctx.ir().block(block).ops.last();
+            }
+            Ok(Self)
+        }
+    }
+
+    /// Depends on [`SubtreeSize`] of its target without reading the IR.
+    struct DependsOnSubtree;
+
+    impl Analysis for DependsOnSubtree {
+        fn compute(ctx: &mut AnalysisContext<'_>, target: OpRef) -> Result<Self, AnalysisError> {
+            ctx.get::<SubtreeSize>(target)?;
+            Ok(Self)
+        }
+    }
+
+    #[test]
+    fn recorded_reads_map_to_outermost_anchors() {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @f() {
+    func.return
+  }
+  func.func @g() {
+    func.return
+  }
+}"#,
+        );
+        let module = module.op();
+        let body = ctx.op_region(module, 0).unwrap();
+        let block = ctx.region(body).blocks[0];
+        let [f, g] = ctx.block(block).ops[..] else {
+            panic!("expected two functions");
+        };
+        let f_body = ctx.op_region(f, 0).unwrap();
+        let f_return = ctx.block(ctx.region(f_body).blocks[0]).ops[0];
+        let path = ctx.intern_path("test.trb");
+        let location = crate::Location::new(path, crate::Span::new(0, 0));
+        let detached = crate::OperationDataBuilder::new(location, "test.op").build(&mut ctx);
+        let detached = ctx.create_op(detached);
+
+        let mut cache = AnalysisCache::new();
+        let footprint = |cache: &AnalysisCache, key| cache.footprints.get(&key).cloned();
+        let anchors = |ops: &[OpRef]| Some(ReadFootprint::Anchors(ops.iter().copied().collect()));
+
+        cache.get::<SubtreeSize>(&ctx, f).unwrap();
+        cache.get::<SubtreeSize>(&ctx, g).unwrap();
+        cache.get::<SubtreeSize>(&ctx, module).unwrap();
+        cache.get::<EnclosingBlock>(&ctx, f_return).unwrap();
+        cache.get::<EnclosingBlock>(&ctx, f).unwrap();
+        cache.get::<SubtreeSize>(&ctx, detached).unwrap();
+        cache.get::<DependsOnSubtree>(&ctx, g).unwrap();
+
+        assert_eq!(footprint(&cache, AnalysisKey::of::<SubtreeSize>(f)), anchors(&[f]));
+        assert_eq!(footprint(&cache, AnalysisKey::of::<SubtreeSize>(g)), anchors(&[g]));
+        assert_eq!(
+            footprint(&cache, AnalysisKey::of::<SubtreeSize>(module)),
+            anchors(&[module])
+        );
+        assert_eq!(
+            footprint(&cache, AnalysisKey::of::<EnclosingBlock>(f_return)),
+            anchors(&[f])
+        );
+        assert_eq!(
+            footprint(&cache, AnalysisKey::of::<EnclosingBlock>(f)),
+            anchors(&[module])
+        );
+        assert_eq!(
+            footprint(&cache, AnalysisKey::of::<SubtreeSize>(detached)),
+            Some(ReadFootprint::WholeContext)
+        );
+        assert_eq!(
+            footprint(&cache, AnalysisKey::of::<DependsOnSubtree>(g)),
+            anchors(&[])
+        );
     }
 
     #[test]

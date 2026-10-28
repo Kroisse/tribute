@@ -5,7 +5,7 @@
 //! use `EntityList + ListPool` for compact 4-byte per-field storage.
 
 use rustc_hash::FxHashMap as HashMap;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use cranelift_entity::{EntityList, EntityRef, ListPool, PrimaryMap, SecondaryMap};
@@ -207,6 +207,35 @@ pub struct IrContext {
 
     /// Diagnostics collected during validation and transformation passes.
     diagnostics: RefCell<Vec<Diagnostic>>,
+
+    /// Entities read while an analysis computation is active.
+    reads: ReadRecorder,
+}
+
+/// One IR entity an analysis computation read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) enum ReadEntity {
+    Op(OpRef),
+    Block(BlockRef),
+    Region(RegionRef),
+    Value(ValueRef),
+}
+
+/// The anchors whose counters cover a computation's reads.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ReadFootprint {
+    /// Some read had no anchor chain.
+    WholeContext,
+    /// The outermost anchors read; none is an ancestor of another.
+    Anchors(SmallVec<[OpRef; 2]>),
+}
+
+/// Records reads through `&self` accessors during nested analysis
+/// computations. Each computation takes the log segment it started.
+#[derive(Default)]
+struct ReadRecorder {
+    depth: Cell<u32>,
+    log: RefCell<Vec<ReadEntity>>,
 }
 
 /// Advance an IR revision; a field-level helper so interning can advance it
@@ -269,6 +298,7 @@ impl Clone for IrContext {
             type_alias_by_name: self.type_alias_by_name.clone(),
             type_alias_by_type: self.type_alias_by_type.clone(),
             diagnostics: self.diagnostics.clone(),
+            reads: ReadRecorder::default(),
         }
     }
 }
@@ -303,6 +333,7 @@ impl IrContext {
             type_alias_by_name: HashMap::default(),
             type_alias_by_type: HashMap::default(),
             diagnostics: RefCell::new(Vec::new()),
+            reads: ReadRecorder::default(),
         }
     }
 
@@ -331,6 +362,7 @@ impl IrContext {
             type_alias_by_name: self.type_alias_by_name.clone(),
             type_alias_by_type: self.type_alias_by_type.clone(),
             diagnostics: self.diagnostics.clone(),
+            reads: ReadRecorder::default(),
         }
     }
 
@@ -340,6 +372,106 @@ impl IrContext {
 
     fn bump_revision(&mut self) {
         advance_revision(&mut self.revision);
+    }
+
+    #[inline]
+    fn record(&self, entity: ReadEntity) {
+        if self.reads.depth.get() != 0 {
+            self.reads.log.borrow_mut().push(entity);
+        }
+    }
+
+    /// Start recording reads for one computation; returns its log start.
+    pub(crate) fn begin_reads(&self) -> usize {
+        self.reads.depth.set(self.reads.depth.get() + 1);
+        self.reads.log.borrow().len()
+    }
+
+    /// Stop recording the computation that started at `start` and return
+    /// its reads, excluding those of computations nested in it.
+    pub(crate) fn end_reads(&self, start: usize) -> Vec<ReadEntity> {
+        let depth = self.reads.depth.get();
+        assert!(depth != 0, "end_reads without begin_reads");
+        self.reads.depth.set(depth - 1);
+        self.reads.log.borrow_mut().split_off(start)
+    }
+
+    fn block_owner(&self, block: BlockRef) -> Option<OpRef> {
+        self.blocks[block]
+            .parent_region
+            .and_then(|region| self.regions[region].parent_op)
+    }
+
+    fn parent_op(&self, op: OpRef) -> Option<OpRef> {
+        self.ops[op]
+            .parent_block
+            .and_then(|block| self.block_owner(block))
+    }
+
+    fn is_anchor(&self, op: OpRef) -> bool {
+        self.ops[op]
+            .name
+            .def()
+            .is_some_and(crate::op_def::OpDef::has_flag::<crate::op_flag::IsolatedFromAbove>)
+    }
+
+    /// Map recorded reads to the outermost anchors that cover them. Reads
+    /// fields directly, so an enclosing recording computation is unaffected.
+    pub(crate) fn read_footprint(&self, reads: &[ReadEntity]) -> ReadFootprint {
+        let mut owners: Vec<OpRef> = Vec::with_capacity(reads.len());
+        for &entity in reads {
+            let owner = match entity {
+                ReadEntity::Op(op) => Some(op),
+                ReadEntity::Block(block) => self.block_owner(block),
+                ReadEntity::Region(region) => self.regions[region].parent_op,
+                ReadEntity::Value(value) => match self.values[value].def {
+                    ValueDef::OpResult(op, _) => Some(op),
+                    ValueDef::BlockArg(block, _) => self.block_owner(block),
+                },
+            };
+            match owner {
+                Some(op) => owners.push(op),
+                None => return ReadFootprint::WholeContext,
+            }
+        }
+        owners.sort_unstable();
+        owners.dedup();
+
+        let mut anchors: SmallVec<[OpRef; 2]> = SmallVec::new();
+        for op in owners {
+            let mut innermost = None;
+            let mut current = op;
+            loop {
+                if innermost.is_none() && self.is_anchor(current) {
+                    innermost = Some(current);
+                }
+                match self.parent_op(current) {
+                    Some(parent) => current = parent,
+                    None => break,
+                }
+            }
+            match innermost {
+                Some(anchor) if self.is_anchor(current) => anchors.push(anchor),
+                _ => return ReadFootprint::WholeContext,
+            }
+        }
+        anchors.sort_unstable();
+        anchors.dedup();
+        let outermost = anchors
+            .iter()
+            .copied()
+            .filter(|&anchor| {
+                let mut current = anchor;
+                while let Some(parent) = self.parent_op(current) {
+                    if anchors.binary_search(&parent).is_ok() {
+                        return false;
+                    }
+                    current = parent;
+                }
+                true
+            })
+            .collect();
+        ReadFootprint::Anchors(outermost)
     }
 
     /// Read interned types without granting mutable access to the IR.
@@ -438,6 +570,7 @@ impl IrContext {
 
     /// The attributes of `op`, read through this context.
     pub fn op_attrs(&self, op: OpRef) -> AttributeView<'_> {
+        self.record(ReadEntity::Op(op));
         self.ops[op].attributes.view(self)
     }
 
@@ -647,6 +780,7 @@ impl IrContext {
 
     /// Get immutable reference to operation data.
     pub fn op(&self, op: OpRef) -> &OperationData {
+        self.record(ReadEntity::Op(op));
         &self.ops[op]
     }
 
@@ -661,11 +795,13 @@ impl IrContext {
 
     /// Get the operands of an operation as a slice.
     pub fn op_operands(&self, op: OpRef) -> &[ValueRef] {
+        self.record(ReadEntity::Op(op));
         self.ops[op].operands.as_slice(&self.value_pool)
     }
 
     /// Get the result types of an operation as a slice.
     pub fn op_result_types(&self, op: OpRef) -> &[TypeRef] {
+        self.record(ReadEntity::Op(op));
         self.ops[op].results.as_slice(&self.type_pool)
     }
 
@@ -738,16 +874,19 @@ impl IrContext {
 
     /// Get the i-th result value of an operation.
     pub fn op_result(&self, op: OpRef, index: u32) -> ValueRef {
+        self.record(ReadEntity::Op(op));
         self.result_values[op].as_slice(&self.value_pool)[index as usize]
     }
 
     /// Get all result values of an operation.
     pub fn op_results(&self, op: OpRef) -> &[ValueRef] {
+        self.record(ReadEntity::Op(op));
         self.result_values[op].as_slice(&self.value_pool)
     }
 
     /// The regions of an operation, in order.
     pub fn op_regions(&self, op: OpRef) -> Regions<'_> {
+        self.record(ReadEntity::Op(op));
         Regions {
             ctx: self,
             next: self.ops[op].first_region,
@@ -761,6 +900,7 @@ impl IrContext {
 
     /// Whether an operation has any region, without walking its region list.
     pub fn op_has_regions(&self, op: OpRef) -> bool {
+        self.record(ReadEntity::Op(op));
         self.ops[op].first_region.is_some()
     }
 
@@ -804,6 +944,7 @@ impl IrContext {
 
     /// The successor blocks of an operation, in order.
     pub fn op_successors(&self, op: OpRef) -> Successors<'_> {
+        self.record(ReadEntity::Op(op));
         self.ops[op]
             .successors
             .as_slice(&self.block_pool)
@@ -818,6 +959,7 @@ impl IrContext {
 
     /// Whether an operation has any successor.
     pub fn op_has_successors(&self, op: OpRef) -> bool {
+        self.record(ReadEntity::Op(op));
         !self.ops[op]
             .successors
             .as_slice(&self.block_pool)
@@ -826,6 +968,7 @@ impl IrContext {
 
     /// The number of successors of an operation.
     pub fn op_successor_count(&self, op: OpRef) -> usize {
+        self.record(ReadEntity::Op(op));
         self.ops[op].successors.as_slice(&self.block_pool).len()
     }
 
@@ -917,6 +1060,7 @@ impl IrContext {
 
     /// Get immutable reference to value data.
     pub fn value(&self, v: ValueRef) -> &ValueData {
+        self.record(ReadEntity::Value(v));
         &self.values[v]
     }
 
@@ -925,6 +1069,7 @@ impl IrContext {
     /// For operation results, this reads from `OperationData.results`.
     /// For block arguments, this reads from `BlockArgData.ty`.
     pub fn value_ty(&self, v: ValueRef) -> TypeRef {
+        self.record(ReadEntity::Value(v));
         match self.values[v].def {
             ValueDef::OpResult(op, idx) => {
                 self.ops[op].results.as_slice(&self.type_pool)[idx as usize]
@@ -935,6 +1080,7 @@ impl IrContext {
 
     /// Get the definition of a value.
     pub fn value_def(&self, v: ValueRef) -> ValueDef {
+        self.record(ReadEntity::Value(v));
         self.values[v].def
     }
 
@@ -963,6 +1109,7 @@ impl IrContext {
 
     /// Get immutable reference to block data.
     pub fn block(&self, b: BlockRef) -> &BlockData {
+        self.record(ReadEntity::Block(b));
         &self.blocks[b]
     }
 
@@ -974,11 +1121,13 @@ impl IrContext {
 
     /// Get the i-th block argument value.
     pub fn block_arg(&self, b: BlockRef, index: u32) -> ValueRef {
+        self.record(ReadEntity::Block(b));
         self.block_arg_values[b].as_slice(&self.value_pool)[index as usize]
     }
 
     /// Get all block argument values.
     pub fn block_args(&self, b: BlockRef) -> &[ValueRef] {
+        self.record(ReadEntity::Block(b));
         self.block_arg_values[b].as_slice(&self.value_pool)
     }
 
@@ -1154,6 +1303,7 @@ impl IrContext {
 
     /// Get immutable reference to region data.
     pub fn region(&self, r: RegionRef) -> &RegionData {
+        self.record(ReadEntity::Region(r));
         &self.regions[r]
     }
 
@@ -1169,11 +1319,13 @@ impl IrContext {
 
     /// Get all uses of a value.
     pub fn uses(&self, v: ValueRef) -> &[Use] {
+        self.record(ReadEntity::Value(v));
         &self.uses[v]
     }
 
     /// Check if a value has any uses.
     pub fn has_uses(&self, v: ValueRef) -> bool {
+        self.record(ReadEntity::Value(v));
         !self.uses[v].is_empty()
     }
 
