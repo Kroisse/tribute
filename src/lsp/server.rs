@@ -38,6 +38,7 @@ use super::completion_index::{
 use super::definition_index::{definition_index, validate_identifier};
 use super::type_index::{AstTypeIndex, print_ast_type, type_index as ast_type_index};
 use tribute::TributeDatabaseImpl;
+use tribute_front::ast::source_hash;
 use tribute_front::keywords::unraw;
 use tribute_front::resolve::NameDisplay;
 use tribute_front::source_file::{apply_edit, new_parser, parse_with_rope};
@@ -563,13 +564,14 @@ impl LspServer {
         let actions = self.db.attach(|db| {
             let result = tribute::compile_with_diagnostics(db, source_cst);
             let type_index = ast_type_index(db, source_cst);
+            let document = source_hash(source_cst.uri(db).as_str());
 
             let mut actions = Vec::new();
 
             // Find diagnostics that overlap with the requested range
             for diag in &result.diagnostics {
                 // Check if diagnostic overlaps with range in this document
-                if diag.inner.span.source != 0
+                if !in_document(diag.inner.span, document)
                     || (diag.inner.span.end as usize) < start_offset
                     || diag.inner.span.start as usize > end_offset
                 {
@@ -811,13 +813,13 @@ impl LspServer {
             .db
             .attach(|db| tribute::compile_with_diagnostics(db, source_cst).diagnostics);
 
-        // Convert to LSP diagnostics. A span with a nonzero source is in a
-        // file module's file rather than this document, so this document
-        // does not show it.
+        // Convert to LSP diagnostics. A span in a file module's file rather
+        // than this document is not shown in it.
+        let document = source_hash(source_cst.uri(&self.db).as_str());
         let lsp_uri = uri.clone();
         let diagnostics: Vec<Diagnostic> = diags
             .iter()
-            .filter(|d| d.inner.span.source == 0)
+            .filter(|d| in_document(d.inner.span, document))
             .map(|d| {
                 let range = span_to_range(rope, d.inner.span);
 
@@ -829,7 +831,7 @@ impl LspServer {
                         d.inner
                             .labels
                             .iter()
-                            .filter(|label| label.span.source == 0)
+                            .filter(|label| in_document(label.span, document))
                             .map(|label| DiagnosticRelatedInformation {
                                 location: Location {
                                     uri: lsp_uri.clone(),
@@ -992,6 +994,12 @@ fn init_lsp_tracing(log_filter: &str, sender: crossbeam_channel::Sender<Message>
         .with(env_filter)
         .with(LspLayer::new(sender))
         .try_init();
+}
+
+/// Whether `span` is in the document whose source hash is `document`. A span
+/// with no source belongs to the document being analyzed.
+fn in_document(span: trunk_ir::Span, document: u64) -> bool {
+    span.source == document || span.source == 0
 }
 
 fn span_to_range(rope: &Rope, span: trunk_ir::Span) -> lsp_types::Range {

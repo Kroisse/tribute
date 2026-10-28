@@ -136,8 +136,7 @@ pub fn lower_source_to_parsed_ast_with_module_path<'db>(
 
 /// Parse and lower the file of the file module at `path` in its package,
 /// like [`lower_source_to_parsed_ast_with_module_path`]. Its items are owned
-/// as the same items declared inline would be, and its spans and diagnostics
-/// are stamped with its source hash so that they name its file
+/// as the same items declared inline would be
 /// (`new-plans/implementation.md` § 패키지 source 트리와 파일 입력).
 #[salsa::tracked(returns(copy))]
 pub fn lower_file_module<'db>(

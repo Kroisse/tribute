@@ -1012,9 +1012,10 @@ representation/ABI 경계)의 실패는 source 진단이 아니라 compiler 내�
 경로 순서에서 한 모듈과 그 아래 모듈의 파일은 연속 구간이므로, 하위 트리의
 파일은 이진 탐색으로 찾는다.
 
-Span은 바이트 위치와 그 위치가 속한 source id를 함께 가진다. Root 파일의 source
-id는 0이고, 파일 모듈의 source id는 그 파일 URI의 hash로 `NodeId`의 source
-hash와 같은 값이다. 파일 모듈의 구문 진단도 같은 source id를 가진다. 트리의
+Span은 바이트 위치와 그 위치가 속한 source id를 함께 가진다. 파일의 source id는
+root와 파일 모듈 모두 그 파일 URI의 hash로, `NodeId`의 source hash와 같은 값이다.
+Source id 0은 어느 파일에도 속하지 않는 위치이다. 파일의 구문 진단도 같은 source
+id를 가진다. 트리의
 span map은 파일들의 span을 하나로 합치지 않는다. 노드의 `NodeId`가 가진 source
 hash로 그 파일을 찾아 그 파일의 상대 span과 layout에서 위치를 읽는다. 따라서 한
 파일의 item을 옮기면 그 파일의 parse 결과만 바뀌고, 트리의 패키지 AST가 같으면

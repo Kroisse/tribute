@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 /// A span of source code, represented as byte offsets.
 ///
 /// `source` names the source the offsets are in, as an opaque id its
-/// producer assigns. `0` is the source the producer started from, so a
-/// producer that reads one source never sets it. The offsets are 32-bit so
+/// producer assigns. `0` names no source, as for a span a producer made
+/// without reading one. The offsets are 32-bit so
 /// that a span, and the IR location that holds one, stays 16 bytes.
 #[derive(
     Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
@@ -19,7 +19,7 @@ pub struct Span {
 }
 
 impl Span {
-    /// The bytes `start..end` of the source the producer started from.
+    /// The bytes `start..end`, in no particular source.
     pub const fn new(start: usize, end: usize) -> Self {
         debug_assert!(end <= u32::MAX as usize, "a source is at most 4 GiB");
         Self {

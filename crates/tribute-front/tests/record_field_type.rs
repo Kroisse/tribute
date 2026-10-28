@@ -9,6 +9,8 @@ use self::common::{ast_pipeline_diagnostics, run_ast_pipeline, run_ast_pipeline_
 use insta::assert_snapshot;
 use salsa_test_macros::salsa_test;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_front::ast::source_hash;
+use tribute_front::path_to_uri;
 use tribute_front::{
     SourceCst,
     ast::{Decl, DeclTable, Expr, ExprKind, Type, TypeDefId, TypeKind, TypedRef},
@@ -23,9 +25,10 @@ fn diagnostics(db: &dyn salsa::Database, text: &str) -> Vec<Diagnostic> {
 
 fn shape_error(text: &str, record: &str, occurrence: usize, message: &str) -> Diagnostic {
     let start = text.match_indices(record).nth(occurrence).unwrap().0;
+    let source = source_hash(path_to_uri("record_shape.trb".as_ref()).as_str());
     Diagnostic::new(
         message,
-        Span::new(start, start + record.len()),
+        Span::new(start, start + record.len()).in_source(source),
         DiagnosticSeverity::Error,
         CompilationPhase::TypeChecking,
     )

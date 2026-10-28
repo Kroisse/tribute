@@ -59,8 +59,6 @@ impl<'db> SourceTree<'db> {
             let index = u32::try_from(index).expect("fewer than 2^32 files");
             by_source.insert(source_hash(file.source.uri(db).as_str()), index);
         }
-        // The root's spans carry the source id `0`.
-        by_source.insert(0, 0);
         Self {
             spliced,
             files,

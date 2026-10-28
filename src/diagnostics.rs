@@ -6,6 +6,7 @@ use trunk_ir::diagnostic::DiagnosticSeverity;
 
 use tribute::SourceCst;
 use tribute::pipeline::compile_with_diagnostics;
+use tribute_front::ast::source_hash;
 use tribute_front::source_tree::source_tree_of;
 use tribute_front::uri_to_path;
 
@@ -36,18 +37,18 @@ fn span_file(
     root_path: &str,
     source: u64,
 ) -> (String, String) {
-    let file = (source != 0)
-        .then(|| Some(source_tree_of(db, root)?.file(source)?.source))
-        .flatten();
+    let file = source_tree_of(db, root)
+        .and_then(|tree| tree.file(source))
+        .map(|file| file.source);
     match file {
-        Some(file) => (
+        Some(file) if file != root => (
             uri_to_path(file.uri(db)).map_or_else(
                 || file.uri(db).as_str().to_owned(),
                 |path| path.display().to_string(),
             ),
             file.text(db).to_string(),
         ),
-        None => (root_path.to_owned(), root.text(db).to_string()),
+        _ => (root_path.to_owned(), root.text(db).to_string()),
     }
 }
 
@@ -111,7 +112,11 @@ pub fn print_diagnostics(
 ) {
     diags.sort_by(|left, right| tribute_core::diagnostic::compare_diagnostics(left, right));
     // Keep each file's diagnostics together, the root file's first.
-    diags.sort_by_key(|diag| diag.inner.span.source);
+    let root = source_hash(source.uri(db).as_str());
+    diags.sort_by_key(|diag| {
+        let source = diag.inner.span.source;
+        (source != root && source != 0, source)
+    });
     for diag in diags.iter() {
         print_diagnostic(db, source, file_path, diag);
     }

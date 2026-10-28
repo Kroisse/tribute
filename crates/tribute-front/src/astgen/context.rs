@@ -15,11 +15,9 @@ use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity}
 /// Context for lowering CST to AST.
 pub struct AstLoweringCtx<'db> {
     pub source: Rope,
-    /// Source hash for distinguishing parse sessions (derived from source URI).
+    /// Source hash for distinguishing parse sessions (derived from source
+    /// URI), stamped on the nodes, spans, and diagnostics of this source.
     source_hash: u64,
-    /// The source id stamped on spans: `0` for the file an analysis starts
-    /// from, the source hash for a file module.
-    span_source: u64,
     /// Builder for span map.
     span_builder: SpanMapBuilder,
     /// Salsa database for accumulating diagnostics directly.
@@ -45,7 +43,6 @@ impl<'db> AstLoweringCtx<'db> {
         Self {
             source,
             source_hash,
-            span_source: 0,
             span_builder: SpanMapBuilder::new(),
             db: None,
             module_path: Vec::new(),
@@ -66,11 +63,9 @@ impl<'db> AstLoweringCtx<'db> {
     }
 
     /// Lower the file of the file module at `module_path` in its package:
-    /// its items are owned as if the module were declared inline, and its
-    /// spans and diagnostics are stamped with this source's hash.
+    /// its items are owned as if the module were declared inline.
     pub fn in_file_module(self, module_path: Vec<Symbol>) -> Self {
         Self {
-            span_source: self.source_hash,
             owner: module_owner(&module_path),
             module_path,
             ..self
@@ -81,7 +76,7 @@ impl<'db> AstLoweringCtx<'db> {
     /// the CST node's span for it.
     pub fn fresh_id_with_span(&mut self, node: &Node) -> NodeId {
         let id = self.next_id();
-        let span = Span::new(node.start_byte(), node.end_byte()).in_source(self.span_source);
+        let span = Span::new(node.start_byte(), node.end_byte()).in_source(self.source_hash);
         self.span_builder.insert(id, span);
         id
     }
@@ -89,7 +84,7 @@ impl<'db> AstLoweringCtx<'db> {
     /// Generate the NodeId of the root `Module` node and record its span.
     pub fn module_id_with_span(&mut self, node: &Node) -> NodeId {
         let id = self.next_id();
-        let span = Span::new(node.start_byte(), node.end_byte()).in_source(self.span_source);
+        let span = Span::new(node.start_byte(), node.end_byte()).in_source(self.source_hash);
         self.span_builder.set_module(id, span);
         id
     }
@@ -143,7 +138,7 @@ impl<'db> AstLoweringCtx<'db> {
         if let Some(db) = self.db {
             Diagnostic::new(
                 message,
-                span.in_source(self.span_source),
+                span.in_source(self.source_hash),
                 DiagnosticSeverity::Error,
                 CompilationPhase::AstGeneration,
             )
@@ -156,7 +151,7 @@ impl<'db> AstLoweringCtx<'db> {
         if let Some(db) = self.db {
             Diagnostic::new(
                 message,
-                span.in_source(self.span_source),
+                span.in_source(self.source_hash),
                 DiagnosticSeverity::Error,
                 CompilationPhase::Parsing,
             )
