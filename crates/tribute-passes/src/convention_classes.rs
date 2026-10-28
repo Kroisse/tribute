@@ -115,11 +115,13 @@ pub(crate) struct Function {
 
 impl Function {
     pub(crate) fn read(ctx: &IrContext, op: OpRef) -> Option<Self> {
-        let function = tribute_control::Func::from_op(ctx, op).ok()?;
-        let name = function.sym_name(ctx).to_owned();
+        if !tribute_control::is_func(ctx, op) {
+            return None;
+        }
+        let name = ctx.op_attrs(op).get_str("sym_name")?.to_owned();
         let (base, claimed) = split_name(&name);
         let base = base.to_owned();
-        let ty = function.r#type(ctx);
+        let ty = ctx.op_attrs(op).get_type("type")?;
         let signature = FuncSig::from_type_ref(ctx, ty)?;
         let binders = tribute_control::row_binders(ctx, op).ok()?;
         let inferred = matches!(
@@ -188,7 +190,7 @@ impl Function {
 
 /// The name a `call`, `tail_call`, or `func_ref` refers to.
 pub(crate) fn reference_callee(ctx: &IrContext, op: OpRef) -> Option<String> {
-    let key = if tribute_control::FuncRef::matches(ctx, op) {
+    let key = if tribute_control::is_func_ref(ctx, op) {
         "func_ref"
     } else if tribute_control::Call::matches(ctx, op) || tribute_control::TailCall::matches(ctx, op)
     {

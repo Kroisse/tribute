@@ -25,25 +25,28 @@ Dialects are split across two crates:
   Language-agnostic dialects (core, func, scf, arith, mem, cf, clif,
   wasm)
 - **tribute-ir** (`crates/tribute-ir/src/dialect/`):
-  Tribute-specific dialects (tribute_control, ability, effect, closure, adt,
-  list, tribute_io, tribute_rt)
+  Tribute-specific dialects (tribute_control, tribute_cps, ability, effect,
+  closure, adt, list, tribute_io, tribute_rt)
 
 Dialect levels (high → low):
 
-- **High-level**: tribute_control, ability, effect, closure, adt, list,
-  tribute_io, tribute_rt — Tribute language concepts
+- **High-level**: tribute_control, tribute_cps, ability, effect, closure, adt,
+  list, tribute_io, tribute_rt — Tribute language concepts
 - **Mid-level**: func, scf, arith, mem — structured operations
 - **Low-level**: cf, wasm, clif — target-specific
 
 ## Source-logical Control
 
 The frontend emits `tribute_control` callable/control operations with exact
-source signatures and checked operation kinds. Shared `tribute_control_to_cps`
-legalization alone constructs continuations and the `func`/`closure` graph.
+source signatures and checked operation kinds. Class specialization replaces
+the callables and indirect transfers whose meaning depends on a convention with
+their `tribute_cps` operations. Shared `tribute_control_to_cps` legalization
+alone constructs continuations and the `func`/`closure` graph.
 Target ABI lowering validates that graph before physicalizing CPS results and
 selecting closure storage. Each operation's own contract is the doc comment
 on its declaration in
-[`tribute_control`](../../crates/tribute-ir/src/dialect/tribute_control.rs) and
+[`tribute_control`](../../crates/tribute-ir/src/dialect/tribute_control.rs),
+[`tribute_cps`](../../crates/tribute-ir/src/dialect/tribute_cps.rs), and
 [`ability`](../../crates/tribute-ir/src/dialect/ability.rs). See
 [the IR contract](../../new-plans/ir.md) for the rules that span operations, and
 [the shared pipeline](../../new-plans/cps-effects.md#shared-middle-end-pipeline).
@@ -216,7 +219,10 @@ Remaining operation-specific checks run afterwards and may assume the
 declared shape. The `tribute_control` local validator and the native backend
 boundary (`validate_clif_ir`) run `OpDef::verify` the same way before their
 own checks, so those checks cover only what the definition cannot express,
-such as symbol lookups, enclosing callables, and region contents.
+such as symbol lookups, enclosing callables, and region contents. A check
+that reads only the operation itself belongs in its `#[verify]` hook; the
+`tribute_control` local validator reaches each operation's checks on its
+placement and regions through the `LocalValidation` interface.
 Debug builds also run `validate_op_schemas`, the declarative stages without the
 `#[verify]` hook, after every pipeline pass, reporting the pass that left an
 operation in violation. A pass that retypes a value before target type
@@ -390,15 +396,13 @@ let func_ty = func::func_sig(ctx, params, [return_ty]).as_type_ref();
 ```
 
 The source signature `tribute_control.func_sig` is declared by hand but is
-built the same way. A signature without a convention is one that class
-specialization has not assigned yet:
+built the same way. It has no calling convention; a `tribute_cps` operation
+declares the convention it was assigned:
 
 ```rust
 let callback = tribute_control::FuncSig::params([i32_ty], i32_ty)
     .row(row)
-    .convention(CallingConvention::Cps)
     .intern(ctx);
-let direct = callback.with_convention(ctx, CallingConvention::Direct);
 ```
 
 String attribute values live in the context's string pool; an attribute

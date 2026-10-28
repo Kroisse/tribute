@@ -511,11 +511,6 @@ fn type_key(ctx: &IrContext, ty: TypeRef) -> String {
                 .iter()
                 .chain([&signature.result(ctx)])
                 .map(|ty| type_key(ctx, *ty))
-                .chain(
-                    signature
-                        .assigned_convention(ctx)
-                        .map(|convention| convention.keyword().to_owned()),
-                )
                 .chain([row])
                 .chain(attributes(&super::RESERVED_ATTRS)),
         );
@@ -666,45 +661,15 @@ impl TypeSink for Lookup<'_> {
     }
 }
 
-/// What a rewrite does to the row and convention of each callable type.
-trait CallableRewrite {
-    /// The row to write in place of `row`; `None` fails the rewrite.
-    fn row(&mut self, row: &Row) -> Option<Row>;
-    /// The convention to write for a callable whose row is now `row`;
-    /// `None` keeps the one it has.
-    fn convention(&mut self, _row: &Row) -> Option<super::CallingConvention> {
-        None
-    }
-}
-
-impl CallableRewrite for RowArgs<'_> {
-    fn row(&mut self, row: &Row) -> Option<Row> {
-        row.substitute(*self)
-    }
-}
-
-/// Assigns each callable the convention its row selects.
-struct Assign<F>(F);
-
-impl<F: FnMut(&Row) -> super::CallingConvention> CallableRewrite for Assign<F> {
-    fn row(&mut self, row: &Row) -> Option<Row> {
-        Some(row.clone())
-    }
-
-    fn convention(&mut self, row: &Row) -> Option<super::CallingConvention> {
-        Some((self.0)(row))
-    }
-}
-
 /// Rewrites every callable type inside a type, rebuilding the types and
 /// tuple layouts that hold it.
-struct Substitution<S, R> {
+struct Substitution<'a, S> {
     sink: S,
-    rewrite: R,
+    args: RowArgs<'a>,
     done: HashMap<TypeRef, Option<TypeRef>>,
 }
 
-impl<S: TypeSink, R: CallableRewrite> Substitution<S, R> {
+impl<S: TypeSink> Substitution<'_, S> {
     fn ty(&mut self, ty: TypeRef) -> Option<TypeRef> {
         if let Some(&done) = self.done.get(&ty) {
             return done;
@@ -740,7 +705,7 @@ impl<S: TypeSink, R: CallableRewrite> Substitution<S, R> {
             *param = substituted;
         }
         if let Some(row) = row {
-            let substituted = self.rewrite.row(&row)?;
+            let substituted = row.substitute(self.args)?;
             if substituted != row {
                 changed = true;
                 let key = self.sink.key(ABILITY_ROW_ATTR)?;
@@ -753,21 +718,6 @@ impl<S: TypeSink, R: CallableRewrite> Substitution<S, R> {
                     .chain((!substituted.is_empty()).then_some((key, value)))
                     .collect();
                 data.attrs = AttributeMap::from_refs(self.sink.ctx(), entries);
-            }
-            if let Some(convention) = self.rewrite.convention(&substituted) {
-                let value = Attribute::String(self.sink.key(convention.keyword())?);
-                let key = self.sink.key(super::CALLING_CONVENTION_ATTR)?;
-                if data.attrs.view(self.sink.ctx()).get(key) != Some(&value) {
-                    changed = true;
-                    let entries: Vec<_> = data
-                        .attrs
-                        .iter()
-                        .filter(|(existing, _)| *existing != key)
-                        .map(|(existing, attr)| (existing, attr.clone()))
-                        .chain([(key, value)])
-                        .collect();
-                    data.attrs = AttributeMap::from_refs(self.sink.ctx(), entries);
-                }
             }
         }
         if changed {
@@ -789,26 +739,10 @@ pub fn substitute_rows<'a>(
 ) -> Option<TypeRef> {
     Substitution {
         sink: Intern(ctx),
-        rewrite: args.into(),
+        args: args.into(),
         done: HashMap::default(),
     }
     .ty(ty)
-}
-
-/// Write on every callable type inside `ty` the convention `class` selects
-/// for its row, rebuilding the types and tuple layouts that hold it.
-pub fn assign_conventions(
-    ctx: &mut IrContext,
-    ty: TypeRef,
-    class: impl FnMut(&Row) -> super::CallingConvention,
-) -> TypeRef {
-    Substitution {
-        sink: Intern(ctx),
-        rewrite: Assign(class),
-        done: HashMap::default(),
-    }
-    .ty(ty)
-    .expect("assigning conventions keeps every row")
 }
 
 /// [`substitute_rows`] without creating types: `None` also when the
@@ -820,7 +754,7 @@ pub fn find_substituted_rows<'a>(
 ) -> Option<TypeRef> {
     Substitution {
         sink: Lookup(ctx),
-        rewrite: args.into(),
+        args: args.into(),
         done: HashMap::default(),
     }
     .ty(ty)

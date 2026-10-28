@@ -6,7 +6,8 @@
 //! instances root `main` and the references' `row_args` need, clones each
 //! definition per instance, points every reference at its instance, copies
 //! each let-bound lambda of an instance once per class vector its
-//! instantiations select, and writes a convention on every source signature.
+//! instantiations select, and replaces every source callable and indirect
+//! transfer with its `tribute_cps` operation, which declares its convention.
 //!
 //! Class variables are selected on the unchanged module. Instances are then
 //! rewritten one at a time, and the instance each reference selects, read
@@ -20,10 +21,11 @@ use std::collections::VecDeque;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use tribute_ir::calling_convention::CallingConvention;
 use tribute_ir::dialect::tribute_control::{self, FuncSig, Row, RowArgs, RowBinder};
+use tribute_ir::dialect::tribute_cps;
 use trunk_ir::context::IrContext;
 use trunk_ir::ir_mapping::IrMapping;
 use trunk_ir::ops::{DialectOp, DialectType};
-use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
+use trunk_ir::refs::{OpRef, RegionRef, ValueRef};
 use trunk_ir::rewrite::Module;
 use trunk_ir::types::Attribute;
 use trunk_ir::{Symbol, SymbolPath};
@@ -36,8 +38,8 @@ use crate::convention_classes::{
 /// Why a module cannot be specialized.
 #[derive(Debug, derive_more::Display, derive_more::Error)]
 pub enum ClassSpecializationError {
-    /// Some or all source signatures already have a convention.
-    #[display("class specialization takes source signatures without calling conventions")]
+    /// The module already holds `tribute_cps` operations.
+    #[display("class specialization takes a module without tribute_cps operations")]
     ConventionsAssigned,
 }
 
@@ -63,9 +65,7 @@ impl trunk_ir::pass::Pass for SpecializeConventionClasses {
 
 /// Specialize the convention classes of `module`.
 pub fn specialize(ctx: &mut IrContext, module: Module) -> Result<(), ClassSpecializationError> {
-    if tribute_control::conventions_assigned(ctx, module) != Some(false)
-        && has_source_signatures(ctx, module)
-    {
+    if has_cps_operations(ctx, module) {
         return Err(ClassSpecializationError::ConventionsAssigned);
     }
     let requirements = requirements(ctx, module);
@@ -99,6 +99,7 @@ pub fn specialize(ctx: &mut IrContext, module: Module) -> Result<(), ClassSpecia
         anchors.insert(&function.name, function.op);
         queue.push_back((function, function.op, classes));
     }
+    let mut instances = Vec::new();
     while let Some((function, op, classes)) = queue.pop_front() {
         let mut instance = Instance {
             function,
@@ -113,7 +114,9 @@ pub fn specialize(ctx: &mut IrContext, module: Module) -> Result<(), ClassSpecia
             binders: function.binders.clone(),
             locals: HashMap::default(),
         };
-        for (callee, classes) in instance.rewrite(ctx, op) {
+        let selected = instance.rewrite(ctx, op);
+        instances.push((op, instance.own_convention(ctx, op)));
+        for (callee, classes) in selected {
             let callee = by_name[callee.as_str()];
             let vectors = known.entry(&callee.name).or_default();
             if vectors.contains(&classes) {
@@ -136,17 +139,22 @@ pub fn specialize(ctx: &mut IrContext, module: Module) -> Result<(), ClassSpecia
     for (_, template) in templates {
         ctx.remove_op(template);
     }
-    assign_module_level(ctx, module, &requirements);
+    for (op, convention) in instances {
+        tribute_cps::replace_control_op(ctx, op, convention);
+    }
     Ok(())
 }
 
-/// Whether `module` reaches a source signature at all. A module without
-/// definitions has no conventions to assign, so it is already specialized.
-fn has_source_signatures(ctx: &IrContext, module: Module) -> bool {
-    module
-        .ops(ctx)
-        .iter()
-        .any(|&op| tribute_control::Func::matches(ctx, op))
+/// Whether `module` holds a `tribute_cps` operation.
+fn has_cps_operations(ctx: &IrContext, module: Module) -> bool {
+    trunk_ir::walk::walk_op::<()>(ctx, module.op(), &mut |op| {
+        if ctx.op(op).name.dialect(ctx) == tribute_cps::DIALECT_NAME {
+            std::ops::ControlFlow::Break(())
+        } else {
+            std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+        }
+    })
+    .is_break()
 }
 
 /// Insert `op` right after `anchor`.
@@ -272,38 +280,22 @@ impl Instance<'_> {
                     .insert(tribute_control::ROW_BINDERS_ATTR, Attribute::List(binders));
             }
         }
-        let mut ops = vec![op];
-        let mut blocks = Vec::new();
+        let mut ops = Vec::new();
         if let Some(body) = ctx.op_region(op, 0) {
             let _ = trunk_ir::walk::walk_region::<()>(ctx, body, &mut |inner| {
                 ops.push(inner);
                 std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
             });
-            let mut regions = vec![body];
-            while let Some(region) = regions.pop() {
-                for &block in &ctx.region(region).blocks {
-                    blocks.push(block);
-                    for &inner in &ctx.block(block).ops {
-                        regions.extend(ctx.op_regions(inner));
-                    }
-                }
-            }
         }
-        let selected: Vec<_> = ops[1..]
+        let selected: Vec<_> = ops
             .iter()
             .filter_map(|&inner| self.point_reference(ctx, inner))
             .collect();
-        for &inner in &ops {
-            self.assign_op(ctx, inner);
-        }
-        for block in blocks {
-            for index in 0..ctx.block_args(block).len() {
-                let value = ctx.block_args(block)[index];
-                let ty = self.assign(ctx, ctx.value_ty(value));
-                ctx.set_block_arg_type(block, index as u32, ty);
+        for inner in ops {
+            if let Some(convention) = self.transfer_convention(ctx, inner) {
+                tribute_cps::replace_control_op(ctx, inner, convention);
             }
         }
-        self.assign_own_convention(ctx, op);
         selected
     }
 
@@ -509,37 +501,28 @@ impl Instance<'_> {
         Some((callee, classes))
     }
 
-    fn assign(&self, ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
-        tribute_control::assign_conventions(ctx, ty, |row| self.class(row))
+    /// The convention of a lambda, `func_ref`, or indirect transfer: the class
+    /// of the row of the callable it makes or calls.
+    fn transfer_convention(&self, ctx: &IrContext, op: OpRef) -> Option<CallingConvention> {
+        let ty = if tribute_control::Lambda::matches(ctx, op)
+            || tribute_control::FuncRef::matches(ctx, op)
+        {
+            ctx.op_result_types(op)[0]
+        } else if tribute_control::CallIndirect::matches(ctx, op)
+            || tribute_control::TailCallIndirect::matches(ctx, op)
+        {
+            ctx.value_ty(ctx.op_operands(op)[0])
+        } else {
+            return None;
+        };
+        let signature = FuncSig::from_type_ref(ctx, ty)?;
+        Some(self.class(&signature.row(ctx)))
     }
 
-    /// Assign conventions to an operation's result types and the types its
-    /// attributes hold.
-    fn assign_op(&self, ctx: &mut IrContext, op: OpRef) {
-        for index in 0..ctx.op_result_types(op).len() {
-            let ty = self.assign(ctx, ctx.op_result_types(op)[index]);
-            ctx.set_op_result_type(op, index as u32, ty);
-        }
-        let attributes: Vec<_> = ctx
-            .op(op)
-            .attributes
-            .iter()
-            .map(|(key, value)| (key, value.clone()))
-            .collect();
-        for (key, value) in attributes {
-            let assigned = value.map_types(|ty| self.assign(ctx, ty));
-            if assigned != value {
-                ctx.op_attrs_mut(op).insert(key, assigned);
-            }
-        }
-    }
-
-    /// A definition with an inferred row reads its own tail only when that
-    /// tail is a class variable.
-    fn assign_own_convention(&self, ctx: &mut IrContext, op: OpRef) {
-        if !self.function.inferred {
-            return;
-        }
+    /// The instance's own convention: the class of its row, where a
+    /// definition with an inferred row reads its own tail only when that tail
+    /// is a class variable.
+    fn own_convention(&self, ctx: &IrContext, op: OpRef) -> CallingConvention {
         let ty = ctx
             .op_attrs(op)
             .get_type("type")
@@ -547,73 +530,14 @@ impl Instance<'_> {
         let signature =
             FuncSig::from_type_ref(ctx, ty).expect("a definition's signature is a func_sig");
         let mut row = signature.row(ctx);
-        if row.tail.is_none_or(|tail| self.params.contains_key(&tail)) {
-            return;
-        }
-        row.tail = None;
-        let convention = self.class(&row);
-        let ty = signature.with_convention(ctx, convention).as_type_ref();
-        ctx.op_attrs_mut(op).insert("type", Attribute::Type(ty));
-    }
-}
-
-/// Assign conventions to the types outside definitions: those of the module
-/// and its other operations, such as the signatures of ability operations,
-/// and the nominal layouts the context publishes as type aliases. They have no row
-/// binders, so only their abilities decide.
-fn assign_module_level(
-    ctx: &mut IrContext,
-    module: Module,
-    requirements: &HashMap<SymbolPath, CallingConvention>,
-) {
-    let class = |row: &Row| {
-        row_class(
-            row,
-            &[],
-            requirements,
-            &HashMap::default(),
-            &HashMap::default(),
-        )
-    };
-    let mut ops = vec![module.op()];
-    for &op in module.ops(ctx).iter() {
-        if tribute_control::Func::matches(ctx, op) {
-            continue;
-        }
-        ops.push(op);
-        let _ = trunk_ir::walk::walk_op::<()>(ctx, op, &mut |inner| {
-            if inner != op {
-                ops.push(inner);
-            }
-            std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
-        });
-    }
-    for op in ops {
-        let attributes: Vec<_> = ctx
-            .op(op)
-            .attributes
-            .iter()
-            .map(|(key, value)| (key, value.clone()))
-            .collect();
-        for (key, value) in attributes {
-            let assigned =
-                value.map_types(|ty| tribute_control::assign_conventions(ctx, ty, class));
-            if assigned != value {
-                ctx.op_attrs_mut(op).insert(key, assigned);
-            }
-        }
-    }
-    for (name, ty) in ctx.type_aliases().to_vec() {
-        let name_of = ctx.get_type(ty).name;
-        if name_of != tribute_ir::dialect::adt::Struct::NAME
-            && name_of != tribute_ir::dialect::adt::Enum::NAME
+        if self.function.inferred
+            && row
+                .tail
+                .is_some_and(|tail| !self.params.contains_key(&tail))
         {
-            continue;
+            row.tail = None;
         }
-        let assigned = tribute_control::assign_conventions(ctx, ty, class);
-        if assigned != ty {
-            ctx.register_type_alias(name, assigned);
-        }
+        self.class(&row)
     }
 }
 

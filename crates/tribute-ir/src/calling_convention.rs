@@ -79,6 +79,22 @@ impl CallingConvention {
     }
 }
 
+/// `Attr<CallingConvention>`: a keyword string. The schema checks only that
+/// the value is a string; an operation declaring it verifies the keyword.
+impl trunk_ir::attr_kind::AttrKind for CallingConvention {
+    const KIND: trunk_ir::op_schema::AttributeKind = trunk_ir::op_schema::AttributeKind::String;
+    type Out<'ctx> = CallingConvention;
+    type In = CallingConvention;
+
+    fn read<'ctx>(ctx: &'ctx IrContext, attr: &'ctx Attribute) -> CallingConvention {
+        Self::from_attribute(ctx, attr).expect("unverified calling convention keyword")
+    }
+
+    fn write(ctx: &mut IrContext, value: CallingConvention) -> Attribute {
+        value.to_attribute(ctx)
+    }
+}
+
 impl fmt::Display for CallingConvention {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.keyword())
