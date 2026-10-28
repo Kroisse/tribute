@@ -239,7 +239,17 @@ pub(crate) enum ReadFootprint {
 #[derive(Default)]
 struct ReadRecorder {
     depth: Cell<u32>,
+    /// Where the innermost active computation's segment starts.
+    segment_start: Cell<usize>,
     log: RefCell<Vec<ReadEntity>>,
+}
+
+/// The log segment of one recorded computation, returned by
+/// `IrContext::begin_reads`.
+#[must_use]
+pub(crate) struct ReadSegment {
+    start: usize,
+    outer_start: usize,
 }
 
 /// Advance an IR revision; a field-level helper so interning can advance it
@@ -443,24 +453,27 @@ impl IrContext {
     #[inline(never)]
     fn record_read(&self, entity: ReadEntity) {
         let mut log = self.reads.log.borrow_mut();
-        if log.last() != Some(&entity) {
+        if log.len() == self.reads.segment_start.get() || log.last() != Some(&entity) {
             log.push(entity);
         }
     }
 
-    /// Start recording reads for one computation; returns its log start.
-    pub(crate) fn begin_reads(&self) -> usize {
+    /// Start recording reads for one computation.
+    pub(crate) fn begin_reads(&self) -> ReadSegment {
         self.reads.depth.set(self.reads.depth.get() + 1);
-        self.reads.log.borrow().len()
+        let start = self.reads.log.borrow().len();
+        let outer_start = self.reads.segment_start.replace(start);
+        ReadSegment { start, outer_start }
     }
 
-    /// Stop recording the computation that started at `start` and return
-    /// its reads, excluding those of computations nested in it.
-    pub(crate) fn end_reads(&self, start: usize) -> Vec<ReadEntity> {
+    /// Stop recording the computation `segment` began and return its
+    /// reads, excluding those of computations nested in it.
+    pub(crate) fn end_reads(&self, segment: ReadSegment) -> Vec<ReadEntity> {
         let depth = self.reads.depth.get();
         assert!(depth != 0, "end_reads without begin_reads");
         self.reads.depth.set(depth - 1);
-        self.reads.log.borrow_mut().split_off(start)
+        self.reads.segment_start.set(segment.outer_start);
+        self.reads.log.borrow_mut().split_off(segment.start)
     }
 
     fn block_owner(&self, block: BlockRef) -> Option<OpRef> {

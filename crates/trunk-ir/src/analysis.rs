@@ -936,6 +936,18 @@ mod tests {
         }
     }
 
+    /// Reads its target, then depends on [`TargetReader`] of it, whose only
+    /// read is the same operation.
+    struct ReadsThenDependsOnTarget;
+
+    impl Analysis for ReadsThenDependsOnTarget {
+        fn compute(ctx: &mut AnalysisContext<'_>, target: OpRef) -> Result<Self, AnalysisError> {
+            let _ = ctx.ir().op(target);
+            ctx.get::<TargetReader>(target)?;
+            Ok(Self)
+        }
+    }
+
     #[test]
     fn recorded_reads_map_to_outermost_anchors() {
         let mut ctx = IrContext::new();
@@ -1010,6 +1022,29 @@ mod tests {
             footprint(&cache, AnalysisKey::of::<DependsOnSubtree>(g)),
             anchors(&[])
         );
+    }
+
+    #[test]
+    fn nested_computation_keeps_a_first_read_equal_to_the_outer_last_read() {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @f() {
+    func.return
+  }
+}"#,
+        );
+        let body = ctx.op_region(module.op(), 0).unwrap();
+        let f = ctx.block(ctx.region(body).blocks[0]).ops[0];
+
+        let mut cache = AnalysisCache::new();
+        cache.get::<ReadsThenDependsOnTarget>(&ctx, f).unwrap();
+        let entry = &cache.cache[&AnalysisKey::of::<TargetReader>(f)];
+        let Stamp::Anchors { anchors, .. } = &entry.stamp else {
+            panic!("expected an anchored stamp");
+        };
+        assert_eq!(anchors[..], [(f, ctx.anchor_revision(f))]);
     }
 
     /// The number of operations in the target module's body, equal across
