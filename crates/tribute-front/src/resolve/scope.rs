@@ -16,10 +16,13 @@ fn prelude_module() -> &'static SymbolPath {
     &PRELUDE
 }
 
-/// The packages a package depends on, each by its name.
+/// The packages a package depends on, each by its name, and the packages
+/// those depend on in turn. Only the named ones are found by name; the
+/// others are read where a re-export names a location in them.
 #[derive(Clone, Debug, Default)]
 pub struct Dependencies<'db> {
     packages: Vec<(Symbol, &'db PackageEnv<'db>)>,
+    indirect: Vec<&'db PackageEnv<'db>>,
 }
 
 impl<'db> Dependencies<'db> {
@@ -28,10 +31,18 @@ impl<'db> Dependencies<'db> {
         Self::default()
     }
 
-    /// The dependency on package `std`, whose environment is `std`.
-    pub fn std(std: &'db PackageEnv<'db>) -> Self {
+    /// The dependencies named in a package's dependency table, each with
+    /// its environment, and the environments of the packages they depend
+    /// on, transitively, that the table does not name. Only
+    /// [`analysis::dependencies`](crate::analysis::dependencies) builds
+    /// them from a table, so the indirect ones are never left out.
+    pub(crate) fn new(
+        packages: impl IntoIterator<Item = (Symbol, &'db PackageEnv<'db>)>,
+        indirect: impl IntoIterator<Item = &'db PackageEnv<'db>>,
+    ) -> Self {
         Self {
-            packages: vec![(Symbol::new(STD_PACKAGE), std)],
+            packages: packages.into_iter().collect(),
+            indirect: indirect.into_iter().collect(),
         }
     }
 
@@ -55,8 +66,12 @@ impl<'db> Dependencies<'db> {
         self.packages.iter().map(|(name, _)| name)
     }
 
+    /// The environments of the named and the indirect dependencies.
     fn iter(&self) -> impl Iterator<Item = &'db PackageEnv<'db>> + '_ {
-        self.packages.iter().map(|(_, env)| *env)
+        self.packages
+            .iter()
+            .map(|(_, env)| *env)
+            .chain(self.indirect.iter().copied())
     }
 }
 

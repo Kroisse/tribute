@@ -23,7 +23,7 @@ use trunk_ir::{IrContext, Module};
 /// source is analyzed in the root crate's environment: as the root package
 /// of an executable build, depending on package `std`.
 pub fn diagnostic_names(db: &dyn salsa::Database) -> NameDisplay {
-    analysis::root_names(db, crate::prelude::frontend_environment(db))
+    analysis::root_names(db, *crate::prelude::frontend_environment(db))
 }
 
 /// Analyze a user source in the root crate's environment, package `std`
@@ -36,12 +36,12 @@ pub fn parse_and_lower_ast(
     db: &dyn salsa::Database,
     source: SourceCst,
 ) -> Option<ast_typeck::TypeCheckOutput<'_>> {
-    analysis::analyze(db, source, crate::prelude::frontend_environment(db))
+    analysis::analyze(db, source, *crate::prelude::frontend_environment(db)).copied()
 }
 
 /// The diagnostics [`parse_and_lower_ast`] reports for `source`.
 pub fn frontend_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<&Diagnostic> {
-    analysis::diagnostics(db, source, crate::prelude::frontend_environment(db))
+    analysis::diagnostics(db, source, *crate::prelude::frontend_environment(db))
 }
 
 /// Merge prelude decls into user's typed AST and lower to arena IR.
@@ -235,7 +235,7 @@ mod tests {
         let typed = parse_and_lower_ast(db, source)?;
         let prelude = crate::prelude::prelude_module(db)?;
         let input = SpecializationInput::new(db, typed, Some(prelude), diagnostic_names(db))
-            .merge_bodies(db, prelude);
+            .merge_bodies(db, [prelude]);
         let intrinsics = ast_to_ir::registered_compiler_intrinsics(input.module()).ok()?;
         monomorphize_functions(db, input.with_compiler_intrinsics(intrinsics)).ok()
     }

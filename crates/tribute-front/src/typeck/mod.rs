@@ -140,7 +140,7 @@ pub struct WellKnownType<'db> {
 }
 
 /// Semantic identities supplied by the prelude and required downstream.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct WellKnownTypes<'db> {
     pub string: Option<WellKnownType<'db>>,
     /// The `==` that `String` literal patterns compare with.
@@ -170,6 +170,15 @@ impl WellKnownTypes<'_> {
             string: None,
             string_equality: None,
             bytes_equality: None,
+        }
+    }
+
+    /// Each identity of `self`, or of `other` where `self` has none.
+    pub fn or(self, other: Self) -> Self {
+        Self {
+            string: self.string.or(other.string),
+            string_equality: self.string_equality.or(other.string_equality),
+            bytes_equality: self.bytes_equality.or(other.bytes_equality),
         }
     }
 }
@@ -335,7 +344,7 @@ impl<'db> From<Vec<(CtorId<'db>, TypeScheme<'db>)>> for ConstructorTypeMetadata<
 /// What type checking fixed for the module's declarations. A module's
 /// output holds only its own package's declarations; the dependency's join
 /// them in specialization (`DeclarationTypeMetadata::after_dependency`).
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct DeclarationTypeMetadata<'db> {
     /// Function type schemes, keyed by path because `FuncDefId` does not
     /// implement `Ord`.
@@ -396,11 +405,7 @@ impl<'db> DeclarationTypeMetadata<'db> {
                 &self.ability_definitions,
                 |(id, ..)| *id,
             ),
-            well_known_types: if self.well_known_types == WellKnownTypes::empty() {
-                dependency.well_known_types
-            } else {
-                self.well_known_types
-            },
+            well_known_types: self.well_known_types.or(dependency.well_known_types),
         }
     }
 }
@@ -442,16 +447,15 @@ impl<'db> TypeCheckOutput<'db> {
     }
 }
 
-/// Prelude's exported type information.
+/// The type information a library package exports to the packages that
+/// depend on it.
 ///
-/// This struct holds type information extracted from the prelude after it has been
-/// fully type-checked. All types are resolved TypeSchemes with no UniVars - only
-/// BoundVars for polymorphic parameters.
-///
-/// This allows user code to use prelude types without sharing a TypeContext,
-/// avoiding UniVar counter conflicts that caused issues in the AST merge approach.
+/// It is extracted after the library is fully type-checked. All types are
+/// resolved TypeSchemes with no UniVars - only BoundVars for polymorphic
+/// parameters - so a dependent package reads them without sharing a
+/// TypeContext with the library.
 #[salsa::tracked]
-pub struct PreludeExports<'db> {
+pub struct PackageExports<'db> {
     /// Function type schemes keyed by FuncDefId.
     #[returns(deref)]
     pub function_types: Vec<(FuncDefId<'db>, TypeScheme<'db>)>,
@@ -570,7 +574,10 @@ mod tests {
                 (path("b"), scheme(TypeKind::Nat)),
                 (SymbolPath::new(["c"]), scheme(TypeKind::Nat)),
             ],
-            WellKnownTypes::empty(),
+            WellKnownTypes {
+                bytes_equality: Some(FuncDefId::new(&db, path("bytes_eq"))),
+                ..WellKnownTypes::empty()
+            },
         );
 
         let layered = module.after_dependency(&dependency);
@@ -582,6 +589,12 @@ mod tests {
                 (SymbolPath::new(["c"]), scheme(TypeKind::Nat)),
             ]
         );
-        assert_eq!(layered.well_known_types, well_known);
+        assert_eq!(
+            layered.well_known_types,
+            WellKnownTypes {
+                bytes_equality: module.well_known_types.bytes_equality,
+                ..well_known
+            }
+        );
     }
 }

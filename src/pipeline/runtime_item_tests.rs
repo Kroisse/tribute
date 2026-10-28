@@ -442,7 +442,7 @@ fn main() -> Nil { }
             let span_map = tribute_front::query::span_map(db, source).expect("parsed source");
             let diagnostic = errors[0].diagnostic(
                 &tribute_front::ast::SpanMaps::new([span_map]),
-                &tribute_front::analysis::root_names(db, crate::prelude::frontend_environment(db)),
+                &tribute_front::analysis::root_names(db, *crate::prelude::frontend_environment(db)),
             );
             assert_eq!(
                 diagnostic.inner.message,

@@ -4,7 +4,7 @@
 use itertools::Itertools;
 use tribute_core::diagnostic::Diagnostic;
 use tribute_front::SourceCst;
-use tribute_front::analysis::{self, Environment};
+use tribute_front::analysis;
 use tribute_front::ast::{Decl, DeclTable, Expr, ExprKind, ResolvedRef, Stmt, TypedRef};
 use trunk_ir::context::IrContext;
 use trunk_ir::printer::print_module;
@@ -12,32 +12,46 @@ use trunk_ir::printer::print_module;
 /// Prelude source, loaded at compile time relative to this file.
 const PRELUDE_SOURCE: &str = include_str!("../../../../lib/std/prelude.trb");
 
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked]
 fn prelude_source(db: &dyn salsa::Database) -> SourceCst {
     SourceCst::from_source_str(db, "prelude:///std/prelude", PRELUDE_SOURCE)
 }
 
-/// The environment the sources under test are analyzed in: package `std`
-/// from the prelude, which declares the operators (`Int::(+)` etc.).
-fn environment(db: &dyn salsa::Database) -> Environment {
-    Environment::Std(prelude_source(db))
+/// Package `std`, whose root module is the prelude.
+#[salsa::tracked]
+fn std_package(db: &dyn salsa::Database) -> analysis::Package {
+    let dependencies = analysis::DependencyTable::new(db, Vec::new());
+    analysis::Package::new(
+        db,
+        tribute_front::resolve::PackageName::std(),
+        *prelude_source(db),
+        dependencies,
+    )
+}
+
+/// The dependency table the sources under test are analyzed against:
+/// package `std` from the prelude, which declares the operators
+/// (`Int::(+)` etc.).
+#[salsa::tracked]
+fn environment(db: &dyn salsa::Database) -> analysis::DependencyTable {
+    analysis::DependencyTable::new(db, vec![*std_package(db)])
 }
 
 /// Inner tracked function that runs the full pipeline.
 ///
 /// Diagnostics emitted during the pipeline are accumulated as Salsa
 /// accumulators and can be collected by the caller.
-#[salsa::tracked(returns(deref))]
+#[salsa::tracked]
 fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String {
     let parsed = tribute_front::query::parsed_ast(db, source);
     assert!(parsed.is_some(), "Should parse successfully");
 
     let span_map = parsed.unwrap().span_map(db);
 
-    let checked = analysis::analyze(db, source, environment(db)).expect("the source parses");
+    let checked = *analysis::analyze(db, source, *environment(db)).expect("the source parses");
     // Specialization looks package std's declarations up but specializes only
     // the module under test, so its output holds no prelude bodies.
-    let prelude = analysis::checked_std(db, prelude_source(db)).expect("the prelude parses");
+    let prelude = analysis::checked_package(db, *std_package(db)).expect("the prelude parses");
     let compiler_intrinsics =
         tribute_front::ast_to_ir::registered_compiler_intrinsics(prelude.checked.module(db))
             .expect("prelude intrinsic directives must be supported");
@@ -45,7 +59,7 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
         db,
         checked,
         Some(prelude.checked),
-        analysis::root_names(db, environment(db)),
+        analysis::root_names(db, *environment(db)),
     )
     .with_compiler_intrinsics(compiler_intrinsics);
     let specialized = tribute_front::monomorphize::monomorphize_functions(db, input)
@@ -83,7 +97,7 @@ pub fn tdnr_function_summary(
     function_name: &str,
 ) -> TdnrSummary {
     let checked =
-        analysis::analyze(db, source, environment(db)).expect("Should parse successfully");
+        *analysis::analyze(db, source, *environment(db)).expect("Should parse successfully");
     let body = function_body(checked.module(db), function_name);
     let mut summary = TdnrSummary::default();
     collect_tdnr_summary(db, body, &mut summary);
@@ -261,7 +275,7 @@ pub fn run_ast_pipeline(db: &dyn salsa::Database, source: SourceCst) {
 
 /// Run the frontend through TDNR, without lowering invalid ASTs to IR.
 pub fn ast_pipeline_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<Diagnostic> {
-    analysis::diagnostics(db, source, environment(db))
+    analysis::diagnostics(db, source, *environment(db))
         .into_iter()
         .cloned()
         .collect()

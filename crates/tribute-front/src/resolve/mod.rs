@@ -34,20 +34,6 @@ use crate::ast::{
     ModuleItem, NodeId, ResolvedRef, SpanMap, TypeDefId, UnresolvedName, Visibility,
 };
 
-/// Resolve names in a module.
-///
-/// This is the main entry point for name resolution.
-pub fn resolve_module<'db>(
-    db: &'db dyn salsa::Database,
-    module: &Module<UnresolvedName>,
-    span_map: &'db SpanMap,
-) -> DeclTable<ResolvedRef<'db>> {
-    // Build the package environment from declarations. Without the prelude,
-    // package `std` holds only the compiler-owned names.
-    let scope = build_env(db, module, Dependencies::std(builtin_library_env(db)));
-    resolve_with_env(db, module, &scope, span_map)
-}
-
 /// Resolve names in a module with the environment [`build_env`] built for
 /// it.
 pub fn resolve_with_env<'db>(
@@ -167,40 +153,19 @@ pub fn build_env<'db>(
     module: &Module<UnresolvedName>,
     dependencies: Dependencies<'db>,
 ) -> Scope<'db> {
-    let env = build_package_env(
-        db,
-        &module.decls,
-        &PackageName::executable_root(),
-        &dependencies,
-    );
+    let env = build_package_env(db, module, &PackageName::executable_root(), &dependencies);
     Scope::new(env, dependencies)
 }
 
-/// Build the environment of the library package `package` whose root
-/// module is `module`.
-pub fn build_library_env<'db>(
+/// Build the environment of the module tree of `package`, whose root
+/// module is `module`, with the packages its dependency table names.
+pub fn build_package_env<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<UnresolvedName>,
     package: &PackageName,
-) -> PackageEnv<'db> {
-    build_package_env(db, &module.decls, package, &Dependencies::none())
-}
-
-/// The environment of a package `std` that declares nothing but the
-/// compiler-owned names, for resolving a package without the prelude.
-#[salsa::tracked]
-pub fn builtin_library_env(db: &dyn salsa::Database) -> PackageEnv<'_> {
-    build_package_env(db, &[], &PackageName::std(), &Dependencies::none())
-}
-
-/// Build the environment of the module tree of `package`, whose root
-/// module holds `decls`.
-fn build_package_env<'db>(
-    db: &'db dyn salsa::Database,
-    decls: &[ModuleItem<UnresolvedName>],
-    package: &PackageName,
     dependencies: &Dependencies<'db>,
 ) -> PackageEnv<'db> {
+    let decls = &module.decls;
     let mut env = PackageEnv::for_package(package.clone());
 
     // Note: We don't use module.name as the initial prefix because
@@ -419,14 +384,15 @@ pub const STD_PACKAGE: &str = "std";
 pub const PRELUDE_MODULE: [&str; 2] = ["prelude", "v0"];
 
 /// Resolve the library package whose root module is `module`, in the
-/// environment `build_library_env` built for it.
+/// environment `build_package_env` built for it against `dependencies`.
 pub fn resolve_library_with_env<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<UnresolvedName>,
     env: &PackageEnv<'db>,
+    dependencies: &Dependencies<'db>,
     span_map: &'db SpanMap,
 ) -> DeclTable<ResolvedRef<'db>> {
-    Resolver::new(db, ScopeRef::new(env, &Dependencies::none()), span_map)
+    Resolver::new(db, ScopeRef::new(env, dependencies), span_map)
         .with_package(env.package().clone())
         .resolve_module(module)
 }

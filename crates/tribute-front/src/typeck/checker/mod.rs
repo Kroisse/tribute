@@ -47,7 +47,7 @@ use crate::ast::{
 use crate::resolve::{NameDisplay, PackageName};
 
 use super::context::ModuleTypeEnv;
-use super::{PreludeExports, StringType, WellKnownType, WellKnownTypeKey, WellKnownTypes};
+use super::{PackageExports, StringType, WellKnownType, WellKnownTypeKey, WellKnownTypes};
 
 /// Result of module type checking.
 pub struct ModuleCheckResult<'db> {
@@ -251,10 +251,12 @@ impl<'db> TypeChecker<'db> {
         self.env.db()
     }
 
-    /// Check against the declarations package `std` exports, read through
-    /// the dependency table. They resolve without sharing a `ModuleTypeEnv`,
-    /// so no unification variable crosses the package boundary.
-    pub fn depend_on(&mut self, exports: &PreludeExports<'db>) {
+    /// Check against the declarations one dependency package exports. Call it
+    /// for every package the checked package depends on, transitively, since
+    /// an export may name a declaration of a package that is not a direct
+    /// dependency. They resolve without sharing a `ModuleTypeEnv`, so no
+    /// unification variable crosses the package boundary.
+    pub fn depend_on(&mut self, exports: &PackageExports<'db>) {
         self.env.depend_on(exports);
     }
 
@@ -265,20 +267,21 @@ impl<'db> TypeChecker<'db> {
         self.check_module_inner(module)
     }
 
-    /// Type check the prelude module once.
+    /// Type check the root module of a library package once.
     ///
-    /// Returns the typed prelude, and the exports that user modules read
-    /// through the dependency table:
-    /// function types, constructors, and type definitions.
-    pub fn check_prelude(
+    /// Returns the typed module, and the exports that dependent packages read
+    /// through the dependency table: function types, constructors, and type
+    /// definitions. Package `std` also publishes its well-known identities;
+    /// another library declares none.
+    pub fn check_library(
         mut self,
         module: &DeclTable<ResolvedRef<'db>>,
-    ) -> (ModuleCheckResult<'db>, PreludeExports<'db>) {
+    ) -> (ModuleCheckResult<'db>, PackageExports<'db>) {
         self.collect_declarations(module);
         let well_known_types = self.prelude_well_known_types(module);
         self.env.set_prelude_well_known_types(well_known_types);
         let checked = self.check_decls(module);
-        let exports = self.prelude_exports(well_known_types);
+        let exports = self.package_exports(well_known_types);
         (self.into_module_result(checked), exports)
     }
 
@@ -352,8 +355,8 @@ impl<'db> TypeChecker<'db> {
     }
 
     /// Export the prelude's finalized types for injection into user modules.
-    fn prelude_exports(&self, well_known_types: WellKnownTypes<'db>) -> PreludeExports<'db> {
-        PreludeExports::new(
+    fn package_exports(&self, well_known_types: WellKnownTypes<'db>) -> PackageExports<'db> {
+        PackageExports::new(
             self.db(),
             self.env.export_function_types_with_ids(),
             self.env.export_extern_functions(),

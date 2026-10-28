@@ -38,7 +38,7 @@ use crate::typeck::{
 const MAX_TRANSITIVE_SPECIALIZATION_ROUNDS: usize = 64;
 
 /// What specialization reads: one checked module, with the declarations of
-/// the package it depends on for lookup and, when merged, that package's
+/// the packages it depends on for lookup and, when merged, those packages'
 /// bodies and per-expression metadata ahead of its own
 /// (`new-plans/implementation.md`, "프론트엔드 단계 경계와 정보 소유권").
 pub struct SpecializationInput<'db> {
@@ -63,20 +63,22 @@ struct Continued<'db> {
 }
 
 impl<'db> SpecializationInput<'db> {
-    /// The checked module, with the declarations of `dependency` under its
-    /// own. Diagnostics spell declarations as `names` does.
+    /// The checked module, with the declarations of `dependencies` under its
+    /// own. `dependencies` are the packages it depends on, transitively,
+    /// each after the packages it depends on. Diagnostics spell declarations
+    /// as `names` does.
     pub fn new(
         db: &'db dyn salsa::Database,
         checked: TypeCheckOutput<'db>,
-        dependency: Option<TypeCheckOutput<'db>>,
+        dependencies: impl IntoIterator<Item = TypeCheckOutput<'db>>,
         names: NameDisplay,
     ) -> Self {
-        let declarations = match dependency {
-            Some(dependency) => checked
-                .declarations(db)
-                .after_dependency(dependency.declarations(db)),
-            None => checked.declarations(db).clone(),
-        };
+        let below = dependencies
+            .into_iter()
+            .fold(DeclarationTypeMetadata::default(), |below, dependency| {
+                dependency.declarations(db).after_dependency(&below)
+            });
+        let declarations = checked.declarations(db).after_dependency(&below);
         Self {
             module: checked.module(db).clone(),
             declarations,
@@ -100,7 +102,7 @@ impl<'db> SpecializationInput<'db> {
         specialized: SpecializationOutput<'db>,
         names: NameDisplay,
     ) -> Self {
-        let mut input = Self::new(db, checked, Some(dependency), names);
+        let mut input = Self::new(db, checked, [dependency], names);
         input.compiler_intrinsics = specialized.compiler_intrinsics(db).clone();
         input.continued = Some(Continued {
             declarations: checked.declarations(db).clone(),
@@ -110,19 +112,26 @@ impl<'db> SpecializationInput<'db> {
         input
     }
 
-    /// Specialize `dependency`'s bodies too: its declarations come first in
-    /// the module, and its per-expression metadata under this module's.
+    /// Specialize the bodies of `dependencies` too, given in the order of
+    /// [`SpecializationInput::new`]: their declarations come first in the
+    /// module in that order, and their per-expression metadata under this
+    /// module's.
     pub fn merge_bodies(
         mut self,
         db: &'db dyn salsa::Database,
-        dependency: TypeCheckOutput<'db>,
+        dependencies: impl IntoIterator<Item = TypeCheckOutput<'db>>,
     ) -> Self {
-        let mut entries = dependency.module(db).entries.clone();
+        let mut entries = Vec::new();
+        let below = dependencies.into_iter().fold(
+            ExpressionTypeMetadata::default(),
+            |below, dependency| {
+                entries.extend(dependency.module(db).entries.iter().cloned());
+                dependency.expression_types(db).after_dependency(&below)
+            },
+        );
         entries.append(&mut self.module.entries);
         self.module.entries = entries;
-        self.expressions = self
-            .expressions
-            .after_dependency(dependency.expression_types(db));
+        self.expressions = self.expressions.after_dependency(&below);
         self
     }
 
