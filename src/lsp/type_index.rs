@@ -7,13 +7,12 @@ use std::collections::BTreeMap;
 
 use trunk_ir::Span;
 
-use tribute_front::SourceCst;
 use tribute_front::ast::visit::{RefSite, Visit, walk_decl_table, walk_expr};
-use tribute_front::ast::{
-    DeclTable, Expr, ExprKind, NodeId, SpanMap, Type, TypeKind, TypedRef, UniVarSource,
-};
+use tribute_front::ast::{Expr, ExprKind, NodeId, SpanMap, Type, TypeKind, TypedRef, UniVarSource};
 use tribute_front::query as ast_query;
 use tribute_front::resolve::NameDisplay;
+use tribute_front::typeck::TypeCheckOutput;
+use tribute_front::{SortedMap, SourceCst};
 
 // =============================================================================
 // Type Pretty Printing
@@ -165,14 +164,14 @@ pub struct AstTypeIndex<'db> {
 }
 
 impl<'db> AstTypeIndex<'db> {
-    /// Build a type index from a typed module.
+    /// Build a type index from a type-checked module.
     pub fn build(
         db: &'db dyn salsa::Database,
-        module: &DeclTable<TypedRef<'db>>,
+        typed: TypeCheckOutput<'db>,
         span_map: &SpanMap,
     ) -> Self {
-        let mut collector = TypeCollector::new(db, span_map);
-        walk_decl_table(&mut collector, module);
+        let mut collector = TypeCollector::new(span_map, &typed.expression_types(db).node_types);
+        walk_decl_table(&mut collector, typed.module(db));
 
         let mut entries = collector.entries;
 
@@ -213,16 +212,16 @@ impl<'db> AstTypeIndex<'db> {
 
 /// Helper struct for collecting type entries from the AST.
 struct TypeCollector<'a, 'db> {
-    db: &'db dyn salsa::Database,
     span_map: &'a SpanMap,
+    node_types: &'a SortedMap<NodeId, Type<'db>>,
     entries: Vec<AstTypeEntry<'db>>,
 }
 
 impl<'a, 'db> TypeCollector<'a, 'db> {
-    fn new(db: &'db dyn salsa::Database, span_map: &'a SpanMap) -> Self {
+    fn new(span_map: &'a SpanMap, node_types: &'a SortedMap<NodeId, Type<'db>>) -> Self {
         Self {
-            db,
             span_map,
+            node_types,
             entries: Vec::new(),
         }
     }
@@ -235,21 +234,21 @@ impl<'a, 'db> TypeCollector<'a, 'db> {
 
 impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for TypeCollector<'_, 'db> {
     fn visit_expr(&mut self, expr: &'ast Expr<TypedRef<'db>>) {
-        // Literals carry their type in their kind. A call's type would need
-        // the callee's result type, so hover covers the callee and arguments.
-        let literal = match expr.kind.as_ref() {
-            ExprKind::NatLit(_) => Some(TypeKind::Nat),
-            ExprKind::IntLit(_) => Some(TypeKind::Int),
-            ExprKind::FloatLit(_) => Some(TypeKind::Float),
-            ExprKind::StringLit(_) => Some(TypeKind::string(self.db)),
-            ExprKind::BytesLit(_) => Some(TypeKind::Bytes),
-            ExprKind::BoolLit(_) => Some(TypeKind::Bool),
-            ExprKind::Nil => Some(TypeKind::Nil),
-            ExprKind::RuneLit(_) => Some(TypeKind::Rune),
-            _ => None,
-        };
-        if let Some(kind) = literal {
-            self.add_entry(expr.id, Type::new(self.db, kind));
+        // A literal has the type the checker gave it, such as the prelude's
+        // `String`. Hover covers a call's callee and arguments, not the call.
+        let literal = matches!(
+            expr.kind.as_ref(),
+            ExprKind::NatLit(_)
+                | ExprKind::IntLit(_)
+                | ExprKind::FloatLit(_)
+                | ExprKind::StringLit(_)
+                | ExprKind::BytesLit(_)
+                | ExprKind::BoolLit(_)
+                | ExprKind::Nil
+                | ExprKind::RuneLit(_)
+        );
+        if literal && let Some(&ty) = self.node_types.get(&expr.id) {
+            self.add_entry(expr.id, ty);
         }
         walk_expr(self, expr);
     }
@@ -275,10 +274,10 @@ pub fn type_index<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Option<AstTypeIndex<'db>> {
-    let module = tribute::parse_and_lower_ast(db, source)?.module(db);
+    let typed = tribute::parse_and_lower_ast(db, source)?;
     let span_map = ast_query::span_map(db, source)?;
 
-    Some(AstTypeIndex::build(db, module, span_map))
+    Some(AstTypeIndex::build(db, typed, span_map))
 }
 
 #[cfg(test)]

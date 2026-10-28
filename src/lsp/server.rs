@@ -2583,7 +2583,10 @@ mod tests {
         let result: Option<Hover> = harness.request::<HoverRequest>(params);
         let hover = result.expect("Hover should return type information");
         let type_str = extract_hover_type(&hover).expect("Should have type content");
-        assert_eq!(type_str, "String", "String literal should have type String");
+        assert_eq!(
+            type_str, "std::String",
+            "String literal should have the prelude's String type"
+        );
     }
 
     #[test]
@@ -2958,7 +2961,11 @@ fn main() -> Nil {
         let messages = open_erroneous(&mut harness, &uri, source);
         assert_eq!(messages.len(), 1, "{messages:?}");
 
-        for (needle, ty) in [("\"sum\"", "String"), ("total", "Int"), ("next", "Int")] {
+        for (needle, ty) in [
+            ("\"sum\"", "std::String"),
+            ("total", "Int"),
+            ("next", "Int"),
+        ] {
             assert_eq!(
                 hover_type_at(&mut harness, &uri, source, needle).as_deref(),
                 Some(ty),
