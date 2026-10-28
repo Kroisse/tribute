@@ -3,18 +3,23 @@
 use crate::calling_convention::ConventionBearing;
 use crate::dialect::tribute_rtti::ManagedRefType;
 use trunk_ir::attr_kind::SymbolRef;
+use trunk_ir::dialect::func::FuncSig;
 use trunk_ir::op_flag::Pure;
 use trunk_ir::op_interface::CallableOwner;
 
 #[trunk_ir::dialect]
 mod closure {
     // Types
-    /// A closure whose callable type is `FuncType`, without its environment.
+    /// A closure whose callable identity is `FuncType`.
     ///
-    /// The type records no calling convention and no environment index.
-    /// A closure is entered through the convention of each transfer, and
-    /// that convention alone places the environment in the entry
-    /// (`new-plans/cps-effects.md`, "CPS 변환의 호출 대상 형상").
+    /// `FuncType` is not an entry ABI: a source callable value's is its
+    /// converted source signature, with no evidence, continuation frame, or
+    /// environment, and a generated continuation's is its `Cps` entry
+    /// without the environment (`new-plans/cps-effects.md`, "Closure type의
+    /// callable"). The type records no calling convention and no environment
+    /// index. A closure is entered through the convention of each transfer,
+    /// whose exact signature carries the entry ABI, and that convention alone
+    /// places the environment in the entry.
     ///
     /// ```text
     /// closure.closure<func.func_sig<(core.i32) -> core.i32>>
@@ -57,15 +62,29 @@ mod closure {
 
     /// High-level lambda: captures + body region → closure value.
     ///
-    /// The body region receives block arguments for the lambda's formal parameters.
+    /// `signature` is the entry signature without the environment: the
+    /// body's parameters, hidden ones of its convention included, and its
+    /// result. The closure type's callable is the closure's identity and may
+    /// differ from it. The body region receives block arguments for the
+    /// signature's parameters.
     /// Captured values are referenced from the parent scope (NOT isolated from above).
     /// A downstream `lower_closure_lambda` pass extracts the body into a top-level
     /// `func.func` and replaces this op with `closure.new`. Its calling
     /// convention is recorded through `ConventionBearing`.
+    ///
+    /// ```text
+    /// %f = closure.lambda(%ev: E, %x: core.i32) -> core.i32 : closure.closure<S> [%y] { .. }
+    /// ```
+    ///
+    /// The parameters and result spell `signature`. The closure type is
+    /// omitted when it is the closure of `signature`.
     #[asm_format]
     #[implements(CallableOwner, ConventionBearing)]
     #[flags(Pure)]
-    fn lambda(captures: Variadic<_>) -> Value<_> {
+    fn lambda<S: FuncSig>(
+        signature: Attr<TypeOf<S>>,
+        captures: Variadic<_>,
+    ) -> Value<impl Closure> {
         #[region(body)]
         {}
     }
@@ -77,7 +96,11 @@ impl ManagedRefType for Closure {}
 // === Custom assembly format for closure.lambda ===
 
 /// Print closure.lambda with decomposed signature:
-/// `%r = closure.lambda(%param: type, ...) -> ret [%cap0, %cap1] { body }`
+/// `%r = closure.lambda(%param: type, ...) -> ret [: closure] [%cap0, %cap1] { body }`
+///
+/// The parameters and result spell `signature`, so a signature with
+/// attributes of its own, or whose inputs are not the body's parameters,
+/// prints generically.
 fn print_closure_lambda(
     h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>,
     op: trunk_ir::OpRef,
@@ -88,18 +111,46 @@ fn print_closure_lambda(
     let Some(region) = h.ctx().op_region(op, 0) else {
         return h.print_generic(op);
     };
+    let entry_args: Vec<_> = {
+        let entry = h.ctx().region(region).blocks[0];
+        h.ctx().block_args(entry).to_vec()
+    };
+    let Some(signature) = h
+        .ctx()
+        .op_attrs(op)
+        .get_type("signature")
+        .and_then(|ty| FuncSig::from_type_ref(h.ctx(), ty))
+    else {
+        return h.print_generic(op);
+    };
+    let ctx = h.ctx();
+    let spelled = signature.non_reserved_attrs(ctx).next().is_none()
+        && signature
+            .inputs_with_attrs(ctx)
+            .all(|(_, attrs)| attrs.is_empty())
+        && signature
+            .results_with_attrs(ctx)
+            .all(|(_, attrs)| attrs.is_empty())
+        && signature.results(ctx).len() <= 1
+        && entry_args
+            .iter()
+            .map(|&arg| ctx.value_ty(arg))
+            .eq(signature.inputs(ctx).iter().copied());
+    if !spelled {
+        return h.print_generic(op);
+    }
+    let result_ty = ctx.op_result_types(op)[0];
+    let result_data = ctx.get_type(result_ty);
+    let closure_of_signature = result_data.name == Closure::NAME
+        && result_data.params.as_slice() == [signature.as_type_ref()]
+        && result_data.attrs.is_empty();
+    let return_ty = signature.single_result(ctx);
 
-    // Assign result name
     let results = h.ctx().op_results(op);
     let name = h.assign_value_name(results[0]);
     write!(h, "{name} = closure.lambda")?;
 
     // "(%param: type, ...)" — entry block args (formal parameters)
-    let entry_args: Vec<_> = {
-        let entry = h.ctx().region(region).blocks[0];
-        h.ctx().block_args(entry).to_vec()
-    };
-
     write!(h, "(")?;
     for (i, &arg) in entry_args.iter().enumerate() {
         if i > 0 {
@@ -112,27 +163,23 @@ fn print_closure_lambda(
     }
     write!(h, ")")?;
 
-    // "-> return_type"
-    // Decompose: result type = closure.closure<func.func_sig<(inputs...) -> result>>
-    let return_ty = {
-        let result_ty = h.ctx().op_result_types(op)[0];
-        let closure_ty_data = h.ctx().get_type(result_ty);
-        if !closure_ty_data.params.is_empty() {
-            let func_ty = closure_ty_data.params[0];
-            trunk_ir::dialect::func::FuncSig::from_type_ref(h.ctx(), func_ty)
-                .and_then(|function| function.single_result(h.ctx()))
-        } else {
-            None
-        }
-    };
-
     if let Some(return_ty) = return_ty {
         write!(h, " -> ")?;
         h.write_type(return_ty)?;
     }
+    if !closure_of_signature {
+        write!(h, " : ")?;
+        h.write_type(result_ty)?;
+    }
 
-    // " {key = val, ...}" — attributes (if any)
-    let attrs = h.ctx().op_attrs(op);
+    // " {key = val, ...}" — attributes other than the signature (if any)
+    let attrs: Vec<_> = h
+        .ctx()
+        .op_attrs(op)
+        .iter()
+        .filter(|(key, _)| *key != "signature")
+        .map(|(key, val)| (key.to_owned(), val.clone()))
+        .collect();
     if !attrs.is_empty() {
         write!(h, " {{")?;
         for (i, (key, val)) in attrs.iter().enumerate() {
@@ -206,6 +253,10 @@ fn parse_closure_lambda<'a>(
     // "-> return_type" (optional)
     let ret_ty = opt(return_type).parse_next(input)?;
 
+    // ": closure_type" (optional; the closure of the signature when omitted)
+    ws.parse_next(input)?;
+    let closure_ty = opt((':', ws, raw_type).map(|(_, _, ty)| ty)).parse_next(input)?;
+
     // " {key = val, ...}" (optional attributes — distinguished from body by lookahead)
     ws.parse_next(input)?;
     let attributes = if starts_attr_dict(input) {
@@ -243,20 +294,20 @@ fn parse_closure_lambda<'a>(
         regions.push(region);
     }
 
-    // Reconstruct closure.closure<func.func_sig<(param_types...) -> return_ty>> type.
-    let func_raw_ty = trunk_ir::dialect::func::signature_raw_type(
+    // The signature is func.func_sig<(param_types...) -> return_ty>.
+    let signature = trunk_ir::dialect::func::signature_raw_type(
         "func.func_sig",
         params.iter().map(|(_, ty)| ty.clone().into()).collect(),
         ret_ty.into_iter().map(Into::into).collect(),
         vec![],
     );
-
-    // closure.closure<func.func_sig<...>>
-    let closure_raw_ty = RawType::Concrete {
+    let closure_raw_ty = closure_ty.unwrap_or_else(|| RawType::Concrete {
         name: "closure.closure",
-        params: vec![func_raw_ty.into()],
+        params: vec![signature.clone().into()],
         attrs: vec![],
-    };
+    });
+    let mut attributes = attributes;
+    attributes.push(("signature".into(), RawAttribute::Type(signature)));
 
     Ok(RawOperation {
         results,
@@ -293,14 +344,8 @@ impl trunk_ir::op_interface::CallableOwner for Lambda {
         ctx: &trunk_ir::IrContext,
     ) -> Option<trunk_ir::dialect::func::FuncSig> {
         use trunk_ir::ops::DialectType;
-        let [result] = ctx.op_result_types(self.op_ref()) else {
-            return None;
-        };
-        let closure = Closure::from_type_ref(ctx, *result)?;
-        let [function] = ctx.get_type(closure.as_type_ref()).params.as_slice() else {
-            return None;
-        };
-        trunk_ir::dialect::func::FuncSig::from_type_ref(ctx, *function)
+        let signature = ctx.op_attrs(self.op_ref()).get_type("signature")?;
+        FuncSig::from_type_ref(ctx, signature)
     }
 }
 #[cfg(test)]
@@ -462,7 +507,9 @@ mod tests {
         });
 
         // Create closure.lambda [%cap] { body } -> closure_ty
+        let signature = func::func_sig(&mut ctx, [i32_ty], [i32_ty]).as_type_ref();
         let lambda_op = super::Lambda::operands(vec![cap_val])
+            .signature(signature)
             .results(closure_ty)
             .regions(body_region)
             .build(&mut ctx, loc);
@@ -588,6 +635,39 @@ mod tests {
     }
 
     #[test]
+    fn a_lambda_whose_closure_is_not_its_signature_prints_the_closure() {
+        use trunk_ir::ops::DialectType;
+        let text = r#"core.module @test {
+  %f = closure.lambda(%ev: core.i64, %x: core.i32) -> core.i32 : closure.closure<func.func_sig<(core.i32) -> core.i32>> {
+    func.return %x
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(&mut ctx, text);
+        let lambda = super::Lambda::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
+        let signature =
+            trunk_ir::dialect::func::FuncSig::from_type_ref(&ctx, lambda.signature(&ctx))
+                .expect("the parameters and result spell the signature");
+        assert_eq!(signature.inputs(&ctx).len(), 2);
+        let printed = trunk_ir::printer::print_module(&ctx, module.op());
+        assert!(printed.contains(" : closure.closure<"), "{printed}");
+        assert_roundtrip(&printed);
+    }
+
+    #[test]
+    fn a_lambda_result_must_be_a_closure() {
+        let text = r#"core.module @test {
+  %f = closure.lambda(%x: core.i32) -> core.i32 : core.i32 {
+    func.return %x
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(&mut ctx, text);
+        let result = trunk_ir::validation::validate_op_schemas(&ctx, module.op());
+        assert!(!result.is_ok(), "{result}");
+    }
+
+    #[test]
     fn test_lambda_roundtrip_with_params_and_captures() {
         assert_roundtrip(
             r#"core.module @test {
@@ -697,7 +777,8 @@ mod malformed_owner_tests {
             let lambda = ctx.block(ctx.region(host.body(&ctx)).blocks[0]).ops[0];
             assert!(super::Lambda::matches(&ctx, lambda));
             let nil = core::Nil::params().intern(&mut ctx).as_type_ref();
-            ctx.set_op_result_type(lambda, 0, nil);
+            ctx.op_attrs_mut(lambda)
+                .insert("signature", trunk_ir::Attribute::Type(nil));
             assert_eq!(
                 DynCallableOwner::get(&ctx, lambda).map(|owner| owner.callable_signature(&ctx)),
                 Some(None)

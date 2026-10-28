@@ -371,12 +371,21 @@ fn source_data_indirect_calls_carry_their_exact_signature() {
         let convention = DynConventionBearing::of(&ctx, *transfer).unwrap();
         let call = trunk_ir::op_interface::DynIndirectCallLike::get(&ctx, *transfer).unwrap();
         let callee = call.indirect_callee(&ctx).unwrap();
-        let expected = physical_closure_function_type(&ctx, ctx.value_ty(callee), convention)
-            .expect("the converted callee retains an exact closure contract");
+        // The callee's closure type is the source callable; the transfer's
+        // signature adds the hidden parameters of its convention.
+        let source = closure::Closure::from_type_ref(&ctx, ctx.value_ty(callee))
+            .map(|closure| closure.func_type(&ctx))
+            .and_then(|ty| func::FuncSig::from_type_ref(&ctx, ty))
+            .expect("the converted callee is a closure of its source callable");
+        let entry = call
+            .exact_signature(&ctx)
+            .and_then(|ty| func::FuncSig::from_type_ref(&ctx, ty))
+            .expect("a converted transfer carries its entry signature");
+        let hidden = usize::from(convention.needs_evidence());
         assert_eq!(
-            call.exact_signature(&ctx),
-            Some(expected),
-            "{convention:?} transfer must carry its exact callee contract: {}",
+            (&entry.inputs(&ctx)[hidden..], entry.results(&ctx)),
+            (source.inputs(&ctx), source.results(&ctx)),
+            "{convention:?} transfer must carry its exact entry contract: {}",
             print_module(&ctx, module.op())
         );
     }
@@ -2309,7 +2318,7 @@ fn fn_operation_stays_evidence_direct_without_continuation_capture() {
         .find(|op| DynConventionBearing::of(&ctx, *op) == Some(CallingConvention::EvidenceDirect))
         .expect("fn handler dispatcher call");
     let call = func::CallIndirect::from_op(&ctx, call).unwrap();
-    let expected = physical_closure_function_type(
+    let expected = tribute_ir::calling_convention::physical_closure_function_type(
         &ctx,
         ctx.value_ty(call.callee(&ctx)),
         CallingConvention::EvidenceDirect,

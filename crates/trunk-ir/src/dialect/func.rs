@@ -677,25 +677,16 @@ impl crate::ops::Verify for TailCallIndirect {
     }
 }
 
-/// A callee whose type is a `func.func_sig`, directly or as the single
-/// parameter of `closure.closure`, must carry the exact signature. Erased
-/// callees (pointers, table indices) are not checked.
+/// A callee whose type is a `func.func_sig` must carry that exact signature.
+/// Any other callee, such as a closure whose type names a callable identity
+/// rather than an entry ABI, a pointer, or a table index, is not checked.
 fn verify_typed_callee(
     ctx: &crate::IrContext,
     callee: crate::ValueRef,
     signature: crate::TypeRef,
 ) -> Result<(), String> {
     let callee_ty = ctx.value_ty(callee);
-    let data = ctx.get_type(callee_ty);
-    let func_ty = if data.name.is(ctx, "closure.closure") {
-        let [func_ty] = data.params.as_slice() else {
-            return Err("callee closure type must contain exactly one function type".into());
-        };
-        *func_ty
-    } else {
-        callee_ty
-    };
-    if FuncSig::from_type_ref(ctx, func_ty).is_some() && func_ty != signature {
+    if FuncSig::from_type_ref(ctx, callee_ty).is_some() && callee_ty != signature {
         return Err("exact indirect signature differs from typed callee".into());
     }
     Ok(())

@@ -47,7 +47,7 @@ impl Converter<'_> {
             return *converted;
         }
         if tribute_control::FuncSig::from_type_ref(self.ctx, ty).is_some() {
-            let (function, _) = self.lower_callable_signature(ty);
+            let function = self.source_callable(ty);
             let converted = physical_closure_type(self.ctx, function);
             self.converted_types.insert(ty, converted);
             return converted;
@@ -112,34 +112,39 @@ impl Converter<'_> {
         converted
     }
 
-    pub(super) fn physical_function_type(&mut self, logical: TypeRef) -> TypeRef {
-        self.lower_callable_signature(logical).0
+    /// The callable identity of a closure of the source signature `logical`:
+    /// its converted parameters and result, without hidden parameters
+    /// (`new-plans/cps-effects.md`, "Closure type의 callable").
+    pub(super) fn source_callable(&mut self, logical: TypeRef) -> TypeRef {
+        let callable = tribute_control::FuncSig::from_type_ref(self.ctx, logical)
+            .expect("pre-CPS validation checked function type");
+        let (source_result, result_attrs) = callable.result_with_attrs(self.ctx);
+        let result_attrs = result_attrs.clone();
+        let result = (
+            self.convert_type(source_result),
+            self.convert_attr_map(&result_attrs),
+        );
+        let params = self.convert_source_params(callable);
+        let attrs = self.convert_signature_attrs(logical);
+        func::func_sig_with_param_attrs(self.ctx, params, [result], attrs).as_type_ref()
     }
 
-    /// Lower a source signature to its logical `func.func_sig` in convention
-    /// order. Parameter attributes follow the parameters they describe: hidden
-    /// parameters have none, and a Cps source result, replaced by
-    /// `core.never`, drops its own.
+    /// Lower a source signature to its logical `func.func_sig` entered
+    /// through `convention`, in convention order. Parameter attributes follow
+    /// the parameters they describe: hidden parameters have none, and a Cps
+    /// source result, replaced by `core.never`, drops its own.
     pub(super) fn lower_callable_signature(
         &mut self,
         logical: TypeRef,
-    ) -> (TypeRef, CallingConvention) {
+        convention: CallingConvention,
+    ) -> TypeRef {
         let callable = tribute_control::FuncSig::from_type_ref(self.ctx, logical)
             .expect("pre-CPS validation checked function type");
-        let convention = tribute_control::func_sig_convention(self.ctx, logical)
-            .expect("pre-CPS validation checked function convention");
         let (source_result, result_attrs) = callable.result_with_attrs(self.ctx);
         let result_attrs = result_attrs.clone();
         let result = self.convert_type(source_result);
         let result_attrs = self.convert_attr_map(&result_attrs);
-        let source_params: Vec<_> = callable
-            .inputs_with_attrs(self.ctx)
-            .map(|(param, attrs)| (param, attrs.clone()))
-            .collect();
-        let params: Vec<_> = source_params
-            .into_iter()
-            .map(|(param, attrs)| (self.convert_type(param), self.convert_attr_map(&attrs)))
-            .collect();
+        let params = self.convert_source_params(callable);
         let evidence = (self.evidence_type(), AttributeMap::new());
         let frame = (self.frame_type(result), AttributeMap::new());
         let abi = CallableAbi::new(convention, params, (result, result_attrs));
@@ -149,14 +154,31 @@ impl Converter<'_> {
         } else {
             abi.source_result
         };
+        let attrs = self.convert_signature_attrs(logical);
+        func::func_sig_with_param_attrs(self.ctx, params, [result], attrs).as_type_ref()
+    }
+
+    fn convert_source_params(
+        &mut self,
+        callable: tribute_control::FuncSig,
+    ) -> Vec<(TypeRef, AttributeMap)> {
+        let source_params: Vec<_> = callable
+            .inputs_with_attrs(self.ctx)
+            .map(|(param, attrs)| (param, attrs.clone()))
+            .collect();
+        source_params
+            .into_iter()
+            .map(|(param, attrs)| (self.convert_type(param), self.convert_attr_map(&attrs)))
+            .collect()
+    }
+
+    fn convert_signature_attrs(&mut self, logical: TypeRef) -> AttributeMap {
         let mut attrs = self.ctx.get_type(logical).attrs.clone();
         tribute_control::FuncSig::remove_reserved_attrs(self.ctx, &mut attrs);
         for value in attrs.values_mut() {
             *value = self.convert_attribute(value);
         }
-        let function =
-            func::func_sig_with_param_attrs(self.ctx, params, [result], attrs).as_type_ref();
-        (function, convention)
+        attrs
     }
 
     pub(super) fn convert_attr_map(&mut self, attrs: &AttributeMap) -> AttributeMap {

@@ -552,17 +552,7 @@ fn typed_callee_signature(
     ctx: &IrContext,
     value: ValueRef,
 ) -> Option<crate::dialect::func::FuncSig> {
-    let ty = ctx.value_ty(value);
-    let data = ctx.get_type(ty);
-    let ty = if data.name.is(ctx, "closure.closure") {
-        let [ty] = data.params.as_slice() else {
-            return None;
-        };
-        *ty
-    } else {
-        ty
-    };
-    crate::dialect::func::FuncSig::from_type_ref(ctx, ty)
+    crate::dialect::func::FuncSig::from_type_ref(ctx, ctx.value_ty(value))
 }
 
 fn check_value_types(
@@ -2398,7 +2388,7 @@ mod tests {
     #[test]
     fn tail_call_indirect_typed_cps_transfer_passes() {
         let input = r#"core.module @test {
-  func.func @main(%k: closure.closure<func.func_sig<(core.i32) -> core.never>>, %value: core.i32) -> core.never {
+  func.func @main(%k: core.ptr, %value: core.i32) -> core.never {
     func.tail_call_indirect %k, %value {signature = func.func_sig<(core.i32) -> core.never>}
   }
 }"#;
@@ -2411,7 +2401,7 @@ mod tests {
     #[test]
     fn tail_call_indirect_rejects_non_cps_result_and_bad_arguments() {
         let input = r#"core.module @test {
-  func.func @main(%k: closure.closure<func.func_sig<(core.i32) -> core.i32>>, %value: core.i1) -> core.never {
+  func.func @main(%k: core.ptr, %value: core.i1) -> core.never {
     func.tail_call_indirect %k, %value {signature = func.func_sig<(core.i32) -> core.i32>}
   }
 }"#;
@@ -2431,7 +2421,7 @@ mod tests {
         let input = r#"core.module @test {
   !never = func.func_sig<() -> core.never>
   !unary = func.func_sig<(core.i32) -> core.never>
-  func.func @result(%k: closure.closure<!never>) -> core.never {
+  func.func @result(%k: !never) -> core.never {
     %bad = func.tail_call_indirect %k {signature = !never} : core.i32
   }
   func.func @not_last(%k: !never) -> core.never {
@@ -2444,9 +2434,6 @@ mod tests {
   func.func @unsigned(%k: !never) -> core.never {
     func.tail_call_indirect %k
   }
-  func.func @bad_closure(%k: closure.closure) -> core.never {
-    func.tail_call_indirect %k {signature = !never}
-  }
   func.func @mismatched(%k: !unary) -> core.never {
     func.tail_call_indirect %k {signature = !never}
   }
@@ -2456,7 +2443,7 @@ mod tests {
   func.func @direct_function(%k: !never) -> core.never {
     func.tail_call_indirect %k {signature = !never}
   }
-  func.func @arity(%k: closure.closure<!unary>) -> core.never {
+  func.func @arity(%k: core.ptr) -> core.never {
     func.tail_call_indirect %k {signature = !unary}
   }
 }"#;
@@ -2469,13 +2456,12 @@ mod tests {
             "must terminate its block",
             "expected at least 1 operand(s), found 0",
             "missing required attribute `signature`",
-            "closure type must contain exactly one function type",
             "exact indirect signature differs from typed callee",
             "operands `args`: expected S::Inputs = (core.i32), found ()",
         ] {
             assert!(text.contains(expected), "missing `{expected}`:\n{text}");
         }
-        assert_eq!(result.errors.len(), 7, "{text}");
+        assert_eq!(result.errors.len(), 6, "{text}");
     }
 
     #[test]
