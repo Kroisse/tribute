@@ -27,30 +27,36 @@ mod closure {
     #[implements(ManagedRefType)]
     struct Closure<FuncType>;
 
-    /// A closure whose convention table holds the entry functions `entries`
-    /// in order, holding `captures` in order. Every entry function receives
-    /// the closure itself as its environment and reads the captures with
-    /// `unpack`. The closure's calling convention is recorded through
-    /// `ConventionBearing` until closure lowering consumes it.
+    /// A closure whose convention table holds the entry functions `entries`,
+    /// holding `captures` in order.
     ///
-    /// Closure lowering makes it one allocation of the convention table
-    /// reference (`tribute_rt.convention_table`) and the captures; see the
-    /// closure storage layout in `new-plans/ir.md`.
+    /// - **Shape:** exactly three entries, one per calling convention in the
+    ///   order of `CallingConvention::slot` (`Direct`, `EvidenceDirect`,
+    ///   `Cps`), and any number of captures.
+    /// - **Meaning:** the entry at a convention's slot is the physical
+    ///   callable a transfer of that convention enters: a body, an adapter,
+    ///   or a trap entry (`new-plans/ir.md`, "Convention entry"). Every entry
+    ///   function receives the closure itself as its environment, at the
+    ///   environment index of its slot's convention, and reads the captures
+    ///   with `unpack`.
+    /// - **Lowering:** closure lowering makes it one allocation of the
+    ///   convention table reference (`tribute_rt.convention_table`) and the
+    ///   captures; see the closure storage layout in `new-plans/ir.md`.
     ///
     /// ```text
-    /// %c = closure.new %x, %y {entries = [@f]} : closure.closure<S>
+    /// %c = closure.new %x, %y {entries = [@f, @trap_e, @trap_c]} : closure.closure<S>
     /// ```
-    #[implements(ConventionBearing)]
     #[flags(Pure)]
     fn new(entries: Attr<[SymbolRef]>, captures: Variadic<_>) -> Value<_> {}
 
     /// The entry function at `index` of the convention table of `closure`,
-    /// as an indirect callee. Closure lowering introduces it for each closure
-    /// call and lowers it in the same step to a read of the closure's
-    /// convention table field and `tribute_rt.convention_entry`.
+    /// as an indirect callee: the slot of the convention of the transfer
+    /// that calls it. Closure lowering introduces it for each closure call
+    /// and lowers it in the same step to a read of the closure's convention
+    /// table field and `tribute_rt.convention_entry`.
     ///
     /// ```text
-    /// %f = closure.entry %c {index = 0} : core.i32
+    /// %f = closure.entry %c {index = 2} : core.i32
     /// ```
     #[flags(Pure)]
     fn entry(index: Attr<u32>, closure: Value<_>) -> Value<_> {}

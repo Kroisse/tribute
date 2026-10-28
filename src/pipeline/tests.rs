@@ -233,6 +233,13 @@ fn root_dispatch_definition_matches_fixed_wasm_tail_signature_and_validates_bina
                                 .unwrap(),
                             )
                         };
+                        // The `Direct` trap entry of the dispatch closure has the
+                        // same arity but takes the closure first.
+                        if signature.params()[0]
+                            == concrete(trunk_ir_wasm_backend::gc_types::CLOSURE_STRUCT_IDX)
+                        {
+                            continue;
+                        }
                         // The evidence is the GC array of markers.
                         assert!(
                             matches!(
@@ -719,8 +726,8 @@ fn main() ->{Io} Nil {
         ctx.value_def(frame),
         trunk_ir::refs::ValueDef::BlockArg(_, 2)
     ));
-    // The callee is the first entry of the convention table the same
-    // closure holds.
+    // The callee is the `Cps` entry (slot 2, one pointer per slot) of the
+    // convention table the same closure holds.
     let load_of = |value| {
         let trunk_ir::refs::ValueDef::OpResult(load, 0) = ctx.value_def(value) else {
             panic!("Done callee must be loaded from the same closure");
@@ -728,7 +735,7 @@ fn main() ->{Io} Nil {
         clif::Load::from_op(&ctx, load).expect("callee load")
     };
     let entry_load = load_of(*callee);
-    assert_eq!(entry_load.offset(&ctx), 0);
+    assert_eq!(entry_load.offset(&ctx), 2 * 8);
     let table_load = load_of(ctx.op_operands(entry_load.op_ref())[0]);
     assert_eq!(table_load.offset(&ctx), 0);
     assert_eq!(ctx.op_operands(table_load.op_ref()), [done]);

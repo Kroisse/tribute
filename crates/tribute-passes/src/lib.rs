@@ -16,6 +16,7 @@ pub mod check_fn_arm_calls;
 pub mod closure_lower;
 mod collections;
 mod convention_classes;
+mod convention_table;
 mod cps_builders;
 mod effect_dispatch;
 pub mod evidence_lowering;

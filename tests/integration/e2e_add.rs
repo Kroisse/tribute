@@ -501,16 +501,43 @@ fn assert_indirect_signature(ctx: &IrContext, owner: func::Func, call: OpRef) {
     }
 }
 
+/// The entry function a convention table implements. The other slots hold
+/// shared trap entries, which are not lifted lambdas.
+fn implemented_entry<'a>(
+    ctx: &IrContext,
+    module: Module,
+    entries: impl IntoIterator<Item = &'a trunk_ir::SymbolPath>,
+) -> func::Func {
+    let entries: Vec<_> = entries
+        .into_iter()
+        .map(ToString::to_string)
+        .filter(|entry| !entry.starts_with("__tribute_trap_entry_"))
+        .collect();
+    let [entry] = &entries[..] else {
+        panic!("one implemented convention entry, found {entries:?}");
+    };
+    named_function(ctx, module, entry)
+}
+
 fn source_closure(ctx: &IrContext, module: Module, name: &str) -> (closure::New, func::Func) {
     let owner = named_function(ctx, module, name);
     let call = only_indirect_call(ctx, owner);
     assert_indirect_signature(ctx, owner, call);
     let closure = closure::New::from_op(ctx, defining_op(ctx, ctx.op_operands(call)[0]))
         .expect("indirect callee must be the source lambda");
-    let lifted = named_function(
-        ctx,
-        module,
-        &closure.entries(ctx).next().expect("one entry").to_string(),
+    let entries: Vec<_> = closure.entries(ctx).collect();
+    assert_eq!(entries.len(), 3, "one entry per convention");
+    let lifted = implemented_entry(ctx, module, entries.iter().copied());
+    let convention = DynConventionBearing::of(ctx, lifted.op_ref()).expect("lifted convention");
+    // The lifted function sits at its convention's slot.
+    assert_eq!(
+        named_function(
+            ctx,
+            module,
+            &entries[convention.slot() as usize].to_string()
+        )
+        .op_ref(),
+        lifted.op_ref()
     );
     let closure_ty = ctx.value_ty(closure.result(ctx));
     let callable = closure::Closure::from_type_ref(ctx, closure_ty).expect("typed closure");
@@ -519,9 +546,7 @@ fn source_closure(ctx: &IrContext, module: Module, name: &str) -> (closure::New,
         signature.as_type_ref(),
         ctx.op_attrs(call).get_type("signature").unwrap()
     );
-    let environment_index = DynConventionBearing::of(ctx, closure.op_ref())
-        .expect("closure convention")
-        .closure_environment_index();
+    let environment_index = convention.closure_environment_index();
     let lifted_signature = func::FuncSig::from_type_ref(ctx, lifted.r#type(ctx)).unwrap();
     let entry = ctx.region(lifted.body(ctx)).blocks[0];
     let entry_types: Vec<_> = ctx
@@ -539,10 +564,6 @@ fn source_closure(ctx: &IrContext, module: Module, name: &str) -> (closure::New,
     );
     assert_eq!(expected, lifted_signature.inputs(ctx));
     assert_eq!(signature.results(ctx), lifted_signature.results(ctx));
-    assert_eq!(
-        DynConventionBearing::of(ctx, lifted.op_ref()),
-        DynConventionBearing::of(ctx, closure.op_ref())
-    );
     (closure, lifted)
 }
 
@@ -602,7 +623,7 @@ fn test_lambda_with_capture() {
         let recovered = closure::Unpack::from_op(&ctx, defining_op(&ctx, addition.rhs(&ctx))).expect("captured addend");
         assert_eq!(recovered.results(&ctx), [addition.rhs(&ctx)]);
         let closure_ty = ctx.value_ty(closure.result(&ctx));
-        let env_index = DynConventionBearing::of(&ctx, closure.op_ref()).unwrap().closure_environment_index();
+        let env_index = DynConventionBearing::of(&ctx, lifted.op_ref()).unwrap().closure_environment_index();
         let entry = ctx.region(lifted.body(&ctx)).blocks[0];
         assert_eq!(recovered.closure(&ctx), ctx.block_args(entry)[env_index]);
         assert_eq!(ctx.value_ty(recovered.closure(&ctx)), closure_ty);
@@ -646,7 +667,7 @@ fn test_higher_order_function_ir() {
         let compute = named_function(&ctx, module, "compute");
         let call = function_ops::<func::TailCall>(&ctx, compute).into_iter().find(|call| call.callee(&ctx) == ["pkg::apply"]).expect("source apply call");
         let argument = call.args(&ctx).iter().find_map(|&value| match ctx.value_def(value) { ValueDef::OpResult(op, _) => closure::New::from_op(&ctx, op).ok(), _ => None }).expect("source lambda argument");
-        let lifted = named_function(&ctx, module, &argument.entries(&ctx).next().expect("one entry").to_string());
+        let lifted = implemented_entry(&ctx, module, argument.entries(&ctx).collect::<Vec<_>>());
         let additions = function_ops::<arith::Addi>(&ctx, lifted);
         assert_eq!(additions.len(), 1);
         let constant = arith::Const::from_op(&ctx, defining_op(&ctx, additions[0].rhs(&ctx))).unwrap();
@@ -665,14 +686,14 @@ fn test_closure_lowering() {
             .unwrap()
             .unwrap();
         let apply = named_function(&ctx, module, "apply");
-        let env_index = DynConventionBearing::of(&ctx, only_indirect_call(&ctx, apply))
-            .expect("callback transfer convention")
-            .closure_environment_index();
+        let convention = DynConventionBearing::of(&ctx, only_indirect_call(&ctx, apply))
+            .expect("callback transfer convention");
+        let env_index = convention.closure_environment_index();
         tribute_passes::closure_lower::lower_prepared_closures(&mut ctx, module).unwrap();
         let call = only_indirect_call(&ctx, apply);
         assert_indirect_signature(&ctx, apply, call);
         let entry = tribute_ir::dialect::tribute_rt::ConventionEntry::from_op(&ctx, defining_op(&ctx, ctx.op_operands(call)[0])).expect("callback entry");
-        assert_eq!(entry.index(&ctx), 0);
+        assert_eq!(entry.index(&ctx), convention.slot());
         let code = adt::StructGet::from_op(&ctx, defining_op(&ctx, entry.table(&ctx))).expect("projected callback convention table");
         assert_eq!(code.field(&ctx), 0);
         let callback = code.r#ref(&ctx);
@@ -703,8 +724,8 @@ fn test_closure_lowering() {
         let fields = pack.fields(&ctx);
         let table = tribute_ir::dialect::tribute_rt::ConventionTable::from_op(&ctx, defining_op(&ctx, fields[0])).unwrap();
         let entries: Vec<_> = table.entries(&ctx).collect();
-        let [entry] = entries[..] else { panic!("one convention entry") };
-        let lifted = named_function(&ctx, module, &entry.to_string());
+        assert_eq!(entries.len(), 3, "one entry per convention");
+        let lifted = implemented_entry(&ctx, module, entries);
         // The closure holds its capture directly after the convention table reference.
         assert_eq!(fields.len(), 2);
         assert_eq!(arith::Const::from_op(&ctx, defining_op(&ctx, fields[1])).unwrap().value(&ctx), Attribute::Int(1));

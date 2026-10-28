@@ -23,6 +23,8 @@
 //! closure's exact type, and it reads its captures with `closure.unpack`.
 
 use crate::collections::HashMap;
+use crate::convention_table::{TrapEntries, logical_entry_signature};
+use crate::lower_continuation_frames::frame_reference;
 
 use tribute_ir::calling_convention::{ConventionBearing, DynConventionBearing};
 use trunk_ir::Symbol;
@@ -46,6 +48,7 @@ pub(crate) fn lower_closure_lambda(ctx: &mut IrContext, module: Module) {
     };
 
     let mut namer = LambdaNamer::new();
+    let mut traps = TrapEntries::default();
 
     // Iterate until no more closure.lambda ops remain.
     // Multiple iterations handle nested lambdas: the first pass converts
@@ -59,7 +62,8 @@ pub(crate) fn lower_closure_lambda(ctx: &mut IrContext, module: Module) {
 
         let mut made_progress = false;
         for lambda_ref in lambdas {
-            made_progress |= lower_single_lambda(ctx, module_block, lambda_ref, &mut namer);
+            made_progress |=
+                lower_single_lambda(ctx, module_block, lambda_ref, &mut namer, &mut traps);
         }
         if !made_progress {
             break;
@@ -126,6 +130,7 @@ fn lower_single_lambda(
     module_block: BlockRef,
     lambda_ref: OpRef,
     namer: &mut LambdaNamer,
+    traps: &mut TrapEntries,
 ) -> bool {
     let Ok(lambda_op) = closure::Lambda::from_op(ctx, lambda_ref) else {
         return false;
@@ -207,11 +212,18 @@ fn lower_single_lambda(
         .expect("closure.lambda should be in a block");
 
     // Create closure.new holding the captures, replacing the lambda.
+    let entries = traps.table(
+        ctx,
+        module_block,
+        location,
+        convention,
+        trunk_ir::SymbolPath::new([lifted_name]),
+        |ctx, slot| logical_entry_signature(ctx, result_ty, slot, frame_reference),
+    );
     let closure_new_op = closure::New::operands(captures.clone())
-        .entries([trunk_ir::SymbolPath::new([lifted_name])])
+        .entries(entries)
         .results(result_ty)
         .build(ctx, location);
-    closure_new_op.set_calling_convention(ctx, convention);
     ctx.insert_op_before(parent_block, lambda_ref, closure_new_op.op_ref());
 
     // RAUW: lambda result → closure.new result.
@@ -534,9 +546,10 @@ mod tests {
         // Run the pass.
         lower_closure_lambda(&mut ctx, module);
 
-        // Verify: module should now have 2 functions (test_fn + test_fn::__clam_0).
+        // Verify: test_fn, test_fn::__clam_0, and the two trap entries that fill
+        // the closure's other convention slots.
         let ops = module.ops(&ctx);
-        assert_eq!(ops.len(), 2, "expected 2 top-level ops after lowering");
+        assert_eq!(ops.len(), 4, "expected 4 top-level ops after lowering");
 
         // The original function should contain closure.new instead of closure.lambda.
         let test_fn = func::Func::from_op(&ctx, ops[0]).unwrap();
@@ -728,9 +741,9 @@ mod tests {
         // Run the pass.
         lower_closure_lambda(&mut ctx, module);
 
-        // Verify: 2 functions.
+        // Verify: test_fn, the lifted function, and two trap entries.
         let ops = module.ops(&ctx);
-        assert_eq!(ops.len(), 2);
+        assert_eq!(ops.len(), 4);
 
         // The original function holds the capture in its closure.new.
         let test_fn = func::Func::from_op(&ctx, ops[0]).unwrap();

@@ -403,6 +403,12 @@ fn main() -> Nil { }
                 if name.starts_with("std::runtime::evidence::") {
                     continue;
                 }
+                // A trap entry only fills a convention slot a closure does not
+                // implement; its signature lays out the closure's callable, which
+                // may already hold evidence, so it is not a lifted function.
+                if name.starts_with("__tribute_trap_entry_") {
+                    continue;
+                }
                 let CallableBody::Definition { entry, .. } =
                     classify_callable_body(&ctx, op).expect("well-formed frontend callable")
                 else {

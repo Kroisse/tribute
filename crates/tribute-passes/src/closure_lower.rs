@@ -277,9 +277,9 @@ impl RewritePattern for LowerClosureCallArena {
             return false;
         };
 
-        // Generate: %table_idx = closure.entry %closure {index = 0}
+        // Generate: %table_idx = closure.entry %closure {index = <slot>}
         let table_idx_op = closure::Entry::operands(callee)
-            .index(0)
+            .index(convention.slot())
             .results(i32_ty)
             .build(ctx, loc);
         let table_idx = ctx.op_result(table_idx_op.op_ref(), 0);
@@ -346,7 +346,7 @@ impl RewritePattern for LowerClosureTailCallArena {
             return false;
         };
         let func_ref = closure::Entry::operands(callee)
-            .index(0)
+            .index(convention.slot())
             .results(i32_ty)
             .build(ctx, location);
         let mut args = args.to_vec();
@@ -643,16 +643,30 @@ fn validate_closure_constructions(
     for new in constructions {
         let closure_ty = ctx.value_ty(new.result(ctx));
         let captured: Vec<_> = new.captures(ctx).iter().map(|&v| ctx.value_ty(v)).collect();
-        // An unresolved entry function is left for the boundary exit to reject.
-        let targets: Vec<_> = new
-            .entries(ctx)
-            .filter_map(|entry| functions.resolve(ctx, new.op_ref(), entry))
-            .filter_map(|target| func::Func::from_op(ctx, target).ok())
-            .collect();
-        let environment_index = DynConventionBearing::of(ctx, new.op_ref())
-            .map(CallingConvention::closure_environment_index);
-        for target in targets {
-            validate_entry_function(ctx, target, closure_ty, environment_index, &captured)?;
+        let entries: Vec<_> = new.entries(ctx).collect();
+        if entries.len() != CallingConvention::ALL.len() {
+            return Err("closure lowering: closure.new must name one entry per convention".into());
+        }
+        for (entry, slot) in entries.into_iter().zip(CallingConvention::ALL) {
+            // An unresolved entry function is left for the boundary exit to reject.
+            let Some(target) = functions
+                .resolve(ctx, new.op_ref(), entry)
+                .and_then(|target| func::Func::from_op(ctx, target).ok())
+            else {
+                continue;
+            };
+            if DynConventionBearing::of(ctx, target.op_ref()) != Some(slot) {
+                return Err(
+                    "closure lowering: entry function convention differs from its slot".into(),
+                );
+            }
+            validate_entry_function(
+                ctx,
+                target,
+                closure_ty,
+                slot.closure_environment_index(),
+                &captured,
+            )?;
         }
     }
     Ok(())
@@ -660,22 +674,20 @@ fn validate_closure_constructions(
 
 /// Check one entry function of a closure of type `closure_ty` holding
 /// captures of the types `captured`, whose environment is at
-/// `environment_index` when the `closure.new` records its convention.
+/// `environment_index`.
 fn validate_entry_function(
     ctx: &IrContext,
     target: func::Func,
     closure_ty: TypeRef,
-    environment_index: Option<usize>,
+    environment_index: usize,
     captured: &[TypeRef],
 ) -> PassRunResult {
-    if let Some(index) = environment_index {
-        let environment = func::FuncSig::from_type_ref(ctx, target.r#type(ctx))
-            .and_then(|signature| signature.inputs(ctx).get(index).copied());
-        if environment != Some(closure_ty) {
-            return Err(
-                "closure lowering: entry function environment differs from its closure type".into(),
-            );
-        }
+    let environment = func::FuncSig::from_type_ref(ctx, target.r#type(ctx))
+        .and_then(|signature| signature.inputs(ctx).get(environment_index).copied());
+    if environment != Some(closure_ty) {
+        return Err(
+            "closure lowering: entry function environment differs from its closure type".into(),
+        );
     }
     let mut unpacked = Vec::new();
     if let Some(code_body) = ctx.op_region(target.op_ref(), 0) {
@@ -1029,18 +1041,24 @@ mod tests {
                 r#"core.module @test {{
   !closure = closure.closure<func.func_sig<({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref>>
 
-  func.func @callee(%ev: {ev_ty}, %env: !closure, %arg: tribute_rt.anyref) -> tribute_rt.anyref {{
+  func.func @callee(%ev: {ev_ty}, %env: !closure, %arg: tribute_rt.anyref) -> tribute_rt.anyref attributes {{tribute.calling_convention = "evidence_direct"}} {{
       func.return %arg
+  }}
+  func.func @trap_direct(%env: !closure, %ev: {ev_ty}, %arg: tribute_rt.anyref) -> tribute_rt.anyref attributes {{tribute.calling_convention = "direct"}} {{
+      func.unreachable
+  }}
+  func.func @trap_cps(%ev: {ev_ty}, %env: !closure, %arg: tribute_rt.anyref) -> core.never attributes {{tribute.calling_convention = "cps"}} {{
+      func.unreachable
   }}
 
   func.func @selected(%ev: {ev_ty}, %payload: tribute_rt.anyref) -> tribute_rt.anyref {{
-      %closure = closure.new {{entries = [@callee]}} : !closure
+      %closure = closure.new {{entries = [@trap_direct, @callee, @trap_cps]}} : !closure
       %result = func.call_indirect %closure, %ev, %payload {{tribute.calling_convention = "evidence_direct", signature = func.func_sig<({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref>}} : tribute_rt.anyref
       func.return %result
   }}
 
   func.func @untouched(%ev: {ev_ty}, %payload: tribute_rt.anyref) -> tribute_rt.anyref {{
-      %closure = closure.new {{entries = [@callee]}} : !closure
+      %closure = closure.new {{entries = [@trap_direct, @callee, @trap_cps]}} : !closure
       %result = func.call_indirect %closure, %ev, %payload {{tribute.calling_convention = "evidence_direct", signature = func.func_sig<({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref>}} : tribute_rt.anyref
       func.return %result
   }}
@@ -1098,13 +1116,19 @@ mod tests {
                 r#"core.module @test {{
   !closure = closure.closure<func.func_sig<({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref>>
 
-  func.func @callee(%ev: {ev_ty}, %env: !closure, %arg: tribute_rt.anyref) -> tribute_rt.anyref {{
+  func.func @callee(%ev: {ev_ty}, %env: !closure, %arg: tribute_rt.anyref) -> tribute_rt.anyref attributes {{tribute.calling_convention = "evidence_direct"}} {{
       func.return %arg
+  }}
+  func.func @trap_direct(%env: !closure, %ev: {ev_ty}, %arg: tribute_rt.anyref) -> tribute_rt.anyref attributes {{tribute.calling_convention = "direct"}} {{
+      func.unreachable
+  }}
+  func.func @trap_cps(%ev: {ev_ty}, %env: !closure, %arg: tribute_rt.anyref) -> core.never attributes {{tribute.calling_convention = "cps"}} {{
+      func.unreachable
   }}
 
   func.func @outer(%outer_ev: {ev_ty}, %payload: tribute_rt.anyref) -> tribute_rt.anyref {{
       func.func @inner(%inner_ev: {ev_ty}, %inner_payload: tribute_rt.anyref) -> tribute_rt.anyref {{
-          %closure = closure.new {{entries = [@callee]}} : !closure
+          %closure = closure.new {{entries = [@trap_direct, @callee, @trap_cps]}} : !closure
           %result = func.call_indirect %closure, %inner_ev, %inner_payload {{tribute.calling_convention = "evidence_direct", signature = func.func_sig<({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref>}} : tribute_rt.anyref
           func.return %result
       }}
@@ -1514,19 +1538,28 @@ mod tests {
     #[test]
     fn a_capturing_closure_is_one_allocation_read_through_its_capture_layout() {
         let mut ctx = IrContext::new();
+        let evidence = evidence_type_str();
         let module = parse_test_module(
             &mut ctx,
-            r#"core.module @test {
+            &format!(
+                r#"core.module @test {{
   !closure = closure.closure<func.func_sig<(core.i64) -> core.i64>>
-  func.func @code(%env: !closure, %value: core.i64) -> core.i64 {
+  func.func @code(%env: !closure, %value: core.i64) -> core.i64 attributes {{tribute.calling_convention = "direct"}} {{
     %first, %second = closure.unpack %env : core.i64, core.i32
     func.return %first
-  }
-  func.func @make(%first: core.i64, %second: core.i32) -> !closure {
-    %created = closure.new %first, %second {entries = [@code]} : !closure
+  }}
+  func.func @trap_evidence_direct(%evidence: {evidence}, %env: !closure, %value: core.i64) -> core.i64 attributes {{tribute.calling_convention = "evidence_direct"}} {{
+    func.unreachable
+  }}
+  func.func @trap_cps(%evidence: {evidence}, %env: !closure, %value: core.i64) -> core.never attributes {{tribute.calling_convention = "cps"}} {{
+    func.unreachable
+  }}
+  func.func @make(%first: core.i64, %second: core.i32) -> !closure {{
+    %created = closure.new %first, %second {{entries = [@code, @trap_evidence_direct, @trap_cps]}} : !closure
     func.return %created
-  }
-}"#,
+  }}
+}}"#
+            ),
         );
         lower_prepared_closures(&mut ctx, module).unwrap();
         finalize_closure_storage_layout(&mut ctx, module);
@@ -1618,7 +1651,7 @@ mod tests {
                 r#"core.module @test {{
   !closure = closure.closure<func.func_sig<(core.i32) -> core.i32>>
   core.module @left {{
-    func.func @helper(%env: !closure, %value: core.i32) -> core.i32 {{
+    func.func @helper(%env: !closure, %value: core.i32) -> core.i32 attributes {{tribute.calling_convention = "direct"}} {{
       func.return %value
     }}
   }}
@@ -1628,8 +1661,14 @@ mod tests {
       func.return %zero
     }}
   }}
+  func.func @trap_evidence_direct(%evidence: core.i32, %env: !closure, %value: core.i32) -> core.i32 attributes {{tribute.calling_convention = "evidence_direct"}} {{
+    func.unreachable
+  }}
+  func.func @trap_cps(%evidence: core.i32, %env: !closure, %value: core.i32) -> core.never attributes {{tribute.calling_convention = "cps"}} {{
+    func.unreachable
+  }}
   func.func @make() -> !closure {{
-    %created = closure.new {{entries = [{reference}]}} : !closure
+    %created = closure.new {{entries = [{reference}, @trap_evidence_direct, @trap_cps]}} : !closure
     func.return %created
   }}
 }}"#
@@ -1642,7 +1681,7 @@ mod tests {
         let ir = print_module(&ctx, module.op());
         assert!(!ir.contains("closure.new"), "{ir}");
         assert!(
-            ir.contains(r#"tribute_rt.convention_table {entries = [@left::@helper]} : tribute_rt.convention_table_ref"#),
+            ir.contains(r#"tribute_rt.convention_table {entries = [@left::@helper, @trap_evidence_direct, @trap_cps]} : tribute_rt.convention_table_ref"#),
             "{ir}"
         );
 

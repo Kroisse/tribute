@@ -52,7 +52,18 @@ impl CallingConvention {
         usize::from(self.needs_evidence())
     }
 
-    const ALL: [Self; 3] = [Self::Direct, Self::EvidenceDirect, Self::Cps];
+    /// Every convention, in convention table order.
+    pub const ALL: [Self; 3] = [Self::Direct, Self::EvidenceDirect, Self::Cps];
+
+    /// The position of this convention's entry in a closure's convention
+    /// table (`new-plans/ir.md`, "Convention entry").
+    pub fn slot(self) -> u32 {
+        match self {
+            Self::Direct => 0,
+            Self::EvidenceDirect => 1,
+            Self::Cps => 2,
+        }
+    }
 
     /// The keyword that spells this convention, both as the stored
     /// attribute value and in the `convention(..)` syntax.
@@ -201,7 +212,6 @@ fn read_convention(
 }
 
 impl ConventionBearing for closure::Lambda {}
-impl ConventionBearing for closure::New {}
 impl ConventionBearing for func::Func {}
 impl ConventionBearing for func::Call {}
 impl ConventionBearing for func::TailCall {}
@@ -405,7 +415,6 @@ mod tests {
         let location = ctx.op(module.op()).location;
         for name in [
             closure::Lambda::NAME,
-            closure::New::NAME,
             func::CallIndirect::NAME,
             func::TailCallIndirect::NAME,
         ] {
@@ -436,7 +445,7 @@ mod tests {
     func.return %x
   }
   func.func @agrees(%x: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
-    %c = closure.new {entries = [@callee], tribute.calling_convention = "direct"} : !closure
+    %c = closure.new {entries = [@callee, @callee, @callee]} : !closure
     %r = func.call_indirect %c, %x {signature = !fn, tribute.calling_convention = "direct"} : core.i32
     func.return %r
   }
