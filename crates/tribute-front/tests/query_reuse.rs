@@ -2,6 +2,7 @@
 
 use tribute_front::SourceCst;
 use tribute_front::ast::{ItemLayout, ItemSpans};
+use tribute_front::astgen::ParsedItem;
 use tribute_front::query::{func_names, parsed_ast, parsed_module, resolved_module};
 use tribute_front::testing::{Executed, LoggingDb};
 
@@ -147,4 +148,90 @@ fn moving_items_changes_only_their_layout() {
         ],
         &["parsed_ast", "has_item_spans"],
     );
+}
+
+/// The owner keys of every item of `source`, inline modules' items after
+/// their module, read outside any query.
+fn item_owners(db: &LoggingDb, source: SourceCst) -> Vec<u64> {
+    fn visit(db: &LoggingDb, items: &[ParsedItem<'_>], owners: &mut Vec<u64>) {
+        for item in items {
+            owners.push(*item.owner(db));
+            visit(db, item.children(db), owners);
+        }
+    }
+    let mut owners = Vec::new();
+    let parsed = parsed_ast(db, source).expect("the source parses");
+    visit(db, parsed.items(db), &mut owners);
+    owners
+}
+
+/// The fields of the items of `source` that `owners` name, found without
+/// reading any other item's declarations or spans.
+fn read_items(db: &dyn salsa::Database, source: SourceCst, owners: &[u64]) -> usize {
+    fn visit(db: &dyn salsa::Database, items: &[ParsedItem<'_>], owners: &[u64]) -> usize {
+        items
+            .iter()
+            .map(|item| {
+                let own = if owners.contains(item.owner(db)) {
+                    item.decls(db).len() + usize::from(*item.spans(db) != ItemSpans::default())
+                } else {
+                    0
+                };
+                own + visit(db, item.children(db), owners)
+            })
+            .sum()
+    }
+    parsed_ast(db, source).map_or(0, |parsed| visit(db, parsed.items(db), owners))
+}
+
+/// A query that reads the item `h`, in `ITEMS`'s inline module.
+#[salsa::tracked(returns(copy))]
+fn edited_item(db: &dyn salsa::Database, source: SourceCst, owner: u64) -> usize {
+    read_items(db, source, &[owner])
+}
+
+/// A query that reads every other item of `ITEMS`.
+#[salsa::tracked(returns(copy))]
+fn other_items(db: &dyn salsa::Database, source: SourceCst, owners: Vec<u64>) -> usize {
+    read_items(db, source, &owners)
+}
+
+/// `ITEMS` with both queries computed, the owner of `h` and of the other
+/// items, and the record of that computation.
+fn items_computed() -> (LoggingDb, SourceCst, u64, Vec<u64>, Executed) {
+    let db = LoggingDb::default();
+    let source = db.source(PATH, ITEMS);
+    let mut others = item_owners(&db, source);
+    // `use`, `Point`, `Counter`, `inner`, then `h` inside it, then `f`.
+    let h = others.remove(4);
+    let baseline = db.record(|db| {
+        edited_item(db, source, h);
+        other_items(db, source, others.clone());
+    });
+    (db, source, h, others, baseline)
+}
+
+/// Editing one item's body changes only that item's fields.
+#[test]
+fn a_body_edit_changes_only_its_item() {
+    let (mut db, source, h, others, baseline) = items_computed();
+    db.replace(source, "{ 1 }", "{ 1 + 2 }");
+    db.record(|db| {
+        edited_item(db, source, h);
+        other_items(db, source, others.clone());
+    })
+    .assert_reuse(&baseline, &["edited_item"], &["other_items"]);
+}
+
+/// Moving every item without changing it leaves every item's fields
+/// unchanged.
+#[test]
+fn moving_items_keeps_every_item() {
+    let (mut db, source, h, others, baseline) = items_computed();
+    db.replace(source, "use ", "// A comment moves every item.\n\nuse ");
+    db.record(|db| {
+        edited_item(db, source, h);
+        other_items(db, source, others.clone());
+    })
+    .assert_reuse(&baseline, &[], &["edited_item", "other_items"]);
 }

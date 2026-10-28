@@ -9,7 +9,7 @@ use salsa::Accumulator;
 use tree_sitter::Node;
 use trunk_ir::{Span, Symbol, SymbolPath};
 
-use crate::ast::{NodeId, SpanMapBuilder, UnresolvedName, owner_hash};
+use crate::ast::{ItemSpans, ModuleItem, NodeId, SpanMapBuilder, UnresolvedName, owner_hash};
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 
 /// Context for lowering CST to AST.
@@ -26,6 +26,9 @@ pub struct AstLoweringCtx<'db> {
     module_path: Vec<Symbol>,
     /// The item that owns the nodes being lowered.
     owner: u64,
+    /// How many items of the same kind and name precede that item in its
+    /// module.
+    occurrence: u32,
     /// How many nodes each owner has numbered so far.
     next_index: HashMap<u64, u32>,
     /// How many items of each kind and name each module has entered so far.
@@ -46,6 +49,7 @@ impl<'db> AstLoweringCtx<'db> {
             db: None,
             module_path: Vec::new(),
             owner: module_owner(&[]),
+            occurrence: 0,
             next_index: HashMap::default(),
             item_counts: HashMap::default(),
         }
@@ -70,7 +74,8 @@ impl<'db> AstLoweringCtx<'db> {
         id
     }
 
-    /// Generate the NodeId of the root `Module` node and record its span.
+    /// Generate the NodeId of a module's node, the root `Module` or an inline
+    /// module's declaration, and record its span in the item layout.
     pub fn module_id_with_span(&mut self, node: &Node) -> NodeId {
         let id = self.next_id();
         let span = Span::new(node.start_byte(), node.end_byte());
@@ -99,14 +104,15 @@ impl<'db> AstLoweringCtx<'db> {
     /// Lower the item of `kind` named `name`, which starts at byte `start`,
     /// with its nodes owned by that item and positioned from its start.
     /// Items of one kind and name in one module are told apart by how many
-    /// of them precede the item.
-    pub fn in_item<T>(
+    /// of them precede the item. `lower` returns the item's declarations and
+    /// the items an inline module's body declares.
+    pub fn in_item(
         &mut self,
         kind: &'static str,
         name: &str,
         start: usize,
-        lower: impl FnOnce(&mut Self) -> T,
-    ) -> T {
+        lower: impl FnOnce(&mut Self) -> (Vec<ModuleItem<UnresolvedName>>, Vec<LoweredItem>),
+    ) -> LoweredItem {
         let module = module_owner(&self.module_path);
         let count = self
             .item_counts
@@ -117,9 +123,22 @@ impl<'db> AstLoweringCtx<'db> {
         let item = owner_hash((path_text(&self.module_path), kind, name, occurrence));
         self.span_builder.set_start(item, start);
         let outer = std::mem::replace(&mut self.owner, item);
-        let lowered = lower(self);
+        let outer_occurrence = std::mem::replace(&mut self.occurrence, occurrence);
+        let (decls, children) = lower(self);
         self.owner = outer;
-        lowered
+        self.occurrence = outer_occurrence;
+        LoweredItem {
+            owner: item,
+            decls,
+            children,
+            spans: self.span_builder.take(item),
+        }
+    }
+
+    /// How many items of the same kind and name precede the item being
+    /// lowered in its module.
+    pub fn occurrence(&self) -> u32 {
+        self.occurrence
     }
 
     /// Emit a diagnostic error.
@@ -222,6 +241,18 @@ impl<'db> AstLoweringCtx<'db> {
         }
         Symbol::new(&crate::keywords::unraw(&self.node_text(node)))
     }
+}
+
+/// One lowered item: its declarations, the items of an inline module's body,
+/// and its nodes' spans relative to its start.
+#[derive(Debug)]
+pub struct LoweredItem {
+    pub owner: u64,
+    /// An inline module's declaration has an empty body; its items are
+    /// `children`.
+    pub decls: Vec<ModuleItem<UnresolvedName>>,
+    pub children: Vec<LoweredItem>,
+    pub spans: ItemSpans,
 }
 
 /// The owner of the module-level nodes of the module at `path`.

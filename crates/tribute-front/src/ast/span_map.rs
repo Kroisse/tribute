@@ -17,11 +17,12 @@ use super::NodeId;
 /// Builder for constructing a SpanMap during AST lowering.
 ///
 /// This is used during CST → AST conversion to collect spans for each node.
-/// Set an item's start before inserting its nodes; after lowering is
-/// complete, call `finish()` for the parts a `SpanMap` reads.
+/// Set an item's start before inserting its nodes, and take its spans once
+/// its nodes are lowered; after lowering is complete, call `finish()` for the
+/// layout and any spans not taken.
 #[derive(Debug, Default)]
 pub struct SpanMapBuilder {
-    spans: HashMap<NodeId, Span>,
+    spans: HashMap<u64, ItemSpans>,
     layout: ItemLayout,
 }
 
@@ -36,9 +37,9 @@ impl SpanMapBuilder {
         self.layout.starts.insert(owner, start);
     }
 
-    /// Record the span of the root `Module` node, which no item owns.
+    /// Record the span of a module's node, which spans the items in it.
     pub fn set_module(&mut self, id: NodeId, span: Span) {
-        self.layout.module = Some((id, span));
+        self.layout.modules.insert(id, span);
     }
 
     /// Insert the source span of a node relative to its item's start. A node
@@ -47,12 +48,21 @@ impl SpanMapBuilder {
         let start = self.layout.starts.get(&id.owner()).copied().unwrap_or(0);
         debug_assert!(start <= span.start, "a node starts within its item");
         let relative = Span::new(span.start - start, span.end - start);
-        self.spans.insert(id, relative);
+        self.spans
+            .entry(id.owner())
+            .or_default()
+            .0
+            .insert(id, relative);
     }
 
-    /// The relative spans of item nodes and the layout of the items.
+    /// Take the relative spans of the nodes `owner` owns.
+    pub fn take(&mut self, owner: u64) -> ItemSpans {
+        self.spans.remove(&owner).unwrap_or_default()
+    }
+
+    /// The relative spans not taken and the layout of the items.
     pub fn finish(self) -> (ItemSpans, ItemLayout) {
-        (ItemSpans(self.spans), self.layout)
+        (self.spans.values().collect(), self.layout)
     }
 }
 
@@ -63,16 +73,29 @@ impl SpanMapBuilder {
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ItemSpans(HashMap<NodeId, Span>);
 
-/// Where each item of one parsed source starts, and the span of its root
-/// `Module`.
+impl<'a> FromIterator<&'a ItemSpans> for ItemSpans {
+    /// The spans of several items' nodes in one map.
+    fn from_iter<I: IntoIterator<Item = &'a ItemSpans>>(parts: I) -> Self {
+        Self(
+            parts
+                .into_iter()
+                .flat_map(|part| part.0.iter())
+                .map(|(&id, &span)| (id, span))
+                .collect(),
+        )
+    }
+}
+
+/// Where each item of one parsed source starts, and the spans of the nodes
+/// of its modules: the root `Module` and each inline module's declaration.
 ///
-/// Moving items changes only this part of a source's spans. The root spans
-/// the whole source, so any edit that changes the source's length changes it
-/// too.
+/// Moving items changes only this part of a source's spans. A module's node
+/// spans the items in it, so an edit that changes the length of one of them
+/// changes this part too; the root spans the whole source.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ItemLayout {
     starts: HashMap<u64, usize>,
-    module: Option<(NodeId, Span)>,
+    modules: HashMap<NodeId, Span>,
 }
 
 /// NodeId → Span mapping of one parsed source.
@@ -99,7 +122,7 @@ impl<'a> SpanMap<'a> {
         static SPANS: ItemSpans = ItemSpans(HashMap::with_hasher(FxBuildHasher));
         static LAYOUT: ItemLayout = ItemLayout {
             starts: HashMap::with_hasher(FxBuildHasher),
-            module: None,
+            modules: HashMap::with_hasher(FxBuildHasher),
         };
         SpanMap::new(&SPANS, &LAYOUT)
     }
@@ -122,9 +145,7 @@ impl<'a> SpanMap<'a> {
             let start = self.layout.starts.get(&id.owner()).copied().unwrap_or(0);
             return Some(Span::new(relative.start + start, relative.end + start));
         }
-        self.layout
-            .module
-            .and_then(|(module, span)| (module == id).then_some(span))
+        self.layout.modules.get(&id).copied()
     }
 
     /// Look up a span by NodeId, returning a default span if not found.
