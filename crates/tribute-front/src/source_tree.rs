@@ -206,6 +206,9 @@ impl<'db> Loader<'db> {
                             module.name
                         ),
                     );
+                    body.clear();
+                    self.changed = true;
+                    continue;
                 }
                 self.splice(body, &sub_path, &sub_dir, spans);
                 continue;

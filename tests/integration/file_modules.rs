@@ -289,6 +289,19 @@ fn diag_file_module_with_a_body() {
     insta::assert_yaml_snapshot!(located_diagnostics(&db, root));
 }
 
+/// A module with a body and a file gets an empty body, so the tree does not
+/// load the files of the modules its body declares.
+#[test]
+fn diag_file_module_with_a_body_loads_nothing_under_it() {
+    let mut db = LoggingDb::default();
+    db.file("/pkg/src/util.trb", "pub mod child\n");
+    let root = db.file(
+        ROOT,
+        "mod util {\n    mod child\n}\n\nfn main() -> Nil { }\n",
+    );
+    insta::assert_yaml_snapshot!(located_diagnostics(&db, root));
+}
+
 #[test]
 fn diag_file_module_reached_twice() {
     let mut db = LoggingDb::default();

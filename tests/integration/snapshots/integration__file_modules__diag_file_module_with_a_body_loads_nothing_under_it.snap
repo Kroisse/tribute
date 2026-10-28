@@ -1,0 +1,5 @@
+---
+source: tests/integration/file_modules.rs
+expression: "located_diagnostics(&db, root)"
+---
+- "/pkg/src/main.trb:0..26: module `util` has a body, but the file `/pkg/src/util.trb` also declares it"
