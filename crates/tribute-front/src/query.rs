@@ -124,7 +124,7 @@ pub fn parsed_module(
 /// Use together with `parsed_module` - both are derived from the same parse.
 /// Like [`parsed_module`], this borrows the field of the cached
 /// [`parsed_ast`] result.
-pub fn span_map(db: &dyn salsa::Database, source: SourceCst) -> Option<&SpanMap> {
+pub fn span_map(db: &dyn salsa::Database, source: SourceCst) -> Option<SpanMap<'_>> {
     parsed_ast(db, source).map(|parsed| parsed.span_map(db))
 }
 

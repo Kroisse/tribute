@@ -65,19 +65,22 @@ pub fn lower_module(
 /// Returns a Vec because use declarations can expand to multiple items.
 fn lower_decl(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<ModuleItem<UnresolvedName>> {
     if let Some((kind, name)) = item_key(ctx, node) {
-        return ctx.in_item(kind, &name, |ctx| lower_item(ctx, node));
+        return ctx.in_item(kind, &name, node.start_byte(), |ctx| lower_item(ctx, node));
     }
     lower_item(ctx, node)
 }
 
 /// The kind and name that identify the item `node` declares, which owns the
-/// nodes inside it. Module-level declarations without a body of their own
-/// (`mod`, `use`) have none: their module owns their nodes.
+/// nodes inside it. A `use` declaration is named by its text. The nodes of an
+/// inline module's body belong to the items in it, so its module owns no
+/// node but the root's `Module`.
 fn item_key(ctx: &AstLoweringCtx<'_>, node: Node) -> Option<(&'static str, String)> {
     let (kind, declaration) = match node.kind() {
         "function_definition" => ("fn", node.named_child(0)?),
         "struct_declaration" | "enum_declaration" => ("type", node),
         "ability_declaration" => ("ability", node),
+        "mod_declaration" => ("mod", node),
+        "use_declaration" => return Some(("use", ctx.node_text_owned(&node))),
         _ => return None,
     };
     let name = declaration.child_by_field_name("name")?;

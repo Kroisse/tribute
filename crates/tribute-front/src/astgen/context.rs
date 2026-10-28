@@ -83,13 +83,15 @@ impl<'db> AstLoweringCtx<'db> {
         lowered
     }
 
-    /// Lower the item of `kind` named `name` with its nodes owned by that
-    /// item. Items of one kind and name in one module are told apart by how
-    /// many of them precede the item.
+    /// Lower the item of `kind` named `name`, which starts at byte `start`,
+    /// with its nodes owned by that item and positioned from its start.
+    /// Items of one kind and name in one module are told apart by how many
+    /// of them precede the item.
     pub fn in_item<T>(
         &mut self,
         kind: &'static str,
         name: &str,
+        start: usize,
         lower: impl FnOnce(&mut Self) -> T,
     ) -> T {
         let module = module_owner(&self.module_path);
@@ -100,6 +102,7 @@ impl<'db> AstLoweringCtx<'db> {
         let occurrence = *count;
         *count += 1;
         let item = owner_hash((path_text(&self.module_path), kind, name, occurrence));
+        self.span_builder.set_start(item, start);
         let outer = std::mem::replace(&mut self.owner, item);
         let lowered = lower(self);
         self.owner = outer;

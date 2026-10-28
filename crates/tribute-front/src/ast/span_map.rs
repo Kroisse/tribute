@@ -17,10 +17,12 @@ use super::NodeId;
 /// Builder for constructing a SpanMap during AST lowering.
 ///
 /// This is used during CST → AST conversion to collect spans for each node.
-/// After lowering is complete, call `finish()` to create a `SpanMap`.
+/// Set an item's start before inserting its nodes; after lowering is
+/// complete, call `finish()` for the parts a `SpanMap` reads.
 #[derive(Debug, Default)]
 pub struct SpanMapBuilder {
     spans: HashMap<NodeId, Span>,
+    layout: ItemLayout,
 }
 
 impl SpanMapBuilder {
@@ -29,30 +31,73 @@ impl SpanMapBuilder {
         Self::default()
     }
 
-    /// Insert a span for a node.
-    pub fn insert(&mut self, id: NodeId, span: Span) {
-        self.spans.insert(id, span);
+    /// Record that the item `owner` starts at byte `start`.
+    pub fn set_start(&mut self, owner: u64, start: usize) {
+        self.layout.starts.insert(owner, start);
     }
 
-    /// Create a SpanMap from this builder.
-    pub fn finish(self) -> SpanMap {
-        SpanMap(self.spans)
+    /// Insert the source span of a node: relative to its item's start, or as
+    /// is for a node no item owns.
+    pub fn insert(&mut self, id: NodeId, span: Span) {
+        let Some(&start) = self.layout.starts.get(&id.owner()) else {
+            self.layout.unowned.insert(id, span);
+            return;
+        };
+        debug_assert!(start <= span.start, "a node starts within its item");
+        let relative = Span::new(span.start - start, span.end - start);
+        self.spans.insert(id, relative);
     }
+
+    /// The relative spans of item nodes and the layout of the items.
+    pub fn finish(self) -> (ItemSpans, ItemLayout) {
+        (ItemSpans(self.spans), self.layout)
+    }
+}
+
+/// Each item node's span relative to the start of its item, in one parsed
+/// source.
+///
+/// Moving an item without changing it leaves its nodes' entries equal.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct ItemSpans(HashMap<NodeId, Span>);
+
+/// Where each item of one parsed source starts, and the spans of the nodes
+/// no item owns, such as the root `Module`.
+///
+/// Moving items changes only this part of a source's spans.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct ItemLayout {
+    starts: HashMap<u64, usize>,
+    unowned: HashMap<NodeId, Span>,
 }
 
 /// NodeId → Span mapping of one parsed source.
 ///
-/// The map belongs to the parse that built it (`ParsedAst`, a Salsa tracked
-/// struct); later stages borrow it rather than copy it. It compares by
-/// content, so a reparse that moves no node leaves it unchanged.
-#[derive(Debug, Default, PartialEq, Eq)]
-pub struct SpanMap(HashMap<NodeId, Span>);
+/// The parts belong to the parse that built them (`ParsedAst`, a Salsa
+/// tracked struct); the map borrows them and adds each item node's relative
+/// span to its item's start. They compare by content, so a reparse that
+/// moves no item leaves both unchanged, and one that only moves items leaves
+/// the relative spans unchanged.
+#[derive(Clone, Copy, Debug)]
+pub struct SpanMap<'a> {
+    spans: &'a ItemSpans,
+    layout: &'a ItemLayout,
+}
 
-impl SpanMap {
+impl<'a> SpanMap<'a> {
+    /// The map that positions `spans` by `layout`.
+    pub fn new(spans: &'a ItemSpans, layout: &'a ItemLayout) -> Self {
+        Self { spans, layout }
+    }
+
     /// The map of no nodes, for checking code that has no source.
-    pub fn empty() -> &'static SpanMap {
-        static EMPTY: SpanMap = SpanMap(HashMap::with_hasher(FxBuildHasher));
-        &EMPTY
+    pub fn empty() -> SpanMap<'static> {
+        static SPANS: ItemSpans = ItemSpans(HashMap::with_hasher(FxBuildHasher));
+        static LAYOUT: ItemLayout = ItemLayout {
+            starts: HashMap::with_hasher(FxBuildHasher),
+            unowned: HashMap::with_hasher(FxBuildHasher),
+        };
+        SpanMap::new(&SPANS, &LAYOUT)
     }
 
     /// Look up a span by NodeId.
@@ -60,13 +105,20 @@ impl SpanMap {
     /// For specialized (monomorphized) nodes, falls back to the origin NodeId
     /// so that spans are inherited from the original generic function.
     pub fn get(&self, id: NodeId) -> Option<Span> {
-        self.0.get(&id).copied().or_else(|| {
-            if id.variant().is_some() {
-                self.0.get(&id.origin()).copied()
-            } else {
-                None
-            }
+        self.get_exact(id).or_else(|| {
+            id.variant()
+                .is_some()
+                .then(|| self.get_exact(id.origin()))
+                .flatten()
         })
+    }
+
+    fn get_exact(&self, id: NodeId) -> Option<Span> {
+        if let Some(relative) = self.spans.0.get(&id) {
+            let start = self.layout.starts.get(&id.owner()).copied().unwrap_or(0);
+            return Some(Span::new(relative.start + start, relative.end + start));
+        }
+        self.layout.unowned.get(&id).copied()
     }
 
     /// Look up a span by NodeId, returning a default span if not found.
@@ -76,7 +128,7 @@ impl SpanMap {
 
     /// Check if this NodeId has a recorded span.
     pub fn contains(&self, id: NodeId) -> bool {
-        self.0.contains_key(&id)
+        self.spans.0.contains_key(&id) || self.layout.unowned.contains_key(&id)
     }
 }
 
@@ -85,11 +137,11 @@ impl SpanMap {
 ///
 /// NodeIds carry their source's hash, so a node is in at most one of them.
 #[derive(Clone, Debug, Default)]
-pub struct SpanMaps<'a>(Vec<&'a SpanMap>);
+pub struct SpanMaps<'a>(Vec<SpanMap<'a>>);
 
 impl<'a> SpanMaps<'a> {
     /// Look up spans in `maps`.
-    pub fn new(maps: impl IntoIterator<Item = &'a SpanMap>) -> Self {
+    pub fn new(maps: impl IntoIterator<Item = SpanMap<'a>>) -> Self {
         Self(maps.into_iter().collect())
     }
 
@@ -117,7 +169,8 @@ mod tests {
         builder.insert(id1, Span::new(10, 20));
         builder.insert(id2, Span::new(30, 40));
 
-        let span_map = builder.finish();
+        let (spans, layout) = builder.finish();
+        let span_map = SpanMap::new(&spans, &layout);
 
         assert_eq!(span_map.get(id1), Some(Span::new(10, 20)));
         assert_eq!(span_map.get(id2), Some(Span::new(30, 40)));
@@ -130,7 +183,8 @@ mod tests {
         let id1 = NodeId::from_raw(0);
         builder.insert(id1, Span::new(10, 20));
 
-        let span_map = builder.finish();
+        let (spans, layout) = builder.finish();
+        let span_map = SpanMap::new(&spans, &layout);
 
         assert_eq!(span_map.get_or_default(id1), Span::new(10, 20));
         assert_eq!(
@@ -143,12 +197,15 @@ mod tests {
     fn test_span_maps_look_up_each_map() {
         let mut user = SpanMapBuilder::new();
         user.insert(NodeId::from_raw(0), Span::new(10, 20));
-        let user = user.finish();
+        let (user_spans, user_layout) = user.finish();
         let mut dependency = SpanMapBuilder::new();
         dependency.insert(NodeId::new(1, 0, 0), Span::new(30, 40));
-        let dependency = dependency.finish();
+        let (dependency_spans, dependency_layout) = dependency.finish();
 
-        let spans = SpanMaps::new([&user, &dependency]);
+        let spans = SpanMaps::new([
+            SpanMap::new(&user_spans, &user_layout),
+            SpanMap::new(&dependency_spans, &dependency_layout),
+        ]);
         assert_eq!(spans.get(NodeId::from_raw(0)), Some(Span::new(10, 20)));
         assert_eq!(spans.get(NodeId::new(1, 0, 0)), Some(Span::new(30, 40)));
         assert_eq!(spans.get_or_default(NodeId::from_raw(9)), Span::new(0, 0));
@@ -160,7 +217,8 @@ mod tests {
         let id = NodeId::from_raw(100);
         builder.insert(id, Span::new(0, 50));
 
-        let span_map = builder.finish();
+        let (spans, layout) = builder.finish();
+        let span_map = SpanMap::new(&spans, &layout);
 
         assert!(span_map.contains(id));
         assert!(!span_map.contains(NodeId::from_raw(999)));
@@ -173,7 +231,8 @@ mod tests {
         let span = Span::new(10, 20);
         builder.insert(origin, span);
 
-        let span_map = builder.finish();
+        let (spans, layout) = builder.finish();
+        let span_map = SpanMap::new(&spans, &layout);
 
         // Specialized NodeId should fall back to origin's span
         let variant = std::num::NonZero::new(12345u64).unwrap();
@@ -182,5 +241,28 @@ mod tests {
         assert_ne!(origin, specialized);
         assert_eq!(span_map.get(specialized), Some(span));
         assert_eq!(span_map.get_or_default(specialized), span);
+    }
+
+    #[test]
+    fn test_span_map_positions_nodes_from_their_owner() {
+        let build = |start: usize| {
+            let mut builder = SpanMapBuilder::new();
+            builder.set_start(7, start);
+            builder.insert(NodeId::new(0, 7, 0), Span::new(start, start + 10));
+            builder.insert(NodeId::new(0, 7, 1), Span::new(start + 4, start + 6));
+            builder.insert(NodeId::new(0, 3, 0), Span::new(0, 2));
+            builder.finish()
+        };
+        let (spans, layout) = build(20);
+        let (moved_spans, moved_layout) = build(35);
+
+        assert_eq!(
+            spans, moved_spans,
+            "moving an owner keeps its relative spans"
+        );
+        assert_ne!(layout, moved_layout);
+        let span_map = SpanMap::new(&moved_spans, &moved_layout);
+        assert_eq!(span_map.get(NodeId::new(0, 7, 1)), Some(Span::new(39, 41)));
+        assert_eq!(span_map.get(NodeId::new(0, 3, 0)), Some(Span::new(0, 2)));
     }
 }

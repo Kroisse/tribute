@@ -818,7 +818,7 @@ mod tests {
     fn resolve_with_builtins<'db>(
         db: &'db dyn salsa::Database,
         module: &Module<UnresolvedName>,
-        span_map: &'db SpanMap,
+        span_map: SpanMap<'db>,
     ) -> crate::ast::DeclTable<crate::ast::ResolvedRef<'db>> {
         let dependencies = crate::analysis::dependencies(db, *crate::analysis::builtins(db));
         let scope = resolve::build_env(db, module, dependencies);
