@@ -2,7 +2,7 @@
 
 use crate::calling_convention::ConventionBearing;
 use crate::dialect::tribute_rtti::ManagedRefType;
-use trunk_ir::attr_kind::SymbolRef;
+use trunk_ir::attr_kind::{Dict, SymbolRef};
 use trunk_ir::dialect::func::FuncSig;
 use trunk_ir::op_flag::Pure;
 use trunk_ir::op_interface::CallableOwner;
@@ -78,8 +78,16 @@ mod closure {
     /// `func.func` and replaces this op with `closure.new`. Its calling
     /// convention is recorded through `ConventionBearing`.
     ///
+    /// `adapters` names, by convention keyword, the adapter entry functions
+    /// of a source lambda's stronger convention table slots
+    /// (`new-plans/ir.md`, "Convention entry"). The body fills the slot of
+    /// the lambda's convention, and a trap entry each other slot. A
+    /// generated closure, whose closure type's callable is its own entry, has
+    /// no adapters.
+    ///
     /// ```text
     /// %f = closure.lambda(%ev: E, %x: core.i32) -> core.i32 : closure.closure<S> [%y] { .. }
+    /// %g = closure.lambda(%x: core.i32) -> core.i32 {adapters = {cps = @a1, evidence_direct = @a0}} [%y] { .. }
     /// ```
     ///
     /// The parameters and result spell `signature`. The closure type is
@@ -89,6 +97,7 @@ mod closure {
     #[flags(Pure)]
     fn lambda<S: FuncSig>(
         signature: Attr<TypeOf<S>>,
+        adapters: Option<Attr<Dict<SymbolRef>>>,
         captures: Variadic<_>,
     ) -> Value<impl Closure> {
         #[region(body)]

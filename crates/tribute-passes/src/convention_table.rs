@@ -1,6 +1,7 @@
 //! The convention tables that `closure.new` names: one entry function per
-//! calling convention, at its slot, with a shared trap entry in every slot
-//! the closure does not implement (`new-plans/ir.md`, "Convention entry").
+//! calling convention, at its slot. A slot the closure does not implement
+//! holds a shared adapter or trap entry (`new-plans/ir.md`, "Convention
+//! entry").
 
 use rustc_hash::FxHashMap as HashMap;
 use tribute_ir::callable_abi::CallableAbi;
@@ -10,72 +11,158 @@ use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, TypeRef};
-use trunk_ir::types::Location;
+use trunk_ir::types::{AttributeMap, Location};
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::cps_builders::{helper_symbol, make_block, single_block_region};
+use crate::lower_continuation_frames::frame_reference;
 
 const TRAP_ENTRY: &str = "trap_entry";
+const ENTRY_ADAPTER: &str = "entry_adapter";
 
-/// The trap entries of each symbol table block, shared there by signature
-/// and convention. A trap entry traps as soon as it is entered.
-#[derive(Default)]
-pub(crate) struct TrapEntries {
+/// How the entries of a table are laid out where the pipeline builds it.
+pub(crate) trait EntryLayout {
+    /// The signature of the entry through `convention` of a closure of type
+    /// `closure_ty`, with the closure as its environment.
+    fn entry_signature(
+        &self,
+        ctx: &mut IrContext,
+        closure_ty: TypeRef,
+        convention: CallingConvention,
+    ) -> TypeRef;
+}
+
+/// Logical entries before frame expansion, whose `Cps` entry takes an
+/// `ability.frame<R>`.
+pub(crate) struct AbstractFrames;
+
+impl EntryLayout for AbstractFrames {
+    fn entry_signature(
+        &self,
+        ctx: &mut IrContext,
+        closure_ty: TypeRef,
+        convention: CallingConvention,
+    ) -> TypeRef {
+        logical_entry_signature(ctx, closure_ty, convention, |ctx, answer| {
+            ability::Frame::params(answer).intern(ctx).as_type_ref()
+        })
+    }
+}
+
+/// Logical entries after frame expansion, whose `Cps` entry takes the frame
+/// reference of its answer.
+pub(crate) struct ExpandedFrames;
+
+impl EntryLayout for ExpandedFrames {
+    fn entry_signature(
+        &self,
+        ctx: &mut IrContext,
+        closure_ty: TypeRef,
+        convention: CallingConvention,
+    ) -> TypeRef {
+        logical_entry_signature(ctx, closure_ty, convention, frame_reference)
+    }
+}
+
+/// The convention tables of the closures a pass makes, and the adapters and
+/// trap entries that fill their slots (`new-plans/ir.md`, "Convention
+/// entry"). Both are shared in each symbol table block by what determines
+/// them.
+pub(crate) struct ConventionTables<L> {
+    layout: L,
     scopes: HashMap<BlockRef, Scope>,
 }
 
-/// The trap entries one symbol table block defines.
+/// The adapters and trap entries one symbol table block defines.
 struct Scope {
-    known: HashMap<(TypeRef, CallingConvention), Symbol>,
-    next: u32,
+    traps: HashMap<(TypeRef, CallingConvention), Symbol>,
+    /// Adapters by their signature, convention, and the convention of the
+    /// entry they call.
+    adapters: HashMap<(TypeRef, CallingConvention, CallingConvention), Symbol>,
+    next_trap: u32,
+    next_adapter: u32,
+}
+
+/// The index of a helper `__tribute_{prefix}_N` named `name`.
+fn helper_index(name: &str, prefix: &str) -> Option<u32> {
+    name.strip_prefix("__tribute_")?
+        .strip_prefix(prefix)?
+        .strip_prefix('_')?
+        .parse()
+        .ok()
 }
 
 impl Scope {
+    /// The helpers `block` already defines. A trap entry is reused by its
+    /// signature and convention; an adapter made by an earlier pass only
+    /// reserves its name.
     fn read(ctx: &IrContext, block: BlockRef) -> Self {
-        let mut known = HashMap::default();
-        let mut next = 0;
+        let mut scope = Self {
+            traps: HashMap::default(),
+            adapters: HashMap::default(),
+            next_trap: 0,
+            next_adapter: 0,
+        };
         for &op in &ctx.block(block).ops {
             let Ok(function) = func::Func::from_op(ctx, op) else {
                 continue;
             };
             let name = function.sym_name(ctx);
-            let index = name
-                .strip_prefix("__tribute_")
-                .and_then(|name| name.strip_prefix(TRAP_ENTRY))
-                .and_then(|name| name.strip_prefix('_'))
-                .and_then(|index| index.parse::<u32>().ok());
-            let (Some(index), Some(convention)) = (index, DynConventionBearing::of(ctx, op)) else {
+            if let Some(index) = helper_index(name, ENTRY_ADAPTER) {
+                scope.next_adapter = scope.next_adapter.max(index + 1);
+                continue;
+            }
+            let (Some(index), Some(convention)) = (
+                helper_index(name, TRAP_ENTRY),
+                DynConventionBearing::of(ctx, op),
+            ) else {
                 continue;
             };
-            known.insert((function.r#type(ctx), convention), Symbol::new(name));
-            next = next.max(index + 1);
+            scope
+                .traps
+                .insert((function.r#type(ctx), convention), Symbol::new(name));
+            scope.next_trap = scope.next_trap.max(index + 1);
         }
-        Self { known, next }
+        scope
     }
 }
 
-impl TrapEntries {
-    /// The entries of a closure that implements only `convention`, with
-    /// `entry`: `entry` at its slot, and in each other slot a trap entry of
-    /// the signature `signature` gives that convention, defined in `block`,
-    /// the symbol table block that resolves the closure's entries.
+impl<L: EntryLayout> ConventionTables<L> {
+    pub(crate) fn new(layout: L) -> Self {
+        Self {
+            layout,
+            scopes: HashMap::default(),
+        }
+    }
+
+    /// The table of a closure of type `closure_ty` whose slots `entries`
+    /// fills, each with the entry function of its convention. A trap entry
+    /// defined in `block`, the symbol table block that resolves the
+    /// closure's entries, fills each other slot.
     pub(crate) fn table(
         &mut self,
         ctx: &mut IrContext,
         block: BlockRef,
         location: Location,
-        convention: CallingConvention,
-        entry: SymbolPath,
-        mut signature: impl FnMut(&mut IrContext, CallingConvention) -> TypeRef,
+        closure_ty: TypeRef,
+        entries: impl IntoIterator<Item = (CallingConvention, SymbolPath)>,
     ) -> [SymbolPath; 3] {
-        CallingConvention::ALL.map(|slot| {
-            if slot == convention {
-                entry.clone()
-            } else {
-                let signature = signature(ctx, slot);
-                SymbolPath::new([self.trap(ctx, block, location, signature, slot)])
-            }
+        let mut slots: [Option<SymbolPath>; 3] = Default::default();
+        for (convention, entry) in entries {
+            slots[convention.slot() as usize] = Some(entry);
+        }
+        let mut slots = slots.into_iter();
+        CallingConvention::ALL.map(|convention| {
+            slots.next().flatten().unwrap_or_else(|| {
+                SymbolPath::new([self.trap(ctx, block, location, closure_ty, convention)])
+            })
         })
+    }
+
+    fn scope(&mut self, ctx: &IrContext, block: BlockRef) -> &mut Scope {
+        self.scopes
+            .entry(block)
+            .or_insert_with(|| Scope::read(ctx, block))
     }
 
     fn trap(
@@ -83,44 +170,164 @@ impl TrapEntries {
         ctx: &mut IrContext,
         block: BlockRef,
         location: Location,
-        signature: TypeRef,
+        closure_ty: TypeRef,
         convention: CallingConvention,
     ) -> Symbol {
-        let scope = self
-            .scopes
-            .entry(block)
-            .or_insert_with(|| Scope::read(ctx, block));
-        if let Some(name) = scope.known.get(&(signature, convention)) {
+        let signature = self.layout.entry_signature(ctx, closure_ty, convention);
+        let scope = self.scope(ctx, block);
+        if let Some(name) = scope.traps.get(&(signature, convention)) {
             return name.clone();
         }
-        let name = helper_symbol(TRAP_ENTRY, scope.next);
-        scope.next += 1;
-        scope.known.insert((signature, convention), name.clone());
-        let inputs = func::FuncSig::from_type_ref(ctx, signature)
-            .expect("a trap entry signature is a func.func_sig")
-            .inputs(ctx)
-            .to_vec();
-        let body = make_block(ctx, location, &inputs);
+        let name = helper_symbol(TRAP_ENTRY, scope.next_trap);
+        scope.next_trap += 1;
+        scope.traps.insert((signature, convention), name.clone());
+        let body = make_block(ctx, location, &entry_inputs(ctx, signature));
         let unreachable = func::Unreachable::operands().build(ctx, location);
         ctx.push_op(body, unreachable.op_ref());
-        let body = single_block_region(ctx, location, body);
-        let function = func::Func::operands()
-            .sym_name(ctx.intern_symbol_text(&name))
-            .r#type(signature)
-            .regions(body)
-            .build(ctx, location);
-        function.set_calling_convention(ctx, convention);
-        ctx.push_op(block, function.op_ref());
+        define(ctx, block, location, &name, signature, body, convention);
         name
     }
+}
+
+impl ConventionTables<AbstractFrames> {
+    /// The adapters of a source closure of type `closure_ty` whose body
+    /// implements `body`: one for each stronger convention, defined in
+    /// `block`. A generated closure, whose closure type's callable is its own
+    /// entry, has none.
+    pub(crate) fn adapters(
+        &mut self,
+        ctx: &mut IrContext,
+        block: BlockRef,
+        location: Location,
+        closure_ty: TypeRef,
+        body: CallingConvention,
+    ) -> Vec<(CallingConvention, Symbol)> {
+        CallingConvention::ALL
+            .into_iter()
+            .filter(|&convention| convention > body)
+            .map(|convention| {
+                let adapter = self.adapter(ctx, block, location, closure_ty, convention, body);
+                (convention, adapter)
+            })
+            .collect()
+    }
+
+    /// The adapter entry through `convention` that enters its closure again
+    /// through `body`, a weaker convention. It drops the evidence `body` does
+    /// not take. A `Cps` adapter exits to its frame with the result, and a
+    /// value adapter tail calls the body's entry. An adapter of a body that
+    /// never returns calls it and traps after the call.
+    fn adapter(
+        &mut self,
+        ctx: &mut IrContext,
+        block: BlockRef,
+        location: Location,
+        closure_ty: TypeRef,
+        convention: CallingConvention,
+        body: CallingConvention,
+    ) -> Symbol {
+        let signature = self.layout.entry_signature(ctx, closure_ty, convention);
+        let key = (signature, convention, body);
+        let scope = self.scope(ctx, block);
+        if let Some(name) = scope.adapters.get(&key) {
+            return name.clone();
+        }
+        let name = helper_symbol(ENTRY_ADAPTER, scope.next_adapter);
+        scope.next_adapter += 1;
+        scope.adapters.insert(key, name.clone());
+
+        // The transfer's signature is the body entry's without the
+        // environment, which the closure lowering interposes again. An
+        // ordinary closure call has one result, so a body that never returns
+        // keeps its logical `core.never` there.
+        let never = core::Never::params().intern(ctx).as_type_ref();
+        let body_entry = self.layout.entry_signature(ctx, closure_ty, body);
+        let mut diverges = false;
+        let transfer_signature = func::FuncSig::from_type_ref(ctx, body_entry)
+            .expect("an entry signature is a func.func_sig")
+            .rebuild(ctx, |inputs, results| {
+                inputs.remove(body.closure_environment_index());
+                if results.is_empty() {
+                    diverges = true;
+                    results.push((never, AttributeMap::new()));
+                }
+            })
+            .as_type_ref();
+        let entry = make_block(ctx, location, &entry_inputs(ctx, signature));
+        let mut params = ctx.block_args(entry).to_vec();
+        let closure = params.remove(convention.closure_environment_index());
+        let evidence = convention.needs_evidence().then(|| params[0]);
+        let frame = convention
+            .needs_continuation_frame()
+            .then(|| params[usize::from(convention.needs_evidence())]);
+        let source = usize::from(convention.needs_evidence())
+            + usize::from(convention.needs_continuation_frame());
+        let args: Vec<_> = evidence
+            .filter(|_| body.needs_evidence())
+            .into_iter()
+            .chain(params[source..].iter().copied())
+            .collect();
+        if let (false, Some(frame)) = (diverges, frame) {
+            let call = func::CallIndirect::operands(closure, args)
+                .signature(transfer_signature)
+                .build(ctx, location);
+            call.set_calling_convention(ctx, body);
+            ctx.push_op(entry, call.op_ref());
+            let exit = ability::Exit::operands(frame, call.result(ctx)).build(ctx, location);
+            ctx.push_op(entry, exit.op_ref());
+        } else if diverges {
+            let call = func::CallIndirect::operands(closure, args)
+                .signature(transfer_signature)
+                .build(ctx, location);
+            call.set_calling_convention(ctx, body);
+            ctx.push_op(entry, call.op_ref());
+            let unreachable = func::Unreachable::operands().build(ctx, location);
+            ctx.push_op(entry, unreachable.op_ref());
+        } else {
+            let tail = func::TailCallIndirect::operands(closure, args)
+                .signature(transfer_signature)
+                .build(ctx, location);
+            tail.set_calling_convention(ctx, body);
+            ctx.push_op(entry, tail.op_ref());
+        }
+        define(ctx, block, location, &name, signature, entry, convention);
+        name
+    }
+}
+
+fn entry_inputs(ctx: &IrContext, signature: TypeRef) -> Vec<TypeRef> {
+    func::FuncSig::from_type_ref(ctx, signature)
+        .expect("an entry signature is a func.func_sig")
+        .inputs(ctx)
+        .to_vec()
+}
+
+/// Define the entry function `name` of `signature` and `convention` with
+/// the body `entry` at the end of `block`.
+fn define(
+    ctx: &mut IrContext,
+    block: BlockRef,
+    location: Location,
+    name: &Symbol,
+    signature: TypeRef,
+    entry: BlockRef,
+    convention: CallingConvention,
+) {
+    let body = single_block_region(ctx, location, entry);
+    let function = func::Func::operands()
+        .sym_name(ctx.intern_symbol_text(name))
+        .r#type(signature)
+        .regions(body)
+        .build(ctx, location);
+    function.set_calling_convention(ctx, convention);
+    ctx.push_op(block, function.op_ref());
 }
 
 /// The logical signature of the entry through `convention` of a closure of
 /// type `closure_ty`: its callable's parameters and result laid out by that
 /// convention, with the closure as the environment and `frame(R)` as the
-/// continuation frame of a result `R`. Before physicalization it is the
-/// signature of a trap entry in that slot.
-pub(crate) fn logical_entry_signature(
+/// continuation frame of a result `R`.
+fn logical_entry_signature(
     ctx: &mut IrContext,
     closure_ty: TypeRef,
     convention: CallingConvention,
@@ -199,6 +406,52 @@ mod tests {
         tables
     }
 
+    /// The convention of the indirect transfer by which the adapter
+    /// `function` enters its own environment, the closure at `environment`.
+    fn adapter_transfer(
+        ctx: &IrContext,
+        function: &str,
+        module: trunk_ir::rewrite::Module,
+        environment: usize,
+    ) -> CallingConvention {
+        let function = module
+            .ops(ctx)
+            .iter()
+            .find_map(|&op| {
+                func::Func::from_op(ctx, op)
+                    .ok()
+                    .filter(|candidate| candidate.sym_name(ctx) == function)
+            })
+            .expect("the adapter is defined in the module");
+        let entry = ctx.region(function.body(ctx)).blocks[0];
+        let closure = ctx.block_args(entry)[environment];
+        let transfer = ctx
+            .block(entry)
+            .ops
+            .iter()
+            .copied()
+            .find(|&op| {
+                func::CallIndirect::matches(ctx, op) || func::TailCallIndirect::matches(ctx, op)
+            })
+            .expect("an adapter enters its closure");
+        assert_eq!(ctx.op_operands(transfer)[0], closure);
+        let signature = ctx
+            .op_attrs(transfer)
+            .get_type("signature")
+            .and_then(|signature| func::FuncSig::from_type_ref(ctx, signature))
+            .expect("the transfer carries its signature");
+        assert!(
+            ctx.op_operands(transfer)[1..]
+                .iter()
+                .map(|&arg| ctx.value_ty(arg))
+                .eq(signature.inputs(ctx).iter().copied()),
+            "the transfer passes its signature's arguments"
+        );
+        DynConventionBearing::of(ctx, transfer).expect("the transfer records its convention")
+    }
+
+    /// A lambda without adapters, such as a generated closure, has trap
+    /// entries in every other slot.
     #[test]
     fn a_closure_fills_the_slots_it_does_not_implement_with_shared_trap_entries() {
         let mut ctx = IrContext::new();
@@ -243,6 +496,100 @@ mod tests {
             [
                 (true, CallingConvention::EvidenceDirect, 1),
                 (true, CallingConvention::Cps, 1),
+            ]
+        );
+    }
+
+    /// A source closure's stronger slots hold adapters that enter it again
+    /// through its own slot, and its weaker slots hold trap entries.
+    #[test]
+    fn a_source_closure_fills_its_stronger_slots_with_adapters() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  tribute_cps.func @direct(%y: core.i32) -> core.i32 convention(direct) {
+    %f = tribute_cps.lambda(%x: core.i32) -> core.i32 captures [%y] entries {
+      direct {
+        %sum = arith.addi %x, %y : core.i32
+        tribute_control.return %sum
+      }
+    }
+    %g = tribute_cps.lambda(%x: core.i32) -> core.i32 captures [] entries {
+      direct {
+        tribute_control.return %x
+      }
+    }
+    %a = tribute_cps.call_indirect %f, %y {convention = "direct"} : core.i32
+    %b = tribute_cps.call_indirect %g, %a {convention = "direct"} : core.i32
+    tribute_control.return %b
+  }
+  tribute_cps.func @evidence(%y: core.i32) -> core.i32 convention(evidence_direct) {
+    %h = tribute_cps.lambda(%x: core.i32) -> core.i32 captures [] entries {
+      evidence_direct {
+        tribute_control.return %x
+      }
+    }
+    %r = tribute_cps.call_indirect %h, %y {convention = "evidence_direct"} : core.i32
+    tribute_control.return %r
+  }
+}"#,
+        );
+        crate::tribute_control_to_cps::tribute_control_to_cps(
+            &mut ctx,
+            module,
+            &[],
+            &mut Default::default(),
+        )
+        .unwrap();
+        // The lambdas name their adapters, and the text round trips.
+        let printed = trunk_ir::printer::print_module(&ctx, module.op());
+        assert!(printed.contains("adapters = {"), "{printed}");
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, &printed);
+        assert_eq!(trunk_ir::printer::print_module(&ctx, module.op()), printed);
+        // Frame expansion lowers the exits of the `Cps` adapters.
+        crate::lower_continuation_frames::lower_continuation_frames(&mut ctx, module).unwrap();
+        let expanded = trunk_ir::printer::print_module(&ctx, module.op());
+        assert!(!expanded.contains("ability.exit"), "{expanded}");
+        lower_closure_lambda(&mut ctx, module);
+        let tables = tables(&ctx, module);
+        let [first, second, third] = &tables[..] else {
+            panic!("three closures: {tables:?}");
+        };
+        // Closures of one type share their adapters.
+        assert_eq!(first[1..], second[1..]);
+        let slots = |table: &[(String, CallingConvention, usize)]| -> Vec<_> {
+            table
+                .iter()
+                .map(|(name, convention, environment)| {
+                    let transfer = name
+                        .starts_with("__tribute_entry_adapter_")
+                        .then(|| adapter_transfer(&ctx, name, module, *environment));
+                    (
+                        name.starts_with("__tribute_trap_entry_"),
+                        transfer,
+                        *convention,
+                        *environment,
+                    )
+                })
+                .collect()
+        };
+        use CallingConvention::*;
+        assert_eq!(
+            slots(first),
+            [
+                (false, None, Direct, 0),
+                (false, Some(Direct), EvidenceDirect, 1),
+                (false, Some(Direct), Cps, 1),
+            ]
+        );
+        assert_eq!(
+            slots(third),
+            [
+                (true, None, Direct, 0),
+                (false, None, EvidenceDirect, 1),
+                (false, Some(EvidenceDirect), Cps, 1),
             ]
         );
     }

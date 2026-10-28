@@ -372,3 +372,21 @@ fn body() ->{State(Int)} Int {
         "26",
     );
 }
+
+/// A lambda that never returns gets the adapters of every closure that
+/// implements `Direct`; their transfers keep its `Never` result.
+#[test]
+fn never_returning_lambda_compiles_with_its_adapters() {
+    common::assert_output_on_both_targets(
+        "never_returning_lambda.trb",
+        r#"
+use std::io::{Io, print_line}
+fn make() ->{} fn(Never) ->{} Never { fn(n: Never) { n } }
+fn main() ->{Io} Nil {
+    let f = make()
+    print_line(+1.to_string)
+}
+"#,
+        "1",
+    );
+}

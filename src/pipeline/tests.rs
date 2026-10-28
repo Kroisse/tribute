@@ -585,13 +585,16 @@ fn prepare_native_fixture(
 }
 
 /// Indirect calls of the compiled program, excluding the RTTI release
-/// dispatch that native lowering generates.
+/// dispatch that native lowering generates and the adapters that fill
+/// convention table slots.
 fn clif_indirect_calls(ctx: &IrContext, module: Module) -> Vec<trunk_ir::OpRef> {
     let body = module.body(ctx).expect("module must have a body");
     let mut calls = Vec::new();
     let _ = walk_region::<()>(ctx, body, &mut |op| {
         if clif::Func::from_op(ctx, op).is_ok_and(|function| {
-            function.sym_name(ctx) == tribute_passes::native::rtti::DEEP_RELEASE_FN
+            let name = function.sym_name(ctx);
+            name == tribute_passes::native::rtti::DEEP_RELEASE_FN
+                || name.starts_with("__tribute_entry_adapter_")
         }) {
             return ControlFlow::Continue(WalkAction::Skip);
         }

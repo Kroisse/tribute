@@ -23,10 +23,9 @@
 //! closure's exact type, and it reads its captures with `closure.unpack`.
 
 use crate::collections::HashMap;
-use crate::convention_table::{TrapEntries, logical_entry_signature};
-use crate::lower_continuation_frames::frame_reference;
+use crate::convention_table::{ConventionTables, ExpandedFrames};
 
-use tribute_ir::calling_convention::{ConventionBearing, DynConventionBearing};
+use tribute_ir::calling_convention::{CallingConvention, ConventionBearing, DynConventionBearing};
 use trunk_ir::Symbol;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
@@ -48,7 +47,7 @@ pub(crate) fn lower_closure_lambda(ctx: &mut IrContext, module: Module) {
     };
 
     let mut namer = LambdaNamer::new();
-    let mut traps = TrapEntries::default();
+    let mut tables = ConventionTables::new(ExpandedFrames);
 
     // Iterate until no more closure.lambda ops remain.
     // Multiple iterations handle nested lambdas: the first pass converts
@@ -63,7 +62,7 @@ pub(crate) fn lower_closure_lambda(ctx: &mut IrContext, module: Module) {
         let mut made_progress = false;
         for lambda_ref in lambdas {
             made_progress |=
-                lower_single_lambda(ctx, module_block, lambda_ref, &mut namer, &mut traps);
+                lower_single_lambda(ctx, module_block, lambda_ref, &mut namer, &mut tables);
         }
         if !made_progress {
             break;
@@ -130,7 +129,7 @@ fn lower_single_lambda(
     module_block: BlockRef,
     lambda_ref: OpRef,
     namer: &mut LambdaNamer,
-    traps: &mut TrapEntries,
+    tables: &mut ConventionTables<ExpandedFrames>,
 ) -> bool {
     let Ok(lambda_op) = closure::Lambda::from_op(ctx, lambda_ref) else {
         return false;
@@ -212,13 +211,25 @@ fn lower_single_lambda(
         .expect("closure.lambda should be in a block");
 
     // Create closure.new holding the captures, replacing the lambda.
-    let entries = traps.table(
+    let adapters: Vec<_> = match lambda_op.adapters(ctx) {
+        Some(adapters) => adapters
+            .iter()
+            .map(|(keyword, adapter)| {
+                let convention = ctx
+                    .str(keyword)
+                    .parse::<CallingConvention>()
+                    .expect("an adapter is keyed by a convention keyword");
+                (convention, adapter.clone())
+            })
+            .collect(),
+        None => Vec::new(),
+    };
+    let entries = tables.table(
         ctx,
         module_block,
         location,
-        convention,
-        trunk_ir::SymbolPath::new([lifted_name]),
-        |ctx, slot| logical_entry_signature(ctx, result_ty, slot, frame_reference),
+        result_ty,
+        std::iter::once((convention, trunk_ir::SymbolPath::new([lifted_name]))).chain(adapters),
     );
     let closure_new_op = closure::New::operands(captures.clone())
         .entries(entries)

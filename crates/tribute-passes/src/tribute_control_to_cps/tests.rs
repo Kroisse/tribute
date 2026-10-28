@@ -352,7 +352,21 @@ fn source_data_indirect_calls_carry_their_exact_signature() {
     let (mut ctx, module) = parse(input);
     tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
 
-    let transfers = convention_bearing_transfers(&ctx, module.op());
+    // The adapters that fill the closures' stronger slots make transfers of
+    // their own.
+    let transfers: Vec<_> = module
+        .ops(&ctx)
+        .iter()
+        .copied()
+        .filter(|&op| {
+            func::Func::from_op(&ctx, op).is_ok_and(|function| {
+                !function
+                    .sym_name(&ctx)
+                    .starts_with("__tribute_entry_adapter_")
+            })
+        })
+        .flat_map(|op| convention_bearing_transfers(&ctx, op))
+        .collect();
     let mut conventions: Vec<_> = transfers
         .iter()
         .map(|transfer| DynConventionBearing::of(&ctx, *transfer).unwrap())
@@ -522,7 +536,9 @@ fn source_signature_metadata_roundtrips_before_conversion() {
         .ops(&ctx)
         .iter()
         .copied()
-        .find(|op| func::Func::matches(&ctx, *op))
+        .find(|&op| {
+            func::Func::from_op(&ctx, op).is_ok_and(|function| function.sym_name(&ctx) == "outer")
+        })
         .unwrap();
     let physical = ctx.op_attrs(lowered).get_type("type").unwrap();
     let physical = func::FuncSig::from_type_ref(&ctx, physical).unwrap();
