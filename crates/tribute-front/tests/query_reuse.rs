@@ -235,3 +235,59 @@ fn moving_items_keeps_every_item() {
     })
     .assert_reuse(&baseline, &[], &["edited_item", "other_items"]);
 }
+
+/// A query that reads one item's fields, keyed by the item.
+#[salsa::tracked(returns(copy))]
+fn item_fields<'db>(db: &'db dyn salsa::Database, item: ParsedItem<'db>) -> usize {
+    item.decls(db).len() + usize::from(*item.spans(db) != ItemSpans::default())
+}
+
+/// The item of `source` that `owner` names, read through `item_fields`.
+#[salsa::tracked(returns(copy))]
+fn item_by_owner(db: &dyn salsa::Database, source: SourceCst, owner: u64) -> usize {
+    let parsed = parsed_ast(db, source).expect("the source parses");
+    let item = parsed
+        .items(db)
+        .iter()
+        .find(|item| *item.owner(db) == owner)
+        .expect("the item exists");
+    item_fields(db, *item)
+}
+
+/// The Salsa ids of the top-level items of `source`, by owner key.
+fn item_ids(db: &LoggingDb, source: SourceCst) -> Vec<(u64, salsa::Id)> {
+    use salsa::plumbing::AsId;
+    let parsed = parsed_ast(db, source).expect("the source parses");
+    let mut ids: Vec<_> = parsed
+        .items(db)
+        .iter()
+        .map(|item| (*item.owner(db), item.as_id()))
+        .collect();
+    ids.sort();
+    ids
+}
+
+/// Reordering items keeps each item's identity and fields; only the list of
+/// items changes.
+#[test]
+fn reordering_items_keeps_every_item() {
+    let db = LoggingDb::default();
+    let source = db.source(PATH, ITEMS);
+    let ids = item_ids(&db, source);
+    let read_all = |db: &LoggingDb| {
+        for &(owner, _) in &ids {
+            item_by_owner(db, source, owner);
+        }
+    };
+    let baseline = db.record(read_all);
+    let mut db = db;
+    db.replace(source, "struct Point { x: Int }\n\n", "");
+    db.replace(
+        source,
+        "fn f(x: Int) -> Int { x }\n",
+        "fn f(x: Int) -> Int { x }\n\nstruct Point { x: Int }\n",
+    );
+    assert_eq!(item_ids(&db, source), ids, "every item keeps its identity");
+    db.record(read_all)
+        .assert_reuse(&baseline, &["item_by_owner"], &["item_fields"]);
+}

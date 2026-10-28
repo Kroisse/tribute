@@ -174,7 +174,7 @@ pub fn lower_source_to_parsed_ast_with_module_path<'db>(
     let (untaken, item_layout) = ctx.finish().finish();
     debug_assert_eq!(untaken, ItemSpans::default(), "every node is an item's");
     module.decls = assemble_decls(&items);
-    let item_spans = all_spans(&items).collect();
+    let item_spans = all_spans(&items).chain([&untaken]).collect();
     let items = items
         .into_iter()
         .map(|item| ParsedItem::create(db, item))
