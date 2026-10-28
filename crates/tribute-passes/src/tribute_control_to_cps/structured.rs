@@ -9,7 +9,7 @@ impl Converter<'_> {
         mapping: &mut HashMap<ValueRef, ValueRef>,
     ) -> Result<OpRef, TributeControlToCpsError> {
         let data = self.ctx.op(source);
-        if data.name.dialect(self.ctx) == tribute_ir::dialect::tribute_control::DIALECT_NAME {
+        if is_source_logical(self.ctx, source) {
             return Err(TributeControlToCpsError::post_op(
                 source,
                 data.location,
@@ -109,11 +109,9 @@ impl Converter<'_> {
                 }
                 let source_ops = self.ctx.block(source_block).ops.clone();
                 for source_op in source_ops {
-                    let converted = if tribute_control::Func::matches(self.ctx, source_op) {
+                    let converted = if tribute_cps::Func::matches(self.ctx, source_op) {
                         self.convert_func(source_op)?
-                    } else if self.ctx.op(source_op).name.dialect(self.ctx)
-                        == tribute_ir::dialect::tribute_control::DIALECT_NAME
-                    {
+                    } else if is_source_logical(self.ctx, source_op) {
                         return Err(TributeControlToCpsError::one(
                             PRE_CPS_BOUNDARY,
                             Some(source_op),
@@ -185,9 +183,7 @@ impl Converter<'_> {
         self.ctx.op_regions(op).any(|region| {
             self.ctx.region(region).blocks.iter().copied().any(|block| {
                 self.ctx.block(block).ops.iter().copied().any(|child| {
-                    self.ctx.op(child).name.dialect(self.ctx)
-                        == tribute_ir::dialect::tribute_control::DIALECT_NAME
-                        || self.contains_tribute_control(child)
+                    is_source_logical(self.ctx, child) || self.contains_tribute_control(child)
                 })
             })
         })
@@ -200,8 +196,8 @@ impl Converter<'_> {
             self.ctx.region(region).blocks.iter().copied().any(|block| {
                 self.ctx.block(block).ops.iter().copied().any(|child| {
                     tribute_control::TailCall::matches(self.ctx, child)
-                        || tribute_control::TailCallIndirect::matches(self.ctx, child)
-                        || (!tribute_control::Lambda::matches(self.ctx, child)
+                        || tribute_cps::TailCallIndirect::matches(self.ctx, child)
+                        || (!tribute_cps::Lambda::matches(self.ctx, child)
                             && self.contains_tail_call(child))
                 })
             })

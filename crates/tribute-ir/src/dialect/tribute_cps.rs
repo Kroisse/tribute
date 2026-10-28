@@ -7,13 +7,14 @@
 //! and run inside these callables. Rows, logical types, and the
 //! `tribute_control.func_sig` callable type are unchanged, and no hidden
 //! parameter exists yet. Whole-IR verification is
-//! [`tribute_control::validate`](super::tribute_control::validate), which
+//! [`tribute_control::validate`], which
 //! reads both dialects.
 
 use trunk_ir::IrContext;
 use trunk_ir::attr_kind::SymbolRef;
 use trunk_ir::op_flag::{IsolatedFromAbove, Pure};
 use trunk_ir::op_interface::CallableExit;
+use trunk_ir::ops::DialectOp;
 
 use crate::calling_convention::CallingConvention;
 use crate::dialect::tribute_control::{
@@ -195,6 +196,63 @@ pub fn declared_convention(
         return None;
     }
     CallingConvention::from_attribute(ctx, ctx.op_attrs(op).get(CONVENTION_ATTR)?)
+}
+
+/// Replace `op`, a `tribute_control` func, lambda, func_ref, call_indirect,
+/// or tail_call_indirect, with its operation here, which declares
+/// `convention`. The replacement takes the operation's place, operands,
+/// attributes, and regions, and the uses of its results.
+///
+/// # Panics
+///
+/// If `op` is none of those operations.
+pub fn replace_control_op(
+    ctx: &mut IrContext,
+    op: trunk_ir::refs::OpRef,
+    convention: CallingConvention,
+) -> trunk_ir::refs::OpRef {
+    let name = if tribute_control::Func::matches(ctx, op) {
+        Func::NAME
+    } else if tribute_control::Lambda::matches(ctx, op) {
+        Lambda::NAME
+    } else if tribute_control::FuncRef::matches(ctx, op) {
+        FuncRef::NAME
+    } else if tribute_control::CallIndirect::matches(ctx, op) {
+        CallIndirect::NAME
+    } else if tribute_control::TailCallIndirect::matches(ctx, op) {
+        TailCallIndirect::NAME
+    } else {
+        panic!("only a convention-dependent tribute_control operation has a tribute_cps form")
+    };
+    let data = ctx.op(op);
+    let mut builder = trunk_ir::context::OperationDataBuilder::new(data.location, name)
+        .operands(ctx.op_operands(op).iter().copied())
+        .results(ctx.op_result_types(op).iter().copied());
+    for (key, value) in data.attributes.iter() {
+        builder = builder.attr(key, value.clone());
+    }
+    let regions: Vec<_> = ctx.op_regions(op).collect();
+    for &region in &regions {
+        ctx.detach_region(region);
+        builder = builder.region(region);
+    }
+    let builder = builder.attr(
+        CONVENTION_ATTR,
+        <CallingConvention as trunk_ir::attr_kind::AttrKind>::write(ctx, convention),
+    );
+    let data = builder.build(ctx);
+    let replacement = ctx.create_op(data);
+    if let Some(block) = ctx.op(op).parent_block {
+        ctx.insert_op_before(block, op, replacement);
+        ctx.remove_op_from_block(block, op);
+    }
+    let results = ctx.op_results(op).to_vec();
+    for (index, old) in results.into_iter().enumerate() {
+        let new = ctx.op_result(replacement, index as u32);
+        ctx.replace_all_uses(old, new);
+    }
+    ctx.remove_op(op);
+    replacement
 }
 
 fn verify_convention(

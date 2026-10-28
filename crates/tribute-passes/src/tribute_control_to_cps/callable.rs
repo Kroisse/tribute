@@ -13,7 +13,7 @@ impl Converter<'_> {
         let location = self.ctx.op(source).location;
         let logical_ty = self.ctx.op_result_types(source)[0];
         let callable = tribute_control::FuncSig::from_type_ref(self.ctx, logical_ty).unwrap();
-        let convention = tribute_control::func_sig_convention(self.ctx, logical_ty).unwrap();
+        let convention = tribute_cps::declared_convention(self.ctx, source).unwrap();
         let source_result = callable.result(self.ctx);
         let source_params = callable.inputs(self.ctx).to_vec();
         let result = self.convert_type(source_result);
@@ -144,7 +144,7 @@ impl Converter<'_> {
             .current_func(source)
             .expect("pre-CPS validation resolved func_ref target in this module");
         let result_logical_ty = self.ctx.op_result_types(source)[0];
-        let result_convention = tribute_control::func_sig_convention(self.ctx, result_logical_ty)
+        let result_convention = tribute_cps::declared_convention(self.ctx, source)
             .expect("pre-CPS validation checked func_ref convention");
         debug_assert!(
             !target.convention.needs_continuation_frame()
@@ -506,7 +506,7 @@ impl Converter<'_> {
         let location = self.ctx.op(source).location;
         let source_callee = self.ctx.op_operands(source)[0];
         let logical_type = self.ctx.value_ty(source_callee);
-        let convention = tribute_control::func_sig_convention(self.ctx, logical_type)
+        let convention = tribute_cps::declared_convention(self.ctx, source)
             .expect("pre-CPS validation checked indirect tail callee convention");
         let callee = mapping
             .get(&source_callee)
@@ -578,7 +578,7 @@ impl Converter<'_> {
         let location = self.ctx.op(source).location;
         let source_callee = self.ctx.op_operands(source)[0];
         let logical_type = self.ctx.value_ty(source_callee);
-        let convention = tribute_control::func_sig_convention(self.ctx, logical_type)
+        let convention = tribute_cps::declared_convention(self.ctx, source)
             .expect("pre-CPS validation checked indirect callee convention");
         let callee = mapping
             .get(&source_callee)

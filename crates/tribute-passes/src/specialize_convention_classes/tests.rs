@@ -4,15 +4,15 @@ use trunk_ir::printer::print_module;
 use super::*;
 
 /// The module `input` becomes, after checking the three properties every
-/// specialized module has: each signature has a convention, the module is
-/// valid, and the classes agree with its rows.
+/// specialized module has: its callables are all `tribute_cps` operations,
+/// the module is valid, and the classes agree with its rows.
 fn specialized(input: &str) -> String {
     let mut ctx = IrContext::new();
     let module = parse_test_module(&mut ctx, input);
     specialize(&mut ctx, module).expect("specializes");
     let printed = print_module(&ctx, module.op());
     assert_eq!(
-        tribute_control::conventions_assigned(&ctx, module),
+        tribute_control::specialized(&ctx, module),
         Some(true),
         "{printed}"
     );
@@ -46,9 +46,11 @@ fn a_pure_callback_selects_the_direct_instance() {
 }"#,
     );
     for expected in [
-        "tribute_control.func @app['a0](%0: core.i32, %1: tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}, tribute.calling_convention = \"cps\"}>) -> core.i32 row(| 'a0) convention(cps) {",
-        "tribute_control.func @\"app$9D\"['a0](%0: core.i32, %1: tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}, tribute.calling_convention = \"direct\"}>) -> core.i32 row(| 'a0) convention(direct) {",
-        "tribute_control.func @bang(%0: core.i32) -> core.i32 convention(direct) {",
+        "tribute_cps.func @app['a0](%0: core.i32, %1: !cb) -> core.i32 row(| 'a0) convention(cps) {",
+        "%2 = tribute_cps.call_indirect %1, %0 {convention = \"cps\"} : core.i32",
+        "tribute_cps.func @\"app$9D\"['a0](%0: core.i32, %1: !cb) -> core.i32 row(| 'a0) convention(direct) {",
+        "%2 = tribute_cps.call_indirect %1, %0 {convention = \"direct\"} : core.i32",
+        "tribute_cps.func @bang(%0: core.i32) -> core.i32 convention(direct) {",
         "%2 = tribute_control.call %0, %1 {callee = @\"app$9D\", row_args = [{}]} : core.i32",
     ] {
         assert!(printed.contains(expected), "{expected}\n{printed}");
@@ -96,12 +98,12 @@ fn a_class_variable_reached_through_a_callee_is_selected() {
     assert_contains(
         &printed,
         &[
-            "tribute_control.func @bang['a0](%0: core.i32) -> core.i32 row(| 'a0) inferred convention(cps) {",
-            "tribute_control.func @\"bang$9D\"['a0](%0: core.i32) -> core.i32 row(| 'a0) inferred convention(direct) {",
+            "tribute_cps.func @bang['a0](%0: core.i32) -> core.i32 row(| 'a0) inferred convention(cps) {",
+            "tribute_cps.func @\"bang$9D\"['a0](%0: core.i32) -> core.i32 row(| 'a0) inferred convention(direct) {",
             "%2 = tribute_control.call %0, %1 {callee = @\"app$9D\", row_args = [{tail = 0}]} : core.i32",
-            "%1 = tribute_control.func_ref {func_ref = @\"bang$9D\", row_args = [{}]}",
+            "%1 = tribute_cps.func_ref {convention = \"direct\", func_ref = @\"bang$9D\", row_args = [{}]}",
             "%2 = tribute_control.call %0, %1 {callee = @\"twice$9D\", row_args = [{}]} : core.i32",
-            "tribute_control.func @ident['a0](%0: core.i32) -> core.i32 row(| 'a0) inferred convention(direct) {",
+            "tribute_cps.func @ident['a0](%0: core.i32) -> core.i32 row(| 'a0) inferred convention(direct) {",
         ],
     );
 }
@@ -132,19 +134,21 @@ fn a_recursive_instance_calls_itself() {
     assert_contains(
         &printed,
         &[
-            "tribute_control.func @loop['a0](%0: core.i32, %1: !t1) -> core.i32 row(| 'a0) convention(cps) {",
-            "%2 = tribute_control.lambda(%3: core.i32) -> core.i32 row(| 'a0) convention(cps) captures [%1] {",
-            "tribute_control.func @\"loop$9D\"['a0](%0: core.i32, %1: !t0) -> core.i32 row(| 'a0) convention(direct) {",
-            "%2 = tribute_control.lambda(%3: core.i32) -> core.i32 row(| 'a0) convention(direct) captures [%1] {",
+            "tribute_cps.func @loop['a0](%0: core.i32, %1: !cb) -> core.i32 row(| 'a0) convention(cps) {",
+            "%2 = tribute_cps.lambda(%3: core.i32) -> core.i32 row(| 'a0) captures [%1] entries {\n        cps {",
+            "%4 = tribute_cps.call_indirect %1, %3 {convention = \"cps\"} : core.i32",
+            "tribute_cps.func @\"loop$9D\"['a0](%0: core.i32, %1: !cb) -> core.i32 row(| 'a0) convention(direct) {",
+            "%2 = tribute_cps.lambda(%3: core.i32) -> core.i32 row(| 'a0) captures [%1] entries {\n        direct {",
+            "%4 = tribute_cps.call_indirect %1, %3 {convention = \"direct\"} : core.i32",
             "tribute_control.tail_call %0, %2 {callee = @\"loop$9D\", row_args = [{tail = 0}]}",
         ],
     );
 }
 
-/// A struct layout whose field is a callable is rebuilt with the field's
-/// convention.
+/// A struct layout whose field is a callable keeps the field's type, and a
+/// call of the field takes the class of its row.
 #[test]
-fn a_layout_takes_the_convention_of_its_callable_field() {
+fn a_layout_keeps_its_callable_field() {
     let printed = specialized(
         r#"core.module @m {
   !cb = tribute_control.func_sig<(core.i32) -> core.i32>
@@ -168,10 +172,10 @@ fn a_layout_takes_the_convention_of_its_callable_field() {
     assert_contains(
         &printed,
         &[
-            "!Holder = adt.struct<Holder(callback: tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = \"direct\"}>)>",
-            "!t0 = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = \"direct\"}>",
-            "%1 = adt.struct_get %0 {field = 0, type = !Holder} : !t0",
+            "!Holder = adt.struct<Holder(callback: !cb)>",
+            "%1 = adt.struct_get %0 {field = 0, type = !Holder} : !cb",
             "%3 = adt.struct_new %1 {type = !Holder} : !HolderRef",
+            "%5 = tribute_cps.call_indirect %4, %0 {convention = \"direct\"} : core.i32",
         ],
     );
 }
@@ -201,19 +205,19 @@ fn an_inferred_row_without_a_class_variable_reads_its_abilities() {
     assert_contains(
         &printed,
         &[
-            "tribute_control.func @each['a0](%0: core.i32) -> core.i32 row(| 'a0) inferred convention(direct) {",
-            "tribute_control.func @ask['a0](%0: core.i32) -> core.i32 row(@Ctl | 'a0) inferred convention(cps) {",
+            "tribute_cps.func @each['a0](%0: core.i32) -> core.i32 row(| 'a0) inferred convention(direct) {",
+            "tribute_cps.func @ask['a0](%0: core.i32) -> core.i32 row(@Ctl | 'a0) inferred convention(cps) {",
         ],
     );
 }
 
 #[test]
-fn a_module_with_conventions_is_rejected() {
+fn a_specialized_module_is_rejected() {
     let mut ctx = IrContext::new();
     let module = parse_test_module(
         &mut ctx,
         r#"core.module @m {
-  tribute_control.func @main(%x: core.i32) -> core.i32 convention(direct) {
+  tribute_cps.func @main(%x: core.i32) -> core.i32 convention(direct) {
     tribute_control.return %x
   }
 }"#,
@@ -232,7 +236,7 @@ fn a_module_with_conventions_is_rejected() {
         .to_string();
     assert!(
         error.contains("specialize-convention-classes")
-            && error.contains("takes source signatures without calling conventions"),
+            && error.contains("takes a module without tribute_cps operations"),
         "{error}"
     );
 }
@@ -273,13 +277,14 @@ fn a_lambda_is_copied_per_class_of_its_instantiations() {
     assert_contains(
         &printed,
         &[
-            "tribute_control.func @f[local 'a0, local 'a1, local 'a2](%0: core.i32) -> core.i32 row(@Ctl) convention(cps) {",
-            "%1 = tribute_control.lambda['a0](%2: core.i32) -> core.i32 row(| 'a0) convention(direct) captures [] {",
-            "%3 = tribute_control.lambda['a2](%4: core.i32) -> core.i32 row(| 'a2) convention(cps) captures [] {",
-            "%5 = tribute_control.lambda['a1]() -> core.i32 row(| 'a1) convention(direct) captures [%1] {",
+            "tribute_cps.func @f[local 'a0, local 'a1, local 'a2](%0: core.i32) -> core.i32 row(@Ctl) convention(cps) {",
+            "%1 = tribute_cps.lambda['a0](%2: core.i32) -> core.i32 row(| 'a0) captures [] entries {\n        direct {",
+            "%3 = tribute_cps.lambda['a2](%4: core.i32) -> core.i32 row(| 'a2) captures [] entries {\n        cps {",
+            "%5 = tribute_cps.lambda['a1]() -> core.i32 row(| 'a1) captures [%1] entries {\n        direct {",
             "%6 = tribute_control.instantiate %1 {row_args = [{tail = 1}]}",
             "%9 = tribute_control.instantiate %1 {row_args = [{}]}",
-            "%12 = tribute_control.instantiate %3 {row_args = [{instances = [@Ctl]}]} : !t0",
+            "%12 = tribute_control.instantiate %3 {row_args = [{instances = [@Ctl]}]} : !lc",
+            "%13 = tribute_cps.call_indirect %12, %11 {convention = \"cps\"} : core.i32",
         ],
     );
 }
@@ -326,13 +331,13 @@ fn each_instance_copies_its_lambdas_with_the_lambdas_inside() {
     assert_contains(
         &printed,
         &[
-            "tribute_control.func @run['a0, local 'a1, local 'a2, local 'a3, local 'a4](%0: core.i32, %1: !t3) -> core.i32 row(| 'a0) convention(cps) {",
-            "%8 = tribute_control.lambda['a3](%9: core.i32) -> core.i32 row(| 'a3) convention(cps) captures [] {",
-            "%10 = tribute_control.lambda['a4](%11: core.i32) -> core.i32 row(| 'a4) convention(cps) captures [] {",
-            "%12 = tribute_control.instantiate %10 {row_args = [{tail = 3}]} : !t7",
-            "%15 = tribute_control.instantiate %8 {row_args = [{tail = 0}]} : !t3",
-            "tribute_control.func @\"run$9D\"['a0, local 'a1, local 'a2](%0: core.i32, %1: !t2) -> core.i32 row(| 'a0) convention(direct) {",
-            "%9 = tribute_control.instantiate %2 {row_args = [{tail = 0}]} : !t2",
+            "tribute_cps.func @run['a0, local 'a1, local 'a2, local 'a3, local 'a4](%0: core.i32, %1: !cb) -> core.i32 row(| 'a0) convention(cps) {",
+            "%8 = tribute_cps.lambda['a3](%9: core.i32) -> core.i32 row(| 'a3) captures [] entries {\n        cps {",
+            "%10 = tribute_cps.lambda['a4](%11: core.i32) -> core.i32 row(| 'a4) captures [] entries {\n              cps {",
+            "%12 = tribute_control.instantiate %10 {row_args = [{tail = 3}]} : !t2",
+            "%15 = tribute_control.instantiate %8 {row_args = [{tail = 0}]} : !cb",
+            "tribute_cps.func @\"run$9D\"['a0, local 'a1, local 'a2](%0: core.i32, %1: !cb) -> core.i32 row(| 'a0) convention(direct) {",
+            "%9 = tribute_control.instantiate %2 {row_args = [{tail = 0}]} : !cb",
         ],
     );
 }
@@ -376,10 +381,10 @@ fn a_lambda_using_a_copy_captures_the_copy() {
     assert_contains(
         &printed,
         &[
-            "%1 = tribute_control.lambda['a0](%2: core.i32) -> core.i32 row(| 'a0) convention(direct) captures [] {",
-            "%3 = tribute_control.lambda['a1](%4: core.i32) -> core.i32 row(| 'a1) convention(cps) captures [] {",
-            "convention(cps) captures [%3, %6] {",
-            "convention(cps) captures [%1, %3, %6] {",
+            "%1 = tribute_cps.lambda['a0](%2: core.i32) -> core.i32 row(| 'a0) captures [] entries {\n        direct {",
+            "%3 = tribute_cps.lambda['a1](%4: core.i32) -> core.i32 row(| 'a1) captures [] entries {\n        cps {",
+            "row(@Ctl) captures [%3, %6] entries {\n        cps {",
+            "row(@Ctl) captures [%1, %3, %6] entries {\n        cps {",
         ],
     );
 }
@@ -412,26 +417,22 @@ fn a_lambda_without_binders_is_shared_by_its_consumers() {
 }"#,
     );
     let main = &printed[printed
-        .find("tribute_control.func @main")
+        .find("tribute_cps.func @main")
         .expect("main is printed")..];
-    assert_eq!(
-        main.matches("tribute_control.lambda").count(),
-        1,
-        "{printed}"
-    );
+    assert_eq!(main.matches("tribute_cps.lambda").count(), 1, "{printed}");
     assert_contains(
         main,
         &[
-            "%1 = tribute_control.lambda(%2: core.i32) -> core.i32 convention(direct) captures [] {",
+            "%1 = tribute_cps.lambda(%2: core.i32) -> core.i32 captures [] entries {\n        direct {",
             "%3 = tribute_control.call %1, %0 {callee = @pure} : core.i32",
             "%4 = tribute_control.call %1, %3 {callee = @\"open$9D\", row_args = [{}]} : core.i32",
         ],
     );
 }
 
-/// Types outside definitions take the conventions of their abilities, a
-/// bodyless definition has no class variables, a reference to root `main`
-/// stays on it, and an instance of the last definition follows it.
+/// Types outside definitions keep their shape, a bodyless definition has no
+/// class variables, a reference to root `main` stays on it, and an instance
+/// of the last definition follows it.
 #[test]
 fn module_level_types_and_references_to_main_keep_their_shape() {
     let printed = specialized(
@@ -457,18 +458,17 @@ fn module_level_types_and_references_to_main_keep_their_shape() {
     assert_contains(
         &printed,
         &[
-            "ability.operation {kind = \"fn\", op_name = \"map\", param_types = [!t0], result_type = core.i32}",
-            "!t0 = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = \"direct\"}>",
-            "tribute_control.func @ext(%arg0: core.i32) -> core.i32 convention(direct) attributes {abi = \"C\"}",
-            "%1 = tribute_control.func_ref {func_ref = @main} : !t0",
+            "ability.operation {kind = \"fn\", op_name = \"map\", param_types = [!pure], result_type = core.i32}",
+            "tribute_cps.func @ext(%arg0: core.i32) -> core.i32 convention(direct) attributes {abi = \"C\"}",
+            "%1 = tribute_cps.func_ref {convention = \"direct\", func_ref = @main} : !pure",
             "callee = @\"app$9D\"",
         ],
     );
     let base = printed
-        .find("tribute_control.func @app[")
+        .find("tribute_cps.func @app[")
         .expect("the base stays");
     let instance = printed
-        .find("tribute_control.func @\"app$9D\"")
+        .find("tribute_cps.func @\"app$9D\"")
         .expect("the instance");
     assert!(base < instance, "{printed}");
 }
@@ -504,11 +504,11 @@ fn an_instantiation_reads_the_class_variables_of_its_instance() {
     assert_contains(
         &printed,
         &[
-            "tribute_control.func @f['a0, local 'a1, local 'a2](%0: core.i32) -> core.i32 row(| 'a0) convention(cps) {",
-            "%1 = tribute_control.lambda['a1](%2: core.i32) -> core.i32 row(| 'a1) convention(cps) captures [] {",
-            "%3 = tribute_control.lambda['a2](%4: core.i32) -> core.i32 row(| 'a2) convention(direct) captures [] {",
+            "tribute_cps.func @f['a0, local 'a1, local 'a2](%0: core.i32) -> core.i32 row(| 'a0) convention(cps) {",
+            "%1 = tribute_cps.lambda['a1](%2: core.i32) -> core.i32 row(| 'a1) captures [] entries {",
+            "%3 = tribute_cps.lambda['a2](%4: core.i32) -> core.i32 row(| 'a2) captures [] entries {",
             "%9 = tribute_control.instantiate %3 {row_args = [{}]}",
-            "tribute_control.func @\"f$9D\"['a0, local 'a1](%0: core.i32) -> core.i32 row(| 'a0) convention(direct) {",
+            "tribute_cps.func @\"f$9D\"['a0, local 'a1](%0: core.i32) -> core.i32 row(| 'a0) convention(direct) {",
             "%7 = tribute_control.instantiate %1 {row_args = [{}]}",
         ],
     );
@@ -547,7 +547,7 @@ fn a_reference_in_a_lambda_selects_by_the_local_class() {
     assert_contains(
         &printed,
         &[
-            "tribute_control.func @\"app$9E\"['a0]",
+            "tribute_cps.func @\"app$9E\"['a0]",
             "%4 = tribute_control.call %2, %3 {callee = @\"app$9E\", row_args = [{tail = 0}]} : core.i32",
         ],
     );
@@ -588,20 +588,19 @@ fn a_lambda_is_copied_after_the_lambdas_its_classes_depend_on() {
     assert_contains(
         &printed,
         &[
-            "tribute_control.func @f[local 'a0, local 'a1, local 'a2, local 'a3, local 'a4](%0: core.i32) -> core.i32 row(@Ctl) convention(cps) {",
-            "%3 = tribute_control.lambda['a1](%4: core.i32) -> core.i32 row(| 'a1) convention(direct) captures [] {",
+            "tribute_cps.func @f[local 'a0, local 'a1, local 'a2, local 'a3, local 'a4](%0: core.i32) -> core.i32 row(@Ctl) convention(cps) {",
+            "%3 = tribute_cps.lambda['a1](%4: core.i32) -> core.i32 row(| 'a1) captures [] entries {",
             "%6 = tribute_control.instantiate %3 {row_args = [{tail = 0}]}",
-            "%11 = tribute_control.lambda['a3](%12: core.i32) -> core.i32 row(| 'a3) convention(direct) captures [] {",
-            "%13 = tribute_control.lambda['a4](%14: core.i32) -> core.i32 row(| 'a4) convention(cps) captures [] {",
+            "%11 = tribute_cps.lambda['a3](%12: core.i32) -> core.i32 row(| 'a3) captures [] entries {",
+            "%13 = tribute_cps.lambda['a4](%14: core.i32) -> core.i32 row(| 'a4) captures [] entries {",
             "%16 = tribute_control.instantiate %13 {row_args = [{tail = 2}]}",
         ],
     );
 }
 
-/// A layout published as a type alias takes the conventions of its callable
-/// fields even where no operation names it.
+/// The layouts the context publishes keep their callable fields.
 #[test]
-fn a_published_layout_takes_the_conventions_of_its_fields() {
+fn a_published_layout_keeps_its_callable_fields() {
     let mut ctx = IrContext::new();
     let module = parse_test_module(
         &mut ctx,
@@ -613,13 +612,8 @@ fn a_published_layout_takes_the_conventions_of_its_fields() {
   }
 }"#,
     );
+    let name = trunk_ir::Symbol::new("Holder");
+    let before = ctx.type_alias_by_name(&name).expect("published layout");
     specialize(&mut ctx, module).expect("specializes");
-    let holder = ctx
-        .type_alias_by_name(&trunk_ir::Symbol::new("Holder"))
-        .expect("published layout");
-    let field = ctx.get_type(holder).params[0];
-    assert_eq!(
-        tribute_control::func_sig_convention(&ctx, field),
-        Some(CallingConvention::Direct)
-    );
+    assert_eq!(ctx.type_alias_by_name(&name), Some(before));
 }

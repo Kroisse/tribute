@@ -8,10 +8,10 @@
 use std::ops::ControlFlow;
 
 use itertools::Itertools;
-use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use rustc_hash::FxHashMap as HashMap;
 use tribute_ir::calling_convention::CallingConvention;
-use tribute_ir::dialect::tribute_control;
 use tribute_ir::dialect::tribute_control::{FuncSig, Row};
+use tribute_ir::dialect::tribute_cps;
 use trunk_ir::SymbolPath;
 use trunk_ir::context::IrContext;
 use trunk_ir::ops::{DialectOp, DialectType};
@@ -182,7 +182,6 @@ impl<'a> Instance<'a> {
 
     fn check(&self, disagreements: &mut Vec<Disagreement>) {
         self.check_own_convention(disagreements);
-        self.check_signature(disagreements);
         self.check_references(disagreements);
         self.check_body(disagreements);
     }
@@ -202,8 +201,8 @@ impl<'a> Instance<'a> {
             row.tail = None;
         }
         let expected = self.class(&row);
-        let actual = signature.convention(self.ctx);
-        if expected != actual {
+        let actual = tribute_cps::declared_convention(self.ctx, self.function.op);
+        if Some(expected) != actual {
             disagreements.push(Disagreement {
                 op: self.function.op,
                 rule: "own",
@@ -212,28 +211,6 @@ impl<'a> Instance<'a> {
                     self.function.name
                 ),
             });
-        }
-    }
-
-    /// Callable types inside the signature have exactly their rows' class.
-    fn check_signature(&self, disagreements: &mut Vec<Disagreement>) {
-        let Some(signature) = FuncSig::from_type_ref(self.ctx, self.function.ty) else {
-            return;
-        };
-        for &ty in signature
-            .inputs(self.ctx)
-            .iter()
-            .chain(signature.results(self.ctx))
-        {
-            for callable in callable_types(self.ctx, ty) {
-                self.compare(
-                    self.function.op,
-                    "signature",
-                    callable,
-                    |actual, expected| actual == expected,
-                    disagreements,
-                );
-            }
         }
     }
 
@@ -268,25 +245,29 @@ impl<'a> Instance<'a> {
         }
     }
 
-    /// Lambdas have exactly their rows' class; every instantiation of one
-    /// selects the same classes; other callable values are at least as
-    /// strong as their rows.
+    /// Lambdas and function references have exactly the class of the row of
+    /// the callable they make, and indirect transfers that of their callee's;
+    /// every instantiation of one lambda selects the same classes.
     fn check_body(&self, disagreements: &mut Vec<Disagreement>) {
         let Some(body) = self.ctx.op_region(self.function.op, 0) else {
             return;
         };
         let mut selections: HashMap<OpRef, Vec<CallingConvention>> = HashMap::default();
         let _ = walk_region::<()>(self.ctx, body, &mut |op| {
-            if tribute_control::Lambda::matches(self.ctx, op) {
-                for &ty in self.ctx.op_result_types(op) {
-                    self.compare(
-                        op,
-                        "lambda",
-                        ty,
-                        |actual, expected| actual == expected,
-                        disagreements,
-                    );
-                }
+            if tribute_cps::Lambda::matches(self.ctx, op) {
+                self.compare(op, "lambda", self.ctx.op_result_types(op)[0], disagreements);
+            } else if tribute_cps::FuncRef::matches(self.ctx, op) {
+                self.compare(
+                    op,
+                    "func_ref",
+                    self.ctx.op_result_types(op)[0],
+                    disagreements,
+                );
+            } else if tribute_cps::CallIndirect::matches(self.ctx, op)
+                || tribute_cps::TailCallIndirect::matches(self.ctx, op)
+            {
+                let callee = self.ctx.value_ty(self.ctx.op_operands(op)[0]);
+                self.compare(op, "transfer", callee, disagreements);
             } else if let Some((lambda, _, rows)) = self.instantiation(op) {
                 let classes: Vec<_> = rows.iter().map(|row| self.class(row)).collect();
                 match selections.get(&lambda) {
@@ -303,39 +284,25 @@ impl<'a> Instance<'a> {
                         selections.insert(lambda, classes);
                     }
                 }
-            } else if !tribute_control::FuncRef::matches(self.ctx, op) {
-                // A `func_ref` keeps its target's convention under a wider
-                // row, which reference validation checks.
-                for &ty in self.ctx.op_result_types(op) {
-                    for callable in callable_types(self.ctx, ty) {
-                        self.compare(
-                            op,
-                            "value",
-                            callable,
-                            |actual, expected| actual >= expected,
-                            disagreements,
-                        );
-                    }
-                }
             }
             ControlFlow::Continue(WalkAction::Advance)
         });
     }
 
+    /// Whether `op` declares the class of the row of `callable`.
     fn compare(
         &self,
         op: OpRef,
         rule: &'static str,
         callable: TypeRef,
-        agrees: impl Fn(CallingConvention, CallingConvention) -> bool,
         disagreements: &mut Vec<Disagreement>,
     ) {
         let Some(signature) = FuncSig::from_type_ref(self.ctx, callable) else {
             return;
         };
         let expected = self.class(&signature.row(self.ctx));
-        let actual = signature.convention(self.ctx);
-        if !agrees(actual, expected) {
+        let actual = tribute_cps::declared_convention(self.ctx, op);
+        if actual != Some(expected) {
             disagreements.push(Disagreement {
                 op,
                 rule,
@@ -346,29 +313,6 @@ impl<'a> Instance<'a> {
             });
         }
     }
-}
-
-/// Every source callable type in `ty`, itself included, through callable
-/// parameters and results and tuple layout elements.
-fn callable_types(ctx: &IrContext, ty: TypeRef) -> Vec<TypeRef> {
-    let mut found = Vec::new();
-    let mut seen = HashSet::default();
-    let mut pending = vec![ty];
-    while let Some(ty) = pending.pop() {
-        if !seen.insert(ty) {
-            continue;
-        }
-        if let Some(signature) = FuncSig::from_type_ref(ctx, ty) {
-            found.push(ty);
-            pending.extend(signature.inputs(ctx));
-            pending.extend(signature.results(ctx));
-        } else if let Some(elements) = tribute_control::logical_tuple_elements(ctx, ty) {
-            pending.extend(elements);
-        } else {
-            pending.extend(ctx.get_type(ty).params.iter().copied());
-        }
-    }
-    found
 }
 
 #[cfg(test)]

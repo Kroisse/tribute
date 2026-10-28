@@ -3859,9 +3859,10 @@ fn collect_reachable_type(ctx: &IrContext, ty: TypeRef, types: &mut HashSet<Type
 /// argument, or type-bearing attribute must not affect validation of this
 /// module. A reachable `adt.typeref` may resolve one unique layout alias; an
 /// ambiguous nominal name remains invalid.
-/// Whether class specialization has run on `module`: `Some(true)` when its
-/// callables are all `tribute_cps` operations, `Some(false)` when none is,
-/// and `None` when the module holds both forms.
+/// Whether class specialization has run on `module`: `Some(false)` when it
+/// holds a `tribute_control` form of a `tribute_cps` operation and no
+/// `tribute_cps` operation, `None` when it holds both, and `Some(true)`
+/// otherwise, which includes a module without callables.
 pub fn specialized(ctx: &IrContext, module: Module) -> Option<bool> {
     let mut control = false;
     let mut cps = false;
@@ -3881,7 +3882,7 @@ pub fn specialized(ctx: &IrContext, module: Module) -> Option<bool> {
     });
     match (control, cps) {
         (true, true) => None,
-        (_, cps) => Some(cps),
+        (control, _) => Some(!control),
     }
 }
 

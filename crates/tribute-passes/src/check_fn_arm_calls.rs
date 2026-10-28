@@ -14,6 +14,7 @@ use itertools::Itertools;
 use rustc_hash::FxHashMap as HashMap;
 use tribute_ir::calling_convention::CallingConvention;
 use tribute_ir::dialect::tribute_control::{self, FuncSig, Row};
+use tribute_ir::dialect::tribute_cps;
 use tribute_ir::runtime_items::{RUNTIME_ITEMS, function_entry_points};
 use trunk_ir::SymbolPath;
 use trunk_ir::context::IrContext;
@@ -107,7 +108,7 @@ pub fn check(ctx: &IrContext, module: Module) -> Vec<FnArmCall> {
     };
     let reachable =
         trunk_ir::transforms::reachable_definitions_with_config(ctx, module, &config, |ctx, op| {
-            tribute_control::Func::matches(ctx, op) && ctx.op_has_regions(op)
+            tribute_control::is_func(ctx, op) && ctx.op_has_regions(op)
         });
     let instances: Vec<Instance> = functions
         .iter()
@@ -293,7 +294,7 @@ impl<'a> Instance<'a> {
     ) {
         let ctx = self.ctx;
         // A lambda's body runs where it is called, under its own convention.
-        if tribute_control::Lambda::matches(ctx, op) {
+        if tribute_control::is_lambda(ctx, op) {
             return;
         }
         if let Ok(handle) = tribute_control::Handle::from_op(ctx, op) {
@@ -348,15 +349,18 @@ impl<'a> Instance<'a> {
                 passed.tail
             });
             (
-                signature.assigned_convention(ctx),
+                tribute_cps::declared_convention(ctx, callee.op),
                 Row::new(instances, tail),
             )
-        } else if tribute_control::CallIndirect::matches(ctx, op)
-            || tribute_control::TailCallIndirect::matches(ctx, op)
+        } else if tribute_control::is_call_indirect(ctx, op)
+            || tribute_control::is_tail_call_indirect(ctx, op)
         {
             let &callee = ctx.op_operands(op).first()?;
             let signature = FuncSig::from_type_ref(ctx, ctx.value_ty(callee))?;
-            (signature.assigned_convention(ctx), signature.row(ctx))
+            (
+                tribute_cps::declared_convention(ctx, op),
+                signature.row(ctx),
+            )
         } else {
             return None;
         };
