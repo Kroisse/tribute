@@ -132,10 +132,10 @@ pub fn dependencies(db: &dyn salsa::Database, table: DependencyTable) -> Depende
         .into_iter()
         .filter(|package| !direct.contains(package))
         .filter_map(|package| package_env(db, package));
-    Dependencies::new(direct.iter().filter_map(|&package| {
+    let named = direct.iter().filter_map(|&package| {
         Some((package_name(db, package).clone(), package_env(db, package)?))
-    }))
-    .with_indirect(indirect)
+    });
+    Dependencies::new(named, indirect)
 }
 
 /// Let `checker` read the exports of every package `table` depends on,

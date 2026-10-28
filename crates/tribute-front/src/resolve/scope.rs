@@ -32,22 +32,18 @@ impl<'db> Dependencies<'db> {
     }
 
     /// The dependencies named in a package's dependency table, each with
-    /// its environment.
-    pub fn new(packages: impl IntoIterator<Item = (Symbol, &'db PackageEnv<'db>)>) -> Self {
-        Self {
-            packages: packages.into_iter().collect(),
-            indirect: Vec::new(),
-        }
-    }
-
-    /// These dependencies with the environments of the packages they
-    /// depend on, transitively, that the table does not name.
-    pub fn with_indirect(
-        mut self,
+    /// its environment, and the environments of the packages they depend
+    /// on, transitively, that the table does not name. Only
+    /// [`analysis::dependencies`](crate::analysis::dependencies) builds
+    /// them from a table, so the indirect ones are never left out.
+    pub(crate) fn new(
+        packages: impl IntoIterator<Item = (Symbol, &'db PackageEnv<'db>)>,
         indirect: impl IntoIterator<Item = &'db PackageEnv<'db>>,
     ) -> Self {
-        self.indirect.extend(indirect);
-        self
+        Self {
+            packages: packages.into_iter().collect(),
+            indirect: indirect.into_iter().collect(),
+        }
     }
 
     /// The environment of the dependency named `name`.
