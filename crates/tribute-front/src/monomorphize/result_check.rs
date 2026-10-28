@@ -27,10 +27,12 @@ pub enum SpecializationInvariant {
 }
 
 /// Check the specialized `module`, its schemes, and its metadata against
-/// the output contract.
+/// the output contract. `dependencies` are the checked tables of the
+/// packages whose declarations `module` refers to without having them.
 pub(super) fn check<'db>(
     db: &'db dyn salsa::Database,
     module: &DeclTable<TypedRef<'db>>,
+    dependencies: &[&DeclTable<TypedRef<'db>>],
     function_types: &[(SymbolPath, TypeScheme<'db>)],
     constructor_types: &ConstructorTypeMetadata<'db>,
     expressions: &ExpressionTypeMetadata<'db>,
@@ -58,7 +60,7 @@ pub(super) fn check<'db>(
     check.table("enum variant schemes", variants);
 
     // A function of a dependency whose bodies were not merged is looked up
-    // by its scheme alone.
+    // by its scheme alone, and a field function by its struct.
     let mut declared: HashSet<_> = function_types
         .iter()
         .map(|(path, _)| path.clone())
@@ -66,6 +68,12 @@ pub(super) fn check<'db>(
     let mut nodes = DeclNodes::default();
     for entry in &module.entries {
         nodes.visit_decl(&entry.decl);
+    }
+    for entry in dependencies
+        .iter()
+        .flat_map(|table| &table.entries)
+        .chain(&module.entries)
+    {
         match &entry.decl {
             Decl::Function(function) => {
                 declared.insert(entry.module.child(function.name.clone()));
@@ -310,6 +318,7 @@ mod tests {
         check(
             db,
             &output.module,
+            &[],
             &output.declarations.function_types,
             &output.declarations.constructor_types,
             &output.expressions,

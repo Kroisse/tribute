@@ -9,8 +9,8 @@ use tribute_front::analysis::{self, DependencyTable, Package};
 use tribute_front::ast::SpanMaps;
 use tribute_front::ast_to_ir::{self, LoweringEnvironment, LoweringInput};
 use tribute_front::monomorphize::{
-    SpecializationInput, SpecializationOutput, monomorphize_functions, specialized_dependencies,
-    specialized_package,
+    SpecializationInput, SpecializationOutput, checked_dependencies, merge_specializations,
+    monomorphize_functions, specialized_dependencies, specialized_package,
 };
 use tribute_front::resolve::PackageName;
 use tribute_front::testing::{Executed, LoggingDb};
@@ -323,6 +323,7 @@ fn run() -> Nat {
 /// all three.
 struct Diamond {
     db: LoggingDb,
+    base: Package,
     left: Package,
     right: Package,
     app: SourceCst,
@@ -353,6 +354,7 @@ impl Diamond {
         let environment = DependencyTable::new(&db, vec![left, right, base, std]);
         Self {
             db,
+            base,
             left,
             right,
             app,
@@ -362,29 +364,30 @@ impl Diamond {
 
     fn specialize(&self) -> Executed {
         self.db.record(|db| {
-            continued_app(db, self.app, self.environment).expect("app specializes");
+            packaged_app(db, self.app, self.environment).expect("app specializes");
         })
     }
 }
 
-/// `app` continuing the specializations of the packages it depends on, as
-/// the root crate specializes a user package.
+/// `app` specialized on its own and merged with the specializations of the
+/// packages it depends on, as the root crate specializes a user package.
 #[salsa::tracked]
-fn continued_app<'db>(
+fn packaged_app<'db>(
     db: &'db dyn salsa::Database,
     app: SourceCst,
     environment: DependencyTable,
 ) -> Option<SpecializationOutput<'db>> {
     let checked = *analysis::analyze(db, app, environment)?;
-    let dependencies = specialized_dependencies(db, environment)?;
-    let input = SpecializationInput::continuing(
+    let input = SpecializationInput::package(
         db,
         checked,
-        dependencies,
+        checked_dependencies(db, environment),
         analysis::root_names(db, environment),
     );
     let intrinsics = ast_to_ir::registered_compiler_intrinsics(input.module()).ok()?;
-    monomorphize_functions(db, input.with_compiler_intrinsics(intrinsics)).ok()
+    let own = monomorphize_functions(db, input.with_compiler_intrinsics(intrinsics)).ok()?;
+    let dependencies = specialized_dependencies(db, environment)?;
+    merge_specializations(db, dependencies.into_iter().chain([own])).ok()
 }
 
 /// `app` specialized with the bodies of every package it depends on merged
@@ -432,8 +435,17 @@ fn instantiates_wrap(db: &LoggingDb, package: Package) -> bool {
     })
 }
 
+/// The instance entries of `package`'s own specialization, spelled out.
+fn own_instances(db: &LoggingDb, package: Package) -> String {
+    let specialized = specialized_package(db, package).expect("the library specializes");
+    format!(
+        "{:?}",
+        &specialized.module(db).entries[*specialized.source_entries(db)..]
+    )
+}
+
 #[test]
-fn continuing_a_diamond_matches_merging_every_body() {
+fn merging_a_diamond_matches_specializing_every_body_at_once() {
     let diamond = Diamond::new();
     let db = &diamond.db;
     assert_eq!(
@@ -444,22 +456,22 @@ fn continuing_a_diamond_matches_merging_every_body() {
         Vec::<String>::new()
     );
     // Both sides of the diamond have an instance of `base::wrap` of their
-    // own, which the continued result keeps once.
+    // own, which the merged result keeps once.
     assert!(instantiates_wrap(db, diamond.left));
     assert!(instantiates_wrap(db, diamond.right));
 
     let merged = merged_app(db, diamond.app, diamond.environment).expect("merging specializes");
-    let continued =
-        continued_app(db, diamond.app, diamond.environment).expect("continuing specializes");
+    let packaged =
+        packaged_app(db, diamond.app, diamond.environment).expect("merging packages specializes");
     let sources = *merged.source_entries(db);
-    assert_eq!(sources, *continued.source_entries(db), "sources");
-    let (merged_module, continued_module) = (merged.module(db), continued.module(db));
+    assert_eq!(sources, *packaged.source_entries(db), "sources");
+    let (merged_module, packaged_module) = (merged.module(db), packaged.module(db));
     assert_eq!(
         merged_module.entries[..sources],
-        continued_module.entries[..sources],
+        packaged_module.entries[..sources],
         "source entries"
     );
-    let instances = counts(&continued_module.entries[sources..]);
+    let instances = counts(&packaged_module.entries[sources..]);
     assert_eq!(
         counts(&merged_module.entries[sources..]),
         instances,
@@ -469,47 +481,47 @@ fn continuing_a_diamond_matches_merging_every_body() {
         instances.values().all(|&count| count == 1),
         "duplicate instance"
     );
-    let (merged_decls, continued_decls) = (merged.declarations(db), continued.declarations(db));
+    let (merged_decls, packaged_decls) = (merged.declarations(db), packaged.declarations(db));
     assert_eq!(
         counts(&merged_decls.function_types),
-        counts(&continued_decls.function_types),
+        counts(&packaged_decls.function_types),
         "function types"
     );
     assert_eq!(
         counts(&merged_decls.constructor_types.schemes),
-        counts(&continued_decls.constructor_types.schemes),
+        counts(&packaged_decls.constructor_types.schemes),
         "constructor schemes"
     );
     assert_eq!(
         merged_decls.constructor_types.specialized_enum_variants,
-        continued_decls.constructor_types.specialized_enum_variants,
+        packaged_decls.constructor_types.specialized_enum_variants,
         "enum variants"
     );
     assert_eq!(
-        merged_decls.ability_definitions, continued_decls.ability_definitions,
+        merged_decls.ability_definitions, packaged_decls.ability_definitions,
         "ability definitions"
     );
     assert_eq!(
-        merged_decls.well_known_types, continued_decls.well_known_types,
+        merged_decls.well_known_types, packaged_decls.well_known_types,
         "well-known types"
     );
     assert!(
-        merged.expression_types(db) == continued.expression_types(db),
+        merged.expression_types(db) == packaged.expression_types(db),
         "expression metadata"
     );
     assert_eq!(
         merged.compiler_intrinsics(db),
-        continued.compiler_intrinsics(db),
+        packaged.compiler_intrinsics(db),
         "compiler intrinsics"
     );
     assert_eq!(
         merged.function_instances(db),
-        continued.function_instances(db),
+        packaged.function_instances(db),
         "function instances"
     );
     assert_eq!(
         merged.nominal_instances(db),
-        continued.nominal_instances(db),
+        packaged.nominal_instances(db),
         "nominal instances"
     );
 }
@@ -523,7 +535,42 @@ fn an_app_edit_reuses_every_dependency_specialization() {
         .replace(diamond.app, "Local { n: 3 }", "Local { n: 4 }");
     diamond.specialize().assert_reuse(
         &baseline,
-        &["continued_app"],
+        &["packaged_app"],
         &["specialized_package", "checked_package"],
     );
+}
+
+/// Editing one side of the diamond respecializes that package alone: the
+/// other side, the package both share, and `std` are reused.
+#[test]
+fn a_library_edit_respecializes_that_library_alone() {
+    let mut diamond = Diamond::new();
+    diamond.specialize();
+    let left = *diamond.left.root(&diamond.db);
+    diamond.db.replace(left, "base::wrap(1)", "base::wrap(5)");
+    let executed = diamond.specialize();
+    assert!(executed.contains("packaged_app"));
+    assert_eq!(executed.count("specialized_package"), 1, "{executed:?}");
+}
+
+/// A package's specialization does not depend on the instances its
+/// dependencies generate: when `base` starts to instantiate its own generic
+/// at `std`'s types, `left` keeps its own instance of it.
+#[test]
+fn a_dependency_instance_leaves_a_dependent_specialization_unchanged() {
+    let mut diamond = Diamond::new();
+    let db = &diamond.db;
+    let before = own_instances(db, diamond.left);
+    assert!(instantiates_wrap(db, diamond.left));
+    assert!(!instantiates_wrap(db, diamond.base));
+    let base = *diamond.base.root(&diamond.db);
+    diamond.db.replace(
+        base,
+        "pub fn unwrap(",
+        "pub fn one() -> Nat { unwrap(wrap(1)) }\n\npub fn unwrap(",
+    );
+    let db = &diamond.db;
+    assert!(instantiates_wrap(db, diamond.base));
+    assert_eq!(own_instances(db, diamond.left), before);
+    packaged_app(db, diamond.app, diamond.environment).expect("merging packages specializes");
 }
