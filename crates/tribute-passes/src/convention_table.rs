@@ -11,7 +11,7 @@ use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, TypeRef};
-use trunk_ir::types::Location;
+use trunk_ir::types::{AttributeMap, Location};
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::cps_builders::{helper_symbol, make_block, single_block_region};
@@ -215,7 +215,8 @@ impl ConventionTables<AbstractFrames> {
     /// The adapter entry through `convention` that enters its closure again
     /// through `body`, a weaker convention. It drops the evidence `body` does
     /// not take. A `Cps` adapter exits to its frame with the result, and a
-    /// value adapter tail calls the body's entry.
+    /// value adapter tail calls the body's entry. An adapter of a body that
+    /// never returns calls it and traps after the call.
     fn adapter(
         &mut self,
         ctx: &mut IrContext,
@@ -236,12 +237,20 @@ impl ConventionTables<AbstractFrames> {
         scope.adapters.insert(key, name.clone());
 
         // The transfer's signature is the body entry's without the
-        // environment, which the closure lowering interposes again.
+        // environment, which the closure lowering interposes again. An
+        // ordinary closure call has one result, so a body that never returns
+        // keeps its logical `core.never` there.
+        let never = core::Never::params().intern(ctx).as_type_ref();
         let body_entry = self.layout.entry_signature(ctx, closure_ty, body);
+        let mut diverges = false;
         let transfer_signature = func::FuncSig::from_type_ref(ctx, body_entry)
             .expect("an entry signature is a func.func_sig")
-            .rebuild(ctx, |inputs, _| {
+            .rebuild(ctx, |inputs, results| {
                 inputs.remove(body.closure_environment_index());
+                if results.is_empty() {
+                    diverges = true;
+                    results.push((never, AttributeMap::new()));
+                }
             })
             .as_type_ref();
         let entry = make_block(ctx, location, &entry_inputs(ctx, signature));
@@ -258,19 +267,22 @@ impl ConventionTables<AbstractFrames> {
             .into_iter()
             .chain(params[source..].iter().copied())
             .collect();
-        if let Some(frame) = frame {
+        if let (false, Some(frame)) = (diverges, frame) {
             let call = func::CallIndirect::operands(closure, args)
                 .signature(transfer_signature)
                 .build(ctx, location);
             call.set_calling_convention(ctx, body);
             ctx.push_op(entry, call.op_ref());
-            let exit = match ctx.op_results(call.op_ref()).first().copied() {
-                Some(result) => ability::Exit::operands(frame, result)
-                    .build(ctx, location)
-                    .op_ref(),
-                None => func::Unreachable::operands().build(ctx, location).op_ref(),
-            };
-            ctx.push_op(entry, exit);
+            let exit = ability::Exit::operands(frame, call.result(ctx)).build(ctx, location);
+            ctx.push_op(entry, exit.op_ref());
+        } else if diverges {
+            let call = func::CallIndirect::operands(closure, args)
+                .signature(transfer_signature)
+                .build(ctx, location);
+            call.set_calling_convention(ctx, body);
+            ctx.push_op(entry, call.op_ref());
+            let unreachable = func::Unreachable::operands().build(ctx, location);
+            ctx.push_op(entry, unreachable.op_ref());
         } else {
             let tail = func::TailCallIndirect::operands(closure, args)
                 .signature(transfer_signature)
