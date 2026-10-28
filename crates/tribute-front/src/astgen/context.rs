@@ -17,6 +17,9 @@ pub struct AstLoweringCtx<'db> {
     pub source: Rope,
     /// Source hash for distinguishing parse sessions (derived from source URI).
     source_hash: u64,
+    /// The source id stamped on spans: `0` for the file an analysis starts
+    /// from, the source hash for a file module.
+    span_source: u64,
     /// Builder for span map.
     span_builder: SpanMapBuilder,
     /// Salsa database for accumulating diagnostics directly.
@@ -42,6 +45,7 @@ impl<'db> AstLoweringCtx<'db> {
         Self {
             source,
             source_hash,
+            span_source: 0,
             span_builder: SpanMapBuilder::new(),
             db: None,
             module_path: Vec::new(),
@@ -61,13 +65,22 @@ impl<'db> AstLoweringCtx<'db> {
         }
     }
 
+    /// Stamp spans and diagnostics with this source's hash, as a file
+    /// module's are.
+    pub fn in_file_module(self) -> Self {
+        Self {
+            span_source: self.source_hash,
+            ..self
+        }
+    }
+
     /// Generate the NodeId of the next node of the current owner and record
     /// the CST node's span for it.
     pub fn fresh_id_with_span(&mut self, node: &Node) -> NodeId {
         let next = self.next_index.entry(self.owner).or_default();
         let id = NodeId::new(self.source_hash, self.owner, *next);
         *next += 1;
-        let span = Span::new(node.start_byte(), node.end_byte());
+        let span = Span::new(node.start_byte(), node.end_byte()).in_source(self.span_source);
         self.span_builder.insert(id, span);
         id
     }
@@ -111,7 +124,7 @@ impl<'db> AstLoweringCtx<'db> {
         if let Some(db) = self.db {
             Diagnostic::new(
                 message,
-                span,
+                span.in_source(self.span_source),
                 DiagnosticSeverity::Error,
                 CompilationPhase::AstGeneration,
             )
@@ -124,7 +137,7 @@ impl<'db> AstLoweringCtx<'db> {
         if let Some(db) = self.db {
             Diagnostic::new(
                 message,
-                span,
+                span.in_source(self.span_source),
                 DiagnosticSeverity::Error,
                 CompilationPhase::Parsing,
             )

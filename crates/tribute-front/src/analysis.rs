@@ -14,10 +14,10 @@ use salsa::Accumulator;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::Symbol;
 
-use crate::astgen::{self, ParsedAst};
-use crate::query;
+use crate::astgen::ParsedAst;
 use crate::resolve::{self, Dependencies, NameDisplay, PackageEnv, PackageName};
 use crate::source_file::SourceCst;
+use crate::source_tree::{self, SourceTree};
 use crate::typeck::{PackageExports, TypeCheckOutput, TypeChecker};
 
 /// A library package: its name, the source of its root module, and the
@@ -45,15 +45,17 @@ pub struct CheckedPackage<'db> {
     pub exports: PackageExports<'db>,
 }
 
-/// Parse the root module of `package`. Its nodes are numbered under its
-/// package name, so they never collide with another package's.
+/// Parse `package` from its root file and the files of its file modules.
+/// Its nodes are numbered under its package name, so they never collide
+/// with another package's.
 pub fn parsed_package(db: &dyn salsa::Database, package: Package) -> Option<ParsedAst<'_>> {
-    let module = package
-        .name(db)
-        .name()
-        .expect("a library package has a name")
-        .clone();
-    astgen::lower_source_to_parsed_ast_with_module_path(db, *package.root(db), Some(module))
+    package_tree(db, package).map(|tree| tree.parsed)
+}
+
+/// The source tree of `package`: its AST and the files it was read from.
+pub fn package_tree(db: &dyn salsa::Database, package: Package) -> Option<&SourceTree<'_>> {
+    let module = package_name(db, package).clone();
+    source_tree::source_tree(db, *package.root(db), Some(module))
 }
 
 /// The environment of `package`, built from its declarations and its
@@ -235,7 +237,7 @@ pub fn analyze<'db>(
     source: SourceCst,
     table: DependencyTable,
 ) -> Option<TypeCheckOutput<'db>> {
-    let parsed = query::parsed_ast(db, source)?;
+    let parsed = source_tree::source_tree_of(db, source)?.parsed;
     let module = parsed.module(db);
     let span_map = parsed.span_map(db);
     let scope = resolve::build_env(db, module, dependencies(db, table));

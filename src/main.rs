@@ -7,20 +7,18 @@ mod lsp;
 use clap::Parser;
 use cli::{Cli, Command};
 use diagnostics::{print_diagnostic, print_diagnostics, report_diagnostics};
-use ropey::Rope;
 use salsa::Database;
 use std::path::{Path, PathBuf};
 use tracing_subscriber::EnvFilter;
+use tribute::TributeDatabaseImpl;
 use tribute::link::link_native_binary;
 use tribute::pipeline::{
     CompilationConfig, compile_to_native_binary, compile_to_wasm_binary, compile_with_diagnostics,
     wasm_binary_diagnostics,
 };
-use tribute::{SourceCst, TributeDatabaseImpl};
 use tribute_core::diagnostic::{Diagnostic, DiagnosticSeverity};
-use tribute_front::query::parsed_ast;
 use tribute_front::resolve::{Dependencies, build_env};
-use tribute_front::source_file::parse_rope;
+use tribute_front::source_tree::source_tree_of;
 
 fn main() {
     let cli = Cli::parse();
@@ -78,20 +76,16 @@ fn compile_file(
     sanitize_address: bool,
     sysroot: Option<&Path>,
 ) {
-    let source_code = {
-        match std::fs::File::open(&input_path).and_then(Rope::from_reader) {
-            Ok(content) => content,
-            Err(e) => {
-                eprintln!("Error reading file {}: {}", input_path.display(), e);
-                std::process::exit(1);
-            }
+    let db = TributeDatabaseImpl::default();
+    let source = match db.input(input_path.clone()) {
+        Ok(source) => source,
+        Err(e) => {
+            eprintln!("Error reading file {}: {}", input_path.display(), e);
+            std::process::exit(1);
         }
     };
 
-    TributeDatabaseImpl::default().attach(|db| {
-        let tree = parse_rope(&source_code, None);
-        let source = SourceCst::from_path(db, &input_path, source_code, tree);
-
+    db.attach(|db| {
         if dump_ir {
             if sanitize_address {
                 eprintln!("warning: --sanitize has no effect with --dump-ir (sanitizer ops are added during backend lowering)");
@@ -108,9 +102,8 @@ fn compile_file(
 
             if !diagnostics.is_empty() {
                 let file_path = input_path.display().to_string();
-                let source_text = source.text(db);
                 for diag in &diagnostics {
-                    print_diagnostic(diag, source_text, &file_path);
+                    print_diagnostic(db, source, &file_path, diag);
                 }
                 if diagnostics
                     .iter()
@@ -203,9 +196,8 @@ fn compile_file(
                 let result = compile_with_diagnostics(db, source);
 
                 let file_path = input_path.display().to_string();
-                let source_text = source.text(db);
                 for diag in &result.diagnostics {
-                    print_diagnostic(diag, source_text, &file_path);
+                    print_diagnostic(db, source, &file_path, diag);
                 }
                 if result
                     .diagnostics
@@ -228,21 +220,18 @@ fn compile_file(
 }
 
 fn debug_file(path: std::path::PathBuf, show_env: bool) {
-    let source_code = {
-        match std::fs::File::open(&path).and_then(Rope::from_reader) {
-            Ok(content) => content,
-            Err(e) => {
-                eprintln!("Error reading file: {e}");
-                std::process::exit(1);
-            }
+    let db = TributeDatabaseImpl::default();
+    let source = match db.input(path.clone()) {
+        Ok(source) => source,
+        Err(e) => {
+            eprintln!("Error reading file: {e}");
+            std::process::exit(1);
         }
     };
 
-    TributeDatabaseImpl::default().attach(|db| {
+    db.attach(|db| {
         println!("=== Compiling: {} ===\n", path.display());
 
-        let tree = parse_rope(&source_code, None);
-        let source = SourceCst::from_path(db, &path, source_code, tree);
         let result = compile_with_diagnostics(db, source);
 
         // Show diagnostics
@@ -258,7 +247,8 @@ fn debug_file(path: std::path::PathBuf, show_env: bool) {
         // Show environment if requested
         if show_env {
             println!("\n=== Package Environment ===");
-            if let Some(parsed) = parsed_ast(db, source) {
+            if let Some(tree) = source_tree_of(db, source) {
+                let parsed = tree.parsed;
                 let env = build_env(db, parsed.module(db), Dependencies::none()).into_env();
                 println!("{:#?}", env);
             } else {

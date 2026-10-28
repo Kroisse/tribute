@@ -55,6 +55,16 @@ impl SpanMap {
         &EMPTY
     }
 
+    /// One map of the nodes of `maps`. NodeIds carry their source's hash,
+    /// so maps of different sources share no node.
+    pub fn merged<'a>(maps: impl IntoIterator<Item = &'a SpanMap>) -> SpanMap {
+        SpanMap(
+            maps.into_iter()
+                .flat_map(|map| map.0.iter().map(|(&id, &span)| (id, span)))
+                .collect(),
+        )
+    }
+
     /// Look up a span by NodeId.
     ///
     /// For specialized (monomorphized) nodes, falls back to the origin NodeId

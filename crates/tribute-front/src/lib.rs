@@ -13,6 +13,7 @@
 //! - [`query`]: Salsa-tracked query functions for incremental compilation
 //! - [`sorted_map`]: Sorted-vector map for deterministic phase results
 //! - [`source_file`]: Source file management and URI handling
+//! - [`source_tree`]: A package's root file and file modules read into one AST
 
 pub mod analysis;
 pub mod ast;
@@ -25,6 +26,7 @@ pub mod query;
 pub mod resolve;
 pub mod sorted_map;
 pub mod source_file;
+pub mod source_tree;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 pub mod typeck;

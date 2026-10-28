@@ -11,7 +11,7 @@
 //     utils.trb         <- mod utils
 
 // Declare file-based modules (loads from .trb files)
-mod math
+pub mod math
 mod utils
 
 // Import from our modules

@@ -568,8 +568,11 @@ impl LspServer {
 
             // Find diagnostics that overlap with the requested range
             for diag in &result.diagnostics {
-                // Check if diagnostic overlaps with range
-                if diag.inner.span.end < start_offset || diag.inner.span.start > end_offset {
+                // Check if diagnostic overlaps with range in this document
+                if diag.inner.span.source != 0
+                    || diag.inner.span.end < start_offset
+                    || diag.inner.span.start > end_offset
+                {
                     continue;
                 }
 
@@ -808,10 +811,13 @@ impl LspServer {
             .db
             .attach(|db| tribute::compile_with_diagnostics(db, source_cst).diagnostics);
 
-        // Convert to LSP diagnostics
+        // Convert to LSP diagnostics. A span with a nonzero source is in a
+        // file module's file rather than this document, so this document
+        // does not show it.
         let lsp_uri = uri.clone();
         let diagnostics: Vec<Diagnostic> = diags
             .iter()
+            .filter(|d| d.inner.span.source == 0)
             .map(|d| {
                 let range = span_to_range(rope, d.inner.span);
 
@@ -823,6 +829,7 @@ impl LspServer {
                         d.inner
                             .labels
                             .iter()
+                            .filter(|label| label.span.source == 0)
                             .map(|label| DiagnosticRelatedInformation {
                                 location: Location {
                                     uri: lsp_uri.clone(),

@@ -1,12 +1,11 @@
-use std::collections::hash_map::Entry;
+use std::sync::Arc;
 
-use lsp_types::Uri;
+use lsp_types::Uri as LspUri;
 use parking_lot::RwLock;
 use ropey::Rope;
-use tribute_front::source_file::parse_rope;
-use tribute_front::{SourceCst, path_to_uri};
+use tribute_front::source_file::{FileProvider, SourceFiles, parse_rope};
+use tribute_front::{SourceCst, Uri, path_to_uri};
 
-#[derive(Default)]
 #[salsa::db]
 pub struct TributeDatabaseImpl {
     storage: salsa::Storage<Self>,
@@ -20,45 +19,56 @@ pub struct TributeDatabaseImpl {
 #[salsa::db]
 impl salsa::Database for TributeDatabaseImpl {}
 
+impl Default for TributeDatabaseImpl {
+    fn default() -> Self {
+        let db = Self {
+            storage: salsa::Storage::default(),
+            documents: RwLock::default(),
+        };
+        SourceFiles::new(&db, Arc::new(FileProvider::new(read_file)));
+        db
+    }
+}
+
+/// The text of the file a `file:` URI names, if it can be read.
+fn read_file(uri: &Uri<String>) -> Option<Rope> {
+    if uri.scheme().map(|scheme| scheme.as_str()) != Some("file") {
+        return None;
+    }
+    let file = std::fs::File::open(uri.path().as_str()).ok()?;
+    Rope::from_reader(file).ok()
+}
+
 impl TributeDatabaseImpl {
+    /// The source of the file at `path`, read from disk on its first
+    /// request. It is the same input a package's source tree finds at that
+    /// path.
     pub fn input(
         &self,
         path: std::path::PathBuf,
     ) -> Result<SourceCst, Box<dyn std::error::Error + Send + Sync>> {
         let path = path.canonicalize()?;
         let uri = path_to_uri(&path);
-        let key = uri.as_str().to_owned();
-        if let Some(entry) = self.documents.read().get(&key) {
-            Ok(*entry)
-        } else {
-            let file = std::fs::File::open(&path)?;
-            let contents = Rope::from_reader(file)?;
-            let tree = parse_rope(&contents, None);
-            let source_cst = SourceCst::new(self, uri, contents, tree);
-            let mut lock = self.documents.write();
-            match lock.entry(key) {
-                Entry::Occupied(entry) => Ok(*entry.get()),
-                Entry::Vacant(entry) => {
-                    entry.insert(source_cst);
-                    Ok(source_cst)
-                }
-            }
-        }
+        let provider = SourceFiles::get(self).provider(self).clone();
+        provider
+            .entry(self, &uri)
+            .source(self)
+            .ok_or_else(|| format!("cannot read {}", path.display()).into())
     }
 
-    pub fn open_document(&self, uri: &Uri, text: Rope) {
+    pub fn open_document(&self, uri: &LspUri, text: Rope) {
         let key = uri.as_str().to_owned();
         let tree = parse_rope(&text, None);
         let source_cst = SourceCst::new(self, (**uri).clone(), text, tree);
         self.documents.write().insert(key, source_cst);
     }
 
-    pub fn close_document(&self, uri: &Uri) {
+    pub fn close_document(&self, uri: &LspUri) {
         let key = uri.as_str();
         self.documents.write().remove(key);
     }
 
-    pub fn source_cst(&self, uri: &Uri) -> Option<SourceCst> {
+    pub fn source_cst(&self, uri: &LspUri) -> Option<SourceCst> {
         let key = uri.as_str();
         self.documents.read().get(key).copied()
     }
@@ -71,7 +81,7 @@ mod tests {
     #[test]
     fn test_document_lifecycle() {
         let db = TributeDatabaseImpl::default();
-        let uri: Uri = "file:///test.trb".parse().unwrap();
+        let uri: LspUri = "file:///test.trb".parse().unwrap();
         let text = Rope::from_str("fn test() { }");
 
         // Initially no document
@@ -89,7 +99,7 @@ mod tests {
     #[test]
     fn test_open_document_overwrites() {
         let db = TributeDatabaseImpl::default();
-        let uri: Uri = "file:///test.trb".parse().unwrap();
+        let uri: LspUri = "file:///test.trb".parse().unwrap();
 
         // Open with first content
         let text1 = Rope::from_str("fn first() { }");
