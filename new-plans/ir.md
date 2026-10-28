@@ -376,8 +376,8 @@ lowering이 정한다.
 분석 캐시의 신선도는 IR 변경에 대해 자동이다. 변경을 관찰하는 주체는
 `IrContext`이고, 결과를 보관하고 신선도를 판정하는 주체는 `AnalysisCache`이며,
 pass와 분석 소비자는 두 값을 명시적인 인자로 받는다. 이 절은 그 두 값 사이의
-계약을 정한다: 변경이 어떤 범위에 보고되는지, 분석이 어떤 범위를 읽는다고
-선언하는지, 어떤 조건에서 결과가 재사용되는지, 반환된 결과의 수명이 어디까지
+계약을 정한다: 변경이 어떤 범위에 보고되는지, 분석이 읽은 범위가 어떻게
+기록되는지, 어떤 조건에서 결과가 재사용되는지, 반환된 결과의 수명이 어디까지
 인지, 그리고 범위를 알 수 없는 변경이 어떻게 보수적으로 처리되는지.
 
 #### Context identity와 전체 revision
@@ -435,7 +435,7 @@ dialect가 선언하므로, anchor 여부는 dialect가 자신의 operation에 �
 가리키거나, module metadata와 type alias를 읽거나, anchor 자신의 결과가
 바깥에서 사용되는 것은 막지 않는다. 따라서 대상 operation이 anchor라는 사실은
 그 분석의 읽기 범위가 subtree에 국한된다는 증명이 아니다. 읽기 범위는 아래의
-footprint 선언이 정한다.
+읽기 기록이 정한다.
 
 루트가 anchor가 아닌 subtree는 anchor 체인이 없다. 아직 block에 넣지 않은
 `arith.const` 하나나, callable에서 떼어낸 region이 그 예다. 체인이 없는 대상에
@@ -447,34 +447,35 @@ subtree는 붙어 있지 않아도 체인을 갖는다. 아직 module에 넣지 
 
 #### 읽기 footprint
 
-분석은 기본적으로 context 전체에 의존한다. `AnalysisContext::ir()`는 임의의
-읽기를 허용하며, 이 접근으로 계산한 결과는 revision이 바뀌면 폐기된다.
-선언하지 않은 분석은 모두 이 기본값을 따르므로, 범위 규칙을 모르는 코드는
-그대로 올바르다.
+분석의 읽기 범위는 선언하지 않고 **관측**한다. `IrContext`의 필드는 비공개이고
+IR entity를 읽는 길은 `&self` 접근자뿐이므로, `AnalysisCache`가 분석 계산을
+실행하는 동안 `IrContext`는 그 접근자로 읽힌 operation, block, region, 값을
+기록한다. 분석은 `AnalysisContext::ir()`로 임의의 읽기를 할 수 있고, typed
+wrapper, interface, walk도 그대로 쓴다. 분석 쪽에는 opt-in이나 별도 view가
+없으며, 읽기 범위는 분석의 약속이 아니라 실제로 읽은 것으로 정해진다.
 
-범위 재사용을 원하는 분석은 **대상 subtree만 읽는다**고 opt-in으로 선언한다.
-선언은 `Analysis`와 별개의 trait이고, 그 trait의 계산 함수는
-`AnalysisContext` 대신 제한된 읽기 view만 받는다. 범위 분석은
-`AnalysisContext::ir()`에 닿을 수 없으므로 읽기 범위는 약속이 아니라 구성으로
-증명된다. 그 view는 다음만 노출한다.
+기록한 entity는 소유 operation으로 옮긴다. Block과 region은 그것을 소유한
+operation으로, 값은 정의 지점(operation 결과라면 그 operation, block argument
+라면 그 block을 소유한 operation)으로 옮긴다. 각 소유 operation은 자신을
+포함하는 가장 안쪽 anchor로 옮기며, 그 결과 집합에서 다른 원소의 조상인
+anchor가 있으면 후손을 버리고 **최외곽 anchor**만 남긴다. 체인 규칙상 안쪽
+anchor의 변경은 바깥 anchor의 카운터도 올리므로, 바깥 anchor 하나로 그 아래의
+읽기를 모두 덮는다. 소유자가 없거나 루트가 anchor가 아닌 entity를 하나라도
+읽은 결과는 context 전체 의존이다.
 
-- 대상 operation과 그 subtree의 operation, block, region, 그리고 그 안에서
-  정의된 값과 그 값들의 use. Anchor 안에서 정의된 값의 사용자는 모두 anchor
-  안에 있으므로 use-list 읽기는 subtree를 벗어나지 않는다. 대상 자신의 결과가
-  바깥에서 어떻게 쓰이는지는 노출하지 않는다.
-- Subtree 안의 operand가 가리키는 바깥 값의 `ValueRef`와 타입. 그 값의 정의
-  operation은 노출하지 않는다.
-- Interned type, path, string attribute 값. 이들은 불변이므로 읽어도 의존성이
-  생기지 않는다.
-- 선언한 선행 분석의 조회. 선행 분석의 대상은 subtree 바깥일 수 있으며(예:
-  module의 symbol table), 조회는 의존성으로 기록된다.
+- 함수 본문만 읽은 결과의 footprint는 그 함수다.
+- Module 본문 block, 즉 함수 목록이나 함수의 `parent_block`을 읽은 결과의
+  footprint는 module이다. `SymbolTable`처럼 module을 읽는 분석은 어느 함수의
+  변경에도 재계산된다.
+- Interned type, path, string attribute 값은 불변이므로 읽어도 기록하지 않는다.
+  Type alias와 같이 operation 밖에 있는 전역 metadata는 미분류 변경 카운터로
+  덮는다.
 
-Symbol reference의 해석, module 집계, type alias와 module metadata 읽기는
-view가 제공하지 않는다. 그런 사실이 필요한 분석은 그것을 담은 선행 분석에
-의존한다. 결과적으로 한 결과의 footprint는 두 부분으로 나뉜다.
+결과적으로 한 결과의 footprint는 두 부분으로 나뉜다.
 
-- **직접 footprint**: 대상의 anchor 체인 가운데 가장 안쪽 anchor. 분석이
-  view로 직접 읽은 범위다.
+- **직접 footprint**: 그 계산이 직접 읽은 entity들의 최외곽 anchor 집합.
+  선행 분석의 계산이 읽은 것은 포함하지 않는다. 계산이 중첩되면 각 계산은 자기
+  구간의 읽기만 가져간다.
 - **선행 의존**: 조회한 선행 분석 결과들. 선행 분석의 footprint는 의존
   분석의 직접 footprint에 합쳐지지 않으며, 선행 분석 결과 자체의 신선도로
   확인한다.
@@ -486,10 +487,10 @@ view가 제공하지 않는다. 그런 사실이 필요한 분석은 그것을 �
 경우도 같다. 의존 분석은 전체 의존을 상속하지 않고, 그 선행 분석의 신선도를
 revision으로 확인한 뒤 재계산 결과의 동등성으로 살아남을 수 있다.
 
-Module을 대상으로 subtree 선언을 한 분석은 module 안의 모든 함수 본문을
-읽는 것이므로 그 module anchor를 직접 footprint로 갖고, 어느 함수의 변경에도
-재계산된다. 함수마다 계산되는 결과와 그것을 합치는 module 집계는 서로 다른
-분석이며, 집계는 함수별 결과를 선행 분석으로 조회한다.
+함수마다 계산되는 결과와 그것을 합치는 module 집계는 서로 다른 분석이며,
+집계는 함수별 결과를 선행 분석으로 조회한다. 집계가 module 본문을 직접 읽으면
+직접 footprint는 module이고 어느 함수의 변경에도 재계산되지만, 함수별 결과는
+각자의 함수만 footprint로 가진다.
 
 #### 변경 보고
 
@@ -506,7 +507,7 @@ Module을 대상으로 subtree 선언을 한 분석은 module 안의 모든 함�
 | --- | --- |
 | Operation의 attribute, 결과 타입, region 목록, successor 변경 | 그 operation의 anchor 체인 |
 | Block argument의 타입·attribute, block의 operation 목록 변경 | 그 block을 소유한 operation의 anchor 체인 |
-| Operation을 block에 넣거나 빼는 것, region을 operation에 붙이거나 떼는 것(이동 포함) | 이전 소유자와 새 소유자의 anchor 체인 모두 |
+| Operation을 block에 넣거나 빼는 것, region을 operation에 붙이거나 떼는 것(이동 포함) | 이전 소유자와 새 소유자의 anchor 체인 모두, 그리고 옮겨지는 operation이 anchor이면 그 operation 자신. 함수의 `parent_block` 읽기는 그 함수로 기록되기 때문이다 |
 | Detached subtree 삭제 | Subtree 안의 모든 anchor와, subtree의 operand가 가리키는 바깥 값의 정의 지점의 anchor 체인(그 값들의 use-list가 바뀐다). 붙어 있는 operation은 먼저 떼어내므로 소유자의 체인은 그때 이미 올라간다 |
 | Operand 추가·제거·교체와 RAUW | 사용자의 anchor 체인, 그리고 이전 값과 새 값의 정의 지점(operation, 또는 block argument라면 그 block을 소유한 operation)의 anchor 체인 |
 | Operand를 가진 detached operation 생성 | 각 operand 값의 정의 지점의 anchor 체인(값의 use-list가 바뀐다) |
@@ -609,8 +610,10 @@ anchor여야 한다는 규칙은 그대로다.
 
 #### 회귀 기준
 
-범위 재사용을 구현하는 변경은 다음을 각각 구별하는 회귀를 갖춘다. 범위 선언이
-없는 분석은 모든 경우에 context 전체 규칙으로 동작해야 한다.
+범위 재사용을 구현하는 변경은 다음을 각각 구별하는 회귀를 갖춘다.
+
+- 읽기 기록이 함수 본문은 그 함수로, module 본문과 함수의 `parent_block`은
+  module로 옮기고, 선행 분석의 계산이 읽은 것을 의존 분석에 넣지 않는 것.
 
 - 최상위 `core.module`(parent block이 없는 루트) 아래 함수의 결과가 그 함수와
   module로 이어지는 anchor 체인을 갖고, 루트가 anchor가 아닌 detached
@@ -670,8 +673,9 @@ Native managed liveness는 정의된 `func.func`를 대상으로 하는 별도�
 표현되며, arena의 구조를 가정하지 않는다. 함수 단위 병렬 편집은 anchor별로
 분리된 편집 권한과 `IrContext`의 공유 읽기 안전성을 전제로 하며 별도 설계로
 다룬다. 그 설계는 anchor 카운터가 사는 자리와 캐시의 결과 발행 방식을 바꿀
-수 있지만, 이 절의 footprint 선언, 변경 분류, 신선도 판정, snapshot 수명은
-그 설계의 입력으로 유지된다.
+수 있지만, 이 절의 읽기 기록, 변경 분류, 신선도 판정, snapshot 수명은
+그 설계의 입력으로 유지된다. 읽기 기록은 계산 하나의 실행 구간에 묶이므로,
+공유 읽기에서는 기록기를 `IrContext` 하나가 아니라 읽는 쪽마다 둔다.
 
 ### Callable 본문 구조
 
