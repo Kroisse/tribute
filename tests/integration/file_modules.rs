@@ -198,6 +198,12 @@ fn the_tree_finds_the_files_under_a_module() {
         paths(tree.files_under(&SymbolPath::new(["util"]))),
         ["/pkg/src/util/text.trb"]
     );
+    assert_eq!(
+        format!("{:?}", tree.span_map(&db)),
+        "SpanMap { files: 4, .. }"
+    );
+    let root_spans = format!("{:?}", tree.root().parsed.span_map(&db));
+    assert!(root_spans.starts_with("SpanMap { spans: "), "{root_spans}");
 }
 
 #[test]
