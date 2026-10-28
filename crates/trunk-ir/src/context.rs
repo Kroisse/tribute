@@ -403,10 +403,16 @@ impl IrContext {
     /// Mark every anchor from `op` to its root as changed at the current
     /// revision. `OpRef`s are never reused, so a removed anchor's counter
     /// stays with it.
+    ///
+    /// An anchor already at the current revision was marked earlier in this
+    /// mutation together with every anchor above it, so the walk stops there.
     fn touch_chain(&mut self, op: OpRef) {
         let mut current = Some(op);
         while let Some(op) = current {
             if self.is_anchor(op) {
+                if self.anchor_revisions[op] == self.revision {
+                    return;
+                }
                 self.anchor_revisions[op] = self.revision;
             }
             current = self.parent_op(op);

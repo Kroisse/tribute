@@ -470,6 +470,8 @@ anchor의 변경은 바깥 anchor의 카운터도 올리므로, 바깥 anchor �
 - Interned type, path, string attribute 값은 불변이므로 읽어도 기록하지 않는다.
   Type alias와 같이 operation 밖에 있는 전역 metadata는 미분류 변경 카운터로
   덮는다.
+- IR entity를 하나도 읽지 않은 결과의 직접 footprint는 빈 집합이다. 그런
+  결과는 미분류 변경과 선행 분석의 변화로만 무효화된다.
 
 결과적으로 한 결과의 footprint는 두 부분으로 나뉜다.
 
