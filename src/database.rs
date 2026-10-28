@@ -3,7 +3,7 @@ use std::sync::Arc;
 use lsp_types::Uri as LspUri;
 use parking_lot::RwLock;
 use ropey::Rope;
-use tribute_front::source_file::{FileProvider, SourceFiles, parse_rope};
+use tribute_front::source_file::{FileProvider, SourceFiles};
 use tribute_front::{SourceCst, Uri, path_to_uri, uri_to_path};
 
 #[salsa::db]
@@ -46,6 +46,12 @@ fn read_file(uri: &Uri<String>) -> Option<Rope> {
     Rope::from_reader(std::fs::File::open(&path).ok()?).ok()
 }
 
+/// The URI the file provider keys `uri`'s file by: a `file:` URI spelled as
+/// [`path_to_uri`] spells its path, whatever encoding the client chose.
+fn provider_uri(uri: &LspUri) -> Uri<String> {
+    uri_to_path(uri).map_or_else(|| (**uri).clone(), |path| path_to_uri(&path))
+}
+
 impl TributeDatabaseImpl {
     /// The source of the file at `path`, read from disk on its first
     /// request. It is the same input a package's source tree finds at that
@@ -63,16 +69,29 @@ impl TributeDatabaseImpl {
             .ok_or_else(|| format!("cannot read {}", path.display()).into())
     }
 
-    pub fn open_document(&self, uri: &LspUri, text: Rope) {
-        let key = uri.as_str().to_owned();
-        let tree = parse_rope(&text, None);
-        let source_cst = SourceCst::new(self, (**uri).clone(), text, tree);
-        self.documents.write().insert(key, source_cst);
+    /// Open the editor buffer `text` for `uri`. The buffer replaces the
+    /// file's text in the source input a package's source tree reads at that
+    /// path, so the packages that contain the file see its edits.
+    pub fn open_document(&mut self, uri: &LspUri, text: Rope) {
+        let file = provider_uri(uri);
+        let provider = SourceFiles::get(self).provider(self).clone();
+        let source_cst = provider
+            .set(self, &file, Some(text))
+            .expect("a file given text has a source");
+        self.documents
+            .write()
+            .insert(uri.as_str().to_owned(), source_cst);
     }
 
-    pub fn close_document(&self, uri: &LspUri) {
-        let key = uri.as_str();
-        self.documents.write().remove(key);
+    /// Close the editor buffer of `uri`, returning its source input to the
+    /// file on disk.
+    pub fn close_document(&mut self, uri: &LspUri) {
+        if self.documents.write().remove(uri.as_str()).is_none() {
+            return;
+        }
+        let file = provider_uri(uri);
+        let provider = SourceFiles::get(self).provider(self).clone();
+        provider.set(self, &file, read_file(&file));
     }
 
     pub fn source_cst(&self, uri: &LspUri) -> Option<SourceCst> {
@@ -87,7 +106,7 @@ mod tests {
 
     #[test]
     fn test_document_lifecycle() {
-        let db = TributeDatabaseImpl::default();
+        let mut db = TributeDatabaseImpl::default();
         let uri: LspUri = "file:///test.trb".parse().unwrap();
         let text = Rope::from_str("fn test() { }");
 
@@ -105,7 +124,7 @@ mod tests {
 
     #[test]
     fn test_open_document_overwrites() {
-        let db = TributeDatabaseImpl::default();
+        let mut db = TributeDatabaseImpl::default();
         let uri: LspUri = "file:///test.trb".parse().unwrap();
 
         // Open with first content

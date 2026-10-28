@@ -2021,6 +2021,88 @@ mod tests {
         assert!(prepare(4, 4).is_some(), "`main`");
     }
 
+    /// A field that a file module destructures with a shorthand pattern is
+    /// not renamable from the root document.
+    #[test]
+    fn a_field_destructured_in_a_file_module_is_not_renamable() {
+        let dir = tempfile::tempdir().expect("temporary package directory");
+        std::fs::write(
+            dir.path().join("util.trb"),
+            "use pkg::Point\n\npub fn sum(p: Point) -> Int {\n    let Point { x, y } = p\n    x + y\n}\n",
+        )
+        .expect("write util.trb");
+        let root = dir.path().join("main.trb");
+        let uri: Uri = format!("file://{}", root.display()).parse().unwrap();
+        let source = "mod util\n\npub struct Point { x: Int, y: Int }\n\nfn main() -> Nil { }\n";
+
+        let mut harness = TestHarness::new();
+        let published = harness.open_document_with_diagnostics(&uri, source);
+        assert_eq!(published.diagnostics, Vec::new());
+        let prepared = harness.request::<PrepareRenameRequest>(TextDocumentPositionParams {
+            text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+            position: lsp_types::Position {
+                line: 2,
+                character: 19, // On `x`
+            },
+        });
+        assert_eq!(prepared, None);
+    }
+
+    /// A file module open in the editor is the source input its package
+    /// reads, so the root sees the buffer until the file is closed.
+    #[test]
+    fn an_open_file_module_buffer_is_what_its_package_reads() {
+        let dir = tempfile::tempdir().expect("temporary package directory");
+        std::fs::write(
+            dir.path().join("util.trb"),
+            "pub fn helper() -> Nat { 1 }\n",
+        )
+        .expect("write util.trb");
+        let root: Uri = format!("file://{}", dir.path().join("main.trb").display())
+            .parse()
+            .unwrap();
+        let util: Uri = format!("file://{}", dir.path().join("util.trb").display())
+            .parse()
+            .unwrap();
+        let source = "mod util\n\nfn main() -> Nil { let _ = util::helper() }\n";
+
+        let mut harness = TestHarness::new();
+        assert_eq!(
+            harness
+                .open_document_with_diagnostics(&root, source)
+                .diagnostics,
+            Vec::new()
+        );
+        harness.open_document(&util, "pub fn other() -> Nat { 1 }\n");
+        assert_ne!(
+            harness
+                .open_document_with_diagnostics(&root, source)
+                .diagnostics,
+            Vec::new(),
+            "the root reads the buffer, which has no `helper`"
+        );
+
+        let close = DidCloseTextDocumentParams {
+            text_document: lsp_types::TextDocumentIdentifier { uri: util.clone() },
+        };
+        let notif = Notification::new(DidCloseTextDocument::METHOD.to_string(), close);
+        harness
+            .client
+            .sender
+            .send(Message::Notification(notif))
+            .unwrap();
+        let msg = harness.server.connection.receiver.recv().unwrap();
+        harness.server.process_message(msg).unwrap();
+        let _cleared = harness.client.receiver.recv().unwrap();
+        assert_eq!(
+            harness
+                .open_document_with_diagnostics(&root, source)
+                .diagnostics,
+            Vec::new(),
+            "closing the buffer returns to the file on disk"
+        );
+    }
+
     #[test]
     fn test_did_change_via_message() {
         let mut harness = TestHarness::new();

@@ -752,6 +752,7 @@ impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for DefinitionCollector<'_, 'db
                 };
                 if shorthand {
                     let Some(span) = self.span_map.get(field.id) else {
+                        self.foreign_names.insert(field.name.clone());
                         continue;
                     };
                     self.references.push(AstReferenceEntry {
