@@ -15,11 +15,12 @@ use trunk_ir::attr_kind::SymbolRef;
 use trunk_ir::op_flag::{IsolatedFromAbove, Pure};
 use trunk_ir::op_interface::CallableExit;
 use trunk_ir::ops::DialectOp;
+use trunk_ir::refs::{RegionRef, ValueRef};
 
 use crate::calling_convention::CallingConvention;
 use crate::dialect::tribute_control::{
-    self, CallableArgumentOrigin, CallableResultOrigin, EvidencePlanSite, EvidenceStep, FuncSig,
-    Row, RowBinder, RowUnion,
+    self, CallableArgumentOrigin, CallableQuery, CallableResultOrigin, EvidencePlanSite,
+    EvidenceStep, FuncSig, Row, RowBinder, RowUnion,
 };
 
 /// The attribute that holds a `tribute_cps` operation's convention.
@@ -348,6 +349,85 @@ impl trunk_ir::asm_format::OpAsmFormat for Lambda {
 }
 
 impl CallableExit for TailCallIndirect {}
+
+impl CallableArgumentOrigin for Func {
+    fn argument_is_callable_origin<'q>(
+        &self,
+        ctx: &IrContext,
+        region: RegionRef,
+        index: u32,
+        argument: ValueRef,
+        _query: &mut CallableQuery<'q>,
+    ) -> bool {
+        let signature = ctx.op_attrs(self.op_ref()).get_type("type");
+        tribute_control::is_signature_parameter(
+            ctx,
+            self.op_ref(),
+            signature,
+            region,
+            index,
+            argument,
+        )
+    }
+}
+
+impl CallableResultOrigin for Lambda {
+    fn result_is_callable_origin<'q>(
+        &self,
+        _ctx: &IrContext,
+        _result: ValueRef,
+        _query: &mut CallableQuery<'q>,
+    ) -> bool {
+        true
+    }
+}
+
+impl CallableArgumentOrigin for Lambda {
+    fn argument_is_callable_origin<'q>(
+        &self,
+        ctx: &IrContext,
+        region: RegionRef,
+        index: u32,
+        argument: ValueRef,
+        _query: &mut CallableQuery<'q>,
+    ) -> bool {
+        let signature = ctx.op_result_types(self.op_ref()).first().copied();
+        tribute_control::is_signature_parameter(
+            ctx,
+            self.op_ref(),
+            signature,
+            region,
+            index,
+            argument,
+        )
+    }
+}
+
+impl CallableResultOrigin for FuncRef {
+    fn result_is_callable_origin<'q>(
+        &self,
+        ctx: &IrContext,
+        _result: ValueRef,
+        query: &mut CallableQuery<'q>,
+    ) -> bool {
+        ctx.op_attrs(self.op_ref())
+            .get_symbol_ref("func_ref")
+            .is_some_and(|symbol| query.names_verified_function(ctx, self.op_ref(), symbol))
+    }
+}
+
+impl CallableResultOrigin for CallIndirect {
+    fn result_is_callable_origin<'q>(
+        &self,
+        ctx: &IrContext,
+        _result: ValueRef,
+        query: &mut CallableQuery<'q>,
+    ) -> bool {
+        ctx.op_operands(self.op_ref())
+            .first()
+            .is_some_and(|&callee| query.accepts(ctx, callee))
+    }
+}
 
 #[cfg(test)]
 mod tests;

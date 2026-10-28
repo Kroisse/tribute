@@ -393,15 +393,13 @@ let func_ty = func::func_sig(ctx, params, [return_ty]).as_type_ref();
 ```
 
 The source signature `tribute_control.func_sig` is declared by hand but is
-built the same way. A signature without a convention is one that class
-specialization has not assigned yet:
+built the same way. It has no calling convention; a `tribute_cps` operation
+declares the convention it was assigned:
 
 ```rust
 let callback = tribute_control::FuncSig::params([i32_ty], i32_ty)
     .row(row)
-    .convention(CallingConvention::Cps)
     .intern(ctx);
-let direct = callback.with_convention(ctx, CallingConvention::Direct);
 ```
 
 String attribute values live in the context's string pool; an attribute

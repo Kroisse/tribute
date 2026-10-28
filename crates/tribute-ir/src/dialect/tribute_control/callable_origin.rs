@@ -118,7 +118,7 @@ impl CallableQuery<'_> {
     /// A value not yet evaluated is taken to be one until its rule is, so a
     /// rule may read an answer that [`Self::resolve`] later withdraws; the
     /// rule is then evaluated again.
-    pub(super) fn accepts(&mut self, _ctx: &IrContext, value: ValueRef) -> bool {
+    pub(crate) fn accepts(&mut self, _ctx: &IrContext, value: ValueRef) -> bool {
         if let Some(dependent) = self.evaluating {
             let dependents = self.dependents.entry(value).or_default();
             if !dependents.contains(&dependent) {
@@ -204,7 +204,12 @@ impl CallableQuery<'_> {
 
     /// Whether `symbol`, referenced from `op`, names a defined function or a
     /// registered intrinsic.
-    fn names_verified_function(&self, ctx: &IrContext, op: OpRef, symbol: &SymbolPath) -> bool {
+    pub(crate) fn names_verified_function(
+        &self,
+        ctx: &IrContext,
+        op: OpRef,
+        symbol: &SymbolPath,
+    ) -> bool {
         self.functions
             .resolve(ctx, op, symbol)
             .filter(|&function| is_func(ctx, function))
@@ -248,7 +253,7 @@ pub trait CallableArgumentOrigin: DialectOp {
 
 /// A parameter of the callable whose only region is `region`, whose
 /// signature is `signature`.
-fn is_signature_parameter(
+pub(crate) fn is_signature_parameter(
     ctx: &IrContext,
     op: OpRef,
     signature: Option<TypeRef>,
@@ -326,71 +331,6 @@ impl CallableResultOrigin for FuncRef {
         ctx.op_attrs(self.op_ref())
             .get_symbol_ref("func_ref")
             .is_some_and(|symbol| query.names_verified_function(ctx, self.op_ref(), symbol))
-    }
-}
-
-impl CallableArgumentOrigin for tribute_cps::Func {
-    fn argument_is_callable_origin<'q>(
-        &self,
-        ctx: &IrContext,
-        region: RegionRef,
-        index: u32,
-        argument: ValueRef,
-        _query: &mut CallableQuery<'q>,
-    ) -> bool {
-        let signature = ctx.op_attrs(self.op_ref()).get_type("type");
-        is_signature_parameter(ctx, self.op_ref(), signature, region, index, argument)
-    }
-}
-
-impl CallableResultOrigin for tribute_cps::Lambda {
-    fn result_is_callable_origin<'q>(
-        &self,
-        _ctx: &IrContext,
-        _result: ValueRef,
-        _query: &mut CallableQuery<'q>,
-    ) -> bool {
-        true
-    }
-}
-
-impl CallableArgumentOrigin for tribute_cps::Lambda {
-    fn argument_is_callable_origin<'q>(
-        &self,
-        ctx: &IrContext,
-        region: RegionRef,
-        index: u32,
-        argument: ValueRef,
-        _query: &mut CallableQuery<'q>,
-    ) -> bool {
-        let signature = ctx.op_result_types(self.op_ref()).first().copied();
-        is_signature_parameter(ctx, self.op_ref(), signature, region, index, argument)
-    }
-}
-
-impl CallableResultOrigin for tribute_cps::FuncRef {
-    fn result_is_callable_origin<'q>(
-        &self,
-        ctx: &IrContext,
-        _result: ValueRef,
-        query: &mut CallableQuery<'q>,
-    ) -> bool {
-        ctx.op_attrs(self.op_ref())
-            .get_symbol_ref("func_ref")
-            .is_some_and(|symbol| query.names_verified_function(ctx, self.op_ref(), symbol))
-    }
-}
-
-impl CallableResultOrigin for tribute_cps::CallIndirect {
-    fn result_is_callable_origin<'q>(
-        &self,
-        ctx: &IrContext,
-        _result: ValueRef,
-        query: &mut CallableQuery<'q>,
-    ) -> bool {
-        ctx.op_operands(self.op_ref())
-            .first()
-            .is_some_and(|&callee| query.accepts(ctx, callee))
     }
 }
 

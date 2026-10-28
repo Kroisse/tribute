@@ -33,6 +33,7 @@ use trunk_ir::{IrContext, Symbol, SymbolPath};
 mod callable_origin;
 mod row;
 
+pub(crate) use callable_origin::is_signature_parameter;
 use callable_origin::validate_callable_origins;
 pub use callable_origin::{CallableArgumentOrigin, CallableQuery, CallableResultOrigin};
 
