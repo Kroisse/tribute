@@ -36,7 +36,7 @@ pub fn parse_and_lower_ast(
     db: &dyn salsa::Database,
     source: SourceCst,
 ) -> Option<ast_typeck::TypeCheckOutput<'_>> {
-    *analysis::analyze(db, source, *crate::prelude::frontend_environment(db))
+    analysis::analyze(db, source, *crate::prelude::frontend_environment(db)).copied()
 }
 
 /// The diagnostics [`parse_and_lower_ast`] reports for `source`.
@@ -121,7 +121,7 @@ fn prepare_frontend_details<'db>(
     // the user's bodies; the result has std's bodies and per-expression
     // metadata ahead of the user's.
     let prelude = match crate::prelude::prelude_module(db) {
-        Some(_) => Some(crate::prelude::specialized_prelude(db).as_ref()?),
+        Some(_) => Some(crate::prelude::specialized_prelude(db)?),
         None => None,
     };
     let names = diagnostic_names(db);

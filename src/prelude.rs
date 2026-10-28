@@ -74,7 +74,7 @@ pub fn frontend_environment(db: &dyn salsa::Database) -> analysis::DependencyTab
 ///
 /// Returns `None` without a prelude, or after reporting why `std` does not
 /// specialize.
-#[salsa::tracked]
+#[salsa::tracked(returns(as_ref))]
 pub(crate) fn specialized_prelude<'db>(
     db: &'db dyn salsa::Database,
 ) -> Option<SpecializedPrelude<'db>> {

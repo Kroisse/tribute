@@ -48,7 +48,7 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
 
     let span_map = parsed.unwrap().span_map(db);
 
-    let checked = analysis::analyze(db, source, *environment(db)).expect("the source parses");
+    let checked = *analysis::analyze(db, source, *environment(db)).expect("the source parses");
     // Specialization looks package std's declarations up but specializes only
     // the module under test, so its output holds no prelude bodies.
     let prelude = analysis::checked_package(db, *std_package(db)).expect("the prelude parses");
@@ -97,7 +97,7 @@ pub fn tdnr_function_summary(
     function_name: &str,
 ) -> TdnrSummary {
     let checked =
-        analysis::analyze(db, source, *environment(db)).expect("Should parse successfully");
+        *analysis::analyze(db, source, *environment(db)).expect("Should parse successfully");
     let body = function_body(checked.module(db), function_name);
     let mut summary = TdnrSummary::default();
     collect_tdnr_summary(db, body, &mut summary);

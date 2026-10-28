@@ -151,7 +151,7 @@ fn specialized_with_library<'db>(
     std: Package,
     lib: Package,
 ) -> SpecializationOutput<'db> {
-    let checked = analysis::analyze(db, app, environment).expect("app parses");
+    let checked = *analysis::analyze(db, app, environment).expect("app parses");
     let std_checked = analysis::checked_package(db, std)
         .expect("std checks")
         .checked;

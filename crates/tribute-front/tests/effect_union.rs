@@ -5,7 +5,7 @@ use tribute_front::analysis;
 use tribute_front::{SourceCst, ast::TypeKind, typeck::TypeCheckOutput};
 
 fn checked(db: &dyn salsa::Database, source: SourceCst) -> TypeCheckOutput<'_> {
-    analysis::analyze(db, source, *analysis::builtins(db)).unwrap()
+    *analysis::analyze(db, source, *analysis::builtins(db)).unwrap()
 }
 
 fn diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<&Diagnostic> {

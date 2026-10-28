@@ -168,7 +168,7 @@ pub fn type_check_output<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Option<TypeCheckOutput<'db>> {
-    *crate::analysis::analyze(db, source, *crate::analysis::builtins(db))
+    crate::analysis::analyze(db, source, *crate::analysis::builtins(db)).copied()
 }
 
 /// Get function type schemes from type checking.

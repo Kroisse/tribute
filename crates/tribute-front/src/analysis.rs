@@ -59,7 +59,7 @@ pub fn parsed_package(db: &dyn salsa::Database, package: Package) -> Option<Pars
 /// The environment of `package`, built from its declarations and its
 /// dependency table. `None` if its root does not parse or it depends on
 /// itself.
-#[salsa::tracked]
+#[salsa::tracked(returns(as_ref))]
 pub fn package_env<'db>(db: &'db dyn salsa::Database, package: Package) -> Option<PackageEnv<'db>> {
     if depends_on_itself(db, package) {
         Diagnostic::new(
@@ -85,12 +85,12 @@ pub fn package_env<'db>(db: &'db dyn salsa::Database, package: Package) -> Optio
 
 /// Resolve and type check `package` once, against the packages it depends
 /// on.
-#[salsa::tracked]
+#[salsa::tracked(returns(as_ref))]
 pub fn checked_package<'db>(
     db: &'db dyn salsa::Database,
     package: Package,
 ) -> Option<CheckedPackage<'db>> {
-    let env = package_env(db, package).as_ref()?;
+    let env = package_env(db, package)?;
     let parsed = parsed_package(db, package)?;
     let span_map = parsed.span_map(db);
     let table = *package.dependencies(db);
@@ -126,10 +126,7 @@ pub fn builtins(db: &dyn salsa::Database) -> DependencyTable {
 /// The packages of `table` with their environments, for name resolution.
 pub fn dependencies(db: &dyn salsa::Database, table: DependencyTable) -> Dependencies<'_> {
     Dependencies::new(table.packages(db).iter().filter_map(|&package| {
-        Some((
-            package_name(db, package).clone(),
-            package_env(db, package).as_ref()?,
-        ))
+        Some((package_name(db, package).clone(), package_env(db, package)?))
     }))
 }
 
@@ -224,7 +221,7 @@ pub fn root_names(db: &dyn salsa::Database, table: DependencyTable) -> NameDispl
 /// accumulated diagnostics, and the result is returned with them. The result
 /// holds only `source`'s declarations; its dependencies' are read through
 /// the dependency table.
-#[salsa::tracked]
+#[salsa::tracked(returns(as_ref))]
 pub fn analyze<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
