@@ -78,9 +78,10 @@ fn adding_a_function_reruns_what_depends_on_the_names() {
         .assert_reuse(&baseline, &["func_names", "function_count"], &[]);
 }
 
-/// Name resolution reads the span map to report its diagnostics, so moving
-/// code reruns it although no name changed. Positions relative to their item
-/// would let it be reused; this test then expects `resolved_module` not to run.
+/// Name resolution reads the span map to report its diagnostics, and the span
+/// map reads the item layout, so moving code reruns it although no name
+/// changed. Once resolution reports diagnostics by `NodeId`, this test
+/// expects `resolved_module` not to run.
 #[test]
 fn moving_code_reruns_name_resolution() {
     let (mut db, source, baseline) = computed();
