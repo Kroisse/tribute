@@ -530,6 +530,16 @@ mod tests {
             &mut Default::default(),
         )
         .unwrap();
+        // The lambdas name their adapters, and the text round trips.
+        let printed = trunk_ir::printer::print_module(&ctx, module.op());
+        assert!(printed.contains("adapters = {"), "{printed}");
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, &printed);
+        assert_eq!(trunk_ir::printer::print_module(&ctx, module.op()), printed);
+        // Frame expansion lowers the exits of the `Cps` adapters.
+        crate::lower_continuation_frames::lower_continuation_frames(&mut ctx, module).unwrap();
+        let expanded = trunk_ir::printer::print_module(&ctx, module.op());
+        assert!(!expanded.contains("ability.exit"), "{expanded}");
         lower_closure_lambda(&mut ctx, module);
         let tables = tables(&ctx, module);
         let [first, second, third] = &tables[..] else {
