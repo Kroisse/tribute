@@ -2152,6 +2152,33 @@ mod tests {
         assert_eq!(prepared, None);
     }
 
+    /// A struct that a file module names only in a type annotation is not
+    /// renamable from the root document.
+    #[test]
+    fn a_struct_annotated_in_a_file_module_is_not_renamable() {
+        let dir = tempfile::tempdir().expect("temporary package directory");
+        std::fs::write(
+            dir.path().join("util.trb"),
+            "pub fn consume(p: pkg::Point) -> Nil { }\n",
+        )
+        .expect("write util.trb");
+        let root = dir.path().join("main.trb");
+        let uri: Uri = format!("file://{}", root.display()).parse().unwrap();
+        let source = "mod util\n\npub struct Point { x: Int }\n\nfn main() -> Nil { }\n";
+
+        let mut harness = TestHarness::new();
+        let published = harness.open_document_with_diagnostics(&uri, source);
+        assert_eq!(published.diagnostics, Vec::new());
+        let mut prepare = |line, character| {
+            harness.request::<PrepareRenameRequest>(TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+                position: lsp_types::Position { line, character },
+            })
+        };
+        assert_eq!(prepare(2, 12), None, "`Point`");
+        assert!(prepare(4, 4).is_some(), "`main`");
+    }
+
     /// A file module open in the editor is the source input its package
     /// reads: opening, editing, and closing it republishes the diagnostics of
     /// an open root of that package.

@@ -17,6 +17,7 @@ use tribute_front::ast::{
     LocalId, NodeId, ParamDecl, Pattern, PatternKind, ResolvedRef, SpanMap, StructDecl, TypedRef,
 };
 use tribute_front::query as ast_query;
+use tribute_front::source_tree::source_tree_of;
 
 // =============================================================================
 // Definition Index
@@ -156,6 +157,7 @@ impl<'db> AstDefinitionIndex<'db> {
         db: &'db dyn salsa::Database,
         module: &DeclTable<TypedRef<'db>>,
         span_map: SpanMap<'_>,
+        foreign_type_names: BTreeSet<Symbol>,
     ) -> Self {
         let mut collector = DefinitionCollector::new(db, span_map);
         walk_decl_table(&mut collector, module);
@@ -163,6 +165,7 @@ impl<'db> AstDefinitionIndex<'db> {
         let mut definitions = collector.definitions;
         let mut references = collector.references;
         let mut foreign_names = collector.foreign_names;
+        foreign_names.extend(foreign_type_names);
         // A constructor names its variant, not its enum, but a qualified
         // path to it spells the enum too.
         for def in &definitions {
@@ -833,7 +836,39 @@ pub fn definition_index<'db>(
     let module = tribute::parse_and_lower_ast(db, source)?.module(db);
     let span_map = ast_query::span_map(db, source)?;
 
-    Some(AstDefinitionIndex::build(db, module, span_map))
+    Some(AstDefinitionIndex::build(
+        db,
+        module,
+        span_map,
+        foreign_type_names(db, source),
+    ))
+}
+
+/// The type names that the other files of `source`'s package spell. Type
+/// annotations carry no resolved reference, so these are read from each
+/// file's syntax tree: a type an annotation names is not renamable from
+/// `source`, whose rename edits only `source`.
+fn foreign_type_names(db: &dyn salsa::Database, source: SourceCst) -> BTreeSet<Symbol> {
+    let mut names = BTreeSet::new();
+    let Some(tree) = source_tree_of(db, source) else {
+        return names;
+    };
+    for file in &tree.files()[1..] {
+        let Some(cst) = ast_query::parse_cst(db, file.source) else {
+            continue;
+        };
+        let text = file.source.text(db);
+        let mut cursor = cst.root_node().walk();
+        let mut stack = vec![cst.root_node()];
+        while let Some(node) = stack.pop() {
+            if node.kind() == "type_identifier" {
+                let name = text.byte_slice(node.start_byte()..node.end_byte());
+                names.insert(Symbol::new(&name.to_string()));
+            }
+            stack.extend(node.children(&mut cursor));
+        }
+    }
+    names
 }
 
 // =============================================================================
