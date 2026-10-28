@@ -116,7 +116,7 @@ impl Converter<'_> {
                             PRE_CPS_BOUNDARY,
                             Some(source_op),
                             Some(self.ctx.op(source_op).location),
-                            "only tribute_control.func may appear directly in a module block",
+                            "only tribute_cps.func may appear directly in a module block",
                         ));
                     } else {
                         self.clone_plain_op(source_op, &mut mapping)?
