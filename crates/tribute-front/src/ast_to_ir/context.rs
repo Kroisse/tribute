@@ -650,11 +650,6 @@ mod tests {
                 .expect("logical function type must be a control callable");
         assert_eq!(signature.result(&ir), i32_ty);
         assert_eq!(signature.inputs(&ir), &[i32_ty]);
-        assert_eq!(
-            tribute_ir::dialect::tribute_control::func_sig_convention(&ir, logical_callable),
-            None,
-            "class specialization assigns conventions"
-        );
 
         let never = AstType::new(&db, TypeKind::Never);
         assert_eq!(

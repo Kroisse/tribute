@@ -15,9 +15,8 @@ use super::{
     COMPILER_INTRINSIC_ATTR, Call, CallIndirect, CallingConvention, CompilerIntrinsicDeclaration,
     Func, FuncRef, FuncSig, Handle, Handler, Instantiate, Lambda, OperationDeclaration,
     OperationDeclarationUse, Perform, Resume, ValidationError, Yield, compiler_intrinsic_map,
-    contains_adt_typeref, convention_at, func_sig_parts, is_call_indirect, is_func,
-    is_tail_call_indirect, nominal_identity, parent_region, push_op_error, push_type_error,
-    walk_region_ops,
+    contains_adt_typeref, func_sig_parts, is_call_indirect, is_func, is_tail_call_indirect,
+    nominal_identity, parent_region, push_op_error, push_type_error, walk_region_ops,
 };
 use crate::dialect::{adt, list, tribute_cps};
 
@@ -260,7 +259,7 @@ fn is_signature_parameter(
     ctx.op_regions(op).eq([region])
         && signature
             .and_then(|ty| func_sig_parts(ctx, ty))
-            .is_some_and(|(_, parameters, _)| {
+            .is_some_and(|(_, parameters)| {
                 parameters.get(index as usize) == Some(&ctx.value_ty(argument))
             })
 }
@@ -679,7 +678,7 @@ pub(super) fn validate_callable_origins(
             if bodyless {
                 let exact_intrinsic = match (registered.get(&symbol), intrinsic_identity) {
                     (Some(expected), Some(actual)) if expected.identity == actual => {
-                        if convention_at(ctx, op, func_sig_type)
+                        if tribute_cps::declared_convention(ctx, op)
                             .is_some_and(|convention| convention != CallingConvention::Direct)
                         {
                             push_op_error(

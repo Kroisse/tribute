@@ -1,5 +1,5 @@
 use trunk_ir::op_def::OpDef;
-use trunk_ir::ops::{DialectOp, DialectType};
+use trunk_ir::ops::DialectOp;
 use trunk_ir::parser::parse_module;
 use trunk_ir::printer::print_module;
 
@@ -47,8 +47,6 @@ fn concise_forms_write_the_operation_convention() {
     );
     let outer = Func::from_op(&ctx, ops[2]).unwrap();
     assert_eq!(outer.convention(&ctx), CallingConvention::Cps);
-    let signature = tribute_control::FuncSig::from_type_ref(&ctx, outer.r#type(&ctx)).unwrap();
-    assert_eq!(signature.assigned_convention(&ctx), None);
     let body = ctx.region(outer.body(&ctx)).blocks[0];
     let lambda = Lambda::from_op(&ctx, ctx.block(body).ops[0]).unwrap();
     assert_eq!(lambda.convention(&ctx), CallingConvention::Cps);

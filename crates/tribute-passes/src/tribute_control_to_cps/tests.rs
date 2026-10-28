@@ -30,7 +30,6 @@ fn shared_function_conversion_preserves_lists_and_nested_attributes() {
     let block = ctx.region(module.body(&ctx).unwrap()).blocks[0];
     let i32_ty = trunk_ir::types::TypeDataBuilder::new("core.i32").intern(&mut ctx);
     let source_callable = tribute_control::FuncSig::params([i32_ty], i32_ty)
-        .convention(CallingConvention::Direct)
         .intern(&mut ctx)
         .as_type_ref();
     for results in [vec![], vec![source_callable]] {
