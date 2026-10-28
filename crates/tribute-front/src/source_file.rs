@@ -315,6 +315,12 @@ mod tests {
     use super::*;
 
     #[test]
+    fn file_provider_debug_shows_its_entry_count() {
+        let provider = FileProvider::in_memory();
+        assert_eq!(format!("{provider:?}"), "FileProvider { entries: 0, .. }");
+    }
+
+    #[test]
     fn path_to_uri_percent_encodes_and_uri_to_path_decodes() {
         let path = Path::new("/my pkg/100%/main.trb");
         let uri = path_to_uri(path);

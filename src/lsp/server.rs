@@ -1945,6 +1945,27 @@ mod tests {
         }
     }
 
+    /// A diagnostic's labels in the document become related information.
+    #[test]
+    fn diagnostic_labels_become_related_information() {
+        let uri = test_uri("duplicate_definition");
+        let source = "fn f() -> Nat { 1 }\n\nfn f() -> Nat { 2 }\n\nfn main() -> Nil { }\n";
+
+        let mut harness = TestHarness::new();
+        let published = harness.open_document_with_diagnostics(&uri, source);
+        let [diagnostic] = &published.diagnostics[..] else {
+            panic!("one diagnostic: {:?}", published.diagnostics);
+        };
+        assert_eq!(diagnostic.range.start.line, 2);
+        let related: Vec<_> = diagnostic
+            .related_information
+            .iter()
+            .flatten()
+            .map(|info| (info.location.uri == uri, info.location.range.start.line))
+            .collect();
+        assert_eq!(related, [(true, 0)]);
+    }
+
     /// An open document is the root of its package: its file modules are
     /// read from disk, and nothing located in their files lands in it.
     #[test]
