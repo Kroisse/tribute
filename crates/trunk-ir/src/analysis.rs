@@ -1,9 +1,15 @@
 //! Analysis framework for TrunkIR passes.
 //!
 //! [`AnalysisCache`] provides lazy, cached analyses keyed by `(TypeId, OpRef)`.
-//! Each lookup compares the context identity and IR revision, discarding all
-//! cached results after any observable IR change. Explicit invalidation
-//! remains available for precise removal when the revision is unchanged.
+//! While an analysis computes, [`IrContext`] records the entities it reads,
+//! and the result is stamped with the outermost `IsolatedFromAbove` anchors
+//! those reads belong to. A lookup reuses a result while no mutation has
+//! touched those anchors and no unclassified mutation has happened; a result
+//! that read anything without an anchor chain follows the whole-context
+//! revision. Prerequisites are checked by result version, and a recomputed
+//! prerequisite keeps its version when [`Analysis::same_as`] holds. Explicit
+//! invalidation remains available for precise removal. The contract is
+//! `new-plans/ir.md`, section "분석 질의와 편집 계약".
 //!
 //! A lookup either returns a complete cached result or an [`AnalysisError`].
 //! Analysis errors describe invalid input IR or an unsupported analysis
@@ -38,9 +44,10 @@
 //! }
 //! ```
 //!
-//! Since the cache discards its results after any IR change, sharing it is
-//! always safe; it saves work where consumers read unchanged IR back to
-//! back, such as the checks at a phase boundary. The [`AnalysisCache::scope`]
+//! Since a result is reused only while nothing it read has changed, sharing
+//! the cache is always safe; it saves work where consumers read unchanged IR
+//! back to back, such as the checks at a phase boundary, and where a mutation
+//! leaves the anchors a result read untouched. The [`AnalysisCache::scope`]
 //! helper bundles a cache with a closure for a self-contained phase.
 //!
 //! # Usage

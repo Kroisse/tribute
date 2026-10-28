@@ -18,7 +18,7 @@ use crate::walk::{WalkAction, walk_op};
 /// analysis failure or proof that execution returns. Target acceptance and
 /// conversion diagnostics belong to consumers, not this analysis.
 ///
-/// Cache lookups recompute this analysis after the IR changes. A lowering may
+/// Cache lookups recompute this analysis after the IR it read changes. A lowering may
 /// retain decisions derived from it for the original operations, but must not
 /// use those decisions as facts about the rewritten IR.
 #[derive(Default)]

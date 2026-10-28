@@ -44,7 +44,7 @@ use crate::walk::{WalkAction, walk_op};
 /// duration of a [`PassManager::run`] call.
 ///
 /// Every pass of one run receives the same [`AnalysisCache`]. The cache
-/// discards its results whenever the IR changes, so a pass may query
+/// stops returning a result once the IR it read changes, so a pass may query
 /// analyses without invalidating them itself.
 pub trait Pass {
     /// Op type this pass operates on.
