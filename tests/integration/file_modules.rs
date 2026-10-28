@@ -221,3 +221,48 @@ fn the_cli_compiles_and_runs_a_file_module_package() {
         "Testing file-based modules:\nBasic math:\n15\n5\nAdvanced math:\n256\nUtilities:\nhahaha\nFile-based modules work!\n"
     );
 }
+
+/// `tribute compile` prints a diagnostic in a file module against that file.
+#[test]
+fn the_cli_reports_file_module_errors_against_their_file() {
+    let package = tempfile::tempdir().expect("temporary package directory");
+    let root = package.path().join("main.trb");
+    std::fs::write(&root, "mod util\n\nfn main() -> Nil { }\n").expect("write main.trb");
+    std::fs::write(
+        package.path().join("util.trb"),
+        "pub fn run() -> Nat { missing }\n\npub fn run() -> Nat { 1 }\n",
+    )
+    .expect("write util.trb");
+    let compiled = Command::new(env!("CARGO_BIN_EXE_tribute"))
+        .args(["compile", "--target", "native"])
+        .arg(&root)
+        .arg("-o")
+        .arg(package.path().join("out"))
+        .output()
+        .expect("invoke tribute compile");
+    let stderr = String::from_utf8_lossy(&compiled.stderr);
+    assert!(!compiled.status.success(), "stderr: {stderr}");
+    assert!(
+        stderr.contains("unresolved name `missing`"),
+        "stderr: {stderr}"
+    );
+    assert!(stderr.contains("util.trb:1:"), "stderr: {stderr}");
+    assert!(stderr.contains("first defined here"), "stderr: {stderr}");
+}
+
+/// `tribute debug --show-env` builds the environment of the whole package.
+#[test]
+fn the_cli_debugs_a_file_module_package() {
+    let root = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/lang-examples/modules_file/main.trb"
+    );
+    let debugged = Command::new(env!("CARGO_BIN_EXE_tribute"))
+        .args(["debug", "--show-env", root])
+        .output()
+        .expect("invoke tribute debug");
+    let stdout = String::from_utf8_lossy(&debugged.stdout);
+    assert!(debugged.status.success(), "{debugged:?}");
+    assert!(stdout.contains("No errors"), "stdout: {stdout}");
+    assert!(stdout.contains("advanced"), "stdout: {stdout}");
+}
