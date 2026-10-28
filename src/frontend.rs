@@ -386,6 +386,52 @@ fn main() ->{Io} Nil {
         assert!(assert_packages_merge_like_bodies(db, "packaged.trb", source) > 0);
     }
 
+    /// A type spelled unqualified inside its module and qualified outside it
+    /// is one type argument: it gives one nominal instance and one
+    /// specialized declaration.
+    #[salsa_test]
+    fn a_type_spelled_two_ways_is_one_instance(db: &crate::TributeDatabaseImpl) {
+        let source = SourceCst::from_source_str(
+            db,
+            "spelled.trb",
+            r#"
+mod shapes {
+    pub struct Thing { n: Nat }
+    pub struct Wrap(a) { value: a }
+    pub fn wrap(thing: Thing) -> Wrap(Thing) { Wrap { value: thing } }
+    pub fn count(wrapped: Wrap(Thing)) -> Nat { wrapped.value.n }
+}
+
+fn unwrap(wrapped: shapes::Wrap(shapes::Thing)) -> Nat { shapes::count(wrapped) }
+
+fn run() -> Nat { unwrap(shapes::wrap(shapes::Thing { n: 1 })) }
+"#,
+        );
+        assert!(
+            frontend_diagnostics(db, source).is_empty(),
+            "{:?}",
+            frontend_diagnostics(db, source)
+        );
+        let specialized = merged_specialization(db, source).expect("the program specializes");
+        let instances: Vec<_> = specialized
+            .nominal_instances(db)
+            .iter()
+            .map(|instance| instance.path.to_string())
+            .filter(|path| path.contains("Wrap"))
+            .collect();
+        assert_eq!(instances, ["pkg::shapes::Wrap$pkg::shapes::Thing"]);
+        let declarations = specialized
+            .module(db)
+            .entries
+            .iter()
+            .filter(|entry| match &entry.decl {
+                tribute_front::ast::Decl::Struct(decl) => decl.name.as_str().contains("Wrap$"),
+                _ => false,
+            })
+            .count();
+        assert_eq!(declarations, 1);
+    }
+
     #[salsa_test]
     fn per_package_specialization_matches_merging_on_examples(db: &crate::TributeDatabaseImpl) {
         fn examples(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
