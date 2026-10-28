@@ -329,9 +329,11 @@ mod tests {
             packaged.function_instances(db),
             "{name}: function instances"
         );
+        // Instances are sorted by path, and those that share one stay in
+        // hash order.
         assert_eq!(
-            merged.nominal_instances(db),
-            packaged.nominal_instances(db),
+            counts(merged.nominal_instances(db)),
+            counts(packaged.nominal_instances(db)),
             "{name}: nominal instances"
         );
         let prelude = *monomorphize::specialized_package(db, *crate::prelude::std_package(db))

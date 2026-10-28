@@ -1,6 +1,5 @@
 //! CST to AST lowering for declarations.
 
-use rustc_hash::FxHashMap as HashMap;
 use tree_sitter::Node;
 use trunk_ir::Symbol;
 
@@ -10,27 +9,12 @@ use crate::ast::{
     UnresolvedName, UseDecl, VariantDecl, Visibility,
 };
 
-use super::context::AstLoweringCtx;
+use super::context::{AstLoweringCtx, LoweredItem};
 use super::expressions::lower_expr;
 use super::helpers::is_comment;
 
-/// Number the type declarations of a module that share a name, in order, so
-/// that each has its own identity even when the module redeclares the name.
-fn assign_type_disambiguators(items: &mut [ModuleItem<UnresolvedName>]) {
-    let mut seen: HashMap<Symbol, u32> = HashMap::default();
-    for item in items {
-        let (name, disambiguator) = match item {
-            ModuleItem::Decl(Decl::Struct(decl)) => (&decl.name, &mut decl.disambiguator),
-            ModuleItem::Decl(Decl::Enum(decl)) => (&decl.name, &mut decl.disambiguator),
-            _ => continue,
-        };
-        let count = seen.entry(name.clone()).or_default();
-        *disambiguator = *count;
-        *count += 1;
-    }
-}
-
-/// Lower a CST source file to an AST Module.
+/// Lower a CST source file to its root `Module`, without declarations, and
+/// its items.
 ///
 /// The `module_name` parameter is the name derived from the source file path.
 /// If `None`, a later phase (or the IR lowering) can assign a default.
@@ -38,10 +22,9 @@ pub fn lower_module(
     ctx: &mut AstLoweringCtx<'_>,
     root: Node,
     module_name: Option<Symbol>,
-) -> Module<UnresolvedName> {
+) -> (Module<UnresolvedName>, Vec<LoweredItem>) {
     let id = ctx.module_id_with_span(&root);
-    let name = module_name;
-    let mut decls = Vec::new();
+    let mut items = Vec::new();
 
     let mut cursor = root.walk();
     for child in root.named_children(&mut cursor) {
@@ -54,40 +37,67 @@ pub fn lower_module(
             continue;
         }
 
-        decls.extend(lower_decl(ctx, child));
+        items.push(lower_decl(ctx, child));
     }
-    assign_type_disambiguators(&mut decls);
 
-    Module { id, name, decls }
+    let module = Module {
+        id,
+        name: module_name,
+        decls: Vec::new(),
+    };
+    (module, items)
 }
 
-/// Lower a CST declaration node to module items.
-/// Returns a Vec because use declarations can expand to multiple items.
-fn lower_decl(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<ModuleItem<UnresolvedName>> {
-    if let Some((kind, name)) = item_key(ctx, node) {
-        return ctx.in_item(kind, &name, node.start_byte(), |ctx| lower_item(ctx, node));
-    }
-    lower_item(ctx, node)
+/// The declarations of `items`, with each inline module's body filled from
+/// its items.
+pub fn assemble_decls(items: &[LoweredItem]) -> Vec<ModuleItem<UnresolvedName>> {
+    items
+        .iter()
+        .flat_map(|item| {
+            item.decls.iter().cloned().map(|mut decl| {
+                if let ModuleItem::Module(module) = &mut decl
+                    && let Some(body) = &mut module.body
+                {
+                    *body = assemble_decls(&item.children);
+                }
+                decl
+            })
+        })
+        .collect()
+}
+
+/// Lower a CST declaration node to the item that owns its nodes. A `use`
+/// declaration lowers to several declarations.
+fn lower_decl(ctx: &mut AstLoweringCtx<'_>, node: Node) -> LoweredItem {
+    let (kind, name) = item_key(ctx, node);
+    ctx.in_item(kind, &name, node.start_byte(), |ctx| lower_item(ctx, node))
 }
 
 /// The kind and name that identify the item `node` declares, which owns the
-/// nodes inside it. A `use` declaration is named by its text. The nodes of an
-/// inline module's body belong to the items in it, so its module owns no
-/// node but the root's `Module`.
-fn item_key(ctx: &AstLoweringCtx<'_>, node: Node) -> Option<(&'static str, String)> {
+/// nodes inside it. A `use` declaration is named by its text, and a
+/// declaration without a name by the empty name. Every declaration is an
+/// item, so a module owns no node but the root's `Module`.
+fn item_key(ctx: &AstLoweringCtx<'_>, node: Node) -> (&'static str, String) {
     let (kind, declaration) = match node.kind() {
-        "function_definition" => ("fn", node.named_child(0)?),
-        "struct_declaration" | "enum_declaration" => ("type", node),
-        "ability_declaration" => ("ability", node),
-        "mod_declaration" => ("mod", node),
-        "use_declaration" => return Some(("use", ctx.node_text_owned(&node))),
-        _ => return None,
+        "function_definition" => ("fn", node.named_child(0)),
+        "struct_declaration" | "enum_declaration" => ("type", Some(node)),
+        "ability_declaration" => ("ability", Some(node)),
+        "mod_declaration" => ("mod", Some(node)),
+        "use_declaration" => return ("use", ctx.node_text_owned(&node)),
+        _ => ("decl", None),
     };
-    let name = declaration.child_by_field_name("name")?;
-    Some((kind, ctx.node_text_owned(&name)))
+    let name = declaration
+        .and_then(|declaration| declaration.child_by_field_name("name"))
+        .map(|name| ctx.node_text_owned(&name))
+        .unwrap_or_default();
+    (kind, name)
 }
 
-fn lower_item(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<ModuleItem<UnresolvedName>> {
+/// Lower an item's declarations, and the items of an inline module's body.
+fn lower_item(
+    ctx: &mut AstLoweringCtx<'_>,
+    node: Node,
+) -> (Vec<ModuleItem<UnresolvedName>>, Vec<LoweredItem>) {
     let decls: Vec<Decl<UnresolvedName>> = match node.kind() {
         "function_definition" => lower_function(ctx, node).into_iter().collect(),
         "struct_declaration" => lower_struct(ctx, node)
@@ -100,15 +110,18 @@ fn lower_item(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<ModuleItem<Unreso
             .into_iter()
             .collect(),
         "mod_declaration" => {
-            return lower_mod(ctx, node)
-                .map(ModuleItem::Module)
-                .into_iter()
-                .collect();
+            let Some((module, children)) = lower_mod(ctx, node) else {
+                return (Vec::new(), Vec::new());
+            };
+            return (vec![ModuleItem::Module(module)], children);
         }
         "use_declaration" => lower_use(ctx, node).into_iter().map(Decl::Use).collect(),
         _ => Vec::new(),
     };
-    decls.into_iter().map(ModuleItem::Decl).collect()
+    (
+        decls.into_iter().map(ModuleItem::Decl).collect(),
+        Vec::new(),
+    )
 }
 
 /// Lower a function definition.
@@ -534,7 +547,7 @@ fn lower_struct(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<StructDecl> 
         id,
         visibility: lower_visibility(ctx, node),
         name,
-        disambiguator: 0,
+        disambiguator: ctx.occurrence(),
         type_params,
         fields,
     })
@@ -611,7 +624,7 @@ fn lower_enum(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<EnumDecl> {
         id,
         visibility: lower_visibility(ctx, node),
         name,
-        disambiguator: 0,
+        disambiguator: ctx.occurrence(),
         type_params,
         variants,
     })
@@ -881,36 +894,42 @@ fn expand_use_tree(
     results
 }
 
-/// Lower a module declaration.
-fn lower_mod(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<ModuleDecl<UnresolvedName>> {
+/// Lower a module declaration, with an inline module's body empty, and the
+/// items of its body.
+fn lower_mod(
+    ctx: &mut AstLoweringCtx<'_>,
+    node: Node,
+) -> Option<(ModuleDecl<UnresolvedName>, Vec<LoweredItem>)> {
     let name_node = node.child_by_field_name("name")?;
 
-    let id = ctx.fresh_id_with_span(&node);
+    // The declaration's span is its header, which ends at its name, so that
+    // its items' edits leave it unchanged.
+    let id = ctx.fresh_id_with_range(node.start_byte(), name_node.end_byte());
     let name = ctx.node_symbol(&name_node);
     let visibility = lower_visibility(ctx, node);
 
     // An external (file-based) module has no inline body.
+    let mut children = Vec::new();
     let body = node.child_by_field_name("body").map(|body_node| {
         ctx.in_module(name.clone(), |ctx| {
-            let mut decls = Vec::new();
             let mut cursor = body_node.walk();
             for child in body_node.named_children(&mut cursor) {
                 if is_comment(child.kind()) {
                     continue;
                 }
-                decls.extend(lower_decl(ctx, child));
+                children.push(lower_decl(ctx, child));
             }
-            assign_type_disambiguators(&mut decls);
-            decls
-        })
+        });
+        Vec::new()
     });
 
-    Some(ModuleDecl {
+    let module = ModuleDecl {
         id,
         name,
         visibility,
         body,
-    })
+    };
+    Some((module, children))
 }
 
 /// The visibility a declaration's `visibility_marker` child gives it.

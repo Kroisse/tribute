@@ -18,11 +18,12 @@ use crate::source_tree::SourceTree;
 /// Builder for constructing a SpanMap during AST lowering.
 ///
 /// This is used during CST → AST conversion to collect spans for each node.
-/// Set an item's start before inserting its nodes; after lowering is
-/// complete, call `finish()` for the parts a `SpanMap` reads.
+/// Set an item's start before inserting its nodes, and take its spans once
+/// its nodes are lowered; after lowering is complete, call `finish()` for the
+/// layout and any spans not taken.
 #[derive(Debug, Default)]
 pub struct SpanMapBuilder {
-    spans: HashMap<NodeId, Span>,
+    spans: HashMap<u64, ItemSpans>,
     layout: ItemLayout,
 }
 
@@ -53,12 +54,21 @@ impl SpanMapBuilder {
             end: span.end - start,
             ..span
         };
-        self.spans.insert(id, relative);
+        self.spans
+            .entry(id.owner())
+            .or_default()
+            .0
+            .insert(id, relative);
     }
 
-    /// The relative spans of item nodes and the layout of the items.
+    /// Take the relative spans of the nodes `owner` owns.
+    pub fn take(&mut self, owner: u64) -> ItemSpans {
+        self.spans.remove(&owner).unwrap_or_default()
+    }
+
+    /// The relative spans not taken and the layout of the items.
     pub fn finish(self) -> (ItemSpans, ItemLayout) {
-        (ItemSpans(self.spans), self.layout)
+        (self.spans.values().collect(), self.layout)
     }
 }
 
@@ -68,6 +78,19 @@ impl SpanMapBuilder {
 /// Moving an item without changing it leaves its nodes' entries equal.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ItemSpans(HashMap<NodeId, Span>);
+
+impl<'a> FromIterator<&'a ItemSpans> for ItemSpans {
+    /// The spans of several items' nodes in one map.
+    fn from_iter<I: IntoIterator<Item = &'a ItemSpans>>(parts: I) -> Self {
+        Self(
+            parts
+                .into_iter()
+                .flat_map(|part| part.0.iter())
+                .map(|(&id, &span)| (id, span))
+                .collect(),
+        )
+    }
+}
 
 /// Where each item of one parsed source starts, and the span of its root
 /// `Module`.

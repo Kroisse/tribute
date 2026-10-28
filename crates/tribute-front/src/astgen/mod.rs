@@ -19,13 +19,14 @@ mod numeric;
 mod patterns;
 mod text_literal;
 
-use crate::ast::{ItemLayout, ItemSpans, Module, SpanMap, UnresolvedName};
+use crate::ast::{ItemLayout, ItemSpans, Module, ModuleItem, SpanMap, UnresolvedName};
 use crate::query::ParsedCst;
 use crate::source_file::SourceCst;
 use ropey::Rope;
 
 pub use context::AstLoweringCtx;
-pub use declarations::lower_module;
+use context::LoweredItem;
+use declarations::{assemble_decls, lower_module};
 use diagnostics::{check_identifiers, collect_error_nodes};
 pub use expressions::lower_expr;
 pub use helpers::is_comment;
@@ -45,7 +46,7 @@ fn lower_cst_to_ast_internal(
     ctx: &mut AstLoweringCtx<'_>,
     cst: &ParsedCst,
     module_name: Option<trunk_ir::Symbol>,
-) -> Module<UnresolvedName> {
+) -> (Module<UnresolvedName>, Vec<LoweredItem>) {
     let root = cst.root_node();
 
     // Check for ERROR nodes anywhere in the CST
@@ -66,26 +67,32 @@ fn lower_cst_to_ast_internal(
 /// the [`SourceCst`] URI and preserves span information.
 pub fn lower_cst_to_ast(source: &Rope, cst: &ParsedCst) -> Module<UnresolvedName> {
     let mut ctx = AstLoweringCtx::new(source.clone(), 0);
-    lower_cst_to_ast_internal(&mut ctx, cst, None)
+    let (mut module, items) = lower_cst_to_ast_internal(&mut ctx, cst, None);
+    module.decls = assemble_decls(&items);
+    module
 }
 
 /// Salsa-tracked parsing result containing both Module and its spans.
 ///
-/// This allows both to be computed together and cached efficiently. Every
-/// reparse creates this struct again, so its fields are tracked: its identity
-/// then does not depend on their content, and a field equal to the previous
-/// revision's keeps that revision, so a query that reads only the module
-/// is not rerun when only positions moved. Spans are split the same way:
-/// moving items without changing them changes only `item_layout`.
+/// Every reparse creates this struct again, so its fields are tracked: its
+/// identity then does not depend on their content, and a field equal to the
+/// previous revision's keeps that revision. The module and its spans are
+/// assembled from `items`, so a reader of them reruns when any item changes;
+/// a reader of one `ParsedItem`'s fields reruns only when that item changes.
+/// Moving items without changing them changes only `item_layout`.
 #[salsa::tracked]
 pub struct ParsedAst<'db> {
     /// The parsed AST module with unresolved names.
     #[tracked]
     pub module: Module<UnresolvedName>,
+    /// The module's items in source order. Adding, removing or reordering
+    /// items changes this list; editing one item does not.
+    #[tracked]
+    pub items: Vec<ParsedItem<'db>>,
     /// Each item node's span relative to the start of its item.
     #[tracked]
     pub item_spans: ItemSpans,
-    /// Where each item starts, and the spans of nodes no item owns.
+    /// Where each item starts, and the span of the root `Module`.
     #[tracked]
     pub item_layout: ItemLayout,
 }
@@ -95,6 +102,40 @@ impl<'db> ParsedAst<'db> {
     /// `item_spans` and `item_layout`.
     pub fn span_map(self, db: &'db dyn salsa::Database) -> SpanMap<'db> {
         SpanMap::new(self.item_spans(db), self.item_layout(db))
+    }
+}
+
+/// One item of a parsed source: a `fn`, a type, an ability, a `mod` or a `use`
+/// declaration, identified by the owner key of its nodes' `NodeId`s.
+///
+/// Each parse creates every item again with the same identity, and an item
+/// whose declarations and relative spans are unchanged keeps its fields'
+/// revisions, wherever it moved.
+#[salsa::tracked]
+pub struct ParsedItem<'db> {
+    /// The owner key of the item's nodes.
+    pub owner: u64,
+    /// The item's declarations; a `use` declaration lowers to several. An
+    /// inline module's declaration has an empty body, whose items are
+    /// `children`.
+    #[tracked]
+    pub decls: Vec<ModuleItem<UnresolvedName>>,
+    /// The items of an inline module's body, in source order.
+    #[tracked]
+    pub children: Vec<ParsedItem<'db>>,
+    /// The item's nodes' spans relative to its start.
+    #[tracked]
+    pub spans: ItemSpans,
+}
+
+impl<'db> ParsedItem<'db> {
+    fn create(db: &'db dyn salsa::Database, item: LoweredItem) -> Self {
+        let children = item
+            .children
+            .into_iter()
+            .map(|child| Self::create(db, child))
+            .collect();
+        Self::new(db, item.owner, item.decls, children, item.spans)
     }
 }
 
@@ -128,10 +169,36 @@ pub fn lower_source_to_parsed_ast_with_module_path<'db>(
     let cst = parse_cst(db, source)?;
     let text = source.text(db);
     let sh = source_hash(source.uri(db).as_str());
-    let mut ctx = AstLoweringCtx::with_db(db, text.clone(), sh);
-    let module = lower_cst_to_ast_internal(&mut ctx, cst, module_path);
-    let (item_spans, item_layout) = ctx.finish().finish();
-    Some(ParsedAst::new(db, module, item_spans, item_layout))
+    let ctx = AstLoweringCtx::with_db(db, text.clone(), sh);
+    Some(parse(db, ctx, cst, module_path))
+}
+
+/// Lower `cst` with `ctx` into the parse of its items.
+fn parse<'db>(
+    db: &'db dyn salsa::Database,
+    mut ctx: AstLoweringCtx<'db>,
+    cst: &ParsedCst,
+    module_path: Option<trunk_ir::Symbol>,
+) -> ParsedAst<'db> {
+    let (mut module, items) = lower_cst_to_ast_internal(&mut ctx, cst, module_path);
+    let (untaken, item_layout) = ctx.finish().finish();
+    debug_assert_eq!(untaken, ItemSpans::default(), "every node is an item's");
+    module.decls = assemble_decls(&items);
+    let item_spans = all_spans(&items).chain([&untaken]).collect();
+    let items = items
+        .into_iter()
+        .map(|item| ParsedItem::create(db, item))
+        .collect();
+    ParsedAst::new(db, module, items, item_spans, item_layout)
+}
+
+/// The spans of `items` and the items in them.
+fn all_spans(items: &[LoweredItem]) -> Box<dyn Iterator<Item = &ItemSpans> + '_> {
+    Box::new(
+        items
+            .iter()
+            .flat_map(|item| std::iter::once(&item.spans).chain(all_spans(&item.children))),
+    )
 }
 
 /// Parse and lower the file of the file module at `path` in its package,
@@ -151,10 +218,8 @@ pub fn lower_file_module<'db>(
     let cst = parse_cst(db, source)?;
     let text = source.text(db);
     let sh = source_hash(source.uri(db).as_str());
-    let mut ctx = AstLoweringCtx::with_db(db, text.clone(), sh).in_file_module(path.to_vec());
-    let module = lower_cst_to_ast_internal(&mut ctx, cst, module_path);
-    let (item_spans, item_layout) = ctx.finish().finish();
-    Some(ParsedAst::new(db, module, item_spans, item_layout))
+    let ctx = AstLoweringCtx::with_db(db, text.clone(), sh).in_file_module(path.to_vec());
+    Some(parse(db, ctx, cst, module_path))
 }
 
 /// Derive a module name from a source file URI.

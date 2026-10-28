@@ -85,9 +85,16 @@ span relative to the start of the item that owns it (a `fn`, a type, an
 ability, a `mod` or a `use` declaration). `item_layout` holds where each item
 starts and the span of the root `Module`, which no item owns. Moving items
 without changing them changes only `item_layout`; since the root spans the
-whole source, so does any edit that changes the source's length. `SpanMap`
-borrows both and computes absolute spans, so a query that reads it still
-reruns when an item moves.
+whole source, so does any edit that changes the source's length. No node's
+span covers another item, so an inline `mod` declaration's span is its
+header. `SpanMap` borrows both and computes absolute spans, so a query that
+reads it still reruns when an item moves.
+
+The parse also hands out each item as a `ParsedItem` tracked struct,
+identified by its owner key, with its declarations, the items of an inline
+module's body, and its relative spans as tracked fields. A query that reads
+one item's fields reruns only when that item changes, while `module` and
+`item_spans` are assembled from every item.
 
 ## Creating a Source Input
 
