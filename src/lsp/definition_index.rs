@@ -152,7 +152,7 @@ impl<'db> AstDefinitionIndex<'db> {
     pub fn build(
         db: &'db dyn salsa::Database,
         module: &DeclTable<TypedRef<'db>>,
-        span_map: &SpanMap,
+        span_map: SpanMap<'_>,
     ) -> Self {
         let mut collector = DefinitionCollector::new(db, span_map);
         walk_decl_table(&mut collector, module);
@@ -471,7 +471,7 @@ impl<'db> AstDefinitionIndex<'db> {
 /// Collector for definitions and references.
 struct DefinitionCollector<'a, 'db> {
     db: &'db dyn salsa::Database,
-    span_map: &'a SpanMap,
+    span_map: SpanMap<'a>,
     definitions: Vec<AstDefinitionEntry>,
     references: Vec<AstReferenceEntry>,
     /// The module-level function being visited.
@@ -479,7 +479,7 @@ struct DefinitionCollector<'a, 'db> {
 }
 
 impl<'a, 'db> DefinitionCollector<'a, 'db> {
-    fn new(db: &'db dyn salsa::Database, span_map: &'a SpanMap) -> Self {
+    fn new(db: &'db dyn salsa::Database, span_map: SpanMap<'a>) -> Self {
         Self {
             db,
             span_map,

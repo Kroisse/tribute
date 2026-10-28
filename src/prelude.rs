@@ -140,7 +140,7 @@ pub(crate) struct SpecializedPrelude<'db> {
 
 /// The span map of the prelude's parse, which locates its nodes in a module
 /// merged with it.
-pub(crate) fn prelude_span_map(db: &dyn salsa::Database) -> Option<&SpanMap> {
+pub(crate) fn prelude_span_map(db: &dyn salsa::Database) -> Option<SpanMap<'_>> {
     analysis::parsed_package(db, *std_package(db)).map(|parsed| parsed.span_map(db))
 }
 

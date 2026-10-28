@@ -74,11 +74,20 @@ allocation, such as a pointer-hashed `Arc`, untracked: every run would then
 allocate a new struct, and everything that reads it would rerun.
 
 Derived data borrows what it is derived from instead of copying it into its
-own result. Source positions stay in the `SpanMap` of the parse that produced
-them: type checking and specialization results hold none, and a stage that
-needs the positions of several sources, such as lowering the module merged
-with package `std`, looks them up through `SpanMaps`, which borrows each
-source's map.
+own result. Source positions stay in the parse that produced them: type
+checking and specialization results hold none, and a stage that needs the
+positions of several sources, such as lowering the module merged with package
+`std`, looks them up through `SpanMaps`, which borrows each source's
+`SpanMap`.
+
+A parse keeps positions in two tracked fields. `item_spans` holds each node's
+span relative to the start of the item that owns it (a `fn`, a type, an
+ability, a `mod` or a `use` declaration). `item_layout` holds where each item
+starts and the span of the root `Module`, which no item owns. Moving items
+without changing them changes only `item_layout`; since the root spans the
+whole source, so does any edit that changes the source's length. `SpanMap`
+borrows both and computes absolute spans, so a query that reads it still
+reruns when an item moves.
 
 ## Creating a Source Input
 

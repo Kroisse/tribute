@@ -40,7 +40,7 @@ pub fn resolve_with_env<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<UnresolvedName>,
     scope: &Scope<'db>,
-    span_map: &'db SpanMap,
+    span_map: SpanMap<'db>,
 ) -> DeclTable<ResolvedRef<'db>> {
     let mut resolver = Resolver::new(db, scope.as_ref(), span_map);
     resolver.resolve_module(module)
@@ -390,7 +390,7 @@ pub fn resolve_library_with_env<'db>(
     module: &Module<UnresolvedName>,
     env: &PackageEnv<'db>,
     dependencies: &Dependencies<'db>,
-    span_map: &'db SpanMap,
+    span_map: SpanMap<'db>,
 ) -> DeclTable<ResolvedRef<'db>> {
     Resolver::new(db, ScopeRef::new(env, dependencies), span_map)
         .with_package(env.package().clone())

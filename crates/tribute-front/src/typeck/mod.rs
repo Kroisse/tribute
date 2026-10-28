@@ -503,7 +503,7 @@ pub struct PackageExports<'db> {
 pub fn typecheck_module<'db>(
     db: &'db dyn salsa::Database,
     module: &DeclTable<ResolvedRef<'db>>,
-    span_map: &'db SpanMap,
+    span_map: SpanMap<'db>,
     names: NameDisplay,
 ) -> TypeCheckOutput<'db> {
     let checker = TypeChecker::new(db, span_map, names);
