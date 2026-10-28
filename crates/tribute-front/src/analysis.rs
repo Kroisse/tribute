@@ -123,11 +123,19 @@ pub fn builtins(db: &dyn salsa::Database) -> DependencyTable {
     DependencyTable::new(db, vec![std])
 }
 
-/// The packages of `table` with their environments, for name resolution.
+/// The packages of `table` with their environments, for name resolution,
+/// and the environments of the packages they depend on, which a path
+/// through a re-export may continue in.
 pub fn dependencies(db: &dyn salsa::Database, table: DependencyTable) -> Dependencies<'_> {
-    Dependencies::new(table.packages(db).iter().filter_map(|&package| {
+    let direct = table.packages(db);
+    let indirect = transitive_packages(db, table)
+        .into_iter()
+        .filter(|package| !direct.contains(package))
+        .filter_map(|package| package_env(db, package));
+    Dependencies::new(direct.iter().filter_map(|&package| {
         Some((package_name(db, package).clone(), package_env(db, package)?))
     }))
+    .with_indirect(indirect)
 }
 
 /// Let `checker` read the exports of every package `table` depends on,

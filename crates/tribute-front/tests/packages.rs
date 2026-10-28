@@ -245,3 +245,49 @@ fn type_checking_reads_the_exports_of_indirect_dependencies() {
         .collect();
     assert_eq!(messages, Vec::<String>::new());
 }
+
+/// A path through a re-export continues in the package the re-export
+/// names: `outer` re-exports a module of `inner`, and `app`, whose table
+/// names only `outer`, reaches a function nested below it.
+#[test]
+fn a_path_continues_through_a_re_export_of_an_indirect_dependency() {
+    let db = LoggingDb::default();
+    let std = Package::new(
+        &db,
+        PackageName::std(),
+        db.source("prelude:///std/prelude", PRELUDE),
+        DependencyTable::new(&db, Vec::new()),
+    );
+    let inner = Package::new(
+        &db,
+        PackageName::library(Symbol::new("inner")),
+        db.source(
+            "inner:///inner.trb",
+            "pub mod a {\n    pub mod b {\n        pub fn f() -> Nat { 1 }\n    }\n}\n",
+        ),
+        DependencyTable::new(&db, vec![std]),
+    );
+    let outer = Package::new(
+        &db,
+        PackageName::library(Symbol::new("outer")),
+        db.source("outer:///outer.trb", "pub use inner::a\n"),
+        DependencyTable::new(&db, vec![inner, std]),
+    );
+    let environment = DependencyTable::new(&db, vec![outer, std]);
+    let messages = |text| -> Vec<String> {
+        let app = db.source("app.trb", text);
+        analysis::diagnostics(&db, app, environment)
+            .into_iter()
+            .map(|diagnostic| diagnostic.inner.message.clone())
+            .collect()
+    };
+    assert_eq!(
+        messages("fn run() -> Nat { outer::a::b::f() }\n"),
+        Vec::<String>::new()
+    );
+    // `app`'s table does not name `inner`, so `app` cannot name it.
+    assert_eq!(
+        messages("fn run() -> Nat { inner::a::b::f() }\n"),
+        ["unresolved name `inner::a::b::f`"]
+    );
+}
