@@ -998,7 +998,9 @@ representation/ABI 경계)의 실패는 source 진단이 아니라 compiler 내�
   남으므로 트리 query가 찾았으나 없던 경로는 그 query의 의존성이 되고, 나중에 그
   파일이 생기면 트리가 무효화된다. 경로별 입력은 지우지 않으며, 파일이 사라지면
   값을 없음으로 바꾼다. 한 경로에는 입력이 하나뿐이어야 하므로, 같은 경로의
-  편집기 버퍼와 디스크 파일은 같은 입력을 갱신한다.
+  편집기 버퍼와 디스크 파일은 같은 입력을 갱신한다. 경로는 `file:` URI로 쓰며,
+  URI path가 그대로 허용하지 않는 바이트(`%` 포함)는 percent-encoding한다. 파일을
+  읽거나 진단에 경로를 보일 때는 decode한 경로를 쓴다.
 - Query는 database 종류에 의존하지 않도록 `&dyn salsa::Database`만 받는다. 그래서
   경로별 입력을 만드는 provider는 database마다 하나인 singleton 입력이 가지며,
   provider가 파일을 어디서 읽을지(디스크, 메모리)는 database를 만드는 쪽이 정한다.
