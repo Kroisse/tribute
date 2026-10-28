@@ -850,11 +850,21 @@ pub fn definition_index<'db>(
 /// from each file's syntax tree: a package-level name another file spells
 /// is not renamable from `source`, whose rename edits only `source`.
 fn foreign_identifiers(db: &dyn salsa::Database, source: SourceCst) -> BTreeSet<Symbol> {
+    package_identifiers(db, source, source)
+}
+
+/// The names that the files of the package rooted at `root`, other than
+/// `except`, spell as identifier tokens.
+pub fn package_identifiers(
+    db: &dyn salsa::Database,
+    root: SourceCst,
+    except: SourceCst,
+) -> BTreeSet<Symbol> {
     let mut names = BTreeSet::new();
-    let Some(tree) = source_tree_of(db, source) else {
+    let Some(tree) = source_tree_of(db, root) else {
         return names;
     };
-    for file in &tree.files()[1..] {
+    for file in tree.files().iter().filter(|file| file.source != except) {
         let Some(cst) = ast_query::parse_cst(db, file.source) else {
             continue;
         };

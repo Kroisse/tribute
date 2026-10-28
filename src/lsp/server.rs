@@ -35,9 +35,12 @@ use super::completion_index::{
     self, complete_keywords, completion_items, completions_in, filter_completions,
     find_callee_signature, function_signatures, module_at,
 };
-use super::definition_index::{definition_index, validate_identifier};
+use super::definition_index::{
+    AstDefinitionEntry, definition_index, package_identifiers, validate_identifier,
+};
 use super::type_index::{AstTypeIndex, print_ast_type, type_index as ast_type_index};
 use tribute::TributeDatabaseImpl;
+use tribute_front::SourceCst;
 use tribute_front::ast::source_hash;
 use tribute_front::keywords::unraw;
 use tribute_front::resolve::NameDisplay;
@@ -225,6 +228,15 @@ impl LspServer {
         })
     }
 
+    /// The roots of the open packages that read `uri`'s file as one of
+    /// their file modules.
+    fn containing_packages(&self, uri: &Uri) -> Vec<SourceCst> {
+        self.dependent_documents(uri)
+            .iter()
+            .filter_map(|root| self.db.source_cst(root))
+            .collect()
+    }
+
     /// Publish the diagnostics of the open documents whose packages read
     /// `uri`'s file, which just changed.
     fn publish_dependents(&self, uri: &Uri) -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -378,12 +390,16 @@ impl LspServer {
         let rope = self.db.source_cst(uri)?.text(&self.db).clone();
         let offset = offset_from_position(&rope, position.line, position.character)?;
         let source_cst = self.db.source_cst(uri)?;
+        let containing = self.containing_packages(uri);
 
         let result = self.db.attach(|db| {
             let index = definition_index(db, source_cst)?;
 
             // Check if rename is possible at this position
             let (def, span) = index.can_rename(db, offset)?;
+            if used_by_containing_packages(db, def, source_cst, &containing) {
+                return None;
+            }
 
             let range = span_to_range(&rope, span);
             let placeholder = def.name.to_string();
@@ -412,12 +428,16 @@ impl LspServer {
         let rope = self.db.source_cst(uri)?.text(&self.db).clone();
         let offset = offset_from_position(&rope, position.line, position.character)?;
         let source_cst = self.db.source_cst(uri)?;
+        let containing = self.containing_packages(uri);
 
         let text_edits = self.db.attach(|db| {
             let index = definition_index(db, source_cst)?;
 
             // Get definition and validate
             let (def, _) = index.can_rename(db, offset)?;
+            if used_by_containing_packages(db, def, source_cst, &containing) {
+                return None;
+            }
 
             // Validate new name
             if validate_identifier(new_name, def.kind.clone()).is_err() {
@@ -1033,6 +1053,21 @@ fn init_lsp_tracing(log_filter: &str, sender: crossbeam_channel::Sender<Message>
         .with(env_filter)
         .with(LspLayer::new(sender))
         .try_init();
+}
+
+/// Whether another file of a package in `containing` that reads `source`
+/// spells the package-level name `def`, so that a rename editing only
+/// `source` would leave it unresolved.
+fn used_by_containing_packages(
+    db: &dyn salsa::Database,
+    def: &AstDefinitionEntry,
+    source: SourceCst,
+    containing: &[SourceCst],
+) -> bool {
+    def.local_id.is_none()
+        && containing
+            .iter()
+            .any(|root| package_identifiers(db, *root, source).contains(&def.name))
 }
 
 /// Whether `span` is in the document whose source hash is `document`. A span
@@ -2201,6 +2236,36 @@ mod tests {
             },
         });
         assert_eq!(prepared, None);
+    }
+
+    /// A file module open next to the root that reads it cannot rename a
+    /// name the root calls, since the rename edits only the file module.
+    #[test]
+    fn a_file_module_does_not_rename_what_an_open_root_calls() {
+        let dir = tempfile::tempdir().expect("temporary package directory");
+        let util_text = "pub fn helper() -> Nat { 1 }\n\nfn private() -> Nat { 2 }\n";
+        std::fs::write(dir.path().join("util.trb"), util_text).expect("write util.trb");
+        let root: Uri = format!("file://{}", dir.path().join("main.trb").display())
+            .parse()
+            .unwrap();
+        let util: Uri = format!("file://{}", dir.path().join("util.trb").display())
+            .parse()
+            .unwrap();
+        let source = "mod util\n\nfn main() -> Nil { let _ = util::helper() }\n";
+
+        let mut harness = TestHarness::new();
+        harness.open_document(&root, source);
+        harness.open_document(&util, util_text);
+        assert_eq!(harness.next_diagnostics().uri, root);
+
+        let mut prepare = |line, character| {
+            harness.request::<PrepareRenameRequest>(TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri: util.clone() },
+                position: lsp_types::Position { line, character },
+            })
+        };
+        assert_eq!(prepare(0, 8), None, "`helper`, called from `main.trb`");
+        assert!(prepare(2, 4).is_some(), "`private`");
     }
 
     /// A file module open in the editor is the source input its package
