@@ -262,7 +262,7 @@ MLIR의 dialect 개념을 차용하여 여러 수준의 연산이 한 모듈 내
 ```text
 Source → CST → AST
     → 이름 해석·타입 추론·TDNR
-    → 패키지 std 병합·intrinsic 검증·monomorphization
+    → intrinsic 검증·패키지별 monomorphization·결과 병합
     → source-logical tribute_control IR
     → class 특수화(tribute_cps)·pre-CPS 검증·tribute_control_to_cps
     → lambda lifting·intrinsic lowering

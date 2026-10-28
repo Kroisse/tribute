@@ -68,14 +68,12 @@ fn instantiate<'db>(
         .build(db))
 }
 
-/// Close `seeds` over their dependencies. Instances in `known` already
-/// exist with their dependencies; they are neither returned nor expanded.
+/// Close `seeds` over their dependencies.
 pub(super) fn collect<'db>(
     db: &'db dyn salsa::Database,
     index: &NominalIndex<'_, 'db>,
     schemes: &HashMap<CtorId<'db>, TypeScheme<'db>>,
     seeds: Instances<'db>,
-    known: Option<&Instances<'db>>,
 ) -> Result<NominalInstances<'db>, Vec<InstanceError>> {
     close_dependencies(
         db,
@@ -84,7 +82,6 @@ pub(super) fn collect<'db>(
         seeds,
         MAX_NOMINAL_ROUNDS,
         MAX_NOMINAL_INSTANCES,
-        known,
     )
     .map_err(|error| vec![error])
 }
@@ -96,7 +93,6 @@ fn close_dependencies<'db>(
     mut pending: Instances<'db>,
     max_rounds: usize,
     max_instances: usize,
-    known: Option<&Instances<'db>>,
 ) -> Result<NominalInstances<'db>, InstanceError> {
     let definitions = &index.declarations;
     let mut instances = Instances::default();
@@ -119,11 +115,7 @@ fn close_dependencies<'db>(
         for (owner, argument_sets) in pending {
             let declaration = &definitions[&owner];
             for arguments in argument_sets {
-                if known.is_some_and(|known| {
-                    known
-                        .get(&owner)
-                        .is_some_and(|known| known.contains(&arguments))
-                }) || !instances
+                if !instances
                     .entry(owner)
                     .or_default()
                     .insert(arguments.clone())
@@ -225,7 +217,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
 "#,
             ),
         );
-        let index = NominalIndex::new(db, input.module(db), None);
+        let index = NominalIndex::new(db, input.module(db), &[]);
         assert_eq!(index.declarations.len(), 6);
         for prefix in ["A", "B"] {
             for (suffix, generic) in [
@@ -310,7 +302,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 "pub mod nested { pub struct Holder(a) { value: a } }\nextern \"C\" fn hold(value: nested::Holder(Int)) -> Nil",
             ),
         );
-        let index = NominalIndex::new(db, input.module(db), None);
+        let index = NominalIndex::new(db, input.module(db), &[]);
         let schemas: HashMap<_, _> = input
             .declarations(db)
             .constructor_types
@@ -330,7 +322,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 .map(|(_, s)| s.body(db)),
             &index,
         );
-        let collected = collect(db, &index, &schemas, seeds, None).unwrap();
+        let collected = collect(db, &index, &schemas, seeds).unwrap();
         assert!(collected.enum_variants.is_empty());
         let [(owner, arguments, scheme)] = collected.struct_constructors.as_slice() else {
             panic!("one retained struct scheme")
@@ -436,10 +428,9 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
             assert!(!seeds.contains_key(&hidden_id));
             let result = collect(
                 db,
-                &NominalIndex::new(db, input.module(db), None),
+                &NominalIndex::new(db, input.module(db), &[]),
                 &schemas,
                 seeds,
-                None,
             )
             .unwrap();
             assert_eq!(
@@ -519,12 +510,11 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 .collect();
             let result = close_dependencies(
                 db,
-                &NominalIndex::new(db, input.module(db), None),
+                &NominalIndex::new(db, input.module(db), &[]),
                 &schemas,
                 seeds,
                 rounds,
                 count,
-                None,
             );
             if succeeds {
                 let result = result.unwrap();
@@ -572,10 +562,9 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
             .collect();
         let result = collect(
             db,
-            &NominalIndex::new(db, input.module(db), None),
+            &NominalIndex::new(db, input.module(db), &[]),
             &schemes,
             seeds,
-            None,
         );
         assert!(
             matches!(result, Err(errors) if errors[0].kind == InstanceErrorKind::ExpansionLimit)
@@ -667,10 +656,9 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 );
                 let result = collect(
                     db,
-                    &NominalIndex::new(db, input.module(db), None),
+                    &NominalIndex::new(db, input.module(db), &[]),
                     &schemas,
                     seeds,
-                    None,
                 );
                 let Err(errors) = result else {
                     panic!("invalid schema accepted")

@@ -39,18 +39,19 @@ pub(super) struct NominalIndex<'ast, 'db> {
 }
 
 impl<'ast, 'db> NominalIndex<'ast, 'db> {
-    /// The nominal declarations of `module` and of `dependency`.
+    /// The nominal declarations of `module` and of `dependencies`.
     pub fn new(
         db: &'db dyn salsa::Database,
         module: &'ast DeclTable<TypedRef<'db>>,
-        dependency: Option<&'ast DeclTable<TypedRef<'db>>>,
+        dependencies: &[&'ast DeclTable<TypedRef<'db>>],
     ) -> Self {
         let mut index = Self {
             module: module.id,
             declarations: HashMap::default(),
         };
-        for entry in dependency
-            .into_iter()
+        for entry in dependencies
+            .iter()
+            .copied()
             .chain([module])
             .flat_map(|table| &table.entries)
         {

@@ -256,21 +256,21 @@ Monomorphization은 `tribute-front`의 typed AST와 명시적인 함수 인스�
 `parse_and_lower_ast()`는 이름 해석과 타입 추론·TDNR을 수행하고, 선택된 함수
 인스턴스와 semantic 메타데이터를 반환한다. 타입 검사는 의존 패키지 `std`의
 선언을 의존성 표로 조회하며, 그 결과에는 사용자 패키지의 선언만 담긴다.
-`std`만의 인스턴스는 `std`의 checked 결과에만 의존하는 tracked 결과다. `std`를
-혼자 검증·특수화한 이 결과는 사용자 패키지를 편집해도 다시 계산하지 않는다.
-`prepare_frontend_for_lowering()`은 이 결과에서 이어서 사용자 패키지에서 도달하는
-인스턴스를 검증·특수화하고 메타데이터를 재작성한 뒤, 두 패키지의 결과를 하나의
-특수화 결과로 병합한다. `std` generic의 인스턴스 중 사용자 패키지에 의존하는 타입
-인자의 것만 이 단계가 만든다
+패키지의 특수화는 그 패키지와 의존 패키지들의 checked 결과에만 의존하는 tracked
+결과이며, 그 패키지의 본문에서 도달하는 인스턴스를 검증·특수화한다. `std`의 특수화는
+사용자 패키지를 편집해도 다시 계산하지 않는다. `prepare_frontend_for_lowering()`은
+사용자 패키지를 같은 방식으로 특수화하고, 그 결과를 의존 패키지들의 특수화 결과와
+함께 하나의 특수화 결과로 병합한다
 ([Implementation — 프론트엔드 단계 경계와 정보 소유권](implementation.md#프론트엔드-단계-경계와-정보-소유권)).
 IR lowering은 이 준비 단계가 성공한 결과만 소비하며, 타입 검사 결과로부터 lowering
 입력을 만드는 경로는 없다.
 
 ```text
 parse_and_lower_ast: 해석·타입 추론·TDNR·인스턴스 기록
-    ↓                       std 특수화: std만의 검증·특수화 (std의 checked 결과에만 의존)
+    ↓                       의존 패키지 특수화: 패키지마다 검증·특수화
+    ↓                       (자기와 의존 패키지의 checked 결과에만 의존)
     ↓                       ↓
-prepare_frontend_for_lowering: 사용자 패키지의 검증·특수화·메타데이터 재작성, 결과 병합
+prepare_frontend_for_lowering: 사용자 패키지의 검증·특수화, 패키지 결과 병합
     ↓
 ast_to_ir: IR lowering
 ```
@@ -390,8 +390,7 @@ IR 생성에 전달하지 않는다. 다형적 재귀는 이 한도에 앞서 [�
 타입 매개변수가 있는 함수와 extern 함수는 template이다. Template은 타입 검사와
 다형적 재귀 검사를 통과해야 하지만 특수화 출력에서 제외한다. 그 template의 노드에
 연결된 표현식·참조별 메타데이터와 스킴도 출력에서 제외한다. Generic intrinsic의
-identity는 남긴다. 의존 패키지의 특수화를 이어받는 특수화가 그 intrinsic을 자기
-타입으로 인스턴스화하기 때문이다. Lowering은 구체 함수 정의만 받으며,
+identity는 남긴다. Lowering은 구체 함수 정의만 받으며,
 함수의 타입 변수를 표현 하나로 소거하지 않는다. 정의 단위 source 규칙의 진단은
 특수화 전에 끝나므로, template을 제외해도 진단은 인스턴스화 여부와 상관없이 같다.
 제외는 nominal 수집보다 먼저 하므로, template 안에서만 쓰인 nominal 인스턴스는

@@ -13,12 +13,13 @@
 [capabilities.md](capabilities.md)를 따른다.
 
 **하나의 module.** 특수화, logical lowering, shared·target lowering과 emission은
-빌드 전체에 대해 하나의 `core.module`에서 실행한다. 특수화는 빌드에 속한 모든
-패키지의 본문을 병합해 실행하며, 병합 순서는
+빌드 전체에 대해 하나의 `core.module`에서 실행한다. 특수화는 패키지마다 하고,
+빌드는 그 결과들을 하나로 병합한다. 특수화가 읽는 결과와 병합 순서는
 [Implementation — 프론트엔드 단계 경계와 정보 소유권](implementation.md#프론트엔드-단계-경계와-정보-소유권)을
 따른다. 의존 패키지 generic의 인스턴스도 그것을 사용하는 패키지와 관계없이 이
-module에 둔다. Source-logical callable/control IR과 CPS legalization은 같은 module
-안에서 검증한다.
+module에 두며, 여러 패키지의 특수화가 만든 같은 인스턴스는 하나만 남는다.
+Source-logical callable/control IR과 CPS legalization은 같은 module 안에서
+검증한다.
 
 **인스턴스 이름.** Generic 인스턴스의 이름은 그 generic을 정의한 선언의 식별
 경로에 타입 인자를 더해 만든다. 인스턴스를 요구한 패키지는 이름에 들어가지
