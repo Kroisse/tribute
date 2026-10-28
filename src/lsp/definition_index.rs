@@ -157,7 +157,7 @@ impl<'db> AstDefinitionIndex<'db> {
         db: &'db dyn salsa::Database,
         module: &DeclTable<TypedRef<'db>>,
         span_map: SpanMap<'_>,
-        foreign_type_names: BTreeSet<Symbol>,
+        foreign_identifiers: BTreeSet<Symbol>,
     ) -> Self {
         let mut collector = DefinitionCollector::new(db, span_map);
         walk_decl_table(&mut collector, module);
@@ -165,7 +165,7 @@ impl<'db> AstDefinitionIndex<'db> {
         let mut definitions = collector.definitions;
         let mut references = collector.references;
         let mut foreign_names = collector.foreign_names;
-        foreign_names.extend(foreign_type_names);
+        foreign_names.extend(foreign_identifiers);
         // A constructor names its variant, not its enum, but a qualified
         // path to it spells the enum too.
         for def in &definitions {
@@ -840,15 +840,16 @@ pub fn definition_index<'db>(
         db,
         module,
         span_map,
-        foreign_type_names(db, source),
+        foreign_identifiers(db, source),
     ))
 }
 
-/// The type names that the other files of `source`'s package spell. Type
-/// annotations carry no resolved reference, so these are read from each
-/// file's syntax tree: a type an annotation names is not renamable from
-/// `source`, whose rename edits only `source`.
-fn foreign_type_names(db: &dyn salsa::Database, source: SourceCst) -> BTreeSet<Symbol> {
+/// The names that the other files of `source`'s package spell. Not every
+/// use of a name carries a resolved reference the index sees (type
+/// annotations, `use` declarations), so these are read as identifier tokens
+/// from each file's syntax tree: a package-level name another file spells
+/// is not renamable from `source`, whose rename edits only `source`.
+fn foreign_identifiers(db: &dyn salsa::Database, source: SourceCst) -> BTreeSet<Symbol> {
     let mut names = BTreeSet::new();
     let Some(tree) = source_tree_of(db, source) else {
         return names;
@@ -861,9 +862,16 @@ fn foreign_type_names(db: &dyn salsa::Database, source: SourceCst) -> BTreeSet<S
         let mut cursor = cst.root_node().walk();
         let mut stack = vec![cst.root_node()];
         while let Some(node) = stack.pop() {
-            if node.kind() == "type_identifier" {
-                let name = text.byte_slice(node.start_byte()..node.end_byte());
-                names.insert(Symbol::new(&name.to_string()));
+            if node.child_count() == 0 {
+                let token = text
+                    .byte_slice(node.start_byte()..node.end_byte())
+                    .to_string();
+                let name = token.strip_prefix("r#").unwrap_or(&token);
+                if name.starts_with(|c: char| c.is_alphabetic() || c == '_')
+                    && name.chars().all(|c| c.is_alphanumeric() || c == '_')
+                {
+                    names.insert(Symbol::new(name));
+                }
             }
             stack.extend(node.children(&mut cursor));
         }
