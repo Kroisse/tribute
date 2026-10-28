@@ -31,11 +31,10 @@ impl SpanMapBuilder {
         Self::default()
     }
 
-    /// Record that the item `owner` of the source `source` starts at byte
-    /// `start`.
-    pub fn set_start(&mut self, source: u64, owner: u64, start: usize) {
+    /// Record that the item `owner` starts at byte `start`.
+    pub fn set_start(&mut self, owner: u64, start: usize) {
         let start = u32::try_from(start).expect("a source is smaller than 4 GiB");
-        self.layout.starts.insert((source, owner), start);
+        self.layout.starts.insert(owner, start);
     }
 
     /// Record the span of the root `Module` node, which no item owns.
@@ -69,14 +68,14 @@ impl SpanMapBuilder {
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ItemSpans(HashMap<NodeId, Span>);
 
-impl ItemSpans {
-    /// The relative spans of the nodes of several sources. NodeIds carry
-    /// their source's hash, so different sources share no node.
-    pub fn merged<'a>(parts: impl IntoIterator<Item = &'a ItemSpans>) -> Self {
+impl<'a> FromIterator<&'a ItemSpans> for ItemSpans {
+    /// The spans of several items' nodes in one map.
+    fn from_iter<I: IntoIterator<Item = &'a ItemSpans>>(parts: I) -> Self {
         Self(
             parts
                 .into_iter()
-                .flat_map(|part| part.0.iter().map(|(&id, &span)| (id, span)))
+                .flat_map(|part| part.0.iter())
+                .map(|(&id, &span)| (id, span))
                 .collect(),
         )
     }
@@ -90,14 +89,13 @@ impl ItemSpans {
 /// too.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ItemLayout {
-    /// Each item's start, by its source and owner.
-    starts: HashMap<(u64, u64), u32>,
+    starts: HashMap<u64, u32>,
     module: Option<(NodeId, Span)>,
 }
 
 impl ItemLayout {
-    /// The layout of `root` with the item starts of `others`, sources whose
-    /// items lie in its module tree.
+    /// The layout of `root` with the item starts of `others`, the files of
+    /// its file modules, whose items are owned by their package paths.
     pub fn merged<'a>(
         root: &'a ItemLayout,
         others: impl IntoIterator<Item = &'a ItemLayout>,
@@ -114,10 +112,7 @@ impl ItemLayout {
 
     /// The start of the item that owns `id`, or `0` for a node no item owns.
     fn start(&self, id: NodeId) -> u32 {
-        self.starts
-            .get(&(id.source(), id.owner()))
-            .copied()
-            .unwrap_or(0)
+        self.starts.get(&id.owner()).copied().unwrap_or(0)
     }
 }
 
@@ -303,7 +298,7 @@ mod tests {
     fn test_span_map_positions_nodes_from_their_owner() {
         let build = |start: usize| {
             let mut builder = SpanMapBuilder::new();
-            builder.set_start(0, 7, start);
+            builder.set_start(7, start);
             builder.insert(NodeId::new(0, 7, 0), Span::new(start, start + 10));
             builder.insert(NodeId::new(0, 7, 1), Span::new(start + 4, start + 6));
             builder.insert(NodeId::new(0, 3, 0), Span::new(0, 2));
@@ -324,26 +319,25 @@ mod tests {
         assert_eq!(span_map.get(NodeId::new(0, 3, 1)), Some(Span::new(0, 45)));
     }
 
-    /// Items of different sources may share an owner; merged parts keep
-    /// each one positioned in its own source, with its source id.
+    /// Merged parts position each source's items, with its source id.
     #[test]
     fn test_merged_parts_position_each_source() {
         let mut root = SpanMapBuilder::new();
-        root.set_start(0, 7, 20);
+        root.set_start(7, 20);
         root.insert(NodeId::new(0, 7, 0), Span::new(24, 26));
         root.set_module(NodeId::new(0, 3, 0), Span::new(0, 40));
         let (root_spans, root_layout) = root.finish();
         let mut file = SpanMapBuilder::new();
-        file.set_start(5, 7, 2);
-        file.insert(NodeId::new(5, 7, 0), Span::new(3, 9).in_source(5));
+        file.set_start(8, 2);
+        file.insert(NodeId::new(5, 8, 0), Span::new(3, 9).in_source(5));
         let (file_spans, file_layout) = file.finish();
 
-        let spans = ItemSpans::merged([&root_spans, &file_spans]);
+        let spans = [&root_spans, &file_spans].into_iter().collect();
         let layout = ItemLayout::merged(&root_layout, [&file_layout]);
         let span_map = SpanMap::new(&spans, &layout);
         assert_eq!(span_map.get(NodeId::new(0, 7, 0)), Some(Span::new(24, 26)));
         assert_eq!(
-            span_map.get(NodeId::new(5, 7, 0)),
+            span_map.get(NodeId::new(5, 8, 0)),
             Some(Span::new(3, 9).in_source(5))
         );
         assert_eq!(span_map.get(NodeId::new(0, 3, 0)), Some(Span::new(0, 40)));

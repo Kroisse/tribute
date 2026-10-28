@@ -134,15 +134,17 @@ pub fn lower_source_to_parsed_ast_with_module_path<'db>(
     Some(ParsedAst::new(db, module, item_spans, item_layout))
 }
 
-/// Parse and lower the file of a file module, like
-/// [`lower_source_to_parsed_ast_with_module_path`], with its spans and
-/// diagnostics stamped with its source hash so that they name its file
+/// Parse and lower the file of the file module at `path` in its package,
+/// like [`lower_source_to_parsed_ast_with_module_path`]. Its items are owned
+/// as the same items declared inline would be, and its spans and diagnostics
+/// are stamped with its source hash so that they name its file
 /// (`new-plans/implementation.md` § 패키지 source 트리와 파일 입력).
 #[salsa::tracked(returns(copy))]
 pub fn lower_file_module<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
     module_path: Option<trunk_ir::Symbol>,
+    path: Vec<trunk_ir::Symbol>,
 ) -> Option<ParsedAst<'db>> {
     use crate::ast::node_id::source_hash;
     use crate::query::parse_cst;
@@ -150,7 +152,7 @@ pub fn lower_file_module<'db>(
     let cst = parse_cst(db, source)?;
     let text = source.text(db);
     let sh = source_hash(source.uri(db).as_str());
-    let mut ctx = AstLoweringCtx::with_db(db, text.clone(), sh).in_file_module();
+    let mut ctx = AstLoweringCtx::with_db(db, text.clone(), sh).in_file_module(path);
     let module = lower_cst_to_ast_internal(&mut ctx, cst, module_path);
     let (item_spans, item_layout) = ctx.finish().finish();
     Some(ParsedAst::new(db, module, item_spans, item_layout))

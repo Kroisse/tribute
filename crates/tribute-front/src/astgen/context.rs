@@ -65,11 +65,14 @@ impl<'db> AstLoweringCtx<'db> {
         }
     }
 
-    /// Stamp spans and diagnostics with this source's hash, as a file
-    /// module's are.
-    pub fn in_file_module(self) -> Self {
+    /// Lower the file of the file module at `module_path` in its package:
+    /// its items are owned as if the module were declared inline, and its
+    /// spans and diagnostics are stamped with this source's hash.
+    pub fn in_file_module(self, module_path: Vec<Symbol>) -> Self {
         Self {
             span_source: self.source_hash,
+            owner: module_owner(&module_path),
+            module_path,
             ..self
         }
     }
@@ -128,7 +131,7 @@ impl<'db> AstLoweringCtx<'db> {
         let occurrence = *count;
         *count += 1;
         let item = owner_hash((path_text(&self.module_path), kind, name, occurrence));
-        self.span_builder.set_start(self.source_hash, item, start);
+        self.span_builder.set_start(item, start);
         let outer = std::mem::replace(&mut self.owner, item);
         let lowered = lower(self);
         self.owner = outer;

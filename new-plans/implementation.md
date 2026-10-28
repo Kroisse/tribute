@@ -1015,8 +1015,9 @@ representation/ABI 경계)의 실패는 source 진단이 아니라 compiler 내�
 그 위치가 속한 source id를 함께 가진다. Root 파일의 source id는 0이고, 파일 모듈의
 source id는 그 파일 URI의 hash로 `NodeId`의 source hash와 같은 값이다. 파일 모듈의
 구문 진단도 같은 source id를 가진다. 트리의 span map은 각 파일의 상대 span과
-layout을 합친 것이다. 다른 파일의 item이 같은 소유 item 식별자를 가질 수
-있으므로, layout은 item 시작점을 source와 item의 쌍으로 찾는다. 트리 query는 읽은
+layout을 합친 것이다. 파일 모듈의 파일은 그 모듈의 패키지 안 경로를 module
+path로 lowering하므로, 그 item은 같은 item을 inline으로 선언했을 때와 같은 소유
+item 식별자를 갖고 다른 파일의 item과 겹치지 않는다. 트리 query는 읽은
 파일 목록을 함께 내므로,
 진단을 출력하는 쪽은 source id로 진단의 파일을 찾는다. IR location은 같은 source
 hash에서 파일 경로를 정한다.

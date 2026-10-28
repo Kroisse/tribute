@@ -6,6 +6,7 @@ use std::process::Command;
 
 use tribute::pipeline::{compile_frontend, compile_with_diagnostics, parse_and_lower_ast};
 use tribute_front::SourceCst;
+use tribute_front::ast::{Decl, ModuleItem, UnresolvedName};
 use tribute_front::source_tree::source_tree_of;
 use tribute_front::testing::LoggingDb;
 use trunk_ir::printer::print_module;
@@ -103,6 +104,64 @@ fn file_modules_lower_like_inline_modules() {
     let inline = print_module(&ctx, module.op());
 
     assert_eq!(files, inline);
+}
+
+/// The owner and index of each function's `NodeId`, by its module path.
+fn function_ids(items: &[ModuleItem<UnresolvedName>], path: &str, out: &mut Vec<String>) {
+    for item in items {
+        match item {
+            ModuleItem::Decl(Decl::Function(func)) => {
+                out.push(format!(
+                    "{path}{}: {:x}/{}",
+                    func.name,
+                    func.id.owner(),
+                    func.id.index()
+                ));
+            }
+            ModuleItem::Module(module) => {
+                let path = format!("{path}{}::", module.name);
+                function_ids(module.body.as_deref().unwrap_or_default(), &path, out);
+            }
+            ModuleItem::Decl(_) => {}
+        }
+    }
+}
+
+/// A file module's items are owned as the same items declared inline, so
+/// their `NodeId`s differ only in the source hash.
+#[test]
+fn file_module_items_are_owned_like_inline_items() {
+    let ids = |db: &LoggingDb, root| {
+        let tree = source_tree_of(db, root).expect("the root parses");
+        let mut ids = Vec::new();
+        function_ids(&tree.parsed.module(db).decls, "", &mut ids);
+        ids
+    };
+    let mut db = LoggingDb::default();
+    let root = package(&mut db);
+    let files = ids(&db, root);
+    let mut db = LoggingDb::default();
+    let root = db.file(ROOT, INLINE);
+    assert_eq!(files, ids(&db, root));
+}
+
+/// Items of the same kind and name in the root file and a file module are
+/// different items, each positioned in its own file.
+#[test]
+fn same_named_items_in_two_files_keep_their_own_spans() {
+    let mut db = LoggingDb::default();
+    db.file("/pkg/src/util.trb", "pub fn run() -> Nat { missing_b }\n");
+    let root = db.file(
+        ROOT,
+        "mod util\n\nfn run() -> Nat {\n    missing_a\n}\n\nfn main() -> Nil { }\n",
+    );
+    assert_eq!(
+        located_diagnostics(&db, root),
+        [
+            "/pkg/src/util.trb:22..31: unresolved name `missing_b`",
+            "/pkg/src/main.trb:32..41: unresolved name `missing_a`",
+        ]
+    );
 }
 
 #[test]

@@ -14,7 +14,7 @@ use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity}
 use trunk_ir::{Span, Symbol};
 
 use crate::ast::node_id::source_hash;
-use crate::ast::{ItemLayout, ItemSpans, Module, ModuleItem, SpanMap, UnresolvedName};
+use crate::ast::{ItemLayout, Module, ModuleItem, SpanMap, UnresolvedName};
 use crate::astgen::{self, ParsedAst};
 use crate::source_file::{SourceCst, push_uri_path, source_at, uri_to_path};
 
@@ -75,6 +75,7 @@ pub fn source_tree<'db>(
     let mut decls = module.decls.clone();
     loader.splice(
         &mut decls,
+        &[],
         module_dir(root.uri(db).as_str()),
         parsed.span_map(db),
     );
@@ -89,10 +90,9 @@ pub fn source_tree<'db>(
         name: module.name.clone(),
         decls,
     };
-    let item_spans = ItemSpans::merged(
-        std::iter::once(parsed.item_spans(db))
-            .chain(loader.parsed.iter().map(|file| file.item_spans(db))),
-    );
+    let item_spans = std::iter::once(parsed.item_spans(db))
+        .chain(loader.parsed.iter().map(|file| file.item_spans(db)))
+        .collect();
     let item_layout = ItemLayout::merged(
         parsed.item_layout(db),
         loader.parsed.iter().map(|file| file.item_layout(db)),
@@ -120,13 +120,21 @@ struct Loader<'db> {
 }
 
 impl<'db> Loader<'db> {
-    /// Fill in the body of each file module among `items`, declared in a
-    /// file whose spans are `spans`, with child module files under `dir`.
-    fn splice(&mut self, items: &mut [ModuleItem<UnresolvedName>], dir: &str, spans: SpanMap<'_>) {
+    /// Fill in the body of each file module among `items`, the items of the
+    /// module at `path` in the package, declared in a file whose spans are
+    /// `spans`, with child module files under `dir`.
+    fn splice(
+        &mut self,
+        items: &mut [ModuleItem<UnresolvedName>],
+        path: &[Symbol],
+        dir: &str,
+        spans: SpanMap<'_>,
+    ) {
         for item in items {
             let ModuleItem::Module(module) = item else {
                 continue;
             };
+            let sub_path = [path, std::slice::from_ref(&module.name)].concat();
             let mut sub_dir = dir.to_owned();
             push_uri_path(&mut sub_dir, module.name.as_str());
             let path = format!("{sub_dir}.trb");
@@ -148,7 +156,7 @@ impl<'db> Loader<'db> {
                         ),
                     );
                 }
-                self.splice(body, &sub_dir, spans);
+                self.splice(body, &sub_path, &sub_dir, spans);
                 continue;
             }
             self.changed = true;
@@ -177,13 +185,17 @@ impl<'db> Loader<'db> {
                 continue;
             }
             self.files.push(source);
-            let Some(parsed) = astgen::lower_file_module(self.db, source, self.module_path.clone())
-            else {
+            let Some(parsed) = astgen::lower_file_module(
+                self.db,
+                source,
+                self.module_path.clone(),
+                sub_path.clone(),
+            ) else {
                 module.body = Some(Vec::new());
                 continue;
             };
             let mut body = parsed.module(self.db).decls.clone();
-            self.splice(&mut body, &sub_dir, parsed.span_map(self.db));
+            self.splice(&mut body, &sub_path, &sub_dir, parsed.span_map(self.db));
             self.parsed.push(parsed);
             module.body = Some(body);
         }
