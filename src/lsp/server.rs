@@ -2125,6 +2125,33 @@ mod tests {
         assert_eq!(prepared, None);
     }
 
+    /// An enum whose constructor a file module calls through a qualified
+    /// path is not renamable from the root document.
+    #[test]
+    fn an_enum_constructed_in_a_file_module_is_not_renamable() {
+        let dir = tempfile::tempdir().expect("temporary package directory");
+        std::fs::write(
+            dir.path().join("util.trb"),
+            "pub fn pick() -> pkg::Choice { pkg::Choice::One(1) }\n",
+        )
+        .expect("write util.trb");
+        let root = dir.path().join("main.trb");
+        let uri: Uri = format!("file://{}", root.display()).parse().unwrap();
+        let source = "mod util\n\npub enum Choice { One(Int), Other }\n\nfn main() -> Nil { }\n";
+
+        let mut harness = TestHarness::new();
+        let published = harness.open_document_with_diagnostics(&uri, source);
+        assert_eq!(published.diagnostics, Vec::new());
+        let prepared = harness.request::<PrepareRenameRequest>(TextDocumentPositionParams {
+            text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+            position: lsp_types::Position {
+                line: 2,
+                character: 10, // On `Choice`
+            },
+        });
+        assert_eq!(prepared, None);
+    }
+
     /// A file module open in the editor is the source input its package
     /// reads: opening, editing, and closing it republishes the diagnostics of
     /// an open root of that package.

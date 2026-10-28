@@ -162,6 +162,16 @@ impl<'db> AstDefinitionIndex<'db> {
 
         let mut definitions = collector.definitions;
         let mut references = collector.references;
+        let mut foreign_names = collector.foreign_names;
+        // A constructor names its variant, not its enum, but a qualified
+        // path to it spells the enum too.
+        for def in &definitions {
+            if let DefinitionKind::EnumVariant { owner } = &def.kind
+                && collector.foreign_variants.contains(&def.name)
+            {
+                foreign_names.insert(owner.clone());
+            }
+        }
 
         // Sort by span
         definitions.sort_by_key(|e| (e.span.start, e.span.end));
@@ -173,13 +183,7 @@ impl<'db> AstDefinitionIndex<'db> {
             by_name.entry(def.name.clone()).or_default().push(i);
         }
 
-        Self::new(
-            db,
-            definitions,
-            references,
-            by_name,
-            collector.foreign_names,
-        )
+        Self::new(db, definitions, references, by_name, foreign_names)
     }
 
     /// Find the definition at a given offset (when cursor is on a definition).
@@ -497,6 +501,9 @@ struct DefinitionCollector<'a, 'db> {
     definitions: Vec<AstDefinitionEntry>,
     references: Vec<AstReferenceEntry>,
     foreign_names: BTreeSet<Symbol>,
+    /// The constructors another file of the package refers to, whose enums
+    /// are found among this document's definitions once all are collected.
+    foreign_variants: BTreeSet<Symbol>,
     /// The module-level function being visited.
     current_func: Option<NodeId>,
 }
@@ -509,6 +516,7 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
             definitions: Vec::new(),
             references: Vec::new(),
             foreign_names: BTreeSet::new(),
+            foreign_variants: BTreeSet::new(),
             current_func: None,
         }
     }
@@ -553,8 +561,21 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
 
     fn add_reference(&mut self, node_id: NodeId, target: ResolvedTarget) {
         let Some(span) = self.span_map.get(node_id) else {
-            if !matches!(target, ResolvedTarget::Local { .. }) {
-                self.foreign_names.insert(target.name());
+            // A qualified path such as `Choice::Some` also spells the item
+            // that owns the target.
+            match &target {
+                ResolvedTarget::Local { .. } => {}
+                ResolvedTarget::Constructor { variant, .. } => {
+                    self.foreign_names.insert(variant.clone());
+                    self.foreign_variants.insert(variant.clone());
+                }
+                ResolvedTarget::AbilityOp { ability, op } => {
+                    self.foreign_names.insert(ability.clone());
+                    self.foreign_names.insert(op.clone());
+                }
+                _ => {
+                    self.foreign_names.insert(target.name());
+                }
             }
             return;
         };
