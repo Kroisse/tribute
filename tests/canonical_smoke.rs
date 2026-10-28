@@ -39,7 +39,7 @@ fn canonical_invalid_source_has_stable_unresolved_name_diagnostic(db: &salsa::Da
 
     let span = diagnostic.inner.span;
     let primary_source = INVALID_SOURCE
-        .get(span.start..span.end)
+        .get(span.range())
         .expect("diagnostic span must be a valid UTF-8 source range");
     assert_eq!(primary_source, "missing_value");
 }

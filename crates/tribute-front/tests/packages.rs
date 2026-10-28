@@ -180,7 +180,7 @@ fn the_program_specializes_the_library_bodies() {
     let std = build.lib.dependencies(db).packages(db)[0];
     let specialized = *specialized_with_library(db, build.app, build.environment, std, build.lib);
     let app_spans = tribute_front::query::span_map(db, build.app).expect("app parses");
-    let lib_spans = analysis::parsed_package(db, build.lib)
+    let lib_spans = analysis::package_tree(db, build.lib)
         .expect("lib parses")
         .span_map(db);
     let mut ir = IrContext::new();

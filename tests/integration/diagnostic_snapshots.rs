@@ -11,6 +11,7 @@ use tribute::Diagnostic;
 use tribute::pipeline::{compile_ast, compile_with_diagnostics};
 use tribute_core::diagnostic::{CompilationPhase, DiagnosticSeverity};
 use tribute_front::SourceCst;
+use tribute_front::ast::source_hash;
 use trunk_ir::Span;
 
 // =============================================================================
@@ -396,12 +397,13 @@ fn invalid_record_shapes_block_public_compilation_apis(db: &salsa::DatabaseImpl)
         let source = SourceCst::from_source_str(db, "test.trb", &text);
         let result = compile_with_diagnostics(db, source);
         let start = text.find(record).expect("record expression");
+        let source_id = source_hash(source.uri(db).as_str());
         let expected: Vec<_> = messages
             .iter()
             .map(|message| {
                 Diagnostic::new(
                     *message,
-                    Span::new(start, start + record.len()),
+                    Span::new(start, start + record.len()).in_source(source_id),
                     DiagnosticSeverity::Error,
                     CompilationPhase::TypeChecking,
                 )

@@ -107,7 +107,7 @@ pub(crate) fn prelude_runtime_types(
 /// The span map of the prelude's parse, which locates its nodes in a module
 /// merged with it.
 pub(crate) fn prelude_span_map(db: &dyn salsa::Database) -> Option<SpanMap<'_>> {
-    analysis::parsed_package(db, *std_package(db)).map(|parsed| parsed.span_map(db))
+    analysis::package_tree(db, *std_package(db)).map(|tree| tree.span_map(db))
 }
 
 /// The prelude's typed AST (parse → resolve → typecheck), without

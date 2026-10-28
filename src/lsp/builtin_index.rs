@@ -35,7 +35,7 @@ pub fn builtin_symbols(db: &dyn salsa::Database, source: SourceCst) -> Vec<Built
 pub fn builtin_at(entries: &[BuiltinSymbolEntry], offset: usize) -> Option<&BuiltinSymbolEntry> {
     entries
         .iter()
-        .filter(|entry| entry.span.start <= offset && offset < entry.span.end)
+        .filter(|entry| entry.span.range().contains(&offset))
         .min_by_key(|entry| entry.span.end - entry.span.start)
 }
 
@@ -68,9 +68,13 @@ fn collect_effect(
         return;
     };
 
+    // An annotation without a span here is in a file module's file.
+    let Some(span) = span_map.get(ability_annotation.id) else {
+        return;
+    };
     if let Some(ability) = AbilityId::builtin_from_path(db, path) {
         entries.push(BuiltinSymbolEntry {
-            span: span_map.get_or_default(ability_annotation.id),
+            span,
             name: ability.name(db),
             qualified: ability.qualified(db).clone(),
         });

@@ -364,7 +364,7 @@ pub fn module_at(db: &dyn salsa::Database, source: SourceCst, offset: usize) -> 
                 continue;
             };
             let Some(body) = &module.body else { continue };
-            let start = span_map.get_or_default(module.id).start;
+            let start = span_map.get_or_default(module.id).start as usize;
             let declaration = root
                 .descendant_for_byte_range(start, start)
                 .and_then(|node| {

@@ -13,6 +13,7 @@ use rustc_hash::{FxBuildHasher, FxHashMap as HashMap};
 use trunk_ir::Span;
 
 use super::NodeId;
+use crate::source_tree::SourceTree;
 
 /// Builder for constructing a SpanMap during AST lowering.
 ///
@@ -34,6 +35,7 @@ impl SpanMapBuilder {
 
     /// Record that the item `owner` starts at byte `start`.
     pub fn set_start(&mut self, owner: u64, start: usize) {
+        let start = u32::try_from(start).expect("a source is smaller than 4 GiB");
         self.layout.starts.insert(owner, start);
     }
 
@@ -45,9 +47,13 @@ impl SpanMapBuilder {
     /// Insert the source span of a node relative to its item's start. A node
     /// no item owns keeps its span as is.
     pub fn insert(&mut self, id: NodeId, span: Span) {
-        let start = self.layout.starts.get(&id.owner()).copied().unwrap_or(0);
+        let start = self.layout.start(id);
         debug_assert!(start <= span.start, "a node starts within its item");
-        let relative = Span::new(span.start - start, span.end - start);
+        let relative = Span {
+            start: span.start - start,
+            end: span.end - start,
+            ..span
+        };
         self.spans
             .entry(id.owner())
             .or_default()
@@ -94,27 +100,66 @@ impl<'a> FromIterator<&'a ItemSpans> for ItemSpans {
 /// too.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ItemLayout {
-    starts: HashMap<u64, usize>,
+    starts: HashMap<u64, u32>,
     module: Option<(NodeId, Span)>,
 }
 
-/// NodeId → Span mapping of one parsed source.
+impl ItemLayout {
+    /// The start of the item that owns `id`, or `0` for a node no item owns.
+    fn start(&self, id: NodeId) -> u32 {
+        self.starts.get(&id.owner()).copied().unwrap_or(0)
+    }
+}
+
+/// NodeId → Span mapping of one parsed source, or of the files of a
+/// package's source tree.
 ///
 /// The parts belong to the parse that built them (`ParsedAst`, a Salsa
 /// tracked struct); the map borrows them and adds each item node's relative
 /// span to its item's start. They compare by content, so a reparse that
 /// moves no item leaves both unchanged, and one that only moves items leaves
-/// the relative spans unchanged.
-#[derive(Clone, Copy, Debug)]
-pub struct SpanMap<'a> {
-    spans: &'a ItemSpans,
-    layout: &'a ItemLayout,
+/// the relative spans unchanged. A tree's map finds a node's file by the
+/// source hash its `NodeId` carries and reads that file's parts only.
+#[derive(Clone, Copy)]
+pub struct SpanMap<'a>(Parts<'a>);
+
+#[derive(Clone, Copy)]
+enum Parts<'a> {
+    File {
+        spans: &'a ItemSpans,
+        layout: &'a ItemLayout,
+    },
+    Tree {
+        db: &'a dyn salsa::Database,
+        tree: &'a SourceTree<'a>,
+    },
+}
+
+impl std::fmt::Debug for SpanMap<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            Parts::File { spans, layout } => f
+                .debug_struct("SpanMap")
+                .field("spans", spans)
+                .field("layout", layout)
+                .finish(),
+            Parts::Tree { tree, .. } => f
+                .debug_struct("SpanMap")
+                .field("files", &tree.files().len())
+                .finish_non_exhaustive(),
+        }
+    }
 }
 
 impl<'a> SpanMap<'a> {
     /// The map that positions `spans` by `layout`.
     pub fn new(spans: &'a ItemSpans, layout: &'a ItemLayout) -> Self {
-        Self { spans, layout }
+        Self(Parts::File { spans, layout })
+    }
+
+    /// The map of the files of `tree`.
+    pub fn tree(db: &'a dyn salsa::Database, tree: &'a SourceTree<'a>) -> Self {
+        Self(Parts::Tree { db, tree })
     }
 
     /// The map of no nodes, for checking code that has no source.
@@ -141,11 +186,22 @@ impl<'a> SpanMap<'a> {
     }
 
     fn get_exact(&self, id: NodeId) -> Option<Span> {
-        if let Some(relative) = self.spans.0.get(&id) {
-            let start = self.layout.starts.get(&id.owner()).copied().unwrap_or(0);
-            return Some(Span::new(relative.start + start, relative.end + start));
+        let (spans, layout) = match self.0 {
+            Parts::File { spans, layout } => (spans, layout),
+            Parts::Tree { db, tree } => {
+                let parsed = tree.file(id.source())?.parsed;
+                (parsed.item_spans(db), parsed.item_layout(db))
+            }
+        };
+        if let Some(relative) = spans.0.get(&id) {
+            let start = layout.start(id);
+            return Some(Span {
+                start: relative.start + start,
+                end: relative.end + start,
+                ..*relative
+            });
         }
-        self.layout
+        layout
             .module
             .and_then(|(module, span)| (module == id).then_some(span))
     }

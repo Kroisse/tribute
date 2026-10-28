@@ -449,7 +449,7 @@ fn main() -> Nil { }
                 "runtime `rt::inferred` must have an empty ability row, written `->{}`"
             );
             assert_eq!(diagnostic.inner.severity, DiagnosticSeverity::Error);
-            assert!(REJECTED[diagnostic.inner.span.start..].starts_with("fn inferred"));
+            assert!(REJECTED[diagnostic.inner.span.start as usize..].starts_with("fn inferred"));
         });
     }
 

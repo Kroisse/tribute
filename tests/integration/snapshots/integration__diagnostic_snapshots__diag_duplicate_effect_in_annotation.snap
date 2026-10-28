@@ -6,10 +6,12 @@ expression: result.diagnostics
   span:
     start: 42
     end: 68
+    source: 9659900100624592365
   severity: Error
   labels:
     - span:
         start: 14
         end: 40
+        source: 9659900100624592365
       message: first matching ability annotation is here
   phase: TypeChecking

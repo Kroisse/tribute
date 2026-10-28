@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use ropey::Rope;
 use salsa::{EventKind, Setter};
 
-use crate::source_file::{apply_edit, new_parser, parse_rope};
+use crate::source_file::{FileProvider, SourceFiles, apply_edit, new_parser, parse_rope};
 use crate::{SourceCst, path_to_uri};
 
 /// A database that records the name of every query it executes.
@@ -31,7 +31,9 @@ impl Default for LoggingDb {
                 log.lock().unwrap().push(name.to_owned());
             }
         })));
-        Self { storage, executed }
+        let db = Self { storage, executed };
+        SourceFiles::new(&db, Arc::new(FileProvider::in_memory()));
+        db
     }
 }
 
@@ -41,6 +43,25 @@ impl LoggingDb {
         let rope = Rope::from_str(text);
         let tree = parse_rope(&rope, None);
         SourceCst::new(self, path_to_uri(path.as_ref()), rope, tree)
+    }
+
+    /// Make `text` the file at `path`, which a package's source tree finds
+    /// by its URI; a file already there keeps its source input.
+    pub fn file(&mut self, path: &str, text: &str) -> SourceCst {
+        let provider = SourceFiles::get(self).provider(self).clone();
+        provider
+            .set(
+                self,
+                &path_to_uri(path.as_ref()),
+                Some(Rope::from_str(text)),
+            )
+            .expect("a file with text")
+    }
+
+    /// Remove the file at `path`.
+    pub fn remove_file(&mut self, path: &str) {
+        let provider = SourceFiles::get(self).provider(self).clone();
+        provider.set(self, &path_to_uri(path.as_ref()), None);
     }
 
     /// Replace the whole text of `source`, and its tree with a fresh parse.

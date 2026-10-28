@@ -846,6 +846,28 @@ pub mod math        // src/utils/math.trb 로드
 pub mod string      // src/utils/string.trb 로드
 ```
 
+**파일의 위치.** 본문 없는 `mod foo`는 선언한 모듈의 디렉토리에 있는 `foo.trb`를
+읽는다. 모듈 이름이 대소문자까지 그대로 파일 이름이 되며, 대소문자를 구분하지 않는
+파일 시스템에서도 다른 철자의 파일은 읽지 않는다. `foo/mod.trb`는 읽지 않는다. 모듈의
+디렉토리는 다음과 같다.
+
+- 패키지 루트 파일(`lib.trb`, `main.trb`, [매니페스트 없는
+  컴파일](#매니페스트-tributetoml)의 source 파일): 그 파일이 있는 디렉토리
+- 파일 모듈 `foo.trb`: 그 옆의 `foo/`
+- 인라인 모듈 `mod a { ... }`: 그 모듈을 둘러싼 모듈의 디렉토리 아래 `a/`
+
+그래서 `src/lib.trb`의 `mod a { mod b }`는 `src/a/b.trb`를 읽는다. 파일 모듈은 그
+파일의 내용을 본문으로 쓴 인라인 모듈과 같은 뜻이며, 이름 해석과 가시성은 모듈이
+어느 파일에 있는지 보지 않는다.
+
+**오류.** 다음은 그 `mod` 선언에서 보고하는 패키지 오류다. 모듈을 조용히 건너뛰지
+않는다.
+
+- 본문 없는 `mod`의 파일이 없다.
+- 본문 있는 `mod`와 같은 위치에 그 모듈의 파일도 있다.
+- 한 파일에 두 `mod` 선언이 닿는다. 루트 파일을 다시 가리키는 `mod`(`main.trb`의
+  `mod main`)도 그렇다.
+
 인라인 모듈과 파일 기반 모듈의 차이:
 
 ```rust
@@ -1018,7 +1040,7 @@ pub use pkg::internal::Config
 pub use pkg::api::{Request, Response}
 
 
-// src/internal/mod.trb (또는 src/internal.trb)
+// src/internal.trb
 pub struct Config {
     debug: Bool
     timeout: Int
