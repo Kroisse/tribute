@@ -423,54 +423,85 @@ impl IrContext {
             .is_some_and(crate::op_def::OpDef::has_flag::<crate::op_flag::IsolatedFromAbove>)
     }
 
+    /// The innermost anchor at or above `block`'s owner, or `None` when the
+    /// block's root is not an anchor.
+    fn anchor_of_block(
+        &self,
+        block: BlockRef,
+        memo: &mut HashMap<BlockRef, Option<OpRef>>,
+    ) -> Option<OpRef> {
+        if let Some(&anchor) = memo.get(&block) {
+            return anchor;
+        }
+        let anchor = match self.block_owner(block) {
+            None => None,
+            Some(owner) => {
+                let above = self.ops[owner]
+                    .parent_block
+                    .map(|parent| self.anchor_of_block(parent, memo));
+                match above {
+                    Some(None) => None,
+                    _ if self.is_anchor(owner) => Some(owner),
+                    Some(above) => above,
+                    None => None,
+                }
+            }
+        };
+        memo.insert(block, anchor);
+        anchor
+    }
+
     /// Map recorded reads to the outermost anchors that cover them. Reads
     /// fields directly, so an enclosing recording computation is unaffected.
     pub(crate) fn read_footprint(&self, reads: &[ReadEntity]) -> ReadFootprint {
-        let mut owners: Vec<OpRef> = Vec::with_capacity(reads.len());
+        // Operations in one block share the innermost anchor at or above
+        // the block's owner, so the walk to the root runs once per block.
+        let mut block_anchors: HashMap<BlockRef, Option<OpRef>> = HashMap::default();
+        let mut anchors: SmallVec<[OpRef; 2]> = SmallVec::new();
+        let mut last_block = None;
         for &entity in reads {
-            let owner = match entity {
-                ReadEntity::Op(op) => Some(op),
-                ReadEntity::Block(block) => self.block_owner(block),
-                ReadEntity::Region(region) => self.regions[region].parent_op,
+            let (op, block) = match entity {
+                ReadEntity::Op(op) => (Some(op), self.ops[op].parent_block),
+                ReadEntity::Block(block) => (None, Some(block)),
+                ReadEntity::Region(region) => match self.regions[region].parent_op {
+                    Some(op) => (Some(op), self.ops[op].parent_block),
+                    None => return ReadFootprint::WholeContext,
+                },
                 ReadEntity::Value(value) => match self.values[value].def {
-                    ValueDef::OpResult(op, _) => Some(op),
-                    ValueDef::BlockArg(block, _) => self.block_owner(block),
+                    ValueDef::OpResult(op, _) => (Some(op), self.ops[op].parent_block),
+                    ValueDef::BlockArg(block, _) => (None, Some(block)),
                 },
             };
-            match owner {
-                Some(op) => owners.push(op),
+            if let Some(op) = op
+                && self.is_anchor(op)
+            {
+                match block {
+                    Some(block) if self.anchor_of_block(block, &mut block_anchors).is_none() => {
+                        return ReadFootprint::WholeContext;
+                    }
+                    None => {}
+                    Some(_) => {}
+                }
+                if anchors.last() != Some(&op) {
+                    anchors.push(op);
+                }
+                continue;
+            }
+            let Some(block) = block else {
+                return ReadFootprint::WholeContext;
+            };
+            if last_block == Some(block) {
+                continue;
+            }
+            last_block = Some(block);
+            match self.anchor_of_block(block, &mut block_anchors) {
+                Some(anchor) => {
+                    if anchors.last() != Some(&anchor) {
+                        anchors.push(anchor);
+                    }
+                }
                 None => return ReadFootprint::WholeContext,
             }
-        }
-        owners.sort_unstable();
-        owners.dedup();
-
-        // Innermost anchor at or above each visited operation, valid only
-        // while every root reached so far is an anchor.
-        let mut innermost: HashMap<OpRef, OpRef> = HashMap::default();
-        let mut anchors: SmallVec<[OpRef; 2]> = SmallVec::new();
-        let mut path: SmallVec<[OpRef; 16]> = SmallVec::new();
-        for op in owners {
-            path.clear();
-            let mut current = op;
-            let mut above = loop {
-                if let Some(&anchor) = innermost.get(&current) {
-                    break anchor;
-                }
-                path.push(current);
-                match self.parent_op(current) {
-                    Some(parent) => current = parent,
-                    None if self.is_anchor(current) => break current,
-                    None => return ReadFootprint::WholeContext,
-                }
-            };
-            for &node in path.iter().rev() {
-                if self.is_anchor(node) {
-                    above = node;
-                }
-                innermost.insert(node, above);
-            }
-            anchors.push(above);
         }
         anchors.sort_unstable();
         anchors.dedup();
