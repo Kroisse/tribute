@@ -20,7 +20,7 @@ use trunk_ir::refs::{RegionRef, ValueRef};
 use crate::calling_convention::CallingConvention;
 use crate::dialect::tribute_control::{
     self, CallableArgumentOrigin, CallableQuery, CallableResultOrigin, EvidencePlanSite,
-    EvidenceStep, FuncSig, Row, RowBinder, RowUnion,
+    EvidenceStep, FuncSig, LocalValidation, Row, RowBinder, RowUnion, ValidationError,
 };
 
 /// The attribute that holds a `tribute_cps` operation's convention.
@@ -52,7 +52,7 @@ mod tribute_cps {
     #[verify]
     #[asm_format]
     #[flags(IsolatedFromAbove)]
-    #[implements(CallableArgumentOrigin)]
+    #[implements(CallableArgumentOrigin, LocalValidation)]
     fn func<S: FuncSig>(
         sym_name: Attr<String>,
         r#type: Attr<TypeOf<S>>,
@@ -90,7 +90,7 @@ mod tribute_cps {
     #[verify]
     #[asm_format]
     #[flags(Pure)]
-    #[implements(CallableResultOrigin, CallableArgumentOrigin)]
+    #[implements(CallableResultOrigin, CallableArgumentOrigin, LocalValidation)]
     fn lambda(
         convention: Attr<CallingConvention>,
         quantified_rows: Option<Attr<[u32]>>,
@@ -172,7 +172,7 @@ mod tribute_cps {
     ///   `tribute_control.tail_call_indirect`.
     /// - **Location:** the source span including the `become` keyword.
     #[verify]
-    #[implements(CallableExit)]
+    #[implements(CallableExit, LocalValidation)]
     fn tail_call_indirect<S: FuncSig>(
         convention: Attr<CallingConvention>,
         evidence_plan: Option<Attr<[EvidenceStep]>>,
@@ -268,7 +268,11 @@ fn verify_convention(
 
 impl trunk_ir::ops::Verify for Func {
     fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
-        verify_convention(ctx, self.op_ref())
+        verify_convention(ctx, self.op_ref())?;
+        Ok(tribute_control::verify_row_declarations(
+            ctx,
+            self.op_ref(),
+        )?)
     }
 }
 
@@ -299,6 +303,7 @@ impl trunk_ir::ops::Verify for CallIndirect {
 impl trunk_ir::ops::Verify for TailCallIndirect {
     fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
         verify_convention(ctx, self.op_ref())?;
+        tribute_control::verify_resolved_types(ctx, self.op_ref())?;
         Ok(tribute_control::verify_evidence_plan(
             ctx,
             self.op_ref(),
@@ -349,6 +354,24 @@ impl trunk_ir::asm_format::OpAsmFormat for Lambda {
 }
 
 impl CallableExit for TailCallIndirect {}
+
+impl LocalValidation for Func {
+    fn validate(&self, ctx: &IrContext, errors: &mut Vec<ValidationError>) {
+        tribute_control::validate_func(ctx, self.op_ref(), errors);
+    }
+}
+
+impl LocalValidation for Lambda {
+    fn validate(&self, ctx: &IrContext, errors: &mut Vec<ValidationError>) {
+        tribute_control::validate_lambda(ctx, self.op_ref(), errors);
+    }
+}
+
+impl LocalValidation for TailCallIndirect {
+    fn validate(&self, ctx: &IrContext, errors: &mut Vec<ValidationError>) {
+        tribute_control::validate_tail_call(ctx, self.op_ref(), errors);
+    }
+}
 
 impl CallableArgumentOrigin for Func {
     fn argument_is_callable_origin<'q>(

@@ -219,7 +219,10 @@ Remaining operation-specific checks run afterwards and may assume the
 declared shape. The `tribute_control` local validator and the native backend
 boundary (`validate_clif_ir`) run `OpDef::verify` the same way before their
 own checks, so those checks cover only what the definition cannot express,
-such as symbol lookups, enclosing callables, and region contents.
+such as symbol lookups, enclosing callables, and region contents. A check
+that reads only the operation itself belongs in its `#[verify]` hook; the
+`tribute_control` local validator reaches each operation's checks on its
+placement and regions through the `LocalValidation` interface.
 Debug builds also run `validate_op_schemas`, the declarative stages without the
 `#[verify]` hook, after every pipeline pass, reporting the pass that left an
 operation in violation. A pass that retypes a value before target type

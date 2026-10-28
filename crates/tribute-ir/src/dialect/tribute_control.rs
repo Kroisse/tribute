@@ -87,9 +87,10 @@ mod tribute_control {
     ///   source locals and parameters enter as block arguments.
     /// - **Location:** the whole span of the source function or extern
     ///   declaration.
+    #[verify]
     #[asm_format]
     #[flags(IsolatedFromAbove)]
-    #[implements(CallableArgumentOrigin)]
+    #[implements(CallableArgumentOrigin, LocalValidation)]
     fn func<S: FuncSig>(
         sym_name: Attr<String>,
         r#type: Attr<TypeOf<S>>,
@@ -132,7 +133,7 @@ mod tribute_control {
     /// - **Location:** the whole span of the source lambda.
     #[asm_format]
     #[flags(Pure)]
-    #[implements(CallableResultOrigin, CallableArgumentOrigin)]
+    #[implements(CallableResultOrigin, CallableArgumentOrigin, LocalValidation)]
     fn lambda(quantified_rows: Option<Attr<[u32]>>, captures: Variadic<_>) -> Value<impl FuncSig> {
         #[region(body)]
         {}
@@ -305,7 +306,7 @@ mod tribute_control {
     /// - **Location:** the source span including the `become` keyword and
     ///   the call.
     #[verify]
-    #[implements(CallLike, CallableExit)]
+    #[implements(CallLike, CallableExit, LocalValidation)]
     fn tail_call(
         callee: Attr<SymbolRef>,
         row_args: Option<Attr<[Row]>>,
@@ -337,7 +338,7 @@ mod tribute_control {
     /// - **Location:** the source span including the `become` keyword and
     ///   the indirect call.
     #[verify]
-    #[implements(CallableExit)]
+    #[implements(CallableExit, LocalValidation)]
     fn tail_call_indirect<S: FuncSig>(
         evidence_plan: Option<Attr<[EvidenceStep]>>,
         callee: Value<S>,
@@ -360,6 +361,7 @@ mod tribute_control {
     /// - **Ownership and value flow:** consumes an ordinary SSA value.
     /// - **Location:** the span of the source return or of the implicit
     ///   body-result expression.
+    #[implements(LocalValidation)]
     fn r#return(value: Value<_>) {}
 
     // Direct-style control operations
@@ -424,6 +426,7 @@ mod tribute_control {
     ///   boundary".
     /// - **Location:** the source location of the ability-operation call,
     ///   including the qualified callee and all arguments where possible.
+    #[verify]
     #[implements(OperationDeclarationUse, CallableResultOrigin)]
     fn perform(
         ability: Attr<SymbolRef>,
@@ -496,7 +499,7 @@ mod tribute_control {
     /// This removes an optional structural case from conversion without
     /// changing source semantics.
     #[verify]
-    #[implements(CallableResultOrigin, CallableArgumentOrigin)]
+    #[implements(CallableResultOrigin, CallableArgumentOrigin, LocalValidation)]
     fn handle(evidence_plan: Option<Attr<[EvidenceStep]>>) -> Value<_> {
         #[region(body)]
         {}
@@ -563,7 +566,8 @@ mod tribute_control {
     ///   arm or an `op -> Never` arm has no continuation capability.
     /// - **Location:** the source handler arm, including the operation
     ///   header.
-    #[implements(OperationDeclarationUse, CallableArgumentOrigin)]
+    #[verify]
+    #[implements(OperationDeclarationUse, CallableArgumentOrigin, LocalValidation)]
     fn handler(
         ability: Attr<SymbolRef>,
         op_name: Attr<String>,
@@ -632,6 +636,7 @@ mod tribute_control {
     ///   yielded.
     /// - **Location:** the source expression that makes the region result. A
     ///   synthesized identity completion uses the owning `handle` location.
+    #[implements(LocalValidation)]
     fn r#yield(value: Value<_>) {}
 }
 
@@ -881,6 +886,12 @@ fn verify_evidence_steps(
     Ok(())
 }
 
+impl trunk_ir::ops::Verify for Func {
+    fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
+        Ok(verify_row_declarations(ctx, self.op_ref())?)
+    }
+}
+
 impl trunk_ir::ops::Verify for FuncRef {
     fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
         Ok(row_args(ctx, self.op_ref()).map(drop)?)
@@ -895,6 +906,7 @@ impl trunk_ir::ops::Verify for Instantiate {
 
 impl trunk_ir::ops::Verify for Call {
     fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
+        verify_resolved_types(ctx, self.op_ref())?;
         row_args(ctx, self.op_ref())?;
         Ok(verify_evidence_plan(
             ctx,
@@ -916,6 +928,7 @@ impl trunk_ir::ops::Verify for CallIndirect {
 
 impl trunk_ir::ops::Verify for TailCall {
     fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
+        verify_resolved_types(ctx, self.op_ref())?;
         row_args(ctx, self.op_ref())?;
         Ok(verify_evidence_plan(
             ctx,
@@ -927,6 +940,7 @@ impl trunk_ir::ops::Verify for TailCall {
 
 impl trunk_ir::ops::Verify for TailCallIndirect {
     fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
+        verify_resolved_types(ctx, self.op_ref())?;
         Ok(verify_evidence_plan(
             ctx,
             self.op_ref(),
@@ -942,6 +956,26 @@ impl trunk_ir::ops::Verify for Resume {
             self.op_ref(),
             EvidencePlanSite::Source,
         )?)
+    }
+}
+
+impl trunk_ir::ops::Verify for Perform {
+    fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
+        if let Some(kind) = ctx.op_attrs(self.op_ref()).get_str("operation_kind")
+            && !matches!(kind, "fn" | "op")
+        {
+            return Err(format!("operation_kind must be \"fn\" or \"op\", found {kind:?}").into());
+        }
+        Ok(verify_resolved_types(ctx, self.op_ref())?)
+    }
+}
+
+impl trunk_ir::ops::Verify for Handler {
+    fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
+        match self.kind(ctx) {
+            "fn" | "op" => Ok(()),
+            kind => Err(format!("kind must be \"fn\" or \"op\", found {kind:?}").into()),
+        }
     }
 }
 
@@ -1330,6 +1364,65 @@ pub struct DeclarationUse<'a> {
     pub op_name: StringRef,
     pub kind: Option<StringRef>,
     pub kind_attr: &'static str,
+}
+
+/// The local checks of a `tribute_control` or `tribute_cps` operation that
+/// its definition cannot express: its placement in the enclosing callable or
+/// structured operation and the contents of its regions. The local validator
+/// queries it after the definition verified the operation, so
+/// implementations may assume the declared shape.
+#[trunk_ir::op_interface]
+pub trait LocalValidation: DialectOp {
+    /// Report each violation of these checks.
+    fn validate(&self, ctx: &IrContext, errors: &mut Vec<ValidationError>);
+}
+
+impl LocalValidation for Func {
+    fn validate(&self, ctx: &IrContext, errors: &mut Vec<ValidationError>) {
+        validate_func(ctx, self.op_ref(), errors);
+    }
+}
+
+impl LocalValidation for Lambda {
+    fn validate(&self, ctx: &IrContext, errors: &mut Vec<ValidationError>) {
+        validate_lambda(ctx, self.op_ref(), errors);
+    }
+}
+
+impl LocalValidation for Return {
+    fn validate(&self, ctx: &IrContext, errors: &mut Vec<ValidationError>) {
+        validate_return(ctx, self.op_ref(), errors);
+    }
+}
+
+impl LocalValidation for TailCall {
+    fn validate(&self, ctx: &IrContext, errors: &mut Vec<ValidationError>) {
+        validate_tail_call(ctx, self.op_ref(), errors);
+    }
+}
+
+impl LocalValidation for TailCallIndirect {
+    fn validate(&self, ctx: &IrContext, errors: &mut Vec<ValidationError>) {
+        validate_tail_call(ctx, self.op_ref(), errors);
+    }
+}
+
+impl LocalValidation for Handle {
+    fn validate(&self, ctx: &IrContext, errors: &mut Vec<ValidationError>) {
+        validate_handle(ctx, self.op_ref(), errors);
+    }
+}
+
+impl LocalValidation for Handler {
+    fn validate(&self, ctx: &IrContext, errors: &mut Vec<ValidationError>) {
+        validate_handler(ctx, self.op_ref(), errors);
+    }
+}
+
+impl LocalValidation for Yield {
+    fn validate(&self, ctx: &IrContext, errors: &mut Vec<ValidationError>) {
+        validate_yield(ctx, self.op_ref(), errors);
+    }
 }
 
 /// An operation that names one ability operation declaration, whose
@@ -2736,45 +2829,43 @@ fn validate_return_or_yield_shape(ctx: &IrContext, op: OpRef, errors: &mut Vec<V
     }
 }
 
-fn validate_row_declarations(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
-    let binders = match row_binders(ctx, op) {
-        Ok(binders) => binders,
-        Err(message) => return push_op_error(ctx, op, errors, message),
-    };
-    let unions = match row_unions(ctx, op) {
-        Ok(unions) => unions,
-        Err(message) => return push_op_error(ctx, op, errors, message),
-    };
+/// That `op`'s row unions name its binders and each declares a distinct
+/// result.
+pub(crate) fn verify_row_declarations(ctx: &IrContext, op: OpRef) -> Result<(), String> {
+    let binders = row_binders(ctx, op)?;
     let mut results = HashSet::default();
-    for union in &unions {
+    for union in row_unions(ctx, op)? {
         let in_scope = |index: u32| usize::try_from(index).is_ok_and(|index| index < binders.len());
         if !in_scope(union.result) || !union.sources.iter().copied().all(in_scope) {
-            push_op_error(
-                ctx,
-                op,
-                errors,
-                "row union names a tail that is not a binder",
-            );
-        } else if union.sources.contains(&union.result) {
-            push_op_error(
-                ctx,
-                op,
-                errors,
-                "row union lists its result among its sources",
-            );
-        } else if !results.insert(union.result) {
-            push_op_error(
-                ctx,
-                op,
-                errors,
-                format!("row tail {} is declared as a union twice", union.result),
-            );
+            return Err("row union names a tail that is not a binder".into());
         }
+        if union.sources.contains(&union.result) {
+            return Err("row union lists its result among its sources".into());
+        }
+        if !results.insert(union.result) {
+            return Err(format!(
+                "row tail {} is declared as a union twice",
+                union.result
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// That no operand or result type of `op` is unresolved.
+pub(crate) fn verify_resolved_types(ctx: &IrContext, op: OpRef) -> Result<(), &'static str> {
+    let unresolved = value_types(ctx, ctx.op_operands(op))
+        .into_iter()
+        .chain(ctx.op_result_types(op).iter().copied())
+        .any(|ty| contains_unresolved_type(ctx, ty, &mut HashSet::default()));
+    if unresolved {
+        Err("operand and result types must be resolved")
+    } else {
+        Ok(())
     }
 }
 
-fn validate_func(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
-    validate_row_declarations(ctx, op, errors);
+pub(crate) fn validate_func(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
     let ty = ctx
         .op_attrs(op)
         .get_type("type")
@@ -2785,20 +2876,10 @@ fn validate_func(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) 
     }
 }
 
-fn validate_lambda(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
+pub(crate) fn validate_lambda(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
     let ty = ctx.op_result_types(op)[0];
     let body = ctx.op_region(op, 0).expect("schema-verified source lambda");
     validate_callable_body(ctx, op, ty, body, errors);
-}
-
-fn validate_call(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
-    let has_unresolved_type = value_types(ctx, ctx.op_operands(op))
-        .into_iter()
-        .chain(ctx.op_result_types(op).iter().copied())
-        .any(|ty| contains_unresolved_type(ctx, ty, &mut HashSet::default()));
-    if has_unresolved_type {
-        push_op_error(ctx, op, errors, "operands and result must be resolved");
-    }
 }
 
 fn validate_return(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
@@ -2896,14 +2977,8 @@ fn tail_call_owner(ctx: &IrContext, op: OpRef) -> Result<(OpRef, TypeRef), &'sta
     }
 }
 
-fn validate_tail_call(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
+pub(crate) fn validate_tail_call(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
     validate_return_or_yield_shape(ctx, op, errors);
-    let has_unresolved_type = value_types(ctx, ctx.op_operands(op))
-        .into_iter()
-        .any(|ty| contains_unresolved_type(ctx, ty, &mut HashSet::default()));
-    if has_unresolved_type {
-        push_op_error(ctx, op, errors, "operands must be resolved");
-    }
     let (owner, owner_ty) = match tail_call_owner(ctx, op) {
         Ok(owner) => owner,
         Err(message) => {
@@ -2939,26 +3014,6 @@ fn validate_tail_call(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationErr
                 "callee convention must not be stronger than the enclosing callable",
             );
         }
-    }
-}
-
-fn validate_perform(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
-    match ctx.op_attrs(op).get_str("operation_kind") {
-        Some("fn" | "op") => {}
-        Some(kind) => push_op_error(
-            ctx,
-            op,
-            errors,
-            format!("operation_kind must be \"fn\" or \"op\", found {kind:?}"),
-        ),
-        None => {}
-    }
-    let has_unresolved_type = value_types(ctx, ctx.op_operands(op))
-        .into_iter()
-        .chain(ctx.op_result_types(op).iter().copied())
-        .any(|ty| contains_unresolved_type(ctx, ty, &mut HashSet::default()));
-    if has_unresolved_type {
-        push_op_error(ctx, op, errors, "operands and result must be resolved");
     }
 }
 
@@ -3076,16 +3131,6 @@ fn region_contains_resume(ctx: &IrContext, region: RegionRef) -> bool {
 
 fn validate_handler(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
     let kind = ctx.op_attrs(op).get_str("kind");
-    if let Some(kind) = kind
-        && !matches!(kind, "fn" | "op")
-    {
-        push_op_error(
-            ctx,
-            op,
-            errors,
-            format!("kind must be \"fn\" or \"op\", found {kind:?}"),
-        );
-    }
     let Some(body) = ctx.op_region(op, 0) else {
         return;
     };
@@ -3253,29 +3298,8 @@ fn validate_local_operation(ctx: &IrContext, op: OpRef, errors: &mut Vec<Validat
         is_func(ctx, op) || is_lambda(ctx, op),
         errors,
     );
-    let validate: Option<fn(&IrContext, OpRef, &mut Vec<ValidationError>)> = if is_func(ctx, op) {
-        Some(validate_func)
-    } else if is_lambda(ctx, op) {
-        Some(validate_lambda)
-    } else if Call::matches(ctx, op) {
-        Some(validate_call)
-    } else if Return::matches(ctx, op) {
-        Some(validate_return)
-    } else if TailCall::matches(ctx, op) || is_tail_call_indirect(ctx, op) {
-        Some(validate_tail_call)
-    } else if Perform::matches(ctx, op) {
-        Some(validate_perform)
-    } else if Handle::matches(ctx, op) {
-        Some(validate_handle)
-    } else if Handler::matches(ctx, op) {
-        Some(validate_handler)
-    } else if Yield::matches(ctx, op) {
-        Some(validate_yield)
-    } else {
-        None
-    };
-    if let Some(validate) = validate {
-        validate(ctx, op, errors);
+    if let Some(validation) = DynLocalValidation::get(ctx, op) {
+        validation.validate(ctx, errors);
     }
 }
 
@@ -5723,7 +5747,7 @@ mod tests {
                         error.op == Some(op)
                             && error
                                 .message
-                                .contains("operands and result must be resolved")
+                                .contains("operand and result types must be resolved")
                     })
                     .count(),
                 1,
