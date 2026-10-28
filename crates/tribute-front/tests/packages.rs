@@ -1,6 +1,7 @@
 //! A program built from several library packages, without a file system:
 //! `app` depends on `lib`, and both depend on `std`.
 
+use rustc_hash::FxHashMap as HashMap;
 use salsa::Setter;
 use tribute_core::diagnostic::Diagnostic;
 use tribute_front::SourceCst;
@@ -8,7 +9,8 @@ use tribute_front::analysis::{self, DependencyTable, Package};
 use tribute_front::ast::SpanMaps;
 use tribute_front::ast_to_ir::{self, LoweringEnvironment, LoweringInput};
 use tribute_front::monomorphize::{
-    SpecializationInput, SpecializationOutput, monomorphize_functions,
+    SpecializationInput, SpecializationOutput, monomorphize_functions, specialized_dependencies,
+    specialized_package,
 };
 use tribute_front::resolve::PackageName;
 use tribute_front::testing::{Executed, LoggingDb};
@@ -289,5 +291,239 @@ fn a_path_continues_through_a_re_export_of_an_indirect_dependency() {
     assert_eq!(
         messages("fn run() -> Nat { inner::a::b::f() }\n"),
         ["unresolved name `inner::a::b::f`"]
+    );
+}
+
+const BASE: &str = "\
+pub struct Box(a) { value: a }
+
+pub fn wrap(value: a) -> Box(a) { Box { value: value } }
+
+pub fn unwrap(boxed: Box(a)) -> a { boxed.value }
+";
+
+const LEFT: &str = "\
+pub fn left() -> Nat { base::unwrap(base::wrap(1)) }
+";
+
+const RIGHT: &str = "\
+pub fn right() -> Nat { Option::unwrap_or(.Some(base::unwrap(base::wrap(2))), 0) }
+";
+
+const DIAMOND_APP: &str = "\
+struct Local { n: Nat }
+
+fn run() -> Nat {
+    left::left() + right::right() + base::unwrap(base::wrap(Local { n: 3 })).n
+}
+";
+
+/// A diamond: `left` and `right` each depend on `base`, and each first
+/// instantiates `base`'s generics at `std`'s types alone. `app` depends on
+/// all three.
+struct Diamond {
+    db: LoggingDb,
+    left: Package,
+    right: Package,
+    app: SourceCst,
+    environment: DependencyTable,
+}
+
+impl Diamond {
+    fn new() -> Self {
+        let db = LoggingDb::default();
+        let std = Package::new(
+            &db,
+            PackageName::std(),
+            db.source("prelude:///std/prelude", PRELUDE),
+            DependencyTable::new(&db, Vec::new()),
+        );
+        let library = |name: &str, text: &str, dependencies: Vec<Package>| {
+            Package::new(
+                &db,
+                PackageName::library(Symbol::new(name)),
+                db.source(&format!("{name}:///{name}.trb"), text),
+                DependencyTable::new(&db, dependencies),
+            )
+        };
+        let base = library("base", BASE, vec![std]);
+        let left = library("left", LEFT, vec![base, std]);
+        let right = library("right", RIGHT, vec![base, std]);
+        let app = db.source("app.trb", DIAMOND_APP);
+        let environment = DependencyTable::new(&db, vec![left, right, base, std]);
+        Self {
+            db,
+            left,
+            right,
+            app,
+            environment,
+        }
+    }
+
+    fn specialize(&self) -> Executed {
+        self.db.record(|db| {
+            continued_app(db, self.app, self.environment).expect("app specializes");
+        })
+    }
+}
+
+/// `app` continuing the specializations of the packages it depends on, as
+/// the root crate specializes a user package.
+#[salsa::tracked]
+fn continued_app<'db>(
+    db: &'db dyn salsa::Database,
+    app: SourceCst,
+    environment: DependencyTable,
+) -> Option<SpecializationOutput<'db>> {
+    let checked = *analysis::analyze(db, app, environment)?;
+    let dependencies = specialized_dependencies(db, environment)?;
+    let input = SpecializationInput::continuing(
+        db,
+        checked,
+        dependencies,
+        analysis::root_names(db, environment),
+    );
+    let intrinsics = ast_to_ir::registered_compiler_intrinsics(input.module()).ok()?;
+    monomorphize_functions(db, input.with_compiler_intrinsics(intrinsics)).ok()
+}
+
+/// `app` specialized with the bodies of every package it depends on merged
+/// in at once.
+#[salsa::tracked]
+fn merged_app<'db>(
+    db: &'db dyn salsa::Database,
+    app: SourceCst,
+    environment: DependencyTable,
+) -> Option<SpecializationOutput<'db>> {
+    let checked = *analysis::analyze(db, app, environment)?;
+    let dependencies: Vec<_> = analysis::transitive_packages(db, environment)
+        .into_iter()
+        .map(|package| analysis::checked_package(db, package).map(|checked| checked.checked))
+        .collect::<Option<_>>()?;
+    let input = SpecializationInput::new(
+        db,
+        checked,
+        dependencies.iter().copied(),
+        analysis::root_names(db, environment),
+    )
+    .merge_bodies(db, dependencies);
+    let intrinsics = ast_to_ir::registered_compiler_intrinsics(input.module()).ok()?;
+    monomorphize_functions(db, input.with_compiler_intrinsics(intrinsics)).ok()
+}
+
+/// Each value of `items` and how many times it occurs.
+fn counts<T: std::hash::Hash + Eq>(items: impl IntoIterator<Item = T>) -> HashMap<T, usize> {
+    let mut counts = HashMap::default();
+    for item in items {
+        *counts.entry(item).or_default() += 1;
+    }
+    counts
+}
+
+/// Whether the function instances of `package`'s own specialization include
+/// one of `base::wrap`.
+fn instantiates_wrap(db: &LoggingDb, package: Package) -> bool {
+    let specialized = specialized_package(db, package).expect("the library specializes");
+    specialized.function_instances(db).iter().any(|path| {
+        path.modules() == ["base"]
+            && path
+                .leaf()
+                .is_some_and(|leaf| leaf.to_string().starts_with("wrap$"))
+    })
+}
+
+#[test]
+fn continuing_a_diamond_matches_merging_every_body() {
+    let diamond = Diamond::new();
+    let db = &diamond.db;
+    assert_eq!(
+        analysis::diagnostics(db, diamond.app, diamond.environment)
+            .into_iter()
+            .map(|diagnostic: &Diagnostic| diagnostic.inner.message.clone())
+            .collect::<Vec<_>>(),
+        Vec::<String>::new()
+    );
+    // Both sides of the diamond have an instance of `base::wrap` of their
+    // own, which the continued result keeps once.
+    assert!(instantiates_wrap(db, diamond.left));
+    assert!(instantiates_wrap(db, diamond.right));
+
+    let merged = merged_app(db, diamond.app, diamond.environment).expect("merging specializes");
+    let continued =
+        continued_app(db, diamond.app, diamond.environment).expect("continuing specializes");
+    let sources = *merged.source_entries(db);
+    assert_eq!(sources, *continued.source_entries(db), "sources");
+    let (merged_module, continued_module) = (merged.module(db), continued.module(db));
+    assert_eq!(
+        merged_module.entries[..sources],
+        continued_module.entries[..sources],
+        "source entries"
+    );
+    let instances = counts(&continued_module.entries[sources..]);
+    assert_eq!(
+        counts(&merged_module.entries[sources..]),
+        instances,
+        "instances"
+    );
+    assert!(
+        instances.values().all(|&count| count == 1),
+        "duplicate instance"
+    );
+    let (merged_decls, continued_decls) = (merged.declarations(db), continued.declarations(db));
+    assert_eq!(
+        counts(&merged_decls.function_types),
+        counts(&continued_decls.function_types),
+        "function types"
+    );
+    assert_eq!(
+        counts(&merged_decls.constructor_types.schemes),
+        counts(&continued_decls.constructor_types.schemes),
+        "constructor schemes"
+    );
+    assert_eq!(
+        merged_decls.constructor_types.specialized_enum_variants,
+        continued_decls.constructor_types.specialized_enum_variants,
+        "enum variants"
+    );
+    assert_eq!(
+        merged_decls.ability_definitions, continued_decls.ability_definitions,
+        "ability definitions"
+    );
+    assert_eq!(
+        merged_decls.well_known_types, continued_decls.well_known_types,
+        "well-known types"
+    );
+    assert!(
+        merged.expression_types(db) == continued.expression_types(db),
+        "expression metadata"
+    );
+    assert_eq!(
+        merged.compiler_intrinsics(db),
+        continued.compiler_intrinsics(db),
+        "compiler intrinsics"
+    );
+    assert_eq!(
+        merged.function_instances(db),
+        continued.function_instances(db),
+        "function instances"
+    );
+    assert_eq!(
+        merged.nominal_instances(db),
+        continued.nominal_instances(db),
+        "nominal instances"
+    );
+}
+
+#[test]
+fn an_app_edit_reuses_every_dependency_specialization() {
+    let mut diamond = Diamond::new();
+    let baseline = diamond.specialize();
+    diamond
+        .db
+        .replace(diamond.app, "Local { n: 3 }", "Local { n: 4 }");
+    diamond.specialize().assert_reuse(
+        &baseline,
+        &["continued_app"],
+        &["specialized_package", "checked_package"],
     );
 }

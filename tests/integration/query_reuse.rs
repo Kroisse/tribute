@@ -35,6 +35,6 @@ fn a_body_edit_does_not_specialize_std_again() {
     db.record(|db| specialize(db, source)).assert_reuse(
         &baseline,
         &["prepare_frontend_details"],
-        &["specialized_prelude"],
+        &["specialized_package", "prelude_runtime_types"],
     );
 }

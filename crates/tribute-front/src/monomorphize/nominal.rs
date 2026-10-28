@@ -225,7 +225,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
 "#,
             ),
         );
-        let index = NominalIndex::new(db, input.module(db), None);
+        let index = NominalIndex::new(db, input.module(db), &[]);
         assert_eq!(index.declarations.len(), 6);
         for prefix in ["A", "B"] {
             for (suffix, generic) in [
@@ -310,7 +310,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 "pub mod nested { pub struct Holder(a) { value: a } }\nextern \"C\" fn hold(value: nested::Holder(Int)) -> Nil",
             ),
         );
-        let index = NominalIndex::new(db, input.module(db), None);
+        let index = NominalIndex::new(db, input.module(db), &[]);
         let schemas: HashMap<_, _> = input
             .declarations(db)
             .constructor_types
@@ -436,7 +436,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
             assert!(!seeds.contains_key(&hidden_id));
             let result = collect(
                 db,
-                &NominalIndex::new(db, input.module(db), None),
+                &NominalIndex::new(db, input.module(db), &[]),
                 &schemas,
                 seeds,
                 None,
@@ -519,7 +519,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 .collect();
             let result = close_dependencies(
                 db,
-                &NominalIndex::new(db, input.module(db), None),
+                &NominalIndex::new(db, input.module(db), &[]),
                 &schemas,
                 seeds,
                 rounds,
@@ -572,7 +572,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
             .collect();
         let result = collect(
             db,
-            &NominalIndex::new(db, input.module(db), None),
+            &NominalIndex::new(db, input.module(db), &[]),
             &schemes,
             seeds,
             None,
@@ -667,7 +667,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 );
                 let result = collect(
                     db,
-                    &NominalIndex::new(db, input.module(db), None),
+                    &NominalIndex::new(db, input.module(db), &[]),
                     &schemas,
                     seeds,
                     None,

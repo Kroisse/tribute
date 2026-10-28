@@ -114,8 +114,8 @@ pub(super) fn validate<'db>(
         HashMap::default();
     let mut fields = HashSet::default();
     let tables = dependency
-        .map(|dependency| (dependency.module, false))
         .into_iter()
+        .flat_map(|dependency| dependency.modules.iter().map(|&table| (table, false)))
         .chain([(module, true)]);
     for (entry, own) in
         tables.flat_map(|(table, own)| table.entries.iter().map(move |entry| (entry, own)))

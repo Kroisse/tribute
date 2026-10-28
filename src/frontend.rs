@@ -13,7 +13,7 @@ use tribute_core::diagnostic::{Diagnostic, DiagnosticSeverity};
 use tribute_front::analysis;
 use tribute_front::ast::SpanMaps;
 use tribute_front::ast_to_ir;
-use tribute_front::monomorphize::{SpecializationInput, SpecializationOutput};
+use tribute_front::monomorphize::{self, SpecializationInput, SpecializationOutput};
 use tribute_front::query as ast_query;
 use tribute_front::resolve::NameDisplay;
 use tribute_front::typeck as ast_typeck;
@@ -117,24 +117,18 @@ fn prepare_frontend_details<'db>(
     source: SourceCst,
 ) -> Option<PreparedFrontend<'db>> {
     // Type checking reads package std's declarations without copying them.
-    // Specialization continues std's own, which depends on std alone, with
-    // the user's bodies; the result has std's bodies and per-expression
-    // metadata ahead of the user's.
-    let prelude = match crate::prelude::prelude_module(db) {
-        Some(_) => Some(crate::prelude::specialized_prelude(db)?),
-        None => None,
+    // Specialization continues each dependency's own, which depends on that
+    // package alone, with the user's bodies; the result has the
+    // dependencies' bodies and per-expression metadata ahead of the user's.
+    // Without a prelude there are no runtime declarations to check.
+    let runtime_types = match crate::prelude::prelude_module(db) {
+        Some(_) => crate::prelude::prelude_runtime_types(db)?.clone(),
+        None => Default::default(),
     };
+    let environment = *crate::prelude::frontend_environment(db);
+    let dependencies = monomorphize::specialized_dependencies(db, environment)?;
     let names = diagnostic_names(db);
-    let input = match prelude {
-        Some(prelude) => SpecializationInput::continuing(
-            db,
-            typed,
-            prelude.checked,
-            prelude.specialized,
-            names.clone(),
-        ),
-        None => SpecializationInput::new(db, typed, None, names.clone()),
-    };
+    let input = SpecializationInput::continuing(db, typed, dependencies, names.clone());
     let span_map = frontend_spans(db, source);
 
     let compiler_intrinsics = match ast_to_ir::registered_compiler_intrinsics(input.module()) {
@@ -146,13 +140,8 @@ fn prepare_frontend_details<'db>(
             return None;
         }
     };
-    // Without a prelude there are no runtime declarations to check.
-    let runtime_types = prelude
-        .map(|prelude| prelude.runtime_types.clone())
-        .unwrap_or_default();
-
     let input = input.with_compiler_intrinsics(compiler_intrinsics);
-    let specialized = match tribute_front::monomorphize::monomorphize_functions(db, input) {
+    let specialized = match monomorphize::monomorphize_functions(db, input) {
         Ok(specialized) => specialized,
         Err(errors) => {
             for error in errors {
@@ -315,10 +304,8 @@ mod tests {
             continued.nominal_instances(db),
             "{name}: nominal instances"
         );
-        let prelude = crate::prelude::specialized_prelude(db)
-            .as_ref()
-            .expect("std specializes")
-            .specialized;
+        let prelude = *monomorphize::specialized_package(db, *crate::prelude::std_package(db))
+            .expect("std specializes");
         continued_module.entries.len()
             - prelude.module(db).entries.len()
             - (sources - *prelude.source_entries(db))
