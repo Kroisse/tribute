@@ -18,7 +18,6 @@
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
-use trunk_ir::OpName;
 
 use trunk_ir::SymbolPath;
 use trunk_ir::context::{IrContext, OperationDataBuilder};
@@ -28,7 +27,7 @@ use trunk_ir::op_interface::IndirectCallLike;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
 use trunk_ir::rewrite::{
-    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter, clone_attrs_except,
+    Module, OpRewritePattern, PatternApplicator, PatternRewriter, TypeConverter, clone_attrs_except,
 };
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 use trunk_ir::walk::{WalkAction, walk_op};
@@ -389,21 +388,16 @@ fn convert_to_wasm_func_type(
     Some(wasm_dialect::func_sig(ctx, inputs, results).as_type_ref())
 }
 
-impl RewritePattern for FuncFuncPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[func::Func::NAME])
-    }
+impl OpRewritePattern for FuncFuncPattern {
+    type Op = func::Func;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        func_op: func::Func,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(func_op) = func::Func::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = func_op.op_ref();
         let loc = ctx.op(op).location;
         let sym_name = func_op.sym_name_ref(ctx);
         let Some(func_type) =
@@ -450,21 +444,16 @@ impl RewritePattern for FuncFuncPattern {
 /// Pattern for `func.call` -> `wasm.call`
 struct FuncCallPattern;
 
-impl RewritePattern for FuncCallPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[func::Call::NAME])
-    }
+impl OpRewritePattern for FuncCallPattern {
+    type Op = func::Call;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        call_op: func::Call,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(call_op) = func::Call::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = call_op.op_ref();
         let loc = ctx.op(op).location;
         let callee = call_op.callee(ctx);
         let args: Vec<_> = ctx.op_operands(op).to_vec();
@@ -487,21 +476,16 @@ impl RewritePattern for FuncCallPattern {
 /// The callee (i32 table index) is the first operand, followed by arguments.
 struct FuncCallIndirectPattern;
 
-impl RewritePattern for FuncCallIndirectPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[func::CallIndirect::NAME])
-    }
+impl OpRewritePattern for FuncCallIndirectPattern {
+    type Op = func::CallIndirect;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        call: func::CallIndirect,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(call) = func::CallIndirect::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = call.op_ref();
         let loc = ctx.op(op).location;
         let all_operands = std::iter::once(call.callee(ctx))
             .chain(CallLike::call_args(&call, ctx).iter().copied())
@@ -545,21 +529,16 @@ impl RewritePattern for FuncCallIndirectPattern {
 /// Pattern for `func.return` -> `wasm.return`
 struct FuncReturnPattern;
 
-impl RewritePattern for FuncReturnPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[func::Return::NAME])
-    }
+impl OpRewritePattern for FuncReturnPattern {
+    type Op = func::Return;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        return_op: func::Return,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(_return_op) = func::Return::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = return_op.op_ref();
         let loc = ctx.op(op).location;
         let values: Vec<_> = ctx.op_operands(op).to_vec();
 
@@ -572,21 +551,16 @@ impl RewritePattern for FuncReturnPattern {
 /// Pattern for `func.tail_call` -> `wasm.return_call`
 struct FuncTailCallPattern;
 
-impl RewritePattern for FuncTailCallPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[func::TailCall::NAME])
-    }
+impl OpRewritePattern for FuncTailCallPattern {
+    type Op = func::TailCall;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        tail_call_op: func::TailCall,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(tail_call_op) = func::TailCall::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = tail_call_op.op_ref();
         let loc = ctx.op(op).location;
         let callee = tail_call_op.callee(ctx);
         let args: Vec<_> = ctx.op_operands(op).to_vec();
@@ -607,21 +581,16 @@ impl RewritePattern for FuncTailCallPattern {
 /// through instead of rebuilding a signature from the runtime operands.
 struct FuncTailCallIndirectPattern;
 
-impl RewritePattern for FuncTailCallIndirectPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[func::TailCallIndirect::NAME])
-    }
+impl OpRewritePattern for FuncTailCallIndirectPattern {
+    type Op = func::TailCallIndirect;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        tail: func::TailCallIndirect,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(tail) = func::TailCallIndirect::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = tail.op_ref();
         // The exact callable metadata is source-authoritative, but the
         // arguments have already reached their Wasm representations. Convert
         // the attribute with the shared signature converter before validating
@@ -679,21 +648,16 @@ impl RewritePattern for FuncTailCallIndirectPattern {
 /// Pattern for `func.unreachable` -> `wasm.unreachable`
 struct FuncUnreachablePattern;
 
-impl RewritePattern for FuncUnreachablePattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[func::Unreachable::NAME])
-    }
+impl OpRewritePattern for FuncUnreachablePattern {
+    type Op = func::Unreachable;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        unreachable_op: func::Unreachable,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(_unreachable_op) = func::Unreachable::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = unreachable_op.op_ref();
         let loc = ctx.op(op).location;
 
         let new_op = wasm_dialect::Unreachable::operands().build(ctx, loc);
@@ -710,21 +674,16 @@ struct FuncConstantPattern {
     table_indices: HashMap<SymbolPath, u32>,
 }
 
-impl RewritePattern for FuncConstantPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[func::Constant::NAME])
-    }
+impl OpRewritePattern for FuncConstantPattern {
+    type Op = func::Constant;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        const_op: func::Constant,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(const_op) = func::Constant::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = const_op.op_ref();
         let func_ref = const_op.func_ref(ctx);
 
         // All func.constant operations must be registered in the function table.

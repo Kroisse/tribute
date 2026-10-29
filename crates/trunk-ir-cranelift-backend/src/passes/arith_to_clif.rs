@@ -11,7 +11,6 @@
 //! - `arith.{sitofp,uitofp,fptosi,fptoui}` -> `clif.fcvt_{from,to}_{sint,uint}`
 //! - `arith.{extf,truncf}` -> `clif.{fpromote,fdemote}`
 
-use trunk_ir::OpName;
 use trunk_ir::StringArg;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::arith;
@@ -20,8 +19,8 @@ use trunk_ir::dialect::core::{self, FloatLike, IntegerLike};
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
-    ConversionError, ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern,
-    TypeConverter,
+    ConversionError, ConversionTarget, Module, OpRewritePattern, PatternApplicator,
+    PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
@@ -74,20 +73,16 @@ fn type_category(ctx: &IrContext, ty: TypeRef) -> Option<&'static str> {
 /// projected away at calls and returns.
 struct NilValuePattern;
 
-impl RewritePattern for NilValuePattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[core::NilValue::NAME])
-    }
+impl OpRewritePattern for NilValuePattern {
+    type Op = core::NilValue;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        nil_value: core::NilValue,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if !core::NilValue::matches(ctx, op) {
-            return false;
-        }
+        let op = nil_value.op_ref();
         let Some(result_ty) = rewriter.result_type(ctx, op, 0) else {
             return false;
         };
@@ -103,21 +98,16 @@ impl RewritePattern for NilValuePattern {
 
 struct ArithConstPattern;
 
-impl RewritePattern for ArithConstPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[arith::Const::NAME])
-    }
+impl OpRewritePattern for ArithConstPattern {
+    type Op = arith::Const;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        const_op: arith::Const,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(const_op) = arith::Const::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = const_op.op_ref();
         let result_types = ctx.op_result_types(op);
         let Some(&raw_result_ty) = result_types.first() else {
             return false;

@@ -15,7 +15,6 @@
 //!   dead casts. A cast it cannot remove stays for the target's legality
 //!   boundary to reject.
 
-use crate::OpName;
 use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
 
@@ -25,7 +24,7 @@ use crate::dialect::core;
 use crate::ops::DialectOp;
 use crate::pass::{Pass, PassRunResult};
 use crate::refs::{BlockRef, OpRef, TypeRef, ValueDef, ValueRef};
-use crate::rewrite::{Module, PatternRewriter, RewritePattern};
+use crate::rewrite::{Module, OpRewritePattern, PatternRewriter};
 use crate::walk::{WalkAction, walk_op};
 
 /// Cast legalization pattern for a target type conversion.
@@ -39,20 +38,16 @@ use crate::walk::{WalkAction, walk_op};
 /// target pass erases it (such as a WasmGC reference upcast).
 pub struct UnrealizedCastConversionPattern;
 
-impl RewritePattern for UnrealizedCastConversionPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[core::UnrealizedConversionCast::NAME])
-    }
+impl OpRewritePattern for UnrealizedCastConversionPattern {
+    type Op = core::UnrealizedConversionCast;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        unrealized_conversion_cast: core::UnrealizedConversionCast,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if !core::UnrealizedConversionCast::matches(ctx, op) {
-            return false;
-        }
+        let op = unrealized_conversion_cast.op_ref();
         let (&[input], &[declared]) = (ctx.op_operands(op), ctx.op_result_types(op)) else {
             return false;
         };

@@ -12,7 +12,6 @@
 
 use rustc_hash::FxHashMap as HashMap;
 use std::ops::ControlFlow;
-use trunk_ir::OpName;
 
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::tribute_control::COMPILER_INTRINSIC_ATTR;
@@ -23,7 +22,7 @@ use trunk_ir::ops::DialectOp;
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
-    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    Module, OpRewritePattern, PatternApplicator, PatternRewriter, TypeConverter,
 };
 use trunk_ir::types::{Attribute, Location};
 use trunk_ir::walk::{WalkAction, walk_op};
@@ -150,20 +149,16 @@ struct SlotsCallPattern<'a> {
     declarations: &'a HashMap<SymbolPath, SlotsOp>,
 }
 
-impl RewritePattern for SlotsCallPattern<'_> {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[func::Call::NAME])
-    }
+impl OpRewritePattern for SlotsCallPattern<'_> {
+    type Op = func::Call;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        call: func::Call,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(call) = func::Call::from_op(ctx, op) else {
-            return false;
-        };
+        let op = call.op_ref();
         let Some(&slots_op) = self.declarations.get(call.callee(ctx)) else {
             return false;
         };
@@ -273,20 +268,15 @@ struct SlotsDeclarationPattern<'a> {
     declarations: &'a HashMap<SymbolPath, SlotsOp>,
 }
 
-impl RewritePattern for SlotsDeclarationPattern<'_> {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[func::Func::NAME])
-    }
+impl OpRewritePattern for SlotsDeclarationPattern<'_> {
+    type Op = func::Func;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        function: func::Func,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(function) = func::Func::from_op(ctx, op) else {
-            return false;
-        };
         let name = SymbolPath::new([Symbol::new(function.sym_name(ctx))]);
         if !self.declarations.contains_key(&name) {
             return false;

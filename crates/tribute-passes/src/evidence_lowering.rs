@@ -10,7 +10,6 @@
 //! on every target.
 
 use std::ops::ControlFlow;
-use trunk_ir::OpName;
 
 use tribute_ir::dialect::ability;
 use tribute_ir::dialect::adt;
@@ -23,8 +22,8 @@ use trunk_ir::ops::DialectOp;
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
-    ConversionError, ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern,
-    TypeConverter,
+    ConversionError, ConversionTarget, Module, OpRewritePattern, PatternApplicator,
+    PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::types::{Attribute, Location};
 use trunk_ir::walk::{WalkAction, walk_op};
@@ -240,20 +239,16 @@ struct LowerEffectExtend<'a> {
     runtime: &'a EvidenceRuntime,
 }
 
-impl RewritePattern for LowerEffectExtend<'_> {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[effect::Extend::NAME])
-    }
+impl OpRewritePattern for LowerEffectExtend<'_> {
+    type Op = effect::Extend;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        extend_op: effect::Extend,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(extend_op) = effect::Extend::from_op(ctx, op) else {
-            return false;
-        };
+        let op = extend_op.op_ref();
         let function = self
             .runtime
             .extend
@@ -368,20 +363,16 @@ struct LowerEffectDispatchTail<'a> {
     runtime: &'a EvidenceRuntime,
 }
 
-impl RewritePattern for LowerEffectDispatchTail<'_> {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[effect::DispatchTail::NAME])
-    }
+impl OpRewritePattern for LowerEffectDispatchTail<'_> {
+    type Op = effect::DispatchTail;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        dispatch_op: effect::DispatchTail,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(dispatch_op) = effect::DispatchTail::from_op(ctx, op) else {
-            return false;
-        };
+        let op = dispatch_op.op_ref();
         if !effect_dispatch::is_valid_tail_dispatch(ctx, op) {
             return false;
         }
@@ -408,20 +399,16 @@ struct LowerEffectDispatchCps<'a> {
     runtime: &'a EvidenceRuntime,
 }
 
-impl RewritePattern for LowerEffectDispatchCps<'_> {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[effect::DispatchCps::NAME])
-    }
+impl OpRewritePattern for LowerEffectDispatchCps<'_> {
+    type Op = effect::DispatchCps;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        dispatch_op: effect::DispatchCps,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(dispatch_op) = effect::DispatchCps::from_op(ctx, op) else {
-            return false;
-        };
+        let op = dispatch_op.op_ref();
         if !effect_dispatch::is_valid_cps_dispatch(ctx, op) {
             return false;
         }

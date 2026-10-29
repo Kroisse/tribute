@@ -29,14 +29,13 @@
 use rustc_hash::FxHashMap as HashMap;
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::tribute_rt;
-use trunk_ir::OpName;
 use trunk_ir::SymbolPath;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
-    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    Module, OpRewritePattern, PatternApplicator, PatternRewriter, TypeConverter,
 };
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::{Attribute, AttributeMap, Location, TypeDataBuilder};
@@ -213,20 +212,16 @@ struct ConventionTablePattern {
     tables: HashMap<Vec<SymbolPath>, u32>,
 }
 
-impl RewritePattern for ConventionTablePattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[tribute_rt::ConventionTable::NAME])
-    }
+impl OpRewritePattern for ConventionTablePattern {
+    type Op = tribute_rt::ConventionTable;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        table: tribute_rt::ConventionTable,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(table) = tribute_rt::ConventionTable::from_op(ctx, op) else {
-            return false;
-        };
+        let op = table.op_ref();
         let entries: Vec<_> = table.entries(ctx).cloned().collect();
         let start = self.tables[&entries];
         let i32_ty = i32_type(ctx);
@@ -243,20 +238,16 @@ impl RewritePattern for ConventionTablePattern {
 /// the entry: the table's first slot plus the entry's position.
 struct ConventionEntryPattern;
 
-impl RewritePattern for ConventionEntryPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[tribute_rt::ConventionEntry::NAME])
-    }
+impl OpRewritePattern for ConventionEntryPattern {
+    type Op = tribute_rt::ConventionEntry;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        entry: tribute_rt::ConventionEntry,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(entry) = tribute_rt::ConventionEntry::from_op(ctx, op) else {
-            return false;
-        };
+        let op = entry.op_ref();
         let table = entry.table(ctx);
         let position = entry.index(ctx);
         if position == 0 {
@@ -281,21 +272,16 @@ impl RewritePattern for ConventionEntryPattern {
 /// Boxing converts an unboxed i32 to an i31ref via `wasm.ref_i31`.
 struct BoxIntPattern;
 
-impl RewritePattern for BoxIntPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[tribute_rt::BoxInt::NAME])
-    }
+impl OpRewritePattern for BoxIntPattern {
+    type Op = tribute_rt::BoxInt;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        box_op: tribute_rt::BoxInt,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(box_op) = tribute_rt::BoxInt::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = box_op.op_ref();
         let location = ctx.op(op).location;
         let value = box_op.value(ctx);
 
@@ -320,21 +306,16 @@ impl RewritePattern for BoxIntPattern {
 /// Unboxing extracts the signed i32 from an i31ref.
 struct UnboxIntPattern;
 
-impl RewritePattern for UnboxIntPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[tribute_rt::UnboxInt::NAME])
-    }
+impl OpRewritePattern for UnboxIntPattern {
+    type Op = tribute_rt::UnboxInt;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        unbox_op: tribute_rt::UnboxInt,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(unbox_op) = tribute_rt::UnboxInt::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = unbox_op.op_ref();
         let location = ctx.op(op).location;
         let (prefix_ops, final_op) = create_i31_unbox(ctx, location, unbox_op.value(ctx), true);
         for prefix in prefix_ops {
@@ -354,21 +335,16 @@ impl RewritePattern for UnboxIntPattern {
 /// Boxing converts an unboxed nat (u32) to an i31ref.
 struct BoxNatPattern;
 
-impl RewritePattern for BoxNatPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[tribute_rt::BoxNat::NAME])
-    }
+impl OpRewritePattern for BoxNatPattern {
+    type Op = tribute_rt::BoxNat;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        box_op: tribute_rt::BoxNat,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(box_op) = tribute_rt::BoxNat::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = box_op.op_ref();
         let location = ctx.op(op).location;
         let value = box_op.value(ctx);
         let i31ref_ty = wasm_dialect::I31ref::params().intern(ctx).as_type_ref();
@@ -390,21 +366,16 @@ impl RewritePattern for BoxNatPattern {
 /// Unboxing extracts the unsigned i32 from an i31ref.
 struct UnboxNatPattern;
 
-impl RewritePattern for UnboxNatPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[tribute_rt::UnboxNat::NAME])
-    }
+impl OpRewritePattern for UnboxNatPattern {
+    type Op = tribute_rt::UnboxNat;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        unbox_op: tribute_rt::UnboxNat,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(unbox_op) = tribute_rt::UnboxNat::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = unbox_op.op_ref();
         let location = ctx.op(op).location;
         let (prefix_ops, final_op) = create_i31_unbox(ctx, location, unbox_op.value(ctx), false);
         for prefix in prefix_ops {
@@ -425,21 +396,16 @@ impl RewritePattern for UnboxNatPattern {
 /// `adt.struct_new` with `anyref_ty` as the result type.
 struct BoxFloatPattern;
 
-impl RewritePattern for BoxFloatPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[tribute_rt::BoxFloat::NAME])
-    }
+impl OpRewritePattern for BoxFloatPattern {
+    type Op = tribute_rt::BoxFloat;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        box_op: tribute_rt::BoxFloat,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(box_op) = tribute_rt::BoxFloat::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = box_op.op_ref();
         let location = ctx.op(op).location;
         let value = box_op.value(ctx);
         let anyref_ty = wasm_dialect::Anyref::params().intern(ctx).as_type_ref();
@@ -465,21 +431,16 @@ impl RewritePattern for BoxFloatPattern {
 /// Unboxing extracts the f64 from a BoxedF64 struct.
 struct UnboxFloatPattern;
 
-impl RewritePattern for UnboxFloatPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[tribute_rt::UnboxFloat::NAME])
-    }
+impl OpRewritePattern for UnboxFloatPattern {
+    type Op = tribute_rt::UnboxFloat;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        unbox_op: tribute_rt::UnboxFloat,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(unbox_op) = tribute_rt::UnboxFloat::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = unbox_op.op_ref();
         let location = ctx.op(op).location;
         let value = unbox_op.value(ctx);
 
@@ -515,21 +476,16 @@ impl RewritePattern for UnboxFloatPattern {
 /// Boxing converts an i32 boolean to an i31ref.
 struct BoxBoolPattern;
 
-impl RewritePattern for BoxBoolPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[tribute_rt::BoxBool::NAME])
-    }
+impl OpRewritePattern for BoxBoolPattern {
+    type Op = tribute_rt::BoxBool;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        box_op: tribute_rt::BoxBool,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(box_op) = tribute_rt::BoxBool::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = box_op.op_ref();
         let location = ctx.op(op).location;
         let value = box_op.value(ctx);
         let i31ref_ty = wasm_dialect::I31ref::params().intern(ctx).as_type_ref();
@@ -551,21 +507,16 @@ impl RewritePattern for BoxBoolPattern {
 /// Unboxing extracts the boolean (0 or 1) from an i31ref.
 struct UnboxBoolPattern;
 
-impl RewritePattern for UnboxBoolPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[tribute_rt::UnboxBool::NAME])
-    }
+impl OpRewritePattern for UnboxBoolPattern {
+    type Op = tribute_rt::UnboxBool;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        unbox_op: tribute_rt::UnboxBool,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(unbox_op) = tribute_rt::UnboxBool::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = unbox_op.op_ref();
         let location = ctx.op(op).location;
         // Use unsigned extraction since bool is 0 or 1
         let (prefix_ops, final_op) = create_i31_unbox(ctx, location, unbox_op.value(ctx), false);

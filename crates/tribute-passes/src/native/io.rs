@@ -1,14 +1,13 @@
 //! Lower target-independent I/O operations to the native runtime ABI.
 
 use tribute_ir::dialect::adt;
-use trunk_ir::OpName;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{arith, core, func, mem, scf};
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
-    ConversionError, ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern,
-    TypeConverter,
+    ConversionError, ConversionTarget, Module, OpRewritePattern, PatternApplicator,
+    PatternRewriter, TypeConverter,
 };
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::{Attribute, Location};
@@ -91,20 +90,16 @@ fn has_function(ctx: &IrContext, block: trunk_ir::BlockRef, name: &str) -> bool 
 
 struct NativeWritePattern;
 
-impl RewritePattern for NativeWritePattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[tribute_io::Write::NAME])
-    }
+impl OpRewritePattern for NativeWritePattern {
+    type Op = tribute_io::Write;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        write: tribute_io::Write,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(write) = tribute_io::Write::from_op(ctx, op) else {
-            return false;
-        };
+        let op = write.op_ref();
         let loc = ctx.op(op).location;
         let result_ty = ctx.op_result_types(op)[0];
         let call = func::Call::operands([write.bytes(ctx), write.newline(ctx)])
@@ -120,20 +115,16 @@ struct NativeReadLinePattern {
     read_line_result_ty: Option<TypeRef>,
 }
 
-impl RewritePattern for NativeReadLinePattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[tribute_io::ReadLine::NAME])
-    }
+impl OpRewritePattern for NativeReadLinePattern {
+    type Op = tribute_io::ReadLine;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        read_line: tribute_io::ReadLine,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if tribute_io::ReadLine::from_op(ctx, op).is_err() {
-            return false;
-        }
+        let op = read_line.op_ref();
         let Some(enum_ty) = self.read_line_result_ty else {
             return false;
         };

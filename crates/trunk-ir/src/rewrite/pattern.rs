@@ -6,6 +6,7 @@
 use super::rewriter::PatternRewriter;
 use crate::OpName;
 use crate::context::IrContext;
+use crate::ops::DialectOp;
 use crate::refs::OpRef;
 
 /// A pattern that can match and transform arena IR operations.
@@ -56,5 +57,52 @@ pub trait RewritePattern {
     /// Optional: return a human-readable name for debugging.
     fn name(&self) -> &'static str {
         std::any::type_name::<Self>()
+    }
+}
+
+/// A pattern that rewrites one operation, given as its typed wrapper.
+///
+/// Implement this instead of [`RewritePattern`] for a pattern whose
+/// operation is a single [`DialectOp`]: the operation's name becomes the
+/// pattern's root, and the pattern receives only operations of that type.
+/// A pattern that matches several operations, a whole dialect, or roots
+/// known only at run time implements [`RewritePattern`] directly.
+pub trait OpRewritePattern {
+    /// The operation this pattern rewrites.
+    type Op: DialectOp;
+
+    /// Attempt to rewrite `op`; see [`RewritePattern::match_and_rewrite`].
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: Self::Op,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool;
+
+    /// Optional: return a human-readable name for debugging.
+    fn name(&self) -> &'static str {
+        std::any::type_name::<Self>()
+    }
+}
+
+impl<P: OpRewritePattern> RewritePattern for P {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        let Ok(op) = P::Op::from_op(ctx, op) else {
+            return false;
+        };
+        OpRewritePattern::match_and_rewrite(self, ctx, op, rewriter)
+    }
+
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[P::Op::NAME])
+    }
+
+    fn name(&self) -> &'static str {
+        OpRewritePattern::name(self)
     }
 }

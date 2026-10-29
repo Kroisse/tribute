@@ -137,7 +137,8 @@ Rules:
   the fixpoint that no pattern still matches.
 - A pattern that matches only some operation names declares them as its
   roots; the applicator offers it only those operations, in the order the
-  patterns were added.
+  patterns were added. A pattern for one operation names its typed wrapper,
+  which is its only root.
 - Prefer focused patterns over large manual tree walks.
 - Use explicit partial or full conversion entry points when legality matters.
 - Keep exact API behavior in Rustdoc near `ConversionTarget`,

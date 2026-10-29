@@ -25,7 +25,6 @@
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
-use trunk_ir::OpName;
 
 use tribute_ir::calling_convention::{CallingConvention, ConventionBearing, DynConventionBearing};
 use tribute_ir::dialect::adt;
@@ -41,7 +40,7 @@ use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
-    ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    ConversionTarget, Module, OpRewritePattern, PatternApplicator, PatternRewriter, TypeConverter,
 };
 use trunk_ir::symbol_table::SymbolTable;
 use trunk_ir::types::{Attribute, AttributeMap, TypeDataBuilder};
@@ -123,21 +122,16 @@ struct LowerClosureNewArena<'a> {
     functions: &'a SymbolTable,
 }
 
-impl RewritePattern for LowerClosureNewArena<'_> {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[closure::New::NAME])
-    }
+impl OpRewritePattern for LowerClosureNewArena<'_> {
+    type Op = closure::New;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        closure_new: closure::New,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(closure_new) = closure::New::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = closure_new.op_ref();
         let loc = ctx.op(op).location;
         let entries: Vec<_> = closure_new.entries(ctx).cloned().collect();
         let resolved = entries.iter().all(|entry| {
@@ -196,20 +190,16 @@ impl RewritePattern for LowerClosureNewArena<'_> {
 /// materialize.
 struct LowerClosureUnpackArena;
 
-impl RewritePattern for LowerClosureUnpackArena {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[closure::Unpack::NAME])
-    }
+impl OpRewritePattern for LowerClosureUnpackArena {
+    type Op = closure::Unpack;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        unpack: closure::Unpack,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(unpack) = closure::Unpack::from_op(ctx, op) else {
-            return false;
-        };
+        let op = unpack.op_ref();
         let loc = ctx.op(op).location;
         let capture_types = ctx.op_result_types(op).to_vec();
         let layout = closure_captures_type_ref(ctx, &capture_types);
@@ -244,21 +234,16 @@ impl RewritePattern for LowerClosureUnpackArena {
 /// Lower `func.call_indirect` on closure values.
 struct LowerClosureCallArena;
 
-impl RewritePattern for LowerClosureCallArena {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[func::CallIndirect::NAME])
-    }
+impl OpRewritePattern for LowerClosureCallArena {
+    type Op = func::CallIndirect;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        call_indirect: func::CallIndirect,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if func::CallIndirect::from_op(ctx, op).is_err() {
-            return false;
-        }
-
+        let op = call_indirect.op_ref();
         let operands = ctx.op_operands(op);
         if operands.is_empty() {
             return false;
@@ -326,20 +311,16 @@ impl RewritePattern for LowerClosureCallArena {
 /// ordinary direct calls are handled separately.
 struct LowerClosureTailCallArena;
 
-impl RewritePattern for LowerClosureTailCallArena {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[func::TailCallIndirect::NAME])
-    }
+impl OpRewritePattern for LowerClosureTailCallArena {
+    type Op = func::TailCallIndirect;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        tail_call_indirect: func::TailCallIndirect,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if func::TailCallIndirect::from_op(ctx, op).is_err() {
-            return false;
-        }
+        let op = tail_call_indirect.op_ref();
         let operands = ctx.op_operands(op).to_vec();
         let Some((&callee, args)) = operands.split_first() else {
             return false;
@@ -497,21 +478,16 @@ fn exact_physical_call_contract(
 /// (`adt.struct_get` field 0) and `tribute_rt.convention_entry`.
 struct LowerClosureEntryArena;
 
-impl RewritePattern for LowerClosureEntryArena {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[closure::Entry::NAME])
-    }
+impl OpRewritePattern for LowerClosureEntryArena {
+    type Op = closure::Entry;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        entry: closure::Entry,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(entry) = closure::Entry::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = entry.op_ref();
         let loc = ctx.op(op).location;
         let index = entry.index(ctx);
         let closure_value = entry.closure(ctx);

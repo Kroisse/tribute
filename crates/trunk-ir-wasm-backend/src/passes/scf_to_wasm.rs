@@ -9,7 +9,6 @@
 
 use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
-use trunk_ir::OpName;
 
 use itertools::Itertools;
 
@@ -21,8 +20,8 @@ use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, RegionRef, ValueRef};
 use trunk_ir::rewrite::{
-    ConversionError, ConversionTarget, IllegalOp, LegalityCheck, Module, PatternApplicator,
-    PatternRewriter, RewritePattern, TypeConverter,
+    ConversionError, ConversionTarget, IllegalOp, LegalityCheck, Module, OpRewritePattern,
+    PatternApplicator, PatternRewriter, TypeConverter,
 };
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::transforms::scf_control_flow::StructuredControlAnalysis;
@@ -370,20 +369,16 @@ fn take_region_ops(ctx: &mut IrContext, region: RegionRef) -> OpList {
 /// Pattern for a resultless `scf.switch` -> nested `wasm.if` comparisons.
 struct ScfSwitchPattern<'a>(&'a ScfLoweringPlan);
 
-impl RewritePattern for ScfSwitchPattern<'_> {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[scf::Switch::NAME])
-    }
+impl OpRewritePattern for ScfSwitchPattern<'_> {
+    type Op = scf::Switch;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        switch: scf::Switch,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(_switch) = scf::Switch::from_op(ctx, op) else {
-            return false;
-        };
+        let op = switch.op_ref();
         let Ok(arms) = switch_arms(ctx, op) else {
             return false;
         };
@@ -475,21 +470,16 @@ impl RewritePattern for ScfSwitchPattern<'_> {
 /// Pattern for `scf.if` -> `wasm.if`
 struct ScfIfPattern<'a>(&'a ScfLoweringPlan);
 
-impl RewritePattern for ScfIfPattern<'_> {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[scf::If::NAME])
-    }
+impl OpRewritePattern for ScfIfPattern<'_> {
+    type Op = scf::If;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        scf_if_op: scf::If,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(scf_if_op) = scf::If::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = scf_if_op.op_ref();
         let loc = ctx.op(op).location;
 
         // Preserve the result list; reject multi-result. The
@@ -537,21 +527,16 @@ impl RewritePattern for ScfIfPattern<'_> {
 /// - `wasm.br(target=2)` branches to the block (break)
 struct ScfLoopPattern<'a>(&'a ScfLoweringPlan);
 
-impl RewritePattern for ScfLoopPattern<'_> {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[scf::Loop::NAME])
-    }
+impl OpRewritePattern for ScfLoopPattern<'_> {
+    type Op = scf::Loop;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        loop_op: scf::Loop,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(loop_op) = scf::Loop::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = loop_op.op_ref();
         let loc = ctx.op(op).location;
 
         // Get result type; reject multi-result loops. The created
@@ -635,21 +620,16 @@ impl RewritePattern for ScfLoopPattern<'_> {
 /// local.get, and the wasm.yield itself produces no Wasm instruction.
 struct ScfYieldPattern;
 
-impl RewritePattern for ScfYieldPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[scf::Yield::NAME])
-    }
+impl OpRewritePattern for ScfYieldPattern {
+    type Op = scf::Yield;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        yield_op: scf::Yield,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if !scf::Yield::matches(ctx, op) {
-            return false;
-        }
-
+        let op = yield_op.op_ref();
         // Get yield values (variadic operands)
         let operands = ctx.op_operands(op).to_vec();
 
@@ -679,21 +659,16 @@ impl RewritePattern for ScfYieldPattern {
 /// depth 1 = wasm.loop) within a `scf.loop`.
 struct ScfContinuePattern;
 
-impl RewritePattern for ScfContinuePattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[scf::Continue::NAME])
-    }
+impl OpRewritePattern for ScfContinuePattern {
+    type Op = scf::Continue;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        continue_op: scf::Continue,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if !scf::Continue::matches(ctx, op) {
-            return false;
-        }
-
+        let op = continue_op.op_ref();
         let loc = ctx.op(op).location;
 
         // Get loop-carried values (variadic operands)
@@ -735,21 +710,16 @@ impl RewritePattern for ScfContinuePattern {
 /// region's result, then branch without operands.
 struct ScfBreakPattern;
 
-impl RewritePattern for ScfBreakPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[scf::Break::NAME])
-    }
+impl OpRewritePattern for ScfBreakPattern {
+    type Op = scf::Break;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        break_op: scf::Break,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(break_op) = scf::Break::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = break_op.op_ref();
         let loc = ctx.op(op).location;
         let value = break_op.value(ctx);
 

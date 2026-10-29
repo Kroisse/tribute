@@ -8,15 +8,12 @@
 
 use tribute_ir::dialect::tribute_rt::{RC_HEADER_SIZE, RTTI_IDX_OFFSET};
 use tribute_ir::dialect::tribute_rtti;
-use trunk_ir::OpName;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{clif, core};
-use trunk_ir::ops::DialectOp;
 use trunk_ir::pass::{Pass, PassRunResult};
-use trunk_ir::refs::OpRef;
 use trunk_ir::rewrite::{
-    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    Module, OpRewritePattern, PatternApplicator, PatternRewriter, TypeConverter,
 };
 
 /// Lowers `tribute_rtti.descriptor` to a read of the RC header's RTTI index.
@@ -50,20 +47,16 @@ fn lower(ctx: &mut IrContext, module: Module) {
 
 struct DescriptorPattern;
 
-impl RewritePattern for DescriptorPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[tribute_rtti::Descriptor::NAME])
-    }
+impl OpRewritePattern for DescriptorPattern {
+    type Op = tribute_rtti::Descriptor;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        descriptor: tribute_rtti::Descriptor,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(descriptor) = tribute_rtti::Descriptor::from_op(ctx, op) else {
-            return false;
-        };
+        let op = descriptor.op_ref();
         let loc = ctx.op(op).location;
         let header_offset = RTTI_IDX_OFFSET as i32 - RC_HEADER_SIZE as i32;
         let index_load = clif::Load::operands(descriptor.r#ref(ctx))
@@ -78,6 +71,7 @@ impl RewritePattern for DescriptorPattern {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use trunk_ir::ops::DialectOp;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
     use trunk_ir::validation::validate_op_schemas;

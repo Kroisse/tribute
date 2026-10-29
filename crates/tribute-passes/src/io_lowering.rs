@@ -1,14 +1,11 @@
 //! Lower embedded standard-library I/O intrinsics to the shared I/O dialect.
 
-use trunk_ir::OpName;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
-use trunk_ir::ops::DialectOp;
 use trunk_ir::pass::{Pass, PassRunResult};
-use trunk_ir::refs::OpRef;
 use trunk_ir::rewrite::{
-    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    Module, OpRewritePattern, PatternApplicator, PatternRewriter, TypeConverter,
 };
 
 use tribute_ir::dialect::tribute_io;
@@ -41,20 +38,16 @@ impl Pass for LowerIoIntrinsics {
 
 struct IoCallPattern;
 
-impl RewritePattern for IoCallPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[func::Call::NAME])
-    }
+impl OpRewritePattern for IoCallPattern {
+    type Op = func::Call;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        call: func::Call,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(call) = func::Call::from_op(ctx, op) else {
-            return false;
-        };
+        let op = call.op_ref();
         let callee = call.callee(ctx);
         let loc = ctx.op(op).location;
         let result_ty = ctx.op_result_types(op).first().copied();
@@ -87,20 +80,15 @@ impl RewritePattern for IoCallPattern {
 
 struct IoDeclarationPattern;
 
-impl RewritePattern for IoDeclarationPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[func::Func::NAME])
-    }
+impl OpRewritePattern for IoDeclarationPattern {
+    type Op = func::Func;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        function: func::Func,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(function) = func::Func::from_op(ctx, op) else {
-            return false;
-        };
         let name = function.sym_name(ctx);
         if name != WRITE_INTRINSIC && name != READ_LINE_INTRINSIC {
             return false;
@@ -114,6 +102,7 @@ impl RewritePattern for IoDeclarationPattern {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use trunk_ir::ops::DialectOp;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::pass::Pass;
     use trunk_ir::printer::print_module;

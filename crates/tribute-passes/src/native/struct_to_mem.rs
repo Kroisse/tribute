@@ -30,7 +30,6 @@
 
 use rustc_hash::FxHashMap as HashMap;
 use std::ops::ControlFlow;
-use trunk_ir::OpName;
 
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::adt::layout::get_struct_fields;
@@ -40,7 +39,7 @@ use trunk_ir::dialect::{arith, core, mem};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
-    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    Module, OpRewritePattern, PatternApplicator, PatternRewriter, TypeConverter,
 };
 use trunk_ir::types::{Attribute, StringRef};
 use trunk_ir::walk::{WalkAction, walk_op};
@@ -148,20 +147,16 @@ struct VariantGetPattern {
     layouts: HashMap<(TypeRef, StringRef), TypeRef>,
 }
 
-impl RewritePattern for VariantGetPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[adt::VariantGet::NAME])
-    }
+impl OpRewritePattern for VariantGetPattern {
+    type Op = adt::VariantGet;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        variant_get: adt::VariantGet,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(variant_get) = adt::VariantGet::from_op(ctx, op) else {
-            return false;
-        };
+        let op = variant_get.op_ref();
         let variant = (variant_get.r#type(ctx), variant_get.tag_ref(ctx));
         let Some(&structural) = self.layouts.get(&variant) else {
             return false;
@@ -184,20 +179,16 @@ struct VariantIsPattern {
     numbers: HashMap<(TypeRef, Option<StringRef>), u32>,
 }
 
-impl RewritePattern for VariantIsPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[adt::VariantIs::NAME])
-    }
+impl OpRewritePattern for VariantIsPattern {
+    type Op = adt::VariantIs;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        variant_is: adt::VariantIs,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(variant_is) = adt::VariantIs::from_op(ctx, op) else {
-            return false;
-        };
+        let op = variant_is.op_ref();
         let loc = ctx.op(op).location;
         let result_ty = variant_is.result_ty(ctx);
         let descriptor = (variant_is.r#type(ctx), Some(variant_is.tag_ref(ctx)));

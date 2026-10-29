@@ -11,12 +11,10 @@
 //! ([`is_wasm_physical_argument_assignable`]) qualify: those emission performs
 //! without a runtime cast.
 
-use trunk_ir::OpName;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, wasm};
-use trunk_ir::ops::DialectOp;
-use trunk_ir::refs::{OpRef, TypeRef};
-use trunk_ir::rewrite::{PatternRewriter, RewritePattern};
+use trunk_ir::refs::TypeRef;
+use trunk_ir::rewrite::{OpRewritePattern, PatternRewriter};
 
 use crate::is_wasm_physical_argument_assignable;
 
@@ -28,20 +26,16 @@ use crate::is_wasm_physical_argument_assignable;
 /// cast legalization pattern so that result types are converted first.
 pub struct ReferenceUpcastPattern;
 
-impl RewritePattern for ReferenceUpcastPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[core::UnrealizedConversionCast::NAME])
-    }
+impl OpRewritePattern for ReferenceUpcastPattern {
+    type Op = core::UnrealizedConversionCast;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        unrealized_conversion_cast: core::UnrealizedConversionCast,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if !core::UnrealizedConversionCast::matches(ctx, op) {
-            return false;
-        }
+        let op = unrealized_conversion_cast.op_ref();
         let (&[input], &[result_ty]) = (ctx.op_operands(op), ctx.op_result_types(op)) else {
             return false;
         };

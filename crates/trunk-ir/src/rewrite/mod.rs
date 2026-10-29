@@ -16,7 +16,7 @@ pub use conversion_target::{
     ConversionError, ConversionMode, ConversionTarget, IllegalOp, LegalityCheck, LegalityDecision,
 };
 pub use helpers::{clone_attrs_except, erase_op, inline_region_blocks, split_block};
-pub use pattern::RewritePattern;
+pub use pattern::{OpRewritePattern, RewritePattern};
 pub use rewriter::PatternRewriter;
 pub use signature_conversion::{
     ConvertedSignatureComponents, FuncSignatureConversionPattern, convert_function_type,

@@ -18,17 +18,15 @@
 
 use tribute_ir::dialect::tribute_rt;
 use tribute_ir::dialect::tribute_rt::{RC_HEADER_SIZE, REFCOUNT_OFFSET, RTTI_IDX_OFFSET};
-use trunk_ir::OpName;
 use trunk_ir::SymbolPath;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core;
-use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::rewriter::PatternRewriter;
 use trunk_ir::rewrite::type_converter::TypeConverter;
 use trunk_ir::rewrite::{
-    ConversionError, ConversionTarget, Module, PatternApplicator, RewritePattern,
+    ConversionError, ConversionTarget, Module, OpRewritePattern, PatternApplicator,
 };
 use trunk_ir::types::{Location, TypeDataBuilder};
 
@@ -198,20 +196,16 @@ struct BoxIntPattern {
     i32_ty: TypeRef,
 }
 
-impl RewritePattern for BoxIntPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[tribute_rt::BoxInt::NAME])
-    }
+impl OpRewritePattern for BoxIntPattern {
+    type Op = tribute_rt::BoxInt;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        box_op: tribute_rt::BoxInt,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(box_op) = tribute_rt::BoxInt::from_op(ctx, op) else {
-            return false;
-        };
+        let op = box_op.op_ref();
         let loc = ctx.op(op).location;
         let value = box_op.value(ctx);
         let mut ops = box_value(
@@ -240,20 +234,16 @@ struct BoxNatPattern {
     i32_ty: TypeRef,
 }
 
-impl RewritePattern for BoxNatPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[tribute_rt::BoxNat::NAME])
-    }
+impl OpRewritePattern for BoxNatPattern {
+    type Op = tribute_rt::BoxNat;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        box_op: tribute_rt::BoxNat,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(box_op) = tribute_rt::BoxNat::from_op(ctx, op) else {
-            return false;
-        };
+        let op = box_op.op_ref();
         let loc = ctx.op(op).location;
         let value = box_op.value(ctx);
         let mut ops = box_value(
@@ -282,20 +272,16 @@ struct BoxBoolPattern {
     i32_ty: TypeRef,
 }
 
-impl RewritePattern for BoxBoolPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[tribute_rt::BoxBool::NAME])
-    }
+impl OpRewritePattern for BoxBoolPattern {
+    type Op = tribute_rt::BoxBool;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        box_op: tribute_rt::BoxBool,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(box_op) = tribute_rt::BoxBool::from_op(ctx, op) else {
-            return false;
-        };
+        let op = box_op.op_ref();
         let loc = ctx.op(op).location;
         let value = box_op.value(ctx);
         let mut ops = box_value(
@@ -324,20 +310,16 @@ struct BoxFloatPattern {
     i32_ty: TypeRef,
 }
 
-impl RewritePattern for BoxFloatPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[tribute_rt::BoxFloat::NAME])
-    }
+impl OpRewritePattern for BoxFloatPattern {
+    type Op = tribute_rt::BoxFloat;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        box_op: tribute_rt::BoxFloat,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(box_op) = tribute_rt::BoxFloat::from_op(ctx, op) else {
-            return false;
-        };
+        let op = box_op.op_ref();
         let loc = ctx.op(op).location;
         let value = box_op.value(ctx);
         let mut ops = box_value(
@@ -368,20 +350,16 @@ struct UnboxIntPattern {
     i32_ty: TypeRef,
 }
 
-impl RewritePattern for UnboxIntPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[tribute_rt::UnboxInt::NAME])
-    }
+impl OpRewritePattern for UnboxIntPattern {
+    type Op = tribute_rt::UnboxInt;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        unbox_op: tribute_rt::UnboxInt,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(unbox_op) = tribute_rt::UnboxInt::from_op(ctx, op) else {
-            return false;
-        };
+        let op = unbox_op.op_ref();
         let loc = ctx.op(op).location;
         let value = unbox_op.value(ctx);
 
@@ -404,20 +382,16 @@ struct UnboxNatPattern {
     i32_ty: TypeRef,
 }
 
-impl RewritePattern for UnboxNatPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[tribute_rt::UnboxNat::NAME])
-    }
+impl OpRewritePattern for UnboxNatPattern {
+    type Op = tribute_rt::UnboxNat;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        unbox_op: tribute_rt::UnboxNat,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(unbox_op) = tribute_rt::UnboxNat::from_op(ctx, op) else {
-            return false;
-        };
+        let op = unbox_op.op_ref();
         let loc = ctx.op(op).location;
         let value = unbox_op.value(ctx);
 
@@ -439,20 +413,16 @@ struct UnboxBoolPattern {
     i32_ty: TypeRef,
 }
 
-impl RewritePattern for UnboxBoolPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[tribute_rt::UnboxBool::NAME])
-    }
+impl OpRewritePattern for UnboxBoolPattern {
+    type Op = tribute_rt::UnboxBool;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        unbox_op: tribute_rt::UnboxBool,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(unbox_op) = tribute_rt::UnboxBool::from_op(ctx, op) else {
-            return false;
-        };
+        let op = unbox_op.op_ref();
         let loc = ctx.op(op).location;
         let value = unbox_op.value(ctx);
 
@@ -474,20 +444,16 @@ struct UnboxFloatPattern {
     f64_ty: TypeRef,
 }
 
-impl RewritePattern for UnboxFloatPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[tribute_rt::UnboxFloat::NAME])
-    }
+impl OpRewritePattern for UnboxFloatPattern {
+    type Op = tribute_rt::UnboxFloat;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        unbox_op: tribute_rt::UnboxFloat,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(unbox_op) = tribute_rt::UnboxFloat::from_op(ctx, op) else {
-            return false;
-        };
+        let op = unbox_op.op_ref();
         let loc = ctx.op(op).location;
         let value = unbox_op.value(ctx);
 

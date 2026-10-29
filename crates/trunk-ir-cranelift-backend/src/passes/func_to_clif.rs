@@ -11,7 +11,6 @@
 //! - `func.constant` -> `clif.symbol_addr`
 
 use rustc_hash::FxHashMap as HashMap;
-use trunk_ir::OpName;
 
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
@@ -21,8 +20,8 @@ use trunk_ir::op_interface::IndirectCallLike;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
-    ConversionError, ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern,
-    TypeConverter,
+    ConversionError, ConversionTarget, Module, OpRewritePattern, PatternApplicator,
+    PatternRewriter, TypeConverter,
 };
 use trunk_ir::symbol_table::SymbolTable;
 use trunk_ir::types::{Attribute, AttributeMap};
@@ -184,21 +183,16 @@ fn intern_ptr_type(ctx: &mut IrContext) -> TypeRef {
 /// Pattern: `func.func` -> `clif.func`
 struct FuncFuncPattern;
 
-impl RewritePattern for FuncFuncPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[func::Func::NAME])
-    }
+impl OpRewritePattern for FuncFuncPattern {
+    type Op = func::Func;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        func: func::Func,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if func::Func::from_op(ctx, op).is_err() {
-            return false;
-        }
-
+        let op = func.op_ref();
         let tc = rewriter.type_converter();
 
         // Convert parameter and return types in the function signature
@@ -228,21 +222,16 @@ impl RewritePattern for FuncFuncPattern {
 /// Pattern: `func.call` -> `clif.call`
 struct FuncCallPattern;
 
-impl RewritePattern for FuncCallPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[func::Call::NAME])
-    }
+impl OpRewritePattern for FuncCallPattern {
+    type Op = func::Call;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        call_op: func::Call,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(call_op) = func::Call::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = call_op.op_ref();
         let callee = call_op.callee(ctx).clone();
         let new_op = crate::passes::cf_to_clif::rebuild_op_as(ctx, op, "clif.call");
         for (index, result_ty) in rewriter.result_types(ctx, op).into_iter().enumerate() {
@@ -258,21 +247,16 @@ impl RewritePattern for FuncCallPattern {
 /// Pattern: `func.call_indirect` -> `clif.call_indirect`
 struct FuncCallIndirectPattern;
 
-impl RewritePattern for FuncCallIndirectPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[func::CallIndirect::NAME])
-    }
+impl OpRewritePattern for FuncCallIndirectPattern {
+    type Op = func::CallIndirect;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        call: func::CallIndirect,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(call) = func::CallIndirect::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = call.op_ref();
         let result_types = rewriter.result_types(ctx, op);
         let Some(signature) = call.exact_signature(ctx) else {
             return false;
@@ -320,20 +304,16 @@ impl RewritePattern for FuncCallIndirectPattern {
 /// Pattern: `func.return` -> `clif.return`
 struct FuncReturnPattern;
 
-impl RewritePattern for FuncReturnPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[func::Return::NAME])
-    }
+impl OpRewritePattern for FuncReturnPattern {
+    type Op = func::Return;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        return_op: func::Return,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if func::Return::from_op(ctx, op).is_err() {
-            return false;
-        }
+        let op = return_op.op_ref();
         let new_op = crate::passes::cf_to_clif::rebuild_op_as(ctx, op, "clif.return");
         rewriter.replace_op(new_op);
         true
@@ -343,21 +323,16 @@ impl RewritePattern for FuncReturnPattern {
 /// Pattern: `func.tail_call` -> `clif.return_call`
 struct FuncTailCallPattern;
 
-impl RewritePattern for FuncTailCallPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[func::TailCall::NAME])
-    }
+impl OpRewritePattern for FuncTailCallPattern {
+    type Op = func::TailCall;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        tail_call: func::TailCall,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(tail_call) = func::TailCall::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = tail_call.op_ref();
         let callee = tail_call.callee(ctx).clone();
         let new_op = crate::passes::cf_to_clif::rebuild_op_as(ctx, op, "clif.return_call");
         ctx.op_attrs_mut(new_op)
@@ -374,20 +349,16 @@ impl RewritePattern for FuncTailCallPattern {
 /// closure lowering it is untyped at the TrunkIR level.
 struct FuncTailCallIndirectPattern;
 
-impl RewritePattern for FuncTailCallIndirectPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[func::TailCallIndirect::NAME])
-    }
+impl OpRewritePattern for FuncTailCallIndirectPattern {
+    type Op = func::TailCallIndirect;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        tail: func::TailCallIndirect,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(tail) = func::TailCallIndirect::from_op(ctx, op) else {
-            return false;
-        };
+        let op = tail.op_ref();
         let Some(signature) = tail.exact_signature(ctx) else {
             return false;
         };
@@ -456,20 +427,16 @@ fn enclosing_results(
 /// Pattern: `func.unreachable` -> `clif.trap`
 struct FuncUnreachablePattern;
 
-impl RewritePattern for FuncUnreachablePattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[func::Unreachable::NAME])
-    }
+impl OpRewritePattern for FuncUnreachablePattern {
+    type Op = func::Unreachable;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        unreachable: func::Unreachable,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if func::Unreachable::from_op(ctx, op).is_err() {
-            return false;
-        }
+        let op = unreachable.op_ref();
         let loc = ctx.op(op).location;
         let new_op = clif::Trap::operands().code("unreachable").build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
@@ -497,21 +464,16 @@ struct FuncConstantPattern {
     functions: HashMap<OpRef, TypeRef>,
 }
 
-impl RewritePattern for FuncConstantPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[func::Constant::NAME])
-    }
+impl OpRewritePattern for FuncConstantPattern {
+    type Op = func::Constant;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        const_op: func::Constant,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(const_op) = func::Constant::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = const_op.op_ref();
         let func_ref = const_op.func_ref(ctx).clone();
         if let &[result] = ctx.op_result_types(op)
             && func::FuncSig::matches(ctx, result)
