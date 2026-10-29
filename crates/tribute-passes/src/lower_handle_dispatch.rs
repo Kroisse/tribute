@@ -73,11 +73,11 @@ impl OpRewritePattern for LowerHandleDispatchPattern {
         ctx: &mut IrContext,
         dispatch_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let body = dispatch_op.body(ctx);
         let blocks = &ctx.region(body).blocks;
         let [body_block] = blocks.as_slice() else {
-            return false;
+            return None;
         };
 
         // `resolve_evidence` has already replaced the body's evidence
@@ -89,7 +89,7 @@ impl OpRewritePattern for LowerHandleDispatchPattern {
             .iter()
             .any(|arg| !ctx.uses(*arg).is_empty())
         {
-            return false;
+            return None;
         }
         let body_ops = ctx.block(*body_block).ops.clone();
         for body_op in body_ops {
@@ -97,7 +97,7 @@ impl OpRewritePattern for LowerHandleDispatchPattern {
             rewriter.insert_op(body_op);
         }
         rewriter.erase_op(vec![]);
-        true
+        Some(())
     }
 }
 

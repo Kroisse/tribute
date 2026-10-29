@@ -400,7 +400,7 @@ impl<Op: ArrayOp> OpRewritePattern for LowerArray<'_, Op> {
         ctx: &mut IrContext,
         op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let mut ops = Vec::new();
         let mut emit = Emitter {
             loc: ctx.op(op.op_ref()).location,
@@ -411,7 +411,7 @@ impl<Op: ArrayOp> OpRewritePattern for LowerArray<'_, Op> {
             rewriter.insert_op(op);
         }
         rewriter.erase_op(result.into_iter().collect());
-        true
+        Some(())
     }
 }
 

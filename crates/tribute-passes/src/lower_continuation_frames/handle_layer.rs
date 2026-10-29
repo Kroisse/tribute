@@ -753,8 +753,8 @@ impl OpRewritePattern for ExpandHandles {
         ctx: &mut IrContext,
         handle: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        self.expand_handle(ctx, handle, rewriter).is_some()
+    ) -> Option<()> {
+        self.expand_handle(ctx, handle, rewriter)
     }
 }
 

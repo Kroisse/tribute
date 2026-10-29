@@ -108,12 +108,10 @@ impl OpRewritePattern for PrependCallPattern<'_> {
         ctx: &mut IrContext,
         call: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = call.op_ref();
         let callee = call.callee(ctx);
-        let Some(base_declaration) = intrinsic_declaration(callee) else {
-            return false;
-        };
+        let base_declaration = intrinsic_declaration(callee)?;
         // The frontend keeps generic extern declarations unmangled while
         // specializing their calls. An exact declaration still takes priority
         // so an ordinary same-spelled function cannot inherit the base ABI.
@@ -125,10 +123,10 @@ impl OpRewritePattern for PrependCallPattern<'_> {
                 .contains(&base_declaration)
         };
         if !eligible {
-            return false;
+            return None;
         }
         let ([element, tail], [_]) = (ctx.op_operands(op), ctx.op_result_types(op)) else {
-            return false;
+            return None;
         };
         let (element, tail) = (*element, *tail);
         let element_ty = ctx.value_ty(element);
@@ -136,7 +134,7 @@ impl OpRewritePattern for PrependCallPattern<'_> {
             .element_type(element_ty)
             .build(ctx, ctx.op(op).location);
         rewriter.replace_op(prepend.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -152,7 +150,7 @@ impl OpRewritePattern for PrependDeclarationPattern<'_> {
         ctx: &mut IrContext,
         function: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         if !self
             .intrinsic_declarations
             .eligible
@@ -160,10 +158,10 @@ impl OpRewritePattern for PrependDeclarationPattern<'_> {
                 Symbol::new(function.sym_name(ctx)).clone()
             ]))
         {
-            return false;
+            return None;
         }
         rewriter.erase_op(vec![]);
-        true
+        Some(())
     }
 }
 

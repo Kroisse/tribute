@@ -57,9 +57,9 @@ impl RewritePattern for ArithIndexPattern {
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         if ctx.op(op).name.dialect(ctx) != arith::DIALECT_NAME {
-            return false;
+            return None;
         }
         let operands = ctx.op_operands(op).to_vec();
         let result_types = ctx.op_result_types(op).to_vec();
@@ -69,7 +69,7 @@ impl RewritePattern for ArithIndexPattern {
             .chain(result_types.iter().copied())
             .any(|ty| core::Index::matches(ctx, ty));
         if !has_index {
-            return false;
+            return None;
         }
         let loc = ctx.op(op).location;
         let i32_ty = intern_i32_type(ctx);
@@ -95,14 +95,14 @@ impl RewritePattern for ArithIndexPattern {
             .collect();
         let results: Vec<_> = if let Some(signed) = index_cast_signedness(ctx, op) {
             let [operand] = operands[..] else {
-                return false;
+                return None;
             };
             let dst_ty = to_i32(ctx, result_types[0]);
             let (Some(src), Some(dst)) = (
                 IntegerLike::width(ctx, ctx.value_ty(operand)),
                 IntegerLike::width(ctx, dst_ty),
             ) else {
-                return false;
+                return None;
             };
             let converted = if src == dst {
                 operand
@@ -154,7 +154,7 @@ impl RewritePattern for ArithIndexPattern {
             })
             .collect();
         rewriter.erase_op(values);
-        true
+        Some(())
     }
 }
 
@@ -183,7 +183,7 @@ impl OpRewritePattern for NilValuePattern {
         ctx: &mut IrContext,
         nil_value: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = nil_value.op_ref();
         let result_ty = ctx.op_result_types(op)[0];
         let loc = ctx.op(op).location;
@@ -191,7 +191,7 @@ impl OpRewritePattern for NilValuePattern {
             .results(result_ty)
             .build(ctx, loc);
         rewriter.replace_op(nop.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -206,16 +206,12 @@ impl OpRewritePattern for ArithConstPattern {
         ctx: &mut IrContext,
         const_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = const_op.op_ref();
         let result_types = ctx.op_result_types(op);
-        let Some(&result_ty) = result_types.first() else {
-            return false;
-        };
+        let &result_ty = result_types.first()?;
 
-        let Some(type_name) = type_suffix(ctx, result_ty) else {
-            return false;
-        };
+        let type_name = type_suffix(ctx, result_ty)?;
 
         let loc = ctx.op(op).location;
         let value = const_op.value(ctx);
@@ -234,13 +230,13 @@ impl OpRewritePattern for ArithConstPattern {
                     .op_ref(),
                 _ => {
                     warn!("arith.const: expected Int or Bool for i32, got {:?}", value);
-                    return false;
+                    return None;
                 }
             },
             "i64" => {
                 let Attribute::Int(v) = value else {
                     warn!("arith.const: expected Int for i64, got {:?}", value);
-                    return false;
+                    return None;
                 };
                 wasm_dialect::I64Const::operands()
                     .value(v as i64)
@@ -251,7 +247,7 @@ impl OpRewritePattern for ArithConstPattern {
             "f32" => {
                 let Attribute::FloatBits(v) = value else {
                     warn!("arith.const: expected FloatBits for f32, got {:?}", value);
-                    return false;
+                    return None;
                 };
                 wasm_dialect::F32Const::operands()
                     .value(f32::from_bits(v as u32))
@@ -262,7 +258,7 @@ impl OpRewritePattern for ArithConstPattern {
             "f64" => {
                 let Attribute::FloatBits(v) = value else {
                     warn!("arith.const: expected FloatBits for f64, got {:?}", value);
-                    return false;
+                    return None;
                 };
                 wasm_dialect::F64Const::operands()
                     .value(f64::from_bits(v))
@@ -272,12 +268,12 @@ impl OpRewritePattern for ArithConstPattern {
             }
             _ => {
                 warn!("arith.const: unsupported type suffix '{}'", type_name);
-                return false;
+                return None;
             }
         };
 
         rewriter.replace_op(new_op_ref);
-        true
+        Some(())
     }
 }
 
@@ -306,23 +302,19 @@ impl RewritePattern for ArithBinOpPattern {
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let data = ctx.op(op);
         if data.name.dialect(ctx) != arith::DIALECT_NAME {
-            return false;
+            return None;
         }
 
         let result_types = ctx.op_result_types(op);
-        let Some(&result_ty) = result_types.first() else {
-            return false;
-        };
+        let &result_ty = result_types.first()?;
         let operands = ctx.op_operands(op).to_vec();
         let (Some(&lhs), Some(&rhs)) = (operands.first(), operands.get(1)) else {
-            return false;
+            return None;
         };
-        let Some(suffix) = type_suffix(ctx, result_ty) else {
-            return false;
-        };
+        let suffix = type_suffix(ctx, result_ty)?;
         let loc = ctx.op(op).location;
         let name = data.name;
         // Division reads the unspecified upper bits of a narrow integer.
@@ -335,7 +327,7 @@ impl RewritePattern for ArithBinOpPattern {
             ]
             .contains(&name)
         {
-            return false;
+            return None;
         }
 
         let new_op = if name == arith::Addi::NAME {
@@ -352,7 +344,7 @@ impl RewritePattern for ArithBinOpPattern {
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                _ => return false,
+                _ => return None,
             }
         } else if name == arith::Addf::NAME {
             match suffix {
@@ -364,7 +356,7 @@ impl RewritePattern for ArithBinOpPattern {
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                _ => return false,
+                _ => return None,
             }
         } else if name == arith::Subi::NAME {
             match suffix {
@@ -376,7 +368,7 @@ impl RewritePattern for ArithBinOpPattern {
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                _ => return false,
+                _ => return None,
             }
         } else if name == arith::Subf::NAME {
             match suffix {
@@ -388,7 +380,7 @@ impl RewritePattern for ArithBinOpPattern {
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                _ => return false,
+                _ => return None,
             }
         } else if name == arith::Muli::NAME {
             match suffix {
@@ -400,7 +392,7 @@ impl RewritePattern for ArithBinOpPattern {
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                _ => return false,
+                _ => return None,
             }
         } else if name == arith::Mulf::NAME {
             match suffix {
@@ -412,7 +404,7 @@ impl RewritePattern for ArithBinOpPattern {
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                _ => return false,
+                _ => return None,
             }
         } else if name == arith::Divsi::NAME {
             match suffix {
@@ -424,7 +416,7 @@ impl RewritePattern for ArithBinOpPattern {
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                _ => return false,
+                _ => return None,
             }
         } else if name == arith::Divui::NAME {
             match suffix {
@@ -436,7 +428,7 @@ impl RewritePattern for ArithBinOpPattern {
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                _ => return false,
+                _ => return None,
             }
         } else if name == arith::Divf::NAME {
             match suffix {
@@ -448,7 +440,7 @@ impl RewritePattern for ArithBinOpPattern {
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                _ => return false,
+                _ => return None,
             }
         } else if name == arith::Remsi::NAME {
             match suffix {
@@ -460,7 +452,7 @@ impl RewritePattern for ArithBinOpPattern {
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                _ => return false,
+                _ => return None,
             }
         } else if name == arith::Remui::NAME {
             match suffix {
@@ -472,14 +464,14 @@ impl RewritePattern for ArithBinOpPattern {
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                _ => return false,
+                _ => return None,
             }
         } else {
-            return false;
+            return None;
         };
 
         rewriter.replace_op(new_op);
-        true
+        Some(())
     }
 }
 
@@ -496,26 +488,22 @@ impl RewritePattern for ArithCmpPattern {
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let result_types = ctx.op_result_types(op);
-        let Some(&result_ty) = result_types.first() else {
-            return false;
-        };
+        let &result_ty = result_types.first()?;
         let operands = ctx.op_operands(op).to_vec();
         let (Some(&lhs), Some(&rhs)) = (operands.first(), operands.get(1)) else {
-            return false;
+            return None;
         };
         let loc = ctx.op(op).location;
 
         if let Ok(cmpi) = arith::Cmpi::from_op(ctx, op) {
             // Comparison reads the unspecified upper bits of a narrow integer.
             if is_narrow(ctx, ctx.value_ty(lhs)) {
-                return false;
+                return None;
             }
             let predicate = cmpi.predicate(ctx);
-            let Some(suffix) = type_suffix(ctx, ctx.value_ty(lhs)) else {
-                return false;
-            };
+            let suffix = type_suffix(ctx, ctx.value_ty(lhs))?;
 
             let pred_str = predicate.to_string();
             let new_op = match (suffix, pred_str.as_str()) {
@@ -599,15 +587,13 @@ impl RewritePattern for ArithCmpPattern {
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                _ => return false,
+                _ => return None,
             };
             rewriter.replace_op(new_op);
-            true
+            Some(())
         } else if let Ok(cmpf) = arith::Cmpf::from_op(ctx, op) {
             let predicate = cmpf.predicate(ctx);
-            let Some(suffix) = type_suffix(ctx, ctx.value_ty(lhs)) else {
-                return false;
-            };
+            let suffix = type_suffix(ctx, ctx.value_ty(lhs))?;
 
             let pred_str = predicate.to_string();
             let new_op = match (suffix, pred_str.as_str()) {
@@ -659,12 +645,12 @@ impl RewritePattern for ArithCmpPattern {
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                _ => return false,
+                _ => return None,
             };
             rewriter.replace_op(new_op);
-            true
+            Some(())
         } else {
-            false
+            None
         }
     }
 }
@@ -682,16 +668,12 @@ impl RewritePattern for ArithNegPattern {
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let loc = ctx.op(op).location;
 
         if let Ok(negf) = arith::Negf::from_op(ctx, op) {
-            let Some(&result_ty) = ctx.op_result_types(op).first() else {
-                return false;
-            };
-            let Some(suffix) = type_suffix(ctx, result_ty) else {
-                return false;
-            };
+            let &result_ty = ctx.op_result_types(op).first()?;
+            let suffix = type_suffix(ctx, result_ty)?;
             let operand = negf.operand(ctx);
 
             match suffix {
@@ -702,7 +684,7 @@ impl RewritePattern for ArithNegPattern {
                             .build(ctx, loc)
                             .op_ref(),
                     );
-                    true
+                    Some(())
                 }
                 "f64" => {
                     rewriter.replace_op(
@@ -711,17 +693,13 @@ impl RewritePattern for ArithNegPattern {
                             .build(ctx, loc)
                             .op_ref(),
                     );
-                    true
+                    Some(())
                 }
-                _ => false,
+                _ => None,
             }
         } else if let Ok(negi) = arith::Negi::from_op(ctx, op) {
-            let Some(&result_ty) = ctx.op_result_types(op).first() else {
-                return false;
-            };
-            let Some(suffix) = type_suffix(ctx, result_ty) else {
-                return false;
-            };
+            let &result_ty = ctx.op_result_types(op).first()?;
+            let suffix = type_suffix(ctx, result_ty)?;
             let operand = negi.operand(ctx);
 
             match suffix {
@@ -736,7 +714,7 @@ impl RewritePattern for ArithNegPattern {
                         .build(ctx, loc);
                     rewriter.insert_op(zero.op_ref());
                     rewriter.replace_op(sub.op_ref());
-                    true
+                    Some(())
                 }
                 "i64" => {
                     let i64_ty = intern_i64_type(ctx);
@@ -749,12 +727,12 @@ impl RewritePattern for ArithNegPattern {
                         .build(ctx, loc);
                     rewriter.insert_op(zero.op_ref());
                     rewriter.replace_op(sub.op_ref());
-                    true
+                    Some(())
                 }
-                _ => false,
+                _ => None,
             }
         } else {
-            false
+            None
         }
     }
 }
@@ -779,10 +757,10 @@ impl RewritePattern for ArithBitwisePattern {
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let data = ctx.op(op);
         if data.name.dialect(ctx) != arith::DIALECT_NAME {
-            return false;
+            return None;
         }
 
         let name = data.name;
@@ -797,25 +775,21 @@ impl RewritePattern for ArithBitwisePattern {
         .contains(&name);
 
         if !is_bitwise {
-            return false;
+            return None;
         }
 
         let result_types = ctx.op_result_types(op);
-        let Some(&result_ty) = result_types.first() else {
-            return false;
-        };
+        let &result_ty = result_types.first()?;
         let operands = ctx.op_operands(op).to_vec();
         let (Some(&lhs), Some(&rhs)) = (operands.first(), operands.get(1)) else {
-            return false;
+            return None;
         };
         // A right shift moves the unspecified upper bits of a narrow integer
         // into the result.
         if is_narrow(ctx, result_ty) && (name == arith::Shr::NAME || name == arith::Shru::NAME) {
-            return false;
+            return None;
         }
-        let Some(suffix) = type_suffix(ctx, result_ty) else {
-            return false;
-        };
+        let suffix = type_suffix(ctx, result_ty)?;
         let loc = ctx.op(op).location;
 
         let new_op = if name == arith::And::NAME {
@@ -828,7 +802,7 @@ impl RewritePattern for ArithBitwisePattern {
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                _ => return false,
+                _ => return None,
             }
         } else if name == arith::Or::NAME {
             match suffix {
@@ -840,7 +814,7 @@ impl RewritePattern for ArithBitwisePattern {
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                _ => return false,
+                _ => return None,
             }
         } else if name == arith::Xor::NAME {
             match suffix {
@@ -852,7 +826,7 @@ impl RewritePattern for ArithBitwisePattern {
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                _ => return false,
+                _ => return None,
             }
         } else if name == arith::Shl::NAME {
             match suffix {
@@ -864,7 +838,7 @@ impl RewritePattern for ArithBitwisePattern {
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                _ => return false,
+                _ => return None,
             }
         } else if name == arith::Shr::NAME {
             match suffix {
@@ -876,7 +850,7 @@ impl RewritePattern for ArithBitwisePattern {
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                _ => return false,
+                _ => return None,
             }
         } else if name == arith::Shru::NAME {
             match suffix {
@@ -888,14 +862,14 @@ impl RewritePattern for ArithBitwisePattern {
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                _ => return false,
+                _ => return None,
             }
         } else {
-            return false;
+            return None;
         };
 
         rewriter.replace_op(new_op);
-        true
+        Some(())
     }
 }
 
@@ -922,16 +896,10 @@ impl RewritePattern for ArithConversionPattern {
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Some(kind) = conversion_kind(ctx, op) else {
-            return false;
-        };
-        let Some(&operand) = ctx.op_operands(op).first() else {
-            return false;
-        };
-        let Some(&dst_ty) = ctx.op_result_types(op).first() else {
-            return false;
-        };
+    ) -> Option<()> {
+        let kind = conversion_kind(ctx, op)?;
+        let &operand = ctx.op_operands(op).first()?;
+        let &dst_ty = ctx.op_result_types(op).first()?;
         let src_ty = ctx.value_ty(operand);
         if is_narrow(ctx, src_ty) || is_narrow(ctx, dst_ty) {
             return lower_narrow_conversion(ctx, op, rewriter, kind);
@@ -942,10 +910,10 @@ impl RewritePattern for ArithConversionPattern {
             IntegerLike::width(ctx, ty).is_none_or(|width| matches!(width, 32 | 64))
         };
         if !exact(ctx, src_ty) || !exact(ctx, dst_ty) {
-            return false;
+            return None;
         }
         let (Some(src), Some(dst)) = (type_suffix(ctx, src_ty), type_suffix(ctx, dst_ty)) else {
-            return false;
+            return None;
         };
         let loc = ctx.op(op).location;
 
@@ -979,10 +947,10 @@ impl RewritePattern for ArithConversionPattern {
             ("fptoui", "f64", "i64") => build!(I64TruncF64U),
             ("extf", "f32", "f64") => build!(F64PromoteF32),
             ("truncf", "f64", "f32") => build!(F32DemoteF64),
-            _ => return false,
+            _ => return None,
         };
         rewriter.replace_op(new_op);
-        true
+        Some(())
     }
 }
 
@@ -1005,17 +973,17 @@ fn lower_narrow_conversion(
     op: OpRef,
     rewriter: &mut PatternRewriter<'_>,
     kind: &str,
-) -> bool {
+) -> Option<()> {
     let operand = ctx.op_operands(op)[0];
     let dst_ty = ctx.op_result_types(op)[0];
     let (Some(src), Some(dst)) = (
         IntegerLike::width(ctx, ctx.value_ty(operand)),
         IntegerLike::width(ctx, dst_ty),
     ) else {
-        return false;
+        return None;
     };
     if src == 1 || dst == 1 {
-        return false;
+        return None;
     }
     let loc = ctx.op(op).location;
     if kind == "trunci" && src == 64 {
@@ -1023,14 +991,14 @@ fn lower_narrow_conversion(
             .results(dst_ty)
             .build(ctx, loc);
         rewriter.replace_op(wrap.op_ref());
-        return true;
+        return Some(());
     }
     let i32_ty = intern_i32_type(ctx);
     // The width to normalize from, and the type of the normalized `i32`.
     let (width, normalized_ty) = match kind {
         "extui" | "extsi" => (src, if dst == 64 { i32_ty } else { dst_ty }),
         "trunci" => (dst, dst_ty),
-        _ => return false,
+        _ => return None,
     };
     let normalized = match (kind, width) {
         ("extsi", 8) => wasm_dialect::I32Extend8S::operands(operand)
@@ -1055,7 +1023,7 @@ fn lower_narrow_conversion(
     };
     if dst != 64 {
         rewriter.replace_op(normalized);
-        return true;
+        return Some(());
     }
     rewriter.insert_op(normalized);
     let value = ctx.op_results(normalized)[0];
@@ -1071,7 +1039,7 @@ fn lower_narrow_conversion(
             .op_ref()
     };
     rewriter.replace_op(widen);
-    true
+    Some(())
 }
 
 /// The name of an `arith` conversion operation, if `op` is one.

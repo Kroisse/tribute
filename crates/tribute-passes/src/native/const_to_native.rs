@@ -378,13 +378,11 @@ impl OpRewritePattern for BytesConstNativePattern {
         ctx: &mut IrContext,
         bytes_const: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = bytes_const.op_ref();
         let content: Vec<u8> = bytes_const.value(ctx).to_vec();
 
-        let Some(data_sym) = self.content_to_symbol.get(&content).cloned() else {
-            return false;
-        };
+        let data_sym = self.content_to_symbol.get(&content).cloned()?;
 
         let loc = ctx.op(op).location;
         let (insert_ops, payload) = emit_bytes_alloc(
@@ -408,7 +406,7 @@ impl OpRewritePattern for BytesConstNativePattern {
             rewriter.insert_op(o);
         }
         rewriter.replace_op(typed.op_ref());
-        true
+        Some(())
     }
 
     fn name(&self) -> &'static str {
@@ -433,17 +431,15 @@ impl OpRewritePattern for StringConstNativePattern {
         ctx: &mut IrContext,
         string_const: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = string_const.op_ref();
         let content = string_const.value(ctx).as_bytes();
         let content_len = content.len() as u64;
-        let Some(data_sym) = self.content_to_symbol.get(content).cloned() else {
-            return false;
-        };
+        let data_sym = self.content_to_symbol.get(content).cloned()?;
 
         let Some(string_enum_ty) = self.string_enum_ty else {
             tracing::warn!("const_to_native: String enum type not found, skipping string_const");
-            return false;
+            return None;
         };
 
         let loc = ctx.op(op).location;
@@ -482,7 +478,7 @@ impl OpRewritePattern for StringConstNativePattern {
         }
         rewriter.insert_op(bytes.op_ref());
         rewriter.replace_op(variant_new.op_ref());
-        true
+        Some(())
     }
 
     fn name(&self) -> &'static str {

@@ -46,10 +46,10 @@ impl OpRewritePattern for UnrealizedCastConversionPattern {
         ctx: &mut IrContext,
         unrealized_conversion_cast: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = unrealized_conversion_cast.op_ref();
         let (&[input], &[declared]) = (ctx.op_operands(op), ctx.op_result_types(op)) else {
-            return false;
+            return None;
         };
         let to = rewriter
             .type_converter()
@@ -66,16 +66,16 @@ impl OpRewritePattern for UnrealizedCastConversionPattern {
                 rewriter.insert_op(mat_op);
             }
             rewriter.erase_op(vec![mat.value]);
-            return true;
+            return Some(());
         }
         if to == declared {
-            return false;
+            return None;
         }
         let cast = core::UnrealizedConversionCast::operands(input)
             .results(to)
             .build(ctx, location);
         rewriter.replace_op(cast.op_ref());
-        true
+        Some(())
     }
 }
 

@@ -171,9 +171,10 @@ impl OpRewritePattern for LowerCall<'_> {
         ctx: &mut IrContext,
         call: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let callee = call.callee(ctx);
+    ) -> Option<()> {
+        let callee = self.lowered.get(call.callee(ctx))?;
         // ...
+        Some(())
     }
 }
 ```
@@ -213,7 +214,9 @@ target when constructing replacements.
 
 ### Return Value
 
-Return `true` if the pattern matched and recorded mutations, `false` otherwise.
+Return `Some(())` if the pattern matched and recorded mutations, `None`
+otherwise. Each check that rejects the operation is a `?`: on an `Option`,
+or on a `Result` after `.ok()`.
 
 Use full conversion where a phase boundary must reject every residual illegal
 operation. Bodyless external functions have no body region; inspect optional

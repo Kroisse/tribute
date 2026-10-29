@@ -360,8 +360,8 @@ impl OpRewritePattern for ExpandSuffixFrames<'_> {
         ctx: &mut IrContext,
         suffix: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        self.0.expand_suffix_frame(ctx, suffix, rewriter).is_some()
+    ) -> Option<()> {
+        self.0.expand_suffix_frame(ctx, suffix, rewriter)
     }
 }
 
@@ -376,8 +376,8 @@ impl OpRewritePattern for ExpandExits<'_> {
         ctx: &mut IrContext,
         exit: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        self.0.expand_exit(ctx, exit, rewriter).is_some()
+    ) -> Option<()> {
+        self.0.expand_exit(ctx, exit, rewriter)
     }
 }
 

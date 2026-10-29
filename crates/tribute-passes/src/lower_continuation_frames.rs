@@ -115,12 +115,12 @@ impl OpRewritePattern for LowerDelimits {
         ctx: &mut IrContext,
         delimit: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = delimit.op_ref();
         let lowered = effect::Delimit::operands(delimit.body(ctx), delimit.evidence(ctx))
             .build(ctx, ctx.op(op).location);
         rewriter.replace_op(lowered.op_ref());
-        true
+        Some(())
     }
 }
 

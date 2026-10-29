@@ -248,7 +248,7 @@ impl OpRewritePattern for LowerEffectExtend<'_> {
         ctx: &mut IrContext,
         extend_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = extend_op.op_ref();
         let function = self
             .runtime
@@ -270,7 +270,7 @@ impl OpRewritePattern for LowerEffectExtend<'_> {
             extend_op.outer(ctx),
         ];
         replace_with_call(ctx, op, Some(function), args, rewriter);
-        true
+        Some(())
     }
 }
 
@@ -290,7 +290,7 @@ impl RewritePattern for LowerEffectStackOp<'_> {
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let runtime = self.runtime;
         let (function, ability, evidence) = if let Ok(mask) = effect::Mask::from_op(ctx, op) {
             (runtime.mask, mask.ability(ctx).clone(), mask.evidence(ctx))
@@ -303,12 +303,12 @@ impl RewritePattern for LowerEffectStackOp<'_> {
                 outer.evidence(ctx),
             )
         } else {
-            return false;
+            return None;
         };
         let loc = ctx.op(op).location;
         let ability_id = effect_dispatch::insert_ability_id(ctx, loc, &ability, rewriter);
         replace_with_call(ctx, op, function, vec![evidence, ability_id], rewriter);
-        true
+        Some(())
     }
 }
 
@@ -332,7 +332,7 @@ impl RewritePattern for LowerEffectTailOp<'_> {
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let runtime = self.runtime;
         let loc = ctx.op(op).location;
         let i32_ty = effect_dispatch::i32_type(ctx);
@@ -363,10 +363,10 @@ impl RewritePattern for LowerEffectTailOp<'_> {
                 vec![push.evidence(ctx), push.source(ctx), ability_id],
             )
         } else {
-            return false;
+            return None;
         };
         replace_with_call(ctx, op, function, args, rewriter);
-        true
+        Some(())
     }
 }
 
@@ -384,10 +384,10 @@ impl OpRewritePattern for LowerEffectDispatchTail<'_> {
         ctx: &mut IrContext,
         dispatch_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = dispatch_op.op_ref();
         if !effect_dispatch::is_valid_tail_dispatch(ctx, op) {
-            return false;
+            return None;
         }
 
         let loc = ctx.op(op).location;
@@ -402,7 +402,7 @@ impl OpRewritePattern for LowerEffectDispatchTail<'_> {
         let dispatch_closure = lookup_tr.call(ctx, loc, [dispatch_op.evidence(ctx), ability_id]);
         rewriter.insert_op(dispatch_closure.op_ref());
         effect_dispatch::lower_tail_dispatch(ctx, op, dispatch_closure.result(ctx), rewriter);
-        true
+        Some(())
     }
 }
 
@@ -420,10 +420,10 @@ impl OpRewritePattern for LowerEffectDispatchCps<'_> {
         ctx: &mut IrContext,
         dispatch_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = dispatch_op.op_ref();
         if !effect_dispatch::is_valid_cps_dispatch(ctx, op) {
-            return false;
+            return None;
         }
 
         let loc = ctx.op(op).location;
@@ -438,7 +438,7 @@ impl OpRewritePattern for LowerEffectDispatchCps<'_> {
         let prompt = lookup.call(ctx, loc, [dispatch_op.evidence(ctx), ability_id]);
         rewriter.insert_op(prompt.op_ref());
         effect_dispatch::lower_cps_dispatch(ctx, op, ability_id, prompt.result(ctx), rewriter);
-        true
+        Some(())
     }
 }
 

@@ -96,7 +96,7 @@ impl OpRewritePattern for StructGetPattern {
         ctx: &mut IrContext,
         struct_get: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = struct_get.op_ref();
         let struct_ty = struct_get.r#type(ctx);
         let field_idx = struct_get.field(ctx) as usize;
@@ -104,12 +104,12 @@ impl OpRewritePattern for StructGetPattern {
 
         let Some(layout) = compute_mem_struct_layout(ctx, struct_ty) else {
             warn!("adt_to_clif arena: struct_get layout is not a mem.struct");
-            return false;
+            return None;
         };
 
         if field_idx >= layout.field_offsets.len() {
             warn!("adt_to_clif arena: field index {} out of bounds", field_idx);
-            return false;
+            return None;
         }
 
         let loc = ctx.op(op).location;
@@ -121,7 +121,7 @@ impl OpRewritePattern for StructGetPattern {
         let result_types = ctx.op_result_types(op);
         let Some(result_ty) = result_types.first().copied() else {
             warn!("adt_to_clif arena: struct_get has no result type");
-            return false;
+            return None;
         };
         let result_ty = tc.convert_type_or_identity(ctx, result_ty);
 
@@ -130,7 +130,7 @@ impl OpRewritePattern for StructGetPattern {
             .results(result_ty)
             .build(ctx, loc);
         rewriter.replace_op(load_op.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -144,18 +144,18 @@ impl OpRewritePattern for StructSetPattern {
         ctx: &mut IrContext,
         struct_set: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = struct_set.op_ref();
         let struct_ty = struct_set.r#type(ctx);
         let field_idx = struct_set.field(ctx) as usize;
 
         let Some(layout) = compute_mem_struct_layout(ctx, struct_ty) else {
             warn!("adt_to_clif arena: struct_set layout is not a mem.struct");
-            return false;
+            return None;
         };
 
         if field_idx >= layout.field_offsets.len() {
-            return false;
+            return None;
         }
 
         let loc = ctx.op(op).location;
@@ -168,7 +168,7 @@ impl OpRewritePattern for StructSetPattern {
             .offset(offset)
             .build(ctx, loc);
         rewriter.replace_op(store_op.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -182,10 +182,10 @@ impl OpRewritePattern for VariantCastPattern {
         ctx: &mut IrContext,
         variant_cast: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let ref_val = variant_cast.r#ref(ctx);
         rewriter.erase_op(vec![ref_val]);
-        true
+        Some(())
     }
 }
 
@@ -199,7 +199,7 @@ impl OpRewritePattern for RefNullPattern {
         ctx: &mut IrContext,
         ref_null: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = ref_null.op_ref();
         let loc = ctx.op(op).location;
         let ptr_ty = core::Ptr::params().intern(ctx).as_type_ref();
@@ -208,7 +208,7 @@ impl OpRewritePattern for RefNullPattern {
             .results(ptr_ty)
             .build(ctx, loc);
         rewriter.replace_op(iconst_op.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -222,10 +222,10 @@ impl OpRewritePattern for RefCastPattern {
         ctx: &mut IrContext,
         ref_cast: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let ref_val = ref_cast.r#ref(ctx);
         rewriter.erase_op(vec![ref_val]);
-        true
+        Some(())
     }
 }
 
@@ -239,13 +239,11 @@ impl OpRewritePattern for RefIsNullPattern {
         ctx: &mut IrContext,
         ref_is_null: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = ref_is_null.op_ref();
         let loc = ctx.op(op).location;
         let ptr_ty = core::Ptr::params().intern(ctx).as_type_ref();
-        let Some(result_ty) = flag_result_type(ctx, op, rewriter) else {
-            return false;
-        };
+        let result_ty = flag_result_type(ctx, op, rewriter)?;
         let i8_ty = intern_i8_type(ctx);
         let ref_val = ref_is_null.r#ref(ctx);
 
@@ -267,7 +265,7 @@ impl OpRewritePattern for RefIsNullPattern {
             result_ty,
             i8_ty,
         );
-        true
+        Some(())
     }
 }
 

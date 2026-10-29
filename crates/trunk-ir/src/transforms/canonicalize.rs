@@ -142,27 +142,25 @@ impl RewritePattern for FoldDispatchPattern {
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Some(result) = DynFold::get(ctx, op).and_then(|fold| fold.fold(ctx)) else {
-            return false;
-        };
+    ) -> Option<()> {
+        let result = DynFold::get(ctx, op).and_then(|fold| fold.fold(ctx))?;
         match result {
             FoldResult::Forward(v) => {
                 rewriter.erase_op(vec![v]);
-                true
+                Some(())
             }
             FoldResult::ArithConst(attr) => {
                 let loc = ctx.op(op).location;
                 let result_ty = match ctx.op_result_types(op) {
                     [t] => *t,
-                    _ => return false,
+                    _ => return None,
                 };
                 let new_const = arith::Const::operands()
                     .value(attr)
                     .results(result_ty)
                     .build(ctx, loc);
                 rewriter.replace_op(new_const.op_ref());
-                true
+                Some(())
             }
             FoldResult::Splice { body, results } => apply_splice(ctx, rewriter, op, body, results),
         }
@@ -184,17 +182,15 @@ fn apply_splice(
     op: OpRef,
     body: Vec<OpRef>,
     results: Vec<ValueRef>,
-) -> bool {
+) -> Option<()> {
     // Precondition: `results` must cover every result slot of the
     // matched op. Check before any mutation so a buggy fold can't leave
     // body ops spliced out and the matched op's regions emptied while
     // the final RAUW fails arity checks deep in `rewriter.erase_op`.
     if ctx.op_results(op).len() != results.len() {
-        return false;
+        return None;
     }
-    let Some(parent_block) = ctx.op(op).parent_block else {
-        return false;
-    };
+    let parent_block = ctx.op(op).parent_block?;
     for body_op in body {
         ctx.detach_op(body_op);
         ctx.insert_op_before(parent_block, op, body_op);
@@ -218,7 +214,7 @@ fn apply_splice(
         }
     }
     rewriter.erase_op(results);
-    true
+    Some(())
 }
 
 /// Every operation in `dialect` that implements [`Fold`]. Used by

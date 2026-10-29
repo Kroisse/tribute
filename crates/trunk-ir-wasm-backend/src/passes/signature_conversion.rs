@@ -20,12 +20,10 @@ impl OpRewritePattern for WasmFuncSignatureConversionPattern {
         ctx: &mut IrContext,
         wasm_func: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = wasm_func.op_ref();
         let func_type = wasm_func.r#type(ctx);
-        let Some(signature) = wasm::FuncSig::from_type_ref(ctx, func_type) else {
-            return false;
-        };
+        let signature = wasm::FuncSig::from_type_ref(ctx, func_type)?;
         let converted = convert_signature_components(
             ctx,
             rewriter.type_converter(),
@@ -34,7 +32,7 @@ impl OpRewritePattern for WasmFuncSignatureConversionPattern {
             signature.non_reserved_attrs(ctx),
         );
         if !converted.changed {
-            return false;
+            return None;
         }
         let new_func_type = wasm::func_sig_with_attrs(
             ctx,

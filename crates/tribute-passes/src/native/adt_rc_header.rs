@@ -168,7 +168,7 @@ impl OpRewritePattern for StructNewPattern {
         ctx: &mut IrContext,
         struct_new: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = struct_new.op_ref();
         let struct_ty = struct_new.r#type(ctx);
         let tc = rewriter.type_converter();
@@ -244,7 +244,7 @@ impl OpRewritePattern for StructNewPattern {
             rewriter.insert_op(o);
         }
         rewriter.replace_op(last);
-        true
+        Some(())
     }
 }
 
@@ -282,7 +282,7 @@ impl OpRewritePattern for VariantNewPattern {
         ctx: &mut IrContext,
         variant_new: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = variant_new.op_ref();
         let enum_ty = variant_new.r#type(ctx);
         let tag = variant_new.tag_ref(ctx);
@@ -358,7 +358,7 @@ impl OpRewritePattern for VariantNewPattern {
             rewriter.insert_op(o);
         }
         rewriter.replace_op(last);
-        true
+        Some(())
     }
 }
 

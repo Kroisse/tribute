@@ -157,11 +157,9 @@ impl OpRewritePattern for SlotsCallPattern<'_> {
         ctx: &mut IrContext,
         call: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = call.op_ref();
-        let Some(&slots_op) = self.declarations.get(call.callee(ctx)) else {
-            return false;
-        };
+        let &slots_op = self.declarations.get(call.callee(ctx))?;
         // `reject_other_references` checked the call's shape.
         let args = ctx.op_operands(op).to_vec();
         let result_ty = ctx.op_result_types(op)[0];
@@ -206,7 +204,7 @@ impl OpRewritePattern for SlotsCallPattern<'_> {
             }
         };
         rewriter.replace_op(lowered);
-        true
+        Some(())
     }
 }
 
@@ -276,13 +274,13 @@ impl OpRewritePattern for SlotsDeclarationPattern<'_> {
         ctx: &mut IrContext,
         function: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let name = SymbolPath::new([Symbol::new(function.sym_name(ctx))]);
         if !self.declarations.contains_key(&name) {
-            return false;
+            return None;
         }
         rewriter.erase_op(vec![]);
-        true
+        Some(())
     }
 }
 

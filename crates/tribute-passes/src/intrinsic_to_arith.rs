@@ -250,16 +250,14 @@ impl OpRewritePattern for ArithIntrinsicPattern<'_> {
         ctx: &mut IrContext,
         call_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = call_op.op_ref();
         let callee = call_op.callee(ctx);
 
         if !self.eligible.contains(callee) {
-            return false;
+            return None;
         }
-        let Some(mapping) = self.map.get(callee) else {
-            return false;
-        };
+        let mapping = self.map.get(callee)?;
 
         let loc = ctx.op(op).location;
         let operands = ctx.op_operands(op).to_vec();
@@ -285,7 +283,7 @@ impl OpRewritePattern for ArithIntrinsicPattern<'_> {
             }
         }
 
-        true
+        Some(())
     }
 }
 
@@ -308,22 +306,20 @@ impl OpRewritePattern for ArithIntrinsicFuncDeclPattern<'_> {
         ctx: &mut IrContext,
         func_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = func_op.op_ref();
         // Check if this is one of our known arithmetic intrinsics
         let sym_name = Symbol::new(func_op.sym_name(ctx));
         if !self.eligible.contains(&SymbolPath::new([sym_name.clone()])) {
-            return false;
+            return None;
         }
-        let Some(mapping) = self.intrinsic_map.get(&SymbolPath::new([sym_name.clone()])) else {
-            return false;
-        };
+        let mapping = self
+            .intrinsic_map
+            .get(&SymbolPath::new([sym_name.clone()]))?;
 
         // External declarations have no body region and must remain
         // untouched. `Func::body` asserts that the region exists.
-        let Some(old_body) = ctx.op_region(op, 0) else {
-            return false;
-        };
+        let old_body = ctx.op_region(op, 0)?;
 
         let loc = ctx.op(op).location;
         let func_ty = func_op.r#type(ctx);
@@ -332,9 +328,7 @@ impl OpRewritePattern for ArithIntrinsicFuncDeclPattern<'_> {
         // This will panic if a non-binary intrinsic is ever added to the map.
         let function = func::FuncSig::from_type_ref(ctx, func_ty)
             .expect("mapped intrinsic declaration must have a valid func.func_sig type");
-        if function.single_result(ctx).is_none() {
-            return false;
-        }
+        function.single_result(ctx)?;
         let param_tys: Vec<TypeRef> = function.inputs(ctx).to_vec();
 
         // Build a new body: entry block with params → arith op → func.return
@@ -388,7 +382,7 @@ impl OpRewritePattern for ArithIntrinsicFuncDeclPattern<'_> {
             .op_ref();
         // Do NOT copy the "intrinsic" abi — this is now a real function
         rewriter.replace_op(new_func);
-        true
+        Some(())
     }
 }
 

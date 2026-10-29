@@ -396,15 +396,12 @@ impl OpRewritePattern for FuncFuncPattern {
         ctx: &mut IrContext,
         func_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = func_op.op_ref();
         let loc = ctx.op(op).location;
         let sym_name = func_op.sym_name_ref(ctx);
-        let Some(func_type) =
-            convert_to_wasm_func_type(ctx, func_op.r#type(ctx), rewriter.type_converter())
-        else {
-            return false;
-        };
+        let func_type =
+            convert_to_wasm_func_type(ctx, func_op.r#type(ctx), rewriter.type_converter())?;
         let attrs_to_preserve = clone_attrs_except(ctx, op, &["sym_name", "type"]);
 
         // Generated Func::body() asserts for valid bodyless declarations.
@@ -412,7 +409,7 @@ impl OpRewritePattern for FuncFuncPattern {
         let body = match ctx.op_region_count(op) {
             0 => None,
             1 => ctx.op_region(op, 0),
-            _ => return false,
+            _ => return None,
         };
 
         // Detach a definition's body region so it can be reused in the new wasm.func.
@@ -437,7 +434,7 @@ impl OpRewritePattern for FuncFuncPattern {
         };
         ctx.op_attrs_mut(new_op).extend(attrs_to_preserve);
         rewriter.replace_op(new_op);
-        true
+        Some(())
     }
 }
 
@@ -452,7 +449,7 @@ impl OpRewritePattern for FuncCallPattern {
         ctx: &mut IrContext,
         call_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = call_op.op_ref();
         let loc = ctx.op(op).location;
         let callee = call_op.callee(ctx);
@@ -466,7 +463,7 @@ impl OpRewritePattern for FuncCallPattern {
             .results(result_types)
             .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -484,7 +481,7 @@ impl OpRewritePattern for FuncCallIndirectPattern {
         ctx: &mut IrContext,
         call: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = call.op_ref();
         let loc = ctx.op(op).location;
         let all_operands = std::iter::once(call.callee(ctx))
@@ -492,13 +489,8 @@ impl OpRewritePattern for FuncCallIndirectPattern {
             .collect::<Vec<_>>();
         let result_types = rewriter.result_types(ctx, op);
 
-        let Some(signature) = call.exact_signature(ctx) else {
-            return false;
-        };
-        let Some(signature) = convert_to_wasm_func_type(ctx, signature, rewriter.type_converter())
-        else {
-            return false;
-        };
+        let signature = call.exact_signature(ctx)?;
+        let signature = convert_to_wasm_func_type(ctx, signature, rewriter.type_converter())?;
         // Validate the replacement's converted results against the retained
         // physical contract before mutating the operation.
         // Arguments other patterns have not converted yet are compared by
@@ -513,7 +505,7 @@ impl OpRewritePattern for FuncCallIndirectPattern {
         )
         .is_err()
         {
-            return false;
+            return None;
         }
         let new_op = wasm_dialect::CallIndirect::operands(all_operands)
             .type_idx(0)
@@ -522,7 +514,7 @@ impl OpRewritePattern for FuncCallIndirectPattern {
             .results(result_types)
             .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -537,14 +529,14 @@ impl OpRewritePattern for FuncReturnPattern {
         ctx: &mut IrContext,
         return_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = return_op.op_ref();
         let loc = ctx.op(op).location;
         let values: Vec<_> = ctx.op_operands(op).to_vec();
 
         let new_op = wasm_dialect::Return::operands(values).build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -559,7 +551,7 @@ impl OpRewritePattern for FuncTailCallPattern {
         ctx: &mut IrContext,
         tail_call_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = tail_call_op.op_ref();
         let loc = ctx.op(op).location;
         let callee = tail_call_op.callee(ctx);
@@ -569,7 +561,7 @@ impl OpRewritePattern for FuncTailCallPattern {
             .callee(callee.clone())
             .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -589,19 +581,14 @@ impl OpRewritePattern for FuncTailCallIndirectPattern {
         ctx: &mut IrContext,
         tail: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = tail.op_ref();
         // The exact callable metadata is source-authoritative, but the
         // arguments have already reached their Wasm representations. Convert
         // the attribute with the shared signature converter before validating
         // it; never derive a replacement signature from the operands.
-        let Some(signature) = tail.exact_signature(ctx) else {
-            return false;
-        };
-        let Some(signature) = convert_to_wasm_func_type(ctx, signature, rewriter.type_converter())
-        else {
-            return false;
-        };
+        let signature = tail.exact_signature(ctx)?;
+        let signature = convert_to_wasm_func_type(ctx, signature, rewriter.type_converter())?;
 
         let mut converted_attrs = ctx.op(op).attributes.clone();
         func::remove_indirect_call_signature(ctx, &mut converted_attrs);
@@ -623,14 +610,14 @@ impl OpRewritePattern for FuncTailCallIndirectPattern {
         )
         .is_err()
         {
-            return false;
+            return None;
         }
 
         let operands = std::iter::once(tail.callee(ctx))
             .chain(CallLike::call_args(&tail, ctx).iter().copied())
             .collect::<Vec<_>>();
         if !TailCallLike::is_resultless(&tail, ctx) {
-            return false;
+            return None;
         }
 
         let loc = ctx.op(op).location;
@@ -641,7 +628,7 @@ impl OpRewritePattern for FuncTailCallIndirectPattern {
             .build(ctx, loc);
         ctx.op_attrs_mut(new_op.op_ref()).extend(converted_attrs);
         rewriter.replace_op(new_op.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -656,13 +643,13 @@ impl OpRewritePattern for FuncUnreachablePattern {
         ctx: &mut IrContext,
         unreachable_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = unreachable_op.op_ref();
         let loc = ctx.op(op).location;
 
         let new_op = wasm_dialect::Unreachable::operands().build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -682,7 +669,7 @@ impl OpRewritePattern for FuncConstantPattern {
         ctx: &mut IrContext,
         const_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = const_op.op_ref();
         let func_ref = const_op.func_ref(ctx);
 
@@ -702,7 +689,7 @@ impl OpRewritePattern for FuncConstantPattern {
             .build(ctx, loc);
 
         rewriter.replace_op(new_op.op_ref());
-        true
+        Some(())
     }
 }
 

@@ -47,11 +47,11 @@ impl OpRewritePattern for CfBrPattern {
         ctx: &mut IrContext,
         br: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = br.op_ref();
         let new_op = rebuild_op_as(ctx, op, "clif.jump");
         rewriter.replace_op(new_op);
-        true
+        Some(())
     }
 }
 
@@ -66,11 +66,11 @@ impl OpRewritePattern for CfCondBrPattern {
         ctx: &mut IrContext,
         cond_br: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = cond_br.op_ref();
         let new_op = rebuild_op_as(ctx, op, "clif.brif");
         rewriter.replace_op(new_op);
-        true
+        Some(())
     }
 }
 
@@ -89,19 +89,14 @@ impl OpRewritePattern for CfSwitchPattern {
         ctx: &mut IrContext,
         switch: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = switch.op_ref();
         let discriminant = switch.discriminant(ctx);
-        let Some(width) = core::IntegerLike::width(ctx, ctx.value_ty(discriminant)) else {
-            return false;
-        };
-        let Some(cases) = switch
+        let width = core::IntegerLike::width(ctx, ctx.value_ty(discriminant))?;
+        let cases = switch
             .cases(ctx)
             .map(|case| unsigned_case(width, case))
-            .collect::<Option<Vec<u64>>>()
-        else {
-            return false;
-        };
+            .collect::<Option<Vec<u64>>>()?;
         let default = switch.default(ctx);
         let targets: trunk_ir::BlockList = switch.targets(ctx).collect();
         let location = ctx.op(op).location;
@@ -110,7 +105,7 @@ impl OpRewritePattern for CfSwitchPattern {
             .successors(default, targets)
             .build(ctx, location);
         rewriter.replace_op(new_op.op_ref());
-        true
+        Some(())
     }
 }
 

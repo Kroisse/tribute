@@ -34,10 +34,10 @@ impl OpRewritePattern for ReferenceUpcastPattern {
         ctx: &mut IrContext,
         unrealized_conversion_cast: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = unrealized_conversion_cast.op_ref();
         let (&[input], &[result_ty]) = (ctx.op_operands(op), ctx.op_result_types(op)) else {
-            return false;
+            return None;
         };
         if rewriter
             .type_converter()
@@ -45,19 +45,19 @@ impl OpRewritePattern for ReferenceUpcastPattern {
             != result_ty
             || !is_abstract_gc_reference(ctx, result_ty)
         {
-            return false;
+            return None;
         }
         let input_ty = ctx.value_ty(input);
         if input_ty == result_ty || !is_wasm_physical_argument_assignable(ctx, input_ty, result_ty)
         {
-            return false;
+            return None;
         }
         let location = ctx.op(op).location;
         let upcast = wasm::RefUpcast::operands(input)
             .results(result_ty)
             .build(ctx, location);
         rewriter.replace_op(upcast.op_ref());
-        true
+        Some(())
     }
 }
 
