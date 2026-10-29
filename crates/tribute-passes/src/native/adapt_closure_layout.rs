@@ -18,13 +18,12 @@ use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::tribute_rt;
 use tribute_ir::dialect::tribute_rtti;
-use trunk_ir::OpName;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{clif, core};
 use trunk_ir::ops::{DialectOp, DialectType};
-use trunk_ir::refs::{OpRef, TypeRef};
+use trunk_ir::refs::TypeRef;
 use trunk_ir::rewrite::{
-    Module, OpRewritePattern, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    Module, OpRewritePattern, PatternApplicator, PatternRewriter, TypeConverter,
 };
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::{Attribute, TypeDataBuilder};
@@ -41,7 +40,8 @@ use crate::closure_lower::{
 pub(crate) fn lower(ctx: &mut IrContext, module: Module) {
     let tables = declare_convention_tables(ctx, module);
     PatternApplicator::new(TypeConverter::new())
-        .add_pattern(ClosureStructAdaptPattern)
+        .add_pattern(AdaptClosureStructNew)
+        .add_pattern(AdaptClosureStructGet)
         .add_pattern(ConventionTablePattern { tables })
         .add_pattern(ConventionEntryPattern)
         .apply_partial(ctx, module);
@@ -208,63 +208,71 @@ impl OpRewritePattern for ConventionEntryPattern {
     }
 }
 
-/// Pattern: adapt closure layout operations to the native layouts.
-struct ClosureStructAdaptPattern;
+/// Retypes `adt.struct_new` of a closure to its native layout.
+struct AdaptClosureStructNew;
 
-impl RewritePattern for ClosureStructAdaptPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[adt::StructNew::NAME, adt::StructGet::NAME])
-    }
+impl OpRewritePattern for AdaptClosureStructNew {
+    type Op = adt::StructNew;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        struct_new: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if let Ok(struct_new) = adt::StructNew::from_op(ctx, op) {
-            let Some(native_ty) = native_closure_layout(ctx, struct_new.r#type(ctx)) else {
-                return false;
-            };
-            let new_op = rebuild_op_as(ctx, op, "adt.struct_new");
-            ctx.op_attrs_mut(new_op)
-                .insert("type", Attribute::Type(native_ty));
-            let Some(&original_ty) = ctx.op_result_types(new_op).first() else {
-                rewriter.replace_op(new_op);
-                return true;
-            };
-            ctx.set_op_result_type(new_op, 0, native_ty);
-            // Users still declare the semantic closure type, so the
-            // allocation is cast back to it; type conversion reconciles the cast.
-            let location = ctx.op(op).location;
-            let allocated = ctx.op_result(new_op, 0);
-            let restored = core::UnrealizedConversionCast::operands(allocated)
-                .results(original_ty)
-                .build(ctx, location);
-            rewriter.insert_op(new_op);
-            rewriter.insert_op(restored.op_ref());
-            rewriter.erase_op(vec![restored.result(ctx)]);
-            return true;
-        }
-
-        if let Ok(struct_get) = adt::StructGet::from_op(ctx, op) {
-            let Some(native_ty) = native_closure_layout(ctx, struct_get.r#type(ctx)) else {
-                return false;
-            };
-            let new_op = rebuild_op_as(ctx, op, "adt.struct_get");
-            ctx.op_attrs_mut(new_op)
-                .insert("type", Attribute::Type(native_ty));
-            // The convention table address is read by `convention_entry`;
-            // captures keep their semantic types.
-            if struct_get.field(ctx) == 0 {
-                let ptr_ty = core::Ptr::params().intern(ctx).as_type_ref();
-                ctx.set_op_result_type(new_op, 0, ptr_ty);
-            }
+        let op = struct_new.op_ref();
+        let Some(native_ty) = native_closure_layout(ctx, struct_new.r#type(ctx)) else {
+            return false;
+        };
+        let new_op = rebuild_op_as(ctx, op, "adt.struct_new");
+        ctx.op_attrs_mut(new_op)
+            .insert("type", Attribute::Type(native_ty));
+        let Some(&original_ty) = ctx.op_result_types(new_op).first() else {
             rewriter.replace_op(new_op);
             return true;
-        }
+        };
+        ctx.set_op_result_type(new_op, 0, native_ty);
+        // Users still declare the semantic closure type, so the
+        // allocation is cast back to it; type conversion reconciles the cast.
+        let location = ctx.op(op).location;
+        let allocated = ctx.op_result(new_op, 0);
+        let restored = core::UnrealizedConversionCast::operands(allocated)
+            .results(original_ty)
+            .build(ctx, location);
+        rewriter.insert_op(new_op);
+        rewriter.insert_op(restored.op_ref());
+        rewriter.erase_op(vec![restored.result(ctx)]);
+        true
+    }
+}
 
-        false
+/// Retypes `adt.struct_get` of a closure to its native layout.
+struct AdaptClosureStructGet;
+
+impl OpRewritePattern for AdaptClosureStructGet {
+    type Op = adt::StructGet;
+
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        struct_get: Self::Op,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        let op = struct_get.op_ref();
+        let Some(native_ty) = native_closure_layout(ctx, struct_get.r#type(ctx)) else {
+            return false;
+        };
+        let new_op = rebuild_op_as(ctx, op, "adt.struct_get");
+        ctx.op_attrs_mut(new_op)
+            .insert("type", Attribute::Type(native_ty));
+        // The convention table address is read by `convention_entry`;
+        // captures keep their semantic types.
+        if struct_get.field(ctx) == 0 {
+            let ptr_ty = core::Ptr::params().intern(ctx).as_type_ref();
+            ctx.set_op_result_type(new_op, 0, ptr_ty);
+        }
+        rewriter.replace_op(new_op);
+        true
     }
 }
 

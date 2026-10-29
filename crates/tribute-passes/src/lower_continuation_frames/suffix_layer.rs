@@ -3,7 +3,6 @@
 //! that holds a layer's `Done` and dispatcher.
 
 use std::ops::ControlFlow;
-use trunk_ir::OpName;
 
 use rustc_hash::FxHashMap as HashMap;
 use tribute_ir::calling_convention::{CallingConvention, ConventionBearing};
@@ -14,7 +13,7 @@ use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
-use trunk_ir::rewrite::{Module, PatternRewriter, RewritePattern};
+use trunk_ir::rewrite::{Module, OpRewritePattern, PatternRewriter};
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 use trunk_ir::walk::{WalkAction, walk_op};
 
@@ -343,34 +342,46 @@ pub(super) fn handle_body_frame(ctx: &IrContext, handle: ability::Handle) -> Opt
     Some(ctx.value_ty(frame))
 }
 
-/// Expands `ability.suffix_frame` and `ability.exit`.
-pub(super) struct ExpandSuffixFrames {
+/// The frame layouts and dispatch adapters that `ability.suffix_frame` and
+/// `ability.exit` expand with.
+pub(super) struct SuffixExpansion {
     pub(super) frames: FrameLayouts,
     pub(super) adapters: DispatchAdapters,
 }
 
-impl RewritePattern for ExpandSuffixFrames {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[ability::SuffixFrame::NAME, ability::Exit::NAME])
-    }
+/// Expands `ability.suffix_frame`.
+pub(super) struct ExpandSuffixFrames<'a>(pub(super) &'a SuffixExpansion);
+
+impl OpRewritePattern for ExpandSuffixFrames<'_> {
+    type Op = ability::SuffixFrame;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        suffix: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if let Ok(suffix) = ability::SuffixFrame::from_op(ctx, op) {
-            self.expand_suffix_frame(ctx, suffix, rewriter).is_some()
-        } else if let Ok(exit) = ability::Exit::from_op(ctx, op) {
-            self.expand_exit(ctx, exit, rewriter).is_some()
-        } else {
-            false
-        }
+        self.0.expand_suffix_frame(ctx, suffix, rewriter).is_some()
     }
 }
 
-impl ExpandSuffixFrames {
+/// Expands `ability.exit`.
+pub(super) struct ExpandExits<'a>(pub(super) &'a SuffixExpansion);
+
+impl OpRewritePattern for ExpandExits<'_> {
+    type Op = ability::Exit;
+
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        exit: Self::Op,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        self.0.expand_exit(ctx, exit, rewriter).is_some()
+    }
+}
+
+impl SuffixExpansion {
     /// Replace `ability.suffix_frame` with the done adapter, the dispatcher
     /// its factory makes over the outer frame's dispatcher, and the frame
     /// that holds both.

@@ -63,8 +63,8 @@ fn lower(
             rtti_map: rtti_map.clone(),
             ptr_ty,
             i64_ty,
-        })
-        .add_pattern(arrays);
+        });
+    let applicator = arrays.add_patterns(applicator);
 
     let target = ConversionTarget::new()
         .illegal_op("adt.struct_new")
