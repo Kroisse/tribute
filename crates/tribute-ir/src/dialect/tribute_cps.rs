@@ -87,10 +87,13 @@ mod tribute_cps {
     ///   `conventions` list and one body region per element, in the same
     ///   order. Each body takes the source parameters. Each body is written
     ///   under its convention's keyword in `entries`.
-    /// - **Meaning:** one lambda value with a body for each class its uses
-    ///   select. Its body of a convention reads the row of each binder it
-    ///   quantifies with the class its uses of that class pass, which those
-    ///   uses agree on (`new-plans/ir.md`, "Convention entry"). Calling the
+    /// - **Meaning:** one lambda value with a body for each class
+    ///   `new-plans/ir.md` ("Convention entry") gives it: each class its uses
+    ///   select, or each class from its row's lower bound to its upper bound
+    ///   when that row reads as an upper bound. Its body of a convention
+    ///   reads each binder it quantifies with the class its uses of that
+    ///   class pass, as an upper bound when they pass different ones, and
+    ///   its own row's tail narrowed to that convention. Calling the
     ///   value with a convention that has a body runs that body; legalization
     ///   fills the other convention entries.
     /// - **Verification:** the verifier checks that the conventions are
@@ -112,23 +115,29 @@ mod tribute_cps {
         {}
     }
 
-    /// A named function instance as a value, entered with one convention.
+    /// A named function as a value, with a target instance per convention
+    /// its row reads.
     ///
     /// ```text
-    /// %f = tribute_cps.func_ref {convention = "cps", func_ref = @id} : !Callable
+    /// %f = tribute_cps.func_ref {conventions = ["direct", "evidence_direct"], func_refs = [@"id$9D", @"id$9E"]} : !Callable
     /// ```
     ///
-    /// - **Shape:** `tribute_control.func_ref` with a required
-    ///   `convention: String`.
-    /// - **Meaning:** the callable value whose convention entry `convention`
-    ///   runs the instance `func_ref` names, which the reference's
-    ///   `row_args` selected. When the instance's convention is weaker,
-    ///   legalization fills the entry with an adapter (`new-plans/ir.md`,
-    ///   "Convention entry").
-    /// - **Verification:** the local verifier checks the attributes. Whole-IR
-    ///   verification checks the source signature as for
-    ///   `tribute_control.func_ref`, and that `convention` is not weaker than
-    ///   the instance's.
+    /// - **Shape:** `tribute_control.func_ref` whose `func_ref` is replaced
+    ///   by a required `func_refs` list, with a required `conventions` list
+    ///   of the same length.
+    /// - **Meaning:** the callable value whose convention entry of each
+    ///   element of `conventions` runs the instance at the same position of
+    ///   `func_refs`. Each instance is the one `row_args` selects with the
+    ///   tail of the value's row read as that convention. The conventions
+    ///   are the classes `new-plans/ir.md` ("Convention entry", 함수 참조)
+    ///   gives a function reference. When an instance's convention is
+    ///   weaker, legalization fills the entry with an adapter; it fills the
+    ///   other entries by the same rule as a lambda's.
+    /// - **Verification:** the local verifier checks the attributes, that
+    ///   the conventions are strictly increasing, and that there is a target
+    ///   for each. Whole-IR verification checks the source signature as for
+    ///   `tribute_control.func_ref`, and that each convention is not weaker
+    ///   than its instance's.
     /// - **Ownership and value flow:** the result is an ordinary SSA value.
     /// - **Location:** the source reference span.
     #[verify]
