@@ -376,13 +376,13 @@ lowering이 정한다.
 분석 캐시의 신선도는 IR 변경에 대해 자동이다. 변경을 관찰하는 주체는
 `IrContext`이고, 결과를 보관하고 신선도를 판정하는 주체는 `AnalysisCache`이며,
 pass와 분석 소비자는 두 값을 명시적인 인자로 받는다. 이 절은 그 두 값 사이의
-계약을 정한다: 변경이 어떤 범위에 보고되는지, 분석이 읽은 범위가 어떻게
-기록되는지, 어떤 조건에서 결과가 재사용되는지, 반환된 결과의 수명이 어디까지
-인지, 그리고 범위를 알 수 없는 변경이 어떻게 보수적으로 처리되는지.
+계약을 정한다: 어떤 변경이 revision을 올리는지, 어떤 조건에서 결과가
+재사용되는지, 반환된 결과의 수명이 어디까지인지, 그리고 IR을 바꾸는 소비자가
+자신이 바꾸는 IR을 요약한 결과를 어떻게 유지하는지.
 
-#### Context identity와 전체 revision
+#### Context identity와 revision
 
-`IrContext`는 주소와 무관한 고유 identity와 단조 증가하는 전체 IR revision을
+`IrContext`는 주소와 무관한 고유 identity와 단조 증가하는 IR revision을
 가진다. Operation, value/use-list, block, region, type·path interner 및 전역
 metadata의 관측 가능한 변경은 첫 쓰기 전에 revision을 올린다. 직접 mutable
 reference를 제공하는 경로는 실제 변경 여부를 알 수 없으므로 반환 전에
@@ -392,16 +392,11 @@ reference를 제공하는 경로는 실제 변경 여부를 알 수 없으므로
 
 `AnalysisCache`는 조회마다 context identity를 대조한다. identity가 다르면 기존
 결과와 분석 간 의존성 기록을 모두 폐기한 뒤 현재 context에 결합한다. 다른
-`IrContext`에 같은 캐시를 넘겨도 새 context에서 다시 계산한다. Context 전체에
-의존하는 결과는 revision까지 대조하므로, 변경이 없는 IR의 반복 조회는 같은
-`Arc`를 재사용하지만 변경된 IR을 읽는 조회는 이전 결과를 반환하지 않는다.
-명시적인 분석 무효화는 신선도 검사가 통과시킨 결과 가운데 관련 분석과 그
-의존 분석만 제거한다. Pass의 보존 선언은 신선도 검사가 거부한 결과를
-재사용하게 할 수 없다. 조회 결과나 실패한 분석 계산은 변경 전후에 부분적으로
-캐시되지 않는다.
+`IrContext`에 같은 캐시를 넘겨도 새 context에서 다시 계산한다. 조회 결과나
+실패한 분석 계산은 변경 전후에 부분적으로 캐시되지 않는다.
 
 `AnalysisCache`는 `IrContext`와 별개의 값으로 남는다. `IrContext`의 필드는
-비공개이고 IR 변경은 그 메서드로만 일어나므로, 변경 범위를 기록하는 editor는
+비공개이고 IR 변경은 그 메서드로만 일어나므로, revision을 올리는 editor는
 별도 타입이 아니라 `IrContext`의 변경 메서드 자체다. `IrContext`와 캐시를
 함께 **소유**하는 session 계층은 두지 않는다. 두 값을 **borrow**만 하는 뷰는
 둘 수 있으며, 그런 뷰는 같은 캐시에 대한 편의 표면이고 이 절의 규칙을 바꾸지
@@ -417,150 +412,28 @@ pass, pass 검증기와 pass 바깥의 분석 소비자가 이를 공유한다. 
 없기 때문이다. 검증기는 IR을 바꾸지 않으므로 검증 중 계산된 분석은 이후 pass를
 위해 캐시에 남는다.
 
-#### 범위 anchor
-
-범위 재사용의 단위는 **anchor**다. Anchor는 `IsolatedFromAbove` flag를 가진
-operation이다. 어떤 operation의 **루트**는 parent block이 없는 가장 바깥
-조상(또는 자신)이고, anchor 체인은 그 operation 자신(anchor인 경우)부터 루트
-까지의 모든 anchor 조상이다. 루트는 어느 block에도 속하지 않는 것이 정상
-상태이다. 파싱이나 pass manager가 다루는 최상위 `core.module`이 그 예이며,
-그 module과 그 아래의 모든 callable은 module에서 끝나는 anchor 체인을 갖는다.
-`core.module`과 각 dialect의 callable 정의가 anchor이고, 범위 규칙은 특정
-dialect의 operation 이름을 가정하지 않는다. Flag는 operation을 정의한
-dialect가 선언하므로, anchor 여부는 dialect가 자신의 operation에 대해 내리는
-결정이다.
-
-`IsolatedFromAbove`는 SSA 값이 바깥에서 subtree 안으로 흘러들지 않는다는
-사실만 증명한다. Subtree 안의 operation이 symbol reference로 바깥의 정의를
-가리키거나, module metadata와 type alias를 읽거나, anchor 자신의 결과가
-바깥에서 사용되는 것은 막지 않는다. 따라서 대상 operation이 anchor라는 사실은
-그 분석의 읽기 범위가 subtree에 국한된다는 증명이 아니다. 읽기 범위는 아래의
-읽기 기록이 정한다.
-
-루트가 anchor가 아닌 subtree는 anchor 체인이 없다. 아직 block에 넣지 않은
-`arith.const` 하나나, callable에서 떼어낸 region이 그 예다. 체인이 없는 대상에
-대한 분석 결과는 context 전체 의존으로 취급한다. 반대로 루트가 anchor인
-subtree는 붙어 있지 않아도 체인을 갖는다. 아직 module에 넣지 않은 함수
-정의의 체인은 그 함수 하나이고, module에 넣는 순간부터 module까지 이어진다.
-이 둘을 구별하는 것은 operation이 어디에 붙어 있는가가 아니라 루트의 flag
-이므로, 최상위 module과 일시적으로 떼어낸 subtree는 같은 규칙으로 다룬다.
-
-#### 읽기 footprint
-
-분석의 읽기 범위는 선언하지 않고 **관측**한다. `IrContext`의 필드는 비공개이고
-IR entity를 읽는 길은 `&self` 접근자뿐이므로, `AnalysisCache`가 분석 계산을
-실행하는 동안 `IrContext`는 그 접근자로 읽힌 operation, block, region, 값을
-기록한다. 분석은 `AnalysisContext::ir()`로 임의의 읽기를 할 수 있고, typed
-wrapper, interface, walk도 그대로 쓴다. 분석 쪽에는 opt-in이나 별도 view가
-없으며, 읽기 범위는 분석의 약속이 아니라 실제로 읽은 것으로 정해진다.
-
-기록한 entity는 소유 operation으로 옮긴다. Block과 region은 그것을 소유한
-operation으로, 값은 정의 지점(operation 결과라면 그 operation, block argument
-라면 그 block을 소유한 operation)으로 옮긴다. 각 소유 operation은 자신을
-포함하는 가장 안쪽 anchor로 옮기며, 그 결과 집합에서 다른 원소의 조상인
-anchor가 있으면 후손을 버리고 **최외곽 anchor**만 남긴다. 체인 규칙상 안쪽
-anchor의 변경은 바깥 anchor의 카운터도 올리므로, 바깥 anchor 하나로 그 아래의
-읽기를 모두 덮는다. 소유자가 없거나 루트가 anchor가 아닌 entity를 하나라도
-읽은 결과는 context 전체 의존이다.
-
-- 함수 본문만 읽은 결과의 footprint는 그 함수다.
-- Module 본문 block, 즉 함수 목록이나 함수의 `parent_block`을 읽은 결과의
-  footprint는 module이다. `SymbolTable`처럼 module을 읽는 분석은 어느 함수의
-  변경에도 재계산된다.
-- Interned type, path, string attribute 값은 불변이므로 읽어도 기록하지 않는다.
-  Type alias와 같이 operation 밖에 있는 전역 metadata는 미분류 변경 카운터로
-  덮는다.
-- IR entity를 하나도 읽지 않은 결과의 직접 footprint는 빈 집합이다. 그런
-  결과는 미분류 변경과 선행 분석의 변화로만 무효화된다.
-
-결과적으로 한 결과의 footprint는 두 부분으로 나뉜다.
-
-- **직접 footprint**: 그 계산이 직접 읽은 entity들의 최외곽 anchor 집합.
-  선행 분석의 계산이 읽은 것은 포함하지 않는다. 계산이 중첩되면 각 계산은 자기
-  구간의 읽기만 가져간다.
-- **선행 의존**: 조회한 선행 분석 결과들. 선행 분석의 footprint는 의존
-  분석의 직접 footprint에 합쳐지지 않으며, 선행 분석 결과 자체의 신선도로
-  확인한다.
-
-두 부분을 합치지 않는 이유는 아래 신선도 판정에서 드러난다. Module 집계에
-의존하는 함수 범위 결과의 stamp에 module anchor 카운터가 직접 들어가면,
-형제 함수의 변경이 그 카운터를 올려 집계의 재계산 결과가 같아도 함수 결과가
-버려지므로 early cutoff가 성립하지 않는다. 선행 분석이 context 전체 의존인
-경우도 같다. 의존 분석은 전체 의존을 상속하지 않고, 그 선행 분석의 신선도를
-revision으로 확인한 뒤 재계산 결과의 동등성으로 살아남을 수 있다.
-
-함수마다 계산되는 결과와 그것을 합치는 module 집계는 서로 다른 분석이며,
-집계는 함수별 결과를 선행 분석으로 조회한다. 집계가 module 본문을 직접 읽으면
-직접 footprint는 module이고 어느 함수의 변경에도 재계산되지만, 함수별 결과는
-각자의 함수만 footprint로 가진다.
-
-#### 변경 보고
-
-`IrContext`는 전체 revision과 함께 두 종류의 카운터를 유지한다.
-
-- **Anchor 카운터**: anchor operation마다 하나. 변경이 영향을 주는 anchor
-  체인의 모든 anchor에 대해 올린다.
-- **미분류 변경 카운터**: 영향 범위를 특정할 수 없는 변경에 대해 올린다.
-
-모든 변경은 전체 revision을 올리고, 추가로 다음 규칙으로 분류한다. 영향받는
-체인은 링크를 끊거나 use-list를 비우기 **전에** 읽는다.
-
-| 변경 | 영향받는 범위 |
-| --- | --- |
-| Operation의 attribute, 결과 타입, region 목록, successor 변경 | 그 operation의 anchor 체인 |
-| Block argument의 타입·attribute, block의 operation 목록 변경 | 그 block을 소유한 operation의 anchor 체인 |
-| Operation을 block에 넣거나 빼는 것, region을 operation에 붙이거나 떼는 것(이동 포함) | 이전 소유자와 새 소유자의 anchor 체인 모두, 그리고 옮겨지는 operation이 anchor이면 그 operation 자신. 함수의 `parent_block` 읽기는 그 함수로 기록되기 때문이다 |
-| Detached subtree 삭제 | Subtree 안의 모든 anchor와, subtree의 operand가 가리키는 바깥 값의 정의 지점의 anchor 체인(그 값들의 use-list가 바뀐다). 붙어 있는 operation은 먼저 떼어내므로 소유자의 체인은 그때 이미 올라간다 |
-| Operand 추가·제거·교체와 RAUW | 사용자의 anchor 체인, 그리고 이전 값과 새 값의 정의 지점(operation, 또는 block argument라면 그 block을 소유한 operation)의 anchor 체인 |
-| Operand를 가진 detached operation 생성 | 각 operand 값의 정의 지점의 anchor 체인(값의 use-list가 바뀐다) |
-| Operand가 없는 detached operation·block·region 생성 | 영향받는 anchor 없음 |
-| 새 type·path·string 항목 interning | 영향받는 anchor 없음(기존 항목의 재interning은 revision도 올리지 않는다) |
-| 직접 mutable reference 경로(`op_mut`, `block_mut`, `region_mut` 등) | 미분류 |
-| Type alias 등록, operation attribute로 표현되지 않는 전역 metadata 변경 | 미분류 |
-
-Anchor 안에서 정의된 값의 사용자는 그 anchor 안에 있으므로, RAUW와 operand
-교체가 올리는 사용자의 체인은 대개 정의 지점의 체인과 같다. Anchor 자신의
-결과처럼 바깥에서 쓰이는 값은 사용자의 체인을 따로 올린다. 체인이 없는
-detached subtree 안의 변경은 그 operand가 가리키는 바깥 값의 정의 체인에만
-영향을 준다. 루트가 anchor인 detached subtree 안의 변경은 그 subtree 안의
-체인을 올리며, 이 체인은 subtree가 module에 붙은 뒤에도 같은 카운터로
-이어진다.
-
-삭제된 anchor의 `OpRef`는 재사용되지 않거나, 재사용되면 그 카운터가 이어진다.
-어느 쪽이든 삭제된 anchor를 footprint로 가진 결과는 삭제가 올린 카운터로
-무효화된다.
-
-부분 변경 뒤 pass가 실패해도 카운터는 되돌리지 않는다. 실패한 pass가 올린
-카운터는 이후 조회에서 해당 범위의 결과를 그대로 폐기한다.
-
 #### 신선도 판정
 
-캐시의 각 결과는 계산 시점의 identity와, footprint에 따라 다음 중 하나를
-기록한다.
+캐시의 각 결과는 계산 시점의 identity와 revision을 기록하고, 조회 시 둘이 모두
+같을 때만 신선하다. Revision이 바뀌면 캐시는 모든 결과와 분석 간 의존성
+기록을 함께 폐기한다. 변경이 없는 IR의 반복 조회는 같은 `Arc`를 재사용하고,
+변경된 IR을 읽는 조회는 이전 결과를 반환하지 않는다. 분석은
+`AnalysisContext::ir()`로 임의의 읽기를 할 수 있으며, 분석이 IR의 어느 부분을
+읽었는지는 신선도에 참여하지 않는다.
 
-- **Context 전체 의존 결과**: 전체 revision. identity와 revision이 모두 같을
-  때만 신선하다.
-- **범위 결과**: 미분류 변경 카운터와 **직접 footprint**의 anchor 카운터.
-  identity가 같고 기록한 카운터가 그대로일 때만 직접 읽은 범위가 신선하다.
-  전체 revision과 선행 분석의 anchor 카운터는 대조하지 않는다. 전체 revision을
-  대조하면 다른 함수의 변경이 재사용을 막고, 선행 분석의 카운터를 대조하면
-  아래의 early cutoff가 성립하지 않는다.
+같은 revision 안에서 분석은 선행 분석을 캐시에서 조회하고, 캐시는 그 의존
+관계를 기록한다. 선행 분석의 명시적 무효화는 모든 전이적 의존 분석을
+제거하고, 의존 분석의 무효화는 선행 분석을 유지한다. Pass의 보존 선언은
+revision 검사가 거부한 결과를 재사용하게 할 수 없다. 보존 선언은 revision
+검사가 통과시킨 결과 가운데 pass 경계에서 무엇을 추가로 버릴지만 정한다.
 
-범위 결과의 신선도는 직접 읽은 범위의 검사와 선행 의존의 검사, 두 단계로
-이루어진다. 의존 분석의 캐시 hit은 반환 전에 각 선행 분석 결과를 같은 규칙으로
-재귀적으로 확인한다. 선행 분석이 더 이상 신선하지 않으면 그것을 다시 계산하고,
-그 분석이 결과 동등성을 선언했고 새 결과가 이전과 같으면 의존 분석을
-유지한다(early cutoff). 다르면 의존 분석과 그 의존 분석을 모두 무효화한다.
-동등성을 선언하지 않은 선행 분석은 재계산되면 항상 의존 분석을 무효화한다.
-Module 집계 분석은 함수 어느 하나의 변경에도 재계산되지만, 결과가 같으면 그
-집계에 의존하는 함수 범위 결과는 직접 footprint의 anchor가 바뀌지 않은 한
-살아남는다. 직접 읽은 범위의 변경은 선행 분석의 동등성으로 가려지지 않는다.
-
-명시적 무효화와 의존성 전파 규칙은 그대로다: 선행 분석의 무효화는 모든
-전이적 의존 분석을 제거하고, 의존 분석의 무효화는 선행 분석을 유지한다.
-Pass의 보존 선언은 revision 검사와 범위 검사 어느 쪽이 거부한 결과도
-재사용하게 할 수 없다. 보존 선언은 두 검사가 통과시킨 결과 가운데 pass 경계
-에서 무엇을 추가로 버릴지만 정한다.
+결과마다 읽은 범위를 추적하지 않는 이유는 비용과 효과의 비대칭이다. 범위를
+추적하려면 모든 변경이 영향받는 범위를 표시하고 분석 계산 중의 모든 읽기를
+기록해야 하며, 그 비용은 IR을 다루는 모든 pass가 낸다. 반면 module을 요약하는
+집계는 module 아래 어느 변경에도 무효화되므로, 범위 추적으로 재사용할 수 있는
+것은 집계가 아니라 함수 하나만 읽는 결과뿐이다. 집계를 다시 계산할 때 바뀌지
+않은 함수를 다시 걷는 비용은, 집계를 쥔 채 IR을 바꾸는 소비자가 그 집계를 직접
+갱신하는 것으로 없앤다(아래 보유 후 갱신).
 
 #### 결과의 수명과 snapshot
 
@@ -571,68 +444,83 @@ Pass의 보존 선언은 revision 검사와 범위 검사 어느 쪽이 거부�
 뷰의 읽기 구간에 묶인 borrow로 돌려주어 변경 전에 놓도록 강제하고, 보유할
 결과만 `Arc`로 꺼내게 하여 이 구분을 타입으로 드러낼 수 있다.
 
-변경 중에 분석 결과를 다루는 소비자는 다음 세 방식 중 하나를 따른다.
+변경 중에 분석 결과를 다루는 소비자는 다음 네 방식 중 하나를 따른다.
 
-- **보유 후 재구축**: 결과의 `Arc`를 쥔 채 rewrite하고, IR을 바꾼 반복마다
-  다음 반복에서 다시 조회한다. 범위 결과는 바뀌지 않은 anchor의 부분을
-  재사용하므로, 재조회는 바뀐 범위만 다시 계산한다. 보유한 결과가 이전 IR의
-  snapshot이라는 사실은 그 결과를 읽는 rewrite가 감수하며 문서화한다.
+- **보유 후 재조회**: 결과의 `Arc`를 쥔 채 rewrite하고, IR을 바꾼 반복마다
+  다음 반복에서 다시 조회한다. 재조회는 결과를 처음부터 다시 계산한다.
+  보유한 결과가 이전 IR의 snapshot이라는 사실은 그 결과를 읽는 rewrite가
+  감수하며 문서화한다.
+- **보유 후 갱신**: 결과를 조회해 소비자 자신의 값으로 복제하고, 자신의
+  변경마다 그 값을 갱신한다. 아래에서 따로 정한다.
 - **결정 추출 후 변경**: 변경 전에 원래 operation에 대한 결정을 모두
   추출하고, rewrite는 추출한 결정만 소비한다.
 - **보존한 계획의 재검증**: 읽기 전용 단계에서 만든 계획을 보존하되, 변경
   단계는 사용 전에 계획이 가리키는 operation identity와 layout을 현재 IR에
   대조한다.
 
-한 pass 안에서 조회·변경·조회가 이어지는 모습은 다음과 같다. 함수 `f`의 범위
-결과를 읽고 `f`만 바꾼 뒤 다시 조회하면 `f`의 결과는 다시 계산되고 형제 `g`의
-결과와, 결과가 같은 module 집계에 의존하는 다른 결과는 그대로 남는다.
+한 pass 안에서 조회·변경·조회가 이어지는 모습은 다음과 같다. 어느 함수를
+바꾸든 revision이 오르므로, 바뀌지 않은 함수의 결과도 다시 계산한다.
 
 ```rust
-let facts_f = analyses.get::<FunctionFacts>(ctx, f)?;   // 계산
-let facts_g = analyses.get::<FunctionFacts>(ctx, g)?;   // 계산
-rewrite_body(ctx, f);                                   // f와 module의 카운터가 오른다
-let again_f = analyses.get::<FunctionFacts>(ctx, f)?;   // 다시 계산; facts_f는 snapshot
-let again_g = analyses.get::<FunctionFacts>(ctx, g)?;   // 같은 Arc
+let facts = analyses.get::<FunctionFacts>(ctx, f)?;   // 계산
+let again = analyses.get::<FunctionFacts>(ctx, f)?;   // 같은 Arc
+rewrite_body(ctx, g);                                 // revision이 오른다
+let fresh = analyses.get::<FunctionFacts>(ctx, f)?;   // 다시 계산; facts는 snapshot
 ```
 
-변경 도중 실패하면 되돌리는 것이 없다. `f`를 절반만 바꾸고 오류를 돌려준
-pass 뒤에도 `f`와 module의 카운터는 이미 올라가 있으므로, 다음 소비자의 조회는
-`f`의 결과와 module 집계를 다시 계산하고 `g`의 결과만 재사용한다. 실패한
-pass 안에서 raw mutable reference를 썼다면 미분류 카운터가 올라가 모든 범위
-결과가 폐기된다.
+변경 도중 실패하면 되돌리는 것이 없다. 함수를 절반만 바꾸고 오류를 돌려준
+pass 뒤에도 revision은 이미 올라가 있으므로, 다음 소비자의 조회는 모든 결과를
+다시 계산한다.
+
+#### 보유 후 갱신
+
+IR을 바꾸는 소비자가 자신이 바꾸는 IR을 요약한 분석 결과를 반복마다 다시
+조회하면, 바뀌지 않은 부분까지 매번 다시 계산한다. 그런 소비자는 결과를 한 번
+조회해 자신의 값으로 복제하고, 자신의 변경과 함께 그 값을 갱신한다.
+
+- 갱신하는 값은 소비자의 것이다. 캐시 항목은 다른 결과와 같이 revision
+  변경으로 폐기되며, 소비자는 갱신한 값을 캐시에 다시 발행하지 않는다. 같은
+  phase의 다른 소비자는 캐시를 조회해 현재 IR에서 계산한 결과를 받는다.
+- 소비자가 갱신한 값을 읽는 시점마다, 그 값은 현재 IR에서 분석을 다시 계산한
+  결과와 같아야 한다. 보수적인 근사는 허용하지 않는다. 도달성 같은 소비자의
+  결정은 정확한 값을 전제로 하기 때문이다.
+- Debug 빌드는 소비자가 갱신한 값을 읽는 반복 경계마다 그 값을 다시 계산한
+  결과와 비교하고, 다르면 실패한다. Debug 빌드가 매 pass 뒤 operation schema를
+  검사하는 것과 같이, 정확성 검사는 release 빌드의 비용에 들지 않는다.
+- 어떤 변경이 결과의 어느 부분을 바꾸는지는 그 분석의 계약이므로, 갱신 연산은
+  분석 타입이 제공하고 그 타입의 문서가 정한다. 소비자는 자신의 변경마다
+  대응하는 갱신 연산을 호출한다.
+
+Call graph를 쥔 인라이너가 이 방식을 따른다. 인라이너는 call graph를 한 번
+조회해 복제하고, 호출 하나를 인라인할 때마다 그 값을 갱신한다. 인라이너는 그
+call graph가 기록한 호출만 인라인하므로, 갱신할 수 없는 호출은 건드리지 않는다.
+Call graph를 조회하는 다른 pass는 인라이너가 끝난 뒤 캐시에서 다시 계산한
+결과를 받는다.
 
 #### Pass 경계
 
-Pass manager는 pass에 `&mut IrContext`와 캐시를 그대로 넘기고, pass의 서명은
-범위 규칙과 무관하다. Pass 안의 모든 변경은 `IrContext` 메서드를 거치므로
-변경 보고는 pass가 협력하지 않아도 일어난다. Pass manager는 전체 revision으로
-pass가 IR을 바꿨는지 판정해 검증기 실행을 결정하며, 범위 카운터는 검증기가
-바뀐 anchor만 다시 검사하는 근거가 될 수 있다. 중첩 pass manager의 대상이
-anchor여야 한다는 규칙은 그대로다.
+Pass manager는 pass에 `&mut IrContext`와 캐시를 그대로 넘긴다. Pass 안의 모든
+변경은 `IrContext` 메서드를 거치므로 revision은 pass가 협력하지 않아도 오른다.
+Pass manager는 revision으로 pass가 IR을 바꿨는지 판정해 검증기 실행을
+결정한다. 중첩 pass manager의 대상이 `IsolatedFromAbove` operation이어야 한다는
+규칙은 분석 캐시와 무관하게 그대로다.
 
 #### 회귀 기준
 
-범위 재사용을 구현하는 변경은 다음을 각각 구별하는 회귀를 갖춘다.
+분석 캐시를 바꾸는 변경은 다음을 각각 구별하는 회귀를 갖춘다.
 
-- 읽기 기록이 함수 본문은 그 함수로, module 본문과 함수의 `parent_block`은
-  module로 옮기고, 선행 분석의 계산이 읽은 것을 의존 분석에 넣지 않는 것.
-
-- 최상위 `core.module`(parent block이 없는 루트) 아래 함수의 결과가 그 함수와
-  module로 이어지는 anchor 체인을 갖고, 루트가 anchor가 아닌 detached
-  subtree의 결과만 context 전체 의존이 되는 것.
-- 형제 함수 변경 뒤 함수 범위 결과의 재사용과, 그 변경이 module 집계를
-  무효화하는 것. 집계의 재계산 결과가 같을 때 그 집계에 의존하는 형제 함수의
-  결과가 살아남고, 직접 읽은 함수의 결과는 집계가 같아도 버려지는 것.
-- 이동(reparenting)이 이전 소유자와 새 소유자 양쪽의 결과를 무효화하는 것.
-- RAUW와 operand 교체가 정의자와 사용자 양쪽의 결과를 무효화하는 것. Anchor의
-  결과처럼 바깥에서 쓰이는 값의 경우를 포함한다.
-- Detached 사용자 생성이 operand 정의자의 결과를 무효화하는 것.
-- Detached subtree 삭제가 그 안의 anchor들의 결과와, subtree가 사용하던
-  바깥 값의 정의 지점의 결과를 무효화하는 것.
-- 직접 mutable reference, type alias 등록, 전역 metadata 변경이 모든 범위
-  결과를 폐기하는 것.
+- 변경이 없는 반복 조회가 같은 `Arc`를 돌려주는 것.
+- IR 변경 뒤 모든 결과가 다시 계산되고, 변경 전에 반환한 `Arc`는 이전 IR의
+  snapshot으로 남는 것.
+- 직접 mutable reference, type alias 등록, 전역 metadata 변경이 revision을
+  올리는 것.
 - 다른 `IrContext`로 넘긴 캐시가 어떤 결과도 재사용하지 않는 것.
-- 한 pass 안의 조회·변경·조회와, 부분 변경 뒤 실패한 pass 다음의 조회.
+- 같은 revision에서 명시적 무효화가 그 분석과 전이적 의존 분석만 제거하고
+  선행 분석은 남기는 것.
+- 부분 변경 뒤 실패한 pass 다음의 조회가 결과를 다시 계산하는 것.
+- 보유 후 갱신하는 소비자의 값이 각 갱신 연산 뒤 다시 계산한 결과와 같은 것.
+  Call graph에서는 같은 callee를 부르는 호출 가운데 하나와 마지막 하나의
+  인라인을 각각 포함한다.
 
 #### Native ownership 분석
 
@@ -669,15 +557,14 @@ Native managed liveness는 정의된 `func.func`를 대상으로 하는 별도�
 `elide_proven_borrowed_parameters`는 선택에 관여하지 않는다. Action planner는
 선택된 결과를 소비한다.
 
-#### 함수 단위 병렬 편집과의 관계
+#### 함수 단위 편집과의 관계
 
-이 절의 범위 단위는 anchor이고 footprint는 anchor 집합과 선행 분석으로만
-표현되며, arena의 구조를 가정하지 않는다. 함수 단위 병렬 편집은 anchor별로
-분리된 편집 권한과 `IrContext`의 공유 읽기 안전성을 전제로 하며 별도 설계로
-다룬다. 그 설계는 anchor 카운터가 사는 자리와 캐시의 결과 발행 방식을 바꿀
-수 있지만, 이 절의 읽기 기록, 변경 분류, 신선도 판정, snapshot 수명은
-그 설계의 입력으로 유지된다. 읽기 기록은 계산 하나의 실행 구간에 묶이므로,
-공유 읽기에서는 기록기를 `IrContext` 하나가 아니라 읽는 쪽마다 둔다.
+이 절의 캐시는 context 하나에 revision 하나를 두며, 결과의 재사용은 IR이
+바뀌지 않은 구간에 한정된다. 함수 하나를 바꾸면서 나머지 함수의 결과를 이어
+쓰는 함수 단위 pass manager, 증분 재컴파일, 함수 단위 병렬 편집은 각자 anchor별
+편집 권한과 결과 보관 방식을 갖춘 별도 설계로 다룬다. 그 설계는 이 절의
+revision 판정을 대체할 수 있지만, 결과의 수명과 snapshot 규칙과 보유 후 갱신의
+정확성 의무는 그대로 이어받는다.
 
 ### Callable 본문 구조
 
