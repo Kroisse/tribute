@@ -643,6 +643,38 @@ fn a_lambda_split_before_its_enclosing_lambda_is_one_value_in_each_copy() {
     );
 }
 
+/// Dropping the binders of folded copies keeps the definition's row unions
+/// on the binders they name.
+#[test]
+fn folding_keeps_the_row_unions_of_the_definition() {
+    let printed = specialized(
+        r#"core.module @m {
+  !l0 = tribute_control.func_sig<(core.i32) -> core.i32>
+  !lc = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {instances = [@Ctl]}}>
+  ability.decl {sym_name = "Ctl"} {
+    ability.operation {kind = "op", op_name = "ctl", param_types = [], result_type = core.i32}
+  }
+  tribute_control.func @f['a0 = 'a1 | 'a2, 'a1, 'a2, local 'a3](%x: core.i32) -> core.i32 row(@Ctl | 'a0) {
+    %g = tribute_control.lambda['a3](%y: core.i32) -> core.i32 row(| 'a3) captures [] {
+      tribute_control.return %y
+    }
+    %a = tribute_control.instantiate %g {row_args = [{}]} : !l0
+    %r = tribute_control.call_indirect %a, %x : core.i32
+    %b = tribute_control.instantiate %g {row_args = [{instances = [@Ctl]}]} : !lc
+    %t = tribute_control.call_indirect %b, %r : core.i32
+    tribute_control.return %t
+  }
+}"#,
+    );
+    assert_contains(
+        &printed,
+        &[
+            "tribute_cps.func @f['a0 = 'a1 | 'a2, 'a1, 'a2, local 'a3](%0: core.i32) -> core.i32 row(@Ctl | 'a0) convention(cps) {",
+            "%1 = tribute_cps.lambda['a3](%2: core.i32) -> core.i32 row(| 'a3) captures [] entries {\n        direct {",
+        ],
+    );
+}
+
 /// A lambda's parameter types name its own binders in every body.
 #[test]
 fn every_body_takes_parameters_over_the_lambdas_own_binders() {
