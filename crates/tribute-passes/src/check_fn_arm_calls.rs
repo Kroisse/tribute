@@ -25,7 +25,8 @@ use trunk_ir::types::Location;
 use trunk_ir::walk::{WalkAction, walk_region};
 
 use crate::convention_classes::{
-    Function, reference_callee, requirements, row_class, settle_class_variables, settle_locals,
+    Function, Locals, reference_callee, requirements, row_class, settle_class_variables,
+    settle_locals,
 };
 
 /// A call in a `fn` arm that may suspend or abort.
@@ -158,7 +159,7 @@ struct Instance<'a> {
     by_name: &'a HashMap<&'a str, &'a Function>,
     requirements: &'a HashMap<SymbolPath, CallingConvention>,
     classes: HashMap<u32, CallingConvention>,
-    locals: HashMap<u32, CallingConvention>,
+    locals: Locals,
 }
 
 impl<'a> Instance<'a> {
@@ -193,13 +194,14 @@ impl<'a> Instance<'a> {
         }
     }
 
-    fn class(&self, row: &Row) -> CallingConvention {
+    /// The class `row` requires at `at`.
+    fn class(&self, row: &Row, at: OpRef) -> CallingConvention {
         row_class(
             row,
             &self.function.binders,
             self.requirements,
             &self.classes,
-            &self.locals,
+            |binder| self.locals.get(self.ctx, binder, at),
         )
     }
 
@@ -247,16 +249,16 @@ impl<'a> Instance<'a> {
                 let Some(row) = reference.rows.get(tail as usize) else {
                     continue;
                 };
-                if caller.class(row) != CallingConvention::Cps {
+                if caller.class(row, reference.op) != CallingConvention::Cps {
                     continue;
                 }
                 let through = Row::new(Vec::new(), row.tail);
                 let labels = Row::new(row.instances.clone(), None);
                 match row.tail {
                     Some(outer)
-                        if caller.class(&labels) != CallingConvention::Cps
+                        if caller.class(&labels, reference.op) != CallingConvention::Cps
                             && caller.classes.get(&outer) == Some(&CallingConvention::Cps)
-                            && caller.class(&through) == CallingConvention::Cps =>
+                            && caller.class(&through, reference.op) == CallingConvention::Cps =>
                     {
                         caller.origins(outer, instances, seen, origins);
                     }
@@ -373,12 +375,12 @@ impl<'a> Instance<'a> {
                 .filter(|instance| !handled.contains(instance)),
             row.tail,
         );
-        if !handled.is_empty() && self.class(&unhandled) != CallingConvention::Cps {
+        if !handled.is_empty() && self.class(&unhandled, op) != CallingConvention::Cps {
             return None;
         }
         let labels = Row::new(unhandled.instances.clone(), None);
         let tail = unhandled.tail.filter(|tail| {
-            self.class(&labels) != CallingConvention::Cps
+            self.class(&labels, op) != CallingConvention::Cps
                 && self.classes.get(tail) == Some(&CallingConvention::Cps)
         });
         Some(tail)

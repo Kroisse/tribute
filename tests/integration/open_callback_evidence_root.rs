@@ -409,20 +409,21 @@ fn main() ->{Io} Nil {
         "{countdown}"
     );
     let main = function("@\"pkg::main\"");
-    assert!(main.starts_with("local 'a0, local 'a1]"), "{main}");
+    assert!(main.starts_with("local 'a0]"), "{main}");
     assert!(
         main.contains("%0 = tribute_cps.lambda['a0](")
-            && main.contains("%4 = tribute_cps.lambda['a1](")
+            && main.contains("direct {")
+            && main.contains("evidence_direct {")
             && main.contains("tribute_control.instantiate %0 {row_args = [{}]}")
             && main.contains(
-                "tribute_control.instantiate %4 {row_args = [{instances = [@\"ability_1_11_std::io::Io\"]}]}"
+                "tribute_control.instantiate %0 {row_args = [{instances = [@\"ability_1_11_std::io::Io\"]}]}"
             ),
         "{main}"
     );
     // The pure callback is lowered at the instantiated, closed row.
     assert!(
         main.contains(
-            "tribute_cps.lambda(%11: core.i32) -> core.i32 captures [] entries {\n        direct {"
+            "tribute_cps.lambda(%8: core.i32) -> core.i32 captures [] entries {\n        direct {"
         ),
         "{main}"
     );

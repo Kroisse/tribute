@@ -4,10 +4,17 @@
 //! The frontend's source-logical IR has rows but no calling conventions. This
 //! pass selects the class variables of every definition, collects the class
 //! instances root `main` and the references' `row_args` need, clones each
-//! definition per instance, points every reference at its instance, copies
-//! each let-bound lambda of an instance once per class vector its
-//! instantiations select, and replaces every source callable and indirect
-//! transfer with its `tribute_cps` operation, which declares its convention.
+//! definition per instance, points every reference at its instance, gives
+//! each let-bound lambda of an instance a body per class its instantiations
+//! select, and replaces every source callable and indirect transfer with its
+//! `tribute_cps` operation, which declares its convention.
+//!
+//! A lambda is first copied once per class vector its instantiations select,
+//! each copy with its own binders, so every copy reads one class for each
+//! binder while the instance is rewritten. The lambda and its first copy of
+//! each other class then fold into one lambda with a body per class, whose
+//! bodies read its own binders again; a copy at a class the lambda already
+//! has stays a separate value.
 //!
 //! Class variables are selected on the unchanged module. Instances are then
 //! rewritten one at a time, and the instance each reference selects, read
@@ -31,7 +38,7 @@ use trunk_ir::types::Attribute;
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::convention_classes::{
-    Function, class_suffix, instantiation, requirements, row_class, settle_class_variables,
+    Function, Locals, class_suffix, instantiation, requirements, row_class, settle_class_variables,
     settle_locals,
 };
 
@@ -112,7 +119,8 @@ pub fn specialize(ctx: &mut IrContext, module: Module) -> Result<(), ClassSpecia
             positions: &positions,
             by_name: &by_name,
             binders: function.binders.clone(),
-            locals: HashMap::default(),
+            locals: Locals::default(),
+            copies: Vec::new(),
         };
         let selected = instance.rewrite(ctx, op);
         instances.push((op, instance.own_convention(ctx, op)));
@@ -175,7 +183,7 @@ fn insert_after(ctx: &mut IrContext, anchor: OpRef, op: OpRef) {
 }
 
 /// Keep the captures of every lambda between `instantiate` and the region
-/// that defines `original` and `copy` equal to its body's external references
+/// that defines `original` and `copy` equal to its bodies' external references
 /// after `instantiate` moved from `original` to `copy`. The copy takes the
 /// original's place in the capture order, next to it while the body still
 /// uses both.
@@ -188,11 +196,14 @@ fn recapture(ctx: &mut IrContext, instantiate: OpRef, lambda: OpRef, copy: Value
             .region(region)
             .parent_op
             .expect("a region inside the copied lambda's region belongs to an operation");
-        if tribute_control::Lambda::matches(ctx, parent) {
+        if tribute_control::Lambda::matches(ctx, parent)
+            || tribute_cps::Lambda::matches(ctx, parent)
+        {
+            let bodies: Vec<_> = ctx.op_regions(parent).collect();
             let used = |ctx: &IrContext, value| {
                 ctx.uses(value)
                     .iter()
-                    .any(|use_| is_within(ctx, use_.user, region))
+                    .any(|use_| bodies.iter().any(|&body| is_within(ctx, use_.user, body)))
             };
             let old = ctx.op_operands(parent).to_vec();
             let mut captures = old.clone();
@@ -214,6 +225,98 @@ fn recapture(ctx: &mut IrContext, instantiate: OpRef, lambda: OpRef, copy: Value
         }
         op = parent;
     }
+}
+
+/// Rename the binders `old` to `new` in the types, attributes, quantified
+/// binders, row unions, and row arguments of `ops`.
+fn rename_binders(ctx: &mut IrContext, ops: &[OpRef], old: &[u32], new: &[u32]) {
+    let binder = |binder: u32| {
+        old.iter()
+            .position(|&known| known == binder)
+            .map_or(binder, |at| new[at])
+    };
+    let rows: Vec<Row> = new.iter().map(|&tail| Row::new([], Some(tail))).collect();
+    let renamed = |row: &Row| {
+        row.substitute(RowArgs::Binders(old, &rows))
+            .expect("a row names binders of its definition")
+    };
+    let rename = |ctx: &mut IrContext, ty| {
+        tribute_control::substitute_rows(ctx, ty, RowArgs::Binders(old, &rows))
+            .expect("a type names binders of its definition")
+    };
+    for &op in ops {
+        for index in 0..ctx.op_result_types(op).len() {
+            let ty = rename(ctx, ctx.op_result_types(op)[index]);
+            ctx.set_op_result_type(op, index as u32, ty);
+        }
+        for region in ctx.op_regions(op).collect::<Vec<_>>() {
+            for block in ctx.region(region).blocks.clone() {
+                for index in 0..ctx.block_args(block).len() {
+                    let ty = rename(ctx, ctx.value_ty(ctx.block_args(block)[index]));
+                    ctx.set_block_arg_type(block, index as u32, ty);
+                }
+            }
+        }
+        let attributes: Vec<_> = ctx
+            .op(op)
+            .attributes
+            .iter()
+            .map(|(key, value)| (key, value.clone()))
+            .collect();
+        for (key, value) in attributes {
+            let renamed = value.map_types(|ty| rename(ctx, ty));
+            if renamed != value {
+                ctx.op_attrs_mut(op).insert(key, renamed);
+            }
+        }
+        let quantified = tribute_control::quantified_rows(ctx, op).unwrap_or_default();
+        if !quantified.is_empty() {
+            let quantified = quantified
+                .iter()
+                .map(|&quantified| Attribute::Int(i128::from(binder(quantified))))
+                .collect();
+            ctx.op_attrs_mut(op).insert(
+                tribute_control::QUANTIFIED_ROWS_ATTR,
+                Attribute::List(quantified),
+            );
+        }
+        let unions = tribute_control::row_unions(ctx, op).unwrap_or_default();
+        if !unions.is_empty() {
+            let unions = unions
+                .into_iter()
+                .map(|union| {
+                    tribute_control::RowUnion {
+                        result: binder(union.result),
+                        sources: union.sources.into_iter().map(binder).collect(),
+                    }
+                    .to_attribute(ctx)
+                })
+                .collect();
+            ctx.op_attrs_mut(op)
+                .insert(tribute_control::ROW_UNIONS_ATTR, Attribute::List(unions));
+        }
+        let args = tribute_control::row_args(ctx, op).unwrap_or_default();
+        if !args.is_empty() {
+            let args = args
+                .iter()
+                .map(|row| renamed(row).to_attribute(ctx))
+                .collect();
+            ctx.op_attrs_mut(op)
+                .insert(tribute_control::ROW_ARGS_ATTR, Attribute::List(args));
+        }
+    }
+}
+
+/// The operations nested in `op`, without `op` itself.
+fn nested_ops(ctx: &IrContext, op: OpRef) -> Vec<OpRef> {
+    let mut ops = Vec::new();
+    let _ = trunk_ir::walk::walk_op::<()>(ctx, op, &mut |inner| {
+        if inner != op {
+            ops.push(inner);
+        }
+        std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+    });
+    ops
 }
 
 /// The region whose block holds `op`.
@@ -251,17 +354,20 @@ struct Instance<'a> {
     /// The module's definitions, by name.
     by_name: &'a HashMap<&'a str, &'a Function>,
     binders: Vec<RowBinder>,
-    locals: HashMap<u32, CallingConvention>,
+    locals: Locals,
+    /// Each lambda split in this instance, with its copies in body order.
+    copies: Vec<(OpRef, Vec<OpRef>)>,
 }
 
 impl Instance<'_> {
-    fn class(&self, row: &Row) -> CallingConvention {
+    /// The class `row` requires at `at`.
+    fn class(&self, ctx: &IrContext, row: &Row, at: OpRef) -> CallingConvention {
         row_class(
             row,
             &self.binders,
             self.requirements,
             &self.params,
-            &self.locals,
+            |binder| self.locals.get(ctx, binder, at),
         )
     }
 
@@ -270,15 +376,6 @@ impl Instance<'_> {
     fn rewrite(&mut self, ctx: &mut IrContext, op: OpRef) -> Vec<(String, Vec<CallingConvention>)> {
         if let Some(body) = ctx.op_region(op, 0) {
             self.split_lambdas(ctx, body);
-            if self.binders.len() != self.function.binders.len() {
-                let binders = self
-                    .binders
-                    .iter()
-                    .map(|binder| Attribute::String(ctx.intern_str(binder.keyword())))
-                    .collect();
-                ctx.op_attrs_mut(op)
-                    .insert(tribute_control::ROW_BINDERS_ATTR, Attribute::List(binders));
-            }
         }
         let mut ops = Vec::new();
         if let Some(body) = ctx.op_region(op, 0) {
@@ -291,10 +388,27 @@ impl Instance<'_> {
             .iter()
             .filter_map(|&inner| self.point_reference(ctx, inner))
             .collect();
-        for inner in ops {
-            if let Some(convention) = self.transfer_convention(ctx, inner) {
+        let conventions: HashMap<OpRef, CallingConvention> = ops
+            .iter()
+            .filter_map(|&inner| Some((inner, self.transfer_convention(ctx, inner)?)))
+            .collect();
+        let (folded, unused) = self.fold_copies(ctx, &conventions);
+        for &inner in &ops {
+            if !folded.contains(&inner)
+                && let Some(&convention) = conventions.get(&inner)
+            {
                 tribute_cps::replace_control_op(ctx, inner, convention);
             }
+        }
+        self.drop_binders(ctx, op, &unused);
+        if self.binders.len() != self.function.binders.len() {
+            let binders = self
+                .binders
+                .iter()
+                .map(|binder| Attribute::String(ctx.intern_str(binder.keyword())))
+                .collect();
+            ctx.op_attrs_mut(op)
+                .insert(tribute_control::ROW_BINDERS_ATTR, Attribute::List(binders));
         }
         selected
     }
@@ -316,7 +430,7 @@ impl Instance<'_> {
                     owners.insert(binder, op);
                 }
                 if let Some((lambda, _, rows)) = instantiation(ctx, op) {
-                    let classes: Vec<_> = rows.iter().map(|row| self.class(row)).collect();
+                    let classes: Vec<_> = rows.iter().map(|row| self.class(ctx, row, op)).collect();
                     let at = match lambdas.iter().position(|known| known.op == lambda) {
                         Some(at) => at,
                         None => {
@@ -362,15 +476,25 @@ impl Instance<'_> {
                 return;
             };
             let mut anchor = lambda.op;
+            let mut copies = Vec::new();
             for (_, uses) in &lambda.groups[1..] {
                 let copy = self.copy_lambda(ctx, lambda.op);
                 insert_after(ctx, anchor, copy);
                 anchor = copy;
+                copies.push(copy);
                 let result = ctx.op_results(copy)[0];
                 for &instantiate in uses {
                     ctx.set_op_operand(instantiate, 0, result);
                     recapture(ctx, instantiate, lambda.op, result);
                 }
+            }
+            match self
+                .copies
+                .iter_mut()
+                .find(|(known, _)| *known == lambda.op)
+            {
+                Some((_, known)) => known.extend(copies),
+                None => self.copies.push((lambda.op, copies)),
             }
         }
     }
@@ -378,14 +502,33 @@ impl Instance<'_> {
     /// A detached copy of `lambda` whose quantifying lambdas, itself
     /// included, quantify new local binders.
     fn copy_lambda(&mut self, ctx: &mut IrContext, lambda: OpRef) -> OpRef {
-        let copy = ctx.clone_op(lambda, &mut IrMapping::new());
+        let mut mapping = IrMapping::new();
+        let copy = ctx.clone_op(lambda, &mut mapping);
+        // A lambda inside `lambda` that was already split is split in the
+        // copy too, so the copy's lambdas fold the same way.
+        let cloned = |ctx: &IrContext, op: OpRef| {
+            mapping
+                .lookup_value(ctx.op_results(op)[0])
+                .and_then(|value| match ctx.value_def(value) {
+                    trunk_ir::refs::ValueDef::OpResult(op, _) => Some(op),
+                    _ => None,
+                })
+        };
+        let nested: Vec<_> = self
+            .copies
+            .iter()
+            .filter_map(|(inner, copies)| {
+                let inner = cloned(ctx, *inner)?;
+                let copies = copies
+                    .iter()
+                    .map(|&copy| cloned(ctx, copy))
+                    .collect::<Option<Vec<_>>>()?;
+                Some((inner, copies))
+            })
+            .collect();
+        self.copies.extend(nested);
         let mut ops = vec![copy];
-        let _ = trunk_ir::walk::walk_op::<()>(ctx, copy, &mut |inner| {
-            if inner != copy {
-                ops.push(inner);
-            }
-            std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
-        });
+        ops.extend(nested_ops(ctx, copy));
         let mut old = Vec::new();
         for &op in &ops {
             old.extend(tribute_control::quantified_rows(ctx, op).unwrap_or_default());
@@ -394,65 +537,133 @@ impl Instance<'_> {
             .map(|offset| u32::try_from(self.binders.len() + offset).expect("binders fit in u32"))
             .collect();
         self.binders.extend(old.iter().map(|_| RowBinder::Local));
-        let rows: Vec<Row> = new.iter().map(|&tail| Row::new([], Some(tail))).collect();
-        let renamed = |row: &Row| {
-            row.substitute(RowArgs::Binders(&old, &rows))
-                .expect("a row names binders of its definition")
-        };
-        let rename = |ctx: &mut IrContext, ty| {
-            tribute_control::substitute_rows(ctx, ty, RowArgs::Binders(&old, &rows))
-                .expect("a type names binders of its definition")
-        };
-        for &op in &ops {
-            for index in 0..ctx.op_result_types(op).len() {
-                let ty = rename(ctx, ctx.op_result_types(op)[index]);
-                ctx.set_op_result_type(op, index as u32, ty);
+        rename_binders(ctx, &ops, &old, &new);
+        copy
+    }
+
+    /// Fold each split lambda and its first copy of every other convention
+    /// into one `tribute_cps.lambda` with a body per convention, and return
+    /// the lambdas folded away. A copy at a convention the lambda already
+    /// has stays its own value. The bodies of the copies read the lambda's
+    /// own binders again, and the uses and captures of the copies move to
+    /// the folded lambda, whose own binders they no longer quantify.
+    fn fold_copies(
+        &self,
+        ctx: &mut IrContext,
+        conventions: &HashMap<OpRef, CallingConvention>,
+    ) -> (HashSet<OpRef>, Vec<u32>) {
+        let mut folded = HashSet::default();
+        let mut unused = Vec::new();
+        for (lambda, copies) in &self.copies {
+            if folded.contains(lambda) {
+                continue;
             }
-            for region in ctx.op_regions(op).collect::<Vec<_>>() {
-                for block in ctx.region(region).blocks.clone() {
-                    for index in 0..ctx.block_args(block).len() {
-                        let ty = rename(ctx, ctx.value_ty(ctx.block_args(block)[index]));
-                        ctx.set_block_arg_type(block, index as u32, ty);
+            let mut members = vec![(conventions[lambda], *lambda)];
+            for &copy in copies.iter().filter(|copy| !folded.contains(*copy)) {
+                let convention = conventions[&copy];
+                if members.iter().all(|&(known, _)| known != convention) {
+                    members.push((convention, copy));
+                }
+            }
+            if members.len() == 1 {
+                continue;
+            }
+            members.sort_by_key(|&(convention, _)| convention);
+            let own = tribute_control::quantified_rows(ctx, *lambda).unwrap_or_default();
+            let mut captures = ctx.op_operands(*lambda).to_vec();
+            for &(_, member) in &members {
+                for &capture in ctx.op_operands(member) {
+                    if !captures.contains(&capture) {
+                        captures.push(capture);
                     }
                 }
-            }
-            let attributes: Vec<_> = ctx
-                .op(op)
-                .attributes
-                .iter()
-                .map(|(key, value)| (key, value.clone()))
-                .collect();
-            for (key, value) in attributes {
-                let renamed = value.map_types(|ty| rename(ctx, ty));
-                if renamed != value {
-                    ctx.op_attrs_mut(op).insert(key, renamed);
+                if member != *lambda {
+                    let fresh = tribute_control::quantified_rows(ctx, member).unwrap_or_default();
+                    let mut ops = vec![member];
+                    ops.extend(nested_ops(ctx, member));
+                    rename_binders(ctx, &ops, &fresh, &own);
+                    unused.extend(fresh);
                 }
             }
-            let quantified = tribute_control::quantified_rows(ctx, op).unwrap_or_default();
-            if !quantified.is_empty() {
-                let quantified = quantified
-                    .iter()
-                    .map(|binder| {
-                        let at = old.iter().position(|known| known == binder);
-                        Attribute::Int(i128::from(at.map_or(*binder, |at| new[at])))
-                    })
-                    .collect();
-                ctx.op_attrs_mut(op).insert(
-                    tribute_control::QUANTIFIED_ROWS_ATTR,
-                    Attribute::List(quantified),
-                );
+            let data = ctx.op(*lambda);
+            let mut builder = trunk_ir::context::OperationDataBuilder::new(
+                data.location,
+                tribute_cps::Lambda::NAME,
+            )
+            .operands(captures)
+            .results(ctx.op_result_types(*lambda).iter().copied());
+            for (key, value) in data.attributes.iter() {
+                builder = builder.attr(key, value.clone());
             }
-            let args = tribute_control::row_args(ctx, op).unwrap_or_default();
-            if !args.is_empty() {
-                let args = args
+            let mut written = Vec::new();
+            for &(convention, member) in &members {
+                written.push(<CallingConvention as trunk_ir::attr_kind::AttrKind>::write(
+                    ctx, convention,
+                ));
+                let body = ctx.op_region(member, 0).expect("a lambda has a body");
+                ctx.detach_region(body);
+                builder = builder.region(body);
+            }
+            let data = builder
+                .attr(tribute_cps::CONVENTIONS_ATTR, Attribute::List(written))
+                .build(ctx);
+            let merged = ctx.create_op(data);
+            let block = ctx
+                .op(*lambda)
+                .parent_block
+                .expect("a split lambda lives in a block");
+            ctx.insert_op_before(block, *lambda, merged);
+            let result = ctx.op_results(merged)[0];
+            ctx.replace_all_uses(ctx.op_results(*lambda)[0], result);
+            for &(_, member) in &members {
+                if member == *lambda {
+                    continue;
+                }
+                let uses: Vec<_> = ctx
+                    .uses(ctx.op_results(member)[0])
                     .iter()
-                    .map(|row| renamed(row).to_attribute(ctx))
+                    .map(|use_| use_.user)
+                    .filter(|&user| tribute_control::Instantiate::matches(ctx, user))
                     .collect();
-                ctx.op_attrs_mut(op)
-                    .insert(tribute_control::ROW_ARGS_ATTR, Attribute::List(args));
+                for instantiate in uses {
+                    ctx.set_op_operand(instantiate, 0, result);
+                    recapture(ctx, instantiate, member, result);
+                }
+            }
+            for &(_, member) in &members {
+                debug_assert!(
+                    ctx.uses(ctx.op_results(member)[0]).is_empty(),
+                    "a folded lambda keeps no use"
+                );
+                ctx.remove_op_from_block(block, member);
+                ctx.remove_op(member);
+                folded.insert(member);
             }
         }
-        copy
+        (folded, unused)
+    }
+
+    /// Remove the local binders `unused` from this instance, `op`, and
+    /// renumber the binders after them.
+    fn drop_binders(&mut self, ctx: &mut IrContext, op: OpRef, unused: &[u32]) {
+        if unused.is_empty() {
+            return;
+        }
+        let kept: Vec<u32> = (0..self.binders.len())
+            .map(|index| u32::try_from(index).expect("binders fit in u32"))
+            .filter(|index| !unused.contains(index))
+            .collect();
+        let renumbered: Vec<u32> = (0..kept.len())
+            .map(|index| u32::try_from(index).expect("binders fit in u32"))
+            .collect();
+        let mut ops = vec![op];
+        ops.extend(nested_ops(ctx, op));
+        rename_binders(ctx, &ops, &kept, &renumbered);
+        let mut index = 0;
+        self.binders.retain(|_| {
+            index += 1;
+            !unused.contains(&(index - 1))
+        });
     }
 
     /// Point a reference at the instance its rows select, and return that
@@ -490,7 +701,7 @@ impl Instance<'_> {
                 usize::try_from(position)
                     .ok()
                     .and_then(|position| rows.get(position))
-                    .map_or(CallingConvention::Cps, |row| self.class(row))
+                    .map_or(CallingConvention::Cps, |row| self.class(ctx, row, op))
             })
             .collect();
         let suffix = class_suffix(&classes);
@@ -516,7 +727,7 @@ impl Instance<'_> {
             return None;
         };
         let signature = FuncSig::from_type_ref(ctx, ty)?;
-        Some(self.class(&signature.row(ctx)))
+        Some(self.class(ctx, &signature.row(ctx), op))
     }
 
     /// The instance's own convention: the class of its row, where a
@@ -537,7 +748,7 @@ impl Instance<'_> {
         {
             row.tail = None;
         }
-        self.class(&row)
+        self.class(ctx, &row, op)
     }
 }
 
