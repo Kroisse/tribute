@@ -5,6 +5,7 @@
 //! so module assembly reads them from the IR.
 
 use tribute_ir::dialect::tribute_io;
+use trunk_ir::OpName;
 use trunk_ir::SymbolPath;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::wasm as wasm_dialect;
@@ -186,6 +187,10 @@ fn incompatible(ctx: &IrContext, op: OpRef, reason: String) -> ConversionError {
 struct WritePattern;
 
 impl RewritePattern for WritePattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[tribute_io::Write::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

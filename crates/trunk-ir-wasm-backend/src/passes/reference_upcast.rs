@@ -11,6 +11,7 @@
 //! ([`is_wasm_physical_argument_assignable`]) qualify: those emission performs
 //! without a runtime cast.
 
+use trunk_ir::OpName;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, wasm};
 use trunk_ir::ops::DialectOp;
@@ -28,6 +29,10 @@ use crate::is_wasm_physical_argument_assignable;
 pub struct ReferenceUpcastPattern;
 
 impl RewritePattern for ReferenceUpcastPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[core::UnrealizedConversionCast::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

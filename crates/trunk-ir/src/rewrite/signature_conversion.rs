@@ -5,6 +5,7 @@
 //!
 //! - [`FuncSignatureConversionPattern`]: Converts `func.func` signatures
 
+use crate::OpName;
 use crate::context::{IrContext, OperationDataBuilder};
 use crate::dialect::func;
 use crate::ops::{DialectOp, DialectType};
@@ -189,6 +190,10 @@ pub fn rewrite_function_signature(
 pub struct FuncSignatureConversionPattern;
 
 impl RewritePattern for FuncSignatureConversionPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[func::Func::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

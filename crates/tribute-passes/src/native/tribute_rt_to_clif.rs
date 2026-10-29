@@ -18,6 +18,7 @@
 
 use tribute_ir::dialect::tribute_rt;
 use tribute_ir::dialect::tribute_rt::{RC_HEADER_SIZE, REFCOUNT_OFFSET, RTTI_IDX_OFFSET};
+use trunk_ir::OpName;
 use trunk_ir::SymbolPath;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
@@ -198,6 +199,10 @@ struct BoxIntPattern {
 }
 
 impl RewritePattern for BoxIntPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[tribute_rt::BoxInt::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -236,6 +241,10 @@ struct BoxNatPattern {
 }
 
 impl RewritePattern for BoxNatPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[tribute_rt::BoxNat::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -274,6 +283,10 @@ struct BoxBoolPattern {
 }
 
 impl RewritePattern for BoxBoolPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[tribute_rt::BoxBool::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -312,6 +325,10 @@ struct BoxFloatPattern {
 }
 
 impl RewritePattern for BoxFloatPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[tribute_rt::BoxFloat::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -352,6 +369,10 @@ struct UnboxIntPattern {
 }
 
 impl RewritePattern for UnboxIntPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[tribute_rt::UnboxInt::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -384,6 +405,10 @@ struct UnboxNatPattern {
 }
 
 impl RewritePattern for UnboxNatPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[tribute_rt::UnboxNat::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -415,6 +440,10 @@ struct UnboxBoolPattern {
 }
 
 impl RewritePattern for UnboxBoolPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[tribute_rt::UnboxBool::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -446,6 +475,10 @@ struct UnboxFloatPattern {
 }
 
 impl RewritePattern for UnboxFloatPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[tribute_rt::UnboxFloat::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

@@ -13,6 +13,7 @@
 //!   Wasm index width, between unrealized casts
 
 use tracing::warn;
+use trunk_ir::OpName;
 
 use trunk_ir::context::{IrContext, OperationDataBuilder};
 use trunk_ir::dialect::arith;
@@ -175,6 +176,10 @@ fn index_cast_signedness(ctx: &IrContext, op: OpRef) -> Option<bool> {
 struct NilValuePattern;
 
 impl RewritePattern for NilValuePattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[core::NilValue::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -198,6 +203,10 @@ impl RewritePattern for NilValuePattern {
 struct ArithConstPattern;
 
 impl RewritePattern for ArithConstPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[arith::Const::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

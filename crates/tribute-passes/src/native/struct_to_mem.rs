@@ -30,6 +30,7 @@
 
 use rustc_hash::FxHashMap as HashMap;
 use std::ops::ControlFlow;
+use trunk_ir::OpName;
 
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::adt::layout::get_struct_fields;
@@ -148,6 +149,10 @@ struct VariantGetPattern {
 }
 
 impl RewritePattern for VariantGetPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[adt::VariantGet::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -180,6 +185,10 @@ struct VariantIsPattern {
 }
 
 impl RewritePattern for VariantIsPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[adt::VariantIs::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

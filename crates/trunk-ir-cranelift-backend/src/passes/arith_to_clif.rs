@@ -11,6 +11,7 @@
 //! - `arith.{sitofp,uitofp,fptosi,fptoui}` -> `clif.fcvt_{from,to}_{sint,uint}`
 //! - `arith.{extf,truncf}` -> `clif.{fpromote,fdemote}`
 
+use trunk_ir::OpName;
 use trunk_ir::StringArg;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::arith;
@@ -74,6 +75,10 @@ fn type_category(ctx: &IrContext, ty: TypeRef) -> Option<&'static str> {
 struct NilValuePattern;
 
 impl RewritePattern for NilValuePattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[core::NilValue::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -99,6 +104,10 @@ impl RewritePattern for NilValuePattern {
 struct ArithConstPattern;
 
 impl RewritePattern for ArithConstPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[arith::Const::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

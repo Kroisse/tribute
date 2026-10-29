@@ -1,6 +1,7 @@
 //! Lower representation-independent `list.*` operations to private native nodes.
 
 use std::ops::ControlFlow;
+use trunk_ir::OpName;
 
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::list;
@@ -144,6 +145,10 @@ fn lower_observation(
 struct EmptyPattern;
 
 impl RewritePattern for EmptyPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[list::Empty::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -167,6 +172,10 @@ impl RewritePattern for EmptyPattern {
 struct PrependPattern;
 
 impl RewritePattern for PrependPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[list::Prepend::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -190,6 +199,10 @@ impl RewritePattern for PrependPattern {
 struct IsEmptyPattern;
 
 impl RewritePattern for IsEmptyPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[list::IsEmpty::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

@@ -1,5 +1,6 @@
 //! Wasm-owned callable signature conversion.
 
+use trunk_ir::OpName;
 use trunk_ir::context::{IrContext, OperationDataBuilder};
 use trunk_ir::dialect::wasm;
 use trunk_ir::ops::{DialectOp, DialectType};
@@ -13,6 +14,10 @@ use trunk_ir::types::Attribute;
 pub struct WasmFuncSignatureConversionPattern;
 
 impl RewritePattern for WasmFuncSignatureConversionPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[wasm::Func::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

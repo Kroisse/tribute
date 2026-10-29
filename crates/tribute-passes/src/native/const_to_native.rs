@@ -16,6 +16,7 @@
 //! produced here are handled by the existing variant lowering.
 
 use hashbrown::hash_map::EntryRef;
+use trunk_ir::OpName;
 
 use crate::collections::{HashMap, HashSet};
 
@@ -371,6 +372,10 @@ struct BytesConstNativePattern {
 }
 
 impl RewritePattern for BytesConstNativePattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[adt::BytesConst::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -427,6 +432,10 @@ struct StringConstNativePattern {
 }
 
 impl RewritePattern for StringConstNativePattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[adt::StringConst::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

@@ -9,6 +9,7 @@
 
 use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
+use trunk_ir::OpName;
 
 use itertools::Itertools;
 
@@ -370,6 +371,10 @@ fn take_region_ops(ctx: &mut IrContext, region: RegionRef) -> OpList {
 struct ScfSwitchPattern<'a>(&'a ScfLoweringPlan);
 
 impl RewritePattern for ScfSwitchPattern<'_> {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[scf::Switch::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -471,6 +476,10 @@ impl RewritePattern for ScfSwitchPattern<'_> {
 struct ScfIfPattern<'a>(&'a ScfLoweringPlan);
 
 impl RewritePattern for ScfIfPattern<'_> {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[scf::If::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -529,6 +538,10 @@ impl RewritePattern for ScfIfPattern<'_> {
 struct ScfLoopPattern<'a>(&'a ScfLoweringPlan);
 
 impl RewritePattern for ScfLoopPattern<'_> {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[scf::Loop::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -623,6 +636,10 @@ impl RewritePattern for ScfLoopPattern<'_> {
 struct ScfYieldPattern;
 
 impl RewritePattern for ScfYieldPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[scf::Yield::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -663,6 +680,10 @@ impl RewritePattern for ScfYieldPattern {
 struct ScfContinuePattern;
 
 impl RewritePattern for ScfContinuePattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[scf::Continue::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -715,6 +736,10 @@ impl RewritePattern for ScfContinuePattern {
 struct ScfBreakPattern;
 
 impl RewritePattern for ScfBreakPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[scf::Break::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

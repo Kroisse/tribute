@@ -8,6 +8,7 @@
 
 use tribute_ir::dialect::tribute_rt::{RC_HEADER_SIZE, RTTI_IDX_OFFSET};
 use tribute_ir::dialect::tribute_rtti;
+use trunk_ir::OpName;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{clif, core};
@@ -50,6 +51,10 @@ fn lower(ctx: &mut IrContext, module: Module) {
 struct DescriptorPattern;
 
 impl RewritePattern for DescriptorPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[tribute_rtti::Descriptor::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

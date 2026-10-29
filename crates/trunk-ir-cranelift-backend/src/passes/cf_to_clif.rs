@@ -5,6 +5,7 @@
 //! - `cf.cond_br` -> `clif.brif`
 //! - `cf.switch` -> `clif.switch`
 
+use trunk_ir::OpName;
 use trunk_ir::OperationDataBuilder;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{cf, clif, core};
@@ -41,6 +42,10 @@ fn cf_to_clif_target() -> ConversionTarget {
 struct CfBrPattern;
 
 impl RewritePattern for CfBrPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[cf::Br::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -61,6 +66,10 @@ impl RewritePattern for CfBrPattern {
 struct CfCondBrPattern;
 
 impl RewritePattern for CfCondBrPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[cf::CondBr::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -85,6 +94,10 @@ impl RewritePattern for CfCondBrPattern {
 struct CfSwitchPattern;
 
 impl RewritePattern for CfSwitchPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[cf::Switch::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

@@ -18,6 +18,7 @@
 //! `adt_to_clif` (Phase 2).
 
 use rustc_hash::FxHashMap as HashMap;
+use trunk_ir::OpName;
 
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::adt::layout::{compute_struct_layout, compute_variant_layout};
@@ -162,6 +163,10 @@ struct StructNewPattern {
 }
 
 impl RewritePattern for StructNewPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[adt::StructNew::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -277,6 +282,10 @@ struct VariantNewPattern {
 }
 
 impl RewritePattern for VariantNewPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[adt::VariantNew::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

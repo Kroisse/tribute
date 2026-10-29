@@ -10,6 +10,7 @@
 
 use hashbrown::hash_map::EntryRef;
 use std::borrow::Cow;
+use trunk_ir::OpName;
 
 use crate::collections::{HashMap, HashSet};
 use std::fmt;
@@ -255,6 +256,10 @@ impl<'a> StringConstPattern<'a> {
 }
 
 impl RewritePattern for StringConstPattern<'_> {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[adt::StringConst::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -311,6 +316,10 @@ impl<'a> BytesConstPattern<'a> {
 }
 
 impl RewritePattern for BytesConstPattern<'_> {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[adt::BytesConst::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

@@ -4,6 +4,7 @@
 //! - `mem.store(ptr, value, offset)` → `clif.store(value, ptr, offset)`
 //! - `mem.ptr_add(base, offset)` → `clif.iadd(base, offset)`
 
+use trunk_ir::OpName;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::mem;
@@ -40,6 +41,10 @@ fn mem_to_clif_target() -> ConversionTarget {
 struct MemLoadPattern;
 
 impl RewritePattern for MemLoadPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[mem::Load::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -70,6 +75,10 @@ impl RewritePattern for MemLoadPattern {
 struct MemStorePattern;
 
 impl RewritePattern for MemStorePattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[mem::Store::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -98,6 +107,10 @@ impl RewritePattern for MemStorePattern {
 struct MemPtrAddPattern;
 
 impl RewritePattern for MemPtrAddPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[mem::PtrAdd::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -124,6 +137,10 @@ impl RewritePattern for MemPtrAddPattern {
 struct MemNullPattern;
 
 impl RewritePattern for MemNullPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[mem::Null::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

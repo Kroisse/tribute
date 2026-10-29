@@ -9,6 +9,7 @@
 //! `ability.abort` into `effect.dispatch_cps` through the frame's dispatcher.
 
 use std::ops::ControlFlow;
+use trunk_ir::OpName;
 
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
@@ -106,6 +107,10 @@ pub fn lower_continuation_frames(
 struct LowerDelimits;
 
 impl RewritePattern for LowerDelimits {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[ability::Delimit::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

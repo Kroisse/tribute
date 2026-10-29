@@ -20,6 +20,7 @@
 //! left here is rejected.
 
 use tracing::warn;
+use trunk_ir::OpName;
 
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::adt::layout::compute_mem_struct_layout;
@@ -90,6 +91,10 @@ fn intern_i8_type(ctx: &mut IrContext) -> TypeRef {
 struct StructGetPattern;
 
 impl RewritePattern for StructGetPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[adt::StructGet::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -139,6 +144,10 @@ impl RewritePattern for StructGetPattern {
 struct StructSetPattern;
 
 impl RewritePattern for StructSetPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[adt::StructSet::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -178,6 +187,10 @@ impl RewritePattern for StructSetPattern {
 struct VariantCastPattern;
 
 impl RewritePattern for VariantCastPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[adt::VariantCast::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -196,6 +209,10 @@ impl RewritePattern for VariantCastPattern {
 struct RefNullPattern;
 
 impl RewritePattern for RefNullPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[adt::RefNull::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -219,6 +236,10 @@ impl RewritePattern for RefNullPattern {
 struct RefCastPattern;
 
 impl RewritePattern for RefCastPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[adt::RefCast::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -237,6 +258,10 @@ impl RewritePattern for RefCastPattern {
 struct RefIsNullPattern;
 
 impl RewritePattern for RefIsNullPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[adt::RefIsNull::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

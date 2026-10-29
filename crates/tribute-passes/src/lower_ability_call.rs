@@ -18,6 +18,7 @@
 //! intermediate best-effort pass: the final `ability-lowered` boundary is
 //! established by `LowerHandleDispatch` after evidence resolution.
 
+use trunk_ir::OpName;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::func;
@@ -87,6 +88,10 @@ struct LowerCallPattern {
 }
 
 impl RewritePattern for LowerCallPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[ability::Call::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

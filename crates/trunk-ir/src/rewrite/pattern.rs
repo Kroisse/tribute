@@ -4,6 +4,7 @@
 //! No lifetimes needed — arena refs are Copy.
 
 use super::rewriter::PatternRewriter;
+use crate::OpName;
 use crate::context::IrContext;
 use crate::refs::OpRef;
 
@@ -38,6 +39,16 @@ pub trait RewritePattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool;
+
+    /// The operations this pattern can match, or `None` if it may match any
+    /// operation.
+    ///
+    /// The applicator offers the pattern only operations with one of these
+    /// names, so a pattern that declares roots never matches another
+    /// operation.
+    fn roots(&self) -> Option<&[OpName]> {
+        None
+    }
 
     /// Optional: return a human-readable name for debugging.
     fn name(&self) -> &'static str {

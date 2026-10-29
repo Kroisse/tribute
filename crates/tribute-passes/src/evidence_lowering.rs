@@ -10,6 +10,7 @@
 //! on every target.
 
 use std::ops::ControlFlow;
+use trunk_ir::OpName;
 
 use tribute_ir::dialect::ability;
 use tribute_ir::dialect::adt;
@@ -240,6 +241,10 @@ struct LowerEffectExtend<'a> {
 }
 
 impl RewritePattern for LowerEffectExtend<'_> {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[effect::Extend::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -364,6 +369,10 @@ struct LowerEffectDispatchTail<'a> {
 }
 
 impl RewritePattern for LowerEffectDispatchTail<'_> {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[effect::DispatchTail::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -400,6 +409,10 @@ struct LowerEffectDispatchCps<'a> {
 }
 
 impl RewritePattern for LowerEffectDispatchCps<'_> {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[effect::DispatchCps::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

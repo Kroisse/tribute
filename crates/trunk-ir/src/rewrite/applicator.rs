@@ -11,10 +11,12 @@ use super::conversion_target::{
 use super::pattern::RewritePattern;
 use super::rewriter::{self, PatternRewriter};
 use super::type_converter::TypeConverter;
+use crate::OpName;
 use crate::context::{IrContext, Use};
 use crate::dialect::{clif, core, func, wasm};
 use crate::ops::DialectOp;
 use crate::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
+use rustc_hash::FxHashMap as HashMap;
 
 /// Scope that bounds a pattern rewrite traversal.
 ///
@@ -155,6 +157,12 @@ impl ApplyResult {
 /// applicator's own mutations make them stale.
 pub struct PatternApplicator<'p> {
     patterns: Vec<Box<dyn RewritePattern + 'p>>,
+    /// Indices of the patterns offered each operation name a pattern
+    /// declares as a root, in insertion order.
+    by_root: HashMap<OpName, Vec<usize>>,
+    /// Indices of the patterns that declare no roots, offered every other
+    /// operation.
+    any_root: Vec<usize>,
     max_iterations: usize,
     type_converter: TypeConverter,
     /// Conversion target used for legality-aware rewriting and verification.
@@ -169,6 +177,8 @@ impl<'p> PatternApplicator<'p> {
     pub fn new(type_converter: TypeConverter) -> Self {
         Self {
             patterns: Vec::new(),
+            by_root: HashMap::default(),
+            any_root: Vec::new(),
             max_iterations: 10,
             type_converter,
             target: ConversionTarget::default(),
@@ -188,9 +198,8 @@ impl<'p> PatternApplicator<'p> {
     }
 
     /// Add a rewrite pattern.
-    pub fn add_pattern(mut self, pattern: impl RewritePattern + 'p) -> Self {
-        self.patterns.push(Box::new(pattern));
-        self
+    pub fn add_pattern(self, pattern: impl RewritePattern + 'p) -> Self {
+        self.add_pattern_box(Box::new(pattern))
     }
 
     /// Add an already-boxed rewrite pattern.
@@ -199,8 +208,33 @@ impl<'p> PatternApplicator<'p> {
     /// (e.g. per-dialect `canonicalization_patterns()` registries) into a
     /// single applicator without naming each concrete type at the call site.
     pub fn add_pattern_box(mut self, pattern: Box<dyn RewritePattern + 'p>) -> Self {
+        let index = self.patterns.len();
+        match pattern.roots() {
+            Some(roots) => {
+                for &root in roots {
+                    let indices = self
+                        .by_root
+                        .entry(root)
+                        .or_insert_with(|| self.any_root.clone());
+                    if indices.last() != Some(&index) {
+                        indices.push(index);
+                    }
+                }
+            }
+            None => {
+                self.any_root.push(index);
+                for indices in self.by_root.values_mut() {
+                    indices.push(index);
+                }
+            }
+        }
         self.patterns.push(pattern);
         self
+    }
+
+    /// The indices of the patterns offered `op`, in insertion order.
+    fn patterns_for(&self, ctx: &IrContext, op: OpRef) -> &[usize] {
+        self.by_root.get(&ctx.op(op).name).unwrap_or(&self.any_root)
     }
 
     /// Enable or disable automatic type conversion.
@@ -383,9 +417,9 @@ impl<'p> PatternApplicator<'p> {
                 }
 
                 // Try each pattern
-                for pattern in &self.patterns {
+                for &index in self.patterns_for(ctx, op) {
                     let mut rw = PatternRewriter::new(&self.type_converter);
-                    let matched = pattern.match_and_rewrite(ctx, op, &mut rw);
+                    let matched = self.patterns[index].match_and_rewrite(ctx, op, &mut rw);
                     if matched && rw.has_mutations() {
                         let mutations = rw.take_mutations();
                         let replaced = self.replaced_results(ctx, op, &mutations);
@@ -1083,6 +1117,61 @@ mod tests {
         assert!(
             printed.contains(r#"test.source {tag = "second"}"#),
             "{printed}"
+        );
+    }
+
+    /// Records each operation offered to it and never matches.
+    struct RecordOffers<'a> {
+        roots: Option<&'a [OpName]>,
+        offered: &'a RefCell<Vec<String>>,
+    }
+
+    impl RewritePattern for RecordOffers<'_> {
+        fn roots(&self) -> Option<&[OpName]> {
+            self.roots
+        }
+
+        fn match_and_rewrite(
+            &self,
+            ctx: &mut IrContext,
+            op: OpRef,
+            _rewriter: &mut PatternRewriter<'_>,
+        ) -> bool {
+            let name = ctx.op(op).name.display(ctx).to_string();
+            self.offered.borrow_mut().push(name);
+            false
+        }
+    }
+
+    #[test]
+    fn patterns_are_offered_only_their_roots_in_insertion_order() {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @f(%x: core.i32) -> core.i32 {
+    %r = arith.addi %x, %x : core.i32
+    func.return %r
+  }
+}"#,
+        );
+
+        let offered = RefCell::new(Vec::new());
+        let roots = [crate::dialect::arith::Addi::NAME];
+        PatternApplicator::new(TypeConverter::new())
+            .add_pattern(RecordOffers {
+                roots: Some(&roots),
+                offered: &offered,
+            })
+            .add_pattern(RecordOffers {
+                roots: None,
+                offered: &offered,
+            })
+            .apply_partial(&mut ctx, module);
+
+        assert_eq!(
+            offered.into_inner(),
+            ["arith.addi", "arith.addi", "func.return", "func.func"]
         );
     }
 

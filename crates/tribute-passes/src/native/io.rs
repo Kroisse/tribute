@@ -1,6 +1,7 @@
 //! Lower target-independent I/O operations to the native runtime ABI.
 
 use tribute_ir::dialect::adt;
+use trunk_ir::OpName;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{arith, core, func, mem, scf};
 use trunk_ir::ops::DialectOp;
@@ -91,6 +92,10 @@ fn has_function(ctx: &IrContext, block: trunk_ir::BlockRef, name: &str) -> bool 
 struct NativeWritePattern;
 
 impl RewritePattern for NativeWritePattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[tribute_io::Write::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -116,6 +121,10 @@ struct NativeReadLinePattern {
 }
 
 impl RewritePattern for NativeReadLinePattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[tribute_io::ReadLine::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

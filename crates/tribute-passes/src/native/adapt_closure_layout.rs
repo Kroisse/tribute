@@ -18,6 +18,7 @@ use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::tribute_rt;
 use tribute_ir::dialect::tribute_rtti;
+use trunk_ir::OpName;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{clif, core};
 use trunk_ir::ops::{DialectOp, DialectType};
@@ -161,6 +162,10 @@ struct ConventionTablePattern {
 }
 
 impl RewritePattern for ConventionTablePattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[tribute_rt::ConventionTable::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -186,6 +191,10 @@ impl RewritePattern for ConventionTablePattern {
 struct ConventionEntryPattern;
 
 impl RewritePattern for ConventionEntryPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[tribute_rt::ConventionEntry::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

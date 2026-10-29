@@ -7,6 +7,7 @@
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
+use trunk_ir::OpName;
 
 use tribute_ir::dialect::tribute_control::COMPILER_INTRINSIC_ATTR;
 use trunk_ir::analysis::AnalysisCache;
@@ -243,6 +244,10 @@ struct ArithIntrinsicPattern<'a> {
 }
 
 impl RewritePattern for ArithIntrinsicPattern<'_> {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[func::Call::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -301,6 +306,10 @@ struct ArithIntrinsicFuncDeclPattern<'a> {
 }
 
 impl RewritePattern for ArithIntrinsicFuncDeclPattern<'_> {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[func::Func::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

@@ -12,6 +12,7 @@
 
 use rustc_hash::FxHashMap as HashMap;
 use std::ops::ControlFlow;
+use trunk_ir::OpName;
 
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::tribute_control::COMPILER_INTRINSIC_ATTR;
@@ -150,6 +151,10 @@ struct SlotsCallPattern<'a> {
 }
 
 impl RewritePattern for SlotsCallPattern<'_> {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[func::Call::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -269,6 +274,10 @@ struct SlotsDeclarationPattern<'a> {
 }
 
 impl RewritePattern for SlotsDeclarationPattern<'_> {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[func::Func::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

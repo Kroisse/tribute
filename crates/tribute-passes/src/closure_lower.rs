@@ -25,6 +25,7 @@
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
+use trunk_ir::OpName;
 
 use tribute_ir::calling_convention::{CallingConvention, ConventionBearing, DynConventionBearing};
 use tribute_ir::dialect::adt;
@@ -123,6 +124,10 @@ struct LowerClosureNewArena<'a> {
 }
 
 impl RewritePattern for LowerClosureNewArena<'_> {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[closure::New::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -192,6 +197,10 @@ impl RewritePattern for LowerClosureNewArena<'_> {
 struct LowerClosureUnpackArena;
 
 impl RewritePattern for LowerClosureUnpackArena {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[closure::Unpack::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -236,6 +245,10 @@ impl RewritePattern for LowerClosureUnpackArena {
 struct LowerClosureCallArena;
 
 impl RewritePattern for LowerClosureCallArena {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[func::CallIndirect::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -314,6 +327,10 @@ impl RewritePattern for LowerClosureCallArena {
 struct LowerClosureTailCallArena;
 
 impl RewritePattern for LowerClosureTailCallArena {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[func::TailCallIndirect::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -481,6 +498,10 @@ fn exact_physical_call_contract(
 struct LowerClosureEntryArena;
 
 impl RewritePattern for LowerClosureEntryArena {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[closure::Entry::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

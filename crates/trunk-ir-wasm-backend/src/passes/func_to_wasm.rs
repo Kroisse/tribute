@@ -18,6 +18,7 @@
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
+use trunk_ir::OpName;
 
 use trunk_ir::SymbolPath;
 use trunk_ir::context::{IrContext, OperationDataBuilder};
@@ -389,6 +390,10 @@ fn convert_to_wasm_func_type(
 }
 
 impl RewritePattern for FuncFuncPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[func::Func::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -446,6 +451,10 @@ impl RewritePattern for FuncFuncPattern {
 struct FuncCallPattern;
 
 impl RewritePattern for FuncCallPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[func::Call::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -479,6 +488,10 @@ impl RewritePattern for FuncCallPattern {
 struct FuncCallIndirectPattern;
 
 impl RewritePattern for FuncCallIndirectPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[func::CallIndirect::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -533,6 +546,10 @@ impl RewritePattern for FuncCallIndirectPattern {
 struct FuncReturnPattern;
 
 impl RewritePattern for FuncReturnPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[func::Return::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -556,6 +573,10 @@ impl RewritePattern for FuncReturnPattern {
 struct FuncTailCallPattern;
 
 impl RewritePattern for FuncTailCallPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[func::TailCall::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -587,6 +608,10 @@ impl RewritePattern for FuncTailCallPattern {
 struct FuncTailCallIndirectPattern;
 
 impl RewritePattern for FuncTailCallIndirectPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[func::TailCallIndirect::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -655,6 +680,10 @@ impl RewritePattern for FuncTailCallIndirectPattern {
 struct FuncUnreachablePattern;
 
 impl RewritePattern for FuncUnreachablePattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[func::Unreachable::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -682,6 +711,10 @@ struct FuncConstantPattern {
 }
 
 impl RewritePattern for FuncConstantPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[func::Constant::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

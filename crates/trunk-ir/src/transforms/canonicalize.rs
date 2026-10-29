@@ -35,7 +35,6 @@
 //! Float and div/rem folds are deferred until each one's edge cases
 //! (NaN/-0.0, division-by-zero) are pinned down.
 
-use rustc_hash::FxHashSet as HashSet;
 use trunk_ir_macros::op_interface;
 
 use crate::OpName;
@@ -112,38 +111,38 @@ pub trait Fold: DialectOp {
 /// registrations for the same operation panic when the registry is first
 /// queried.
 pub struct FoldDispatchPattern {
-    /// The operations whose folds this dispatcher applies; `None` applies
-    /// every registered fold.
-    ops: Option<HashSet<OpName>>,
+    /// The operations whose folds this dispatcher applies.
+    ops: Vec<OpName>,
 }
 
 impl FoldDispatchPattern {
     /// Build a dispatcher that applies only the folds of `ops`.
     pub fn from_ops(ops: impl IntoIterator<Item = OpName>) -> Self {
         Self {
-            ops: Some(ops.into_iter().collect()),
+            ops: ops.into_iter().collect(),
         }
     }
 
     /// Build a dispatcher from every [`Fold`] implementation registered
     /// across the workspace.
     pub fn from_inventory() -> Self {
-        Self { ops: None }
+        Self {
+            ops: DynFold::implementors().collect(),
+        }
     }
 }
 
 impl RewritePattern for FoldDispatchPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&self.ops)
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if let Some(ops) = &self.ops
-            && !ops.contains(&ctx.op(op).name)
-        {
-            return false;
-        }
         let Some(result) = DynFold::get(ctx, op).and_then(|fold| fold.fold(ctx)) else {
             return false;
         };

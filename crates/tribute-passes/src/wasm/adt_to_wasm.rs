@@ -56,6 +56,7 @@
 use super::type_converter::gc_array_type;
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::adt::layout::get_enum_variants;
+use trunk_ir::OpName;
 use trunk_ir::StringRef;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core::{self, IntegerLike};
@@ -174,6 +175,10 @@ struct StructNewPattern {
 }
 
 impl RewritePattern for StructNewPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[adt::StructNew::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -216,6 +221,10 @@ impl RewritePattern for StructNewPattern {
 struct StructGetPattern;
 
 impl RewritePattern for StructGetPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[adt::StructGet::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -249,6 +258,10 @@ impl RewritePattern for StructGetPattern {
 struct StructSetPattern;
 
 impl RewritePattern for StructSetPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[adt::StructSet::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -285,6 +298,10 @@ struct VariantNewPattern {
 }
 
 impl RewritePattern for VariantNewPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[adt::VariantNew::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -331,6 +348,10 @@ struct VariantIsPattern {
 }
 
 impl RewritePattern for VariantIsPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[adt::VariantIs::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -391,6 +412,10 @@ impl RewritePattern for VariantIsPattern {
 struct VariantCastPattern;
 
 impl RewritePattern for VariantCastPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[adt::VariantCast::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -430,6 +455,10 @@ impl RewritePattern for VariantCastPattern {
 struct VariantGetPattern;
 
 impl RewritePattern for VariantGetPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[adt::VariantGet::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -500,6 +529,10 @@ impl RewritePattern for VariantGetPattern {
 struct ArrayNewPattern;
 
 impl RewritePattern for ArrayNewPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[adt::ArrayNew::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -526,6 +559,10 @@ impl RewritePattern for ArrayNewPattern {
 struct ArrayOfPattern;
 
 impl RewritePattern for ArrayOfPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[adt::ArrayOf::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -560,6 +597,10 @@ impl RewritePattern for ArrayOfPattern {
 struct ArraySplicePattern;
 
 impl RewritePattern for ArraySplicePattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[adt::ArraySplice::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -750,6 +791,10 @@ fn array_read(
 struct ArrayGetPattern;
 
 impl RewritePattern for ArrayGetPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[adt::ArrayGet::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -827,6 +872,10 @@ fn gc_element_operand(
 struct ArraySetPattern;
 
 impl RewritePattern for ArraySetPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[adt::ArraySet::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -854,6 +903,10 @@ impl RewritePattern for ArraySetPattern {
 struct ArrayLenPattern;
 
 impl RewritePattern for ArrayLenPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[adt::ArrayLen::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -898,6 +951,10 @@ fn wasm_index(
 struct RefNullPattern;
 
 impl RewritePattern for RefNullPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[adt::RefNull::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -926,6 +983,10 @@ impl RewritePattern for RefNullPattern {
 struct RefIsNullPattern;
 
 impl RewritePattern for RefIsNullPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[adt::RefIsNull::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -952,6 +1013,10 @@ impl RewritePattern for RefIsNullPattern {
 struct RefCastPattern;
 
 impl RewritePattern for RefCastPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[adt::RefCast::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

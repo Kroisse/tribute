@@ -15,6 +15,7 @@
 //!   dead casts. A cast it cannot remove stays for the target's legality
 //!   boundary to reject.
 
+use crate::OpName;
 use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
 
@@ -39,6 +40,10 @@ use crate::walk::{WalkAction, walk_op};
 pub struct UnrealizedCastConversionPattern;
 
 impl RewritePattern for UnrealizedCastConversionPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[core::UnrealizedConversionCast::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

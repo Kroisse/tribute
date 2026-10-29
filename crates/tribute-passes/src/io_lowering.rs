@@ -1,5 +1,6 @@
 //! Lower embedded standard-library I/O intrinsics to the shared I/O dialect.
 
+use trunk_ir::OpName;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
@@ -41,6 +42,10 @@ impl Pass for LowerIoIntrinsics {
 struct IoCallPattern;
 
 impl RewritePattern for IoCallPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[func::Call::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -83,6 +88,10 @@ impl RewritePattern for IoCallPattern {
 struct IoDeclarationPattern;
 
 impl RewritePattern for IoDeclarationPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[func::Func::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

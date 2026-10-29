@@ -11,6 +11,7 @@
 //! - `func.constant` -> `clif.symbol_addr`
 
 use rustc_hash::FxHashMap as HashMap;
+use trunk_ir::OpName;
 
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
@@ -184,6 +185,10 @@ fn intern_ptr_type(ctx: &mut IrContext) -> TypeRef {
 struct FuncFuncPattern;
 
 impl RewritePattern for FuncFuncPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[func::Func::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -224,6 +229,10 @@ impl RewritePattern for FuncFuncPattern {
 struct FuncCallPattern;
 
 impl RewritePattern for FuncCallPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[func::Call::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -250,6 +259,10 @@ impl RewritePattern for FuncCallPattern {
 struct FuncCallIndirectPattern;
 
 impl RewritePattern for FuncCallIndirectPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[func::CallIndirect::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -308,6 +321,10 @@ impl RewritePattern for FuncCallIndirectPattern {
 struct FuncReturnPattern;
 
 impl RewritePattern for FuncReturnPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[func::Return::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -327,6 +344,10 @@ impl RewritePattern for FuncReturnPattern {
 struct FuncTailCallPattern;
 
 impl RewritePattern for FuncTailCallPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[func::TailCall::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -354,6 +375,10 @@ impl RewritePattern for FuncTailCallPattern {
 struct FuncTailCallIndirectPattern;
 
 impl RewritePattern for FuncTailCallIndirectPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[func::TailCallIndirect::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -432,6 +457,10 @@ fn enclosing_results(
 struct FuncUnreachablePattern;
 
 impl RewritePattern for FuncUnreachablePattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[func::Unreachable::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -469,6 +498,10 @@ struct FuncConstantPattern {
 }
 
 impl RewritePattern for FuncConstantPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[func::Constant::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

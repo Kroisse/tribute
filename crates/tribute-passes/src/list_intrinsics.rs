@@ -1,6 +1,7 @@
 //! Lower the public prelude List construction intrinsic to shared `list.*` IR.
 
 use rustc_hash::FxHashSet as HashSet;
+use trunk_ir::OpName;
 
 use tribute_ir::dialect::list;
 use tribute_ir::dialect::tribute_control::COMPILER_INTRINSIC_ATTR;
@@ -102,6 +103,10 @@ struct PrependCallPattern<'a> {
 }
 
 impl RewritePattern for PrependCallPattern<'_> {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[func::Call::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -146,6 +151,10 @@ struct PrependDeclarationPattern<'a> {
 }
 
 impl RewritePattern for PrependDeclarationPattern<'_> {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[func::Func::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
