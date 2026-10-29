@@ -25,7 +25,7 @@ use trunk_ir::ops::DialectOp;
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
-    PatternApplicator, PatternRewriter, RewritePattern, RewriteScope, TypeConverter,
+    OpRewritePattern, PatternApplicator, PatternRewriter, RewriteScope, TypeConverter,
 };
 
 use crate::effect_dispatch::pack_payload;
@@ -86,17 +86,16 @@ struct LowerCallPattern {
     types: CommonTypes,
 }
 
-impl RewritePattern for LowerCallPattern {
+impl OpRewritePattern for LowerCallPattern {
+    type Op = ability::Call;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        call: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if ability::Call::from_op(ctx, op).is_err() {
-            return false;
-        }
-
+        let op = call.op_ref();
         let location = ctx.op(op).location;
         let ability = ctx.op_attrs(op).get_symbol_ref("ability").cloned().unwrap();
         let op_name = ctx.op_attrs(op).get_string_ref("op_name").unwrap();

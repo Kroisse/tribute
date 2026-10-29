@@ -21,7 +21,7 @@ use trunk_ir::ops::DialectOp;
 use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{OpRef, RegionRef};
 use trunk_ir::rewrite::{
-    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    Module, OpRewritePattern, PatternApplicator, PatternRewriter, TypeConverter,
 };
 use trunk_ir::types::Attribute;
 
@@ -254,17 +254,16 @@ impl<'a> StringConstPattern<'a> {
     }
 }
 
-impl RewritePattern for StringConstPattern<'_> {
+impl OpRewritePattern for StringConstPattern<'_> {
+    type Op = adt::StringConst;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        string_const: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(string_const) = adt::StringConst::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = string_const.op_ref();
         let content = string_const.value(ctx).as_bytes();
         let Some((data_idx, len)) = lookup_segment(self.segments, content) else {
             return false;
@@ -310,17 +309,16 @@ impl<'a> BytesConstPattern<'a> {
     }
 }
 
-impl RewritePattern for BytesConstPattern<'_> {
+impl OpRewritePattern for BytesConstPattern<'_> {
+    type Op = adt::BytesConst;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        bytes_const: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(bytes_const) = adt::BytesConst::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = bytes_const.op_ref();
         let b = bytes_const.value(ctx);
         let content: Vec<u8> = b.to_vec();
 
@@ -566,11 +564,16 @@ mod tests {
         );
 
         assert_eq!(
-            StringConstPattern::new(&DataSegments::default(), None).name(),
+            trunk_ir::rewrite::RewritePattern::name(&StringConstPattern::new(
+                &DataSegments::default(),
+                None
+            )),
             "StringConstPattern"
         );
         assert_eq!(
-            BytesConstPattern::new(&DataSegments::default()).name(),
+            trunk_ir::rewrite::RewritePattern::name(&BytesConstPattern::new(
+                &DataSegments::default()
+            )),
             "BytesConstPattern"
         );
     }

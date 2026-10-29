@@ -9,9 +9,8 @@ use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::{Pass, PassRunResult};
-use trunk_ir::refs::OpRef;
 use trunk_ir::rewrite::{
-    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    Module, OpRewritePattern, PatternApplicator, PatternRewriter, TypeConverter,
 };
 use trunk_ir::{Symbol, SymbolPath};
 
@@ -101,16 +100,16 @@ struct PrependCallPattern<'a> {
     intrinsic_declarations: &'a IntrinsicDeclarations,
 }
 
-impl RewritePattern for PrependCallPattern<'_> {
+impl OpRewritePattern for PrependCallPattern<'_> {
+    type Op = func::Call;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        call: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(call) = func::Call::from_op(ctx, op) else {
-            return false;
-        };
+        let op = call.op_ref();
         let callee = call.callee(ctx);
         let Some(base_declaration) = intrinsic_declaration(callee) else {
             return false;
@@ -145,16 +144,15 @@ struct PrependDeclarationPattern<'a> {
     intrinsic_declarations: &'a IntrinsicDeclarations,
 }
 
-impl RewritePattern for PrependDeclarationPattern<'_> {
+impl OpRewritePattern for PrependDeclarationPattern<'_> {
+    type Op = func::Func;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        function: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(function) = func::Func::from_op(ctx, op) else {
-            return false;
-        };
         if !self
             .intrinsic_declarations
             .eligible

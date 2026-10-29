@@ -23,7 +23,7 @@ use trunk_ir::dialect::{clif, core};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
-    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    Module, OpRewritePattern, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::{Attribute, TypeDataBuilder};
@@ -160,16 +160,16 @@ struct ConventionTablePattern {
     tables: HashMap<Vec<SymbolPath>, Symbol>,
 }
 
-impl RewritePattern for ConventionTablePattern {
+impl OpRewritePattern for ConventionTablePattern {
+    type Op = tribute_rt::ConventionTable;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        table: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(table) = tribute_rt::ConventionTable::from_op(ctx, op) else {
-            return false;
-        };
+        let op = table.op_ref();
         let entries: Vec<_> = table.entries(ctx).cloned().collect();
         let symbol = self.tables[&entries].clone();
         let ptr_ty = core::Ptr::params().intern(ctx).as_type_ref();
@@ -185,16 +185,16 @@ impl RewritePattern for ConventionTablePattern {
 /// Pattern: `tribute_rt.convention_entry` → a load of the entry's address.
 struct ConventionEntryPattern;
 
-impl RewritePattern for ConventionEntryPattern {
+impl OpRewritePattern for ConventionEntryPattern {
+    type Op = tribute_rt::ConventionEntry;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        entry: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(entry) = tribute_rt::ConventionEntry::from_op(ctx, op) else {
-            return false;
-        };
+        let op = entry.op_ref();
         let offset = entry.index(ctx) * POINTER_SIZE;
         let table = entry.table(ctx);
         let i64_ty = TypeDataBuilder::new("core.i64").intern(ctx);

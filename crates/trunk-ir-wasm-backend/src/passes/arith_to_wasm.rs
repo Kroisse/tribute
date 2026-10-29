@@ -21,7 +21,7 @@ use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
-    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    Module, OpRewritePattern, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::types::Attribute;
 
@@ -174,16 +174,16 @@ fn index_cast_signedness(ctx: &IrContext, op: OpRef) -> Option<bool> {
 /// Nil has no Wasm representation; its value is a placeholder.
 struct NilValuePattern;
 
-impl RewritePattern for NilValuePattern {
+impl OpRewritePattern for NilValuePattern {
+    type Op = core::NilValue;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        nil_value: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if !core::NilValue::matches(ctx, op) {
-            return false;
-        }
+        let op = nil_value.op_ref();
         let result_ty = ctx.op_result_types(op)[0];
         let loc = ctx.op(op).location;
         let nop = wasm_dialect::Nop::operands()
@@ -197,17 +197,16 @@ impl RewritePattern for NilValuePattern {
 /// Pattern for `arith.const` -> `wasm.{type}_const`
 struct ArithConstPattern;
 
-impl RewritePattern for ArithConstPattern {
+impl OpRewritePattern for ArithConstPattern {
+    type Op = arith::Const;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        const_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(_const_op) = arith::Const::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = const_op.op_ref();
         let result_types = ctx.op_result_types(op);
         let Some(&result_ty) = result_types.first() else {
             return false;
@@ -218,7 +217,7 @@ impl RewritePattern for ArithConstPattern {
         };
 
         let loc = ctx.op(op).location;
-        let value = _const_op.value(ctx);
+        let value = const_op.value(ctx);
 
         let new_op_ref = match type_name {
             "i32" => match value {

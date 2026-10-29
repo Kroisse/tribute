@@ -118,8 +118,10 @@ and applies only when that operation's dynamic rule returns `Legal`.
 ## Pattern Rewriting
 
 Patterns match one operation family and mutate through `PatternRewriter`.
-`PatternApplicator` walks nested regions and applies patterns to a fixpoint. Its
-conversion target controls legality-aware rewriting and final verification.
+`PatternApplicator` applies patterns to a fixpoint: it sweeps every operation in
+the scope once, then offers only the operations a rewrite may have enabled a
+pattern on, until a round changes nothing. Its conversion target controls
+legality-aware rewriting and final verification.
 Type adaptation is enabled separately when a pass needs it.
 
 Rules:
@@ -128,6 +130,15 @@ Rules:
   driver. Output the driver reads back, such as a count, never decides a later
   rewrite. A pattern does not cache IR facts between matches; later rewrites
   make them stale.
+- A pattern changes attached IR only through `PatternRewriter`. The applicator
+  revisits the operations those changes touch, the users of replaced values,
+  the definers of operands, and the ancestors of the rewritten operation; a
+  change made directly on attached IR is not revisited. Debug builds check at
+  the fixpoint that no pattern still matches.
+- A pattern that matches only some operation names declares them as its
+  roots; the applicator offers it only those operations, in the order the
+  patterns were added. A pattern for one operation names its typed wrapper,
+  which is its only root.
 - Prefer focused patterns over large manual tree walks.
 - Use explicit partial or full conversion entry points when legality matters.
 - Keep exact API behavior in Rustdoc near `ConversionTarget`,

@@ -19,8 +19,8 @@ use trunk_ir::dialect::core::{self, FloatLike, IntegerLike};
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
-    ConversionError, ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern,
-    TypeConverter,
+    ConversionError, ConversionTarget, Module, OpRewritePattern, PatternApplicator,
+    PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
@@ -73,16 +73,16 @@ fn type_category(ctx: &IrContext, ty: TypeRef) -> Option<&'static str> {
 /// projected away at calls and returns.
 struct NilValuePattern;
 
-impl RewritePattern for NilValuePattern {
+impl OpRewritePattern for NilValuePattern {
+    type Op = core::NilValue;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        nil_value: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if !core::NilValue::matches(ctx, op) {
-            return false;
-        }
+        let op = nil_value.op_ref();
         let Some(result_ty) = rewriter.result_type(ctx, op, 0) else {
             return false;
         };
@@ -98,17 +98,16 @@ impl RewritePattern for NilValuePattern {
 
 struct ArithConstPattern;
 
-impl RewritePattern for ArithConstPattern {
+impl OpRewritePattern for ArithConstPattern {
+    type Op = arith::Const;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        const_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(const_op) = arith::Const::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = const_op.op_ref();
         let result_types = ctx.op_result_types(op);
         let Some(&raw_result_ty) = result_types.first() else {
             return false;

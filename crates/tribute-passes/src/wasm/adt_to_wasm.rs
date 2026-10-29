@@ -61,10 +61,10 @@ use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core::{self, IntegerLike};
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::dialect::wasm_gc as wasm_gc_dialect;
-use trunk_ir::ops::{DialectOp, DialectType};
+use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
-    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    Module, OpRewritePattern, PatternApplicator, PatternRewriter, TypeConverter,
 };
 use trunk_ir::types::TypeDataBuilder;
 
@@ -173,17 +173,16 @@ struct StructNewPattern {
     numbers: DescriptorNumbers,
 }
 
-impl RewritePattern for StructNewPattern {
+impl OpRewritePattern for StructNewPattern {
+    type Op = adt::StructNew;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        struct_new: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(struct_new) = adt::StructNew::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = struct_new.op_ref();
         let loc = ctx.op(op).location;
         let struct_ty = struct_new.r#type(ctx);
         let mut fields: Vec<_> = struct_new.fields(ctx).to_vec();
@@ -215,17 +214,16 @@ impl RewritePattern for StructNewPattern {
 /// is handled by the emit stage in `struct_handlers.rs`, not here.
 struct StructGetPattern;
 
-impl RewritePattern for StructGetPattern {
+impl OpRewritePattern for StructGetPattern {
+    type Op = adt::StructGet;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        struct_get: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(struct_get) = adt::StructGet::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = struct_get.op_ref();
         let loc = ctx.op(op).location;
         let ref_val = struct_get.r#ref(ctx);
         let Some(result_ty) = rewriter.result_type(ctx, op, 0) else {
@@ -248,17 +246,16 @@ impl RewritePattern for StructGetPattern {
 /// Pattern for `adt.struct_set` -> `wasm.struct_set`
 struct StructSetPattern;
 
-impl RewritePattern for StructSetPattern {
+impl OpRewritePattern for StructSetPattern {
+    type Op = adt::StructSet;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        struct_set: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(struct_set) = adt::StructSet::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = struct_set.op_ref();
         let loc = ctx.op(op).location;
         let ref_val = struct_set.r#ref(ctx);
         let value = struct_set.value(ctx);
@@ -284,17 +281,16 @@ struct VariantNewPattern {
     numbers: DescriptorNumbers,
 }
 
-impl RewritePattern for VariantNewPattern {
+impl OpRewritePattern for VariantNewPattern {
+    type Op = adt::VariantNew;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        variant_new: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(variant_new) = adt::VariantNew::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = variant_new.op_ref();
         let loc = ctx.op(op).location;
         let tag_sym = variant_new.tag_ref(ctx);
         let Some(base_type) = canonical_enum_type(ctx, variant_new.r#type(ctx)) else {
@@ -330,17 +326,16 @@ struct VariantIsPattern {
     numbers: DescriptorNumbers,
 }
 
-impl RewritePattern for VariantIsPattern {
+impl OpRewritePattern for VariantIsPattern {
+    type Op = adt::VariantIs;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        variant_is: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(variant_is) = adt::VariantIs::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = variant_is.op_ref();
         let loc = ctx.op(op).location;
         let tag = variant_is.tag_ref(ctx);
         let ref_val = variant_is.r#ref(ctx);
@@ -390,17 +385,16 @@ impl RewritePattern for VariantIsPattern {
 /// Casts a variant reference to a specific variant type after pattern matching.
 struct VariantCastPattern;
 
-impl RewritePattern for VariantCastPattern {
+impl OpRewritePattern for VariantCastPattern {
+    type Op = adt::VariantCast;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        variant_cast: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(variant_cast) = adt::VariantCast::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = variant_cast.op_ref();
         let loc = ctx.op(op).location;
         let tag = variant_cast.tag_ref(ctx);
         let ref_val = variant_cast.r#ref(ctx);
@@ -429,17 +423,16 @@ impl RewritePattern for VariantCastPattern {
 /// The type for struct.get comes from the operand (the variant_cast result).
 struct VariantGetPattern;
 
-impl RewritePattern for VariantGetPattern {
+impl OpRewritePattern for VariantGetPattern {
+    type Op = adt::VariantGet;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        variant_get: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(variant_get) = adt::VariantGet::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = variant_get.op_ref();
         let loc = ctx.op(op).location;
         let ref_val = variant_get.r#ref(ctx);
         let field_idx = variant_get.field(ctx);
@@ -499,17 +492,16 @@ impl RewritePattern for VariantGetPattern {
 /// Pattern for `adt.array_new` -> `wasm.array_new`
 struct ArrayNewPattern;
 
-impl RewritePattern for ArrayNewPattern {
+impl OpRewritePattern for ArrayNewPattern {
+    type Op = adt::ArrayNew;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        array_new: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(array_new) = adt::ArrayNew::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = array_new.op_ref();
         let loc = ctx.op(op).location;
         let length = wasm_index(ctx, rewriter, array_new.length(ctx), loc);
         let array_ty = gc_array_type(ctx, array_new.r#type(ctx));
@@ -525,17 +517,16 @@ impl RewritePattern for ArrayNewPattern {
 /// Pattern for `adt.array_of` -> `wasm.array_new_fixed`
 struct ArrayOfPattern;
 
-impl RewritePattern for ArrayOfPattern {
+impl OpRewritePattern for ArrayOfPattern {
+    type Op = adt::ArrayOf;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        array_of: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(array_of) = adt::ArrayOf::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = array_of.op_ref();
         let loc = ctx.op(op).location;
         let array_ty = gc_array_type(ctx, array_of.r#type(ctx));
         let mut elements = array_of.elements(ctx).to_vec();
@@ -559,17 +550,16 @@ impl RewritePattern for ArrayOfPattern {
 /// empty or holds a `source` element, so `source[0]` fills it.
 struct ArraySplicePattern;
 
-impl RewritePattern for ArraySplicePattern {
+impl OpRewritePattern for ArraySplicePattern {
+    type Op = adt::ArraySplice;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        splice: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(splice) = adt::ArraySplice::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = splice.op_ref();
         let loc = ctx.op(op).location;
         let array_ty = gc_array_type(ctx, splice.r#type(ctx));
         let source = gc_array_operand(ctx, rewriter, splice.source(ctx), loc);
@@ -749,17 +739,16 @@ fn array_read(
 /// Pattern for `adt.array_get` -> `wasm.array_get`
 struct ArrayGetPattern;
 
-impl RewritePattern for ArrayGetPattern {
+impl OpRewritePattern for ArrayGetPattern {
+    type Op = adt::ArrayGet;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        array_get: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(array_get) = adt::ArrayGet::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = array_get.op_ref();
         let loc = ctx.op(op).location;
         let ref_val = gc_array_operand(ctx, rewriter, array_get.r#ref(ctx), loc);
         let index = wasm_index(ctx, rewriter, array_get.index(ctx), loc);
@@ -826,17 +815,16 @@ fn gc_element_operand(
 /// Pattern for `adt.array_set` -> `wasm.array_set`
 struct ArraySetPattern;
 
-impl RewritePattern for ArraySetPattern {
+impl OpRewritePattern for ArraySetPattern {
+    type Op = adt::ArraySet;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        array_set: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(array_set) = adt::ArraySet::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = array_set.op_ref();
         let loc = ctx.op(op).location;
         let ref_val = gc_array_operand(ctx, rewriter, array_set.r#ref(ctx), loc);
         let index = wasm_index(ctx, rewriter, array_set.index(ctx), loc);
@@ -853,17 +841,16 @@ impl RewritePattern for ArraySetPattern {
 /// Pattern for `adt.array_len` -> `wasm.array_len`
 struct ArrayLenPattern;
 
-impl RewritePattern for ArrayLenPattern {
+impl OpRewritePattern for ArrayLenPattern {
+    type Op = adt::ArrayLen;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        array_len: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(array_len) = adt::ArrayLen::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = array_len.op_ref();
         let loc = ctx.op(op).location;
         let ref_val = gc_array_operand(ctx, rewriter, array_len.r#ref(ctx), loc);
         let result_ty = array_len.result_ty(ctx);
@@ -897,17 +884,16 @@ fn wasm_index(
 /// Pattern for `adt.ref_null` -> `wasm.ref_null`
 struct RefNullPattern;
 
-impl RewritePattern for RefNullPattern {
+impl OpRewritePattern for RefNullPattern {
+    type Op = adt::RefNull;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        ref_null: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(ref_null) = adt::RefNull::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = ref_null.op_ref();
         let loc = ctx.op(op).location;
         let result_ty = ref_null.result_ty(ctx);
 
@@ -925,17 +911,16 @@ impl RewritePattern for RefNullPattern {
 /// Pattern for `adt.ref_is_null` -> `wasm.ref_is_null`
 struct RefIsNullPattern;
 
-impl RewritePattern for RefIsNullPattern {
+impl OpRewritePattern for RefIsNullPattern {
+    type Op = adt::RefIsNull;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        ref_is_null: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(ref_is_null) = adt::RefIsNull::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = ref_is_null.op_ref();
         let loc = ctx.op(op).location;
         let ref_val = ref_is_null.r#ref(ctx);
         let result_ty = ref_is_null.result_ty(ctx);
@@ -951,17 +936,16 @@ impl RewritePattern for RefIsNullPattern {
 /// Pattern for `adt.ref_cast` -> `wasm.ref_cast`
 struct RefCastPattern;
 
-impl RewritePattern for RefCastPattern {
+impl OpRewritePattern for RefCastPattern {
+    type Op = adt::RefCast;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        ref_cast: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(ref_cast) = adt::RefCast::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = ref_cast.op_ref();
         let loc = ctx.op(op).location;
         let ref_val = ref_cast.r#ref(ctx);
         let result_ty = ref_cast.result_ty(ctx);
@@ -982,6 +966,7 @@ impl RewritePattern for RefCastPattern {
 mod tests {
     use super::*;
     use trunk_ir::dialect::wasm;
+    use trunk_ir::ops::DialectOp;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir_wasm_backend::gc_types::FIRST_USER_TYPE_IDX;
 

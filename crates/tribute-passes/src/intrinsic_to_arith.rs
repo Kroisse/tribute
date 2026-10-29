@@ -18,7 +18,7 @@ use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
-    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    Module, OpRewritePattern, PatternApplicator, PatternRewriter, TypeConverter,
 };
 use trunk_ir::symbol_table::SymbolTable;
 use trunk_ir::types::{Attribute, Location};
@@ -242,16 +242,16 @@ struct ArithIntrinsicPattern<'a> {
     eligible: &'a HashSet<SymbolPath>,
 }
 
-impl RewritePattern for ArithIntrinsicPattern<'_> {
+impl OpRewritePattern for ArithIntrinsicPattern<'_> {
+    type Op = func::Call;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        call_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(call_op) = func::Call::from_op(ctx, op) else {
-            return false;
-        };
+        let op = call_op.op_ref();
         let callee = call_op.callee(ctx);
 
         if !self.eligible.contains(callee) {
@@ -300,17 +300,16 @@ struct ArithIntrinsicFuncDeclPattern<'a> {
     eligible: &'a HashSet<SymbolPath>,
 }
 
-impl RewritePattern for ArithIntrinsicFuncDeclPattern<'_> {
+impl OpRewritePattern for ArithIntrinsicFuncDeclPattern<'_> {
+    type Op = func::Func;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        func_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(func_op) = func::Func::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = func_op.op_ref();
         // Check if this is one of our known arithmetic intrinsics
         let sym_name = Symbol::new(func_op.sym_name(ctx));
         if !self.eligible.contains(&SymbolPath::new([sym_name.clone()])) {

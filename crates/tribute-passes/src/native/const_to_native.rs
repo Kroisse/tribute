@@ -28,8 +28,8 @@ use trunk_ir::dialect::core;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
-    ConversionError, ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern,
-    TypeConverter,
+    ConversionError, ConversionTarget, Module, OpRewritePattern, PatternApplicator,
+    PatternRewriter, TypeConverter,
 };
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
@@ -370,17 +370,16 @@ struct BytesConstNativePattern {
     i32_ty: TypeRef,
 }
 
-impl RewritePattern for BytesConstNativePattern {
+impl OpRewritePattern for BytesConstNativePattern {
+    type Op = adt::BytesConst;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        bytes_const: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(bytes_const) = adt::BytesConst::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = bytes_const.op_ref();
         let content: Vec<u8> = bytes_const.value(ctx).to_vec();
 
         let Some(data_sym) = self.content_to_symbol.get(&content).cloned() else {
@@ -426,17 +425,16 @@ struct StringConstNativePattern {
     string_enum_ty: Option<TypeRef>,
 }
 
-impl RewritePattern for StringConstNativePattern {
+impl OpRewritePattern for StringConstNativePattern {
+    type Op = adt::StringConst;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        string_const: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(string_const) = adt::StringConst::from_op(ctx, op) else {
-            return false;
-        };
-
+        let op = string_const.op_ref();
         let content = string_const.value(ctx).as_bytes();
         let content_len = content.len() as u64;
         let Some(data_sym) = self.content_to_symbol.get(content).cloned() else {

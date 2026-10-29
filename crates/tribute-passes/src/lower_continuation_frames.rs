@@ -21,9 +21,9 @@ use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::{Pass, PassRunResult};
-use trunk_ir::refs::{BlockRef, OpRef, TypeRef};
+use trunk_ir::refs::{BlockRef, TypeRef};
 use trunk_ir::rewrite::{
-    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    Module, OpRewritePattern, PatternApplicator, PatternRewriter, TypeConverter,
 };
 use trunk_ir::types::TypeDataBuilder;
 use trunk_ir::walk::{WalkAction, walk_op};
@@ -105,16 +105,16 @@ pub fn lower_continuation_frames(
 /// already a layout; building the delimiter is the target ABI boundary's.
 struct LowerDelimits;
 
-impl RewritePattern for LowerDelimits {
+impl OpRewritePattern for LowerDelimits {
+    type Op = ability::Delimit;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        delimit: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(delimit) = ability::Delimit::from_op(ctx, op) else {
-            return false;
-        };
+        let op = delimit.op_ref();
         let lowered = effect::Delimit::operands(delimit.body(ctx), delimit.evidence(ctx))
             .build(ctx, ctx.op(op).location);
         rewriter.replace_op(lowered.op_ref());
