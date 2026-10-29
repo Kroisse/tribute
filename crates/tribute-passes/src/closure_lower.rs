@@ -139,9 +139,7 @@ impl OpRewritePattern for LowerClosureNewArena<'_> {
                 .resolve(ctx, op, entry)
                 .is_some_and(|target| func::Func::matches(ctx, target))
         });
-        if !resolved {
-            return None;
-        }
+        rewriter.ensure(resolved, "an entry does not name a function")?;
         let captures = closure_new.captures(ctx).to_vec();
         let result_ty = ctx.op_result_types(op)[0];
 
@@ -245,9 +243,7 @@ impl OpRewritePattern for LowerClosureCallArena {
     ) -> Option<()> {
         let op = call_indirect.op_ref();
         let operands = ctx.op_operands(op);
-        if operands.is_empty() {
-            return None;
-        }
+        rewriter.ensure(!operands.is_empty(), "closure call has no callee operand")?;
         let callee = operands[0];
         // Only a closure carries an environment; a `func.func_sig` callee
         // is a plain function pointer.
@@ -261,9 +257,10 @@ impl OpRewritePattern for LowerClosureCallArena {
 
         let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
         let convention = DynConventionBearing::of(ctx, op)?;
-        if caller_results.len() != usize::from(convention != CallingConvention::Cps) {
-            return None;
-        }
+        rewriter.ensure(
+            caller_results.len() == usize::from(convention != CallingConvention::Cps),
+            "caller result count does not fit the convention",
+        )?;
         let contract =
             exact_physical_call_contract(ctx, op, callee, convention, &args, &caller_results)?;
 

@@ -496,16 +496,14 @@ impl OpRewritePattern for FuncCallIndirectPattern {
         // Arguments other patterns have not converted yet are compared by
         // their target types.
         let type_converter = rewriter.type_converter();
-        if crate::emit::helpers::exact_call_indirect_signature_with_results(
+        if let Err(error) = crate::emit::helpers::exact_call_indirect_signature_with_results(
             ctx,
             op,
             signature,
             &result_types,
             &|ty| type_converter.convert_type_or_identity(ctx, ty),
-        )
-        .is_err()
-        {
-            return None;
+        ) {
+            return rewriter.no_match(error.to_string());
         }
         let new_op = wasm_dialect::CallIndirect::operands(all_operands)
             .type_idx(0)
@@ -602,23 +600,22 @@ impl OpRewritePattern for FuncTailCallIndirectPattern {
         // Arguments other patterns have not converted yet are compared by
         // their target types.
         let type_converter = rewriter.type_converter();
-        if crate::emit::helpers::exact_return_call_indirect_signature_with(
+        if let Err(error) = crate::emit::helpers::exact_return_call_indirect_signature_with(
             ctx,
             op,
             signature,
             &|ty| type_converter.convert_type_or_identity(ctx, ty),
-        )
-        .is_err()
-        {
-            return None;
+        ) {
+            return rewriter.no_match(error.to_string());
         }
 
         let operands = std::iter::once(tail.callee(ctx))
             .chain(CallLike::call_args(&tail, ctx).iter().copied())
             .collect::<Vec<_>>();
-        if !TailCallLike::is_resultless(&tail, ctx) {
-            return None;
-        }
+        rewriter.ensure(
+            TailCallLike::is_resultless(&tail, ctx),
+            "tail call has results",
+        )?;
 
         let loc = ctx.op(op).location;
         let new_op = wasm_dialect::ReturnCallIndirect::operands(operands)

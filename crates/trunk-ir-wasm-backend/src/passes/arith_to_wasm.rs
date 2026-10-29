@@ -323,17 +323,17 @@ impl RewritePattern for ArithBinOpPattern {
         let loc = ctx.op(op).location;
         let name = data.name;
         // Division reads the unspecified upper bits of a narrow integer.
-        if is_narrow(ctx, result_ty)
-            && [
-                arith::Divsi::NAME,
-                arith::Divui::NAME,
-                arith::Remsi::NAME,
-                arith::Remui::NAME,
-            ]
-            .contains(&name)
-        {
-            return None;
-        }
+        rewriter.ensure(
+            !(is_narrow(ctx, result_ty)
+                && [
+                    arith::Divsi::NAME,
+                    arith::Divui::NAME,
+                    arith::Remsi::NAME,
+                    arith::Remui::NAME,
+                ]
+                .contains(&name)),
+            "division of a narrow integer is not lowered",
+        )?;
 
         let new_op = if name == arith::Addi::NAME {
             match suffix {
@@ -504,9 +504,10 @@ impl RewritePattern for ArithCmpPattern {
 
         if let Ok(cmpi) = arith::Cmpi::from_op(ctx, op) {
             // Comparison reads the unspecified upper bits of a narrow integer.
-            if is_narrow(ctx, ctx.value_ty(lhs)) {
-                return None;
-            }
+            rewriter.ensure(
+                !is_narrow(ctx, ctx.value_ty(lhs)),
+                "comparison of a narrow integer is not lowered",
+            )?;
             let predicate = cmpi.predicate(ctx);
             let suffix = type_suffix(ctx, ctx.value_ty(lhs))?;
 
@@ -791,9 +792,10 @@ impl RewritePattern for ArithBitwisePattern {
         };
         // A right shift moves the unspecified upper bits of a narrow integer
         // into the result.
-        if is_narrow(ctx, result_ty) && (name == arith::Shr::NAME || name == arith::Shru::NAME) {
-            return None;
-        }
+        rewriter.ensure(
+            !(is_narrow(ctx, result_ty) && (name == arith::Shr::NAME || name == arith::Shru::NAME)),
+            "right shift of a narrow integer is not lowered",
+        )?;
         let suffix = type_suffix(ctx, result_ty)?;
         let loc = ctx.op(op).location;
 
@@ -914,9 +916,10 @@ impl RewritePattern for ArithConversionPattern {
         let exact = |ctx: &IrContext, ty| {
             IntegerLike::width(ctx, ty).is_none_or(|width| matches!(width, 32 | 64))
         };
-        if !exact(ctx, src_ty) || !exact(ctx, dst_ty) {
-            return None;
-        }
+        rewriter.ensure(
+            exact(ctx, src_ty) && exact(ctx, dst_ty),
+            "conversion width is neither 32 nor 64 bits",
+        )?;
         let (Some(src), Some(dst)) = (type_suffix(ctx, src_ty), type_suffix(ctx, dst_ty)) else {
             return None;
         };

@@ -82,13 +82,12 @@ impl OpRewritePattern for LowerHandleDispatchPattern {
         // argument. The final delimiter is resultless, so exhausting it is
         // a structural splice only: no carrier inspection and no returned
         // control value are involved.
-        if ctx
-            .block_args(*body_block)
-            .iter()
-            .any(|arg| !ctx.uses(*arg).is_empty())
-        {
-            return None;
-        }
+        rewriter.ensure(
+            ctx.block_args(*body_block)
+                .iter()
+                .all(|arg| ctx.uses(*arg).is_empty()),
+            "body block arguments are still used",
+        )?;
         let body_ops = ctx.block(*body_block).ops.clone();
         for body_op in body_ops {
             ctx.detach_op(body_op);

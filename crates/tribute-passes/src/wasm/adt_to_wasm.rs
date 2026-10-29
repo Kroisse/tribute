@@ -435,23 +435,25 @@ impl OpRewritePattern for VariantGetPattern {
         let declared_is_bytes = has_runtime_layout(ctx, declared_field_ty, runtime_layout::BYTES);
         let is_bytes_anyref_erasure =
             declared_is_bytes && wasm_dialect::Anyref::matches(ctx, requested_result_ty);
-        if requested_result_ty != declared_field_ty && !is_bytes_anyref_erasure {
-            return None;
-        }
+        rewriter.ensure(
+            requested_result_ty == declared_field_ty || is_bytes_anyref_erasure,
+            "result type differs from the declared field type",
+        )?;
         let result_ty = declared_field_ty;
         let variant_type = variant_type(ctx, enum_type, tag)?;
         // An operand that already has a struct type is a cast to this
         // variant's layout; a logical reference must name this enum.
         let operand_ty = ctx.value_ty(ref_val);
-        if wasm_gc_dialect::Struct::matches(ctx, operand_ty) && operand_ty != variant_type {
-            return None;
-        }
+        rewriter.ensure(
+            !(wasm_gc_dialect::Struct::matches(ctx, operand_ty) && operand_ty != variant_type),
+            "operand is another variant's struct",
+        )?;
         let operand_data = ctx.get_type(operand_ty);
-        if operand_data.name == tribute_ir::dialect::adt::Typeref::NAME
-            && canonical_typeref_enum_type(ctx, operand_ty) != Some(enum_type)
-        {
-            return None;
-        }
+        rewriter.ensure(
+            !(operand_data.name == tribute_ir::dialect::adt::Typeref::NAME
+                && canonical_typeref_enum_type(ctx, operand_ty) != Some(enum_type)),
+            "operand typeref names another enum",
+        )?;
 
         // The variant's fields follow its descriptor field.
         let new_op = wasm_gc_dialect::StructGet::operands(ref_val)
