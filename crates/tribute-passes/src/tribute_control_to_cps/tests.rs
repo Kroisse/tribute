@@ -2645,4 +2645,7 @@ fn a_lambda_with_two_bodies_lifts_an_entry_per_body() {
         "a body fills the Direct and Cps slots: {entries:?}\n{lifted}"
     );
     assert_eq!(ctx.op_operands(new.op_ref()).len(), 1, "{lifted}");
+    crate::closure_lower::lower_prepared_closures(&mut ctx, module).unwrap();
+    let lowered = print_module(&ctx, module.op());
+    assert!(!lowered.contains("closure.new"), "{lowered}");
 }
