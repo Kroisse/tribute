@@ -1103,9 +1103,10 @@ trip한다. Callable type에는 convention을 쓰지 않는다. 출력기는 bod
 추론하지 않는다.
 
 `tribute_control.lambda`는 본문 하나를 가진다. `tribute_cps.lambda`는
-`captures [...]` 뒤에 `entries`와 entry 목록을 쓰며, 본문을 가진 entry는 convention
-keyword 뒤에 본문을 쓴다. 더 약한 본문을 adapter로 부르는 entry는
-`cps = direct`처럼 그 본문의 class를 적고 본문이 없다. Trap entry는 쓰지 않는다.
+`captures [...]` 뒤에 `entries`와 본문 목록을 쓰며, 본문마다 convention keyword 뒤에
+본문을 쓴다. 본문은 convention 순서이고 convention마다 많아야 하나다. Adapter와
+trap entry는 쓰지 않는다. 본문이 없는 convention entry는 legalization이
+[채우기](#convention-entry) 규칙으로 정한다.
 
 ```text
 tribute_cps.func @f(%x: T) -> R convention(cps)
@@ -1127,7 +1128,6 @@ tribute_cps.func @decl(%x: T) -> R convention(direct)
   evidence_direct {
     ...
   }
-  cps = evidence_direct
 }
 ```
 

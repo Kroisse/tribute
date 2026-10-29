@@ -64,6 +64,13 @@ mod test_typed {
 
         fn marker() -> Value<_> {}
 
+        fn arms(scrutinee: Value<_>) {
+            #[region(default)]
+            {}
+            #[regions(cases)]
+            {}
+        }
+
         fn jump(args: Variadic<_>) {
             #[successor(dest)]
             {}
@@ -382,6 +389,19 @@ fn fluent_builders_group_inputs_by_kind() {
         .results(i1_ty)
         .build(&mut ctx, loc);
 
+    let default = empty_region(&mut ctx, loc);
+    let cases = [empty_region(&mut ctx, loc), empty_region(&mut ctx, loc)];
+    let arms = test_typed::Arms::operands(a)
+        .regions(default, cases)
+        .build(&mut ctx, loc);
+    assert_eq!(arms.default(&ctx), default);
+    assert!(arms.cases(&ctx).eq(cases));
+    let only_default = empty_region(&mut ctx, loc);
+    let no_cases = test_typed::Arms::operands(a)
+        .regions(only_default, [])
+        .build(&mut ctx, loc);
+    assert_eq!(no_cases.cases(&ctx).count(), 0);
+
     let dest = ctx.create_block(BlockData {
         location: loc,
         args: Vec::new(),
@@ -401,6 +421,8 @@ fn fluent_builders_group_inputs_by_kind() {
         declared.op_ref(),
         labeled.op_ref(),
         marker.op_ref(),
+        arms.op_ref(),
+        no_cases.op_ref(),
         jump.op_ref(),
     ] {
         let def = crate::op_def::OpDef::of(&ctx, op).expect("typed ops are registered");

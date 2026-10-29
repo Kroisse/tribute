@@ -26,6 +26,10 @@ use crate::dialect::tribute_control::{
 /// The attribute that holds a `tribute_cps` operation's convention.
 pub const CONVENTION_ATTR: &str = "convention";
 
+/// The attribute that holds the conventions of a `tribute_cps.lambda`'s
+/// bodies, in body order.
+pub const CONVENTIONS_ATTR: &str = "conventions";
+
 #[trunk_ir::dialect]
 mod tribute_cps {
     /// A named source function instance with its convention.
@@ -65,38 +69,45 @@ mod tribute_cps {
         {}
     }
 
-    /// A source lambda with its convention entry.
+    /// A source lambda with a body per convention entry its uses select.
     ///
     /// ```text
     /// %f = tribute_cps.lambda(%x: T) -> R captures [%capture0, ...] entries {
-    ///   cps {
+    ///   direct {
     ///     ...
     ///     tribute_control.return %value
+    ///   }
+    ///   cps {
+    ///     ...
     ///   }
     /// }
     /// ```
     ///
     /// - **Shape:** `tribute_control.lambda` with a required
-    ///   `convention: String`. The body is the convention entry of that
-    ///   convention, written under its keyword in `entries`.
-    /// - **Meaning:** the lambda of one class vector of its uses, whose body
-    ///   reads the row of each binder with the class its uses pass
-    ///   (`new-plans/ir.md`, "Convention entry"). Calling the value with its
-    ///   convention runs the body.
-    /// - **Verification:** the local verifier checks the convention keyword.
-    ///   Otherwise as `tribute_control.lambda`.
-    /// - **Ownership and value flow:** as `tribute_control.lambda`.
+    ///   `conventions` list and one body region per element, in the same
+    ///   order. Each body takes the source parameters. Each body is written
+    ///   under its convention's keyword in `entries`.
+    /// - **Meaning:** the lambda of one class vector of its uses. Its body of
+    ///   a convention reads the row of each binder with the class its uses of
+    ///   that class pass (`new-plans/ir.md`, "Convention entry"). Calling the
+    ///   value with a convention that has a body runs that body; legalization
+    ///   fills the other convention entries.
+    /// - **Verification:** the verifier checks that the conventions are
+    ///   strictly increasing and that there is a body for each one.
+    ///   Otherwise as `tribute_control.lambda`, for each body.
+    /// - **Ownership and value flow:** as `tribute_control.lambda`; the
+    ///   captures are shared by every body.
     /// - **Location:** the source lambda's span.
     #[verify]
     #[asm_format]
     #[flags(Pure)]
     #[implements(CallableResultOrigin, CallableArgumentOrigin, LocalValidation)]
     fn lambda(
-        convention: Attr<CallingConvention>,
+        conventions: Attr<[CallingConvention]>,
         quantified_rows: Option<Attr<[u32]>>,
         captures: Variadic<_>,
     ) -> Value<impl FuncSig> {
-        #[region(body)]
+        #[regions(bodies)]
         {}
     }
 
@@ -199,9 +210,64 @@ pub fn declared_convention(
     CallingConvention::from_attribute(ctx, ctx.op_attrs(op).get(CONVENTION_ATTR)?)
 }
 
+/// Why a `tribute_cps.lambda`'s conventions do not name its bodies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, derive_more::Display, derive_more::Error)]
+#[display("`conventions` must be strictly increasing, with one body for each")]
+pub struct MalformedBodies;
+
+/// The conventions of a lambda's bodies, when it is a `tribute_cps.lambda`
+/// whose list is well formed, in body order.
+pub fn body_conventions(
+    ctx: &IrContext,
+    op: trunk_ir::refs::OpRef,
+) -> Option<Vec<CallingConvention>> {
+    if !Lambda::matches(ctx, op) {
+        return None;
+    }
+    let trunk_ir::types::Attribute::List(conventions) = ctx.op_attrs(op).get(CONVENTIONS_ATTR)?
+    else {
+        return None;
+    };
+    let conventions = conventions
+        .iter()
+        .map(|convention| CallingConvention::from_attribute(ctx, convention))
+        .collect::<Option<Vec<_>>>()?;
+    (!conventions.is_empty()
+        && conventions.is_sorted_by(|a, b| a < b)
+        && conventions.len() == ctx.op_region_count(op))
+    .then_some(conventions)
+}
+
+/// The convention of the body of `owner`, a callable, that holds `op`: the
+/// convention of a `tribute_cps.func`, or of the `tribute_cps.lambda` body
+/// `op` is in.
+pub fn convention_at(
+    ctx: &IrContext,
+    owner: trunk_ir::refs::OpRef,
+    op: trunk_ir::refs::OpRef,
+) -> Option<CallingConvention> {
+    let Some(conventions) = body_conventions(ctx, owner) else {
+        return declared_convention(ctx, owner);
+    };
+    let mut current = op;
+    let body = loop {
+        let region = ctx
+            .op(current)
+            .parent_block
+            .and_then(|block| ctx.block(block).parent_region)?;
+        let parent = ctx.region(region).parent_op?;
+        if parent == owner {
+            break region;
+        }
+        current = parent;
+    };
+    let index = ctx.op_regions(owner).position(|region| region == body)?;
+    conventions.get(index).copied()
+}
+
 /// Replace `op`, a `tribute_control` func, lambda, func_ref, call_indirect,
 /// or tail_call_indirect, with its operation here, which declares
-/// `convention`. The replacement takes the operation's place, operands,
+/// `convention`; a lambda's one body has that convention. The replacement takes the operation's place, operands,
 /// attributes, and regions, and the uses of its results.
 ///
 /// # Panics
@@ -237,10 +303,15 @@ pub fn replace_control_op(
         ctx.detach_region(region);
         builder = builder.region(region);
     }
-    let builder = builder.attr(
-        CONVENTION_ATTR,
-        <CallingConvention as trunk_ir::attr_kind::AttrKind>::write(ctx, convention),
-    );
+    let convention = <CallingConvention as trunk_ir::attr_kind::AttrKind>::write(ctx, convention);
+    let builder = if name == Lambda::NAME {
+        builder.attr(
+            CONVENTIONS_ATTR,
+            trunk_ir::types::Attribute::List(vec![convention]),
+        )
+    } else {
+        builder.attr(CONVENTION_ATTR, convention)
+    };
     let data = builder.build(ctx);
     let replacement = ctx.create_op(data);
     if let Some(block) = ctx.op(op).parent_block {
@@ -278,7 +349,10 @@ impl trunk_ir::ops::Verify for Func {
 
 impl trunk_ir::ops::Verify for Lambda {
     fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
-        verify_convention(ctx, self.op_ref())
+        match body_conventions(ctx, self.op_ref()) {
+            Some(_) => Ok(()),
+            None => Err(MalformedBodies.into()),
+        }
     }
 }
 
@@ -333,12 +407,12 @@ impl trunk_ir::asm_format::OpAsmFormat for Func {
 
 impl trunk_ir::asm_format::OpAsmFormat for Lambda {
     fn print(&self, h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>) -> std::fmt::Result {
-        match declared_convention(h.ctx(), self.op_ref()) {
-            Some(convention) => tribute_control::print_lambda(
+        match body_conventions(h.ctx(), self.op_ref()) {
+            Some(conventions) => tribute_control::print_lambda(
                 h,
                 self.op_ref(),
                 "tribute_cps.lambda",
-                Some(convention),
+                Some(&conventions),
             ),
             None => h.print_generic(self.op_ref()),
         }

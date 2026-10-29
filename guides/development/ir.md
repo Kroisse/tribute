@@ -137,9 +137,10 @@ where
   `(StringArg, value)` entries.
 - Regions and successors are declared in the body: `#[region(name)] {}`,
   `#[region(name?)] {}` for an optional last region such as the body of an
-  external function, and `#[successor(name)] {}`. `#[successors(name)] {}`
-  declares the rest of the successor list and must come last; its accessor
-  iterates those blocks.
+  external function, and `#[successor(name)] {}`. `#[regions(name)] {}` and
+  `#[successors(name)] {}` declare the rest of the region or successor list
+  and must come last of their kind; their accessors iterate those regions or
+  blocks, and the builder takes them as an iterator.
 - Bounds are Rust types implementing `type_constraint::TypeConstraint`:
   `core` scalar categories (`IntegerLike` for fixed-width integers,
   `IntegerOrIndex` for those and `core.index`, `BoolLike`, `FloatLike`,

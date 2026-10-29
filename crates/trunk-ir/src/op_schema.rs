@@ -39,7 +39,8 @@ pub struct OpSchema {
     pub result_constraint: ValueConstraint,
     /// Declared attributes.
     pub attributes: &'static [AttributeSchema],
-    /// Declared regions in order. Only the last region may be optional.
+    /// Declared regions in order. Only the last region may be optional or
+    /// variadic.
     pub regions: &'static [RegionSchema],
     /// Declared successors in order. Only the last may be variadic.
     pub successors: &'static [SuccessorSchema],
@@ -157,6 +158,8 @@ pub struct RegionSchema {
     /// Whether the region may be absent, e.g. the body of an external
     /// function declaration.
     pub optional: bool,
+    /// Whether this is the rest of the region list.
+    pub variadic: bool,
 }
 
 /// Static description of one declared attribute.
@@ -508,11 +511,12 @@ impl OpSchema {
         let required = self
             .regions
             .iter()
-            .filter(|region| !region.optional)
+            .filter(|region| !region.optional && !region.variadic)
             .count();
+        let variadic = self.regions.iter().any(|region| region.variadic);
         CountRange {
             min: required,
-            max: Some(self.regions.len()),
+            max: (!variadic).then_some(self.regions.len()),
         }
     }
 

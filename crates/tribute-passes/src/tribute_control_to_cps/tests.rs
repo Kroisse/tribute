@@ -507,7 +507,7 @@ fn source_signature_metadata_roundtrips_before_conversion() {
   !outer = tribute_control.func_sig<() -> core.i32, {metadata = [[!inner, @function]]}>
   !lambda = tribute_control.func_sig<() -> core.i32, {metadata = [[!inner, @lambda]]}>
   tribute_cps.func {convention = "direct", sym_name = "outer", type = !outer} {
-    %lambda = tribute_cps.lambda {convention = "direct"} : !lambda {
+    %lambda = tribute_cps.lambda {conventions = ["direct"]} : !lambda {
       %inner = arith.const {value = 1} : core.i32
       tribute_control.return %inner
     }
@@ -2553,6 +2553,33 @@ fn legalization_requires_assigned_conventions() {
         error
             .to_string()
             .contains("class specialization must run before legalization"),
+        "{error}"
+    );
+}
+
+#[test]
+fn legalization_takes_a_lambda_with_one_body() {
+    let (mut ctx, module) = parse(
+        r#"core.module @test {
+  tribute_cps.func @outer(%captured: core.i32, %value: core.i32) -> core.i32 convention(cps) {
+    %lambda = tribute_cps.lambda(%inner: core.i32) -> core.i32 captures [%captured] entries {
+      direct {
+        tribute_control.return %inner
+      }
+      cps {
+        tribute_control.return %captured
+      }
+    }
+    %called = tribute_cps.call_indirect %lambda, %value {convention = "cps"} : core.i32
+    tribute_control.return %called
+  }
+}"#,
+    );
+    let error = tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("legalization takes a tribute_cps.lambda with one body"),
         "{error}"
     );
 }
