@@ -9,7 +9,6 @@
 
 use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
-use std::sync::Arc;
 
 use itertools::Itertools;
 
@@ -64,11 +63,10 @@ pub fn lower(
     // Patterns consume decisions about source operations. They must not
     // query cached source facts after nested operations have been rewritten.
     analyses.invalidate::<StructuredControlAnalysis>(module.op());
-    let plan = Arc::new(plan);
     PatternApplicator::new(type_converter)
-        .add_pattern(ScfIfPattern(plan.clone()))
-        .add_pattern(ScfSwitchPattern(plan.clone()))
-        .add_pattern(ScfLoopPattern(plan))
+        .add_pattern(ScfIfPattern(&plan))
+        .add_pattern(ScfSwitchPattern(&plan))
+        .add_pattern(ScfLoopPattern(&plan))
         .add_pattern(ScfYieldPattern)
         .add_pattern(ScfContinuePattern)
         .add_pattern(ScfBreakPattern)
@@ -369,9 +367,9 @@ fn take_region_ops(ctx: &mut IrContext, region: RegionRef) -> OpList {
 }
 
 /// Pattern for a resultless `scf.switch` -> nested `wasm.if` comparisons.
-struct ScfSwitchPattern(Arc<ScfLoweringPlan>);
+struct ScfSwitchPattern<'a>(&'a ScfLoweringPlan);
 
-impl RewritePattern for ScfSwitchPattern {
+impl RewritePattern for ScfSwitchPattern<'_> {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -470,9 +468,9 @@ impl RewritePattern for ScfSwitchPattern {
 }
 
 /// Pattern for `scf.if` -> `wasm.if`
-struct ScfIfPattern(Arc<ScfLoweringPlan>);
+struct ScfIfPattern<'a>(&'a ScfLoweringPlan);
 
-impl RewritePattern for ScfIfPattern {
+impl RewritePattern for ScfIfPattern<'_> {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -528,9 +526,9 @@ impl RewritePattern for ScfIfPattern {
 /// From inside a `wasm.if` within the loop body:
 /// - `wasm.br(target=1)` branches to the loop (continue)
 /// - `wasm.br(target=2)` branches to the block (break)
-struct ScfLoopPattern(Arc<ScfLoweringPlan>);
+struct ScfLoopPattern<'a>(&'a ScfLoweringPlan);
 
-impl RewritePattern for ScfLoopPattern {
+impl RewritePattern for ScfLoopPattern<'_> {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

@@ -251,7 +251,7 @@ struct CanonicalizeResult {
     pub reached_fixpoint: bool,
 }
 
-fn canonicalize_applicator() -> PatternApplicator {
+fn canonicalize_applicator() -> PatternApplicator<'static> {
     PatternApplicator::new(TypeConverter::new())
         .add_pattern_box(Box::new(FoldDispatchPattern::from_inventory()))
 }

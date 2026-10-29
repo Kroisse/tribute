@@ -10,7 +10,6 @@
 //! on every target.
 
 use std::ops::ControlFlow;
-use std::rc::Rc;
 
 use tribute_ir::dialect::ability;
 use tribute_ir::dialect::adt;
@@ -80,21 +79,12 @@ pub(crate) fn lower_evidence_func(
     func_op: func::Func,
     runtime: &EvidenceRuntime,
 ) -> Result<(), ConversionError> {
-    let runtime = Rc::new(*runtime);
     PatternApplicator::new(TypeConverter::new())
         .with_target(effect_abi_target())
-        .add_pattern(LowerEffectExtend {
-            runtime: Rc::clone(&runtime),
-        })
-        .add_pattern(LowerEffectStackOp {
-            runtime: Rc::clone(&runtime),
-        })
-        .add_pattern(LowerEffectTailOp {
-            runtime: Rc::clone(&runtime),
-        })
-        .add_pattern(LowerEffectDispatchTail {
-            runtime: Rc::clone(&runtime),
-        })
+        .add_pattern(LowerEffectExtend { runtime })
+        .add_pattern(LowerEffectStackOp { runtime })
+        .add_pattern(LowerEffectTailOp { runtime })
+        .add_pattern(LowerEffectDispatchTail { runtime })
         .add_pattern(LowerEffectDispatchCps { runtime })
         .apply_partial_conversion(ctx, func_op, "evidence-effect-abi")?;
     Ok(())
@@ -245,11 +235,11 @@ fn some_dispatch(
 }
 
 /// `effect.extend` → `std::runtime::evidence::extend`.
-struct LowerEffectExtend {
-    runtime: Rc<EvidenceRuntime>,
+struct LowerEffectExtend<'a> {
+    runtime: &'a EvidenceRuntime,
 }
 
-impl RewritePattern for LowerEffectExtend {
+impl RewritePattern for LowerEffectExtend<'_> {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -285,18 +275,18 @@ impl RewritePattern for LowerEffectExtend {
 
 /// `effect.mask` / `effect.dup` / `effect.outer` → the runtime function of
 /// the same name.
-struct LowerEffectStackOp {
-    runtime: Rc<EvidenceRuntime>,
+struct LowerEffectStackOp<'a> {
+    runtime: &'a EvidenceRuntime,
 }
 
-impl RewritePattern for LowerEffectStackOp {
+impl RewritePattern for LowerEffectStackOp<'_> {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let runtime = &self.runtime;
+        let runtime = self.runtime;
         let (function, ability, evidence) = if let Ok(mask) = effect::Mask::from_op(ctx, op) {
             (runtime.mask, mask.ability(ctx).clone(), mask.evidence(ctx))
         } else if let Ok(dup) = effect::Dup::from_op(ctx, op) {
@@ -319,18 +309,18 @@ impl RewritePattern for LowerEffectStackOp {
 
 /// `effect.tail` / `effect.with_tail` / `effect.push` → the runtime
 /// function of the same name.
-struct LowerEffectTailOp {
-    runtime: Rc<EvidenceRuntime>,
+struct LowerEffectTailOp<'a> {
+    runtime: &'a EvidenceRuntime,
 }
 
-impl RewritePattern for LowerEffectTailOp {
+impl RewritePattern for LowerEffectTailOp<'_> {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let runtime = &self.runtime;
+        let runtime = self.runtime;
         let loc = ctx.op(op).location;
         let i32_ty = effect_dispatch::i32_type(ctx);
         let mut slot = |ctx: &mut IrContext, index: u32| {
@@ -369,11 +359,11 @@ impl RewritePattern for LowerEffectTailOp {
 
 /// `effect.dispatch_tail` → `std::runtime::evidence::lookup_tr` + indirect
 /// call.
-struct LowerEffectDispatchTail {
-    runtime: Rc<EvidenceRuntime>,
+struct LowerEffectDispatchTail<'a> {
+    runtime: &'a EvidenceRuntime,
 }
 
-impl RewritePattern for LowerEffectDispatchTail {
+impl RewritePattern for LowerEffectDispatchTail<'_> {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -405,11 +395,11 @@ impl RewritePattern for LowerEffectDispatchTail {
 
 /// `effect.dispatch_cps` → `std::runtime::evidence::lookup` + proper-tail
 /// transfer.
-struct LowerEffectDispatchCps {
-    runtime: Rc<EvidenceRuntime>,
+struct LowerEffectDispatchCps<'a> {
+    runtime: &'a EvidenceRuntime,
 }
 
-impl RewritePattern for LowerEffectDispatchCps {
+impl RewritePattern for LowerEffectDispatchCps<'_> {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

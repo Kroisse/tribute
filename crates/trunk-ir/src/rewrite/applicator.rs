@@ -141,8 +141,20 @@ impl ApplyResult {
 }
 
 /// Applies rewrite patterns to arena IR using visitor-based fixpoint iteration.
-pub struct PatternApplicator {
-    patterns: Vec<Box<dyn RewritePattern>>,
+///
+/// The applicator holds its patterns for the lifetime `'p`, so patterns
+/// borrow data the driver computed, such as a symbol table or a lowering
+/// plan, instead of sharing it through `Rc` or `Arc`.
+///
+/// A pattern decides only from the IR and that read-only data. A pattern
+/// that reports to the driver, such as a count or a collected list, writes
+/// through a `Cell` or `RefCell` the driver owns and reads back after
+/// applying the patterns; what it writes never decides a later rewrite. A
+/// pattern must not cache facts about the IR, such as uses, types, or the
+/// operations a region holds, between calls: later rewrites and the
+/// applicator's own mutations make them stale.
+pub struct PatternApplicator<'p> {
+    patterns: Vec<Box<dyn RewritePattern + 'p>>,
     max_iterations: usize,
     type_converter: TypeConverter,
     /// Conversion target used for legality-aware rewriting and verification.
@@ -152,7 +164,7 @@ pub struct PatternApplicator {
     auto_type_conversion: bool,
 }
 
-impl PatternApplicator {
+impl<'p> PatternApplicator<'p> {
     /// Create a new applicator with the given type converter.
     pub fn new(type_converter: TypeConverter) -> Self {
         Self {
@@ -176,7 +188,7 @@ impl PatternApplicator {
     }
 
     /// Add a rewrite pattern.
-    pub fn add_pattern(mut self, pattern: impl RewritePattern + 'static) -> Self {
+    pub fn add_pattern(mut self, pattern: impl RewritePattern + 'p) -> Self {
         self.patterns.push(Box::new(pattern));
         self
     }
@@ -186,7 +198,7 @@ impl PatternApplicator {
     /// Useful when collecting heterogeneous patterns from multiple sources
     /// (e.g. per-dialect `canonicalization_patterns()` registries) into a
     /// single applicator without naming each concrete type at the call site.
-    pub fn add_pattern_box(mut self, pattern: Box<dyn RewritePattern>) -> Self {
+    pub fn add_pattern_box(mut self, pattern: Box<dyn RewritePattern + 'p>) -> Self {
         self.patterns.push(pattern);
         self
     }
@@ -511,6 +523,7 @@ mod tests {
 
     use crate::*;
     use smallvec::smallvec;
+    use std::cell::RefCell;
 
     fn test_ctx() -> (IrContext, Location) {
         let mut ctx = IrContext::new();
@@ -1004,6 +1017,71 @@ mod tests {
         );
         assert!(
             !printed.contains("core.unrealized_conversion_cast"),
+            "{printed}"
+        );
+    }
+
+    /// Renames each `test.source` whose `tag` the driver selects to
+    /// `test.target`, and records the tag in a log the driver owns.
+    struct RenameSelected<'a> {
+        selected: &'a [&'a str],
+        renamed: &'a RefCell<Vec<String>>,
+    }
+
+    impl RewritePattern for RenameSelected<'_> {
+        fn match_and_rewrite(
+            &self,
+            ctx: &mut IrContext,
+            op: OpRef,
+            rewriter: &mut PatternRewriter<'_>,
+        ) -> bool {
+            if !ctx.op(op).name.is(ctx, "test.source") {
+                return false;
+            }
+            let tag = ctx.op_attrs(op).get_str("tag").unwrap().to_owned();
+            if !self.selected.contains(&tag.as_str()) {
+                return false;
+            }
+            self.renamed.borrow_mut().push(tag);
+            let loc = ctx.op(op).location;
+            let result_types = ctx.op_result_types(op).to_vec();
+            let new_data = OperationDataBuilder::new(loc, "test.target")
+                .results(result_types)
+                .build(ctx);
+            let new_op = ctx.create_op(new_data);
+            rewriter.replace_op(new_op);
+            true
+        }
+    }
+
+    #[test]
+    fn pattern_borrows_data_from_the_driver() {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  %0 = test.source {tag = "first"} : core.i32
+  %1 = test.source {tag = "second"} : core.i32
+  %2 = test.source {tag = "third"} : core.i32
+}"#,
+        );
+
+        let selected = ["first", "third"];
+        let renamed = RefCell::new(Vec::new());
+        let result = PatternApplicator::new(TypeConverter::new())
+            .add_pattern(RenameSelected {
+                selected: &selected,
+                renamed: &renamed,
+            })
+            .apply_partial(&mut ctx, module);
+
+        assert!(result.reached_fixpoint);
+        assert_eq!(result.total_changes, 2);
+        assert_eq!(renamed.into_inner(), ["first", "third"]);
+        let printed = print_module(&ctx, module.op());
+        assert_eq!(printed.matches("test.target").count(), 2, "{printed}");
+        assert!(
+            printed.contains(r#"test.source {tag = "second"}"#),
             "{printed}"
         );
     }

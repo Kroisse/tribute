@@ -22,6 +22,14 @@ use crate::refs::OpRef;
 ///
 /// Return `true` if the pattern matched and recorded mutations via the rewriter.
 /// Return `false` if the pattern does not apply.
+///
+/// # State
+///
+/// `match_and_rewrite` takes `&self`: a pattern decides from the IR and the
+/// read-only data it holds or borrows from the driver, so its result does not
+/// depend on the order in which the applicator visits operations. Do not cache
+/// facts about the IR between calls; rewrites make them stale. See
+/// [`PatternApplicator`](super::PatternApplicator).
 pub trait RewritePattern {
     /// Attempt to match and rewrite an operation.
     fn match_and_rewrite(

@@ -1,7 +1,6 @@
 //! Lower the public prelude List construction intrinsic to shared `list.*` IR.
 
 use rustc_hash::FxHashSet as HashSet;
-use std::rc::Rc;
 
 use tribute_ir::dialect::list;
 use tribute_ir::dialect::tribute_control::COMPILER_INTRINSIC_ATTR;
@@ -85,25 +84,24 @@ impl Pass for LowerListIntrinsics {
                     .insert(SymbolPath::new([name]));
             }
         }
-        let intrinsic_declarations = Rc::new(intrinsic_declarations);
 
         PatternApplicator::new(TypeConverter::new())
             .add_pattern(PrependCallPattern {
-                intrinsic_declarations: Rc::clone(&intrinsic_declarations),
+                intrinsic_declarations: &intrinsic_declarations,
             })
             .add_pattern(PrependDeclarationPattern {
-                intrinsic_declarations,
+                intrinsic_declarations: &intrinsic_declarations,
             })
             .apply_partial(ctx, module);
         Ok(())
     }
 }
 
-struct PrependCallPattern {
-    intrinsic_declarations: Rc<IntrinsicDeclarations>,
+struct PrependCallPattern<'a> {
+    intrinsic_declarations: &'a IntrinsicDeclarations,
 }
 
-impl RewritePattern for PrependCallPattern {
+impl RewritePattern for PrependCallPattern<'_> {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -143,11 +141,11 @@ impl RewritePattern for PrependCallPattern {
     }
 }
 
-struct PrependDeclarationPattern {
-    intrinsic_declarations: Rc<IntrinsicDeclarations>,
+struct PrependDeclarationPattern<'a> {
+    intrinsic_declarations: &'a IntrinsicDeclarations,
 }
 
-impl RewritePattern for PrependDeclarationPattern {
+impl RewritePattern for PrependDeclarationPattern<'_> {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
