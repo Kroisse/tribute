@@ -155,7 +155,7 @@ impl OpRewritePattern for SlotsCallPattern<'_> {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        call: func::Call,
+        call: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = call.op_ref();
@@ -274,7 +274,7 @@ impl OpRewritePattern for SlotsDeclarationPattern<'_> {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        function: func::Func,
+        function: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let name = SymbolPath::new([Symbol::new(function.sym_name(ctx))]);

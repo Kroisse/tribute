@@ -43,7 +43,7 @@ impl OpRewritePattern for MemLoadPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        load_op: mem::Load,
+        load_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = load_op.op_ref();
@@ -73,7 +73,7 @@ impl OpRewritePattern for MemStorePattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        store_op: mem::Store,
+        store_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = store_op.op_ref();
@@ -101,7 +101,7 @@ impl OpRewritePattern for MemPtrAddPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        ptr_add: mem::PtrAdd,
+        ptr_add: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = ptr_add.op_ref();
@@ -127,7 +127,7 @@ impl OpRewritePattern for MemNullPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        null: mem::Null,
+        null: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = null.op_ref();

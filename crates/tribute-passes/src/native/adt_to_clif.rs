@@ -94,7 +94,7 @@ impl OpRewritePattern for StructGetPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        struct_get: adt::StructGet,
+        struct_get: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = struct_get.op_ref();
@@ -142,7 +142,7 @@ impl OpRewritePattern for StructSetPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        struct_set: adt::StructSet,
+        struct_set: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = struct_set.op_ref();
@@ -180,7 +180,7 @@ impl OpRewritePattern for VariantCastPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        variant_cast: adt::VariantCast,
+        variant_cast: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let ref_val = variant_cast.r#ref(ctx);
@@ -197,7 +197,7 @@ impl OpRewritePattern for RefNullPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        ref_null: adt::RefNull,
+        ref_null: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = ref_null.op_ref();
@@ -220,7 +220,7 @@ impl OpRewritePattern for RefCastPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        ref_cast: adt::RefCast,
+        ref_cast: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let ref_val = ref_cast.r#ref(ctx);
@@ -237,7 +237,7 @@ impl OpRewritePattern for RefIsNullPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        ref_is_null: adt::RefIsNull,
+        ref_is_null: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = ref_is_null.op_ref();

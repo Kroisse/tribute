@@ -149,7 +149,7 @@ impl OpRewritePattern for EmptyPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        empty: list::Empty,
+        empty: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = empty.op_ref();
@@ -172,7 +172,7 @@ impl OpRewritePattern for PrependPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        prepend: list::Prepend,
+        prepend: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = prepend.op_ref();
@@ -195,7 +195,7 @@ impl OpRewritePattern for IsEmptyPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        is_empty: list::IsEmpty,
+        is_empty: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = is_empty.op_ref();

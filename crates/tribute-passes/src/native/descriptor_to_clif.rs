@@ -53,7 +53,7 @@ impl OpRewritePattern for DescriptorPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        descriptor: tribute_rtti::Descriptor,
+        descriptor: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = descriptor.op_ref();

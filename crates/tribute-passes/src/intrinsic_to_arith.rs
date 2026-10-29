@@ -248,7 +248,7 @@ impl OpRewritePattern for ArithIntrinsicPattern<'_> {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        call_op: func::Call,
+        call_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = call_op.op_ref();
@@ -306,7 +306,7 @@ impl OpRewritePattern for ArithIntrinsicFuncDeclPattern<'_> {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        func_op: func::Func,
+        func_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = func_op.op_ref();

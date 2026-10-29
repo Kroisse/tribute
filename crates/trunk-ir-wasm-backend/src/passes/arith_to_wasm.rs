@@ -180,7 +180,7 @@ impl OpRewritePattern for NilValuePattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        nil_value: core::NilValue,
+        nil_value: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = nil_value.op_ref();
@@ -203,7 +203,7 @@ impl OpRewritePattern for ArithConstPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        const_op: arith::Const,
+        const_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = const_op.op_ref();

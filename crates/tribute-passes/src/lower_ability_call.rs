@@ -92,7 +92,7 @@ impl OpRewritePattern for LowerCallPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        call: ability::Call,
+        call: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = call.op_ref();

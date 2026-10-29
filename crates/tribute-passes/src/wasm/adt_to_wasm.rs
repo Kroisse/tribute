@@ -179,7 +179,7 @@ impl OpRewritePattern for StructNewPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        struct_new: adt::StructNew,
+        struct_new: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = struct_new.op_ref();
@@ -220,7 +220,7 @@ impl OpRewritePattern for StructGetPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        struct_get: adt::StructGet,
+        struct_get: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = struct_get.op_ref();
@@ -252,7 +252,7 @@ impl OpRewritePattern for StructSetPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        struct_set: adt::StructSet,
+        struct_set: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = struct_set.op_ref();
@@ -287,7 +287,7 @@ impl OpRewritePattern for VariantNewPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        variant_new: adt::VariantNew,
+        variant_new: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = variant_new.op_ref();
@@ -332,7 +332,7 @@ impl OpRewritePattern for VariantIsPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        variant_is: adt::VariantIs,
+        variant_is: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = variant_is.op_ref();
@@ -391,7 +391,7 @@ impl OpRewritePattern for VariantCastPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        variant_cast: adt::VariantCast,
+        variant_cast: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = variant_cast.op_ref();
@@ -429,7 +429,7 @@ impl OpRewritePattern for VariantGetPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        variant_get: adt::VariantGet,
+        variant_get: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = variant_get.op_ref();
@@ -498,7 +498,7 @@ impl OpRewritePattern for ArrayNewPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        array_new: adt::ArrayNew,
+        array_new: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = array_new.op_ref();
@@ -523,7 +523,7 @@ impl OpRewritePattern for ArrayOfPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        array_of: adt::ArrayOf,
+        array_of: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = array_of.op_ref();
@@ -556,7 +556,7 @@ impl OpRewritePattern for ArraySplicePattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        splice: adt::ArraySplice,
+        splice: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = splice.op_ref();
@@ -745,7 +745,7 @@ impl OpRewritePattern for ArrayGetPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        array_get: adt::ArrayGet,
+        array_get: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = array_get.op_ref();
@@ -821,7 +821,7 @@ impl OpRewritePattern for ArraySetPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        array_set: adt::ArraySet,
+        array_set: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = array_set.op_ref();
@@ -847,7 +847,7 @@ impl OpRewritePattern for ArrayLenPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        array_len: adt::ArrayLen,
+        array_len: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = array_len.op_ref();
@@ -890,7 +890,7 @@ impl OpRewritePattern for RefNullPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        ref_null: adt::RefNull,
+        ref_null: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = ref_null.op_ref();
@@ -917,7 +917,7 @@ impl OpRewritePattern for RefIsNullPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        ref_is_null: adt::RefIsNull,
+        ref_is_null: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = ref_is_null.op_ref();
@@ -942,7 +942,7 @@ impl OpRewritePattern for RefCastPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        ref_cast: adt::RefCast,
+        ref_cast: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = ref_cast.op_ref();

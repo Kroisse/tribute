@@ -394,7 +394,7 @@ impl OpRewritePattern for FuncFuncPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        func_op: func::Func,
+        func_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = func_op.op_ref();
@@ -450,7 +450,7 @@ impl OpRewritePattern for FuncCallPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        call_op: func::Call,
+        call_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = call_op.op_ref();
@@ -482,7 +482,7 @@ impl OpRewritePattern for FuncCallIndirectPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        call: func::CallIndirect,
+        call: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = call.op_ref();
@@ -535,7 +535,7 @@ impl OpRewritePattern for FuncReturnPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        return_op: func::Return,
+        return_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = return_op.op_ref();
@@ -557,7 +557,7 @@ impl OpRewritePattern for FuncTailCallPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        tail_call_op: func::TailCall,
+        tail_call_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = tail_call_op.op_ref();
@@ -587,7 +587,7 @@ impl OpRewritePattern for FuncTailCallIndirectPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        tail: func::TailCallIndirect,
+        tail: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = tail.op_ref();
@@ -654,7 +654,7 @@ impl OpRewritePattern for FuncUnreachablePattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        unreachable_op: func::Unreachable,
+        unreachable_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = unreachable_op.op_ref();
@@ -680,7 +680,7 @@ impl OpRewritePattern for FuncConstantPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        const_op: func::Constant,
+        const_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = const_op.op_ref();

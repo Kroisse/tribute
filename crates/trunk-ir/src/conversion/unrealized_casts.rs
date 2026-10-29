@@ -44,7 +44,7 @@ impl OpRewritePattern for UnrealizedCastConversionPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        unrealized_conversion_cast: core::UnrealizedConversionCast,
+        unrealized_conversion_cast: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = unrealized_conversion_cast.op_ref();

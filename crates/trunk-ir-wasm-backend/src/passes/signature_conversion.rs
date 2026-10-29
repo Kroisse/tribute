@@ -18,7 +18,7 @@ impl OpRewritePattern for WasmFuncSignatureConversionPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        wasm_func: wasm::Func,
+        wasm_func: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = wasm_func.op_ref();

@@ -128,7 +128,7 @@ impl OpRewritePattern for LowerClosureNewArena<'_> {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        closure_new: closure::New,
+        closure_new: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = closure_new.op_ref();
@@ -196,7 +196,7 @@ impl OpRewritePattern for LowerClosureUnpackArena {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        unpack: closure::Unpack,
+        unpack: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = unpack.op_ref();
@@ -240,7 +240,7 @@ impl OpRewritePattern for LowerClosureCallArena {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        call_indirect: func::CallIndirect,
+        call_indirect: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = call_indirect.op_ref();
@@ -317,7 +317,7 @@ impl OpRewritePattern for LowerClosureTailCallArena {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        tail_call_indirect: func::TailCallIndirect,
+        tail_call_indirect: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = tail_call_indirect.op_ref();
@@ -484,7 +484,7 @@ impl OpRewritePattern for LowerClosureEntryArena {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        entry: closure::Entry,
+        entry: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = entry.op_ref();

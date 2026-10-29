@@ -166,7 +166,7 @@ impl OpRewritePattern for ConventionTablePattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        table: tribute_rt::ConventionTable,
+        table: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = table.op_ref();
@@ -191,7 +191,7 @@ impl OpRewritePattern for ConventionEntryPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        entry: tribute_rt::ConventionEntry,
+        entry: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = entry.op_ref();

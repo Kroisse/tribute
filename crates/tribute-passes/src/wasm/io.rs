@@ -191,7 +191,7 @@ impl OpRewritePattern for WritePattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        write: tribute_io::Write,
+        write: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = write.op_ref();

@@ -166,7 +166,7 @@ impl OpRewritePattern for StructNewPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        struct_new: adt::StructNew,
+        struct_new: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = struct_new.op_ref();
@@ -280,7 +280,7 @@ impl OpRewritePattern for VariantNewPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        variant_new: adt::VariantNew,
+        variant_new: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = variant_new.op_ref();

@@ -202,7 +202,7 @@ impl OpRewritePattern for BoxIntPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        box_op: tribute_rt::BoxInt,
+        box_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = box_op.op_ref();
@@ -240,7 +240,7 @@ impl OpRewritePattern for BoxNatPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        box_op: tribute_rt::BoxNat,
+        box_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = box_op.op_ref();
@@ -278,7 +278,7 @@ impl OpRewritePattern for BoxBoolPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        box_op: tribute_rt::BoxBool,
+        box_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = box_op.op_ref();
@@ -316,7 +316,7 @@ impl OpRewritePattern for BoxFloatPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        box_op: tribute_rt::BoxFloat,
+        box_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = box_op.op_ref();
@@ -356,7 +356,7 @@ impl OpRewritePattern for UnboxIntPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        unbox_op: tribute_rt::UnboxInt,
+        unbox_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = unbox_op.op_ref();
@@ -388,7 +388,7 @@ impl OpRewritePattern for UnboxNatPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        unbox_op: tribute_rt::UnboxNat,
+        unbox_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = unbox_op.op_ref();
@@ -419,7 +419,7 @@ impl OpRewritePattern for UnboxBoolPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        unbox_op: tribute_rt::UnboxBool,
+        unbox_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = unbox_op.op_ref();
@@ -450,7 +450,7 @@ impl OpRewritePattern for UnboxFloatPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        unbox_op: tribute_rt::UnboxFloat,
+        unbox_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = unbox_op.op_ref();

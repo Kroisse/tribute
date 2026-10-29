@@ -153,7 +153,7 @@ impl OpRewritePattern for VariantGetPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        variant_get: adt::VariantGet,
+        variant_get: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = variant_get.op_ref();
@@ -185,7 +185,7 @@ impl OpRewritePattern for VariantIsPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        variant_is: adt::VariantIs,
+        variant_is: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = variant_is.op_ref();

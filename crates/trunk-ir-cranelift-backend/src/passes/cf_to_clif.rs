@@ -45,7 +45,7 @@ impl OpRewritePattern for CfBrPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        br: cf::Br,
+        br: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = br.op_ref();
@@ -64,7 +64,7 @@ impl OpRewritePattern for CfCondBrPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        cond_br: cf::CondBr,
+        cond_br: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = cond_br.op_ref();
@@ -87,7 +87,7 @@ impl OpRewritePattern for CfSwitchPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        switch: cf::Switch,
+        switch: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = switch.op_ref();

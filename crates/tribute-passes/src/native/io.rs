@@ -96,7 +96,7 @@ impl OpRewritePattern for NativeWritePattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        write: tribute_io::Write,
+        write: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = write.op_ref();
@@ -121,7 +121,7 @@ impl OpRewritePattern for NativeReadLinePattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        read_line: tribute_io::ReadLine,
+        read_line: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = read_line.op_ref();

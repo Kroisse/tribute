@@ -111,7 +111,7 @@ impl OpRewritePattern for LowerDelimits {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        delimit: ability::Delimit,
+        delimit: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = delimit.op_ref();

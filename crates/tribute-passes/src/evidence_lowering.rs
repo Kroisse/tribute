@@ -245,7 +245,7 @@ impl OpRewritePattern for LowerEffectExtend<'_> {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        extend_op: effect::Extend,
+        extend_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = extend_op.op_ref();
@@ -369,7 +369,7 @@ impl OpRewritePattern for LowerEffectDispatchTail<'_> {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        dispatch_op: effect::DispatchTail,
+        dispatch_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = dispatch_op.op_ref();
@@ -405,7 +405,7 @@ impl OpRewritePattern for LowerEffectDispatchCps<'_> {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        dispatch_op: effect::DispatchCps,
+        dispatch_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = dispatch_op.op_ref();

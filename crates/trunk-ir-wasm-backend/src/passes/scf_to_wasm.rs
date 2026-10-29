@@ -375,7 +375,7 @@ impl OpRewritePattern for ScfSwitchPattern<'_> {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        switch: scf::Switch,
+        switch: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = switch.op_ref();
@@ -476,7 +476,7 @@ impl OpRewritePattern for ScfIfPattern<'_> {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        scf_if_op: scf::If,
+        scf_if_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = scf_if_op.op_ref();
@@ -533,7 +533,7 @@ impl OpRewritePattern for ScfLoopPattern<'_> {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        loop_op: scf::Loop,
+        loop_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = loop_op.op_ref();
@@ -626,7 +626,7 @@ impl OpRewritePattern for ScfYieldPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        yield_op: scf::Yield,
+        yield_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = yield_op.op_ref();
@@ -665,7 +665,7 @@ impl OpRewritePattern for ScfContinuePattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        continue_op: scf::Continue,
+        continue_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = continue_op.op_ref();
@@ -716,7 +716,7 @@ impl OpRewritePattern for ScfBreakPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        break_op: scf::Break,
+        break_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = break_op.op_ref();

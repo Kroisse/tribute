@@ -169,7 +169,7 @@ impl OpRewritePattern for LowerCall<'_> {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        call: func::Call,
+        call: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let callee = call.callee(ctx);

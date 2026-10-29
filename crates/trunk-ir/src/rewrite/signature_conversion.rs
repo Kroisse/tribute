@@ -193,7 +193,7 @@ impl OpRewritePattern for FuncSignatureConversionPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        func_op: func::Func,
+        func_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = func_op.op_ref();

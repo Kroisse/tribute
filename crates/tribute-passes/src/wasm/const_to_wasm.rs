@@ -260,7 +260,7 @@ impl OpRewritePattern for StringConstPattern<'_> {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        string_const: adt::StringConst,
+        string_const: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = string_const.op_ref();
@@ -315,7 +315,7 @@ impl OpRewritePattern for BytesConstPattern<'_> {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        bytes_const: adt::BytesConst,
+        bytes_const: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = bytes_const.op_ref();

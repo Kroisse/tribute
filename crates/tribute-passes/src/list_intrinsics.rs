@@ -106,7 +106,7 @@ impl OpRewritePattern for PrependCallPattern<'_> {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        call: func::Call,
+        call: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let op = call.op_ref();
@@ -150,7 +150,7 @@ impl OpRewritePattern for PrependDeclarationPattern<'_> {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        function: func::Func,
+        function: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         if !self
