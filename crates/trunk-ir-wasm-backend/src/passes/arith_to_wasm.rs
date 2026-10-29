@@ -215,11 +215,19 @@ impl OpRewritePattern for ArithConstPattern {
 
         let new_op_ref = match type_name {
             "i32" => match value {
-                Attribute::Int(v) => wasm_dialect::I32Const::operands()
-                    .value(v as i32)
-                    .results(result_ty)
-                    .build(ctx, loc)
-                    .op_ref(),
+                Attribute::Int(v) => {
+                    let v = rewriter.require(
+                        i32::try_from(v)
+                            .ok()
+                            .or_else(|| u32::try_from(v).ok().map(|v| v as i32)),
+                        "integer constant does not fit in 32 bits",
+                    )?;
+                    wasm_dialect::I32Const::operands()
+                        .value(v)
+                        .results(result_ty)
+                        .build(ctx, loc)
+                        .op_ref()
+                }
                 Attribute::Bool(b) => wasm_dialect::I32Const::operands()
                     .value(if b { 1 } else { 0 })
                     .results(result_ty)
@@ -234,8 +242,14 @@ impl OpRewritePattern for ArithConstPattern {
                 let Attribute::Int(v) = value else {
                     return rewriter.no_match(format!("expected Int for i64, got {value:?}"));
                 };
+                let v = rewriter.require(
+                    i64::try_from(v)
+                        .ok()
+                        .or_else(|| u64::try_from(v).ok().map(|v| v as i64)),
+                    "integer constant does not fit in 64 bits",
+                )?;
                 wasm_dialect::I64Const::operands()
-                    .value(v as i64)
+                    .value(v)
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref()
