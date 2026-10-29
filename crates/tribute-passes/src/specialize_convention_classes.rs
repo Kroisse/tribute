@@ -502,7 +502,31 @@ impl Instance<'_> {
     /// A detached copy of `lambda` whose quantifying lambdas, itself
     /// included, quantify new local binders.
     fn copy_lambda(&mut self, ctx: &mut IrContext, lambda: OpRef) -> OpRef {
-        let copy = ctx.clone_op(lambda, &mut IrMapping::new());
+        let mut mapping = IrMapping::new();
+        let copy = ctx.clone_op(lambda, &mut mapping);
+        // A lambda inside `lambda` that was already split is split in the
+        // copy too, so the copy's lambdas fold the same way.
+        let cloned = |ctx: &IrContext, op: OpRef| {
+            mapping
+                .lookup_value(ctx.op_results(op)[0])
+                .and_then(|value| match ctx.value_def(value) {
+                    trunk_ir::refs::ValueDef::OpResult(op, _) => Some(op),
+                    _ => None,
+                })
+        };
+        let nested: Vec<_> = self
+            .copies
+            .iter()
+            .filter_map(|(inner, copies)| {
+                let inner = cloned(ctx, *inner)?;
+                let copies = copies
+                    .iter()
+                    .map(|&copy| cloned(ctx, copy))
+                    .collect::<Option<Vec<_>>>()?;
+                Some((inner, copies))
+            })
+            .collect();
+        self.copies.extend(nested);
         let mut ops = vec![copy];
         ops.extend(nested_ops(ctx, copy));
         let mut old = Vec::new();

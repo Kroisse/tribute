@@ -595,6 +595,54 @@ fn a_lambda_reads_an_enclosing_binder_in_each_body() {
     );
 }
 
+/// A lambda split before an enclosing lambda is copied stays one value in
+/// each copy: the inner lambda splits first, since the outer one waits for
+/// the lambda its use reads, and the copy of the outer lambda folds its own
+/// copy of the inner lambda.
+#[test]
+fn a_lambda_split_before_its_enclosing_lambda_is_one_value_in_each_copy() {
+    let printed = specialized(
+        r#"core.module @m {
+  !pure = tribute_control.func_sig<(core.i32) -> core.i32>
+  !ctl = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {instances = [@Ctl]}}>
+  !in0 = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>
+  !h0 = tribute_control.func_sig<() -> core.i32>
+  !hc = tribute_control.func_sig<() -> core.i32, {ability_row = {instances = [@Ctl]}}>
+  ability.decl {sym_name = "Ctl"} {
+    ability.operation {kind = "op", op_name = "ctl", param_types = [], result_type = core.i32}
+  }
+  tribute_control.func @f[local 'a0, local 'a1, local 'a2](%x: core.i32) -> core.i32 row(@Ctl) {
+    %o = tribute_control.lambda['a1](%y: core.i32) -> core.i32 row(| 'a1) captures [] {
+      %n = tribute_control.lambda['a2](%z: core.i32) -> core.i32 row(| 'a2) captures [] {
+        tribute_control.return %z
+      }
+      %d = tribute_control.instantiate %n {row_args = [{}]} : !pure
+      %u = tribute_control.instantiate %n {row_args = [{instances = [@Ctl]}]} : !ctl
+      %v = tribute_control.call_indirect %d, %y : core.i32
+      tribute_control.return %v
+    }
+    %w = tribute_control.lambda['a0]() -> core.i32 row(| 'a0) captures [%o] {
+      %s = tribute_control.instantiate %o {row_args = [{tail = 0}]} : !in0
+      %c = arith.const {value = 1} : core.i32
+      %v = tribute_control.call_indirect %s, %c : core.i32
+      tribute_control.return %v
+    }
+    %a = tribute_control.instantiate %w {row_args = [{}]} : !h0
+    %b = tribute_control.instantiate %w {row_args = [{instances = [@Ctl]}]} : !hc
+    %r = tribute_control.call_indirect %a : core.i32
+    %t = tribute_control.call_indirect %b : core.i32
+    tribute_control.return %t
+  }
+}"#,
+    );
+    // `w`, `o`, and one `n` in each body of `o`.
+    assert_eq!(
+        printed.matches("tribute_cps.lambda").count(),
+        4,
+        "{printed}"
+    );
+}
+
 /// A lambda's parameter types name its own binders in every body.
 #[test]
 fn every_body_takes_parameters_over_the_lambdas_own_binders() {
