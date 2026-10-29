@@ -763,12 +763,8 @@ impl OpRewritePattern for ExpandHandles {
         let completion = handle.completion(ctx);
         let arm_values = handle.arms(ctx).to_vec();
         let bindings: Vec<_> = handle.handlers(ctx).collect();
-        let [source_block] = ctx.region(handle.body(ctx)).blocks[..] else {
-            return None;
-        };
-        let [source_evidence, source_frame] = ctx.block_args(source_block)[..] else {
-            return None;
-        };
+        let &[source_block] = ctx.region(handle.body(ctx)).blocks.as_array()?;
+        let &[source_evidence, source_frame] = ctx.block_args(source_block).as_array()?;
         if bindings.len() != arm_values.len() {
             return None;
         }

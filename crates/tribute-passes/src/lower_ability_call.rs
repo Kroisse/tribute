@@ -100,9 +100,7 @@ impl OpRewritePattern for LowerCallPattern {
         let ability = ctx.op_attrs(op).get_symbol_ref("ability").cloned().unwrap();
         let op_name = ctx.op_attrs(op).get_string_ref("op_name").unwrap();
         let result_types = ctx.op_result_types(op).to_vec();
-        let [result_type] = result_types.as_slice() else {
-            return None;
-        };
+        let [result_type] = result_types.as_array()?;
 
         // Operands: [...values]
         let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();

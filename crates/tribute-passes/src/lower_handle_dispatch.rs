@@ -76,9 +76,7 @@ impl OpRewritePattern for LowerHandleDispatchPattern {
     ) -> Option<()> {
         let body = dispatch_op.body(ctx);
         let blocks = &ctx.region(body).blocks;
-        let [body_block] = blocks.as_slice() else {
-            return None;
-        };
+        let [body_block] = blocks.as_array()?;
 
         // `resolve_evidence` has already replaced the body's evidence
         // argument. The final delimiter is resultless, so exhausting it is

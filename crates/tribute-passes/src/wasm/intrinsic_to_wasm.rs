@@ -464,9 +464,7 @@ impl OpRewritePattern for BytesSliceOrPanicPattern<'_> {
         }
 
         let operands = ctx.op_operands(op).to_vec();
-        let [bytes, start, end] = operands[..] else {
-            return None;
-        };
+        let &[bytes, start, end] = operands.as_array()?;
         let location = ctx.op(op).location;
         let bytes_ty = super::bytes::bytes_struct_type(ctx);
         let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);

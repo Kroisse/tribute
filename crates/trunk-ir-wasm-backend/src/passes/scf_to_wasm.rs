@@ -236,13 +236,9 @@ fn switch_shape(ctx: &IrContext, op: OpRef) -> Option<ScfSwitchShape> {
     if !ctx.op_results(op).is_empty() {
         return None;
     }
-    let [discriminant] = ctx.op_operands(op) else {
-        return None;
-    };
+    let [discriminant] = ctx.op_operands(op).as_array()?;
     let switch_body = ctx.op_regions(op).exactly_one().ok()?;
-    let [body_block] = ctx.region(switch_body).blocks.as_slice() else {
-        return None;
-    };
+    let [body_block] = ctx.region(switch_body).blocks.as_array()?;
     if !ctx.block_args(*body_block).is_empty() {
         return None;
     }
@@ -254,9 +250,7 @@ fn switch_shape(ctx: &IrContext, op: OpRef) -> Option<ScfSwitchShape> {
             return None;
         }
         let body = ctx.op_regions(arm).exactly_one().ok()?;
-        let [entry] = ctx.region(body).blocks.as_slice() else {
-            return None;
-        };
+        let [entry] = ctx.region(body).blocks.as_array()?;
         if !ctx.block_args(*entry).is_empty() {
             return None;
         }

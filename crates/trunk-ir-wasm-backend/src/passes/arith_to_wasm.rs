@@ -93,9 +93,7 @@ impl RewritePattern for ArithIndexPattern {
             })
             .collect();
         let results: Vec<_> = if let Some(signed) = index_cast_signedness(ctx, op) {
-            let [operand] = operands[..] else {
-                return None;
-            };
+            let &[operand] = operands.as_array()?;
             let dst_ty = to_i32(ctx, result_types[0]);
             let (Some(src), Some(dst)) = (
                 IntegerLike::width(ctx, ctx.value_ty(operand)),

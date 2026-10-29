@@ -333,12 +333,8 @@ fn evidence_plan(ctx: &IrContext, op: OpRef) -> Option<Attribute> {
 
 /// The type of the frame the body of `handle` receives.
 pub(super) fn handle_body_frame(ctx: &IrContext, handle: ability::Handle) -> Option<TypeRef> {
-    let [block] = ctx.region(handle.body(ctx)).blocks[..] else {
-        return None;
-    };
-    let [_, frame] = ctx.block_args(block)[..] else {
-        return None;
-    };
+    let &[block] = ctx.region(handle.body(ctx)).blocks.as_array()?;
+    let &[_, frame] = ctx.block_args(block).as_array()?;
     Some(ctx.value_ty(frame))
 }
 

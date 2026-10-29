@@ -259,9 +259,7 @@ impl OpRewritePattern for ForwardStructGet {
             return None;
         }
         let &stored = ctx.op_operands(producer).get(get.field(ctx) as usize)?;
-        let [result_ty] = ctx.op_result_types(get.op_ref()) else {
-            return None;
-        };
+        let [result_ty] = ctx.op_result_types(get.op_ref()).as_array()?;
         if ctx.value_ty(stored) != *result_ty {
             return None;
         }
@@ -290,9 +288,7 @@ impl Fold for RefCast {
         let op = self.op_ref();
         let cast = self;
         let operand = cast.r#ref(ctx);
-        let [result_ty] = ctx.op_result_types(op) else {
-            return None;
-        };
+        let [result_ty] = ctx.op_result_types(op).as_array()?;
         (ctx.value_ty(operand) == *result_ty && cast.r#type(ctx) == *result_ty)
             .then_some(FoldResult::Forward(operand))
     }

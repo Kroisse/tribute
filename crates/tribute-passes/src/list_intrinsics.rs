@@ -125,9 +125,10 @@ impl OpRewritePattern for PrependCallPattern<'_> {
         if !eligible {
             return None;
         }
-        let ([element, tail], [_]) = (ctx.op_operands(op), ctx.op_result_types(op)) else {
-            return None;
-        };
+        let ([element, tail], [_]) = (
+            ctx.op_operands(op).as_array()?,
+            ctx.op_result_types(op).as_array()?,
+        );
         let (element, tail) = (*element, *tail);
         let element_ty = ctx.value_ty(element);
         let prepend = list::Prepend::operands(element, tail)

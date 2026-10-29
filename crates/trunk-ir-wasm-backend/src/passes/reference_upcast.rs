@@ -36,9 +36,10 @@ impl OpRewritePattern for ReferenceUpcastPattern {
         rewriter: &mut PatternRewriter<'_>,
     ) -> Option<()> {
         let op = unrealized_conversion_cast.op_ref();
-        let (&[input], &[result_ty]) = (ctx.op_operands(op), ctx.op_result_types(op)) else {
-            return None;
-        };
+        let (&[input], &[result_ty]) = (
+            ctx.op_operands(op).as_array()?,
+            ctx.op_result_types(op).as_array()?,
+        );
         if rewriter
             .type_converter()
             .convert_type_or_identity(ctx, result_ty)
