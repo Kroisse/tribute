@@ -20,6 +20,11 @@ use crate::op_def::{OpName, OpNameArg};
 use crate::symbol::Symbol;
 use crate::type_def::TypeName;
 
+mod reads;
+
+use reads::ReadRecorder;
+pub(crate) use reads::{ReadEntity, ReadFootprint};
+
 // ============================================================================
 // Use-chain
 // ============================================================================
@@ -207,6 +212,14 @@ pub struct IrContext {
 
     /// Diagnostics collected during validation and transformation passes.
     diagnostics: RefCell<Vec<Diagnostic>>,
+
+    /// Entities read while an analysis computation is active.
+    reads: ReadRecorder,
+    /// The revision of the last change in each anchor's scope, for the
+    /// anchors changed since the context was created.
+    anchor_revisions: HashMap<OpRef, u64>,
+    /// The revision of the last change whose scope is not classified.
+    unclassified_revision: u64,
 }
 
 /// Advance an IR revision; a field-level helper so interning can advance it
@@ -269,6 +282,9 @@ impl Clone for IrContext {
             type_alias_by_name: self.type_alias_by_name.clone(),
             type_alias_by_type: self.type_alias_by_type.clone(),
             diagnostics: self.diagnostics.clone(),
+            reads: ReadRecorder::default(),
+            anchor_revisions: self.anchor_revisions.clone(),
+            unclassified_revision: self.unclassified_revision,
         }
     }
 }
@@ -303,6 +319,9 @@ impl IrContext {
             type_alias_by_name: HashMap::default(),
             type_alias_by_type: HashMap::default(),
             diagnostics: RefCell::new(Vec::new()),
+            reads: ReadRecorder::default(),
+            anchor_revisions: HashMap::default(),
+            unclassified_revision: 0,
         }
     }
 
@@ -331,6 +350,9 @@ impl IrContext {
             type_alias_by_name: self.type_alias_by_name.clone(),
             type_alias_by_type: self.type_alias_by_type.clone(),
             diagnostics: self.diagnostics.clone(),
+            reads: ReadRecorder::default(),
+            anchor_revisions: self.anchor_revisions.clone(),
+            unclassified_revision: self.unclassified_revision,
         }
     }
 
@@ -340,6 +362,73 @@ impl IrContext {
 
     fn bump_revision(&mut self) {
         advance_revision(&mut self.revision);
+    }
+
+    /// The revision of the last change in `anchor`'s scope.
+    pub(crate) fn anchor_revision(&self, anchor: OpRef) -> u64 {
+        self.anchor_revisions.get(&anchor).copied().unwrap_or(0)
+    }
+
+    /// The revision of the last change whose scope is not classified.
+    pub(crate) fn unclassified_revision(&self) -> u64 {
+        self.unclassified_revision
+    }
+
+    /// Advance the revision for a change no anchor chain describes.
+    fn bump_unclassified(&mut self) {
+        self.bump_revision();
+        self.unclassified_revision = self.revision;
+    }
+
+    /// Mark every anchor from `op` to its root as changed at the current
+    /// revision. `OpRef`s are never reused, so a removed anchor's counter
+    /// stays with it.
+    ///
+    /// An anchor already at the current revision was marked earlier in this
+    /// mutation together with every anchor above it, so the walk stops there.
+    fn touch_chain(&mut self, op: OpRef) {
+        let mut current = Some(op);
+        while let Some(op) = current {
+            if self.is_anchor(op)
+                && self.anchor_revisions.insert(op, self.revision) == Some(self.revision)
+            {
+                return;
+            }
+            current = self.parent_op(op);
+        }
+    }
+
+    fn touch_block_owner(&mut self, block: BlockRef) {
+        if let Some(owner) = self.block_owner(block) {
+            self.touch_chain(owner);
+        }
+    }
+
+    /// Mark the chain of `value`'s definition, whose use-list changes.
+    fn touch_value_def(&mut self, value: ValueRef) {
+        match self.values[value].def {
+            ValueDef::OpResult(op, _) => self.touch_chain(op),
+            ValueDef::BlockArg(block, _) => self.touch_block_owner(block),
+        }
+    }
+
+    fn block_owner(&self, block: BlockRef) -> Option<OpRef> {
+        self.blocks[block]
+            .parent_region
+            .and_then(|region| self.regions[region].parent_op)
+    }
+
+    fn parent_op(&self, op: OpRef) -> Option<OpRef> {
+        self.ops[op]
+            .parent_block
+            .and_then(|block| self.block_owner(block))
+    }
+
+    fn is_anchor(&self, op: OpRef) -> bool {
+        self.ops[op]
+            .name
+            .def()
+            .is_some_and(crate::op_def::OpDef::has_flag::<crate::op_flag::IsolatedFromAbove>)
     }
 
     /// Read interned types without granting mutable access to the IR.
@@ -437,7 +526,9 @@ impl IrContext {
     }
 
     /// The attributes of `op`, read through this context.
+    #[inline]
     pub fn op_attrs(&self, op: OpRef) -> AttributeView<'_> {
+        self.record(ReadEntity::Op(op));
         self.ops[op].attributes.view(self)
     }
 
@@ -454,6 +545,7 @@ impl IrContext {
     /// The attributes of `op`, changed through this context.
     pub fn op_attrs_mut(&mut self, op: OpRef) -> AttributeViewMut<'_> {
         self.bump_revision();
+        self.touch_chain(op);
         AttributeViewMut::new(&mut self.ops[op].attributes, &mut self.strings)
     }
 
@@ -461,6 +553,7 @@ impl IrContext {
     /// context.
     pub fn block_arg_attrs_mut(&mut self, block: BlockRef, index: usize) -> AttributeViewMut<'_> {
         self.bump_revision();
+        self.touch_block_owner(block);
         AttributeViewMut::new(&mut self.blocks[block].args[index].attrs, &mut self.strings)
     }
 
@@ -544,7 +637,7 @@ impl IrContext {
         if self.type_alias_by_name.get(&name) == Some(&ty) {
             return;
         }
-        self.bump_revision();
+        self.bump_unclassified();
         if let Some(old_ty) = self.type_alias_by_name.insert(name.clone(), ty) {
             // Remove old reverse mapping
             self.type_alias_by_type.remove(&old_ty);
@@ -625,6 +718,9 @@ impl IrContext {
         }
 
         // Register operand uses
+        for &val in &operand_slice {
+            self.touch_value_def(val);
+        }
         for (idx, &val) in operand_slice.iter().enumerate() {
             self.uses[val].push(Use {
                 user: op,
@@ -646,7 +742,9 @@ impl IrContext {
     }
 
     /// Get immutable reference to operation data.
+    #[inline]
     pub fn op(&self, op: OpRef) -> &OperationData {
+        self.record(ReadEntity::Op(op));
         &self.ops[op]
     }
 
@@ -655,17 +753,21 @@ impl IrContext {
     /// **Warning**: Modifying operands directly will desync the use-chain.
     /// Prefer `replace_all_uses` or re-creating the operation.
     pub fn op_mut(&mut self, op: OpRef) -> &mut OperationData {
-        self.bump_revision();
+        self.bump_unclassified();
         &mut self.ops[op]
     }
 
     /// Get the operands of an operation as a slice.
+    #[inline]
     pub fn op_operands(&self, op: OpRef) -> &[ValueRef] {
+        self.record(ReadEntity::Op(op));
         self.ops[op].operands.as_slice(&self.value_pool)
     }
 
     /// Get the result types of an operation as a slice.
+    #[inline]
     pub fn op_result_types(&self, op: OpRef) -> &[TypeRef] {
+        self.record(ReadEntity::Op(op));
         self.ops[op].results.as_slice(&self.type_pool)
     }
 
@@ -675,6 +777,7 @@ impl IrContext {
             return;
         }
         self.bump_revision();
+        self.touch_chain(op);
         self.ops[op].results.as_mut_slice(&mut self.type_pool)[index as usize] = new_ty;
     }
 
@@ -685,6 +788,9 @@ impl IrContext {
             return;
         }
         self.bump_revision();
+        self.touch_chain(op);
+        self.touch_value_def(old_val);
+        self.touch_value_def(new_val);
         self.uses[old_val].retain(|u| !(u.user == op && u.operand_index == index));
         self.ops[op].operands.as_mut_slice(&mut self.value_pool)[index as usize] = new_val;
         self.uses[new_val].push(Use {
@@ -697,6 +803,8 @@ impl IrContext {
     pub fn push_op_operand(&mut self, op: OpRef, val: ValueRef) {
         let index = self.ops[op].operands.len(&self.value_pool) as u32;
         self.bump_revision();
+        self.touch_chain(op);
+        self.touch_value_def(val);
         self.ops[op].operands.push(val, &mut self.value_pool);
         self.uses[val].push(Use {
             user: op,
@@ -716,6 +824,11 @@ impl IrContext {
 
         let removed = old_operands[index_usize];
         self.bump_revision();
+        self.touch_chain(op);
+        // The removed use and every later use change their operand index.
+        for &val in &old_operands[index_usize..] {
+            self.touch_value_def(val);
+        }
         self.uses[removed].retain(|u| !(u.user == op && u.operand_index == index));
 
         for (old_idx, &val) in old_operands.iter().enumerate().skip(index_usize + 1) {
@@ -737,17 +850,23 @@ impl IrContext {
     }
 
     /// Get the i-th result value of an operation.
+    #[inline]
     pub fn op_result(&self, op: OpRef, index: u32) -> ValueRef {
+        self.record(ReadEntity::Op(op));
         self.result_values[op].as_slice(&self.value_pool)[index as usize]
     }
 
     /// Get all result values of an operation.
+    #[inline]
     pub fn op_results(&self, op: OpRef) -> &[ValueRef] {
+        self.record(ReadEntity::Op(op));
         self.result_values[op].as_slice(&self.value_pool)
     }
 
     /// The regions of an operation, in order.
+    #[inline]
     pub fn op_regions(&self, op: OpRef) -> Regions<'_> {
+        self.record(ReadEntity::Op(op));
         Regions {
             ctx: self,
             next: self.ops[op].first_region,
@@ -760,7 +879,9 @@ impl IrContext {
     }
 
     /// Whether an operation has any region, without walking its region list.
+    #[inline]
     pub fn op_has_regions(&self, op: OpRef) -> bool {
+        self.record(ReadEntity::Op(op));
         self.ops[op].first_region.is_some()
     }
 
@@ -783,6 +904,7 @@ impl IrContext {
             );
         }
         self.bump_revision();
+        self.touch_chain(op);
         self.regions[region].parent_op = Some(op);
         self.next_region[region] = None;
         match self.op_regions(op).last() {
@@ -795,6 +917,7 @@ impl IrContext {
     /// parent.
     pub fn clear_op_regions(&mut self, op: OpRef) {
         self.bump_revision();
+        self.touch_chain(op);
         let mut next = self.ops[op].first_region.take();
         while let Some(region) = next {
             next = self.next_region[region].take();
@@ -803,7 +926,9 @@ impl IrContext {
     }
 
     /// The successor blocks of an operation, in order.
+    #[inline]
     pub fn op_successors(&self, op: OpRef) -> Successors<'_> {
+        self.record(ReadEntity::Op(op));
         self.ops[op]
             .successors
             .as_slice(&self.block_pool)
@@ -817,7 +942,9 @@ impl IrContext {
     }
 
     /// Whether an operation has any successor.
+    #[inline]
     pub fn op_has_successors(&self, op: OpRef) -> bool {
+        self.record(ReadEntity::Op(op));
         !self.ops[op]
             .successors
             .as_slice(&self.block_pool)
@@ -825,7 +952,9 @@ impl IrContext {
     }
 
     /// The number of successors of an operation.
+    #[inline]
     pub fn op_successor_count(&self, op: OpRef) -> usize {
+        self.record(ReadEntity::Op(op));
         self.ops[op].successors.as_slice(&self.block_pool).len()
     }
 
@@ -836,12 +965,14 @@ impl IrContext {
     /// Panics if the operation has no `index`-th successor.
     pub fn set_op_successor(&mut self, op: OpRef, index: usize, block: BlockRef) {
         self.bump_revision();
+        self.touch_chain(op);
         self.ops[op].successors.as_mut_slice(&mut self.block_pool)[index] = block;
     }
 
     /// Keep only the first `len` successors of an operation.
     pub fn truncate_op_successors(&mut self, op: OpRef, len: usize) {
         self.bump_revision();
+        self.touch_chain(op);
         let kept: BlockList = self.op_successors(op).take(len).collect();
         self.ops[op].successors.replace(&kept, &mut self.block_pool);
     }
@@ -897,6 +1028,18 @@ impl IrContext {
             subtree.push(o);
             std::ops::ControlFlow::Continue(crate::walk::WalkAction::Advance)
         });
+        // Mark the subtree's anchors and the definitions whose use-lists
+        // lose entries before those entries are cleared.
+        for &o in &subtree {
+            if self.is_anchor(o) {
+                self.anchor_revisions.insert(o, self.revision);
+            }
+            let operands: SmallVec<[ValueRef; 8]> =
+                self.ops[o].operands.as_slice(&self.value_pool).into();
+            for val in operands {
+                self.touch_value_def(val);
+            }
+        }
         for &o in &subtree {
             self.clear_operand_uses_of(o);
         }
@@ -916,7 +1059,9 @@ impl IrContext {
     // ========================================================================
 
     /// Get immutable reference to value data.
+    #[inline]
     pub fn value(&self, v: ValueRef) -> &ValueData {
+        self.record(ReadEntity::Value(v));
         &self.values[v]
     }
 
@@ -924,7 +1069,9 @@ impl IrContext {
     ///
     /// For operation results, this reads from `OperationData.results`.
     /// For block arguments, this reads from `BlockArgData.ty`.
+    #[inline]
     pub fn value_ty(&self, v: ValueRef) -> TypeRef {
+        self.record(ReadEntity::Value(v));
         match self.values[v].def {
             ValueDef::OpResult(op, idx) => {
                 self.ops[op].results.as_slice(&self.type_pool)[idx as usize]
@@ -934,7 +1081,9 @@ impl IrContext {
     }
 
     /// Get the definition of a value.
+    #[inline]
     pub fn value_def(&self, v: ValueRef) -> ValueDef {
+        self.record(ReadEntity::Value(v));
         self.values[v].def
     }
 
@@ -962,23 +1111,29 @@ impl IrContext {
     }
 
     /// Get immutable reference to block data.
+    #[inline]
     pub fn block(&self, b: BlockRef) -> &BlockData {
+        self.record(ReadEntity::Block(b));
         &self.blocks[b]
     }
 
     /// Get mutable reference to block data.
     pub fn block_mut(&mut self, b: BlockRef) -> &mut BlockData {
-        self.bump_revision();
+        self.bump_unclassified();
         &mut self.blocks[b]
     }
 
     /// Get the i-th block argument value.
+    #[inline]
     pub fn block_arg(&self, b: BlockRef, index: u32) -> ValueRef {
+        self.record(ReadEntity::Block(b));
         self.block_arg_values[b].as_slice(&self.value_pool)[index as usize]
     }
 
     /// Get all block argument values.
+    #[inline]
     pub fn block_args(&self, b: BlockRef) -> &[ValueRef] {
+        self.record(ReadEntity::Block(b));
         self.block_arg_values[b].as_slice(&self.value_pool)
     }
 
@@ -986,6 +1141,7 @@ impl IrContext {
     pub fn add_block_arg(&mut self, block: BlockRef, arg: BlockArgData) -> ValueRef {
         let index = self.blocks[block].args.len() as u32;
         self.bump_revision();
+        self.touch_block_owner(block);
         self.blocks[block].args.push(arg);
         let v = self.values.push(ValueData {
             def: ValueDef::BlockArg(block, index),
@@ -1002,6 +1158,7 @@ impl IrContext {
     /// indices are updated.
     pub fn prepend_block_arg(&mut self, block: BlockRef, arg: BlockArgData) -> ValueRef {
         self.bump_revision();
+        self.touch_block_owner(block);
         // Shift existing block arg ValueDef indices by +1
         let existing_args = self.block_arg_values[block].as_slice(&self.value_pool);
         let existing_refs: SmallVec<[ValueRef; 8]> = existing_args.into();
@@ -1037,6 +1194,7 @@ impl IrContext {
             return;
         }
         self.bump_revision();
+        self.touch_block_owner(block);
         self.blocks[block].args[index as usize].ty = new_ty;
     }
 
@@ -1055,6 +1213,9 @@ impl IrContext {
         self.bump_revision();
         self.ops[op].parent_block = Some(block);
         self.blocks[block].ops.push(op);
+        // The chain now runs through the new owner and includes `op` itself
+        // when it is an anchor.
+        self.touch_chain(op);
     }
 
     /// Insert an operation before `before` in the given block.
@@ -1078,6 +1239,7 @@ impl IrContext {
         self.bump_revision();
         self.blocks[block].ops.insert(pos, op);
         self.ops[op].parent_block = Some(block);
+        self.touch_chain(op);
     }
 
     /// Remove an operation from a block (does not destroy the operation).
@@ -1085,6 +1247,11 @@ impl IrContext {
     /// Only clears the operation's `parent_block` if it matches the given block.
     pub fn remove_op_from_block(&mut self, block: BlockRef, op: OpRef) {
         self.bump_revision();
+        if self.ops[op].parent_block == Some(block) {
+            self.touch_chain(op);
+        } else {
+            self.touch_block_owner(block);
+        }
         self.blocks[block].ops.retain(|o| *o != op);
         if self.ops[op].parent_block == Some(block) {
             self.ops[op].parent_block = None;
@@ -1138,6 +1305,7 @@ impl IrContext {
     pub fn detach_region(&mut self, region: RegionRef) {
         if let Some(parent_op) = self.regions[region].parent_op {
             self.bump_revision();
+            self.touch_chain(parent_op);
             self.regions[region].parent_op = None;
             let after = self.next_region[region].take();
             if self.ops[parent_op].first_region == Some(region) {
@@ -1153,13 +1321,15 @@ impl IrContext {
     }
 
     /// Get immutable reference to region data.
+    #[inline]
     pub fn region(&self, r: RegionRef) -> &RegionData {
+        self.record(ReadEntity::Region(r));
         &self.regions[r]
     }
 
     /// Get mutable reference to region data.
     pub fn region_mut(&mut self, r: RegionRef) -> &mut RegionData {
-        self.bump_revision();
+        self.bump_unclassified();
         &mut self.regions[r]
     }
 
@@ -1168,12 +1338,16 @@ impl IrContext {
     // ========================================================================
 
     /// Get all uses of a value.
+    #[inline]
     pub fn uses(&self, v: ValueRef) -> &[Use] {
+        self.record(ReadEntity::Value(v));
         &self.uses[v]
     }
 
     /// Check if a value has any uses.
+    #[inline]
     pub fn has_uses(&self, v: ValueRef) -> bool {
+        self.record(ReadEntity::Value(v));
         !self.uses[v].is_empty()
     }
 
@@ -1327,6 +1501,12 @@ impl IrContext {
             return;
         }
         self.bump_revision();
+        self.touch_value_def(old);
+        self.touch_value_def(new);
+        let users: SmallVec<[OpRef; 8]> = self.uses[old].iter().map(|u| u.user).collect();
+        for user in users {
+            self.touch_chain(user);
+        }
         // Take the old use list
         let old_uses = std::mem::take(&mut self.uses[old]);
 
