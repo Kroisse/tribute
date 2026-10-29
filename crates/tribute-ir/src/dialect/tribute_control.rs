@@ -2030,14 +2030,14 @@ impl trunk_ir::asm_format::OpAsmFormat for Func {
 
 // === Custom assembly: tribute_control.lambda ===
 
-/// Print a source lambda as `name`. With the convention `entry` the operation
-/// declares, its body is that convention entry's; without it, the body
-/// follows the captures.
+/// Print a source lambda as `name`. With the conventions of the bodies the
+/// operation declares, each body is written under its convention in
+/// `entries`; without them, the one body follows the captures.
 pub(crate) fn print_lambda(
     h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>,
     op: OpRef,
     name: &str,
-    entry: Option<CallingConvention>,
+    entries: Option<&[CallingConvention]>,
 ) -> fmt::Result {
     use fmt::Write;
 
@@ -2100,15 +2100,34 @@ pub(crate) fn print_lambda(
     }
     write!(h, "]")?;
     let mut excluded = vec![CALLING_CONVENTION_ATTR, QUANTIFIED_ROWS_ATTR];
-    if entry.is_some() {
-        excluded.push(tribute_cps::CONVENTION_ATTR);
+    if entries.is_some() {
+        excluded.push(tribute_cps::CONVENTIONS_ATTR);
     }
     print_extra_attributes(h, op, &excluded)?;
 
-    match (region, entry) {
-        (Some(region), Some(entry)) => {
+    match (region, entries) {
+        (Some(first), Some(entries)) => {
+            // Every body takes the parameters the header names.
+            let ctx = h.ctx();
+            let entry_args = |region: RegionRef| {
+                ctx.region(region)
+                    .blocks
+                    .first()
+                    .map_or(&[][..], |&block| ctx.block_args(block))
+            };
+            let bodies: Vec<_> = ctx.op_regions(op).collect();
+            for &body in &bodies[1..] {
+                for (&arg, &like) in entry_args(body).iter().zip(entry_args(first)) {
+                    h.assign_value_name_like(arg, like);
+                }
+            }
             write!(h, " entries")?;
-            h.print_labelled_bodies([(entry.keyword(), region)])
+            h.print_labelled_bodies(
+                entries
+                    .iter()
+                    .map(|convention| convention.keyword())
+                    .zip(bodies),
+            )
         }
         (Some(region), None) => h.print_body(region),
         (None, _) => Ok(()),
@@ -2131,31 +2150,37 @@ fn parse_captures<'a>(input: &mut &'a str) -> winnow::ModalResult<Vec<&'a str>> 
     .parse_next(input)
 }
 
-/// `entries { <convention> { .. } }`, the one convention entry of a lambda
-/// that declares its convention, and that entry's body.
-fn parse_entry<'a>(
+/// `entries { <convention> { .. } ... }`, the bodies of a lambda that
+/// declares their conventions, in order.
+fn parse_entries<'a>(
     input: &mut &'a str,
-) -> winnow::ModalResult<(CallingConvention, trunk_ir::parser::raw::RawRegion<'a>)> {
+) -> winnow::ModalResult<Vec<(CallingConvention, trunk_ir::parser::raw::RawRegion<'a>)>> {
     use trunk_ir::parser::raw::{ident, raw_region, ws};
+    use winnow::combinator::repeat;
     use winnow::prelude::*;
 
     "entries".parse_next(input)?;
     ws.parse_next(input)?;
     '{'.parse_next(input)?;
     ws.parse_next(input)?;
-    let convention = ident
-        .try_map(str::parse::<CallingConvention>)
-        .parse_next(input)?;
-    ws.parse_next(input)?;
-    let region = raw_region.parse_next(input)?;
-    ws.parse_next(input)?;
+    let entries = repeat(
+        1..,
+        (
+            ident.try_map(str::parse::<CallingConvention>),
+            ws,
+            raw_region,
+            ws,
+        )
+            .map(|(convention, _, region, _)| (convention, region)),
+    )
+    .parse_next(input)?;
     '}'.parse_next(input)?;
-    Ok((convention, region))
+    Ok(entries)
 }
 
-/// Parse a source lambda named `name`. With `entries`, the body is written as
-/// the one convention entry the operation declares; otherwise it follows the
-/// captures.
+/// Parse a source lambda named `name`. With `entries`, its bodies are
+/// written under the conventions the operation declares; otherwise its one
+/// body follows the captures.
 pub(crate) fn parse_lambda<'a>(
     input: &mut &'a str,
     results: Vec<&'a str>,
@@ -2196,7 +2221,7 @@ pub(crate) fn parse_lambda<'a>(
         .unwrap_or_default();
     if has_duplicate_convention_attr(&attributes)
         || attributes.iter().any(|(key, _)| {
-            key == QUANTIFIED_ROWS_ATTR || (entries && key == tribute_cps::CONVENTION_ATTR)
+            key == QUANTIFIED_ROWS_ATTR || (entries && key == tribute_cps::CONVENTIONS_ATTR)
         })
     {
         return Err(winnow::error::ErrMode::Backtrack(
@@ -2216,20 +2241,27 @@ pub(crate) fn parse_lambda<'a>(
     }
 
     ws.parse_next(input)?;
-    let mut region = if entries {
-        let entry = parse_entry(input)?;
+    let mut regions = if entries {
+        let (conventions, regions): (Vec<_>, Vec<_>) = parse_entries(input)?.into_iter().unzip();
         attributes.push((
-            tribute_cps::CONVENTION_ATTR.into(),
-            RawAttribute::String(entry.0.keyword().to_owned()),
+            tribute_cps::CONVENTIONS_ATTR.into(),
+            RawAttribute::List(
+                conventions
+                    .into_iter()
+                    .map(|convention| RawAttribute::String(convention.keyword().to_owned()))
+                    .collect(),
+            ),
         ));
-        entry.1
+        regions
     } else {
-        raw_region.parse_next(input)?
+        vec![raw_region.parse_next(input)?]
     };
-    if !region.blocks.is_empty() {
-        let mut merged = params.clone();
-        merged.append(&mut region.blocks[0].args);
-        region.blocks[0].args = merged;
+    for region in &mut regions {
+        if !region.blocks.is_empty() {
+            let mut merged = params.clone();
+            merged.append(&mut region.blocks[0].args);
+            region.blocks[0].args = merged;
+        }
     }
 
     Ok(RawOperation {
@@ -2242,7 +2274,7 @@ pub(crate) fn parse_lambda<'a>(
         operands: captures,
         attributes,
         result_types: vec![func_sig_raw_type(result, &params, row)],
-        regions: vec![region],
+        regions,
         successors: vec![],
     })
 }
@@ -2878,8 +2910,9 @@ pub(crate) fn validate_func(ctx: &IrContext, op: OpRef, errors: &mut Vec<Validat
 
 pub(crate) fn validate_lambda(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
     let ty = ctx.op_result_types(op)[0];
-    let body = ctx.op_region(op, 0).expect("schema-verified source lambda");
-    validate_callable_body(ctx, op, ty, body, errors);
+    for body in ctx.op_regions(op).collect::<Vec<_>>() {
+        validate_callable_body(ctx, op, ty, body, errors);
+    }
 }
 
 fn validate_return(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
@@ -3004,7 +3037,7 @@ pub(crate) fn validate_tail_call(ctx: &IrContext, op: OpRef, errors: &mut Vec<Va
         }
         if let (Some(callee_cc), Some(owner_cc)) = (
             tribute_cps::declared_convention(ctx, op),
-            tribute_cps::declared_convention(ctx, owner),
+            tribute_cps::convention_at(ctx, owner, op),
         ) && callee_cc > owner_cc
         {
             push_op_error(
@@ -3548,7 +3581,7 @@ fn validate_symbol_use(
             }
             if let (Some(callee_cc), Some(owner_cc)) = (
                 tribute_cps::declared_convention(ctx, target),
-                tribute_cps::declared_convention(ctx, owner),
+                tribute_cps::convention_at(ctx, owner, op),
             ) && callee_cc > owner_cc
             {
                 push_op_error(
@@ -3611,18 +3644,19 @@ fn validate_lambda_captures(ctx: &IrContext, body: RegionRef, errors: &mut Vec<V
         if !is_lambda(ctx, op) {
             return;
         }
-        let Some(region) = ctx.op_region(op, 0) else {
-            return;
-        };
         let captures = ctx.op_operands(op);
         let capture_set: HashSet<ValueRef> = captures.iter().copied().collect();
         if capture_set.len() != captures.len() {
             push_op_error(ctx, op, errors, "capture list contains duplicate values");
         }
-        let mut defined = HashSet::default();
-        collect_region_values(ctx, region, &mut defined);
+        // The bodies share the captures, which every body's references
+        // outside it make up together.
         let mut external = HashSet::default();
-        collect_external_references(ctx, region, &defined, &mut external);
+        for region in ctx.op_regions(op) {
+            let mut defined = HashSet::default();
+            collect_region_values(ctx, region, &mut defined);
+            collect_external_references(ctx, region, &defined, &mut external);
+        }
         for missing in external.difference(&capture_set) {
             push_op_error(
                 ctx,

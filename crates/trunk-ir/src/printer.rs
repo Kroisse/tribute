@@ -324,6 +324,14 @@ impl<'a, 'ctx> OpPrintHelper<'a, 'ctx> {
         self.state.get_value_name(v)
     }
 
+    /// Give `v` the name already assigned to `like`, for a value of a
+    /// sibling region whose name the custom syntax writes only once, such
+    /// as a parameter every body of an operation shares.
+    pub fn assign_value_name_like(&mut self, v: ValueRef, like: ValueRef) {
+        let name = self.state.get_value_name(like).to_owned();
+        self.state.value_names.insert(v, name);
+    }
+
     /// Write a type using the current alias map.
     pub fn write_type(&mut self, ty: TypeRef) -> fmt::Result {
         self.state.write_type(&mut *self.f, ty)

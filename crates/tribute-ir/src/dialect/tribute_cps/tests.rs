@@ -49,8 +49,73 @@ fn concise_forms_write_the_operation_convention() {
     assert_eq!(outer.convention(&ctx), CallingConvention::Cps);
     let body = ctx.region(outer.body(&ctx)).blocks[0];
     let lambda = Lambda::from_op(&ctx, ctx.block(body).ops[0]).unwrap();
-    assert_eq!(lambda.convention(&ctx), CallingConvention::Cps);
+    itertools::assert_equal(lambda.conventions(&ctx), [CallingConvention::Cps]);
     assert_eq!(lambda.captures(&ctx).len(), 1);
+}
+
+const TWO_BODIES: &str = r#"core.module @test {
+  !t0 = tribute_control.func_sig<(core.i32) -> core.i32>
+
+  tribute_cps.func @outer(%0: core.i32) -> core.i32 convention(cps) {
+      %1 = tribute_cps.lambda(%2: core.i32) -> core.i32 captures [%0] entries {
+        direct {
+            tribute_control.return %0
+        }
+        cps {
+            tribute_control.return %2
+        }
+      }
+      tribute_cps.tail_call_indirect %1, %0 {convention = "cps"}
+  }
+}
+"#;
+
+#[test]
+fn a_lambda_writes_a_body_per_convention() {
+    let (ctx, module) = parse(TWO_BODIES);
+    assert_eq!(print_module(&ctx, module.op()), TWO_BODIES);
+    let outer = Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
+    let body = ctx.region(outer.body(&ctx)).blocks[0];
+    let lambda = Lambda::from_op(&ctx, ctx.block(body).ops[0]).unwrap();
+    itertools::assert_equal(
+        lambda.conventions(&ctx),
+        [CallingConvention::Direct, CallingConvention::Cps],
+    );
+    let bodies: Vec<_> = lambda.bodies(&ctx).collect();
+    assert_eq!(bodies.len(), 2);
+    // Each body takes the parameters, and the bodies share the captures.
+    for body in bodies {
+        let entry = ctx.region(body).blocks[0];
+        assert_eq!(ctx.block_args(entry).len(), 1);
+    }
+    assert_eq!(messages(TWO_BODIES), Vec::<String>::new());
+}
+
+#[test]
+fn a_lambda_names_each_body_once_in_order() {
+    for conventions in [
+        &[CallingConvention::Cps, CallingConvention::Direct][..],
+        &[CallingConvention::Direct, CallingConvention::Direct],
+        &[CallingConvention::Direct],
+    ] {
+        let (mut ctx, module) = parse(TWO_BODIES);
+        let outer = Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
+        let body = ctx.region(outer.body(&ctx)).blocks[0];
+        let lambda = ctx.block(body).ops[0];
+        let list = conventions
+            .iter()
+            .map(|convention| ctx.string_attr(convention.keyword()))
+            .collect();
+        ctx.op_attrs_mut(lambda)
+            .insert(CONVENTIONS_ATTR, trunk_ir::types::Attribute::List(list));
+        let errors = OpDef::of(&ctx, lambda).unwrap().verify(&ctx, lambda);
+        assert!(
+            errors.iter().any(|error| error
+                .to_string()
+                .contains("`conventions` must be strictly increasing")),
+            "{conventions:?}: {errors:?}"
+        );
+    }
 }
 
 #[test]
@@ -158,5 +223,45 @@ fn a_function_reference_is_not_weaker_than_its_instance() {
     assert_eq!(
         errors,
         ["func_ref result convention must be at least as strong as its target"]
+    );
+}
+
+/// A body after the first reads the parameters the header names, and
+/// makes transfers through its own convention.
+#[test]
+fn every_body_takes_the_parameters_and_its_own_convention() {
+    let input = r#"core.module @test {
+  !t0 = tribute_control.func_sig<() -> core.i32>
+  !t1 = tribute_control.func_sig<(!t0) -> core.i32>
+
+  tribute_cps.func @outer(%0: core.i32) -> core.i32 convention(cps) {
+      %1 = tribute_cps.lambda(%2: !t0) -> core.i32 captures [%0] entries {
+        direct {
+            tribute_control.return %0
+        }
+        cps {
+            %3 = tribute_cps.call_indirect %2 {convention = "cps"} : core.i32
+            tribute_control.return %3
+        }
+      }
+      tribute_control.return %0
+  }
+}
+"#;
+    let (ctx, module) = parse(input);
+    assert_eq!(print_module(&ctx, module.op()), input);
+    assert_eq!(messages(input), Vec::<String>::new());
+
+    // A transfer in the Direct body may not be stronger than that body.
+    let stronger = input.replace(
+        "direct {\n            tribute_control.return %0",
+        "direct {\n            tribute_cps.tail_call_indirect %2 {convention = \"cps\"}",
+    );
+    assert!(
+        messages(&stronger)
+            .iter()
+            .any(|message| message.contains("must not be stronger than the enclosing callable")),
+        "{:?}",
+        messages(&stronger)
     );
 }

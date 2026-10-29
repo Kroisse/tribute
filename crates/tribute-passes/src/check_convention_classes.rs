@@ -301,7 +301,13 @@ impl<'a> Instance<'a> {
             return;
         };
         let expected = self.class(&signature.row(self.ctx));
-        let actual = tribute_cps::declared_convention(self.ctx, op);
+        let actual = match tribute_cps::body_conventions(self.ctx, op) {
+            Some(conventions) => match conventions[..] {
+                [convention] => Some(convention),
+                _ => None,
+            },
+            None => tribute_cps::declared_convention(self.ctx, op),
+        };
         if actual != Some(expected) {
             disagreements.push(Disagreement {
                 op,

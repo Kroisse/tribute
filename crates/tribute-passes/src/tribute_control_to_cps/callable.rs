@@ -13,7 +13,14 @@ impl Converter<'_> {
         let location = self.ctx.op(source).location;
         let logical_ty = self.ctx.op_result_types(source)[0];
         let callable = tribute_control::FuncSig::from_type_ref(self.ctx, logical_ty).unwrap();
-        let convention = tribute_cps::declared_convention(self.ctx, source).unwrap();
+        let conventions = tribute_cps::body_conventions(self.ctx, source)
+            .expect("pre-CPS validation checked lambda conventions");
+        let [convention] = conventions[..] else {
+            return Err(self.malformed_source(
+                source,
+                "legalization takes a tribute_cps.lambda with one body",
+            ));
+        };
         let source_result = callable.result(self.ctx);
         let source_params = callable.inputs(self.ctx).to_vec();
         let result = self.convert_type(source_result);

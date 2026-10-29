@@ -443,10 +443,11 @@ direct/indirect call, return의 대응 관계를 검증하고 physical symbol과
 
 - `tribute_cps.func`는 `func.func`와 physical `func.func_sig`를 만든다.
 - `tribute_cps.lambda`는 physical `closure.lambda`와 convention 없는
-  `closure.closure`를 만든다. `closure.lambda`는 entry마다 본문이나 adapter를
-  가지며, 각 entry의 signature에는 그 바깥 convention의 `CallableAbi` hidden
-  parameter가 있지만 environment는 없다. 기존 closure lowering이 entry마다
-  environment를 interpose한다.
+  `closure.closure`를 만든다. `closure.lambda`는 `tribute_cps.lambda`의 본문마다
+  본문 하나를 가지며, 본문의 signature에는 그 convention의 `CallableAbi` hidden
+  parameter가 있지만 environment는 없다. 본문이 없는 더 강한 convention entry의
+  adapter는 legalization이 만들어 `closure.lambda`에 적는다. 기존 closure
+  lowering이 본문마다 environment를 interpose한다.
 - `tribute_cps.func_ref`는 capture 없는 `closure.new`와 entry마다 env-bearing
   `func.func`를 만든다. Entry 함수는 그 entry의 convention을 사용하고 필요한 hidden
   operand와 source argument를 대상 physical worker에 전달하므로 named function도
