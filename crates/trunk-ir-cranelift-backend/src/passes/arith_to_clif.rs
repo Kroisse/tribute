@@ -534,13 +534,13 @@ impl RewritePattern for ArithConversionPattern {
         // conversions stay unconverted and fail the conversion boundary.
         let width = |ctx: &IrContext, ty| IntegerLike::width(ctx, ty);
         let bool_source = width(ctx, ctx.value_ty(operand)) == Some(1);
-        if (bool_source
-            && !(arith::Extui::matches(ctx, op)
-                && width(ctx, result_ty).is_some_and(|width| width > 8)))
-            || width(ctx, result_ty) == Some(1)
-        {
-            return None;
-        }
+        rewriter.ensure(
+            !((bool_source
+                && !(arith::Extui::matches(ctx, op)
+                    && width(ctx, result_ty).is_some_and(|width| width > 8)))
+                || width(ctx, result_ty) == Some(1)),
+            "boolean conversion other than zero extension past 8 bits",
+        )?;
         // Operand and result types are constrained by each operation's
         // declaration, so the op alone selects the Cranelift instruction.
         let new_op = if arith::Extsi::matches(ctx, op) {
@@ -628,9 +628,10 @@ impl RewritePattern for ArithIndexCastPattern {
         };
         // As for `arith.extsi`, a boolean held as an `i8` 0 or 1 has no
         // sign-extending instruction.
-        if (from == 1 && signed) || to == 1 {
-            return None;
-        }
+        rewriter.ensure(
+            !((from == 1 && signed) || to == 1),
+            "index cast to or sign-extending from a boolean",
+        )?;
         if from == to {
             rewriter.erase_op(vec![operand]);
             return Some(());
