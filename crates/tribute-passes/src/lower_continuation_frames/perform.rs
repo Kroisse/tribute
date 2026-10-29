@@ -1,7 +1,7 @@
 //! Builders of the resumption an expanded `ability.perform` or
 //! `ability.abort` passes to the dispatcher.
 
-use tribute_ir::calling_convention::{CallingConvention, ConventionBearing};
+use tribute_ir::calling_convention::CallingConvention;
 use tribute_ir::calling_convention::{cps_closure_function_type, cps_resume_type};
 use tribute_ir::dialect::{ability, adt, closure, effect, tribute_rt};
 use trunk_ir::context::IrContext;
@@ -158,11 +158,11 @@ fn push_reject_resume(
         .expect("Resume<R> is a closure")
         .func_type(ctx);
     let lambda = closure::Lambda::operands(std::iter::empty::<ValueRef>())
-        .signature(signature)
+        .signatures([signature])
+        .conventions([CallingConvention::Cps])
         .results(resume_type)
-        .regions(region)
+        .regions([region])
         .build(ctx, location);
-    lambda.set_calling_convention(ctx, CallingConvention::Cps);
     ctx.push_op(block, lambda.op_ref());
     lambda.result(ctx)
 }

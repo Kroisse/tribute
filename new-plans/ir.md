@@ -807,7 +807,8 @@ one result. `Result`와 `Params`는 source-logical type이다. Convention은 key
 `tribute.calling_convention` operation attribute로 바꾼다. `tribute_cps` operation의
 convention은 그 operation이 선언한 속성이고, physical operation의 convention은
 [`ConventionBearing` interface](cps-effects.md#pre-cps-callable-shape)로만 읽고
-쓴다. Type verifier는
+쓴다. `closure.lambda`는 본문마다 convention을 자기 `conventions` 속성으로 선언한다.
+Type verifier는
 result 하나와 parameter 0개 이상, 모든 component type의 resolution을 검사하며,
 convention 속성과 physical `func.func_sig`나 `closure.closure` component를
 허용하지 않는다. 전체 규칙은

@@ -540,7 +540,7 @@ fn enclosing_func_signature(
         let region = ctx.block(block).parent_region?;
         op = ctx.region(region).parent_op?;
         if let Some(owner) = DynCallableOwner::get(ctx, op) {
-            return owner.callable_signature(ctx);
+            return owner.callable_signature(ctx, region);
         }
         if IsolatedFromAbove::is_set(ctx, op) {
             return None;
