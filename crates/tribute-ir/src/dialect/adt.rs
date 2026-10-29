@@ -182,9 +182,9 @@ use std::ops::ControlFlow;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::pass::{Pass, PassRunResult};
-use trunk_ir::refs::{OpRef, TypeRef, ValueDef, ValueRef};
+use trunk_ir::refs::{TypeRef, ValueDef};
 use trunk_ir::rewrite::{
-    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    Module, OpRewritePattern, PatternApplicator, PatternRewriter, TypeConverter,
 };
 use trunk_ir::transforms::canonicalize::{Fold, FoldResult};
 use trunk_ir::walk::{WalkAction, walk_op};
@@ -238,52 +238,51 @@ struct ForwardStructGet {
     written: HashSet<TypeRef>,
 }
 
-impl RewritePattern for ForwardStructGet {
+impl OpRewritePattern for ForwardStructGet {
+    type Op = StructGet;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        get: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Some(stored) = self.forwarded_field(ctx, op) else {
-            return false;
-        };
-        rewriter.erase_op(vec![stored]);
-        true
-    }
-
-    fn name(&self) -> &'static str {
-        "ForwardStructGet"
-    }
-}
-
-impl ForwardStructGet {
-    fn forwarded_field(&self, ctx: &IrContext, op: OpRef) -> Option<ValueRef> {
-        let get = StructGet::from_op(ctx, op).ok()?;
         if self.written.contains(&get.r#type(ctx)) {
-            return None;
+            return false;
         }
         let source = get.r#ref(ctx);
         let ValueDef::OpResult(producer, _) = ctx.value_def(source) else {
-            return None;
+            return false;
         };
-        let new = StructNew::from_op(ctx, producer).ok()?;
+        let Ok(new) = StructNew::from_op(ctx, producer) else {
+            return false;
+        };
         if new.r#type(ctx) != get.r#type(ctx) {
-            return None;
+            return false;
         }
-        let stored = *ctx.op_operands(producer).get(get.field(ctx) as usize)?;
-        let [result_ty] = ctx.op_result_types(op) else {
-            return None;
+        let Some(&stored) = ctx.op_operands(producer).get(get.field(ctx) as usize) else {
+            return false;
+        };
+        let [result_ty] = ctx.op_result_types(get.op_ref()) else {
+            return false;
         };
         if ctx.value_ty(stored) != *result_ty {
-            return None;
+            return false;
         }
         let owned = ctx.uses(source).iter().any(|usage| {
             crate::dialect::tribute_rt::Retain::matches(ctx, usage.user)
                 || crate::dialect::tribute_rt::Release::matches(ctx, usage.user)
                 || crate::dialect::tribute_rt::IntoRaw::matches(ctx, usage.user)
         });
-        (!owned).then_some(stored)
+        if owned {
+            return false;
+        }
+        rewriter.erase_op(vec![stored]);
+        true
+    }
+
+    fn name(&self) -> &'static str {
+        "ForwardStructGet"
     }
 }
 

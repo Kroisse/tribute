@@ -13,6 +13,7 @@
 //!   Wasm index width, between unrealized casts
 
 use tracing::warn;
+use trunk_ir::OpName;
 
 use trunk_ir::context::{IrContext, OperationDataBuilder};
 use trunk_ir::dialect::arith;
@@ -284,6 +285,22 @@ impl OpRewritePattern for ArithConstPattern {
 struct ArithBinOpPattern;
 
 impl RewritePattern for ArithBinOpPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[
+            arith::Addi::NAME,
+            arith::Subi::NAME,
+            arith::Muli::NAME,
+            arith::Divsi::NAME,
+            arith::Divui::NAME,
+            arith::Remsi::NAME,
+            arith::Remui::NAME,
+            arith::Addf::NAME,
+            arith::Subf::NAME,
+            arith::Mulf::NAME,
+            arith::Divf::NAME,
+        ])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -470,6 +487,10 @@ impl RewritePattern for ArithBinOpPattern {
 struct ArithCmpPattern;
 
 impl RewritePattern for ArithCmpPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[arith::Cmpi::NAME, arith::Cmpf::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -652,6 +673,10 @@ impl RewritePattern for ArithCmpPattern {
 struct ArithNegPattern;
 
 impl RewritePattern for ArithNegPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[arith::Negi::NAME, arith::Negf::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -738,6 +763,17 @@ impl RewritePattern for ArithNegPattern {
 struct ArithBitwisePattern;
 
 impl RewritePattern for ArithBitwisePattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[
+            arith::And::NAME,
+            arith::Or::NAME,
+            arith::Xor::NAME,
+            arith::Shl::NAME,
+            arith::Shr::NAME,
+            arith::Shru::NAME,
+        ])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -867,6 +903,20 @@ impl RewritePattern for ArithBitwisePattern {
 struct ArithConversionPattern;
 
 impl RewritePattern for ArithConversionPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[
+            arith::Extsi::NAME,
+            arith::Extui::NAME,
+            arith::Trunci::NAME,
+            arith::Sitofp::NAME,
+            arith::Uitofp::NAME,
+            arith::Fptosi::NAME,
+            arith::Fptoui::NAME,
+            arith::Extf::NAME,
+            arith::Truncf::NAME,
+        ])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

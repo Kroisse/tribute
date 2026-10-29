@@ -10,6 +10,7 @@
 //!   converted type of its argument
 
 use tracing::debug;
+use trunk_ir::OpName;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::func;
 use trunk_ir::op_interface::DynIndirectCallLike;
@@ -43,7 +44,7 @@ pub(crate) fn lower(ctx: &mut IrContext, module: Module) {
         .with_auto_type_conversion(true)
         .add_pattern(FuncSignatureConversionPattern)
         .add_pattern(WasmFuncSignatureConversionPattern)
-        .add_pattern(IndirectCallSignaturePattern);
+        .add_pattern(IndirectCallSignaturePattern::new());
     applicator.apply_partial(ctx, module);
 }
 
@@ -59,9 +60,24 @@ pub(crate) fn lower(ctx: &mut IrContext, module: Module) {
 /// patterns. An input slot therefore follows its argument only once the
 /// argument holds a conversion of the declared type, which keeps the signature
 /// equal to the argument types whatever order the patterns apply in.
-struct IndirectCallSignaturePattern;
+struct IndirectCallSignaturePattern {
+    /// The operations that implement `IndirectCallLike`.
+    roots: Vec<OpName>,
+}
+
+impl IndirectCallSignaturePattern {
+    fn new() -> Self {
+        Self {
+            roots: DynIndirectCallLike::implementors().collect(),
+        }
+    }
+}
 
 impl RewritePattern for IndirectCallSignaturePattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&self.roots)
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

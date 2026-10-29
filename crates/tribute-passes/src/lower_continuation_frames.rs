@@ -37,7 +37,7 @@ mod suffix_layer;
 
 use handle_layer::{ExpandHandles, number_handles};
 use perform::ExpandDispatches;
-use suffix_layer::{ExpandSuffixFrames, build_dispatch_adapters};
+use suffix_layer::{ExpandExits, ExpandSuffixFrames, SuffixExpansion, build_dispatch_adapters};
 
 /// Pass-manager wrapper of [`lower_continuation_frames`].
 pub struct LowerContinuationFrames;
@@ -85,11 +85,13 @@ pub fn lower_continuation_frames(
             .collect(),
     );
     let adapters = build_dispatch_adapters(ctx, module, module_block, &frames)?;
+    let suffix_expansion = SuffixExpansion {
+        frames: frames.clone(),
+        adapters: adapters.clone(),
+    };
     PatternApplicator::new(TypeConverter::new())
-        .add_pattern(ExpandSuffixFrames {
-            frames: frames.clone(),
-            adapters: adapters.clone(),
-        })
+        .add_pattern(ExpandSuffixFrames(&suffix_expansion))
+        .add_pattern(ExpandExits(&suffix_expansion))
         .add_pattern(ExpandHandles {
             frames: frames.clone(),
             adapters,
