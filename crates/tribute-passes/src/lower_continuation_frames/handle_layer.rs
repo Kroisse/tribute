@@ -765,9 +765,10 @@ impl OpRewritePattern for ExpandHandles {
         let bindings: Vec<_> = handle.handlers(ctx).collect();
         let &[source_block] = ctx.region(handle.body(ctx)).blocks.as_array()?;
         let &[source_evidence, source_frame] = ctx.block_args(source_block).as_array()?;
-        if bindings.len() != arm_values.len() {
-            return None;
-        }
+        rewriter.ensure(
+            bindings.len() == arm_values.len(),
+            "handler bindings and arms differ in number",
+        )?;
         let arms = bindings
             .into_iter()
             .zip(&arm_values)

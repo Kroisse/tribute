@@ -386,9 +386,10 @@ impl OpRewritePattern for LowerEffectDispatchTail<'_> {
         rewriter: &mut PatternRewriter<'_>,
     ) -> Option<()> {
         let op = dispatch_op.op_ref();
-        if !effect_dispatch::is_valid_tail_dispatch(ctx, op) {
-            return None;
-        }
+        rewriter.ensure(
+            effect_dispatch::is_valid_tail_dispatch(ctx, op),
+            "invalid tail dispatch",
+        )?;
 
         let loc = ctx.op(op).location;
         let ability_id = {
@@ -422,9 +423,10 @@ impl OpRewritePattern for LowerEffectDispatchCps<'_> {
         rewriter: &mut PatternRewriter<'_>,
     ) -> Option<()> {
         let op = dispatch_op.op_ref();
-        if !effect_dispatch::is_valid_cps_dispatch(ctx, op) {
-            return None;
-        }
+        rewriter.ensure(
+            effect_dispatch::is_valid_cps_dispatch(ctx, op),
+            "invalid CPS dispatch",
+        )?;
 
         let loc = ctx.op(op).location;
         let ability_id = {

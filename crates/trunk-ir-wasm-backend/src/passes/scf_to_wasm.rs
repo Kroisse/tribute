@@ -474,9 +474,7 @@ impl OpRewritePattern for ScfIfPattern<'_> {
         // created `wasm.if` must declare target types, so read them through the
         // converter instead of copying the shared IR spelling.
         let mut result_types = rewriter.result_types(ctx, op);
-        if result_types.len() > 1 {
-            return None;
-        }
+        rewriter.ensure(result_types.len() <= 1, "more than one result")?;
         let drop_result = self.0.drop_never_results.contains(&op);
         if drop_result {
             result_types.clear();
@@ -530,9 +528,7 @@ impl OpRewritePattern for ScfLoopPattern<'_> {
         // Get result type; reject multi-result loops. The created
         // `wasm.block`/`wasm.loop` must declare target types.
         let mut result_types = rewriter.result_types(ctx, op);
-        if result_types.len() > 1 {
-            return None;
-        }
+        rewriter.ensure(result_types.len() <= 1, "more than one result")?;
         let drop_result = self.0.drop_never_results.contains(&op);
         if drop_result {
             result_types.clear();

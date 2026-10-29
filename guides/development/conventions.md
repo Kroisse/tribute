@@ -222,7 +222,10 @@ A check worth explaining gives its reason through the rewriter instead of
 logging: `rewriter.require(option, "reason")?` and
 `rewriter.ensure(condition, "reason")?` take a static reason, and
 `return rewriter.no_match(format!(..))` builds one in the failing branch. The
-applicator logs the reason at debug level with the pattern and operation.
+applicator logs the reason at debug level with the pattern and operation. Give
+a reason where the operation is one the pattern handles but its shape or a
+precondition rules the rewrite out; a check that only tells another operation
+apart, such as its dialect or callee, stays a plain `?` or `return None`.
 
 Use full conversion where a phase boundary must reject every residual illegal
 operation. Bodyless external functions have no body region; inspect optional

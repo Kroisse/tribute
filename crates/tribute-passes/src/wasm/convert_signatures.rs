@@ -91,9 +91,10 @@ impl RewritePattern for IndirectCallSignaturePattern {
         let results = signature.results(ctx).to_vec();
         let arguments = call.indirect_arguments(ctx)?;
         let arguments: Vec<_> = arguments.iter().map(|&arg| ctx.value_ty(arg)).collect();
-        if arguments.len() != declared.len() {
-            return None;
-        }
+        rewriter.ensure(
+            arguments.len() == declared.len(),
+            "argument count differs from the signature",
+        )?;
         let mut inputs = Vec::with_capacity(declared.len());
         for (declared, actual) in declared.into_iter().zip(arguments) {
             let converted = actual != declared

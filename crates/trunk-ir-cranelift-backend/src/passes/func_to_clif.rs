@@ -263,25 +263,30 @@ impl OpRewritePattern for FuncCallIndirectPattern {
             .copied()
             .filter(|ty| !crate::function::is_nil_type(ctx, *ty))
             .collect::<Vec<_>>();
-        if callable.inputs(ctx).len() != CallLike::call_args(&call, ctx).len()
-            || callable
-                .inputs(ctx)
-                .iter()
-                .zip(CallLike::call_args(&call, ctx))
-                .any(|(&param, &arg)| param != ctx.value_ty(arg))
-            || (result_types.as_slice() != callable.results(ctx)
-                && result_types != runtime_result_types)
-        {
-            return None;
-        }
+        let args = CallLike::call_args(&call, ctx);
+        rewriter.ensure(
+            callable.inputs(ctx).len() == args.len()
+                && callable
+                    .inputs(ctx)
+                    .iter()
+                    .zip(args)
+                    .all(|(&param, &arg)| param == ctx.value_ty(arg)),
+            "arguments do not match the indirect call signature",
+        )?;
+        rewriter.ensure(
+            result_types.as_slice() == callable.results(ctx)
+                || result_types == runtime_result_types,
+            "results do not match the indirect call signature",
+        )?;
 
         let new_op = crate::passes::cf_to_clif::rebuild_op_as(ctx, op, "clif.call_indirect");
         let mut attributes = std::mem::take(&mut ctx.op_mut(new_op).attributes);
         func::remove_indirect_call_signature(ctx, &mut attributes);
         ctx.op_mut(new_op).attributes = attributes;
-        if !clif::set_indirect_call_signature(ctx, new_op, sig_ty) {
-            return None;
-        }
+        rewriter.ensure(
+            clif::set_indirect_call_signature(ctx, new_op, sig_ty),
+            "indirect call signature does not fit the call",
+        )?;
         for (index, result_ty) in result_types.into_iter().enumerate() {
             ctx.set_op_result_type(new_op, index as u32, result_ty);
         }
@@ -352,26 +357,37 @@ impl OpRewritePattern for FuncTailCallIndirectPattern {
         let signature = convert_to_clif_func_type(ctx, signature, rewriter.type_converter())?;
         let callable = clif::FuncSig::from_type_ref(ctx, signature)?;
         let caller_results = enclosing_results(ctx, op, rewriter.type_converter())?;
-        if callable.call_conv(ctx) != Some(func::CallConv::Tail)
-            || callable.results(ctx) != caller_results.as_slice()
-            || !TailCallLike::is_resultless(&tail, ctx)
-            || callable.inputs(ctx).len() != CallLike::call_args(&tail, ctx).len()
-            || callable
-                .inputs(ctx)
-                .iter()
-                .zip(CallLike::call_args(&tail, ctx))
-                .any(|(&param, &arg)| param != ctx.value_ty(arg))
-        {
-            return None;
-        }
+        rewriter.ensure(
+            callable.call_conv(ctx) == Some(func::CallConv::Tail),
+            "indirect tail call signature is not tail-callable",
+        )?;
+        rewriter.ensure(
+            callable.results(ctx) == caller_results.as_slice(),
+            "indirect tail call results differ from the caller's",
+        )?;
+        rewriter.ensure(
+            TailCallLike::is_resultless(&tail, ctx),
+            "indirect tail call has results",
+        )?;
+        let args = CallLike::call_args(&tail, ctx);
+        rewriter.ensure(
+            callable.inputs(ctx).len() == args.len()
+                && callable
+                    .inputs(ctx)
+                    .iter()
+                    .zip(args)
+                    .all(|(&param, &arg)| param == ctx.value_ty(arg)),
+            "arguments do not match the indirect tail call signature",
+        )?;
 
         let new_op = crate::passes::cf_to_clif::rebuild_op_as(ctx, op, "clif.return_call_indirect");
         let mut attributes = std::mem::take(&mut ctx.op_mut(new_op).attributes);
         func::remove_indirect_call_signature(ctx, &mut attributes);
         ctx.op_mut(new_op).attributes = attributes;
-        if !clif::set_indirect_call_signature(ctx, new_op, signature) {
-            return None;
-        }
+        rewriter.ensure(
+            clif::set_indirect_call_signature(ctx, new_op, signature),
+            "indirect tail call signature does not fit the call",
+        )?;
         rewriter.replace_op(new_op);
         Some(())
     }
@@ -463,7 +479,7 @@ impl OpRewritePattern for FuncConstantPattern {
                 .and_then(|target| self.functions.get(&target).copied())
                 != Some(result)
         {
-            return None;
+            return rewriter.no_match("constant's type differs from the function it names");
         }
         let loc = ctx.op(op).location;
         let ptr_ty = intern_ptr_type(ctx);

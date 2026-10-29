@@ -199,9 +199,10 @@ impl OpRewritePattern for VariantIsPattern {
             return Some(());
         };
         // The comparison yields `core.i1`, the type a variant test has.
-        if !core::I1::matches(ctx, result_ty) {
-            return None;
-        }
+        rewriter.ensure(
+            core::I1::matches(ctx, result_ty),
+            "variant test result is not core.i1",
+        )?;
         let actual = tribute_rtti::Descriptor::operands(variant_is.r#ref(ctx)).build(ctx, loc);
         let i32_ty = ctx.value_ty(actual.result(ctx));
         let expected = arith::Const::operands()

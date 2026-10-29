@@ -171,9 +171,10 @@ impl OpRewritePattern for BytesRangeEqualPattern<'_> {
         }
 
         let operands = ctx.op_operands(op).to_vec();
-        if operands.len() != 5 {
-            return None;
-        }
+        rewriter.ensure(
+            operands.len() == 5,
+            "bytes range comparison does not take five operands",
+        )?;
         let location = ctx.op(op).location;
         let result_ty = ctx.op_result_types(op)[0];
         let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
@@ -356,9 +357,10 @@ impl OpRewritePattern for BytesConcatPattern<'_> {
         }
 
         let operands = ctx.op_operands(op).to_vec();
-        if operands.len() < 2 {
-            return None;
-        }
+        rewriter.ensure(
+            operands.len() >= 2,
+            "bytes concatenation takes fewer than two operands",
+        )?;
         let left = operands[0];
         let right = operands[1];
 
