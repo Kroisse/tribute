@@ -738,7 +738,9 @@ pub(super) fn number_handles(ctx: &IrContext, module: Module) -> HashMap<OpRef, 
     handles
 }
 
-/// Expands `ability.handle`.
+/// Replaces `ability.handle` with the first installation of its layer:
+/// the layer's factories, a fresh prompt, and the `ability.handle_dispatch`
+/// whose body starts by building the layer's frame.
 pub(super) struct ExpandHandles {
     pub(super) frames: FrameLayouts,
     pub(super) adapters: DispatchAdapters,
@@ -752,20 +754,6 @@ impl OpRewritePattern for ExpandHandles {
         &self,
         ctx: &mut IrContext,
         handle: Self::Op,
-        rewriter: &mut PatternRewriter<'_>,
-    ) -> Option<()> {
-        self.expand_handle(ctx, handle, rewriter)
-    }
-}
-
-impl ExpandHandles {
-    /// Replace `ability.handle` with the first installation of its layer:
-    /// the layer's factories, a fresh prompt, and the `ability.handle_dispatch`
-    /// whose body starts by building the layer's frame.
-    fn expand_handle(
-        &self,
-        ctx: &mut IrContext,
-        handle: ability::Handle,
         rewriter: &mut PatternRewriter<'_>,
     ) -> Option<()> {
         let op = handle.op_ref();
