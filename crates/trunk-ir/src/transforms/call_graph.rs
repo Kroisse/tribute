@@ -10,6 +10,9 @@
 //! Functions are identified by their defining operations. A reference is
 //! resolved by [`SymbolTable`] from the operation that holds it; one that
 //! names no unique symbol adds no edge.
+//!
+//! A pass that rewrites the calls a graph describes can keep its own copy
+//! current with [`CallGraph::inline_call`] instead of rebuilding it.
 
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
@@ -33,7 +36,7 @@ type Edges = HashMap<OpRef, HashSet<OpRef>>;
 /// Reference edges are conservative: they represent "function X escapes as a
 /// value, so could be called from anywhere later" and should be treated as a
 /// call edge for recursion detection.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct CallGraph {
     /// Caller → set of callees (includes direct calls and address references).
     pub edges: Edges,
@@ -52,6 +55,104 @@ pub struct CallGraph {
     /// Address references are *not* counted here (they are tracked in
     /// `address_taken`).
     pub call_site_count: HashMap<OpRef, usize>,
+    /// Caller → the references in its body, for callers with any.
+    bodies: HashMap<OpRef, BodyReferences>,
+    /// Symbol → number of function bodies that take its address.
+    address_referrers: HashMap<OpRef, usize>,
+}
+
+/// The references in one function body, by target.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct BodyReferences {
+    /// Callee → number of direct-call sites.
+    calls: HashMap<OpRef, usize>,
+    /// Symbols referenced other than as the callee of a direct call.
+    addresses: HashSet<OpRef>,
+}
+
+impl BodyReferences {
+    fn is_empty(&self) -> bool {
+        self.calls.is_empty() && self.addresses.is_empty()
+    }
+}
+
+impl CallGraph {
+    /// Update the graph after the direct call from `caller` to `callee` was
+    /// replaced by a copy of `callee`'s body, as the inliner does.
+    ///
+    /// The graph is then the one a rebuild gives, provided `caller` and
+    /// `callee` are in the same symbol table, so the copied references
+    /// resolve to the same symbols, and `callee` is not `caller`.
+    ///
+    /// # Panics
+    ///
+    /// If `caller` has no direct call to `callee`.
+    pub fn inline_call(&mut self, caller: OpRef, callee: OpRef) {
+        assert_ne!(caller, callee, "a function is not inlined into itself");
+        let mut body = self.remove_body(caller);
+        let sites = body
+            .calls
+            .get_mut(&callee)
+            .expect("the inlined call is a direct call from the caller");
+        *sites -= 1;
+        if *sites == 0 {
+            body.calls.remove(&callee);
+        }
+        if let Some(inlined) = self.bodies.get(&callee) {
+            for (&target, &sites) in &inlined.calls {
+                *body.calls.entry(target).or_insert(0) += sites;
+            }
+            body.addresses.extend(inlined.addresses.iter().copied());
+        }
+        self.add_body(caller, body);
+    }
+
+    fn add_body(&mut self, caller: OpRef, body: BodyReferences) {
+        if body.is_empty() {
+            return;
+        }
+        for (&callee, &sites) in &body.calls {
+            self.edges.entry(caller).or_default().insert(callee);
+            self.calls.entry(caller).or_default().insert(callee);
+            *self.call_site_count.entry(callee).or_insert(0) += sites;
+        }
+        for &target in &body.addresses {
+            self.edges.entry(caller).or_default().insert(target);
+            self.address_taken.insert(target);
+            *self.address_referrers.entry(target).or_insert(0) += 1;
+        }
+        self.bodies.insert(caller, body);
+    }
+
+    fn remove_body(&mut self, caller: OpRef) -> BodyReferences {
+        let body = self.bodies.remove(&caller).unwrap_or_default();
+        self.edges.remove(&caller);
+        self.calls.remove(&caller);
+        for (callee, &sites) in &body.calls {
+            let count = self
+                .call_site_count
+                .get_mut(callee)
+                .expect("every recorded call site is counted");
+            *count -= sites;
+            if *count == 0 {
+                self.call_site_count.remove(callee);
+            }
+        }
+        for target in &body.addresses {
+            let referrers = self
+                .address_referrers
+                .get_mut(target)
+                .expect("every recorded address reference is counted");
+            *referrers -= 1;
+            if *referrers == 0 {
+                self.address_referrers.remove(target);
+                if !self.module_references.contains(target) {
+                    self.address_taken.remove(target);
+                }
+            }
+        }
+        body
+    }
 }
 
 /// Build a call graph for `module`, recursing into nested `core.module` ops.
@@ -100,21 +201,22 @@ pub fn call_graph_over(
         .filter(|&op| is_function(ctx, op))
         .collect();
     for caller in graph.functions.clone() {
+        let mut body = BodyReferences::default();
         for region in ctx.op_regions(caller) {
-            collect_calls(ctx, region, caller, symbols, &mut graph, is_function);
+            collect_references(ctx, region, symbols, &mut body, is_function);
         }
+        graph.add_body(caller, body);
     }
     graph
 }
 
-/// Record the calls and references in `region` as edges from `caller`.
-/// Nested function definitions record their own edges.
-fn collect_calls(
+/// Record the calls and references in `region` into `body`. Nested function
+/// definitions record their own.
+fn collect_references(
     ctx: &IrContext,
     region: RegionRef,
-    caller: OpRef,
     symbols: &SymbolTable,
-    graph: &mut CallGraph,
+    body: &mut BodyReferences,
     is_function: FunctionDefinition,
 ) {
     let _ = walk_region::<()>(ctx, region, &mut |op| {
@@ -131,20 +233,13 @@ fn collect_calls(
                 return;
             };
             if is_callee {
-                record_call(graph, caller, target);
+                *body.calls.entry(target).or_insert(0) += 1;
             } else {
-                graph.edges.entry(caller).or_default().insert(target);
-                graph.address_taken.insert(target);
+                body.addresses.insert(target);
             }
         });
         ControlFlow::Continue(WalkAction::Advance)
     });
-}
-
-fn record_call(graph: &mut CallGraph, caller: OpRef, callee: OpRef) {
-    graph.edges.entry(caller).or_default().insert(callee);
-    graph.calls.entry(caller).or_default().insert(callee);
-    *graph.call_site_count.entry(callee).or_insert(0) += 1;
 }
 
 /// `CallGraph` as an [`Analysis`] over the [`SymbolTable`] of `target`, which
@@ -497,6 +592,76 @@ mod tests {
         assert_eq!(fresh.call_site_count.get(&other), Some(&1));
         assert_eq!(old.call_site_count.get(&leaf), Some(&1));
         assert!(!std::sync::Arc::ptr_eq(&old, &fresh));
+    }
+
+    /// The call in `caller`'s body to `callee`, the first one if several.
+    fn call_to(ctx: &IrContext, caller: OpRef, callee: &str) -> OpRef {
+        let body = ctx.op_region(caller, 0).unwrap();
+        let mut found = None;
+        let _ = walk_region::<()>(ctx, body, &mut |op| {
+            if found.is_none()
+                && func::Call::from_op(ctx, op).is_ok_and(|call| call.callee(ctx) == [callee])
+            {
+                found = Some(op);
+            }
+            ControlFlow::Continue(WalkAction::Advance)
+        });
+        found.expect("caller calls callee")
+    }
+
+    fn root_symbol(ctx: &IrContext, module: Module, name: &str) -> OpRef {
+        SymbolTable::collect(ctx, module)
+            .resolve_in(ctx, module.op(), &SymbolPath::new([name]))
+            .unwrap()
+    }
+
+    const INLINE_FIXTURE: &str = r#"core.module @test {
+  func.func @leaf() -> core.i32 {
+    %0 = arith.const {value = 0} : core.i32
+    func.return %0
+  }
+  func.func @other() -> core.i32 {
+    %0 = arith.const {value = 1} : core.i32
+    func.return %0
+  }
+  func.func @helper() -> core.i32 {
+    %0 = func.call {callee = @leaf} : core.i32
+    %1 = func.constant {func_ref = @other} : core.ptr
+    func.return %0
+  }
+  func.func @main() -> core.i32 {
+    %0 = func.call {callee = @helper} : core.i32
+    %1 = func.call {callee = @helper} : core.i32
+    func.return %1
+  }
+}"#;
+
+    #[test]
+    fn inline_call_matches_a_rebuild() {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, INLINE_FIXTURE);
+        let [main, helper, leaf, other] =
+            ["main", "helper", "leaf", "other"].map(|name| root_symbol(&ctx, module, name));
+        let mut graph = build_call_graph(&ctx, module);
+
+        // One of two calls: `main` still calls `helper` and now also
+        // calls `leaf` and takes the address of `other`.
+        let call = call_to(&ctx, main, "helper");
+        crate::transforms::inline_single_call(&mut ctx, call, helper).unwrap();
+        graph.inline_call(main, helper);
+        assert_eq!(graph, build_call_graph(&ctx, module));
+        assert_eq!(graph.call_site_count.get(&helper), Some(&1));
+        assert_eq!(graph.call_site_count.get(&leaf), Some(&2));
+
+        // The last call: `main` no longer calls `helper`, and the address
+        // of `other` is taken once by each body.
+        let call = call_to(&ctx, main, "helper");
+        crate::transforms::inline_single_call(&mut ctx, call, helper).unwrap();
+        graph.inline_call(main, helper);
+        assert_eq!(graph, build_call_graph(&ctx, module));
+        assert_eq!(graph.call_site_count.get(&helper), None);
+        assert!(!graph.calls[&main].contains(&helper));
+        assert!(graph.address_taken.contains(&other));
     }
 
     #[test]

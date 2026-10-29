@@ -218,7 +218,7 @@ fn module_path(ctx: &IrContext, op: OpRef) -> SymbolPath {
     SymbolPath::new(path.into_iter().rev())
 }
 
-fn parent_op(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
+pub(crate) fn parent_op(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
     let block = ctx.op(op).parent_block?;
     ctx.region(ctx.block(block).parent_region?).parent_op
 }
