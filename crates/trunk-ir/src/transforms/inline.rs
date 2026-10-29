@@ -190,12 +190,11 @@ fn splice_callee_body_before(
 // =========================================================================
 
 use super::call_graph::{CallGraph, directly_recursive_functions};
-use crate::rewrite::{Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter};
-use crate::symbol_table::{SymbolTable, nearest_table, parent_op};
+use crate::rewrite::Module;
+use crate::symbol_table::{SymbolTable, nearest_table};
+use crate::walk::{WalkAction, walk_region};
 use rustc_hash::FxHashSet as HashSet;
-use std::cell::RefCell;
-use std::rc::Rc;
-use std::sync::Arc;
+use std::ops::ControlFlow;
 
 /// Knobs for the inlining pass.
 #[derive(Debug, Clone)]
@@ -299,69 +298,76 @@ pub struct InlineResult {
 /// same phase (e.g. a future canonicalize) can share the cached call
 /// graph. See [`crate::analysis`] module docs for the orchestration
 /// convention.
-fn inline_functions(
-    ctx: &mut IrContext,
-    module: Module,
-    am: &mut crate::analysis::AnalysisCache,
-) -> InlineResult {
+fn inline_functions(ctx: &mut IrContext, module: Module, am: &mut AnalysisCache) -> InlineResult {
     inline_functions_with_config(ctx, module, InlineConfig::default(), am)
 }
 
 /// Run one pass of function inlining with custom config. See
 /// [`inline_functions`] for the `am` injection convention.
 ///
-/// Drives the [`InlineCallSite`] pattern through a
-/// [`PatternApplicator`] one iteration at a time over a copy of the
-/// [`CallGraph`] that the pattern **updates at each rewrite** with
-/// [`CallGraph::inline_call`]. This keeps the
+/// Sweeps the call sites of every function in the [`CallGraph`], in
+/// graph order, over a copy of the graph that **each rewrite updates**
+/// with [`CallGraph::inline_call`]. This keeps the
 /// `always_inline_single_call_site` fast path accurate when earlier
 /// rewrites duplicate a previously-single-site callee across multiple
 /// newly-exposed call sites; with a stale graph the heuristic becomes
 /// traversal-order dependent and can aggressively splice a large callee
-/// that no longer has a single site. Debug builds compare the copy with a
-/// rebuilt graph after every iteration. Inlining adds and removes no
-/// symbol, so the [`SymbolTable`] queried before the first rewrite stays
+/// that no longer has a single site. A sweep visits the call sites that
+/// existed when it started, so calls copied in by a splice wait for the
+/// next sweep. Debug builds compare the copy with a rebuilt graph after
+/// every sweep that changed the IR. Inlining adds and removes no symbol,
+/// so the [`SymbolTable`] queried before the first rewrite stays
 /// accurate.
 ///
-/// Loops until the applicator reports zero changes, with no artificial
-/// cap. Termination is guaranteed by policy: the inliner never
-/// targets recursive or escaping callees, so the subgraph being inlined
-/// is a DAG and every iteration strictly consumes at least one call op
-/// from a finite pool of inlineable call-chain depth. A deeply nested
-/// wrapper chain (e.g. `a → b → c → … → leaf`) can therefore require
-/// as many outer iterations as its depth, which the loop handles
-/// rather than returning a silent partial result.
+/// Loops until a sweep inlines nothing, with no artificial cap.
+/// Termination is guaranteed by policy: the inliner never targets
+/// recursive or escaping callees, so the subgraph being inlined is a DAG
+/// and every sweep strictly consumes at least one call op from a finite
+/// pool of inlineable call-chain depth. A deeply nested wrapper chain
+/// (e.g. `a → b → c → … → leaf`) can therefore require as many sweeps as
+/// its depth, which the loop handles rather than returning a silent
+/// partial result.
 fn inline_functions_with_config(
     ctx: &mut IrContext,
     module: Module,
     config: InlineConfig,
-    am: &mut crate::analysis::AnalysisCache,
+    am: &mut AnalysisCache,
 ) -> InlineResult {
-    let mut inlined_count = 0usize;
     let symbols = am.require::<SymbolTable>(ctx, module.op());
-    let graph = Rc::new(RefCell::new(CallGraph::clone(
-        &am.require::<CallGraph>(ctx, module.op()),
-    )));
+    let mut graph = CallGraph::clone(&am.require::<CallGraph>(ctx, module.op()));
+    let mut inlined_count = 0usize;
 
     loop {
-        let recursive = directly_recursive_functions(&graph.borrow());
-        let pattern = InlineCallSite::new(
-            Arc::clone(&symbols),
-            Rc::clone(&graph),
-            recursive,
-            config.clone(),
-        );
-
-        let applicator = PatternApplicator::new(TypeConverter::new())
-            .add_pattern(pattern)
-            .with_max_iterations(1);
-        let result = applicator.apply_partial(ctx, module);
-        if result.total_changes == 0 {
+        let recursive = directly_recursive_functions(&graph);
+        let mut changes = 0usize;
+        for (caller, call) in call_sites(ctx, &graph) {
+            let Some(callee) = ctx.op_attrs(call).get_symbol_ref("callee") else {
+                continue;
+            };
+            let Some(callee_op) = symbols.resolve(ctx, call, callee) else {
+                continue;
+            };
+            // The callee body's references are written for its own module;
+            // they would name other symbols from the caller's.
+            if nearest_table(ctx, call) != nearest_table(ctx, callee_op) {
+                continue;
+            }
+            if !should_inline(&graph, &config, &recursive, ctx, callee_op) {
+                continue;
+            }
+            // Policy said yes but the primitive may still reject the callee
+            // (e.g. it has no body); keep the pass resilient.
+            if inline_single_call(ctx, call, callee_op).is_ok() {
+                graph.inline_call(caller, callee_op);
+                changes += 1;
+            }
+        }
+        if changes == 0 {
             break;
         }
-        inlined_count += result.total_changes;
+        inlined_count += changes;
         debug_assert!(
-            *graph.borrow() == super::call_graph::build_call_graph(ctx, module),
+            graph == super::call_graph::build_call_graph(ctx, module),
             "the inliner's call graph must equal a rebuild of the current IR"
         );
     }
@@ -369,130 +375,29 @@ fn inline_functions_with_config(
     InlineResult { inlined_count }
 }
 
-// =========================================================================
-// InlineCallSite pattern
-// =========================================================================
-
-/// A per-call-site rewrite pattern that inlines a `func.call` /
-/// `func.tail_call` whose callee satisfies [`InlineConfig`]-driven policy.
-///
-/// # Graph accuracy
-///
-/// The shared [`CallGraph`] must be **accurate for the current IR**.
-/// The `always_inline_single_call_site` rule in particular is sensitive
-/// to stale `call_site_count`: once an earlier rewrite duplicates a
-/// previously-single-site callee across several newly-exposed call
-/// sites, the heuristic would otherwise take the single-site fast path
-/// N times over, splicing a potentially large callee body into every
-/// caller.
-///
-/// The pattern updates the graph with [`CallGraph::inline_call`] at each
-/// rewrite, and inlines only call sites the graph records. Patterns
-/// composed with it in one applicator must not change direct calls or
-/// symbol references, which the graph would not see.
-pub struct InlineCallSite {
-    symbols: Arc<SymbolTable>,
-    graph: Rc<RefCell<CallGraph>>,
-    recursive: HashSet<OpRef>,
-    config: InlineConfig,
-}
-
-impl InlineCallSite {
-    /// Build a pattern against `symbols`, `graph` and `recursive` using
-    /// `config`.
-    pub fn new(
-        symbols: Arc<SymbolTable>,
-        graph: Rc<RefCell<CallGraph>>,
-        recursive: HashSet<OpRef>,
-        config: InlineConfig,
-    ) -> Self {
-        Self {
-            symbols,
-            graph,
-            recursive,
-            config,
+/// The direct calls in the bodies of `graph`'s `func.func`s, each with the
+/// function whose body holds it. Calls in a nested function definition
+/// belong to no function of the graph and are left out, as the graph
+/// leaves them out.
+fn call_sites(ctx: &IrContext, graph: &CallGraph) -> Vec<(OpRef, OpRef)> {
+    let mut sites = Vec::new();
+    for &caller in &graph.functions {
+        if !func::Func::matches(ctx, caller) {
+            continue;
+        }
+        for region in ctx.op_regions(caller) {
+            let _ = walk_region::<()>(ctx, region, &mut |op| {
+                if func::Func::matches(ctx, op) {
+                    return ControlFlow::Continue(WalkAction::Skip);
+                }
+                if func::Call::matches(ctx, op) || func::TailCall::matches(ctx, op) {
+                    sites.push((caller, op));
+                }
+                ControlFlow::Continue(WalkAction::Advance)
+            });
         }
     }
-}
-
-impl RewritePattern for InlineCallSite {
-    fn match_and_rewrite(
-        &self,
-        ctx: &mut IrContext,
-        op: OpRef,
-        rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let is_tail = func::TailCall::matches(ctx, op);
-        let is_regular = func::Call::matches(ctx, op);
-        if !is_tail && !is_regular {
-            return false;
-        }
-
-        let Some(callee) = ctx.op_attrs(op).get_symbol_ref("callee") else {
-            return false;
-        };
-        let Some(callee_op) = self.symbols.resolve(ctx, op, callee) else {
-            return false;
-        };
-        // The callee body's references are written for its own module; they
-        // would name other symbols from the caller's.
-        if nearest_table(ctx, op) != nearest_table(ctx, callee_op) {
-            return false;
-        }
-        let Some(caller) = enclosing_function(ctx, op) else {
-            return false;
-        };
-        {
-            let graph = self.graph.borrow();
-            if !graph
-                .calls
-                .get(&caller)
-                .is_some_and(|callees| callees.contains(&callee_op))
-            {
-                return false;
-            }
-            if !should_inline(&graph, &self.config, &self.recursive, ctx, callee_op) {
-                return false;
-            }
-        }
-
-        let call_loc = ctx.op(op).location;
-        let ret_values = match splice_callee_body_before(ctx, op, callee_op) {
-            Ok(v) => v,
-            Err(_) => {
-                // Policy said yes but primitive rejected (e.g. callee has
-                // no body). Keep pass resilient.
-                return false;
-            }
-        };
-        self.graph.borrow_mut().inline_call(caller, callee_op);
-
-        if is_tail {
-            let new_ret = func::Return::operands(ret_values)
-                .build(ctx, call_loc)
-                .op_ref();
-            rewriter.replace_op(new_ret);
-        } else {
-            rewriter.erase_op(ret_values);
-        }
-        true
-    }
-
-    fn name(&self) -> &'static str {
-        "InlineCallSite"
-    }
-}
-
-/// The `func.func` whose body holds `op`.
-fn enclosing_function(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
-    let mut current = parent_op(ctx, op);
-    while let Some(op) = current {
-        if func::Func::matches(ctx, op) {
-            return Some(op);
-        }
-        current = parent_op(ctx, op);
-    }
-    None
+    sites
 }
 
 // =========================================================================
@@ -1334,12 +1239,12 @@ mod pass {
         use crate::analysis::AnalysisCache;
 
         // Declaration order puts the callers (`a`, `b`) before the chain
-        // (`wrapper`, `large`). The applicator first inlines `wrapper`
+        // (`wrapper`, `large`). The first sweep inlines `wrapper`
         // into `a` and `b` via the size threshold, which duplicates the
         // inner `call @large` into both callers. When it reaches
         // `wrapper`'s own call, the updated graph counts three call sites
         // to `large`, so the single-call-site fast path must *not* fire
-        // even though the graph at the start of the iteration counted one.
+        // even though the graph at the start of the sweep counted one.
         //
         // No copy of `large` is made: `a`, `b`, and `wrapper` all keep
         // `call @large`.
@@ -1409,7 +1314,7 @@ mod pass {
         // main() -> helper()
         //
         // All three are small, single-call-site, non-recursive. A single
-        // invocation of `inline_functions` should drive the applicator to
+        // invocation of `inline_functions` should sweep to
         // a fixed point that eliminates both `func.call` sites in one run.
         let input = r#"core.module @test {
   func.func @inner() -> core.i32 {
@@ -1437,95 +1342,6 @@ mod pass {
         // Fresh graph must contain no call edges at all.
         let post = am.require::<CallGraph>(&ctx, module.op());
         assert!(post.call_site_count.is_empty());
-    }
-
-    #[test]
-    fn composes_with_another_rewrite_pattern_in_same_applicator() {
-        use crate::analysis::AnalysisCache;
-        use crate::rewrite::{PatternApplicator, TypeConverter};
-        use crate::transforms::canonicalize::FoldDispatchPattern;
-
-        // helper(%arg) -> %arg + 0
-        // main()       -> helper(5)
-        //
-        // Running the inliner pattern alongside a single-entry
-        // canonicalize fold dispatcher in the same applicator drives
-        // both to a fixed point: inlining exposes `arith.addi %5, %0`
-        // inside `main`, the fold dispatcher rewrites it via
-        // the `arith.addi` fold, and the final result contains a single constant
-        // + return.
-        let input = r#"core.module @test {
-  func.func @helper(%arg: core.i32) -> core.i32 {
-    %0 = arith.const {value = 0} : core.i32
-    %1 = arith.addi %arg, %0 : core.i32
-    func.return %1
-  }
-  func.func @main() -> core.i32 {
-    %0 = arith.const {value = 5} : core.i32
-    %1 = func.call %0 {callee = @helper} : core.i32
-    func.return %1
-  }
-}"#;
-        let mut ctx = IrContext::new();
-        let module = crate::parser::parse_test_module(&mut ctx, input);
-
-        let mut am = AnalysisCache::new();
-        let symbols = am.require::<SymbolTable>(&ctx, module.op());
-        let graph = am.require::<CallGraph>(&ctx, module.op());
-        let recursive = directly_recursive_functions(&graph);
-        let main_op = root_symbol(&ctx, module, "main");
-
-        let inline_pattern = InlineCallSite::new(
-            symbols,
-            Rc::new(RefCell::new(CallGraph::clone(&graph))),
-            recursive,
-            InlineConfig::default(),
-        );
-
-        let total_changes = {
-            let dispatcher = FoldDispatchPattern::from_ops([crate::dialect::arith::Addi::NAME]);
-            let applicator = PatternApplicator::new(TypeConverter::new())
-                .add_pattern(inline_pattern)
-                .add_pattern_box(Box::new(dispatcher));
-            applicator.apply_partial(&mut ctx, module).total_changes
-        };
-
-        // The applicator must have fired both patterns: the inliner once
-        // (call → spliced body) and the fold at least once on the exposed
-        // `arith.addi`. With one call + one add this floor is two changes.
-        assert!(
-            total_changes >= 2,
-            "expected at least one inline + one fold mutation, got {total_changes}"
-        );
-
-        // End state: `main` has no calls and no `arith.addi` — just the
-        // const + return left. This is the composition property: the
-        // inliner exposed the `arith.addi %5, %0` inside `main`, and the
-        // fold pattern erased it in the same applicator sweep.
-        let body = ctx.op_region(main_op, 0).unwrap();
-        let (has_call, has_add) = scan_main_body(&ctx, body);
-        assert!(!has_call, "main should not contain any calls after run");
-        assert!(
-            !has_add,
-            "main should not contain any arith.addi after composition"
-        );
-    }
-
-    fn scan_main_body(ctx: &IrContext, region: crate::refs::RegionRef) -> (bool, bool) {
-        use crate::walk::{WalkAction, walk_region};
-        use std::ops::ControlFlow;
-        let mut has_call = false;
-        let mut has_add = false;
-        let _ = walk_region::<()>(ctx, region, &mut |op| {
-            if func::Call::matches(ctx, op) || func::TailCall::matches(ctx, op) {
-                has_call = true;
-            }
-            if ctx.op(op).name.is(ctx, "arith.addi") {
-                has_add = true;
-            }
-            ControlFlow::Continue(WalkAction::Advance)
-        });
-        (has_call, has_add)
     }
 }
 
