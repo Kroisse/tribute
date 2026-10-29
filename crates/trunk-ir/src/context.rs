@@ -5,7 +5,7 @@
 //! use `EntityList + ListPool` for compact 4-byte per-field storage.
 
 use rustc_hash::FxHashMap as HashMap;
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use cranelift_entity::{EntityList, EntityRef, ListPool, PrimaryMap, SecondaryMap};
@@ -19,6 +19,11 @@ use crate::location::Span;
 use crate::op_def::{OpName, OpNameArg};
 use crate::symbol::Symbol;
 use crate::type_def::TypeName;
+
+mod reads;
+
+use reads::ReadRecorder;
+pub(crate) use reads::{ReadEntity, ReadFootprint};
 
 // ============================================================================
 // Use-chain
@@ -217,48 +222,6 @@ pub struct IrContext {
     unclassified_revision: u64,
 }
 
-/// One IR entity an analysis computation read.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) enum ReadEntity {
-    Op(OpRef),
-    Block(BlockRef),
-    Region(RegionRef),
-    Value(ValueRef),
-    /// Reads already known to include one with no anchor chain; a
-    /// compacted segment holds it alone.
-    Chainless,
-}
-
-/// The anchors whose counters cover a computation's reads.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ReadFootprint {
-    /// Some read had no anchor chain.
-    WholeContext,
-    /// The outermost anchors read; none is an ancestor of another.
-    Anchors(SmallVec<[OpRef; 2]>),
-}
-
-/// Records reads through `&self` accessors during nested analysis
-/// computations. Each computation takes the log segment it started.
-#[derive(Default)]
-struct ReadRecorder {
-    depth: Cell<u32>,
-    /// Where the innermost active computation's segment starts.
-    segment_start: Cell<usize>,
-    log: RefCell<Vec<ReadEntity>>,
-}
-
-/// The shortest segment `IrContext::record_read` reduces to its anchors.
-const MIN_COMPACTED_READS: usize = 1024;
-
-/// The log segment of one recorded computation, returned by
-/// `IrContext::begin_reads`.
-#[must_use]
-pub(crate) struct ReadSegment {
-    start: usize,
-    outer_start: usize,
-}
-
 /// Advance an IR revision; a field-level helper so interning can advance it
 /// while an interner entry is still borrowed.
 fn advance_revision(revision: &mut u64) {
@@ -449,58 +412,6 @@ impl IrContext {
         }
     }
 
-    #[inline(always)]
-    fn record(&self, entity: ReadEntity) {
-        if self.reads.depth.get() != 0 {
-            self.record_read(entity);
-        }
-    }
-
-    #[inline(never)]
-    fn record_read(&self, entity: ReadEntity) {
-        let mut log = self.reads.log.borrow_mut();
-        let start = self.reads.segment_start.get();
-        let segment = &log[start..];
-        if segment.last() == Some(&entity) || segment == [ReadEntity::Chainless] {
-            return;
-        }
-        // Reduce a full segment to its anchors in place, so a computation
-        // that walks a large subtree keeps a log about the size of its
-        // footprint instead of one entry per read.
-        if log.len() == log.capacity() && segment.len() >= MIN_COMPACTED_READS {
-            let footprint = self.read_footprint(segment);
-            log.truncate(start);
-            match footprint {
-                ReadFootprint::WholeContext => log.push(ReadEntity::Chainless),
-                ReadFootprint::Anchors(anchors) => {
-                    log.extend(anchors.into_iter().map(ReadEntity::Op));
-                }
-            }
-        }
-        log.push(entity);
-    }
-
-    /// Start recording reads for one computation.
-    pub(crate) fn begin_reads(&self) -> ReadSegment {
-        self.reads.depth.set(self.reads.depth.get() + 1);
-        let start = self.reads.log.borrow().len();
-        let outer_start = self.reads.segment_start.replace(start);
-        ReadSegment { start, outer_start }
-    }
-
-    /// Stop recording the computation `segment` began and return the
-    /// footprint of its reads, excluding those of computations nested in it.
-    pub(crate) fn end_reads(&self, segment: ReadSegment) -> ReadFootprint {
-        let depth = self.reads.depth.get();
-        assert!(depth != 0, "end_reads without begin_reads");
-        self.reads.depth.set(depth - 1);
-        self.reads.segment_start.set(segment.outer_start);
-        let mut log = self.reads.log.borrow_mut();
-        let footprint = self.read_footprint(&log[segment.start..]);
-        log.truncate(segment.start);
-        footprint
-    }
-
     fn block_owner(&self, block: BlockRef) -> Option<OpRef> {
         self.blocks[block]
             .parent_region
@@ -518,106 +429,6 @@ impl IrContext {
             .name
             .def()
             .is_some_and(crate::op_def::OpDef::has_flag::<crate::op_flag::IsolatedFromAbove>)
-    }
-
-    /// The innermost anchor at or above `block`'s owner, or `None` when the
-    /// block's root is not an anchor.
-    fn anchor_of_block(
-        &self,
-        block: BlockRef,
-        memo: &mut HashMap<BlockRef, Option<OpRef>>,
-    ) -> Option<OpRef> {
-        if let Some(&anchor) = memo.get(&block) {
-            return anchor;
-        }
-        let anchor = match self.block_owner(block) {
-            None => None,
-            Some(owner) => {
-                let above = self.ops[owner]
-                    .parent_block
-                    .map(|parent| self.anchor_of_block(parent, memo));
-                match above {
-                    Some(None) => None,
-                    _ if self.is_anchor(owner) => Some(owner),
-                    Some(above) => above,
-                    None => None,
-                }
-            }
-        };
-        memo.insert(block, anchor);
-        anchor
-    }
-
-    /// Map recorded reads to the outermost anchors that cover them. Reads
-    /// fields directly, so an enclosing recording computation is unaffected.
-    fn read_footprint(&self, reads: &[ReadEntity]) -> ReadFootprint {
-        // Operations in one block share the innermost anchor at or above
-        // the block's owner, so the walk to the root runs once per block.
-        let mut block_anchors: HashMap<BlockRef, Option<OpRef>> = HashMap::default();
-        let mut anchors: SmallVec<[OpRef; 2]> = SmallVec::new();
-        let mut last_block = None;
-        for &entity in reads {
-            let (op, block) = match entity {
-                ReadEntity::Op(op) => (Some(op), self.ops[op].parent_block),
-                ReadEntity::Block(block) => (None, Some(block)),
-                ReadEntity::Region(region) => match self.regions[region].parent_op {
-                    Some(op) => (Some(op), self.ops[op].parent_block),
-                    None => return ReadFootprint::WholeContext,
-                },
-                ReadEntity::Value(value) => match self.values[value].def {
-                    ValueDef::OpResult(op, _) => (Some(op), self.ops[op].parent_block),
-                    ValueDef::BlockArg(block, _) => (None, Some(block)),
-                },
-                ReadEntity::Chainless => return ReadFootprint::WholeContext,
-            };
-            if let Some(op) = op
-                && self.is_anchor(op)
-            {
-                match block {
-                    Some(block) if self.anchor_of_block(block, &mut block_anchors).is_none() => {
-                        return ReadFootprint::WholeContext;
-                    }
-                    None => {}
-                    Some(_) => {}
-                }
-                if anchors.last() != Some(&op) {
-                    anchors.push(op);
-                }
-                continue;
-            }
-            let Some(block) = block else {
-                return ReadFootprint::WholeContext;
-            };
-            if last_block == Some(block) {
-                continue;
-            }
-            last_block = Some(block);
-            match self.anchor_of_block(block, &mut block_anchors) {
-                Some(anchor) => {
-                    if anchors.last() != Some(&anchor) {
-                        anchors.push(anchor);
-                    }
-                }
-                None => return ReadFootprint::WholeContext,
-            }
-        }
-        anchors.sort_unstable();
-        anchors.dedup();
-        let outermost = anchors
-            .iter()
-            .copied()
-            .filter(|&anchor| {
-                let mut current = anchor;
-                while let Some(parent) = self.parent_op(current) {
-                    if anchors.binary_search(&parent).is_ok() {
-                        return false;
-                    }
-                    current = parent;
-                }
-                true
-            })
-            .collect();
-        ReadFootprint::Anchors(outermost)
     }
 
     /// Read interned types without granting mutable access to the IR.

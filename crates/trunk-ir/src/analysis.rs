@@ -1028,9 +1028,10 @@ mod tests {
         static CHAINLESS_READ: std::cell::Cell<Option<OpRef>> = const { std::cell::Cell::new(None) };
     }
 
-    /// Reads its target and its first region alternately, enough times to
-    /// fill several log segments, after reading the operation in
-    /// `CHAINLESS_READ` if one is set.
+    /// Reads its target and its first region alternately, often enough
+    /// that the recorder folds pending reads into the footprint before the
+    /// computation ends, after reading the operation in `CHAINLESS_READ` if
+    /// one is set.
     struct RepeatedReads;
 
     impl Analysis for RepeatedReads {
@@ -1048,7 +1049,7 @@ mod tests {
     }
 
     #[test]
-    fn compacted_reads_keep_their_footprint() {
+    fn folded_reads_keep_their_footprint() {
         let mut ctx = IrContext::new();
         let module = crate::parser::parse_test_module(
             &mut ctx,
