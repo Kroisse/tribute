@@ -437,10 +437,10 @@ impl OpRewritePattern for StringConstNativePattern {
         let content_len = content.len() as u64;
         let data_sym = self.content_to_symbol.get(content).cloned()?;
 
-        let Some(string_enum_ty) = self.string_enum_ty else {
-            tracing::warn!("const_to_native: String enum type not found, skipping string_const");
-            return None;
-        };
+        let string_enum_ty = rewriter.require(
+            self.string_enum_ty,
+            "String enum type not found, skipping string_const",
+        )?;
 
         let loc = ctx.op(op).location;
 

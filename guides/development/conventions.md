@@ -218,6 +218,12 @@ Return `Some(())` if the pattern matched and recorded mutations, `None`
 otherwise. Each check that rejects the operation is a `?`: on an `Option`,
 or on a `Result` after `.ok()`.
 
+A check worth explaining gives its reason through the rewriter instead of
+logging: `rewriter.require(option, "reason")?` and
+`rewriter.ensure(condition, "reason")?` take a static reason, and
+`return rewriter.no_match(format!(..))` builds one in the failing branch. The
+applicator logs the reason at debug level with the pattern and operation.
+
 Use full conversion where a phase boundary must reject every residual illegal
 operation. Bodyless external functions have no body region; inspect optional
 regions before using a body accessor.

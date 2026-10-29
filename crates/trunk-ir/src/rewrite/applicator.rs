@@ -519,6 +519,13 @@ impl<'p> PatternApplicator<'p> {
             let matched = self.patterns[index]
                 .match_and_rewrite(ctx, op, &mut rw)
                 .is_some();
+            if !matched && let Some(reason) = rw.take_no_match() {
+                tracing::debug!(
+                    pattern = self.patterns[index].name(),
+                    op = %ctx.op(op).name.display(ctx),
+                    "no match: {reason}",
+                );
+            }
             if matched && rw.has_mutations() {
                 let mutations = rw.take_mutations();
                 self.queue_neighbors(ctx, op, worklist);

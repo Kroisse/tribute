@@ -266,10 +266,8 @@ impl OpRewritePattern for StringConstPattern<'_> {
         let op = string_const.op_ref();
         let content = string_const.value(ctx).as_bytes();
         let (data_idx, len) = lookup_segment(self.segments, content)?;
-        let Some(string_enum_ty) = self.string_enum_ty else {
-            tracing::warn!("const_to_wasm: canonical String enum type not found");
-            return None;
-        };
+        let string_enum_ty =
+            rewriter.require(self.string_enum_ty, "canonical String enum type not found")?;
 
         let location = ctx.op(op).location;
         let bytes_ty = super::bytes::bytes_struct_type(ctx);

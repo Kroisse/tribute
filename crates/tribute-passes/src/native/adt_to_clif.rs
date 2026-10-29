@@ -19,8 +19,6 @@
 //! through `array_to_clif`, so an array operation
 //! left here is rejected.
 
-use tracing::warn;
-
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::adt::layout::compute_mem_struct_layout;
 use trunk_ir::context::IrContext;
@@ -102,14 +100,13 @@ impl OpRewritePattern for StructGetPattern {
         let field_idx = struct_get.field(ctx) as usize;
         let tc = rewriter.type_converter();
 
-        let Some(layout) = compute_mem_struct_layout(ctx, struct_ty) else {
-            warn!("adt_to_clif arena: struct_get layout is not a mem.struct");
-            return None;
-        };
+        let layout = rewriter.require(
+            compute_mem_struct_layout(ctx, struct_ty),
+            "struct_get layout is not a mem.struct",
+        )?;
 
         if field_idx >= layout.field_offsets.len() {
-            warn!("adt_to_clif arena: field index {} out of bounds", field_idx);
-            return None;
+            return rewriter.no_match(format!("field index {field_idx} out of bounds"));
         }
 
         let loc = ctx.op(op).location;
@@ -119,10 +116,10 @@ impl OpRewritePattern for StructGetPattern {
 
         // Convert result type through type converter (e.g. tribute_rt.any -> core.ptr)
         let result_types = ctx.op_result_types(op);
-        let Some(result_ty) = result_types.first().copied() else {
-            warn!("adt_to_clif arena: struct_get has no result type");
-            return None;
-        };
+        let result_ty = rewriter.require(
+            result_types.first().copied(),
+            "struct_get has no result type",
+        )?;
         let result_ty = tc.convert_type_or_identity(ctx, result_ty);
 
         let load_op = clif::Load::operands(ref_val)
@@ -149,10 +146,10 @@ impl OpRewritePattern for StructSetPattern {
         let struct_ty = struct_set.r#type(ctx);
         let field_idx = struct_set.field(ctx) as usize;
 
-        let Some(layout) = compute_mem_struct_layout(ctx, struct_ty) else {
-            warn!("adt_to_clif arena: struct_set layout is not a mem.struct");
-            return None;
-        };
+        let layout = rewriter.require(
+            compute_mem_struct_layout(ctx, struct_ty),
+            "struct_set layout is not a mem.struct",
+        )?;
 
         if field_idx >= layout.field_offsets.len() {
             return None;

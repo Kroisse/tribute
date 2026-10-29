@@ -12,7 +12,6 @@
 //! - operations on `core.index` -> the same operations on `core.i32`, the
 //!   Wasm index width, between unrealized casts
 
-use tracing::warn;
 use trunk_ir::OpName;
 
 use trunk_ir::context::{IrContext, OperationDataBuilder};
@@ -229,14 +228,13 @@ impl OpRewritePattern for ArithConstPattern {
                     .build(ctx, loc)
                     .op_ref(),
                 _ => {
-                    warn!("arith.const: expected Int or Bool for i32, got {:?}", value);
-                    return None;
+                    return rewriter
+                        .no_match(format!("expected Int or Bool for i32, got {value:?}"));
                 }
             },
             "i64" => {
                 let Attribute::Int(v) = value else {
-                    warn!("arith.const: expected Int for i64, got {:?}", value);
-                    return None;
+                    return rewriter.no_match(format!("expected Int for i64, got {value:?}"));
                 };
                 wasm_dialect::I64Const::operands()
                     .value(v as i64)
@@ -246,8 +244,7 @@ impl OpRewritePattern for ArithConstPattern {
             }
             "f32" => {
                 let Attribute::FloatBits(v) = value else {
-                    warn!("arith.const: expected FloatBits for f32, got {:?}", value);
-                    return None;
+                    return rewriter.no_match(format!("expected FloatBits for f32, got {value:?}"));
                 };
                 wasm_dialect::F32Const::operands()
                     .value(f32::from_bits(v as u32))
@@ -257,8 +254,7 @@ impl OpRewritePattern for ArithConstPattern {
             }
             "f64" => {
                 let Attribute::FloatBits(v) = value else {
-                    warn!("arith.const: expected FloatBits for f64, got {:?}", value);
-                    return None;
+                    return rewriter.no_match(format!("expected FloatBits for f64, got {value:?}"));
                 };
                 wasm_dialect::F64Const::operands()
                     .value(f64::from_bits(v))
@@ -266,10 +262,7 @@ impl OpRewritePattern for ArithConstPattern {
                     .build(ctx, loc)
                     .op_ref()
             }
-            _ => {
-                warn!("arith.const: unsupported type suffix '{}'", type_name);
-                return None;
-            }
+            _ => return rewriter.no_match(format!("unsupported type suffix '{type_name}'")),
         };
 
         rewriter.replace_op(new_op_ref);
