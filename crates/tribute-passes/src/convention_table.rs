@@ -190,24 +190,30 @@ impl<L: EntryLayout> ConventionTables<L> {
 }
 
 impl ConventionTables<AbstractFrames> {
-    /// The adapters of a source closure of type `closure_ty` whose body
-    /// implements `body`: one for each stronger convention, defined in
-    /// `block`. A generated closure, whose closure type's callable is its own
-    /// entry, has none.
+    /// The adapters of a source closure of type `closure_ty` whose bodies
+    /// implement `bodies`, defined in `block`: one for each convention without
+    /// a body that is stronger than a body, entering the strongest such body.
+    /// A generated closure, whose closure type's callable is its own entry,
+    /// has none.
     pub(crate) fn adapters(
         &mut self,
         ctx: &mut IrContext,
         block: BlockRef,
         location: Location,
         closure_ty: TypeRef,
-        body: CallingConvention,
+        bodies: &[CallingConvention],
     ) -> Vec<(CallingConvention, Symbol)> {
         CallingConvention::ALL
             .into_iter()
-            .filter(|&convention| convention > body)
-            .map(|convention| {
+            .filter(|convention| !bodies.contains(convention))
+            .filter_map(|convention| {
+                let body = bodies
+                    .iter()
+                    .copied()
+                    .filter(|&body| body < convention)
+                    .max()?;
                 let adapter = self.adapter(ctx, block, location, closure_ty, convention, body);
-                (convention, adapter)
+                Some((convention, adapter))
             })
             .collect()
     }
@@ -459,10 +465,10 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @main(%y: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
-    %f = closure.lambda(%x: core.i32) -> core.i32 {tribute.calling_convention = "direct"} [%y] {
+    %f = closure.lambda [%y] direct(%x: core.i32) -> core.i32 {
       func.return %x
     }
-    %g = closure.lambda(%x: core.i32) -> core.i32 {tribute.calling_convention = "direct"} [%y] {
+    %g = closure.lambda [%y] direct(%x: core.i32) -> core.i32 {
       func.return %y
     }
     func.return %y

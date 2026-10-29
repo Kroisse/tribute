@@ -202,7 +202,13 @@ pub struct RegionValueTransfer {
 /// A registered owner with an invalid signature is still an ownership boundary.
 #[op_interface]
 pub trait CallableOwner: DialectOp {
-    fn callable_signature(&self, ctx: &IrContext) -> Option<crate::dialect::func::FuncSig>;
+    /// The signature of the callable whose body is `body`, one of this
+    /// operation's regions.
+    fn callable_signature(
+        &self,
+        ctx: &IrContext,
+        body: crate::refs::RegionRef,
+    ) -> Option<crate::dialect::func::FuncSig>;
 }
 
 /// Semantics of operations that leave the current callable.

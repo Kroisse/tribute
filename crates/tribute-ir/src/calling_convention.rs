@@ -211,7 +211,6 @@ fn read_convention(
         .ok_or(ConventionError::Malformed)
 }
 
-impl ConventionBearing for closure::Lambda {}
 impl ConventionBearing for func::Func {}
 impl ConventionBearing for func::Call {}
 impl ConventionBearing for func::TailCall {}
@@ -413,11 +412,7 @@ mod tests {
             named(&ctx, module, "core.module")
         ));
         let location = ctx.op(module.op()).location;
-        for name in [
-            closure::Lambda::NAME,
-            func::CallIndirect::NAME,
-            func::TailCallIndirect::NAME,
-        ] {
+        for name in [func::CallIndirect::NAME, func::TailCallIndirect::NAME] {
             let op = trunk_ir::OperationDataBuilder::new(location, name).build(&mut ctx);
             let op = ctx.create_op(op);
             assert!(DynConventionBearing::is_implemented(&ctx, op), "{name:?}");

@@ -1015,7 +1015,11 @@ impl crate::asm_format::OpAsmFormat for Func {
 }
 
 impl crate::op_interface::CallableOwner for Func {
-    fn callable_signature(&self, ctx: &crate::IrContext) -> Option<crate::dialect::func::FuncSig> {
+    fn callable_signature(
+        &self,
+        ctx: &crate::IrContext,
+        _: crate::refs::RegionRef,
+    ) -> Option<crate::dialect::func::FuncSig> {
         ctx.op_attrs(self.op_ref())
             .get_type("type")
             .and_then(|ty| crate::dialect::func::FuncSig::from_type_ref(ctx, ty))

@@ -25,7 +25,7 @@
 use crate::collections::HashMap;
 use crate::convention_table::{ConventionTables, ExpandedFrames};
 
-use tribute_ir::calling_convention::{CallingConvention, ConventionBearing, DynConventionBearing};
+use tribute_ir::calling_convention::{CallingConvention, ConventionBearing};
 use trunk_ir::Symbol;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
@@ -142,67 +142,70 @@ fn lower_single_lambda(
     let captures: Vec<ValueRef> = ctx.op_operands(lambda_ref).to_vec();
     let capture_types: Vec<TypeRef> = captures.iter().map(|&v| ctx.value_ty(v)).collect();
 
-    let body_region = lambda_op.body(ctx);
-
-    // Generate unique lifted name derived from the enclosing function.
+    // Generate unique lifted names derived from the enclosing function.
     let parent_name = find_enclosing_func_name(ctx, lambda_ref);
-    let lifted_name = namer.next_name(&parent_name);
 
-    // Original entry block args = lambda formal parameters.
-    let orig_entry = ctx.region(body_region).blocks[0];
-    let orig_param_count = ctx.block(orig_entry).args.len();
-    let orig_param_types: Vec<TypeRef> = (0..orig_param_count)
-        .map(|i| ctx.block(orig_entry).args[i].ty)
-        .collect();
-
-    // The lambda's convention alone places the environment. Do not recover
+    // Each body's convention alone places its environment. Do not recover
     // hidden operands from a lambda's shape.
-    let Some(convention) = DynConventionBearing::of(ctx, lambda_ref) else {
+    let Some(entries) = lambda_op.entries(ctx) else {
         return false;
     };
-    let environment_index = convention.closure_environment_index();
     if !closure::Closure::matches(ctx, result_ty) {
         return false;
     }
-    let Some(callable) = func::FuncSig::from_type_ref(ctx, lambda_op.signature(ctx)) else {
-        return false;
-    };
-    if callable.single_result(ctx).is_none() {
-        return false;
+    let mut lifts = Vec::with_capacity(entries.len());
+    for entry in &entries {
+        // Original entry block args = the body's formal parameters.
+        let orig_entry = ctx.region(entry.body).blocks[0];
+        let orig_param_types: Vec<TypeRef> = ctx
+            .block(orig_entry)
+            .args
+            .iter()
+            .map(|arg| arg.ty)
+            .collect();
+        let environment_index = entry.convention.closure_environment_index();
+        if entry.signature.single_result(ctx).is_none()
+            || entry.signature.inputs(ctx) != orig_param_types.as_slice()
+            || environment_index > orig_param_types.len()
+        {
+            return false;
+        }
+        lifts.push((entry, orig_param_types, environment_index));
     }
-    if callable.inputs(ctx) != orig_param_types.as_slice() {
-        return false;
-    }
-    if environment_index > orig_param_count {
-        return false;
-    }
-    // === Build the lifted function ===
-    let func_body_region = build_lifted_body(
-        ctx,
-        location,
-        body_region,
-        &LiftBodyParams {
-            captures: &captures,
-            capture_types: &capture_types,
-            orig_param_types: &orig_param_types,
-            environment_index,
-            closure_ty: result_ty,
-        },
-    );
 
-    let func_ty = callable
-        .rebuild(ctx, |inputs, _| {
-            inputs.insert(environment_index, (result_ty, AttributeMap::new()));
-        })
-        .as_type_ref();
+    let mut bodies = Vec::with_capacity(lifts.len());
+    for (entry, orig_param_types, environment_index) in lifts {
+        let lifted_name = namer.next_name(&parent_name);
+        // === Build the lifted function ===
+        let func_body_region = build_lifted_body(
+            ctx,
+            location,
+            entry.body,
+            &LiftBodyParams {
+                captures: &captures,
+                capture_types: &capture_types,
+                orig_param_types: &orig_param_types,
+                environment_index,
+                closure_ty: result_ty,
+            },
+        );
 
-    let func_op = func::Func::operands()
-        .sym_name(ctx.intern_symbol_text(&lifted_name))
-        .r#type(func_ty)
-        .regions(func_body_region)
-        .build(ctx, location);
-    func_op.set_calling_convention(ctx, convention);
-    ctx.push_op(module_block, func_op.op_ref());
+        let func_ty = entry
+            .signature
+            .rebuild(ctx, |inputs, _| {
+                inputs.insert(environment_index, (result_ty, AttributeMap::new()));
+            })
+            .as_type_ref();
+
+        let func_op = func::Func::operands()
+            .sym_name(ctx.intern_symbol_text(&lifted_name))
+            .r#type(func_ty)
+            .regions(func_body_region)
+            .build(ctx, location);
+        func_op.set_calling_convention(ctx, entry.convention);
+        ctx.push_op(module_block, func_op.op_ref());
+        bodies.push((entry.convention, trunk_ir::SymbolPath::new([lifted_name])));
+    }
 
     // === Replace closure.lambda at the original site ===
     let parent_block = ctx
@@ -229,7 +232,7 @@ fn lower_single_lambda(
         module_block,
         location,
         result_ty,
-        std::iter::once((convention, trunk_ir::SymbolPath::new([lifted_name]))).chain(adapters),
+        bodies.into_iter().chain(adapters),
     );
     let closure_new_op = closure::New::operands(captures.clone())
         .entries(entries)
@@ -525,11 +528,11 @@ mod tests {
 
         // closure.lambda [] { ... } -> closure_ty
         let lambda_op = closure::Lambda::operands(Vec::<ValueRef>::new())
-            .signature(func_ty)
+            .signatures([func_ty])
+            .conventions([CallingConvention::Direct])
             .results(closure_ty)
-            .regions(lambda_body_region)
+            .regions([lambda_body_region])
             .build(&mut ctx, loc);
-        lambda_op.set_calling_convention(&mut ctx, CallingConvention::Direct);
 
         // Wrap in a func.func
         let outer_entry = ctx.create_block(BlockData {
@@ -641,13 +644,11 @@ mod tests {
                 lambda_func_ty.as_type_ref(),
             );
             let lambda = closure::Lambda::operands(Vec::<ValueRef>::new())
-                .signature(lambda_func_ty.as_type_ref())
+                .signatures([lambda_func_ty.as_type_ref()])
+                .conventions(convention)
                 .results(lambda_ty)
-                .regions(lambda_body)
+                .regions([lambda_body])
                 .build(&mut ctx, loc);
-            if let Some(convention) = convention {
-                lambda.set_calling_convention(&mut ctx, convention);
-            }
             ctx.push_op(outer_entry, lambda.op_ref());
 
             let outer_body = ctx.create_region(RegionData {
@@ -729,11 +730,11 @@ mod tests {
 
         // closure.lambda [%a] { ... }
         let lambda_op = closure::Lambda::operands(vec![a_val])
-            .signature(func_ty)
+            .signatures([func_ty])
+            .conventions([CallingConvention::Direct])
             .results(closure_ty)
-            .regions(lambda_body_region)
+            .regions([lambda_body_region])
             .build(&mut ctx, loc);
-        lambda_op.set_calling_convention(&mut ctx, CallingConvention::Direct);
         ctx.push_op(outer_entry, lambda_op.op_ref());
 
         let outer_body = ctx.create_region(RegionData {
