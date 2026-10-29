@@ -10,13 +10,14 @@ use diagnostics::{print_diagnostic, print_diagnostics, report_diagnostics};
 use salsa::Database;
 use std::path::{Path, PathBuf};
 use tracing_subscriber::EnvFilter;
-use tribute::TributeDatabaseImpl;
 use tribute::link::link_native_binary;
 use tribute::pipeline::{
     CompilationConfig, compile_to_native_binary, compile_to_wasm_binary, compile_with_diagnostics,
     wasm_binary_diagnostics,
 };
+use tribute::{TributeDatabaseImpl, check_library};
 use tribute_core::diagnostic::{Diagnostic, DiagnosticSeverity};
+use tribute_front::manifest::load_package;
 use tribute_front::resolve::{Dependencies, build_env};
 use tribute_front::source_tree::source_tree_of;
 
@@ -77,12 +78,23 @@ fn compile_file(
     sysroot: Option<&Path>,
 ) {
     let db = TributeDatabaseImpl::default();
-    let source = match db.input(input_path.clone()) {
-        Ok(source) => source,
-        Err(e) => {
-            eprintln!("Error reading file {}: {}", input_path.display(), e);
-            std::process::exit(1);
+    let (source, input_path, default_output) = if input_path.is_dir() {
+        match load_package_dir(&db, &input_path, target) {
+            PackageInput::Executable { root, output } => {
+                (root, input_path.join("src/main.trb"), output)
+            }
+            PackageInput::Checked => return,
         }
+    } else {
+        let source = match db.input(input_path.clone()) {
+            Ok(source) => source,
+            Err(e) => {
+                eprintln!("Error reading file {}: {}", input_path.display(), e);
+                std::process::exit(1);
+            }
+        };
+        let output = input_path.with_extension("");
+        (source, input_path, output)
     };
 
     db.attach(|db| {
@@ -138,7 +150,7 @@ fn compile_file(
                     let mut diags =
                         compile_to_native_binary::accumulated::<Diagnostic>(db, source, config);
                     print_diagnostics(db, source, &input_path.display().to_string(), &mut diags);
-                    let output = output_path.unwrap_or_else(|| input_path.with_extension(""));
+                    let output = output_path.unwrap_or(default_output);
                     if let Err(e) = link_native_binary(object_bytes, &output, sysroot) {
                         eprintln!("Linking failed: {e}");
                         std::process::exit(1);
@@ -168,7 +180,7 @@ fn compile_file(
                             &mut diags,
                         );
                         let output =
-                            output_path.unwrap_or_else(|| input_path.with_extension("wasm"));
+                            output_path.unwrap_or_else(|| default_output.with_extension("wasm"));
 
                         if let Err(error) = std::fs::write(&output, wasm_bytes) {
                             eprintln!(
@@ -217,6 +229,77 @@ fn compile_file(
             }
         }
     });
+}
+
+/// What compiling a package directory continues with.
+enum PackageInput {
+    /// Build the executable whose root file is `root`, by default into
+    /// `output`.
+    Executable {
+        root: tribute::SourceCst,
+        output: PathBuf,
+    },
+    /// The package has no executable, and its library checked.
+    Checked,
+}
+
+/// Load the package in `dir` from its manifest, reporting the manifest's
+/// errors. A package with `src/main.trb` builds that executable; a package
+/// with only `src/lib.trb` is checked as a library, for target `none` only.
+fn load_package_dir(db: &TributeDatabaseImpl, dir: &Path, target: &str) -> PackageInput {
+    let manifest = match db.manifest(dir) {
+        Ok(manifest) => manifest,
+        Err(e) => {
+            eprintln!("Error loading package {}: {e}", dir.display());
+            std::process::exit(1);
+        }
+    };
+    db.attach(|db| {
+        let implicit = *tribute::frontend_environment(db);
+        let source = manifest.source(db).expect("a manifest that exists");
+        let manifest_path = dir.join(tribute_front::manifest::MANIFEST_FILE);
+        let manifest_path = manifest_path.display().to_string();
+        let loaded = load_package(db, manifest, implicit);
+        let mut diags = load_package::accumulated::<Diagnostic>(db, manifest, implicit);
+        let failed = diags
+            .iter()
+            .any(|diag| diag.inner.severity == DiagnosticSeverity::Error);
+        print_diagnostics(db, source, &manifest_path, &mut diags);
+        let loaded = loaded.as_ref().filter(|_| !failed);
+        let Some(loaded) = loaded else {
+            std::process::exit(1);
+        };
+        let name = loaded.name.as_ref().map_or("main", |name| name.as_str());
+        if let Some(root) = loaded.executable {
+            return PackageInput::Executable {
+                root,
+                output: dir.join(name),
+            };
+        }
+        if target != "none" {
+            eprintln!(
+                "Error: package `{name}` has no `src/main.trb`; a library package builds no executable (use `--target none` to check it)"
+            );
+            std::process::exit(1);
+        }
+        let Some(library) = loaded.library else {
+            std::process::exit(1);
+        };
+        println!("Checking library package `{name}`...");
+        let mut checked = check_library(db, library);
+        let mut diags = check_library::accumulated::<Diagnostic>(db, library);
+        checked &= !diags
+            .iter()
+            .any(|diag| diag.inner.severity == DiagnosticSeverity::Error);
+        let root = library.root(db);
+        let root_path = dir.join("src/lib.trb").display().to_string();
+        print_diagnostics(db, *root, &root_path, &mut diags);
+        if !checked {
+            std::process::exit(1);
+        }
+        println!("✓ Checked successfully");
+        PackageInput::Checked
+    })
 }
 
 fn debug_file(path: std::path::PathBuf, show_env: bool) {

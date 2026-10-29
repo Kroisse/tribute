@@ -265,7 +265,7 @@ impl LspServer {
                 return Some((
                     format!(
                         "```tribute\n{}\n```",
-                        print_ast_type(db, &tribute::diagnostic_names(db), entry.ty)
+                        print_ast_type(db, &tribute::diagnostic_names(db, source_cst), entry.ty)
                     ),
                     entry.span,
                 ));

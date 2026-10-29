@@ -8,26 +8,30 @@
 //! [`crate::pipeline`] runs on that IR.
 
 use crate::SourceCst;
+use crate::prelude::root_environment;
 use salsa::Accumulator;
 use tribute_core::diagnostic::{Diagnostic, DiagnosticSeverity};
-use tribute_front::analysis;
 use tribute_front::ast::SpanMaps;
 use tribute_front::ast_to_ir;
 use tribute_front::monomorphize::{self, SpecializationInput, SpecializationOutput};
 use tribute_front::resolve::NameDisplay;
 use tribute_front::source_tree::source_tree_of;
 use tribute_front::typeck as ast_typeck;
+use tribute_front::{analysis, manifest};
 use trunk_ir::{IrContext, Module};
 
 /// How diagnostics and editor features spell declarations while a user
 /// source is analyzed in the root crate's environment: as the root package
-/// of an executable build, depending on package `std`.
-pub fn diagnostic_names(db: &dyn salsa::Database) -> NameDisplay {
-    analysis::root_names(db, *crate::prelude::frontend_environment(db))
+/// of an executable build, depending on the packages of its manifest and
+/// package `std`.
+pub fn diagnostic_names(db: &dyn salsa::Database, source: SourceCst) -> NameDisplay {
+    analysis::root_names(db, root_environment(db, source))
 }
 
-/// Analyze a user source in the root crate's environment, package `std`
-/// from the prelude source (see [`tribute_front::analysis::analyze`]).
+/// Analyze a user source in the root crate's environment: the packages its
+/// package's manifest names, and package `std` from the prelude source (see
+/// [`tribute_front::analysis::analyze`] and
+/// [`root_environment`](crate::prelude::root_environment)).
 ///
 /// Returns the typed AST, even when the analysis reports errors; returns
 /// `None` only if the source does not parse. Does NOT call `ast_to_ir` —
@@ -36,12 +40,30 @@ pub fn parse_and_lower_ast(
     db: &dyn salsa::Database,
     source: SourceCst,
 ) -> Option<ast_typeck::TypeCheckOutput<'_>> {
-    analysis::analyze(db, source, *crate::prelude::frontend_environment(db)).copied()
+    analysis::analyze(db, source, root_environment(db, source)).copied()
 }
 
-/// The diagnostics [`parse_and_lower_ast`] reports for `source`.
+/// The diagnostics [`parse_and_lower_ast`] reports for `source`, with those
+/// of its package's manifests.
 pub fn frontend_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<&Diagnostic> {
-    analysis::diagnostics(db, source, *crate::prelude::frontend_environment(db))
+    let implicit = *crate::prelude::frontend_environment(db);
+    let mut diagnostics =
+        manifest::source_dependencies::accumulated::<Diagnostic>(db, source, implicit);
+    diagnostics.extend(analysis::diagnostics(
+        db,
+        source,
+        root_environment(db, source),
+    ));
+    diagnostics
+}
+
+/// Check the library package `package` on its own, through
+/// specialization, as a build that depends on it would. Returns whether it
+/// checked; read its diagnostics with `check_library::accumulated`.
+#[salsa::tracked(returns(copy))]
+pub fn check_library(db: &dyn salsa::Database, package: analysis::Package) -> bool {
+    analysis::checked_package(db, package).is_some()
+        && monomorphize::specialized_package(db, package).is_some()
 }
 
 /// Merge prelude decls into user's typed AST and lower to arena IR.
@@ -73,7 +95,7 @@ pub(crate) fn merge_and_lower_to_ir<'db>(
         context,
         module: frontend.module,
         compiler_intrinsics: frontend.compiler_intrinsics,
-        names: diagnostic_names(db),
+        names: diagnostic_names(db, source),
     }
 }
 
@@ -126,8 +148,8 @@ fn prepare_frontend_details<'db>(
         Some(_) => crate::prelude::prelude_runtime_types(db)?.clone(),
         None => Default::default(),
     };
-    let environment = *crate::prelude::frontend_environment(db);
-    let names = diagnostic_names(db);
+    let environment = root_environment(db, source);
+    let names = diagnostic_names(db, source);
     let input = SpecializationInput::package(
         db,
         typed,
@@ -170,21 +192,27 @@ fn prepare_frontend_details<'db>(
 }
 
 /// The span maps of a user source's package, with its file modules, and of
-/// package std, which locate the nodes of the module merged from both.
+/// the packages it depends on, which locate the nodes of the module merged
+/// from all of them.
 pub(crate) fn frontend_spans(db: &dyn salsa::Database, source: SourceCst) -> SpanMaps<'_> {
-    let prelude = crate::prelude::prelude_span_map(db);
     let package = source_tree_of(db, source).map(|tree| tree.span_map(db));
-    SpanMaps::new(package.into_iter().chain(prelude))
+    let dependencies = analysis::transitive_packages(db, root_environment(db, source))
+        .into_iter()
+        .filter_map(|package| analysis::package_tree(db, package))
+        .map(|tree| tree.span_map(db));
+    SpanMaps::new(package.into_iter().chain(dependencies))
 }
 
 /// The sources merged into a user source's module besides itself: the files
-/// of its file modules, and package std.
+/// of its file modules, and those of the packages it depends on.
 fn merged_sources(db: &dyn salsa::Database, source: SourceCst) -> Vec<String> {
-    let files = source_tree_of(db, source).map_or(&[][..], |tree| &tree.files()[1..]);
-    files
-        .iter()
+    let own = source_tree_of(db, source).map_or(&[][..], |tree| &tree.files()[1..]);
+    let dependencies = analysis::transitive_packages(db, root_environment(db, source))
+        .into_iter()
+        .filter_map(|package| analysis::package_tree(db, package));
+    own.iter()
+        .chain(dependencies.flat_map(|tree| tree.files()))
         .map(|file| file.source.uri(db).as_str().to_owned())
-        .chain([crate::prelude::PRELUDE_URI.to_owned()])
         .collect()
 }
 
@@ -248,8 +276,9 @@ mod tests {
     ) -> Option<SpecializationOutput<'db>> {
         let typed = parse_and_lower_ast(db, source)?;
         let prelude = crate::prelude::prelude_module(db)?;
-        let input = SpecializationInput::new(db, typed, Some(prelude), diagnostic_names(db))
-            .merge_bodies(db, [prelude]);
+        let input =
+            SpecializationInput::new(db, typed, Some(prelude), diagnostic_names(db, source))
+                .merge_bodies(db, [prelude]);
         let intrinsics = ast_to_ir::registered_compiler_intrinsics(input.module()).ok()?;
         monomorphize_functions(db, input.with_compiler_intrinsics(intrinsics)).ok()
     }

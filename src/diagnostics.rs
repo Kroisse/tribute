@@ -7,7 +7,7 @@ use trunk_ir::diagnostic::DiagnosticSeverity;
 use tribute::SourceCst;
 use tribute::pipeline::compile_with_diagnostics;
 use tribute_front::ast::source_hash;
-use tribute_front::source_tree::source_tree_of;
+use tribute_front::source_file::SourceFiles;
 use tribute_front::uri_to_path;
 
 /// Get the display color for a compilation phase.
@@ -29,17 +29,15 @@ pub fn normalize_span(start: usize, end: usize) -> (usize, usize) {
 }
 
 /// The name and text of the file whose spans carry the source id `source`:
-/// the root file `root`, shown as `root_path`, or one of its package's file
-/// modules.
+/// the root file `root`, shown as `root_path`, or another file the build
+/// read, such as a file module, a manifest, or a dependency's file.
 fn span_file(
     db: &dyn salsa::Database,
     root: SourceCst,
     root_path: &str,
     source: u64,
 ) -> (String, String) {
-    let file = source_tree_of(db, root)
-        .and_then(|tree| tree.file(source))
-        .map(|file| file.source);
+    let file = SourceFiles::try_get(db).and_then(|files| files.provider(db).find(db, source));
     match file {
         Some(file) if file != root => (
             uri_to_path(file.uri(db)).map_or_else(

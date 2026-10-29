@@ -3,7 +3,8 @@ use std::sync::Arc;
 use lsp_types::Uri as LspUri;
 use parking_lot::RwLock;
 use ropey::Rope;
-use tribute_front::source_file::{FileProvider, SourceFiles};
+use tribute_front::manifest::MANIFEST_FILE;
+use tribute_front::source_file::{FileEntry, FileProvider, SourceFiles};
 use tribute_front::{SourceCst, Uri, path_to_uri, uri_to_path};
 
 #[salsa::db]
@@ -67,6 +68,34 @@ impl TributeDatabaseImpl {
             .entry(self, &uri)
             .source(self)
             .ok_or_else(|| format!("cannot read {}", path.display()).into())
+    }
+
+    /// The manifest `tribute.toml` of the package directory `dir`, read
+    /// from disk on its first request.
+    pub fn manifest(
+        &self,
+        dir: &std::path::Path,
+    ) -> Result<FileEntry, Box<dyn std::error::Error + Send + Sync>> {
+        let dir = dir.canonicalize()?;
+        let uri = path_to_uri(&dir.join(MANIFEST_FILE));
+        let provider = SourceFiles::get(self).provider(self).clone();
+        let entry = provider.entry(self, &uri);
+        if entry.source(self).is_some() {
+            return Ok(entry);
+        }
+        let misspelled = std::fs::read_dir(&dir)?
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name())
+            .find(|name| name.eq_ignore_ascii_case(MANIFEST_FILE));
+        Err(match misspelled {
+            Some(name) => format!(
+                "cannot find `{MANIFEST_FILE}` in {}; the manifest must be named `{MANIFEST_FILE}`, not `{}`",
+                dir.display(),
+                name.display()
+            ),
+            None => format!("cannot find `{MANIFEST_FILE}` in {}", dir.display()),
+        }
+        .into())
     }
 
     /// Open the editor buffer `text` for `uri`. The buffer replaces the

@@ -14,6 +14,7 @@
 //! - [`sorted_map`]: Sorted-vector map for deterministic phase results
 //! - [`source_file`]: Source file management and URI handling
 //! - [`source_tree`]: A package's root file and file modules read into one AST
+//! - [`manifest`]: Package manifests and the package graph they declare
 
 pub mod analysis;
 pub mod ast;
@@ -21,6 +22,7 @@ pub mod ast_to_ir;
 pub mod astgen;
 mod collections;
 pub mod keywords;
+pub mod manifest;
 pub mod monomorphize;
 pub mod query;
 pub mod resolve;

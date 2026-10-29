@@ -9,6 +9,8 @@ use salsa::Setter;
 use tree_sitter::{InputEdit, Parser, Point, Tree};
 use trunk_ir::Symbol;
 
+use crate::ast::source_hash;
+
 #[salsa::input(debug)]
 pub struct SourceCst {
     pub uri: Uri<String>,
@@ -68,8 +70,10 @@ pub struct FileEntry {
 /// Entries are never removed: a file that disappears keeps its entry with
 /// no source, so the queries that read it stay its dependents.
 pub struct FileProvider {
-    /// Keyed by URI. The URIs are those of a package's root and the files
-    /// its `mod` declarations name, not arbitrary client input.
+    /// Keyed by URI. The URIs are those of package roots, the files their
+    /// `mod` declarations name, and the manifests of packages and the
+    /// dependencies they name, not arbitrary client input. A manifest's
+    /// entry is read only for its text; its tree is never used.
     entries: Mutex<HashMap<String, FileEntry>>,
     read: Box<ReadFile>,
 }
@@ -105,6 +109,16 @@ impl FileProvider {
     pub fn existing(&self, uri: &Uri<String>) -> Option<FileEntry> {
         let entries = self.entries.lock().expect("file entries lock");
         entries.get(uri.as_str()).copied()
+    }
+
+    /// The source of the requested or set file whose URI has the source id
+    /// `source`, the id its spans carry.
+    pub fn find(&self, db: &dyn salsa::Database, source: u64) -> Option<SourceCst> {
+        let entries = self.entries.lock().expect("file entries lock");
+        entries
+            .iter()
+            .find(|(uri, _)| source_hash(uri) == source)
+            .and_then(|(_, entry)| entry.source(db))
     }
 
     /// Make `text` the file at `uri`, or remove the file if `text` is
@@ -156,8 +170,14 @@ impl std::fmt::Debug for FileProvider {
 /// database has no [`SourceFiles`]. Inside a query, records a dependency on
 /// whether the file exists.
 pub fn source_at(db: &dyn salsa::Database, uri: &Uri<String>) -> Option<SourceCst> {
+    file_at(db, uri)?.source(db)
+}
+
+/// The entry of the file at `uri`, or `None` if the database has no
+/// [`SourceFiles`].
+pub fn file_at(db: &dyn salsa::Database, uri: &Uri<String>) -> Option<FileEntry> {
     let files = SourceFiles::try_get(db)?;
-    files.provider(db).entry(db, uri).source(db)
+    Some(files.provider(db).entry(db, uri))
 }
 
 fn new_source(db: &dyn salsa::Database, uri: Uri<String>, text: Rope) -> SourceCst {
