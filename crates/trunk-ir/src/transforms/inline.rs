@@ -290,8 +290,8 @@ pub struct InlineResult {
 }
 
 /// Run one pass of function inlining over `module` using default
-/// config. `am` is consumed for [`CallGraph`] access and invalidated
-/// iff at least one call site was rewritten.
+/// config. `am` provides the [`CallGraph`]; results that read the
+/// functions a rewrite changed are recomputed when next queried.
 ///
 /// Construct `am` at the pipeline level so that other passes in the
 /// same phase (e.g. a future canonicalize) can share the cached call
@@ -309,8 +309,11 @@ fn inline_functions(
 /// [`inline_functions`] for the `am` injection convention.
 ///
 /// Drives the [`InlineCallSite`] pattern through a
-/// [`PatternApplicator`] one iteration at a time, **rebuilding the
-/// [`CallGraph`] analysis at each iteration boundary**. This is needed
+/// [`PatternApplicator`] one iteration at a time, **querying the
+/// [`CallGraph`] analysis again at each iteration boundary**, which
+/// rebuilds it against the rewritten IR while reusing the
+/// [`FunctionReferences`](super::call_graph::FunctionReferences) of
+/// every function the iteration left unchanged. This is needed
 /// for the `always_inline_single_call_site` fast path to stay accurate
 /// when earlier rewrites duplicate a previously-single-site callee
 /// across multiple newly-exposed call sites; without the rebuild the
@@ -349,10 +352,6 @@ fn inline_functions_with_config(
             break;
         }
         inlined_count += result.total_changes;
-        // Rewrites happened this iteration — drop the cached graph so the
-        // next `am.get::<CallGraph>` rebuilds against the current IR.
-        am.invalidate::<CallGraph>(module.op());
-        am.invalidate::<SymbolTable>(module.op());
     }
 
     InlineResult { inlined_count }

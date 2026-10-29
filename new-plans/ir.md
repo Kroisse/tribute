@@ -467,6 +467,10 @@ anchor의 변경은 바깥 anchor의 카운터도 올리므로, 바깥 anchor �
 - Module 본문 block, 즉 함수 목록이나 함수의 `parent_block`을 읽은 결과의
   footprint는 module이다. `SymbolTable`처럼 module을 읽는 분석은 어느 함수의
   변경에도 재계산된다.
+- Symbol 참조를 해석하려면 참조를 담은 operation에서 가장 가까운 module까지
+  조상을 거슬러 올라가므로, 해석한 결과의 footprint는 module이다. 함수 범위
+  분석은 참조를 해석하지 않은 path로 모으고, 해석은 그 결과를 조회하는 module
+  집계가 맡는다.
 - Interned type, path, string attribute 값은 불변이므로 읽어도 기록하지 않는다.
   Type alias와 같이 operation 밖에 있는 전역 metadata는 미분류 변경 카운터로
   덮는다.

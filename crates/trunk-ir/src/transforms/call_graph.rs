@@ -10,19 +10,26 @@
 //! Functions are identified by their defining operations. A reference is
 //! resolved by [`SymbolTable`] from the operation that holds it; one that
 //! names no unique symbol adds no edge.
+//!
+//! Within an [`AnalysisCache`](crate::analysis::AnalysisCache), each
+//! function's references are a separate [`FunctionReferences`] result that
+//! reads only that function, and [`CallGraph`] resolves them. Rebuilding the
+//! graph after an edit therefore walks only the bodies that changed.
 
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
+use std::borrow::Borrow;
 use std::ops::ControlFlow;
 
 use crate::analysis::{Analysis, AnalysisContext, AnalysisError, InfallibleAnalysis};
 use crate::context::IrContext;
-use crate::dialect::func;
+use crate::dialect::{core, func};
 use crate::op_interface::DynCallLike;
 use crate::ops::DialectOp;
-use crate::refs::{OpRef, RegionRef};
+use crate::refs::OpRef;
 use crate::rewrite::Module;
-use crate::symbol_table::SymbolTable;
+use crate::symbol::SymbolPath;
+use crate::symbol_table::{SymbolTable, nearest_table};
 use crate::walk::{WalkAction, walk_op, walk_region};
 
 type Edges = HashMap<OpRef, HashSet<OpRef>>;
@@ -80,6 +87,38 @@ pub fn call_graph_over(
     symbols: &SymbolTable,
     is_function: FunctionDefinition,
 ) -> CallGraph {
+    let functions = functions_of(ctx, symbols, is_function);
+    let references = functions
+        .iter()
+        .map(|&function| FunctionReferences::collect(ctx, function, is_function))
+        .collect();
+    assemble(ctx, module, symbols, is_function, functions, references)
+}
+
+/// The symbols that are functions, in traversal order.
+fn functions_of(
+    ctx: &IrContext,
+    symbols: &SymbolTable,
+    is_function: FunctionDefinition,
+) -> Vec<OpRef> {
+    symbols
+        .symbols()
+        .iter()
+        .copied()
+        .filter(|&op| is_function(ctx, op))
+        .collect()
+}
+
+/// Build the graph of `functions` from the references of each, given in the
+/// same order, and the references held outside every function.
+fn assemble(
+    ctx: &IrContext,
+    module: OpRef,
+    symbols: &SymbolTable,
+    is_function: FunctionDefinition,
+    functions: Vec<OpRef>,
+    references: Vec<impl Borrow<FunctionReferences>>,
+) -> CallGraph {
     let mut graph = CallGraph::default();
     let _ = walk_op::<()>(ctx, module, &mut |op| {
         if is_function(ctx, op) {
@@ -93,52 +132,27 @@ pub fn call_graph_over(
         });
         ControlFlow::Continue(WalkAction::Advance)
     });
-    graph.functions = symbols
-        .symbols()
-        .iter()
-        .copied()
-        .filter(|&op| is_function(ctx, op))
-        .collect();
-    for caller in graph.functions.clone() {
-        for region in ctx.op_regions(caller) {
-            collect_calls(ctx, region, caller, symbols, &mut graph, is_function);
-        }
-    }
-    graph
-}
-
-/// Record the calls and references in `region` as edges from `caller`.
-/// Nested function definitions record their own edges.
-fn collect_calls(
-    ctx: &IrContext,
-    region: RegionRef,
-    caller: OpRef,
-    symbols: &SymbolTable,
-    graph: &mut CallGraph,
-    is_function: FunctionDefinition,
-) {
-    let _ = walk_region::<()>(ctx, region, &mut |op| {
-        if is_function(ctx, op) {
-            return ControlFlow::Continue(WalkAction::Skip);
-        }
-        let mut callee = DynCallLike::get(ctx, op).map(|call| call.direct_callee(ctx));
-        ctx.op(op).attributes.visit_symbol_refs(&mut |reference| {
-            let is_callee = callee == Some(reference);
-            if is_callee {
-                callee = None;
-            }
-            let Some(target) = symbols.resolve(ctx, op, reference) else {
-                return;
+    for (&caller, references) in functions.iter().zip(&references) {
+        // Every operation in a function body resolves in the function's
+        // table, except under a module nested in the body, which is not a
+        // table of `symbols` and which `FunctionReferences` skips.
+        let Some(table) = nearest_table(ctx, caller) else {
+            continue;
+        };
+        for reference in &references.borrow().references {
+            let Some(target) = symbols.resolve_in(ctx, table, &reference.path) else {
+                continue;
             };
-            if is_callee {
-                record_call(graph, caller, target);
+            if reference.call {
+                record_call(&mut graph, caller, target);
             } else {
                 graph.edges.entry(caller).or_default().insert(target);
                 graph.address_taken.insert(target);
             }
-        });
-        ControlFlow::Continue(WalkAction::Advance)
-    });
+        }
+    }
+    graph.functions = functions;
+    graph
 }
 
 fn record_call(graph: &mut CallGraph, caller: OpRef, callee: OpRef) {
@@ -147,21 +161,83 @@ fn record_call(graph: &mut CallGraph, caller: OpRef, callee: OpRef) {
     *graph.call_site_count.entry(callee).or_insert(0) += 1;
 }
 
+/// One symbol reference in a function body, before resolution.
+#[derive(Debug)]
+struct Reference {
+    path: SymbolPath,
+    /// Whether the reference is the callee of a direct call.
+    call: bool,
+}
+
+/// The symbol references in one function's body, unresolved, in traversal
+/// order. Nested function definitions hold their own references.
+///
+/// Resolving a reference reads the module that holds the function, so a
+/// result that resolved its references would be recomputed after an edit to
+/// any function. [`CallGraph`] resolves them instead.
+#[derive(Debug)]
+pub struct FunctionReferences {
+    references: Vec<Reference>,
+}
+
+impl FunctionReferences {
+    fn collect(ctx: &IrContext, function: OpRef, is_function: FunctionDefinition) -> Self {
+        let mut references = Vec::new();
+        for region in ctx.op_regions(function) {
+            let _ = walk_region::<()>(ctx, region, &mut |op| {
+                if is_function(ctx, op) || core::Module::matches(ctx, op) {
+                    return ControlFlow::Continue(WalkAction::Skip);
+                }
+                let mut callee = DynCallLike::get(ctx, op).map(|call| call.direct_callee(ctx));
+                ctx.op(op).attributes.visit_symbol_refs(&mut |path| {
+                    let call = callee == Some(path);
+                    if call {
+                        callee = None;
+                    }
+                    references.push(Reference {
+                        path: path.clone(),
+                        call,
+                    });
+                });
+                ControlFlow::Continue(WalkAction::Advance)
+            });
+        }
+        Self { references }
+    }
+}
+
+/// `FunctionReferences` as an [`Analysis`] of a `func.func` target.
+impl Analysis for FunctionReferences {
+    fn compute(ctx: &mut AnalysisContext<'_>, target: OpRef) -> Result<Self, AnalysisError> {
+        Ok(Self::collect(ctx.ir(), target, func::Func::matches))
+    }
+}
+
+impl InfallibleAnalysis for FunctionReferences {}
+
 /// `CallGraph` as an [`Analysis`] over the [`SymbolTable`] of `target`, which
-/// must be a `core.module` op.
+/// must be a `core.module` op, and the [`FunctionReferences`] of each of its
+/// functions.
 impl Analysis for CallGraph {
     fn compute(ctx: &mut AnalysisContext<'_>, target: OpRef) -> Result<Self, AnalysisError> {
         let symbols = ctx.get::<SymbolTable>(target)?;
-        Ok(call_graph_over(
+        let functions = functions_of(ctx.ir(), &symbols, func::Func::matches);
+        let references = functions
+            .iter()
+            .map(|&function| ctx.get::<FunctionReferences>(function))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(assemble(
             ctx.ir(),
             target,
             &symbols,
             func::Func::matches,
+            functions,
+            references,
         ))
     }
 }
 
-/// Depends only on the infallible [`SymbolTable`].
+/// Depends only on the infallible [`SymbolTable`] and [`FunctionReferences`].
 impl InfallibleAnalysis for CallGraph {}
 
 /// Compute the SCC id for every function in the call graph using Tarjan's algorithm.
@@ -616,5 +692,77 @@ mod tests {
         assert_eq!(graph.functions.len(), 3);
         let g = named(&ctx, &graph);
         assert_eq!(g.call_site_count[&SymbolPath::new(["leaf"])], 1);
+    }
+
+    /// Rebuilding the graph after an edit to one function reuses the
+    /// references of every other function and matches a full rebuild.
+    #[test]
+    fn rebuild_after_an_edit_reuses_unchanged_function_references() {
+        use crate::analysis::AnalysisCache;
+        use std::sync::Arc;
+
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @f() -> core.i32 {
+    %0 = func.call {callee = @g} : core.i32
+    func.return %0
+  }
+  func.func @g() -> core.i32 {
+    %0 = arith.const {value = 1} : core.i32
+    func.return %0
+  }
+}"#,
+        );
+        let symbols = SymbolTable::collect(&ctx, module);
+        let symbol = |name: &str| {
+            symbols
+                .resolve_in(&ctx, module.op(), &SymbolPath::new([name]))
+                .expect("root symbol")
+        };
+        let (f, g) = (symbol("f"), symbol("g"));
+
+        let mut analyses = AnalysisCache::new();
+        let before = analyses.require::<CallGraph>(&ctx, module.op());
+        assert!(recursive_functions(&before).is_empty());
+        let f_references = analyses
+            .get_cached::<FunctionReferences>(&ctx, f)
+            .expect("the graph queries each function's references");
+
+        let g_body = ctx.op_region(g, 0).unwrap();
+        let g_entry = ctx.region(g_body).blocks[0];
+        let g_return = *ctx.block(g_entry).ops.last().unwrap();
+        let i32_ty = i32_type(&mut ctx);
+        let location = ctx.op(g_return).location;
+        let call = func::Call::operands(std::iter::empty())
+            .callee(SymbolPath::new(["f"]))
+            .results([i32_ty])
+            .build(&mut ctx, location);
+        ctx.insert_op_before(g_entry, g_return, call.op_ref());
+
+        assert!(
+            analyses
+                .get_cached::<CallGraph>(&ctx, module.op())
+                .is_none()
+        );
+        assert!(analyses.get_cached::<FunctionReferences>(&ctx, g).is_none());
+        let after = analyses.require::<CallGraph>(&ctx, module.op());
+        let kept = analyses
+            .get_cached::<FunctionReferences>(&ctx, f)
+            .expect("an edit to g leaves f's references current");
+        assert!(Arc::ptr_eq(&f_references, &kept));
+
+        let rebuilt = named(&ctx, &after);
+        let full = named(&ctx, &build_call_graph(&ctx, module));
+        assert_eq!(rebuilt.edges, full.edges);
+        assert_eq!(rebuilt.call_site_count, full.call_site_count);
+        assert_eq!(rebuilt.recursive, full.recursive);
+        assert_eq!(
+            rebuilt.recursive,
+            [SymbolPath::new(["f"]), SymbolPath::new(["g"])]
+                .into_iter()
+                .collect::<HashSet<_>>()
+        );
     }
 }
