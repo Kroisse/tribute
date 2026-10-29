@@ -251,8 +251,8 @@ pub trait CallableArgumentOrigin: DialectOp {
     ) -> bool;
 }
 
-/// A parameter of the callable whose only region is `region`, whose
-/// signature is `signature`.
+/// A parameter of a body `region` of the callable whose signature is
+/// `signature`. Every body of a callable takes its parameters.
 pub(crate) fn is_signature_parameter(
     ctx: &IrContext,
     op: OpRef,
@@ -261,7 +261,7 @@ pub(crate) fn is_signature_parameter(
     index: u32,
     argument: ValueRef,
 ) -> bool {
-    ctx.op_regions(op).eq([region])
+    ctx.op_regions(op).any(|body| body == region)
         && signature
             .and_then(|ty| func_sig_parts(ctx, ty))
             .is_some_and(|(_, parameters)| {

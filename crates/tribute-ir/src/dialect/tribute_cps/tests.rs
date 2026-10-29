@@ -59,10 +59,10 @@ const TWO_BODIES: &str = r#"core.module @test {
   tribute_cps.func @outer(%0: core.i32) -> core.i32 convention(cps) {
       %1 = tribute_cps.lambda(%2: core.i32) -> core.i32 captures [%0] entries {
         direct {
-            tribute_control.return %2
+            tribute_control.return %0
         }
         cps {
-            tribute_control.return %0
+            tribute_control.return %2
         }
       }
       tribute_cps.tail_call_indirect %1, %0 {convention = "cps"}
@@ -223,5 +223,45 @@ fn a_function_reference_is_not_weaker_than_its_instance() {
     assert_eq!(
         errors,
         ["func_ref result convention must be at least as strong as its target"]
+    );
+}
+
+/// A body after the first reads the parameters the header names, and
+/// makes transfers through its own convention.
+#[test]
+fn every_body_takes_the_parameters_and_its_own_convention() {
+    let input = r#"core.module @test {
+  !t0 = tribute_control.func_sig<() -> core.i32>
+  !t1 = tribute_control.func_sig<(!t0) -> core.i32>
+
+  tribute_cps.func @outer(%0: core.i32) -> core.i32 convention(cps) {
+      %1 = tribute_cps.lambda(%2: !t0) -> core.i32 captures [%0] entries {
+        direct {
+            tribute_control.return %0
+        }
+        cps {
+            %3 = tribute_cps.call_indirect %2 {convention = "cps"} : core.i32
+            tribute_control.return %3
+        }
+      }
+      tribute_control.return %0
+  }
+}
+"#;
+    let (ctx, module) = parse(input);
+    assert_eq!(print_module(&ctx, module.op()), input);
+    assert_eq!(messages(input), Vec::<String>::new());
+
+    // A transfer in the Direct body may not be stronger than that body.
+    let stronger = input.replace(
+        "direct {\n            tribute_control.return %0",
+        "direct {\n            tribute_cps.tail_call_indirect %2 {convention = \"cps\"}",
+    );
+    assert!(
+        messages(&stronger)
+            .iter()
+            .any(|message| message.contains("must not be stronger than the enclosing callable")),
+        "{:?}",
+        messages(&stronger)
     );
 }

@@ -199,7 +199,8 @@ mod tribute_cps {
 pub struct MalformedConvention;
 
 /// The convention `op` declares, when it is a `tribute_cps` operation with a
-/// valid one.
+/// valid one. A `tribute_cps.lambda` declares one per body instead; see
+/// [`body_conventions`] and [`convention_at`].
 pub fn declared_convention(
     ctx: &IrContext,
     op: trunk_ir::refs::OpRef,
