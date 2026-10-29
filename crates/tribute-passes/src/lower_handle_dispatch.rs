@@ -5,15 +5,12 @@
 //!
 //! Uses `PatternApplicator` for declarative op-level rewriting.
 
-use trunk_ir::OpName;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::func;
-use trunk_ir::ops::DialectOp;
 use trunk_ir::pass::{Pass, PassRunResult};
-use trunk_ir::refs::OpRef;
 use trunk_ir::rewrite::{
-    ConversionError, ConversionTarget, PatternApplicator, PatternRewriter, RewritePattern,
+    ConversionError, ConversionTarget, OpRewritePattern, PatternApplicator, PatternRewriter,
     RewriteScope, TypeConverter,
 };
 
@@ -68,51 +65,46 @@ impl Pass for LowerHandleDispatch {
 /// Splice a resultless delimiter after its evidence argument has been resolved.
 struct LowerHandleDispatchPattern;
 
-impl RewritePattern for LowerHandleDispatchPattern {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[ability::HandleDispatch::NAME])
-    }
+impl OpRewritePattern for LowerHandleDispatchPattern {
+    type Op = ability::HandleDispatch;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        dispatch_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if let Ok(dispatch_op) = ability::HandleDispatch::from_op(ctx, op) {
-            let body = dispatch_op.body(ctx);
-            let blocks = &ctx.region(body).blocks;
-            let [body_block] = blocks.as_slice() else {
-                return false;
-            };
+        let body = dispatch_op.body(ctx);
+        let blocks = &ctx.region(body).blocks;
+        let [body_block] = blocks.as_slice() else {
+            return false;
+        };
 
-            // `resolve_evidence` has already replaced the body's evidence
-            // argument. The final delimiter is resultless, so exhausting it is
-            // a structural splice only: no carrier inspection and no returned
-            // control value are involved.
-            if ctx
-                .block_args(*body_block)
-                .iter()
-                .any(|arg| !ctx.uses(*arg).is_empty())
-            {
-                return false;
-            }
-            let body_ops = ctx.block(*body_block).ops.clone();
-            for body_op in body_ops {
-                ctx.detach_op(body_op);
-                rewriter.insert_op(body_op);
-            }
-            rewriter.erase_op(vec![]);
-            return true;
+        // `resolve_evidence` has already replaced the body's evidence
+        // argument. The final delimiter is resultless, so exhausting it is
+        // a structural splice only: no carrier inspection and no returned
+        // control value are involved.
+        if ctx
+            .block_args(*body_block)
+            .iter()
+            .any(|arg| !ctx.uses(*arg).is_empty())
+        {
+            return false;
         }
-
-        false
+        let body_ops = ctx.block(*body_block).ops.clone();
+        for body_op in body_ops {
+            ctx.detach_op(body_op);
+            rewriter.insert_op(body_op);
+        }
+        rewriter.erase_op(vec![]);
+        true
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use trunk_ir::ops::DialectOp;
 
     use trunk_ir::context::IrContext;
     use trunk_ir::parser::parse_test_module;

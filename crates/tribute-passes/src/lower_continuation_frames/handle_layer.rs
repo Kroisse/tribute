@@ -2,7 +2,6 @@
 //! factories, resume tokens, marker dispatchers, and delimiter.
 
 use std::ops::ControlFlow;
-use trunk_ir::OpName;
 
 use rustc_hash::FxHashMap as HashMap;
 
@@ -17,7 +16,7 @@ use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{arith, core, func, scf};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
-use trunk_ir::rewrite::{Module, PatternRewriter, RewritePattern};
+use trunk_ir::rewrite::{Module, OpRewritePattern, PatternRewriter};
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 use trunk_ir::walk::{WalkAction, walk_op};
 use trunk_ir::{Symbol, SymbolPath};
@@ -746,19 +745,16 @@ pub(super) struct ExpandHandles {
     pub(super) handles: HashMap<OpRef, u32>,
 }
 
-impl RewritePattern for ExpandHandles {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[ability::Handle::NAME])
-    }
+impl OpRewritePattern for ExpandHandles {
+    type Op = ability::Handle;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        handle: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        ability::Handle::from_op(ctx, op)
-            .is_ok_and(|handle| self.expand_handle(ctx, handle, rewriter).is_some())
+        self.expand_handle(ctx, handle, rewriter).is_some()
     }
 }
 

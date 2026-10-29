@@ -6,14 +6,12 @@
 //! struct/array operations on the bytes layout. The bytes element read intrinsic is lowered inside the boundary by
 //! `wasm/bytes.rs`.
 
-use trunk_ir::OpName;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::wasm as wasm_dialect;
-use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, ValueRef};
 use trunk_ir::rewrite::{
-    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    Module, OpRewritePattern, PatternApplicator, PatternRewriter, TypeConverter,
 };
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::symbol_table::SymbolTable;
@@ -98,13 +96,16 @@ pub(crate) fn lower(ctx: &mut IrContext, module: Module) {
 // Bytes helper patterns
 // =============================================================================
 
-/// Whether `op` calls the C helper `helper`: its callee resolves to a
+/// Whether `call` calls the C helper `helper`: its callee resolves to a
 /// bodyless `abi = "C"` declaration with that link name.
-fn calls_c_helper(ctx: &IrContext, symbols: &SymbolTable, op: OpRef, helper: &'static str) -> bool {
-    wasm_dialect::Call::from_op(ctx, op).is_ok_and(|call| {
-        super::runtime_bindings::c_helper(ctx, symbols, op, call.callee(ctx))
-            .is_some_and(|name| name == helper)
-    })
+fn calls_c_helper(
+    ctx: &IrContext,
+    symbols: &SymbolTable,
+    call: wasm_dialect::Call,
+    helper: &'static str,
+) -> bool {
+    super::runtime_bindings::c_helper(ctx, symbols, call.op_ref(), call.callee(ctx))
+        .is_some_and(|name| name == helper)
 }
 
 /// Pattern for `__tribute_bytes_len(bytes)` -> `struct.get $bytes 2`
@@ -112,18 +113,17 @@ fn calls_c_helper(ctx: &IrContext, symbols: &SymbolTable, op: OpRef, helper: &'s
 /// Returns i32 directly since Nat is mapped to i32.
 struct BytesLenPattern<'a>(&'a SymbolTable);
 
-impl RewritePattern for BytesLenPattern<'_> {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[wasm_dialect::Call::NAME])
-    }
+impl OpRewritePattern for BytesLenPattern<'_> {
+    type Op = wasm_dialect::Call;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        call: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if !calls_c_helper(ctx, self.0, op, BYTES_LEN) {
+        let op = call.op_ref();
+        if !calls_c_helper(ctx, self.0, call, BYTES_LEN) {
             return false;
         }
 
@@ -158,18 +158,17 @@ impl RewritePattern for BytesLenPattern<'_> {
 /// of contiguous rope-leaf spans rather than once per logical byte.
 struct BytesRangeEqualPattern<'a>(&'a SymbolTable);
 
-impl RewritePattern for BytesRangeEqualPattern<'_> {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[wasm_dialect::Call::NAME])
-    }
+impl OpRewritePattern for BytesRangeEqualPattern<'_> {
+    type Op = wasm_dialect::Call;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        call: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if !calls_c_helper(ctx, self.0, op, BYTES_RANGE_EQUAL) {
+        let op = call.op_ref();
+        if !calls_c_helper(ctx, self.0, call, BYTES_RANGE_EQUAL) {
             return false;
         }
 
@@ -344,18 +343,17 @@ fn value_break_region(
 /// Pattern for `__tribute_bytes_concat(left, right)` -> allocate a new array and copy both
 struct BytesConcatPattern<'a>(&'a SymbolTable);
 
-impl RewritePattern for BytesConcatPattern<'_> {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[wasm_dialect::Call::NAME])
-    }
+impl OpRewritePattern for BytesConcatPattern<'_> {
+    type Op = wasm_dialect::Call;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        call: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if !calls_c_helper(ctx, self.0, op, BYTES_CONCAT) {
+        let op = call.op_ref();
+        if !calls_c_helper(ctx, self.0, call, BYTES_CONCAT) {
             return false;
         }
 
@@ -453,18 +451,17 @@ impl RewritePattern for BytesConcatPattern<'_> {
 /// Bytes struct.
 struct BytesSliceOrPanicPattern<'a>(&'a SymbolTable);
 
-impl RewritePattern for BytesSliceOrPanicPattern<'_> {
-    fn roots(&self) -> Option<&[OpName]> {
-        Some(&[wasm_dialect::Call::NAME])
-    }
+impl OpRewritePattern for BytesSliceOrPanicPattern<'_> {
+    type Op = wasm_dialect::Call;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        call: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if !calls_c_helper(ctx, self.0, op, BYTES_SLICE_OR_PANIC) {
+        let op = call.op_ref();
+        if !calls_c_helper(ctx, self.0, call, BYTES_SLICE_OR_PANIC) {
             return false;
         }
 
