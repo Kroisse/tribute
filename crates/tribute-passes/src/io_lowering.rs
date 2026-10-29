@@ -46,7 +46,7 @@ impl OpRewritePattern for IoCallPattern {
         ctx: &mut IrContext,
         call: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = call.op_ref();
         let callee = call.callee(ctx);
         let loc = ctx.op(op).location;
@@ -54,7 +54,7 @@ impl OpRewritePattern for IoCallPattern {
 
         let replacement = if callee == [WRITE_INTRINSIC] {
             let (Some(result_ty), [bytes, newline]) = (result_ty, ctx.op_operands(op)) else {
-                return false;
+                return None;
             };
             let (bytes, newline) = (*bytes, *newline);
             tribute_io::Write::operands(bytes, newline)
@@ -63,18 +63,18 @@ impl OpRewritePattern for IoCallPattern {
                 .op_ref()
         } else if callee == [READ_LINE_INTRINSIC] {
             let (Some(result_ty), []) = (result_ty, ctx.op_operands(op)) else {
-                return false;
+                return None;
             };
             tribute_io::ReadLine::operands()
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
         } else {
-            return false;
+            return None;
         };
 
         rewriter.replace_op(replacement);
-        true
+        Some(())
     }
 }
 
@@ -88,14 +88,14 @@ impl OpRewritePattern for IoDeclarationPattern {
         ctx: &mut IrContext,
         function: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let name = function.sym_name(ctx);
         if name != WRITE_INTRINSIC && name != READ_LINE_INTRINSIC {
-            return false;
+            return None;
         }
 
         rewriter.erase_op(vec![]);
-        true
+        Some(())
     }
 }
 

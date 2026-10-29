@@ -516,7 +516,16 @@ impl<'p> PatternApplicator<'p> {
 
         for &index in self.patterns_for(ctx, op) {
             let mut rw = PatternRewriter::new(&self.type_converter);
-            let matched = self.patterns[index].match_and_rewrite(ctx, op, &mut rw);
+            let matched = self.patterns[index]
+                .match_and_rewrite(ctx, op, &mut rw)
+                .is_some();
+            if !matched && let Some(reason) = rw.take_no_match() {
+                tracing::debug!(
+                    pattern = self.patterns[index].name(),
+                    op = %ctx.op(op).name.display(ctx),
+                    "no match: {reason}",
+                );
+            }
             if matched && rw.has_mutations() {
                 let mutations = rw.take_mutations();
                 self.queue_neighbors(ctx, op, worklist);
@@ -640,7 +649,9 @@ impl<'p> PatternApplicator<'p> {
             for &index in self.patterns_for(&probe, op) {
                 let pattern = &self.patterns[index];
                 let mut rw = PatternRewriter::new(&self.type_converter);
-                if pattern.match_and_rewrite(&mut probe, op, &mut rw) && rw.has_mutations() {
+                if pattern.match_and_rewrite(&mut probe, op, &mut rw).is_some()
+                    && rw.has_mutations()
+                {
                     panic!(
                         "pattern `{}` still matches `{}` after the applicator reached a \
                          fixpoint; a rewrite changed it without queueing it",
@@ -983,10 +994,10 @@ mod tests {
             ctx: &mut IrContext,
             op: OpRef,
             rewriter: &mut PatternRewriter<'_>,
-        ) -> bool {
+        ) -> Option<()> {
             let data = ctx.op(op);
             if !data.name.is(ctx, "test.source") {
-                return false;
+                return None;
             }
 
             let loc = data.location;
@@ -997,7 +1008,7 @@ mod tests {
                 .build(ctx);
             let new_op = ctx.create_op(new_data);
             rewriter.replace_op(new_op);
-            true
+            Some(())
         }
     }
 
@@ -1341,13 +1352,13 @@ mod tests {
             ctx: &mut IrContext,
             op: OpRef,
             rewriter: &mut PatternRewriter<'_>,
-        ) -> bool {
+        ) -> Option<()> {
             if !ctx.op(op).name.is(ctx, "test.source") {
-                return false;
+                return None;
             }
             let tag = ctx.op_attrs(op).get_str("tag").unwrap().to_owned();
             if !self.selected.contains(&tag.as_str()) {
-                return false;
+                return None;
             }
             self.renamed.borrow_mut().push(tag);
             let loc = ctx.op(op).location;
@@ -1357,7 +1368,7 @@ mod tests {
                 .build(ctx);
             let new_op = ctx.create_op(new_data);
             rewriter.replace_op(new_op);
-            true
+            Some(())
         }
     }
 
@@ -1409,10 +1420,10 @@ mod tests {
             ctx: &mut IrContext,
             op: OpRef,
             _rewriter: &mut PatternRewriter<'_>,
-        ) -> bool {
+        ) -> Option<()> {
             let name = ctx.op(op).name.display(ctx).to_string();
             self.offered.borrow_mut().push(name);
-            false
+            None
         }
     }
 
@@ -1462,11 +1473,11 @@ mod tests {
             ctx: &mut IrContext,
             op: OpRef,
             rewriter: &mut PatternRewriter<'_>,
-        ) -> bool {
+        ) -> Option<()> {
             if !ctx.op(op).name.is(ctx, self.from)
                 || (self.only_dead && ctx.op_results(op).iter().any(|&v| ctx.has_uses(v)))
             {
-                return false;
+                return None;
             }
             let loc = ctx.op(op).location;
             let result_types = ctx.op_result_types(op).to_vec();
@@ -1475,7 +1486,7 @@ mod tests {
                 .build(ctx);
             let new_op = ctx.create_op(new_data);
             rewriter.replace_op(new_op);
-            true
+            Some(())
         }
     }
 
@@ -1488,12 +1499,12 @@ mod tests {
             ctx: &mut IrContext,
             op: OpRef,
             rewriter: &mut PatternRewriter<'_>,
-        ) -> bool {
+        ) -> Option<()> {
             if !ctx.op(op).name.is(ctx, "test.sink") {
-                return false;
+                return None;
             }
             rewriter.erase_op(vec![]);
-            true
+            Some(())
         }
     }
 
@@ -1534,9 +1545,9 @@ mod tests {
             ctx: &mut IrContext,
             op: OpRef,
             rewriter: &mut PatternRewriter<'_>,
-        ) -> bool {
+        ) -> Option<()> {
             if !ctx.op(op).name.is(ctx, "test.source") {
-                return false;
+                return None;
             }
             let block = ctx.op(op).parent_block.unwrap();
             for sibling in ctx.block(block).ops.clone() {
@@ -1549,7 +1560,7 @@ mod tests {
             let new_data = OperationDataBuilder::new(loc, "test.target").build(ctx);
             let new_op = ctx.create_op(new_data);
             rewriter.replace_op(new_op);
-            true
+            Some(())
         }
     }
 
@@ -1562,15 +1573,15 @@ mod tests {
             ctx: &mut IrContext,
             op: OpRef,
             rewriter: &mut PatternRewriter<'_>,
-        ) -> bool {
+        ) -> Option<()> {
             if !ctx.op(op).name.is(ctx, "test.waiting") || !ctx.op_attrs(op).contains_key("ready") {
-                return false;
+                return None;
             }
             let loc = ctx.op(op).location;
             let new_data = OperationDataBuilder::new(loc, "test.done").build(ctx);
             let new_op = ctx.create_op(new_data);
             rewriter.replace_op(new_op);
-            true
+            Some(())
         }
     }
 
@@ -1603,9 +1614,9 @@ mod tests {
             ctx: &mut IrContext,
             op: OpRef,
             rewriter: &mut PatternRewriter<'_>,
-        ) -> bool {
+        ) -> Option<()> {
             if !ctx.op(op).name.is(ctx, "test.source") {
-                return false;
+                return None;
             }
             let loc = ctx.op(op).location;
             let i32_ty = i32_type(ctx);
@@ -1628,7 +1639,7 @@ mod tests {
                 .build(ctx);
             let container = ctx.create_op(data);
             rewriter.replace_op(container);
-            true
+            Some(())
         }
     }
 

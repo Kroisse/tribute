@@ -236,15 +236,9 @@ fn switch_shape(ctx: &IrContext, op: OpRef) -> Option<ScfSwitchShape> {
     if !ctx.op_results(op).is_empty() {
         return None;
     }
-    let [discriminant] = ctx.op_operands(op) else {
-        return None;
-    };
-    let Ok(switch_body) = ctx.op_regions(op).exactly_one() else {
-        return None;
-    };
-    let [body_block] = ctx.region(switch_body).blocks.as_slice() else {
-        return None;
-    };
+    let [discriminant] = ctx.op_operands(op).as_array()?;
+    let switch_body = ctx.op_regions(op).exactly_one().ok()?;
+    let [body_block] = ctx.region(switch_body).blocks.as_array()?;
     if !ctx.block_args(*body_block).is_empty() {
         return None;
     }
@@ -255,12 +249,8 @@ fn switch_shape(ctx: &IrContext, op: OpRef) -> Option<ScfSwitchShape> {
         if !ctx.op_results(arm).is_empty() || !ctx.op_operands(arm).is_empty() {
             return None;
         }
-        let Ok(body) = ctx.op_regions(arm).exactly_one() else {
-            return None;
-        };
-        let [entry] = ctx.region(body).blocks.as_slice() else {
-            return None;
-        };
+        let body = ctx.op_regions(arm).exactly_one().ok()?;
+        let [entry] = ctx.region(body).blocks.as_array()?;
         if !ctx.block_args(*entry).is_empty() {
             return None;
         }
@@ -377,11 +367,9 @@ impl OpRewritePattern for ScfSwitchPattern<'_> {
         ctx: &mut IrContext,
         switch: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = switch.op_ref();
-        let Ok(arms) = switch_arms(ctx, op) else {
-            return false;
-        };
+        let arms = switch_arms(ctx, op).ok()?;
         let loc = ctx.op(op).location;
         let nil_ty = core::Nil::params().intern(ctx).as_type_ref();
         let result_types = if self.0.resultless_switches.contains(&op) {
@@ -404,7 +392,7 @@ impl OpRewritePattern for ScfSwitchPattern<'_> {
                 }
             }
             rewriter.erase_op(vec![]);
-            return true;
+            return Some(());
         }
 
         let discriminant = arms.discriminant;
@@ -463,7 +451,7 @@ impl OpRewritePattern for ScfSwitchPattern<'_> {
             rewriter.insert_op(unreachable.op_ref());
         }
         rewriter.erase_op(vec![]);
-        true
+        Some(())
     }
 }
 
@@ -478,7 +466,7 @@ impl OpRewritePattern for ScfIfPattern<'_> {
         ctx: &mut IrContext,
         scf_if_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = scf_if_op.op_ref();
         let loc = ctx.op(op).location;
 
@@ -487,7 +475,7 @@ impl OpRewritePattern for ScfIfPattern<'_> {
         // converter instead of copying the shared IR spelling.
         let mut result_types = rewriter.result_types(ctx, op);
         if result_types.len() > 1 {
-            return false;
+            return None;
         }
         let drop_result = self.0.drop_never_results.contains(&op);
         if drop_result {
@@ -515,7 +503,7 @@ impl OpRewritePattern for ScfIfPattern<'_> {
             drop_result,
             rewriter,
         );
-        true
+        Some(())
     }
 }
 
@@ -535,7 +523,7 @@ impl OpRewritePattern for ScfLoopPattern<'_> {
         ctx: &mut IrContext,
         loop_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = loop_op.op_ref();
         let loc = ctx.op(op).location;
 
@@ -543,7 +531,7 @@ impl OpRewritePattern for ScfLoopPattern<'_> {
         // `wasm.block`/`wasm.loop` must declare target types.
         let mut result_types = rewriter.result_types(ctx, op);
         if result_types.len() > 1 {
-            return false;
+            return None;
         }
         let drop_result = self.0.drop_never_results.contains(&op);
         if drop_result {
@@ -605,7 +593,7 @@ impl OpRewritePattern for ScfLoopPattern<'_> {
             drop_result,
             rewriter,
         );
-        true
+        Some(())
     }
 }
 
@@ -628,7 +616,7 @@ impl OpRewritePattern for ScfYieldPattern {
         ctx: &mut IrContext,
         yield_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = yield_op.op_ref();
         // Get yield values (variadic operands)
         let operands = ctx.op_operands(op).to_vec();
@@ -636,19 +624,19 @@ impl OpRewritePattern for ScfYieldPattern {
         if operands.is_empty() {
             // No value to yield - just erase
             rewriter.erase_op(vec![]);
-            return true;
+            return Some(());
         }
 
         if operands.len() > 1 {
             // Multi-value yields are not yet supported; leave unlowered.
-            return false;
+            return None;
         }
 
         let value = operands[0];
         let loc = ctx.op(op).location;
         let new_op = wasm_dialect::Yield::operands(value).build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -667,7 +655,7 @@ impl OpRewritePattern for ScfContinuePattern {
         ctx: &mut IrContext,
         continue_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = continue_op.op_ref();
         let loc = ctx.op(op).location;
 
@@ -675,14 +663,14 @@ impl OpRewritePattern for ScfContinuePattern {
         let values = ctx.op_operands(op).to_vec();
         if values.len() > 1 {
             // Multiple loop-carried values not yet supported; leave unlowered.
-            return false;
+            return None;
         }
 
         if values.is_empty() {
             // No loop-carried values -- simple branch
             let br_op = wasm_dialect::Br::operands().target(1).build(ctx, loc);
             rewriter.replace_op(br_op.op_ref());
-            return true;
+            return Some(());
         }
 
         // Emit wasm.yield(value) + wasm.br(1) for each loop-carried value.
@@ -694,7 +682,7 @@ impl OpRewritePattern for ScfContinuePattern {
 
         rewriter.insert_op(yield_op.op_ref());
         rewriter.replace_op(br_op.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -718,7 +706,7 @@ impl OpRewritePattern for ScfBreakPattern {
         ctx: &mut IrContext,
         break_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = break_op.op_ref();
         let loc = ctx.op(op).location;
         let value = break_op.value(ctx);
@@ -731,7 +719,7 @@ impl OpRewritePattern for ScfBreakPattern {
 
         rewriter.insert_op(yield_op.op_ref());
         rewriter.replace_op(br_op.op_ref());
-        true
+        Some(())
     }
 }
 

@@ -262,16 +262,12 @@ impl OpRewritePattern for StringConstPattern<'_> {
         ctx: &mut IrContext,
         string_const: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = string_const.op_ref();
         let content = string_const.value(ctx).as_bytes();
-        let Some((data_idx, len)) = lookup_segment(self.segments, content) else {
-            return false;
-        };
-        let Some(string_enum_ty) = self.string_enum_ty else {
-            tracing::warn!("const_to_wasm: canonical String enum type not found");
-            return false;
-        };
+        let (data_idx, len) = lookup_segment(self.segments, content)?;
+        let string_enum_ty =
+            rewriter.require(self.string_enum_ty, "canonical String enum type not found")?;
 
         let location = ctx.op(op).location;
         let bytes_ty = super::bytes::bytes_struct_type(ctx);
@@ -290,7 +286,7 @@ impl OpRewritePattern for StringConstPattern<'_> {
 
         rewriter.insert_op(bytes.op_ref());
         rewriter.replace_op(leaf.op_ref());
-        true
+        Some(())
     }
 
     fn name(&self) -> &'static str {
@@ -317,14 +313,12 @@ impl OpRewritePattern for BytesConstPattern<'_> {
         ctx: &mut IrContext,
         bytes_const: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = bytes_const.op_ref();
         let b = bytes_const.value(ctx);
         let content: Vec<u8> = b.to_vec();
 
-        let Some((data_idx, len)) = lookup_segment(self.segments, &content) else {
-            return false;
-        };
+        let (data_idx, len) = lookup_segment(self.segments, &content)?;
 
         let location = ctx.op(op).location;
         let bytes_ty = super::bytes::bytes_struct_type(ctx);
@@ -338,7 +332,7 @@ impl OpRewritePattern for BytesConstPattern<'_> {
             .build(ctx, location);
 
         rewriter.replace_op(new_op.op_ref());
-        true
+        Some(())
     }
 
     fn name(&self) -> &'static str {

@@ -181,17 +181,14 @@ impl OpRewritePattern for StructNewPattern {
         ctx: &mut IrContext,
         struct_new: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = struct_new.op_ref();
         let loc = ctx.op(op).location;
         let struct_ty = struct_new.r#type(ctx);
         let mut fields: Vec<_> = struct_new.fields(ctx).to_vec();
         if has_descriptor_field(ctx, struct_ty) {
-            let Some(descriptor) =
-                descriptor_operand(ctx, rewriter, &self.numbers, (struct_ty, None), loc)
-            else {
-                return false;
-            };
+            let descriptor =
+                descriptor_operand(ctx, rewriter, &self.numbers, (struct_ty, None), loc)?;
             fields.insert(0, descriptor);
         }
         let result_ty = struct_new.result_ty(ctx);
@@ -204,7 +201,7 @@ impl OpRewritePattern for StructNewPattern {
             .results(result_ty)
             .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -222,13 +219,11 @@ impl OpRewritePattern for StructGetPattern {
         ctx: &mut IrContext,
         struct_get: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = struct_get.op_ref();
         let loc = ctx.op(op).location;
         let ref_val = struct_get.r#ref(ctx);
-        let Some(result_ty) = rewriter.result_type(ctx, op, 0) else {
-            return false;
-        };
+        let result_ty = rewriter.result_type(ctx, op, 0)?;
         let field_idx = physical_field(ctx, struct_get.r#type(ctx), struct_get.field(ctx));
 
         // Build wasm.struct_get with the converted field result type.
@@ -239,7 +234,7 @@ impl OpRewritePattern for StructGetPattern {
             .results(result_ty)
             .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -254,7 +249,7 @@ impl OpRewritePattern for StructSetPattern {
         ctx: &mut IrContext,
         struct_set: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = struct_set.op_ref();
         let loc = ctx.op(op).location;
         let ref_val = struct_set.r#ref(ctx);
@@ -268,7 +263,7 @@ impl OpRewritePattern for StructSetPattern {
             .field_idx(field_idx)
             .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -289,31 +284,24 @@ impl OpRewritePattern for VariantNewPattern {
         ctx: &mut IrContext,
         variant_new: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = variant_new.op_ref();
         let loc = ctx.op(op).location;
         let tag_sym = variant_new.tag_ref(ctx);
-        let Some(base_type) = canonical_enum_type(ctx, variant_new.r#type(ctx)) else {
-            return false;
-        };
+        let base_type = canonical_enum_type(ctx, variant_new.r#type(ctx))?;
         let mut fields: Vec<_> = variant_new.fields(ctx).to_vec();
         let descriptor = (variant_new.r#type(ctx), Some(tag_sym));
-        let Some(descriptor) = descriptor_operand(ctx, rewriter, &self.numbers, descriptor, loc)
-        else {
-            return false;
-        };
+        let descriptor = descriptor_operand(ctx, rewriter, &self.numbers, descriptor, loc)?;
         fields.insert(0, descriptor);
 
-        let Some(variant_type) = variant_type(ctx, base_type, tag_sym) else {
-            return false;
-        };
+        let variant_type = variant_type(ctx, base_type, tag_sym)?;
 
         let new_op = wasm_gc_dialect::StructNew::operands(fields)
             .r#type(variant_type)
             .results(variant_type)
             .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -334,16 +322,14 @@ impl OpRewritePattern for VariantIsPattern {
         ctx: &mut IrContext,
         variant_is: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = variant_is.op_ref();
         let loc = ctx.op(op).location;
         let tag = variant_is.tag_ref(ctx);
         let ref_val = variant_is.r#ref(ctx);
         let result_ty = variant_is.result_ty(ctx);
 
-        let Some(enum_type) = canonical_enum_type(ctx, variant_is.r#type(ctx)) else {
-            return false;
-        };
+        let enum_type = canonical_enum_type(ctx, variant_is.r#type(ctx))?;
 
         let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
         let Some(&number) = self.numbers.get(&(enum_type, Some(tag))) else {
@@ -352,7 +338,7 @@ impl OpRewritePattern for VariantIsPattern {
                 .results(result_ty)
                 .build(ctx, loc);
             rewriter.replace_op(never.op_ref());
-            return true;
+            return Some(());
         };
 
         let described_ty = super::type_converter::described_adt_type(ctx);
@@ -376,7 +362,7 @@ impl OpRewritePattern for VariantIsPattern {
         rewriter.insert_op(descriptor.op_ref());
         rewriter.insert_op(expected.op_ref());
         rewriter.replace_op(matches.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -393,26 +379,22 @@ impl OpRewritePattern for VariantCastPattern {
         ctx: &mut IrContext,
         variant_cast: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = variant_cast.op_ref();
         let loc = ctx.op(op).location;
         let tag = variant_cast.tag_ref(ctx);
         let ref_val = variant_cast.r#ref(ctx);
 
-        let Some(enum_type) = canonical_enum_type(ctx, variant_cast.r#type(ctx)) else {
-            return false;
-        };
+        let enum_type = canonical_enum_type(ctx, variant_cast.r#type(ctx))?;
 
-        let Some(variant_type) = variant_type(ctx, enum_type, tag) else {
-            return false;
-        };
+        let variant_type = variant_type(ctx, enum_type, tag)?;
 
         let new_op = wasm_gc_dialect::RefCast::operands(ref_val)
             .target_type(variant_type)
             .results(variant_type)
             .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -431,25 +413,20 @@ impl OpRewritePattern for VariantGetPattern {
         ctx: &mut IrContext,
         variant_get: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = variant_get.op_ref();
         let loc = ctx.op(op).location;
         let ref_val = variant_get.r#ref(ctx);
         let field_idx = variant_get.field(ctx);
         let tag = variant_get.tag_ref(ctx);
-        let Some(enum_type) = canonical_enum_type(ctx, variant_get.r#type(ctx)) else {
-            return false;
-        };
-        let Some(declared_field_ty) = get_enum_variants(ctx, enum_type)
+        let enum_type = canonical_enum_type(ctx, variant_get.r#type(ctx))?;
+        let declared_field_ty = get_enum_variants(ctx, enum_type)
             .and_then(|variants| {
                 variants
                     .into_iter()
                     .find(|(variant_tag, _)| *variant_tag == tag)
             })
-            .and_then(|(_, fields)| fields.get(field_idx as usize).copied())
-        else {
-            return false;
-        };
+            .and_then(|(_, fields)| fields.get(field_idx as usize).copied())?;
         let declared_field_ty = physical_variant_field_type(ctx, declared_field_ty);
         let requested_result_ty = physical_variant_field_type(ctx, variant_get.result_ty(ctx));
         // String::Leaf has the canonical bytes layout even though frontend
@@ -459,23 +436,21 @@ impl OpRewritePattern for VariantGetPattern {
         let is_bytes_anyref_erasure =
             declared_is_bytes && wasm_dialect::Anyref::matches(ctx, requested_result_ty);
         if requested_result_ty != declared_field_ty && !is_bytes_anyref_erasure {
-            return false;
+            return None;
         }
         let result_ty = declared_field_ty;
-        let Some(variant_type) = variant_type(ctx, enum_type, tag) else {
-            return false;
-        };
+        let variant_type = variant_type(ctx, enum_type, tag)?;
         // An operand that already has a struct type is a cast to this
         // variant's layout; a logical reference must name this enum.
         let operand_ty = ctx.value_ty(ref_val);
         if wasm_gc_dialect::Struct::matches(ctx, operand_ty) && operand_ty != variant_type {
-            return false;
+            return None;
         }
         let operand_data = ctx.get_type(operand_ty);
         if operand_data.name == tribute_ir::dialect::adt::Typeref::NAME
             && canonical_typeref_enum_type(ctx, operand_ty) != Some(enum_type)
         {
-            return false;
+            return None;
         }
 
         // The variant's fields follow its descriptor field.
@@ -485,7 +460,7 @@ impl OpRewritePattern for VariantGetPattern {
             .results(result_ty)
             .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -500,7 +475,7 @@ impl OpRewritePattern for ArrayNewPattern {
         ctx: &mut IrContext,
         array_new: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = array_new.op_ref();
         let loc = ctx.op(op).location;
         let length = wasm_index(ctx, rewriter, array_new.length(ctx), loc);
@@ -510,7 +485,7 @@ impl OpRewritePattern for ArrayNewPattern {
             .r#type(array_ty)
             .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -525,7 +500,7 @@ impl OpRewritePattern for ArrayOfPattern {
         ctx: &mut IrContext,
         array_of: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = array_of.op_ref();
         let loc = ctx.op(op).location;
         let array_ty = gc_array_type(ctx, array_of.r#type(ctx));
@@ -537,7 +512,7 @@ impl OpRewritePattern for ArrayOfPattern {
             .r#type(array_ty)
             .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -558,7 +533,7 @@ impl OpRewritePattern for ArraySplicePattern {
         ctx: &mut IrContext,
         splice: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = splice.op_ref();
         let loc = ctx.op(op).location;
         let array_ty = gc_array_type(ctx, splice.r#type(ctx));
@@ -664,7 +639,7 @@ impl OpRewritePattern for ArraySplicePattern {
         .build(ctx, loc);
         rewriter.insert_op(copy_tail.op_ref());
         rewriter.erase_op(vec![result]);
-        true
+        Some(())
     }
 }
 
@@ -747,7 +722,7 @@ impl OpRewritePattern for ArrayGetPattern {
         ctx: &mut IrContext,
         array_get: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = array_get.op_ref();
         let loc = ctx.op(op).location;
         let ref_val = gc_array_operand(ctx, rewriter, array_get.r#ref(ctx), loc);
@@ -756,7 +731,7 @@ impl OpRewritePattern for ArrayGetPattern {
         let array_ty = gc_array_type(ctx, ctx.value_ty(ref_val));
         let new_op = array_read(ctx, loc, array_ty, ref_val, index);
         rewriter.replace_op(new_op);
-        true
+        Some(())
     }
 }
 
@@ -823,7 +798,7 @@ impl OpRewritePattern for ArraySetPattern {
         ctx: &mut IrContext,
         array_set: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = array_set.op_ref();
         let loc = ctx.op(op).location;
         let ref_val = gc_array_operand(ctx, rewriter, array_set.r#ref(ctx), loc);
@@ -834,7 +809,7 @@ impl OpRewritePattern for ArraySetPattern {
             .r#type(array_ty)
             .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -849,7 +824,7 @@ impl OpRewritePattern for ArrayLenPattern {
         ctx: &mut IrContext,
         array_len: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = array_len.op_ref();
         let loc = ctx.op(op).location;
         let ref_val = gc_array_operand(ctx, rewriter, array_len.r#ref(ctx), loc);
@@ -861,7 +836,7 @@ impl OpRewritePattern for ArrayLenPattern {
             .results(result_ty)
             .build(ctx, loc);
         rewriter.replace_op(index.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -892,7 +867,7 @@ impl OpRewritePattern for RefNullPattern {
         ctx: &mut IrContext,
         ref_null: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = ref_null.op_ref();
         let loc = ctx.op(op).location;
         let result_ty = ref_null.result_ty(ctx);
@@ -904,7 +879,7 @@ impl OpRewritePattern for RefNullPattern {
             .results(result_ty)
             .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -919,7 +894,7 @@ impl OpRewritePattern for RefIsNullPattern {
         ctx: &mut IrContext,
         ref_is_null: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = ref_is_null.op_ref();
         let loc = ctx.op(op).location;
         let ref_val = ref_is_null.r#ref(ctx);
@@ -929,7 +904,7 @@ impl OpRewritePattern for RefIsNullPattern {
             .results(result_ty)
             .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -944,7 +919,7 @@ impl OpRewritePattern for RefCastPattern {
         ctx: &mut IrContext,
         ref_cast: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = ref_cast.op_ref();
         let loc = ctx.op(op).location;
         let ref_val = ref_cast.r#ref(ctx);
@@ -958,7 +933,7 @@ impl OpRewritePattern for RefCastPattern {
             .results(result_ty)
             .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
-        true
+        Some(())
     }
 }
 

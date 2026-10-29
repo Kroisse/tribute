@@ -98,7 +98,7 @@ impl OpRewritePattern for NativeWritePattern {
         ctx: &mut IrContext,
         write: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = write.op_ref();
         let loc = ctx.op(op).location;
         let result_ty = ctx.op_result_types(op)[0];
@@ -107,7 +107,7 @@ impl OpRewritePattern for NativeWritePattern {
             .results([result_ty])
             .build(ctx, loc);
         rewriter.replace_op(call.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -123,11 +123,9 @@ impl OpRewritePattern for NativeReadLinePattern {
         ctx: &mut IrContext,
         read_line: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = read_line.op_ref();
-        let Some(enum_ty) = self.read_line_result_ty else {
-            return false;
-        };
+        let enum_ty = self.read_line_result_ty?;
 
         let loc = ctx.op(op).location;
         let result_ty = ctx.op_result_types(op)[0];
@@ -231,7 +229,7 @@ impl OpRewritePattern for NativeReadLinePattern {
             rewriter.insert_op(inserted);
         }
         rewriter.replace_op(line_if.op_ref());
-        true
+        Some(())
     }
 }
 

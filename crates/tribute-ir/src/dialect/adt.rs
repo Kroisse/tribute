@@ -246,28 +246,22 @@ impl OpRewritePattern for ForwardStructGet {
         ctx: &mut IrContext,
         get: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         if self.written.contains(&get.r#type(ctx)) {
-            return false;
+            return None;
         }
         let source = get.r#ref(ctx);
         let ValueDef::OpResult(producer, _) = ctx.value_def(source) else {
-            return false;
+            return None;
         };
-        let Ok(new) = StructNew::from_op(ctx, producer) else {
-            return false;
-        };
+        let new = StructNew::from_op(ctx, producer).ok()?;
         if new.r#type(ctx) != get.r#type(ctx) {
-            return false;
+            return None;
         }
-        let Some(&stored) = ctx.op_operands(producer).get(get.field(ctx) as usize) else {
-            return false;
-        };
-        let [result_ty] = ctx.op_result_types(get.op_ref()) else {
-            return false;
-        };
+        let &stored = ctx.op_operands(producer).get(get.field(ctx) as usize)?;
+        let [result_ty] = ctx.op_result_types(get.op_ref()).as_array()?;
         if ctx.value_ty(stored) != *result_ty {
-            return false;
+            return None;
         }
         let owned = ctx.uses(source).iter().any(|usage| {
             crate::dialect::tribute_rt::Retain::matches(ctx, usage.user)
@@ -275,10 +269,10 @@ impl OpRewritePattern for ForwardStructGet {
                 || crate::dialect::tribute_rt::IntoRaw::matches(ctx, usage.user)
         });
         if owned {
-            return false;
+            return None;
         }
         rewriter.erase_op(vec![stored]);
-        true
+        Some(())
     }
 
     fn name(&self) -> &'static str {
@@ -294,9 +288,7 @@ impl Fold for RefCast {
         let op = self.op_ref();
         let cast = self;
         let operand = cast.r#ref(ctx);
-        let [result_ty] = ctx.op_result_types(op) else {
-            return None;
-        };
+        let [result_ty] = ctx.op_result_types(op).as_array()?;
         (ctx.value_ty(operand) == *result_ty && cast.r#type(ctx) == *result_ty)
             .then_some(FoldResult::Forward(operand))
     }

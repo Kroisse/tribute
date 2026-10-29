@@ -151,7 +151,7 @@ impl OpRewritePattern for EmptyPattern {
         ctx: &mut IrContext,
         empty: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = empty.op_ref();
         let result_ty = ctx.op_result_types(op)[0];
         let node_ty = node_type(ctx, empty.element_type(ctx));
@@ -160,7 +160,7 @@ impl OpRewritePattern for EmptyPattern {
             .results(result_ty)
             .build(ctx, ctx.op(op).location);
         rewriter.replace_op(null.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -174,7 +174,7 @@ impl OpRewritePattern for PrependPattern {
         ctx: &mut IrContext,
         prepend: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = prepend.op_ref();
         let result_ty = ctx.op_result_types(op)[0];
         let node_ty = node_type(ctx, prepend.element_type(ctx));
@@ -183,7 +183,7 @@ impl OpRewritePattern for PrependPattern {
             .results(result_ty)
             .build(ctx, ctx.op(op).location);
         rewriter.replace_op(node.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -197,14 +197,14 @@ impl OpRewritePattern for IsEmptyPattern {
         ctx: &mut IrContext,
         is_empty: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = is_empty.op_ref();
         let result_ty = ctx.op_result_types(op)[0];
         let check = adt::RefIsNull::operands(is_empty.list(ctx))
             .results(result_ty)
             .build(ctx, ctx.op(op).location);
         rewriter.replace_op(check.op_ref());
-        true
+        Some(())
     }
 }
 

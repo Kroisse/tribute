@@ -183,18 +183,16 @@ impl RewritePattern for ExpandDispatches {
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         if let Ok(perform) = ability::Perform::from_op(ctx, op) {
             let resumption = Some(perform.resumption(ctx));
             let values = perform.values(ctx).to_vec();
             self.expand_dispatch(ctx, op, perform.frame(ctx), resumption, &values, rewriter)
-                .is_some()
         } else if let Ok(abort) = ability::Abort::from_op(ctx, op) {
             let values = abort.values(ctx).to_vec();
             self.expand_dispatch(ctx, op, abort.frame(ctx), None, &values, rewriter)
-                .is_some()
         } else {
-            false
+            None
         }
     }
 }

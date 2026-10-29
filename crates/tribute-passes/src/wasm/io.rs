@@ -193,14 +193,14 @@ impl OpRewritePattern for WritePattern {
         ctx: &mut IrContext,
         write: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = write.op_ref();
         let call = func::Call::operands([write.bytes(ctx), write.newline(ctx)])
             .callee(SymbolPath::new([WRITE_HELPER]))
             .results([ctx.op_result_types(op)[0]])
             .build(ctx, ctx.op(op).location);
         rewriter.replace_op(call.op_ref());
-        true
+        Some(())
     }
 }
 

@@ -22,8 +22,9 @@ use crate::refs::OpRef;
 ///
 /// # Return Value
 ///
-/// Return `true` if the pattern matched and recorded mutations via the rewriter.
-/// Return `false` if the pattern does not apply.
+/// Return `Some(())` if the pattern matched and recorded mutations via the
+/// rewriter, and `None` if it does not apply, so that each check can reject
+/// the operation with `?`.
 ///
 /// # State
 ///
@@ -42,7 +43,7 @@ pub trait RewritePattern {
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool;
+    ) -> Option<()>;
 
     /// The operations this pattern can match, or `None` if it may match any
     /// operation.
@@ -77,7 +78,7 @@ pub trait OpRewritePattern {
         ctx: &mut IrContext,
         op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool;
+    ) -> Option<()>;
 
     /// Optional: return a human-readable name for debugging.
     fn name(&self) -> &'static str {
@@ -91,10 +92,8 @@ impl<P: OpRewritePattern> RewritePattern for P {
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(op) = P::Op::from_op(ctx, op) else {
-            return false;
-        };
+    ) -> Option<()> {
+        let op = P::Op::from_op(ctx, op).ok()?;
         OpRewritePattern::match_and_rewrite(self, ctx, op, rewriter)
     }
 

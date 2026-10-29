@@ -130,7 +130,7 @@ impl OpRewritePattern for LowerClosureNewArena<'_> {
         ctx: &mut IrContext,
         closure_new: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = closure_new.op_ref();
         let loc = ctx.op(op).location;
         let entries: Vec<_> = closure_new.entries(ctx).cloned().collect();
@@ -140,7 +140,7 @@ impl OpRewritePattern for LowerClosureNewArena<'_> {
                 .is_some_and(|target| func::Func::matches(ctx, target))
         });
         if !resolved {
-            return false;
+            return None;
         }
         let captures = closure_new.captures(ctx).to_vec();
         let result_ty = ctx.op_result_types(op)[0];
@@ -174,7 +174,7 @@ impl OpRewritePattern for LowerClosureNewArena<'_> {
 
         rewriter.insert_op(struct_new_op.op_ref());
         rewriter.replace_op(cast.op_ref());
-        true
+        Some(())
     }
 
     fn name(&self) -> &'static str {
@@ -198,7 +198,7 @@ impl OpRewritePattern for LowerClosureUnpackArena {
         ctx: &mut IrContext,
         unpack: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = unpack.op_ref();
         let loc = ctx.op(op).location;
         let capture_types = ctx.op_result_types(op).to_vec();
@@ -223,7 +223,7 @@ impl OpRewritePattern for LowerClosureUnpackArena {
             captures.push(get.result(ctx));
         }
         rewriter.erase_op(captures);
-        true
+        Some(())
     }
 
     fn name(&self) -> &'static str {
@@ -242,18 +242,16 @@ impl OpRewritePattern for LowerClosureCallArena {
         ctx: &mut IrContext,
         call_indirect: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = call_indirect.op_ref();
         let operands = ctx.op_operands(op);
         if operands.is_empty() {
-            return false;
+            return None;
         }
         let callee = operands[0];
         // Only a closure carries an environment; a `func.func_sig` callee
         // is a plain function pointer.
-        if physical_closure_type_for_callee(ctx, callee).is_none() {
-            return false;
-        }
+        physical_closure_type_for_callee(ctx, callee)?;
 
         let loc = ctx.op(op).location;
         let args: Vec<ValueRef> = operands[1..].to_vec();
@@ -262,17 +260,12 @@ impl OpRewritePattern for LowerClosureCallArena {
         let caller_results = ctx.op_result_types(op).to_vec();
 
         let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
-        let Some(convention) = DynConventionBearing::of(ctx, op) else {
-            return false;
-        };
+        let convention = DynConventionBearing::of(ctx, op)?;
         if caller_results.len() != usize::from(convention != CallingConvention::Cps) {
-            return false;
+            return None;
         }
-        let Some(contract) =
-            exact_physical_call_contract(ctx, op, callee, convention, &args, &caller_results)
-        else {
-            return false;
-        };
+        let contract =
+            exact_physical_call_contract(ctx, op, callee, convention, &args, &caller_results)?;
 
         // Generate: %table_idx = closure.entry %closure {index = <slot>}
         let table_idx_op = closure::Entry::operands(callee)
@@ -298,7 +291,7 @@ impl OpRewritePattern for LowerClosureCallArena {
         rewriter.insert_op(table_idx_op.op_ref());
 
         rewriter.replace_op(new_call.op_ref());
-        true
+        Some(())
     }
 
     fn name(&self) -> &'static str {
@@ -319,29 +312,17 @@ impl OpRewritePattern for LowerClosureTailCallArena {
         ctx: &mut IrContext,
         tail_call_indirect: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = tail_call_indirect.op_ref();
         let operands = ctx.op_operands(op).to_vec();
-        let Some((&callee, args)) = operands.split_first() else {
-            return false;
-        };
-        let Some(convention) = DynConventionBearing::of(ctx, op) else {
-            return false;
-        };
-        if physical_closure_type_for_callee(ctx, callee).is_none() {
-            return false;
-        }
+        let (&callee, args) = operands.split_first()?;
+        let convention = DynConventionBearing::of(ctx, op)?;
+        physical_closure_type_for_callee(ctx, callee)?;
 
         let location = ctx.op(op).location;
         let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
-        let Some(results) = exact_tail_results(ctx, op, convention) else {
-            return false;
-        };
-        let Some(contract) =
-            exact_physical_call_contract(ctx, op, callee, convention, args, &results)
-        else {
-            return false;
-        };
+        let results = exact_tail_results(ctx, op, convention)?;
+        let contract = exact_physical_call_contract(ctx, op, callee, convention, args, &results)?;
         let func_ref = closure::Entry::operands(callee)
             .index(convention.slot())
             .results(i32_ty)
@@ -362,7 +343,7 @@ impl OpRewritePattern for LowerClosureTailCallArena {
 
         rewriter.insert_op(func_ref.op_ref());
         rewriter.replace_op(tail.op_ref());
-        true
+        Some(())
     }
 
     fn name(&self) -> &'static str {
@@ -486,7 +467,7 @@ impl OpRewritePattern for LowerClosureEntryArena {
         ctx: &mut IrContext,
         entry: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = entry.op_ref();
         let loc = ctx.op(op).location;
         let index = entry.index(ctx);
@@ -508,7 +489,7 @@ impl OpRewritePattern for LowerClosureEntryArena {
             .build(ctx, loc);
         rewriter.insert_op(get_op.op_ref());
         rewriter.replace_op(read.op_ref());
-        true
+        Some(())
     }
 
     fn name(&self) -> &'static str {

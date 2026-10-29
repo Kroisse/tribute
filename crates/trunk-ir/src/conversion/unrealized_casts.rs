@@ -46,11 +46,12 @@ impl OpRewritePattern for UnrealizedCastConversionPattern {
         ctx: &mut IrContext,
         unrealized_conversion_cast: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = unrealized_conversion_cast.op_ref();
-        let (&[input], &[declared]) = (ctx.op_operands(op), ctx.op_result_types(op)) else {
-            return false;
-        };
+        let (&[input], &[declared]) = (
+            ctx.op_operands(op).as_array()?,
+            ctx.op_result_types(op).as_array()?,
+        );
         let to = rewriter
             .type_converter()
             .convert_type_or_identity(ctx, declared);
@@ -66,16 +67,16 @@ impl OpRewritePattern for UnrealizedCastConversionPattern {
                 rewriter.insert_op(mat_op);
             }
             rewriter.erase_op(vec![mat.value]);
-            return true;
+            return Some(());
         }
         if to == declared {
-            return false;
+            return None;
         }
         let cast = core::UnrealizedConversionCast::operands(input)
             .results(to)
             .build(ctx, location);
         rewriter.replace_op(cast.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -186,9 +187,7 @@ fn cast_parts(ctx: &IrContext, op: OpRef) -> Option<(BlockRef, ValueRef, TypeRef
 
 /// The cast that defines the input of `op`, if any.
 fn input_cast(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
-    let &[input] = ctx.op_operands(op) else {
-        return None;
-    };
+    let &[input] = ctx.op_operands(op).as_array()?;
     match ctx.value_def(input) {
         ValueDef::OpResult(producer, _)
             if core::UnrealizedConversionCast::matches(ctx, producer) =>

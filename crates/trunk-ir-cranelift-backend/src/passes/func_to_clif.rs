@@ -191,7 +191,7 @@ impl OpRewritePattern for FuncFuncPattern {
         ctx: &mut IrContext,
         func: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = func.op_ref();
         let tc = rewriter.type_converter();
 
@@ -200,12 +200,8 @@ impl OpRewritePattern for FuncFuncPattern {
         let func_type_attr = ctx.op_attrs(op).get_type("type");
 
         let mut new_attrs = data.attributes.clone();
-        let Some(func_ty) = func_type_attr else {
-            return false;
-        };
-        let Some(new_func_ty) = convert_to_clif_func_type(ctx, func_ty, tc) else {
-            return false;
-        };
+        let func_ty = func_type_attr?;
+        let new_func_ty = convert_to_clif_func_type(ctx, func_ty, tc)?;
         new_attrs
             .view_mut(ctx)
             .insert("type", Attribute::Type(new_func_ty));
@@ -215,7 +211,7 @@ impl OpRewritePattern for FuncFuncPattern {
         ctx.op_mut(new_op).attributes = new_attrs;
         // Update dialect/name (already done by rebuild_op_as)
         rewriter.replace_op(new_op);
-        true
+        Some(())
     }
 }
 
@@ -230,7 +226,7 @@ impl OpRewritePattern for FuncCallPattern {
         ctx: &mut IrContext,
         call_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = call_op.op_ref();
         let callee = call_op.callee(ctx).clone();
         let new_op = crate::passes::cf_to_clif::rebuild_op_as(ctx, op, "clif.call");
@@ -240,7 +236,7 @@ impl OpRewritePattern for FuncCallPattern {
         ctx.op_attrs_mut(new_op)
             .insert("callee", Attribute::SymbolRef(callee));
         rewriter.replace_op(new_op);
-        true
+        Some(())
     }
 }
 
@@ -255,19 +251,12 @@ impl OpRewritePattern for FuncCallIndirectPattern {
         ctx: &mut IrContext,
         call: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = call.op_ref();
         let result_types = rewriter.result_types(ctx, op);
-        let Some(signature) = call.exact_signature(ctx) else {
-            return false;
-        };
-        let Some(sig_ty) = convert_to_clif_func_type(ctx, signature, rewriter.type_converter())
-        else {
-            return false;
-        };
-        let Some(callable) = clif::FuncSig::from_type_ref(ctx, sig_ty) else {
-            return false;
-        };
+        let signature = call.exact_signature(ctx)?;
+        let sig_ty = convert_to_clif_func_type(ctx, signature, rewriter.type_converter())?;
+        let callable = clif::FuncSig::from_type_ref(ctx, sig_ty)?;
         let runtime_result_types = callable
             .results(ctx)
             .iter()
@@ -283,7 +272,7 @@ impl OpRewritePattern for FuncCallIndirectPattern {
             || (result_types.as_slice() != callable.results(ctx)
                 && result_types != runtime_result_types)
         {
-            return false;
+            return None;
         }
 
         let new_op = crate::passes::cf_to_clif::rebuild_op_as(ctx, op, "clif.call_indirect");
@@ -291,13 +280,13 @@ impl OpRewritePattern for FuncCallIndirectPattern {
         func::remove_indirect_call_signature(ctx, &mut attributes);
         ctx.op_mut(new_op).attributes = attributes;
         if !clif::set_indirect_call_signature(ctx, new_op, sig_ty) {
-            return false;
+            return None;
         }
         for (index, result_ty) in result_types.into_iter().enumerate() {
             ctx.set_op_result_type(new_op, index as u32, result_ty);
         }
         rewriter.replace_op(new_op);
-        true
+        Some(())
     }
 }
 
@@ -312,11 +301,11 @@ impl OpRewritePattern for FuncReturnPattern {
         ctx: &mut IrContext,
         return_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = return_op.op_ref();
         let new_op = crate::passes::cf_to_clif::rebuild_op_as(ctx, op, "clif.return");
         rewriter.replace_op(new_op);
-        true
+        Some(())
     }
 }
 
@@ -331,14 +320,14 @@ impl OpRewritePattern for FuncTailCallPattern {
         ctx: &mut IrContext,
         tail_call: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = tail_call.op_ref();
         let callee = tail_call.callee(ctx).clone();
         let new_op = crate::passes::cf_to_clif::rebuild_op_as(ctx, op, "clif.return_call");
         ctx.op_attrs_mut(new_op)
             .insert("callee", Attribute::SymbolRef(callee));
         rewriter.replace_op(new_op);
-        true
+        Some(())
     }
 }
 
@@ -357,21 +346,12 @@ impl OpRewritePattern for FuncTailCallIndirectPattern {
         ctx: &mut IrContext,
         tail: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = tail.op_ref();
-        let Some(signature) = tail.exact_signature(ctx) else {
-            return false;
-        };
-        let Some(signature) = convert_to_clif_func_type(ctx, signature, rewriter.type_converter())
-        else {
-            return false;
-        };
-        let Some(callable) = clif::FuncSig::from_type_ref(ctx, signature) else {
-            return false;
-        };
-        let Some(caller_results) = enclosing_results(ctx, op, rewriter.type_converter()) else {
-            return false;
-        };
+        let signature = tail.exact_signature(ctx)?;
+        let signature = convert_to_clif_func_type(ctx, signature, rewriter.type_converter())?;
+        let callable = clif::FuncSig::from_type_ref(ctx, signature)?;
+        let caller_results = enclosing_results(ctx, op, rewriter.type_converter())?;
         if callable.call_conv(ctx) != Some(func::CallConv::Tail)
             || callable.results(ctx) != caller_results.as_slice()
             || !TailCallLike::is_resultless(&tail, ctx)
@@ -382,7 +362,7 @@ impl OpRewritePattern for FuncTailCallIndirectPattern {
                 .zip(CallLike::call_args(&tail, ctx))
                 .any(|(&param, &arg)| param != ctx.value_ty(arg))
         {
-            return false;
+            return None;
         }
 
         let new_op = crate::passes::cf_to_clif::rebuild_op_as(ctx, op, "clif.return_call_indirect");
@@ -390,10 +370,10 @@ impl OpRewritePattern for FuncTailCallIndirectPattern {
         func::remove_indirect_call_signature(ctx, &mut attributes);
         ctx.op_mut(new_op).attributes = attributes;
         if !clif::set_indirect_call_signature(ctx, new_op, signature) {
-            return false;
+            return None;
         }
         rewriter.replace_op(new_op);
-        true
+        Some(())
     }
 }
 
@@ -435,12 +415,12 @@ impl OpRewritePattern for FuncUnreachablePattern {
         ctx: &mut IrContext,
         unreachable: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = unreachable.op_ref();
         let loc = ctx.op(op).location;
         let new_op = clif::Trap::operands().code("unreachable").build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -472,7 +452,7 @@ impl OpRewritePattern for FuncConstantPattern {
         ctx: &mut IrContext,
         const_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = const_op.op_ref();
         let func_ref = const_op.func_ref(ctx).clone();
         if let &[result] = ctx.op_result_types(op)
@@ -483,7 +463,7 @@ impl OpRewritePattern for FuncConstantPattern {
                 .and_then(|target| self.functions.get(&target).copied())
                 != Some(result)
         {
-            return false;
+            return None;
         }
         let loc = ctx.op(op).location;
         let ptr_ty = intern_ptr_type(ctx);
@@ -492,7 +472,7 @@ impl OpRewritePattern for FuncConstantPattern {
             .results(ptr_ty)
             .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
-        true
+        Some(())
     }
 }
 

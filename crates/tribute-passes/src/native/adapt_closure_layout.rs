@@ -169,7 +169,7 @@ impl OpRewritePattern for ConventionTablePattern {
         ctx: &mut IrContext,
         table: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = table.op_ref();
         let entries: Vec<_> = table.entries(ctx).cloned().collect();
         let symbol = self.tables[&entries].clone();
@@ -179,7 +179,7 @@ impl OpRewritePattern for ConventionTablePattern {
             .results(ptr_ty)
             .build(ctx, ctx.op(op).location);
         rewriter.replace_op(address.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -194,7 +194,7 @@ impl OpRewritePattern for ConventionEntryPattern {
         ctx: &mut IrContext,
         entry: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = entry.op_ref();
         let offset = entry.index(ctx) * POINTER_SIZE;
         let table = entry.table(ctx);
@@ -204,7 +204,7 @@ impl OpRewritePattern for ConventionEntryPattern {
             .results(i64_ty)
             .build(ctx, ctx.op(op).location);
         rewriter.replace_op(load.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -219,17 +219,15 @@ impl OpRewritePattern for AdaptClosureStructNew {
         ctx: &mut IrContext,
         struct_new: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = struct_new.op_ref();
-        let Some(native_ty) = native_closure_layout(ctx, struct_new.r#type(ctx)) else {
-            return false;
-        };
+        let native_ty = native_closure_layout(ctx, struct_new.r#type(ctx))?;
         let new_op = rebuild_op_as(ctx, op, "adt.struct_new");
         ctx.op_attrs_mut(new_op)
             .insert("type", Attribute::Type(native_ty));
         let Some(&original_ty) = ctx.op_result_types(new_op).first() else {
             rewriter.replace_op(new_op);
-            return true;
+            return Some(());
         };
         ctx.set_op_result_type(new_op, 0, native_ty);
         // Users still declare the semantic closure type, so the
@@ -242,7 +240,7 @@ impl OpRewritePattern for AdaptClosureStructNew {
         rewriter.insert_op(new_op);
         rewriter.insert_op(restored.op_ref());
         rewriter.erase_op(vec![restored.result(ctx)]);
-        true
+        Some(())
     }
 }
 
@@ -257,11 +255,9 @@ impl OpRewritePattern for AdaptClosureStructGet {
         ctx: &mut IrContext,
         struct_get: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = struct_get.op_ref();
-        let Some(native_ty) = native_closure_layout(ctx, struct_get.r#type(ctx)) else {
-            return false;
-        };
+        let native_ty = native_closure_layout(ctx, struct_get.r#type(ctx))?;
         let new_op = rebuild_op_as(ctx, op, "adt.struct_get");
         ctx.op_attrs_mut(new_op)
             .insert("type", Attribute::Type(native_ty));
@@ -272,7 +268,7 @@ impl OpRewritePattern for AdaptClosureStructGet {
             ctx.set_op_result_type(new_op, 0, ptr_ty);
         }
         rewriter.replace_op(new_op);
-        true
+        Some(())
     }
 }
 

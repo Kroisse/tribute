@@ -121,16 +121,14 @@ impl OpRewritePattern for BytesLenPattern<'_> {
         ctx: &mut IrContext,
         call: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = call.op_ref();
         if !calls_c_helper(ctx, self.0, call, BYTES_LEN) {
-            return false;
+            return None;
         }
 
         let operands = ctx.op_operands(op).to_vec();
-        let Some(bytes_ref) = operands.first().copied() else {
-            return false;
-        };
+        let bytes_ref = operands.first().copied()?;
 
         let location = ctx.op(op).location;
         let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
@@ -143,7 +141,7 @@ impl OpRewritePattern for BytesLenPattern<'_> {
             .build(ctx, location);
 
         rewriter.replace_op(get_len.op_ref());
-        true
+        Some(())
     }
 
     fn name(&self) -> &'static str {
@@ -166,15 +164,15 @@ impl OpRewritePattern for BytesRangeEqualPattern<'_> {
         ctx: &mut IrContext,
         call: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = call.op_ref();
         if !calls_c_helper(ctx, self.0, call, BYTES_RANGE_EQUAL) {
-            return false;
+            return None;
         }
 
         let operands = ctx.op_operands(op).to_vec();
         if operands.len() != 5 {
-            return false;
+            return None;
         }
         let location = ctx.op(op).location;
         let result_ty = ctx.op_result_types(op)[0];
@@ -287,7 +285,7 @@ impl OpRewritePattern for BytesRangeEqualPattern<'_> {
         rewriter.insert_op(right_start.op_ref());
         rewriter.insert_op(zero.op_ref());
         rewriter.replace_op(compare.op_ref());
-        true
+        Some(())
     }
 
     fn name(&self) -> &'static str {
@@ -351,15 +349,15 @@ impl OpRewritePattern for BytesConcatPattern<'_> {
         ctx: &mut IrContext,
         call: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = call.op_ref();
         if !calls_c_helper(ctx, self.0, call, BYTES_CONCAT) {
-            return false;
+            return None;
         }
 
         let operands = ctx.op_operands(op).to_vec();
         if operands.len() < 2 {
-            return false;
+            return None;
         }
         let left = operands[0];
         let right = operands[1];
@@ -438,7 +436,7 @@ impl OpRewritePattern for BytesConcatPattern<'_> {
             rewriter.insert_op(o);
         }
         rewriter.replace_op(last);
-        true
+        Some(())
     }
 
     fn name(&self) -> &'static str {
@@ -459,16 +457,14 @@ impl OpRewritePattern for BytesSliceOrPanicPattern<'_> {
         ctx: &mut IrContext,
         call: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = call.op_ref();
         if !calls_c_helper(ctx, self.0, call, BYTES_SLICE_OR_PANIC) {
-            return false;
+            return None;
         }
 
         let operands = ctx.op_operands(op).to_vec();
-        let [bytes, start, end] = operands[..] else {
-            return false;
-        };
+        let &[bytes, start, end] = operands.as_array()?;
         let location = ctx.op(op).location;
         let bytes_ty = super::bytes::bytes_struct_type(ctx);
         let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
@@ -514,7 +510,7 @@ impl OpRewritePattern for BytesSliceOrPanicPattern<'_> {
         rewriter.insert_op(offset.op_ref());
         rewriter.insert_op(len.op_ref());
         rewriter.replace_op(slice.op_ref());
-        true
+        Some(())
     }
 
     fn name(&self) -> &'static str {

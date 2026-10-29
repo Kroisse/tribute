@@ -94,15 +94,13 @@ impl OpRewritePattern for LowerCallPattern {
         ctx: &mut IrContext,
         call: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = call.op_ref();
         let location = ctx.op(op).location;
         let ability = ctx.op_attrs(op).get_symbol_ref("ability").cloned().unwrap();
         let op_name = ctx.op_attrs(op).get_string_ref("op_name").unwrap();
         let result_types = ctx.op_result_types(op).to_vec();
-        let [result_type] = result_types.as_slice() else {
-            return false;
-        };
+        let [result_type] = result_types.as_array()?;
 
         // Operands: [...values]
         let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
@@ -113,7 +111,7 @@ impl OpRewritePattern for LowerCallPattern {
         // Consume the enclosing callable's exact hidden-parameter contract.
         let Some(evidence_val) = enclosing_callable_evidence(ctx, op) else {
             // Leave malformed input for the final ability boundary to reject.
-            return false;
+            return None;
         };
 
         // === 2. Build the canonical payload product. ===
@@ -144,7 +142,7 @@ impl OpRewritePattern for LowerCallPattern {
         // === 4. Erase ability.call, mapping its result to the typed dispatch result ===
         rewriter.erase_op(vec![ctx.op_result(typed_result, 0)]);
 
-        true
+        Some(())
     }
 }
 

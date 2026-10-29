@@ -360,15 +360,11 @@ fn switch_arms(ctx: &IrContext, scf_op: OpRef) -> Option<SwitchArms> {
         return None;
     }
 
-    let [discriminant] = ctx.op_operands(scf_op) else {
-        return None;
-    };
+    let [discriminant] = ctx.op_operands(scf_op).as_array()?;
     let Ok(body_region) = ctx.op_regions(scf_op).exactly_one() else {
         return None;
     };
-    let [body_block] = ctx.region(body_region).blocks.as_slice() else {
-        return None;
-    };
+    let [body_block] = ctx.region(body_region).blocks.as_array()?;
 
     let mut cases = Vec::new();
     let mut default_region = None;

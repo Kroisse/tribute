@@ -220,7 +220,7 @@ impl OpRewritePattern for ConventionTablePattern {
         ctx: &mut IrContext,
         table: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = table.op_ref();
         let entries: Vec<_> = table.entries(ctx).cloned().collect();
         let start = self.tables[&entries];
@@ -230,7 +230,7 @@ impl OpRewritePattern for ConventionTablePattern {
             .results(i32_ty)
             .build(ctx, ctx.op(op).location);
         rewriter.replace_op(index.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -246,13 +246,13 @@ impl OpRewritePattern for ConventionEntryPattern {
         ctx: &mut IrContext,
         entry: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = entry.op_ref();
         let table = entry.table(ctx);
         let position = entry.index(ctx);
         if position == 0 {
             rewriter.erase_op(vec![table]);
-            return true;
+            return Some(());
         }
         let location = ctx.op(op).location;
         let i32_ty = i32_type(ctx);
@@ -263,7 +263,7 @@ impl OpRewritePattern for ConventionEntryPattern {
         let index = wasm_dialect::I32Add::operands(table, offset.result(ctx)).build(ctx, location);
         rewriter.insert_op(offset.op_ref());
         rewriter.replace_op(index.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -280,7 +280,7 @@ impl OpRewritePattern for BoxIntPattern {
         ctx: &mut IrContext,
         box_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = box_op.op_ref();
         let location = ctx.op(op).location;
         let value = box_op.value(ctx);
@@ -293,7 +293,7 @@ impl OpRewritePattern for BoxIntPattern {
             .build(ctx, location);
 
         rewriter.replace_op(new_op.op_ref());
-        true
+        Some(())
     }
 
     fn name(&self) -> &'static str {
@@ -314,7 +314,7 @@ impl OpRewritePattern for UnboxIntPattern {
         ctx: &mut IrContext,
         unbox_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = unbox_op.op_ref();
         let location = ctx.op(op).location;
         let (prefix_ops, final_op) = create_i31_unbox(ctx, location, unbox_op.value(ctx), true);
@@ -322,7 +322,7 @@ impl OpRewritePattern for UnboxIntPattern {
             rewriter.insert_op(prefix);
         }
         rewriter.replace_op(final_op);
-        true
+        Some(())
     }
 
     fn name(&self) -> &'static str {
@@ -343,7 +343,7 @@ impl OpRewritePattern for BoxNatPattern {
         ctx: &mut IrContext,
         box_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = box_op.op_ref();
         let location = ctx.op(op).location;
         let value = box_op.value(ctx);
@@ -353,7 +353,7 @@ impl OpRewritePattern for BoxNatPattern {
             .results(i31ref_ty)
             .build(ctx, location);
         rewriter.replace_op(new_op.op_ref());
-        true
+        Some(())
     }
 
     fn name(&self) -> &'static str {
@@ -374,7 +374,7 @@ impl OpRewritePattern for UnboxNatPattern {
         ctx: &mut IrContext,
         unbox_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = unbox_op.op_ref();
         let location = ctx.op(op).location;
         let (prefix_ops, final_op) = create_i31_unbox(ctx, location, unbox_op.value(ctx), false);
@@ -382,7 +382,7 @@ impl OpRewritePattern for UnboxNatPattern {
             rewriter.insert_op(prefix);
         }
         rewriter.replace_op(final_op);
-        true
+        Some(())
     }
 
     fn name(&self) -> &'static str {
@@ -404,7 +404,7 @@ impl OpRewritePattern for BoxFloatPattern {
         ctx: &mut IrContext,
         box_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = box_op.op_ref();
         let location = ctx.op(op).location;
         let value = box_op.value(ctx);
@@ -418,7 +418,7 @@ impl OpRewritePattern for BoxFloatPattern {
             .build(ctx, location);
 
         rewriter.replace_op(struct_op.op_ref());
-        true
+        Some(())
     }
 
     fn name(&self) -> &'static str {
@@ -439,7 +439,7 @@ impl OpRewritePattern for UnboxFloatPattern {
         ctx: &mut IrContext,
         unbox_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = unbox_op.op_ref();
         let location = ctx.op(op).location;
         let value = unbox_op.value(ctx);
@@ -463,7 +463,7 @@ impl OpRewritePattern for UnboxFloatPattern {
 
         rewriter.insert_op(cast_op.op_ref());
         rewriter.replace_op(get_op.op_ref());
-        true
+        Some(())
     }
 
     fn name(&self) -> &'static str {
@@ -484,7 +484,7 @@ impl OpRewritePattern for BoxBoolPattern {
         ctx: &mut IrContext,
         box_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = box_op.op_ref();
         let location = ctx.op(op).location;
         let value = box_op.value(ctx);
@@ -494,7 +494,7 @@ impl OpRewritePattern for BoxBoolPattern {
             .results(i31ref_ty)
             .build(ctx, location);
         rewriter.replace_op(new_op.op_ref());
-        true
+        Some(())
     }
 
     fn name(&self) -> &'static str {
@@ -515,7 +515,7 @@ impl OpRewritePattern for UnboxBoolPattern {
         ctx: &mut IrContext,
         unbox_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = unbox_op.op_ref();
         let location = ctx.op(op).location;
         // Use unsigned extraction since bool is 0 or 1
@@ -524,7 +524,7 @@ impl OpRewritePattern for UnboxBoolPattern {
             rewriter.insert_op(prefix);
         }
         rewriter.replace_op(final_op);
-        true
+        Some(())
     }
 
     fn name(&self) -> &'static str {

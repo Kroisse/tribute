@@ -55,7 +55,7 @@ impl OpRewritePattern for DescriptorPattern {
         ctx: &mut IrContext,
         descriptor: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let op = descriptor.op_ref();
         let loc = ctx.op(op).location;
         let header_offset = RTTI_IDX_OFFSET as i32 - RC_HEADER_SIZE as i32;
@@ -64,7 +64,7 @@ impl OpRewritePattern for DescriptorPattern {
             .results(descriptor.result_ty(ctx))
             .build(ctx, loc);
         rewriter.replace_op(index_load.op_ref());
-        true
+        Some(())
     }
 }
 
