@@ -4,6 +4,7 @@
 use tribute_ir::calling_convention::CallingConvention;
 use tribute_ir::calling_convention::{cps_closure_function_type, cps_resume_type};
 use tribute_ir::dialect::{ability, adt, closure, effect, tribute_rt};
+use trunk_ir::OpName;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{arith, core, func, scf};
 use trunk_ir::ops::{DialectOp, DialectType};
@@ -173,6 +174,10 @@ pub(super) struct ExpandDispatches {
 }
 
 impl RewritePattern for ExpandDispatches {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[ability::Perform::NAME, ability::Abort::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

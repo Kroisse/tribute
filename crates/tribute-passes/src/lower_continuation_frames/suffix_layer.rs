@@ -3,6 +3,7 @@
 //! that holds a layer's `Done` and dispatcher.
 
 use std::ops::ControlFlow;
+use trunk_ir::OpName;
 
 use rustc_hash::FxHashMap as HashMap;
 use tribute_ir::calling_convention::{CallingConvention, ConventionBearing};
@@ -349,6 +350,10 @@ pub(super) struct ExpandSuffixFrames {
 }
 
 impl RewritePattern for ExpandSuffixFrames {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[ability::SuffixFrame::NAME, ability::Exit::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

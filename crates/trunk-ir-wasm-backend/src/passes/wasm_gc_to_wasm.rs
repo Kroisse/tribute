@@ -1,6 +1,7 @@
 //! Resolve typed `wasm_gc` operations to indexed `wasm` instructions.
 
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use trunk_ir::OpName;
 
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{wasm, wasm_gc};
@@ -144,6 +145,26 @@ impl LowerTypedGcPattern {
 }
 
 impl RewritePattern for LowerTypedGcPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[
+            wasm_gc::StructNew::NAME,
+            wasm_gc::StructGet::NAME,
+            wasm_gc::StructSet::NAME,
+            wasm_gc::ArrayNew::NAME,
+            wasm_gc::ArrayNewDefault::NAME,
+            wasm_gc::ArrayNewData::NAME,
+            wasm_gc::ArrayNewFixed::NAME,
+            wasm_gc::ArrayGet::NAME,
+            wasm_gc::ArrayGetS::NAME,
+            wasm_gc::ArrayGetU::NAME,
+            wasm_gc::ArraySet::NAME,
+            wasm_gc::ArrayCopy::NAME,
+            wasm_gc::RefNull::NAME,
+            wasm_gc::RefCast::NAME,
+            wasm_gc::RefTest::NAME,
+        ])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

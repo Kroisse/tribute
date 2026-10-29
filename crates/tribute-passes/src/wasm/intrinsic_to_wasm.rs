@@ -6,6 +6,7 @@
 //! struct/array operations on the bytes layout. The bytes element read intrinsic is lowered inside the boundary by
 //! `wasm/bytes.rs`.
 
+use trunk_ir::OpName;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::wasm as wasm_dialect;
@@ -112,6 +113,10 @@ fn calls_c_helper(ctx: &IrContext, symbols: &SymbolTable, op: OpRef, helper: &'s
 struct BytesLenPattern<'a>(&'a SymbolTable);
 
 impl RewritePattern for BytesLenPattern<'_> {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[wasm_dialect::Call::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -154,6 +159,10 @@ impl RewritePattern for BytesLenPattern<'_> {
 struct BytesRangeEqualPattern<'a>(&'a SymbolTable);
 
 impl RewritePattern for BytesRangeEqualPattern<'_> {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[wasm_dialect::Call::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -336,6 +345,10 @@ fn value_break_region(
 struct BytesConcatPattern<'a>(&'a SymbolTable);
 
 impl RewritePattern for BytesConcatPattern<'_> {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[wasm_dialect::Call::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -441,6 +454,10 @@ impl RewritePattern for BytesConcatPattern<'_> {
 struct BytesSliceOrPanicPattern<'a>(&'a SymbolTable);
 
 impl RewritePattern for BytesSliceOrPanicPattern<'_> {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[wasm_dialect::Call::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

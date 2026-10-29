@@ -23,6 +23,7 @@
 
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::ops::ControlFlow;
+use trunk_ir::OpName;
 
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::{tribute_rt, tribute_rtti};
@@ -346,6 +347,17 @@ impl Emitter<'_> {
 }
 
 impl RewritePattern for ArrayPatterns {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[
+            adt::ArrayOf::NAME,
+            adt::ArrayNew::NAME,
+            adt::ArrayGet::NAME,
+            adt::ArraySet::NAME,
+            adt::ArrayLen::NAME,
+            adt::ArraySplice::NAME,
+        ])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

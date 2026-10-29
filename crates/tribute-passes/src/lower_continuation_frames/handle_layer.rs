@@ -2,6 +2,7 @@
 //! factories, resume tokens, marker dispatchers, and delimiter.
 
 use std::ops::ControlFlow;
+use trunk_ir::OpName;
 
 use rustc_hash::FxHashMap as HashMap;
 
@@ -746,6 +747,10 @@ pub(super) struct ExpandHandles {
 }
 
 impl RewritePattern for ExpandHandles {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[ability::Handle::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

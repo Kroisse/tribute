@@ -5,6 +5,7 @@
 //!
 //! Uses `PatternApplicator` for declarative op-level rewriting.
 
+use trunk_ir::OpName;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::func;
@@ -68,6 +69,10 @@ impl Pass for LowerHandleDispatch {
 struct LowerHandleDispatchPattern;
 
 impl RewritePattern for LowerHandleDispatchPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[ability::HandleDispatch::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

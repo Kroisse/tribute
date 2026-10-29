@@ -24,6 +24,7 @@
 //! ```
 
 use std::ops::ControlFlow;
+use trunk_ir::OpName;
 
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{clif, core};
@@ -118,6 +119,10 @@ fn is_checked(ctx: &IrContext, op: OpRef, access: &Access) -> bool {
 struct CheckMemoryAccess;
 
 impl RewritePattern for CheckMemoryAccess {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[clif::Load::NAME, clif::Store::NAME, clif::AtomicRmw::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

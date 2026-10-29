@@ -1,6 +1,7 @@
 //! Arena-based adt dialect.
 
 use crate::dialect::tribute_rtti::ManagedRefType;
+use trunk_ir::OpName;
 use trunk_ir::asm_format::TypeAliasHint;
 use trunk_ir::dialect::core::Index;
 use trunk_ir::op_flag::Pure;
@@ -239,6 +240,10 @@ struct ForwardStructGet {
 }
 
 impl RewritePattern for ForwardStructGet {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[StructGet::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

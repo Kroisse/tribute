@@ -11,6 +11,7 @@
 //! types for as long as they exist.
 
 use tribute_ir::dialect::tribute_rt;
+use trunk_ir::OpName;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core;
 use trunk_ir::ops::DialectOp;
@@ -29,6 +30,10 @@ pub(super) fn lower(ctx: &mut IrContext, module: Module) {
 struct TransferToCast;
 
 impl RewritePattern for TransferToCast {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[tribute_rt::IntoRaw::NAME, tribute_rt::FromRaw::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
