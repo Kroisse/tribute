@@ -1,15 +1,9 @@
 //! Analysis framework for TrunkIR passes.
 //!
 //! [`AnalysisCache`] provides lazy, cached analyses keyed by `(TypeId, OpRef)`.
-//! While an analysis computes, [`IrContext`] records the entities it reads,
-//! and the result is stamped with the outermost `IsolatedFromAbove` anchors
-//! those reads belong to. A lookup reuses a result while no mutation has
-//! touched those anchors and no unclassified mutation has happened; a result
-//! that read anything without an anchor chain follows the whole-context
-//! revision. Prerequisites are checked by result version, and a recomputed
-//! prerequisite keeps its version when [`Analysis::same_as`] holds. Explicit
-//! invalidation remains available for precise removal. The contract is
-//! `new-plans/ir.md`, section "분석 질의와 편집 계약".
+//! Each lookup compares the context identity and IR revision, discarding all
+//! cached results after any observable IR change. Explicit invalidation
+//! remains available for precise removal when the revision is unchanged.
 //!
 //! A lookup either returns a complete cached result or an [`AnalysisError`].
 //! Analysis errors describe invalid input IR or an unsupported analysis
@@ -44,10 +38,9 @@
 //! }
 //! ```
 //!
-//! Since a result is reused only while nothing it read has changed, sharing
-//! the cache is always safe; it saves work where consumers read unchanged IR
-//! back to back, such as the checks at a phase boundary, and where a mutation
-//! leaves the anchors a result read untouched. The [`AnalysisCache::scope`]
+//! Since the cache discards its results after any IR change, sharing it is
+//! always safe; it saves work where consumers read unchanged IR back to
+//! back, such as the checks at a phase boundary. The [`AnalysisCache::scope`]
 //! helper bundles a cache with a closure for a self-contained phase.
 //!
 //! # Usage
@@ -77,9 +70,7 @@ use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
 
-use smallvec::SmallVec;
-
-use crate::context::{IrContext, ReadFootprint};
+use crate::context::IrContext;
 use crate::refs::OpRef;
 
 /// Internal IR-analysis failure returned by [`AnalysisCache::get`].
@@ -217,17 +208,6 @@ pub trait Analysis: Any + Send + Sync {
     fn compute(ctx: &mut AnalysisContext<'_>, target: OpRef) -> Result<Self, AnalysisError>
     where
         Self: Sized;
-
-    /// Whether this freshly computed result equals `previous`, the result it
-    /// replaces. When it does, results that depend on `previous` stay cached
-    /// (early cutoff). The default never claims equality.
-    fn same_as(&self, previous: &Self) -> bool
-    where
-        Self: Sized,
-    {
-        let _ = previous;
-        false
-    }
 }
 
 /// An [`Analysis`] whose computation never fails for a valid target.
@@ -246,8 +226,7 @@ pub trait InfallibleAnalysis: Analysis {}
 pub struct AnalysisContext<'a> {
     ir: &'a IrContext,
     cache: &'a mut AnalysisCache,
-    /// Each prerequisite read, with the version of the result returned.
-    dependencies: HashMap<AnalysisKey, u64>,
+    dependencies: HashSet<AnalysisKey>,
 }
 
 impl<'a> AnalysisContext<'a> {
@@ -259,9 +238,7 @@ impl<'a> AnalysisContext<'a> {
     /// Get a typed prerequisite through the same cache.
     pub fn get<A: Analysis>(&mut self, target: OpRef) -> Result<Arc<A>, AnalysisError> {
         let analysis = self.cache.get::<A>(self.ir, target)?;
-        let key = AnalysisKey::of::<A>(target);
-        self.dependencies
-            .insert(key, self.cache.cache[&key].version);
+        self.dependencies.insert(AnalysisKey::of::<A>(target));
         Ok(analysis)
     }
 }
@@ -287,81 +264,15 @@ struct InProgressAnalysis {
     analysis_type: &'static str,
 }
 
-/// What a cached result must still match to be fresh.
-#[derive(Clone, Debug)]
-enum Stamp {
-    /// Some read had no anchor chain: the whole-context revision.
-    Revision(u64),
-    /// The unclassified-change revision and each directly read outermost
-    /// anchor's revision.
-    Anchors {
-        unclassified: u64,
-        anchors: SmallVec<[(OpRef, u64); 2]>,
-    },
-}
-
-impl Stamp {
-    fn of(ctx: &IrContext, footprint: ReadFootprint) -> Self {
-        match footprint {
-            ReadFootprint::WholeContext => Self::Revision(ctx.analysis_stamp().1),
-            ReadFootprint::Anchors(anchors) => Self::Anchors {
-                unclassified: ctx.unclassified_revision(),
-                anchors: anchors
-                    .into_iter()
-                    .map(|anchor| (anchor, ctx.anchor_revision(anchor)))
-                    .collect(),
-            },
-        }
-    }
-
-    fn is_fresh(&self, ctx: &IrContext) -> bool {
-        match self {
-            Self::Revision(revision) => ctx.analysis_stamp().1 == *revision,
-            Self::Anchors {
-                unclassified,
-                anchors,
-            } => {
-                ctx.unclassified_revision() == *unclassified
-                    && anchors
-                        .iter()
-                        .all(|&(anchor, revision)| ctx.anchor_revision(anchor) == revision)
-            }
-        }
-    }
-}
-
-type ErasedResult = Arc<dyn Any + Send + Sync>;
-
-/// A published result. A stale entry stays until it is recomputed, so the
-/// replacement can keep its version when it equals the old result.
-struct Entry {
-    result: ErasedResult,
-    stamp: Stamp,
-    /// Changes only when a recomputation yields an unequal result;
-    /// dependents record the version they read.
-    version: u64,
-    /// Recomputes the entry's analysis for its target through the cache.
-    recompute: fn(&mut AnalysisCache, &IrContext, OpRef) -> bool,
-}
-
-fn recompute_erased<A: Analysis>(
-    cache: &mut AnalysisCache,
-    ctx: &IrContext,
-    target: OpRef,
-) -> bool {
-    cache.get::<A>(ctx, target).is_ok()
-}
-
 /// Lazy, typed cache of analyses keyed by `(TypeId, OpRef)`.
 ///
 /// See the [module docs](self) for the pipeline-scoped ownership model.
 #[derive(Default)]
 pub struct AnalysisCache {
-    bound_identity: Option<u64>,
-    cache: HashMap<AnalysisKey, Entry>,
-    next_version: u64,
-    /// Computed analysis -> its direct prerequisites and the versions read.
-    dependencies: HashMap<AnalysisKey, HashMap<AnalysisKey, u64>>,
+    bound_stamp: Option<(u64, u64)>,
+    cache: HashMap<AnalysisKey, Arc<dyn Any + Send + Sync>>,
+    /// Computed analysis -> its direct prerequisites.
+    dependencies: HashMap<AnalysisKey, HashSet<AnalysisKey>>,
     /// Prerequisite -> analyses that directly depend on it.
     dependents: HashMap<AnalysisKey, HashSet<AnalysisKey>>,
     in_progress: Vec<InProgressAnalysis>,
@@ -409,8 +320,10 @@ impl AnalysisCache {
     ) -> Result<Arc<A>, AnalysisError> {
         self.sync_with(ctx);
         let key = AnalysisKey::of::<A>(target);
-        if self.validate(ctx, key, true) {
-            return Ok(Self::downcast(&self.cache[&key].result));
+        if let Some(entry) = self.cache.get(&key) {
+            return Ok(Arc::clone(entry)
+                .downcast::<A>()
+                .expect("analysis cache type mismatch"));
         }
 
         if let Some(cycle_start) = self.in_progress.iter().position(|entry| entry.key == key) {
@@ -432,23 +345,15 @@ impl AnalysisCache {
             key,
             analysis_type: type_name::<A>(),
         });
-        let revision = ctx.analysis_stamp();
-        let reads_start = ctx.begin_reads();
         let (result, dependencies) = {
             let mut computation = AnalysisContext {
                 ir: ctx,
                 cache: self,
-                dependencies: HashMap::default(),
+                dependencies: HashSet::default(),
             };
             let result = A::compute(&mut computation, target);
             (result, computation.dependencies)
         };
-        let footprint = ctx.end_reads(reads_start);
-        assert_eq!(
-            ctx.analysis_stamp(),
-            revision,
-            "IR changed during analysis computation"
-        );
         let completed = self
             .in_progress
             .pop()
@@ -458,25 +363,9 @@ impl AnalysisCache {
         // Publish only a complete result and its complete dependency set. A
         // failure leaves neither a cache entry nor dependency metadata behind.
         let analysis = Arc::new(result?);
-        let version = match self.cache.get(&key) {
-            Some(previous) if analysis.same_as(&Self::downcast::<A>(&previous.result)) => {
-                previous.version
-            }
-            _ => {
-                self.next_version += 1;
-                self.next_version
-            }
-        };
+        let entry: Arc<dyn Any + Send + Sync> = analysis.clone();
         self.replace_dependencies(key, dependencies);
-        self.cache.insert(
-            key,
-            Entry {
-                result: analysis.clone(),
-                stamp: Stamp::of(ctx, footprint),
-                version,
-                recompute: recompute_erased::<A>,
-            },
-        );
+        self.cache.insert(key, entry);
         Ok(analysis)
     }
 
@@ -493,13 +382,15 @@ impl AnalysisCache {
 
     /// Return the cached analysis `A` for `target` without computing it.
     ///
-    /// Returns `None` unless the result and every prerequisite it depends on
-    /// are still fresh; no prerequisite is recomputed.
+    /// A changed revision or context clears the cache and returns `None`.
     pub fn get_cached<A: Analysis>(&mut self, ctx: &IrContext, target: OpRef) -> Option<Arc<A>> {
         self.sync_with(ctx);
         let key = AnalysisKey::of::<A>(target);
-        self.validate(ctx, key, false)
-            .then(|| Self::downcast(&self.cache[&key].result))
+        self.cache.get(&key).map(|v| {
+            Arc::clone(v)
+                .downcast::<A>()
+                .expect("analysis cache type mismatch")
+        })
     }
 
     /// Invalidate the cached analysis `A` for `target`, if present.
@@ -530,11 +421,10 @@ impl AnalysisCache {
         self.dependencies.clear();
         self.dependents.clear();
         self.in_progress.clear();
-        self.bound_identity = None;
+        self.bound_stamp = None;
     }
 
-    /// Number of cached analyses, fresh or not (useful for diagnostics and
-    /// tests).
+    /// Number of cached analyses (useful for diagnostics/tests).
     pub fn len(&self) -> usize {
         self.cache.len()
     }
@@ -544,74 +434,25 @@ impl AnalysisCache {
         self.cache.is_empty()
     }
 
-    fn downcast<A: Analysis>(result: &ErasedResult) -> Arc<A> {
-        Arc::clone(result)
-            .downcast::<A>()
-            .expect("analysis cache type mismatch")
-    }
-
     fn sync_with(&mut self, ctx: &IrContext) {
-        let (identity, _) = ctx.analysis_stamp();
-        if self.bound_identity == Some(identity) {
+        let stamp = ctx.analysis_stamp();
+        if self.bound_stamp == Some(stamp) {
             return;
         }
         assert!(
             self.in_progress.is_empty(),
-            "IR context changed during analysis computation"
+            "IR changed during analysis computation"
         );
         self.clear();
-        self.bound_identity = Some(identity);
+        self.bound_stamp = Some(stamp);
     }
 
-    /// Whether `key` is cached and still describes the IR: its own reads are
-    /// unchanged and every prerequisite still has the version it read. With
-    /// `recompute`, a stale prerequisite is recomputed first, keeping its
-    /// version when the new result equals the old one.
-    fn validate(&mut self, ctx: &IrContext, key: AnalysisKey, recompute: bool) -> bool {
-        let Some(entry) = self.cache.get(&key) else {
-            return false;
-        };
-        if !entry.stamp.is_fresh(ctx) {
-            return false;
-        }
-        let prerequisites = self
-            .dependencies
-            .get(&key)
-            .map(|prerequisites| {
-                prerequisites
-                    .iter()
-                    .map(|(&key, &version)| (key, version))
-                    .collect::<SmallVec<[_; 4]>>()
-            })
-            .unwrap_or_default();
-        prerequisites.into_iter().all(|(prerequisite, version)| {
-            self.current_version(ctx, prerequisite, recompute) == Some(version)
-        })
-    }
-
-    /// The version of `key`'s result for the current IR, if it is cached
-    /// fresh or, with `recompute`, recomputes successfully.
-    fn current_version(
-        &mut self,
-        ctx: &IrContext,
-        key: AnalysisKey,
-        recompute: bool,
-    ) -> Option<u64> {
-        let recompute_fn = self.cache.get(&key)?.recompute;
-        if !self.validate(ctx, key, recompute)
-            && !(recompute && recompute_fn(self, ctx, key.target))
-        {
-            return None;
-        }
-        Some(self.cache[&key].version)
-    }
-
-    fn replace_dependencies(&mut self, key: AnalysisKey, dependencies: HashMap<AnalysisKey, u64>) {
+    fn replace_dependencies(&mut self, key: AnalysisKey, dependencies: HashSet<AnalysisKey>) {
         self.remove_dependencies(key);
         if dependencies.is_empty() {
             return;
         }
-        for prerequisite in dependencies.keys() {
+        for prerequisite in &dependencies {
             self.dependents
                 .entry(*prerequisite)
                 .or_default()
@@ -624,7 +465,7 @@ impl AnalysisCache {
         let Some(prerequisites) = self.dependencies.remove(&key) else {
             return;
         };
-        for prerequisite in prerequisites.into_keys() {
+        for prerequisite in prerequisites {
             let remove_entry = self
                 .dependents
                 .get_mut(&prerequisite)
@@ -686,25 +527,6 @@ mod tests {
         fn compute(_ctx: &mut AnalysisContext<'_>, target: OpRef) -> Result<Self, AnalysisError> {
             Ok(Self { target })
         }
-    }
-
-    /// Reads its target operation and nothing else.
-    #[derive(Debug)]
-    struct TargetReader;
-
-    impl Analysis for TargetReader {
-        fn compute(ctx: &mut AnalysisContext<'_>, target: OpRef) -> Result<Self, AnalysisError> {
-            let _ = ctx.ir().op(target);
-            Ok(Self)
-        }
-    }
-
-    /// A detached operation, whose reads have no anchor chain.
-    fn detached_op(ctx: &mut IrContext) -> OpRef {
-        let path = ctx.intern_path("test.trb");
-        let location = crate::Location::new(path, crate::Span::new(0, 0));
-        let data = crate::OperationDataBuilder::new(location, "test.op").build(ctx);
-        ctx.create_op(data)
     }
 
     #[derive(Debug)]
@@ -901,499 +723,6 @@ mod tests {
         }
     }
 
-    /// Counts the operations of its target's subtree.
-    struct SubtreeSize;
-
-    impl Analysis for SubtreeSize {
-        fn compute(ctx: &mut AnalysisContext<'_>, target: OpRef) -> Result<Self, AnalysisError> {
-            let _ = crate::walk::walk_op::<()>(ctx.ir(), target, &mut |_| {
-                std::ops::ControlFlow::Continue(crate::walk::WalkAction::Advance)
-            });
-            Ok(Self)
-        }
-    }
-
-    /// Reads the block that holds its target, as structured-control
-    /// analyses do.
-    struct EnclosingBlock;
-
-    impl Analysis for EnclosingBlock {
-        fn compute(ctx: &mut AnalysisContext<'_>, target: OpRef) -> Result<Self, AnalysisError> {
-            if let Some(block) = ctx.ir().op(target).parent_block {
-                let _ = ctx.ir().block(block).ops.last();
-            }
-            Ok(Self)
-        }
-    }
-
-    /// Depends on [`SubtreeSize`] of its target without reading the IR.
-    struct DependsOnSubtree;
-
-    impl Analysis for DependsOnSubtree {
-        fn compute(ctx: &mut AnalysisContext<'_>, target: OpRef) -> Result<Self, AnalysisError> {
-            ctx.get::<SubtreeSize>(target)?;
-            Ok(Self)
-        }
-    }
-
-    /// Reads its target, then depends on [`TargetReader`] of it, whose only
-    /// read is the same operation.
-    struct ReadsThenDependsOnTarget;
-
-    impl Analysis for ReadsThenDependsOnTarget {
-        fn compute(ctx: &mut AnalysisContext<'_>, target: OpRef) -> Result<Self, AnalysisError> {
-            let _ = ctx.ir().op(target);
-            ctx.get::<TargetReader>(target)?;
-            Ok(Self)
-        }
-    }
-
-    #[test]
-    fn recorded_reads_map_to_outermost_anchors() {
-        let mut ctx = IrContext::new();
-        let module = crate::parser::parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  func.func @f() {
-    func.return
-  }
-  func.func @g() {
-    func.return
-  }
-}"#,
-        );
-        let module = module.op();
-        let body = ctx.op_region(module, 0).unwrap();
-        let block = ctx.region(body).blocks[0];
-        let [f, g] = ctx.block(block).ops[..] else {
-            panic!("expected two functions");
-        };
-        let f_body = ctx.op_region(f, 0).unwrap();
-        let f_return = ctx.block(ctx.region(f_body).blocks[0]).ops[0];
-        let path = ctx.intern_path("test.trb");
-        let location = crate::Location::new(path, crate::Span::new(0, 0));
-        let detached = crate::OperationDataBuilder::new(location, "test.op").build(&mut ctx);
-        let detached = ctx.create_op(detached);
-
-        let mut cache = AnalysisCache::new();
-        let footprint = |cache: &AnalysisCache, key| {
-            cache.cache.get(&key).map(|entry| match &entry.stamp {
-                Stamp::Revision(_) => ReadFootprint::WholeContext,
-                Stamp::Anchors { anchors, .. } => {
-                    ReadFootprint::Anchors(anchors.iter().map(|&(anchor, _)| anchor).collect())
-                }
-            })
-        };
-        let anchors = |ops: &[OpRef]| Some(ReadFootprint::Anchors(ops.iter().copied().collect()));
-
-        cache.get::<SubtreeSize>(&ctx, f).unwrap();
-        cache.get::<SubtreeSize>(&ctx, g).unwrap();
-        cache.get::<SubtreeSize>(&ctx, module).unwrap();
-        cache.get::<EnclosingBlock>(&ctx, f_return).unwrap();
-        cache.get::<EnclosingBlock>(&ctx, f).unwrap();
-        cache.get::<SubtreeSize>(&ctx, detached).unwrap();
-        cache.get::<DependsOnSubtree>(&ctx, g).unwrap();
-
-        assert_eq!(
-            footprint(&cache, AnalysisKey::of::<SubtreeSize>(f)),
-            anchors(&[f])
-        );
-        assert_eq!(
-            footprint(&cache, AnalysisKey::of::<SubtreeSize>(g)),
-            anchors(&[g])
-        );
-        assert_eq!(
-            footprint(&cache, AnalysisKey::of::<SubtreeSize>(module)),
-            anchors(&[module])
-        );
-        assert_eq!(
-            footprint(&cache, AnalysisKey::of::<EnclosingBlock>(f_return)),
-            anchors(&[f])
-        );
-        assert_eq!(
-            footprint(&cache, AnalysisKey::of::<EnclosingBlock>(f)),
-            anchors(&[module])
-        );
-        assert_eq!(
-            footprint(&cache, AnalysisKey::of::<SubtreeSize>(detached)),
-            Some(ReadFootprint::WholeContext)
-        );
-        assert_eq!(
-            footprint(&cache, AnalysisKey::of::<DependsOnSubtree>(g)),
-            anchors(&[])
-        );
-    }
-
-    std::thread_local! {
-        static CHAINLESS_READ: std::cell::Cell<Option<OpRef>> = const { std::cell::Cell::new(None) };
-    }
-
-    /// Reads its target and its first region alternately, often enough
-    /// that the recorder folds pending reads into the footprint before the
-    /// computation ends, after reading the operation in `CHAINLESS_READ` if
-    /// one is set.
-    struct RepeatedReads;
-
-    impl Analysis for RepeatedReads {
-        fn compute(ctx: &mut AnalysisContext<'_>, target: OpRef) -> Result<Self, AnalysisError> {
-            if let Some(op) = CHAINLESS_READ.get() {
-                let _ = ctx.ir().op(op);
-            }
-            let body = ctx.ir().op_region(target, 0).unwrap();
-            for _ in 0..2000 {
-                let _ = ctx.ir().op(target);
-                let _ = ctx.ir().region(body);
-            }
-            Ok(Self)
-        }
-    }
-
-    #[test]
-    fn folded_reads_keep_their_footprint() {
-        let mut ctx = IrContext::new();
-        let module = crate::parser::parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  func.func @f() {
-    func.return
-  }
-}"#,
-        );
-        let body = ctx.op_region(module.op(), 0).unwrap();
-        let f = ctx.block(ctx.region(body).blocks[0]).ops[0];
-        let detached = detached_op(&mut ctx);
-        let stamp = |cache: &AnalysisCache| match &cache.cache[&AnalysisKey::of::<RepeatedReads>(f)]
-            .stamp
-        {
-            Stamp::Revision(_) => None,
-            Stamp::Anchors { anchors, .. } => Some(
-                anchors
-                    .iter()
-                    .map(|&(anchor, _)| anchor)
-                    .collect::<Vec<_>>(),
-            ),
-        };
-
-        let mut cache = AnalysisCache::new();
-        cache.get::<RepeatedReads>(&ctx, f).unwrap();
-        assert_eq!(stamp(&cache), Some(vec![f]));
-
-        CHAINLESS_READ.set(Some(detached));
-        let mut cache = AnalysisCache::new();
-        cache.get::<RepeatedReads>(&ctx, f).unwrap();
-        CHAINLESS_READ.set(None);
-        assert_eq!(stamp(&cache), None);
-    }
-
-    #[test]
-    fn nested_computation_keeps_a_first_read_equal_to_the_outer_last_read() {
-        let mut ctx = IrContext::new();
-        let module = crate::parser::parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  func.func @f() {
-    func.return
-  }
-}"#,
-        );
-        let body = ctx.op_region(module.op(), 0).unwrap();
-        let f = ctx.block(ctx.region(body).blocks[0]).ops[0];
-
-        let mut cache = AnalysisCache::new();
-        cache.get::<ReadsThenDependsOnTarget>(&ctx, f).unwrap();
-        let entry = &cache.cache[&AnalysisKey::of::<TargetReader>(f)];
-        let Stamp::Anchors { anchors, .. } = &entry.stamp else {
-            panic!("expected an anchored stamp");
-        };
-        assert_eq!(anchors[..], [(f, ctx.anchor_revision(f))]);
-    }
-
-    /// The number of operations in the target module's body, equal across
-    /// recomputations that keep the count.
-    #[derive(Debug, PartialEq)]
-    struct FunctionCount(usize);
-
-    static FUNCTION_COUNTS: AtomicUsize = AtomicUsize::new(0);
-
-    impl Analysis for FunctionCount {
-        fn compute(ctx: &mut AnalysisContext<'_>, target: OpRef) -> Result<Self, AnalysisError> {
-            FUNCTION_COUNTS.fetch_add(1, Ordering::SeqCst);
-            let body = ctx.ir().op_region(target, 0).unwrap();
-            let block = ctx.ir().region(body).blocks[0];
-            Ok(Self(ctx.ir().block(block).ops.len()))
-        }
-
-        fn same_as(&self, previous: &Self) -> bool {
-            self == previous
-        }
-    }
-
-    std::thread_local! {
-        static AGGREGATE_MODULE: std::cell::Cell<Option<OpRef>> = const { std::cell::Cell::new(None) };
-    }
-
-    /// Reads its target function and depends on the module's
-    /// [`FunctionCount`], which the test names through `AGGREGATE_MODULE`.
-    struct BodyWithCount;
-
-    impl Analysis for BodyWithCount {
-        fn compute(ctx: &mut AnalysisContext<'_>, target: OpRef) -> Result<Self, AnalysisError> {
-            let _ = crate::walk::walk_op::<()>(ctx.ir(), target, &mut |_| {
-                std::ops::ControlFlow::Continue(crate::walk::WalkAction::Advance)
-            });
-            let module = AGGREGATE_MODULE
-                .get()
-                .expect("test sets the aggregate module");
-            ctx.get::<FunctionCount>(module)?;
-            Ok(Self)
-        }
-    }
-
-    struct Functions {
-        ctx: IrContext,
-        module: OpRef,
-        f: OpRef,
-        g: OpRef,
-        /// `%a`, `%s`, and the return of `@f`.
-        f_ops: [OpRef; 3],
-        /// `%b` and the return of `@g`.
-        g_ops: [OpRef; 2],
-    }
-
-    fn functions() -> Functions {
-        let mut ctx = IrContext::new();
-        let module = crate::parser::parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  func.func @f(%x: core.i32) -> core.i32 {
-    %a = arith.const {value = 1} : core.i32
-    %s = arith.addi %x, %a : core.i32
-    func.return %s
-  }
-  func.func @g() -> core.i32 {
-    %b = arith.const {value = 2} : core.i32
-    func.return %b
-  }
-}"#,
-        )
-        .op();
-        let body_ops = |ctx: &IrContext, op: OpRef| {
-            let region = ctx.op_region(op, 0).unwrap();
-            ctx.block(ctx.region(region).blocks[0]).ops.clone()
-        };
-        let [f, g] = body_ops(&ctx, module)[..] else {
-            panic!("expected two functions");
-        };
-        let f_ops = body_ops(&ctx, f)[..].try_into().unwrap();
-        let g_ops = body_ops(&ctx, g)[..].try_into().unwrap();
-        Functions {
-            ctx,
-            module,
-            f,
-            g,
-            f_ops,
-            g_ops,
-        }
-    }
-
-    fn is_cached<A: Analysis>(cache: &mut AnalysisCache, ctx: &IrContext, target: OpRef) -> bool {
-        cache.get_cached::<A>(ctx, target).is_some()
-    }
-
-    #[test]
-    fn sibling_function_results_survive_and_module_results_recompute() {
-        let Functions {
-            mut ctx,
-            module,
-            f,
-            g,
-            f_ops,
-            ..
-        } = functions();
-        let mut cache = AnalysisCache::new();
-        let old_g = cache.get::<SubtreeSize>(&ctx, g).unwrap();
-        cache.get::<SubtreeSize>(&ctx, f).unwrap();
-        cache.get::<SubtreeSize>(&ctx, module).unwrap();
-
-        ctx.op_attrs_mut(f_ops[1])
-            .insert("tag", crate::types::Attribute::Int(1));
-
-        assert!(!is_cached::<SubtreeSize>(&mut cache, &ctx, f));
-        assert!(!is_cached::<SubtreeSize>(&mut cache, &ctx, module));
-        let again_g = cache.get::<SubtreeSize>(&ctx, g).unwrap();
-        assert!(Arc::ptr_eq(&old_g, &again_g));
-
-        // A new interned type is not IR structure.
-        let ty = crate::types::TypeDataBuilder::new("test.fresh").build(&mut ctx);
-        ctx.intern_type(ty);
-        assert!(is_cached::<SubtreeSize>(&mut cache, &ctx, g));
-    }
-
-    #[test]
-    fn equal_aggregate_keeps_dependents_but_not_direct_reads() {
-        let _counters = lock_counters();
-        let Functions {
-            mut ctx,
-            module,
-            f,
-            g,
-            f_ops,
-            ..
-        } = functions();
-        AGGREGATE_MODULE.set(Some(module));
-        let mut cache = AnalysisCache::new();
-        let old_f = cache.get::<BodyWithCount>(&ctx, f).unwrap();
-        let old_g = cache.get::<BodyWithCount>(&ctx, g).unwrap();
-
-        // Editing `@f` recomputes the aggregate to an equal count: `@g`'s
-        // result survives, `@f`'s own reads changed.
-        FUNCTION_COUNTS.store(0, Ordering::SeqCst);
-        ctx.op_attrs_mut(f_ops[1])
-            .insert("tag", crate::types::Attribute::Int(1));
-        assert!(Arc::ptr_eq(
-            &old_g,
-            &cache.get::<BodyWithCount>(&ctx, g).unwrap()
-        ));
-        let new_f = cache.get::<BodyWithCount>(&ctx, f).unwrap();
-        assert!(!Arc::ptr_eq(&old_f, &new_f));
-        assert_eq!(FUNCTION_COUNTS.load(Ordering::SeqCst), 1);
-
-        // The same holds when the aggregate is recomputed directly first.
-        ctx.op_attrs_mut(f_ops[1])
-            .insert("tag", crate::types::Attribute::Int(2));
-        cache.get::<FunctionCount>(&ctx, module).unwrap();
-        assert!(Arc::ptr_eq(
-            &old_g,
-            &cache.get::<BodyWithCount>(&ctx, g).unwrap()
-        ));
-
-        // A third function changes the count, so every dependent recomputes,
-        // even after a direct recomputation of the aggregate.
-        let body = ctx.op_region(module, 0).unwrap();
-        let block = ctx.region(body).blocks[0];
-        let mut mapping = crate::ir_mapping::IrMapping::new();
-        ctx.clone_op_into_block(block, g, &mut mapping);
-        cache.get::<FunctionCount>(&ctx, module).unwrap();
-        assert!(!Arc::ptr_eq(
-            &old_g,
-            &cache.get::<BodyWithCount>(&ctx, g).unwrap()
-        ));
-        assert!(!is_cached::<BodyWithCount>(&mut cache, &ctx, f));
-    }
-
-    #[test]
-    fn moves_invalidate_old_and_new_owners_and_the_moved_anchor() {
-        let Functions {
-            mut ctx,
-            f,
-            g,
-            f_ops,
-            g_ops,
-            ..
-        } = functions();
-        let mut cache = AnalysisCache::new();
-        cache.get::<SubtreeSize>(&ctx, f).unwrap();
-        cache.get::<SubtreeSize>(&ctx, g).unwrap();
-
-        ctx.detach_op(g_ops[0]);
-        let f_entry = ctx.op(f_ops[0]).parent_block.unwrap();
-        ctx.insert_op_before(f_entry, f_ops[2], g_ops[0]);
-        assert!(!is_cached::<SubtreeSize>(&mut cache, &ctx, f));
-        assert!(!is_cached::<SubtreeSize>(&mut cache, &ctx, g));
-
-        // Reading an anchor operation is recorded against the anchor, so
-        // moving the anchor itself invalidates it while its sibling stays.
-        cache.get::<TargetReader>(&ctx, f).unwrap();
-        cache.get::<TargetReader>(&ctx, g).unwrap();
-        let module_block = ctx.op(g).parent_block.unwrap();
-        ctx.detach_op(g);
-        ctx.push_op(module_block, g);
-        assert!(!is_cached::<TargetReader>(&mut cache, &ctx, g));
-        assert!(is_cached::<TargetReader>(&mut cache, &ctx, f));
-    }
-
-    #[test]
-    fn use_list_changes_invalidate_definitions_and_users() {
-        let Functions {
-            mut ctx,
-            f,
-            g,
-            f_ops,
-            g_ops,
-            ..
-        } = functions();
-        let mut cache = AnalysisCache::new();
-        cache.get::<SubtreeSize>(&ctx, f).unwrap();
-        cache.get::<SubtreeSize>(&ctx, g).unwrap();
-
-        let a = ctx.op_result(f_ops[0], 0);
-        let entry = ctx.op(f_ops[0]).parent_block.unwrap();
-        let x = ctx.block_arg(entry, 0);
-        ctx.replace_all_uses(a, x);
-        assert!(!is_cached::<SubtreeSize>(&mut cache, &ctx, f));
-        assert!(is_cached::<SubtreeSize>(&mut cache, &ctx, g));
-
-        cache.get::<SubtreeSize>(&ctx, f).unwrap();
-        let b = ctx.op_result(g_ops[0], 0);
-        ctx.push_op_operand(g_ops[1], b);
-        assert!(!is_cached::<SubtreeSize>(&mut cache, &ctx, g));
-        assert!(is_cached::<SubtreeSize>(&mut cache, &ctx, f));
-
-        // A detached user of `%b` changes its use-list.
-        cache.get::<SubtreeSize>(&ctx, g).unwrap();
-        let location = ctx.op(g).location;
-        let user = crate::OperationDataBuilder::new(location, "test.user")
-            .operand(b)
-            .build(&mut ctx);
-        let user = ctx.create_op(user);
-        assert!(!is_cached::<SubtreeSize>(&mut cache, &ctx, g));
-        assert!(is_cached::<SubtreeSize>(&mut cache, &ctx, f));
-
-        // Removing that detached user changes it again.
-        cache.get::<SubtreeSize>(&ctx, g).unwrap();
-        ctx.remove_op(user);
-        assert!(!is_cached::<SubtreeSize>(&mut cache, &ctx, g));
-        assert!(is_cached::<SubtreeSize>(&mut cache, &ctx, f));
-    }
-
-    #[test]
-    fn removing_a_detached_anchor_invalidates_its_results() {
-        let Functions { mut ctx, f, g, .. } = functions();
-        let mut cache = AnalysisCache::new();
-        cache.get::<SubtreeSize>(&ctx, f).unwrap();
-        ctx.detach_op(g);
-        // A detached function is its own root anchor.
-        cache.get::<SubtreeSize>(&ctx, g).unwrap();
-        assert!(is_cached::<SubtreeSize>(&mut cache, &ctx, g));
-        ctx.remove_op(g);
-        assert!(!is_cached::<SubtreeSize>(&mut cache, &ctx, g));
-        assert!(is_cached::<SubtreeSize>(&mut cache, &ctx, f));
-    }
-
-    #[test]
-    fn unclassified_changes_discard_every_scoped_result() {
-        let Functions {
-            mut ctx,
-            f,
-            g,
-            f_ops,
-            ..
-        } = functions();
-        let mut cache = AnalysisCache::new();
-        cache.get::<SubtreeSize>(&ctx, f).unwrap();
-        cache.get::<SubtreeSize>(&ctx, g).unwrap();
-        let _ = ctx.op_mut(f_ops[2]);
-        assert!(!is_cached::<SubtreeSize>(&mut cache, &ctx, f));
-        assert!(!is_cached::<SubtreeSize>(&mut cache, &ctx, g));
-
-        cache.get::<SubtreeSize>(&ctx, g).unwrap();
-        let ty = crate::types::TypeDataBuilder::new("test.aliased").build(&mut ctx);
-        let ty = ctx.intern_type(ty);
-        assert!(is_cached::<SubtreeSize>(&mut cache, &ctx, g));
-        ctx.register_type_alias(crate::symbol::Symbol::new("Aliased"), ty);
-        assert!(!is_cached::<SubtreeSize>(&mut cache, &ctx, g));
-    }
-
     #[test]
     fn get_returns_same_arc_on_cache_hit() {
         let _counters = lock_counters();
@@ -1424,9 +753,9 @@ mod tests {
         ctx.op_attrs_mut(op)
             .insert("marker", crate::types::Attribute::Int(7));
         assert!(analyses.get_cached::<MarkerAnalysis>(&ctx, op).is_none());
-        // Results that read no IR stay fresh.
-        assert!(analyses.get_cached::<RootAnalysis>(&ctx, op).is_some());
-        assert!(analyses.get_cached::<OtherAnalysis>(&ctx, op).is_some());
+        assert!(analyses.cache.is_empty());
+        assert!(analyses.dependencies.is_empty());
+        assert!(analyses.dependents.is_empty());
 
         let fresh = analyses.get::<MarkerAnalysis>(&ctx, op).unwrap();
         assert_eq!(old.0, None);
@@ -1470,42 +799,24 @@ mod tests {
             ops: smallvec::SmallVec::new(),
             parent_region: None,
         });
-        // The detached consumer has no anchor chain, so its result follows
-        // the whole-context revision.
         let mut analyses = AnalysisCache::new();
-        let _ = analyses.get::<TargetReader>(&ctx, consumer).unwrap();
+        let _ = analyses.get::<DummyAnalysis>(&ctx, module).unwrap();
 
         let unchanged = ctx.analysis_stamp();
         ctx.set_op_operand(consumer, 0, ctx.op_result(source_a, 0));
         ctx.set_op_result_type(consumer, 0, i32_ty);
         ctx.set_block_arg_type(block, 0, i32_ty);
         assert_eq!(ctx.analysis_stamp(), unchanged);
-        assert!(
-            analyses
-                .get_cached::<TargetReader>(&ctx, consumer)
-                .is_some()
-        );
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, module).is_some());
 
         ctx.set_op_operand(consumer, 0, ctx.op_result(source_b, 0));
-        assert!(
-            analyses
-                .get_cached::<TargetReader>(&ctx, consumer)
-                .is_none()
-        );
-        let _ = analyses.get::<TargetReader>(&ctx, consumer).unwrap();
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, module).is_none());
+        let _ = analyses.get::<DummyAnalysis>(&ctx, module).unwrap();
         ctx.set_op_result_type(consumer, 0, f64_ty);
-        assert!(
-            analyses
-                .get_cached::<TargetReader>(&ctx, consumer)
-                .is_none()
-        );
-        let _ = analyses.get::<TargetReader>(&ctx, consumer).unwrap();
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, module).is_none());
+        let _ = analyses.get::<DummyAnalysis>(&ctx, module).unwrap();
         ctx.set_block_arg_type(block, 0, f64_ty);
-        assert!(
-            analyses
-                .get_cached::<TargetReader>(&ctx, consumer)
-                .is_none()
-        );
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, module).is_none());
     }
 
     #[test]
@@ -1541,17 +852,15 @@ mod tests {
 
     #[test]
     fn interning_follows_revision_contract() {
-        // A detached target follows the whole-context revision.
-        let (mut ctx, _) = test_ctx();
-        let op = detached_op(&mut ctx);
+        let (mut ctx, op) = test_ctx();
         let mut analyses = AnalysisCache::new();
-        let initial = analyses.get::<TargetReader>(&ctx, op).unwrap();
+        let initial = analyses.get::<DummyAnalysis>(&ctx, op).unwrap();
         let stamp = ctx.analysis_stamp();
 
         let path = ctx.intern_path("file:///same.trb");
         assert_ne!(ctx.analysis_stamp(), stamp);
-        assert!(analyses.get_cached::<TargetReader>(&ctx, op).is_none());
-        let after_path = analyses.get::<TargetReader>(&ctx, op).unwrap();
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, op).is_none());
+        let after_path = analyses.get::<DummyAnalysis>(&ctx, op).unwrap();
         assert!(!Arc::ptr_eq(&initial, &after_path));
 
         let unchanged = ctx.analysis_stamp();
@@ -1559,24 +868,24 @@ mod tests {
         assert_eq!(ctx.analysis_stamp(), unchanged);
         assert!(Arc::ptr_eq(
             &after_path,
-            &analyses.get::<TargetReader>(&ctx, op).unwrap()
+            &analyses.get::<DummyAnalysis>(&ctx, op).unwrap()
         ));
 
         let ty = crate::types::TypeDataBuilder::new("test.fresh").build(&mut ctx);
         let interned = ctx.intern_type(ty.clone());
-        assert!(analyses.get_cached::<TargetReader>(&ctx, op).is_none());
-        let after_type = analyses.get::<TargetReader>(&ctx, op).unwrap();
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, op).is_none());
+        let after_type = analyses.get::<DummyAnalysis>(&ctx, op).unwrap();
         let unchanged = ctx.analysis_stamp();
         assert_eq!(ctx.intern_type(ty), interned);
         assert_eq!(ctx.analysis_stamp(), unchanged);
         assert!(Arc::ptr_eq(
             &after_type,
-            &analyses.get::<TargetReader>(&ctx, op).unwrap()
+            &analyses.get::<DummyAnalysis>(&ctx, op).unwrap()
         ));
 
         ctx.register_type_alias(crate::symbol::Symbol::new("Alias"), interned);
-        assert!(analyses.get_cached::<TargetReader>(&ctx, op).is_none());
-        let _ = analyses.get::<TargetReader>(&ctx, op).unwrap();
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, op).is_none());
+        let _ = analyses.get::<DummyAnalysis>(&ctx, op).unwrap();
         let unchanged = ctx.analysis_stamp();
         ctx.register_type_alias(crate::symbol::Symbol::new("Alias"), interned);
         assert_eq!(ctx.analysis_stamp(), unchanged);

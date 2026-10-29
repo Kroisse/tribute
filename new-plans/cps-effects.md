@@ -492,7 +492,7 @@ Closure의 environment index는 entry마다 그 바깥 convention 하나로 정�
 `evidence, environment, ContinuationFrame<R>, X`이고, evidence가 없는 `Done<R>`의
 entry는 `R, environment`다. 따라서 같은 `closure.closure` type의 closure는 같은
 convention에서 언제나 같은 entry ABI를 가진다. `closure.closure` type은 convention도
-environment index도 기록하지 않는다. Lambda lifting은 `closure.lambda`의 convention에서,
+environment index도 기록하지 않는다. Lambda lifting은 `closure.lambda` 본문의 convention에서,
 indirect call lowering은 이전이 가진 convention에서, entry 함수는 자기 convention에서
 index를 얻는다. Consumer가 arity, parameter type, body shape로 slot이나 hidden
 operand를 복원하는 것은 illegal이다.
@@ -511,9 +511,9 @@ closure는 convention마다 다른 entry ABI로 불리므로 `S`에서 hidden pa
   그 continuation의 `Cps` entry에서 environment를 뺀 signature다. 이 형상은
   continuation을 만들고 소비하는 operation과 frame layout의 자리가 정하며, 형상만 보고
   continuation임을 판정하지 않는다.
-- Entry ABI는 entry를 가진 것이 싣는다. `closure.lambda`는 environment를 뺀 entry
-  signature를 `signature`로 가지고, entry 함수는 자기 signature를, 간접 이전은 exact
-  `signature`를 가진다. Closure lowering은 이 signature에 environment를 넣으며 `S`와
+- Entry ABI는 entry를 가진 것이 싣는다. `closure.lambda`는 본문마다 environment를 뺀
+  entry signature를 `signatures`에 가지고, entry 함수는 자기 signature를, 간접 이전은
+  exact `signature`를 가진다. Closure lowering은 이 signature에 environment를 넣으며 `S`와
   비교하지 않는다.
 
 Environment를 받는 `func.func`는 entry block의 environment 인자에
@@ -523,9 +523,9 @@ type이다([closure 저장 layout](ir.md#closure-저장-layout)). 본문이 없�
 environment를 받을 수 없다. 물리화 검증은 이 표식으로 entry 함수를 알아보고 slot을
 대조하며, type이나 arity로 slot을 추측하지 않는다.
 
-생성한 physical definition, lambda entry, `func_ref` entry 함수, direct/indirect
-call에는 그 정의, entry, 이전이 가진 convention을 기존
-`tribute.calling_convention` attribute로 복사한다.
+생성한 physical definition, `func_ref` entry 함수, direct/indirect call에는 그 정의,
+entry, 이전이 가진 convention을 기존 `tribute.calling_convention` attribute로
+복사하고, `closure.lambda`에는 본문마다 그 본문의 convention을 `conventions`에 적는다.
 Metadata/type/symbol 불일치는 conversion failure이며 hidden operand를 추측하지
 않는다. TrunkIR의 `TypeConverter`, function signature conversion, dialect
 builder를 재사용하되 `tribute_control` 전용 graph pattern은
@@ -533,8 +533,9 @@ builder를 재사용하되 `tribute_control` 전용 graph pattern은
 
 Operation의 convention은 tribute-ir의 `ConventionBearing` operation interface가
 소유한다. 이 interface를 구현하는 `func.func`, `func.call`, `func.call_indirect`,
-`func.tail_call`, `func.tail_call_indirect`, `closure.lambda`만
-convention을 가질 수 있다. `closure.new`는 convention을 기록하지 않으며, entry 목록의 칸이
+`func.tail_call`, `func.tail_call_indirect`만 convention을 가질 수 있다.
+`closure.lambda`는 본문마다 convention을 `conventions` 목록으로 선언하며 이 interface에
+속하지 않는다. `closure.new`는 convention을 기록하지 않으며, entry 목록의 칸이
 곧 각 entry의 convention이다. `tribute_cps` operation의 convention은 그 operation이 선언한 속성이며
 이 interface에 속하지 않는다. Pass는 attribute key를 직접 읽거나 쓰지 않고 이 interface로 convention을
 읽고, 쓰고, 소비한다. Attribute 철자는 tribute-ir의 저장, 출력, 파싱, 검증만 다룬다. 읽기는 convention이 없는
@@ -545,8 +546,8 @@ Legalization 출구 검증과 물리화 입구는 module 전체의 convention을
 
 - 이 interface를 구현하지 않는 operation에 붙은 convention
 - Keyword가 아닌 convention 값
-- `closure.lambda`의 convention이나 `closure.new`의 칸이 정하는 convention이 그 entry
-  함수의 convention과 다른 경우. Closure type은 convention을 기록하지
+- `closure.lambda` 본문의 convention이나 `closure.new`의 칸이 정하는 convention이 그
+  entry 함수의 convention과 다른 경우. Closure type은 convention을 기록하지
   않는다.
 
 같은 legalization에서 각 `tribute_control.perform`을 typecheck된

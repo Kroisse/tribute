@@ -25,6 +25,22 @@ pub type RewriteMap<'db> = HashMap<FuncDefId<'db>, Vec<(InstanceKey<'db>, Symbol
 /// Type rewrite map: declaration identity → specialized argument/name pairs.
 pub type TypeRewriteMap<'db> = HashMap<TypeDefId<'db>, Vec<(Vec<Type<'db>>, SymbolPath)>>;
 
+/// The specialized path of `id` applied to `args`, matched by identity
+/// rather than by how `args` spell their nominal types.
+fn find_mangled<'a, 'db>(
+    db: &'db dyn salsa::Database,
+    map: &'a TypeRewriteMap<'db>,
+    id: TypeDefId<'db>,
+    args: &[Type<'db>],
+) -> Option<&'a SymbolPath> {
+    let entries = map.get(&id)?;
+    let args = super::collect::canonical_args(db, args);
+    entries
+        .iter()
+        .find(|(ta, _)| *ta == args)
+        .map(|(_, mangled)| mangled)
+}
+
 /// Rewrite all generic function call sites in a module to use specialized versions.
 pub fn rewrite_module<'db>(
     db: &'db dyn salsa::Database,
@@ -118,11 +134,9 @@ pub fn rewrite_field_function_refs<'db>(
                 return;
             };
             let mut function = original;
-            if let Some((_, mangled)) = type_rewrite_map.get(owner).and_then(|entries| {
-                entries
-                    .iter()
-                    .find(|(args, _)| *args == instance.type_arguments)
-            }) && !instance.type_arguments.is_empty()
+            if let Some(mangled) =
+                find_mangled(db, type_rewrite_map, *owner, &instance.type_arguments)
+                && !instance.type_arguments.is_empty()
             {
                 function = FuncDefId::new(db, kind.path(mangled, field));
                 *owner = owner.with_path(db, mangled.clone());
@@ -178,8 +192,7 @@ impl<'db> TypeFolder<'db> for NominalRewrite<'_, 'db> {
         // List(Option(Int)) where the outer ctor is non-generic).
         if let TypeKind::Named { id, args, .. } = ty.kind(self.db)
             && !args.is_empty()
-            && let Some(entries) = self.map.get(id)
-            && let Some((_, mangled)) = entries.iter().find(|(ta, _)| ta == args)
+            && let Some(mangled) = find_mangled(self.db, self.map, *id, args)
         {
             return Ok(Type::new(
                 self.db,
@@ -240,10 +253,7 @@ fn find_mangled_for_ctor<'db>(
     // Check if the result type is a Named type with args
     match result_ty.kind(db) {
         TypeKind::Named { id, args, .. } if !args.is_empty() => {
-            let entries = map.get(id)?;
-            // Match against the original args stored in the map.
-            let (_, mangled) = entries.iter().find(|(ta, _)| ta == args)?;
-            Some(mangled.clone())
+            find_mangled(db, map, *id, args).cloned()
         }
         _ => None,
     }
@@ -257,10 +267,7 @@ fn find_mangled_for_typedef<'db>(
 ) -> Option<SymbolPath> {
     match ty.kind(db) {
         TypeKind::Named { id, args, .. } if !args.is_empty() => {
-            let entries = map.get(id)?;
-            // Match against the original args stored in the map.
-            let (_, mangled) = entries.iter().find(|(ta, _)| ta == args)?;
-            Some(mangled.clone())
+            find_mangled(db, map, *id, args).cloned()
         }
         _ => None,
     }

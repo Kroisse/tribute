@@ -140,12 +140,13 @@ pub enum ConventionError {
 }
 
 /// A physical operation that records the calling convention of the callable
-/// it defines, creates, or transfers to, from CPS legalization until the
-/// last reader inside the representation/ABI boundary consumes it
+/// it defines or transfers to, from CPS legalization until the last reader
+/// inside the representation/ABI boundary consumes it
 /// (`new-plans/cps-effects.md`, "CPS 변환의 호출 대상 형상").
 ///
 /// Only these operations carry a convention, and passes read, write, and
-/// consume it only through this interface.
+/// consume it only through this interface. A `closure.lambda` declares the
+/// convention of each body in its own `conventions` attribute instead.
 #[trunk_ir::op_interface]
 pub trait ConventionBearing: DialectOp {
     /// The recorded convention; `Ok(None)` when the operation records none.
@@ -211,7 +212,6 @@ fn read_convention(
         .ok_or(ConventionError::Malformed)
 }
 
-impl ConventionBearing for closure::Lambda {}
 impl ConventionBearing for func::Func {}
 impl ConventionBearing for func::Call {}
 impl ConventionBearing for func::TailCall {}
@@ -413,11 +413,7 @@ mod tests {
             named(&ctx, module, "core.module")
         ));
         let location = ctx.op(module.op()).location;
-        for name in [
-            closure::Lambda::NAME,
-            func::CallIndirect::NAME,
-            func::TailCallIndirect::NAME,
-        ] {
+        for name in [func::CallIndirect::NAME, func::TailCallIndirect::NAME] {
             let op = trunk_ir::OperationDataBuilder::new(location, name).build(&mut ctx);
             let op = ctx.create_op(op);
             assert!(DynConventionBearing::is_implemented(&ctx, op), "{name:?}");

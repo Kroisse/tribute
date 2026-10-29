@@ -252,11 +252,20 @@ fn verify_final_handle_dispatch_types(ctx: &IrContext, module: Module) -> Vec<Bo
             });
             return;
         };
-        if DynConventionBearing::of(ctx, def) != Some(expected) {
+        let conventions = tribute_ir::dialect::closure::Lambda::from_op(ctx, def)
+            .ok()
+            .and_then(|lambda| lambda.entries(ctx))
+            .map(|entries| {
+                entries
+                    .iter()
+                    .map(|entry| entry.convention)
+                    .collect::<Vec<_>>()
+            });
+        if conventions.as_deref() != Some(&[expected][..]) {
             failures.push(BoundaryFailure {
                 op: Some(def),
                 location: Some(ctx.op(def).location),
-                message: format!("dispatcher must preserve calling convention metadata {expected}"),
+                message: format!("dispatcher must be a closure.lambda with one {expected} body"),
             });
         }
     }
