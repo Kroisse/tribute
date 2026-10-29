@@ -78,10 +78,12 @@ fn compile_file(
     sysroot: Option<&Path>,
 ) {
     let db = TributeDatabaseImpl::default();
-    let (source, input_path, default_output) = if input_path.is_dir() {
+    // The default outputs of the native and the wasm target.
+    let (source, input_path, (default_output, default_wasm)) = if input_path.is_dir() {
         match load_package_dir(&db, &input_path, target) {
             PackageInput::Executable { root, output } => {
-                (root, input_path.join("src/main.trb"), output)
+                let wasm = output.with_extension("wasm");
+                (root, input_path.join("src/main.trb"), (output, wasm))
             }
             PackageInput::Checked => return,
         }
@@ -93,8 +95,11 @@ fn compile_file(
                 std::process::exit(1);
             }
         };
-        let output = input_path.with_extension("");
-        (source, input_path, output)
+        let outputs = (
+            input_path.with_extension(""),
+            input_path.with_extension("wasm"),
+        );
+        (source, input_path, outputs)
     };
 
     db.attach(|db| {
@@ -180,7 +185,7 @@ fn compile_file(
                             &mut diags,
                         );
                         let output =
-                            output_path.unwrap_or_else(|| default_output.with_extension("wasm"));
+                            output_path.unwrap_or(default_wasm);
 
                         if let Err(error) = std::fs::write(&output, wasm_bytes) {
                             eprintln!(
