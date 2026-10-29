@@ -665,6 +665,27 @@ mod tests {
     }
 
     #[test]
+    fn inline_call_moves_a_callee_body_updated_by_an_earlier_inline() {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, INLINE_FIXTURE);
+        let [main, helper, leaf] =
+            ["main", "helper", "leaf"].map(|name| root_symbol(&ctx, module, name));
+        let mut graph = build_call_graph(&ctx, module);
+
+        let call = call_to(&ctx, helper, "leaf");
+        crate::transforms::inline_single_call(&mut ctx, call, leaf).unwrap();
+        graph.inline_call(helper, leaf);
+        assert_eq!(graph, build_call_graph(&ctx, module));
+
+        // `helper` no longer calls `leaf`, so neither does its copy.
+        let call = call_to(&ctx, main, "helper");
+        crate::transforms::inline_single_call(&mut ctx, call, helper).unwrap();
+        graph.inline_call(main, helper);
+        assert_eq!(graph, build_call_graph(&ctx, module));
+        assert_eq!(graph.call_site_count.get(&leaf), None);
+    }
+
+    #[test]
     fn nested_module_qualifies_func_names() {
         let (mut ctx, loc) = test_ctx();
         // Outer module contains a nested `core.module` named "inner"

@@ -1330,20 +1330,19 @@ mod pass {
     }
 
     #[test]
-    fn single_call_site_rule_observes_rebuilt_counts_per_iteration() {
+    fn single_call_site_rule_observes_counts_updated_within_an_iteration() {
         use crate::analysis::AnalysisCache;
 
         // Declaration order puts the callers (`a`, `b`) before the chain
-        // (`wrapper`, `large`). In iteration 1 the applicator first
-        // inlines `wrapper` into `a` and `b` via the size threshold,
-        // which duplicates the inner `call @large` into both callers.
-        // Iteration 2 then sees two real call sites to `large`, so the
-        // single-call-site fast path must *not* fire for `large` even
-        // though the iter-1 graph captured `large` at one site.
+        // (`wrapper`, `large`). The applicator first inlines `wrapper`
+        // into `a` and `b` via the size threshold, which duplicates the
+        // inner `call @large` into both callers. When it reaches
+        // `wrapper`'s own call, the updated graph counts three call sites
+        // to `large`, so the single-call-site fast path must *not* fire
+        // even though the graph at the start of the iteration counted one.
         //
-        // The expected end state preserves the pre-refactor policy:
-        // `large` is inlined into `wrapper` (1 extra copy), but neither
-        // `a` nor `b` is spliced; both keep `call @large`.
+        // No copy of `large` is made: `a`, `b`, and `wrapper` all keep
+        // `call @large`.
         let mut input = String::from(
             "core.module @test {\n\
   func.func @a() -> core.i32 {\n\
@@ -1391,9 +1390,14 @@ mod pass {
                 calls, 1,
                 "{name} must retain exactly one call after the pass; \
                  the single-call-site rule should not fire on `large` \
-                 in iter 2 against a stale graph"
+                 against a stale count"
             );
         }
+        let wrapper = root_symbol(&ctx, module, "wrapper");
+        let large = root_symbol(&ctx, module, "large");
+        let graph = crate::transforms::build_call_graph(&ctx, module);
+        assert!(graph.calls[&wrapper].contains(&large));
+        assert_eq!(graph.call_site_count.get(&large), Some(&3));
     }
 
     #[test]
