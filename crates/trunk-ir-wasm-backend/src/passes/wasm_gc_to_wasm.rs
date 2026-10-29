@@ -145,7 +145,7 @@ impl LowerTypedGcPattern {
 
 impl RewritePattern for LowerTypedGcPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,

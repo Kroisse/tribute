@@ -251,7 +251,7 @@ struct LowerEffectExtend {
 
 impl RewritePattern for LowerEffectExtend {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -291,7 +291,7 @@ struct LowerEffectStackOp {
 
 impl RewritePattern for LowerEffectStackOp {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -325,7 +325,7 @@ struct LowerEffectTailOp {
 
 impl RewritePattern for LowerEffectTailOp {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -375,7 +375,7 @@ struct LowerEffectDispatchTail {
 
 impl RewritePattern for LowerEffectDispatchTail {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -411,7 +411,7 @@ struct LowerEffectDispatchCps {
 
 impl RewritePattern for LowerEffectDispatchCps {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,

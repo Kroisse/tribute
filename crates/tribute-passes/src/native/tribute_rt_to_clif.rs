@@ -199,7 +199,7 @@ struct BoxIntPattern {
 
 impl RewritePattern for BoxIntPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -237,7 +237,7 @@ struct BoxNatPattern {
 
 impl RewritePattern for BoxNatPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -275,7 +275,7 @@ struct BoxBoolPattern {
 
 impl RewritePattern for BoxBoolPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -313,7 +313,7 @@ struct BoxFloatPattern {
 
 impl RewritePattern for BoxFloatPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -353,7 +353,7 @@ struct UnboxIntPattern {
 
 impl RewritePattern for UnboxIntPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -385,7 +385,7 @@ struct UnboxNatPattern {
 
 impl RewritePattern for UnboxNatPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -416,7 +416,7 @@ struct UnboxBoolPattern {
 
 impl RewritePattern for UnboxBoolPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -447,7 +447,7 @@ struct UnboxFloatPattern {
 
 impl RewritePattern for UnboxFloatPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,

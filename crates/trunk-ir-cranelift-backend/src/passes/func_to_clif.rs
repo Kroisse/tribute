@@ -35,7 +35,7 @@ pub fn lower(
     let symbols = SymbolTable::collect(ctx, module);
     let functions = function_signatures(ctx, &symbols);
 
-    let applicator = PatternApplicator::new(type_converter)
+    let mut applicator = PatternApplicator::new(type_converter)
         .with_auto_type_conversion(true)
         .add_pattern(FuncFuncPattern)
         .add_pattern(FuncCallPattern)
@@ -185,7 +185,7 @@ struct FuncFuncPattern;
 
 impl RewritePattern for FuncFuncPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -225,7 +225,7 @@ struct FuncCallPattern;
 
 impl RewritePattern for FuncCallPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -251,7 +251,7 @@ struct FuncCallIndirectPattern;
 
 impl RewritePattern for FuncCallIndirectPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -309,7 +309,7 @@ struct FuncReturnPattern;
 
 impl RewritePattern for FuncReturnPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -328,7 +328,7 @@ struct FuncTailCallPattern;
 
 impl RewritePattern for FuncTailCallPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -355,7 +355,7 @@ struct FuncTailCallIndirectPattern;
 
 impl RewritePattern for FuncTailCallIndirectPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -433,7 +433,7 @@ struct FuncUnreachablePattern;
 
 impl RewritePattern for FuncUnreachablePattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -470,7 +470,7 @@ struct FuncConstantPattern {
 
 impl RewritePattern for FuncConstantPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,

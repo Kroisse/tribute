@@ -92,7 +92,7 @@ struct NativeWritePattern;
 
 impl RewritePattern for NativeWritePattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -117,7 +117,7 @@ struct NativeReadLinePattern {
 
 impl RewritePattern for NativeReadLinePattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,

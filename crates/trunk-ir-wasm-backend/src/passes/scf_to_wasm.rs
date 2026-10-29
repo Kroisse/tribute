@@ -373,7 +373,7 @@ struct ScfSwitchPattern(Arc<ScfLoweringPlan>);
 
 impl RewritePattern for ScfSwitchPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -474,7 +474,7 @@ struct ScfIfPattern(Arc<ScfLoweringPlan>);
 
 impl RewritePattern for ScfIfPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -532,7 +532,7 @@ struct ScfLoopPattern(Arc<ScfLoweringPlan>);
 
 impl RewritePattern for ScfLoopPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -626,7 +626,7 @@ struct ScfYieldPattern;
 
 impl RewritePattern for ScfYieldPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -666,7 +666,7 @@ struct ScfContinuePattern;
 
 impl RewritePattern for ScfContinuePattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -718,7 +718,7 @@ struct ScfBreakPattern;
 
 impl RewritePattern for ScfBreakPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,

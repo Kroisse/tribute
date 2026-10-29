@@ -40,7 +40,7 @@ pub struct UnrealizedCastConversionPattern;
 
 impl RewritePattern for UnrealizedCastConversionPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,

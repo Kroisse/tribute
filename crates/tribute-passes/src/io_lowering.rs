@@ -30,7 +30,7 @@ impl Pass for LowerIoIntrinsics {
         target: core::Module,
         _analyses: &mut AnalysisCache,
     ) -> PassRunResult {
-        let applicator = PatternApplicator::new(TypeConverter::new())
+        let mut applicator = PatternApplicator::new(TypeConverter::new())
             .add_pattern(IoCallPattern)
             .add_pattern(IoDeclarationPattern);
         applicator.apply_partial(ctx, Module::from(target));
@@ -42,7 +42,7 @@ struct IoCallPattern;
 
 impl RewritePattern for IoCallPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -84,7 +84,7 @@ struct IoDeclarationPattern;
 
 impl RewritePattern for IoDeclarationPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,

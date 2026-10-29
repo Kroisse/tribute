@@ -105,7 +105,7 @@ struct PrependCallPattern {
 
 impl RewritePattern for PrependCallPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -149,7 +149,7 @@ struct PrependDeclarationPattern {
 
 impl RewritePattern for PrependDeclarationPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,

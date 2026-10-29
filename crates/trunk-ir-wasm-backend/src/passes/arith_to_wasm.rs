@@ -30,7 +30,7 @@ use trunk_ir::types::Attribute;
 /// The `type_converter` parameter allows language-specific backends to provide
 /// their own type conversion rules.
 pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
-    let applicator = PatternApplicator::new(type_converter)
+    let mut applicator = PatternApplicator::new(type_converter)
         .add_pattern(ArithIndexPattern)
         .add_pattern(ArithConstPattern)
         .add_pattern(NilValuePattern)
@@ -52,7 +52,7 @@ struct ArithIndexPattern;
 
 impl RewritePattern for ArithIndexPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -176,7 +176,7 @@ struct NilValuePattern;
 
 impl RewritePattern for NilValuePattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -199,7 +199,7 @@ struct ArithConstPattern;
 
 impl RewritePattern for ArithConstPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -286,7 +286,7 @@ struct ArithBinOpPattern;
 
 impl RewritePattern for ArithBinOpPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -472,7 +472,7 @@ struct ArithCmpPattern;
 
 impl RewritePattern for ArithCmpPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -654,7 +654,7 @@ struct ArithNegPattern;
 
 impl RewritePattern for ArithNegPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -740,7 +740,7 @@ struct ArithBitwisePattern;
 
 impl RewritePattern for ArithBitwisePattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -869,7 +869,7 @@ struct ArithConversionPattern;
 
 impl RewritePattern for ArithConversionPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,

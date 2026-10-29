@@ -255,7 +255,7 @@ impl ArithIntrinsicPattern {
 
 impl RewritePattern for ArithIntrinsicPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -313,7 +313,7 @@ struct ArithIntrinsicFuncDeclPattern {
 
 impl RewritePattern for ArithIntrinsicFuncDeclPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,

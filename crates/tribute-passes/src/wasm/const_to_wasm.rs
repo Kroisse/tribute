@@ -179,7 +179,7 @@ pub(crate) fn validate_for_wasm(
 pub(crate) fn lower(ctx: &mut IrContext, module: Module, analysis: &ConstAnalysis) {
     let segments = Rc::new(declare_data_segments(ctx, module, &analysis.contents));
 
-    let applicator = PatternApplicator::new(TypeConverter::new())
+    let mut applicator = PatternApplicator::new(TypeConverter::new())
         .add_pattern(StringConstPattern::new(
             segments.clone(),
             analysis.string_enum_ty,
@@ -260,7 +260,7 @@ impl StringConstPattern {
 
 impl RewritePattern for StringConstPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -316,7 +316,7 @@ impl BytesConstPattern {
 
 impl RewritePattern for BytesConstPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,

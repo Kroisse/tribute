@@ -372,7 +372,7 @@ struct BytesConstNativePattern {
 
 impl RewritePattern for BytesConstNativePattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -428,7 +428,7 @@ struct StringConstNativePattern {
 
 impl RewritePattern for StringConstNativePattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,

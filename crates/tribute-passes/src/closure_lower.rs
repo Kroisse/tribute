@@ -125,7 +125,7 @@ struct LowerClosureNewArena {
 
 impl RewritePattern for LowerClosureNewArena {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -194,7 +194,7 @@ struct LowerClosureUnpackArena;
 
 impl RewritePattern for LowerClosureUnpackArena {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -238,7 +238,7 @@ struct LowerClosureCallArena;
 
 impl RewritePattern for LowerClosureCallArena {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -316,7 +316,7 @@ struct LowerClosureTailCallArena;
 
 impl RewritePattern for LowerClosureTailCallArena {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -483,7 +483,7 @@ struct LowerClosureEntryArena;
 
 impl RewritePattern for LowerClosureEntryArena {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -722,7 +722,7 @@ fn rewrite_validated_closures_in_func(
     if !ctx.op_has_regions(func_op.op_ref()) {
         return;
     }
-    let applicator = PatternApplicator::new(TypeConverter::new())
+    let mut applicator = PatternApplicator::new(TypeConverter::new())
         .with_target(
             ConversionTarget::new()
                 .legal_op("func.func")

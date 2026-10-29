@@ -163,7 +163,7 @@ struct StructNewPattern {
 
 impl RewritePattern for StructNewPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -278,7 +278,7 @@ struct VariantNewPattern {
 
 impl RewritePattern for VariantNewPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,

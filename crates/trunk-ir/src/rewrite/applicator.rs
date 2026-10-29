@@ -141,8 +141,20 @@ impl ApplyResult {
 }
 
 /// Applies rewrite patterns to arena IR using visitor-based fixpoint iteration.
-pub struct PatternApplicator {
-    patterns: Vec<Box<dyn RewritePattern>>,
+///
+/// The applicator holds its patterns for the lifetime `'p`, so a pattern may
+/// borrow from the driver that builds the applicator, including through
+/// `&'p mut T`. The driver gets the borrow back once the applicator is
+/// dropped.
+///
+/// A pattern may keep state across [`RewritePattern::match_and_rewrite`]
+/// calls only when the driver owns it and reads it back after applying the
+/// patterns, such as a count, a collected list, or an analysis the pattern
+/// updates for each rewrite it records. A pattern must not cache facts about
+/// the IR, such as uses, types, or the operations a region holds, between
+/// calls: later rewrites and the applicator's own mutations make them stale.
+pub struct PatternApplicator<'p> {
+    patterns: Vec<Box<dyn RewritePattern + 'p>>,
     max_iterations: usize,
     type_converter: TypeConverter,
     /// Conversion target used for legality-aware rewriting and verification.
@@ -152,7 +164,7 @@ pub struct PatternApplicator {
     auto_type_conversion: bool,
 }
 
-impl PatternApplicator {
+impl<'p> PatternApplicator<'p> {
     /// Create a new applicator with the given type converter.
     pub fn new(type_converter: TypeConverter) -> Self {
         Self {
@@ -176,7 +188,7 @@ impl PatternApplicator {
     }
 
     /// Add a rewrite pattern.
-    pub fn add_pattern(mut self, pattern: impl RewritePattern + 'static) -> Self {
+    pub fn add_pattern(mut self, pattern: impl RewritePattern + 'p) -> Self {
         self.patterns.push(Box::new(pattern));
         self
     }
@@ -186,6 +198,7 @@ impl PatternApplicator {
     /// Useful when collecting heterogeneous patterns from multiple sources
     /// (e.g. per-dialect `canonicalization_patterns()` registries) into a
     /// single applicator without naming each concrete type at the call site.
+    /// A `'static` box coerces to `'p`, so registries need no lifetime.
     pub fn add_pattern_box(mut self, pattern: Box<dyn RewritePattern>) -> Self {
         self.patterns.push(pattern);
         self
@@ -216,7 +229,7 @@ impl PatternApplicator {
     /// Apply patterns within a rewrite scope without verification.
     ///
     /// The configured target still skips operations classified as legal.
-    pub fn apply_partial<S: RewriteScope>(&self, ctx: &mut IrContext, scope: S) -> ApplyResult {
+    pub fn apply_partial<S: RewriteScope>(&mut self, ctx: &mut IrContext, scope: S) -> ApplyResult {
         let module_first_block = scope.module_first_block(ctx);
         let mut total_changes = 0;
         let mut iterations = 0;
@@ -247,7 +260,7 @@ impl PatternApplicator {
     /// the target. Unknown operations may remain for later conversion passes.
     /// Failures are reported as [`ConversionError`] with `boundary` attached.
     pub fn apply_partial_conversion(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         scope: impl RewriteScope,
         boundary: &'static str,
@@ -265,7 +278,7 @@ impl PatternApplicator {
     /// operations. Use this at named pipeline boundaries. Failures are reported
     /// as [`ConversionError`] with `boundary` attached.
     pub fn apply_full_conversion(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         scope: impl RewriteScope,
         boundary: &'static str,
@@ -279,7 +292,7 @@ impl PatternApplicator {
 
     /// Run a single iteration over all operations below the selected root.
     fn run_one_iteration(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         scope: impl RewriteScope,
         module_first_block: Option<BlockRef>,
@@ -294,7 +307,7 @@ impl PatternApplicator {
     }
 
     fn visit_region(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         region: RegionRef,
         module_first_block: Option<BlockRef>,
@@ -308,7 +321,7 @@ impl PatternApplicator {
     }
 
     fn visit_block(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         block: BlockRef,
         module_first_block: Option<BlockRef>,
@@ -371,9 +384,9 @@ impl PatternApplicator {
                 }
 
                 // Try each pattern
-                for pattern in &self.patterns {
+                for i in 0..self.patterns.len() {
                     let mut rw = PatternRewriter::new(&self.type_converter);
-                    let matched = pattern.match_and_rewrite(ctx, op, &mut rw);
+                    let matched = self.patterns[i].match_and_rewrite(ctx, op, &mut rw);
                     if matched && rw.has_mutations() {
                         let mutations = rw.take_mutations();
                         let replaced = self.replaced_results(ctx, op, &mutations);
@@ -659,7 +672,7 @@ mod tests {
 
     impl RewritePattern for RenamePattern {
         fn match_and_rewrite(
-            &self,
+            &mut self,
             ctx: &mut IrContext,
             op: OpRef,
             rewriter: &mut PatternRewriter<'_>,
@@ -1006,6 +1019,62 @@ mod tests {
             !printed.contains("core.unrealized_conversion_cast"),
             "{printed}"
         );
+    }
+
+    /// Renames `test.source` to `test.target` and records each renamed
+    /// operation's `tag` in a list the driver owns.
+    struct RecordRenames<'a> {
+        renamed: &'a mut Vec<String>,
+    }
+
+    impl RewritePattern for RecordRenames<'_> {
+        fn match_and_rewrite(
+            &mut self,
+            ctx: &mut IrContext,
+            op: OpRef,
+            rewriter: &mut PatternRewriter<'_>,
+        ) -> bool {
+            if !ctx.op(op).name.is(ctx, "test.source") {
+                return false;
+            }
+            let tag = ctx.op_attrs(op).get_str("tag").unwrap().to_owned();
+            self.renamed.push(tag);
+            let loc = ctx.op(op).location;
+            let result_types = ctx.op_result_types(op).to_vec();
+            let new_data = OperationDataBuilder::new(loc, "test.target")
+                .results(result_types)
+                .build(ctx);
+            let new_op = ctx.create_op(new_data);
+            rewriter.replace_op(new_op);
+            true
+        }
+    }
+
+    #[test]
+    fn pattern_updates_state_borrowed_from_the_driver() {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  %0 = test.source {tag = "first"} : core.i32
+  %1 = test.other : core.i32
+  %2 = test.source {tag = "second"} : core.i32
+}"#,
+        );
+
+        let mut renamed = Vec::new();
+        let mut applicator =
+            PatternApplicator::new(TypeConverter::new()).add_pattern(RecordRenames {
+                renamed: &mut renamed,
+            });
+        let result = applicator.apply_partial(&mut ctx, module);
+        drop(applicator);
+
+        assert!(result.reached_fixpoint);
+        assert_eq!(result.total_changes, 2);
+        assert_eq!(renamed, ["first", "second"]);
+        let printed = print_module(&ctx, module.op());
+        assert!(!printed.contains("test.source"), "{printed}");
     }
 
     #[test]

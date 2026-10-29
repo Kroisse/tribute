@@ -22,10 +22,19 @@ use crate::refs::OpRef;
 ///
 /// Return `true` if the pattern matched and recorded mutations via the rewriter.
 /// Return `false` if the pattern does not apply.
+///
+/// # State
+///
+/// `match_and_rewrite` takes `&mut self`, so a pattern may update state
+/// across calls. Keep only state the driver owns and reads back after
+/// applying the patterns, possibly through a `&mut` borrow the pattern holds
+/// for the applicator's lifetime. Do not cache facts about the IR between
+/// calls; rewrites make them stale. See
+/// [`PatternApplicator`](super::PatternApplicator).
 pub trait RewritePattern {
     /// Attempt to match and rewrite an operation.
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,

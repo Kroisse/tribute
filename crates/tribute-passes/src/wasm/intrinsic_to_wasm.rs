@@ -86,7 +86,7 @@ pub const BYTES_SLICE_OR_PANIC: &str = "__tribute_bytes_slice_or_panic";
 /// Bind calls to the `extern "C"` bytes helpers to WasmGC operations.
 pub(crate) fn lower(ctx: &mut IrContext, module: Module) {
     let symbols = Rc::new(SymbolTable::collect(ctx, module));
-    let applicator = PatternApplicator::new(TypeConverter::new())
+    let mut applicator = PatternApplicator::new(TypeConverter::new())
         .add_pattern(BytesLenPattern(Rc::clone(&symbols)))
         .add_pattern(BytesRangeEqualPattern(Rc::clone(&symbols)))
         .add_pattern(BytesConcatPattern(Rc::clone(&symbols)))
@@ -115,7 +115,7 @@ struct BytesLenPattern(Rc<SymbolTable>);
 
 impl RewritePattern for BytesLenPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -157,7 +157,7 @@ struct BytesRangeEqualPattern(Rc<SymbolTable>);
 
 impl RewritePattern for BytesRangeEqualPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -339,7 +339,7 @@ struct BytesConcatPattern(Rc<SymbolTable>);
 
 impl RewritePattern for BytesConcatPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -444,7 +444,7 @@ struct BytesSliceOrPanicPattern(Rc<SymbolTable>);
 
 impl RewritePattern for BytesSliceOrPanicPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,

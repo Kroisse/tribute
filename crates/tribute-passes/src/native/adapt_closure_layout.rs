@@ -162,7 +162,7 @@ struct ConventionTablePattern {
 
 impl RewritePattern for ConventionTablePattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -187,7 +187,7 @@ struct ConventionEntryPattern;
 
 impl RewritePattern for ConventionEntryPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -212,7 +212,7 @@ struct ClosureStructAdaptPattern;
 
 impl RewritePattern for ClosureStructAdaptPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,

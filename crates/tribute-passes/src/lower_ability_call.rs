@@ -54,7 +54,7 @@ impl CommonTypes {
 /// `ability-lowered` boundary.
 pub(crate) fn lower_ability_call<S: RewriteScope>(ctx: &mut IrContext, scope: S) {
     let types = CommonTypes::new(ctx);
-    let applicator =
+    let mut applicator =
         PatternApplicator::new(TypeConverter::new()).add_pattern(LowerCallPattern { types });
     applicator.apply_partial(ctx, scope);
 }
@@ -88,7 +88,7 @@ struct LowerCallPattern {
 
 impl RewritePattern for LowerCallPattern {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,

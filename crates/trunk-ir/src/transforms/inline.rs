@@ -341,7 +341,7 @@ fn inline_functions_with_config(
 
         let pattern = InlineCallSite::new(symbols, Arc::clone(&graph), recursive, config.clone());
 
-        let applicator = PatternApplicator::new(TypeConverter::new())
+        let mut applicator = PatternApplicator::new(TypeConverter::new())
             .add_pattern(pattern)
             .with_max_iterations(1);
         let result = applicator.apply_partial(ctx, module);
@@ -407,7 +407,7 @@ impl InlineCallSite {
 
 impl RewritePattern for InlineCallSite {
     fn match_and_rewrite(
-        &self,
+        &mut self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -1450,7 +1450,7 @@ mod pass {
 
         let total_changes = {
             let dispatcher = FoldDispatchPattern::from_ops([crate::dialect::arith::Addi::NAME]);
-            let applicator = PatternApplicator::new(TypeConverter::new())
+            let mut applicator = PatternApplicator::new(TypeConverter::new())
                 .add_pattern(inline_pattern)
                 .add_pattern_box(Box::new(dispatcher));
             applicator.apply_partial(&mut ctx, module).total_changes
