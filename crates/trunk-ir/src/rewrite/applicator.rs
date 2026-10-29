@@ -158,7 +158,10 @@ impl ApplyResult {
 /// recording them. A change made directly on attached IR is not queued, and
 /// a pattern it enables may never run. Debug builds check this: at the
 /// fixpoint they offer every operation again on a copy of the context and
-/// panic if a pattern still matches.
+/// panic if a pattern still matches or a type would still convert. A
+/// converted block argument queues its users but not the branches into its
+/// block, so a pattern that matches on a successor's argument types relies
+/// on that check.
 ///
 /// The applicator holds its patterns for the lifetime `'p`, so patterns
 /// borrow data the driver computed, such as a symbol table or a lowering
@@ -301,7 +304,8 @@ impl<'p> PatternApplicator<'p> {
             };
             total_changes += changes;
             if changes == 0 {
-                if cfg!(debug_assertions) {
+                // A first round that changes nothing was a full sweep.
+                if cfg!(debug_assertions) && total_changes > 0 {
                     self.check_fixpoint(ctx, &regions);
                 }
                 return ApplyResult {
@@ -590,15 +594,45 @@ impl<'p> PatternApplicator<'p> {
         let mut probe = ctx.clone();
         let mut ops = Vec::new();
         for &region in regions {
+            if self.auto_type_conversion && !self.type_converter.is_empty() {
+                for &block in &probe.region(region).blocks {
+                    assert!(
+                        !self.converts_any(&probe, probe.block_args(block).iter().copied()),
+                        "a block argument in the scope still converts after the applicator \
+                         reached a fixpoint",
+                    );
+                }
+            }
             collect_ops_post_order(&probe, region, &mut ops);
         }
         for op in ops {
-            if !self.is_offered(&probe, op, regions)
-                || (self.target.has_constraints()
-                    && self.target.is_legal(&probe, op) == LegalityCheck::Legal)
+            if !self.is_offered(&probe, op, regions) {
+                continue;
+            }
+            if self.auto_type_conversion && !self.type_converter.is_empty() {
+                for region in probe.op_regions(op) {
+                    for &block in &probe.region(region).blocks {
+                        assert!(
+                            !self.converts_any(&probe, probe.block_args(block).iter().copied()),
+                            "a block argument in `{}` still converts after the applicator \
+                             reached a fixpoint",
+                            probe.op(op).name.display(&probe),
+                        );
+                    }
+                }
+            }
+            if self.target.has_constraints()
+                && self.target.is_legal(&probe, op) == LegalityCheck::Legal
             {
                 continue;
             }
+            assert!(
+                !(self.converts_operands_of(&probe, op)
+                    && core::UnrealizedConversionCast::from_op(&probe, op).is_err()
+                    && self.converts_any(&probe, probe.op_operands(op).iter().copied())),
+                "an operand of `{}` still converts after the applicator reached a fixpoint",
+                probe.op(op).name.display(&probe),
+            );
             for &index in self.patterns_for(&probe, op) {
                 let pattern = &self.patterns[index];
                 let mut rw = PatternRewriter::new(&self.type_converter);
@@ -612,6 +646,16 @@ impl<'p> PatternApplicator<'p> {
                 }
             }
         }
+    }
+
+    /// Whether the type converter changes the type of any of `values`.
+    fn converts_any(&self, ctx: &IrContext, values: impl IntoIterator<Item = ValueRef>) -> bool {
+        values.into_iter().any(|value| {
+            let ty = ctx.value_ty(value);
+            self.type_converter
+                .convert_type(ctx, ty)
+                .is_some_and(|converted| converted != ty)
+        })
     }
 
     /// Whether this conversion casts the operands of `op` to their converted
@@ -1394,11 +1438,9 @@ mod tests {
             })
             .apply_partial(&mut ctx, module);
 
-        // Debug builds offer every operation again to check the fixpoint.
-        let sweeps = if cfg!(debug_assertions) { 2 } else { 1 };
         assert_eq!(
             offered.into_inner(),
-            ["arith.addi", "arith.addi", "func.return", "func.func"].repeat(sweeps)
+            ["arith.addi", "arith.addi", "func.return", "func.func"]
         );
     }
 

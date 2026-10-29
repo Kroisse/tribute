@@ -167,6 +167,11 @@ instead of sharing it through `Rc` or `Arc`. A pattern that reports to the
 driver writes through a driver-owned `Cell` or `RefCell`; what it writes does
 not decide later rewrites, and no pattern caches IR facts across matches.
 
+A pattern that matches only some operations names them in `roots`, and the
+applicator offers it only those. A pattern changes attached IR only through the
+rewriter: after its first sweep, the applicator revisits only the operations the
+recorded changes touch.
+
 A pass that converts types builds its type converter in `run` and passes it to
 `PatternApplicator`. `PassManager` holds no converter.
 
