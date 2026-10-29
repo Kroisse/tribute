@@ -571,6 +571,10 @@ impl<'p> PatternApplicator<'p> {
     /// Queue an operation a rewrite inserted, after the operations nested
     /// in it, converting the argument types of its blocks first.
     fn queue_new_op(&self, ctx: &mut IrContext, op: OpRef, worklist: &mut Worklist) -> usize {
+        // A sweep skips a recursively legal operation and everything in it.
+        if self.target.has_constraints() && self.target.is_recursively_legal(ctx, op) {
+            return 0;
+        }
         let mut changes = 0;
         for region in ctx.op_regions(op).collect::<crate::RegionList>() {
             for block in ctx.region(region).blocks.clone() {
@@ -1587,6 +1591,75 @@ mod tests {
             .add_pattern(MarkSiblingsReady)
             .add_pattern(FinishReady)
             .apply_partial(&mut ctx, module);
+    }
+
+    /// Replaces `test.source` with a `test.container` whose block takes a
+    /// `core.i32` argument.
+    struct InsertContainer;
+
+    impl RewritePattern for InsertContainer {
+        fn match_and_rewrite(
+            &self,
+            ctx: &mut IrContext,
+            op: OpRef,
+            rewriter: &mut PatternRewriter<'_>,
+        ) -> bool {
+            if !ctx.op(op).name.is(ctx, "test.source") {
+                return false;
+            }
+            let loc = ctx.op(op).location;
+            let i32_ty = i32_type(ctx);
+            let block = ctx.create_block(BlockData {
+                location: loc,
+                args: vec![BlockArgData {
+                    ty: i32_ty,
+                    attrs: Default::default(),
+                }],
+                ops: smallvec![],
+                parent_region: None,
+            });
+            let region = ctx.create_region(RegionData {
+                location: loc,
+                blocks: smallvec![block],
+                parent_op: None,
+            });
+            let data = OperationDataBuilder::new(loc, "test.container")
+                .region(region)
+                .build(ctx);
+            let container = ctx.create_op(data);
+            rewriter.replace_op(container);
+            true
+        }
+    }
+
+    #[test]
+    fn inserted_recursively_legal_op_keeps_its_block_argument_types() {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  test.source
+}"#,
+        );
+        let i32_ty = i32_type(&mut ctx);
+        let i64_ty = TypeDataBuilder::new("core.i64").intern(&mut ctx);
+        let mut converter = TypeConverter::new();
+        converter.add_conversion(move |_, ty| (ty == i32_ty).then_some(i64_ty));
+        let mut target = ConversionTarget::new();
+        target.add_illegal_op("test.source");
+        target.add_legal_op("test.container");
+        target.add_recursive_legal_op("test.container");
+
+        PatternApplicator::new(converter)
+            .with_target(target)
+            .with_auto_type_conversion(true)
+            .add_pattern(InsertContainer)
+            .apply_partial(&mut ctx, module);
+
+        let container = ctx.block(module.first_block(&ctx).unwrap()).ops[0];
+        let region = ctx.op_region(container, 0).unwrap();
+        let block = ctx.region(region).blocks[0];
+        assert_eq!(ctx.value_ty(ctx.block_arg(block, 0)), i32_ty);
     }
 
     #[test]
