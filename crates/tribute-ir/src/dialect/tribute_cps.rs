@@ -87,9 +87,10 @@ mod tribute_cps {
     ///   `conventions` list and one body region per element, in the same
     ///   order. Each body takes the source parameters. Each body is written
     ///   under its convention's keyword in `entries`.
-    /// - **Meaning:** the lambda of one class vector of its uses. Its body of
-    ///   a convention reads the row of each binder with the class its uses of
-    ///   that class pass (`new-plans/ir.md`, "Convention entry"). Calling the
+    /// - **Meaning:** one lambda value with a body for each class its uses
+    ///   select. Its body of a convention reads the row of each binder it
+    ///   quantifies with the class its uses of that class pass, which those
+    ///   uses agree on (`new-plans/ir.md`, "Convention entry"). Calling the
     ///   value with a convention that has a body runs that body; legalization
     ///   fills the other convention entries.
     /// - **Verification:** the verifier checks that the conventions are

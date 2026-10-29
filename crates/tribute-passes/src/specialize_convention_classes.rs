@@ -228,8 +228,13 @@ fn recapture(ctx: &mut IrContext, instantiate: OpRef, lambda: OpRef, copy: Value
 }
 
 /// Rename the binders `old` to `new` in the types, attributes, quantified
-/// binders, and row arguments of `ops`.
+/// binders, row unions, and row arguments of `ops`.
 fn rename_binders(ctx: &mut IrContext, ops: &[OpRef], old: &[u32], new: &[u32]) {
+    let binder = |binder: u32| {
+        old.iter()
+            .position(|&known| known == binder)
+            .map_or(binder, |at| new[at])
+    };
     let rows: Vec<Row> = new.iter().map(|&tail| Row::new([], Some(tail))).collect();
     let renamed = |row: &Row| {
         row.substitute(RowArgs::Binders(old, &rows))
@@ -268,15 +273,27 @@ fn rename_binders(ctx: &mut IrContext, ops: &[OpRef], old: &[u32], new: &[u32]) 
         if !quantified.is_empty() {
             let quantified = quantified
                 .iter()
-                .map(|binder| {
-                    let at = old.iter().position(|known| known == binder);
-                    Attribute::Int(i128::from(at.map_or(*binder, |at| new[at])))
-                })
+                .map(|&quantified| Attribute::Int(i128::from(binder(quantified))))
                 .collect();
             ctx.op_attrs_mut(op).insert(
                 tribute_control::QUANTIFIED_ROWS_ATTR,
                 Attribute::List(quantified),
             );
+        }
+        let unions = tribute_control::row_unions(ctx, op).unwrap_or_default();
+        if !unions.is_empty() {
+            let unions = unions
+                .into_iter()
+                .map(|union| {
+                    tribute_control::RowUnion {
+                        result: binder(union.result),
+                        sources: union.sources.into_iter().map(binder).collect(),
+                    }
+                    .to_attribute(ctx)
+                })
+                .collect();
+            ctx.op_attrs_mut(op)
+                .insert(tribute_control::ROW_UNIONS_ATTR, Attribute::List(unions));
         }
         let args = tribute_control::row_args(ctx, op).unwrap_or_default();
         if !args.is_empty() {
@@ -615,7 +632,9 @@ impl Instance<'_> {
         let renumbered: Vec<u32> = (0..kept.len())
             .map(|index| u32::try_from(index).expect("binders fit in u32"))
             .collect();
-        rename_binders(ctx, &nested_ops(ctx, op), &kept, &renumbered);
+        let mut ops = vec![op];
+        ops.extend(nested_ops(ctx, op));
+        rename_binders(ctx, &ops, &kept, &renumbered);
         let mut index = 0;
         self.binders.retain(|_| {
             index += 1;
