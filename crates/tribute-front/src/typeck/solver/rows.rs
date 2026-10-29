@@ -914,9 +914,7 @@ impl<'db> TypeSolver<'db> {
     pub(crate) fn unsettled_ambiguity(&self) -> Option<LocatedSolveError<'db>> {
         self.pending_row_unions.iter().find_map(|(union, origin)| {
             let result = self.normalize_row(union.result);
-            let [source] = union.sources.as_slice() else {
-                return None;
-            };
+            let [source] = union.sources.as_array()?;
             let source = self.normalize_row(*source);
             (result.rest(self.db).is_none() && source.rest(self.db).is_none()).then(|| {
                 LocatedSolveError {

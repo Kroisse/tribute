@@ -13,7 +13,6 @@ use std::borrow::Cow;
 
 use crate::collections::{HashMap, HashSet};
 use std::fmt;
-use std::rc::Rc;
 
 use tribute_ir::dialect::adt;
 use trunk_ir::context::IrContext;
@@ -22,7 +21,7 @@ use trunk_ir::ops::DialectOp;
 use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{OpRef, RegionRef};
 use trunk_ir::rewrite::{
-    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    Module, OpRewritePattern, PatternApplicator, PatternRewriter, TypeConverter,
 };
 use trunk_ir::types::Attribute;
 
@@ -177,14 +176,11 @@ pub(crate) fn validate_for_wasm(
 /// that the module does not already carry, then lowers the constants to
 /// reference those segments.
 pub(crate) fn lower(ctx: &mut IrContext, module: Module, analysis: &ConstAnalysis) {
-    let segments = Rc::new(declare_data_segments(ctx, module, &analysis.contents));
+    let segments = declare_data_segments(ctx, module, &analysis.contents);
 
     let applicator = PatternApplicator::new(TypeConverter::new())
-        .add_pattern(StringConstPattern::new(
-            segments.clone(),
-            analysis.string_enum_ty,
-        ))
-        .add_pattern(BytesConstPattern::new(segments));
+        .add_pattern(StringConstPattern::new(&segments, analysis.string_enum_ty))
+        .add_pattern(BytesConstPattern::new(&segments));
     applicator.apply_partial(ctx, module);
 }
 
@@ -244,13 +240,13 @@ fn lookup_segment(segments: &DataSegments, content: &[u8]) -> Option<(u32, u32)>
 }
 
 /// Pattern for `adt.string_const` -> `String::Leaf(wasm.bytes_from_data)`.
-struct StringConstPattern {
-    segments: Rc<DataSegments>,
+struct StringConstPattern<'a> {
+    segments: &'a DataSegments,
     string_enum_ty: Option<trunk_ir::TypeRef>,
 }
 
-impl StringConstPattern {
-    fn new(segments: Rc<DataSegments>, string_enum_ty: Option<trunk_ir::TypeRef>) -> Self {
+impl<'a> StringConstPattern<'a> {
+    fn new(segments: &'a DataSegments, string_enum_ty: Option<trunk_ir::TypeRef>) -> Self {
         Self {
             segments,
             string_enum_ty,
@@ -258,25 +254,20 @@ impl StringConstPattern {
     }
 }
 
-impl RewritePattern for StringConstPattern {
+impl OpRewritePattern for StringConstPattern<'_> {
+    type Op = adt::StringConst;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        string_const: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(string_const) = adt::StringConst::from_op(ctx, op) else {
-            return false;
-        };
-
+    ) -> Option<()> {
+        let op = string_const.op_ref();
         let content = string_const.value(ctx).as_bytes();
-        let Some((data_idx, len)) = lookup_segment(&self.segments, content) else {
-            return false;
-        };
-        let Some(string_enum_ty) = self.string_enum_ty else {
-            tracing::warn!("const_to_wasm: canonical String enum type not found");
-            return false;
-        };
+        let (data_idx, len) = lookup_segment(self.segments, content)?;
+        let string_enum_ty =
+            rewriter.require(self.string_enum_ty, "canonical String enum type not found")?;
 
         let location = ctx.op(op).location;
         let bytes_ty = super::bytes::bytes_struct_type(ctx);
@@ -295,7 +286,7 @@ impl RewritePattern for StringConstPattern {
 
         rewriter.insert_op(bytes.op_ref());
         rewriter.replace_op(leaf.op_ref());
-        true
+        Some(())
     }
 
     fn name(&self) -> &'static str {
@@ -304,33 +295,30 @@ impl RewritePattern for StringConstPattern {
 }
 
 /// Pattern for `adt.bytes_const` -> `wasm.bytes_from_data`
-struct BytesConstPattern {
-    segments: Rc<DataSegments>,
+struct BytesConstPattern<'a> {
+    segments: &'a DataSegments,
 }
 
-impl BytesConstPattern {
-    fn new(segments: Rc<DataSegments>) -> Self {
+impl<'a> BytesConstPattern<'a> {
+    fn new(segments: &'a DataSegments) -> Self {
         Self { segments }
     }
 }
 
-impl RewritePattern for BytesConstPattern {
+impl OpRewritePattern for BytesConstPattern<'_> {
+    type Op = adt::BytesConst;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        bytes_const: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(bytes_const) = adt::BytesConst::from_op(ctx, op) else {
-            return false;
-        };
-
+    ) -> Option<()> {
+        let op = bytes_const.op_ref();
         let b = bytes_const.value(ctx);
         let content: Vec<u8> = b.to_vec();
 
-        let Some((data_idx, len)) = lookup_segment(&self.segments, &content) else {
-            return false;
-        };
+        let (data_idx, len) = lookup_segment(self.segments, &content)?;
 
         let location = ctx.op(op).location;
         let bytes_ty = super::bytes::bytes_struct_type(ctx);
@@ -344,7 +332,7 @@ impl RewritePattern for BytesConstPattern {
             .build(ctx, location);
 
         rewriter.replace_op(new_op.op_ref());
-        true
+        Some(())
     }
 
     fn name(&self) -> &'static str {
@@ -570,11 +558,16 @@ mod tests {
         );
 
         assert_eq!(
-            StringConstPattern::new(Rc::default(), None).name(),
+            trunk_ir::rewrite::RewritePattern::name(&StringConstPattern::new(
+                &DataSegments::default(),
+                None
+            )),
             "StringConstPattern"
         );
         assert_eq!(
-            BytesConstPattern::new(Rc::default()).name(),
+            trunk_ir::rewrite::RewritePattern::name(&BytesConstPattern::new(
+                &DataSegments::default()
+            )),
             "BytesConstPattern"
         );
     }

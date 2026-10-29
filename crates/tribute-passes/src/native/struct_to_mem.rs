@@ -39,7 +39,7 @@ use trunk_ir::dialect::{arith, core, mem};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
-    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    Module, OpRewritePattern, PatternApplicator, PatternRewriter, TypeConverter,
 };
 use trunk_ir::types::{Attribute, StringRef};
 use trunk_ir::walk::{WalkAction, walk_op};
@@ -147,20 +147,18 @@ struct VariantGetPattern {
     layouts: HashMap<(TypeRef, StringRef), TypeRef>,
 }
 
-impl RewritePattern for VariantGetPattern {
+impl OpRewritePattern for VariantGetPattern {
+    type Op = adt::VariantGet;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        variant_get: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(variant_get) = adt::VariantGet::from_op(ctx, op) else {
-            return false;
-        };
+    ) -> Option<()> {
+        let op = variant_get.op_ref();
         let variant = (variant_get.r#type(ctx), variant_get.tag_ref(ctx));
-        let Some(&structural) = self.layouts.get(&variant) else {
-            return false;
-        };
+        let &structural = self.layouts.get(&variant)?;
         let loc = ctx.op(op).location;
         let field_get = adt::StructGet::operands(variant_get.r#ref(ctx))
             .r#type(structural)
@@ -168,7 +166,7 @@ impl RewritePattern for VariantGetPattern {
             .results(variant_get.result_ty(ctx))
             .build(ctx, loc);
         rewriter.replace_op(field_get.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -179,16 +177,16 @@ struct VariantIsPattern {
     numbers: HashMap<(TypeRef, Option<StringRef>), u32>,
 }
 
-impl RewritePattern for VariantIsPattern {
+impl OpRewritePattern for VariantIsPattern {
+    type Op = adt::VariantIs;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        variant_is: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(variant_is) = adt::VariantIs::from_op(ctx, op) else {
-            return false;
-        };
+    ) -> Option<()> {
+        let op = variant_is.op_ref();
         let loc = ctx.op(op).location;
         let result_ty = variant_is.result_ty(ctx);
         let descriptor = (variant_is.r#type(ctx), Some(variant_is.tag_ref(ctx)));
@@ -198,11 +196,11 @@ impl RewritePattern for VariantIsPattern {
                 .results(result_ty)
                 .build(ctx, loc);
             rewriter.replace_op(never.op_ref());
-            return true;
+            return Some(());
         };
         // The comparison yields `core.i1`, the type a variant test has.
         if !core::I1::matches(ctx, result_ty) {
-            return false;
+            return None;
         }
         let actual = tribute_rtti::Descriptor::operands(variant_is.r#ref(ctx)).build(ctx, loc);
         let i32_ty = ctx.value_ty(actual.result(ctx));
@@ -216,7 +214,7 @@ impl RewritePattern for VariantIsPattern {
         rewriter.insert_op(actual.op_ref());
         rewriter.insert_op(expected.op_ref());
         rewriter.replace_op(matches.op_ref());
-        true
+        Some(())
     }
 }
 

@@ -13,7 +13,7 @@ use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
-use trunk_ir::rewrite::{Module, PatternRewriter, RewritePattern};
+use trunk_ir::rewrite::{Module, OpRewritePattern, PatternRewriter};
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 use trunk_ir::walk::{WalkAction, walk_op};
 
@@ -333,46 +333,30 @@ fn evidence_plan(ctx: &IrContext, op: OpRef) -> Option<Attribute> {
 
 /// The type of the frame the body of `handle` receives.
 pub(super) fn handle_body_frame(ctx: &IrContext, handle: ability::Handle) -> Option<TypeRef> {
-    let [block] = ctx.region(handle.body(ctx)).blocks[..] else {
-        return None;
-    };
-    let [_, frame] = ctx.block_args(block)[..] else {
-        return None;
-    };
+    let &[block] = ctx.region(handle.body(ctx)).blocks.as_array()?;
+    let &[_, frame] = ctx.block_args(block).as_array()?;
     Some(ctx.value_ty(frame))
 }
 
-/// Expands `ability.suffix_frame` and `ability.exit`.
-pub(super) struct ExpandSuffixFrames {
+/// The frame layouts and dispatch adapters that `ability.suffix_frame` and
+/// `ability.exit` expand with.
+pub(super) struct SuffixExpansion {
     pub(super) frames: FrameLayouts,
     pub(super) adapters: DispatchAdapters,
 }
 
-impl RewritePattern for ExpandSuffixFrames {
+/// Replaces `ability.suffix_frame` with the done adapter, the dispatcher
+/// its factory makes over the outer frame's dispatcher, and the frame
+/// that holds both.
+pub(super) struct ExpandSuffixFrames<'a>(pub(super) &'a SuffixExpansion);
+
+impl OpRewritePattern for ExpandSuffixFrames<'_> {
+    type Op = ability::SuffixFrame;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
-        rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        if let Ok(suffix) = ability::SuffixFrame::from_op(ctx, op) {
-            self.expand_suffix_frame(ctx, suffix, rewriter).is_some()
-        } else if let Ok(exit) = ability::Exit::from_op(ctx, op) {
-            self.expand_exit(ctx, exit, rewriter).is_some()
-        } else {
-            false
-        }
-    }
-}
-
-impl ExpandSuffixFrames {
-    /// Replace `ability.suffix_frame` with the done adapter, the dispatcher
-    /// its factory makes over the outer frame's dispatcher, and the frame
-    /// that holds both.
-    fn expand_suffix_frame(
-        &self,
-        ctx: &mut IrContext,
-        suffix: ability::SuffixFrame,
+        suffix: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> Option<()> {
         let location = ctx.op(suffix.op_ref()).location;
@@ -380,15 +364,15 @@ impl ExpandSuffixFrames {
         let outer = suffix.outer(ctx);
         let continuation = suffix.continuation(ctx);
         let plan = evidence_plan(ctx, suffix.op_ref());
-        let value = self.frames.of(ctx, suffix.result_ty(ctx))?;
-        let boundary = self.frames.of(ctx, ctx.value_ty(outer))?;
+        let value = self.0.frames.of(ctx, suffix.result_ty(ctx))?;
+        let boundary = self.0.frames.of(ctx, ctx.value_ty(outer))?;
         let block = make_block(ctx, location, &[]);
         let (done_op, done) =
             build_done_adapter(ctx, value.answer, continuation, evidence, outer, location).ok()?;
         ctx.push_op(block, done_op);
         let outer_dispatch = frame_dispatch(ctx, block, location, &boundary, outer);
         let frames = LayerFrames { value, boundary };
-        let symbol = self.adapters.factory(&frames, plan)?;
+        let symbol = self.0.adapters.factory(&frames, plan)?;
         let evidence_type = ctx.value_ty(evidence);
         let completion_type =
             cps_completion_type(ctx, evidence_type, value.answer, boundary.reference);
@@ -410,18 +394,24 @@ impl ExpandSuffixFrames {
         rewriter.erase_op(vec![frame]);
         Some(())
     }
+}
 
-    /// Replace `ability.exit` with the transfer to the frame's `Done<R>`.
-    fn expand_exit(
+/// Replaces `ability.exit` with the transfer to the frame's `Done<R>`.
+pub(super) struct ExpandExits<'a>(pub(super) &'a SuffixExpansion);
+
+impl OpRewritePattern for ExpandExits<'_> {
+    type Op = ability::Exit;
+
+    fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        exit: ability::Exit,
+        exit: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> Option<()> {
         let location = ctx.op(exit.op_ref()).location;
         let frame = exit.frame(ctx);
         let value = exit.value(ctx);
-        let types = self.frames.of(ctx, ctx.value_ty(frame))?;
+        let types = self.0.frames.of(ctx, ctx.value_ty(frame))?;
         let block = make_block(ctx, location, &[]);
         let done = frame_done(ctx, block, location, &types, frame);
         let transfer = emit_cps_tail_call_indirect(ctx, block, location, done, [value]).ok()?;

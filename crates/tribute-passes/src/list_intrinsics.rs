@@ -1,7 +1,6 @@
 //! Lower the public prelude List construction intrinsic to shared `list.*` IR.
 
 use rustc_hash::FxHashSet as HashSet;
-use std::rc::Rc;
 
 use tribute_ir::dialect::list;
 use tribute_ir::dialect::tribute_control::COMPILER_INTRINSIC_ATTR;
@@ -10,9 +9,8 @@ use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::{Pass, PassRunResult};
-use trunk_ir::refs::OpRef;
 use trunk_ir::rewrite::{
-    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    Module, OpRewritePattern, PatternApplicator, PatternRewriter, TypeConverter,
 };
 use trunk_ir::{Symbol, SymbolPath};
 
@@ -85,38 +83,35 @@ impl Pass for LowerListIntrinsics {
                     .insert(SymbolPath::new([name]));
             }
         }
-        let intrinsic_declarations = Rc::new(intrinsic_declarations);
 
         PatternApplicator::new(TypeConverter::new())
             .add_pattern(PrependCallPattern {
-                intrinsic_declarations: Rc::clone(&intrinsic_declarations),
+                intrinsic_declarations: &intrinsic_declarations,
             })
             .add_pattern(PrependDeclarationPattern {
-                intrinsic_declarations,
+                intrinsic_declarations: &intrinsic_declarations,
             })
             .apply_partial(ctx, module);
         Ok(())
     }
 }
 
-struct PrependCallPattern {
-    intrinsic_declarations: Rc<IntrinsicDeclarations>,
+struct PrependCallPattern<'a> {
+    intrinsic_declarations: &'a IntrinsicDeclarations,
 }
 
-impl RewritePattern for PrependCallPattern {
+impl OpRewritePattern for PrependCallPattern<'_> {
+    type Op = func::Call;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        call: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(call) = func::Call::from_op(ctx, op) else {
-            return false;
-        };
+    ) -> Option<()> {
+        let op = call.op_ref();
         let callee = call.callee(ctx);
-        let Some(base_declaration) = intrinsic_declaration(callee) else {
-            return false;
-        };
+        let base_declaration = intrinsic_declaration(callee)?;
         // The frontend keeps generic extern declarations unmangled while
         // specializing their calls. An exact declaration still takes priority
         // so an ordinary same-spelled function cannot inherit the base ABI.
@@ -128,35 +123,35 @@ impl RewritePattern for PrependCallPattern {
                 .contains(&base_declaration)
         };
         if !eligible {
-            return false;
+            return None;
         }
-        let ([element, tail], [_]) = (ctx.op_operands(op), ctx.op_result_types(op)) else {
-            return false;
-        };
+        let ([element, tail], [_]) = (
+            ctx.op_operands(op).as_array()?,
+            ctx.op_result_types(op).as_array()?,
+        );
         let (element, tail) = (*element, *tail);
         let element_ty = ctx.value_ty(element);
         let prepend = list::Prepend::operands(element, tail)
             .element_type(element_ty)
             .build(ctx, ctx.op(op).location);
         rewriter.replace_op(prepend.op_ref());
-        true
+        Some(())
     }
 }
 
-struct PrependDeclarationPattern {
-    intrinsic_declarations: Rc<IntrinsicDeclarations>,
+struct PrependDeclarationPattern<'a> {
+    intrinsic_declarations: &'a IntrinsicDeclarations,
 }
 
-impl RewritePattern for PrependDeclarationPattern {
+impl OpRewritePattern for PrependDeclarationPattern<'_> {
+    type Op = func::Func;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        function: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(function) = func::Func::from_op(ctx, op) else {
-            return false;
-        };
+    ) -> Option<()> {
         if !self
             .intrinsic_declarations
             .eligible
@@ -164,10 +159,10 @@ impl RewritePattern for PrependDeclarationPattern {
                 Symbol::new(function.sym_name(ctx)).clone()
             ]))
         {
-            return false;
+            return None;
         }
         rewriter.erase_op(vec![]);
-        true
+        Some(())
     }
 }
 

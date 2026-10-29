@@ -136,9 +136,7 @@ fn closure_signature(ctx: &IrContext, ty: TypeRef) -> Option<func::FuncSig> {
     if !data.name.is(ctx, "closure.closure") {
         return None;
     }
-    let [function] = data.params.as_slice() else {
-        return None;
-    };
+    let [function] = data.params.as_array()?;
     func::FuncSig::from_type_ref(ctx, *function)
 }
 

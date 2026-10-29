@@ -6,15 +6,12 @@
 //! struct/array operations on the bytes layout. The bytes element read intrinsic is lowered inside the boundary by
 //! `wasm/bytes.rs`.
 
-use std::rc::Rc;
-
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::wasm as wasm_dialect;
-use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, ValueRef};
 use trunk_ir::rewrite::{
-    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    Module, OpRewritePattern, PatternApplicator, PatternRewriter, TypeConverter,
 };
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::symbol_table::SymbolTable;
@@ -85,12 +82,12 @@ pub const BYTES_SLICE_OR_PANIC: &str = "__tribute_bytes_slice_or_panic";
 
 /// Bind calls to the `extern "C"` bytes helpers to WasmGC operations.
 pub(crate) fn lower(ctx: &mut IrContext, module: Module) {
-    let symbols = Rc::new(SymbolTable::collect(ctx, module));
+    let symbols = SymbolTable::collect(ctx, module);
     let applicator = PatternApplicator::new(TypeConverter::new())
-        .add_pattern(BytesLenPattern(Rc::clone(&symbols)))
-        .add_pattern(BytesRangeEqualPattern(Rc::clone(&symbols)))
-        .add_pattern(BytesConcatPattern(Rc::clone(&symbols)))
-        .add_pattern(BytesSliceOrPanicPattern(symbols));
+        .add_pattern(BytesLenPattern(&symbols))
+        .add_pattern(BytesRangeEqualPattern(&symbols))
+        .add_pattern(BytesConcatPattern(&symbols))
+        .add_pattern(BytesSliceOrPanicPattern(&symbols));
 
     applicator.apply_partial(ctx, module);
 }
@@ -99,35 +96,39 @@ pub(crate) fn lower(ctx: &mut IrContext, module: Module) {
 // Bytes helper patterns
 // =============================================================================
 
-/// Whether `op` calls the C helper `helper`: its callee resolves to a
+/// Whether `call` calls the C helper `helper`: its callee resolves to a
 /// bodyless `abi = "C"` declaration with that link name.
-fn calls_c_helper(ctx: &IrContext, symbols: &SymbolTable, op: OpRef, helper: &'static str) -> bool {
-    wasm_dialect::Call::from_op(ctx, op).is_ok_and(|call| {
-        super::runtime_bindings::c_helper(ctx, symbols, op, call.callee(ctx))
-            .is_some_and(|name| name == helper)
-    })
+fn calls_c_helper(
+    ctx: &IrContext,
+    symbols: &SymbolTable,
+    call: wasm_dialect::Call,
+    helper: &'static str,
+) -> bool {
+    super::runtime_bindings::c_helper(ctx, symbols, call.op_ref(), call.callee(ctx))
+        .is_some_and(|name| name == helper)
 }
 
 /// Pattern for `__tribute_bytes_len(bytes)` -> `struct.get $bytes 2`
 ///
 /// Returns i32 directly since Nat is mapped to i32.
-struct BytesLenPattern(Rc<SymbolTable>);
+struct BytesLenPattern<'a>(&'a SymbolTable);
 
-impl RewritePattern for BytesLenPattern {
+impl OpRewritePattern for BytesLenPattern<'_> {
+    type Op = wasm_dialect::Call;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        call: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        if !calls_c_helper(ctx, &self.0, op, BYTES_LEN) {
-            return false;
+    ) -> Option<()> {
+        let op = call.op_ref();
+        if !calls_c_helper(ctx, self.0, call, BYTES_LEN) {
+            return None;
         }
 
         let operands = ctx.op_operands(op).to_vec();
-        let Some(bytes_ref) = operands.first().copied() else {
-            return false;
-        };
+        let bytes_ref = operands.first().copied()?;
 
         let location = ctx.op(op).location;
         let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
@@ -140,7 +141,7 @@ impl RewritePattern for BytesLenPattern {
             .build(ctx, location);
 
         rewriter.replace_op(get_len.op_ref());
-        true
+        Some(())
     }
 
     fn name(&self) -> &'static str {
@@ -153,22 +154,25 @@ impl RewritePattern for BytesLenPattern {
 /// The generated Wasm loop compares bytes directly in the two backing arrays
 /// and exits at the first mismatch. String equality invokes this once per pair
 /// of contiguous rope-leaf spans rather than once per logical byte.
-struct BytesRangeEqualPattern(Rc<SymbolTable>);
+struct BytesRangeEqualPattern<'a>(&'a SymbolTable);
 
-impl RewritePattern for BytesRangeEqualPattern {
+impl OpRewritePattern for BytesRangeEqualPattern<'_> {
+    type Op = wasm_dialect::Call;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        call: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        if !calls_c_helper(ctx, &self.0, op, BYTES_RANGE_EQUAL) {
-            return false;
+    ) -> Option<()> {
+        let op = call.op_ref();
+        if !calls_c_helper(ctx, self.0, call, BYTES_RANGE_EQUAL) {
+            return None;
         }
 
         let operands = ctx.op_operands(op).to_vec();
         if operands.len() != 5 {
-            return false;
+            return None;
         }
         let location = ctx.op(op).location;
         let result_ty = ctx.op_result_types(op)[0];
@@ -281,7 +285,7 @@ impl RewritePattern for BytesRangeEqualPattern {
         rewriter.insert_op(right_start.op_ref());
         rewriter.insert_op(zero.op_ref());
         rewriter.replace_op(compare.op_ref());
-        true
+        Some(())
     }
 
     fn name(&self) -> &'static str {
@@ -335,22 +339,25 @@ fn value_break_region(
 }
 
 /// Pattern for `__tribute_bytes_concat(left, right)` -> allocate a new array and copy both
-struct BytesConcatPattern(Rc<SymbolTable>);
+struct BytesConcatPattern<'a>(&'a SymbolTable);
 
-impl RewritePattern for BytesConcatPattern {
+impl OpRewritePattern for BytesConcatPattern<'_> {
+    type Op = wasm_dialect::Call;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        call: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        if !calls_c_helper(ctx, &self.0, op, BYTES_CONCAT) {
-            return false;
+    ) -> Option<()> {
+        let op = call.op_ref();
+        if !calls_c_helper(ctx, self.0, call, BYTES_CONCAT) {
+            return None;
         }
 
         let operands = ctx.op_operands(op).to_vec();
         if operands.len() < 2 {
-            return false;
+            return None;
         }
         let left = operands[0];
         let right = operands[1];
@@ -429,7 +436,7 @@ impl RewritePattern for BytesConcatPattern {
             rewriter.insert_op(o);
         }
         rewriter.replace_op(last);
-        true
+        Some(())
     }
 
     fn name(&self) -> &'static str {
@@ -440,23 +447,24 @@ impl RewritePattern for BytesConcatPattern {
 /// Pattern for `__tribute_bytes_slice_or_panic(bytes, start, end)`: trap
 /// unless `start <= end <= bytes.len`, then share the backing array in a new
 /// Bytes struct.
-struct BytesSliceOrPanicPattern(Rc<SymbolTable>);
+struct BytesSliceOrPanicPattern<'a>(&'a SymbolTable);
 
-impl RewritePattern for BytesSliceOrPanicPattern {
+impl OpRewritePattern for BytesSliceOrPanicPattern<'_> {
+    type Op = wasm_dialect::Call;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        call: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        if !calls_c_helper(ctx, &self.0, op, BYTES_SLICE_OR_PANIC) {
-            return false;
+    ) -> Option<()> {
+        let op = call.op_ref();
+        if !calls_c_helper(ctx, self.0, call, BYTES_SLICE_OR_PANIC) {
+            return None;
         }
 
         let operands = ctx.op_operands(op).to_vec();
-        let [bytes, start, end] = operands[..] else {
-            return false;
-        };
+        let &[bytes, start, end] = operands.as_array()?;
         let location = ctx.op(op).location;
         let bytes_ty = super::bytes::bytes_struct_type(ctx);
         let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
@@ -502,7 +510,7 @@ impl RewritePattern for BytesSliceOrPanicPattern {
         rewriter.insert_op(offset.op_ref());
         rewriter.insert_op(len.op_ref());
         rewriter.replace_op(slice.op_ref());
-        true
+        Some(())
     }
 
     fn name(&self) -> &'static str {

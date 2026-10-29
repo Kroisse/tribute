@@ -25,7 +25,6 @@
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
-use std::sync::Arc;
 
 use tribute_ir::calling_convention::{CallingConvention, ConventionBearing, DynConventionBearing};
 use tribute_ir::dialect::adt;
@@ -41,7 +40,7 @@ use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
-    ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    ConversionTarget, Module, OpRewritePattern, PatternApplicator, PatternRewriter, TypeConverter,
 };
 use trunk_ir::symbol_table::SymbolTable;
 use trunk_ir::types::{Attribute, AttributeMap, TypeDataBuilder};
@@ -119,21 +118,20 @@ pub(crate) fn is_closure_layout(ctx: &IrContext, ty: TypeRef) -> bool {
 /// left for the boundary exit to reject. Until storage finalization,
 /// remaining uses keep the semantic closure type through an unrealized cast
 /// of the pack.
-struct LowerClosureNewArena {
-    functions: Arc<SymbolTable>,
+struct LowerClosureNewArena<'a> {
+    functions: &'a SymbolTable,
 }
 
-impl RewritePattern for LowerClosureNewArena {
+impl OpRewritePattern for LowerClosureNewArena<'_> {
+    type Op = closure::New;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        closure_new: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(closure_new) = closure::New::from_op(ctx, op) else {
-            return false;
-        };
-
+    ) -> Option<()> {
+        let op = closure_new.op_ref();
         let loc = ctx.op(op).location;
         let entries: Vec<_> = closure_new.entries(ctx).cloned().collect();
         let resolved = entries.iter().all(|entry| {
@@ -142,7 +140,7 @@ impl RewritePattern for LowerClosureNewArena {
                 .is_some_and(|target| func::Func::matches(ctx, target))
         });
         if !resolved {
-            return false;
+            return None;
         }
         let captures = closure_new.captures(ctx).to_vec();
         let result_ty = ctx.op_result_types(op)[0];
@@ -176,7 +174,7 @@ impl RewritePattern for LowerClosureNewArena {
 
         rewriter.insert_op(struct_new_op.op_ref());
         rewriter.replace_op(cast.op_ref());
-        true
+        Some(())
     }
 
     fn name(&self) -> &'static str {
@@ -192,16 +190,16 @@ impl RewritePattern for LowerClosureNewArena {
 /// materialize.
 struct LowerClosureUnpackArena;
 
-impl RewritePattern for LowerClosureUnpackArena {
+impl OpRewritePattern for LowerClosureUnpackArena {
+    type Op = closure::Unpack;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        unpack: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(unpack) = closure::Unpack::from_op(ctx, op) else {
-            return false;
-        };
+    ) -> Option<()> {
+        let op = unpack.op_ref();
         let loc = ctx.op(op).location;
         let capture_types = ctx.op_result_types(op).to_vec();
         let layout = closure_captures_type_ref(ctx, &capture_types);
@@ -225,7 +223,7 @@ impl RewritePattern for LowerClosureUnpackArena {
             captures.push(get.result(ctx));
         }
         rewriter.erase_op(captures);
-        true
+        Some(())
     }
 
     fn name(&self) -> &'static str {
@@ -236,27 +234,24 @@ impl RewritePattern for LowerClosureUnpackArena {
 /// Lower `func.call_indirect` on closure values.
 struct LowerClosureCallArena;
 
-impl RewritePattern for LowerClosureCallArena {
+impl OpRewritePattern for LowerClosureCallArena {
+    type Op = func::CallIndirect;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        call_indirect: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        if func::CallIndirect::from_op(ctx, op).is_err() {
-            return false;
-        }
-
+    ) -> Option<()> {
+        let op = call_indirect.op_ref();
         let operands = ctx.op_operands(op);
         if operands.is_empty() {
-            return false;
+            return None;
         }
         let callee = operands[0];
         // Only a closure carries an environment; a `func.func_sig` callee
         // is a plain function pointer.
-        if physical_closure_type_for_callee(ctx, callee).is_none() {
-            return false;
-        }
+        physical_closure_type_for_callee(ctx, callee)?;
 
         let loc = ctx.op(op).location;
         let args: Vec<ValueRef> = operands[1..].to_vec();
@@ -265,17 +260,12 @@ impl RewritePattern for LowerClosureCallArena {
         let caller_results = ctx.op_result_types(op).to_vec();
 
         let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
-        let Some(convention) = DynConventionBearing::of(ctx, op) else {
-            return false;
-        };
+        let convention = DynConventionBearing::of(ctx, op)?;
         if caller_results.len() != usize::from(convention != CallingConvention::Cps) {
-            return false;
+            return None;
         }
-        let Some(contract) =
-            exact_physical_call_contract(ctx, op, callee, convention, &args, &caller_results)
-        else {
-            return false;
-        };
+        let contract =
+            exact_physical_call_contract(ctx, op, callee, convention, &args, &caller_results)?;
 
         // Generate: %table_idx = closure.entry %closure {index = <slot>}
         let table_idx_op = closure::Entry::operands(callee)
@@ -301,7 +291,7 @@ impl RewritePattern for LowerClosureCallArena {
         rewriter.insert_op(table_idx_op.op_ref());
 
         rewriter.replace_op(new_call.op_ref());
-        true
+        Some(())
     }
 
     fn name(&self) -> &'static str {
@@ -314,37 +304,25 @@ impl RewritePattern for LowerClosureCallArena {
 /// ordinary direct calls are handled separately.
 struct LowerClosureTailCallArena;
 
-impl RewritePattern for LowerClosureTailCallArena {
+impl OpRewritePattern for LowerClosureTailCallArena {
+    type Op = func::TailCallIndirect;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        tail_call_indirect: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        if func::TailCallIndirect::from_op(ctx, op).is_err() {
-            return false;
-        }
+    ) -> Option<()> {
+        let op = tail_call_indirect.op_ref();
         let operands = ctx.op_operands(op).to_vec();
-        let Some((&callee, args)) = operands.split_first() else {
-            return false;
-        };
-        let Some(convention) = DynConventionBearing::of(ctx, op) else {
-            return false;
-        };
-        if physical_closure_type_for_callee(ctx, callee).is_none() {
-            return false;
-        }
+        let (&callee, args) = operands.split_first()?;
+        let convention = DynConventionBearing::of(ctx, op)?;
+        physical_closure_type_for_callee(ctx, callee)?;
 
         let location = ctx.op(op).location;
         let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
-        let Some(results) = exact_tail_results(ctx, op, convention) else {
-            return false;
-        };
-        let Some(contract) =
-            exact_physical_call_contract(ctx, op, callee, convention, args, &results)
-        else {
-            return false;
-        };
+        let results = exact_tail_results(ctx, op, convention)?;
+        let contract = exact_physical_call_contract(ctx, op, callee, convention, args, &results)?;
         let func_ref = closure::Entry::operands(callee)
             .index(convention.slot())
             .results(i32_ty)
@@ -365,7 +343,7 @@ impl RewritePattern for LowerClosureTailCallArena {
 
         rewriter.insert_op(func_ref.op_ref());
         rewriter.replace_op(tail.op_ref());
-        true
+        Some(())
     }
 
     fn name(&self) -> &'static str {
@@ -481,17 +459,16 @@ fn exact_physical_call_contract(
 /// (`adt.struct_get` field 0) and `tribute_rt.convention_entry`.
 struct LowerClosureEntryArena;
 
-impl RewritePattern for LowerClosureEntryArena {
+impl OpRewritePattern for LowerClosureEntryArena {
+    type Op = closure::Entry;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        entry: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(entry) = closure::Entry::from_op(ctx, op) else {
-            return false;
-        };
-
+    ) -> Option<()> {
+        let op = entry.op_ref();
         let loc = ctx.op(op).location;
         let index = entry.index(ctx);
         let closure_value = entry.closure(ctx);
@@ -512,7 +489,7 @@ impl RewritePattern for LowerClosureEntryArena {
             .build(ctx, loc);
         rewriter.insert_op(get_op.op_ref());
         rewriter.replace_op(read.op_ref());
-        true
+        Some(())
     }
 
     fn name(&self) -> &'static str {
@@ -594,7 +571,7 @@ pub fn lower_prepared_closures(ctx: &mut IrContext, module: Module) -> PassRunRe
             break;
         }
         // Rebuilt per batch so functions introduced by lowering resolve too.
-        let functions = Arc::new(SymbolTable::collect(ctx, module));
+        let functions = SymbolTable::collect(ctx, module);
 
         // Validate the batch as a whole before rewriting any body.
         for &function in &discovered {
@@ -602,7 +579,7 @@ pub fn lower_prepared_closures(ctx: &mut IrContext, module: Module) -> PassRunRe
             validate_closure_constructions(ctx, function, &functions)?;
         }
         for func_op in discovered.into_iter().rev() {
-            rewrite_validated_closures_in_func(ctx, func_op, functions.clone());
+            rewrite_validated_closures_in_func(ctx, func_op, &functions);
             // Closure lowering is the last reader of a function's convention.
             func_op.remove_calling_convention(ctx);
         }
@@ -717,7 +694,7 @@ fn validate_entry_function(
 fn rewrite_validated_closures_in_func(
     ctx: &mut IrContext,
     func_op: func::Func,
-    functions: Arc<SymbolTable>,
+    functions: &SymbolTable,
 ) {
     if !ctx.op_has_regions(func_op.op_ref()) {
         return;
@@ -1310,7 +1287,7 @@ mod tests {
             assert_eq!(print_module(&ctx, module.op()), before);
             assert_eq!(collect_ops(&ctx, module.op()), ops);
             // The rewrite pattern must also decline unsupported arities safely.
-            rewrite_validated_closures_in_func(&mut ctx, invalid, Default::default());
+            rewrite_validated_closures_in_func(&mut ctx, invalid, &SymbolTable::default());
             assert_eq!(print_module(&ctx, module.op()), before);
             assert_eq!(collect_ops(&ctx, module.op()), ops);
         }

@@ -6,8 +6,8 @@ use trunk_ir::dialect::{arith, core, func, mem, scf};
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
-    ConversionError, ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern,
-    TypeConverter,
+    ConversionError, ConversionTarget, Module, OpRewritePattern, PatternApplicator,
+    PatternRewriter, TypeConverter,
 };
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::{Attribute, Location};
@@ -90,16 +90,16 @@ fn has_function(ctx: &IrContext, block: trunk_ir::BlockRef, name: &str) -> bool 
 
 struct NativeWritePattern;
 
-impl RewritePattern for NativeWritePattern {
+impl OpRewritePattern for NativeWritePattern {
+    type Op = tribute_io::Write;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        write: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(write) = tribute_io::Write::from_op(ctx, op) else {
-            return false;
-        };
+    ) -> Option<()> {
+        let op = write.op_ref();
         let loc = ctx.op(op).location;
         let result_ty = ctx.op_result_types(op)[0];
         let call = func::Call::operands([write.bytes(ctx), write.newline(ctx)])
@@ -107,7 +107,7 @@ impl RewritePattern for NativeWritePattern {
             .results([result_ty])
             .build(ctx, loc);
         rewriter.replace_op(call.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -115,19 +115,17 @@ struct NativeReadLinePattern {
     read_line_result_ty: Option<TypeRef>,
 }
 
-impl RewritePattern for NativeReadLinePattern {
+impl OpRewritePattern for NativeReadLinePattern {
+    type Op = tribute_io::ReadLine;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        read_line: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        if tribute_io::ReadLine::from_op(ctx, op).is_err() {
-            return false;
-        }
-        let Some(enum_ty) = self.read_line_result_ty else {
-            return false;
-        };
+    ) -> Option<()> {
+        let op = read_line.op_ref();
+        let enum_ty = self.read_line_result_ty?;
 
         let loc = ctx.op(op).location;
         let result_ty = ctx.op_result_types(op)[0];
@@ -231,7 +229,7 @@ impl RewritePattern for NativeReadLinePattern {
             rewriter.insert_op(inserted);
         }
         rewriter.replace_op(line_if.op_ref());
-        true
+        Some(())
     }
 }
 

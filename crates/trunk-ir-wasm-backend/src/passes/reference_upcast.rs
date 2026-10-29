@@ -13,9 +13,8 @@
 
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, wasm};
-use trunk_ir::ops::DialectOp;
-use trunk_ir::refs::{OpRef, TypeRef};
-use trunk_ir::rewrite::{PatternRewriter, RewritePattern};
+use trunk_ir::refs::TypeRef;
+use trunk_ir::rewrite::{OpRewritePattern, PatternRewriter};
 
 use crate::is_wasm_physical_argument_assignable;
 
@@ -27,38 +26,39 @@ use crate::is_wasm_physical_argument_assignable;
 /// cast legalization pattern so that result types are converted first.
 pub struct ReferenceUpcastPattern;
 
-impl RewritePattern for ReferenceUpcastPattern {
+impl OpRewritePattern for ReferenceUpcastPattern {
+    type Op = core::UnrealizedConversionCast;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        unrealized_conversion_cast: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        if !core::UnrealizedConversionCast::matches(ctx, op) {
-            return false;
-        }
-        let (&[input], &[result_ty]) = (ctx.op_operands(op), ctx.op_result_types(op)) else {
-            return false;
-        };
+    ) -> Option<()> {
+        let op = unrealized_conversion_cast.op_ref();
+        let (&[input], &[result_ty]) = (
+            ctx.op_operands(op).as_array()?,
+            ctx.op_result_types(op).as_array()?,
+        );
         if rewriter
             .type_converter()
             .convert_type_or_identity(ctx, result_ty)
             != result_ty
             || !is_abstract_gc_reference(ctx, result_ty)
         {
-            return false;
+            return None;
         }
         let input_ty = ctx.value_ty(input);
         if input_ty == result_ty || !is_wasm_physical_argument_assignable(ctx, input_ty, result_ty)
         {
-            return false;
+            return None;
         }
         let location = ctx.op(op).location;
         let upcast = wasm::RefUpcast::operands(input)
             .results(result_ty)
             .build(ctx, location);
         rewriter.replace_op(upcast.op_ref());
-        true
+        Some(())
     }
 }
 

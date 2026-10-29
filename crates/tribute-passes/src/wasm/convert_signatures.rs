@@ -10,6 +10,7 @@
 //!   converted type of its argument
 
 use tracing::debug;
+use trunk_ir::OpName;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::func;
 use trunk_ir::op_interface::DynIndirectCallLike;
@@ -43,7 +44,7 @@ pub(crate) fn lower(ctx: &mut IrContext, module: Module) {
         .with_auto_type_conversion(true)
         .add_pattern(FuncSignatureConversionPattern)
         .add_pattern(WasmFuncSignatureConversionPattern)
-        .add_pattern(IndirectCallSignaturePattern);
+        .add_pattern(IndirectCallSignaturePattern::new());
     applicator.apply_partial(ctx, module);
 }
 
@@ -59,32 +60,39 @@ pub(crate) fn lower(ctx: &mut IrContext, module: Module) {
 /// patterns. An input slot therefore follows its argument only once the
 /// argument holds a conversion of the declared type, which keeps the signature
 /// equal to the argument types whatever order the patterns apply in.
-struct IndirectCallSignaturePattern;
+struct IndirectCallSignaturePattern {
+    /// The operations that implement `IndirectCallLike`.
+    roots: Vec<OpName>,
+}
+
+impl IndirectCallSignaturePattern {
+    fn new() -> Self {
+        Self {
+            roots: DynIndirectCallLike::implementors().collect(),
+        }
+    }
+}
 
 impl RewritePattern for IndirectCallSignaturePattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&self.roots)
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Some(call) = DynIndirectCallLike::get(ctx, op) else {
-            return false;
-        };
-        let Some(signature_ty) = call.exact_signature(ctx) else {
-            return false;
-        };
-        let Some(signature) = func::FuncSig::from_type_ref(ctx, signature_ty) else {
-            return false;
-        };
+    ) -> Option<()> {
+        let call = DynIndirectCallLike::get(ctx, op)?;
+        let signature_ty = call.exact_signature(ctx)?;
+        let signature = func::FuncSig::from_type_ref(ctx, signature_ty)?;
         let declared = signature.inputs(ctx).to_vec();
         let results = signature.results(ctx).to_vec();
-        let Some(arguments) = call.indirect_arguments(ctx) else {
-            return false;
-        };
+        let arguments = call.indirect_arguments(ctx)?;
         let arguments: Vec<_> = arguments.iter().map(|&arg| ctx.value_ty(arg)).collect();
         if arguments.len() != declared.len() {
-            return false;
+            return None;
         }
         let mut inputs = Vec::with_capacity(declared.len());
         for (declared, actual) in declared.into_iter().zip(arguments) {
@@ -97,7 +105,7 @@ impl RewritePattern for IndirectCallSignaturePattern {
         let new_signature = func::func_sig_with_attrs(ctx, inputs, results, attrs).as_type_ref();
 
         if new_signature == signature_ty {
-            return false;
+            return None;
         }
         let result_types = ctx.op_result_types(op).to_vec();
 
@@ -120,7 +128,7 @@ impl RewritePattern for IndirectCallSignaturePattern {
             "a rebuilt indirect call keeps its signature slot"
         );
         rewriter.replace_op(new_op);
-        true
+        Some(())
     }
 
     fn name(&self) -> &'static str {

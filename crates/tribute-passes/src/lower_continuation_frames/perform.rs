@@ -1,9 +1,10 @@
 //! Builders of the resumption an expanded `ability.perform` or
 //! `ability.abort` passes to the dispatcher.
 
-use tribute_ir::calling_convention::{CallingConvention, ConventionBearing};
+use tribute_ir::calling_convention::CallingConvention;
 use tribute_ir::calling_convention::{cps_closure_function_type, cps_resume_type};
 use tribute_ir::dialect::{ability, adt, closure, effect, tribute_rt};
+use trunk_ir::OpName;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{arith, core, func, scf};
 use trunk_ir::ops::{DialectOp, DialectType};
@@ -158,11 +159,11 @@ fn push_reject_resume(
         .expect("Resume<R> is a closure")
         .func_type(ctx);
     let lambda = closure::Lambda::operands(std::iter::empty::<ValueRef>())
-        .signature(signature)
+        .signatures([signature])
+        .conventions([CallingConvention::Cps])
         .results(resume_type)
-        .regions(region)
+        .regions([region])
         .build(ctx, location);
-    lambda.set_calling_convention(ctx, CallingConvention::Cps);
     ctx.push_op(block, lambda.op_ref());
     lambda.result(ctx)
 }
@@ -173,23 +174,25 @@ pub(super) struct ExpandDispatches {
 }
 
 impl RewritePattern for ExpandDispatches {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[ability::Perform::NAME, ability::Abort::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         if let Ok(perform) = ability::Perform::from_op(ctx, op) {
             let resumption = Some(perform.resumption(ctx));
             let values = perform.values(ctx).to_vec();
             self.expand_dispatch(ctx, op, perform.frame(ctx), resumption, &values, rewriter)
-                .is_some()
         } else if let Ok(abort) = ability::Abort::from_op(ctx, op) {
             let values = abort.values(ctx).to_vec();
             self.expand_dispatch(ctx, op, abort.frame(ctx), None, &values, rewriter)
-                .is_some()
         } else {
-            false
+            None
         }
     }
 }

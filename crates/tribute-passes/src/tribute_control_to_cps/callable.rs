@@ -15,12 +15,6 @@ impl Converter<'_> {
         let callable = tribute_control::FuncSig::from_type_ref(self.ctx, logical_ty).unwrap();
         let conventions = tribute_cps::body_conventions(self.ctx, source)
             .expect("pre-CPS validation checked lambda conventions");
-        let [convention] = conventions[..] else {
-            return Err(self.malformed_source(
-                source,
-                "legalization takes a tribute_cps.lambda with one body",
-            ));
-        };
         let source_result = callable.result(self.ctx);
         let source_params = callable.inputs(self.ctx).to_vec();
         let result = self.convert_type(source_result);
@@ -31,49 +25,50 @@ impl Converter<'_> {
             .collect();
         let evidence = self.evidence_type();
         let frame = self.frame_type(result);
-        let abi = CallableAbi::new(convention, source_param_types, result);
-        let params = abi.lowered_params(evidence, frame);
-        let body_source = self.ctx.op_region(source, 0).ok_or_else(|| {
-            self.malformed_source(source, "tribute_control.lambda requires a body region")
-        })?;
-        let entry_source = self.ctx.region(body_source).blocks[0];
-        let block = make_block(self.ctx, location, &params);
-        let mut body_mapping = mapping.clone();
-        let offset = abi.source_param_offset();
-        for (old, new) in self
-            .ctx
-            .block_args(entry_source)
-            .to_vec()
-            .into_iter()
-            .zip(self.ctx.block_args(block)[offset..].iter().copied())
-        {
-            body_mapping.insert(old, new);
+        let sources: Vec<_> = self.ctx.op_regions(source).collect();
+        let mut bodies = Vec::with_capacity(sources.len());
+        for (&convention, body_source) in conventions.iter().zip(sources) {
+            let abi = CallableAbi::new(convention, source_param_types.clone(), result);
+            let params = abi.lowered_params(evidence, frame);
+            let entry_source = self.ctx.region(body_source).blocks[0];
+            let block = make_block(self.ctx, location, &params);
+            let mut body_mapping = mapping.clone();
+            let offset = abi.source_param_offset();
+            for (old, new) in self
+                .ctx
+                .block_args(entry_source)
+                .to_vec()
+                .into_iter()
+                .zip(self.ctx.block_args(block)[offset..].iter().copied())
+            {
+                body_mapping.insert(old, new);
+            }
+            let evidence_value = convention
+                .needs_evidence()
+                .then(|| self.ctx.block_args(block)[0]);
+            let exit_k = convention
+                .needs_continuation_frame()
+                .then(|| self.ctx.block_args(block)[usize::from(convention.needs_evidence())]);
+            let flow = Flow {
+                convention,
+                evidence: evidence_value,
+                exit_k,
+                root_exit_k: exit_k,
+                void_exit_k: None,
+                answer_type: result,
+                preserve_scf_yield: false,
+                arm: None,
+                tail_join: None,
+            };
+            self.convert_sequence(
+                self.ctx.block(entry_source).ops.clone(),
+                0,
+                block,
+                &mut body_mapping,
+                &flow,
+            )?;
+            bodies.push(single_block_region(self.ctx, location, block));
         }
-        let evidence_value = convention
-            .needs_evidence()
-            .then(|| self.ctx.block_args(block)[0]);
-        let exit_k = convention
-            .needs_continuation_frame()
-            .then(|| self.ctx.block_args(block)[usize::from(convention.needs_evidence())]);
-        let flow = Flow {
-            convention,
-            evidence: evidence_value,
-            exit_k,
-            root_exit_k: exit_k,
-            void_exit_k: None,
-            answer_type: result,
-            preserve_scf_yield: false,
-            arm: None,
-            tail_join: None,
-        };
-        self.convert_sequence(
-            self.ctx.block(entry_source).ops.clone(),
-            0,
-            block,
-            &mut body_mapping,
-            &flow,
-        )?;
-        let body = single_block_region(self.ctx, location, block);
         let captures: Vec<_> = self
             .ctx
             .op_operands(source)
@@ -81,13 +76,16 @@ impl Converter<'_> {
             .map(|capture| mapping.get(capture).copied().unwrap_or(*capture))
             .collect();
         let physical_ty = self.convert_type(logical_ty);
-        let signature = self.lower_callable_signature(logical_ty, convention);
+        let signatures: Vec<_> = conventions
+            .iter()
+            .map(|&convention| self.lower_callable_signature(logical_ty, convention))
+            .collect();
         let adapters = self.tables.adapters(
             self.ctx,
             self.module_block,
             location,
             physical_ty,
-            convention,
+            &conventions,
         );
         let adapters = (!adapters.is_empty()).then(|| {
             adapters
@@ -101,17 +99,20 @@ impl Converter<'_> {
                 .collect::<Vec<_>>()
         });
         let lambda = closure::Lambda::operands(captures)
-            .signature(signature)
+            .signatures(signatures)
+            .conventions(conventions)
             .adapters(adapters)
             .results(physical_ty)
-            .regions(body)
+            .regions(bodies)
             .build(self.ctx, location);
         self.copy_extra_attrs(
             source,
             lambda.op_ref(),
-            &[tribute_control::QUANTIFIED_ROWS_ATTR],
+            &[
+                tribute_control::QUANTIFIED_ROWS_ATTR,
+                tribute_cps::CONVENTIONS_ATTR,
+            ],
         );
-        lambda.set_calling_convention(self.ctx, convention);
         Ok(lambda.op_ref())
     }
 
@@ -259,7 +260,7 @@ impl Converter<'_> {
             self.module_block,
             location,
             closure_ty,
-            result_convention,
+            &[result_convention],
         );
         let entries = self.tables.table(
             self.ctx,

@@ -26,12 +26,11 @@ use trunk_ir::SymbolPath;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core;
-use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::rewriter::PatternRewriter;
 use trunk_ir::rewrite::type_converter::TypeConverter;
 use trunk_ir::rewrite::{
-    ConversionError, ConversionTarget, Module, PatternApplicator, RewritePattern,
+    ConversionError, ConversionTarget, Module, OpRewritePattern, PatternApplicator,
 };
 use trunk_ir::types::{Location, StringRef, TypeDataBuilder};
 
@@ -64,8 +63,8 @@ fn lower(
             rtti_map: rtti_map.clone(),
             ptr_ty,
             i64_ty,
-        })
-        .add_pattern(arrays);
+        });
+    let applicator = arrays.add_patterns(applicator);
 
     let target = ConversionTarget::new()
         .illegal_op("adt.struct_new")
@@ -161,17 +160,16 @@ struct StructNewPattern {
     i64_ty: TypeRef,
 }
 
-impl RewritePattern for StructNewPattern {
+impl OpRewritePattern for StructNewPattern {
+    type Op = adt::StructNew;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        struct_new: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(struct_new) = adt::StructNew::from_op(ctx, op) else {
-            return false;
-        };
-
+    ) -> Option<()> {
+        let op = struct_new.op_ref();
         let struct_ty = struct_new.r#type(ctx);
         let tc = rewriter.type_converter();
 
@@ -246,7 +244,7 @@ impl RewritePattern for StructNewPattern {
             rewriter.insert_op(o);
         }
         rewriter.replace_op(last);
-        true
+        Some(())
     }
 }
 
@@ -276,17 +274,16 @@ struct VariantNewPattern {
     i64_ty: TypeRef,
 }
 
-impl RewritePattern for VariantNewPattern {
+impl OpRewritePattern for VariantNewPattern {
+    type Op = adt::VariantNew;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        variant_new: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(variant_new) = adt::VariantNew::from_op(ctx, op) else {
-            return false;
-        };
-
+    ) -> Option<()> {
+        let op = variant_new.op_ref();
         let enum_ty = variant_new.r#type(ctx);
         let tag = variant_new.tag_ref(ctx);
         let tc = rewriter.type_converter();
@@ -361,7 +358,7 @@ impl RewritePattern for VariantNewPattern {
             rewriter.insert_op(o);
         }
         rewriter.replace_op(last);
-        true
+        Some(())
     }
 }
 

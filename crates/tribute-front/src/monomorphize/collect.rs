@@ -8,7 +8,7 @@ use crate::ast::visit::{RefSite, Refs, walk_decl, walk_decl_table};
 use std::convert::Infallible;
 use std::ops::ControlFlow;
 
-use crate::ast::fold::{TypeVisitable, TypeVisitor};
+use crate::ast::fold::{TypeFoldable, TypeFolder, TypeVisitable, TypeVisitor};
 use crate::ast::{
     AbilityRow, DeclTable, FuncDefId, ResolvedRef, Type, TypeDefId, TypeKind, TypeScheme, TypedRef,
 };
@@ -298,6 +298,67 @@ pub(super) fn collect_from_type<'db>(
     let ControlFlow::Continue(()) = ty.visit_with(&mut NominalCollector::new(db, index, result));
 }
 
+/// `args` with every nominal type spelled by its declaration's path.
+///
+/// A nominal type's name is only how a reference spelled it, so instances
+/// are keyed by this form: one spelled `ParseError` inside its module and
+/// `std::Int::ParseError` outside it is one instance
+/// (`new-plans/implementation.md`).
+pub(super) fn canonical_args<'db>(
+    db: &'db dyn salsa::Database,
+    args: &[Type<'db>],
+) -> Vec<Type<'db>> {
+    CanonicalNames::new(db).args(args)
+}
+
+/// Respells nominal types by their declaration's path, visiting each
+/// shared type once.
+struct CanonicalNames<'db> {
+    db: &'db dyn salsa::Database,
+    cache: HashMap<Type<'db>, Type<'db>>,
+}
+
+impl<'db> CanonicalNames<'db> {
+    fn new(db: &'db dyn salsa::Database) -> Self {
+        Self {
+            db,
+            cache: HashMap::default(),
+        }
+    }
+
+    fn args(&mut self, args: &[Type<'db>]) -> Vec<Type<'db>> {
+        args.iter().map(|arg| arg.fold_with(self)).collect()
+    }
+}
+
+impl<'db> TypeFolder<'db> for CanonicalNames<'db> {
+    type Error = Infallible;
+
+    fn db(&self) -> &'db dyn salsa::Database {
+        self.db
+    }
+
+    fn fold_type(&mut self, ty: Type<'db>) -> Result<Type<'db>, Infallible> {
+        if let Some(canonical) = self.cache.get(&ty) {
+            return Ok(*canonical);
+        }
+        let folded = ty.try_super_fold_with(self)?;
+        let canonical = match folded.kind(self.db) {
+            TypeKind::Named { id, name, args } if *name != id.qualified(self.db) => Type::new(
+                self.db,
+                TypeKind::Named {
+                    id: *id,
+                    name: id.qualified(self.db),
+                    args: args.clone(),
+                },
+            ),
+            _ => folded,
+        };
+        self.cache.insert(ty, canonical);
+        Ok(canonical)
+    }
+}
+
 /// Records each declaration-backed generic type with concrete arguments.
 pub(super) struct NominalCollector<'a, 'db> {
     db: &'db dyn salsa::Database,
@@ -306,6 +367,7 @@ pub(super) struct NominalCollector<'a, 'db> {
     // Interned types form a DAG. Visit shared arguments once, including during
     // expanding nominal dependency discovery, so its round limit remains effective.
     seen: HashSet<Type<'db>>,
+    canonical: CanonicalNames<'db>,
 }
 
 impl<'a, 'db> NominalCollector<'a, 'db> {
@@ -319,6 +381,7 @@ impl<'a, 'db> NominalCollector<'a, 'db> {
             index,
             result,
             seen: HashSet::default(),
+            canonical: CanonicalNames::new(db),
         }
     }
 }
@@ -339,7 +402,10 @@ impl<'db> TypeVisitor<'db> for NominalCollector<'_, 'db> {
             && self.index.is_generic(*id)
             && args.iter().all(|arg| is_concrete_type(self.db, *arg))
         {
-            self.result.entry(*id).or_default().insert(args.clone());
+            self.result
+                .entry(*id)
+                .or_default()
+                .insert(self.canonical.args(args));
         }
         ty.super_visit_with(self)
     }

@@ -12,7 +12,6 @@
 
 use rustc_hash::FxHashMap as HashMap;
 use std::ops::ControlFlow;
-use std::rc::Rc;
 
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::tribute_control::COMPILER_INTRINSIC_ATTR;
@@ -23,7 +22,7 @@ use trunk_ir::ops::DialectOp;
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
-    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    Module, OpRewritePattern, PatternApplicator, PatternRewriter, TypeConverter,
 };
 use trunk_ir::types::{Attribute, Location};
 use trunk_ir::walk::{WalkAction, walk_op};
@@ -103,12 +102,13 @@ impl Pass for LowerSlotsIntrinsics {
             return Ok(());
         }
         reject_other_references(ctx, module, &declarations)?;
-        let declarations = Rc::new(declarations);
         PatternApplicator::new(TypeConverter::new())
             .add_pattern(SlotsCallPattern {
-                declarations: Rc::clone(&declarations),
+                declarations: &declarations,
             })
-            .add_pattern(SlotsDeclarationPattern { declarations })
+            .add_pattern(SlotsDeclarationPattern {
+                declarations: &declarations,
+            })
             .apply_partial(ctx, module);
         Ok(())
     }
@@ -145,23 +145,21 @@ fn reject_other_references(
     found.map_or(Ok(()), Err)
 }
 
-struct SlotsCallPattern {
-    declarations: Rc<HashMap<SymbolPath, SlotsOp>>,
+struct SlotsCallPattern<'a> {
+    declarations: &'a HashMap<SymbolPath, SlotsOp>,
 }
 
-impl RewritePattern for SlotsCallPattern {
+impl OpRewritePattern for SlotsCallPattern<'_> {
+    type Op = func::Call;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        call: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(call) = func::Call::from_op(ctx, op) else {
-            return false;
-        };
-        let Some(&slots_op) = self.declarations.get(call.callee(ctx)) else {
-            return false;
-        };
+    ) -> Option<()> {
+        let op = call.op_ref();
+        let &slots_op = self.declarations.get(call.callee(ctx))?;
         // `reject_other_references` checked the call's shape.
         let args = ctx.op_operands(op).to_vec();
         let result_ty = ctx.op_result_types(op)[0];
@@ -206,7 +204,7 @@ impl RewritePattern for SlotsCallPattern {
             }
         };
         rewriter.replace_op(lowered);
-        true
+        Some(())
     }
 }
 
@@ -264,26 +262,25 @@ impl Lowering<'_, '_> {
     }
 }
 
-struct SlotsDeclarationPattern {
-    declarations: Rc<HashMap<SymbolPath, SlotsOp>>,
+struct SlotsDeclarationPattern<'a> {
+    declarations: &'a HashMap<SymbolPath, SlotsOp>,
 }
 
-impl RewritePattern for SlotsDeclarationPattern {
+impl OpRewritePattern for SlotsDeclarationPattern<'_> {
+    type Op = func::Func;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        function: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(function) = func::Func::from_op(ctx, op) else {
-            return false;
-        };
+    ) -> Option<()> {
         let name = SymbolPath::new([Symbol::new(function.sym_name(ctx))]);
         if !self.declarations.contains_key(&name) {
-            return false;
+            return None;
         }
         rewriter.erase_op(vec![]);
-        true
+        Some(())
     }
 }
 

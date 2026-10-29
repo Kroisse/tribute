@@ -10,7 +10,7 @@
 //! on every target.
 
 use std::ops::ControlFlow;
-use std::rc::Rc;
+use trunk_ir::OpName;
 
 use tribute_ir::dialect::ability;
 use tribute_ir::dialect::adt;
@@ -23,8 +23,8 @@ use trunk_ir::ops::DialectOp;
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
-    ConversionError, ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern,
-    TypeConverter,
+    ConversionError, ConversionTarget, Module, OpRewritePattern, PatternApplicator,
+    PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::types::{Attribute, Location};
 use trunk_ir::walk::{WalkAction, walk_op};
@@ -80,21 +80,12 @@ pub(crate) fn lower_evidence_func(
     func_op: func::Func,
     runtime: &EvidenceRuntime,
 ) -> Result<(), ConversionError> {
-    let runtime = Rc::new(*runtime);
     PatternApplicator::new(TypeConverter::new())
         .with_target(effect_abi_target())
-        .add_pattern(LowerEffectExtend {
-            runtime: Rc::clone(&runtime),
-        })
-        .add_pattern(LowerEffectStackOp {
-            runtime: Rc::clone(&runtime),
-        })
-        .add_pattern(LowerEffectTailOp {
-            runtime: Rc::clone(&runtime),
-        })
-        .add_pattern(LowerEffectDispatchTail {
-            runtime: Rc::clone(&runtime),
-        })
+        .add_pattern(LowerEffectExtend { runtime })
+        .add_pattern(LowerEffectStackOp { runtime })
+        .add_pattern(LowerEffectTailOp { runtime })
+        .add_pattern(LowerEffectDispatchTail { runtime })
         .add_pattern(LowerEffectDispatchCps { runtime })
         .apply_partial_conversion(ctx, func_op, "evidence-effect-abi")?;
     Ok(())
@@ -245,20 +236,20 @@ fn some_dispatch(
 }
 
 /// `effect.extend` → `std::runtime::evidence::extend`.
-struct LowerEffectExtend {
-    runtime: Rc<EvidenceRuntime>,
+struct LowerEffectExtend<'a> {
+    runtime: &'a EvidenceRuntime,
 }
 
-impl RewritePattern for LowerEffectExtend {
+impl OpRewritePattern for LowerEffectExtend<'_> {
+    type Op = effect::Extend;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        extend_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(extend_op) = effect::Extend::from_op(ctx, op) else {
-            return false;
-        };
+    ) -> Option<()> {
+        let op = extend_op.op_ref();
         let function = self
             .runtime
             .extend
@@ -279,24 +270,28 @@ impl RewritePattern for LowerEffectExtend {
             extend_op.outer(ctx),
         ];
         replace_with_call(ctx, op, Some(function), args, rewriter);
-        true
+        Some(())
     }
 }
 
 /// `effect.mask` / `effect.dup` / `effect.outer` → the runtime function of
 /// the same name.
-struct LowerEffectStackOp {
-    runtime: Rc<EvidenceRuntime>,
+struct LowerEffectStackOp<'a> {
+    runtime: &'a EvidenceRuntime,
 }
 
-impl RewritePattern for LowerEffectStackOp {
+impl RewritePattern for LowerEffectStackOp<'_> {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[effect::Mask::NAME, effect::Dup::NAME, effect::Outer::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let runtime = &self.runtime;
+    ) -> Option<()> {
+        let runtime = self.runtime;
         let (function, ability, evidence) = if let Ok(mask) = effect::Mask::from_op(ctx, op) {
             (runtime.mask, mask.ability(ctx).clone(), mask.evidence(ctx))
         } else if let Ok(dup) = effect::Dup::from_op(ctx, op) {
@@ -308,29 +303,37 @@ impl RewritePattern for LowerEffectStackOp {
                 outer.evidence(ctx),
             )
         } else {
-            return false;
+            return None;
         };
         let loc = ctx.op(op).location;
         let ability_id = effect_dispatch::insert_ability_id(ctx, loc, &ability, rewriter);
         replace_with_call(ctx, op, function, vec![evidence, ability_id], rewriter);
-        true
+        Some(())
     }
 }
 
 /// `effect.tail` / `effect.with_tail` / `effect.push` → the runtime
 /// function of the same name.
-struct LowerEffectTailOp {
-    runtime: Rc<EvidenceRuntime>,
+struct LowerEffectTailOp<'a> {
+    runtime: &'a EvidenceRuntime,
 }
 
-impl RewritePattern for LowerEffectTailOp {
+impl RewritePattern for LowerEffectTailOp<'_> {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[
+            effect::Tail::NAME,
+            effect::WithTail::NAME,
+            effect::Push::NAME,
+        ])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let runtime = &self.runtime;
+    ) -> Option<()> {
+        let runtime = self.runtime;
         let loc = ctx.op(op).location;
         let i32_ty = effect_dispatch::i32_type(ctx);
         let mut slot = |ctx: &mut IrContext, index: u32| {
@@ -360,31 +363,31 @@ impl RewritePattern for LowerEffectTailOp {
                 vec![push.evidence(ctx), push.source(ctx), ability_id],
             )
         } else {
-            return false;
+            return None;
         };
         replace_with_call(ctx, op, function, args, rewriter);
-        true
+        Some(())
     }
 }
 
 /// `effect.dispatch_tail` → `std::runtime::evidence::lookup_tr` + indirect
 /// call.
-struct LowerEffectDispatchTail {
-    runtime: Rc<EvidenceRuntime>,
+struct LowerEffectDispatchTail<'a> {
+    runtime: &'a EvidenceRuntime,
 }
 
-impl RewritePattern for LowerEffectDispatchTail {
+impl OpRewritePattern for LowerEffectDispatchTail<'_> {
+    type Op = effect::DispatchTail;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        dispatch_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(dispatch_op) = effect::DispatchTail::from_op(ctx, op) else {
-            return false;
-        };
+    ) -> Option<()> {
+        let op = dispatch_op.op_ref();
         if !effect_dispatch::is_valid_tail_dispatch(ctx, op) {
-            return false;
+            return None;
         }
 
         let loc = ctx.op(op).location;
@@ -399,28 +402,28 @@ impl RewritePattern for LowerEffectDispatchTail {
         let dispatch_closure = lookup_tr.call(ctx, loc, [dispatch_op.evidence(ctx), ability_id]);
         rewriter.insert_op(dispatch_closure.op_ref());
         effect_dispatch::lower_tail_dispatch(ctx, op, dispatch_closure.result(ctx), rewriter);
-        true
+        Some(())
     }
 }
 
 /// `effect.dispatch_cps` → `std::runtime::evidence::lookup` + proper-tail
 /// transfer.
-struct LowerEffectDispatchCps {
-    runtime: Rc<EvidenceRuntime>,
+struct LowerEffectDispatchCps<'a> {
+    runtime: &'a EvidenceRuntime,
 }
 
-impl RewritePattern for LowerEffectDispatchCps {
+impl OpRewritePattern for LowerEffectDispatchCps<'_> {
+    type Op = effect::DispatchCps;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        dispatch_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(dispatch_op) = effect::DispatchCps::from_op(ctx, op) else {
-            return false;
-        };
+    ) -> Option<()> {
+        let op = dispatch_op.op_ref();
         if !effect_dispatch::is_valid_cps_dispatch(ctx, op) {
-            return false;
+            return None;
         }
 
         let loc = ctx.op(op).location;
@@ -435,7 +438,7 @@ impl RewritePattern for LowerEffectDispatchCps {
         let prompt = lookup.call(ctx, loc, [dispatch_op.evidence(ctx), ability_id]);
         rewriter.insert_op(prompt.op_ref());
         effect_dispatch::lower_cps_dispatch(ctx, op, ability_id, prompt.result(ctx), rewriter);
-        true
+        Some(())
     }
 }
 

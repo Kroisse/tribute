@@ -12,8 +12,8 @@ use trunk_ir::dialect::{core, func};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
-    ConversionError, ConversionTarget, IllegalOp, LegalityCheck, Module, PatternApplicator,
-    PatternRewriter, RewritePattern, TypeConverter,
+    ConversionError, ConversionTarget, IllegalOp, LegalityCheck, Module, OpRewritePattern,
+    PatternApplicator, PatternRewriter, TypeConverter,
 };
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::{Attribute, Location};
@@ -185,22 +185,22 @@ fn incompatible(ctx: &IrContext, op: OpRef, reason: String) -> ConversionError {
 
 struct WritePattern;
 
-impl RewritePattern for WritePattern {
+impl OpRewritePattern for WritePattern {
+    type Op = tribute_io::Write;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        write: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(write) = tribute_io::Write::from_op(ctx, op) else {
-            return false;
-        };
+    ) -> Option<()> {
+        let op = write.op_ref();
         let call = func::Call::operands([write.bytes(ctx), write.newline(ctx)])
             .callee(SymbolPath::new([WRITE_HELPER]))
             .results([ctx.op_result_types(op)[0]])
             .build(ctx, ctx.op(op).location);
         rewriter.replace_op(call.op_ref());
-        true
+        Some(())
     }
 }
 

@@ -1315,9 +1315,7 @@ pub fn resume_token_parts(ctx: &IrContext, ty: TypeRef) -> Option<(TypeRef, Type
     if !ResumeToken::matches(ctx, ty) {
         return None;
     }
-    let [input, answer] = ctx.get_type(ty).params.as_slice() else {
-        return None;
-    };
+    let [input, answer] = ctx.get_type(ty).params.as_array()?;
     Some((*input, *answer))
 }
 

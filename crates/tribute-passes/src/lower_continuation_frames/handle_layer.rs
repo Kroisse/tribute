@@ -16,7 +16,7 @@ use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{arith, core, func, scf};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
-use trunk_ir::rewrite::{Module, PatternRewriter, RewritePattern};
+use trunk_ir::rewrite::{Module, OpRewritePattern, PatternRewriter};
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 use trunk_ir::walk::{WalkAction, walk_op};
 use trunk_ir::{Symbol, SymbolPath};
@@ -738,33 +738,22 @@ pub(super) fn number_handles(ctx: &IrContext, module: Module) -> HashMap<OpRef, 
     handles
 }
 
-/// Expands `ability.handle`.
+/// Replaces `ability.handle` with the first installation of its layer:
+/// the layer's factories, a fresh prompt, and the `ability.handle_dispatch`
+/// whose body starts by building the layer's frame.
 pub(super) struct ExpandHandles {
     pub(super) frames: FrameLayouts,
     pub(super) adapters: DispatchAdapters,
     pub(super) handles: HashMap<OpRef, u32>,
 }
 
-impl RewritePattern for ExpandHandles {
+impl OpRewritePattern for ExpandHandles {
+    type Op = ability::Handle;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
-        rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        ability::Handle::from_op(ctx, op)
-            .is_ok_and(|handle| self.expand_handle(ctx, handle, rewriter).is_some())
-    }
-}
-
-impl ExpandHandles {
-    /// Replace `ability.handle` with the first installation of its layer:
-    /// the layer's factories, a fresh prompt, and the `ability.handle_dispatch`
-    /// whose body starts by building the layer's frame.
-    fn expand_handle(
-        &self,
-        ctx: &mut IrContext,
-        handle: ability::Handle,
+        handle: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> Option<()> {
         let op = handle.op_ref();
@@ -774,12 +763,8 @@ impl ExpandHandles {
         let completion = handle.completion(ctx);
         let arm_values = handle.arms(ctx).to_vec();
         let bindings: Vec<_> = handle.handlers(ctx).collect();
-        let [source_block] = ctx.region(handle.body(ctx)).blocks[..] else {
-            return None;
-        };
-        let [source_evidence, source_frame] = ctx.block_args(source_block)[..] else {
-            return None;
-        };
+        let &[source_block] = ctx.region(handle.body(ctx)).blocks.as_array()?;
+        let &[source_evidence, source_frame] = ctx.block_args(source_block).as_array()?;
         if bindings.len() != arm_values.len() {
             return None;
         }

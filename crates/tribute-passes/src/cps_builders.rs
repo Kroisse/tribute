@@ -67,13 +67,12 @@ pub(crate) fn closure_over(
     let signature = closure::Closure::from_type_ref(ctx, closure_type)
         .expect("a generated continuation is a closure")
         .func_type(ctx);
-    let lambda = closure::Lambda::operands(ordered_external_values(ctx, region))
-        .signature(signature)
+    closure::Lambda::operands(ordered_external_values(ctx, region))
+        .signatures([signature])
+        .conventions([convention])
         .results(closure_type)
-        .regions(region)
-        .build(ctx, location);
-    lambda.set_calling_convention(ctx, convention);
-    lambda
+        .regions([region])
+        .build(ctx, location)
 }
 
 /// Emit a final CPS tail transfer into a generated continuation, whose

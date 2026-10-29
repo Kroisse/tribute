@@ -11,6 +11,7 @@
 //! - `arith.{sitofp,uitofp,fptosi,fptoui}` -> `clif.fcvt_{from,to}_{sint,uint}`
 //! - `arith.{extf,truncf}` -> `clif.{fpromote,fdemote}`
 
+use trunk_ir::OpName;
 use trunk_ir::StringArg;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::arith;
@@ -19,8 +20,8 @@ use trunk_ir::dialect::core::{self, FloatLike, IntegerLike};
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
-    ConversionError, ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern,
-    TypeConverter,
+    ConversionError, ConversionTarget, Module, OpRewritePattern, PatternApplicator,
+    PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
@@ -73,62 +74,68 @@ fn type_category(ctx: &IrContext, ty: TypeRef) -> Option<&'static str> {
 /// projected away at calls and returns.
 struct NilValuePattern;
 
-impl RewritePattern for NilValuePattern {
+impl OpRewritePattern for NilValuePattern {
+    type Op = core::NilValue;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        nil_value: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        if !core::NilValue::matches(ctx, op) {
-            return false;
-        }
-        let Some(result_ty) = rewriter.result_type(ctx, op, 0) else {
-            return false;
-        };
+    ) -> Option<()> {
+        let op = nil_value.op_ref();
+        let result_ty = rewriter.result_type(ctx, op, 0)?;
         let loc = ctx.op(op).location;
         let new_op = clif::Iconst::operands()
             .value(0)
             .results(result_ty)
             .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
-        true
+        Some(())
     }
+}
+
+/// The `iconst` immediate of `value` in an integer type of `width` bits, if
+/// `value` is in the signed or unsigned range of that width.
+fn integer_immediate(value: i128, width: u32) -> Option<i64> {
+    if width >= 64 {
+        return i64::try_from(value)
+            .ok()
+            .or_else(|| u64::try_from(value).ok().map(|value| value as i64));
+    }
+    let min = -(1i128 << (width - 1));
+    let max = (1i128 << width) - 1;
+    (min..=max).contains(&value).then_some(value as i64)
 }
 
 struct ArithConstPattern;
 
-impl RewritePattern for ArithConstPattern {
+impl OpRewritePattern for ArithConstPattern {
+    type Op = arith::Const;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        const_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(const_op) = arith::Const::from_op(ctx, op) else {
-            return false;
-        };
-
+    ) -> Option<()> {
+        let op = const_op.op_ref();
         let result_types = ctx.op_result_types(op);
-        let Some(&raw_result_ty) = result_types.first() else {
-            return false;
-        };
+        let &raw_result_ty = result_types.first()?;
 
         let result_ty = rewriter
             .type_converter()
             .convert_type(ctx, raw_result_ty)
             .unwrap_or(raw_result_ty);
 
-        let Some(category) = type_category(ctx, result_ty) else {
-            return false;
-        };
+        let category = type_category(ctx, result_ty)?;
         let loc = ctx.op(op).location;
         let value = const_op.value(ctx);
 
         let new_op_ref = match category {
             "f32" => {
                 let Attribute::FloatBits(v) = value else {
-                    return false;
+                    return rewriter.no_match(format!("expected FloatBits for f32, got {value:?}"));
                 };
                 clif::F32const::operands()
                     .value(f32::from_bits(v as u32))
@@ -138,7 +145,7 @@ impl RewritePattern for ArithConstPattern {
             }
             "f64" => {
                 let Attribute::FloatBits(v) = value else {
-                    return false;
+                    return rewriter.no_match(format!("expected FloatBits for f64, got {value:?}"));
                 };
                 clif::F64const::operands()
                     .value(f64::from_bits(v))
@@ -148,9 +155,11 @@ impl RewritePattern for ArithConstPattern {
             }
             _ => match value {
                 Attribute::Int(v) => {
-                    let Some(v) = i64::try_from(v).ok() else {
-                        return false;
-                    };
+                    let width = IntegerLike::width(ctx, result_ty).unwrap_or(64);
+                    let v = rewriter.require(
+                        integer_immediate(v, width),
+                        "integer constant does not fit its type",
+                    )?;
                     clif::Iconst::operands()
                         .value(v)
                         .results(result_ty)
@@ -162,35 +171,49 @@ impl RewritePattern for ArithConstPattern {
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                _ => return false,
+                _ => return rewriter.no_match(format!("expected Int or Bool, got {value:?}")),
             },
         };
 
         rewriter.replace_op(new_op_ref);
-        true
+        Some(())
     }
 }
 
 struct ArithBinOpPattern;
 
 impl RewritePattern for ArithBinOpPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[
+            arith::Addi::NAME,
+            arith::Subi::NAME,
+            arith::Muli::NAME,
+            arith::Divsi::NAME,
+            arith::Divui::NAME,
+            arith::Remsi::NAME,
+            arith::Remui::NAME,
+            arith::Addf::NAME,
+            arith::Subf::NAME,
+            arith::Mulf::NAME,
+            arith::Divf::NAME,
+        ])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let data = ctx.op(op);
         if data.name.dialect(ctx) != arith::DIALECT_NAME {
-            return false;
+            return None;
         }
 
-        let Some(result_ty) = rewriter.result_type(ctx, op, 0) else {
-            return false;
-        };
+        let result_ty = rewriter.result_type(ctx, op, 0)?;
         let operands = ctx.op_operands(op).to_vec();
         let (Some(&lhs), Some(&rhs)) = (operands.first(), operands.get(1)) else {
-            return false;
+            return None;
         };
         let loc = ctx.op(op).location;
         let name = data.name;
@@ -251,11 +274,11 @@ impl RewritePattern for ArithBinOpPattern {
                 .build(ctx, loc)
                 .op_ref()
         } else {
-            return false;
+            return None;
         };
 
         rewriter.replace_op(new_op);
-        true
+        Some(())
     }
 }
 
@@ -287,15 +310,17 @@ pub fn finalize_cmp(
 struct ArithCmpPattern;
 
 impl RewritePattern for ArithCmpPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[arith::Cmpi::NAME, arith::Cmpf::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Some(result_ty) = rewriter.result_type(ctx, op, 0) else {
-            return false;
-        };
+    ) -> Option<()> {
+        let result_ty = rewriter.result_type(ctx, op, 0)?;
         let loc = ctx.op(op).location;
         // Cranelift's icmp/fcmp always return i8, so emit the comparison with
         // core.i8 result, then uextend to the converted result type (core.i32)
@@ -319,7 +344,7 @@ impl RewritePattern for ArithCmpPattern {
                 result_ty,
                 i8_ty,
             );
-            true
+            Some(())
         } else if let Ok(cmpf) = arith::Cmpf::from_op(ctx, op) {
             let lhs = cmpf.lhs(ctx);
             let rhs = cmpf.rhs(ctx);
@@ -346,9 +371,9 @@ impl RewritePattern for ArithCmpPattern {
                 result_ty,
                 i8_ty,
             );
-            true
+            Some(())
         } else {
-            false
+            None
         }
     }
 }
@@ -356,15 +381,17 @@ impl RewritePattern for ArithCmpPattern {
 struct ArithNegPattern;
 
 impl RewritePattern for ArithNegPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[arith::Negi::NAME, arith::Negf::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Some(ty) = rewriter.result_type(ctx, op, 0) else {
-            return false;
-        };
+    ) -> Option<()> {
+        let ty = rewriter.result_type(ctx, op, 0)?;
         let loc = ctx.op(op).location;
 
         if let Ok(negi) = arith::Negi::from_op(ctx, op) {
@@ -375,7 +402,7 @@ impl RewritePattern for ArithNegPattern {
                     .build(ctx, loc)
                     .op_ref(),
             );
-            true
+            Some(())
         } else if let Ok(negf) = arith::Negf::from_op(ctx, op) {
             let operand = negf.operand(ctx);
             rewriter.replace_op(
@@ -384,9 +411,9 @@ impl RewritePattern for ArithNegPattern {
                     .build(ctx, loc)
                     .op_ref(),
             );
-            true
+            Some(())
         } else {
-            false
+            None
         }
     }
 }
@@ -394,15 +421,26 @@ impl RewritePattern for ArithNegPattern {
 struct ArithBitwisePattern;
 
 impl RewritePattern for ArithBitwisePattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[
+            arith::And::NAME,
+            arith::Or::NAME,
+            arith::Xor::NAME,
+            arith::Shl::NAME,
+            arith::Shr::NAME,
+            arith::Shru::NAME,
+        ])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let data = ctx.op(op);
         if data.name.dialect(ctx) != arith::DIALECT_NAME {
-            return false;
+            return None;
         }
 
         let name = data.name;
@@ -416,15 +454,13 @@ impl RewritePattern for ArithBitwisePattern {
         ]
         .contains(&name);
         if !is_bitwise {
-            return false;
+            return None;
         }
 
-        let Some(result_ty) = rewriter.result_type(ctx, op, 0) else {
-            return false;
-        };
+        let result_ty = rewriter.result_type(ctx, op, 0)?;
         let operands = ctx.op_operands(op).to_vec();
         let (Some(&lhs), Some(&rhs)) = (operands.first(), operands.get(1)) else {
-            return false;
+            return None;
         };
         let loc = ctx.op(op).location;
 
@@ -459,29 +495,39 @@ impl RewritePattern for ArithBitwisePattern {
                 .build(ctx, loc)
                 .op_ref()
         } else {
-            return false;
+            return None;
         };
 
         rewriter.replace_op(new_op);
-        true
+        Some(())
     }
 }
 
 struct ArithConversionPattern;
 
 impl RewritePattern for ArithConversionPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[
+            arith::Extsi::NAME,
+            arith::Extui::NAME,
+            arith::Trunci::NAME,
+            arith::Sitofp::NAME,
+            arith::Uitofp::NAME,
+            arith::Fptosi::NAME,
+            arith::Fptoui::NAME,
+            arith::Extf::NAME,
+            arith::Truncf::NAME,
+        ])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Some(&operand) = ctx.op_operands(op).first() else {
-            return false;
-        };
-        let Some(result_ty) = rewriter.result_type(ctx, op, 0) else {
-            return false;
-        };
+    ) -> Option<()> {
+        let &operand = ctx.op_operands(op).first()?;
+        let result_ty = rewriter.result_type(ctx, op, 0)?;
         let loc = ctx.op(op).location;
         // Cranelift holds `core.i1` as an `i8` 0 or 1, so only zero extension
         // of a boolean past 8 bits is a plain instruction. Other boolean
@@ -493,7 +539,7 @@ impl RewritePattern for ArithConversionPattern {
                 && width(ctx, result_ty).is_some_and(|width| width > 8)))
             || width(ctx, result_ty) == Some(1)
         {
-            return false;
+            return None;
         }
         // Operand and result types are constrained by each operation's
         // declaration, so the op alone selects the Cranelift instruction.
@@ -543,10 +589,10 @@ impl RewritePattern for ArithConversionPattern {
                 .build(ctx, loc)
                 .op_ref()
         } else {
-            return false;
+            return None;
         };
         rewriter.replace_op(new_op);
-        true
+        Some(())
     }
 }
 
@@ -556,38 +602,38 @@ impl RewritePattern for ArithConversionPattern {
 struct ArithIndexCastPattern;
 
 impl RewritePattern for ArithIndexCastPattern {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[arith::IndexCastsi::NAME, arith::IndexCastui::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let signed = arith::IndexCastsi::matches(ctx, op);
         if !signed && !arith::IndexCastui::matches(ctx, op) {
-            return false;
+            return None;
         }
-        let Some(&operand) = ctx.op_operands(op).first() else {
-            return false;
-        };
-        let Some(result_ty) = rewriter.result_type(ctx, op, 0) else {
-            return false;
-        };
+        let &operand = ctx.op_operands(op).first()?;
+        let result_ty = rewriter.result_type(ctx, op, 0)?;
         // An index without a target width stays unconverted and fails the
         // conversion boundary.
         let (Some(from), Some(to)) = (
             IntegerLike::width(ctx, ctx.value_ty(operand)),
             IntegerLike::width(ctx, result_ty),
         ) else {
-            return false;
+            return None;
         };
         // As for `arith.extsi`, a boolean held as an `i8` 0 or 1 has no
         // sign-extending instruction.
         if (from == 1 && signed) || to == 1 {
-            return false;
+            return None;
         }
         if from == to {
             rewriter.erase_op(vec![operand]);
-            return true;
+            return Some(());
         }
         let loc = ctx.op(op).location;
         let new_op = if from > to {
@@ -607,12 +653,13 @@ impl RewritePattern for ArithIndexCastPattern {
                 .op_ref()
         };
         rewriter.replace_op(new_op);
-        true
+        Some(())
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::integer_immediate;
     use trunk_ir::context::IrContext;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
@@ -637,6 +684,17 @@ mod tests {
             .add_conversion(move |ctx, ty| core::Index::matches(ctx, ty).then_some(i64_ty));
         super::lower(&mut ctx, module, type_converter).unwrap();
         print_module(&ctx, module.op())
+    }
+
+    #[test]
+    fn integer_immediates_accept_the_signed_and_unsigned_range_of_their_width() {
+        assert_eq!(integer_immediate(-128, 8), Some(-128));
+        assert_eq!(integer_immediate(255, 8), Some(255));
+        assert_eq!(integer_immediate(256, 8), None);
+        assert_eq!(integer_immediate(-129, 8), None);
+        assert_eq!(integer_immediate(u64::MAX.into(), 64), Some(-1));
+        assert_eq!(integer_immediate(i64::MIN.into(), 64), Some(i64::MIN));
+        assert_eq!(integer_immediate(i128::from(u64::MAX) + 1, 64), None);
     }
 
     #[test]

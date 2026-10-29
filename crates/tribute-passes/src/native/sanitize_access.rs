@@ -24,6 +24,7 @@
 //! ```
 
 use std::ops::ControlFlow;
+use trunk_ir::OpName;
 
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{clif, core};
@@ -118,21 +119,21 @@ fn is_checked(ctx: &IrContext, op: OpRef, access: &Access) -> bool {
 struct CheckMemoryAccess;
 
 impl RewritePattern for CheckMemoryAccess {
+    fn roots(&self) -> Option<&[OpName]> {
+        Some(&[clif::Load::NAME, clif::Store::NAME, clif::AtomicRmw::NAME])
+    }
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Some(access) = access_of(ctx, op) else {
-            return false;
-        };
+    ) -> Option<()> {
+        let access = access_of(ctx, op)?;
         // The pass rejects an access of unknown width before it rewrites.
-        let Ok(width) = access_width(ctx, access.ty) else {
-            return false;
-        };
+        let width = access_width(ctx, access.ty).ok()?;
         if width == 0 || is_checked(ctx, op, &access) {
-            return false;
+            return None;
         }
         let loc = ctx.op(op).location;
         let i64_ty = trunk_ir::TypeDataBuilder::new("core.i64").intern(ctx);
@@ -163,7 +164,7 @@ impl RewritePattern for CheckMemoryAccess {
             .results([nil_ty])
             .build(ctx, loc);
         rewriter.insert_op(check.op_ref());
-        true
+        Some(())
     }
 
     fn name(&self) -> &'static str {

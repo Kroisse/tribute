@@ -155,11 +155,44 @@ if let Ok(call_op) = func::Call::from_op(ctx, op) {
 
 ### Pattern Interface
 
-Patterns implement `RewritePattern` with `match_and_rewrite`:
+A pattern that rewrites one operation implements `OpRewritePattern`, naming
+the operation's typed wrapper as `type Op`. Its `match_and_rewrite` takes:
 
 - `ctx`: Mutable arena context for querying and building IR
-- `op`: The matched `OpRef`, inspected through typed `from_op` wrappers
+- `op`: The matched operation's typed wrapper; `op.op_ref()` is its `OpRef`
 - `rewriter`: `PatternRewriter` that records structural mutations
+
+```rust
+impl OpRewritePattern for LowerCall<'_> {
+    type Op = func::Call;
+
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        call: Self::Op,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> Option<()> {
+        let callee = self.lowered.get(call.callee(ctx))?;
+        // ...
+        Some(())
+    }
+}
+```
+
+A pattern that matches several operations, a whole dialect, or roots known
+only at run time implements `RewritePattern` directly, with an `OpRef` and
+an optional `roots`.
+
+`match_and_rewrite` takes `&self`. `PatternApplicator<'p>` holds its patterns
+for `'p`, so patterns borrow data the driver computed (`&'p SymbolTable`)
+instead of sharing it through `Rc` or `Arc`. A pattern that reports to the
+driver writes through a driver-owned `Cell` or `RefCell`; what it writes does
+not decide later rewrites, and no pattern caches IR facts across matches.
+
+The applicator offers a pattern only the operations in its roots: `Op` for an
+`OpRewritePattern`, `roots` for a `RewritePattern`. A pattern changes attached
+IR only through the rewriter: after its first sweep, the applicator revisits
+only the operations the recorded changes touch.
 
 A pass that converts types builds its type converter in `run` and passes it to
 `PatternApplicator`. `PassManager` holds no converter.
@@ -181,7 +214,15 @@ target when constructing replacements.
 
 ### Return Value
 
-Return `true` if the pattern matched and recorded mutations, `false` otherwise.
+Return `Some(())` if the pattern matched and recorded mutations, `None`
+otherwise. Each check that rejects the operation is a `?`: on an `Option`,
+or on a `Result` after `.ok()`.
+
+A check worth explaining gives its reason through the rewriter instead of
+logging: `rewriter.require(option, "reason")?` and
+`rewriter.ensure(condition, "reason")?` take a static reason, and
+`return rewriter.no_match(format!(..))` builds one in the failing branch. The
+applicator logs the reason at debug level with the pattern and operation.
 
 Use full conversion where a phase boundary must reject every residual illegal
 operation. Bodyless external functions have no body region; inspect optional

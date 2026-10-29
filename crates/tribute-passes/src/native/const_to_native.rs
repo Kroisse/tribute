@@ -28,8 +28,8 @@ use trunk_ir::dialect::core;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
-    ConversionError, ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern,
-    TypeConverter,
+    ConversionError, ConversionTarget, Module, OpRewritePattern, PatternApplicator,
+    PatternRewriter, TypeConverter,
 };
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
@@ -370,22 +370,19 @@ struct BytesConstNativePattern {
     i32_ty: TypeRef,
 }
 
-impl RewritePattern for BytesConstNativePattern {
+impl OpRewritePattern for BytesConstNativePattern {
+    type Op = adt::BytesConst;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        bytes_const: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(bytes_const) = adt::BytesConst::from_op(ctx, op) else {
-            return false;
-        };
-
+    ) -> Option<()> {
+        let op = bytes_const.op_ref();
         let content: Vec<u8> = bytes_const.value(ctx).to_vec();
 
-        let Some(data_sym) = self.content_to_symbol.get(&content).cloned() else {
-            return false;
-        };
+        let data_sym = self.content_to_symbol.get(&content).cloned()?;
 
         let loc = ctx.op(op).location;
         let (insert_ops, payload) = emit_bytes_alloc(
@@ -409,7 +406,7 @@ impl RewritePattern for BytesConstNativePattern {
             rewriter.insert_op(o);
         }
         rewriter.replace_op(typed.op_ref());
-        true
+        Some(())
     }
 
     fn name(&self) -> &'static str {
@@ -426,27 +423,24 @@ struct StringConstNativePattern {
     string_enum_ty: Option<TypeRef>,
 }
 
-impl RewritePattern for StringConstNativePattern {
+impl OpRewritePattern for StringConstNativePattern {
+    type Op = adt::StringConst;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        string_const: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(string_const) = adt::StringConst::from_op(ctx, op) else {
-            return false;
-        };
-
+    ) -> Option<()> {
+        let op = string_const.op_ref();
         let content = string_const.value(ctx).as_bytes();
         let content_len = content.len() as u64;
-        let Some(data_sym) = self.content_to_symbol.get(content).cloned() else {
-            return false;
-        };
+        let data_sym = self.content_to_symbol.get(content).cloned()?;
 
-        let Some(string_enum_ty) = self.string_enum_ty else {
-            tracing::warn!("const_to_native: String enum type not found, skipping string_const");
-            return false;
-        };
+        let string_enum_ty = rewriter.require(
+            self.string_enum_ty,
+            "String enum type not found, skipping string_const",
+        )?;
 
         let loc = ctx.op(op).location;
 
@@ -484,7 +478,7 @@ impl RewritePattern for StringConstNativePattern {
         }
         rewriter.insert_op(bytes.op_ref());
         rewriter.replace_op(variant_new.op_ref());
-        true
+        Some(())
     }
 
     fn name(&self) -> &'static str {

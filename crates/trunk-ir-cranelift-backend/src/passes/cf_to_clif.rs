@@ -8,11 +8,10 @@
 use trunk_ir::OperationDataBuilder;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{cf, clif, core};
-use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::OpRef;
 use trunk_ir::rewrite::{
-    ConversionError, ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern,
-    TypeConverter,
+    ConversionError, ConversionTarget, Module, OpRewritePattern, PatternApplicator,
+    PatternRewriter, TypeConverter,
 };
 
 /// Lower cf dialect to clif dialect.
@@ -40,40 +39,38 @@ fn cf_to_clif_target() -> ConversionTarget {
 /// Pattern: `cf.br` -> `clif.jump`
 struct CfBrPattern;
 
-impl RewritePattern for CfBrPattern {
+impl OpRewritePattern for CfBrPattern {
+    type Op = cf::Br;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        br: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        if cf::Br::from_op(ctx, op).is_err() {
-            return false;
-        }
-
+    ) -> Option<()> {
+        let op = br.op_ref();
         let new_op = rebuild_op_as(ctx, op, "clif.jump");
         rewriter.replace_op(new_op);
-        true
+        Some(())
     }
 }
 
 /// Pattern: `cf.cond_br` -> `clif.brif`
 struct CfCondBrPattern;
 
-impl RewritePattern for CfCondBrPattern {
+impl OpRewritePattern for CfCondBrPattern {
+    type Op = cf::CondBr;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        cond_br: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        if cf::CondBr::from_op(ctx, op).is_err() {
-            return false;
-        }
-
+    ) -> Option<()> {
+        let op = cond_br.op_ref();
         let new_op = rebuild_op_as(ctx, op, "clif.brif");
         rewriter.replace_op(new_op);
-        true
+        Some(())
     }
 }
 
@@ -84,27 +81,22 @@ impl RewritePattern for CfCondBrPattern {
 /// discriminant's width.
 struct CfSwitchPattern;
 
-impl RewritePattern for CfSwitchPattern {
+impl OpRewritePattern for CfSwitchPattern {
+    type Op = cf::Switch;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        switch: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(switch) = cf::Switch::from_op(ctx, op) else {
-            return false;
-        };
+    ) -> Option<()> {
+        let op = switch.op_ref();
         let discriminant = switch.discriminant(ctx);
-        let Some(width) = core::IntegerLike::width(ctx, ctx.value_ty(discriminant)) else {
-            return false;
-        };
-        let Some(cases) = switch
+        let width = core::IntegerLike::width(ctx, ctx.value_ty(discriminant))?;
+        let cases = switch
             .cases(ctx)
             .map(|case| unsigned_case(width, case))
-            .collect::<Option<Vec<u64>>>()
-        else {
-            return false;
-        };
+            .collect::<Option<Vec<u64>>>()?;
         let default = switch.default(ctx);
         let targets: trunk_ir::BlockList = switch.targets(ctx).collect();
         let location = ctx.op(op).location;
@@ -113,7 +105,7 @@ impl RewritePattern for CfSwitchPattern {
             .successors(default, targets)
             .build(ctx, location);
         rewriter.replace_op(new_op.op_ref());
-        true
+        Some(())
     }
 }
 

@@ -139,6 +139,17 @@ fn assert_nested_resume_frames(converted: &str, printed: &str) {
     assert!(!printed.contains("tribute_control."), "{printed}");
 }
 
+/// The conventions of the bodies of `lambda`, a `closure.lambda`.
+fn lambda_conventions(ctx: &IrContext, lambda: OpRef) -> Vec<CallingConvention> {
+    closure::Lambda::from_op(ctx, lambda)
+        .ok()
+        .and_then(|lambda| lambda.entries(ctx))
+        .into_iter()
+        .flatten()
+        .map(|entry| entry.convention)
+        .collect()
+}
+
 fn collect_lambdas(ctx: &IrContext, op: OpRef, lambdas: &mut Vec<OpRef>) {
     if closure::Lambda::matches(ctx, op) {
         lambdas.push(op);
@@ -270,7 +281,7 @@ fn textual_direct_evidence_and_cps_transfers_preserve_exact_abis() {
     collect_lambdas(&ctx, module.op(), &mut lambdas);
     let one_parameter_cps = lambdas.into_iter().find(|lambda| {
         let closure_ty = ctx.op_result_types(*lambda)[0];
-        DynConventionBearing::of(&ctx, *lambda) == Some(CallingConvention::Cps)
+        lambda_conventions(&ctx, *lambda) == [CallingConvention::Cps]
             && closure::Closure::from_type_ref(&ctx, closure_ty)
                 .and_then(|closure| func::FuncSig::from_type_ref(&ctx, closure.func_type(&ctx)))
                 .is_some_and(|callable| callable.inputs(&ctx).len() == 1)
@@ -1120,7 +1131,7 @@ fn post_boundary_rejects_nonphysical_dispatchers_and_residual_control_ops() {
     let wrong_abi_input = r#"core.module @test {
   !evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
   func.func @caller(%ev: !evidence, %prompt: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-    %tr = closure.lambda(%inner: !evidence) -> tribute_rt.anyref {tribute.calling_convention = "evidence_direct"} {
+    %tr = closure.lambda evidence_direct(%inner: !evidence) -> tribute_rt.anyref {
       func.unreachable
     }
     ability.handle_dispatch %ev, %prompt, %tr {abilities = [@State]} {
@@ -1140,7 +1151,7 @@ fn post_boundary_rejects_nonphysical_dispatchers_and_residual_control_ops() {
     let wrong_metadata_input = r#"core.module @test {
   !evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
   func.func @caller(%ev: !evidence, %prompt: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-    %tr = closure.lambda(%inner: !evidence, %op_idx: core.i32, %payload: tribute_rt.anyref) -> tribute_rt.anyref {tribute.calling_convention = "direct"} {
+    %tr = closure.lambda direct(%inner: !evidence, %op_idx: core.i32, %payload: tribute_rt.anyref) -> tribute_rt.anyref {
       func.unreachable
     }
     ability.handle_dispatch %ev, %prompt, %tr {abilities = [@State]} {
@@ -1153,7 +1164,7 @@ fn post_boundary_rejects_nonphysical_dispatchers_and_residual_control_ops() {
     let error = verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap_err();
     let text = error.to_string();
     assert!(
-        text.contains("calling convention metadata evidence_direct"),
+        text.contains("dispatcher must be a closure.lambda with one evidence_direct body"),
         "{text}"
     );
 
@@ -1594,7 +1605,7 @@ fn textual_zero_result_cps_and_direct_scf_branches_lower() {
     collect_lambdas(&ctx, module.op(), &mut lambdas);
     let mut generated_param_counts = Vec::new();
     for lambda in lambdas {
-        if DynConventionBearing::of(&ctx, lambda) != Some(CallingConvention::Cps) {
+        if lambda_conventions(&ctx, lambda) != [CallingConvention::Cps] {
             continue;
         }
         let closure_ty = ctx.op_result_types(lambda)[0];
@@ -2557,8 +2568,11 @@ fn legalization_requires_assigned_conventions() {
     );
 }
 
+/// A lambda with a body per convention legalizes to one closure with a
+/// lifted entry per body, sharing its captures, and an adapter for the slot
+/// between them.
 #[test]
-fn legalization_takes_a_lambda_with_one_body() {
+fn a_lambda_with_two_bodies_lifts_an_entry_per_body() {
     let (mut ctx, module) = parse(
         r#"core.module @test {
   tribute_cps.func @outer(%captured: core.i32, %value: core.i32) -> core.i32 convention(cps) {
@@ -2575,11 +2589,63 @@ fn legalization_takes_a_lambda_with_one_body() {
   }
 }"#,
     );
-    let error = tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("legalization takes a tribute_cps.lambda with one body"),
-        "{error}"
+    tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
+    let mut lambdas = Vec::new();
+    collect_lambdas(&ctx, module.op(), &mut lambdas);
+    let source = lambdas
+        .iter()
+        .filter_map(|&op| closure::Lambda::from_op(&ctx, op).ok())
+        .find(|lambda| lambda.adapters(&ctx).is_some())
+        .expect("the source lambda has adapters");
+    let entries = source.entries(&ctx).expect("the lists describe the bodies");
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| entry.convention)
+            .collect::<Vec<_>>(),
+        [CallingConvention::Direct, CallingConvention::Cps]
     );
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| entry.signature.inputs(&ctx).len())
+            .collect::<Vec<_>>(),
+        [1, 3],
+        "the Cps body takes the evidence and its frame"
+    );
+    let adapters: Vec<_> = source
+        .adapters(&ctx)
+        .unwrap()
+        .iter()
+        .map(|(keyword, _)| ctx.str(keyword).to_owned())
+        .collect();
+    assert_eq!(adapters, ["evidence_direct"]);
+    assert_eq!(ctx.op_operands(source.op_ref()).len(), 1);
+
+    crate::lower_closure_lambda::lower_closure_lambda(&mut ctx, module);
+    let lifted = print_module(&ctx, module.op());
+    assert!(!lifted.contains("closure.lambda"), "{lifted}");
+    let mut news = Vec::new();
+    let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
+        if let Ok(new) = closure::New::from_op(&ctx, op)
+            && new
+                .entries(&ctx)
+                .any(|entry| entry.to_string().contains("__tribute_entry_adapter_"))
+        {
+            news.push(new);
+        }
+        std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+    });
+    let [new] = news[..] else {
+        panic!("one closure holds the adapter: {lifted}");
+    };
+    let entries: Vec<_> = new.entries(&ctx).map(|entry| entry.to_string()).collect();
+    assert!(
+        entries[0] != entries[2] && entries.iter().all(|entry| !entry.contains("trap")),
+        "a body fills the Direct and Cps slots: {entries:?}\n{lifted}"
+    );
+    assert_eq!(ctx.op_operands(new.op_ref()).len(), 1, "{lifted}");
+    crate::closure_lower::lower_prepared_closures(&mut ctx, module).unwrap();
+    let lowered = print_module(&ctx, module.op());
+    assert!(!lowered.contains("closure.new"), "{lowered}");
 }
