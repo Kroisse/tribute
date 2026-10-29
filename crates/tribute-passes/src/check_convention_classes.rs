@@ -20,7 +20,7 @@ use trunk_ir::rewrite::Module;
 use trunk_ir::walk::{WalkAction, walk_region};
 
 use crate::convention_classes::{
-    Function, class_suffix, instantiation, requirements, row_class, settle_class_variables,
+    Function, Locals, class_suffix, instantiation, requirements, row_class, settle_class_variables,
     settle_locals, split_name,
 };
 
@@ -92,8 +92,8 @@ struct Instance<'a> {
     requirements: &'a HashMap<SymbolPath, CallingConvention>,
     /// The class of each class variable.
     classes: HashMap<u32, CallingConvention>,
-    /// The class of each local binder, and the lambda that quantifies it.
-    locals: HashMap<u32, CallingConvention>,
+    /// The class of each local binder in each body of its lambda.
+    locals: Locals,
 }
 
 impl<'a> Instance<'a> {
@@ -145,7 +145,7 @@ impl<'a> Instance<'a> {
             positions,
             requirements,
             classes,
-            locals: HashMap::default(),
+            locals: Locals::default(),
         };
         instance.settle_locals();
         instance
@@ -169,14 +169,14 @@ impl<'a> Instance<'a> {
         instantiation(self.ctx, op)
     }
 
-    /// The class a row requires inside this instance.
-    fn class(&self, row: &Row) -> CallingConvention {
+    /// The class a row requires at `at` inside this instance.
+    fn class(&self, row: &Row, at: OpRef) -> CallingConvention {
         row_class(
             row,
             &self.function.binders,
             self.requirements,
             &self.classes,
-            &self.locals,
+            |binder| self.locals.get(self.ctx, binder, at),
         )
     }
 
@@ -200,7 +200,7 @@ impl<'a> Instance<'a> {
         {
             row.tail = None;
         }
-        let expected = self.class(&row);
+        let expected = self.class(&row, self.function.op);
         let actual = tribute_cps::declared_convention(self.ctx, self.function.op);
         if Some(expected) != actual {
             disagreements.push(Disagreement {
@@ -228,7 +228,7 @@ impl<'a> Instance<'a> {
                     usize::try_from(position)
                         .ok()
                         .and_then(|position| reference.rows.get(position))
-                        .map_or(CallingConvention::Cps, |row| self.class(row))
+                        .map_or(CallingConvention::Cps, |row| self.class(row, reference.op))
                 })
                 .collect();
             let expected = format!("{callee}{}", class_suffix(&classes));
@@ -245,17 +245,21 @@ impl<'a> Instance<'a> {
         }
     }
 
-    /// Lambdas and function references have exactly the class of the row of
-    /// the callable they make, and indirect transfers that of their callee's;
-    /// every instantiation of one lambda selects the same classes.
+    /// A lambda has a body for exactly the classes its instantiations
+    /// select, function references have the class of the row of the callable
+    /// they make, and indirect transfers that of their callee's; the
+    /// instantiations of one lambda that select one class pass the same
+    /// classes.
     fn check_body(&self, disagreements: &mut Vec<Disagreement>) {
         let Some(body) = self.ctx.op_region(self.function.op, 0) else {
             return;
         };
-        let mut selections: HashMap<OpRef, Vec<CallingConvention>> = HashMap::default();
+        let mut lambdas = Vec::new();
+        let mut selections: HashMap<OpRef, Vec<(CallingConvention, Vec<CallingConvention>)>> =
+            HashMap::default();
         let _ = walk_region::<()>(self.ctx, body, &mut |op| {
             if tribute_cps::Lambda::matches(self.ctx, op) {
-                self.compare(op, "lambda", self.ctx.op_result_types(op)[0], disagreements);
+                lambdas.push(op);
             } else if tribute_cps::FuncRef::matches(self.ctx, op) {
                 self.compare(
                     op,
@@ -269,24 +273,48 @@ impl<'a> Instance<'a> {
                 let callee = self.ctx.value_ty(self.ctx.op_operands(op)[0]);
                 self.compare(op, "transfer", callee, disagreements);
             } else if let Some((lambda, _, rows)) = self.instantiation(op) {
-                let classes: Vec<_> = rows.iter().map(|row| self.class(row)).collect();
-                match selections.get(&lambda) {
-                    Some(first) if *first != classes => disagreements.push(Disagreement {
+                let Some(made) = FuncSig::from_type_ref(self.ctx, self.ctx.op_result_types(op)[0])
+                else {
+                    return ControlFlow::Continue(WalkAction::Advance);
+                };
+                let selected = self.class(&made.row(self.ctx), op);
+                let classes: Vec<_> = rows.iter().map(|row| self.class(row, op)).collect();
+                let known = selections.entry(lambda).or_default();
+                match known.iter().find(|(class, _)| *class == selected) {
+                    Some((_, first)) if *first != classes => disagreements.push(Disagreement {
                         op,
                         rule: "instantiate",
                         message: format!(
-                            "{} instantiates one lambda at classes {first:?} and {classes:?}",
+                            "{} instantiates one lambda at {selected:?} with classes {first:?} and {classes:?}",
                             self.function.name
                         ),
                     }),
                     Some(_) => {}
-                    None => {
-                        selections.insert(lambda, classes);
-                    }
+                    None => known.push((selected, classes)),
                 }
             }
             ControlFlow::Continue(WalkAction::Advance)
         });
+        for lambda in lambdas {
+            let expected: Vec<_> = match selections.get(&lambda) {
+                Some(selected) => selected.iter().map(|&(class, _)| class).sorted().collect(),
+                None => FuncSig::from_type_ref(self.ctx, self.ctx.op_result_types(lambda)[0])
+                    .map(|signature| self.class(&signature.row(self.ctx), lambda))
+                    .into_iter()
+                    .collect(),
+            };
+            let actual = tribute_cps::body_conventions(self.ctx, lambda);
+            if actual.as_ref() != Some(&expected) {
+                disagreements.push(Disagreement {
+                    op: lambda,
+                    rule: "lambda",
+                    message: format!(
+                        "a lambda in {} has bodies {actual:?}, its uses select {expected:?}",
+                        self.function.name
+                    ),
+                });
+            }
+        }
     }
 
     /// Whether `op` declares the class of the row of `callable`.
@@ -300,14 +328,8 @@ impl<'a> Instance<'a> {
         let Some(signature) = FuncSig::from_type_ref(self.ctx, callable) else {
             return;
         };
-        let expected = self.class(&signature.row(self.ctx));
-        let actual = match tribute_cps::body_conventions(self.ctx, op) {
-            Some(conventions) => match conventions[..] {
-                [convention] => Some(convention),
-                _ => None,
-            },
-            None => tribute_cps::declared_convention(self.ctx, op),
-        };
+        let expected = self.class(&signature.row(self.ctx), op);
+        let actual = tribute_cps::declared_convention(self.ctx, op);
         if actual != Some(expected) {
             disagreements.push(Disagreement {
                 op,

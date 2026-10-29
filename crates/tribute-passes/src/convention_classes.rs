@@ -11,7 +11,7 @@ use std::ops::ControlFlow;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use tribute_ir::calling_convention::CallingConvention;
 use tribute_ir::dialect::tribute_control::{FuncSig, Row, RowBinder};
-use tribute_ir::dialect::{ability, tribute_control};
+use tribute_ir::dialect::{ability, tribute_control, tribute_cps};
 use trunk_ir::context::IrContext;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
@@ -286,14 +286,15 @@ pub(crate) fn class_positions(functions: &[Function]) -> HashMap<String, Vec<u32
 }
 
 /// The class `row` requires inside an instance whose class variables have
-/// `params` and whose local binders have `locals`. A local binder not yet
-/// settled reads as `Direct`, the start of their least fixed point.
+/// `params` and whose local binders have the classes `local` reads. A local
+/// binder not yet settled reads as `Direct`, the start of their least fixed
+/// point.
 pub(crate) fn row_class(
     row: &Row,
     binders: &[RowBinder],
     requirements: &HashMap<SymbolPath, CallingConvention>,
     params: &HashMap<u32, CallingConvention>,
-    locals: &HashMap<u32, CallingConvention>,
+    local: impl Fn(u32) -> Option<CallingConvention>,
 ) -> CallingConvention {
     let instances = row
         .instances
@@ -314,10 +315,7 @@ pub(crate) fn row_class(
         .and_then(|index| binders.get(index));
     let tail = match kind {
         Some(RowBinder::Param) => params.get(&tail).copied().unwrap_or(CallingConvention::Cps),
-        Some(RowBinder::Local) => locals
-            .get(&tail)
-            .copied()
-            .unwrap_or(CallingConvention::Direct),
+        Some(RowBinder::Local) => local(tail).unwrap_or(CallingConvention::Direct),
         _ => CallingConvention::Cps,
     };
     instances.max(tail)
@@ -338,38 +336,116 @@ pub(crate) fn instantiation(ctx: &IrContext, op: OpRef) -> Option<(OpRef, Vec<u3
     Some((lambda, binders, rows))
 }
 
-/// The class of each local binder of `body`: the join of the classes its
-/// instantiations pass for it, which may name other local binders.
+/// The classes of the local binders of an instance's body. A binder has a
+/// class in each body of the lambda that quantifies it: the join of the
+/// classes its instantiations that select that body pass for it
+/// (`new-plans/ir.md`, "Convention entry").
+#[derive(Default, PartialEq, Eq)]
+pub(crate) struct Locals {
+    classes: HashMap<(u32, usize), CallingConvention>,
+    owners: HashMap<u32, OpRef>,
+}
+
+impl Locals {
+    /// The class of local `binder` in the body of its lambda that holds
+    /// `at`, or in the lambda's first body when `at` is outside them.
+    pub(crate) fn get(&self, ctx: &IrContext, binder: u32, at: OpRef) -> Option<CallingConvention> {
+        let body = self
+            .owners
+            .get(&binder)
+            .map_or(0, |&owner| body_index(ctx, owner, at));
+        self.classes.get(&(binder, body)).copied()
+    }
+}
+
+/// The index of the body of `owner` that holds `at`, or 0 when none does.
+fn body_index(ctx: &IrContext, owner: OpRef, at: OpRef) -> usize {
+    let mut current = at;
+    while let Some(region) = ctx
+        .op(current)
+        .parent_block
+        .and_then(|block| ctx.block(block).parent_region)
+    {
+        let Some(parent) = ctx.region(region).parent_op else {
+            break;
+        };
+        if parent == owner {
+            return ctx
+                .op_regions(owner)
+                .position(|body| body == region)
+                .unwrap_or(0);
+        }
+        current = parent;
+    }
+    0
+}
+
+/// The class of each local binder of `body` in each body of its lambda.
+///
+/// An instantiation selects the body of the class of the row it makes. That
+/// class can rise as the binders it reads settle and move the instantiation
+/// to another body, so each round recomputes the classes from the previous
+/// one rather than joining into them.
 pub(crate) fn settle_locals(
     ctx: &IrContext,
     body: RegionRef,
     binders: &[RowBinder],
     requirements: &HashMap<SymbolPath, CallingConvention>,
     params: &HashMap<u32, CallingConvention>,
-) -> HashMap<u32, CallingConvention> {
+) -> Locals {
     let mut instantiations = Vec::new();
+    let mut owners = HashMap::default();
     let _ = walk_region::<()>(ctx, body, &mut |op| {
-        if let Some((_, quantified, rows)) = instantiation(ctx, op) {
-            instantiations.push((quantified, rows));
+        for binder in tribute_control::quantified_rows(ctx, op).unwrap_or_default() {
+            owners.insert(binder, op);
+        }
+        if let Some((lambda, quantified, rows)) = instantiation(ctx, op) {
+            let made = FuncSig::from_type_ref(ctx, ctx.op_result_types(op)[0])
+                .map(|signature| signature.row(ctx));
+            let bodies = tribute_cps::body_conventions(ctx, lambda).filter(|c| c.len() > 1);
+            instantiations.push((op, quantified, rows, made, bodies));
         }
         ControlFlow::Continue(WalkAction::Advance)
     });
-    let mut locals = HashMap::default();
-    loop {
-        let mut changed = false;
-        for (quantified, rows) in &instantiations {
-            for (binder, row) in quantified.iter().zip(rows) {
-                let class = row_class(row, binders, requirements, params, &locals);
-                let joined = locals
-                    .get(binder)
-                    .map_or(class, |known: &CallingConvention| (*known).max(class));
-                if locals.insert(*binder, joined) != Some(joined) {
-                    changed = true;
+    let mut locals = Locals {
+        classes: HashMap::default(),
+        owners,
+    };
+    // While no instantiation changes body, a round only raises classes, each
+    // binder at most twice in each of at most three bodies. An instantiation
+    // that changes body can keep the classes from settling; the last round
+    // then stands, and the checks report what it leaves.
+    let rounds = 6 * locals.owners.len() + 2;
+    for _ in 0..rounds {
+        let mut classes: HashMap<(u32, usize), CallingConvention> = HashMap::default();
+        for (op, quantified, rows, made, bodies) in &instantiations {
+            let class = |row: &Row| {
+                row_class(row, binders, requirements, params, |binder| {
+                    locals.get(ctx, binder, *op)
+                })
+            };
+            let body = match (made, bodies) {
+                (Some(made), Some(bodies)) => {
+                    let selected = class(made);
+                    bodies
+                        .iter()
+                        .position(|&convention| convention == selected)
+                        .unwrap_or(0)
                 }
+                _ => 0,
+            };
+            for (binder, row) in quantified.iter().zip(rows) {
+                let class = class(row);
+                classes
+                    .entry((*binder, body))
+                    .and_modify(|known| *known = (*known).max(class))
+                    .or_insert(class);
             }
         }
-        if !changed {
-            return locals;
+        if classes == locals.classes {
+            break;
         }
+        locals.classes = classes;
     }
+    locals
 }

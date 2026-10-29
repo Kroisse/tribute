@@ -117,13 +117,46 @@ fn a_local_class_settles_from_direct_through_other_locals() {
 }
 
 #[test]
-fn every_instantiation_of_a_lambda_selects_the_same_classes() {
+fn a_lambda_has_a_body_for_each_class_its_instantiations_select() {
     let input = LOCAL.replace("CTL", CTL).replace(
         "USE",
         "%b = tribute_control.instantiate %g {row_args = [{instances = [@Ctl]}]} : !lc",
     );
-    let found = rules(&input);
-    assert!(found.contains(&"instantiate"), "{found:?}");
+    assert_eq!(rules(&input), ["lambda"]);
+    let input = input.replace(
+        "      direct {\n        tribute_control.return %y\n      }\n",
+        "      direct {\n        tribute_control.return %y\n      }\n      cps {\n        tribute_control.return %y\n      }\n",
+    );
+    assert_eq!(rules(&input), [""; 0]);
+}
+
+#[test]
+fn instantiations_that_select_one_class_pass_the_same_classes() {
+    let input = |second: &str| {
+        format!(
+            r#"core.module @m {{
+  !l0 = tribute_control.func_sig<(core.i32) -> core.i32, {{ability_row = {{instances = [@Ctl]}}}}>
+  !la = tribute_control.func_sig<(core.i32) -> core.i32, {{ability_row = {{instances = [@Ask, @Ctl]}}}}>
+  ability.decl {{sym_name = "Ask"}} {{
+    ability.operation {{kind = "fn", op_name = "ask", param_types = [], result_type = core.i32}}
+  }}
+{CTL}
+  tribute_cps.func @f[local 'a0](%x: core.i32) -> core.i32 convention(direct) {{
+    %g = tribute_cps.lambda['a0](%y: core.i32) -> core.i32 row(@Ctl | 'a0) captures [] entries {{
+      cps {{
+        tribute_control.return %y
+      }}
+    }}
+    %a = tribute_control.instantiate %g {{row_args = [{{}}]}} : !l0
+    %b = tribute_control.instantiate %g {{row_args = [{second}]}} : {}
+    tribute_control.return %x
+  }}
+}}"#,
+            if second == "{}" { "!l0" } else { "!la" }
+        )
+    };
+    assert_eq!(rules(&input("{}")), [""; 0]);
+    assert_eq!(rules(&input("{instances = [@Ask]}")), ["instantiate"]);
 }
 
 #[test]
