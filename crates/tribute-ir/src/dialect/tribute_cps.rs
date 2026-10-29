@@ -93,9 +93,10 @@ mod tribute_cps {
     ///   when that row reads as an upper bound. Its body of a convention
     ///   reads each binder it quantifies with the class its uses of that
     ///   class pass, as an upper bound when they pass different ones, and
-    ///   its own row's tail narrowed to that convention. Calling the
-    ///   value with a convention that has a body runs that body; legalization
-    ///   fills the other convention entries.
+    ///   its own row's tail, when that tail reads as an upper bound, as an
+    ///   upper bound narrowed to that convention. Calling the value with a
+    ///   convention that has a body runs that body; legalization fills the
+    ///   other convention entries.
     /// - **Verification:** the verifier checks that the conventions are
     ///   strictly increasing and that there is a body for each one.
     ///   Otherwise as `tribute_control.lambda`, for each body.
@@ -128,7 +129,8 @@ mod tribute_cps {
     /// - **Meaning:** the callable value whose convention entry of each
     ///   element of `conventions` runs the instance at the same position of
     ///   `func_refs`. Each instance is the one `row_args` selects with the
-    ///   tail of the value's row read as that convention. The conventions
+    ///   tail of the value's row narrowed to that convention as a lambda
+    ///   body narrows it. The conventions
     ///   are the classes `new-plans/ir.md` ("Convention entry", 함수 참조)
     ///   gives a function reference. When an instance's convention is
     ///   weaker, legalization fills the entry with an adapter. When a

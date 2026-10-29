@@ -939,8 +939,11 @@ instance들의 requirement를 합친 class이며, row가 실행 중에 요구하
 - 사용의 class나 자기 row의 class가 상한이면, 그 row의 하한부터 상한까지의 class마다
   본문을 둔다.
 
-Class `c`의 본문은 위 읽기를 따르되, 자기 row의 tail을 `c`로 좁혀 읽는다. 하한이
-`c`보다 약하면 tail은 정확한 `c`이고, 그렇지 않으면 상한 `c`다.
+Class `c`의 본문은 위 읽기를 따르되, 자기 row의 tail이 상한이면 그 상한을 `c`로
+좁혀 상한으로 읽는다. 상한 이하의 class로 부르면 그 class의 본문으로 들어오므로,
+본문 `c`에 들어온 값의 실제 class는 `c`보다 강하지 않다는 것만 알 수 있다. 그래서
+하한이 `c`보다 약해도 tail을 정확한 `c`로 읽지 않으며, 본문 `c`가 그 tail로 만드는
+callable도 하한부터 `c`까지 본문을 가진다.
 
 **값은 나누지 않는다.** 같은 class를 고르는 사용들이 양화한 binder에 서로 다른 class를
 넘겨도 람다는 값 하나다. 그 binder로 읽는 row가 상한이 되고, 본문이 그 row로 만드는
@@ -992,8 +995,8 @@ class(상한이면 상한)와 같아야 하며, 다르면 컴파일 오류다. T
 
 **함수 참조.** `func_ref`는 람다가 본문을 두는 규칙과 같은 class마다 대상 인스턴스
 하나를 둔다. 값의 row의 class가 정확하면 그 class 하나이고, 상한이면 하한부터
-상한까지다. Class `c`의 대상은 값의 row의 tail을 `c`로 좁혀 읽은 `row_args`의 class
-인자가 고르는 인스턴스이며, 대상들을 본문으로 삼아 같은 규칙으로 convention entry를
+상한까지다. Class `c`의 대상은 본문과 같이 값의 row의 tail을 `c`로 좁혀 읽은 `row_args`의
+class 인자가 고르는 인스턴스이며, 대상들을 본문으로 삼아 같은 규칙으로 convention entry를
 채운다. 대상이 class 없는 tail 때문에 그 값의 row가 요구하는 것보다 강한 `Cps`
 인스턴스이면, 더 약한 convention entry는
 [값 delimiter](cps-effects.md#값-delimiter)로 worker를 부르는
