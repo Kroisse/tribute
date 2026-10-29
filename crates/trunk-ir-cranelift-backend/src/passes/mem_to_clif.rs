@@ -20,7 +20,7 @@ pub fn lower(
     module: Module,
     type_converter: TypeConverter,
 ) -> Result<(), ConversionError> {
-    let mut applicator = PatternApplicator::new(type_converter)
+    let applicator = PatternApplicator::new(type_converter)
         .with_auto_type_conversion(true)
         .add_pattern(MemLoadPattern)
         .add_pattern(MemStorePattern)
@@ -41,7 +41,7 @@ struct MemLoadPattern;
 
 impl RewritePattern for MemLoadPattern {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -71,7 +71,7 @@ struct MemStorePattern;
 
 impl RewritePattern for MemStorePattern {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -99,7 +99,7 @@ struct MemPtrAddPattern;
 
 impl RewritePattern for MemPtrAddPattern {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -125,7 +125,7 @@ struct MemNullPattern;
 
 impl RewritePattern for MemNullPattern {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,

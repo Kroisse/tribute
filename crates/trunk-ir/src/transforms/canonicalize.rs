@@ -134,7 +134,7 @@ impl FoldDispatchPattern {
 
 impl RewritePattern for FoldDispatchPattern {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -545,7 +545,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, input);
 
-        let mut applicator = PatternApplicator::new(TypeConverter::new())
+        let applicator = PatternApplicator::new(TypeConverter::new())
             .with_max_iterations(1)
             .add_pattern_box(Box::new(FoldDispatchPattern::from_inventory()));
         let result = applicator.apply_partial(&mut ctx, module);

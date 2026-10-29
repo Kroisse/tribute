@@ -145,7 +145,7 @@ struct EmptyPattern;
 
 impl RewritePattern for EmptyPattern {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -168,7 +168,7 @@ struct PrependPattern;
 
 impl RewritePattern for PrependPattern {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -191,7 +191,7 @@ struct IsEmptyPattern;
 
 impl RewritePattern for IsEmptyPattern {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,

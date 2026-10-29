@@ -21,7 +21,7 @@ pub fn lower(
     module: Module,
     type_converter: TypeConverter,
 ) -> Result<(), ConversionError> {
-    let mut applicator = PatternApplicator::new(type_converter)
+    let applicator = PatternApplicator::new(type_converter)
         .with_auto_type_conversion(true)
         .add_pattern(CfBrPattern)
         .add_pattern(CfCondBrPattern)
@@ -42,7 +42,7 @@ struct CfBrPattern;
 
 impl RewritePattern for CfBrPattern {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -62,7 +62,7 @@ struct CfCondBrPattern;
 
 impl RewritePattern for CfCondBrPattern {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -86,7 +86,7 @@ struct CfSwitchPattern;
 
 impl RewritePattern for CfSwitchPattern {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,

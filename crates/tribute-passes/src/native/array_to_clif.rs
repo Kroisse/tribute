@@ -347,7 +347,7 @@ impl Emitter<'_> {
 
 impl RewritePattern for ArrayPatterns {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,

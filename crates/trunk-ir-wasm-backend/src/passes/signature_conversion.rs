@@ -14,7 +14,7 @@ pub struct WasmFuncSignatureConversionPattern;
 
 impl RewritePattern for WasmFuncSignatureConversionPattern {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,

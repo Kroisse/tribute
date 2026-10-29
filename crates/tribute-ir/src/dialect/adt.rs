@@ -240,7 +240,7 @@ struct ForwardStructGet {
 
 impl RewritePattern for ForwardStructGet {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,

@@ -6,8 +6,6 @@
 //! struct/array operations on the bytes layout. The bytes element read intrinsic is lowered inside the boundary by
 //! `wasm/bytes.rs`.
 
-use std::rc::Rc;
-
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::wasm as wasm_dialect;
@@ -85,12 +83,12 @@ pub const BYTES_SLICE_OR_PANIC: &str = "__tribute_bytes_slice_or_panic";
 
 /// Bind calls to the `extern "C"` bytes helpers to WasmGC operations.
 pub(crate) fn lower(ctx: &mut IrContext, module: Module) {
-    let symbols = Rc::new(SymbolTable::collect(ctx, module));
-    let mut applicator = PatternApplicator::new(TypeConverter::new())
-        .add_pattern(BytesLenPattern(Rc::clone(&symbols)))
-        .add_pattern(BytesRangeEqualPattern(Rc::clone(&symbols)))
-        .add_pattern(BytesConcatPattern(Rc::clone(&symbols)))
-        .add_pattern(BytesSliceOrPanicPattern(symbols));
+    let symbols = SymbolTable::collect(ctx, module);
+    let applicator = PatternApplicator::new(TypeConverter::new())
+        .add_pattern(BytesLenPattern(&symbols))
+        .add_pattern(BytesRangeEqualPattern(&symbols))
+        .add_pattern(BytesConcatPattern(&symbols))
+        .add_pattern(BytesSliceOrPanicPattern(&symbols));
 
     applicator.apply_partial(ctx, module);
 }
@@ -111,16 +109,16 @@ fn calls_c_helper(ctx: &IrContext, symbols: &SymbolTable, op: OpRef, helper: &'s
 /// Pattern for `__tribute_bytes_len(bytes)` -> `struct.get $bytes 2`
 ///
 /// Returns i32 directly since Nat is mapped to i32.
-struct BytesLenPattern(Rc<SymbolTable>);
+struct BytesLenPattern<'a>(&'a SymbolTable);
 
-impl RewritePattern for BytesLenPattern {
+impl RewritePattern for BytesLenPattern<'_> {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if !calls_c_helper(ctx, &self.0, op, BYTES_LEN) {
+        if !calls_c_helper(ctx, self.0, op, BYTES_LEN) {
             return false;
         }
 
@@ -153,16 +151,16 @@ impl RewritePattern for BytesLenPattern {
 /// The generated Wasm loop compares bytes directly in the two backing arrays
 /// and exits at the first mismatch. String equality invokes this once per pair
 /// of contiguous rope-leaf spans rather than once per logical byte.
-struct BytesRangeEqualPattern(Rc<SymbolTable>);
+struct BytesRangeEqualPattern<'a>(&'a SymbolTable);
 
-impl RewritePattern for BytesRangeEqualPattern {
+impl RewritePattern for BytesRangeEqualPattern<'_> {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if !calls_c_helper(ctx, &self.0, op, BYTES_RANGE_EQUAL) {
+        if !calls_c_helper(ctx, self.0, op, BYTES_RANGE_EQUAL) {
             return false;
         }
 
@@ -335,16 +333,16 @@ fn value_break_region(
 }
 
 /// Pattern for `__tribute_bytes_concat(left, right)` -> allocate a new array and copy both
-struct BytesConcatPattern(Rc<SymbolTable>);
+struct BytesConcatPattern<'a>(&'a SymbolTable);
 
-impl RewritePattern for BytesConcatPattern {
+impl RewritePattern for BytesConcatPattern<'_> {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if !calls_c_helper(ctx, &self.0, op, BYTES_CONCAT) {
+        if !calls_c_helper(ctx, self.0, op, BYTES_CONCAT) {
             return false;
         }
 
@@ -440,16 +438,16 @@ impl RewritePattern for BytesConcatPattern {
 /// Pattern for `__tribute_bytes_slice_or_panic(bytes, start, end)`: trap
 /// unless `start <= end <= bytes.len`, then share the backing array in a new
 /// Bytes struct.
-struct BytesSliceOrPanicPattern(Rc<SymbolTable>);
+struct BytesSliceOrPanicPattern<'a>(&'a SymbolTable);
 
-impl RewritePattern for BytesSliceOrPanicPattern {
+impl RewritePattern for BytesSliceOrPanicPattern<'_> {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if !calls_c_helper(ctx, &self.0, op, BYTES_SLICE_OR_PANIC) {
+        if !calls_c_helper(ctx, self.0, op, BYTES_SLICE_OR_PANIC) {
             return false;
         }
 

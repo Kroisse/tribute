@@ -124,10 +124,10 @@ Type adaptation is enabled separately when a pass needs it.
 
 Rules:
 
-- A pattern keeps no state across matches except read-only analysis data and
-  state the driver owns and reads back after the applicator finishes, such as
-  an analysis the pattern updates for each rewrite it records. A pattern does
-  not cache IR facts between matches; later rewrites make them stale.
+- A pattern decides only from the IR and read-only data it borrows from the
+  driver. Output the driver reads back, such as a count, never decides a later
+  rewrite. A pattern does not cache IR facts between matches; later rewrites
+  make them stale.
 - Prefer focused patterns over large manual tree walks.
 - Use explicit partial or full conversion entry points when legality matters.
 - Keep exact API behavior in Rustdoc near `ConversionTarget`,

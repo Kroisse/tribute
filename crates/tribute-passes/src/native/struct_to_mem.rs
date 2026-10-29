@@ -149,7 +149,7 @@ struct VariantGetPattern {
 
 impl RewritePattern for VariantGetPattern {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -181,7 +181,7 @@ struct VariantIsPattern {
 
 impl RewritePattern for VariantIsPattern {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,

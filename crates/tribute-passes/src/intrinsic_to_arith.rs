@@ -7,7 +7,6 @@
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
-use std::rc::Rc;
 
 use tribute_ir::dialect::tribute_control::COMPILER_INTRINSIC_ATTR;
 use trunk_ir::analysis::AnalysisCache;
@@ -33,33 +32,33 @@ use trunk_ir::{Symbol, SymbolPath};
 /// contain only `func.unreachable` — are given a real body so they remain
 /// valid when used as first-class values (closures, `func.constant`, etc.).
 pub(crate) fn lower_intrinsic_to_arith(ctx: &mut IrContext, module: Module) {
-    let pattern = ArithIntrinsicPattern::new();
-    let intrinsic_map: HashMap<SymbolPath, ArithMapping> = pattern.map.clone();
-    let eligible: Rc<HashSet<SymbolPath>> = Rc::new(
-        module
-            .ops(ctx)
-            .iter()
-            .copied()
-            .filter_map(|op| {
-                let function = func::Func::from_op(ctx, op).ok()?;
-                let symbol = SymbolPath::new([function.sym_name(ctx)]);
-                (ctx.op_attrs(op)
-                    .get_str(COMPILER_INTRINSIC_ATTR)
-                    .is_some_and(|identity| symbol == [identity])
-                    && intrinsic_map.get(&symbol).is_some_and(|mapping| {
-                        exact_signature(ctx, function.r#type(ctx), &symbol, mapping)
-                    }))
-                .then_some(symbol)
-            })
-            .collect(),
-    );
+    let intrinsic_map = ArithIntrinsicPattern::intrinsic_map();
+    let eligible: HashSet<SymbolPath> = module
+        .ops(ctx)
+        .iter()
+        .copied()
+        .filter_map(|op| {
+            let function = func::Func::from_op(ctx, op).ok()?;
+            let symbol = SymbolPath::new([function.sym_name(ctx)]);
+            (ctx.op_attrs(op)
+                .get_str(COMPILER_INTRINSIC_ATTR)
+                .is_some_and(|identity| symbol == [identity])
+                && intrinsic_map.get(&symbol).is_some_and(|mapping| {
+                    exact_signature(ctx, function.r#type(ctx), &symbol, mapping)
+                }))
+            .then_some(symbol)
+        })
+        .collect();
 
     let mut applicator = PatternApplicator::new(TypeConverter::new());
     applicator = applicator
-        .add_pattern(pattern.with_eligible(Rc::clone(&eligible)))
+        .add_pattern(ArithIntrinsicPattern {
+            map: intrinsic_map.clone(),
+            eligible: &eligible,
+        })
         .add_pattern(ArithIntrinsicFuncDeclPattern {
             intrinsic_map,
-            eligible: Rc::clone(&eligible),
+            eligible: &eligible,
         });
     applicator.apply_partial(ctx, module);
 
@@ -142,13 +141,13 @@ enum ArithMapping {
 
 /// Pattern that matches `func.call` to known arithmetic intrinsics and
 /// rewrites them to the corresponding `arith.*` dialect operations.
-struct ArithIntrinsicPattern {
+struct ArithIntrinsicPattern<'a> {
     map: HashMap<SymbolPath, ArithMapping>,
-    eligible: Rc<HashSet<SymbolPath>>,
+    eligible: &'a HashSet<SymbolPath>,
 }
 
-impl ArithIntrinsicPattern {
-    fn new() -> Self {
+impl ArithIntrinsicPattern<'_> {
+    fn intrinsic_map() -> HashMap<SymbolPath, ArithMapping> {
         let mut map = HashMap::default();
 
         macro_rules! binary {
@@ -241,21 +240,13 @@ impl ArithIntrinsicPattern {
         cmpf!("std::Float::>", "ogt");
         cmpf!("std::Float::>=", "oge");
 
-        Self {
-            map,
-            eligible: Rc::new(HashSet::default()),
-        }
-    }
-
-    fn with_eligible(mut self, eligible: Rc<HashSet<SymbolPath>>) -> Self {
-        self.eligible = eligible;
-        self
+        map
     }
 }
 
-impl RewritePattern for ArithIntrinsicPattern {
+impl RewritePattern for ArithIntrinsicPattern<'_> {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -306,14 +297,14 @@ impl RewritePattern for ArithIntrinsicPattern {
 /// This allows intrinsic operators to work as first-class values (closures,
 /// `func.constant` references) while also removing the `abi = "intrinsic"`
 /// marker so the backend treats them as normal functions.
-struct ArithIntrinsicFuncDeclPattern {
+struct ArithIntrinsicFuncDeclPattern<'a> {
     intrinsic_map: HashMap<SymbolPath, ArithMapping>,
-    eligible: Rc<HashSet<SymbolPath>>,
+    eligible: &'a HashSet<SymbolPath>,
 }
 
-impl RewritePattern for ArithIntrinsicFuncDeclPattern {
+impl RewritePattern for ArithIntrinsicFuncDeclPattern<'_> {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,

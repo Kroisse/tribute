@@ -36,7 +36,7 @@ pub(crate) fn lower_handle_dispatch(
     ctx: &mut IrContext,
     scope: impl RewriteScope,
 ) -> Result<(), ConversionError> {
-    let mut applicator = PatternApplicator::new(TypeConverter::new())
+    let applicator = PatternApplicator::new(TypeConverter::new())
         .with_target(ability_lowered_target())
         .add_pattern(LowerHandleDispatchPattern);
     applicator.apply_partial_conversion(ctx, scope, ABILITY_LOWERED_BOUNDARY)?;
@@ -69,7 +69,7 @@ struct LowerHandleDispatchPattern;
 
 impl RewritePattern for LowerHandleDispatchPattern {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,

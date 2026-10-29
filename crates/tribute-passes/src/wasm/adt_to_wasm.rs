@@ -141,7 +141,7 @@ fn descriptor_operand(
 /// their own type conversion rules.
 pub(crate) fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
     let numbers = tribute_rtti::Layout::declared_indices(ctx, module);
-    let mut applicator = PatternApplicator::new(type_converter)
+    let applicator = PatternApplicator::new(type_converter)
         .add_pattern(StructNewPattern {
             numbers: numbers.clone(),
         })
@@ -175,7 +175,7 @@ struct StructNewPattern {
 
 impl RewritePattern for StructNewPattern {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -217,7 +217,7 @@ struct StructGetPattern;
 
 impl RewritePattern for StructGetPattern {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -250,7 +250,7 @@ struct StructSetPattern;
 
 impl RewritePattern for StructSetPattern {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -286,7 +286,7 @@ struct VariantNewPattern {
 
 impl RewritePattern for VariantNewPattern {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -332,7 +332,7 @@ struct VariantIsPattern {
 
 impl RewritePattern for VariantIsPattern {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -392,7 +392,7 @@ struct VariantCastPattern;
 
 impl RewritePattern for VariantCastPattern {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -431,7 +431,7 @@ struct VariantGetPattern;
 
 impl RewritePattern for VariantGetPattern {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -501,7 +501,7 @@ struct ArrayNewPattern;
 
 impl RewritePattern for ArrayNewPattern {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -527,7 +527,7 @@ struct ArrayOfPattern;
 
 impl RewritePattern for ArrayOfPattern {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -561,7 +561,7 @@ struct ArraySplicePattern;
 
 impl RewritePattern for ArraySplicePattern {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -751,7 +751,7 @@ struct ArrayGetPattern;
 
 impl RewritePattern for ArrayGetPattern {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -828,7 +828,7 @@ struct ArraySetPattern;
 
 impl RewritePattern for ArraySetPattern {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -855,7 +855,7 @@ struct ArrayLenPattern;
 
 impl RewritePattern for ArrayLenPattern {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -899,7 +899,7 @@ struct RefNullPattern;
 
 impl RewritePattern for RefNullPattern {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -927,7 +927,7 @@ struct RefIsNullPattern;
 
 impl RewritePattern for RefIsNullPattern {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -953,7 +953,7 @@ struct RefCastPattern;
 
 impl RewritePattern for RefCastPattern {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,

@@ -174,7 +174,7 @@ pub(super) struct ExpandDispatches {
 
 impl RewritePattern for ExpandDispatches {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,

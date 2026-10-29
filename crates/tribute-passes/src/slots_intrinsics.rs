@@ -12,7 +12,6 @@
 
 use rustc_hash::FxHashMap as HashMap;
 use std::ops::ControlFlow;
-use std::rc::Rc;
 
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::tribute_control::COMPILER_INTRINSIC_ATTR;
@@ -103,12 +102,13 @@ impl Pass for LowerSlotsIntrinsics {
             return Ok(());
         }
         reject_other_references(ctx, module, &declarations)?;
-        let declarations = Rc::new(declarations);
         PatternApplicator::new(TypeConverter::new())
             .add_pattern(SlotsCallPattern {
-                declarations: Rc::clone(&declarations),
+                declarations: &declarations,
             })
-            .add_pattern(SlotsDeclarationPattern { declarations })
+            .add_pattern(SlotsDeclarationPattern {
+                declarations: &declarations,
+            })
             .apply_partial(ctx, module);
         Ok(())
     }
@@ -145,13 +145,13 @@ fn reject_other_references(
     found.map_or(Ok(()), Err)
 }
 
-struct SlotsCallPattern {
-    declarations: Rc<HashMap<SymbolPath, SlotsOp>>,
+struct SlotsCallPattern<'a> {
+    declarations: &'a HashMap<SymbolPath, SlotsOp>,
 }
 
-impl RewritePattern for SlotsCallPattern {
+impl RewritePattern for SlotsCallPattern<'_> {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -264,13 +264,13 @@ impl Lowering<'_, '_> {
     }
 }
 
-struct SlotsDeclarationPattern {
-    declarations: Rc<HashMap<SymbolPath, SlotsOp>>,
+struct SlotsDeclarationPattern<'a> {
+    declarations: &'a HashMap<SymbolPath, SlotsOp>,
 }
 
-impl RewritePattern for SlotsDeclarationPattern {
+impl RewritePattern for SlotsDeclarationPattern<'_> {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,

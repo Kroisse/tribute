@@ -48,7 +48,7 @@ fn lower(
     module: Module,
     type_converter: TypeConverter,
 ) -> Result<(), ConversionError> {
-    let mut applicator = PatternApplicator::new(type_converter)
+    let applicator = PatternApplicator::new(type_converter)
         .with_auto_type_conversion(true)
         .add_pattern(StructGetPattern)
         .add_pattern(StructSetPattern)
@@ -91,7 +91,7 @@ struct StructGetPattern;
 
 impl RewritePattern for StructGetPattern {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -140,7 +140,7 @@ struct StructSetPattern;
 
 impl RewritePattern for StructSetPattern {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -179,7 +179,7 @@ struct VariantCastPattern;
 
 impl RewritePattern for VariantCastPattern {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -197,7 +197,7 @@ struct RefNullPattern;
 
 impl RewritePattern for RefNullPattern {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -220,7 +220,7 @@ struct RefCastPattern;
 
 impl RewritePattern for RefCastPattern {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -238,7 +238,7 @@ struct RefIsNullPattern;
 
 impl RewritePattern for RefIsNullPattern {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,

@@ -161,11 +161,11 @@ Patterns implement `RewritePattern` with `match_and_rewrite`:
 - `op`: The matched `OpRef`, inspected through typed `from_op` wrappers
 - `rewriter`: `PatternRewriter` that records structural mutations
 
-`match_and_rewrite` takes `&mut self`, and `PatternApplicator<'p>` holds its
-patterns for `'p`, so a pattern can borrow `&'p mut` state from the driver
-without `Rc` or `RefCell`. The driver reads that state back once the
-applicator is dropped. Keep only such driver-owned state across matches, not
-caches of IR facts.
+`match_and_rewrite` takes `&self`. `PatternApplicator<'p>` holds its patterns
+for `'p`, so patterns borrow data the driver computed (`&'p SymbolTable`)
+instead of sharing it through `Rc` or `Arc`. A pattern that reports to the
+driver writes through a driver-owned `Cell` or `RefCell`; what it writes does
+not decide later rewrites, and no pattern caches IR facts across matches.
 
 A pass that converts types builds its type converter in `run` and passes it to
 `PatternApplicator`. `PassManager` holds no converter.

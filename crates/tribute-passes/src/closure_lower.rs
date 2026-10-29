@@ -25,7 +25,6 @@
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
-use std::sync::Arc;
 
 use tribute_ir::calling_convention::{CallingConvention, ConventionBearing, DynConventionBearing};
 use tribute_ir::dialect::adt;
@@ -119,13 +118,13 @@ pub(crate) fn is_closure_layout(ctx: &IrContext, ty: TypeRef) -> bool {
 /// left for the boundary exit to reject. Until storage finalization,
 /// remaining uses keep the semantic closure type through an unrealized cast
 /// of the pack.
-struct LowerClosureNewArena {
-    functions: Arc<SymbolTable>,
+struct LowerClosureNewArena<'a> {
+    functions: &'a SymbolTable,
 }
 
-impl RewritePattern for LowerClosureNewArena {
+impl RewritePattern for LowerClosureNewArena<'_> {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -194,7 +193,7 @@ struct LowerClosureUnpackArena;
 
 impl RewritePattern for LowerClosureUnpackArena {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -238,7 +237,7 @@ struct LowerClosureCallArena;
 
 impl RewritePattern for LowerClosureCallArena {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -316,7 +315,7 @@ struct LowerClosureTailCallArena;
 
 impl RewritePattern for LowerClosureTailCallArena {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -483,7 +482,7 @@ struct LowerClosureEntryArena;
 
 impl RewritePattern for LowerClosureEntryArena {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
@@ -594,7 +593,7 @@ pub fn lower_prepared_closures(ctx: &mut IrContext, module: Module) -> PassRunRe
             break;
         }
         // Rebuilt per batch so functions introduced by lowering resolve too.
-        let functions = Arc::new(SymbolTable::collect(ctx, module));
+        let functions = SymbolTable::collect(ctx, module);
 
         // Validate the batch as a whole before rewriting any body.
         for &function in &discovered {
@@ -602,7 +601,7 @@ pub fn lower_prepared_closures(ctx: &mut IrContext, module: Module) -> PassRunRe
             validate_closure_constructions(ctx, function, &functions)?;
         }
         for func_op in discovered.into_iter().rev() {
-            rewrite_validated_closures_in_func(ctx, func_op, functions.clone());
+            rewrite_validated_closures_in_func(ctx, func_op, &functions);
             // Closure lowering is the last reader of a function's convention.
             func_op.remove_calling_convention(ctx);
         }
@@ -717,12 +716,12 @@ fn validate_entry_function(
 fn rewrite_validated_closures_in_func(
     ctx: &mut IrContext,
     func_op: func::Func,
-    functions: Arc<SymbolTable>,
+    functions: &SymbolTable,
 ) {
     if !ctx.op_has_regions(func_op.op_ref()) {
         return;
     }
-    let mut applicator = PatternApplicator::new(TypeConverter::new())
+    let applicator = PatternApplicator::new(TypeConverter::new())
         .with_target(
             ConversionTarget::new()
                 .legal_op("func.func")
@@ -1310,7 +1309,7 @@ mod tests {
             assert_eq!(print_module(&ctx, module.op()), before);
             assert_eq!(collect_ops(&ctx, module.op()), ops);
             // The rewrite pattern must also decline unsupported arities safely.
-            rewrite_validated_closures_in_func(&mut ctx, invalid, Default::default());
+            rewrite_validated_closures_in_func(&mut ctx, invalid, &SymbolTable::default());
             assert_eq!(print_module(&ctx, module.op()), before);
             assert_eq!(collect_ops(&ctx, module.op()), ops);
         }

@@ -350,7 +350,7 @@ pub(super) struct ExpandSuffixFrames {
 
 impl RewritePattern for ExpandSuffixFrames {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,

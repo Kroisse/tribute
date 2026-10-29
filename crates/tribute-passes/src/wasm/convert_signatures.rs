@@ -32,7 +32,7 @@ pub(crate) fn lower(ctx: &mut IrContext, module: Module) {
     // lowered uses, such as an `adt.array_get` of an array parameter, is cast
     // back to the type that operation's schema requires; target lowering
     // consumes the cast.
-    let mut applicator = PatternApplicator::new(type_converter)
+    let applicator = PatternApplicator::new(type_converter)
         .with_target(
             ConversionTarget::new()
                 .illegal_op("func.func")
@@ -63,7 +63,7 @@ struct IndirectCallSignaturePattern;
 
 impl RewritePattern for IndirectCallSignaturePattern {
     fn match_and_rewrite(
-        &mut self,
+        &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
