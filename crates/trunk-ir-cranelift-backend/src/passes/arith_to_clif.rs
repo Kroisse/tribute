@@ -95,6 +95,19 @@ impl OpRewritePattern for NilValuePattern {
     }
 }
 
+/// The `iconst` immediate of `value` in an integer type of `width` bits, if
+/// `value` is in the signed or unsigned range of that width.
+fn integer_immediate(value: i128, width: u32) -> Option<i64> {
+    if width >= 64 {
+        return i64::try_from(value)
+            .ok()
+            .or_else(|| u64::try_from(value).ok().map(|value| value as i64));
+    }
+    let min = -(1i128 << (width - 1));
+    let max = (1i128 << width) - 1;
+    (min..=max).contains(&value).then_some(value as i64)
+}
+
 struct ArithConstPattern;
 
 impl OpRewritePattern for ArithConstPattern {
@@ -142,9 +155,10 @@ impl OpRewritePattern for ArithConstPattern {
             }
             _ => match value {
                 Attribute::Int(v) => {
+                    let width = IntegerLike::width(ctx, result_ty).unwrap_or(64);
                     let v = rewriter.require(
-                        i64::try_from(v).ok(),
-                        "integer constant does not fit in an i64",
+                        integer_immediate(v, width),
+                        "integer constant does not fit its type",
                     )?;
                     clif::Iconst::operands()
                         .value(v)
@@ -645,6 +659,7 @@ impl RewritePattern for ArithIndexCastPattern {
 
 #[cfg(test)]
 mod tests {
+    use super::integer_immediate;
     use trunk_ir::context::IrContext;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
@@ -669,6 +684,17 @@ mod tests {
             .add_conversion(move |ctx, ty| core::Index::matches(ctx, ty).then_some(i64_ty));
         super::lower(&mut ctx, module, type_converter).unwrap();
         print_module(&ctx, module.op())
+    }
+
+    #[test]
+    fn integer_immediates_accept_the_signed_and_unsigned_range_of_their_width() {
+        assert_eq!(integer_immediate(-128, 8), Some(-128));
+        assert_eq!(integer_immediate(255, 8), Some(255));
+        assert_eq!(integer_immediate(256, 8), None);
+        assert_eq!(integer_immediate(-129, 8), None);
+        assert_eq!(integer_immediate(u64::MAX.into(), 64), Some(-1));
+        assert_eq!(integer_immediate(i64::MIN.into(), 64), Some(i64::MIN));
+        assert_eq!(integer_immediate(i128::from(u64::MAX) + 1, 64), None);
     }
 
     #[test]
