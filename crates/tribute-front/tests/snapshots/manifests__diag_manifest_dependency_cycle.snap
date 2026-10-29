@@ -1,0 +1,6 @@
+---
+source: crates/tribute-front/tests/manifests.rs
+expression: ws.source_errors(app)
+---
+/ws/app/tribute.toml:61..67 `itself`: dependency `itself` depends on this package again, forming a cycle
+/ws/b/tribute.toml:37..38 `c`: dependency `c` depends on this package again, forming a cycle

@@ -1,0 +1,14 @@
+---
+source: crates/tribute-front/tests/manifests.rs
+expression: ws.source_errors(app)
+---
+/ws/app/tribute.toml:113..116 `geo`: dependency `geo` names the package `geometry` in `/ws/geometry`; the entry must be named `geometry`
+/ws/app/tribute.toml:164..177 `"../app_only"`: dependency `app_only` has no `src/lib.trb` in `/ws/app_only`
+/ws/app/tribute.toml:180..183 `std`: `std` names the standard library, which every package depends on
+/ws/app/tribute.toml:206..215 `versioned`: dependency `versioned` names the package `geometry` in `/ws/geometry`; the entry must be named `geometry`
+/ws/app/tribute.toml:242..249 `version`: unknown key `version` in dependency `versioned`; a dependency has only `path`
+/ws/app/tribute.toml:265..278 `"../geometry"`: dependency `bare` must be a table `{ path = "…" }`
+/ws/app/tribute.toml:279..287 `pathless`: dependency `pathless` has no `path`
+/ws/app/tribute.toml:313..314 `1`: `path` must be a string
+/ws/app/tribute.toml:58..70 `"../missing"`: cannot find `tribute.toml` of dependency `missing` in `/ws/missing`
+/ws/app/tribute.toml:95..110 `"../misspelled"`: cannot find `tribute.toml` of dependency `misspelled` in `/ws/misspelled`

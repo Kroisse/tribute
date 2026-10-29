@@ -60,7 +60,7 @@ pub fn frontend_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<
 /// Check the library package `package` on its own, through
 /// specialization, as a build that depends on it would. Returns whether it
 /// checked; read its diagnostics with `check_library::accumulated`.
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked]
 pub fn check_library(db: &dyn salsa::Database, package: analysis::Package) -> bool {
     analysis::checked_package(db, package).is_some()
         && monomorphize::specialized_package(db, package).is_some()

@@ -31,6 +31,7 @@ mod file_modules;
 mod frontend_instances;
 mod frontend_type_roots;
 mod lang_examples;
+mod manifests;
 mod native_arrays;
 mod native_multiway_branch;
 mod open_callback_evidence_root;

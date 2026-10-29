@@ -286,7 +286,7 @@ fn load_package_dir(db: &TributeDatabaseImpl, dir: &Path, target: &str) -> Packa
             std::process::exit(1);
         };
         println!("Checking library package `{name}`...");
-        let mut checked = check_library(db, library);
+        let mut checked = *check_library(db, library);
         let mut diags = check_library::accumulated::<Diagnostic>(db, library);
         checked &= !diags
             .iter()

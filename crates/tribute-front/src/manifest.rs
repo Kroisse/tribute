@@ -153,56 +153,77 @@ pub fn load_package(
     }
     Some(LoadedPackage {
         name: manifest.name.clone(),
-        library: library_package(db, file, implicit),
+        library: *library_package(db, file, implicit),
         executable,
     })
 }
 
 /// The library package of the manifest `file`, rooted at its `src/lib.trb`:
 /// `None` if the manifest gives no valid name or there is no such file.
-#[salsa::tracked(returns(copy))]
+///
+/// It reads its manifest only through [`package_name`] and
+/// [`dependency_table`], so an edit that only moves text in a manifest
+/// keeps the package.
+#[salsa::tracked]
 pub fn library_package(
     db: &dyn salsa::Database,
     file: FileEntry,
     implicit: DependencyTable,
 ) -> Option<Package> {
-    let name = manifest(db, file)?.name.clone()?;
+    let name = package_name(db, file).clone()?;
     let root = source_at(db, &beside(file.uri(db), LIBRARY_ROOT)?)?;
     Some(Package::new(
         db,
         PackageName::library(name),
         root,
-        dependency_table(db, file, implicit),
+        *dependency_table(db, file, implicit),
     ))
 }
 
 /// The dependency table the manifest `file` declares: the library package
 /// of each `[dependencies]` entry that loads, then the packages of
 /// `implicit`, which every package depends on.
-///
-/// Reports at its entry a dependency with no manifest, one whose package
-/// name differs from the entry's, one without `src/lib.trb`, and one that
-/// depends on this package again; none of them is in the table.
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked]
 pub fn dependency_table(
     db: &dyn salsa::Database,
     file: FileEntry,
     implicit: DependencyTable,
 ) -> DependencyTable {
-    let mut packages = Vec::new();
-    if let Some(manifest) = manifest(db, file) {
-        for entry in &manifest.dependencies {
-            packages.extend(dependency(db, file, entry, implicit));
-        }
-    }
+    let mut packages: Vec<Package> = loaded_dependencies(db, file)
+        .iter()
+        .filter_map(|&dependency| *library_package(db, dependency, implicit))
+        .collect();
     packages.extend(implicit.packages(db).iter().copied());
     DependencyTable::new(db, packages)
+}
+
+/// The package name the manifest `file` gives, if it is valid.
+#[salsa::tracked]
+fn package_name(db: &dyn salsa::Database, file: FileEntry) -> Option<Symbol> {
+    manifest(db, file).as_ref()?.name.clone()
+}
+
+/// The manifests of the `[dependencies]` entries of `file` that load.
+///
+/// Reports at its entry a dependency with no manifest, one whose package
+/// name differs from the entry's, one without `src/lib.trb`, and one that
+/// depends on this package again; none of them is in the result.
+#[salsa::tracked]
+fn loaded_dependencies(db: &dyn salsa::Database, file: FileEntry) -> Vec<FileEntry> {
+    let Some(manifest) = manifest(db, file) else {
+        return Vec::new();
+    };
+    manifest
+        .dependencies
+        .iter()
+        .filter_map(|entry| dependency(db, file, entry))
+        .collect()
 }
 
 /// The dependency table `source` is analyzed against: that of the package
 /// whose `src/main.trb` it is, or `implicit` for a source compiled without
 /// a manifest.
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked]
 pub fn source_dependencies(
     db: &dyn salsa::Database,
     source: SourceCst,
@@ -210,7 +231,7 @@ pub fn source_dependencies(
 ) -> DependencyTable {
     let manifest_file = executable_manifest(source.uri(db)).and_then(|uri| file_at(db, &uri));
     match manifest_file {
-        Some(file) if manifest(db, file).is_some() => dependency_table(db, file, implicit),
+        Some(file) if file.source(db).is_some() => *dependency_table(db, file, implicit),
         _ => implicit,
     }
 }
@@ -229,17 +250,16 @@ fn executable_manifest(uri: &Uri<String>) -> Option<Uri<String>> {
     Some(path_to_uri(&src.parent()?.join(MANIFEST_FILE)))
 }
 
-/// The package `entry` of the manifest `from` names, or `None` after
-/// reporting why it does not load.
+/// The manifest of the package `entry` of the manifest `from` names, or
+/// `None` after reporting why it does not load.
 fn dependency(
     db: &dyn salsa::Database,
     from: FileEntry,
     entry: &DependencyEntry,
-    implicit: DependencyTable,
-) -> Option<Package> {
+) -> Option<FileEntry> {
     let directory = entry.directory.display();
-    let file = file_at(db, &entry.manifest());
-    let Some(manifest) = file.and_then(|file| manifest(db, file)) else {
+    let file = file_at(db, &entry.manifest())?;
+    let Some(manifest) = manifest(db, file) else {
         error(
             db,
             entry.path_span,
@@ -251,7 +271,6 @@ fn dependency(
         );
         return None;
     };
-    let file = file?;
     if reaches(db, file, from) {
         error(
             db,
@@ -278,16 +297,16 @@ fn dependency(
         );
         return None;
     }
-    let package = library_package(db, file, implicit);
-    if package.is_none() {
+    if source_at(db, &beside(file.uri(db), LIBRARY_ROOT)?).is_none() {
         error(
             db,
             entry.path_span,
             CompilationPhase::NameResolution,
             format!("dependency `{name}` has no `{LIBRARY_ROOT}` in `{directory}`"),
         );
+        return None;
     }
-    package
+    Some(file)
 }
 
 /// Whether the manifest `from`, or a manifest its dependencies name,
