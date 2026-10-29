@@ -29,7 +29,10 @@ use crate::refs::OpRef;
 /// `match_and_rewrite` takes `&self`: a pattern decides from the IR and the
 /// read-only data it holds or borrows from the driver, so its result does not
 /// depend on the order in which the applicator visits operations. Do not cache
-/// facts about the IR between calls; rewrites make them stale. See
+/// facts about the IR between calls; rewrites make them stale.
+///
+/// A pattern changes attached IR only through `rewriter`, so that the
+/// applicator offers the affected operations again. See
 /// [`PatternApplicator`](super::PatternApplicator).
 pub trait RewritePattern {
     /// Attempt to match and rewrite an operation.
