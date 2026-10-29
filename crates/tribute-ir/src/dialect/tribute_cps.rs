@@ -131,13 +131,17 @@ mod tribute_cps {
     ///   tail of the value's row read as that convention. The conventions
     ///   are the classes `new-plans/ir.md` ("Convention entry", 함수 참조)
     ///   gives a function reference. When an instance's convention is
-    ///   weaker, legalization fills the entry with an adapter; it fills the
-    ///   other entries by the same rule as a lambda's.
+    ///   weaker, legalization fills the entry with an adapter. When a
+    ///   classless tail makes the instance `Cps` and its convention is
+    ///   weaker, the entry is the `func_ref` adapter that calls the worker
+    ///   through a value delimiter (`new-plans/cps-effects.md`, 값
+    ///   delimiter). Legalization fills the other entries by the same rule
+    ///   as a lambda's.
     /// - **Verification:** the local verifier checks the attributes, that
     ///   the conventions are strictly increasing, and that there is a target
     ///   for each. Whole-IR verification checks the source signature as for
     ///   `tribute_control.func_ref`, and that each convention is not weaker
-    ///   than its instance's.
+    ///   than its instance's unless that instance is `Cps`.
     /// - **Ownership and value flow:** the result is an ordinary SSA value.
     /// - **Location:** the source reference span.
     #[verify]
