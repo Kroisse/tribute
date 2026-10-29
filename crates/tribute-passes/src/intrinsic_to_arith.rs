@@ -32,7 +32,7 @@ use trunk_ir::{Symbol, SymbolPath};
 /// contain only `func.unreachable` — are given a real body so they remain
 /// valid when used as first-class values (closures, `func.constant`, etc.).
 pub(crate) fn lower_intrinsic_to_arith(ctx: &mut IrContext, module: Module) {
-    let intrinsic_map = ArithIntrinsicPattern::intrinsic_map();
+    let intrinsic_map = arith_intrinsic_map();
     let eligible: HashSet<SymbolPath> = module
         .ops(ctx)
         .iter()
@@ -53,11 +53,11 @@ pub(crate) fn lower_intrinsic_to_arith(ctx: &mut IrContext, module: Module) {
     let mut applicator = PatternApplicator::new(TypeConverter::new());
     applicator = applicator
         .add_pattern(ArithIntrinsicPattern {
-            map: intrinsic_map.clone(),
+            map: &intrinsic_map,
             eligible: &eligible,
         })
         .add_pattern(ArithIntrinsicFuncDeclPattern {
-            intrinsic_map,
+            intrinsic_map: &intrinsic_map,
             eligible: &eligible,
         });
     applicator.apply_partial(ctx, module);
@@ -129,7 +129,6 @@ impl Pass for LowerIntrinsicToArith {
 }
 
 /// What kind of arith operation to emit.
-#[derive(Clone)]
 enum ArithMapping {
     /// Binary arithmetic: addi, addf, subi, etc.
     BinaryOp(fn(&mut IrContext, Location, ValueRef, ValueRef) -> OpRef),
@@ -139,109 +138,108 @@ enum ArithMapping {
     CmpF(&'static str),
 }
 
+/// The `arith` lowering of each arithmetic intrinsic, keyed by its path.
+fn arith_intrinsic_map() -> HashMap<SymbolPath, ArithMapping> {
+    let mut map = HashMap::default();
+
+    macro_rules! binary {
+        ($name:expr, $op_fn:expr) => {
+            map.insert(SymbolPath::new([$name]), ArithMapping::BinaryOp($op_fn));
+        };
+    }
+    macro_rules! cmpi {
+        ($name:expr, $pred:expr) => {
+            map.insert(SymbolPath::new([$name]), ArithMapping::CmpI($pred));
+        };
+    }
+    macro_rules! cmpf {
+        ($name:expr, $pred:expr) => {
+            map.insert(SymbolPath::new([$name]), ArithMapping::CmpF($pred));
+        };
+    }
+
+    // --- Int (signed) ---
+    binary!("std::Int::+", |ctx, loc, l, r| arith::Addi::operands(l, r)
+        .build(ctx, loc)
+        .op_ref());
+    binary!("std::Int::-", |ctx, loc, l, r| arith::Subi::operands(l, r)
+        .build(ctx, loc)
+        .op_ref());
+    binary!("std::Int::*", |ctx, loc, l, r| arith::Muli::operands(l, r)
+        .build(ctx, loc)
+        .op_ref());
+    binary!("std::Int::/", |ctx, loc, l, r| arith::Divsi::operands(l, r)
+        .build(ctx, loc)
+        .op_ref());
+    binary!("std::Int::%", |ctx, loc, l, r| arith::Remsi::operands(l, r)
+        .build(ctx, loc)
+        .op_ref());
+    cmpi!("std::Int::==", "eq");
+    cmpi!("std::Int::!=", "ne");
+    cmpi!("std::Int::<", "slt");
+    cmpi!("std::Int::<=", "sle");
+    cmpi!("std::Int::>", "sgt");
+    cmpi!("std::Int::>=", "sge");
+
+    // --- Nat (unsigned) ---
+    binary!("std::Nat::+", |ctx, loc, l, r| arith::Addi::operands(l, r)
+        .build(ctx, loc)
+        .op_ref());
+    binary!("std::Nat::-", |ctx, loc, l, r| arith::Subi::operands(l, r)
+        .build(ctx, loc)
+        .op_ref());
+    binary!("std::Nat::*", |ctx, loc, l, r| arith::Muli::operands(l, r)
+        .build(ctx, loc)
+        .op_ref());
+    binary!("std::Nat::/", |ctx, loc, l, r| arith::Divui::operands(l, r)
+        .build(ctx, loc)
+        .op_ref());
+    binary!("std::Nat::%", |ctx, loc, l, r| arith::Remui::operands(l, r)
+        .build(ctx, loc)
+        .op_ref());
+    cmpi!("std::Nat::==", "eq");
+    cmpi!("std::Nat::!=", "ne");
+    cmpi!("std::Nat::<", "ult");
+    cmpi!("std::Nat::<=", "ule");
+    cmpi!("std::Nat::>", "ugt");
+    cmpi!("std::Nat::>=", "uge");
+
+    // --- Float ---
+    binary!("std::Float::+", |ctx, loc, l, r| arith::Addf::operands(
+        l, r
+    )
+    .build(ctx, loc)
+    .op_ref());
+    binary!("std::Float::-", |ctx, loc, l, r| arith::Subf::operands(
+        l, r
+    )
+    .build(ctx, loc)
+    .op_ref());
+    binary!("std::Float::*", |ctx, loc, l, r| arith::Mulf::operands(
+        l, r
+    )
+    .build(ctx, loc)
+    .op_ref());
+    binary!("std::Float::/", |ctx, loc, l, r| arith::Divf::operands(
+        l, r
+    )
+    .build(ctx, loc)
+    .op_ref());
+    cmpf!("std::Float::==", "oeq");
+    cmpf!("std::Float::!=", "une");
+    cmpf!("std::Float::<", "olt");
+    cmpf!("std::Float::<=", "ole");
+    cmpf!("std::Float::>", "ogt");
+    cmpf!("std::Float::>=", "oge");
+
+    map
+}
+
 /// Pattern that matches `func.call` to known arithmetic intrinsics and
 /// rewrites them to the corresponding `arith.*` dialect operations.
 struct ArithIntrinsicPattern<'a> {
-    map: HashMap<SymbolPath, ArithMapping>,
+    map: &'a HashMap<SymbolPath, ArithMapping>,
     eligible: &'a HashSet<SymbolPath>,
-}
-
-impl ArithIntrinsicPattern<'_> {
-    fn intrinsic_map() -> HashMap<SymbolPath, ArithMapping> {
-        let mut map = HashMap::default();
-
-        macro_rules! binary {
-            ($name:expr, $op_fn:expr) => {
-                map.insert(SymbolPath::new([$name]), ArithMapping::BinaryOp($op_fn));
-            };
-        }
-        macro_rules! cmpi {
-            ($name:expr, $pred:expr) => {
-                map.insert(SymbolPath::new([$name]), ArithMapping::CmpI($pred));
-            };
-        }
-        macro_rules! cmpf {
-            ($name:expr, $pred:expr) => {
-                map.insert(SymbolPath::new([$name]), ArithMapping::CmpF($pred));
-            };
-        }
-
-        // --- Int (signed) ---
-        binary!("std::Int::+", |ctx, loc, l, r| arith::Addi::operands(l, r)
-            .build(ctx, loc)
-            .op_ref());
-        binary!("std::Int::-", |ctx, loc, l, r| arith::Subi::operands(l, r)
-            .build(ctx, loc)
-            .op_ref());
-        binary!("std::Int::*", |ctx, loc, l, r| arith::Muli::operands(l, r)
-            .build(ctx, loc)
-            .op_ref());
-        binary!("std::Int::/", |ctx, loc, l, r| arith::Divsi::operands(l, r)
-            .build(ctx, loc)
-            .op_ref());
-        binary!("std::Int::%", |ctx, loc, l, r| arith::Remsi::operands(l, r)
-            .build(ctx, loc)
-            .op_ref());
-        cmpi!("std::Int::==", "eq");
-        cmpi!("std::Int::!=", "ne");
-        cmpi!("std::Int::<", "slt");
-        cmpi!("std::Int::<=", "sle");
-        cmpi!("std::Int::>", "sgt");
-        cmpi!("std::Int::>=", "sge");
-
-        // --- Nat (unsigned) ---
-        binary!("std::Nat::+", |ctx, loc, l, r| arith::Addi::operands(l, r)
-            .build(ctx, loc)
-            .op_ref());
-        binary!("std::Nat::-", |ctx, loc, l, r| arith::Subi::operands(l, r)
-            .build(ctx, loc)
-            .op_ref());
-        binary!("std::Nat::*", |ctx, loc, l, r| arith::Muli::operands(l, r)
-            .build(ctx, loc)
-            .op_ref());
-        binary!("std::Nat::/", |ctx, loc, l, r| arith::Divui::operands(l, r)
-            .build(ctx, loc)
-            .op_ref());
-        binary!("std::Nat::%", |ctx, loc, l, r| arith::Remui::operands(l, r)
-            .build(ctx, loc)
-            .op_ref());
-        cmpi!("std::Nat::==", "eq");
-        cmpi!("std::Nat::!=", "ne");
-        cmpi!("std::Nat::<", "ult");
-        cmpi!("std::Nat::<=", "ule");
-        cmpi!("std::Nat::>", "ugt");
-        cmpi!("std::Nat::>=", "uge");
-
-        // --- Float ---
-        binary!("std::Float::+", |ctx, loc, l, r| arith::Addf::operands(
-            l, r
-        )
-        .build(ctx, loc)
-        .op_ref());
-        binary!("std::Float::-", |ctx, loc, l, r| arith::Subf::operands(
-            l, r
-        )
-        .build(ctx, loc)
-        .op_ref());
-        binary!("std::Float::*", |ctx, loc, l, r| arith::Mulf::operands(
-            l, r
-        )
-        .build(ctx, loc)
-        .op_ref());
-        binary!("std::Float::/", |ctx, loc, l, r| arith::Divf::operands(
-            l, r
-        )
-        .build(ctx, loc)
-        .op_ref());
-        cmpf!("std::Float::==", "oeq");
-        cmpf!("std::Float::!=", "une");
-        cmpf!("std::Float::<", "olt");
-        cmpf!("std::Float::<=", "ole");
-        cmpf!("std::Float::>", "ogt");
-        cmpf!("std::Float::>=", "oge");
-
-        map
-    }
 }
 
 impl RewritePattern for ArithIntrinsicPattern<'_> {
@@ -298,7 +296,7 @@ impl RewritePattern for ArithIntrinsicPattern<'_> {
 /// `func.constant` references) while also removing the `abi = "intrinsic"`
 /// marker so the backend treats them as normal functions.
 struct ArithIntrinsicFuncDeclPattern<'a> {
-    intrinsic_map: HashMap<SymbolPath, ArithMapping>,
+    intrinsic_map: &'a HashMap<SymbolPath, ArithMapping>,
     eligible: &'a HashSet<SymbolPath>,
 }
 
