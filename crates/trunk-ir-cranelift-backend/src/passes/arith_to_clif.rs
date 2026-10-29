@@ -122,7 +122,7 @@ impl OpRewritePattern for ArithConstPattern {
         let new_op_ref = match category {
             "f32" => {
                 let Attribute::FloatBits(v) = value else {
-                    return None;
+                    return rewriter.no_match(format!("expected FloatBits for f32, got {value:?}"));
                 };
                 clif::F32const::operands()
                     .value(f32::from_bits(v as u32))
@@ -132,7 +132,7 @@ impl OpRewritePattern for ArithConstPattern {
             }
             "f64" => {
                 let Attribute::FloatBits(v) = value else {
-                    return None;
+                    return rewriter.no_match(format!("expected FloatBits for f64, got {value:?}"));
                 };
                 clif::F64const::operands()
                     .value(f64::from_bits(v))
@@ -142,7 +142,10 @@ impl OpRewritePattern for ArithConstPattern {
             }
             _ => match value {
                 Attribute::Int(v) => {
-                    let v = i64::try_from(v).ok()?;
+                    let v = rewriter.require(
+                        i64::try_from(v).ok(),
+                        "integer constant does not fit in an i64",
+                    )?;
                     clif::Iconst::operands()
                         .value(v)
                         .results(result_ty)
@@ -154,7 +157,7 @@ impl OpRewritePattern for ArithConstPattern {
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                _ => return None,
+                _ => return rewriter.no_match(format!("expected Int or Bool, got {value:?}")),
             },
         };
 
