@@ -181,7 +181,12 @@ mod tribute_cps {
     ///   each convention is not weaker than its target's unless that target
     ///   is `Cps`.
     /// - **Ownership and value flow:** defines no value.
+    /// - **Symbol:** a discardable `SymbolDefinition` that is not a
+    ///   declaration. Its `targets` are its uses, so it keeps them alive
+    ///   only while a live `tribute_cps.func_ref` uses it, and global DCE
+    ///   removes it once none does (`new-plans/ir.md`, "Core Invariants").
     /// - **Location:** the span of the referenced definition.
+    #[implements(trunk_ir::op_interface::SymbolDefinition)]
     fn func_table(
         sym_name: Attr<String>,
         conventions: Attr<[CallingConvention]>,
@@ -483,6 +488,14 @@ impl CallableExit for TailCallIndirect {}
 impl trunk_ir::op_interface::SymbolDefinition for Func {
     fn is_discardable(&self, ctx: &IrContext) -> bool {
         !(ctx.op_attrs(self.op_ref()).contains_key("abi") && ctx.op_has_regions(self.op_ref()))
+    }
+}
+
+/// A table has no body, but it defines its entries rather than declaring
+/// a symbol defined elsewhere.
+impl trunk_ir::op_interface::SymbolDefinition for FuncTable {
+    fn is_declaration(&self, _ctx: &IrContext) -> bool {
+        false
     }
 }
 
