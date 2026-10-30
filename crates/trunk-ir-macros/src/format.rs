@@ -9,10 +9,25 @@ use quote::{quote, quote_spanned};
 use crate::codegen::attr_kind_trait;
 use crate::parse::{AttrKind, OperationDef, RegionOrSuccessor, ResultDef};
 
-type Error = (Span, String);
+/// A format rule broken by the element at `span`.
+struct FormatError {
+    span: Span,
+    message: String,
+}
 
-fn err<T>(span: Span, message: impl Into<String>) -> Result<T, Error> {
-    Err((span, message.into()))
+impl FormatError {
+    /// A `compile_error!` reporting the rule at the element.
+    fn to_compile_error(&self) -> TokenStream {
+        let message = &self.message;
+        quote_spanned!(self.span=> ::core::compile_error!(#message);)
+    }
+}
+
+fn err<T>(span: Span, message: impl Into<String>) -> Result<T, FormatError> {
+    Err(FormatError {
+        span,
+        message: message.into(),
+    })
 }
 
 /// The `OpAsmFormatDef` expression for `op`'s format elements, or a
@@ -25,10 +40,10 @@ pub fn gen_format(
 ) -> TokenStream {
     match check(crate_path, op, attr_span, tokens) {
         Ok(expr) => expr,
-        Err((span, message)) => quote_spanned!(span=> {
-            ::core::compile_error!(#message);
-            None
-        }),
+        Err(error) => {
+            let error = error.to_compile_error();
+            quote!({ #error None })
+        }
     }
 }
 
@@ -137,7 +152,7 @@ impl<'a> Format<'a> {
         }
     }
 
-    fn write(&mut self, entity: Entity, span: Span) -> Result<(), Error> {
+    fn write(&mut self, entity: Entity, span: Span) -> Result<(), FormatError> {
         if self.written.contains(&entity) {
             return err(
                 span,
@@ -154,7 +169,7 @@ impl<'a> Format<'a> {
         &mut self,
         tokens: TokenStream,
         in_group: bool,
-    ) -> Result<Vec<(Element, Span, bool)>, Error> {
+    ) -> Result<Vec<(Element, Span, bool)>, FormatError> {
         let tokens: Vec<TokenTree> = tokens.into_iter().collect();
         let mut elements = Vec::new();
         let mut index = 0;
@@ -228,7 +243,7 @@ impl<'a> Format<'a> {
         Ok(elements)
     }
 
-    fn entity(&mut self, name: &str, span: Span) -> Result<Element, Error> {
+    fn entity(&mut self, name: &str, span: Span) -> Result<Element, FormatError> {
         if name == "attr_dict" {
             self.write(Entity::AttrDict, span)?;
             return Ok(Element::AttrDict);
@@ -263,7 +278,12 @@ impl<'a> Format<'a> {
         Ok(element)
     }
 
-    fn directive(&mut self, name: &str, args: TokenStream, span: Span) -> Result<Element, Error> {
+    fn directive(
+        &mut self,
+        name: &str,
+        args: TokenStream,
+        span: Span,
+    ) -> Result<Element, FormatError> {
         if name == "attr_dict" {
             return err(span, "`attr_dict` takes no arguments");
         }
@@ -346,7 +366,11 @@ impl<'a> Format<'a> {
 
     /// An optional group: literals and one entity, its anchor, which may be
     /// absent.
-    fn group(&self, elements: Vec<(Element, Span, bool)>, span: Span) -> Result<Element, Error> {
+    fn group(
+        &self,
+        elements: Vec<(Element, Span, bool)>,
+        span: Span,
+    ) -> Result<Element, FormatError> {
         let mut entities = elements
             .iter()
             .filter(|e| !matches!(e.0, Element::Literal(_)));
@@ -429,7 +453,7 @@ fn check(
     op: &OperationDef,
     attr_span: Span,
     tokens: &TokenStream,
-) -> Result<TokenStream, Error> {
+) -> Result<TokenStream, FormatError> {
     if op
         .operands
         .iter()
