@@ -1,9 +1,7 @@
-//! `#[asm_format(..)]`: parse an operation's format elements, check them
-//! against its declaration, and emit the `OpFormat` table the printer and
-//! parser interpret.
-//!
-//! The rules are those of `new-plans/ir.md`, "선언적 어셈블리 형식". A rule
-//! the format breaks is reported at the element that breaks it.
+//! `#[asm_format(..)]`: check an operation's format elements against its
+//! declaration and emit the `OpFormat` table the printer and parser
+//! interpret, following `new-plans/ir.md`, "선언적 어셈블리 형식". A rule the
+//! format breaks is reported at the element that breaks it.
 
 use proc_macro2::{Delimiter, Span, TokenStream, TokenTree};
 use quote::{quote, quote_spanned};
@@ -12,6 +10,10 @@ use crate::codegen::attr_kind_trait;
 use crate::parse::{AttrKind, OperationDef, RegionOrSuccessor, ResultDef};
 
 type Error = (Span, String);
+
+fn err<T>(span: Span, message: impl Into<String>) -> Result<T, Error> {
+    Err((span, message.into()))
+}
 
 /// The `OpAsmFormatDef` expression for `op`'s format elements, or a
 /// `compile_error!` at the element that breaks a rule.
@@ -30,150 +32,23 @@ pub fn gen_format(
     }
 }
 
-// ============================================================================
-// Syntax
-// ============================================================================
-
-/// One element as written, before it is resolved against the declaration.
-enum Item {
-    Literal {
-        text: String,
-        span: Span,
-    },
-    /// An entity, or a directive `name(args..)`; `anchor` when marked `^`.
-    Named {
-        name: String,
-        args: Option<Vec<(String, Span)>>,
-        span: Span,
-        anchor: bool,
-    },
-    Optional {
-        items: Vec<Item>,
-        span: Span,
-    },
+/// A declared entity a format element writes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Entity {
+    Operand(usize),
+    Attribute(usize),
+    Results,
+    Region(usize),
+    Successor(usize),
+    AttrDict,
 }
 
-fn strip_raw(name: String) -> String {
-    match name.strip_prefix("r#") {
-        Some(name) => name.to_owned(),
-        None => name,
-    }
-}
-
-fn parse_items(tokens: TokenStream) -> Result<Vec<Item>, Error> {
-    let tokens: Vec<TokenTree> = tokens.into_iter().collect();
-    let mut tokens = tokens.into_iter().peekable();
-    let mut items = Vec::new();
-    while let Some(token) = tokens.next() {
-        match token {
-            TokenTree::Literal(literal) => {
-                let raw = literal.to_string();
-                let text = raw
-                    .strip_prefix('"')
-                    .and_then(|rest| rest.strip_suffix('"'))
-                    .filter(|text| !text.contains(['\\', '"']))
-                    .ok_or_else(|| {
-                        (
-                            literal.span(),
-                            "a format literal is a plain string literal, such as `\"(\"`"
-                                .to_owned(),
-                        )
-                    })?;
-                if text.chars().any(char::is_whitespace) {
-                    return Err((
-                        literal.span(),
-                        "a format literal is one token; write `\"a\" \"b\"` for two".to_owned(),
-                    ));
-                }
-                items.push(Item::Literal {
-                    text: text.to_owned(),
-                    span: literal.span(),
-                });
-            }
-            TokenTree::Ident(ident) => {
-                let span = ident.span();
-                let name = strip_raw(ident.to_string());
-                // `name(..)` is a directive; `name (..)?` is an entity
-                // followed by an optional group.
-                let followed_by_group = {
-                    let mut ahead = tokens.clone();
-                    matches!(ahead.next(), Some(TokenTree::Group(group)) if group.delimiter() == Delimiter::Parenthesis)
-                        && !matches!(ahead.next(), Some(TokenTree::Punct(p)) if p.as_char() == '?')
-                };
-                let args = match tokens.peek() {
-                    Some(TokenTree::Group(group))
-                        if followed_by_group && group.delimiter() == Delimiter::Parenthesis =>
-                    {
-                        let stream = group.stream();
-                        tokens.next();
-                        let mut args = Vec::new();
-                        for token in stream {
-                            match token {
-                                TokenTree::Ident(arg) => {
-                                    args.push((strip_raw(arg.to_string()), arg.span()))
-                                }
-                                TokenTree::Punct(p) if p.as_char() == ',' => {}
-                                other => {
-                                    return Err((
-                                        other.span(),
-                                        format!("expected an entity name in `{name}(..)`"),
-                                    ));
-                                }
-                            }
-                        }
-                        Some(args)
-                    }
-                    _ => None,
-                };
-                let anchor =
-                    matches!(tokens.peek(), Some(TokenTree::Punct(p)) if p.as_char() == '^');
-                if anchor {
-                    tokens.next();
-                }
-                items.push(Item::Named {
-                    name,
-                    args,
-                    span,
-                    anchor,
-                });
-            }
-            TokenTree::Group(group) if group.delimiter() == Delimiter::Parenthesis => {
-                match tokens.next() {
-                    Some(TokenTree::Punct(p)) if p.as_char() == '?' => {}
-                    _ => {
-                        return Err((
-                            group.span(),
-                            "a parenthesized group is an optional group `( .. )?`; write punctuation as a string literal".to_owned(),
-                        ));
-                    }
-                }
-                items.push(Item::Optional {
-                    items: parse_items(group.stream())?,
-                    span: group.span(),
-                });
-            }
-            other => {
-                return Err((
-                    other.span(),
-                    "write punctuation as a string literal, such as `\":\"`".to_owned(),
-                ));
-            }
-        }
-    }
-    Ok(items)
-}
-
-// ============================================================================
-// Resolution
-// ============================================================================
-
-/// One element resolved against the declaration.
 enum Element {
     Literal(String),
     Operand(usize),
     Attribute(usize),
     Symbol(usize),
-    ResultType(usize),
+    ResultType,
     ResultTypes,
     AttrDict {
         keyword: bool,
@@ -195,17 +70,18 @@ enum Anchor {
     Region(usize),
 }
 
-/// The regions and successors of an operation, each by its position in its
-/// own list.
-struct Bodies<'a> {
+struct Format<'a> {
+    op: &'a OperationDef,
+    /// Regions as (name, optional, variadic), by position among regions.
     regions: Vec<(&'a str, bool, bool)>,
+    /// Successors as (name, variadic), by position among successors.
     successors: Vec<(&'a str, bool)>,
+    written: Vec<Entity>,
 }
 
-impl<'a> Bodies<'a> {
-    fn of(op: &'a OperationDef) -> Self {
-        let mut regions = Vec::new();
-        let mut successors = Vec::new();
+impl<'a> Format<'a> {
+    fn new(op: &'a OperationDef) -> Self {
+        let (mut regions, mut successors) = (Vec::new(), Vec::new());
         for item in &op.regions {
             match item {
                 RegionOrSuccessor::Region {
@@ -219,40 +95,14 @@ impl<'a> Bodies<'a> {
             }
         }
         Self {
+            op,
             regions,
             successors,
+            written: Vec::new(),
         }
     }
-}
 
-/// What the format has written so far, to report what is written twice or
-/// left out.
-#[derive(Default)]
-struct Written {
-    operands: Vec<bool>,
-    attributes: Vec<bool>,
-    results: Vec<bool>,
-    all_results: bool,
-    regions: Vec<bool>,
-    successors: Vec<bool>,
-    attr_dict: bool,
-}
-
-struct Resolver<'a> {
-    op: &'a OperationDef,
-    bodies: Bodies<'a>,
-    written: Written,
-}
-
-fn mark(slot: &mut bool, span: Span, what: &str) -> Result<(), Error> {
-    if std::mem::replace(slot, true) {
-        return Err((span, format!("the format writes {what} twice")));
-    }
-    Ok(())
-}
-
-impl Resolver<'_> {
-    fn result_name(&self) -> Option<&str> {
+    fn result_name(&self) -> Option<&'a str> {
         match &self.op.results {
             ResultDef::None => None,
             ResultDef::Single(name) | ResultDef::Variadic(name) | ResultDef::Optional(name) => {
@@ -261,314 +111,312 @@ impl Resolver<'_> {
         }
     }
 
-    fn one_arg<'s>(
-        &self,
-        name: &str,
-        args: &'s [(String, Span)],
-        span: Span,
-    ) -> Result<&'s (String, Span), Error> {
-        match args {
-            [arg] => Ok(arg),
-            _ => Err((span, format!("`{name}(..)` takes one entity"))),
+    fn lookup(&self, name: &str) -> Option<Entity> {
+        if let Some(i) = self.op.operands.iter().position(|o| o.name == name) {
+            Some(Entity::Operand(i))
+        } else if let Some(i) = self.op.attrs.iter().position(|a| a.name == name) {
+            Some(Entity::Attribute(i))
+        } else if self.result_name() == Some(name) {
+            Some(Entity::Results)
+        } else if let Some(i) = self.regions.iter().position(|r| r.0 == name) {
+            Some(Entity::Region(i))
+        } else {
+            self.successors
+                .iter()
+                .position(|s| s.0 == name)
+                .map(Entity::Successor)
         }
     }
 
-    fn attribute(&self, name: &str) -> Option<usize> {
-        self.op.attrs.iter().position(|attr| attr.name == name)
+    fn describe(&self, entity: Entity) -> String {
+        match entity {
+            Entity::Operand(i) => format!("operand `{}`", self.op.operands[i].name),
+            Entity::Attribute(i) => format!("attribute `{}`", self.op.attrs[i].name),
+            Entity::Results => format!("the type of `{}`", self.result_name().unwrap_or_default()),
+            Entity::Region(i) => format!("region `{}`", self.regions[i].0),
+            Entity::Successor(i) => format!("successor `{}`", self.successors[i].0),
+            Entity::AttrDict => "`attr_dict`".to_owned(),
+        }
     }
 
-    fn items(&mut self, items: &[Item], in_group: bool) -> Result<Vec<(Element, Span)>, Error> {
-        items.iter().map(|item| self.item(item, in_group)).collect()
-    }
-
-    fn item(&mut self, item: &Item, in_group: bool) -> Result<(Element, Span), Error> {
-        match item {
-            Item::Literal { text, span } => Ok((Element::Literal(text.clone()), *span)),
-            Item::Optional { items, span } => {
-                if in_group {
-                    return Err((*span, "optional groups do not nest".to_owned()));
-                }
-                self.group(items, *span)
-            }
-            Item::Named {
-                name,
-                args,
+    fn write(&mut self, entity: Entity, span: Span) -> Result<(), Error> {
+        if self.written.contains(&entity) {
+            return err(
                 span,
-                anchor,
-            } => {
-                if *anchor && !in_group {
-                    return Err((
-                        *span,
-                        "`^` marks the anchor of an optional group".to_owned(),
-                    ));
-                }
-                let element = match args {
-                    None => self.entity(name, *span)?,
-                    Some(args) => self.directive(name, args, *span)?,
-                };
-                Ok((element, *span))
-            }
+                format!("the format writes {} twice", self.describe(entity)),
+            );
         }
+        self.written.push(entity);
+        Ok(())
+    }
+
+    /// Parse format tokens into elements, each with whether it is marked
+    /// as an anchor with `^`.
+    fn elements(
+        &mut self,
+        tokens: TokenStream,
+        in_group: bool,
+    ) -> Result<Vec<(Element, Span, bool)>, Error> {
+        let tokens: Vec<TokenTree> = tokens.into_iter().collect();
+        let mut elements = Vec::new();
+        let mut index = 0;
+        while let Some(token) = tokens.get(index) {
+            index += 1;
+            let is_punct = |token: Option<&TokenTree>, c: char| matches!(token, Some(TokenTree::Punct(p)) if p.as_char() == c);
+            let span = token.span();
+            let element = match token {
+                TokenTree::Literal(literal) => {
+                    let raw = literal.to_string();
+                    let Some(text) = raw
+                        .strip_prefix('"')
+                        .and_then(|rest| rest.strip_suffix('"'))
+                        .filter(|text| {
+                            !text.contains(['\\', '"']) && !text.contains(char::is_whitespace)
+                        })
+                    else {
+                        return err(
+                            span,
+                            "a format literal is one token in a plain string literal, such as `\"(\"`",
+                        );
+                    };
+                    Element::Literal(text.to_owned())
+                }
+                TokenTree::Group(group) if group.delimiter() == Delimiter::Parenthesis => {
+                    if !is_punct(tokens.get(index), '?') {
+                        return err(
+                            span,
+                            "a parenthesized group is an optional group `( .. )?`; write punctuation as a string literal",
+                        );
+                    }
+                    index += 1;
+                    if in_group {
+                        return err(span, "optional groups do not nest");
+                    }
+                    let inner = self.elements(group.stream(), true)?;
+                    self.group(inner, span)?
+                }
+                TokenTree::Ident(ident) => {
+                    let name = ident.to_string();
+                    let name = name.strip_prefix("r#").unwrap_or(&name);
+                    // `name(..)` is a directive; `name (..)?` is an entity
+                    // followed by an optional group.
+                    match tokens.get(index) {
+                        Some(TokenTree::Group(group))
+                            if group.delimiter() == Delimiter::Parenthesis
+                                && !is_punct(tokens.get(index + 1), '?') =>
+                        {
+                            index += 1;
+                            self.directive(name, group.stream(), span)?
+                        }
+                        _ => self.entity(name, span)?,
+                    }
+                }
+                _ => {
+                    return err(
+                        span,
+                        "write punctuation as a string literal, such as `\":\"`",
+                    );
+                }
+            };
+            let anchor = is_punct(tokens.get(index), '^');
+            if anchor {
+                if !in_group {
+                    return err(span, "`^` marks the anchor of an optional group");
+                }
+                index += 1;
+            }
+            elements.push((element, span, anchor));
+        }
+        Ok(elements)
     }
 
     fn entity(&mut self, name: &str, span: Span) -> Result<Element, Error> {
-        if let Some(index) = self.op.operands.iter().position(|o| o.name == name) {
-            mark(
-                &mut self.written.operands[index],
-                span,
-                &format!("operand `{name}`"),
-            )?;
-            return Ok(Element::Operand(index));
-        }
-        if let Some(index) = self.attribute(name) {
-            mark(
-                &mut self.written.attributes[index],
-                span,
-                &format!("attribute `{name}`"),
-            )?;
-            return Ok(Element::Attribute(index));
-        }
         if name == "attr_dict" {
-            mark(&mut self.written.attr_dict, span, "`attr_dict`")?;
+            self.write(Entity::AttrDict, span)?;
             return Ok(Element::AttrDict { keyword: false });
         }
-        let hint = if self.result_name() == Some(name) {
-            "a result's type is written with `type(..)` or `types(..)`"
-        } else if self.bodies.regions.iter().any(|r| r.0 == name) {
-            "a region is written with `region(..)` or `regions(..)`"
-        } else if self.bodies.successors.iter().any(|s| s.0 == name) {
-            "a successor is written with `successor(..)` or `successors(..)`"
-        } else {
-            return Err((span, format!("the operation declares no `{name}`")));
+        let Some(entity) = self.lookup(name) else {
+            return err(span, format!("the operation declares no `{name}`"));
         };
-        Err((span, hint.to_owned()))
+        let element = match entity {
+            Entity::Operand(i) => Element::Operand(i),
+            Entity::Attribute(i) => Element::Attribute(i),
+            Entity::Results => {
+                return err(
+                    span,
+                    "a result's type is written with `type(..)` or `types(..)`",
+                );
+            }
+            Entity::Region(_) => {
+                return err(
+                    span,
+                    "a region is written with `region(..)` or `regions(..)`",
+                );
+            }
+            Entity::Successor(_) => {
+                return err(
+                    span,
+                    "a successor is written with `successor(..)` or `successors(..)`",
+                );
+            }
+            Entity::AttrDict => unreachable!("`lookup` finds declared entities"),
+        };
+        self.write(entity, span)?;
+        Ok(element)
     }
 
-    fn directive(
-        &mut self,
-        name: &str,
-        args: &[(String, Span)],
-        span: Span,
-    ) -> Result<Element, Error> {
-        match name {
-            "attr_dict" => {
-                let keyword = match args {
-                    [] => false,
-                    [(arg, _)] if arg == "keyword" => true,
-                    _ => {
-                        return Err((
-                            span,
-                            "expected `attr_dict` or `attr_dict(keyword)`".to_owned(),
-                        ));
-                    }
-                };
-                mark(&mut self.written.attr_dict, span, "`attr_dict`")?;
-                Ok(Element::AttrDict { keyword })
+    fn directive(&mut self, name: &str, args: TokenStream, span: Span) -> Result<Element, Error> {
+        let args: Vec<TokenTree> = args.into_iter().collect();
+        let [TokenTree::Ident(arg)] = &args[..] else {
+            return err(span, format!("`{name}(..)` takes one name"));
+        };
+        let arg_span = arg.span();
+        let arg = arg.to_string();
+        let arg = arg.strip_prefix("r#").unwrap_or(&arg);
+        if name == "attr_dict" {
+            if arg != "keyword" {
+                return err(arg_span, "expected `attr_dict` or `attr_dict(keyword)`");
             }
-            "symbol" => {
-                let (arg, arg_span) = self.one_arg(name, args, span)?;
-                let index = self.attribute(arg).ok_or_else(|| {
-                    (
-                        *arg_span,
-                        format!("the operation declares no attribute `{arg}`"),
-                    )
-                })?;
-                let attr = &self.op.attrs[index];
-                if !attr.kind.is_string() || attr.list || attr.optional {
-                    return Err((
-                        *arg_span,
-                        "`symbol(..)` writes a required `Attr<String>`".to_owned(),
-                    ));
-                }
-                mark(
-                    &mut self.written.attributes[index],
-                    *arg_span,
-                    &format!("attribute `{arg}`"),
-                )?;
-                Ok(Element::Symbol(index))
-            }
-            "type" | "types" => {
-                let (arg, arg_span) = self.one_arg(name, args, span)?;
-                if self.result_name() != Some(arg.as_str()) {
-                    return Err((
-                        *arg_span,
-                        format!("`{arg}` is not a result of the operation"),
-                    ));
-                }
-                match (&self.op.results, name) {
-                    (ResultDef::Single(_), "type") => {
-                        mark(
-                            &mut self.written.results[0],
-                            *arg_span,
-                            &format!("the type of `{arg}`"),
-                        )?;
-                        Ok(Element::ResultType(0))
-                    }
-                    (ResultDef::Optional(_), "type") | (ResultDef::Variadic(_), "types") => {
-                        mark(
-                            &mut self.written.all_results,
-                            *arg_span,
-                            &format!("the type of `{arg}`"),
-                        )?;
-                        Ok(Element::ResultTypes)
-                    }
-                    (ResultDef::Variadic(_), _) => {
-                        Err((span, format!("`{arg}` is variadic; write `types({arg})`")))
-                    }
-                    _ => Err((span, format!("`{arg}` is one result; write `type({arg})`"))),
-                }
-            }
-            "region" | "regions" => {
-                let (arg, arg_span) = self.one_arg(name, args, span)?;
-                let index = self
-                    .bodies
-                    .regions
-                    .iter()
-                    .position(|r| r.0 == arg)
-                    .ok_or_else(|| {
-                        (
-                            *arg_span,
-                            format!("the operation declares no region `{arg}`"),
-                        )
-                    })?;
-                let variadic = self.bodies.regions[index].2;
-                if variadic != (name == "regions") {
-                    let expected = if variadic { "regions" } else { "region" };
-                    return Err((span, format!("write `{expected}({arg})`")));
-                }
-                mark(
-                    &mut self.written.regions[index],
-                    *arg_span,
-                    &format!("region `{arg}`"),
-                )?;
-                Ok(Element::Region(index))
-            }
-            "successor" | "successors" => {
-                let (arg, arg_span) = self.one_arg(name, args, span)?;
-                let index = self
-                    .bodies
-                    .successors
-                    .iter()
-                    .position(|s| s.0 == arg)
-                    .ok_or_else(|| {
-                        (
-                            *arg_span,
-                            format!("the operation declares no successor `{arg}`"),
-                        )
-                    })?;
-                let variadic = self.bodies.successors[index].1;
-                if variadic != (name == "successors") {
-                    let expected = if variadic { "successors" } else { "successor" };
-                    return Err((span, format!("write `{expected}({arg})`")));
-                }
-                mark(
-                    &mut self.written.successors[index],
-                    *arg_span,
-                    &format!("successor `{arg}`"),
-                )?;
-                Ok(Element::Successor(index))
-            }
-            other => Err((
-                span,
-                format!(
-                    "unknown format directive `{other}`; expected `symbol`, `type`, `types`, `attr_dict`, `region`, `regions`, `successor`, or `successors`"
-                ),
-            )),
+            self.write(Entity::AttrDict, span)?;
+            return Ok(Element::AttrDict { keyword: true });
         }
+        let entity = self.lookup(arg);
+        let plural = name.ends_with('s');
+        let element = match (name, entity) {
+            ("symbol", Some(Entity::Attribute(i))) => {
+                let attr = &self.op.attrs[i];
+                if !attr.kind.is_string() || attr.list || attr.optional {
+                    return err(arg_span, "`symbol(..)` writes a required `Attr<String>`");
+                }
+                Element::Symbol(i)
+            }
+            ("type" | "types", Some(Entity::Results)) => match (&self.op.results, plural) {
+                (ResultDef::Single(_), false) => Element::ResultType,
+                (ResultDef::Optional(_), false) | (ResultDef::Variadic(_), true) => {
+                    Element::ResultTypes
+                }
+                (ResultDef::Variadic(_), false) => {
+                    return err(span, format!("`{arg}` is variadic; write `types({arg})`"));
+                }
+                _ => {
+                    return err(
+                        span,
+                        format!("`{arg}` is at most one result; write `type({arg})`"),
+                    );
+                }
+            },
+            ("region" | "regions", Some(Entity::Region(i))) => {
+                if self.regions[i].2 != plural {
+                    return err(
+                        span,
+                        if plural {
+                            "write `region(..)` for one region"
+                        } else {
+                            "write `regions(..)` for a variadic region list"
+                        },
+                    );
+                }
+                Element::Region(i)
+            }
+            ("successor" | "successors", Some(Entity::Successor(i))) => {
+                if self.successors[i].1 != plural {
+                    return err(
+                        span,
+                        if plural {
+                            "write `successor(..)` for one successor"
+                        } else {
+                            "write `successors(..)` for a variadic successor list"
+                        },
+                    );
+                }
+                Element::Successor(i)
+            }
+            (
+                "symbol" | "type" | "types" | "region" | "regions" | "successor" | "successors",
+                _,
+            ) => {
+                return err(arg_span, format!("`{name}(..)` cannot write `{arg}`"));
+            }
+            _ => {
+                return err(
+                    span,
+                    format!(
+                        "unknown format directive `{name}`; expected `symbol`, `type`, `types`, `attr_dict`, `region`, `regions`, `successor`, or `successors`"
+                    ),
+                );
+            }
+        };
+        self.write(entity.expect("matched above"), arg_span)?;
+        Ok(element)
     }
 
     /// An optional group: literals and one entity, its anchor, which may be
     /// absent.
-    fn group(&mut self, items: &[Item], span: Span) -> Result<(Element, Span), Error> {
-        let elements = self.items(items, true)?;
-        let mut entities = items
+    fn group(&self, elements: Vec<(Element, Span, bool)>, span: Span) -> Result<Element, Error> {
+        let mut entities = elements
             .iter()
-            .zip(&elements)
-            .filter(|(item, _)| !matches!(item, Item::Literal { .. }));
-        let (Some((anchor_item, (anchor_element, anchor_span))), None) =
-            (entities.next(), entities.next())
-        else {
-            return Err((
+            .filter(|e| !matches!(e.0, Element::Literal(_)));
+        let (Some((anchor, anchor_span, marked)), None) = (entities.next(), entities.next()) else {
+            return err(
                 span,
-                "an optional group holds literals and exactly one entity, its anchor".to_owned(),
-            ));
+                "an optional group holds literals and exactly one entity, its anchor",
+            );
         };
-        if !matches!(anchor_item, Item::Named { anchor: true, .. }) {
-            return Err((
+        if !marked {
+            return err(
                 *anchor_span,
-                "mark the group's entity as its anchor with `^`".to_owned(),
-            ));
+                "mark the group's entity as its anchor with `^`",
+            );
         }
-        let first_is_literal_or_anchor = matches!(items.first(), Some(Item::Literal { .. }))
-            || std::ptr::eq(items.first().unwrap(), anchor_item);
-        if !first_is_literal_or_anchor {
-            return Err((
-                span,
-                "an optional group begins with a literal or its anchor".to_owned(),
-            ));
-        }
-        let anchor = match *anchor_element {
-            Element::Attribute(index) => {
-                let attr = &self.op.attrs[index];
-                if !attr.optional {
-                    return Err((
-                        *anchor_span,
-                        "an attribute anchor is an optional attribute".to_owned(),
-                    ));
-                }
-                if !attr.list && matches!(&attr.kind, AttrKind::Path(path) if path.is_ident("bool"))
-                {
-                    Anchor::Flag(index)
-                } else {
-                    Anchor::Attribute(index)
+        let anchor = match *anchor {
+            Element::Attribute(i) if self.op.attrs[i].optional => {
+                let attr = &self.op.attrs[i];
+                match &attr.kind {
+                    AttrKind::Path(path) if !attr.list && path.is_ident("bool") => Anchor::Flag(i),
+                    _ => Anchor::Attribute(i),
                 }
             }
-            Element::Operand(index) if self.op.operands[index].variadic => Anchor::Operand(index),
+            Element::Operand(i) if self.op.operands[i].variadic => Anchor::Operand(i),
             Element::ResultTypes => Anchor::Results,
-            Element::Region(index)
-                if self.bodies.regions[index].1 || self.bodies.regions[index].2 =>
-            {
-                Anchor::Region(index)
-            }
+            Element::Region(i) if self.regions[i].1 || self.regions[i].2 => Anchor::Region(i),
             _ => {
-                return Err((
+                return err(
                     *anchor_span,
-                    "an anchor is an optional attribute, a variadic operand or result, or an optional or variadic region".to_owned(),
-                ));
+                    "an anchor is an optional attribute, a variadic operand or result, or an optional or variadic region",
+                );
             }
         };
         // A flag stands for the group and writes no value.
+        let is_flag = matches!(anchor, Anchor::Flag(_));
         let elements: Vec<_> = elements
             .into_iter()
-            .filter(|(element, _)| {
-                !matches!((anchor, element), (Anchor::Flag(_), Element::Attribute(_)))
-            })
+            .filter(|(element, ..)| !(is_flag && matches!(element, Element::Attribute(_))))
+            .map(|(element, span, _)| (element, span))
             .collect();
         if elements.is_empty() {
-            return Err((
-                span,
-                "a flag's group writes a literal that stands for it".to_owned(),
-            ));
+            return err(span, "a flag's group writes a literal that stands for it");
         }
-        Ok((Element::Optional { anchor, elements }, span))
+        Ok(Element::Optional { anchor, elements })
     }
 }
 
-/// The first token an element may begin with, when it is known.
-fn first_token(element: &Element) -> Option<String> {
+/// The first token an element begins with, when it is fixed.
+fn first_token(element: &Element) -> Option<&str> {
     match element {
-        Element::Literal(text) => Some(text.clone()),
-        Element::Operand(_) => Some("%".into()),
-        Element::Symbol(_) => Some("@".into()),
-        Element::Successor(_) => Some("^".into()),
-        Element::Region(_) | Element::AttrDict { keyword: false } => Some("{".into()),
-        Element::AttrDict { keyword: true } => Some("attributes".into()),
-        Element::Optional { elements, .. } => elements.first().and_then(|(e, _)| first_token(e)),
-        Element::Attribute(_) | Element::ResultType(_) | Element::ResultTypes => None,
+        Element::Literal(text) => Some(text),
+        Element::Operand(_) => Some("%"),
+        Element::Symbol(_) => Some("@"),
+        Element::Successor(_) => Some("^"),
+        Element::Region(_) | Element::AttrDict { keyword: false } => Some("{"),
+        Element::AttrDict { keyword: true } => Some("attributes"),
+        Element::Optional { elements, .. } => first_token(&elements[0].0),
+        Element::Attribute(_) | Element::ResultType | Element::ResultTypes => None,
     }
 }
 
-/// Whether a parser that tries `group` first cannot tell it from `next`.
+/// Whether a parser that tries an optional group first cannot tell it from
+/// the element after it. An element without a fixed first token is a value,
+/// which a value-like token can begin.
 fn ambiguous(group: Option<&str>, next: Option<&str>) -> bool {
     let value_like = |token: &str| {
         token.starts_with(['@', '{', '[', '"', '-'])
@@ -580,59 +428,6 @@ fn ambiguous(group: Option<&str>, next: Option<&str>) -> bool {
         (None, Some(token)) | (Some(token), None) => value_like(token),
         (Some(a), Some(b)) => a == b,
     }
-}
-
-fn check_layout(elements: &[(Element, Span)], first_attrs: &mut Vec<usize>) -> Result<(), Error> {
-    // The first element after the symbol decides custom against generic
-    // syntax, which begins with `{`, `%`, or `:`.
-    for (element, span) in elements {
-        let (first, first_span) = match element {
-            Element::Symbol(_) => continue,
-            Element::Optional { elements, .. } => (&elements[0].0, elements[0].1),
-            _ => (element, *span),
-        };
-        match first {
-            Element::Literal(text) if text.is_empty() || text.starts_with(['{', '%', ':']) => {
-                return Err((
-                    first_span,
-                    "a format cannot begin like generic syntax, with `{`, `%`, or `:`".to_owned(),
-                ));
-            }
-            Element::Literal(_) => {}
-            Element::Attribute(index) => first_attrs.push(*index),
-            Element::Operand(_)
-            | Element::ResultType(_)
-            | Element::ResultTypes
-            | Element::AttrDict { .. }
-            | Element::Region(_)
-            | Element::Successor(_) => {
-                return Err((first_span, "a format begins with a literal or an attribute, not with what generic syntax begins with".to_owned()));
-            }
-            Element::Symbol(_) | Element::Optional { .. } => {}
-        }
-        if !matches!(element, Element::Optional { .. }) {
-            break;
-        }
-    }
-
-    for (position, (element, span)) in elements.iter().enumerate() {
-        let next = elements.get(position + 1);
-        if let (Element::AttrDict { keyword: false }, Some((next, _))) = (element, next)
-            && first_token(next).as_deref() == Some("{")
-        {
-            return Err((*span, "a bare `attr_dict` before a region cannot be told apart from it; write `attr_dict(keyword)`".to_owned()));
-        }
-        if let Element::Optional { .. } = element
-            && let Some((next, _)) = next
-            && ambiguous(
-                first_token(element).as_deref(),
-                first_token(next).as_deref(),
-            )
-        {
-            return Err((*span, "the parser cannot tell this optional group from the element after it by its first token".to_owned()));
-        }
-    }
-    Ok(())
 }
 
 fn check(
@@ -648,109 +443,126 @@ fn check(
         .count()
         > 1
     {
-        return Err((
+        return err(
             attr_span,
-            "a declarative format supports at most one variadic operand".to_owned(),
-        ));
-    }
-    let items = parse_items(tokens.clone())?;
-    let bodies = Bodies::of(op);
-    let mut resolver = Resolver {
-        written: Written {
-            operands: vec![false; op.operands.len()],
-            attributes: vec![false; op.attrs.len()],
-            results: vec![false; usize::from(matches!(op.results, ResultDef::Single(_)))],
-            regions: vec![false; bodies.regions.len()],
-            successors: vec![false; bodies.successors.len()],
-            ..Written::default()
-        },
-        bodies,
-        op,
-    };
-    let elements = resolver.items(&items, false)?;
-    let written = &resolver.written;
-
-    let missing = |what: String| Err((attr_span, format!("the format does not write {what}")));
-    if let Some(operand) = op
-        .operands
-        .iter()
-        .zip(&written.operands)
-        .find(|(_, w)| !**w)
-    {
-        return missing(format!("operand `{}`", operand.0.name));
-    }
-    if let Some((region, _)) = resolver
-        .bodies
-        .regions
-        .iter()
-        .zip(&written.regions)
-        .find(|(_, w)| !**w)
-    {
-        return missing(format!("region `{}`", region.0));
-    }
-    if let Some((successor, _)) = resolver
-        .bodies
-        .successors
-        .iter()
-        .zip(&written.successors)
-        .find(|(_, w)| !**w)
-    {
-        return missing(format!("successor `{}`", successor.0));
-    }
-    let results_written = match op.results {
-        ResultDef::None => true,
-        ResultDef::Single(_) => written.results[0],
-        ResultDef::Variadic(_) | ResultDef::Optional(_) => written.all_results,
-    };
-    if !results_written {
-        return missing(format!(
-            "the type of `{}`",
-            resolver.result_name().unwrap_or_default()
-        ));
-    }
-    if !written.attr_dict
-        && let Some((attr, _)) = op.attrs.iter().zip(&written.attributes).find(|(_, w)| !**w)
-    {
-        return Err((
-            attr_span,
-            format!(
-                "the format does not write attribute `{}`; write it or add `attr_dict`",
-                attr.name
-            ),
-        ));
-    }
-    // An optional attribute is written only as the anchor of a group, and
-    // results that may be absent likewise, so their punctuation goes with
-    // them.
-    for (element, span) in &elements {
-        if let Element::ResultTypes = element {
-            return Err((
-                *span,
-                "the operation may have no results; write their types as the anchor of an optional group, such as `(\":\" types(results)^)?`".to_owned(),
-            ));
-        }
-        if let Element::Attribute(index) = element
-            && op.attrs[*index].optional
-        {
-            return Err((*span, "an optional attribute is written as the anchor of an optional group `( .. attr^ .. )?`".to_owned()));
-        }
-    }
-
-    let mut first_attrs = Vec::new();
-    check_layout(&elements, &mut first_attrs)?;
-
-    let fmt = quote!(#crate_path::asm_format::declarative);
-    let elements = gen_elements(&fmt, &elements);
-    let assertions = first_attrs.into_iter().map(|index| {
-        let attr = &op.attrs[index];
-        let kind = attr_kind_trait(crate_path, attr);
-        let message = format!(
-            "attribute `{}` begins the format, so its kind cannot be `_` or a dictionary, which generic syntax could begin with",
-            attr.name
+            "a declarative format supports at most one variadic operand",
         );
-        let span = attr.raw_ident.span();
-        quote_spanned!(span=> const _: () = ::core::assert!(!#fmt::ambiguous_first_kind(#kind::KIND), #message);)
-    });
+    }
+    let mut format = Format::new(op);
+    let elements: Vec<(Element, Span)> = format
+        .elements(tokens.clone(), false)?
+        .into_iter()
+        .map(|(element, span, _)| (element, span))
+        .collect();
+
+    let has_dict = format.written.contains(&Entity::AttrDict);
+    let required = (0..op.operands.len())
+        .map(Entity::Operand)
+        .chain((0..format.regions.len()).map(Entity::Region))
+        .chain((0..format.successors.len()).map(Entity::Successor))
+        .chain(format.result_name().map(|_| Entity::Results))
+        .chain(
+            (0..op.attrs.len())
+                .filter(|_| !has_dict)
+                .map(Entity::Attribute),
+        );
+    for entity in required {
+        if !format.written.contains(&entity) {
+            let hint = if matches!(entity, Entity::Attribute(_)) {
+                "; write it or add `attr_dict`"
+            } else {
+                ""
+            };
+            return err(
+                attr_span,
+                format!(
+                    "the format does not write {}{hint}",
+                    format.describe(entity)
+                ),
+            );
+        }
+    }
+
+    for (position, (element, span)) in elements.iter().enumerate() {
+        match element {
+            Element::ResultTypes => {
+                return err(
+                    *span,
+                    "the operation may have no results; write their types as the anchor of an optional group, such as `(\":\" types(results)^)?`",
+                );
+            }
+            Element::Attribute(i) if op.attrs[*i].optional => {
+                return err(
+                    *span,
+                    "an optional attribute is written as the anchor of an optional group `( .. attr^ .. )?`",
+                );
+            }
+            _ => {}
+        }
+        let next = elements
+            .get(position + 1)
+            .map(|(next, _)| first_token(next));
+        if matches!(element, Element::AttrDict { keyword: false }) && next == Some(Some("{")) {
+            return err(
+                *span,
+                "a bare `attr_dict` before a region cannot be told apart from it; write `attr_dict(keyword)`",
+            );
+        }
+        if matches!(element, Element::Optional { .. })
+            && let Some(next) = next
+            && ambiguous(first_token(element), next)
+        {
+            return err(
+                *span,
+                "the parser cannot tell this optional group from the element after it by its first token",
+            );
+        }
+    }
+
+    // The elements up to the first that is neither a symbol nor optional
+    // decide custom against generic syntax, which begins with `{`, `%`, or
+    // `:`. An attribute there must not be of a kind generic syntax could
+    // begin with, which only the kind's `KIND` tells.
+    let fmt = quote!(#crate_path::asm_format::declarative);
+    let mut assertions = Vec::new();
+    for (element, span) in &elements {
+        let (first, first_span) = match element {
+            Element::Symbol(_) => continue,
+            Element::Optional { elements, .. } => (&elements[0].0, elements[0].1),
+            _ => (element, *span),
+        };
+        match first {
+            Element::Literal(text) if text.is_empty() || text.starts_with(['{', '%', ':']) => {
+                return err(
+                    first_span,
+                    "a format cannot begin like generic syntax, with `{`, `%`, or `:`",
+                );
+            }
+            Element::Literal(_) => {}
+            Element::Attribute(i) => {
+                let attr = &op.attrs[*i];
+                let kind = attr_kind_trait(crate_path, attr);
+                let message = format!(
+                    "attribute `{}` begins the format, so its kind cannot be `_` or a dictionary, which generic syntax could begin with",
+                    attr.name
+                );
+                assertions.push(quote_spanned!(attr.raw_ident.span()=>
+                    const _: () = ::core::assert!(!#fmt::ambiguous_first_kind(#kind::KIND), #message);
+                ));
+            }
+            _ => {
+                return err(
+                    first_span,
+                    "a format begins with a literal or an attribute, not with what generic syntax begins with",
+                );
+            }
+        }
+        if !matches!(element, Element::Optional { .. }) {
+            break;
+        }
+    }
+
+    let elements = gen_elements(&fmt, &elements);
     Ok(quote!({
         #(#assertions)*
         Some(#crate_path::asm_format::OpAsmFormatDef::Declarative(
@@ -767,7 +579,7 @@ fn gen_elements(fmt: &TokenStream, elements: &[(Element, Span)]) -> Vec<TokenStr
             Element::Operand(i) => quote!(#fmt::FormatElement::Operand(#i)),
             Element::Attribute(i) => quote!(#fmt::FormatElement::Attribute(#i)),
             Element::Symbol(i) => quote!(#fmt::FormatElement::Symbol(#i)),
-            Element::ResultType(i) => quote!(#fmt::FormatElement::ResultType(#i)),
+            Element::ResultType => quote!(#fmt::FormatElement::ResultType(0)),
             Element::ResultTypes => quote!(#fmt::FormatElement::ResultTypes),
             Element::AttrDict { keyword } => quote!(#fmt::FormatElement::AttrDict { keyword: #keyword }),
             Element::Region(i) => quote!(#fmt::FormatElement::Region(#i)),
