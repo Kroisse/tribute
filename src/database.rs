@@ -1,8 +1,10 @@
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use lsp_types::Uri as LspUri;
 use parking_lot::RwLock;
 use ropey::Rope;
+use tribute_front::build_inputs::{package_inputs, source_inputs};
 use tribute_front::manifest::{MANIFEST_FILE, set_package_root};
 use tribute_front::source_file::{FileEntry, FileProvider, SourceFiles};
 use tribute_front::{SourceCst, Uri, path_to_uri, uri_to_path};
@@ -141,6 +143,70 @@ impl TributeDatabaseImpl {
         let key = uri.as_str();
         self.documents.read().get(key).copied()
     }
+
+    /// The files that analyzing the open documents reads, other than the
+    /// documents themselves, which the language server watches
+    /// (`new-plans/lsp.md` § 입력과 무효화): each document's source tree,
+    /// the package it belongs to with its dependencies, and the manifests
+    /// looked for to find that package.
+    pub fn watched_files(&self) -> Vec<PathBuf> {
+        let documents = self.open_documents();
+        let provider = SourceFiles::get(self).provider(self).clone();
+        let implicit = *crate::frontend_environment(self);
+        let mut files = Vec::new();
+        for (_, source) in &documents {
+            files.extend_from_slice(source_inputs(self, *source));
+            let Some(path) = uri_to_path(source.uri(self)) else {
+                continue;
+            };
+            for manifest in manifest_candidates(&path) {
+                let entry = provider.entry(self, &path_to_uri(&manifest));
+                files.push(manifest);
+                if entry.source(self).is_some() {
+                    files.extend_from_slice(package_inputs(self, entry, implicit, true));
+                    break;
+                }
+            }
+        }
+        let open: Vec<PathBuf> = documents
+            .iter()
+            .filter_map(|(_, source)| uri_to_path(source.uri(self)))
+            .collect();
+        files.retain(|file| !open.contains(file));
+        files.sort();
+        files.dedup();
+        files
+    }
+
+    /// Read the file at `uri` from disk again, after it changed there. An
+    /// open document keeps its buffer, and a file no analysis asked for is
+    /// left unread. Each open document is then analyzed in the package it
+    /// now belongs to, since a manifest may have appeared or disappeared.
+    pub fn reload_file(&mut self, uri: &LspUri) {
+        if self.source_cst(uri).is_some() {
+            return;
+        }
+        let file = provider_uri(uri);
+        let provider = SourceFiles::get(self).provider(self).clone();
+        if provider.existing(&file).is_none() {
+            return;
+        }
+        provider.set(self, &file, read_file(&file));
+        for (_, source) in self.open_documents() {
+            let manifest = document_manifest(self, &provider, source.uri(self));
+            set_package_root(self, source, manifest);
+        }
+    }
+}
+
+/// The manifests that may make the document at `path` part of a package,
+/// nearest first: `tribute.toml` beside each `src` directory above it.
+fn manifest_candidates(path: &Path) -> impl Iterator<Item = PathBuf> + '_ {
+    path.ancestors()
+        .skip(1)
+        .filter(|dir| dir.file_name().is_some_and(|name| name == "src"))
+        .filter_map(|src| src.parent())
+        .map(|package| package.join(MANIFEST_FILE))
 }
 
 /// The manifest of the package the document at `file` belongs to: that of
@@ -152,11 +218,8 @@ fn document_manifest(
     file: &Uri<String>,
 ) -> Option<FileEntry> {
     let path = uri_to_path(file)?;
-    path.ancestors()
-        .skip(1)
-        .filter(|dir| dir.file_name().is_some_and(|name| name == "src"))
-        .filter_map(|src| src.parent())
-        .map(|package| provider.entry(db, &path_to_uri(&package.join(MANIFEST_FILE))))
+    manifest_candidates(&path)
+        .map(|manifest| provider.entry(db, &path_to_uri(&manifest)))
         .find(|manifest| manifest.source(db).is_some())
 }
 
@@ -240,5 +303,47 @@ mod tests {
             .map(|package| package.name(&db).name().unwrap().to_string())
             .collect::<Vec<_>>();
         assert_eq!(names, ["geometry", "std"]);
+    }
+
+    /// A document outside any package watches the manifest that would put
+    /// it in one; once that manifest appears, it is analyzed in the package
+    /// and watches the package's files.
+    #[test]
+    fn a_new_manifest_puts_an_open_document_in_its_package() {
+        let dir = tempfile::tempdir().unwrap();
+        let geometry = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/packages/geometry");
+        let package = dir.path();
+        let main = package.join("src/main.trb");
+        let uri: LspUri = path_to_uri(&main).as_str().parse().unwrap();
+        let mut db = TributeDatabaseImpl::default();
+        db.open_document(&uri, Rope::from_str("fn main() -> Nil { }\n"));
+        let source = db.source_cst(&uri).unwrap();
+        let manifest = package.join(MANIFEST_FILE);
+        assert_eq!(db.watched_files(), [manifest.as_path()]);
+
+        std::fs::write(
+            &manifest,
+            format!(
+                "[package]\nname = \"app\"\n\n[dependencies]\ngeometry = {{ path = {:?} }}\n",
+                geometry.display().to_string()
+            ),
+        )
+        .unwrap();
+        db.reload_file(&path_to_uri(&manifest).as_str().parse().unwrap());
+        let names: Vec<_> = crate::root_environment(&db, source)
+            .packages(&db)
+            .iter()
+            .map(|package| package.name(&db).name().unwrap().to_string())
+            .collect();
+        assert_eq!(names, ["geometry", "std"]);
+        let mut expected = vec![
+            geometry.join("src/lib.trb"),
+            geometry.join(MANIFEST_FILE),
+            package.join("src/lib.trb"),
+            manifest,
+        ];
+        expected.sort();
+        assert_eq!(db.watched_files(), expected);
     }
 }

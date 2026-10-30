@@ -17,9 +17,10 @@ use tribute::pipeline::{
 };
 use tribute::{TributeDatabaseImpl, check_library};
 use tribute_core::diagnostic::{Diagnostic, DiagnosticSeverity};
+use tribute_front::build_inputs::{package_inputs, source_inputs};
 use tribute_front::manifest::{load_package, root_file_manifest, set_package_root};
 use tribute_front::resolve::{Dependencies, build_env};
-use tribute_front::source_file::FileEntry;
+use tribute_front::source_file::{FileEntry, SourceFiles};
 use tribute_front::source_tree::source_tree_of;
 
 fn main() {
@@ -51,6 +52,11 @@ fn main() {
                 sysroot.as_deref(),
             );
         }
+        Command::Files {
+            input,
+            deps,
+            candidates,
+        } => list_files(&input, deps, candidates),
         Command::Debug { file, show_env } => {
             init_tracing(&cli.log);
             debug_file(file, show_env);
@@ -334,6 +340,36 @@ fn note_package_root_file(path: &Path) {
         path.display(),
         dir.display()
     );
+}
+
+/// Print the files the build of `input` reads (`new-plans/implementation.md`
+/// § 패키지 source 트리와 파일 입력): with `candidates`, also the paths with
+/// no file yet.
+fn list_files(input: &Path, deps: bool, candidates: bool) {
+    let db = TributeDatabaseImpl::default();
+    let files = if input.is_dir() {
+        let manifest = db.manifest(input).unwrap_or_else(|e| {
+            eprintln!("Error loading package {}: {e}", input.display());
+            std::process::exit(1);
+        });
+        let implicit = *tribute::frontend_environment(&db);
+        package_inputs(&db, manifest, implicit, deps).clone()
+    } else {
+        let source = db.input(input.to_owned()).unwrap_or_else(|e| {
+            eprintln!("Error reading file {}: {e}", input.display());
+            std::process::exit(1);
+        });
+        source_inputs(&db, source).clone()
+    };
+    let provider = SourceFiles::get(&db).provider(&db).clone();
+    for path in files {
+        let exists = provider
+            .existing(&tribute_front::path_to_uri(&path))
+            .is_some_and(|entry| entry.source(&db).is_some());
+        if exists || candidates {
+            println!("{}", path.display());
+        }
+    }
 }
 
 fn debug_file(path: std::path::PathBuf, show_env: bool) {
