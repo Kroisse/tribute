@@ -53,11 +53,16 @@ mod tribute_cps {
     /// - **Verification:** the local verifier checks the convention keyword.
     ///   Otherwise as `tribute_control.func`.
     /// - **Ownership and value flow:** as `tribute_control.func`.
+    /// - **Symbol:** as `tribute_control.func`.
     /// - **Location:** the source function's span.
     #[verify]
     #[asm_format]
     #[flags(IsolatedFromAbove)]
-    #[implements(CallableArgumentOrigin, LocalValidation)]
+    #[implements(
+        CallableArgumentOrigin,
+        LocalValidation,
+        trunk_ir::op_interface::SymbolDefinition
+    )]
     fn func<S: FuncSig>(
         sym_name: Attr<String>,
         r#type: Attr<TypeOf<S>>,
@@ -473,6 +478,13 @@ impl trunk_ir::asm_format::OpAsmFormat for Lambda {
 }
 
 impl CallableExit for TailCallIndirect {}
+
+/// As `tribute_control.func`.
+impl trunk_ir::op_interface::SymbolDefinition for Func {
+    fn is_discardable(&self, ctx: &IrContext) -> bool {
+        !(ctx.op_attrs(self.op_ref()).contains_key("abi") && ctx.op_has_regions(self.op_ref()))
+    }
+}
 
 impl LocalValidation for Func {
     fn validate(&self, ctx: &IrContext, errors: &mut Vec<ValidationError>) {

@@ -36,6 +36,32 @@ macro_rules! register_interfaces {
 }
 
 // =============================================================================
+// Symbol interfaces
+// =============================================================================
+
+/// A symbol definition: an operation that a symbol table names by its
+/// `sym_name`, the counterpart of MLIR's `SymbolOpInterface`.
+///
+/// The definition's uses are the symbol references in its own attributes and
+/// in its regions. Global DCE removes a discardable definition that no live
+/// operation uses; an operation that does not implement this interface is
+/// never removed by it, and the references it holds are roots.
+#[op_interface]
+pub trait SymbolDefinition: DialectOp {
+    /// Whether the definition may be removed when nothing live uses it. A
+    /// definition that is visible outside the module answers `false`.
+    fn is_discardable(&self, _ctx: &IrContext) -> bool {
+        true
+    }
+
+    /// Whether the definition declares a symbol defined elsewhere, without a
+    /// body of its own.
+    fn is_declaration(&self, ctx: &IrContext) -> bool {
+        !ctx.op_has_regions(self.op_ref())
+    }
+}
+
+// =============================================================================
 // Control-flow interfaces
 // =============================================================================
 
