@@ -376,3 +376,24 @@ fn a_function_table_and_its_targets_are_in_the_module_of_its_references() {
         ]
     );
 }
+
+#[test]
+fn the_targets_of_a_function_table_share_one_source_signature() {
+    let errors = messages(
+        r#"core.module @test {
+  tribute_cps.func @a() -> core.i32 convention(direct) {
+    %0 = arith.const {value = 1} : core.i32
+    tribute_control.return %0
+  }
+  tribute_cps.func @b(%x: core.i32) -> core.i32 convention(cps) {
+    tribute_control.return %x
+  }
+  tribute_cps.func_table @t [direct = @a, cps = @b]
+}
+"#,
+    );
+    assert_eq!(
+        errors,
+        ["function table targets must share one source signature"]
+    );
+}

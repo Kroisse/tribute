@@ -3550,9 +3550,9 @@ fn validate_func_ref_signature(
     }
 }
 
-/// Check that each target of `table`, a `tribute_cps.func_table`, is an
-/// instance of one definition, entered with its own convention or, for a
-/// `Cps` target, a weaker one.
+/// Check that the targets of `table`, a `tribute_cps.func_table`, share one
+/// source signature, each entered with its own convention or, for a `Cps`
+/// target, a weaker one.
 fn validate_func_table(
     ctx: &IrContext,
     table: OpRef,
@@ -3590,7 +3590,7 @@ fn validate_func_table(
                 ctx,
                 table,
                 errors,
-                "function table targets must be instances of one definition",
+                "function table targets must share one source signature",
             );
         }
         if let Some(own) = tribute_cps::declared_convention(ctx, instance)

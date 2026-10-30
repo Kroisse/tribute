@@ -160,7 +160,10 @@ mod tribute_cps {
     /// - **Placement:** directly in a module, as a symbol definition. Class
     ///   specialization makes one for each definition and class arguments
     ///   that a `tribute_cps.func_ref` refers to, named as
-    ///   `new-plans/cps-effects.md` ("Class 특수화 pass") gives.
+    ///   `new-plans/cps-effects.md` ("Class 특수화 pass") gives, whose
+    ///   targets are instances of that one definition. The IR does not
+    ///   record which definition an instance comes from, so verification
+    ///   cannot check this.
     /// - **Meaning:** the convention entry of each element of `conventions`
     ///   runs the `tribute_cps.func` instance at the same position of
     ///   `targets`. Each instance is the one the class arguments select
@@ -181,7 +184,7 @@ mod tribute_cps {
     ///   the lists have the same length, and that the conventions are
     ///   strictly increasing. Whole-IR verification checks that each target
     ///   names a `tribute_cps.func` of the table's own module by one name,
-    ///   that the targets are instances of the same definition, and that
+    ///   that the targets share one source signature, and that
     ///   each convention is its target's, or weaker than it when the target
     ///   is `Cps`.
     /// - **Ownership and value flow:** defines no value.
