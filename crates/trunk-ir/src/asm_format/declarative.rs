@@ -597,6 +597,13 @@ impl<'a> FormatParser<'a> {
                 Ok(())
             }
             FormatElement::Attribute(index) => {
+                // Only `@` begins a symbol reference; generic syntax's
+                // dictionary must not be read as its value.
+                if self.schema.attributes[index].kind == AttributeKind::SymbolRef
+                    && !input.starts_with('@')
+                {
+                    return Err(ErrMode::Backtrack(expected("`@name`")));
+                }
                 let value = raw_attr_value
                     .parse_next(input)
                     .map_err(|e| e.map(|_| expected("attribute value")))?;
@@ -907,6 +914,7 @@ mod tests {
         let generic = r#"core.module @m {
   %0 = asm_format_test.tagged {note = "n", tag = @f} : core.i32
   asm_format_test.def {kind = "k", sym_name = "d"}
+  %1 = asm_format_test.reference {target = @f} : core.i32
 }
 "#;
         assert_eq!(
@@ -914,6 +922,7 @@ mod tests {
             r#"core.module @m {
   %0 = asm_format_test.tagged ref @f note "n" : core.i32
   asm_format_test.def @d kind "k"
+  %0 = asm_format_test.reference @f : core.i32
 }
 "#
         );
