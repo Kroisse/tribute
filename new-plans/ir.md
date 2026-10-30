@@ -512,6 +512,36 @@ region의 entry argument에 첫 region과 같은 이름을 주고, parser는 매
 region의 entry block에 되돌린다. Printer는 `IsolatedFromAbove` operation의 형식을
 쓰기 전에 값과 block 번호를 새로 매긴다.
 
+#### 표기 관례
+
+여러 operation이 같은 개념을 쓰면 같은 원소 배열로 쓴다. 전용 형식을 선언적
+형식으로 옮길 때는 표기를 이 관례에 맞추어 바꿀 수 있으며, 옮긴 형식의 canonical
+표기는 textual fixture가 고정한다.
+
+- Symbol을 정의하는 operation은 operation 이름 바로 뒤에 `symbol(sym_name)`으로
+  `@name`을 쓴다.
+- Region을 가진 operation은 남은 attribute를 `attr_dict(keyword)`로 region 바로
+  앞에 쓴다. 따옴표 없는 `{..}` dictionary는 region이 없는 operation에만 쓴다.
+- Capture operand 목록은 비어 있어도 `captures [..]`로 쓴다.
+- Convention처럼 keyword로 쓰는 attribute 하나는 `name(keyword)`로 쓴다
+  (`convention(cps)`).
+- 이름 붙은 본문이 여럿이면 `entries { label { .. } .. }`로 쓴다. 본문마다
+  signature가 다르면 label 뒤에 그 본문의 signature를 쓴다
+  (`label(%x: T) -> R { .. }`). 모든 본문이 같은 signature를 받으면 signature는
+  header에 한 번만 쓴다.
+- `signature`로 재구성되지 않는 result 타입은 형식의 끝에 `: type`으로 쓴다.
+
+```text
+%f = closure.lambda captures [%y] attributes {adapters = {evidence_direct = @a0}} entries {
+  direct(%x: core.i32) -> core.i32 {
+    ...
+  }
+  cps(%ev: E, %k: K, %x: core.i32) -> core.i32 {
+    ...
+  }
+} : closure.closure<S>
+```
+
 #### Signature codec
 
 Signature codec은 signature 타입과 그 함수 형태 표기 사이의 변환이며, 타입을
