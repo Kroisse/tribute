@@ -413,7 +413,8 @@ func.func @decl(%arg0: core.i32)
 literal은 문자열 literal로 쓴다.
 
 - **Literal** — keyword(`"captures"`)나 구두점(`"("`, `"["`, `"->"`, `":"`,
-  `","`, `"="`)이다. 빈 literal `""`는 다음 원소 앞의 공백을 없앤다.
+  `","`, `"="`)이다. Keyword는 식별자 하나이고, 구두점에는 영숫자를 섞지 않는다.
+  빈 literal `""`는 다음 원소 앞의 공백을 없앤다.
 - **Operand** — `%name`으로 쓰고, 가변 operand는 쉼표로 구분한 목록이다. 목록을
   감싸는 괄호는 literal로 쓴다. Operand 타입은 쓰지 않는다. Generic 형식처럼
   parser는 SSA 이름으로 값을 찾고 값에서 타입을 얻는다.
@@ -479,7 +480,7 @@ Macro는 형식 기술을 선언과 대조해 다음을 어기면 그 원소를 
   앞의 구두점도 함께 생략해야 하기 때문이다.
 - 선택 묶음의 anchor는 선택 attribute, 가변 operand, 가변 result, 선택 region,
   가변 region 목록 중 하나다. 묶음 안에는 anchor 하나와 literal만 둔다. Parser는
-  묶음의 첫 원소가 token을 읽으면 묶음이 있다고 정한다.
+  `""`를 건너뛴 묶음의 첫 원소가 token을 읽으면 묶음이 있다고 정한다.
 - 아무것도 쓰지 않을 수 있는 원소(선택 묶음, `attr_dict`, 가변 operand·successor
   목록, 선택 region, 가변 region 목록)의 첫 token은 그 뒤에 올 수 있는 어떤 첫
   token과도 겹치지 않는다. 뒤에 오는 원소도 아무것도 쓰지 않을 수 있으면 그 다음

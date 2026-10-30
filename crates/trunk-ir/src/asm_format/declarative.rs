@@ -684,7 +684,13 @@ impl<'a> FormatParser<'a> {
                 Ok(())
             }
             FormatElement::Optional { anchor, elements } => {
-                let Some((first, rest)) = elements.split_first() else {
+                // `""` spacing literals read nothing; the first element after
+                // them decides the group.
+                let start = elements
+                    .iter()
+                    .position(|element| !matches!(element, FormatElement::Literal("")))
+                    .unwrap_or(elements.len());
+                let Some((first, rest)) = elements[start..].split_first() else {
                     return Ok(());
                 };
                 // The group is present when its first element reads a token.
@@ -820,6 +826,9 @@ mod tests {
         #[asm_format(("on" on^)?)]
         fn toggle(on: Option<Attr<bool>>) {}
 
+        #[asm_format("go" "(" ("" "on" on^)? ")")]
+        fn run(on: Option<Attr<bool>>) {}
+
         #[asm_format(symbol(callee))]
         fn named(callee: Attr<String>) {}
 
@@ -935,6 +944,8 @@ mod tests {
   asm_format_test.def @f kind "k" {
       asm_format_test.toggle on
       asm_format_test.toggle
+      asm_format_test.run go(on)
+      asm_format_test.run go()
       asm_format_test.named @target
       asm_format_test.mark now
       attributes.probe

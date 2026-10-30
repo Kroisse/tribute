@@ -192,6 +192,17 @@ impl<'a> Format<'a> {
                             "a format literal is one token in a plain string literal, such as `\"(\"`",
                         );
                     };
+                    // The parser reads a keyword as a whole identifier and
+                    // punctuation as text, so a literal is one or the other.
+                    let ident_char = |c: char| c.is_ascii_alphanumeric() || c == '_';
+                    let keyword = text.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+                        && text.chars().all(ident_char);
+                    if !keyword && text.contains(ident_char) {
+                        return err(
+                            span,
+                            "a format literal is an identifier or punctuation; write `\"a\" \".\"` for a mix",
+                        );
+                    }
                     Element::Literal(text.to_owned())
                 }
                 TokenTree::Group(group) if group.delimiter() == Delimiter::Parenthesis => {
@@ -436,9 +447,17 @@ fn first_token(element: &Element) -> Token<'_> {
         Element::Successor(_) => Token::Text("^"),
         Element::Region(_) => Token::Text("{"),
         Element::AttrDict => Token::Text("attributes"),
-        Element::Optional { elements, .. } => first_token(&elements[0].0),
+        Element::Optional { elements, .. } => first_token(&leading(elements).0),
         Element::Attribute(_) | Element::ResultType | Element::ResultTypes => Token::Value,
     }
+}
+
+/// A group's first element that writes text, past `""` spacing literals.
+fn leading(elements: &[(Element, Span)]) -> &(Element, Span) {
+    elements
+        .iter()
+        .find(|(element, _)| !matches!(element, Element::Literal(text) if text.is_empty()))
+        .unwrap_or(&elements[0])
 }
 
 /// Whether a parser reading one of the two cannot tell it from the other by
@@ -446,9 +465,9 @@ fn first_token(element: &Element) -> Token<'_> {
 /// is read by prefix.
 fn conflict(a: Token<'_>, b: Token<'_>) -> bool {
     let value_like = |text: &str| {
-        text.starts_with(['@', '{', '[', '"', '-'])
+        text.starts_with(['@', '{', '[', '"', '-', '!'])
             || text.starts_with(|c: char| c.is_ascii_digit())
-            || ["true", "false", "unit"].contains(&text)
+            || ["true", "false", "unit", "loc"].contains(&text)
     };
     let word = |text: &str| text.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_');
     match (a, b) {
@@ -486,6 +505,9 @@ impl Format<'_> {
     ) -> Vec<Token<'e>> {
         let mut tokens = Vec::new();
         for (element, _) in &elements[position..] {
+            if matches!(element, Element::Literal(text) if text.is_empty()) {
+                continue;
+            }
             tokens.push(first_token(element));
             if !self.may_be_empty(element) {
                 return tokens;
@@ -623,7 +645,10 @@ fn check(
     for (element, span) in &elements {
         let (first, first_span) = match element {
             Element::Symbol(_) => continue,
-            Element::Optional { elements, .. } => (&elements[0].0, elements[0].1),
+            Element::Optional { elements, .. } => {
+                let (first, span) = leading(elements);
+                (first, *span)
+            }
             _ => (element, *span),
         };
         match first {
@@ -769,6 +794,13 @@ mod tests {
                 ),
                 quote!("x" 'c'),
                 "plain string literal",
+            ),
+            (
+                quote!(
+                    fn op() {}
+                ),
+                quote!("x" "a.b"),
+                "identifier or punctuation",
             ),
             (
                 quote!(
@@ -991,6 +1023,13 @@ mod tests {
                 ),
                 quote!(a "x"),
                 "begins with a literal or an attribute",
+            ),
+            (
+                quote!(
+                    fn op() -> Variadic<_> {}
+                ),
+                quote!("x" (types(results)^ ":")? "!"),
+                "may write nothing",
             ),
         ];
         let failures: Vec<String> = cases
