@@ -484,8 +484,8 @@ Macro는 형식 기술을 선언과 대조해 다음을 어기면 그 원소를 
   뒤에 쓰는 것이고, 나머지는 operation 이름만 쓴 generic 형식 뒤의 다음 줄이 시작할
   수 있는 것이다.
 - 선택 묶음은 여는 literal로 시작하고, 그 뒤에는 literal과 anchor 하나만 둔다.
-  `""`는 묶음 안에 쓰지 않는다. 여는 literal은 keyword(`true`, `false`, `unit`,
-  `loc`, `attributes`는 제외)이거나 값, `attr_dict`, 다음 줄이 시작할 수 없는
+  `""`는 묶음 안에 쓰지 않는다. 여는 literal은 keyword(값이 시작하는 `true`, `false`,
+  `unit`, `loc`, `b`는 제외)이거나 값, `attr_dict`, 다음 줄이 시작할 수 없는
   구두점이며, 형식의 다른 literal과 같지 않고 구두점끼리는 접두사도 겹치지 않는다.
   Parser는 여는 literal을 읽으면 묶음이 있다고 정한다.
 - Anchor는 선택 attribute, 가변 operand, 가변 result 중 하나다.
@@ -496,6 +496,7 @@ Macro는 형식 기술을 선언과 대조해 다음을 어기면 그 원소를 
   위해서다.
 - 선택 region과 가변 region 목록 뒤에서 선택 묶음을 건너뛴 첫 원소는 없거나
   `{`로 시작하지 않는 literal이다.
+- Literal `attributes`는 `attr_dict`만 쓴다.
 - `""`는 구두점 literal 옆에만 둔다. Keyword나 값끼리 붙으면 한 token으로 읽히기
   때문이다.
 - `signature`의 `t`는 signature codec을 구현한 bound로 묶인 타입 변수여야 하고,

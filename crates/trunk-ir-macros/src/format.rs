@@ -201,6 +201,9 @@ impl<'a> Format<'a> {
                             "a format literal is an identifier or punctuation; write `\"a\" \".\"` for a mix",
                         );
                     }
+                    if text == "attributes" {
+                        return err(span, "`attributes` is reserved for `attr_dict`");
+                    }
                     Element::Literal(text.to_owned())
                 }
                 TokenTree::Group(group) if group.delimiter() == Delimiter::Parenthesis => {
@@ -519,7 +522,7 @@ fn is_keyword(text: &str) -> bool {
 /// with it.
 fn opens_group(text: &str) -> bool {
     if is_keyword(text) {
-        !["true", "false", "unit", "loc", "attributes"].contains(&text)
+        !["true", "false", "unit", "loc", "b"].contains(&text)
     } else {
         !text.is_empty()
             && text != "-"
@@ -1105,6 +1108,20 @@ mod tests {
                 ),
                 quote!("run" region(extra) ("on" on^)? region(body)),
                 "past any optional groups",
+            ),
+            (
+                quote!(
+                    fn op() {}
+                ),
+                quote!("run" attr_dict "attributes"),
+                "reserved for `attr_dict`",
+            ),
+            (
+                quote!(
+                    fn op(on: Option<Attr<bool>>, payload: Attr<_>) {}
+                ),
+                quote!("run" ("b" on^)? payload),
+                "begins with a keyword or punctuation",
             ),
         ];
         let failures: Vec<String> = cases
