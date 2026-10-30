@@ -477,10 +477,12 @@ Macro는 형식 기술을 선언과 대조해 다음을 어기면 그 원소를 
   세지 않는다.
 - Attribute는 많아야 한 번 명시하고, 명시하지 않은 attribute가 있으면
   `attr_dict`가 있어야 한다. 같은 entity를 두 원소가 쓰지 않는다.
-- 형식은 literal로 시작하며, `symbol`이 있으면 그 바로 뒤의 literal로 시작한다.
-  이 literal은 `{`, `%`, `:`, `[`, `^`, `}`로 시작하지 않는다. 앞의 넷은 generic
-  형식이 operation 이름 뒤에 쓰는 것이고, 나머지는 operation 이름만 쓴 generic
-  형식 뒤의 다음 줄이 시작할 수 있는 것이다.
+- 형식은 `symbol`과 symbol 참조 attribute로 시작할 수 있다. Generic 형식은 `@`로
+  시작하지 않기 때문이다. 그 뒤, 또는 그런 원소가 없으면 처음에는 literal이 온다.
+  앞에 symbol이 있으면 이 literal로 여는 선택 묶음도 된다. 이 literal은 `{`, `%`,
+  `:`, `[`, `^`, `}`로 시작하지 않는다. 앞의 넷은 generic 형식이 operation 이름
+  뒤에 쓰는 것이고, 나머지는 operation 이름만 쓴 generic 형식 뒤의 다음 줄이 시작할
+  수 있는 것이다.
 - 선택 묶음은 여는 literal로 시작하고, 그 뒤에는 literal과 anchor 하나만 둔다.
   `""`는 묶음 안에 쓰지 않는다. 여는 literal은 keyword(`true`, `false`, `unit`,
   `loc`, `attributes`는 제외)이거나 값, `attr_dict`, 다음 줄이 시작할 수 없는
@@ -492,8 +494,10 @@ Macro는 형식 기술을 선언과 대조해 다음을 어기면 그 원소를 
 - 가변 operand·successor 목록 바로 뒤에는 닫는 literal `")"`나 `"]"`가 온다. 빈
   목록이 뒤의 원소를 읽거나 목록이 쉼표를 자기 구분자로 읽는 일이 없게 하기
   위해서다.
-- 선택 region과 가변 region 목록은 형식의 마지막이거나, `{`로 시작하지 않는
-  literal 또는 그런 literal로 여는 묶음 앞에 온다.
+- 선택 region과 가변 region 목록 뒤에서 선택 묶음을 건너뛴 첫 원소는 없거나
+  `{`로 시작하지 않는 literal이다.
+- `""`는 구두점 literal 옆에만 둔다. Keyword나 값끼리 붙으면 한 token으로 읽히기
+  때문이다.
 - `signature`의 `t`는 signature codec을 구현한 bound로 묶인 타입 변수여야 하고,
   나열한 region은 선언된 region이어야 한다.
 

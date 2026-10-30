@@ -14,7 +14,7 @@ use winnow::error::{ContextError, ErrMode, StrContext, StrContextValue};
 use winnow::prelude::*;
 
 use crate::op_def::OpDef;
-use crate::op_schema::{Arity, OpSchema, ResultSchema};
+use crate::op_schema::{Arity, AttributeKind, OpSchema, ResultSchema};
 use crate::parser::raw::{
     RawAttribute, RawOperation, RawRegion, RawType, block_label, ident, raw_attr_dict,
     raw_attr_value, raw_region, raw_type, symbol_ref, value_ref, ws,
@@ -559,7 +559,16 @@ impl<'a> FormatParser<'a> {
         let before = input.len();
         match self.element(input, element) {
             Ok(()) => {
-                if input.len() != before && !matches!(element, FormatElement::Symbol(_)) {
+                // A leading symbol or symbol reference cannot be generic
+                // syntax's, but generic syntax may follow it.
+                let symbol_like = match *element {
+                    FormatElement::Symbol(_) => true,
+                    FormatElement::Attribute(index) => {
+                        self.schema.attributes[index].kind == AttributeKind::SymbolRef
+                    }
+                    _ => false,
+                };
+                if input.len() != before && !symbol_like {
                     self.committed = true;
                 }
                 Ok(())
@@ -765,6 +774,9 @@ mod tests {
         #[asm_format(symbol(callee))]
         fn named(callee: Attr<String>) {}
 
+        #[asm_format(target ("note" note^)? ":" type(result))]
+        fn reference(target: Attr<SymbolRef>, note: Option<Attr<String>>) -> Value<_> {}
+
         #[asm_format("now" ("quick" quick^)? ("with" "(" args^ ")")? attr_dict)]
         fn mark(quick: Option<Attr<bool>>, args: Variadic<_>) {}
 
@@ -880,6 +892,8 @@ mod tests {
       asm_format_test.run go(on)
       asm_format_test.run go()
       asm_format_test.named @target
+      %0 = asm_format_test.reference @f note "n" : core.i32
+      %1 = asm_format_test.reference @g : core.i32
       asm_format_test.mark now
       attributes.probe
   }

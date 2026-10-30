@@ -472,12 +472,31 @@ impl<'a> Format<'a> {
                         "result types that may be absent come last, as `(\":\" types(..)^)?` ending the format",
                     );
                 }
+                // Optional groups may be omitted, so the first element after
+                // them is what the region list could run into.
                 Element::Region(i) if self.regions[i].1 || self.regions[i].2 => {
-                    if next.is_some() && !next_text.is_some_and(|text| !text.starts_with('{')) {
+                    let required = elements[position + 1..]
+                        .iter()
+                        .find(|(element, _)| !matches!(element, Element::Optional { .. }));
+                    if required.is_some_and(|(element, _)| {
+                        !matches!(element, Element::Literal(text) if !text.starts_with('{'))
+                    }) {
                         return err(
                             *span,
-                            "an optional or variadic region ends the format or comes before a literal other than `{`",
+                            "an optional or variadic region ends the format or comes before a literal other than `{`, past any optional groups",
                         );
+                    }
+                }
+                // `""` glues two tokens; punctuation keeps them apart.
+                Element::Literal(ref text) if text.is_empty() => {
+                    let punctuation = |element: Option<&(Element, Span)>| {
+                        matches!(element, Some((Element::Literal(text), _))
+                            if !text.is_empty() && !is_keyword(text))
+                    };
+                    if !punctuation(position.checked_sub(1).and_then(|p| elements.get(p)))
+                        && !punctuation(elements.get(position + 1))
+                    {
+                        return err(*span, "`\"\"` stands next to a punctuation literal");
                     }
                 }
                 Element::Optional { ref elements, .. } => {
@@ -555,19 +574,39 @@ fn check(
         }
     }
 
-    // After an optional symbol, a literal decides custom against generic
-    // syntax, which begins with `{`, `%`, `:`, or `[`, or ends the operation
-    // before a line beginning with `%`, `^`, or `}`.
-    if let Some((first, span)) = elements
+    // Generic syntax never begins with `@`, so symbols and symbol references
+    // may lead. After them a literal decides custom against generic syntax,
+    // which begins with `{`, `%`, `:`, or `[`, or ends the operation before a
+    // line beginning with `%`, `^`, or `}`; a group may stand in for it once a
+    // symbol has decided.
+    let symbol_like = |element: &Element| match *element {
+        Element::Symbol(_) => true,
+        Element::Attribute(i) => {
+            let attr = &op.attrs[i];
+            !attr.list && matches!(&attr.kind, AttrKind::Path(path) if path.is_ident("SymbolRef"))
+        }
+        _ => false,
+    };
+    let decides =
+        |text: &str| !text.is_empty() && !text.starts_with(['{', '%', ':', '[', '^', '}']);
+    let leading = elements
         .iter()
-        .find(|(element, _)| !matches!(element, Element::Symbol(_)))
-        && !matches!(first, Element::Literal(text)
-            if !text.is_empty() && !text.starts_with(['{', '%', ':', '[', '^', '}']))
-    {
-        return err(
-            *span,
-            "a format begins with a literal, after `symbol(..)` if it has one, and not with `{`, `%`, `:`, `[`, `^`, or `}`",
-        );
+        .take_while(|(element, _)| symbol_like(element))
+        .count();
+    if let Some((first, span)) = elements.get(leading) {
+        let decided = match first {
+            Element::Literal(text) => decides(text),
+            Element::Optional { elements, .. } if leading > 0 => {
+                matches!(&elements[0].0, Element::Literal(text) if decides(text))
+            }
+            _ => false,
+        };
+        if !decided {
+            return err(
+                *span,
+                "a format begins with a literal, after any symbols or symbol references, and not with `{`, `%`, `:`, `[`, `^`, or `}`",
+            );
+        }
     }
 
     for (element, span) in &elements {
@@ -1040,6 +1079,32 @@ mod tests {
                 ),
                 quote!(("y" a^)? "x"),
                 "a format begins with a literal",
+            ),
+            (
+                quote!(
+                    fn op(a: Attr<SymbolRef>, b: Attr<u32>) {}
+                ),
+                quote!(a b),
+                "a format begins with a literal",
+            ),
+            (
+                quote!(
+                    fn op() {}
+                ),
+                quote!("run" "" "fast"),
+                "next to a punctuation literal",
+            ),
+            (
+                quote!(
+                    fn op(on: Option<Attr<bool>>) {
+                        #[region(body)]
+                        {}
+                        #[region(extra?)]
+                        {}
+                    }
+                ),
+                quote!("run" region(extra) ("on" on^)? region(body)),
+                "past any optional groups",
             ),
         ];
         let failures: Vec<String> = cases

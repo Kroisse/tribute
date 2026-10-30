@@ -177,7 +177,8 @@ where
   `successor(..)`/`successors(..)` write the other entities. `("kw" .. x^)?`
   opens with a literal and is written only when its anchor `x` is present;
   an optional `bool` anchor is a flag the group's literals stand for. A
-  format begins with a literal (after `symbol(..)`), closes each variadic
+  format begins with a literal (after any `symbol(..)` or symbol reference),
+  closes each variadic
   list with `")"` or `"]"`, and ends with `(":" types(..)^)?` for results
   that may be absent. The macro reports a broken rule, a missing entity, or
   one written twice at the element at fault. An operation the format cannot
