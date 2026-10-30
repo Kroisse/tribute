@@ -606,7 +606,12 @@ impl<'a> FormatParser<'a> {
                 let value = raw_attr_value
                     .parse_next(input)
                     .map_err(|e| e.map(|_| expected("attribute value")))?;
-                if !raw_accepts(self.schema.attributes[index].kind, &value) {
+                // `true`, `false`, and `unit` are read by prefix; one that
+                // continues as a name is part of the next operation's name.
+                let keyword_prefix = matches!(value, RawAttribute::Bool(_) | RawAttribute::Unit)
+                    && input
+                        .starts_with(|c: char| c == '.' || c == '_' || c.is_ascii_alphanumeric());
+                if keyword_prefix || !raw_accepts(self.schema.attributes[index].kind, &value) {
                     *input = checkpoint;
                     return Err(ErrMode::Backtrack(expected(
                         "an attribute value of the declared kind",
@@ -832,6 +837,9 @@ mod tests {
         #[asm_format(symbol(callee))]
         fn named(callee: Attr<String>) {}
 
+        #[asm_format(flag "set")]
+        fn bit(flag: Attr<bool>) {}
+
         #[asm_format(("quick" quick^)? "now" ("with" args^)? attr_dict)]
         fn mark(quick: Option<Attr<bool>>, args: Variadic<_>) {}
 
@@ -932,6 +940,8 @@ mod tests {
         let text = r#"core.module @m {
   asm_format_test.mark {quick = false}
   asm_format_test.toggle {on = false}
+  asm_format_test.bit
+  true.probe
 }
 "#;
         assert_eq!(print(text), text);
