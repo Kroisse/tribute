@@ -1,0 +1,5 @@
+error: a format cannot begin like generic syntax, with `{`, `%`, `:`, `[`, `^`, or `}`
+ --> tests/ui/asm_format_begins_with_bracket.rs:4:22
+  |
+4 |         #[asm_format("[" successors(targets) "]")]
+  |                      ^^^

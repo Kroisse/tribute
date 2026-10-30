@@ -560,6 +560,7 @@ impl<'a> FormatParser<'a> {
         input: &mut &'a str,
         element: &FormatElement,
     ) -> ModalResult<()> {
+        ws.parse_next(input)?;
         let before = input.len();
         match self.element(input, element) {
             Ok(()) => {
@@ -679,18 +680,17 @@ impl<'a> FormatParser<'a> {
                 let Some((first, rest)) = elements.split_first() else {
                     return Ok(());
                 };
+                // The group is present when its first element reads a token.
                 let checkpoint = *input;
                 match self.element(input, first) {
-                    Ok(()) => {}
-                    Err(ErrMode::Backtrack(_)) => {
+                    Ok(()) if input.len() != checkpoint.len() => {}
+                    Ok(()) | Err(ErrMode::Backtrack(_)) => {
                         *input = checkpoint;
                         return Ok(());
                     }
                     Err(error) => return Err(error),
                 }
-                if !self.committed && input.len() != checkpoint.len() {
-                    self.committed = true;
-                }
+                self.committed = true;
                 if let FormatAnchor::Flag(index) = anchor {
                     self.attribute(index, RawAttribute::Bool(true));
                 }
@@ -731,7 +731,8 @@ fn raw_accepts(kind: AttributeKind, value: &RawAttribute<'_>) -> bool {
     }
 }
 
-/// Read `text`; a keyword must not continue as a longer identifier.
+/// Read `text`; a keyword must not continue as a longer identifier or as an
+/// operation name.
 fn literal(input: &mut &str, text: &'static str) -> ModalResult<()> {
     let error = || {
         let mut error = ContextError::new();
@@ -742,7 +743,7 @@ fn literal(input: &mut &str, text: &'static str) -> ModalResult<()> {
     if is_word {
         let checkpoint = *input;
         return match opt(ident).parse_next(input)? {
-            Some(word) if word == text => Ok(()),
+            Some(word) if word == text && !input.starts_with('.') => Ok(()),
             _ => {
                 *input = checkpoint;
                 Err(error())
@@ -758,10 +759,14 @@ fn literal(input: &mut &str, text: &'static str) -> ModalResult<()> {
     }
 }
 
-/// Whether `kind` cannot begin a declarative format: its generic syntax may
-/// start with `{`, which also begins generic operation syntax.
+/// Whether `kind` cannot begin a declarative format: its syntax may begin
+/// with `{`, which also begins generic operation syntax, or read the name of
+/// the next operation as a type.
 pub const fn ambiguous_first_kind(kind: AttributeKind) -> bool {
-    matches!(kind, AttributeKind::Any | AttributeKind::Dict(_))
+    matches!(
+        kind,
+        AttributeKind::Any | AttributeKind::Dict(_) | AttributeKind::Type
+    )
 }
 
 #[cfg(test)]
@@ -790,6 +795,17 @@ mod tests {
         #[asm_format("to" successor(dest) "(" args ")")]
         fn branch(args: Variadic<_>) {
             #[successor(dest)]
+            {}
+        }
+
+        #[asm_format(("quick" quick^)? "now" ("with" args^)? attr_dict)]
+        fn mark(quick: Option<Attr<bool>>, args: Variadic<_>) {}
+
+        #[asm_format("cases" "[" successors(dests) "]" (":" type(result)^)? regions(bodies))]
+        fn switch() -> Option<Value<_>> {
+            #[successors(dests)]
+            {}
+            #[regions(bodies)]
             {}
         }
     }
@@ -850,6 +866,40 @@ mod tests {
 }
 "#,
         );
+    }
+
+    #[test]
+    fn optional_groups_and_lists_round_trip() {
+        assert_round_trip(
+            r#"core.module @m {
+  asm_format_test.def @cfg kind "c" {
+    ^bb0:
+      asm_format_test.mark quick now
+      asm_format_test.mark now
+      %0 = asm_format_test.tagged @f : core.i32
+      asm_format_test.mark now with %0
+      asm_format_test.mark now attributes {extra = 1}
+      asm_format_test.switch cases [^bb1, ^bb0] {
+          asm_format_test.mark now
+      } {
+          asm_format_test.mark quick now
+      }
+
+    ^bb1:
+      %1 = asm_format_test.switch cases [] : core.i32
+  }
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn a_format_beginning_with_an_absent_group_reads_generic_syntax() {
+        let text = r#"core.module @m {
+  asm_format_test.mark {quick = false}
+}
+"#;
+        assert_eq!(print(text), text);
     }
 
     #[test]

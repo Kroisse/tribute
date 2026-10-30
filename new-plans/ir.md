@@ -478,11 +478,18 @@ Macro는 형식 기술을 선언과 대조해 다음을 어기면 그 원소를 
 - 가변 result나 선택 result의 타입은 선택 묶음의 anchor로만 쓴다. 결과가 없을 때
   앞의 구두점도 함께 생략해야 하기 때문이다.
 - 선택 묶음의 anchor는 선택 attribute, 가변 operand, 가변 result, 선택 region,
-  가변 region 목록 중 하나다. 묶음 안에는 선택 entity와 literal만 둔다. 묶음의 첫 원소는
-  literal이거나 anchor이며, 그 첫 token은 묶음 바로 뒤에 올 수 있는 원소의 첫
-  token과 달라야 한다. Parser는 첫 token 하나로 묶음의 유무를 정한다.
-- 첫 원소는 `{`, `%`, `:`로 시작할 수 없다. 그 셋으로 시작하는 입력은 generic
-  형식이다.
+  가변 region 목록 중 하나다. 묶음 안에는 anchor 하나와 literal만 둔다. Parser는
+  묶음의 첫 원소가 token을 읽으면 묶음이 있다고 정한다.
+- 아무것도 쓰지 않을 수 있는 원소(선택 묶음, `attr_dict`, 가변 operand·successor
+  목록, 선택 region, 가변 region 목록)의 첫 token은 그 뒤에 올 수 있는 어떤 첫
+  token과도 겹치지 않는다. 뒤에 오는 원소도 아무것도 쓰지 않을 수 있으면 그 다음
+  원소까지 보며, 형식의 끝 뒤에는 다음 줄의 `%`, `^`, `}`, 다음 operation 이름이 올
+  수 있다. 값을 쓰는 원소(attribute, 타입)의 첫 token은 정해져 있지 않으므로
+  값처럼 시작하는 token과 모두 겹친다.
+- 형식을 시작하는 원소는 `{`, `%`, `:`, `[`, `^`, `}`로 시작할 수 없다. 앞의
+  넷은 generic 형식이 operation 이름 뒤에 쓰는 것이고, 나머지는 operation 이름만
+  쓴 generic 형식 뒤의 다음 줄이 시작할 수 있는 것이다. 형식을 시작하는
+  attribute는 `_`, dictionary, 타입 종류일 수 없다.
 - `signature`의 `t`는 signature codec을 구현한 bound로 묶인 타입 변수여야 하고,
   나열한 region은 선언된 region이어야 한다.
 
@@ -504,8 +511,10 @@ Printer는 쓰기 전에 operation이 형식으로 손실 없이 표현되는지
 같은 텍스트가 된다. 같은 operation을 generic 형식으로 쓴 텍스트도 같은 operation으로
 읽힌다. Parser는 operation schema를 검증하지 않는다.
 
-Parser는 형식의 첫 token을 읽기 전에만 backtrack하고, 첫 token을 읽은 뒤의
-실패는 기대한 원소를 밝힌 오류로 끝낸다. 첫 token에서 backtrack한 입력은 generic
+Parser는 `symbol`이 아닌 원소가 첫 token을 읽기 전에만 backtrack하고, 그 뒤의
+실패는 기대한 원소를 밝힌 오류로 끝낸다. 원소 사이의 공백은 token이 아니다. Keyword
+literal은 식별자 전체로 읽으며, 바로 뒤에 `.`이 오면 다음 operation 이름의 일부로
+보고 읽지 않는다. 첫 token에서 backtrack한 입력은 generic
 형식으로 다시 읽는다.
 
 `signature`가 entry argument를 쓰는 region이 여럿이면 printer는 둘째 이후

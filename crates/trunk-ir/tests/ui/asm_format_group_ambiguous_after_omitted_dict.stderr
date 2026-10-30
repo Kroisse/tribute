@@ -1,0 +1,5 @@
+error: this element may write nothing, and it begins like what can follow it; separate them with a literal
+ --> tests/ui/asm_format_group_ambiguous_after_omitted_dict.rs:4:28
+  |
+4 |         #[asm_format("run" ("flag" left^)? attr_dict ("flag" right^)?)]
+  |                            ^^^^^^^^^^^^^^

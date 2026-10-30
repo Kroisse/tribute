@@ -1,4 +1,4 @@
-error[E0080]: evaluation panicked: attribute `value` begins the format, so its kind cannot be `_` or a dictionary, which generic syntax could begin with
+error[E0080]: evaluation panicked: attribute `value` begins the format, so its kind cannot be `_`, a dictionary, or a type, which generic syntax or the next operation could begin with
  --> tests/ui/asm_format_ambiguous_first_attribute.rs:5:18
   |
 5 |         fn probe(value: Attr<_>) {}

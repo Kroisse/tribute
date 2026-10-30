@@ -418,33 +418,75 @@ impl<'a> Format<'a> {
     }
 }
 
-/// The first token an element begins with, when it is fixed.
-fn first_token(element: &Element) -> Option<&str> {
+/// What an element's text can begin with: fixed text, a value, or the end
+/// of the operation, after which the next line can begin with `%`, `^`, `}`,
+/// or another operation's name.
+#[derive(Clone, Copy)]
+enum Token<'a> {
+    Text(&'a str),
+    Value,
+    End,
+}
+
+fn first_token(element: &Element) -> Token<'_> {
     match element {
-        Element::Literal(text) => Some(text),
-        Element::Operand(_) => Some("%"),
-        Element::Symbol(_) => Some("@"),
-        Element::Successor(_) => Some("^"),
-        Element::Region(_) => Some("{"),
-        Element::AttrDict => Some("attributes"),
+        Element::Literal(text) => Token::Text(text),
+        Element::Operand(_) => Token::Text("%"),
+        Element::Symbol(_) => Token::Text("@"),
+        Element::Successor(_) => Token::Text("^"),
+        Element::Region(_) => Token::Text("{"),
+        Element::AttrDict => Token::Text("attributes"),
         Element::Optional { elements, .. } => first_token(&elements[0].0),
-        Element::Attribute(_) | Element::ResultType | Element::ResultTypes => None,
+        Element::Attribute(_) | Element::ResultType | Element::ResultTypes => Token::Value,
     }
 }
 
-/// Whether a parser that tries an optional group first cannot tell it from
-/// the element after it. An element without a fixed first token is a value,
-/// which a value-like token can begin.
-fn ambiguous(group: Option<&str>, next: Option<&str>) -> bool {
-    let value_like = |token: &str| {
-        token.starts_with(['@', '{', '[', '"', '-'])
-            || token.starts_with(|c: char| c.is_ascii_digit())
-            || ["true", "false", "unit"].contains(&token)
+/// Whether a parser reading one of the two cannot tell it from the other by
+/// its first token. A keyword is read as a whole identifier, but punctuation
+/// is read by prefix.
+fn conflict(a: Token<'_>, b: Token<'_>) -> bool {
+    let value_like = |text: &str| {
+        text.starts_with(['@', '{', '[', '"', '-'])
+            || text.starts_with(|c: char| c.is_ascii_digit())
+            || ["true", "false", "unit"].contains(&text)
     };
-    match (group, next) {
-        (None, None) => true,
-        (None, Some(token)) | (Some(token), None) => value_like(token),
-        (Some(a), Some(b)) => a == b,
+    let word = |text: &str| text.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_');
+    match (a, b) {
+        (Token::Value, Token::Value | Token::End) | (Token::End, Token::Value) => true,
+        (Token::Value, Token::Text(text)) | (Token::Text(text), Token::Value) => value_like(text),
+        (Token::Text(text), Token::End) | (Token::End, Token::Text(text)) => {
+            text.starts_with(['%', '^', '}'])
+        }
+        (Token::Text(a), Token::Text(b)) => {
+            a == b || (!word(a) && !word(b) && (a.starts_with(b) || b.starts_with(a)))
+        }
+        (Token::End, Token::End) => false,
+    }
+}
+
+impl Format<'_> {
+    /// Whether an element may write nothing.
+    fn may_be_empty(&self, element: &Element) -> bool {
+        match *element {
+            Element::Operand(i) => self.op.operands[i].variadic,
+            Element::Successor(i) => self.successors[i].1,
+            Element::Region(i) => self.regions[i].1 || self.regions[i].2,
+            Element::AttrDict | Element::Optional { .. } | Element::ResultTypes => true,
+            _ => false,
+        }
+    }
+
+    /// The first tokens that can follow the end of `elements[..position]`.
+    fn follow<'e>(&self, elements: &'e [(Element, Span)], position: usize) -> Vec<Token<'e>> {
+        let mut tokens = Vec::new();
+        for (element, _) in &elements[position..] {
+            tokens.push(first_token(element));
+            if !self.may_be_empty(element) {
+                return tokens;
+            }
+        }
+        tokens.push(Token::End);
+        tokens
     }
 }
 
@@ -517,23 +559,27 @@ fn check(
             }
             _ => {}
         }
-        let next = elements
-            .get(position + 1)
-            .map(|(next, _)| first_token(next));
-        if matches!(element, Element::Optional { .. })
-            && let Some(next) = next
-            && ambiguous(first_token(element), next)
-        {
-            return err(
-                *span,
-                "the parser cannot tell this optional group from the element after it by its first token",
-            );
+        // An element that may write nothing must not begin like anything
+        // that can follow it, or the parser reads that as this element.
+        if format.may_be_empty(element) {
+            let first = first_token(element);
+            if format
+                .follow(&elements, position + 1)
+                .into_iter()
+                .any(|next| conflict(first, next))
+            {
+                return err(
+                    *span,
+                    "this element may write nothing, and it begins like what can follow it; separate them with a literal",
+                );
+            }
         }
     }
 
     // The elements up to the first that is neither a symbol nor optional
-    // decide custom against generic syntax, which begins with `{`, `%`, or
-    // `:`. An attribute there must not be of a kind generic syntax could
+    // decide custom against generic syntax, which begins with `{`, `%`, `:`,
+    // or `[`, or ends the operation before a line beginning with `%`, `^`,
+    // or `}`. An attribute there must not be of a kind generic syntax could
     // begin with, which only the kind's `KIND` tells.
     let fmt = quote!(#crate_path::asm_format::declarative);
     let mut assertions = Vec::new();
@@ -544,10 +590,12 @@ fn check(
             _ => (element, *span),
         };
         match first {
-            Element::Literal(text) if text.is_empty() || text.starts_with(['{', '%', ':']) => {
+            Element::Literal(text)
+                if text.is_empty() || text.starts_with(['{', '%', ':', '[', '^', '}']) =>
+            {
                 return err(
                     first_span,
-                    "a format cannot begin like generic syntax, with `{`, `%`, or `:`",
+                    "a format cannot begin like generic syntax, with `{`, `%`, `:`, `[`, `^`, or `}`",
                 );
             }
             Element::Literal(_) => {}
@@ -555,7 +603,7 @@ fn check(
                 let attr = &op.attrs[*i];
                 let kind = attr_kind_trait(crate_path, attr);
                 let message = format!(
-                    "attribute `{}` begins the format, so its kind cannot be `_` or a dictionary, which generic syntax could begin with",
+                    "attribute `{}` begins the format, so its kind cannot be `_`, a dictionary, or a type, which generic syntax or the next operation could begin with",
                     attr.name
                 );
                 assertions.push(quote_spanned!(attr.raw_ident.span()=>
