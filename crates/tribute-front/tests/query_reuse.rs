@@ -79,18 +79,16 @@ fn adding_a_function_reruns_what_depends_on_the_names() {
         .assert_reuse(&baseline, &["func_names", "function_count"], &[]);
 }
 
-/// Name resolution reads the span map to report its diagnostics, and the span
-/// map reads the item layout, so moving code reruns it although no name
-/// changed. Once resolution reports diagnostics by `NodeId`, this test
-/// expects `resolved_module` not to run.
+/// Name resolution reads the span map only to report a diagnostic, so
+/// moving code that resolves without one reuses it.
 #[test]
-fn moving_code_reruns_name_resolution() {
+fn moving_code_reuses_name_resolution() {
     let (mut db, source, baseline) = computed();
     move_code(&mut db, source);
     db.record(|db| {
         resolved_module(db, source);
     })
-    .assert_reuse(&baseline, &["resolved_module"], &[]);
+    .assert_reuse(&baseline, &[], &["resolved_module"]);
 }
 
 /// A program with every kind of item, including one in an inline module.

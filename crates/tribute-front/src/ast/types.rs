@@ -426,7 +426,7 @@ pub struct AbilityInstance<'db> {
 }
 
 /// Ability row variable for row-polymorphic effects.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct RowVar {
     pub id: u64,
 }
@@ -473,7 +473,7 @@ pub fn collect_row_vars<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> Vec
 /// The IDs have the same order as the concrete effects in the converted row.
 /// Row-variable annotations are intentionally omitted. Keeping this metadata
 /// outside [`AbilityRow`] preserves the row's semantic identity.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, salsa::SalsaValue)]
 pub struct AbilityAnnotationOrigins {
     concrete: Vec<NodeId>,
 }
