@@ -1,0 +1,34 @@
+---
+source: crates/tribute-front/tests/manifests.rs
+expression: "report.join(\"\\n\")"
+---
+[dependencies]
+=> /ws/app/tribute.toml:0..0 ``: the manifest has no `[package]` table
+
+[package]
+version = "1"
+=> /ws/app/tribute.toml:1..8 `package`: the `[package]` table has no `name`
+
+[package]
+name = 1
+=> /ws/app/tribute.toml:17..18 `1`: `name` must be a string
+
+[package]
+name = "pkg"
+=> /ws/app/tribute.toml:17..22 `"pkg"`: `pkg` is a path keyword and cannot name a package
+
+[package]
+name = "std"
+=> /ws/app/tribute.toml:17..22 `"std"`: `std` names the standard library, which every package depends on
+
+[package]
+name = "Geometry"
+=> /ws/app/tribute.toml:17..27 `"Geometry"`: `Geometry` is not a package name; it must be a lowercase identifier
+
+[package]
+name = "my-app"
+=> /ws/app/tribute.toml:17..25 `"my-app"`: `my-app` is not a package name; it must be a lowercase identifier
+
+[package
+name = "app"
+=> /ws/app/tribute.toml:8..8 ``: invalid manifest: unclosed table, expected `]`

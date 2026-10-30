@@ -39,8 +39,9 @@ use super::definition_index::{
     AstDefinitionEntry, definition_index, package_identifiers, validate_identifier,
 };
 use super::type_index::{AstTypeIndex, print_ast_type, type_index as ast_type_index};
-use tribute::TributeDatabaseImpl;
+use tribute::{TributeDatabaseImpl, root_environment};
 use tribute_front::SourceCst;
+use tribute_front::analysis::Package;
 use tribute_front::ast::source_hash;
 use tribute_front::keywords::unraw;
 use tribute_front::resolve::NameDisplay;
@@ -208,8 +209,37 @@ impl LspServer {
     }
 
     /// The open documents other than `uri` whose packages read `uri`'s
-    /// file as one of their file modules.
+    /// file, as one of their file modules or as a file of a package they
+    /// depend on.
     fn dependent_documents(&self, uri: &Uri) -> Vec<Uri> {
+        self.documents_reading(uri, |db, root, changed| {
+            reads_file(db, root, changed)
+                || root_environment(db, root)
+                    .packages(db)
+                    .iter()
+                    .any(|package| package_reads_file(db, *package, changed))
+        })
+        .into_iter()
+        .filter_map(|(key, _)| key.parse().ok())
+        .collect()
+    }
+
+    /// The roots of the open packages that read `uri`'s file as one of
+    /// their file modules.
+    fn containing_packages(&self, uri: &Uri) -> Vec<SourceCst> {
+        self.documents_reading(uri, reads_file)
+            .into_iter()
+            .map(|(_, root)| root)
+            .collect()
+    }
+
+    /// The open documents other than `uri` whose roots `reads` says read
+    /// `uri`'s file.
+    fn documents_reading(
+        &self,
+        uri: &Uri,
+        reads: impl Fn(&dyn salsa::Database, SourceCst, SourceCst) -> bool,
+    ) -> Vec<(String, SourceCst)> {
         let Some(changed) = self.db.source_cst(uri) else {
             return Vec::new();
         };
@@ -217,24 +247,9 @@ impl LspServer {
         self.db.attach(|db| {
             documents
                 .into_iter()
-                .filter(|(key, root)| {
-                    key != uri.as_str()
-                        && source_tree_of(db, *root).is_some_and(|tree| {
-                            tree.files().iter().any(|file| file.source == changed)
-                        })
-                })
-                .filter_map(|(key, _)| key.parse().ok())
+                .filter(|(key, root)| key != uri.as_str() && reads(db, *root, changed))
                 .collect()
         })
-    }
-
-    /// The roots of the open packages that read `uri`'s file as one of
-    /// their file modules.
-    fn containing_packages(&self, uri: &Uri) -> Vec<SourceCst> {
-        self.dependent_documents(uri)
-            .iter()
-            .filter_map(|root| self.db.source_cst(root))
-            .collect()
     }
 
     /// Publish the diagnostics of the open documents whose packages read
@@ -265,7 +280,7 @@ impl LspServer {
                 return Some((
                     format!(
                         "```tribute\n{}\n```",
-                        print_ast_type(db, &tribute::diagnostic_names(db), entry.ty)
+                        print_ast_type(db, &tribute::diagnostic_names(db, source_cst), entry.ty)
                     ),
                     entry.span,
                 ));
@@ -1053,6 +1068,23 @@ fn init_lsp_tracing(log_filter: &str, sender: crossbeam_channel::Sender<Message>
         .with(env_filter)
         .with(LspLayer::new(sender))
         .try_init();
+}
+
+/// Whether the source tree of the package whose root is `root` reads
+/// `file`.
+fn reads_file(db: &dyn salsa::Database, root: SourceCst, file: SourceCst) -> bool {
+    source_tree_of(db, root).is_some_and(|tree| tree.files().iter().any(|read| read.source == file))
+}
+
+/// Whether `package` or a package it depends on, transitively, reads
+/// `file`.
+fn package_reads_file(db: &dyn salsa::Database, package: Package, file: SourceCst) -> bool {
+    reads_file(db, *package.root(db), file)
+        || package
+            .dependencies(db)
+            .packages(db)
+            .iter()
+            .any(|dependency| package_reads_file(db, *dependency, file))
 }
 
 /// Whether another file of a package in `containing` that reads `source`
@@ -2271,6 +2303,39 @@ mod tests {
     /// A file module open in the editor is the source input its package
     /// reads: opening, editing, and closing it republishes the diagnostics of
     /// an open root of that package.
+    /// Editing a dependency's buffer republishes the open packages that
+    /// depend on it.
+    #[test]
+    fn an_open_dependency_buffer_republishes_its_dependents() {
+        let packages =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/packages");
+        let uri = |path: &str| -> Uri {
+            tribute_front::path_to_uri(&packages.join(path))
+                .as_str()
+                .parse()
+                .unwrap()
+        };
+        let (app, geometry) = (uri("app/src/main.trb"), uri("geometry/src/lib.trb"));
+        let source = std::fs::read_to_string(packages.join("app/src/main.trb")).unwrap();
+
+        let mut harness = TestHarness::new();
+        assert_eq!(
+            harness
+                .open_document_with_diagnostics(&app, &source)
+                .diagnostics,
+            Vec::new()
+        );
+
+        harness.open_document(&geometry, "pub struct Rect { w: Nat, h: Nat }\n");
+        let republished = harness.next_diagnostics();
+        assert_eq!(republished.uri, app);
+        assert_ne!(
+            republished.diagnostics,
+            Vec::new(),
+            "the app reads the buffer, which has no `area`"
+        );
+    }
+
     #[test]
     fn an_open_file_module_buffer_is_what_its_package_reads() {
         let dir = tempfile::tempdir().expect("temporary package directory");

@@ -49,9 +49,8 @@ export(`std::io::Io`)만 [의존 패키지](#prelude와-패키지-std) 경로나
 syntax와 backend-independent lowering이 canonical identity를 요구하는 opaque `List`와
 ambient/intrinsic 성질처럼 compiler가 보장해야 하는 metadata는 builtin registry에 둔다.
 
-LSP는 import된 compiler-owned binding을 completion과 hover에 노출한다. 다만 이동할
-source declaration이 없으므로 go-to-definition과 rename target은 제공하지 않는다.
-로컬 declaration은 같은 short name의 builtin import보다 우선하며, 이 규칙은 effect
+Language server가 이 binding을 보이는 방식은 [Language Server](lsp.md#결과)를
+따른다. 로컬 declaration은 같은 short name의 builtin import보다 우선하며, 이 규칙은 effect
 annotation을 포함한 모든 name-resolution 경로에서 동일하게 적용한다. 이 shadowing은
 syntax-owned semantics를 바꾸지 않는다. 예를 들어 로컬 `List`는 annotation에서
 선택될 수 있지만 `[1, 2]`의 canonical builtin `List` identity를 capture하지 못하며,
@@ -815,9 +814,37 @@ geometry = { path = "../geometry" }
 쓰일 패키지에서는 권장하지 않는다. 다른 파일에서 상속하거나 포함한 경로는 그 경로를
 선언한 파일의 디렉토리를 기준으로 해석한다.
 
+**패키지의 동일성.** 한 빌드에서 같은 디렉토리를 가리키는 의존성 항목은 모두 같은
+패키지를 가리킨다. 디렉토리는 매니페스트의 디렉토리에 `path`를 이어 `.`과 `..`를
+글자 그대로 접은 경로로 비교한다. 그래서 두 패키지가 같은 라이브러리에 의존하면 그
+라이브러리는 빌드에 한 번만 들어온다.
+
+**패키지 오류.** 매니페스트 오류는 그 매니페스트의 경로와 위치를 가지고 보고한다.
+
+- 매니페스트 자신의 오류는 그 매니페스트에서 보고한다. TOML 구문 오류, `[package]`의
+  `name`이 없거나 위 이름 규칙을 어기는 경우, 이름 규칙을 어기는 의존성 항목 이름
+  (`std` 포함), 표가 아니거나 `path`가 없거나 `path`가 문자열이 아닌 의존성 항목,
+  의존성 항목의 `path` 아닌 key(`version` 등)가 그렇다. 패키지 디렉토리를 빌드할
+  때 `src/`에 `lib.trb`와 `main.trb`가 모두 없는 것도 그 매니페스트의 오류다.
+- 의존 패키지에 관한 오류는 의존하는 쪽 매니페스트의 그 항목에서 보고한다. `path`에
+  `tribute.toml`이 없을 때, 항목의 이름이 의존 패키지의 `[package] name`과 다를 때,
+  의존 패키지에 `lib.trb`가 없을 때가 그렇다.
+- 의존성은 순환할 수 없다. 의존 패키지가 의존 관계를 따라 다시 의존하는 쪽
+  패키지에 닿으면, 그 순환을 닫는 의존성 항목에서 보고한다.
+
+오류가 난 의존성 항목은 의존성 표에서 빠지므로, 그 패키지의 경로는 이름 해석에서
+다시 오류가 된다.
+
+**실행 파일 루트.** 실행 파일 빌드의 루트 파일은 패키지의 `src/main.trb`이며, 그
+의존성 표는 매니페스트의 `[dependencies]`와 `std`다. `src/lib.trb`만 있는 패키지는 실행 파일을 만들지 않으며, 라이브러리로
+검사한다.
+
 **매니페스트 없는 컴파일.** 매니페스트 없이 source 파일 하나를 컴파일할 수 있다. 그
 파일은 `std`에만 의존하는 실행 파일 패키지의 루트이며, 파일 기반 모듈은 그 파일의
-디렉토리를 `src/`처럼 기준으로 삼아 찾는다.
+디렉토리를 `src/`처럼 기준으로 삼아 찾는다. 컴파일 입력이 source 파일이면 그
+파일이 패키지 안에 있어도, 패키지의 루트 파일이어도 매니페스트 없이 컴파일한다.
+패키지는 그 디렉토리로 컴파일한다. 편집기에서 연 파일을 어느 패키지 안에서
+분석하는지는 [Language Server](lsp.md#문서가-속한-패키지)를 따른다.
 
 ### 모듈 이름 관례
 
