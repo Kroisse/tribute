@@ -646,12 +646,23 @@ consumer는 nested region을 재귀적으로 순회해야 하며, "사용 없음
   (`@left::@helper`). Identifier가 아닌 component는 따옴표로 감싸므로, `::`를 포함한
   이름 하나는 `@"left::helper"`로 쓴다. Path의 순서는 component를 차례로 비교한
   순서다.
-- 함수 참조를 모으는 분석(call graph, global DCE)은 참조하는 operation이나 속성의
+- Symbol 참조를 모으는 분석(call graph, global DCE)은 참조하는 operation이나 속성의
   이름을 나열하지 않고 operation 속성의 모든 symbol 참조를 모은다. 직접 호출
   operation은 `CallLike` interface로 callee를 게시하며, 그 callee 참조만 호출이다.
-  그 밖의 참조는 모두 주소 참조이고, 대상 함수는 값으로 escape한 것으로 본다. 함수
-  정의 밖에 있는 참조는 reachability root다. Symbol 참조는 operation 속성에만 두며,
-  type 속성과 block 인자 속성에는 두지 않는다.
+  그 밖의 참조는 모두 주소 참조이고, 대상 함수는 값으로 escape한 것으로 본다. Symbol
+  참조는 operation 속성에만 두며, type 속성과 block 인자 속성에는 두지 않는다.
+- Symbol 정의는 `SymbolDefinition` interface를 구현한 operation이다(MLIR
+  `SymbolOpInterface`). 이 interface는 쓰이지 않을 때 지워도 되는지와 본문 없는
+  선언인지를 답한다. 정의의 속성과 region 안에 있는 참조는 그 정의의 사용이다.
+  정의에 속하지 않는 참조만 reachability root다. Global DCE는 call graph가 아니라
+  symbol 정의 위에서 동작한다. Symbol 정의가 아닌 operation, 지울 수 없는 정의,
+  설정이 지정한 진입점(기본값은 root module의 `main`과 `_start`)은 살아 있다. 살아
+  있는 operation이 사용하는 정의도 살아 있으며, 이 관계를 따라 닫는다. 살아 있지 않은
+  정의는 지운다. 그래서 region 없는 정의의 속성이 가리키는 대상은 그 정의가 살아
+  있는 동안에만 살아 있다. 본문과 `abi` 속성을 함께 가진 함수 정의는 module 밖에서
+  호출되므로 지울 수 없고, `abi`가 있는 본문 없는 선언은 import이므로 쓰이지 않으면
+  지운다. Call graph는 callable 사이의 호출·주소 참조 분석으로 남으며, DCE가 무엇을
+  남길지 정하지 않는다.
 - Nested regions use normal SSA visibility rules: values defined inside a
   nested region are not visible outside it unless yielded or otherwise modeled
   by the operation.

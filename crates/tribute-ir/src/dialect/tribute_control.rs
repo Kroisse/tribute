@@ -85,12 +85,19 @@ mod tribute_control {
     ///   `inferred_row` (`new-plans/ir.md`, "Ability row").
     /// - **Ownership and value flow:** the body is isolated from above. Only
     ///   source locals and parameters enter as block arguments.
+    /// - **Symbol:** a `SymbolDefinition`. A definition with a body and a
+    ///   foreign `abi` is not discardable; any other is removed once nothing
+    ///   live uses it (`new-plans/ir.md`, "Core Invariants").
     /// - **Location:** the whole span of the source function or extern
     ///   declaration.
     #[verify]
     #[asm_format]
     #[flags(IsolatedFromAbove)]
-    #[implements(CallableArgumentOrigin, LocalValidation)]
+    #[implements(
+        CallableArgumentOrigin,
+        LocalValidation,
+        trunk_ir::op_interface::SymbolDefinition
+    )]
     fn func<S: FuncSig>(
         sym_name: Attr<String>,
         r#type: Attr<TypeOf<S>>,
@@ -1373,6 +1380,14 @@ pub struct DeclarationUse<'a> {
 pub trait LocalValidation: DialectOp {
     /// Report each violation of these checks.
     fn validate(&self, ctx: &IrContext, errors: &mut Vec<ValidationError>);
+}
+
+/// As `func.func`: a definition with a body and a foreign `abi` is
+/// callable from outside the module, so it is kept.
+impl trunk_ir::op_interface::SymbolDefinition for Func {
+    fn is_discardable(&self, ctx: &IrContext) -> bool {
+        !(ctx.op_attrs(self.op_ref()).contains_key("abi") && ctx.op_has_regions(self.op_ref()))
+    }
 }
 
 impl LocalValidation for Func {

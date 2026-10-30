@@ -42,7 +42,7 @@ pub trait TailCallLike: CallLike {
 #[trunk_ir::dialect]
 mod func {
     #[asm_format]
-    #[implements(CallableOwner)]
+    #[implements(CallableOwner, op_interface::SymbolDefinition)]
     #[flags(IsolatedFromAbove)]
     fn func(sym_name: Attr<String>, r#type: Attr<Type>) {
         #[region(body?)]
@@ -1025,6 +1025,15 @@ impl crate::op_interface::CallableOwner for Func {
             .and_then(|ty| crate::dialect::func::FuncSig::from_type_ref(ctx, ty))
     }
 }
+/// A function with a body and an `abi` attribute is callable from outside
+/// the module, so it is kept. A bodyless `abi` declaration is an import and
+/// goes once nothing uses it.
+impl op_interface::SymbolDefinition for Func {
+    fn is_discardable(&self, ctx: &IrContext) -> bool {
+        !(ctx.op_attrs(self.op_ref()).contains_key("abi") && ctx.op_has_regions(self.op_ref()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

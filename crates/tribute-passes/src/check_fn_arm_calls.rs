@@ -15,7 +15,7 @@ use rustc_hash::FxHashMap as HashMap;
 use tribute_ir::calling_convention::CallingConvention;
 use tribute_ir::dialect::tribute_control::{self, FuncSig, Row};
 use tribute_ir::dialect::tribute_cps;
-use tribute_ir::runtime_items::{RUNTIME_ITEMS, function_entry_points};
+use tribute_ir::runtime_items::RUNTIME_ITEMS;
 use trunk_ir::SymbolPath;
 use trunk_ir::context::IrContext;
 use trunk_ir::ops::{DialectOp, DialectType};
@@ -27,6 +27,7 @@ use trunk_ir::walk::{WalkAction, walk_region};
 use crate::convention_classes::{
     Function, reference_callee, requirements, row_class, settle_class_variables, settle_locals,
 };
+use crate::unreferenced_source_functions::source_dce_config;
 
 /// A call in a `fn` arm that may suspend or abort.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -102,17 +103,14 @@ pub fn check(ctx: &IrContext, module: Module) -> Vec<FnArmCall> {
     let positions = settle_class_variables(&mut functions);
     let by_name: HashMap<&str, &Function> =
         functions.iter().map(|f| (f.name.as_str(), f)).collect();
-    let config = trunk_ir::transforms::GlobalDceConfig {
-        extra_entry_points: function_entry_points(RUNTIME_ITEMS),
-        ..Default::default()
-    };
-    let reachable =
-        trunk_ir::transforms::reachable_definitions_with_config(ctx, module, &config, |ctx, op| {
-            tribute_control::is_func(ctx, op) && ctx.op_has_regions(op)
-        });
+    let reachable = trunk_ir::transforms::reachable_definitions_with_config(
+        ctx,
+        module,
+        &source_dce_config(RUNTIME_ITEMS),
+    );
     let instances: Vec<Instance> = functions
         .iter()
-        .filter(|f| reachable.contains(&f.op))
+        .filter(|f| ctx.op_has_regions(f.op) && reachable.contains(&f.op))
         .map(|function| Instance::new(ctx, function, &positions, &by_name, &requirements))
         .collect();
     let mut calls: Vec<FnArmCall> = Vec::new();
