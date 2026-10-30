@@ -43,12 +43,14 @@ use trunk_ir::Symbol;
 
 use crate::SortedMap;
 use crate::ast::{
-    Decl, DeclEntry, DeclTable, FuncDefId, NodeId, ResolvedRef, SpanMap, Type, TypeScheme,
-    TypedRef, UniVarId,
+    Decl, DeclEntry, DeclTable, FuncDecl, FuncDefId, NodeId, ResolvedRef, SpanMap, Type,
+    TypeScheme, TypedRef, UniVarId,
 };
 use crate::resolve::{NameDisplay, PackageName};
 
-use super::context::ModuleTypeEnv;
+use std::sync::Arc;
+
+use super::context::{ModuleTypeEnv, TypeEnvData};
 use super::{PackageExports, StringType, WellKnownType, WellKnownTypeKey, WellKnownTypes};
 
 /// Result of module type checking.
@@ -85,11 +87,39 @@ pub struct ModuleCheckResult<'db> {
     pub well_known_types: WellKnownTypes<'db>,
 }
 
-/// What checking one module-level function produces: its body's node
-/// metadata, keyed by nodes only that function owns. Function checking only
-/// reads the module environment, so the module merges these results in any
-/// order.
-#[derive(Default)]
+/// What collecting a module's declarations produces: the environment each
+/// of its functions is checked in, and the diagnostics collection reported.
+/// It holds no function body, so editing a body leaves it equal.
+#[derive(Clone, PartialEq, Eq, salsa::SalsaValue)]
+pub struct ModuleDeclarations<'db> {
+    env: Arc<TypeEnvData<'db>>,
+    signatures: Arc<SignatureNames<'db>>,
+    diagnostics: Vec<NodeDiagnostic>,
+}
+
+/// The names each collected function signature binds, for checking its
+/// body against them.
+#[derive(Clone, Default, PartialEq, Eq, salsa::SalsaValue)]
+struct SignatureNames<'db> {
+    /// Source origins for concrete effects in each collected function signature.
+    effect_annotation_origins: HashMap<FuncDefId<'db>, crate::ast::AbilityAnnotationOrigins>,
+    row_names: HashMap<FuncDefId<'db>, HashMap<Symbol, crate::ast::RowVar>>,
+    type_names: HashMap<FuncDefId<'db>, HashMap<Symbol, u32>>,
+}
+
+/// What checking one module-level function produces: its typed declaration,
+/// its body's node metadata, and its diagnostics, positioned at nodes.
+#[derive(Clone, PartialEq, Eq, salsa::SalsaValue)]
+pub struct CheckedFunction<'db> {
+    decl: FuncDecl<TypedRef<'db>>,
+    check: FunctionCheck<'db>,
+    diagnostics: Vec<NodeDiagnostic>,
+}
+
+/// A function's body node metadata, keyed by nodes only that function owns.
+/// Function checking only reads the module environment, so the module
+/// merges these results in any order.
+#[derive(Clone, Default, PartialEq, Eq, salsa::SalsaValue)]
 pub(crate) struct FunctionCheck<'db> {
     pub(super) node_types: HashMap<NodeId, Type<'db>>,
     pub(super) function_instances: HashMap<NodeId, super::FunctionInstance<'db>>,
@@ -142,10 +172,7 @@ pub struct TypeChecker<'db> {
     perform_operations: HashMap<NodeId, crate::typeck::InstantiatedPerformOperation<'db>>,
     lambda_signatures: HashMap<NodeId, crate::typeck::LambdaSignature<'db>>,
     exhaustive_cases: Vec<NodeId>,
-    /// Source origins for concrete effects in each collected function signature.
-    effect_annotation_origins: HashMap<FuncDefId<'db>, crate::ast::AbilityAnnotationOrigins>,
-    signature_row_names: HashMap<FuncDefId<'db>, HashMap<Symbol, crate::ast::RowVar>>,
-    signature_type_names: HashMap<FuncDefId<'db>, HashMap<Symbol, u32>>,
+    signatures: Arc<SignatureNames<'db>>,
     /// Each collected function, checked against the field getters once
     /// every declaration is collected.
     function_decls: Vec<(NodeId, FuncDefId<'db>)>,
@@ -223,9 +250,7 @@ impl<'db> TypeChecker<'db> {
             perform_operations: HashMap::default(),
             lambda_signatures: HashMap::default(),
             exhaustive_cases: Vec::new(),
-            effect_annotation_origins: HashMap::default(),
-            signature_row_names: HashMap::default(),
-            signature_type_names: HashMap::default(),
+            signatures: Default::default(),
             function_decls: Vec::new(),
             diagnostics: Default::default(),
         }
@@ -273,6 +298,93 @@ impl<'db> TypeChecker<'db> {
     /// Returns the typed module, function type schemes, and node types.
     pub fn check_module(self, module: &DeclTable<ResolvedRef<'db>>) -> ModuleCheckResult<'db> {
         self.check_module_inner(module)
+    }
+
+    /// Collect a module's declarations, for checking its functions one at a
+    /// time with [`TypeChecker::check_function`].
+    pub fn collect_module(
+        mut self,
+        module: &DeclTable<ResolvedRef<'db>>,
+    ) -> ModuleDeclarations<'db> {
+        self.collect_declarations(module);
+        ModuleDeclarations {
+            env: self.env.data().clone(),
+            signatures: self.signatures,
+            diagnostics: self.diagnostics.into_inner(),
+        }
+    }
+
+    /// Check against declarations collected before, instead of collecting
+    /// them.
+    pub fn with_declarations(mut self, declarations: &ModuleDeclarations<'db>) -> Self {
+        self.env = ModuleTypeEnv::from_data(self.db(), declarations.env.clone());
+        self.signatures = declarations.signatures.clone();
+        self
+    }
+
+    /// Check one module-level function, declared in `module`, against the
+    /// collected declarations. Its diagnostics stay positioned at nodes, so
+    /// the checker needs no span map.
+    pub fn check_function(
+        mut self,
+        module: &SymbolPath,
+        func: &FuncDecl<ResolvedRef<'db>>,
+    ) -> CheckedFunction<'db> {
+        self.prefix = module.clone();
+        let (decl, check) = self.check_func_decl(func);
+        CheckedFunction {
+            decl,
+            check,
+            diagnostics: self.diagnostics.into_inner(),
+        }
+    }
+
+    /// Assemble a module's result from its collected declarations and its
+    /// functions' results, in declaration order, and report their
+    /// diagnostics at the spans of the checker's span map.
+    pub fn finish_module<'a>(
+        mut self,
+        declarations: &ModuleDeclarations<'db>,
+        module: &DeclTable<ResolvedRef<'db>>,
+        functions: impl IntoIterator<Item = &'a CheckedFunction<'db>>,
+    ) -> ModuleCheckResult<'db>
+    where
+        'db: 'a,
+    {
+        self = self.with_declarations(declarations);
+        self.diagnostics
+            .get_mut()
+            .extend(declarations.diagnostics.iter().cloned());
+        let mut functions = functions.into_iter();
+        let entries = module
+            .entries
+            .iter()
+            .map(|entry| {
+                let decl = match &entry.decl {
+                    Decl::Function(_) => {
+                        let checked = functions
+                            .next()
+                            .expect("a checked function for each function declaration");
+                        self.diagnostics
+                            .get_mut()
+                            .extend(checked.diagnostics.iter().cloned());
+                        self.merge_function(checked.check.clone());
+                        Decl::Function(checked.decl.clone())
+                    }
+                    decl => self.check_decl(decl),
+                };
+                DeclEntry {
+                    module: entry.module.clone(),
+                    decl,
+                }
+            })
+            .collect();
+        self.accumulate_diagnostics();
+        self.into_module_result(DeclTable {
+            id: module.id,
+            name: module.name.clone(),
+            entries,
+        })
     }
 
     /// Type check the root module of a library package once.

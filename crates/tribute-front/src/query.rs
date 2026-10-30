@@ -147,19 +147,14 @@ pub fn func_names(db: &dyn salsa::Database, source: SourceCst) -> Vec<Symbol> {
         .collect()
 }
 
-/// Resolve all names in a module.
-///
-/// Resolution currently processes the complete module in one tracked query.
-#[salsa::tracked(returns(as_ref))]
+/// Resolve all names in the source alone: the module
+/// [`crate::analysis::resolved_module`] resolves in the builtin environment.
 pub fn resolved_module<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
-) -> Option<DeclTable<ResolvedRef<'db>>> {
-    let module = parsed_module(db, source)?;
-    let sm = span_map(db, source)?;
-    let dependencies = crate::analysis::dependencies(db, *crate::analysis::builtins(db));
-    let scope = crate::resolve::build_env(db, module, dependencies);
-    Some(crate::resolve::resolve_with_env(db, module, &scope, sm))
+) -> Option<&'db DeclTable<ResolvedRef<'db>>> {
+    crate::analysis::resolved_module(db, source, *crate::analysis::builtins(db))
+        .map(|resolved| &resolved.module)
 }
 
 /// Type check the source alone: [`crate::analysis::analyze`] in the
@@ -664,11 +659,10 @@ fn explicit() ->{} Nil { Nil }
         let db = salsa::DatabaseImpl::default();
         let source = make_source(&db, "fn main() -> Nil { undefined_var }");
 
-        // Call resolved_module to trigger name resolution
-        let _module = resolved_module(&db, source);
-
-        // Collect diagnostics
-        let diagnostics: Vec<_> = resolved_module::accumulated::<Diagnostic>(&db, source);
+        let table = *crate::analysis::builtins(&db);
+        crate::analysis::resolved_module(&db, source, table);
+        let diagnostics: Vec<_> =
+            crate::analysis::resolved_module::accumulated::<Diagnostic>(&db, source, table);
 
         // Should have a diagnostic about unresolved name
         assert!(

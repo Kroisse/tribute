@@ -66,7 +66,7 @@ impl<'db> TypeChecker<'db> {
         let (param_types, expected_return, instantiated_func_ty, signature_instance) =
             self.get_func_signature_with_type(&mut ctx, func_id, func);
         if let Some((_, instance)) = &signature_instance
-            && let Some(names) = self.signature_type_names.get(&func_id)
+            && let Some(names) = self.signatures.type_names.get(&func_id)
         {
             for (name, index) in names {
                 ctx.bind_annotation_type_parameter(
@@ -76,7 +76,7 @@ impl<'db> TypeChecker<'db> {
             }
         }
         if let Some((scheme, instance)) = &signature_instance
-            && let Some(names) = self.signature_row_names.get(&func_id)
+            && let Some(names) = self.signatures.row_names.get(&func_id)
         {
             for (name, original) in names {
                 let index = scheme
@@ -1188,7 +1188,8 @@ impl<'db> TypeChecker<'db> {
         index: usize,
     ) -> String {
         let var = scheme.effect_params(self.db()).get(index).copied();
-        self.signature_row_names
+        self.signatures
+            .row_names
             .get(&func_id)
             .into_iter()
             .flatten()
@@ -1206,7 +1207,7 @@ impl<'db> TypeChecker<'db> {
         func_id: FuncDefId<'db>,
         resolved_declared: crate::ast::AbilityRow<'db>,
     ) -> bool {
-        let Some(origins) = self.effect_annotation_origins.get(&func_id) else {
+        let Some(origins) = self.signatures.effect_annotation_origins.get(&func_id) else {
             return false;
         };
         let (duplicate, message) = if let Some(duplicate) =
@@ -1279,7 +1280,8 @@ impl<'db> TypeChecker<'db> {
         };
 
         let type_names: HashMap<u32, Symbol> = self
-            .signature_type_names
+            .signatures
+            .type_names
             .get(&func_id)
             .into_iter()
             .flatten()
@@ -1315,7 +1317,8 @@ impl<'db> TypeChecker<'db> {
         }
 
         let row_names: HashMap<crate::ast::RowVar, Symbol> = self
-            .signature_row_names
+            .signatures
+            .row_names
             .get(&func_id)
             .into_iter()
             .flatten()

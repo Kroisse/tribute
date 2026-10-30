@@ -17,6 +17,7 @@ use crate::typeck::context::{AbilityInfo, AbilityOpInfo};
 
 use super::NodeDiagnostic;
 use super::TypeChecker;
+use std::sync::Arc;
 
 /// Declared field names in order, if every field is named. A constructor
 /// without fields has an empty list.
@@ -261,10 +262,13 @@ impl<'db> TypeChecker<'db> {
         // Register the function with its FuncDefId
         let func_id = self.func_def_id(&func.name);
         if let Some(origins) = effect_origins {
-            self.effect_annotation_origins.insert(func_id, origins);
+            Arc::make_mut(&mut self.signatures)
+                .effect_annotation_origins
+                .insert(func_id, origins);
         }
-        self.signature_row_names.insert(func_id, vars.rows);
-        self.signature_type_names.insert(func_id, vars.types);
+        let signatures = Arc::make_mut(&mut self.signatures);
+        signatures.row_names.insert(func_id, vars.rows);
+        signatures.type_names.insert(func_id, vars.types);
         self.env.register_function(func_id, scheme);
 
         self.function_decls.push((func.id, func_id));
