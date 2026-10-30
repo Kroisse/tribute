@@ -446,7 +446,7 @@ literal은 문자열 literal로 쓴다.
   `attr`를 함께 쓴다.
 - **`successor(s)`, `successors(ss)`** — `^bb1`로 쓴다.
 - **선택 묶음 `( .. )?`** — 원소 하나에 `^`를 붙여 anchor로 삼는다. Anchor가
-  있으면(선택 attribute가 있거나, 가변 operand·region 목록이 비어 있지 않으면)
+  있으면(선택 attribute가 있거나, 가변 operand·result·region 목록이 비어 있지 않으면)
   묶음 전체를 쓰고, 없으면 묶음 전체를 생략한다. `Option<Attr<bool>>`인 anchor가
   묶음에서 값을 쓰지 않으면 표시 flag다. `true`면 묶음을 쓰고 parser는 묶음을
   만나면 `true`를 저장한다.
