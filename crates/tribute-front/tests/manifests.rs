@@ -46,12 +46,19 @@ impl Workspace {
         let mut ws = Self::new();
         ws.file(
             "/ws/geometry/tribute.toml",
-            "[package]\nname = \"geometry\"\n",
+            r#"[package]
+name = "geometry"
+"#,
         );
         ws.file("/ws/geometry/src/lib.trb", GEOMETRY);
         ws.file(
             "/ws/app/tribute.toml",
-            "[package]\nname = \"app\"\n\n[dependencies]\ngeometry = { path = \"../geometry\" }\n",
+            r#"[package]
+name = "app"
+
+[dependencies]
+geometry = { path = "../geometry" }
+"#,
         );
         let app = ws.file("/ws/app/src/main.trb", APP);
         (ws, app)
@@ -156,7 +163,7 @@ fn an_app_is_analyzed_against_its_manifests_dependencies() {
 #[test]
 fn a_source_outside_a_package_depends_on_std_alone() {
     let mut ws = Workspace::new();
-    ws.file("/ws/app/tribute.toml", "[package]\nname = \"app\"\n");
+    ws.file(r#"/ws/app/tribute.toml"#, "[package]\nname = \"app\"\n");
     let lib = ws.file("/ws/app/src/lib.trb", GEOMETRY);
     let loose = ws.file("/ws/loose/src/main.trb", APP);
     assert_eq!(ws.table(lib), ["std"]);
@@ -191,18 +198,30 @@ fn dependencies_on_one_directory_share_one_package() {
     let mut ws = Workspace::new();
     ws.file(
         "/ws/geometry/tribute.toml",
-        "[package]\nname = \"geometry\"\n",
+        r#"[package]
+name = "geometry"
+"#,
     );
     ws.file("/ws/geometry/src/lib.trb", GEOMETRY);
     ws.file(
         "/ws/shapes/tribute.toml",
-        "[package]\nname = \"shapes\"\n\n[dependencies]\ngeometry = { path = \"../geometry\" }\n",
+        r#"[package]
+name = "shapes"
+
+[dependencies]
+geometry = { path = "../geometry" }
+"#,
     );
     ws.file("/ws/shapes/src/lib.trb", "");
     ws.file(
         "/ws/app/tribute.toml",
-        "[package]\nname = \"app\"\n\n[dependencies]\n\
-         geometry = { path = \"./../geometry/\" }\nshapes = { path = \"../shapes\" }\n",
+        r#"[package]
+name = "app"
+
+[dependencies]
+geometry = { path = "./../geometry/" }
+shapes = { path = "../shapes" }
+"#,
     );
     let app = ws.file("/ws/app/src/main.trb", APP);
     let table = *source_dependencies(&ws.db, app, ws.std);
@@ -226,7 +245,10 @@ fn editing_a_manifest_reloads_only_its_dependents() {
     // A comment changes no manifest value.
     ws.file(
         "/ws/geometry/tribute.toml",
-        "# shapes\n[package]\nname = \"geometry\"\n",
+        r#"# shapes
+[package]
+name = "geometry"
+"#,
     );
     analyze(&ws).assert_reuse(
         &baseline,
@@ -242,7 +264,13 @@ fn editing_a_manifest_reloads_only_its_dependents() {
     // A dependency that does not load leaves the table as it was.
     ws.file(
         "/ws/app/tribute.toml",
-        "[package]\nname = \"app\"\n\n[dependencies]\ngeometry = { path = \"../geometry\" }\nextra = { path = \"../extra\" }\n",
+        r#"[package]
+name = "app"
+
+[dependencies]
+geometry = { path = "../geometry" }
+extra = { path = "../extra" }
+"#,
     );
     analyze(&ws).assert_reuse(
         &baseline,
@@ -258,7 +286,9 @@ fn creating_a_missing_dependency_loads_it() {
     assert_eq!(ws.table(app), ["std"]);
     ws.file(
         "/ws/geometry/tribute.toml",
-        "[package]\nname = \"geometry\"\n",
+        r#"[package]
+name = "geometry"
+"#,
     );
     assert_eq!(ws.table(app), ["geometry", "std"]);
 }
@@ -274,14 +304,29 @@ fn app_with(manifest: &str) -> (Workspace, SourceCst) {
 fn diag_manifest_package_names() {
     let mut report = Vec::new();
     for manifest in [
-        "[dependencies]\n",
-        "[package]\nversion = \"1\"\n",
-        "[package]\nname = 1\n",
-        "[package]\nname = \"pkg\"\n",
-        "[package]\nname = \"std\"\n",
-        "[package]\nname = \"Geometry\"\n",
-        "[package]\nname = \"my-app\"\n",
-        "[package\nname = \"app\"\n",
+        r#"[dependencies]
+"#,
+        r#"[package]
+version = "1"
+"#,
+        r#"[package]
+name = 1
+"#,
+        r#"[package]
+name = "pkg"
+"#,
+        r#"[package]
+name = "std"
+"#,
+        r#"[package]
+name = "Geometry"
+"#,
+        r#"[package]
+name = "my-app"
+"#,
+        r#"[package
+name = "app"
+"#,
     ] {
         let (ws, app) = app_with(manifest);
         report.push(format!("{manifest}=> {}\n", ws.source_errors(app)));
@@ -294,31 +339,41 @@ fn diag_manifest_dependency_entries() {
     let mut ws = Workspace::new();
     ws.file(
         "/ws/geometry/tribute.toml",
-        "[package]\nname = \"geometry\"\n",
+        r#"[package]
+name = "geometry"
+"#,
     );
     ws.file("/ws/geometry/src/lib.trb", GEOMETRY);
     ws.file(
         "/ws/misspelled/Tribute.toml",
-        "[package]\nname = \"misspelled\"\n",
+        r#"[package]
+name = "misspelled"
+"#,
     );
     ws.file("/ws/misspelled/src/lib.trb", "");
     ws.file(
         "/ws/app_only/tribute.toml",
-        "[package]\nname = \"app_only\"\n",
+        r#"[package]
+name = "app_only"
+"#,
     );
     ws.file("/ws/app_only/src/main.trb", "");
     ws.file(
         "/ws/app/tribute.toml",
-        "[package]\nname = \"app\"\n\n[dependencies]\n\
-         missing = { path = \"../missing\" }\n\
-         misspelled = { path = \"../misspelled\" }\n\
-         geo = { path = \"../geometry\" }\n\
-         app_only = { path = \"../app_only\" }\n\
-         std = { path = \"../std\" }\n\
-         versioned = { path = \"../geometry\", version = \"1\" }\n\
-         bare = \"../geometry\"\n\
-         pathless = {}\n\
-         numbered = { path = 1 }\n",
+        r#"[package]
+name = "app"
+
+[dependencies]
+missing = { path = "../missing" }
+misspelled = { path = "../misspelled" }
+geo = { path = "../geometry" }
+app_only = { path = "../app_only" }
+std = { path = "../std" }
+versioned = { path = "../geometry", version = "1" }
+bare = "../geometry"
+pathless = {}
+numbered = { path = 1 }
+"#,
     );
     let app = ws.file("/ws/app/src/main.trb", APP);
     insta::assert_snapshot!(ws.source_errors(app));
@@ -332,14 +387,25 @@ fn diag_manifest_dependency_cycle() {
         ws.file(
             &format!("/ws/{name}/tribute.toml"),
             &format!(
-                "[package]\nname = \"{name}\"\n\n[dependencies]\n{dependency} = {{ path = \"../{dependency}\" }}\n"
+                r#"[package]
+name = "{name}"
+
+[dependencies]
+{dependency} = {{ path = "../{dependency}" }}
+"#
             ),
         );
         ws.file(&format!("/ws/{name}/src/lib.trb"), "");
     }
     ws.file(
         "/ws/app/tribute.toml",
-        "[package]\nname = \"app\"\n\n[dependencies]\na = { path = \"../a\" }\nitself = { path = \".\" }\n",
+        r#"[package]
+name = "app"
+
+[dependencies]
+a = { path = "../a" }
+itself = { path = "." }
+"#,
     );
     let app = ws.file("/ws/app/src/main.trb", "");
     insta::assert_snapshot!(ws.source_errors(app));
@@ -358,7 +424,7 @@ fn diag_manifest_dependency_cycle() {
 #[test]
 fn diag_manifest_package_without_root_files() {
     let mut ws = Workspace::new();
-    ws.file("/ws/empty/tribute.toml", "[package]\nname = \"empty\"\n");
+    ws.file(r#"/ws/empty/tribute.toml"#, "[package]\nname = \"empty\"\n");
     ws.file("/ws/empty/main.trb", "");
     insta::assert_snapshot!(ws.load_errors("/ws/empty/tribute.toml"));
 }

@@ -10,7 +10,9 @@ use tribute::pipeline::{compile_frontend, compile_with_diagnostics};
 use tribute_front::testing::LoggingDb;
 use trunk_ir::printer::print_module;
 
-const GEOMETRY_MANIFEST: &str = "[package]\nname = \"geometry\"\n";
+const GEOMETRY_MANIFEST: &str = r#"[package]
+name = "geometry"
+"#;
 
 const GEOMETRY: &str = "\
 pub struct Rect { w: Nat, h: Nat }
@@ -18,13 +20,12 @@ pub struct Rect { w: Nat, h: Nat }
 pub fn area(rect: Rect) -> Nat { rect.w * rect.h }
 ";
 
-const APP_MANIFEST: &str = "\
-[package]
-name = \"app\"
+const APP_MANIFEST: &str = r#"[package]
+name = "app"
 
 [dependencies]
-geometry = { path = \"../geometry\" }
-";
+geometry = { path = "../geometry" }
+"#;
 
 const APP: &str = "\
 use std::io::{Io, print_line}
@@ -205,7 +206,12 @@ fn the_cli_reports_manifest_errors_against_their_manifest() {
     write(
         temp.path(),
         "app/tribute.toml",
-        "[package]\nname = \"app\"\n\n[dependencies]\ngeo = { path = \"../geometry\" }\n",
+        r#"[package]
+name = "app"
+
+[dependencies]
+geo = { path = "../geometry" }
+"#,
     );
     let compiled = compile(temp.path(), &["--target", "native", "app"]);
     let stderr = stderr(&compiled);
@@ -219,7 +225,9 @@ fn the_cli_reports_manifest_errors_against_their_manifest() {
     write(
         temp.path(),
         "geometry/tribute.toml",
-        "[package]\nname = \"std\"\n",
+        r#"[package]
+name = "std"
+"#,
     );
     let compiled = compile(temp.path(), &["--target", "none", "geometry"]);
     let stderr = String::from_utf8_lossy(&compiled.stderr);
