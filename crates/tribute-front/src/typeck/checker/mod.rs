@@ -26,6 +26,8 @@
 mod become_check;
 mod collect;
 mod diagnostics;
+
+pub use diagnostics::NodeDiagnostic;
 mod exhaustiveness;
 mod expr;
 mod finalize;
@@ -37,7 +39,7 @@ use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 use trunk_ir::SymbolPath;
 
-use trunk_ir::{Span, Symbol};
+use trunk_ir::Symbol;
 
 use crate::SortedMap;
 use crate::ast::{
@@ -147,6 +149,8 @@ pub struct TypeChecker<'db> {
     /// Each collected function, checked against the field getters once
     /// every declaration is collected.
     function_decls: Vec<(NodeId, FuncDefId<'db>)>,
+    /// Diagnostics reported so far, positioned at nodes.
+    diagnostics: std::cell::RefCell<Vec<NodeDiagnostic>>,
 }
 
 impl<'db> TypeChecker<'db> {
@@ -223,12 +227,16 @@ impl<'db> TypeChecker<'db> {
             signature_row_names: HashMap::default(),
             signature_type_names: HashMap::default(),
             function_decls: Vec::new(),
+            diagnostics: Default::default(),
         }
     }
 
-    /// Get the span for a NodeId, falling back to Span::new(0, 0) if not found.
-    pub(crate) fn get_span(&self, node_id: crate::ast::NodeId) -> Span {
-        self.span_map.get_or_default(node_id)
+    /// Report the diagnostics recorded so far at the spans of their nodes.
+    fn accumulate_diagnostics(&self) {
+        use salsa::Accumulator;
+        for diagnostic in self.diagnostics.take() {
+            diagnostic.resolve(&self.span_map).accumulate(self.db());
+        }
     }
 
     /// The path of the module being checked.
@@ -282,6 +290,7 @@ impl<'db> TypeChecker<'db> {
         self.env.set_prelude_well_known_types(well_known_types);
         let checked = self.check_decls(module);
         let exports = self.package_exports(well_known_types);
+        self.accumulate_diagnostics();
         (self.into_module_result(checked), exports)
     }
 
@@ -301,6 +310,7 @@ impl<'db> TypeChecker<'db> {
         // which is for external references, not internal function naming.
         self.collect_declarations(module);
         let checked = self.check_decls(module);
+        self.accumulate_diagnostics();
         self.into_module_result(checked)
     }
 

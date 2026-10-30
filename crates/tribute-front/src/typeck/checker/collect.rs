@@ -6,8 +6,7 @@
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 
-use salsa::Accumulator;
-use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_core::{CompilationPhase, DiagnosticSeverity};
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::{
@@ -16,6 +15,7 @@ use crate::ast::{
 };
 use crate::typeck::context::{AbilityInfo, AbilityOpInfo};
 
+use super::NodeDiagnostic;
 use super::TypeChecker;
 
 /// Declared field names in order, if every field is named. A constructor
@@ -72,18 +72,18 @@ impl<'db> TypeChecker<'db> {
             let Some(getter) = self.env.field_function(function) else {
                 continue;
             };
-            Diagnostic::new(
+            NodeDiagnostic::new(
                 format!(
                     "function `{}` is already declared by field `{}` of struct `{}`",
                     self.names().path(function.path(self.db())),
                     getter.field,
                     getter.owner.name(self.db()),
                 ),
-                self.get_span(node),
+                node,
                 DiagnosticSeverity::Error,
                 CompilationPhase::TypeChecking,
             )
-            .accumulate(self.db());
+            .report(self);
         }
     }
 
@@ -272,13 +272,13 @@ impl<'db> TypeChecker<'db> {
 
     /// Report a missing part of a function signature, typed as an error.
     fn missing_signature_type(&self, node: crate::ast::NodeId, message: String) -> Type<'db> {
-        Diagnostic::new(
+        NodeDiagnostic::new(
             message,
-            self.get_span(node),
+            node,
             DiagnosticSeverity::Error,
             CompilationPhase::TypeChecking,
         )
-        .accumulate(self.db());
+        .report(self);
         Type::new(self.db(), TypeKind::Error)
     }
 
@@ -311,17 +311,17 @@ impl<'db> TypeChecker<'db> {
         // One external symbol cannot serve instances of different
         // representations (`new-plans/modules.md`, "모듈 선언과 Use").
         if !type_params.is_empty() && func.abi != "intrinsic" {
-            Diagnostic::new(
+            NodeDiagnostic::new(
                 format!(
                     "extern function `{}` cannot be generic; only `extern \"intrinsic\"` \
                      functions may have type parameters",
                     func.name
                 ),
-                self.get_span(func.id),
+                func.id,
                 DiagnosticSeverity::Error,
                 CompilationPhase::TypeChecking,
             )
-            .accumulate(self.db());
+            .report(self);
         }
 
         let mut effect_params = collect_row_vars(self.db(), func_ty);
@@ -706,13 +706,13 @@ impl<'db> TypeChecker<'db> {
                     .filter(|ann| match &ann.kind {
                         TypeAnnotationKind::Infer => false,
                         TypeAnnotationKind::Named(name) if is_type_variable(name) => {
-                            Diagnostic::new(
+                            NodeDiagnostic::new(
                                 format!("row variable `{name}` is not bound in this declaration"),
-                                self.get_span(ann.id),
+                                ann.id,
                                 DiagnosticSeverity::Error,
                                 CompilationPhase::TypeChecking,
                             )
-                            .accumulate(self.db());
+                            .report(self);
                             false
                         }
                         _ => true,

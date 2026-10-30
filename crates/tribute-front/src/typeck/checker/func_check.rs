@@ -8,8 +8,7 @@ use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 
 use itertools::Itertools;
-use salsa::Accumulator;
-use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_core::{CompilationPhase, DiagnosticSeverity};
 use trunk_ir::Symbol;
 
 use crate::ast::{
@@ -19,6 +18,7 @@ use crate::ast::{
 use super::super::constraint::{ConstraintOrigin, ConstraintOriginKind, ConstraintSet};
 use super::super::func_context::FunctionInferenceContext;
 use super::super::solver::{LocatedSolveError, TypeSolver};
+use super::NodeDiagnostic;
 #[cfg(test)]
 use super::diagnostics::{format_solve_error, solve_error_context};
 use super::finalize::{Finalize, Substitution};
@@ -381,16 +381,16 @@ impl<'db> TypeChecker<'db> {
             && let TypeKind::Func { result, .. } = substituted_ty.kind(self.db())
             && !matches!(result.kind(self.db()), TypeKind::Nil | TypeKind::Error)
         {
-            Diagnostic::new(
+            NodeDiagnostic::new(
                 format!(
                     "function 'main' must return Nil, but returns `{}`",
                     result.display(self.db(), self.names())
                 ),
-                self.get_span(func.id),
+                func.id,
                 DiagnosticSeverity::Error,
                 CompilationPhase::TypeChecking,
             )
-            .accumulate(self.db());
+            .report(self);
         }
 
         if let Some(declared) = declared_effect {
@@ -420,18 +420,18 @@ impl<'db> TypeChecker<'db> {
                     .filter(|effect| !effect.ability_id.is_builtin_io(self.db()))
                     .collect_vec();
                 if !unhandled.is_empty() {
-                    Diagnostic::new(
+                    NodeDiagnostic::new(
                         format!(
                             "function 'main' has unhandled effects: {}",
                             unhandled.iter().format_with(", ", |effect, f| f(
                                 &effect.display(self.db(), self.names())
                             ))
                         ),
-                        self.get_span(func.id),
+                        func.id,
                         DiagnosticSeverity::Error,
                         CompilationPhase::TypeChecking,
                     )
-                    .accumulate(self.db());
+                    .report(self);
                 }
             }
         }
@@ -734,16 +734,16 @@ impl<'db> TypeChecker<'db> {
                     Some(origin) if !resolved.contains_key(&origin.node_id) => {
                         waiting_errors.push(error);
                     }
-                    origin => Diagnostic::new(
+                    origin => NodeDiagnostic::new(
                         format!(
                             "type error during UFCS method resolution: {}",
                             error.error.display(self.db(), self.names())
                         ),
-                        self.get_span(origin.map_or(func_node_id, |origin| origin.node_id)),
+                        origin.map_or(func_node_id, |origin| origin.node_id),
                         DiagnosticSeverity::Error,
                         CompilationPhase::TypeChecking,
                     )
-                    .accumulate(self.db()),
+                    .report(self),
                 }
             }
             deferred = remaining;
@@ -941,13 +941,13 @@ impl<'db> TypeChecker<'db> {
                 call.method
             ),
         };
-        Diagnostic::new(
+        NodeDiagnostic::new(
             message,
-            self.get_span(call.callee),
+            call.callee,
             DiagnosticSeverity::Error,
             CompilationPhase::TypeChecking,
         )
-        .accumulate(self.db());
+        .report(self);
     }
 
     /// Concrete effects of `body` that `declared` does not name.
@@ -989,7 +989,7 @@ impl<'db> TypeChecker<'db> {
             if effects.is_empty() {
                 continue;
             }
-            Diagnostic::new(
+            NodeDiagnostic::new(
                 format!(
                     "function '{}' {message}: {}",
                     func.name,
@@ -997,11 +997,11 @@ impl<'db> TypeChecker<'db> {
                         &effect.display(self.db(), self.names())
                     )),
                 ),
-                self.get_span(func.id),
+                func.id,
                 DiagnosticSeverity::Error,
                 CompilationPhase::TypeChecking,
             )
-            .accumulate(self.db());
+            .report(self);
         }
     }
 
@@ -1075,18 +1075,18 @@ impl<'db> TypeChecker<'db> {
             if declared.contains(&row) || !reaches_own(row) || !reported.insert(row) {
                 continue;
             }
-            Diagnostic::new(
+            NodeDiagnostic::new(
                 format!(
                     "function '{}' performs the effects of {} without declaring them; \
                      use the same row variable in its own ability row",
                     func.name,
                     self.signature_row_name(func_id, scheme, index),
                 ),
-                self.get_span(func.id),
+                func.id,
                 DiagnosticSeverity::Error,
                 CompilationPhase::TypeChecking,
             )
-            .accumulate(db);
+            .report(self);
         }
         !reported.is_empty()
     }
@@ -1169,13 +1169,13 @@ impl<'db> TypeChecker<'db> {
             ));
         }
         for message in messages.iter().unique() {
-            Diagnostic::new(
+            NodeDiagnostic::new(
                 message.clone(),
-                self.get_span(func.id),
+                func.id,
                 DiagnosticSeverity::Error,
                 CompilationPhase::TypeChecking,
             )
-            .accumulate(db);
+            .report(self);
         }
         !messages.is_empty()
     }
@@ -1236,18 +1236,17 @@ impl<'db> TypeChecker<'db> {
         } else {
             return false;
         };
-        Diagnostic::builder(
+        NodeDiagnostic::new(
             message,
-            self.get_span(duplicate.duplicate_annotation_id),
+            duplicate.duplicate_annotation_id,
             DiagnosticSeverity::Error,
             CompilationPhase::TypeChecking,
         )
         .label(
-            self.get_span(duplicate.first_annotation_id),
+            duplicate.first_annotation_id,
             "first matching ability annotation is here",
         )
-        .build()
-        .accumulate(self.db());
+        .report(self);
         true
     }
 
@@ -1270,13 +1269,13 @@ impl<'db> TypeChecker<'db> {
         let reported = std::cell::Cell::new(false);
         let report = |message: String| {
             reported.set(true);
-            Diagnostic::new(
+            NodeDiagnostic::new(
                 message,
-                self.get_span(func.id),
+                func.id,
                 DiagnosticSeverity::Error,
                 CompilationPhase::TypeChecking,
             )
-            .accumulate(db);
+            .report(self);
         };
 
         let type_names: HashMap<u32, Symbol> = self
