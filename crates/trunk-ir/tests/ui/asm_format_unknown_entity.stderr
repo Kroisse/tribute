@@ -1,0 +1,5 @@
+error: the operation declares no `missing`
+ --> tests/ui/asm_format_unknown_entity.rs:4:30
+  |
+4 |         #[asm_format("probe" missing)]
+  |                              ^^^^^^^

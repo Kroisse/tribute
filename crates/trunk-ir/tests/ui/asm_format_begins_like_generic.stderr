@@ -1,0 +1,5 @@
+error: a format begins with a literal or an attribute, not with what generic syntax begins with
+ --> tests/ui/asm_format_begins_like_generic.rs:4:22
+  |
+4 |         #[asm_format(args attr_dict)]
+  |                      ^^^^

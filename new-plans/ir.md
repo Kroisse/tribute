@@ -474,6 +474,8 @@ Macro는 형식 기술을 선언과 대조해 다음을 어기면 그 원소를 
   세지 않는다.
 - Attribute는 많아야 한 번 명시하고, 명시하지 않은 attribute가 있으면
   `attr_dict`가 있어야 한다. 같은 entity를 두 원소가 쓰지 않는다.
+- 가변 result나 선택 result의 타입은 선택 묶음의 anchor로만 쓴다. 결과가 없을 때
+  앞의 구두점도 함께 생략해야 하기 때문이다.
 - 선택 묶음의 anchor는 선택 attribute, 가변 operand, 가변 result, 선택 region,
   가변 region 목록 중 하나다. 묶음 안에는 선택 entity와 literal만 둔다. 묶음의 첫 원소는
   literal이거나 anchor이며, 그 첫 token은 묶음 바로 뒤에 올 수 있는 원소의 첫

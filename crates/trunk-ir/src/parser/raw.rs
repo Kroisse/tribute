@@ -613,6 +613,19 @@ pub fn raw_operation<'a>(input: &mut &'a str) -> ModalResult<RawOperation<'a>> {
 
     // dialect.op
     let name = qualified_name.parse_next(input)?;
+    let def = crate::OpDef::lookup(name);
+
+    // A declarative format reads everything after the name, `@name` included.
+    if let Some(def) = def
+        && let Some(crate::asm_format::OpAsmFormatDef::Declarative(format)) = def.asm_format
+    {
+        let checkpoint = *input;
+        match crate::asm_format::declarative::parse(input, name, results.clone(), def, format) {
+            Ok(operation) => return Ok(operation),
+            Err(winnow::error::ErrMode::Backtrack(_)) => *input = checkpoint,
+            Err(error) => return Err(error),
+        }
+    }
 
     // Optional @symbol (e.g., core.module @test, func.func @main)
     let sym_name = opt(preceded(ws, symbol_ref)).parse_next(input)?;
@@ -625,9 +638,8 @@ pub fn raw_operation<'a>(input: &mut &'a str) -> ModalResult<RawOperation<'a>> {
     let generic_custom_shape =
         input.starts_with('{') || input.starts_with('%') || input.starts_with(':');
     // Check the operation's custom assembly format
-    if let Some(hooks) = crate::OpDef::lookup(name)
-        .and_then(|def| def.asm_format)
-        .filter(|_| !generic_func)
+    if let Some(crate::asm_format::OpAsmFormatDef::Hooks(hooks)) =
+        def.and_then(|def| def.asm_format).filter(|_| !generic_func)
     {
         let checkpoint = *input;
         match (hooks.parse)(input, results.clone(), sym_name.clone()) {

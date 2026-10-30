@@ -3,7 +3,11 @@
 //! Operations and types declare these hooks with `#[asm_format]`, and their
 //! definitions hold them, to control how they are spelled in textual IR. They
 //! affect only the printer and the parser: unlike [operation interfaces](mod@crate::op_interface), they carry no meaning
-//! that passes or analyses consult.
+//! that passes or analyses consult. An operation declares its format either
+//! by hand through [`OpAsmFormat`], or with format elements in
+//! `#[asm_format(..)]`, which [`declarative`] interprets.
+
+pub mod declarative;
 
 use std::fmt;
 
@@ -75,6 +79,16 @@ pub trait OpAsmFormat: DialectOp {
         results: Vec<&'a str>,
         sym_name: Option<String>,
     ) -> winnow::ModalResult<RawOperation<'a>>;
+}
+
+/// The custom assembly format an [`OpDef`](crate::OpDef) stores for an
+/// `#[asm_format]` operation.
+#[derive(Clone, Copy, Debug)]
+pub enum OpAsmFormatDef {
+    /// Hand-written hooks, from the wrapper's [`OpAsmFormat`] impl.
+    Hooks(OpAsmHooks),
+    /// Format elements declared in `#[asm_format(..)]`.
+    Declarative(&'static declarative::OpFormat),
 }
 
 /// The hooks an [`OpDef`](crate::OpDef) stores for an `#[asm_format]`
