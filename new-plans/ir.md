@@ -486,6 +486,8 @@ Macro는 형식 기술을 선언과 대조해 다음을 어기면 그 원소를 
   원소까지 보며, 형식의 끝 뒤에는 다음 줄의 `%`, `^`, `}`, 다음 operation 이름이 올
   수 있다. 값을 쓰는 원소(attribute, 타입)의 첫 token은 정해져 있지 않으므로
   값처럼 시작하는 token과 모두 겹친다.
+- 쉼표로 구분한 목록(가변 operand·successor, `types`) 뒤에 `","`가 올 수 없다.
+  목록이 그 쉼표를 자기 구분자로 읽기 때문이다.
 - 형식을 시작하는 원소는 `{`, `%`, `:`, `[`, `^`, `}`로 시작할 수 없다. 앞의
   넷은 generic 형식이 operation 이름 뒤에 쓰는 것이고, 나머지는 operation 이름만
   쓴 generic 형식 뒤의 다음 줄이 시작할 수 있는 것이다. 형식을 시작하는
@@ -512,7 +514,7 @@ Printer는 쓰기 전에 operation이 형식으로 손실 없이 표현되는지
 읽힌다. Parser는 operation schema를 검증하지 않는다.
 
 Parser는 `symbol`이 아닌 원소가 첫 token을 읽기 전에만 backtrack하고, 그 뒤의
-실패는 기대한 원소를 밝힌 오류로 끝낸다. 원소가 모두 없어 아무 token도 읽지 않았으면
+실패는 기대한 원소를 밝힌 오류로 끝낸다. `symbol`을 포함해 어느 원소도 token을 읽지 않았으면
 입력을 generic 형식으로 읽으며, 그런 operation은 두 형식에서 같다. 원소 사이의
 공백은 token이 아니다. Keyword
 literal과 `attr_dict`의 `attributes`는 식별자 전체로 읽으며, 바로 뒤에 `.`이 오면

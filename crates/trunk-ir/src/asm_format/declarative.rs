@@ -505,6 +505,7 @@ pub(crate) fn parse<'a>(
         schema,
         format,
         committed: false,
+        matched: false,
         parsed: Parsed {
             operands: vec![Vec::new(); schema.operands.len()],
             attributes: Vec::new(),
@@ -518,7 +519,7 @@ pub(crate) fn parse<'a>(
     }
     // Every element was absent, so the input may as well be generic syntax,
     // which reads an operation without any of them the same way.
-    if !parser.committed {
+    if !parser.matched {
         return Err(ErrMode::Backtrack(expected("the operation's format")));
     }
     let Parsed {
@@ -555,6 +556,8 @@ struct FormatParser<'a> {
     schema: &'static OpSchema,
     format: &'static OpFormat,
     committed: bool,
+    /// Whether any element, a symbol included, has read a token.
+    matched: bool,
     parsed: Parsed<'a>,
 }
 
@@ -569,8 +572,9 @@ impl<'a> FormatParser<'a> {
         let before = input.len();
         match self.element(input, element) {
             Ok(()) => {
-                if input.len() != before && !matches!(element, FormatElement::Symbol(_)) {
-                    self.committed = true;
+                if input.len() != before {
+                    self.matched = true;
+                    self.committed |= !matches!(element, FormatElement::Symbol(_));
                 }
                 Ok(())
             }
@@ -694,6 +698,7 @@ impl<'a> FormatParser<'a> {
                     Err(error) => return Err(error),
                 }
                 self.committed = true;
+                self.matched = true;
                 if let FormatAnchor::Flag(index) = anchor {
                     self.attribute(index, RawAttribute::Bool(true));
                 }
@@ -803,6 +808,9 @@ mod tests {
 
         #[asm_format(("on" on^)?)]
         fn toggle(on: Option<Attr<bool>>) {}
+
+        #[asm_format(symbol(callee))]
+        fn named(callee: Attr<String>) {}
 
         #[asm_format(("quick" quick^)? "now" ("with" args^)? attr_dict)]
         fn mark(quick: Option<Attr<bool>>, args: Variadic<_>) {}
@@ -916,6 +924,7 @@ mod tests {
   asm_format_test.def @f kind "k" {
       asm_format_test.toggle on
       asm_format_test.toggle
+      asm_format_test.named @target
       asm_format_test.mark now
       attributes.probe
   }

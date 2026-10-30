@@ -476,8 +476,14 @@ impl Format<'_> {
         }
     }
 
-    /// The first tokens that can follow the end of `elements[..position]`.
-    fn follow<'e>(&self, elements: &'e [(Element, Span)], position: usize) -> Vec<Token<'e>> {
+    /// The first tokens that can follow the end of `elements[..position]`,
+    /// with `tail` following the end of `elements`.
+    fn follow<'e>(
+        &self,
+        elements: &'e [(Element, Span)],
+        position: usize,
+        tail: &[Token<'e>],
+    ) -> Vec<Token<'e>> {
         let mut tokens = Vec::new();
         for (element, _) in &elements[position..] {
             tokens.push(first_token(element));
@@ -485,8 +491,49 @@ impl Format<'_> {
                 return tokens;
             }
         }
-        tokens.push(Token::End);
+        tokens.extend_from_slice(tail);
         tokens
+    }
+
+    /// Whether an element writes a comma-separated list, which would read a
+    /// `,` after it as its own separator.
+    fn is_list(&self, element: &Element) -> bool {
+        match *element {
+            Element::Operand(i) => self.op.operands[i].variadic,
+            Element::Successor(i) => self.successors[i].1,
+            Element::ResultTypes => true,
+            _ => false,
+        }
+    }
+
+    /// Reject a list that a `,` can follow, at the top level or inside a
+    /// group.
+    fn check_lists(&self, elements: &[(Element, Span)]) -> Result<(), FormatError> {
+        let comma = |tokens: Vec<Token<'_>>| tokens.iter().any(|t| matches!(t, Token::Text(",")));
+        for (position, (element, span)) in elements.iter().enumerate() {
+            let after = self.follow(elements, position + 1, &[Token::End]);
+            let inner = match element {
+                Element::Optional { elements, .. } => elements,
+                _ => {
+                    if self.is_list(element) && comma(after) {
+                        return err(
+                            *span,
+                            "a comma-separated list cannot be followed by `\",\"`",
+                        );
+                    }
+                    continue;
+                }
+            };
+            for (j, (element, span)) in inner.iter().enumerate() {
+                if self.is_list(element) && comma(self.follow(inner, j + 1, &after)) {
+                    return err(
+                        *span,
+                        "a comma-separated list cannot be followed by `\",\"`",
+                    );
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -496,18 +543,6 @@ fn check(
     attr_span: Span,
     tokens: &TokenStream,
 ) -> Result<TokenStream, FormatError> {
-    if op
-        .operands
-        .iter()
-        .filter(|operand| operand.variadic)
-        .count()
-        > 1
-    {
-        return err(
-            attr_span,
-            "a declarative format supports at most one variadic operand",
-        );
-    }
     let mut format = Format::new(op);
     let elements: Vec<(Element, Span)> = format
         .elements(tokens.clone(), false)?
@@ -564,7 +599,7 @@ fn check(
         if format.may_be_empty(element) {
             let first = first_token(element);
             if format
-                .follow(&elements, position + 1)
+                .follow(&elements, position + 1, &[Token::End])
                 .into_iter()
                 .any(|next| conflict(first, next))
             {
@@ -575,6 +610,8 @@ fn check(
             }
         }
     }
+
+    format.check_lists(&elements)?;
 
     // The elements up to the first that is neither a symbol nor optional
     // decide custom against generic syntax, which begins with `{`, `%`, `:`,
@@ -657,4 +694,316 @@ fn gen_elements(fmt: &TokenStream, elements: &[(Element, Span)]) -> Vec<TokenStr
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use quote::quote;
+
+    use super::*;
+    use crate::parse::{DialectItem, parse_input};
+
+    /// Check the format of the one operation `item` declares.
+    fn check_op(item: TokenStream) -> Result<TokenStream, String> {
+        let module = parse_input(quote!(), item).expect("the declaration parses");
+        let Some(DialectItem::Operation(op)) = module.items.first() else {
+            panic!("expected an operation");
+        };
+        let tokens = op.format.as_ref().expect("a format");
+        check(&quote!(::trunk_ir), op, Span::call_site(), tokens).map_err(|error| error.message)
+    }
+
+    #[test]
+    fn accepted_formats_emit_their_tables() {
+        for item in [
+            quote!(
+                mod t {
+                    #[asm_format(symbol(sym_name) "kind" ("on" on^)? attr_dict region(body))]
+                    fn op(sym_name: Attr<String>, on: Option<Attr<bool>>) {
+                        #[region(body?)]
+                        {}
+                    }
+                }
+            ),
+            quote!(
+                mod t {
+                    #[asm_format("to" successors(dests) ";" "(" args ")" (":" types(results)^)? regions(bodies))]
+                    fn op(args: Variadic<_>) -> Variadic<_> {
+                        #[successors(dests)]
+                        {}
+                        #[regions(bodies)]
+                        {}
+                    }
+                }
+            ),
+            quote!(
+                mod t {
+                    #[asm_format(tag (":" type(result)^)? "on" successor(dest) region(body))]
+                    fn op(tag: Attr<SymbolRef>) -> Option<Value<_>> {
+                        #[region(body)]
+                        {}
+                        #[successor(dest)]
+                        {}
+                    }
+                }
+            ),
+        ] {
+            let tokens = check_op(item).expect("the format is accepted").to_string();
+            assert!(tokens.contains("OpFormat"), "{tokens}");
+        }
+    }
+
+    #[test]
+    fn broken_rules_are_reported() {
+        let cases = [
+            (
+                quote!(
+                    fn op() {}
+                ),
+                quote!("x" "a b"),
+                "one token",
+            ),
+            (
+                quote!(
+                    fn op() {}
+                ),
+                quote!("x" 'c'),
+                "plain string literal",
+            ),
+            (
+                quote!(
+                    fn op() {}
+                ),
+                quote!("x"("y")),
+                "optional group `( .. )?`",
+            ),
+            (
+                quote!(
+                    fn op() {}
+                ),
+                quote!("x" ;),
+                "punctuation",
+            ),
+            (
+                quote!(
+                    fn op(a: Option<Attr<bool>>) {}
+                ),
+                quote!("x" (("y" a^)?)?),
+                "do not nest",
+            ),
+            (
+                quote!(
+                    fn op(a: Value<_>) {}
+                ),
+                quote!("x" a^),
+                "anchor of an optional group",
+            ),
+            (
+                quote!(
+                    fn op(a: Value<_>) {}
+                ),
+                quote!("x" a a),
+                "twice",
+            ),
+            (
+                quote!(
+                    fn op() -> Value<_> {}
+                ),
+                quote!("x" result),
+                "`type(..)`",
+            ),
+            (
+                quote!(
+                    fn op() {
+                        #[region(r)]
+                        {}
+                    }
+                ),
+                quote!("x" r),
+                "`region(..)`",
+            ),
+            (
+                quote!(
+                    fn op() {
+                        #[successor(s)]
+                        {}
+                    }
+                ),
+                quote!("x" s),
+                "`successor(..)`",
+            ),
+            (
+                quote!(
+                    fn op() {}
+                ),
+                quote!("x" missing),
+                "declares no `missing`",
+            ),
+            (
+                quote!(
+                    fn op() {}
+                ),
+                quote!("x" attr_dict(keyword)),
+                "takes no arguments",
+            ),
+            (
+                quote!(
+                    fn op() {}
+                ),
+                quote!("x" type(a, b)),
+                "takes one name",
+            ),
+            (
+                quote!(
+                    fn op(a: Attr<u32>) {}
+                ),
+                quote!("x" symbol(a)),
+                "`Attr<String>`",
+            ),
+            (
+                quote!(
+                    fn op() -> Variadic<_> {}
+                ),
+                quote!("x" (":" type(results)^)?),
+                "write `types",
+            ),
+            (
+                quote!(
+                    fn op() -> Value<_> {}
+                ),
+                quote!("x" ":" types(result)),
+                "write `type",
+            ),
+            (
+                quote!(
+                    fn op() {
+                        #[region(r)]
+                        {}
+                    }
+                ),
+                quote!("x" regions(r)),
+                "write `region(..)`",
+            ),
+            (
+                quote!(
+                    fn op() {
+                        #[successor(s)]
+                        {}
+                    }
+                ),
+                quote!("x" successors(s)),
+                "write `successor(..)`",
+            ),
+            (
+                quote!(
+                    fn op(a: Value<_>) {}
+                ),
+                quote!("x" region(a)),
+                "cannot write `a`",
+            ),
+            (
+                quote!(
+                    fn op() {}
+                ),
+                quote!("x" unknown(a)),
+                "unknown format directive",
+            ),
+            (
+                quote!(
+                    fn op(a: Option<Attr<bool>>, b: Option<Attr<bool>>) {}
+                ),
+                quote!("x" (a^ b^)?),
+                "exactly one entity",
+            ),
+            (
+                quote!(
+                    fn op(a: Option<Attr<bool>>) {}
+                ),
+                quote!("x" ("y" a)?),
+                "mark the group's entity",
+            ),
+            (
+                quote!(
+                    fn op(a: Attr<String>) {}
+                ),
+                quote!("x" ("y" a^)?),
+                "an anchor is",
+            ),
+            (
+                quote!(
+                    fn op(a: Option<Attr<bool>>) {}
+                ),
+                quote!("x" (a^)?),
+                "flag's group",
+            ),
+            (
+                quote!(
+                    fn op(a: Value<_>) {}
+                ),
+                quote!("x"),
+                "does not write operand `a`",
+            ),
+            (
+                quote!(
+                    fn op(a: Attr<u32>) {}
+                ),
+                quote!("x"),
+                "add `attr_dict`",
+            ),
+            (
+                quote!(
+                    fn op() -> Variadic<_> {}
+                ),
+                quote!("x" ":" types(results)),
+                "may have no results",
+            ),
+            (
+                quote!(
+                    fn op(a: Option<Attr<u32>>) {}
+                ),
+                quote!("x" a),
+                "anchor of an optional group `(",
+            ),
+            (
+                quote!(
+                    fn op(a: Variadic<_>) {}
+                ),
+                quote!("x" a),
+                "may write nothing",
+            ),
+            (
+                quote!(
+                    fn op(a: Value<_>, b: Variadic<_>) {}
+                ),
+                quote!("x" b "," a),
+                "comma-separated list",
+            ),
+            (
+                quote!(
+                    fn op() {}
+                ),
+                quote!("[" "x"),
+                "cannot begin like generic syntax",
+            ),
+            (
+                quote!(
+                    fn op(a: Value<_>) {}
+                ),
+                quote!(a "x"),
+                "begins with a literal or an attribute",
+            ),
+        ];
+        let failures: Vec<String> = cases
+            .into_iter()
+            .filter_map(|(op, format, expected)| {
+                let item = quote!(mod t { #[asm_format(#format)] #op });
+                match check_op(item) {
+                    Err(message) if message.contains(expected) => None,
+                    Err(message) => Some(format!("{format}: `{message}` lacks `{expected}`")),
+                    Ok(_) => Some(format!("{format}: accepted, expected `{expected}`")),
+                }
+            })
+            .collect();
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
 }

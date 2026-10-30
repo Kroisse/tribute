@@ -1,0 +1,5 @@
+error: a comma-separated list cannot be followed by `","`
+ --> tests/ui/asm_format_list_before_comma.rs:4:28
+  |
+4 |         #[asm_format("run" args "," tail)]
+  |                            ^^^^
