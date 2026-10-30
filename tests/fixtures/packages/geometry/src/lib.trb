@@ -1,0 +1,3 @@
+pub struct Rect { w: Nat, h: Nat }
+
+pub fn area(rect: Rect) -> Nat { rect.w * rect.h }

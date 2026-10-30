@@ -10,46 +10,37 @@ use tribute::pipeline::{compile_frontend, compile_with_diagnostics};
 use tribute_front::testing::LoggingDb;
 use trunk_ir::printer::print_module;
 
-const GEOMETRY_MANIFEST: &str = r#"[package]
-name = "geometry"
-"#;
+/// The packages `app` and `geometry`, where `app` depends on `geometry`.
+const PACKAGES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/packages");
 
-const GEOMETRY: &str = "\
-pub struct Rect { w: Nat, h: Nat }
+const GEOMETRY_MANIFEST: &str = include_str!("../fixtures/packages/geometry/tribute.toml");
+const GEOMETRY: &str = include_str!("../fixtures/packages/geometry/src/lib.trb");
+const APP_MANIFEST: &str = include_str!("../fixtures/packages/app/tribute.toml");
+const APP: &str = include_str!("../fixtures/packages/app/src/main.trb");
 
-pub fn area(rect: Rect) -> Nat { rect.w * rect.h }
-";
-
-const APP_MANIFEST: &str = r#"[package]
-name = "app"
-
-[dependencies]
-geometry = { path = "../geometry" }
-"#;
-
-const APP: &str = "\
-use std::io::{Io, print_line}
-
-fn main() ->{Io} Nil {
-    print_line(geometry::area(geometry::Rect { w: 3, h: 4 }).to_string)
-}
-";
-
-/// A workspace directory holding `app`, which depends on `geometry`.
-fn workspace() -> tempfile::TempDir {
+/// A copy of [`PACKAGES`], for a test that changes its files or builds
+/// into its directories.
+fn copy_packages() -> tempfile::TempDir {
     let temp = tempfile::tempdir().expect("temporary directory");
-    write(temp.path(), "geometry/tribute.toml", GEOMETRY_MANIFEST);
-    write(temp.path(), "geometry/src/lib.trb", GEOMETRY);
-    write(temp.path(), "app/tribute.toml", APP_MANIFEST);
-    write(temp.path(), "app/src/main.trb", APP);
+    copy_dir(Path::new(PACKAGES), temp.path());
     temp
 }
 
+fn copy_dir(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).expect("create the directory");
+    for entry in std::fs::read_dir(from).expect("read the directory") {
+        let entry = entry.expect("a directory entry");
+        let target = to.join(entry.file_name());
+        if entry.file_type().expect("a file type").is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), target).expect("copy the file");
+        }
+    }
+}
+
 fn write(root: &Path, path: &str, text: &str) {
-    let path = root.join(path);
-    std::fs::create_dir_all(path.parent().expect("a parent directory"))
-        .expect("create the directory");
-    std::fs::write(path, text).expect("write the file");
+    std::fs::write(root.join(path), text).expect("write the file");
 }
 
 /// Run `tribute compile` in `cwd` with `args`.
@@ -106,8 +97,7 @@ fn an_app_lowers_its_dependency_at_its_identity_paths() {
 /// differently.
 #[test]
 fn the_cli_compiles_a_package_from_any_working_directory() {
-    let temp = workspace();
-    let ws = temp.path();
+    let ws = Path::new(PACKAGES);
     let output_dir = tempfile::tempdir().expect("temporary output directory");
     let runs: [(PathBuf, &str); 2] = [
         (ws.to_owned(), "app"),
@@ -136,7 +126,7 @@ fn the_cli_compiles_a_package_from_any_working_directory() {
 /// directory.
 #[test]
 fn the_cli_names_a_packages_executable_after_it() {
-    let temp = workspace();
+    let temp = copy_packages();
     let compiled = compile(temp.path(), &["--target", "native", "app"]);
     assert_success(&compiled);
     assert!(temp.path().join("app/app").is_file());
@@ -146,11 +136,11 @@ fn the_cli_names_a_packages_executable_after_it() {
 /// no executable.
 #[test]
 fn the_cli_checks_a_library_package() {
-    let temp = workspace();
-    let checked = compile(temp.path(), &["--target", "none", "geometry"]);
+    let packages = Path::new(PACKAGES);
+    let checked = compile(packages, &["--target", "none", "geometry"]);
     assert_success(&checked);
 
-    let built = compile(temp.path(), &["--target", "native", "geometry"]);
+    let built = compile(packages, &["--target", "native", "geometry"]);
     assert!(!built.status.success());
     assert!(
         stderr(&built).contains("package `geometry` has no `src/main.trb`"),
@@ -158,6 +148,7 @@ fn the_cli_checks_a_library_package() {
         stderr(&built)
     );
 
+    let temp = copy_packages();
     write(
         temp.path(),
         "geometry/src/lib.trb",
@@ -175,8 +166,7 @@ fn the_cli_checks_a_library_package() {
 /// A directory without `tribute.toml`, spelled exactly, is no package.
 #[test]
 fn the_cli_reports_a_missing_or_misspelled_manifest() {
-    let temp = workspace();
-    let missing = compile(temp.path(), &["--target", "none", "app/src"]);
+    let missing = compile(Path::new(PACKAGES), &["--target", "none", "app/src"]);
     assert!(!missing.status.success());
     assert!(
         stderr(&missing).contains("cannot find `tribute.toml` in"),
@@ -184,6 +174,7 @@ fn the_cli_reports_a_missing_or_misspelled_manifest() {
         stderr(&missing)
     );
 
+    let temp = copy_packages();
     std::fs::rename(
         temp.path().join("app/tribute.toml"),
         temp.path().join("app/Tribute.toml"),
@@ -202,7 +193,7 @@ fn the_cli_reports_a_missing_or_misspelled_manifest() {
 /// Manifest errors are printed against the manifest that has them.
 #[test]
 fn the_cli_reports_manifest_errors_against_their_manifest() {
-    let temp = workspace();
+    let temp = copy_packages();
     write(
         temp.path(),
         "app/tribute.toml",
