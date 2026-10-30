@@ -388,7 +388,7 @@ operation 이름으로 찾는다. 어느 쪽이든 generic 형식은 항상 읽�
 생성하지 않는다.
 
 ```rust
-#[asm_format(symbol(sym_name) signature(r#type, body) attr_dict(keyword) region(body))]
+#[asm_format(symbol(sym_name) signature(r#type, body) attr_dict region(body))]
 #[flags(IsolatedFromAbove)]
 fn func<S: FuncSig>(sym_name: Attr<String>, r#type: Attr<TypeOf<S>>) {
     #[region(body?)]
@@ -427,8 +427,9 @@ literal은 문자열 literal로 쓴다.
   `types(results)`, 또는 타입을 재구성하는 `signature`로 정확히 한 번 쓴다.
   `types`는 결과 목록을 쉼표로 구분해 쓰며, 결과가 없을 수 있으면 앞의 구두점과
   함께 선택 묶음에 둔다.
-- **`attr_dict`** — 형식의 다른 원소가 쓰지 않은 모든 attribute를 `{..}`로 쓴다.
-  `attr_dict(keyword)`는 `attributes {..}`로 쓴다. 남은 attribute가 없으면 아무
+- **`attr_dict`** — 형식의 다른 원소가 쓰지 않은 모든 attribute를
+  `attributes {..}`로 쓴다. Keyword 없는 `{..}`는 region이나 generic 형식과
+  첫 token이 겹치므로 쓰지 않는다. 남은 attribute가 없으면 아무
   것도 쓰지 않는다. 다른 원소가 쓰는 attribute는 자동으로 제외하며, parser는 그런
   key를 dictionary에서 만나면 거부한다.
 - **`signature(t, regions..)`** — 함수 형태 `(%a: A, %b: B) -> R`을 쓴다. `t`는
@@ -482,8 +483,6 @@ Macro는 형식 기술을 선언과 대조해 다음을 어기면 그 원소를 
   token과 달라야 한다. Parser는 첫 token 하나로 묶음의 유무를 정한다.
 - 첫 원소는 `{`, `%`, `:`로 시작할 수 없다. 그 셋으로 시작하는 입력은 generic
   형식이다.
-- 따옴표 없는 `attr_dict` 바로 뒤에 region이 올 수 없다. 둘 다 `{`로 시작하므로
-  `attr_dict(keyword)`를 쓴다.
 - `signature`의 `t`는 signature codec을 구현한 bound로 묶인 타입 변수여야 하고,
   나열한 region은 선언된 region이어야 한다.
 
@@ -522,8 +521,8 @@ region의 entry block에 되돌린다. Printer는 `IsolatedFromAbove` operation�
 
 - Symbol을 정의하는 operation은 operation 이름 바로 뒤에 `symbol(sym_name)`으로
   `@name`을 쓴다.
-- Region을 가진 operation은 남은 attribute를 `attr_dict(keyword)`로 region 바로
-  앞에 쓴다. 따옴표 없는 `{..}` dictionary는 region이 없는 operation에만 쓴다.
+- 남은 attribute는 `attr_dict`로 region 바로 앞에 쓰고, region이 없으면 끝에
+  쓴다.
 - Capture operand 목록은 비어 있어도 `captures [..]`로 쓴다.
 - Convention처럼 keyword로 쓰는 attribute 하나는 `name(keyword)`로 쓴다
   (`convention(cps)`).

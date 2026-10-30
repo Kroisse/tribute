@@ -1,5 +1,0 @@
-error: a bare `attr_dict` before a region cannot be told apart from it; write `attr_dict(keyword)`
- --> tests/ui/asm_format_bare_dict_before_region.rs:4:30
-  |
-4 |         #[asm_format("probe" attr_dict region(body))]
-  |                              ^^^^^^^^^

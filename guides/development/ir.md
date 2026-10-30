@@ -172,8 +172,8 @@ where
   ```
 
   String literals are keywords and punctuation, a bare name is an operand
-  or attribute, and `symbol(..)`, `type(..)`/`types(..)`, `attr_dict` /
-  `attr_dict(keyword)`, `region(..)`/`regions(..)`, and
+  or attribute, and `symbol(..)`, `type(..)`/`types(..)`, `attr_dict`
+  (`attributes {..}`), `region(..)`/`regions(..)`, and
   `successor(..)`/`successors(..)` write the other entities. `( .. x^ .. )?`
   is written only when its anchor `x` is present; an optional `bool`
   anchor is a flag the group's literals stand for. The macro rejects a

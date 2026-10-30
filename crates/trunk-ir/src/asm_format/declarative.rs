@@ -47,9 +47,8 @@ pub enum FormatElement {
     /// The comma-separated types of every result, for a variadic or optional
     /// result.
     ResultTypes,
-    /// The attributes no other element writes, as `{..}`, or as
-    /// `attributes {..}` with `keyword`.
-    AttrDict { keyword: bool },
+    /// The attributes no other element writes, as `attributes {..}`.
+    AttrDict,
     /// A region in generic form, or each region of a variadic list.
     Region(usize),
     /// A successor's label, or a comma-separated list for a variadic one.
@@ -292,7 +291,7 @@ impl Printer<'_, '_, '_> {
                 }
                 Ok(())
             }
-            FormatElement::AttrDict { keyword } => {
+            FormatElement::AttrDict => {
                 let written = written_attributes(self.schema, self.format);
                 let mut rest = ctx
                     .op(op)
@@ -303,10 +302,8 @@ impl Printer<'_, '_, '_> {
                 if rest.peek().is_none() {
                     return Ok(());
                 }
-                self.token('{')?;
-                if keyword {
-                    self.h.write_str("attributes ")?;
-                }
+                self.token('a')?;
+                self.h.write_str("attributes ")?;
                 self.h.write_attr_dict(rest)
             }
             FormatElement::Region(index) => {
@@ -452,7 +449,7 @@ fn printable(ctx: &IrContext, op: OpRef, schema: &OpSchema, format: &OpFormat) -
     let has_dict = {
         let mut found = false;
         visit(format.elements, &mut |element| {
-            found |= matches!(element, FormatElement::AttrDict { .. })
+            found |= matches!(element, FormatElement::AttrDict)
         });
         found
     };
@@ -628,19 +625,13 @@ impl<'a> FormatParser<'a> {
                 self.parsed.result_types[0] = types;
                 Ok(())
             }
-            FormatElement::AttrDict { keyword } => {
-                let dict = if keyword {
-                    let checkpoint = *input;
-                    if ident.parse_next(input).ok() == Some("attributes") {
-                        ws.parse_next(input)?;
-                        Some(raw_attr_dict.parse_next(input)?)
-                    } else {
-                        *input = checkpoint;
-                        None
-                    }
-                } else if input.starts_with('{') {
+            FormatElement::AttrDict => {
+                let checkpoint = *input;
+                let dict = if ident.parse_next(input).ok() == Some("attributes") {
+                    ws.parse_next(input)?;
                     Some(raw_attr_dict.parse_next(input)?)
                 } else {
+                    *input = checkpoint;
                     None
                 };
                 let written = written_attributes(self.schema, self.format);
@@ -786,7 +777,7 @@ mod tests {
         fn invoke(callee: Attr<SymbolRef>, args: Variadic<_>) -> Variadic<_> {}
 
         #[asm_format(
-            symbol(sym_name) "kind" kind ("inferred" inferred^)? attr_dict(keyword) region(body)
+            symbol(sym_name) "kind" kind ("inferred" inferred^)? attr_dict region(body)
         )]
         fn def(sym_name: Attr<String>, kind: Attr<String>, inferred: Option<Attr<bool>>) {
             #[region(body?)]

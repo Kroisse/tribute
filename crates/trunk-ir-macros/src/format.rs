@@ -50,9 +50,7 @@ enum Element {
     Symbol(usize),
     ResultType,
     ResultTypes,
-    AttrDict {
-        keyword: bool,
-    },
+    AttrDict,
     Region(usize),
     Successor(usize),
     Optional {
@@ -233,7 +231,7 @@ impl<'a> Format<'a> {
     fn entity(&mut self, name: &str, span: Span) -> Result<Element, Error> {
         if name == "attr_dict" {
             self.write(Entity::AttrDict, span)?;
-            return Ok(Element::AttrDict { keyword: false });
+            return Ok(Element::AttrDict);
         }
         let Some(entity) = self.lookup(name) else {
             return err(span, format!("the operation declares no `{name}`"));
@@ -266,6 +264,9 @@ impl<'a> Format<'a> {
     }
 
     fn directive(&mut self, name: &str, args: TokenStream, span: Span) -> Result<Element, Error> {
+        if name == "attr_dict" {
+            return err(span, "`attr_dict` takes no arguments");
+        }
         let args: Vec<TokenTree> = args.into_iter().collect();
         let [TokenTree::Ident(arg)] = &args[..] else {
             return err(span, format!("`{name}(..)` takes one name"));
@@ -273,13 +274,6 @@ impl<'a> Format<'a> {
         let arg_span = arg.span();
         let arg = arg.to_string();
         let arg = arg.strip_prefix("r#").unwrap_or(&arg);
-        if name == "attr_dict" {
-            if arg != "keyword" {
-                return err(arg_span, "expected `attr_dict` or `attr_dict(keyword)`");
-            }
-            self.write(Entity::AttrDict, span)?;
-            return Ok(Element::AttrDict { keyword: true });
-        }
         let entity = self.lookup(arg);
         let plural = name.ends_with('s');
         let element = match (name, entity) {
@@ -341,7 +335,7 @@ impl<'a> Format<'a> {
                 return err(
                     span,
                     format!(
-                        "unknown format directive `{name}`; expected `symbol`, `type`, `types`, `attr_dict`, `region`, `regions`, `successor`, or `successors`"
+                        "unknown format directive `{name}`; expected `symbol`, `type`, `types`, `region`, `regions`, `successor`, or `successors`"
                     ),
                 );
             }
@@ -407,8 +401,8 @@ fn first_token(element: &Element) -> Option<&str> {
         Element::Operand(_) => Some("%"),
         Element::Symbol(_) => Some("@"),
         Element::Successor(_) => Some("^"),
-        Element::Region(_) | Element::AttrDict { keyword: false } => Some("{"),
-        Element::AttrDict { keyword: true } => Some("attributes"),
+        Element::Region(_) => Some("{"),
+        Element::AttrDict => Some("attributes"),
         Element::Optional { elements, .. } => first_token(&elements[0].0),
         Element::Attribute(_) | Element::ResultType | Element::ResultTypes => None,
     }
@@ -502,12 +496,6 @@ fn check(
         let next = elements
             .get(position + 1)
             .map(|(next, _)| first_token(next));
-        if matches!(element, Element::AttrDict { keyword: false }) && next == Some(Some("{")) {
-            return err(
-                *span,
-                "a bare `attr_dict` before a region cannot be told apart from it; write `attr_dict(keyword)`",
-            );
-        }
         if matches!(element, Element::Optional { .. })
             && let Some(next) = next
             && ambiguous(first_token(element), next)
@@ -581,7 +569,7 @@ fn gen_elements(fmt: &TokenStream, elements: &[(Element, Span)]) -> Vec<TokenStr
             Element::Symbol(i) => quote!(#fmt::FormatElement::Symbol(#i)),
             Element::ResultType => quote!(#fmt::FormatElement::ResultType(0)),
             Element::ResultTypes => quote!(#fmt::FormatElement::ResultTypes),
-            Element::AttrDict { keyword } => quote!(#fmt::FormatElement::AttrDict { keyword: #keyword }),
+            Element::AttrDict => quote!(#fmt::FormatElement::AttrDict),
             Element::Region(i) => quote!(#fmt::FormatElement::Region(#i)),
             Element::Successor(i) => quote!(#fmt::FormatElement::Successor(#i)),
             Element::Optional { anchor, elements } => {
