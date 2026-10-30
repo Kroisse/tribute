@@ -25,8 +25,8 @@ use trunk_ir::types::Location;
 use trunk_ir::walk::{WalkAction, walk_region};
 
 use crate::convention_classes::{
-    Function, Locals, reference_callee, requirements, row_class, settle_class_variables,
-    settle_locals,
+    Function, Locals, func_tables, reference_callee, requirements, row_class,
+    settle_class_variables, settle_locals,
 };
 use crate::unreferenced_source_functions::source_dce_config;
 
@@ -96,10 +96,11 @@ impl trunk_ir::pass::Pass for CheckFnArmCalls {
 /// them, such as a module without `main`, checks no instance here.
 pub fn check(ctx: &IrContext, module: Module) -> Vec<FnArmCall> {
     let requirements = requirements(ctx, module);
+    let tables = func_tables(ctx, module);
     let mut functions: Vec<Function> = module
         .ops(ctx)
         .iter()
-        .filter_map(|&op| Function::read(ctx, op))
+        .filter_map(|&op| Function::read(ctx, op, &tables))
         .collect();
     let positions = settle_class_variables(&mut functions);
     let by_name: HashMap<&str, &Function> =

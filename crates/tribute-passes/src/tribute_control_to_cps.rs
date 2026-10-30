@@ -419,8 +419,10 @@ fn collect_callable_graph(ctx: &IrContext, module: Module, symbols: &SymbolTable
     let mut targets = HashMap::default();
     let mut func_tables = HashMap::default();
     let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
-        if tribute_cps::FuncRef::matches(ctx, op)
-            && let Some(table) = tribute_cps::func_ref_table(ctx, op)
+        if let Ok(reference) = tribute_cps::FuncRef::from_op(ctx, op)
+            && let Some(table) = symbols
+                .resolve(ctx, op, reference.func_ref(ctx))
+                .filter(|&table| tribute_cps::FuncTable::matches(ctx, table))
         {
             let entries = tribute_cps::table_entries(ctx, table)
                 .unwrap_or_default()

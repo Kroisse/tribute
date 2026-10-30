@@ -79,7 +79,8 @@ pub fn specialize(ctx: &mut IrContext, module: Module) -> Result<(), ClassSpecia
     let mut functions: Vec<Function> = module
         .ops(ctx)
         .iter()
-        .filter_map(|&op| Function::read(ctx, op))
+        // No table exists before specialization.
+        .filter_map(|&op| Function::read(ctx, op, &HashMap::default()))
         .collect();
     let positions = settle_class_variables(&mut functions);
     let variables = |name: &str| positions.get(name).map_or(&[][..], Vec::as_slice);
@@ -178,12 +179,12 @@ fn add_func_tables(ctx: &mut IrContext, module: Module) {
             .expect("collected a func_ref")
             .func_ref(ctx)
             .clone();
-        let Some(&instance) = target
+        // Every specialized reference is in a root instance and names a root
+        // definition, whose instances are root functions.
+        let instance = *target
             .as_simple()
             .and_then(|name| instances.get(name.as_str()))
-        else {
-            continue;
-        };
+            .expect("a specialized func_ref names a root instance");
         let table = format!(
             "{}{TABLE_SUFFIX}",
             target.leaf().expect("a reference has a leaf")

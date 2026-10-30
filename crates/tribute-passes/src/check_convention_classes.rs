@@ -20,8 +20,8 @@ use trunk_ir::rewrite::Module;
 use trunk_ir::walk::{WalkAction, walk_region};
 
 use crate::convention_classes::{
-    Function, Locals, class_suffix, instantiation, requirements, row_class, settle_class_variables,
-    settle_locals, split_name,
+    Function, Locals, class_suffix, func_tables, instantiation, requirements, row_class,
+    settle_class_variables, settle_locals, split_name,
 };
 
 /// A place where the IR's rows imply another class than specialization chose.
@@ -70,16 +70,24 @@ impl trunk_ir::pass::Pass for CheckConventionClasses {
 /// Every disagreement in `module`.
 pub fn check(ctx: &IrContext, module: Module) -> Vec<Disagreement> {
     let requirements = requirements(ctx, module);
+    let tables = func_tables(ctx, module);
     let mut functions: Vec<Function> = module
         .ops(ctx)
         .iter()
-        .filter_map(|&op| Function::read(ctx, op))
+        .filter_map(|&op| Function::read(ctx, op, &tables))
         .collect();
     let positions = settle_class_variables(&mut functions);
     let mut disagreements = Vec::new();
     for function in &functions {
-        Instance::new(ctx, function, &positions, &requirements, &mut disagreements)
-            .check(&mut disagreements);
+        Instance::new(
+            ctx,
+            function,
+            &positions,
+            &requirements,
+            &tables,
+            &mut disagreements,
+        )
+        .check(&mut disagreements);
     }
     disagreements
 }
@@ -90,6 +98,8 @@ struct Instance<'a> {
     function: &'a Function,
     positions: &'a HashMap<String, Vec<u32>>,
     requirements: &'a HashMap<SymbolPath, CallingConvention>,
+    /// The module's function tables, by name.
+    tables: &'a HashMap<String, OpRef>,
     /// The class of each class variable.
     classes: HashMap<u32, CallingConvention>,
     /// The class of each local binder in each body of its lambda.
@@ -102,6 +112,7 @@ impl<'a> Instance<'a> {
         function: &'a Function,
         positions: &'a HashMap<String, Vec<u32>>,
         requirements: &'a HashMap<SymbolPath, CallingConvention>,
+        tables: &'a HashMap<String, OpRef>,
         disagreements: &mut Vec<Disagreement>,
     ) -> Self {
         let variables = positions.get(&function.base).map_or(&[][..], Vec::as_slice);
@@ -144,6 +155,7 @@ impl<'a> Instance<'a> {
             function,
             positions,
             requirements,
+            tables,
             classes,
             locals: Locals::default(),
         };
@@ -322,8 +334,11 @@ impl<'a> Instance<'a> {
             return;
         };
         let expected = self.class(&signature.row(self.ctx), op);
-        let weakest = tribute_cps::func_ref_table(self.ctx, op)
-            .and_then(|table| tribute_cps::table_entries(self.ctx, table))
+        let weakest = tribute_cps::FuncRef::from_op(self.ctx, op)
+            .ok()
+            .and_then(|reference| reference.func_ref(self.ctx).as_simple().cloned())
+            .and_then(|name| self.tables.get(name.as_str()))
+            .and_then(|&table| tribute_cps::table_entries(self.ctx, table))
             .and_then(|entries| entries.first().map(|&(convention, _)| convention));
         if weakest.is_none_or(|weakest| weakest > expected) {
             disagreements.push(Disagreement {

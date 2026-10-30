@@ -114,7 +114,11 @@ pub(crate) struct Function {
 }
 
 impl Function {
-    pub(crate) fn read(ctx: &IrContext, op: OpRef) -> Option<Self> {
+    pub(crate) fn read(
+        ctx: &IrContext,
+        op: OpRef,
+        tables: &HashMap<String, OpRef>,
+    ) -> Option<Self> {
         if !tribute_control::is_func(ctx, op) {
             return None;
         }
@@ -154,7 +158,9 @@ impl Function {
                 let rows = tribute_control::row_args(ctx, inner).unwrap_or_default();
                 if tribute_control::Instantiate::matches(ctx, inner) {
                     selecting.extend(rows.iter().filter_map(|row| row.tail));
-                } else if let Some(callee) = reference_callee(ctx, inner) {
+                } else if let Some(callee) =
+                    reference_callee(ctx, inner).or_else(|| table_callee(ctx, inner, tables))
+                {
                     references.push(Reference {
                         op: inner,
                         callee,
@@ -188,17 +194,9 @@ impl Function {
     }
 }
 
-/// The name a `call`, `tail_call`, or `func_ref` refers to, through its
-/// table for a `tribute_cps.func_ref`.
+/// The name a `call`, `tail_call`, or `tribute_control.func_ref` refers to.
 pub(crate) fn reference_callee(ctx: &IrContext, op: OpRef) -> Option<String> {
-    if tribute_cps::FuncRef::matches(ctx, op) {
-        // Every table class specialization makes has its instance as its
-        // only target.
-        let table = tribute_cps::func_ref_table(ctx, op)?;
-        let (_, target) = tribute_cps::table_entries(ctx, table)?.into_iter().next()?;
-        return Some(target.leaf()?.to_string());
-    }
-    let key = if tribute_control::is_func_ref(ctx, op) {
+    let key = if tribute_control::FuncRef::matches(ctx, op) {
         "func_ref"
     } else if tribute_control::Call::matches(ctx, op) || tribute_control::TailCall::matches(ctx, op)
     {
@@ -208,6 +206,26 @@ pub(crate) fn reference_callee(ctx: &IrContext, op: OpRef) -> Option<String> {
     };
     let path = ctx.op_attrs(op).get_symbol_ref(key)?;
     Some(path.leaf()?.to_string())
+}
+
+/// The function tables of `module`, by name.
+pub(crate) fn func_tables(ctx: &IrContext, module: Module) -> HashMap<String, OpRef> {
+    module
+        .ops(ctx)
+        .iter()
+        .filter(|&&op| tribute_cps::FuncTable::matches(ctx, op))
+        .filter_map(|&op| Some((ctx.op_attrs(op).get_str("sym_name")?.to_owned(), op)))
+        .collect()
+}
+
+/// The name a `tribute_cps.func_ref` refers to through its table in
+/// `tables`: the table's target, which is the only one every table class
+/// specialization makes has.
+fn table_callee(ctx: &IrContext, op: OpRef, tables: &HashMap<String, OpRef>) -> Option<String> {
+    let reference = tribute_cps::FuncRef::from_op(ctx, op).ok()?;
+    let table = *tables.get(reference.func_ref(ctx).as_simple()?.as_str())?;
+    let (_, target) = tribute_cps::table_entries(ctx, table)?.into_iter().next()?;
+    Some(target.leaf()?.to_string())
 }
 
 /// The types of every value a body defines: operation results and block
