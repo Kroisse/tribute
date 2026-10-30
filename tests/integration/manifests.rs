@@ -258,3 +258,65 @@ fn the_cli_compiles_a_packages_root_file_without_its_manifest() {
     );
     assert!(stderr.contains("unresolved"), "{stderr}");
 }
+
+/// Run `tribute files` in `cwd` with `args`, returning the paths it printed
+/// relative to `cwd`.
+fn list_files(cwd: &Path, args: &[&str]) -> Vec<String> {
+    let output = Command::new(env!("CARGO_BIN_EXE_tribute"))
+        .current_dir(cwd)
+        .arg("files")
+        .args(args)
+        .output()
+        .expect("invoke tribute files");
+    assert_success(&output);
+    let cwd = cwd.canonicalize().expect("a directory");
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|line| {
+            Path::new(line)
+                .strip_prefix(&cwd)
+                .expect("a path in the working directory")
+                .display()
+                .to_string()
+        })
+        .collect()
+}
+
+/// `tribute files` lists the files a package's build reads: its own by
+/// default, its dependencies' with `--deps`, and the paths with no file yet
+/// with `--candidates`.
+#[test]
+fn the_cli_lists_the_files_a_build_reads() {
+    let temp = copy_packages();
+    write(
+        temp.path(),
+        "app/src/main.trb",
+        &format!("mod later\n{APP}"),
+    );
+    assert_eq!(
+        list_files(temp.path(), &["app"]),
+        ["app/src/main.trb", "app/tribute.toml"]
+    );
+    assert_eq!(
+        list_files(temp.path(), &["app", "--deps"]),
+        [
+            "app/src/main.trb",
+            "app/tribute.toml",
+            "geometry/src/lib.trb",
+            "geometry/tribute.toml",
+        ]
+    );
+    assert_eq!(
+        list_files(&temp.path().join("app"), &["--candidates"]),
+        [
+            "src/later.trb",
+            "src/lib.trb",
+            "src/main.trb",
+            "tribute.toml"
+        ]
+    );
+    assert_eq!(
+        list_files(temp.path(), &["app/src/main.trb", "--candidates"]),
+        ["app/src/later.trb", "app/src/main.trb"]
+    );
+}
