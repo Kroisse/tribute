@@ -201,12 +201,17 @@ impl LspServer {
             tracing::info!(uri = ?change.uri, "Watched file changed");
             self.db.reload_file(&change.uri);
         }
+        self.publish_open_documents()?;
+        self.update_watchers()
+    }
+
+    fn publish_open_documents(&self) -> Result<(), Box<dyn Error + Send + Sync>> {
         for (key, _) in self.db.open_documents() {
             if let Ok(uri) = key.parse() {
                 self.publish_diagnostics(&uri)?;
             }
         }
-        self.update_watchers()
+        Ok(())
     }
 
     /// Have the client watch the files the open documents' analyses read
@@ -216,7 +221,20 @@ impl LspServer {
         if !self.watches_files {
             return Ok(());
         }
-        let files = self.db.watched_files();
+        // A file that was not watched may have changed on disk meanwhile,
+        // and reading it again may change the files to watch.
+        let files = loop {
+            let files = self.db.watched_files();
+            let added: Vec<PathBuf> = files
+                .iter()
+                .filter(|file| !self.watched.contains(file))
+                .cloned()
+                .collect();
+            if !self.db.refresh_files(&added) {
+                break files;
+            }
+            self.publish_open_documents()?;
+        };
         if files == self.watched {
             return Ok(());
         }
@@ -2118,6 +2136,46 @@ mod tests {
                     ],
                 ),
             ]
+        );
+
+        // A module file that changed while no `mod` named it is read again
+        // when one names it again.
+        let edit = |harness: &mut TestHarness, version, text: &str| {
+            harness.notify::<DidChangeTextDocument>(DidChangeTextDocumentParams {
+                text_document: lsp_types::VersionedTextDocumentIdentifier {
+                    uri: uri.clone(),
+                    version,
+                },
+                content_changes: vec![TextDocumentContentChangeEvent {
+                    range: None,
+                    range_length: None,
+                    text: text.to_owned(),
+                }],
+            });
+            harness.sent()
+        };
+        let unwatched = edit(&mut harness, 2, "mod later\n\nfn main() -> Nil { }\n");
+        assert!(
+            !watcher_requests(&unwatched)
+                .last()
+                .unwrap()
+                .1
+                .contains(&path("src/util.trb"))
+        );
+        std::fs::write(package.join("src/util.trb"), "pub fn f() -> Nat { 1 }\n").unwrap();
+        let rewatched = edit(&mut harness, 3, source);
+        let Some(published) = rewatched.iter().rev().find_map(|message| match message {
+            Message::Notification(published) => Some(published),
+            _ => None,
+        }) else {
+            panic!("diagnostics: {rewatched:?}");
+        };
+        let published: PublishDiagnosticsParams =
+            serde_json::from_value(published.params.clone()).unwrap();
+        let messages: Vec<_> = published.diagnostics.iter().map(|d| &d.message).collect();
+        assert!(
+            !messages.iter().any(|message| message.contains("util::f")),
+            "{messages:?}"
         );
     }
 

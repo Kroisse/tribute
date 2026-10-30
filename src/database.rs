@@ -183,20 +183,52 @@ impl TributeDatabaseImpl {
     /// left unread. Each open document is then analyzed in the package it
     /// now belongs to, since a manifest may have appeared or disappeared.
     pub fn reload_file(&mut self, uri: &LspUri) {
-        let file = provider_uri(uri);
+        if self.refresh(&provider_uri(uri)) {
+            self.assign_packages();
+        }
+    }
+
+    /// Read each of `files` from disk again, as [`Self::reload_file`] does,
+    /// for files that were not watched and may have changed meanwhile.
+    /// Returns whether any of them changed.
+    pub fn refresh_files(&mut self, files: &[PathBuf]) -> bool {
+        let mut changed = false;
+        for file in files {
+            changed |= self.refresh(&path_to_uri(file));
+        }
+        if changed {
+            self.assign_packages();
+        }
+        changed
+    }
+
+    /// Make the input of `file` what is on disk, unless it is an open
+    /// document or no analysis asked for it. Returns whether it changed.
+    fn refresh(&mut self, file: &Uri<String>) -> bool {
         let open = self
             .documents
             .read()
             .values()
             .any(|source| source.uri(self).as_str() == file.as_str());
         if open {
-            return;
+            return false;
         }
         let provider = SourceFiles::get(self).provider(self).clone();
-        if provider.existing(&file).is_none() {
-            return;
+        let Some(entry) = provider.existing(file) else {
+            return false;
+        };
+        let text = read_file(file);
+        let current = entry.source(self).map(|source| source.text(self));
+        if current == text.as_ref() {
+            return false;
         }
-        provider.set(self, &file, read_file(&file));
+        provider.set(self, file, text);
+        true
+    }
+
+    /// Analyze each open document in the package it belongs to now.
+    fn assign_packages(&mut self) {
+        let provider = SourceFiles::get(self).provider(self).clone();
         for (_, source) in self.open_documents() {
             let manifest = document_manifest(self, &provider, source.uri(self));
             set_package_root(self, source, manifest);
