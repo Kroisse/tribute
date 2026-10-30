@@ -18,8 +18,8 @@
 use std::path::{Component, Path, PathBuf};
 
 use fluent_uri::Uri;
-use rustc_hash::FxHashSet as HashSet;
-use salsa::Accumulator;
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use salsa::{Accumulator, Setter as _};
 use toml::Spanned;
 use toml::de::{DeTable, DeValue};
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
@@ -220,27 +220,63 @@ fn loaded_dependencies(db: &dyn salsa::Database, file: FileEntry) -> Vec<FileEnt
         .collect()
 }
 
-/// The dependency table `source` is analyzed against: that of the package
-/// whose `src/main.trb` it is, or `implicit` for a source compiled without
-/// a manifest.
+/// The manifest of the package of each root source a tool analyzes as a
+/// package root (`new-plans/implementation.md` § 패키지 source 트리와 파일
+/// 입력). The tool that picks a root registers it: the CLI a package
+/// directory's `src/main.trb`, and the language server the root of the
+/// package an open document belongs to.
+#[salsa::input(singleton, debug)]
+pub struct PackageRoots {
+    #[returns(ref)]
+    pub manifests: HashMap<SourceCst, FileEntry>,
+}
+
+/// Analyze the root `source` against the dependency table of the manifest
+/// `manifest`, or against the implicit table if `manifest` is `None`.
+pub fn set_package_root(
+    db: &mut dyn salsa::Database,
+    source: SourceCst,
+    manifest: Option<FileEntry>,
+) {
+    let Some(roots) = PackageRoots::try_get(db) else {
+        if let Some(manifest) = manifest {
+            PackageRoots::new(db, [(source, manifest)].into_iter().collect());
+        }
+        return;
+    };
+    let mut manifests = roots.manifests(db).clone();
+    let changed = match manifest {
+        Some(manifest) => manifests.insert(source, manifest) != Some(manifest),
+        None => manifests.remove(&source).is_some(),
+    };
+    if changed {
+        roots.set_manifests(db).to(manifests);
+    }
+}
+
+/// The dependency table the root `source` is analyzed against: that of the
+/// manifest [`PackageRoots`] registers for it, or `implicit` for a source
+/// compiled without a manifest.
 #[salsa::tracked]
 pub fn source_dependencies(
     db: &dyn salsa::Database,
     source: SourceCst,
     implicit: DependencyTable,
 ) -> DependencyTable {
-    let manifest_file = executable_manifest(source.uri(db)).and_then(|uri| file_at(db, &uri));
-    match manifest_file {
+    let manifest =
+        PackageRoots::try_get(db).and_then(|roots| roots.manifests(db).get(&source).copied());
+    match manifest {
         Some(file) if file.source(db).is_some() => *dependency_table(db, file, implicit),
         _ => implicit,
     }
 }
 
-/// The manifest of the package whose executable root is at `uri`, if `uri`
-/// is a package's `src/main.trb`.
-fn executable_manifest(uri: &Uri<String>) -> Option<Uri<String>> {
+/// The manifest beside the package root file at `uri`, if `uri` is a
+/// `src/main.trb` or `src/lib.trb`. Whether the manifest exists is not
+/// checked.
+pub fn root_file_manifest(uri: &Uri<String>) -> Option<Uri<String>> {
     let path = uri_to_path(uri)?;
-    if path.file_name()? != "main.trb" {
+    if path.file_name()? != "main.trb" && path.file_name()? != "lib.trb" {
         return None;
     }
     let src = path.parent()?;
@@ -511,14 +547,14 @@ mod tests {
     }
 
     #[test]
-    fn only_a_packages_main_has_a_manifest() {
+    fn only_a_packages_root_files_have_a_manifest() {
         for (path, expected) in [
             ("/ws/app/src/main.trb", Some("file:///ws/app/tribute.toml")),
-            ("/ws/app/src/lib.trb", None),
+            ("/ws/app/src/lib.trb", Some("file:///ws/app/tribute.toml")),
             ("/ws/app/main.trb", None),
             ("/ws/app/src/util/main.trb", None),
         ] {
-            let manifest = executable_manifest(&path_to_uri(Path::new(path)));
+            let manifest = root_file_manifest(&path_to_uri(Path::new(path)));
             assert_eq!(manifest.as_ref().map(Uri::as_str), expected, "{path}");
         }
     }

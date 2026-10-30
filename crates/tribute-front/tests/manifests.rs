@@ -3,7 +3,7 @@
 
 use tribute_core::diagnostic::Diagnostic;
 use tribute_front::analysis::{self, DependencyTable, Package};
-use tribute_front::manifest::{self, source_dependencies};
+use tribute_front::manifest::{self, root_file_manifest, set_package_root, source_dependencies};
 use tribute_front::resolve::PackageName;
 use tribute_front::source_file::{FileEntry, SourceFiles, file_at, uri_to_path};
 use tribute_front::testing::LoggingDb;
@@ -60,12 +60,24 @@ name = "app"
 geometry = { path = "../geometry" }
 "#,
         );
-        let app = ws.file("/ws/app/src/main.trb", APP);
+        let app = ws.root("/ws/app/src/main.trb", APP);
         (ws, app)
     }
 
     fn file(&mut self, path: &str, text: &str) -> SourceCst {
         self.db.file(path, text)
+    }
+
+    /// The package root file at `path`, registered as the root of the
+    /// package of the manifest beside it, as the CLI and the language server
+    /// register theirs.
+    fn root(&mut self, path: &str, text: &str) -> SourceCst {
+        let source = self.file(path, text);
+        let manifest = root_file_manifest(source.uri(&self.db))
+            .and_then(|uri| file_at(&self.db, &uri))
+            .expect("a package root file");
+        set_package_root(&mut self.db, source, Some(manifest));
+        source
     }
 
     fn entry(&self, path: &str) -> FileEntry {
@@ -160,13 +172,19 @@ fn an_app_is_analyzed_against_its_manifests_dependencies() {
     assert_eq!(messages, Vec::<String>::new());
 }
 
+/// A root reads its package's manifest only when it is registered as the
+/// package's root; any other source depends on `std` alone, even a
+/// package's own root file.
 #[test]
-fn a_source_outside_a_package_depends_on_std_alone() {
-    let mut ws = Workspace::new();
-    ws.file(r#"/ws/app/tribute.toml"#, "[package]\nname = \"app\"\n");
-    let lib = ws.file("/ws/app/src/lib.trb", GEOMETRY);
-    let loose = ws.file("/ws/loose/src/main.trb", APP);
+fn only_a_registered_root_reads_its_manifest() {
+    let (mut ws, _) = Workspace::with_app();
+    let lib = ws.file("/ws/app/src/lib.trb", APP);
     assert_eq!(ws.table(lib), ["std"]);
+    assert_eq!(ws.root("/ws/app/src/lib.trb", APP), lib);
+    assert_eq!(ws.table(lib), ["geometry", "std"]);
+    set_package_root(&mut ws.db, lib, None);
+    assert_eq!(ws.table(lib), ["std"]);
+    let loose = ws.root("/ws/loose/src/main.trb", APP);
     assert_eq!(ws.table(loose), ["std"]);
 }
 
@@ -223,7 +241,7 @@ geometry = { path = "./../geometry/" }
 shapes = { path = "../shapes" }
 "#,
     );
-    let app = ws.file("/ws/app/src/main.trb", APP);
+    let app = ws.root("/ws/app/src/main.trb", APP);
     let table = *source_dependencies(&ws.db, app, ws.std);
     let packages = table.packages(&ws.db);
     let shapes = packages[1];
@@ -296,7 +314,7 @@ name = "geometry"
 fn app_with(manifest: &str) -> (Workspace, SourceCst) {
     let mut ws = Workspace::new();
     ws.file("/ws/app/tribute.toml", manifest);
-    let app = ws.file("/ws/app/src/main.trb", APP);
+    let app = ws.root("/ws/app/src/main.trb", APP);
     (ws, app)
 }
 
@@ -375,7 +393,7 @@ pathless = {}
 numbered = { path = 1 }
 "#,
     );
-    let app = ws.file("/ws/app/src/main.trb", APP);
+    let app = ws.root("/ws/app/src/main.trb", APP);
     insta::assert_snapshot!(ws.source_errors(app));
     assert_eq!(ws.table(app), ["std"]);
 }
@@ -407,7 +425,7 @@ a = { path = "../a" }
 itself = { path = "." }
 "#,
     );
-    let app = ws.file("/ws/app/src/main.trb", "");
+    let app = ws.root("/ws/app/src/main.trb", "");
     insta::assert_snapshot!(ws.source_errors(app));
     // `a` reaches the cycle `b -> c -> b` at `b`, whose entry for `c`
     // closes it, so `b` depends on `std` alone.
@@ -424,7 +442,12 @@ itself = { path = "." }
 #[test]
 fn diag_manifest_package_without_root_files() {
     let mut ws = Workspace::new();
-    ws.file(r#"/ws/empty/tribute.toml"#, "[package]\nname = \"empty\"\n");
+    ws.file(
+        "/ws/empty/tribute.toml",
+        r#"[package]
+name = "empty"
+"#,
+    );
     ws.file("/ws/empty/main.trb", "");
     insta::assert_snapshot!(ws.load_errors("/ws/empty/tribute.toml"));
 }

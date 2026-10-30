@@ -7,6 +7,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use tribute::pipeline::{compile_frontend, compile_with_diagnostics};
+use tribute_front::manifest::set_package_root;
+use tribute_front::path_to_uri;
+use tribute_front::source_file::file_at;
 use tribute_front::testing::LoggingDb;
 use trunk_ir::printer::print_module;
 
@@ -76,6 +79,9 @@ fn an_app_lowers_its_dependency_at_its_identity_paths() {
     db.file("/ws/geometry/src/lib.trb", GEOMETRY);
     db.file("/ws/app/tribute.toml", APP_MANIFEST);
     let app = db.file("/ws/app/src/main.trb", APP);
+    let manifest = file_at(&db, &path_to_uri(Path::new("/ws/app/tribute.toml")))
+        .expect("the database has a provider");
+    set_package_root(&mut db, app, Some(manifest));
     let messages: Vec<_> = compile_with_diagnostics(&db, app)
         .diagnostics
         .into_iter()
@@ -234,4 +240,21 @@ name = "std"
         stderr.contains("the package has neither `src/lib.trb` nor `src/main.trb`"),
         "{stderr}"
     );
+}
+
+/// A source file is compiled without a manifest even when it is a
+/// package's root file, and the CLI points out the package directory.
+#[test]
+fn the_cli_compiles_a_packages_root_file_without_its_manifest() {
+    let compiled = compile(
+        Path::new(PACKAGES),
+        &["--target", "none", "app/src/main.trb"],
+    );
+    let stderr = stderr(&compiled);
+    assert!(!compiled.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("is a root file of the package in"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("unresolved"), "{stderr}");
 }

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use lsp_types::Uri as LspUri;
 use parking_lot::RwLock;
 use ropey::Rope;
-use tribute_front::manifest::MANIFEST_FILE;
+use tribute_front::manifest::{MANIFEST_FILE, root_file_manifest, set_package_root};
 use tribute_front::source_file::{FileEntry, FileProvider, SourceFiles};
 use tribute_front::{SourceCst, Uri, path_to_uri, uri_to_path};
 
@@ -100,13 +100,17 @@ impl TributeDatabaseImpl {
 
     /// Open the editor buffer `text` for `uri`. The buffer replaces the
     /// file's text in the source input a package's source tree reads at that
-    /// path, so the packages that contain the file see its edits.
+    /// path, so the packages that contain the file see its edits. A
+    /// package's root file is analyzed as the root of that package
+    /// (`new-plans/lsp.md` § 문서가 속한 패키지).
     pub fn open_document(&mut self, uri: &LspUri, text: Rope) {
         let file = provider_uri(uri);
         let provider = SourceFiles::get(self).provider(self).clone();
         let source_cst = provider
             .set(self, &file, Some(text))
             .expect("a file given text has a source");
+        let manifest = root_file_manifest(&file).map(|manifest| provider.entry(self, &manifest));
+        set_package_root(self, source_cst, manifest);
         self.documents
             .write()
             .insert(uri.as_str().to_owned(), source_cst);
@@ -115,9 +119,10 @@ impl TributeDatabaseImpl {
     /// Close the editor buffer of `uri`, returning its source input to the
     /// file on disk.
     pub fn close_document(&mut self, uri: &LspUri) {
-        if self.documents.write().remove(uri.as_str()).is_none() {
+        let Some(source_cst) = self.documents.write().remove(uri.as_str()) else {
             return;
-        }
+        };
+        set_package_root(self, source_cst, None);
         let file = provider_uri(uri);
         let provider = SourceFiles::get(self).provider(self).clone();
         provider.set(self, &file, read_file(&file));
@@ -178,5 +183,27 @@ mod tests {
 
         let cst2 = db.source_cst(&uri).unwrap();
         assert_eq!(cst2.text(&db).to_string(), "fn second() { }");
+    }
+    /// An open package root file is analyzed against its package's
+    /// dependencies until it is closed.
+    #[test]
+    fn an_open_root_file_reads_its_packages_manifest() {
+        let mut db = TributeDatabaseImpl::default();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/packages/app/src/main.trb");
+        let uri: LspUri = path_to_uri(&path).as_str().parse().unwrap();
+        let text = Rope::from_str(&std::fs::read_to_string(&path).unwrap());
+        db.open_document(&uri, text);
+        let source = db.source_cst(&uri).unwrap();
+        let names = |db: &TributeDatabaseImpl| {
+            crate::root_environment(db, source)
+                .packages(db)
+                .iter()
+                .map(|package| package.name(db).name().unwrap().to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(&db), ["geometry", "std"]);
+        db.close_document(&uri);
+        assert_eq!(names(&db), ["std"]);
     }
 }

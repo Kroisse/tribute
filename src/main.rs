@@ -17,8 +17,9 @@ use tribute::pipeline::{
 };
 use tribute::{TributeDatabaseImpl, check_library};
 use tribute_core::diagnostic::{Diagnostic, DiagnosticSeverity};
-use tribute_front::manifest::load_package;
+use tribute_front::manifest::{load_package, root_file_manifest, set_package_root};
 use tribute_front::resolve::{Dependencies, build_env};
+use tribute_front::source_file::FileEntry;
 use tribute_front::source_tree::source_tree_of;
 
 fn main() {
@@ -77,17 +78,23 @@ fn compile_file(
     sanitize_address: bool,
     sysroot: Option<&Path>,
 ) {
-    let db = TributeDatabaseImpl::default();
+    let mut db = TributeDatabaseImpl::default();
     // The default outputs of the native and the wasm target.
     let (source, input_path, (default_output, default_wasm)) = if input_path.is_dir() {
         match load_package_dir(&db, &input_path, target) {
-            PackageInput::Executable { root, output } => {
+            PackageInput::Executable {
+                root,
+                manifest,
+                output,
+            } => {
+                set_package_root(&mut db, root, Some(manifest));
                 let wasm = output.with_extension("wasm");
                 (root, input_path.join("src/main.trb"), (output, wasm))
             }
             PackageInput::Checked => return,
         }
     } else {
+        note_package_root_file(&input_path);
         let source = match db.input(input_path.clone()) {
             Ok(source) => source,
             Err(e) => {
@@ -238,10 +245,11 @@ fn compile_file(
 
 /// What compiling a package directory continues with.
 enum PackageInput {
-    /// Build the executable whose root file is `root`, by default into
-    /// `output`.
+    /// Build the executable whose root file is `root`, of the package whose
+    /// manifest is `manifest`, by default into `output`.
     Executable {
         root: tribute::SourceCst,
+        manifest: FileEntry,
         output: PathBuf,
     },
     /// The package has no executable, and its library checked.
@@ -278,6 +286,7 @@ fn load_package_dir(db: &TributeDatabaseImpl, dir: &Path, target: &str) -> Packa
         if let Some(root) = loaded.executable {
             return PackageInput::Executable {
                 root,
+                manifest,
                 output: dir.join(name),
             };
         }
@@ -305,6 +314,26 @@ fn load_package_dir(db: &TributeDatabaseImpl, dir: &Path, target: &str) -> Packa
         println!("✓ Checked successfully");
         PackageInput::Checked
     })
+}
+
+/// A source file is compiled without a manifest even if it is a package's
+/// root file (`new-plans/modules.md` § 매니페스트 (`tribute.toml`)); point
+/// out the package directory that compiles it with its dependencies.
+fn note_package_root_file(path: &Path) {
+    let Ok(path) = path.canonicalize() else {
+        return;
+    };
+    let manifest = root_file_manifest(&tribute_front::path_to_uri(&path))
+        .and_then(|uri| tribute_front::uri_to_path(&uri))
+        .filter(|manifest| manifest.is_file());
+    let Some(dir) = manifest.as_deref().and_then(Path::parent) else {
+        return;
+    };
+    eprintln!(
+        "note: {} is a root file of the package in {}, but a source file is compiled without its package's manifest; compile the directory to use the package's dependencies",
+        path.display(),
+        dir.display()
+    );
 }
 
 fn debug_file(path: std::path::PathBuf, show_env: bool) {

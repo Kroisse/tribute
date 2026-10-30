@@ -67,10 +67,10 @@ pub fn frontend_environment(db: &dyn salsa::Database) -> analysis::DependencyTab
     analysis::DependencyTable::new(db, vec![*std_package(db)])
 }
 
-/// The dependency table the root crate analyzes `source` against: that of
-/// the package whose `src/main.trb` it is, with package `std`, or package
-/// `std` alone for a source without a manifest
-/// ([`tribute_front::manifest::source_dependencies`]).
+/// The dependency table the root crate analyzes the root `source` against:
+/// that of the package the CLI or the language server registered it as the
+/// root of, with package `std`, or package `std` alone for a source without
+/// a manifest ([`tribute_front::manifest::source_dependencies`]).
 pub fn root_environment(
     db: &dyn salsa::Database,
     source: crate::SourceCst,
