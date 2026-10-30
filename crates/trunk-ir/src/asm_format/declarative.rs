@@ -703,7 +703,18 @@ impl<'a> FormatParser<'a> {
                     self.attribute(index, RawAttribute::Bool(true));
                 }
                 rest.iter()
-                    .try_for_each(|element| self.committed_element(input, element))
+                    .try_for_each(|element| self.committed_element(input, element))?;
+                // The printer writes a group only for a present anchor.
+                let present = match anchor {
+                    FormatAnchor::Attribute(_) | FormatAnchor::Flag(_) => true,
+                    FormatAnchor::Operand(index) => !self.parsed.operands[index].is_empty(),
+                    FormatAnchor::Results => !self.parsed.result_types[0].is_empty(),
+                    FormatAnchor::Region(index) => !self.parsed.regions[index].is_empty(),
+                };
+                if !present {
+                    return Err(ErrMode::Cut(expected("the optional group's anchor")));
+                }
+                Ok(())
             }
         }
     }
@@ -972,6 +983,16 @@ mod tests {
             error.contains("without the attributes the format writes"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn a_group_without_its_anchor_is_an_error() {
+        let error = parse_error(
+            r#"core.module @m {
+  asm_format_test.mark now with
+}"#,
+        );
+        assert!(error.contains("anchor"), "{error}");
     }
 
     #[test]
