@@ -516,6 +516,11 @@ pub(crate) fn parse<'a>(
     for element in format.elements {
         parser.committed_element(input, element)?;
     }
+    // Every element was absent, so the input may as well be generic syntax,
+    // which reads an operation without any of them the same way.
+    if !parser.committed {
+        return Err(ErrMode::Backtrack(expected("the operation's format")));
+    }
     let Parsed {
         operands,
         attributes,
@@ -627,12 +632,10 @@ impl<'a> FormatParser<'a> {
                 Ok(())
             }
             FormatElement::AttrDict => {
-                let checkpoint = *input;
-                let dict = if ident.parse_next(input).ok() == Some("attributes") {
+                let dict = if literal(input, "attributes").is_ok() {
                     ws.parse_next(input)?;
                     Some(raw_attr_dict.parse_next(input)?)
                 } else {
-                    *input = checkpoint;
                     None
                 };
                 let written = written_attributes(self.schema, self.format);
@@ -798,6 +801,9 @@ mod tests {
             {}
         }
 
+        #[asm_format(("on" on^)?)]
+        fn toggle(on: Option<Attr<bool>>) {}
+
         #[asm_format(("quick" quick^)? "now" ("with" args^)? attr_dict)]
         fn mark(quick: Option<Attr<bool>>, args: Variadic<_>) {}
 
@@ -897,9 +903,25 @@ mod tests {
     fn a_format_beginning_with_an_absent_group_reads_generic_syntax() {
         let text = r#"core.module @m {
   asm_format_test.mark {quick = false}
+  asm_format_test.toggle {on = false}
 }
 "#;
         assert_eq!(print(text), text);
+    }
+
+    #[test]
+    fn absent_elements_do_not_read_the_next_operation() {
+        assert_round_trip(
+            r#"core.module @m {
+  asm_format_test.def @f kind "k" {
+      asm_format_test.toggle on
+      asm_format_test.toggle
+      asm_format_test.mark now
+      attributes.probe
+  }
+}
+"#,
+        );
     }
 
     #[test]

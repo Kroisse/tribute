@@ -512,9 +512,11 @@ Printer는 쓰기 전에 operation이 형식으로 손실 없이 표현되는지
 읽힌다. Parser는 operation schema를 검증하지 않는다.
 
 Parser는 `symbol`이 아닌 원소가 첫 token을 읽기 전에만 backtrack하고, 그 뒤의
-실패는 기대한 원소를 밝힌 오류로 끝낸다. 원소 사이의 공백은 token이 아니다. Keyword
-literal은 식별자 전체로 읽으며, 바로 뒤에 `.`이 오면 다음 operation 이름의 일부로
-보고 읽지 않는다. 첫 token에서 backtrack한 입력은 generic
+실패는 기대한 원소를 밝힌 오류로 끝낸다. 원소가 모두 없어 아무 token도 읽지 않았으면
+입력을 generic 형식으로 읽으며, 그런 operation은 두 형식에서 같다. 원소 사이의
+공백은 token이 아니다. Keyword
+literal과 `attr_dict`의 `attributes`는 식별자 전체로 읽으며, 바로 뒤에 `.`이 오면
+다음 operation 이름의 일부로 보고 읽지 않는다. 첫 token에서 backtrack한 입력은 generic
 형식으로 다시 읽는다.
 
 `signature`가 entry argument를 쓰는 region이 여럿이면 printer는 둘째 이후
