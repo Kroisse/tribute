@@ -1,9 +1,9 @@
 //! Diagnostic formatting utilities for the Tribute compiler CLI.
 
-use std::convert::Infallible;
 use std::fmt;
+use std::ops::Range;
 
-use ariadne::{Cache, Color, Label, Report, ReportKind, Source};
+use ariadne::{Cache, Color, Config, IndexType, Label, Report, ReportKind, Source};
 use rustc_hash::FxHashMap as HashMap;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic};
 use trunk_ir::diagnostic::DiagnosticSeverity;
@@ -32,14 +32,23 @@ pub fn normalize_span(start: usize, end: usize) -> (usize, usize) {
     (start, end.max(start + 1))
 }
 
-/// The files a diagnostic's spans are in, each read into an ariadne
-/// [`Source`] when the report first prints it.
+/// The files a diagnostic's spans are in. Each holds only the lines its
+/// spans cover, after an empty line for each line before them, so that
+/// ariadne numbers them as in the file. (Ariadne's `display_line_offset`
+/// moves the location in a report's header, but not its line numbers.)
 struct SpanFiles<'a> {
     db: &'a dyn salsa::Database,
     root: SourceCst,
     /// How the root file is shown.
     root_path: &'a str,
-    sources: HashMap<SourceCst, Source<String>>,
+    excerpts: HashMap<SourceCst, Excerpt>,
+}
+
+/// The lines of a file that a diagnostic's spans cover.
+struct Excerpt {
+    /// The byte offset in the file of the excerpt's start.
+    offset: usize,
+    source: Source<String>,
 }
 
 impl<'a> SpanFiles<'a> {
@@ -48,7 +57,7 @@ impl<'a> SpanFiles<'a> {
             db,
             root,
             root_path,
-            sources: HashMap::default(),
+            excerpts: HashMap::default(),
         }
     }
 
@@ -60,18 +69,53 @@ impl<'a> SpanFiles<'a> {
             .and_then(|files| files.provider(self.db).find(self.db, source))
             .unwrap_or(self.root)
     }
+
+    /// Read the lines that `spans`, byte ranges in their files, cover.
+    fn read(&mut self, spans: &[(SourceCst, Range<usize>)]) {
+        let mut covered: HashMap<SourceCst, Range<usize>> = HashMap::default();
+        for (file, span) in spans {
+            covered
+                .entry(*file)
+                .and_modify(|range| {
+                    range.start = range.start.min(span.start);
+                    range.end = range.end.max(span.end);
+                })
+                .or_insert_with(|| span.clone());
+        }
+        for (file, range) in covered {
+            let text = file.text(self.db);
+            let len = text.len_bytes();
+            let first = text.byte_to_line(range.start.min(len));
+            let last = text.byte_to_line(range.end.min(len));
+            let start = text.line_to_byte(first);
+            let end = text.line_to_byte((last + 1).min(text.len_lines()));
+            let mut excerpt = "\n".repeat(first);
+            excerpt.extend(text.byte_slice(start..end).chunks());
+            self.excerpts.insert(
+                file,
+                Excerpt {
+                    offset: start - first,
+                    source: Source::from(excerpt),
+                },
+            );
+        }
+    }
+
+    /// `span` of `file` as a span of its excerpt.
+    fn span(&self, file: SourceCst, span: &Range<usize>) -> (SourceCst, Range<usize>) {
+        let offset = self.excerpts.get(&file).map_or(0, |excerpt| excerpt.offset);
+        (file, span.start - offset..span.end - offset)
+    }
 }
 
 impl Cache<SourceCst> for SpanFiles<'_> {
     type Storage = String;
 
     fn fetch(&mut self, file: &SourceCst) -> Result<&Source<String>, impl fmt::Debug> {
-        let db = self.db;
-        Ok::<_, Infallible>(
-            self.sources
-                .entry(*file)
-                .or_insert_with(|| Source::from(file.text(db).to_string())),
-        )
+        self.excerpts
+            .get(file)
+            .map(|excerpt| &excerpt.source)
+            .ok_or("a file no span of the diagnostic is in")
     }
 
     fn display<'b>(&self, file: &'b SourceCst) -> Option<impl fmt::Display + 'b> {
@@ -94,10 +138,23 @@ pub fn print_diagnostic(
     root_path: &str,
     diag: &Diagnostic,
 ) {
-    let files = SpanFiles::new(db, root, root_path);
-    let span = diag.inner.span;
-    let file = files.file(span.source);
-    let (start, end) = normalize_span(span.start as usize, span.end as usize);
+    let mut files = SpanFiles::new(db, root, root_path);
+    let span_of = |span: &trunk_ir::Span| {
+        let (start, end) = normalize_span(span.start as usize, span.end as usize);
+        (files.file(span.source), start..end)
+    };
+    let main = span_of(&diag.inner.span);
+    let labels: Vec<_> = diag
+        .inner
+        .labels
+        .iter()
+        .map(|label| (span_of(&label.span), label.message.as_ref()))
+        .collect();
+    let spans: Vec<_> = std::iter::once(main.clone())
+        .chain(labels.iter().map(|(span, _)| span.clone()))
+        .collect();
+    files.read(&spans);
+    let main = files.span(main.0, &main.1);
     let color = phase_color(&diag.phase);
 
     let report_kind = match diag.inner.severity {
@@ -106,22 +163,20 @@ pub fn print_diagnostic(
         DiagnosticSeverity::Info => ReportKind::Advice,
     };
 
-    let mut report = Report::build(report_kind, (file, start..end))
+    let mut report = Report::build(report_kind, main.clone())
+        .with_config(Config::default().with_index_type(IndexType::Byte))
         .with_code(format!("{:?}", diag.phase))
         .with_message(&diag.inner.message)
         .with_label(
-            Label::new((file, start..end))
+            Label::new(main)
                 .with_message(&diag.inner.message)
                 .with_color(color),
         );
 
-    // Add secondary labels
-    for label in diag.inner.labels.iter() {
-        let label_file = files.file(label.span.source);
-        let (ls, le) = normalize_span(label.span.start as usize, label.span.end as usize);
+    for ((file, span), message) in &labels {
         report = report.with_label(
-            Label::new((label_file, ls..le))
-                .with_message(label.message.as_ref())
+            Label::new(files.span(*file, span))
+                .with_message(message)
                 .with_color(Color::Blue),
         );
     }
