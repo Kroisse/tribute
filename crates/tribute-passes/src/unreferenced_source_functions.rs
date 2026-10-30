@@ -67,6 +67,16 @@ fn has_evidence_sources(ctx: &IrContext, module: core::Module) -> bool {
     .is_break()
 }
 
+/// Global DCE configuration that keeps the functions of `runtime` and every
+/// bodyless declaration.
+pub fn source_dce_config(runtime: &[RuntimeItem]) -> trunk_ir::transforms::GlobalDceConfig {
+    trunk_ir::transforms::GlobalDceConfig {
+        extra_entry_points: function_entry_points(runtime),
+        keep_declarations: true,
+        ..Default::default()
+    }
+}
+
 impl Default for EliminateUnreferencedSourceFunctions {
     fn default() -> Self {
         Self::new()
@@ -87,15 +97,10 @@ impl Pass for EliminateUnreferencedSourceFunctions {
         _: &mut AnalysisCache,
     ) -> PassRunResult {
         let eliminate = |ctx: &mut IrContext, runtime| {
-            let config = trunk_ir::transforms::GlobalDceConfig {
-                extra_entry_points: function_entry_points(runtime),
-                ..Default::default()
-            };
             trunk_ir::transforms::eliminate_dead_definitions_with_config(
                 ctx,
                 target.into(),
-                config,
-                |ctx, op| tribute_control::is_func(ctx, op) && ctx.op_has_regions(op),
+                source_dce_config(runtime),
             );
         };
         eliminate(ctx, self.runtime);
