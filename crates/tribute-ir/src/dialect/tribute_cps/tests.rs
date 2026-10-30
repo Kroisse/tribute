@@ -345,3 +345,34 @@ fn a_function_reference_writes_its_target_and_row_arguments() {
     let (ctx, module) = parse(input);
     assert_eq!(print_module(&ctx, module.op()), input);
 }
+
+/// A reference and its table's targets are in one module, where
+/// legalization builds the table's entries.
+#[test]
+fn a_function_table_and_its_targets_are_in_the_module_of_its_references() {
+    let errors = messages(
+        r#"core.module @test {
+  core.module @inner {
+    tribute_cps.func @id() -> core.i32 convention(direct) {
+      %0 = arith.const {value = 1} : core.i32
+      tribute_control.return %0
+    }
+    tribute_cps.func_table @"id$8" [direct = @id]
+  }
+  tribute_cps.func_table @"outer$8" [direct = @inner::@id]
+  tribute_cps.func @f() -> core.i32 convention(direct) {
+    %0 = tribute_cps.func_ref @inner::@"id$8" : tribute_control.func_sig<() -> core.i32>
+    %1 = tribute_cps.call_indirect %0 {convention = "direct"} : core.i32
+    tribute_control.return %1
+  }
+}
+"#,
+    );
+    assert_eq!(
+        errors,
+        [
+            "function table target @inner::id must be in the table's own module",
+            "func_ref @inner::id$8 must name a table of its own module",
+        ]
+    );
+}

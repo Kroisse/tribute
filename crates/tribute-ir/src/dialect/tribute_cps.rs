@@ -134,9 +134,11 @@ mod tribute_cps {
     /// - **Meaning:** the callable value whose convention entries are the
     ///   table's. References that share a table share its entries.
     /// - **Verification:** the local verifier checks the attributes.
-    ///   Whole-IR verification checks that `func_ref` resolves to a
-    ///   `tribute_cps.func_table`, and checks the source signature against
-    ///   each of its targets as for `tribute_control.func_ref`.
+    ///   Whole-IR verification checks that `func_ref` names a
+    ///   `tribute_cps.func_table` of the reference's own module by one name,
+    ///   and checks the source signature against each of its targets as for
+    ///   `tribute_control.func_ref`. Legalization builds the table's entries
+    ///   in that module.
     /// - **Ownership and value flow:** the result is an ordinary SSA value.
     /// - **Location:** the source reference span.
     #[verify]
@@ -178,7 +180,8 @@ mod tribute_cps {
     /// - **Verification:** the local verifier checks the attributes, that
     ///   the lists have the same length, and that the conventions are
     ///   strictly increasing. Whole-IR verification checks that each target
-    ///   resolves to a `tribute_cps.func` of the same definition, and that
+    ///   names a `tribute_cps.func` of the table's own module by one name,
+    ///   that the targets are instances of the same definition, and that
     ///   each convention is its target's, or weaker than it when the target
     ///   is `Cps`.
     /// - **Ownership and value flow:** defines no value.

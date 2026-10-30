@@ -3561,6 +3561,15 @@ fn validate_func_table(
 ) {
     let mut signature = None;
     for (convention, target) in tribute_cps::table_entries(ctx, table).unwrap_or_default() {
+        if target.as_simple().is_none() {
+            push_op_error(
+                ctx,
+                table,
+                errors,
+                format!("function table target @{target} must be in the table's own module"),
+            );
+            continue;
+        }
         let Some(instance) = funcs
             .definitions(ctx, table, &target)
             .first()
@@ -3625,6 +3634,15 @@ fn validate_symbol_use(
                 return;
             };
             if tribute_cps::FuncRef::matches(ctx, op) {
+                if symbol.as_simple().is_none() {
+                    push_op_error(
+                        ctx,
+                        op,
+                        errors,
+                        format!("func_ref @{symbol} must name a table of its own module"),
+                    );
+                    return;
+                }
                 let Some(table) = funcs
                     .definitions(ctx, op, symbol)
                     .first()
