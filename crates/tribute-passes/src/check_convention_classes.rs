@@ -261,12 +261,7 @@ impl<'a> Instance<'a> {
             if tribute_cps::Lambda::matches(self.ctx, op) {
                 lambdas.push(op);
             } else if tribute_cps::FuncRef::matches(self.ctx, op) {
-                self.compare(
-                    op,
-                    "func_ref",
-                    self.ctx.op_result_types(op)[0],
-                    disagreements,
-                );
+                self.check_func_ref(op, disagreements);
             } else if tribute_cps::CallIndirect::matches(self.ctx, op)
                 || tribute_cps::TailCallIndirect::matches(self.ctx, op)
             {
@@ -318,6 +313,30 @@ impl<'a> Instance<'a> {
     }
 
     /// Whether `op` declares the class of the row of `callable`.
+    /// A function reference's table has an entry no stronger than the class
+    /// of the row of the callable it makes, so every place the value reaches
+    /// enters a target or an adapter to one.
+    fn check_func_ref(&self, op: OpRef, disagreements: &mut Vec<Disagreement>) {
+        let Some(signature) = FuncSig::from_type_ref(self.ctx, self.ctx.op_result_types(op)[0])
+        else {
+            return;
+        };
+        let expected = self.class(&signature.row(self.ctx), op);
+        let weakest = tribute_cps::func_ref_table(self.ctx, op)
+            .and_then(|table| tribute_cps::table_entries(self.ctx, table))
+            .and_then(|entries| entries.first().map(|&(convention, _)| convention));
+        if weakest.is_none_or(|weakest| weakest > expected) {
+            disagreements.push(Disagreement {
+                op,
+                rule: "func_ref",
+                message: format!(
+                    "a function reference in {} enters its table at {weakest:?}, its row implies {expected:?}",
+                    self.function.name
+                ),
+            });
+        }
+    }
+
     fn compare(
         &self,
         op: OpRef,

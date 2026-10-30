@@ -161,27 +161,89 @@ impl Converter<'_> {
         source: OpRef,
     ) -> Result<(Vec<OpRef>, ValueRef), TributeControlToCpsError> {
         let location = self.ctx.op(source).location;
-        let target_symbol = self
-            .ctx
-            .op_attrs(source)
-            .get_symbol_ref("func_ref")
-            .expect("pre-CPS validation checked func_ref target")
-            .clone();
-        let target = self
-            .current_func(source)
-            .expect("pre-CPS validation resolved func_ref target in this module");
+        let table = self
+            .func_tables
+            .get(&source)
+            .cloned()
+            .expect("pre-CPS validation resolved func_ref table in this module");
         let result_logical_ty = self.ctx.op_result_types(source)[0];
-        let result_convention = tribute_cps::declared_convention(self.ctx, source)
-            .expect("pre-CPS validation checked func_ref convention");
-        debug_assert!(
-            !target.convention.needs_continuation_frame()
-                || result_convention.needs_continuation_frame(),
-            "pre-CPS validation rejects a weaker func_ref result convention"
+        let closure_ty = self.convert_type(result_logical_ty);
+        let entries = match self.table_entries.get(&(table.op, closure_ty)) {
+            Some(entries) => entries.clone(),
+            None => {
+                let entries = self.build_table_entries(&table, result_logical_ty, closure_ty)?;
+                self.table_entries
+                    .insert((table.op, closure_ty), entries.clone());
+                entries
+            }
+        };
+        let closure_new = closure::New::operands(std::iter::empty::<ValueRef>())
+            .entries(entries)
+            .results(closure_ty)
+            .build(self.ctx, location);
+        Ok((vec![closure_new.op_ref()], closure_new.result(self.ctx)))
+    }
+
+    /// The convention entries of `table` for closures of `closure_ty`: an
+    /// entry function for each target, then adapters and traps for the other
+    /// conventions.
+    fn build_table_entries(
+        &mut self,
+        table: &FuncTable,
+        logical_ty: TypeRef,
+        closure_ty: TypeRef,
+    ) -> Result<[SymbolPath; 3], TributeControlToCpsError> {
+        let location = self.ctx.op(table.op).location;
+        let mut bodies = Vec::new();
+        for (convention, callable, target) in &table.entries {
+            let info = self
+                .funcs
+                .get(callable)
+                .cloned()
+                .expect("pre-CPS validation resolved table targets");
+            if *convention < info.convention {
+                return Err(self.malformed_source(
+                    table.op,
+                    "a function table entry weaker than its target is not supported",
+                ));
+            }
+            let entry = self.func_ref_entry(location, logical_ty, *convention, &info, target);
+            bodies.push((*convention, entry));
+        }
+        let conventions: Vec<_> = bodies.iter().map(|&(convention, _)| convention).collect();
+        let adapters = self.tables.adapters(
+            self.ctx,
+            self.module_block,
+            location,
+            closure_ty,
+            &conventions,
         );
+        Ok(self.tables.table(
+            self.ctx,
+            self.module_block,
+            location,
+            closure_ty,
+            bodies
+                .into_iter()
+                .chain(adapters)
+                .map(|(convention, entry)| (convention, SymbolPath::new([entry]))),
+        ))
+    }
+
+    /// The entry function through `convention` of a closure of `logical_ty`
+    /// that calls `target`, the callable `info` describes.
+    fn func_ref_entry(
+        &mut self,
+        location: Location,
+        logical_ty: TypeRef,
+        result_convention: CallingConvention,
+        target: &CallableInfo,
+        target_symbol: &SymbolPath,
+    ) -> Symbol {
         // The adapter is the closure's entry with the environment
         // interposed, so both share parameter attributes and metadata.
-        let closure_ty = self.convert_type(result_logical_ty);
-        let function = self.lower_callable_signature(result_logical_ty, result_convention);
+        let closure_ty = self.convert_type(logical_ty);
+        let function = self.lower_callable_signature(logical_ty, result_convention);
         let callable = func::FuncSig::from_type_ref(self.ctx, function)
             .expect("an entry signature is a func.func_sig");
         // The adapter's environment is the capture-free closure itself.
@@ -254,28 +316,7 @@ impl Converter<'_> {
             .build(self.ctx, location);
         adapter.set_calling_convention(self.ctx, result_convention);
         self.ctx.push_op(self.module_block, adapter.op_ref());
-
-        let adapters = self.tables.adapters(
-            self.ctx,
-            self.module_block,
-            location,
-            closure_ty,
-            &[result_convention],
-        );
-        let entries = self.tables.table(
-            self.ctx,
-            self.module_block,
-            location,
-            closure_ty,
-            std::iter::once((result_convention, adapter_symbol))
-                .chain(adapters)
-                .map(|(convention, entry)| (convention, trunk_ir::SymbolPath::new([entry]))),
-        );
-        let closure_new = closure::New::operands(std::iter::empty::<ValueRef>())
-            .entries(entries)
-            .results(closure_ty)
-            .build(self.ctx, location);
-        Ok((vec![closure_new.op_ref()], closure_new.result(self.ctx)))
+        adapter_symbol
     }
 
     pub(super) fn convert_func(

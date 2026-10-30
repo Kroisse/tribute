@@ -73,9 +73,13 @@ struct Converter<'a> {
     module_block: BlockRef,
     /// Every source callable, by its defining operation.
     funcs: HashMap<OpRef, CallableInfo>,
-    /// The callable each source operation's callee or `func_ref` names,
-    /// resolved before conversion moves anything.
+    /// The callable each source operation's callee names, resolved before
+    /// conversion moves anything.
     targets: HashMap<OpRef, OpRef>,
+    /// The table each `func_ref` names, resolved the same way.
+    func_tables: HashMap<OpRef, FuncTable>,
+    /// The convention entries built for each table and closure type.
+    table_entries: HashMap<(OpRef, TypeRef), [trunk_ir::SymbolPath; 3]>,
     /// Source operations whose references are looked up in a nested module.
     converted_types: HashMap<TypeRef, TypeRef>,
     helper_index: u32,
@@ -151,14 +155,15 @@ impl<'a> Converter<'a> {
             module_block,
             funcs: graph.funcs,
             targets: graph.targets,
+            func_tables: graph.func_tables,
+            table_entries: HashMap::default(),
             converted_types: HashMap::default(),
             helper_index: 0,
             tables: ConventionTables::new(AbstractFrames),
         }
     }
 
-    /// The callable the callee or `func_ref` of the source operation `op`
-    /// names.
+    /// The callable the callee of the source operation `op` names.
     fn current_func(&self, op: OpRef) -> Option<CallableInfo> {
         self.targets
             .get(&op)
@@ -372,6 +377,15 @@ fn is_source_logical(ctx: &IrContext, op: OpRef) -> bool {
 struct CallableGraph {
     funcs: HashMap<OpRef, CallableInfo>,
     targets: HashMap<OpRef, OpRef>,
+    func_tables: HashMap<OpRef, FuncTable>,
+}
+
+/// The targets of a `tribute_cps.func_table`, each with the convention it is
+/// entered with, the callable it names, and the reference to that callable.
+#[derive(Clone)]
+struct FuncTable {
+    op: OpRef,
+    entries: Vec<(CallingConvention, OpRef, trunk_ir::SymbolPath)>,
 }
 
 /// Every source callable by its defining operation, and the callable each
@@ -403,7 +417,24 @@ fn collect_callable_graph(ctx: &IrContext, module: Module, symbols: &SymbolTable
         })
         .collect();
     let mut targets = HashMap::default();
+    let mut func_tables = HashMap::default();
     let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
+        if tribute_cps::FuncRef::matches(ctx, op)
+            && let Some(table) = tribute_cps::func_ref_table(ctx, op)
+        {
+            let entries = tribute_cps::table_entries(ctx, table)
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|(convention, target)| {
+                    let callable = symbols
+                        .resolve(ctx, table, &target)
+                        .filter(|callable| funcs.contains_key(callable))?;
+                    Some((convention, callable, target))
+                })
+                .collect();
+            func_tables.insert(op, FuncTable { op: table, entries });
+            return ControlFlow::Continue(WalkAction::Advance);
+        }
         let attributes = &ctx.op(op).attributes;
         if let Some(target) = attributes
             .view(ctx)
@@ -416,7 +447,11 @@ fn collect_callable_graph(ctx: &IrContext, module: Module, symbols: &SymbolTable
         }
         ControlFlow::Continue(WalkAction::Advance)
     });
-    CallableGraph { funcs, targets }
+    CallableGraph {
+        funcs,
+        targets,
+        func_tables,
+    }
 }
 
 fn verify_candidate_or_restore_aliases(
@@ -488,6 +523,9 @@ pub fn tribute_control_to_cps(
             if tribute_cps::Func::matches(converter.ctx, source) {
                 let function = converter.convert_func(source)?;
                 converter.ctx.push_op(new_block, function);
+            } else if tribute_cps::FuncTable::matches(converter.ctx, source) {
+                // Its references build its entries when they are converted.
+                continue;
             } else if is_source_logical(converter.ctx, source) {
                 return Err(TributeControlToCpsError::one(
                     PRE_CPS_BOUNDARY,

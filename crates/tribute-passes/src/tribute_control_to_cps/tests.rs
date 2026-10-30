@@ -246,14 +246,17 @@ fn textual_direct_evidence_and_cps_transfers_preserve_exact_abis() {
   tribute_cps.func @cps(%value: core.i32) -> core.i32 convention(cps) {
     tribute_control.return %value
   }
+  tribute_cps.func_table {conventions = ["direct"], sym_name = "direct$direct", targets = [@direct]}
+  tribute_cps.func_table {conventions = ["evidence_direct"], sym_name = "evidence$evidence_direct", targets = [@evidence]}
+  tribute_cps.func_table {conventions = ["cps"], sym_name = "cps$cps", targets = [@cps]}
   tribute_cps.func @exercise(%value: core.i32) -> core.i32 convention(cps) {
     %direct_result = tribute_control.call %value {callee = @direct} : core.i32
     %evidence_result = tribute_control.call %direct_result {callee = @evidence} : core.i32
-    %direct_ref = tribute_cps.func_ref {convention = "direct", func_ref = @direct} : !direct
+    %direct_ref = tribute_cps.func_ref {func_ref = @"direct$direct"} : !direct
     %direct_indirect = tribute_cps.call_indirect %direct_ref, %evidence_result {convention = "direct"} : core.i32
-    %evidence_ref = tribute_cps.func_ref {convention = "evidence_direct", func_ref = @evidence} : !evidence
+    %evidence_ref = tribute_cps.func_ref {func_ref = @"evidence$evidence_direct"} : !evidence
     %evidence_indirect = tribute_cps.call_indirect %evidence_ref, %direct_indirect {convention = "evidence_direct"} : core.i32
-    %cps_ref = tribute_cps.func_ref {convention = "cps", func_ref = @cps} : !cps
+    %cps_ref = tribute_cps.func_ref {func_ref = @"cps$cps"} : !cps
     %cps_indirect = tribute_cps.call_indirect %cps_ref, %evidence_indirect {convention = "cps"} : core.i32
     tribute_control.return %cps_indirect
   }
@@ -340,8 +343,9 @@ fn source_data_indirect_calls_carry_their_exact_signature() {
     %result = tribute_cps.call_indirect %f, %left, %right {convention = "direct"} : core.i32
     tribute_control.return %result
   }
+  tribute_cps.func_table {conventions = ["direct"], sym_name = "add$direct", targets = [@add]}
   tribute_cps.func @named_ref(%left: core.i32, %right: core.i32) -> core.i32 convention(direct) {
-    %ref = tribute_cps.func_ref {convention = "direct", func_ref = @add} : !direct
+    %ref = tribute_cps.func_ref {func_ref = @"add$direct"} : !direct
     %called = tribute_cps.call_indirect %ref, %left, %right {convention = "direct"} : core.i32
     tribute_control.return %called
   }
@@ -1703,8 +1707,9 @@ fn stronger_func_ref_builds_a_cps_adapter_without_a_null_environment() {
   tribute_cps.func @id(%value: core.i32) -> core.i32 convention(direct) {
     tribute_control.return %value
   }
+  tribute_cps.func_table {conventions = ["cps"], sym_name = "id$cps", targets = [@id]}
   tribute_cps.func @run(%value: core.i32) -> core.i32 convention(cps) {
-    %callee = tribute_cps.func_ref {convention = "cps", func_ref = @id} : !cps
+    %callee = tribute_cps.func_ref {func_ref = @"id$cps"} : !cps
     %result = tribute_cps.call_indirect %callee, %value {convention = "cps"} : core.i32
     tribute_control.return %result
   }
@@ -1729,8 +1734,9 @@ fn parameter_attributes_follow_their_parameters_to_the_physical_abi() {
   tribute_cps.func @id(%value: core.i32) -> core.i32 convention(direct) {
     tribute_control.return %value
   }
+  tribute_cps.func_table {conventions = ["cps"], sym_name = "id$cps", targets = [@id]}
   tribute_cps.func @run(%value: core.i32) -> core.i32 convention(cps) {
-    %callee = tribute_cps.func_ref {convention = "cps", func_ref = @id} : !cps
+    %callee = tribute_cps.func_ref {func_ref = @"id$cps"} : !cps
     %result = tribute_cps.call_indirect %callee, %value {convention = "cps"} : core.i32
     tribute_control.return %result
   }
@@ -1823,13 +1829,19 @@ fn func_ref_adapters_cover_every_legal_convention_strengthening() {
   tribute_cps.func @cps(%value: core.i32) -> core.i32 convention(cps) {
     tribute_control.return %value
   }
+  tribute_cps.func_table {conventions = ["direct"], sym_name = "direct$direct", targets = [@direct]}
+  tribute_cps.func_table {conventions = ["evidence_direct"], sym_name = "direct$evidence_direct", targets = [@direct]}
+  tribute_cps.func_table {conventions = ["cps"], sym_name = "direct$cps", targets = [@direct]}
+  tribute_cps.func_table {conventions = ["evidence_direct"], sym_name = "evidence$evidence_direct", targets = [@evidence]}
+  tribute_cps.func_table {conventions = ["cps"], sym_name = "evidence$cps", targets = [@evidence]}
+  tribute_cps.func_table {conventions = ["cps"], sym_name = "cps$cps", targets = [@cps]}
   tribute_cps.func @refs(%value: core.i32) -> core.i32 convention(cps) {
-    %direct_direct = tribute_cps.func_ref {convention = "direct", func_ref = @direct} : !direct
-    %direct_evidence = tribute_cps.func_ref {convention = "evidence_direct", func_ref = @direct} : !evidence
-    %direct_cps = tribute_cps.func_ref {convention = "cps", func_ref = @direct} : !cps
-    %evidence_evidence = tribute_cps.func_ref {convention = "evidence_direct", func_ref = @evidence} : !evidence
-    %evidence_cps = tribute_cps.func_ref {convention = "cps", func_ref = @evidence} : !cps
-    %cps_cps = tribute_cps.func_ref {convention = "cps", func_ref = @cps} : !cps
+    %direct_direct = tribute_cps.func_ref {func_ref = @"direct$direct"} : !direct
+    %direct_evidence = tribute_cps.func_ref {func_ref = @"direct$evidence_direct"} : !evidence
+    %direct_cps = tribute_cps.func_ref {func_ref = @"direct$cps"} : !cps
+    %evidence_evidence = tribute_cps.func_ref {func_ref = @"evidence$evidence_direct"} : !evidence
+    %evidence_cps = tribute_cps.func_ref {func_ref = @"evidence$cps"} : !cps
+    %cps_cps = tribute_cps.func_ref {func_ref = @"cps$cps"} : !cps
     tribute_control.return %value
   }
 }"#;
@@ -1857,8 +1869,9 @@ fn func_ref_in_a_nested_module_is_adapted_in_that_module() {
     tribute_cps.func @id(%value: core.i32) -> core.i32 convention(direct) {
       tribute_control.return %value
     }
+    tribute_cps.func_table {conventions = ["direct"], sym_name = "id$direct", targets = [@id]}
     tribute_cps.func @refs(%value: core.i32) -> core.i32 convention(direct) {
-      %reference = tribute_cps.func_ref {convention = "direct", func_ref = @id} : !direct
+      %reference = tribute_cps.func_ref {func_ref = @"id$direct"} : !direct
       tribute_control.return %value
     }
   }
@@ -1890,15 +1903,19 @@ fn func_ref_in_a_nested_module_is_adapted_in_that_module() {
     }
 }
 
+/// A classless tail lets a table enter a `Cps` target through a weaker
+/// convention, whose value-delimiter adapter legalization does not build
+/// yet.
 #[test]
-fn weaker_func_ref_adapter_is_rejected_before_mutation() {
+fn a_table_entry_weaker_than_its_cps_target_is_rejected_before_mutation() {
     let input = r#"core.module @test {
   !evidence = tribute_control.func_sig<(core.i32) -> core.i32>
   tribute_cps.func @cps(%value: core.i32) -> core.i32 convention(cps) {
     tribute_control.return %value
   }
+  tribute_cps.func_table {conventions = ["evidence_direct"], sym_name = "cps$evidence_direct", targets = [@cps]}
   tribute_cps.func @broken(%value: core.i32) -> core.i32 convention(evidence_direct) {
-    %callee = tribute_cps.func_ref {convention = "evidence_direct", func_ref = @cps} : !evidence
+    %callee = tribute_cps.func_ref {func_ref = @"cps$evidence_direct"} : !evidence
     tribute_control.return %value
   }
 }"#;
@@ -1908,7 +1925,7 @@ fn weaker_func_ref_adapter_is_rejected_before_mutation() {
     assert!(
         error
             .to_string()
-            .contains("result convention must be at least as strong"),
+            .contains("a function table entry weaker than its target is not supported"),
         "{error}"
     );
 }

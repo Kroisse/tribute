@@ -129,7 +129,7 @@ mod tests {
             r#"core.module @m {
   !f = tribute_control.func_sig<() -> core.i32>
   tribute_cps.func @main() -> core.i32 convention(direct) {
-    %f = tribute_cps.func_ref {convention = "direct", func_ref = @"used$8"} : !f
+    %f = tribute_cps.func_ref {func_ref = @"used$8"} : !f
     %r = tribute_cps.call_indirect %f {convention = "direct"} : core.i32
     tribute_control.return %r
   }

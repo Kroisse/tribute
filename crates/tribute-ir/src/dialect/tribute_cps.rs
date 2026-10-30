@@ -142,12 +142,7 @@ mod tribute_cps {
     #[verify]
     #[flags(Pure)]
     #[implements(CallableResultOrigin)]
-    fn func_ref(
-        func_ref: Attr<SymbolRef>,
-        convention: Attr<CallingConvention>,
-        row_args: Option<Attr<[Row]>>,
-    ) -> Value<impl FuncSig> {
-    }
+    fn func_ref(func_ref: Attr<SymbolRef>, row_args: Option<Attr<[Row]>>) -> Value<impl FuncSig> {}
 
     /// The convention table of a named function for one set of class
     /// arguments, with a target instance per convention its row reads.
@@ -189,6 +184,7 @@ mod tribute_cps {
     ///   only while a live `tribute_cps.func_ref` uses it, and global DCE
     ///   removes it once none does (`new-plans/ir.md`, "Core Invariants").
     /// - **Location:** the span of the referenced definition.
+    #[verify]
     #[implements(trunk_ir::op_interface::SymbolDefinition)]
     fn func_table(
         sym_name: Attr<String>,
@@ -296,6 +292,57 @@ pub fn body_conventions(
     .then_some(conventions)
 }
 
+/// Why a `tribute_cps.func_table`'s conventions do not name its targets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, derive_more::Display, derive_more::Error)]
+#[display("`conventions` must be strictly increasing, with one target for each")]
+pub struct MalformedTable;
+
+/// The conventions and targets of `op`, when it is a
+/// `tribute_cps.func_table` whose lists are well formed, in convention order.
+pub fn table_entries(
+    ctx: &IrContext,
+    op: trunk_ir::refs::OpRef,
+) -> Option<Vec<(CallingConvention, trunk_ir::SymbolPath)>> {
+    let table = FuncTable::from_op(ctx, op).ok()?;
+    let trunk_ir::types::Attribute::List(conventions) = ctx.op_attrs(op).get(CONVENTIONS_ATTR)?
+    else {
+        return None;
+    };
+    let conventions = conventions
+        .iter()
+        .map(|convention| CallingConvention::from_attribute(ctx, convention))
+        .collect::<Option<Vec<_>>>()?;
+    let targets: Vec<_> = table.targets(ctx).cloned().collect();
+    (!conventions.is_empty()
+        && conventions.is_sorted_by(|a, b| a < b)
+        && conventions.len() == targets.len())
+    .then(|| conventions.into_iter().zip(targets).collect())
+}
+
+/// The `tribute_cps.func_table` that `op`, a `tribute_cps.func_ref`, names:
+/// the table of that name directly in the nearest enclosing module.
+pub fn func_ref_table(ctx: &IrContext, op: trunk_ir::refs::OpRef) -> Option<trunk_ir::refs::OpRef> {
+    let name = FuncRef::from_op(ctx, op)
+        .ok()?
+        .func_ref(ctx)
+        .as_simple()?
+        .clone();
+    let mut current = op;
+    let module = loop {
+        let block = ctx.op(current).parent_block?;
+        current = ctx.region(ctx.block(block).parent_region?).parent_op?;
+        if trunk_ir::dialect::core::Module::matches(ctx, current) {
+            break trunk_ir::rewrite::Module::from(
+                trunk_ir::dialect::core::Module::from_op(ctx, current).ok()?,
+            );
+        }
+    };
+    module.ops(ctx).iter().copied().find(|&table| {
+        FuncTable::matches(ctx, table)
+            && ctx.op_attrs(table).get_str("sym_name") == Some(name.as_str())
+    })
+}
+
 /// The convention of the body of `owner`, a callable, that holds `op`: the
 /// convention of a `tribute_cps.func`, or of the `tribute_cps.lambda` body
 /// `op` is in.
@@ -325,7 +372,9 @@ pub fn convention_at(
 
 /// Replace `op`, a `tribute_control` func, lambda, func_ref, call_indirect,
 /// or tail_call_indirect, with its operation here, which declares
-/// `convention`; a lambda's one body has that convention. The replacement takes the operation's place, operands,
+/// `convention`; a lambda's one body has that convention, and a func_ref
+/// declares none, since its table holds its conventions. The replacement
+/// takes the operation's place, operands,
 /// attributes, and regions, and the uses of its results.
 ///
 /// # Panics
@@ -367,6 +416,8 @@ pub fn replace_control_op(
             CONVENTIONS_ATTR,
             trunk_ir::types::Attribute::List(vec![convention]),
         )
+    } else if name == FuncRef::NAME {
+        builder
     } else {
         builder.attr(CONVENTION_ATTR, convention)
     };
@@ -416,8 +467,16 @@ impl trunk_ir::ops::Verify for Lambda {
 
 impl trunk_ir::ops::Verify for FuncRef {
     fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
-        verify_convention(ctx, self.op_ref())?;
         Ok(tribute_control::row_args(ctx, self.op_ref()).map(drop)?)
+    }
+}
+
+impl trunk_ir::ops::Verify for FuncTable {
+    fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
+        match table_entries(ctx, self.op_ref()) {
+            Some(_) => Ok(()),
+            None => Err(MalformedTable.into()),
+        }
     }
 }
 
@@ -582,7 +641,7 @@ impl CallableResultOrigin for FuncRef {
     ) -> bool {
         ctx.op_attrs(self.op_ref())
             .get_symbol_ref("func_ref")
-            .is_some_and(|symbol| query.names_verified_function(ctx, self.op_ref(), symbol))
+            .is_some_and(|symbol| query.names_verified_table(ctx, self.op_ref(), symbol))
     }
 }
 

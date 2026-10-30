@@ -11,6 +11,7 @@ const MODULE: &str = r#"core.module @test {
   !t1 = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>
 
   tribute_cps.func @declared(%arg0: core.i32) -> core.i32 convention(direct)
+  tribute_cps.func_table {conventions = ["direct"], sym_name = "declared$8", targets = [@declared]}
   tribute_cps.func @apply(%0: !t0, %1: core.i32) -> core.i32 convention(direct) {
       %2 = tribute_cps.call_indirect %0, %1 {convention = "direct"} : core.i32
       tribute_control.return %2
@@ -21,7 +22,7 @@ const MODULE: &str = r#"core.module @test {
             tribute_control.return %0
         }
       }
-      %3 = tribute_cps.func_ref {convention = "cps", func_ref = @declared} : !t0
+      %3 = tribute_cps.func_ref {func_ref = @"declared$8"} : !t0
       tribute_cps.tail_call_indirect %1, %0 {convention = "cps"}
   }
 }
@@ -45,7 +46,7 @@ fn concise_forms_write_the_operation_convention() {
         declared_convention(&ctx, ops[0]),
         Some(CallingConvention::Direct)
     );
-    let outer = Func::from_op(&ctx, ops[2]).unwrap();
+    let outer = Func::from_op(&ctx, ops[3]).unwrap();
     assert_eq!(outer.convention(&ctx), CallingConvention::Cps);
     let body = ctx.region(outer.body(&ctx)).blocks[0];
     let lambda = Lambda::from_op(&ctx, ctx.block(body).ops[0]).unwrap();
@@ -204,25 +205,80 @@ fn an_indirect_tail_call_is_not_stronger_than_its_callable() {
     );
 }
 
+/// A module whose function table enters `@target`, an instance of
+/// convention `target`, through `entry`.
+fn table_module(target: &str, entry: &str) -> String {
+    format!(
+        r#"core.module @test {{
+  tribute_cps.func @target() -> core.i32 convention({target}) {{
+    %0 = arith.const {{value = 1}} : core.i32
+    tribute_control.return %0
+  }}
+  tribute_cps.func_table {{conventions = ["{entry}"], sym_name = "target$8", targets = [@target]}}
+  tribute_cps.func @f() -> core.i32 convention(direct) {{
+    %0 = tribute_cps.func_ref {{func_ref = @"target$8"}} : tribute_control.func_sig<() -> core.i32>
+    %1 = tribute_cps.call_indirect %0 {{convention = "direct"}} : core.i32
+    tribute_control.return %1
+  }}
+}}
+"#
+    )
+}
+
 #[test]
-fn a_function_reference_is_not_weaker_than_its_instance() {
+fn a_function_table_entry_is_not_weaker_than_its_target() {
+    assert_eq!(
+        messages(&table_module("evidence_direct", "direct")),
+        ["function table entry `direct` is weaker than its target @target"]
+    );
+}
+
+/// A classless tail can make the target `Cps` while the value's row needs
+/// a weaker entry.
+#[test]
+fn a_function_table_entry_may_be_weaker_than_a_cps_target() {
+    assert_eq!(
+        messages(&table_module("cps", "direct")),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_function_reference_names_a_function_table() {
     let errors = messages(
         r#"core.module @test {
-  tribute_cps.func @target() -> core.i32 convention(cps) {
+  tribute_cps.func @target() -> core.i32 convention(direct) {
     %0 = arith.const {value = 1} : core.i32
     tribute_control.return %0
   }
   tribute_cps.func @f() -> core.i32 convention(direct) {
-    %0 = tribute_cps.func_ref {convention = "direct", func_ref = @target} : tribute_control.func_sig<() -> core.i32>
+    %0 = tribute_cps.func_ref {func_ref = @target} : tribute_control.func_sig<() -> core.i32>
     %1 = tribute_cps.call_indirect %0 {convention = "direct"} : core.i32
     tribute_control.return %1
   }
 }
 "#,
     );
-    assert_eq!(
-        errors,
-        ["func_ref result convention must be at least as strong as its target"]
+    assert!(
+        errors.contains(&"unresolved function table @target".to_owned()),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn a_function_table_names_one_target_per_increasing_convention() {
+    let (ctx, module) = parse(
+        r#"core.module @test {
+  tribute_cps.func_table {conventions = ["cps", "direct"], sym_name = "t", targets = [@a, @b]}
+}
+"#,
+    );
+    let op = module.ops(&ctx)[0];
+    let errors = OpDef::of(&ctx, op).unwrap().verify(&ctx, op);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0].to_string().contains("strictly increasing"),
+        "{errors:?}"
     );
 }
 

@@ -188,8 +188,16 @@ impl Function {
     }
 }
 
-/// The name a `call`, `tail_call`, or `func_ref` refers to.
+/// The name a `call`, `tail_call`, or `func_ref` refers to, through its
+/// table for a `tribute_cps.func_ref`.
 pub(crate) fn reference_callee(ctx: &IrContext, op: OpRef) -> Option<String> {
+    if tribute_cps::FuncRef::matches(ctx, op) {
+        // Every table class specialization makes has its instance as its
+        // only target.
+        let table = tribute_cps::func_ref_table(ctx, op)?;
+        let (_, target) = tribute_cps::table_entries(ctx, table)?.into_iter().next()?;
+        return Some(target.leaf()?.to_string());
+    }
     let key = if tribute_control::is_func_ref(ctx, op) {
         "func_ref"
     } else if tribute_control::Call::matches(ctx, op) || tribute_control::TailCall::matches(ctx, op)
