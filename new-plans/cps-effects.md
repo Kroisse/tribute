@@ -99,7 +99,7 @@ fn(a) -> b ≡ fn(a) ->{e} b
 바뀌지 않는다. Row의 tail은 다음과 같이 읽는다.
 
 ```text
-class 변수인 tail                       → 그 인스턴스에 고정된 class
+class 변수인 tail                       → 그 인스턴스에 고정된 class(상한이면 상한)
 정의 자신의 tail 중 class 변수가 아닌 것 → 요구 없음
 그 밖의 tail                            → Cps
 ```
@@ -179,26 +179,31 @@ class 변수를 갖지 않는다.
 **`let`에 묶인 람다.** 지역 스킴이 양화한 row 변수의 class는 사용처마다 row
 인자에서 계산한다. IR에서 그 row 인자는 사용처의
 [`instantiate`](../crates/tribute-ir/src/dialect/tribute_control.rs)가
-가진다. 람다의 본문과 값 나누기는 [convention entry](ir.md#convention-entry)를
-따른다. 본문마다 본문의 참조를 그 class로 읽으므로, 본문이 참조하는 정의도 본문마다
-따로 인스턴스를 고른다. 다른 지역 람다의 본문 안에 있는 사용처는 그 람다의 본문이
+가진다. 람다의 본문과 class 읽기는 [convention entry](ir.md#convention-entry)를
+따른다. 사용들이 binder에 서로 다른 class를 넘겨도 값을 나누지 않고 그 binder를
+상한으로 읽는다. 본문마다 본문의 참조를 그 읽기로 읽으므로, 본문이 참조하는 정의도
+본문마다 따로 인스턴스를 고른다. 다른 지역 람다의 본문 안에 있는 사용처는 그 람다의 본문이
 정해진 뒤에 계산한다.
 
 **Class 인자.** 참조 지점의 class 인자는 참조가 넘기는 row 인자(`row_args`)에서
-계산한다. Callable 타입에서 역추론하지 않는다.
+계산한다. Callable 타입에서 역추론하지 않는다. Class 인자는 정확한 class이거나
+상한이다([class 읽기](ir.md#convention-entry)).
 
 ```text
 class({A₁, ..., Aₙ})     = requirement(A₁) ⊔ ... ⊔ requirement(Aₙ)
 class({A₁, ..., Aₙ | e}) = 위 값 ⊔ class(e)
 
 class(e) = 참조를 포함한 인스턴스가 e에 고정한 class   (e가 그 인스턴스의 class 변수)
+         = 참조를 담은 본문이 e를 읽는 class          (e가 람다가 양화한 local binder)
          = Cps                                          (그 밖의 row 변수)
 ```
 
 `requirement`는 ability 단위의
-[convention bound](#row와-호출-규약)다.
+[convention bound](#row와-호출-규약)다. 합에 상한이 섞이면 결과도 상한이며, 정확한
+부분만으로 같은 class가 되면 정확한 class다.
 
-**인스턴스.** 인스턴스 key는 `(정의, class 인자)`다. 타입 인자는 frontend의 타입
+**인스턴스.** 인스턴스 key는 `(정의, class 인자)`이며, 같은 class라도 정확한 것과
+상한은 다른 인자다. 타입 인자는 frontend의 타입
 특수화가 이미 정의 하나로 만들어 두었으므로 key의 정의가 그것을 대신한다. Class
 인자가 모두 `Cps`인 인스턴스는 class 특수화가 없는 정의와 같은 convention과 이름을
 가진다.
@@ -209,15 +214,17 @@ Root `main`은 참조 없이 존재하는 인스턴스다. 그 row를 instantiat
 **인스턴스 안에서의 규칙.** 인스턴스는 class 변수에서 class로 가는 표를 가진다.
 Class 특수화 pass가 row의 convention을 계산할 때 tail이 표에 있으면 그 class를 쓰고,
 없으면 열린 row의 규칙대로 `Cps`를 쓴다. 매개변수의 callable 타입, 그 callable의 호출,
-인스턴스 자신의 worker convention이 모두 이 표를 따른다. 따라서 호출자가 넘긴
-callable의 convention과 인스턴스가 기대하는 convention이 class 인자에서 함께
-정해진다.
+인스턴스 자신의 worker convention이 모두 이 표를 따른다. 표의 class가 상한이면 호출과
+worker convention은 그 상한을 쓰고, 그 row로 만드는 callable은 하한부터 상한까지
+본문이나 entry 대상을 둔다. 따라서 호출자가 넘긴 callable의 convention과 인스턴스가
+기대하는 convention이 class 인자에서 함께 정해진다.
 
 Class 특수화는 row를 스킴이나 metadata에 치환하지 않는다. 호출의 evidence 선택은
 typechecking이 원래 정의에 대해 계산한 것을 그대로 물려받으며 다시 계산하지 않는다.
 Evidence를 받지 않는 convention의 호출에는 선택을 싣지 않는다.
 
-Class 값은 셋뿐이므로 class 변수가 `n`개인 정의의 인스턴스는 최대 `3ⁿ`개다. 재귀가
+Class 인자는 정확한 class 셋과 상한 둘(`EvidenceDirect` 이하, `Cps` 이하)뿐이므로
+class 변수가 `n`개인 정의의 인스턴스는 최대 `5ⁿ`개다. 재귀가
 새 class 인자를 만들어도 이 한도 안에서 고정점에 도달한다.
 
 ### Class 특수화 pass
@@ -231,9 +238,10 @@ row와 [row binder](ir.md#row-binder), 참조의 `row_args`, 지역 람다의
 
 - 위 규칙으로 정의마다 class 변수를 정하고, root `main`과 참조의 class 인자에서 필요한
   인스턴스를 모은다.
-- 정의를 인스턴스마다 `tribute_cps.func`로 복제한다. Class 인자가 모두 `Cps`가 아닌 인스턴스의 이름은 정의
+- 정의를 인스턴스마다 `tribute_cps.func`로 복제한다. Class 인자가 모두 정확한 `Cps`가 아닌 인스턴스의 이름은 정의
   이름 뒤에 `$9`와 class 변수마다 `D`(`Direct`), `E`(`EvidenceDirect`), `C`(`Cps`) 한
-  글자를 붙인 것이다. 타입 인자 조각은 숫자로 시작하지 않으므로 이 접미사와 섞이지
+  글자를 붙인 것이다. 상한은 소문자 `e`(`EvidenceDirect` 이하)와 `c`(`Cps` 이하)로
+  적는다. 타입 인자 조각은 숫자로 시작하지 않으므로 이 접미사와 섞이지
   않는다. 참조는 자기 class 인자의 인스턴스를 가리키도록 바꾼다.
 
   ```text
@@ -245,25 +253,21 @@ row와 [row binder](ir.md#row-binder), 참조의 `row_args`, 지역 람다의
 
 - 인스턴스 안의 람다마다 [convention entry](ir.md#convention-entry)를 정해
   `tribute_cps.lambda`로 바꾼다.
-  1. 람다의 사용이 고르는 class마다 본문 하나를 둔다. 본문은 그 class로 다시 읽은
-     람다 본문의 복사이며, 그 안에서 row를 양화하는 람다는 정의의 binder 목록 끝에
-     새 `local` binder를 받는다.
+  1. [본문 규칙](ir.md#convention-entry)이 정하는 class마다 본문 하나를 둔다. 본문은
+     그 class로 다시 읽은 람다 본문의 복사이며, 그 안에서 row를 양화하는 람다는
+     정의의 binder 목록 끝에 새 `local` binder를 받는다.
   2. 본문이 없는 convention entry는 더 약한 본문을 부르는 adapter나 trap entry로 채운다.
-  3. 값을 나누지 않는 한 람다 op, 결과 값, capture 목록, `instantiate`는 하나로
-     남으므로 사용처를 다시 연결하지 않는다. Capture 목록은 모든 본문의 외부 참조와
-     같게 다시 계산한다.
-  4. 같은 class를 고르는 사용들이 양화한 binder에 서로 다른 class 조합을 넘기면
-     ([값 나누기](ir.md#convention-entry)), 넘기는 조합마다 람다를 복제해 값을 나누고
-     각 사용을 자기 조합의 복사본으로 연결한다. 본문 순서로 처음 나오는 사용의
-     조합이 원래 람다를 갖고, 다른 조합의 복사본은 원래 람다 바로 뒤에 놓인다. 복사본은
-     자기 조합을 넘기는 사용들이 고르는 class의 본문 하나만 가진다. 다시
-     연결한 `instantiate`가 다른 람다의 본문 안에 있으면 그 람다의 capture도 본문의
-     외부 참조와 같게 고치며, 복사본은 capture 순서에서 원래 람다의 자리를 잇는다.
-  5. 본문 안의 사용이 바깥 람다에 새 class를 고를 수 있으므로, 새 본문과 새 복사본이
-     없을 때까지 지역 class를 다시 정한다. 람다마다 본문은 셋을 넘지 않고 조합은
-     유한하므로 이 반복은 끝난다.
-- `func_ref`마다 `tribute_cps.func_ref`로 바꾸며 entry의 대상 인스턴스를
-  `row_args`의 class 인자로 정하고, 그 인스턴스를 인스턴스 수집에 더한다.
+  3. 람다 op, 결과 값, capture 목록, `instantiate`는 하나로 남으므로 사용처를 다시
+     연결하지 않는다. 같은 class를 고르는 사용들이 양화한 binder에 서로 다른 class를
+     넘겨도 값을 나누지 않으며, 그 본문은 binder를 상한으로 읽는다. Capture 목록은
+     모든 본문의 외부 참조와 같게 다시 계산한다.
+  4. 본문 안의 사용이 바깥 람다에 새 class를 고를 수 있으므로, 새 본문이 없을 때까지
+     지역 class를 다시 정한다. 람다마다 본문은 셋을 넘지 않으므로 이 반복은 끝난다.
+- `func_ref`마다 그 정의와 class 인자의 `tribute_cps.func_table`을 가리키는
+  `tribute_cps.func_ref`로 바꾼다. Table은 정의와 class 인자마다 하나만 만들며, 그
+  이름은 그 class 인자의 인스턴스 이름 뒤에 `$8`을 붙인 것이다. Table은
+  [함수 참조](ir.md#convention-entry) 규칙이 정하는 class마다 대상 인스턴스를
+  `row_args`의 class 인자로 정하고, 그 인스턴스들을 인스턴스 수집에 더한다.
 - 간접 이전을 `tribute_cps.call_indirect`와 `tribute_cps.tail_call_indirect`로 바꾸며
   [convention을 갖는 자리](ir.md#convention과-class-특수화)에 convention을 쓴다. 정의
   자신의 convention은 [tail 규칙](#row와-호출-규약)으로 읽는다.
@@ -395,7 +399,7 @@ arm의 `scf.yield`)를 arm 안으로 복제해 이어 legalize하고, tail call�
 뒤에 operation이 남지 않는다. Suffix에 넘길 evidence와 `ContinuationFrame<R>`는
 arm이 감싼 callable의 것을 그대로 쓴다.
 
-`func_ref`가 `Direct`/`EvidenceDirect` entry마다 만드는 entry 함수는
+`func_table`이 `Direct`/`EvidenceDirect` entry마다 만드는 entry 함수는
 target이 platform `abi`를 유지하지 않고 target 결과가 entry 결과와 같으면
 target을 `func.tail_call`로 부른다. 이 경우 callable value를 통한 `become`은
 entry frame을 남기지 않는다. Platform `abi` target의 entry 함수는 일반 호출 뒤
@@ -449,10 +453,13 @@ direct/indirect call, return의 대응 관계를 검증하고 physical symbol과
   parameter가 있지만 environment는 없다. 본문이 없는 더 강한 convention entry의
   adapter는 legalization이 만들어 `closure.lambda`에 적는다. 기존 closure
   lowering이 본문마다 environment를 interpose한다.
-- `tribute_cps.func_ref`는 capture 없는 `closure.new`와 entry마다 env-bearing
-  `func.func`를 만든다. Entry 함수는 그 entry의 convention을 사용하고 필요한 hidden
-  operand와 source argument를 대상 physical worker에 전달하므로 named function도
-  다른 closure와 같은 entry ABI를 갖는다. 기존 closure lowering은 이 `closure.new`를
+- `tribute_cps.func_table`은 entry마다 env-bearing `func.func`를 한 번 만들고,
+  `tribute_cps.func_ref`는 그 entry들을 담은 capture 없는 `closure.new`가 된다.
+  Table을 공유하는 참조들은 같은 entry 함수를 쓴다. 대상 인스턴스가 있는 entry는 그
+  대상을 부르고, 없는 entry는 같은 채우기 규칙에 따라 adapter나 trap entry다.
+  Entry 함수는 그 entry의 convention을 사용하고 필요한 hidden operand와 source
+  argument를 대상 physical worker에 전달하므로 named function도 다른 closure와 같은
+  entry ABI를 갖는다. 기존 closure lowering은 이 `closure.new`를
   convention table과 closure base 할당으로 바꾼다.
 - `Direct`/`EvidenceDirect`의 `tribute_control.call`과
   `tribute_cps.call_indirect`는 각각 physical `func.call`과 `func.call_indirect`가

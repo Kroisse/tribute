@@ -730,14 +730,16 @@ convention 속성과 physical `func.func_sig`나 `closure.closure` component를
 | `tribute_control.resume` | resumptive general handler arm에 바인딩된 affine resumption을 소비 |
 | `tribute_control.yield` | 실행 가능한 `tribute_control` region을 logical value로 종료 |
 
-Class 특수화가 만드는 `tribute_cps` operation은 다음과 같다. 각각 같은 이름의
-`tribute_control` operation에 convention을 더한 것이다.
+Class 특수화가 만드는 `tribute_cps` operation은 다음과 같다. `func_table`을 뺀
+각각은 같은 이름의 `tribute_control` operation에 convention을 더한 것이고,
+`func_table`은 `func_ref`가 가리키는 convention table 정의다.
 
 | Operation | 용도 |
 | ---- | ---- |
 | `tribute_cps.func` | convention을 가진 named callable 인스턴스 |
 | `tribute_cps.lambda` | convention entry 목록을 가진 source lambda |
-| `tribute_cps.func_ref` | convention entry마다 대상 인스턴스를 가진 named function 참조 |
+| `tribute_cps.func_ref` | `func_table`을 가리키는 named function 참조 |
+| `tribute_cps.func_table` | convention entry마다 대상 인스턴스를 적은 named function의 convention table |
 | `tribute_cps.call_indirect` | convention을 가진 callable value 간접 호출 |
 | `tribute_cps.tail_call_indirect` | convention을 가진 callable value 간접 proper tail call |
 
@@ -817,7 +819,7 @@ binder가 없다. `ability_arg`는 ability instance의 symbol이 그 인자를 �
 사용이 없고, 그 변수는 `body`다. Binder 종류는 row의 구조만 기록하며 실행 전략을 담지
 않는다. CPS 전략의 class 특수화는 tail의 class를 binder 종류에 따라 읽는다. `param`은
 그 인스턴스가 고정한 class, `ability_arg`와 `body`는 `Cps`다. `local`의 class는 그것을
-소유한 람다의 본문마다 다르며, 그 [convention entry](#convention-entry)의 convention이
+소유한 람다의 본문마다 다르며, [convention entry](#convention-entry)의 class 읽기가
 정한다.
 
 정의 안의 모든 tail은 이 목록의 index다. Signature, 중첩된 callable type, block
@@ -852,7 +854,7 @@ binder를 공유하며, entry마다 그 binder에 class를 하나씩 고정한�
 
 `instantiate`는 type의 row만 치환하며 convention이나 entry를 고르지 않는다. 한 람다
 식은 `tribute_control.lambda` 하나이고, 사용처마다 따로 만들지 않는다. Class
-특수화가 [본문](#convention-entry) 규칙으로 값을 나눌 때만 복사본이 생긴다. 쓰이지 않는
+특수화도 람다를 값 하나로 두며 [본문](#convention-entry)만 class마다 늘린다. 쓰이지 않는
 람다는 양화할 사용이 없으므로 그 변수는 `body`다. 다른 `let`의 값으로 람다를 다시
 묶는 별칭은 람다가 아닌 값이다. 별칭 자리에서 람다를 한 번 인스턴스화하며, 별칭의
 지역 scheme이 양화한 변수는 `body`다. 람다가 아닌 binding의 사용은 `instantiate`를
@@ -894,8 +896,8 @@ operation으로 바꾼다.
   [convention entry](#convention-entry)마다 그 entry를 채우는 본문을 가진다.
 - `tribute_cps.call_indirect`와 `tribute_cps.tail_call_indirect`는 callee를 부르는
   convention을 가진다.
-- `tribute_cps.func_ref`는 convention entry마다 그 entry로 들어갈 대상 인스턴스를
-  가진다.
+- `tribute_cps.func_ref`는 `tribute_cps.func_table` 하나를 가리키고, 그 table이
+  convention entry마다 그 entry로 들어갈 대상 인스턴스를 가진다.
 
 나머지 `tribute_control` operation(`call`, `tail_call`, `return`, `instantiate`,
 `perform`, `handle`, `handler`, `resume`, `yield`)은 그대로 남아 `tribute_cps`
@@ -928,28 +930,54 @@ adapter, trap entry 가운데 하나다. 물리 ABI(hidden parameter)는 그 con
 convention의 convention entry로 들어가며, 실행 중에 entry를 고르지 않는다. 그래서
 값마다 convention entry는 `Direct`, `EvidenceDirect`, `Cps` 셋을 넘지 않는다.
 
-**본문.** 람다는 그 람다의 사용이 고르는 class마다 본문 하나를 가지며, 다른 class의
-본문은 없다. 사용의 class는 그 사용의 `instantiate`가 람다 자신의 row에 넘기는 row의
-class다. Row를 양화하지 않는 람다는 사용이 하나의 class만 고르므로 본문이 하나다.
-Class `c`의 본문은 람다를 다음처럼 다시 읽은 것이다.
+**Class 읽기.** Class 특수화는 row의 class를 정확한 class나 상한으로 읽는다. 상한
+`c`로 읽은 row는 실행 중에 `c`보다 약하거나 같은 어느 class든 요구할 수 있다는
+뜻이다. 상한 `Direct`는 정확한 `Direct`와 같다. Row의 **하한**은 row에 적힌 ability
+instance들의 requirement를 합친 class이며, row가 실행 중에 요구하는 class는 하한보다
+약하지 않다.
 
-- 람다가 양화한 `local` binder는 class `c`를 고르는 사용들이 그 binder에 넘기는
-  row의 class로 읽는다. 람다 자신의 row에 나타나는지와 관계없다.
-- 둘러싼 인스턴스의 binder는 그 인스턴스가 고정한 class로 읽는다.
+- 둘러싼 인스턴스의 class 변수는 그 인스턴스가 고정한 정확한 class나 상한으로 읽는다.
+- 람다가 양화한 `local` binder는 아래 본문 `c` 안에서, class `c`를 고르는 사용들이 그
+  binder에 넘기는 row의 class로 읽는다. 그 사용들이 모두 같은 정확한 class를 넘기면
+  그 class이고, 그렇지 않으면 넘기는 class들을 합친 상한이다. 람다 자신의 row에
+  나타나는지와 관계없다.
+- Row의 class는 하한과 tail의 class를 합친 것이다. Tail이 상한이면 row의 class도
+  상한이다. 다만 하한이 그 상한과 같으면 정확한 class다.
 
-**값 나누기.** 같은 class `c`를 고르는 사용들이 양화한 binder에 서로 다른 class
-조합을 넘기면, class 특수화는 넘기는 조합마다 람다를 값 하나씩으로 나누고 각 사용을
-자기 조합의 값에 연결한다. 나눈 값은 각자 capture 목록과 convention table을 가진다.
-그래서 한 값 안에서는 같은 class를 고르는 사용들이 같은 조합을 넘기며, 본문은
-class마다 하나다.
+**본문.** 람다는 다음 class마다 본문 하나를 가지며, 다른 class의 본문은 없다.
 
-조합을 더 강한 class로 합쳐 읽을 수 없는 이유는 본문이 그 binder의 row로 만드는
-closure에 있다. 그 closure는 본문이 읽은 class를 생성 class로 가지므로, 합쳐 읽은
-class보다 약한 class로 그 closure를 부르는 쪽이 trap entry에 닿는다. 예를 들어 두
-사용이 모두 `Cps`를 고르면서 binder 하나에 각각 `Direct`와 `Cps` class의 row를
-넘긴다고 하자. 그 binder를 `Cps`로 읽은 본문이 돌려준 closure를 첫 사용 쪽은
-`Direct`로 부르므로 trap entry에 닿는다. Binder가 람다 자신의 row에 있어도 그 row의
-다른 ability 때문에 `c`가 binder의 class보다 강할 수 있으므로 같다.
+- `instantiate`로만 쓰이는 `let` 람다는 사용이 고르는 class마다 본문을 둔다. 사용의
+  class는 그 사용의 `instantiate`가 람다 자신의 row에 넘기는 row의 class다.
+- 그 밖의 람다는 자기 row의 class가 정확하면 그 class의 본문 하나를 둔다.
+- 사용의 class나 자기 row의 class가 상한이면, 그 row의 하한부터 상한까지의 class마다
+  본문을 둔다.
+
+Class `c`의 본문은 위 읽기를 따르되, 자기 row의 tail이 상한이면 그 상한을 `c`로
+좁혀 상한으로 읽는다. 상한 이하의 class로 부르면 그 class의 본문으로 들어오므로,
+본문 `c`에 들어온 값의 실제 class는 `c`보다 강하지 않다는 것만 알 수 있다. 그래서
+하한이 `c`보다 약해도 tail을 정확한 `c`로 읽지 않으며, 본문 `c`가 그 tail로 만드는
+callable도 하한부터 `c`까지 본문을 가진다.
+
+**값은 나누지 않는다.** 같은 class를 고르는 사용들이 양화한 binder에 서로 다른 class를
+넘겨도 람다는 값 하나다. 그 binder로 읽는 row가 상한이 되고, 본문이 그 row로 만드는
+callable은 하한부터 상한까지 본문을 가지므로 어느 사용 쪽에서 불러도 맞는 본문이
+있다. 예를 들어 `let wrap = fn(k) { fn() { k() } }`를 순수한 `k`와 `EvidenceDirect`인
+`k`로 쓰면, 두 사용은 모두 `Direct`를 고르고 `wrap`은 `Direct` 본문 하나를 가진다. 그
+본문이 만드는 `fn() { k() }`는 상한 `EvidenceDirect`의 row를 가지므로 `Direct`와
+`EvidenceDirect` 본문을 함께 가지며, 각 본문은 `k`를 자기 convention으로 부른다.
+
+이 규칙은 다음 두 사실에 기댄다.
+
+- 상한으로 읽은 row로 만든 값의 실제 class는 그 row의 하한과 상한 사이에 있고, 값이
+  놓이는 자리의 class는 실제 class보다 약하지 않다. 상한 이하로 부르면 그 class의
+  본문이 있고, 상한보다 강하게 부르면 상한 본문을 부르는 adapter가 있다.
+- 간접 이전은 상한으로 부른다. 본문이 어떤 tail의 callable을 부르면 그 tail은 본문을
+  담은 callable의 row에도 있다. `handle`은 ability instance를 처리할 뿐 tail을 지우지
+  않기 때문이다. 그래서 그 상한은 본문의 convention보다 강하지 않다.
+
+대가는 정확도다. 상한으로 읽은 tail의 callable을 부르면 실제 callee보다 강한 entry로
+들어가 adapter를 거칠 수 있고, 상한으로 읽은 row의 callable은 쓰이지 않는 class의
+본문을 가질 수 있다. 결과는 바뀌지 않는다.
 
 **Capture.** 람다의 capture 목록은 하나이며, 모든 본문이 실제 사용하는 외부 SSA
 값과 일치한다. Capture는 closure 하나에 한 번만 담긴다.
@@ -970,17 +998,27 @@ convention entry들이 adapter 하나를 공유하게 할 수 있다.
 
 **Trap entry.** Trap entry는 그 convention entry의 signature를 가지고 들어오자마자
 trap하는 함수이며, target은 signature가 같은 trap entry들이 하나를 공유하게 한다.
-Trap entry는 실행되지 않는다. 값은 사용을 거쳐서만 다른 자리로 가고, 어떤 값이
-놓이는 자리의 class는 그 값을 만든 사용의 class보다 약하지 않기 때문이다. Class는
-row의 tail에서 계산하고, 값이 tail의 정체를 잃는 자리(별칭, class 없는 tail)는
-`Cps`로만 읽는다. Class 특수화는 확인할 수 있는 것을 확인한다. 모든 간접 이전의
-convention은 그 이전을 담은 인스턴스와 entry의 class 표로 callee type을 읽은 값과
-같아야 하며, 다르면 컴파일 오류다. Trap entry는 값의 흐름을 따라가야만 드러나는
+Trap entry는 실행되지 않는다. 값이 놓이는 자리의 class는 그 값의 실제 class보다
+약하지 않고, 값은 실제 class부터 자기가 읽힌 상한까지의 본문을 모두 갖기 때문이다.
+Class는 row의 tail에서 계산하고, 값이 tail의 정체를 잃는 자리(별칭, class 없는
+tail)는 `Cps`로만 읽는다. Class 특수화는 확인할 수 있는 것을 확인한다. 모든 간접
+이전의 convention은 그 이전을 담은 인스턴스와 본문의 class 읽기로 callee type을 읽은
+class(상한이면 상한)와 같아야 하며, 다르면 컴파일 오류다. Trap entry는 값의 흐름을 따라가야만 드러나는
 위반을 실행 중에 멈추게 하는 안전망이다.
 
-**함수 참조.** `func_ref`는 `row_args`가 고르는 대상의 class 인스턴스 하나를 본문으로
-삼아 같은 규칙으로 convention entry를 채운다. 대상이 class 없는 tail 때문에 그 값의
-row가 요구하는 것보다 강한 `Cps` 인스턴스이면, 더 약한 convention entry는
+**함수 참조.** 함수 참조의 convention entry 대상은 module 수준의 `func_table` 정의
+하나가 모아 가지며, `func_ref`는 그 table을 가리킨다. Table은 정의와 참조의 class
+인자마다 하나이므로, 같은 정의를 같은 class 인자로 참조하는 `func_ref`들은 table을
+공유한다. 그래서 table의 내용은 참조가 넘기는 row가 아니라 정의와 class 인자만으로
+정한다. Class 인자는 넘긴 row의 하한을 담지 않으므로, 같은 class 인자를 넘기는
+참조들도 하한이 서로 다를 수 있기 때문이다. Table은 정의의 row를 class 인자로 읽은
+class가 정확하면 그 class의 대상 하나를 두고, 상한이면 정의의 row의 하한부터 그
+상한까지 class마다 대상 하나를 둔다. 참조가 넘기는 row는 정의의 row에 적힌 ability
+instance를 그대로 가지므로, 참조된 값의 실제 class는 이 범위 안에 있다. Class `c`의
+대상은 정의의 row의 tail인 class 변수의 인자를 람다 본문과 같이 `c`로 좁힌 class
+인자가 고르는 인스턴스이며, 대상들을 본문으로 삼아 같은 규칙으로 convention entry를
+채운다. 대상이 class 없는 tail 때문에 그 값의 row가 요구하는 것보다 강한 `Cps`
+인스턴스이면, 더 약한 convention entry는
 [값 delimiter](cps-effects.md#값-delimiter)로 worker를 부르는
 [`func_ref` adapter](cps-effects.md#cps-변환의-호출-대상-형상)다.
 
@@ -993,7 +1031,7 @@ Adapter는 source 람다와 `func_ref`에만 있으며, legalization이 만들�
 
 **Convention table.** Closure 값은 convention table 참조 하나와 capture로 이루어진다
 ([closure 저장 layout](#closure-저장-layout)). Convention table은 closure를 만드는
-code 대상(람다, `func_ref`의 대상과 class 인자)마다 정적으로 하나이고, `Direct`,
+code 대상(람다, `func_table`)마다 정적으로 하나이고, `Direct`,
 `EvidenceDirect`, `Cps` 순서로 convention entry 셋을 담는다. Convention이 곧 table
 안의 위치이므로 위치를 따로 정하지 않는다. Table은 생성 뒤 바뀌지 않으며 managed
 참조를 담지 않는다.

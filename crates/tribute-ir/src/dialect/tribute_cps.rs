@@ -3,7 +3,8 @@
 //!
 //! Class specialization replaces the five `tribute_control` operations whose
 //! meaning depends on a convention with the operation of the same name here,
-//! which adds that convention. The other `tribute_control` operations stay
+//! which adds that convention, and adds the `tribute_cps.func_table` that a
+//! function reference names. The other `tribute_control` operations stay
 //! and run inside these callables. Rows, logical types, and the
 //! `tribute_control.func_sig` callable type are unchanged, and no hidden
 //! parameter exists yet. Whole-IR verification is
@@ -92,12 +93,16 @@ mod tribute_cps {
     ///   `conventions` list and one body region per element, in the same
     ///   order. Each body takes the source parameters. Each body is written
     ///   under its convention's keyword in `entries`.
-    /// - **Meaning:** one lambda value with a body for each class its uses
-    ///   select. Its body of a convention reads the row of each binder it
-    ///   quantifies with the class its uses of that class pass, which those
-    ///   uses agree on (`new-plans/ir.md`, "Convention entry"). Calling the
-    ///   value with a convention that has a body runs that body; legalization
-    ///   fills the other convention entries.
+    /// - **Meaning:** one lambda value with a body for each class
+    ///   `new-plans/ir.md` ("Convention entry") gives it: each class its uses
+    ///   select, or each class from its row's lower bound to its upper bound
+    ///   when that row reads as an upper bound. Its body of a convention
+    ///   reads each binder it quantifies with the class its uses of that
+    ///   class pass, as an upper bound when they pass different ones, and
+    ///   its own row's tail, when that tail reads as an upper bound, as an
+    ///   upper bound narrowed to that convention. Calling the value with a
+    ///   convention that has a body runs that body; legalization fills the
+    ///   other convention entries.
     /// - **Verification:** the verifier checks that the conventions are
     ///   strictly increasing and that there is a body for each one.
     ///   Otherwise as `tribute_control.lambda`, for each body.
@@ -117,23 +122,21 @@ mod tribute_cps {
         {}
     }
 
-    /// A named function instance as a value, entered with one convention.
+    /// A named function as a value, entered through the convention table
+    /// of its definition and class arguments.
     ///
     /// ```text
-    /// %f = tribute_cps.func_ref {convention = "cps", func_ref = @id} : !Callable
+    /// %f = tribute_cps.func_ref {func_ref = @"id$9e$8"} : !Callable
     /// ```
     ///
-    /// - **Shape:** `tribute_control.func_ref` with a required
-    ///   `convention: String`.
-    /// - **Meaning:** the callable value whose convention entry `convention`
-    ///   runs the instance `func_ref` names, which the reference's
-    ///   `row_args` selected. When the instance's convention is weaker,
-    ///   legalization fills the entry with an adapter (`new-plans/ir.md`,
-    ///   "Convention entry").
-    /// - **Verification:** the local verifier checks the attributes. Whole-IR
-    ///   verification checks the source signature as for
-    ///   `tribute_control.func_ref`, and that `convention` is not weaker than
-    ///   the instance's.
+    /// - **Shape:** `tribute_control.func_ref` whose `func_ref` names a
+    ///   `tribute_cps.func_table` instead of a function.
+    /// - **Meaning:** the callable value whose convention entries are the
+    ///   table's. References that share a table share its entries.
+    /// - **Verification:** the local verifier checks the attributes.
+    ///   Whole-IR verification checks that `func_ref` resolves to a
+    ///   `tribute_cps.func_table`, and checks the source signature against
+    ///   each of its targets as for `tribute_control.func_ref`.
     /// - **Ownership and value flow:** the result is an ordinary SSA value.
     /// - **Location:** the source reference span.
     #[verify]
@@ -144,6 +147,54 @@ mod tribute_cps {
         convention: Attr<CallingConvention>,
         row_args: Option<Attr<[Row]>>,
     ) -> Value<impl FuncSig> {
+    }
+
+    /// The convention table of a named function for one set of class
+    /// arguments, with a target instance per convention its row reads.
+    ///
+    /// ```text
+    /// tribute_cps.func_table @"id$9e$8" {conventions = ["direct", "evidence_direct"], targets = [@"id$9D", @"id$9e"]}
+    /// ```
+    ///
+    /// - **Shape:** no operands, results, or regions. `sym_name: String`,
+    ///   and `conventions` and `targets` lists of the same length.
+    /// - **Placement:** directly in a module, as a symbol definition. Class
+    ///   specialization makes one for each definition and class arguments
+    ///   that a `tribute_cps.func_ref` refers to, named as
+    ///   `new-plans/cps-effects.md` ("Class 특수화 pass") gives.
+    /// - **Meaning:** the convention entry of each element of `conventions`
+    ///   runs the `tribute_cps.func` instance at the same position of
+    ///   `targets`. Each instance is the one the class arguments select
+    ///   once the argument of the class variable that is the definition
+    ///   row's tail is narrowed to that convention, as a lambda body narrows
+    ///   a tail. The conventions are the classes `new-plans/ir.md`
+    ///   ("Convention entry", 함수 참조) gives the definition's row read with
+    ///   the class arguments. They depend only on the definition and the
+    ///   class arguments, never on the row a reference passes, so every
+    ///   reference with those arguments can share the table. When an instance's convention is weaker, legalization
+    ///   fills the entry with an adapter. When a classless tail makes the
+    ///   instance `Cps` and its convention is weaker, the entry is the
+    ///   `func_ref` adapter that calls the worker through a value delimiter
+    ///   (`new-plans/cps-effects.md`, 값 delimiter). Legalization fills the
+    ///   other entries by the same rule as a lambda's, once for the table.
+    /// - **Verification:** the local verifier checks the attributes, that
+    ///   the lists have the same length, and that the conventions are
+    ///   strictly increasing. Whole-IR verification checks that each target
+    ///   resolves to a `tribute_cps.func` of the same definition, and that
+    ///   each convention is not weaker than its target's unless that target
+    ///   is `Cps`.
+    /// - **Ownership and value flow:** defines no value.
+    /// - **Symbol:** a discardable `SymbolDefinition` that is not a
+    ///   declaration. Its `targets` are its uses, so it keeps them alive
+    ///   only while a live `tribute_cps.func_ref` uses it, and global DCE
+    ///   removes it once none does (`new-plans/ir.md`, "Core Invariants").
+    /// - **Location:** the span of the referenced definition.
+    #[implements(trunk_ir::op_interface::SymbolDefinition)]
+    fn func_table(
+        sym_name: Attr<String>,
+        conventions: Attr<[CallingConvention]>,
+        targets: Attr<[SymbolRef]>,
+    ) {
     }
 
     /// An indirect call through one convention.
@@ -440,6 +491,14 @@ impl CallableExit for TailCallIndirect {}
 impl trunk_ir::op_interface::SymbolDefinition for Func {
     fn is_discardable(&self, ctx: &IrContext) -> bool {
         !(ctx.op_attrs(self.op_ref()).contains_key("abi") && ctx.op_has_regions(self.op_ref()))
+    }
+}
+
+/// A table has no body, but it defines its entries rather than declaring
+/// a symbol defined elsewhere.
+impl trunk_ir::op_interface::SymbolDefinition for FuncTable {
+    fn is_declaration(&self, _ctx: &IrContext) -> bool {
+        false
     }
 }
 
