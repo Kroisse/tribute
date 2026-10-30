@@ -183,10 +183,15 @@ impl TributeDatabaseImpl {
     /// left unread. Each open document is then analyzed in the package it
     /// now belongs to, since a manifest may have appeared or disappeared.
     pub fn reload_file(&mut self, uri: &LspUri) {
-        if self.source_cst(uri).is_some() {
+        let file = provider_uri(uri);
+        let open = self
+            .documents
+            .read()
+            .values()
+            .any(|source| source.uri(self).as_str() == file.as_str());
+        if open {
             return;
         }
-        let file = provider_uri(uri);
         let provider = SourceFiles::get(self).provider(self).clone();
         if provider.existing(&file).is_none() {
             return;
@@ -321,6 +326,10 @@ mod tests {
         let source = db.source_cst(&uri).unwrap();
         let manifest = package.join(MANIFEST_FILE);
         assert_eq!(db.watched_files(), [manifest.as_path()]);
+
+        // An open document keeps its buffer, though no file is on disk.
+        db.reload_file(&uri);
+        assert_eq!(source.text(&db).to_string(), "fn main() -> Nil { }\n");
 
         std::fs::write(
             &manifest,

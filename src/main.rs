@@ -56,7 +56,10 @@ fn main() {
             input,
             deps,
             candidates,
-        } => list_files(&input, deps, candidates),
+        } => {
+            init_tracing(&cli.log);
+            list_files(&input, deps, candidates);
+        }
         Command::Debug { file, show_env } => {
             init_tracing(&cli.log);
             debug_file(file, show_env);
