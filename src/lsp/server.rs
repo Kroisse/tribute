@@ -62,8 +62,11 @@ struct LspServer {
     parser: tree_sitter::Parser,
     /// Whether the client lets the server register file watchers.
     watches_files: bool,
-    /// The files the client watches for the server.
+    /// The files the server asked the client to watch.
     watched: Vec<PathBuf>,
+    /// The id of the registration request for `watched` that the client
+    /// has not answered yet.
+    pending_registration: Option<RequestId>,
     next_request_id: i32,
 }
 
@@ -82,6 +85,7 @@ impl LspServer {
             parser: new_parser(),
             watches_files,
             watched: Vec::new(),
+            pending_registration: None,
             next_request_id: 0,
         }
     }
@@ -105,10 +109,16 @@ impl LspServer {
                 self.handle_request(req)?;
             }
             Message::Response(response) => {
-                // Only watcher registrations are sent, and a failed one
-                // leaves the open documents' changes still read.
+                let registration = self.pending_registration.as_ref() == Some(&response.id);
+                if registration {
+                    self.pending_registration = None;
+                }
                 if let Err(error) = response.response_result {
                     tracing::warn!(id = ?response.id, message = %error.message, "Client request failed");
+                    // Nothing is watched, so the next update registers again.
+                    if registration {
+                        self.watched.clear();
+                    }
                 }
             }
             Message::Notification(notif) => {
@@ -235,24 +245,22 @@ impl LspServer {
                     register_options: Some(serde_json::to_value(options)?),
                 }],
             };
-            self.send_request::<RegisterCapability>(params)?;
+            self.pending_registration = Some(self.send_request::<RegisterCapability>(params)?);
         }
         self.watched = files;
         Ok(())
     }
 
+    /// Send a request to the client, returning its id.
     fn send_request<R: lsp_types::request::Request>(
         &mut self,
         params: R::Params,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    ) -> Result<RequestId, Box<dyn Error + Send + Sync>> {
         self.next_request_id += 1;
-        let request = Request::new(
-            RequestId::from(format!("tribute-{}", self.next_request_id)),
-            R::METHOD.to_owned(),
-            params,
-        );
+        let id = RequestId::from(format!("tribute-{}", self.next_request_id));
+        let request = Request::new(id.clone(), R::METHOD.to_owned(), params);
         self.connection.sender.send(Message::Request(request))?;
-        Ok(())
+        Ok(id)
     }
 
     fn did_open(
@@ -2048,6 +2056,7 @@ mod tests {
 
         let mut harness = TestHarness::watching_files();
         harness.open_document(&uri, source);
+        let rejected = harness.sent();
         let registered = vec![(
             RegisterCapability::METHOD.to_owned(),
             vec![
@@ -2057,6 +2066,19 @@ mod tests {
                 path("tribute.toml"),
             ],
         )];
+        assert_eq!(watcher_requests(&rejected), registered);
+
+        // A client that rejects the registration is asked again on the next
+        // update, with no unregistration since nothing was registered.
+        let Some(Message::Request(request)) = rejected.last() else {
+            panic!("a registration: {rejected:?}");
+        };
+        let response = Response::new_err(request.id.clone(), -32603, "rejected".to_owned());
+        harness
+            .server
+            .process_message(Message::Response(response))
+            .unwrap();
+        changed(&mut harness, "src/util.trb");
         assert_eq!(watcher_requests(&harness.sent()), registered);
 
         // A changed module file is read again; the files stay the same.
