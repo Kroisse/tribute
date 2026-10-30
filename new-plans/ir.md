@@ -395,7 +395,7 @@ fn func<S: FuncSig>(sym_name: Attr<String>, r#type: Attr<TypeOf<S>>) {
     {}
 }
 
-#[asm_format("call" callee "(" args ")" attr_dict ":" types(results))]
+#[asm_format("call" callee "(" args ")" attr_dict (":" types(results)^)?)]
 fn invoke(callee: Attr<SymbolRef>, args: Variadic<_>) -> Variadic<_> {}
 ```
 
@@ -421,11 +421,12 @@ literal은 문자열 literal로 쓴다.
   attribute 문법(`"text"`, `@sym`, `[..]`, `42`)이다. `keyword(attr)`는 종류가
   keyword codec을 정의한 attribute를 따옴표 없는 식별자로 쓴다(예: calling
   convention의 `cps`). `symbol(attr)`는 문자열 attribute를 정의 이름 `@name`으로
-  쓰며, 형식의 첫 원소일 때만 쓸 수 있다.
+  쓴다.
 - **Result** — Result 이름과 `=`(`%r =`)은 형식에 쓰지 않는다. Printer가 앞에 쓰고,
-  parser는 형식 parser를 부르기 전에 읽는다. `symbol`도 같은 방식으로 host가
-  읽으므로 첫 원소에만 올 수 있다. Result 타입은 `type(result)`나
+  parser는 형식 parser를 부르기 전에 읽는다. Result 타입은 `type(result)`나
   `types(results)`, 또는 타입을 재구성하는 `signature`로 정확히 한 번 쓴다.
+  `types`는 결과 목록을 쉼표로 구분해 쓰며, 결과가 없을 수 있으면 앞의 구두점과
+  함께 선택 묶음에 둔다.
 - **`attr_dict`** — 형식의 다른 원소가 쓰지 않은 모든 attribute를 `{..}`로 쓴다.
   `attr_dict(keyword)`는 `attributes {..}`로 쓴다. 남은 attribute가 없으면 아무
   것도 쓰지 않는다. 다른 원소가 쓰는 attribute는 자동으로 제외하며, parser는 그런
@@ -441,7 +442,8 @@ literal은 문자열 literal로 쓴다.
   매개변수를 entry block argument로 되돌린다. 다른 region은 entry label과 argument를
   generic처럼 쓴다. 선택 region이 없으면 아무것도 쓰지 않는다.
   `labelled_regions(rs, attr)`는 `{ label { .. } label { .. } }`로 쓰고 label은
-  목록 attribute `attr`의 원소를 keyword로 쓴 것이다.
+  목록 attribute `attr`의 원소를 keyword로 쓴 것이다. 이 원소는 region 목록과
+  `attr`를 함께 쓴다.
 - **`successor(s)`, `successors(ss)`** — `^bb1`로 쓴다.
 - **선택 묶음 `( .. )?`** — 원소 하나에 `^`를 붙여 anchor로 삼는다. Anchor가
   있으면(선택 attribute가 있거나, 가변 operand·region 목록이 비어 있지 않으면)
@@ -454,6 +456,11 @@ literal은 문자열 literal로 쓴다.
   쓴 것으로 센다. Parser는 directive가 나열하지 않은 entity의 값을 돌려주면
   거부한다.
 
+Operation 이름 뒤의 입력은 모두 형식 parser가 읽는다. Generic 형식이 operation
+이름 뒤의 `@name`을 `sym_name`으로 읽는 축약은 손으로 쓴 형식과 generic 형식에만
+해당하며, 선언적 형식에서는 `symbol(sym_name)`이나 symbol 참조 attribute처럼 `@`로
+시작하는 원소가 그 자리를 읽는다.
+
 공백은 원소 사이에 하나 쓴다. `(`, `[` 뒤와 `)`, `]`, `,` 앞에는 쓰지 않고,
 `signature`와 `"("`는 앞 원소에 붙여 쓴다. Parser는 원소 사이의 공백을 무시한다.
 
@@ -463,15 +470,16 @@ Macro는 형식 기술을 선언과 대조해 다음을 어기면 그 원소를 
 거부한다.
 
 - Operand, region, successor는 각각 정확히 한 번 쓴다. Result 타입도 정확히 한 번
-  쓴다.
+  쓴다. `signature`의 region 인자는 entry argument를 묶을 뿐 region을 쓴 것으로
+  세지 않는다.
 - Attribute는 많아야 한 번 명시하고, 명시하지 않은 attribute가 있으면
   `attr_dict`가 있어야 한다. 같은 entity를 두 원소가 쓰지 않는다.
-- 선택 묶음의 anchor는 선택 attribute, 가변 operand, 선택 region, 가변 region
-  목록 중 하나다. 묶음 안에는 선택 entity와 literal만 둔다. 묶음의 첫 원소는
+- 선택 묶음의 anchor는 선택 attribute, 가변 operand, 가변 result, 선택 region,
+  가변 region 목록 중 하나다. 묶음 안에는 선택 entity와 literal만 둔다. 묶음의 첫 원소는
   literal이거나 anchor이며, 그 첫 token은 묶음 바로 뒤에 올 수 있는 원소의 첫
   token과 달라야 한다. Parser는 첫 token 하나로 묶음의 유무를 정한다.
-- `symbol`을 뺀 첫 원소는 `{`, `%`, `:`로 시작할 수 없다. 그 셋으로 시작하는
-  입력은 generic 형식이다.
+- 첫 원소는 `{`, `%`, `:`로 시작할 수 없다. 그 셋으로 시작하는 입력은 generic
+  형식이다.
 - 따옴표 없는 `attr_dict` 바로 뒤에 region이 올 수 없다. 둘 다 `{`로 시작하므로
   `attr_dict(keyword)`를 쓴다.
 - `signature`의 `t`는 signature codec을 구현한 bound로 묶인 타입 변수여야 하고,
@@ -522,7 +530,9 @@ dialect 이름을 알지 못하며, `signature`는 형식이 묶은 타입 변�
   밖의 non-reserved type attribute가 있으면 분해하지 않는다.
   `func.func_sig` 계열은 매개변수 속성을 매개변수 뒤에 `%a: A {k = v}`로 쓰고,
   두 count 밖의 type attribute를 결과 뒤에 `, {..}`로 쓴다. 이때 결과가 없으면
-  `-> ()`를 쓴다. 이 표기는 [타입 textual form](#타입-textual-form)의 함수 형태와
+  `-> ()`를 쓴다. 매개변수 속성이 있는 결과는 결과 목록을 괄호로 감싸
+  `-> (R {k = v})`로 쓴다. 바로 뒤의 region과 `{`가 겹치지 않게 하기 위해서다.
+  이 표기는 [타입 textual form](#타입-textual-form)의 함수 형태와
   같은 순서다.
 
 함수 형태의 operation 문법은 그 operation이 선언한 형식에서만 나온다. Generic
