@@ -6,7 +6,6 @@
 use proc_macro2::{Delimiter, Span, TokenStream, TokenTree};
 use quote::{quote, quote_spanned};
 
-use crate::codegen::attr_kind_trait;
 use crate::parse::{AttrKind, OperationDef, RegionOrSuccessor, ResultDef};
 
 /// A format rule broken by the element at `span`.
@@ -80,7 +79,6 @@ enum Anchor {
     Flag(usize),
     Operand(usize),
     Results,
-    Region(usize),
 }
 
 struct Format<'a> {
@@ -375,13 +373,25 @@ impl<'a> Format<'a> {
         Ok(element)
     }
 
-    /// An optional group: literals and one entity, its anchor, which may be
-    /// absent.
+    /// An optional group: a keyword, then literals and one entity, its
+    /// anchor. The group is written exactly when its anchor is present.
     fn group(
         &self,
         elements: Vec<(Element, Span, bool)>,
         span: Span,
     ) -> Result<Element, FormatError> {
+        if !matches!(&elements[0].0, Element::Literal(text) if opens_group(text)) {
+            return err(
+                span,
+                "an optional group begins with a keyword or punctuation that no value begins with",
+            );
+        }
+        if let Some((_, span, _)) = elements
+            .iter()
+            .find(|(e, ..)| matches!(e, Element::Literal(text) if text.is_empty()))
+        {
+            return err(*span, "`\"\"` stays outside optional groups");
+        }
         let mut entities = elements
             .iter()
             .filter(|e| !matches!(e.0, Element::Literal(_)));
@@ -407,164 +417,101 @@ impl<'a> Format<'a> {
             }
             Element::Operand(i) if self.op.operands[i].variadic => Anchor::Operand(i),
             Element::ResultTypes => Anchor::Results,
-            Element::Region(i) if self.regions[i].1 || self.regions[i].2 => Anchor::Region(i),
             _ => {
                 return err(
                     *anchor_span,
-                    "an anchor is an optional attribute, a variadic operand or result, or an optional or variadic region",
+                    "an anchor is an optional attribute or a variadic operand or result",
                 );
             }
         };
         // A flag stands for the group and writes no value.
         let is_flag = matches!(anchor, Anchor::Flag(_));
-        let elements: Vec<_> = elements
+        let elements = elements
             .into_iter()
             .filter(|(element, ..)| !(is_flag && matches!(element, Element::Attribute(_))))
             .map(|(element, span, _)| (element, span))
             .collect();
-        if elements
-            .iter()
-            .all(|(element, _)| matches!(element, Element::Literal(text) if text.is_empty()))
-        {
-            return err(span, "a flag's group writes a literal that stands for it");
-        }
         Ok(Element::Optional { anchor, elements })
     }
-}
 
-/// What an element's text can begin with: fixed text, a value, or the end
-/// of the operation, after which the next line can begin with `%`, `^`, `}`,
-/// or another operation's name.
-#[derive(Clone, Copy)]
-enum Token<'a> {
-    Text(&'a str),
-    Value,
-    End,
-}
-
-fn first_token(element: &Element) -> Token<'_> {
-    match element {
-        Element::Literal(text) => Token::Text(text),
-        Element::Operand(_) => Token::Text("%"),
-        Element::Symbol(_) => Token::Text("@"),
-        Element::Successor(_) => Token::Text("^"),
-        Element::Region(_) => Token::Text("{"),
-        Element::AttrDict => Token::Text("attributes"),
-        Element::Optional { elements, .. } => first_token(&leading(elements).0),
-        Element::Attribute(_) | Element::ResultType | Element::ResultTypes => Token::Value,
-    }
-}
-
-/// A group's first element that writes text, past `""` spacing literals.
-fn leading(elements: &[(Element, Span)]) -> &(Element, Span) {
-    elements
-        .iter()
-        .find(|(element, _)| !matches!(element, Element::Literal(text) if text.is_empty()))
-        .unwrap_or(&elements[0])
-}
-
-/// Whether a parser reading one of the two cannot tell it from the other by
-/// its first token. A keyword is read as a whole identifier, but punctuation
-/// is read by prefix.
-fn conflict(a: Token<'_>, b: Token<'_>) -> bool {
-    let value_like = |text: &str| {
-        text.starts_with(['@', '{', '[', '"', '-', '!'])
-            || text.starts_with(|c: char| c.is_ascii_digit())
-            || ["true", "false", "unit", "loc"].contains(&text)
-    };
-    let word = |text: &str| text.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_');
-    match (a, b) {
-        (Token::Value, Token::Value | Token::End) | (Token::End, Token::Value) => true,
-        (Token::Value, Token::Text(text)) | (Token::Text(text), Token::Value) => value_like(text),
-        (Token::Text(text), Token::End) | (Token::End, Token::Text(text)) => {
-            text.starts_with(['%', '^', '}'])
-        }
-        (Token::Text(a), Token::Text(b)) => {
-            a == b || (!word(a) && !word(b) && (a.starts_with(b) || b.starts_with(a)))
-        }
-        (Token::End, Token::End) => false,
-    }
-}
-
-impl Format<'_> {
-    /// Whether an element may write nothing.
-    fn may_be_empty(&self, element: &Element) -> bool {
-        match *element {
-            Element::Operand(i) => self.op.operands[i].variadic,
-            Element::Successor(i) => self.successors[i].1,
-            Element::Region(i) => self.regions[i].1 || self.regions[i].2,
-            Element::AttrDict | Element::Optional { .. } | Element::ResultTypes => true,
-            _ => false,
-        }
-    }
-
-    /// The first tokens that can follow the end of `elements[..position]`,
-    /// with `tail` following the end of `elements`.
-    fn follow<'e>(
-        &self,
-        elements: &'e [(Element, Span)],
-        position: usize,
-        tail: &[Token<'e>],
-    ) -> Vec<Token<'e>> {
-        let mut tokens = Vec::new();
-        for (element, _) in &elements[position..] {
-            if matches!(element, Element::Literal(text) if text.is_empty()) {
-                continue;
-            }
-            tokens.push(first_token(element));
-            if !self.may_be_empty(element) {
-                return tokens;
-            }
-        }
-        tokens.extend_from_slice(tail);
-        tokens
-    }
-
-    /// The token that continues a list an element writes: a `,` before
-    /// the next item of a comma-separated list, or the `{` of the next region.
-    fn continuation(&self, element: &Element) -> Option<&'static str> {
-        match *element {
-            Element::Operand(i) if self.op.operands[i].variadic => Some(","),
-            Element::Successor(i) if self.successors[i].1 => Some(","),
-            Element::ResultTypes => Some(","),
-            Element::Region(i) if self.regions[i].2 => Some("{"),
-            _ => None,
-        }
-    }
-
-    /// Reject a list that what follows it can continue, at the top level or
-    /// inside a group, since the list would read it as its next item.
-    fn check_lists(&self, elements: &[(Element, Span)]) -> Result<(), FormatError> {
-        let check = |element: &Element, span: Span, after: Vec<Token<'_>>| {
-            let Some(continuation) = self.continuation(element) else {
-                return Ok(());
-            };
-            if after
-                .into_iter()
-                .any(|next| conflict(Token::Text(continuation), next))
-            {
-                return err(
-                    span,
-                    format!("a list cannot be followed by what continues it, `{continuation}`"),
-                );
-            }
-            Ok(())
-        };
+    /// Check the elements of one sequence, the format or a group, where
+    /// `last` tells whether the sequence ends the format.
+    fn check_sequence(&self, elements: &[(Element, Span)], last: bool) -> Result<(), FormatError> {
         for (position, (element, span)) in elements.iter().enumerate() {
-            let after = self.follow(elements, position + 1, &[Token::End]);
-            match element {
-                Element::Optional {
-                    elements: inner, ..
-                } => {
-                    for (j, (element, span)) in inner.iter().enumerate() {
-                        check(element, *span, self.follow(inner, j + 1, &after))?;
+            let next = elements.get(position + 1).map(|(next, _)| next);
+            let next_text = match next {
+                Some(Element::Literal(text)) => Some(text.as_str()),
+                Some(Element::Optional { elements, .. }) => match &elements[0].0 {
+                    Element::Literal(text) => Some(text.as_str()),
+                    _ => None,
+                },
+                _ => None,
+            };
+            match *element {
+                // A list reads items while it sees `,`, and an empty one would
+                // read whatever follows as its first item.
+                Element::Operand(i) if self.op.operands[i].variadic => {
+                    if !matches!(next_text, Some(")" | "]")) {
+                        return err(
+                            *span,
+                            "a variadic list is closed by a literal `\")\"` or `\"]\"` right after it",
+                        );
                     }
                 }
-                _ => check(element, *span, after)?,
+                Element::Successor(i) if self.successors[i].1 => {
+                    if !matches!(next_text, Some(")" | "]")) {
+                        return err(
+                            *span,
+                            "a variadic list is closed by a literal `\")\"` or `\"]\"` right after it",
+                        );
+                    }
+                }
+                Element::ResultTypes if !(last && next.is_none()) => {
+                    return err(
+                        *span,
+                        "result types that may be absent come last, as `(\":\" types(..)^)?` ending the format",
+                    );
+                }
+                Element::Region(i) if self.regions[i].1 || self.regions[i].2 => {
+                    if next.is_some() && !next_text.is_some_and(|text| !text.starts_with('{')) {
+                        return err(
+                            *span,
+                            "an optional or variadic region ends the format or comes before a literal other than `{`",
+                        );
+                    }
+                }
+                Element::Optional { ref elements, .. } => {
+                    self.check_sequence(elements, last && next.is_none())?;
+                }
+                _ => {}
             }
         }
         Ok(())
     }
+}
+
+/// Whether a literal is a keyword, read as a whole identifier.
+fn is_keyword(text: &str) -> bool {
+    text.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+}
+
+/// Whether a literal can begin an optional group: the parser tries it where
+/// the group may be absent, so no value, `attr_dict`, or next line may begin
+/// with it.
+fn opens_group(text: &str) -> bool {
+    if is_keyword(text) {
+        !["true", "false", "unit", "loc", "attributes"].contains(&text)
+    } else {
+        !text.is_empty()
+            && text != "-"
+            && !text.starts_with(['@', '{', '[', '"', '!', '%', '^', '}'])
+            && !text.starts_with(|c: char| c.is_ascii_digit())
+    }
+}
+
+/// Whether the parser could read one literal where it expects the other.
+fn overlaps(a: &str, b: &str) -> bool {
+    a == b || (!is_keyword(a) && !is_keyword(b) && (a.starts_with(b) || b.starts_with(a)))
 }
 
 fn check(
@@ -608,97 +555,78 @@ fn check(
         }
     }
 
-    for (position, (element, span)) in elements.iter().enumerate() {
+    // After an optional symbol, a literal decides custom against generic
+    // syntax, which begins with `{`, `%`, `:`, or `[`, or ends the operation
+    // before a line beginning with `%`, `^`, or `}`.
+    if let Some((first, span)) = elements
+        .iter()
+        .find(|(element, _)| !matches!(element, Element::Symbol(_)))
+        && !matches!(first, Element::Literal(text)
+            if !text.is_empty() && !text.starts_with(['{', '%', ':', '[', '^', '}']))
+    {
+        return err(
+            *span,
+            "a format begins with a literal, after `symbol(..)` if it has one, and not with `{`, `%`, `:`, `[`, `^`, or `}`",
+        );
+    }
+
+    for (element, span) in &elements {
+        if let Element::ResultTypes = element {
+            return err(
+                *span,
+                "the operation may have no results; write their types as the anchor of an optional group, such as `(\":\" types(results)^)?`",
+            );
+        }
+        if let Element::Attribute(i) = element
+            && op.attrs[*i].optional
+        {
+            return err(
+                *span,
+                "an optional attribute is written as the anchor of an optional group `(\"keyword\" .. attr^ ..)?`",
+            );
+        }
+    }
+    format.check_sequence(&elements, true)?;
+
+    // A group is recognized by its first literal, so no other literal may
+    // read the same way.
+    let mut literals = Vec::new();
+    visit_literals(&elements, &mut literals);
+    for (element, span) in &elements {
+        if let Element::Optional {
+            elements: inner, ..
+        } = element
+            && let Element::Literal(opener) = &inner[0].0
+            && literals
+                .iter()
+                .filter(|text| overlaps(text, opener))
+                .count()
+                > 1
+        {
+            return err(
+                *span,
+                "an optional group's first literal reads like no other literal in the format",
+            );
+        }
+    }
+
+    let fmt = quote!(#crate_path::asm_format::declarative);
+    let elements = gen_elements(&fmt, &elements);
+    Ok(
+        quote!(Some(#crate_path::asm_format::OpAsmFormatDef::Declarative(
+            &#fmt::OpFormat { elements: &[#(#elements),*] }
+        ))),
+    )
+}
+
+fn visit_literals<'e>(elements: &'e [(Element, Span)], literals: &mut Vec<&'e String>) {
+    for (element, _) in elements {
         match element {
-            Element::ResultTypes => {
-                return err(
-                    *span,
-                    "the operation may have no results; write their types as the anchor of an optional group, such as `(\":\" types(results)^)?`",
-                );
-            }
-            Element::Attribute(i) if op.attrs[*i].optional => {
-                return err(
-                    *span,
-                    "an optional attribute is written as the anchor of an optional group `( .. attr^ .. )?`",
-                );
-            }
+            Element::Literal(text) => literals.push(text),
+            Element::Optional { elements, .. } => visit_literals(elements, literals),
             _ => {}
         }
-        // An element that may write nothing must not begin like anything
-        // that can follow it, or the parser reads that as this element.
-        if format.may_be_empty(element) {
-            let first = first_token(element);
-            if format
-                .follow(&elements, position + 1, &[Token::End])
-                .into_iter()
-                .any(|next| conflict(first, next))
-            {
-                return err(
-                    *span,
-                    "this element may write nothing, and it begins like what can follow it; separate them with a literal",
-                );
-            }
-        }
     }
-
-    format.check_lists(&elements)?;
-
-    // The elements up to the first that is neither a symbol nor optional
-    // decide custom against generic syntax, which begins with `{`, `%`, `:`,
-    // or `[`, or ends the operation before a line beginning with `%`, `^`,
-    // or `}`. An attribute there must not be of a kind generic syntax could
-    // begin with, which only the kind's `KIND` tells.
-    let fmt = quote!(#crate_path::asm_format::declarative);
-    let mut assertions = Vec::new();
-    for (element, span) in &elements {
-        let (first, first_span) = match element {
-            Element::Symbol(_) => continue,
-            Element::Optional { elements, .. } => {
-                let (first, span) = leading(elements);
-                (first, *span)
-            }
-            _ => (element, *span),
-        };
-        match first {
-            Element::Literal(text)
-                if text.is_empty() || text.starts_with(['{', '%', ':', '[', '^', '}']) =>
-            {
-                return err(
-                    first_span,
-                    "a format cannot begin like generic syntax, with `{`, `%`, `:`, `[`, `^`, or `}`",
-                );
-            }
-            Element::Literal(_) => {}
-            Element::Attribute(i) => {
-                let attr = &op.attrs[*i];
-                let kind = attr_kind_trait(crate_path, attr);
-                let message = format!(
-                    "attribute `{}` begins the format, so its kind cannot be `_`, a dictionary, or a type, which generic syntax or the next operation could begin with",
-                    attr.name
-                );
-                assertions.push(quote_spanned!(attr.raw_ident.span()=>
-                    const _: () = ::core::assert!(!#fmt::ambiguous_first_kind(#kind::KIND), #message);
-                ));
-            }
-            _ => {
-                return err(
-                    first_span,
-                    "a format begins with a literal or an attribute, not with what generic syntax begins with",
-                );
-            }
-        }
-        if !matches!(element, Element::Optional { .. }) {
-            break;
-        }
-    }
-
-    let elements = gen_elements(&fmt, &elements);
-    Ok(quote!({
-        #(#assertions)*
-        Some(#crate_path::asm_format::OpAsmFormatDef::Declarative(
-            &#fmt::OpFormat { elements: &[#(#elements),*] }
-        ))
-    }))
 }
 
 fn gen_elements(fmt: &TokenStream, elements: &[(Element, Span)]) -> Vec<TokenStream> {
@@ -720,7 +648,6 @@ fn gen_elements(fmt: &TokenStream, elements: &[(Element, Span)]) -> Vec<TokenStr
                     Anchor::Flag(i) => quote!(#fmt::FormatAnchor::Flag(#i)),
                     Anchor::Operand(i) => quote!(#fmt::FormatAnchor::Operand(#i)),
                     Anchor::Results => quote!(#fmt::FormatAnchor::Results),
-                    Anchor::Region(i) => quote!(#fmt::FormatAnchor::Region(#i)),
                 };
                 let elements = gen_elements(fmt, elements);
                 quote!(#fmt::FormatElement::Optional { anchor: #anchor, elements: &[#(#elements),*] })
@@ -760,7 +687,7 @@ mod tests {
             ),
             quote!(
                 mod t {
-                    #[asm_format("to" successors(dests) ";" "(" args ")" (":" types(results)^)? regions(bodies))]
+                    #[asm_format("to" "[" successors(dests) "]" "(" args ")" regions(bodies) (":" types(results)^)?)]
                     fn op(args: Variadic<_>) -> Variadic<_> {
                         #[successors(dests)]
                         {}
@@ -771,13 +698,19 @@ mod tests {
             ),
             quote!(
                 mod t {
-                    #[asm_format(tag (":" type(result)^)? "on" successor(dest) region(body))]
+                    #[asm_format("tag" tag "on" successor(dest) region(body) ("->" type(result)^)?)]
                     fn op(tag: Attr<SymbolRef>) -> Option<Value<_>> {
                         #[region(body)]
                         {}
                         #[successor(dest)]
                         {}
                     }
+                }
+            ),
+            quote!(
+                mod t {
+                    #[asm_format(symbol(callee))]
+                    fn op(callee: Attr<String>) {}
                 }
             ),
         ] {
@@ -800,15 +733,15 @@ mod tests {
                 quote!(
                     fn op() {}
                 ),
-                quote!("x" 'c'),
-                "plain string literal",
+                quote!("x" "a.b"),
+                "identifier or punctuation",
             ),
             (
                 quote!(
                     fn op() {}
                 ),
-                quote!("x" "a.b"),
-                "identifier or punctuation",
+                quote!("x" 'c'),
+                "plain string literal",
             ),
             (
                 quote!(
@@ -828,7 +761,7 @@ mod tests {
                 quote!(
                     fn op(a: Option<Attr<bool>>) {}
                 ),
-                quote!("x" (("y" a^)?)?),
+                quote!("x" ("y" ("z" a^)?)?),
                 "do not nest",
             ),
             (
@@ -950,9 +883,37 @@ mod tests {
             ),
             (
                 quote!(
-                    fn op(a: Option<Attr<bool>>, b: Option<Attr<bool>>) {}
+                    fn op(a: Option<Attr<bool>>) {}
                 ),
-                quote!("x" (a^ b^)?),
+                quote!("x" (a^)?),
+                "begins with a keyword or punctuation",
+            ),
+            (
+                quote!(
+                    fn op(a: Option<Attr<bool>>) {}
+                ),
+                quote!("x" ("[" a^)?),
+                "begins with a keyword or punctuation",
+            ),
+            (
+                quote!(
+                    fn op(a: Option<Attr<bool>>) {}
+                ),
+                quote!("x" ("true" a^)?),
+                "begins with a keyword or punctuation",
+            ),
+            (
+                quote!(
+                    fn op(a: Option<Attr<bool>>) {}
+                ),
+                quote!("x" ("y" "" a^)?),
+                "outside optional groups",
+            ),
+            (
+                quote!(
+                    fn op(a: Option<Attr<u32>>, b: Option<Attr<u32>>) {}
+                ),
+                quote!("x" ("y" a^ b^)?),
                 "exactly one entity",
             ),
             (
@@ -971,10 +932,13 @@ mod tests {
             ),
             (
                 quote!(
-                    fn op(a: Option<Attr<bool>>) {}
+                    fn op() {
+                        #[region(r?)]
+                        {}
+                    }
                 ),
-                quote!("x" (a^)?),
-                "flag's group",
+                quote!("x" ("y" region(r)^)?),
+                "an anchor is",
             ),
             (
                 quote!(
@@ -999,6 +963,13 @@ mod tests {
             ),
             (
                 quote!(
+                    fn op() -> Variadic<_> {}
+                ),
+                quote!("x" (":" types(results)^)? "y"),
+                "come last",
+            ),
+            (
+                quote!(
                     fn op(a: Option<Attr<u32>>) {}
                 ),
                 quote!("x" a),
@@ -1009,54 +980,66 @@ mod tests {
                     fn op(a: Variadic<_>) {}
                 ),
                 quote!("x" a),
-                "may write nothing",
+                "closed by a literal",
             ),
             (
                 quote!(
                     fn op(a: Value<_>, b: Variadic<_>) {}
                 ),
-                quote!("x" b "," a),
-                "what continues it, `,`",
+                quote!("x" "(" b "," a ")"),
+                "closed by a literal",
+            ),
+            (
+                quote!(
+                    fn op() {
+                        #[region(r?)]
+                        {}
+                    }
+                ),
+                quote!("x" region(r) attr_dict),
+                "optional or variadic region",
+            ),
+            (
+                quote!(
+                    fn op(a: Option<Attr<bool>>, b: Option<Attr<bool>>) {}
+                ),
+                quote!("x" ("f" a^)? attr_dict ("f" b^)?),
+                "reads like no other literal",
+            ),
+            (
+                quote!(
+                    fn op(a: Option<Attr<u32>>) {}
+                ),
+                quote!("x" ("-" a^)?),
+                "begins with a keyword or punctuation",
+            ),
+            (
+                quote!(
+                    fn op(a: Option<Attr<u32>>) {}
+                ),
+                quote!("x" ("->" a^)? "-"),
+                "reads like no other literal",
             ),
             (
                 quote!(
                     fn op() {}
                 ),
                 quote!("[" "x"),
-                "cannot begin like generic syntax",
+                "a format begins with a literal",
             ),
             (
                 quote!(
                     fn op(a: Value<_>) {}
                 ),
                 quote!(a "x"),
-                "begins with a literal or an attribute",
+                "a format begins with a literal",
             ),
             (
                 quote!(
-                    fn op() -> Variadic<_> {}
+                    fn op(a: Option<Attr<bool>>) {}
                 ),
-                quote!("x" (types(results)^ ":")? "!"),
-                "may write nothing",
-            ),
-            (
-                quote!(
-                    fn op() {
-                        #[region(body)]
-                        {}
-                        #[regions(extras)]
-                        {}
-                    }
-                ),
-                quote!("x" ("extras" regions(extras)^)? region(body)),
-                "what continues it, `{`",
-            ),
-            (
-                quote!(
-                    fn op(on: Option<Attr<bool>>) {}
-                ),
-                quote!("x" ("" on^)?),
-                "flag's group",
+                quote!(("y" a^)? "x"),
+                "a format begins with a literal",
             ),
         ];
         let failures: Vec<String> = cases

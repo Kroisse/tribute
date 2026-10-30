@@ -1,5 +1,0 @@
-error: a list cannot be followed by what continues it, `,`
- --> tests/ui/asm_format_list_before_comma.rs:4:28
-  |
-4 |         #[asm_format("run" args "," tail)]
-  |                            ^^^^

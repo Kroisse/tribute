@@ -447,8 +447,9 @@ literal은 문자열 literal로 쓴다.
   목록 attribute `attr`의 원소를 keyword로 쓴 것이다. 이 원소는 region 목록과
   `attr`를 함께 쓴다.
 - **`successor(s)`, `successors(ss)`** — `^bb1`로 쓴다.
-- **선택 묶음 `( .. )?`** — 원소 하나에 `^`를 붙여 anchor로 삼는다. Anchor가
-  있으면(선택 attribute가 있거나, 가변 operand·result·region 목록이 비어 있지 않으면)
+- **선택 묶음 `( .. )?`** — 묶음을 여는 literal 뒤에 literal과 원소 하나를 두고,
+  그 원소에 `^`를 붙여 anchor로 삼는다. Anchor가
+  있으면(선택 attribute가 있거나, 가변 operand·result 목록이 비어 있지 않으면)
   묶음 전체를 쓰고, 없으면 묶음 전체를 생략한다. `Option<Attr<bool>>`인 anchor가
   묶음에서 값을 쓰지 않으면 표시 flag다. `true`면 묶음을 쓰고 parser는 묶음을
   만나면 `true`를 저장한다.
@@ -476,25 +477,23 @@ Macro는 형식 기술을 선언과 대조해 다음을 어기면 그 원소를 
   세지 않는다.
 - Attribute는 많아야 한 번 명시하고, 명시하지 않은 attribute가 있으면
   `attr_dict`가 있어야 한다. 같은 entity를 두 원소가 쓰지 않는다.
-- 가변 result나 선택 result의 타입은 선택 묶음의 anchor로만 쓴다. 결과가 없을 때
-  앞의 구두점도 함께 생략해야 하기 때문이다.
-- 선택 묶음의 anchor는 선택 attribute, 가변 operand, 가변 result, 선택 region,
-  가변 region 목록 중 하나다. 묶음 안에는 anchor 하나와 literal만 둔다. Parser는
-  `""`를 건너뛴 묶음의 첫 원소가 token을 읽으면 묶음이 있다고 정한다.
-- 아무것도 쓰지 않을 수 있는 원소(선택 묶음, `attr_dict`, 가변 operand·successor
-  목록, 선택 region, 가변 region 목록)의 첫 token은 그 뒤에 올 수 있는 어떤 첫
-  token과도 겹치지 않는다. 뒤에 오는 원소도 아무것도 쓰지 않을 수 있으면 그 다음
-  원소까지 보며, 형식의 끝 뒤에는 다음 줄의 `%`, `^`, `}`, 다음 operation 이름이 올
-  수 있다. 값을 쓰는 원소(attribute, 타입)의 첫 token은 정해져 있지 않으므로
-  값처럼 시작하는 token과 모두 겹친다.
-- 목록 뒤에는 그 목록을 잇는 token이 올 수 없다. 쉼표로 구분한 목록(가변
-  operand·successor, `types`)은 `","`를, 가변 region 목록은 `{`를 다음 항목으로
-  읽는다. 선택 묶음 안의 목록은 묶음 뒤에 오는 원소까지 본다.
-- 표시 flag의 묶음은 `""`가 아닌 literal을 하나 이상 쓴다.
-- 형식을 시작하는 원소는 `{`, `%`, `:`, `[`, `^`, `}`로 시작할 수 없다. 앞의
-  넷은 generic 형식이 operation 이름 뒤에 쓰는 것이고, 나머지는 operation 이름만
-  쓴 generic 형식 뒤의 다음 줄이 시작할 수 있는 것이다. 형식을 시작하는
-  attribute는 `_`, dictionary, 타입 종류일 수 없다.
+- 형식은 literal로 시작하며, `symbol`이 있으면 그 바로 뒤의 literal로 시작한다.
+  이 literal은 `{`, `%`, `:`, `[`, `^`, `}`로 시작하지 않는다. 앞의 넷은 generic
+  형식이 operation 이름 뒤에 쓰는 것이고, 나머지는 operation 이름만 쓴 generic
+  형식 뒤의 다음 줄이 시작할 수 있는 것이다.
+- 선택 묶음은 여는 literal로 시작하고, 그 뒤에는 literal과 anchor 하나만 둔다.
+  `""`는 묶음 안에 쓰지 않는다. 여는 literal은 keyword(`true`, `false`, `unit`,
+  `loc`, `attributes`는 제외)이거나 값, `attr_dict`, 다음 줄이 시작할 수 없는
+  구두점이며, 형식의 다른 literal과 같지 않고 구두점끼리는 접두사도 겹치지 않는다.
+  Parser는 여는 literal을 읽으면 묶음이 있다고 정한다.
+- Anchor는 선택 attribute, 가변 operand, 가변 result 중 하나다.
+- 가변 result나 선택 result의 타입은 `(":" types(..)^)?`처럼 선택 묶음의
+  마지막에 쓰고, 그 묶음은 형식의 마지막 원소다.
+- 가변 operand·successor 목록 바로 뒤에는 닫는 literal `")"`나 `"]"`가 온다. 빈
+  목록이 뒤의 원소를 읽거나 목록이 쉼표를 자기 구분자로 읽는 일이 없게 하기
+  위해서다.
+- 선택 region과 가변 region 목록은 형식의 마지막이거나, `{`로 시작하지 않는
+  literal 또는 그런 literal로 여는 묶음 앞에 온다.
 - `signature`의 `t`는 signature codec을 구현한 bound로 묶인 타입 변수여야 하고,
   나열한 region은 선언된 region이어야 한다.
 
@@ -517,9 +516,7 @@ Printer는 쓰기 전에 operation이 형식으로 손실 없이 표현되는지
 읽힌다. Parser는 operation schema를 검증하지 않는다.
 
 Parser는 `symbol`이 아닌 원소가 첫 token을 읽기 전에만 backtrack하고, 그 뒤의
-실패는 기대한 원소를 밝힌 오류로 끝낸다. `symbol`을 포함해 어느 원소도 token을 읽지 않았으면
-입력을 generic 형식으로 읽으며, 그런 operation은 두 형식에서 같다. 원소 사이의
-공백은 token이 아니다. Keyword
+실패는 기대한 원소를 밝힌 오류로 끝낸다. 원소 사이의 공백은 token이 아니다. Keyword
 literal과 `attr_dict`의 `attributes`는 식별자 전체로 읽으며, 바로 뒤에 `.`이 오면
 다음 operation 이름의 일부로 보고 읽지 않는다. 첫 token에서 backtrack한 입력은 generic
 형식으로 다시 읽는다.

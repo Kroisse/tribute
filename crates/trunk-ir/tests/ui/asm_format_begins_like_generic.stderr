@@ -1,4 +1,4 @@
-error: this element may write nothing, and it begins like what can follow it; separate them with a literal
+error: a format begins with a literal, after `symbol(..)` if it has one, and not with `{`, `%`, `:`, `[`, `^`, or `}`
  --> tests/ui/asm_format_begins_like_generic.rs:4:22
   |
 4 |         #[asm_format(args attr_dict)]

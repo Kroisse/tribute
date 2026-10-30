@@ -14,7 +14,7 @@ use winnow::error::{ContextError, ErrMode, StrContext, StrContextValue};
 use winnow::prelude::*;
 
 use crate::op_def::OpDef;
-use crate::op_schema::{Arity, AttributeKind, OpSchema, ResultSchema};
+use crate::op_schema::{Arity, OpSchema, ResultSchema};
 use crate::parser::raw::{
     RawAttribute, RawOperation, RawRegion, RawType, block_label, ident, raw_attr_dict,
     raw_attr_value, raw_region, raw_type, symbol_ref, value_ref, ws,
@@ -72,8 +72,6 @@ pub enum FormatAnchor {
     Operand(usize),
     /// Results, when there is at least one.
     Results,
-    /// An optional region, or a variadic region list that is not empty.
-    Region(usize),
 }
 
 // =============================================================================
@@ -385,9 +383,6 @@ fn anchor_present(ctx: &IrContext, op: OpRef, schema: &OpSchema, anchor: FormatA
             !operand_range(schema, index, ctx.op_operands(op).len()).is_empty()
         }
         FormatAnchor::Results => !ctx.op_results(op).is_empty(),
-        FormatAnchor::Region(index) => {
-            !region_range(schema, index, ctx.op_region_count(op)).is_empty()
-        }
     }
 }
 
@@ -505,7 +500,6 @@ pub(crate) fn parse<'a>(
         schema,
         format,
         committed: false,
-        matched: false,
         parsed: Parsed {
             operands: vec![Vec::new(); schema.operands.len()],
             attributes: Vec::new(),
@@ -516,11 +510,6 @@ pub(crate) fn parse<'a>(
     };
     for element in format.elements {
         parser.committed_element(input, element)?;
-    }
-    // Every element was absent, so the input may as well be generic syntax,
-    // which reads an operation without any of them the same way.
-    if !parser.matched {
-        return Err(ErrMode::Backtrack(expected("the operation's format")));
     }
     let Parsed {
         operands,
@@ -556,8 +545,6 @@ struct FormatParser<'a> {
     schema: &'static OpSchema,
     format: &'static OpFormat,
     committed: bool,
-    /// Whether any element, a symbol included, has read a token.
-    matched: bool,
     parsed: Parsed<'a>,
 }
 
@@ -572,9 +559,8 @@ impl<'a> FormatParser<'a> {
         let before = input.len();
         match self.element(input, element) {
             Ok(()) => {
-                if input.len() != before {
-                    self.matched = true;
-                    self.committed |= !matches!(element, FormatElement::Symbol(_));
+                if input.len() != before && !matches!(element, FormatElement::Symbol(_)) {
+                    self.committed = true;
                 }
                 Ok(())
             }
@@ -602,21 +588,9 @@ impl<'a> FormatParser<'a> {
                 Ok(())
             }
             FormatElement::Attribute(index) => {
-                let checkpoint = *input;
                 let value = raw_attr_value
                     .parse_next(input)
                     .map_err(|e| e.map(|_| expected("attribute value")))?;
-                // `true`, `false`, and `unit` are read by prefix; one that
-                // continues as a name is part of the next operation's name.
-                let keyword_prefix = matches!(value, RawAttribute::Bool(_) | RawAttribute::Unit)
-                    && input
-                        .starts_with(|c: char| c == '.' || c == '_' || c.is_ascii_alphanumeric());
-                if keyword_prefix || !raw_accepts(self.schema.attributes[index].kind, &value) {
-                    *input = checkpoint;
-                    return Err(ErrMode::Backtrack(expected(
-                        "an attribute value of the declared kind",
-                    )));
-                }
                 self.attribute(index, value);
                 Ok(())
             }
@@ -689,27 +663,17 @@ impl<'a> FormatParser<'a> {
                 Ok(())
             }
             FormatElement::Optional { anchor, elements } => {
-                // `""` spacing literals read nothing; the first element after
-                // them decides the group.
-                let start = elements
-                    .iter()
-                    .position(|element| !matches!(element, FormatElement::Literal("")))
-                    .unwrap_or(elements.len());
-                let Some((first, rest)) = elements[start..].split_first() else {
+                // A group begins with its keyword, which tells whether it is
+                // present.
+                let Some((first, rest)) = elements.split_first() else {
                     return Ok(());
                 };
-                // The group is present when its first element reads a token.
-                let checkpoint = *input;
                 match self.element(input, first) {
-                    Ok(()) if input.len() != checkpoint.len() => {}
-                    Ok(()) | Err(ErrMode::Backtrack(_)) => {
-                        *input = checkpoint;
-                        return Ok(());
-                    }
+                    Ok(()) => {}
+                    Err(ErrMode::Backtrack(_)) => return Ok(()),
                     Err(error) => return Err(error),
                 }
                 self.committed = true;
-                self.matched = true;
                 if let FormatAnchor::Flag(index) = anchor {
                     self.attribute(index, RawAttribute::Bool(true));
                 }
@@ -720,7 +684,6 @@ impl<'a> FormatParser<'a> {
                     FormatAnchor::Attribute(_) | FormatAnchor::Flag(_) => true,
                     FormatAnchor::Operand(index) => !self.parsed.operands[index].is_empty(),
                     FormatAnchor::Results => !self.parsed.result_types[0].is_empty(),
-                    FormatAnchor::Region(index) => !self.parsed.regions[index].is_empty(),
                 };
                 if !present {
                     return Err(ErrMode::Cut(expected("the optional group's anchor")));
@@ -733,31 +696,6 @@ impl<'a> FormatParser<'a> {
     fn attribute(&mut self, index: usize, value: RawAttribute<'a>) {
         let name = self.schema.attributes[index].name;
         self.parsed.attributes.push((name.into(), value));
-    }
-}
-
-/// Whether a parsed attribute value can have `kind`, as far as its syntax
-/// shows; the builder checks integer ranges and types.
-fn raw_accepts(kind: AttributeKind, value: &RawAttribute<'_>) -> bool {
-    match (kind, value) {
-        (AttributeKind::Any, _) => true,
-        (AttributeKind::Bool, RawAttribute::Bool(_)) => true,
-        (
-            AttributeKind::I32 | AttributeKind::I64 | AttributeKind::U32 | AttributeKind::U64,
-            RawAttribute::Int(_),
-        ) => true,
-        (AttributeKind::F32 | AttributeKind::F64, RawAttribute::Float(_)) => true,
-        (AttributeKind::Type, RawAttribute::Type(_)) => true,
-        (AttributeKind::String, RawAttribute::String(_)) => true,
-        (AttributeKind::SymbolRef, RawAttribute::SymbolRef(_)) => true,
-        (AttributeKind::Bytes, RawAttribute::Bytes(_)) => true,
-        (AttributeKind::List(element), RawAttribute::List(items)) => {
-            items.iter().all(|item| raw_accepts(*element, item))
-        }
-        (AttributeKind::Dict(value), RawAttribute::Dict(entries)) => {
-            entries.iter().all(|(_, entry)| raw_accepts(*value, entry))
-        }
-        _ => false,
     }
 }
 
@@ -789,16 +727,6 @@ fn literal(input: &mut &str, text: &'static str) -> ModalResult<()> {
     }
 }
 
-/// Whether `kind` cannot begin a declarative format: its syntax may begin
-/// with `{`, which also begins generic operation syntax, or read the name of
-/// the next operation as a type.
-pub const fn ambiguous_first_kind(kind: AttributeKind) -> bool {
-    matches!(
-        kind,
-        AttributeKind::Any | AttributeKind::Dict(_) | AttributeKind::Type
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use crate::IrContext;
@@ -819,7 +747,7 @@ mod tests {
             {}
         }
 
-        #[asm_format(tag ("note" note^)? ":" type(result))]
+        #[asm_format("ref" tag ("note" note^)? ":" type(result))]
         fn tagged(tag: Attr<SymbolRef>, note: Option<Attr<String>>) -> Value<_> {}
 
         #[asm_format("to" successor(dest) "(" args ")")]
@@ -828,22 +756,19 @@ mod tests {
             {}
         }
 
-        #[asm_format(("on" on^)?)]
+        #[asm_format("turn" ("on" on^)?)]
         fn toggle(on: Option<Attr<bool>>) {}
 
-        #[asm_format("go" "(" ("" "on" on^)? ")")]
+        #[asm_format("go" "(" ("on" on^)? ")")]
         fn run(on: Option<Attr<bool>>) {}
 
         #[asm_format(symbol(callee))]
         fn named(callee: Attr<String>) {}
 
-        #[asm_format(flag "set")]
-        fn bit(flag: Attr<bool>) {}
-
-        #[asm_format(("quick" quick^)? "now" ("with" args^)? attr_dict)]
+        #[asm_format("now" ("quick" quick^)? ("with" "(" args^ ")")? attr_dict)]
         fn mark(quick: Option<Attr<bool>>, args: Variadic<_>) {}
 
-        #[asm_format("cases" "[" successors(dests) "]" (":" type(result)^)? regions(bodies))]
+        #[asm_format("cases" "[" successors(dests) "]" regions(bodies) (":" type(result)^)?)]
         fn switch() -> Option<Value<_>> {
             #[successors(dests)]
             {}
@@ -883,8 +808,8 @@ mod tests {
         assert_round_trip(
             r#"core.module @m {
   asm_format_test.def @f kind "pure" inferred attributes {extra = 1} {
-      %0 = asm_format_test.tagged @f note "n" : core.i32
-      %1 = asm_format_test.tagged @g : core.i32
+      %0 = asm_format_test.tagged ref @f note "n" : core.i32
+      %1 = asm_format_test.tagged ref @g : core.i32
       %2 = asm_format_test.invoke call @f(%0, %1) : core.i32
       asm_format_test.invoke call @g()
   }
@@ -916,15 +841,15 @@ mod tests {
             r#"core.module @m {
   asm_format_test.def @cfg kind "c" {
     ^bb0:
-      asm_format_test.mark quick now
+      asm_format_test.mark now quick
       asm_format_test.mark now
-      %0 = asm_format_test.tagged @f : core.i32
-      asm_format_test.mark now with %0
+      %0 = asm_format_test.tagged ref @f : core.i32
+      asm_format_test.mark now with(%0)
       asm_format_test.mark now attributes {extra = 1}
       asm_format_test.switch cases [^bb1, ^bb0] {
           asm_format_test.mark now
       } {
-          asm_format_test.mark quick now
+          asm_format_test.mark now quick
       }
 
     ^bb1:
@@ -936,12 +861,10 @@ mod tests {
     }
 
     #[test]
-    fn a_format_beginning_with_an_absent_group_reads_generic_syntax() {
+    fn false_flags_print_generically_and_read_back() {
         let text = r#"core.module @m {
   asm_format_test.mark {quick = false}
   asm_format_test.toggle {on = false}
-  asm_format_test.bit
-  true.probe
 }
 "#;
         assert_eq!(print(text), text);
@@ -952,8 +875,8 @@ mod tests {
         assert_round_trip(
             r#"core.module @m {
   asm_format_test.def @f kind "k" {
-      asm_format_test.toggle on
-      asm_format_test.toggle
+      asm_format_test.toggle turn on
+      asm_format_test.toggle turn
       asm_format_test.run go(on)
       asm_format_test.run go()
       asm_format_test.named @target
@@ -975,7 +898,7 @@ mod tests {
         assert_eq!(
             print(generic),
             r#"core.module @m {
-  %0 = asm_format_test.tagged @f note "n" : core.i32
+  %0 = asm_format_test.tagged ref @f note "n" : core.i32
   asm_format_test.def @d kind "k"
 }
 "#
@@ -1010,7 +933,7 @@ mod tests {
     fn a_group_without_its_anchor_is_an_error() {
         let error = parse_error(
             r#"core.module @m {
-  asm_format_test.mark now with
+  asm_format_test.mark now with()
 }"#,
         );
         assert!(error.contains("anchor"), "{error}");

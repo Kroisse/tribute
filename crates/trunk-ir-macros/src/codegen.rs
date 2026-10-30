@@ -1467,7 +1467,7 @@ fn attr_kind_type(crate_path: &TokenStream, attr: &AttrDef) -> TokenStream {
 }
 
 /// A declared attribute's kind as its `AttrKind` implementation.
-pub(crate) fn attr_kind_trait(crate_path: &TokenStream, attr: &AttrDef) -> TokenStream {
+fn attr_kind_trait(crate_path: &TokenStream, attr: &AttrDef) -> TokenStream {
     let kind = attr_kind_type(crate_path, attr);
     // The span points a type that is not a kind at its declaration.
     let span = match &attr.kind {

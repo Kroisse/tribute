@@ -174,11 +174,13 @@ where
   String literals are keywords and punctuation, a bare name is an operand
   or attribute, and `symbol(..)`, `type(..)`/`types(..)`, `attr_dict`
   (`attributes {..}`), `region(..)`/`regions(..)`, and
-  `successor(..)`/`successors(..)` write the other entities. `( .. x^ .. )?`
-  is written only when its anchor `x` is present; an optional `bool`
-  anchor is a flag the group's literals stand for. The macro rejects a
-  format that leaves an entity out, writes one twice, or begins like
-  generic syntax, at the element at fault. An operation the format cannot
+  `successor(..)`/`successors(..)` write the other entities. `("kw" .. x^)?`
+  opens with a literal and is written only when its anchor `x` is present;
+  an optional `bool` anchor is a flag the group's literals stand for. A
+  format begins with a literal (after `symbol(..)`), closes each variadic
+  list with `")"` or `"]"`, and ends with `(":" types(..)^)?` for results
+  that may be absent. The macro reports a broken rule, a missing entity, or
+  one written twice at the element at fault. An operation the format cannot
   spell without loss prints generically.
 - `#[asm_format]` without elements on an operation requires
   `trunk_ir::asm_format::OpAsmFormat` for its wrapper, which prints and
