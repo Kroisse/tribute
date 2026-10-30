@@ -106,8 +106,7 @@ pub fn eliminate_dead_definitions_with_config(
 
 /// The live [`SymbolDefinition`]s of `module` under `config`: the
 /// definitions [`eliminate_dead_definitions_with_config`] would not remove,
-/// except those of nested modules a non-recursive configuration does not
-/// analyze.
+/// including those of nested modules a non-recursive configuration keeps.
 pub fn reachable_definitions_with_config(
     ctx: &IrContext,
     module: Module,
