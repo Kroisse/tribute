@@ -108,20 +108,18 @@ fn without_row(callable_ty: &str) -> String {
 }
 
 /// The convention a printed `tribute_cps` operation declares, quoted.
-/// The `conventions` of the function table named `name`.
-fn table_conventions<'a>(ir: &'a str, name: &str) -> &'a str {
+/// The conventions of the entries of the function table named `name`.
+fn table_conventions(ir: &str, name: &str) -> Vec<String> {
+    let header = format!("tribute_cps.func_table @\"{name}\" [");
     let line = ir
         .lines()
-        .find(|line| {
-            line.contains("tribute_cps.func_table")
-                && line.contains(&format!("sym_name = \"{name}\""))
-        })
+        .find_map(|line| line.trim().strip_prefix(&header))
         .unwrap_or_else(|| panic!("missing function table {name}:\n{ir}"));
-    line.split("conventions = ")
-        .nth(1)
-        .and_then(|suffix| suffix.split(']').next())
-        .map(|list| list.trim_start_matches('['))
-        .unwrap_or_else(|| panic!("missing conventions in {line}"))
+    line.trim_end_matches(']')
+        .split(", ")
+        .filter_map(|entry| entry.split(" = ").next())
+        .map(str::to_owned)
+        .collect()
 }
 
 /// Each printed lambda's header line, followed by the line that opens its
@@ -183,7 +181,7 @@ fn main() -> Nil {}
     );
     // The value enters `double` directly; an adapter fills the `Cps` slot
     // that `apply` calls.
-    assert_eq!(table_conventions(&ir, "pkg::double$8"), "\"direct\"");
+    assert_eq!(table_conventions(&ir, "pkg::double$8"), ["direct"]);
     assert!(
         named_function_header(&ir, "double").contains("convention(direct)"),
         "the original named worker must remain Direct:\n{ir}"
@@ -215,7 +213,7 @@ fn main() -> Nil {}
     let reference_values = refs.iter().map(|line| value_name(line)).collect::<Vec<_>>();
     assert_ne!(reference_values[0], reference_values[1]);
     // Both references share the table of the one instance they name.
-    assert_eq!(table_conventions(&ir, "pkg::double$8"), "\"direct\"");
+    assert_eq!(table_conventions(&ir, "pkg::double$8"), ["direct"]);
     for value in reference_values {
         assert_not_cast(logical_function(&ir, "forward"), value);
     }

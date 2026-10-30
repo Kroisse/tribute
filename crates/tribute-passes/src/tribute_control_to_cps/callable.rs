@@ -201,13 +201,13 @@ impl Converter<'_> {
                 .get(callable)
                 .cloned()
                 .expect("pre-CPS validation resolved table targets");
-            if *convention < info.convention {
+            if *convention != info.convention {
                 return Err(self.malformed_source(
                     table.op,
                     "a function table entry weaker than its target is not supported",
                 ));
             }
-            let entry = self.func_ref_entry(location, logical_ty, *convention, &info, target);
+            let entry = self.func_ref_entry(location, logical_ty, &info, target);
             bodies.push((*convention, entry));
         }
         let conventions: Vec<_> = bodies.iter().map(|&(convention, _)| convention).collect();
@@ -230,93 +230,68 @@ impl Converter<'_> {
         ))
     }
 
-    /// The entry function through `convention` of a closure of `logical_ty`
-    /// that calls `target`, the callable `info` describes.
+    /// The entry function of a closure of `logical_ty` that enters `target`,
+    /// the callable `info` describes, through its own convention.
     fn func_ref_entry(
         &mut self,
         location: Location,
         logical_ty: TypeRef,
-        result_convention: CallingConvention,
-        target: &CallableInfo,
-        target_symbol: &SymbolPath,
+        info: &CallableInfo,
+        target: &SymbolPath,
     ) -> Symbol {
-        // The adapter is the closure's entry with the environment
-        // interposed, so both share parameter attributes and metadata.
+        let convention = info.convention;
+        // The entry is the closure's entry with the environment interposed,
+        // so both share parameter attributes and metadata.
         let closure_ty = self.convert_type(logical_ty);
-        let function = self.lower_callable_signature(logical_ty, result_convention);
+        let function = self.lower_callable_signature(logical_ty, convention);
         let callable = func::FuncSig::from_type_ref(self.ctx, function)
             .expect("an entry signature is a func.func_sig");
-        // The adapter's environment is the capture-free closure itself.
-        let adapter = callable.rebuild(self.ctx, |inputs, _| {
-            inputs.insert(
-                usize::from(result_convention.needs_evidence()),
-                (closure_ty, AttributeMap::new()),
-            );
+        // The entry's environment is the capture-free closure itself, right
+        // after the optional evidence.
+        let evidence = usize::from(convention.needs_evidence());
+        let entry = callable.rebuild(self.ctx, |inputs, _| {
+            inputs.insert(evidence, (closure_ty, AttributeMap::new()));
         });
-        let physical_params = adapter.inputs(self.ctx).to_vec();
-        let adapter_ty = adapter.as_type_ref();
+        let physical_params = entry.inputs(self.ctx).to_vec();
+        let entry_ty = entry.as_type_ref();
         let block = make_block(self.ctx, location, &physical_params);
         let args = self.ctx.block_args(block).to_vec();
-        let evidence_offset = usize::from(result_convention.needs_evidence());
-        // The environment is interposed immediately after optional evidence,
-        // so a present ContinuationFrame is the following slot.
-        let frame_offset = evidence_offset + 1;
-        let source_offset = usize::from(result_convention.needs_evidence())
-            + 1
-            + usize::from(result_convention.needs_continuation_frame());
-        let mut target_args = Vec::new();
-        if target.convention.needs_evidence() {
-            target_args.push(args[0]);
-        }
-        if target.convention.needs_continuation_frame() {
-            target_args.push(args[frame_offset]);
-        }
-        target_args.extend_from_slice(&args[source_offset..]);
-        let target_result = self.convert_type(target.source_result);
-        if target.convention == CallingConvention::Cps {
-            let tail = func::TailCall::operands(target_args)
-                .callee(target_symbol.clone())
-                .build(self.ctx, location);
-            tail.set_calling_convention(self.ctx, CallingConvention::Cps);
-            self.ctx.push_op(block, tail.op_ref());
-        } else if result_convention != CallingConvention::Cps
-            && !target.platform
-            && adapter.results(self.ctx) == [target_result]
+        let target_args: Vec<_> = args[..evidence]
+            .iter()
+            .chain(&args[evidence + 1..])
+            .copied()
+            .collect();
+        let target_result = self.convert_type(info.source_result);
+        if convention == CallingConvention::Cps
+            || (!info.platform && entry.results(self.ctx) == [target_result])
         {
-            // A value adapter transfers its frame to the target, so a source
-            // `become` through the adapted callable value stays a proper
-            // tail call.
+            // The entry transfers its frame to the target, so a source
+            // `become` through the callable value stays a proper tail call.
             let tail = func::TailCall::operands(target_args)
-                .callee(target_symbol.clone())
+                .callee(target.clone())
                 .build(self.ctx, location);
-            tail.set_calling_convention(self.ctx, target.convention);
+            tail.set_calling_convention(self.ctx, convention);
             self.ctx.push_op(block, tail.op_ref());
         } else {
             let call = func::Call::operands(target_args)
-                .callee(target_symbol.clone())
+                .callee(target.clone())
                 .results([target_result])
                 .build(self.ctx, location);
-            call.set_calling_convention(self.ctx, target.convention);
+            call.set_calling_convention(self.ctx, convention);
             self.ctx.push_op(block, call.op_ref());
-            if result_convention == CallingConvention::Cps {
-                let exit = ability::Exit::operands(args[frame_offset], call.result(self.ctx))
-                    .build(self.ctx, location);
-                self.ctx.push_op(block, exit.op_ref());
-            } else {
-                let ret = func::Return::operands([call.result(self.ctx)]).build(self.ctx, location);
-                self.ctx.push_op(block, ret.op_ref());
-            }
+            let ret = func::Return::operands([call.result(self.ctx)]).build(self.ctx, location);
+            self.ctx.push_op(block, ret.op_ref());
         }
         let region = single_block_region(self.ctx, location, block);
-        let adapter_symbol = self.fresh_helper("func_ref_adapter");
-        let adapter = func::Func::operands()
-            .sym_name(self.ctx.intern_symbol_text(&adapter_symbol))
-            .r#type(adapter_ty)
+        let symbol = self.fresh_helper("func_ref_adapter");
+        let entry = func::Func::operands()
+            .sym_name(self.ctx.intern_symbol_text(&symbol))
+            .r#type(entry_ty)
             .regions(region)
             .build(self.ctx, location);
-        adapter.set_calling_convention(self.ctx, result_convention);
-        self.ctx.push_op(self.module_block, adapter.op_ref());
-        adapter_symbol
+        entry.set_calling_convention(self.ctx, convention);
+        self.ctx.push_op(self.module_block, entry.op_ref());
+        symbol
     }
 
     pub(super) fn convert_func(

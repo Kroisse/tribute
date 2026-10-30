@@ -11,7 +11,7 @@ const MODULE: &str = r#"core.module @test {
   !t1 = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>
 
   tribute_cps.func @declared(%arg0: core.i32) -> core.i32 convention(direct)
-  tribute_cps.func_table {conventions = ["direct"], sym_name = "declared$8", targets = [@declared]}
+  tribute_cps.func_table @"declared$8" [direct = @declared]
   tribute_cps.func @apply(%0: !t0, %1: core.i32) -> core.i32 convention(direct) {
       %2 = tribute_cps.call_indirect %0, %1 {convention = "direct"} : core.i32
       tribute_control.return %2
@@ -214,7 +214,7 @@ fn table_module(target: &str, entry: &str) -> String {
     %0 = arith.const {{value = 1}} : core.i32
     tribute_control.return %0
   }}
-  tribute_cps.func_table {{conventions = ["{entry}"], sym_name = "target$8", targets = [@target]}}
+  tribute_cps.func_table @"target$8" [{entry} = @target]
   tribute_cps.func @f() -> core.i32 convention(direct) {{
     %0 = tribute_cps.func_ref {{func_ref = @"target$8"}} : tribute_control.func_sig<() -> core.i32>
     %1 = tribute_cps.call_indirect %0 {{convention = "direct"}} : core.i32
@@ -226,11 +226,19 @@ fn table_module(target: &str, entry: &str) -> String {
 }
 
 #[test]
-fn a_function_table_entry_is_not_weaker_than_its_target() {
+fn a_function_table_entry_has_the_convention_of_its_target() {
     assert_eq!(
-        messages(&table_module("evidence_direct", "direct")),
-        ["function table entry `direct` is weaker than its target @target"]
+        messages(&table_module("direct", "direct")),
+        Vec::<String>::new()
     );
+    for entry in ["direct", "cps"] {
+        assert_eq!(
+            messages(&table_module("evidence_direct", entry)),
+            [format!(
+                "function table entry `{entry}` is not the convention of its target @target"
+            )]
+        );
+    }
 }
 
 /// A classless tail can make the target `Cps` while the value's row needs
@@ -269,7 +277,7 @@ fn a_function_reference_names_a_function_table() {
 fn a_function_table_names_one_target_per_increasing_convention() {
     let (ctx, module) = parse(
         r#"core.module @test {
-  tribute_cps.func_table {conventions = ["cps", "direct"], sym_name = "t", targets = [@a, @b]}
+  tribute_cps.func_table @t [cps = @a, direct = @b]
 }
 "#,
     );

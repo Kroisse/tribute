@@ -3456,8 +3456,8 @@ fn validate_func_ref_signature(
 }
 
 /// Check that each target of `table`, a `tribute_cps.func_table`, is an
-/// instance of one definition, entered with a convention no weaker than
-/// its own unless it is `Cps`.
+/// instance of one definition, entered with its own convention or, for a
+/// `Cps` target, a weaker one.
 fn validate_func_table(
     ctx: &IrContext,
     table: OpRef,
@@ -3490,15 +3490,15 @@ fn validate_func_table(
             );
         }
         if let Some(own) = tribute_cps::declared_convention(ctx, instance)
-            && convention < own
-            && own != CallingConvention::Cps
+            && convention != own
+            && !(convention < own && own == CallingConvention::Cps)
         {
             push_op_error(
                 ctx,
                 table,
                 errors,
                 format!(
-                    "function table entry `{}` is weaker than its target @{target}",
+                    "function table entry `{}` is not the convention of its target @{target}",
                     convention.keyword()
                 ),
             );

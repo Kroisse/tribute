@@ -148,11 +148,12 @@ mod tribute_cps {
     /// arguments, with a target instance per convention its row reads.
     ///
     /// ```text
-    /// tribute_cps.func_table @"id$9e$8" {conventions = ["direct", "evidence_direct"], targets = [@"id$9D", @"id$9e"]}
+    /// tribute_cps.func_table @"id$9e$8" [direct = @"id$9D", evidence_direct = @"id$9e"]
     /// ```
     ///
     /// - **Shape:** no operands, results, or regions. `sym_name: String`,
-    ///   and `conventions` and `targets` lists of the same length.
+    ///   and `conventions` and `targets` lists of the same length. The
+    ///   concise form writes each convention with its target.
     /// - **Placement:** directly in a module, as a symbol definition. Class
     ///   specialization makes one for each definition and class arguments
     ///   that a `tribute_cps.func_ref` refers to, named as
@@ -166,17 +167,18 @@ mod tribute_cps {
     ///   ("Convention entry", 함수 참조) gives the definition's row read with
     ///   the class arguments. They depend only on the definition and the
     ///   class arguments, never on the row a reference passes, so every
-    ///   reference with those arguments can share the table. When an instance's convention is weaker, legalization
-    ///   fills the entry with an adapter. When a classless tail makes the
-    ///   instance `Cps` and its convention is weaker, the entry is the
-    ///   `func_ref` adapter that calls the worker through a value delimiter
+    ///   reference with those arguments can share the table. An entry is
+    ///   the target's own convention, so legalization enters the target
+    ///   directly. When a classless tail makes the instance `Cps` and its
+    ///   convention is weaker, the entry is the `func_ref` adapter that
+    ///   calls the worker through a value delimiter
     ///   (`new-plans/cps-effects.md`, 값 delimiter). Legalization fills the
     ///   other entries by the same rule as a lambda's, once for the table.
     /// - **Verification:** the local verifier checks the attributes, that
     ///   the lists have the same length, and that the conventions are
     ///   strictly increasing. Whole-IR verification checks that each target
     ///   resolves to a `tribute_cps.func` of the same definition, and that
-    ///   each convention is not weaker than its target's unless that target
+    ///   each convention is its target's, or weaker than it when the target
     ///   is `Cps`.
     /// - **Ownership and value flow:** defines no value.
     /// - **Symbol:** a discardable `SymbolDefinition` that is not a
@@ -185,6 +187,7 @@ mod tribute_cps {
     ///   removes it once none does (`new-plans/ir.md`, "Core Invariants").
     /// - **Location:** the span of the referenced definition.
     #[verify]
+    #[asm_format]
     #[implements(trunk_ir::op_interface::SymbolDefinition)]
     fn func_table(
         sym_name: Attr<String>,
@@ -541,6 +544,96 @@ impl trunk_ir::asm_format::OpAsmFormat for Lambda {
         sym_name: Option<String>,
     ) -> winnow::ModalResult<trunk_ir::parser::raw::RawOperation<'a>> {
         tribute_control::parse_lambda(input, results, sym_name, "tribute_cps.lambda", true)
+    }
+}
+
+/// `tribute_cps.func_table @name [convention = @target, ...]`. A table with
+/// other attributes or malformed entries prints generically.
+impl trunk_ir::asm_format::OpAsmFormat for FuncTable {
+    fn print(&self, h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>) -> std::fmt::Result {
+        use std::fmt::Write;
+        let ctx = h.ctx();
+        let op = self.op_ref();
+        let name = ctx.op_attrs(op).get_str("sym_name").map(str::to_owned);
+        let (Some(name), Some(entries), 3) = (
+            name,
+            table_entries(ctx, op),
+            ctx.op_attrs(op).iter().count(),
+        ) else {
+            return h.print_generic(op);
+        };
+        write!(h, "tribute_cps.func_table ")?;
+        h.write_symbol_text(&name)?;
+        write!(h, " [")?;
+        for (index, (convention, target)) in entries.into_iter().enumerate() {
+            if index > 0 {
+                write!(h, ", ")?;
+            }
+            write!(h, "{} = ", convention.keyword())?;
+            h.write_attribute(&trunk_ir::Attribute::SymbolRef(target))?;
+        }
+        write!(h, "]")
+    }
+
+    fn parse<'a>(
+        input: &mut &'a str,
+        results: Vec<&'a str>,
+        sym_name: Option<String>,
+    ) -> winnow::ModalResult<trunk_ir::parser::raw::RawOperation<'a>> {
+        use trunk_ir::parser::raw::*;
+        use winnow::combinator::{delimited, separated};
+        use winnow::prelude::*;
+
+        if sym_name.is_none() || !results.is_empty() {
+            return Err(winnow::error::ErrMode::Backtrack(
+                winnow::error::ContextError::new(),
+            ));
+        }
+        ws.parse_next(input)?;
+        let entries: Vec<(CallingConvention, Vec<String>)> = delimited(
+            ('[', ws),
+            separated(
+                1..,
+                (
+                    ws,
+                    ident.try_map(str::parse::<CallingConvention>),
+                    ws,
+                    '=',
+                    ws,
+                    symbol_path,
+                    ws,
+                )
+                    .map(|(_, convention, _, _, _, target, _)| (convention, target)),
+                ',',
+            ),
+            (ws, ']'),
+        )
+        .parse_next(input)?;
+        let (conventions, targets): (Vec<_>, Vec<_>) = entries
+            .into_iter()
+            .map(|(convention, target)| {
+                (
+                    RawAttribute::String(convention.keyword().to_owned()),
+                    RawAttribute::SymbolRef(target),
+                )
+            })
+            .unzip();
+        Ok(RawOperation {
+            results,
+            name: "tribute_cps.func_table",
+            sym_name,
+            has_func_signature: false,
+            func_params: vec![],
+            return_type: None,
+            operands: vec![],
+            attributes: vec![
+                (CONVENTIONS_ATTR.into(), RawAttribute::List(conventions)),
+                ("targets".into(), RawAttribute::List(targets)),
+            ],
+            result_types: vec![],
+            regions: vec![],
+            successors: vec![],
+        })
     }
 }
 
