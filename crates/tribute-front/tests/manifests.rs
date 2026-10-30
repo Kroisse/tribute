@@ -378,6 +378,24 @@ extra = { path = "../extra" }
     assert_eq!(ws.inputs("/ws/app/tribute.toml", true), all);
 }
 
+/// A library whose manifest gives no valid name still lists its source
+/// tree.
+#[test]
+fn a_library_without_a_valid_name_lists_its_tree() {
+    let mut ws = Workspace::new();
+    ws.file("/ws/lib/tribute.toml", "[package]\nname = \"Bad\"\n");
+    ws.file("/ws/lib/src/lib.trb", "mod part\n");
+    assert_eq!(
+        ws.inputs("/ws/lib/tribute.toml", false),
+        [
+            "/ws/lib/src/lib.trb",
+            "/ws/lib/src/main.trb",
+            "/ws/lib/src/part.trb",
+            "/ws/lib/tribute.toml",
+        ]
+    );
+}
+
 /// A source file compiled without a manifest lists only what its source
 /// tree looked for.
 #[test]

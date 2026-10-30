@@ -75,14 +75,20 @@ fn package_files(
     executable: bool,
 ) -> Vec<PathBuf> {
     let mut inputs: Vec<PathBuf> = uri_to_path(file.uri(db)).into_iter().collect();
-    inputs.extend(
-        beside(file.uri(db), LIBRARY_ROOT)
-            .as_ref()
-            .and_then(uri_to_path),
-    );
-    let library = library_package(db, file, implicit).and_then(|package| package_tree(db, package));
-    if let Some(tree) = library {
-        inputs.extend_from_slice(tree.probed());
+    if let Some(uri) = beside(file.uri(db), LIBRARY_ROOT) {
+        inputs.extend(uri_to_path(&uri));
+        let library =
+            library_package(db, file, implicit).and_then(|package| package_tree(db, package));
+        match library {
+            Some(tree) => inputs.extend_from_slice(tree.probed()),
+            // A manifest without a valid name builds no library package, but
+            // its root file is still the package's.
+            None => {
+                if let Some(root) = source_at(db, &uri) {
+                    inputs.extend(tree_inputs(db, root));
+                }
+            }
+        }
     }
     if executable && let Some(uri) = beside(file.uri(db), EXECUTABLE_ROOT) {
         inputs.extend(uri_to_path(&uri));
