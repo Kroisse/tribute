@@ -422,7 +422,10 @@ impl<'a> Format<'a> {
             .filter(|(element, ..)| !(is_flag && matches!(element, Element::Attribute(_))))
             .map(|(element, span, _)| (element, span))
             .collect();
-        if elements.is_empty() {
+        if elements
+            .iter()
+            .all(|(element, _)| matches!(element, Element::Literal(text) if text.is_empty()))
+        {
             return err(span, "a flag's group writes a literal that stands for it");
         }
         Ok(Element::Optional { anchor, elements })
@@ -517,42 +520,47 @@ impl Format<'_> {
         tokens
     }
 
-    /// Whether an element writes a comma-separated list, which would read a
-    /// `,` after it as its own separator.
-    fn is_list(&self, element: &Element) -> bool {
+    /// The token that continues a list an element writes: a `,` before
+    /// the next item of a comma-separated list, or the `{` of the next region.
+    fn continuation(&self, element: &Element) -> Option<&'static str> {
         match *element {
-            Element::Operand(i) => self.op.operands[i].variadic,
-            Element::Successor(i) => self.successors[i].1,
-            Element::ResultTypes => true,
-            _ => false,
+            Element::Operand(i) if self.op.operands[i].variadic => Some(","),
+            Element::Successor(i) if self.successors[i].1 => Some(","),
+            Element::ResultTypes => Some(","),
+            Element::Region(i) if self.regions[i].2 => Some("{"),
+            _ => None,
         }
     }
 
-    /// Reject a list that a `,` can follow, at the top level or inside a
-    /// group.
+    /// Reject a list that what follows it can continue, at the top level or
+    /// inside a group, since the list would read it as its next item.
     fn check_lists(&self, elements: &[(Element, Span)]) -> Result<(), FormatError> {
-        let comma = |tokens: Vec<Token<'_>>| tokens.iter().any(|t| matches!(t, Token::Text(",")));
+        let check = |element: &Element, span: Span, after: Vec<Token<'_>>| {
+            let Some(continuation) = self.continuation(element) else {
+                return Ok(());
+            };
+            if after
+                .into_iter()
+                .any(|next| conflict(Token::Text(continuation), next))
+            {
+                return err(
+                    span,
+                    format!("a list cannot be followed by what continues it, `{continuation}`"),
+                );
+            }
+            Ok(())
+        };
         for (position, (element, span)) in elements.iter().enumerate() {
             let after = self.follow(elements, position + 1, &[Token::End]);
-            let inner = match element {
-                Element::Optional { elements, .. } => elements,
-                _ => {
-                    if self.is_list(element) && comma(after) {
-                        return err(
-                            *span,
-                            "a comma-separated list cannot be followed by `\",\"`",
-                        );
+            match element {
+                Element::Optional {
+                    elements: inner, ..
+                } => {
+                    for (j, (element, span)) in inner.iter().enumerate() {
+                        check(element, *span, self.follow(inner, j + 1, &after))?;
                     }
-                    continue;
                 }
-            };
-            for (j, (element, span)) in inner.iter().enumerate() {
-                if self.is_list(element) && comma(self.follow(inner, j + 1, &after)) {
-                    return err(
-                        *span,
-                        "a comma-separated list cannot be followed by `\",\"`",
-                    );
-                }
+                _ => check(element, *span, after)?,
             }
         }
         Ok(())
@@ -1008,7 +1016,7 @@ mod tests {
                     fn op(a: Value<_>, b: Variadic<_>) {}
                 ),
                 quote!("x" b "," a),
-                "comma-separated list",
+                "what continues it, `,`",
             ),
             (
                 quote!(
@@ -1030,6 +1038,25 @@ mod tests {
                 ),
                 quote!("x" (types(results)^ ":")? "!"),
                 "may write nothing",
+            ),
+            (
+                quote!(
+                    fn op() {
+                        #[region(body)]
+                        {}
+                        #[regions(extras)]
+                        {}
+                    }
+                ),
+                quote!("x" ("extras" regions(extras)^)? region(body)),
+                "what continues it, `{`",
+            ),
+            (
+                quote!(
+                    fn op(on: Option<Attr<bool>>) {}
+                ),
+                quote!("x" ("" on^)?),
+                "flag's group",
             ),
         ];
         let failures: Vec<String> = cases
