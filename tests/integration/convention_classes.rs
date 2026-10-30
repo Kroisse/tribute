@@ -135,7 +135,7 @@ fn lambda_headers(ir: &str) -> Vec<String> {
 
 fn named_ref_lines<'a>(ir: &'a str, name: &str) -> Vec<&'a str> {
     ir.lines()
-        .filter(|line| line.contains(&format!("func_ref = @\"pkg::{name}$8\"")))
+        .filter(|line| line.contains(&format!("func_ref @\"pkg::{name}$8\"")))
         .collect()
 }
 

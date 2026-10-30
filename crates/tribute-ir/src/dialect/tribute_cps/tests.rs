@@ -22,7 +22,7 @@ const MODULE: &str = r#"core.module @test {
             tribute_control.return %0
         }
       }
-      %3 = tribute_cps.func_ref {func_ref = @"declared$8"} : !t0
+      %3 = tribute_cps.func_ref @"declared$8" : !t0
       tribute_cps.tail_call_indirect %1, %0 {convention = "cps"}
   }
 }
@@ -328,4 +328,20 @@ fn every_body_takes_the_parameters_and_its_own_convention() {
         "{:?}",
         messages(&stronger)
     );
+}
+
+#[test]
+fn a_function_reference_writes_its_target_and_row_arguments() {
+    let input = r#"core.module @test {
+  !t0 = tribute_control.func_sig<() -> core.i32, {ability_row = {tail = 0}}>
+
+  tribute_cps.func @f['a0]() -> core.i32 row(| 'a0) convention(cps) {
+      %0 = tribute_cps.func_ref @inner::@"g$8" [{tail = 0}] : !t0
+      %1 = tribute_control.func_ref @h : !t0
+      tribute_cps.tail_call_indirect %0 {convention = "cps"}
+  }
+}
+"#;
+    let (ctx, module) = parse(input);
+    assert_eq!(print_module(&ctx, module.op()), input);
 }

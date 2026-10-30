@@ -126,7 +126,7 @@ mod tribute_cps {
     /// of its definition and class arguments.
     ///
     /// ```text
-    /// %f = tribute_cps.func_ref {func_ref = @"id$9e$8"} : !Callable
+    /// %f = tribute_cps.func_ref @"id$9e$8" : !Callable
     /// ```
     ///
     /// - **Shape:** `tribute_control.func_ref` whose `func_ref` names a
@@ -140,6 +140,7 @@ mod tribute_cps {
     /// - **Ownership and value flow:** the result is an ordinary SSA value.
     /// - **Location:** the source reference span.
     #[verify]
+    #[asm_format]
     #[flags(Pure)]
     #[implements(CallableResultOrigin)]
     fn func_ref(func_ref: Attr<SymbolRef>, row_args: Option<Attr<[Row]>>) -> Value<impl FuncSig> {}
@@ -634,6 +635,20 @@ impl trunk_ir::asm_format::OpAsmFormat for FuncTable {
             regions: vec![],
             successors: vec![],
         })
+    }
+}
+
+impl trunk_ir::asm_format::OpAsmFormat for FuncRef {
+    fn print(&self, h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>) -> std::fmt::Result {
+        tribute_control::print_func_ref(h, self.op_ref(), "tribute_cps.func_ref")
+    }
+
+    fn parse<'a>(
+        input: &mut &'a str,
+        results: Vec<&'a str>,
+        sym_name: Option<String>,
+    ) -> winnow::ModalResult<trunk_ir::parser::raw::RawOperation<'a>> {
+        tribute_control::parse_func_ref(input, results, sym_name, "tribute_cps.func_ref")
     }
 }
 
