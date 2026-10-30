@@ -23,6 +23,7 @@ Key design docs:
 - `new-plans/type-inference.md`
 - `new-plans/ir.md`
 - `new-plans/implementation.md`
+- `new-plans/lsp.md`
 - `new-plans/cranelift-backend.md`
 - `new-plans/runtime-types.md`
 

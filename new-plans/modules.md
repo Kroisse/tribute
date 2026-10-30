@@ -49,9 +49,8 @@ export(`std::io::Io`)만 [의존 패키지](#prelude와-패키지-std) 경로나
 syntax와 backend-independent lowering이 canonical identity를 요구하는 opaque `List`와
 ambient/intrinsic 성질처럼 compiler가 보장해야 하는 metadata는 builtin registry에 둔다.
 
-LSP는 import된 compiler-owned binding을 completion과 hover에 노출한다. 다만 이동할
-source declaration이 없으므로 go-to-definition과 rename target은 제공하지 않는다.
-로컬 declaration은 같은 short name의 builtin import보다 우선하며, 이 규칙은 effect
+Language server가 이 binding을 보이는 방식은 [Language Server](lsp.md#결과)를
+따른다. 로컬 declaration은 같은 short name의 builtin import보다 우선하며, 이 규칙은 effect
 annotation을 포함한 모든 name-resolution 경로에서 동일하게 적용한다. 이 shadowing은
 syntax-owned semantics를 바꾸지 않는다. 예를 들어 로컬 `List`는 annotation에서
 선택될 수 있지만 `[1, 2]`의 canonical builtin `List` identity를 capture하지 못하며,
@@ -837,17 +836,15 @@ geometry = { path = "../geometry" }
 다시 오류가 된다.
 
 **실행 파일 루트.** 실행 파일 빌드의 루트 파일은 패키지의 `src/main.trb`이며, 그
-의존성 표는 매니페스트의 `[dependencies]`와 `std`다. Source 파일 하나를 컴파일할
-때도 그 파일이 `tribute.toml`을 담은 디렉토리의 `src/main.trb`이면 그 패키지의
-실행 파일 루트로 컴파일한다. 그래서 패키지 디렉토리를 컴파일하는 것과 그
-`src/main.trb`를 컴파일하는 것, 편집기에서 그 파일을 여는 것은 같은 의존성 표로
-해석한다. `src/lib.trb`만 있는 패키지는 실행 파일을 만들지 않으며, 라이브러리로
+의존성 표는 매니페스트의 `[dependencies]`와 `std`다. `src/lib.trb`만 있는 패키지는 실행 파일을 만들지 않으며, 라이브러리로
 검사한다.
 
 **매니페스트 없는 컴파일.** 매니페스트 없이 source 파일 하나를 컴파일할 수 있다. 그
 파일은 `std`에만 의존하는 실행 파일 패키지의 루트이며, 파일 기반 모듈은 그 파일의
-디렉토리를 `src/`처럼 기준으로 삼아 찾는다. 위의 `src/main.trb`가 아닌 파일은
-가까이에 매니페스트가 있어도 매니페스트 없이 컴파일한다.
+디렉토리를 `src/`처럼 기준으로 삼아 찾는다. 컴파일 입력이 source 파일이면 그
+파일이 패키지 안에 있어도, 패키지의 루트 파일이어도 매니페스트 없이 컴파일한다.
+패키지는 그 디렉토리로 컴파일한다. 편집기에서 연 파일을 어느 패키지 안에서
+분석하는지는 [Language Server](lsp.md#문서가-속한-패키지)를 따른다.
 
 ### 모듈 이름 관례
 

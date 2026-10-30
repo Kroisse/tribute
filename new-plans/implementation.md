@@ -1021,10 +1021,13 @@ representation/ABI 경계)의 실패는 source 진단이 아니라 compiler 내�
   query는 서로를 순환 호출하지 않는다.
 - 같은 디렉토리를 가리키는 의존성은 같은 매니페스트 경로가 되므로 같은 query 결과,
   즉 같은 패키지 입력을 받는다.
-- 실행 파일 루트의 의존성 표는 source 파일의 경로에서 정한다. Source가
-  매니페스트 옆 `src/main.trb`이면 그 매니페스트의 의존성 표이고, 아니면 암묵적
-  의존성 표다. Root crate는 이 표로 frontend를 실행하므로, CLI와 language server가
-  같은 파일을 같은 표로 해석한다.
+- 실행 파일 루트의 의존성 표는 source 파일의 경로가 아니라 그 source를 루트로
+  고른 도구가 정한다. Database마다 하나인 singleton 입력이 루트 source마다 그
+  패키지의 매니페스트 파일 입력을 가지며, 등록된 루트는 그 매니페스트의 의존성
+  표로, 등록되지 않은 루트는 암묵적 의존성 표로 분석한다. CLI는 패키지 디렉토리를
+  컴파일할 때 그 `src/main.trb`를 등록하고 source 파일 입력은 등록하지 않는다.
+  Language server는 문서가 속한 패키지의 루트를 등록한다
+  ([Language Server](lsp.md#문서가-속한-패키지)).
 
 **Source 위치.** 트리는 패키지의 각 파일을 그 파일의 parse 결과와 함께, 패키지
 안 module path 순으로 담는다. Root 파일의 경로는 빈 경로이다. 파일 모듈의 파일은
