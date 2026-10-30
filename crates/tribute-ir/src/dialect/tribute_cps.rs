@@ -3,7 +3,8 @@
 //!
 //! Class specialization replaces the five `tribute_control` operations whose
 //! meaning depends on a convention with the operation of the same name here,
-//! which adds that convention. The other `tribute_control` operations stay
+//! which adds that convention, and adds the `tribute_cps.func_table` that a
+//! function reference names. The other `tribute_control` operations stay
 //! and run inside these callables. Rows, logical types, and the
 //! `tribute_control.func_sig` callable type are unchanged, and no hidden
 //! parameter exists yet. Whole-IR verification is
@@ -116,34 +117,21 @@ mod tribute_cps {
         {}
     }
 
-    /// A named function as a value, with a target instance per convention
-    /// its row reads.
+    /// A named function as a value, entered through the convention table
+    /// of its definition and class arguments.
     ///
     /// ```text
-    /// %f = tribute_cps.func_ref {conventions = ["direct", "evidence_direct"], func_refs = [@"id$9D", @"id$9E"]} : !Callable
+    /// %f = tribute_cps.func_ref {func_ref = @"id$9e$8"} : !Callable
     /// ```
     ///
-    /// - **Shape:** `tribute_control.func_ref` whose `func_ref` is replaced
-    ///   by a required `func_refs` list, with a required `conventions` list
-    ///   of the same length.
-    /// - **Meaning:** the callable value whose convention entry of each
-    ///   element of `conventions` runs the instance at the same position of
-    ///   `func_refs`. Each instance is the one `row_args` selects with the
-    ///   tail of the value's row narrowed to that convention as a lambda
-    ///   body narrows it. The conventions
-    ///   are the classes `new-plans/ir.md` ("Convention entry", 함수 참조)
-    ///   gives a function reference. When an instance's convention is
-    ///   weaker, legalization fills the entry with an adapter. When a
-    ///   classless tail makes the instance `Cps` and its convention is
-    ///   weaker, the entry is the `func_ref` adapter that calls the worker
-    ///   through a value delimiter (`new-plans/cps-effects.md`, 값
-    ///   delimiter). Legalization fills the other entries by the same rule
-    ///   as a lambda's.
-    /// - **Verification:** the local verifier checks the attributes, that
-    ///   the conventions are strictly increasing, and that there is a target
-    ///   for each. Whole-IR verification checks the source signature as for
-    ///   `tribute_control.func_ref`, and that each convention is not weaker
-    ///   than its instance's unless that instance is `Cps`.
+    /// - **Shape:** `tribute_control.func_ref` whose `func_ref` names a
+    ///   `tribute_cps.func_table` instead of a function.
+    /// - **Meaning:** the callable value whose convention entries are the
+    ///   table's. References that share a table share its entries.
+    /// - **Verification:** the local verifier checks the attributes.
+    ///   Whole-IR verification checks that `func_ref` resolves to a
+    ///   `tribute_cps.func_table`, and checks the source signature against
+    ///   each of its targets as for `tribute_control.func_ref`.
     /// - **Ownership and value flow:** the result is an ordinary SSA value.
     /// - **Location:** the source reference span.
     #[verify]
@@ -154,6 +142,46 @@ mod tribute_cps {
         convention: Attr<CallingConvention>,
         row_args: Option<Attr<[Row]>>,
     ) -> Value<impl FuncSig> {
+    }
+
+    /// The convention table of a named function for one set of class
+    /// arguments, with a target instance per convention its row reads.
+    ///
+    /// ```text
+    /// tribute_cps.func_table @"id$9e$8" {conventions = ["direct", "evidence_direct"], targets = [@"id$9D", @"id$9e"]}
+    /// ```
+    ///
+    /// - **Shape:** no operands, results, or regions. `sym_name: String`,
+    ///   and `conventions` and `targets` lists of the same length.
+    /// - **Placement:** directly in a module, as a symbol definition. Class
+    ///   specialization makes one for each definition and class arguments
+    ///   that a `tribute_cps.func_ref` refers to, named as
+    ///   `new-plans/cps-effects.md` ("Class 특수화 pass") gives.
+    /// - **Meaning:** the convention entry of each element of `conventions`
+    ///   runs the `tribute_cps.func` instance at the same position of
+    ///   `targets`. Each instance is the one the class arguments select with
+    ///   the tail of the reference's row narrowed to that convention as a
+    ///   lambda body narrows it. The conventions are the classes
+    ///   `new-plans/ir.md` ("Convention entry", 함수 참조) gives a function
+    ///   reference. When an instance's convention is weaker, legalization
+    ///   fills the entry with an adapter. When a classless tail makes the
+    ///   instance `Cps` and its convention is weaker, the entry is the
+    ///   `func_ref` adapter that calls the worker through a value delimiter
+    ///   (`new-plans/cps-effects.md`, 값 delimiter). Legalization fills the
+    ///   other entries by the same rule as a lambda's, once for the table.
+    /// - **Verification:** the local verifier checks the attributes, that
+    ///   the lists have the same length, and that the conventions are
+    ///   strictly increasing. Whole-IR verification checks that each target
+    ///   resolves to a `tribute_cps.func` of the same definition, and that
+    ///   each convention is not weaker than its target's unless that target
+    ///   is `Cps`.
+    /// - **Ownership and value flow:** defines no value.
+    /// - **Location:** the span of the referenced definition.
+    fn func_table(
+        sym_name: Attr<String>,
+        conventions: Attr<[CallingConvention]>,
+        targets: Attr<[SymbolRef]>,
+    ) {
     }
 
     /// An indirect call through one convention.

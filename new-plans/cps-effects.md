@@ -263,9 +263,11 @@ row와 [row binder](ir.md#row-binder), 참조의 `row_args`, 지역 람다의
      모든 본문의 외부 참조와 같게 다시 계산한다.
   4. 본문 안의 사용이 바깥 람다에 새 class를 고를 수 있으므로, 새 본문이 없을 때까지
      지역 class를 다시 정한다. 람다마다 본문은 셋을 넘지 않으므로 이 반복은 끝난다.
-- `func_ref`마다 `tribute_cps.func_ref`로 바꾸며 [함수 참조](ir.md#convention-entry)
-  규칙이 정하는 class마다 대상 인스턴스를 `row_args`의 class 인자로 정하고, 그
-  인스턴스들을 인스턴스 수집에 더한다.
+- `func_ref`마다 그 정의와 class 인자의 `tribute_cps.func_table`을 가리키는
+  `tribute_cps.func_ref`로 바꾼다. Table은 정의와 class 인자마다 하나만 만들며, 그
+  이름은 그 class 인자의 인스턴스 이름 뒤에 `$8`을 붙인 것이다. Table은
+  [함수 참조](ir.md#convention-entry) 규칙이 정하는 class마다 대상 인스턴스를
+  `row_args`의 class 인자로 정하고, 그 인스턴스들을 인스턴스 수집에 더한다.
 - 간접 이전을 `tribute_cps.call_indirect`와 `tribute_cps.tail_call_indirect`로 바꾸며
   [convention을 갖는 자리](ir.md#convention과-class-특수화)에 convention을 쓴다. 정의
   자신의 convention은 [tail 규칙](#row와-호출-규약)으로 읽는다.
@@ -397,7 +399,7 @@ arm의 `scf.yield`)를 arm 안으로 복제해 이어 legalize하고, tail call�
 뒤에 operation이 남지 않는다. Suffix에 넘길 evidence와 `ContinuationFrame<R>`는
 arm이 감싼 callable의 것을 그대로 쓴다.
 
-`func_ref`가 `Direct`/`EvidenceDirect` entry마다 만드는 entry 함수는
+`func_table`이 `Direct`/`EvidenceDirect` entry마다 만드는 entry 함수는
 target이 platform `abi`를 유지하지 않고 target 결과가 entry 결과와 같으면
 target을 `func.tail_call`로 부른다. 이 경우 callable value를 통한 `become`은
 entry frame을 남기지 않는다. Platform `abi` target의 entry 함수는 일반 호출 뒤
@@ -451,11 +453,13 @@ direct/indirect call, return의 대응 관계를 검증하고 physical symbol과
   parameter가 있지만 environment는 없다. 본문이 없는 더 강한 convention entry의
   adapter는 legalization이 만들어 `closure.lambda`에 적는다. 기존 closure
   lowering이 본문마다 environment를 interpose한다.
-- `tribute_cps.func_ref`는 capture 없는 `closure.new`와 entry마다 env-bearing
-  `func.func`를 만든다. 대상 인스턴스가 있는 entry는 그 대상을 부르고, 없는 entry는
-  같은 채우기 규칙에 따라 adapter나 trap entry다. Entry 함수는 그 entry의 convention을 사용하고 필요한 hidden
-  operand와 source argument를 대상 physical worker에 전달하므로 named function도
-  다른 closure와 같은 entry ABI를 갖는다. 기존 closure lowering은 이 `closure.new`를
+- `tribute_cps.func_table`은 entry마다 env-bearing `func.func`를 한 번 만들고,
+  `tribute_cps.func_ref`는 그 entry들을 담은 capture 없는 `closure.new`가 된다.
+  Table을 공유하는 참조들은 같은 entry 함수를 쓴다. 대상 인스턴스가 있는 entry는 그
+  대상을 부르고, 없는 entry는 같은 채우기 규칙에 따라 adapter나 trap entry다.
+  Entry 함수는 그 entry의 convention을 사용하고 필요한 hidden operand와 source
+  argument를 대상 physical worker에 전달하므로 named function도 다른 closure와 같은
+  entry ABI를 갖는다. 기존 closure lowering은 이 `closure.new`를
   convention table과 closure base 할당으로 바꾼다.
 - `Direct`/`EvidenceDirect`의 `tribute_control.call`과
   `tribute_cps.call_indirect`는 각각 physical `func.call`과 `func.call_indirect`가

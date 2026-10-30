@@ -719,14 +719,16 @@ convention 속성과 physical `func.func_sig`나 `closure.closure` component를
 | `tribute_control.resume` | resumptive general handler arm에 바인딩된 affine resumption을 소비 |
 | `tribute_control.yield` | 실행 가능한 `tribute_control` region을 logical value로 종료 |
 
-Class 특수화가 만드는 `tribute_cps` operation은 다음과 같다. 각각 같은 이름의
-`tribute_control` operation에 convention을 더한 것이다.
+Class 특수화가 만드는 `tribute_cps` operation은 다음과 같다. `func_table`을 뺀
+각각은 같은 이름의 `tribute_control` operation에 convention을 더한 것이고,
+`func_table`은 `func_ref`가 가리키는 convention table 정의다.
 
 | Operation | 용도 |
 | ---- | ---- |
 | `tribute_cps.func` | convention을 가진 named callable 인스턴스 |
 | `tribute_cps.lambda` | convention entry 목록을 가진 source lambda |
-| `tribute_cps.func_ref` | convention entry마다 대상 인스턴스를 가진 named function 참조 |
+| `tribute_cps.func_ref` | `func_table`을 가리키는 named function 참조 |
+| `tribute_cps.func_table` | convention entry마다 대상 인스턴스를 적은 named function의 convention table |
 | `tribute_cps.call_indirect` | convention을 가진 callable value 간접 호출 |
 | `tribute_cps.tail_call_indirect` | convention을 가진 callable value 간접 proper tail call |
 
@@ -883,8 +885,8 @@ operation으로 바꾼다.
   [convention entry](#convention-entry)마다 그 entry를 채우는 본문을 가진다.
 - `tribute_cps.call_indirect`와 `tribute_cps.tail_call_indirect`는 callee를 부르는
   convention을 가진다.
-- `tribute_cps.func_ref`는 convention entry마다 그 entry로 들어갈 대상 인스턴스를
-  가진다.
+- `tribute_cps.func_ref`는 `tribute_cps.func_table` 하나를 가리키고, 그 table이
+  convention entry마다 그 entry로 들어갈 대상 인스턴스를 가진다.
 
 나머지 `tribute_control` operation(`call`, `tail_call`, `return`, `instantiate`,
 `perform`, `handle`, `handler`, `resume`, `yield`)은 그대로 남아 `tribute_cps`
@@ -993,7 +995,10 @@ tail)는 `Cps`로만 읽는다. Class 특수화는 확인할 수 있는 것을 �
 class(상한이면 상한)와 같아야 하며, 다르면 컴파일 오류다. Trap entry는 값의 흐름을 따라가야만 드러나는
 위반을 실행 중에 멈추게 하는 안전망이다.
 
-**함수 참조.** `func_ref`는 람다가 본문을 두는 규칙과 같은 class마다 대상 인스턴스
+**함수 참조.** 함수 참조의 convention entry 대상은 module 수준의 `func_table` 정의
+하나가 모아 가지며, `func_ref`는 그 table을 가리킨다. Table은 정의와 참조의 class
+인자마다 하나이므로, 같은 정의를 같은 class 인자로 참조하는 `func_ref`들은 table을
+공유한다. Table은 람다가 본문을 두는 규칙과 같은 class마다 대상 인스턴스
 하나를 둔다. 값의 row의 class가 정확하면 그 class 하나이고, 상한이면 하한부터
 상한까지다. Class `c`의 대상은 본문과 같이 값의 row의 tail을 `c`로 좁혀 읽은 `row_args`의
 class 인자가 고르는 인스턴스이며, 대상들을 본문으로 삼아 같은 규칙으로 convention entry를
@@ -1011,7 +1016,7 @@ Adapter는 source 람다와 `func_ref`에만 있으며, legalization이 만들�
 
 **Convention table.** Closure 값은 convention table 참조 하나와 capture로 이루어진다
 ([closure 저장 layout](#closure-저장-layout)). Convention table은 closure를 만드는
-code 대상(람다, `func_ref`의 대상과 class 인자)마다 정적으로 하나이고, `Direct`,
+code 대상(람다, `func_table`)마다 정적으로 하나이고, `Direct`,
 `EvidenceDirect`, `Cps` 순서로 convention entry 셋을 담는다. Convention이 곧 table
 안의 위치이므로 위치를 따로 정하지 않는다. Table은 생성 뒤 바뀌지 않으며 managed
 참조를 담지 않는다.
