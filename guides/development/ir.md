@@ -162,9 +162,20 @@ where
 - `#[verify]` on an operation requires `trunk_ir::ops::Verify` for its
   wrapper. It checks what the schema cannot express and runs only after
   every generated check passed.
-- `#[asm_format]` on an operation requires `trunk_ir::asm_format::OpAsmFormat`
-  for its wrapper, which prints and parses the operation's custom syntax.
-  Generic syntax stays readable for every operation.
+- `#[asm_format(..)]` on an operation declares its custom syntax as a list of
+  format elements, from which the shared printer and parser both work:
+  `#[asm_format(symbol(sym_name) signature(r#type, body) attr_dict(keyword)
+  region(body))]`. Elements name the declared entities; string literals are
+  keywords and punctuation, `( .. ^ .. )?` is an optional group, and
+  `custom(D(..))` hands the listed entities to a `trunk_ir::asm_format::OpAsmDirective`
+  impl. The macro rejects a format that leaves an entity out or writes one
+  twice. An operation the format cannot print without loss prints
+  generically. See
+  [the declarative assembly format](../../new-plans/ir.md#선언적-어셈블리-형식).
+- `#[asm_format]` without arguments on an operation requires
+  `trunk_ir::asm_format::OpAsmFormat` for its wrapper, which prints and
+  parses the operation's custom syntax by hand. Generic syntax stays
+  readable for every operation.
 - On a type `struct`, `#[verify]` requires `trunk_ir::type_verifier::VerifyType`
   and `#[asm_format]` requires `trunk_ir::asm_format::TypeAsmFormat`. A
   hand-written `TypeDef` adds the same hooks with `with_verifier` and
@@ -181,7 +192,8 @@ where
   map it to the generic form with `num_inputs`/`num_results`. The core
   printer and parser have no function syntax of their own, so another
   dialect's `*.func_sig` uses the generic form unless it registers the same
-  hooks.
+  hooks. An operation's `signature(..)` format element reaches the same
+  syntax through the signature codec its type variable's bound implements.
 - A hand-written `TypeDef` is a `static` registered with
   `trunk_ir::register_type_def!(&DEF)`. Dialect crates never use
   `inventory` directly; registration goes through `#[dialect]` and these
