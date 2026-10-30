@@ -1009,10 +1009,14 @@ class(상한이면 상한)와 같아야 하며, 다르면 컴파일 오류다. T
 **함수 참조.** 함수 참조의 convention entry 대상은 module 수준의 `func_table` 정의
 하나가 모아 가지며, `func_ref`는 그 table을 가리킨다. Table은 정의와 참조의 class
 인자마다 하나이므로, 같은 정의를 같은 class 인자로 참조하는 `func_ref`들은 table을
-공유한다. Table은 람다가 본문을 두는 규칙과 같은 class마다 대상 인스턴스
-하나를 둔다. 값의 row의 class가 정확하면 그 class 하나이고, 상한이면 하한부터
-상한까지다. Class `c`의 대상은 본문과 같이 값의 row의 tail을 `c`로 좁혀 읽은 `row_args`의
-class 인자가 고르는 인스턴스이며, 대상들을 본문으로 삼아 같은 규칙으로 convention entry를
+공유한다. 그래서 table의 내용은 참조가 넘기는 row가 아니라 정의와 class 인자만으로
+정한다. Class 인자는 넘긴 row의 하한을 담지 않으므로, 같은 class 인자를 넘기는
+참조들도 하한이 서로 다를 수 있기 때문이다. Table은 정의의 row를 class 인자로 읽은
+class가 정확하면 그 class의 대상 하나를 두고, 상한이면 정의의 row의 하한부터 그
+상한까지 class마다 대상 하나를 둔다. 참조가 넘기는 row는 정의의 row에 적힌 ability
+instance를 그대로 가지므로, 참조된 값의 실제 class는 이 범위 안에 있다. Class `c`의
+대상은 정의의 row의 tail인 class 변수의 인자를 람다 본문과 같이 `c`로 좁힌 class
+인자가 고르는 인스턴스이며, 대상들을 본문으로 삼아 같은 규칙으로 convention entry를
 채운다. 대상이 class 없는 tail 때문에 그 값의 row가 요구하는 것보다 강한 `Cps`
 인스턴스이면, 더 약한 convention entry는
 [값 delimiter](cps-effects.md#값-delimiter)로 worker를 부르는

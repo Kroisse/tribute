@@ -164,11 +164,14 @@ mod tribute_cps {
     ///   `new-plans/cps-effects.md` ("Class 특수화 pass") gives.
     /// - **Meaning:** the convention entry of each element of `conventions`
     ///   runs the `tribute_cps.func` instance at the same position of
-    ///   `targets`. Each instance is the one the class arguments select with
-    ///   the tail of the reference's row narrowed to that convention as a
-    ///   lambda body narrows it. The conventions are the classes
-    ///   `new-plans/ir.md` ("Convention entry", 함수 참조) gives a function
-    ///   reference. When an instance's convention is weaker, legalization
+    ///   `targets`. Each instance is the one the class arguments select
+    ///   once the argument of the class variable that is the definition
+    ///   row's tail is narrowed to that convention, as a lambda body narrows
+    ///   a tail. The conventions are the classes `new-plans/ir.md`
+    ///   ("Convention entry", 함수 참조) gives the definition's row read with
+    ///   the class arguments. They depend only on the definition and the
+    ///   class arguments, never on the row a reference passes, so every
+    ///   reference with those arguments can share the table. When an instance's convention is weaker, legalization
     ///   fills the entry with an adapter. When a classless tail makes the
     ///   instance `Cps` and its convention is weaker, the entry is the
     ///   `func_ref` adapter that calls the worker through a value delimiter
