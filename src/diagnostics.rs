@@ -1,6 +1,10 @@
 //! Diagnostic formatting utilities for the Tribute compiler CLI.
 
-use ariadne::{Color, Label, Report, ReportKind, sources};
+use std::convert::Infallible;
+use std::fmt;
+
+use ariadne::{Cache, Color, Label, Report, ReportKind, Source};
+use rustc_hash::FxHashMap as HashMap;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic};
 use trunk_ir::diagnostic::DiagnosticSeverity;
 
@@ -28,25 +32,57 @@ pub fn normalize_span(start: usize, end: usize) -> (usize, usize) {
     (start, end.max(start + 1))
 }
 
-/// The name and text of the file whose spans carry the source id `source`:
-/// the root file `root`, shown as `root_path`, or another file the build
-/// read, such as a file module, a manifest, or a dependency's file.
-fn span_file(
-    db: &dyn salsa::Database,
+/// The files a diagnostic's spans are in, each read into an ariadne
+/// [`Source`] when the report first prints it.
+struct SpanFiles<'a> {
+    db: &'a dyn salsa::Database,
     root: SourceCst,
-    root_path: &str,
-    source: u64,
-) -> (String, String) {
-    let file = SourceFiles::try_get(db).and_then(|files| files.provider(db).find(db, source));
-    match file {
-        Some(file) if file != root => (
-            uri_to_path(file.uri(db)).map_or_else(
-                || file.uri(db).as_str().to_owned(),
-                |path| path.display().to_string(),
-            ),
-            file.text(db).to_string(),
-        ),
-        _ => (root_path.to_owned(), root.text(db).to_string()),
+    /// How the root file is shown.
+    root_path: &'a str,
+    sources: HashMap<SourceCst, Source<String>>,
+}
+
+impl<'a> SpanFiles<'a> {
+    fn new(db: &'a dyn salsa::Database, root: SourceCst, root_path: &'a str) -> Self {
+        Self {
+            db,
+            root,
+            root_path,
+            sources: HashMap::default(),
+        }
+    }
+
+    /// The file whose spans carry the source id `source`: another file the
+    /// build read, such as a file module, a manifest, or a dependency's
+    /// file, or else the root.
+    fn file(&self, source: u64) -> SourceCst {
+        SourceFiles::try_get(self.db)
+            .and_then(|files| files.provider(self.db).find(self.db, source))
+            .unwrap_or(self.root)
+    }
+}
+
+impl Cache<SourceCst> for SpanFiles<'_> {
+    type Storage = String;
+
+    fn fetch(&mut self, file: &SourceCst) -> Result<&Source<String>, impl fmt::Debug> {
+        let db = self.db;
+        Ok::<_, Infallible>(
+            self.sources
+                .entry(*file)
+                .or_insert_with(|| Source::from(file.text(db).to_string())),
+        )
+    }
+
+    fn display<'b>(&self, file: &'b SourceCst) -> Option<impl fmt::Display + 'b> {
+        if *file == self.root {
+            return Some(self.root_path.to_owned());
+        }
+        let uri = file.uri(self.db);
+        Some(uri_to_path(uri).map_or_else(
+            || uri.as_str().to_owned(),
+            |path| path.display().to_string(),
+        ))
     }
 }
 
@@ -58,8 +94,9 @@ pub fn print_diagnostic(
     root_path: &str,
     diag: &Diagnostic,
 ) {
+    let files = SpanFiles::new(db, root, root_path);
     let span = diag.inner.span;
-    let (file, text) = span_file(db, root, root_path, span.source);
+    let file = files.file(span.source);
     let (start, end) = normalize_span(span.start as usize, span.end as usize);
     let color = phase_color(&diag.phase);
 
@@ -69,28 +106,24 @@ pub fn print_diagnostic(
         DiagnosticSeverity::Info => ReportKind::Advice,
     };
 
-    let mut report = Report::build(report_kind, (file.clone(), start..end))
+    let mut report = Report::build(report_kind, (file, start..end))
         .with_code(format!("{:?}", diag.phase))
         .with_message(&diag.inner.message)
         .with_label(
-            Label::new((file.clone(), start..end))
+            Label::new((file, start..end))
                 .with_message(&diag.inner.message)
                 .with_color(color),
         );
-    let mut files = vec![(file, text)];
 
     // Add secondary labels
     for label in diag.inner.labels.iter() {
-        let (label_file, label_text) = span_file(db, root, root_path, label.span.source);
+        let label_file = files.file(label.span.source);
         let (ls, le) = normalize_span(label.span.start as usize, label.span.end as usize);
         report = report.with_label(
-            Label::new((label_file.clone(), ls..le))
+            Label::new((label_file, ls..le))
                 .with_message(label.message.as_ref())
                 .with_color(Color::Blue),
         );
-        if !files.iter().any(|(name, _)| *name == label_file) {
-            files.push((label_file, label_text));
-        }
     }
 
     // Add note
@@ -98,7 +131,7 @@ pub fn print_diagnostic(
         report = report.with_note(note.as_ref());
     }
 
-    report.finish().eprint(sources(files)).ok();
+    report.finish().eprint(files).ok();
 }
 
 /// Print accumulated diagnostics in source order.
