@@ -20,8 +20,8 @@ use trunk_ir::rewrite::Module;
 use trunk_ir::walk::{WalkAction, walk_region};
 
 use crate::convention_classes::{
-    Function, Locals, class_suffix, func_tables, instantiation, requirements, row_class,
-    settle_class_variables, settle_locals, split_name,
+    Class, Function, Locals, Reader, class_suffix, func_tables, instantiation, requirements,
+    settle_class_variables, split_name,
 };
 
 /// A place where the IR's rows imply another class than specialization chose.
@@ -97,13 +97,9 @@ struct Instance<'a> {
     ctx: &'a IrContext,
     function: &'a Function,
     positions: &'a HashMap<String, Vec<u32>>,
-    requirements: &'a HashMap<SymbolPath, CallingConvention>,
     /// The module's function tables, by name.
     tables: &'a HashMap<String, OpRef>,
-    /// The class of each class variable.
-    classes: HashMap<u32, CallingConvention>,
-    /// The class of each local binder in each body of its lambda.
-    locals: Locals,
+    reader: Reader<'a>,
 }
 
 impl<'a> Instance<'a> {
@@ -127,7 +123,7 @@ impl<'a> Instance<'a> {
             });
         }
         let claimed = if function.root_entry {
-            vec![CallingConvention::Direct; variables.len()]
+            vec![Class::DIRECT; variables.len()]
         } else {
             match &function.claimed {
                 Some(classes) => {
@@ -146,50 +142,35 @@ impl<'a> Instance<'a> {
                     }
                     classes.clone()
                 }
-                None => vec![CallingConvention::Cps; variables.len()],
+                None => vec![Class::CPS; variables.len()],
             }
         };
-        let classes = variables.iter().copied().zip(claimed).collect();
-        let mut instance = Self {
+        let mut reader = Reader {
+            binders: function.binders.clone(),
+            requirements,
+            params: variables.iter().copied().zip(claimed).collect(),
+            locals: Locals::default(),
+        };
+        if let Some(body) = ctx.op_region(function.op, 0) {
+            reader.settle_locals(ctx, body);
+        }
+        Self {
             ctx,
             function,
             positions,
-            requirements,
             tables,
-            classes,
-            locals: Locals::default(),
-        };
-        instance.settle_locals();
-        instance
-    }
-
-    /// The class of each local binder.
-    fn settle_locals(&mut self) {
-        if let Some(body) = self.ctx.op_region(self.function.op, 0) {
-            self.locals = settle_locals(
-                self.ctx,
-                body,
-                &self.function.binders,
-                self.requirements,
-                &self.classes,
-            );
+            reader,
         }
     }
 
-    /// The lambda `op` instantiates, its quantified binders, and the rows.
-    fn instantiation(&self, op: OpRef) -> Option<(OpRef, Vec<u32>, Vec<Row>)> {
-        instantiation(self.ctx, op)
+    /// The class a row requires at `at` inside this instance.
+    fn class(&self, row: &Row, at: OpRef) -> Class {
+        self.reader.class(self.ctx, row, at)
     }
 
-    /// The class a row requires at `at` inside this instance.
-    fn class(&self, row: &Row, at: OpRef) -> CallingConvention {
-        row_class(
-            row,
-            &self.function.binders,
-            self.requirements,
-            &self.classes,
-            |binder| self.locals.get(self.ctx, binder, at),
-        )
+    /// The conventions a row may require at `at` inside this instance.
+    fn conventions(&self, row: &Row, at: OpRef) -> Vec<CallingConvention> {
+        self.reader.conventions(self.ctx, row, at)
     }
 
     fn check(&self, disagreements: &mut Vec<Disagreement>) {
@@ -208,11 +189,11 @@ impl<'a> Instance<'a> {
         if self.function.inferred
             && row
                 .tail
-                .is_some_and(|tail| !self.classes.contains_key(&tail))
+                .is_some_and(|tail| !self.reader.params.contains_key(&tail))
         {
             row.tail = None;
         }
-        let expected = self.class(&row, self.function.op);
+        let expected = self.class(&row, self.function.op).bound();
         let actual = tribute_cps::declared_convention(self.ctx, self.function.op);
         if Some(expected) != actual {
             disagreements.push(Disagreement {
@@ -240,7 +221,7 @@ impl<'a> Instance<'a> {
                     usize::try_from(position)
                         .ok()
                         .and_then(|position| reference.rows.get(position))
-                        .map_or(CallingConvention::Cps, |row| self.class(row, reference.op))
+                        .map_or(Class::CPS, |row| self.class(row, reference.op))
                 })
                 .collect();
             let expected = format!("{callee}{}", class_suffix(&classes));
@@ -257,18 +238,17 @@ impl<'a> Instance<'a> {
         }
     }
 
-    /// A lambda has a body for exactly the classes its instantiations
-    /// select, function references have the class of the row of the callable
-    /// they make, and indirect transfers that of their callee's; the
-    /// instantiations of one lambda that select one class pass the same
-    /// classes.
+    /// A lambda has a body for exactly the conventions the rows of the
+    /// callables its instantiations make may require, or, without
+    /// instantiations, its own row; function references enter their table
+    /// no stronger than their row, and indirect transfers have the class of
+    /// their callee's row, or its bound.
     fn check_body(&self, disagreements: &mut Vec<Disagreement>) {
         let Some(body) = self.ctx.op_region(self.function.op, 0) else {
             return;
         };
         let mut lambdas = Vec::new();
-        let mut selections: HashMap<OpRef, Vec<(CallingConvention, Vec<CallingConvention>)>> =
-            HashMap::default();
+        let mut selections: HashMap<OpRef, Vec<CallingConvention>> = HashMap::default();
         let _ = walk_region::<()>(self.ctx, body, &mut |op| {
             if tribute_cps::Lambda::matches(self.ctx, op) {
                 lambdas.push(op);
@@ -279,36 +259,23 @@ impl<'a> Instance<'a> {
             {
                 let callee = self.ctx.value_ty(self.ctx.op_operands(op)[0]);
                 self.compare(op, "transfer", callee, disagreements);
-            } else if let Some((lambda, _, rows)) = self.instantiation(op) {
-                let Some(made) = FuncSig::from_type_ref(self.ctx, self.ctx.op_result_types(op)[0])
-                else {
-                    return ControlFlow::Continue(WalkAction::Advance);
-                };
-                let selected = self.class(&made.row(self.ctx), op);
-                let classes: Vec<_> = rows.iter().map(|row| self.class(row, op)).collect();
-                let known = selections.entry(lambda).or_default();
-                match known.iter().find(|(class, _)| *class == selected) {
-                    Some((_, first)) if *first != classes => disagreements.push(Disagreement {
-                        op,
-                        rule: "instantiate",
-                        message: format!(
-                            "{} instantiates one lambda at {selected:?} with classes {first:?} and {classes:?}",
-                            self.function.name
-                        ),
-                    }),
-                    Some(_) => {}
-                    None => known.push((selected, classes)),
-                }
+            } else if let Some((lambda, _, _)) = instantiation(self.ctx, op)
+                && let Some(made) =
+                    FuncSig::from_type_ref(self.ctx, self.ctx.op_result_types(op)[0])
+            {
+                selections
+                    .entry(lambda)
+                    .or_default()
+                    .extend(self.conventions(&made.row(self.ctx), op));
             }
             ControlFlow::Continue(WalkAction::Advance)
         });
         for lambda in lambdas {
             let expected: Vec<_> = match selections.get(&lambda) {
-                Some(selected) => selected.iter().map(|&(class, _)| class).sorted().collect(),
+                Some(selected) => selected.iter().copied().sorted().dedup().collect(),
                 None => FuncSig::from_type_ref(self.ctx, self.ctx.op_result_types(lambda)[0])
-                    .map(|signature| self.class(&signature.row(self.ctx), lambda))
-                    .into_iter()
-                    .collect(),
+                    .map(|signature| self.conventions(&signature.row(self.ctx), lambda))
+                    .unwrap_or_default(),
             };
             let actual = tribute_cps::body_conventions(self.ctx, lambda);
             if actual.as_ref() != Some(&expected) {
@@ -333,7 +300,7 @@ impl<'a> Instance<'a> {
         else {
             return;
         };
-        let expected = self.class(&signature.row(self.ctx), op);
+        let expected = self.conventions(&signature.row(self.ctx), op)[0];
         let weakest = tribute_cps::FuncRef::from_op(self.ctx, op)
             .ok()
             .and_then(|reference| reference.func_ref(self.ctx).as_simple().cloned())
@@ -362,7 +329,7 @@ impl<'a> Instance<'a> {
         let Some(signature) = FuncSig::from_type_ref(self.ctx, callable) else {
             return;
         };
-        let expected = self.class(&signature.row(self.ctx), op);
+        let expected = self.class(&signature.row(self.ctx), op).bound();
         let actual = tribute_cps::declared_convention(self.ctx, op);
         if actual != Some(expected) {
             disagreements.push(Disagreement {

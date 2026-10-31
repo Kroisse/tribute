@@ -130,8 +130,10 @@ fn a_lambda_has_a_body_for_each_class_its_instantiations_select() {
     assert_eq!(rules(&input), [""; 0]);
 }
 
+/// Instantiations that select one body may pass different classes for a
+/// binder, which that body reads as their upper bound.
 #[test]
-fn instantiations_that_select_one_class_pass_the_same_classes() {
+fn instantiations_that_select_one_class_may_pass_other_classes() {
     let input = |second: &str| {
         format!(
             r#"core.module @m {{
@@ -156,7 +158,7 @@ fn instantiations_that_select_one_class_pass_the_same_classes() {
         )
     };
     assert_eq!(rules(&input("{}")), [""; 0]);
-    assert_eq!(rules(&input("{instances = [@Ask]}")), ["instantiate"]);
+    assert_eq!(rules(&input("{instances = [@Ask]}")), [""; 0]);
 }
 
 #[test]

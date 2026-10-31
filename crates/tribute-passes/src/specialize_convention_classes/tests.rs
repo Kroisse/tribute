@@ -720,10 +720,11 @@ fn every_body_takes_parameters_over_the_lambdas_own_binders() {
 }
 
 /// Instantiations that select one class but pass other classes for the
-/// lambda's binder still split the value: a lambda whose own row always
-/// requires `Cps` is copied with a new binder for the second combination.
+/// lambda's binder keep one value, whose body reads the binder as their
+/// upper bound: the lambda it makes has a body from that row's lower bound
+/// up to the bound, and a call through the binder's row uses the bound.
 #[test]
-fn instantiations_of_one_class_with_other_binder_classes_split_the_value() {
+fn instantiations_of_one_class_with_other_binder_classes_read_an_upper_bound() {
     let printed = specialized(
         r#"core.module @m {
   !pure = tribute_control.func_sig<(core.i32) -> core.i32>
@@ -756,13 +757,12 @@ fn instantiations_of_one_class_with_other_binder_classes_split_the_value() {
     assert_contains(
         &printed,
         &[
-            "tribute_cps.func @f[local 'a0, local 'a1, local 'a2, local 'a3](%0: core.i32) -> core.i32 row(@Ctl) convention(cps) {",
+            "tribute_cps.func @f[local 'a0, local 'a1](%0: core.i32) -> core.i32 row(@Ctl) convention(cps) {",
             "%1 = tribute_cps.lambda['a0](%2: core.i32) -> core.i32 row(@Ctl | 'a0) captures [] entries {\n        cps {",
-            "convention = \"direct\"",
-            "%7 = tribute_cps.lambda['a2](%8: core.i32) -> core.i32 row(@Ctl | 'a2) captures [] entries {\n        cps {",
-            "%11 = tribute_control.instantiate %9 {row_args = [{tail = 2}]}",
-            "%12 = tribute_cps.call_indirect %11, %8 {convention = \"evidence_direct\"} : core.i32",
-            "%14 = tribute_control.instantiate %7 {row_args = [{instances = [@Ask]}]} : !la",
+            "%3 = tribute_cps.lambda['a1](%4: core.i32) -> core.i32 row(| 'a1) captures [] entries {\n              direct {",
+            "              evidence_direct {",
+            "%6 = tribute_cps.call_indirect %5, %2 {convention = \"evidence_direct\"} : core.i32",
+            "%8 = tribute_control.instantiate %1 {row_args = [{instances = [@Ask]}]} : !la",
         ],
     );
 }
