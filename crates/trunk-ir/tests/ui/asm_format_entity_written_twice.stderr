@@ -1,0 +1,5 @@
+error: the format writes operand `lhs` twice
+ --> tests/ui/asm_format_entity_written_twice.rs:4:38
+  |
+4 |         #[asm_format("probe" lhs "," lhs)]
+  |                                      ^^^

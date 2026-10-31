@@ -1,12 +1,65 @@
 //! Source-oriented rendering of function inference failures.
 
 use super::TypeChecker;
-use crate::ast::{TypeKind, TypeOrigin};
+use crate::ast::{NodeId, SpanMap, TypeKind, TypeOrigin};
 use crate::resolve::NameDisplay;
 use crate::typeck::constraint::ConstraintOriginKind;
 use crate::typeck::solver::LocatedSolveError;
-use salsa::Accumulator;
 use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+
+/// A type checking diagnostic whose positions are nodes. Checking a
+/// function does not read the span map, so its result stays valid when
+/// other items move; the spans are looked up when it is reported.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct NodeDiagnostic {
+    message: String,
+    node: NodeId,
+    severity: DiagnosticSeverity,
+    phase: CompilationPhase,
+    labels: Vec<(NodeId, Box<str>)>,
+}
+
+impl NodeDiagnostic {
+    pub(crate) fn new(
+        message: impl Into<String>,
+        node: NodeId,
+        severity: DiagnosticSeverity,
+        phase: CompilationPhase,
+    ) -> Self {
+        Self {
+            message: message.into(),
+            node,
+            severity,
+            phase,
+            labels: Vec::new(),
+        }
+    }
+
+    /// Add a secondary label at a related node.
+    pub(crate) fn label(mut self, node: NodeId, message: impl Into<Box<str>>) -> Self {
+        self.labels.push((node, message.into()));
+        self
+    }
+
+    /// Record the diagnostic in `checker`'s report.
+    pub(crate) fn report(self, checker: &TypeChecker<'_>) {
+        checker.diagnostics.borrow_mut().push(self);
+    }
+
+    /// The diagnostic at the spans `span_map` gives its nodes.
+    pub fn resolve(&self, span_map: &SpanMap<'_>) -> Diagnostic {
+        let mut builder = Diagnostic::builder(
+            self.message.clone(),
+            span_map.get_or_default(self.node),
+            self.severity,
+            self.phase.clone(),
+        );
+        for (node, message) in &self.labels {
+            builder = builder.label(span_map.get_or_default(*node), message.clone());
+        }
+        builder.build()
+    }
+}
 
 pub(super) fn solve_error_context(kind: Option<ConstraintOriginKind>) -> &'static str {
     match kind {
@@ -72,9 +125,9 @@ impl<'db> TypeChecker<'db> {
             .unwrap_or(func_id);
         let context = solve_error_context(failure.origin.map(|origin| origin.kind));
         let error = format_solve_error(self.db(), self.names(), &failure.error);
-        let mut diagnostic = Diagnostic::builder(
+        let mut diagnostic = NodeDiagnostic::new(
             format!("type error{context} in function '{}': {error}", func_name),
-            self.get_span(primary_node),
+            primary_node,
             DiagnosticSeverity::Error,
             CompilationPhase::TypeChecking,
         );
@@ -90,11 +143,11 @@ impl<'db> TypeChecker<'db> {
                 .map(|annotation| annotation.id)
                 .unwrap_or(func_id);
             diagnostic = diagnostic.label(
-                self.get_span(related_node),
+                related_node,
                 "enclosing function effect contract is declared here",
             );
         }
 
-        diagnostic.build().accumulate(self.db());
+        diagnostic.report(self);
     }
 }

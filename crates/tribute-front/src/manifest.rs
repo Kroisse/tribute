@@ -35,10 +35,10 @@ use crate::source_file::{FileEntry, SourceCst, file_at, path_to_uri, source_at, 
 pub const MANIFEST_FILE: &str = "tribute.toml";
 
 /// The root file of a library package, relative to its manifest.
-const LIBRARY_ROOT: &str = "src/lib.trb";
+pub(crate) const LIBRARY_ROOT: &str = "src/lib.trb";
 
 /// The root file of an executable package, relative to its manifest.
-const EXECUTABLE_ROOT: &str = "src/main.trb";
+pub(crate) const EXECUTABLE_ROOT: &str = "src/main.trb";
 
 /// A manifest as written, with the errors in it reported.
 #[derive(Clone, Debug, PartialEq, Eq, salsa::SalsaValue)]
@@ -371,7 +371,7 @@ fn reaches(db: &dyn salsa::Database, from: FileEntry, target: FileEntry) -> bool
 }
 
 /// The URI of `relative` in the directory of the file at `uri`.
-fn beside(uri: &Uri<String>, relative: &str) -> Option<Uri<String>> {
+pub(crate) fn beside(uri: &Uri<String>, relative: &str) -> Option<Uri<String>> {
     let path = uri_to_path(uri)?;
     Some(path_to_uri(&normalize(&path.parent()?.join(relative))))
 }

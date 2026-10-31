@@ -48,6 +48,22 @@ pub enum Command {
         sysroot: Option<PathBuf>,
     },
 
+    /// List the files a build reads, one path per line
+    Files {
+        /// A package directory or a source file, as `compile` takes
+        #[arg(default_value = ".")]
+        input: PathBuf,
+
+        /// Also list the files of the package's dependencies
+        #[arg(long)]
+        deps: bool,
+
+        /// Also list paths with no file yet, whose creation changes the
+        /// build (for file watchers)
+        #[arg(long)]
+        candidates: bool,
+    },
+
     /// Debug compilation of a source file
     Debug {
         /// Path to the source file to debug

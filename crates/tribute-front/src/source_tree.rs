@@ -9,6 +9,8 @@
 //! resolution and type checking read the result as one package, as if its
 //! modules were written inline.
 
+use std::path::PathBuf;
+
 use fluent_uri::Uri;
 use rustc_hash::FxHashMap as HashMap;
 use salsa::Accumulator;
@@ -36,6 +38,8 @@ pub struct SourceTree<'db> {
     files: Vec<PackageFile<'db>>,
     /// The index in `files` of the file whose spans carry each source id.
     by_source: HashMap<u64, u32>,
+    /// The path of every file the tree looked for, found or not.
+    probed: Vec<PathBuf>,
 }
 
 /// One file of a package: its module path in the package, its source, and
@@ -51,6 +55,7 @@ impl<'db> SourceTree<'db> {
     fn new(
         spliced: Option<Module<UnresolvedName>>,
         mut files: Vec<PackageFile<'db>>,
+        probed: Vec<PathBuf>,
         db: &'db dyn salsa::Database,
     ) -> Self {
         files.sort_by(|left, right| left.path.cmp(&right.path));
@@ -63,6 +68,7 @@ impl<'db> SourceTree<'db> {
             spliced,
             files,
             by_source,
+            probed,
         }
     }
 
@@ -82,6 +88,13 @@ impl<'db> SourceTree<'db> {
     /// The files of the package, in module path order.
     pub fn files(&self) -> &[PackageFile<'db>] {
         &self.files
+    }
+
+    /// The path of every file the tree looked for: the files it read, and
+    /// the module files that do not exist, whose creation changes the
+    /// tree. A root that is not a `file:` URI has no path.
+    pub fn probed(&self) -> &[PathBuf] {
+        &self.probed
     }
 
     /// The files of `module` and the modules under it.
@@ -129,13 +142,19 @@ pub fn source_tree<'db>(
         .iter()
         .any(|item| matches!(item, ModuleItem::Module(_)))
     {
-        return Some(SourceTree::new(None, vec![root_file], db));
+        return Some(SourceTree::new(
+            None,
+            vec![root_file],
+            uri_to_path(root.uri(db)).into_iter().collect(),
+            db,
+        ));
     }
     let mut loader = Loader {
         db,
         module_path,
         seen: vec![root],
         files: vec![root_file],
+        probed: uri_to_path(root.uri(db)).into_iter().collect(),
         changed: false,
     };
     let mut decls = module.decls.clone();
@@ -150,7 +169,7 @@ pub fn source_tree<'db>(
         name: module.name.clone(),
         decls,
     });
-    Some(SourceTree::new(spliced, loader.files, db))
+    Some(SourceTree::new(spliced, loader.files, loader.probed, db))
 }
 
 /// The source tree rooted at `source`, its nodes numbered under the module
@@ -166,6 +185,7 @@ struct Loader<'db> {
     /// The files the tree reached, to report one reached twice.
     seen: Vec<SourceCst>,
     files: Vec<PackageFile<'db>>,
+    probed: Vec<PathBuf>,
     /// Whether a module's body was filled in.
     changed: bool,
 }
@@ -193,10 +213,11 @@ impl<'db> Loader<'db> {
             let span = spans.get_or_default(module.id);
             let uri = Uri::parse_from(path).ok();
             let found = uri.as_ref().and_then(|uri| source_at(self.db, uri));
-            let shown = uri
+            let file = uri.as_ref().and_then(uri_to_path);
+            let shown = file
                 .as_ref()
-                .and_then(uri_to_path)
                 .map_or_else(String::new, |path| path.display().to_string());
+            self.probed.extend(file);
             if let Some(body) = &mut module.body {
                 if found.is_some() {
                     self.error(

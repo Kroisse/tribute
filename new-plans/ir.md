@@ -371,6 +371,230 @@ Structured-to-CFG 변환은 case가 이 조건을 만족하는 정수 discrimina
 비교하는 `cf.cond_br` 사슬로 내린다. Case 값의 분포에 따른 분기 전략은 target
 lowering이 정한다.
 
+### 선언적 어셈블리 형식
+
+Operation의 전용 textual 형식은 그 operation의 `#[dialect]` 선언에 형식 기술로
+붙인다. `#[asm_format(...)]`에 형식 원소를 나열하면 정의는 같은 기술 하나에서
+printer와 parser를 함께 얻는다. 인자 없는 `#[asm_format]`은 손으로 쓴
+`OpAsmFormat` 구현을 요구하며, 두 방식은 같은 hook으로 등록되어 printer와 parser가
+operation 이름으로 찾는다. 어느 쪽이든 generic 형식은 항상 읽고 쓸 수 있고,
+디버깅과 fallback 표현으로 남는다. 형식은 printer와 parser에만 영향을 주며 pass와
+분석은 형식을 참조하지 않는다.
+
+형식 기술은 [선언적 operation schema](#선언적-operation-schema)가 선언한 entity를
+이름으로 가리킬 뿐 새 entity나 의미를 만들지 않는다. 형식 기술은 macro가 검증한
+정적 원소 표로 정의에 저장되고, trunk-ir의 공용 printer와 parser가 이 표를
+해석한다. Schema descriptor와 마찬가지로 operation마다 printer와 parser 코드를 따로
+생성하지 않는다.
+
+```rust
+#[asm_format(symbol(sym_name) signature(r#type, body) attr_dict region(body))]
+#[flags(IsolatedFromAbove)]
+fn func<S: FuncSig>(sym_name: Attr<String>, r#type: Attr<TypeOf<S>>) {
+    #[region(body?)]
+    {}
+}
+
+#[asm_format("call" callee "(" args ")" attr_dict (":" types(results)^)?)]
+fn invoke(callee: Attr<SymbolRef>, args: Variadic<_>) -> Variadic<_> {}
+```
+
+```text
+func.func @add(%a: core.i32, %b: core.i32) -> core.i32 {
+  ...
+}
+func.func @decl(%arg0: core.i32)
+%r = test.invoke call @add(%x, %y) : core.i32
+```
+
+#### 원소
+
+형식은 Rust token으로 쓴다. Entity는 선언에 쓴 식별자(`r#type` 포함)로 가리키고,
+literal은 문자열 literal로 쓴다.
+
+- **Literal** — keyword(`"captures"`)나 구두점(`"("`, `"["`, `"->"`, `":"`,
+  `","`, `"="`)이다. Keyword는 식별자 하나이고, 구두점에는 영숫자를 섞지 않는다.
+  공백은 printer가 정하므로 빈 literal은 없다.
+- **Operand** — `%name`으로 쓰고, 가변 operand는 쉼표로 구분한 목록이다. 목록을
+  감싸는 괄호는 literal로 쓴다. Operand 타입은 쓰지 않는다. Generic 형식처럼
+  parser는 SSA 이름으로 값을 찾고 값에서 타입을 얻는다.
+- **Attribute** — 그 attribute 종류의 textual 형식으로 쓴다. 기본은 generic
+  attribute 문법(`"text"`, `@sym`, `[..]`, `42`)이다. `keyword(attr)`는 종류가
+  keyword codec을 정의한 attribute를 따옴표 없는 식별자로 쓴다(예: calling
+  convention의 `cps`). `symbol(attr)`는 문자열 attribute를 정의 이름 `@name`으로
+  쓴다.
+- **Result** — Result 이름과 `=`(`%r =`)은 형식에 쓰지 않는다. Printer가 앞에 쓰고,
+  parser는 형식 parser를 부르기 전에 읽는다. Result 타입은 `type(result)`나
+  `types(results)`, 또는 타입을 재구성하는 `signature`로 정확히 한 번 쓴다.
+  `types`는 결과 목록을 쉼표로 구분해 쓰며, 결과가 없을 수 있으면 앞의 구두점과
+  함께 선택 묶음에 둔다.
+- **`attr_dict`** — 형식의 다른 원소가 쓰지 않은 모든 attribute를
+  `attributes {..}`로 쓴다. Keyword 없는 `{..}`는 region이나 generic 형식과
+  첫 token이 겹치므로 쓰지 않는다. 남은 attribute가 없으면 아무
+  것도 쓰지 않는다. 다른 원소가 쓰는 attribute는 자동으로 제외하며, parser는 그런
+  key를 dictionary에서 만나면 거부한다.
+- **`signature(t, regions..)`** — 함수 형태 `(%a: A, %b: B) -> R`을 쓴다. `t`는
+  `Attr<TypeOf<S>>` attribute나 `Value<S>` result이고, `S`의 bound가 signature
+  codec을 구현해야 한다. 나머지 인자는 이 signature의 매개변수를 entry block
+  argument로 받는 region이다. 결과가 없으면 화살표를 쓰지 않고, 하나면 `-> R`,
+  여럿이면 `-> (R1, R2)`로 쓴다. 매개변수 이름은 첫 region의 entry block
+  argument 이름이고, region이 없으면 `%arg0`, `%arg1`, …이다.
+- **`region(r)`, `regions(rs)`** — `{ .. }`로 쓴다. `signature`가 entry
+  argument를 쓰는 region은 entry block label을 생략하고, parser가 signature의
+  매개변수를 entry block argument로 되돌린다. 다른 region은 entry label과 argument를
+  generic처럼 쓴다. 선택 region이 없으면 아무것도 쓰지 않는다.
+  `labelled_regions(rs, attr)`는 `{ label { .. } label { .. } }`로 쓰고 label은
+  목록 attribute `attr`의 원소를 keyword로 쓴 것이다. 이 원소는 region 목록과
+  `attr`를 함께 쓴다.
+- **`successor(s)`, `successors(ss)`** — `^bb1`로 쓴다.
+- **선택 묶음 `( .. )?`** — 묶음을 여는 literal 뒤에 literal과 원소 하나를 두고,
+  그 원소에 `^`를 붙여 anchor로 삼는다. Anchor가
+  있으면(선택 attribute가 있거나, 가변 operand·result 목록이 비어 있지 않으면)
+  묶음 전체를 쓰고, 없으면 묶음 전체를 생략한다. `Option<Attr<bool>>`인 anchor가
+  묶음에서 값을 쓰지 않으면 표시 flag다. `true`면 묶음을 쓰고 parser는 묶음을
+  만나면 `true`를 저장한다.
+- **`custom(D(entities..))`** — 선언적으로 쓸 수 없는 부분을 Rust 타입 `D`에
+  맡긴다. `D`는 `OpAsmDirective`를 구현하며, 나열한 entity의 출력, 손실 없는
+  출력 가능 여부 판정, 파싱을 맡는다. 형식 검증은 나열한 entity를 이 directive가
+  쓴 것으로 센다. Parser는 directive가 나열하지 않은 entity의 값을 돌려주면
+  거부한다.
+
+Operation 이름 뒤의 입력은 모두 형식 parser가 읽는다. Generic 형식이 operation
+이름 뒤의 `@name`을 `sym_name`으로 읽는 축약은 손으로 쓴 형식과 generic 형식에만
+해당하며, 선언적 형식에서는 `symbol(sym_name)`이나 symbol 참조 attribute처럼 `@`로
+시작하는 원소가 그 자리를 읽는다.
+
+공백은 원소 사이에 하나 쓴다. `(`, `[` 뒤와 `)`, `]`, `,` 앞에는 쓰지 않고,
+`signature`와 `"("`는 앞 원소에 붙여 쓴다. Parser는 원소 사이의 공백을 무시한다.
+
+#### 컴파일 시점 검증
+
+Macro는 형식 기술을 선언과 대조해 다음을 어기면 그 원소를 가리키는 진단으로
+거부한다.
+
+- Operand, region, successor는 각각 정확히 한 번 쓴다. Result 타입도 정확히 한 번
+  쓴다. `signature`의 region 인자는 entry argument를 묶을 뿐 region을 쓴 것으로
+  세지 않는다.
+- Attribute는 많아야 한 번 명시하고, 명시하지 않은 attribute가 있으면
+  `attr_dict`가 있어야 한다. 같은 entity를 두 원소가 쓰지 않는다.
+- 형식은 원소를 하나 이상 쓰고, `symbol`과 symbol 참조 attribute로 시작할 수
+  있다. Generic 형식은 `@`로 시작하지 않기 때문이다. 그 뒤, 또는 그런 원소가
+  없으면 처음에는 literal이 온다. 앞에 symbol이 있으면 이 literal로 여는 선택
+  묶음도 된다. 이 literal은 `{`, `%`, `:`, `[`, `^`, `}`로 시작하지 않는다. 앞의
+  넷은 generic 형식이 operation 이름 뒤에 쓰는 것이고, 나머지는 operation 이름만
+  쓴 generic 형식 뒤의 다음 줄이 시작할 수 있는 것이다.
+- 선택 묶음은 여는 literal로 시작하고, 그 뒤에는 literal과 anchor 하나만 둔다.
+  여는 literal은 keyword(값이 시작하는 `true`, `false`, `unit`, `loc`, `b`는
+  제외)이거나 값, `attr_dict`, 다음 줄이 시작할 수 없는 구두점이며, 형식의 다른
+  literal과 같지 않고 구두점끼리는 접두사도 겹치지 않는다. Parser는 여는 literal을
+  읽으면 묶음이 있다고 정한다.
+- Anchor는 선택 attribute, 가변 operand, 가변 result 중 하나다.
+- 가변 result나 선택 result의 타입은 `(":" types(..)^)?`처럼 선택 묶음의
+  마지막에 쓰고, 그 묶음은 형식의 마지막 원소다.
+- 가변 operand·successor 목록 바로 뒤에는 선택 묶음이 아닌 닫는 literal `")"`나
+  `"]"`가 온다. 빈 목록이 뒤의 원소를 읽거나 목록이 쉼표를 자기 구분자로 읽는
+  일이 없게 하기 위해서다.
+- 선택 region과 가변 region 목록 뒤에서 선택 묶음을 건너뛴 첫 원소는 없거나
+  `{`로 시작하지 않는 literal이다.
+- Literal `attributes`는 `attr_dict`만 쓴다.
+- `signature`의 `t`는 signature codec을 구현한 bound로 묶인 타입 변수여야 하고,
+  나열한 region은 선언된 region이어야 한다.
+
+#### 출력과 파싱 계약
+
+Printer는 쓰기 전에 operation이 형식으로 손실 없이 표현되는지 판정하고, 표현되지
+않으면 generic 형식으로 출력한다. 표현 가능하려면 다음을 모두 만족해야 한다.
+
+- Result 개수와 region 개수가 선언과 맞는다.
+- 명시한 attribute는 필수면 있고, 값이 그 원소가 쓸 수 있는 영역 안에 있다.
+  `keyword`는 codec이 keyword를 돌려줘야 하고, 표시 flag의 값은 `true`다.
+- `attr_dict`가 없으면 선언하지 않은 attribute가 없다.
+- Signature codec이 타입을 분해할 수 있고, `signature`가 entry argument를 쓰는
+  각 region의 entry block argument 타입이 codec의 입력 타입과 같다. 여러 region이면
+  모든 region이 같은 매개변수를 받는다.
+- 각 custom directive가 출력 가능하다고 판정한다.
+
+이 판정을 통과한 operation은 parser가 같은 operation으로 다시 읽고, 다시 출력하면
+같은 텍스트가 된다. 같은 operation을 generic 형식으로 쓴 텍스트도 같은 operation으로
+읽힌다. Parser는 operation schema를 검증하지 않는다.
+
+Parser는 `symbol`이 아닌 원소가 첫 token을 읽기 전에만 backtrack하고, 그 뒤의
+실패는 기대한 원소를 밝힌 오류로 끝낸다. 원소 사이의 공백은 token이 아니다. Keyword
+literal과 `attr_dict`의 `attributes`는 식별자 전체로 읽으며, 바로 뒤에 `.`이 오면
+다음 operation 이름의 일부로 보고 읽지 않는다. 첫 token에서 backtrack한 입력은 generic
+형식으로 다시 읽는다.
+
+`signature`가 entry argument를 쓰는 region이 여럿이면 printer는 둘째 이후
+region의 entry argument에 첫 region과 같은 이름을 주고, parser는 매개변수를 모든
+region의 entry block에 되돌린다. Printer는 `IsolatedFromAbove` operation의 형식을
+쓰기 전에 값과 block 번호를 새로 매긴다.
+
+#### 표기 관례
+
+여러 operation이 같은 개념을 쓰면 같은 원소 배열로 쓴다. 전용 형식을 선언적
+형식으로 옮길 때는 표기를 이 관례에 맞추어 바꿀 수 있으며, 옮긴 형식의 canonical
+표기는 textual fixture가 고정한다.
+
+- Symbol을 정의하는 operation은 operation 이름 바로 뒤에 `symbol(sym_name)`으로
+  `@name`을 쓴다.
+- 남은 attribute는 `attr_dict`로 region 바로 앞에 쓰고, region이 없으면 끝에
+  쓴다.
+- Capture operand 목록은 비어 있어도 `captures [..]`로 쓴다.
+- Convention처럼 keyword로 쓰는 attribute 하나는 `name(keyword)`로 쓴다
+  (`convention(cps)`).
+- 이름 붙은 본문이 여럿이면 `entries { label { .. } .. }`로 쓴다. 본문마다
+  signature가 다르면 label 뒤에 그 본문의 signature를 쓴다
+  (`label(%x: T) -> R { .. }`). 모든 본문이 같은 signature를 받으면 signature는
+  header에 한 번만 쓴다.
+- `signature`로 재구성되지 않는 result 타입은 형식의 끝에 `: type`으로 쓴다.
+
+```text
+%f = closure.lambda captures [%y] attributes {adapters = {evidence_direct = @a0}} entries {
+  direct(%x: core.i32) -> core.i32 {
+    ...
+  }
+  cps(%ev: E, %k: K, %x: core.i32) -> core.i32 {
+    ...
+  }
+} : closure.closure<S>
+```
+
+#### Signature codec
+
+Signature codec은 signature 타입과 그 함수 형태 표기 사이의 변환이며, 타입을
+정의하는 dialect가 그 타입의 wrapper에 구현한다. Trunk-ir는 signature 타입이나
+dialect 이름을 알지 못하며, `signature`는 형식이 묶은 타입 변수의 bound에서 codec을
+고른다. 같은 표기로 `func.func_sig`, `wasm.func_sig`, `clif.func_sig`,
+`tribute_control.func_sig`를 재구성한다.
+
+- 분해는 입력과 결과(각각의 매개변수 속성 포함), 그리고 codec이 소유하는 꼬리
+  표기를 돌려준다. 손실 없이 분해할 수 없는 타입이면 분해하지 않으며, 그
+  operation은 generic 형식으로 출력한다.
+- 재구성은 parser가 읽은 입력·결과와 꼬리 표기를 그 타입의 generic raw 형태로
+  만든다. Codec은 허용하는 결과 개수를 정한다.
+- 꼬리 표기는 결과 뒤에 오며 codec이 출력과 파싱을 모두 맡는다.
+  `tribute_control.func_sig`는 꼬리 표기로 [ability row](#ability-row)를 쓰고, row
+  밖의 non-reserved type attribute가 있으면 분해하지 않는다.
+  `func.func_sig` 계열은 매개변수 속성을 매개변수 뒤에 `%a: A {k = v}`로 쓰고,
+  두 count 밖의 type attribute를 결과 뒤에 `, {..}`로 쓴다. 이때 결과가 없으면
+  `-> ()`를 쓴다. 매개변수 속성이 있는 결과는 결과 목록을 괄호로 감싸
+  `-> (R {k = v})`로 쓴다. 바로 뒤의 region과 `{`가 겹치지 않게 하기 위해서다.
+  이 표기는 [타입 textual form](#타입-textual-form)의 함수 형태와
+  같은 순서다.
+
+함수 형태의 operation 문법은 그 operation이 선언한 형식에서만 나온다. Generic
+parser는 operation 이름을 보고 signature 타입을 합성하지 않으며, 매개변수
+목록을 entry block argument로 옮기는 일은 `signature`를 선언한 형식이 한다.
+
+#### 타입 형식
+
+타입의 전용 문법은 `TypeAsmFormat`을 손으로 구현해 등록한다. 이 형식 기술은
+operation에만 쓴다. 전용 문법을 가진 타입은 같은 저장 표현과 문법을 공유하는
+signature 타입 네 가지와 `adt.struct`, `adt.enum`뿐이다. Signature 타입은 이미
+하나의 공용 printer/parser를 공유하고 operation의 signature codec이 같은 구현을
+쓴다. `adt.struct`와 `adt.enum`의 문법은 매개변수 속성에서 이름을 꺼내고 variant
+타입을 중첩하므로, 두 소비자만을 위해 타입 형식 문법을 설계하지 않는다.
+
 ### 분석 질의와 편집 계약
 
 분석 캐시의 신선도는 IR 변경에 대해 자동이다. 변경을 관찰하는 주체는
@@ -2273,9 +2497,11 @@ must agree with a typed callee.
 
 Custom `func.func` assembly omits the arrow for zero results and prints `-> T`
 for one result. Absent arrow means zero IR results, never implicit Unit.
-Generic operation syntax preserves its explicit `type` attribute; custom
-assembly retains an explicit type when needed to preserve type attributes and
-validates its agreement with the decomposed signature. Shared conversion maps
+Generic operation syntax preserves its explicit `type` attribute. Custom
+assembly spells the whole type through its
+[signature codec](#signature-codec): parameter attributes follow their
+parameter, and type attributes follow the results as `, {..}`, so it never
+writes `type` in its attribute dictionary. Shared conversion maps
 every input/result and nested type attribute, including types inside
 [parameter attributes](#타입-매개변수-속성), preserving cardinality, and
 checks entry argument arity before changing the signature or entry arguments.

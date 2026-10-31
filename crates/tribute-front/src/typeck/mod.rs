@@ -30,7 +30,9 @@ pub(crate) mod prop;
 mod solver;
 pub mod subst;
 
-pub use checker::{Mode, ModuleCheckResult, TypeChecker};
+pub use checker::{
+    CheckedFunction, Mode, ModuleCheckResult, ModuleDeclarations, NodeDiagnostic, TypeChecker,
+};
 pub use constraint::{Constraint, ConstraintSet};
 pub use context::{AbilityInfo, AbilityOpInfo, MethodEntry, ModuleTypeEnv, parameter_type_matches};
 

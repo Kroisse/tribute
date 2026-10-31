@@ -4,27 +4,31 @@
 
 use std::error::Error;
 use std::io;
+use std::path::{Path, PathBuf};
 
 use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
 use lsp_types::{
     CodeAction, CodeActionKind, CodeActionOptions, CodeActionOrCommand, CodeActionParams,
     CodeActionProviderCapability, CompletionItem, CompletionList, CompletionOptions,
     CompletionParams, Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity,
-    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-    DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams,
-    GotoDefinitionResponse, Hover, HoverContents, HoverParams, HoverProviderCapability,
-    InitializeParams, Location, MarkupContent, MarkupKind, PrepareRenameResponse,
-    PublishDiagnosticsParams, ReferenceParams, RenameOptions, RenameParams, ServerCapabilities,
-    SignatureHelp, SignatureHelpOptions, SignatureHelpParams, SymbolKind,
-    TextDocumentContentChangeEvent, TextDocumentPositionParams, TextDocumentSyncCapability,
-    TextDocumentSyncKind, TextDocumentSyncOptions, TextEdit, Uri, WorkspaceEdit,
+    DidChangeTextDocumentParams, DidChangeWatchedFilesParams,
+    DidChangeWatchedFilesRegistrationOptions, DidCloseTextDocumentParams,
+    DidOpenTextDocumentParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
+    FileSystemWatcher, GlobPattern, GotoDefinitionParams, GotoDefinitionResponse, Hover,
+    HoverContents, HoverParams, HoverProviderCapability, InitializeParams, Location, MarkupContent,
+    MarkupKind, PrepareRenameResponse, PublishDiagnosticsParams, ReferenceParams, Registration,
+    RegistrationParams, RenameOptions, RenameParams, ServerCapabilities, SignatureHelp,
+    SignatureHelpOptions, SignatureHelpParams, SymbolKind, TextDocumentContentChangeEvent,
+    TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind,
+    TextDocumentSyncOptions, TextEdit, Unregistration, UnregistrationParams, Uri, WorkspaceEdit,
     notification::{
-        DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, Notification as _,
-        PublishDiagnostics,
+        DidChangeTextDocument, DidChangeWatchedFiles, DidCloseTextDocument, DidOpenTextDocument,
+        Notification as _, PublishDiagnostics,
     },
     request::{
         CodeActionRequest, Completion, DocumentSymbolRequest, GotoDefinition, HoverRequest,
-        PrepareRenameRequest, References, Rename, SignatureHelpRequest,
+        PrepareRenameRequest, References, RegisterCapability, Rename, SignatureHelpRequest,
+        UnregisterCapability,
     },
 };
 use ropey::Rope;
@@ -48,19 +52,41 @@ use tribute_front::resolve::NameDisplay;
 use tribute_front::source_file::{apply_edit, new_parser, parse_with_rope};
 use tribute_front::source_tree::source_tree_of;
 
+/// The id of the server's registration for watched file changes.
+const WATCHED_FILES_REGISTRATION: &str = "tribute/build-inputs";
+
 /// Main LSP server state.
 struct LspServer {
     connection: Connection,
     db: TributeDatabaseImpl,
     parser: tree_sitter::Parser,
+    /// Whether the client lets the server register file watchers.
+    watches_files: bool,
+    /// The files the server asked the client to watch.
+    watched: Vec<PathBuf>,
+    /// The id of the registration request for `watched` that the client
+    /// has not answered yet.
+    pending_registration: Option<RequestId>,
+    next_request_id: i32,
 }
 
 impl LspServer {
-    fn new(connection: Connection) -> Self {
+    fn new(connection: Connection, params: &InitializeParams) -> Self {
+        let watches_files = params
+            .capabilities
+            .workspace
+            .as_ref()
+            .and_then(|workspace| workspace.did_change_watched_files)
+            .and_then(|capability| capability.dynamic_registration)
+            .unwrap_or(false);
         Self {
             connection,
             db: TributeDatabaseImpl::default(),
             parser: new_parser(),
+            watches_files,
+            watched: Vec::new(),
+            pending_registration: None,
+            next_request_id: 0,
         }
     }
 
@@ -82,8 +108,18 @@ impl LspServer {
                 }
                 self.handle_request(req)?;
             }
-            Message::Response(_) => {
-                // We don't send requests, so we shouldn't get responses
+            Message::Response(response) => {
+                let registration = self.pending_registration.as_ref() == Some(&response.id);
+                if registration {
+                    self.pending_registration = None;
+                }
+                if let Err(error) = response.response_result {
+                    tracing::warn!(id = ?response.id, message = %error.message, "Client request failed");
+                    // Nothing is watched, so the next update registers again.
+                    if registration {
+                        self.watched.clear();
+                    }
+                }
             }
             Message::Notification(notif) => {
                 self.handle_notification(notif)?;
@@ -147,10 +183,102 @@ impl LspServer {
             self.did_open(params)?;
         } else if let Some(params) = cast_notification::<DidChangeTextDocument>(notif.clone()) {
             self.did_change(params)?;
-        } else if let Some(params) = cast_notification::<DidCloseTextDocument>(notif) {
+        } else if let Some(params) = cast_notification::<DidCloseTextDocument>(notif.clone()) {
             self.did_close(params)?;
+        } else if let Some(params) = cast_notification::<DidChangeWatchedFiles>(notif) {
+            self.did_change_watched_files(params)?;
         }
         Ok(())
+    }
+
+    /// Read the changed files from disk again, and republish the open
+    /// documents' diagnostics.
+    fn did_change_watched_files(
+        &mut self,
+        params: DidChangeWatchedFilesParams,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        for change in &params.changes {
+            tracing::info!(uri = ?change.uri, "Watched file changed");
+            self.db.reload_file(&change.uri);
+        }
+        self.publish_open_documents()?;
+        self.update_watchers()
+    }
+
+    fn publish_open_documents(&self) -> Result<(), Box<dyn Error + Send + Sync>> {
+        for (key, _) in self.db.open_documents() {
+            if let Ok(uri) = key.parse() {
+                self.publish_diagnostics(&uri)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Have the client watch the files the open documents' analyses read
+    /// (`new-plans/lsp.md` § 입력과 무효화), registering again only when
+    /// they changed.
+    fn update_watchers(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
+        if !self.watches_files {
+            return Ok(());
+        }
+        // A file that was not watched may have changed on disk meanwhile,
+        // and reading it again may change the files to watch.
+        let files = loop {
+            let files = self.db.watched_files();
+            let added: Vec<PathBuf> = files
+                .iter()
+                .filter(|file| !self.watched.contains(file))
+                .cloned()
+                .collect();
+            if !self.db.refresh_files(&added) {
+                break files;
+            }
+            self.publish_open_documents()?;
+        };
+        if files == self.watched {
+            return Ok(());
+        }
+        if !self.watched.is_empty() {
+            let params = UnregistrationParams {
+                unregisterations: vec![Unregistration {
+                    id: WATCHED_FILES_REGISTRATION.to_owned(),
+                    method: DidChangeWatchedFiles::METHOD.to_owned(),
+                }],
+            };
+            self.send_request::<UnregisterCapability>(params)?;
+        }
+        if !files.is_empty() {
+            let watchers = files
+                .iter()
+                .map(|file| FileSystemWatcher {
+                    glob_pattern: GlobPattern::String(glob_literal(file)),
+                    kind: None,
+                })
+                .collect();
+            let options = DidChangeWatchedFilesRegistrationOptions { watchers };
+            let params = RegistrationParams {
+                registrations: vec![Registration {
+                    id: WATCHED_FILES_REGISTRATION.to_owned(),
+                    method: DidChangeWatchedFiles::METHOD.to_owned(),
+                    register_options: Some(serde_json::to_value(options)?),
+                }],
+            };
+            self.pending_registration = Some(self.send_request::<RegisterCapability>(params)?);
+        }
+        self.watched = files;
+        Ok(())
+    }
+
+    /// Send a request to the client, returning its id.
+    fn send_request<R: lsp_types::request::Request>(
+        &mut self,
+        params: R::Params,
+    ) -> Result<RequestId, Box<dyn Error + Send + Sync>> {
+        self.next_request_id += 1;
+        let id = RequestId::from(format!("tribute-{}", self.next_request_id));
+        let request = Request::new(id.clone(), R::METHOD.to_owned(), params);
+        self.connection.sender.send(Message::Request(request))?;
+        Ok(id)
     }
 
     fn did_open(
@@ -167,7 +295,7 @@ impl LspServer {
 
         self.publish_diagnostics(&uri)?;
         self.publish_dependents(&uri)?;
-        Ok(())
+        self.update_watchers()
     }
 
     fn did_change(
@@ -181,7 +309,7 @@ impl LspServer {
 
         self.publish_diagnostics(&uri)?;
         self.publish_dependents(&uri)?;
-        Ok(())
+        self.update_watchers()
     }
 
     fn did_close(
@@ -205,7 +333,7 @@ impl LspServer {
         for dependent in dependents {
             self.publish_diagnostics(&dependent)?;
         }
-        Ok(())
+        self.update_watchers()
     }
 
     /// The open documents other than `uri` whose packages read `uri`'s
@@ -1036,8 +1164,8 @@ fn initialize_server(connection: Connection) -> Result<LspServer, Box<dyn Error 
     let capabilities = server_capabilities();
     let server_capabilities = serde_json::to_value(&capabilities)?;
     let init_params = connection.initialize(server_capabilities)?;
-    let _params: InitializeParams = serde_json::from_value(init_params)?;
-    Ok(LspServer::new(connection))
+    let params: InitializeParams = serde_json::from_value(init_params)?;
+    Ok(LspServer::new(connection, &params))
 }
 
 /// Start the LSP server.
@@ -1068,6 +1196,23 @@ fn init_lsp_tracing(log_filter: &str, sender: crossbeam_channel::Sender<Message>
         .with(env_filter)
         .with(LspLayer::new(sender))
         .try_init();
+}
+
+/// A glob pattern that matches `path` alone: each glob metacharacter in it
+/// is a one-character class.
+fn glob_literal(path: &Path) -> String {
+    let mut pattern = String::new();
+    for c in path.to_string_lossy().chars() {
+        match c {
+            '*' | '?' | '[' | ']' | '{' | '}' => {
+                pattern.push('[');
+                pattern.push(c);
+                pattern.push(']');
+            }
+            _ => pattern.push(c),
+        }
+    }
+    pattern
 }
 
 /// Whether the source tree of the package whose root is `root` reads
@@ -1714,12 +1859,34 @@ mod tests {
 
     impl TestHarness {
         fn new() -> Self {
+            Self::with_params(InitializeParams::default())
+        }
+
+        /// A harness whose client lets the server register file watchers.
+        fn watching_files() -> Self {
+            Self::with_params(InitializeParams {
+                capabilities: lsp_types::ClientCapabilities {
+                    workspace: Some(lsp_types::WorkspaceClientCapabilities {
+                        did_change_watched_files: Some(
+                            lsp_types::DidChangeWatchedFilesClientCapabilities {
+                                dynamic_registration: Some(true),
+                                relative_pattern_support: None,
+                            },
+                        ),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+        }
+
+        fn with_params(init_params: InitializeParams) -> Self {
             use lsp_types::request::{Initialize, Request as _};
 
             let (server_conn, client_conn) = Connection::memory();
 
             // Send initialize request from client
-            let init_params = InitializeParams::default();
             let init_request = lsp_server::Request::new(
                 RequestId::from(0),
                 Initialize::METHOD.to_string(),
@@ -1803,6 +1970,11 @@ mod tests {
             self.server.process_message(msg).unwrap();
         }
 
+        /// The messages the server sent and the client has not read.
+        fn sent(&mut self) -> Vec<Message> {
+            self.client.receiver.try_iter().collect()
+        }
+
         /// The next diagnostics the server published.
         fn next_diagnostics(&mut self) -> PublishDiagnosticsParams {
             let message = self
@@ -1842,6 +2014,177 @@ mod tests {
                 other => panic!("Expected response message, got {:?}", other),
             }
         }
+    }
+
+    /// The methods of the requests among `messages`, with the paths each
+    /// watcher registration watches.
+    fn watcher_requests(messages: &[Message]) -> Vec<(String, Vec<String>)> {
+        use lsp_types::request::Request as _;
+        messages
+            .iter()
+            .filter_map(|message| match message {
+                Message::Request(request) => Some(request),
+                _ => None,
+            })
+            .map(|request| {
+                let mut patterns = Vec::new();
+                if request.method == RegisterCapability::METHOD {
+                    let params: RegistrationParams =
+                        serde_json::from_value(request.params.clone()).unwrap();
+                    for registration in params.registrations {
+                        let options: DidChangeWatchedFilesRegistrationOptions =
+                            serde_json::from_value(registration.register_options.unwrap()).unwrap();
+                        patterns.extend(options.watchers.into_iter().map(|watcher| {
+                            match watcher.glob_pattern {
+                                GlobPattern::String(pattern) => pattern,
+                                GlobPattern::Relative(_) => panic!("an absolute pattern"),
+                            }
+                        }));
+                    }
+                }
+                (request.method.clone(), patterns)
+            })
+            .collect()
+    }
+
+    /// The server watches the files an open document's package reads,
+    /// reads a watched file again when it changes, and registers again when
+    /// the files change.
+    #[test]
+    fn the_server_watches_the_files_its_documents_read() {
+        use lsp_types::request::Request as _;
+        let dir = tempfile::tempdir().expect("temporary package directory");
+        let package = dir.path();
+        std::fs::create_dir(package.join("src")).unwrap();
+        std::fs::write(package.join("tribute.toml"), "[package]\nname = \"app\"\n").unwrap();
+        std::fs::write(package.join("src/util.trb"), "pub fn f() -> Nat { 1 }\n").unwrap();
+        let main = package.join("src/main.trb");
+        let uri: Uri = tribute_front::path_to_uri(&main).as_str().parse().unwrap();
+        let source = "mod util\nmod later\n\nfn main() -> Nil { let _ = util::f() }\n";
+        let path = |relative: &str| package.join(relative).display().to_string();
+        let changed = |harness: &mut TestHarness, relative: &str| {
+            let uri = tribute_front::path_to_uri(&package.join(relative));
+            harness.notify::<DidChangeWatchedFiles>(DidChangeWatchedFilesParams {
+                changes: vec![lsp_types::FileEvent {
+                    uri: uri.as_str().parse().unwrap(),
+                    typ: lsp_types::FileChangeType::CHANGED,
+                }],
+            });
+        };
+
+        let mut harness = TestHarness::watching_files();
+        harness.open_document(&uri, source);
+        let rejected = harness.sent();
+        let registered = vec![(
+            RegisterCapability::METHOD.to_owned(),
+            vec![
+                path("src/later.trb"),
+                path("src/lib.trb"),
+                path("src/util.trb"),
+                path("tribute.toml"),
+            ],
+        )];
+        assert_eq!(watcher_requests(&rejected), registered);
+
+        // A client that rejects the registration is asked again on the next
+        // update, with no unregistration since nothing was registered.
+        let Some(Message::Request(request)) = rejected.last() else {
+            panic!("a registration: {rejected:?}");
+        };
+        let response = Response::new_err(request.id.clone(), -32603, "rejected".to_owned());
+        harness
+            .server
+            .process_message(Message::Response(response))
+            .unwrap();
+        changed(&mut harness, "src/util.trb");
+        assert_eq!(watcher_requests(&harness.sent()), registered);
+
+        // A changed module file is read again; the files stay the same.
+        std::fs::write(package.join("src/util.trb"), "pub fn g() -> Nat { 1 }\n").unwrap();
+        changed(&mut harness, "src/util.trb");
+        let sent = harness.sent();
+        assert_eq!(watcher_requests(&sent), []);
+        let Some(Message::Notification(published)) = sent.first() else {
+            panic!("diagnostics: {sent:?}");
+        };
+        let published: PublishDiagnosticsParams =
+            serde_json::from_value(published.params.clone()).unwrap();
+        assert_eq!(published.uri, uri);
+        let messages: Vec<_> = published.diagnostics.iter().map(|d| &d.message).collect();
+        assert!(
+            messages
+                .iter()
+                .any(|message| *message == "unresolved name `util::f`"),
+            "{messages:?}"
+        );
+
+        // A new module file with a module of its own adds that file.
+        std::fs::write(package.join("src/later.trb"), "pub mod deeper\n").unwrap();
+        changed(&mut harness, "src/later.trb");
+        assert_eq!(
+            watcher_requests(&harness.sent()),
+            [
+                (UnregisterCapability::METHOD.to_owned(), vec![]),
+                (
+                    RegisterCapability::METHOD.to_owned(),
+                    vec![
+                        path("src/later/deeper.trb"),
+                        path("src/later.trb"),
+                        path("src/lib.trb"),
+                        path("src/util.trb"),
+                        path("tribute.toml"),
+                    ],
+                ),
+            ]
+        );
+
+        // A module file that changed while no `mod` named it is read again
+        // when one names it again.
+        let edit = |harness: &mut TestHarness, version, text: &str| {
+            harness.notify::<DidChangeTextDocument>(DidChangeTextDocumentParams {
+                text_document: lsp_types::VersionedTextDocumentIdentifier {
+                    uri: uri.clone(),
+                    version,
+                },
+                content_changes: vec![TextDocumentContentChangeEvent {
+                    range: None,
+                    range_length: None,
+                    text: text.to_owned(),
+                }],
+            });
+            harness.sent()
+        };
+        let unwatched = edit(&mut harness, 2, "mod later\n\nfn main() -> Nil { }\n");
+        assert!(
+            !watcher_requests(&unwatched)
+                .last()
+                .unwrap()
+                .1
+                .contains(&path("src/util.trb"))
+        );
+        std::fs::write(package.join("src/util.trb"), "pub fn f() -> Nat { 1 }\n").unwrap();
+        let rewatched = edit(&mut harness, 3, source);
+        let Some(published) = rewatched.iter().rev().find_map(|message| match message {
+            Message::Notification(published) => Some(published),
+            _ => None,
+        }) else {
+            panic!("diagnostics: {rewatched:?}");
+        };
+        let published: PublishDiagnosticsParams =
+            serde_json::from_value(published.params.clone()).unwrap();
+        let messages: Vec<_> = published.diagnostics.iter().map(|d| &d.message).collect();
+        assert!(
+            !messages.iter().any(|message| message.contains("util::f")),
+            "{messages:?}"
+        );
+    }
+
+    #[test]
+    fn glob_literal_escapes_metacharacters() {
+        assert_eq!(
+            glob_literal(Path::new("/a/b[1]/{c}*?.trb")),
+            "/a/b[[]1[]]/[{]c[}][*][?].trb"
+        );
     }
 
     fn test_uri(name: &str) -> Uri {

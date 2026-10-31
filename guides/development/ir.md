@@ -162,9 +162,31 @@ where
 - `#[verify]` on an operation requires `trunk_ir::ops::Verify` for its
   wrapper. It checks what the schema cannot express and runs only after
   every generated check passed.
-- `#[asm_format]` on an operation requires `trunk_ir::asm_format::OpAsmFormat`
-  for its wrapper, which prints and parses the operation's custom syntax.
-  Generic syntax stays readable for every operation.
+- `#[asm_format(..)]` on an operation lists its custom syntax as format
+  elements, which the shared printer and parser both interpret
+  ([declarative assembly format](../../new-plans/ir.md#선언적-어셈블리-형식)):
+
+  ```rust
+  #[asm_format("call" callee "(" args ")" attr_dict (":" types(results)^)?)]
+  fn invoke(callee: Attr<SymbolRef>, args: Variadic<_>) -> Variadic<_> {}
+  ```
+
+  String literals are keywords and punctuation, a bare name is an operand
+  or attribute, and `symbol(..)`, `type(..)`/`types(..)`, `attr_dict`
+  (`attributes {..}`), `region(..)`/`regions(..)`, and
+  `successor(..)`/`successors(..)` write the other entities. `("kw" .. x^)?`
+  opens with a literal and is written only when its anchor `x` is present;
+  an optional `bool` anchor is a flag the group's literals stand for. A
+  format begins with a literal (after any `symbol(..)` or symbol reference),
+  closes each variadic
+  list with `")"` or `"]"`, and ends with `(":" types(..)^)?` for results
+  that may be absent. The macro reports a broken rule, a missing entity, or
+  one written twice at the element at fault. An operation the format cannot
+  spell without loss prints generically.
+- `#[asm_format]` without elements on an operation requires
+  `trunk_ir::asm_format::OpAsmFormat` for its wrapper, which prints and
+  parses the operation's custom syntax by hand. Generic syntax stays
+  readable for every operation.
 - On a type `struct`, `#[verify]` requires `trunk_ir::type_verifier::VerifyType`
   and `#[asm_format]` requires `trunk_ir::asm_format::TypeAsmFormat`. A
   hand-written `TypeDef` adds the same hooks with `with_verifier` and

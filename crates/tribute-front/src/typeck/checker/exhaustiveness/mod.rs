@@ -10,9 +10,9 @@ mod matrix;
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 
+use super::NodeDiagnostic;
 use itertools::Itertools;
-use salsa::Accumulator;
-use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_core::{CompilationPhase, DiagnosticSeverity};
 use trunk_ir::Symbol;
 
 use self::matrix::{Analyzer, Ctor, Family, FamilyId, GiveUp, Pat, VariantInfo, Witness};
@@ -152,13 +152,7 @@ impl<'db> TypeChecker<'db> {
     }
 
     fn report_case(&self, node: NodeId, message: &str, severity: DiagnosticSeverity) {
-        Diagnostic::new(
-            message,
-            self.get_span(node),
-            severity,
-            CompilationPhase::TypeChecking,
-        )
-        .accumulate(self.db());
+        NodeDiagnostic::new(message, node, severity, CompilationPhase::TypeChecking).report(self);
     }
 }
 

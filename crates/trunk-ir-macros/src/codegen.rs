@@ -202,15 +202,16 @@ fn gen_op_def(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -> Tok
         None => quote!(None),
     };
     // Likewise for a missing `OpAsmFormat` impl and `#[asm_format]`.
-    let asm_format = match op.asm_format {
-        Some(span) => {
+    let asm_format = match (op.asm_format, &op.format) {
+        (Some(span), Some(tokens)) => crate::format::gen_format(crate_path, op, span, tokens),
+        (Some(span), None) => {
             let mut sname = struct_name(&op.name);
             sname.set_span(span);
             quote_spanned!(span=> Some(
                 <#sname as #crate_path::ops::__private::DeclaredOpAsmFormat>::ASM_HOOKS
             ))
         }
-        None => quote!(None),
+        (None, _) => quote!(None),
     };
 
     // The span points a type that is not a flag at its `#[flags]` entry.

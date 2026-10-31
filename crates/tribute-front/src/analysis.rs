@@ -12,12 +12,15 @@
 
 use salsa::Accumulator;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
-use trunk_ir::Symbol;
+use trunk_ir::{Symbol, SymbolPath};
 
+use crate::ast::{Decl, DeclTable, FuncDecl, ResolvedRef, SpanMap};
 use crate::resolve::{self, Dependencies, NameDisplay, PackageEnv, PackageName};
 use crate::source_file::SourceCst;
 use crate::source_tree::{self, SourceTree};
-use crate::typeck::{PackageExports, TypeCheckOutput, TypeChecker};
+use crate::typeck::{
+    CheckedFunction, ModuleDeclarations, PackageExports, TypeCheckOutput, TypeChecker,
+};
 
 /// A library package: its name, the source of its root module, and the
 /// packages its dependency table names (`new-plans/implementation.md`).
@@ -218,13 +221,96 @@ pub fn root_names(db: &dyn salsa::Database, table: DependencyTable) -> NameDispl
     )
 }
 
+/// A source's module after name resolution, with one [`ResolvedFunction`]
+/// for each module-level function, in declaration order.
+#[derive(Clone, PartialEq, Eq, salsa::SalsaValue)]
+pub struct ResolvedModule<'db> {
+    pub module: DeclTable<ResolvedRef<'db>>,
+    pub functions: Vec<ResolvedFunction<'db>>,
+}
+
+/// One module-level function after name resolution, identified by its
+/// module and name. Its declaration is a tracked field, so an edit that
+/// leaves the declaration unchanged keeps the value of the revision before,
+/// and the function's check is reused.
+#[salsa::tracked(debug)]
+pub struct ResolvedFunction<'db> {
+    /// The module that declares the function.
+    pub module: SymbolPath,
+    pub name: Symbol,
+    #[tracked]
+    pub decl: FuncDecl<ResolvedRef<'db>>,
+}
+
+/// Parse and resolve `source` against the packages `table` names. `None` if
+/// `source` does not parse.
+#[salsa::tracked(returns(as_ref))]
+pub fn resolved_module<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+    table: DependencyTable,
+) -> Option<ResolvedModule<'db>> {
+    let tree = source_tree::source_tree_of(db, source)?;
+    let module = tree.module(db);
+    let scope = resolve::build_env(db, module, dependencies(db, table));
+    let module = resolve::resolve_with_env(db, module, &scope, tree.span_map(db));
+    let functions = module
+        .entries
+        .iter()
+        .filter_map(|entry| match &entry.decl {
+            Decl::Function(func) => Some(ResolvedFunction::new(
+                db,
+                entry.module.clone(),
+                func.name.clone(),
+                func.clone(),
+            )),
+            _ => None,
+        })
+        .collect();
+    Some(ResolvedModule { module, functions })
+}
+
+/// The declarations of `source`'s resolved module, collected for checking
+/// its functions. They hold no function body, so an edit inside one leaves
+/// them equal to the revision before.
+#[salsa::tracked(returns(as_ref))]
+pub fn module_declarations<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+    table: DependencyTable,
+) -> Option<ModuleDeclarations<'db>> {
+    let resolved = resolved_module(db, source, table)?;
+    let mut checker = TypeChecker::new(db, SpanMap::empty(), root_names(db, table));
+    depend_on_table(db, &mut checker, table);
+    Some(checker.collect_module(&resolved.module))
+}
+
+/// Type check one module-level function of `source` against its module's
+/// declarations. It reads only `function`'s declaration and those
+/// declarations, and no source position, so it reruns only when one of them
+/// changes.
+#[salsa::tracked(returns(ref))]
+pub fn check_function<'db>(
+    db: &'db dyn salsa::Database,
+    function: ResolvedFunction<'db>,
+    source: SourceCst,
+    table: DependencyTable,
+) -> CheckedFunction<'db> {
+    let declarations = module_declarations(db, source, table)
+        .expect("a resolved function's module has declarations");
+    TypeChecker::new(db, SpanMap::empty(), root_names(db, table))
+        .with_declarations(declarations)
+        .check_function(function.module(db), function.decl(db))
+}
+
 /// Parse, resolve, and type check `source` against the packages `table`
 /// names.
 ///
 /// Returns `None` only if `source` does not parse. Errors are reported as
 /// accumulated diagnostics, and the result is returned with them. The result
 /// holds only `source`'s declarations; its dependencies' are read through
-/// the dependency table.
+/// the dependency table. Each function is checked by [`check_function`], so
+/// an edit rechecks only the functions whose declarations it changed.
 #[salsa::tracked(returns(as_ref))]
 pub fn analyze<'db>(
     db: &'db dyn salsa::Database,
@@ -232,16 +318,16 @@ pub fn analyze<'db>(
     table: DependencyTable,
 ) -> Option<TypeCheckOutput<'db>> {
     let tree = source_tree::source_tree_of(db, source)?;
-    let module = tree.module(db);
-    let span_map = tree.span_map(db);
-    let scope = resolve::build_env(db, module, dependencies(db, table));
-    let resolved = resolve::resolve_with_env(db, module, &scope, span_map);
-
-    let mut checker = TypeChecker::new(db, span_map, root_names(db, table));
-    depend_on_table(db, &mut checker, table);
+    let resolved = resolved_module(db, source, table)?;
+    let declarations = module_declarations(db, source, table)?;
+    let functions = resolved
+        .functions
+        .iter()
+        .map(|&function| check_function(db, function, source, table));
+    let checker = TypeChecker::new(db, tree.span_map(db), root_names(db, table));
     Some(TypeCheckOutput::from_check(
         db,
-        checker.check_module(&resolved),
+        checker.finish_module(declarations, &resolved.module, functions),
     ))
 }
 

@@ -347,6 +347,27 @@ impl<'a, 'ctx> OpPrintHelper<'a, 'ctx> {
         self.state.write_attribute(&mut *self.f, attr)
     }
 
+    /// Write `{key = value, ...}`.
+    pub fn write_attr_dict<'b>(
+        &mut self,
+        attrs: impl Iterator<Item = (StringRef, &'b Attribute)>,
+    ) -> fmt::Result {
+        self.state.write_attr_dict(&mut *self.f, attrs)
+    }
+
+    /// The label of a block, assigned when its region was printed.
+    pub fn block_label(&self, block: BlockRef) -> &str {
+        self.state.get_block_label(block)
+    }
+
+    /// Print `{ .. }` holding a region in generic form, block labels
+    /// included.
+    pub fn print_region(&mut self, region: RegionRef) -> fmt::Result {
+        self.f.write_str("{\n")?;
+        print_region(self.state, &mut *self.f, region, self.indent + 2)?;
+        write!(self.f, "{}}}", " ".repeat(self.indent))
+    }
+
     /// Print the operation with generic assembly.
     ///
     /// Custom formats use this when their concise form cannot represent the
@@ -825,10 +846,20 @@ fn print_operation(
     let indent_str = " ".repeat(indent);
     f.write_str(&indent_str)?;
     // Check the operation's custom assembly format
-    if let Some(hooks) = crate::OpDef::of(state.ctx, op).and_then(|def| def.asm_format) {
-        (hooks.print)(&mut OpPrintHelper { state, f, indent }, op)?;
-    } else {
-        print_generic_op(state, f, op, indent)?;
+    let def = crate::OpDef::of(state.ctx, op);
+    match def.and_then(|def| Some((def, def.asm_format?))) {
+        Some((_, crate::asm_format::OpAsmFormatDef::Hooks(hooks))) => {
+            (hooks.print)(&mut OpPrintHelper { state, f, indent }, op)?;
+        }
+        Some((def, crate::asm_format::OpAsmFormatDef::Declarative(format))) => {
+            crate::asm_format::declarative::print(
+                &mut OpPrintHelper { state, f, indent },
+                op,
+                def,
+                format,
+            )?;
+        }
+        None => print_generic_op(state, f, op, indent)?,
     }
     f.write_char('\n')
 }
