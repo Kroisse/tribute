@@ -129,16 +129,16 @@ mod tests {
             r#"core.module @m {
   !f = tribute_control.func_sig<() -> core.i32>
   tribute_cps.func @main() -> core.i32 convention(direct) {
-    %f = tribute_cps.func_ref {convention = "direct", func_ref = @"used$8"} : !f
+    %f = tribute_cps.func_ref {func_ref = @"used$8"} : !f
     %r = tribute_cps.call_indirect %f {convention = "direct"} : core.i32
     tribute_control.return %r
   }
-  tribute_cps.func_table {conventions = ["direct"], sym_name = "used$8", targets = [@"used$9D"]}
+  tribute_cps.func_table @"used$8" = {direct = @"used$9D"}
   tribute_cps.func @"used$9D"() -> core.i32 convention(direct) {
     %c = arith.const {value = 1} : core.i32
     tribute_control.return %c
   }
-  tribute_cps.func_table {conventions = ["direct"], sym_name = "unused$8", targets = [@"unused$9D"]}
+  tribute_cps.func_table @"unused$8" = {direct = @"unused$9D"}
   tribute_cps.func @"unused$9D"() -> core.i32 convention(direct) {
     %c = arith.const {value = 2} : core.i32
     tribute_control.return %c

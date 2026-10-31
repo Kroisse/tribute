@@ -160,25 +160,29 @@ fn instantiations_that_select_one_class_pass_the_same_classes() {
 }
 
 #[test]
-fn a_func_ref_has_the_class_of_the_row_of_its_value() {
-    // The value's row is wider than the target's, so its class is stronger.
-    let input = |convention: &str| {
+fn a_func_ref_enters_its_table_no_stronger_than_the_row_of_its_value() {
+    let input = |value: &str, entry: &str| {
         format!(
             r#"core.module @m {{
   !open = tribute_control.func_sig<(core.i32) -> core.i32, {{ability_row = {{instances = [@Ctl]}}}}>
+  !closed = tribute_control.func_sig<(core.i32) -> core.i32>
 {CTL}
   tribute_cps.func @pure(%x: core.i32) -> core.i32 convention(direct) {{
     tribute_control.return %x
   }}
+  tribute_cps.func_table @"pure$8" = {{{entry} = @pure}}
   tribute_cps.func @f(%x: core.i32) -> core.i32 convention(direct) {{
-    %p = tribute_cps.func_ref {{convention = "{convention}", func_ref = @pure}} : !open
+    %p = tribute_cps.func_ref {{func_ref = @"pure$8"}} : {value}
     tribute_control.return %x
   }}
 }}"#
         )
     };
-    assert_eq!(rules(&input("cps")), [""; 0]);
-    assert_eq!(rules(&input("direct")), ["func_ref"]);
+    // A value whose row is wider than the target's enters a weaker entry
+    // through an adapter.
+    assert_eq!(rules(&input("!open", "direct")), [""; 0]);
+    assert_eq!(rules(&input("!closed", "direct")), [""; 0]);
+    assert_eq!(rules(&input("!closed", "cps")), ["func_ref"]);
 }
 
 #[test]
@@ -234,8 +238,9 @@ fn a_definition_without_a_body_has_no_class_variables() {
   tribute_cps.func @pure(%y: core.i32) -> core.i32 convention(direct) {{
     tribute_control.return %y
   }}
+  tribute_cps.func_table @"pure$8" = {{direct = @pure}}
   tribute_cps.func @main(%x: core.i32) -> core.i32 convention(direct) {{
-    %f = tribute_cps.func_ref {{convention = "direct", func_ref = @pure}} : !closed
+    %f = tribute_cps.func_ref {{func_ref = @"pure$8"}} : !closed
     %r = tribute_control.call %x, %f {{callee = @external, row_args = [{{}}]}} : core.i32
     tribute_control.return %r
   }}

@@ -111,6 +111,10 @@ impl Converter<'_> {
                 for source_op in source_ops {
                     let converted = if tribute_cps::Func::matches(self.ctx, source_op) {
                         self.convert_func(source_op)?
+                    } else if tribute_cps::FuncTable::matches(self.ctx, source_op) {
+                        // Its references build its entries when they are
+                        // converted.
+                        continue;
                     } else if is_source_logical(self.ctx, source_op) {
                         return Err(TributeControlToCpsError::one(
                             PRE_CPS_BOUNDARY,

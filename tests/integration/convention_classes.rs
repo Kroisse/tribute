@@ -108,12 +108,18 @@ fn without_row(callable_ty: &str) -> String {
 }
 
 /// The convention a printed `tribute_cps` operation declares, quoted.
-fn declared_convention(line: &str) -> &str {
-    line.split("convention = ")
-        .nth(1)
-        .and_then(|suffix| suffix.split([',', '}']).next())
-        .map(str::trim)
-        .unwrap_or_else(|| panic!("missing declared convention in {line}"))
+/// The conventions of the entries of the function table named `name`.
+fn table_conventions(ir: &str, name: &str) -> Vec<String> {
+    let header = format!("tribute_cps.func_table @\"{name}\" = {{");
+    let line = ir
+        .lines()
+        .find_map(|line| line.trim().strip_prefix(&header))
+        .unwrap_or_else(|| panic!("missing function table {name}:\n{ir}"));
+    line.trim_end_matches('}')
+        .split(", ")
+        .filter_map(|entry| entry.split(" = ").next())
+        .map(str::to_owned)
+        .collect()
 }
 
 /// Each printed lambda's header line, followed by the line that opens its
@@ -129,10 +135,7 @@ fn lambda_headers(ir: &str) -> Vec<String> {
 
 fn named_ref_lines<'a>(ir: &'a str, name: &str) -> Vec<&'a str> {
     ir.lines()
-        .filter(|line| {
-            line.contains(&format!("func_ref = @\"pkg::{name}\""))
-                || line.contains(&format!("func_ref = @{name}"))
-        })
+        .filter(|line| line.contains(&format!("func_ref @\"pkg::{name}$8\"")))
         .collect()
 }
 
@@ -176,7 +179,9 @@ fn main() -> Nil {}
             .contains(&format!("(%0: {}, ", without_row(callback_ty))),
         "the fresh function reference must have apply's callback type, up to its row:\n{ir}"
     );
-    assert_eq!(declared_convention(double_ref), "\"cps\"");
+    // The value enters `double` directly; an adapter fills the `Cps` slot
+    // that `apply` calls.
+    assert_eq!(table_conventions(&ir, "pkg::double$8"), ["direct"]);
     assert!(
         named_function_header(&ir, "double").contains("convention(direct)"),
         "the original named worker must remain Direct:\n{ir}"
@@ -207,12 +212,8 @@ fn main() -> Nil {}
     );
     let reference_values = refs.iter().map(|line| value_name(line)).collect::<Vec<_>>();
     assert_ne!(reference_values[0], reference_values[1]);
-    let conventions = refs
-        .iter()
-        .map(|line| declared_convention(line))
-        .collect::<Vec<_>>();
-    assert!(conventions.contains(&"\"direct\""));
-    assert!(conventions.contains(&"\"cps\""));
+    // Both references share the table of the one instance they name.
+    assert_eq!(table_conventions(&ir, "pkg::double$8"), ["direct"]);
     for value in reference_values {
         assert_not_cast(logical_function(&ir, "forward"), value);
     }
@@ -549,9 +550,13 @@ fn main() -> Nil {{
                 let ValueDef::OpResult(producer, _) = ir.value_def(callback) else {
                     panic!("expected named callback: {text}");
                 };
-                let reference = tribute_cps::FuncRef::from_op(&ir, producer).unwrap();
-                assert_eq!(*reference.func_ref(&ir), SymbolPath::new(["std::Int::+"]));
-                conventions.push(reference.convention(&ir));
+                let table = tribute_cps::func_ref_table(&ir, producer).unwrap();
+                let entries = tribute_cps::table_entries(&ir, table).unwrap();
+                let [(convention, target)] = &entries[..] else {
+                    panic!("expected one table entry: {text}");
+                };
+                assert_eq!(*target, SymbolPath::new(["std::Int::+"]));
+                conventions.push(*convention);
             }
             ControlFlow::Continue(WalkAction::Advance)
         });

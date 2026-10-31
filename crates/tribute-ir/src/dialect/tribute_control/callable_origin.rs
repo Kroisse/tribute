@@ -215,6 +215,29 @@ impl CallableQuery<'_> {
             .filter(|&function| is_func(ctx, function))
             .is_some_and(|function| verified_callable_declaration(ctx, function, self.registered))
     }
+
+    /// Whether `symbol`, referenced from `op`, names a function table whose
+    /// targets all name defined functions or registered intrinsics.
+    pub(crate) fn names_verified_table(
+        &self,
+        ctx: &IrContext,
+        op: OpRef,
+        symbol: &SymbolPath,
+    ) -> bool {
+        self.functions
+            .resolve(ctx, op, symbol)
+            .and_then(|table| {
+                Some((
+                    table,
+                    crate::dialect::tribute_cps::table_entries(ctx, table)?,
+                ))
+            })
+            .is_some_and(|(table, entries)| {
+                entries
+                    .iter()
+                    .all(|(_, target)| self.names_verified_function(ctx, table, target))
+            })
+    }
 }
 
 /// An operation whose results can be callables whose source signature comes

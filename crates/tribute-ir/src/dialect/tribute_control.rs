@@ -182,12 +182,14 @@ mod tribute_control {
     /// function has a body or is a registered compiler intrinsic.
     ///
     /// ```text
-    /// %f = tribute_control.func_ref {func_ref = @id} : !Callable
+    /// %f = tribute_control.func_ref @id : !Callable
+    /// %g = tribute_control.func_ref @map rows [{tail = 0}] : !Callable
     /// ```
     ///
     /// - **Shape:** no operands or regions, and not a terminator.
     ///   `func_ref: Symbol` is required, and the result is one
-    ///   `tribute_control.func_sig`.
+    ///   `tribute_control.func_sig`. The concise form writes `func_ref`, then
+    ///   `row_args` after `rows` when present.
     /// - **Meaning:** makes a named function a first-class source value,
     ///   which source needs because it can use a named function as a
     ///   higher-order value. The result has the target's source signature.
@@ -205,6 +207,7 @@ mod tribute_control {
     /// - **Location:** the source reference span that uses the named function
     ///   as a value.
     #[verify]
+    #[asm_format(func_ref ("rows" row_args^)? ":" type(result))]
     #[flags(Pure)]
     #[implements(CallableResultOrigin)]
     fn func_ref(func_ref: Attr<SymbolRef>, row_args: Option<Attr<[Row]>>) -> Value<impl FuncSig> {}
@@ -3419,6 +3422,102 @@ fn types_match(actual: &[TypeRef], expected: &[Option<TypeRef>]) -> bool {
             .all(|(actual, expected)| Some(*actual) == *expected)
 }
 
+/// Check that the result of `op`, a func_ref, is `target`'s signature with
+/// the reference's row arguments substituted.
+fn validate_func_ref_signature(
+    ctx: &IrContext,
+    op: OpRef,
+    target: OpRef,
+    errors: &mut Vec<ValidationError>,
+) {
+    let Some(target_ty) = ctx.op_attrs(target).get_type("type") else {
+        return;
+    };
+    let Some(result_ty) = ctx.op_result_types(op).first().copied() else {
+        return;
+    };
+    let Some(args) = reference_row_args(ctx, op, target, errors) else {
+        return;
+    };
+    let same_signature = substituted_parts(ctx, target_ty, &args)
+        .zip(FuncSig::from_type_ref(ctx, result_ty))
+        .is_some_and(|(expected, signature)| {
+            Some(signature.result(ctx)) == expected.result
+                && types_match(signature.inputs(ctx), &expected.inputs)
+                && expected
+                    .row
+                    .is_some_and(|row| signature.row(ctx).includes(&row))
+        });
+    if !same_signature {
+        push_op_error(
+            ctx,
+            op,
+            errors,
+            "func_ref result source signature does not match its target",
+        );
+    }
+}
+
+/// Check that the targets of `table`, a `tribute_cps.func_table`, share one
+/// source signature, each entered with its own convention or, for a `Cps`
+/// target, a weaker one.
+fn validate_func_table(
+    ctx: &IrContext,
+    table: OpRef,
+    funcs: &SymbolTable,
+    errors: &mut Vec<ValidationError>,
+) {
+    let mut signature = None;
+    for (convention, target) in tribute_cps::table_entries(ctx, table).unwrap_or_default() {
+        if target.as_simple().is_none() {
+            push_op_error(
+                ctx,
+                table,
+                errors,
+                format!("function table target @{target} must be in the table's own module"),
+            );
+            continue;
+        }
+        let Some(instance) = funcs
+            .definitions(ctx, table, &target)
+            .first()
+            .copied()
+            .filter(|&instance| tribute_cps::Func::matches(ctx, instance))
+        else {
+            push_op_error(
+                ctx,
+                table,
+                errors,
+                format!("function table target @{target} is not a tribute_cps.func"),
+            );
+            continue;
+        };
+        let ty = ctx.op_attrs(instance).get_type("type");
+        if *signature.get_or_insert(ty) != ty {
+            push_op_error(
+                ctx,
+                table,
+                errors,
+                "function table targets must share one source signature",
+            );
+        }
+        if let Some(own) = tribute_cps::declared_convention(ctx, instance)
+            && convention != own
+            && !(convention < own && own == CallingConvention::Cps)
+        {
+            push_op_error(
+                ctx,
+                table,
+                errors,
+                format!(
+                    "function table entry `{}` is not the convention of its target @{target}",
+                    convention.keyword()
+                ),
+            );
+        }
+    }
+}
+
 fn validate_symbol_uses(
     ctx: &IrContext,
     module: Module,
@@ -3442,6 +3541,42 @@ fn validate_symbol_use(
             let Some(symbol) = ctx.op_attrs(op).get_symbol_ref("func_ref") else {
                 return;
             };
+            if tribute_cps::FuncRef::matches(ctx, op) {
+                if symbol.as_simple().is_none() {
+                    push_op_error(
+                        ctx,
+                        op,
+                        errors,
+                        format!("func_ref @{symbol} must name a table of its own module"),
+                    );
+                    return;
+                }
+                let Some(table) = funcs
+                    .definitions(ctx, op, symbol)
+                    .first()
+                    .copied()
+                    .filter(|&table| tribute_cps::FuncTable::matches(ctx, table))
+                else {
+                    push_op_error(
+                        ctx,
+                        op,
+                        errors,
+                        format!("unresolved function table @{symbol}"),
+                    );
+                    return;
+                };
+                for (_, target) in tribute_cps::table_entries(ctx, table).unwrap_or_default() {
+                    if let Some(target) = funcs
+                        .definitions(ctx, table, &target)
+                        .first()
+                        .copied()
+                        .filter(|&target| is_func(ctx, target))
+                    {
+                        validate_func_ref_signature(ctx, op, target, errors);
+                    }
+                }
+                return;
+            }
             let Some(target) = funcs
                 .definitions(ctx, op, symbol)
                 .first()
@@ -3456,43 +3591,9 @@ fn validate_symbol_use(
                 );
                 return;
             };
-            let Some(target_ty) = ctx.op_attrs(target).get_type("type") else {
-                return;
-            };
-            let Some(result_ty) = ctx.op_result_types(op).first().copied() else {
-                return;
-            };
-            let Some(args) = reference_row_args(ctx, op, target, errors) else {
-                return;
-            };
-            let same_signature = substituted_parts(ctx, target_ty, &args)
-                .zip(FuncSig::from_type_ref(ctx, result_ty))
-                .is_some_and(|(expected, signature)| {
-                    Some(signature.result(ctx)) == expected.result
-                        && types_match(signature.inputs(ctx), &expected.inputs)
-                        && expected
-                            .row
-                            .is_some_and(|row| signature.row(ctx).includes(&row))
-                });
-            if !same_signature {
-                push_op_error(
-                    ctx,
-                    op,
-                    errors,
-                    "func_ref result source signature does not match its target",
-                );
-            } else if let (Some(target_cc), Some(result_cc)) = (
-                tribute_cps::declared_convention(ctx, target),
-                tribute_cps::declared_convention(ctx, op),
-            ) && result_cc < target_cc
-            {
-                push_op_error(
-                    ctx,
-                    op,
-                    errors,
-                    "func_ref result convention must be at least as strong as its target",
-                );
-            }
+            validate_func_ref_signature(ctx, op, target, errors);
+        } else if tribute_cps::FuncTable::matches(ctx, op) {
+            validate_func_table(ctx, op, funcs, errors);
         } else if Call::matches(ctx, op) {
             let Some(symbol) = ctx.op_attrs(op).get_symbol_ref("callee") else {
                 return;

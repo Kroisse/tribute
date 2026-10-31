@@ -79,7 +79,8 @@ pub fn specialize(ctx: &mut IrContext, module: Module) -> Result<(), ClassSpecia
     let mut functions: Vec<Function> = module
         .ops(ctx)
         .iter()
-        .filter_map(|&op| Function::read(ctx, op))
+        // No table exists before specialization.
+        .filter_map(|&op| Function::read(ctx, op, &HashMap::default()))
         .collect();
     let positions = settle_class_variables(&mut functions);
     let variables = |name: &str| positions.get(name).map_or(&[][..], Vec::as_slice);
@@ -150,8 +151,65 @@ pub fn specialize(ctx: &mut IrContext, module: Module) -> Result<(), ClassSpecia
     for (op, convention) in instances {
         tribute_cps::replace_control_op(ctx, op, convention);
     }
+    add_func_tables(ctx, module);
     Ok(())
 }
+
+/// Point every `tribute_cps.func_ref` at the table of the instance it names,
+/// and add each table after its instance. An instance has one class vector,
+/// so its table has the instance as its only target, at the instance's own
+/// convention (`new-plans/ir.md`, "Convention entry", 함수 참조).
+fn add_func_tables(ctx: &mut IrContext, module: Module) {
+    let mut references = Vec::new();
+    let _ = trunk_ir::walk::walk_op::<()>(ctx, module.op(), &mut |op| {
+        if tribute_cps::FuncRef::matches(ctx, op) {
+            references.push(op);
+        }
+        std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+    });
+    let instances: HashMap<String, OpRef> = module
+        .ops(ctx)
+        .iter()
+        .filter(|&&op| tribute_cps::Func::matches(ctx, op))
+        .filter_map(|&op| Some((ctx.op_attrs(op).get_str("sym_name")?.to_owned(), op)))
+        .collect();
+    let mut tables: HashSet<String> = HashSet::default();
+    for reference in references {
+        let target = tribute_cps::FuncRef::from_op(ctx, reference)
+            .expect("collected a func_ref")
+            .func_ref(ctx)
+            .clone();
+        // Every specialized reference is in a root instance and names a root
+        // definition, whose instances are root functions.
+        let instance = *target
+            .as_simple()
+            .and_then(|name| instances.get(name.as_str()))
+            .expect("a specialized func_ref names a root instance");
+        let table = format!(
+            "{}{TABLE_SUFFIX}",
+            target.leaf().expect("a reference has a leaf")
+        );
+        ctx.op_attrs_mut(reference).insert(
+            "func_ref",
+            Attribute::SymbolRef(SymbolPath::new([Symbol::new(&table)])),
+        );
+        if !tables.insert(table.clone()) {
+            continue;
+        }
+        let convention =
+            tribute_cps::declared_convention(ctx, instance).expect("an instance has a convention");
+        let location = ctx.op(instance).location;
+        let op = tribute_cps::FuncTable::operands()
+            .sym_name(table)
+            .entries(vec![(convention.keyword().into(), target)])
+            .build(ctx, location);
+        insert_after(ctx, instance, op.op_ref());
+    }
+}
+
+/// The suffix of a function table's name after its instance's name
+/// (`new-plans/cps-effects.md`, "Class 특수화 pass").
+const TABLE_SUFFIX: &str = "$8";
 
 /// Whether `module` holds a `tribute_cps` operation.
 fn has_cps_operations(ctx: &IrContext, module: Module) -> bool {

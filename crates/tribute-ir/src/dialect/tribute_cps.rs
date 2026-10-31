@@ -12,7 +12,7 @@
 //! reads both dialects.
 
 use trunk_ir::IrContext;
-use trunk_ir::attr_kind::SymbolRef;
+use trunk_ir::attr_kind::{Dict, SymbolRef};
 use trunk_ir::op_flag::{IsolatedFromAbove, Pure};
 use trunk_ir::op_interface::CallableExit;
 use trunk_ir::ops::DialectOp;
@@ -126,7 +126,7 @@ mod tribute_cps {
     /// of its definition and class arguments.
     ///
     /// ```text
-    /// %f = tribute_cps.func_ref {func_ref = @"id$9e$8"} : !Callable
+    /// %f = tribute_cps.func_ref @"id$9e$8" : !Callable
     /// ```
     ///
     /// - **Shape:** `tribute_control.func_ref` whose `func_ref` names a
@@ -134,68 +134,67 @@ mod tribute_cps {
     /// - **Meaning:** the callable value whose convention entries are the
     ///   table's. References that share a table share its entries.
     /// - **Verification:** the local verifier checks the attributes.
-    ///   Whole-IR verification checks that `func_ref` resolves to a
-    ///   `tribute_cps.func_table`, and checks the source signature against
-    ///   each of its targets as for `tribute_control.func_ref`.
+    ///   Whole-IR verification checks that `func_ref` names a
+    ///   `tribute_cps.func_table` of the reference's own module by one name,
+    ///   and checks the source signature against each of its targets as for
+    ///   `tribute_control.func_ref`. Legalization builds the table's entries
+    ///   in that module.
     /// - **Ownership and value flow:** the result is an ordinary SSA value.
     /// - **Location:** the source reference span.
     #[verify]
+    #[asm_format(func_ref ("rows" row_args^)? ":" type(result))]
     #[flags(Pure)]
     #[implements(CallableResultOrigin)]
-    fn func_ref(
-        func_ref: Attr<SymbolRef>,
-        convention: Attr<CallingConvention>,
-        row_args: Option<Attr<[Row]>>,
-    ) -> Value<impl FuncSig> {
-    }
+    fn func_ref(func_ref: Attr<SymbolRef>, row_args: Option<Attr<[Row]>>) -> Value<impl FuncSig> {}
 
     /// The convention table of a named function for one set of class
     /// arguments, with a target instance per convention its row reads.
     ///
     /// ```text
-    /// tribute_cps.func_table @"id$9e$8" {conventions = ["direct", "evidence_direct"], targets = [@"id$9D", @"id$9e"]}
+    /// tribute_cps.func_table @"id$9e$8" = {direct = @"id$9D", evidence_direct = @"id$9e"}
     /// ```
     ///
     /// - **Shape:** no operands, results, or regions. `sym_name: String`,
-    ///   and `conventions` and `targets` lists of the same length.
+    ///   and a non-empty `entries` dictionary from convention keywords to
+    ///   their targets.
     /// - **Placement:** directly in a module, as a symbol definition. Class
     ///   specialization makes one for each definition and class arguments
     ///   that a `tribute_cps.func_ref` refers to, named as
-    ///   `new-plans/cps-effects.md` ("Class 특수화 pass") gives.
-    /// - **Meaning:** the convention entry of each element of `conventions`
-    ///   runs the `tribute_cps.func` instance at the same position of
-    ///   `targets`. Each instance is the one the class arguments select
+    ///   `new-plans/cps-effects.md` ("Class 특수화 pass") gives, whose
+    ///   targets are instances of that one definition. The IR does not
+    ///   record which definition an instance comes from, so verification
+    ///   cannot check this.
+    /// - **Meaning:** the convention entry of each key of `entries` runs
+    ///   the `tribute_cps.func` instance it maps to. Each instance is the one the class arguments select
     ///   once the argument of the class variable that is the definition
     ///   row's tail is narrowed to that convention, as a lambda body narrows
     ///   a tail. The conventions are the classes `new-plans/ir.md`
     ///   ("Convention entry", 함수 참조) gives the definition's row read with
     ///   the class arguments. They depend only on the definition and the
     ///   class arguments, never on the row a reference passes, so every
-    ///   reference with those arguments can share the table. When an instance's convention is weaker, legalization
-    ///   fills the entry with an adapter. When a classless tail makes the
-    ///   instance `Cps` and its convention is weaker, the entry is the
-    ///   `func_ref` adapter that calls the worker through a value delimiter
+    ///   reference with those arguments can share the table. An entry is
+    ///   the target's own convention, so legalization enters the target
+    ///   directly. When a classless tail makes the instance `Cps` and its
+    ///   convention is weaker, the entry is the `func_ref` adapter that
+    ///   calls the worker through a value delimiter
     ///   (`new-plans/cps-effects.md`, 값 delimiter). Legalization fills the
     ///   other entries by the same rule as a lambda's, once for the table.
-    /// - **Verification:** the local verifier checks the attributes, that
-    ///   the lists have the same length, and that the conventions are
-    ///   strictly increasing. Whole-IR verification checks that each target
-    ///   resolves to a `tribute_cps.func` of the same definition, and that
-    ///   each convention is not weaker than its target's unless that target
+    /// - **Verification:** the local verifier checks the attributes and that
+    ///   each key of `entries` is a convention keyword. Whole-IR verification checks that each target
+    ///   names a `tribute_cps.func` of the table's own module by one name,
+    ///   that the targets share one source signature, and that
+    ///   each convention is its target's, or weaker than it when the target
     ///   is `Cps`.
     /// - **Ownership and value flow:** defines no value.
     /// - **Symbol:** a discardable `SymbolDefinition` that is not a
-    ///   declaration. Its `targets` are its uses, so it keeps them alive
+    ///   declaration. Its targets are its uses, so it keeps them alive
     ///   only while a live `tribute_cps.func_ref` uses it, and global DCE
     ///   removes it once none does (`new-plans/ir.md`, "Core Invariants").
     /// - **Location:** the span of the referenced definition.
+    #[verify]
+    #[asm_format(symbol(sym_name) "=" entries)]
     #[implements(trunk_ir::op_interface::SymbolDefinition)]
-    fn func_table(
-        sym_name: Attr<String>,
-        conventions: Attr<[CallingConvention]>,
-        targets: Attr<[SymbolRef]>,
-    ) {
-    }
+    fn func_table(sym_name: Attr<String>, entries: Attr<Dict<SymbolRef>>) {}
 
     /// An indirect call through one convention.
     ///
@@ -296,6 +295,52 @@ pub fn body_conventions(
     .then_some(conventions)
 }
 
+/// Why a `tribute_cps.func_table`'s entries do not name its targets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, derive_more::Display, derive_more::Error)]
+#[display("`entries` must map one or more convention keywords to their targets")]
+pub struct MalformedTable;
+
+/// The conventions and targets of `op`, when it is a
+/// `tribute_cps.func_table` whose entries are well formed, in convention
+/// order.
+pub fn table_entries(
+    ctx: &IrContext,
+    op: trunk_ir::refs::OpRef,
+) -> Option<Vec<(CallingConvention, trunk_ir::SymbolPath)>> {
+    let table = FuncTable::from_op(ctx, op).ok()?;
+    let mut entries = table
+        .entries(ctx)
+        .iter()
+        .map(|(key, target)| Some((ctx.str(key).parse().ok()?, target.clone())))
+        .collect::<Option<Vec<_>>>()?;
+    entries.sort_by_key(|&(convention, _)| convention);
+    (!entries.is_empty()).then_some(entries)
+}
+
+/// The `tribute_cps.func_table` that `op`, a `tribute_cps.func_ref`, names:
+/// the table of that name directly in the nearest enclosing module.
+pub fn func_ref_table(ctx: &IrContext, op: trunk_ir::refs::OpRef) -> Option<trunk_ir::refs::OpRef> {
+    let name = FuncRef::from_op(ctx, op)
+        .ok()?
+        .func_ref(ctx)
+        .as_simple()?
+        .clone();
+    let mut current = op;
+    let module = loop {
+        let block = ctx.op(current).parent_block?;
+        current = ctx.region(ctx.block(block).parent_region?).parent_op?;
+        if trunk_ir::dialect::core::Module::matches(ctx, current) {
+            break trunk_ir::rewrite::Module::from(
+                trunk_ir::dialect::core::Module::from_op(ctx, current).ok()?,
+            );
+        }
+    };
+    module.ops(ctx).iter().copied().find(|&table| {
+        FuncTable::matches(ctx, table)
+            && ctx.op_attrs(table).get_str("sym_name") == Some(name.as_str())
+    })
+}
+
 /// The convention of the body of `owner`, a callable, that holds `op`: the
 /// convention of a `tribute_cps.func`, or of the `tribute_cps.lambda` body
 /// `op` is in.
@@ -325,7 +370,9 @@ pub fn convention_at(
 
 /// Replace `op`, a `tribute_control` func, lambda, func_ref, call_indirect,
 /// or tail_call_indirect, with its operation here, which declares
-/// `convention`; a lambda's one body has that convention. The replacement takes the operation's place, operands,
+/// `convention`; a lambda's one body has that convention, and a func_ref
+/// declares none, since its table holds its conventions. The replacement
+/// takes the operation's place, operands,
 /// attributes, and regions, and the uses of its results.
 ///
 /// # Panics
@@ -367,6 +414,8 @@ pub fn replace_control_op(
             CONVENTIONS_ATTR,
             trunk_ir::types::Attribute::List(vec![convention]),
         )
+    } else if name == FuncRef::NAME {
+        builder
     } else {
         builder.attr(CONVENTION_ATTR, convention)
     };
@@ -416,8 +465,16 @@ impl trunk_ir::ops::Verify for Lambda {
 
 impl trunk_ir::ops::Verify for FuncRef {
     fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
-        verify_convention(ctx, self.op_ref())?;
         Ok(tribute_control::row_args(ctx, self.op_ref()).map(drop)?)
+    }
+}
+
+impl trunk_ir::ops::Verify for FuncTable {
+    fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
+        match table_entries(ctx, self.op_ref()) {
+            Some(_) => Ok(()),
+            None => Err(MalformedTable.into()),
+        }
     }
 }
 
@@ -582,7 +639,7 @@ impl CallableResultOrigin for FuncRef {
     ) -> bool {
         ctx.op_attrs(self.op_ref())
             .get_symbol_ref("func_ref")
-            .is_some_and(|symbol| query.names_verified_function(ctx, self.op_ref(), symbol))
+            .is_some_and(|symbol| query.names_verified_table(ctx, self.op_ref(), symbol))
     }
 }
 
