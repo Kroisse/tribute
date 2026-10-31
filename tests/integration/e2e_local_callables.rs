@@ -390,3 +390,112 @@ fn main() ->{Io} Nil {
         "1",
     );
 }
+
+/// Uses of one helper that pass callbacks of different classes keep one
+/// value: the closure each use makes reads the callback's row as their upper
+/// bound, and is called through the class of its own use.
+#[test]
+fn local_wrapper_makes_closures_called_at_the_class_of_their_callback() {
+    assert_state_program(
+        r#"fn body() ->{State(Int)} Int {
+    let wrap = fn(k: fn() ->{e} Int) { fn() { k() } }
+    let pure = wrap(fn() ->{} Int { +2 })
+    let counted = wrap(fn() { State::set(State::get() + +1)
+                              State::get() })
+    pure() + counted()
+}"#,
+        "13",
+    );
+}
+
+/// A helper that performs an ability of its own and calls its callback
+/// before it makes a closure over it.
+#[test]
+fn local_wrapper_with_its_own_ability_makes_closures_over_its_callback() {
+    assert_state_program(
+        r#"fn body() ->{State(Int)} Int {
+    let wrap = fn(k: fn() ->{e} Int) {
+        State::set(State::get() + +1)
+        let first = k()
+        fn() { first + k() }
+    }
+    let pure = wrap(fn() ->{} Int { +2 })
+    let counted = wrap(fn() { State::set(State::get() + +1)
+                              State::get() })
+    pure() + counted()
+}"#,
+        "31",
+    );
+}
+
+/// A helper's binder that only its parameter and result name: the stored
+/// callback is called at the class of each use.
+#[test]
+fn local_store_returns_its_callback_at_the_class_of_each_use() {
+    assert_state_program(
+        r#"fn body() ->{State(Int)} Int {
+    let store = fn(k: fn() ->{e} Int) { k }
+    let pure = store(fn() ->{} Int { +2 })
+    let counted = store(fn() { State::set(State::get() + +1)
+                               State::get() })
+    pure() + counted()
+}"#,
+        "13",
+    );
+}
+
+/// A helper that makes a closure calling a named function of its callback's
+/// row enters the function at the class of each use.
+#[test]
+fn local_wrapper_makes_closures_over_a_named_function() {
+    assert_state_program(
+        r#"fn call(f: fn() ->{e} Int) ->{e} Int { f() }
+fn body() ->{State(Int)} Int {
+    let wrap = fn(k: fn() ->{e} Int) { fn() { call(k) } }
+    let pure = wrap(fn() ->{} Int { +2 })
+    let counted = wrap(fn() { State::set(State::get() + +1)
+                              State::get() })
+    pure() + counted()
+}"#,
+        "13",
+    );
+}
+
+/// A helper that returns a named function as a value.
+#[test]
+fn local_helper_returns_a_named_function_value() {
+    assert_state_program(
+        r#"fn call(f: fn() ->{e} Int) ->{e} Int { f() }
+fn body() ->{State(Int)} Int {
+    let reference = fn(k: fn() ->{e} Int) { call }
+    let named = reference(fn() ->{} Int { +0 })
+    named(fn() { State::set(State::get() + +1)
+                 State::get() })
+}"#,
+        "11",
+    );
+}
+
+/// Inside an instance whose class variable is `Cps`, uses of one helper
+/// pass a closed row and that variable for its binder: the closure its body
+/// makes reads the binder as an upper bound, and each use calls it through
+/// its own class.
+#[test]
+fn local_wrapper_used_at_two_classes_inside_an_instance() {
+    let body = r#"fn both(k1: fn() ->{} Int, k2: fn() ->{e} Int) ->{e} Int {
+    let wrap = fn(k: fn() ->{r} Int) { fn() { k() } }
+    let a = wrap(k1)
+    let b = wrap(k2)
+    a() + b()
+}
+fn body() ->{State(Int)} Int {
+    let pure = both(fn() ->{} Int { +2 }, fn() ->{} Int { +3 })
+    pure + both(fn() ->{} Int { +2 }, fn() { State::set(State::get() + +1)
+                                             State::get() })
+}"#;
+    common::assert_output_on_both_targets_with_native_asan(
+        "local_upper_bound.trb",
+        &format!("{STATE_PRELUDE}\n{body}"),
+        "18",
+    );
+}
