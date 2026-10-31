@@ -506,6 +506,10 @@ pub(crate) fn parse<'a>(
     for element in format.elements {
         parser.committed_element(input, element)?;
     }
+    // A format of symbols alone reads only a prefix of generic syntax.
+    if !parser.committed && input.trim_start().starts_with(['{', ':', '[']) {
+        return Err(ErrMode::Backtrack(expected("the end of the operation")));
+    }
     let Parsed {
         operands,
         attributes,
@@ -909,6 +913,7 @@ mod tests {
   %0 = asm_format_test.tagged {note = "n", tag = @f} : core.i32
   asm_format_test.def {kind = "k", sym_name = "d"}
   %1 = asm_format_test.reference {target = @f} : core.i32
+  asm_format_test.named @t {extra = 1}
 }
 "#;
         assert_eq!(
@@ -917,6 +922,7 @@ mod tests {
   %0 = asm_format_test.tagged ref @f note "n" : core.i32
   asm_format_test.def @d kind "k"
   %0 = asm_format_test.reference @f : core.i32
+  asm_format_test.named {extra = 1, sym_name = "t"}
 }
 "#
         );
