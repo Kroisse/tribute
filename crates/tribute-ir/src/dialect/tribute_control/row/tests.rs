@@ -9,9 +9,9 @@ use super::super::{FuncSig, ValidationResult, validate_local, validate_whole_ir}
 use super::*;
 
 const MODULE: &str = r#"core.module @test {
-  !open = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>
-  !closed = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {instances = [@A, @B]}}>
-  !applied = tribute_control.func_sig<(!closed, core.i32) -> core.i32, {ability_row = {instances = [@A, @B]}}>
+  !open = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {tail = 0}})>
+  !closed = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {instances = [@A, @B]}})>
+  !applied = tribute_control.func_sig<(!closed, core.i32) -> (core.i32, {ability_row = {instances = [@A, @B]}})>
 
   ability.decl {sym_name = "A"} {
     ability.operation {kind = "fn", op_name = "get", param_types = [], result_type = core.i32}
@@ -148,8 +148,8 @@ fn rows_must_be_sorted_and_not_written_when_closed_and_empty() {
     );
     assert_rejects(
         &MODULE.replace(
-            "!closed = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {instances = [@A, @B]}",
-            "!closed = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {}",
+            "!closed = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {instances = [@A, @B]}",
+            "!closed = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {}",
         ),
         "malformed tribute_control.func_sig: Row",
     );
@@ -431,8 +431,8 @@ fn a_function_reference_may_widen_the_row_of_its_target() {
         "{func_ref = @apply, row_args = [{instances = [@A]}]}",
     );
     let narrowed = input.replace(
-        "!applied = tribute_control.func_sig<(!closed, core.i32) -> core.i32, {ability_row = {instances = [@A, @B]}",
-        "!narrow = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {instances = [@A]}}>\n  !applied = tribute_control.func_sig<(!narrow, core.i32) -> core.i32, {ability_row = {instances = [@A, @B]}",
+        "!applied = tribute_control.func_sig<(!closed, core.i32) -> (core.i32, {ability_row = {instances = [@A, @B]}",
+        "!narrow = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {instances = [@A]}})>\n  !applied = tribute_control.func_sig<(!narrow, core.i32) -> (core.i32, {ability_row = {instances = [@A, @B]}",
     );
     let (ctx, module) = parse(&narrowed);
     let result = validate(&ctx, module);
@@ -440,8 +440,8 @@ fn a_function_reference_may_widen_the_row_of_its_target() {
 
     assert_rejects(
         &narrowed.replace(
-            "-> core.i32, {ability_row = {instances = [@A, @B]}}>\n\n",
-            "-> core.i32, {ability_row = {instances = [@B]}}>\n\n",
+            "-> (core.i32, {ability_row = {instances = [@A, @B]}})>\n\n",
+            "-> (core.i32, {ability_row = {instances = [@B]}})>\n\n",
         ),
         "func_ref result source signature does not match its target",
     );
@@ -460,8 +460,8 @@ fn row_inclusion_counts_instances_and_keeps_the_tail() {
 }
 
 const LOCALS: &str = r#"core.module @test {
-  !step = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 1}}>
-  !step0 = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>
+  !step = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {tail = 1}})>
+  !step0 = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {tail = 0}})>
   ability.decl {sym_name = "A"} {
   }
   tribute_control.func @f['a0, local 'a1](%x: core.i32) -> core.i32 row(| 'a0) {
@@ -504,7 +504,7 @@ fn instantiate_substitutes_only_the_quantified_binders() {
     // The lambda's own binder becomes `@A`; the enclosing `'a0` stays.
     let input = locals("{instances = [@A]}", "!closed").replace(
         "  ability.decl",
-        "  !closed = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {instances = [@A]}}>\n  ability.decl",
+        "  !closed = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {instances = [@A]}})>\n  ability.decl",
     );
     let (ctx, module) = parse(&input);
     let result = validate(&ctx, module);
@@ -581,7 +581,7 @@ fn a_lambda_captured_by_another_is_instantiated_in_its_body() {
 
 /// Frontend output before class specialization.
 const FRONTEND: &str = r#"core.module @test {
-  !cb = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>
+  !cb = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {tail = 0}})>
   !pure = tribute_control.func_sig<(core.i32) -> core.i32>
   !applied = tribute_control.func_sig<(!pure, core.i32) -> core.i32>
   tribute_control.func @apply['a0](%f: !cb, %x: core.i32) -> core.i32 row(| 'a0) {
@@ -626,7 +626,7 @@ fn frontend_output_validates_and_round_trips() {
 #[test]
 fn a_callable_type_has_no_convention() {
     assert_rejects(
-        "core.module @test {\n  !f = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = \"direct\"}>\n  tribute_control.func @f(%x: !f) -> core.i32\n}",
+        "core.module @test {\n  !f = tribute_control.func_sig<(core.i32) -> (core.i32, {tribute.calling_convention = \"direct\"})>\n  tribute_control.func @f(%x: !f) -> core.i32\n}",
         "malformed tribute_control.func_sig: Convention",
     );
 }

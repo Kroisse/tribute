@@ -29,7 +29,7 @@ fn specialized(input: &str) -> String {
 fn a_pure_callback_selects_the_direct_instance() {
     let printed = specialized(
         r#"core.module @m {
-  !cb = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>
+  !cb = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {tail = 0}})>
   !pure = tribute_control.func_sig<(core.i32) -> core.i32>
   tribute_control.func @app['a0](%x: core.i32, %f: !cb) -> core.i32 row(| 'a0) {
     %r = tribute_control.call_indirect %f, %x : core.i32
@@ -70,7 +70,7 @@ fn assert_contains(printed: &str, expected: &[&str]) {
 fn a_class_variable_reached_through_a_callee_is_selected() {
     let printed = specialized(
         r#"core.module @m {
-  !cb = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>
+  !cb = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {tail = 0}})>
   !pure = tribute_control.func_sig<(core.i32) -> core.i32>
   tribute_control.func @app['a0](%x: core.i32, %f: !cb) -> core.i32 row(| 'a0) {
     %r = tribute_control.call_indirect %f, %x : core.i32
@@ -115,7 +115,7 @@ fn a_class_variable_reached_through_a_callee_is_selected() {
 fn a_recursive_instance_calls_itself() {
     let printed = specialized(
         r#"core.module @m {
-  !cb = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>
+  !cb = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {tail = 0}})>
   tribute_control.func @loop['a0](%n: core.i32, %f: !cb) -> core.i32 row(| 'a0) {
     %g = tribute_control.lambda(%y: core.i32) -> core.i32 row(| 'a0) captures [%f] {
       %v = tribute_control.call_indirect %f, %y : core.i32
@@ -250,8 +250,8 @@ fn a_lambda_has_a_body_per_class_of_its_instantiations() {
     let printed = specialized(
         r#"core.module @m {
   !l0 = tribute_control.func_sig<(core.i32) -> core.i32>
-  !lc = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {instances = [@Ctl]}}>
-  !l1 = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 1}}>
+  !lc = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {instances = [@Ctl]}})>
+  !l1 = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {tail = 1}})>
   !h0 = tribute_control.func_sig<() -> core.i32>
   ability.decl {sym_name = "Ctl"} {
     ability.operation {kind = "op", op_name = "ctl", param_types = [], result_type = core.i32}
@@ -296,8 +296,8 @@ fn a_lambda_has_a_body_per_class_of_its_instantiations() {
 fn each_instance_copies_the_lambdas_inside_each_body() {
     let printed = specialized(
         r#"core.module @m {
-  !cb = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>
-  !in1 = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 1}}>
+  !cb = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {tail = 0}})>
+  !in1 = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {tail = 1}})>
   !pure = tribute_control.func_sig<(core.i32) -> core.i32>
   tribute_control.func @app['a0](%x: core.i32, %f: !cb) -> core.i32 row(| 'a0) {
     %r = tribute_control.call_indirect %f, %x : core.i32
@@ -349,8 +349,8 @@ fn a_lambda_using_a_lambda_of_two_classes_captures_it_once() {
     let printed = specialized(
         r#"core.module @m {
   !l0 = tribute_control.func_sig<(core.i32) -> core.i32>
-  !lc = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {instances = [@Ctl]}}>
-  !hc = tribute_control.func_sig<() -> core.i32, {ability_row = {instances = [@Ctl]}}>
+  !lc = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {instances = [@Ctl]}})>
+  !hc = tribute_control.func_sig<() -> (core.i32, {ability_row = {instances = [@Ctl]}})>
   ability.decl {sym_name = "Ctl"} {
     ability.operation {kind = "op", op_name = "ctl", param_types = [], result_type = core.i32}
   }
@@ -396,7 +396,7 @@ fn a_lambda_using_a_lambda_of_two_classes_captures_it_once() {
 fn a_lambda_without_binders_is_shared_by_its_consumers() {
     let printed = specialized(
         r#"core.module @m {
-  !cb = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>
+  !cb = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {tail = 0}})>
   !pure = tribute_control.func_sig<(core.i32) -> core.i32>
   tribute_control.func @pure(%f: !pure, %x: core.i32) -> core.i32 {
     %r = tribute_control.call_indirect %f, %x : core.i32
@@ -437,7 +437,7 @@ fn a_lambda_without_binders_is_shared_by_its_consumers() {
 fn module_level_types_and_references_to_main_keep_their_shape() {
     let printed = specialized(
         r#"core.module @m {
-  !cb = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>
+  !cb = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {tail = 0}})>
   !pure = tribute_control.func_sig<(core.i32) -> core.i32>
   ability.decl {sym_name = "Map"} {
     ability.operation {kind = "fn", op_name = "map", param_types = [!pure], result_type = core.i32}
@@ -481,7 +481,7 @@ fn module_level_types_and_references_to_main_keep_their_shape() {
 fn an_instantiation_reads_the_class_variables_of_its_instance() {
     let printed = specialized(
         r#"core.module @m {
-  !cb = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>
+  !cb = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {tail = 0}})>
   !pure = tribute_control.func_sig<(core.i32) -> core.i32>
   tribute_control.func @f['a0, local 'a1](%x: core.i32) -> core.i32 row(| 'a0) {
     %g = tribute_control.lambda['a1](%y: core.i32) -> core.i32 row(| 'a1) captures [] {
@@ -520,9 +520,9 @@ fn an_instantiation_reads_the_class_variables_of_its_instance() {
 fn a_reference_in_a_lambda_selects_by_the_local_class() {
     let printed = specialized(
         r#"core.module @m {
-  !cb = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>
-  !ask = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {instances = [@Ask]}}>
-  !ga = tribute_control.func_sig<(core.i32, !ask) -> core.i32, {ability_row = {instances = [@Ask]}}>
+  !cb = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {tail = 0}})>
+  !ask = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {instances = [@Ask]}})>
+  !ga = tribute_control.func_sig<(core.i32, !ask) -> (core.i32, {ability_row = {instances = [@Ask]}})>
   ability.decl {sym_name = "Ask"} {
     ability.operation {kind = "fn", op_name = "ask", param_types = [], result_type = core.i32}
   }
@@ -561,8 +561,8 @@ fn a_lambda_reads_an_enclosing_binder_in_each_body() {
     let printed = specialized(
         r#"core.module @m {
   !pure = tribute_control.func_sig<(core.i32) -> core.i32>
-  !in0 = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>
-  !ctl = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {instances = [@Ctl]}}>
+  !in0 = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {tail = 0}})>
+  !ctl = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {instances = [@Ctl]}})>
   ability.decl {sym_name = "Ctl"} {
     ability.operation {kind = "op", op_name = "ctl", param_types = [], result_type = core.i32}
   }
@@ -606,10 +606,10 @@ fn a_lambda_split_before_its_enclosing_lambda_is_one_value_in_each_copy() {
     let printed = specialized(
         r#"core.module @m {
   !pure = tribute_control.func_sig<(core.i32) -> core.i32>
-  !ctl = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {instances = [@Ctl]}}>
-  !in0 = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>
+  !ctl = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {instances = [@Ctl]}})>
+  !in0 = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {tail = 0}})>
   !h0 = tribute_control.func_sig<() -> core.i32>
-  !hc = tribute_control.func_sig<() -> core.i32, {ability_row = {instances = [@Ctl]}}>
+  !hc = tribute_control.func_sig<() -> (core.i32, {ability_row = {instances = [@Ctl]}})>
   ability.decl {sym_name = "Ctl"} {
     ability.operation {kind = "op", op_name = "ctl", param_types = [], result_type = core.i32}
   }
@@ -652,7 +652,7 @@ fn folding_keeps_the_row_unions_of_the_definition() {
     let printed = specialized(
         r#"core.module @m {
   !l0 = tribute_control.func_sig<(core.i32) -> core.i32>
-  !lc = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {instances = [@Ctl]}}>
+  !lc = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {instances = [@Ctl]}})>
   ability.decl {sym_name = "Ctl"} {
     ability.operation {kind = "op", op_name = "ctl", param_types = [], result_type = core.i32}
   }
@@ -683,10 +683,10 @@ fn every_body_takes_parameters_over_the_lambdas_own_binders() {
     let printed = specialized(
         r#"core.module @m {
   !l0 = tribute_control.func_sig<(core.i32) -> core.i32>
-  !lc = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {instances = [@Ctl]}}>
-  !k0 = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>
+  !lc = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {instances = [@Ctl]}})>
+  !k0 = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {tail = 0}})>
   !g0 = tribute_control.func_sig<(core.i32, !l0) -> core.i32>
-  !gc = tribute_control.func_sig<(core.i32, !lc) -> core.i32, {ability_row = {instances = [@Ctl]}}>
+  !gc = tribute_control.func_sig<(core.i32, !lc) -> (core.i32, {ability_row = {instances = [@Ctl]}})>
   ability.decl {sym_name = "Ctl"} {
     ability.operation {kind = "op", op_name = "ctl", param_types = [], result_type = core.i32}
   }
@@ -727,9 +727,9 @@ fn instantiations_of_one_class_with_other_binder_classes_split_the_value() {
     let printed = specialized(
         r#"core.module @m {
   !pure = tribute_control.func_sig<(core.i32) -> core.i32>
-  !l0 = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {instances = [@Ctl]}}>
-  !la = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {instances = [@Ask, @Ctl]}}>
-  !in0 = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>
+  !l0 = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {instances = [@Ctl]}})>
+  !la = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {instances = [@Ask, @Ctl]}})>
+  !in0 = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {tail = 0}})>
   ability.decl {sym_name = "Ask"} {
     ability.operation {kind = "fn", op_name = "ask", param_types = [], result_type = core.i32}
   }

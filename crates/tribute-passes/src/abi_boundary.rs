@@ -602,12 +602,12 @@ mod tests {
     fn physical_module_has_no_violations() {
         let violations = kinds(
             r#"core.module @test {
-  func.func @target(%value: core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} attributes {tribute.types = {"std::String" = core.i32}} {
+  func.func @target(%value: core.i32 {tribute.ownership = "consumed"}) -> ({call_conv = "tail"}) attributes {tribute.types = {"std::String" = core.i32}} {
     func.return
   }
-  func.func @caller(%value: core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
-    %reference = func.constant {func_ref = @target} : func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>
-    func.tail_call_indirect %reference, %value {signature = func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>}
+  func.func @caller(%value: core.i32 {tribute.ownership = "consumed"}) -> ({call_conv = "tail"}) {
+    %reference = func.constant {func_ref = @target} : func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> ({call_conv = "tail"})>
+    func.tail_call_indirect %reference, %value {signature = func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> ({call_conv = "tail"})>}
   }
 }"#,
         );
@@ -764,12 +764,12 @@ mod tests {
   func.func @never() -> core.never {
     func.unreachable
   }
-  func.func @target(%env: core.ptr, %value: core.i32) -> (), {call_conv = "tail"} {
+  func.func @target(%env: core.ptr, %value: core.i32) -> ({call_conv = "tail"}) {
     func.return
   }
   func.func @caller(%value: core.i32) {
     %same = core.unrealized_conversion_cast %value : core.i32
-    %reference = func.constant {func_ref = @target} : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
+    %reference = func.constant {func_ref = @target} : func.func_sig<(core.i32) -> ({call_conv = "tail"})>
     func.return
   }
 }"#,
@@ -825,7 +825,7 @@ mod tests {
 
     #[test]
     fn reference_calling_convention_must_match_its_target() {
-        let tail = "func.func_sig<(core.i32 {tribute.ownership = \"consumed\"}) -> (), {call_conv = \"tail\"}>";
+        let tail = "func.func_sig<(core.i32 {tribute.ownership = \"consumed\"}) -> ({call_conv = \"tail\"})>";
         let platform = "func.func_sig<(core.i32 {tribute.ownership = \"consumed\"}) -> ()>";
         assert_eq!(
             kinds(&reference_module(tail, platform)),
@@ -875,7 +875,7 @@ mod tests {
                 "",
                 "%zero = arith.const {value = 0} : core.i32\n    func.return %zero",
             ),
-            entry("() -> (), {call_conv = \"tail\"}", "", "func.return"),
+            entry("() -> ({call_conv = \"tail\"})", "", "func.return"),
         ] {
             assert_eq!(
                 kinds(&malformed),
@@ -895,7 +895,7 @@ mod tests {
 
     #[test]
     fn the_ownership_contract_must_be_complete_and_known() {
-        let unmarked_tail = "func.func_sig<(core.i32) -> (), {call_conv = \"tail\"}>";
+        let unmarked_tail = "func.func_sig<(core.i32) -> ({call_conv = \"tail\"})>";
         assert_eq!(
             kinds(&reference_module(unmarked_tail, unmarked_tail)),
             [
@@ -1094,7 +1094,7 @@ mod tests {
         assert_eq!(
             kinds(
                 r#"core.module @test {
-  func.func @run(%value: tribute_rt.anyref {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
+  func.func @run(%value: tribute_rt.anyref {tribute.ownership = "consumed"}) -> ({call_conv = "tail"}) {
     func.unreachable
   }
 }"#

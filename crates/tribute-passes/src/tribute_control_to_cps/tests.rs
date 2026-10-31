@@ -490,7 +490,7 @@ fn nested_modules_resolve_same_named_callables_in_their_own_module() {
 #[test]
 fn textual_nested_attribute_types_convert_atomically() {
     let input = r#"core.module @test {
-  !callback = tribute_control.func_sig<(core.i32) -> core.i32, {metadata = [core.array<core.i32>, [7, @Callback]]}>
+  !callback = tribute_control.func_sig<(core.i32) -> (core.i32, {metadata = [core.array<core.i32>, [7, @Callback]]})>
   !record = adt.struct<CallbackRecord(callback: !callback)>
   tribute_cps.func @identity(%value: !record) -> !record convention(direct) {
     tribute_control.return %value
@@ -501,7 +501,7 @@ fn textual_nested_attribute_types_convert_atomically() {
     let printed = print_module(&ctx, module.op());
     assert!(printed.contains("adt.struct<CallbackRecord("));
     assert!(
-        printed.contains("closure.closure<func.func_sig<(core.i32) -> core.i32, {metadata"),
+        printed.contains("closure.closure<func.func_sig<(core.i32) -> (core.i32, {metadata"),
         "{printed}"
     );
     assert!(
@@ -519,8 +519,8 @@ fn textual_nested_attribute_types_convert_atomically() {
 fn source_signature_metadata_roundtrips_before_conversion() {
     let source = r#"core.module @test {
   !inner = tribute_control.func_sig<(core.i32) -> core.i32>
-  !outer = tribute_control.func_sig<() -> core.i32, {metadata = [[!inner, @function]]}>
-  !lambda = tribute_control.func_sig<() -> core.i32, {metadata = [[!inner, @lambda]]}>
+  !outer = tribute_control.func_sig<() -> (core.i32, {metadata = [[!inner, @function]]})>
+  !lambda = tribute_control.func_sig<() -> (core.i32, {metadata = [[!inner, @lambda]]})>
   tribute_cps.func {convention = "direct", sym_name = "outer", type = !outer} {
     %lambda = tribute_cps.lambda {conventions = ["direct"]} : !lambda {
       %inner = arith.const {value = 1} : core.i32
@@ -534,13 +534,13 @@ fn source_signature_metadata_roundtrips_before_conversion() {
     let printed_source = print_module(&ctx, module.op());
     assert!(
         printed_source.contains(
-            "!outer = tribute_control.func_sig<() -> core.i32, {metadata = [[!inner, @function]]}>"
+            "!outer = tribute_control.func_sig<() -> (core.i32, {metadata = [[!inner, @function]]})>"
         ),
         "{printed_source}"
     );
     assert!(
         printed_source.contains(
-            "!lambda = tribute_control.func_sig<() -> core.i32, {metadata = [[!inner, @lambda]]}>"
+            "!lambda = tribute_control.func_sig<() -> (core.i32, {metadata = [[!inner, @lambda]]})>"
         ),
         "{printed_source}"
     );
@@ -1732,7 +1732,7 @@ fn stronger_func_ref_builds_a_cps_adapter_without_a_null_environment() {
 #[test]
 fn parameter_attributes_follow_their_parameters_to_the_physical_abi() {
     let input = r#"core.module @test {
-  !cps = tribute_control.func_sig<(core.i32 {k = @v}) -> core.i32 {r = @x}>
+  !cps = tribute_control.func_sig<(core.i32 {k = @v}) -> (core.i32 {r = @x})>
   tribute_cps.func @id(%value: core.i32) -> core.i32 convention(cps) {
     tribute_control.return %value
   }
@@ -2507,7 +2507,7 @@ fn a_general_operation_outside_a_handle_is_rejected_in_a_direct_callable() {
 #[test]
 fn legalization_drops_ability_rows_and_row_metadata() {
     let with_rows = r#"core.module @test {
-  !open = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>
+  !open = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {tail = 0}})>
   ability.decl {sym_name = "A"} {
     ability.operation {kind = "fn", op_name = "get", param_types = [], result_type = core.i32}
   }
@@ -2548,7 +2548,7 @@ fn instantiate_legalizes_to_its_lambda() {
         let kind = if header.is_empty() { "body" } else { "local" };
         format!(
             r#"core.module @m {{
-  !step0 = tribute_control.func_sig<(core.i32) -> core.i32, {{ability_row = {{tail = 0}}}}>
+  !step0 = tribute_control.func_sig<(core.i32) -> (core.i32, {{ability_row = {{tail = 0}}}})>
   tribute_cps.func @f['a0, {kind} 'a1](%x: core.i32) -> core.i32 row(| 'a0) convention(direct) {{
     %g = tribute_cps.lambda{header}(%y: core.i32) -> core.i32 row(| 'a1) captures [] entries {{
       direct {{

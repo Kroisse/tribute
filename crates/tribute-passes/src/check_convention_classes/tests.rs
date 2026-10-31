@@ -21,7 +21,7 @@ const CTL: &str = r#"  ability.decl {sym_name = "Ctl"} {
 fn calls(callback: &str, own: &str, lambda: &str, callee: &str) -> String {
     format!(
         r#"core.module @m {{
-  !cb = tribute_control.func_sig<(core.i32) -> core.i32, {{ability_row = {{tail = 0}}}}>
+  !cb = tribute_control.func_sig<(core.i32) -> (core.i32, {{ability_row = {{tail = 0}}}})>
 {CTL}
   tribute_cps.func @"app$9D"['a0](%x: core.i32, %f: !cb) -> core.i32 row(| 'a0) convention({own}) {{
     %r = tribute_cps.call_indirect %f, %x {{convention = "{callback}"}} : core.i32
@@ -84,8 +84,8 @@ fn instances_of_one_definition_select_the_same_class_variables() {
 
 const LOCAL: &str = r#"core.module @m {
   !l0 = tribute_control.func_sig<(core.i32) -> core.i32>
-  !lc = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {instances = [@Ctl]}}>
-  !l1 = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 1}}>
+  !lc = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {instances = [@Ctl]}})>
+  !l1 = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {tail = 1}})>
   !h0 = tribute_control.func_sig<() -> core.i32>
 CTL
   tribute_cps.func @f[local 'a0, local 'a1](%x: core.i32) -> core.i32 convention(direct) {
@@ -135,8 +135,8 @@ fn instantiations_that_select_one_class_pass_the_same_classes() {
     let input = |second: &str| {
         format!(
             r#"core.module @m {{
-  !l0 = tribute_control.func_sig<(core.i32) -> core.i32, {{ability_row = {{instances = [@Ctl]}}}}>
-  !la = tribute_control.func_sig<(core.i32) -> core.i32, {{ability_row = {{instances = [@Ask, @Ctl]}}}}>
+  !l0 = tribute_control.func_sig<(core.i32) -> (core.i32, {{ability_row = {{instances = [@Ctl]}}}})>
+  !la = tribute_control.func_sig<(core.i32) -> (core.i32, {{ability_row = {{instances = [@Ask, @Ctl]}}}})>
   ability.decl {{sym_name = "Ask"}} {{
     ability.operation {{kind = "fn", op_name = "ask", param_types = [], result_type = core.i32}}
   }}
@@ -164,7 +164,7 @@ fn a_func_ref_enters_its_table_no_stronger_than_the_row_of_its_value() {
     let input = |value: &str, entry: &str| {
         format!(
             r#"core.module @m {{
-  !open = tribute_control.func_sig<(core.i32) -> core.i32, {{ability_row = {{instances = [@Ctl]}}}}>
+  !open = tribute_control.func_sig<(core.i32) -> (core.i32, {{ability_row = {{instances = [@Ctl]}}}})>
   !closed = tribute_control.func_sig<(core.i32) -> core.i32>
 {CTL}
   tribute_cps.func @pure(%x: core.i32) -> core.i32 convention(direct) {{
@@ -231,7 +231,7 @@ fn a_definition_without_a_body_has_no_class_variables() {
     // With a class variable, the closed row would select `external$9D`.
     let input = format!(
         r#"core.module @m {{
-  !cb = tribute_control.func_sig<(core.i32) -> core.i32, {{ability_row = {{tail = 0}}}}>
+  !cb = tribute_control.func_sig<(core.i32) -> (core.i32, {{ability_row = {{tail = 0}}}})>
   !closed = tribute_control.func_sig<(core.i32) -> core.i32>
 {CTL}
   tribute_cps.func @external['a0](%x: core.i32, %f: !cb) -> core.i32 row(| 'a0) convention(cps)

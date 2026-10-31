@@ -8,7 +8,7 @@ use crate::dialect::tribute_control;
 
 const MODULE: &str = r#"core.module @test {
   !t0 = tribute_control.func_sig<(core.i32) -> core.i32>
-  !t1 = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>
+  !t1 = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {tail = 0}})>
 
   tribute_cps.func @declared(%arg0: core.i32) -> core.i32 convention(direct)
   tribute_cps.func_table @"declared$8" = {direct = @declared}
@@ -333,7 +333,7 @@ fn every_body_takes_the_parameters_and_its_own_convention() {
 #[test]
 fn a_function_reference_writes_its_target_and_row_arguments() {
     let input = r#"core.module @test {
-  !t0 = tribute_control.func_sig<() -> core.i32, {ability_row = {tail = 0}}>
+  !t0 = tribute_control.func_sig<() -> (core.i32, {ability_row = {tail = 0}})>
 
   tribute_cps.func @f['a0]() -> core.i32 row(| 'a0) convention(cps) {
       %0 = tribute_cps.func_ref @inner::@"g$8" rows [{tail = 0}] : !t0

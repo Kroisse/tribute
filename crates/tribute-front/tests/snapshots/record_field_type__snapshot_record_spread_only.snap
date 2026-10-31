@@ -7,8 +7,8 @@ core.module @test {
   !"pkg::Config" = adt.struct<"pkg::Config"(debug: core.i1, verbose: core.i1)>
   !"pkg::Config_1" = adt.typeref<{name = "pkg::Config"}>
   !t1 = tribute_control.func_sig<(!"pkg::Config_1", core.i1) -> !"pkg::Config_1">
-  !t2 = tribute_control.func_sig<(core.i1) -> core.i1, {ability_row = {tail = 0}}>
-  !t0 = tribute_control.func_sig<(!"pkg::Config_1", !t2) -> !"pkg::Config_1", {ability_row = {tail = 0}}>
+  !t2 = tribute_control.func_sig<(core.i1) -> (core.i1, {ability_row = {tail = 0}})>
+  !t0 = tribute_control.func_sig<(!"pkg::Config_1", !t2) -> (!"pkg::Config_1", {ability_row = {tail = 0}})>
   !t3 = tribute_control.func_sig<(!"pkg::Config_1") -> core.i1>
 
   tribute_control.func @"pkg::Config::debug"(%0: !"pkg::Config_1") -> core.i1 {

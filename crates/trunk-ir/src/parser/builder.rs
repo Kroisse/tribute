@@ -855,7 +855,7 @@ core.module @test {
         for spelling in [
             "core.tuple<core.i32, {param_attrs = [{k = 1}]}>",
             "core.tuple<core.i32, {param_attrs = 1}>",
-            "func.func_sig<(core.i32) -> (), {param_attrs = [{k = 1}]}>",
+            "func.func_sig<(core.i32) -> ({param_attrs = [{k = 1}]})>",
         ] {
             let mut ctx = IrContext::new();
             let input = format!("core.module @test {{ !bad = {spelling} }}");
@@ -1400,9 +1400,9 @@ core.module @test {
 
     #[test]
     fn review_function_result_type_preserves_empty_body() {
-        for attrs in ["", ", {effect = core.nil}"] {
+        for results in ["()", "({effect = core.nil})"] {
             let input = format!(
-                "core.module @test {{ func.func @f() -> func.func_sig<() -> (){attrs}> {{}} }}"
+                "core.module @test {{ func.func @f() -> func.func_sig<() -> {results}> {{}} }}"
             );
             let mut ctx = IrContext::new();
             let module = parse_module(&mut ctx, &input).unwrap();
@@ -1426,7 +1426,7 @@ core.module @test {
                 )
                 .ops[0];
             assert_eq!(reparsed.op_region_count(function2), 1);
-            assert_eq!(printed.contains("effect = core.nil"), !attrs.is_empty());
+            assert_eq!(printed.contains("effect = core.nil"), results != "()");
         }
     }
 
@@ -1495,7 +1495,7 @@ core.module @test {
     #[test]
     fn clif_syntax_uses_the_target_owned_signature() {
         let input = r#"core.module @test {
-  !contract = clif.func_sig<(core.i32) -> (core.i32, core.i64), {tag = @native}>
+  !contract = clif.func_sig<(core.i32) -> (core.i32, core.i64, {tag = @native})>
   clif.func @id(%value: core.i32) -> core.i32 {
     clif.return %value
   }
@@ -1516,7 +1516,7 @@ core.module @test {
         let mut rejected = IrContext::new();
         let error = parse_module(
             &mut rejected,
-            "core.module @test { !bad = clif.func_sig<() -> (), {num_inputs = 0}> }",
+            "core.module @test { !bad = clif.func_sig<() -> ({num_inputs = 0})> }",
         )
         .expect_err("target count delimiters are constructor-owned");
         assert!(
@@ -1528,14 +1528,14 @@ core.module @test {
     #[test]
     fn test_func_type_preserves_non_reserved_attributes() {
         let input = r#"core.module @test {
-  !with_attr = func.func_sig<(core.i32) -> core.i64, {effect = core.nil}>
+  !with_attr = func.func_sig<(core.i32) -> (core.i64, {effect = core.nil})>
 }"#;
         let mut ctx = IrContext::new();
         let module = parse_module(&mut ctx, input).expect("function type attribute should parse");
         let printed = print_module(&ctx, module);
         assert!(
             printed.contains(
-                "!with_attr = func.func_sig<(core.i32) -> core.i64, {effect = core.nil}>"
+                "!with_attr = func.func_sig<(core.i32) -> (core.i64, {effect = core.nil})>"
             ),
             "{printed}"
         );
@@ -1548,7 +1548,7 @@ core.module @test {
     fn test_func_type_rejects_reserved_textual_attributes() {
         for reserved in [func::NUM_INPUTS_ATTR, func::NUM_RESULTS_ATTR] {
             let input = format!(
-                "core.module @test {{ !bad = func.func_sig<() -> core.nil, {{{reserved} = 0}}> }}"
+                "core.module @test {{ !bad = func.func_sig<() -> (core.nil, {{{reserved} = 0}})> }}"
             );
             let mut ctx = IrContext::new();
             let error = parse_module(&mut ctx, &input).expect_err("reserved key must be rejected");

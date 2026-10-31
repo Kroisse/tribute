@@ -2251,7 +2251,7 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         assert!(
             printed.contains(
-                "signature = func.func_sig<(core.i32 {tribute.ownership = \"consumed\"}, tribute_rt.anyref {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}) -> (), {call_conv = \"tail\"}>"
+                "signature = func.func_sig<(core.i32 {tribute.ownership = \"consumed\"}, tribute_rt.anyref {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}) -> ({call_conv = \"tail\"})>"
             ),
             "{printed}"
         );
@@ -2864,8 +2864,8 @@ mod tests {
 
         let printed = print_module(&ctx, module.op());
         assert!(
-            printed.contains("func.func @defined(%0: core.i32 {tribute.ownership = \"consumed\"}, %1: !Env {tribute.ownership = \"consumed\"}, %2: core.i32 {tribute.ownership = \"consumed\"}) -> (), {call_conv = \"tail\"}")
-                && printed.contains("func.constant {func_ref = @defined} : func.func_sig<(core.i32 {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}) -> (), {call_conv = \"tail\"}>"),
+            printed.contains("func.func @defined(%0: core.i32 {tribute.ownership = \"consumed\"}, %1: !Env {tribute.ownership = \"consumed\"}, %2: core.i32 {tribute.ownership = \"consumed\"}) -> ({call_conv = \"tail\"})")
+                && printed.contains("func.constant {func_ref = @defined} : func.func_sig<(core.i32 {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}) -> ({call_conv = \"tail\"})>"),
             "{printed}"
         );
     }
@@ -2901,7 +2901,7 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         assert!(
             printed.contains(
-                ": func.func_sig<(core.i32 {tribute.ownership = \"consumed\"}) -> (), {call_conv = \"tail\"}>"
+                ": func.func_sig<(core.i32 {tribute.ownership = \"consumed\"}) -> ({call_conv = \"tail\"})>"
             ),
             "{printed}"
         );

@@ -1222,26 +1222,26 @@ mod tests {
 
     #[test]
     fn standalone_function_printing_expands_aliases_in_lists_and_attributes() {
-        for result in ["()", "!scalar"] {
+        for result in ["", "!scalar, "] {
             let mut ctx = IrContext::new();
             let input = format!(
                 "core.module @m {{
                 !scalar = core.i32
-                !callable = func.func_sig<(!scalar) -> {result}, {{nested = [!scalar]}}>
+                !callable = func.func_sig<(!scalar) -> ({result}{{nested = [!scalar]}})>
                 func.func @f(%x: !callable) {{ func.return }}
             }}"
             );
             let module = crate::parser::parse_module(&mut ctx, &input).unwrap();
             let callable = ctx.type_alias_by_text("callable").unwrap();
-            let expanded_result = if result == "()" { "()" } else { "core.i32" };
+            let expanded_result = if result.is_empty() { "" } else { "core.i32, " };
             assert_eq!(
                 print_type(&ctx, callable),
-                format!("func.func_sig<(core.i32) -> {expanded_result}, {{nested = [core.i32]}}>")
+                format!("func.func_sig<(core.i32) -> ({expanded_result}{{nested = [core.i32]}})>")
             );
             let printed = print_module(&ctx, module);
             assert!(
                 printed.contains(&format!(
-                    "func.func_sig<(!scalar) -> {result}, {{nested = [!scalar]}}>"
+                    "func.func_sig<(!scalar) -> ({result}{{nested = [!scalar]}})>"
                 )),
                 "{printed}"
             );

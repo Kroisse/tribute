@@ -202,7 +202,7 @@ where
   the type when it generates aliases; a hand-written `TypeDef` adds it with
   `with_alias_hint`. `#[implements(..)]` on a type registers the wrapper's
   [type interfaces](#type-interfaces).
-- The function syntax `<(inputs) -> results, {attrs}>` belongs to the
+- The function syntax `<(inputs) -> (results, {attrs})>` belongs to the
   signature types that register it: their `TypeAsmFormat` calls
   `func::print_signature_type` and `func::parse_signature_type`, which
   map it to the generic form with `num_inputs`/`num_results`. The core

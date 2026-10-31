@@ -13,13 +13,16 @@ use winnow::combinator::{delimited, opt, separated};
 use winnow::error::{ContextError, ErrMode, StrContext, StrContextValue};
 use winnow::prelude::*;
 
-use crate::asm_format::{SignatureCodecHooks, SignatureParts};
+use crate::asm_format::{
+    SignatureCodecHooks, SignatureParts, parse_signature_results, write_signature_param,
+    write_signature_results,
+};
 use crate::op_def::OpDef;
 use crate::op_flag::IsolatedFromAbove;
 use crate::op_schema::{Arity, AttributeKind, OpSchema, ResultSchema};
 use crate::parser::raw::{
     RawAttribute, RawOperation, RawParam, RawRegion, RawType, block_label, ident, raw_attr_dict,
-    raw_attr_value, raw_param, raw_param_list, raw_region, raw_type, symbol_ref, value_ref, ws,
+    raw_attr_value, raw_param, raw_region, raw_type, symbol_ref, value_ref, ws,
 };
 use crate::printer::OpPrintHelper;
 use crate::types::Attribute;
@@ -380,31 +383,14 @@ impl Printer<'_, '_, '_> {
                         None => write!(self.h, "%arg{position}")?,
                     }
                     self.h.write_str(": ")?;
-                    self.param(ty, attrs)?;
+                    write_signature_param(self.h, ty, attrs)?;
                 }
                 self.h.write_char(')')?;
-                if parts.results.is_empty() && !parts.tail {
+                if parts.results.is_empty() && parts.tail.is_empty() {
                     return Ok(());
                 }
                 self.h.write_str(" -> ")?;
-                match parts.results[..] {
-                    // Attributes after a bare result would read as a region.
-                    [(ty, attrs)] if attrs.is_empty() => self.h.write_type(ty)?,
-                    ref results => {
-                        self.h.write_char('(')?;
-                        for (position, &(ty, attrs)) in results.iter().enumerate() {
-                            if position > 0 {
-                                self.h.write_str(", ")?;
-                            }
-                            self.param(ty, attrs)?;
-                        }
-                        self.h.write_char(')')?;
-                    }
-                }
-                if parts.tail {
-                    (codec.print_tail)(self.h, ty)?;
-                }
-                Ok(())
+                write_signature_results(self.h, &parts.results, &parts.tail)
             }
             FormatElement::Optional { anchor, elements } => {
                 if anchor_present(ctx, op, self.schema, anchor) {
@@ -413,16 +399,6 @@ impl Printer<'_, '_, '_> {
                 Ok(())
             }
         }
-    }
-
-    /// Write a signature parameter's type and its attributes.
-    fn param(&mut self, ty: crate::TypeRef, attrs: &crate::AttributeMap) -> fmt::Result {
-        self.h.write_type(ty)?;
-        if !attrs.is_empty() {
-            self.h.write_char(' ')?;
-            self.h.write_attr_dict(attrs.iter())?;
-        }
-        Ok(())
     }
 }
 
@@ -872,21 +848,17 @@ impl<'a> FormatParser<'a> {
                     (ws, ')'),
                 )
                 .parse_next(input)?;
-                let results = if opt((ws, "->", ws)).parse_next(input)?.is_some() {
-                    if input.starts_with('(') {
-                        raw_param_list.parse_next(input)?
-                    } else {
-                        vec![raw_type.parse_next(input)?.into()]
-                    }
+                let (results, tail) = if opt((ws, "->", ws)).parse_next(input)?.is_some() {
+                    parse_signature_results(input)?
                 } else {
-                    Vec::new()
+                    (Vec::new(), Vec::new())
                 };
                 let args = params
                     .iter()
                     .map(|(name, param)| (*name, param.ty.clone()))
                     .collect();
                 let inputs = params.into_iter().map(|(_, param)| param).collect();
-                let ty = (codec.parse)(input, inputs, results)?;
+                let ty = (codec.build)(inputs, results, tail)?;
                 self.attribute(attribute, RawAttribute::Type(ty));
                 self.signature_regions = regions;
                 self.entry_args = args;
@@ -1058,7 +1030,7 @@ mod tests {
   asm_format_test.fun @param_attrs(%0: core.i32 {k = 1}) -> (core.i32 {r = 2}) {
       asm_format_test.invoke call @ret(%0)
   }
-  asm_format_test.fun @tail(%0: core.i32) -> (), {call_conv = "tail"} attributes {extra = 1} {
+  asm_format_test.fun @tail(%0: core.i32) -> ({call_conv = "tail"}) attributes {extra = 1} {
       asm_format_test.invoke call @ret()
   }
   asm_format_test.fun @blocks(%0: core.i32) {
@@ -1075,7 +1047,7 @@ mod tests {
     #[test]
     fn generic_signatures_read_back() {
         let generic = r#"core.module @m {
-  asm_format_test.fun {sym_name = "g", type = func.func_sig<(core.i32) -> core.i32, {call_conv = "tail"}>} {
+  asm_format_test.fun {sym_name = "g", type = func.func_sig<(core.i32) -> (core.i32, {call_conv = "tail"})>} {
     ^bb0(%0: core.i32):
       asm_format_test.invoke call @ret(%0)
   }
@@ -1084,7 +1056,7 @@ mod tests {
         assert_eq!(
             print(generic),
             r#"core.module @m {
-  asm_format_test.fun @g(%0: core.i32) -> core.i32, {call_conv = "tail"} {
+  asm_format_test.fun @g(%0: core.i32) -> (core.i32, {call_conv = "tail"}) {
       asm_format_test.invoke call @ret(%0)
   }
 }

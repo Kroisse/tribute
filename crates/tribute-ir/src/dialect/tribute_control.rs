@@ -5568,9 +5568,9 @@ mod tests {
     fn custom_assembly_round_trips_declarations_definitions_and_lambdas() {
         let input = r#"core.module @test {
   !inner = tribute_control.func_sig<(core.i32) -> core.i32>
-  !shared = tribute_control.func_sig<(core.i32, core.i32) -> core.i32, {metadata = [[!inner, @signature]]}>
-  !lambda = tribute_control.func_sig<(core.i32, core.i32) -> core.i32, {metadata = [[!inner, @lambda]]}>
-  !distinct = tribute_control.func_sig<(core.i32, core.i32) -> core.i32, {metadata = [[!inner, @distinct]]}>
+  !shared = tribute_control.func_sig<(core.i32, core.i32) -> (core.i32, {metadata = [[!inner, @signature]]})>
+  !lambda = tribute_control.func_sig<(core.i32, core.i32) -> (core.i32, {metadata = [[!inner, @lambda]]})>
+  !distinct = tribute_control.func_sig<(core.i32, core.i32) -> (core.i32, {metadata = [[!inner, @distinct]]})>
   tribute_control.func {metadata = @declaration, sym_name = "decl", type = !shared, visibility = @private}
   tribute_control.func {metadata = @definition, sym_name = "definition", type = !shared, visibility = @private} {
     ^bb0(%left: core.i32, %right: core.i32):
@@ -5656,13 +5656,13 @@ mod tests {
         );
 
         let inline = r#"core.module @test {
-  tribute_control.func {sym_name = "inline", type = tribute_control.func_sig<(core.i32) -> core.i32, {metadata = @inline}>}
+  tribute_control.func {sym_name = "inline", type = tribute_control.func_sig<(core.i32) -> (core.i32, {metadata = @inline})>}
 }"#;
         let (inline_ctx, inline_module) = parse_fixture(inline);
         let inline_printed = assert_round_trip(&inline_ctx, inline_module);
         assert!(
             inline_printed.contains(
-                "type = tribute_control.func_sig<(core.i32) -> core.i32, {metadata = @inline}>"
+                "type = tribute_control.func_sig<(core.i32) -> (core.i32, {metadata = @inline})>"
             ),
             "single-use attributed signature must stay inline: {inline_printed}"
         );
@@ -5788,7 +5788,7 @@ mod tests {
     fn validator_rejects_invalid_convention_and_duplicate_op_metadata() {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
-  !bad = tribute_control.func_sig<() -> core.i32, {tribute.calling_convention = 3}>
+  !bad = tribute_control.func_sig<() -> (core.i32, {tribute.calling_convention = 3})>
   %call = tribute_control.call {callee = @missing, tribute.calling_convention = "direct"} : core.i32
 }"#,
         );
