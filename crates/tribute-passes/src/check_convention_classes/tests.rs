@@ -72,7 +72,7 @@ fn an_instance_of_an_upper_bound_has_a_body_per_class_up_to_it() {
     let input = |bodies: &str| {
         format!(
             r#"core.module @m {{
-  !cb = tribute_control.func_sig<(core.i32) -> core.i32, {{ability_row = {{tail = 0}}}}>
+  !cb = tribute_control.func_sig<(core.i32) -> (core.i32, {{ability_row = {{tail = 0}}}})>
   tribute_cps.func @"wrap$9e"['a0](%x: core.i32) -> core.i32 row(| 'a0) convention(evidence_direct) {{
     %f = tribute_cps.lambda(%y: core.i32) -> core.i32 row(| 'a0) captures [] entries {{
 {bodies}

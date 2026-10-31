@@ -774,12 +774,12 @@ fn instantiations_of_one_class_with_other_binder_classes_read_an_upper_bound() {
 fn a_reference_of_an_upper_bound_enters_a_target_per_class_up_to_it() {
     let printed = specialized(
         r#"core.module @m {
-  !cb0 = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>
-  !call0 = tribute_control.func_sig<(core.i32, !cb0) -> core.i32, {ability_row = {tail = 0}}>
+  !cb0 = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {tail = 0}})>
+  !call0 = tribute_control.func_sig<(core.i32, !cb0) -> (core.i32, {ability_row = {tail = 0}})>
   !cbp = tribute_control.func_sig<(core.i32) -> core.i32>
   !callp = tribute_control.func_sig<(core.i32, !cbp) -> core.i32>
-  !cba = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {instances = [@Ask]}}>
-  !calla = tribute_control.func_sig<(core.i32, !cba) -> core.i32, {ability_row = {instances = [@Ask]}}>
+  !cba = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {instances = [@Ask]}})>
+  !calla = tribute_control.func_sig<(core.i32, !cba) -> (core.i32, {ability_row = {instances = [@Ask]}})>
   !wp = tribute_control.func_sig<() -> !callp>
   !wa = tribute_control.func_sig<() -> !calla>
   ability.decl {sym_name = "Ask"} {
