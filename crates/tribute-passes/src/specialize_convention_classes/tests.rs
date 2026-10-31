@@ -767,6 +767,54 @@ fn instantiations_of_one_class_with_other_binder_classes_read_an_upper_bound() {
     );
 }
 
+/// A function reference whose class argument is an upper bound enters a
+/// table with a target per class from its row's lower bound up to the
+/// bound, each the instance whose argument narrows to that class.
+#[test]
+fn a_reference_of_an_upper_bound_enters_a_target_per_class_up_to_it() {
+    let printed = specialized(
+        r#"core.module @m {
+  !cb0 = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>
+  !call0 = tribute_control.func_sig<(core.i32, !cb0) -> core.i32, {ability_row = {tail = 0}}>
+  !cbp = tribute_control.func_sig<(core.i32) -> core.i32>
+  !callp = tribute_control.func_sig<(core.i32, !cbp) -> core.i32>
+  !cba = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {instances = [@Ask]}}>
+  !calla = tribute_control.func_sig<(core.i32, !cba) -> core.i32, {ability_row = {instances = [@Ask]}}>
+  !wp = tribute_control.func_sig<() -> !callp>
+  !wa = tribute_control.func_sig<() -> !calla>
+  ability.decl {sym_name = "Ask"} {
+    ability.operation {kind = "fn", op_name = "ask", param_types = [], result_type = core.i32}
+  }
+  tribute_control.func @call['a0](%x: core.i32, %f: !cb0) -> core.i32 row(| 'a0) {
+    %r = tribute_control.call_indirect %f, %x : core.i32
+    tribute_control.return %r
+  }
+  tribute_control.func @main[local 'a0](%x: core.i32) -> core.i32 {
+    %w = tribute_control.lambda['a0]() -> !call0 captures [] {
+      %c = tribute_control.func_ref @call rows [{tail = 0}] : !call0
+      tribute_control.return %c
+    }
+    %p = tribute_control.instantiate %w {row_args = [{}]} : !wp
+    %a = tribute_control.instantiate %w {row_args = [{instances = [@Ask]}]} : !wa
+    %cp = tribute_control.call_indirect %p : !callp
+    %ca = tribute_control.call_indirect %a : !calla
+    tribute_control.return %x
+  }
+}"#,
+    );
+    assert_contains(
+        &printed,
+        &[
+            "%1 = tribute_cps.lambda['a0]() -> !call0 captures [] entries {\n        direct {",
+            "%2 = tribute_cps.func_ref @\"call$9e$8\" rows [{tail = 0}] : !call0",
+            "tribute_cps.func @\"call$9D\"['a0](%0: core.i32, %1: !cb0) -> core.i32 row(| 'a0) convention(direct) {",
+            "tribute_cps.func @\"call$9e\"['a0](%0: core.i32, %1: !cb0) -> core.i32 row(| 'a0) convention(evidence_direct) {",
+            "%2 = tribute_cps.call_indirect %1, %0 {convention = \"evidence_direct\"} : core.i32",
+            "tribute_cps.func_table @\"call$9e$8\" = {direct = @\"call$9D\", evidence_direct = @\"call$9e\"}",
+        ],
+    );
+}
+
 /// The layouts the context publishes keep their callable fields.
 #[test]
 fn a_published_layout_keeps_its_callable_fields() {
