@@ -870,3 +870,37 @@ fn main() -> Nil {}
         assert!(lambdas[0].ends_with(" direct {"), "{instance}:\n{ir}");
     }
 }
+
+/// Uses of a local helper that pass classes of their own for its binder
+/// keep it one value; the closure its body makes reads the binder as their
+/// upper bound and has a body for each class up to it.
+#[salsa_test]
+fn a_local_helper_used_at_two_classes_stays_one_value(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "local_upper_bound.trb",
+        r#"
+fn both(k1: fn() ->{} Int, k2: fn() ->{e} Int) ->{e} Int {
+    let wrap = fn(k: fn() ->{r} Int) { fn() { k() } }
+    let a = wrap(k1)
+    let b = wrap(k2)
+    a() + b()
+}
+fn main() -> Nil {}
+"#,
+    );
+
+    let ir = common::specialized_frontend_ir(db, source);
+    let both = logical_function(&ir, "both");
+    assert_eq!(
+        both.matches("tribute_cps.lambda[").count(),
+        1,
+        "the helper is one value:\n{both}"
+    );
+    let closure = &both[both
+        .find("tribute_cps.lambda() ")
+        .unwrap_or_else(|| panic!("the helper makes a closure:\n{both}"))..];
+    for body in ["direct {", "evidence_direct {", "cps {"] {
+        assert!(closure.contains(body), "missing body `{body}`:\n{both}");
+    }
+}

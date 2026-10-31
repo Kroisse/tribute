@@ -720,10 +720,11 @@ fn every_body_takes_parameters_over_the_lambdas_own_binders() {
 }
 
 /// Instantiations that select one class but pass other classes for the
-/// lambda's binder still split the value: a lambda whose own row always
-/// requires `Cps` is copied with a new binder for the second combination.
+/// lambda's binder keep one value, whose body reads the binder as their
+/// upper bound: the lambda it makes has a body from that row's lower bound
+/// up to the bound, and a call through the binder's row uses the bound.
 #[test]
-fn instantiations_of_one_class_with_other_binder_classes_split_the_value() {
+fn instantiations_of_one_class_with_other_binder_classes_read_an_upper_bound() {
     let printed = specialized(
         r#"core.module @m {
   !pure = tribute_control.func_sig<(core.i32) -> core.i32>
@@ -756,13 +757,60 @@ fn instantiations_of_one_class_with_other_binder_classes_split_the_value() {
     assert_contains(
         &printed,
         &[
-            "tribute_cps.func @f[local 'a0, local 'a1, local 'a2, local 'a3](%0: core.i32) -> core.i32 row(@Ctl) convention(cps) {",
+            "tribute_cps.func @f[local 'a0, local 'a1](%0: core.i32) -> core.i32 row(@Ctl) convention(cps) {",
             "%1 = tribute_cps.lambda['a0](%2: core.i32) -> core.i32 row(@Ctl | 'a0) captures [] entries {\n        cps {",
-            "convention = \"direct\"",
-            "%7 = tribute_cps.lambda['a2](%8: core.i32) -> core.i32 row(@Ctl | 'a2) captures [] entries {\n        cps {",
-            "%11 = tribute_control.instantiate %9 {row_args = [{tail = 2}]}",
-            "%12 = tribute_cps.call_indirect %11, %8 {convention = \"evidence_direct\"} : core.i32",
-            "%14 = tribute_control.instantiate %7 {row_args = [{instances = [@Ask]}]} : !la",
+            "%3 = tribute_cps.lambda['a1](%4: core.i32) -> core.i32 row(| 'a1) captures [] entries {\n              direct {",
+            "              evidence_direct {",
+            "%6 = tribute_cps.call_indirect %5, %2 {convention = \"evidence_direct\"} : core.i32",
+            "%8 = tribute_control.instantiate %1 {row_args = [{instances = [@Ask]}]} : !la",
+        ],
+    );
+}
+
+/// A function reference whose class argument is an upper bound enters a
+/// table with a target per class from its row's lower bound up to the
+/// bound, each the instance whose argument narrows to that class.
+#[test]
+fn a_reference_of_an_upper_bound_enters_a_target_per_class_up_to_it() {
+    let printed = specialized(
+        r#"core.module @m {
+  !cb0 = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>
+  !call0 = tribute_control.func_sig<(core.i32, !cb0) -> core.i32, {ability_row = {tail = 0}}>
+  !cbp = tribute_control.func_sig<(core.i32) -> core.i32>
+  !callp = tribute_control.func_sig<(core.i32, !cbp) -> core.i32>
+  !cba = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {instances = [@Ask]}}>
+  !calla = tribute_control.func_sig<(core.i32, !cba) -> core.i32, {ability_row = {instances = [@Ask]}}>
+  !wp = tribute_control.func_sig<() -> !callp>
+  !wa = tribute_control.func_sig<() -> !calla>
+  ability.decl {sym_name = "Ask"} {
+    ability.operation {kind = "fn", op_name = "ask", param_types = [], result_type = core.i32}
+  }
+  tribute_control.func @call['a0](%x: core.i32, %f: !cb0) -> core.i32 row(| 'a0) {
+    %r = tribute_control.call_indirect %f, %x : core.i32
+    tribute_control.return %r
+  }
+  tribute_control.func @main[local 'a0](%x: core.i32) -> core.i32 {
+    %w = tribute_control.lambda['a0]() -> !call0 captures [] {
+      %c = tribute_control.func_ref @call rows [{tail = 0}] : !call0
+      tribute_control.return %c
+    }
+    %p = tribute_control.instantiate %w {row_args = [{}]} : !wp
+    %a = tribute_control.instantiate %w {row_args = [{instances = [@Ask]}]} : !wa
+    %cp = tribute_control.call_indirect %p : !callp
+    %ca = tribute_control.call_indirect %a : !calla
+    tribute_control.return %x
+  }
+}"#,
+    );
+    assert_contains(
+        &printed,
+        &[
+            "%1 = tribute_cps.lambda['a0]() -> !call0 captures [] entries {\n        direct {",
+            "%2 = tribute_cps.func_ref @\"call$9e$8\" rows [{tail = 0}] : !call0",
+            "tribute_cps.func @\"call$9D\"['a0](%0: core.i32, %1: !cb0) -> core.i32 row(| 'a0) convention(direct) {",
+            "tribute_cps.func @\"call$9e\"['a0](%0: core.i32, %1: !cb0) -> core.i32 row(| 'a0) convention(evidence_direct) {",
+            "%2 = tribute_cps.call_indirect %1, %0 {convention = \"evidence_direct\"} : core.i32",
+            "tribute_cps.func_table @\"call$9e$8\" = {direct = @\"call$9D\", evidence_direct = @\"call$9e\"}",
         ],
     );
 }
