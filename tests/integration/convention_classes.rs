@@ -110,12 +110,12 @@ fn without_row(callable_ty: &str) -> String {
 /// The convention a printed `tribute_cps` operation declares, quoted.
 /// The conventions of the entries of the function table named `name`.
 fn table_conventions(ir: &str, name: &str) -> Vec<String> {
-    let header = format!("tribute_cps.func_table @\"{name}\" [");
+    let header = format!("tribute_cps.func_table @\"{name}\" = {{");
     let line = ir
         .lines()
         .find_map(|line| line.trim().strip_prefix(&header))
         .unwrap_or_else(|| panic!("missing function table {name}:\n{ir}"));
-    line.trim_end_matches(']')
+    line.trim_end_matches('}')
         .split(", ")
         .filter_map(|entry| entry.split(" = ").next())
         .map(str::to_owned)

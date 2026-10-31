@@ -183,13 +183,13 @@ mod tribute_control {
     ///
     /// ```text
     /// %f = tribute_control.func_ref @id : !Callable
-    /// %g = tribute_control.func_ref @map [{tail = 0}] : !Callable
+    /// %g = tribute_control.func_ref @map rows [{tail = 0}] : !Callable
     /// ```
     ///
     /// - **Shape:** no operands or regions, and not a terminator.
     ///   `func_ref: Symbol` is required, and the result is one
     ///   `tribute_control.func_sig`. The concise form writes `func_ref`, then
-    ///   `row_args` when present.
+    ///   `row_args` after `rows` when present.
     /// - **Meaning:** makes a named function a first-class source value,
     ///   which source needs because it can use a named function as a
     ///   higher-order value. The result has the target's source signature.
@@ -207,7 +207,7 @@ mod tribute_control {
     /// - **Location:** the source reference span that uses the named function
     ///   as a value.
     #[verify]
-    #[asm_format]
+    #[asm_format(func_ref ("rows" row_args^)? ":" type(result))]
     #[flags(Pure)]
     #[implements(CallableResultOrigin)]
     fn func_ref(func_ref: Attr<SymbolRef>, row_args: Option<Attr<[Row]>>) -> Value<impl FuncSig> {}
@@ -2293,98 +2293,6 @@ pub(crate) fn parse_lambda<'a>(
         regions,
         successors: vec![],
     })
-}
-
-/// Print `op`, a func_ref named `name`, as
-/// `%f = name @target [row_args] : type`. A reference with other attributes
-/// or more than one result prints generically.
-pub(crate) fn print_func_ref(
-    h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>,
-    op: OpRef,
-    name: &str,
-) -> std::fmt::Result {
-    use std::fmt::Write;
-    let ctx = h.ctx();
-    let attrs = ctx.op_attrs(op);
-    let target = attrs.get("func_ref").cloned();
-    let row_args = attrs.get(ROW_ARGS_ATTR).cloned();
-    let known = 1 + usize::from(row_args.is_some());
-    let (Some(target @ Attribute::SymbolRef(_)), [result], true) = (
-        target,
-        ctx.op_results(op),
-        attrs.iter().count() == known && ctx.op_operands(op).is_empty(),
-    ) else {
-        return h.print_generic(op);
-    };
-    let result = *result;
-    let value = h.assign_value_name(result);
-    write!(h, "{value} = {name} ")?;
-    h.write_attribute(&target)?;
-    if let Some(row_args) = row_args {
-        write!(h, " ")?;
-        h.write_attribute(&row_args)?;
-    }
-    write!(h, " : ")?;
-    let ty = h.ctx().value_ty(result);
-    h.write_type(ty)
-}
-
-/// Parse the concise form [`print_func_ref`] writes for the operation
-/// `name`.
-pub(crate) fn parse_func_ref<'a>(
-    input: &mut &'a str,
-    results: Vec<&'a str>,
-    sym_name: Option<String>,
-    name: &'a str,
-) -> winnow::ModalResult<trunk_ir::parser::raw::RawOperation<'a>> {
-    use trunk_ir::parser::raw::*;
-    use winnow::prelude::*;
-
-    let (Some(first), [_]) = (sym_name, &results[..]) else {
-        return Err(winnow::error::ErrMode::Backtrack(
-            winnow::error::ContextError::new(),
-        ));
-    };
-    let mut target = vec![first];
-    while input.starts_with("::@") {
-        *input = &input[2..];
-        target.push(symbol_ref.parse_next(input)?);
-    }
-    let mut attributes = vec![("func_ref".into(), RawAttribute::SymbolRef(target))];
-    ws.parse_next(input)?;
-    if input.starts_with('[') {
-        attributes.push((ROW_ARGS_ATTR.into(), raw_attr_value.parse_next(input)?));
-        ws.parse_next(input)?;
-    }
-    (':', ws).parse_next(input)?;
-    let ty = raw_type.parse_next(input)?;
-    Ok(RawOperation {
-        results,
-        name,
-        sym_name: None,
-        has_func_signature: false,
-        func_params: vec![],
-        return_type: None,
-        operands: vec![],
-        attributes,
-        result_types: vec![ty],
-        regions: vec![],
-        successors: vec![],
-    })
-}
-
-impl trunk_ir::asm_format::OpAsmFormat for FuncRef {
-    fn print(&self, h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>) -> std::fmt::Result {
-        print_func_ref(h, self.op_ref(), "tribute_control.func_ref")
-    }
-
-    fn parse<'a>(
-        input: &mut &'a str,
-        results: Vec<&'a str>,
-        sym_name: Option<String>,
-    ) -> winnow::ModalResult<trunk_ir::parser::raw::RawOperation<'a>> {
-        parse_func_ref(input, results, sym_name, "tribute_control.func_ref")
-    }
 }
 
 impl trunk_ir::asm_format::OpAsmFormat for Lambda {

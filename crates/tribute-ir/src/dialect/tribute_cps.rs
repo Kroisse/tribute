@@ -12,7 +12,7 @@
 //! reads both dialects.
 
 use trunk_ir::IrContext;
-use trunk_ir::attr_kind::SymbolRef;
+use trunk_ir::attr_kind::{Dict, SymbolRef};
 use trunk_ir::op_flag::{IsolatedFromAbove, Pure};
 use trunk_ir::op_interface::CallableExit;
 use trunk_ir::ops::DialectOp;
@@ -142,7 +142,7 @@ mod tribute_cps {
     /// - **Ownership and value flow:** the result is an ordinary SSA value.
     /// - **Location:** the source reference span.
     #[verify]
-    #[asm_format]
+    #[asm_format(func_ref ("rows" row_args^)? ":" type(result))]
     #[flags(Pure)]
     #[implements(CallableResultOrigin)]
     fn func_ref(func_ref: Attr<SymbolRef>, row_args: Option<Attr<[Row]>>) -> Value<impl FuncSig> {}
@@ -151,12 +151,12 @@ mod tribute_cps {
     /// arguments, with a target instance per convention its row reads.
     ///
     /// ```text
-    /// tribute_cps.func_table @"id$9e$8" [direct = @"id$9D", evidence_direct = @"id$9e"]
+    /// tribute_cps.func_table @"id$9e$8" = {direct = @"id$9D", evidence_direct = @"id$9e"}
     /// ```
     ///
     /// - **Shape:** no operands, results, or regions. `sym_name: String`,
-    ///   and `conventions` and `targets` lists of the same length. The
-    ///   concise form writes each convention with its target.
+    ///   and a non-empty `entries` dictionary from convention keywords to
+    ///   their targets.
     /// - **Placement:** directly in a module, as a symbol definition. Class
     ///   specialization makes one for each definition and class arguments
     ///   that a `tribute_cps.func_ref` refers to, named as
@@ -164,9 +164,8 @@ mod tribute_cps {
     ///   targets are instances of that one definition. The IR does not
     ///   record which definition an instance comes from, so verification
     ///   cannot check this.
-    /// - **Meaning:** the convention entry of each element of `conventions`
-    ///   runs the `tribute_cps.func` instance at the same position of
-    ///   `targets`. Each instance is the one the class arguments select
+    /// - **Meaning:** the convention entry of each key of `entries` runs
+    ///   the `tribute_cps.func` instance it maps to. Each instance is the one the class arguments select
     ///   once the argument of the class variable that is the definition
     ///   row's tail is narrowed to that convention, as a lambda body narrows
     ///   a tail. The conventions are the classes `new-plans/ir.md`
@@ -180,28 +179,22 @@ mod tribute_cps {
     ///   calls the worker through a value delimiter
     ///   (`new-plans/cps-effects.md`, 값 delimiter). Legalization fills the
     ///   other entries by the same rule as a lambda's, once for the table.
-    /// - **Verification:** the local verifier checks the attributes, that
-    ///   the lists have the same length, and that the conventions are
-    ///   strictly increasing. Whole-IR verification checks that each target
+    /// - **Verification:** the local verifier checks the attributes and that
+    ///   each key of `entries` is a convention keyword. Whole-IR verification checks that each target
     ///   names a `tribute_cps.func` of the table's own module by one name,
     ///   that the targets share one source signature, and that
     ///   each convention is its target's, or weaker than it when the target
     ///   is `Cps`.
     /// - **Ownership and value flow:** defines no value.
     /// - **Symbol:** a discardable `SymbolDefinition` that is not a
-    ///   declaration. Its `targets` are its uses, so it keeps them alive
+    ///   declaration. Its targets are its uses, so it keeps them alive
     ///   only while a live `tribute_cps.func_ref` uses it, and global DCE
     ///   removes it once none does (`new-plans/ir.md`, "Core Invariants").
     /// - **Location:** the span of the referenced definition.
     #[verify]
-    #[asm_format]
+    #[asm_format(symbol(sym_name) "=" entries)]
     #[implements(trunk_ir::op_interface::SymbolDefinition)]
-    fn func_table(
-        sym_name: Attr<String>,
-        conventions: Attr<[CallingConvention]>,
-        targets: Attr<[SymbolRef]>,
-    ) {
-    }
+    fn func_table(sym_name: Attr<String>, entries: Attr<Dict<SymbolRef>>) {}
 
     /// An indirect call through one convention.
     ///
@@ -302,31 +295,26 @@ pub fn body_conventions(
     .then_some(conventions)
 }
 
-/// Why a `tribute_cps.func_table`'s conventions do not name its targets.
+/// Why a `tribute_cps.func_table`'s entries do not name its targets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, derive_more::Display, derive_more::Error)]
-#[display("`conventions` must be strictly increasing, with one target for each")]
+#[display("`entries` must map one or more convention keywords to their targets")]
 pub struct MalformedTable;
 
 /// The conventions and targets of `op`, when it is a
-/// `tribute_cps.func_table` whose lists are well formed, in convention order.
+/// `tribute_cps.func_table` whose entries are well formed, in convention
+/// order.
 pub fn table_entries(
     ctx: &IrContext,
     op: trunk_ir::refs::OpRef,
 ) -> Option<Vec<(CallingConvention, trunk_ir::SymbolPath)>> {
     let table = FuncTable::from_op(ctx, op).ok()?;
-    let trunk_ir::types::Attribute::List(conventions) = ctx.op_attrs(op).get(CONVENTIONS_ATTR)?
-    else {
-        return None;
-    };
-    let conventions = conventions
+    let mut entries = table
+        .entries(ctx)
         .iter()
-        .map(|convention| CallingConvention::from_attribute(ctx, convention))
+        .map(|(key, target)| Some((ctx.str(key).parse().ok()?, target.clone())))
         .collect::<Option<Vec<_>>>()?;
-    let targets: Vec<_> = table.targets(ctx).cloned().collect();
-    (!conventions.is_empty()
-        && conventions.is_sorted_by(|a, b| a < b)
-        && conventions.len() == targets.len())
-    .then(|| conventions.into_iter().zip(targets).collect())
+    entries.sort_by_key(|&(convention, _)| convention);
+    (!entries.is_empty()).then_some(entries)
 }
 
 /// The `tribute_cps.func_table` that `op`, a `tribute_cps.func_ref`, names:
@@ -551,110 +539,6 @@ impl trunk_ir::asm_format::OpAsmFormat for Lambda {
         sym_name: Option<String>,
     ) -> winnow::ModalResult<trunk_ir::parser::raw::RawOperation<'a>> {
         tribute_control::parse_lambda(input, results, sym_name, "tribute_cps.lambda", true)
-    }
-}
-
-/// `tribute_cps.func_table @name [convention = @target, ...]`. A table with
-/// other attributes or malformed entries prints generically.
-impl trunk_ir::asm_format::OpAsmFormat for FuncTable {
-    fn print(&self, h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>) -> std::fmt::Result {
-        use std::fmt::Write;
-        let ctx = h.ctx();
-        let op = self.op_ref();
-        let name = ctx.op_attrs(op).get_str("sym_name").map(str::to_owned);
-        let (Some(name), Some(entries), 3) = (
-            name,
-            table_entries(ctx, op),
-            ctx.op_attrs(op).iter().count(),
-        ) else {
-            return h.print_generic(op);
-        };
-        write!(h, "tribute_cps.func_table ")?;
-        h.write_symbol_text(&name)?;
-        write!(h, " [")?;
-        for (index, (convention, target)) in entries.into_iter().enumerate() {
-            if index > 0 {
-                write!(h, ", ")?;
-            }
-            write!(h, "{} = ", convention.keyword())?;
-            h.write_attribute(&trunk_ir::Attribute::SymbolRef(target))?;
-        }
-        write!(h, "]")
-    }
-
-    fn parse<'a>(
-        input: &mut &'a str,
-        results: Vec<&'a str>,
-        sym_name: Option<String>,
-    ) -> winnow::ModalResult<trunk_ir::parser::raw::RawOperation<'a>> {
-        use trunk_ir::parser::raw::*;
-        use winnow::combinator::{delimited, separated};
-        use winnow::prelude::*;
-
-        if sym_name.is_none() || !results.is_empty() {
-            return Err(winnow::error::ErrMode::Backtrack(
-                winnow::error::ContextError::new(),
-            ));
-        }
-        ws.parse_next(input)?;
-        let entries: Vec<(CallingConvention, Vec<String>)> = delimited(
-            ('[', ws),
-            separated(
-                1..,
-                (
-                    ws,
-                    ident.try_map(str::parse::<CallingConvention>),
-                    ws,
-                    '=',
-                    ws,
-                    symbol_path,
-                    ws,
-                )
-                    .map(|(_, convention, _, _, _, target, _)| (convention, target)),
-                ',',
-            ),
-            (ws, ']'),
-        )
-        .parse_next(input)?;
-        let (conventions, targets): (Vec<_>, Vec<_>) = entries
-            .into_iter()
-            .map(|(convention, target)| {
-                (
-                    RawAttribute::String(convention.keyword().to_owned()),
-                    RawAttribute::SymbolRef(target),
-                )
-            })
-            .unzip();
-        Ok(RawOperation {
-            results,
-            name: "tribute_cps.func_table",
-            sym_name,
-            has_func_signature: false,
-            func_params: vec![],
-            return_type: None,
-            operands: vec![],
-            attributes: vec![
-                (CONVENTIONS_ATTR.into(), RawAttribute::List(conventions)),
-                ("targets".into(), RawAttribute::List(targets)),
-            ],
-            result_types: vec![],
-            regions: vec![],
-            successors: vec![],
-        })
-    }
-}
-
-impl trunk_ir::asm_format::OpAsmFormat for FuncRef {
-    fn print(&self, h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>) -> std::fmt::Result {
-        tribute_control::print_func_ref(h, self.op_ref(), "tribute_cps.func_ref")
-    }
-
-    fn parse<'a>(
-        input: &mut &'a str,
-        results: Vec<&'a str>,
-        sym_name: Option<String>,
-    ) -> winnow::ModalResult<trunk_ir::parser::raw::RawOperation<'a>> {
-        tribute_control::parse_func_ref(input, results, sym_name, "tribute_cps.func_ref")
     }
 }
 

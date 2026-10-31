@@ -201,8 +201,7 @@ fn add_func_tables(ctx: &mut IrContext, module: Module) {
         let location = ctx.op(instance).location;
         let op = tribute_cps::FuncTable::operands()
             .sym_name(table)
-            .conventions([convention])
-            .targets([target])
+            .entries(vec![(convention.keyword().into(), target)])
             .build(ctx, location);
         insert_after(ctx, instance, op.op_ref());
     }
