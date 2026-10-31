@@ -126,8 +126,8 @@ pub trait Verify: DialectOp {
 pub mod __private {
     use super::{IrContext, VerificationError, Verify};
     use crate::asm_format::{
-        OpAsmFormat, OpAsmHooks, TypeAliasHint, TypeAliasHook, TypeAsmFormat, TypeAsmHooks,
-        erased_alias_hint,
+        OpAsmFormat, OpAsmFormatDef, OpAsmHooks, TypeAliasHint, TypeAliasHook, TypeAsmFormat,
+        TypeAsmHooks, erased_alias_hint,
     };
     use crate::type_def::TypeVerifier;
     use crate::type_verifier::{VerifyType, erased_verifier};
@@ -159,18 +159,18 @@ pub mod __private {
         note = "add `impl OpAsmFormat for {Self} {{ fn print(..) {{ .. }} fn parse(..) {{ .. }} }}`"
     )]
     pub trait DeclaredOpAsmFormat {
-        const ASM_HOOKS: OpAsmHooks;
+        const ASM_HOOKS: OpAsmFormatDef;
     }
 
     #[diagnostic::do_not_recommend]
     impl<T: OpAsmFormat> DeclaredOpAsmFormat for T {
-        const ASM_HOOKS: OpAsmHooks = OpAsmHooks {
+        const ASM_HOOKS: OpAsmFormatDef = OpAsmFormatDef::Hooks(OpAsmHooks {
             print: |h, op| match T::from_op(h.ctx(), op) {
                 Ok(op) => op.print(h),
                 Err(_) => Err(std::fmt::Error),
             },
             parse: T::parse,
-        };
+        });
     }
 
     /// Entry point for generated type verifiers.

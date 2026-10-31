@@ -43,6 +43,9 @@ pub struct OperationDef {
     pub verify: Option<proc_macro2::Span>,
     /// `#[asm_format]`: print and parse through the wrapper's `OpAsmFormat` impl. Holds the attribute's span for diagnostics.
     pub asm_format: Option<proc_macro2::Span>,
+    /// `#[asm_format(..)]`: the format elements the printer and parser
+    /// interpret instead of an `OpAsmFormat` impl.
+    pub format: Option<proc_macro2::TokenStream>,
     /// `#[implements(..)]`: the operation interfaces the wrapper implements.
     pub implements: Vec<PathEntry>,
     /// `#[flags(..)]`: the operation flags the definition declares.
@@ -228,6 +231,7 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
     let mut alias_hint = None;
     let mut implements: Option<Vec<PathEntry>> = None;
     let mut flags: Option<Vec<PathEntry>> = None;
+    let mut format: Option<proc_macro2::TokenStream> = None;
     let mut docs = Vec::new();
 
     // Collect outer attributes: #[doc = "..."], #[verify], #[asm_format],
@@ -250,11 +254,12 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
                 }
                 verify = Some(span);
             }
-            OuterAttr::AsmFormat(span) => {
+            OuterAttr::AsmFormat(span, elements) => {
                 if asm_format.is_some() {
                     return Err("duplicate #[asm_format] on the same operation".into());
                 }
                 asm_format = Some(span);
+                format = elements;
             }
             OuterAttr::AliasHint(span) => {
                 if alias_hint.is_some() {
@@ -302,6 +307,7 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
                 return Err("#[verify] reserves the name `verify` for `Verify::verify`".into());
             }
             if asm_format.is_some()
+                && format.is_none()
                 && let Some(name) = entity_names(&op).find(|name| ["print", "parse"].contains(name))
             {
                 return Err(format!(
@@ -335,6 +341,7 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
             }
             op.verify = verify;
             op.asm_format = asm_format;
+            op.format = format;
             op.implements = implements.unwrap_or_default();
             op.flags = flags.unwrap_or_default();
             op.docs = docs;
@@ -351,6 +358,11 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
             }
             if flags.is_some() {
                 return Err("#[flags] declares operation flags and is not allowed on types".into());
+            }
+            if format.is_some() {
+                return Err(
+                    "a type's custom syntax is a hand-written `TypeAsmFormat`; write `#[asm_format]` without format elements".into(),
+                );
             }
             let mut td = parse_struct_def(iter)?;
             // Each parameter, attribute, and string attribute handle has an
@@ -406,7 +418,8 @@ enum OuterAttr {
     LegacyAttrs,
     RestResults,
     Verify(proc_macro2::Span),
-    AsmFormat(proc_macro2::Span),
+    /// `#[asm_format]`, with the format elements of `#[asm_format(..)]`.
+    AsmFormat(proc_macro2::Span, Option<proc_macro2::TokenStream>),
     AliasHint(proc_macro2::Span),
     Implements(Vec<PathEntry>),
     Flags(Vec<PathEntry>),
@@ -470,8 +483,16 @@ fn parse_outer_attr(iter: &mut TokenIter) -> Result<OuterAttr, String> {
             Ok(OuterAttr::Verify(ident.span()))
         }
         "asm_format" => {
-            expect_consumed(&inner, "#[asm_format]")?;
-            Ok(OuterAttr::AsmFormat(ident.span()))
+            let elements = if has_remaining(&inner) {
+                let group = expect_group(&mut inner, Delimiter::Parenthesis).map_err(|_| {
+                    "expected `#[asm_format]` or `#[asm_format(elements..)]`".to_string()
+                })?;
+                expect_consumed(&inner, "#[asm_format(..)]")?;
+                Some(group.stream())
+            } else {
+                None
+            };
+            Ok(OuterAttr::AsmFormat(ident.span(), elements))
         }
         "alias_hint" => {
             expect_consumed(&inner, "#[alias_hint]")?;
@@ -1884,11 +1905,11 @@ mod tests {
             (
                 quote!(
                     mod test {
-                        #[asm_format(custom)]
-                        fn op() {}
+                        #[asm_format("custom")]
+                        struct Ty;
                     }
                 ),
-                "#[asm_format]",
+                "hand-written `TypeAsmFormat`",
             ),
             (
                 quote!(

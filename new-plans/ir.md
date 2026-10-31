@@ -388,7 +388,7 @@ operation 이름으로 찾는다. 어느 쪽이든 generic 형식은 항상 읽�
 생성하지 않는다.
 
 ```rust
-#[asm_format(symbol(sym_name) signature(r#type, body) attr_dict(keyword) region(body))]
+#[asm_format(symbol(sym_name) signature(r#type, body) attr_dict region(body))]
 #[flags(IsolatedFromAbove)]
 fn func<S: FuncSig>(sym_name: Attr<String>, r#type: Attr<TypeOf<S>>) {
     #[region(body?)]
@@ -413,7 +413,8 @@ func.func @decl(%arg0: core.i32)
 literal은 문자열 literal로 쓴다.
 
 - **Literal** — keyword(`"captures"`)나 구두점(`"("`, `"["`, `"->"`, `":"`,
-  `","`, `"="`)이다. 빈 literal `""`는 다음 원소 앞의 공백을 없앤다.
+  `","`, `"="`)이다. Keyword는 식별자 하나이고, 구두점에는 영숫자를 섞지 않는다.
+  공백은 printer가 정하므로 빈 literal은 없다.
 - **Operand** — `%name`으로 쓰고, 가변 operand는 쉼표로 구분한 목록이다. 목록을
   감싸는 괄호는 literal로 쓴다. Operand 타입은 쓰지 않는다. Generic 형식처럼
   parser는 SSA 이름으로 값을 찾고 값에서 타입을 얻는다.
@@ -427,8 +428,9 @@ literal은 문자열 literal로 쓴다.
   `types(results)`, 또는 타입을 재구성하는 `signature`로 정확히 한 번 쓴다.
   `types`는 결과 목록을 쉼표로 구분해 쓰며, 결과가 없을 수 있으면 앞의 구두점과
   함께 선택 묶음에 둔다.
-- **`attr_dict`** — 형식의 다른 원소가 쓰지 않은 모든 attribute를 `{..}`로 쓴다.
-  `attr_dict(keyword)`는 `attributes {..}`로 쓴다. 남은 attribute가 없으면 아무
+- **`attr_dict`** — 형식의 다른 원소가 쓰지 않은 모든 attribute를
+  `attributes {..}`로 쓴다. Keyword 없는 `{..}`는 region이나 generic 형식과
+  첫 token이 겹치므로 쓰지 않는다. 남은 attribute가 없으면 아무
   것도 쓰지 않는다. 다른 원소가 쓰는 attribute는 자동으로 제외하며, parser는 그런
   key를 dictionary에서 만나면 거부한다.
 - **`signature(t, regions..)`** — 함수 형태 `(%a: A, %b: B) -> R`을 쓴다. `t`는
@@ -445,8 +447,9 @@ literal은 문자열 literal로 쓴다.
   목록 attribute `attr`의 원소를 keyword로 쓴 것이다. 이 원소는 region 목록과
   `attr`를 함께 쓴다.
 - **`successor(s)`, `successors(ss)`** — `^bb1`로 쓴다.
-- **선택 묶음 `( .. )?`** — 원소 하나에 `^`를 붙여 anchor로 삼는다. Anchor가
-  있으면(선택 attribute가 있거나, 가변 operand·result·region 목록이 비어 있지 않으면)
+- **선택 묶음 `( .. )?`** — 묶음을 여는 literal 뒤에 literal과 원소 하나를 두고,
+  그 원소에 `^`를 붙여 anchor로 삼는다. Anchor가
+  있으면(선택 attribute가 있거나, 가변 operand·result 목록이 비어 있지 않으면)
   묶음 전체를 쓰고, 없으면 묶음 전체를 생략한다. `Option<Attr<bool>>`인 anchor가
   묶음에서 값을 쓰지 않으면 표시 flag다. `true`면 묶음을 쓰고 parser는 묶음을
   만나면 `true`를 저장한다.
@@ -474,14 +477,26 @@ Macro는 형식 기술을 선언과 대조해 다음을 어기면 그 원소를 
   세지 않는다.
 - Attribute는 많아야 한 번 명시하고, 명시하지 않은 attribute가 있으면
   `attr_dict`가 있어야 한다. 같은 entity를 두 원소가 쓰지 않는다.
-- 선택 묶음의 anchor는 선택 attribute, 가변 operand, 가변 result, 선택 region,
-  가변 region 목록 중 하나다. 묶음 안에는 선택 entity와 literal만 둔다. 묶음의 첫 원소는
-  literal이거나 anchor이며, 그 첫 token은 묶음 바로 뒤에 올 수 있는 원소의 첫
-  token과 달라야 한다. Parser는 첫 token 하나로 묶음의 유무를 정한다.
-- 첫 원소는 `{`, `%`, `:`로 시작할 수 없다. 그 셋으로 시작하는 입력은 generic
-  형식이다.
-- 따옴표 없는 `attr_dict` 바로 뒤에 region이 올 수 없다. 둘 다 `{`로 시작하므로
-  `attr_dict(keyword)`를 쓴다.
+- 형식은 원소를 하나 이상 쓰고, `symbol`과 symbol 참조 attribute로 시작할 수
+  있다. Generic 형식은 `@`로 시작하지 않기 때문이다. 그 뒤, 또는 그런 원소가
+  없으면 처음에는 literal이 온다. 앞에 symbol이 있으면 이 literal로 여는 선택
+  묶음도 된다. 이 literal은 `{`, `%`, `:`, `[`, `^`, `}`로 시작하지 않는다. 앞의
+  넷은 generic 형식이 operation 이름 뒤에 쓰는 것이고, 나머지는 operation 이름만
+  쓴 generic 형식 뒤의 다음 줄이 시작할 수 있는 것이다.
+- 선택 묶음은 여는 literal로 시작하고, 그 뒤에는 literal과 anchor 하나만 둔다.
+  여는 literal은 keyword(값이 시작하는 `true`, `false`, `unit`, `loc`, `b`는
+  제외)이거나 값, `attr_dict`, 다음 줄이 시작할 수 없는 구두점이며, 형식의 다른
+  literal과 같지 않고 구두점끼리는 접두사도 겹치지 않는다. Parser는 여는 literal을
+  읽으면 묶음이 있다고 정한다.
+- Anchor는 선택 attribute, 가변 operand, 가변 result 중 하나다.
+- 가변 result나 선택 result의 타입은 `(":" types(..)^)?`처럼 선택 묶음의
+  마지막에 쓰고, 그 묶음은 형식의 마지막 원소다.
+- 가변 operand·successor 목록 바로 뒤에는 선택 묶음이 아닌 닫는 literal `")"`나
+  `"]"`가 온다. 빈 목록이 뒤의 원소를 읽거나 목록이 쉼표를 자기 구분자로 읽는
+  일이 없게 하기 위해서다.
+- 선택 region과 가변 region 목록 뒤에서 선택 묶음을 건너뛴 첫 원소는 없거나
+  `{`로 시작하지 않는 literal이다.
+- Literal `attributes`는 `attr_dict`만 쓴다.
 - `signature`의 `t`는 signature codec을 구현한 bound로 묶인 타입 변수여야 하고,
   나열한 region은 선언된 region이어야 한다.
 
@@ -503,8 +518,10 @@ Printer는 쓰기 전에 operation이 형식으로 손실 없이 표현되는지
 같은 텍스트가 된다. 같은 operation을 generic 형식으로 쓴 텍스트도 같은 operation으로
 읽힌다. Parser는 operation schema를 검증하지 않는다.
 
-Parser는 형식의 첫 token을 읽기 전에만 backtrack하고, 첫 token을 읽은 뒤의
-실패는 기대한 원소를 밝힌 오류로 끝낸다. 첫 token에서 backtrack한 입력은 generic
+Parser는 `symbol`이 아닌 원소가 첫 token을 읽기 전에만 backtrack하고, 그 뒤의
+실패는 기대한 원소를 밝힌 오류로 끝낸다. 원소 사이의 공백은 token이 아니다. Keyword
+literal과 `attr_dict`의 `attributes`는 식별자 전체로 읽으며, 바로 뒤에 `.`이 오면
+다음 operation 이름의 일부로 보고 읽지 않는다. 첫 token에서 backtrack한 입력은 generic
 형식으로 다시 읽는다.
 
 `signature`가 entry argument를 쓰는 region이 여럿이면 printer는 둘째 이후
@@ -520,8 +537,8 @@ region의 entry block에 되돌린다. Printer는 `IsolatedFromAbove` operation�
 
 - Symbol을 정의하는 operation은 operation 이름 바로 뒤에 `symbol(sym_name)`으로
   `@name`을 쓴다.
-- Region을 가진 operation은 남은 attribute를 `attr_dict(keyword)`로 region 바로
-  앞에 쓴다. 따옴표 없는 `{..}` dictionary는 region이 없는 operation에만 쓴다.
+- 남은 attribute는 `attr_dict`로 region 바로 앞에 쓰고, region이 없으면 끝에
+  쓴다.
 - Capture operand 목록은 비어 있어도 `captures [..]`로 쓴다.
 - Convention처럼 keyword로 쓰는 attribute 하나는 `name(keyword)`로 쓴다
   (`convention(cps)`).
