@@ -1872,6 +1872,58 @@ fn references_sharing_a_table_share_its_entries() {
     assert!(!printed.contains("tribute_control."));
 }
 
+/// A table with a target for each of two conventions enters each target
+/// through its own convention, and adapts the stronger slot to the
+/// strongest target.
+#[test]
+fn a_table_of_two_targets_enters_each_through_its_convention() {
+    let input = r#"core.module @test {
+  !callable = tribute_control.func_sig<(core.i32) -> core.i32>
+  tribute_cps.func @direct(%value: core.i32) -> core.i32 convention(direct) {
+    tribute_control.return %value
+  }
+  tribute_cps.func @evidence(%value: core.i32) -> core.i32 convention(evidence_direct) {
+    tribute_control.return %value
+  }
+  tribute_cps.func_table @"id$8" = {direct = @direct, evidence_direct = @evidence}
+  tribute_cps.func @refs(%value: core.i32) -> core.i32 convention(cps) {
+    %reference = tribute_cps.func_ref {func_ref = @"id$8"} : !callable
+    tribute_control.return %value
+  }
+}"#;
+    let (mut ctx, module) = parse(input);
+    tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
+    verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
+    let printed = print_module(&ctx, module.op());
+    let mut tables = Vec::new();
+    let _ = walk_op::<()>(&ctx, module.op(), &mut |op| {
+        if let Ok(closure) = closure::New::from_op(&ctx, op) {
+            tables.push(
+                closure
+                    .entries(&ctx)
+                    .map(|entry| entry.to_string())
+                    .collect::<Vec<_>>(),
+            );
+        }
+        ControlFlow::Continue(WalkAction::Advance)
+    });
+    let [entries] = &tables[..] else {
+        panic!("one closure: {printed}");
+    };
+    assert!(entries[0].contains("func_ref_adapter"), "{printed}");
+    assert!(entries[1].contains("func_ref_adapter"), "{printed}");
+    assert_ne!(entries[0], entries[1], "{printed}");
+    assert!(entries[2].contains("entry_adapter"), "{printed}");
+    for (entry, target) in [(&entries[0], "@direct"), (&entries[1], "@evidence")] {
+        let function = printed
+            .split("func.func @")
+            .find(|function| function.starts_with(entry.as_str()))
+            .unwrap_or_else(|| panic!("{entry}: {printed}"));
+        let body = function.split("\n  }").next().unwrap();
+        assert!(body.contains(&format!("callee = {target}")), "{body}");
+    }
+}
+
 /// A func_ref adapter is defined in the root module, which a reference in a
 /// nested module cannot name.
 #[test]

@@ -25,8 +25,8 @@ use trunk_ir::types::Location;
 use trunk_ir::walk::{WalkAction, walk_region};
 
 use crate::convention_classes::{
-    Function, Locals, func_tables, reference_callee, requirements, row_class,
-    settle_class_variables, settle_locals,
+    Class, Function, Locals, Reader, func_tables, reference_callee, requirements,
+    settle_class_variables,
 };
 use crate::unreferenced_source_functions::source_dce_config;
 
@@ -156,9 +156,7 @@ struct Instance<'a> {
     ctx: &'a IrContext,
     function: &'a Function,
     by_name: &'a HashMap<&'a str, &'a Function>,
-    requirements: &'a HashMap<SymbolPath, CallingConvention>,
-    classes: HashMap<u32, CallingConvention>,
-    locals: Locals,
+    reader: Reader<'a>,
 }
 
 impl<'a> Instance<'a> {
@@ -171,37 +169,42 @@ impl<'a> Instance<'a> {
     ) -> Self {
         let variables = positions.get(&function.base).map_or(&[][..], Vec::as_slice);
         let claimed = if function.root_entry {
-            vec![CallingConvention::Direct; variables.len()]
+            vec![Class::DIRECT; variables.len()]
         } else {
             function
                 .claimed
                 .clone()
-                .unwrap_or_else(|| vec![CallingConvention::Cps; variables.len()])
+                .unwrap_or_else(|| vec![Class::CPS; variables.len()])
         };
-        let classes = variables.iter().copied().zip(claimed).collect();
-        let locals = ctx
-            .op_region(function.op, 0)
-            .map(|body| settle_locals(ctx, body, &function.binders, requirements, &classes))
-            .unwrap_or_default();
+        let mut reader = Reader {
+            binders: function.binders.clone(),
+            requirements,
+            params: variables.iter().copied().zip(claimed).collect(),
+            locals: Locals::default(),
+        };
+        if let Some(body) = ctx.op_region(function.op, 0) {
+            reader.settle_locals(ctx, body);
+        }
         Self {
             ctx,
             function,
             by_name,
-            requirements,
-            classes,
-            locals,
+            reader,
         }
     }
 
-    /// The class `row` requires at `at`.
+    /// The convention `row` requires at `at`, or its bound when it may
+    /// require less: a row that may be `Cps` counts as one that is.
     fn class(&self, row: &Row, at: OpRef) -> CallingConvention {
-        row_class(
-            row,
-            &self.function.binders,
-            self.requirements,
-            &self.classes,
-            |binder| self.locals.get(self.ctx, binder, at),
-        )
+        self.reader.class(self.ctx, row, at).bound()
+    }
+
+    /// Whether class variable `tail` may be `Cps` in this instance.
+    fn may_be_cps(&self, tail: u32) -> bool {
+        self.reader
+            .params
+            .get(&tail)
+            .is_some_and(|class| class.bound() == CallingConvention::Cps)
     }
 
     fn check_arm(
@@ -242,7 +245,7 @@ impl<'a> Instance<'a> {
         seen.push((self.function.op, tail));
         for caller in instances {
             for reference in &caller.function.references {
-                if reference.callee != self.function.name {
+                if !reference.targets.contains(&self.function.name) {
                     continue;
                 }
                 let Some(row) = reference.rows.get(tail as usize) else {
@@ -256,7 +259,7 @@ impl<'a> Instance<'a> {
                 match row.tail {
                     Some(outer)
                         if caller.class(&labels, reference.op) != CallingConvention::Cps
-                            && caller.classes.get(&outer) == Some(&CallingConvention::Cps)
+                            && caller.may_be_cps(outer)
                             && caller.class(&through, reference.op) == CallingConvention::Cps =>
                     {
                         caller.origins(outer, instances, seen, origins);
@@ -379,8 +382,7 @@ impl<'a> Instance<'a> {
         }
         let labels = Row::new(unhandled.instances.clone(), None);
         let tail = unhandled.tail.filter(|tail| {
-            self.class(&labels, op) != CallingConvention::Cps
-                && self.classes.get(tail) == Some(&CallingConvention::Cps)
+            self.class(&labels, op) != CallingConvention::Cps && self.may_be_cps(*tail)
         });
         Some(tail)
     }
