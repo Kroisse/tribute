@@ -67,6 +67,12 @@ enum Element {
     AttrDict,
     Region(usize),
     Successor(usize),
+    /// `signature(t, regions..)`, with the bound whose codec spells `t`.
+    Signature {
+        attribute: usize,
+        regions: Vec<usize>,
+        codec: TokenStream,
+    },
     Optional {
         anchor: Anchor,
         elements: Vec<(Element, Span)>,
@@ -88,6 +94,7 @@ struct Format<'a> {
     /// Successors as (name, variadic), by position among successors.
     successors: Vec<(&'a str, bool)>,
     written: Vec<Entity>,
+    signature: bool,
 }
 
 impl<'a> Format<'a> {
@@ -110,6 +117,7 @@ impl<'a> Format<'a> {
             regions,
             successors,
             written: Vec::new(),
+            signature: false,
         }
     }
 
@@ -305,6 +313,9 @@ impl<'a> Format<'a> {
         if name == "attr_dict" {
             return err(span, "`attr_dict` takes no arguments");
         }
+        if name == "signature" {
+            return self.signature(args, span);
+        }
         let args: Vec<TokenTree> = args.into_iter().collect();
         let [TokenTree::Ident(arg)] = &args[..] else {
             return err(span, format!("`{name}(..)` takes one name"));
@@ -373,13 +384,92 @@ impl<'a> Format<'a> {
                 return err(
                     span,
                     format!(
-                        "unknown format directive `{name}`; expected `symbol`, `type`, `types`, `region`, `regions`, `successor`, or `successors`"
+                        "unknown format directive `{name}`; expected `symbol`, `signature`, `type`, `types`, `region`, `regions`, `successor`, or `successors`"
                     ),
                 );
             }
         };
         self.write(entity.expect("matched above"), arg_span)?;
         Ok(element)
+    }
+
+    /// `signature(t, regions..)`: the type attribute `t` in function form,
+    /// whose inputs are the entry block arguments of the listed regions.
+    fn signature(&mut self, args: TokenStream, span: Span) -> Result<Element, FormatError> {
+        if self.signature {
+            return err(span, "a format writes at most one `signature(..)`");
+        }
+        self.signature = true;
+        let mut names = Vec::new();
+        let mut tokens = args.into_iter().peekable();
+        while let Some(token) = tokens.next() {
+            let TokenTree::Ident(name) = token else {
+                return err(token.span(), "`signature(..)` takes names separated by `,`");
+            };
+            names.push(name);
+            match tokens.next() {
+                None => break,
+                Some(TokenTree::Punct(p)) if p.as_char() == ',' => {}
+                Some(other) => {
+                    return err(other.span(), "`signature(..)` takes names separated by `,`");
+                }
+            }
+        }
+        let Some((ty, regions)) = names.split_first() else {
+            return err(span, "`signature(..)` names a signature type attribute");
+        };
+        let name = |ident: &proc_macro2::Ident| {
+            let name = ident.to_string();
+            name.strip_prefix("r#").unwrap_or(&name).to_owned()
+        };
+        let attribute = match self.lookup(&name(ty)) {
+            Some(Entity::Attribute(i)) => i,
+            _ => {
+                return err(
+                    ty.span(),
+                    "`signature(..)` writes an `Attr<TypeOf<S>>` attribute first",
+                );
+            }
+        };
+        let attr = &self.op.attrs[attribute];
+        let codec = match (&attr.kind, attr.binds) {
+            (crate::parse::AttrKind::BoundType, Some(var)) if !attr.list && !attr.optional => {
+                match &self.op.type_vars[var].bounds[..] {
+                    [bound] => quote!(#bound),
+                    _ => {
+                        return err(
+                            ty.span(),
+                            "the signature's type variable has one bound, whose `SignatureCodec` spells it",
+                        );
+                    }
+                }
+            }
+            _ => {
+                return err(
+                    ty.span(),
+                    "`signature(..)` writes a required `Attr<TypeOf<S>>` attribute",
+                );
+            }
+        };
+        self.write(Entity::Attribute(attribute), ty.span())?;
+        let mut listed = Vec::new();
+        for region in regions {
+            let Some(Entity::Region(i)) = self.lookup(&name(region)) else {
+                return err(
+                    region.span(),
+                    "`signature(..)` lists regions after its attribute",
+                );
+            };
+            if listed.contains(&i) {
+                return err(region.span(), "`signature(..)` lists a region twice");
+            }
+            listed.push(i);
+        }
+        Ok(Element::Signature {
+            attribute,
+            regions: listed,
+            codec,
+        })
     }
 
     /// An optional group: a keyword, then literals and one entity, its
@@ -564,8 +654,8 @@ fn check(
     // Generic syntax never begins with `@`, so symbols and symbol references
     // may lead. After them a literal decides custom against generic syntax,
     // which begins with `{`, `%`, `:`, or `[`, or ends the operation before a
-    // line beginning with `%`, `^`, or `}`; a group may stand in for it once a
-    // symbol has decided.
+    // line beginning with `%`, `^`, or `}`; a group or a signature's `(` may
+    // stand in for it once a symbol has decided.
     let symbol_like = |element: &Element| match *element {
         Element::Symbol(_) => true,
         Element::Attribute(i) => {
@@ -589,12 +679,13 @@ fn check(
             Element::Optional { elements, .. } if leading > 0 => {
                 matches!(&elements[0].0, Element::Literal(text) if decides(text))
             }
+            Element::Signature { .. } => leading > 0,
             _ => false,
         };
         if !decided {
             return err(
                 *span,
-                "a format begins with a literal, after any symbols or symbol references, and not with `{`, `%`, `:`, `[`, `^`, or `}`",
+                "a format begins with a literal, after any symbols or symbol references, and not with `{`, `%`, `:`, `[`, `^`, or `}`; a `signature(..)` may follow a symbol",
             );
         }
     }
@@ -640,7 +731,7 @@ fn check(
     }
 
     let fmt = quote!(#crate_path::asm_format::declarative);
-    let elements = gen_elements(&fmt, &elements);
+    let elements = gen_elements(crate_path, &fmt, &elements);
     Ok(
         quote!(Some(#crate_path::asm_format::OpAsmFormatDef::Declarative(
             &#fmt::OpFormat { elements: &[#(#elements),*] }
@@ -658,7 +749,11 @@ fn visit_literals<'e>(elements: &'e [(Element, Span)], literals: &mut Vec<&'e St
     }
 }
 
-fn gen_elements(fmt: &TokenStream, elements: &[(Element, Span)]) -> Vec<TokenStream> {
+fn gen_elements(
+    crate_path: &TokenStream,
+    fmt: &TokenStream,
+    elements: &[(Element, Span)],
+) -> Vec<TokenStream> {
     elements
         .iter()
         .map(|(element, _)| match element {
@@ -671,6 +766,15 @@ fn gen_elements(fmt: &TokenStream, elements: &[(Element, Span)]) -> Vec<TokenStr
             Element::AttrDict => quote!(#fmt::FormatElement::AttrDict),
             Element::Region(i) => quote!(#fmt::FormatElement::Region(#i)),
             Element::Successor(i) => quote!(#fmt::FormatElement::Successor(#i)),
+            Element::Signature {
+                attribute,
+                regions,
+                codec,
+            } => quote!(#fmt::FormatElement::Signature {
+                attribute: #attribute,
+                regions: &[#(#regions),*],
+                codec: #crate_path::asm_format::SignatureCodecHooks::of::<#codec>(),
+            }),
             Element::Optional { anchor, elements } => {
                 let anchor = match *anchor {
                     Anchor::Attribute(i) => quote!(#fmt::FormatAnchor::Attribute(#i)),
@@ -678,7 +782,7 @@ fn gen_elements(fmt: &TokenStream, elements: &[(Element, Span)]) -> Vec<TokenStr
                     Anchor::Operand(i) => quote!(#fmt::FormatAnchor::Operand(#i)),
                     Anchor::Results => quote!(#fmt::FormatAnchor::Results),
                 };
-                let elements = gen_elements(fmt, elements);
+                let elements = gen_elements(crate_path, fmt, elements);
                 quote!(#fmt::FormatElement::Optional { anchor: #anchor, elements: &[#(#elements),*] })
             }
         })
@@ -740,6 +844,15 @@ mod tests {
                 mod t {
                     #[asm_format(symbol(callee))]
                     fn op(callee: Attr<String>) {}
+                }
+            ),
+            quote!(
+                mod t {
+                    #[asm_format(symbol(sym_name) signature(r#type, body) attr_dict region(body))]
+                    fn op<S: FuncSig>(sym_name: Attr<String>, r#type: Attr<TypeOf<S>>) {
+                        #[region(body?)]
+                        {}
+                    }
                 }
             ),
         ] {
@@ -1133,6 +1246,49 @@ mod tests {
                 ),
                 quote!("run" ("b" on^)? payload),
                 "begins with a keyword or punctuation",
+            ),
+            (
+                quote!(
+                    fn op<S: FuncSig>(t: Attr<TypeOf<S>>) {
+                        #[region(body)]
+                        {}
+                    }
+                ),
+                quote!(signature(t, body) region(body)),
+                "may follow a symbol",
+            ),
+            (
+                quote!(
+                    fn op(sym_name: Attr<String>, t: Attr<Type>) {}
+                ),
+                quote!(symbol(sym_name) signature(t)),
+                "`Attr<TypeOf<S>>`",
+            ),
+            (
+                quote!(
+                    fn op<S: FuncSig>(sym_name: Attr<String>, t: Attr<TypeOf<S>>) {}
+                ),
+                quote!(symbol(sym_name) signature(t, sym_name)),
+                "lists regions",
+            ),
+            (
+                quote!(
+                    fn op<S: FuncSig>(sym_name: Attr<String>, t: Attr<TypeOf<S>>) {}
+                ),
+                quote!(symbol(sym_name) signature(t) t),
+                "writes attribute `t` twice",
+            ),
+            (
+                quote!(
+                    fn op<S: FuncSig, T: FuncSig>(
+                        sym_name: Attr<String>,
+                        t: Attr<TypeOf<S>>,
+                        u: Attr<TypeOf<T>>,
+                    ) {
+                    }
+                ),
+                quote!(symbol(sym_name) signature(t) signature(u)),
+                "at most one `signature(..)`",
             ),
         ];
         let failures: Vec<String> = cases

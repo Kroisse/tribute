@@ -480,9 +480,10 @@ Macro는 형식 기술을 선언과 대조해 다음을 어기면 그 원소를 
 - 형식은 원소를 하나 이상 쓰고, `symbol`과 symbol 참조 attribute로 시작할 수
   있다. Generic 형식은 `@`로 시작하지 않기 때문이다. 그 뒤, 또는 그런 원소가
   없으면 처음에는 literal이 온다. 앞에 symbol이 있으면 이 literal로 여는 선택
-  묶음도 된다. 이 literal은 `{`, `%`, `:`, `[`, `^`, `}`로 시작하지 않는다. 앞의
-  넷은 generic 형식이 operation 이름 뒤에 쓰는 것이고, 나머지는 operation 이름만
-  쓴 generic 형식 뒤의 다음 줄이 시작할 수 있는 것이다.
+  묶음이나 `(`로 시작하는 `signature`도 된다. 이 literal은 `{`, `%`, `:`, `[`,
+  `^`, `}`로 시작하지 않는다. 앞의 넷은 generic 형식이 operation 이름 뒤에 쓰는
+  것이고, 나머지는 operation 이름만 쓴 generic 형식 뒤의 다음 줄이 시작할 수 있는
+  것이다.
 - 선택 묶음은 여는 literal로 시작하고, 그 뒤에는 literal과 anchor 하나만 둔다.
   여는 literal은 keyword(값이 시작하는 `true`, `false`, `unit`, `loc`, `b`는
   제외)이거나 값, `attr_dict`, 다음 줄이 시작할 수 없는 구두점이며, 형식의 다른
@@ -527,7 +528,7 @@ literal과 `attr_dict`의 `attributes`는 식별자 전체로 읽으며, 바로 
 `signature`가 entry argument를 쓰는 region이 여럿이면 printer는 둘째 이후
 region의 entry argument에 첫 region과 같은 이름을 주고, parser는 매개변수를 모든
 region의 entry block에 되돌린다. Printer는 `IsolatedFromAbove` operation의 형식을
-쓰기 전에 값과 block 번호를 새로 매긴다.
+쓰는 동안 값과 block 번호를 새로 매기고, 쓴 뒤에는 바깥 번호를 이어 간다.
 
 #### 표기 관례
 

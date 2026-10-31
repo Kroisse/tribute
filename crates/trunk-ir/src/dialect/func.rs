@@ -1,7 +1,6 @@
 //! Arena-based func dialect.
 
 use crate::attr_kind::SymbolRef;
-use crate::attr_kind::Type;
 use crate::op_flag::{IsolatedFromAbove, Pure};
 use crate::op_interface::{
     self, CallableExit, CallableOwner, ControlFlowInterfaceError, IndirectCallLike,
@@ -41,10 +40,10 @@ pub trait TailCallLike: CallLike {
 
 #[trunk_ir::dialect]
 mod func {
-    #[asm_format]
+    #[asm_format(symbol(sym_name) signature(r#type, body) attr_dict region(body))]
     #[implements(CallableOwner, op_interface::SymbolDefinition)]
     #[flags(IsolatedFromAbove)]
-    fn func(sym_name: Attr<String>, r#type: Attr<Type>) {
+    fn func<S: FuncSig>(sym_name: Attr<String>, r#type: Attr<TypeOf<S>>) {
         #[region(body?)]
         {}
     }
@@ -346,6 +345,51 @@ impl crate::asm_format::TypeAsmFormat for FuncSig {
     }
 }
 
+impl crate::asm_format::SignatureCodec for FuncSig {
+    fn decompose(ctx: &IrContext, ty: TypeRef) -> Option<crate::asm_format::SignatureParts<'_>> {
+        let signature = Self::from_type_ref(ctx, ty)?;
+        let data = ctx.get_type(ty);
+        data.validate_param_attrs(ctx).ok()?;
+        Some(crate::asm_format::SignatureParts {
+            inputs: signature.inputs_with_attrs(ctx).collect(),
+            results: signature.results_with_attrs(ctx).collect(),
+            tail: signature_tail_attrs(ctx, data, true).next().is_some(),
+        })
+    }
+
+    fn print_tail(h: &mut crate::printer::OpPrintHelper<'_, '_>, ty: TypeRef) -> std::fmt::Result {
+        use std::fmt::Write;
+
+        let ctx = h.ctx();
+        h.write_str(", ")?;
+        h.write_attr_dict(signature_tail_attrs(ctx, ctx.get_type(ty), true))
+    }
+
+    fn parse<'a>(
+        input: &mut &'a str,
+        inputs: Vec<RawParam<'a>>,
+        results: Vec<RawParam<'a>>,
+    ) -> winnow::ModalResult<RawType<'a>> {
+        parse_signature_tail(input, "func.func_sig", inputs, results, Some(1))
+    }
+}
+
+/// The type attributes the function syntax writes after the results: all
+/// but the counts, and but the parameter attributes when those are written
+/// after their parameters.
+fn signature_tail_attrs<'a>(
+    ctx: &'a IrContext,
+    data: &'a crate::types::TypeData,
+    inline_param_attrs: bool,
+) -> impl Iterator<Item = (crate::StringRef, &'a Attribute)> {
+    data.attrs.iter().filter(move |&(key, _)| {
+        let key = ctx.str(key);
+        key != NUM_INPUTS_ATTR
+            && key != NUM_RESULTS_ATTR
+            && !(inline_param_attrs && key == crate::types::PARAM_ATTRS_ATTR)
+    })
+}
+
 /// Print a validated signature type as `name<(inputs) -> results, {attrs}>`.
 ///
 /// The type stores its inputs then its results as parameters, delimited by
@@ -398,16 +442,7 @@ pub fn print_signature_type(
         h.write_char(')')?;
     }
 
-    let mut attrs = data
-        .attrs
-        .iter()
-        .filter(|&(key, _)| {
-            let key = ctx.str(key);
-            key != NUM_INPUTS_ATTR
-                && key != NUM_RESULTS_ATTR
-                && !(inline_param_attrs && key == crate::types::PARAM_ATTRS_ATTR)
-        })
-        .peekable();
+    let mut attrs = signature_tail_attrs(ctx, data, inline_param_attrs).peekable();
     if attrs.peek().is_some() {
         h.write_str(", ")?;
         h.write_attr_dict(attrs)?;
@@ -419,25 +454,17 @@ pub fn print_signature_type(
 /// bracket into the generic form [`signature_raw_type`] builds.
 ///
 /// A list that does not start with `(` backtracks to generic parsing. The
-/// syntax owns the delimiter counts, so an attribute dictionary that writes
-/// them is rejected, as is a result count above `max_results`.
+/// attributes and the result count are checked as for an operation's
+/// `signature` element.
 pub fn parse_signature_type<'a>(
     input: &mut &'a str,
     name: &'a str,
     max_results: Option<usize>,
 ) -> winnow::ModalResult<RawType<'a>> {
-    use crate::parser::raw::{raw_attr_dict, raw_param, raw_param_list, ws};
-    use winnow::combinator::{opt, preceded};
-    use winnow::error::{ContextError, ErrMode, StrContext, StrContextValue};
+    use crate::parser::raw::{raw_param, raw_param_list, ws};
+    use winnow::error::{ContextError, ErrMode};
     use winnow::prelude::*;
 
-    let cut = |description: &'static str| {
-        let mut error = ContextError::new();
-        error.push(StrContext::Expected(StrContextValue::Description(
-            description,
-        )));
-        ErrMode::Cut(error)
-    };
     if !input.starts_with('(') {
         return Err(ErrMode::Backtrack(ContextError::new()));
     }
@@ -451,12 +478,39 @@ pub fn parse_signature_type<'a>(
         vec![raw_param.parse_next(input)?]
     };
     ws.parse_next(input)?;
-    let attrs = opt(preceded((',', ws), raw_attr_dict))
-        .parse_next(input)?
-        .unwrap_or_default();
+    let ty = parse_signature_tail(input, name, inputs, results, max_results)?;
     ws.parse_next(input)?;
     '>'.parse_next(input)?;
+    Ok(ty)
+}
 
+/// Parse the attributes `, {attrs}` that may follow a signature's results
+/// and build the generic form [`signature_raw_type`] builds.
+///
+/// The syntax owns the delimiter counts, so an attribute dictionary that
+/// writes them is rejected, as is a result count above `max_results`.
+fn parse_signature_tail<'a>(
+    input: &mut &'a str,
+    name: &'a str,
+    inputs: Vec<RawParam<'a>>,
+    results: Vec<RawParam<'a>>,
+    max_results: Option<usize>,
+) -> winnow::ModalResult<RawType<'a>> {
+    use crate::parser::raw::{raw_attr_dict, ws};
+    use winnow::combinator::{opt, preceded};
+    use winnow::error::{ContextError, ErrMode, StrContext, StrContextValue};
+    use winnow::prelude::*;
+
+    let cut = |description: &'static str| {
+        let mut error = ContextError::new();
+        error.push(StrContext::Expected(StrContextValue::Description(
+            description,
+        )));
+        ErrMode::Cut(error)
+    };
+    let attrs = opt(preceded((ws, ',', ws), raw_attr_dict))
+        .parse_next(input)?
+        .unwrap_or_default();
     if max_results.is_some_and(|max| results.len() > max) {
         return Err(cut("no more results than the signature type allows"));
     }
@@ -835,185 +889,6 @@ impl Func {
     }
 }
 
-// === Custom assembly format for func.func ===
-
-/// Print func.func with decomposed signature:
-/// `func.func @name(%arg: type, ...) -> return_type effects eff_type { body }`
-fn print_func(h: &mut crate::printer::OpPrintHelper<'_, '_>, op: crate::OpRef) -> std::fmt::Result {
-    use std::fmt::Write;
-
-    let sym_name = h.ctx().op_attrs(op).get_str("sym_name");
-
-    write!(h, "func.func")?;
-
-    // Function name
-    if let Some(name) = sym_name {
-        write!(h, " ")?;
-        h.write_symbol_text(name)?;
-    }
-
-    // Reset numbering for function body
-    h.reset_numbering();
-
-    // Extract region ref and func type info before mutable operations
-    let region = {
-        let regions = h.ctx().op_region_count(op);
-        assert!(
-            regions <= 1,
-            "print_func: expected at most one region, found {regions}",
-        );
-        h.ctx().op_region(op, 0)
-    };
-
-    // Extract the validated input/result lists from the func.func_sig type attribute.
-    let type_info = {
-        h.ctx()
-            .op_attrs(op)
-            .get_type("type")
-            .and_then(|ty| crate::dialect::func::FuncSig::from_type_ref(h.ctx(), ty))
-            .map(|func| (func.single_result(h.ctx()), func.inputs(h.ctx()).to_vec()))
-    };
-
-    if let Some(region) = region {
-        // Print entry block args as function signature
-        let entry_args: Vec<_> = {
-            let blocks = &h.ctx().region(region).blocks;
-            blocks
-                .first()
-                .map(|&b| h.ctx().block_args(b).to_vec())
-                .unwrap_or_default()
-        };
-
-        write!(h, "(")?;
-        for (i, &arg) in entry_args.iter().enumerate() {
-            if i > 0 {
-                write!(h, ", ")?;
-            }
-            let name = h.assign_value_name(arg);
-            let ty = h.ctx().value_ty(arg);
-            write!(h, "{name}: ")?;
-            h.write_type(ty)?;
-        }
-        write!(h, ")")?;
-    } else if let Some((_, ref param_tys)) = type_info {
-        // Body-less declaration: synthesize params from type
-        write!(h, "(")?;
-        for (i, &ty) in param_tys.iter().enumerate() {
-            if i > 0 {
-                write!(h, ", ")?;
-            }
-            write!(h, "%arg{i}: ")?;
-            h.write_type(ty)?;
-        }
-        write!(h, ")")?;
-    } else {
-        write!(h, "()")?;
-    }
-
-    if let Some((Some(result_ty), _)) = type_info {
-        write!(h, " -> ")?;
-        h.write_type(result_ty)?;
-    }
-
-    // Extra attributes (everything except sym_name and type, which are
-    // already encoded in the signature).  Clone to avoid borrow conflicts
-    // with the mutable write helpers.
-    let preserve_type = h.ctx().op_attrs(op).get_type("type").is_some_and(|ty| {
-        h.ctx()
-            .get_type(ty)
-            .attrs
-            .keys()
-            .any(|key| ![NUM_INPUTS_ATTR, NUM_RESULTS_ATTR].contains(&h.ctx().str(key)))
-    });
-    let extra_attrs: Vec<_> = h
-        .ctx()
-        .op_attrs(op)
-        .iter()
-        .filter(|&(k, _)| k != "sym_name" && (preserve_type || k != "type"))
-        .collect();
-    if !extra_attrs.is_empty() {
-        write!(h, " attributes {{")?;
-        for (i, (key, val)) in extra_attrs.iter().enumerate() {
-            if i > 0 {
-                write!(h, ", ")?;
-            }
-            write!(h, "{key} = ")?;
-            h.write_attribute(val)?;
-        }
-        write!(h, "}}")?;
-    }
-
-    if let Some(region) = region {
-        h.print_body(region)?;
-    }
-
-    Ok(())
-}
-
-/// Parse func.func custom format back into a RawOperation.
-fn parse_func<'a>(
-    input: &mut &'a str,
-    results: Vec<&'a str>,
-    sym_name: Option<String>,
-) -> winnow::ModalResult<crate::parser::raw::RawOperation<'a>> {
-    use crate::parser::raw::*;
-    use winnow::combinator::opt;
-    use winnow::prelude::*;
-
-    // "(%arg: type, ...)" or "()"
-    ws.parse_next(input)?;
-    let params = if input.starts_with('(') {
-        func_params.parse_next(input)?
-    } else {
-        vec![]
-    };
-
-    // "-> return_type" (optional)
-    let ret_ty = opt(return_type).parse_next(input)?;
-
-    // "attributes { key = value, ... }" (optional extra attributes)
-    let attributes = opt((ws, "attributes", ws, raw_attr_dict))
-        .parse_next(input)?
-        .map(|(_, _, _, attrs)| attrs)
-        .unwrap_or_default();
-
-    // "{ body }"
-    ws.parse_next(input)?;
-    let mut regions = Vec::new();
-    if input.starts_with('{') {
-        let region = raw_region.parse_next(input)?;
-        regions.push(region);
-    }
-
-    Ok(RawOperation {
-        results,
-        name: "func.func",
-        sym_name,
-        has_func_signature: true,
-        func_params: params,
-        return_type: ret_ty,
-        operands: vec![],
-        attributes,
-        result_types: vec![],
-        regions,
-        successors: vec![],
-    })
-}
-
-impl crate::asm_format::OpAsmFormat for Func {
-    fn print(&self, h: &mut crate::printer::OpPrintHelper<'_, '_>) -> std::fmt::Result {
-        print_func(h, self.op_ref())
-    }
-
-    fn parse<'a>(
-        input: &mut &'a str,
-        results: Vec<&'a str>,
-        sym_name: Option<String>,
-    ) -> winnow::ModalResult<crate::parser::raw::RawOperation<'a>> {
-        parse_func(input, results, sym_name)
-    }
-}
-
 impl crate::op_interface::CallableOwner for Func {
     fn callable_signature(
         &self,
@@ -1120,7 +995,7 @@ mod tests {
     #[test]
     fn call_conv_is_a_signature_attribute_that_round_trips() {
         let input = r#"core.module @test {
-  func.func @transfer(%callee: func.func_sig<(core.i32) -> (), {call_conv = "tail"}>, %value: core.i32) attributes {type = func.func_sig<(func.func_sig<(core.i32) -> (), {call_conv = "tail"}>, core.i32) -> (), {call_conv = "tail"}>} {
+  func.func @transfer(%callee: func.func_sig<(core.i32) -> (), {call_conv = "tail"}>, %value: core.i32) -> (), {call_conv = "tail"} {
     func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> (), {call_conv = "tail"}>}
   }
 }"#;
@@ -1354,7 +1229,7 @@ mod result_list_tests {
         }
         for input in [
             "core.module @m { func.func {sym_name = \"f\", type = func.func_sig<(core.i32) -> (), {tag = @kept, nested = [core.i64]}>} }",
-            "core.module @m { func.func @f(%x: core.i32) attributes {type = func.func_sig<(core.i32) -> (), {tag = @kept, nested = [core.i64]}>} { func.return } }",
+            "core.module @m { func.func @f(%x: core.i32) -> (), {tag = @kept, nested = [core.i64]} { func.return } }",
         ] {
             let mut ctx = IrContext::new();
             let op = parse_module(&mut ctx, input).unwrap();
@@ -1564,6 +1439,11 @@ mod normal_validation_regressions {
             "core.module @m { func.func @f() attributes {type = 1} }",
         )
         .unwrap_err();
-        assert!(error.message.contains("type attribute"), "{error}");
+        assert!(
+            error
+                .message
+                .contains("without the attributes the format writes"),
+            "{error}"
+        );
     }
 }

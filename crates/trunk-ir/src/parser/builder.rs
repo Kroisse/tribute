@@ -418,8 +418,7 @@ impl<'a> ArenaIrBuilder<'a> {
         }
 
         // Handle func-style signature → func.func_sig type
-        let has_func_signature =
-            raw.has_func_signature || raw.return_type.is_some() || !raw.func_params.is_empty();
+        let has_func_signature = raw.has_func_signature || raw.return_type.is_some();
         if has_func_signature {
             let results = match raw.return_type.as_ref() {
                 Some(t) => vec![self.build_type(t)?],
@@ -509,11 +508,11 @@ impl<'a> ArenaIrBuilder<'a> {
             })
             .collect::<Result<_, _>>()?;
 
-        // Build regions (inject func_params as entry block args for the first region)
+        // Build regions, giving func_params to the entry blocks they belong to
         let is_module = name == crate::dialect::core::Module::NAME;
         let mut regions = Vec::with_capacity(raw.regions.len());
         for (i, r) in raw.regions.iter().enumerate() {
-            let extra_args = if i == 0 && !raw.func_params.is_empty() {
+            let extra_args = if raw.func_param_regions.contains(&i) {
                 &raw.func_params[..]
             } else {
                 &[]

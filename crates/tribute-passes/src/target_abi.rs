@@ -2864,7 +2864,7 @@ mod tests {
 
         let printed = print_module(&ctx, module.op());
         assert!(
-            printed.contains("func.func @defined(%0: core.i32, %1: !Env, %2: core.i32)")
+            printed.contains("func.func @defined(%0: core.i32 {tribute.ownership = \"consumed\"}, %1: !Env {tribute.ownership = \"consumed\"}, %2: core.i32 {tribute.ownership = \"consumed\"}) -> (), {call_conv = \"tail\"}")
                 && printed.contains("func.constant {func_ref = @defined} : func.func_sig<(core.i32 {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}) -> (), {call_conv = \"tail\"}>"),
             "{printed}"
         );

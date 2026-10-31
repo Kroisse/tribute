@@ -12,9 +12,9 @@ pub mod declarative;
 use std::fmt;
 
 use crate::ops::{DialectOp, DialectType};
-use crate::parser::raw::{RawOperation, RawType};
+use crate::parser::raw::{RawOperation, RawParam, RawType};
 use crate::printer::{OpPrintHelper, TypePrintHelper};
-use crate::{IrContext, OpRef, TypeRef};
+use crate::{AttributeMap, IrContext, OpRef, TypeRef};
 
 // =============================================================================
 // TypeAliasHint — alias name suggestions for the printer
@@ -103,6 +103,74 @@ pub struct OpAsmHooks {
         results: Vec<&'a str>,
         sym_name: Option<String>,
     ) -> winnow::ModalResult<RawOperation<'a>>,
+}
+
+// =============================================================================
+// SignatureCodec — the function form of a signature type
+// =============================================================================
+
+/// The parameters a [`SignatureCodec`] decomposes a signature type into.
+#[derive(Debug)]
+pub struct SignatureParts<'a> {
+    /// Each input with its own attributes.
+    pub inputs: Vec<(TypeRef, &'a AttributeMap)>,
+    /// Each result with its own attributes.
+    pub results: Vec<(TypeRef, &'a AttributeMap)>,
+    /// Whether the codec writes a tail after the results.
+    pub tail: bool,
+}
+
+/// Conversion between a signature type and the function form
+/// `(%a: A, %b: B) -> R` that the `signature` format element writes
+/// (`new-plans/ir.md`, "Signature codec").
+///
+/// The dialect that defines the signature type implements it on the type's
+/// wrapper. A format names the codec through the bound of the type variable
+/// its `signature` element writes, so trunk-ir knows no signature type.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is the bound of a `signature` format element but does not implement `SignatureCodec`",
+    label = "`signature(..)` requires this implementation"
+)]
+pub trait SignatureCodec: DialectType {
+    /// The inputs and results of `ty`, or `None` when the function form
+    /// cannot spell it without loss.
+    fn decompose(ctx: &IrContext, ty: TypeRef) -> Option<SignatureParts<'_>>;
+
+    /// Print the tail after the results. Called only when
+    /// [`decompose`](Self::decompose) reports one.
+    fn print_tail(h: &mut OpPrintHelper<'_, '_>, ty: TypeRef) -> fmt::Result;
+
+    /// Parse the tail after the results, if any, and build the type's generic
+    /// raw form from the parsed inputs and results. A result count the type
+    /// does not allow is an error.
+    fn parse<'a>(
+        input: &mut &'a str,
+        inputs: Vec<RawParam<'a>>,
+        results: Vec<RawParam<'a>>,
+    ) -> winnow::ModalResult<RawType<'a>>;
+}
+
+/// A [`SignatureCodec`]'s hooks, as a `signature` format element stores them.
+#[derive(Clone, Copy, Debug)]
+pub struct SignatureCodecHooks {
+    pub decompose: for<'c> fn(&'c IrContext, TypeRef) -> Option<SignatureParts<'c>>,
+    pub print_tail: fn(&mut OpPrintHelper<'_, '_>, TypeRef) -> fmt::Result,
+    pub parse: for<'a> fn(
+        &mut &'a str,
+        Vec<RawParam<'a>>,
+        Vec<RawParam<'a>>,
+    ) -> winnow::ModalResult<RawType<'a>>,
+}
+
+impl SignatureCodecHooks {
+    /// The hooks of `T`'s codec.
+    pub const fn of<T: SignatureCodec>() -> Self {
+        Self {
+            decompose: T::decompose,
+            print_tail: T::print_tail,
+            parse: T::parse,
+        }
+    }
 }
 
 // =============================================================================

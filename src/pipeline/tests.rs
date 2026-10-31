@@ -813,7 +813,7 @@ fn physical_tail_chain_module(done_call_conv: &str, reference_call_conv: &str) -
     func.unreachable
   }}
 
-  func.func @done(%value: core.i32) attributes {{type = func.func_sig<(core.i32) -> (){done_call_conv}>}} {{
+  func.func @done(%value: core.i32) -> (){done_call_conv} {{
     %expected = arith.const {{value = 3}} : core.i32
     %ok = arith.cmpi %value, %expected {{predicate = "eq"}} : core.i1
     scf.if %ok {{
@@ -825,14 +825,14 @@ fn physical_tail_chain_module(done_call_conv: &str, reference_call_conv: &str) -
     func.return
   }}
 
-  func.func @step(%value: core.i32) attributes {{type = func.func_sig<(core.i32) -> (), {{call_conv = "tail"}}>}} {{
+  func.func @step(%value: core.i32) -> (), {{call_conv = "tail"}} {{
     %one = arith.const {{value = 1}} : core.i32
     %next = arith.addi %value, %one : core.i32
     %done = func.constant {{func_ref = @done}} : func.func_sig<(core.i32) -> (){reference_call_conv}>
     func.tail_call_indirect %done, %next {{signature = func.func_sig<(core.i32) -> (), {{call_conv = "tail"}}>}}
   }}
 
-  func.func @start(%value: core.i32) attributes {{type = func.func_sig<(core.i32) -> (), {{call_conv = "tail"}}>}} {{
+  func.func @start(%value: core.i32) -> (), {{call_conv = "tail"}} {{
     %one = arith.const {{value = 1}} : core.i32
     %next = arith.addi %value, %one : core.i32
     func.tail_call %next {{callee = @step}}

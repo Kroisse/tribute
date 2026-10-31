@@ -602,10 +602,10 @@ mod tests {
     fn physical_module_has_no_violations() {
         let violations = kinds(
             r#"core.module @test {
-  func.func @target(%value: core.i32) attributes {type = func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>, tribute.types = {"std::String" = core.i32}} {
+  func.func @target(%value: core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} attributes {tribute.types = {"std::String" = core.i32}} {
     func.return
   }
-  func.func @caller(%value: core.i32) attributes {type = func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
+  func.func @caller(%value: core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
     %reference = func.constant {func_ref = @target} : func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>
     func.tail_call_indirect %reference, %value {signature = func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>}
   }
@@ -764,7 +764,7 @@ mod tests {
   func.func @never() -> core.never {
     func.unreachable
   }
-  func.func @target(%env: core.ptr, %value: core.i32) attributes {type = func.func_sig<(core.ptr, core.i32) -> (), {call_conv = "tail"}>} {
+  func.func @target(%env: core.ptr, %value: core.i32) -> (), {call_conv = "tail"} {
     func.return
   }
   func.func @caller(%value: core.i32) {
@@ -843,8 +843,9 @@ mod tests {
     fn reference_module(definition: &str, reference: &str) -> String {
         format!(
             r#"core.module @test {{
-  func.func @target(%value: core.i32) attributes {{type = {definition}}} {{
-    func.return
+  func.func {{sym_name = "target", type = {definition}}} {{
+    ^bb0(%value: core.i32):
+      func.return
   }}
   func.func @caller() {{
     %reference = func.constant {{func_ref = @target}} : {reference}
@@ -874,11 +875,7 @@ mod tests {
                 "",
                 "%zero = arith.const {value = 0} : core.i32\n    func.return %zero",
             ),
-            entry(
-                "()",
-                " attributes {type = func.func_sig<() -> (), {call_conv = \"tail\"}>}",
-                "func.return",
-            ),
+            entry("() -> (), {call_conv = \"tail\"}", "", "func.return"),
         ] {
             assert_eq!(
                 kinds(&malformed),
@@ -1097,7 +1094,7 @@ mod tests {
         assert_eq!(
             kinds(
                 r#"core.module @test {
-  func.func @run(%value: tribute_rt.anyref) attributes {type = func.func_sig<(tribute_rt.anyref {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
+  func.func @run(%value: tribute_rt.anyref {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
     func.unreachable
   }
 }"#
