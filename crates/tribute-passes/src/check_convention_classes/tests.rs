@@ -65,6 +65,32 @@ fn an_instance_has_its_classes_in_its_transfers_and_convention() {
     );
 }
 
+/// An instance of an upper bound calls through the bound, and a lambda over
+/// its class variable has a body for each class up to it.
+#[test]
+fn an_instance_of_an_upper_bound_has_a_body_per_class_up_to_it() {
+    let input = |bodies: &str| {
+        format!(
+            r#"core.module @m {{
+  !cb = tribute_control.func_sig<(core.i32) -> core.i32, {{ability_row = {{tail = 0}}}}>
+  tribute_cps.func @"wrap$9e"['a0](%x: core.i32) -> core.i32 row(| 'a0) convention(evidence_direct) {{
+    %f = tribute_cps.lambda(%y: core.i32) -> core.i32 row(| 'a0) captures [] entries {{
+{bodies}
+    }}
+    %r = tribute_cps.call_indirect %f, %x {{convention = "evidence_direct"}} : core.i32
+    tribute_control.return %r
+  }}
+}}"#
+        )
+    };
+    let body = |convention: &str| {
+        format!("      {convention} {{\n        tribute_control.return %y\n      }}")
+    };
+    assert_eq!(rules(&input(&body("direct"))), ["lambda"]);
+    let both = format!("{}\n{}", body("direct"), body("evidence_direct"));
+    assert_eq!(rules(&input(&both)), [""; 0]);
+}
+
 #[test]
 fn a_suffix_names_one_class_per_class_variable() {
     // The reference names the instance, whose name claims two classes.
