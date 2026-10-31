@@ -505,14 +505,14 @@ mod tests {
     use trunk_ir::{Attribute, AttributeMap};
 
     const TAIL_TRANSFERS: &str = r#"core.module @test {
-  func.func @direct_target(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> (), {call_conv = "tail"}>} {
+  func.func @direct_target(%value: core.i32) -> ({call_conv = "tail"}) {
     func.return
   }
-  func.func @direct_caller(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> (), {call_conv = "tail"}>} {
+  func.func @direct_caller(%value: core.i32) -> ({call_conv = "tail"}) {
     func.tail_call %value {callee = @direct_target}
   }
-  func.func @indirect_caller(%callee: core.ptr, %value: core.i32) attributes {type = func.func_sig<(core.ptr, core.i32) -> (), {call_conv = "tail"}>} {
-    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> (), {call_conv = "tail"}>}
+  func.func @indirect_caller(%callee: core.ptr, %value: core.i32) -> ({call_conv = "tail"}) {
+    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> ({call_conv = "tail"})>}
   }
 }"#;
 
@@ -804,8 +804,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !evidence = core.array<core.i32>
-  func.func @caller(%callee: core.ptr, %evidence: !evidence) attributes {type = func.func_sig<(core.ptr, !evidence) -> (), {call_conv = "tail"}>} {
-    func.tail_call_indirect %callee, %evidence {signature = func.func_sig<(!evidence) -> (), {call_conv = "tail"}>}
+  func.func @caller(%callee: core.ptr, %evidence: !evidence) -> ({call_conv = "tail"}) {
+    func.tail_call_indirect %callee, %evidence {signature = func.func_sig<(!evidence) -> ({call_conv = "tail"})>}
   }
 }"#,
         );
@@ -821,8 +821,7 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         assert!(
             printed.contains("clif.return_call_indirect")
-                && printed
-                    .contains("sig = clif.func_sig<(core.ptr) -> (), {call_conv = \"tail\"}>"),
+                && printed.contains("sig = clif.func_sig<(core.ptr) -> ({call_conv = \"tail\"})>"),
             "{printed}"
         );
         assert!(
@@ -925,8 +924,8 @@ mod tests {
     fn value_tail_call_indirect_returns_the_callers_result() {
         let output = run_pass(
             r#"core.module @test {
-  func.func @caller(%callee: core.ptr, %value: core.i32) -> core.i32 attributes {type = func.func_sig<(core.ptr, core.i32) -> core.i32, {call_conv = "tail"}>} {
-    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> core.i32, {call_conv = "tail"}>}
+  func.func @caller(%callee: core.ptr, %value: core.i32) -> (core.i32, {call_conv = "tail"}) {
+    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> (core.i32, {call_conv = "tail"})>}
   }
 }"#,
         );
@@ -982,7 +981,7 @@ mod tests {
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
-  func.func @target(%value: core.i32) attributes {{type = func.func_sig<(core.i32) -> (), {{call_conv = "tail"}}>}} {{
+  func.func @target(%value: core.i32) -> ({{call_conv = "tail"}}) {{
     func.return
   }}
   func.func @take() {{
@@ -995,7 +994,7 @@ mod tests {
             super::lower(&mut ctx, module, TypeConverter::new()).map(|_| ())
         };
 
-        lower_reference("func.func_sig<(core.i32) -> (), {call_conv = \"tail\"}>")
+        lower_reference("func.func_sig<(core.i32) -> ({call_conv = \"tail\"})>")
             .expect("a reference with the target convention lowers");
         let error = lower_reference("func.func_sig<(core.i32) -> ()>")
             .expect_err("a platform reference to a tail function must not be erased");
@@ -1009,11 +1008,11 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   core.module @inner {
-    func.func @helper(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> (), {call_conv = "tail"}>} {
+    func.func @helper(%value: core.i32) -> ({call_conv = "tail"}) {
       func.return
     }
     func.func @take() {
-      %reference = func.constant {func_ref = @helper} : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
+      %reference = func.constant {func_ref = @helper} : func.func_sig<(core.i32) -> ({call_conv = "tail"})>
       func.return
     }
   }
@@ -1040,7 +1039,7 @@ mod tests {
         let unknown = lower(
             r#"core.module @test {
   func.func @take() {
-    %reference = func.constant {func_ref = @missing} : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
+    %reference = func.constant {func_ref = @missing} : func.func_sig<(core.i32) -> ({call_conv = "tail"})>
     func.return
   }
 }"#,
@@ -1050,14 +1049,14 @@ mod tests {
         let duplicated = lower(
             r#"core.module @test {
   core.module @left {
-    func.func @helper(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> (), {call_conv = "tail"}>} {
+    func.func @helper(%value: core.i32) -> ({call_conv = "tail"}) {
       func.return
     }
-    func.func @helper(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> (), {call_conv = "tail"}>} {
+    func.func @helper(%value: core.i32) -> ({call_conv = "tail"}) {
       func.return
     }
     func.func @take() {
-      %reference = func.constant {func_ref = @left::@helper} : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
+      %reference = func.constant {func_ref = @left::@helper} : func.func_sig<(core.i32) -> ({call_conv = "tail"})>
       func.return
     }
   }
@@ -1067,11 +1066,11 @@ mod tests {
 
         let different_inputs = lower(
             r#"core.module @test {
-  func.func @target(%env: core.ptr, %value: core.i32) attributes {type = func.func_sig<(core.ptr, core.i32) -> (), {call_conv = "tail"}>} {
+  func.func @target(%env: core.ptr, %value: core.i32) -> ({call_conv = "tail"}) {
     func.return
   }
   func.func @take() {
-    %reference = func.constant {func_ref = @target} : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
+    %reference = func.constant {func_ref = @target} : func.func_sig<(core.i32) -> ({call_conv = "tail"})>
     func.return
   }
 }"#,

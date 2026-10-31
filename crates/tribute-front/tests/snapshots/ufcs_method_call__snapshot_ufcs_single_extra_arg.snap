@@ -8,11 +8,11 @@ core.module @test {
   !"pkg::Triple" = adt.struct<"pkg::Triple"(x: core.i32, y: core.i32, z: core.i32)>
   !"pkg::Triple_1" = adt.typeref<{name = "pkg::Triple"}>
   !"pkg::Pair_1" = adt.typeref<{name = "pkg::Pair"}>
-  !t0 = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>
-  !t1 = tribute_control.func_sig<(!"pkg::Triple_1", !t0) -> !"pkg::Triple_1", {ability_row = {tail = 0}}>
+  !t0 = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {tail = 0}})>
+  !t1 = tribute_control.func_sig<(!"pkg::Triple_1", !t0) -> (!"pkg::Triple_1", {ability_row = {tail = 0}})>
   !t2 = tribute_control.func_sig<(!"pkg::Triple_1", core.i32) -> !"pkg::Triple_1">
   !t3 = tribute_control.func_sig<(!"pkg::Triple_1") -> core.i32>
-  !t4 = tribute_control.func_sig<(!"pkg::Pair_1", !t0) -> !"pkg::Pair_1", {ability_row = {tail = 0}}>
+  !t4 = tribute_control.func_sig<(!"pkg::Pair_1", !t0) -> (!"pkg::Pair_1", {ability_row = {tail = 0}})>
   !t5 = tribute_control.func_sig<(!"pkg::Pair_1", core.i32) -> !"pkg::Pair_1">
   !t6 = tribute_control.func_sig<(!"pkg::Pair_1") -> core.i32>
 

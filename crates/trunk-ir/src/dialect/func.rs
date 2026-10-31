@@ -1,7 +1,6 @@
 //! Arena-based func dialect.
 
 use crate::attr_kind::SymbolRef;
-use crate::attr_kind::Type;
 use crate::op_flag::{IsolatedFromAbove, Pure};
 use crate::op_interface::{
     self, CallableExit, CallableOwner, ControlFlowInterfaceError, IndirectCallLike,
@@ -41,10 +40,10 @@ pub trait TailCallLike: CallLike {
 
 #[trunk_ir::dialect]
 mod func {
-    #[asm_format]
+    #[asm_format(symbol(sym_name) signature(r#type, body) attr_dict region(body))]
     #[implements(CallableOwner, op_interface::SymbolDefinition)]
     #[flags(IsolatedFromAbove)]
-    fn func(sym_name: Attr<String>, r#type: Attr<Type>) {
+    fn func<S: FuncSig>(sym_name: Attr<String>, r#type: Attr<TypeOf<S>>) {
         #[region(body?)]
         {}
     }
@@ -346,90 +345,133 @@ impl crate::asm_format::TypeAsmFormat for FuncSig {
     }
 }
 
-/// Print a validated signature type as `name<(inputs) -> results, {attrs}>`.
+impl crate::asm_format::SignatureCodec for FuncSig {
+    fn decompose(ctx: &IrContext, ty: TypeRef) -> Option<crate::asm_format::SignatureParts<'_>> {
+        let signature = Self::from_type_ref(ctx, ty)?;
+        let data = ctx.get_type(ty);
+        data.validate_param_attrs(ctx).ok()?;
+        Some(crate::asm_format::SignatureParts {
+            inputs: signature.inputs_with_attrs(ctx).collect(),
+            results: signature.results_with_attrs(ctx).collect(),
+            tail: signature_tail_attrs(ctx, data, true).collect(),
+        })
+    }
+
+    fn build<'a>(
+        inputs: Vec<RawParam<'a>>,
+        results: Vec<RawParam<'a>>,
+        tail: RawAttrDict<'a>,
+    ) -> winnow::ModalResult<RawType<'a>> {
+        signature_from_parts("func.func_sig", inputs, results, tail, Some(1))
+    }
+}
+
+/// The type attributes the function syntax writes last in the result list:
+/// all but the counts, and but the parameter attributes when those are
+/// written after their parameters.
+fn signature_tail_attrs<'a>(
+    ctx: &'a IrContext,
+    data: &'a crate::types::TypeData,
+    inline_param_attrs: bool,
+) -> impl Iterator<Item = (crate::StringRef, &'a Attribute)> {
+    data.attrs.iter().filter(move |&(key, _)| {
+        let key = ctx.str(key);
+        key != NUM_INPUTS_ATTR
+            && key != NUM_RESULTS_ATTR
+            && !(inline_param_attrs && key == crate::types::PARAM_ATTRS_ATTR)
+    })
+}
+
+/// Print a validated signature type as `name<(inputs) -> results>`, the
+/// remaining type attributes last in a parenthesized result list.
 ///
 /// The type stores its inputs then its results as parameters, delimited by
 /// [`NUM_INPUTS_ATTR`] and [`NUM_RESULTS_ATTR`], which the syntax implies and
-/// does not print. One result is written bare, any other count in
-/// parentheses. Parameter attributes follow their parameter. Signature types
-/// of other dialects that share this layout reuse it with
+/// does not print. Parameter attributes follow their parameter. Signature
+/// types of other dialects that share this layout reuse it with
 /// [`parse_signature_type`] in their
 /// [`TypeAsmFormat`](crate::asm_format::TypeAsmFormat).
 pub fn print_signature_type(
     h: &mut crate::printer::TypePrintHelper<'_, '_>,
     ty: TypeRef,
 ) -> std::fmt::Result {
+    use crate::asm_format::{write_signature_param, write_signature_results};
     use std::fmt::Write;
 
     let ctx = h.ctx();
     let data = ctx.get_type(ty);
     let num_inputs = read_count(ctx, &data.attrs, NUM_INPUTS_ATTR)
         .expect("a validated signature type stores its input count") as usize;
-    let (inputs, results) = data.params.split_at(num_inputs);
     let inline_param_attrs = data.validate_param_attrs(ctx).is_ok();
-    let write_param = |h: &mut crate::printer::TypePrintHelper<'_, '_>, index: usize| {
-        h.write_type(data.params[index])?;
-        let attrs = data.param_attrs(ctx, index);
-        if inline_param_attrs && !attrs.is_empty() {
-            h.write_char(' ')?;
-            h.write_attr_dict(attrs.iter())?;
-        }
-        Ok(())
-    };
+    let no_attrs = AttributeMap::new();
+    let params: Vec<(TypeRef, &AttributeMap)> = data
+        .params
+        .iter()
+        .enumerate()
+        .map(|(index, &param)| {
+            let attrs = if inline_param_attrs {
+                data.param_attrs(ctx, index)
+            } else {
+                &no_attrs
+            };
+            (param, attrs)
+        })
+        .collect();
+    let (inputs, results) = params.split_at(num_inputs);
+    let tail: Vec<_> = signature_tail_attrs(ctx, data, inline_param_attrs).collect();
 
     write!(h, "{}<(", data.name.display(ctx))?;
-    for index in 0..inputs.len() {
+    for (index, &(input, attrs)) in inputs.iter().enumerate() {
         if index > 0 {
             h.write_str(", ")?;
         }
-        write_param(h, index)?;
+        write_signature_param(h, input, attrs)?;
     }
     h.write_str(") -> ")?;
-    if results.len() == 1 {
-        write_param(h, num_inputs)?;
-    } else {
-        h.write_char('(')?;
-        for index in 0..results.len() {
-            if index > 0 {
-                h.write_str(", ")?;
-            }
-            write_param(h, num_inputs + index)?;
-        }
-        h.write_char(')')?;
-    }
-
-    let mut attrs = data
-        .attrs
-        .iter()
-        .filter(|&(key, _)| {
-            let key = ctx.str(key);
-            key != NUM_INPUTS_ATTR
-                && key != NUM_RESULTS_ATTR
-                && !(inline_param_attrs && key == crate::types::PARAM_ATTRS_ATTR)
-        })
-        .peekable();
-    if attrs.peek().is_some() {
-        h.write_str(", ")?;
-        h.write_attr_dict(attrs)?;
-    }
+    write_signature_results(h, results, &tail)?;
     h.write_char('>')
 }
 
-/// Parse the rest of `name<(inputs) -> results, {attrs}>` after its opening
-/// bracket into the generic form [`signature_raw_type`] builds.
+/// Parse the rest of `name<(inputs) -> results>` after its opening bracket
+/// into the generic form [`signature_raw_type`] builds.
 ///
 /// A list that does not start with `(` backtracks to generic parsing. The
-/// syntax owns the delimiter counts, so an attribute dictionary that writes
-/// them is rejected, as is a result count above `max_results`.
+/// type attributes and the result count are checked as for an operation's
+/// `signature` element.
 pub fn parse_signature_type<'a>(
     input: &mut &'a str,
     name: &'a str,
     max_results: Option<usize>,
 ) -> winnow::ModalResult<RawType<'a>> {
-    use crate::parser::raw::{raw_attr_dict, raw_param, raw_param_list, ws};
-    use winnow::combinator::{opt, preceded};
-    use winnow::error::{ContextError, ErrMode, StrContext, StrContextValue};
+    use crate::parser::raw::{raw_param_list, ws};
+    use winnow::error::{ContextError, ErrMode};
     use winnow::prelude::*;
+
+    if !input.starts_with('(') {
+        return Err(ErrMode::Backtrack(ContextError::new()));
+    }
+    let inputs = raw_param_list.parse_next(input)?;
+    ws.parse_next(input)?;
+    "->".parse_next(input)?;
+    ws.parse_next(input)?;
+    let (results, tail) = crate::asm_format::parse_signature_results(input)?;
+    ws.parse_next(input)?;
+    '>'.parse_next(input)?;
+    signature_from_parts(name, inputs, results, tail, max_results)
+}
+
+/// Build a signature type's generic form from its parsed parts.
+///
+/// The syntax owns the delimiter counts, so type attributes that write them
+/// are rejected, as is a result count above `max_results`.
+fn signature_from_parts<'a>(
+    name: &'a str,
+    inputs: Vec<RawParam<'a>>,
+    results: Vec<RawParam<'a>>,
+    attrs: RawAttrDict<'a>,
+    max_results: Option<usize>,
+) -> winnow::ModalResult<RawType<'a>> {
+    use winnow::error::{ContextError, ErrMode, StrContext, StrContextValue};
 
     let cut = |description: &'static str| {
         let mut error = ContextError::new();
@@ -438,25 +480,6 @@ pub fn parse_signature_type<'a>(
         )));
         ErrMode::Cut(error)
     };
-    if !input.starts_with('(') {
-        return Err(ErrMode::Backtrack(ContextError::new()));
-    }
-    let inputs = raw_param_list.parse_next(input)?;
-    ws.parse_next(input)?;
-    "->".parse_next(input)?;
-    ws.parse_next(input)?;
-    let results = if input.starts_with('(') {
-        raw_param_list.parse_next(input)?
-    } else {
-        vec![raw_param.parse_next(input)?]
-    };
-    ws.parse_next(input)?;
-    let attrs = opt(preceded((',', ws), raw_attr_dict))
-        .parse_next(input)?
-        .unwrap_or_default();
-    ws.parse_next(input)?;
-    '>'.parse_next(input)?;
-
     if max_results.is_some_and(|max| results.len() > max) {
         return Err(cut("no more results than the signature type allows"));
     }
@@ -835,185 +858,6 @@ impl Func {
     }
 }
 
-// === Custom assembly format for func.func ===
-
-/// Print func.func with decomposed signature:
-/// `func.func @name(%arg: type, ...) -> return_type effects eff_type { body }`
-fn print_func(h: &mut crate::printer::OpPrintHelper<'_, '_>, op: crate::OpRef) -> std::fmt::Result {
-    use std::fmt::Write;
-
-    let sym_name = h.ctx().op_attrs(op).get_str("sym_name");
-
-    write!(h, "func.func")?;
-
-    // Function name
-    if let Some(name) = sym_name {
-        write!(h, " ")?;
-        h.write_symbol_text(name)?;
-    }
-
-    // Reset numbering for function body
-    h.reset_numbering();
-
-    // Extract region ref and func type info before mutable operations
-    let region = {
-        let regions = h.ctx().op_region_count(op);
-        assert!(
-            regions <= 1,
-            "print_func: expected at most one region, found {regions}",
-        );
-        h.ctx().op_region(op, 0)
-    };
-
-    // Extract the validated input/result lists from the func.func_sig type attribute.
-    let type_info = {
-        h.ctx()
-            .op_attrs(op)
-            .get_type("type")
-            .and_then(|ty| crate::dialect::func::FuncSig::from_type_ref(h.ctx(), ty))
-            .map(|func| (func.single_result(h.ctx()), func.inputs(h.ctx()).to_vec()))
-    };
-
-    if let Some(region) = region {
-        // Print entry block args as function signature
-        let entry_args: Vec<_> = {
-            let blocks = &h.ctx().region(region).blocks;
-            blocks
-                .first()
-                .map(|&b| h.ctx().block_args(b).to_vec())
-                .unwrap_or_default()
-        };
-
-        write!(h, "(")?;
-        for (i, &arg) in entry_args.iter().enumerate() {
-            if i > 0 {
-                write!(h, ", ")?;
-            }
-            let name = h.assign_value_name(arg);
-            let ty = h.ctx().value_ty(arg);
-            write!(h, "{name}: ")?;
-            h.write_type(ty)?;
-        }
-        write!(h, ")")?;
-    } else if let Some((_, ref param_tys)) = type_info {
-        // Body-less declaration: synthesize params from type
-        write!(h, "(")?;
-        for (i, &ty) in param_tys.iter().enumerate() {
-            if i > 0 {
-                write!(h, ", ")?;
-            }
-            write!(h, "%arg{i}: ")?;
-            h.write_type(ty)?;
-        }
-        write!(h, ")")?;
-    } else {
-        write!(h, "()")?;
-    }
-
-    if let Some((Some(result_ty), _)) = type_info {
-        write!(h, " -> ")?;
-        h.write_type(result_ty)?;
-    }
-
-    // Extra attributes (everything except sym_name and type, which are
-    // already encoded in the signature).  Clone to avoid borrow conflicts
-    // with the mutable write helpers.
-    let preserve_type = h.ctx().op_attrs(op).get_type("type").is_some_and(|ty| {
-        h.ctx()
-            .get_type(ty)
-            .attrs
-            .keys()
-            .any(|key| ![NUM_INPUTS_ATTR, NUM_RESULTS_ATTR].contains(&h.ctx().str(key)))
-    });
-    let extra_attrs: Vec<_> = h
-        .ctx()
-        .op_attrs(op)
-        .iter()
-        .filter(|&(k, _)| k != "sym_name" && (preserve_type || k != "type"))
-        .collect();
-    if !extra_attrs.is_empty() {
-        write!(h, " attributes {{")?;
-        for (i, (key, val)) in extra_attrs.iter().enumerate() {
-            if i > 0 {
-                write!(h, ", ")?;
-            }
-            write!(h, "{key} = ")?;
-            h.write_attribute(val)?;
-        }
-        write!(h, "}}")?;
-    }
-
-    if let Some(region) = region {
-        h.print_body(region)?;
-    }
-
-    Ok(())
-}
-
-/// Parse func.func custom format back into a RawOperation.
-fn parse_func<'a>(
-    input: &mut &'a str,
-    results: Vec<&'a str>,
-    sym_name: Option<String>,
-) -> winnow::ModalResult<crate::parser::raw::RawOperation<'a>> {
-    use crate::parser::raw::*;
-    use winnow::combinator::opt;
-    use winnow::prelude::*;
-
-    // "(%arg: type, ...)" or "()"
-    ws.parse_next(input)?;
-    let params = if input.starts_with('(') {
-        func_params.parse_next(input)?
-    } else {
-        vec![]
-    };
-
-    // "-> return_type" (optional)
-    let ret_ty = opt(return_type).parse_next(input)?;
-
-    // "attributes { key = value, ... }" (optional extra attributes)
-    let attributes = opt((ws, "attributes", ws, raw_attr_dict))
-        .parse_next(input)?
-        .map(|(_, _, _, attrs)| attrs)
-        .unwrap_or_default();
-
-    // "{ body }"
-    ws.parse_next(input)?;
-    let mut regions = Vec::new();
-    if input.starts_with('{') {
-        let region = raw_region.parse_next(input)?;
-        regions.push(region);
-    }
-
-    Ok(RawOperation {
-        results,
-        name: "func.func",
-        sym_name,
-        has_func_signature: true,
-        func_params: params,
-        return_type: ret_ty,
-        operands: vec![],
-        attributes,
-        result_types: vec![],
-        regions,
-        successors: vec![],
-    })
-}
-
-impl crate::asm_format::OpAsmFormat for Func {
-    fn print(&self, h: &mut crate::printer::OpPrintHelper<'_, '_>) -> std::fmt::Result {
-        print_func(h, self.op_ref())
-    }
-
-    fn parse<'a>(
-        input: &mut &'a str,
-        results: Vec<&'a str>,
-        sym_name: Option<String>,
-    ) -> winnow::ModalResult<crate::parser::raw::RawOperation<'a>> {
-        parse_func(input, results, sym_name)
-    }
-}
-
 impl crate::op_interface::CallableOwner for Func {
     fn callable_signature(
         &self,
@@ -1063,7 +907,7 @@ mod tests {
     #[test]
     fn signature_syntax_parses_into_the_generic_form() {
         let raw = parse_raw_signature(
-            "func.func_sig<(core.i32 {a = @x}, core.ptr) -> core.i64 {b = @y}, {call_conv = \"tail\"}>",
+            "func.func_sig<(core.i32 {a = @x}, core.ptr) -> (core.i64 {b = @y}, {call_conv = \"tail\"})>",
         );
         let RawType::Concrete {
             name,
@@ -1120,8 +964,8 @@ mod tests {
     #[test]
     fn call_conv_is_a_signature_attribute_that_round_trips() {
         let input = r#"core.module @test {
-  func.func @transfer(%callee: func.func_sig<(core.i32) -> (), {call_conv = "tail"}>, %value: core.i32) attributes {type = func.func_sig<(func.func_sig<(core.i32) -> (), {call_conv = "tail"}>, core.i32) -> (), {call_conv = "tail"}>} {
-    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> (), {call_conv = "tail"}>}
+  func.func @transfer(%callee: func.func_sig<(core.i32) -> ({call_conv = "tail"})>, %value: core.i32) -> ({call_conv = "tail"}) {
+    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> ({call_conv = "tail"})>}
   }
 }"#;
         let mut ctx = crate::IrContext::new();
@@ -1353,8 +1197,8 @@ mod result_list_tests {
             }
         }
         for input in [
-            "core.module @m { func.func {sym_name = \"f\", type = func.func_sig<(core.i32) -> (), {tag = @kept, nested = [core.i64]}>} }",
-            "core.module @m { func.func @f(%x: core.i32) attributes {type = func.func_sig<(core.i32) -> (), {tag = @kept, nested = [core.i64]}>} { func.return } }",
+            "core.module @m { func.func {sym_name = \"f\", type = func.func_sig<(core.i32) -> ({tag = @kept, nested = [core.i64]})>} }",
+            "core.module @m { func.func @f(%x: core.i32) -> ({tag = @kept, nested = [core.i64]}) { func.return } }",
         ] {
             let mut ctx = IrContext::new();
             let op = parse_module(&mut ctx, input).unwrap();
@@ -1564,6 +1408,11 @@ mod normal_validation_regressions {
             "core.module @m { func.func @f() attributes {type = 1} }",
         )
         .unwrap_err();
-        assert!(error.message.contains("type attribute"), "{error}");
+        assert!(
+            error
+                .message
+                .contains("without the attributes the format writes"),
+            "{error}"
+        );
     }
 }

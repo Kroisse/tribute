@@ -7,8 +7,8 @@ core.module @test {
   !"pkg::Point" = adt.struct<"pkg::Point"(x: core.i32, y: core.i32)>
   !"pkg::Point_1" = adt.typeref<{name = "pkg::Point"}>
   !t1 = tribute_control.func_sig<(!"pkg::Point_1", core.i32) -> !"pkg::Point_1">
-  !t2 = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>
-  !t0 = tribute_control.func_sig<(!"pkg::Point_1", !t2) -> !"pkg::Point_1", {ability_row = {tail = 0}}>
+  !t2 = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {tail = 0}})>
+  !t0 = tribute_control.func_sig<(!"pkg::Point_1", !t2) -> (!"pkg::Point_1", {ability_row = {tail = 0}})>
   !t3 = tribute_control.func_sig<(!"pkg::Point_1") -> core.i32>
 
   tribute_control.func @"pkg::Point::x"(%0: !"pkg::Point_1") -> core.i32 {

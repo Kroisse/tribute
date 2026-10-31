@@ -9,19 +9,24 @@ use std::borrow::Cow;
 use std::fmt::{self, Write};
 use std::ops::Range;
 
-use winnow::combinator::{opt, separated};
+use winnow::combinator::{delimited, opt, separated};
 use winnow::error::{ContextError, ErrMode, StrContext, StrContextValue};
 use winnow::prelude::*;
 
+use crate::asm_format::{
+    SignatureCodecHooks, SignatureParts, parse_signature_results, write_signature_param,
+    write_signature_results,
+};
 use crate::op_def::OpDef;
+use crate::op_flag::IsolatedFromAbove;
 use crate::op_schema::{Arity, AttributeKind, OpSchema, ResultSchema};
 use crate::parser::raw::{
-    RawAttribute, RawOperation, RawRegion, RawType, block_label, ident, raw_attr_dict,
-    raw_attr_value, raw_region, raw_type, symbol_ref, value_ref, ws,
+    RawAttribute, RawOperation, RawParam, RawRegion, RawType, block_label, ident, raw_attr_dict,
+    raw_attr_value, raw_param, raw_region, raw_type, symbol_ref, value_ref, ws,
 };
 use crate::printer::OpPrintHelper;
 use crate::types::Attribute;
-use crate::{IrContext, OpRef};
+use crate::{BlockRef, IrContext, OpRef};
 
 /// The format elements of an operation, in order.
 #[derive(Debug)]
@@ -48,10 +53,18 @@ pub enum FormatElement {
     ResultTypes,
     /// The attributes no other element writes, as `attributes {..}`.
     AttrDict,
-    /// A region in generic form, or each region of a variadic list.
+    /// A region in generic form, or each region of a variadic list. A region
+    /// a [`Signature`](Self::Signature) lists elides its entry block.
     Region(usize),
     /// A successor's label, or a comma-separated list for a variadic one.
     Successor(usize),
+    /// A signature type attribute in function form, `(%a: A) -> R`, whose
+    /// inputs are the entry block arguments of the listed regions.
+    Signature {
+        attribute: usize,
+        regions: &'static [usize],
+        codec: SignatureCodecHooks,
+    },
     /// Elements written only when their anchor is present.
     Optional {
         anchor: FormatAnchor,
@@ -175,14 +188,21 @@ pub(crate) fn print(
         h.write_str(" = ")?;
     }
     write!(h, "{}", ctx.op(op).name.display(ctx))?;
-    let mut printer = Printer {
-        h,
-        op,
-        schema: &def.schema,
-        format,
-        spacing: Spacing::Space,
+    let print_elements = |h: &mut OpPrintHelper<'_, '_>| {
+        Printer {
+            h,
+            op,
+            schema: &def.schema,
+            format,
+            spacing: Spacing::Space,
+        }
+        .elements(format.elements)
     };
-    printer.elements(format.elements)
+    if def.has_flag::<IsolatedFromAbove>() {
+        h.with_fresh_numbering(print_elements)
+    } else {
+        print_elements(h)
+    }
 }
 
 /// Whether the space before the next token is written.
@@ -306,7 +326,11 @@ impl Printer<'_, '_, '_> {
                         .op_region(op, position)
                         .expect("a region within the counted list");
                     self.token('{')?;
-                    self.h.print_region(region)?;
+                    if signature_lists(self.format.elements, index) {
+                        self.h.print_region_without_entry(region)?;
+                    } else {
+                        self.h.print_region(region)?;
+                    }
                 }
                 Ok(())
             }
@@ -329,6 +353,45 @@ impl Printer<'_, '_, '_> {
                 }
                 Ok(())
             }
+            FormatElement::Signature {
+                attribute,
+                regions,
+                codec,
+            } => {
+                let ty = ctx
+                    .op_attrs(op)
+                    .get_type(self.schema.attributes[attribute].name)
+                    .expect("a printable signature is a type");
+                let parts = (codec.decompose)(ctx, ty).expect("a printable signature decomposes");
+                let entries = signature_entries(ctx, op, self.schema, regions);
+                self.token('(')?;
+                self.h.write_char('(')?;
+                for (position, &(ty, attrs)) in parts.inputs.iter().enumerate() {
+                    if position > 0 {
+                        self.h.write_str(", ")?;
+                    }
+                    match entries.split_first() {
+                        Some((&first, rest)) => {
+                            let arg = ctx.block_args(first)[position];
+                            let name = self.h.assign_value_name(arg);
+                            for &other in rest {
+                                self.h
+                                    .assign_value_name_like(ctx.block_args(other)[position], arg);
+                            }
+                            self.h.write_str(&name)?;
+                        }
+                        None => write!(self.h, "%arg{position}")?,
+                    }
+                    self.h.write_str(": ")?;
+                    write_signature_param(self.h, ty, attrs)?;
+                }
+                self.h.write_char(')')?;
+                if parts.results.is_empty() && parts.tail.is_empty() {
+                    return Ok(());
+                }
+                self.h.write_str(" -> ")?;
+                write_signature_results(self.h, &parts.results, &parts.tail)
+            }
             FormatElement::Optional { anchor, elements } => {
                 if anchor_present(ctx, op, self.schema, anchor) {
                     self.elements(elements)?;
@@ -339,15 +402,58 @@ impl Printer<'_, '_, '_> {
     }
 }
 
+/// Whether a `signature` element of the format lists region `index`.
+fn signature_lists(elements: &[FormatElement], index: usize) -> bool {
+    let mut listed = false;
+    visit(elements, &mut |element| {
+        if let FormatElement::Signature { regions, .. } = element {
+            listed |= regions.contains(&index);
+        }
+    });
+    listed
+}
+
+/// The entry blocks of the present regions a `signature` element lists, or
+/// `None` for a present region without blocks.
+fn signature_entry_blocks(
+    ctx: &IrContext,
+    op: OpRef,
+    schema: &OpSchema,
+    regions: &[usize],
+) -> Option<Vec<BlockRef>> {
+    let count = ctx.op_region_count(op);
+    regions
+        .iter()
+        .flat_map(|&index| region_range(schema, index, count))
+        .map(|position| {
+            let region = ctx.op_region(op, position)?;
+            ctx.region(region).blocks.first().copied()
+        })
+        .collect()
+}
+
+/// The entry blocks of a printable signature's regions.
+fn signature_entries(
+    ctx: &IrContext,
+    op: OpRef,
+    schema: &OpSchema,
+    regions: &[usize],
+) -> Vec<BlockRef> {
+    signature_entry_blocks(ctx, op, schema, regions)
+        .expect("a printable signature's regions have entry blocks")
+}
+
 /// The names of the attributes a format writes outside its attribute
 /// dictionary.
 fn written_attributes(schema: &OpSchema, format: &OpFormat) -> Vec<&'static str> {
     fn collect(schema: &OpSchema, elements: &[FormatElement], names: &mut Vec<&'static str>) {
         for element in elements {
             match *element {
-                FormatElement::Attribute(index) | FormatElement::Symbol(index) => {
-                    names.push(schema.attributes[index].name)
-                }
+                FormatElement::Attribute(index)
+                | FormatElement::Symbol(index)
+                | FormatElement::Signature {
+                    attribute: index, ..
+                } => names.push(schema.attributes[index].name),
                 FormatElement::Optional { anchor, elements } => {
                     if let FormatAnchor::Flag(index) = anchor {
                         names.push(schema.attributes[index].name);
@@ -422,6 +528,16 @@ fn printable(ctx: &IrContext, op: OpRef, schema: &OpSchema, format: &OpFormat) -
             let attribute = &schema.attributes[index];
             written_ok &= matches!(attrs.get(attribute.name), Some(Attribute::String(_)));
         }
+        FormatElement::Signature {
+            attribute,
+            regions,
+            codec,
+        } => {
+            written_ok &= attrs
+                .get_type(schema.attributes[attribute].name)
+                .and_then(|ty| (codec.decompose)(ctx, ty))
+                .is_some_and(|parts| signature_fits(ctx, op, schema, regions, &parts));
+        }
         FormatElement::Optional {
             anchor: FormatAnchor::Flag(index),
             ..
@@ -450,6 +566,27 @@ fn printable(ctx: &IrContext, op: OpRef, schema: &OpSchema, format: &OpFormat) -
             .iter()
             .all(|(key, _)| written.contains(&ctx.str(key)))
     }
+}
+
+/// Whether every present region a signature lists receives its inputs as
+/// entry block arguments.
+fn signature_fits(
+    ctx: &IrContext,
+    op: OpRef,
+    schema: &OpSchema,
+    regions: &[usize],
+    parts: &SignatureParts<'_>,
+) -> bool {
+    signature_entry_blocks(ctx, op, schema, regions).is_some_and(|entries| {
+        entries.iter().all(|&entry| {
+            let args = ctx.block_args(entry);
+            args.len() == parts.inputs.len()
+                && args
+                    .iter()
+                    .zip(&parts.inputs)
+                    .all(|(&arg, &(ty, _))| ctx.value_ty(arg) == ty)
+        })
+    })
 }
 
 fn visit(elements: &[FormatElement], f: &mut impl FnMut(&FormatElement)) {
@@ -495,6 +632,8 @@ pub(crate) fn parse<'a>(
         schema,
         format,
         committed: false,
+        signature_regions: &[],
+        entry_args: Vec::new(),
         parsed: Parsed {
             operands: vec![Vec::new(); schema.operands.len()],
             attributes: Vec::new(),
@@ -517,12 +656,22 @@ pub(crate) fn parse<'a>(
         regions,
         successors,
     } = parser.parsed;
+    // A signature's inputs are the entry block arguments of its regions.
+    let mut func_param_regions = Vec::new();
+    let mut position = 0;
+    for (index, parsed) in regions.iter().enumerate() {
+        if parser.signature_regions.contains(&index) {
+            func_param_regions.extend(position..position + parsed.len());
+        }
+        position += parsed.len();
+    }
     Ok(RawOperation {
         results,
         name,
         sym_name: None,
         has_func_signature: false,
-        func_params: Vec::new(),
+        func_params: parser.entry_args,
+        func_param_regions,
         return_type: None,
         operands: operands.into_iter().flatten().collect(),
         attributes,
@@ -544,6 +693,10 @@ struct FormatParser<'a> {
     schema: &'static OpSchema,
     format: &'static OpFormat,
     committed: bool,
+    /// The regions a signature lists, which take `entry_args` as their
+    /// entry block arguments.
+    signature_regions: &'static [usize],
+    entry_args: Vec<(&'a str, RawType<'a>)>,
     parsed: Parsed<'a>,
 }
 
@@ -676,6 +829,41 @@ impl<'a> FormatParser<'a> {
                 self.parsed.successors[index] = labels;
                 Ok(())
             }
+            FormatElement::Signature {
+                attribute,
+                regions,
+                codec,
+            } => {
+                if !input.starts_with('(') {
+                    return Err(ErrMode::Backtrack(expected("a signature `(..)`")));
+                }
+                let params: Vec<(&'a str, RawParam<'a>)> = delimited(
+                    ('(', ws),
+                    separated(
+                        0..,
+                        (ws, value_ref, ws, ':', ws, raw_param, ws)
+                            .map(|(_, name, _, _, _, param, _)| (name, param)),
+                        ',',
+                    ),
+                    (ws, ')'),
+                )
+                .parse_next(input)?;
+                let (results, tail) = if opt((ws, "->", ws)).parse_next(input)?.is_some() {
+                    parse_signature_results(input)?
+                } else {
+                    (Vec::new(), Vec::new())
+                };
+                let args = params
+                    .iter()
+                    .map(|(name, param)| (*name, param.ty.clone()))
+                    .collect();
+                let inputs = params.into_iter().map(|(_, param)| param).collect();
+                let ty = (codec.build)(inputs, results, tail)?;
+                self.attribute(attribute, RawAttribute::Type(ty));
+                self.signature_regions = regions;
+                self.entry_args = args;
+                Ok(())
+            }
             FormatElement::Optional { anchor, elements } => {
                 // A group begins with its keyword, which tells whether it is
                 // present.
@@ -745,6 +933,8 @@ fn literal(input: &mut &str, text: &'static str) -> ModalResult<()> {
 mod tests {
     use crate::IrContext;
     use crate::attr_kind::SymbolRef;
+    use crate::dialect::func::FuncSig;
+    use crate::op_flag::IsolatedFromAbove;
     use crate::parser::{parse_module, parse_test_module};
     use crate::printer::print_module;
 
@@ -792,6 +982,13 @@ mod tests {
             #[regions(bodies)]
             {}
         }
+
+        #[asm_format(symbol(sym_name) signature(r#type, body) attr_dict region(body))]
+        #[flags(IsolatedFromAbove)]
+        fn fun<S: FuncSig>(sym_name: Attr<String>, r#type: Attr<TypeOf<S>>) {
+            #[region(body?)]
+            {}
+        }
     }
 
     /// Parse `text`, check that it prints as itself, and that the printed
@@ -818,6 +1015,75 @@ mod tests {
             .map(|_| ())
             .expect_err("the text should not parse")
             .to_string()
+    }
+
+    #[test]
+    fn signatures_round_trip() {
+        assert_round_trip(
+            r#"core.module @m {
+  asm_format_test.fun @add(%0: core.i32, %1: core.i32) -> core.i32 {
+      %2 = asm_format_test.invoke call @add(%0, %1) : core.i32
+      asm_format_test.invoke call @ret(%2)
+  }
+  asm_format_test.fun @decl(%arg0: core.i32, %arg1: core.i1)
+  asm_format_test.fun @none()
+  asm_format_test.fun @param_attrs(%0: core.i32 {k = 1}) -> (core.i32 {r = 2}) {
+      asm_format_test.invoke call @ret(%0)
+  }
+  asm_format_test.fun @tail(%0: core.i32) -> ({call_conv = "tail"}) attributes {extra = 1} {
+      asm_format_test.invoke call @ret()
+  }
+  asm_format_test.fun @blocks(%0: core.i32) {
+    ^bb0:
+      asm_format_test.branch to ^bb1(%0)
+    ^bb1(%1: core.i32):
+      asm_format_test.invoke call @ret(%1)
+  }
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn generic_signatures_read_back() {
+        let generic = r#"core.module @m {
+  asm_format_test.fun {sym_name = "g", type = func.func_sig<(core.i32) -> (core.i32, {call_conv = "tail"})>} {
+    ^bb0(%0: core.i32):
+      asm_format_test.invoke call @ret(%0)
+  }
+}
+"#;
+        assert_eq!(
+            print(generic),
+            r#"core.module @m {
+  asm_format_test.fun @g(%0: core.i32) -> (core.i32, {call_conv = "tail"}) {
+      asm_format_test.invoke call @ret(%0)
+  }
+}
+"#
+        );
+    }
+
+    #[test]
+    fn signatures_that_do_not_match_their_body_print_generically() {
+        let text = r#"core.module @m {
+  asm_format_test.fun {sym_name = "g", type = func.func_sig<(core.i32) -> ()>} {
+    ^bb0(%0: core.i64):
+      asm_format_test.invoke call @ret(%0)
+  }
+}
+"#;
+        assert_eq!(print(text), text);
+    }
+
+    #[test]
+    fn signatures_reject_more_results_than_their_type_allows() {
+        let error = parse_error(
+            r#"core.module @m {
+  asm_format_test.fun @f() -> (core.i32, core.i32)
+}"#,
+        );
+        assert!(error.contains("no more results"), "{error}");
     }
 
     #[test]

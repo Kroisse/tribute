@@ -4,8 +4,8 @@ assertion_line: 64
 expression: "run_ast_pipeline_with_ir(db, source)"
 ---
 core.module @test {
-  !t0 = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>
-  !t1 = tribute_control.func_sig<(core.i32) -> core.i1, {ability_row = {tail = 0}}>
+  !t0 = tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {tail = 0}})>
+  !t1 = tribute_control.func_sig<(core.i32) -> (core.i1, {ability_row = {tail = 0}})>
   !t2 = tribute_control.func_sig<(core.i32, core.i32) -> core.i32>
 
   tribute_control.func @"std::Int::=="(%arg0: core.i32, %arg1: core.i32) -> core.i1

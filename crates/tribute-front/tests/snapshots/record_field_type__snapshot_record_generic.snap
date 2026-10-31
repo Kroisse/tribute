@@ -9,8 +9,8 @@ core.module @test {
   !"pkg::Pair$Int$Bool_1" = adt.typeref<{name = "pkg::Pair$Int$Bool"}>
   !"pkg::Pair_1" = adt.typeref<{name = "pkg::Pair"}>
   !t1 = tribute_control.func_sig<(!"pkg::Pair_1", tribute_rt.anyref) -> !"pkg::Pair_1">
-  !t2 = tribute_control.func_sig<(tribute_rt.anyref) -> tribute_rt.anyref, {ability_row = {tail = 0}}>
-  !t0 = tribute_control.func_sig<(!"pkg::Pair_1", !t2) -> !"pkg::Pair_1", {ability_row = {tail = 0}}>
+  !t2 = tribute_control.func_sig<(tribute_rt.anyref) -> (tribute_rt.anyref, {ability_row = {tail = 0}})>
+  !t0 = tribute_control.func_sig<(!"pkg::Pair_1", !t2) -> (!"pkg::Pair_1", {ability_row = {tail = 0}})>
   !t3 = tribute_control.func_sig<(!"pkg::Pair_1") -> tribute_rt.anyref>
 
   tribute_control.func @"pkg::Pair::first"(%0: !"pkg::Pair_1") -> tribute_rt.anyref {
@@ -60,7 +60,7 @@ core.module @test {
       %3 = adt.struct_new %1, %2 {type = !"pkg::Pair$Int$Bool"} : !"pkg::Pair$Int$Bool_1"
       tribute_control.return %3
   }
-  tribute_control.func @"pkg::Pair$Int$Bool::first::modify"['a0](%0: !"pkg::Pair$Int$Bool_1", %1: tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>) -> !"pkg::Pair$Int$Bool_1" row(| 'a0) {
+  tribute_control.func @"pkg::Pair$Int$Bool::first::modify"['a0](%0: !"pkg::Pair$Int$Bool_1", %1: tribute_control.func_sig<(core.i32) -> (core.i32, {ability_row = {tail = 0}})>) -> !"pkg::Pair$Int$Bool_1" row(| 'a0) {
       %2 = adt.struct_get %0 {field = 0, type = !"pkg::Pair$Int$Bool"} : core.i32
       %3 = tribute_control.call_indirect %1, %2 : core.i32
       %4 = adt.struct_get %0 {field = 1, type = !"pkg::Pair$Int$Bool"} : core.i1
@@ -76,7 +76,7 @@ core.module @test {
       %3 = adt.struct_new %2, %1 {type = !"pkg::Pair$Int$Bool"} : !"pkg::Pair$Int$Bool_1"
       tribute_control.return %3
   }
-  tribute_control.func @"pkg::Pair$Int$Bool::second::modify"['a0](%0: !"pkg::Pair$Int$Bool_1", %1: tribute_control.func_sig<(core.i1) -> core.i1, {ability_row = {tail = 0}}>) -> !"pkg::Pair$Int$Bool_1" row(| 'a0) {
+  tribute_control.func @"pkg::Pair$Int$Bool::second::modify"['a0](%0: !"pkg::Pair$Int$Bool_1", %1: tribute_control.func_sig<(core.i1) -> (core.i1, {ability_row = {tail = 0}})>) -> !"pkg::Pair$Int$Bool_1" row(| 'a0) {
       %2 = adt.struct_get %0 {field = 1, type = !"pkg::Pair$Int$Bool"} : core.i1
       %3 = tribute_control.call_indirect %1, %2 : core.i1
       %4 = adt.struct_get %0 {field = 0, type = !"pkg::Pair$Int$Bool"} : core.i32

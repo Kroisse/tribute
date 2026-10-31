@@ -1,4 +1,4 @@
-error: a format begins with a literal, after any symbols or symbol references, and not with `{`, `%`, `:`, `[`, `^`, or `}`
+error: a format begins with a literal, after any symbols or symbol references, and not with `{`, `%`, `:`, `[`, `^`, or `}`; a `signature(..)` may follow a symbol
  --> tests/ui/asm_format_begins_like_generic.rs:4:22
   |
 4 |         #[asm_format(args attr_dict)]

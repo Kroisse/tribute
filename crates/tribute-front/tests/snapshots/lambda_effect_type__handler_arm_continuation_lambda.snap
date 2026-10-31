@@ -4,7 +4,7 @@ assertion_line: 235
 expression: ir_text
 ---
 core.module @test {
-  !t0 = tribute_control.func_sig<() -> core.i32, {ability_row = {instances = [@"ability_2_10_pkg::State_3_int"], tail = 0}}>
+  !t0 = tribute_control.func_sig<() -> (core.i32, {ability_row = {instances = [@"ability_2_10_pkg::State_3_int"], tail = 0}})>
 
   tribute_control.func @"pkg::zero"['a0]() -> core.i32 row(| 'a0) inferred {
       %0 = tribute_control.lambda() -> core.i32 row(@"ability_2_10_pkg::State_3_int" | 'a0) captures [] {
