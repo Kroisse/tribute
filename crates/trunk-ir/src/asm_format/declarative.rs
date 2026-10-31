@@ -33,8 +33,7 @@ pub struct OpFormat {
 /// operation's [`OpSchema`].
 #[derive(Debug)]
 pub enum FormatElement {
-    /// A keyword or punctuation written as is. `""` drops the space before
-    /// the next element.
+    /// A keyword or punctuation written as is.
     Literal(&'static str),
     /// An operand: `%name`, or a comma-separated list for a variadic one.
     Operand(usize),
@@ -223,10 +222,6 @@ impl Printer<'_, '_, '_> {
         let ctx = self.h.ctx();
         let op = self.op;
         match *element {
-            FormatElement::Literal("") => {
-                self.spacing = Spacing::Glue;
-                Ok(())
-            }
             FormatElement::Literal(text) => {
                 self.token(text.chars().next().unwrap_or(' '))?;
                 self.h.write_str(text)?;
@@ -581,7 +576,6 @@ impl<'a> FormatParser<'a> {
     fn element(&mut self, input: &mut &'a str, element: &FormatElement) -> ModalResult<()> {
         ws.parse_next(input)?;
         match *element {
-            FormatElement::Literal("") => Ok(()),
             FormatElement::Literal(text) => literal(input, text),
             FormatElement::Operand(index) => {
                 let values = if self.schema.operands[index].arity == Arity::Variadic {

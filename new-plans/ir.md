@@ -414,7 +414,7 @@ literal은 문자열 literal로 쓴다.
 
 - **Literal** — keyword(`"captures"`)나 구두점(`"("`, `"["`, `"->"`, `":"`,
   `","`, `"="`)이다. Keyword는 식별자 하나이고, 구두점에는 영숫자를 섞지 않는다.
-  빈 literal `""`는 다음 원소 앞의 공백을 없앤다.
+  공백은 printer가 정하므로 빈 literal은 없다.
 - **Operand** — `%name`으로 쓰고, 가변 operand는 쉼표로 구분한 목록이다. 목록을
   감싸는 괄호는 literal로 쓴다. Operand 타입은 쓰지 않는다. Generic 형식처럼
   parser는 SSA 이름으로 값을 찾고 값에서 타입을 얻는다.
@@ -477,28 +477,26 @@ Macro는 형식 기술을 선언과 대조해 다음을 어기면 그 원소를 
   세지 않는다.
 - Attribute는 많아야 한 번 명시하고, 명시하지 않은 attribute가 있으면
   `attr_dict`가 있어야 한다. 같은 entity를 두 원소가 쓰지 않는다.
-- 형식은 `symbol`과 symbol 참조 attribute로 시작할 수 있다. Generic 형식은 `@`로
-  시작하지 않기 때문이다. 그 뒤, 또는 그런 원소가 없으면 처음에는 literal이 온다.
-  앞에 symbol이 있으면 이 literal로 여는 선택 묶음도 된다. 이 literal은 `{`, `%`,
-  `:`, `[`, `^`, `}`로 시작하지 않는다. 앞의 넷은 generic 형식이 operation 이름
-  뒤에 쓰는 것이고, 나머지는 operation 이름만 쓴 generic 형식 뒤의 다음 줄이 시작할
-  수 있는 것이다.
+- 형식은 원소를 하나 이상 쓰고, `symbol`과 symbol 참조 attribute로 시작할 수
+  있다. Generic 형식은 `@`로 시작하지 않기 때문이다. 그 뒤, 또는 그런 원소가
+  없으면 처음에는 literal이 온다. 앞에 symbol이 있으면 이 literal로 여는 선택
+  묶음도 된다. 이 literal은 `{`, `%`, `:`, `[`, `^`, `}`로 시작하지 않는다. 앞의
+  넷은 generic 형식이 operation 이름 뒤에 쓰는 것이고, 나머지는 operation 이름만
+  쓴 generic 형식 뒤의 다음 줄이 시작할 수 있는 것이다.
 - 선택 묶음은 여는 literal로 시작하고, 그 뒤에는 literal과 anchor 하나만 둔다.
-  `""`는 묶음 안에 쓰지 않는다. 여는 literal은 keyword(값이 시작하는 `true`, `false`,
-  `unit`, `loc`, `b`는 제외)이거나 값, `attr_dict`, 다음 줄이 시작할 수 없는
-  구두점이며, 형식의 다른 literal과 같지 않고 구두점끼리는 접두사도 겹치지 않는다.
-  Parser는 여는 literal을 읽으면 묶음이 있다고 정한다.
+  여는 literal은 keyword(값이 시작하는 `true`, `false`, `unit`, `loc`, `b`는
+  제외)이거나 값, `attr_dict`, 다음 줄이 시작할 수 없는 구두점이며, 형식의 다른
+  literal과 같지 않고 구두점끼리는 접두사도 겹치지 않는다. Parser는 여는 literal을
+  읽으면 묶음이 있다고 정한다.
 - Anchor는 선택 attribute, 가변 operand, 가변 result 중 하나다.
 - 가변 result나 선택 result의 타입은 `(":" types(..)^)?`처럼 선택 묶음의
   마지막에 쓰고, 그 묶음은 형식의 마지막 원소다.
-- 가변 operand·successor 목록 바로 뒤에는 닫는 literal `")"`나 `"]"`가 온다. 빈
-  목록이 뒤의 원소를 읽거나 목록이 쉼표를 자기 구분자로 읽는 일이 없게 하기
-  위해서다.
+- 가변 operand·successor 목록 바로 뒤에는 선택 묶음이 아닌 닫는 literal `")"`나
+  `"]"`가 온다. 빈 목록이 뒤의 원소를 읽거나 목록이 쉼표를 자기 구분자로 읽는
+  일이 없게 하기 위해서다.
 - 선택 region과 가변 region 목록 뒤에서 선택 묶음을 건너뛴 첫 원소는 없거나
   `{`로 시작하지 않는 literal이다.
 - Literal `attributes`는 `attr_dict`만 쓴다.
-- `""`는 구두점 literal 옆에만 두고, `.`로 시작하는 literal 앞에는 두지 않는다.
-  Keyword나 값끼리 붙거나 뒤에 `.`가 붙으면 한 token으로 읽히기 때문이다.
 - `signature`의 `t`는 signature codec을 구현한 bound로 묶인 타입 변수여야 하고,
   나열한 region은 선언된 region이어야 한다.
 

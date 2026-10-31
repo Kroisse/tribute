@@ -190,6 +190,12 @@ impl<'a> Format<'a> {
                             "a format literal is one token in a plain string literal, such as `\"(\"`",
                         );
                     };
+                    if text.is_empty() {
+                        return err(
+                            span,
+                            "a format literal is not empty; the printer places the spaces",
+                        );
+                    }
                     // The parser reads a keyword as a whole identifier and
                     // punctuation as text, so a literal is one or the other.
                     let ident_char = |c: char| c.is_ascii_alphanumeric() || c == '_';
@@ -389,12 +395,6 @@ impl<'a> Format<'a> {
                 "an optional group begins with a keyword or punctuation that no value begins with",
             );
         }
-        if let Some((_, span, _)) = elements
-            .iter()
-            .find(|(e, ..)| matches!(e, Element::Literal(text) if text.is_empty()))
-        {
-            return err(*span, "`\"\"` stays outside optional groups");
-        }
         let mut entities = elements
             .iter()
             .filter(|e| !matches!(e.0, Element::Literal(_)));
@@ -444,10 +444,6 @@ impl<'a> Format<'a> {
             let next = elements.get(position + 1).map(|(next, _)| next);
             let next_text = match next {
                 Some(Element::Literal(text)) => Some(text.as_str()),
-                Some(Element::Optional { elements, .. }) => match &elements[0].0 {
-                    Element::Literal(text) => Some(text.as_str()),
-                    _ => None,
-                },
                 _ => None,
             };
             match *element {
@@ -487,27 +483,6 @@ impl<'a> Format<'a> {
                         return err(
                             *span,
                             "an optional or variadic region ends the format or comes before a literal other than `{`, past any optional groups",
-                        );
-                    }
-                }
-                // `""` glues two tokens; punctuation keeps them apart.
-                Element::Literal(ref text) if text.is_empty() => {
-                    let punctuation = |element: Option<&(Element, Span)>| {
-                        matches!(element, Some((Element::Literal(text), _))
-                            if !text.is_empty() && !is_keyword(text))
-                    };
-                    if !punctuation(position.checked_sub(1).and_then(|p| elements.get(p)))
-                        && !punctuation(elements.get(position + 1))
-                    {
-                        return err(*span, "`\"\"` stands next to a punctuation literal");
-                    }
-                    // A keyword or value runs into a glued `.`.
-                    if matches!(elements.get(position + 1),
-                        Some((Element::Literal(text), _)) if text.starts_with('.'))
-                    {
-                        return err(
-                            *span,
-                            "`\"\"` does not come before a literal beginning with `.`",
                         );
                     }
                 }
@@ -605,6 +580,9 @@ fn check(
         .iter()
         .take_while(|(element, _)| symbol_like(element))
         .count();
+    if elements.is_empty() {
+        return err(attr_span, "a format writes at least one element");
+    }
     if let Some((first, span)) = elements.get(leading) {
         let decided = match first {
             Element::Literal(text) => decides(text),
@@ -955,13 +933,6 @@ mod tests {
             ),
             (
                 quote!(
-                    fn op(a: Option<Attr<bool>>) {}
-                ),
-                quote!("x" ("y" "" a^)?),
-                "outside optional groups",
-            ),
-            (
-                quote!(
                     fn op(a: Option<Attr<u32>>, b: Option<Attr<u32>>) {}
                 ),
                 quote!("x" ("y" a^ b^)?),
@@ -1103,15 +1074,32 @@ mod tests {
                 quote!(
                     fn op() {}
                 ),
-                quote!("run" "" "fast"),
-                "next to a punctuation literal",
+                quote!("run" "" "."),
+                "is not empty",
             ),
             (
                 quote!(
                     fn op() {}
                 ),
-                quote!("run" "" "."),
-                "beginning with `.`",
+                quote!(),
+                "at least one element",
+            ),
+            (
+                quote!(
+                    fn op(args: Variadic<_>, on: Option<Attr<bool>>) {}
+                ),
+                quote!("run" "(" args (")" on^)?),
+                "closed by a literal",
+            ),
+            (
+                quote!(
+                    fn op() {
+                        #[region(extra?)]
+                        {}
+                    }
+                ),
+                quote!("run" region(extra) "{" "}"),
+                "optional or variadic region",
             ),
             (
                 quote!(
