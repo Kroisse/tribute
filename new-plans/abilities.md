@@ -71,38 +71,29 @@ fn(String) ->{Http} Response             // Http만
 fn(String) ->{Http, Async} Response      // Http와 Async
 ```
 
-### Builtin Ambient Ability
+### Host Interface
 
-`std::io::Io`는 컴파일러가 소유하는 builtin ambient ability다. 외부 세계와의
-입출력을 ability row에서 추적하지만 사용자가 handler를 설치해 제거할 수는 없다.
+Program 밖의 기능은 host가 처리하는 ability로 연다. 그런 ability도 일반 ability이며,
+program 안에서 처리되지 않고 host가 부르는 entrypoint(`main` 등)에 남으면 host가
+처리한다. Entrypoint에 남은 row들이 program의 host interface이고, 규칙은
+[host-interface.md](host-interface.md)가 정한다. Compiler가 특별히 아는 ambient
+ability는 없다. 표준 입출력도 패키지 `std`의 source에 선언한 ability `std::io::Io`와 그 위의
+`std::io::Read`, `std::io::Write`로 제공한다([io.md](io.md)).
 
 ```rust
 use std::abilities::Throw
-use std::io::{Io, Error, print, print_line, read_line}
+use std::io::{Read, Write, Error, print, print_line, read_line}
 
-fn greet(name: String) ->{Io} Nil {
+fn greet(name: String) ->{Write} Nil {
     print("Hello, ")
     print_line(name)
 }
 
-fn prompt() ->{Io, Throw(Error)} String {
+fn prompt() ->{Read, Write, Throw(Error)} String {
     print("Name: ")
     read_line()
 }
 ```
-
-`Io`에는 operation이 없다. `print`, `print_line`, `read_line`은 runtime이
-제공하는 일반 함수이며 `Io`를 ability annotation으로 요구한다. 사용자는
-`ambient ability`나 `builtin ability`를 선언하는 문법을 사용할 수 없다.
-오직 canonical builtin identity인 `std::io::Io`만 ambient로 취급된다.
-Compiler는 builtin/source origin을 포함한 identity로 이를 구분하고,
-`std::io::Io`를 resolver namespace에 virtual export로 주입한다. 사용자 AST에
-synthetic ability declaration을 추가하지 않는다.
-
-Ambient는 evidence가 필요 없다는 뜻이 아니다. `Io`만 요구하는 함수도 evidence를
-받지만, `Io`에는 `op` operation이 없으므로 중단되지 않는다. `Io`와 `Throw(Error)`처럼
-`op` operation을 가진 ability가 함께 있으면 중단될 수 있다. 각 경우의 호출 규약은
-[CPS 전략](cps-effects.md#호출-규약)이 정한다.
 
 ## 함수 정의 문법
 
@@ -241,7 +232,7 @@ ability State(s) {
 }
 
 ability Logger {
-    fn log(msg: String) -> Nil
+    op log(msg: String) -> Nil
 }
 
 ability Fail {
@@ -267,7 +258,7 @@ ability Stream(a) {
 
 // ❌ 불가: 다른 ability를 참조
 ability Reporter {
-    fn report(message: String) ->{Reporter, Io} Nil
+    op report(message: String) ->{Reporter, Write} Nil
 }
 ```
 
@@ -276,13 +267,16 @@ ability Reporter {
 ```rust
 // operation은 자신의 ability만 수행
 ability Reporter {
-    fn report(message: String) -> Nil
+    op report(message: String) -> Nil
 }
 
-// handler가 Io effect를 사용하여 구현
-fn run_reporter(comp: fn() ->{e, Reporter} a) ->{e, Io} a {
+// handler가 Write effect를 사용하여 구현
+fn run_reporter(comp: fn() ->{e, Reporter} a) ->{e, Write} a {
     handle comp() {
-        fn Reporter::report(message) { print_line(message) }
+        op Reporter::report(message) {
+            print_line(message)
+            resume Nil
+        }
     }
 }
 ```
@@ -303,7 +297,10 @@ operation을 정의하듯, handler에서도 `fn`/`op` 키워드로 각 operation
 ```rust
 handle computation() {
     do result { result }
-    fn Logger::log(msg) { print_line(msg) }
+    op Logger::log(msg) {
+        print_line(msg)
+        resume Nil
+    }
     op State::get() { run_state(fn() resume state, state) }
 }
 ```
@@ -318,7 +315,10 @@ handle의 결과로 내는 identity completion을 쓴다:
 
 ```rust
 handle computation() {
-    fn Logger::log(msg) { print_line(msg) }
+    op Logger::log(msg) {
+        print_line(msg)
+        resume Nil
+    }
 }
 ```
 
@@ -370,14 +370,14 @@ resume 값이 된다. 함수 정의와 동일한 구조:
 
 ```rust
 // 선언
-ability Logger {
-    fn log(msg: String) -> Nil
+ability Clock {
+    fn now_millis() -> Int
 }
 
 // handler (구현)
-fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Io} a {
+fn fixed_clock(comp: fn() ->{e, Clock} a, now: Int) ->{e} a {
     handle comp() {
-        fn Logger::log(msg) { print_line(msg) } // Nil 반환 → resume Nil
+        fn Clock::now_millis() { now } // Int 반환 → resume now
     }
 }
 ```
@@ -516,9 +516,12 @@ fn run_maybe(comp: fn() ->{e, Fail} a) ->{e} Option(a) {
 중첩하거나 하나의 handler에서 여러 ability를 처리할 수 있다:
 
 ```rust
-fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Io} a {
+fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Write} a {
     handle comp() {
-        fn Logger::log(msg) { print_line(msg) }
+        op Logger::log(msg) {
+            print_line(msg)
+            resume Nil
+        }
     }
 }
 ```
@@ -526,10 +529,11 @@ fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Io} a {
 ## 전체 예시
 
 ```rust
-use std::io::{Io, print_line}
+use std::abilities::Exception
+use std::io::{Io, Write, stdio, print_line}
 
 ability Logger {
-    fn log(msg: String) -> Nil
+    op log(msg: String) -> Nil
 }
 
 ability State(s) {
@@ -550,13 +554,17 @@ fn run_state(comp: fn() ->{e, State(s)} a, state: s) ->{e} a {
     }
 }
 
-fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Io} a {
+fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Write} a {
     handle comp() {
-        fn Logger::log(msg) { print_line(msg) }
+        op Logger::log(msg) {
+            print_line(msg)
+            resume Nil
+        }
     }
 }
 
-fn main() ->{Io} Nil {
+fn main() ->{Io, Exception} Nil {
+    with stdio
     fn() {
         fn() {
             counter()
@@ -573,7 +581,7 @@ fn main() ->{Io} Nil {
 
 | 선언 | resume | continuation 캡처 | handler arm | 용례 |
 | ---- | ------ | ----------------- | ----------- | ---- |
-| `fn log(msg: String) -> Nil` | 1회, 암시적 | 없음 | `fn`만 가능 | Reader, Logger |
+| `fn now_millis() -> Int` | 1회, 암시적 | 없음 | `fn`만 가능 | Clock, Config |
 | `op get() -> s` | 0~1회, `resume` (affine) | 있음 | `op`만 가능 | State, Stream, Coroutine |
 | `op fail(msg: String) -> Never` | 0회 | 없음 | `op`만 가능 | Fail, Exception |
 

@@ -482,11 +482,12 @@ ownership, liveness를 읽지 않는다. Runtime 자체의 code는 계측하지 
 
 ## Native I/O
 
-Shared `tribute_io.write`와 `tribute_io.read_line`은
-[io.md](io.md#native-runtime-abi)의 private runtime ABI로 낮춘다. Runtime descriptor를
-high-level `ReadLineResult` ADT로 바꾼 뒤 SCF, ADT, memory lowering을 적용한다.
-Native runtime은 Tribute enum/RTTI layout에 의존하지 않는다. E2E 검증은 subprocess
-stdin의 raw bytes로 빈 줄, partial EOF, EOF, invalid UTF-8을 확인한다.
+표준 입출력 ability `std::io::Io`는 host interface의 다른 ability와 같이
+[host 경계](host-interface.md#host-경계)를 따라 C ABI로 낮춘다. `tribute-runtime`이
+그 interface를 구현하며, 값은 canonical ABI 배치로 복사한다. Native runtime은
+Tribute enum/RTTI layout에 의존하지 않는다. E2E 검증은 subprocess stdin의 raw
+bytes로 빈 줄, partial EOF, EOF, invalid UTF-8을 확인한다
+([`read_line` Contract](io.md#read_line-contract)).
 
 ---
 
