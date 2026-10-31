@@ -389,7 +389,7 @@ impl<'a> Format<'a> {
         elements: Vec<(Element, Span, bool)>,
         span: Span,
     ) -> Result<Element, FormatError> {
-        if !matches!(&elements[0].0, Element::Literal(text) if opens_group(text)) {
+        if !matches!(elements.first(), Some((Element::Literal(text), ..)) if opens_group(text)) {
             return err(
                 span,
                 "an optional group begins with a keyword or punctuation that no value begins with",
@@ -929,6 +929,13 @@ mod tests {
                     fn op(a: Option<Attr<bool>>) {}
                 ),
                 quote!("x" ("true" a^)?),
+                "begins with a keyword or punctuation",
+            ),
+            (
+                quote!(
+                    fn op() {}
+                ),
+                quote!("x"()?),
                 "begins with a keyword or punctuation",
             ),
             (
