@@ -501,6 +501,15 @@ impl<'a> Format<'a> {
                     {
                         return err(*span, "`\"\"` stands next to a punctuation literal");
                     }
+                    // A keyword or value runs into a glued `.`.
+                    if matches!(elements.get(position + 1),
+                        Some((Element::Literal(text), _)) if text.starts_with('.'))
+                    {
+                        return err(
+                            *span,
+                            "`\"\"` does not come before a literal beginning with `.`",
+                        );
+                    }
                 }
                 Element::Optional { ref elements, .. } => {
                     self.check_sequence(elements, last && next.is_none())?;
@@ -1096,6 +1105,13 @@ mod tests {
                 ),
                 quote!("run" "" "fast"),
                 "next to a punctuation literal",
+            ),
+            (
+                quote!(
+                    fn op() {}
+                ),
+                quote!("run" "" "."),
+                "beginning with `.`",
             ),
             (
                 quote!(

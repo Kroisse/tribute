@@ -497,8 +497,8 @@ Macro는 형식 기술을 선언과 대조해 다음을 어기면 그 원소를 
 - 선택 region과 가변 region 목록 뒤에서 선택 묶음을 건너뛴 첫 원소는 없거나
   `{`로 시작하지 않는 literal이다.
 - Literal `attributes`는 `attr_dict`만 쓴다.
-- `""`는 구두점 literal 옆에만 둔다. Keyword나 값끼리 붙으면 한 token으로 읽히기
-  때문이다.
+- `""`는 구두점 literal 옆에만 두고, `.`로 시작하는 literal 앞에는 두지 않는다.
+  Keyword나 값끼리 붙거나 뒤에 `.`가 붙으면 한 token으로 읽히기 때문이다.
 - `signature`의 `t`는 signature codec을 구현한 bound로 묶인 타입 변수여야 하고,
   나열한 region은 선언된 region이어야 한다.
 
