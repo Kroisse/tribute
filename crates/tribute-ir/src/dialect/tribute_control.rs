@@ -1031,7 +1031,8 @@ static FUNC_SIG_DEF: trunk_ir::TypeDef = trunk_ir::TypeDef::new("tribute_control
 
 trunk_ir::register_type_def!(&FUNC_SIG_DEF);
 
-/// The `func.func_sig` syntax, with exactly one result.
+/// The function syntax `func.func_sig` also uses,
+/// `tribute_control.func_sig<(A) -> R>`, with exactly one result.
 impl trunk_ir::asm_format::TypeAsmFormat for FuncSig {
     fn print(&self, h: &mut trunk_ir::printer::TypePrintHelper<'_, '_>) -> fmt::Result {
         trunk_ir::dialect::func::print_signature_type(h, self.0)
