@@ -566,22 +566,22 @@ region의 entry block에 되돌린다. Printer는 `IsolatedFromAbove` operation�
 Signature codec은 signature 타입과 그 함수 형태 표기 사이의 변환이며, 타입을
 정의하는 dialect가 그 타입의 wrapper에 구현한다. Trunk-ir는 signature 타입이나
 dialect 이름을 알지 못하며, `signature`는 형식이 묶은 타입 변수의 bound에서 codec을
-고른다. 같은 표기로 `func.func_sig`, `wasm.func_sig`, `clif.func_sig`,
-`tribute_control.func_sig`를 재구성한다.
+고른다. 같은 함수 형태로 `func.func_sig`, `wasm.func_sig`, `clif.func_sig`,
+`tribute_control.func_sig`를 재구성하며, 결과 뒤의 꼬리 표기만 codec마다 다르다.
 
 - 분해는 입력과 결과(각각의 매개변수 속성 포함), 그리고 codec이 소유하는 꼬리
   표기를 돌려준다. 손실 없이 분해할 수 없는 타입이면 분해하지 않으며, 그
   operation은 generic 형식으로 출력한다.
 - 재구성은 parser가 읽은 입력·결과와 꼬리 표기를 그 타입의 generic raw 형태로
   만든다. Codec은 허용하는 결과 개수를 정한다.
-- 꼬리 표기는 괄호로 감싼 결과 목록의 마지막 원소로 오며, codec이 출력과 파싱을
-  모두 맡는다. 괄호 안에서 타입으로 시작하지 않는 원소가 꼬리 표기다.
-  `func.func_sig` 계열은 매개변수 속성을 매개변수 뒤에 `%a: A {k = v}`로 쓰고,
-  두 count 밖의 type attribute를 꼬리 표기 `{..}`로 쓴다
-  (`-> (R, {call_conv = "tail"})`, 결과가 없으면 `-> ({..})`).
-  `tribute_control.func_sig`의 type attribute인 [ability row](#ability-row)도 같은
-  꼬리 표기로 쓴다. 결과 목록 밖에는 괄호 없는 `{`가 오지 않으므로, 형식이
-  signature 바로 뒤에 쓰는 region과 겹치지 않는다. 이 표기는
+- 꼬리 표기는 결과 뒤에 오는 codec 고유의 절이며, codec이 출력과 파싱을 모두
+  맡는다. `func.func_sig` 계열은 매개변수 속성을 매개변수 뒤에 `%a: A {k = v}`로
+  쓰고, 두 count 밖의 type attribute를 결과 뒤에 쉼표로 이어 dictionary로 쓴다
+  (`-> R, {call_conv = "tail"}`, 결과가 없으면 `-> (), {..}`). 쉼표 없이 타입
+  바로 뒤에 오는 dictionary는 그 타입의 매개변수 속성이므로 쉼표가 둘을 구분한다.
+  `tribute_control.func_sig`는 [ability row](#ability-row)를 `row(..)` 절로
+  쓴다(`-> R row(@A | 'a1)`). 꼬리 절은 쉼표나 keyword로 시작하므로, 형식이
+  signature 바로 뒤에 쓰는 `attributes {..}`나 region과 겹치지 않는다. 이 표기는
   [타입 textual form](#타입-textual-form)의 함수 형태와 같다.
 
 함수 형태의 operation 문법은 그 operation이 선언한 형식에서만 나온다. Generic
@@ -1000,11 +1000,12 @@ non-resumptive case를 식별해야 하므로 `Never`용 `anyref` placeholder는
 ### Ability row
 
 `tribute_control.func_sig`는 callable의 ability row를 `ability_row` type 속성으로
-가진다.
+가진다. 함수 형태에서는 결과 뒤의 `row(..)` 절로 쓴다. `|` 앞은 `instances`이고,
+뒤의 `'aN`은 `tail = N`이다. 아래 타입의 저장 표현은
+`{ability_row = {instances = [@"<instance A>", @"<instance B>"], tail = 1}}`이다.
 
 ```text
-tribute_control.func_sig<(T) -> (R,
-    {ability_row = {instances = [@"<instance A>", @"<instance B>"], tail = 1}})>
+tribute_control.func_sig<(T) -> R row(@"<instance A>", @"<instance B>" | 'a1)>
 ```
 
 - **값:** `instances`는
@@ -2085,7 +2086,7 @@ core.i32
 core.tuple<core.i32, core.ptr {k = "v"}>
 core.ref<core.i32, {nullable = true}>
 adt.typeref<{name = "Point"}>
-func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (core.i64, {call_conv = "tail"})>
+func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> core.i64, {call_conv = "tail"}>
 ```
 
 - 매개변수도 속성도 없는 타입은 이름만 쓴다.
@@ -2094,10 +2095,12 @@ func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (core.i64, {call_co
   매개변수 바로 뒤의 dictionary는 그 매개변수의
   [매개변수 속성](#타입-매개변수-속성)이다.
 - 함수 형태 `<(inputs...) -> results>`는 `func` dialect가 정의하는 전용
-  문법이다. 결과가 하나이고 매개변수 속성도 type 속성도 없으면 결과를 괄호 없이
-  쓰고, 그 밖에는 괄호로 감싼 목록으로 쓰며 type 속성 dictionary는 이 목록의
-  마지막 원소로 둔다(`-> ()`, `-> (R1, R2)`, `-> (R {k = v})`,
-  `-> ({call_conv = "tail"})`). 입력과 결과도 각각 매개변수 속성을 가질 수 있고,
+  문법이다. 결과가 하나이고 매개변수 속성이 없으면 결과를 괄호 없이 쓰고, 그
+  밖에는 괄호로 감싼 목록으로 쓴다(`-> ()`, `-> (R1, R2)`, `-> (R {k = v})`).
+  Type 속성은 결과 뒤의 꼬리 표기로 쓰며, 그 표기는 타입을 정의하는 dialect가
+  정한다. `func.func_sig` 계열은 일반 형태처럼 쉼표 뒤의 dictionary로 쓰고
+  (`-> R, {call_conv = "tail"}`, `-> (), {..}`), `tribute_control.func_sig`는
+  `row(..)` 절로 쓴다. 입력과 결과도 각각 매개변수 속성을 가질 수 있고,
   저장 표현은
   [`func.func_sig`](#funcfunc_sig-function-type)의 평탄한 매개변수 벡터와 두
   count다. 같은 저장 표현을 쓰는 signature 타입(`func.func_sig`,
@@ -2440,13 +2443,13 @@ func.func_sig<(Evidence, Frame, core.i32) -> core.never>
 
 The input list is always parenthesized. An empty result list is printed as
 `()`, and the single supported result is printed without parentheses unless it
-carries parameter attributes or type attributes follow. Following the
+carries parameter attributes. Following the
 [self-delimiting type form](#타입-textual-form), each input or result may carry
-its parameter attributes, and the remaining type attributes come last inside the
-parenthesized result list:
+its parameter attributes, and the remaining type attributes follow the results
+as a dictionary after a comma:
 
 ```text
-func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> ({call_conv = "tail"})>
+func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>
 ```
 
 TrunkIR recognizes a parenthesized multi-result list so it can diagnose it, but

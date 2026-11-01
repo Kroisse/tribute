@@ -357,6 +357,17 @@ impl crate::asm_format::SignatureCodec for FuncSig {
         })
     }
 
+    fn write_tail(
+        w: &mut dyn crate::asm_format::SignatureWriter,
+        tail: &[(crate::StringRef, &Attribute)],
+    ) -> std::fmt::Result {
+        crate::asm_format::write_dict_tail(w, tail)
+    }
+
+    fn parse_tail<'a>(input: &mut &'a str) -> winnow::ModalResult<RawAttrDict<'a>> {
+        crate::asm_format::parse_dict_tail(input)
+    }
+
     fn build<'a>(
         inputs: Vec<RawParam<'a>>,
         results: Vec<RawParam<'a>>,
@@ -366,8 +377,8 @@ impl crate::asm_format::SignatureCodec for FuncSig {
     }
 }
 
-/// The type attributes the function syntax writes last in the result list:
-/// all but the counts, and but the parameter attributes when those are
+/// The type attributes the function syntax writes after the results: all
+/// but the counts, and but the parameter attributes when those are
 /// written after their parameters.
 fn signature_tail_attrs<'a>(
     ctx: &'a IrContext,
@@ -383,7 +394,7 @@ fn signature_tail_attrs<'a>(
 }
 
 /// Print a validated signature type as `name<(inputs) -> results>`, the
-/// remaining type attributes last in a parenthesized result list.
+/// remaining type attributes after a comma, `, {k = v}`.
 ///
 /// The type stores its inputs then its results as parameters, delimited by
 /// [`NUM_INPUTS_ATTR`] and [`NUM_RESULTS_ATTR`], which the syntax implies and
@@ -395,7 +406,7 @@ pub fn print_signature_type(
     h: &mut crate::printer::TypePrintHelper<'_, '_>,
     ty: TypeRef,
 ) -> std::fmt::Result {
-    use crate::asm_format::{write_signature_param, write_signature_results};
+    use crate::asm_format::{write_dict_tail, write_signature_param, write_signature_results};
     use std::fmt::Write;
 
     let ctx = h.ctx();
@@ -428,7 +439,8 @@ pub fn print_signature_type(
         write_signature_param(h, input, attrs)?;
     }
     h.write_str(") -> ")?;
-    write_signature_results(h, results, &tail)?;
+    write_signature_results(h, results)?;
+    write_dict_tail(h, &tail)?;
     h.write_char('>')
 }
 
@@ -454,7 +466,8 @@ pub fn parse_signature_type<'a>(
     ws.parse_next(input)?;
     "->".parse_next(input)?;
     ws.parse_next(input)?;
-    let (results, tail) = crate::asm_format::parse_signature_results(input)?;
+    let results = crate::asm_format::parse_signature_results(input)?;
+    let tail = crate::asm_format::parse_dict_tail(input)?;
     ws.parse_next(input)?;
     '>'.parse_next(input)?;
     signature_from_parts(name, inputs, results, tail, max_results)
@@ -464,7 +477,7 @@ pub fn parse_signature_type<'a>(
 ///
 /// The syntax owns the delimiter counts, so type attributes that write them
 /// are rejected, as is a result count above `max_results`.
-fn signature_from_parts<'a>(
+pub fn signature_from_parts<'a>(
     name: &'a str,
     inputs: Vec<RawParam<'a>>,
     results: Vec<RawParam<'a>>,
@@ -907,7 +920,7 @@ mod tests {
     #[test]
     fn signature_syntax_parses_into_the_generic_form() {
         let raw = parse_raw_signature(
-            "func.func_sig<(core.i32 {a = @x}, core.ptr) -> (core.i64 {b = @y}, {call_conv = \"tail\"})>",
+            "func.func_sig<(core.i32 {a = @x}, core.ptr) -> (core.i64 {b = @y}), {call_conv = \"tail\"}>",
         );
         let RawType::Concrete {
             name,
@@ -964,8 +977,8 @@ mod tests {
     #[test]
     fn call_conv_is_a_signature_attribute_that_round_trips() {
         let input = r#"core.module @test {
-  func.func @transfer(%callee: func.func_sig<(core.i32) -> ({call_conv = "tail"})>, %value: core.i32) -> ({call_conv = "tail"}) {
-    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> ({call_conv = "tail"})>}
+  func.func @transfer(%callee: func.func_sig<(core.i32) -> (), {call_conv = "tail"}>, %value: core.i32) -> (), {call_conv = "tail"} {
+    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> (), {call_conv = "tail"}>}
   }
 }"#;
         let mut ctx = crate::IrContext::new();
@@ -1197,8 +1210,8 @@ mod result_list_tests {
             }
         }
         for input in [
-            "core.module @m { func.func {sym_name = \"f\", type = func.func_sig<(core.i32) -> ({tag = @kept, nested = [core.i64]})>} }",
-            "core.module @m { func.func @f(%x: core.i32) -> ({tag = @kept, nested = [core.i64]}) { func.return } }",
+            "core.module @m { func.func {sym_name = \"f\", type = func.func_sig<(core.i32) -> (), {tag = @kept, nested = [core.i64]}>} }",
+            "core.module @m { func.func @f(%x: core.i32) -> (), {tag = @kept, nested = [core.i64]} { func.return } }",
         ] {
             let mut ctx = IrContext::new();
             let op = parse_module(&mut ctx, input).unwrap();

@@ -390,7 +390,8 @@ impl Printer<'_, '_, '_> {
                     return Ok(());
                 }
                 self.h.write_str(" -> ")?;
-                write_signature_results(self.h, &parts.results, &parts.tail)
+                write_signature_results(self.h, &parts.results)?;
+                (codec.write_tail)(self.h, &parts.tail)
             }
             FormatElement::Optional { anchor, elements } => {
                 if anchor_present(ctx, op, self.schema, anchor) {
@@ -849,7 +850,8 @@ impl<'a> FormatParser<'a> {
                 )
                 .parse_next(input)?;
                 let (results, tail) = if opt((ws, "->", ws)).parse_next(input)?.is_some() {
-                    parse_signature_results(input)?
+                    let results = parse_signature_results(input)?;
+                    (results, (codec.parse_tail)(input)?)
                 } else {
                     (Vec::new(), Vec::new())
                 };
@@ -1030,7 +1032,7 @@ mod tests {
   asm_format_test.fun @param_attrs(%0: core.i32 {k = 1}) -> (core.i32 {r = 2}) {
       asm_format_test.invoke call @ret(%0)
   }
-  asm_format_test.fun @tail(%0: core.i32) -> ({call_conv = "tail"}) attributes {extra = 1} {
+  asm_format_test.fun @tail(%0: core.i32) -> (), {call_conv = "tail"} attributes {extra = 1} {
       asm_format_test.invoke call @ret()
   }
   asm_format_test.fun @blocks(%0: core.i32) {
@@ -1047,7 +1049,7 @@ mod tests {
     #[test]
     fn generic_signatures_read_back() {
         let generic = r#"core.module @m {
-  asm_format_test.fun {sym_name = "g", type = func.func_sig<(core.i32) -> (core.i32, {call_conv = "tail"})>} {
+  asm_format_test.fun {sym_name = "g", type = func.func_sig<(core.i32) -> core.i32, {call_conv = "tail"}>} {
     ^bb0(%0: core.i32):
       asm_format_test.invoke call @ret(%0)
   }
@@ -1056,7 +1058,7 @@ mod tests {
         assert_eq!(
             print(generic),
             r#"core.module @m {
-  asm_format_test.fun @g(%0: core.i32) -> (core.i32, {call_conv = "tail"}) {
+  asm_format_test.fun @g(%0: core.i32) -> core.i32, {call_conv = "tail"} {
       asm_format_test.invoke call @ret(%0)
   }
 }
