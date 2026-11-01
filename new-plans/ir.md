@@ -434,8 +434,8 @@ literal은 문자열 literal로 쓴다.
   것도 쓰지 않는다. 다른 원소가 쓰는 attribute는 자동으로 제외하며, parser는 그런
   key를 dictionary에서 만나면 거부한다.
 - **`signature(t, regions..)`** — 함수 형태 `(%a: A, %b: B) -> R`을 쓴다. `t`는
-  `Attr<TypeOf<S>>` attribute나 `Value<S>` result이고, `S`의 bound가 signature
-  codec을 구현해야 한다. 나머지 인자는 이 signature의 매개변수를 entry block
+  필수 `Attr<TypeOf<S>>` attribute나 `Value<S>` result이고, `S`는 bound를
+  하나만 가지며 그 bound가 signature codec을 구현해야 한다. 나머지 인자는 이 signature의 매개변수를 entry block
   argument로 받는 region이다. 결과는 [타입 textual form](#타입-textual-form)의
   함수 형태처럼 쓰되, 결과도 꼬리 표기도 없으면 화살표를 쓰지 않는다. 매개변수
   이름은 첫 region의 entry block argument 이름이고, region이 없으면 `%arg0`,
