@@ -335,7 +335,10 @@ impl Printer<'_, '_, '_> {
                     .op(op)
                     .attributes
                     .iter()
-                    .filter(|&(key, _)| !written.contains(&ctx.str(key)))
+                    .filter(|&(key, value)| {
+                        let key = ctx.str(key);
+                        !written.contains(&key) && !self.schema.holds_default(ctx, key, value)
+                    })
                     .peekable();
                 if rest.peek().is_none() {
                     return Ok(());
@@ -523,7 +526,10 @@ fn written_attributes(schema: &OpSchema, format: &OpFormat) -> Vec<&'static str>
 fn anchor_present(ctx: &IrContext, op: OpRef, schema: &OpSchema, anchor: FormatAnchor) -> bool {
     match anchor {
         FormatAnchor::Attribute(index) => {
-            ctx.op_attrs(op).contains_key(schema.attributes[index].name)
+            let attribute = &schema.attributes[index];
+            ctx.op_attrs(op)
+                .get(attribute.name)
+                .is_some_and(|value| !attribute.holds_default(ctx, value))
         }
         FormatAnchor::Flag(index) => {
             matches!(
@@ -606,10 +612,11 @@ fn printable(ctx: &IrContext, op: OpRef, schema: &OpSchema, format: &OpFormat) -
             anchor: FormatAnchor::Flag(index),
             ..
         } => {
-            written_ok &= matches!(
-                attrs.get(schema.attributes[index].name),
-                None | Some(Attribute::Bool(true))
-            );
+            let attribute = &schema.attributes[index];
+            written_ok &= match attrs.get(attribute.name) {
+                None | Some(Attribute::Bool(true)) => true,
+                Some(value) => attribute.holds_default(ctx, value),
+            };
         }
         _ => {}
     });
@@ -1134,12 +1141,6 @@ mod tests {
         #[asm_format("values" ("n" n^)? ("label" label^)? attr_dict)]
         fn pick(#[default(3)] n: Attr<u32>, #[default("none")] label: Attr<String>) {}
 
-        /// A type whose attribute has a default.
-        struct Slot {
-            #[default(false)]
-            pinned: Attr<bool>,
-        }
-
         #[asm_format("go" "(" keyword(speed) ")" attr_dict)]
         fn drive(speed: Attr<Speed>) {}
 
@@ -1256,16 +1257,27 @@ mod tests {
     }
 
     #[test]
-    fn defaulted_attributes_read_their_default_when_absent() {
-        let text = r#"core.module @m {
+    fn defaulted_attributes_are_absent_in_their_canonical_form() {
+        let canonical = r#"core.module @m {
   asm_format_test.pick values
-  asm_format_test.pick values n 3 label "none"
   asm_format_test.pick values n 7
 }
 "#;
-        assert_round_trip(text);
+        assert_round_trip(canonical);
+        // An explicit default, in the format or generically, reads as absent.
+        assert_eq!(
+            print(
+                r#"core.module @m {
+  asm_format_test.pick values n 3 label "none"
+  asm_format_test.pick {label = "none", n = 7}
+}
+"#
+            ),
+            canonical
+        );
+
         let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, text);
+        let module = parse_test_module(&mut ctx, canonical);
         let picks: Vec<_> = module
             .ops(&ctx)
             .iter()
@@ -1273,24 +1285,22 @@ mod tests {
             .collect();
         let read = |pick: &Pick| (pick.n(&ctx), pick.label(&ctx).to_owned());
         assert_eq!(read(&picks[0]), (3, "none".to_owned()));
-        assert_eq!(read(&picks[1]), (3, "none".to_owned()));
-        assert_eq!(read(&picks[2]), (7, "none".to_owned()));
+        assert_eq!(read(&picks[1]), (7, "none".to_owned()));
         assert_eq!(picks[0].label_ref(&ctx), None);
 
-        let loc = ctx.op(picks[0].op_ref()).location;
-        let unset = Pick::operands().build(&mut ctx, loc);
-        assert!(ctx.op(unset.op_ref()).attributes.is_empty());
-        let set = Pick::operands().n(3).build(&mut ctx, loc);
-        assert_eq!(
-            ctx.op_attrs(set.op_ref()).get("n"),
-            Some(&Attribute::Int(3))
-        );
+        // The printer leaves out a stored default, however it was stored.
+        let first = picks[0].op_ref();
+        ctx.op_attrs_mut(first).insert("n", Attribute::Int(3));
+        assert_eq!(print_module(&ctx, module.op()), canonical);
 
-        let unpinned = Slot::params().intern(&mut ctx);
-        let pinned = Slot::params().pinned(true).intern(&mut ctx);
-        assert!(!unpinned.pinned(&ctx));
-        assert!(pinned.pinned(&ctx));
-        assert!(ctx.get_type(unpinned.as_type_ref()).attrs.is_empty());
+        let loc = ctx.op(first).location;
+        let default = Pick::operands().n(3).label("none").build(&mut ctx, loc);
+        assert!(ctx.op(default.op_ref()).attributes.is_empty());
+        let other = Pick::operands().n(7).build(&mut ctx, loc);
+        assert_eq!(
+            ctx.op_attrs(other.op_ref()).get("n"),
+            Some(&Attribute::Int(7))
+        );
     }
 
     #[test]

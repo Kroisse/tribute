@@ -163,7 +163,17 @@ fn gen_op_def(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -> Tok
             Some(i) => quote!(Some(#i)),
             None => quote!(None),
         };
-        quote!(#schema_mod::AttributeSchema { name: #name, kind: #kind, optional: #optional, binds: #binds })
+        let is_default = match gen_is_default(crate_path, attr) {
+            Some(check) => quote!(Some(#check)),
+            None => quote!(None),
+        };
+        quote!(#schema_mod::AttributeSchema {
+            name: #name,
+            kind: #kind,
+            optional: #optional,
+            binds: #binds,
+            is_default: #is_default,
+        })
     });
 
     let regions = op.regions.iter().filter_map(|item| match item {
@@ -747,7 +757,16 @@ fn gen_fluent_builder(crate_path: &TokenStream, dialect: &str, op: &OperationDef
             let #field = self.#field.map(|value| #kind::write(ctx, value));
         });
         methods.push(gen_attr_setter(crate_path, attr));
-        if attr.optional {
+        if let Some(is_default) = gen_is_default(crate_path, attr) {
+            // Absence is the canonical form of the default.
+            build_stmts.push(quote! {
+                if let Some(value) = #field
+                    && !(#is_default)(ctx, &value)
+                {
+                    __builder = __builder.attr(#name_str, value);
+                }
+            });
+        } else if attr.optional {
             build_stmts.push(quote! {
                 if let Some(value) = #field {
                     __builder = __builder.attr(#name_str, value);
@@ -913,6 +932,18 @@ fn gen_fluent_builder(crate_path: &TokenStream, dialect: &str, op: &OperationDef
             }
         }
     }
+}
+
+/// For an attribute declared with `#[default(v)]`, a function telling
+/// whether an attribute value is `v`.
+fn gen_is_default(crate_path: &TokenStream, attr: &AttrDef) -> Option<TokenStream> {
+    let default = attr.default.as_ref()?;
+    let kind = attr_kind_trait(crate_path, attr);
+    Some(quote! {
+        |ctx: &#crate_path::IrContext, value: &#crate_path::Attribute| -> bool {
+            #kind::KIND.accepts(value) && #kind::read(ctx, value) == (#default)
+        }
+    })
 }
 
 /// A builder's setter for one attribute. A list is set from its elements. A

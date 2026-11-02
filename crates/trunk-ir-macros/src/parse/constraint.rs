@@ -666,28 +666,22 @@ fn check_default(name: &str, optional: bool, list: bool) -> Result<(), String> {
 }
 
 /// Parse a type's attribute fields: `name: Attr<K>` or
-/// `name: Option<Attr<K>>`, each optionally documented or defaulted.
+/// `name: Option<Attr<K>>`, each optionally documented.
 pub(super) fn parse_type_fields(stream: TokenStream) -> Result<Vec<AttrDef>, String> {
     let mut iter = stream.to_token_iter();
     let mut attrs = Vec::new();
     let mut names = HashSet::default();
     while has_remaining(&iter) {
         let mut docs = Vec::new();
-        let mut default = None;
         while peek_punct(&iter, '#') {
             consume_punct(&mut iter)?;
             let bracket = expect_group(&mut iter, Delimiter::Bracket)?;
-            if let Some(value) = parse_default(&bracket)? {
-                if default.replace(value).is_some() {
-                    return Err("an attribute takes at most one `#[default(..)]`".into());
-                }
-                continue;
+            if parse_default(&bracket)?.is_some() {
+                return Err("a type attribute takes no `#[default(..)]`: types intern their attributes, so a stored default would make another type".into());
             }
             if !matches!(bracket.stream().into_iter().next(), Some(TokenTree::Ident(i)) if i == "doc")
             {
-                return Err(
-                    "a type attribute field takes only doc comments and `#[default(..)]`".into(),
-                );
+                return Err("a type attribute field takes only doc comments".into());
             }
             docs.push(bracket);
         }
@@ -721,17 +715,14 @@ pub(super) fn parse_type_fields(stream: TokenStream) -> Result<Vec<AttrDef>, Str
                 }
             }
         };
-        if default.is_some() {
-            check_default(&name, optional, list)?;
-        }
         attrs.push(AttrDef {
             name,
             raw_ident: ident,
             kind,
             list,
-            optional: optional || default.is_some(),
+            optional,
             binds: None,
-            default,
+            default: None,
             docs,
         });
         if has_remaining(&iter) {
