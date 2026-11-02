@@ -356,6 +356,22 @@ fn main() ->{Io} Nil {
     );
 }
 
+/// Sibling helpers that write one row name quantify rows of their own.
+#[test]
+fn sibling_local_helpers_with_one_row_name_keep_their_own_rows() {
+    assert_state_program(
+        r#"fn call(f: fn() ->{e} Int) ->{e} Int { f() }
+fn body() ->{State(Int)} Int {
+    let wrap = fn(k: fn() ->{e} Int) { fn() { k() } }
+    let reference = fn(k: fn() ->{e} Int) { call }
+    let pure = wrap(fn() ->{} Int { +2 })
+    let named = reference(fn() { State::get() })
+    pure() + named(fn() ->{} Int { +4 })
+}"#,
+        "6",
+    );
+}
+
 /// A pure factory's result is generalized like a lambda but stays one value.
 #[test]
 fn local_helper_from_a_factory_takes_callbacks_with_different_rows() {

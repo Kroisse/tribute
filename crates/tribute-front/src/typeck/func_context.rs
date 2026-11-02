@@ -1148,6 +1148,19 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         self.annotation_type_parameters.values().copied()
     }
 
+    /// The row names annotations have bound so far, which a `let` keeps
+    /// visible after it ends.
+    pub(crate) fn annotation_row_names(&self) -> HashSet<Symbol> {
+        self.annotation_rows.keys().cloned().collect()
+    }
+
+    /// End the scope of the row names a `let` introduced: names outside
+    /// `outer` name fresh rows again after it (`new-plans/type-inference.md`,
+    /// row variables).
+    pub(crate) fn end_let_row_scope(&mut self, outer: &HashSet<Symbol>) {
+        self.annotation_rows.retain(|name, _| outer.contains(name));
+    }
+
     pub(crate) fn annotation_row(&mut self, name: Symbol) -> RowVar {
         if let Some(row) = self.annotation_rows.get(&name) {
             return *row;
