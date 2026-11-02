@@ -113,8 +113,12 @@ dialect lowering은 `effect.*`를 보지 않는다.
 호출 후에는 마지막 결과가 스택 맨 위에 있으므로 지역 변수에 역순으로 저장한다.
 입력이나 값 위치의 `core.nil`은 생략하지 않고 널을 허용하는 참조로 표현한다.
 모든 `wasm.call_indirect`와 `wasm.return_call_indirect`는 exact `wasm.func_sig`를
-명시한다. Signature가 없으면 lowering과 emission이 실패하며 operand/result 타입,
-상위 함수의 return 또는 `type_idx`로 대체 시그니처를 추론하지 않는다.
+필수 attribute로 명시한다. Signature가 없으면 lowering과 emission이 실패하며
+operand/result 타입이나 상위 함수의 return으로 대체 시그니처를 추론하지 않는다.
+두 operation의 callee는 함수 테이블의 `core.i32` 인덱스이며 첫 operand로 둔다.
+인덱스는 실행 중에 정해지는 값이고, 테이블 번호는 명령어의 즉치값이므로
+`table` attribute로 두며 없으면 테이블 0이다. 함수 타입 인덱스는 operation에
+담지 않고 emitter가 signature를 등록한 결과에서 얻는다.
 Wasm 코드 생성기는 함수 본문이나 테이블 인덱스에서 CPS 여부를 추론하지 않는다.
 
 ### Switch 지원 조건
@@ -225,8 +229,7 @@ Wasm source handler 지원은 shared/native handler 실행 지원이 아니라 W
 시그니처를 명시한다. `env`는 dispatch closure 자신이다. Evidence와 반환 표현은 정확히
 일치해야 하며 packed payload는 검증된 GC widening만 허용한다. Lowering은
 operand로 ABI를 재추론하지 않고 이 고정 시그니처를 `wasm.call_indirect`에
-보존한다. Emitter는 최종 모듈 등록 결과에서 함수 타입 인덱스를 얻으며,
-lowering의 placeholder `type_idx`가 그 결과를 덮어쓰지 않는다.
+보존한다. Emitter는 최종 모듈 등록 결과에서 함수 타입 인덱스를 얻는다.
 
 ### Nil 값과 callable result의 구분
 

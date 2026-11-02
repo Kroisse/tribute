@@ -49,11 +49,30 @@ mod wasm {
     #[implements(CallLike)]
     fn call(callee: Attr<SymbolRef>, args: Variadic<_>) -> Variadic<_> {}
 
+    /// Call the function at a table index through its exact signature.
+    ///
+    /// ```text
+    /// %result = wasm.call_indirect %index(%arg0, ...) table 1 : (A, ...) -> R
+    /// ```
+    ///
+    /// - **Shape:** `callee` is the `core.i32` index into the function table
+    ///   `table`, table 0 when absent; `args` are the call's arguments, and
+    ///   `signature` is the callee's `wasm.func_sig`.
+    /// - **Meaning:** Wasm `call_indirect` with the type `signature`, which
+    ///   traps when the table entry has another type. Emission pushes the
+    ///   arguments, then the index.
+    /// - **Verification:** emission checks that each argument is physically
+    ///   assignable to its parameter and that the results are the
+    ///   signature's, or none for a signature whose one result is
+    ///   `core.nil`.
+    /// - **Ownership and value flow:** the index and arguments are ordinary
+    ///   SSA uses.
+    #[asm_format(callee "(" args ")" ("table" table^)? attr_dict ":" signature(signature))]
     #[implements(IndirectCallLike)]
-    fn call_indirect(
-        type_idx: Attr<u32>,
-        table: Attr<u32>,
-        signature: Option<Attr<Type>>,
+    fn call_indirect<S: FuncSig>(
+        table: Option<Attr<u32>>,
+        signature: Attr<TypeOf<S>>,
+        callee: Value<I32>,
         args: Variadic<_>,
     ) -> Variadic<_> {
     }
@@ -61,11 +80,24 @@ mod wasm {
     #[implements(CallLike)]
     fn return_call(callee: Attr<SymbolRef>, args: Variadic<_>) {}
 
+    /// A tail call of the function at a table index through its exact
+    /// signature.
+    ///
+    /// ```text
+    /// wasm.return_call_indirect %index(%arg0, ...) : (A, ...) -> R
+    /// ```
+    ///
+    /// - **Shape:** as `wasm.call_indirect`, without results.
+    /// - **Meaning:** Wasm `return_call_indirect`.
+    /// - **Verification:** as for `wasm.call_indirect`'s arguments; the
+    ///   signature's results are the enclosing function's.
+    /// - **Ownership and value flow:** as `wasm.call_indirect`.
+    #[asm_format(callee "(" args ")" ("table" table^)? attr_dict ":" signature(signature))]
     #[implements(IndirectCallLike)]
-    fn return_call_indirect(
-        type_idx: Attr<u32>,
-        table: Attr<u32>,
-        signature: Option<Attr<Type>>,
+    fn return_call_indirect<S: FuncSig>(
+        table: Option<Attr<u32>>,
+        signature: Attr<TypeOf<S>>,
+        callee: Value<I32>,
         args: Variadic<_>,
     ) {
     }
@@ -776,9 +808,17 @@ pub fn func_sig_with_attrs(
 
 const INDIRECT_CALL_SIGNATURE_ATTR: &str = "signature";
 
+/// The `wasm.func_sig` an indirect transfer declares, read without assuming
+/// its schema holds.
+fn exact_indirect_signature(ctx: &crate::IrContext, op: crate::OpRef) -> Option<crate::TypeRef> {
+    ctx.op_attrs(op)
+        .get_type(INDIRECT_CALL_SIGNATURE_ATTR)
+        .filter(|&ty| FuncSig::from_type_ref(ctx, ty).is_some())
+}
+
 impl IndirectCallLike for CallIndirect {
     fn exact_signature(&self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
-        self.signature(ctx)
+        exact_indirect_signature(ctx, self.op_ref())
     }
 
     fn set_exact_signature(&self, ctx: &mut crate::IrContext, signature: crate::TypeRef) -> bool {
@@ -788,7 +828,7 @@ impl IndirectCallLike for CallIndirect {
 
 impl IndirectCallLike for ReturnCallIndirect {
     fn exact_signature(&self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
-        self.signature(ctx)
+        exact_indirect_signature(ctx, self.op_ref())
     }
 
     fn set_exact_signature(&self, ctx: &mut crate::IrContext, signature: crate::TypeRef) -> bool {
@@ -900,15 +940,15 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.func @ordinary(%table: core.i32, %value: core.i32) -> core.i32 {
-    %result = wasm.call_indirect %table, %value {signature = wasm.func_sig<(core.i32) -> core.i32>, table = 0, type_idx = 0} : core.i32
+    %result = wasm.call_indirect %table, %value {signature = wasm.func_sig<(core.i32) -> core.i32>} : core.i32
     wasm.return %result
   }
   wasm.func @plain(%table: core.i32, %value: core.i32) -> core.i32 {
-    %result = wasm.call_indirect %table, %value {table = 0, type_idx = 0} : core.i32
+    %result = wasm.call_indirect %table, %value : core.i32
     wasm.return %result
   }
   wasm.func @tail(%table: core.i32, %value: core.i32) -> core.nil {
-    wasm.return_call_indirect %table, %value {signature = wasm.func_sig<(core.i32) -> core.nil>, table = 0, type_idx = 0}
+    wasm.return_call_indirect %table, %value {signature = wasm.func_sig<(core.i32) -> core.nil>}
   }
   wasm.func @direct() -> core.nil {
     wasm.return
@@ -939,8 +979,25 @@ mod tests {
         assert!(DynIndirectCallLike::get(&ctx, direct).is_none());
 
         let printed = print_module(&ctx, module.op());
-        assert!(printed.contains("wasm.call_indirect"));
-        assert!(printed.contains("signature = wasm.func_sig<(core.i32) -> core.i32>"));
+        assert!(
+            printed.contains("wasm.call_indirect %0(%1) : (core.i32) -> core.i32"),
+            "{printed}"
+        );
+    }
+
+    #[test]
+    fn indirect_calls_write_the_index_as_their_callee() {
+        let text = r#"core.module @test {
+  wasm.func @calls(%0: core.i32, %1: core.i64) -> core.i32 {
+      %2 = wasm.call_indirect %0(%1) : (core.i64) -> core.i32
+      %3, %4 = wasm.call_indirect %0() table 1 : () -> (core.i32, core.i64)
+      wasm.return_call_indirect %0(%1, %2) table 2 attributes {extra = 1} : (core.i64, core.i32) -> core.i32
+  }
+}
+"#;
+        let mut ctx = crate::IrContext::new();
+        let module = parse_test_module(&mut ctx, text);
+        assert_eq!(print_module(&ctx, module.op()), text);
     }
 
     #[test]

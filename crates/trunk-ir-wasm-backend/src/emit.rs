@@ -1248,7 +1248,7 @@ mod tests {
     wasm.return
   }
   wasm.func @caller(%table_index: core.i32, %value: core.i32) -> core.nil {
-    wasm.return_call_indirect %table_index, %value {signature = wasm.func_sig<(core.i32) -> core.nil>, table = 0, type_idx = 0}
+    wasm.return_call_indirect %table_index, %value {signature = wasm.func_sig<(core.i32) -> core.nil>}
   }
   wasm.export_func {name = "caller", func = @caller}
 }"#,
@@ -1571,7 +1571,7 @@ mod tests {
   }
   wasm.func {sym_name = "caller", type = wasm.func_sig<(core.i32) -> (core.i32, core.i64)>} {
     ^entry(%table_index: core.i32):
-      %a, %b = wasm.call_indirect %table_index {signature = wasm.func_sig<() -> (core.i32, core.i64)>, table = 0, type_idx = 0} : core.i32, core.i64
+      %a, %b = wasm.call_indirect %table_index {signature = wasm.func_sig<() -> (core.i32, core.i64)>} : core.i32, core.i64
       wasm.return %a, %b
   }
 }"#,
@@ -1640,7 +1640,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.func @caller(%table_index: core.i32, %value: core.i32) -> core.nil {
-    wasm.return_call_indirect %table_index, %value {signature = wasm.func_sig<(core.i32) -> core.nil>, table = 0, type_idx = 0}
+    wasm.return_call_indirect %table_index, %value {signature = wasm.func_sig<(core.i32) -> core.nil>}
   }
 }"#,
         );
@@ -1682,7 +1682,7 @@ mod tests {
             r#"core.module @test {
   wasm.table {reftype = "funcref", min = 1, max = 1}
   wasm.func @caller(%table_index: core.i32, %value: wasm.structref) -> core.i32 {
-    %result = wasm.call_indirect %table_index, %value {signature = wasm.func_sig<(wasm.anyref) -> core.i32>, table = 0, type_idx = 0} : core.i32
+    %result = wasm.call_indirect %table_index, %value {signature = wasm.func_sig<(wasm.anyref) -> core.i32>} : core.i32
     wasm.return %result
   }
 }"#,
@@ -1738,14 +1738,14 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.func @caller(%table_index: core.i32) -> core.i32 {
-    %result = wasm.call_indirect %table_index {type_idx = 0} : core.i32
+    %result = wasm.call_indirect %table_index : core.i32
     wasm.return %result
   }
 }"#,
         );
         let error = crate::emit_module_to_wasm(&mut ctx, module)
             .err()
-            .expect("an encoded type index cannot replace an exact signature");
+            .expect("an indirect call without its exact signature is not emitted");
         assert!(
             error
                 .to_string()
@@ -1787,7 +1787,7 @@ mod tests {
             r#"core.module @test {
   wasm.table {reftype = "funcref", min = 1, max = 1}
   wasm.func @caller(%table_index: core.i32) -> wasm.funcref {
-    %ignored = wasm.call_indirect %table_index {signature = wasm.func_sig<() -> wasm.anyref>, table = 0, type_idx = 0} : wasm.anyref
+    %ignored = wasm.call_indirect %table_index {signature = wasm.func_sig<() -> wasm.anyref>} : wasm.anyref
     %result = wasm.nop : wasm.funcref
     wasm.return %result
   }
@@ -1847,7 +1847,7 @@ mod tests {
   wasm.func {sym_name = "caller", type = wasm.func_sig<() -> core.i32>} {
     wasm.call {callee = @set_one}
     %table_index = wasm.i32_const {value = 0} : core.i32
-    wasm.call_indirect %table_index {signature = wasm.func_sig<() -> ()>, table = 0, type_idx = 0}
+    wasm.call_indirect %table_index {signature = wasm.func_sig<() -> ()>}
     %result = wasm.global_get {index = 0} : core.i32
     wasm.return %result
   }
@@ -1934,7 +1934,7 @@ mod tests {
   }
   wasm.func {sym_name = "caller", type = wasm.func_sig<(core.i32) -> (core.i32, core.i64)>} {
     ^entry(%table_index: core.i32):
-      %a, %b = wasm.call_indirect %table_index {signature = wasm.func_sig<() -> (core.i32, core.i64)>, table = 0, type_idx = 0} : core.i32, core.i64
+      %a, %b = wasm.call_indirect %table_index {signature = wasm.func_sig<() -> (core.i32, core.i64)>} : core.i32, core.i64
       wasm.return %a, %b
   }
   wasm.export_func {name = "indirect_pair", func = @caller}
