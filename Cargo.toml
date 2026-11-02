@@ -59,6 +59,7 @@ tribute-rc = { path = "crates/tribute-rc" }
 tribute-front = { path = "crates/tribute-front" }
 tribute-ir = { path = "crates/tribute-ir" }
 tribute-passes = { path = "crates/tribute-passes" }
+tribute-prop = { path = "crates/tribute-prop" }
 trunk-ir = { path = "crates/trunk-ir" }
 trunk-ir-macros = { path = "crates/trunk-ir-macros" }
 tribute-runtime = { path = "crates/tribute-runtime" }

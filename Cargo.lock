@@ -1932,6 +1932,7 @@ dependencies = [
  "tribute-core",
  "tribute-front",
  "tribute-ir",
+ "tribute-prop",
  "trunk-ir",
  "winnow",
 ]
@@ -1964,6 +1965,13 @@ dependencies = [
  "trunk-ir",
  "trunk-ir-cranelift-backend",
  "trunk-ir-wasm-backend",
+]
+
+[[package]]
+name = "tribute-prop"
+version = "0.1.0"
+dependencies = [
+ "proptest",
 ]
 
 [[package]]
