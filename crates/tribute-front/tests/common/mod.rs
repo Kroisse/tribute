@@ -250,10 +250,13 @@ pub fn run_ast_pipeline_with_ir(db: &dyn salsa::Database, source: SourceCst) -> 
 
     let ir = run_ast_pipeline_inner(db, source);
     // Production lowers only a module without errors.
-    let errors: Vec<_> = run_ast_pipeline_inner::accumulated::<Diagnostic>(db, source)
-        .into_iter()
-        .filter(|d| d.inner.severity == tribute_core::diagnostic::DiagnosticSeverity::Error)
-        .collect();
+    let errors: Vec<_> = tribute_front::ast::locate_diagnostics(
+        run_ast_pipeline_inner::accumulated::<Diagnostic>(db, source),
+        run_ast_pipeline_inner::accumulated::<tribute_front::ast::NodeDiagnostic>(db, source),
+        analysis::spans(db, source, *environment(db)),
+    )
+    .filter(|d| d.inner.severity == tribute_core::diagnostic::DiagnosticSeverity::Error)
+    .collect();
     assert!(
         errors.is_empty(),
         "Expected no errors, but found {}:\n{}",
@@ -296,9 +299,6 @@ pub fn prelude_string_type(db: &dyn salsa::Database) -> tribute_front::ast::Type
 /// Run the frontend through TDNR, without lowering invalid ASTs to IR.
 pub fn ast_pipeline_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<Diagnostic> {
     analysis::diagnostics(db, source, *environment(db))
-        .into_iter()
-        .cloned()
-        .collect()
 }
 
 /// Run the frontend and return error diagnostic messages.

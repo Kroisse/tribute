@@ -31,7 +31,7 @@ use trunk_ir::SymbolPath;
 
 use crate::ast::{
     AbilityId, CtorId, Decl, DeclTable, FIELD_LENS_FUNCTIONS, FuncDefId, Module, ModuleDecl,
-    ModuleItem, NodeId, ResolvedRef, SpanMap, TypeDefId, UnresolvedName, Visibility,
+    ModuleItem, NodeId, ResolvedRef, TypeDefId, UnresolvedName, Visibility,
 };
 
 /// Resolve names in a module with the environment [`build_env`] built for
@@ -40,10 +40,8 @@ pub fn resolve_with_env<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<UnresolvedName>,
     scope: &Scope<'db>,
-    span_map: SpanMap<'db>,
 ) -> DeclTable<ResolvedRef<'db>> {
-    let mut resolver = Resolver::new(db, scope.as_ref(), span_map);
-    resolver.resolve_module(module)
+    Resolver::new(db, scope.as_ref()).resolve_module(module)
 }
 
 /// Resolve `use` imports that reference module-qualified paths.
@@ -390,9 +388,8 @@ pub fn resolve_library_with_env<'db>(
     module: &Module<UnresolvedName>,
     env: &PackageEnv<'db>,
     dependencies: &Dependencies<'db>,
-    span_map: SpanMap<'db>,
 ) -> DeclTable<ResolvedRef<'db>> {
-    Resolver::new(db, ScopeRef::new(env, dependencies), span_map)
+    Resolver::new(db, ScopeRef::new(env, dependencies))
         .with_package(env.package().clone())
         .resolve_module(module)
 }

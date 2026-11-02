@@ -5,6 +5,7 @@
 
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
+use salsa::Accumulator;
 
 use tribute_core::{CompilationPhase, DiagnosticSeverity};
 use trunk_ir::{Symbol, SymbolPath};
@@ -84,7 +85,7 @@ impl<'db> TypeChecker<'db> {
                 DiagnosticSeverity::Error,
                 CompilationPhase::TypeChecking,
             )
-            .report(self);
+            .accumulate(self.db());
         }
     }
 
@@ -282,7 +283,7 @@ impl<'db> TypeChecker<'db> {
             DiagnosticSeverity::Error,
             CompilationPhase::TypeChecking,
         )
-        .report(self);
+        .accumulate(self.db());
         Type::new(self.db(), TypeKind::Error)
     }
 
@@ -325,7 +326,7 @@ impl<'db> TypeChecker<'db> {
                 DiagnosticSeverity::Error,
                 CompilationPhase::TypeChecking,
             )
-            .report(self);
+            .accumulate(self.db());
         }
 
         let mut effect_params = collect_row_vars(self.db(), func_ty);
@@ -716,7 +717,7 @@ impl<'db> TypeChecker<'db> {
                                 DiagnosticSeverity::Error,
                                 CompilationPhase::TypeChecking,
                             )
-                            .report(self);
+                            .accumulate(self.db());
                             false
                         }
                         _ => true,

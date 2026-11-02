@@ -6,6 +6,7 @@
 
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
+use salsa::Accumulator;
 
 use itertools::Itertools;
 use tribute_core::{CompilationPhase, DiagnosticSeverity};
@@ -390,7 +391,7 @@ impl<'db> TypeChecker<'db> {
                 DiagnosticSeverity::Error,
                 CompilationPhase::TypeChecking,
             )
-            .report(self);
+            .accumulate(self.db());
         }
 
         if let Some(declared) = declared_effect {
@@ -431,7 +432,7 @@ impl<'db> TypeChecker<'db> {
                         DiagnosticSeverity::Error,
                         CompilationPhase::TypeChecking,
                     )
-                    .report(self);
+                    .accumulate(self.db());
                 }
             }
         }
@@ -743,7 +744,7 @@ impl<'db> TypeChecker<'db> {
                         DiagnosticSeverity::Error,
                         CompilationPhase::TypeChecking,
                     )
-                    .report(self),
+                    .accumulate(self.db()),
                 }
             }
             deferred = remaining;
@@ -947,7 +948,7 @@ impl<'db> TypeChecker<'db> {
             DiagnosticSeverity::Error,
             CompilationPhase::TypeChecking,
         )
-        .report(self);
+        .accumulate(self.db());
     }
 
     /// Concrete effects of `body` that `declared` does not name.
@@ -1001,7 +1002,7 @@ impl<'db> TypeChecker<'db> {
                 DiagnosticSeverity::Error,
                 CompilationPhase::TypeChecking,
             )
-            .report(self);
+            .accumulate(self.db());
         }
     }
 
@@ -1086,7 +1087,7 @@ impl<'db> TypeChecker<'db> {
                 DiagnosticSeverity::Error,
                 CompilationPhase::TypeChecking,
             )
-            .report(self);
+            .accumulate(self.db());
         }
         !reported.is_empty()
     }
@@ -1175,7 +1176,7 @@ impl<'db> TypeChecker<'db> {
                 DiagnosticSeverity::Error,
                 CompilationPhase::TypeChecking,
             )
-            .report(self);
+            .accumulate(self.db());
         }
         !messages.is_empty()
     }
@@ -1247,7 +1248,7 @@ impl<'db> TypeChecker<'db> {
             duplicate.first_annotation_id,
             "first matching ability annotation is here",
         )
-        .report(self);
+        .accumulate(self.db());
         true
     }
 
@@ -1276,7 +1277,7 @@ impl<'db> TypeChecker<'db> {
                 DiagnosticSeverity::Error,
                 CompilationPhase::TypeChecking,
             )
-            .report(self);
+            .accumulate(self.db());
         };
 
         let type_names: HashMap<u32, Symbol> = self

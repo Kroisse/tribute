@@ -6,15 +6,15 @@
 use rustc_hash::FxHashMap as HashMap;
 
 use itertools::Itertools;
-use salsa::Accumulator as _;
-use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use salsa::Accumulator;
+use tribute_core::diagnostic::{CompilationPhase, DiagnosticSeverity};
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::{
     Arm, Candidates, CtorId, Decl, DeclEntry, DeclTable, Expr, ExprKind, FIELD_LENS_FUNCTIONS,
     FieldDecl, FieldInit, FieldPattern, FuncDecl, HandlerArm, HandlerKind, LocalId, LocalIdGen,
-    Module, ModuleItem, ModulePath, NodeId, Param, ParamDecl, Pattern, PatternKind, ResolvedRef,
-    SpanMap, Stmt, TypeAnnotation, TypeAnnotationKind, TypeKind, TypeParamDecl, UnresolvedName,
+    Module, ModuleItem, ModulePath, NodeDiagnostic, NodeId, Param, ParamDecl, Pattern, PatternKind,
+    ResolvedRef, Stmt, TypeAnnotation, TypeAnnotationKind, TypeKind, TypeParamDecl, UnresolvedName,
     UseDecl, Visibility,
 };
 
@@ -100,8 +100,6 @@ pub struct Resolver<'e, 'db> {
     /// The environment of the package being resolved, with the packages it
     /// depends on.
     scope: ScopeRef<'e, 'db>,
-    /// Span map for emitting diagnostics with source locations.
-    span_map: SpanMap<'db>,
     /// Lexical nested-module namespace used for unqualified references in an
     /// inline module body.
     module_path: Vec<Symbol>,
@@ -140,15 +138,10 @@ struct FunctionResolver<'r, 'e, 'db> {
 
 impl<'e, 'db> Resolver<'e, 'db> {
     /// Create a new resolver reading names through `scope`.
-    pub fn new(
-        db: &'db dyn salsa::Database,
-        scope: ScopeRef<'e, 'db>,
-        span_map: SpanMap<'db>,
-    ) -> Self {
+    pub fn new(db: &'db dyn salsa::Database, scope: ScopeRef<'e, 'db>) -> Self {
         Self {
             db,
             scope,
-            span_map,
             module_path: Vec::new(),
             module_imports: Vec::new(),
             module_imported_functions: Vec::new(),
@@ -307,12 +300,12 @@ impl<'e, 'db> Resolver<'e, 'db> {
         written: impl std::fmt::Display,
         restriction: &Restriction,
     ) {
-        Diagnostic::new(
+        NodeDiagnostic::new(
             format!(
                 "`{written}` is not visible here: {}",
                 restriction.display(&self.names())
             ),
-            self.span_map.get_or_default(node),
+            node,
             DiagnosticSeverity::Error,
             CompilationPhase::NameResolution,
         )
@@ -452,12 +445,12 @@ impl<'e, 'db> Resolver<'e, 'db> {
     }
 
     fn report_unresolved_method(&self, node: NodeId, method: &Symbol) {
-        Diagnostic::new(
+        NodeDiagnostic::new(
             format!(
                 "unresolved method `{method}`: the scope names no function `{method}`, \
                  and no module or type in it has one"
             ),
-            self.span_map.get_or_default(node),
+            node,
             DiagnosticSeverity::Error,
             CompilationPhase::NameResolution,
         )
@@ -756,9 +749,9 @@ impl<'e, 'db> Resolver<'e, 'db> {
 
     /// Report a path whose keywords do not denote a module.
     fn report_path_keyword(&self, node: NodeId, error: PathKeywordError) {
-        Diagnostic::new(
+        NodeDiagnostic::new(
             error.to_string(),
-            self.span_map.get_or_default(node),
+            node,
             DiagnosticSeverity::Error,
             CompilationPhase::NameResolution,
         )
@@ -940,12 +933,12 @@ impl<'e, 'db> Resolver<'e, 'db> {
     /// Report an annotation path that names a module rather than a type.
     fn report_module_annotation(&self, ann: &mut TypeAnnotation) {
         if let TypeAnnotationKind::Path(segments) = &ann.kind {
-            Diagnostic::new(
+            NodeDiagnostic::new(
                 format!(
                     "`{}` names a module, not a type",
                     segments.iter().format("::")
                 ),
-                self.span_map.get_or_default(ann.id),
+                ann.id,
                 DiagnosticSeverity::Error,
                 CompilationPhase::NameResolution,
             )
@@ -956,9 +949,9 @@ impl<'e, 'db> Resolver<'e, 'db> {
 
     /// Report a type or ability name an annotation cannot see.
     fn report_unresolved_annotation(&self, node: NodeId, name: &Symbol) {
-        Diagnostic::new(
+        NodeDiagnostic::new(
             format!("unresolved name `{name}`"),
-            self.span_map.get_or_default(node),
+            node,
             DiagnosticSeverity::Error,
             CompilationPhase::NameResolution,
         )
@@ -1020,7 +1013,7 @@ impl<'e, 'db> Resolver<'e, 'db> {
     /// Resolve a module into the table of its declarations, each in the
     /// module its scope follows.
     pub fn resolve_module(
-        &mut self,
+        mut self,
         module: &Module<UnresolvedName>,
     ) -> DeclTable<ResolvedRef<'db>> {
         self.report_repeated_definitions(&module.decls);
@@ -1159,17 +1152,13 @@ impl<'e, 'db> Resolver<'e, 'db> {
     /// the definition.
     fn report_repeated_definitions(&mut self, items: &[ModuleItem<UnresolvedName>]) {
         for repeat in super::repeated_definitions(items) {
-            Diagnostic::builder(
+            NodeDiagnostic::new(
                 format!("duplicate definition of `{}`", repeat.name),
-                self.span_map.get_or_default(repeat.id),
+                repeat.id,
                 DiagnosticSeverity::Error,
                 CompilationPhase::NameResolution,
             )
-            .label(
-                self.span_map.get_or_default(repeat.earlier),
-                "first defined here",
-            )
-            .build()
+            .label(repeat.earlier, "first defined here")
             .accumulate(self.db);
             self.redefinitions.push(repeat.id);
         }
@@ -1218,12 +1207,12 @@ impl<'e, 'db> Resolver<'e, 'db> {
                     if !FIELD_LENS_FUNCTIONS.iter().any(|lens| name == lens) {
                         continue;
                     }
-                    Diagnostic::new(
+                    NodeDiagnostic::new(
                         format!(
                             "duplicate definition of `{}::{}::{name}`: struct `{}` defines it for its field `{}`",
                             companion.name, field.name, companion.name, field.name
                         ),
-                        self.span_map.get_or_default(id),
+                        id,
                         DiagnosticSeverity::Error,
                         CompilationPhase::NameResolution,
                     )
@@ -1297,9 +1286,9 @@ impl<'e, 'db> Resolver<'e, 'db> {
                  a restricted visibility names the declaring module or a module around it"
             ),
         };
-        Diagnostic::new(
+        NodeDiagnostic::new(
             message,
-            self.span_map.get_or_default(id),
+            id,
             DiagnosticSeverity::Error,
             CompilationPhase::NameResolution,
         )
@@ -1397,9 +1386,9 @@ impl<'e, 'db> Resolver<'e, 'db> {
         } else {
             format!("unresolved import `{}`", u.path.iter().format("::"))
         };
-        Diagnostic::new(
+        NodeDiagnostic::new(
             message,
-            self.span_map.get_or_default(u.id),
+            u.id,
             DiagnosticSeverity::Error,
             CompilationPhase::NameResolution,
         )
@@ -1452,13 +1441,13 @@ impl<'e, 'db> Resolver<'e, 'db> {
                 None => true,
             });
         if let Some(restriction) = wider {
-            Diagnostic::new(
+            NodeDiagnostic::new(
                 format!(
                     "`{written}` cannot be re-exported as `{}`: {}",
                     u.visibility,
                     restriction.display(&self.names())
                 ),
-                self.span_map.get_or_default(u.id),
+                u.id,
                 DiagnosticSeverity::Error,
                 CompilationPhase::NameResolution,
             )
@@ -1765,7 +1754,6 @@ impl<'r, 'e, 'db> FunctionResolver<'r, 'e, 'db> {
 
     /// Report an unresolved name diagnostic, with "did you mean?" suggestions.
     fn report_unresolved_name(&self, name: &UnresolvedName) {
-        let span = self.module.span_map.get_or_default(name.id);
         let similar = self.find_similar_names(&name.name());
         // A variant is declared only in its enum's namespace, so a bare
         // variant name is written as an implicit constructor.
@@ -1786,9 +1774,9 @@ impl<'r, 'e, 'db> FunctionResolver<'r, 'e, 'db> {
             format!("unresolved name `{}`; did you mean {}?", name, suggestions)
         };
 
-        Diagnostic::new(
+        NodeDiagnostic::new(
             message,
-            span,
+            name.id,
             DiagnosticSeverity::Error,
             CompilationPhase::NameResolution,
         )
@@ -2342,7 +2330,7 @@ mod tests {
     fn test_resolve_local_variable(db: &salsa::DatabaseImpl) {
         let env = PackageEnv::new();
         let dependencies = Dependencies::none();
-        let module = Resolver::new(db, ScopeRef::new(&env, &dependencies), SpanMap::empty());
+        let module = Resolver::new(db, ScopeRef::new(&env, &dependencies));
         let mut resolver = FunctionResolver::new(&module);
 
         let param_name = Symbol::new("x");
@@ -2371,7 +2359,7 @@ mod tests {
     fn test_scope_isolation(db: &salsa::DatabaseImpl) {
         let env = PackageEnv::new();
         let dependencies = Dependencies::none();
-        let module = Resolver::new(db, ScopeRef::new(&env, &dependencies), SpanMap::empty());
+        let module = Resolver::new(db, ScopeRef::new(&env, &dependencies));
         let mut resolver = FunctionResolver::new(&module);
 
         let x = Symbol::new("x");
@@ -2404,7 +2392,7 @@ mod tests {
     fn test_nested_scopes(db: &salsa::DatabaseImpl) {
         let env = PackageEnv::new();
         let dependencies = Dependencies::none();
-        let module = Resolver::new(db, ScopeRef::new(&env, &dependencies), SpanMap::empty());
+        let module = Resolver::new(db, ScopeRef::new(&env, &dependencies));
         let mut resolver = FunctionResolver::new(&module);
 
         let x = Symbol::new("x");
@@ -2455,7 +2443,7 @@ mod tests {
 
         let env = PackageEnv::new();
         let dependencies = Dependencies::none();
-        let module = Resolver::new(db, ScopeRef::new(&env, &dependencies), SpanMap::empty());
+        let module = Resolver::new(db, ScopeRef::new(&env, &dependencies));
         let mut resolver = FunctionResolver::new(&module);
         resolver.push_scope();
 
@@ -2500,7 +2488,7 @@ mod tests {
 
         let env = PackageEnv::new();
         let dependencies = Dependencies::none();
-        let module = Resolver::new(db, ScopeRef::new(&env, &dependencies), SpanMap::empty());
+        let module = Resolver::new(db, ScopeRef::new(&env, &dependencies));
         let mut resolver = FunctionResolver::new(&module);
         resolver.push_scope();
 

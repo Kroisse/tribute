@@ -194,9 +194,9 @@ pub fn print_diagnostics(
     db: &dyn salsa::Database,
     source: SourceCst,
     file_path: &str,
-    diags: &mut [&Diagnostic],
+    diags: &mut [Diagnostic],
 ) {
-    diags.sort_by(|left, right| tribute_core::diagnostic::compare_diagnostics(left, right));
+    diags.sort_by(tribute_core::diagnostic::compare_diagnostics);
     // Keep each file's diagnostics together, the root file's first.
     let root = source_hash(source.uri(db).as_str());
     diags.sort_by_key(|diag| {
@@ -221,7 +221,7 @@ pub fn report_diagnostics(
     db: &dyn salsa::Database,
     source: SourceCst,
     file_path: &str,
-    mut accumulated_diags: Vec<&Diagnostic>,
+    mut accumulated_diags: Vec<Diagnostic>,
 ) {
     if !accumulated_diags.is_empty() {
         print_diagnostics(db, source, file_path, &mut accumulated_diags);

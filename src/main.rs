@@ -127,11 +127,7 @@ fn compile_file(
             let result = tribute::pipeline::dump_ir(db, source, is_native);
 
             // Collect diagnostics
-            let diagnostics: Vec<Diagnostic> =
-                tribute::pipeline::dump_ir::accumulated::<Diagnostic>(db, source, is_native)
-                    .into_iter()
-                    .cloned()
-                    .collect();
+            let diagnostics = tribute::pipeline::dump_ir_diagnostics(db, source, is_native);
 
             if !diagnostics.is_empty() {
                 let file_path = input_path.display().to_string();
@@ -169,7 +165,7 @@ fn compile_file(
                 );
                 if let Some(object_bytes) = compile_to_native_binary(db, source, config) {
                     let mut diags =
-                        compile_to_native_binary::accumulated::<Diagnostic>(db, source, config);
+                        tribute::pipeline::native_binary_diagnostics(db, source, config);
                     print_diagnostics(db, source, &input_path.display().to_string(), &mut diags);
                     let output = output_path.unwrap_or(default_output);
                     if let Err(e) = link_native_binary(object_bytes, &output, sysroot) {
@@ -183,7 +179,7 @@ fn compile_file(
                 } else {
                     let file_path = input_path.display().to_string();
                     let diags =
-                        compile_to_native_binary::accumulated::<Diagnostic>(db, source, config);
+                        tribute::pipeline::native_binary_diagnostics(db, source, config);
                     report_diagnostics(db, source, &file_path, diags);
                     std::process::exit(1);
                 }
@@ -282,7 +278,11 @@ fn load_package_dir(db: &TributeDatabaseImpl, dir: &Path, target: &str) -> Packa
         let manifest_path = dir.join(tribute_front::manifest::MANIFEST_FILE);
         let manifest_path = manifest_path.display().to_string();
         let loaded = load_package(db, manifest, implicit);
-        let mut diags = load_package::accumulated::<Diagnostic>(db, manifest, implicit);
+        let mut diags: Vec<Diagnostic> =
+            load_package::accumulated::<Diagnostic>(db, manifest, implicit)
+                .into_iter()
+                .cloned()
+                .collect();
         let failed = diags
             .iter()
             .any(|diag| diag.inner.severity == DiagnosticSeverity::Error);
@@ -310,7 +310,7 @@ fn load_package_dir(db: &TributeDatabaseImpl, dir: &Path, target: &str) -> Packa
         };
         println!("Checking library package `{name}`...");
         let mut checked = *check_library(db, library);
-        let mut diags = check_library::accumulated::<Diagnostic>(db, library);
+        let mut diags = tribute::library_diagnostics(db, library);
         checked &= !diags
             .iter()
             .any(|diag| diag.inner.severity == DiagnosticSeverity::Error);

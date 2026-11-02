@@ -205,9 +205,7 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
                 ast,
                 tribute_front::resolve::Dependencies::none(),
             ),
-            parsed.span_map(db),
         ),
-        parsed.span_map(db),
         root_names(),
     );
     let mono = tribute_front::monomorphize::monomorphize_functions(
@@ -249,9 +247,7 @@ fn lower_monomorphized_source(
                 ast,
                 tribute_front::resolve::Dependencies::none(),
             ),
-            parsed.span_map(db),
         ),
-        parsed.span_map(db),
         root_names(),
     );
     let mono = tribute_front::monomorphize::monomorphize_functions(
@@ -297,9 +293,8 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
         db,
         ast,
         &tribute_front::resolve::build_env(db, ast, tribute_front::resolve::Dependencies::none()),
-        span_map,
     );
-    let checked = tribute_front::typeck::typecheck_module(db, &resolved, span_map, root_names());
+    let checked = tribute_front::typeck::typecheck_module(db, &resolved, root_names());
     let mono = tribute_front::monomorphize::monomorphize_functions(
         db,
         tribute_front::monomorphize::SpecializationInput::new(db, checked, None, root_names()),
@@ -437,6 +432,10 @@ fn use_bool() ->{} Bool { apply(True) }
     );
     assert_outer_local_signatures(db, source);
     let errors = assert_outer_local_signatures::accumulated::<tribute_core::Diagnostic>(db, source);
+    assert!(errors.is_empty(), "{errors:?}");
+    let errors = assert_outer_local_signatures::accumulated::<tribute_front::ast::NodeDiagnostic>(
+        db, source,
+    );
     assert!(errors.is_empty(), "{errors:?}");
 }
 
