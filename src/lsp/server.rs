@@ -2787,6 +2787,56 @@ mod tests {
         assert!(messages[0].contains("helper"), "{messages:?}");
     }
 
+    /// An error both roots of a file module report is published once.
+    #[test]
+    fn an_error_both_roots_report_is_published_once() {
+        let dir = package_dir(&[
+            ("lib.trb", "mod shared\n"),
+            (
+                "main.trb",
+                "mod shared\n\nfn main() -> Nil { let _ = shared::size() }\n",
+            ),
+        ]);
+        let shared = file_uri(&dir, "src/shared.trb");
+
+        let mut harness = TestHarness::new();
+        let published =
+            harness.open_document_with_diagnostics(&shared, "pub fn size() -> Nat { missing }\n");
+        assert_eq!(
+            published.diagnostics.len(),
+            1,
+            "{:?}",
+            published.diagnostics
+        );
+    }
+
+    /// Hover in an open `src/lib.trb` reads the library package's analysis.
+    #[test]
+    fn hover_in_a_library_root_reads_the_library() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/packages/geometry/src/lib.trb");
+        let uri: Uri = tribute_front::path_to_uri(&path).as_str().parse().unwrap();
+
+        let mut harness = TestHarness::new();
+        let published =
+            harness.open_document_with_diagnostics(&uri, &std::fs::read_to_string(&path).unwrap());
+        assert_eq!(published.diagnostics, Vec::new());
+
+        let hover = harness
+            .request::<HoverRequest>(HoverParams {
+                text_document_position_params: TextDocumentPositionParams {
+                    text_document: lsp_types::TextDocumentIdentifier { uri },
+                    position: lsp_types::Position {
+                        line: 2,
+                        character: 33, // `rect` in the body of `area`
+                    },
+                },
+                work_done_progress_params: Default::default(),
+            })
+            .expect("the type of `rect`");
+        assert_eq!(extract_hover_type(&hover), Some("Rect"));
+    }
+
     #[test]
     fn an_open_dependency_buffer_republishes_its_dependents() {
         let packages =
