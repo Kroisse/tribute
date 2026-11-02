@@ -15,6 +15,7 @@ derive_more.workspace = true
 fluent-uri.workspace = true
 itertools.workspace = true
 salsa.workspace = true
+siphasher.workspace = true
 ropey.workspace = true
 hashbrown.workspace = true
 rustc-hash.workspace = true

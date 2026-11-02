@@ -1,7 +1,7 @@
 use super::nominal_index::{Declaration, NominalDeclaration, NominalIndex};
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
-use std::hash::{Hash, Hasher};
+use salsa::plumbing::AsId;
 use std::num::NonZero;
 use trunk_ir::SymbolPath;
 
@@ -10,9 +10,9 @@ use trunk_ir::Symbol;
 use crate::ast::fold::TypeFoldable;
 use crate::ast::visit::{RefSite, Visit, VisitMut};
 use crate::ast::{
-    Decl, DeclEntry, DeclTable, EnumDecl, ExternFuncDecl, FieldDecl, FuncDecl, FuncDefId, NodeId,
-    StructDecl, Type, TypeAnnotation, TypeAnnotationKind, TypeDefId, TypeKind, TypeScheme,
-    TypedRef, VariantDecl,
+    Decl, DeclEntry, DeclTable, EnumDecl, ExternFuncDecl, FieldDecl, FuncDecl, FuncDefId,
+    IdentityHasher, NodeId, StructDecl, Type, TypeAnnotation, TypeAnnotationKind, TypeDefId,
+    TypeKind, TypeScheme, TypedRef, VariantDecl,
 };
 use crate::typeck::subst::{BoundVarOutOfBounds, BoundVarSubst};
 
@@ -539,12 +539,15 @@ fn specialize_extern_decl(
 ///
 /// This is used to give specialized AST nodes unique NodeIds that
 /// don't collide with the original or other specializations.
+/// A type is written as its interned id, so the variant is stable within a
+/// database.
 pub(crate) fn type_args_variant(type_args: &[Type<'_>]) -> NonZero<u64> {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    type_args.hash(&mut hasher);
-    let hash = hasher.finish();
-    // Ensure non-zero: if hash happens to be 0, use 1
-    NonZero::new(hash).unwrap_or(NonZero::new(1).unwrap())
+    let mut hasher = IdentityHasher::new();
+    hasher.u64(type_args.len() as u64);
+    for ty in type_args {
+        hasher.u64(ty.as_id().as_bits());
+    }
+    hasher.finish_nonzero()
 }
 
 fn specialize_func_decl<'db>(
