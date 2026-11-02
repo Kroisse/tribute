@@ -83,6 +83,9 @@ pub struct Fragment {
     pub value: Value,
     /// The names the text refers to that it does not bind itself.
     pub free: BTreeSet<String>,
+    /// Whether the value is a `case` result, directly or as a block's
+    /// last expression.
+    yields_case: bool,
 }
 
 impl Fragment {
@@ -95,6 +98,7 @@ impl Fragment {
             src,
             value,
             free: BTreeSet::new(),
+            yields_case: false,
         }
     }
 
@@ -107,7 +111,12 @@ impl Fragment {
             .into_iter()
             .flat_map(|child| child.free.iter().cloned())
             .collect();
-        Self { src, value, free }
+        Self {
+            src,
+            value,
+            free,
+            yields_case: false,
+        }
     }
 }
 
@@ -253,6 +262,7 @@ fn leaf(env: &Env, goal: Goal) -> BoxedStrategy<Fragment> {
             free: BTreeSet::from([binding.name.clone()]),
             src: binding.name,
             value: binding.value,
+            yields_case: false,
         })
         .boxed();
     prop_oneof![literal, var].boxed()
@@ -318,11 +328,11 @@ fn arithmetic(
                 depth,
             );
             // TODO: drop this filter once type checking selects `+` and `*`
-            // in a `case` arm whose operands are both `case` expressions;
-            // it reports them as ambiguous today.
-            let lhs_is_case = is_case(&lhs);
-            rhs.prop_filter("both operands are case expressions", move |rhs| {
-                !(lhs_is_case && is_case(rhs))
+            // in a `case` arm whose operands are both `case` results; it
+            // reports them as ambiguous today.
+            let lhs_case = lhs.yields_case;
+            rhs.prop_filter("both operands are case results", move |rhs| {
+                !(lhs_case && rhs.yields_case)
             })
             .prop_map(move |rhs| {
                 let value =
@@ -332,10 +342,6 @@ fn arithmetic(
             })
         })
         .boxed()
-}
-
-fn is_case(fragment: &Fragment) -> bool {
-    fragment.src.starts_with("{ case ")
 }
 
 fn nat(fragment: &Fragment) -> u32 {
@@ -470,6 +476,7 @@ fn block(env: Env, goal: Goal, depth: u32) -> BoxedStrategy<Fragment> {
                     src,
                     value: body.value,
                     free,
+                    yields_case: body.yields_case,
                 }
             })
         })
@@ -501,7 +508,10 @@ fn case(env: Env, goal: Goal, depth: u32) -> BoxedStrategy<Fragment> {
                 let wildcard = bodies.last().expect("a case has a wildcard arm");
                 write!(src, "_ -> {} }} }}", wildcard.src).expect("writing to a String");
                 let value = bodies[taken].value.clone();
-                Fragment::compound(src, value, std::iter::once(&scrutinee).chain(&bodies))
+                Fragment {
+                    yields_case: true,
+                    ..Fragment::compound(src, value, std::iter::once(&scrutinee).chain(&bodies))
+                }
             })
         })
         .boxed()
