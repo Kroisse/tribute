@@ -199,7 +199,7 @@ mod tribute_cps {
     /// An indirect call through one convention.
     ///
     /// ```text
-    /// %result = tribute_cps.call_indirect %callee(%arg0, ...) attributes {convention = "direct"} : Result
+    /// %result = tribute_cps.call_indirect %callee, %arg0, ... {convention = "direct"} : Result
     /// ```
     ///
     /// - **Shape:** `tribute_control.call_indirect` with a required
@@ -212,7 +212,6 @@ mod tribute_cps {
     /// - **Ownership and value flow:** as `tribute_control.call_indirect`.
     /// - **Location:** the source indirect-call span.
     #[verify]
-    #[asm_format(callee "(" args ")" attr_dict ":" type(result))]
     #[implements(CallableResultOrigin)]
     fn call_indirect<S: FuncSig>(
         convention: Attr<CallingConvention>,
@@ -225,7 +224,7 @@ mod tribute_cps {
     /// A proper tail call of a callable value through one convention.
     ///
     /// ```text
-    /// tribute_cps.tail_call_indirect %callee(%arg0, ...) attributes {convention = "cps"}
+    /// tribute_cps.tail_call_indirect %callee, %arg0, ... {convention = "cps"}
     /// ```
     ///
     /// - **Shape:** `tribute_control.tail_call_indirect` with a required
@@ -240,7 +239,6 @@ mod tribute_cps {
     ///   `tribute_control.tail_call_indirect`.
     /// - **Location:** the source span including the `become` keyword.
     #[verify]
-    #[asm_format(callee "(" args ")" attr_dict)]
     #[implements(CallableExit, LocalValidation)]
     fn tail_call_indirect<S: FuncSig>(
         convention: Attr<CallingConvention>,
