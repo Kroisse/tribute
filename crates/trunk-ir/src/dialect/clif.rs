@@ -330,7 +330,7 @@ impl crate::asm_format::SignatureCodec for FuncSig {
         ty: crate::TypeRef,
     ) -> Option<crate::asm_format::SignatureParts<'_>> {
         Self::from_type_ref(ctx, ty)?;
-        super::func::signature_parts(ctx, ty)
+        super::func::signature_codec_parts(ctx, ty)
     }
 
     fn build<'a>(
