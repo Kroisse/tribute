@@ -10,7 +10,7 @@ use std::fmt;
 use std::ops::ControlFlow;
 use trunk_ir::attr_kind::SymbolRef;
 use trunk_ir::attr_kind::Type;
-use trunk_ir::op_flag::{IsolatedFromAbove, Pure};
+use trunk_ir::op_flag::{IsolatedFromAbove, OpFlag, Pure};
 
 use crate::calling_convention::{CALLING_CONVENTION_ATTR, CallingConvention};
 use crate::dialect::{adt, tribute_cps};
@@ -46,6 +46,27 @@ pub use row::{
 
 /// Exact semantic identity copied from the trusted compiler-intrinsic registry.
 pub const COMPILER_INTRINSIC_ATTR: &str = "tribute.compiler_intrinsic";
+
+/// A source named function in either dialect: `tribute_control.func`, or the
+/// `tribute_cps.func` class specialization makes of one.
+#[trunk_ir::op_flag]
+pub struct SourceFunc;
+
+/// A source lambda in either dialect.
+#[trunk_ir::op_flag]
+pub struct SourceLambda;
+
+/// A named function reference in either dialect.
+#[trunk_ir::op_flag]
+pub struct SourceFuncRef;
+
+/// An indirect call in either dialect.
+#[trunk_ir::op_flag]
+pub struct SourceCallIndirect;
+
+/// An indirect proper tail call in either dialect.
+#[trunk_ir::op_flag]
+pub struct SourceTailCallIndirect;
 
 #[trunk_ir::dialect]
 mod tribute_control {
@@ -88,11 +109,12 @@ mod tribute_control {
     /// - **Symbol:** a `SymbolDefinition`. A definition with a body and a
     ///   foreign `abi` is not discardable; any other is removed once nothing
     ///   live uses it (`new-plans/ir.md`, "Core Invariants").
+    /// - **Flags:** `SourceFunc`, shared with `tribute_cps.func`.
     /// - **Location:** the whole span of the source function or extern
     ///   declaration.
     #[verify]
     #[asm_format]
-    #[flags(IsolatedFromAbove)]
+    #[flags(IsolatedFromAbove, SourceFunc)]
     #[implements(
         CallableArgumentOrigin,
         LocalValidation,
@@ -137,9 +159,10 @@ mod tribute_control {
     ///   "지역 람다의 양화와 인스턴스화").
     /// - **Ownership and value flow:** the captures are ordinary SSA uses,
     ///   and there is no other hidden operand.
+    /// - **Flags:** `SourceLambda`, shared with `tribute_cps.lambda`.
     /// - **Location:** the whole span of the source lambda.
     #[asm_format]
-    #[flags(Pure)]
+    #[flags(Pure, SourceLambda)]
     #[implements(CallableResultOrigin, CallableArgumentOrigin, LocalValidation)]
     fn lambda(quantified_rows: Option<Attr<[u32]>>, captures: Variadic<_>) -> Value<impl FuncSig> {
         #[region(body)]
@@ -204,11 +227,12 @@ mod tribute_control {
     ///   that the outer row holds each instance of the substituted row at
     ///   least as many times and, if that row has a tail, the same tail.
     /// - **Ownership and value flow:** the result is an ordinary SSA value.
+    /// - **Flags:** `SourceFuncRef`, shared with `tribute_cps.func_ref`.
     /// - **Location:** the source reference span that uses the named function
     ///   as a value.
     #[verify]
     #[asm_format(func_ref ("rows" row_args^)? ":" type(result))]
-    #[flags(Pure)]
+    #[flags(Pure, SourceFuncRef)]
     #[implements(CallableResultOrigin)]
     fn func_ref(func_ref: Attr<SymbolRef>, row_args: Option<Attr<[Row]>>) -> Value<impl FuncSig> {}
 
@@ -265,10 +289,12 @@ mod tribute_control {
     /// - **Ownership and value flow:** the callee and arguments are ordinary
     ///   SSA uses. There is no environment, evidence, or
     ///   `ContinuationFrame<R>`.
+    /// - **Flags:** `SourceCallIndirect`, shared with `tribute_cps.call_indirect`.
     /// - **Location:** the source indirect-call span, including the callee
     ///   and the arguments.
     #[verify]
     #[asm_format(callee "(" args ")" attr_dict ":" type(result))]
+    #[flags(SourceCallIndirect)]
     #[implements(CallableResultOrigin)]
     fn call_indirect<S: FuncSig>(
         evidence_plan: Option<Attr<[EvidenceStep]>>,
@@ -346,10 +372,12 @@ mod tribute_control {
     /// - **Ownership and value flow:** as for `tribute_control.call_indirect`,
     ///   the environment, evidence, and `ContinuationFrame<R>` are not
     ///   operands.
+    /// - **Flags:** `SourceTailCallIndirect`, shared with `tribute_cps.tail_call_indirect`.
     /// - **Location:** the source span including the `become` keyword and
     ///   the indirect call.
     #[verify]
     #[asm_format(callee "(" args ")" attr_dict)]
+    #[flags(SourceTailCallIndirect)]
     #[implements(CallableExit, LocalValidation)]
     fn tail_call_indirect<S: FuncSig>(
         evidence_plan: Option<Attr<[EvidenceStep]>>,
@@ -1333,37 +1361,11 @@ impl FuncSigBuilder {
     }
 }
 
-/// Whether `op` is a source function: a `tribute_control.func`, or the
-/// `tribute_cps.func` class specialization makes of one.
-pub fn is_func(ctx: &IrContext, op: OpRef) -> bool {
-    Func::matches(ctx, op) || tribute_cps::Func::matches(ctx, op)
-}
-
-/// Whether `op` is a source lambda in either dialect.
-pub fn is_lambda(ctx: &IrContext, op: OpRef) -> bool {
-    Lambda::matches(ctx, op) || tribute_cps::Lambda::matches(ctx, op)
-}
-
-/// Whether `op` is a named function reference in either dialect.
-pub fn is_func_ref(ctx: &IrContext, op: OpRef) -> bool {
-    FuncRef::matches(ctx, op) || tribute_cps::FuncRef::matches(ctx, op)
-}
-
-/// Whether `op` is an indirect call in either dialect.
-pub fn is_call_indirect(ctx: &IrContext, op: OpRef) -> bool {
-    CallIndirect::matches(ctx, op) || tribute_cps::CallIndirect::matches(ctx, op)
-}
-
-/// Whether `op` is an indirect proper tail call in either dialect.
-pub fn is_tail_call_indirect(ctx: &IrContext, op: OpRef) -> bool {
-    TailCallIndirect::matches(ctx, op) || tribute_cps::TailCallIndirect::matches(ctx, op)
-}
-
 /// The source signature of a function or lambda in either dialect.
 fn callable_signature(ctx: &IrContext, op: OpRef) -> Option<TypeRef> {
-    if is_func(ctx, op) {
+    if SourceFunc::is_set(ctx, op) {
         ctx.op_attrs(op).get_type("type")
-    } else if is_lambda(ctx, op) {
+    } else if SourceLambda::is_set(ctx, op) {
         ctx.op_result_types(op).first().copied()
     } else {
         None
@@ -2991,9 +2993,9 @@ fn validate_return(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>
         );
         return;
     };
-    let callable_ty = if is_func(ctx, owner) {
+    let callable_ty = if SourceFunc::is_set(ctx, owner) {
         ctx.op_attrs(owner).get_type("type")
-    } else if is_lambda(ctx, owner) {
+    } else if SourceLambda::is_set(ctx, owner) {
         ctx.op_result_types(owner).first().copied()
     } else {
         None
@@ -3020,7 +3022,7 @@ fn validate_return(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>
 }
 
 fn is_tail_call(ctx: &IrContext, op: OpRef) -> bool {
-    TailCall::matches(ctx, op) || is_tail_call_indirect(ctx, op)
+    TailCall::matches(ctx, op) || SourceTailCallIndirect::is_set(ctx, op)
 }
 
 /// The callable whose body contains `op` and its source signature, or an
@@ -3032,7 +3034,7 @@ fn tail_call_owner(ctx: &IrContext, op: OpRef) -> Result<(OpRef, TypeRef), &'sta
         let Some(owner) = parent_op(ctx, exit) else {
             return Err("must be inside a tribute_control.func or lambda body");
         };
-        if is_func(ctx, owner) || is_lambda(ctx, owner) {
+        if SourceFunc::is_set(ctx, owner) || SourceLambda::is_set(ctx, owner) {
             return callable_signature(ctx, owner)
                 .map(|ty| (owner, ty))
                 .ok_or("must be inside a tribute_control.func or lambda body");
@@ -3084,7 +3086,7 @@ pub(crate) fn validate_tail_call(ctx: &IrContext, op: OpRef, errors: &mut Vec<Va
             return;
         }
     };
-    if is_tail_call_indirect(ctx, op) {
+    if SourceTailCallIndirect::is_set(ctx, op) {
         let callee_ty = ctx.value_ty(ctx.op_operands(op)[0]);
         let (Some((callee_result, _)), Some((owner_result, _))) = (
             func_sig_parts(ctx, callee_ty),
@@ -3393,7 +3395,7 @@ fn validate_local_operation(ctx: &IrContext, op: OpRef, errors: &mut Vec<Validat
         ctx,
         op,
         &def.schema,
-        is_func(ctx, op) || is_lambda(ctx, op),
+        SourceFunc::is_set(ctx, op) || SourceLambda::is_set(ctx, op),
         errors,
     );
     if let Some(validation) = DynLocalValidation::get(ctx, op) {
@@ -3586,7 +3588,7 @@ fn validate_symbol_use(
     errors: &mut Vec<ValidationError>,
 ) {
     {
-        if is_func_ref(ctx, op) {
+        if SourceFuncRef::is_set(ctx, op) {
             let Some(symbol) = ctx.op_attrs(op).get_symbol_ref("func_ref") else {
                 return;
             };
@@ -3619,7 +3621,7 @@ fn validate_symbol_use(
                         .definitions(ctx, table, &target)
                         .first()
                         .copied()
-                        .filter(|&target| is_func(ctx, target))
+                        .filter(|&target| SourceFunc::is_set(ctx, target))
                     {
                         validate_func_ref_signature(ctx, op, target, errors);
                     }
@@ -3630,7 +3632,7 @@ fn validate_symbol_use(
                 .definitions(ctx, op, symbol)
                 .first()
                 .copied()
-                .filter(|&target| is_func(ctx, target))
+                .filter(|&target| SourceFunc::is_set(ctx, target))
             else {
                 push_op_error(
                     ctx,
@@ -3651,7 +3653,7 @@ fn validate_symbol_use(
                 .definitions(ctx, op, symbol)
                 .first()
                 .copied()
-                .filter(|&target| is_func(ctx, target))
+                .filter(|&target| SourceFunc::is_set(ctx, target))
             else {
                 push_op_error(ctx, op, errors, format!("unresolved callee @{symbol}"));
                 return;
@@ -3694,7 +3696,7 @@ fn validate_symbol_use(
                 .definitions(ctx, op, symbol)
                 .first()
                 .copied()
-                .filter(|&target| is_func(ctx, target))
+                .filter(|&target| SourceFunc::is_set(ctx, target))
             else {
                 push_op_error(ctx, op, errors, format!("unresolved callee @{symbol}"));
                 return;
@@ -3792,7 +3794,7 @@ fn collect_external_references(
                     external.insert(operand);
                 }
             }
-            if is_func(ctx, op) {
+            if SourceFunc::is_set(ctx, op) {
                 continue;
             }
             for nested in ctx.op_regions(op) {
@@ -3804,7 +3806,7 @@ fn collect_external_references(
 
 fn validate_lambda_captures(ctx: &IrContext, body: RegionRef, errors: &mut Vec<ValidationError>) {
     walk_region_ops(ctx, body, &mut |op| {
-        if !is_lambda(ctx, op) {
+        if !SourceLambda::is_set(ctx, op) {
             return;
         }
         let captures = ctx.op_operands(op);
@@ -4219,10 +4221,10 @@ fn validate_return_contracts(ctx: &IrContext, body: RegionRef, errors: &mut Vec<
                 );
                 return;
             };
-            if is_func(ctx, current) {
+            if SourceFunc::is_set(ctx, current) {
                 break ctx.op_attrs(current).get_type("type");
             }
-            if is_lambda(ctx, current) {
+            if SourceLambda::is_set(ctx, current) {
                 break ctx.op_result_types(current).first().copied();
             }
             owner = parent_op(ctx, current);
@@ -4336,7 +4338,7 @@ fn direct_call_reenters_enclosing_func(ctx: &IrContext, op: OpRef) -> bool {
     };
     let mut owner = parent_op(ctx, op);
     while let Some(current) = owner {
-        if is_func(ctx, current) {
+        if SourceFunc::is_set(ctx, current) {
             // The call is looked up in the module enclosing the function,
             // where the function is a symbol under its own name.
             return parent_op(ctx, current)
@@ -4383,9 +4385,9 @@ fn validate_affine_lambda_carrier(
             );
             continue;
         }
-        if is_lambda(ctx, use_.user) {
+        if SourceLambda::is_set(ctx, use_.user) {
             captures.push(use_.user);
-        } else if (is_call_indirect(ctx, use_.user) && use_.operand_index == 0)
+        } else if (SourceCallIndirect::is_set(ctx, use_.user) && use_.operand_index == 0)
             // A captured resumption may be passed to the enclosing source
             // function's recursive logical call (for example
             // `run_state(fn() { resume value }, value)`). Other direct calls
@@ -4425,7 +4427,7 @@ fn validate_affine_lambda_carrier(
 
     if !captures.is_empty() {
         for terminal in &terminals {
-            if is_call_indirect(ctx, *terminal)
+            if SourceCallIndirect::is_set(ctx, *terminal)
                 && !captures.iter().any(|capture| {
                     ctx.op_region(*capture, 0)
                         .is_some_and(|region| op_is_within_region(ctx, *terminal, region))
@@ -4477,7 +4479,7 @@ fn validate_token_path(
         }
         if Resume::matches(ctx, use_.user) && use_.operand_index == 0 {
             resumes.push(use_.user);
-        } else if is_lambda(ctx, use_.user) {
+        } else if SourceLambda::is_set(ctx, use_.user) {
             captures.push(use_.user);
         } else {
             push_op_error(
@@ -4700,7 +4702,7 @@ fn validate_local_quantification(
     errors: &mut Vec<ValidationError>,
 ) {
     for &func in module.ops(ctx).iter() {
-        if !is_func(ctx, func) {
+        if !SourceFunc::is_set(ctx, func) {
             continue;
         }
         let (Ok(binders), Some(body)) = (row_binders(ctx, func), ctx.op_region(func, 0)) else {
@@ -4708,7 +4710,7 @@ fn validate_local_quantification(
         };
         let mut owners = HashSet::default();
         walk_region_ops(ctx, body, &mut |op| {
-            if is_lambda(ctx, op) {
+            if SourceLambda::is_set(ctx, op) {
                 let quantified = match quantified_rows(ctx, op) {
                     Ok(quantified) => quantified,
                     Err(message) => return push_op_error(ctx, op, errors, message),
@@ -4739,7 +4741,8 @@ fn validate_local_quantification(
                 let direct_use = !quantified.is_empty()
                     && result.is_some_and(|result| {
                         ctx.uses(result).iter().any(|used| {
-                            !Instantiate::matches(ctx, used.user) && !is_lambda(ctx, used.user)
+                            !Instantiate::matches(ctx, used.user)
+                                && !SourceLambda::is_set(ctx, used.user)
                         })
                     });
                 if direct_use {
@@ -4772,7 +4775,9 @@ fn validate_instantiate(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationE
         .op_operands(op)
         .first()
         .and_then(|&operand| match ctx.value_def(operand) {
-            ValueDef::OpResult(producer, _) if is_lambda(ctx, producer) => Some(producer),
+            ValueDef::OpResult(producer, _) if SourceLambda::is_set(ctx, producer) => {
+                Some(producer)
+            }
             _ => None,
         });
     let quantified = lambda
@@ -4832,7 +4837,7 @@ fn validate_row_scopes(
             }
             return ControlFlow::Continue(WalkAction::Advance);
         }
-        if !is_func(ctx, op) {
+        if !SourceFunc::is_set(ctx, op) {
             return ControlFlow::Continue(WalkAction::Advance);
         }
         let Ok(binders) = row_binders(ctx, op) else {
@@ -4882,11 +4887,11 @@ fn enclosing_row_tail(ctx: &IrContext, op: OpRef) -> Option<(Option<u32>, OpRef)
     let mut tail = None;
     loop {
         let owner = parent_op(ctx, current)?;
-        if is_lambda(ctx, owner) && tail.is_none() {
+        if SourceLambda::is_set(ctx, owner) && tail.is_none() {
             let ty = ctx.op_result_types(owner).first().copied()?;
             tail = Some(FuncSig::from_type_ref(ctx, ty)?.row(ctx).tail);
         }
-        if is_func(ctx, owner) {
+        if SourceFunc::is_set(ctx, owner) {
             let tail = match tail {
                 Some(tail) => tail,
                 None => {
@@ -4967,7 +4972,7 @@ fn validate_evidence_tails(
             .op_attrs(op)
             .get_symbol_ref("callee")
             .and_then(|symbol| symbols.definitions(ctx, op, symbol).first().copied())
-            .filter(|&callee| is_func(ctx, callee));
+            .filter(|&callee| SourceFunc::is_set(ctx, callee));
         let Some(callee) = callee else {
             return;
         };

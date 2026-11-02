@@ -21,7 +21,8 @@ use trunk_ir::refs::{RegionRef, ValueRef};
 use crate::calling_convention::CallingConvention;
 use crate::dialect::tribute_control::{
     self, CallableArgumentOrigin, CallableQuery, CallableResultOrigin, EvidencePlanSite,
-    EvidenceStep, FuncSig, LocalValidation, Row, RowBinder, RowUnion, ValidationError,
+    EvidenceStep, FuncSig, LocalValidation, Row, RowBinder, RowUnion, SourceCallIndirect,
+    SourceFunc, SourceFuncRef, SourceLambda, SourceTailCallIndirect, ValidationError,
 };
 
 /// The attribute that holds a `tribute_cps` operation's convention.
@@ -54,10 +55,11 @@ mod tribute_cps {
     ///   Otherwise as `tribute_control.func`.
     /// - **Ownership and value flow:** as `tribute_control.func`.
     /// - **Symbol:** as `tribute_control.func`.
+    /// - **Flags:** `SourceFunc`, shared with `tribute_control.func`.
     /// - **Location:** the source function's span.
     #[verify]
     #[asm_format]
-    #[flags(IsolatedFromAbove)]
+    #[flags(IsolatedFromAbove, SourceFunc)]
     #[implements(
         CallableArgumentOrigin,
         LocalValidation,
@@ -108,10 +110,11 @@ mod tribute_cps {
     ///   Otherwise as `tribute_control.lambda`, for each body.
     /// - **Ownership and value flow:** as `tribute_control.lambda`; the
     ///   captures are shared by every body.
+    /// - **Flags:** `SourceLambda`, shared with `tribute_control.lambda`.
     /// - **Location:** the source lambda's span.
     #[verify]
     #[asm_format]
-    #[flags(Pure)]
+    #[flags(Pure, SourceLambda)]
     #[implements(CallableResultOrigin, CallableArgumentOrigin, LocalValidation)]
     fn lambda(
         conventions: Attr<[CallingConvention]>,
@@ -140,10 +143,11 @@ mod tribute_cps {
     ///   `tribute_control.func_ref`. Legalization builds the table's entries
     ///   in that module.
     /// - **Ownership and value flow:** the result is an ordinary SSA value.
+    /// - **Flags:** `SourceFuncRef`, shared with `tribute_control.func_ref`.
     /// - **Location:** the source reference span.
     #[verify]
     #[asm_format(func_ref ("rows" row_args^)? ":" type(result))]
-    #[flags(Pure)]
+    #[flags(Pure, SourceFuncRef)]
     #[implements(CallableResultOrigin)]
     fn func_ref(func_ref: Attr<SymbolRef>, row_args: Option<Attr<[Row]>>) -> Value<impl FuncSig> {}
 
@@ -210,8 +214,10 @@ mod tribute_cps {
     /// - **Verification:** the local verifier checks the convention keyword.
     ///   Otherwise as `tribute_control.call_indirect`.
     /// - **Ownership and value flow:** as `tribute_control.call_indirect`.
+    /// - **Flags:** `SourceCallIndirect`, shared with `tribute_control.call_indirect`.
     /// - **Location:** the source indirect-call span.
     #[verify]
+    #[flags(SourceCallIndirect)]
     #[implements(CallableResultOrigin)]
     fn call_indirect<S: FuncSig>(
         convention: Attr<CallingConvention>,
@@ -237,8 +243,10 @@ mod tribute_cps {
     ///   Otherwise as `tribute_control.tail_call_indirect`.
     /// - **Ownership and value flow:** as
     ///   `tribute_control.tail_call_indirect`.
+    /// - **Flags:** `SourceTailCallIndirect`, shared with `tribute_control.tail_call_indirect`.
     /// - **Location:** the source span including the `become` keyword.
     #[verify]
+    #[flags(SourceTailCallIndirect)]
     #[implements(CallableExit, LocalValidation)]
     fn tail_call_indirect<S: FuncSig>(
         convention: Attr<CallingConvention>,
