@@ -3,8 +3,6 @@
 //! This module transforms `Expr<UnresolvedName>` into `Expr<ResolvedRef<'db>>`
 //! by looking up names in the package environment and local scopes.
 
-use std::cell::RefCell;
-
 use rustc_hash::FxHashMap as HashMap;
 
 use itertools::Itertools;
@@ -12,11 +10,11 @@ use tribute_core::diagnostic::{CompilationPhase, DiagnosticSeverity};
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::{
-    Arm, Candidates, CtorId, Decl, DeclEntry, DeclTable, Expr, ExprKind, FIELD_LENS_FUNCTIONS,
-    FieldDecl, FieldInit, FieldPattern, FuncDecl, HandlerArm, HandlerKind, LocalId, LocalIdGen,
-    Module, ModuleItem, ModulePath, NodeDiagnostic, NodeId, Param, ParamDecl, Pattern, PatternKind,
-    ResolvedRef, Stmt, TypeAnnotation, TypeAnnotationKind, TypeKind, TypeParamDecl, UnresolvedName,
-    UseDecl, Visibility,
+    Arm, Candidates, CtorId, Decl, DeclEntry, DeclTable, DiagnosticLog, Expr, ExprKind,
+    FIELD_LENS_FUNCTIONS, FieldDecl, FieldInit, FieldPattern, FuncDecl, HandlerArm, HandlerKind,
+    LocalId, LocalIdGen, Module, ModuleItem, ModulePath, NodeDiagnostic, NodeId, Param, ParamDecl,
+    Pattern, PatternKind, ResolvedRef, Stmt, TypeAnnotation, TypeAnnotationKind, TypeKind,
+    TypeParamDecl, UnresolvedName, UseDecl, Visibility,
 };
 
 use super::ModuleResolution;
@@ -103,7 +101,7 @@ pub struct Resolver<'e, 'db> {
     /// depends on.
     scope: ScopeRef<'e, 'db>,
     /// The diagnostics reported so far, positioned at their nodes.
-    diagnostics: RefCell<Vec<NodeDiagnostic>>,
+    diagnostics: DiagnosticLog,
     /// Lexical nested-module namespace used for unqualified references in an
     /// inline module body.
     module_path: Vec<Symbol>,
@@ -140,8 +138,8 @@ struct FunctionResolver<'r, 'e, 'db> {
     method_functions: HashMap<Symbol, Candidates<crate::ast::FuncDefId<'db>>>,
 }
 
-impl crate::ast::DiagnosticSink for Resolver<'_, '_> {
-    fn node_diagnostics(&self) -> &RefCell<Vec<NodeDiagnostic>> {
+impl AsRef<DiagnosticLog> for Resolver<'_, '_> {
+    fn as_ref(&self) -> &DiagnosticLog {
         &self.diagnostics
     }
 }
@@ -152,7 +150,7 @@ impl<'e, 'db> Resolver<'e, 'db> {
         Self {
             db,
             scope,
-            diagnostics: RefCell::default(),
+            diagnostics: DiagnosticLog::default(),
             module_path: Vec::new(),
             module_imports: Vec::new(),
             module_imported_functions: Vec::new(),
@@ -1034,7 +1032,7 @@ impl<'e, 'db> Resolver<'e, 'db> {
                 name: module.name.clone(),
                 entries,
             },
-            diagnostics: self.diagnostics.into_inner(),
+            diagnostics: self.diagnostics.into_vec(),
         }
     }
 

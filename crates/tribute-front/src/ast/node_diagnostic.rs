@@ -18,9 +18,29 @@ pub struct NodeDiagnostic {
     labels: Vec<(NodeId, Box<str>)>,
 }
 
-/// Something that collects the [`NodeDiagnostic`]s reported while it runs.
-pub(crate) trait DiagnosticSink {
-    fn node_diagnostics(&self) -> &RefCell<Vec<NodeDiagnostic>>;
+/// The [`NodeDiagnostic`]s a phase reports while it runs, in report order.
+/// A report needs only a shared reference, so a phase that reads its state
+/// through `&self` reports as it goes.
+#[derive(Debug, Default)]
+pub(crate) struct DiagnosticLog(RefCell<Vec<NodeDiagnostic>>);
+
+impl DiagnosticLog {
+    pub(crate) fn push(&self, diagnostic: NodeDiagnostic) {
+        self.0.borrow_mut().push(diagnostic);
+    }
+
+    pub(crate) fn extend(&self, diagnostics: impl IntoIterator<Item = NodeDiagnostic>) {
+        self.0.borrow_mut().extend(diagnostics);
+    }
+
+    /// The diagnostics reported so far, leaving the log empty.
+    pub(crate) fn take(&self) -> Vec<NodeDiagnostic> {
+        self.0.take()
+    }
+
+    pub(crate) fn into_vec(self) -> Vec<NodeDiagnostic> {
+        self.0.into_inner()
+    }
 }
 
 impl NodeDiagnostic {
@@ -45,9 +65,9 @@ impl NodeDiagnostic {
         self
     }
 
-    /// Record the diagnostic in `sink`'s report.
-    pub(crate) fn report(self, sink: &impl DiagnosticSink) {
-        sink.node_diagnostics().borrow_mut().push(self);
+    /// Record the diagnostic in `phase`'s log.
+    pub(crate) fn report(self, phase: &impl AsRef<DiagnosticLog>) {
+        phase.as_ref().push(self);
     }
 
     /// The diagnostic at the spans `span_map` gives its nodes.

@@ -67,7 +67,7 @@ pub mod visit;
 // Re-export core types
 pub use decl::*;
 pub use expr::*;
-pub(crate) use node_diagnostic::DiagnosticSink;
+pub(crate) use node_diagnostic::DiagnosticLog;
 pub use node_diagnostic::NodeDiagnostic;
 pub use node_id::*;
 pub use pattern::*;

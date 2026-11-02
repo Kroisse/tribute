@@ -27,6 +27,7 @@ mod become_check;
 mod collect;
 mod diagnostics;
 
+use crate::ast::DiagnosticLog;
 pub use crate::ast::NodeDiagnostic;
 mod exhaustiveness;
 mod expr;
@@ -177,11 +178,11 @@ pub struct TypeChecker<'db> {
     /// every declaration is collected.
     function_decls: Vec<(NodeId, FuncDefId<'db>)>,
     /// Diagnostics reported so far, positioned at nodes.
-    diagnostics: std::cell::RefCell<Vec<NodeDiagnostic>>,
+    diagnostics: DiagnosticLog,
 }
 
-impl crate::ast::DiagnosticSink for TypeChecker<'_> {
-    fn node_diagnostics(&self) -> &std::cell::RefCell<Vec<NodeDiagnostic>> {
+impl AsRef<DiagnosticLog> for TypeChecker<'_> {
+    fn as_ref(&self) -> &DiagnosticLog {
         &self.diagnostics
     }
 }
@@ -316,7 +317,7 @@ impl<'db> TypeChecker<'db> {
         ModuleDeclarations {
             env: self.env.data().clone(),
             signatures: self.signatures,
-            diagnostics: self.diagnostics.into_inner(),
+            diagnostics: self.diagnostics.into_vec(),
         }
     }
 
@@ -341,7 +342,7 @@ impl<'db> TypeChecker<'db> {
         CheckedFunction {
             decl,
             check,
-            diagnostics: self.diagnostics.into_inner(),
+            diagnostics: self.diagnostics.into_vec(),
         }
     }
 
@@ -359,7 +360,6 @@ impl<'db> TypeChecker<'db> {
     {
         self = self.with_declarations(declarations);
         self.diagnostics
-            .get_mut()
             .extend(declarations.diagnostics.iter().cloned());
         let mut functions = functions.into_iter();
         let entries = module
@@ -371,9 +371,7 @@ impl<'db> TypeChecker<'db> {
                         let checked = functions
                             .next()
                             .expect("a checked function for each function declaration");
-                        self.diagnostics
-                            .get_mut()
-                            .extend(checked.diagnostics.iter().cloned());
+                        self.diagnostics.extend(checked.diagnostics.iter().cloned());
                         self.merge_function(checked.check.clone());
                         Decl::Function(checked.decl.clone())
                     }
