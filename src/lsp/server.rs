@@ -3153,6 +3153,38 @@ mod tests {
     }
 
     #[test]
+    fn test_completion_after_a_dot_offers_a_manifest_dependency_constructor() {
+        let packages =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/packages");
+        let uri: Uri = tribute_front::path_to_uri(&packages.join("app/src/main.trb"))
+            .as_str()
+            .parse()
+            .unwrap();
+        let mut harness = TestHarness::new();
+        harness.open_document(&uri, "use geometry::Rect\nfn pick() -> Rect { .R }");
+
+        let params = CompletionParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri },
+                position: lsp_types::Position {
+                    line: 1,
+                    character: 22, // After `.R`
+                },
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            context: None,
+        };
+
+        let result: Option<lsp_types::CompletionResponse> = harness.request::<Completion>(params);
+        let Some(lsp_types::CompletionResponse::List(list)) = result else {
+            panic!("Should return a completion list");
+        };
+        let labels: Vec<_> = list.items.iter().map(|item| item.label.as_str()).collect();
+        assert_eq!(labels, ["Rect"]);
+    }
+
+    #[test]
     fn test_completion_after_a_line_leading_dot_keeps_methods() {
         let mut harness = TestHarness::new();
         let uri = test_uri("completion_line_dot");

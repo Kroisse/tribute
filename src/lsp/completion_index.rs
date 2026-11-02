@@ -232,7 +232,7 @@ pub fn constructor_items(db: &dyn salsa::Database, unit: AnalysisUnit) -> Vec<As
                 let dependency;
                 let ty = match types.get(&target[..]) {
                     Some(ty) => ty,
-                    None => match dependency_type_constructors(db, target) {
+                    None => match dependency_type_constructors(db, unit, target) {
                         Some(ty) => {
                             dependency = ty;
                             &dependency
@@ -298,9 +298,10 @@ impl TypeConstructors {
 /// the public variants of an enum.
 fn dependency_type_constructors(
     db: &dyn salsa::Database,
+    unit: AnalysisUnit,
     identity: &[Symbol],
 ) -> Option<TypeConstructors> {
-    let dependencies = tribute::prelude_dependencies(db);
+    let dependencies = tribute_front::analysis::dependencies(db, unit.dependencies(db));
     let own = tribute_front::resolve::PackageEnv::new();
     let scope = tribute_front::resolve::ScopeRef::new(&own, &dependencies);
     let location = scope.locate(identity)?;
