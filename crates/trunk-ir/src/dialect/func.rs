@@ -347,25 +347,8 @@ impl crate::asm_format::TypeAsmFormat for FuncSig {
 
 impl crate::asm_format::SignatureCodec for FuncSig {
     fn decompose(ctx: &IrContext, ty: TypeRef) -> Option<crate::asm_format::SignatureParts<'_>> {
-        let signature = Self::from_type_ref(ctx, ty)?;
-        let data = ctx.get_type(ty);
-        data.validate_param_attrs(ctx).ok()?;
-        Some(crate::asm_format::SignatureParts {
-            inputs: signature.inputs_with_attrs(ctx).collect(),
-            results: signature.results_with_attrs(ctx).collect(),
-            tail: signature_tail_attrs(ctx, data, true).collect(),
-        })
-    }
-
-    fn write_tail(
-        w: &mut dyn crate::asm_format::SignatureWriter,
-        tail: &[(crate::StringRef, &Attribute)],
-    ) -> std::fmt::Result {
-        crate::asm_format::write_dict_tail(w, tail)
-    }
-
-    fn parse_tail<'a>(input: &mut &'a str) -> winnow::ModalResult<RawAttrDict<'a>> {
-        crate::asm_format::parse_dict_tail(input)
+        Self::from_type_ref(ctx, ty)?;
+        signature_codec_parts(ctx, ty)
     }
 
     fn build<'a>(
@@ -411,37 +394,61 @@ pub fn print_signature_type(
 
     let ctx = h.ctx();
     let data = ctx.get_type(ty);
-    let num_inputs = read_count(ctx, &data.attrs, NUM_INPUTS_ATTR)
-        .expect("a validated signature type stores its input count") as usize;
-    let inline_param_attrs = data.validate_param_attrs(ctx).is_ok();
-    let no_attrs = AttributeMap::new();
-    let params: Vec<(TypeRef, &AttributeMap)> = data
-        .params
-        .iter()
-        .enumerate()
-        .map(|(index, &param)| {
-            let attrs = if inline_param_attrs {
-                data.param_attrs(ctx, index)
-            } else {
-                &no_attrs
-            };
-            (param, attrs)
-        })
-        .collect();
-    let (inputs, results) = params.split_at(num_inputs);
-    let tail: Vec<_> = signature_tail_attrs(ctx, data, inline_param_attrs).collect();
+    let parts = signature_parts(ctx, ty);
 
     write!(h, "{}<(", data.name.display(ctx))?;
-    for (index, &(input, attrs)) in inputs.iter().enumerate() {
+    for (index, &(input, attrs)) in parts.inputs.iter().enumerate() {
         if index > 0 {
             h.write_str(", ")?;
         }
         write_signature_param(h, input, attrs)?;
     }
     h.write_str(") -> ")?;
-    write_signature_results(h, results)?;
-    write_dict_tail(h, &tail)?;
+    write_signature_results(h, &parts.results)?;
+    write_dict_tail(h, &parts.tail)?;
     h.write_char('>')
+}
+
+/// The inputs, results, and remaining type attributes of a validated
+/// signature type that stores its inputs then its results as parameters,
+/// delimited by [`NUM_INPUTS_ATTR`] and [`NUM_RESULTS_ATTR`]. Each parameter
+/// carries its own attributes; malformed parameter attributes, which the
+/// function form cannot spell beside their parameters, stay in the tail.
+///
+/// Signature types of other dialects with this layout decompose through it
+/// in their [`SignatureCodec`](crate::asm_format::SignatureCodec).
+pub fn signature_parts(ctx: &IrContext, ty: TypeRef) -> crate::asm_format::SignatureParts<'_> {
+    static NO_ATTRS: AttributeMap = AttributeMap::new();
+    let data = ctx.get_type(ty);
+    let inline_param_attrs = data.validate_param_attrs(ctx).is_ok();
+    let mut params = data
+        .params_with_attrs(ctx)
+        .map(|(param, attrs)| (param, if inline_param_attrs { attrs } else { &NO_ATTRS }));
+    let inputs = params
+        .by_ref()
+        .take(signature_input_count(ctx, data))
+        .collect();
+    crate::asm_format::SignatureParts {
+        inputs,
+        results: params.collect(),
+        tail: signature_tail_attrs(ctx, data, inline_param_attrs).collect(),
+    }
+}
+
+/// [`signature_parts`] for a [`SignatureCodec`](crate::asm_format::SignatureCodec):
+/// `None` when the parameter attributes are malformed, since the parser
+/// reserves `param_attrs` for the attributes written beside each parameter.
+pub fn signature_codec_parts(
+    ctx: &IrContext,
+    ty: TypeRef,
+) -> Option<crate::asm_format::SignatureParts<'_>> {
+    ctx.get_type(ty).validate_param_attrs(ctx).ok()?;
+    Some(signature_parts(ctx, ty))
+}
+
+fn signature_input_count(ctx: &IrContext, data: &crate::types::TypeData) -> usize {
+    read_count(ctx, &data.attrs, NUM_INPUTS_ATTR)
+        .expect("a validated signature type stores its input count") as usize
 }
 
 /// Parse the rest of `name<(inputs) -> results>` after its opening bracket

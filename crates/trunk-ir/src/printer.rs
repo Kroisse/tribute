@@ -683,12 +683,13 @@ fn collect_module_types(ctx: &IrContext, region: RegionRef) -> HashMap<TypeRef, 
             *counts.entry(ty).or_default() += 1;
         }
 
-        // Attributes containing types.
-        // Skip func.func — its `type` attribute holds the function signature
-        // (func.func_sig), which would otherwise dominate alias candidates.
-        let is_func_decl = crate::dialect::func::Func::matches(ctx, op);
-        if !is_func_decl {
-            for attr in data.attributes.values() {
+        // Attributes containing types, except a signature its format writes
+        // in the function form, where an alias would go unused.
+        let signature_attrs = crate::op_def::OpDef::of(ctx, op)
+            .map(crate::asm_format::declarative::signature_attributes)
+            .unwrap_or_default();
+        for (key, attr) in data.attributes.iter() {
+            if !signature_attrs.contains(&ctx.str(key)) {
                 count_attr_types(&mut counts, attr);
             }
         }

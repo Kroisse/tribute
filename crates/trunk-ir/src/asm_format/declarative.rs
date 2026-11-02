@@ -414,6 +414,21 @@ fn signature_lists(elements: &[FormatElement], index: usize) -> bool {
     listed
 }
 
+/// The attributes the `signature` elements of an operation's declarative
+/// format write in the function form.
+pub(crate) fn signature_attributes(def: &OpDef) -> Vec<&'static str> {
+    let Some(super::OpAsmFormatDef::Declarative(format)) = def.asm_format else {
+        return Vec::new();
+    };
+    let mut names = Vec::new();
+    visit(format.elements, &mut |element| {
+        if let FormatElement::Signature { attribute, .. } = *element {
+            names.push(def.schema.attributes[attribute].name);
+        }
+    });
+    names
+}
+
 /// The entry blocks of the present regions a `signature` element lists, or
 /// `None` for a present region without blocks.
 fn signature_entry_blocks(
@@ -670,10 +685,8 @@ pub(crate) fn parse<'a>(
         results,
         name,
         sym_name: None,
-        has_func_signature: false,
         func_params: parser.entry_args,
         func_param_regions,
-        return_type: None,
         operands: operands.into_iter().flatten().collect(),
         attributes,
         result_types: result_types.into_iter().flatten().collect(),

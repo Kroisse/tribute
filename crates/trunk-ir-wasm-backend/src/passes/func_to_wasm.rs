@@ -850,12 +850,13 @@ mod tests {
 
         let output = print_module(&ctx, module.op());
         assert!(
-            output.contains("!t0 = wasm.func_sig<(core.i32) -> core.i32>")
-                && output.contains("wasm.func {custom = 7, sym_name = \"external\", type = !t0}"),
+            output.contains(
+                "wasm.func @external(%arg0: core.i32) -> core.i32 attributes {custom = 7}"
+            ),
             "{output}"
         );
         assert!(
-            output.contains("wasm.func {sym_name = \"defined\""),
+            output.contains("wasm.func @defined(%0: core.i32) -> core.i32 {"),
             "{output}"
         );
         assert!(output.contains("wasm.return %0"), "{output}");
@@ -926,8 +927,7 @@ mod tests {
         );
         assert!(output.contains(" = wasm.call_indirect "), "{output}");
         assert!(
-            output.contains("!t0 = wasm.func_sig<(core.i32) -> core.nil>")
-                && output.contains("signature = !t0"),
+            output.contains("signature = wasm.func_sig<(core.i32) -> core.nil>"),
             "{output}"
         );
     }

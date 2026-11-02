@@ -1183,13 +1183,13 @@ mod tests {
 
         let output = print_module(&ctx, module.op());
         let int_release = output
-            .split("clif.func {sym_name = \"__tribute_release_3\"")
+            .split("clif.func @__tribute_release_3(")
             .nth(1)
             .expect("boxed Int must have a reserved RTTI release entry");
         assert!(int_release.contains("value = 12"));
         assert!(int_release.contains("callee = @__tribute_dealloc"));
         let float_release = output
-            .split("clif.func {sym_name = \"__tribute_release_4\"")
+            .split("clif.func @__tribute_release_4(")
             .nth(1)
             .expect("boxed Float must have a reserved RTTI release entry");
         assert!(float_release.contains("value = 16"));
@@ -1300,7 +1300,7 @@ mod tests {
         let output = print_module(&ctx, module.op());
         let release_function = |index: u32| {
             let start = output
-                .find(&format!("sym_name = \"{RELEASE_FN_PREFIX}{index}\""))
+                .find(&format!("clif.func @{RELEASE_FN_PREFIX}{index}("))
                 .unwrap_or_else(|| panic!("no release function {index}"));
             let rest = &output[start + 1..];
             let end = ["clif.func ", "clif.data "]
@@ -1477,7 +1477,7 @@ mod tests {
         // func_ptr.
         let index = tribute_rtti::Layout::declared_indices(&ctx, module)[&(closure_ty, None)];
         let (_, release_fn) = output
-            .split_once(&format!("sym_name = \"__tribute_release_{index}\""))
+            .split_once(&format!("clif.func @__tribute_release_{index}("))
             .expect("closure release function");
         let release_fn = release_fn.split("clif.func").next().unwrap();
         let release_count = release_fn.matches("tribute_rt.release").count();

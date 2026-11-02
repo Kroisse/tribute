@@ -74,8 +74,9 @@ mod wasm {
     fn nop() -> Value<_> {}
 
     // Module
+    #[asm_format(symbol(sym_name) signature(r#type, body) attr_dict region(body))]
     #[flags(IsolatedFromAbove)]
-    fn func(sym_name: Attr<String>, r#type: Attr<Type>) {
+    fn func<S: FuncSig>(sym_name: Attr<String>, r#type: Attr<TypeOf<S>>) {
         #[region(body?)]
         {}
     }
@@ -668,6 +669,24 @@ impl crate::asm_format::TypeAsmFormat for FuncSig {
     }
 }
 
+impl crate::asm_format::SignatureCodec for FuncSig {
+    fn decompose(
+        ctx: &crate::IrContext,
+        ty: crate::TypeRef,
+    ) -> Option<crate::asm_format::SignatureParts<'_>> {
+        Self::from_type_ref(ctx, ty)?;
+        super::func::signature_codec_parts(ctx, ty)
+    }
+
+    fn build<'a>(
+        inputs: Vec<crate::parser::raw::RawParam<'a>>,
+        results: Vec<crate::parser::raw::RawParam<'a>>,
+        tail: crate::parser::raw::RawAttrDict<'a>,
+    ) -> winnow::ModalResult<crate::parser::raw::RawType<'a>> {
+        super::func::signature_from_parts("wasm.func_sig", inputs, results, tail, None)
+    }
+}
+
 impl DialectType for FuncSig {
     const DEF: &'static crate::type_def::TypeDef = &FUNC_SIG_DEF;
 
@@ -933,5 +952,20 @@ mod tests {
             .view_mut(&mut ctx)
             .insert(NUM_INPUTS_ATTR, crate::Attribute::Int(0));
         let _ = func_sig_with_attrs(&mut ctx, [], [], attrs);
+    }
+
+    #[test]
+    fn func_writes_its_signature_in_the_function_form() {
+        let source = r#"core.module @test {
+  wasm.func @external(%arg0: core.i32) -> core.i32 attributes {abi = "C"}
+  wasm.func @pair(%0: core.i32) -> (core.i32, core.i64) {
+      %1 = wasm.i64_const {value = 1} : core.i64
+      wasm.return %0, %1
+  }
+}
+"#;
+        let mut ctx = crate::IrContext::new();
+        let module = parse_test_module(&mut ctx, source);
+        assert_eq!(print_module(&ctx, module.op()), source);
     }
 }
