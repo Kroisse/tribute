@@ -45,7 +45,6 @@ pub struct IrLoweringCtx<'db> {
     span_map: SpanMaps<'db>,
     /// Stack of scopes, each mapping LocalId to (name, SSA value).
     scopes: Vec<HashMap<LocalId, (Symbol, ValueRef)>>,
-    local_callable_values: Vec<HashMap<(NodeId, crate::ast::Type<'db>, TypeRef), ValueRef>>,
     /// Scoped tags identifying locals whose SSA value is a suspended handler
     /// continuation rather than a source value.
     resume_scopes: Vec<HashSet<LocalId>>,
@@ -105,7 +104,6 @@ impl<'db> IrLoweringCtx<'db> {
             source_paths: HashMap::default(),
             span_map,
             scopes: vec![HashMap::default()],
-            local_callable_values: vec![HashMap::default()],
             resume_scopes: vec![HashSet::default()],
             function_types,
             nominal: NominalTypes::new(db),
@@ -255,14 +253,12 @@ impl<'db> IrLoweringCtx<'db> {
     /// Enter a new scope (internal — use `scope()` guard instead).
     fn enter_scope(&mut self) {
         self.scopes.push(HashMap::default());
-        self.local_callable_values.push(HashMap::default());
         self.resume_scopes.push(HashSet::default());
     }
 
     /// Exit the current scope (internal — use `scope()` guard instead).
     fn exit_scope(&mut self) {
         self.scopes.pop();
-        self.local_callable_values.pop();
         self.resume_scopes.pop();
     }
 
@@ -271,27 +267,6 @@ impl<'db> IrLoweringCtx<'db> {
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(local_id, (name, value));
         }
-    }
-
-    pub(crate) fn bind_local_callable(
-        &mut self,
-        key: (NodeId, crate::ast::Type<'db>, TypeRef),
-        value: ValueRef,
-    ) {
-        self.local_callable_values
-            .last_mut()
-            .expect("active scope")
-            .insert(key, value);
-    }
-
-    pub(crate) fn lookup_local_callable(
-        &self,
-        key: (NodeId, crate::ast::Type<'db>, TypeRef),
-    ) -> Option<ValueRef> {
-        self.local_callable_values
-            .iter()
-            .rev()
-            .find_map(|scope| scope.get(&key).copied())
     }
 
     pub(crate) fn bind_resume(&mut self, local_id: LocalId, name: Symbol, value: ValueRef) {

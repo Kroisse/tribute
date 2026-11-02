@@ -242,7 +242,6 @@ mod tests {
     use crate::source_file::path_to_uri;
     use ropey::Rope;
     use tree_sitter::Parser;
-    use tribute_core::diagnostic::Diagnostic;
 
     fn make_source(db: &dyn salsa::Database, text: &str) -> SourceCst {
         let uri = path_to_uri(std::path::Path::new("test.trb"));
@@ -660,9 +659,7 @@ fn explicit() ->{} Nil { Nil }
         let source = make_source(&db, "fn main() -> Nil { undefined_var }");
 
         let table = *crate::analysis::builtins(&db);
-        crate::analysis::resolved_module(&db, source, table);
-        let diagnostics: Vec<_> =
-            crate::analysis::resolved_module::accumulated::<Diagnostic>(&db, source, table);
+        let diagnostics = crate::analysis::diagnostics(&db, source, table);
 
         // Should have a diagnostic about unresolved name
         assert!(
@@ -672,7 +669,7 @@ fn explicit() ->{} Nil { Nil }
         assert!(
             diagnostics
                 .iter()
-                .any(|d| d.inner.message.contains("unresolved name")),
+                .any(|d| d.message.contains("unresolved name")),
             "Diagnostic should mention unresolved name: {:?}",
             diagnostics
         );

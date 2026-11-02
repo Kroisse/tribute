@@ -899,17 +899,16 @@ binding의 NodeId와 LocalId, scheme, 참조별 타입·row 인자와 선택된 
 함께 전달한다. 동일 참조의 재검사는 같은 인스턴스를 사용하며, 특수화는 enclosing
 함수의 복제와 함께 binding identity 및 이 메타데이터를 갱신한다.
 
-데이터 매개변수·결과·capture 타입이 고정된 source lambda는 검사된 지역 row
-인스턴스로 생성할 수 있다. 여기서 고정 타입에는 부모 함수가 소유한 타입
-매개변수도 포함된다. 특수화 전 generic 본문에서도 이 변수는 같은 부모 binder를
-참조하며, 지역 사용처마다 새로 인스턴스화하지 않는다. 이 과정은 binding이
-소유한 row만 치환하고 환경의
-자유 변수나 다른 지역 scheme을 닫지 않는다. Lowering은 lambda 본문 형상이나
-비어 있는 explicit effect 목록으로 purity를 다시 추론하지 않는다.
+부모 함수가 소유한 타입 매개변수는 특수화 전 generic 본문에서도 같은 부모
+binder를 참조하며, 지역 사용처마다 새로 인스턴스화하지 않는다. 지역 사용의
+인스턴스화는 binding이 소유한 row만 치환하고 환경의 자유 변수나 다른 지역 scheme을
+닫지 않는다. Lowering은 lambda 본문 형상이나 비어 있는 explicit effect 목록으로
+purity를 다시 추론하지 않는다.
 
-지역 callable 생성은 원래 binding 위치의 값을 사용한다. 같은 인스턴스와 호출
-계약은 생성물을 공유할 수 있지만, 첫 사용의 타입을 다른 사용 전체에 적용해서는
-안 된다. 임의의 callable-producing RHS를 사용처마다 다시 평가하지 않는다.
+Lowering은 `let`에 묶인 람다를 원래 binding 위치에서 한 번만 만들고, 사용마다
+그 사용의 row 인자로 인스턴스화한다([IR 계약](ir.md#지역-람다의-양화와-인스턴스화)).
+사용처의 타입에 맞춘 람다를 따로 만들지 않으며, 첫 사용의 타입을 다른 사용 전체에
+적용하지도 않는다. 임의의 callable-producing RHS를 사용처마다 다시 평가하지 않는다.
 
 ---
 

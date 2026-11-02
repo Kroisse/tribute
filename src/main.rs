@@ -16,7 +16,7 @@ use tribute::pipeline::{
     wasm_binary_diagnostics,
 };
 use tribute::{TributeDatabaseImpl, check_library};
-use tribute_core::diagnostic::{Diagnostic, DiagnosticSeverity};
+use tribute_core::diagnostic::{DiagnosticSeverity, SpanDiagnostic};
 use tribute_front::build_inputs::{package_inputs, source_inputs};
 use tribute_front::manifest::{load_package, root_file_manifest, set_package_root};
 use tribute_front::resolve::{Dependencies, build_env};
@@ -127,11 +127,7 @@ fn compile_file(
             let result = tribute::pipeline::dump_ir(db, source, is_native);
 
             // Collect diagnostics
-            let diagnostics: Vec<Diagnostic> =
-                tribute::pipeline::dump_ir::accumulated::<Diagnostic>(db, source, is_native)
-                    .into_iter()
-                    .cloned()
-                    .collect();
+            let diagnostics = tribute::pipeline::dump_ir_diagnostics(db, source, is_native);
 
             if !diagnostics.is_empty() {
                 let file_path = input_path.display().to_string();
@@ -140,7 +136,7 @@ fn compile_file(
                 }
                 if diagnostics
                     .iter()
-                    .any(|d| d.inner.severity == DiagnosticSeverity::Error)
+                    .any(|d| d.severity == DiagnosticSeverity::Error)
                 {
                     std::process::exit(1);
                 }
@@ -169,7 +165,7 @@ fn compile_file(
                 );
                 if let Some(object_bytes) = compile_to_native_binary(db, source, config) {
                     let mut diags =
-                        compile_to_native_binary::accumulated::<Diagnostic>(db, source, config);
+                        tribute::pipeline::native_binary_diagnostics(db, source, config);
                     print_diagnostics(db, source, &input_path.display().to_string(), &mut diags);
                     let output = output_path.unwrap_or(default_output);
                     if let Err(e) = link_native_binary(object_bytes, &output, sysroot) {
@@ -183,7 +179,7 @@ fn compile_file(
                 } else {
                     let file_path = input_path.display().to_string();
                     let diags =
-                        compile_to_native_binary::accumulated::<Diagnostic>(db, source, config);
+                        tribute::pipeline::native_binary_diagnostics(db, source, config);
                     report_diagnostics(db, source, &file_path, diags);
                     std::process::exit(1);
                 }
@@ -235,7 +231,7 @@ fn compile_file(
                 if result
                     .diagnostics
                     .iter()
-                    .any(|diag| diag.inner.severity == DiagnosticSeverity::Error)
+                    .any(|diag| diag.severity == DiagnosticSeverity::Error)
                 {
                     std::process::exit(1);
                 }
@@ -282,10 +278,13 @@ fn load_package_dir(db: &TributeDatabaseImpl, dir: &Path, target: &str) -> Packa
         let manifest_path = dir.join(tribute_front::manifest::MANIFEST_FILE);
         let manifest_path = manifest_path.display().to_string();
         let loaded = load_package(db, manifest, implicit);
-        let mut diags = load_package::accumulated::<Diagnostic>(db, manifest, implicit);
+        let mut diags: Vec<_> = load_package::accumulated::<SpanDiagnostic>(db, manifest, implicit)
+            .into_iter()
+            .map(SpanDiagnostic::view)
+            .collect();
         let failed = diags
             .iter()
-            .any(|diag| diag.inner.severity == DiagnosticSeverity::Error);
+            .any(|diag| diag.severity == DiagnosticSeverity::Error);
         print_diagnostics(db, source, &manifest_path, &mut diags);
         let loaded = loaded.as_ref().filter(|_| !failed);
         let Some(loaded) = loaded else {
@@ -310,10 +309,10 @@ fn load_package_dir(db: &TributeDatabaseImpl, dir: &Path, target: &str) -> Packa
         };
         println!("Checking library package `{name}`...");
         let mut checked = *check_library(db, library);
-        let mut diags = check_library::accumulated::<Diagnostic>(db, library);
+        let mut diags = tribute::library_diagnostics(db, library);
         checked &= !diags
             .iter()
-            .any(|diag| diag.inner.severity == DiagnosticSeverity::Error);
+            .any(|diag| diag.severity == DiagnosticSeverity::Error);
         let root = library.root(db);
         let root_path = dir.join("src/lib.trb").display().to_string();
         print_diagnostics(db, *root, &root_path, &mut diags);
@@ -396,7 +395,7 @@ fn debug_file(path: std::path::PathBuf, show_env: bool) {
         } else {
             println!("Diagnostics ({} total):", result.diagnostics.len());
             for diag in &result.diagnostics {
-                println!("  [{:?}] {}", diag.phase, diag.inner.message);
+                println!("  [{:?}] {}", diag.phase, diag.message);
             }
         }
 

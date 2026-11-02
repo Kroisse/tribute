@@ -3,7 +3,6 @@
 //! It emits only the documented `tribute_control` boundary and ordinary value
 //! dialects; shared CPS construction belongs to `tribute-passes`.
 
-use rustc_hash::FxHashMap as HashMap;
 use tribute_ir::dialect::tribute_control;
 use trunk_ir::context::{BlockData, IrContext, OperationDataBuilder, RegionData};
 use trunk_ir::dialect::core;
@@ -16,7 +15,7 @@ use crate::ast::{Decl, DeclEntry, TypedRef};
 use crate::ast_to_ir::context::IrLoweringCtx;
 use crate::ast_to_ir::{FrontendIrModule, LoweringInput};
 
-use callable::{lower_function, plan_local_callables, prescan_row_binders, row_effects};
+use callable::{lower_function, prescan_row_binders, row_effects};
 use declarations::{
     Declarations, instance_operations, lower_extern, lower_struct_accessors,
     prescan_source_functions, prescan_struct_accessor_signatures,
@@ -111,8 +110,7 @@ pub(super) fn lower_module<'db>(
         evidence_plans,
         local_instances,
         function_instances,
-        local_callables: local_callables::Plan::default(),
-        function_local_callables: HashMap::default(),
+        aliases: local_callables::Aliases::default(),
         local_uses: Vec::new(),
         root_entry: None,
     };
@@ -132,7 +130,6 @@ pub(super) fn lower_module<'db>(
     );
     prescan_struct_accessor_signatures(&mut ctx, ir, &ast.entries);
     prescan_source_functions(&mut ctx, &ast.entries);
-    plan_local_callables(&mut ctx, ir, &ast.entries, &mut declarations);
     let well_known_types = well_known_type_prescan.finish();
     for entry in ast.entries {
         lower_decl(&mut ctx, ir, module_block, entry, &mut declarations);
@@ -212,6 +209,7 @@ mod tests {
     use super::*;
     use crate::SortedMap;
     use crate::ast_to_ir::lower::IrBuilder;
+    use rustc_hash::FxHashMap as HashMap;
     use salsa_test_macros::salsa_test;
     use tribute_ir::dialect::adt;
     use tribute_ir::dialect::tribute_control::OperationDeclaration;

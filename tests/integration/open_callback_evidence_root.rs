@@ -513,10 +513,10 @@ fn main() -> Nil {
     }
 }
 
-/// A let-bound lambda lowered once for the type each use needs carries only
-/// instantiated rows, so it quantifies nothing and its rows are body rows.
+/// A let-bound lambda with a closed row quantifies nothing: it is one lambda,
+/// which a pure and an open consumer both take as it is.
 #[salsa_test]
-fn a_lambda_materialized_per_use_quantifies_no_rows(db: &salsa::DatabaseImpl) {
+fn a_closed_lambda_used_by_two_consumers_is_one_value(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
         "test.trb",
@@ -543,7 +543,7 @@ fn main() -> Nil {
         .nth(1)
         .and_then(|rest| rest.split("\n  }\n").next())
         .expect("run");
-    assert!(run.contains("tribute_cps.lambda("), "{run}");
+    assert_eq!(run.matches("tribute_cps.lambda(").count(), 1, "{run}");
     assert!(
         !run.contains("lambda['") && !run.contains("instantiate") && !run.contains("local '"),
         "{run}"

@@ -12,7 +12,6 @@ use tribute::pipeline::{
     NativeOptimizationOptions, OptimizationOptions, PairedRcEliminationPolicy,
     TemporaryBorrowPolicy, compile_to_native_binary,
 };
-use tribute_core::diagnostic::Diagnostic;
 use tribute_front::SourceCst;
 
 #[cfg(unix)]
@@ -66,8 +65,7 @@ pub fn compile_native_or_panic_with_options(
 ) -> &[u8] {
     let config = CompilationConfig::new(db, sanitize_address, optimizations);
     compile_to_native_binary(db, source_file, config).unwrap_or_else(|| {
-        let diagnostics: Vec<_> =
-            compile_to_native_binary::accumulated::<Diagnostic>(db, source_file, config);
+        let diagnostics = tribute::pipeline::native_binary_diagnostics(db, source_file, config);
         for diag in &diagnostics {
             eprintln!("Diagnostic: {:?}", diag);
         }
@@ -671,7 +669,7 @@ pub fn specialized_frontend_ir(db: &dyn salsa::Database, source: SourceCst) -> S
             "the frontend rejects the source: {}",
             diagnostics
                 .iter()
-                .format_with("; ", |diagnostic, f| f(&diagnostic.inner.message))
+                .format_with("; ", |diagnostic, f| f(&diagnostic.message))
         );
     };
     let core_module =

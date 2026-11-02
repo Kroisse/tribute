@@ -45,9 +45,8 @@ pub(super) struct Declarations<'db> {
     /// The instance each reference to a generic function selects.
     pub(super) function_instances:
         SortedMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
-    pub(super) local_callables: local_callables::Plan<'db>,
-    /// The plan of each function, by its declaration, until it is lowered.
-    pub(super) function_local_callables: HashMap<crate::ast::NodeId, local_callables::Plan<'db>>,
+    /// The named-function aliases of the function being lowered.
+    pub(super) aliases: local_callables::Aliases<'db>,
     /// The uses of the let-bound lambdas of the function being lowered.
     pub(super) local_uses: Vec<crate::monomorphize::LocalInstantiation<'db>>,
     /// The symbol of the root package's entry function, once it is lowered.

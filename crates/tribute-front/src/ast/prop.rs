@@ -801,10 +801,9 @@ fn all_vars_bound<'a>(expr: &'a Expr<UnresolvedName>, bound: &[&'a Symbol]) -> b
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::SpanMap;
     use crate::resolve;
     use crate::typeck;
-    use tribute_core::diagnostic::{CompilationPhase, Diagnostic};
+    use tribute_core::diagnostic::{CompilationPhase, SpanDiagnostic};
 
     /// Salsa input wrapper so that generated modules can be passed into
     /// `#[salsa::tracked]` helper functions (which require Salsa struct params).
@@ -818,11 +817,10 @@ mod tests {
     fn resolve_with_builtins<'db>(
         db: &'db dyn salsa::Database,
         module: &Module<UnresolvedName>,
-        span_map: SpanMap<'db>,
     ) -> crate::ast::DeclTable<crate::ast::ResolvedRef<'db>> {
         let dependencies = crate::analysis::dependencies(db, *crate::analysis::builtins(db));
         let scope = resolve::build_env(db, module, dependencies);
-        resolve::resolve_with_env(db, module, &scope, span_map)
+        resolve::resolve_with_env(db, module, &scope)
     }
 
     /// Tracked wrapper: name resolution only, so its diagnostics can be
@@ -830,7 +828,7 @@ mod tests {
     #[salsa::tracked]
     fn run_resolve(db: &dyn salsa::Database, input: PropTestInput) {
         let module = input.module(db);
-        let _resolved = resolve_with_builtins(db, module, SpanMap::empty());
+        let _resolved = resolve_with_builtins(db, module);
     }
 
     /// Tracked wrapper: resolve → typecheck pipeline.
@@ -842,12 +840,10 @@ mod tests {
     #[salsa::tracked]
     fn run_resolve_and_typecheck(db: &dyn salsa::Database, input: PropTestInput) -> String {
         let module = input.module(db);
-        let span_map = SpanMap::empty();
-        let resolved = resolve_with_builtins(db, module, span_map);
+        let resolved = resolve_with_builtins(db, module);
         let output = typeck::typecheck_module(
             db,
             &resolved,
-            span_map,
             resolve::NameDisplay::new(&resolve::PackageName::executable_root(), []),
         );
         format!(
@@ -858,15 +854,21 @@ mod tests {
     }
 
     /// Run the typecheck pipeline in a fresh database, returning the
-    /// rendered result and every accumulated diagnostic.
-    fn typecheck_in_fresh_db(module: Module<UnresolvedName>) -> (String, Vec<Diagnostic>) {
+    /// rendered result and the phase and rendering of every accumulated
+    /// diagnostic.
+    fn typecheck_in_fresh_db(
+        module: Module<UnresolvedName>,
+    ) -> (String, Vec<(CompilationPhase, String)>) {
         let db = salsa::DatabaseImpl::new();
         let input = PropTestInput::new(&db, module);
         let rendered = run_resolve_and_typecheck(&db, input).clone();
-        let diagnostics = run_resolve_and_typecheck::accumulated::<Diagnostic>(&db, input)
-            .into_iter()
-            .cloned()
-            .collect();
+        let diagnostics = crate::ast::locate_diagnostics(
+            run_resolve_and_typecheck::accumulated::<SpanDiagnostic>(&db, input),
+            run_resolve_and_typecheck::accumulated::<crate::ast::NodeDiagnostic>(&db, input),
+            crate::ast::SpanMaps::default(),
+        )
+        .map(|diagnostic| (diagnostic.phase, format!("{diagnostic:?}")))
+        .collect();
         (rendered, diagnostics)
     }
 
@@ -972,7 +974,9 @@ mod tests {
             let db = salsa::DatabaseImpl::new();
             let input = PropTestInput::new(&db, module);
             run_resolve(&db, input);
-            let diagnostics = run_resolve::accumulated::<Diagnostic>(&db, input);
+            let diagnostics = run_resolve::accumulated::<SpanDiagnostic>(&db, input);
+            prop_assert!(diagnostics.is_empty(), "unexpected diagnostics: {:?}", diagnostics);
+            let diagnostics = run_resolve::accumulated::<crate::ast::NodeDiagnostic>(&db, input);
             prop_assert!(diagnostics.is_empty(), "unexpected diagnostics: {:?}", diagnostics);
         }
 
@@ -986,11 +990,11 @@ mod tests {
         #[test]
         fn typecheck_does_not_panic(module in parsed_module()) {
             let (_, diagnostics) = typecheck_in_fresh_db(module);
-            for diagnostic in &diagnostics {
+            for (phase, diagnostic) in &diagnostics {
                 prop_assert_eq!(
-                    &diagnostic.phase,
+                    phase,
                     &CompilationPhase::TypeChecking,
-                    "{:?}",
+                    "{}",
                     diagnostic
                 );
             }

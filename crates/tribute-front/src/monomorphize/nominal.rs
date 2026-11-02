@@ -185,12 +185,10 @@ mod tests {
             db,
             ast,
             &crate::resolve::build_env(db, ast, crate::resolve::Dependencies::none()),
-            parsed.span_map(db),
         );
         crate::typeck::typecheck_module(
             db,
             &resolved,
-            parsed.span_map(db),
             crate::resolve::NameDisplay::new(&crate::resolve::PackageName::executable_root(), []),
         )
     }

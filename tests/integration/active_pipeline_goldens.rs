@@ -15,14 +15,14 @@ use tribute_ir::calling_convention::DynConventionBearing;
 use tribute_ir::continuation_frame;
 use trunk_ir::printer::print_module;
 
-fn assert_no_diagnostics(stage: &str, diagnostics: &[Diagnostic]) {
+fn assert_no_diagnostics(stage: &str, diagnostics: &[Diagnostic<'_>]) {
     assert!(
         diagnostics.is_empty(),
         "{stage} emitted diagnostics:\n{}",
         diagnostics.iter().format_with("\n", |diagnostic, f| {
             f(&format_args!(
                 "  - [{}] {}",
-                diagnostic.phase, diagnostic.inner.message
+                diagnostic.phase, diagnostic.message
             ))
         })
     );
@@ -42,10 +42,7 @@ fn shared_pipeline_ir(db: &dyn salsa::Database, name: &str, code: &str) -> Strin
 fn native_pipeline_ir<'db>(db: &'db dyn salsa::Database, name: &str, code: &str) -> &'db str {
     let source = SourceCst::from_source_str(db, name, code);
     let ir_text = dump_ir(db, source, true).expect("native pipeline dump should succeed");
-    let diagnostics: Vec<Diagnostic> = dump_ir::accumulated::<Diagnostic>(db, source, true)
-        .into_iter()
-        .cloned()
-        .collect();
+    let diagnostics = tribute::pipeline::dump_ir_diagnostics(db, source, true);
     assert_no_diagnostics("native pipeline", &diagnostics);
     ir_text
 }

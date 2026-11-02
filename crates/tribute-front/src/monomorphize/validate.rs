@@ -8,7 +8,7 @@ use crate::ast::{
 use crate::typeck::subst::BoundVarSubst;
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
-use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_core::diagnostic::{CompilationPhase, DiagnosticSeverity, SpanDiagnostic};
 use trunk_ir::SymbolPath;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -52,7 +52,7 @@ pub struct InstanceError {
 impl InstanceError {
     /// The source diagnostic of this error, at the reference whose instance
     /// is invalid.
-    pub fn diagnostic(&self, spans: &SpanMaps<'_>) -> Diagnostic {
+    pub fn diagnostic(&self, spans: &SpanMaps<'_>) -> SpanDiagnostic {
         let message = match &self.kind {
             InstanceErrorKind::ExpansionLimit => "specialization did not terminate: generic \
                  definitions keep requiring instances at new type arguments"
@@ -80,7 +80,7 @@ impl InstanceError {
             ),
             kind => format!("invalid specialization instance at {}: {kind:?}", self.node),
         };
-        Diagnostic::new(
+        SpanDiagnostic::new(
             message,
             spans.get_or_default(self.node),
             DiagnosticSeverity::Error,

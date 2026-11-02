@@ -37,7 +37,6 @@ pub use constraint::{Constraint, ConstraintSet};
 pub use context::{AbilityInfo, AbilityOpInfo, MethodEntry, ModuleTypeEnv, parameter_type_matches};
 
 use crate::SortedMap;
-use crate::ast::SpanMap;
 use crate::resolve::NameDisplay;
 pub use func_context::FunctionInferenceContext;
 use rustc_hash::FxHashMap as HashMap;
@@ -505,10 +504,9 @@ pub struct PackageExports<'db> {
 pub fn typecheck_module<'db>(
     db: &'db dyn salsa::Database,
     module: &DeclTable<ResolvedRef<'db>>,
-    span_map: SpanMap<'db>,
     names: NameDisplay,
 ) -> TypeCheckOutput<'db> {
-    let checker = TypeChecker::new(db, span_map, names);
+    let checker = TypeChecker::new(db, names);
     TypeCheckOutput::from_check(db, checker.check_module(module))
 }
 

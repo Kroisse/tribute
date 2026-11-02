@@ -719,8 +719,11 @@ fn main() -> Nil {}
     );
 }
 
+/// A use of a named-function alias references the function again with the
+/// rows of that use, so a pure use calls its `Direct` instance and takes the
+/// closed lambda as it is.
 #[salsa_test]
-fn local_named_consumer_retains_its_worker_parameter_convention(db: &salsa::DatabaseImpl) {
+fn a_named_alias_references_its_function_with_the_rows_of_its_use(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
         "local_consumer.trb",
@@ -736,9 +739,12 @@ fn main() -> Nil {}
 "#,
     );
     let ir = common::specialized_frontend_ir(db, source);
+    let entry = logical_function(&ir, "entry");
     assert!(
-        !logical_function(&ir, "entry").contains("unrealized_conversion_cast"),
-        "{ir}"
+        entry.contains("tribute_cps.func_ref @\"pkg::open$9D$8\" rows [{}]")
+            && entry.contains("convention(direct)")
+            && !entry.contains("unrealized_conversion_cast"),
+        "{entry}"
     );
 }
 

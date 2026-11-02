@@ -2,7 +2,7 @@
 #![allow(dead_code)]
 
 use itertools::Itertools;
-use tribute_core::diagnostic::Diagnostic;
+use tribute_core::diagnostic::{Diagnostic, SpanDiagnostic};
 use tribute_front::SourceCst;
 use tribute_front::analysis;
 use tribute_front::ast::{Decl, DeclTable, Expr, ExprKind, ResolvedRef, Stmt, TypedRef};
@@ -224,7 +224,8 @@ fn collect_tdnr_summary<'db>(
 /// avoiding false positives from prelude diagnostics.
 pub fn run_ast_pipeline_with_ir(db: &dyn salsa::Database, source: SourceCst) -> &str {
     // Check for parse errors in the test source (not prelude)
-    let parse_diagnostics = tribute_front::query::parsed_ast::accumulated::<Diagnostic>(db, source);
+    let parse_diagnostics =
+        tribute_front::query::parsed_ast::accumulated::<SpanDiagnostic>(db, source);
     let parse_errors: Vec<_> = parse_diagnostics
         .iter()
         .filter(|d| {
@@ -250,17 +251,20 @@ pub fn run_ast_pipeline_with_ir(db: &dyn salsa::Database, source: SourceCst) -> 
 
     let ir = run_ast_pipeline_inner(db, source);
     // Production lowers only a module without errors.
-    let errors: Vec<_> = run_ast_pipeline_inner::accumulated::<Diagnostic>(db, source)
-        .into_iter()
-        .filter(|d| d.inner.severity == tribute_core::diagnostic::DiagnosticSeverity::Error)
-        .collect();
+    let errors: Vec<_> = tribute_front::ast::locate_diagnostics(
+        run_ast_pipeline_inner::accumulated::<SpanDiagnostic>(db, source),
+        run_ast_pipeline_inner::accumulated::<tribute_front::ast::NodeDiagnostic>(db, source),
+        analysis::spans(db, source, *environment(db)),
+    )
+    .filter(|d| d.severity == tribute_core::diagnostic::DiagnosticSeverity::Error)
+    .collect();
     assert!(
         errors.is_empty(),
         "Expected no errors, but found {}:\n{}",
         errors.len(),
         errors.iter().format_with("\n", |d, f| f(&format_args!(
             "  - [{}] {}",
-            d.phase, d.inner.message
+            d.phase, d.message
         )))
     );
     ir
@@ -273,12 +277,32 @@ pub fn run_ast_pipeline(db: &dyn salsa::Database, source: SourceCst) {
     let _ = run_ast_pipeline_with_ir(db, source);
 }
 
+/// Parse, resolve, and type check `source` against the prelude.
+pub fn analyze_with_prelude(
+    db: &dyn salsa::Database,
+    source: SourceCst,
+) -> tribute_front::typeck::TypeCheckOutput<'_> {
+    *analysis::analyze(db, source, *environment(db)).expect("the source parses")
+}
+
+/// The prelude's `String` type.
+pub fn prelude_string_type(db: &dyn salsa::Database) -> tribute_front::ast::Type<'_> {
+    let prelude = analysis::checked_package(db, *std_package(db)).expect("the prelude parses");
+    prelude
+        .checked
+        .declarations(db)
+        .well_known_types
+        .string
+        .expect("the prelude declares String")
+        .ty
+}
+
 /// Run the frontend through TDNR, without lowering invalid ASTs to IR.
-pub fn ast_pipeline_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<Diagnostic> {
+pub fn ast_pipeline_diagnostics(
+    db: &dyn salsa::Database,
+    source: SourceCst,
+) -> Vec<Diagnostic<'_>> {
     analysis::diagnostics(db, source, *environment(db))
-        .into_iter()
-        .cloned()
-        .collect()
 }
 
 /// Run the frontend and return error diagnostic messages.
@@ -286,8 +310,8 @@ pub fn ast_pipeline_error_messages(db: &dyn salsa::Database, source: SourceCst) 
     ast_pipeline_diagnostics(db, source)
         .into_iter()
         .filter(|diagnostic| {
-            diagnostic.inner.severity == tribute_core::diagnostic::DiagnosticSeverity::Error
+            diagnostic.severity == tribute_core::diagnostic::DiagnosticSeverity::Error
         })
-        .map(|diagnostic| diagnostic.inner.message)
+        .map(|diagnostic| diagnostic.message.to_owned())
         .collect()
 }

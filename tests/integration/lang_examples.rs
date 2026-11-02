@@ -52,7 +52,7 @@ fn frontend_messages(path: &Path) -> Vec<String> {
     db.attach(|db| {
         tribute::pipeline::frontend_diagnostics(db, source)
             .into_iter()
-            .map(|diagnostic| diagnostic.inner.message.clone())
+            .map(|diagnostic| diagnostic.message.to_owned())
             .collect()
     })
 }

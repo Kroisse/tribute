@@ -21,7 +21,7 @@ fn check(db: &LoggingDb, source: SourceCst) -> Vec<String> {
     analysis::diagnostics(db, source, table)
         .into_iter()
         .map(|diagnostic| {
-            let span = diagnostic.inner.span;
+            let span = diagnostic.span;
             text[span.start as usize..span.end as usize].to_owned()
         })
         .collect()
@@ -77,5 +77,23 @@ fn moving_code_reuses_checks_and_moves_their_diagnostics() {
         after = check(db, source);
     });
     assert_eq!(executed.count("check_function"), 0);
+    assert_eq!(after, before);
+}
+
+/// Moving code reuses name resolution even when it reports an unresolved
+/// name, and the diagnostic follows the name.
+#[test]
+fn moving_code_reuses_resolution_and_moves_its_diagnostics() {
+    let db = LoggingDb::default();
+    let source = db.source(PATH, "fn f() -> Int { missing }\n");
+    let before = check(&db, source);
+    assert_eq!(before, ["missing"]);
+    let mut db = db;
+    db.replace(source, "fn f", "// A comment moves the function.\n\nfn f");
+    let mut after = Vec::new();
+    let executed = db.record(|db| {
+        after = check(db, source);
+    });
+    assert_eq!(executed.count("resolved_module"), 0);
     assert_eq!(after, before);
 }

@@ -5,6 +5,7 @@
 
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
+use salsa::Accumulator;
 
 use itertools::Itertools;
 use tribute_core::{CompilationPhase, DiagnosticSeverity};
@@ -529,7 +530,7 @@ impl<'db> TypeChecker<'db> {
                             DiagnosticSeverity::Error,
                             CompilationPhase::TypeChecking,
                         )
-                        .report(self);
+                        .accumulate(self.db());
                     } else {
                         handled_ability_ids.push(ability_id);
                     }
@@ -739,7 +740,7 @@ impl<'db> TypeChecker<'db> {
                     DiagnosticSeverity::Error,
                     CompilationPhase::TypeChecking,
                 )
-                .report(self);
+                .accumulate(self.db());
             }
             return ctx.error_type();
         }
@@ -1247,7 +1248,7 @@ impl<'db> TypeChecker<'db> {
             DiagnosticSeverity::Error,
             CompilationPhase::TypeChecking,
         )
-        .report(self);
+        .accumulate(self.db());
     }
 
     /// Check that a positional constructor pattern names a constructor and
@@ -1400,7 +1401,7 @@ impl<'db> TypeChecker<'db> {
                 DiagnosticSeverity::Error,
                 CompilationPhase::TypeChecking,
             )
-            .report(self);
+            .accumulate(self.db());
         }
         ctx.error_type()
     }
@@ -1914,7 +1915,7 @@ impl<'db> TypeChecker<'db> {
             DiagnosticSeverity::Error,
             CompilationPhase::TypeChecking,
         )
-        .report(self);
+        .accumulate(self.db());
     }
 
     /// Select the function a call names among the functions name resolution
@@ -3563,7 +3564,7 @@ impl<'db> TypeChecker<'db> {
                     DiagnosticSeverity::Error,
                     CompilationPhase::TypeChecking,
                 )
-                .report(self);
+                .accumulate(self.db());
             }
             return self.invalid_handler_operation(ctx, op, syntax_kind, params.len());
         };
@@ -3575,7 +3576,7 @@ impl<'db> TypeChecker<'db> {
                     DiagnosticSeverity::Error,
                     CompilationPhase::TypeChecking,
                 )
-                .report(self);
+                .accumulate(self.db());
             }
             return self.invalid_handler_operation(ctx, op, syntax_kind, params.len());
         };
@@ -3589,7 +3590,7 @@ impl<'db> TypeChecker<'db> {
                 DiagnosticSeverity::Error,
                 CompilationPhase::TypeChecking,
             )
-            .report(self);
+            .accumulate(self.db());
         }
 
         // A handler must retain the exact instantiated ability from the handled
@@ -3661,7 +3662,7 @@ impl<'db> TypeChecker<'db> {
                         DiagnosticSeverity::Error,
                         CompilationPhase::TypeChecking,
                     )
-                    .report(self);
+                    .accumulate(self.db());
                 }
                 return self.invalid_handler_operation(ctx, op, syntax_kind, params.len());
             }
@@ -3676,7 +3677,7 @@ impl<'db> TypeChecker<'db> {
                         DiagnosticSeverity::Error,
                         CompilationPhase::TypeChecking,
                     )
-                    .report(self);
+                    .accumulate(self.db());
                 }
                 return self.invalid_handler_operation(ctx, op, syntax_kind, params.len());
             }
@@ -3724,7 +3725,7 @@ impl<'db> TypeChecker<'db> {
                     DiagnosticSeverity::Error,
                     CompilationPhase::TypeChecking,
                 )
-                .report(self);
+                .accumulate(self.db());
             }
             return self.invalid_handler_operation(ctx, op, syntax_kind, params.len());
         }
@@ -3943,7 +3944,7 @@ impl<'db> TypeChecker<'db> {
                 DiagnosticSeverity::Error,
                 CompilationPhase::TypeChecking,
             )
-            .report(self);
+            .accumulate(self.db());
         }
     }
 
@@ -4006,7 +4007,7 @@ impl<'db> TypeChecker<'db> {
                 DiagnosticSeverity::Error,
                 CompilationPhase::TypeChecking,
             )
-            .report(self);
+            .accumulate(self.db());
         }
     }
 
@@ -4060,8 +4061,8 @@ mod tests {
 
     use crate::ast::{
         AbilityId, AbilityRow, Expr, ExprKind, FuncDefId, HandlerArm, HandlerKind, LocalId, NodeId,
-        OpDeclKind, Pattern, PatternKind, ResolvedRef, SpanMap, Type, TypeAnnotation,
-        TypeAnnotationKind, TypeDefId, TypeKind,
+        OpDeclKind, Pattern, PatternKind, ResolvedRef, Type, TypeAnnotation, TypeAnnotationKind,
+        TypeDefId, TypeKind,
     };
     use crate::typeck::context::{AbilityInfo, AbilityOpInfo};
     use crate::typeck::func_context::HandleContext;
@@ -4073,7 +4074,6 @@ mod tests {
     fn make_test_checker(db: &dyn salsa::Database) -> TypeChecker<'_> {
         TypeChecker::new(
             db,
-            SpanMap::empty(),
             crate::resolve::NameDisplay::new(&crate::resolve::PackageName::executable_root(), []),
         )
     }

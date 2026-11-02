@@ -8,7 +8,7 @@ mod expr;
 mod logical;
 
 use salsa::Accumulator;
-use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_core::diagnostic::{CompilationPhase, DiagnosticSeverity, SpanDiagnostic};
 use tribute_ir::dialect::tribute_control::{Row, RowBinder, RowUnion};
 use tribute_ir::dialect::{tribute_control, tribute_rt};
 use trunk_ir::Symbol;
@@ -313,7 +313,7 @@ pub(super) fn validate_nat_i31(
 ) -> Option<i32> {
     const I31_MAX: u64 = (1 << 30) - 1;
     if n > I31_MAX {
-        Diagnostic::new(
+        SpanDiagnostic::new(
             format!(
                 "natural number literal {} exceeds i31 range (max: {})",
                 n, I31_MAX
@@ -339,7 +339,7 @@ pub(super) fn validate_int_i31(
     const I31_MIN: i64 = -(1 << 30);
     const I31_MAX: i64 = (1 << 30) - 1;
     if !(I31_MIN..=I31_MAX).contains(&n) {
-        Diagnostic::new(
+        SpanDiagnostic::new(
             format!(
                 "integer literal {} exceeds i31 range ({} to {})",
                 n, I31_MIN, I31_MAX

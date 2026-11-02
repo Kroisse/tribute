@@ -301,8 +301,8 @@ pass가 정한 convention이 아니다. Arm의 정의에 드러나는 위반은 
   것으로 본다.
 - [abilities.md](abilities.md#fn-operation-handler)의 tail 예외 가운데 `body`
   tail은 이렇게 읽는다. `body` tail은 callee 값 type의 어느 매개변수 타입에도 나타나지 않으면 ability를 더하지
-  않고, 나타나면 `op`를 선언한 ability를 담을 수 있다고 본다. 별칭과 일반화된 계산
-  결과의 사용에는 `instantiate`가 없어서 인자의 row를 그 tail에 이어 읽을 수 없기
+  않고, 나타나면 `op`를 선언한 ability를 담을 수 있다고 본다. 람다의 별칭과 일반화된
+  계산 결과의 사용에는 `instantiate`가 없어서 인자의 row를 그 tail에 이어 읽을 수 없기
   때문이다.
 - 직접 호출은 callee 인스턴스의 row를, 간접 호출은 callee 값 type의 row를 이 표로
   읽는다. Arm 안의 `handle` body에 있는 호출은 그 row에서 둘러싼 `handle`들이 처리하는

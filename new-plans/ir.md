@@ -1111,6 +1111,14 @@ type에는 그 `body` binder가 그대로 남는다. 그래서 별칭이나 일�
 간접 이전은 그 자리를 `Cps`로 읽고, 별칭 자리의 인스턴스화도 `Cps`를 고르므로 값은
 그 entry를 가진다.
 
+람다의 별칭과 달리, 이름 붙은 함수를 그대로 묶은 binding과 그런 binding을 다시
+묶은 별칭은 값을 묶지 않는다. 함수 참조는 할당도 효과도 없으므로, 그 binding의
+사용은 묶인 값을 읽지 않고 함수를 다시 참조한다. 그 `tribute_control.func_ref`는
+타입 검사가 그 사용에 고른 인스턴스의 row를 넘긴다. 별칭마다 scheme을 인스턴스화한
+row를 사용 쪽에서부터 거슬러 대입해 함수 참조 자리의 row 인자를 얻는다. 그래서
+순수한 사용은 `body` binder 대신 그 사용의 row를 보고, 닫힌 row의 람다를 그대로
+넘길 수 있다.
+
 #### Row 인자와 치환
 
 Row-polymorphic 정의를 참조하는 `call`, `tail_call`, `func_ref`는 `row_args`로 callee의
@@ -1248,7 +1256,7 @@ convention entry들이 adapter 하나를 공유하게 할 수 있다.
 trap하는 함수이며, target은 signature가 같은 trap entry들이 하나를 공유하게 한다.
 Trap entry는 실행되지 않는다. 값이 놓이는 자리의 class는 그 값의 실제 class보다
 약하지 않고, 값은 실제 class부터 자기가 읽힌 상한까지의 본문을 모두 갖기 때문이다.
-Class는 row의 tail에서 계산하고, 값이 tail의 정체를 잃는 자리(별칭, class 없는
+Class는 row의 tail에서 계산하고, 값이 tail의 정체를 잃는 자리(람다의 별칭, class 없는
 tail)는 `Cps`로만 읽는다. Class 특수화는 확인할 수 있는 것을 확인한다. 모든 간접
 이전의 convention은 그 이전을 담은 인스턴스와 본문의 class 읽기로 callee type을 읽은
 class(상한이면 상한)와 같아야 하며, 다르면 컴파일 오류다. Trap entry는 값의 흐름을 따라가야만 드러나는

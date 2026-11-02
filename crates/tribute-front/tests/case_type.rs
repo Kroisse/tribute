@@ -433,8 +433,8 @@ fn exhaustiveness_outcome(
     let source = SourceCst::from_source_str(db, "test.trb", source);
     let messages = common::ast_pipeline_diagnostics(db, source)
         .into_iter()
-        .filter(|diagnostic| diagnostic.inner.severity == severity)
-        .map(|diagnostic| diagnostic.inner.message)
+        .filter(|diagnostic| diagnostic.severity == severity)
+        .map(|diagnostic| diagnostic.message.to_owned())
         .collect();
     let exhaustive = tribute_front::query::type_check_output(db, source)
         .expect("type checking should produce output")
@@ -808,9 +808,9 @@ fn errors_without_prelude(db: &salsa::DatabaseImpl, source: &str) -> Vec<String>
     tribute_front::analysis::diagnostics(db, source, *tribute_front::analysis::builtins(db))
         .into_iter()
         .filter(|diagnostic| {
-            diagnostic.inner.severity == tribute_core::diagnostic::DiagnosticSeverity::Error
+            diagnostic.severity == tribute_core::diagnostic::DiagnosticSeverity::Error
         })
-        .map(|diagnostic| diagnostic.inner.message.clone())
+        .map(|diagnostic| diagnostic.message.to_owned())
         .collect()
 }
 

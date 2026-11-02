@@ -27,7 +27,7 @@ mod become_check;
 mod collect;
 mod diagnostics;
 
-pub use diagnostics::NodeDiagnostic;
+pub use crate::ast::NodeDiagnostic;
 mod exhaustiveness;
 mod expr;
 mod finalize;
@@ -43,8 +43,8 @@ use trunk_ir::Symbol;
 
 use crate::SortedMap;
 use crate::ast::{
-    Decl, DeclEntry, DeclTable, FuncDecl, FuncDefId, NodeId, ResolvedRef, SpanMap, Type,
-    TypeScheme, TypedRef, UniVarId,
+    Decl, DeclEntry, DeclTable, FuncDecl, FuncDefId, NodeId, ResolvedRef, Type, TypeScheme,
+    TypedRef, UniVarId,
 };
 use crate::resolve::{NameDisplay, PackageName};
 
@@ -88,13 +88,11 @@ pub struct ModuleCheckResult<'db> {
 }
 
 /// What collecting a module's declarations produces: the environment each
-/// of its functions is checked in, and the diagnostics collection reported.
-/// It holds no function body, so editing a body leaves it equal.
+/// of its functions is checked in. It holds no function body, so editing a body leaves it equal.
 #[derive(Clone, PartialEq, Eq, salsa::SalsaValue)]
 pub struct ModuleDeclarations<'db> {
     env: Arc<TypeEnvData<'db>>,
     signatures: Arc<SignatureNames<'db>>,
-    diagnostics: Vec<NodeDiagnostic>,
 }
 
 /// The names each collected function signature binds, for checking its
@@ -107,13 +105,12 @@ struct SignatureNames<'db> {
     type_names: HashMap<FuncDefId<'db>, HashMap<Symbol, u32>>,
 }
 
-/// What checking one module-level function produces: its typed declaration,
-/// its body's node metadata, and its diagnostics, positioned at nodes.
+/// What checking one module-level function produces: its typed declaration
+/// and its body's node metadata.
 #[derive(Clone, PartialEq, Eq, salsa::SalsaValue)]
 pub struct CheckedFunction<'db> {
     decl: FuncDecl<TypedRef<'db>>,
     check: FunctionCheck<'db>,
-    diagnostics: Vec<NodeDiagnostic>,
 }
 
 /// A function's body node metadata, keyed by nodes only that function owns.
@@ -157,8 +154,6 @@ pub struct TypeChecker<'db> {
     pub(crate) env: ModuleTypeEnv<'db>,
     /// Current module prefix for qualified function names (e.g., "foo::bar").
     pub(crate) prefix: SymbolPath,
-    /// Span map for converting NodeId to Span in diagnostics.
-    pub(crate) span_map: SpanMap<'db>,
     /// How diagnostics spell the declarations of the package being checked.
     names: NameDisplay,
     /// Accumulated node types from all functions.
@@ -176,8 +171,6 @@ pub struct TypeChecker<'db> {
     /// Each collected function, checked against the field getters once
     /// every declaration is collected.
     function_decls: Vec<(NodeId, FuncDefId<'db>)>,
-    /// Diagnostics reported so far, positioned at nodes.
-    diagnostics: std::cell::RefCell<Vec<NodeDiagnostic>>,
 }
 
 impl<'db> TypeChecker<'db> {
@@ -234,13 +227,12 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
-    /// Create a new type checker with the given span map, whose diagnostics
-    /// spell declarations as `names` does.
-    pub fn new(db: &'db dyn salsa::Database, span_map: SpanMap<'db>, names: NameDisplay) -> Self {
+    /// Create a new type checker whose diagnostics spell declarations as
+    /// `names` does.
+    pub fn new(db: &'db dyn salsa::Database, names: NameDisplay) -> Self {
         Self {
             env: ModuleTypeEnv::new(db),
             prefix: SymbolPath::root(),
-            span_map,
             names,
             node_types: HashMap::default(),
             function_instances: HashMap::default(),
@@ -252,15 +244,6 @@ impl<'db> TypeChecker<'db> {
             exhaustive_cases: Vec::new(),
             signatures: Default::default(),
             function_decls: Vec::new(),
-            diagnostics: Default::default(),
-        }
-    }
-
-    /// Report the diagnostics recorded so far at the spans of their nodes.
-    fn accumulate_diagnostics(&self) {
-        use salsa::Accumulator;
-        for diagnostic in self.diagnostics.take() {
-            diagnostic.resolve(&self.span_map).accumulate(self.db());
         }
     }
 
@@ -310,7 +293,6 @@ impl<'db> TypeChecker<'db> {
         ModuleDeclarations {
             env: self.env.data().clone(),
             signatures: self.signatures,
-            diagnostics: self.diagnostics.into_inner(),
         }
     }
 
@@ -323,8 +305,7 @@ impl<'db> TypeChecker<'db> {
     }
 
     /// Check one module-level function, declared in `module`, against the
-    /// collected declarations. Its diagnostics stay positioned at nodes, so
-    /// the checker needs no span map.
+    /// collected declarations.
     pub fn check_function(
         mut self,
         module: &SymbolPath,
@@ -332,16 +313,11 @@ impl<'db> TypeChecker<'db> {
     ) -> CheckedFunction<'db> {
         self.prefix = module.clone();
         let (decl, check) = self.check_func_decl(func);
-        CheckedFunction {
-            decl,
-            check,
-            diagnostics: self.diagnostics.into_inner(),
-        }
+        CheckedFunction { decl, check }
     }
 
     /// Assemble a module's result from its collected declarations and its
-    /// functions' results, in declaration order, and report their
-    /// diagnostics at the spans of the checker's span map.
+    /// functions' results, in declaration order.
     pub fn finish_module<'a>(
         mut self,
         declarations: &ModuleDeclarations<'db>,
@@ -352,9 +328,6 @@ impl<'db> TypeChecker<'db> {
         'db: 'a,
     {
         self = self.with_declarations(declarations);
-        self.diagnostics
-            .get_mut()
-            .extend(declarations.diagnostics.iter().cloned());
         let mut functions = functions.into_iter();
         let entries = module
             .entries
@@ -365,9 +338,6 @@ impl<'db> TypeChecker<'db> {
                         let checked = functions
                             .next()
                             .expect("a checked function for each function declaration");
-                        self.diagnostics
-                            .get_mut()
-                            .extend(checked.diagnostics.iter().cloned());
                         self.merge_function(checked.check.clone());
                         Decl::Function(checked.decl.clone())
                     }
@@ -379,7 +349,6 @@ impl<'db> TypeChecker<'db> {
                 }
             })
             .collect();
-        self.accumulate_diagnostics();
         self.into_module_result(DeclTable {
             id: module.id,
             name: module.name.clone(),
@@ -402,7 +371,6 @@ impl<'db> TypeChecker<'db> {
         self.env.set_prelude_well_known_types(well_known_types);
         let checked = self.check_decls(module);
         let exports = self.package_exports(well_known_types);
-        self.accumulate_diagnostics();
         (self.into_module_result(checked), exports)
     }
 
@@ -422,7 +390,6 @@ impl<'db> TypeChecker<'db> {
         // which is for external references, not internal function naming.
         self.collect_declarations(module);
         let checked = self.check_decls(module);
-        self.accumulate_diagnostics();
         self.into_module_result(checked)
     }
 

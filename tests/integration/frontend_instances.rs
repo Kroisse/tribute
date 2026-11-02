@@ -1,7 +1,7 @@
 //! The tracked public specialization query rejects damaged instance evidence.
 use salsa_test_macros::salsa_test;
 use tribute::pipeline::{frontend_diagnostics, parse_and_lower_ast, prepare_frontend_for_lowering};
-use tribute_core::diagnostic::Diagnostic;
+use tribute_core::diagnostic::SpanDiagnostic;
 use tribute_front::{
     SourceCst,
     ast::{FuncDefId, Type, TypeKind},
@@ -81,7 +81,7 @@ fn damaged_instances_are_tracked_diagnostics(db: &salsa::DatabaseImpl) {
             !prepare_damaged(db, source, damage),
             "damage {damage} must not produce a lowered frontend"
         );
-        let messages: Vec<_> = prepare_damaged::accumulated::<Diagnostic>(db, source, damage)
+        let messages: Vec<_> = prepare_damaged::accumulated::<SpanDiagnostic>(db, source, damage)
             .iter()
             .map(|diagnostic| diagnostic.inner.message.to_string())
             .collect();
@@ -121,7 +121,7 @@ fn inconsistent_effect_instances_block_lowering(db: &salsa::DatabaseImpl) {
         (8, "IncompleteAbilityArgument"),
     ] {
         assert!(!prepare_damaged(db, source, damage));
-        let errors = prepare_damaged::accumulated::<Diagnostic>(db, source, damage);
+        let errors = prepare_damaged::accumulated::<SpanDiagnostic>(db, source, damage);
         assert!(
             errors
                 .iter()
@@ -198,7 +198,7 @@ fn incomplete_instances_are_rejected_whether_or_not_reached(db: &salsa::Database
             ),
         );
         assert!(!prepares(db, source), "{main}");
-        let messages: Vec<_> = prepares::accumulated::<Diagnostic>(db, source)
+        let messages: Vec<_> = prepares::accumulated::<SpanDiagnostic>(db, source)
             .iter()
             .map(|diagnostic| diagnostic.inner.message.to_string())
             .collect();
