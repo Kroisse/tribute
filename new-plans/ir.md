@@ -1100,8 +1100,8 @@ binder를 공유하며, entry마다 그 binder에 class를 하나씩 고정한�
 거치지 않으므로, 타입 검사가 사용마다 그 scheme을 새로 인스턴스화하더라도 IR의 값
 type에는 그 `body` binder가 그대로 남는다. 그래서 별칭이나 일반화된 계산 결과를 통한
 간접 이전은 그 자리를 `Cps`로 읽고, 별칭 자리의 인스턴스화도 `Cps`를 고르므로 값은
-그 entry를 가진다. 그런 값의 매개변수 row tail도 `body` binder이므로, 타입 검사가 고른
-row와 달라진다. 그 자리에 넘기는 람다는 매개변수의 callable type으로 만들고, 함수
+그 entry를 가진다. 그런 값의 매개변수 row tail이 그 `body` binder이면, 그 row는 타입
+검사가 고른 row와 달라진다. 그 자리에 넘기는 람다는 매개변수의 callable type으로 만들고, 함수
 참조는 그 type의 `tribute_control.func_ref`로 다시 만든다. Conversion cast는 callable의
 ABI를 바꿀 수 없기 때문이다.
 
