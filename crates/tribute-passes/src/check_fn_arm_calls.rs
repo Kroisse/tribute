@@ -18,6 +18,7 @@ use tribute_ir::dialect::tribute_cps;
 use tribute_ir::runtime_items::RUNTIME_ITEMS;
 use trunk_ir::SymbolPath;
 use trunk_ir::context::IrContext;
+use trunk_ir::op_flag::OpFlag;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, RegionRef};
 use trunk_ir::rewrite::Module;
@@ -298,7 +299,7 @@ impl<'a> Instance<'a> {
     ) {
         let ctx = self.ctx;
         // A lambda's body runs where it is called, under its own convention.
-        if tribute_control::is_lambda(ctx, op) {
+        if tribute_control::SourceLambda::is_set(ctx, op) {
             return;
         }
         if let Ok(handle) = tribute_control::Handle::from_op(ctx, op) {
@@ -356,8 +357,8 @@ impl<'a> Instance<'a> {
                 tribute_cps::declared_convention(ctx, callee.op),
                 Row::new(instances, tail),
             )
-        } else if tribute_control::is_call_indirect(ctx, op)
-            || tribute_control::is_tail_call_indirect(ctx, op)
+        } else if tribute_control::SourceCallIndirect::is_set(ctx, op)
+            || tribute_control::SourceTailCallIndirect::is_set(ctx, op)
         {
             let &callee = ctx.op_operands(op).first()?;
             let signature = FuncSig::from_type_ref(ctx, ctx.value_ty(callee))?;

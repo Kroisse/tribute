@@ -13,6 +13,7 @@ use tribute_ir::calling_convention::CallingConvention;
 use tribute_ir::dialect::tribute_control::{FuncSig, Row, RowBinder};
 use tribute_ir::dialect::{ability, tribute_control, tribute_cps};
 use trunk_ir::context::IrContext;
+use trunk_ir::op_flag::OpFlag;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
 use trunk_ir::rewrite::Module;
@@ -222,7 +223,7 @@ impl Function {
         op: OpRef,
         tables: &HashMap<String, OpRef>,
     ) -> Option<Self> {
-        if !tribute_control::is_func(ctx, op) {
+        if !tribute_control::SourceFunc::is_set(ctx, op) {
             return None;
         }
         let name = ctx.op_attrs(op).get_str("sym_name")?.to_owned();
