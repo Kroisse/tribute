@@ -1431,26 +1431,26 @@ fn main() ->{Io} Nil {
 
 ### Expressions
 
-| 구문                  | 의미                   |
-| --------------------- | ---------------------- |
-| `{ stmts expr }`      | Block / 그룹화         |
-| `fn(x) expr`          | Lambda                 |
-| `case e { pat -> e }` | Pattern matching       |
-| `handle e { arms }`   | Effect handling        |
-| `x.f`                 | UFCS (괄호 생략)       |
-| `x.f(y)`              | UFCS                   |
-| `T::f(x)`             | Qualified call         |
-| `T { f: v }`          | Record construction    |
-| `T { ..x, f: v }`     | Record update (spread) |
-| `.V`, `.V(x)`         | 암묵적 생성자          |
-| `.V { f: v }`         | 암묵적 record 생성     |
-| `[a, b, c]`           | List literal           |
-| `#(a, b, c)`          | Tuple literal          |
-| `a <> b`              | Concatenation          |
-| `a T::<> b`           | Qualified operator     |
-| `(+)`, `(T::<>)`      | Operator as function   |
-| `resume expr`         | Continuation 재개      |
-| `become f(x)`         | Proper tail call       |
+| 구문                  | 의미                                  |
+| --------------------- | ------------------------------------- |
+| `{ stmt … expr }`     | Block / 그룹화 (문장은 개행으로 구분) |
+| `fn(x) expr`          | Lambda                                |
+| `case e { pat -> e }` | Pattern matching                      |
+| `handle e { arms }`   | Effect handling                       |
+| `x.f`                 | UFCS (괄호 생략)                      |
+| `x.f(y)`              | UFCS                                  |
+| `T::f(x)`             | Qualified call                        |
+| `T { f: v }`          | Record construction                   |
+| `T { ..x, f: v }`     | Record update (spread)                |
+| `.V`, `.V(x)`         | 암묵적 생성자                         |
+| `.V { f: v }`         | 암묵적 record 생성                    |
+| `[a, b, c]`           | List literal                          |
+| `#(a, b, c)`          | Tuple literal                         |
+| `a <> b`              | Concatenation                         |
+| `a T::<> b`           | Qualified operator                    |
+| `(+)`, `(T::<>)`      | Operator as function                  |
+| `resume expr`         | Continuation 재개                     |
+| `become f(x)`         | Proper tail call                      |
 
 ### Patterns
 
