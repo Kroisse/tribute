@@ -15,7 +15,7 @@ core.module @test {
       %4 = adt.struct_get %3 {field = 0, type = !_closure_captures} : core.ptr
       %5 = adt.struct_get %3 {field = 1, type = !_closure_captures} : core.ptr
       %6 = clif.load %4 {offset = 0} : core.i64
-      %7 = clif.call_indirect %6, %5 {sig = clif.func_sig<(core.ptr) -> core.i32>} : core.i32
+      %7 = clif.call_indirect %6(%5) : (core.ptr) -> core.i32
       clif.return %7
   }
   clif.data {align = 8, bytes = b"\0\0\0\0\0\0\0\0", sym_name = "__tribute_convention_table_0"} {

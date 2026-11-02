@@ -13,7 +13,7 @@ const MODULE: &str = r#"core.module @test {
   tribute_cps.func @declared(%arg0: core.i32) -> core.i32 convention(direct)
   tribute_cps.func_table @"declared$8" = {direct = @declared}
   tribute_cps.func @apply(%0: !t0, %1: core.i32) -> core.i32 convention(direct) {
-      %2 = tribute_cps.call_indirect %0, %1 {convention = "direct"} : core.i32
+      %2 = tribute_cps.call_indirect %0(%1) convention(direct) : core.i32
       tribute_control.return %2
   }
   tribute_cps.func @outer['a0](%0: core.i32) -> core.i32 row(| 'a0) convention(cps) attributes {visibility = "private"} {
@@ -23,7 +23,7 @@ const MODULE: &str = r#"core.module @test {
         }
       }
       %3 = tribute_cps.func_ref @"declared$8" : !t0
-      tribute_cps.tail_call_indirect %1, %0 {convention = "cps"}
+      tribute_cps.tail_call_indirect %1(%0) convention(cps)
   }
 }
 "#;
@@ -66,7 +66,7 @@ const TWO_BODIES: &str = r#"core.module @test {
             tribute_control.return %2
         }
       }
-      tribute_cps.tail_call_indirect %1, %0 {convention = "cps"}
+      tribute_cps.tail_call_indirect %1(%0) convention(cps)
   }
 }
 "#;
@@ -194,7 +194,7 @@ fn an_indirect_tail_call_is_not_stronger_than_its_callable() {
     let errors = messages(
         r#"core.module @test {
   tribute_cps.func @f(%k: tribute_control.func_sig<() -> core.i32>) -> core.i32 convention(direct) {
-    tribute_cps.tail_call_indirect %k {convention = "cps"}
+    tribute_cps.tail_call_indirect %k() convention(cps)
   }
 }
 "#,
@@ -261,7 +261,7 @@ fn a_function_reference_names_a_function_table() {
   }
   tribute_cps.func @f() -> core.i32 convention(direct) {
     %0 = tribute_cps.func_ref {func_ref = @target} : tribute_control.func_sig<() -> core.i32>
-    %1 = tribute_cps.call_indirect %0 {convention = "direct"} : core.i32
+    %1 = tribute_cps.call_indirect %0() convention(direct) : core.i32
     tribute_control.return %1
   }
 }
@@ -304,7 +304,7 @@ fn every_body_takes_the_parameters_and_its_own_convention() {
             tribute_control.return %0
         }
         cps {
-            %3 = tribute_cps.call_indirect %2 {convention = "cps"} : core.i32
+            %3 = tribute_cps.call_indirect %2() convention(cps) : core.i32
             tribute_control.return %3
         }
       }
@@ -319,7 +319,7 @@ fn every_body_takes_the_parameters_and_its_own_convention() {
     // A transfer in the Direct body may not be stronger than that body.
     let stronger = input.replace(
         "direct {\n            tribute_control.return %0",
-        "direct {\n            tribute_cps.tail_call_indirect %2 {convention = \"cps\"}",
+        "direct {\n            tribute_cps.tail_call_indirect %2() convention(cps)",
     );
     assert!(
         messages(&stronger)
@@ -338,7 +338,7 @@ fn a_function_reference_writes_its_target_and_row_arguments() {
   tribute_cps.func @f['a0]() -> core.i32 row(| 'a0) convention(cps) {
       %0 = tribute_cps.func_ref @inner::@"g$8" rows [{tail = 0}] : !t0
       %1 = tribute_control.func_ref @h : !t0
-      tribute_cps.tail_call_indirect %0 {convention = "cps"}
+      tribute_cps.tail_call_indirect %0() convention(cps)
   }
 }
 "#;
@@ -362,7 +362,7 @@ fn a_function_table_and_its_targets_are_in_the_module_of_its_references() {
   tribute_cps.func_table @"outer$8" = {direct = @inner::@id}
   tribute_cps.func @f() -> core.i32 convention(direct) {
     %0 = tribute_cps.func_ref @inner::@"id$8" : tribute_control.func_sig<() -> core.i32>
-    %1 = tribute_cps.call_indirect %0 {convention = "direct"} : core.i32
+    %1 = tribute_cps.call_indirect %0() convention(direct) : core.i32
     tribute_control.return %1
   }
 }

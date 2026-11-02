@@ -1043,16 +1043,15 @@ mod tests {
             output.contains("wasm.return_call_indirect %0, %1 {signature = wasm.func_sig<(wasm.anyref) -> ()>, table = 0, test.marker = 2, type_idx = 0}"),
             "the converted transfer must retain its calling convention: {output}"
         );
-        assert!(
-            !output.contains("signature = func.func_sig<(tribute_rt.anyref) -> ()>"),
-            "{output}"
-        );
+        assert!(!output.contains("(tribute_rt.anyref) -> ()"), "{output}");
         assert!(
             !output.contains("table = 7") && !output.contains("type_idx = 9"),
             "stale source table metadata must not reach Wasm: {output}"
         );
         assert!(
-            output.contains("func.tail_call_indirect %0, %1 {signature = func.func_sig<(tribute_rt.float) -> ()>, test.marker = 2}"),
+            output.contains(
+                "func.tail_call_indirect %0(%1) attributes {test.marker = 2} : (tribute_rt.float) -> ()"
+            ),
             "the mismatched transfer must remain unchanged: {output}"
         );
     }
@@ -1099,13 +1098,11 @@ mod tests {
             "stale source table metadata must not reach Wasm: {output}"
         );
         assert!(
-            !output.contains("signature = func.func_sig<(tribute_rt.anyref) -> core.i32>"),
+            !output.contains("(tribute_rt.anyref) -> core.i32"),
             "{output}"
         );
         assert!(
-            output.contains(
-                "func.call_indirect %0, %1 {signature = func.func_sig<(tribute_rt.float) -> core.i32>} : core.i32"
-            ),
+            output.contains("func.call_indirect %0(%1) : (tribute_rt.float) -> core.i32"),
             "the mismatched call must remain unchanged: {output}"
         );
     }

@@ -1212,10 +1212,9 @@ mod tests {
 
         let printed = crate::printer::print_module(&ctx, module.op());
         assert!(
-            printed.contains("!t0 = func.func_sig<(core.nil) -> core.never>"),
+            printed.contains("attributes {test.marker = 2} : (core.nil) -> core.never"),
             "{printed}"
         );
-        assert!(printed.contains("signature = !t0"), "{printed}");
         assert!(printed.contains("test.marker = 2"));
     }
 

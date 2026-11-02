@@ -172,9 +172,12 @@ where
   ```
 
   String literals are keywords and punctuation, a bare name is an operand
-  or attribute, and `symbol(..)`, `type(..)`/`types(..)`, `attr_dict`
+  or attribute, and `symbol(..)`, `keyword(..)`, `type(..)`/`types(..)`, `attr_dict`
   (`attributes {..}`), `region(..)`/`regions(..)`, and
   `successor(..)`/`successors(..)` write the other entities.
+  `keyword(a)` writes the attribute `a` as a bare identifier through the
+  `asm_format::KeywordCodec` of its kind, as `tribute_cps` writes
+  `convention(cps)`.
   `signature(t, body)` writes the `Attr<TypeOf<S>>` attribute `t` as
   `(%a: A) -> R`, through the `asm_format::SignatureCodec` of `S`'s bound,
   with the inputs as the entry block arguments of `body`, which then elides

@@ -420,9 +420,11 @@ literal은 문자열 literal로 쓴다.
   parser는 SSA 이름으로 값을 찾고 값에서 타입을 얻는다.
 - **Attribute** — 그 attribute 종류의 textual 형식으로 쓴다. 기본은 generic
   attribute 문법(`"text"`, `@sym`, `[..]`, `42`)이다. `keyword(attr)`는 종류가
-  keyword codec을 정의한 attribute를 따옴표 없는 식별자로 쓴다(예: calling
-  convention의 `cps`). `symbol(attr)`는 문자열 attribute를 정의 이름 `@name`으로
-  쓴다.
+  keyword codec을 정의한 필수 attribute를 따옴표 없는 식별자로 쓴다(예: calling
+  convention의 `cps`). Keyword codec은 attribute 종류가 구현하며, 값을 그 값을
+  쓰는 keyword로, keyword를 값으로 바꾼다. 저장 형태는 종류가 정하므로 문자열이
+  아니어도 된다. Parser는 codec이 받지 않는 식별자를 거부한다. `symbol(attr)`는
+  문자열 attribute를 정의 이름 `@name`으로 쓴다.
 - **Result** — Result 이름과 `=`(`%r =`)은 형식에 쓰지 않는다. Printer가 앞에 쓰고,
   parser는 형식 parser를 부르기 전에 읽는다. Result 타입은 `type(result)`나
   `types(results)`, 또는 타입을 재구성하는 `signature`로 정확히 한 번 쓴다.
@@ -437,9 +439,12 @@ literal은 문자열 literal로 쓴다.
   필수 `Attr<TypeOf<S>>` attribute나 `Value<S>` result이고, `S`는 bound를
   하나만 가지며 그 bound가 signature codec을 구현해야 한다. 나머지 인자는 이 signature의 매개변수를 entry block
   argument로 받는 region이다. 결과는 [타입 textual form](#타입-textual-form)의
-  함수 형태처럼 쓰되, 결과도 꼬리 표기도 없으면 화살표를 쓰지 않는다. 매개변수
-  이름은 첫 region의 entry block argument 이름이고, region이 없으면 `%arg0`,
-  `%arg1`, …이다.
+  함수 형태처럼 쓰되, region을 나열한 형식은 결과도 꼬리 표기도 없으면 화살표를
+  쓰지 않는다. 매개변수 이름은 첫 region의 entry block argument 이름이고, 그
+  region이 없으면 `%arg0`, `%arg1`, …이다. 형식이 region을 나열하지 않으면 함수
+  타입처럼 매개변수 이름 없이 타입만 쓰고 화살표를 생략하지 않는다
+  (`(A, B) -> R`, `(A) -> ()`). Operation이 result를 선언하면 signature의 결과가
+  곧 그 result 타입이므로, `signature`가 result 타입을 쓴 것으로 센다.
 - **`region(r)`, `regions(rs)`** — `{ .. }`로 쓴다. `signature`가 entry
   argument를 쓰는 region은 entry block label을 생략하고, parser가 signature의
   매개변수를 entry block argument로 되돌린다. 다른 region은 entry label과 argument를
@@ -466,7 +471,7 @@ Operation 이름 뒤의 입력은 모두 형식 parser가 읽는다. Generic 형
 시작하는 원소가 그 자리를 읽는다.
 
 공백은 원소 사이에 하나 쓴다. `(`, `[` 뒤와 `)`, `]`, `,` 앞에는 쓰지 않고,
-`signature`와 `"("`는 앞 원소에 붙여 쓴다. Parser는 원소 사이의 공백을 무시한다.
+`signature`와 `"("`는 앞 원소에 붙여 쓰되, 구두점 literal 뒤에서는 한 칸 띄운다. Parser는 원소 사이의 공백을 무시한다.
 
 #### 컴파일 시점 검증
 
@@ -480,7 +485,9 @@ Macro는 형식 기술을 선언과 대조해 다음을 어기면 그 원소를 
   `attr_dict`가 있어야 한다. 같은 entity를 두 원소가 쓰지 않는다.
 - 형식은 원소를 하나 이상 쓰고, `symbol`과 symbol 참조 attribute로 시작할 수
   있다. Generic 형식은 `@`로 시작하지 않기 때문이다. 그 뒤, 또는 그런 원소가
-  없으면 처음에는 literal이 온다. 앞에 symbol이 있으면 이 literal로 여는 선택
+  없으면 처음에는 literal이 온다. 고정 operand 하나가 literal `"("` 앞에서 이
+  literal을 대신할 수 있다. Generic 형식은 operand 바로 뒤에 `(`를 쓰지 않기
+  때문이다. 앞에 symbol이 있으면 이 literal로 여는 선택
   묶음이나 `(`로 시작하는 `signature`도 된다. 이 literal은 `{`, `%`, `:`, `[`,
   `^`, `}`로 시작하지 않는다. 앞의 넷은 generic 형식이 operation 이름 뒤에 쓰는
   것이고, 나머지는 operation 이름만 쓴 generic 형식 뒤의 다음 줄이 시작할 수 있는
@@ -513,15 +520,16 @@ Printer는 쓰기 전에 operation이 형식으로 손실 없이 표현되는지
 - `attr_dict`가 없으면 선언하지 않은 attribute가 없다.
 - Signature codec이 타입을 분해할 수 있고, `signature`가 entry argument를 쓰는
   각 region의 entry block argument 타입이 codec의 입력 타입과 같다. 여러 region이면
-  모든 region이 같은 매개변수를 받는다.
+  모든 region이 같은 매개변수를 받는다. `signature`가 result 타입을 쓰면
+  operation의 result 타입이 codec이 분해한 결과 타입과 같다.
 - 각 custom directive가 출력 가능하다고 판정한다.
 
 이 판정을 통과한 operation은 parser가 같은 operation으로 다시 읽고, 다시 출력하면
 같은 텍스트가 된다. 같은 operation을 generic 형식으로 쓴 텍스트도 같은 operation으로
 읽힌다. Parser는 operation schema를 검증하지 않는다.
 
-Parser는 `symbol`이 아닌 원소가 첫 token을 읽기 전에만 backtrack하고, 그 뒤의
-실패는 기대한 원소를 밝힌 오류로 끝낸다. 원소 사이의 공백은 token이 아니다. Keyword
+Parser는 `symbol`과 맨 앞 operand가 아닌 원소가 첫 token을 읽기 전에만
+backtrack하고, 그 뒤의 실패는 기대한 원소를 밝힌 오류로 끝낸다. 원소 사이의 공백은 token이 아니다. Keyword
 literal과 `attr_dict`의 `attributes`는 식별자 전체로 읽으며, 바로 뒤에 `.`이 오면
 다음 operation 이름의 일부로 보고 읽지 않는다. 첫 token에서 backtrack한 입력은 generic
 형식으로 다시 읽는다.
@@ -549,6 +557,10 @@ region의 entry block에 되돌린다. Printer는 `IsolatedFromAbove` operation�
   (`label(%x: T) -> R { .. }`). 모든 본문이 같은 signature를 받으면 signature는
   header에 한 번만 쓴다.
 - `signature`로 재구성되지 않는 result 타입은 형식의 끝에 `: type`으로 쓴다.
+- 간접 호출은 MLIR의 `func.call_indirect`처럼 `%callee(%args)`로 쓴다. 호출
+  signature를 attribute로 가지면 `: signature(t)`로 끝에 쓰고, 결과 타입은 그
+  signature에서 재구성한다. Callee 타입이 signature이면 operand 타입에서 얻으므로
+  result 타입만 `: type`으로 쓴다.
 
 ```text
 %f = closure.lambda captures [%y] attributes {adapters = {evidence_direct = @a0}} entries {

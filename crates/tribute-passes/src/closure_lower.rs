@@ -1143,9 +1143,13 @@ mod tests {
             !ir.contains("closure.func") && !ir.contains("closure.unpack"),
             "module entrypoint should lower closure accessors:\n{ir}"
         );
+        let exact_calls = collect_ops(&ctx, module.op())
+            .into_iter()
+            .filter_map(|op| func::CallIndirect::from_op(&ctx, op).ok())
+            .filter(|call| func::FuncSig::from_type_ref(&ctx, call.signature(&ctx)).is_some())
+            .count();
         assert_eq!(
-            ir.matches("signature").count(),
-            2,
+            exact_calls, 2,
             "each lowered indirect call must retain an exact signature:\n{ir}"
         );
 
@@ -1273,7 +1277,15 @@ mod tests {
                     .unwrap();
                 assert_eq!(ctx.op_result_types(call).len(), 1);
                 assert_eq!(ctx.op_operands(call).len(), 2);
-                assert!(print_module(&ctx, invalid.op_ref()).contains("signature"));
+                assert!(
+                    func::FuncSig::from_type_ref(
+                        &ctx,
+                        func::CallIndirect::from_op(&ctx, call)
+                            .unwrap()
+                            .signature(&ctx)
+                    )
+                    .is_some()
+                );
                 continue;
             }
             let error = lower_prepared_closures(&mut ctx, module).unwrap_err();

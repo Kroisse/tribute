@@ -47,9 +47,9 @@ fn a_pure_callback_selects_the_direct_instance() {
     );
     for expected in [
         "tribute_cps.func @app['a0](%0: core.i32, %1: !cb) -> core.i32 row(| 'a0) convention(cps) {",
-        "%2 = tribute_cps.call_indirect %1, %0 {convention = \"cps\"} : core.i32",
+        "%2 = tribute_cps.call_indirect %1(%0) convention(cps) : core.i32",
         "tribute_cps.func @\"app$9D\"['a0](%0: core.i32, %1: !cb) -> core.i32 row(| 'a0) convention(direct) {",
-        "%2 = tribute_cps.call_indirect %1, %0 {convention = \"direct\"} : core.i32",
+        "%2 = tribute_cps.call_indirect %1(%0) convention(direct) : core.i32",
         "tribute_cps.func @bang(%0: core.i32) -> core.i32 convention(direct) {",
         "%2 = tribute_control.call %0, %1 {callee = @\"app$9D\", row_args = [{}]} : core.i32",
     ] {
@@ -137,10 +137,10 @@ fn a_recursive_instance_calls_itself() {
         &[
             "tribute_cps.func @loop['a0](%0: core.i32, %1: !cb) -> core.i32 row(| 'a0) convention(cps) {",
             "%2 = tribute_cps.lambda(%3: core.i32) -> core.i32 row(| 'a0) captures [%1] entries {\n        cps {",
-            "%4 = tribute_cps.call_indirect %1, %3 {convention = \"cps\"} : core.i32",
+            "%4 = tribute_cps.call_indirect %1(%3) convention(cps) : core.i32",
             "tribute_cps.func @\"loop$9D\"['a0](%0: core.i32, %1: !cb) -> core.i32 row(| 'a0) convention(direct) {",
             "%2 = tribute_cps.lambda(%3: core.i32) -> core.i32 row(| 'a0) captures [%1] entries {\n        direct {",
-            "%4 = tribute_cps.call_indirect %1, %3 {convention = \"direct\"} : core.i32",
+            "%4 = tribute_cps.call_indirect %1(%3) convention(direct) : core.i32",
             "tribute_control.tail_call %0, %2 {callee = @\"loop$9D\", row_args = [{tail = 0}]}",
         ],
     );
@@ -176,7 +176,7 @@ fn a_layout_keeps_its_callable_field() {
             "!Holder = adt.struct<Holder(callback: !cb)>",
             "%1 = adt.struct_get %0 {field = 0, type = !Holder} : !cb",
             "%3 = adt.struct_new %1 {type = !Holder} : !HolderRef",
-            "%5 = tribute_cps.call_indirect %4, %0 {convention = \"direct\"} : core.i32",
+            "%5 = tribute_cps.call_indirect %4(%0) convention(direct) : core.i32",
         ],
     );
 }
@@ -287,7 +287,7 @@ fn a_lambda_has_a_body_per_class_of_its_instantiations() {
             "%4 = tribute_control.instantiate %1 {row_args = [{tail = 1}]}",
             "%7 = tribute_control.instantiate %1 {row_args = [{}]}",
             "%10 = tribute_control.instantiate %1 {row_args = [{instances = [@Ctl]}]} : !lc",
-            "%11 = tribute_cps.call_indirect %10, %9 {convention = \"cps\"} : core.i32",
+            "%11 = tribute_cps.call_indirect %10(%9) convention(cps) : core.i32",
         ],
     );
 }
@@ -593,9 +593,9 @@ fn a_lambda_reads_an_enclosing_binder_in_each_body() {
         &[
             "tribute_cps.func @f[local 'a0, local 'a1, local 'a2](%0: core.i32) -> core.i32 row(@Ctl) convention(cps) {",
             "%3 = tribute_cps.lambda['a1](%4: core.i32) -> core.i32 row(| 'a1) captures [] entries {\n              direct {\n                  tribute_control.return %4\n              }\n            }",
-            "%8 = tribute_cps.call_indirect %6, %7 {convention = \"direct\"} : core.i32",
+            "%8 = tribute_cps.call_indirect %6(%7) convention(direct) : core.i32",
             "%9 = tribute_cps.lambda['a2](%10: core.i32) -> core.i32 row(| 'a2) captures [] entries {\n              direct {\n                  tribute_control.return %10\n              }\n              cps {",
-            "%14 = tribute_cps.call_indirect %12, %13 {convention = \"cps\"} : core.i32",
+            "%14 = tribute_cps.call_indirect %12(%13) convention(cps) : core.i32",
         ],
     );
 }
@@ -717,7 +717,7 @@ fn every_body_takes_parameters_over_the_lambdas_own_binders() {
         &[
             "tribute_cps.func @f[local 'a0](%0: core.i32) -> core.i32 row(@Ctl) convention(cps) {",
             "%1 = tribute_cps.lambda['a0](%2: core.i32, %3: !k0) -> core.i32 row(| 'a0) captures [] entries {\n        direct {",
-            "%5 = tribute_cps.call_indirect %3, %2 {convention = \"cps\"} : core.i32",
+            "%5 = tribute_cps.call_indirect %3(%2) convention(cps) : core.i32",
         ],
     );
 }
@@ -764,7 +764,7 @@ fn instantiations_of_one_class_with_other_binder_classes_read_an_upper_bound() {
             "%1 = tribute_cps.lambda['a0](%2: core.i32) -> core.i32 row(@Ctl | 'a0) captures [] entries {\n        cps {",
             "%3 = tribute_cps.lambda['a1](%4: core.i32) -> core.i32 row(| 'a1) captures [] entries {\n              direct {",
             "              evidence_direct {",
-            "%6 = tribute_cps.call_indirect %5, %2 {convention = \"evidence_direct\"} : core.i32",
+            "%6 = tribute_cps.call_indirect %5(%2) convention(evidence_direct) : core.i32",
             "%8 = tribute_control.instantiate %1 {row_args = [{instances = [@Ask]}]} : !la",
         ],
     );
@@ -812,7 +812,7 @@ fn a_reference_of_an_upper_bound_enters_a_target_per_class_up_to_it() {
             "%2 = tribute_cps.func_ref @\"call$9e$8\" rows [{tail = 0}] : !call0",
             "tribute_cps.func @\"call$9D\"['a0](%0: core.i32, %1: !cb0) -> core.i32 row(| 'a0) convention(direct) {",
             "tribute_cps.func @\"call$9e\"['a0](%0: core.i32, %1: !cb0) -> core.i32 row(| 'a0) convention(evidence_direct) {",
-            "%2 = tribute_cps.call_indirect %1, %0 {convention = \"evidence_direct\"} : core.i32",
+            "%2 = tribute_cps.call_indirect %1(%0) convention(evidence_direct) : core.i32",
             "tribute_cps.func_table @\"call$9e$8\" = {direct = @\"call$9D\", evidence_direct = @\"call$9e\"}",
         ],
     );

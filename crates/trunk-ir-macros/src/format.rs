@@ -62,16 +62,23 @@ enum Element {
     Operand(usize),
     Attribute(usize),
     Symbol(usize),
+    /// `keyword(attr)`, with the attribute kind whose codec spells it.
+    Keyword {
+        attribute: usize,
+        codec: TokenStream,
+    },
     ResultType,
     ResultTypes,
     AttrDict,
     Region(usize),
     Successor(usize),
-    /// `signature(t, regions..)`, with the bound whose codec spells `t`.
+    /// `signature(t, regions..)`, with the bound whose codec spells `t`,
+    /// and whether its results are the operation's result types.
     Signature {
         attribute: usize,
         regions: Vec<usize>,
         codec: TokenStream,
+        results: bool,
     },
     Optional {
         anchor: Anchor,
@@ -333,6 +340,21 @@ impl<'a> Format<'a> {
                 }
                 Element::Symbol(i)
             }
+            ("keyword", Some(Entity::Attribute(i))) => {
+                let attr = &self.op.attrs[i];
+                match &attr.kind {
+                    AttrKind::Path(path) if !attr.list && !attr.optional => Element::Keyword {
+                        attribute: i,
+                        codec: quote!(#path),
+                    },
+                    _ => {
+                        return err(
+                            arg_span,
+                            "`keyword(..)` writes a required attribute whose kind implements `KeywordCodec`",
+                        );
+                    }
+                }
+            }
             ("type" | "types", Some(Entity::Results)) => match (&self.op.results, plural) {
                 (ResultDef::Single(_), false) => Element::ResultType,
                 (ResultDef::Optional(_), false) | (ResultDef::Variadic(_), true) => {
@@ -375,7 +397,8 @@ impl<'a> Format<'a> {
                 Element::Successor(i)
             }
             (
-                "symbol" | "type" | "types" | "region" | "regions" | "successor" | "successors",
+                "symbol" | "keyword" | "type" | "types" | "region" | "regions" | "successor"
+                | "successors",
                 _,
             ) => {
                 return err(arg_span, format!("`{name}(..)` cannot write `{arg}`"));
@@ -384,7 +407,7 @@ impl<'a> Format<'a> {
                 return err(
                     span,
                     format!(
-                        "unknown format directive `{name}`; expected `symbol`, `signature`, `type`, `types`, `region`, `regions`, `successor`, or `successors`"
+                        "unknown format directive `{name}`; expected `symbol`, `keyword`, `signature`, `type`, `types`, `region`, `regions`, `successor`, or `successors`"
                     ),
                 );
             }
@@ -465,10 +488,16 @@ impl<'a> Format<'a> {
             }
             listed.push(i);
         }
+        // The signature's results are the operation's result types.
+        let results = self.result_name().is_some();
+        if results {
+            self.write(Entity::Results, ty.span())?;
+        }
         Ok(Element::Signature {
             attribute,
             regions: listed,
             codec,
+            results,
         })
     }
 
@@ -655,7 +684,8 @@ fn check(
     // may lead. After them a literal decides custom against generic syntax,
     // which begins with `{`, `%`, `:`, or `[`, or ends the operation before a
     // line beginning with `%`, `^`, or `}`; a group or a signature's `(` may
-    // stand in for it once a symbol has decided.
+    // stand in for it once a symbol has decided. Generic syntax never writes
+    // `(` after an operand, so a fixed operand before `"("` decides as well.
     let symbol_like = |element: &Element| match *element {
         Element::Symbol(_) => true,
         Element::Attribute(i) => {
@@ -680,12 +710,16 @@ fn check(
                 matches!(&elements[0].0, Element::Literal(text) if decides(text))
             }
             Element::Signature { .. } => leading > 0,
+            Element::Operand(i) if !op.operands[*i].variadic => matches!(
+                elements.get(leading + 1),
+                Some((Element::Literal(text), _)) if text == "("
+            ),
             _ => false,
         };
         if !decided {
             return err(
                 *span,
-                "a format begins with a literal, after any symbols or symbol references, and not with `{`, `%`, `:`, `[`, `^`, or `}`; a `signature(..)` may follow a symbol",
+                "a format begins with a literal, after any symbols or symbol references, and not with `{`, `%`, `:`, `[`, `^`, or `}`; a `signature(..)` may follow a symbol, and a fixed operand may come before `\"(\"`",
             );
         }
     }
@@ -761,6 +795,10 @@ fn gen_elements(
             Element::Operand(i) => quote!(#fmt::FormatElement::Operand(#i)),
             Element::Attribute(i) => quote!(#fmt::FormatElement::Attribute(#i)),
             Element::Symbol(i) => quote!(#fmt::FormatElement::Symbol(#i)),
+            Element::Keyword { attribute, codec } => quote!(#fmt::FormatElement::Keyword {
+                attribute: #attribute,
+                codec: #crate_path::asm_format::KeywordCodecHooks::of::<#codec>(),
+            }),
             Element::ResultType => quote!(#fmt::FormatElement::ResultType(0)),
             Element::ResultTypes => quote!(#fmt::FormatElement::ResultTypes),
             Element::AttrDict => quote!(#fmt::FormatElement::AttrDict),
@@ -770,10 +808,12 @@ fn gen_elements(
                 attribute,
                 regions,
                 codec,
+                results,
             } => quote!(#fmt::FormatElement::Signature {
                 attribute: #attribute,
                 regions: &[#(#regions),*],
                 codec: #crate_path::asm_format::SignatureCodecHooks::of::<#codec>(),
+                results: #results,
             }),
             Element::Optional { anchor, elements } => {
                 let anchor = match *anchor {

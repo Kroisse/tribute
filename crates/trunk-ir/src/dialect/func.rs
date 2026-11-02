@@ -52,6 +52,7 @@ mod func {
     fn call(callee: Attr<SymbolRef>, args: Variadic<_>) -> Variadic<_> {}
 
     #[verify]
+    #[asm_format(callee "(" args ")" attr_dict ":" signature(signature))]
     #[implements(IndirectCallLike)]
     fn call_indirect<S: FuncSig>(
         signature: Attr<TypeOf<S>>,
@@ -64,6 +65,7 @@ mod func {
     fn tail_call(callee: Attr<SymbolRef>, args: Variadic<_>) {}
 
     #[verify]
+    #[asm_format(callee "(" args ")" attr_dict ":" signature(signature))]
     #[implements(CallableExit, IndirectCallLike)]
     fn tail_call_indirect<S: FuncSig>(
         signature: Attr<TypeOf<S>>,
@@ -1091,10 +1093,9 @@ mod tests {
 
         let printed = print_module(&ctx, module.op());
         assert!(
-            printed.contains("!t0 = func.func_sig<(core.i32) -> core.i32>"),
+            printed.contains("func.call_indirect %0(%1) : (core.i32) -> core.i32"),
             "{printed}"
         );
-        assert!(printed.contains("signature = !t0"), "{printed}");
         assert!(!printed.contains("func.indirect_call_signature"));
     }
 
