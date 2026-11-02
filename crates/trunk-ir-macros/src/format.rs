@@ -533,7 +533,20 @@ impl<'a> Format<'a> {
             Element::Attribute(i) if self.op.attrs[i].optional => {
                 let attr = &self.op.attrs[i];
                 match &attr.kind {
-                    AttrKind::Path(path) if !attr.list && path.is_ident("bool") => Anchor::Flag(i),
+                    AttrKind::Path(path) if !attr.list && path.is_ident("bool") => {
+                        // An absent flag reads as `false`.
+                        if attr
+                            .default
+                            .as_ref()
+                            .is_some_and(|value| value.to_string() == "true")
+                        {
+                            return err(
+                                *anchor_span,
+                                "a flag stands for `true` and its absence for `false`; it takes no `#[default(true)]`",
+                            );
+                        }
+                        Anchor::Flag(i)
+                    }
                     _ => Anchor::Attribute(i),
                 }
             }

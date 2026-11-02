@@ -79,8 +79,8 @@ which rustdoc cannot resolve.
   declared in `<..>`, where `#[rest]` marks a variadic last one, and type
   attributes as fields typed like operation attributes:
   `struct Ref<Pointee> { nullable: Attr<bool> }`, with optional ones as
-  `Option<Attr<K>>`. A wrapper accepts only types with the declared
-  parameters and attributes.
+  `Option<Attr<K>>` and defaulted ones as `#[default(v)] name: Attr<K>`. A
+  wrapper accepts only types with the declared parameters and attributes.
 - `fn` definitions declare operations. The signature declares each entity and
   its type constraint, following
   [the declarative schema contract](../../new-plans/ir.md#선언적-operation-schema).
@@ -116,8 +116,12 @@ where
 ```
 
 - Parameters are `Value<C>`, `Variadic<C>`, `Values<L>`, `Attr<K>`,
-  `Attr<[K]>` (a list whose every element has kind `K`), and
-  `Option<Attr<..>>`. Results are `Value<C>` or `Option<Value<C>>` (accessor
+  `Attr<[K]>` (a list whose every element has kind `K`),
+  `Option<Attr<..>>`, and `#[default(v)] name: Attr<K>`, an optional
+  attribute whose accessor returns `v`, an expression of the kind's accessor
+  type, when it is absent. The builder stores only a value it is given, and
+  an absent attribute and one holding `v` print and parse as different
+  operations. Results are `Value<C>` or `Option<Value<C>>` (accessor
   `result`) or `Variadic<C>` / `Values<L>` (accessor `results`).
 - Attribute kinds are Rust types implementing `attr_kind::AttrKind`, resolved
   in the dialect's scope like bounds: primitives (`bool`, `i32`, `i64`, `u32`,

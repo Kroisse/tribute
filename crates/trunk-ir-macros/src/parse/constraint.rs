@@ -513,7 +513,7 @@ pub(super) fn parse_typed_operation(
     let mut attrs = Vec::new();
     let mut operands = Vec::new();
     let mut names = HashSet::default();
-    for (ident, ty) in &params {
+    for (ident, ty, default) in &params {
         let name = ident_str(ident);
         check_name(&name, &mut names)?;
         if matches!(ty, Ty::Tuple(t) if t.is_empty()) {
@@ -531,15 +531,29 @@ pub(super) fn parse_typed_operation(
                         (kind, false, binds)
                     }
                 };
+                if default.is_some() {
+                    check_default(&name, optional, list)?;
+                    if binds.is_some() {
+                        return Err(format!(
+                            "attribute `{name}` binds a type variable and takes no `#[default(..)]`"
+                        ));
+                    }
+                }
                 attrs.push(AttrDef {
                     name,
                     raw_ident: ident.clone(),
                     kind,
                     list,
-                    optional,
+                    optional: optional || default.is_some(),
                     binds,
+                    default: default.clone(),
                     docs: Vec::new(),
                 });
+            }
+            _ if default.is_some() => {
+                return Err(format!(
+                    "only an attribute takes `#[default(..)]`, not `{name}`"
+                ));
             }
             "Value" | "Variadic" | "Values" if !optional => {
                 if operands.last().is_some_and(|o: &Operand| o.variadic) {
@@ -618,20 +632,62 @@ pub(super) fn parse_typed_operation(
     })
 }
 
+/// The value of `#[default(v)]`, or `None` for another attribute.
+fn parse_default(bracket: &proc_macro2::Group) -> Result<Option<TokenStream>, String> {
+    let mut tokens = bracket.stream().into_iter();
+    match (tokens.next(), tokens.next(), tokens.next()) {
+        (Some(TokenTree::Ident(name)), Some(TokenTree::Group(value)), None)
+            if name == "default" && value.delimiter() == Delimiter::Parenthesis =>
+        {
+            if value.stream().is_empty() {
+                return Err("`#[default(..)]` takes the default value".into());
+            }
+            Ok(Some(value.stream()))
+        }
+        (Some(TokenTree::Ident(name)), ..) if name == "default" => {
+            Err("write a default as `#[default(value)]`".into())
+        }
+        _ => Ok(None),
+    }
+}
+
+/// A defaulted attribute is a required single value whose absence the
+/// default stands for.
+fn check_default(name: &str, optional: bool, list: bool) -> Result<(), String> {
+    if optional {
+        return Err(format!(
+            "attribute `{name}` is `Option<Attr<..>>`; a defaulted attribute is `Attr<..>`"
+        ));
+    }
+    if list {
+        return Err(format!("list attribute `{name}` takes no `#[default(..)]`"));
+    }
+    Ok(())
+}
+
 /// Parse a type's attribute fields: `name: Attr<K>` or
-/// `name: Option<Attr<K>>`, each optionally documented.
+/// `name: Option<Attr<K>>`, each optionally documented or defaulted.
 pub(super) fn parse_type_fields(stream: TokenStream) -> Result<Vec<AttrDef>, String> {
     let mut iter = stream.to_token_iter();
     let mut attrs = Vec::new();
     let mut names = HashSet::default();
     while has_remaining(&iter) {
         let mut docs = Vec::new();
+        let mut default = None;
         while peek_punct(&iter, '#') {
             consume_punct(&mut iter)?;
             let bracket = expect_group(&mut iter, Delimiter::Bracket)?;
+            if let Some(value) = parse_default(&bracket)? {
+                if default.replace(value).is_some() {
+                    return Err("an attribute takes at most one `#[default(..)]`".into());
+                }
+                continue;
+            }
             if !matches!(bracket.stream().into_iter().next(), Some(TokenTree::Ident(i)) if i == "doc")
             {
-                return Err("a type attribute field takes only doc comments".into());
+                return Err(
+                    "a type attribute field takes only doc comments and `#[default(..)]`".into(),
+                );
             }
             docs.push(bracket);
         }
@@ -665,13 +721,17 @@ pub(super) fn parse_type_fields(stream: TokenStream) -> Result<Vec<AttrDef>, Str
                 }
             }
         };
+        if default.is_some() {
+            check_default(&name, optional, list)?;
+        }
         attrs.push(AttrDef {
             name,
             raw_ident: ident,
             kind,
             list,
-            optional,
+            optional: optional || default.is_some(),
             binds: None,
+            default,
             docs,
         });
         if has_remaining(&iter) {
@@ -833,12 +893,23 @@ fn check_relations_bound(
 }
 
 /// Parse `name: Type` parameters.
-fn parse_params(stream: TokenStream) -> Result<Vec<(Ident, Ty)>, String> {
+fn parse_params(stream: TokenStream) -> Result<Vec<(Ident, Ty, Option<TokenStream>)>, String> {
     let mut iter = stream.to_token_iter();
     let mut params = Vec::new();
     while has_remaining(&iter) {
-        if peek_punct(&iter, '#') {
-            return Err("`#[rest]` is not supported on operands; declare `Variadic<_>`".into());
+        let mut default = None;
+        while peek_punct(&iter, '#') {
+            consume_punct(&mut iter)?;
+            let bracket = expect_group(&mut iter, Delimiter::Bracket)?;
+            match parse_default(&bracket)? {
+                Some(value) if default.is_none() => default = Some(value),
+                Some(_) => return Err("an attribute takes at most one `#[default(..)]`".into()),
+                None => {
+                    return Err(
+                        "`#[rest]` is not supported on operands; declare `Variadic<_>`".into(),
+                    );
+                }
+            }
         }
         if peek_punct(&iter, '&') || peek_ident(&iter, "self") {
             return Err("self parameter is not supported".into());
@@ -848,7 +919,7 @@ fn parse_params(stream: TokenStream) -> Result<Vec<(Ident, Ty)>, String> {
             _ => return Err("parameter must have a name".into()),
         };
         expect_punct(&mut iter, ':')?;
-        params.push((ident, parse_ty(&mut iter)?));
+        params.push((ident, parse_ty(&mut iter)?, default));
         if has_remaining(&iter) {
             expect_punct(&mut iter, ',')?;
         }

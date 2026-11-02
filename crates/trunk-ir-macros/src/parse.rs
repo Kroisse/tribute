@@ -99,6 +99,10 @@ pub struct AttrDef {
     pub list: bool,
     pub optional: bool,
     pub binds: Option<usize>,
+    /// `#[default(v)]`: the value the accessor returns when the attribute
+    /// is absent, an expression of the kind's accessor type. A defaulted
+    /// attribute is `optional` in the schema.
+    pub default: Option<proc_macro2::TokenStream>,
     /// Doc comments, forwarded to the accessor.
     pub docs: Vec<proc_macro2::Group>,
 }

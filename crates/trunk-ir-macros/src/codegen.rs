@@ -519,8 +519,21 @@ fn gen_map_attr_accessor(
     let name_str = &attr.name;
     let kind = attr_kind_trait(crate_path, attr);
     let docs = &attr.docs;
-    let accessor = |method: &proc_macro2::Ident, out: TokenStream, read: TokenStream| {
-        if attr.optional {
+    let accessor = |method: &proc_macro2::Ident,
+                    out: TokenStream,
+                    read: TokenStream,
+                    default: Option<&TokenStream>| {
+        if let Some(default) = default {
+            quote! {
+                #(# #docs)*
+                pub fn #method<'ctx>(&self, ctx: &'ctx #crate_path::IrContext) -> #out {
+                    match #attrs.get(#name_str) {
+                        Some(attr) => #read,
+                        None => #default,
+                    }
+                }
+            }
+        } else if attr.optional {
             quote! {
                 #(# #docs)*
                 pub fn #method<'ctx>(&self, ctx: &'ctx #crate_path::IrContext) -> Option<#out> {
@@ -543,6 +556,7 @@ fn gen_map_attr_accessor(
         name,
         quote!(#kind::Out<'ctx>),
         quote!(#kind::read(ctx, attr)),
+        attr.default.as_ref(),
     );
     if !attr.kind.is_string() {
         return value;
@@ -558,6 +572,7 @@ fn gen_map_attr_accessor(
         &format_ident!("{}_ref", attr.name),
         quote!(#handle_kind::Handle<'ctx>),
         quote!(#handle_kind::handle(attr)),
+        None,
     );
     quote!(#value #handle)
 }
@@ -931,7 +946,7 @@ fn gen_attr_setter(crate_path: &TokenStream, attr: &AttrDef) -> TokenStream {
                 self
             }
         },
-        (false, false) if attr.optional => quote! {
+        (false, false) if attr.optional && attr.default.is_none() => quote! {
             pub fn #name(mut self, value: impl Into<Option<#kind::In>>) -> Self {
                 self.#field = value.into();
                 self

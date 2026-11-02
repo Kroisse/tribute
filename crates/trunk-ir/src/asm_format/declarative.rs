@@ -1027,6 +1027,7 @@ mod tests {
     use crate::attr_kind::SymbolRef;
     use crate::dialect::func::FuncSig;
     use crate::op_flag::IsolatedFromAbove;
+    use crate::ops::DialectOp;
     use crate::parser::{parse_module, parse_test_module};
     use crate::printer::print_module;
     use crate::types::Attribute;
@@ -1128,6 +1129,15 @@ mod tests {
             {}
             #[region(second)]
             {}
+        }
+
+        #[asm_format("values" ("n" n^)? ("label" label^)? attr_dict)]
+        fn pick(#[default(3)] n: Attr<u32>, #[default("none")] label: Attr<String>) {}
+
+        /// A type whose attribute has a default.
+        struct Slot {
+            #[default(false)]
+            pinned: Attr<bool>,
         }
 
         #[asm_format("go" "(" keyword(speed) ")" attr_dict)]
@@ -1243,6 +1253,44 @@ mod tests {
 }
 "#
         );
+    }
+
+    #[test]
+    fn defaulted_attributes_read_their_default_when_absent() {
+        let text = r#"core.module @m {
+  asm_format_test.pick values
+  asm_format_test.pick values n 3 label "none"
+  asm_format_test.pick values n 7
+}
+"#;
+        assert_round_trip(text);
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, text);
+        let picks: Vec<_> = module
+            .ops(&ctx)
+            .iter()
+            .map(|&op| Pick::from_op(&ctx, op).unwrap())
+            .collect();
+        let read = |pick: &Pick| (pick.n(&ctx), pick.label(&ctx).to_owned());
+        assert_eq!(read(&picks[0]), (3, "none".to_owned()));
+        assert_eq!(read(&picks[1]), (3, "none".to_owned()));
+        assert_eq!(read(&picks[2]), (7, "none".to_owned()));
+        assert_eq!(picks[0].label_ref(&ctx), None);
+
+        let loc = ctx.op(picks[0].op_ref()).location;
+        let unset = Pick::operands().build(&mut ctx, loc);
+        assert!(ctx.op(unset.op_ref()).attributes.is_empty());
+        let set = Pick::operands().n(3).build(&mut ctx, loc);
+        assert_eq!(
+            ctx.op_attrs(set.op_ref()).get("n"),
+            Some(&Attribute::Int(3))
+        );
+
+        let unpinned = Slot::params().intern(&mut ctx);
+        let pinned = Slot::params().pinned(true).intern(&mut ctx);
+        assert!(!unpinned.pinned(&ctx));
+        assert!(pinned.pinned(&ctx));
+        assert!(ctx.get_type(unpinned.as_type_ref()).attrs.is_empty());
     }
 
     #[test]

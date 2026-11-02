@@ -145,6 +145,11 @@ format과 선언적 rewrite 도구는 operation 정의를 중복하지 않고 �
   `Variadic<C>`는 같은 제약을 만족하는 0개 이상의 operand, `Values<L>`는
   타입 목록 `L`과 개수·순서·타입이 정확히 일치하는 operand 목록이다.
   `Attr<K>`는 attribute이고, `Option<Attr<K>>`는 선택 attribute다.
+  `#[default(v)] name: Attr<K>`는 기본값이 있는 attribute로, schema에서는 선택
+  attribute와 같다. Accessor는 attribute가 없으면 `v`를 돌려주고, builder는
+  설정한 값만 저장한다. 없는 attribute와 기본값을 저장한 attribute는 서로 다른
+  operation이며, printer와 parser는 둘을 구분해 그대로 다시 읽는다. 목록
+  attribute, 선택 attribute, 타입 변수를 묶는 attribute에는 기본값을 줄 수 없다.
   가변 operand 구간은 operand 중 마지막 하나만 허용한다.
 - Attribute 종류 `K`는 bound와 마찬가지로 Rust 타입이다. 종류는 schema가
   검사하는 값 영역, accessor가 돌려주는 값, builder가 받는 값을 스스로
@@ -2052,8 +2057,8 @@ Type verifier가 있는 타입의 typed wrapper와 exact bound는 verifier를 �
 Dialect 타입은 operation과 같은 정의 문법으로 선언한다. IR 타입 매개변수는
 `<..>`에, type 속성은 operation attribute와 같은 종류 표기를 쓰는 필드로 선언한다.
 `struct Ref<Pointee> { nullable: Attr<bool> }`이며, 선택 속성은
-`Option<Attr<K>>`다. 생성된 builder는 매개변수에서 시작해 속성을 이름으로 받고
-타입을 intern한다.
+`Option<Attr<K>>`, 기본값이 있는 속성은 `#[default(v)] name: Attr<K>`다. 생성된
+builder는 매개변수에서 시작해 속성을 이름으로 받고 타입을 intern한다.
 
 타입과 operation은 검증 시점이 다르다. 타입은 intern된 뒤 바뀌지 않으므로 생성
 시점에 한 번 검증한다. Type verifier가 있는 타입의 builder는 intern한 타입을
