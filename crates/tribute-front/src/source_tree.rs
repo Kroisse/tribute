@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use fluent_uri::Uri;
 use rustc_hash::FxHashMap as HashMap;
 use salsa::Accumulator;
-use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_core::diagnostic::{CompilationPhase, DiagnosticSeverity, SpanDiagnostic};
 use trunk_ir::{Span, Symbol, SymbolPath};
 
 use crate::ast::node_id::source_hash;
@@ -281,7 +281,7 @@ impl<'db> Loader<'db> {
     }
 
     fn error(&self, span: Span, message: String) {
-        Diagnostic::new(
+        SpanDiagnostic::new(
             message,
             span,
             DiagnosticSeverity::Error,

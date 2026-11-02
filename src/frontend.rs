@@ -10,7 +10,7 @@
 use crate::SourceCst;
 use crate::prelude::root_environment;
 use salsa::Accumulator;
-use tribute_core::diagnostic::{Diagnostic, DiagnosticSeverity};
+use tribute_core::diagnostic::{DiagnosticSeverity, SpanDiagnostic};
 use tribute_front::ast::{NodeDiagnostic, SpanMaps, locate_diagnostics};
 use tribute_front::ast_to_ir;
 use tribute_front::monomorphize::{self, SpecializationInput, SpecializationOutput};
@@ -45,10 +45,10 @@ pub fn parse_and_lower_ast(
 
 /// The diagnostics [`parse_and_lower_ast`] reports for `source`, with those
 /// of its package's manifests.
-pub fn frontend_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<Diagnostic> {
+pub fn frontend_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<SpanDiagnostic> {
     let implicit = *crate::prelude::frontend_environment(db);
-    let mut diagnostics: Vec<Diagnostic> =
-        manifest::source_dependencies::accumulated::<Diagnostic>(db, source, implicit)
+    let mut diagnostics: Vec<SpanDiagnostic> =
+        manifest::source_dependencies::accumulated::<SpanDiagnostic>(db, source, implicit)
             .into_iter()
             .cloned()
             .collect();
@@ -73,9 +73,9 @@ pub fn check_library(db: &dyn salsa::Database, package: analysis::Package) -> bo
 pub fn library_diagnostics(
     db: &dyn salsa::Database,
     package: analysis::Package,
-) -> Vec<Diagnostic> {
+) -> Vec<SpanDiagnostic> {
     locate_diagnostics(
-        check_library::accumulated::<Diagnostic>(db, package),
+        check_library::accumulated::<SpanDiagnostic>(db, package),
         check_library::accumulated::<NodeDiagnostic>(db, package),
         analysis::library_spans(db, package),
     )
@@ -141,9 +141,9 @@ pub fn prepare_frontend_diagnostics<'db>(
     db: &'db dyn salsa::Database,
     typed: ast_typeck::TypeCheckOutput<'db>,
     source: SourceCst,
-) -> Vec<Diagnostic> {
+) -> Vec<SpanDiagnostic> {
     locate_diagnostics(
-        prepare_frontend_details::accumulated::<Diagnostic>(db, typed, source),
+        prepare_frontend_details::accumulated::<SpanDiagnostic>(db, typed, source),
         prepare_frontend_details::accumulated::<NodeDiagnostic>(db, typed, source),
         frontend_spans(db, source),
     )

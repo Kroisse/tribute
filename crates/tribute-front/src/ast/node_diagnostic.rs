@@ -1,6 +1,6 @@
 //! Diagnostics positioned at nodes rather than source spans.
 
-use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_core::{CompilationPhase, DiagnosticSeverity, SpanDiagnostic};
 use trunk_ir::diagnostic::Label;
 
 use super::{NodeId, SpanMaps};
@@ -42,8 +42,8 @@ impl NodeDiagnostic {
     }
 
     /// The diagnostic at the spans `spans` gives its nodes.
-    pub fn locate(&self, spans: &SpanMaps<'_>) -> Diagnostic {
-        Diagnostic {
+    pub fn locate(&self, spans: &SpanMaps<'_>) -> SpanDiagnostic {
+        SpanDiagnostic {
             inner: trunk_ir::diagnostic::Diagnostic {
                 message: self.message.clone(),
                 span: spans.get_or_default(self.node),
@@ -67,10 +67,10 @@ impl NodeDiagnostic {
 /// `spans` gives their nodes. Read both from a query outside any query:
 /// reading accumulated values inside one is an untracked read.
 pub fn locate_diagnostics<'a, 's>(
-    diagnostics: Vec<&'a Diagnostic>,
+    diagnostics: Vec<&'a SpanDiagnostic>,
     nodes: Vec<&'a NodeDiagnostic>,
     spans: SpanMaps<'s>,
-) -> impl Iterator<Item = Diagnostic> {
+) -> impl Iterator<Item = SpanDiagnostic> {
     let located = nodes.into_iter().map(move |node| node.locate(&spans));
     diagnostics.into_iter().cloned().chain(located)
 }

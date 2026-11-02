@@ -22,7 +22,7 @@ use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use salsa::{Accumulator, Setter as _};
 use toml::Spanned;
 use toml::de::{DeTable, DeValue};
-use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_core::diagnostic::{CompilationPhase, DiagnosticSeverity, SpanDiagnostic};
 use trunk_ir::{Span, Symbol};
 
 use crate::analysis::{DependencyTable, Package};
@@ -579,7 +579,7 @@ impl Reader<'_> {
 }
 
 fn error(db: &dyn salsa::Database, span: Span, phase: CompilationPhase, message: String) {
-    Diagnostic::new(message, span, DiagnosticSeverity::Error, phase).accumulate(db);
+    SpanDiagnostic::new(message, span, DiagnosticSeverity::Error, phase).accumulate(db);
 }
 
 #[cfg(test)]

@@ -2,7 +2,7 @@
 //! (`new-plans/lsp.md` § 문서가 속한 패키지).
 
 use itertools::Itertools;
-use tribute_core::diagnostic::Diagnostic;
+use tribute_core::diagnostic::SpanDiagnostic;
 use tribute_front::analysis::{self, DependencyTable, Package};
 use tribute_front::ast::SpanMap;
 use tribute_front::ast::source_hash;
@@ -101,16 +101,18 @@ impl AnalysisUnit {
     }
 
     /// The diagnostics of the package's analysis and of its manifests.
-    pub fn diagnostics(self, db: &dyn salsa::Database) -> Vec<Diagnostic> {
+    pub fn diagnostics(self, db: &dyn salsa::Database) -> Vec<SpanDiagnostic> {
         match self {
             Self::Executable(root) => crate::compile_with_diagnostics(db, root).diagnostics,
             Self::Library(package) => {
                 let implicit = *crate::frontend_environment(db);
                 let manifest = *manifest::owning_manifest(db, *package.root(db));
-                let mut diagnostics: Vec<Diagnostic> = manifest
+                let mut diagnostics: Vec<SpanDiagnostic> = manifest
                     .into_iter()
                     .flat_map(|manifest| {
-                        manifest::library_package::accumulated::<Diagnostic>(db, manifest, implicit)
+                        manifest::library_package::accumulated::<SpanDiagnostic>(
+                            db, manifest, implicit,
+                        )
                     })
                     .cloned()
                     .chain(crate::library_diagnostics(db, package))

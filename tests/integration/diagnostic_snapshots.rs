@@ -7,7 +7,7 @@
 
 use salsa::Database;
 use salsa_test_macros::salsa_test;
-use tribute::Diagnostic;
+use tribute::SpanDiagnostic;
 use tribute::pipeline::{compile_ast, compile_with_diagnostics};
 use tribute_core::diagnostic::{CompilationPhase, DiagnosticSeverity};
 use tribute_front::SourceCst;
@@ -401,7 +401,7 @@ fn invalid_record_shapes_block_public_compilation_apis(db: &salsa::DatabaseImpl)
         let expected: Vec<_> = messages
             .iter()
             .map(|message| {
-                Diagnostic::new(
+                SpanDiagnostic::new(
                     *message,
                     Span::new(start, start + record.len()).in_source(source_id),
                     DiagnosticSeverity::Error,

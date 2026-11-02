@@ -5,7 +5,7 @@
 
 use itertools::Itertools;
 use salsa_test_macros::salsa_test;
-use tribute::Diagnostic;
+use tribute::SpanDiagnostic;
 use tribute::pipeline::{
     NativePipelineStage, OptimizationOptions, compile_ast, compile_with_diagnostics, dump_ir,
     dump_native_ir_at_stage,
@@ -15,7 +15,7 @@ use tribute_ir::calling_convention::DynConventionBearing;
 use tribute_ir::continuation_frame;
 use trunk_ir::printer::print_module;
 
-fn assert_no_diagnostics(stage: &str, diagnostics: &[Diagnostic]) {
+fn assert_no_diagnostics(stage: &str, diagnostics: &[SpanDiagnostic]) {
     assert!(
         diagnostics.is_empty(),
         "{stage} emitted diagnostics:\n{}",

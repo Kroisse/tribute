@@ -16,7 +16,7 @@ use tribute::pipeline::{
     wasm_binary_diagnostics,
 };
 use tribute::{TributeDatabaseImpl, check_library};
-use tribute_core::diagnostic::{Diagnostic, DiagnosticSeverity};
+use tribute_core::diagnostic::{DiagnosticSeverity, SpanDiagnostic};
 use tribute_front::build_inputs::{package_inputs, source_inputs};
 use tribute_front::manifest::{load_package, root_file_manifest, set_package_root};
 use tribute_front::resolve::{Dependencies, build_env};
@@ -278,8 +278,8 @@ fn load_package_dir(db: &TributeDatabaseImpl, dir: &Path, target: &str) -> Packa
         let manifest_path = dir.join(tribute_front::manifest::MANIFEST_FILE);
         let manifest_path = manifest_path.display().to_string();
         let loaded = load_package(db, manifest, implicit);
-        let mut diags: Vec<Diagnostic> =
-            load_package::accumulated::<Diagnostic>(db, manifest, implicit)
+        let mut diags: Vec<SpanDiagnostic> =
+            load_package::accumulated::<SpanDiagnostic>(db, manifest, implicit)
                 .into_iter()
                 .cloned()
                 .collect();

@@ -841,7 +841,7 @@ impl LspServer {
     fn action_for_diagnostic(
         &self,
         db: &dyn salsa::Database,
-        diag: &tribute_core::diagnostic::Diagnostic,
+        diag: &tribute_core::diagnostic::SpanDiagnostic,
         rope: &Rope,
         uri: &Uri,
         type_index: Option<&AstTypeIndex<'_>>,
@@ -1254,7 +1254,10 @@ fn glob_literal(path: &Path) -> String {
 
 /// The diagnostics of every package the document `source` is analyzed
 /// in, each once.
-fn document_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<tribute::Diagnostic> {
+fn document_diagnostics(
+    db: &dyn salsa::Database,
+    source: SourceCst,
+) -> Vec<tribute::SpanDiagnostic> {
     let mut diagnostics: Vec<_> = document_units(db, source)
         .iter()
         .flat_map(|unit| unit.diagnostics(db))

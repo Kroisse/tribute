@@ -3,7 +3,7 @@
 
 use rustc_hash::FxHashMap as HashMap;
 use salsa::Setter;
-use tribute_core::diagnostic::Diagnostic;
+use tribute_core::diagnostic::SpanDiagnostic;
 use tribute_front::SourceCst;
 use tribute_front::analysis::{self, DependencyTable, Package};
 use tribute_front::ast::SpanMaps;
@@ -71,7 +71,7 @@ impl Build {
     fn diagnostics(&self) -> Vec<String> {
         analysis::diagnostics(&self.db, self.app, self.environment)
             .into_iter()
-            .map(|diagnostic: Diagnostic| diagnostic.inner.message)
+            .map(|diagnostic: SpanDiagnostic| diagnostic.inner.message)
             .collect()
     }
 
@@ -132,10 +132,11 @@ fn a_package_that_depends_on_itself_is_rejected() {
     table.set_packages(&mut build.db).to(packages);
 
     assert!(analysis::package_env(&build.db, build.lib).is_none());
-    let messages: Vec<_> = analysis::package_env::accumulated::<Diagnostic>(&build.db, build.lib)
-        .into_iter()
-        .map(|diagnostic| diagnostic.inner.message.clone())
-        .collect();
+    let messages: Vec<_> =
+        analysis::package_env::accumulated::<SpanDiagnostic>(&build.db, build.lib)
+            .into_iter()
+            .map(|diagnostic| diagnostic.inner.message.clone())
+            .collect();
     assert_eq!(
         messages,
         ["package `lib` depends on itself through its dependency table"]
@@ -451,7 +452,7 @@ fn merging_a_diamond_matches_specializing_every_body_at_once() {
     assert_eq!(
         analysis::diagnostics(db, diamond.app, diamond.environment)
             .into_iter()
-            .map(|diagnostic: Diagnostic| diagnostic.inner.message)
+            .map(|diagnostic: SpanDiagnostic| diagnostic.inner.message)
             .collect::<Vec<_>>(),
         Vec::<String>::new()
     );
@@ -604,7 +605,7 @@ fn merging_keeps_the_metadata_of_the_instance_it_keeps() {
     assert_eq!(
         analysis::diagnostics(&db, app, environment)
             .into_iter()
-            .map(|diagnostic: Diagnostic| diagnostic.inner.message)
+            .map(|diagnostic: SpanDiagnostic| diagnostic.inner.message)
             .collect::<Vec<_>>(),
         Vec::<String>::new()
     );

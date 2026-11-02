@@ -1,7 +1,7 @@
 //! Packages loaded from their manifests (`new-plans/modules.md` §
 //! 매니페스트 (`tribute.toml`)), without a file system.
 
-use tribute_core::diagnostic::Diagnostic;
+use tribute_core::diagnostic::SpanDiagnostic;
 use tribute_front::analysis::{self, DependencyTable, Package};
 use tribute_front::build_inputs::{package_inputs, source_inputs};
 use tribute_front::manifest::{self, root_file_manifest, set_package_root, source_dependencies};
@@ -103,7 +103,7 @@ geometry = { path = "../geometry" }
     /// The diagnostics analyzing `source` reports, before its own source.
     fn source_errors(&self, source: SourceCst) -> String {
         source_dependencies(&self.db, source, self.std);
-        self.located(source_dependencies::accumulated::<Diagnostic>(
+        self.located(source_dependencies::accumulated::<SpanDiagnostic>(
             &self.db, source, self.std,
         ))
     }
@@ -113,14 +113,14 @@ geometry = { path = "../geometry" }
     fn load_errors(&self, path: &str) -> String {
         let file = self.entry(path);
         manifest::load_package(&self.db, file, self.std);
-        self.located(manifest::load_package::accumulated::<Diagnostic>(
+        self.located(manifest::load_package::accumulated::<SpanDiagnostic>(
             &self.db, file, self.std,
         ))
     }
 
     /// Each diagnostic with the path of the file it is in and the text it
     /// points at.
-    fn located(&self, diagnostics: Vec<&Diagnostic>) -> String {
+    fn located(&self, diagnostics: Vec<&SpanDiagnostic>) -> String {
         let provider = SourceFiles::get(&self.db).provider(&self.db).clone();
         let mut lines: Vec<String> = diagnostics
             .into_iter()

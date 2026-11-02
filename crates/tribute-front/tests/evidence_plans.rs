@@ -1,7 +1,7 @@
 //! Typechecking selects each call's evidence by the callee's row position.
 use itertools::Itertools;
 use salsa_test_macros::salsa_test;
-use tribute_core::diagnostic::Diagnostic;
+use tribute_core::diagnostic::SpanDiagnostic;
 use tribute_front::analysis;
 use tribute_front::{
     SourceCst,
@@ -12,7 +12,7 @@ fn checked(db: &dyn salsa::Database, source: SourceCst) -> TypeCheckOutput<'_> {
     *analysis::analyze(db, source, *analysis::builtins(db)).unwrap()
 }
 
-fn diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<Diagnostic> {
+fn diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<SpanDiagnostic> {
     analysis::diagnostics(db, source, *analysis::builtins(db))
 }
 

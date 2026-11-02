@@ -5,7 +5,7 @@ use std::ops::Range;
 
 use ariadne::{Cache, Color, Config, IndexType, Label, Report, ReportKind, Source};
 use rustc_hash::FxHashMap as HashMap;
-use tribute_core::diagnostic::{CompilationPhase, Diagnostic};
+use tribute_core::diagnostic::{CompilationPhase, SpanDiagnostic};
 use trunk_ir::diagnostic::DiagnosticSeverity;
 
 use tribute::SourceCst;
@@ -136,7 +136,7 @@ pub fn print_diagnostic(
     db: &dyn salsa::Database,
     root: SourceCst,
     root_path: &str,
-    diag: &Diagnostic,
+    diag: &SpanDiagnostic,
 ) {
     let mut files = SpanFiles::new(db, root, root_path);
     let span_of = |span: &trunk_ir::Span| {
@@ -194,7 +194,7 @@ pub fn print_diagnostics(
     db: &dyn salsa::Database,
     source: SourceCst,
     file_path: &str,
-    diags: &mut [Diagnostic],
+    diags: &mut [SpanDiagnostic],
 ) {
     diags.sort_by(tribute_core::diagnostic::compare_diagnostics);
     // Keep each file's diagnostics together, the root file's first.
@@ -221,7 +221,7 @@ pub fn report_diagnostics(
     db: &dyn salsa::Database,
     source: SourceCst,
     file_path: &str,
-    mut accumulated_diags: Vec<Diagnostic>,
+    mut accumulated_diags: Vec<SpanDiagnostic>,
 ) {
     if !accumulated_diags.is_empty() {
         print_diagnostics(db, source, file_path, &mut accumulated_diags);

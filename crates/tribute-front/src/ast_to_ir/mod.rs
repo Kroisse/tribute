@@ -34,7 +34,7 @@ use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 use std::sync::LazyLock;
 
-use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_core::diagnostic::{CompilationPhase, DiagnosticSeverity, SpanDiagnostic};
 use tribute_ir::dialect::tribute_control::CompilerIntrinsicDeclaration;
 use trunk_ir::context::IrContext;
 use trunk_ir::rewrite::Module as IrModule;
@@ -113,8 +113,8 @@ pub struct UnsupportedCompilerIntrinsic {
 impl UnsupportedCompilerIntrinsic {
     /// The source diagnostic of this directive, at its declaration, naming
     /// it as `names` spells it.
-    pub fn diagnostic(&self, spans: &SpanMaps<'_>, names: &NameDisplay) -> Diagnostic {
-        Diagnostic::new(
+    pub fn diagnostic(&self, spans: &SpanMaps<'_>, names: &NameDisplay) -> SpanDiagnostic {
+        SpanDiagnostic::new(
             format!(
                 "unsupported compiler intrinsic directive `{}`",
                 names.symbol(&self.identity)

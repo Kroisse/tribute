@@ -18,7 +18,7 @@ use tribute_front::SourceCst;
 use tribute_front::source_file::parse_rope;
 
 /// Helper to compile code and collect diagnostics using CLI pipeline.
-fn compile_and_check(code: &str, name: &str) -> Vec<tribute_core::diagnostic::Diagnostic> {
+fn compile_and_check(code: &str, name: &str) -> Vec<tribute_core::diagnostic::SpanDiagnostic> {
     let source_code = Rope::from_str(code);
 
     TributeDatabaseImpl::default().attach(|db| {
@@ -34,7 +34,10 @@ fn compile_and_check(code: &str, name: &str) -> Vec<tribute_core::diagnostic::Di
 ///
 /// Use this instead of `compile_and_check` when testing for frontend errors that would
 /// cause later pipeline stages to panic.
-fn compile_frontend_and_check(code: &str, name: &str) -> Vec<tribute_core::diagnostic::Diagnostic> {
+fn compile_frontend_and_check(
+    code: &str,
+    name: &str,
+) -> Vec<tribute_core::diagnostic::SpanDiagnostic> {
     let source_code = Rope::from_str(code);
 
     TributeDatabaseImpl::default().attach(|db| {
@@ -46,7 +49,7 @@ fn compile_frontend_and_check(code: &str, name: &str) -> Vec<tribute_core::diagn
 }
 
 /// Helper to print diagnostics concisely (truncating long messages).
-fn print_diagnostics(diagnostics: &[tribute_core::diagnostic::Diagnostic]) {
+fn print_diagnostics(diagnostics: &[tribute_core::diagnostic::SpanDiagnostic]) {
     for diag in diagnostics {
         let msg = if diag.inner.message.len() > 200 {
             format!(
