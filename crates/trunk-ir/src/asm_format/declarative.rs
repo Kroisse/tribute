@@ -1118,6 +1118,18 @@ mod tests {
             {}
         }
 
+        #[asm_format(
+            symbol(sym_name) signature(r#type, first, second) attr_dict region(first)
+            region(second)
+        )]
+        #[flags(IsolatedFromAbove)]
+        fn both<S: FuncSig>(sym_name: Attr<String>, r#type: Attr<TypeOf<S>>) {
+            #[region(first)]
+            {}
+            #[region(second)]
+            {}
+        }
+
         #[asm_format("go" "(" keyword(speed) ")" attr_dict)]
         fn drive(speed: Attr<Speed>) {}
 
@@ -1177,6 +1189,20 @@ mod tests {
       asm_format_test.branch to ^bb1(%0)
     ^bb1(%1: core.i32):
       asm_format_test.invoke call @ret(%1)
+  }
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn every_region_a_signature_lists_takes_its_parameters() {
+        assert_round_trip(
+            r#"core.module @m {
+  asm_format_test.both @b(%0: core.i32) -> core.i32 {
+      asm_format_test.invoke call @ret(%0)
+  } {
+      asm_format_test.invoke call @ret(%0)
   }
 }
 "#,
