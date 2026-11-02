@@ -308,7 +308,8 @@ static FUNC_SIG_DEF: crate::type_def::TypeDef = crate::type_def::TypeDef::new("c
 
 crate::register_type_def!(&FUNC_SIG_DEF);
 
-/// The `func.func_sig` syntax, with any number of results.
+/// The function syntax `func.func_sig` also uses, `clif.func_sig<(A) -> R>`,
+/// with any number of results.
 impl crate::asm_format::TypeAsmFormat for FuncSig {
     fn print(&self, h: &mut crate::printer::TypePrintHelper<'_, '_>) -> std::fmt::Result {
         super::func::print_signature_type(h, self.0)

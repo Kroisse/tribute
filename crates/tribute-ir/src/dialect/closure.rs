@@ -444,6 +444,7 @@ fn parse_closure_lambda<'a>(
         sym_name,
         has_func_signature: false,
         func_params: vec![],
+        func_param_regions: vec![],
         return_type: None,
         operands: captures,
         attributes,

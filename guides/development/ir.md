@@ -174,10 +174,15 @@ where
   String literals are keywords and punctuation, a bare name is an operand
   or attribute, and `symbol(..)`, `type(..)`/`types(..)`, `attr_dict`
   (`attributes {..}`), `region(..)`/`regions(..)`, and
-  `successor(..)`/`successors(..)` write the other entities. `("kw" .. x^)?`
+  `successor(..)`/`successors(..)` write the other entities.
+  `signature(t, body)` writes the `Attr<TypeOf<S>>` attribute `t` as
+  `(%a: A) -> R`, through the `asm_format::SignatureCodec` of `S`'s bound,
+  with the inputs as the entry block arguments of `body`, which then elides
+  its entry block, as `func.func` does. `("kw" .. x^)?`
   opens with a literal and is written only when its anchor `x` is present;
   an optional `bool` anchor is a flag the group's literals stand for. A
-  format begins with a literal (after any `symbol(..)` or symbol reference),
+  format begins with a literal (after any `symbol(..)` or symbol reference,
+  or a `signature(..)` after them),
   closes each variadic
   list with `")"` or `"]"`, and ends with `(":" types(..)^)?` for results
   that may be absent. The macro reports a broken rule, a missing entity, or

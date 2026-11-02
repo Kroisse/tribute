@@ -1,0 +1,22 @@
+error[E0277]: `Plain` is the bound of a `signature` format element but does not implement `SignatureCodec`
+ --> tests/ui/asm_format_signature_without_codec.rs:7:21
+  |
+7 |         fn probe<S: Plain>(sym_name: Attr<String>, r#type: Attr<TypeOf<S>>) {
+  |                     ^^^^^ `signature(..)` requires this implementation
+  |
+help: the trait `SignatureCodec` is not implemented for `Plain`
+ --> tests/ui/asm_format_signature_without_codec.rs:2:5
+  |
+2 |     #[trunk_ir::dialect]
+  |     ^^^^^^^^^^^^^^^^^^^^
+help: the trait `SignatureCodec` is implemented for `trunk_ir::dialect::func::FuncSig`
+ --> src/dialect/func.rs
+  |
+  | impl crate::asm_format::SignatureCodec for FuncSig {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `SignatureCodecHooks::of`
+ --> src/asm_format.rs
+  |
+  |     pub const fn of<T: SignatureCodec>() -> Self {
+  |                        ^^^^^^^^^^^^^^ required by this bound in `SignatureCodecHooks::of`
+  = note: this error originates in the attribute macro `trunk_ir::dialect` (in Nightly builds, run with -Z macro-backtrace for more info)

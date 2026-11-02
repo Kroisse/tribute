@@ -1031,17 +1031,65 @@ static FUNC_SIG_DEF: trunk_ir::TypeDef = trunk_ir::TypeDef::new("tribute_control
 
 trunk_ir::register_type_def!(&FUNC_SIG_DEF);
 
-/// The `func.func_sig` syntax, with exactly one result.
+/// The function syntax `func.func_sig` also uses, with exactly one result
+/// and the row as a clause after it, `tribute_control.func_sig<(A) -> R
+/// row(@A | 'a0)>`. A signature with any other type attribute writes them
+/// all after a comma, as `func.func_sig` does.
 impl trunk_ir::asm_format::TypeAsmFormat for FuncSig {
     fn print(&self, h: &mut trunk_ir::printer::TypePrintHelper<'_, '_>) -> fmt::Result {
-        trunk_ir::dialect::func::print_signature_type(h, self.0)
+        use fmt::Write;
+        use trunk_ir::asm_format::{write_signature_param, write_signature_results};
+
+        let ctx = h.ctx();
+        if self.has_nonreserved_attrs(ctx) {
+            return trunk_ir::dialect::func::print_signature_type(h, self.0);
+        }
+        let (inputs, result, row) = (self.inputs(ctx).to_vec(), self.result(ctx), self.row(ctx));
+        let no_attrs = AttributeMap::new();
+        h.write_str("tribute_control.func_sig<(")?;
+        for (index, &input) in inputs.iter().enumerate() {
+            if index > 0 {
+                h.write_str(", ")?;
+            }
+            write_signature_param(h, input, &no_attrs)?;
+        }
+        h.write_str(") -> ")?;
+        write_signature_results(h, &[(result, &no_attrs)])?;
+        print_row(h, &row)?;
+        h.write_char('>')
     }
 
     fn parse<'a>(
         input: &mut &'a str,
         name: &'a str,
     ) -> winnow::ModalResult<trunk_ir::parser::raw::RawType<'a>> {
-        trunk_ir::dialect::func::parse_signature_type(input, name, Some(1))
+        use trunk_ir::asm_format::{parse_dict_tail, parse_signature_results};
+        use trunk_ir::parser::raw::{raw_param_list, ws};
+        use winnow::error::{ContextError, ErrMode, StrContext, StrContextValue};
+        use winnow::prelude::*;
+
+        if !input.starts_with('(') {
+            return Err(ErrMode::Backtrack(ContextError::new()));
+        }
+        let inputs = raw_param_list.parse_next(input)?;
+        ws.parse_next(input)?;
+        "->".parse_next(input)?;
+        ws.parse_next(input)?;
+        let results = parse_signature_results(input)?;
+        let mut tail = parse_dict_tail(input)?;
+        if let Some(row) = parse_row(input)? {
+            if tail.iter().any(|(key, _)| key == ABILITY_ROW_ATTR) {
+                let mut error = ContextError::new();
+                error.push(StrContext::Expected(StrContextValue::Description(
+                    "the row once, as either `row(..)` or `ability_row`",
+                )));
+                return Err(ErrMode::Cut(error));
+            }
+            tail.push((ABILITY_ROW_ATTR.into(), row));
+        }
+        ws.parse_next(input)?;
+        '>'.parse_next(input)?;
+        trunk_ir::dialect::func::signature_from_parts(name, inputs, results, tail, Some(1))
     }
 }
 
@@ -1513,8 +1561,7 @@ impl CallableExit for TailCallIndirect {}
 
 // === Custom assembly: tribute_control.func ===
 
-fn print_row(h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>, row: &Row) -> fmt::Result {
-    use fmt::Write;
+fn print_row(h: &mut dyn trunk_ir::asm_format::SignatureWriter, row: &Row) -> fmt::Result {
     if row.is_empty() {
         return Ok(());
     }
@@ -1816,7 +1863,8 @@ pub(crate) fn print_func(
         write!(h, " -> ")?;
         h.write_type(result)?;
         if let Some(ty) = callable_ty {
-            print_row(h, &FuncSig(ty).row(h.ctx()))?;
+            let row = FuncSig(ty).row(h.ctx());
+            print_row(h, &row)?;
         }
         if header.inferred {
             write!(h, " inferred")?;
@@ -2021,6 +2069,7 @@ pub(crate) fn parse_func<'a>(
         sym_name,
         has_func_signature: false,
         func_params: vec![],
+        func_param_regions: vec![],
         return_type: None,
         operands: vec![],
         attributes,
@@ -2098,7 +2147,8 @@ pub(crate) fn print_lambda(
         write!(h, " -> ")?;
         h.write_type(result)?;
         if let Some(ty) = callable_ty {
-            print_row(h, &FuncSig(ty).row(h.ctx()))?;
+            let row = FuncSig(ty).row(h.ctx());
+            print_row(h, &row)?;
         }
     }
     write!(h, " captures [")?;
@@ -2286,6 +2336,7 @@ pub(crate) fn parse_lambda<'a>(
         sym_name,
         has_func_signature: false,
         func_params: vec![],
+        func_param_regions: vec![],
         return_type: None,
         operands: captures,
         attributes,

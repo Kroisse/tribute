@@ -505,13 +505,13 @@ mod tests {
     use trunk_ir::{Attribute, AttributeMap};
 
     const TAIL_TRANSFERS: &str = r#"core.module @test {
-  func.func @direct_target(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> (), {call_conv = "tail"}>} {
+  func.func @direct_target(%value: core.i32) -> (), {call_conv = "tail"} {
     func.return
   }
-  func.func @direct_caller(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> (), {call_conv = "tail"}>} {
+  func.func @direct_caller(%value: core.i32) -> (), {call_conv = "tail"} {
     func.tail_call %value {callee = @direct_target}
   }
-  func.func @indirect_caller(%callee: core.ptr, %value: core.i32) attributes {type = func.func_sig<(core.ptr, core.i32) -> (), {call_conv = "tail"}>} {
+  func.func @indirect_caller(%callee: core.ptr, %value: core.i32) -> (), {call_conv = "tail"} {
     func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> (), {call_conv = "tail"}>}
   }
 }"#;
@@ -804,7 +804,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !evidence = core.array<core.i32>
-  func.func @caller(%callee: core.ptr, %evidence: !evidence) attributes {type = func.func_sig<(core.ptr, !evidence) -> (), {call_conv = "tail"}>} {
+  func.func @caller(%callee: core.ptr, %evidence: !evidence) -> (), {call_conv = "tail"} {
     func.tail_call_indirect %callee, %evidence {signature = func.func_sig<(!evidence) -> (), {call_conv = "tail"}>}
   }
 }"#,
@@ -925,7 +925,7 @@ mod tests {
     fn value_tail_call_indirect_returns_the_callers_result() {
         let output = run_pass(
             r#"core.module @test {
-  func.func @caller(%callee: core.ptr, %value: core.i32) -> core.i32 attributes {type = func.func_sig<(core.ptr, core.i32) -> core.i32, {call_conv = "tail"}>} {
+  func.func @caller(%callee: core.ptr, %value: core.i32) -> core.i32, {call_conv = "tail"} {
     func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> core.i32, {call_conv = "tail"}>}
   }
 }"#,
@@ -982,7 +982,7 @@ mod tests {
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
-  func.func @target(%value: core.i32) attributes {{type = func.func_sig<(core.i32) -> (), {{call_conv = "tail"}}>}} {{
+  func.func @target(%value: core.i32) -> (), {{call_conv = "tail"}} {{
     func.return
   }}
   func.func @take() {{
@@ -1009,7 +1009,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   core.module @inner {
-    func.func @helper(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> (), {call_conv = "tail"}>} {
+    func.func @helper(%value: core.i32) -> (), {call_conv = "tail"} {
       func.return
     }
     func.func @take() {
@@ -1050,10 +1050,10 @@ mod tests {
         let duplicated = lower(
             r#"core.module @test {
   core.module @left {
-    func.func @helper(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> (), {call_conv = "tail"}>} {
+    func.func @helper(%value: core.i32) -> (), {call_conv = "tail"} {
       func.return
     }
-    func.func @helper(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> (), {call_conv = "tail"}>} {
+    func.func @helper(%value: core.i32) -> (), {call_conv = "tail"} {
       func.return
     }
     func.func @take() {
@@ -1067,7 +1067,7 @@ mod tests {
 
         let different_inputs = lower(
             r#"core.module @test {
-  func.func @target(%env: core.ptr, %value: core.i32) attributes {type = func.func_sig<(core.ptr, core.i32) -> (), {call_conv = "tail"}>} {
+  func.func @target(%env: core.ptr, %value: core.i32) -> (), {call_conv = "tail"} {
     func.return
   }
   func.func @take() {

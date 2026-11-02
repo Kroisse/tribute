@@ -42,6 +42,9 @@ pub struct RawOperation<'a> {
     /// Optional function-style parameters: `(%arg: type, ...)`.
     pub has_func_signature: bool,
     pub func_params: Vec<(&'a str, RawType<'a>)>,
+    /// The regions, by position, whose entry blocks take `func_params` as
+    /// arguments.
+    pub func_param_regions: Vec<usize>,
     /// Optional return type from `-> type`.
     pub return_type: Option<RawType<'a>>,
     pub operands: Vec<&'a str>,
@@ -631,15 +634,13 @@ pub fn raw_operation<'a>(input: &mut &'a str) -> ModalResult<RawOperation<'a>> {
     let sym_name = opt(preceded(ws, symbol_ref)).parse_next(input)?;
 
     ws.parse_next(input)?;
-    // A bare attribute dictionary is generic syntax, even for func.func.
-    let generic_func = name == "func.func" && input.starts_with('{');
     // Generic operations begin with attributes or operands. Only those shapes
     // may recover from a custom parser's Backtrack into generic parsing.
     let generic_custom_shape =
         input.starts_with('{') || input.starts_with('%') || input.starts_with(':');
     // Check the operation's custom assembly format
     if let Some(crate::asm_format::OpAsmFormatDef::Hooks(hooks)) =
-        def.and_then(|def| def.asm_format).filter(|_| !generic_func)
+        def.and_then(|def| def.asm_format)
     {
         let checkpoint = *input;
         match (hooks.parse)(input, results.clone(), sym_name.clone()) {
@@ -706,6 +707,7 @@ pub fn raw_operation<'a>(input: &mut &'a str) -> ModalResult<RawOperation<'a>> {
         sym_name,
         has_func_signature,
         func_params: func_params_parsed,
+        func_param_regions: vec![0],
         return_type: return_ty,
         operands,
         attributes,

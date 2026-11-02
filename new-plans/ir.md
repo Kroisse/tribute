@@ -434,11 +434,12 @@ literal은 문자열 literal로 쓴다.
   것도 쓰지 않는다. 다른 원소가 쓰는 attribute는 자동으로 제외하며, parser는 그런
   key를 dictionary에서 만나면 거부한다.
 - **`signature(t, regions..)`** — 함수 형태 `(%a: A, %b: B) -> R`을 쓴다. `t`는
-  `Attr<TypeOf<S>>` attribute나 `Value<S>` result이고, `S`의 bound가 signature
-  codec을 구현해야 한다. 나머지 인자는 이 signature의 매개변수를 entry block
-  argument로 받는 region이다. 결과가 없으면 화살표를 쓰지 않고, 하나면 `-> R`,
-  여럿이면 `-> (R1, R2)`로 쓴다. 매개변수 이름은 첫 region의 entry block
-  argument 이름이고, region이 없으면 `%arg0`, `%arg1`, …이다.
+  필수 `Attr<TypeOf<S>>` attribute나 `Value<S>` result이고, `S`는 bound를
+  하나만 가지며 그 bound가 signature codec을 구현해야 한다. 나머지 인자는 이 signature의 매개변수를 entry block
+  argument로 받는 region이다. 결과는 [타입 textual form](#타입-textual-form)의
+  함수 형태처럼 쓰되, 결과도 꼬리 표기도 없으면 화살표를 쓰지 않는다. 매개변수
+  이름은 첫 region의 entry block argument 이름이고, region이 없으면 `%arg0`,
+  `%arg1`, …이다.
 - **`region(r)`, `regions(rs)`** — `{ .. }`로 쓴다. `signature`가 entry
   argument를 쓰는 region은 entry block label을 생략하고, parser가 signature의
   매개변수를 entry block argument로 되돌린다. 다른 region은 entry label과 argument를
@@ -480,9 +481,10 @@ Macro는 형식 기술을 선언과 대조해 다음을 어기면 그 원소를 
 - 형식은 원소를 하나 이상 쓰고, `symbol`과 symbol 참조 attribute로 시작할 수
   있다. Generic 형식은 `@`로 시작하지 않기 때문이다. 그 뒤, 또는 그런 원소가
   없으면 처음에는 literal이 온다. 앞에 symbol이 있으면 이 literal로 여는 선택
-  묶음도 된다. 이 literal은 `{`, `%`, `:`, `[`, `^`, `}`로 시작하지 않는다. 앞의
-  넷은 generic 형식이 operation 이름 뒤에 쓰는 것이고, 나머지는 operation 이름만
-  쓴 generic 형식 뒤의 다음 줄이 시작할 수 있는 것이다.
+  묶음이나 `(`로 시작하는 `signature`도 된다. 이 literal은 `{`, `%`, `:`, `[`,
+  `^`, `}`로 시작하지 않는다. 앞의 넷은 generic 형식이 operation 이름 뒤에 쓰는
+  것이고, 나머지는 operation 이름만 쓴 generic 형식 뒤의 다음 줄이 시작할 수 있는
+  것이다.
 - 선택 묶음은 여는 literal로 시작하고, 그 뒤에는 literal과 anchor 하나만 둔다.
   여는 literal은 keyword(값이 시작하는 `true`, `false`, `unit`, `loc`, `b`는
   제외)이거나 값, `attr_dict`, 다음 줄이 시작할 수 없는 구두점이며, 형식의 다른
@@ -527,7 +529,7 @@ literal과 `attr_dict`의 `attributes`는 식별자 전체로 읽으며, 바로 
 `signature`가 entry argument를 쓰는 region이 여럿이면 printer는 둘째 이후
 region의 entry argument에 첫 region과 같은 이름을 주고, parser는 매개변수를 모든
 region의 entry block에 되돌린다. Printer는 `IsolatedFromAbove` operation의 형식을
-쓰기 전에 값과 block 번호를 새로 매긴다.
+쓰는 동안 값과 block 번호를 새로 매기고, 쓴 뒤에는 바깥 번호를 이어 간다.
 
 #### 표기 관례
 
@@ -564,23 +566,23 @@ region의 entry block에 되돌린다. Printer는 `IsolatedFromAbove` operation�
 Signature codec은 signature 타입과 그 함수 형태 표기 사이의 변환이며, 타입을
 정의하는 dialect가 그 타입의 wrapper에 구현한다. Trunk-ir는 signature 타입이나
 dialect 이름을 알지 못하며, `signature`는 형식이 묶은 타입 변수의 bound에서 codec을
-고른다. 같은 표기로 `func.func_sig`, `wasm.func_sig`, `clif.func_sig`,
-`tribute_control.func_sig`를 재구성한다.
+고른다. 같은 함수 형태로 `func.func_sig`, `wasm.func_sig`, `clif.func_sig`,
+`tribute_control.func_sig`를 재구성하며, 결과 뒤의 꼬리 표기만 codec마다 다르다.
 
 - 분해는 입력과 결과(각각의 매개변수 속성 포함), 그리고 codec이 소유하는 꼬리
   표기를 돌려준다. 손실 없이 분해할 수 없는 타입이면 분해하지 않으며, 그
   operation은 generic 형식으로 출력한다.
 - 재구성은 parser가 읽은 입력·결과와 꼬리 표기를 그 타입의 generic raw 형태로
   만든다. Codec은 허용하는 결과 개수를 정한다.
-- 꼬리 표기는 결과 뒤에 오며 codec이 출력과 파싱을 모두 맡는다.
-  `tribute_control.func_sig`는 꼬리 표기로 [ability row](#ability-row)를 쓰고, row
-  밖의 non-reserved type attribute가 있으면 분해하지 않는다.
-  `func.func_sig` 계열은 매개변수 속성을 매개변수 뒤에 `%a: A {k = v}`로 쓰고,
-  두 count 밖의 type attribute를 결과 뒤에 `, {..}`로 쓴다. 이때 결과가 없으면
-  `-> ()`를 쓴다. 매개변수 속성이 있는 결과는 결과 목록을 괄호로 감싸
-  `-> (R {k = v})`로 쓴다. 바로 뒤의 region과 `{`가 겹치지 않게 하기 위해서다.
-  이 표기는 [타입 textual form](#타입-textual-form)의 함수 형태와
-  같은 순서다.
+- 꼬리 표기는 결과 뒤에 오는 codec 고유의 절이며, codec이 출력과 파싱을 모두
+  맡는다. `func.func_sig` 계열은 매개변수 속성을 매개변수 뒤에 `%a: A {k = v}`로
+  쓰고, 두 count 밖의 type attribute를 결과 뒤에 쉼표로 이어 dictionary로 쓴다
+  (`-> R, {call_conv = "tail"}`, 결과가 없으면 `-> (), {..}`). 쉼표 없이 타입
+  바로 뒤에 오는 dictionary는 그 타입의 매개변수 속성이므로 쉼표가 둘을 구분한다.
+  `tribute_control.func_sig`는 [ability row](#ability-row)를 `row(..)` 절로
+  쓴다(`-> R row(@A | 'a1)`). 꼬리 절은 쉼표나 keyword로 시작하므로, 형식이
+  signature 바로 뒤에 쓰는 `attributes {..}`나 region과 겹치지 않는다. 이 표기는
+  [타입 textual form](#타입-textual-form)의 함수 형태와 같다.
 
 함수 형태의 operation 문법은 그 operation이 선언한 형식에서만 나온다. Generic
 parser는 operation 이름을 보고 signature 타입을 합성하지 않으며, 매개변수
@@ -998,11 +1000,12 @@ non-resumptive case를 식별해야 하므로 `Never`용 `anyref` placeholder는
 ### Ability row
 
 `tribute_control.func_sig`는 callable의 ability row를 `ability_row` type 속성으로
-가진다.
+가진다. 함수 형태에서는 결과 뒤의 `row(..)` 절로 쓴다. `|` 앞은 `instances`이고,
+뒤의 `'aN`은 `tail = N`이다. 아래 타입의 저장 표현은
+`{ability_row = {instances = [@"<instance A>", @"<instance B>"], tail = 1}}`이다.
 
 ```text
-tribute_control.func_sig<(T) -> R,
-    {ability_row = {instances = [@"<instance A>", @"<instance B>"], tail = 1}}>
+tribute_control.func_sig<(T) -> R row(@"<instance A>", @"<instance B>" | 'a1)>
 ```
 
 - **값:** `instances`는
@@ -2091,8 +2094,14 @@ func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> core.i64, {call_con
   dictionary다. `{`로 시작하는 원소가 type 속성이며, 마지막에 한 번만 올 수 있다.
   매개변수 바로 뒤의 dictionary는 그 매개변수의
   [매개변수 속성](#타입-매개변수-속성)이다.
-- 함수 형태 `<(inputs...) -> results[, {type 속성}]>`는 `func` dialect가 정의하는
-  전용 문법이다. 입력과 결과도 각각 매개변수 속성을 가질 수 있고, 저장 표현은
+- 함수 형태 `<(inputs...) -> results>`는 `func` dialect가 정의하는 전용
+  문법이다. 결과가 하나이고 매개변수 속성이 없으면 결과를 괄호 없이 쓰고, 그
+  밖에는 괄호로 감싼 목록으로 쓴다(`-> ()`, `-> (R1, R2)`, `-> (R {k = v})`).
+  Type 속성은 결과 뒤의 꼬리 표기로 쓰며, 그 표기는 타입을 정의하는 dialect가
+  정한다. `func.func_sig` 계열은 일반 형태처럼 쉼표 뒤의 dictionary로 쓰고
+  (`-> R, {call_conv = "tail"}`, `-> (), {..}`), `tribute_control.func_sig`는
+  `row(..)` 절로 쓴다. 입력과 결과도 각각 매개변수 속성을 가질 수 있고,
+  저장 표현은
   [`func.func_sig`](#funcfunc_sig-function-type)의 평탄한 매개변수 벡터와 두
   count다. 같은 저장 표현을 쓰는 signature 타입(`func.func_sig`,
   `wasm.func_sig`, `clif.func_sig`, `tribute_control.func_sig`)은 각자의
@@ -2433,10 +2442,11 @@ func.func_sig<(Evidence, Frame, core.i32) -> core.never>
 ```
 
 The input list is always parenthesized. An empty result list is printed as
-`()`, while the single supported result is printed without parentheses.
-Following the [self-delimiting type form](#타입-textual-form), each input or
-result may carry its parameter attributes, and the remaining type attributes
-come last inside the brackets:
+`()`, and the single supported result is printed without parentheses unless it
+carries parameter attributes. Following the
+[self-delimiting type form](#타입-textual-form), each input or result may carry
+its parameter attributes, and the remaining type attributes follow the results
+as a dictionary after a comma:
 
 ```text
 func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>

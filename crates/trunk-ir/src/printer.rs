@@ -34,6 +34,14 @@ struct PrintState<'a> {
     type_alias_names: HashMap<TypeRef, String>,
 }
 
+/// Value names and block labels set aside while an isolated operation is
+/// printed.
+struct Numbering {
+    value_names: HashMap<ValueRef, String>,
+    block_labels: HashMap<BlockRef, String>,
+    counters: (usize, usize),
+}
+
 impl<'a> PrintState<'a> {
     fn new(ctx: &'a IrContext) -> Self {
         let mut state = Self::without_aliases(ctx);
@@ -91,6 +99,25 @@ impl<'a> PrintState<'a> {
         self.next_block_num = 0;
         self.value_names.clear();
         self.block_labels.clear();
+    }
+
+    /// Set the numbering aside for a fresh one, to restore it with
+    /// `restore_numbering`.
+    fn take_numbering(&mut self) -> Numbering {
+        Numbering {
+            value_names: std::mem::take(&mut self.value_names),
+            block_labels: std::mem::take(&mut self.block_labels),
+            counters: (
+                std::mem::take(&mut self.next_value_num),
+                std::mem::take(&mut self.next_block_num),
+            ),
+        }
+    }
+
+    fn restore_numbering(&mut self, numbering: Numbering) {
+        self.value_names = numbering.value_names;
+        self.block_labels = numbering.block_labels;
+        self.restore_counters(numbering.counters);
     }
 
     /// Restore only counters saved by `save_counters`.
@@ -381,6 +408,27 @@ impl<'a, 'ctx> OpPrintHelper<'a, 'ctx> {
         self.state.reset_numbering();
     }
 
+    /// Run `print` with fresh value and block numbering, restoring the
+    /// current numbering afterwards.
+    pub(crate) fn with_fresh_numbering(
+        &mut self,
+        print: impl FnOnce(&mut Self) -> fmt::Result,
+    ) -> fmt::Result {
+        let numbering = self.state.take_numbering();
+        let result = print(self);
+        self.state.restore_numbering(numbering);
+        result
+    }
+
+    /// Print `{ .. }` holding a region whose entry block arguments the
+    /// operation's signature wrote, eliding the entry block as
+    /// [`Self::print_body`] does.
+    pub fn print_region_without_entry(&mut self, region: RegionRef) -> fmt::Result {
+        self.f.write_str("{\n")?;
+        self.print_region_eliding_entry(region, self.indent + 2)?;
+        write!(self.f, "{}}}", " ".repeat(self.indent))
+    }
+
     /// Print ` { .. }` holding a region with the entry block label elided.
     ///
     /// Entry block args are assumed to have been printed externally (e.g., as
@@ -389,10 +437,8 @@ impl<'a, 'ctx> OpPrintHelper<'a, 'ctx> {
     /// block label is printed without args, and non-entry blocks are printed
     /// normally.
     pub fn print_body(&mut self, region: RegionRef) -> fmt::Result {
-        self.f.write_str(" {\n")?;
-        self.print_region_eliding_entry(region, self.indent + 2)?;
-        let indent_str = " ".repeat(self.indent);
-        write!(self.f, "{indent_str}}}")
+        self.f.write_char(' ')?;
+        self.print_region_without_entry(region)
     }
 
     /// Print ` {`, a `label { .. }` line for each region one level in, and

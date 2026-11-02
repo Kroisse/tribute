@@ -1732,7 +1732,7 @@ fn stronger_func_ref_builds_a_cps_adapter_without_a_null_environment() {
 #[test]
 fn parameter_attributes_follow_their_parameters_to_the_physical_abi() {
     let input = r#"core.module @test {
-  !cps = tribute_control.func_sig<(core.i32 {k = @v}) -> core.i32 {r = @x}>
+  !cps = tribute_control.func_sig<(core.i32 {k = @v}) -> (core.i32 {r = @x})>
   tribute_cps.func @id(%value: core.i32) -> core.i32 convention(cps) {
     tribute_control.return %value
   }
@@ -2559,7 +2559,7 @@ fn a_general_operation_outside_a_handle_is_rejected_in_a_direct_callable() {
 #[test]
 fn legalization_drops_ability_rows_and_row_metadata() {
     let with_rows = r#"core.module @test {
-  !open = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {tail = 0}}>
+  !open = tribute_control.func_sig<(core.i32) -> core.i32 row(| 'a0)>
   ability.decl {sym_name = "A"} {
     ability.operation {kind = "fn", op_name = "get", param_types = [], result_type = core.i32}
   }
@@ -2578,7 +2578,7 @@ fn legalization_drops_ability_rows_and_row_metadata() {
   }
 }"#;
     let without_rows = with_rows
-        .replace(", {ability_row = {tail = 0}}", "")
+        .replace("core.i32 row(| 'a0)>", "core.i32>")
         .replace("['a0 = 'a1, body 'a1]", "")
         .replace(" row(| 'a0) inferred", "")
         .replace(" row(@A)", "")
@@ -2600,7 +2600,7 @@ fn instantiate_legalizes_to_its_lambda() {
         let kind = if header.is_empty() { "body" } else { "local" };
         format!(
             r#"core.module @m {{
-  !step0 = tribute_control.func_sig<(core.i32) -> core.i32, {{ability_row = {{tail = 0}}}}>
+  !step0 = tribute_control.func_sig<(core.i32) -> core.i32 row(| 'a0)>
   tribute_cps.func @f['a0, {kind} 'a1](%x: core.i32) -> core.i32 row(| 'a0) convention(direct) {{
     %g = tribute_cps.lambda{header}(%y: core.i32) -> core.i32 row(| 'a1) captures [] entries {{
       direct {{

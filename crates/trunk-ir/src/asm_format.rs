@@ -12,9 +12,10 @@ pub mod declarative;
 use std::fmt;
 
 use crate::ops::{DialectOp, DialectType};
-use crate::parser::raw::{RawOperation, RawType};
+use crate::parser::raw::{RawAttrDict, RawOperation, RawParam, RawType};
 use crate::printer::{OpPrintHelper, TypePrintHelper};
-use crate::{IrContext, OpRef, TypeRef};
+use crate::types::Attribute;
+use crate::{AttributeMap, IrContext, OpRef, StringRef, TypeRef};
 
 // =============================================================================
 // TypeAliasHint — alias name suggestions for the printer
@@ -103,6 +104,201 @@ pub struct OpAsmHooks {
         results: Vec<&'a str>,
         sym_name: Option<String>,
     ) -> winnow::ModalResult<RawOperation<'a>>,
+}
+
+// =============================================================================
+// SignatureCodec — the function form of a signature type
+// =============================================================================
+
+/// The parameters a [`SignatureCodec`] decomposes a signature type into.
+#[derive(Debug)]
+pub struct SignatureParts<'a> {
+    /// Each input with its own attributes.
+    pub inputs: Vec<(TypeRef, &'a AttributeMap)>,
+    /// Each result with its own attributes.
+    pub results: Vec<(TypeRef, &'a AttributeMap)>,
+    /// The type attributes the codec writes after the results.
+    pub tail: Vec<(StringRef, &'a Attribute)>,
+}
+
+/// Conversion between a signature type and the function form
+/// `(%a: A, %b: B) -> R` that the `signature` format element writes
+/// (`new-plans/ir.md`, "Signature codec").
+///
+/// The dialect that defines the signature type implements it on the type's
+/// wrapper. A format names the codec through the bound of the type variable
+/// its `signature` element writes, so trunk-ir knows no signature type.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is the bound of a `signature` format element but does not implement `SignatureCodec`",
+    label = "`signature(..)` requires this implementation"
+)]
+pub trait SignatureCodec: DialectType {
+    /// The inputs, results, and tail of `ty`, or `None` when the function
+    /// form cannot spell it without loss.
+    fn decompose(ctx: &IrContext, ty: TypeRef) -> Option<SignatureParts<'_>>;
+
+    /// Write the tail after the results; nothing when it is empty.
+    fn write_tail(w: &mut dyn SignatureWriter, tail: &[(StringRef, &Attribute)]) -> fmt::Result;
+
+    /// Parse the tail [`write_tail`](Self::write_tail) writes, or an empty
+    /// one when its introducer is absent.
+    fn parse_tail<'a>(input: &mut &'a str) -> winnow::ModalResult<RawAttrDict<'a>>;
+
+    /// Build the type's generic raw form from the parsed inputs, results,
+    /// and tail. A result count or a tail attribute the type does not allow
+    /// is an error.
+    fn build<'a>(
+        inputs: Vec<RawParam<'a>>,
+        results: Vec<RawParam<'a>>,
+        tail: RawAttrDict<'a>,
+    ) -> winnow::ModalResult<RawType<'a>>;
+}
+
+/// A [`SignatureCodec`]'s hooks, as a `signature` format element stores them.
+#[derive(Clone, Copy, Debug)]
+pub struct SignatureCodecHooks {
+    pub decompose: for<'c> fn(&'c IrContext, TypeRef) -> Option<SignatureParts<'c>>,
+    pub write_tail: fn(&mut dyn SignatureWriter, &[(StringRef, &Attribute)]) -> fmt::Result,
+    pub parse_tail: for<'a> fn(&mut &'a str) -> winnow::ModalResult<RawAttrDict<'a>>,
+    pub build: for<'a> fn(
+        Vec<RawParam<'a>>,
+        Vec<RawParam<'a>>,
+        RawAttrDict<'a>,
+    ) -> winnow::ModalResult<RawType<'a>>,
+}
+
+impl SignatureCodecHooks {
+    /// The hooks of `T`'s codec.
+    pub const fn of<T: SignatureCodec>() -> Self {
+        Self {
+            decompose: T::decompose,
+            write_tail: T::write_tail,
+            parse_tail: T::parse_tail,
+            build: T::build,
+        }
+    }
+}
+
+/// A printer that writes the parts of a function form: an operation's or a
+/// signature type's.
+pub trait SignatureWriter: fmt::Write {
+    fn write_type(&mut self, ty: TypeRef) -> fmt::Result;
+    fn write_attribute(&mut self, attr: &Attribute) -> fmt::Result;
+    fn write_attr_dict(
+        &mut self,
+        attrs: &mut dyn Iterator<Item = (StringRef, &Attribute)>,
+    ) -> fmt::Result;
+}
+
+impl SignatureWriter for OpPrintHelper<'_, '_> {
+    fn write_type(&mut self, ty: TypeRef) -> fmt::Result {
+        OpPrintHelper::write_type(self, ty)
+    }
+
+    fn write_attribute(&mut self, attr: &Attribute) -> fmt::Result {
+        OpPrintHelper::write_attribute(self, attr)
+    }
+
+    fn write_attr_dict(
+        &mut self,
+        attrs: &mut dyn Iterator<Item = (StringRef, &Attribute)>,
+    ) -> fmt::Result {
+        OpPrintHelper::write_attr_dict(self, attrs)
+    }
+}
+
+impl SignatureWriter for TypePrintHelper<'_, '_> {
+    fn write_type(&mut self, ty: TypeRef) -> fmt::Result {
+        TypePrintHelper::write_type(self, ty)
+    }
+
+    fn write_attribute(&mut self, attr: &Attribute) -> fmt::Result {
+        TypePrintHelper::write_attribute(self, attr)
+    }
+
+    fn write_attr_dict(
+        &mut self,
+        attrs: &mut dyn Iterator<Item = (StringRef, &Attribute)>,
+    ) -> fmt::Result {
+        TypePrintHelper::write_attr_dict(self, attrs)
+    }
+}
+
+/// Write a function form's parameter type and its attributes, `T {k = v}`.
+pub fn write_signature_param(
+    w: &mut dyn SignatureWriter,
+    ty: TypeRef,
+    attrs: &AttributeMap,
+) -> fmt::Result {
+    w.write_type(ty)?;
+    if !attrs.is_empty() {
+        w.write_char(' ')?;
+        w.write_attr_dict(&mut attrs.iter())?;
+    }
+    Ok(())
+}
+
+/// Write a function form's results after `->`: one result without
+/// attributes bare, and otherwise a parenthesized list, `(R {k = v})`.
+pub fn write_signature_results(
+    w: &mut dyn SignatureWriter,
+    results: &[(TypeRef, &AttributeMap)],
+) -> fmt::Result {
+    if let [(ty, attrs)] = results
+        && attrs.is_empty()
+    {
+        return w.write_type(*ty);
+    }
+    w.write_char('(')?;
+    for (index, &(ty, attrs)) in results.iter().enumerate() {
+        if index > 0 {
+            w.write_str(", ")?;
+        }
+        write_signature_param(w, ty, attrs)?;
+    }
+    w.write_char(')')
+}
+
+/// Parse a function form's results after `->` as
+/// [`write_signature_results`] writes them.
+pub fn parse_signature_results<'a>(input: &mut &'a str) -> winnow::ModalResult<Vec<RawParam<'a>>> {
+    use crate::parser::raw::{raw_param_list, raw_type};
+    use winnow::prelude::*;
+
+    if input.starts_with('(') {
+        raw_param_list.parse_next(input)
+    } else {
+        Ok(vec![raw_type.parse_next(input)?.into()])
+    }
+}
+
+/// Write a tail of type attributes as a dictionary after a comma,
+/// `, {k = v}`, as the `func.func_sig` family does.
+pub fn write_dict_tail(
+    w: &mut dyn SignatureWriter,
+    tail: &[(StringRef, &Attribute)],
+) -> fmt::Result {
+    if tail.is_empty() {
+        return Ok(());
+    }
+    w.write_str(", ")?;
+    w.write_attr_dict(&mut tail.iter().copied())
+}
+
+/// Parse the tail [`write_dict_tail`] writes.
+pub fn parse_dict_tail<'a>(input: &mut &'a str) -> winnow::ModalResult<RawAttrDict<'a>> {
+    use crate::parser::raw::{raw_attr_dict, ws};
+    use winnow::prelude::*;
+
+    let checkpoint = *input;
+    ws.parse_next(input)?;
+    if !input.starts_with(',') {
+        *input = checkpoint;
+        return Ok(Vec::new());
+    }
+    ','.parse_next(input)?;
+    ws.parse_next(input)?;
+    raw_attr_dict.parse_next(input)
 }
 
 // =============================================================================
