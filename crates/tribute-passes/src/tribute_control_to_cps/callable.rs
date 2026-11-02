@@ -201,7 +201,13 @@ impl Converter<'_> {
                 .get(callable)
                 .cloned()
                 .expect("pre-CPS validation resolved table targets");
-            let entry = self.func_ref_entry(location, logical_ty, *convention, &info, target);
+            if *convention != info.convention {
+                return Err(self.malformed_source(
+                    table.op,
+                    "a function table entry weaker than its target is not supported",
+                ));
+            }
+            let entry = self.func_ref_entry(location, logical_ty, &info, target);
             bodies.push((*convention, entry));
         }
         let conventions: Vec<_> = bodies.iter().map(|&(convention, _)| convention).collect();
@@ -224,17 +230,16 @@ impl Converter<'_> {
         ))
     }
 
-    /// The entry function through `convention` of a closure of `logical_ty`
-    /// that enters `target`, the callable `info` describes. A Cps target
-    /// entered through a weaker convention runs under a value delimiter.
+    /// The entry function of a closure of `logical_ty` that enters `target`,
+    /// the callable `info` describes, through its own convention.
     fn func_ref_entry(
         &mut self,
         location: Location,
         logical_ty: TypeRef,
-        convention: CallingConvention,
         info: &CallableInfo,
         target: &SymbolPath,
     ) -> Symbol {
+        let convention = info.convention;
         // The entry is the closure's entry with the environment interposed,
         // so both share parameter attributes and metadata.
         let closure_ty = self.convert_type(logical_ty);
@@ -257,18 +262,7 @@ impl Converter<'_> {
             .copied()
             .collect();
         let target_result = self.convert_type(info.source_result);
-        if convention != info.convention {
-            let answer = self.delimit_call(
-                block,
-                location,
-                target,
-                &args[evidence + 1..],
-                target_result,
-                args[..evidence].first().copied(),
-            );
-            let ret = func::Return::operands([answer]).build(self.ctx, location);
-            self.ctx.push_op(block, ret.op_ref());
-        } else if convention == CallingConvention::Cps
+        if convention == CallingConvention::Cps
             || (!info.platform && entry.results(self.ctx) == [target_result])
         {
             // The entry transfers its frame to the target, so a source

@@ -349,11 +349,12 @@ fn main() ->{Io} Nil {
     assert_output_on_both_targets("ability_row_deferred_method_effect.trb", code, "shout\nio");
 }
 
-/// A named function whose own row tail is no class variable is `Cps`. Passed
-/// where its row is closed or names only a `fn` ability, its value enters
-/// it under a value delimiter, here around a `handle` that resumes.
+/// A written own row tail that reaches no callable requires nothing, so a
+/// named function with one is not `Cps`. Its value is entered where its row
+/// is closed or names only a `fn` ability, and its `handle` that resumes
+/// runs under a value delimiter in its own body.
 #[test]
-fn test_cps_named_function_value_runs_under_a_value_delimiter() {
+fn test_open_row_named_function_value_enters_its_direct_instance() {
     let code = r#"use std::io::{Io, print_line}
 
 ability Ask {
@@ -390,7 +391,7 @@ fn main() ->{Io} Nil {
 }
 "#;
     assert_output_on_both_targets_with_native_asan(
-        "ability_row_cps_function_value.trb",
+        "ability_row_open_function_value.trb",
         code,
         "40\n41",
     );

@@ -110,10 +110,15 @@ tail이 `Cps`를 요구한다.
 
 둘째 줄은 정의 자신의 row tail 중 정의 안의 어떤 callable에도 닿지 않는 것이다.
 Annotation을 생략한 정의와 열린 row를 적은 정의가 같다. 그런 tail은 정의의 코드를
-바꾸지 않는다. 그러므로 effect-polymorphic `add`와 `fn f() ->{e} Int`는 Direct이고,
+바꾸지 않는다. 본문은 tail을 추상 변수로 두고 한 번 검사되므로, 호출하는 쪽이 그
+tail에 어떤 ability를 넘기더라도 본문은 그 ability의 operation에 닿지 못한다.
+그러므로 effect-polymorphic `add`와 `fn f() ->{e} Int`는 Direct이고,
 명시적인 `->{}`도 닫힌 빈 row이므로 Direct다. 마지막 줄에는 ability 인자에 나타난
 tail, 어느 scheme도 양화하지 않은 tail, 그리고 정의 자신의 row가 아닌 자리에 적은
-열린 row의 tail 중 class 변수가 아닌 것이 들어간다.
+열린 row의 tail 중 class 변수가 아닌 것이 들어간다. 정의 자신의 tail이라도
+[여러 tail의 합집합](ir.md#tail의-합집합)인 것은 source를 통해 callable에 닿고,
+본문이 없는 정의의 tail은 본문이 무엇에 닿는지 알 수 없으므로 둘 다 마지막 줄에
+들어간다.
 
 정의가 `Cps`가 아니면 그 row에는 `op`를 가진 ability도 class 없는 tail도 없다.
 본문의 `handle`, `resume`, `Cps` 호출은
@@ -400,11 +405,10 @@ arm의 `scf.yield`)를 arm 안으로 복제해 이어 legalize하고, tail call�
 arm이 감싼 callable의 것을 그대로 쓴다.
 
 `func_table`이 `Direct`/`EvidenceDirect` entry마다 만드는 entry 함수는
-target이 같은 convention이고 platform `abi`를 유지하지 않으며 target 결과가 entry
-결과와 같으면 target을 `func.tail_call`로 부른다. 이 경우 callable value를 통한
-`become`은 entry frame을 남기지 않는다. Platform `abi` target의 entry 함수는 일반 호출
-뒤 반환하고, `Cps` target의 entry 함수는 delimiter의 답을 반환하므로 둘 다 entry
-frame 하나가 남는다.
+target이 platform `abi`를 유지하지 않고 target 결과가 entry 결과와 같으면
+target을 `func.tail_call`로 부른다. 이 경우 callable value를 통한 `become`은
+entry frame을 남기지 않는다. Platform `abi` target의 entry 함수는 일반 호출 뒤
+반환하므로 entry frame 하나가 남는다.
 
 `become`이 아닌 `Direct`/`EvidenceDirect` 호출은 꼬리 위치에 있어도 legalization이
 `func.call`과 `func.call_indirect`로 만든다. Target lowering은 최적화로 이 호출을
@@ -458,8 +462,6 @@ direct/indirect call, return의 대응 관계를 검증하고 physical symbol과
   `tribute_cps.func_ref`는 그 entry들을 담은 capture 없는 `closure.new`가 된다.
   Table을 공유하는 참조들은 같은 entry 함수를 쓴다. 대상 인스턴스가 있는 entry는 그
   대상을 부르고, 없는 entry는 같은 채우기 규칙에 따라 adapter나 trap entry다.
-  `Cps` 대상을 더 약한 convention으로 가리키는 entry는 그 대상을
-  [값 delimiter](#값-delimiter) 안에서 부르고 delimiter의 답을 반환한다.
   Entry 함수는 그 entry의 convention을 사용하고 필요한 hidden operand와 source
   argument를 대상 physical worker에 전달하므로 named function도 다른 closure와 같은
   entry ABI를 갖는다. 기존 closure lowering은 이 `closure.new`를

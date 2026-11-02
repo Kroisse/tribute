@@ -1969,54 +1969,18 @@ fn func_ref_in_a_nested_module_is_adapted_in_that_module() {
 }
 
 /// A classless tail lets a table enter a `Cps` target through a weaker
-/// convention, whose entry calls the target under a value delimiter.
+/// convention, whose value-delimiter adapter legalization does not build
+/// yet.
 #[test]
-fn a_table_entry_weaker_than_its_cps_target_runs_it_under_a_value_delimiter() {
+fn a_table_entry_weaker_than_its_cps_target_is_rejected_before_mutation() {
     let input = r#"core.module @test {
-  !closed = tribute_control.func_sig<(core.i32) -> core.i32>
+  !evidence = tribute_control.func_sig<(core.i32) -> core.i32>
   tribute_cps.func @cps(%value: core.i32) -> core.i32 convention(cps) {
     tribute_control.return %value
   }
-  tribute_cps.func_table @"cps$8" = {cps = @cps, direct = @cps, evidence_direct = @cps}
-  tribute_cps.func @direct(%value: core.i32) -> core.i32 convention(direct) {
-    %callee = tribute_cps.func_ref {func_ref = @"cps$8"} : !closed
-    %answer = tribute_cps.call_indirect %callee, %value {convention = "direct"} : core.i32
-    tribute_control.return %answer
-  }
-}"#;
-    let (mut ctx, module) = parse(input);
-    run_pre_cps(&mut ctx, module).unwrap();
-    verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
-    let i32_type = TypeDataBuilder::new("core.i32").intern(&mut ctx);
-    let mut entries: Vec<_> = module
-        .ops(&ctx)
-        .iter()
-        .filter_map(|&op| func::Func::from_op(&ctx, op).ok())
-        .map(|function| function.sym_name(&ctx).to_owned())
-        .filter(|name| name.starts_with("__tribute_func_ref_adapter_"))
-        .map(|name| delimiters(&ctx, module, &name))
-        .collect();
-    entries.sort();
-    // The Cps entry enters the target directly; the Direct entry's
-    // delimiter starts on the initial evidence, and the EvidenceDirect
-    // entry's on its own.
-    assert_eq!(
-        entries,
-        [vec![], vec![(false, i32_type)], vec![(true, i32_type)]]
-    );
-}
-
-/// Only a `Cps` target may be entered through a weaker convention.
-#[test]
-fn a_table_entry_weaker_than_a_target_that_is_not_cps_is_rejected_before_mutation() {
-    let input = r#"core.module @test {
-  !closed = tribute_control.func_sig<(core.i32) -> core.i32>
-  tribute_cps.func @evidence(%value: core.i32) -> core.i32 convention(evidence_direct) {
-    tribute_control.return %value
-  }
-  tribute_cps.func_table @"evidence$8" = {direct = @evidence}
-  tribute_cps.func @broken(%value: core.i32) -> core.i32 convention(direct) {
-    %callee = tribute_cps.func_ref {func_ref = @"evidence$8"} : !closed
+  tribute_cps.func_table @"cps$8" = {evidence_direct = @cps}
+  tribute_cps.func @broken(%value: core.i32) -> core.i32 convention(evidence_direct) {
+    %callee = tribute_cps.func_ref {func_ref = @"cps$8"} : !evidence
     tribute_control.return %value
   }
 }"#;
@@ -2026,7 +1990,7 @@ fn a_table_entry_weaker_than_a_target_that_is_not_cps_is_rejected_before_mutatio
     assert!(
         error
             .to_string()
-            .contains("function table entry `direct` is not the convention of its target"),
+            .contains("a function table entry weaker than its target is not supported"),
         "{error}"
     );
 }
