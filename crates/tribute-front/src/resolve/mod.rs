@@ -31,19 +31,53 @@ use trunk_ir::SymbolPath;
 
 use crate::ast::{
     AbilityId, CtorId, Decl, DeclTable, FIELD_LENS_FUNCTIONS, FuncDefId, Module, ModuleDecl,
-    ModuleItem, NodeId, ResolvedRef, SpanMap, TypeDefId, UnresolvedName, Visibility,
+    ModuleItem, NodeDiagnostic, NodeId, ResolvedRef, SpanMap, TypeDefId, UnresolvedName,
+    Visibility,
 };
 
+/// A module after name resolution, with the diagnostics resolution reported
+/// positioned at their nodes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModuleResolution<'db> {
+    pub module: DeclTable<ResolvedRef<'db>>,
+    pub diagnostics: Vec<NodeDiagnostic>,
+}
+
+impl<'db> ModuleResolution<'db> {
+    /// The resolved module, after reporting its diagnostics at the spans
+    /// `span_map` gives their nodes.
+    pub fn report(
+        self,
+        db: &dyn salsa::Database,
+        span_map: &SpanMap<'_>,
+    ) -> DeclTable<ResolvedRef<'db>> {
+        use salsa::Accumulator;
+        for diagnostic in &self.diagnostics {
+            diagnostic.resolve(span_map).accumulate(db);
+        }
+        self.module
+    }
+}
+
 /// Resolve names in a module with the environment [`build_env`] built for
-/// it.
+/// it, without reading any source position.
+pub fn resolve_module_with_env<'db>(
+    db: &'db dyn salsa::Database,
+    module: &Module<UnresolvedName>,
+    scope: &Scope<'db>,
+) -> ModuleResolution<'db> {
+    Resolver::new(db, scope.as_ref()).resolve_module(module)
+}
+
+/// Resolve names in a module with the environment [`build_env`] built for
+/// it, reporting diagnostics at the spans `span_map` gives.
 pub fn resolve_with_env<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<UnresolvedName>,
     scope: &Scope<'db>,
     span_map: SpanMap<'db>,
 ) -> DeclTable<ResolvedRef<'db>> {
-    let mut resolver = Resolver::new(db, scope.as_ref(), span_map);
-    resolver.resolve_module(module)
+    resolve_module_with_env(db, module, scope).report(db, &span_map)
 }
 
 /// Resolve `use` imports that reference module-qualified paths.
@@ -392,9 +426,10 @@ pub fn resolve_library_with_env<'db>(
     dependencies: &Dependencies<'db>,
     span_map: SpanMap<'db>,
 ) -> DeclTable<ResolvedRef<'db>> {
-    Resolver::new(db, ScopeRef::new(env, dependencies), span_map)
+    Resolver::new(db, ScopeRef::new(env, dependencies))
         .with_package(env.package().clone())
         .resolve_module(module)
+        .report(db, &span_map)
 }
 
 /// Expose compiler-owned definitions through the ordinary resolver namespace

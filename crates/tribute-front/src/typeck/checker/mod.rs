@@ -27,7 +27,7 @@ mod become_check;
 mod collect;
 mod diagnostics;
 
-pub use diagnostics::NodeDiagnostic;
+pub use crate::ast::NodeDiagnostic;
 mod exhaustiveness;
 mod expr;
 mod finalize;
@@ -178,6 +178,12 @@ pub struct TypeChecker<'db> {
     function_decls: Vec<(NodeId, FuncDefId<'db>)>,
     /// Diagnostics reported so far, positioned at nodes.
     diagnostics: std::cell::RefCell<Vec<NodeDiagnostic>>,
+}
+
+impl crate::ast::DiagnosticSink for TypeChecker<'_> {
+    fn node_diagnostics(&self) -> &std::cell::RefCell<Vec<NodeDiagnostic>> {
+        &self.diagnostics
+    }
 }
 
 impl<'db> TypeChecker<'db> {

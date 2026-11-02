@@ -14,7 +14,7 @@ use salsa::Accumulator;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::{Symbol, SymbolPath};
 
-use crate::ast::{Decl, DeclTable, FuncDecl, ResolvedRef, SpanMap};
+use crate::ast::{Decl, DeclTable, FuncDecl, NodeDiagnostic, ResolvedRef, SpanMap};
 use crate::resolve::{self, Dependencies, NameDisplay, PackageEnv, PackageName};
 use crate::source_file::SourceCst;
 use crate::source_tree::{self, SourceTree};
@@ -222,11 +222,13 @@ pub fn root_names(db: &dyn salsa::Database, table: DependencyTable) -> NameDispl
 }
 
 /// A source's module after name resolution, with one [`ResolvedFunction`]
-/// for each module-level function, in declaration order.
+/// for each module-level function, in declaration order, and the
+/// diagnostics resolution reported, positioned at their nodes.
 #[derive(Clone, PartialEq, Eq, salsa::SalsaValue)]
 pub struct ResolvedModule<'db> {
     pub module: DeclTable<ResolvedRef<'db>>,
     pub functions: Vec<ResolvedFunction<'db>>,
+    pub diagnostics: Vec<NodeDiagnostic>,
 }
 
 /// One module-level function after name resolution, identified by its
@@ -243,7 +245,8 @@ pub struct ResolvedFunction<'db> {
 }
 
 /// Parse and resolve `source` against the packages `table` names. `None` if
-/// `source` does not parse.
+/// `source` does not parse. It reads no source position, so moving code
+/// reuses it; [`analyze`] reports its diagnostics.
 #[salsa::tracked(returns(as_ref))]
 pub fn resolved_module<'db>(
     db: &'db dyn salsa::Database,
@@ -253,7 +256,10 @@ pub fn resolved_module<'db>(
     let tree = source_tree::source_tree_of(db, source)?;
     let module = tree.module(db);
     let scope = resolve::build_env(db, module, dependencies(db, table));
-    let module = resolve::resolve_with_env(db, module, &scope, tree.span_map(db));
+    let resolve::ModuleResolution {
+        module,
+        diagnostics,
+    } = resolve::resolve_module_with_env(db, module, &scope);
     let functions = module
         .entries
         .iter()
@@ -267,7 +273,11 @@ pub fn resolved_module<'db>(
             _ => None,
         })
         .collect();
-    Some(ResolvedModule { module, functions })
+    Some(ResolvedModule {
+        module,
+        functions,
+        diagnostics,
+    })
 }
 
 /// The declarations of `source`'s resolved module, collected for checking
@@ -319,12 +329,16 @@ pub fn analyze<'db>(
 ) -> Option<TypeCheckOutput<'db>> {
     let tree = source_tree::source_tree_of(db, source)?;
     let resolved = resolved_module(db, source, table)?;
+    let span_map = tree.span_map(db);
+    for diagnostic in &resolved.diagnostics {
+        diagnostic.resolve(&span_map).accumulate(db);
+    }
     let declarations = module_declarations(db, source, table)?;
     let functions = resolved
         .functions
         .iter()
         .map(|&function| check_function(db, function, source, table));
-    let checker = TypeChecker::new(db, tree.span_map(db), root_names(db, table));
+    let checker = TypeChecker::new(db, span_map, root_names(db, table));
     Some(TypeCheckOutput::from_check(
         db,
         checker.finish_module(declarations, &resolved.module, functions),
