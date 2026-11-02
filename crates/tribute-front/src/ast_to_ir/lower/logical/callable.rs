@@ -135,6 +135,34 @@ pub(super) fn lower_function_ref<'db>(
     result(builder.ir, op)
 }
 
+/// Reference the function the named-function alias `local` stands for,
+/// with the rows its use `node` passes (`new-plans/ir.md`, 지역 람다의
+/// 양화와 인스턴스화), or `None` if `local` is no such alias.
+pub(super) fn lower_alias_reference<'db>(
+    builder: &mut IrBuilder<'_, 'db>,
+    node: crate::ast::NodeId,
+    local: crate::ast::LocalId,
+    declarations: &Declarations<'db>,
+    expected_ty: Option<TypeRef>,
+) -> Option<ValueRef> {
+    let (function, rows) =
+        declarations
+            .aliases
+            .reference(builder.ctx.db, local, node, declarations)?;
+    let rows = rows
+        .into_iter()
+        .map(|row| builder.ctx.ability_row(row))
+        .collect();
+    Some(lower_function_ref(
+        builder,
+        builder.location(node),
+        function.path(builder.ctx.db).clone(),
+        RowArguments::Rows(rows),
+        declarations,
+        expected_ty,
+    ))
+}
+
 /// Where a reference finds the row arguments it passes to its callee.
 #[derive(Clone)]
 pub(super) enum RowArguments {
@@ -189,24 +217,10 @@ pub(super) fn lower_expr_for_callable_parameter<'db>(
     match &*expr.kind {
         ExprKind::Var(reference) => {
             if let ResolvedRef::Local { id, .. } = reference.resolved {
-                if local_callables::lookup(builder.ctx, expr.id, declarations).is_some() {
-                    return lower_local_reference(builder, expr.id, id, declarations);
-                }
-                if let Some(value) = builder.ctx.lookup(id)
-                    && let trunk_ir::refs::ValueDef::OpResult(producer, _) =
-                        builder.ir.value_def(value)
-                    && let Some(name) = builder.ctx.function_ref_path(producer).cloned()
+                if let Some(value) =
+                    lower_alias_reference(builder, expr.id, id, declarations, Some(expected_ty))
                 {
-                    let rows = tribute_control::row_args(builder.ir, producer)
-                        .expect("a lowered func_ref has well-formed row arguments");
-                    return Some(lower_function_ref(
-                        builder,
-                        builder.location(expr.id),
-                        name,
-                        RowArguments::Rows(rows),
-                        declarations,
-                        Some(expected_ty),
-                    ));
+                    return Some(value);
                 }
                 return lower_expr(builder, expr, declarations);
             }
@@ -366,33 +380,6 @@ pub(super) fn row_effects<'db>(
     found
 }
 
-/// Plan the local callables of every function. A plan gives a pure use of a
-/// lambda its own instance where it can; a use it leaves alone reads the
-/// lambda as it was written.
-pub(super) fn plan_local_callables<'db>(
-    ctx: &mut IrLoweringCtx<'db>,
-    ir: &mut IrContext,
-    entries: &[DeclEntry<TypedRef<'db>>],
-    declarations: &mut Declarations<'db>,
-) {
-    for entry in entries {
-        let prefix = &entry.module;
-        let Decl::Function(function) = &entry.decl else {
-            continue;
-        };
-        let name = prefix.child(function.name.clone());
-        if ctx.lookup_function_type(&name).is_none() {
-            continue;
-        }
-        let outer = ctx.enter_definition(&name);
-        let plan = local_callables::Plan::collect(ctx, ir, &function.body, declarations);
-        ctx.leave_definition(outer);
-        declarations
-            .function_local_callables
-            .insert(function.id, plan);
-    }
-}
-
 pub(super) fn lower_function<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     ir: &mut IrContext,
@@ -434,12 +421,7 @@ pub(super) fn lower_function<'db>(
             }
         }
         declarations.local_uses = local_instantiations(scope.db, &function, declarations);
-        declarations.local_callables = declarations
-            .function_local_callables
-            .remove(&function.id)
-            .unwrap_or_else(|| {
-                local_callables::Plan::collect(&mut scope, ir, &function.body, declarations)
-            });
+        declarations.aliases = local_callables::Aliases::collect(&function.body);
         let value = lower_expr(
             &mut IrBuilder::new(&mut scope, ir, entry),
             function.body,
