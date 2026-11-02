@@ -1260,8 +1260,7 @@ fn document_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<trib
         .flat_map(|unit| unit.diagnostics(db))
         .collect();
     diagnostics.sort_by(tribute_core::diagnostic::compare_diagnostics);
-    diagnostics.dedup();
-    diagnostics
+    diagnostics.into_iter().unique().collect()
 }
 
 /// The definition index to rename the symbol at `offset` of `source` with,

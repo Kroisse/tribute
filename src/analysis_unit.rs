@@ -1,6 +1,7 @@
 //! The packages the language server analyzes a document in
 //! (`new-plans/lsp.md` § 문서가 속한 패키지).
 
+use itertools::Itertools;
 use tribute_core::diagnostic::Diagnostic;
 use tribute_front::analysis::{self, DependencyTable, Package};
 use tribute_front::ast::SpanMap;
@@ -116,8 +117,7 @@ impl AnalysisUnit {
                     .cloned()
                     .collect();
                 diagnostics.sort_by(tribute_core::diagnostic::compare_diagnostics);
-                diagnostics.dedup();
-                diagnostics
+                diagnostics.into_iter().unique().collect()
             }
         }
     }
