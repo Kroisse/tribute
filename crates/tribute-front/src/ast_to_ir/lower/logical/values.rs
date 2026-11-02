@@ -18,11 +18,10 @@ use crate::ast_to_ir::context::IrLoweringCtx;
 use crate::ast_to_ir::lower::IrBuilder;
 
 use super::callable::{
-    CallPosition, RowArguments, attach_evidence_plan, ends_with_tail_call, lower_become,
-    lower_call, lower_function_ref, lower_handle, lower_lambda,
+    CallPosition, RowArguments, attach_evidence_plan, ends_with_tail_call, lower_alias_reference,
+    lower_become, lower_call, lower_function_ref, lower_handle, lower_lambda,
 };
 use super::declarations::Declarations;
-use super::local_callables;
 use super::nominal::expr_type_for_id;
 
 pub(super) fn lower_expr<'db>(
@@ -813,8 +812,10 @@ pub(super) fn lower_local_reference<'db>(
     local: crate::ast::LocalId,
     declarations: &Declarations<'db>,
 ) -> Option<ValueRef> {
-    let value = local_callables::lookup(builder.ctx, node, declarations)
-        .or_else(|| builder.ctx.lookup(local))?;
+    if let Some(value) = lower_alias_reference(builder, node, local, declarations, None) {
+        return Some(value);
+    }
+    let value = builder.ctx.lookup(local)?;
     let trunk_ir::refs::ValueDef::OpResult(lambda, _) = builder.ir.value_def(value) else {
         return Some(value);
     };
@@ -855,17 +856,20 @@ pub(super) fn lower_statement<'db>(
 ) {
     match statement {
         Stmt::Let { pattern, value, .. } => {
-            let lowered = local_callables::materialize(builder, &pattern, &value, declarations)
-                .or_else(|| {
-                    let lambda = matches!(&*value.kind, ExprKind::Lambda { .. });
-                    let lowered = lower_expr(builder, value, declarations)?;
-                    if lambda {
-                        quantify_local_rows(builder, pattern.id, lowered, declarations);
-                    }
-                    Some(lowered)
-                });
-            if let Some(value) = lowered {
-                bind_pattern(builder, &pattern, value);
+            if let PatternKind::Bind {
+                local_id: Some(local),
+                ..
+            } = &*pattern.kind
+                && declarations.aliases.contains(*local)
+            {
+                return;
+            }
+            let lambda = matches!(&*value.kind, ExprKind::Lambda { .. });
+            if let Some(lowered) = lower_expr(builder, value, declarations) {
+                if lambda {
+                    quantify_local_rows(builder, pattern.id, lowered, declarations);
+                }
+                bind_pattern(builder, &pattern, lowered);
             }
         }
         Stmt::Expr { expr, .. } => {

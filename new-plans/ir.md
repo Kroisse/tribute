@@ -1102,6 +1102,13 @@ type에는 그 `body` binder가 그대로 남는다. 그래서 별칭이나 일�
 간접 이전은 그 자리를 `Cps`로 읽고, 별칭 자리의 인스턴스화도 `Cps`를 고르므로 값은
 그 entry를 가진다.
 
+이름 붙은 함수를 그대로 묶은 binding, 그리고 그런 binding을 다시 묶은 별칭은
+예외다. 함수 참조는 할당도 효과도 없으므로, 그 binding의 사용은 묶인 값을 읽지
+않고 함수를 다시 참조한다. 그 `tribute_control.func_ref`는 타입 검사가 그 사용에
+고른 인스턴스의 row를 넘긴다. 별칭마다 scheme을 인스턴스화한 row를 사용 쪽에서부터
+거슬러 대입해 함수 참조 자리의 row 인자를 얻는다. 그래서 순수한 사용은 `body`
+binder 대신 그 사용의 row를 보고, 닫힌 row의 람다를 그대로 넘길 수 있다.
+
 #### Row 인자와 치환
 
 Row-polymorphic 정의를 참조하는 `call`, `tail_call`, `func_ref`는 `row_args`로 callee의
