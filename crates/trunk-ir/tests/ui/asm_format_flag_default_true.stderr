@@ -1,4 +1,4 @@
-error: a flag stands for `true` and its absence for `false`; it takes no `#[default(true)]`
+error: a flag stands for `true` and its absence for `false`; its only default is `#[default(false)]`
  --> tests/ui/asm_format_flag_default_true.rs:4:39
   |
 4 |         #[asm_format("probe" ("quick" quick^)?)]

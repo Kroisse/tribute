@@ -538,11 +538,11 @@ impl<'a> Format<'a> {
                         if attr
                             .default
                             .as_ref()
-                            .is_some_and(|value| value.to_string() == "true")
+                            .is_some_and(|value| value.to_string() != "false")
                         {
                             return err(
                                 *anchor_span,
-                                "a flag stands for `true` and its absence for `false`; it takes no `#[default(true)]`",
+                                "a flag stands for `true` and its absence for `false`; its only default is `#[default(false)]`",
                             );
                         }
                         Anchor::Flag(i)
