@@ -109,6 +109,7 @@ mod tribute_control {
     /// - **Symbol:** a `SymbolDefinition`. A definition with a body and a
     ///   foreign `abi` is not discardable; any other is removed once nothing
     ///   live uses it (`new-plans/ir.md`, "Core Invariants").
+    /// - **Signature:** a `SourceCallable` whose signature is `type`.
     /// - **Flags:** `SourceFunc`, shared with `tribute_cps.func`.
     /// - **Location:** the whole span of the source function or extern
     ///   declaration.
@@ -118,6 +119,7 @@ mod tribute_control {
     #[implements(
         CallableArgumentOrigin,
         LocalValidation,
+        SourceCallable,
         trunk_ir::op_interface::SymbolDefinition
     )]
     fn func<S: FuncSig>(
@@ -159,11 +161,17 @@ mod tribute_control {
     ///   "지역 람다의 양화와 인스턴스화").
     /// - **Ownership and value flow:** the captures are ordinary SSA uses,
     ///   and there is no other hidden operand.
+    /// - **Signature:** a `SourceCallable` whose signature is its result type.
     /// - **Flags:** `SourceLambda`, shared with `tribute_cps.lambda`.
     /// - **Location:** the whole span of the source lambda.
     #[asm_format]
     #[flags(Pure, SourceLambda)]
-    #[implements(CallableResultOrigin, CallableArgumentOrigin, LocalValidation)]
+    #[implements(
+        CallableResultOrigin,
+        CallableArgumentOrigin,
+        LocalValidation,
+        SourceCallable
+    )]
     fn lambda(quantified_rows: Option<Attr<[u32]>>, captures: Variadic<_>) -> Value<impl FuncSig> {
         #[region(body)]
         {}
@@ -1359,17 +1367,6 @@ impl FuncSigBuilder {
     }
 }
 
-/// The source signature of a function or lambda in either dialect.
-fn callable_signature(ctx: &IrContext, op: OpRef) -> Option<TypeRef> {
-    if SourceFunc::is_set(ctx, op) {
-        ctx.op_attrs(op).get_type("type")
-    } else if SourceLambda::is_set(ctx, op) {
-        ctx.op_result_types(op).first().copied()
-    } else {
-        None
-    }
-}
-
 /// Read the exact input and answer types carried by a resume token.
 pub fn resume_token_parts(ctx: &IrContext, ty: TypeRef) -> Option<(TypeRef, TypeRef)> {
     if !ResumeToken::matches(ctx, ty) {
@@ -1433,6 +1430,31 @@ pub struct DeclarationUse<'a> {
 pub trait LocalValidation: DialectOp {
     /// Report each violation of these checks.
     fn validate(&self, ctx: &IrContext, errors: &mut Vec<ValidationError>);
+}
+
+/// A source function or lambda in either dialect: a callable whose body
+/// ends in `tribute_control.return`, with the source signature it declares.
+///
+/// Whole-IR validation queries it on operations whose schema may not hold,
+/// so implementations read the signature fallibly and leave checking that
+/// it is a `tribute_control.func_sig` to the caller.
+#[trunk_ir::op_interface]
+pub trait SourceCallable: DialectOp {
+    /// The type the callable declares as its signature; `None` when it
+    /// declares none.
+    fn callable_signature(&self, ctx: &IrContext) -> Option<TypeRef>;
+}
+
+impl SourceCallable for Func {
+    fn callable_signature(&self, ctx: &IrContext) -> Option<TypeRef> {
+        ctx.op_attrs(self.op_ref()).get_type("type")
+    }
+}
+
+impl SourceCallable for Lambda {
+    fn callable_signature(&self, ctx: &IrContext) -> Option<TypeRef> {
+        ctx.op_result_types(self.op_ref()).first().copied()
+    }
 }
 
 /// As `func.func`: a definition with a body and a foreign `abi` is
@@ -2991,13 +3013,8 @@ fn validate_return(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>
         );
         return;
     };
-    let callable_ty = if SourceFunc::is_set(ctx, owner) {
-        ctx.op_attrs(owner).get_type("type")
-    } else if SourceLambda::is_set(ctx, owner) {
-        ctx.op_result_types(owner).first().copied()
-    } else {
-        None
-    };
+    let callable_ty =
+        DynSourceCallable::get(ctx, owner).and_then(|callable| callable.callable_signature(ctx));
     let Some((result, _)) = callable_ty.and_then(|ty| func_sig_parts(ctx, ty)) else {
         push_op_error(
             ctx,
@@ -3032,8 +3049,9 @@ fn tail_call_owner(ctx: &IrContext, op: OpRef) -> Result<(OpRef, TypeRef), &'sta
         let Some(owner) = parent_op(ctx, exit) else {
             return Err("must be inside a tribute_control.func or lambda body");
         };
-        if SourceFunc::is_set(ctx, owner) || SourceLambda::is_set(ctx, owner) {
-            return callable_signature(ctx, owner)
+        if let Some(callable) = DynSourceCallable::get(ctx, owner) {
+            return callable
+                .callable_signature(ctx)
                 .map(|ty| (owner, ty))
                 .ok_or("must be inside a tribute_control.func or lambda body");
         }
@@ -3393,7 +3411,7 @@ fn validate_local_operation(ctx: &IrContext, op: OpRef, errors: &mut Vec<Validat
         ctx,
         op,
         &def.schema,
-        SourceFunc::is_set(ctx, op) || SourceLambda::is_set(ctx, op),
+        DynSourceCallable::is_implemented(ctx, op),
         errors,
     );
     if let Some(validation) = DynLocalValidation::get(ctx, op) {
@@ -4219,11 +4237,8 @@ fn validate_return_contracts(ctx: &IrContext, body: RegionRef, errors: &mut Vec<
                 );
                 return;
             };
-            if SourceFunc::is_set(ctx, current) {
-                break ctx.op_attrs(current).get_type("type");
-            }
-            if SourceLambda::is_set(ctx, current) {
-                break ctx.op_result_types(current).first().copied();
+            if let Some(callable) = DynSourceCallable::get(ctx, current) {
+                break callable.callable_signature(ctx);
             }
             owner = parent_op(ctx, current);
         };
@@ -4885,17 +4900,17 @@ fn enclosing_row_tail(ctx: &IrContext, op: OpRef) -> Option<(Option<u32>, OpRef)
     let mut tail = None;
     loop {
         let owner = parent_op(ctx, current)?;
+        let signature_tail = || {
+            let ty = DynSourceCallable::get(ctx, owner)?.callable_signature(ctx)?;
+            Some(FuncSig::from_type_ref(ctx, ty)?.row(ctx).tail)
+        };
         if SourceLambda::is_set(ctx, owner) && tail.is_none() {
-            let ty = ctx.op_result_types(owner).first().copied()?;
-            tail = Some(FuncSig::from_type_ref(ctx, ty)?.row(ctx).tail);
+            tail = Some(signature_tail()?);
         }
         if SourceFunc::is_set(ctx, owner) {
             let tail = match tail {
                 Some(tail) => tail,
-                None => {
-                    let ty = ctx.op_attrs(owner).get_type("type")?;
-                    FuncSig::from_type_ref(ctx, ty)?.row(ctx).tail
-                }
+                None => signature_tail()?,
             };
             return Some((tail, owner));
         }

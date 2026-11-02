@@ -22,7 +22,8 @@ use crate::calling_convention::CallingConvention;
 use crate::dialect::tribute_control::{
     self, CallableArgumentOrigin, CallableQuery, CallableResultOrigin, EvidencePlanSite,
     EvidenceStep, FuncSig, LocalValidation, Row, RowBinder, RowUnion, SourceCallIndirect,
-    SourceFunc, SourceFuncRef, SourceLambda, SourceTailCallIndirect, ValidationError,
+    SourceCallable, SourceFunc, SourceFuncRef, SourceLambda, SourceTailCallIndirect,
+    ValidationError,
 };
 
 /// The attribute that holds a `tribute_cps` operation's convention.
@@ -55,6 +56,7 @@ mod tribute_cps {
     ///   Otherwise as `tribute_control.func`.
     /// - **Ownership and value flow:** as `tribute_control.func`.
     /// - **Symbol:** as `tribute_control.func`.
+    /// - **Signature:** a `SourceCallable` whose signature is `type`.
     /// - **Flags:** `SourceFunc`, shared with `tribute_control.func`.
     /// - **Location:** the source function's span.
     #[verify]
@@ -63,6 +65,7 @@ mod tribute_cps {
     #[implements(
         CallableArgumentOrigin,
         LocalValidation,
+        SourceCallable,
         trunk_ir::op_interface::SymbolDefinition
     )]
     fn func<S: FuncSig>(
@@ -110,12 +113,18 @@ mod tribute_cps {
     ///   Otherwise as `tribute_control.lambda`, for each body.
     /// - **Ownership and value flow:** as `tribute_control.lambda`; the
     ///   captures are shared by every body.
+    /// - **Signature:** a `SourceCallable` whose signature is its result type.
     /// - **Flags:** `SourceLambda`, shared with `tribute_control.lambda`.
     /// - **Location:** the source lambda's span.
     #[verify]
     #[asm_format]
     #[flags(Pure, SourceLambda)]
-    #[implements(CallableResultOrigin, CallableArgumentOrigin, LocalValidation)]
+    #[implements(
+        CallableResultOrigin,
+        CallableArgumentOrigin,
+        LocalValidation,
+        SourceCallable
+    )]
     fn lambda(
         conventions: Attr<[CallingConvention]>,
         quantified_rows: Option<Attr<[u32]>>,
@@ -567,6 +576,18 @@ impl trunk_ir::op_interface::SymbolDefinition for FuncTable {
     }
 }
 
+impl SourceCallable for Func {
+    fn callable_signature(&self, ctx: &IrContext) -> Option<trunk_ir::refs::TypeRef> {
+        ctx.op_attrs(self.op_ref()).get_type("type")
+    }
+}
+
+impl SourceCallable for Lambda {
+    fn callable_signature(&self, ctx: &IrContext) -> Option<trunk_ir::refs::TypeRef> {
+        ctx.op_result_types(self.op_ref()).first().copied()
+    }
+}
+
 impl LocalValidation for Func {
     fn validate(&self, ctx: &IrContext, errors: &mut Vec<ValidationError>) {
         tribute_control::validate_func(ctx, self.op_ref(), errors);
@@ -594,7 +615,7 @@ impl CallableArgumentOrigin for Func {
         argument: ValueRef,
         _query: &mut CallableQuery<'q>,
     ) -> bool {
-        let signature = ctx.op_attrs(self.op_ref()).get_type("type");
+        let signature = self.callable_signature(ctx);
         tribute_control::is_signature_parameter(
             ctx,
             self.op_ref(),
@@ -626,7 +647,7 @@ impl CallableArgumentOrigin for Lambda {
         argument: ValueRef,
         _query: &mut CallableQuery<'q>,
     ) -> bool {
-        let signature = ctx.op_result_types(self.op_ref()).first().copied();
+        let signature = self.callable_signature(ctx);
         tribute_control::is_signature_parameter(
             ctx,
             self.op_ref(),

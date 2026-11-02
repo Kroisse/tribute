@@ -15,7 +15,7 @@ use trunk_ir::{IrContext, SymbolPath};
 use super::{
     COMPILER_INTRINSIC_ATTR, Call, CallIndirect, CallingConvention, CompilerIntrinsicDeclaration,
     Func, FuncRef, FuncSig, Handle, Handler, Instantiate, Lambda, OperationDeclaration,
-    OperationDeclarationUse, Perform, Resume, SourceCallIndirect, SourceFunc,
+    OperationDeclarationUse, Perform, Resume, SourceCallIndirect, SourceCallable, SourceFunc,
     SourceTailCallIndirect, ValidationError, Yield, compiler_intrinsic_map, contains_adt_typeref,
     func_sig_parts, nominal_identity, parent_region, push_op_error, push_type_error,
     walk_region_ops,
@@ -303,7 +303,7 @@ impl CallableArgumentOrigin for Func {
         argument: ValueRef,
         _query: &mut CallableQuery<'q>,
     ) -> bool {
-        let signature = ctx.op_attrs(self.op_ref()).get_type("type");
+        let signature = self.callable_signature(ctx);
         is_signature_parameter(ctx, self.op_ref(), signature, region, index, argument)
     }
 }
@@ -328,7 +328,7 @@ impl CallableArgumentOrigin for Lambda {
         argument: ValueRef,
         _query: &mut CallableQuery<'q>,
     ) -> bool {
-        let signature = ctx.op_result_types(self.op_ref()).first().copied();
+        let signature = self.callable_signature(ctx);
         is_signature_parameter(ctx, self.op_ref(), signature, region, index, argument)
     }
 }
