@@ -90,10 +90,10 @@
 //! collected at the end of compilation.
 
 use crate::SourceCst;
+use crate::frontend::frontend_spans;
 use salsa::Accumulator;
 use std::ops::RangeInclusive;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
-use tribute_front::ast::NodeDiagnostic;
 use tribute_front::resolve::NameDisplay;
 use trunk_ir::Span;
 use trunk_ir::analysis::AnalysisCache;
@@ -169,8 +169,7 @@ pub use tribute_passes::native::optimization::{
 
 pub use crate::frontend::{
     FrontendCompilation, compile_frontend, compile_frontend_for_shared_route, frontend_diagnostics,
-    locate_source_diagnostics, parse_and_lower_ast, prepare_frontend_diagnostics,
-    prepare_frontend_for_lowering,
+    parse_and_lower_ast, prepare_frontend_diagnostics, prepare_frontend_for_lowering,
 };
 use trunk_ir_cranelift_backend::{
     CompilationResult as NativeCompilationResult, emit_module_to_native,
@@ -878,13 +877,11 @@ pub fn compile_to_wasm_binary(
 /// Diagnostics accumulated by [`compile_to_wasm_binary`], including the
 /// warnings of a successful compilation.
 pub fn wasm_binary_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<Diagnostic> {
-    compile_to_wasm_binary_tracked(db, source);
-    locate_source_diagnostics(
-        db,
-        source,
-        compile_to_wasm_binary_tracked::accumulated::<Diagnostic>(db, source),
-        compile_to_wasm_binary_tracked::accumulated::<NodeDiagnostic>(db, source),
+    tribute_front::located_diagnostics!(
+        compile_to_wasm_binary_tracked(db, source),
+        frontend_spans(db, source)
     )
+    .collect()
 }
 
 /// The diagnostics [`dump_ir`] reports.
@@ -893,13 +890,8 @@ pub fn dump_ir_diagnostics(
     source: SourceCst,
     native: bool,
 ) -> Vec<Diagnostic> {
-    dump_ir(db, source, native).ok();
-    locate_source_diagnostics(
-        db,
-        source,
-        dump_ir::accumulated::<Diagnostic>(db, source, native),
-        dump_ir::accumulated::<NodeDiagnostic>(db, source, native),
-    )
+    tribute_front::located_diagnostics!(dump_ir(db, source, native), frontend_spans(db, source))
+        .collect()
 }
 
 /// The diagnostics [`compile_to_native_binary`] reports, including the
@@ -909,13 +901,11 @@ pub fn native_binary_diagnostics(
     source: SourceCst,
     config: CompilationConfig,
 ) -> Vec<Diagnostic> {
-    compile_to_native_binary(db, source, config);
-    locate_source_diagnostics(
-        db,
-        source,
-        compile_to_native_binary::accumulated::<Diagnostic>(db, source, config),
-        compile_to_native_binary::accumulated::<NodeDiagnostic>(db, source, config),
+    tribute_front::located_diagnostics!(
+        compile_to_native_binary(db, source, config),
+        frontend_spans(db, source)
     )
+    .collect()
 }
 
 /// Compile to native object bytes.
@@ -1051,12 +1041,11 @@ pub fn compile_with_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> 
     let produced_module = compile_ast_tracked(db, source);
 
     // Collect all accumulated diagnostics from the compilation
-    let mut diagnostics = locate_source_diagnostics(
-        db,
-        source,
-        compile_ast_tracked::accumulated::<Diagnostic>(db, source),
-        compile_ast_tracked::accumulated::<NodeDiagnostic>(db, source),
-    );
+    let mut diagnostics: Vec<_> = tribute_front::located_diagnostics!(
+        compile_ast_tracked(db, source),
+        frontend_spans(db, source)
+    )
+    .collect();
     diagnostics.sort_by(tribute_core::diagnostic::compare_diagnostics);
 
     CompilationResult {

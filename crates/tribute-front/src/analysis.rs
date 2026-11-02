@@ -14,9 +14,7 @@ use salsa::Accumulator;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::{Symbol, SymbolPath};
 
-use crate::ast::{
-    Decl, DeclTable, FuncDecl, NodeDiagnostic, ResolvedRef, SpanMap, SpanMaps, locate_diagnostics,
-};
+use crate::ast::{Decl, DeclTable, FuncDecl, ResolvedRef, SpanMap, SpanMaps};
 use crate::resolve::{self, Dependencies, NameDisplay, PackageEnv, PackageName};
 use crate::source_file::SourceCst;
 use crate::source_tree::{self, SourceTree};
@@ -339,12 +337,7 @@ pub fn diagnostics(
     source: SourceCst,
     table: DependencyTable,
 ) -> Vec<Diagnostic> {
-    analyze(db, source, table);
-    locate_diagnostics(
-        analyze::accumulated::<Diagnostic>(db, source, table),
-        analyze::accumulated::<NodeDiagnostic>(db, source, table),
-        &spans(db, source, table),
-    )
+    crate::located_diagnostics!(analyze(db, source, table), spans(db, source, table)).collect()
 }
 
 /// The span maps of `source`'s package, with its file modules, and of the

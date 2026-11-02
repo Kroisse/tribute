@@ -859,11 +859,11 @@ mod tests {
         let db = salsa::DatabaseImpl::new();
         let input = PropTestInput::new(&db, module);
         let rendered = run_resolve_and_typecheck(&db, input).clone();
-        let diagnostics = crate::ast::locate_diagnostics(
-            run_resolve_and_typecheck::accumulated::<Diagnostic>(&db, input),
-            run_resolve_and_typecheck::accumulated::<crate::ast::NodeDiagnostic>(&db, input),
-            &crate::ast::SpanMaps::default(),
-        );
+        let diagnostics = crate::located_diagnostics!(
+            run_resolve_and_typecheck(&db, input),
+            crate::ast::SpanMaps::default(),
+        )
+        .collect();
         (rendered, diagnostics)
     }
 

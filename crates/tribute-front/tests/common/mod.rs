@@ -5,10 +5,7 @@ use itertools::Itertools;
 use tribute_core::diagnostic::Diagnostic;
 use tribute_front::SourceCst;
 use tribute_front::analysis;
-use tribute_front::ast::{
-    Decl, DeclTable, Expr, ExprKind, NodeDiagnostic, ResolvedRef, Stmt, TypedRef,
-    locate_diagnostics,
-};
+use tribute_front::ast::{Decl, DeclTable, Expr, ExprKind, ResolvedRef, Stmt, TypedRef};
 use trunk_ir::context::IrContext;
 use trunk_ir::printer::print_module;
 
@@ -253,12 +250,10 @@ pub fn run_ast_pipeline_with_ir(db: &dyn salsa::Database, source: SourceCst) -> 
 
     let ir = run_ast_pipeline_inner(db, source);
     // Production lowers only a module without errors.
-    let errors: Vec<_> = locate_diagnostics(
-        run_ast_pipeline_inner::accumulated::<Diagnostic>(db, source),
-        run_ast_pipeline_inner::accumulated::<NodeDiagnostic>(db, source),
-        &analysis::spans(db, source, *environment(db)),
+    let errors: Vec<_> = tribute_front::located_diagnostics!(
+        run_ast_pipeline_inner(db, source),
+        analysis::spans(db, source, *environment(db)),
     )
-    .into_iter()
     .filter(|d| d.inner.severity == tribute_core::diagnostic::DiagnosticSeverity::Error)
     .collect();
     assert!(

@@ -11,7 +11,7 @@ use crate::SourceCst;
 use crate::prelude::root_environment;
 use salsa::Accumulator;
 use tribute_core::diagnostic::{Diagnostic, DiagnosticSeverity};
-use tribute_front::ast::{NodeDiagnostic, SpanMaps, locate_diagnostics};
+use tribute_front::ast::SpanMaps;
 use tribute_front::ast_to_ir;
 use tribute_front::monomorphize::{self, SpecializationInput, SpecializationOutput};
 use tribute_front::resolve::NameDisplay;
@@ -60,17 +60,6 @@ pub fn frontend_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<
     diagnostics
 }
 
-/// A query's `diagnostics` and `nodes` diagnostics for `source`, with the
-/// nodes located in `source`'s package and the packages it depends on.
-pub fn locate_source_diagnostics<'a>(
-    db: &dyn salsa::Database,
-    source: SourceCst,
-    diagnostics: Vec<&'a Diagnostic>,
-    nodes: Vec<&'a NodeDiagnostic>,
-) -> Vec<Diagnostic> {
-    locate_diagnostics(diagnostics, nodes, &frontend_spans(db, source))
-}
-
 /// Check the library package `package` on its own, through
 /// specialization, as a build that depends on it would. Returns whether it
 /// checked; read its diagnostics with [`library_diagnostics`].
@@ -85,12 +74,11 @@ pub fn library_diagnostics(
     db: &dyn salsa::Database,
     package: analysis::Package,
 ) -> Vec<Diagnostic> {
-    check_library(db, package);
-    locate_diagnostics(
-        check_library::accumulated::<Diagnostic>(db, package),
-        check_library::accumulated::<NodeDiagnostic>(db, package),
-        &analysis::library_spans(db, package),
+    tribute_front::located_diagnostics!(
+        check_library(db, package),
+        analysis::library_spans(db, package),
     )
+    .collect()
 }
 
 /// Merge prelude decls into user's typed AST and lower to arena IR.
@@ -153,13 +141,11 @@ pub fn prepare_frontend_diagnostics<'db>(
     typed: ast_typeck::TypeCheckOutput<'db>,
     source: SourceCst,
 ) -> Vec<Diagnostic> {
-    prepare_frontend_details(db, typed, source);
-    locate_source_diagnostics(
-        db,
-        source,
-        prepare_frontend_details::accumulated::<Diagnostic>(db, typed, source),
-        prepare_frontend_details::accumulated::<NodeDiagnostic>(db, typed, source),
+    tribute_front::located_diagnostics!(
+        prepare_frontend_details(db, typed, source),
+        frontend_spans(db, source),
     )
+    .collect()
 }
 
 /// Merge and specialize inside a tracked query so specialization failures
