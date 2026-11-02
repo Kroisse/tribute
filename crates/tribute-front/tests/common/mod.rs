@@ -250,8 +250,9 @@ pub fn run_ast_pipeline_with_ir(db: &dyn salsa::Database, source: SourceCst) -> 
 
     let ir = run_ast_pipeline_inner(db, source);
     // Production lowers only a module without errors.
-    let errors: Vec<_> = tribute_front::located_diagnostics!(
-        run_ast_pipeline_inner(db, source),
+    let errors: Vec<_> = tribute_front::ast::locate_diagnostics(
+        run_ast_pipeline_inner::accumulated::<Diagnostic>(db, source),
+        run_ast_pipeline_inner::accumulated::<tribute_front::ast::NodeDiagnostic>(db, source),
         analysis::spans(db, source, *environment(db)),
     )
     .filter(|d| d.inner.severity == tribute_core::diagnostic::DiagnosticSeverity::Error)

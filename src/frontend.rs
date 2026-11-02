@@ -11,7 +11,7 @@ use crate::SourceCst;
 use crate::prelude::root_environment;
 use salsa::Accumulator;
 use tribute_core::diagnostic::{Diagnostic, DiagnosticSeverity};
-use tribute_front::ast::SpanMaps;
+use tribute_front::ast::{NodeDiagnostic, SpanMaps, locate_diagnostics};
 use tribute_front::ast_to_ir;
 use tribute_front::monomorphize::{self, SpecializationInput, SpecializationOutput};
 use tribute_front::resolve::NameDisplay;
@@ -74,8 +74,9 @@ pub fn library_diagnostics(
     db: &dyn salsa::Database,
     package: analysis::Package,
 ) -> Vec<Diagnostic> {
-    tribute_front::located_diagnostics!(
-        check_library(db, package),
+    locate_diagnostics(
+        check_library::accumulated::<Diagnostic>(db, package),
+        check_library::accumulated::<NodeDiagnostic>(db, package),
         analysis::library_spans(db, package),
     )
     .collect()
@@ -141,8 +142,9 @@ pub fn prepare_frontend_diagnostics<'db>(
     typed: ast_typeck::TypeCheckOutput<'db>,
     source: SourceCst,
 ) -> Vec<Diagnostic> {
-    tribute_front::located_diagnostics!(
-        prepare_frontend_details(db, typed, source),
+    locate_diagnostics(
+        prepare_frontend_details::accumulated::<Diagnostic>(db, typed, source),
+        prepare_frontend_details::accumulated::<NodeDiagnostic>(db, typed, source),
         frontend_spans(db, source),
     )
     .collect()
