@@ -81,7 +81,7 @@ impl LspServer {
             .unwrap_or(false);
         Self {
             connection,
-            db: TributeDatabaseImpl::default(),
+            db: TributeDatabaseImpl::language_server(),
             parser: new_parser(),
             watches_files,
             watched: Vec::new(),

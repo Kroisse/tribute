@@ -222,13 +222,29 @@ fn loaded_dependencies(db: &dyn salsa::Database, file: FileEntry) -> Vec<FileEnt
 
 /// The manifest of the package of each root source a tool analyzes as a
 /// package root (`new-plans/implementation.md` § 패키지 source 트리와 파일
-/// 입력). The tool that picks a root registers it: the CLI a package
-/// directory's `src/main.trb`, and the language server the root of the
-/// package an open document belongs to.
+/// 입력). The CLI registers a package directory's `src/main.trb`. The
+/// language server instead finds the package of any source by its path,
+/// with `by_path`.
 #[salsa::input(singleton, debug)]
 pub struct PackageRoots {
     #[returns(ref)]
     pub manifests: HashMap<SourceCst, FileEntry>,
+    /// Whether a source no manifest is registered for is analyzed with the
+    /// manifest of the package its path puts it in ([`owning_manifest`]).
+    pub by_path: bool,
+}
+
+/// Analyze each source with the manifest of the package its path puts it
+/// in, unless a manifest is registered for it.
+pub fn find_packages_by_path(db: &mut dyn salsa::Database) {
+    match PackageRoots::try_get(db) {
+        Some(roots) => {
+            roots.set_by_path(db).to(true);
+        }
+        None => {
+            PackageRoots::new(db, HashMap::default(), true);
+        }
+    }
 }
 
 /// Analyze the root `source` against the dependency table of the manifest
@@ -240,7 +256,7 @@ pub fn set_package_root(
 ) {
     let Some(roots) = PackageRoots::try_get(db) else {
         if let Some(manifest) = manifest {
-            PackageRoots::new(db, [(source, manifest)].into_iter().collect());
+            PackageRoots::new(db, [(source, manifest)].into_iter().collect(), false);
         }
         return;
     };
@@ -255,7 +271,8 @@ pub fn set_package_root(
 }
 
 /// The dependency table the root `source` is analyzed against: that of the
-/// manifest [`PackageRoots`] registers for it, or `implicit` for a source
+/// manifest [`PackageRoots`] registers for it or, when it finds packages by
+/// path, that of the package `source` belongs to; `implicit` for a source
 /// compiled without a manifest.
 #[salsa::tracked]
 pub fn source_dependencies(
@@ -263,12 +280,40 @@ pub fn source_dependencies(
     source: SourceCst,
     implicit: DependencyTable,
 ) -> DependencyTable {
-    let manifest =
-        PackageRoots::try_get(db).and_then(|roots| roots.manifests(db).get(&source).copied());
+    let manifest = PackageRoots::try_get(db).and_then(|roots| {
+        let registered = roots.manifests(db).get(&source).copied();
+        registered.or_else(|| {
+            roots
+                .by_path(db)
+                .then(|| *owning_manifest(db, source))
+                .flatten()
+        })
+    });
     match manifest {
         Some(file) if file.source(db).is_some() => *dependency_table(db, file, implicit),
         _ => implicit,
     }
+}
+
+/// The manifest of the package `source` belongs to by its path: that of the
+/// nearest ancestor directory with a manifest whose `src/` contains it
+/// (`new-plans/lsp.md` § 문서가 속한 패키지).
+#[salsa::tracked]
+pub fn owning_manifest(db: &dyn salsa::Database, source: SourceCst) -> Option<FileEntry> {
+    let path = uri_to_path(source.uri(db))?;
+    manifest_candidates(&path)
+        .filter_map(|manifest| file_at(db, &path_to_uri(&manifest)))
+        .find(|manifest| manifest.source(db).is_some())
+}
+
+/// The manifests that may make the file at `path` part of a package,
+/// nearest first: `tribute.toml` beside each `src` directory above it.
+pub fn manifest_candidates(path: &Path) -> impl Iterator<Item = PathBuf> + '_ {
+    path.ancestors()
+        .skip(1)
+        .filter(|dir| dir.file_name().is_some_and(|name| name == "src"))
+        .filter_map(|src| src.parent())
+        .map(|package| package.join(MANIFEST_FILE))
 }
 
 /// The manifest beside the package root file at `uri`, if `uri` is a
