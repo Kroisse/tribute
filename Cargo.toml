@@ -113,8 +113,10 @@ tribute-front = { workspace = true, features = ["testing"] }
 trunk-ir = { workspace = true, features = ["salsa", "symbol-stats"] }
 wasmparser.workspace = true
 insta.workspace = true
+proptest.workspace = true
 salsa-test-macros = { path = "crates/salsa-test-macros" }
 serde.workspace = true
+tribute-prop.workspace = true
 
 # Dev and test builds keep debug assertions, including the per-pass IR
 # verifier, but optimize lightly: unoptimized IR walks dominated test time.
