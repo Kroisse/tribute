@@ -1436,10 +1436,12 @@ pub trait LocalValidation: DialectOp {
 /// ends in `tribute_control.return`, with the source signature it declares.
 ///
 /// Whole-IR validation queries it on operations whose schema may not hold,
-/// so implementations read the signature fallibly.
+/// so implementations read the signature fallibly and leave checking that
+/// it is a `tribute_control.func_sig` to the caller.
 #[trunk_ir::op_interface]
 pub trait SourceCallable: DialectOp {
-    /// The callable's `tribute_control.func_sig`; `None` when it lacks one.
+    /// The type the callable declares as its signature; `None` when it
+    /// declares none.
     fn callable_signature(&self, ctx: &IrContext) -> Option<TypeRef>;
 }
 
