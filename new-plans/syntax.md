@@ -64,7 +64,7 @@ type where in
 &&  ||
 
 // 기타
-=  ->  ::  .  ,  ;  :  |  <>
+=  ->  ::  .  ,  :  |  <>
 
 // 괄호류
 (  )  {  }  [  ]
@@ -809,7 +809,7 @@ Runtime value를 기존 tail 앞에 붙이는 최소 public API는
 Block ::= '{' Statement* Expression? '}'
 
 Statement ::= LetStatement
-            | Expression ';'?
+            | Expression
 
 LetStatement ::= 'let' Pattern (':' Type)? '=' Expression
 ```
@@ -1335,13 +1335,9 @@ struct User {
 struct User { name: String, age: Nat }
 ```
 
-### 세미콜론
+### 문장 구분자
 
-세미콜론은 선택적이지만, 한 줄에 여러 문장을 쓸 때 필요:
-
-```rust
-let x = 1; let y = 2; x + y
-```
+블록 안의 문장은 개행으로 구분한다. 세미콜론은 문장 구분자가 아니다.
 
 ---
 
@@ -1437,7 +1433,7 @@ fn main() ->{Io} Nil {
 
 | 구문                  | 의미                   |
 | --------------------- | ---------------------- |
-| `{ stmts; expr }`     | Block / 그룹화         |
+| `{ stmts expr }`      | Block / 그룹화         |
 | `fn(x) expr`          | Lambda                 |
 | `case e { pat -> e }` | Pattern matching       |
 | `handle e { arms }`   | Effect handling        |
