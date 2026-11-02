@@ -71,7 +71,7 @@ impl Build {
     fn diagnostics(&self) -> Vec<String> {
         analysis::diagnostics(&self.db, self.app, self.environment)
             .into_iter()
-            .map(|diagnostic: SpanDiagnostic| diagnostic.inner.message)
+            .map(|diagnostic| diagnostic.message.to_owned())
             .collect()
     }
 
@@ -244,7 +244,7 @@ fn type_checking_reads_the_exports_of_indirect_dependencies() {
     let environment = DependencyTable::new(&db, vec![outer, std]);
     let messages: Vec<_> = analysis::diagnostics(&db, app, environment)
         .into_iter()
-        .map(|diagnostic| diagnostic.inner.message.clone())
+        .map(|diagnostic| diagnostic.message)
         .collect();
     assert_eq!(messages, Vec::<String>::new());
 }
@@ -281,7 +281,7 @@ fn a_path_continues_through_a_re_export_of_an_indirect_dependency() {
         let app = db.source("app.trb", text);
         analysis::diagnostics(&db, app, environment)
             .into_iter()
-            .map(|diagnostic| diagnostic.inner.message.clone())
+            .map(|diagnostic| diagnostic.message.to_owned())
             .collect()
     };
     assert_eq!(
@@ -452,7 +452,7 @@ fn merging_a_diamond_matches_specializing_every_body_at_once() {
     assert_eq!(
         analysis::diagnostics(db, diamond.app, diamond.environment)
             .into_iter()
-            .map(|diagnostic: SpanDiagnostic| diagnostic.inner.message)
+            .map(|diagnostic| diagnostic.message.to_owned())
             .collect::<Vec<_>>(),
         Vec::<String>::new()
     );
@@ -605,7 +605,7 @@ fn merging_keeps_the_metadata_of_the_instance_it_keeps() {
     assert_eq!(
         analysis::diagnostics(&db, app, environment)
             .into_iter()
-            .map(|diagnostic: SpanDiagnostic| diagnostic.inner.message)
+            .map(|diagnostic| diagnostic.message.to_owned())
             .collect::<Vec<_>>(),
         Vec::<String>::new()
     );

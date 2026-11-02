@@ -2,7 +2,7 @@
 #![allow(dead_code)]
 
 use itertools::Itertools;
-use tribute_core::diagnostic::SpanDiagnostic;
+use tribute_core::diagnostic::{Diagnostic, SpanDiagnostic};
 use tribute_front::SourceCst;
 use tribute_front::analysis;
 use tribute_front::ast::{Decl, DeclTable, Expr, ExprKind, ResolvedRef, Stmt, TypedRef};
@@ -256,7 +256,7 @@ pub fn run_ast_pipeline_with_ir(db: &dyn salsa::Database, source: SourceCst) -> 
         run_ast_pipeline_inner::accumulated::<tribute_front::ast::NodeDiagnostic>(db, source),
         analysis::spans(db, source, *environment(db)),
     )
-    .filter(|d| d.inner.severity == tribute_core::diagnostic::DiagnosticSeverity::Error)
+    .filter(|d| d.severity == tribute_core::diagnostic::DiagnosticSeverity::Error)
     .collect();
     assert!(
         errors.is_empty(),
@@ -264,7 +264,7 @@ pub fn run_ast_pipeline_with_ir(db: &dyn salsa::Database, source: SourceCst) -> 
         errors.len(),
         errors.iter().format_with("\n", |d, f| f(&format_args!(
             "  - [{}] {}",
-            d.phase, d.inner.message
+            d.phase, d.message
         )))
     );
     ir
@@ -301,7 +301,7 @@ pub fn prelude_string_type(db: &dyn salsa::Database) -> tribute_front::ast::Type
 pub fn ast_pipeline_diagnostics(
     db: &dyn salsa::Database,
     source: SourceCst,
-) -> Vec<SpanDiagnostic> {
+) -> Vec<Diagnostic<'_>> {
     analysis::diagnostics(db, source, *environment(db))
 }
 
@@ -310,8 +310,8 @@ pub fn ast_pipeline_error_messages(db: &dyn salsa::Database, source: SourceCst) 
     ast_pipeline_diagnostics(db, source)
         .into_iter()
         .filter(|diagnostic| {
-            diagnostic.inner.severity == tribute_core::diagnostic::DiagnosticSeverity::Error
+            diagnostic.severity == tribute_core::diagnostic::DiagnosticSeverity::Error
         })
-        .map(|diagnostic| diagnostic.inner.message)
+        .map(|diagnostic| diagnostic.message.to_owned())
         .collect()
 }

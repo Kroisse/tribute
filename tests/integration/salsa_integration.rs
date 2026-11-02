@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use tree_sitter::{InputEdit, Parser, Point};
 use tribute::pipeline::compile_with_diagnostics;
 use tribute::{SourceCst, TributeDatabaseImpl, compile_frontend};
-use tribute_core::diagnostic::{CompilationPhase, DiagnosticSeverity, SpanDiagnostic};
+use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity, SpanDiagnostic};
 use tribute_front::ast::{Decl, ExprKind, ModuleItem, NodeId, source_hash};
 use tribute_ir::dialect::tribute_control;
 use trunk_ir::Span;
@@ -73,7 +73,7 @@ fn returned_constant(ctx: &IrContext, module: &Module, name: &str) -> i128 {
 fn compile_frontend_with_diagnostics(
     db: &dyn salsa::Database,
     source: SourceCst,
-) -> Result<(IrContext, Module), Vec<SpanDiagnostic>> {
+) -> Result<(IrContext, Module), Vec<Diagnostic<'_>>> {
     compile_frontend(db, source).ok_or_else(|| tribute::pipeline::frontend_diagnostics(db, source))
 }
 
@@ -269,6 +269,10 @@ fn record_shape_diagnostics_follow_incremental_declaration_edits_slow() {
                 CompilationPhase::TypeChecking,
             )
         })
+        .collect();
+    let changed_diagnostics: Vec<_> = changed_diagnostics
+        .iter()
+        .map(SpanDiagnostic::view)
         .collect();
 
     for (revision, text) in [ORIGINAL, changed.as_str(), ORIGINAL]

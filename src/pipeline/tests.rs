@@ -1172,8 +1172,8 @@ fn test_unresolved_reference_diagnostic(db: &salsa::DatabaseImpl) {
 
     // Check that the diagnostic message mentions the unresolved name
     let has_unresolved_error = result.diagnostics.iter().any(|d| {
-        d.inner.message.contains("unresolved")
-            && d.inner.severity == DiagnosticSeverity::Error
+        d.message.contains("unresolved")
+            && d.severity == DiagnosticSeverity::Error
             && d.phase == CompilationPhase::NameResolution
     });
     assert!(
@@ -1189,9 +1189,9 @@ fn test_parse_error_diagnostic(db: &salsa::DatabaseImpl) {
     let result = compile_with_diagnostics(db, source);
 
     let has_parse_error = result.diagnostics.iter().any(|d| {
-        d.inner.severity == DiagnosticSeverity::Error
+        d.severity == DiagnosticSeverity::Error
             && d.phase == CompilationPhase::Parsing
-            && d.inner.message.contains("syntax error")
+            && d.message.contains("syntax error")
     });
     assert!(
         has_parse_error,
@@ -1231,7 +1231,7 @@ fn test_prelude_option_type(db: &salsa::DatabaseImpl) {
     let has_option_error = result
         .diagnostics
         .iter()
-        .any(|d| d.inner.message.contains("Option") || d.inner.message.contains("None"));
+        .any(|d| d.message.contains("Option") || d.message.contains("None"));
     assert!(
         !has_option_error,
         "Option and None should be available from prelude, got: {:?}",
@@ -1252,7 +1252,7 @@ fn test_prelude_result_type(db: &salsa::DatabaseImpl) {
     let has_result_error = result
         .diagnostics
         .iter()
-        .any(|d| d.inner.message.contains("Result") || d.inner.message.contains("Ok"));
+        .any(|d| d.message.contains("Result") || d.message.contains("Ok"));
     assert!(
         !has_result_error,
         "Result and Ok should be available from prelude, got: {:?}",
@@ -1279,7 +1279,7 @@ fn test_case_expression_pattern_binding(db: &salsa::DatabaseImpl) {
     let has_unresolved_y = result
         .diagnostics
         .iter()
-        .any(|d| d.inner.message.contains("unresolved") && d.inner.message.contains("y"));
+        .any(|d| d.message.contains("unresolved") && d.message.contains("y"));
     assert!(
         !has_unresolved_y,
         "Pattern binding `y` should be resolved, got: {:?}",
@@ -1323,9 +1323,10 @@ fn test_case_lowering_non_exhaustive(db: &salsa::DatabaseImpl) {
     );
 
     let result = compile_with_diagnostics(db, source);
-    let has_non_exhaustive = result.diagnostics.iter().any(|d| {
-        d.inner.message.contains("non-exhaustive") && d.inner.severity == DiagnosticSeverity::Error
-    });
+    let has_non_exhaustive = result
+        .diagnostics
+        .iter()
+        .any(|d| d.message.contains("non-exhaustive") && d.severity == DiagnosticSeverity::Error);
     assert!(
         has_non_exhaustive,
         "Expected non-exhaustive case diagnostic, got: {:?}",
@@ -1349,8 +1350,8 @@ fn test_case_lowering_nested_non_exhaustive(db: &salsa::DatabaseImpl) {
 
     let result = compile_with_diagnostics(db, source);
     let has_non_exhaustive = result.diagnostics.iter().any(|d| {
-        d.inner.message.contains("missing patterns: .Some(False)")
-            && d.inner.severity == DiagnosticSeverity::Error
+        d.message.contains("missing patterns: .Some(False)")
+            && d.severity == DiagnosticSeverity::Error
     });
     assert!(
         has_non_exhaustive,
@@ -1404,7 +1405,7 @@ fn test_tdnr_struct_field_access(db: &salsa::DatabaseImpl) {
     let has_unresolved_name = result
         .diagnostics
         .iter()
-        .any(|d| d.inner.message.contains("unresolved") && d.inner.message.contains("name"));
+        .any(|d| d.message.contains("unresolved") && d.message.contains("name"));
     assert!(
         !has_unresolved_name,
         "TDNR should resolve user.name to User::name(user), got: {:?}",
@@ -2041,7 +2042,7 @@ fn main() -> Nil {
     // just to check it.
     assert_eq!(errors.len(), 1, "{errors:?}");
     assert_eq!(errors[0].phase, CompilationPhase::Lowering);
-    let message = &errors[0].inner.message;
+    let message = &errors[0].message;
     assert!(
         message.contains("unsatisfiable runtime binding user_bridge"),
         "{message}"
@@ -2067,12 +2068,12 @@ mod Nested {
         .zip(["user_intrinsic", "Nested::unused_generic"])
     {
         assert_eq!(
-            diagnostic.inner.message,
+            diagnostic.message,
             format!("unsupported compiler intrinsic directive `{identity}`")
         );
-        assert_eq!(diagnostic.inner.severity, DiagnosticSeverity::Error);
+        assert_eq!(diagnostic.severity, DiagnosticSeverity::Error);
         assert_eq!(diagnostic.phase, CompilationPhase::Lowering);
-        assert_ne!(diagnostic.inner.span, trunk_ir::Span::default());
+        assert_ne!(diagnostic.span, trunk_ir::Span::default());
     }
 }
 
@@ -2090,9 +2091,7 @@ fn std_specialization_failures_reach_user_preparation(db: &salsa::DatabaseImpl) 
         assert!(prepare_frontend_for_lowering(db, typed, source).is_none());
         let diagnostics = prepare_frontend_diagnostics(db, typed, source);
         itertools::assert_equal(
-            diagnostics
-                .iter()
-                .map(|diagnostic| diagnostic.inner.message.as_str()),
+            diagnostics.iter().map(|diagnostic| diagnostic.message),
             ["unsupported compiler intrinsic directive `unsupported_std_intrinsic`"],
         );
     }
@@ -2111,9 +2110,7 @@ fn user_declaration_cannot_claim_a_library_intrinsic(db: &salsa::DatabaseImpl) {
     assert!(prepare_frontend_for_lowering(db, typed, source).is_none());
     let diagnostics = prepare_frontend_diagnostics(db, typed, source);
     itertools::assert_equal(
-        diagnostics
-            .iter()
-            .map(|diagnostic| diagnostic.inner.message.as_str()),
+        diagnostics.iter().map(|diagnostic| diagnostic.message),
         ["unsupported compiler intrinsic directive `__bytes_get_or_panic`"],
     );
 }
@@ -2604,7 +2601,7 @@ fn test_main_returns_nil_ok(db: &salsa::DatabaseImpl) {
     let has_main_error = result
         .diagnostics
         .iter()
-        .any(|d| d.inner.message.contains("must return Nil"));
+        .any(|d| d.message.contains("must return Nil"));
     assert!(
         !has_main_error,
         "main() returning Nil should not produce an error, got: {:?}",
@@ -2618,8 +2615,8 @@ fn test_main_returns_int_error(db: &salsa::DatabaseImpl) {
 
     let result = compile_with_diagnostics(db, source);
     let has_main_error = result.diagnostics.iter().any(|d| {
-        d.inner.message.contains("must return Nil")
-            && d.inner.severity == DiagnosticSeverity::Error
+        d.message.contains("must return Nil")
+            && d.severity == DiagnosticSeverity::Error
             && d.phase == CompilationPhase::TypeChecking
     });
     assert!(
@@ -2637,7 +2634,7 @@ fn test_non_main_returns_int_ok(db: &salsa::DatabaseImpl) {
     let has_main_error = result
         .diagnostics
         .iter()
-        .any(|d| d.inner.message.contains("must return Nil"));
+        .any(|d| d.message.contains("must return Nil"));
     assert!(
         !has_main_error,
         "non-main function returning Int should not produce main-specific error, got: {:?}",

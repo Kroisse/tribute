@@ -21,7 +21,7 @@ fn check(db: &LoggingDb, source: SourceCst) -> Vec<String> {
     analysis::diagnostics(db, source, table)
         .into_iter()
         .map(|diagnostic| {
-            let span = diagnostic.inner.span;
+            let span = diagnostic.span;
             text[span.start as usize..span.end as usize].to_owned()
         })
         .collect()

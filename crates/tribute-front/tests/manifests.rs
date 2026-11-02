@@ -168,7 +168,7 @@ fn an_app_is_analyzed_against_its_manifests_dependencies() {
     let messages: Vec<_> =
         analysis::diagnostics(&ws.db, app, *source_dependencies(&ws.db, app, ws.std))
             .into_iter()
-            .map(|diagnostic| diagnostic.inner.message.clone())
+            .map(|diagnostic| diagnostic.message)
             .collect();
     assert_eq!(messages, Vec::<String>::new());
 }

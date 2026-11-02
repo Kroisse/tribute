@@ -12,8 +12,8 @@ fn errors(db: &dyn salsa::Database, text: &str) -> Vec<String> {
     let source = SourceCst::from_source_str(db, "implicit_constructor.trb", text);
     ast_pipeline_diagnostics(db, source)
         .into_iter()
-        .filter(|diagnostic| diagnostic.inner.severity == DiagnosticSeverity::Error)
-        .map(|diagnostic| diagnostic.inner.message)
+        .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
+        .map(|diagnostic| diagnostic.message.to_owned())
         .collect()
 }
 

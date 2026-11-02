@@ -20,7 +20,7 @@ fn assert_error(
     let errors: Vec<_> = ast_pipeline_diagnostics(db, source)
         .into_iter()
         .filter(|d| {
-            d.inner.severity == DiagnosticSeverity::Error
+            d.severity == DiagnosticSeverity::Error
                 && matches!(
                     d.phase,
                     CompilationPhase::Parsing | CompilationPhase::AstGeneration
@@ -33,14 +33,14 @@ fn assert_error(
     assert_eq!(error.phase, phase, "{text:?}");
     let start = text.find(part).expect("part must occur");
     assert_eq!(
-        error.inner.span.range(),
+        error.span.range(),
         start..start + part.len(),
         "{text:?}: span must cover {part:?}"
     );
     assert!(
-        error.inner.message.contains(message),
+        error.message.contains(message),
         "{text:?}: unexpected message: {}",
-        error.inner.message
+        error.message
     );
 }
 

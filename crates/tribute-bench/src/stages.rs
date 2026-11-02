@@ -42,7 +42,7 @@ pub fn frontend(program: &Program) -> Result<FrontendCompilation, String> {
                 "frontend failed: {}",
                 diagnostics
                     .iter()
-                    .format_with("; ", |diagnostic, f| f(&diagnostic.inner.message))
+                    .format_with("; ", |diagnostic, f| f(&diagnostic.message))
             )
         })
     })

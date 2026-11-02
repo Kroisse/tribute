@@ -809,9 +809,9 @@ impl LspServer {
             // Find diagnostics that overlap with the requested range
             for diag in &diagnostics {
                 // Check if diagnostic overlaps with range in this document
-                if !in_document(diag.inner.span, document)
-                    || (diag.inner.span.end as usize) < start_offset
-                    || diag.inner.span.start as usize > end_offset
+                if !in_document(diag.span, document)
+                    || (diag.span.end as usize) < start_offset
+                    || diag.span.start as usize > end_offset
                 {
                     continue;
                 }
@@ -841,27 +841,26 @@ impl LspServer {
     fn action_for_diagnostic(
         &self,
         db: &dyn salsa::Database,
-        diag: &tribute_core::diagnostic::SpanDiagnostic,
+        diag: &tribute_core::diagnostic::Diagnostic<'_>,
         rope: &Rope,
         uri: &Uri,
         type_index: Option<&AstTypeIndex<'_>>,
     ) -> Option<CodeAction> {
         // Pattern: "top-level function `{name}` must have an explicit return type annotation"
         if diag
-            .inner
             .message
             .contains("must have an explicit return type annotation")
         {
             // Try to find the inferred type at the diagnostic location
             let type_index = type_index?;
-            if let Some(entry) = type_index.type_at(db, diag.inner.span.start as usize) {
+            if let Some(entry) = type_index.type_at(db, diag.span.start as usize) {
                 // The annotation is inserted into source, where only the full
                 // identity path names the type from every module.
                 let type_str = print_ast_type(db, &NameDisplay::identity(), entry.ty);
 
                 // Find the position after the closing parenthesis of parameters
                 // We need to insert ": Type" before the function body
-                let insert_pos = self.find_return_type_insert_position(rope, diag.inner.span)?;
+                let insert_pos = self.find_return_type_insert_position(rope, diag.span)?;
                 let (line, char) = position_from_offset(rope, insert_pos);
                 let pos = lsp_types::Position {
                     line,
@@ -888,8 +887,8 @@ impl LspServer {
                     title: format!("Add return type annotation: {}", type_str),
                     kind: Some(CodeActionKind::QUICKFIX),
                     diagnostics: Some(vec![Diagnostic {
-                        range: span_to_range(rope, diag.inner.span),
-                        severity: Some(match diag.inner.severity {
+                        range: span_to_range(rope, diag.span),
+                        severity: Some(match diag.severity {
                             tribute_core::diagnostic::DiagnosticSeverity::Error => {
                                 DiagnosticSeverity::ERROR
                             }
@@ -900,7 +899,7 @@ impl LspServer {
                                 DiagnosticSeverity::INFORMATION
                             }
                         }),
-                        message: diag.inner.message.clone(),
+                        message: diag.message.to_string(),
                         source: Some("tribute".to_string()),
                         ..Default::default()
                     }]),
@@ -916,10 +915,9 @@ impl LspServer {
 
         // Pattern: "parameter N of top-level function `{name}` must have an explicit type annotation"
         if diag
-            .inner
             .message
             .contains("must have an explicit type annotation")
-            && diag.inner.message.contains("parameter")
+            && diag.message.contains("parameter")
         {
             // For parameter annotations, we would need to find the parameter location
             // and its inferred type. This is more complex as we need to parse the message
@@ -1049,65 +1047,63 @@ impl LspServer {
         };
         let rope = source_cst.text(&self.db);
 
-        // Run Salsa compilation
-        let diags = self.db.attach(|db| document_diagnostics(db, source_cst));
-
         // Convert to LSP diagnostics. A span in a file module's file rather
         // than this document is not shown in it.
         let document = source_hash(source_cst.uri(&self.db).as_str());
         let lsp_uri = uri.clone();
-        let diagnostics: Vec<Diagnostic> = diags
-            .iter()
-            .filter(|d| in_document(d.inner.span, document))
-            .map(|d| {
-                let range = span_to_range(rope, d.inner.span);
+        let diagnostics: Vec<Diagnostic> = self.db.attach(|db| {
+            document_diagnostics(db, source_cst)
+                .iter()
+                .filter(|d| in_document(d.span, document))
+                .map(|d| {
+                    let range = span_to_range(rope, d.span);
 
-                // Convert secondary labels to related information
-                let related_information = if d.inner.labels.is_empty() {
-                    None
-                } else {
-                    Some(
-                        d.inner
-                            .labels
-                            .iter()
-                            .filter(|label| in_document(label.span, document))
-                            .map(|label| DiagnosticRelatedInformation {
-                                location: Location {
-                                    uri: lsp_uri.clone(),
-                                    range: span_to_range(rope, label.span),
-                                },
-                                message: label.message.to_string(),
-                            })
-                            .collect(),
-                    )
-                };
+                    // Convert secondary labels to related information
+                    let related_information = if d.labels.is_empty() {
+                        None
+                    } else {
+                        Some(
+                            d.labels
+                                .iter()
+                                .filter(|label| in_document(label.span, document))
+                                .map(|label| DiagnosticRelatedInformation {
+                                    location: Location {
+                                        uri: lsp_uri.clone(),
+                                        range: span_to_range(rope, label.span),
+                                    },
+                                    message: label.message.to_string(),
+                                })
+                                .collect(),
+                        )
+                    };
 
-                // Append note to message if present
-                let message = match &d.inner.note {
-                    Some(note) => format!("{}\nnote: {note}", d.inner.message),
-                    None => d.inner.message.clone(),
-                };
+                    // Append note to message if present
+                    let message = match d.note {
+                        Some(note) => format!("{}\nnote: {note}", d.message),
+                        None => d.message.to_string(),
+                    };
 
-                Diagnostic {
-                    range,
-                    severity: Some(match d.inner.severity {
-                        tribute_core::diagnostic::DiagnosticSeverity::Error => {
-                            DiagnosticSeverity::ERROR
-                        }
-                        tribute_core::diagnostic::DiagnosticSeverity::Warning => {
-                            DiagnosticSeverity::WARNING
-                        }
-                        tribute_core::diagnostic::DiagnosticSeverity::Info => {
-                            DiagnosticSeverity::INFORMATION
-                        }
-                    }),
-                    message,
-                    source: Some("tribute".to_string()),
-                    related_information,
-                    ..Default::default()
-                }
-            })
-            .collect();
+                    Diagnostic {
+                        range,
+                        severity: Some(match d.severity {
+                            tribute_core::diagnostic::DiagnosticSeverity::Error => {
+                                DiagnosticSeverity::ERROR
+                            }
+                            tribute_core::diagnostic::DiagnosticSeverity::Warning => {
+                                DiagnosticSeverity::WARNING
+                            }
+                            tribute_core::diagnostic::DiagnosticSeverity::Info => {
+                                DiagnosticSeverity::INFORMATION
+                            }
+                        }),
+                        message,
+                        source: Some("tribute".to_string()),
+                        related_information,
+                        ..Default::default()
+                    }
+                })
+                .collect()
+        });
 
         let params = PublishDiagnosticsParams {
             uri: uri.clone(),
@@ -1257,7 +1253,7 @@ fn glob_literal(path: &Path) -> String {
 fn document_diagnostics(
     db: &dyn salsa::Database,
     source: SourceCst,
-) -> Vec<tribute::SpanDiagnostic> {
+) -> Vec<tribute::Diagnostic<'_>> {
     let mut diagnostics: Vec<_> = document_units(db, source)
         .iter()
         .flat_map(|unit| unit.diagnostics(db))

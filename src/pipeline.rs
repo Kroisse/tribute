@@ -93,7 +93,7 @@ use crate::SourceCst;
 use crate::frontend::frontend_spans;
 use salsa::Accumulator;
 use std::ops::RangeInclusive;
-use tribute_core::diagnostic::{CompilationPhase, DiagnosticSeverity, SpanDiagnostic};
+use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity, SpanDiagnostic};
 use tribute_front::ast::{NodeDiagnostic, locate_diagnostics};
 use tribute_front::resolve::NameDisplay;
 use trunk_ir::Span;
@@ -180,11 +180,11 @@ use trunk_ir_wasm_backend::{
 };
 
 /// Result of diagnostic compilation through the shared pipeline.
-pub struct CompilationResult {
+pub struct CompilationResult<'db> {
     /// Whether the shared pipeline produced a module.
     pub produced_module: bool,
     /// Diagnostics collected during compilation.
-    pub diagnostics: Vec<SpanDiagnostic>,
+    pub diagnostics: Vec<Diagnostic<'db>>,
 }
 
 // =============================================================================
@@ -871,13 +871,13 @@ fn compile_to_wasm_binary_tracked(db: &dyn salsa::Database, source: SourceCst) -
 pub fn compile_to_wasm_binary(
     db: &dyn salsa::Database,
     source: SourceCst,
-) -> Result<&[u8], Vec<SpanDiagnostic>> {
+) -> Result<&[u8], Vec<Diagnostic<'_>>> {
     compile_to_wasm_binary_tracked(db, source).ok_or_else(|| wasm_binary_diagnostics(db, source))
 }
 
 /// Diagnostics accumulated by [`compile_to_wasm_binary`], including the
 /// warnings of a successful compilation.
-pub fn wasm_binary_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<SpanDiagnostic> {
+pub fn wasm_binary_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<Diagnostic<'_>> {
     locate_diagnostics(
         compile_to_wasm_binary_tracked::accumulated::<SpanDiagnostic>(db, source),
         compile_to_wasm_binary_tracked::accumulated::<NodeDiagnostic>(db, source),
@@ -891,7 +891,7 @@ pub fn dump_ir_diagnostics(
     db: &dyn salsa::Database,
     source: SourceCst,
     native: bool,
-) -> Vec<SpanDiagnostic> {
+) -> Vec<Diagnostic<'_>> {
     locate_diagnostics(
         dump_ir::accumulated::<SpanDiagnostic>(db, source, native),
         dump_ir::accumulated::<NodeDiagnostic>(db, source, native),
@@ -906,7 +906,7 @@ pub fn native_binary_diagnostics(
     db: &dyn salsa::Database,
     source: SourceCst,
     config: CompilationConfig,
-) -> Vec<SpanDiagnostic> {
+) -> Vec<Diagnostic<'_>> {
     locate_diagnostics(
         compile_to_native_binary::accumulated::<SpanDiagnostic>(db, source, config),
         compile_to_native_binary::accumulated::<NodeDiagnostic>(db, source, config),
@@ -1043,7 +1043,10 @@ pub fn compile_ast(
 /// Run compilation and return detailed results including diagnostics.
 ///
 /// Diagnostics are collected using Salsa accumulators from all compilation stages.
-pub fn compile_with_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> CompilationResult {
+pub fn compile_with_diagnostics(
+    db: &dyn salsa::Database,
+    source: SourceCst,
+) -> CompilationResult<'_> {
     // Run the tracked function to collect diagnostics
     let produced_module = compile_ast_tracked(db, source);
 

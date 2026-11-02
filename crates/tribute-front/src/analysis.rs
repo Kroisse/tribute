@@ -11,7 +11,7 @@
 //! analysis reported no error.
 
 use salsa::Accumulator;
-use tribute_core::diagnostic::{CompilationPhase, DiagnosticSeverity, SpanDiagnostic};
+use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity, SpanDiagnostic};
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::{
@@ -338,7 +338,7 @@ pub fn diagnostics(
     db: &dyn salsa::Database,
     source: SourceCst,
     table: DependencyTable,
-) -> Vec<SpanDiagnostic> {
+) -> Vec<Diagnostic<'_>> {
     locate_diagnostics(
         analyze::accumulated::<SpanDiagnostic>(db, source, table),
         analyze::accumulated::<NodeDiagnostic>(db, source, table),

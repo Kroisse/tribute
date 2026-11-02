@@ -57,9 +57,11 @@ fn bench_edit(group: &mut BenchmarkGroup<'_, WallTime>, workload: &str, edit: &E
     let toggle = || session.borrow_mut().toggle();
     let diagnostics = || {
         let session = session.borrow();
-        session
-            .db()
-            .attach(|db| compile_with_diagnostics(db, session.source()))
+        session.db().attach(|db| {
+            compile_with_diagnostics(db, session.source())
+                .diagnostics
+                .len()
+        })
     };
 
     if edit.breaks {

@@ -78,7 +78,7 @@ fn located_diagnostics(db: &LoggingDb, root: SourceCst) -> Vec<String> {
         .diagnostics
         .iter()
         .map(|diagnostic| {
-            let span = diagnostic.inner.span;
+            let span = diagnostic.span;
             let file = tree
                 .file(span.source)
                 .expect("a file of the package")
@@ -88,7 +88,7 @@ fn located_diagnostics(db: &LoggingDb, root: SourceCst) -> Vec<String> {
                 file.uri(db).path(),
                 span.start,
                 span.end,
-                diagnostic.inner.message
+                diagnostic.message
             )
         })
         .collect()

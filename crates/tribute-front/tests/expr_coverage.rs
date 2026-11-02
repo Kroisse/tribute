@@ -274,7 +274,7 @@ fn test_binop_operand_types(db: &salsa::DatabaseImpl) {
             assert!(
                 diagnostics
                     .iter()
-                    .any(|d| d.inner.severity == DiagnosticSeverity::Error),
+                    .any(|d| d.severity == DiagnosticSeverity::Error),
                 "expected a type error for `{expr}`, got {diagnostics:?}"
             );
         }

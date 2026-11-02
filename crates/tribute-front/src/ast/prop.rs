@@ -854,8 +854,11 @@ mod tests {
     }
 
     /// Run the typecheck pipeline in a fresh database, returning the
-    /// rendered result and every accumulated diagnostic.
-    fn typecheck_in_fresh_db(module: Module<UnresolvedName>) -> (String, Vec<SpanDiagnostic>) {
+    /// rendered result and the phase and rendering of every accumulated
+    /// diagnostic.
+    fn typecheck_in_fresh_db(
+        module: Module<UnresolvedName>,
+    ) -> (String, Vec<(CompilationPhase, String)>) {
         let db = salsa::DatabaseImpl::new();
         let input = PropTestInput::new(&db, module);
         let rendered = run_resolve_and_typecheck(&db, input).clone();
@@ -864,6 +867,7 @@ mod tests {
             run_resolve_and_typecheck::accumulated::<crate::ast::NodeDiagnostic>(&db, input),
             crate::ast::SpanMaps::default(),
         )
+        .map(|diagnostic| (diagnostic.phase, format!("{diagnostic:?}")))
         .collect();
         (rendered, diagnostics)
     }
@@ -986,11 +990,11 @@ mod tests {
         #[test]
         fn typecheck_does_not_panic(module in parsed_module()) {
             let (_, diagnostics) = typecheck_in_fresh_db(module);
-            for diagnostic in &diagnostics {
+            for (phase, diagnostic) in &diagnostics {
                 prop_assert_eq!(
-                    &diagnostic.phase,
+                    phase,
                     &CompilationPhase::TypeChecking,
-                    "{:?}",
+                    "{}",
                     diagnostic
                 );
             }
