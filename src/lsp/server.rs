@@ -43,7 +43,7 @@ use super::definition_index::{
     AstDefinitionEntry, definition_index, package_identifiers, validate_identifier,
 };
 use super::type_index::{AstTypeIndex, print_ast_type, type_index as ast_type_index};
-use tribute::{TributeDatabaseImpl, root_environment};
+use tribute::{AnalysisUnit, TributeDatabaseImpl, root_environment};
 use tribute_front::SourceCst;
 use tribute_front::analysis::Package;
 use tribute_front::ast::source_hash;
@@ -404,17 +404,27 @@ impl LspServer {
         let source_cst = self.db.source_cst(uri)?;
 
         let (contents, span) = self.db.attach(|db| {
-            if let Some(entry) = ast_type_index(db, source_cst)?.type_at(db, offset) {
+            if let Some(entry) =
+                ast_type_index(db, AnalysisUnit::Executable(source_cst), source_cst)?
+                    .type_at(db, offset)
+            {
                 return Some((
                     format!(
                         "```tribute\n{}\n```",
-                        print_ast_type(db, &tribute::diagnostic_names(db, source_cst), entry.ty)
+                        print_ast_type(
+                            db,
+                            &AnalysisUnit::Executable(source_cst).names(db),
+                            entry.ty
+                        )
                     ),
                     entry.span,
                 ));
             }
 
-            let entry = builtin_at(builtin_symbols(db, source_cst), offset)?;
+            let entry = builtin_at(
+                builtin_symbols(db, AnalysisUnit::Executable(source_cst), source_cst),
+                offset,
+            )?;
             Some((
                 format!(
                     "```tribute\nability {}\n```\n\nCompiler-owned ambient ability `{}`.",
@@ -454,7 +464,7 @@ impl LspServer {
 
         // Run Salsa compilation and build definition index
         let definition = self.db.attach(|db| {
-            let index = definition_index(db, source_cst)?;
+            let index = definition_index(db, AnalysisUnit::Executable(source_cst), source_cst)?;
             index.definition_at(db, offset).cloned()
         })?;
 
@@ -490,7 +500,7 @@ impl LspServer {
         let source_cst = self.db.source_cst(uri)?;
 
         let locations = self.db.attach(|db| {
-            let index = definition_index(db, source_cst)?;
+            let index = definition_index(db, AnalysisUnit::Executable(source_cst), source_cst)?;
 
             let (target, refs) = index.references_at(db, offset)?;
 
@@ -536,7 +546,7 @@ impl LspServer {
         let containing = self.containing_packages(uri);
 
         let result = self.db.attach(|db| {
-            let index = definition_index(db, source_cst)?;
+            let index = definition_index(db, AnalysisUnit::Executable(source_cst), source_cst)?;
 
             // Check if rename is possible at this position
             let (def, span) = index.can_rename(db, offset)?;
@@ -574,7 +584,7 @@ impl LspServer {
         let containing = self.containing_packages(uri);
 
         let text_edits = self.db.attach(|db| {
-            let index = definition_index(db, source_cst)?;
+            let index = definition_index(db, AnalysisUnit::Executable(source_cst), source_cst)?;
 
             // Get definition and validate
             let (def, _) = index.can_rename(db, offset)?;
@@ -664,19 +674,22 @@ impl LspServer {
             dot_context(&rope, tree, offset - prefix.len())
         });
         let items = self.db.attach(|db| {
-            let module = module_at(db, source_cst, offset);
+            let module = module_at(db, AnalysisUnit::Executable(source_cst), source_cst, offset);
             // After the `.` of an implicit constructor, constructors fit;
             // both a module's own and the prelude's are candidates.
             let constructors = || {
-                filter_completions(completion_index::constructor_items(db, source_cst), &prefix)
-                    .filter(|item| item.module.as_ref().is_none_or(|own| *own == module))
-                    .cloned()
-                    .collect::<Vec<_>>()
+                filter_completions(
+                    completion_index::constructor_items(db, AnalysisUnit::Executable(source_cst)),
+                    &prefix,
+                )
+                .filter(|item| item.module.as_ref().is_none_or(|own| *own == module))
+                .cloned()
+                .collect::<Vec<_>>()
             };
             if dot == DotContext::ImplicitConstructor {
                 return Some(constructors());
             }
-            let all_items = completion_items(db, source_cst);
+            let all_items = completion_items(db, AnalysisUnit::Executable(source_cst));
 
             // Offer what the cursor's module names, filtered by prefix
             let in_scope: Vec<_> = completions_in(all_items, &module).cloned().collect();
@@ -765,7 +778,7 @@ impl LspServer {
         // Collect diagnostics and type information for code action generation
         let actions = self.db.attach(|db| {
             let result = tribute::compile_with_diagnostics(db, source_cst);
-            let type_index = ast_type_index(db, source_cst);
+            let type_index = ast_type_index(db, AnalysisUnit::Executable(source_cst), source_cst);
             let document = source_hash(source_cst.uri(db).as_str());
 
             let mut actions = Vec::new();
@@ -991,7 +1004,8 @@ impl LspServer {
         let active_param = call_info.active_param;
 
         let result = self.db.attach(|db| {
-            let signatures = function_signatures(db, source_cst);
+            let signatures =
+                function_signatures(db, AnalysisUnit::Executable(source_cst), source_cst);
             let sig = find_callee_signature(&signatures, &callee_name)?;
 
             Some(super::pretty::format_ast_signature(
@@ -1242,9 +1256,9 @@ fn used_by_containing_packages(
     containing: &[SourceCst],
 ) -> bool {
     def.local_id.is_none()
-        && containing
-            .iter()
-            .any(|root| package_identifiers(db, *root, source).contains(&def.name))
+        && containing.iter().any(|root| {
+            package_identifiers(db, AnalysisUnit::Executable(*root), source).contains(&def.name)
+        })
 }
 
 /// Whether `span` is in the document whose source hash is `document`. A span

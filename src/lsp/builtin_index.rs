@@ -1,10 +1,10 @@
 //! Source-position index for compiler-owned bindings without declarations.
 
+use tribute::AnalysisUnit;
 use tribute_front::SourceCst;
 use tribute_front::ast::{
     AbilityId, Decl, DeclTable, SpanMap, TypeAnnotation, TypeAnnotationKind, TypedRef,
 };
-use tribute_front::query as ast_query;
 use trunk_ir::{Span, Symbol};
 
 /// A compiler-owned symbol referenced from source.
@@ -15,14 +15,19 @@ pub struct BuiltinSymbolEntry {
     pub qualified: Symbol,
 }
 
-/// Compiler-owned symbol references in a source file.
+/// Compiler-owned symbol references in the file `source`, as `unit`'s
+/// analysis resolves them.
 #[salsa::tracked(returns(deref))]
-pub fn builtin_symbols(db: &dyn salsa::Database, source: SourceCst) -> Vec<BuiltinSymbolEntry> {
-    let Some(output) = tribute::parse_and_lower_ast(db, source) else {
+pub fn builtin_symbols(
+    db: &dyn salsa::Database,
+    unit: AnalysisUnit,
+    source: SourceCst,
+) -> Vec<BuiltinSymbolEntry> {
+    let Some(output) = unit.typed(db) else {
         return Vec::new();
     };
     let module = output.module(db);
-    let Some(span_map) = ast_query::span_map(db, source) else {
+    let Some(span_map) = unit.span_map(db, source) else {
         return Vec::new();
     };
 
@@ -94,7 +99,7 @@ mod tests {
             "use std::io::Io\nfn main() ->{Io} Nil { Nil }",
         );
 
-        let entries = builtin_symbols(&db, source);
+        let entries = builtin_symbols(&db, AnalysisUnit::Executable(source), source);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].qualified, Symbol::new("std::io::Io"));
     }
@@ -108,6 +113,6 @@ mod tests {
             "use std::io::Io\nability Io {}\nfn main() ->{Io} Nil { Nil }",
         );
 
-        assert!(builtin_symbols(&db, source).is_empty());
+        assert!(builtin_symbols(&db, AnalysisUnit::Executable(source), source).is_empty());
     }
 }

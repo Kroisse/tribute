@@ -5,6 +5,7 @@
 
 use trunk_ir::{Span, Symbol, SymbolPath};
 
+use tribute::AnalysisUnit;
 use tribute_front::SourceCst;
 use tribute_front::ast::{
     AbilityId, Decl, DeclTable, ModuleItem, SpanMap, TypeAnnotation, TypeAnnotationKind, TypedRef,
@@ -78,15 +79,15 @@ pub fn complete_keywords(prefix: &str) -> Vec<AstCompletionItem> {
         .collect()
 }
 
-/// The declarations of the root module of `module`.
-fn root_decls<'a, 'db>(
+/// The declarations of the module of `module` at the identity path `path`.
+fn module_decls<'a, 'db>(
     module: &'a DeclTable<TypedRef<'db>>,
+    path: SymbolPath,
 ) -> impl Iterator<Item = &'a Decl<TypedRef<'db>>> {
-    let root = tribute_front::resolve::PackageName::executable_root().identity_path(&[]);
     module
         .entries
         .iter()
-        .filter(move |entry| entry.module == root)
+        .filter(move |entry| entry.module == path)
         .map(|entry| &entry.decl)
 }
 
@@ -94,8 +95,8 @@ fn root_decls<'a, 'db>(
 /// its modules, which that module's body names, then the prelude's public
 /// root items, which every module of the package names.
 #[salsa::tracked(returns(deref))]
-pub fn completion_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<AstCompletionItem> {
-    let Some(output) = tribute::parse_and_lower_ast(db, source) else {
+pub fn completion_items(db: &dyn salsa::Database, unit: AnalysisUnit) -> Vec<AstCompletionItem> {
+    let Some(output) = unit.typed(db) else {
         return Vec::new();
     };
     let module = output.module(db);
@@ -166,10 +167,10 @@ pub fn completion_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<AstC
 /// module names. Each item's detail is the constructor's path through its
 /// type as the module names the type.
 #[salsa::tracked(returns(deref))]
-pub fn constructor_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<AstCompletionItem> {
+pub fn constructor_items(db: &dyn salsa::Database, unit: AnalysisUnit) -> Vec<AstCompletionItem> {
     use rustc_hash::FxHashMap as HashMap;
 
-    let Some(output) = tribute::parse_and_lower_ast(db, source) else {
+    let Some(output) = unit.typed(db) else {
         return Vec::new();
     };
     let entries = &output.module(db).entries;
@@ -347,11 +348,17 @@ fn prelude_constructors(db: &dyn salsa::Database) -> Vec<(Symbol, Symbol)> {
 }
 
 /// The identity path of the module whose body contains the byte offset
-/// `offset` of `source`, as the module's declarations record it.
+/// `offset` of the file `source` of `unit`'s source tree, as the module's
+/// declarations record it.
 ///
 /// A module declaration's span covers only its header, so the extent of its
 /// body comes from the syntax tree.
-pub fn module_at(db: &dyn salsa::Database, source: SourceCst, offset: usize) -> SymbolPath {
+pub fn module_at(
+    db: &dyn salsa::Database,
+    unit: AnalysisUnit,
+    source: SourceCst,
+    offset: usize,
+) -> SymbolPath {
     fn descend(
         items: &[ModuleItem<UnresolvedName>],
         span_map: SpanMap<'_>,
@@ -381,19 +388,19 @@ pub fn module_at(db: &dyn salsa::Database, source: SourceCst, offset: usize) -> 
         }
     }
 
-    let mut path = SymbolPath::root();
-    if let Some(parsed) = ast_query::parsed_ast(db, source)
+    let mut path = unit.module_path(db, source);
+    if let Some(file) = unit.file(db, source)
         && let Some(tree) = source.tree(db)
     {
         descend(
-            &parsed.module(db).decls,
-            parsed.span_map(db),
+            &file.parsed.module(db).decls,
+            file.parsed.span_map(db),
             tree.root_node(),
             offset,
             &mut path,
         );
     }
-    tribute_front::resolve::PackageName::executable_root().identity_path(&path)
+    path
 }
 
 /// The items of `items` the body of `module` names. A declaration of the
@@ -600,19 +607,24 @@ fn print_type_annotation(ty: &TypeAnnotation) -> String {
     }
 }
 
-/// Build function signatures from a typed module.
-pub fn function_signatures(db: &dyn salsa::Database, source: SourceCst) -> Vec<FunctionSignature> {
-    let Some(output) = tribute::parse_and_lower_ast(db, source) else {
+/// Build the signatures of the functions the file `source` declares at its
+/// top level, as `unit`'s analysis types them.
+pub fn function_signatures(
+    db: &dyn salsa::Database,
+    unit: AnalysisUnit,
+    source: SourceCst,
+) -> Vec<FunctionSignature> {
+    let Some(output) = unit.typed(db) else {
         return Vec::new();
     };
     let module = output.module(db);
-    let Some(span_map) = ast_query::span_map(db, source) else {
+    let Some(span_map) = unit.span_map(db, source) else {
         return Vec::new();
     };
 
     let mut signatures = Vec::new();
 
-    for decl in root_decls(module) {
+    for decl in module_decls(module, unit.module_path(db, source)) {
         if let Decl::Function(func) = decl {
             let params: Vec<_> = func
                 .params
@@ -683,7 +695,7 @@ mod tests {
         let db = salsa::DatabaseImpl::default();
         let text = "mod shapes {\n    pub enum Shape { Dot, Line(Nat) }\n    pub struct Point { x: Nat }\n    pub enum Pair { Pair(Nat, Nat), Empty }\n}\nuse shapes::Shape\nuse shapes::Point\nmod inner {\n    use super::shapes::Shape as S\n    use super::shapes::Point as P\n    use super::shapes::Pair as Q\n}\n";
         let source = make_source(&db, text);
-        let items = constructor_items(&db, source);
+        let items = constructor_items(&db, AnalysisUnit::Executable(source));
         let at = |module: &[&str]| -> Vec<(String, String)> {
             let module = SymbolPath::new(module.iter().copied());
             let mut found: Vec<_> = items
@@ -726,7 +738,7 @@ mod tests {
         let db = salsa::DatabaseImpl::default();
         let text = "use std::io::Error\nmod inner {\n    use std::io::Error as IoError\n}\n";
         let source = make_source(&db, text);
-        let items = constructor_items(&db, source);
+        let items = constructor_items(&db, AnalysisUnit::Executable(source));
         let detail_at = |module: &SymbolPath, name: &str| {
             items
                 .iter()
@@ -748,7 +760,7 @@ mod tests {
         let db = salsa::DatabaseImpl::default();
         let text = "enum Color { Red, Green }\nstruct Point { x: Nat }\nmod inner {\n    enum Mode { Quiet }\n}\n";
         let source = make_source(&db, text);
-        let items = constructor_items(&db, source);
+        let items = constructor_items(&db, AnalysisUnit::Executable(source));
         let at = |module: &SymbolPath| -> Vec<(String, Option<String>)> {
             items
                 .iter()
@@ -837,7 +849,7 @@ mod tests {
         let db = salsa::DatabaseImpl::default();
         let source = make_source(&db, "fn hello() { 1 }");
 
-        let items = completion_items(&db, source);
+        let items = completion_items(&db, AnalysisUnit::Executable(source));
         assert!(!items.is_empty());
 
         let hello_item = items.iter().find(|i| i.name == "hello");
@@ -850,9 +862,9 @@ mod tests {
         let db = salsa::DatabaseImpl::default();
         let text = "fn top() -> Nat { 1 }\nmod inner {\n    fn local() -> Nat { 2 }\n}\n";
         let source = make_source(&db, text);
-        let items = completion_items(&db, source);
+        let items = completion_items(&db, AnalysisUnit::Executable(source));
         let names_at = |offset| -> Vec<Symbol> {
-            let module = module_at(&db, source, offset);
+            let module = module_at(&db, AnalysisUnit::Executable(source), source, offset);
             completions_in(items, &module)
                 .map(|item| item.name.clone())
                 .collect()
@@ -879,7 +891,7 @@ mod tests {
     fn test_completions_hide_shadowed_library_names() {
         let db = salsa::DatabaseImpl::default();
         let source = make_source(&db, "enum Option { Some, Empty }\nfn main() -> Nil {}\n");
-        let items = completion_items(&db, source);
+        let items = completion_items(&db, AnalysisUnit::Executable(source));
         let root = root();
         let named: Vec<_> = completions_in(items, &root)
             .filter(|item| item.name == "Option" || item.name == "Some")
@@ -893,8 +905,13 @@ mod tests {
         let db = salsa::DatabaseImpl::default();
         let text = "mod std {\n    fn local() -> Nat { 1 }\n}\nfn main() -> Nil {}\n";
         let source = make_source(&db, text);
-        let items = completion_items(&db, source);
-        let module = module_at(&db, source, text.find("fn local").unwrap());
+        let items = completion_items(&db, AnalysisUnit::Executable(source));
+        let module = module_at(
+            &db,
+            AnalysisUnit::Executable(source),
+            source,
+            text.find("fn local").unwrap(),
+        );
         assert!(completions_in(items, &module).any(|item| item.name == "local"));
     }
 
@@ -903,7 +920,7 @@ mod tests {
         let db = salsa::DatabaseImpl::default();
         let source = make_source(&db, "struct Point { x: Int, y: Int }");
 
-        let items = completion_items(&db, source);
+        let items = completion_items(&db, AnalysisUnit::Executable(source));
         let point_item = items.iter().find(|i| i.name == "Point");
         assert!(point_item.is_some());
         assert_eq!(point_item.unwrap().kind, CompletionKind::Struct);
@@ -914,7 +931,7 @@ mod tests {
         let db = salsa::DatabaseImpl::default();
         let source = make_source(&db, "use std::io::Io\nfn main() -> Nil { Nil }");
 
-        let items = completion_items(&db, source);
+        let items = completion_items(&db, AnalysisUnit::Executable(source));
         let io = items
             .iter()
             .find(|item| item.name == "Io")
@@ -931,7 +948,7 @@ mod tests {
         let db = salsa::DatabaseImpl::default();
         let source = make_source(&db, "enum Color { Red, Green, Blue }");
 
-        let items = completion_items(&db, source);
+        let items = completion_items(&db, AnalysisUnit::Executable(source));
 
         // Should have the enum
         let color_item = items.iter().find(|i| i.name == "Color");
@@ -1008,7 +1025,7 @@ mod tests {
         let db = salsa::DatabaseImpl::default();
         let source = make_source(&db, "fn add(a: Int, b: Int) -> Int { a + b }");
 
-        let signatures = function_signatures(&db, source);
+        let signatures = function_signatures(&db, AnalysisUnit::Executable(source), source);
         assert_eq!(signatures.len(), 1);
 
         let sig = &signatures[0];
@@ -1024,7 +1041,7 @@ mod tests {
         let db = salsa::DatabaseImpl::default();
         let source = make_source(&db, "fn identity(x) { x }");
 
-        let signatures = function_signatures(&db, source);
+        let signatures = function_signatures(&db, AnalysisUnit::Executable(source), source);
         assert_eq!(signatures.len(), 1);
 
         let sig = &signatures[0];
@@ -1037,7 +1054,7 @@ mod tests {
         let db = salsa::DatabaseImpl::default();
         let source = make_source(&db, "fn add(a: Int, b: Int) -> Int { a + b }");
 
-        let signatures = function_signatures(&db, source);
+        let signatures = function_signatures(&db, AnalysisUnit::Executable(source), source);
         assert_eq!(signatures.len(), 1);
         assert!(signatures[0].effects.is_none());
     }
@@ -1047,7 +1064,7 @@ mod tests {
         let db = salsa::DatabaseImpl::default();
         let source = make_source(&db, "fn foo() { 1 }\nfn bar() { 2 }");
 
-        let signatures = function_signatures(&db, source);
+        let signatures = function_signatures(&db, AnalysisUnit::Executable(source), source);
         assert_eq!(signatures.len(), 2);
 
         let foo = find_signature(&signatures, &trunk_ir::Symbol::new("foo"));
@@ -1062,7 +1079,7 @@ mod tests {
         let db = salsa::DatabaseImpl::default();
         let source = make_source(&db, "fn r#case(x: Nat) -> Nat { x }\nfn plain() { 1 }");
 
-        let signatures = function_signatures(&db, source);
+        let signatures = function_signatures(&db, AnalysisUnit::Executable(source), source);
         for callee in ["r#case", "case"] {
             let sig = find_callee_signature(&signatures, callee);
             assert_eq!(
@@ -1079,7 +1096,7 @@ mod tests {
         let db = salsa::DatabaseImpl::default();
         let source = make_source(&db, r#"extern "intrinsic" fn __add(a: Int, b: Int) -> Int"#);
 
-        let items = completion_items(&db, source);
+        let items = completion_items(&db, AnalysisUnit::Executable(source));
         let add_item = items.iter().find(|i| i.name == "__add");
         assert!(
             add_item.is_some(),
@@ -1097,7 +1114,7 @@ mod tests {
 fn main() -> Nil { 1 }"#,
         );
 
-        let items = completion_items(&db, source);
+        let items = completion_items(&db, AnalysisUnit::Executable(source));
 
         let add_item = items.iter().find(|i| i.name == "__add");
         assert!(add_item.is_some(), "Extern function should appear");
