@@ -1,7 +1,11 @@
 //! Properties of the generator itself.
 
 use proptest::prelude::*;
-use tribute_prop::{Env, Fragment, Goal, Value, fragment, program};
+use tribute_prop::env::{Env, Goal};
+use tribute_prop::expr::fragment;
+use tribute_prop::fragment::Fragment;
+use tribute_prop::program::program;
+use tribute_prop::value::Value;
 
 /// Strategy for an env of up to four bindings, as enclosing `let`s leave
 /// it.

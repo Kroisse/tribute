@@ -1,3 +1,5 @@
+//! Generated source text with the value it evaluates to.
+
 use std::collections::BTreeSet;
 
 use crate::value::{Ty, Value};

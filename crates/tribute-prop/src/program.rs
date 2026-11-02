@@ -1,3 +1,5 @@
+//! Whole programs of independent checks that `main` prints.
+
 use std::fmt::Write;
 
 use proptest::prelude::*;

@@ -1,3 +1,5 @@
+//! The types the generator produces and the values of their fragments.
+
 use std::fmt;
 
 use proptest::prelude::*;
@@ -45,7 +47,7 @@ impl Value {
     }
 }
 
-/// The text a [`Program`](crate::Program) prints for a value: decimal for `Nat`, the
+/// The text a [`Program`](crate::program::Program) prints for a value: decimal for `Nat`, the
 /// constructor name for `Bool`, and the text itself for `String`.
 impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

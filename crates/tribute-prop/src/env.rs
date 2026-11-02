@@ -1,3 +1,5 @@
+//! The bindings in scope and the goal a strategy generates for.
+
 use crate::value::{Ty, Value};
 
 /// One `let` binding in scope.

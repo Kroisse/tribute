@@ -9,7 +9,8 @@ mod common;
 use proptest::prelude::*;
 use tribute_front::SourceCst;
 use tribute_front::ast::{Decl, Type, TypeKind};
-use tribute_prop::{Program, Ty, program};
+use tribute_prop::program::{Program, program};
+use tribute_prop::value::Ty;
 
 use self::common::{analyze_with_prelude, ast_pipeline_diagnostics, prelude_string_type};
 
