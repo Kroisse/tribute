@@ -484,9 +484,8 @@ impl OpRewritePattern for FuncCallIndirectPattern {
     ) -> Option<()> {
         let op = call.op_ref();
         let loc = ctx.op(op).location;
-        let all_operands = std::iter::once(call.callee(ctx))
-            .chain(CallLike::call_args(&call, ctx).iter().copied())
-            .collect::<Vec<_>>();
+        let callee = call.callee(ctx);
+        let args = CallLike::call_args(&call, ctx).to_vec();
         let result_types = rewriter.result_types(ctx, op);
 
         let signature = call.exact_signature(ctx)?;
@@ -505,10 +504,8 @@ impl OpRewritePattern for FuncCallIndirectPattern {
         ) {
             return rewriter.no_match(error.to_string());
         }
-        let new_op = wasm_dialect::CallIndirect::operands(all_operands)
-            .type_idx(0)
-            .table(0)
-            .signature(Some(signature))
+        let new_op = wasm_dialect::CallIndirect::operands(callee, args)
+            .signature(signature)
             .results(result_types)
             .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
@@ -609,19 +606,16 @@ impl OpRewritePattern for FuncTailCallIndirectPattern {
             return rewriter.no_match(error.to_string());
         }
 
-        let operands = std::iter::once(tail.callee(ctx))
-            .chain(CallLike::call_args(&tail, ctx).iter().copied())
-            .collect::<Vec<_>>();
+        let callee = tail.callee(ctx);
+        let args = CallLike::call_args(&tail, ctx).to_vec();
         rewriter.ensure(
             TailCallLike::is_resultless(&tail, ctx),
             "tail call has results",
         )?;
 
         let loc = ctx.op(op).location;
-        let new_op = wasm_dialect::ReturnCallIndirect::operands(operands)
-            .type_idx(0)
-            .table(0)
-            .signature(Some(signature))
+        let new_op = wasm_dialect::ReturnCallIndirect::operands(callee, args)
+            .signature(signature)
             .build(ctx, loc);
         ctx.op_attrs_mut(new_op.op_ref()).extend(converted_attrs);
         rewriter.replace_op(new_op.op_ref());
@@ -922,12 +916,11 @@ mod tests {
             "{output}"
         );
         assert!(
-            output.contains("wasm.return_call_indirect %0, %1"),
+            output.contains("wasm.return_call_indirect %0(%1) : (core.i32) -> core.nil"),
             "{output}"
         );
-        assert!(output.contains(" = wasm.call_indirect "), "{output}");
         assert!(
-            output.contains("signature = wasm.func_sig<(core.i32) -> core.nil>"),
+            output.contains(" = wasm.call_indirect %0(%1) : (core.i32) -> core.i32"),
             "{output}"
         );
     }
@@ -967,9 +960,7 @@ mod tests {
 
         let output = print_module(&ctx, module.op());
         assert!(
-            output.contains(
-                "wasm.call_indirect %0 {signature = wasm.func_sig<() -> core.nil>, table = 0, type_idx = 0}"
-            ),
+            output.contains("wasm.call_indirect %0 {signature = wasm.func_sig<() -> core.nil>}"),
             "{output}"
         );
         assert!(!output.contains("func.call_indirect"), "{output}");
@@ -1035,12 +1026,14 @@ mod tests {
         let output = print_module(&ctx, module.op());
         assert!(
             output.contains(
-                "wasm.return_call_indirect %0, %1 {signature = wasm.func_sig<(wasm.anyref) -> ()>"
+                "wasm.return_call_indirect %0(%1) attributes {test.marker = 2} : (wasm.anyref) -> ()"
             ),
             "{output}"
         );
         assert!(
-            output.contains("wasm.return_call_indirect %0, %1 {signature = wasm.func_sig<(wasm.anyref) -> ()>, table = 0, test.marker = 2, type_idx = 0}"),
+            output.contains(
+                "wasm.return_call_indirect %0(%1) attributes {test.marker = 2} : (wasm.anyref) -> ()"
+            ),
             "the converted transfer must retain its calling convention: {output}"
         );
         assert!(!output.contains("(tribute_rt.anyref) -> ()"), "{output}");
@@ -1088,9 +1081,7 @@ mod tests {
 
         let output = print_module(&ctx, module.op());
         assert!(
-            output.contains(
-                "wasm.call_indirect %0, %1 {signature = wasm.func_sig<(wasm.anyref) -> core.i32>, table = 0, type_idx = 0}"
-            ),
+            output.contains("wasm.call_indirect %0(%1) : (wasm.anyref) -> core.i32"),
             "{output}"
         );
         assert!(
