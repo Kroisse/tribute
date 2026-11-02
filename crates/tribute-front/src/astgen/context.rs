@@ -10,7 +10,7 @@ use tree_sitter::Node;
 use trunk_ir::{Span, Symbol, SymbolPath};
 
 use crate::ast::{ItemSpans, ModuleItem, NodeId, SpanMapBuilder, UnresolvedName, owner_hash};
-use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_core::diagnostic::{CompilationPhase, DiagnosticSeverity, SpanDiagnostic};
 
 /// Context for lowering CST to AST.
 pub struct AstLoweringCtx<'db> {
@@ -161,7 +161,7 @@ impl<'db> AstLoweringCtx<'db> {
     /// Emit a diagnostic error.
     pub fn error(&mut self, span: Span, message: impl Into<String>) {
         if let Some(db) = self.db {
-            Diagnostic::new(
+            SpanDiagnostic::new(
                 message,
                 span.in_source(self.source_hash),
                 DiagnosticSeverity::Error,
@@ -174,7 +174,7 @@ impl<'db> AstLoweringCtx<'db> {
     /// Emit a parse error diagnostic for syntax errors.
     pub fn parse_error(&mut self, span: Span, message: impl Into<String>) {
         if let Some(db) = self.db {
-            Diagnostic::new(
+            SpanDiagnostic::new(
                 message,
                 span.in_source(self.source_hash),
                 DiagnosticSeverity::Error,

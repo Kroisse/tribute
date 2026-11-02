@@ -8,7 +8,7 @@
 
 use rustc_hash::FxHashMap as HashMap;
 
-use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_core::diagnostic::{CompilationPhase, DiagnosticSeverity, SpanDiagnostic};
 use tribute_ir::runtime_items::{RuntimeItem, RuntimeItemKind};
 use trunk_ir::SymbolPath;
 
@@ -37,8 +37,8 @@ pub struct RuntimeItemError {
 impl RuntimeItemError {
     /// The source diagnostic of this error, at its declaration, naming the
     /// item as `names` spells it.
-    pub fn diagnostic(&self, spans: &SpanMaps<'_>, names: &NameDisplay) -> Diagnostic {
-        Diagnostic::new(
+    pub fn diagnostic(&self, spans: &SpanMaps<'_>, names: &NameDisplay) -> SpanDiagnostic {
+        SpanDiagnostic::new(
             format!("runtime `{}` {}", names.text(&self.path), self.kind),
             spans.get_or_default(self.node),
             DiagnosticSeverity::Error,

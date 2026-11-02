@@ -7,7 +7,7 @@
 
 use salsa::Database;
 use salsa_test_macros::salsa_test;
-use tribute::Diagnostic;
+use tribute::SpanDiagnostic;
 use tribute::pipeline::{compile_ast, compile_with_diagnostics};
 use tribute_core::diagnostic::{CompilationPhase, DiagnosticSeverity};
 use tribute_front::SourceCst;
@@ -401,7 +401,7 @@ fn invalid_record_shapes_block_public_compilation_apis(db: &salsa::DatabaseImpl)
         let expected: Vec<_> = messages
             .iter()
             .map(|message| {
-                Diagnostic::new(
+                SpanDiagnostic::new(
                     *message,
                     Span::new(start, start + record.len()).in_source(source_id),
                     DiagnosticSeverity::Error,
@@ -411,6 +411,7 @@ fn invalid_record_shapes_block_public_compilation_apis(db: &salsa::DatabaseImpl)
             .collect();
         // Public diagnostics retain phase/span/message sorting, including mixed errors.
         // Exact equality also rejects spurious missing-field diagnostics.
+        let expected: Vec<_> = expected.iter().map(SpanDiagnostic::view).collect();
         assert_eq!(result.diagnostics, expected, "{record}");
         assert!(!result.produced_module, "{record}");
         assert!(tribute::compile_frontend(db, source).is_none(), "{record}");
@@ -434,10 +435,10 @@ fn invalid(base: Pair(Int, Bool)) -> Pair(Int, Int) {
     assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
     let diagnostic = &result.diagnostics[0];
     assert_eq!(diagnostic.phase, CompilationPhase::TypeChecking);
-    assert_eq!(diagnostic.inner.severity, DiagnosticSeverity::Error);
-    assert!(diagnostic.inner.message.contains("type error"));
-    assert!(diagnostic.inner.message.contains("Int"));
-    assert!(diagnostic.inner.message.contains("Bool"));
+    assert_eq!(diagnostic.severity, DiagnosticSeverity::Error);
+    assert!(diagnostic.message.contains("type error"));
+    assert!(diagnostic.message.contains("Int"));
+    assert!(diagnostic.message.contains("Bool"));
     assert!(!result.produced_module);
     assert!(tribute::compile_frontend(db, source).is_none());
     assert!(matches!(compile_ast(db, source), Ok(None)));
@@ -724,7 +725,11 @@ fn test() ->{State(Int), State(Int)} Nil {
     let compile = || {
         salsa::DatabaseImpl::default().attach(|db| {
             let source = SourceCst::from_source_str(db, "test.trb", SOURCE);
-            compile_with_diagnostics(db, source).diagnostics
+            compile_with_diagnostics(db, source)
+                .diagnostics
+                .iter()
+                .map(|diagnostic| format!("{diagnostic:?}"))
+                .collect::<Vec<_>>()
         })
     };
 
@@ -760,7 +765,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
         result
             .diagnostics
             .iter()
-            .any(|d| d.inner.message.contains("missing an arm for `set`")),
+            .any(|d| d.message.contains("missing an arm for `set`")),
         "expected a missing handler arm diagnostic, got: {:?}",
         result.diagnostics
     );

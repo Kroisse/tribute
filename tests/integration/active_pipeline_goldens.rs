@@ -15,14 +15,14 @@ use tribute_ir::calling_convention::DynConventionBearing;
 use tribute_ir::continuation_frame;
 use trunk_ir::printer::print_module;
 
-fn assert_no_diagnostics(stage: &str, diagnostics: &[Diagnostic]) {
+fn assert_no_diagnostics(stage: &str, diagnostics: &[Diagnostic<'_>]) {
     assert!(
         diagnostics.is_empty(),
         "{stage} emitted diagnostics:\n{}",
         diagnostics.iter().format_with("\n", |diagnostic, f| {
             f(&format_args!(
                 "  - [{}] {}",
-                diagnostic.phase, diagnostic.inner.message
+                diagnostic.phase, diagnostic.message
             ))
         })
     );

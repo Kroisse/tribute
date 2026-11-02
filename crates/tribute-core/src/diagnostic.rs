@@ -1,22 +1,65 @@
 //! Diagnostic messages emitted during compilation.
 
 use serde::Serialize;
+use smallvec::SmallVec;
+use trunk_ir::Span;
 
 pub use trunk_ir::diagnostic::DiagnosticSeverity;
 
-/// A diagnostic message (error, warning, or info) with source location and
-/// compilation phase. Wraps [`trunk_ir::diagnostic::Diagnostic`] with
-/// Tribute-specific compilation phase information.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
+/// A reported diagnostic, at the spans it was reported at or at the spans its
+/// nodes were located at. It borrows its text from the reported value, and
+/// compares with a view borrowed from another database.
+#[derive(Clone, Debug, Eq, Hash, Serialize)]
+pub struct Diagnostic<'a> {
+    pub message: &'a str,
+    pub span: Span,
+    pub severity: DiagnosticSeverity,
+    /// Related spans, such as "first defined here".
+    #[serde(skip_serializing_if = "SmallVec::is_empty")]
+    pub labels: SmallVec<[Label<'a>; 2]>,
+    /// Extra context after the main message.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<&'a str>,
+    pub phase: CompilationPhase,
+}
+
+/// A secondary label of a [`Diagnostic`], at a related span.
+#[derive(Clone, Copy, Debug, Eq, Hash, Serialize)]
+pub struct Label<'a> {
+    pub span: Span,
+    pub message: &'a str,
+}
+
+impl<'b> PartialEq<Diagnostic<'b>> for Diagnostic<'_> {
+    fn eq(&self, other: &Diagnostic<'b>) -> bool {
+        self.message == other.message
+            && self.span == other.span
+            && self.severity == other.severity
+            && self.labels[..] == other.labels[..]
+            && self.note == other.note
+            && self.phase == other.phase
+    }
+}
+
+impl<'b> PartialEq<Label<'b>> for Label<'_> {
+    fn eq(&self, other: &Label<'b>) -> bool {
+        self.span == other.span && self.message == other.message
+    }
+}
+
+/// A diagnostic message (error, warning, or info) reported at a source span,
+/// with its compilation phase. Wraps [`trunk_ir::diagnostic::Diagnostic`]
+/// with Tribute-specific compilation phase information. Readers see it
+/// through [`SpanDiagnostic::view`].
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[salsa::accumulator]
-pub struct Diagnostic {
-    #[serde(flatten)]
+pub struct SpanDiagnostic {
     pub inner: trunk_ir::diagnostic::Diagnostic,
     pub phase: CompilationPhase,
 }
 
 /// Compilation phase where a diagnostic was emitted.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
 pub enum CompilationPhase {
     Parsing,
     AstGeneration,
@@ -27,7 +70,7 @@ pub enum CompilationPhase {
     Optimization,
 }
 
-impl Diagnostic {
+impl SpanDiagnostic {
     /// Create a new diagnostic with the given message, span, severity, and phase.
     pub fn new(
         message: impl Into<String>,
@@ -47,23 +90,43 @@ impl Diagnostic {
         }
     }
 
-    /// Create a `Diagnostic` from a [`trunk_ir::diagnostic::Diagnostic`] and a
+    /// Create a `SpanDiagnostic` from a [`trunk_ir::diagnostic::Diagnostic`] and a
     /// compilation phase.
     pub fn from_ir(diag: trunk_ir::diagnostic::Diagnostic, phase: CompilationPhase) -> Self {
         Self { inner: diag, phase }
     }
 
+    /// The diagnostic as readers see it.
+    pub fn view(&self) -> Diagnostic<'_> {
+        let inner = &self.inner;
+        Diagnostic {
+            message: &inner.message,
+            span: inner.span,
+            severity: inner.severity,
+            labels: inner
+                .labels
+                .iter()
+                .map(|label| Label {
+                    span: label.span,
+                    message: &label.message,
+                })
+                .collect(),
+            note: inner.note.as_deref(),
+            phase: self.phase,
+        }
+    }
+
     /// Create a builder for a diagnostic with secondary labels and/or notes.
     ///
     /// Use this when you need to attach additional context beyond a single
-    /// message and span. For simple diagnostics, use [`Diagnostic::new`] directly.
+    /// message and span. For simple diagnostics, use [`SpanDiagnostic::new`] directly.
     pub fn builder(
         message: impl Into<String>,
         span: trunk_ir::Span,
         severity: DiagnosticSeverity,
         phase: CompilationPhase,
-    ) -> DiagnosticBuilder {
-        DiagnosticBuilder {
+    ) -> SpanDiagnosticBuilder {
+        SpanDiagnosticBuilder {
             message: message.into(),
             span,
             severity,
@@ -74,11 +137,11 @@ impl Diagnostic {
     }
 }
 
-/// Builder for constructing [`Diagnostic`] values with secondary labels and notes.
+/// Builder for constructing [`SpanDiagnostic`] values with secondary labels and notes.
 ///
 /// Labels are collected in a `Vec` during building and converted to `Box<[Label]>`
-/// once at [`build`](DiagnosticBuilder::build) time.
-pub struct DiagnosticBuilder {
+/// once at [`build`](SpanDiagnosticBuilder::build) time.
+pub struct SpanDiagnosticBuilder {
     message: String,
     span: trunk_ir::Span,
     severity: DiagnosticSeverity,
@@ -87,7 +150,7 @@ pub struct DiagnosticBuilder {
     note: Option<Box<str>>,
 }
 
-impl DiagnosticBuilder {
+impl SpanDiagnosticBuilder {
     /// Add a secondary label pointing to a related source span.
     pub fn label(mut self, span: trunk_ir::Span, message: impl Into<Box<str>>) -> Self {
         self.labels.push(trunk_ir::diagnostic::Label {
@@ -103,9 +166,9 @@ impl DiagnosticBuilder {
         self
     }
 
-    /// Build the [`Diagnostic`].
-    pub fn build(self) -> Diagnostic {
-        Diagnostic {
+    /// Build the [`SpanDiagnostic`].
+    pub fn build(self) -> SpanDiagnostic {
+        SpanDiagnostic {
             inner: trunk_ir::diagnostic::Diagnostic {
                 message: self.message,
                 span: self.span,
@@ -137,8 +200,8 @@ impl std::fmt::Display for CompilationPhase {
 /// Compilation phase is primary, followed by source location and message as
 /// deterministic tie-breakers. This is also used by the CLI for target-specific
 /// accumulator results.
-pub fn compare_diagnostics(left: &Diagnostic, right: &Diagnostic) -> std::cmp::Ordering {
-    fn phase_rank(phase: &CompilationPhase) -> u8 {
+pub fn compare_diagnostics(left: &Diagnostic<'_>, right: &Diagnostic<'_>) -> std::cmp::Ordering {
+    fn phase_rank(phase: CompilationPhase) -> u8 {
         match phase {
             CompilationPhase::Parsing => 0,
             CompilationPhase::AstGeneration => 1,
@@ -150,8 +213,8 @@ pub fn compare_diagnostics(left: &Diagnostic, right: &Diagnostic) -> std::cmp::O
         }
     }
 
-    phase_rank(&left.phase)
-        .cmp(&phase_rank(&right.phase))
-        .then_with(|| left.inner.span.cmp(&right.inner.span))
-        .then_with(|| left.inner.message.cmp(&right.inner.message))
+    phase_rank(left.phase)
+        .cmp(&phase_rank(right.phase))
+        .then_with(|| left.span.cmp(&right.span))
+        .then_with(|| left.message.cmp(right.message))
 }

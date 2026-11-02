@@ -176,9 +176,9 @@ fn phase_errors(
     tribute_front::analysis::diagnostics(db, source, *tribute_front::analysis::builtins(db))
         .into_iter()
         .filter(|diagnostic| {
-            diagnostic.inner.severity == DiagnosticSeverity::Error && diagnostic.phase == phase
+            diagnostic.severity == DiagnosticSeverity::Error && diagnostic.phase == phase
         })
-        .map(|diagnostic| diagnostic.inner.message.clone())
+        .map(|diagnostic| diagnostic.message.to_owned())
         .collect()
 }
 

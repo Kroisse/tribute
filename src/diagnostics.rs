@@ -136,19 +136,18 @@ pub fn print_diagnostic(
     db: &dyn salsa::Database,
     root: SourceCst,
     root_path: &str,
-    diag: &Diagnostic,
+    diag: &Diagnostic<'_>,
 ) {
     let mut files = SpanFiles::new(db, root, root_path);
     let span_of = |span: &trunk_ir::Span| {
         let (start, end) = normalize_span(span.start as usize, span.end as usize);
         (files.file(span.source), start..end)
     };
-    let main = span_of(&diag.inner.span);
+    let main = span_of(&diag.span);
     let labels: Vec<_> = diag
-        .inner
         .labels
         .iter()
-        .map(|label| (span_of(&label.span), label.message.as_ref()))
+        .map(|label| (span_of(&label.span), label.message))
         .collect();
     let spans: Vec<_> = std::iter::once(main.clone())
         .chain(labels.iter().map(|(span, _)| span.clone()))
@@ -157,7 +156,7 @@ pub fn print_diagnostic(
     let main = files.span(main.0, &main.1);
     let color = phase_color(&diag.phase);
 
-    let report_kind = match diag.inner.severity {
+    let report_kind = match diag.severity {
         DiagnosticSeverity::Error => ReportKind::Error,
         DiagnosticSeverity::Warning => ReportKind::Warning,
         DiagnosticSeverity::Info => ReportKind::Advice,
@@ -166,10 +165,10 @@ pub fn print_diagnostic(
     let mut report = Report::build(report_kind, main.clone())
         .with_config(Config::default().with_index_type(IndexType::Byte))
         .with_code(format!("{:?}", diag.phase))
-        .with_message(&diag.inner.message)
+        .with_message(diag.message)
         .with_label(
             Label::new(main)
-                .with_message(&diag.inner.message)
+                .with_message(diag.message)
                 .with_color(color),
         );
 
@@ -182,8 +181,8 @@ pub fn print_diagnostic(
     }
 
     // Add note
-    if let Some(note) = &diag.inner.note {
-        report = report.with_note(note.as_ref());
+    if let Some(note) = diag.note {
+        report = report.with_note(note);
     }
 
     report.finish().eprint(files).ok();
@@ -194,13 +193,13 @@ pub fn print_diagnostics(
     db: &dyn salsa::Database,
     source: SourceCst,
     file_path: &str,
-    diags: &mut [Diagnostic],
+    diags: &mut [Diagnostic<'_>],
 ) {
     diags.sort_by(tribute_core::diagnostic::compare_diagnostics);
     // Keep each file's diagnostics together, the root file's first.
     let root = source_hash(source.uri(db).as_str());
     diags.sort_by_key(|diag| {
-        let source = diag.inner.span.source;
+        let source = diag.span.source;
         // A span in no file is shown against the root, with its diagnostics.
         if source == root || source == 0 {
             None
@@ -221,7 +220,7 @@ pub fn report_diagnostics(
     db: &dyn salsa::Database,
     source: SourceCst,
     file_path: &str,
-    mut accumulated_diags: Vec<Diagnostic>,
+    mut accumulated_diags: Vec<Diagnostic<'_>>,
 ) {
     if !accumulated_diags.is_empty() {
         print_diagnostics(db, source, file_path, &mut accumulated_diags);

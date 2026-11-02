@@ -1,7 +1,6 @@
 //! Diagnostics positioned at nodes rather than source spans.
 
-use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
-use trunk_ir::diagnostic::Label;
+use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity, Label, SpanDiagnostic};
 
 use super::{NodeId, SpanMaps};
 
@@ -42,23 +41,21 @@ impl NodeDiagnostic {
     }
 
     /// The diagnostic at the spans `spans` gives its nodes.
-    pub fn locate(&self, spans: &SpanMaps<'_>) -> Diagnostic {
+    pub fn locate<'a>(&'a self, spans: &SpanMaps<'_>) -> Diagnostic<'a> {
         Diagnostic {
-            inner: trunk_ir::diagnostic::Diagnostic {
-                message: self.message.clone(),
-                span: spans.get_or_default(self.node),
-                severity: self.severity,
-                labels: self
-                    .labels
-                    .iter()
-                    .map(|(node, message)| Label {
-                        span: spans.get_or_default(*node),
-                        message: message.clone(),
-                    })
-                    .collect(),
-                note: None,
-            },
-            phase: self.phase.clone(),
+            message: &self.message,
+            span: spans.get_or_default(self.node),
+            severity: self.severity,
+            labels: self
+                .labels
+                .iter()
+                .map(|(node, message)| Label {
+                    span: spans.get_or_default(*node),
+                    message,
+                })
+                .collect(),
+            note: None,
+            phase: self.phase,
         }
     }
 }
@@ -67,10 +64,13 @@ impl NodeDiagnostic {
 /// `spans` gives their nodes. Read both from a query outside any query:
 /// reading accumulated values inside one is an untracked read.
 pub fn locate_diagnostics<'a, 's>(
-    diagnostics: Vec<&'a Diagnostic>,
+    diagnostics: Vec<&'a SpanDiagnostic>,
     nodes: Vec<&'a NodeDiagnostic>,
     spans: SpanMaps<'s>,
-) -> impl Iterator<Item = Diagnostic> {
+) -> impl Iterator<Item = Diagnostic<'a>> {
     let located = nodes.into_iter().map(move |node| node.locate(&spans));
-    diagnostics.into_iter().cloned().chain(located)
+    diagnostics
+        .into_iter()
+        .map(SpanDiagnostic::view)
+        .chain(located)
 }

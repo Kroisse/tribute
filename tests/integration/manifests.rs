@@ -85,7 +85,7 @@ fn an_app_lowers_its_dependency_at_its_identity_paths() {
     let messages: Vec<_> = compile_with_diagnostics(&db, app)
         .diagnostics
         .into_iter()
-        .map(|diagnostic| diagnostic.inner.message)
+        .map(|diagnostic| diagnostic.message)
         .collect();
     assert_eq!(messages, Vec::<String>::new());
     let (ctx, module) = compile_frontend(&db, app).expect("frontend output");

@@ -8,7 +8,7 @@ fn checked(db: &dyn salsa::Database, source: SourceCst) -> TypeCheckOutput<'_> {
     *analysis::analyze(db, source, *analysis::builtins(db)).unwrap()
 }
 
-fn diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<Diagnostic> {
+fn diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<Diagnostic<'_>> {
     analysis::diagnostics(db, source, *analysis::builtins(db))
 }
 
@@ -114,7 +114,7 @@ fn shared(comp: fn() ->{e} Nil) ->{e} Nil {
     checked(db, source);
     let errors: Vec<_> = diagnostics(db, source)
         .into_iter()
-        .map(|diagnostic| diagnostic.inner.message.clone())
+        .map(|diagnostic| diagnostic.message)
         .collect();
     assert_eq!(
         errors,
@@ -211,7 +211,7 @@ fn handled(comp: fn() ->{{e}} Nil) ->{{}} Nil {{
     let _ = checked(db, undeclared);
     let errors: Vec<_> = diagnostics(db, undeclared)
         .into_iter()
-        .map(|diagnostic| diagnostic.inner.message.clone())
+        .map(|diagnostic| diagnostic.message)
         .collect();
     assert_eq!(
         errors,
@@ -254,7 +254,7 @@ fn main() ->{{}} Nil {{
         let _ = checked(db, source);
         let errors: Vec<_> = diagnostics(db, source)
             .into_iter()
-            .map(|diagnostic| diagnostic.inner.message.clone())
+            .map(|diagnostic| diagnostic.message)
             .collect();
         assert!(
             errors
@@ -381,7 +381,7 @@ fn once() ->{State(Int)} Nil { both(inc, fn() { Nil }) }
         let _ = checked(db, source);
         let errors: Vec<_> = diagnostics(db, source)
             .into_iter()
-            .map(|diagnostic| diagnostic.inner.message.clone())
+            .map(|diagnostic| diagnostic.message)
             .collect();
         assert!(errors.is_empty(), "{name}: {errors:?}");
     }
@@ -408,7 +408,7 @@ fn leak(h: fn() ->{t} Nil) ->{t} Nil {
     let _ = checked(db, source);
     let errors: Vec<_> = diagnostics(db, source)
         .into_iter()
-        .map(|diagnostic| diagnostic.inner.message.clone())
+        .map(|diagnostic| diagnostic.message)
         .collect();
     assert_eq!(errors, ["function 'leak' uses undeclared effects: Ping"]);
 }
@@ -459,7 +459,7 @@ fn bump(n: Int) ->{Ask} Int { n + Ask::ask() }
         let _ = checked(db, source);
         let errors: Vec<_> = diagnostics(db, source)
             .into_iter()
-            .map(|diagnostic| diagnostic.inner.message.clone())
+            .map(|diagnostic| diagnostic.message)
             .collect();
         assert!(errors.is_empty(), "{name}: {errors:?}");
     }
@@ -484,7 +484,7 @@ fn run() ->{Tell} Int { apply(+1, bump) }
     let _ = checked(db, source);
     let errors: Vec<_> = diagnostics(db, source)
         .into_iter()
-        .map(|diagnostic| diagnostic.inner.message.clone())
+        .map(|diagnostic| diagnostic.message)
         .collect();
     assert_eq!(
         errors,
@@ -533,7 +533,7 @@ fn named(f: fn() ->{e} Int) ->{e} Int {
     let _ = checked(db, source);
     let errors: Vec<_> = diagnostics(db, source)
         .into_iter()
-        .map(|diagnostic| diagnostic.inner.message.clone())
+        .map(|diagnostic| diagnostic.message)
         .collect();
     assert!(errors.is_empty(), "{errors:?}");
 }

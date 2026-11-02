@@ -431,7 +431,8 @@ fn use_bool() ->{} Bool { apply(True) }
 "#,
     );
     assert_outer_local_signatures(db, source);
-    let errors = assert_outer_local_signatures::accumulated::<tribute_core::Diagnostic>(db, source);
+    let errors =
+        assert_outer_local_signatures::accumulated::<tribute_core::SpanDiagnostic>(db, source);
     assert!(errors.is_empty(), "{errors:?}");
     let errors = assert_outer_local_signatures::accumulated::<tribute_front::ast::NodeDiagnostic>(
         db, source,

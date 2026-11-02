@@ -10,7 +10,7 @@
 use crate::SourceCst;
 use crate::prelude::root_environment;
 use salsa::Accumulator;
-use tribute_core::diagnostic::{Diagnostic, DiagnosticSeverity};
+use tribute_core::diagnostic::{Diagnostic, DiagnosticSeverity, SpanDiagnostic};
 use tribute_front::ast::{NodeDiagnostic, SpanMaps, locate_diagnostics};
 use tribute_front::ast_to_ir;
 use tribute_front::monomorphize::{self, SpecializationInput, SpecializationOutput};
@@ -45,12 +45,12 @@ pub fn parse_and_lower_ast(
 
 /// The diagnostics [`parse_and_lower_ast`] reports for `source`, with those
 /// of its package's manifests.
-pub fn frontend_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<Diagnostic> {
+pub fn frontend_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<Diagnostic<'_>> {
     let implicit = *crate::prelude::frontend_environment(db);
-    let mut diagnostics: Vec<Diagnostic> =
-        manifest::source_dependencies::accumulated::<Diagnostic>(db, source, implicit)
+    let mut diagnostics: Vec<_> =
+        manifest::source_dependencies::accumulated::<SpanDiagnostic>(db, source, implicit)
             .into_iter()
-            .cloned()
+            .map(SpanDiagnostic::view)
             .collect();
     diagnostics.extend(analysis::diagnostics(
         db,
@@ -73,9 +73,9 @@ pub fn check_library(db: &dyn salsa::Database, package: analysis::Package) -> bo
 pub fn library_diagnostics(
     db: &dyn salsa::Database,
     package: analysis::Package,
-) -> Vec<Diagnostic> {
+) -> Vec<Diagnostic<'_>> {
     locate_diagnostics(
-        check_library::accumulated::<Diagnostic>(db, package),
+        check_library::accumulated::<SpanDiagnostic>(db, package),
         check_library::accumulated::<NodeDiagnostic>(db, package),
         analysis::library_spans(db, package),
     )
@@ -141,9 +141,9 @@ pub fn prepare_frontend_diagnostics<'db>(
     db: &'db dyn salsa::Database,
     typed: ast_typeck::TypeCheckOutput<'db>,
     source: SourceCst,
-) -> Vec<Diagnostic> {
+) -> Vec<Diagnostic<'db>> {
     locate_diagnostics(
-        prepare_frontend_details::accumulated::<Diagnostic>(db, typed, source),
+        prepare_frontend_details::accumulated::<SpanDiagnostic>(db, typed, source),
         prepare_frontend_details::accumulated::<NodeDiagnostic>(db, typed, source),
         frontend_spans(db, source),
     )
@@ -266,7 +266,7 @@ pub fn compile_frontend_for_shared_route(
     let typed = parse_and_lower_ast(db, source)?;
     let has_frontend_errors = frontend_diagnostics(db, source)
         .iter()
-        .any(|diagnostic| diagnostic.inner.severity == DiagnosticSeverity::Error);
+        .any(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error);
     if has_frontend_errors {
         return None;
     }
@@ -502,7 +502,7 @@ fn run() -> Nat { unwrap(shapes::wrap(shapes::Thing { n: 1 })) }
             let source = SourceCst::from_path(db, file, text, tree);
             let has_errors = frontend_diagnostics(db, source)
                 .iter()
-                .any(|diagnostic| diagnostic.inner.severity == DiagnosticSeverity::Error);
+                .any(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error);
             if !has_errors {
                 assert_packages_merge_like_bodies(db, &file.display().to_string(), source);
                 compared += 1;

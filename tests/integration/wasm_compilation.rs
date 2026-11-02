@@ -94,7 +94,7 @@ fn main() ->{Io} Nil {
     };
     let messages: Vec<String> = diagnostics
         .iter()
-        .map(|diagnostic| diagnostic.inner.message.clone())
+        .map(|diagnostic| diagnostic.message.to_owned())
         .collect();
     assert!(
         messages

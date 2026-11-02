@@ -15,7 +15,7 @@
 pub use crate::analysis_unit::{AnalysisUnit, document_units};
 pub use crate::database::TributeDatabaseImpl;
 pub use ropey::Rope;
-pub use tribute_core::diagnostic::{Diagnostic, DiagnosticSeverity};
+pub use tribute_core::diagnostic::{Diagnostic, DiagnosticSeverity, SpanDiagnostic};
 pub use tribute_front::SourceCst;
 pub use tribute_front::{ParsedCst, parse_cst};
 

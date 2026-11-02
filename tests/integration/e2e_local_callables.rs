@@ -90,7 +90,7 @@ fn main() -> Nil {}
     );
     let errors: Vec<_> = frontend_diagnostics(db, source)
         .into_iter()
-        .filter(|diagnostic| diagnostic.inner.severity == DiagnosticSeverity::Error)
+        .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
         .collect();
     assert!(
         !errors.is_empty(),
@@ -99,7 +99,7 @@ fn main() -> Nil {}
     assert!(
         errors
             .iter()
-            .any(|diagnostic| diagnostic.inner.message.contains("ability row mismatch")),
+            .any(|diagnostic| diagnostic.message.contains("ability row mismatch")),
         "{errors:?}"
     );
 }

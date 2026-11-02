@@ -17,8 +17,26 @@ use tribute::pipeline::{CompilationConfig, OptimizationOptions};
 use tribute_front::SourceCst;
 use tribute_front::source_file::parse_rope;
 
+/// A diagnostic, owned so that it outlives the database it was read from.
+#[derive(Debug)]
+struct Reported {
+    severity: tribute_core::diagnostic::DiagnosticSeverity,
+    phase: tribute_core::diagnostic::CompilationPhase,
+    message: String,
+}
+
+impl From<tribute_core::diagnostic::Diagnostic<'_>> for Reported {
+    fn from(diagnostic: tribute_core::diagnostic::Diagnostic<'_>) -> Self {
+        Self {
+            severity: diagnostic.severity,
+            phase: diagnostic.phase,
+            message: diagnostic.message.to_owned(),
+        }
+    }
+}
+
 /// Helper to compile code and collect diagnostics using CLI pipeline.
-fn compile_and_check(code: &str, name: &str) -> Vec<tribute_core::diagnostic::Diagnostic> {
+fn compile_and_check(code: &str, name: &str) -> Vec<Reported> {
     let source_code = Rope::from_str(code);
 
     TributeDatabaseImpl::default().attach(|db| {
@@ -27,6 +45,9 @@ fn compile_and_check(code: &str, name: &str) -> Vec<tribute_core::diagnostic::Di
 
         let config = CompilationConfig::new(db, false, OptimizationOptions::production());
         tribute::pipeline::native_binary_diagnostics(db, source_file, config)
+            .into_iter()
+            .map(Reported::from)
+            .collect()
     })
 }
 
@@ -34,7 +55,7 @@ fn compile_and_check(code: &str, name: &str) -> Vec<tribute_core::diagnostic::Di
 ///
 /// Use this instead of `compile_and_check` when testing for frontend errors that would
 /// cause later pipeline stages to panic.
-fn compile_frontend_and_check(code: &str, name: &str) -> Vec<tribute_core::diagnostic::Diagnostic> {
+fn compile_frontend_and_check(code: &str, name: &str) -> Vec<Reported> {
     let source_code = Rope::from_str(code);
 
     TributeDatabaseImpl::default().attach(|db| {
@@ -42,22 +63,25 @@ fn compile_frontend_and_check(code: &str, name: &str) -> Vec<tribute_core::diagn
         let source_file = SourceCst::from_path(db, name, source_code.clone(), tree);
 
         tribute::pipeline::frontend_diagnostics(db, source_file)
+            .into_iter()
+            .map(Reported::from)
+            .collect()
     })
 }
 
 /// Helper to print diagnostics concisely (truncating long messages).
-fn print_diagnostics(diagnostics: &[tribute_core::diagnostic::Diagnostic]) {
+fn print_diagnostics(diagnostics: &[Reported]) {
     for diag in diagnostics {
-        let msg = if diag.inner.message.len() > 200 {
+        let msg = if diag.message.len() > 200 {
             format!(
                 "{}... [truncated {} chars]",
-                &diag.inner.message[..200],
-                diag.inner.message.len() - 200
+                &diag.message[..200],
+                diag.message.len() - 200
             )
         } else {
-            diag.inner.message.clone()
+            diag.message.clone()
         };
-        eprintln!("[{:?}] {}: {}", diag.inner.severity, diag.phase, msg);
+        eprintln!("[{:?}] {}: {}", diag.severity, diag.phase, msg);
     }
 }
 
@@ -415,7 +439,7 @@ fn main() -> Nil {
     assert!(
         diagnostics
             .iter()
-            .any(|d| d.inner.message.contains("unhandled effects")),
+            .any(|d| d.message.contains("unhandled effects")),
         "a source ability named Io must remain non-ambient: {diagnostics:?}"
     );
 }
@@ -442,7 +466,7 @@ fn main() -> Nil {
     assert!(
         diagnostics
             .iter()
-            .any(|d| d.inner.message.contains("unhandled effects")),
+            .any(|d| d.message.contains("unhandled effects")),
         "the local Io declaration should shadow the builtin import: {diagnostics:?}"
     );
 }
@@ -466,7 +490,7 @@ fn main() ->{Io} Nil {
     assert!(
         diagnostics
             .iter()
-            .any(|d| d.inner.message.contains("cannot be handled")),
+            .any(|d| d.message.contains("cannot be handled")),
         "handling builtin Io should be rejected: {diagnostics:?}"
     );
 }
@@ -492,7 +516,7 @@ fn main() -> Nil {
 
     let has_unhandled_effect_error = diagnostics
         .iter()
-        .any(|d| d.inner.message.contains("unhandled effects"));
+        .any(|d| d.message.contains("unhandled effects"));
     assert!(
         has_unhandled_effect_error,
         "Expected 'unhandled effects' error for main calling ability ops, got: {:?}",
@@ -522,7 +546,7 @@ fn main() -> Nil {
 
     let has_unhandled_effect_error = diagnostics
         .iter()
-        .any(|d| d.inner.message.contains("unhandled effects"));
+        .any(|d| d.message.contains("unhandled effects"));
     assert!(
         has_unhandled_effect_error,
         "Expected 'unhandled effects' error when main calls effectful function, got: {:?}",
@@ -590,7 +614,6 @@ fn main() -> Nil { }
     print_diagnostics(&diagnostics);
     assert!(
         diagnostics.iter().any(|d| d
-            .inner
             .message
             .contains("function 'counter' uses undeclared effects: State")),
         "an omitted ability row must not absorb the body's effects: {diagnostics:?}"
@@ -688,7 +711,7 @@ fn main() -> Nil { }
     // Verify it's a type mismatch error
     let has_type_error = diagnostics
         .iter()
-        .any(|d| d.inner.message.contains("expected") && d.inner.message.contains("found"));
+        .any(|d| d.message.contains("expected") && d.message.contains("found"));
     assert!(
         has_type_error,
         "Expected type mismatch error, got: {:?}",

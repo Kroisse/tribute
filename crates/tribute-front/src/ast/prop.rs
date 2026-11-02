@@ -803,7 +803,7 @@ mod tests {
     use super::*;
     use crate::resolve;
     use crate::typeck;
-    use tribute_core::diagnostic::{CompilationPhase, Diagnostic};
+    use tribute_core::diagnostic::{CompilationPhase, SpanDiagnostic};
 
     /// Salsa input wrapper so that generated modules can be passed into
     /// `#[salsa::tracked]` helper functions (which require Salsa struct params).
@@ -854,16 +854,20 @@ mod tests {
     }
 
     /// Run the typecheck pipeline in a fresh database, returning the
-    /// rendered result and every accumulated diagnostic.
-    fn typecheck_in_fresh_db(module: Module<UnresolvedName>) -> (String, Vec<Diagnostic>) {
+    /// rendered result and the phase and rendering of every accumulated
+    /// diagnostic.
+    fn typecheck_in_fresh_db(
+        module: Module<UnresolvedName>,
+    ) -> (String, Vec<(CompilationPhase, String)>) {
         let db = salsa::DatabaseImpl::new();
         let input = PropTestInput::new(&db, module);
         let rendered = run_resolve_and_typecheck(&db, input).clone();
         let diagnostics = crate::ast::locate_diagnostics(
-            run_resolve_and_typecheck::accumulated::<Diagnostic>(&db, input),
+            run_resolve_and_typecheck::accumulated::<SpanDiagnostic>(&db, input),
             run_resolve_and_typecheck::accumulated::<crate::ast::NodeDiagnostic>(&db, input),
             crate::ast::SpanMaps::default(),
         )
+        .map(|diagnostic| (diagnostic.phase, format!("{diagnostic:?}")))
         .collect();
         (rendered, diagnostics)
     }
@@ -970,7 +974,7 @@ mod tests {
             let db = salsa::DatabaseImpl::new();
             let input = PropTestInput::new(&db, module);
             run_resolve(&db, input);
-            let diagnostics = run_resolve::accumulated::<Diagnostic>(&db, input);
+            let diagnostics = run_resolve::accumulated::<SpanDiagnostic>(&db, input);
             prop_assert!(diagnostics.is_empty(), "unexpected diagnostics: {:?}", diagnostics);
             let diagnostics = run_resolve::accumulated::<crate::ast::NodeDiagnostic>(&db, input);
             prop_assert!(diagnostics.is_empty(), "unexpected diagnostics: {:?}", diagnostics);
@@ -986,11 +990,11 @@ mod tests {
         #[test]
         fn typecheck_does_not_panic(module in parsed_module()) {
             let (_, diagnostics) = typecheck_in_fresh_db(module);
-            for diagnostic in &diagnostics {
+            for (phase, diagnostic) in &diagnostics {
                 prop_assert_eq!(
-                    &diagnostic.phase,
+                    phase,
                     &CompilationPhase::TypeChecking,
-                    "{:?}",
+                    "{}",
                     diagnostic
                 );
             }

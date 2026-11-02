@@ -669,7 +669,7 @@ pub fn specialized_frontend_ir(db: &dyn salsa::Database, source: SourceCst) -> S
             "the frontend rejects the source: {}",
             diagnostics
                 .iter()
-                .format_with("; ", |diagnostic, f| f(&diagnostic.inner.message))
+                .format_with("; ", |diagnostic, f| f(&diagnostic.message))
         );
     };
     let core_module =

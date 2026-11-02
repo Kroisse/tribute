@@ -11,7 +11,7 @@ fn has_errors(db: &TributeDatabaseImpl, session: &EditSession) -> bool {
         compile_with_diagnostics(db, session.source())
             .diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.inner.severity == DiagnosticSeverity::Error)
+            .any(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
     })
 }
 

@@ -11,7 +11,7 @@
 //! analysis reported no error.
 
 use salsa::Accumulator;
-use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity, SpanDiagnostic};
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::{
@@ -63,7 +63,7 @@ pub fn package_tree(db: &dyn salsa::Database, package: Package) -> Option<&Sourc
 #[salsa::tracked(returns(as_ref))]
 pub fn package_env<'db>(db: &'db dyn salsa::Database, package: Package) -> Option<PackageEnv<'db>> {
     if depends_on_itself(db, package) {
-        Diagnostic::new(
+        SpanDiagnostic::new(
             format!(
                 "package `{}` depends on itself through its dependency table",
                 package_name(db, package)
@@ -338,9 +338,9 @@ pub fn diagnostics(
     db: &dyn salsa::Database,
     source: SourceCst,
     table: DependencyTable,
-) -> Vec<Diagnostic> {
+) -> Vec<Diagnostic<'_>> {
     locate_diagnostics(
-        analyze::accumulated::<Diagnostic>(db, source, table),
+        analyze::accumulated::<SpanDiagnostic>(db, source, table),
         analyze::accumulated::<NodeDiagnostic>(db, source, table),
         spans(db, source, table),
     )
