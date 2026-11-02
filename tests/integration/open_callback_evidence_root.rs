@@ -495,6 +495,7 @@ fn main() -> Nil {
         .expect("class specialization accepts frontend output")
         .expect("production frontend should lower");
     let ir = trunk_ir::printer::print_module(&ctx, module.op());
+    // `main` has no class variables, so each lambda appears once.
     let quantified: Vec<Vec<&str>> = ir
         .split("tribute_cps.lambda[")
         .skip(1)

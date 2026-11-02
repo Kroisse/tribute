@@ -540,13 +540,16 @@ unify({State(Int), Choice(Bool) | e₁}, {State(a), Choice(a) | e₂})
 // Error: a를 Int와 Bool로 동시에 정할 수 없다
 ```
 
-Named row variables have declaration-scoped identity: repeated names share an
-identity and distinct names do not. Multiple row names denote their union.
+Named row variables have scope-wide identity: within the scope that introduces
+a name, repeated names share an identity and distinct names do not. The scope
+is the declaration, or the `let` that first writes the name. Multiple row names
+denote their union.
 
 지역 타입 주석도 선언의 row 이름 환경을 사용한다. 같은 함수 선언의 서명과 본문에서
 같은 이름은 같은 row를 가리키고, 다른 이름은 독립적으로 유지한다. 다만 `let`의
 주석과 오른쪽 식에서 처음 나온 이름은 그 `let`의 범위에 속한다. 그 `let`이 끝나면
-이름은 다시 쓸 수 있고, 다른 `let`이나 뒤의 주석에서 같은 이름은 새 row다. 그래서
+이름은 다시 쓸 수 있고, 다른 `let`이나 뒤의 주석에서 같은 이름은 새 row다. 오른쪽
+식이 effect를 수행해 일반화하지 않는 `let`도 같다. 그래서
 `let`이 일반화한 row는 그 `let`만 소유하며, 형제 `let` 둘이 같은 이름을 적어도
 서로 다른 row를 양화한다. 서명이나 바깥 범위에 이미 있는 이름은 그 row를
 가리키므로 `let`이 일반화하지 않는다. `{e1, e2}`는
