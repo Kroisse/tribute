@@ -327,9 +327,9 @@ fn arithmetic(
                 },
                 depth,
             );
-            // TODO: drop this filter once type checking selects `+` and `*`
-            // in a `case` arm whose operands are both `case` results; it
-            // reports them as ambiguous today.
+            // TODO(#1783): drop this filter once type checking selects `+`
+            // and `*` in a `case` arm whose operands are both `case`
+            // results; it reports them as ambiguous today.
             let lhs_case = lhs.yields_case;
             rhs.prop_filter("both operands are case results", move |rhs| {
                 !(lhs_case && rhs.yields_case)
