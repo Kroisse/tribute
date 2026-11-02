@@ -5,6 +5,7 @@ use crate::ast::{NodeDiagnostic, TypeKind, TypeOrigin};
 use crate::resolve::NameDisplay;
 use crate::typeck::constraint::ConstraintOriginKind;
 use crate::typeck::solver::LocatedSolveError;
+use salsa::Accumulator;
 use tribute_core::{CompilationPhase, DiagnosticSeverity};
 
 pub(super) fn solve_error_context(kind: Option<ConstraintOriginKind>) -> &'static str {
@@ -94,6 +95,6 @@ impl<'db> TypeChecker<'db> {
             );
         }
 
-        diagnostic.report(self);
+        diagnostic.accumulate(self.db());
     }
 }

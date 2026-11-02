@@ -13,14 +13,12 @@ use crate::common;
 use ropey::Rope;
 use salsa::Database;
 use tribute::TributeDatabaseImpl;
-use tribute::pipeline::{CompilationConfig, OptimizationOptions, compile_to_native_binary};
+use tribute::pipeline::{CompilationConfig, OptimizationOptions};
 use tribute_front::SourceCst;
 use tribute_front::source_file::parse_rope;
 
 /// Helper to compile code and collect diagnostics using CLI pipeline.
 fn compile_and_check(code: &str, name: &str) -> Vec<tribute_core::diagnostic::Diagnostic> {
-    use tribute_core::diagnostic::Diagnostic;
-
     let source_code = Rope::from_str(code);
 
     TributeDatabaseImpl::default().attach(|db| {
@@ -28,10 +26,7 @@ fn compile_and_check(code: &str, name: &str) -> Vec<tribute_core::diagnostic::Di
         let source_file = SourceCst::from_path(db, name, source_code.clone(), tree);
 
         let config = CompilationConfig::new(db, false, OptimizationOptions::production());
-        compile_to_native_binary::accumulated::<Diagnostic>(db, source_file, config)
-            .into_iter()
-            .cloned()
-            .collect()
+        tribute::pipeline::native_binary_diagnostics(db, source_file, config)
     })
 }
 
@@ -47,9 +42,6 @@ fn compile_frontend_and_check(code: &str, name: &str) -> Vec<tribute_core::diagn
         let source_file = SourceCst::from_path(db, name, source_code.clone(), tree);
 
         tribute::pipeline::frontend_diagnostics(db, source_file)
-            .into_iter()
-            .cloned()
-            .collect()
     })
 }
 

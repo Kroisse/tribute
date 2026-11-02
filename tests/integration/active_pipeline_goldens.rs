@@ -42,10 +42,7 @@ fn shared_pipeline_ir(db: &dyn salsa::Database, name: &str, code: &str) -> Strin
 fn native_pipeline_ir<'db>(db: &'db dyn salsa::Database, name: &str, code: &str) -> &'db str {
     let source = SourceCst::from_source_str(db, name, code);
     let ir_text = dump_ir(db, source, true).expect("native pipeline dump should succeed");
-    let diagnostics: Vec<Diagnostic> = dump_ir::accumulated::<Diagnostic>(db, source, true)
-        .into_iter()
-        .cloned()
-        .collect();
+    let diagnostics = tribute::pipeline::dump_ir_diagnostics(db, source, true);
     assert_no_diagnostics("native pipeline", &diagnostics);
     ir_text
 }

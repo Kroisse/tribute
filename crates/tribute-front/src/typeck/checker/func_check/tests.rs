@@ -3,7 +3,7 @@ use rustc_hash::FxHashMap as HashMap;
 use salsa_test_macros::salsa_test;
 use trunk_ir::Symbol;
 
-use crate::ast::{AbilityRow, NodeId, SpanMap, Type, TypeDefId, TypeKind};
+use crate::ast::{AbilityRow, NodeId, Type, TypeDefId, TypeKind};
 use crate::typeck::{TypeChecker, TypeSolver};
 
 use super::super::super::solver::SolveError;
@@ -102,7 +102,6 @@ fn collect_deferred_resolution_univars_includes_callee_type(db: &salsa::Database
 
     let checker = TypeChecker::new(
         db,
-        SpanMap::empty(),
         crate::resolve::NameDisplay::new(&crate::resolve::PackageName::executable_root(), []),
     );
     let mut collected = Vec::new();

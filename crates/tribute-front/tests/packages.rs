@@ -71,7 +71,7 @@ impl Build {
     fn diagnostics(&self) -> Vec<String> {
         analysis::diagnostics(&self.db, self.app, self.environment)
             .into_iter()
-            .map(|diagnostic: &Diagnostic| diagnostic.inner.message.clone())
+            .map(|diagnostic: Diagnostic| diagnostic.inner.message)
             .collect()
     }
 
@@ -451,7 +451,7 @@ fn merging_a_diamond_matches_specializing_every_body_at_once() {
     assert_eq!(
         analysis::diagnostics(db, diamond.app, diamond.environment)
             .into_iter()
-            .map(|diagnostic: &Diagnostic| diagnostic.inner.message.clone())
+            .map(|diagnostic: Diagnostic| diagnostic.inner.message)
             .collect::<Vec<_>>(),
         Vec::<String>::new()
     );
@@ -604,7 +604,7 @@ fn merging_keeps_the_metadata_of_the_instance_it_keeps() {
     assert_eq!(
         analysis::diagnostics(&db, app, environment)
             .into_iter()
-            .map(|diagnostic: &Diagnostic| diagnostic.inner.message.clone())
+            .map(|diagnostic: Diagnostic| diagnostic.inner.message)
             .collect::<Vec<_>>(),
         Vec::<String>::new()
     );

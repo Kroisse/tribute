@@ -11,7 +11,7 @@ use crate::SourceCst;
 use crate::prelude::root_environment;
 use salsa::Accumulator;
 use tribute_core::diagnostic::{Diagnostic, DiagnosticSeverity};
-use tribute_front::ast::SpanMaps;
+use tribute_front::ast::{NodeDiagnostic, SpanMaps, locate_diagnostics};
 use tribute_front::ast_to_ir;
 use tribute_front::monomorphize::{self, SpecializationInput, SpecializationOutput};
 use tribute_front::resolve::NameDisplay;
@@ -45,10 +45,13 @@ pub fn parse_and_lower_ast(
 
 /// The diagnostics [`parse_and_lower_ast`] reports for `source`, with those
 /// of its package's manifests.
-pub fn frontend_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<&Diagnostic> {
+pub fn frontend_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<Diagnostic> {
     let implicit = *crate::prelude::frontend_environment(db);
-    let mut diagnostics =
-        manifest::source_dependencies::accumulated::<Diagnostic>(db, source, implicit);
+    let mut diagnostics: Vec<Diagnostic> =
+        manifest::source_dependencies::accumulated::<Diagnostic>(db, source, implicit)
+            .into_iter()
+            .cloned()
+            .collect();
     diagnostics.extend(analysis::diagnostics(
         db,
         source,
@@ -57,13 +60,37 @@ pub fn frontend_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<
     diagnostics
 }
 
+/// A query's `diagnostics` and `nodes` diagnostics for `source`, with the
+/// nodes located in `source`'s package and the packages it depends on.
+pub fn locate_source_diagnostics<'a>(
+    db: &dyn salsa::Database,
+    source: SourceCst,
+    diagnostics: Vec<&'a Diagnostic>,
+    nodes: Vec<&'a NodeDiagnostic>,
+) -> Vec<Diagnostic> {
+    locate_diagnostics(diagnostics, nodes, &frontend_spans(db, source))
+}
+
 /// Check the library package `package` on its own, through
 /// specialization, as a build that depends on it would. Returns whether it
-/// checked; read its diagnostics with `check_library::accumulated`.
+/// checked; read its diagnostics with [`library_diagnostics`].
 #[salsa::tracked]
 pub fn check_library(db: &dyn salsa::Database, package: analysis::Package) -> bool {
     analysis::checked_package(db, package).is_some()
         && monomorphize::specialized_package(db, package).is_some()
+}
+
+/// The diagnostics [`check_library`] reports for `package`.
+pub fn library_diagnostics(
+    db: &dyn salsa::Database,
+    package: analysis::Package,
+) -> Vec<Diagnostic> {
+    check_library(db, package);
+    locate_diagnostics(
+        check_library::accumulated::<Diagnostic>(db, package),
+        check_library::accumulated::<NodeDiagnostic>(db, package),
+        &analysis::library_spans(db, package),
+    )
 }
 
 /// Merge prelude decls into user's typed AST and lower to arena IR.
@@ -125,9 +152,14 @@ pub fn prepare_frontend_diagnostics<'db>(
     db: &'db dyn salsa::Database,
     typed: ast_typeck::TypeCheckOutput<'db>,
     source: SourceCst,
-) -> Vec<&'db Diagnostic> {
+) -> Vec<Diagnostic> {
     prepare_frontend_details(db, typed, source);
-    prepare_frontend_details::accumulated::<Diagnostic>(db, typed, source)
+    locate_source_diagnostics(
+        db,
+        source,
+        prepare_frontend_details::accumulated::<Diagnostic>(db, typed, source),
+        prepare_frontend_details::accumulated::<NodeDiagnostic>(db, typed, source),
+    )
 }
 
 /// Merge and specialize inside a tracked query so specialization failures
@@ -195,12 +227,7 @@ fn prepare_frontend_details<'db>(
 /// the packages it depends on, which locate the nodes of the module merged
 /// from all of them.
 pub(crate) fn frontend_spans(db: &dyn salsa::Database, source: SourceCst) -> SpanMaps<'_> {
-    let package = source_tree_of(db, source).map(|tree| tree.span_map(db));
-    let dependencies = analysis::transitive_packages(db, root_environment(db, source))
-        .into_iter()
-        .filter_map(|package| analysis::package_tree(db, package))
-        .map(|tree| tree.span_map(db));
-    SpanMaps::new(package.into_iter().chain(dependencies))
+    analysis::spans(db, source, root_environment(db, source))
 }
 
 /// The sources merged into a user source's module besides itself: the files

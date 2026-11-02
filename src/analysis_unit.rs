@@ -106,15 +106,14 @@ impl AnalysisUnit {
             Self::Executable(root) => crate::compile_with_diagnostics(db, root).diagnostics,
             Self::Library(package) => {
                 let implicit = *crate::frontend_environment(db);
-                crate::check_library(db, package);
                 let manifest = *manifest::owning_manifest(db, *package.root(db));
                 let mut diagnostics: Vec<Diagnostic> = manifest
                     .into_iter()
                     .flat_map(|manifest| {
                         manifest::library_package::accumulated::<Diagnostic>(db, manifest, implicit)
                     })
-                    .chain(crate::check_library::accumulated::<Diagnostic>(db, package))
                     .cloned()
+                    .chain(crate::library_diagnostics(db, package))
                     .collect();
                 diagnostics.sort_by(tribute_core::diagnostic::compare_diagnostics);
                 diagnostics.into_iter().unique().collect()

@@ -6,18 +6,18 @@
 use rustc_hash::FxHashMap as HashMap;
 
 use itertools::Itertools;
+use salsa::Accumulator;
 use tribute_core::diagnostic::{CompilationPhase, DiagnosticSeverity};
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::{
-    Arm, Candidates, CtorId, Decl, DeclEntry, DeclTable, DiagnosticLog, Expr, ExprKind,
-    FIELD_LENS_FUNCTIONS, FieldDecl, FieldInit, FieldPattern, FuncDecl, HandlerArm, HandlerKind,
-    LocalId, LocalIdGen, Module, ModuleItem, ModulePath, NodeDiagnostic, NodeId, Param, ParamDecl,
-    Pattern, PatternKind, ResolvedRef, Stmt, TypeAnnotation, TypeAnnotationKind, TypeKind,
-    TypeParamDecl, UnresolvedName, UseDecl, Visibility,
+    Arm, Candidates, CtorId, Decl, DeclEntry, DeclTable, Expr, ExprKind, FIELD_LENS_FUNCTIONS,
+    FieldDecl, FieldInit, FieldPattern, FuncDecl, HandlerArm, HandlerKind, LocalId, LocalIdGen,
+    Module, ModuleItem, ModulePath, NodeDiagnostic, NodeId, Param, ParamDecl, Pattern, PatternKind,
+    ResolvedRef, Stmt, TypeAnnotation, TypeAnnotationKind, TypeKind, TypeParamDecl, UnresolvedName,
+    UseDecl, Visibility,
 };
 
-use super::ModuleResolution;
 use super::env::{Binding, Restriction};
 use super::package::{IdentityPath, Location, NameDisplay, PackageName};
 use super::path::{PathKeywordError, absolute_path, dependency_path};
@@ -100,8 +100,6 @@ pub struct Resolver<'e, 'db> {
     /// The environment of the package being resolved, with the packages it
     /// depends on.
     scope: ScopeRef<'e, 'db>,
-    /// The diagnostics reported so far, positioned at their nodes.
-    diagnostics: DiagnosticLog,
     /// Lexical nested-module namespace used for unqualified references in an
     /// inline module body.
     module_path: Vec<Symbol>,
@@ -138,19 +136,12 @@ struct FunctionResolver<'r, 'e, 'db> {
     method_functions: HashMap<Symbol, Candidates<crate::ast::FuncDefId<'db>>>,
 }
 
-impl AsRef<DiagnosticLog> for Resolver<'_, '_> {
-    fn as_ref(&self) -> &DiagnosticLog {
-        &self.diagnostics
-    }
-}
-
 impl<'e, 'db> Resolver<'e, 'db> {
     /// Create a new resolver reading names through `scope`.
     pub fn new(db: &'db dyn salsa::Database, scope: ScopeRef<'e, 'db>) -> Self {
         Self {
             db,
             scope,
-            diagnostics: DiagnosticLog::default(),
             module_path: Vec::new(),
             module_imports: Vec::new(),
             module_imported_functions: Vec::new(),
@@ -318,7 +309,7 @@ impl<'e, 'db> Resolver<'e, 'db> {
             DiagnosticSeverity::Error,
             CompilationPhase::NameResolution,
         )
-        .report(self);
+        .accumulate(self.db);
     }
 
     /// The binding a simple name has in the current scope, apart from local
@@ -463,7 +454,7 @@ impl<'e, 'db> Resolver<'e, 'db> {
             DiagnosticSeverity::Error,
             CompilationPhase::NameResolution,
         )
-        .report(self);
+        .accumulate(self.db);
     }
 
     /// Whether the first segment of a qualified `path` is a prelude name the
@@ -764,7 +755,7 @@ impl<'e, 'db> Resolver<'e, 'db> {
             DiagnosticSeverity::Error,
             CompilationPhase::NameResolution,
         )
-        .report(self);
+        .accumulate(self.db);
     }
 
     /// Rewrite the names in `ann` to the identity paths of what they name.
@@ -951,7 +942,7 @@ impl<'e, 'db> Resolver<'e, 'db> {
                 DiagnosticSeverity::Error,
                 CompilationPhase::NameResolution,
             )
-            .report(self);
+            .accumulate(self.db);
         }
         ann.kind = TypeAnnotationKind::Error;
     }
@@ -964,7 +955,7 @@ impl<'e, 'db> Resolver<'e, 'db> {
             DiagnosticSeverity::Error,
             CompilationPhase::NameResolution,
         )
-        .report(self);
+        .accumulate(self.db);
     }
 
     fn resolve_param_paths(&self, params: &mut [ParamDecl]) {
@@ -1021,18 +1012,18 @@ impl<'e, 'db> Resolver<'e, 'db> {
 
     /// Resolve a module into the table of its declarations, each in the
     /// module its scope follows.
-    pub fn resolve_module(mut self, module: &Module<UnresolvedName>) -> ModuleResolution<'db> {
+    pub fn resolve_module(
+        mut self,
+        module: &Module<UnresolvedName>,
+    ) -> DeclTable<ResolvedRef<'db>> {
         self.report_repeated_definitions(&module.decls);
         self.report_field_lens_redefinitions(&module.decls);
         let mut entries = Vec::new();
         self.resolve_items(&module.decls, &mut entries);
-        ModuleResolution {
-            module: DeclTable {
-                id: module.id,
-                name: module.name.clone(),
-                entries,
-            },
-            diagnostics: self.diagnostics.into_vec(),
+        DeclTable {
+            id: module.id,
+            name: module.name.clone(),
+            entries,
         }
     }
 
@@ -1168,7 +1159,7 @@ impl<'e, 'db> Resolver<'e, 'db> {
                 CompilationPhase::NameResolution,
             )
             .label(repeat.earlier, "first defined here")
-            .report(self);
+            .accumulate(self.db);
             self.redefinitions.push(repeat.id);
         }
     }
@@ -1225,7 +1216,7 @@ impl<'e, 'db> Resolver<'e, 'db> {
                         DiagnosticSeverity::Error,
                         CompilationPhase::NameResolution,
                     )
-                    .report(self);
+                    .accumulate(self.db);
                     self.redefinitions.push(id);
                 }
             }
@@ -1301,7 +1292,7 @@ impl<'e, 'db> Resolver<'e, 'db> {
             DiagnosticSeverity::Error,
             CompilationPhase::NameResolution,
         )
-        .report(self);
+        .accumulate(self.db);
     }
 
     /// The module the path of a `pub(scope)` marker in the current module
@@ -1401,7 +1392,7 @@ impl<'e, 'db> Resolver<'e, 'db> {
             DiagnosticSeverity::Error,
             CompilationPhase::NameResolution,
         )
-        .report(self);
+        .accumulate(self.db);
         None
     }
 
@@ -1460,7 +1451,7 @@ impl<'e, 'db> Resolver<'e, 'db> {
                 DiagnosticSeverity::Error,
                 CompilationPhase::NameResolution,
             )
-            .report(self);
+            .accumulate(self.db);
         }
     }
 
@@ -1789,7 +1780,7 @@ impl<'r, 'e, 'db> FunctionResolver<'r, 'e, 'db> {
             DiagnosticSeverity::Error,
             CompilationPhase::NameResolution,
         )
-        .report(self.module);
+        .accumulate(self.module.db);
     }
 
     /// Find names in scope that are similar to the given name.

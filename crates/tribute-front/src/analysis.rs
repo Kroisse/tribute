@@ -14,7 +14,9 @@ use salsa::Accumulator;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::{Symbol, SymbolPath};
 
-use crate::ast::{Decl, DeclTable, FuncDecl, NodeDiagnostic, ResolvedRef, SpanMap};
+use crate::ast::{
+    Decl, DeclTable, FuncDecl, NodeDiagnostic, ResolvedRef, SpanMap, SpanMaps, locate_diagnostics,
+};
 use crate::resolve::{self, Dependencies, NameDisplay, PackageEnv, PackageName};
 use crate::source_file::SourceCst;
 use crate::source_tree::{self, SourceTree};
@@ -91,12 +93,10 @@ pub fn checked_package<'db>(
 ) -> Option<CheckedPackage<'db>> {
     let env = package_env(db, package)?;
     let tree = package_tree(db, package)?;
-    let span_map = tree.span_map(db);
     let table = *package.dependencies(db);
     let dependencies = dependencies(db, table);
-    let resolved =
-        resolve::resolve_library_with_env(db, tree.module(db), env, &dependencies, span_map);
-    let mut checker = TypeChecker::new(db, span_map, package_names(db, package));
+    let resolved = resolve::resolve_library_with_env(db, tree.module(db), env, &dependencies);
+    let mut checker = TypeChecker::new(db, package_names(db, package));
     depend_on_table(db, &mut checker, table);
     let (result, exports) = checker.check_library(&resolved);
     Some(CheckedPackage {
@@ -222,13 +222,11 @@ pub fn root_names(db: &dyn salsa::Database, table: DependencyTable) -> NameDispl
 }
 
 /// A source's module after name resolution, with one [`ResolvedFunction`]
-/// for each module-level function, in declaration order, and the
-/// diagnostics resolution reported, positioned at their nodes.
+/// for each module-level function, in declaration order.
 #[derive(Clone, PartialEq, Eq, salsa::SalsaValue)]
 pub struct ResolvedModule<'db> {
     pub module: DeclTable<ResolvedRef<'db>>,
     pub functions: Vec<ResolvedFunction<'db>>,
-    pub diagnostics: Vec<NodeDiagnostic>,
 }
 
 /// One module-level function after name resolution, identified by its
@@ -245,8 +243,8 @@ pub struct ResolvedFunction<'db> {
 }
 
 /// Parse and resolve `source` against the packages `table` names. `None` if
-/// `source` does not parse. It reads no source position, so moving code
-/// reuses it; [`analyze`] reports its diagnostics.
+/// `source` does not parse. Its diagnostics are positioned at nodes, so
+/// moving code reuses it.
 #[salsa::tracked(returns(as_ref))]
 pub fn resolved_module<'db>(
     db: &'db dyn salsa::Database,
@@ -256,10 +254,7 @@ pub fn resolved_module<'db>(
     let tree = source_tree::source_tree_of(db, source)?;
     let module = tree.module(db);
     let scope = resolve::build_env(db, module, dependencies(db, table));
-    let resolve::ModuleResolution {
-        module,
-        diagnostics,
-    } = resolve::resolve_module_with_env(db, module, &scope);
+    let module = resolve::resolve_with_env(db, module, &scope);
     let functions = module
         .entries
         .iter()
@@ -273,11 +268,7 @@ pub fn resolved_module<'db>(
             _ => None,
         })
         .collect();
-    Some(ResolvedModule {
-        module,
-        functions,
-        diagnostics,
-    })
+    Some(ResolvedModule { module, functions })
 }
 
 /// The declarations of `source`'s resolved module, collected for checking
@@ -290,7 +281,7 @@ pub fn module_declarations<'db>(
     table: DependencyTable,
 ) -> Option<ModuleDeclarations<'db>> {
     let resolved = resolved_module(db, source, table)?;
-    let mut checker = TypeChecker::new(db, SpanMap::empty(), root_names(db, table));
+    let mut checker = TypeChecker::new(db, root_names(db, table));
     depend_on_table(db, &mut checker, table);
     Some(checker.collect_module(&resolved.module))
 }
@@ -308,7 +299,7 @@ pub fn check_function<'db>(
 ) -> CheckedFunction<'db> {
     let declarations = module_declarations(db, source, table)
         .expect("a resolved function's module has declarations");
-    TypeChecker::new(db, SpanMap::empty(), root_names(db, table))
+    TypeChecker::new(db, root_names(db, table))
         .with_declarations(declarations)
         .check_function(function.module(db), function.decl(db))
 }
@@ -327,18 +318,13 @@ pub fn analyze<'db>(
     source: SourceCst,
     table: DependencyTable,
 ) -> Option<TypeCheckOutput<'db>> {
-    let tree = source_tree::source_tree_of(db, source)?;
     let resolved = resolved_module(db, source, table)?;
-    let span_map = tree.span_map(db);
-    for diagnostic in &resolved.diagnostics {
-        diagnostic.resolve(&span_map).accumulate(db);
-    }
     let declarations = module_declarations(db, source, table)?;
     let functions = resolved
         .functions
         .iter()
         .map(|&function| check_function(db, function, source, table));
-    let checker = TypeChecker::new(db, span_map, root_names(db, table));
+    let checker = TypeChecker::new(db, root_names(db, table));
     Some(TypeCheckOutput::from_check(
         db,
         checker.finish_module(declarations, &resolved.module, functions),
@@ -346,12 +332,47 @@ pub fn analyze<'db>(
 }
 
 /// The diagnostics [`analyze`] reports for `source` against `table`,
-/// including those of its dependencies' own analyses.
+/// including those of its dependencies' own analyses, with those positioned
+/// at nodes located through [`spans`].
 pub fn diagnostics(
     db: &dyn salsa::Database,
     source: SourceCst,
     table: DependencyTable,
-) -> Vec<&Diagnostic> {
+) -> Vec<Diagnostic> {
     analyze(db, source, table);
-    analyze::accumulated::<Diagnostic>(db, source, table)
+    locate_diagnostics(
+        analyze::accumulated::<Diagnostic>(db, source, table),
+        analyze::accumulated::<NodeDiagnostic>(db, source, table),
+        &spans(db, source, table),
+    )
+}
+
+/// The span maps of `source`'s package, with its file modules, and of the
+/// packages `table` names, which locate every node an analysis of `source`
+/// reports.
+pub fn spans(db: &dyn salsa::Database, source: SourceCst, table: DependencyTable) -> SpanMaps<'_> {
+    let own = source_tree::source_tree_of(db, source).map(|tree| tree.span_map(db));
+    SpanMaps::new(own.into_iter().chain(package_spans(db, table)))
+}
+
+/// The span maps of `package`, with its file modules, and of the packages it
+/// depends on, which locate every node a check of `package` reports.
+pub fn library_spans(db: &dyn salsa::Database, package: Package) -> SpanMaps<'_> {
+    let own = package_tree(db, package).map(|tree| tree.span_map(db));
+    SpanMaps::new(
+        own.into_iter()
+            .chain(package_spans(db, *package.dependencies(db))),
+    )
+}
+
+/// The span maps of the packages `table` names and the packages they depend
+/// on.
+pub fn package_spans(
+    db: &dyn salsa::Database,
+    table: DependencyTable,
+) -> impl Iterator<Item = SpanMap<'_>> {
+    transitive_packages(db, table)
+        .into_iter()
+        .filter_map(move |package| package_tree(db, package))
+        .map(move |tree| tree.span_map(db))
 }

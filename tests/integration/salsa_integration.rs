@@ -73,7 +73,7 @@ fn returned_constant(ctx: &IrContext, module: &Module, name: &str) -> i128 {
 fn compile_frontend_with_diagnostics(
     db: &dyn salsa::Database,
     source: SourceCst,
-) -> Result<(IrContext, Module), Vec<&Diagnostic>> {
+) -> Result<(IrContext, Module), Vec<Diagnostic>> {
     compile_frontend(db, source).ok_or_else(|| tribute::pipeline::frontend_diagnostics(db, source))
 }
 

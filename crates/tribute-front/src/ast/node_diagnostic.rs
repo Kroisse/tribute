@@ -1,46 +1,21 @@
 //! Diagnostics positioned at nodes rather than source spans.
 
-use std::cell::RefCell;
-
 use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 
-use super::{NodeId, SpanMap};
+use super::{NodeId, SpanMaps};
 
 /// A diagnostic whose positions are nodes. A query that reports one does
-/// not read the span map, so its result stays valid when code moves; the
-/// spans are looked up when it is reported.
+/// not read the span map, so its result stays valid when code moves. The
+/// reader of a query's diagnostics looks the spans up with
+/// [`locate_diagnostics`].
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[salsa::accumulator]
 pub struct NodeDiagnostic {
     message: String,
     node: NodeId,
     severity: DiagnosticSeverity,
     phase: CompilationPhase,
     labels: Vec<(NodeId, Box<str>)>,
-}
-
-/// The [`NodeDiagnostic`]s a phase reports while it runs, in report order.
-/// A report needs only a shared reference, so a phase that reads its state
-/// through `&self` reports as it goes.
-#[derive(Debug, Default)]
-pub(crate) struct DiagnosticLog(RefCell<Vec<NodeDiagnostic>>);
-
-impl DiagnosticLog {
-    pub(crate) fn push(&self, diagnostic: NodeDiagnostic) {
-        self.0.borrow_mut().push(diagnostic);
-    }
-
-    pub(crate) fn extend(&self, diagnostics: impl IntoIterator<Item = NodeDiagnostic>) {
-        self.0.borrow_mut().extend(diagnostics);
-    }
-
-    /// The diagnostics reported so far, leaving the log empty.
-    pub(crate) fn take(&self) -> Vec<NodeDiagnostic> {
-        self.0.take()
-    }
-
-    pub(crate) fn into_vec(self) -> Vec<NodeDiagnostic> {
-        self.0.into_inner()
-    }
 }
 
 impl NodeDiagnostic {
@@ -65,22 +40,31 @@ impl NodeDiagnostic {
         self
     }
 
-    /// Record the diagnostic in `phase`'s log.
-    pub(crate) fn report(self, phase: &impl AsRef<DiagnosticLog>) {
-        phase.as_ref().push(self);
-    }
-
-    /// The diagnostic at the spans `span_map` gives its nodes.
-    pub fn resolve(&self, span_map: &SpanMap<'_>) -> Diagnostic {
+    /// The diagnostic at the spans `spans` gives its nodes.
+    pub fn locate(&self, spans: &SpanMaps<'_>) -> Diagnostic {
         let mut builder = Diagnostic::builder(
             self.message.clone(),
-            span_map.get_or_default(self.node),
+            spans.get_or_default(self.node),
             self.severity,
             self.phase.clone(),
         );
         for (node, message) in &self.labels {
-            builder = builder.label(span_map.get_or_default(*node), message.clone());
+            builder = builder.label(spans.get_or_default(*node), message.clone());
         }
         builder.build()
     }
+}
+
+/// A query's `diagnostics`, followed by its `nodes` diagnostics at the spans
+/// `spans` gives their nodes.
+pub fn locate_diagnostics<'a>(
+    diagnostics: impl IntoIterator<Item = &'a Diagnostic>,
+    nodes: impl IntoIterator<Item = &'a NodeDiagnostic>,
+    spans: &SpanMaps<'_>,
+) -> Vec<Diagnostic> {
+    diagnostics
+        .into_iter()
+        .cloned()
+        .chain(nodes.into_iter().map(|node| node.locate(spans)))
+        .collect()
 }
