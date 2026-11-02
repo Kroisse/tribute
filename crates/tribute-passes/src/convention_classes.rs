@@ -289,21 +289,30 @@ impl Function {
         })
     }
 
-    /// This definition's own row, read with its own tail only where that
-    /// tail may reach a callable in it: a class variable, a union of tails,
+    /// The own row of `op`, an instance of this definition, read with its
+    /// own tail only where that tail may reach a callable in it: a class variable, a union of tails,
     /// a binder that is not `param`, or any tail of a definition without a
     /// body. Any other own tail reaches no callable, so it requires
     /// nothing, whether the row was written or inferred
     /// (`new-plans/cps-effects.md`, "Row와 호출 규약").
-    pub(crate) fn own_row(&self, ctx: &IrContext, is_class_variable: impl Fn(u32) -> bool) -> Row {
-        let mut row = FuncSig::from_type_ref(ctx, self.ty)
+    pub(crate) fn own_row(
+        &self,
+        ctx: &IrContext,
+        op: OpRef,
+        is_class_variable: impl Fn(u32) -> bool,
+    ) -> Row {
+        let ty = ctx
+            .op_attrs(op)
+            .get_type("type")
+            .expect("a definition has a signature");
+        let mut row = FuncSig::from_type_ref(ctx, ty)
             .expect("a definition's signature is a func_sig")
             .row(ctx);
         let requires_nothing = |tail: u32| {
             self.is_candidate(tail)
                 && !is_class_variable(tail)
-                && ctx.op_region(self.op, 0).is_some()
-                && !tribute_control::row_unions(ctx, self.op)
+                && ctx.op_region(op, 0).is_some()
+                && !tribute_control::row_unions(ctx, op)
                     .unwrap_or_default()
                     .iter()
                     .any(|union| union.result == tail)

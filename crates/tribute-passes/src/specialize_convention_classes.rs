@@ -617,7 +617,7 @@ impl Instance<'_> {
             .copied()
             .zip(classes.iter().copied())
             .collect();
-        let row = definition.own_row(ctx, |tail| params.contains_key(&tail));
+        let row = definition.own_row(ctx, definition.op, |tail| params.contains_key(&tail));
         let reader = Reader {
             binders: definition.binders.clone(),
             requirements: self.reader.requirements,
@@ -661,7 +661,7 @@ impl Instance<'_> {
     fn own_class(&self, ctx: &IrContext, op: OpRef) -> Class {
         let row = self
             .function
-            .own_row(ctx, |tail| self.reader.params.contains_key(&tail));
+            .own_row(ctx, op, |tail| self.reader.params.contains_key(&tail));
         self.reader.class(ctx, &row, op)
     }
 }

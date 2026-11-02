@@ -181,9 +181,9 @@ impl<'a> Instance<'a> {
 
     /// A definition's own convention is the class of its own row.
     fn check_own_convention(&self, disagreements: &mut Vec<Disagreement>) {
-        let row = self
-            .function
-            .own_row(self.ctx, |tail| self.reader.params.contains_key(&tail));
+        let row = self.function.own_row(self.ctx, self.function.op, |tail| {
+            self.reader.params.contains_key(&tail)
+        });
         let expected = self.class(&row, self.function.op).bound();
         let actual = tribute_cps::declared_convention(self.ctx, self.function.op);
         if Some(expected) != actual {
