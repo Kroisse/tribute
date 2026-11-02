@@ -1,39 +1,48 @@
 //! Global Dead Code Elimination (DCE) pass for arena IR.
 //!
-//! Removes function definitions that are not reachable from reachability roots.
-//! Reachability roots include:
-//! - The root module's `main` or `_start`
-//! - Functions referenced outside any function definition, such as by
-//!   `wasm.export_func`
-//! - Function definitions with an `abi` attribute (externally callable)
+//! Removes the [`SymbolDefinition`]s that no live operation uses. The live
+//! operations are:
+//! - every operation that is not a symbol definition of a module's table
+//! - every definition that is not discardable, such as a function with a
+//!   body and an `abi` attribute (externally callable)
+//! - the configured entry points, by root-qualified path (`main` and
+//!   `_start` by default), and declarations if the configuration keeps them
 //!
-//! A bodyless `abi` declaration is an import, not a root: it stays only while
-//! something reachable references it.
-//! - Custom entry points from configuration, by root-qualified path
-//!
-//! Follows the [`CallGraph`] edges of calls and address references, then
-//! removes unreachable functions via BFS.
+//! A definition's uses are the symbol references in its own attributes and
+//! in its regions. A use that resolves to a definition makes it live, and
+//! liveness follows the uses of live definitions. A bodyless `abi`
+//! declaration is an import: it stays only while something live uses it.
 
+use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
-use std::collections::VecDeque;
+use std::ops::ControlFlow;
 
 use crate::analysis::AnalysisCache;
 use crate::context::IrContext;
-use crate::dialect::func;
-use crate::ops::DialectOp;
+use crate::dialect::core;
+use crate::op_interface::DynSymbolDefinition;
+#[cfg(doc)]
+use crate::op_interface::SymbolDefinition;
+use crate::pass::{Pass, PassRunResult};
 use crate::refs::OpRef;
 use crate::rewrite::Module;
 use crate::symbol::SymbolPath;
 use crate::symbol_table::{SymbolTable, nearest_table, qualified_name};
-use crate::transforms::call_graph::{CallGraph, FunctionDefinition, call_graph_over};
+use crate::walk::{WalkAction, walk_op, walk_region};
 
 /// Configuration for global dead code elimination.
 #[derive(Debug, Clone)]
 pub struct GlobalDceConfig {
-    /// Additional entry points (besides main/_start), by root-qualified
-    /// path: `SymbolPath::new(["m", "init"])` names `init` in the nested
-    /// module `m`.
+    /// The program's entry points, by root-qualified path. Default: `main`
+    /// and `_start` in the root module.
+    pub entry_points: Vec<SymbolPath>,
+    /// Additional entry points, by root-qualified path:
+    /// `SymbolPath::new(["m", "init"])` names `init` in the nested module
+    /// `m`.
     pub extra_entry_points: Vec<SymbolPath>,
+    /// Whether to keep every [`SymbolDefinition::is_declaration`]
+    /// definition. Default: false.
+    pub keep_declarations: bool,
     /// Whether to recursively process nested modules. Default: true.
     pub recursive: bool,
 }
@@ -41,7 +50,9 @@ pub struct GlobalDceConfig {
 impl Default for GlobalDceConfig {
     fn default() -> Self {
         Self {
+            entry_points: vec![SymbolPath::new(["main"]), SymbolPath::new(["_start"])],
             extra_entry_points: Vec::new(),
+            keep_declarations: false,
             recursive: true,
         }
     }
@@ -49,14 +60,15 @@ impl Default for GlobalDceConfig {
 
 /// Result of running global DCE.
 pub struct GlobalDceResult {
-    /// Number of functions removed.
+    /// Number of definitions removed.
     pub removed_count: usize,
-    /// Names of removed functions (for debugging).
+    /// Names of removed definitions (for debugging).
     pub removed_functions: Vec<SymbolPath>,
 }
 
-/// Eliminate unreachable functions from a module using default configuration.
-pub fn eliminate_dead_functions(
+/// Eliminate unused definitions from a module using default configuration.
+#[cfg(test)]
+fn eliminate_dead_functions(
     ctx: &mut IrContext,
     module: Module,
     analyses: &mut AnalysisCache,
@@ -64,30 +76,22 @@ pub fn eliminate_dead_functions(
     eliminate_dead_functions_with_config(ctx, module, GlobalDceConfig::default(), analyses)
 }
 
-/// Eliminate unreachable functions with custom configuration, using the
-/// [`SymbolTable`] and [`CallGraph`] cached in `analyses`.
-pub fn eliminate_dead_functions_with_config(
+/// Eliminate unused definitions with custom configuration, using the
+/// [`SymbolTable`] cached in `analyses`.
+fn eliminate_dead_functions_with_config(
     ctx: &mut IrContext,
     module: Module,
     config: GlobalDceConfig,
     analyses: &mut AnalysisCache,
 ) -> GlobalDceResult {
     let symbols = analyses.require::<SymbolTable>(ctx, module.op());
-    let graph = analyses.require::<CallGraph>(ctx, module.op());
-    run(ctx, module, &config, &symbols, &graph, func::Func::matches)
+    run(ctx, module, &config, &symbols)
 }
 
-/// Eliminate the unreachable function definitions `is_function` identifies.
-///
-/// This is global DCE for a dialect whose function definition is not
-/// `func.func`, such as a source-level callable. It follows the same roots
-/// and reference edges, and builds its own symbol table and call graph.
-pub fn eliminate_dead_definitions(
-    ctx: &mut IrContext,
-    module: Module,
-    is_function: FunctionDefinition,
-) -> GlobalDceResult {
-    eliminate_dead_definitions_with_config(ctx, module, GlobalDceConfig::default(), is_function)
+/// Eliminate the [`SymbolDefinition`]s of `module` that no live operation
+/// uses, building its own symbol table.
+pub fn eliminate_dead_definitions(ctx: &mut IrContext, module: Module) -> GlobalDceResult {
+    eliminate_dead_definitions_with_config(ctx, module, GlobalDceConfig::default())
 }
 
 /// [`eliminate_dead_definitions`] with custom configuration.
@@ -95,55 +99,127 @@ pub fn eliminate_dead_definitions_with_config(
     ctx: &mut IrContext,
     module: Module,
     config: GlobalDceConfig,
-    is_function: FunctionDefinition,
 ) -> GlobalDceResult {
     let symbols = SymbolTable::collect(ctx, module);
-    let graph = call_graph_over(ctx, module.op(), &symbols, is_function);
-    run(ctx, module, &config, &symbols, &graph, is_function)
+    run(ctx, module, &config, &symbols)
 }
 
-/// Eliminate the functions of `module` not reachable from its roots.
+/// The live [`SymbolDefinition`]s of `module` under `config`: the
+/// definitions [`eliminate_dead_definitions_with_config`] would not remove,
+/// including those of nested modules a non-recursive configuration keeps.
+pub fn reachable_definitions_with_config(
+    ctx: &IrContext,
+    module: Module,
+    config: &GlobalDceConfig,
+) -> HashSet<OpRef> {
+    let symbols = SymbolTable::collect(ctx, module);
+    Liveness::compute(ctx, module, config, &symbols).live
+}
+
+/// Which definitions of a module are live.
+struct Liveness {
+    /// The symbol definitions of the module's tables that DCE may remove.
+    candidates: Vec<OpRef>,
+    /// The candidates that are live.
+    live: HashSet<OpRef>,
+}
+
+impl Liveness {
+    fn compute(
+        ctx: &IrContext,
+        module: Module,
+        config: &GlobalDceConfig,
+        symbols: &SymbolTable,
+    ) -> Self {
+        let is_candidate = |op| config.recursive || nearest_table(ctx, op) == Some(module.op());
+        let definitions: Vec<OpRef> = symbols
+            .symbols()
+            .iter()
+            .copied()
+            .filter(|&op| DynSymbolDefinition::is_implemented(ctx, op))
+            .collect();
+        let definition_set: HashSet<OpRef> = definitions.iter().copied().collect();
+
+        let mut worklist: Vec<OpRef> = Vec::new();
+        let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
+            if definition_set.contains(&op) {
+                return ControlFlow::Continue(WalkAction::Skip);
+            }
+            uses_of_operation(ctx, op, symbols, &mut worklist);
+            ControlFlow::Continue(WalkAction::Advance)
+        });
+        for path in config.entry_points.iter().chain(&config.extra_entry_points) {
+            worklist.extend(symbols.resolve_in(ctx, module.op(), path));
+        }
+        let mut uses: HashMap<OpRef, Vec<OpRef>> = HashMap::default();
+        for &op in &definitions {
+            let definition = DynSymbolDefinition::get(ctx, op)
+                .expect("every definition implements SymbolDefinition");
+            if !is_candidate(op)
+                || !definition.is_discardable(ctx)
+                || (config.keep_declarations && definition.is_declaration(ctx))
+            {
+                worklist.push(op);
+            }
+            let mut targets = Vec::new();
+            uses_of_operation(ctx, op, symbols, &mut targets);
+            for region in ctx.op_regions(op) {
+                let _ = walk_region::<()>(ctx, region, &mut |nested| {
+                    uses_of_operation(ctx, nested, symbols, &mut targets);
+                    ControlFlow::Continue(WalkAction::Advance)
+                });
+            }
+            uses.insert(op, targets);
+        }
+
+        let mut live = HashSet::default();
+        while let Some(op) = worklist.pop() {
+            if !definition_set.contains(&op) || !live.insert(op) {
+                continue;
+            }
+            if let Some(targets) = uses.get(&op) {
+                worklist.extend(targets.iter().filter(|t| !live.contains(*t)).copied());
+            }
+        }
+        let candidates = definitions
+            .into_iter()
+            .filter(|&op| is_candidate(op))
+            .collect();
+        Liveness { candidates, live }
+    }
+}
+
+/// Push the definitions the symbol references in `op`'s attributes resolve
+/// to onto `targets`.
+fn uses_of_operation(ctx: &IrContext, op: OpRef, symbols: &SymbolTable, targets: &mut Vec<OpRef>) {
+    ctx.op(op).attributes.visit_symbol_refs(&mut |reference| {
+        targets.extend(symbols.resolve(ctx, op, reference));
+    });
+}
+
+/// Eliminate the definitions of `module` that no live operation uses.
 ///
-/// Every definition of a duplicated name is a separate function, which no
-/// reference reaches. With `recursive: false`, functions in nested modules
-/// are neither removed nor analyzed; they are kept as roots.
+/// Every definition of a duplicated name is a separate definition, which no
+/// reference reaches. With `recursive: false`, definitions in nested modules
+/// are neither removed nor analyzed; they are kept, with their uses.
 fn run(
     ctx: &mut IrContext,
     module: Module,
     config: &GlobalDceConfig,
     symbols: &SymbolTable,
-    graph: &CallGraph,
-    is_function: FunctionDefinition,
 ) -> GlobalDceResult {
-    let is_candidate = |op| config.recursive || nearest_table(ctx, op) == Some(module.op());
-    let extra: HashSet<OpRef> = config
-        .extra_entry_points
-        .iter()
-        .filter_map(|path| symbols.resolve_in(ctx, module.op(), path))
-        .collect();
-    let mut roots: HashSet<OpRef> = graph
-        .functions
-        .iter()
-        .copied()
-        .filter(|&op| !is_candidate(op) || is_root(ctx, module, op) || extra.contains(&op))
-        .collect();
-    roots.extend(graph.module_references.iter().copied());
-    let reachable = compute_reachable(graph, roots);
-
-    let dead: Vec<OpRef> = graph
-        .functions
-        .iter()
-        .copied()
-        .filter(|&op| is_function(ctx, op) && is_candidate(op) && !reachable.contains(&op))
+    let Liveness { candidates, live } = Liveness::compute(ctx, module, config, symbols);
+    let dead: Vec<OpRef> = candidates
+        .into_iter()
+        .filter(|op| !live.contains(op))
         .collect();
     let mut removed = Vec::with_capacity(dead.len());
     for op in dead {
         removed.extend(qualified_name(ctx, op));
-        // Erase the unreachable function: `erase_op` clears the operand
-        // use-chains of the func and its body subtree, so dead funcs don't
-        // leave stale uses behind (#710). Func scopes are independent (SSA),
-        // so clearing the body's operand uses cannot affect other reachable
-        // functions.
+        // `erase_op` clears the operand use-chains of the definition and its
+        // body subtree, so dead definitions don't leave stale uses behind
+        // (#710). A definition's body is isolated from other definitions, so
+        // clearing its operand uses cannot affect a live one.
         crate::rewrite::erase_op(ctx, op);
     }
 
@@ -153,46 +229,53 @@ fn run(
     }
 }
 
-/// Whether the function `op` is a reachability root: `main` or `_start` in
-/// the root module, or a function definition with an `abi` attribute
-/// (externally callable).
-fn is_root(ctx: &IrContext, module: Module, op: OpRef) -> bool {
-    let entry = nearest_table(ctx, op) == Some(module.op())
-        && matches!(
-            ctx.op_attrs(op).get_str("sym_name"),
-            Some("main" | "_start")
-        );
-    entry || (ctx.op_attrs(op).contains_key("abi") && ctx.op_has_regions(op))
+#[cfg(test)]
+mod prop_tests;
+
+/// Remove the symbol definitions no live operation uses, using the
+/// [`SymbolTable`] cached in the run's analyses.
+pub struct GlobalDce {
+    pub config: GlobalDceConfig,
 }
 
-/// Functions reachable from `roots` via BFS over call and reference edges.
-fn compute_reachable(graph: &CallGraph, roots: HashSet<OpRef>) -> HashSet<OpRef> {
-    let mut reachable = HashSet::default();
-    let mut worklist: VecDeque<OpRef> = roots.into_iter().collect();
+impl Pass for GlobalDce {
+    type Target = core::Module;
 
-    while let Some(func) = worklist.pop_front() {
-        if !reachable.insert(func) {
-            continue;
-        }
-        if let Some(callees) = graph.edges.get(&func) {
-            worklist.extend(
-                callees
-                    .iter()
-                    .filter(|callee| !reachable.contains(*callee))
-                    .copied(),
-            );
-        }
+    fn name(&self) -> &'static str {
+        "global-dce"
     }
 
-    reachable
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        eliminate_dead_functions_with_config(ctx, target.into(), self.config.clone(), analyses);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
-mod prop_tests;
+#[crate::dialect]
+mod test_symbol {
+    /// A region-less definition whose `targets` name other definitions.
+    #[implements(crate::op_interface::SymbolDefinition)]
+    fn table(sym_name: Attr<String>, targets: Attr<[crate::attr_kind::SymbolRef]>) {}
+}
+
+#[cfg(test)]
+impl crate::op_interface::SymbolDefinition for Table {
+    fn is_declaration(&self, _ctx: &IrContext) -> bool {
+        false
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dialect::func;
+    use crate::ops::DialectOp;
     use crate::symbol::SymbolPath;
     use crate::*;
 
@@ -296,7 +379,7 @@ mod tests {
         );
         let config = GlobalDceConfig {
             extra_entry_points: vec![SymbolPath::new(["m", "init"])],
-            recursive: true,
+            ..Default::default()
         };
 
         let result =
@@ -339,5 +422,99 @@ mod tests {
                 .into_iter()
                 .collect::<HashSet<_>>()
         );
+    }
+
+    fn surviving_definitions(ctx: &IrContext, module: Module) -> HashSet<SymbolPath> {
+        SymbolTable::collect(ctx, module)
+            .symbols()
+            .iter()
+            .filter(|&&op| DynSymbolDefinition::is_implemented(ctx, op))
+            .filter_map(|&op| qualified_name(ctx, op))
+            .collect()
+    }
+
+    fn paths<const N: usize>(names: [&str; N]) -> HashSet<SymbolPath> {
+        names
+            .map(|name| SymbolPath::new([name]))
+            .into_iter()
+            .collect()
+    }
+
+    const TABLE_MODULE: &str = r#"core.module @root {
+  func.func @main() {
+    test.use {table = @REFERENCE}
+    func.return
+  }
+  func.func @dead() {
+    test.use {table = @from_dead}
+    func.return
+  }
+  test_symbol.table {sym_name = "live", targets = [@a, @b]}
+  test_symbol.table {sym_name = "from_dead", targets = [@c]}
+  test_symbol.table {sym_name = "unreferenced", targets = [@d]}
+  func.func @a() {
+    func.return
+  }
+  func.func @b() {
+    func.call {callee = @shared}
+    func.return
+  }
+  func.func @c() {
+    func.return
+  }
+  func.func @d() {
+    func.return
+  }
+  func.func @shared() {
+    func.return
+  }
+}"#;
+
+    #[test]
+    fn a_reachable_definition_keeps_the_targets_of_its_attributes() {
+        let mut ctx = IrContext::new();
+        let source = TABLE_MODULE.replace("REFERENCE", "live");
+        let module = crate::parser::parse_test_module(&mut ctx, &source);
+
+        eliminate_dead_functions(&mut ctx, module, &mut Default::default());
+
+        assert_eq!(
+            surviving_definitions(&ctx, module),
+            paths(["main", "live", "a", "b", "shared"])
+        );
+    }
+
+    #[test]
+    fn an_unreferenced_definition_goes_with_the_targets_only_it_uses() {
+        let mut ctx = IrContext::new();
+        let source = TABLE_MODULE.replace("REFERENCE", "nothing");
+        let module = crate::parser::parse_test_module(&mut ctx, &source);
+
+        eliminate_dead_functions(&mut ctx, module, &mut Default::default());
+
+        assert_eq!(surviving_definitions(&ctx, module), paths(["main"]));
+    }
+
+    #[test]
+    fn declarations_stay_when_configured() {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @root {
+  func.func @import() attributes {abi = "C"}
+  func.func @unused() {
+    func.return
+  }
+}"#,
+        );
+        let config = GlobalDceConfig {
+            keep_declarations: true,
+            ..Default::default()
+        };
+
+        let result =
+            eliminate_dead_functions_with_config(&mut ctx, module, config, &mut Default::default());
+
+        assert_eq!(result.removed_functions, [SymbolPath::new(["unused"])]);
     }
 }

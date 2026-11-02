@@ -9,10 +9,9 @@ use crate::context::{IrContext, OperationDataBuilder};
 use crate::dialect::func;
 use crate::ops::{DialectOp, DialectType};
 use crate::refs::{OpRef, RegionRef, TypeRef};
-use crate::rewrite::clone_attrs_except;
-use crate::rewrite::pattern::RewritePattern;
 use crate::rewrite::rewriter::PatternRewriter;
 use crate::rewrite::type_converter::TypeConverter;
+use crate::rewrite::{OpRewritePattern, clone_attrs_except};
 use crate::types::Attribute;
 
 /// Converted components of a validated callable signature.
@@ -158,11 +157,9 @@ pub fn rewrite_function_signature(
     new_func_type: TypeRef,
     new_inputs: &[TypeRef],
     make_op: impl FnOnce(&mut IrContext, TypeRef, Option<RegionRef>) -> OpRef,
-) -> bool {
+) -> Option<()> {
     let attrs_to_preserve = clone_attrs_except(ctx, op, &["sym_name", "type"]);
-    let Some(entry_block) = entry_block_for_signature_update(ctx, op, new_inputs) else {
-        return false;
-    };
+    let entry_block = entry_block_for_signature_update(ctx, op, new_inputs)?;
 
     update_entry_block_args(ctx, entry_block, new_inputs);
 
@@ -176,7 +173,7 @@ pub fn rewrite_function_signature(
     ctx.op_attrs_mut(new_op).extend(attrs_to_preserve);
 
     rewriter.replace_op(new_op);
-    true
+    Some(())
 }
 
 /// Pattern that converts `func.func` operation signatures using a `TypeConverter`.
@@ -188,21 +185,18 @@ pub fn rewrite_function_signature(
 /// 4. Rebuilds the function with the converted signature
 pub struct FuncSignatureConversionPattern;
 
-impl RewritePattern for FuncSignatureConversionPattern {
+impl OpRewritePattern for FuncSignatureConversionPattern {
+    type Op = func::Func;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        func_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(func_op) = func::Func::from_op(ctx, op) else {
-            return false;
-        };
-
+    ) -> Option<()> {
+        let op = func_op.op_ref();
         let func_type = func_op.r#type(ctx);
-        let Some(signature) = func::FuncSig::from_type_ref(ctx, func_type) else {
-            return false;
-        };
+        let signature = func::FuncSig::from_type_ref(ctx, func_type)?;
         let converted = convert_signature_components(
             ctx,
             rewriter.type_converter(),
@@ -211,7 +205,7 @@ impl RewritePattern for FuncSignatureConversionPattern {
             signature.non_reserved_attrs(ctx),
         );
         if !converted.changed {
-            return false;
+            return None;
         }
         let new_func_type = func::func_sig_with_attrs(
             ctx,
@@ -625,7 +619,15 @@ mod result_list_tests {
         let mut converter = TypeConverter::new();
         converter.add_conversion(move |_, ty| (ty == nil).then_some(ptr));
         let mut rewriter = PatternRewriter::new(&converter);
-        assert!(!FuncSignatureConversionPattern.match_and_rewrite(&mut ctx, op, &mut rewriter));
+        assert!(
+            crate::rewrite::RewritePattern::match_and_rewrite(
+                &FuncSignatureConversionPattern,
+                &mut ctx,
+                op,
+                &mut rewriter,
+            )
+            .is_none()
+        );
         assert_eq!(ctx.op_attrs(op).get_type("type"), Some(bad_signature));
         let entry = ctx.region(function.body(&ctx)).blocks[0];
         assert_eq!(ctx.value_ty(ctx.block_arg(entry, 0)), nil);

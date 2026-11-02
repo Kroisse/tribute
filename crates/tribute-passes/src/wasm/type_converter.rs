@@ -46,12 +46,8 @@ use trunk_ir::types::{AttributeMap, Location};
 // ADT type helpers (arena versions)
 // =============================================================================
 
-/// Get the canonical Closure ADT type (arena version).
-///
-/// Layout: (table_idx: i32, env: anyref)
-///
-/// IMPORTANT: Must use wasm.anyref (not tribute_rt.anyref) to ensure consistent
-/// type identity for emit lookups.
+/// The Wasm closure base: the convention table's first slot in the function
+/// table, `{ entries: i32 }`.
 pub fn closure_adt_type(ctx: &mut IrContext) -> TypeRef {
     let i32_ty = core::I32::type_ref(ctx);
     crate::closure_lower::closure_base_layout(ctx, i32_ty)
@@ -268,10 +264,12 @@ pub(crate) fn convert_builtin_layouts(ctx: &mut IrContext, module: trunk_ir::rew
         if trunk_ir::dialect::core::Bytes::matches(ctx, ty) {
             return Some(bytes);
         }
-        use tribute_ir::dialect::tribute_rt::{Anyref, Bool, Float, Int, Intref, Nat};
+        use tribute_ir::dialect::tribute_rt::{
+            Anyref, Bool, ConventionTableRef, Float, Int, Intref, Nat,
+        };
 
         let name = ctx.get_type(ty).name;
-        if [Int::NAME, Nat::NAME, Bool::NAME].contains(&name) {
+        if [Int::NAME, Nat::NAME, Bool::NAME, ConventionTableRef::NAME].contains(&name) {
             Some(i32_ty)
         } else if name == Float::NAME {
             Some(f64_ty)
@@ -330,6 +328,16 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
     // Convert tribute_rt.bool -> core.i32 (boolean as i32)
     tc.add_conversion(move |ctx, ty| {
         if tribute_ir::dialect::tribute_rt::Bool::matches(ctx, ty) {
+            Some(i32_ty)
+        } else {
+            None
+        }
+    });
+
+    // Convert tribute_rt.convention_table_ref -> core.i32 (the table's first
+    // slot in the function table)
+    tc.add_conversion(move |ctx, ty| {
+        if tribute_ir::dialect::tribute_rt::ConventionTableRef::matches(ctx, ty) {
             Some(i32_ty)
         } else {
             None
@@ -441,8 +449,8 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
         // -----------------------------------------------------------------
 
         // Reference upcasts (for example a concrete struct or `adt.typeref` to
-        // `structref`/`anyref`) are elided by the Wasm target's upcast elision,
-        // not materialized,
+        // `structref`/`anyref`) become `wasm.ref_upcast` in the Wasm target's
+        // cast legalization, not materializations,
         // and values of equal representation get equal types from the target
         // conversion. Only real conversions are materialized below.
         let to_is_structref = trunk_ir::dialect::wasm::Structref::matches(ctx, to_ty);
@@ -452,7 +460,7 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
         let to_is_struct_like = is_struct_like(ctx, to_ty);
 
         if from_is_struct_like && to_is_struct_like {
-            // Upcasts are elided by the target; only downcasts need a ref_cast.
+            // Upcasts become `wasm.ref_upcast`; only downcasts need a ref_cast.
             let to_is_anyref = trunk_ir::dialect::wasm::Anyref::matches(ctx, to_ty);
             let from_is_anyref = trunk_ir::dialect::wasm::Anyref::matches(ctx, from_ty);
             if to_is_anyref || (to_is_structref && !from_is_anyref) {
@@ -657,17 +665,17 @@ mod tests {
     use trunk_ir::ops::DialectOp;
 
     #[test]
-    fn cast_legalization_retypes_then_elides_reference_upcasts() {
+    fn cast_legalization_retypes_then_writes_reference_upcasts() {
         use trunk_ir::analysis::AnalysisCache;
         use trunk_ir::conversion::{ReconcileUnrealizedCasts, UnrealizedCastConversionPattern};
         use trunk_ir::pass::Pass;
-        use trunk_ir_wasm_backend::passes::reference_upcast_elision::ReferenceUpcastElisionPattern;
+        use trunk_ir_wasm_backend::passes::reference_upcast::ReferenceUpcastPattern;
 
         let mut ctx = IrContext::new();
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
+  !Closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @f(%c: !Closure) {
     %erased = core.unrealized_conversion_cast %c : tribute_rt.anyref
     func.call %erased {callee = @use}
@@ -679,7 +687,7 @@ mod tests {
 
         let result = trunk_ir::rewrite::PatternApplicator::new(tc)
             .add_pattern(UnrealizedCastConversionPattern)
-            .add_pattern(ReferenceUpcastElisionPattern)
+            .add_pattern(ReferenceUpcastPattern)
             .apply_partial(&mut ctx, module);
         let core_module = trunk_ir::dialect::core::Module::from_op(&ctx, module.op()).unwrap();
         ReconcileUnrealizedCasts
@@ -689,7 +697,10 @@ mod tests {
         assert!(result.reached_fixpoint);
         let printed = trunk_ir::printer::print_module(&ctx, module.op());
         assert!(!printed.contains("unrealized_conversion_cast"), "{printed}");
-        assert!(printed.contains("func.call %0"), "{printed}");
+        assert!(
+            printed.contains("wasm.ref_upcast %0 : wasm.anyref"),
+            "{printed}"
+        );
     }
 
     #[test]
@@ -709,7 +720,7 @@ mod tests {
             .build(&mut ctx);
         let source = ctx.create_op(source_data);
         let value = ctx.op_result(source, 0);
-        // An upcast is elided by the target, and a representation match is not
+        // An upcast is the target's `wasm.ref_upcast`, and a representation match is not
         // a conversion; neither is materialized.
         assert!(
             tc.materialize(&mut ctx, location, value, concrete, anyref)
@@ -823,7 +834,7 @@ mod tests {
             adt::Struct::from_type_ref(&ctx, target)
                 .unwrap()
                 .fields(&ctx),
-            [("code", i32_ty)],
+            [("entries", i32_ty)],
         );
     }
 }

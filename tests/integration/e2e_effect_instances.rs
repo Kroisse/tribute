@@ -2,8 +2,7 @@
 use crate::common;
 
 use salsa_test_macros::salsa_test;
-use tribute::pipeline::{parse_and_lower_ast, prepare_frontend_for_lowering};
-use tribute_core::Diagnostic;
+use tribute::pipeline::{frontend_diagnostics, parse_and_lower_ast, prepare_frontend_for_lowering};
 use tribute_front::{SourceCst, ast::TypeKind};
 
 const NESTED: &str = include_str!("../fixtures/three_abilities_nested.trb");
@@ -13,11 +12,12 @@ fn nested_writer_instance_is_concrete_before_erasure(db: &salsa::DatabaseImpl) {
     let text = format!("{}\n{NESTED}", common::PRINT_EXTERNS);
     let source = SourceCst::from_source_str(db, "nested_instances.trb", &text);
     let typed = parse_and_lower_ast(db, source).unwrap();
-    assert!(parse_and_lower_ast::accumulated::<Diagnostic>(db, source).is_empty());
+    assert!(frontend_diagnostics(db, source).is_empty());
     let main = typed
-        .function_types(db)
+        .declarations(db)
+        .function_types
         .iter()
-        .find(|(name, _)| name == ["main"])
+        .find(|(name, _)| name == ["pkg", "main"])
         .unwrap()
         .1;
     assert!(main.type_params(db).is_empty());
@@ -27,7 +27,7 @@ fn nested_writer_instance_is_concrete_before_erasure(db: &salsa::DatabaseImpl) {
             .function_instances
             .iter()
             .any(
-                |(_, instance)| instance.function.qualified(db) == "run_writer"
+                |(_, instance)| instance.function.qualified(db) == "pkg::run_writer"
                     && instance.type_arguments.len() == 2
                     && instance
                         .type_arguments
@@ -37,16 +37,18 @@ fn nested_writer_instance_is_concrete_before_erasure(db: &salsa::DatabaseImpl) {
     );
     let prepared = prepare_frontend_for_lowering(db, typed, source).unwrap();
     let writer = prepared
-        .perform_operations(db)
+        .expression_types(db)
+        .perform_operations
         .iter()
-        .find(|(_, op)| op.ability.qualified(db) == "Writer")
+        .find(|(_, op)| op.ability.qualified(db) == "pkg::Writer")
         .unwrap()
         .1
         .clone();
     assert!(matches!(writer.ability_args.as_slice(), [ty] if matches!(ty.kind(db), TypeKind::Nat)));
     assert!(
         prepared
-            .handler_operations(db)
+            .expression_types(db)
+            .handler_operations
             .iter()
             .any(|(_, op)| op.ability == writer.ability && op.ability_args == writer.ability_args)
     );
@@ -77,7 +79,7 @@ fn run_writer(comp: fn() ->{{e, Writer(w)}} a) ->{{e}} a {{
     }}
 }}
 fn relay(comp: fn() ->{{e}} a) ->{{e}} a {{ comp() }}
-fn main() -> Nil {{ __tribute_print_nat(run_writer({callback})) }}
+fn main() ->{{std::io::Io}} Nil {{ std::io::print_line(run_writer({callback}).to_string) }}
 "#,
             common::PRINT_EXTERNS
         );

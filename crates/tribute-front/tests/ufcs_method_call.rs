@@ -146,7 +146,7 @@ fn test() -> Nat {
             method_calls: vec![],
             calls: vec![
                 TdnrCall {
-                    target: "pure_value".to_owned(),
+                    target: "pkg::pure_value".to_owned(),
                     arg_count: 0,
                 },
                 TdnrCall {
@@ -192,10 +192,10 @@ fn test(n: Int) -> Int {
     assert_eq!(
         calls,
         vec![
-            call("math::add", 2),
-            call("math::double", 1),
-            call("math::double", 1),
-            call("math::inner::twice", 1),
+            call("pkg::math::add", 2),
+            call("pkg::math::double", 1),
+            call("pkg::math::double", 1),
+            call("pkg::math::inner::twice", 1),
         ]
     );
     run_ast_pipeline(db, source);
@@ -251,7 +251,7 @@ fn test(p: Point) -> Nat {
         TdnrSummary {
             method_calls: vec![],
             calls: vec![TdnrCall {
-                target: "Point::x".to_owned(),
+                target: "pkg::Point::x".to_owned(),
                 arg_count: 1,
             }],
         }
@@ -280,7 +280,7 @@ fn test(c: Counter) -> Nat {
         TdnrSummary {
             method_calls: vec![],
             calls: vec![TdnrCall {
-                target: "Counter::add".to_owned(),
+                target: "pkg::Counter::add".to_owned(),
                 arg_count: 2,
             }],
         }
@@ -343,7 +343,7 @@ fn test(i: Item) -> Nat {
         TdnrSummary {
             method_calls: vec![],
             calls: vec![TdnrCall {
-                target: "Outer::score".to_owned(),
+                target: "pkg::Outer::score".to_owned(),
                 arg_count: 1,
             }],
         }
@@ -376,7 +376,7 @@ fn score_b(thing: B::Thing) -> Nat { thing.score() }
         TdnrSummary {
             method_calls: vec![],
             calls: vec![TdnrCall {
-                target: "A::score".to_owned(),
+                target: "pkg::A::score".to_owned(),
                 arg_count: 1,
             }],
         }
@@ -386,7 +386,7 @@ fn score_b(thing: B::Thing) -> Nat { thing.score() }
         TdnrSummary {
             method_calls: vec![],
             calls: vec![TdnrCall {
-                target: "B::score".to_owned(),
+                target: "pkg::B::score".to_owned(),
                 arg_count: 1,
             }],
         }
@@ -423,11 +423,11 @@ fn test() -> #(Nat, Nat) {
             method_calls: vec![],
             calls: vec![
                 TdnrCall {
-                    target: "A::tag".to_owned(),
+                    target: "pkg::A::tag".to_owned(),
                     arg_count: 1,
                 },
                 TdnrCall {
-                    target: "B::tag".to_owned(),
+                    target: "pkg::B::tag".to_owned(),
                     arg_count: 1,
                 },
             ],

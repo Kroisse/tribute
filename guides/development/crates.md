@@ -25,4 +25,6 @@ cargo tree --workspace --edges normal
 ```
 
 Pipeline structure is documented in the top-of-file comment in
-[src/pipeline.rs](../../src/pipeline.rs).
+[src/pipeline.rs](../../src/pipeline.rs). The root crate assembles the
+frontend's tracked queries, from parsing to the lowering input, in
+[src/frontend.rs](../../src/frontend.rs).

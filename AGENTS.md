@@ -24,6 +24,7 @@ Key design docs:
 - `new-plans/type-inference.md`
 - `new-plans/ir.md`
 - `new-plans/implementation.md`
+- `new-plans/lsp.md`
 - `new-plans/cranelift-backend.md`
 - `new-plans/runtime-types.md`
 
@@ -61,6 +62,9 @@ cargo run -- --log=tribute_front::typeck=trace compile file.trb
   contract, the doc comment on its `#[dialect]` declaration plays that role.
 - Flag `new-plans/` text that cites issue or PR numbers, branches, or task
   status.
+- Flag language or frontend rules stated in terms of calling convention,
+  convention class, or convention entry; those belong to the execution
+  strategy (`new-plans/design.md`).
 - Flag ownership or callable ABI inferred from symbol spelling, body shape, or
   an erased pointer type. Typed wrappers, interfaces, and declared signatures
   carry that information (`guides/development/conventions.md`).

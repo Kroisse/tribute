@@ -1,0 +1,7 @@
+---
+source: tests/integration/file_modules.rs
+assertion_line: 179
+expression: "located_diagnostics(&db, root)"
+---
+- "/pkg/src/util/deep.trb:0..22: syntax error: unmatched `(`, expected `)`"
+- "/pkg/src/util.trb:36..43: unresolved name `missing`"

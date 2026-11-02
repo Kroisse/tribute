@@ -21,7 +21,7 @@ use crate::typeck::prop::{
 };
 
 /// Unification variables and row tails for open types.
-const OPEN: TypeGen = TypeGen::GROUND.univars(4).row_vars(3).higher_kinded(true);
+const OPEN: TypeGen = TypeGen::GROUND.univars(4).row_vars(3).continuations(true);
 
 /// Rows with open arguments and tails, one instance per ability.
 const ORDERED_ROWS: TypeGen = TypeGen::GROUND
@@ -32,7 +32,7 @@ const ORDERED_ROWS: TypeGen = TypeGen::GROUND
 
 /// Closed ground types whose rows hold at most one instance of each ability,
 /// so every effect of a generalization matches exactly one effect.
-const GROUND_UNIQUE: TypeGen = TypeGen::GROUND.higher_kinded(true).unique_abilities(true);
+const GROUND_UNIQUE: TypeGen = TypeGen::GROUND.continuations(true).unique_abilities(true);
 
 fn solve_types<'db>(
     db: &'db dyn salsa::Database,
@@ -199,8 +199,8 @@ proptest! {
     /// ignored.
     #[test]
     fn ground_types_unify_iff_equal(
-        left in type_shape(TypeGen::GROUND.higher_kinded(true)),
-        right in type_shape(TypeGen::GROUND.higher_kinded(true)),
+        left in type_shape(TypeGen::GROUND.continuations(true)),
+        right in type_shape(TypeGen::GROUND.continuations(true)),
     ) {
         let db = salsa::DatabaseImpl::new();
         for (left, right) in [(left.build(&db), right.build(&db)), (left.build(&db), left.build(&db))] {
@@ -219,7 +219,7 @@ proptest! {
     /// contains it, wherever it occurs, including inside an effect argument.
     #[test]
     fn variable_does_not_unify_with_a_type_containing_it(
-        context in context_with_hole(TypeGen::GROUND.higher_kinded(true), TypeShape::UniVar(0)),
+        context in context_with_hole(TypeGen::GROUND.continuations(true), TypeShape::UniVar(0)),
         var_first in any::<bool>(),
     ) {
         let db = salsa::DatabaseImpl::new();

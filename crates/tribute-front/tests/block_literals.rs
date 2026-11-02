@@ -27,8 +27,8 @@ fn assert_error(db: &dyn salsa::Database, text: &str, after: &str, part: &str, m
     let from = text.find(after).expect("anchor must occur");
     let start = from + text[from..].find(part).expect("part must occur");
     assert_eq!(
-        (error.inner.span.start, error.inner.span.end),
-        (start, start + part.len()),
+        error.inner.span.range(),
+        start..start + part.len(),
         "span must cover {part:?}"
     );
     assert!(

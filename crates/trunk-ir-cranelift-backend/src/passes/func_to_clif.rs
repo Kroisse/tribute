@@ -20,8 +20,8 @@ use trunk_ir::op_interface::IndirectCallLike;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
-    ConversionError, ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern,
-    TypeConverter,
+    ConversionError, ConversionTarget, Module, OpRewritePattern, PatternApplicator,
+    PatternRewriter, TypeConverter,
 };
 use trunk_ir::symbol_table::SymbolTable;
 use trunk_ir::types::{Attribute, AttributeMap};
@@ -183,17 +183,16 @@ fn intern_ptr_type(ctx: &mut IrContext) -> TypeRef {
 /// Pattern: `func.func` -> `clif.func`
 struct FuncFuncPattern;
 
-impl RewritePattern for FuncFuncPattern {
+impl OpRewritePattern for FuncFuncPattern {
+    type Op = func::Func;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        func: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        if func::Func::from_op(ctx, op).is_err() {
-            return false;
-        }
-
+    ) -> Option<()> {
+        let op = func.op_ref();
         let tc = rewriter.type_converter();
 
         // Convert parameter and return types in the function signature
@@ -201,12 +200,8 @@ impl RewritePattern for FuncFuncPattern {
         let func_type_attr = ctx.op_attrs(op).get_type("type");
 
         let mut new_attrs = data.attributes.clone();
-        let Some(func_ty) = func_type_attr else {
-            return false;
-        };
-        let Some(new_func_ty) = convert_to_clif_func_type(ctx, func_ty, tc) else {
-            return false;
-        };
+        let func_ty = func_type_attr?;
+        let new_func_ty = convert_to_clif_func_type(ctx, func_ty, tc)?;
         new_attrs
             .view_mut(ctx)
             .insert("type", Attribute::Type(new_func_ty));
@@ -216,24 +211,23 @@ impl RewritePattern for FuncFuncPattern {
         ctx.op_mut(new_op).attributes = new_attrs;
         // Update dialect/name (already done by rebuild_op_as)
         rewriter.replace_op(new_op);
-        true
+        Some(())
     }
 }
 
 /// Pattern: `func.call` -> `clif.call`
 struct FuncCallPattern;
 
-impl RewritePattern for FuncCallPattern {
+impl OpRewritePattern for FuncCallPattern {
+    type Op = func::Call;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        call_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(call_op) = func::Call::from_op(ctx, op) else {
-            return false;
-        };
-
+    ) -> Option<()> {
+        let op = call_op.op_ref();
         let callee = call_op.callee(ctx).clone();
         let new_op = crate::passes::cf_to_clif::rebuild_op_as(ctx, op, "clif.call");
         for (index, result_ty) in rewriter.result_types(ctx, op).into_iter().enumerate() {
@@ -242,107 +236,103 @@ impl RewritePattern for FuncCallPattern {
         ctx.op_attrs_mut(new_op)
             .insert("callee", Attribute::SymbolRef(callee));
         rewriter.replace_op(new_op);
-        true
+        Some(())
     }
 }
 
 /// Pattern: `func.call_indirect` -> `clif.call_indirect`
 struct FuncCallIndirectPattern;
 
-impl RewritePattern for FuncCallIndirectPattern {
+impl OpRewritePattern for FuncCallIndirectPattern {
+    type Op = func::CallIndirect;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        call: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(call) = func::CallIndirect::from_op(ctx, op) else {
-            return false;
-        };
-
+    ) -> Option<()> {
+        let op = call.op_ref();
         let result_types = rewriter.result_types(ctx, op);
-        let Some(signature) = call.exact_signature(ctx) else {
-            return false;
-        };
-        let Some(sig_ty) = convert_to_clif_func_type(ctx, signature, rewriter.type_converter())
-        else {
-            return false;
-        };
-        let Some(callable) = clif::FuncSig::from_type_ref(ctx, sig_ty) else {
-            return false;
-        };
+        let signature = call.exact_signature(ctx)?;
+        let sig_ty = convert_to_clif_func_type(ctx, signature, rewriter.type_converter())?;
+        let callable = clif::FuncSig::from_type_ref(ctx, sig_ty)?;
         let runtime_result_types = callable
             .results(ctx)
             .iter()
             .copied()
             .filter(|ty| !crate::function::is_nil_type(ctx, *ty))
             .collect::<Vec<_>>();
-        if callable.inputs(ctx).len() != CallLike::call_args(&call, ctx).len()
-            || callable
-                .inputs(ctx)
-                .iter()
-                .zip(CallLike::call_args(&call, ctx))
-                .any(|(&param, &arg)| param != ctx.value_ty(arg))
-            || (result_types.as_slice() != callable.results(ctx)
-                && result_types != runtime_result_types)
-        {
-            return false;
-        }
+        let args = CallLike::call_args(&call, ctx);
+        rewriter.ensure(
+            callable.inputs(ctx).len() == args.len()
+                && callable
+                    .inputs(ctx)
+                    .iter()
+                    .zip(args)
+                    .all(|(&param, &arg)| param == ctx.value_ty(arg)),
+            "arguments do not match the indirect call signature",
+        )?;
+        rewriter.ensure(
+            result_types.as_slice() == callable.results(ctx)
+                || result_types == runtime_result_types,
+            "results do not match the indirect call signature",
+        )?;
 
         let new_op = crate::passes::cf_to_clif::rebuild_op_as(ctx, op, "clif.call_indirect");
         let mut attributes = std::mem::take(&mut ctx.op_mut(new_op).attributes);
         func::remove_indirect_call_signature(ctx, &mut attributes);
         ctx.op_mut(new_op).attributes = attributes;
-        if !clif::set_indirect_call_signature(ctx, new_op, sig_ty) {
-            return false;
-        }
+        rewriter.ensure(
+            clif::set_indirect_call_signature(ctx, new_op, sig_ty),
+            "indirect call signature does not fit the call",
+        )?;
         for (index, result_ty) in result_types.into_iter().enumerate() {
             ctx.set_op_result_type(new_op, index as u32, result_ty);
         }
         rewriter.replace_op(new_op);
-        true
+        Some(())
     }
 }
 
 /// Pattern: `func.return` -> `clif.return`
 struct FuncReturnPattern;
 
-impl RewritePattern for FuncReturnPattern {
+impl OpRewritePattern for FuncReturnPattern {
+    type Op = func::Return;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        return_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        if func::Return::from_op(ctx, op).is_err() {
-            return false;
-        }
+    ) -> Option<()> {
+        let op = return_op.op_ref();
         let new_op = crate::passes::cf_to_clif::rebuild_op_as(ctx, op, "clif.return");
         rewriter.replace_op(new_op);
-        true
+        Some(())
     }
 }
 
 /// Pattern: `func.tail_call` -> `clif.return_call`
 struct FuncTailCallPattern;
 
-impl RewritePattern for FuncTailCallPattern {
+impl OpRewritePattern for FuncTailCallPattern {
+    type Op = func::TailCall;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        tail_call: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(tail_call) = func::TailCall::from_op(ctx, op) else {
-            return false;
-        };
-
+    ) -> Option<()> {
+        let op = tail_call.op_ref();
         let callee = tail_call.callee(ctx).clone();
         let new_op = crate::passes::cf_to_clif::rebuild_op_as(ctx, op, "clif.return_call");
         ctx.op_attrs_mut(new_op)
             .insert("callee", Attribute::SymbolRef(callee));
         rewriter.replace_op(new_op);
-        true
+        Some(())
     }
 }
 
@@ -353,51 +343,53 @@ impl RewritePattern for FuncTailCallPattern {
 /// closure lowering it is untyped at the TrunkIR level.
 struct FuncTailCallIndirectPattern;
 
-impl RewritePattern for FuncTailCallIndirectPattern {
+impl OpRewritePattern for FuncTailCallIndirectPattern {
+    type Op = func::TailCallIndirect;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        tail: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(tail) = func::TailCallIndirect::from_op(ctx, op) else {
-            return false;
-        };
-        let Some(signature) = tail.exact_signature(ctx) else {
-            return false;
-        };
-        let Some(signature) = convert_to_clif_func_type(ctx, signature, rewriter.type_converter())
-        else {
-            return false;
-        };
-        let Some(callable) = clif::FuncSig::from_type_ref(ctx, signature) else {
-            return false;
-        };
-        let Some(caller_results) = enclosing_results(ctx, op, rewriter.type_converter()) else {
-            return false;
-        };
-        if callable.call_conv(ctx) != Some(func::CallConv::Tail)
-            || callable.results(ctx) != caller_results.as_slice()
-            || !TailCallLike::is_resultless(&tail, ctx)
-            || callable.inputs(ctx).len() != CallLike::call_args(&tail, ctx).len()
-            || callable
-                .inputs(ctx)
-                .iter()
-                .zip(CallLike::call_args(&tail, ctx))
-                .any(|(&param, &arg)| param != ctx.value_ty(arg))
-        {
-            return false;
-        }
+    ) -> Option<()> {
+        let op = tail.op_ref();
+        let signature = tail.exact_signature(ctx)?;
+        let signature = convert_to_clif_func_type(ctx, signature, rewriter.type_converter())?;
+        let callable = clif::FuncSig::from_type_ref(ctx, signature)?;
+        let caller_results = enclosing_results(ctx, op, rewriter.type_converter())?;
+        rewriter.ensure(
+            callable.call_conv(ctx) == Some(func::CallConv::Tail),
+            "indirect tail call signature is not tail-callable",
+        )?;
+        rewriter.ensure(
+            callable.results(ctx) == caller_results.as_slice(),
+            "indirect tail call results differ from the caller's",
+        )?;
+        rewriter.ensure(
+            TailCallLike::is_resultless(&tail, ctx),
+            "indirect tail call has results",
+        )?;
+        let args = CallLike::call_args(&tail, ctx);
+        rewriter.ensure(
+            callable.inputs(ctx).len() == args.len()
+                && callable
+                    .inputs(ctx)
+                    .iter()
+                    .zip(args)
+                    .all(|(&param, &arg)| param == ctx.value_ty(arg)),
+            "arguments do not match the indirect tail call signature",
+        )?;
 
         let new_op = crate::passes::cf_to_clif::rebuild_op_as(ctx, op, "clif.return_call_indirect");
         let mut attributes = std::mem::take(&mut ctx.op_mut(new_op).attributes);
         func::remove_indirect_call_signature(ctx, &mut attributes);
         ctx.op_mut(new_op).attributes = attributes;
-        if !clif::set_indirect_call_signature(ctx, new_op, signature) {
-            return false;
-        }
+        rewriter.ensure(
+            clif::set_indirect_call_signature(ctx, new_op, signature),
+            "indirect tail call signature does not fit the call",
+        )?;
         rewriter.replace_op(new_op);
-        true
+        Some(())
     }
 }
 
@@ -431,20 +423,20 @@ fn enclosing_results(
 /// Pattern: `func.unreachable` -> `clif.trap`
 struct FuncUnreachablePattern;
 
-impl RewritePattern for FuncUnreachablePattern {
+impl OpRewritePattern for FuncUnreachablePattern {
+    type Op = func::Unreachable;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        unreachable: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        if func::Unreachable::from_op(ctx, op).is_err() {
-            return false;
-        }
+    ) -> Option<()> {
+        let op = unreachable.op_ref();
         let loc = ctx.op(op).location;
         let new_op = clif::Trap::operands().code("unreachable").build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -468,17 +460,16 @@ struct FuncConstantPattern {
     functions: HashMap<OpRef, TypeRef>,
 }
 
-impl RewritePattern for FuncConstantPattern {
+impl OpRewritePattern for FuncConstantPattern {
+    type Op = func::Constant;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        const_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(const_op) = func::Constant::from_op(ctx, op) else {
-            return false;
-        };
-
+    ) -> Option<()> {
+        let op = const_op.op_ref();
         let func_ref = const_op.func_ref(ctx).clone();
         if let &[result] = ctx.op_result_types(op)
             && func::FuncSig::matches(ctx, result)
@@ -488,7 +479,7 @@ impl RewritePattern for FuncConstantPattern {
                 .and_then(|target| self.functions.get(&target).copied())
                 != Some(result)
         {
-            return false;
+            return rewriter.no_match("constant's type differs from the function it names");
         }
         let loc = ctx.op(op).location;
         let ptr_ty = intern_ptr_type(ctx);
@@ -497,7 +488,7 @@ impl RewritePattern for FuncConstantPattern {
             .results(ptr_ty)
             .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -514,13 +505,13 @@ mod tests {
     use trunk_ir::{Attribute, AttributeMap};
 
     const TAIL_TRANSFERS: &str = r#"core.module @test {
-  func.func @direct_target(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> (), {call_conv = "tail"}>} {
+  func.func @direct_target(%value: core.i32) -> (), {call_conv = "tail"} {
     func.return
   }
-  func.func @direct_caller(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> (), {call_conv = "tail"}>} {
+  func.func @direct_caller(%value: core.i32) -> (), {call_conv = "tail"} {
     func.tail_call %value {callee = @direct_target}
   }
-  func.func @indirect_caller(%callee: core.ptr, %value: core.i32) attributes {type = func.func_sig<(core.ptr, core.i32) -> (), {call_conv = "tail"}>} {
+  func.func @indirect_caller(%callee: core.ptr, %value: core.i32) -> (), {call_conv = "tail"} {
     func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> (), {call_conv = "tail"}>}
   }
 }"#;
@@ -813,7 +804,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !evidence = core.array<core.i32>
-  func.func @caller(%callee: core.ptr, %evidence: !evidence) attributes {type = func.func_sig<(core.ptr, !evidence) -> (), {call_conv = "tail"}>} {
+  func.func @caller(%callee: core.ptr, %evidence: !evidence) -> (), {call_conv = "tail"} {
     func.tail_call_indirect %callee, %evidence {signature = func.func_sig<(!evidence) -> (), {call_conv = "tail"}>}
   }
 }"#,
@@ -934,7 +925,7 @@ mod tests {
     fn value_tail_call_indirect_returns_the_callers_result() {
         let output = run_pass(
             r#"core.module @test {
-  func.func @caller(%callee: core.ptr, %value: core.i32) -> core.i32 attributes {type = func.func_sig<(core.ptr, core.i32) -> core.i32, {call_conv = "tail"}>} {
+  func.func @caller(%callee: core.ptr, %value: core.i32) -> core.i32, {call_conv = "tail"} {
     func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> core.i32, {call_conv = "tail"}>}
   }
 }"#,
@@ -991,7 +982,7 @@ mod tests {
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
-  func.func @target(%value: core.i32) attributes {{type = func.func_sig<(core.i32) -> (), {{call_conv = "tail"}}>}} {{
+  func.func @target(%value: core.i32) -> (), {{call_conv = "tail"}} {{
     func.return
   }}
   func.func @take() {{
@@ -1018,7 +1009,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   core.module @inner {
-    func.func @helper(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> (), {call_conv = "tail"}>} {
+    func.func @helper(%value: core.i32) -> (), {call_conv = "tail"} {
       func.return
     }
     func.func @take() {
@@ -1059,10 +1050,10 @@ mod tests {
         let duplicated = lower(
             r#"core.module @test {
   core.module @left {
-    func.func @helper(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> (), {call_conv = "tail"}>} {
+    func.func @helper(%value: core.i32) -> (), {call_conv = "tail"} {
       func.return
     }
-    func.func @helper(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> (), {call_conv = "tail"}>} {
+    func.func @helper(%value: core.i32) -> (), {call_conv = "tail"} {
       func.return
     }
     func.func @take() {
@@ -1076,7 +1067,7 @@ mod tests {
 
         let different_inputs = lower(
             r#"core.module @test {
-  func.func @target(%env: core.ptr, %value: core.i32) attributes {type = func.func_sig<(core.ptr, core.i32) -> (), {call_conv = "tail"}>} {
+  func.func @target(%env: core.ptr, %value: core.i32) -> (), {call_conv = "tail"} {
     func.return
   }
   func.func @take() {

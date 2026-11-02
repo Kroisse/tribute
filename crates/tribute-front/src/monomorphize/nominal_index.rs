@@ -39,12 +39,22 @@ pub(super) struct NominalIndex<'ast, 'db> {
 }
 
 impl<'ast, 'db> NominalIndex<'ast, 'db> {
-    pub fn new(db: &'db dyn salsa::Database, module: &'ast DeclTable<TypedRef<'db>>) -> Self {
+    /// The nominal declarations of `module` and of `dependencies`.
+    pub fn new(
+        db: &'db dyn salsa::Database,
+        module: &'ast DeclTable<TypedRef<'db>>,
+        dependencies: &[&'ast DeclTable<TypedRef<'db>>],
+    ) -> Self {
         let mut index = Self {
             module: module.id,
             declarations: HashMap::default(),
         };
-        for entry in &module.entries {
+        for entry in dependencies
+            .iter()
+            .copied()
+            .chain([module])
+            .flat_map(|table| &table.entries)
+        {
             index.collect(db, &entry.module, &entry.decl);
         }
         index
@@ -62,10 +72,10 @@ impl<'ast, 'db> NominalIndex<'ast, 'db> {
         prefix: &SymbolPath,
         decl: &'ast Decl<TypedRef<'db>>,
     ) {
-        let (name, node, declaration) = match decl {
+        let (name, disambiguator, declaration) = match decl {
             Decl::Struct(s) => (
                 s.name.clone(),
-                s.id,
+                s.disambiguator,
                 Declaration {
                     source: NominalDeclaration::Struct(s),
                     constructors: vec![Constructor {
@@ -77,7 +87,7 @@ impl<'ast, 'db> NominalIndex<'ast, 'db> {
             ),
             Decl::Enum(e) => (
                 e.name.clone(),
-                e.id,
+                e.disambiguator,
                 Declaration {
                     source: NominalDeclaration::Enum(e),
                     constructors: e
@@ -85,7 +95,7 @@ impl<'ast, 'db> NominalIndex<'ast, 'db> {
                         .iter()
                         .map(|v| Constructor {
                             node: v.id,
-                            id: CtorId::new(db, prefix.child(v.name.clone())),
+                            id: CtorId::new(db, prefix.child(e.name.clone()).child(v.name.clone())),
                             fields: v.fields.len(),
                         })
                         .collect(),
@@ -93,7 +103,7 @@ impl<'ast, 'db> NominalIndex<'ast, 'db> {
             ),
             _ => return,
         };
-        let id = TypeDefId::source(db, prefix.child(name.clone()), node);
+        let id = TypeDefId::declared(db, prefix.child(name.clone()), disambiguator);
         self.declarations.insert(id, declaration);
     }
 }

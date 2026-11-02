@@ -519,9 +519,7 @@ impl Fold for If {
 
         // Active region must be a single block whose terminator is `scf.yield`.
         let blocks = &ctx.region(active_region).blocks;
-        let [active_block] = blocks.as_slice() else {
-            return None;
-        };
+        let [active_block] = blocks.as_array()?;
         let region_ops = &ctx.block(*active_block).ops;
         let (yield_op, body_ops) = region_ops.split_last()?;
         if !Yield::matches(ctx, *yield_op) {
@@ -562,9 +560,7 @@ impl Fold for Switch {
             return None;
         }
         let selector = const_int_value(ctx, switch.discriminant(ctx))?;
-        let [body_block] = ctx.region(switch.body(ctx)).blocks.as_slice() else {
-            return None;
-        };
+        let [body_block] = ctx.region(switch.body(ctx)).blocks.as_array()?;
 
         let mut matched = None;
         let mut default_region = None;
@@ -592,9 +588,7 @@ impl Fold for Switch {
             None => default_region?,
         };
 
-        let [active_block] = ctx.region(active_region).blocks.as_slice() else {
-            return None;
-        };
+        let [active_block] = ctx.region(active_region).blocks.as_array()?;
         let arm_ops = &ctx.block(*active_block).ops;
         let (last, rest) = arm_ops.split_last()?;
         let body = if let Ok(yield_op) = Yield::from_op(ctx, *last) {

@@ -11,12 +11,16 @@ use std::borrow::Cow;
 use std::ops::ControlFlow;
 use std::rc::Rc;
 
+use itertools::Itertools;
+
 use trunk_ir::Symbol;
 use trunk_ir::SymbolPath;
+use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
 use trunk_ir::op_interface::DynIndirectCallLike;
 use trunk_ir::ops::{DialectOp, DialectType};
+use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::Module;
 use trunk_ir::symbol_table::{SymbolTable, link_name};
@@ -35,7 +39,6 @@ const FORBIDDEN_DIALECTS: &[&str] = &[
 const FORBIDDEN_ATTRIBUTES: &[&str] = &[
     "tribute.calling_convention",
     "tribute.cps_continuation_frame_result",
-    "tribute.closure_environment_index",
     tribute_ir::dialect::tribute_control::ABILITY_ROW_ATTR,
     tribute_ir::dialect::tribute_control::ROW_BINDERS_ATTR,
     tribute_ir::dialect::tribute_control::ROW_UNIONS_ATTR,
@@ -109,6 +112,10 @@ pub enum ViolationKind {
     /// A `func.constant` whose type is not its target's exact signature.
     #[display("function reference differs from its target signature")]
     ReferenceSignatureMismatch,
+    /// A `tribute_rt.convention_table` entry that names no function
+    /// definition.
+    #[display("convention table entry names no function")]
+    UnresolvedConventionEntry,
     /// A function definition or indirect call without an exact signature.
     #[display("missing exact callable signature")]
     MissingExactSignature,
@@ -143,7 +150,7 @@ pub struct BoundaryViolation {
 /// Operations, aliases, result types, block arguments and their attributes,
 /// and nested type parameters and attributes are all inspected. Referenced C
 /// declarations that `target` does not bind are reported last.
-pub fn verify_boundary_exit(
+fn verify_boundary_exit(
     ctx: &IrContext,
     module: Module,
     target: TargetKind,
@@ -164,6 +171,57 @@ pub fn verify_boundary_exit(
     verifier.check_runtime_bindings(&ops, &functions, target);
     verifier.check_root_entry(module, &functions);
     verifier.violations
+}
+
+/// The boundary exit violations of a module, reported together.
+#[derive(Clone, Debug, PartialEq, Eq, derive_more::Display, derive_more::Error)]
+#[display(
+    "{target:?} representation/ABI boundary exit violations: {}",
+    violations.iter().format("; ")
+)]
+pub struct BoundaryExitError {
+    pub target: TargetKind,
+    pub violations: Vec<BoundaryViolation>,
+}
+
+/// Reject a module whose representation/ABI boundary exit violates the
+/// contract for `target`.
+fn check_boundary_exit(
+    ctx: &IrContext,
+    module: Module,
+    target: TargetKind,
+) -> Result<(), BoundaryExitError> {
+    let violations = verify_boundary_exit(ctx, module, target);
+    if violations.is_empty() {
+        Ok(())
+    } else {
+        Err(BoundaryExitError { target, violations })
+    }
+}
+
+/// Reject a module whose representation/ABI boundary exit violates the
+/// contract for `target`. It verifies in every build, unlike the debug
+/// verifier of a [`trunk_ir::pass::PassManager`].
+pub struct CheckBoundaryExit {
+    pub target: TargetKind,
+}
+
+impl Pass for CheckBoundaryExit {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "check-boundary-exit"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        check_boundary_exit(ctx, target.into(), self.target)?;
+        Ok(())
+    }
 }
 
 /// A violation found inside a type, relative to the site that uses the type.
@@ -320,6 +378,20 @@ impl<'a> Verifier<'a> {
                     Some(op),
                     format!("{op_name} @{target}"),
                 );
+            }
+        }
+        if let Ok(table) = tribute_ir::dialect::tribute_rt::ConventionTable::from_op(ctx, op) {
+            for entry in table.entries(ctx) {
+                let resolved = functions
+                    .resolve(ctx, op, entry)
+                    .is_some_and(|function| func::Func::matches(ctx, function));
+                if !resolved {
+                    self.report(
+                        ViolationKind::UnresolvedConventionEntry,
+                        Some(op),
+                        format!("{op_name} @{entry}"),
+                    );
+                }
             }
         }
         let has_exact_signature = if let Ok(function) = func::Func::from_op(ctx, op) {
@@ -530,10 +602,10 @@ mod tests {
     fn physical_module_has_no_violations() {
         let violations = kinds(
             r#"core.module @test {
-  func.func @target(%value: core.i32) attributes {type = func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>, tribute.types = {"std::String" = core.i32}} {
+  func.func @target(%value: core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} attributes {tribute.types = {"std::String" = core.i32}} {
     func.return
   }
-  func.func @caller(%value: core.i32) attributes {type = func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
+  func.func @caller(%value: core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
     %reference = func.constant {func_ref = @target} : func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>
     func.tail_call_indirect %reference, %value {signature = func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>}
   }
@@ -571,7 +643,7 @@ mod tests {
         let violations = kinds(
             r#"core.module @test {
   func.func @run(%evidence: core.ptr) {
-    %created = closure.new {func_ref = @run} : core.ptr
+    %created = closure.new {entries = [@run]} : core.ptr
     func.return
   }
 }"#,
@@ -587,7 +659,7 @@ mod tests {
         assert_eq!(
             kinds(
                 r#"core.module @test {
-  func.func @run() attributes {tribute.calling_convention = 2} {
+  func.func @run() attributes {tribute.calling_convention = "cps"} {
     func.return
   }
 }"#
@@ -607,18 +679,18 @@ mod tests {
         assert_eq!(
             kinds(
                 r#"core.module @test {
-  func.func @run() attributes {evidence = [func.func_sig<(adt.typeref<{name = "Frame", tribute.closure_environment_index = 0}>) -> ()>]} {
+  func.func @run() attributes {evidence = [func.func_sig<(adt.typeref<{name = "Frame", tribute.cps_continuation_frame_result = core.nil}>) -> ()>]} {
     func.return
   }
 }"#
             ),
-            [attribute("tribute.closure_environment_index")]
+            [attribute("tribute.cps_continuation_frame_result")]
         );
         // Dictionary keys and types nested in dictionary values.
         assert_eq!(
             kinds(
                 r#"core.module @test {
-  func.func @run() attributes {meta = [{tribute.calling_convention = 2}]} {
+  func.func @run() attributes {meta = [{tribute.calling_convention = "cps"}]} {
     func.return
   }
 }"#
@@ -636,12 +708,12 @@ mod tests {
         assert_eq!(
             kinds(
                 r#"core.module @test {
-  func.func @run() attributes {meta = {ty = adt.typeref<{name = "Frame", tribute.closure_environment_index = 0}>}} {
+  func.func @run() attributes {meta = {ty = adt.typeref<{name = "Frame", tribute.cps_continuation_frame_result = core.nil}>}} {
     func.return
   }
 }"#
             ),
-            [attribute("tribute.closure_environment_index")]
+            [attribute("tribute.cps_continuation_frame_result")]
         );
         // Block argument attribute. Textual IR cannot spell block argument
         // attributes other than names, so attach one directly.
@@ -692,7 +764,7 @@ mod tests {
   func.func @never() -> core.never {
     func.unreachable
   }
-  func.func @target(%env: core.ptr, %value: core.i32) attributes {type = func.func_sig<(core.ptr, core.i32) -> (), {call_conv = "tail"}>} {
+  func.func @target(%env: core.ptr, %value: core.i32) -> (), {call_conv = "tail"} {
     func.return
   }
   func.func @caller(%value: core.i32) {
@@ -771,8 +843,9 @@ mod tests {
     fn reference_module(definition: &str, reference: &str) -> String {
         format!(
             r#"core.module @test {{
-  func.func @target(%value: core.i32) attributes {{type = {definition}}} {{
-    func.return
+  func.func {{sym_name = "target", type = {definition}}} {{
+    ^bb0(%value: core.i32):
+      func.return
   }}
   func.func @caller() {{
     %reference = func.constant {{func_ref = @target}} : {reference}
@@ -802,11 +875,7 @@ mod tests {
                 "",
                 "%zero = arith.const {value = 0} : core.i32\n    func.return %zero",
             ),
-            entry(
-                "()",
-                " attributes {type = func.func_sig<() -> (), {call_conv = \"tail\"}>}",
-                "func.return",
-            ),
+            entry("() -> (), {call_conv = \"tail\"}", "", "func.return"),
         ] {
             assert_eq!(
                 kinds(&malformed),
@@ -903,7 +972,7 @@ mod tests {
         let plain = verify(
             r#"core.module @test {
   !frame = adt.typeref<{name = "Frame"}>
-  func.func @run(%frame: !frame) attributes {tribute.calling_convention = 2} {
+  func.func @run(%frame: !frame) attributes {tribute.calling_convention = "cps"} {
     %same = core.unrealized_conversion_cast %frame : !frame
     func.return
   }
@@ -913,7 +982,7 @@ mod tests {
         let annotated = verify(
             r#"core.module @test {
   !frame = adt.typeref<{name = "Frame", tribute.definition = loc("test.trb" 10:20)}>
-  func.func @run(%frame: !frame) attributes {tribute.calling_convention = 2, tribute.definition = loc("test.trb" 30:40)} {
+  func.func @run(%frame: !frame) attributes {tribute.calling_convention = "cps", tribute.definition = loc("test.trb" 30:40)} {
     %same = core.unrealized_conversion_cast %frame : !frame
     func.return
   }
@@ -970,6 +1039,23 @@ mod tests {
     }
 
     #[test]
+    fn convention_table_entries_must_name_function_definitions() {
+        let violations = kinds(
+            r#"core.module @test {
+  func.func @target(%value: core.i32) {
+    func.return
+  }
+  func.func @make() {
+    %table = tribute_rt.convention_table {entries = [@target]} : tribute_rt.convention_table_ref
+    %missing = tribute_rt.convention_table {entries = [@target, @missing]} : tribute_rt.convention_table_ref
+    func.return
+  }
+}"#,
+        );
+        assert_eq!(violations, [ViolationKind::UnresolvedConventionEntry]);
+    }
+
+    #[test]
     fn untyped_references_and_indirect_calls_without_signatures_are_reported() {
         let violations = kinds(
             r#"core.module @test {
@@ -1008,7 +1094,7 @@ mod tests {
         assert_eq!(
             kinds(
                 r#"core.module @test {
-  func.func @run(%value: tribute_rt.anyref) attributes {type = func.func_sig<(tribute_rt.anyref {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
+  func.func @run(%value: tribute_rt.anyref {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
     func.unreachable
   }
 }"#

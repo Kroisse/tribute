@@ -169,6 +169,23 @@ expect_commands "$FMT" "$CLIPPY" "$DOC" "$AST_TEST" "$AST_SCAN" "$MARKDOWN" "$RU
     expect_status 1 env LINT_TEST_AST_GREP_SCAN_STATUS=1 git commit -qm 'ast-grep must fail'
     expect_commands "$FMT" "$AST_TEST" "$AST_SCAN"
     test "$(git rev-parse HEAD)" = "$initial_head"
+
+    # A linked work tree shares an absolute hooksPath with the main checkout;
+    # the hook must lint the work tree being committed.
+    git config core.hooksPath "$(pwd -P)/.ci/githooks"
+    git add .ci
+    expect_status 0 git commit -qm 'Track lint scripts'
+    git worktree add -q ../linked
+    cd ../linked
+    linked_root="$(pwd -P)"
+    printf 'linked change\n' >sample.txt
+    git add sample.txt
+    expect_status 0 env LINT_TEST_CWD_LOG="$TEMP_DIR/cwd" git commit -qm 'Linked commit'
+    expect_commands "$FMT" "$AST_TEST" "$AST_SCAN" "$MARKDOWN"
+    if [ "$(cat "$TEMP_DIR/cwd")" != "$linked_root" ]; then
+        echo "pre-commit linted $(cat "$TEMP_DIR/cwd") instead of $linked_root" >&2
+        exit 1
+    fi
 )
 
 echo "Lint, full validation, and pre-commit tests passed!"

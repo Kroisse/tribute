@@ -25,11 +25,11 @@ use trunk_ir::ops::DialectOp;
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
-    PatternApplicator, PatternRewriter, RewritePattern, RewriteScope, TypeConverter,
+    OpRewritePattern, PatternApplicator, PatternRewriter, RewriteScope, TypeConverter,
 };
 
 use crate::effect_dispatch::pack_payload;
-use tribute_ir::calling_convention::{CLOSURE_ENVIRONMENT_INDEX_ATTR, DynConventionBearing};
+use tribute_ir::calling_convention::DynConventionBearing;
 use tribute_ir::dialect::ability;
 use tribute_ir::dialect::effect;
 use tribute_ir::dialect::tribute_rt;
@@ -86,24 +86,21 @@ struct LowerCallPattern {
     types: CommonTypes,
 }
 
-impl RewritePattern for LowerCallPattern {
+impl OpRewritePattern for LowerCallPattern {
+    type Op = ability::Call;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        call: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        if ability::Call::from_op(ctx, op).is_err() {
-            return false;
-        }
-
+    ) -> Option<()> {
+        let op = call.op_ref();
         let location = ctx.op(op).location;
         let ability = ctx.op_attrs(op).get_symbol_ref("ability").cloned().unwrap();
         let op_name = ctx.op_attrs(op).get_string_ref("op_name").unwrap();
         let result_types = ctx.op_result_types(op).to_vec();
-        let [result_type] = result_types.as_slice() else {
-            return false;
-        };
+        let [result_type] = result_types.as_array()?;
 
         // Operands: [...values]
         let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
@@ -114,7 +111,7 @@ impl RewritePattern for LowerCallPattern {
         // Consume the enclosing callable's exact hidden-parameter contract.
         let Some(evidence_val) = enclosing_callable_evidence(ctx, op) else {
             // Leave malformed input for the final ability boundary to reject.
-            return false;
+            return None;
         };
 
         // === 2. Build the canonical payload product. ===
@@ -145,7 +142,7 @@ impl RewritePattern for LowerCallPattern {
         // === 4. Erase ability.call, mapping its result to the typed dispatch result ===
         rewriter.erase_op(vec![ctx.op_result(typed_result, 0)]);
 
-        true
+        Some(())
     }
 }
 
@@ -155,9 +152,8 @@ impl RewritePattern for LowerCallPattern {
 
 /// Read the canonical evidence slot of the nearest callable with a declared ABI.
 ///
-/// A lifted closure whose type records environment index 0 stores that
-/// environment ahead of the hidden evidence parameter, so evidence then
-/// occupies the following slot.
+/// A convention that carries evidence places it first, ahead of any
+/// environment.
 fn enclosing_callable_evidence(ctx: &IrContext, op: OpRef) -> Option<ValueRef> {
     let mut current = op;
     loop {
@@ -168,14 +164,8 @@ fn enclosing_callable_evidence(ctx: &IrContext, op: OpRef) -> Option<ValueRef> {
             if !DynConventionBearing::of(ctx, parent)?.needs_evidence() {
                 return None;
             }
-            let environment_index = ctx
-                .op_attrs(parent)
-                .get_u32(CLOSURE_ENVIRONMENT_INDEX_ATTR)
-                .ok()
-                .flatten();
-            let evidence_index = usize::from(environment_index == Some(0));
             let entry = *ctx.region(ctx.op_region(parent, 0)?).blocks.first()?;
-            let &evidence = ctx.block_args(entry).get(evidence_index)?;
+            let &evidence = ctx.block_args(entry).first()?;
             return ability::is_evidence_type_ref(ctx, ctx.value_ty(evidence)).then_some(evidence);
         }
         current = parent;
@@ -209,7 +199,7 @@ mod tests {
             &mut ctx,
             &format!(
                 r#"core.module @test {{
-  func.func @test_fn(%ev: {ev_ty}) -> tribute_rt.anyref attributes {{tribute.calling_convention = 1}} {{
+  func.func @test_fn(%ev: {ev_ty}) -> tribute_rt.anyref attributes {{tribute.calling_convention = "evidence_direct"}} {{
     %msg = arith.const {{value = 1}} : tribute_rt.anyref
     %result = ability.call %msg {{ability = @Console, op_name = "print"}} : tribute_rt.anyref
     func.return %result
@@ -232,15 +222,15 @@ mod tests {
         for (attributes, params) in [
             ("", "%ev: !Evidence"),
             (
-                "attributes {tribute.calling_convention = 0}",
+                "attributes {tribute.calling_convention = \"direct\"}",
                 "%ev: !Evidence",
             ),
             (
-                "attributes {tribute.calling_convention = 1}",
+                "attributes {tribute.calling_convention = \"evidence_direct\"}",
                 "%value: core.i32, %ev: !Evidence",
             ),
             (
-                "attributes {tribute.calling_convention = 2}",
+                "attributes {tribute.calling_convention = \"cps\"}",
                 "%value: core.i32, %ev: !Evidence",
             ),
         ] {
@@ -274,7 +264,7 @@ mod tests {
             &mut ctx,
             &format!(
                 r#"core.module @test {{
-  func.func @test_fn(%ev: {ev_ty}) -> core.i32 attributes {{tribute.calling_convention = 1}} {{
+  func.func @test_fn(%ev: {ev_ty}) -> core.i32 attributes {{tribute.calling_convention = "evidence_direct"}} {{
     %result = ability.call {{ability = @Counter, op_name = "next"}} : core.i32
     func.return %result
   }}

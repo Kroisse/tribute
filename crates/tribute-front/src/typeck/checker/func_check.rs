@@ -8,8 +8,7 @@ use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 
 use itertools::Itertools;
-use salsa::Accumulator;
-use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_core::{CompilationPhase, DiagnosticSeverity};
 use trunk_ir::Symbol;
 
 use crate::ast::{
@@ -19,10 +18,23 @@ use crate::ast::{
 use super::super::constraint::{ConstraintOrigin, ConstraintOriginKind, ConstraintSet};
 use super::super::func_context::FunctionInferenceContext;
 use super::super::solver::{LocatedSolveError, TypeSolver};
+use super::NodeDiagnostic;
 #[cfg(test)]
 use super::diagnostics::{format_solve_error, solve_error_context};
 use super::finalize::{Finalize, Substitution};
 use super::{FunctionCheck, Mode, TypeChecker};
+
+/// What resolving a function's deferred calls and implicit constructors
+/// after solving selected.
+struct DeferredSelections<'db> {
+    /// The function each deferred call selected, and its instance.
+    functions: HashMap<crate::ast::NodeId, (FuncDefId<'db>, Type<'db>)>,
+    /// The constructor each deferred implicit constructor selected, and its
+    /// instance.
+    constructors: HashMap<crate::ast::NodeId, (ResolvedRef<'db>, Type<'db>)>,
+    /// Errors of relations that waited for a selection, not of the selection.
+    waiting_errors: Vec<LocatedSolveError<'db>>,
+}
 use crate::ast::visit::VisitMut;
 
 impl<'db> TypeChecker<'db> {
@@ -46,7 +58,7 @@ impl<'db> TypeChecker<'db> {
         let func_id = self.func_def_id(&func.name);
         let mut ctx = FunctionInferenceContext::new(self.db(), &self.env, func_id);
         // Only the exact root `main` is an entrypoint.
-        let is_root_main = crate::is_root_main(&func.name, self.current_prefix().is_root());
+        let is_root_main = crate::is_root_main(&func.name, self.current_prefix());
 
         // 2. Get the function's registered type scheme and instantiate it
 
@@ -54,7 +66,7 @@ impl<'db> TypeChecker<'db> {
         let (param_types, expected_return, instantiated_func_ty, signature_instance) =
             self.get_func_signature_with_type(&mut ctx, func_id, func);
         if let Some((_, instance)) = &signature_instance
-            && let Some(names) = self.signature_type_names.get(&func_id)
+            && let Some(names) = self.signatures.type_names.get(&func_id)
         {
             for (name, index) in names {
                 ctx.bind_annotation_type_parameter(
@@ -64,7 +76,7 @@ impl<'db> TypeChecker<'db> {
             }
         }
         if let Some((scheme, instance)) = &signature_instance
-            && let Some(names) = self.signature_row_names.get(&func_id)
+            && let Some(names) = self.signatures.row_names.get(&func_id)
         {
             for (name, original) in names {
                 let index = scheme
@@ -156,6 +168,7 @@ impl<'db> TypeChecker<'db> {
         let body_ability_row = ctx.current_effect();
         // Take deferred methods for post-solve resolution
         let deferred_methods = ctx.take_deferred_methods();
+        let deferred_constructors = ctx.take_deferred_constructors();
         let become_method_operands = ctx.take_become_method_operands();
         let evidence = std::mem::take(&mut ctx.evidence);
         let next_row_var = ctx.next_row_var();
@@ -175,6 +188,9 @@ impl<'db> TypeChecker<'db> {
                 method.arg_types.clone(),
                 method.effect,
             );
+        }
+        for constructor in &deferred_constructors {
+            constructor.defer_in(self.db(), &mut solver);
         }
 
         let mut solve_failed = false;
@@ -200,9 +216,14 @@ impl<'db> TypeChecker<'db> {
         // 4b. Post-solve: resolve deferred method calls
         // After solving, UniVar receiver types may now be concrete.
         // Look up methods and add type constraints for return types.
-        let (mut deferred_resolutions, waiting_errors) = self.resolve_deferred_methods(
+        let DeferredSelections {
+            functions: mut deferred_resolutions,
+            constructors: constructor_resolutions,
+            waiting_errors,
+        } = self.resolve_deferred_methods(
             &mut solver,
             deferred_methods,
+            deferred_constructors,
             func.id,
             &mut func_instances,
         );
@@ -298,6 +319,14 @@ impl<'db> TypeChecker<'db> {
         );
         let mut body_univars = Vec::new();
         self.collect_univars_from_body(&body, type_subst, row_subst, &mut body_univars);
+        for (_, instance) in constructor_resolutions.values() {
+            type_subst.collect_univars_from_type(
+                self.db(),
+                *instance,
+                row_subst,
+                &mut body_univars,
+            );
+        }
         self.collect_univars_from_deferred_resolutions(
             &deferred_resolutions,
             type_subst,
@@ -352,13 +381,16 @@ impl<'db> TypeChecker<'db> {
             && let TypeKind::Func { result, .. } = substituted_ty.kind(self.db())
             && !matches!(result.kind(self.db()), TypeKind::Nil | TypeKind::Error)
         {
-            Diagnostic::new(
-                format!("function 'main' must return Nil, but returns `{}`", result),
-                self.get_span(func.id),
+            NodeDiagnostic::new(
+                format!(
+                    "function 'main' must return Nil, but returns `{}`",
+                    result.display(self.db(), self.names())
+                ),
+                func.id,
                 DiagnosticSeverity::Error,
                 CompilationPhase::TypeChecking,
             )
-            .accumulate(self.db());
+            .report(self);
         }
 
         if let Some(declared) = declared_effect {
@@ -388,16 +420,18 @@ impl<'db> TypeChecker<'db> {
                     .filter(|effect| !effect.ability_id.is_builtin_io(self.db()))
                     .collect_vec();
                 if !unhandled.is_empty() {
-                    Diagnostic::new(
+                    NodeDiagnostic::new(
                         format!(
                             "function 'main' has unhandled effects: {}",
-                            unhandled.iter().format(", ")
+                            unhandled.iter().format_with(", ", |effect, f| f(
+                                &effect.display(self.db(), self.names())
+                            ))
                         ),
-                        self.get_span(func.id),
+                        func.id,
                         DiagnosticSeverity::Error,
                         CompilationPhase::TypeChecking,
                     )
-                    .accumulate(self.db());
+                    .report(self);
                 }
             }
         }
@@ -428,11 +462,6 @@ impl<'db> TypeChecker<'db> {
         let generalized =
             type_subst.apply_generalization(self.db(), substituted_ty, row_subst, &var_to_index);
 
-        // Create type params for all generalized UniVars
-        let type_params: Vec<crate::ast::TypeParam> = (0..var_to_index.len())
-            .map(|_| crate::ast::TypeParam::anonymous())
-            .collect();
-
         // The declared signature is the function's final scheme; checking the
         // body never republishes it.
         if let Some((declared, _)) = &signature_instance {
@@ -440,7 +469,7 @@ impl<'db> TypeChecker<'db> {
                 solve_failed
                     || reported_error
                     || (declared.body(self.db()) == generalized
-                        && declared.type_params(self.db()) == type_params),
+                        && declared.type_params(self.db()).len() == var_to_index.len()),
                 "checked type of `{}` differs from its declaration:\n  declared: {:?}\n  checked:  {:?}",
                 func.name,
                 declared,
@@ -458,7 +487,7 @@ impl<'db> TypeChecker<'db> {
 
         // 6. Materialize the solved node types before rebuilding the body.
         // Post-solve case coverage consults these entries during body substitution.
-        for (node_id, ty) in func_node_types {
+        for (&node_id, &ty) in &func_node_types {
             let substituted = substitution.apply(ty);
             checked.node_types.insert(node_id, substituted);
         }
@@ -469,7 +498,9 @@ impl<'db> TypeChecker<'db> {
             checker: self,
             substitution: &substitution,
             deferred_resolutions: &deferred_resolutions,
+            constructor_resolutions: &constructor_resolutions,
             node_types: &checked.node_types,
+            unbound_node_types: &func_node_types,
             exhaustive_cases: &mut checked.exhaustive_cases,
             exhaustiveness_reported: &mut checked.exhaustiveness_reported,
         }
@@ -588,17 +619,19 @@ impl<'db> TypeChecker<'db> {
     /// Iteratively resolves methods whose receiver types are now concrete after solving.
     /// Each resolved method adds new type constraints (return type, param types),
     /// which are re-solved. Repeats until no more progress.
+    ///
+    /// Implicit constructors whose selection waits are selected in the same
+    /// rounds, since each selection may determine the other's types.
     fn resolve_deferred_methods(
         &self,
         solver: &mut TypeSolver<'db>,
         mut deferred: Vec<crate::typeck::func_context::DeferredMethodCall<'db>>,
+        mut constructors: Vec<crate::typeck::func_context::DeferredConstructor<'db>>,
         func_node_id: crate::ast::NodeId,
         instances: &mut HashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
-    ) -> (
-        HashMap<crate::ast::NodeId, (FuncDefId<'db>, Type<'db>)>,
-        Vec<LocatedSolveError<'db>>,
-    ) {
+    ) -> DeferredSelections<'db> {
         let mut resolved = HashMap::default();
+        let mut resolved_constructors = HashMap::default();
         // Errors of relations that waited for a call, not of the call.
         let mut waiting_errors = Vec::new();
         // Once no call can be selected with the types determined so far,
@@ -650,17 +683,43 @@ impl<'db> TypeChecker<'db> {
                     remaining.push(mc);
                 }
             }
+            let mut remaining_constructors = Vec::new();
+            for constructor in std::mem::take(&mut constructors) {
+                if let super::implicit_ctor::ConstructorSelection::One(id) =
+                    self.select_deferred_constructor(solver, &constructor, settled)
+                {
+                    let (instance, constraints) =
+                        self.selected_constructor_constraints(solver, &constructor, id);
+                    resolved_constructors.insert(
+                        constructor.node_id,
+                        (
+                            ResolvedRef::constructor(id, constructor.name.clone()),
+                            instance,
+                        ),
+                    );
+                    solver.resolve_producer(constructor.node_id);
+                    for constraint in constraints {
+                        new_constraints.add(constraint);
+                    }
+                } else {
+                    remaining_constructors.push(constructor);
+                }
+            }
 
             if new_constraints.is_empty() {
-                if !settled && !remaining.is_empty() {
+                if !settled && !(remaining.is_empty() && remaining_constructors.is_empty()) {
                     settled = true;
                     deferred = remaining;
+                    constructors = remaining_constructors;
                     continue;
                 }
                 // A call has only the functions its scope names, so what
                 // is still undecided here stays so.
                 for mc in &remaining {
                     self.report_unresolved_method_path(solver, mc);
+                }
+                for constructor in &remaining_constructors {
+                    self.report_unselected_constructor(solver, constructor);
                 }
                 break;
             }
@@ -675,19 +734,27 @@ impl<'db> TypeChecker<'db> {
                     Some(origin) if !resolved.contains_key(&origin.node_id) => {
                         waiting_errors.push(error);
                     }
-                    origin => Diagnostic::new(
-                        format!("type error during UFCS method resolution: {}", error.error),
-                        self.get_span(origin.map_or(func_node_id, |origin| origin.node_id)),
+                    origin => NodeDiagnostic::new(
+                        format!(
+                            "type error during UFCS method resolution: {}",
+                            error.error.display(self.db(), self.names())
+                        ),
+                        origin.map_or(func_node_id, |origin| origin.node_id),
                         DiagnosticSeverity::Error,
                         CompilationPhase::TypeChecking,
                     )
-                    .accumulate(self.db()),
+                    .report(self),
                 }
             }
             deferred = remaining;
+            constructors = remaining_constructors;
             settled = false;
         }
-        (resolved, waiting_errors)
+        DeferredSelections {
+            functions: resolved,
+            constructors: resolved_constructors,
+            waiting_errors,
+        }
     }
 
     /// What selecting a function of type `callee` for the deferred `call`
@@ -822,7 +889,10 @@ impl<'db> TypeChecker<'db> {
                 call.arg_types
                     .iter()
                     .map(|ty| solver.type_subst().apply(self.db(), *ty))
-                    .format_with(", ", |ty, f| f(&format_args!("`{ty}`")))
+                    .format_with(", ", |ty, f| f(&format_args!(
+                        "`{}`",
+                        ty.display(self.db(), self.names())
+                    )))
             )
         };
         let selection = self.select_deferred_method(solver, call, true);
@@ -830,7 +900,10 @@ impl<'db> TypeChecker<'db> {
             functions
                 .iter()
                 .format_with(", ", |function, f| {
-                    f(&format_args!("`{}`", function.qualified(self.db())))
+                    f(&format_args!(
+                        "`{}`",
+                        self.names().path(function.path(self.db()))
+                    ))
                 })
                 .to_string()
         };
@@ -839,8 +912,9 @@ impl<'db> TypeChecker<'db> {
                 let expected = solver.expected_type(call.result_ty);
                 match expected.kind(self.db()) {
                     TypeKind::Func { .. } => format!(
-                        "ambiguous path `{}` used as a value of type `{expected}`: it names {}",
+                        "ambiguous path `{}` used as a value of type `{}`: it names {}",
                         call.method,
+                        expected.display(self.db(), self.names()),
                         names(&functions),
                     ),
                     _ => format!(
@@ -853,7 +927,9 @@ impl<'db> TypeChecker<'db> {
             (_, true) => format!(
                 "unresolved path `{}`: no function it names has type `{}`",
                 call.method,
-                solver.expected_type(call.result_ty),
+                solver
+                    .expected_type(call.result_ty)
+                    .display(self.db(), self.names()),
             ),
             (super::expr::MethodSelection::Ambiguous(functions), false) => format!(
                 "ambiguous path `{}` for {arguments}: it names {}",
@@ -865,13 +941,13 @@ impl<'db> TypeChecker<'db> {
                 call.method
             ),
         };
-        Diagnostic::new(
+        NodeDiagnostic::new(
             message,
-            self.get_span(call.callee),
+            call.callee,
             DiagnosticSeverity::Error,
             CompilationPhase::TypeChecking,
         )
-        .accumulate(self.db());
+        .report(self);
     }
 
     /// Concrete effects of `body` that `declared` does not name.
@@ -913,17 +989,19 @@ impl<'db> TypeChecker<'db> {
             if effects.is_empty() {
                 continue;
             }
-            Diagnostic::new(
+            NodeDiagnostic::new(
                 format!(
                     "function '{}' {message}: {}",
                     func.name,
-                    effects.iter().format(", "),
+                    effects.iter().format_with(", ", |effect, f| f(
+                        &effect.display(self.db(), self.names())
+                    )),
                 ),
-                self.get_span(func.id),
+                func.id,
                 DiagnosticSeverity::Error,
                 CompilationPhase::TypeChecking,
             )
-            .accumulate(self.db());
+            .report(self);
         }
     }
 
@@ -997,18 +1075,18 @@ impl<'db> TypeChecker<'db> {
             if declared.contains(&row) || !reaches_own(row) || !reported.insert(row) {
                 continue;
             }
-            Diagnostic::new(
+            NodeDiagnostic::new(
                 format!(
                     "function '{}' performs the effects of {} without declaring them; \
                      use the same row variable in its own ability row",
                     func.name,
                     self.signature_row_name(func_id, scheme, index),
                 ),
-                self.get_span(func.id),
+                func.id,
                 DiagnosticSeverity::Error,
                 CompilationPhase::TypeChecking,
             )
-            .accumulate(db);
+            .report(self);
         }
         !reported.is_empty()
     }
@@ -1057,7 +1135,11 @@ impl<'db> TypeChecker<'db> {
                     "function '{}' handles {} from {} without its signature determining \
                      which effect instance that is",
                     func.name,
-                    removal.removed.instances(db).iter().format(", "),
+                    removal
+                        .removed
+                        .instances(db)
+                        .iter()
+                        .format_with(", ", |effect, f| f(&effect.display(db, self.names()))),
                     row_name(removal.source.rest(db)),
                 ));
                 continue;
@@ -1066,7 +1148,9 @@ impl<'db> TypeChecker<'db> {
                 "function '{}' handles {} from {} without declaring {} there; \
                  add {} to that ability row",
                 func.name,
-                removed.iter().format(", "),
+                removed
+                    .iter()
+                    .format_with(", ", |effect, f| f(&effect.display(db, self.names()))),
                 row_name(removal.source.rest(db)),
                 if removed.len() == 1 { "it" } else { "them" },
                 if removed.len() == 1 { "it" } else { "them" },
@@ -1085,13 +1169,13 @@ impl<'db> TypeChecker<'db> {
             ));
         }
         for message in messages.iter().unique() {
-            Diagnostic::new(
+            NodeDiagnostic::new(
                 message.clone(),
-                self.get_span(func.id),
+                func.id,
                 DiagnosticSeverity::Error,
                 CompilationPhase::TypeChecking,
             )
-            .accumulate(db);
+            .report(self);
         }
         !messages.is_empty()
     }
@@ -1104,7 +1188,8 @@ impl<'db> TypeChecker<'db> {
         index: usize,
     ) -> String {
         let var = scheme.effect_params(self.db()).get(index).copied();
-        self.signature_row_names
+        self.signatures
+            .row_names
             .get(&func_id)
             .into_iter()
             .flatten()
@@ -1122,7 +1207,7 @@ impl<'db> TypeChecker<'db> {
         func_id: FuncDefId<'db>,
         resolved_declared: crate::ast::AbilityRow<'db>,
     ) -> bool {
-        let Some(origins) = self.effect_annotation_origins.get(&func_id) else {
+        let Some(origins) = self.signatures.effect_annotation_origins.get(&func_id) else {
             return false;
         };
         let (duplicate, message) = if let Some(duplicate) =
@@ -1131,7 +1216,9 @@ impl<'db> TypeChecker<'db> {
             let message = format!(
                 "function '{}' declares duplicate ability: {}",
                 func.name,
-                duplicate.effects.iter().format(", "),
+                duplicate.effects.iter().format_with(", ", |effect, f| f(
+                    &effect.display(self.db(), self.names())
+                )),
             );
             (duplicate, message)
         } else if let Some(duplicate) =
@@ -1150,18 +1237,17 @@ impl<'db> TypeChecker<'db> {
         } else {
             return false;
         };
-        Diagnostic::builder(
+        NodeDiagnostic::new(
             message,
-            self.get_span(duplicate.duplicate_annotation_id),
+            duplicate.duplicate_annotation_id,
             DiagnosticSeverity::Error,
             CompilationPhase::TypeChecking,
         )
         .label(
-            self.get_span(duplicate.first_annotation_id),
+            duplicate.first_annotation_id,
             "first matching ability annotation is here",
         )
-        .build()
-        .accumulate(self.db());
+        .report(self);
         true
     }
 
@@ -1184,17 +1270,18 @@ impl<'db> TypeChecker<'db> {
         let reported = std::cell::Cell::new(false);
         let report = |message: String| {
             reported.set(true);
-            Diagnostic::new(
+            NodeDiagnostic::new(
                 message,
-                self.get_span(func.id),
+                func.id,
                 DiagnosticSeverity::Error,
                 CompilationPhase::TypeChecking,
             )
-            .accumulate(db);
+            .report(self);
         };
 
         let type_names: HashMap<u32, Symbol> = self
-            .signature_type_names
+            .signatures
+            .type_names
             .get(&func_id)
             .into_iter()
             .flatten()
@@ -1224,13 +1311,14 @@ impl<'db> TypeChecker<'db> {
                     "type variable `{}` in the signature of `{}` is `{}` in its body",
                     type_name(index),
                     func.name,
-                    resolved,
+                    resolved.display(db, self.names()),
                 )),
             }
         }
 
         let row_names: HashMap<crate::ast::RowVar, Symbol> = self
-            .signature_row_names
+            .signatures
+            .row_names
             .get(&func_id)
             .into_iter()
             .flatten()
@@ -1274,7 +1362,10 @@ impl<'db> TypeChecker<'db> {
                     "{} in the signature of `{}` has {} in its body",
                     row_name(index),
                     func.name,
-                    resolved.instances(db).iter().format(", "),
+                    resolved
+                        .instances(db)
+                        .iter()
+                        .format_with(", ", |effect, f| f(&effect.display(db, self.names()))),
                 ));
             }
         }

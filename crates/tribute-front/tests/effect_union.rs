@@ -1,14 +1,15 @@
 //! Semantic effect unions survive declaration collection and generalization.
 use salsa_test_macros::salsa_test;
 use tribute_core::diagnostic::Diagnostic;
+use tribute_front::analysis;
 use tribute_front::{SourceCst, ast::TypeKind, typeck::TypeCheckOutput};
 
-#[salsa::tracked(returns(copy))]
 fn checked(db: &dyn salsa::Database, source: SourceCst) -> TypeCheckOutput<'_> {
-    let parsed = tribute_front::query::parsed_ast(db, source).unwrap();
-    let spans = parsed.span_map(db);
-    let resolved = tribute_front::resolve::resolve_module(db, parsed.module(db), spans.clone());
-    tribute_front::typeck::typecheck_module(db, &resolved, spans)
+    *analysis::analyze(db, source, *analysis::builtins(db)).unwrap()
+}
+
+fn diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<&Diagnostic> {
+    analysis::diagnostics(db, source, *analysis::builtins(db))
 }
 
 #[salsa_test]
@@ -24,9 +25,9 @@ fn combine(left: fn() ->{e1} Nil, right: fn() ->{e2} Nil) ->{e1, e2} Nil {
 "#,
     );
     let output = checked(db, source);
-    let errors = checked::accumulated::<Diagnostic>(db, source);
+    let errors = diagnostics(db, source);
     assert!(errors.is_empty(), "{errors:?}");
-    let scheme = output.function_types(db)[0].1;
+    let scheme = output.declarations(db).function_types[0].1;
     let TypeKind::Func { params, effect, .. } = scheme.body(db).kind(db) else {
         panic!()
     };
@@ -63,12 +64,13 @@ fn local(left: fn() ->{e1} Nil, right: fn() ->{e2} Nil) ->{e1, e2} Nil {
 "#,
     );
     let output = checked(db, source);
-    let errors = checked::accumulated::<Diagnostic>(db, source);
+    let errors = diagnostics(db, source);
     assert!(errors.is_empty(), "{errors:?}");
     let scheme = output
-        .function_types(db)
+        .declarations(db)
+        .function_types
         .iter()
-        .find(|(name, _)| name == ["local"])
+        .find(|(name, _)| name == ["pkg", "local"])
         .unwrap()
         .1;
     let TypeKind::Func { params, .. } = scheme.body(db).kind(db) else {
@@ -83,7 +85,10 @@ fn local(left: fn() ->{e1} Nil, right: fn() ->{e2} Nil) ->{e1, e2} Nil {
     let TypeKind::Func {
         params: local_params,
         ..
-    } = output.lambda_signatures(db)[0].1.function_type.kind(db)
+    } = output.expression_types(db).lambda_signatures[0]
+        .1
+        .function_type
+        .kind(db)
     else {
         panic!("lambda")
     };
@@ -107,7 +112,7 @@ fn shared(comp: fn() ->{e} Nil) ->{e} Nil {
     // The lambda's `e` is the signature's `e`, which is rigid in the body:
     // passing `other` where a pure callback is expected would close it.
     checked(db, source);
-    let errors: Vec<_> = checked::accumulated::<Diagnostic>(db, source)
+    let errors: Vec<_> = diagnostics(db, source)
         .into_iter()
         .map(|diagnostic| diagnostic.inner.message.clone())
         .collect();
@@ -138,7 +143,7 @@ fn main() ->{} Nil {
 "#,
     );
     let _ = checked(db, source);
-    let errors = checked::accumulated::<Diagnostic>(db, source);
+    let errors = diagnostics(db, source);
     assert!(errors.is_empty(), "{errors:?}");
 }
 
@@ -177,12 +182,13 @@ fn main() ->{{}} Nil {{ handled({callback}) }}
             ),
         );
         let output = checked(db, source);
-        let errors = checked::accumulated::<Diagnostic>(db, source);
+        let errors = diagnostics(db, source);
         assert_eq!(errors.is_empty(), valid, "{callback}: {errors:?}");
         let scheme = output
-            .function_types(db)
+            .declarations(db)
+            .function_types
             .iter()
-            .find(|(name, _)| name == ["handled"])
+            .find(|(name, _)| name == ["pkg", "handled"])
             .unwrap()
             .1;
         assert!(scheme.row_removals(db).is_empty());
@@ -203,7 +209,7 @@ fn handled(comp: fn() ->{{e}} Nil) ->{{}} Nil {{
         ),
     );
     let _ = checked(db, undeclared);
-    let errors: Vec<_> = checked::accumulated::<Diagnostic>(db, undeclared)
+    let errors: Vec<_> = diagnostics(db, undeclared)
         .into_iter()
         .map(|diagnostic| diagnostic.inner.message.clone())
         .collect();
@@ -246,7 +252,7 @@ fn main() ->{{}} Nil {{
             ),
         );
         let _ = checked(db, source);
-        let errors: Vec<_> = checked::accumulated::<Diagnostic>(db, source)
+        let errors: Vec<_> = diagnostics(db, source)
             .into_iter()
             .map(|diagnostic| diagnostic.inner.message.clone())
             .collect();
@@ -278,12 +284,13 @@ fn main() -> Nil { print(run_writer(fn() { relay(use_writer) })) }
 "#,
     );
     let output = checked(db, source);
-    let errors = checked::accumulated::<Diagnostic>(db, source);
+    let errors = diagnostics(db, source);
     assert!(errors.is_empty(), "{errors:?}");
     let main = output
-        .function_types(db)
+        .declarations(db)
+        .function_types
         .iter()
-        .find(|(name, _)| name == ["main"])
+        .find(|(name, _)| name == ["pkg", "main"])
         .unwrap()
         .1;
     assert!(
@@ -295,7 +302,7 @@ fn main() -> Nil { print(run_writer(fn() { relay(use_writer) })) }
         references
             .iter()
             .any(|(_, instance)| instance.function.qualified(db)
-                == trunk_ir::Symbol::new("run_writer")
+                == trunk_ir::Symbol::new("pkg::run_writer")
                 && instance
                     .type_arguments
                     .iter()
@@ -372,7 +379,7 @@ fn once() ->{State(Int)} Nil { both(inc, fn() { Nil }) }
     ] {
         let source = SourceCst::from_source_str(db, name, &format!("{PRELUDE}{body}"));
         let _ = checked(db, source);
-        let errors: Vec<_> = checked::accumulated::<Diagnostic>(db, source)
+        let errors: Vec<_> = diagnostics(db, source)
             .into_iter()
             .map(|diagnostic| diagnostic.inner.message.clone())
             .collect();
@@ -399,7 +406,7 @@ fn leak(h: fn() ->{t} Nil) ->{t} Nil {
 "#,
     );
     let _ = checked(db, source);
-    let errors: Vec<_> = checked::accumulated::<Diagnostic>(db, source)
+    let errors: Vec<_> = diagnostics(db, source)
         .into_iter()
         .map(|diagnostic| diagnostic.inner.message.clone())
         .collect();
@@ -450,7 +457,7 @@ fn bump(n: Int) ->{Ask} Int { n + Ask::ask() }
         let text = format!("{PRELUDE}{body}\n");
         let source = SourceCst::from_source_str(db, "function_value.trb", &text);
         let _ = checked(db, source);
-        let errors: Vec<_> = checked::accumulated::<Diagnostic>(db, source)
+        let errors: Vec<_> = diagnostics(db, source)
             .into_iter()
             .map(|diagnostic| diagnostic.inner.message.clone())
             .collect();
@@ -475,7 +482,7 @@ fn run() ->{Tell} Int { apply(+1, bump) }
 "#,
     );
     let _ = checked(db, source);
-    let errors: Vec<_> = checked::accumulated::<Diagnostic>(db, source)
+    let errors: Vec<_> = diagnostics(db, source)
         .into_iter()
         .map(|diagnostic| diagnostic.inner.message.clone())
         .collect();
@@ -524,7 +531,7 @@ fn named(f: fn() ->{e} Int) ->{e} Int {
 "#,
     );
     let _ = checked(db, source);
-    let errors: Vec<_> = checked::accumulated::<Diagnostic>(db, source)
+    let errors: Vec<_> = diagnostics(db, source)
         .into_iter()
         .map(|diagnostic| diagnostic.inner.message.clone())
         .collect();

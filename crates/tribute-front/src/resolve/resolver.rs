@@ -1,7 +1,7 @@
 //! Name resolution logic.
 //!
 //! This module transforms `Expr<UnresolvedName>` into `Expr<ResolvedRef<'db>>`
-//! by looking up names in the module environment and local scopes.
+//! by looking up names in the package environment and local scopes.
 
 use rustc_hash::FxHashMap as HashMap;
 
@@ -11,16 +11,17 @@ use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity}
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::{
-    AbilityOrigin, Arm, Candidates, Decl, DeclEntry, DeclTable, Expr, ExprKind,
-    FIELD_LENS_FUNCTIONS, FieldDecl, FieldInit, FieldPattern, FuncDecl, HandlerArm, HandlerKind,
-    LocalId, LocalIdGen, Module, ModuleItem, ModulePath, NodeId, Param, ParamDecl, Pattern,
-    PatternKind, ResolvedRef, SpanMap, Stmt, TypeAnnotation, TypeAnnotationKind, TypeKind,
-    TypeOrigin, TypeParamDecl, UnresolvedName, UseDecl, Visibility,
+    Arm, Candidates, CtorId, Decl, DeclEntry, DeclTable, Expr, ExprKind, FIELD_LENS_FUNCTIONS,
+    FieldDecl, FieldInit, FieldPattern, FuncDecl, HandlerArm, HandlerKind, LocalId, LocalIdGen,
+    Module, ModuleItem, ModulePath, NodeId, Param, ParamDecl, Pattern, PatternKind, ResolvedRef,
+    SpanMap, Stmt, TypeAnnotation, TypeAnnotationKind, TypeKind, TypeParamDecl, UnresolvedName,
+    UseDecl, Visibility,
 };
 
-use super::env::{Binding, ModuleEnv, Restriction};
-use super::package::Package;
-use super::path::{PathKeywordError, absolute_path};
+use super::env::{Binding, Restriction};
+use super::package::{IdentityPath, Location, NameDisplay, PackageName};
+use super::path::{PathKeywordError, absolute_path, dependency_path};
+use super::scope::ScopeRef;
 
 /// Find the best matches from `candidates` by a caller-provided score function.
 ///
@@ -94,132 +95,82 @@ enum MethodCandidates<'db> {
 }
 
 /// Resolver for transforming unresolved names to resolved references.
-pub struct Resolver<'db> {
+pub struct Resolver<'e, 'db> {
     db: &'db dyn salsa::Database,
-    /// Module-level environment with function and type definitions.
-    env: ModuleEnv<'db>,
-    /// Stack of local scopes (function parameters, let bindings, etc.).
-    local_scopes: Vec<HashMap<Symbol, LocalId>>,
-    /// Generator for unique LocalIds.
-    local_id_gen: LocalIdGen,
+    /// The environment of the package being resolved, with the packages it
+    /// depends on.
+    scope: ScopeRef<'e, 'db>,
     /// Span map for emitting diagnostics with source locations.
-    span_map: SpanMap,
-    /// Stack of LocalIds for `resume` in `op` handler arms.
-    resume_local_id_stack: Vec<LocalId>,
-    /// Ability operations injected from ability annotations (effect-directed resolution).
-    /// Maps unqualified operation name → Binding. Cleared on each function scope.
-    effect_ops: HashMap<Symbol, Binding<'db>>,
+    span_map: SpanMap<'db>,
     /// Lexical nested-module namespace used for unqualified references in an
     /// inline module body.
     module_path: Vec<Symbol>,
     /// For each inline module entered, its imports: the imported name and the
-    /// package-root path it names. An import is visible only in the body of
+    /// location it names. An import is visible only in the body of
     /// the module that declares it.
-    module_imports: Vec<HashMap<Symbol, Vec<Symbol>>>,
+    module_imports: Vec<HashMap<Symbol, Location>>,
     /// The functions a name imports in each enclosing inline module when
     /// several of the module's `use`s give it different ones.
     module_imported_functions: Vec<HashMap<Symbol, Vec<crate::ast::FuncDefId<'db>>>>,
-    /// The functions each method name has named so far in the package root
-    /// (first) and in each enclosing inline module.
-    method_functions: Vec<HashMap<Symbol, Candidates<crate::ast::FuncDefId<'db>>>>,
     /// Source functions that redefine a struct field's function. They are
     /// reported and dropped, so the field's function is the definition.
     redefinitions: Vec<NodeId>,
     /// The package whose module tree `module_path` is a path of.
-    package: Package,
+    package: PackageName,
 }
 
-impl<'db> Resolver<'db> {
-    /// Create a new resolver with the given environment.
-    pub fn new(db: &'db dyn salsa::Database, env: ModuleEnv<'db>, span_map: SpanMap) -> Self {
+/// Resolver for the body of one module-level function, in the scope its
+/// module gives. Its local variables, and so their `LocalId`s, belong to that
+/// function alone.
+struct FunctionResolver<'r, 'e, 'db> {
+    /// The resolver of the module the function is in.
+    module: &'r Resolver<'e, 'db>,
+    /// Stack of local scopes (function parameters, let bindings, etc.).
+    local_scopes: Vec<HashMap<Symbol, LocalId>>,
+    /// Generator for the function's LocalIds.
+    local_id_gen: LocalIdGen,
+    /// Stack of LocalIds for `resume` in `op` handler arms.
+    resume_local_id_stack: Vec<LocalId>,
+    /// Ability operations injected from ability annotations (effect-directed resolution).
+    /// Maps unqualified operation name → Binding.
+    effect_ops: HashMap<Symbol, Binding<'db>>,
+    /// The functions each method name has named so far.
+    method_functions: HashMap<Symbol, Candidates<crate::ast::FuncDefId<'db>>>,
+}
+
+impl<'e, 'db> Resolver<'e, 'db> {
+    /// Create a new resolver reading names through `scope`.
+    pub fn new(
+        db: &'db dyn salsa::Database,
+        scope: ScopeRef<'e, 'db>,
+        span_map: SpanMap<'db>,
+    ) -> Self {
         Self {
             db,
-            env,
-            local_scopes: vec![HashMap::default()],
-            local_id_gen: LocalIdGen::new(),
-            resume_local_id_stack: Vec::new(),
+            scope,
             span_map,
-            effect_ops: HashMap::default(),
             module_path: Vec::new(),
             module_imports: Vec::new(),
             module_imported_functions: Vec::new(),
-            method_functions: vec![HashMap::default()],
             redefinitions: Vec::new(),
-            package: Package::compiled(),
+            package: PackageName::executable_root(),
         }
     }
 
     /// Resolve the module tree of `package`.
-    pub fn with_package(mut self, package: Package) -> Self {
+    pub fn with_package(mut self, package: PackageName) -> Self {
         self.package = package;
         self
     }
 
-    /// Enter a new local scope.
-    fn push_scope(&mut self) {
-        self.local_scopes.push(HashMap::default());
+    /// How diagnostics spell declarations of the package being resolved.
+    fn names(&self) -> NameDisplay {
+        NameDisplay::new(&self.package, self.scope.dependency_names())
     }
 
-    /// Exit the current local scope.
-    fn pop_scope(&mut self) {
-        self.local_scopes.pop();
-    }
-
-    /// Bind a local variable in the current scope.
-    fn bind_local(&mut self, name: Symbol) -> LocalId {
-        let id = self.local_id_gen.fresh();
-        if let Some(scope) = self.local_scopes.last_mut() {
-            scope.insert(name, id);
-        }
-        id
-    }
-
-    /// Look up a local variable in all scopes.
-    fn lookup_local(&self, name: &Symbol) -> Option<LocalId> {
-        for scope in self.local_scopes.iter().rev() {
-            if let Some(&id) = scope.get(name) {
-                return Some(id);
-            }
-        }
-        None
-    }
-
-    /// Resolve an unresolved name to a ResolvedRef.
-    fn resolve_name(&self, name: &UnresolvedName) -> ResolvedRef<'db> {
-        let sym = name.name();
-
-        // For simple names: check locals, builtins, then module environment
-        if name.is_simple() {
-            // First check local variables
-            if let Some(local_id) = self.lookup_local(&sym) {
-                return ResolvedRef::local(local_id, sym);
-            }
-
-            if let Some(binding) = self.lookup_simple(&sym) {
-                return self.visible_ref(binding, name);
-            }
-
-            // Check effect-injected ability operations (effect-directed resolution)
-            if let Some(binding) = self.effect_ops.get(&sym) {
-                return self.visible_ref(binding, name);
-            }
-        } else {
-            // Qualified path: e.g., State::get, Option::Some, abilities::Throw::throw
-            match self.qualified_entry(name) {
-                Ok(Some((namespace, binding))) => {
-                    return self.visible_entry_ref(&namespace, binding, name);
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    self.report_path_keyword(name.id, error);
-                    return ResolvedRef::local(LocalId::UNRESOLVED, sym);
-                }
-            }
-        }
-
-        // Not found - emit diagnostic and return unresolved sentinel
-        self.report_unresolved_name(name);
-        ResolvedRef::local(LocalId::UNRESOLVED, sym)
+    /// The names the package and its dependencies give.
+    fn view(&self) -> ScopeRef<'e, 'db> {
+        self.scope
     }
 
     /// The reference `name` makes to `binding`, or an unresolved one if the
@@ -237,7 +188,7 @@ impl<'db> Resolver<'db> {
     /// entry.
     fn visible_entry_ref(
         &self,
-        namespace: &[Symbol],
+        namespace: &Location,
         binding: &Binding<'db>,
         name: &UnresolvedName,
     ) -> ResolvedRef<'db> {
@@ -250,27 +201,31 @@ impl<'db> Resolver<'db> {
 
     /// The restriction of the entry `name` of `namespace`, which holds
     /// `binding`: a re-export's own, or else the binding's.
-    fn entry_restriction(
+    fn entry_restrictions(
         &self,
-        namespace: &[Symbol],
+        namespace: &Location,
         name: &Symbol,
         binding: &Binding<'db>,
-    ) -> Option<&Restriction> {
-        self.env
-            .entry_restriction(namespace, name)
-            .or_else(|| self.env.restriction(binding))
+    ) -> Vec<&Restriction> {
+        let entry = self.view().entry_restrictions(namespace, name);
+        if entry.is_empty() {
+            self.view().restriction(binding).into_iter().collect()
+        } else {
+            entry.iter().collect()
+        }
     }
 
     /// The restriction that hides the entry `name` of `namespace` from the
     /// current module.
     fn hidden_entry(
         &self,
-        namespace: &[Symbol],
+        namespace: &Location,
         name: &Symbol,
         binding: &Binding<'db>,
     ) -> Option<&Restriction> {
-        self.entry_restriction(namespace, name, binding)
-            .filter(|restriction| !restriction.is_visible_from(&self.module_path))
+        self.entry_restrictions(namespace, name, binding)
+            .into_iter()
+            .find(|restriction| !restriction.is_visible_from(&self.package, &self.module_path))
     }
 
     /// Whether the current module sees the re-export, if any, that the entry
@@ -278,56 +233,70 @@ impl<'db> Resolver<'db> {
     /// candidate; one it sees is checked by its binding.
     fn visible_through_entry(
         &self,
-        namespace: &[Symbol],
+        namespace: &Location,
         name: &Symbol,
         binding: &Binding<'db>,
     ) -> bool {
-        self.env.entry_restriction(namespace, name).is_none()
+        self.view().entry_restrictions(namespace, name).is_empty()
             || self.hidden_entry(namespace, name, binding).is_none()
     }
 
     /// The restriction that hides `binding` from the current module.
     fn hidden(&self, binding: &Binding<'db>) -> Option<&Restriction> {
-        self.env
+        self.view()
             .restriction(binding)
-            .filter(|restriction| !restriction.is_visible_from(&self.module_path))
+            .filter(|restriction| !restriction.is_visible_from(&self.package, &self.module_path))
     }
 
-    /// The narrowest restriction of what the package-root path `path` names,
-    /// from the modules on the path and the binding at its end. Each of them
-    /// is visible within a module around that binding, so the narrowest one
-    /// decides where it is visible.
-    fn path_restriction(&self, path: &[Symbol]) -> Option<&Restriction> {
+    /// The restrictions of what `location` names, from the modules on its
+    /// path and the binding at its end. It is visible only where every one
+    /// of them is.
+    fn path_restrictions(&self, location: &Location) -> Vec<&Restriction> {
         // A path that names an item does not pass through the companion
         // module of the item's name, whose visibility is its own.
         let item = self
-            .lookup_path(path)
-            .filter(|binding| !matches!(binding, Binding::Module { .. }));
+            .lookup_path(location)
+            .filter(|binding| !matches!(binding, Binding::Module { .. } | Binding::Import { .. }));
+        let path = &location.path;
         let modules = if item.is_some() {
             path.len().saturating_sub(1)
         } else {
             path.len()
         };
-        let own = item.and_then(|binding| {
-            let (name, namespace) = path.split_last()?;
-            self.entry_restriction(namespace, name, binding)
-        });
-        (1..=modules)
-            .filter_map(|end| self.env.module_restriction(&path[..end]))
-            .chain(own)
-            .max_by_key(|restriction| {
-                restriction
-                    .within
-                    .as_ref()
-                    .map_or(usize::MAX, |within| within.len())
+        let own = item
+            .and_then(|binding| {
+                let (name, namespace) = location.split_last()?;
+                Some(self.entry_restrictions(&namespace, name, binding))
             })
+            .unwrap_or_default();
+        (1..=modules)
+            .filter_map(|end| {
+                let module = location
+                    .package
+                    .at(SymbolPath::new(path[..end].iter().cloned()));
+                self.view().module_restriction(&module)
+            })
+            .chain(own)
+            .collect()
     }
 
-    /// The restriction that hides what the package-root path `path` names
-    /// from the current module.
-    fn hidden_path(&self, path: &[Symbol]) -> Option<&Restriction> {
-        self.path_restriction(path)
-            .filter(|restriction| !restriction.is_visible_from(&self.module_path))
+    /// How narrow `restriction` is to the current package: another
+    /// package's hides it however wide it is.
+    fn narrowness(&self, restriction: &Restriction) -> usize {
+        if restriction.package == self.package {
+            restriction.within.len()
+        } else {
+            usize::MAX
+        }
+    }
+
+    /// The narrowest restriction that hides what `location` names from the
+    /// current module.
+    fn hidden_path(&self, location: &Location) -> Option<&Restriction> {
+        self.path_restrictions(location)
+            .into_iter()
+            .filter(|restriction| !restriction.is_visible_from(&self.package, &self.module_path))
+            .max_by_key(|restriction| self.narrowness(restriction))
     }
 
     /// Report a reference, written as `written`, to what `restriction` hides
@@ -339,7 +308,10 @@ impl<'db> Resolver<'db> {
         restriction: &Restriction,
     ) {
         Diagnostic::new(
-            format!("`{written}` is not visible here: {restriction}"),
+            format!(
+                "`{written}` is not visible here: {}",
+                restriction.display(&self.names())
+            ),
             self.span_map.get_or_default(node),
             DiagnosticSeverity::Error,
             CompilationPhase::NameResolution,
@@ -351,14 +323,14 @@ impl<'db> Resolver<'db> {
     /// variables.
     fn lookup_simple(&self, sym: &Symbol) -> Option<&Binding<'db>> {
         self.lookup_direct(sym)
-            .or_else(|| self.env.lookup_library(sym))
+            .or_else(|| self.view().lookup_library(sym))
     }
 
     /// The binding a simple name has in the current scope through its
     /// declarations and `use`s, apart from local variables and the prelude.
     fn lookup_direct(&self, sym: &Symbol) -> Option<&Binding<'db>> {
         if !self.module_path.is_empty()
-            && let Some(binding) = self.env.lookup_qualified(&self.module_path, sym)
+            && let Some(binding) = self.view().lookup_qualified(&self.here(), sym)
         {
             return Some(binding);
         }
@@ -373,16 +345,17 @@ impl<'db> Resolver<'db> {
         // An inline module sees its companion, not the items of the modules
         // around it; the package root sees its own items too.
         if self.module_path.is_empty() {
-            self.env
+            self.scope
+                .own()
                 .lookup(sym)
-                .filter(|_| !self.env.is_library_only(sym))
+                .filter(|_| !self.view().is_library_only(sym))
         } else {
             self.companion(sym)
         }
     }
 
-    /// The package-root namespace and the binding a qualified path names
-    /// from the current scope.
+    /// The namespace and the binding a qualified path names from the
+    /// current scope.
     ///
     /// A path keyword names a package-root path, read from nowhere else. A
     /// first segment the enclosing module imports names only the imported
@@ -390,60 +363,84 @@ impl<'db> Resolver<'db> {
     fn qualified_entry(
         &self,
         name: &UnresolvedName,
-    ) -> Result<Option<(SymbolPath, &Binding<'db>)>, PathKeywordError> {
+    ) -> Result<Option<(Location, &Binding<'db>)>, PathKeywordError> {
         let sym = name.name();
         let Some(namespace) = name.namespace() else {
             return Ok(None);
         };
-        if let Some(path) = absolute_path(&self.module_path, &namespace)? {
-            let binding = if path.is_empty() {
-                self.env.lookup(&sym)
-            } else {
-                self.env.lookup_qualified(&path, &sym)
-            };
-            return Ok(binding.map(|binding| (SymbolPath::new(path), binding)));
+        if let Some(namespace) = self.fixed_location(&namespace)? {
+            let namespace = self.through_exports(namespace);
+            let binding = self.view().lookup_path(&namespace.child(sym));
+            return Ok(binding.map(|binding| (namespace, binding)));
         }
         Ok(self.namespace_in_scope(namespace).and_then(|namespace| {
-            let binding = self.env.lookup_qualified(&namespace, &sym)?;
+            let namespace = self.through_exports(namespace);
+            let binding = self.view().lookup_qualified(&namespace, &sym)?;
             Some((namespace, binding))
         }))
     }
 
-    /// The functions an unqualified call or reference `name` may be, by
-    /// rank, when it may be more than one: the functions the scope names
-    /// directly, then the prelude function of that name. A local variable of
-    /// the name hides them all.
-    fn unqualified_functions(&self, name: &UnresolvedName) -> Option<Candidates<ResolvedRef<'db>>> {
-        let sym = name.name();
-        if !name.is_simple() || self.lookup_local(&sym).is_some() {
-            return None;
+    /// `namespace`, or, when it is not a namespace itself, where it continues
+    /// through a re-export on its path: `m::library::Option`, after `pub use
+    /// std as library` in `m`, is `Option` in package `std`. A re-export the
+    /// current module does not see stops the path.
+    fn through_exports(&self, namespace: Location) -> Location {
+        if self.view().has_namespace(&namespace) {
+            return namespace;
         }
-        let direct = match self.module_imported_functions(&sym) {
-            Some(imported) => imported.to_vec(),
-            None => match self.lookup_direct(&sym) {
-                Some(Binding::Function { id }) => vec![*id],
-                Some(_) => return None,
-                None => Vec::new(),
-            },
-        };
-        let library = match self.env.lookup_library(&sym) {
-            Some(binding @ Binding::Function { id }) if self.hidden(binding).is_none() => {
-                vec![*id]
-            }
-            _ => Vec::new(),
-        };
-        let mut functions = Candidates::new(direct, Vec::new(), library);
-        for rank in functions.ranks_mut() {
-            rank.sort_by_key(|function| function.path(self.db));
+        // Each segment continues from the one before it: to what a re-export
+        // of that name names, whose own entries alone the exporting module
+        // holds a copy of, or else into a namespace.
+        let mut current = namespace.package.at(SymbolPath::root());
+        for (index, segment) in namespace.path.iter().enumerate() {
+            let next = current.child(segment.clone());
+            current = if let Some(target) = self.export_chain(&current, segment) {
+                target
+            } else if self.view().has_namespace(&next) {
+                next
+            } else {
+                return next.join(&namespace.path[index + 1..]);
+            };
         }
-        (functions.len() > 1).then(|| functions.map(|&id| ResolvedRef::function(id)))
+        current
+    }
+
+    /// What the re-export of `name` in `namespace` names, followed through
+    /// the re-exports it names in turn, if the current module sees each.
+    fn export_chain(&self, namespace: &Location, name: &Symbol) -> Option<Location> {
+        use rustc_hash::FxHashSet as HashSet;
+
+        let visible = |outer: &Location, name: &Symbol| {
+            let target = self.view().export_target(outer, name)?;
+            let hidden = self
+                .view()
+                .entry_restrictions(outer, name)
+                .iter()
+                .any(|restriction| !restriction.is_visible_from(&self.package, &self.module_path));
+            (!hidden).then(|| target.clone())
+        };
+        let mut target = visible(namespace, name)?;
+        // A target that is itself a re-export continues to what that names.
+        // Each step replaces the location with a recorded target, so the
+        // targets seen so far end a cycle.
+        let mut seen = HashSet::default();
+        while seen.insert(target.clone()) {
+            let Some(next) = target
+                .split_last()
+                .and_then(|(name, outer)| visible(&outer, name))
+            else {
+                break;
+            };
+            target = next;
+        }
+        Some(target)
     }
 
     /// The functions several `use`s of the enclosing module give `name`,
     /// whatever the local variables are.
     fn module_imported_functions(&self, name: &Symbol) -> Option<&[crate::ast::FuncDefId<'db>]> {
         if self.module_path.is_empty() {
-            return self.env.imported_functions(name);
+            return self.view().imported_functions(name);
         }
         if self.defined_in_module(name) {
             return None;
@@ -467,72 +464,57 @@ impl<'db> Resolver<'db> {
         .accumulate(self.db);
     }
 
-    /// The functions the path of a qualified method call `x.a::b(y)` may
-    /// name, ranked by how its first segment comes into scope: `a::b` as the
-    /// call's scope resolves it, unless `a` is a prelude name, then
-    /// `m::a::b` for each name `m` in that scope, then `a::b` and `p::a::b`
-    /// through the prelude names `p`. A path that starts with a keyword or a
-    /// dependency package names its one function only. A declaration's name
-    /// counts as the module that shares it.
-    fn method_candidates(&self, path: &UnresolvedName) -> MethodCandidates<'db> {
-        let mut direct: Vec<crate::ast::FuncDefId<'db>> = Vec::new();
-        match self.qualified_entry(path) {
-            // A path through a prelude name is the prelude's reading of it.
-            Ok(Some((_, Binding::Function { .. }))) if self.reaches_through_prelude(path) => {}
-            Ok(Some((namespace, binding @ Binding::Function { id })))
-                if self.visible_through_entry(&namespace, &path.name(), binding) =>
-            {
-                direct.push(*id)
-            }
-            // A constructor or an ability operation takes the receiver as
-            // its first argument without a choice by type.
-            Ok(Some((namespace, binding))) => {
-                return MethodCandidates::Callee(self.visible_entry_ref(&namespace, binding, path));
-            }
-            Ok(None) => {}
-            Err(error) => {
-                self.report_path_keyword(path.id, error);
-                return MethodCandidates::Unresolved;
-            }
-        }
-        let functions = if self.names_one_path(path) {
-            Candidates::new(direct, Vec::new(), Vec::new())
-        } else {
-            Candidates::new(
-                direct,
-                self.scope_namespace_functions(path),
-                self.library_method_functions(&path.path),
-            )
-        };
-        let Some(functions) = self.visible_functions(functions, path.id, path) else {
-            return MethodCandidates::Unresolved;
-        };
-        MethodCandidates::Functions(functions)
-    }
-
     /// Whether the first segment of a qualified `path` is a prelude name the
     /// scope does not name through its declarations and `use`s.
     fn reaches_through_prelude(&self, path: &UnresolvedName) -> bool {
         let first = path.path.first().expect("a method path has a segment");
-        if self.env.library_namespace(first).is_none() || self.module_import(first).is_some() {
-            return false;
+        self.view().library_namespace(first).is_some() && !self.module_names(first)
+    }
+
+    /// Whether the current module names `first` itself, through its
+    /// declarations, modules, and `use`s. Such a name hides a prelude name
+    /// and a dependency's name from the start of a path.
+    fn module_names(&self, first: &Symbol) -> bool {
+        if self.module_import(first).is_some() {
+            return true;
         }
         if self.module_path.is_empty() {
-            !self.env.declares(first.clone()) && self.env.get_use_path(first).is_none()
+            self.view().declares(first.clone())
+                || self.view().get_use_path(first).is_some()
+                || self.view().lookup(first).is_some()
         } else {
-            let nested: Vec<Symbol> = self.module_path.iter().chain([first]).cloned().collect();
-            !self.env.has_namespace(&nested) && !self.defined_in_module(first)
+            self.defined_in_module(first)
+                || self.view().has_namespace(&self.here().child(first.clone()))
         }
+    }
+
+    /// The one location `path` names wherever it is written, when it
+    /// starts with a path keyword or a leading `::`; `None` for a path that
+    /// starts with a name.
+    fn fixed_location(&self, path: &[Symbol]) -> Result<Option<Location>, PathKeywordError> {
+        if let Some((name, rest)) = dependency_path(path) {
+            let root = self
+                .view()
+                .dependency_root(name)
+                .ok_or_else(|| PathKeywordError::UnknownPackage(name.clone()))?;
+            return Ok(Some(root.join(rest)));
+        }
+        Ok(absolute_path(&self.module_path, path)?
+            .map(|path| self.package.at(SymbolPath::new(path))))
+    }
+
+    /// The location of the current module.
+    fn here(&self) -> Location {
+        self.package
+            .at(SymbolPath::new(self.module_path.iter().cloned()))
     }
 
     /// Whether a qualified `path` starts with a path keyword or a dependency
     /// package the scope does not shadow, and so names one path only.
     fn names_one_path(&self, path: &UnresolvedName) -> bool {
         let first = path.path.first().expect("a method path has a segment");
-        matches!(absolute_path(&self.module_path, &path.path), Ok(Some(_)))
-            || (self.env.is_library_root(first)
-                && self.module_import(first).is_none()
-                && self.lookup_direct(first).is_none())
+        matches!(self.fixed_location(&path.path), Ok(Some(_)))
+            || (self.view().dependency_root(first).is_some() && !self.module_names(first))
     }
 
     /// The functions `m::path` names for each name `m` in the scope.
@@ -554,16 +536,105 @@ impl<'db> Resolver<'db> {
         functions
     }
 
+    /// The candidates of an implicit constructor `.Name`, which type
+    /// checking selects from by the type its context gives.
+    fn implicit_constructor(&self, name: &UnresolvedName) -> ResolvedRef<'db> {
+        let ctor = name.name();
+        let mut in_scope: Vec<_> = self
+            .names_in_scope()
+            .into_iter()
+            .filter_map(|ty| {
+                let binding = self.lookup_direct(&ty)?;
+                let path =
+                    UnresolvedName::new(SymbolPath::new([ty.clone(), ctor.clone()]), name.id);
+                let variant = match self.qualified_entry(&path) {
+                    Ok(Some((namespace, binding))) => self
+                        .visible_through_entry(&namespace, &ctor, binding)
+                        .then_some(binding),
+                    _ => None,
+                };
+                self.type_constructor(&ty, binding, &ctor, variant)
+            })
+            .collect();
+        let mut prelude: Vec<_> = self
+            .view()
+            .iter_library_names()
+            .into_iter()
+            .filter_map(|ty| {
+                let binding = self.view().lookup_library(&ty)?;
+                let variant = self.view().library_namespace(&ty).and_then(|namespace| {
+                    self.view()
+                        .lookup_qualified(&namespace, &ctor)
+                        .filter(|binding| self.visible_through_entry(&namespace, &ctor, binding))
+                });
+                self.type_constructor(&ty, binding, &ctor, variant)
+            })
+            .collect();
+        for rank in [&mut in_scope, &mut prelude] {
+            rank.sort_by_key(|ctor: &CtorId<'db>| ctor.path(self.db));
+            rank.dedup();
+        }
+        let mut hidden: Vec<_> = self
+            .view()
+            .restrictions()
+            .filter_map(|(binding, restriction)| match binding {
+                Binding::Constructor { id, .. }
+                    if id.name(self.db) == ctor
+                        && !restriction.is_visible_from(&self.package, &self.module_path) =>
+                {
+                    Some((*id, restriction.display(&self.names()).to_string()))
+                }
+                _ => None,
+            })
+            .collect();
+        hidden.sort_by_key(|(id, _)| id.path(self.db));
+        ResolvedRef::ImplicitConstructor {
+            name: ctor,
+            candidates: Candidates::new(Vec::new(), in_scope, prelude),
+            hidden,
+        }
+    }
+
+    /// The constructor `ctor` of the type a scope's name `ty` binds to
+    /// `binding`: the struct itself when it has that name, or the variant
+    /// `variant` that the namespace `ty::ctor` holds when it is the enum's.
+    fn type_constructor(
+        &self,
+        ty: &Symbol,
+        binding: &Binding<'db>,
+        ctor: &Symbol,
+        variant: Option<&Binding<'db>>,
+    ) -> Option<CtorId<'db>> {
+        match (binding, variant) {
+            (Binding::Constructor { id, tag: None, .. }, _) if ty == ctor => {
+                self.hidden(binding).is_none().then_some(*id)
+            }
+            (
+                Binding::TypeDef { id },
+                Some(Binding::Constructor {
+                    id: variant,
+                    tag: Some(_),
+                    ..
+                }),
+            ) if variant.path(self.db).parent().as_ref() == Some(id.path(self.db)) => {
+                Some(*variant)
+            }
+            _ => None,
+        }
+    }
+
     /// The functions a method path names through the prelude, whatever the
     /// scope's declarations and `use`s hide: the prelude's reading of the
     /// path itself, and `p::path` for each prelude name `p`.
     fn library_method_functions(&self, path: &[Symbol]) -> Vec<crate::ast::FuncDefId<'db>> {
         let mut functions = Vec::new();
-        let mut push = |namespace: &[Symbol], name: &Symbol| {
+        // A name the prelude supplies has no namespace.
+        let mut push = |namespace: Option<&Location>, name: &Symbol| {
             if let Some(binding @ Binding::Function { id }) = match namespace {
-                [] => self.env.lookup_library(name),
-                _ => self.env.lookup_qualified(namespace, name),
-            } && self.visible_through_entry(namespace, name, binding)
+                None => self.view().lookup_library(name),
+                Some(namespace) => self.view().lookup_qualified(namespace, name),
+            } && namespace
+                .is_none_or(|namespace| self.visible_through_entry(namespace, name, binding))
                 && !functions.contains(id)
             {
                 functions.push(*id);
@@ -571,81 +642,14 @@ impl<'db> Resolver<'db> {
         };
         let (name, namespace) = path.split_last().expect("a method path has a segment");
         match self.library_namespace_path(namespace) {
-            Some(namespace) => push(&namespace, name),
-            None if namespace.is_empty() => push(&[], name),
+            Some(namespace) => push(Some(&namespace), name),
+            None if namespace.is_empty() => push(None, name),
             None => {}
         }
-        for prelude_name in self.env.iter_library_names() {
-            if let Some(library) = self.env.library_namespace(&prelude_name) {
-                let namespace: Vec<Symbol> = library.iter().chain(namespace).cloned().collect();
-                push(&namespace, name);
+        for prelude_name in self.view().iter_library_names() {
+            if let Some(library) = self.view().library_namespace(&prelude_name) {
+                push(Some(&library.join(namespace)), name);
             }
-        }
-        functions
-    }
-
-    /// The functions of `functions` the current module sees, each rank
-    /// sorted by path. When it sees none, report the method written as
-    /// `written`: as hidden if it would see one otherwise, else as
-    /// unresolved.
-    fn visible_functions(
-        &self,
-        mut functions: Candidates<crate::ast::FuncDefId<'db>>,
-        node: NodeId,
-        written: &UnresolvedName,
-    ) -> Option<Candidates<ResolvedRef<'db>>> {
-        for rank in functions.ranks_mut() {
-            rank.sort_by_key(|function| function.path(self.db));
-        }
-        let visible = functions.filter_map(|&id| {
-            self.hidden(&Binding::Function { id })
-                .is_none()
-                .then(|| ResolvedRef::function(id))
-        });
-        if !visible.is_empty() {
-            return Some(visible);
-        }
-        match functions.iter().next() {
-            Some(&id) => {
-                let binding = Binding::Function { id };
-                let restriction = self.hidden(&binding).expect("every function is hidden");
-                self.report_hidden(node, written, restriction);
-            }
-            None if written.is_simple() => self.report_unresolved_method(node, &written.name()),
-            None => self.report_unresolved_name(written),
-        }
-        None
-    }
-
-    /// The functions an unqualified method call `x.f(y)` may name, by rank:
-    /// `f` as the call's scope names it directly, then `m::f` for each name
-    /// `m` in that scope, then the prelude's `f` and `p::f` for each prelude
-    /// name `p`. A declaration's name counts as the module that shares it.
-    fn method_functions(
-        &mut self,
-        method: &Symbol,
-        node: NodeId,
-    ) -> Candidates<crate::ast::FuncDefId<'db>> {
-        if let Some(functions) = self.method_functions.last().and_then(|m| m.get(method)) {
-            return functions.clone();
-        }
-        // A method is a declared function; a local variable of its name does
-        // not hide it.
-        let direct = match self.module_imported_functions(method) {
-            Some(imported) => imported.to_vec(),
-            None => match self.lookup_direct(method) {
-                Some(Binding::Function { id }) => vec![*id],
-                _ => Vec::new(),
-            },
-        };
-        let path = UnresolvedName::new(SymbolPath::new([method.clone()]), node);
-        let functions = Candidates::new(
-            direct,
-            self.scope_namespace_functions(&path),
-            self.library_method_functions(&path.path),
-        );
-        if let Some(scope) = self.method_functions.last_mut() {
-            scope.insert(method.clone(), functions.clone());
         }
         functions
     }
@@ -655,14 +659,15 @@ impl<'db> Resolver<'db> {
     fn names_in_scope(&self) -> Vec<Symbol> {
         if self.module_path.is_empty() {
             return self
-                .env
+                .scope
+                .own()
                 .iter_all_names()
-                .filter(|name| !self.env.is_library_only(name))
+                .filter(|name| !self.view().is_library_only(name))
                 .collect();
         }
         let imports = self.module_imports.last();
-        self.env
-            .iter_namespace(&self.module_path)
+        self.view()
+            .iter_namespace(&self.here())
             .map(|(name, _)| name)
             .chain(
                 imports
@@ -674,78 +679,79 @@ impl<'db> Resolver<'db> {
 
     /// Whether the enclosing inline module itself defines `name`.
     fn defined_in_module(&self, name: &Symbol) -> bool {
-        !self.module_path.is_empty() && {
-            self.env.lookup_qualified(&self.module_path, name).is_some()
-        }
+        !self.module_path.is_empty() && self.view().lookup_qualified(&self.here(), name).is_some()
     }
 
-    /// The package-root path an import of the enclosing inline module gives
-    /// `name`.
-    fn module_import(&self, name: &Symbol) -> Option<&[Symbol]> {
-        self.module_imports.last()?.get(name).map(Vec::as_slice)
+    /// The location an import of the enclosing inline module gives `name`.
+    fn module_import(&self, name: &Symbol) -> Option<&Location> {
+        self.module_imports.last()?.get(name)
     }
 
-    /// `namespace` with its first segment replaced by the path an import of
-    /// the enclosing inline module gives it, e.g. `Abort` after
+    /// `namespace` with its first segment replaced by the location an
+    /// import of the enclosing inline module gives it, e.g. `Abort` after
     /// `use outer::abilities::Abort` becomes `outer::abilities::Abort`.
-    fn imported_namespace(&self, namespace: &SymbolPath) -> Option<SymbolPath> {
+    fn imported_namespace(&self, namespace: &SymbolPath) -> Option<Location> {
         let imports = self.module_imports.last()?;
         let (first, rest) = namespace.split_first()?;
-        let target = imports.get(first)?;
-        Some(SymbolPath::new(target.iter().chain(rest).cloned()))
+        Some(imports.get(first)?.join(rest))
     }
 
-    /// The package-root namespace a qualified path's namespace names.
+    /// The location a qualified path's namespace names.
     ///
-    /// Inside an inline module the path starts from one of its imports, from
-    /// the module, or from a namespace the prelude supplies. At the package
-    /// root it is already a package-root namespace.
-    fn namespace_in_scope(&self, namespace: SymbolPath) -> Option<SymbolPath> {
+    /// The path starts from one of the current module's imports or from
+    /// the module itself, else from a namespace the prelude supplies or a
+    /// dependency. A first segment the module names keeps the path in the
+    /// module even where the path names nothing there. At the package root
+    /// a path that starts nowhere else stays in the package.
+    fn namespace_in_scope(&self, namespace: SymbolPath) -> Option<Location> {
         if let Some(imported) = self.imported_namespace(&namespace) {
             return Some(imported);
         }
         let (first, rest) = namespace.split_first()?;
         if self.module_path.is_empty() {
-            if self.env.has_namespace(&namespace) {
-                return Some(namespace);
+            let own = self.package.at(namespace.clone());
+            if self.view().has_namespace(&own) {
+                return Some(own);
             }
             // A `use` gives the imported name's own namespace; a namespace
-            // nested in it continues from the imported path.
+            // nested in it continues from the imported location.
             if !rest.is_empty()
-                && let Some(path) = self.env.get_use_path(first)
+                && let Some(location) = self.view().get_use_path(first)
             {
-                return Some(SymbolPath::new(path.iter().chain(rest).cloned()));
+                return Some(location.join(rest));
             }
-            if self.env.declares(first.clone()) {
-                return Some(namespace);
+            if self.view().declares(first.clone()) {
+                return Some(own);
             }
         } else {
-            let nested = SymbolPath::new(self.module_path.iter().chain(namespace.iter()).cloned());
-            if self.env.has_namespace(&nested) || self.defined_in_module(first) {
+            // A first segment the module names keeps the path in it.
+            let nested = self.here().join(namespace.iter());
+            if self.view().has_namespace(&nested) || self.module_names(first) {
                 return Some(nested);
             }
         }
-        if let Some(library) = self.env.library_namespace(first) {
-            return Some(SymbolPath::new(library.iter().chain(rest).cloned()));
+        if let Some(library) = self.view().library_namespace(first) {
+            return Some(library.join(rest));
         }
-        (self.module_path.is_empty() || self.env.is_library_root(first)).then_some(namespace)
+        if let Some(root) = self.view().dependency_root(first) {
+            return Some(root.join(rest));
+        }
+        self.module_path
+            .is_empty()
+            .then(|| self.package.at(namespace))
     }
 
-    /// The package path a path starting with a library namespace alias
-    /// continues to, e.g. `Option::Some` → `std::Option::Some`.
-    fn library_namespace_path(&self, path: &[Symbol]) -> Option<Vec<Symbol>> {
+    /// The location a path starting with a library namespace alias
+    /// continues to, e.g. `Option::Some` → `Some` in package `std`'s
+    /// `Option`.
+    fn library_namespace_path(&self, path: &[Symbol]) -> Option<Location> {
         let (first, rest) = path.split_first()?;
-        let namespace = self.env.library_namespace(first)?;
-        Some(namespace.iter().chain(rest).cloned().collect())
+        Some(self.view().library_namespace(first)?.join(rest))
     }
 
-    /// The binding a package-root path names.
-    fn lookup_path(&self, path: &[Symbol]) -> Option<&Binding<'db>> {
-        let (last, namespace) = path.split_last()?;
-        if namespace.is_empty() {
-            return self.env.lookup(last);
-        }
-        self.env.lookup_qualified(namespace, last)
+    /// The binding at `location`.
+    fn lookup_path(&self, location: &Location) -> Option<&Binding<'db>> {
+        self.view().lookup_path(location)
     }
 
     /// Report a path whose keywords do not denote a module.
@@ -759,52 +765,50 @@ impl<'db> Resolver<'db> {
         .accumulate(self.db);
     }
 
-    /// Rewrite the names in `ann` to the package-root paths they name.
+    /// Rewrite the names in `ann` to the identity paths of what they name.
     ///
     /// A path starting with a path keyword names the path it expands to.
     /// Inside an inline module, a type or ability name the module does not
     /// declare comes from its imports or the prelude, and a path starts from
-    /// the module, an import, or a prelude namespace.
+    /// the module, an import, a prelude namespace, or a dependency.
     fn resolve_annotation_paths(&self, ann: &mut TypeAnnotation) {
         self.resolve_annotation_names(ann);
-        if let TypeAnnotationKind::Path(path) = &mut ann.kind {
-            if let Some(restriction) = self.hidden_path(path) {
-                self.report_hidden(ann.id, path.iter().format("::"), restriction);
+        self.check_identity_path(ann);
+    }
+
+    /// Check the identity path at the top of `ann`, if it has one: report
+    /// it if the current module does not see what it names, and rewrite it
+    /// to the declaration's identity.
+    fn check_identity_path(&self, ann: &mut TypeAnnotation) {
+        if let TypeAnnotationKind::Path(path) = &mut ann.kind
+            && let Some(location) = self.view().locate(path)
+        {
+            if let Some(restriction) = self.hidden_path(&location) {
+                self.report_hidden(ann.id, self.names().path(path), restriction);
                 ann.kind = TypeAnnotationKind::Error;
-            } else if let Some(declared) = self.declared_path(path) {
+            } else {
                 // Later phases read an annotation by its identity.
-                *path = declared;
+                let declared = self.declared_path(&location);
+                if declared[..] != path[..] {
+                    *path = declared.to_vec();
+                }
             }
         }
     }
 
-    /// The identity path of what the package-root path `path` names, when
-    /// it differs from `path`: through a re-export, or in a library package,
-    /// whose module paths omit its name.
-    fn declared_path(&self, path: &[Symbol]) -> Option<Vec<Symbol>> {
-        // A library package's environment holds compiler-owned items at the
-        // paths their identities have under the package.
-        let library = self.package.is_library();
-        let declared = match self.lookup_path(path) {
-            Some(Binding::TypeDef { id })
-                if matches!(id.origin(self.db), TypeOrigin::Source(_)) =>
-            {
-                id.path(self.db).to_vec()
-            }
-            Some(Binding::Constructor { id, tag: None, .. }) => id.path(self.db).to_vec(),
-            Some(Binding::Ability { id }) if id.origin(self.db) == AbilityOrigin::Source => {
-                id.path(self.db).to_vec()
-            }
-            Some(Binding::TypeDef { id }) if library && id.is_builtin_list(self.db) => {
-                id.path(self.db).to_vec()
-            }
-            _ if library => self.package.identity_path(path).to_vec(),
-            _ => return None,
+    /// The identity path of what `location` names: the declaration's, which
+    /// differs from the location's through a re-export.
+    fn declared_path(&self, location: &Location) -> IdentityPath {
+        let declared = match self.lookup_path(location) {
+            Some(Binding::TypeDef { id }) => id.path(self.db),
+            Some(Binding::Constructor { id, tag: None, .. }) => id.path(self.db),
+            Some(Binding::Ability { id }) => id.path(self.db),
+            _ => return location.identity(),
         };
-        (declared[..] != *path).then_some(declared)
+        IdentityPath::new(declared.clone())
     }
 
-    /// Rewrite the name at the top of `ann` to the package-root path it
+    /// Rewrite the name at the top of `ann` to the identity path of what it
     /// names, and the names below it as [`Self::resolve_annotation_paths`]
     /// does.
     fn resolve_annotation_names(&self, ann: &mut TypeAnnotation) {
@@ -817,11 +821,11 @@ impl<'db> Resolver<'db> {
                 if local || self.defined_in_module(name) {
                     return;
                 }
-                if let Some(path) = self.companion_type(name) {
-                    ann.kind = TypeAnnotationKind::Path(path);
+                if let Some(location) = self.companion_type(name) {
+                    ann.kind = TypeAnnotationKind::Path(location.identity().to_vec());
                 } else if let Some(target) = self.module_import(name) {
-                    ann.kind = TypeAnnotationKind::Path(target.to_vec());
-                } else if let Some(path) = self.env.library_path(name) {
+                    ann.kind = TypeAnnotationKind::Path(target.identity().to_vec());
+                } else if let Some(path) = self.view().library_path(name) {
                     ann.kind = TypeAnnotationKind::Path(path.to_vec());
                 } else {
                     self.report_unresolved_annotation(ann.id, name);
@@ -836,54 +840,44 @@ impl<'db> Resolver<'db> {
                         || TypeKind::from_primitive_name(spelling).is_some()
                 });
                 if !local
-                    && !self.env.declares(name.clone())
-                    && self.env.get_use_path(name).is_none()
-                    && let Some(path) = self.env.library_path(name)
+                    && !self.view().declares(name.clone())
+                    && self.view().get_use_path(name).is_none()
+                    && let Some(path) = self.view().library_path(name)
                 {
                     ann.kind = TypeAnnotationKind::Path(path.to_vec());
                 }
             }
             TypeAnnotationKind::Path(segments) => {
-                match absolute_path(&self.module_path, segments) {
-                    Ok(Some(path)) if !path.is_empty() => *segments = path,
-                    Ok(Some(_)) => {
-                        Diagnostic::new(
-                            format!(
-                                "`{}` names a module, not a type",
-                                segments.iter().format("::")
-                            ),
-                            self.span_map.get_or_default(ann.id),
-                            DiagnosticSeverity::Error,
-                            CompilationPhase::NameResolution,
-                        )
-                        .accumulate(self.db);
-                        ann.kind = TypeAnnotationKind::Error;
-                    }
-                    Ok(None) if self.module_path.is_empty() => {
-                        let first = segments[0].clone();
-                        if !self.env.declares(first)
-                            && let Some(path) = self.library_namespace_path(segments)
-                        {
-                            *segments = path;
-                        }
-                    }
-                    Ok(None) => {
-                        let (first, rest) = segments.split_first().expect("a path has a segment");
-                        if let Some(target) = self.module_import(first) {
-                            *segments = target.iter().chain(rest).cloned().collect();
-                        } else if self.defined_in_module(first) {
-                            *segments =
-                                self.module_path.iter().chain(&*segments).cloned().collect();
-                        } else if let Some(path) = self.library_namespace_path(segments) {
-                            *segments = path;
-                        } else if !self.env.is_library_root(first) {
-                            let path = Symbol::new(&segments.iter().format("::").to_string());
-                            self.report_unresolved_annotation(ann.id, &path);
-                            ann.kind = TypeAnnotationKind::Error;
-                        }
-                    }
+                // A path that starts with a keyword or `::` names one
+                // location; any other path starts where the scope reads it.
+                let location = match self.fixed_location(segments) {
+                    Ok(Some(location)) => Some(location),
+                    Ok(None) => self.namespace_in_scope(SymbolPath::new(segments.clone())),
                     Err(error) => {
                         self.report_path_keyword(ann.id, error);
+                        ann.kind = TypeAnnotationKind::Error;
+                        return;
+                    }
+                };
+                // Its namespace continues through a re-export on it, as a
+                // value path's does.
+                let location = location.map(|location| match location.split_last() {
+                    Some((name, namespace)) => self.through_exports(namespace).child(name.clone()),
+                    None => location,
+                });
+                // The path names only what is at its location.
+                match location
+                    .as_ref()
+                    .map(|location| (location, self.lookup_path(location)))
+                {
+                    Some((_, Some(Binding::Module { .. }))) => self.report_module_annotation(ann),
+                    Some((location, Some(_))) => *segments = location.identity().to_vec(),
+                    Some((location, None)) if location.path.is_empty() => {
+                        self.report_module_annotation(ann)
+                    }
+                    _ => {
+                        let path = Symbol::new(&segments.iter().format("::").to_string());
+                        self.report_unresolved_annotation(ann.id, &path);
                         ann.kind = TypeAnnotationKind::Error;
                     }
                 }
@@ -898,13 +892,10 @@ impl<'db> Resolver<'db> {
                 result,
                 abilities,
             } => {
-                if self.module_path.is_empty() {
-                    self.resolve_effect_annotations(abilities);
-                }
                 params
                     .iter_mut()
-                    .chain(abilities)
                     .for_each(|ann| self.resolve_annotation_paths(ann));
+                self.resolve_effect_annotations(abilities);
                 self.resolve_annotation_paths(result);
             }
             TypeAnnotationKind::Tuple(elements) => elements
@@ -914,10 +905,10 @@ impl<'db> Resolver<'db> {
         }
     }
 
-    /// The package-root path of the type or ability a module's own name
-    /// names: the declaration beside the module that it accompanies, as
-    /// `mod Option` accompanies `enum Option`.
-    fn companion_type(&self, name: &Symbol) -> Option<Vec<Symbol>> {
+    /// The location of the type or ability a module's own name names: the
+    /// declaration beside the module that it accompanies, as `mod Option`
+    /// accompanies `enum Option`.
+    fn companion_type(&self, name: &Symbol) -> Option<Location> {
         let binding = self.companion(name)?;
         // A struct's name binds its constructor.
         matches!(
@@ -928,7 +919,8 @@ impl<'db> Resolver<'db> {
         )
         .then(|| {
             let parent = &self.module_path[..self.module_path.len() - 1];
-            parent.iter().chain([name]).cloned().collect()
+            self.package
+                .at(SymbolPath::new(parent.iter().chain([name]).cloned()))
         })
     }
 
@@ -939,10 +931,27 @@ impl<'db> Resolver<'db> {
         if *own != name {
             return None;
         }
-        if parent.is_empty() {
-            return self.env.lookup(name);
+        let location = self
+            .package
+            .at(SymbolPath::new(parent.iter().chain([name]).cloned()));
+        self.lookup_path(&location)
+    }
+
+    /// Report an annotation path that names a module rather than a type.
+    fn report_module_annotation(&self, ann: &mut TypeAnnotation) {
+        if let TypeAnnotationKind::Path(segments) = &ann.kind {
+            Diagnostic::new(
+                format!(
+                    "`{}` names a module, not a type",
+                    segments.iter().format("::")
+                ),
+                self.span_map.get_or_default(ann.id),
+                DiagnosticSeverity::Error,
+                CompilationPhase::NameResolution,
+            )
+            .accumulate(self.db);
         }
-        self.env.lookup_qualified(parent, name)
+        ann.kind = TypeAnnotationKind::Error;
     }
 
     /// Report a type or ability name an annotation cannot see.
@@ -979,49 +988,6 @@ impl<'db> Resolver<'db> {
         }
     }
 
-    /// Report an unresolved name diagnostic, with "did you mean?" suggestions.
-    fn report_unresolved_name(&self, name: &UnresolvedName) {
-        let span = self.span_map.get_or_default(name.id);
-        let similar = self.find_similar_names(&name.name());
-
-        let message = if similar.is_empty() {
-            format!("unresolved name `{}`", name)
-        } else {
-            let suggestions = similar
-                .iter()
-                .format_with(", ", |s, f| s.with_str(|name| f(&format_args!("`{name}`"))));
-            format!("unresolved name `{}`; did you mean {}?", name, suggestions)
-        };
-
-        Diagnostic::new(
-            message,
-            span,
-            DiagnosticSeverity::Error,
-            CompilationPhase::NameResolution,
-        )
-        .accumulate(self.db);
-    }
-
-    /// Find names in scope that are similar to the given name.
-    fn find_similar_names(&self, name: &Symbol) -> Vec<Symbol> {
-        use rustc_hash::FxHashSet as HashSet;
-
-        let candidates: HashSet<Symbol> = self
-            .local_scopes
-            .iter()
-            .flat_map(|scope| scope.keys().cloned())
-            .chain(self.env.iter_all_names())
-            .collect();
-
-        let target = name.to_string();
-        best_matches_by(
-            candidates,
-            |sym: &Symbol| sym.with_str(|s| strsim::jaro_winkler(&target, s)),
-            0.8,
-            3,
-        )
-    }
-
     /// Convert a binding to a resolved reference.
     fn binding_to_ref(&self, binding: &Binding<'db>, name: Symbol) -> ResolvedRef<'db> {
         match binding {
@@ -1031,9 +997,19 @@ impl<'db> Resolver<'db> {
             }
             Binding::TypeDef { id } => ResolvedRef::type_def(*id),
             Binding::Module { path } => {
-                let path_ref = ModulePath::new(self.db, path.clone());
+                let path_ref = ModulePath::new(self.db, path.to_vec());
                 ResolvedRef::Module { path: path_ref }
             }
+            // A `use` of one segment names the package root's own module of
+            // that name. Any longer `use` still unresolved names nothing, and
+            // its declaration is reported.
+            Binding::Import { path } if path.len() == 1 => {
+                let identity = self.package.identity_path(path).to_vec();
+                ResolvedRef::Module {
+                    path: ModulePath::new(self.db, identity),
+                }
+            }
+            Binding::Import { .. } => ResolvedRef::local(LocalId::UNRESOLVED, name),
             Binding::AbilityOp { ability, op, kind } => {
                 ResolvedRef::ability_op(*ability, op.clone(), *kind)
             }
@@ -1047,6 +1023,7 @@ impl<'db> Resolver<'db> {
         &mut self,
         module: &Module<UnresolvedName>,
     ) -> DeclTable<ResolvedRef<'db>> {
+        self.report_repeated_definitions(&module.decls);
         self.report_field_lens_redefinitions(&module.decls);
         let mut entries = Vec::new();
         self.resolve_items(&module.decls, &mut entries);
@@ -1060,7 +1037,7 @@ impl<'db> Resolver<'db> {
     /// Resolve a declaration.
     fn resolve_decl(&mut self, decl: &Decl<UnresolvedName>) -> Decl<ResolvedRef<'db>> {
         match decl {
-            Decl::Function(f) => Decl::Function(self.resolve_func_decl(f)),
+            Decl::Function(f) => Decl::Function(FunctionResolver::new(self).resolve_func_decl(f)),
             // These declarations contain no expressions to resolve.
             Decl::ExternFunction(e) => {
                 let mut e = e.clone();
@@ -1101,6 +1078,7 @@ impl<'db> Resolver<'db> {
         module: &crate::ast::ModuleDecl<UnresolvedName>,
         entries: &mut Vec<DeclEntry<ResolvedRef<'db>>>,
     ) {
+        self.report_repeated_definitions(module.body.as_deref().unwrap_or_default());
         self.report_field_lens_redefinitions(module.body.as_deref().unwrap_or_default());
         // For inline modules, recursively resolve nested declarations
         self.module_path.push(module.name.clone());
@@ -1118,7 +1096,7 @@ impl<'db> Resolver<'db> {
             .collect();
         self.module_imports.push(HashMap::default());
         loop {
-            let resolved: Vec<(Symbol, Vec<Symbol>)> = uses
+            let resolved: Vec<(Symbol, Location)> = uses
                 .iter()
                 .filter_map(|import| {
                     let name = import
@@ -1168,14 +1146,33 @@ impl<'db> Resolver<'db> {
             .filter_map(|(name, imported)| Some((name, imported.filter(|f| f.len() > 1)?)))
             .collect();
         self.module_imported_functions.push(functions);
-        self.method_functions.push(HashMap::default());
         if let Some(items) = &module.body {
             self.resolve_items(items, entries);
         }
-        self.method_functions.pop();
         self.module_imported_functions.pop();
         self.module_imports.pop();
         self.module_path.pop();
+    }
+
+    /// Report each declaration that repeats the name of an earlier one in its
+    /// module, and record it as a redefinition. The earlier declaration is
+    /// the definition.
+    fn report_repeated_definitions(&mut self, items: &[ModuleItem<UnresolvedName>]) {
+        for repeat in super::repeated_definitions(items) {
+            Diagnostic::builder(
+                format!("duplicate definition of `{}`", repeat.name),
+                self.span_map.get_or_default(repeat.id),
+                DiagnosticSeverity::Error,
+                CompilationPhase::NameResolution,
+            )
+            .label(
+                self.span_map.get_or_default(repeat.earlier),
+                "first defined here",
+            )
+            .build()
+            .accumulate(self.db);
+            self.redefinitions.push(repeat.id);
+        }
     }
 
     /// Report a companion module that declares a function the struct beside
@@ -1191,7 +1188,8 @@ impl<'db> Resolver<'db> {
                 .iter()
                 .filter_map(|item| match item {
                     ModuleItem::Decl(Decl::Struct(declaration))
-                        if declaration.name == companion.name =>
+                        if declaration.name == companion.name
+                            && !self.redefinitions.contains(&declaration.id) =>
                     {
                         Some(&declaration.fields)
                     }
@@ -1237,19 +1235,20 @@ impl<'db> Resolver<'db> {
     }
 
     /// Resolve the items of a module body into `entries`, without the
-    /// functions reported as redefinitions.
+    /// declarations reported as redefinitions.
     fn resolve_items(
         &mut self,
         items: &[ModuleItem<UnresolvedName>],
         entries: &mut Vec<DeclEntry<ResolvedRef<'db>>>,
     ) {
         for item in items {
+            if let ModuleItem::Decl(decl) = item
+                && self.is_redefinition(decl)
+            {
+                continue;
+            }
             self.report_visibility_path(item);
             match item {
-                ModuleItem::Decl(Decl::Function(function))
-                    if self.redefinitions.contains(&function.id) => {}
-                ModuleItem::Decl(Decl::ExternFunction(function))
-                    if self.redefinitions.contains(&function.id) => {}
                 ModuleItem::Decl(decl) => {
                     let decl = self.resolve_decl(decl);
                     entries.push(DeclEntry {
@@ -1260,6 +1259,19 @@ impl<'db> Resolver<'db> {
                 ModuleItem::Module(module) => self.resolve_module_decl(module, entries),
             }
         }
+    }
+
+    /// Whether `decl` was reported as a redefinition.
+    fn is_redefinition(&self, decl: &Decl<UnresolvedName>) -> bool {
+        let id = match decl {
+            Decl::Function(f) => f.id,
+            Decl::ExternFunction(f) => f.id,
+            Decl::Struct(s) => s.id,
+            Decl::Enum(e) => e.id,
+            Decl::Ability(a) => a.id,
+            Decl::Use(_) => return false,
+        };
+        self.redefinitions.contains(&id)
     }
 
     /// Report a `pub(path)` marker on `item` whose path names neither the
@@ -1300,6 +1312,509 @@ impl<'db> Resolver<'db> {
         super::restriction_module(&self.module_path, scope)
     }
 
+    /// Extract the ability name (as a Symbol) from a type annotation.
+    ///
+    /// - `Named(sym)` → sym (e.g., `Abort`)
+    /// - `Path(segs)` → qualified symbol (e.g., `abilities::Throw`)
+    /// - `App { ctor, .. }` → recurse into ctor (e.g., `Throw` from `Throw(Nat)`)
+    fn extract_ability_name(ann: &TypeAnnotation) -> Option<SymbolPath> {
+        match &ann.kind {
+            TypeAnnotationKind::Named(sym) => {
+                // Row tail variables (lowercase, e.g., `e`) are not concrete abilities
+                sym.with_str(|s| s.starts_with(|c: char| c.is_ascii_uppercase()))
+                    .then(|| SymbolPath::new([sym.clone()]))
+            }
+            TypeAnnotationKind::Path(segs) => {
+                (!segs.is_empty()).then(|| SymbolPath::new(segs.iter().cloned()))
+            }
+            TypeAnnotationKind::App { ctor, .. } => Self::extract_ability_name(ctor),
+            _ => None,
+        }
+    }
+
+    /// Resolve the names in effect annotations, and at the package root
+    /// rewrite imported ability names to qualified paths.
+    ///
+    /// When an ability is imported via `use` (e.g., `use abilities::Abort`), the
+    /// import stores the location it imports. At the package root this
+    /// rewrites unqualified ability names in ability annotations to its
+    /// identity so that `annotation_to_effect` creates the correct AbilityId.
+    /// Inside an inline module, `resolve_annotation_paths` resolves imports.
+    fn resolve_effect_annotations(&self, effects: &mut [TypeAnnotation]) {
+        for ann in effects {
+            self.resolve_annotation_paths(ann);
+            if self.module_path.is_empty() {
+                self.resolve_ability_in_annotation(ann);
+            }
+        }
+    }
+
+    fn resolve_ability_in_annotation(&self, ann: &mut TypeAnnotation) {
+        match &mut ann.kind {
+            TypeAnnotationKind::Named(sym)
+                if sym.with_str(|s| s.starts_with(|c: char| c.is_ascii_uppercase()))
+                    && !self.view().has_definition(sym) =>
+            {
+                if let Some(location) = self.view().get_use_path(sym)
+                    && let path = location.identity()
+                    && path.len() >= 2
+                {
+                    ann.kind = TypeAnnotationKind::Path(path.to_vec());
+                    self.check_identity_path(ann);
+                }
+            }
+            TypeAnnotationKind::App { ctor, .. } => self.resolve_ability_in_annotation(ctor),
+            _ => {}
+        }
+    }
+
+    /// Resolve a use declaration, recording the identity path of what it
+    /// names.
+    fn resolve_use_decl(&self, u: &UseDecl) -> UseDecl {
+        UseDecl {
+            target: self.resolve_use_target(u),
+            ..u.clone()
+        }
+    }
+
+    /// The identity path of what `u` names. A path that names nothing is
+    /// reported, since it would otherwise leave the import as a module
+    /// placeholder.
+    fn resolve_use_target(&self, u: &UseDecl) -> Option<Vec<Symbol>> {
+        let message = if let Err(error) = self.fixed_location(&u.path) {
+            error.to_string()
+        } else if let Some(first) = self.ambiguous_use_start(&u.path) {
+            format!(
+                "`use {}` is ambiguous: `{first}` names both a name of this module and \
+                 package `{first}`; write `self::{first}` or `pkg::{first}` for the module's \
+                 name, or `::{first}` for the package",
+                u.path.iter().format("::")
+            )
+        } else if let Some(target) = self.use_target(&u.path) {
+            self.check_use_visibility(u, &target);
+            // Later phases read the target by its identity.
+            return Some(self.declared_path(&target).to_vec());
+        } else {
+            format!("unresolved import `{}`", u.path.iter().format("::"))
+        };
+        Diagnostic::new(
+            message,
+            self.span_map.get_or_default(u.id),
+            DiagnosticSeverity::Error,
+            CompilationPhase::NameResolution,
+        )
+        .accumulate(self.db);
+        None
+    }
+
+    /// The first segment of a `use` path that names both a name of the
+    /// current module and a dependency, which makes the path ambiguous.
+    fn ambiguous_use_start<'p>(&self, path: &'p [Symbol]) -> Option<&'p Symbol> {
+        let (first, rest) = path.split_first()?;
+        // A `use` of one segment imports that name itself.
+        (!rest.is_empty()
+            && matches!(self.fixed_location(path), Ok(None))
+            && self.view().dependency_root(first).is_some()
+            && self.module_names(first))
+        .then_some(first)
+    }
+
+    /// Report a `use` of `target` that the current module does not see, or
+    /// that re-exports it more widely than it is visible.
+    fn check_use_visibility(&self, u: &UseDecl, target: &Location) {
+        // The path as written, not an identity path.
+        let written = u.path.iter().format("::");
+        if let Some(restriction) = self.hidden_path(target) {
+            self.report_hidden(u.id, written, restriction);
+            return;
+        }
+        let restrictions = self.path_restrictions(target);
+        if restrictions.is_empty() {
+            return;
+        }
+        let exported = match &u.visibility {
+            Visibility::Private => return,
+            // An invalid path is reported with the declaration.
+            Visibility::Restricted(scope) => match self.restriction_module(scope) {
+                Some(module) => Some(module),
+                None => return,
+            },
+            Visibility::Public => None,
+        };
+        // A `use` may not show what it names wider than any of its
+        // restrictions.
+        let wider = restrictions
+            .into_iter()
+            .find(|restriction| match &exported {
+                Some(exported) => {
+                    restriction.package != self.package || exported.len() < restriction.within.len()
+                }
+                None => true,
+            });
+        if let Some(restriction) = wider {
+            Diagnostic::new(
+                format!(
+                    "`{written}` cannot be re-exported as `{}`: {}",
+                    u.visibility,
+                    restriction.display(&self.names())
+                ),
+                self.span_map.get_or_default(u.id),
+                DiagnosticSeverity::Error,
+                CompilationPhase::NameResolution,
+            )
+            .accumulate(self.db);
+        }
+    }
+
+    /// The location of the definition or module `path` names.
+    ///
+    /// A path starting with a path keyword names exactly the path it expands
+    /// to. Any other path starts from the current module, or else from a
+    /// namespace the prelude supplies or a dependency, unless the module
+    /// names its first segment itself.
+    fn use_target(&self, path: &[Symbol]) -> Option<Location> {
+        let names = |location: &Location| {
+            // A package root names that package.
+            let Some((last, namespace)) = location.split_last() else {
+                return self.view().has_namespace(location);
+            };
+            // A single-segment path must name a definition: `env.lookup`
+            // would also find the module placeholder this import inserted.
+            let found = if namespace.path.is_root() && namespace.package == self.package {
+                self.view().has_definition(last)
+            } else {
+                self.view().lookup_qualified(&namespace, last).is_some()
+            };
+            found || self.view().has_namespace(location)
+        };
+        match self.fixed_location(path) {
+            Ok(Some(location)) => {
+                return names(&location).then_some(location);
+            }
+            Err(_) => return None,
+            Ok(None) => {}
+        }
+        if self.module_path.is_empty() {
+            let location = super::root_location(self.view(), path)?;
+            return names(&location).then_some(location);
+        }
+        // An inline module's path starts from one of its imports, the module
+        // itself, or a namespace the prelude supplies.
+        let (first, rest) = path.split_first()?;
+        if let Some(target) = self.module_import(first) {
+            let imported = target.join(rest);
+            return names(&imported).then_some(imported);
+        }
+        let nested = self.here().join(path);
+        if names(&nested) {
+            return Some(nested);
+        }
+        if self.module_names(first) {
+            return None;
+        }
+        if let Some(library) = self.library_namespace_path(path)
+            && names(&library)
+        {
+            return Some(library);
+        }
+        let dependency = self.view().dependency_root(first)?.join(rest);
+        names(&dependency).then_some(dependency)
+    }
+}
+
+impl<'r, 'e, 'db> FunctionResolver<'r, 'e, 'db> {
+    /// A resolver for one function in the module `module` is resolving.
+    fn new(module: &'r Resolver<'e, 'db>) -> Self {
+        Self {
+            module,
+            local_scopes: vec![HashMap::default()],
+            local_id_gen: LocalIdGen::new(),
+            resume_local_id_stack: Vec::new(),
+            effect_ops: HashMap::default(),
+            method_functions: HashMap::default(),
+        }
+    }
+
+    /// Enter a new local scope.
+    fn push_scope(&mut self) {
+        self.local_scopes.push(HashMap::default());
+    }
+
+    /// Exit the current local scope.
+    fn pop_scope(&mut self) {
+        self.local_scopes.pop();
+    }
+
+    /// Bind a local variable in the current scope.
+    fn bind_local(&mut self, name: Symbol) -> LocalId {
+        let id = self.local_id_gen.fresh();
+        if let Some(scope) = self.local_scopes.last_mut() {
+            scope.insert(name, id);
+        }
+        id
+    }
+
+    /// Look up a local variable in all scopes.
+    fn lookup_local(&self, name: &Symbol) -> Option<LocalId> {
+        for scope in self.local_scopes.iter().rev() {
+            if let Some(&id) = scope.get(name) {
+                return Some(id);
+            }
+        }
+        None
+    }
+
+    /// Resolve an unresolved name to a ResolvedRef.
+    fn resolve_name(&self, name: &UnresolvedName) -> ResolvedRef<'db> {
+        let sym = name.name();
+
+        // For simple names: check locals, builtins, then the package environment
+        if name.is_simple() {
+            // First check local variables
+            if let Some(local_id) = self.lookup_local(&sym) {
+                return ResolvedRef::local(local_id, sym);
+            }
+
+            if let Some(binding) = self.module.lookup_simple(&sym) {
+                return self.module.visible_ref(binding, name);
+            }
+
+            // Check effect-injected ability operations (effect-directed resolution)
+            if let Some(binding) = self.effect_ops.get(&sym) {
+                return self.module.visible_ref(binding, name);
+            }
+        } else {
+            // Qualified path: e.g., State::get, Option::Some, abilities::Throw::throw
+            match self.module.qualified_entry(name) {
+                Ok(Some((namespace, binding))) => {
+                    return self.module.visible_entry_ref(&namespace, binding, name);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    self.module.report_path_keyword(name.id, error);
+                    return ResolvedRef::local(LocalId::UNRESOLVED, sym);
+                }
+            }
+        }
+
+        // Not found - emit diagnostic and return unresolved sentinel
+        self.report_unresolved_name(name);
+        ResolvedRef::local(LocalId::UNRESOLVED, sym)
+    }
+
+    /// The functions an unqualified call or reference `name` may be, by
+    /// rank, when it may be more than one: the functions the scope names
+    /// directly, then the prelude function of that name. A local variable of
+    /// the name hides them all.
+    fn unqualified_functions(&self, name: &UnresolvedName) -> Option<Candidates<ResolvedRef<'db>>> {
+        let sym = name.name();
+        if !name.is_simple() || self.lookup_local(&sym).is_some() {
+            return None;
+        }
+        let direct = match self.module.module_imported_functions(&sym) {
+            Some(imported) => imported.to_vec(),
+            None => match self.module.lookup_direct(&sym) {
+                Some(Binding::Function { id }) => vec![*id],
+                Some(_) => return None,
+                None => Vec::new(),
+            },
+        };
+        let library = match self.module.view().lookup_library(&sym) {
+            Some(binding @ Binding::Function { id }) if self.module.hidden(binding).is_none() => {
+                vec![*id]
+            }
+            _ => Vec::new(),
+        };
+        let mut functions = Candidates::new(direct, Vec::new(), library);
+        for rank in functions.ranks_mut() {
+            rank.sort_by_key(|function| function.path(self.module.db));
+        }
+        (functions.len() > 1).then(|| functions.map(|&id| ResolvedRef::function(id)))
+    }
+
+    /// The functions the path of a qualified method call `x.a::b(y)` may
+    /// name, ranked by how its first segment comes into scope: `a::b` as the
+    /// call's scope resolves it, unless `a` is a prelude name, then
+    /// `m::a::b` for each name `m` in that scope, then `a::b` and `p::a::b`
+    /// through the prelude names `p`. A path that starts with a keyword or a
+    /// dependency package names its one function only. A declaration's name
+    /// counts as the module that shares it.
+    fn method_candidates(&self, path: &UnresolvedName) -> MethodCandidates<'db> {
+        let mut direct: Vec<crate::ast::FuncDefId<'db>> = Vec::new();
+        match self.module.qualified_entry(path) {
+            // A path through a prelude name is the prelude's reading of it.
+            Ok(Some((_, Binding::Function { .. })))
+                if self.module.reaches_through_prelude(path) => {}
+            Ok(Some((namespace, binding @ Binding::Function { id })))
+                if self
+                    .module
+                    .visible_through_entry(&namespace, &path.name(), binding) =>
+            {
+                direct.push(*id)
+            }
+            // A constructor or an ability operation takes the receiver as
+            // its first argument without a choice by type.
+            Ok(Some((namespace, binding))) => {
+                return MethodCandidates::Callee(
+                    self.module.visible_entry_ref(&namespace, binding, path),
+                );
+            }
+            Ok(None) => {}
+            Err(error) => {
+                self.module.report_path_keyword(path.id, error);
+                return MethodCandidates::Unresolved;
+            }
+        }
+        let functions = if self.module.names_one_path(path) {
+            Candidates::new(direct, Vec::new(), Vec::new())
+        } else {
+            Candidates::new(
+                direct,
+                self.module.scope_namespace_functions(path),
+                self.module.library_method_functions(&path.path),
+            )
+        };
+        let Some(functions) = self.visible_functions(functions, path.id, path) else {
+            return MethodCandidates::Unresolved;
+        };
+        MethodCandidates::Functions(functions)
+    }
+
+    /// The functions of `functions` the current module sees, each rank
+    /// sorted by path. When it sees none, report the method written as
+    /// `written`: as hidden if it would see one otherwise, else as
+    /// unresolved.
+    fn visible_functions(
+        &self,
+        mut functions: Candidates<crate::ast::FuncDefId<'db>>,
+        node: NodeId,
+        written: &UnresolvedName,
+    ) -> Option<Candidates<ResolvedRef<'db>>> {
+        for rank in functions.ranks_mut() {
+            rank.sort_by_key(|function| function.path(self.module.db));
+        }
+        let visible = functions.filter_map(|&id| {
+            self.module
+                .hidden(&Binding::Function { id })
+                .is_none()
+                .then(|| ResolvedRef::function(id))
+        });
+        if !visible.is_empty() {
+            return Some(visible);
+        }
+        match functions.iter().next() {
+            Some(&id) => {
+                let binding = Binding::Function { id };
+                let restriction = self
+                    .module
+                    .hidden(&binding)
+                    .expect("every function is hidden");
+                self.module.report_hidden(node, written, restriction);
+            }
+            None if written.is_simple() => {
+                self.module.report_unresolved_method(node, &written.name())
+            }
+            None => self.report_unresolved_name(written),
+        }
+        None
+    }
+
+    /// The functions an unqualified method call `x.f(y)` may name, by rank:
+    /// `f` as the call's scope names it directly, then `m::f` for each name
+    /// `m` in that scope, then the prelude's `f` and `p::f` for each prelude
+    /// name `p`. A declaration's name counts as the module that shares it.
+    fn method_functions(
+        &mut self,
+        method: &Symbol,
+        node: NodeId,
+    ) -> Candidates<crate::ast::FuncDefId<'db>> {
+        if let Some(functions) = self.method_functions.get(method) {
+            return functions.clone();
+        }
+        // A method is a declared function; a local variable of its name does
+        // not hide it.
+        let direct = match self.module.module_imported_functions(method) {
+            Some(imported) => imported.to_vec(),
+            None => match self.module.lookup_direct(method) {
+                Some(Binding::Function { id }) => vec![*id],
+                _ => Vec::new(),
+            },
+        };
+        let path = UnresolvedName::new(SymbolPath::new([method.clone()]), node);
+        let functions = Candidates::new(
+            direct,
+            self.module.scope_namespace_functions(&path),
+            self.module.library_method_functions(&path.path),
+        );
+        self.method_functions
+            .insert(method.clone(), functions.clone());
+        functions
+    }
+
+    /// The constructor a reference names: a path as [`resolve_name`]
+    /// resolves it, or the candidates of an implicit constructor `.Name`.
+    ///
+    /// [`resolve_name`]: Self::resolve_name
+    fn resolve_constructor(&self, name: &UnresolvedName) -> ResolvedRef<'db> {
+        if name.implicit {
+            self.module.implicit_constructor(name)
+        } else {
+            self.resolve_name(name)
+        }
+    }
+
+    /// Report an unresolved name diagnostic, with "did you mean?" suggestions.
+    fn report_unresolved_name(&self, name: &UnresolvedName) {
+        let span = self.module.span_map.get_or_default(name.id);
+        let similar = self.find_similar_names(&name.name());
+        // A variant is declared only in its enum's namespace, so a bare
+        // variant name is written as an implicit constructor.
+        let implicit = name.is_simple()
+            && matches!(
+                self.module.implicit_constructor(&UnresolvedName::implicit(name.name(), name.id)),
+                ResolvedRef::ImplicitConstructor { candidates, .. } if !candidates.is_empty()
+            );
+
+        let message = if implicit {
+            format!("unresolved name `{name}`; did you mean `.{name}`?")
+        } else if similar.is_empty() {
+            format!("unresolved name `{}`", name)
+        } else {
+            let suggestions = similar
+                .iter()
+                .format_with(", ", |s, f| s.with_str(|name| f(&format_args!("`{name}`"))));
+            format!("unresolved name `{}`; did you mean {}?", name, suggestions)
+        };
+
+        Diagnostic::new(
+            message,
+            span,
+            DiagnosticSeverity::Error,
+            CompilationPhase::NameResolution,
+        )
+        .accumulate(self.module.db);
+    }
+
+    /// Find names in scope that are similar to the given name.
+    fn find_similar_names(&self, name: &Symbol) -> Vec<Symbol> {
+        use rustc_hash::FxHashSet as HashSet;
+
+        let candidates: HashSet<Symbol> = self
+            .local_scopes
+            .iter()
+            .flat_map(|scope| scope.keys().cloned())
+            .chain(self.module.view().iter_all_names())
+            .collect();
+
+        let target = name.to_string();
+        best_matches_by(
+            candidates,
+            |sym: &Symbol| sym.with_str(|s| strsim::jaro_winkler(&target, s)),
+            0.8,
+            3,
+        )
+    }
+
     /// Resolve a function declaration.
     fn resolve_func_decl(&mut self, func: &FuncDecl<UnresolvedName>) -> FuncDecl<ResolvedRef<'db>> {
         // Enter a new scope for function body
@@ -1315,24 +1830,19 @@ impl<'db> Resolver<'db> {
                 p
             })
             .collect();
-        self.resolve_param_paths(&mut params);
+        self.module.resolve_param_paths(&mut params);
         let mut type_params = func.type_params.clone();
-        self.resolve_bound_paths(&mut type_params);
+        self.module.resolve_bound_paths(&mut type_params);
         let mut return_ty = func.return_ty.clone();
         if let Some(ty) = &mut return_ty {
-            self.resolve_annotation_paths(ty);
+            self.module.resolve_annotation_paths(ty);
         }
 
         // Resolve imported ability names in ability annotations to qualified paths.
         // e.g., after `use abilities::Abort`, rewrite `{Abort}` → `{abilities::Abort}`
         let mut effects = func.effects.clone();
         if let Some(effs) = &mut effects {
-            // Inside an inline module the general pass resolves imports too.
-            if self.module_path.is_empty() {
-                self.resolve_effect_annotations(effs);
-            }
-            effs.iter_mut()
-                .for_each(|ann| self.resolve_annotation_paths(ann));
+            self.module.resolve_effect_annotations(effs);
         }
 
         // Inject ability operations from ability annotations into scope.
@@ -1373,206 +1883,31 @@ impl<'db> Resolver<'db> {
     fn inject_ability_operations(&mut self, effects: &[TypeAnnotation]) {
         self.effect_ops.clear();
         for ann in effects {
-            let Some(ability_name) = Self::extract_ability_name(ann) else {
+            let Some(ability_name) = Resolver::extract_ability_name(ann) else {
                 continue;
             };
 
-            // The annotation names the ability by its identity; the
-            // environment holds it at its path in this package.
-            let namespace = self
-                .package
-                .module_path(&ability_name)
-                .unwrap_or(&ability_name);
-            for (op_name, binding) in self.env.iter_namespace(namespace) {
-                if matches!(binding, Binding::AbilityOp { .. }) {
-                    // Don't override existing entries (first ability wins;
-                    // TODO: detect ambiguity when multiple abilities export same op name)
-                    self.effect_ops.entry(op_name).or_insert(binding.clone());
-                }
-            }
-        }
-    }
-
-    /// Extract the ability name (as a Symbol) from a type annotation.
-    ///
-    /// - `Named(sym)` → sym (e.g., `Abort`)
-    /// - `Path(segs)` → qualified symbol (e.g., `abilities::Throw`)
-    /// - `App { ctor, .. }` → recurse into ctor (e.g., `Throw` from `Throw(Nat)`)
-    fn extract_ability_name(ann: &TypeAnnotation) -> Option<SymbolPath> {
-        match &ann.kind {
-            TypeAnnotationKind::Named(sym) => {
-                // Row tail variables (lowercase, e.g., `e`) are not concrete abilities
-                sym.with_str(|s| s.starts_with(|c: char| c.is_ascii_uppercase()))
-                    .then(|| SymbolPath::new([sym.clone()]))
-            }
-            TypeAnnotationKind::Path(segs) => {
-                (!segs.is_empty()).then(|| SymbolPath::new(segs.iter().cloned()))
-            }
-            TypeAnnotationKind::App { ctor, .. } => Self::extract_ability_name(ctor),
-            _ => None,
-        }
-    }
-
-    /// Resolve the package root's imported ability names in effect
-    /// annotations to qualified paths.
-    ///
-    /// When an ability is imported via `use` (e.g., `use abilities::Abort`), the
-    /// import stores the original module path. This method rewrites unqualified
-    /// ability names in ability annotations to their qualified form so that
-    /// `annotation_to_effect` creates the correct AbilityId. Inside an inline
-    /// module, `resolve_annotation_paths` resolves imports instead.
-    fn resolve_effect_annotations(&self, effects: &mut [TypeAnnotation]) {
-        for ann in effects {
-            self.resolve_ability_in_annotation(ann);
-        }
-    }
-
-    fn resolve_ability_in_annotation(&self, ann: &mut TypeAnnotation) {
-        match &mut ann.kind {
-            TypeAnnotationKind::Named(sym)
-                if sym.with_str(|s| s.starts_with(|c: char| c.is_ascii_uppercase()))
-                    && !self.env.has_definition(sym) =>
-            {
-                if let Some(path) = self.env.get_use_path(sym)
-                    && path.len() >= 2
-                {
-                    ann.kind = TypeAnnotationKind::Path(path.clone());
-                }
-            }
-            TypeAnnotationKind::App { ctor, .. } => self.resolve_ability_in_annotation(ctor),
-            _ => {}
-        }
-    }
-
-    /// Resolve a use declaration, recording the package-root path of what it
-    /// names.
-    fn resolve_use_decl(&self, u: &UseDecl) -> UseDecl {
-        UseDecl {
-            target: self.resolve_use_target(u),
-            ..u.clone()
-        }
-    }
-
-    /// The package-root path of what `u` names. A path that names nothing is
-    /// reported, since it would otherwise leave the import as a module
-    /// placeholder.
-    fn resolve_use_target(&self, u: &UseDecl) -> Option<Vec<Symbol>> {
-        let message = if let Err(error) = absolute_path(&self.module_path, &u.path) {
-            error.to_string()
-        } else if let Some(target) = self.use_target(&u.path) {
-            self.check_use_visibility(u, &target);
-            // Later phases read the target by its identity.
-            return Some(self.declared_path(&target).unwrap_or(target));
-        } else {
-            format!("unresolved import `{}`", u.path.iter().format("::"))
-        };
-        Diagnostic::new(
-            message,
-            self.span_map.get_or_default(u.id),
-            DiagnosticSeverity::Error,
-            CompilationPhase::NameResolution,
-        )
-        .accumulate(self.db);
-        None
-    }
-
-    /// Report a `use` of `target` that the current module does not see, or
-    /// that re-exports it more widely than it is visible.
-    fn check_use_visibility(&self, u: &UseDecl, target: &[Symbol]) {
-        let Some(restriction) = self.path_restriction(target) else {
-            return;
-        };
-        let written = u.path.iter().format("::");
-        if !restriction.is_visible_from(&self.module_path) {
-            self.report_hidden(u.id, written, restriction);
-            return;
-        }
-        let exported = match &u.visibility {
-            Visibility::Private => return,
-            // An invalid path is reported with the declaration.
-            Visibility::Restricted(scope) => match self.restriction_module(scope) {
-                Some(module) => Some(module),
-                None => return,
-            },
-            Visibility::Public => None,
-        };
-        let wider = match (&exported, &restriction.within) {
-            (Some(exported), Some(within)) => exported.len() < within.len(),
-            _ => true,
-        };
-        if wider {
-            Diagnostic::new(
-                format!(
-                    "`{written}` cannot be re-exported as `{}`: {restriction}",
-                    u.visibility
-                ),
-                self.span_map.get_or_default(u.id),
-                DiagnosticSeverity::Error,
-                CompilationPhase::NameResolution,
-            )
-            .accumulate(self.db);
-        }
-    }
-
-    /// The package-root path of the definition or module `path` names.
-    ///
-    /// A path starting with a path keyword names exactly the path it expands
-    /// to. Any other path starts from the current module, or inside an inline
-    /// module from a namespace the prelude supplies.
-    fn use_target(&self, path: &[Symbol]) -> Option<Vec<Symbol>> {
-        let names = |path: &[Symbol]| {
-            let Some((last, namespace)) = path.split_last() else {
-                return false;
+            // The annotation names the ability by its identity.
+            let Some(namespace) = self.module.view().locate(&ability_name) else {
+                continue;
             };
-            // A single-segment path must name a definition: `env.lookup`
-            // would also find the module placeholder this import inserted.
-            let found = if namespace.is_empty() {
-                self.env.has_definition(last)
-            } else {
-                self.env.lookup_qualified(namespace, last).is_some()
-            };
-            found || self.env.has_namespace(path)
-        };
-        match absolute_path(&self.module_path, path) {
-            Ok(Some(path)) => return names(&path).then_some(path),
-            Err(_) => return None,
-            Ok(None) => {}
-        }
-        if self.module_path.is_empty() {
-            if names(path) {
-                return Some(path.to_vec());
+            let operations: Vec<(Symbol, Binding<'db>)> = self
+                .module
+                .view()
+                .iter_namespace(&namespace)
+                .filter(|(_, binding)| matches!(binding, Binding::AbilityOp { .. }))
+                .map(|(name, binding)| (name, binding.clone()))
+                .collect();
+            for (op_name, binding) in operations {
+                // Don't override existing entries (first ability wins;
+                // TODO: detect ambiguity when multiple abilities export same op name)
+                self.effect_ops.entry(op_name).or_insert(binding);
             }
-            if self.env.declares(path.first()?.clone()) {
-                return None;
-            }
-            let library = self.library_namespace_path(path)?;
-            return names(&library).then_some(library);
         }
-        // An inline module's path starts from one of its imports, the module
-        // itself, or a namespace the prelude supplies.
-        if let Some((first, rest)) = path.split_first()
-            && let Some(target) = self.module_import(first)
-        {
-            let imported: Vec<Symbol> = target.iter().chain(rest).cloned().collect();
-            return names(&imported).then_some(imported);
-        }
-        let nested: Vec<Symbol> = self.module_path.iter().chain(path).cloned().collect();
-        if names(&nested) {
-            return Some(nested);
-        }
-        if let Some(library) = self.library_namespace_path(path)
-            && names(&library)
-        {
-            return Some(library);
-        }
-        let library = path
-            .first()
-            .is_some_and(|first| self.env.is_library_root(first));
-        (library && names(path)).then(|| path.to_vec())
     }
 
     /// Resolve an expression.
-    pub fn resolve_expr(&mut self, expr: &Expr<UnresolvedName>) -> Expr<ResolvedRef<'db>> {
+    fn resolve_expr(&mut self, expr: &Expr<UnresolvedName>) -> Expr<ResolvedRef<'db>> {
         let kind = match &*expr.kind {
             ExprKind::Var(name) => {
                 // The type the name is used at selects among the functions
@@ -1624,7 +1959,7 @@ impl<'db> Resolver<'db> {
             }
 
             ExprKind::Cons { ctor, args } => {
-                let resolved_ctor = self.resolve_name(ctor);
+                let resolved_ctor = self.resolve_constructor(ctor);
                 let args = args.iter().map(|a| self.resolve_expr(a)).collect();
                 ExprKind::Cons {
                     ctor: resolved_ctor,
@@ -1637,7 +1972,7 @@ impl<'db> Resolver<'db> {
                 fields,
                 spread,
             } => {
-                let resolved_type = self.resolve_name(type_name);
+                let resolved_type = self.resolve_constructor(type_name);
                 let fields = fields
                     .iter()
                     .map(|f| FieldInit {
@@ -1704,7 +2039,7 @@ impl<'db> Resolver<'db> {
                     .map(|p| {
                         let mut p = p.clone();
                         if let Some(ty) = &mut p.ty {
-                            self.resolve_annotation_paths(ty);
+                            self.module.resolve_annotation_paths(ty);
                         }
                         p.local_id = Some(self.bind_local(p.name.clone()));
                         p
@@ -1769,7 +2104,7 @@ impl<'db> Resolver<'db> {
                 let pattern = self.resolve_pattern_with_bindings(pattern);
                 let mut ty = ty.clone();
                 if let Some(ty) = &mut ty {
-                    self.resolve_annotation_paths(ty);
+                    self.module.resolve_annotation_paths(ty);
                 }
                 Stmt::Let {
                     id: *id,
@@ -1896,7 +2231,7 @@ impl<'db> Resolver<'db> {
             PatternKind::Literal(lit) => PatternKind::Literal(lit.clone()),
 
             PatternKind::Variant { ctor, fields } => {
-                let resolved_ctor = self.resolve_name(ctor);
+                let resolved_ctor = self.resolve_constructor(ctor);
                 let fields = fields
                     .iter()
                     .map(|p| self.resolve_pattern_with_bindings(p))
@@ -1912,7 +2247,7 @@ impl<'db> Resolver<'db> {
                 fields,
                 rest,
             } => {
-                let resolved_type = self.resolve_name(type_name);
+                let resolved_type = self.resolve_constructor(type_name);
                 let fields = fields
                     .iter()
                     .map(|f| {
@@ -1998,14 +2333,17 @@ impl<'db> Resolver<'db> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::{env::PackageEnv, scope::Dependencies};
     use super::*;
     use crate::ast::NodeId;
     use salsa_test_macros::salsa_test;
 
     #[salsa_test]
     fn test_resolve_local_variable(db: &salsa::DatabaseImpl) {
-        let env = ModuleEnv::new();
-        let mut resolver = Resolver::new(db, env, SpanMap::default());
+        let env = PackageEnv::new();
+        let dependencies = Dependencies::none();
+        let module = Resolver::new(db, ScopeRef::new(&env, &dependencies), SpanMap::empty());
+        let mut resolver = FunctionResolver::new(&module);
 
         let param_name = Symbol::new("x");
 
@@ -2031,8 +2369,10 @@ mod tests {
 
     #[salsa_test]
     fn test_scope_isolation(db: &salsa::DatabaseImpl) {
-        let env = ModuleEnv::new();
-        let mut resolver = Resolver::new(db, env, SpanMap::default());
+        let env = PackageEnv::new();
+        let dependencies = Dependencies::none();
+        let module = Resolver::new(db, ScopeRef::new(&env, &dependencies), SpanMap::empty());
+        let mut resolver = FunctionResolver::new(&module);
 
         let x = Symbol::new("x");
         let y = Symbol::new("y");
@@ -2062,8 +2402,10 @@ mod tests {
 
     #[salsa_test]
     fn test_nested_scopes(db: &salsa::DatabaseImpl) {
-        let env = ModuleEnv::new();
-        let mut resolver = Resolver::new(db, env, SpanMap::default());
+        let env = PackageEnv::new();
+        let dependencies = Dependencies::none();
+        let module = Resolver::new(db, ScopeRef::new(&env, &dependencies), SpanMap::empty());
+        let mut resolver = FunctionResolver::new(&module);
 
         let x = Symbol::new("x");
         let y = Symbol::new("y");
@@ -2111,8 +2453,10 @@ mod tests {
     fn test_list_rest_pattern_local_id(db: &salsa::DatabaseImpl) {
         use crate::ast::{Pattern, PatternKind};
 
-        let env = ModuleEnv::new();
-        let mut resolver = Resolver::new(db, env, SpanMap::default());
+        let env = PackageEnv::new();
+        let dependencies = Dependencies::none();
+        let module = Resolver::new(db, ScopeRef::new(&env, &dependencies), SpanMap::empty());
+        let mut resolver = FunctionResolver::new(&module);
         resolver.push_scope();
 
         // Create a ListRest pattern: [head, ..rest]
@@ -2154,8 +2498,10 @@ mod tests {
     fn test_as_pattern_local_id(db: &salsa::DatabaseImpl) {
         use crate::ast::{Pattern, PatternKind};
 
-        let env = ModuleEnv::new();
-        let mut resolver = Resolver::new(db, env, SpanMap::default());
+        let env = PackageEnv::new();
+        let dependencies = Dependencies::none();
+        let module = Resolver::new(db, ScopeRef::new(&env, &dependencies), SpanMap::empty());
+        let mut resolver = FunctionResolver::new(&module);
         resolver.push_scope();
 
         // Create an As pattern: _ as all

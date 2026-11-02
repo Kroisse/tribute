@@ -49,12 +49,11 @@
 //! let resolved: ResolvedModule<'db> = resolve_module(db, parsed);
 //!
 //! // After type checking
-//! let typed: TypedModule<'db> = typecheck_module(db, &resolved);
+//! let typed: TypeCheckOutput<'db> = typecheck_module(db, &resolved, span_map);
 //! ```
 
 mod decl;
 mod expr;
-pub mod lookup;
 pub(crate) mod node_id;
 mod pattern;
 mod phases;

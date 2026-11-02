@@ -26,28 +26,32 @@
 mod become_check;
 mod collect;
 mod diagnostics;
+
+pub use diagnostics::NodeDiagnostic;
 mod exhaustiveness;
 mod expr;
 mod finalize;
 mod fn_arm_check;
 mod func_check;
+mod implicit_ctor;
 
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 use trunk_ir::SymbolPath;
 
-use trunk_ir::{Span, Symbol};
+use trunk_ir::Symbol;
 
 use crate::SortedMap;
 use crate::ast::{
-    Decl, DeclEntry, DeclTable, FuncDefId, NodeId, ResolvedRef, SpanMap, Type, TypeScheme,
-    TypedRef, UniVarId,
+    Decl, DeclEntry, DeclTable, FuncDecl, FuncDefId, NodeId, ResolvedRef, SpanMap, Type,
+    TypeScheme, TypedRef, UniVarId,
 };
+use crate::resolve::{NameDisplay, PackageName};
 
-use super::context::ModuleTypeEnv;
-use super::{
-    DefinitionIdentity, PreludeExports, StringType, WellKnownType, WellKnownTypeKey, WellKnownTypes,
-};
+use std::sync::Arc;
+
+use super::context::{ModuleTypeEnv, TypeEnvData};
+use super::{PackageExports, StringType, WellKnownType, WellKnownTypeKey, WellKnownTypes};
 
 /// Result of module type checking.
 pub struct ModuleCheckResult<'db> {
@@ -83,11 +87,39 @@ pub struct ModuleCheckResult<'db> {
     pub well_known_types: WellKnownTypes<'db>,
 }
 
-/// What checking one module-level function produces: its body's node
-/// metadata, keyed by nodes only that function owns. Function checking only
-/// reads the module environment, so the module merges these results in any
-/// order.
-#[derive(Default)]
+/// What collecting a module's declarations produces: the environment each
+/// of its functions is checked in, and the diagnostics collection reported.
+/// It holds no function body, so editing a body leaves it equal.
+#[derive(Clone, PartialEq, Eq, salsa::SalsaValue)]
+pub struct ModuleDeclarations<'db> {
+    env: Arc<TypeEnvData<'db>>,
+    signatures: Arc<SignatureNames<'db>>,
+    diagnostics: Vec<NodeDiagnostic>,
+}
+
+/// The names each collected function signature binds, for checking its
+/// body against them.
+#[derive(Clone, Default, PartialEq, Eq, salsa::SalsaValue)]
+struct SignatureNames<'db> {
+    /// Source origins for concrete effects in each collected function signature.
+    effect_annotation_origins: HashMap<FuncDefId<'db>, crate::ast::AbilityAnnotationOrigins>,
+    row_names: HashMap<FuncDefId<'db>, HashMap<Symbol, crate::ast::RowVar>>,
+    type_names: HashMap<FuncDefId<'db>, HashMap<Symbol, u32>>,
+}
+
+/// What checking one module-level function produces: its typed declaration,
+/// its body's node metadata, and its diagnostics, positioned at nodes.
+#[derive(Clone, PartialEq, Eq, salsa::SalsaValue)]
+pub struct CheckedFunction<'db> {
+    decl: FuncDecl<TypedRef<'db>>,
+    check: FunctionCheck<'db>,
+    diagnostics: Vec<NodeDiagnostic>,
+}
+
+/// A function's body node metadata, keyed by nodes only that function owns.
+/// Function checking only reads the module environment, so the module
+/// merges these results in any order.
+#[derive(Clone, Default, PartialEq, Eq, salsa::SalsaValue)]
 pub(crate) struct FunctionCheck<'db> {
     pub(super) node_types: HashMap<NodeId, Type<'db>>,
     pub(super) function_instances: HashMap<NodeId, super::FunctionInstance<'db>>,
@@ -126,7 +158,9 @@ pub struct TypeChecker<'db> {
     /// Current module prefix for qualified function names (e.g., "foo::bar").
     pub(crate) prefix: SymbolPath,
     /// Span map for converting NodeId to Span in diagnostics.
-    pub(crate) span_map: SpanMap,
+    pub(crate) span_map: SpanMap<'db>,
+    /// How diagnostics spell the declarations of the package being checked.
+    names: NameDisplay,
     /// Accumulated node types from all functions.
     /// Collects NodeId → Type mappings during type checking.
     node_types: HashMap<NodeId, Type<'db>>,
@@ -138,45 +172,44 @@ pub struct TypeChecker<'db> {
     perform_operations: HashMap<NodeId, crate::typeck::InstantiatedPerformOperation<'db>>,
     lambda_signatures: HashMap<NodeId, crate::typeck::LambdaSignature<'db>>,
     exhaustive_cases: Vec<NodeId>,
-    /// Source origins for concrete effects in each collected function signature.
-    effect_annotation_origins: HashMap<FuncDefId<'db>, crate::ast::AbilityAnnotationOrigins>,
-    signature_row_names: HashMap<FuncDefId<'db>, HashMap<Symbol, crate::ast::RowVar>>,
-    signature_type_names: HashMap<FuncDefId<'db>, HashMap<Symbol, u32>>,
+    signatures: Arc<SignatureNames<'db>>,
     /// Each collected function, checked against the field getters once
     /// every declaration is collected.
     function_decls: Vec<(NodeId, FuncDefId<'db>)>,
+    /// Diagnostics reported so far, positioned at nodes.
+    diagnostics: std::cell::RefCell<Vec<NodeDiagnostic>>,
 }
 
 impl<'db> TypeChecker<'db> {
-    /// The module whose items the prelude declares at its root: its package.
-    fn prelude_root() -> SymbolPath {
-        SymbolPath::new([crate::resolve::LIBRARY_PACKAGE])
-    }
-
     fn prelude_well_known_type(
         &self,
         module: &DeclTable<ResolvedRef<'db>>,
         key: impl WellKnownTypeKey,
     ) -> Option<WellKnownType<'db>> {
         let name = key.name();
-        let root = Self::prelude_root();
-        let declaration = module
+        let root = PackageName::std().identity_path(&[]);
+        let disambiguator = module
             .entries
             .iter()
             .filter(|entry| entry.module == root)
             .find_map(|entry| match &entry.decl {
-                Decl::Struct(decl) if decl.name == name => Some(decl.id),
-                Decl::Enum(decl) if decl.name == name => Some(decl.id),
+                Decl::Struct(crate::ast::StructDecl {
+                    name: declared,
+                    disambiguator,
+                    ..
+                })
+                | Decl::Enum(crate::ast::EnumDecl {
+                    name: declared,
+                    disambiguator,
+                    ..
+                }) if *declared == name => Some(*disambiguator),
                 _ => None,
             })?;
         let qualified = root.child(name.clone());
         let ty = self.env.lookup_type_def(&qualified)?.body(self.db());
         Some(WellKnownType {
             ty,
-            definition: DefinitionIdentity::new(
-                declaration,
-                self.span_map.get_or_default(declaration),
-            ),
+            definition: crate::ast::TypeDefId::declared(self.db(), qualified, disambiguator),
         })
     }
 
@@ -189,7 +222,7 @@ impl<'db> TypeChecker<'db> {
         let string = self.prelude_well_known_type(module, StringType);
         // `==` of a prelude type is the function of that name in the type's
         // module.
-        let root = Self::prelude_root();
+        let root = PackageName::std().identity_path(&[]);
         let equality = |type_name: &str| {
             let function = FuncDefId::new(self.db(), root.child(type_name).child("=="));
             self.env.lookup_function(function).map(|_| function)
@@ -201,12 +234,14 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
-    /// Create a new type checker with the given span map.
-    pub fn new(db: &'db dyn salsa::Database, span_map: SpanMap) -> Self {
+    /// Create a new type checker with the given span map, whose diagnostics
+    /// spell declarations as `names` does.
+    pub fn new(db: &'db dyn salsa::Database, span_map: SpanMap<'db>, names: NameDisplay) -> Self {
         Self {
             env: ModuleTypeEnv::new(db),
             prefix: SymbolPath::root(),
             span_map,
+            names,
             node_types: HashMap::default(),
             function_instances: HashMap::default(),
             local_instances: HashMap::default(),
@@ -215,16 +250,18 @@ impl<'db> TypeChecker<'db> {
             perform_operations: HashMap::default(),
             lambda_signatures: HashMap::default(),
             exhaustive_cases: Vec::new(),
-            effect_annotation_origins: HashMap::default(),
-            signature_row_names: HashMap::default(),
-            signature_type_names: HashMap::default(),
+            signatures: Default::default(),
             function_decls: Vec::new(),
+            diagnostics: Default::default(),
         }
     }
 
-    /// Get the span for a NodeId, falling back to Span::new(0, 0) if not found.
-    pub(crate) fn get_span(&self, node_id: crate::ast::NodeId) -> Span {
-        self.span_map.get_or_default(node_id)
+    /// Report the diagnostics recorded so far at the spans of their nodes.
+    fn accumulate_diagnostics(&self) {
+        use salsa::Accumulator;
+        for diagnostic in self.diagnostics.take() {
+            diagnostic.resolve(&self.span_map).accumulate(self.db());
+        }
     }
 
     /// The path of the module being checked.
@@ -237,17 +274,23 @@ impl<'db> TypeChecker<'db> {
         FuncDefId::new(self.db(), self.prefix.child(name.clone()))
     }
 
+    /// How diagnostics spell declarations of the package being checked.
+    pub(crate) fn names(&self) -> &NameDisplay {
+        &self.names
+    }
+
     /// Get the database.
     pub(crate) fn db(&self) -> &'db dyn salsa::Database {
         self.env.db()
     }
 
-    /// Inject prelude's resolved type information before type checking.
-    ///
-    /// This makes prelude's types (Option, Some, None, etc.) available
-    /// to user code without sharing a ModuleTypeEnv, avoiding UniVar conflicts.
-    pub fn inject_prelude(&mut self, exports: &PreludeExports<'db>) {
-        self.env.inject_prelude(exports);
+    /// Check against the declarations one dependency package exports. Call it
+    /// for every package the checked package depends on, transitively, since
+    /// an export may name a declaration of a package that is not a direct
+    /// dependency. They resolve without sharing a `ModuleTypeEnv`, so no
+    /// unification variable crosses the package boundary.
+    pub fn depend_on(&mut self, exports: &PackageExports<'db>) {
+        self.env.depend_on(exports);
     }
 
     /// Type check a module.
@@ -257,19 +300,109 @@ impl<'db> TypeChecker<'db> {
         self.check_module_inner(module)
     }
 
-    /// Type check the prelude module once.
-    ///
-    /// Returns the typed prelude, and the exports that user modules inject:
-    /// function types, constructors, and type definitions.
-    pub fn check_prelude(
+    /// Collect a module's declarations, for checking its functions one at a
+    /// time with [`TypeChecker::check_function`].
+    pub fn collect_module(
         mut self,
         module: &DeclTable<ResolvedRef<'db>>,
-    ) -> (ModuleCheckResult<'db>, PreludeExports<'db>) {
+    ) -> ModuleDeclarations<'db> {
+        self.collect_declarations(module);
+        ModuleDeclarations {
+            env: self.env.data().clone(),
+            signatures: self.signatures,
+            diagnostics: self.diagnostics.into_inner(),
+        }
+    }
+
+    /// Check against declarations collected before, instead of collecting
+    /// them.
+    pub fn with_declarations(mut self, declarations: &ModuleDeclarations<'db>) -> Self {
+        self.env = ModuleTypeEnv::from_data(self.db(), declarations.env.clone());
+        self.signatures = declarations.signatures.clone();
+        self
+    }
+
+    /// Check one module-level function, declared in `module`, against the
+    /// collected declarations. Its diagnostics stay positioned at nodes, so
+    /// the checker needs no span map.
+    pub fn check_function(
+        mut self,
+        module: &SymbolPath,
+        func: &FuncDecl<ResolvedRef<'db>>,
+    ) -> CheckedFunction<'db> {
+        self.prefix = module.clone();
+        let (decl, check) = self.check_func_decl(func);
+        CheckedFunction {
+            decl,
+            check,
+            diagnostics: self.diagnostics.into_inner(),
+        }
+    }
+
+    /// Assemble a module's result from its collected declarations and its
+    /// functions' results, in declaration order, and report their
+    /// diagnostics at the spans of the checker's span map.
+    pub fn finish_module<'a>(
+        mut self,
+        declarations: &ModuleDeclarations<'db>,
+        module: &DeclTable<ResolvedRef<'db>>,
+        functions: impl IntoIterator<Item = &'a CheckedFunction<'db>>,
+    ) -> ModuleCheckResult<'db>
+    where
+        'db: 'a,
+    {
+        self = self.with_declarations(declarations);
+        self.diagnostics
+            .get_mut()
+            .extend(declarations.diagnostics.iter().cloned());
+        let mut functions = functions.into_iter();
+        let entries = module
+            .entries
+            .iter()
+            .map(|entry| {
+                let decl = match &entry.decl {
+                    Decl::Function(_) => {
+                        let checked = functions
+                            .next()
+                            .expect("a checked function for each function declaration");
+                        self.diagnostics
+                            .get_mut()
+                            .extend(checked.diagnostics.iter().cloned());
+                        self.merge_function(checked.check.clone());
+                        Decl::Function(checked.decl.clone())
+                    }
+                    decl => self.check_decl(decl),
+                };
+                DeclEntry {
+                    module: entry.module.clone(),
+                    decl,
+                }
+            })
+            .collect();
+        self.accumulate_diagnostics();
+        self.into_module_result(DeclTable {
+            id: module.id,
+            name: module.name.clone(),
+            entries,
+        })
+    }
+
+    /// Type check the root module of a library package once.
+    ///
+    /// Returns the typed module, and the exports that dependent packages read
+    /// through the dependency table: function types, constructors, and type
+    /// definitions. Package `std` also publishes its well-known identities;
+    /// another library declares none.
+    pub fn check_library(
+        mut self,
+        module: &DeclTable<ResolvedRef<'db>>,
+    ) -> (ModuleCheckResult<'db>, PackageExports<'db>) {
         self.collect_declarations(module);
         let well_known_types = self.prelude_well_known_types(module);
         self.env.set_prelude_well_known_types(well_known_types);
         let checked = self.check_decls(module);
-        let exports = self.prelude_exports(well_known_types);
+        let exports = self.package_exports(well_known_types);
+        self.accumulate_diagnostics();
         (self.into_module_result(checked), exports)
     }
 
@@ -289,6 +422,7 @@ impl<'db> TypeChecker<'db> {
         // which is for external references, not internal function naming.
         self.collect_declarations(module);
         let checked = self.check_decls(module);
+        self.accumulate_diagnostics();
         self.into_module_result(checked)
     }
 
@@ -321,7 +455,7 @@ impl<'db> TypeChecker<'db> {
         let function_types = self.env.export_function_types();
         let constructor_types = self.env.export_constructor_types();
         let ability_definitions = self.env.export_ability_defs();
-        let well_known_types = self.env.well_known_types();
+        let well_known_types = self.env.own_well_known_types();
 
         self.exhaustive_cases.sort();
 
@@ -343,8 +477,8 @@ impl<'db> TypeChecker<'db> {
     }
 
     /// Export the prelude's finalized types for injection into user modules.
-    fn prelude_exports(&self, well_known_types: WellKnownTypes<'db>) -> PreludeExports<'db> {
-        PreludeExports::new(
+    fn package_exports(&self, well_known_types: WellKnownTypes<'db>) -> PackageExports<'db> {
+        PackageExports::new(
             self.db(),
             self.env.export_function_types_with_ids(),
             self.env.export_extern_functions(),

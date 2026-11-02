@@ -22,12 +22,11 @@ use trunk_ir::SymbolPath;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core;
-use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::rewriter::PatternRewriter;
 use trunk_ir::rewrite::type_converter::TypeConverter;
 use trunk_ir::rewrite::{
-    ConversionError, ConversionTarget, Module, PatternApplicator, RewritePattern,
+    ConversionError, ConversionTarget, Module, OpRewritePattern, PatternApplicator,
 };
 use trunk_ir::types::{Location, TypeDataBuilder};
 
@@ -197,16 +196,16 @@ struct BoxIntPattern {
     i32_ty: TypeRef,
 }
 
-impl RewritePattern for BoxIntPattern {
+impl OpRewritePattern for BoxIntPattern {
+    type Op = tribute_rt::BoxInt;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        box_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(box_op) = tribute_rt::BoxInt::from_op(ctx, op) else {
-            return false;
-        };
+    ) -> Option<()> {
+        let op = box_op.op_ref();
         let loc = ctx.op(op).location;
         let value = box_op.value(ctx);
         let mut ops = box_value(
@@ -225,7 +224,7 @@ impl RewritePattern for BoxIntPattern {
             rewriter.insert_op(o);
         }
         rewriter.replace_op(last);
-        true
+        Some(())
     }
 }
 
@@ -235,16 +234,16 @@ struct BoxNatPattern {
     i32_ty: TypeRef,
 }
 
-impl RewritePattern for BoxNatPattern {
+impl OpRewritePattern for BoxNatPattern {
+    type Op = tribute_rt::BoxNat;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        box_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(box_op) = tribute_rt::BoxNat::from_op(ctx, op) else {
-            return false;
-        };
+    ) -> Option<()> {
+        let op = box_op.op_ref();
         let loc = ctx.op(op).location;
         let value = box_op.value(ctx);
         let mut ops = box_value(
@@ -263,7 +262,7 @@ impl RewritePattern for BoxNatPattern {
             rewriter.insert_op(o);
         }
         rewriter.replace_op(last);
-        true
+        Some(())
     }
 }
 
@@ -273,16 +272,16 @@ struct BoxBoolPattern {
     i32_ty: TypeRef,
 }
 
-impl RewritePattern for BoxBoolPattern {
+impl OpRewritePattern for BoxBoolPattern {
+    type Op = tribute_rt::BoxBool;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        box_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(box_op) = tribute_rt::BoxBool::from_op(ctx, op) else {
-            return false;
-        };
+    ) -> Option<()> {
+        let op = box_op.op_ref();
         let loc = ctx.op(op).location;
         let value = box_op.value(ctx);
         let mut ops = box_value(
@@ -301,7 +300,7 @@ impl RewritePattern for BoxBoolPattern {
             rewriter.insert_op(o);
         }
         rewriter.replace_op(last);
-        true
+        Some(())
     }
 }
 
@@ -311,16 +310,16 @@ struct BoxFloatPattern {
     i32_ty: TypeRef,
 }
 
-impl RewritePattern for BoxFloatPattern {
+impl OpRewritePattern for BoxFloatPattern {
+    type Op = tribute_rt::BoxFloat;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        box_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(box_op) = tribute_rt::BoxFloat::from_op(ctx, op) else {
-            return false;
-        };
+    ) -> Option<()> {
+        let op = box_op.op_ref();
         let loc = ctx.op(op).location;
         let value = box_op.value(ctx);
         let mut ops = box_value(
@@ -339,7 +338,7 @@ impl RewritePattern for BoxFloatPattern {
             rewriter.insert_op(o);
         }
         rewriter.replace_op(last);
-        true
+        Some(())
     }
 }
 
@@ -351,23 +350,23 @@ struct UnboxIntPattern {
     i32_ty: TypeRef,
 }
 
-impl RewritePattern for UnboxIntPattern {
+impl OpRewritePattern for UnboxIntPattern {
+    type Op = tribute_rt::UnboxInt;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        unbox_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(unbox_op) = tribute_rt::UnboxInt::from_op(ctx, op) else {
-            return false;
-        };
+    ) -> Option<()> {
+        let op = unbox_op.op_ref();
         let loc = ctx.op(op).location;
         let value = unbox_op.value(ctx);
 
         // If the input is already i32, the unbox is a no-op (value was stored raw).
         if ctx.value_ty(value) == self.i32_ty {
             rewriter.erase_op(vec![value]);
-            return true;
+            return Some(());
         }
 
         let load_op = clif::Load::operands(value)
@@ -375,7 +374,7 @@ impl RewritePattern for UnboxIntPattern {
             .results(self.i32_ty)
             .build(ctx, loc);
         rewriter.replace_op(load_op.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -383,22 +382,22 @@ struct UnboxNatPattern {
     i32_ty: TypeRef,
 }
 
-impl RewritePattern for UnboxNatPattern {
+impl OpRewritePattern for UnboxNatPattern {
+    type Op = tribute_rt::UnboxNat;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        unbox_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(unbox_op) = tribute_rt::UnboxNat::from_op(ctx, op) else {
-            return false;
-        };
+    ) -> Option<()> {
+        let op = unbox_op.op_ref();
         let loc = ctx.op(op).location;
         let value = unbox_op.value(ctx);
 
         if ctx.value_ty(value) == self.i32_ty {
             rewriter.erase_op(vec![value]);
-            return true;
+            return Some(());
         }
 
         let load_op = clif::Load::operands(value)
@@ -406,7 +405,7 @@ impl RewritePattern for UnboxNatPattern {
             .results(self.i32_ty)
             .build(ctx, loc);
         rewriter.replace_op(load_op.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -414,22 +413,22 @@ struct UnboxBoolPattern {
     i32_ty: TypeRef,
 }
 
-impl RewritePattern for UnboxBoolPattern {
+impl OpRewritePattern for UnboxBoolPattern {
+    type Op = tribute_rt::UnboxBool;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        unbox_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(unbox_op) = tribute_rt::UnboxBool::from_op(ctx, op) else {
-            return false;
-        };
+    ) -> Option<()> {
+        let op = unbox_op.op_ref();
         let loc = ctx.op(op).location;
         let value = unbox_op.value(ctx);
 
         if ctx.value_ty(value) == self.i32_ty {
             rewriter.erase_op(vec![value]);
-            return true;
+            return Some(());
         }
 
         let load_op = clif::Load::operands(value)
@@ -437,7 +436,7 @@ impl RewritePattern for UnboxBoolPattern {
             .results(self.i32_ty)
             .build(ctx, loc);
         rewriter.replace_op(load_op.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -445,22 +444,22 @@ struct UnboxFloatPattern {
     f64_ty: TypeRef,
 }
 
-impl RewritePattern for UnboxFloatPattern {
+impl OpRewritePattern for UnboxFloatPattern {
+    type Op = tribute_rt::UnboxFloat;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        unbox_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(unbox_op) = tribute_rt::UnboxFloat::from_op(ctx, op) else {
-            return false;
-        };
+    ) -> Option<()> {
+        let op = unbox_op.op_ref();
         let loc = ctx.op(op).location;
         let value = unbox_op.value(ctx);
 
         if ctx.value_ty(value) == self.f64_ty {
             rewriter.erase_op(vec![value]);
-            return true;
+            return Some(());
         }
 
         let load_op = clif::Load::operands(value)
@@ -468,7 +467,7 @@ impl RewritePattern for UnboxFloatPattern {
             .results(self.f64_ty)
             .build(ctx, loc);
         rewriter.replace_op(load_op.op_ref());
-        true
+        Some(())
     }
 }
 

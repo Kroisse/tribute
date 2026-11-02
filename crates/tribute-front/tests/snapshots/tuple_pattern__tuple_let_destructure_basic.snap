@@ -8,7 +8,7 @@ core.module @test {
   !__logical_tuple_tuple_2_10_coreZ2ei32_10_coreZ2ei32_1 = adt.typeref<{name = "__logical_tuple_tuple_2_10_coreZ2ei32_10_coreZ2ei32"}>
 
   tribute_control.func @"std::Nat::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32
-  tribute_control.func @test['a0]() -> core.i32 row(| 'a0) inferred {
+  tribute_control.func @"pkg::test"['a0]() -> core.i32 row(| 'a0) inferred {
       %0 = arith.const {value = 1} : core.i32
       %1 = arith.const {value = 2} : core.i32
       %2 = adt.struct_new %0, %1 {type = !__logical_tuple_tuple_2_10_coreZ2ei32_10_coreZ2ei32} : !__logical_tuple_tuple_2_10_coreZ2ei32_10_coreZ2ei32_1

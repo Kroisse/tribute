@@ -27,7 +27,7 @@ pub fn builtin_symbols(db: &dyn salsa::Database, source: SourceCst) -> Vec<Built
     };
 
     let mut entries = Vec::new();
-    collect_module(db, module, &span_map, &mut entries);
+    collect_module(db, module, span_map, &mut entries);
     entries.sort_by_key(|entry| (entry.span.start, entry.span.end));
     entries
 }
@@ -35,14 +35,14 @@ pub fn builtin_symbols(db: &dyn salsa::Database, source: SourceCst) -> Vec<Built
 pub fn builtin_at(entries: &[BuiltinSymbolEntry], offset: usize) -> Option<&BuiltinSymbolEntry> {
     entries
         .iter()
-        .filter(|entry| entry.span.start <= offset && offset < entry.span.end)
+        .filter(|entry| entry.span.range().contains(&offset))
         .min_by_key(|entry| entry.span.end - entry.span.start)
 }
 
 fn collect_module(
     db: &dyn salsa::Database,
     module: &DeclTable<TypedRef<'_>>,
-    span_map: &SpanMap,
+    span_map: SpanMap<'_>,
     entries: &mut Vec<BuiltinSymbolEntry>,
 ) {
     for decl in module.decls() {
@@ -57,7 +57,7 @@ fn collect_module(
 fn collect_effect(
     db: &dyn salsa::Database,
     annotation: &TypeAnnotation,
-    span_map: &SpanMap,
+    span_map: SpanMap<'_>,
     entries: &mut Vec<BuiltinSymbolEntry>,
 ) {
     let ability_annotation = match &annotation.kind {
@@ -68,9 +68,13 @@ fn collect_effect(
         return;
     };
 
+    // An annotation without a span here is in a file module's file.
+    let Some(span) = span_map.get(ability_annotation.id) else {
+        return;
+    };
     if let Some(ability) = AbilityId::builtin_from_path(db, path) {
         entries.push(BuiltinSymbolEntry {
-            span: span_map.get_or_default(ability_annotation.id),
+            span,
             name: ability.name(db),
             qualified: ability.qualified(db).clone(),
         });

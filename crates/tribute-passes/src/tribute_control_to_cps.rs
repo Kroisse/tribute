@@ -13,10 +13,9 @@ use std::ops::ControlFlow;
 
 use tribute_ir::callable_abi::CallableAbi;
 use tribute_ir::calling_convention::{
-    CallingConvention, cps_completion_type, cps_resume_exact_type, physical_closure_function_type,
-    physical_closure_type, physical_closure_type_with_environment_index,
+    CallingConvention, cps_completion_type, cps_resume_exact_type, physical_closure_type,
 };
-use tribute_ir::dialect::{ability, closure, effect, tribute_control};
+use tribute_ir::dialect::{ability, closure, effect, tribute_control, tribute_cps};
 use trunk_ir::OpList;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
@@ -29,6 +28,8 @@ use trunk_ir::symbol_table::SymbolTable;
 use trunk_ir::types::{Attribute, AttributeMap, Location, TypeDataBuilder};
 use trunk_ir::walk::{WalkAction, walk_op};
 use trunk_ir::{OperationDataBuilder, Symbol, SymbolPath};
+
+use crate::convention_table::{AbstractFrames, ConventionTables};
 
 mod boundary;
 mod callable;
@@ -72,12 +73,17 @@ struct Converter<'a> {
     module_block: BlockRef,
     /// Every source callable, by its defining operation.
     funcs: HashMap<OpRef, CallableInfo>,
-    /// The callable each source operation's callee or `func_ref` names,
-    /// resolved before conversion moves anything.
+    /// The callable each source operation's callee names, resolved before
+    /// conversion moves anything.
     targets: HashMap<OpRef, OpRef>,
+    /// The table each `func_ref` names, resolved the same way.
+    func_tables: HashMap<OpRef, FuncTable>,
+    /// The convention entries built for each table and closure type.
+    table_entries: HashMap<(OpRef, TypeRef), [trunk_ir::SymbolPath; 3]>,
     /// Source operations whose references are looked up in a nested module.
     converted_types: HashMap<TypeRef, TypeRef>,
     helper_index: u32,
+    tables: ConventionTables<AbstractFrames>,
 }
 
 /// How a `resume` in the body of a handler arm reaches its continuation.
@@ -149,13 +155,15 @@ impl<'a> Converter<'a> {
             module_block,
             funcs: graph.funcs,
             targets: graph.targets,
+            func_tables: graph.func_tables,
+            table_entries: HashMap::default(),
             converted_types: HashMap::default(),
             helper_index: 0,
+            tables: ConventionTables::new(AbstractFrames),
         }
     }
 
-    /// The callable the callee or `func_ref` of the source operation `op`
-    /// names.
+    /// The callable the callee of the source operation `op` names.
     fn current_func(&self, op: OpRef) -> Option<CallableInfo> {
         self.targets
             .get(&op)
@@ -263,7 +271,7 @@ impl<'a> Converter<'a> {
                 self.lower_structured_if(source, rest, block, mapping, flow)?;
                 return Ok(());
             }
-            if name.dialect(self.ctx) != tribute_control::DIALECT_NAME {
+            if !is_source_logical(self.ctx, source) {
                 let cloned = self.clone_plain_op(source, mapping)?;
                 self.ctx.push_op(block, cloned);
                 index += 1;
@@ -284,7 +292,7 @@ impl<'a> Converter<'a> {
                 let value = mapping.get(&value).copied().unwrap_or(value);
                 self.emit_exit(block, location, value, flow)?;
                 return Ok(());
-            } else if tribute_control::Lambda::matches(self.ctx, source) {
+            } else if tribute_cps::Lambda::matches(self.ctx, source) {
                 let lambda = self.lower_lambda(source, mapping)?;
                 self.ctx.push_op(block, lambda);
                 mapping.insert(self.ctx.op_result(source, 0), self.ctx.op_result(lambda, 0));
@@ -295,7 +303,7 @@ impl<'a> Converter<'a> {
                 let lambda = mapping.get(&lambda).copied().unwrap_or(lambda);
                 mapping.insert(self.ctx.op_result(source, 0), lambda);
                 index += 1;
-            } else if tribute_control::FuncRef::matches(self.ctx, source) {
+            } else if tribute_cps::FuncRef::matches(self.ctx, source) {
                 let (ops, value) = self.lower_func_ref(source)?;
                 for op in ops {
                     self.ctx.push_op(block, op);
@@ -310,7 +318,7 @@ impl<'a> Converter<'a> {
                     return Ok(());
                 }
                 index += 1;
-            } else if tribute_control::CallIndirect::matches(self.ctx, source) {
+            } else if tribute_cps::CallIndirect::matches(self.ctx, source) {
                 if self
                     .lower_call_indirect(source, rest, block, mapping, flow)?
                     .is_break()
@@ -321,7 +329,7 @@ impl<'a> Converter<'a> {
             } else if tribute_control::TailCall::matches(self.ctx, source) {
                 self.lower_tail_call(source, block, mapping, flow)?;
                 return Ok(());
-            } else if tribute_control::TailCallIndirect::matches(self.ctx, source) {
+            } else if tribute_cps::TailCallIndirect::matches(self.ctx, source) {
                 self.lower_tail_call_indirect(source, block, mapping, flow)?;
                 return Ok(());
             } else if tribute_control::Perform::matches(self.ctx, source) {
@@ -358,11 +366,26 @@ impl<'a> Converter<'a> {
     }
 }
 
+/// Whether `op` belongs to the source-logical dialects this pass consumes.
+fn is_source_logical(ctx: &IrContext, op: OpRef) -> bool {
+    let dialect = ctx.op(op).name.dialect(ctx);
+    dialect == tribute_control::DIALECT_NAME || dialect == tribute_cps::DIALECT_NAME
+}
+
 /// The source callables of a module and what its references name.
 #[derive(Default)]
 struct CallableGraph {
     funcs: HashMap<OpRef, CallableInfo>,
     targets: HashMap<OpRef, OpRef>,
+    func_tables: HashMap<OpRef, FuncTable>,
+}
+
+/// The targets of a `tribute_cps.func_table`, each with the convention it is
+/// entered with, the callable it names, and the reference to that callable.
+#[derive(Clone)]
+struct FuncTable {
+    op: OpRef,
+    entries: Vec<(CallingConvention, OpRef, trunk_ir::SymbolPath)>,
 }
 
 /// Every source callable by its defining operation, and the callable each
@@ -372,16 +395,16 @@ fn collect_callable_graph(ctx: &IrContext, module: Module, symbols: &SymbolTable
         .symbols()
         .iter()
         .copied()
-        .filter(|&op| tribute_control::Func::matches(ctx, op))
-        .map(|op| {
+        .filter_map(|op| tribute_cps::Func::from_op(ctx, op).ok())
+        .map(|function| {
+            let op = function.op_ref();
             let logical_type = ctx
                 .op_attrs(op)
                 .get_type("type")
                 .expect("pre-CPS validation checked function type");
             let callable = tribute_control::FuncSig::from_type_ref(ctx, logical_type)
                 .expect("pre-CPS validation checked callable type");
-            let convention = tribute_control::func_sig_convention(ctx, logical_type)
-                .expect("pre-CPS validation checked callable convention");
+            let convention = function.convention(ctx);
             (
                 op,
                 CallableInfo {
@@ -394,7 +417,26 @@ fn collect_callable_graph(ctx: &IrContext, module: Module, symbols: &SymbolTable
         })
         .collect();
     let mut targets = HashMap::default();
+    let mut func_tables = HashMap::default();
     let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
+        if let Ok(reference) = tribute_cps::FuncRef::from_op(ctx, op)
+            && let Some(table) = symbols
+                .resolve(ctx, op, reference.func_ref(ctx))
+                .filter(|&table| tribute_cps::FuncTable::matches(ctx, table))
+        {
+            let entries = tribute_cps::table_entries(ctx, table)
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|(convention, target)| {
+                    let callable = symbols
+                        .resolve(ctx, table, &target)
+                        .filter(|callable| funcs.contains_key(callable))?;
+                    Some((convention, callable, target))
+                })
+                .collect();
+            func_tables.insert(op, FuncTable { op: table, entries });
+            return ControlFlow::Continue(WalkAction::Advance);
+        }
         let attributes = &ctx.op(op).attributes;
         if let Some(target) = attributes
             .view(ctx)
@@ -407,7 +449,11 @@ fn collect_callable_graph(ctx: &IrContext, module: Module, symbols: &SymbolTable
         }
         ControlFlow::Continue(WalkAction::Advance)
     });
-    CallableGraph { funcs, targets }
+    CallableGraph {
+        funcs,
+        targets,
+        func_tables,
+    }
 }
 
 fn verify_candidate_or_restore_aliases(
@@ -476,17 +522,18 @@ pub fn tribute_control_to_cps(
         let mut mapping = HashMap::default();
         let source_ops = converter.ctx.block(source_blocks[0]).ops.clone();
         for source in source_ops {
-            if tribute_control::Func::matches(converter.ctx, source) {
+            if tribute_cps::Func::matches(converter.ctx, source) {
                 let function = converter.convert_func(source)?;
                 converter.ctx.push_op(new_block, function);
-            } else if converter.ctx.op(source).name.dialect(converter.ctx)
-                == tribute_control::DIALECT_NAME
-            {
+            } else if tribute_cps::FuncTable::matches(converter.ctx, source) {
+                // Its references build its entries when they are converted.
+                continue;
+            } else if is_source_logical(converter.ctx, source) {
                 return Err(TributeControlToCpsError::one(
                     PRE_CPS_BOUNDARY,
                     Some(source),
                     Some(converter.ctx.op(source).location),
-                    "only tribute_control.func may appear directly in a module block",
+                    "only tribute_cps.func may appear directly in a module block",
                 ));
             } else {
                 let cloned = converter.clone_plain_op(source, &mut mapping)?;

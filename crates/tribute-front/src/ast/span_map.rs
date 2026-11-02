@@ -8,21 +8,23 @@
 //! - Span changes don't invalidate Salsa caches
 //! - Additional metadata can be added using the same pattern
 
-use rustc_hash::FxHashMap as HashMap;
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use rustc_hash::{FxBuildHasher, FxHashMap as HashMap};
 
 use trunk_ir::Span;
 
 use super::NodeId;
+use crate::source_tree::SourceTree;
 
 /// Builder for constructing a SpanMap during AST lowering.
 ///
 /// This is used during CST → AST conversion to collect spans for each node.
-/// After lowering is complete, call `finish()` to create a `SpanMap`.
+/// Set an item's start before inserting its nodes, and take its spans once
+/// its nodes are lowered; after lowering is complete, call `finish()` for the
+/// layout and any spans not taken.
 #[derive(Debug, Default)]
 pub struct SpanMapBuilder {
-    spans: HashMap<NodeId, Span>,
+    spans: HashMap<u64, ItemSpans>,
+    layout: ItemLayout,
 }
 
 impl SpanMapBuilder {
@@ -31,58 +33,143 @@ impl SpanMapBuilder {
         Self::default()
     }
 
-    /// Insert a span for a node.
+    /// Record that the item `owner` starts at byte `start`.
+    pub fn set_start(&mut self, owner: u64, start: usize) {
+        let start = u32::try_from(start).expect("a source is smaller than 4 GiB");
+        self.layout.starts.insert(owner, start);
+    }
+
+    /// Record the span of the root `Module` node, which no item owns.
+    pub fn set_module(&mut self, id: NodeId, span: Span) {
+        self.layout.module = Some((id, span));
+    }
+
+    /// Insert the source span of a node relative to its item's start. A node
+    /// no item owns keeps its span as is.
     pub fn insert(&mut self, id: NodeId, span: Span) {
-        self.spans.insert(id, span);
+        let start = self.layout.start(id);
+        debug_assert!(start <= span.start, "a node starts within its item");
+        let relative = Span {
+            start: span.start - start,
+            end: span.end - start,
+            ..span
+        };
+        self.spans
+            .entry(id.owner())
+            .or_default()
+            .0
+            .insert(id, relative);
     }
 
-    /// Create a SpanMap from this builder.
-    pub fn finish(self) -> SpanMap {
-        SpanMap(Arc::new(self.spans))
+    /// Take the relative spans of the nodes `owner` owns.
+    pub fn take(&mut self, owner: u64) -> ItemSpans {
+        self.spans.remove(&owner).unwrap_or_default()
     }
-}
 
-/// NodeId → Span mapping.
-///
-/// Uses `Arc<HashMap>` internally for efficient sharing and cheap cloning.
-/// The SpanMap is immutable once created.
-///
-/// This is embedded in `ParsedAst` (a Salsa tracked struct) which handles
-/// the incremental caching. SpanMap itself is not a Salsa type.
-///
-/// Note: `Hash` is implemented using Arc pointer identity for Salsa compatibility.
-/// Two SpanMaps hash the same only if they point to the same underlying data.
-#[derive(Clone, Debug)]
-pub struct SpanMap(Arc<HashMap<NodeId, Span>>);
-
-impl PartialEq for SpanMap {
-    fn eq(&self, other: &Self) -> bool {
-        // Compare by Arc pointer identity for efficiency
-        Arc::ptr_eq(&self.0, &other.0) || self.0 == other.0
+    /// The relative spans not taken and the layout of the items.
+    pub fn finish(self) -> (ItemSpans, ItemLayout) {
+        (self.spans.values().collect(), self.layout)
     }
 }
 
-impl Eq for SpanMap {}
+/// Each item node's span relative to the start of its item, in one parsed
+/// source.
+///
+/// Moving an item without changing it leaves its nodes' entries equal.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct ItemSpans(HashMap<NodeId, Span>);
 
-impl Hash for SpanMap {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        // Hash by Arc pointer address for Salsa compatibility
-        // This means two SpanMaps with the same content but different Arc instances
-        // will have different hashes, but Salsa will fall back to equality check
-        std::ptr::hash(Arc::as_ptr(&self.0), state);
+impl<'a> FromIterator<&'a ItemSpans> for ItemSpans {
+    /// The spans of several items' nodes in one map.
+    fn from_iter<I: IntoIterator<Item = &'a ItemSpans>>(parts: I) -> Self {
+        Self(
+            parts
+                .into_iter()
+                .flat_map(|part| part.0.iter())
+                .map(|(&id, &span)| (id, span))
+                .collect(),
+        )
     }
 }
 
-impl SpanMap {
-    /// Merge another SpanMap into this one, returning a new SpanMap.
-    ///
-    /// Entries from `other` are included first, then entries from `self`
-    /// override any conflicting keys (in practice NodeIds don't collide
-    /// across separate parse trees).
-    pub fn merge(&self, other: &SpanMap) -> SpanMap {
-        let mut merged = other.0.as_ref().clone();
-        merged.extend(self.0.iter().map(|(&k, &v)| (k, v)));
-        SpanMap(Arc::new(merged))
+/// Where each item of one parsed source starts, and the span of its root
+/// `Module`.
+///
+/// Moving items changes only this part of a source's spans. The root spans
+/// the whole source, so any edit that changes the source's length changes it
+/// too.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct ItemLayout {
+    starts: HashMap<u64, u32>,
+    module: Option<(NodeId, Span)>,
+}
+
+impl ItemLayout {
+    /// The start of the item that owns `id`, or `0` for a node no item owns.
+    fn start(&self, id: NodeId) -> u32 {
+        self.starts.get(&id.owner()).copied().unwrap_or(0)
+    }
+}
+
+/// NodeId → Span mapping of one parsed source, or of the files of a
+/// package's source tree.
+///
+/// The parts belong to the parse that built them (`ParsedAst`, a Salsa
+/// tracked struct); the map borrows them and adds each item node's relative
+/// span to its item's start. They compare by content, so a reparse that
+/// moves no item leaves both unchanged, and one that only moves items leaves
+/// the relative spans unchanged. A tree's map finds a node's file by the
+/// source hash its `NodeId` carries and reads that file's parts only.
+#[derive(Clone, Copy)]
+pub struct SpanMap<'a>(Parts<'a>);
+
+#[derive(Clone, Copy)]
+enum Parts<'a> {
+    File {
+        spans: &'a ItemSpans,
+        layout: &'a ItemLayout,
+    },
+    Tree {
+        db: &'a dyn salsa::Database,
+        tree: &'a SourceTree<'a>,
+    },
+}
+
+impl std::fmt::Debug for SpanMap<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            Parts::File { spans, layout } => f
+                .debug_struct("SpanMap")
+                .field("spans", spans)
+                .field("layout", layout)
+                .finish(),
+            Parts::Tree { tree, .. } => f
+                .debug_struct("SpanMap")
+                .field("files", &tree.files().len())
+                .finish_non_exhaustive(),
+        }
+    }
+}
+
+impl<'a> SpanMap<'a> {
+    /// The map that positions `spans` by `layout`.
+    pub fn new(spans: &'a ItemSpans, layout: &'a ItemLayout) -> Self {
+        Self(Parts::File { spans, layout })
+    }
+
+    /// The map of the files of `tree`.
+    pub fn tree(db: &'a dyn salsa::Database, tree: &'a SourceTree<'a>) -> Self {
+        Self(Parts::Tree { db, tree })
+    }
+
+    /// The map of no nodes, for checking code that has no source.
+    pub fn empty() -> SpanMap<'static> {
+        static SPANS: ItemSpans = ItemSpans(HashMap::with_hasher(FxBuildHasher));
+        static LAYOUT: ItemLayout = ItemLayout {
+            starts: HashMap::with_hasher(FxBuildHasher),
+            module: None,
+        };
+        SpanMap::new(&SPANS, &LAYOUT)
     }
 
     /// Look up a span by NodeId.
@@ -90,13 +177,33 @@ impl SpanMap {
     /// For specialized (monomorphized) nodes, falls back to the origin NodeId
     /// so that spans are inherited from the original generic function.
     pub fn get(&self, id: NodeId) -> Option<Span> {
-        self.0.get(&id).copied().or_else(|| {
-            if id.variant().is_some() {
-                self.0.get(&id.origin()).copied()
-            } else {
-                None
-            }
+        self.get_exact(id).or_else(|| {
+            id.variant()
+                .is_some()
+                .then(|| self.get_exact(id.origin()))
+                .flatten()
         })
+    }
+
+    fn get_exact(&self, id: NodeId) -> Option<Span> {
+        let (spans, layout) = match self.0 {
+            Parts::File { spans, layout } => (spans, layout),
+            Parts::Tree { db, tree } => {
+                let parsed = tree.file(id.source())?.parsed;
+                (parsed.item_spans(db), parsed.item_layout(db))
+            }
+        };
+        if let Some(relative) = spans.0.get(&id) {
+            let start = layout.start(id);
+            return Some(Span {
+                start: relative.start + start,
+                end: relative.end + start,
+                ..*relative
+            });
+        }
+        layout
+            .module
+            .and_then(|(module, span)| (module == id).then_some(span))
     }
 
     /// Look up a span by NodeId, returning a default span if not found.
@@ -105,17 +212,32 @@ impl SpanMap {
     }
 
     /// Check if this NodeId has a recorded span.
-    ///
-    /// This is useful for reverse lookup: given a CST node, check if it
-    /// corresponds to an AST node by checking if its ID is in the SpanMap.
     pub fn contains(&self, id: NodeId) -> bool {
-        self.0.contains_key(&id)
+        self.get_exact(id).is_some()
     }
 }
 
-impl Default for SpanMap {
-    fn default() -> Self {
-        Self(Arc::new(HashMap::default()))
+/// The span maps of several parsed sources, looked up as one, such as a
+/// module's and those of the packages it depends on.
+///
+/// NodeIds carry their source's hash, so a node is in at most one of them.
+#[derive(Clone, Debug, Default)]
+pub struct SpanMaps<'a>(Vec<SpanMap<'a>>);
+
+impl<'a> SpanMaps<'a> {
+    /// Look up spans in `maps`.
+    pub fn new(maps: impl IntoIterator<Item = SpanMap<'a>>) -> Self {
+        Self(maps.into_iter().collect())
+    }
+
+    /// Look up a span by NodeId in each map in turn.
+    pub fn get(&self, id: NodeId) -> Option<Span> {
+        self.0.iter().find_map(|map| map.get(id))
+    }
+
+    /// Look up a span by NodeId, returning a default span if not found.
+    pub fn get_or_default(&self, id: NodeId) -> Span {
+        self.get(id).unwrap_or(Span::new(0, 0))
     }
 }
 
@@ -132,7 +254,8 @@ mod tests {
         builder.insert(id1, Span::new(10, 20));
         builder.insert(id2, Span::new(30, 40));
 
-        let span_map = builder.finish();
+        let (spans, layout) = builder.finish();
+        let span_map = SpanMap::new(&spans, &layout);
 
         assert_eq!(span_map.get(id1), Some(Span::new(10, 20)));
         assert_eq!(span_map.get(id2), Some(Span::new(30, 40)));
@@ -145,7 +268,8 @@ mod tests {
         let id1 = NodeId::from_raw(0);
         builder.insert(id1, Span::new(10, 20));
 
-        let span_map = builder.finish();
+        let (spans, layout) = builder.finish();
+        let span_map = SpanMap::new(&spans, &layout);
 
         assert_eq!(span_map.get_or_default(id1), Span::new(10, 20));
         assert_eq!(
@@ -155,18 +279,21 @@ mod tests {
     }
 
     #[test]
-    fn test_span_map_clone() {
-        let mut builder = SpanMapBuilder::new();
-        builder.insert(NodeId::from_raw(0), Span::new(10, 20));
+    fn test_span_maps_look_up_each_map() {
+        let mut user = SpanMapBuilder::new();
+        user.insert(NodeId::from_raw(0), Span::new(10, 20));
+        let (user_spans, user_layout) = user.finish();
+        let mut dependency = SpanMapBuilder::new();
+        dependency.insert(NodeId::new(1, 0, 0), Span::new(30, 40));
+        let (dependency_spans, dependency_layout) = dependency.finish();
 
-        let span_map1 = builder.finish();
-        let span_map2 = span_map1.clone();
-
-        // Both should refer to the same data (Arc)
-        assert_eq!(
-            span_map1.get(NodeId::from_raw(0)),
-            span_map2.get(NodeId::from_raw(0))
-        );
+        let spans = SpanMaps::new([
+            SpanMap::new(&user_spans, &user_layout),
+            SpanMap::new(&dependency_spans, &dependency_layout),
+        ]);
+        assert_eq!(spans.get(NodeId::from_raw(0)), Some(Span::new(10, 20)));
+        assert_eq!(spans.get(NodeId::new(1, 0, 0)), Some(Span::new(30, 40)));
+        assert_eq!(spans.get_or_default(NodeId::from_raw(9)), Span::new(0, 0));
     }
 
     #[test]
@@ -175,7 +302,8 @@ mod tests {
         let id = NodeId::from_raw(100);
         builder.insert(id, Span::new(0, 50));
 
-        let span_map = builder.finish();
+        let (spans, layout) = builder.finish();
+        let span_map = SpanMap::new(&spans, &layout);
 
         assert!(span_map.contains(id));
         assert!(!span_map.contains(NodeId::from_raw(999)));
@@ -188,7 +316,8 @@ mod tests {
         let span = Span::new(10, 20);
         builder.insert(origin, span);
 
-        let span_map = builder.finish();
+        let (spans, layout) = builder.finish();
+        let span_map = SpanMap::new(&spans, &layout);
 
         // Specialized NodeId should fall back to origin's span
         let variant = std::num::NonZero::new(12345u64).unwrap();
@@ -197,5 +326,30 @@ mod tests {
         assert_ne!(origin, specialized);
         assert_eq!(span_map.get(specialized), Some(span));
         assert_eq!(span_map.get_or_default(specialized), span);
+    }
+
+    #[test]
+    fn test_span_map_positions_nodes_from_their_owner() {
+        let build = |start: usize| {
+            let mut builder = SpanMapBuilder::new();
+            builder.set_start(7, start);
+            builder.insert(NodeId::new(0, 7, 0), Span::new(start, start + 10));
+            builder.insert(NodeId::new(0, 7, 1), Span::new(start + 4, start + 6));
+            builder.insert(NodeId::new(0, 3, 0), Span::new(0, 2));
+            builder.set_module(NodeId::new(0, 3, 1), Span::new(0, start + 10));
+            builder.finish()
+        };
+        let (spans, layout) = build(20);
+        let (moved_spans, moved_layout) = build(35);
+
+        assert_eq!(
+            spans, moved_spans,
+            "moving an owner keeps its relative spans"
+        );
+        assert_ne!(layout, moved_layout);
+        let span_map = SpanMap::new(&moved_spans, &moved_layout);
+        assert_eq!(span_map.get(NodeId::new(0, 7, 1)), Some(Span::new(39, 41)));
+        assert_eq!(span_map.get(NodeId::new(0, 3, 0)), Some(Span::new(0, 2)));
+        assert_eq!(span_map.get(NodeId::new(0, 3, 1)), Some(Span::new(0, 45)));
     }
 }

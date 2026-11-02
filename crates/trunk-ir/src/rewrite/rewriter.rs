@@ -3,6 +3,8 @@
 //! Accumulates mutations from pattern rewrites. Unlike the Salsa version,
 //! no value remapping is needed — RAUW handles that directly on the context.
 
+use std::borrow::Cow;
+
 use crate::context::IrContext;
 use crate::refs::{OpRef, TypeRef, ValueRef};
 use crate::rewrite::type_converter::TypeConverter;
@@ -35,6 +37,7 @@ pub struct PatternRewriter<'a> {
     replacement: Option<OpRef>,
     erase_values: Option<Vec<ValueRef>>,
     module_ops: Vec<OpRef>,
+    no_match: Option<Cow<'static, str>>,
 }
 
 impl<'a> PatternRewriter<'a> {
@@ -47,12 +50,42 @@ impl<'a> PatternRewriter<'a> {
             replacement: None,
             erase_values: None,
             module_ops: Vec::new(),
+            no_match: None,
         }
     }
 
     /// Get a reference to the type converter.
-    pub fn type_converter(&self) -> &TypeConverter {
+    pub fn type_converter(&self) -> &'a TypeConverter {
         self.type_converter
+    }
+
+    /// Reject the current operation for `reason`, returning `None`.
+    ///
+    /// The applicator logs the reason at debug level with the pattern and
+    /// the operation, so a pattern explains why it declined without logging
+    /// itself. Use it for a reason built with `format!` inside the failing
+    /// branch; [`require`](Self::require) and [`ensure`](Self::ensure) take
+    /// a static reason.
+    pub fn no_match<T>(&mut self, reason: impl Into<Cow<'static, str>>) -> Option<T> {
+        self.no_match = Some(reason.into());
+        None
+    }
+
+    /// `value`, or a rejection of the current operation for `reason` if it
+    /// is `None`: `let layout = rewriter.require(lookup(..), "why")?`.
+    pub fn require<T>(&mut self, value: Option<T>, reason: &'static str) -> Option<T> {
+        value.or_else(|| self.no_match(reason))
+    }
+
+    /// Reject the current operation for `reason` unless `cond` holds:
+    /// `rewriter.ensure(index < len, "why")?`.
+    pub fn ensure(&mut self, cond: bool, reason: &'static str) -> Option<()> {
+        self.require(cond.then_some(()), reason)
+    }
+
+    /// The reason the pattern gave for rejecting the operation, if any.
+    pub(crate) fn take_no_match(&mut self) -> Option<Cow<'static, str>> {
+        self.no_match.take()
     }
 
     // === Mutations ===
@@ -273,6 +306,23 @@ mod tests {
     use crate::dialect::func;
     use crate::parser::parse_test_module;
     use crate::printer::print_module;
+
+    #[test]
+    fn require_and_ensure_record_the_rejection_reason() {
+        let converter = TypeConverter::new();
+        let mut rewriter = PatternRewriter::new(&converter);
+        assert_eq!(rewriter.require(Some(1), "unused"), Some(1));
+        assert_eq!(rewriter.ensure(true, "unused"), Some(()));
+        assert_eq!(rewriter.take_no_match(), None);
+
+        assert_eq!(rewriter.require(None::<u32>, "missing layout"), None);
+        assert_eq!(rewriter.take_no_match().as_deref(), Some("missing layout"));
+        assert_eq!(rewriter.ensure(false, "index out of bounds"), None);
+        assert_eq!(
+            rewriter.take_no_match().as_deref(),
+            Some("index out of bounds")
+        );
+    }
 
     #[test]
     fn resultless_replacement_requires_unused_results() {

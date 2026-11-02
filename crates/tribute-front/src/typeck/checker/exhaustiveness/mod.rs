@@ -10,9 +10,9 @@ mod matrix;
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 
+use super::NodeDiagnostic;
 use itertools::Itertools;
-use salsa::Accumulator;
-use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_core::{CompilationPhase, DiagnosticSeverity};
 use trunk_ir::Symbol;
 
 use self::matrix::{Analyzer, Ctor, Family, FamilyId, GiveUp, Pat, VariantInfo, Witness};
@@ -29,11 +29,13 @@ impl<'db> TypeChecker<'db> {
     /// Check that a case expression is exhaustive and warn about arms that
     /// earlier arms already cover.
     ///
-    /// Returns whether the case was proved exhaustive.
+    /// Returns whether the case was proved exhaustive. A diagnostic shows
+    /// the scrutinee's type as `shown_ty`.
     pub(super) fn check_exhaustiveness(
         &self,
         reported: &mut HashSet<NodeId>,
         scrutinee_ty: Type<'db>,
+        shown_ty: Type<'db>,
         arms: &[Arm<TypedRef<'db>>],
         span_node_id: NodeId,
     ) -> bool {
@@ -121,7 +123,8 @@ impl<'db> TypeChecker<'db> {
                 self.report_case(
                     span_node_id,
                     &format!(
-                        "non-exhaustive case expression: missing patterns: {}{more}",
+                        "non-exhaustive case expression on `{}`: missing patterns: {}{more}",
+                        shown_ty.display(self.db(), self.names()),
                         shown.format(", ")
                     ),
                     DiagnosticSeverity::Error,
@@ -135,10 +138,6 @@ impl<'db> TypeChecker<'db> {
     fn nominal_type(&self, ty: Type<'db>) -> Option<TypeDefId<'db>> {
         match ty.kind(self.db()) {
             TypeKind::Named { id, .. } => Some(*id),
-            TypeKind::App { ctor, .. } => match ctor.kind(self.db()) {
-                TypeKind::Named { id, .. } => Some(*id),
-                _ => None,
-            },
             _ => None,
         }
     }
@@ -153,13 +152,7 @@ impl<'db> TypeChecker<'db> {
     }
 
     fn report_case(&self, node: NodeId, message: &str, severity: DiagnosticSeverity) {
-        Diagnostic::new(
-            message,
-            self.get_span(node),
-            severity,
-            CompilationPhase::TypeChecking,
-        )
-        .accumulate(self.db());
+        NodeDiagnostic::new(message, node, severity, CompilationPhase::TypeChecking).report(self);
     }
 }
 
@@ -323,12 +316,12 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
         let db = self.checker.db();
         // Test for an enum first: a variant may share its enum's name.
         if let Some(variants) = self.checker.env.lookup_enum_variants(ty.path(db)) {
-            // Variants are registered in the enum's module, not under the enum.
+            // Variants are registered under the enum.
             let variants = variants
                 .iter()
                 .map(|variant| {
                     let variant = variant.clone();
-                    let constructor = CtorId::new(db, ty.path(db).sibling(variant.clone()));
+                    let constructor = CtorId::new(db, ty.path(db).child(variant.clone()));
                     let (arity, _) = self.constructor_shape(constructor)?;
                     Some(VariantInfo {
                         name: variant,
@@ -336,7 +329,10 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
                     })
                 })
                 .collect::<Option<_>>()?;
-            return Some(Family { variants });
+            return Some(Family {
+                variants,
+                implicit: true,
+            });
         }
         if id.qualified(db) != *name {
             return None;
@@ -347,6 +343,7 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
                 name: id.name(db),
                 arity,
             }],
+            implicit: false,
         })
     }
 

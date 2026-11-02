@@ -1,0 +1,5 @@
+error: mark the group's entity as its anchor with `^`
+ --> tests/ui/asm_format_group_without_anchor.rs:4:38
+  |
+4 |         #[asm_format("probe" ("note" note)?)]
+  |                                      ^^^^

@@ -2,13 +2,14 @@
 //!
 //! These cases exercise fixed-data-type local lambdas, `fn`-declared named
 //! callables, and captures under managed ownership on the source-logical
-//! route. Named-operator callables used directly or through a local alias are
-//! deferred to issue #1007 and are intentionally absent here.
+//! route, and fixed-data-type local helpers whose callbacks have different
+//! ability rows. Named-operator callables used directly or through a local
+//! alias are deferred to issue #1007 and are intentionally absent here.
 use crate::common;
 
 use salsa_test_macros::salsa_test;
-use tribute::pipeline::parse_and_lower_ast;
-use tribute_core::{Diagnostic, diagnostic::DiagnosticSeverity};
+use tribute::pipeline::frontend_diagnostics;
+use tribute_core::diagnostic::DiagnosticSeverity;
 use tribute_front::SourceCst;
 
 fn assert_native(body: &str, expected: &[u8]) {
@@ -22,10 +23,11 @@ fn assert_native(body: &str, expected: &[u8]) {
 fn fixed_local_identity_prints_three() {
     assert_native(
         r#"
+use std::io::{Io, print_line}
 fn apply(f: fn(Int) ->{} Int, x: Int) ->{} Int { f(x) }
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let identity = fn(x: Int) x
-    __tribute_print_int(apply(identity, +3))
+    print_line(apply(identity, +3).to_string)
 }
 "#,
         b"3\n",
@@ -36,13 +38,14 @@ fn main() -> Nil {
 fn captured_alias_prints_nine() {
     assert_native(
         r#"
+use std::io::{Io, print_line}
 fn apply(f: fn(Int) ->{} Int, x: Int) ->{} Int { f(x) }
 fn captured(k: Int) ->{} Int {
     let action = fn(x: Int) k
     let alias = action
     apply(alias, +3)
 }
-fn main() -> Nil { __tribute_print_int(captured(+9)) }
+fn main() ->{Io} Nil { print_line(captured(+9).to_string) }
 "#,
         b"9\n",
     );
@@ -52,16 +55,17 @@ fn main() -> Nil { __tribute_print_int(captured(+9)) }
 fn factory_rhs_is_evaluated_once() {
     assert_native(
         r#"
-fn make() -> fn(Int) ->{} Int {
-    __tribute_print_int(+1)
+use std::io::{Io, print_line}
+fn make() ->{Io} fn(Int) ->{} Int {
+    print_line(+1.to_string)
     fn(x: Int) ->{} Int { x }
 }
 fn apply(f: fn(Int) ->{} Int, x: Int) ->{} Int { f(x) }
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let action = make()
     let alias = action
-    __tribute_print_int(apply(action, +3))
-    __tribute_print_int(apply(alias, +9))
+    print_line(apply(action, +3).to_string)
+    print_line(apply(alias, +9).to_string)
 }
 "#,
         b"1\n3\n9\n",
@@ -84,8 +88,7 @@ fn invalid() ->{State(Int)} Int {
 fn main() -> Nil {}
 "#,
     );
-    let _ = parse_and_lower_ast(db, source);
-    let errors: Vec<_> = parse_and_lower_ast::accumulated::<Diagnostic>(db, source)
+    let errors: Vec<_> = frontend_diagnostics(db, source)
         .into_iter()
         .filter(|diagnostic| diagnostic.inner.severity == DiagnosticSeverity::Error)
         .collect();
@@ -105,12 +108,13 @@ fn main() -> Nil {}
 fn named_direct_pure_and_open_consumers() {
     assert_native(
         r#"
+use std::io::{Io, print_line}
 fn identity(x: Int) ->{} Int { x }
 fn pure(f: fn(Int) ->{} Int, x: Int) ->{} Int { f(x) }
 fn open(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(x) }
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let first = pure(identity, +3)
-    __tribute_print_int(open(identity, first))
+    print_line(open(identity, first).to_string)
 }
 "#,
         b"3\n",
@@ -126,13 +130,14 @@ fn local_pure_and_open_consumers() {
         assert_native(
             &format!(
                 r#"
+use std::io::{{Io, print_line}}
 fn pure(f: fn(Int) ->{{}} Int, x: Int) ->{{}} Int {{ f(x) }}
 fn open(f: fn(Int) ->{{e}} Int, x: Int) ->{{e}} Int {{ f(x) }}
 fn run() ->{{}} Int {{
     let action = fn(x: Int) x
     {calls}
 }}
-fn main() -> Nil {{ __tribute_print_int(run()) }}
+fn main() ->{{Io}} Nil {{ print_line(run().to_string) }}
 "#
             ),
             b"3\n",
@@ -144,12 +149,13 @@ fn main() -> Nil {{ __tribute_print_int(run()) }}
 fn existing_generalized_local_direct_calls() {
     assert_native(
         r#"
-fn main() -> Nil {
+use std::io::{Io, print_line}
+fn main() ->{Io} Nil {
     let identity = fn(x) x
-    __tribute_print_int(identity(+3))
+    print_line(identity(+3).to_string)
     case identity(True) {
-        True -> __tribute_print_int(+4)
-        False -> __tribute_print_int(+0)
+        True -> print_line({{ +4 }}.to_string)
+        False -> print_line({{ +0 }}.to_string)
     }
 }
 "#,
@@ -161,13 +167,14 @@ fn main() -> Nil {
 fn managed_capture_retains_its_field() {
     assert_native(
         r#"
+use std::io::{Io, print_line}
 struct Box { value: Int }
 fn apply(f: fn(Int) ->{} Int, x: Int) ->{} Int { f(x) }
 fn captured(k: Box) ->{} Int {
     let action = fn(x: Int) k.value
     apply(action, +3)
 }
-fn main() -> Nil { __tribute_print_int(captured(Box { value: +9 })) }
+fn main() ->{Io} Nil { print_line(captured(Box { value: +9 }).to_string) }
 "#,
         b"9\n",
     );
@@ -177,6 +184,7 @@ fn main() -> Nil { __tribute_print_int(captured(Box { value: +9 })) }
 fn local_open_then_pure_consumers() {
     assert_native(
         r#"
+use std::io::{Io, print_line}
 fn pure(f: fn(Int) ->{} Int, x: Int) ->{} Int { f(x) }
 fn open(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(x) }
 fn run() ->{} Int {
@@ -184,8 +192,309 @@ fn run() ->{} Int {
     let first = open(action, +3)
     pure(action, first)
 }
-fn main() -> Nil { __tribute_print_int(run()) }
+fn main() ->{Io} Nil { print_line(run().to_string) }
 "#,
         b"3\n",
+    );
+}
+
+const STATE_PRELUDE: &str = r#"use std::io::{Io, print_line}
+
+ability State(s) {
+    op get() -> s
+    op set(value: s) -> Nil
+}
+
+fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
+    handle comp() {
+        do result { result }
+        op State::get() { run_state(fn() { resume init }, init) }
+        op State::set(v) { run_state(fn() { resume Nil }, v) }
+    }
+}
+
+fn main() ->{Io} Nil { print_line(run_state(fn() body(), +10).to_string) }
+"#;
+
+/// Runs `body() ->{State(Int)} Int` under a `State` handler starting at 10.
+fn assert_state_program(body: &str, expected: &str) {
+    let source = format!("{STATE_PRELUDE}\n{body}");
+    common::assert_output_on_both_targets("local_row_polymorphic.trb", &source, expected);
+}
+
+#[test]
+fn local_helper_takes_callbacks_with_different_rows_in_either_order() {
+    for (calls, expected) in [
+        (
+            "let a = twice(fn(x: Int) ->{} Int { x + +1 }, +1)
+    twice(fn(x: Int) { State::set(State::get() + x)
+                       State::get() }, a)",
+            "26",
+        ),
+        (
+            "let a = twice(fn(x: Int) { State::set(State::get() + x)
+                               State::get() }, +3)
+    twice(fn(x: Int) ->{} Int { x + +1 }, a)",
+            "28",
+        ),
+    ] {
+        assert_state_program(
+            &format!(
+                "fn body() ->{{State(Int)}} Int {{
+    let twice = fn(f: fn(Int) ->{{e}} Int, x: Int) ->{{e}} Int {{ f(f(x)) }}
+    {calls}
+}}"
+            ),
+            expected,
+        );
+    }
+}
+
+#[test]
+fn local_helper_with_a_nested_callable_signature() {
+    assert_state_program(
+        r#"fn body() ->{State(Int)} Int {
+    let with_inc = fn(k: fn(fn(Int) ->{e} Int) ->{e} Int) ->{e} Int { k(fn(x: Int) x + +1) }
+    let a = with_inc(fn(g: fn(Int) ->{} Int) ->{} Int { g(+1) })
+    with_inc(fn(g: fn(Int) ->{State(Int)} Int) {
+        State::set(a)
+        g(State::get())
+    })
+}"#,
+        "3",
+    );
+}
+
+#[test]
+fn local_helper_alias_and_capture_keep_their_rows() {
+    assert_state_program(
+        r#"fn body() ->{State(Int)} Int {
+    let k = +100
+    let twice = fn(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(f(x + k)) }
+    let alias = twice
+    let a = alias(fn(x: Int) ->{} Int { x + +1 }, +1)
+    alias(fn(x: Int) { State::set(State::get() + x)
+                       State::get() }, a)
+}"#,
+        "426",
+    );
+}
+
+#[test]
+fn local_helper_passed_to_consumers_with_different_rows() {
+    assert_state_program(
+        r#"fn use_pure(h: fn(fn(Int) ->{} Int, Int) ->{} Int) ->{} Int { h(fn(x: Int) x + +1, +1) }
+fn use_state(h: fn(fn(Int) ->{State(Int)} Int, Int) ->{State(Int)} Int) ->{State(Int)} Int {
+    h(fn(x: Int) { State::set(State::get() + x)
+                   State::get() }, +2)
+}
+fn body() ->{State(Int)} Int {
+    let twice = fn(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(f(x)) }
+    let a = use_pure(twice)
+    a + use_state(twice)
+}"#,
+        "27",
+    );
+}
+
+/// One use of the helper is inside another lambda, whose captures must name
+/// the copy that use selects.
+#[test]
+fn local_helper_used_inside_another_lambda_at_a_second_row() {
+    assert_state_program(
+        r#"fn body() ->{State(Int)} Int {
+    let twice = fn(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(f(x)) }
+    let a = twice(fn(x: Int) ->{} Int { x + +1 }, +1)
+    let go = fn() ->{State(Int)} Int {
+        twice(fn(x: Int) { State::set(State::get() + x)
+                           State::get() }, a)
+    }
+    go()
+}"#,
+        "26",
+    );
+}
+
+#[test]
+fn local_helper_used_by_a_row_polymorphic_local_helper() {
+    assert_state_program(
+        r#"fn body() ->{State(Int)} Int {
+    let twice = fn(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(f(x)) }
+    let quad = fn(f: fn(Int) ->{r} Int, x: Int) ->{r} Int { twice(f, twice(f, x)) }
+    let a = quad(fn(x: Int) ->{} Int { x + +1 }, +1)
+    quad(fn(x: Int) { State::set(State::get() + x)
+                      State::get() }, a)
+}"#,
+        "120",
+    );
+}
+
+#[test]
+fn local_helper_forwards_the_enclosing_open_row() {
+    common::assert_output_on_both_targets(
+        "local_row_forwarding.trb",
+        &format!(
+            "{}\n{}",
+            STATE_PRELUDE.replace(
+                "fn main() ->{Io} Nil { print_line(run_state(fn() body(), +10).to_string) }",
+                ""
+            ),
+            r#"fn open(f: fn(Int) ->{e} Int, x: Int) ->{e} Int {
+    let twice = fn(g: fn(Int) ->{r} Int, y: Int) ->{r} Int { g(g(y)) }
+    let a = twice(fn(y: Int) ->{} Int { y + +1 }, x)
+    twice(f, a)
+}
+fn main() ->{Io} Nil {
+    print_line(open(fn(x: Int) ->{} Int { x * +2 }, +1).to_string)
+    print_line(run_state(fn() open(fn(x: Int) {
+        State::set(x)
+        State::get() + +1
+    }, +1), +0).to_string)
+}"#
+        ),
+        "12\n5",
+    );
+}
+
+/// A pure factory's result is generalized like a lambda but stays one value.
+#[test]
+fn local_helper_from_a_factory_takes_callbacks_with_different_rows() {
+    assert_state_program(
+        r#"fn make() ->{} fn(fn(Int) ->{e} Int, Int) ->{e} Int {
+    fn(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(f(x)) }
+}
+fn body() ->{State(Int)} Int {
+    let twice = make()
+    let a = twice(fn(x: Int) ->{} Int { x + +1 }, +1)
+    twice(fn(x: Int) { State::set(State::get() + x)
+                       State::get() }, a)
+}"#,
+        "26",
+    );
+}
+
+/// A lambda that never returns gets the adapters of every closure that
+/// implements `Direct`; their transfers keep its `Never` result.
+#[test]
+fn never_returning_lambda_compiles_with_its_adapters() {
+    common::assert_output_on_both_targets(
+        "never_returning_lambda.trb",
+        r#"
+use std::io::{Io, print_line}
+fn make() ->{} fn(Never) ->{} Never { fn(n: Never) { n } }
+fn main() ->{Io} Nil {
+    let f = make()
+    print_line(+1.to_string)
+}
+"#,
+        "1",
+    );
+}
+
+/// A helper's shape inside an instance whose class variable is `Cps`, with
+/// uses that pass a closed row and that variable for its binder `r`: its
+/// body reads `r` as their upper bound.
+fn assert_helper_at_two_classes(helper: &str, uses: &str, expected: &str) {
+    let body = format!(
+        "fn call(f: fn() ->{{e}} Int) ->{{e}} Int {{ f() }}
+fn both(k1: fn() ->{{}} Int, k2: fn() ->{{e}} Int) ->{{e, State(Int)}} Int {{
+    {helper}
+    {uses}
+}}
+fn body() ->{{State(Int)}} Int {{
+    let pure = both(fn() ->{{}} Int {{ +2 }}, fn() ->{{}} Int {{ +3 }})
+    pure + both(fn() ->{{}} Int {{ +2 }}, fn() {{ State::set(State::get() + +1)
+                                             State::get() }})
+}}"
+    );
+    common::assert_output_on_both_targets_with_native_asan(
+        "local_upper_bound.trb",
+        &format!("{STATE_PRELUDE}\n{body}"),
+        expected,
+    );
+}
+
+/// The closure the helper makes has a body for each class up to the bound,
+/// and each use calls it through its own class.
+#[test]
+fn local_wrapper_makes_closures_called_at_the_class_of_their_callback() {
+    assert_helper_at_two_classes(
+        "let wrap = fn(k: fn() ->{r} Int) { fn() { k() } }",
+        "let a = wrap(k1)
+    let b = wrap(k2)
+    a() + b()",
+        "18",
+    );
+}
+
+/// A helper that performs an ability of its own and calls its callback
+/// before it makes a closure over it.
+#[test]
+fn local_wrapper_with_its_own_ability_makes_closures_over_its_callback() {
+    assert_helper_at_two_classes(
+        "let wrap = fn(k: fn() ->{r} Int) {
+        State::set(State::get() + +1)
+        let first = k()
+        fn() { first + k() }
+    }",
+        "let a = wrap(k1)
+    let b = wrap(k2)
+    a() + b()",
+        "45",
+    );
+}
+
+/// A binder that only the helper's parameter and result name: the stored
+/// callback is called at the class of each use.
+#[test]
+fn local_store_returns_its_callback_at_the_class_of_each_use() {
+    assert_helper_at_two_classes(
+        "let store = fn(k: fn() ->{r} Int) { k }",
+        "let a = store(k1)
+    let b = store(k2)
+    a() + b()",
+        "18",
+    );
+}
+
+/// The closure calls a named function of its callback's row, whose instance
+/// each body selects by its own class.
+#[test]
+fn local_wrapper_makes_closures_over_a_named_function() {
+    assert_helper_at_two_classes(
+        "let wrap = fn(k: fn() ->{r} Int) { fn() { call(k) } }",
+        "let a = wrap(k1)
+    let b = wrap(k2)
+    a() + b()",
+        "18",
+    );
+}
+
+/// A helper returns a named function as a value. The frontend passes the
+/// reference a classless row of its own, so its table enters `Cps`; the
+/// class pass tests cover a table of an upper bound.
+#[test]
+fn local_helper_returns_a_named_function_at_two_classes() {
+    assert_helper_at_two_classes(
+        "let reference = fn(k: fn() ->{r} Int) { call }",
+        "let a = reference(k1)
+    let b = reference(k2)
+    a(k1) + b(k2)",
+        "18",
+    );
+}
+
+/// A helper that returns a named function as a value.
+#[test]
+fn local_helper_returns_a_named_function_value() {
+    assert_state_program(
+        r#"fn call(f: fn() ->{e} Int) ->{e} Int { f() }
+fn body() ->{State(Int)} Int {
+    let reference = fn(k: fn() ->{e} Int) { call }
+    let named = reference(fn() ->{} Int { +0 })
+    named(fn() { State::set(State::get() + +1)
+                 State::get() })
+}"#,
+        "11",
     );
 }

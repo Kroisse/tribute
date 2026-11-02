@@ -8,6 +8,7 @@ use proc_macro::TokenStream as ProcTokenStream;
 
 mod codegen;
 mod flag;
+mod format;
 mod interface;
 mod parse;
 
@@ -45,7 +46,8 @@ mod parse;
 /// - `OpDef` registration: the declarative `OpSchema`, plus a call to the
 ///   wrapper's `trunk_ir::ops::Verify` impl for `#[verify]` operations and
 ///   the wrapper's `trunk_ir::asm_format::OpAsmFormat` print/parse hooks for
-///   `#[asm_format]` operations
+///   `#[asm_format]` operations, or the checked format elements of
+///   `#[asm_format(..)]`
 /// - For `#[implements(A, path::B)]`, a registration of the wrapper's impl of
 ///   each listed operation interface; a missing impl is reported at its entry
 /// - For `#[flags(Pure, ..)]`, the listed operation flags in the `OpDef`

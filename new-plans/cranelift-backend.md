@@ -320,29 +320,28 @@ type, exact callable contract와 CFG liveness만 사용한다. RTTI deep-release
 entry/call/store/load/final-use/tail action은 이 plan에 함께 들어간다. 이후
 `core.ptr`는 이미 선택된 explicit RC operation의 physical operand일 뿐이다.
 
-Plan의 RTTI 배치는 plan을 만든 직후 descriptor(struct layout, enum layout의
-variant 하나, 또는 `adt.array` 타입)마다 하나의
-`tribute_rtti.layout` 선언으로 모듈에 기록한다. 선언이 담는 내용은
-[runtime-types.md](runtime-types.md#ir에서의-표현)를 따른다. index는 plan의
-할당 순서대로 사용자 RTTI index 공간에서 정한다.
-[Closure 저장 layout](ir.md#closure-저장-layout)의 base와 각 capture layout은
-서로 다른 할당 descriptor이므로 layout마다 RTTI 선언과 release 함수를 가진다. Closure
-layout을 native 표현으로 바꾸는 일은 Tribute target 단계가 소유하며, 할당 op과 그
-layout의 RTTI 선언을 함께 바꾼다. Native closure 객체는 RC header 뒤 payload offset
-0에 code pointer를 두고 그 뒤에 capture를 자연 정렬로 둔다. Code pointer는 해제하지
-않는 unmanaged 필드이고, capture의 해제 여부는 plan의 managed 판정을 따른다. Base와
-capture layout이 code 필드를 같은 offset에 두므로 base에서 capture layout으로의
-cast는 pointer를 바꾸지 않는다. RTTI 생성은 선언이 모든 할당 descriptor를 정확히
-한 번씩 이름 붙이는지 검사한 뒤, descriptor별 release 함수, index마다 release 함수
-주소와 descriptor 내용을 담는 RTTI table(`clif.data`와 재배치), table을 통해 해제를 디스패치하는
-`__tribute_deep_release`를 IR에 선언한다. `struct_to_mem`은 struct와 variant field
-접근의 nominal layout을 [`mem.struct`](ir.md#nominal-수준과-structural-수준)로 바꾸며, 선언의
-필드 종류에서 해제되는 필드를 읽는다. 같은 단계가 variant 판별을 값의 descriptor
-번호(`tribute_rtti.descriptor`)와 선언된 번호의 정수 비교로 바꾼다. Descriptor 번호를
-읽는 연산은 managed 참조만 받으며, native 타입 변환이 그 참조를 pointer로 바꾸기
-전에 RC header의 index를 읽는 `clif.load`가 된다. 비교는 일반 정수 비교로
-내려간다. RC header lowering은 선언된 index를
-header에 기록하고 선언을 지운다. Backend는 RTTI 이름 규칙을 알지 않는다.
+Plan의 RTTI 배치는 plan을 만든 직후 descriptor(struct layout, enum layout의 variant 하나, 또는
+`adt.array` 타입)마다 하나의 `tribute_rtti.layout` 선언으로 모듈에 기록한다. 선언이 담는 내용은
+[runtime-types.md](runtime-types.md#ir에서의-표현)를 따른다. index는 plan의 할당 순서대로 사용자
+RTTI index 공간에서 정한다. [Closure 저장 layout](ir.md#closure-저장-layout)의 base와 각
+capture layout은 서로 다른 할당 descriptor이므로 layout마다 RTTI 선언과 release 함수를 가진다.
+Closure layout을 native 표현으로 바꾸는 일은 Tribute target 단계가 소유하며, 할당 op과 그 layout의
+RTTI 선언을 함께 바꾼다. Native closure 객체는 RC header 뒤 payload offset 0에 [convention
+table](ir.md#convention-entry)의 주소를 두고 그 뒤에 capture를 자연 정렬로 둔다. Convention
+table은 entry 함수 목록마다 하나인 읽기 전용 `clif.data`이며, `Direct`, `EvidenceDirect`, `Cps`
+순서의 pointer 크기 칸 셋에 entry 함수의 주소를 `clif.func_reloc`로 적는다. 본문도 adapter도 없는 칸은 그
+convention entry의 signature를 가진 trap 함수의 주소다. Table 주소는 해제하지 않는 unmanaged 필드이고,
+capture의 해제 여부는 plan의 managed 판정을 따른다. 간접 호출은 table 주소를 읽고 convention의 entry를 읽어
+그 주소를 호출한다. Base와 capture layout이 table 필드를 같은 offset에 두므로 base에서 capture
+layout으로의 cast는 pointer를 바꾸지 않는다. RTTI 생성은 선언이 모든 할당 descriptor를 정확히 한 번씩 이름
+붙이는지 검사한 뒤, descriptor별 release 함수, index마다 release 함수 주소와 descriptor 내용을 담는
+RTTI table(`clif.data`와 재배치), table을 통해 해제를 디스패치하는 `__tribute_deep_release`를 IR에
+선언한다. `struct_to_mem`은 struct와 variant field 접근의 nominal layout을
+[`mem.struct`](ir.md#nominal-수준과-structural-수준)로 바꾸며, 선언의 필드 종류에서 해제되는 필드를 읽는다.
+같은 단계가 variant 판별을 값의 descriptor 번호(`tribute_rtti.descriptor`)와 선언된 번호의 정수 비교로
+바꾼다. Descriptor 번호를 읽는 연산은 managed 참조만 받으며, native 타입 변환이 그 참조를 pointer로 바꾸기 전에
+RC header의 index를 읽는 `clif.load`가 된다. 비교는 일반 정수 비교로 내려간다. RC header lowering은
+선언된 index를 header에 기록하고 선언을 지운다. Backend는 RTTI 이름 규칙을 알지 않는다.
 
 Native RC materialization은 같은 type-erasure 전 경계에서 검증된 plan을 즉시
 소비한다. IR을 바꾸기 전에 전체 insertion schedule을 검증하며,

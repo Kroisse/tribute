@@ -813,12 +813,24 @@ mod tests {
         module: Module<UnresolvedName>,
     }
 
+    /// Resolve `module` against the package `std` of the compiler-owned
+    /// names alone.
+    fn resolve_with_builtins<'db>(
+        db: &'db dyn salsa::Database,
+        module: &Module<UnresolvedName>,
+        span_map: SpanMap<'db>,
+    ) -> crate::ast::DeclTable<crate::ast::ResolvedRef<'db>> {
+        let dependencies = crate::analysis::dependencies(db, *crate::analysis::builtins(db));
+        let scope = resolve::build_env(db, module, dependencies);
+        resolve::resolve_with_env(db, module, &scope, span_map)
+    }
+
     /// Tracked wrapper: name resolution only, so its diagnostics can be
     /// collected through the accumulator.
     #[salsa::tracked]
     fn run_resolve(db: &dyn salsa::Database, input: PropTestInput) {
         let module = input.module(db);
-        let _resolved = resolve::resolve_module(db, module, SpanMap::default());
+        let _resolved = resolve_with_builtins(db, module, SpanMap::empty());
     }
 
     /// Tracked wrapper: resolve → typecheck pipeline.
@@ -830,10 +842,19 @@ mod tests {
     #[salsa::tracked]
     fn run_resolve_and_typecheck(db: &dyn salsa::Database, input: PropTestInput) -> String {
         let module = input.module(db);
-        let span_map = SpanMap::default();
-        let resolved = resolve::resolve_module(db, module, span_map.clone());
-        let output = typeck::typecheck_module(db, &resolved, span_map);
-        format!("{:#?}\n{:#?}", output.module(db), output.function_types(db))
+        let span_map = SpanMap::empty();
+        let resolved = resolve_with_builtins(db, module, span_map);
+        let output = typeck::typecheck_module(
+            db,
+            &resolved,
+            span_map,
+            resolve::NameDisplay::new(&resolve::PackageName::executable_root(), []),
+        );
+        format!(
+            "{:#?}\n{:#?}",
+            output.module(db),
+            output.declarations(db).function_types
+        )
     }
 
     /// Run the typecheck pipeline in a fresh database, returning the

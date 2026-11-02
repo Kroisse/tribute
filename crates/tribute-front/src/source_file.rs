@@ -1,9 +1,15 @@
-use std::path::Path;
+use std::ops::Range;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use fluent_uri::Uri;
 use ropey::Rope;
-use tree_sitter::{Parser, Tree};
+use rustc_hash::FxHashMap as HashMap;
+use salsa::Setter;
+use tree_sitter::{InputEdit, Parser, Point, Tree};
 use trunk_ir::Symbol;
+
+use crate::ast::source_hash;
 
 #[salsa::input(debug)]
 pub struct SourceCst {
@@ -30,31 +36,272 @@ impl SourceCst {
     /// Convenience for tests that need a fully parsed source.
     pub fn from_source_str(db: &dyn salsa::Database, path: &str, text: &str) -> Self {
         let rope = Rope::from_str(text);
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_tribute::LANGUAGE.into())
-            .expect("Failed to set tree-sitter language");
-        let tree = parser.parse(text, None).expect("Failed to parse source");
+        let tree = new_parser()
+            .parse(text, None)
+            .expect("Failed to parse source");
         Self::from_path(db, path, rope, Some(tree))
     }
 }
 
-/// Convert a filesystem path to a file:// URI.
+/// The files a compilation finds by URI, through the database's one
+/// [`FileProvider`] (`new-plans/implementation.md` § 패키지 source 트리와
+/// 파일 입력). Queries take `&dyn salsa::Database`, so the provider is
+/// reached through this singleton input rather than a database trait.
+#[salsa::input(singleton, debug)]
+pub struct SourceFiles {
+    pub provider: Arc<FileProvider>,
+}
+
+/// The file at one URI: its source, or `None` while there is no file.
+///
+/// A query that reads `source` depends on whether the file exists, so
+/// creating a file it looked for invalidates it.
+#[salsa::input(debug)]
+pub struct FileEntry {
+    #[returns(ref)]
+    pub uri: Uri<String>,
+    #[returns(copy)]
+    pub source: Option<SourceCst>,
+}
+
+/// Makes one [`FileEntry`] per URI on its first request, from what its
+/// reader finds there.
+///
+/// Entries are never removed: a file that disappears keeps its entry with
+/// no source, so the queries that read it stay its dependents.
+pub struct FileProvider {
+    /// Keyed by URI. The URIs are those of package roots, the files their
+    /// `mod` declarations name, and the manifests of packages and the
+    /// dependencies they name, not arbitrary client input. A manifest's
+    /// entry is read only for its text; its tree is never used.
+    entries: Mutex<HashMap<String, FileEntry>>,
+    read: Box<ReadFile>,
+}
+
+/// Reads the text of the file at a URI, if there is one.
+type ReadFile = dyn Fn(&Uri<String>) -> Option<Rope> + Send + Sync;
+
+impl FileProvider {
+    /// A provider that reads a file with `read` when it is first requested.
+    pub fn new(read: impl Fn(&Uri<String>) -> Option<Rope> + Send + Sync + 'static) -> Self {
+        Self {
+            entries: Mutex::default(),
+            read: Box::new(read),
+        }
+    }
+
+    /// A provider that finds only the files given to [`FileProvider::set`].
+    pub fn in_memory() -> Self {
+        Self::new(|_| None)
+    }
+
+    /// The entry of `uri`, created with what the reader finds there if
+    /// this is its first request.
+    pub fn entry(&self, db: &dyn salsa::Database, uri: &Uri<String>) -> FileEntry {
+        let mut entries = self.entries.lock().expect("file entries lock");
+        *entries.entry(uri.as_str().to_owned()).or_insert_with(|| {
+            let source = (self.read)(uri).map(|text| new_source(db, uri.clone(), text));
+            FileEntry::new(db, uri.clone(), source)
+        })
+    }
+
+    /// The entry of `uri` if it was requested or set before.
+    pub fn existing(&self, uri: &Uri<String>) -> Option<FileEntry> {
+        let entries = self.entries.lock().expect("file entries lock");
+        entries.get(uri.as_str()).copied()
+    }
+
+    /// The source of the requested or set file whose URI has the source id
+    /// `source`, the id its spans carry.
+    pub fn find(&self, db: &dyn salsa::Database, source: u64) -> Option<SourceCst> {
+        let entries = self.entries.lock().expect("file entries lock");
+        entries
+            .iter()
+            .find(|(uri, _)| source_hash(uri) == source)
+            .and_then(|(_, entry)| entry.source(db))
+    }
+
+    /// Make `text` the file at `uri`, or remove the file if `text` is
+    /// `None`. A file that exists keeps its source input, with the new text
+    /// and a fresh parse.
+    pub fn set(
+        &self,
+        db: &mut dyn salsa::Database,
+        uri: &Uri<String>,
+        text: Option<Rope>,
+    ) -> Option<SourceCst> {
+        let Some(entry) = self.existing(uri) else {
+            let source = text.map(|text| new_source(db, uri.clone(), text));
+            let entry = FileEntry::new(db, uri.clone(), source);
+            let mut entries = self.entries.lock().expect("file entries lock");
+            entries.insert(uri.as_str().to_owned(), entry);
+            return source;
+        };
+        match (entry.source(db), text) {
+            (Some(source), Some(text)) => {
+                let tree = parse_rope(&text, None);
+                source.set_text(db).to(text);
+                source.set_tree(db).to(tree);
+                Some(source)
+            }
+            (None, Some(text)) => {
+                let source = new_source(db, uri.clone(), text);
+                entry.set_source(db).to(Some(source));
+                Some(source)
+            }
+            (_, None) => {
+                entry.set_source(db).to(None);
+                None
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for FileProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let entries = self.entries.lock().map_or(0, |entries| entries.len());
+        f.debug_struct("FileProvider")
+            .field("entries", &entries)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The source of the file at `uri`, or `None` if there is none or the
+/// database has no [`SourceFiles`]. Inside a query, records a dependency on
+/// whether the file exists.
+pub fn source_at(db: &dyn salsa::Database, uri: &Uri<String>) -> Option<SourceCst> {
+    file_at(db, uri)?.source(db)
+}
+
+/// The entry of the file at `uri`, or `None` if the database has no
+/// [`SourceFiles`].
+pub fn file_at(db: &dyn salsa::Database, uri: &Uri<String>) -> Option<FileEntry> {
+    let files = SourceFiles::try_get(db)?;
+    Some(files.provider(db).entry(db, uri))
+}
+
+fn new_source(db: &dyn salsa::Database, uri: Uri<String>, text: Rope) -> SourceCst {
+    let tree = parse_rope(&text, None);
+    SourceCst::new(db, uri, text, tree)
+}
+
+/// Convert a filesystem path to a file:// URI, percent-encoding each byte
+/// that a URI path does not allow as is, `%` among them.
 pub fn path_to_uri(path: &Path) -> Uri<String> {
     let path_str = path.to_string_lossy();
-    let uri_string = if path_str.starts_with('/') {
-        format!("file://{}", path_str)
-    } else {
+    let mut uri_string = String::from("file://");
+    if !path_str.starts_with('/') {
         // Relative path - just use as-is for testing
-        format!("file:///{}", path_str)
-    };
+        uri_string.push('/');
+    }
+    push_uri_path(&mut uri_string, &path_str);
     Uri::parse_from(uri_string).expect("valid file URI")
+}
+
+/// Append `text` to a URI path, percent-encoding each byte that a URI path
+/// does not allow as is, `%` among them.
+pub(crate) fn push_uri_path(uri: &mut String, text: &str) {
+    use std::fmt::Write;
+    for &byte in text.as_bytes() {
+        if byte.is_ascii_alphanumeric() || b"/-._~!$&'()*+,;=:@".contains(&byte) {
+            uri.push(char::from(byte));
+        } else {
+            let _ = write!(uri, "%{byte:02X}");
+        }
+    }
+}
+
+/// The filesystem path a `file:` URI names, with its percent-encoding
+/// decoded; the inverse of [`path_to_uri`].
+pub fn uri_to_path(uri: &Uri<String>) -> Option<PathBuf> {
+    if uri.scheme()?.as_str() != "file" {
+        return None;
+    }
+    let path = uri.path().as_estr().decode().into_string().ok()?;
+    Some(PathBuf::from(path.into_owned()))
 }
 
 /// Parse a text rope with a given parser.
 pub fn parse_with_rope(parser: &mut Parser, rope: &Rope, old_tree: Option<&Tree>) -> Option<Tree> {
     let mut callback = |byte: usize, _| chunk_from_byte(rope, byte);
     parser.parse_with_options(&mut callback, old_tree, None)
+}
+
+/// A parser for Tribute source.
+pub fn new_parser() -> Parser {
+    let mut parser = Parser::new();
+    parser
+        .set_language(&tree_sitter_tribute::LANGUAGE.into())
+        .expect("Failed to set tree-sitter language");
+    parser
+}
+
+/// Parse a text rope with a new parser.
+pub fn parse_rope(rope: &Rope, old_tree: Option<&Tree>) -> Option<Tree> {
+    parse_with_rope(&mut new_parser(), rope, old_tree)
+}
+
+/// Replace the bytes `range` of `source`'s text with `text`, and reparse it
+/// incrementally from its edited tree.
+///
+/// `range` must lie within the text on character boundaries.
+pub fn apply_edit(
+    db: &mut dyn salsa::Database,
+    parser: &mut Parser,
+    source: SourceCst,
+    range: Range<usize>,
+    text: &str,
+) {
+    let mut rope = source.text(db).clone();
+    let start_byte = range.start;
+    let old_end_byte = range.end;
+    let start_position = byte_point(&rope, start_byte);
+    let old_end_position = byte_point(&rope, old_end_byte);
+    let new_end_position = point_after_text(start_position, text);
+    let new_end_byte = start_byte + text.len();
+
+    let start_char = rope.byte_to_char(start_byte);
+    let old_end_char = rope.byte_to_char(old_end_byte);
+    rope.remove(start_char..old_end_char);
+    rope.insert(start_char, text);
+
+    let tree = match source.tree(db).cloned() {
+        Some(mut tree) => {
+            tree.edit(&InputEdit {
+                start_byte,
+                old_end_byte,
+                new_end_byte,
+                start_position,
+                old_end_position,
+                new_end_position,
+            });
+            parse_with_rope(parser, &rope, Some(&tree))
+        }
+        None => parse_with_rope(parser, &rope, None),
+    };
+    source.set_text(db).to(rope);
+    source.set_tree(db).to(tree);
+}
+
+fn point_after_text(start: Point, text: &str) -> Point {
+    let mut row = start.row;
+    let mut column = start.column;
+    let mut lines = text.split('\n');
+    if let Some(first) = lines.next() {
+        column += first.len();
+    }
+    for line in lines {
+        row += 1;
+        column = line.len();
+    }
+    Point { row, column }
+}
+
+fn byte_point(rope: &Rope, offset: usize) -> Point {
+    let offset = offset.min(rope.len_bytes());
+    let row = rope.byte_to_line(offset);
+    let column = offset - rope.line_to_byte(row);
+    Point { row, column }
 }
 
 fn chunk_from_byte(rope: &Rope, byte: usize) -> &[u8] {
@@ -86,6 +333,20 @@ pub fn derive_module_name_from_path(uri_str: &str) -> Symbol {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_provider_debug_shows_its_entry_count() {
+        let provider = FileProvider::in_memory();
+        assert_eq!(format!("{provider:?}"), "FileProvider { entries: 0, .. }");
+    }
+
+    #[test]
+    fn path_to_uri_percent_encodes_and_uri_to_path_decodes() {
+        let path = Path::new("/my pkg/100%/main.trb");
+        let uri = path_to_uri(path);
+        assert_eq!(uri.as_str(), "file:///my%20pkg/100%25/main.trb");
+        assert_eq!(uri_to_path(&uri).as_deref(), Some(path));
+    }
 
     #[test]
     fn path_to_uri_prefixes_file_scheme() {
@@ -130,5 +391,35 @@ mod tests {
             let chunk = chunk_from_byte(&rope, byte);
             assert_eq!(chunk, expected, "{text:?} at byte {byte}");
         }
+    }
+
+    #[test]
+    fn point_after_text_advances_by_rows_and_bytes() {
+        for (row, column, text, expected) in [
+            (0, 0, "hello", (0, 5)),
+            (0, 0, "hello\nworld", (1, 5)),
+            (5, 10, "abc", (5, 13)),
+            (0, 0, "a\nb\nc", (2, 1)),
+        ] {
+            let point = point_after_text(Point { row, column }, text);
+            assert_eq!((point.row, point.column), expected, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn byte_point_counts_bytes_from_the_line_start() {
+        let rope = Rope::from_str("hello\nworld");
+        for (offset, expected) in [(0, (0, 0)), (6, (1, 0)), (8, (1, 2)), (100, (1, 5))] {
+            let point = byte_point(&rope, offset);
+            assert_eq!((point.row, point.column), expected, "at byte {offset}");
+        }
+    }
+
+    #[test]
+    fn parse_rope_parses_and_reparses_with_an_old_tree() {
+        let tree = parse_rope(&Rope::from_str("fn foo() { 1 }"), None).expect("a tree");
+        assert_eq!(tree.root_node().kind(), "source_file");
+        let tree = parse_rope(&Rope::from_str("fn foo() { 2 }"), Some(&tree));
+        assert!(tree.is_some(), "reparses with the old tree");
     }
 }

@@ -32,9 +32,9 @@
 //! manager take it as a parameter:
 //!
 //! ```ignore
-//! fn run_cleanup_passes(ctx: &mut IrContext, m: Module, analyses: &mut AnalysisCache) {
-//!     eliminate_dead_functions(ctx, m, analyses);
-//!     function_pm.run(ctx, m.into(), analyses)?;
+//! fn check_boundary(ctx: &IrContext, m: Module, analyses: &mut AnalysisCache) {
+//!     let symbols = analyses.require::<SymbolTable>(ctx, m.op());
+//!     // check the module against `symbols`…
 //! }
 //! ```
 //!
@@ -295,8 +295,8 @@ impl AnalysisCache {
     ///
     /// ```ignore
     /// AnalysisCache::scope(ctx, |ctx, analyses| {
-    ///     inline_functions(ctx, m, InlineConfig::default(), analyses);
-    ///     // more passes sharing `analyses`…
+    ///     pm.run(ctx, m, analyses)?;
+    ///     // more consumers sharing `analyses`…
     /// });
     /// ```
     pub fn scope<R>(

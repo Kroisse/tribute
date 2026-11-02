@@ -3,7 +3,7 @@
 //! Maps names to definitions and references, enabling navigation and
 //! refactoring LSP features.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use trunk_ir::{Span, Symbol};
 
@@ -17,6 +17,7 @@ use tribute_front::ast::{
     LocalId, NodeId, ParamDecl, Pattern, PatternKind, ResolvedRef, SpanMap, StructDecl, TypedRef,
 };
 use tribute_front::query as ast_query;
+use tribute_front::source_tree::source_tree_of;
 
 // =============================================================================
 // Definition Index
@@ -69,6 +70,8 @@ pub struct AstDefinitionEntry {
     pub kind: DefinitionKind,
     /// The LocalId for local bindings (enables shadowed variable disambiguation).
     pub local_id: Option<LocalId>,
+    /// The module-level function whose body numbers `local_id`.
+    pub owner: Option<NodeId>,
 }
 
 /// Entry representing a reference to a definition.
@@ -89,7 +92,13 @@ pub struct AstReferenceEntry {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ResolvedTarget {
     /// Reference to a local variable.
-    Local { id: LocalId, name: Symbol },
+    ///
+    /// `LocalId`s are unique only within the module-level function `owner`.
+    Local {
+        owner: Option<NodeId>,
+        id: LocalId,
+        name: Symbol,
+    },
     /// Reference to a function.
     Function { name: Symbol },
     /// Reference to a constructor.
@@ -124,21 +133,6 @@ impl ResolvedTarget {
             ResolvedTarget::Other { name } => name.clone(),
         }
     }
-
-    /// Get the LocalId if this is a local reference.
-    pub fn local_id(&self) -> Option<LocalId> {
-        match self {
-            ResolvedTarget::Local { id, .. } => Some(*id),
-            ResolvedTarget::Field { .. }
-            | ResolvedTarget::Function { .. }
-            | ResolvedTarget::Constructor { .. }
-            | ResolvedTarget::Type { .. }
-            | ResolvedTarget::Ability { .. }
-            | ResolvedTarget::AbilityOp { .. }
-            | ResolvedTarget::Unresolved { .. }
-            | ResolvedTarget::Other { .. } => None,
-        }
-    }
 }
 
 /// Index for go-to-definition and find-references.
@@ -152,6 +146,9 @@ pub struct AstDefinitionIndex<'db> {
     pub references: Vec<AstReferenceEntry>,
     /// Map from name to definition indices.
     by_name: BTreeMap<Symbol, Vec<usize>>,
+    /// Names that a package-level definition or reference in another file
+    /// of the package (a file module's) also uses.
+    foreign_names: BTreeSet<Symbol>,
 }
 
 impl<'db> AstDefinitionIndex<'db> {
@@ -159,13 +156,25 @@ impl<'db> AstDefinitionIndex<'db> {
     pub fn build(
         db: &'db dyn salsa::Database,
         module: &DeclTable<TypedRef<'db>>,
-        span_map: &SpanMap,
+        span_map: SpanMap<'_>,
+        foreign_identifiers: BTreeSet<Symbol>,
     ) -> Self {
         let mut collector = DefinitionCollector::new(db, span_map);
         walk_decl_table(&mut collector, module);
 
         let mut definitions = collector.definitions;
         let mut references = collector.references;
+        let mut foreign_names = collector.foreign_names;
+        foreign_names.extend(foreign_identifiers);
+        // A constructor names its variant, not its enum, but a qualified
+        // path to it spells the enum too.
+        for def in &definitions {
+            if let DefinitionKind::EnumVariant { owner } = &def.kind
+                && collector.foreign_variants.contains(&def.name)
+            {
+                foreign_names.insert(owner.clone());
+            }
+        }
 
         // Sort by span
         definitions.sort_by_key(|e| (e.span.start, e.span.end));
@@ -177,7 +186,7 @@ impl<'db> AstDefinitionIndex<'db> {
             by_name.entry(def.name.clone()).or_default().push(i);
         }
 
-        Self::new(db, definitions, references, by_name)
+        Self::new(db, definitions, references, by_name, foreign_names)
     }
 
     /// Find the definition at a given offset (when cursor is on a definition).
@@ -188,7 +197,7 @@ impl<'db> AstDefinitionIndex<'db> {
     ) -> Option<&AstDefinitionEntry> {
         self.definitions(db)
             .iter()
-            .filter(|e| e.span.start <= offset && offset < e.span.end)
+            .filter(|e| e.span.range().contains(&offset))
             .min_by_key(|e| e.span.end - e.span.start)
     }
 
@@ -200,7 +209,7 @@ impl<'db> AstDefinitionIndex<'db> {
     ) -> Option<&AstReferenceEntry> {
         self.references(db)
             .iter()
-            .filter(|e| e.span.start <= offset && offset < e.span.end)
+            .filter(|e| e.span.range().contains(&offset))
             .min_by_key(|e| e.span.end - e.span.start)
     }
 
@@ -241,11 +250,11 @@ impl<'db> AstDefinitionIndex<'db> {
         target: &ResolvedTarget,
     ) -> Option<&AstDefinitionEntry> {
         match target {
-            ResolvedTarget::Local { id, name } => {
-                // For locals, match by LocalId for precise scoping
+            ResolvedTarget::Local { owner, id, name } => {
+                // For locals, match by owner and LocalId for precise scoping
                 self.definitions(db)
                     .iter()
-                    .find(|d| d.name == *name && d.local_id == Some(*id))
+                    .find(|d| d.name == *name && d.owner == *owner && d.local_id == Some(*id))
             }
             ResolvedTarget::Constructor { type_name, variant } => {
                 // Match by variant name AND owner type for precise disambiguation
@@ -309,11 +318,11 @@ impl<'db> AstDefinitionIndex<'db> {
         target: &ResolvedTarget,
     ) -> Vec<&AstReferenceEntry> {
         match target {
-            ResolvedTarget::Local { id, name } => {
-                // For locals, match by LocalId for precise scoping
+            ResolvedTarget::Local { .. } => {
+                // For locals, match by owner and LocalId for precise scoping
                 self.references(db)
                     .iter()
-                    .filter(|r| r.target.name() == *name && r.target.local_id() == Some(*id))
+                    .filter(|r| r.target == *target)
                     .collect()
             }
             ResolvedTarget::Constructor { type_name, variant } => {
@@ -411,6 +420,7 @@ impl<'db> AstDefinitionIndex<'db> {
             DefinitionKind::Local | DefinitionKind::Parameter => {
                 if let Some(local_id) = def.local_id {
                     ResolvedTarget::Local {
+                        owner: def.owner,
                         id: local_id,
                         name: def.name.clone(),
                     }
@@ -448,7 +458,21 @@ impl<'db> AstDefinitionIndex<'db> {
     /// Check if renaming is possible at the given position.
     ///
     /// Uses LocalId-based matching for precise shadowed variable disambiguation.
+    /// A package-level name that another file of the package also defines or
+    /// references is not renamable: the edit would cover only this document.
     pub fn can_rename(
+        &self,
+        db: &'db dyn salsa::Database,
+        offset: usize,
+    ) -> Option<(&AstDefinitionEntry, Span)> {
+        let (def, span) = self.rename_site(db, offset)?;
+        if def.local_id.is_none() && self.foreign_names(db).contains(&def.name) {
+            return None;
+        }
+        Some((def, span))
+    }
+
+    fn rename_site(
         &self,
         db: &'db dyn salsa::Database,
         offset: usize,
@@ -464,8 +488,7 @@ impl<'db> AstDefinitionIndex<'db> {
         // Only the name is renamable, not the rest of the declaration
         // (a field's type annotation, for instance).
         if let Some(def) = self.definition_at_position(db, offset)
-            && def.name_span.start <= offset
-            && offset < def.name_span.end
+            && def.name_span.range().contains(&offset)
         {
             return Some((def, def.name_span));
         }
@@ -477,18 +500,27 @@ impl<'db> AstDefinitionIndex<'db> {
 /// Collector for definitions and references.
 struct DefinitionCollector<'a, 'db> {
     db: &'db dyn salsa::Database,
-    span_map: &'a SpanMap,
+    span_map: SpanMap<'a>,
     definitions: Vec<AstDefinitionEntry>,
     references: Vec<AstReferenceEntry>,
+    foreign_names: BTreeSet<Symbol>,
+    /// The constructors another file of the package refers to, whose enums
+    /// are found among this document's definitions once all are collected.
+    foreign_variants: BTreeSet<Symbol>,
+    /// The module-level function being visited.
+    current_func: Option<NodeId>,
 }
 
 impl<'a, 'db> DefinitionCollector<'a, 'db> {
-    fn new(db: &'db dyn salsa::Database, span_map: &'a SpanMap) -> Self {
+    fn new(db: &'db dyn salsa::Database, span_map: SpanMap<'a>) -> Self {
         Self {
             db,
             span_map,
             definitions: Vec::new(),
             references: Vec::new(),
+            foreign_names: BTreeSet::new(),
+            foreign_variants: BTreeSet::new(),
+            current_func: None,
         }
     }
 
@@ -511,7 +543,13 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
         kind: DefinitionKind,
         local_id: Option<LocalId>,
     ) {
-        let span = self.span_map.get_or_default(node_id);
+        // A node without a span here is in a file module's file.
+        let Some(span) = self.span_map.get(node_id) else {
+            if local_id.is_none() {
+                self.foreign_names.insert(name);
+            }
+            return;
+        };
         let name_span = self.span_map.get_or_default(name_id);
         self.definitions.push(AstDefinitionEntry {
             node_id,
@@ -520,11 +558,30 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
             name,
             kind,
             local_id,
+            owner: self.current_func,
         });
     }
 
     fn add_reference(&mut self, node_id: NodeId, target: ResolvedTarget) {
-        let span = self.span_map.get_or_default(node_id);
+        let Some(span) = self.span_map.get(node_id) else {
+            // A qualified path such as `Choice::Some` also spells the item
+            // that owns the target.
+            match &target {
+                ResolvedTarget::Local { .. } => {}
+                ResolvedTarget::Constructor { variant, .. } => {
+                    self.foreign_names.insert(variant.clone());
+                    self.foreign_variants.insert(variant.clone());
+                }
+                ResolvedTarget::AbilityOp { ability, op } => {
+                    self.foreign_names.insert(ability.clone());
+                    self.foreign_names.insert(op.clone());
+                }
+                _ => {
+                    self.foreign_names.insert(target.name());
+                }
+            }
+            return;
+        };
         self.references.push(AstReferenceEntry {
             node_id,
             span,
@@ -616,6 +673,7 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
     fn resolve_resolved_ref(&self, resolved: &ResolvedRef<'db>) -> ResolvedTarget {
         match resolved {
             ResolvedRef::Local { id, name } => ResolvedTarget::Local {
+                owner: self.current_func,
                 id: *id,
                 name: name.clone(),
             },
@@ -632,6 +690,10 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
             ResolvedRef::Module { .. } => ResolvedTarget::Other {
                 name: Symbol::new("module"),
             },
+            // Left after a reported error: type checking selects a constructor.
+            ResolvedRef::ImplicitConstructor { name, .. } => {
+                ResolvedTarget::Other { name: name.clone() }
+            }
             ResolvedRef::AbilityOp { ability, op, .. } => ResolvedTarget::AbilityOp {
                 ability: ability.name(self.db),
                 op: op.clone(),
@@ -657,10 +719,12 @@ impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for DefinitionCollector<'_, 'db
 
     fn visit_func_decl(&mut self, func: &'ast FuncDecl<TypedRef<'db>>) {
         self.add_definition(func.id, func.name.clone(), DefinitionKind::Function, None);
+        self.current_func = Some(func.id);
         for param in &func.params {
             self.collect_param(param);
         }
         walk_func_decl(self, func);
+        self.current_func = None;
     }
 
     fn visit_expr(&mut self, expr: &'ast Expr<TypedRef<'db>>) {
@@ -711,7 +775,10 @@ impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for DefinitionCollector<'_, 'db
                     name: field.name.clone(),
                 };
                 if shorthand {
-                    let span = self.span_map.get_or_default(field.id);
+                    let Some(span) = self.span_map.get(field.id) else {
+                        self.foreign_names.insert(field.name.clone());
+                        continue;
+                    };
                     self.references.push(AstReferenceEntry {
                         node_id: field.id,
                         span,
@@ -769,7 +836,57 @@ pub fn definition_index<'db>(
     let module = tribute::parse_and_lower_ast(db, source)?.module(db);
     let span_map = ast_query::span_map(db, source)?;
 
-    Some(AstDefinitionIndex::build(db, module, &span_map))
+    Some(AstDefinitionIndex::build(
+        db,
+        module,
+        span_map,
+        foreign_identifiers(db, source),
+    ))
+}
+
+/// The names that the other files of `source`'s package spell. Not every
+/// use of a name carries a resolved reference the index sees (type
+/// annotations, `use` declarations), so these are read as identifier tokens
+/// from each file's syntax tree: a package-level name another file spells
+/// is not renamable from `source`, whose rename edits only `source`.
+fn foreign_identifiers(db: &dyn salsa::Database, source: SourceCst) -> BTreeSet<Symbol> {
+    package_identifiers(db, source, source)
+}
+
+/// The names that the files of the package rooted at `root`, other than
+/// `except`, spell as identifier tokens.
+pub fn package_identifiers(
+    db: &dyn salsa::Database,
+    root: SourceCst,
+    except: SourceCst,
+) -> BTreeSet<Symbol> {
+    let mut names = BTreeSet::new();
+    let Some(tree) = source_tree_of(db, root) else {
+        return names;
+    };
+    for file in tree.files().iter().filter(|file| file.source != except) {
+        let Some(cst) = ast_query::parse_cst(db, file.source) else {
+            continue;
+        };
+        let text = file.source.text(db);
+        let mut cursor = cst.root_node().walk();
+        let mut stack = vec![cst.root_node()];
+        while let Some(node) = stack.pop() {
+            if node.child_count() == 0 {
+                let token = text
+                    .byte_slice(node.start_byte()..node.end_byte())
+                    .to_string();
+                let name = token.strip_prefix("r#").unwrap_or(&token);
+                if name.starts_with(|c: char| c.is_alphabetic() || c == '_')
+                    && name.chars().all(|c| c.is_alphanumeric() || c == '_')
+                {
+                    names.insert(Symbol::new(name));
+                }
+            }
+            stack.extend(node.children(&mut cursor));
+        }
+    }
+    names
 }
 
 // =============================================================================
@@ -1117,8 +1234,8 @@ mod tests {
 
 fn unwrap(opt: Option) -> Int {
     case opt {
-        Some(v) -> v
-        None -> 0
+        .Some(v) -> v
+        .None -> 0
     }
 }"#,
         );
@@ -1235,6 +1352,7 @@ fn unwrap(opt: Option) -> Int {
         for def in &x_defs {
             if let Some(local_id) = def.local_id {
                 let target = ResolvedTarget::Local {
+                    owner: def.owner,
                     id: local_id,
                     name: x_sym.clone(),
                 };
@@ -1733,6 +1851,39 @@ enum Result(T, E) {
         }
     }
 
+    #[test]
+    fn test_same_local_id_in_different_functions_stays_apart() {
+        let db = salsa::DatabaseImpl::default();
+        let text = "fn f(x: Int) -> Int { x }\nfn g(x: Int) -> Int { x }";
+        let source = make_source(&db, text);
+        let index = definition_index(&db, source).unwrap();
+
+        for func in ["fn f", "fn g"] {
+            let start = text.find(func).unwrap();
+            let end = text[start..].find('}').unwrap() + start;
+            let body_x = text[start..end].rfind('x').unwrap() + start;
+            let param_x = text[start..].find("x:").unwrap() + start;
+
+            let (target, refs) = index.references_at(&db, body_x).unwrap();
+            assert_eq!(refs.len(), 1, "{func}: one reference stays in the function");
+            assert!(
+                (start..end).contains(&(refs[0].span.start as usize)),
+                "{func}: reference crossed functions"
+            );
+
+            let def = index.definition_of_target(&db, &target).unwrap();
+            assert!(
+                (start..end).contains(&(def.span.start as usize)),
+                "{func}: definition crossed functions"
+            );
+            assert_eq!(def.span.start as usize, param_x);
+
+            let (_, from_def) = index.references_at(&db, param_x).unwrap();
+            assert_eq!(from_def.len(), 1);
+            assert_eq!(from_def[0].span.start as usize, body_x);
+        }
+    }
+
     // Target-aware reference tests (shadowing)
 
     #[test]
@@ -2036,10 +2187,10 @@ struct Rect { x: Int, width: Int }"#,
         let mut spans: Vec<_> = index
             .references_of_target(db, target)
             .iter()
-            .map(|r| (r.span.start, r.span.end))
+            .map(|r| r.span.range())
             .collect();
-        spans.sort();
-        spans.into_iter().map(|(s, e)| &text[s..e]).collect()
+        spans.sort_by_key(|range| (range.start, range.end));
+        spans.into_iter().map(|range| &text[range]).collect()
     }
 
     #[test]
@@ -2073,8 +2224,8 @@ fn main() {
                 owner: trunk_ir::Symbol::new("Point")
             }
         );
-        assert!(text[def.span.start..def.span.end].starts_with("x: Int"));
-        assert!(def.span.end < text.find("struct Rect").unwrap());
+        assert!(text[def.span.range()].starts_with("x: Int"));
+        assert!((def.span.end as usize) < text.find("struct Rect").unwrap());
     }
 
     #[test]
@@ -2132,12 +2283,12 @@ fn sum(p: Point) -> Int {
 
         let x = field_target("Point", "x");
         let def = index.definition_of_target(&db, &x).unwrap();
-        assert_eq!(&text[def.name_span.start..def.name_span.end], "x");
-        assert!(text[def.span.start..def.span.end].starts_with("x: Int"));
+        assert_eq!(&text[def.name_span.range()], "x");
+        assert!(text[def.span.range()].starts_with("x: Int"));
 
         let shorthand = index.shorthand_fields_of_target(&db, &x);
         assert_eq!(shorthand.len(), 1);
-        assert_eq!(&text[shorthand[0].span.start..shorthand[0].span.end], "x");
+        assert_eq!(&text[shorthand[0].span.range()], "x");
         assert!(
             index
                 .shorthand_fields_of_target(&db, &field_target("Point", "y"))

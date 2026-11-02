@@ -119,7 +119,7 @@ fn lower_constructor_pattern(
     ctx: &mut AstLoweringCtx<'_>,
     node: Node,
 ) -> PatternKind<UnresolvedName> {
-    // grammar.js: field("name", $.type_path)
+    // grammar.js: field("name", choice($.type_path, $.implicit_constructor))
     //   + optional choice of:
     //     - Tuple-style: field("args", $.pattern_list)
     //     - Struct-style: field("fields", $.pattern_fields)
@@ -131,9 +131,7 @@ fn lower_constructor_pattern(
         return PatternKind::Error;
     };
 
-    let name = ctx.node_path(&name_node);
-    let ctor_id = ctx.fresh_id_with_span(&name_node);
-    let ctor = UnresolvedName::new(name, ctor_id);
+    let ctor = ctx.constructor_name(&name_node);
 
     // Handle tuple-style args: Some(x), Pair(a, b)
     if let Some(args) = args_node {
@@ -555,7 +553,7 @@ mod tests {
         let source = r#"
             fn main() -> Nil {
                 case x {
-                    None -> 0
+                    .None -> 0
                     _ -> 1
                 }
             }
@@ -573,7 +571,7 @@ mod tests {
         let source = r#"
             fn main() -> Nil {
                 case x {
-                    Some(y) -> y
+                    .Some(y) -> y
                     _ -> 0
                 }
             }
@@ -790,8 +788,8 @@ mod tests {
         let source = r#"
             fn main() -> Nil {
                 case x {
-                    Some(y) as opt -> opt
-                    _ -> None
+                    .Some(y) as opt -> opt
+                    _ -> .None
                 }
             }
         "#;

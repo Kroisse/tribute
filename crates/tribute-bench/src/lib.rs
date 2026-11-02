@@ -1,5 +1,6 @@
-//! Programs and compilation stages shared by the representation/ABI boundary
-//! benchmark and report.
+//! Programs, compilation stages, and source edits shared by the benchmarks
+//! and the report.
 
+pub mod editing;
 pub mod programs;
 pub mod stages;

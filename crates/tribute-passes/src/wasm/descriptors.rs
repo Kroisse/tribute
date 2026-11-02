@@ -28,7 +28,7 @@ pub fn has_descriptor_field(ctx: &IrContext, ty: TypeRef) -> bool {
 }
 
 /// Declare the module's user allocation descriptors in allocation order.
-pub fn declare(ctx: &mut IrContext, module: Module) {
+pub(crate) fn declare(ctx: &mut IrContext, module: Module) {
     let mut descriptors = Vec::new();
     let mut seen = HashSet::default();
     if let Some(body) = module.body(ctx) {
@@ -102,7 +102,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !S = adt.struct<S(next: adt.typeref<{name = "S"}>, any: tribute_rt.anyref, n: tribute_rt.nat)>
-  !Closure = adt.struct<_closure(code: core.i32), {layout = "closure"}>
+  !Closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
   !E = adt.enum<E { None(), Some(core.f64) }>
   wasm.func @main(%next: adt.typeref<{name = "S"}>, %any: tribute_rt.anyref, %n: tribute_rt.nat, %x: core.f64) -> core.nil {
     %one = wasm.i32_const {value = 1} : core.i32

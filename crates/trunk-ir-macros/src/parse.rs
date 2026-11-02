@@ -43,6 +43,9 @@ pub struct OperationDef {
     pub verify: Option<proc_macro2::Span>,
     /// `#[asm_format]`: print and parse through the wrapper's `OpAsmFormat` impl. Holds the attribute's span for diagnostics.
     pub asm_format: Option<proc_macro2::Span>,
+    /// `#[asm_format(..)]`: the format elements the printer and parser
+    /// interpret instead of an `OpAsmFormat` impl.
+    pub format: Option<proc_macro2::TokenStream>,
     /// `#[implements(..)]`: the operation interfaces the wrapper implements.
     pub implements: Vec<PathEntry>,
     /// `#[flags(..)]`: the operation flags the definition declares.
@@ -139,8 +142,14 @@ pub enum ResultDef {
 }
 
 pub enum RegionOrSuccessor {
-    /// A region; `optional` regions are declared as `#[region(name?)]`.
-    Region { name: String, optional: bool },
+    /// A region; `optional` regions are declared as `#[region(name?)]`, and
+    /// a `variadic` one, declared as `#[regions(name)]`, is the rest of the
+    /// region list.
+    Region {
+        name: String,
+        optional: bool,
+        variadic: bool,
+    },
     /// A successor; a `variadic` one, declared as `#[successors(name)]`, is
     /// the rest of the successor list.
     Successor { name: String, variadic: bool },
@@ -222,6 +231,7 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
     let mut alias_hint = None;
     let mut implements: Option<Vec<PathEntry>> = None;
     let mut flags: Option<Vec<PathEntry>> = None;
+    let mut format: Option<proc_macro2::TokenStream> = None;
     let mut docs = Vec::new();
 
     // Collect outer attributes: #[doc = "..."], #[verify], #[asm_format],
@@ -244,11 +254,12 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
                 }
                 verify = Some(span);
             }
-            OuterAttr::AsmFormat(span) => {
+            OuterAttr::AsmFormat(span, elements) => {
                 if asm_format.is_some() {
                     return Err("duplicate #[asm_format] on the same operation".into());
                 }
                 asm_format = Some(span);
+                format = elements;
             }
             OuterAttr::AliasHint(span) => {
                 if alias_hint.is_some() {
@@ -296,6 +307,7 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
                 return Err("#[verify] reserves the name `verify` for `Verify::verify`".into());
             }
             if asm_format.is_some()
+                && format.is_none()
                 && let Some(name) = entity_names(&op).find(|name| ["print", "parse"].contains(name))
             {
                 return Err(format!(
@@ -329,6 +341,7 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
             }
             op.verify = verify;
             op.asm_format = asm_format;
+            op.format = format;
             op.implements = implements.unwrap_or_default();
             op.flags = flags.unwrap_or_default();
             op.docs = docs;
@@ -345,6 +358,11 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
             }
             if flags.is_some() {
                 return Err("#[flags] declares operation flags and is not allowed on types".into());
+            }
+            if format.is_some() {
+                return Err(
+                    "a type's custom syntax is a hand-written `TypeAsmFormat`; write `#[asm_format]` without format elements".into(),
+                );
             }
             let mut td = parse_struct_def(iter)?;
             // Each parameter, attribute, and string attribute handle has an
@@ -400,7 +418,8 @@ enum OuterAttr {
     LegacyAttrs,
     RestResults,
     Verify(proc_macro2::Span),
-    AsmFormat(proc_macro2::Span),
+    /// `#[asm_format]`, with the format elements of `#[asm_format(..)]`.
+    AsmFormat(proc_macro2::Span, Option<proc_macro2::TokenStream>),
     AliasHint(proc_macro2::Span),
     Implements(Vec<PathEntry>),
     Flags(Vec<PathEntry>),
@@ -464,8 +483,16 @@ fn parse_outer_attr(iter: &mut TokenIter) -> Result<OuterAttr, String> {
             Ok(OuterAttr::Verify(ident.span()))
         }
         "asm_format" => {
-            expect_consumed(&inner, "#[asm_format]")?;
-            Ok(OuterAttr::AsmFormat(ident.span()))
+            let elements = if has_remaining(&inner) {
+                let group = expect_group(&mut inner, Delimiter::Parenthesis).map_err(|_| {
+                    "expected `#[asm_format]` or `#[asm_format(elements..)]`".to_string()
+                })?;
+                expect_consumed(&inner, "#[asm_format(..)]")?;
+                Some(group.stream())
+            } else {
+                None
+            };
+            Ok(OuterAttr::AsmFormat(ident.span(), elements))
         }
         "alias_hint" => {
             expect_consumed(&inner, "#[alias_hint]")?;
@@ -546,7 +573,7 @@ fn parse_regions(stream: proc_macro2::TokenStream) -> Result<Vec<RegionOrSuccess
         let mut inner = bracket.stream().to_token_iter();
 
         let kw: Ident = Ident::parser(&mut inner)
-            .map_err(|e| format!("expected `region` or `successor`: {e}"))?;
+            .map_err(|e| format!("expected `region`, `regions`, or `successor`: {e}"))?;
 
         let paren = expect_group(&mut inner, Delimiter::Parenthesis)?;
         expect_consumed(&inner, "#[region/successor(...)]")?;
@@ -567,15 +594,29 @@ fn parse_regions(stream: proc_macro2::TokenStream) -> Result<Vec<RegionOrSuccess
         }
 
         match kw.to_string().as_str() {
-            "region" => {
+            keyword @ ("region" | "regions") => {
                 let _body = expect_group(&mut iter, Delimiter::Brace)?;
+                let variadic = keyword == "regions";
+                if variadic && optional {
+                    return Err("variadic regions cannot be optional".into());
+                }
                 if items
                     .iter()
                     .any(|item| matches!(item, RegionOrSuccessor::Region { optional: true, .. }))
                 {
                     return Err("an optional region must be the last region".into());
                 }
-                items.push(RegionOrSuccessor::Region { name, optional });
+                if items
+                    .iter()
+                    .any(|item| matches!(item, RegionOrSuccessor::Region { variadic: true, .. }))
+                {
+                    return Err("variadic regions must be the last regions".into());
+                }
+                items.push(RegionOrSuccessor::Region {
+                    name,
+                    optional,
+                    variadic,
+                });
             }
             keyword @ ("successor" | "successors") => {
                 if optional {
@@ -596,7 +637,7 @@ fn parse_regions(stream: proc_macro2::TokenStream) -> Result<Vec<RegionOrSuccess
             }
             other => {
                 return Err(format!(
-                    "expected `region`, `successor`, or `successors`, got `{other}`"
+                    "expected `region`, `regions`, `successor`, or `successors`, got `{other}`"
                 ));
             }
         }
@@ -966,7 +1007,7 @@ mod tests {
         assert_eq!(op.regions.len(), 1);
         assert!(matches!(
             &op.regions[0],
-            RegionOrSuccessor::Region { name, optional: false } if name == "body"
+            RegionOrSuccessor::Region { name, optional: false, variadic: false } if name == "body"
         ));
     }
 
@@ -1035,6 +1076,43 @@ mod tests {
                 .err()
                 .unwrap()
                 .contains("variadic successors must be the last successors")
+        );
+    }
+
+    #[test]
+    fn test_parse_variadic_regions() {
+        let module = parse_test_module(quote! {
+            mod test {
+                fn lambda() {
+                    #[region(header)] {}
+                    #[regions(bodies)] {}
+                }
+            }
+        })
+        .unwrap();
+
+        let op = match &module.items[0] {
+            DialectItem::Operation(op) => op,
+            _ => panic!("expected operation"),
+        };
+        assert!(matches!(
+            &op.regions[1],
+            RegionOrSuccessor::Region { name, optional: false, variadic: true } if name == "bodies"
+        ));
+
+        let not_last = parse_test_module(quote! {
+            mod test {
+                fn lambda() {
+                    #[regions(bodies)] {}
+                    #[region(tail)] {}
+                }
+            }
+        });
+        assert!(
+            not_last
+                .err()
+                .unwrap()
+                .contains("variadic regions must be the last regions")
         );
     }
 
@@ -1110,11 +1188,11 @@ mod tests {
         assert!(matches!(&op.results, ResultDef::Optional(s) if s == "result"));
         assert!(matches!(
             &op.regions[0],
-            RegionOrSuccessor::Region { name, optional: false } if name == "first"
+            RegionOrSuccessor::Region { name, optional: false, variadic: false } if name == "first"
         ));
         assert!(matches!(
             &op.regions[1],
-            RegionOrSuccessor::Region { name, optional: true } if name == "body"
+            RegionOrSuccessor::Region { name, optional: true, variadic: false } if name == "body"
         ));
     }
 
@@ -1827,11 +1905,11 @@ mod tests {
             (
                 quote!(
                     mod test {
-                        #[asm_format(custom)]
-                        fn op() {}
+                        #[asm_format("custom")]
+                        struct Ty;
                     }
                 ),
-                "#[asm_format]",
+                "hand-written `TypeAsmFormat`",
             ),
             (
                 quote!(

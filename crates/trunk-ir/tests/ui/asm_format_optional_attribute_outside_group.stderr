@@ -1,0 +1,5 @@
+error: an optional attribute is written as the anchor of an optional group `("keyword" .. attr^ ..)?`
+ --> tests/ui/asm_format_optional_attribute_outside_group.rs:4:30
+  |
+4 |         #[asm_format("probe" note)]
+  |                              ^^^^

@@ -9,9 +9,11 @@
 //! The Wasm lowering lives in `wasm/bytes.rs`.
 
 use trunk_ir::SymbolPath;
+use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
 use trunk_ir::ops::DialectOp;
+use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::OpRef;
 use trunk_ir::rewrite::Module;
 use trunk_ir::types::TypeDataBuilder;
@@ -22,7 +24,7 @@ use crate::bytes_intrinsic::{self, BytesIntrinsicError};
 const GET_OR_PANIC_FN: &str = "__tribute_bytes_get_or_panic";
 
 /// Lower calls to the bytes intrinsic to calls to the native runtime.
-pub fn lower(ctx: &mut IrContext, module: Module) -> Result<(), BytesIntrinsicError> {
+fn lower(ctx: &mut IrContext, module: Module) -> Result<(), BytesIntrinsicError> {
     let mut lowered = false;
     bytes_intrinsic::lower_get_or_panic(ctx, module, |ctx, call| {
         lowered = true;
@@ -32,6 +34,27 @@ pub fn lower(ctx: &mut IrContext, module: Module) -> Result<(), BytesIntrinsicEr
         ensure_runtime_declaration(ctx, module);
     }
     Ok(())
+}
+
+/// Lower calls to the bytes intrinsic to calls to the native runtime.
+pub struct LowerBytesIntrinsics;
+
+impl Pass for LowerBytesIntrinsics {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "native-bytes-intrinsics"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        lower(ctx, target.into())?;
+        Ok(())
+    }
 }
 
 /// Rewrite one bytes element read into a call to the runtime function, which

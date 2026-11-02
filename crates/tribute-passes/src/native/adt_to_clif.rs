@@ -19,18 +19,15 @@
 //! through `array_to_clif`, so an array operation
 //! left here is rejected.
 
-use tracing::warn;
-
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::adt::layout::compute_mem_struct_layout;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core;
-use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
-    ConversionError, ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern,
-    TypeConverter,
+    ConversionError, ConversionTarget, Module, OpRewritePattern, PatternApplicator,
+    PatternRewriter, TypeConverter,
 };
 use trunk_ir::types::TypeDataBuilder;
 use trunk_ir_cranelift_backend::passes::arith_to_clif::finalize_cmp;
@@ -89,29 +86,27 @@ fn intern_i8_type(ctx: &mut IrContext) -> TypeRef {
 
 struct StructGetPattern;
 
-impl RewritePattern for StructGetPattern {
+impl OpRewritePattern for StructGetPattern {
+    type Op = adt::StructGet;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        struct_get: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(struct_get) = adt::StructGet::from_op(ctx, op) else {
-            return false;
-        };
-
+    ) -> Option<()> {
+        let op = struct_get.op_ref();
         let struct_ty = struct_get.r#type(ctx);
         let field_idx = struct_get.field(ctx) as usize;
         let tc = rewriter.type_converter();
 
-        let Some(layout) = compute_mem_struct_layout(ctx, struct_ty) else {
-            warn!("adt_to_clif arena: struct_get layout is not a mem.struct");
-            return false;
-        };
+        let layout = rewriter.require(
+            compute_mem_struct_layout(ctx, struct_ty),
+            "struct_get layout is not a mem.struct",
+        )?;
 
         if field_idx >= layout.field_offsets.len() {
-            warn!("adt_to_clif arena: field index {} out of bounds", field_idx);
-            return false;
+            return rewriter.no_match(format!("field index {field_idx} out of bounds"));
         }
 
         let loc = ctx.op(op).location;
@@ -121,10 +116,10 @@ impl RewritePattern for StructGetPattern {
 
         // Convert result type through type converter (e.g. tribute_rt.any -> core.ptr)
         let result_types = ctx.op_result_types(op);
-        let Some(result_ty) = result_types.first().copied() else {
-            warn!("adt_to_clif arena: struct_get has no result type");
-            return false;
-        };
+        let result_ty = rewriter.require(
+            result_types.first().copied(),
+            "struct_get has no result type",
+        )?;
         let result_ty = tc.convert_type_or_identity(ctx, result_ty);
 
         let load_op = clif::Load::operands(ref_val)
@@ -132,33 +127,32 @@ impl RewritePattern for StructGetPattern {
             .results(result_ty)
             .build(ctx, loc);
         rewriter.replace_op(load_op.op_ref());
-        true
+        Some(())
     }
 }
 
 struct StructSetPattern;
 
-impl RewritePattern for StructSetPattern {
+impl OpRewritePattern for StructSetPattern {
+    type Op = adt::StructSet;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        struct_set: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(struct_set) = adt::StructSet::from_op(ctx, op) else {
-            return false;
-        };
-
+    ) -> Option<()> {
+        let op = struct_set.op_ref();
         let struct_ty = struct_set.r#type(ctx);
         let field_idx = struct_set.field(ctx) as usize;
 
-        let Some(layout) = compute_mem_struct_layout(ctx, struct_ty) else {
-            warn!("adt_to_clif arena: struct_set layout is not a mem.struct");
-            return false;
-        };
+        let layout = rewriter.require(
+            compute_mem_struct_layout(ctx, struct_ty),
+            "struct_set layout is not a mem.struct",
+        )?;
 
         if field_idx >= layout.field_offsets.len() {
-            return false;
+            return None;
         }
 
         let loc = ctx.op(op).location;
@@ -171,40 +165,39 @@ impl RewritePattern for StructSetPattern {
             .offset(offset)
             .build(ctx, loc);
         rewriter.replace_op(store_op.op_ref());
-        true
+        Some(())
     }
 }
 
 struct VariantCastPattern;
 
-impl RewritePattern for VariantCastPattern {
+impl OpRewritePattern for VariantCastPattern {
+    type Op = adt::VariantCast;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        variant_cast: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(variant_cast) = adt::VariantCast::from_op(ctx, op) else {
-            return false;
-        };
+    ) -> Option<()> {
         let ref_val = variant_cast.r#ref(ctx);
         rewriter.erase_op(vec![ref_val]);
-        true
+        Some(())
     }
 }
 
 struct RefNullPattern;
 
-impl RewritePattern for RefNullPattern {
+impl OpRewritePattern for RefNullPattern {
+    type Op = adt::RefNull;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        ref_null: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        if adt::RefNull::from_op(ctx, op).is_err() {
-            return false;
-        }
+    ) -> Option<()> {
+        let op = ref_null.op_ref();
         let loc = ctx.op(op).location;
         let ptr_ty = core::Ptr::params().intern(ctx).as_type_ref();
         let iconst_op = clif::Iconst::operands()
@@ -212,46 +205,42 @@ impl RewritePattern for RefNullPattern {
             .results(ptr_ty)
             .build(ctx, loc);
         rewriter.replace_op(iconst_op.op_ref());
-        true
+        Some(())
     }
 }
 
 struct RefCastPattern;
 
-impl RewritePattern for RefCastPattern {
+impl OpRewritePattern for RefCastPattern {
+    type Op = adt::RefCast;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        ref_cast: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(ref_cast) = adt::RefCast::from_op(ctx, op) else {
-            return false;
-        };
+    ) -> Option<()> {
         let ref_val = ref_cast.r#ref(ctx);
         rewriter.erase_op(vec![ref_val]);
-        true
+        Some(())
     }
 }
 
 struct RefIsNullPattern;
 
-impl RewritePattern for RefIsNullPattern {
+impl OpRewritePattern for RefIsNullPattern {
+    type Op = adt::RefIsNull;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        ref_is_null: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(ref_is_null) = adt::RefIsNull::from_op(ctx, op) else {
-            return false;
-        };
-
+    ) -> Option<()> {
+        let op = ref_is_null.op_ref();
         let loc = ctx.op(op).location;
         let ptr_ty = core::Ptr::params().intern(ctx).as_type_ref();
-        let Some(result_ty) = flag_result_type(ctx, op, rewriter) else {
-            return false;
-        };
+        let result_ty = flag_result_type(ctx, op, rewriter)?;
         let i8_ty = intern_i8_type(ctx);
         let ref_val = ref_is_null.r#ref(ctx);
 
@@ -273,7 +262,7 @@ impl RewritePattern for RefIsNullPattern {
             result_ty,
             i8_ty,
         );
-        true
+        Some(())
     }
 }
 

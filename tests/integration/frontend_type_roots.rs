@@ -1,14 +1,15 @@
 //! Valid metadata-only roots must materialize nominal declarations before erasure.
 use salsa_test_macros::salsa_test;
-use tribute::pipeline::{parse_and_lower_ast, prepare_frontend_for_lowering};
-use tribute_core::Diagnostic;
+use tribute::pipeline::{
+    parse_and_lower_ast, prepare_frontend_diagnostics, prepare_frontend_for_lowering,
+};
 use tribute_front::{
     SourceCst,
     ast::{
         AbilityId, AbilityInstance, AbilityRow, Decl, RowRemoval, RowUnion, RowVar, Type,
         TypeDefId, TypeKind, TypeParam,
     },
-    typeck::TypeCheckOutput,
+    typeck::{DeclarationTypeMetadata, TypeCheckOutput},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -25,7 +26,7 @@ fn prepare_root<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
     root: Root,
-) -> TypeCheckOutput<'db> {
+) -> tribute_front::monomorphize::SpecializationOutput<'db> {
     let typed = parse_and_lower_ast(db, source).unwrap();
     let packet_decl = typed
         .module(db)
@@ -40,8 +41,7 @@ fn prepare_root<'db>(
         TypeKind::Named {
             id: TypeDefId::source(
                 db,
-                trunk_ir::SymbolPath::new([packet_decl.name.clone()]),
-                packet_decl.id,
+                trunk_ir::SymbolPath::new(["pkg".into(), packet_decl.name.clone()]),
             ),
             name: packet_decl.name.clone(),
             args: vec![Type::new(db, TypeKind::Nat)],
@@ -50,7 +50,7 @@ fn prepare_root<'db>(
     let row = AbilityRow::single(
         db,
         AbilityInstance {
-            ability_id: AbilityId::source(db, trunk_ir::SymbolPath::new(["Marker"])),
+            ability_id: AbilityId::source(db, trunk_ir::SymbolPath::new(["pkg", "Marker"])),
             args: vec![packet],
         },
     );
@@ -58,17 +58,17 @@ fn prepare_root<'db>(
         sources: vec![row],
         result: row,
     };
-    let mut functions = typed.function_types(db).to_vec();
-    let mut constructors = typed.constructor_types(db).clone();
+    let mut functions = typed.declarations(db).function_types.clone();
+    let mut constructors = typed.declarations(db).constructor_types.clone();
     let mut metadata = typed.expression_types(db).clone();
     let (_, scheme) = functions
         .iter_mut()
-        .find(|(name, _)| name == ["marker"])
+        .find(|(name, _)| name == ["pkg", "marker"])
         .unwrap();
     let instance = &mut metadata
         .function_instances
         .iter_mut()
-        .find(|(_, instance)| instance.function.qualified(db) == "marker")
+        .find(|(_, instance)| instance.function.qualified(db) == "pkg::marker")
         .unwrap()
         .1;
 
@@ -104,7 +104,7 @@ fn prepare_root<'db>(
             let (_, constructor) = constructors
                 .schemes
                 .iter_mut()
-                .find(|(id, _)| id.qualified(db) == "Packet")
+                .find(|(id, _)| id.qualified(db) == "pkg::Packet")
                 .unwrap();
             *constructor = constructor.to_builder(db).row_unions(vec![union]).build(db);
         }
@@ -113,19 +113,15 @@ fn prepare_root<'db>(
     let input = TypeCheckOutput::new(
         db,
         typed.module(db).clone(),
-        functions,
-        constructors,
+        DeclarationTypeMetadata {
+            function_types: functions,
+            constructor_types: constructors,
+            ..typed.declarations(db).clone()
+        },
         metadata,
-        typed.ability_definitions(db).to_vec(),
-        typed.handler_operations(db).clone(),
-        typed.perform_operations(db).clone(),
-        typed.lambda_signatures(db).clone(),
-        typed.exhaustive_cases(db).to_vec(),
-        *typed.well_known_types(db),
-        typed.span_map(db),
     );
     let prepared = prepare_frontend_for_lowering(db, input, source);
-    let errors = prepare_frontend_for_lowering::accumulated::<Diagnostic>(db, input, source);
+    let errors = prepare_frontend_diagnostics(db, input, source);
     assert!(
         errors.is_empty(),
         "invalid metadata for {root:?}: {errors:?}"
@@ -154,30 +150,36 @@ fn main() -> Nil { marker() }
         })
         .unwrap_or_else(|| panic!("{root:?} did not materialize Packet(Nat)"));
     assert!(declaration.type_params.is_empty());
-    let marker = prepared
-        .function_types(db)
-        .iter()
-        .find(|(name, _)| name == ["marker"])
-        .unwrap()
-        .1;
+    // Under `Root::TypeArgument`, `marker` is generic, so only its instance
+    // remains.
+    let marker = || {
+        prepared
+            .declarations(db)
+            .function_types
+            .iter()
+            .find(|(name, _)| name == ["pkg", "marker"])
+            .unwrap()
+            .1
+    };
     let instance = &prepared
         .expression_types(db)
         .function_instances
         .iter()
-        .find(|(_, instance)| instance.function.qualified(db) == "marker")
+        .find(|(_, instance)| instance.function.qualified(db) == "pkg::marker")
         .unwrap()
         .1;
     let ty = match root {
         Root::TypeArgument => instance.type_arguments[0],
         Root::RowArgument => instance.row_arguments[0].instances(db)[0].args[0],
-        Root::Union => marker.row_unions(db)[0].result.instances(db)[0].args[0],
-        Root::Removal => marker.row_removals(db)[0].removed.instances(db)[0].args[0],
+        Root::Union => marker().row_unions(db)[0].result.instances(db)[0].args[0],
+        Root::Removal => marker().row_removals(db)[0].removed.instances(db)[0].args[0],
         Root::ConstructorUnion => {
             prepared
-                .constructor_types(db)
+                .declarations(db)
+                .constructor_types
                 .schemes
                 .iter()
-                .find(|(id, _)| id.qualified(db) == "Packet")
+                .find(|(id, _)| id.qualified(db) == "pkg::Packet")
                 .unwrap()
                 .1
                 .row_unions(db)[0]
@@ -190,7 +192,7 @@ fn main() -> Nil { marker() }
         panic!("nominal type")
     };
     assert!(args.is_empty(), "{root:?} retained generic arguments");
-    assert_eq!(id.qualified(db), declaration.name);
+    assert_eq!(id.qualified(db), *format!("pkg::{}", declaration.name));
     let original = prepared
         .module(db)
         .decls()
@@ -203,8 +205,7 @@ fn main() -> Nil { marker() }
         id.origin(db),
         TypeDefId::source(
             db,
-            trunk_ir::SymbolPath::new([original.name.clone()]),
-            original.id
+            trunk_ir::SymbolPath::new(["pkg".into(), original.name.clone()])
         )
         .origin(db)
     );

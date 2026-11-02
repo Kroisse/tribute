@@ -231,7 +231,7 @@ fn root_main_reports_unhandled_and_undeclared_effects(db: &salsa::DatabaseImpl) 
     let step = "use std::io::Io\n\nfn step() ->{Io} Nil { step() }\n\n";
     assert_eq!(
         errors(db, &format!("{step}fn main() -> Nil {{\n    step()\n}}\n")),
-        ["function 'main' uses undeclared effects: Io"],
+        ["function 'main' uses undeclared effects: std::io::Io"],
     );
     assert!(
         errors(
@@ -254,7 +254,8 @@ fn checked_signatures(db: &dyn salsa::Database, text: &str) -> (Vec<String>, Vec
     assert_eq!(errors(db, text), Vec::<String>::new());
     let output = tribute_front::query::type_check_output(db, source).unwrap();
     let mut schemes: Vec<_> = output
-        .function_types(db)
+        .declarations(db)
+        .function_types
         .iter()
         .map(|(name, scheme)| format!("{name}: {scheme:?}"))
         .collect();
@@ -305,7 +306,8 @@ fn instances_use_the_declared_scheme(db: &salsa::DatabaseImpl) {
     for (_, instance) in instances {
         let name = instance.function.qualified(db);
         let (_, scheme) = output
-            .function_types(db)
+            .declarations(db)
+            .function_types
             .iter()
             .find(|(candidate, _)| candidate == instance.function.path(db))
             .unwrap_or_else(|| panic!("no scheme for {name}"));
@@ -336,9 +338,10 @@ fn main() -> Nil { }
     assert_eq!(errors(db, text), Vec::<String>::new());
     let output = tribute_front::query::type_check_output(db, source).unwrap();
     let (_, scheme) = output
-        .function_types(db)
+        .declarations(db)
+        .function_types
         .iter()
-        .find(|(name, _)| name == ["run_state"])
+        .find(|(name, _)| name == ["pkg", "run_state"])
         .unwrap();
     assert_eq!(scheme.effect_params(db).len(), 1);
     assert!(scheme.row_unions(db).is_empty());

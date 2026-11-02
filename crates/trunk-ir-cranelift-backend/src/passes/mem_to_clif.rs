@@ -7,11 +7,9 @@
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::mem;
-use trunk_ir::ops::DialectOp;
-use trunk_ir::refs::OpRef;
 use trunk_ir::rewrite::{
-    ConversionError, ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern,
-    TypeConverter,
+    ConversionError, ConversionTarget, Module, OpRewritePattern, PatternApplicator,
+    PatternRewriter, TypeConverter,
 };
 
 /// Lower mem dialect to clif dialect.
@@ -39,77 +37,69 @@ fn mem_to_clif_target() -> ConversionTarget {
 
 struct MemLoadPattern;
 
-impl RewritePattern for MemLoadPattern {
+impl OpRewritePattern for MemLoadPattern {
+    type Op = mem::Load;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        load_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(load_op) = mem::Load::from_op(ctx, op) else {
-            return false;
-        };
-        let Some(result_ty) = rewriter.result_type(ctx, op, 0) else {
-            return false;
-        };
+    ) -> Option<()> {
+        let op = load_op.op_ref();
+        let result_ty = rewriter.result_type(ctx, op, 0)?;
         let loc = ctx.op(op).location;
         let ptr = load_op.ptr(ctx);
-        let Ok(offset) = i32::try_from(load_op.offset(ctx)) else {
-            return false;
-        };
+        let offset = i32::try_from(load_op.offset(ctx)).ok()?;
         let new_op = clif::Load::operands(ptr)
             .offset(offset)
             .results(result_ty)
             .build(ctx, loc)
             .op_ref();
         rewriter.replace_op(new_op);
-        true
+        Some(())
     }
 }
 
 struct MemStorePattern;
 
-impl RewritePattern for MemStorePattern {
+impl OpRewritePattern for MemStorePattern {
+    type Op = mem::Store;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        store_op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(store_op) = mem::Store::from_op(ctx, op) else {
-            return false;
-        };
+    ) -> Option<()> {
+        let op = store_op.op_ref();
         let loc = ctx.op(op).location;
         let ptr = store_op.ptr(ctx);
         let value = store_op.value(ctx);
-        let Ok(offset) = i32::try_from(store_op.offset(ctx)) else {
-            return false;
-        };
+        let offset = i32::try_from(store_op.offset(ctx)).ok()?;
         // clif.store operand order: (value, addr)
         let new_op = clif::Store::operands(value, ptr)
             .offset(offset)
             .build(ctx, loc)
             .op_ref();
         rewriter.replace_op(new_op);
-        true
+        Some(())
     }
 }
 
 struct MemPtrAddPattern;
 
-impl RewritePattern for MemPtrAddPattern {
+impl OpRewritePattern for MemPtrAddPattern {
+    type Op = mem::PtrAdd;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        ptr_add: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(ptr_add) = mem::PtrAdd::from_op(ctx, op) else {
-            return false;
-        };
-        let Some(result_ty) = rewriter.result_type(ctx, op, 0) else {
-            return false;
-        };
+    ) -> Option<()> {
+        let op = ptr_add.op_ref();
+        let result_ty = rewriter.result_type(ctx, op, 0)?;
         let loc = ctx.op(op).location;
         // Pointers are pointer-width integers in Cranelift.
         let new_op = clif::Iadd::operands(ptr_add.base(ctx), ptr_add.offset(ctx))
@@ -117,25 +107,23 @@ impl RewritePattern for MemPtrAddPattern {
             .build(ctx, loc)
             .op_ref();
         rewriter.replace_op(new_op);
-        true
+        Some(())
     }
 }
 
 struct MemNullPattern;
 
-impl RewritePattern for MemNullPattern {
+impl OpRewritePattern for MemNullPattern {
+    type Op = mem::Null;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        null: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        if !mem::Null::matches(ctx, op) {
-            return false;
-        }
-        let Some(result_ty) = rewriter.result_type(ctx, op, 0) else {
-            return false;
-        };
+    ) -> Option<()> {
+        let op = null.op_ref();
+        let result_ty = rewriter.result_type(ctx, op, 0)?;
         let loc = ctx.op(op).location;
         // Pointers are pointer-width integers in Cranelift; null is zero.
         let new_op = clif::Iconst::operands()
@@ -144,7 +132,7 @@ impl RewritePattern for MemNullPattern {
             .build(ctx, loc)
             .op_ref();
         rewriter.replace_op(new_op);
-        true
+        Some(())
     }
 }
 

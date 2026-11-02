@@ -1,130 +1,78 @@
 //\! Shared test helpers for tribute-front integration tests.
 #![allow(dead_code)]
 
-use rustc_hash::FxHashMap as HashMap;
+use itertools::Itertools;
 use tribute_core::diagnostic::Diagnostic;
 use tribute_front::SourceCst;
+use tribute_front::analysis;
 use tribute_front::ast::{Decl, DeclTable, Expr, ExprKind, ResolvedRef, Stmt, TypedRef};
-use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::core;
-use trunk_ir::ops::DialectOp;
-use trunk_ir::pass::PassManager;
 use trunk_ir::printer::print_module;
 
 /// Prelude source, loaded at compile time relative to this file.
 const PRELUDE_SOURCE: &str = include_str!("../../../../lib/std/prelude.trb");
 
-/// Result of loading and type-checking the prelude.
-struct PreludeData<'db> {
-    exports: tribute_front::typeck::PreludeExports<'db>,
-    env: tribute_front::resolve::ModuleEnv<'db>,
-    typed_module: tribute_front::ast::DeclTable<tribute_front::ast::TypedRef<'db>>,
+#[salsa::tracked]
+fn prelude_source(db: &dyn salsa::Database) -> SourceCst {
+    SourceCst::from_source_str(db, "prelude:///std/prelude", PRELUDE_SOURCE)
 }
 
-/// Load and type-check the prelude so tests can use arithmetic operators.
-///
-/// Operators like `+`, `*`, `==` are declared as `extern "intrinsic" fn` in
-/// the prelude for Int, Nat, and Float. Without the prelude, no function
-/// is in scope for them.
-fn load_prelude(db: &dyn salsa::Database) -> Option<PreludeData<'_>> {
-    let prelude_cst = SourceCst::from_source_str(db, "prelude:///std/prelude", PRELUDE_SOURCE);
-
-    let parsed = tribute_front::query::parsed_ast_with_module_path(
+/// Package `std`, whose root module is the prelude.
+#[salsa::tracked]
+fn std_package(db: &dyn salsa::Database) -> analysis::Package {
+    let dependencies = analysis::DependencyTable::new(db, Vec::new());
+    analysis::Package::new(
         db,
-        prelude_cst,
-        trunk_ir::Symbol::new("prelude"),
-    )?;
+        tribute_front::resolve::PackageName::std(),
+        *prelude_source(db),
+        dependencies,
+    )
+}
 
-    let prelude_ast = parsed.module(db);
-    let prelude_span_map = parsed.span_map(db);
-
-    // Build env for name resolution merging
-    let env = tribute_front::resolve::build_library_env(db, prelude_ast);
-
-    // Resolve prelude with its own env
-    let resolved_prelude = tribute_front::resolve::resolve_library_with_env(
-        db,
-        prelude_ast,
-        env.clone(),
-        prelude_span_map.clone(),
-    );
-
-    // Type-check once for both the exports injected into user modules and
-    // the typed module lowering reads the intrinsics from.
-    let checker = tribute_front::typeck::TypeChecker::new(db, prelude_span_map);
-    let (result, exports) = checker.check_prelude(&resolved_prelude);
-
-    Some(PreludeData {
-        exports,
-        env,
-        typed_module: result.module,
-    })
+/// The dependency table the sources under test are analyzed against:
+/// package `std` from the prelude, which declares the operators
+/// (`Int::(+)` etc.).
+#[salsa::tracked]
+fn environment(db: &dyn salsa::Database) -> analysis::DependencyTable {
+    analysis::DependencyTable::new(db, vec![*std_package(db)])
 }
 
 /// Inner tracked function that runs the full pipeline.
 ///
 /// Diagnostics emitted during the pipeline are accumulated as Salsa
 /// accumulators and can be collected by the caller.
-#[salsa::tracked(returns(clone))]
-fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst, specialize: bool) -> String {
+#[salsa::tracked]
+fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String {
     let parsed = tribute_front::query::parsed_ast(db, source);
     assert!(parsed.is_some(), "Should parse successfully");
 
-    let parsed = parsed.unwrap();
-    let ast = parsed.module(db);
-    let span_map = parsed.span_map(db);
+    let span_map = parsed.unwrap().span_map(db);
 
-    // Load prelude for operator declarations (Int::(+) etc.)
-    let prelude = load_prelude(db);
-
-    // Build env, merging prelude bindings so operator names resolve
-    let mut env = tribute_front::resolve::build_env(db, ast);
-    if let Some(ref p) = prelude {
-        tribute_front::resolve::merge_library(&mut env, &p.env);
-    }
-    let resolved = tribute_front::resolve::resolve_with_env(db, ast, env, span_map.clone());
-
-    // Type-check with prelude types injected
-    let mut checker = tribute_front::typeck::TypeChecker::new(db, span_map.clone());
-    if let Some(ref p) = prelude {
-        checker.inject_prelude(&p.exports);
-    }
-    let result = checker.check_module(&resolved);
-
-    let tdnr_ast = result.module;
-
-    let function_types_map: HashMap<_, _> = result.function_types.into_iter().collect();
-    let constructor_types: HashMap<_, _> = result.constructor_types.into_iter().collect();
-    let ability_definitions: HashMap<_, _> = result.ability_definitions.into_iter().collect();
-    let compiler_intrinsics = prelude
-        .as_ref()
-        .map(|prelude| {
-            tribute_front::ast_to_ir::registered_compiler_intrinsics(&prelude.typed_module)
-                .expect("prelude intrinsic directives must be supported")
-        })
-        .unwrap_or_default();
+    let checked = *analysis::analyze(db, source, *environment(db)).expect("the source parses");
+    // Specialization looks package std's declarations up but specializes only
+    // the module under test, so its output holds no prelude bodies.
+    let prelude = analysis::checked_package(db, *std_package(db)).expect("the prelude parses");
+    let compiler_intrinsics =
+        tribute_front::ast_to_ir::registered_compiler_intrinsics(prelude.checked.module(db))
+            .expect("prelude intrinsic directives must be supported");
+    let input = tribute_front::monomorphize::SpecializationInput::new(
+        db,
+        checked,
+        Some(prelude.checked),
+        analysis::root_names(db, *environment(db)),
+    )
+    .with_compiler_intrinsics(compiler_intrinsics);
+    let specialized = tribute_front::monomorphize::monomorphize_functions(db, input)
+        .expect("checked instances must specialize");
     let mut ir = IrContext::new();
-    let module = tribute_front::ast_to_ir::TypedModule {
-        ast: tdnr_ast,
-        span_map,
-        function_types: function_types_map,
-        constructor_types,
-        specialized_enum_variants: Default::default(),
-        node_types: result.node_types,
-        local_instances: result.local_instances,
-        function_instances: result.function_instances,
-        ability_definitions,
-        handler_operations: result.handler_operations,
-        perform_operations: result.perform_operations,
-        lambda_signatures: result.lambda_signatures,
-        exhaustive_cases: result.exhaustive_cases.into_iter().collect(),
-        evidence_plans: result.evidence_plans,
-        well_known_types: result.well_known_types,
-        compiler_intrinsics,
-        runtime_types: Default::default(),
-        merged_sources: Vec::new(),
-    }
+    let module = tribute_front::ast_to_ir::LoweringInput::from_specialization(
+        db,
+        specialized,
+        tribute_front::ast_to_ir::LoweringEnvironment {
+            span_map: tribute_front::ast::SpanMaps::new([span_map]),
+            ..Default::default()
+        },
+    )
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());
     let validation = tribute_ir::dialect::tribute_control::validate(
         &ir,
@@ -136,85 +84,7 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst, specializ
         validation.is_ok(),
         "logical frontend output must validate: {validation}"
     );
-    if specialize {
-        let core_module = core::Module::from_op(&ir, module.module.op())
-            .expect("frontend output must be a core.module");
-        let mut pm = PassManager::new();
-        pm.add_pass(trunk_ir::transforms::EliminateDeadCode::<core::Module>::new())
-            .add_pass(tribute_passes::specialize_convention_classes::SpecializeConventionClasses);
-        pm.run(&mut ir, core_module, &mut AnalysisCache::new())
-            .expect("class specialization accepts frontend output");
-        let validation = tribute_ir::dialect::tribute_control::validate(
-            &ir,
-            module.module,
-            &module.compiler_intrinsics,
-            &mut Default::default(),
-        );
-        assert!(
-            validation.is_ok(),
-            "specialized output must validate: {validation}"
-        );
-        let disagreements = tribute_passes::check_convention_classes::check(&ir, module.module);
-        assert!(disagreements.is_empty(), "{disagreements:?}");
-    }
     print_module(&ir, module.module.op())
-}
-
-#[salsa::tracked]
-fn run_frontend_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) {
-    let parsed = tribute_front::query::parsed_ast(db, source);
-    assert!(parsed.is_some(), "Should parse successfully");
-
-    let parsed = parsed.unwrap();
-    let ast = parsed.module(db);
-    let span_map = parsed.span_map(db);
-    let prelude = load_prelude(db);
-
-    let mut env = tribute_front::resolve::build_env(db, ast);
-    if let Some(ref p) = prelude {
-        tribute_front::resolve::merge_library(&mut env, &p.env);
-    }
-    let resolved = tribute_front::resolve::resolve_with_env(db, ast, env, span_map.clone());
-
-    let mut checker = tribute_front::typeck::TypeChecker::new(db, span_map);
-    if let Some(ref p) = prelude {
-        checker.inject_prelude(&p.exports);
-    }
-    let _ = checker.check_module(&resolved);
-}
-
-#[salsa::tracked(returns(clone))]
-fn tdnr_function_summary_inner(
-    db: &dyn salsa::Database,
-    source: SourceCst,
-    function_name: String,
-) -> TdnrSummary {
-    let parsed = tribute_front::query::parsed_ast(db, source);
-    assert!(parsed.is_some(), "Should parse successfully");
-
-    let parsed = parsed.unwrap();
-    let ast = parsed.module(db);
-    let span_map = parsed.span_map(db);
-
-    let prelude = load_prelude(db);
-
-    let mut env = tribute_front::resolve::build_env(db, ast);
-    if let Some(ref p) = prelude {
-        tribute_front::resolve::merge_library(&mut env, &p.env);
-    }
-    let resolved = tribute_front::resolve::resolve_with_env(db, ast, env, span_map.clone());
-
-    let mut checker = tribute_front::typeck::TypeChecker::new(db, span_map);
-    if let Some(ref p) = prelude {
-        checker.inject_prelude(&p.exports);
-    }
-    let result = checker.check_module(&resolved);
-
-    let module = result.module;
-    let body = function_body(&module, &function_name);
-    let mut summary = TdnrSummary::default();
-    collect_tdnr_summary(db, body, &mut summary);
-    summary
 }
 
 /// Run the AST pipeline through TDNR and summarize one function body.
@@ -226,7 +96,12 @@ pub fn tdnr_function_summary(
     source: SourceCst,
     function_name: &str,
 ) -> TdnrSummary {
-    tdnr_function_summary_inner(db, source, function_name.to_owned())
+    let checked =
+        *analysis::analyze(db, source, *environment(db)).expect("Should parse successfully");
+    let body = function_body(checked.module(db), function_name);
+    let mut summary = TdnrSummary::default();
+    collect_tdnr_summary(db, body, &mut summary);
+    summary
 }
 
 fn function_body<'db>(
@@ -347,7 +222,7 @@ fn collect_tdnr_summary<'db>(
 ///
 /// Uses `parsed_ast` to check only the test source for parse errors,
 /// avoiding false positives from prelude diagnostics.
-pub fn run_ast_pipeline_with_ir(db: &dyn salsa::Database, source: SourceCst) -> String {
+pub fn run_ast_pipeline_with_ir(db: &dyn salsa::Database, source: SourceCst) -> &str {
     // Check for parse errors in the test source (not prelude)
     let parse_diagnostics = tribute_front::query::parsed_ast::accumulated::<Diagnostic>(db, source);
     let parse_errors: Vec<_> = parse_diagnostics
@@ -367,24 +242,28 @@ pub fn run_ast_pipeline_with_ir(db: &dyn salsa::Database, source: SourceCst) -> 
         parse_errors.len(),
         parse_errors
             .iter()
-            .map(|d| {
-                format!(
-                    "  - [{}] {} (span: {}..{})",
-                    d.phase, d.inner.message, d.inner.span.start, d.inner.span.end
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+            .format_with("\n", |d, f| f(&format_args!(
+                "  - [{}] {} (span: {}..{})",
+                d.phase, d.inner.message, d.inner.span.start, d.inner.span.end
+            )))
     );
 
-    run_ast_pipeline_inner(db, source, false)
-}
-
-/// [`run_ast_pipeline_with_ir`], then class specialization: the IR with the
-/// class instances and conventions legalization reads.
-pub fn run_ast_pipeline_with_specialized_ir(db: &dyn salsa::Database, source: SourceCst) -> String {
-    let _ = run_ast_pipeline_with_ir(db, source);
-    run_ast_pipeline_inner(db, source, true)
+    let ir = run_ast_pipeline_inner(db, source);
+    // Production lowers only a module without errors.
+    let errors: Vec<_> = run_ast_pipeline_inner::accumulated::<Diagnostic>(db, source)
+        .into_iter()
+        .filter(|d| d.inner.severity == tribute_core::diagnostic::DiagnosticSeverity::Error)
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "Expected no errors, but found {}:\n{}",
+        errors.len(),
+        errors.iter().format_with("\n", |d, f| f(&format_args!(
+            "  - [{}] {}",
+            d.phase, d.inner.message
+        )))
+    );
+    ir
 }
 
 /// Run the full AST pipeline without returning IR text.
@@ -396,8 +275,7 @@ pub fn run_ast_pipeline(db: &dyn salsa::Database, source: SourceCst) {
 
 /// Run the frontend through TDNR, without lowering invalid ASTs to IR.
 pub fn ast_pipeline_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<Diagnostic> {
-    run_frontend_pipeline_inner(db, source);
-    run_frontend_pipeline_inner::accumulated::<Diagnostic>(db, source)
+    analysis::diagnostics(db, source, *environment(db))
         .into_iter()
         .cloned()
         .collect()

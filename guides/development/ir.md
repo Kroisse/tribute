@@ -25,35 +25,42 @@ Dialects are split across two crates:
   Language-agnostic dialects (core, func, scf, arith, mem, cf, clif,
   wasm)
 - **tribute-ir** (`crates/tribute-ir/src/dialect/`):
-  Tribute-specific dialects (tribute_control, ability, effect, closure, adt,
-  list, tribute_io, tribute_rt)
+  Tribute-specific dialects (tribute_control, tribute_cps, ability, effect,
+  closure, adt, list, tribute_io, tribute_rt)
 
 Dialect levels (high → low):
 
-- **High-level**: tribute_control, ability, effect, closure, adt, list,
-  tribute_io, tribute_rt — Tribute language concepts
+- **High-level**: tribute_control, tribute_cps, ability, effect, closure, adt,
+  list, tribute_io, tribute_rt — Tribute language concepts
 - **Mid-level**: func, scf, arith, mem — structured operations
 - **Low-level**: cf, wasm, clif — target-specific
 
 ## Source-logical Control
 
 The frontend emits `tribute_control` callable/control operations with exact
-source signatures and checked operation kinds. Shared `tribute_control_to_cps`
-legalization alone constructs continuations and the `func`/`closure` graph.
+source signatures and checked operation kinds. Class specialization replaces
+the callables and indirect transfers whose meaning depends on a convention with
+their `tribute_cps` operations. Shared `tribute_control_to_cps` legalization
+alone constructs continuations and the `func`/`closure` graph.
 Target ABI lowering validates that graph before physicalizing CPS results and
 selecting closure storage. Each operation's own contract is the doc comment
 on its declaration in
-[`tribute_control`](../../crates/tribute-ir/src/dialect/tribute_control.rs) and
+[`tribute_control`](../../crates/tribute-ir/src/dialect/tribute_control.rs),
+[`tribute_cps`](../../crates/tribute-ir/src/dialect/tribute_cps.rs), and
 [`ability`](../../crates/tribute-ir/src/dialect/ability.rs). See
 [the IR contract](../../new-plans/ir.md) for the rules that span operations, and
 [the shared pipeline](../../new-plans/cps-effects.md#shared-middle-end-pipeline).
 
 The target [representation/ABI boundary](../../new-plans/ir.md#representationabi-경계)
 ends with an exit verification that rejects any violation in every build; later
-passes read only the physical contracts it checked. `pipeline::dump_ir`
-(`--dump-ir`) prints the module at that exit, and tests split a compilation
-there with `run_target_to_boundary_exit` and `emit_from_boundary_exit`. The
-stage order is in the top-of-file comment in [src/pipeline.rs](../../src/pipeline.rs).
+passes read only the physical contracts it checked. After the frontend, the
+pipeline is one ordered chain of stages that `stage_passes` in
+[src/pipeline.rs](../../src/pipeline.rs) builds; each entry point runs a
+contiguous range of it as one `PassManager`. `pipeline::dump_ir`
+(`--dump-ir`) runs the chain to that exit and prints the module, and tests
+split a compilation there with `run_target_to_boundary_exit` and
+`emit_from_boundary_exit`. The stage order is in the top-of-file comment in
+[src/pipeline.rs](../../src/pipeline.rs).
 
 ## `#[dialect]` Macro
 
@@ -130,9 +137,10 @@ where
   `(StringArg, value)` entries.
 - Regions and successors are declared in the body: `#[region(name)] {}`,
   `#[region(name?)] {}` for an optional last region such as the body of an
-  external function, and `#[successor(name)] {}`. `#[successors(name)] {}`
-  declares the rest of the successor list and must come last; its accessor
-  iterates those blocks.
+  external function, and `#[successor(name)] {}`. `#[regions(name)] {}` and
+  `#[successors(name)] {}` declare the rest of the region or successor list
+  and must come last of their kind; their accessors iterate those regions or
+  blocks, and the builder takes them as an iterator.
 - Bounds are Rust types implementing `type_constraint::TypeConstraint`:
   `core` scalar categories (`IntegerLike` for fixed-width integers,
   `IntegerOrIndex` for those and `core.index`, `BoolLike`, `FloatLike`,
@@ -154,9 +162,36 @@ where
 - `#[verify]` on an operation requires `trunk_ir::ops::Verify` for its
   wrapper. It checks what the schema cannot express and runs only after
   every generated check passed.
-- `#[asm_format]` on an operation requires `trunk_ir::asm_format::OpAsmFormat`
-  for its wrapper, which prints and parses the operation's custom syntax.
-  Generic syntax stays readable for every operation.
+- `#[asm_format(..)]` on an operation lists its custom syntax as format
+  elements, which the shared printer and parser both interpret
+  ([declarative assembly format](../../new-plans/ir.md#선언적-어셈블리-형식)):
+
+  ```rust
+  #[asm_format("call" callee "(" args ")" attr_dict (":" types(results)^)?)]
+  fn invoke(callee: Attr<SymbolRef>, args: Variadic<_>) -> Variadic<_> {}
+  ```
+
+  String literals are keywords and punctuation, a bare name is an operand
+  or attribute, and `symbol(..)`, `type(..)`/`types(..)`, `attr_dict`
+  (`attributes {..}`), `region(..)`/`regions(..)`, and
+  `successor(..)`/`successors(..)` write the other entities.
+  `signature(t, body)` writes the `Attr<TypeOf<S>>` attribute `t` as
+  `(%a: A) -> R`, through the `asm_format::SignatureCodec` of `S`'s bound,
+  with the inputs as the entry block arguments of `body`, which then elides
+  its entry block, as `func.func` does. `("kw" .. x^)?`
+  opens with a literal and is written only when its anchor `x` is present;
+  an optional `bool` anchor is a flag the group's literals stand for. A
+  format begins with a literal (after any `symbol(..)` or symbol reference,
+  or a `signature(..)` after them),
+  closes each variadic
+  list with `")"` or `"]"`, and ends with `(":" types(..)^)?` for results
+  that may be absent. The macro reports a broken rule, a missing entity, or
+  one written twice at the element at fault. An operation the format cannot
+  spell without loss prints generically.
+- `#[asm_format]` without elements on an operation requires
+  `trunk_ir::asm_format::OpAsmFormat` for its wrapper, which prints and
+  parses the operation's custom syntax by hand. Generic syntax stays
+  readable for every operation.
 - On a type `struct`, `#[verify]` requires `trunk_ir::type_verifier::VerifyType`
   and `#[asm_format]` requires `trunk_ir::asm_format::TypeAsmFormat`. A
   hand-written `TypeDef` adds the same hooks with `with_verifier` and
@@ -167,6 +202,13 @@ where
   the type when it generates aliases; a hand-written `TypeDef` adds it with
   `with_alias_hint`. `#[implements(..)]` on a type registers the wrapper's
   [type interfaces](#type-interfaces).
+- The function syntax `<(inputs) -> results, {attrs}>` belongs to the
+  signature types that register it: their `TypeAsmFormat` calls
+  `func::print_signature_type` and `func::parse_signature_type`, which
+  map it to the generic form with `num_inputs`/`num_results`. The core
+  printer and parser have no function syntax of their own, so another
+  dialect's `*.func_sig` uses the generic form unless it registers the same
+  hooks.
 - A hand-written `TypeDef` is a `static` registered with
   `trunk_ir::register_type_def!(&DEF)`. Dialect crates never use
   `inventory` directly; registration goes through `#[dialect]` and these
@@ -205,12 +247,16 @@ Remaining operation-specific checks run afterwards and may assume the
 declared shape. The `tribute_control` local validator and the native backend
 boundary (`validate_clif_ir`) run `OpDef::verify` the same way before their
 own checks, so those checks cover only what the definition cannot express,
-such as symbol lookups, enclosing callables, and region contents.
-Debug builds also run `validate_op_schemas`, the declarative stages without
-the `#[verify]` hook, after every pipeline pass, reporting the pass that left
-an operation in violation. A pass that retypes a value before target type
+such as symbol lookups, enclosing callables, and region contents. A check
+that reads only the operation itself belongs in its `#[verify]` hook; the
+`tribute_control` local validator reaches each operation's checks on its
+placement and regions through the `LocalValidation` interface.
+Debug builds also run `validate_op_schemas`, the declarative stages without the
+`#[verify]` hook, after every pipeline pass, reporting the pass that left an
+operation in violation. A pass that retypes a value before target type
 conversion inserts `core.unrealized_conversion_cast` back to the type its uses
-declare. `PatternApplicator` does this for a staged conversion with
+declare.
+`PatternApplicator` does this for a staged conversion with
 `with_auto_type_conversion(true)` and a `ConversionTarget`. It casts the
 operands only of operations the target declares illegal. Where it retypes a
 block argument or a replaced result that an operation the target has no rule
@@ -222,8 +268,9 @@ before target conversion only retypes a value. A target
 conversion converts every value's type, including cast results through
 `UnrealizedCastConversionPattern`; its materializer builds only real
 representation changes and never forwards a value of another type. A target
-whose type system accepts subtype references elides those upcasts itself; the
-Wasm target's `ReferenceUpcastElisionPattern` follows the backend's physical
+whose type system accepts subtype references writes those upcasts as its own
+explicit operation, since schemas compare types exactly; the Wasm target's
+`ReferenceUpcastPattern` turns them into `wasm.ref_upcast` by the backend's physical
 assignability rule. The converter-free `ReconcileUnrealizedCasts` pass then folds
 identities and cast chains, and a cast left after that is rejected by the
 target emission boundary.
@@ -377,15 +424,13 @@ let func_ty = func::func_sig(ctx, params, [return_ty]).as_type_ref();
 ```
 
 The source signature `tribute_control.func_sig` is declared by hand but is
-built the same way. A signature without a convention is one that class
-specialization has not assigned yet:
+built the same way. It has no calling convention; a `tribute_cps` operation
+declares the convention it was assigned:
 
 ```rust
 let callback = tribute_control::FuncSig::params([i32_ty], i32_ty)
     .row(row)
-    .convention(CallingConvention::Cps)
     .intern(ctx);
-let direct = callback.with_convention(ctx, CallingConvention::Direct);
 ```
 
 String attribute values live in the context's string pool; an attribute

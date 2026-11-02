@@ -7,7 +7,7 @@ use tree_sitter::{InputEdit, Parser, Point};
 use tribute::pipeline::compile_with_diagnostics;
 use tribute::{SourceCst, TributeDatabaseImpl, compile_frontend};
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
-use tribute_front::ast::{Decl, ExprKind, ModuleItem, NodeId};
+use tribute_front::ast::{Decl, ExprKind, ModuleItem, NodeId, source_hash};
 use tribute_ir::dialect::tribute_control;
 use trunk_ir::Span;
 use trunk_ir::dialect::{arith, core};
@@ -23,7 +23,7 @@ fn source_function(ctx: &IrContext, module: &Module, name: &str) -> tribute_cont
         .filter_map(|&op| {
             tribute_control::Func::from_op(ctx, op)
                 .ok()
-                .filter(|function| function.sym_name(ctx) == name)
+                .filter(|function| function.sym_name(ctx) == format!("pkg::{name}"))
         })
         .collect();
     assert_eq!(matches.len(), 1, "expected one source function {name}");
@@ -74,9 +74,7 @@ fn compile_frontend_with_diagnostics(
     db: &dyn salsa::Database,
     source: SourceCst,
 ) -> Result<(IrContext, Module), Vec<&Diagnostic>> {
-    compile_frontend(db, source).ok_or_else(|| {
-        tribute::pipeline::parse_and_lower_ast::accumulated::<Diagnostic>(db, source)
-    })
+    compile_frontend(db, source).ok_or_else(|| tribute::pipeline::frontend_diagnostics(db, source))
 }
 
 fn expect_compilation_success(db: &dyn salsa::Database, source: SourceCst) -> (IrContext, Module) {
@@ -259,7 +257,8 @@ fn record_shape_diagnostics_follow_incremental_declaration_edits_slow() {
     let changed = ORIGINAL.replacen("y: Int", "z: Int", 1);
     let edit_start = ORIGINAL.find("y: Int").expect("declaration field");
     let record_start = ORIGINAL.find(RECORD).expect("record expression");
-    let record_span = Span::new(record_start, record_start + RECORD.len());
+    let record_span = Span::new(record_start, record_start + RECORD.len())
+        .in_source(source_hash(source.uri(&db).as_str()));
     let changed_diagnostics: Vec<_> = ["missing field: z", "unknown field `y` for struct `Point`"]
         .into_iter()
         .map(|message| {

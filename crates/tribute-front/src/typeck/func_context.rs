@@ -201,6 +201,8 @@ pub struct FunctionInferenceContext<'a, 'db> {
     deferred_methods: Vec<DeferredMethodCall<'db>>,
     /// Deferred method calls resolved before the function was solved.
     resolved_deferred_methods: Vec<(DeferredMethodCall<'db>, FuncDefId<'db>, Type<'db>)>,
+    /// The implicit constructors decided at each expression or pattern.
+    implicit_constructors: HashMap<NodeId, ImplicitConstructor<'db>>,
 
     /// Evidence scopes and the calls and resumes made in them.
     pub(crate) evidence: super::evidence_plan::EvidenceTracker<'db>,
@@ -232,6 +234,84 @@ pub struct DeferredMethodCall<'db> {
     pub arg_types: Vec<Type<'db>>,
     /// Fresh row for the method's effects, joined into the caller's row.
     pub effect: AbilityRow<'db>,
+}
+
+/// What an implicit constructor `.Name` must take, as it is written.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ConstructorShape {
+    /// `.Name`.
+    Unit,
+    /// `.Name(a, b)`, with this many arguments or sub-patterns.
+    Positional(usize),
+    /// `.Name { a, b }`, with the field names as written, and whether a
+    /// spread or a `..` gives the fields not written.
+    Fields { names: Vec<Symbol>, rest: bool },
+}
+
+impl ConstructorShape {
+    /// `.Name` with `count` arguments or sub-patterns, `.Name` alone for none.
+    pub fn of_arity(count: usize) -> Self {
+        if count == 0 {
+            Self::Unit
+        } else {
+            Self::Positional(count)
+        }
+    }
+}
+
+/// The constructor an implicit constructor `.Name` at an expression or a
+/// pattern names, as type checking decided it.
+#[derive(Clone)]
+pub enum ImplicitConstructor<'db> {
+    /// The constructor its type or its only candidate gave where it is
+    /// written, or an unresolved reference after a reported error.
+    Resolved(crate::ast::ResolvedRef<'db>),
+    /// A selection that waits for more of its types.
+    Deferred(DeferredConstructor<'db>),
+}
+
+/// An implicit constructor whose selection waits until after constraint
+/// solving, like a [`DeferredMethodCall`].
+#[derive(Clone)]
+pub struct DeferredConstructor<'db> {
+    /// The expression or pattern.
+    pub node_id: NodeId,
+    /// The constructor's name.
+    pub name: Symbol,
+    /// The constructors of the types in scope with that name, by rank.
+    pub candidates: crate::ast::Candidates<CtorId<'db>>,
+    /// The constructors with that name the module does not see, with why.
+    pub hidden: Vec<(CtorId<'db>, String)>,
+    /// How it is written.
+    pub shape: ConstructorShape,
+    /// Whether it is a pattern, whose fields equal the constructor's
+    /// rather than coerce to them.
+    pub pattern: bool,
+    /// What stands for the constructor's type until it is selected: a pure
+    /// function from `field_types` to `result_ty`, or `result_ty` itself
+    /// for a unit.
+    pub ctor_ty: Type<'db>,
+    /// The type of the value it constructs or matches.
+    pub result_ty: Type<'db>,
+    /// The type of each argument, sub-pattern, or field, as written.
+    pub field_types: Vec<Type<'db>>,
+}
+
+impl<'db> DeferredConstructor<'db> {
+    /// Register the constructor with `solver` as a producer of its value,
+    /// which waits for the selection and performs no effect.
+    pub fn defer_in(
+        &self,
+        db: &'db dyn salsa::Database,
+        solver: &mut super::solver::TypeSolver<'db>,
+    ) {
+        solver.defer_producer(
+            self.node_id,
+            self.result_ty,
+            self.field_types.clone(),
+            AbilityRow::pure(db),
+        );
+    }
 }
 
 impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
@@ -288,6 +368,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             method_syntax_calls: HashSet::default(),
             deferred_methods: Vec::new(),
             resolved_deferred_methods: Vec::new(),
+            implicit_constructors: HashMap::default(),
             evidence: Default::default(),
         }
     }
@@ -1002,6 +1083,47 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         &self.deferred_methods
     }
 
+    /// The implicit constructor decided at `node`.
+    pub fn implicit_constructor(&self, node: NodeId) -> Option<&ImplicitConstructor<'db>> {
+        self.implicit_constructors.get(&node)
+    }
+
+    /// Record the implicit constructor decided at `node`.
+    pub fn record_implicit_constructor(
+        &mut self,
+        node: NodeId,
+        constructor: ImplicitConstructor<'db>,
+    ) {
+        self.implicit_constructors.insert(node, constructor);
+    }
+
+    /// The implicit constructors still to be selected, in source order.
+    pub fn deferred_constructors(&self) -> Vec<&DeferredConstructor<'db>> {
+        let mut deferred: Vec<_> = self
+            .implicit_constructors
+            .values()
+            .filter_map(|constructor| match constructor {
+                ImplicitConstructor::Deferred(deferred) => Some(deferred),
+                ImplicitConstructor::Resolved(_) => None,
+            })
+            .collect();
+        deferred.sort_by_key(|deferred| deferred.node_id);
+        deferred
+    }
+
+    /// Take the implicit constructors still to be selected, in source order.
+    pub fn take_deferred_constructors(&mut self) -> Vec<DeferredConstructor<'db>> {
+        let mut deferred: Vec<_> = std::mem::take(&mut self.implicit_constructors)
+            .into_values()
+            .filter_map(|constructor| match constructor {
+                ImplicitConstructor::Deferred(deferred) => Some(deferred),
+                ImplicitConstructor::Resolved(_) => None,
+            })
+            .collect();
+        deferred.sort_by_key(|deferred| deferred.node_id);
+        deferred
+    }
+
     pub(crate) fn next_row_var(&self) -> u64 {
         self.next_row_var
     }
@@ -1400,18 +1522,16 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 mod tests {
     use super::*;
     use crate::ast::{TypeDefId, TypeParam};
+    use itertools::Itertools;
     use salsa_test_macros::salsa_test;
 
     /// Create a type parameter with just a name.
     fn type_param(name: Symbol) -> TypeParam {
-        TypeParam {
-            name: Some(name),
-            kind: None,
-        }
+        TypeParam { name: Some(name) }
     }
 
-    #[salsa::tracked(returns(copy))]
-    fn test_fresh_type_var_per_function_inner(db: &dyn salsa::Database) -> bool {
+    #[salsa_test]
+    fn test_fresh_type_var_per_function(db: &dyn salsa::Database) {
         let env = ModuleTypeEnv::new(db);
 
         // Two separate FunctionInferenceContexts with different function IDs
@@ -1421,35 +1541,22 @@ mod tests {
         let mut ctx1 = FunctionInferenceContext::new(db, &env, func_id1);
         let mut ctx2 = FunctionInferenceContext::new(db, &env, func_id2);
 
-        let var1_1 = ctx1.fresh_type_var();
-        let var1_2 = ctx1.fresh_type_var();
-        let var2_1 = ctx2.fresh_type_var();
-        let var2_2 = ctx2.fresh_type_var();
+        let vars = [
+            ctx1.fresh_type_var(),
+            ctx1.fresh_type_var(),
+            ctx2.fresh_type_var(),
+            ctx2.fresh_type_var(),
+        ];
 
         // All variables should be different (globally unique due to function IDs)
-        if var1_1 == var1_2 || var1_1 == var2_1 || var1_1 == var2_2 {
-            return false;
-        }
-        if var1_2 == var2_1 || var1_2 == var2_2 {
-            return false;
-        }
-        if var2_1 == var2_2 {
-            return false;
-        }
-
-        true
-    }
-
-    #[salsa_test]
-    fn test_fresh_type_var_per_function(db: &dyn salsa::Database) {
         assert!(
-            test_fresh_type_var_per_function_inner(db),
+            vars.iter().all_unique(),
             "Type variables should be globally unique across all function contexts"
         );
     }
 
-    #[salsa::tracked(returns(copy))]
-    fn test_instantiate_scheme_inner(db: &dyn salsa::Database) -> bool {
+    #[salsa_test]
+    fn test_instantiate_scheme(db: &dyn salsa::Database) {
         let mut env = ModuleTypeEnv::new(db);
 
         // Create a polymorphic function type: forall a. a -> a
@@ -1476,13 +1583,9 @@ mod tests {
         let ty1 = ctx.instantiate_function(func_id).unwrap();
         let ty2 = ctx.instantiate_function(func_id).unwrap();
 
-        // Two instantiations should get different UniVars
-        if ty1 == ty2 {
-            return false;
-        }
-
-        // Both should be function types with UniVar params
-        if let (
+        // Each instantiation gets fresh UniVars: both are `?a -> ?a`, with
+        // different variables.
+        let (
             TypeKind::Func {
                 params: p1,
                 result: r1,
@@ -1494,21 +1597,15 @@ mod tests {
                 ..
             },
         ) = (ty1.kind(db), ty2.kind(db))
-        {
-            p1.len() == 1
-                && p1[0] == *r1
-                && p2[0] == *r2
-                && p1[0] != p2[0] // Different UniVars
-                && matches!(p1[0].kind(db), TypeKind::UniVar { .. })
-        } else {
-            false
-        }
-    }
-
-    #[salsa_test]
-    fn test_instantiate_scheme(db: &dyn salsa::Database) {
-        assert!(
-            test_instantiate_scheme_inner(db),
+        else {
+            panic!("instantiations should be function types: {ty1:?}, {ty2:?}");
+        };
+        assert_eq!(p1.len(), 1);
+        assert_eq!(p1[0], *r1);
+        assert_eq!(p2[0], *r2);
+        assert!(matches!(p1[0].kind(db), TypeKind::UniVar { .. }));
+        assert_ne!(
+            p1[0], p2[0],
             "Each instantiation should produce fresh type variables"
         );
     }
@@ -1609,7 +1706,7 @@ mod tests {
     }
 
     #[salsa_test]
-    fn test_instantiate_scheme_freshens_rows_in_app_and_continuation(db: &dyn salsa::Database) {
+    fn test_instantiate_scheme_freshens_rows_in_tuple_and_continuation(db: &dyn salsa::Database) {
         fn continuation_effect<'db>(
             db: &'db dyn salsa::Database,
             ty: Type<'db>,
@@ -1634,24 +1731,18 @@ mod tests {
                 effect: shared,
             },
         );
-        let app = Type::new(
-            db,
-            TypeKind::App {
-                ctor: continuation,
-                args: vec![continuation],
-            },
-        );
-        let scheme = TypeScheme::new(db, vec![], vec![RowVar { id: 0 }], app);
+        let pair = Type::new(db, TypeKind::Tuple(vec![continuation, continuation]));
+        let scheme = TypeScheme::new(db, vec![], vec![RowVar { id: 0 }], pair);
 
         let instantiated = ctx.instantiate_scheme(scheme);
-        let TypeKind::App { ctor, args } = instantiated.kind(db) else {
-            panic!("expected application type");
+        let TypeKind::Tuple(elements) = instantiated.kind(db) else {
+            panic!("expected tuple type");
         };
-        let ctor_effect = continuation_effect(db, *ctor);
-        let arg_effect = continuation_effect(db, args[0]);
+        let first_effect = continuation_effect(db, elements[0]);
+        let second_effect = continuation_effect(db, elements[1]);
 
-        assert_eq!(ctor_effect.rest(db), arg_effect.rest(db));
-        assert_ne!(ctor_effect.rest(db), shared.rest(db));
+        assert_eq!(first_effect.rest(db), second_effect.rest(db));
+        assert_ne!(first_effect.rest(db), shared.rest(db));
     }
 
     #[salsa_test]
@@ -1694,8 +1785,8 @@ mod tests {
         assert!(empty.is_empty());
     }
 
-    #[salsa::tracked(returns(copy))]
-    fn test_instantiate_constructor_inner(db: &dyn salsa::Database) -> bool {
+    #[salsa_test]
+    fn test_instantiate_constructor(db: &dyn salsa::Database) {
         let mut env = ModuleTypeEnv::new(db);
 
         // Create a polymorphic constructor: forall a. a -> Option(a)
@@ -1730,13 +1821,9 @@ mod tests {
         let ty1 = ctx.instantiate_constructor(ctor_id).unwrap();
         let ty2 = ctx.instantiate_constructor(ctor_id).unwrap();
 
-        // Two instantiations should get different UniVars
-        if ty1 == ty2 {
-            return false;
-        }
-
-        // Both should be function types with UniVar params
-        if let (
+        // Each instantiation gets fresh UniVars: both are `?a -> Option(?a)`,
+        // with different variables.
+        let (
             TypeKind::Func {
                 params: p1,
                 result: r1,
@@ -1748,38 +1835,22 @@ mod tests {
                 ..
             },
         ) = (ty1.kind(db), ty2.kind(db))
-        {
-            // Verify param is UniVar and same as result's type arg
-            if !matches!(p1[0].kind(db), TypeKind::UniVar { .. }) {
-                return false;
-            }
-            if !matches!(p2[0].kind(db), TypeKind::UniVar { .. }) {
-                return false;
-            }
-
-            // Results should be Named types with the UniVar as argument
-            let r1_ok = if let TypeKind::Named { name, args, .. } = r1.kind(db) {
-                *name == type_name && args.len() == 1 && args[0] == p1[0]
-            } else {
-                false
-            };
-            let r2_ok = if let TypeKind::Named { name, args, .. } = r2.kind(db) {
-                *name == type_name && args.len() == 1 && args[0] == p2[0]
-            } else {
-                false
-            };
-
-            // Different UniVars for different instantiations
-            r1_ok && r2_ok && p1[0] != p2[0]
-        } else {
-            false
+        else {
+            panic!("instantiations should be function types: {ty1:?}, {ty2:?}");
+        };
+        for (param, result) in [(p1[0], r1), (p2[0], r2)] {
+            assert!(matches!(param.kind(db), TypeKind::UniVar { .. }));
+            // The result is a Named type with the UniVar as argument.
+            assert!(
+                matches!(
+                    result.kind(db),
+                    TypeKind::Named { name, args, .. } if *name == type_name && args[..] == [param]
+                ),
+                "{result:?}"
+            );
         }
-    }
-
-    #[salsa_test]
-    fn test_instantiate_constructor(db: &dyn salsa::Database) {
-        assert!(
-            test_instantiate_constructor_inner(db),
+        assert_ne!(
+            p1[0], p2[0],
             "Each constructor instantiation should produce fresh type variables"
         );
     }

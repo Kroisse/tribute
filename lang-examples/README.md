@@ -61,7 +61,7 @@ diff -u \
 ### M0 native effects artifact
 
 [`native_effects.trb`](native_effects.trb) handles the public
-`abilities::Throw` ability and writes through `std::io`.
+`std::abilities::Throw` ability and writes through `std::io`.
 
 ```bash
 cargo run --locked -- compile lang-examples/native_effects.trb \

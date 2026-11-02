@@ -67,9 +67,9 @@ enum Shape {
 
 fn area(shape: Shape) -> Nat {
     case shape {
-        Circle { radius } -> radius
-        Rect { tall: True, width } -> width
-        Rect { width: _, .. } -> 0
+        .Circle { radius } -> radius
+        .Rect { tall: True, width } -> width
+        .Rect { width: _, .. } -> 0
     }
 }
 "#,
@@ -144,8 +144,8 @@ enum Shape {
 
 fn size(shape: Shape) -> Nat {
     case shape {
-        Circle { size, .. } -> size
-        Dot { value } -> value
+        .Circle { size, .. } -> size
+        .Dot { value } -> value
     }
 }
 "#,
@@ -153,8 +153,8 @@ fn size(shape: Shape) -> Nat {
     assert_eq!(
         errors,
         [
-            "unknown field `size` for variant `Circle`",
-            "`Dot` has positional fields; match it with `Dot(...)`",
+            "unknown field `size` for variant `Shape::Circle`",
+            "`Shape::Dot` has positional fields; match it with `.Dot(...)`",
         ]
     );
 }
@@ -172,10 +172,10 @@ enum Shape {
 
 fn size(shape: Shape) -> Nat {
     case shape {
-        Dot(a, b) -> a
-        Line(a) -> a
-        Empty(a) -> a
-        Dot -> 0
+        .Dot(a, b) -> a
+        .Line(a) -> a
+        .Empty(a) -> a
+        .Dot -> 0
         _ -> 0
     }
 }
@@ -184,10 +184,10 @@ fn size(shape: Shape) -> Nat {
     assert_eq!(
         errors,
         [
-            "constructor `Dot` expects 1 field, but the pattern has 2",
-            "constructor `Line` expects 2 fields, but the pattern has 1",
-            "constructor `Empty` expects 0 fields, but the pattern has 1",
-            "constructor `Dot` expects 1 field, but the pattern has 0",
+            "constructor `Shape::Dot` expects 1 field, but the pattern has 2",
+            "constructor `Shape::Line` expects 2 fields, but the pattern has 1",
+            "constructor `Shape::Empty` expects 0 fields, but the pattern has 1",
+            "constructor `Shape::Dot` expects 1 field, but the pattern has 0",
         ]
     );
 }
@@ -227,9 +227,9 @@ enum Shape {
         r#"
 fn area(shape: Shape) -> Nat {
     case shape {
-        Circle { .. } -> 0
-        Rect { tall: True, width } -> width
-        Rect { width: _, tall: False } -> 1
+        .Circle { .. } -> 0
+        .Rect { tall: True, width } -> width
+        .Rect { width: _, tall: False } -> 1
     }
 }
 "#
@@ -242,15 +242,15 @@ fn area(shape: Shape) -> Nat {
         r#"
 fn area(shape: Shape) -> Nat {
     case shape {
-        Circle { .. } -> 0
-        Rect { tall: True, .. } -> 1
+        .Circle { .. } -> 0
+        .Rect { tall: True, .. } -> 1
     }
 }
 "#
     );
     assert_eq!(
         messages(db, &partial, DiagnosticSeverity::Error),
-        ["non-exhaustive case expression: missing patterns: Rect(_, False)"]
+        ["non-exhaustive case expression on `Shape`: missing patterns: .Rect(_, False)"]
     );
 
     let repeated = format!(
@@ -258,9 +258,9 @@ fn area(shape: Shape) -> Nat {
         r#"
 fn area(shape: Shape) -> Nat {
     case shape {
-        Rect { tall: _, .. } -> 1
-        Rect { width, tall: _ } -> width
-        Circle { radius } -> radius
+        .Rect { tall: _, .. } -> 1
+        .Rect { width, tall: _ } -> width
+        .Circle { radius } -> radius
     }
 }
 "#
@@ -284,9 +284,9 @@ enum Shape {
 
 fn kind(shape: Shape) -> Nat {
     case shape {
-        Circle { .. } -> 0
-        Rect { .., } -> 1
-        Empty { .. } -> 2
+        .Circle { .. } -> 0
+        .Rect { .., } -> 1
+        .Empty { .. } -> 2
     }
 }
 

@@ -1,12 +1,18 @@
 //! Diagnostic formatting utilities for the Tribute compiler CLI.
 
-use ariadne::{Color, Label, Report, ReportKind, Source};
-use ropey::Rope;
+use std::fmt;
+use std::ops::Range;
+
+use ariadne::{Cache, Color, Config, IndexType, Label, Report, ReportKind, Source};
+use rustc_hash::FxHashMap as HashMap;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic};
 use trunk_ir::diagnostic::DiagnosticSeverity;
 
 use tribute::SourceCst;
 use tribute::pipeline::compile_with_diagnostics;
+use tribute_front::ast::source_hash;
+use tribute_front::source_file::SourceFiles;
+use tribute_front::uri_to_path;
 
 /// Get the display color for a compilation phase.
 pub fn phase_color(phase: &CompilationPhase) -> Color {
@@ -26,11 +32,130 @@ pub fn normalize_span(start: usize, end: usize) -> (usize, usize) {
     (start, end.max(start + 1))
 }
 
-/// Print a diagnostic using ariadne for pretty output.
-pub fn print_diagnostic(diag: &Diagnostic, source: &Rope, file_path: &str) {
-    let (start, end) = normalize_span(diag.inner.span.start, diag.inner.span.end);
+/// The files a diagnostic's spans are in. Each holds only the lines its
+/// spans cover, after an empty line for each line before them, so that
+/// ariadne numbers them as in the file. (Ariadne's `display_line_offset`
+/// moves the location in a report's header, but not its line numbers.)
+struct SpanFiles<'a> {
+    db: &'a dyn salsa::Database,
+    root: SourceCst,
+    /// How the root file is shown.
+    root_path: &'a str,
+    excerpts: HashMap<SourceCst, Excerpt>,
+}
+
+/// The lines of a file that a diagnostic's spans cover.
+struct Excerpt {
+    /// The byte offset in the file of the excerpt's start.
+    offset: usize,
+    source: Source<String>,
+}
+
+impl<'a> SpanFiles<'a> {
+    fn new(db: &'a dyn salsa::Database, root: SourceCst, root_path: &'a str) -> Self {
+        Self {
+            db,
+            root,
+            root_path,
+            excerpts: HashMap::default(),
+        }
+    }
+
+    /// The file whose spans carry the source id `source`: another file the
+    /// build read, such as a file module, a manifest, or a dependency's
+    /// file, or else the root.
+    fn file(&self, source: u64) -> SourceCst {
+        SourceFiles::try_get(self.db)
+            .and_then(|files| files.provider(self.db).find(self.db, source))
+            .unwrap_or(self.root)
+    }
+
+    /// Read the lines that `spans`, byte ranges in their files, cover.
+    fn read(&mut self, spans: &[(SourceCst, Range<usize>)]) {
+        let mut covered: HashMap<SourceCst, Range<usize>> = HashMap::default();
+        for (file, span) in spans {
+            covered
+                .entry(*file)
+                .and_modify(|range| {
+                    range.start = range.start.min(span.start);
+                    range.end = range.end.max(span.end);
+                })
+                .or_insert_with(|| span.clone());
+        }
+        for (file, range) in covered {
+            let text = file.text(self.db);
+            let len = text.len_bytes();
+            let first = text.byte_to_line(range.start.min(len));
+            let last = text.byte_to_line(range.end.min(len));
+            let start = text.line_to_byte(first);
+            let end = text.line_to_byte((last + 1).min(text.len_lines()));
+            let mut excerpt = "\n".repeat(first);
+            excerpt.extend(text.byte_slice(start..end).chunks());
+            self.excerpts.insert(
+                file,
+                Excerpt {
+                    offset: start - first,
+                    source: Source::from(excerpt),
+                },
+            );
+        }
+    }
+
+    /// `span` of `file` as a span of its excerpt.
+    fn span(&self, file: SourceCst, span: &Range<usize>) -> (SourceCst, Range<usize>) {
+        let offset = self.excerpts.get(&file).map_or(0, |excerpt| excerpt.offset);
+        (file, span.start - offset..span.end - offset)
+    }
+}
+
+impl Cache<SourceCst> for SpanFiles<'_> {
+    type Storage = String;
+
+    fn fetch(&mut self, file: &SourceCst) -> Result<&Source<String>, impl fmt::Debug> {
+        self.excerpts
+            .get(file)
+            .map(|excerpt| &excerpt.source)
+            .ok_or("a file no span of the diagnostic is in")
+    }
+
+    fn display<'b>(&self, file: &'b SourceCst) -> Option<impl fmt::Display + 'b> {
+        if *file == self.root {
+            return Some(self.root_path.to_owned());
+        }
+        let uri = file.uri(self.db);
+        Some(uri_to_path(uri).map_or_else(
+            || uri.as_str().to_owned(),
+            |path| path.display().to_string(),
+        ))
+    }
+}
+
+/// Print a diagnostic of the package whose root file is `root` using
+/// ariadne, against the file each of its spans is in.
+pub fn print_diagnostic(
+    db: &dyn salsa::Database,
+    root: SourceCst,
+    root_path: &str,
+    diag: &Diagnostic,
+) {
+    let mut files = SpanFiles::new(db, root, root_path);
+    let span_of = |span: &trunk_ir::Span| {
+        let (start, end) = normalize_span(span.start as usize, span.end as usize);
+        (files.file(span.source), start..end)
+    };
+    let main = span_of(&diag.inner.span);
+    let labels: Vec<_> = diag
+        .inner
+        .labels
+        .iter()
+        .map(|label| (span_of(&label.span), label.message.as_ref()))
+        .collect();
+    let spans: Vec<_> = std::iter::once(main.clone())
+        .chain(labels.iter().map(|(span, _)| span.clone()))
+        .collect();
+    files.read(&spans);
+    let main = files.span(main.0, &main.1);
     let color = phase_color(&diag.phase);
-    let source_text: String = source.to_string();
 
     let report_kind = match diag.inner.severity {
         DiagnosticSeverity::Error => ReportKind::Error,
@@ -38,21 +163,20 @@ pub fn print_diagnostic(diag: &Diagnostic, source: &Rope, file_path: &str) {
         DiagnosticSeverity::Info => ReportKind::Advice,
     };
 
-    let mut report = Report::build(report_kind, (file_path, start..end))
+    let mut report = Report::build(report_kind, main.clone())
+        .with_config(Config::default().with_index_type(IndexType::Byte))
         .with_code(format!("{:?}", diag.phase))
         .with_message(&diag.inner.message)
         .with_label(
-            Label::new((file_path, start..end))
+            Label::new(main)
                 .with_message(&diag.inner.message)
                 .with_color(color),
         );
 
-    // Add secondary labels
-    for label in diag.inner.labels.iter() {
-        let (ls, le) = normalize_span(label.span.start, label.span.end);
+    for ((file, span), message) in &labels {
         report = report.with_label(
-            Label::new((file_path, ls..le))
-                .with_message(label.message.as_ref())
+            Label::new(files.span(*file, span))
+                .with_message(message)
                 .with_color(Color::Blue),
         );
     }
@@ -62,10 +186,7 @@ pub fn print_diagnostic(diag: &Diagnostic, source: &Rope, file_path: &str) {
         report = report.with_note(note.as_ref());
     }
 
-    report
-        .finish()
-        .eprint((file_path, Source::from(source_text)))
-        .ok();
+    report.finish().eprint(files).ok();
 }
 
 /// Print accumulated diagnostics in source order.
@@ -75,9 +196,20 @@ pub fn print_diagnostics(
     file_path: &str,
     diags: &mut [&Diagnostic],
 ) {
-    diags.sort_by(|left, right| tribute::pipeline::compare_diagnostics(left, right));
+    diags.sort_by(|left, right| tribute_core::diagnostic::compare_diagnostics(left, right));
+    // Keep each file's diagnostics together, the root file's first.
+    let root = source_hash(source.uri(db).as_str());
+    diags.sort_by_key(|diag| {
+        let source = diag.inner.span.source;
+        // A span in no file is shown against the root, with its diagnostics.
+        if source == root || source == 0 {
+            None
+        } else {
+            Some(source)
+        }
+    });
     for diag in diags.iter() {
-        print_diagnostic(diag, source.text(db), file_path);
+        print_diagnostic(db, source, file_path, diag);
     }
 }
 
@@ -91,14 +223,13 @@ pub fn report_diagnostics(
     file_path: &str,
     mut accumulated_diags: Vec<&Diagnostic>,
 ) {
-    let source_text = source.text(db);
     if !accumulated_diags.is_empty() {
         print_diagnostics(db, source, file_path, &mut accumulated_diags);
     } else {
         let result = compile_with_diagnostics(db, source);
         if !result.diagnostics.is_empty() {
             for diag in &result.diagnostics {
-                print_diagnostic(diag, source_text, file_path);
+                print_diagnostic(db, source, file_path, diag);
             }
         } else {
             eprintln!("Compilation failed (unknown error)");

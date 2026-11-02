@@ -78,6 +78,12 @@ pub fn tribute_control_pre_cps_target() -> ConversionTarget {
     ConversionTarget::new()
         .legal_dialect(trunk_ir::dialect::core::DIALECT_NAME)
         .legal_dialect(tribute_ir::dialect::tribute_control::DIALECT_NAME)
+        .legal_dialect(tribute_ir::dialect::tribute_cps::DIALECT_NAME)
+        .illegal_op(tribute_control::Func::NAME)
+        .illegal_op(tribute_control::Lambda::NAME)
+        .illegal_op(tribute_control::FuncRef::NAME)
+        .illegal_op(tribute_control::CallIndirect::NAME)
+        .illegal_op(tribute_control::TailCallIndirect::NAME)
         .legal_dialect(trunk_ir::dialect::scf::DIALECT_NAME)
         .legal_dialect(trunk_ir::dialect::arith::DIALECT_NAME)
         .legal_dialect(tribute_ir::dialect::adt::DIALECT_NAME)
@@ -90,7 +96,9 @@ pub fn tribute_control_pre_cps_target() -> ConversionTarget {
 
 /// Partial post-legalization target. Unknown operations belong to later passes.
 pub fn tribute_control_post_cps_target() -> ConversionTarget {
-    ConversionTarget::new().illegal_dialect(tribute_ir::dialect::tribute_control::DIALECT_NAME)
+    ConversionTarget::new()
+        .illegal_dialect(tribute_ir::dialect::tribute_control::DIALECT_NAME)
+        .illegal_dialect(tribute_ir::dialect::tribute_cps::DIALECT_NAME)
 }
 
 #[derive(Clone, Copy)]
@@ -128,6 +136,7 @@ fn walk_type(
         }
         TypeBoundary::Post => {
             data.name.dialect(ctx) == tribute_ir::dialect::tribute_control::DIALECT_NAME
+                || data.name.dialect(ctx) == tribute_ir::dialect::tribute_cps::DIALECT_NAME
         }
     };
     if forbidden {
@@ -243,14 +252,20 @@ fn verify_final_handle_dispatch_types(ctx: &IrContext, module: Module) -> Vec<Bo
             });
             return;
         };
-        if DynConventionBearing::of(ctx, def) != Some(expected) {
+        let conventions = tribute_ir::dialect::closure::Lambda::from_op(ctx, def)
+            .ok()
+            .and_then(|lambda| lambda.entries(ctx))
+            .map(|entries| {
+                entries
+                    .iter()
+                    .map(|entry| entry.convention)
+                    .collect::<Vec<_>>()
+            });
+        if conventions.as_deref() != Some(&[expected][..]) {
             failures.push(BoundaryFailure {
                 op: Some(def),
                 location: Some(ctx.op(def).location),
-                message: format!(
-                    "dispatcher must preserve calling convention metadata {}",
-                    expected as u8
-                ),
+                message: format!("dispatcher must be a closure.lambda with one {expected} body"),
             });
         }
     }
@@ -553,11 +568,11 @@ pub fn verify_tribute_control_pre_cps(
     analyses: &mut AnalysisCache,
 ) -> Result<(), TributeControlToCpsError> {
     let mut failures = Vec::new();
-    if tribute_control::conventions_assigned(ctx, module) == Some(false) {
+    if tribute_control::specialized(ctx, module) == Some(false) {
         failures.push(BoundaryFailure {
             op: None,
             location: None,
-            message: "source signatures have no calling convention; class specialization must run before legalization".into(),
+            message: "source callables are not tribute_cps operations; class specialization must run before legalization".into(),
         });
     }
     let validation = tribute_control::validate(ctx, module, compiler_intrinsics, analyses);
@@ -642,6 +657,19 @@ pub fn verify_tribute_control_post_cps(
         });
     }
     failures.extend(verify_final_handle_dispatch_types(ctx, module));
+    failures.extend(
+        tribute_ir::calling_convention::verify_conventions(ctx, module.op())
+            .into_iter()
+            .map(|violation| BoundaryFailure {
+                op: Some(violation.op),
+                location: Some(ctx.op(violation.op).location),
+                message: format!(
+                    "{}: {}",
+                    ctx.op(violation.op).name.display(ctx),
+                    violation.error
+                ),
+            }),
+    );
     let symbols = analyses.require::<SymbolTable>(ctx, module.op());
     failures.extend(verify_physical_callable_graph(ctx, module, &symbols));
     failures.extend(

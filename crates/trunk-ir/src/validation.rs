@@ -23,6 +23,7 @@ use derive_more::{Display, Error};
 
 use super::analysis::AnalysisCache;
 use super::context::IrContext;
+use super::dialect::core;
 use super::op_def::OpDef;
 use super::op_flag::{IsolatedFromAbove, OpFlag};
 use super::op_interface::{
@@ -30,6 +31,7 @@ use super::op_interface::{
     RegionBranchPoint, RegionSuccessor, RegionValueTransfer,
 };
 use super::ops::{DialectOp, DialectType};
+use super::pass::{Pass, PassRunResult};
 use super::refs::{OpRef, RegionRef, ValueDef, ValueRef};
 use super::rewrite::Module;
 use super::symbol_table::{SymbolTable, link_name, qualified_name};
@@ -538,7 +540,7 @@ fn enclosing_func_signature(
         let region = ctx.block(block).parent_region?;
         op = ctx.region(region).parent_op?;
         if let Some(owner) = DynCallableOwner::get(ctx, op) {
-            return owner.callable_signature(ctx);
+            return owner.callable_signature(ctx, region);
         }
         if IsolatedFromAbove::is_set(ctx, op) {
             return None;
@@ -550,17 +552,7 @@ fn typed_callee_signature(
     ctx: &IrContext,
     value: ValueRef,
 ) -> Option<crate::dialect::func::FuncSig> {
-    let ty = ctx.value_ty(value);
-    let data = ctx.get_type(ty);
-    let ty = if data.name.is(ctx, "closure.closure") {
-        let [ty] = data.params.as_slice() else {
-            return None;
-        };
-        *ty
-    } else {
-        ty
-    };
-    crate::dialect::func::FuncSig::from_type_ref(ctx, ty)
+    crate::dialect::func::FuncSig::from_type_ref(ctx, ctx.value_ty(value))
 }
 
 fn check_value_types(
@@ -1208,7 +1200,7 @@ fn check_call_arity_in_region(
 /// correct number of arguments matching the callee's function signature.
 ///
 /// Arity mismatches are reported as warnings via `ctx.report_warning`.
-pub fn validate_call_arity(ctx: &IrContext, module: Module) {
+fn validate_call_arity(ctx: &IrContext, module: Module) {
     let symbols = SymbolTable::collect(ctx, module);
     let _ = walk::walk_op::<std::convert::Infallible>(ctx, module.op(), &mut |op| {
         if !is_arity_checked_function(ctx, op) {
@@ -1221,6 +1213,59 @@ pub fn validate_call_arity(ctx: &IrContext, module: Module) {
         }
         std::ops::ControlFlow::Continue(walk::WalkAction::Skip)
     });
+}
+
+/// Check that every `func.call` and `func.tail_call` passes as many
+/// arguments as its callee's signature takes. A mismatch is a warning
+/// reported to the context's diagnostics; it does not fail the run.
+pub struct CheckCallArity;
+
+impl Pass for CheckCallArity {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "check-call-arity"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        validate_call_arity(ctx, target.into());
+        Ok(())
+    }
+}
+
+/// In debug builds, reject a module with [`validate_value_integrity`]
+/// errors, labeled with the pipeline point `boundary`. It does nothing in
+/// release builds.
+pub struct CheckValueIntegrity {
+    pub boundary: &'static str,
+}
+
+impl Pass for CheckValueIntegrity {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "check-value-integrity"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        if cfg!(debug_assertions) {
+            let result = validate_value_integrity(ctx, target.into());
+            if !result.is_ok() {
+                return Err(format!("value integrity errors {}: {result}", self.boundary).into());
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Run all validations and combine results.
@@ -1723,6 +1768,19 @@ mod tests {
         assert_eq!(stale_errors.len(), 1);
         assert_eq!(stale_errors[0].0, "func_b");
         assert!(stale_errors[0].2.contains("arith.const"));
+
+        // In debug builds the check pass rejects the module.
+        if cfg!(debug_assertions) {
+            let error = CheckValueIntegrity {
+                boundary: "at test",
+            }
+            .run(&mut ctx, module_op, &mut AnalysisCache::new())
+            .expect_err("a stale value fails the value integrity check");
+            assert!(
+                error.to_string().contains("value integrity errors at test"),
+                "{error}"
+            );
+        }
     }
 
     #[test]
@@ -2330,7 +2388,7 @@ mod tests {
     #[test]
     fn tail_call_indirect_typed_cps_transfer_passes() {
         let input = r#"core.module @test {
-  func.func @main(%k: closure.closure<func.func_sig<(core.i32) -> core.never>>, %value: core.i32) -> core.never {
+  func.func @main(%k: core.ptr, %value: core.i32) -> core.never {
     func.tail_call_indirect %k, %value {signature = func.func_sig<(core.i32) -> core.never>}
   }
 }"#;
@@ -2343,7 +2401,7 @@ mod tests {
     #[test]
     fn tail_call_indirect_rejects_non_cps_result_and_bad_arguments() {
         let input = r#"core.module @test {
-  func.func @main(%k: closure.closure<func.func_sig<(core.i32) -> core.i32>>, %value: core.i1) -> core.never {
+  func.func @main(%k: core.ptr, %value: core.i1) -> core.never {
     func.tail_call_indirect %k, %value {signature = func.func_sig<(core.i32) -> core.i32>}
   }
 }"#;
@@ -2363,7 +2421,7 @@ mod tests {
         let input = r#"core.module @test {
   !never = func.func_sig<() -> core.never>
   !unary = func.func_sig<(core.i32) -> core.never>
-  func.func @result(%k: closure.closure<!never>) -> core.never {
+  func.func @result(%k: !never) -> core.never {
     %bad = func.tail_call_indirect %k {signature = !never} : core.i32
   }
   func.func @not_last(%k: !never) -> core.never {
@@ -2376,9 +2434,6 @@ mod tests {
   func.func @unsigned(%k: !never) -> core.never {
     func.tail_call_indirect %k
   }
-  func.func @bad_closure(%k: closure.closure) -> core.never {
-    func.tail_call_indirect %k {signature = !never}
-  }
   func.func @mismatched(%k: !unary) -> core.never {
     func.tail_call_indirect %k {signature = !never}
   }
@@ -2388,7 +2443,7 @@ mod tests {
   func.func @direct_function(%k: !never) -> core.never {
     func.tail_call_indirect %k {signature = !never}
   }
-  func.func @arity(%k: closure.closure<!unary>) -> core.never {
+  func.func @arity(%k: core.ptr) -> core.never {
     func.tail_call_indirect %k {signature = !unary}
   }
 }"#;
@@ -2401,13 +2456,12 @@ mod tests {
             "must terminate its block",
             "expected at least 1 operand(s), found 0",
             "missing required attribute `signature`",
-            "closure type must contain exactly one function type",
             "exact indirect signature differs from typed callee",
             "operands `args`: expected S::Inputs = (core.i32), found ()",
         ] {
             assert!(text.contains(expected), "missing `{expected}`:\n{text}");
         }
-        assert_eq!(result.errors.len(), 7, "{text}");
+        assert_eq!(result.errors.len(), 6, "{text}");
     }
 
     #[test]
@@ -2454,6 +2508,51 @@ mod tests {
         assert!(
             text.contains("else_region must terminate with scf.yield"),
             "{text}"
+        );
+    }
+
+    #[test]
+    fn check_passes_accept_valid_ir_and_report_arity_as_a_warning() {
+        use crate::pass::PassManager;
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @add(%0: core.i32, %1: core.i32) -> core.i32 {
+    %2 = arith.addi %0, %1 : core.i32
+    func.return %2
+  }
+  func.func @main() -> core.i32 {
+    %0 = arith.const {value = 1} : core.i32
+    %1 = func.call %0 {callee = @add} : core.i32
+    func.return %1
+  }
+}"#,
+        );
+        let root = core::Module::from_op(&ctx, module.op()).expect("core.module");
+        let passes = Rc::new(RefCell::new(Vec::new()));
+        let seen = Rc::clone(&passes);
+        let mut pm = PassManager::new();
+        pm.add_pass(CheckValueIntegrity { boundary: "test" })
+            .add_pass(CheckCallArity);
+        pm.with_instrumentation(move |_ctx, name, _op| seen.borrow_mut().push(name.to_owned()));
+
+        pm.run(&mut ctx, root, &mut AnalysisCache::new())
+            .expect("valid IR passes both checks; an arity mismatch is only a warning");
+
+        assert_eq!(
+            *passes.borrow(),
+            ["check-value-integrity", "check-call-arity"]
+        );
+        let diagnostics = ctx.diagnostics();
+        assert_eq!(diagnostics.len(), 1);
+        assert!(
+            diagnostics[0].message.contains("1 argument(s), expected 2"),
+            "{}",
+            diagnostics[0].message
         );
     }
 

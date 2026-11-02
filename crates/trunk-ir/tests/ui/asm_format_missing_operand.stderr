@@ -1,0 +1,5 @@
+error: the format does not write operand `rhs`
+ --> tests/ui/asm_format_missing_operand.rs:4:11
+  |
+4 |         #[asm_format("probe" lhs attr_dict)]
+  |           ^^^^^^^^^^

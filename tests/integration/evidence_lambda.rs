@@ -6,8 +6,8 @@
 use ropey::Rope;
 use salsa::Database;
 use tribute::TributeDatabaseImpl;
-use tribute::database::parse_with_thread_local;
 use tribute_front::SourceCst;
+use tribute_front::source_file::parse_rope;
 use trunk_ir::callable::{CallableBody, classify_callable_body};
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::func;
@@ -17,7 +17,7 @@ use trunk_ir::rewrite::Module;
 /// Helper to compile code through the shared production pipeline and return arena IR.
 fn compile_to_ir(db: &dyn salsa::Database, code: &str, name: &str) -> (IrContext, Module) {
     let source_code = Rope::from_str(code);
-    let tree = parse_with_thread_local(&source_code, None);
+    let tree = parse_rope(&source_code, None);
     let source_file = SourceCst::from_path(db, name, source_code, tree);
     tribute::pipeline::compile_ast(db, source_file)
         .expect("shared production pipeline should succeed")
@@ -50,7 +50,7 @@ fn function_abi(ctx: &IrContext, module: &Module, target: &str) -> (usize, bool,
         .copied()
         .find_map(|op| {
             let func_op = func::Func::from_op(ctx, op).ok()?;
-            (func_op.sym_name(ctx) == target).then_some(func_op)
+            (func_op.sym_name(ctx) == format!("pkg::{target}")).then_some(func_op)
         })
         .unwrap_or_else(|| panic!("missing function '{target}'"));
     let func_ty = func_op.r#type(ctx);
@@ -60,10 +60,8 @@ fn function_abi(ctx: &IrContext, module: &Module, target: &str) -> (usize, bool,
     let has_evidence = params
         .first()
         .is_some_and(|ty| tribute_ir::dialect::ability::is_evidence_type_ref(ctx, *ty));
-    let is_cps = ctx
-        .op_attrs(func_op.op_ref())
-        .get("tribute.calling_convention")
-        .is_some_and(|attr| *attr == trunk_ir::Attribute::Int(2));
+    let is_cps = tribute_ir::calling_convention::DynConventionBearing::of(ctx, func_op.op_ref())
+        == Some(tribute_ir::calling_convention::CallingConvention::Cps);
     let hidden_count = usize::from(has_evidence) + usize::from(has_evidence && is_cps);
     let has_done_k = is_cps;
     let returns_anyref = function.single_result(ctx).is_some_and(|result| {
@@ -85,7 +83,7 @@ fn function_param_types(ctx: &IrContext, module: &Module, target: &str) -> Vec<t
         .copied()
         .find_map(|op| {
             let func_op = func::Func::from_op(ctx, op).ok()?;
-            (func_op.sym_name(ctx) == target).then_some(func_op)
+            (func_op.sym_name(ctx) == format!("pkg::{target}")).then_some(func_op)
         })
         .unwrap_or_else(|| panic!("missing function '{target}'"));
     func::FuncSig::from_type_ref(ctx, func_op.r#type(ctx))
@@ -350,7 +348,7 @@ fn main() -> Nil { }
         // counter should have evidence
         let counter_has_evidence = functions
             .iter()
-            .any(|(name, has_ev)| name == "counter" && *has_ev);
+            .any(|(name, has_ev)| name == "pkg::counter" && *has_ev);
         assert!(counter_has_evidence, "counter() should have evidence");
 
         // The lambda calling counter() should also have evidence
@@ -405,6 +403,12 @@ fn main() -> Nil { }
                 if name.starts_with("std::runtime::evidence::") {
                     continue;
                 }
+                // A trap entry only fills a convention slot a closure does not
+                // implement; its signature lays out the closure's callable, which
+                // may already hold evidence, so it is not a lifted function.
+                if name.starts_with("__tribute_trap_entry_") {
+                    continue;
+                }
                 let CallableBody::Definition { entry, .. } =
                     classify_callable_body(&ctx, op).expect("well-formed frontend callable")
                 else {
@@ -445,7 +449,7 @@ fn main() -> Nil { }
             .copied()
             .find_map(|op| {
                 let function = func::Func::from_op(&ctx, op).ok()?;
-                (function.sym_name(&ctx) == "foreign").then_some(function)
+                (function.sym_name(&ctx) == "pkg::foreign").then_some(function)
             })
             .expect("external declaration");
         assert_eq!(

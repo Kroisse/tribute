@@ -1,0 +1,5 @@
+error: the operation may have no results; write their types as the anchor of an optional group, such as `(":" types(results)^)?`
+ --> tests/ui/asm_format_result_types_outside_group.rs:4:34
+  |
+4 |         #[asm_format("probe" ":" types(results))]
+  |                                  ^^^^^

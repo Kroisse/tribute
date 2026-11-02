@@ -48,9 +48,8 @@ export(`Slots(a)`, `Dispatch`)는 그 모듈이 `pub(pkg)`이므로 패키지 `s
 syntax와 backend-independent lowering이 canonical identity를 요구하는 opaque `List`와
 intrinsic 성질처럼 compiler가 보장해야 하는 metadata는 builtin registry에 둔다.
 
-LSP는 import된 compiler-owned binding을 completion과 hover에 노출한다. 다만 이동할
-source declaration이 없으므로 go-to-definition과 rename target은 제공하지 않는다.
-로컬 declaration은 같은 short name의 builtin import보다 우선하며, 이 규칙은 effect
+Language server가 이 binding을 보이는 방식은 [Language Server](lsp.md#결과)를
+따른다. 로컬 declaration은 같은 short name의 builtin import보다 우선하며, 이 규칙은 effect
 annotation을 포함한 모든 name-resolution 경로에서 동일하게 적용한다. 이 shadowing은
 syntax-owned semantics를 바꾸지 않는다. 예를 들어 로컬 `List`는 annotation에서
 선택될 수 있지만 `[1, 2]`의 canonical builtin `List` identity를 capture하지 못하며,
@@ -73,16 +72,30 @@ syntax-owned semantics를 바꾸지 않는다. 예를 들어 로컬 `List`는 an
 
 식별 경로와 IR symbol의 철자는 다음과 같다.
 
-- 의존 패키지의 선언은 패키지 이름으로 시작한다. 패키지 `std`의 선언은
-  `std::Option`, `std::Option::map`, `std::Int::+`다.
-- 컴파일하는 패키지의 선언은 자기 패키지 component를 생략하고 모듈 경로로
-  시작한다(`main`, `geometry::area`). 이 생략은 컴파일하는 패키지에만 적용한다.
-  패키지 `std`는 언제나 의존 패키지로 해석하므로, `std` 선언의 식별 경로와 IR
-  symbol, runtime 항목 경로, `tribute.types` key는 언제나 `std::…`다.
-- 생략한 경로의 첫 component가 의존 패키지의 이름이면 생략하지 않고 `pkg`로
-  시작한다. 사용자 패키지의 `mod std { pub fn f() … }`의 `f`는 `pkg::std::f`이고,
-  패키지 `std`의 선언과 식별자나 symbol을 공유하지 않는다. `pkg`는 경로 키워드이므로
-  어떤 모듈의 이름도 될 수 없어 이 경로는 다른 선언과 겹치지 않는다.
+- 라이브러리 패키지의 선언은 언제나 패키지 이름으로 시작한다. 패키지 `std`의
+  선언은 `std::Option`, `std::Option::map`, `std::Int::+`다. 라이브러리
+  패키지를 혼자 컴파일하든 다른 패키지의 의존 패키지로 해석하든 식별 경로는
+  같으므로, 그 패키지의 식별 경로와 IR symbol, runtime 항목 경로,
+  `tribute.types` key는 어느 빌드에서나 같다.
+- 실행 파일 빌드의 루트 패키지의 선언은 component `pkg`로 시작한다(`pkg::main`,
+  `pkg::geometry::area`). 루트 패키지의 `mod std { pub fn f() … }`의 `f`는
+  `pkg::std::f`이고, 패키지 `std`의 선언과 식별자나 symbol을 공유하지 않는다.
+  `pkg`는 경로 키워드이고 매니페스트도 패키지 이름으로 허용하지 않으므로, 이 경로는
+  어떤 라이브러리 패키지나 모듈의 경로와도 겹치지 않는다. 라이브러리 `lib`의
+  `mod std`의 `f`는 `lib::std::f`다.
+- 실행 파일 루트 패키지의 식별 경로에는 패키지 이름을 쓰지 않는다. 한 패키지는
+  `lib.trb`와 `main.trb`를 함께 가질 수 있고([최상위 모듈](#최상위-모듈-root-module)),
+  빌드는 모든 패키지의 본문을 하나의 module로 합친다
+  ([Linking](linking.md#compilation-unit)). 실행 파일 루트가 패키지 이름으로
+  시작하면, 같은 이름의 라이브러리와 같은 경로를 쓰게 된다.
+
+**진단의 이름 표기.** 진단은 현재 컴파일하는 패키지의 선언을 그 패키지의 component
+없이 표기한다. 실행 파일 루트 패키지를 컴파일하면 그 선언은 `Point`,
+`geometry::area`이고, 라이브러리 `lib`를 컴파일하면 `lib`의 선언은 `area`다. 다른
+패키지의 선언은 식별 경로 그대로 표기한다(`std::Option`, `lib::area`). 패키지
+component를 뗀 경로가 의존 패키지의 이름으로 시작하면 component를 남겨, 그 패키지의
+선언과 구별한다(실행 파일 루트의 `pkg::std::f`). 이 표기는 표시 규칙일 뿐이며 식별
+경로와 IR symbol은 바꾸지 않는다.
 
 **의존 패키지.** 패키지는 의존하는 패키지를 의존성 표로 안다. 모든 패키지는 `std`에
 의존한다. 의존 패키지의 이름은 모든 모듈에서 경로의 첫 segment가 될 수 있고, 그 경로는
@@ -100,9 +113,9 @@ syntax-owned semantics를 바꾸지 않는다. 예를 들어 로컬 `List`는 an
 
 **Prelude.** prelude는 패키지 `std`의 모듈 `std::prelude::v0`다. 모든 패키지의 모든
 모듈은 패키지 `std` 자신의 모듈을 포함해 `std::prelude::v0`의 `pub` 항목을 짧은
-이름으로 본다. 그 항목은 대개 표준 라이브러리 선언의 re-export다. 값과 타입(`Option`,
-`Some`, `String`)뿐 아니라 그 항목의 namespace도 경로의 첫 segment가 된다
-(`Option::map`, `Int::to_string`, `abilities::Throw`). Re-export는 대상의 namespace를
+이름으로 본다. 그 항목은 대개 표준 라이브러리 선언의 re-export다. 타입(`Option`,
+`String`)뿐 아니라 그 항목의 namespace도 경로의 첫 segment가 된다
+(`Option::map`, `Option::Some`, `Int::to_string`). Re-export는 대상의 namespace를
 함께 가져오기 때문이다.
 
 - 모듈 안의 이름이 prelude 짧은 이름보다 우선한다. 가려진 prelude 항목은
@@ -113,9 +126,17 @@ syntax-owned semantics를 바꾸지 않는다. 예를 들어 로컬 `List`는 an
   `x.std::Option::map(f)`로 쓴다.
 - `std::prelude::v0`의 `use`는 prelude 짧은 이름으로 시작하지 않고 경로 키워드로
   쓴다(`pub use pkg::Option`). Prelude가 자기 자신에 기대지 않게 하기 위해서다.
-- Prelude에 둘 이름은 사용자 코드가 짧은 이름으로 쓰는 표준 타입, 생성자, namespace다.
-  Compiler 소유 `List`의 짧은 이름도 prelude의 re-export다. 같은 선언을 가리키므로
-  식별 경로는 바뀌지 않는다.
+- Prelude에 둘 이름은 사용자 코드가 짧은 이름으로 쓰는 표준 타입과, 타입과 같은
+  이름의 namespace(`Int`, `Bytes`)다. Compiler 소유 `List`의 짧은 이름도 prelude의
+  re-export다. 같은 선언을 가리키므로 식별 경로는 바뀌지 않는다.
+- Enum variant는 prelude에 두지 않는다. Variant는 enum의 namespace에만 있으므로
+  ([types.md](types.md#enum-variant의-이름)), prelude 타입의 variant는
+  `Option::Some`이나 [암묵적 생성자](type-inference.md#암묵적-생성자) `.Some`으로
+  가리킨다. 그래서 `Result::Error`와 `std::io::Error`처럼 이름이 같은 variant와
+  타입이 prelude에서 충돌하지 않는다.
+- 표준 라이브러리의 모듈(`std::abilities`, `std::io`, `std::collections`)은
+  prelude에 두지 않는다. 그 항목은 `std::io::print_line`처럼 패키지 경로로
+  가리키거나 `use`로 가져온다.
 
 진단은 타입을 식별 경로로 표시한다. 패키지 `std`의 타입은 `std::Option(Int)`처럼
 보인다.
@@ -238,6 +259,13 @@ symbol uniqueness 규칙을 완화하지 않는다.
 이름공간이므로, 모듈 안에서 선언해도 모듈 경로를 붙이지 않는다. 소스에서는 여전히
 모듈 경로로 그 함수를 가리킨다.
 
+`extern "intrinsic"`이 아닌 extern 함수는 타입 매개변수를 가질 수 없으며, 명시하지
+않은 타입 변수도 마찬가지다. 외부 함수는 symbol 하나로 링크되므로 인스턴스마다 다른
+정의를 가질 수 없고, 인스턴스마다 다른 표현을 symbol 하나가 받으려면 균일 표현이
+필요하다([Generics](generics.md)는 이를 채택하지 않는다). Intrinsic은 compiler가
+인스턴스마다 구현을 공급하므로 generic일 수 있다. 타입 검사는 이 규칙을 선언마다
+진단하며, 쓰이지 않는 선언도 진단한다.
+
 ### Use 문법
 
 ```rust
@@ -260,7 +288,9 @@ use std::collections::List::prepend
 
 ### 타입과 동명 네임스페이스
 
-타입 선언(`struct`, `enum`)은 암묵적으로 동명의 네임스페이스를 생성한다. 생성자는 자동으로 해당 네임스페이스에 포함된다.
+타입 선언(`struct`, `enum`)은 암묵적으로 동명의 네임스페이스를 생성한다. Enum의
+variant는 이 네임스페이스에만 선언되며, enum을 둘러싼 모듈에는 이름이 생기지
+않는다([types.md](types.md#enum-variant의-이름)).
 
 ```rust
 pub enum Option(a) {
@@ -279,15 +309,15 @@ pub enum Option(a) {
 pub mod Option {
     pub fn map(opt: Option(a), f: fn(a) -> b) -> Option(b) {
         case opt {
-            None -> None
-            Some(x) -> Some(f(x))
+            .None -> .None
+            .Some(x) -> .Some(f(x))
         }
     }
 
     pub fn unwrap_or(opt: Option(a), default: a) -> a {
         case opt {
-            None -> default
-            Some(x) -> x
+            .None -> default
+            .Some(x) -> x
         }
     }
 }
@@ -302,6 +332,14 @@ pub mod Option {
 enum Option(a) { None, Some(a) }
 let option = Option::None  // 값 `option`과 타입 `Option`은 다른 네임스페이스
 ```
+
+### 중복 선언
+
+한 모듈(패키지 루트, 파일 모듈, 인라인 `mod` 본문) 안에서 `fn`, `extern fn`,
+`struct`, `enum`, `ability`는 이름 하나를 한 번만 선언할 수 있다. 같은 이름을 다시
+선언하면 나중 선언이 오류이며, 먼저 선언한 것이 그 이름의 정의로 남는다. 오류가 난
+선언은 이후 단계에 전달되지 않는다. 타입과 같은 이름의 companion `mod`, `use`,
+다른 모듈의 같은 이름은 중복이 아니다.
 
 ---
 
@@ -428,6 +466,29 @@ mod b {
 ```
 
 스코프에 없는 모듈의 선언은 호출의 후보를 바꾸지 않는다.
+
+### 암묵적 생성자의 후보
+
+[암묵적 생성자](type-inference.md#암묵적-생성자) `.Name`은 그 자리의 타입이 정해지면
+그 타입의 생성자를 쓴다. 타입이 정해지지 않았을 때만 스코프의 타입에서 후보를
+모은다. 후보는 스코프 안의 타입 이름 `T`마다 `T`의 생성자 `Name`이다. 경로
+`T::Name`으로 쓸 수 있는 생성자이며, 쓰는 자리에서 보이는 것만 든다. 순위는
+UFCS의 [후보의 순위](#후보의-순위)를 따른다.
+
+1. **스코프의 타입**: 호출 위치의 스코프가 선언이나 `use`로 가리키는 타입.
+2. **Prelude**: prelude의 짧은 이름이 가리키는 타입. 스코프의 선언이나 `use`가 그
+   짧은 이름을 가려도 이 순위의 후보로 남는다.
+
+같은 타입을 여러 이름으로 가리켜도 후보는 하나다. 고르는 방식과 기다리는 방식,
+모호성 오류는 [후보 선택](#후보-선택)과 같다.
+
+```rust
+use std::io::Error
+
+fn f() -> Result(Int, Error) {
+    .Error { error: .EndOfFile }    // 기대 타입 Result의 Error, 그 필드 타입 Error의
+}                                   // EndOfFile
+```
 
 ### 후보의 순위
 
@@ -722,6 +783,70 @@ my_app/
 
 `lib.trb`와 `main.trb`가 동시에 존재하면 라이브러리와 실행 파일을 모두 제공하는 패키지가 된다.
 
+### 매니페스트 (`tribute.toml`)
+
+패키지는 매니페스트 `tribute.toml`을 담은 디렉토리다. 매니페스트는 패키지 이름과
+[의존성 표](#prelude와-패키지-std)를 정한다. 루트 파일은 매니페스트에 적지 않고,
+매니페스트 옆 `src/` 아래의 `lib.trb`와 `main.trb`로 정한다
+([최상위 모듈](#최상위-모듈-root-module)). 둘 다 없으면 패키지 오류다. 파일 이름은
+대소문자까지 `tribute.toml`이어야 하며, 대소문자를 구분하지 않는 파일 시스템에서도
+다른 철자의 파일은 매니페스트로 읽지 않는다.
+
+```toml
+[package]
+name = "my_app"
+
+[dependencies]
+geometry = { path = "../geometry" }
+```
+
+- `[package]`의 `name`은 필수다. 이름은 소문자 모듈 이름과 같은 식별자이며, 경로
+  키워드(`pkg`, `super`, `self`)와 `std`는 쓸 수 없다.
+- `[dependencies]`의 각 항목은 이름 → `{ path = "…" }`다. `path`는 의존 패키지의
+  `tribute.toml`을 담은 디렉토리이고, 그 패키지는 `lib.trb`를 가져야 한다. 항목의
+  이름은 의존 패키지의 `[package] name`과 같아야 하며, 그 이름이 의존 패키지 경로의
+  첫 segment가 된다(`geometry::area`, `::geometry::area`). 버전과 registry는 이
+  표의 형식에 포함하지 않는다.
+- `std`는 모든 패키지의 암묵적 의존성이므로 `[dependencies]`에 적지 않는다.
+
+**경로의 기준.** 매니페스트의 모든 경로는 그 매니페스트를 담은 디렉토리를 기준으로
+해석하며, 프로세스의 작업 디렉토리를 기준으로 하지 않는다. 그래서 같은 매니페스트는
+어디서 컴파일해도 같은 패키지를 가리킨다. 절대 경로도 허용하지만, 다른 환경에서
+쓰일 패키지에서는 권장하지 않는다. 다른 파일에서 상속하거나 포함한 경로는 그 경로를
+선언한 파일의 디렉토리를 기준으로 해석한다.
+
+**패키지의 동일성.** 한 빌드에서 같은 디렉토리를 가리키는 의존성 항목은 모두 같은
+패키지를 가리킨다. 디렉토리는 매니페스트의 디렉토리에 `path`를 이어 `.`과 `..`를
+글자 그대로 접은 경로로 비교한다. 그래서 두 패키지가 같은 라이브러리에 의존하면 그
+라이브러리는 빌드에 한 번만 들어온다.
+
+**패키지 오류.** 매니페스트 오류는 그 매니페스트의 경로와 위치를 가지고 보고한다.
+
+- 매니페스트 자신의 오류는 그 매니페스트에서 보고한다. TOML 구문 오류, `[package]`의
+  `name`이 없거나 위 이름 규칙을 어기는 경우, 이름 규칙을 어기는 의존성 항목 이름
+  (`std` 포함), 표가 아니거나 `path`가 없거나 `path`가 문자열이 아닌 의존성 항목,
+  의존성 항목의 `path` 아닌 key(`version` 등)가 그렇다. 패키지 디렉토리를 빌드할
+  때 `src/`에 `lib.trb`와 `main.trb`가 모두 없는 것도 그 매니페스트의 오류다.
+- 의존 패키지에 관한 오류는 의존하는 쪽 매니페스트의 그 항목에서 보고한다. `path`에
+  `tribute.toml`이 없을 때, 항목의 이름이 의존 패키지의 `[package] name`과 다를 때,
+  의존 패키지에 `lib.trb`가 없을 때가 그렇다.
+- 의존성은 순환할 수 없다. 의존 패키지가 의존 관계를 따라 다시 의존하는 쪽
+  패키지에 닿으면, 그 순환을 닫는 의존성 항목에서 보고한다.
+
+오류가 난 의존성 항목은 의존성 표에서 빠지므로, 그 패키지의 경로는 이름 해석에서
+다시 오류가 된다.
+
+**실행 파일 루트.** 실행 파일 빌드의 루트 파일은 패키지의 `src/main.trb`이며, 그
+의존성 표는 매니페스트의 `[dependencies]`와 `std`다. `src/lib.trb`만 있는 패키지는 실행 파일을 만들지 않으며, 라이브러리로
+검사한다.
+
+**매니페스트 없는 컴파일.** 매니페스트 없이 source 파일 하나를 컴파일할 수 있다. 그
+파일은 `std`에만 의존하는 실행 파일 패키지의 루트이며, 파일 기반 모듈은 그 파일의
+디렉토리를 `src/`처럼 기준으로 삼아 찾는다. 컴파일 입력이 source 파일이면 그
+파일이 패키지 안에 있어도, 패키지의 루트 파일이어도 매니페스트 없이 컴파일한다.
+패키지는 그 디렉토리로 컴파일한다. 편집기에서 연 파일을 어느 패키지 안에서
+분석하는지는 [Language Server](lsp.md#문서가-속한-패키지)를 따른다.
+
 ### 모듈 이름 관례
 
 - **기본**: 소문자 (`math`, `utils`, `api`)
@@ -748,6 +873,28 @@ pub mod api         // src/api.trb 로드 (public)
 pub mod math        // src/utils/math.trb 로드
 pub mod string      // src/utils/string.trb 로드
 ```
+
+**파일의 위치.** 본문 없는 `mod foo`는 선언한 모듈의 디렉토리에 있는 `foo.trb`를
+읽는다. 모듈 이름이 대소문자까지 그대로 파일 이름이 되며, 대소문자를 구분하지 않는
+파일 시스템에서도 다른 철자의 파일은 읽지 않는다. `foo/mod.trb`는 읽지 않는다. 모듈의
+디렉토리는 다음과 같다.
+
+- 패키지 루트 파일(`lib.trb`, `main.trb`, [매니페스트 없는
+  컴파일](#매니페스트-tributetoml)의 source 파일): 그 파일이 있는 디렉토리
+- 파일 모듈 `foo.trb`: 그 옆의 `foo/`
+- 인라인 모듈 `mod a { ... }`: 그 모듈을 둘러싼 모듈의 디렉토리 아래 `a/`
+
+그래서 `src/lib.trb`의 `mod a { mod b }`는 `src/a/b.trb`를 읽는다. 파일 모듈은 그
+파일의 내용을 본문으로 쓴 인라인 모듈과 같은 뜻이며, 이름 해석과 가시성은 모듈이
+어느 파일에 있는지 보지 않는다.
+
+**오류.** 다음은 그 `mod` 선언에서 보고하는 패키지 오류다. 모듈을 조용히 건너뛰지
+않는다.
+
+- 본문 없는 `mod`의 파일이 없다.
+- 본문 있는 `mod`와 같은 위치에 그 모듈의 파일도 있다.
+- 한 파일에 두 `mod` 선언이 닿는다. 루트 파일을 다시 가리키는 `mod`(`main.trb`의
+  `mod main`)도 그렇다.
 
 인라인 모듈과 파일 기반 모듈의 차이:
 
@@ -901,6 +1048,14 @@ pub use pkg::internal::{TypeA, TypeB}
 pub use pkg::internal::LongTypeName as Short
 ```
 
+Re-export한 이름은 대상을 가리킨다. 그 이름 뒤로 이어지는 경로는 대상에서, 대상의
+namespace를 따라 끝까지 이어진다. 모듈 `m`이 `pub use std as library`를 선언하면
+`m::library::Option::Some`은 패키지 `std`의 `Option::Some`이다. 경로가 지나는
+re-export도 [가시성](#가시성-visibility) 규칙을 따르므로, 쓰는 자리에서 보이지 않는
+re-export를 지나는 경로는 그 re-export에서 멈춘다. Re-export한 이름 아래의 항목
+(`m::Opt::Some`, `m::library::Option`)도 그 re-export와 같은 가시성을 가지므로, 경로나
+타입 annotation으로 그 항목을 가리켜도 보이지 않는 re-export를 우회하지 않는다.
+
 ### 완전한 예시
 
 ```rust
@@ -913,7 +1068,7 @@ pub use pkg::internal::Config
 pub use pkg::api::{Request, Response}
 
 
-// src/internal/mod.trb (또는 src/internal.trb)
+// src/internal.trb
 pub struct Config {
     debug: Bool
     timeout: Int
@@ -945,5 +1100,4 @@ pub fn handle(req: Request) -> Response {
 
 1. **Prelude 버전**: `std::prelude::v0` 다음 버전을 언제, 어떻게 고르는지
 2. **조건부 컴파일**: `#[cfg(...)] mod foo` 문법 및 지원 범위
-3. **매니페스트**: `Tribute.toml` 형식 및 필수 여부
-4. **lang-examples 구조**: 각 예제를 개별 폴더의 `main.trb`로 재구성
+3. **lang-examples 구조**: 각 예제를 개별 폴더의 `main.trb`로 재구성

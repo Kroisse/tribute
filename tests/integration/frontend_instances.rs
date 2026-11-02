@@ -1,6 +1,6 @@
 //! The tracked public specialization query rejects damaged instance evidence.
 use salsa_test_macros::salsa_test;
-use tribute::pipeline::{parse_and_lower_ast, prepare_frontend_for_lowering};
+use tribute::pipeline::{frontend_diagnostics, parse_and_lower_ast, prepare_frontend_for_lowering};
 use tribute_core::diagnostic::Diagnostic;
 use tribute_front::{
     SourceCst,
@@ -12,9 +12,11 @@ use tribute_front::{
 fn prepare_damaged(db: &dyn salsa::Database, source: SourceCst, damage: u8) -> bool {
     let typed = parse_and_lower_ast(db, source).unwrap();
     let mut metadata = typed.expression_types(db).clone();
-    let mut handlers = typed.handler_operations(db).clone();
-    let mut performs = typed.perform_operations(db).clone();
-    let target = if damage >= 6 { "hidden" } else { "identity" };
+    let target = if damage >= 6 {
+        "pkg::hidden"
+    } else {
+        "pkg::identity"
+    };
     let node = metadata
         .function_instances
         .iter()
@@ -33,16 +35,18 @@ fn prepare_damaged(db: &dyn salsa::Database, source: SourceCst, damage: u8) -> b
             5 => instance.callable = Type::new(db, TypeKind::Bool),
             6 => instance.type_arguments[0] = Type::new(db, TypeKind::Bool),
             7 => {
-                let (_, handler) = handlers
+                let (_, handler) = metadata
+                    .handler_operations
                     .iter_mut()
-                    .find(|(_, operation)| operation.ability.qualified(db) == "Writer")
+                    .find(|(_, operation)| operation.ability.qualified(db) == "pkg::Writer")
                     .unwrap();
                 handler.ability_args[0] = Type::new(db, TypeKind::BoundVar { index: 999 });
             }
             8 => {
-                let (_, perform) = performs
+                let (_, perform) = metadata
+                    .perform_operations
                     .iter_mut()
-                    .find(|(_, operation)| operation.ability.qualified(db) == "Writer")
+                    .find(|(_, operation)| operation.ability.qualified(db) == "pkg::Writer")
                     .unwrap();
                 perform.ability_args[0] = Type::new(db, TypeKind::BoundVar { index: 999 });
             }
@@ -52,16 +56,8 @@ fn prepare_damaged(db: &dyn salsa::Database, source: SourceCst, damage: u8) -> b
     let damaged = TypeCheckOutput::new(
         db,
         typed.module(db).clone(),
-        typed.function_types(db).to_vec(),
-        typed.constructor_types(db).clone(),
+        typed.declarations(db).clone(),
         metadata,
-        typed.ability_definitions(db).to_vec(),
-        handlers,
-        performs,
-        typed.lambda_signatures(db).clone(),
-        typed.exhaustive_cases(db).to_vec(),
-        *typed.well_known_types(db),
-        typed.span_map(db),
     );
     prepare_frontend_for_lowering(db, damaged, source).is_some()
 }
@@ -139,14 +135,14 @@ fn inconsistent_effect_instances_block_lowering(db: &salsa::DatabaseImpl) {
 fn effect_only_nominal_instance_matches_handlers_and_performs(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(db, "effect_only.trb", EFFECT_ONLY_NOMINAL);
     let typed = parse_and_lower_ast(db, source).unwrap();
-    let errors = parse_and_lower_ast::accumulated::<Diagnostic>(db, source);
+    let errors = frontend_diagnostics(db, source);
     assert!(errors.is_empty(), "{errors:?}");
     let prepared = prepare_frontend_for_lowering(db, typed, source).unwrap();
     let instance = prepared
         .expression_types(db)
         .function_instances
         .iter()
-        .find(|(_, instance)| instance.function.qualified(db) == "hidden")
+        .find(|(_, instance)| instance.function.qualified(db) == "pkg::hidden")
         .unwrap()
         .1
         .clone();
@@ -154,17 +150,21 @@ fn effect_only_nominal_instance_matches_handlers_and_performs(db: &salsa::Databa
     let argument = instance.type_arguments[0];
     assert!(matches!(argument.kind(db), TypeKind::Named { args, .. } if args.is_empty()));
     let handlers: Vec<_> = prepared
-        .handler_operations(db)
+        .expression_types(db)
+        .handler_operations
         .iter()
         .filter(|(_, operation)| {
-            operation.ability.qualified(db) == "Writer" && operation.ability_args == vec![argument]
+            operation.ability.qualified(db) == "pkg::Writer"
+                && operation.ability_args == vec![argument]
         })
         .collect();
     let performs: Vec<_> = prepared
-        .perform_operations(db)
+        .expression_types(db)
+        .perform_operations
         .iter()
         .filter(|(_, operation)| {
-            operation.ability.qualified(db) == "Writer" && operation.ability_args == vec![argument]
+            operation.ability.qualified(db) == "pkg::Writer"
+                && operation.ability_args == vec![argument]
         })
         .collect();
     assert!(!handlers.is_empty());
@@ -174,4 +174,85 @@ fn effect_only_nominal_instance_matches_handlers_and_performs(db: &salsa::Databa
             .iter()
             .all(|(_, perform)| handler.ability == perform.ability)
     }));
+}
+
+#[salsa::tracked(returns(copy))]
+fn prepares(db: &dyn salsa::Database, source: SourceCst) -> bool {
+    let typed = parse_and_lower_ast(db, source).unwrap();
+    prepare_frontend_for_lowering(db, typed, source).is_some()
+}
+
+/// Every monomorphic function is lowered, so an incomplete instance in one
+/// is rejected whether or not `main` reaches it.
+#[salsa_test]
+fn incomplete_instances_are_rejected_whether_or_not_reached(db: &salsa::DatabaseImpl) {
+    for main in [
+        "fn main() -> Nil { }",
+        "fn main() -> Nil { let _ = unused() }",
+    ] {
+        let source = SourceCst::from_source_str(
+            db,
+            "incomplete_instance.trb",
+            &format!(
+                "fn count(xs: List(a)) -> Nat {{ 0 }}\nfn unused() -> Nat {{ count([]) }}\n{main}"
+            ),
+        );
+        assert!(!prepares(db, source), "{main}");
+        let messages: Vec<_> = prepares::accumulated::<Diagnostic>(db, source)
+            .iter()
+            .map(|diagnostic| diagnostic.inner.message.to_string())
+            .collect();
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("IncompleteTypeArgument")),
+            "{main}: {messages:?}"
+        );
+    }
+}
+
+/// The specialization output holds a generic function's instances, never
+/// the function itself, nor nominal instances only its body mentions.
+#[salsa_test]
+fn generic_function_templates_leave_the_specialization_output(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "templates.trb",
+        r#"
+struct Packet(a) { value: a }
+fn identity(value: a) -> a { value }
+fn unreached(value: a) -> Packet(Bool) { Packet { value: True } }
+fn main() -> Nil { let _ = identity(5) }
+"#,
+    );
+    let typed = parse_and_lower_ast(db, source).unwrap();
+    let specialized = prepare_frontend_for_lowering(db, typed, source).unwrap();
+    let names: Vec<String> = specialized
+        .module(db)
+        .decls()
+        .filter_map(|decl| match decl {
+            tribute_front::ast::Decl::Function(function) => Some(function.name.to_string()),
+            tribute_front::ast::Decl::Struct(declaration) => Some(declaration.name.to_string()),
+            _ => None,
+        })
+        .collect();
+    for absent in ["identity", "unreached", "Packet$Bool"] {
+        assert!(
+            !names.iter().any(|name| name == absent),
+            "{absent}: {names:?}"
+        );
+    }
+    for present in ["identity$Nat", "main", "Packet"] {
+        assert!(
+            names.iter().any(|name| name == present),
+            "{present}: {names:?}"
+        );
+    }
+    assert!(
+        specialized
+            .declarations(db)
+            .function_types
+            .iter()
+            .all(|(path, _)| *path != ["identity"] && *path != ["unreached"])
+    );
 }

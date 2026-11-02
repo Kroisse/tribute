@@ -21,9 +21,9 @@ use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::{Pass, PassRunResult};
-use trunk_ir::refs::{BlockRef, OpRef, TypeRef};
+use trunk_ir::refs::{BlockRef, TypeRef};
 use trunk_ir::rewrite::{
-    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    Module, OpRewritePattern, PatternApplicator, PatternRewriter, TypeConverter,
 };
 use trunk_ir::types::TypeDataBuilder;
 use trunk_ir::walk::{WalkAction, walk_op};
@@ -37,7 +37,7 @@ mod suffix_layer;
 
 use handle_layer::{ExpandHandles, number_handles};
 use perform::ExpandDispatches;
-use suffix_layer::{ExpandSuffixFrames, build_dispatch_adapters};
+use suffix_layer::{ExpandExits, ExpandSuffixFrames, SuffixExpansion, build_dispatch_adapters};
 
 /// Pass-manager wrapper of [`lower_continuation_frames`].
 pub struct LowerContinuationFrames;
@@ -85,11 +85,13 @@ pub fn lower_continuation_frames(
             .collect(),
     );
     let adapters = build_dispatch_adapters(ctx, module, module_block, &frames)?;
+    let suffix_expansion = SuffixExpansion {
+        frames: frames.clone(),
+        adapters: adapters.clone(),
+    };
     PatternApplicator::new(TypeConverter::new())
-        .add_pattern(ExpandSuffixFrames {
-            frames: frames.clone(),
-            adapters: adapters.clone(),
-        })
+        .add_pattern(ExpandSuffixFrames(&suffix_expansion))
+        .add_pattern(ExpandExits(&suffix_expansion))
         .add_pattern(ExpandHandles {
             frames: frames.clone(),
             adapters,
@@ -105,20 +107,20 @@ pub fn lower_continuation_frames(
 /// already a layout; building the delimiter is the target ABI boundary's.
 struct LowerDelimits;
 
-impl RewritePattern for LowerDelimits {
+impl OpRewritePattern for LowerDelimits {
+    type Op = ability::Delimit;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        delimit: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(delimit) = ability::Delimit::from_op(ctx, op) else {
-            return false;
-        };
+    ) -> Option<()> {
+        let op = delimit.op_ref();
         let lowered = effect::Delimit::operands(delimit.body(ctx), delimit.evidence(ctx))
             .build(ctx, ctx.op(op).location);
         rewriter.replace_op(lowered.op_ref());
-        true
+        Some(())
     }
 }
 
@@ -202,6 +204,35 @@ fn frame_layouts(ctx: &mut IrContext, module: Module) -> Vec<(TypeRef, FrameType
         ));
     }
     layouts
+}
+
+/// The frame reference of `answer`, an answer whose own frames are already
+/// references: the layout frame expansion registered for it, or one
+/// registered now in the same numbering. A pass after frame expansion that
+/// makes a `Cps` entry signature takes its frame from here.
+pub(crate) fn frame_reference(ctx: &mut IrContext, answer: TypeRef) -> TypeRef {
+    let mut registered = 0;
+    for (name, layout) in ctx.type_aliases().to_vec() {
+        let name = name.to_string();
+        if !name.starts_with(continuation_frame::NAME_PREFIX) {
+            continue;
+        }
+        registered += 1;
+        if continuation_frame::result_type(ctx, layout) == Some(answer) {
+            return continuation_frame::ref_type(ctx, name, answer);
+        }
+    }
+    let name = format!("{}{registered}", continuation_frame::NAME_PREFIX);
+    let reference = continuation_frame::ref_type(ctx, name.clone(), answer);
+    let evidence = ability::evidence_adt_type_ref(ctx);
+    let anyref = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
+    let i32_type = TypeDataBuilder::new("core.i32").intern(ctx);
+    let done = cps_done_type(ctx, answer);
+    let dispatch = cps_dispatch_type(ctx, evidence, reference, anyref, i32_type);
+    let name_ref = ctx.intern_str(&name);
+    let layout = continuation_frame::layout_type(ctx, name_ref, answer, done, dispatch);
+    ctx.register_type_alias(Symbol::new(&name), layout);
+    reference
 }
 
 fn resolve_frame(
@@ -467,7 +498,7 @@ mod tests {
     const TYPES: &str = r#"  !marker = adt.typeref<{name = "std::runtime::evidence::Marker"}>
   !ev = adt.array<!marker>
   !frame = ability.frame<core.i32>
-  !resume = closure.closure<func.func_sig<(!ev, !frame, core.i32) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
+  !resume = closure.closure<func.func_sig<(!ev, !frame, core.i32) -> core.never>>
   !nested = ability.frame<!resume>"#;
 
     /// Parse a module over `TYPES` whose `@run` has `params` and `body`.

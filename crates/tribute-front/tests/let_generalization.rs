@@ -1,5 +1,5 @@
 use salsa_test_macros::salsa_test;
-use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_core::{CompilationPhase, DiagnosticSeverity};
 use tribute_front::{
     SourceCst,
     ast::{
@@ -38,10 +38,6 @@ fn type_contains<'db>(
         TypeKind::Tuple(elements) => elements
             .iter()
             .any(|element| type_contains(db, *element, predicate)),
-        TypeKind::App { ctor, args } => {
-            type_contains(db, *ctor, predicate)
-                || args.iter().any(|arg| type_contains(db, *arg, predicate))
-        }
         TypeKind::Continuation {
             arg,
             result,
@@ -177,7 +173,7 @@ fn phase_errors(
     phase: CompilationPhase,
 ) -> Vec<String> {
     let _ = tribute_front::query::type_check_output(db, source);
-    tribute_front::query::type_check_output::accumulated::<Diagnostic>(db, source)
+    tribute_front::analysis::diagnostics(db, source, *tribute_front::analysis::builtins(db))
         .into_iter()
         .filter(|diagnostic| {
             diagnostic.inner.severity == DiagnosticSeverity::Error && diagnostic.phase == phase
@@ -229,9 +225,10 @@ fn pass(value: a) -> a {
         .expect("type checking should produce output");
     let scheme = |name: &str| {
         output
-            .function_types(db)
+            .declarations(db)
+            .function_types
             .iter()
-            .find_map(|(candidate, scheme)| (candidate == [name]).then_some(*scheme))
+            .find_map(|(candidate, scheme)| (candidate == ["pkg", name]).then_some(*scheme))
             .unwrap_or_else(|| panic!("missing function scheme for {name}"))
     };
 
@@ -254,7 +251,8 @@ fn pass(value: a) -> a {
                 && matches!(result.kind(db), TypeKind::BoundVar { index: 0 })
     ));
     for ty in output
-        .function_types(db)
+        .declarations(db)
+        .function_types
         .iter()
         .map(|(_, scheme)| scheme.body(db))
         .chain(
@@ -273,7 +271,8 @@ fn pass(value: a) -> a {
         )
         .chain(
             output
-                .lambda_signatures(db)
+                .expression_types(db)
+                .lambda_signatures
                 .iter()
                 .map(|(_, signature)| signature.function_type),
         )
@@ -303,7 +302,7 @@ fn pass(value: a) -> a {
                 "{name} node metadata exceeds its scheme arity {arity}: {ty:?}"
             );
         }
-        for (lambda, signature) in output.lambda_signatures(db) {
+        for (lambda, signature) in &output.expression_types(db).lambda_signatures {
             if nodes.contains(lambda) {
                 assert!(
                     !type_contains_out_of_scope_bound(db, signature.function_type, arity),
@@ -338,7 +337,8 @@ fn pass(value: a) -> a {
     );
     assert!(
         output
-            .lambda_signatures(db)
+            .expression_types(db)
+            .lambda_signatures
             .iter()
             .all(|(_, signature)| is_local_identity_signature(db, signature.function_type)),
         "each identity definition must retain one LocalBoundVar owner"
@@ -365,7 +365,7 @@ fn pair() -> Nil {
     let output = tribute_front::query::type_check_output(db, source)
         .expect("type checking should produce output");
     let (scope, signature) = output
-        .lambda_signatures(db)
+        .expression_types(db).lambda_signatures
         .iter()
         .find(|(_, signature)| {
             matches!(signature.function_type.kind(db), TypeKind::Func { effect, .. } if !effect.instances(db).is_empty())
@@ -398,7 +398,7 @@ fn pair() -> Nil {
     let effect = AbilityRow::single(
         db,
         AbilityInstance {
-            ability_id: AbilityId::source(db, trunk_ir::SymbolPath::new(["Source"])),
+            ability_id: AbilityId::source(db, trunk_ir::SymbolPath::new(["pkg", "Source"])),
             args: vec![local, univar],
         },
     );
@@ -458,9 +458,10 @@ fn run_writer(comp: fn() ->{e, Writer(w)} a) ->{e, Audit} a {
     let output = tribute_front::query::type_check_output(db, source)
         .expect("type checking should produce output");
     let run_writer = output
-        .function_types(db)
+        .declarations(db)
+        .function_types
         .iter()
-        .find_map(|(name, scheme)| (name == ["run_writer"]).then_some(*scheme))
+        .find_map(|(name, scheme)| (name == ["pkg", "run_writer"]).then_some(*scheme))
         .expect("run_writer scheme should be present");
     let TypeKind::Func { params, .. } = run_writer.body(db).kind(db) else {
         panic!("run_writer scheme must be callable");
@@ -474,7 +475,8 @@ fn run_writer(comp: fn() ->{e, Writer(w)} a) ->{e, Audit} a {
     };
 
     let signatures: Vec<_> = output
-        .lambda_signatures(db)
+        .expression_types(db)
+        .lambda_signatures
         .iter()
         .map(|(_, signature)| signature.clone())
         .collect();
@@ -490,14 +492,14 @@ fn run_writer(comp: fn() ->{e, Writer(w)} a) ->{e, Audit} a {
         .instances(db)
         .iter()
         .find(|effect| {
-            effect.ability_id == AbilityId::source(db, trunk_ir::SymbolPath::new(["Writer"]))
+            effect.ability_id == AbilityId::source(db, trunk_ir::SymbolPath::new(["pkg", "Writer"]))
         })
         .expect("the enclosing computation must retain Writer(w)");
     let lambda_writer = lambda_effect
         .instances(db)
         .iter()
         .find(|effect| {
-            effect.ability_id == AbilityId::source(db, trunk_ir::SymbolPath::new(["Writer"]))
+            effect.ability_id == AbilityId::source(db, trunk_ir::SymbolPath::new(["pkg", "Writer"]))
         })
         .expect("the resume lambda must retain Writer(w)");
     assert_eq!(
@@ -509,7 +511,7 @@ fn run_writer(comp: fn() ->{e, Writer(w)} a) ->{e, Audit} a {
             .instances(db)
             .iter()
             .any(|effect| effect.ability_id
-                == AbilityId::source(db, trunk_ir::SymbolPath::new(["Audit"]))),
+                == AbilityId::source(db, trunk_ir::SymbolPath::new(["pkg", "Audit"]))),
         "the resume lambda must retain its independently performed Audit effect"
     );
 }
@@ -525,7 +527,7 @@ enum Wrapped(a) {
 }
 
 fn pair() -> #(Nat, Bool) {
-    let Wrapped(identity) = Wrapped(fn(value) value)
+    let .Wrapped(identity) = Wrapped::Wrapped(fn(value) value)
     #(identity(1), identity(True))
 }
 "#,
@@ -626,7 +628,7 @@ extern "intrinsic" fn take_nat(value: Nat) ->{} Nil
 extern "intrinsic" fn take_bool(value: Bool) ->{} Nil
 
 fn restricted() -> Nil {
-    let Wrapped(value) = Wrapped(Source::get())
+    let .Wrapped(value) = .Wrapped(Source::get())
     take_nat(value)
     take_bool(value)
 }
@@ -696,12 +698,14 @@ fn make() ->{} fn(a) ->{} a {
 "#,
     );
     let output = tribute_front::query::type_check_output(db, source).unwrap();
-    let errors = tribute_front::query::type_check_output::accumulated::<Diagnostic>(db, source);
+    let errors =
+        tribute_front::analysis::diagnostics(db, source, *tribute_front::analysis::builtins(db));
     assert!(errors.is_empty(), "{errors:?}");
     let scheme = output
-        .function_types(db)
+        .declarations(db)
+        .function_types
         .iter()
-        .find(|(name, _)| name == ["make"])
+        .find(|(name, _)| name == ["pkg", "make"])
         .unwrap()
         .1;
     assert_eq!(scheme.type_params(db).len(), 1);
@@ -770,7 +774,7 @@ fn shared() -> #(Nat, Bool, Nat, Bool, Nat) {
     assert_eq!(lets.len(), 2, "shared has two lets");
     assert_ne!(lets[0].0, lets[1].0, "the lets have distinct root patterns");
 
-    let signatures = output.lambda_signatures(db);
+    let signatures = &output.expression_types(db).lambda_signatures;
     assert_eq!(signatures.len(), 2, "each let has one identity lambda");
     for (lambda, signature) in signatures.iter() {
         let (root, _) = lets

@@ -34,8 +34,8 @@ fn assert_literal_error(
         .expect("literal must occur in the source")
         + literal.find(part).expect("part must occur in the literal");
     assert_eq!(
-        (error.inner.span.start, error.inner.span.end),
-        (start, start + part.len()),
+        error.inner.span.range(),
+        start..start + part.len(),
         "{text:?}: span must cover {part:?}"
     );
     assert!(

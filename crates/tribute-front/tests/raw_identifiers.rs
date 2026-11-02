@@ -33,8 +33,8 @@ fn assert_error(
     assert_eq!(error.phase, phase, "{text:?}");
     let start = text.find(part).expect("part must occur");
     assert_eq!(
-        (error.inner.span.start, error.inner.span.end),
-        (start, start + part.len()),
+        error.inner.span.range(),
+        start..start + part.len(),
         "{text:?}: span must cover {part:?}"
     );
     assert!(

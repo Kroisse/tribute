@@ -11,6 +11,8 @@
 use proptest::prelude::*;
 
 use super::*;
+use crate::dialect::func;
+use crate::ops::DialectOp;
 use crate::prop::{Built, ModuleSpec, built, module_spec, reachable_from};
 
 fn config() -> impl Strategy<Value = (bool, Vec<bool>)> {
@@ -72,6 +74,7 @@ proptest! {
                 .map(|(path, _)| path.clone())
                 .collect(),
             recursive,
+            ..Default::default()
         };
 
         let result = eliminate_dead_functions_with_config(

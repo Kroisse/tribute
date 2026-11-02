@@ -7,19 +7,20 @@ use std::collections::BTreeMap;
 
 use trunk_ir::Span;
 
-use tribute_front::SourceCst;
 use tribute_front::ast::visit::{RefSite, Visit, walk_decl_table, walk_expr};
-use tribute_front::ast::{
-    DeclTable, Expr, ExprKind, NodeId, SpanMap, Type, TypeKind, TypedRef, UniVarSource,
-};
+use tribute_front::ast::{Expr, ExprKind, NodeId, SpanMap, Type, TypeKind, TypedRef, UniVarSource};
 use tribute_front::query as ast_query;
+use tribute_front::resolve::NameDisplay;
+use tribute_front::typeck::TypeCheckOutput;
+use tribute_front::{SortedMap, SourceCst};
 
 // =============================================================================
 // Type Pretty Printing
 // =============================================================================
 
-/// Pretty-print an AST type to a user-friendly string.
-pub fn print_ast_type(db: &dyn salsa::Database, ty: Type<'_>) -> String {
+/// Pretty-print an AST type to a user-friendly string, spelling declaration
+/// names as `names` does.
+pub fn print_ast_type(db: &dyn salsa::Database, names: &NameDisplay, ty: Type<'_>) -> String {
     let kind = ty.kind(db);
 
     if let Some(name) = kind.primitive_name() {
@@ -54,10 +55,12 @@ pub fn print_ast_type(db: &dyn salsa::Database, ty: Type<'_>) -> String {
         }
 
         TypeKind::Named { name, args, .. } => {
+            let name = name.with_str(|name| names.text(name).to_owned());
             if args.is_empty() {
-                name.to_string()
+                name
             } else {
-                let args_str: Vec<String> = args.iter().map(|t| print_ast_type(db, *t)).collect();
+                let args_str: Vec<String> =
+                    args.iter().map(|t| print_ast_type(db, names, *t)).collect();
                 format!("{}({})", name, args_str.join(", "))
             }
         }
@@ -68,8 +71,11 @@ pub fn print_ast_type(db: &dyn salsa::Database, ty: Type<'_>) -> String {
             effect,
             ..
         } => {
-            let params_str: Vec<String> = params.iter().map(|t| print_ast_type(db, *t)).collect();
-            let result_str = print_ast_type(db, *result);
+            let params_str: Vec<String> = params
+                .iter()
+                .map(|t| print_ast_type(db, names, *t))
+                .collect();
+            let result_str = print_ast_type(db, names, *result);
 
             let effects = effect.instances(db);
             let has_rest = effect.rest(db).is_some();
@@ -85,8 +91,11 @@ pub fn print_ast_type(db: &dyn salsa::Database, ty: Type<'_>) -> String {
                         if e.args.is_empty() {
                             e.ability_id.name(db).to_string()
                         } else {
-                            let args_str: Vec<String> =
-                                e.args.iter().map(|t| print_ast_type(db, *t)).collect();
+                            let args_str: Vec<String> = e
+                                .args
+                                .iter()
+                                .map(|t| print_ast_type(db, names, *t))
+                                .collect();
                             format!("{}({})", e.ability_id.name(db), args_str.join(", "))
                         }
                     })
@@ -112,14 +121,11 @@ pub fn print_ast_type(db: &dyn salsa::Database, ty: Type<'_>) -> String {
         }
 
         TypeKind::Tuple(elems) => {
-            let elems_str: Vec<String> = elems.iter().map(|t| print_ast_type(db, *t)).collect();
+            let elems_str: Vec<String> = elems
+                .iter()
+                .map(|t| print_ast_type(db, names, *t))
+                .collect();
             format!("({})", elems_str.join(", "))
-        }
-
-        TypeKind::App { ctor, args } => {
-            let ctor_str = print_ast_type(db, *ctor);
-            let args_str: Vec<String> = args.iter().map(|t| print_ast_type(db, *t)).collect();
-            format!("{}({})", ctor_str, args_str.join(", "))
         }
 
         TypeKind::Error => "<error>".to_string(),
@@ -158,14 +164,14 @@ pub struct AstTypeIndex<'db> {
 }
 
 impl<'db> AstTypeIndex<'db> {
-    /// Build a type index from a typed module.
+    /// Build a type index from a type-checked module.
     pub fn build(
         db: &'db dyn salsa::Database,
-        module: &DeclTable<TypedRef<'db>>,
-        span_map: &SpanMap,
+        typed: TypeCheckOutput<'db>,
+        span_map: SpanMap<'_>,
     ) -> Self {
-        let mut collector = TypeCollector::new(db, span_map);
-        walk_decl_table(&mut collector, module);
+        let mut collector = TypeCollector::new(span_map, &typed.expression_types(db).node_types);
+        walk_decl_table(&mut collector, typed.module(db));
 
         let mut entries = collector.entries;
 
@@ -194,7 +200,7 @@ impl<'db> AstTypeIndex<'db> {
         let containing: Vec<_> = self
             .entries(db)
             .iter()
-            .filter(|e| e.span.start <= offset && offset < e.span.end)
+            .filter(|e| e.span.range().contains(&offset))
             .collect();
 
         // Return the innermost (smallest span)
@@ -206,43 +212,46 @@ impl<'db> AstTypeIndex<'db> {
 
 /// Helper struct for collecting type entries from the AST.
 struct TypeCollector<'a, 'db> {
-    db: &'db dyn salsa::Database,
-    span_map: &'a SpanMap,
+    span_map: SpanMap<'a>,
+    node_types: &'a SortedMap<NodeId, Type<'db>>,
     entries: Vec<AstTypeEntry<'db>>,
 }
 
 impl<'a, 'db> TypeCollector<'a, 'db> {
-    fn new(db: &'db dyn salsa::Database, span_map: &'a SpanMap) -> Self {
+    fn new(span_map: SpanMap<'a>, node_types: &'a SortedMap<NodeId, Type<'db>>) -> Self {
         Self {
-            db,
             span_map,
+            node_types,
             entries: Vec::new(),
         }
     }
 
     fn add_entry(&mut self, node_id: NodeId, ty: Type<'db>) {
-        let span = self.span_map.get_or_default(node_id);
+        // A node without a span here is in a file module's file.
+        let Some(span) = self.span_map.get(node_id) else {
+            return;
+        };
         self.entries.push(AstTypeEntry { node_id, span, ty });
     }
 }
 
 impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for TypeCollector<'_, 'db> {
     fn visit_expr(&mut self, expr: &'ast Expr<TypedRef<'db>>) {
-        // Literals carry their type in their kind. A call's type would need
-        // the callee's result type, so hover covers the callee and arguments.
-        let literal = match expr.kind.as_ref() {
-            ExprKind::NatLit(_) => Some(TypeKind::Nat),
-            ExprKind::IntLit(_) => Some(TypeKind::Int),
-            ExprKind::FloatLit(_) => Some(TypeKind::Float),
-            ExprKind::StringLit(_) => Some(TypeKind::string(self.db)),
-            ExprKind::BytesLit(_) => Some(TypeKind::Bytes),
-            ExprKind::BoolLit(_) => Some(TypeKind::Bool),
-            ExprKind::Nil => Some(TypeKind::Nil),
-            ExprKind::RuneLit(_) => Some(TypeKind::Rune),
-            _ => None,
-        };
-        if let Some(kind) = literal {
-            self.add_entry(expr.id, Type::new(self.db, kind));
+        // A literal has the type the checker gave it, such as the prelude's
+        // `String`. Hover covers a call's callee and arguments, not the call.
+        let literal = matches!(
+            expr.kind.as_ref(),
+            ExprKind::NatLit(_)
+                | ExprKind::IntLit(_)
+                | ExprKind::FloatLit(_)
+                | ExprKind::StringLit(_)
+                | ExprKind::BytesLit(_)
+                | ExprKind::BoolLit(_)
+                | ExprKind::Nil
+                | ExprKind::RuneLit(_)
+        );
+        if literal && let Some(&ty) = self.node_types.get(&expr.id) {
+            self.add_entry(expr.id, ty);
         }
         walk_expr(self, expr);
     }
@@ -268,10 +277,10 @@ pub fn type_index<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Option<AstTypeIndex<'db>> {
-    let module = tribute::parse_and_lower_ast(db, source)?.module(db);
+    let typed = tribute::parse_and_lower_ast(db, source)?;
     let span_map = ast_query::span_map(db, source)?;
 
-    Some(AstTypeIndex::build(db, module, &span_map))
+    Some(AstTypeIndex::build(db, typed, span_map))
 }
 
 #[cfg(test)]
@@ -288,13 +297,16 @@ mod tests {
         let db = salsa::DatabaseImpl::default();
 
         let int_ty = Type::new(&db, TypeKind::Int);
-        assert_eq!(print_ast_type(&db, int_ty), "Int");
+        assert_eq!(print_ast_type(&db, &NameDisplay::identity(), int_ty), "Int");
 
         let bool_ty = Type::new(&db, TypeKind::Bool);
-        assert_eq!(print_ast_type(&db, bool_ty), "Bool");
+        assert_eq!(
+            print_ast_type(&db, &NameDisplay::identity(), bool_ty),
+            "Bool"
+        );
 
         let nil_ty = Type::new(&db, TypeKind::Nil);
-        assert_eq!(print_ast_type(&db, nil_ty), "Nil");
+        assert_eq!(print_ast_type(&db, &NameDisplay::identity(), nil_ty), "Nil");
     }
 
     #[test]
@@ -310,7 +322,10 @@ mod tests {
                 args: vec![int_ty],
             },
         );
-        assert_eq!(print_ast_type(&db, list_ty), "List(Int)");
+        assert_eq!(
+            print_ast_type(&db, &NameDisplay::identity(), list_ty),
+            "List(Int)"
+        );
     }
 
     #[test]
@@ -329,7 +344,10 @@ mod tests {
                 effect: pure_effect,
             },
         );
-        assert_eq!(print_ast_type(&db, func_ty), "fn(Int, Int) -> Int");
+        assert_eq!(
+            print_ast_type(&db, &NameDisplay::identity(), func_ty),
+            "fn(Int, Int) -> Int"
+        );
     }
 
     #[test]
@@ -352,12 +370,38 @@ mod tests {
     #[test]
     fn test_type_index_uses_prelude() {
         let db = salsa::DatabaseImpl::default();
-        let text = "fn f(error: Int::ParseError) -> Nat {\n    let value = case error {\n        Int::ParseError::InvalidSyntax -> Some(1)\n        Int::ParseError::OutOfRange -> None\n    }\n    let other = value\n    0\n}\n";
+        let text = "fn f(error: Int::ParseError) -> Nat {\n    let value = case error {\n        Int::ParseError::InvalidSyntax -> .Some(1)\n        Int::ParseError::OutOfRange -> .None\n    }\n    let other = value\n    0\n}\n";
         let source = make_source(&db, text);
         let index = type_index(&db, source).expect("type index");
         let offset = text.rfind("value").unwrap();
         let entry = index.type_at(&db, offset).expect("type of `value`");
-        assert_eq!(print_ast_type(&db, entry.ty), "std::Option(Nat)");
+        assert_eq!(
+            print_ast_type(&db, &NameDisplay::identity(), entry.ty),
+            "std::Option(Nat)"
+        );
+    }
+
+    /// Hover spells the user's own types without the executable root's
+    /// package component, and other packages' types whole.
+    #[test]
+    fn test_type_index_spells_the_users_types_relative_to_its_package() {
+        let db = salsa::DatabaseImpl::default();
+        let text = "struct Point { x: Nat }\nfn f() -> Nat {\n    let point = Point { x: 1 }\n    point.x\n}\n";
+        let source = make_source(&db, text);
+        let index = type_index(&db, source).expect("type index");
+        let entry = index
+            .type_at(&db, text.rfind("point").unwrap())
+            .expect("type of `point`");
+        let std = trunk_ir::Symbol::new(tribute_front::resolve::STD_PACKAGE);
+        let names = NameDisplay::new(
+            &tribute_front::resolve::PackageName::executable_root(),
+            [&std],
+        );
+        assert_eq!(print_ast_type(&db, &names, entry.ty), "Point");
+        assert_eq!(
+            print_ast_type(&db, &NameDisplay::identity(), entry.ty),
+            "pkg::Point"
+        );
     }
 
     #[test]
@@ -378,7 +422,7 @@ mod tests {
 
         // The type might be a UniVar if not fully resolved, or Int if resolved
         // For now, just verify we found a type entry
-        let ty_str = print_ast_type(&db, entry.unwrap().ty);
+        let ty_str = print_ast_type(&db, &NameDisplay::identity(), entry.unwrap().ty);
         assert!(!ty_str.is_empty(), "Should have a non-empty type string");
     }
 
@@ -389,17 +433,17 @@ mod tests {
         let db = salsa::DatabaseImpl::default();
 
         let ty = Type::new(&db, TypeKind::BoundVar { index: 0 });
-        assert_eq!(print_ast_type(&db, ty), "a");
+        assert_eq!(print_ast_type(&db, &NameDisplay::identity(), ty), "a");
 
         let ty = Type::new(&db, TypeKind::BoundVar { index: 1 });
-        assert_eq!(print_ast_type(&db, ty), "b");
+        assert_eq!(print_ast_type(&db, &NameDisplay::identity(), ty), "b");
 
         let ty = Type::new(&db, TypeKind::BoundVar { index: 25 });
-        assert_eq!(print_ast_type(&db, ty), "z");
+        assert_eq!(print_ast_type(&db, &NameDisplay::identity(), ty), "z");
 
         // Large index should fallback to t{index}
         let ty = Type::new(&db, TypeKind::BoundVar { index: 26 });
-        assert_eq!(print_ast_type(&db, ty), "t26");
+        assert_eq!(print_ast_type(&db, &NameDisplay::identity(), ty), "t26");
     }
 
     #[test]
@@ -409,7 +453,7 @@ mod tests {
         let scope = ast_query::parsed_ast(&db, source).unwrap().module(&db).id;
         for (index, expected) in [(0, "a"), (1, "b"), (26, "t26")] {
             let ty = Type::new(&db, TypeKind::LocalBoundVar { scope, index });
-            assert_eq!(print_ast_type(&db, ty), expected);
+            assert_eq!(print_ast_type(&db, &NameDisplay::identity(), ty), expected);
         }
     }
 
@@ -429,7 +473,7 @@ mod tests {
                 id: make_uni_var(0),
             },
         );
-        assert_eq!(print_ast_type(&db, ty), "a");
+        assert_eq!(print_ast_type(&db, &NameDisplay::identity(), ty), "a");
 
         let ty = Type::new(
             &db,
@@ -437,7 +481,7 @@ mod tests {
                 id: make_uni_var(25),
             },
         );
-        assert_eq!(print_ast_type(&db, ty), "z");
+        assert_eq!(print_ast_type(&db, &NameDisplay::identity(), ty), "z");
 
         // Large id should fallback to ?{id}
         let ty = Type::new(
@@ -446,7 +490,7 @@ mod tests {
                 id: make_uni_var(100),
             },
         );
-        assert_eq!(print_ast_type(&db, ty), "?100");
+        assert_eq!(print_ast_type(&db, &NameDisplay::identity(), ty), "?100");
     }
 
     #[test]
@@ -456,30 +500,10 @@ mod tests {
         let int_ty = Type::new(&db, TypeKind::Int);
         let bool_ty = Type::new(&db, TypeKind::Bool);
         let tuple_ty = Type::new(&db, TypeKind::Tuple(vec![int_ty, bool_ty]));
-        assert_eq!(print_ast_type(&db, tuple_ty), "(Int, Bool)");
-    }
-
-    #[test]
-    fn test_print_ast_type_app() {
-        let db = salsa::DatabaseImpl::default();
-
-        let int_ty = Type::new(&db, TypeKind::Int);
-        let ctor_ty = Type::new(
-            &db,
-            TypeKind::Named {
-                id: TypeDefId::builtin_list(&db),
-                name: trunk_ir::Symbol::new("List"),
-                args: vec![],
-            },
+        assert_eq!(
+            print_ast_type(&db, &NameDisplay::identity(), tuple_ty),
+            "(Int, Bool)"
         );
-        let app_ty = Type::new(
-            &db,
-            TypeKind::App {
-                ctor: ctor_ty,
-                args: vec![int_ty],
-            },
-        );
-        assert_eq!(print_ast_type(&db, app_ty), "List(Int)");
     }
 
     #[test]
@@ -487,7 +511,7 @@ mod tests {
         let db = salsa::DatabaseImpl::default();
 
         let ty = Type::new(&db, TypeKind::Error);
-        assert_eq!(print_ast_type(&db, ty), "<error>");
+        assert_eq!(print_ast_type(&db, &NameDisplay::identity(), ty), "<error>");
     }
 
     #[test]
@@ -511,7 +535,10 @@ mod tests {
                 effect: ability_row,
             },
         );
-        assert_eq!(print_ast_type(&db, func_ty), "fn(Int) ->{IO} Int");
+        assert_eq!(
+            print_ast_type(&db, &NameDisplay::identity(), func_ty),
+            "fn(Int) ->{IO} Int"
+        );
     }
 
     // Type Collection Tests
@@ -540,8 +567,8 @@ mod tests {
 
 fn test(opt: Option) -> Int {
     case opt {
-        Some(v) -> v
-        None -> 0
+        .Some(v) -> v
+        .None -> 0
     }
 }"#,
         );
@@ -586,7 +613,10 @@ fn test(opt: Option) -> Int {
     fn test_rune_type_printed() {
         let db = salsa::DatabaseImpl::default();
         let rune_ty = Type::new(&db, TypeKind::Rune);
-        assert_eq!(print_ast_type(&db, rune_ty), "Rune");
+        assert_eq!(
+            print_ast_type(&db, &NameDisplay::identity(), rune_ty),
+            "Rune"
+        );
     }
 
     #[test]

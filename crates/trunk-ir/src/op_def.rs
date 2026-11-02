@@ -9,7 +9,7 @@
 
 use std::sync::LazyLock;
 
-use crate::asm_format::OpAsmHooks;
+use crate::asm_format::OpAsmFormatDef;
 use crate::name::{Definition, DefinitionTable, Name, NameArg, QualifiedName};
 use crate::op_flag::{OpFlag, OpFlagDef};
 use crate::op_schema::{OpSchema, SchemaViolation};
@@ -36,9 +36,10 @@ pub struct OpDef {
     /// Calls the wrapper's [`Verify`](crate::ops::Verify) impl for
     /// `#[verify]` operations.
     pub verifier: Option<OpVerifier>,
-    /// Calls the wrapper's [`OpAsmFormat`](crate::asm_format::OpAsmFormat) impl
-    /// for `#[asm_format]` operations.
-    pub asm_format: Option<OpAsmHooks>,
+    /// The custom assembly format of `#[asm_format]` operations: the
+    /// wrapper's [`OpAsmFormat`](crate::asm_format::OpAsmFormat) impl, or the
+    /// format elements of `#[asm_format(..)]`.
+    pub asm_format: Option<OpAsmFormatDef>,
     /// The flags listed in `#[flags(..)]`.
     pub flags: &'static [&'static OpFlagDef],
 }

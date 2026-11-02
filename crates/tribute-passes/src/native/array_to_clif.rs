@@ -21,6 +21,8 @@
 //!
 //! [`adt_rc_header`]: super::adt_rc_header
 
+use std::marker::PhantomData;
+
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::ops::ControlFlow;
 
@@ -32,7 +34,9 @@ use trunk_ir::dialect::{clif, core};
 use trunk_ir::location::Span;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
-use trunk_ir::rewrite::{Module, PatternRewriter, RewritePattern, TypeConverter};
+use trunk_ir::rewrite::{
+    Module, OpRewritePattern, PatternApplicator, PatternRewriter, TypeConverter,
+};
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::Location;
 use trunk_ir::walk::{WalkAction, walk_region};
@@ -90,9 +94,9 @@ impl ElementLayout {
     }
 }
 
-/// The patterns that lower the array operations of one module, which
-/// [`prepare`] builds while the RTTI layouts are still declared.
-pub(super) struct ArrayPatterns {
+/// What lowering the array operations of one module reads, which
+/// [`prepare`] collects while the RTTI layouts are still declared.
+pub(super) struct ArrayLowering {
     descriptors: HashMap<TypeRef, ArrayDescriptor>,
     /// The element layout of each `adt.array_get`, `adt.array_set`, and
     /// `adt.array_len`, read before construction rewrites erase the array
@@ -107,7 +111,7 @@ pub(super) fn prepare(
     ctx: &mut IrContext,
     module: Module,
     type_converter: &TypeConverter,
-) -> ArrayPatterns {
+) -> ArrayLowering {
     let mut descriptors = HashMap::default();
     for layout in tribute_rtti::Layout::declared(ctx, module) {
         let ty = layout.r#type(ctx);
@@ -185,7 +189,7 @@ pub(super) fn prepare(
         }
     }
 
-    ArrayPatterns {
+    ArrayLowering {
         descriptors,
         accesses,
     }
@@ -345,88 +349,185 @@ impl Emitter<'_> {
     }
 }
 
-impl RewritePattern for ArrayPatterns {
+impl ArrayLowering {
+    /// Add a pattern for each array operation to `applicator`.
+    pub(super) fn add_patterns<'p>(
+        &'p self,
+        applicator: PatternApplicator<'p>,
+    ) -> PatternApplicator<'p> {
+        applicator
+            .add_pattern(LowerArray::<adt::ArrayOf>::new(self))
+            .add_pattern(LowerArray::<adt::ArrayNew>::new(self))
+            .add_pattern(LowerArray::<adt::ArraySplice>::new(self))
+            .add_pattern(LowerArray::<adt::ArrayGet>::new(self))
+            .add_pattern(LowerArray::<adt::ArraySet>::new(self))
+            .add_pattern(LowerArray::<adt::ArrayLen>::new(self))
+    }
+}
+
+/// An array operation that lowers to `clif` operations.
+trait ArrayOp: DialectOp {
+    /// Emit the lowering of this operation, returning the value that
+    /// replaces its result, if it has one.
+    fn emit(
+        self,
+        arrays: &ArrayLowering,
+        ctx: &mut IrContext,
+        emit: &mut Emitter<'_>,
+    ) -> Option<ValueRef>;
+}
+
+/// Lowers one kind of array operation.
+struct LowerArray<'a, Op> {
+    arrays: &'a ArrayLowering,
+    op: PhantomData<Op>,
+}
+
+impl<'a, Op> LowerArray<'a, Op> {
+    fn new(arrays: &'a ArrayLowering) -> Self {
+        Self {
+            arrays,
+            op: PhantomData,
+        }
+    }
+}
+
+impl<Op: ArrayOp> OpRewritePattern for LowerArray<'_, Op> {
+    type Op = Op;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        op: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
+    ) -> Option<()> {
         let mut ops = Vec::new();
         let mut emit = Emitter {
-            loc: ctx.op(op).location,
+            loc: ctx.op(op.op_ref()).location,
             ops: &mut ops,
         };
-        let result = if let Ok(of) = adt::ArrayOf::from_op(ctx, op) {
-            let descriptor = self.descriptor(of.r#type(ctx));
-            let elements = of.elements(ctx).to_vec();
-            let size = FIXED_ALLOC_SIZE + elements.len() as u64 * u64::from(descriptor.stride);
-            let size = emit.i64(ctx, size as i64);
-            let payload = rc_allocation(ctx, emit.loc, size, descriptor.index, emit.ops);
-            let len = emit.i64(ctx, elements.len() as i64);
-            emit.store(ctx, len, payload, LEN_OFFSET);
-            for (position, element) in elements.into_iter().enumerate() {
-                let offset = ELEMENTS_OFFSET as usize + position * descriptor.stride as usize;
-                let offset = i32::try_from(offset).expect("array_of element offset fits i32");
-                emit.store(ctx, element, payload, offset);
-            }
-            Some(payload)
-        } else if let Ok(new) = adt::ArrayNew::from_op(ctx, op) {
-            let descriptor = self.descriptor(new.r#type(ctx));
-            let ptr_ty = core::Ptr::params().intern(ctx).as_type_ref();
-            let call = clif::Call::operands([new.length(ctx), new.initial(ctx)])
-                .callee(helper_symbol(Helper::New, descriptor))
-                .results([ptr_ty])
-                .build(ctx, emit.loc);
-            Some(emit.push(call).results(ctx)[0])
-        } else if let Ok(splice) = adt::ArraySplice::from_op(ctx, op) {
-            let descriptor = self.descriptor(splice.r#type(ctx));
-            let start = splice.start(ctx);
-            let elements = splice.elements(ctx).to_vec();
-            let count = emit.i64(ctx, elements.len() as i64);
-            let ptr_ty = core::Ptr::params().intern(ctx).as_type_ref();
-            let call = clif::Call::operands([splice.source(ctx), start, splice.end(ctx), count])
-                .callee(helper_symbol(Helper::Splice, descriptor))
-                .results([ptr_ty])
-                .build(ctx, emit.loc);
-            let payload = emit.push(call).results(ctx)[0];
-            if !elements.is_empty() {
-                let base = emit.element_base(ctx, payload, start, descriptor.stride);
-                for (position, element) in elements.into_iter().enumerate() {
-                    let offset = ELEMENTS_OFFSET as usize + position * descriptor.stride as usize;
-                    let offset = i32::try_from(offset).expect("splice element offset fits i32");
-                    emit.store(ctx, element, base, offset);
-                }
-            }
-            Some(payload)
-        } else if let Ok(get) = adt::ArrayGet::from_op(ctx, op) {
-            let layout = self.access(op);
-            let (array, index) = (get.r#ref(ctx), get.index(ctx));
-            emit.check_index(ctx, array, index);
-            let base = emit.element_base(ctx, array, index, layout.stride);
-            Some(emit.load(ctx, base, ELEMENTS_OFFSET, layout.element))
-        } else if let Ok(set) = adt::ArraySet::from_op(ctx, op) {
-            let layout = self.access(op);
-            let (array, index) = (set.r#ref(ctx), set.index(ctx));
-            emit.check_index(ctx, array, index);
-            let base = emit.element_base(ctx, array, index, layout.stride);
-            emit.store(ctx, set.value(ctx), base, ELEMENTS_OFFSET);
-            None
-        } else if let Ok(len) = adt::ArrayLen::from_op(ctx, op) {
-            let i64_ty = core::I64::type_ref(ctx);
-            Some(emit.load(ctx, len.r#ref(ctx), LEN_OFFSET, i64_ty))
-        } else {
-            return false;
-        };
+        let result = op.emit(self.arrays, ctx, &mut emit);
         for op in ops {
             rewriter.insert_op(op);
         }
         rewriter.erase_op(result.into_iter().collect());
-        true
+        Some(())
     }
 }
 
-impl ArrayPatterns {
+impl ArrayOp for adt::ArrayOf {
+    fn emit(
+        self,
+        arrays: &ArrayLowering,
+        ctx: &mut IrContext,
+        emit: &mut Emitter<'_>,
+    ) -> Option<ValueRef> {
+        let descriptor = arrays.descriptor(self.r#type(ctx));
+        let elements = self.elements(ctx).to_vec();
+        let size = FIXED_ALLOC_SIZE + elements.len() as u64 * u64::from(descriptor.stride);
+        let size = emit.i64(ctx, size as i64);
+        let payload = rc_allocation(ctx, emit.loc, size, descriptor.index, emit.ops);
+        let len = emit.i64(ctx, elements.len() as i64);
+        emit.store(ctx, len, payload, LEN_OFFSET);
+        for (position, element) in elements.into_iter().enumerate() {
+            let offset = ELEMENTS_OFFSET as usize + position * descriptor.stride as usize;
+            let offset = i32::try_from(offset).expect("array_of element offset fits i32");
+            emit.store(ctx, element, payload, offset);
+        }
+        Some(payload)
+    }
+}
+
+impl ArrayOp for adt::ArrayNew {
+    fn emit(
+        self,
+        arrays: &ArrayLowering,
+        ctx: &mut IrContext,
+        emit: &mut Emitter<'_>,
+    ) -> Option<ValueRef> {
+        let descriptor = arrays.descriptor(self.r#type(ctx));
+        let ptr_ty = core::Ptr::params().intern(ctx).as_type_ref();
+        let call = clif::Call::operands([self.length(ctx), self.initial(ctx)])
+            .callee(helper_symbol(Helper::New, descriptor))
+            .results([ptr_ty])
+            .build(ctx, emit.loc);
+        Some(emit.push(call).results(ctx)[0])
+    }
+}
+
+impl ArrayOp for adt::ArraySplice {
+    fn emit(
+        self,
+        arrays: &ArrayLowering,
+        ctx: &mut IrContext,
+        emit: &mut Emitter<'_>,
+    ) -> Option<ValueRef> {
+        let descriptor = arrays.descriptor(self.r#type(ctx));
+        let start = self.start(ctx);
+        let elements = self.elements(ctx).to_vec();
+        let count = emit.i64(ctx, elements.len() as i64);
+        let ptr_ty = core::Ptr::params().intern(ctx).as_type_ref();
+        let call = clif::Call::operands([self.source(ctx), start, self.end(ctx), count])
+            .callee(helper_symbol(Helper::Splice, descriptor))
+            .results([ptr_ty])
+            .build(ctx, emit.loc);
+        let payload = emit.push(call).results(ctx)[0];
+        if !elements.is_empty() {
+            let base = emit.element_base(ctx, payload, start, descriptor.stride);
+            for (position, element) in elements.into_iter().enumerate() {
+                let offset = ELEMENTS_OFFSET as usize + position * descriptor.stride as usize;
+                let offset = i32::try_from(offset).expect("splice element offset fits i32");
+                emit.store(ctx, element, base, offset);
+            }
+        }
+        Some(payload)
+    }
+}
+
+impl ArrayOp for adt::ArrayGet {
+    fn emit(
+        self,
+        arrays: &ArrayLowering,
+        ctx: &mut IrContext,
+        emit: &mut Emitter<'_>,
+    ) -> Option<ValueRef> {
+        let layout = arrays.access(self.op_ref());
+        let (array, index) = (self.r#ref(ctx), self.index(ctx));
+        emit.check_index(ctx, array, index);
+        let base = emit.element_base(ctx, array, index, layout.stride);
+        Some(emit.load(ctx, base, ELEMENTS_OFFSET, layout.element))
+    }
+}
+
+impl ArrayOp for adt::ArraySet {
+    fn emit(
+        self,
+        arrays: &ArrayLowering,
+        ctx: &mut IrContext,
+        emit: &mut Emitter<'_>,
+    ) -> Option<ValueRef> {
+        let layout = arrays.access(self.op_ref());
+        let (array, index) = (self.r#ref(ctx), self.index(ctx));
+        emit.check_index(ctx, array, index);
+        let base = emit.element_base(ctx, array, index, layout.stride);
+        emit.store(ctx, self.value(ctx), base, ELEMENTS_OFFSET);
+        None
+    }
+}
+
+impl ArrayOp for adt::ArrayLen {
+    fn emit(
+        self,
+        _arrays: &ArrayLowering,
+        ctx: &mut IrContext,
+        emit: &mut Emitter<'_>,
+    ) -> Option<ValueRef> {
+        let i64_ty = core::I64::type_ref(ctx);
+        Some(emit.load(ctx, self.r#ref(ctx), LEN_OFFSET, i64_ty))
+    }
+}
+
+impl ArrayLowering {
     fn descriptor(&self, array_ty: TypeRef) -> ArrayDescriptor {
         *self
             .descriptors

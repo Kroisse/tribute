@@ -5,8 +5,8 @@
 //! not run independent function-level inference.
 //!
 //! These queries analyze the source alone, without the prelude or other external
-//! declarations. The root crate's pipeline supplies them for compilation and
-//! editor features.
+//! declarations. [`crate::analysis`] analyzes a source in an explicit
+//! environment, for compilation and editor features.
 //!
 //! ## Caching Strategy
 //!
@@ -106,19 +106,6 @@ pub fn parsed_ast<'db>(
     crate::astgen::lower_source_to_parsed_ast(db, source)
 }
 
-/// Parse a source file to AST with a specific module path.
-///
-/// This variant is used for parsing the prelude or other library modules
-/// where NodeIds need a different module path to avoid collisions.
-#[salsa::tracked(returns(copy))]
-pub fn parsed_ast_with_module_path<'db>(
-    db: &'db dyn salsa::Database,
-    source: SourceCst,
-    module_path: Symbol,
-) -> Option<crate::astgen::ParsedAst<'db>> {
-    crate::astgen::lower_source_to_parsed_ast_with_module_path(db, source, Some(module_path))
-}
-
 /// Parse a source file to an AST module.
 ///
 /// Borrows the module of the cached [`parsed_ast`] result. This is not a
@@ -135,8 +122,9 @@ pub fn parsed_module(
 ///
 /// The SpanMap maps NodeId → Span for looking up source locations.
 /// Use together with `parsed_module` - both are derived from the same parse.
-#[salsa::tracked(returns(clone))]
-pub fn span_map(db: &dyn salsa::Database, source: SourceCst) -> Option<SpanMap> {
+/// Like [`parsed_module`], this borrows the field of the cached
+/// [`parsed_ast`] result.
+pub fn span_map(db: &dyn salsa::Database, source: SourceCst) -> Option<SpanMap<'_>> {
     parsed_ast(db, source).map(|parsed| parsed.span_map(db))
 }
 
@@ -159,31 +147,23 @@ pub fn func_names(db: &dyn salsa::Database, source: SourceCst) -> Vec<Symbol> {
         .collect()
 }
 
-/// Resolve all names in a module.
-///
-/// Resolution currently processes the complete module in one tracked query.
-#[salsa::tracked(returns(as_ref))]
+/// Resolve all names in the source alone: the module
+/// [`crate::analysis::resolved_module`] resolves in the builtin environment.
 pub fn resolved_module<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
-) -> Option<DeclTable<ResolvedRef<'db>>> {
-    let module = parsed_module(db, source)?;
-    let sm = span_map(db, source)?;
-    Some(crate::resolve::resolve_module(db, module, sm))
+) -> Option<&'db DeclTable<ResolvedRef<'db>>> {
+    crate::analysis::resolved_module(db, source, *crate::analysis::builtins(db))
+        .map(|resolved| &resolved.module)
 }
 
-/// Base query: run type checking once (cached by Salsa).
-///
-/// Returns a `TypeCheckOutput` containing both the typed AST module
-/// and function type schemes.
-#[salsa::tracked(returns(copy))]
+/// Type check the source alone: [`crate::analysis::analyze`] in the
+/// builtin environment.
 pub fn type_check_output<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Option<TypeCheckOutput<'db>> {
-    let module = resolved_module(db, source)?;
-    let sm = span_map(db, source)?;
-    Some(crate::typeck::typecheck_module(db, module, sm))
+    crate::analysis::analyze(db, source, *crate::analysis::builtins(db)).copied()
 }
 
 /// Get function type schemes from type checking.
@@ -194,7 +174,7 @@ pub fn function_schemes<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Option<&'db [(SymbolPath, TypeScheme<'db>)]> {
-    type_check_output(db, source).map(|o| o.function_types(db))
+    type_check_output(db, source).map(|o| o.declarations(db).function_types.as_slice())
 }
 
 // =============================================================================
@@ -214,8 +194,9 @@ fn find_func<'a, V>(module: &'a Module<V>, name: &Symbol) -> Option<&'a FuncDecl
 
 /// Find the function declaration named `name` in the root module of `table`.
 fn find_root_func<'a, V>(table: &'a DeclTable<V>, name: &Symbol) -> Option<&'a FuncDecl<V>> {
+    let root = crate::resolve::PackageName::executable_root().identity_path(&[]);
     table.entries.iter().find_map(|entry| match &entry.decl {
-        Decl::Function(f) if entry.module.is_root() && f.name == *name => Some(f),
+        Decl::Function(f) if entry.module == root && f.name == *name => Some(f),
         _ => None,
     })
 }
@@ -231,7 +212,7 @@ pub fn parsed_func<'db>(
 
 /// Resolve a single function by name.
 ///
-/// The function is resolved in the context of the full module environment.
+/// The function is resolved in the context of the full package environment.
 pub fn resolved_func<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
@@ -405,7 +386,7 @@ mod tests {
 
         let schemes = schemes.unwrap();
         assert!(
-            schemes.iter().any(|(name, _)| name == ["foo"]),
+            schemes.iter().any(|(name, _)| name == ["pkg", "foo"]),
             "function_schemes should contain 'foo', got: {:?}",
             schemes
                 .iter()
@@ -429,7 +410,7 @@ fn explicit() ->{} Nil { Nil }
         let effect_of = |name: &str| {
             let (_, scheme) = schemes
                 .iter()
-                .find(|(symbol, _)| symbol == [name])
+                .find(|(symbol, _)| symbol == ["pkg", name])
                 .expect("function scheme should exist");
             let crate::ast::TypeKind::Func { effect, .. } = scheme.body(&db).kind(&db) else {
                 panic!("expected function type");
@@ -458,51 +439,32 @@ fn explicit() ->{} Nil { Nil }
         );
 
         // function_types should be a valid Vec (possibly empty for simple cases)
-        let _ft = output.function_types(&db);
+        let _ft = &output.declarations(&db).function_types;
     }
 
     /// Recursively check if a type contains any unresolved UniVar.
     fn contains_univar(db: &dyn salsa::Database, ty: crate::ast::Type) -> bool {
-        fn effect_contains_univar(
-            db: &dyn salsa::Database,
-            effect: crate::ast::AbilityRow<'_>,
-        ) -> bool {
-            effect
-                .instances(db)
-                .iter()
-                .any(|effect| effect.args.iter().any(|arg| contains_univar(db, *arg)))
+        use crate::ast::fold::{TypeVisitable, TypeVisitor};
+        use std::ops::ControlFlow;
+
+        struct ContainsUniVar<'db>(&'db dyn salsa::Database);
+
+        impl<'db> TypeVisitor<'db> for ContainsUniVar<'db> {
+            type Break = ();
+
+            fn db(&self) -> &'db dyn salsa::Database {
+                self.0
+            }
+
+            fn visit_type(&mut self, ty: crate::ast::Type<'db>) -> ControlFlow<()> {
+                match ty.kind(self.0) {
+                    crate::ast::TypeKind::UniVar { .. } => ControlFlow::Break(()),
+                    _ => ty.super_visit_with(self),
+                }
+            }
         }
 
-        match ty.kind(db) {
-            crate::ast::TypeKind::UniVar { .. } => true,
-            crate::ast::TypeKind::Func {
-                params,
-                result,
-                effect,
-                ..
-            } => {
-                params.iter().any(|p| contains_univar(db, *p))
-                    || contains_univar(db, *result)
-                    || effect_contains_univar(db, *effect)
-            }
-            crate::ast::TypeKind::Named { args, .. } => {
-                args.iter().any(|a| contains_univar(db, *a))
-            }
-            crate::ast::TypeKind::Tuple(elems) => elems.iter().any(|e| contains_univar(db, *e)),
-            crate::ast::TypeKind::App { ctor, args } => {
-                contains_univar(db, *ctor) || args.iter().any(|a| contains_univar(db, *a))
-            }
-            crate::ast::TypeKind::Continuation {
-                arg,
-                result,
-                effect,
-            } => {
-                contains_univar(db, *arg)
-                    || contains_univar(db, *result)
-                    || effect_contains_univar(db, *effect)
-            }
-            _ => false,
-        }
+        ty.visit_with(&mut ContainsUniVar(db)).is_break()
     }
 
     #[test]
@@ -582,7 +544,7 @@ fn explicit() ->{} Nil { Nil }
         let schemes = schemes.unwrap();
         let add = schemes
             .iter()
-            .find(|(name, _)| name == ["add"])
+            .find(|(name, _)| name == ["pkg", "add"])
             .expect("should have 'add' scheme");
 
         let body = add.1.body(&db);
@@ -604,7 +566,7 @@ fn explicit() ->{} Nil { Nil }
         let schemes = schemes.unwrap();
         let inc_scheme = schemes
             .iter()
-            .find(|(name, _)| name == ["inc"])
+            .find(|(name, _)| name == ["pkg", "inc"])
             .expect("should have 'inc' scheme");
 
         let body = inc_scheme.1.body(&db);
@@ -643,7 +605,7 @@ fn explicit() ->{} Nil { Nil }
         let schemes = schemes.unwrap();
         let apply = schemes
             .iter()
-            .find(|(name, _)| name == ["apply"])
+            .find(|(name, _)| name == ["pkg", "apply"])
             .expect("should have 'apply' scheme");
 
         // type_params should contain a and b (in declaration order)
@@ -697,11 +659,10 @@ fn explicit() ->{} Nil { Nil }
         let db = salsa::DatabaseImpl::default();
         let source = make_source(&db, "fn main() -> Nil { undefined_var }");
 
-        // Call resolved_module to trigger name resolution
-        let _module = resolved_module(&db, source);
-
-        // Collect diagnostics
-        let diagnostics: Vec<_> = resolved_module::accumulated::<Diagnostic>(&db, source);
+        let table = *crate::analysis::builtins(&db);
+        crate::analysis::resolved_module(&db, source, table);
+        let diagnostics: Vec<_> =
+            crate::analysis::resolved_module::accumulated::<Diagnostic>(&db, source, table);
 
         // Should have a diagnostic about unresolved name
         assert!(

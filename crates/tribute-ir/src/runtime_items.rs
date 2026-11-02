@@ -107,6 +107,19 @@ pub fn function_entry_points(items: &[RuntimeItem]) -> Vec<SymbolPath> {
         .collect()
 }
 
+/// Global DCE configuration that roots every function of `runtime`.
+///
+/// A runtime function is a root until the target lowering stages that call
+/// it have run (`new-plans/modules.md`, "생존 범위"). Every runtime function
+/// is called by target evidence lowering or earlier; the cleanup DCE after
+/// it removes the ones nothing calls.
+pub fn kept_alive(runtime: &[RuntimeItem]) -> trunk_ir::transforms::GlobalDceConfig {
+    trunk_ir::transforms::GlobalDceConfig {
+        extra_entry_points: function_entry_points(runtime),
+        ..Default::default()
+    }
+}
+
 /// The runtime type at `path`, published in the prelude type dictionary.
 pub fn runtime_type(ctx: &IrContext, module: Module, path: &[&str]) -> Option<TypeRef> {
     crate::metadata::prelude_type(ctx, module.op(), runtime_symbol(path).as_str())

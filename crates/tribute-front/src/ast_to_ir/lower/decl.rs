@@ -2,17 +2,17 @@
 
 use trunk_ir::refs::TypeRef;
 
-struct PendingWellKnownType {
-    definition: crate::typeck::DefinitionIdentity,
+struct PendingWellKnownType<'db> {
+    definition: crate::ast::TypeDefId<'db>,
     ir_type: Option<TypeRef>,
 }
 
-pub(super) struct WellKnownTypePrescan {
-    string: Option<PendingWellKnownType>,
+pub(super) struct WellKnownTypePrescan<'db> {
+    string: Option<PendingWellKnownType<'db>>,
 }
 
-impl WellKnownTypePrescan {
-    pub(super) fn new(types: crate::typeck::WellKnownTypes<'_>) -> Self {
+impl<'db> WellKnownTypePrescan<'db> {
+    pub(super) fn new(types: crate::typeck::WellKnownTypes<'db>) -> Self {
         Self {
             string: types.string.map(|ty| PendingWellKnownType {
                 definition: ty.definition,
@@ -21,7 +21,7 @@ impl WellKnownTypePrescan {
         }
     }
 
-    pub(super) fn is_string(&self, definition: crate::typeck::DefinitionIdentity) -> bool {
+    pub(super) fn is_string(&self, definition: crate::ast::TypeDefId<'db>) -> bool {
         self.string
             .as_ref()
             .is_some_and(|string| string.definition == definition)

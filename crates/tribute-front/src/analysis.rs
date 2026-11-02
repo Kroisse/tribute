@@ -1,0 +1,343 @@
+//! Frontend analysis of a package source against the packages it depends on.
+//!
+//! The CLI, the language server, and tests analyze a source through these
+//! queries, passing the dependency table it is analyzed against explicitly.
+//! The caller owns where each library package's source comes from and builds
+//! the [`Package`] inputs.
+//!
+//! [`analyze`] returns its result even when it reports errors, so editor
+//! features can read a partial result. Whether a result may be lowered is the
+//! caller's decision: the compilation route lowers only a source whose
+//! analysis reported no error.
+
+use salsa::Accumulator;
+use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use trunk_ir::{Symbol, SymbolPath};
+
+use crate::ast::{Decl, DeclTable, FuncDecl, ResolvedRef, SpanMap};
+use crate::resolve::{self, Dependencies, NameDisplay, PackageEnv, PackageName};
+use crate::source_file::SourceCst;
+use crate::source_tree::{self, SourceTree};
+use crate::typeck::{
+    CheckedFunction, ModuleDeclarations, PackageExports, TypeCheckOutput, TypeChecker,
+};
+
+/// A library package: its name, the source of its root module, and the
+/// packages its dependency table names (`new-plans/implementation.md`).
+/// Package `std` is one whose table is empty.
+#[salsa::input(debug)]
+pub struct Package {
+    pub name: PackageName,
+    pub root: SourceCst,
+    pub dependencies: DependencyTable,
+}
+
+/// A dependency table: the library packages a package depends on, each
+/// named in it by its package name.
+#[salsa::input(debug)]
+pub struct DependencyTable {
+    pub packages: Vec<Package>,
+}
+
+/// A library package type checked on its own: the typed module, and the
+/// exports a dependent package's type checking reads.
+#[derive(Clone, Copy, PartialEq, Eq, salsa::SalsaValue)]
+pub struct CheckedPackage<'db> {
+    pub checked: TypeCheckOutput<'db>,
+    pub exports: PackageExports<'db>,
+}
+
+/// The source tree of `package`: its root file and the files of its file
+/// modules, read into one AST. Its nodes are numbered under its package
+/// name, so they never collide with another package's.
+pub fn package_tree(db: &dyn salsa::Database, package: Package) -> Option<&SourceTree<'_>> {
+    let module = package_name(db, package).clone();
+    source_tree::source_tree(db, *package.root(db), Some(module))
+}
+
+/// The environment of `package`, built from its declarations and its
+/// dependency table. `None` if its root does not parse or it depends on
+/// itself.
+#[salsa::tracked(returns(as_ref))]
+pub fn package_env<'db>(db: &'db dyn salsa::Database, package: Package) -> Option<PackageEnv<'db>> {
+    if depends_on_itself(db, package) {
+        Diagnostic::new(
+            format!(
+                "package `{}` depends on itself through its dependency table",
+                package_name(db, package)
+            ),
+            trunk_ir::Span::new(0, 0),
+            DiagnosticSeverity::Error,
+            CompilationPhase::NameResolution,
+        )
+        .accumulate(db);
+        return None;
+    }
+    let tree = package_tree(db, package)?;
+    Some(resolve::build_package_env(
+        db,
+        tree.module(db),
+        package.name(db),
+        &dependencies(db, *package.dependencies(db)),
+    ))
+}
+
+/// Resolve and type check `package` once, against the packages it depends
+/// on.
+#[salsa::tracked(returns(as_ref))]
+pub fn checked_package<'db>(
+    db: &'db dyn salsa::Database,
+    package: Package,
+) -> Option<CheckedPackage<'db>> {
+    let env = package_env(db, package)?;
+    let tree = package_tree(db, package)?;
+    let span_map = tree.span_map(db);
+    let table = *package.dependencies(db);
+    let dependencies = dependencies(db, table);
+    let resolved =
+        resolve::resolve_library_with_env(db, tree.module(db), env, &dependencies, span_map);
+    let mut checker = TypeChecker::new(db, span_map, package_names(db, package));
+    depend_on_table(db, &mut checker, table);
+    let (result, exports) = checker.check_library(&resolved);
+    Some(CheckedPackage {
+        checked: TypeCheckOutput::from_check(db, result),
+        exports,
+    })
+}
+
+/// A dependency table of one package `std` whose root module is empty, so
+/// that it declares only the compiler-owned names: for analyzing a source
+/// without the prelude.
+#[salsa::tracked]
+pub fn builtins(db: &dyn salsa::Database) -> DependencyTable {
+    let text = ropey::Rope::new();
+    let tree = crate::source_file::parse_rope(&text, None);
+    let uri = fluent_uri::Uri::parse_from("builtins:///std".to_owned()).expect("valid URI");
+    let std = Package::new(
+        db,
+        PackageName::std(),
+        SourceCst::new(db, uri, text, tree),
+        DependencyTable::new(db, Vec::new()),
+    );
+    DependencyTable::new(db, vec![std])
+}
+
+/// The packages of `table` with their environments, for name resolution,
+/// and the environments of the packages they depend on, which a path
+/// through a re-export may continue in.
+pub fn dependencies(db: &dyn salsa::Database, table: DependencyTable) -> Dependencies<'_> {
+    let direct = table.packages(db);
+    let indirect = transitive_packages(db, table)
+        .into_iter()
+        .filter(|package| !direct.contains(package))
+        .filter_map(|package| package_env(db, package));
+    let named = direct.iter().filter_map(|&package| {
+        Some((package_name(db, package).clone(), package_env(db, package)?))
+    });
+    Dependencies::new(named, indirect)
+}
+
+/// Let `checker` read the exports of every package `table` depends on,
+/// transitively, each once and after the packages it depends on.
+fn depend_on_table<'db>(
+    db: &'db dyn salsa::Database,
+    checker: &mut TypeChecker<'db>,
+    table: DependencyTable,
+) {
+    for package in transitive_packages(db, table) {
+        if let Some(checked) = checked_package(db, package) {
+            checker.depend_on(&checked.exports);
+        }
+    }
+}
+
+/// The packages `table` depends on, transitively, each after the packages
+/// it depends on.
+pub fn transitive_packages(db: &dyn salsa::Database, table: DependencyTable) -> Vec<Package> {
+    fn visit(db: &dyn salsa::Database, package: Package, order: &mut Vec<Package>) {
+        if order.contains(&package) {
+            return;
+        }
+        for &dependency in package.dependencies(db).packages(db) {
+            // A package on a cycle is rejected by its environment, so the
+            // visit stops at it.
+            if !depends_on_itself(db, dependency) {
+                visit(db, dependency, order);
+            }
+        }
+        order.push(package);
+    }
+    let mut order = Vec::new();
+    for &package in table.packages(db) {
+        if !depends_on_itself(db, package) {
+            visit(db, package, &mut order);
+        }
+    }
+    order
+}
+
+/// Whether `package` reaches itself through dependency tables.
+fn depends_on_itself(db: &dyn salsa::Database, package: Package) -> bool {
+    let mut seen = Vec::new();
+    let mut stack: Vec<Package> = package.dependencies(db).packages(db).clone();
+    while let Some(next) = stack.pop() {
+        if next == package {
+            return true;
+        }
+        if !seen.contains(&next) {
+            seen.push(next);
+            stack.extend(next.dependencies(db).packages(db).iter().copied());
+        }
+    }
+    false
+}
+
+/// The name a dependency table names `package` by.
+fn package_name(db: &dyn salsa::Database, package: Package) -> &Symbol {
+    package
+        .name(db)
+        .name()
+        .expect("a library package has a name")
+}
+
+/// How diagnostics spell declarations while `package` is compiled.
+pub fn package_names(db: &dyn salsa::Database, package: Package) -> NameDisplay {
+    let table = package.dependencies(db).packages(db);
+    NameDisplay::new(
+        package.name(db),
+        table.iter().map(|&dependency| package_name(db, dependency)),
+    )
+}
+
+/// How diagnostics spell declarations while the executable root package is
+/// compiled against `table`.
+pub fn root_names(db: &dyn salsa::Database, table: DependencyTable) -> NameDisplay {
+    NameDisplay::new(
+        &PackageName::executable_root(),
+        table
+            .packages(db)
+            .iter()
+            .map(|&package| package_name(db, package)),
+    )
+}
+
+/// A source's module after name resolution, with one [`ResolvedFunction`]
+/// for each module-level function, in declaration order.
+#[derive(Clone, PartialEq, Eq, salsa::SalsaValue)]
+pub struct ResolvedModule<'db> {
+    pub module: DeclTable<ResolvedRef<'db>>,
+    pub functions: Vec<ResolvedFunction<'db>>,
+}
+
+/// One module-level function after name resolution, identified by its
+/// module and name. Its declaration is a tracked field, so an edit that
+/// leaves the declaration unchanged keeps the value of the revision before,
+/// and the function's check is reused.
+#[salsa::tracked(debug)]
+pub struct ResolvedFunction<'db> {
+    /// The module that declares the function.
+    pub module: SymbolPath,
+    pub name: Symbol,
+    #[tracked]
+    pub decl: FuncDecl<ResolvedRef<'db>>,
+}
+
+/// Parse and resolve `source` against the packages `table` names. `None` if
+/// `source` does not parse.
+#[salsa::tracked(returns(as_ref))]
+pub fn resolved_module<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+    table: DependencyTable,
+) -> Option<ResolvedModule<'db>> {
+    let tree = source_tree::source_tree_of(db, source)?;
+    let module = tree.module(db);
+    let scope = resolve::build_env(db, module, dependencies(db, table));
+    let module = resolve::resolve_with_env(db, module, &scope, tree.span_map(db));
+    let functions = module
+        .entries
+        .iter()
+        .filter_map(|entry| match &entry.decl {
+            Decl::Function(func) => Some(ResolvedFunction::new(
+                db,
+                entry.module.clone(),
+                func.name.clone(),
+                func.clone(),
+            )),
+            _ => None,
+        })
+        .collect();
+    Some(ResolvedModule { module, functions })
+}
+
+/// The declarations of `source`'s resolved module, collected for checking
+/// its functions. They hold no function body, so an edit inside one leaves
+/// them equal to the revision before.
+#[salsa::tracked(returns(as_ref))]
+pub fn module_declarations<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+    table: DependencyTable,
+) -> Option<ModuleDeclarations<'db>> {
+    let resolved = resolved_module(db, source, table)?;
+    let mut checker = TypeChecker::new(db, SpanMap::empty(), root_names(db, table));
+    depend_on_table(db, &mut checker, table);
+    Some(checker.collect_module(&resolved.module))
+}
+
+/// Type check one module-level function of `source` against its module's
+/// declarations. It reads only `function`'s declaration and those
+/// declarations, and no source position, so it reruns only when one of them
+/// changes.
+#[salsa::tracked(returns(ref))]
+pub fn check_function<'db>(
+    db: &'db dyn salsa::Database,
+    function: ResolvedFunction<'db>,
+    source: SourceCst,
+    table: DependencyTable,
+) -> CheckedFunction<'db> {
+    let declarations = module_declarations(db, source, table)
+        .expect("a resolved function's module has declarations");
+    TypeChecker::new(db, SpanMap::empty(), root_names(db, table))
+        .with_declarations(declarations)
+        .check_function(function.module(db), function.decl(db))
+}
+
+/// Parse, resolve, and type check `source` against the packages `table`
+/// names.
+///
+/// Returns `None` only if `source` does not parse. Errors are reported as
+/// accumulated diagnostics, and the result is returned with them. The result
+/// holds only `source`'s declarations; its dependencies' are read through
+/// the dependency table. Each function is checked by [`check_function`], so
+/// an edit rechecks only the functions whose declarations it changed.
+#[salsa::tracked(returns(as_ref))]
+pub fn analyze<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+    table: DependencyTable,
+) -> Option<TypeCheckOutput<'db>> {
+    let tree = source_tree::source_tree_of(db, source)?;
+    let resolved = resolved_module(db, source, table)?;
+    let declarations = module_declarations(db, source, table)?;
+    let functions = resolved
+        .functions
+        .iter()
+        .map(|&function| check_function(db, function, source, table));
+    let checker = TypeChecker::new(db, tree.span_map(db), root_names(db, table));
+    Some(TypeCheckOutput::from_check(
+        db,
+        checker.finish_module(declarations, &resolved.module, functions),
+    ))
+}
+
+/// The diagnostics [`analyze`] reports for `source` against `table`,
+/// including those of its dependencies' own analyses.
+pub fn diagnostics(
+    db: &dyn salsa::Database,
+    source: SourceCst,
+    table: DependencyTable,
+) -> Vec<&Diagnostic> {
+    analyze(db, source, table);
+    analyze::accumulated::<Diagnostic>(db, source, table)
+}

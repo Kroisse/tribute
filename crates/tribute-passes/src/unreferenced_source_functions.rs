@@ -67,6 +67,16 @@ fn has_evidence_sources(ctx: &IrContext, module: core::Module) -> bool {
     .is_break()
 }
 
+/// Global DCE configuration that keeps the functions of `runtime` and every
+/// bodyless declaration.
+pub fn source_dce_config(runtime: &[RuntimeItem]) -> trunk_ir::transforms::GlobalDceConfig {
+    trunk_ir::transforms::GlobalDceConfig {
+        extra_entry_points: function_entry_points(runtime),
+        keep_declarations: true,
+        ..Default::default()
+    }
+}
+
 impl Default for EliminateUnreferencedSourceFunctions {
     fn default() -> Self {
         Self::new()
@@ -87,15 +97,10 @@ impl Pass for EliminateUnreferencedSourceFunctions {
         _: &mut AnalysisCache,
     ) -> PassRunResult {
         let eliminate = |ctx: &mut IrContext, runtime| {
-            let config = trunk_ir::transforms::GlobalDceConfig {
-                extra_entry_points: function_entry_points(runtime),
-                ..Default::default()
-            };
             trunk_ir::transforms::eliminate_dead_definitions_with_config(
                 ctx,
                 target.into(),
-                config,
-                |ctx, op| tribute_control::Func::matches(ctx, op) && ctx.op_has_regions(op),
+                source_dce_config(runtime),
             );
         };
         eliminate(ctx, self.runtime);
@@ -105,5 +110,53 @@ impl Pass for EliminateUnreferencedSourceFunctions {
             eliminate(ctx, &[]);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use trunk_ir::parser::parse_test_module;
+
+    use super::*;
+
+    /// A function table lives while a live reference uses it, and keeps
+    /// its targets alive only while it lives, although it has no body.
+    #[test]
+    fn a_function_table_lives_and_keeps_its_targets_only_while_referenced() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @m {
+  !f = tribute_control.func_sig<() -> core.i32>
+  tribute_cps.func @main() -> core.i32 convention(direct) {
+    %f = tribute_cps.func_ref {func_ref = @"used$8"} : !f
+    %r = tribute_cps.call_indirect %f {convention = "direct"} : core.i32
+    tribute_control.return %r
+  }
+  tribute_cps.func_table @"used$8" = {direct = @"used$9D"}
+  tribute_cps.func @"used$9D"() -> core.i32 convention(direct) {
+    %c = arith.const {value = 1} : core.i32
+    tribute_control.return %c
+  }
+  tribute_cps.func_table @"unused$8" = {direct = @"unused$9D"}
+  tribute_cps.func @"unused$9D"() -> core.i32 convention(direct) {
+    %c = arith.const {value = 2} : core.i32
+    tribute_control.return %c
+  }
+}"#,
+        );
+
+        trunk_ir::transforms::eliminate_dead_definitions_with_config(
+            &mut ctx,
+            module,
+            source_dce_config(&[]),
+        );
+
+        let survivors: Vec<_> = module
+            .ops(&ctx)
+            .iter()
+            .filter_map(|&op| ctx.op_attrs(op).get_str("sym_name").map(str::to_owned))
+            .collect();
+        assert_eq!(survivors, ["main", "used$8", "used$9D"]);
     }
 }

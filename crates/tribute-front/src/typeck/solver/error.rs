@@ -1,6 +1,7 @@
 //! Structured solver failures and their diagnostic messages.
 
 use crate::ast::{AbilityRow, Type, UniVarId};
+use crate::resolve::NameDisplay;
 use crate::typeck::constraint::ConstraintOrigin;
 
 /// Error during constraint solving.
@@ -39,32 +40,64 @@ pub struct LocatedSolveError<'db> {
     pub origin: Option<ConstraintOrigin>,
 }
 
-impl std::fmt::Display for SolveError<'_> {
+impl<'db> SolveError<'db> {
+    /// The message of this failure, spelling declarations as `names` does.
+    pub fn display<'a>(
+        &'a self,
+        db: &'db dyn salsa::Database,
+        names: &'a NameDisplay,
+    ) -> SolveErrorDisplay<'a, 'db> {
+        SolveErrorDisplay {
+            error: self,
+            db,
+            names,
+        }
+    }
+}
+
+/// A [`SolveError`] formatted for a diagnostic.
+pub struct SolveErrorDisplay<'a, 'db> {
+    error: &'a SolveError<'db>,
+    db: &'db dyn salsa::Database,
+    names: &'a NameDisplay,
+}
+
+impl std::fmt::Display for SolveErrorDisplay<'_, '_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::TypeMismatch { expected, actual } => {
-                write!(f, "expected `{}`, found `{}`", expected, actual)
+        let (db, names) = (self.db, self.names);
+        match self.error {
+            SolveError::TypeMismatch { expected, actual } => {
+                write!(
+                    f,
+                    "expected `{}`, found `{}`",
+                    expected.display(db, names),
+                    actual.display(db, names)
+                )
             }
-            Self::OccursCheck { ty, .. } => {
+            SolveError::OccursCheck { ty, .. } => {
                 write!(
                     f,
                     "infinite type: cannot construct the infinite type `{}`",
-                    ty
+                    ty.display(db, names)
                 )
             }
-            Self::RowMismatch { expected, actual } => {
+            SolveError::RowMismatch { expected, actual } => {
                 write!(
                     f,
-                    "ability row mismatch: expected `{expected}`, found `{actual}`"
+                    "ability row mismatch: expected `{}`, found `{}`",
+                    expected.display(db, names),
+                    actual.display(db, names)
                 )
             }
-            Self::AmbiguousAbility { expected, actual } => {
+            SolveError::AmbiguousAbility { expected, actual } => {
                 write!(
                     f,
-                    "ambiguous ability: cannot match `{actual}` with `{expected}`, more than one instance could correspond; annotate the ability's type arguments"
+                    "ambiguous ability: cannot match `{}` with `{}`, more than one instance could correspond; annotate the ability's type arguments",
+                    actual.display(db, names),
+                    expected.display(db, names)
                 )
             }
-            Self::AbilityArgArityMismatch {
+            SolveError::AbilityArgArityMismatch {
                 effect_name,
                 expected,
                 found,
@@ -74,7 +107,7 @@ impl std::fmt::Display for SolveError<'_> {
                     write!(
                         f,
                         "ability `{}` expects {} type argument{}, but {} {} given",
-                        name,
+                        names.text(name),
                         expected,
                         expected.plural(),
                         found,

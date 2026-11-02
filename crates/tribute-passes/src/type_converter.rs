@@ -190,10 +190,10 @@ mod tests {
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
-                !Closure = adt.struct<_closure(code: core.i32), {{layout = "closure"}}>
+                !Closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {{layout = "closure"}}>
                 func.func @transfer(%index: core.i32, %erased: tribute_rt.anyref) {{
                     {cast}
-                    func.tail_call_indirect %index, {arg} {{signature = func.func_sig<(!Closure) -> ()>, tribute.calling_convention = 2}}
+                    func.tail_call_indirect %index, {arg} {{signature = func.func_sig<(!Closure) -> ()>, tribute.calling_convention = "cps"}}
                 }}
             }}"#
                 ),
@@ -208,14 +208,8 @@ mod tests {
                 // call's signature, so the debug verifier rejects the input
                 // before any lowering step runs.
                 let error = lowered.expect_err("erased argument must not fill the closure slot");
-                let crate::wasm::lower::WasmLowerError::Pass(pass_error) = &error else {
-                    panic!("expected a pass-manager error: {error}");
-                };
                 assert!(
-                    matches!(
-                        pass_error.kind(),
-                        trunk_ir::pass::PassErrorKind::InvalidInput(_)
-                    ),
+                    matches!(error.kind(), trunk_ir::pass::PassErrorKind::InvalidInput(_)),
                     "{error}"
                 );
                 assert!(

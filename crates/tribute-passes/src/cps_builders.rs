@@ -64,18 +64,22 @@ pub(crate) fn closure_over(
     closure_type: TypeRef,
     convention: CallingConvention,
 ) -> closure::Lambda {
-    let lambda = closure::Lambda::operands(ordered_external_values(ctx, region))
+    let signature = closure::Closure::from_type_ref(ctx, closure_type)
+        .expect("a generated continuation is a closure")
+        .func_type(ctx);
+    closure::Lambda::operands(ordered_external_values(ctx, region))
+        .signatures([signature])
+        .conventions([convention])
         .results(closure_type)
-        .regions(region)
-        .build(ctx, location);
-    lambda.set_calling_convention(ctx, convention);
-    lambda
+        .regions([region])
+        .build(ctx, location)
 }
 
-/// Emit a final CPS tail transfer from the callee's exact typed closure
-/// contract. This must not reconstruct a signature from physical operands:
-/// closure extraction interposes an environment later and preserves this
-/// contract on the resulting indirect transfer.
+/// Emit a final CPS tail transfer into a generated continuation, whose
+/// closure type's callable is its `Cps` entry. This must not reconstruct a
+/// signature from physical operands: closure extraction interposes an
+/// environment later and preserves this contract on the resulting indirect
+/// transfer.
 pub(crate) fn emit_cps_tail_call_indirect(
     ctx: &mut IrContext,
     block: BlockRef,
@@ -83,14 +87,27 @@ pub(crate) fn emit_cps_tail_call_indirect(
     callee: ValueRef,
     args: impl IntoIterator<Item = ValueRef>,
 ) -> Result<OpRef, TributeControlToCpsError> {
-    let args = args.into_iter().collect::<Vec<_>>();
     let closure_type = ctx.value_ty(callee);
     let signature = cps_closure_function_type(ctx, closure_type).ok_or_else(|| {
         TributeControlToCpsError::post_at(
             location,
-            "CPS indirect tail callee has no exact provenance-bearing closure contract",
+            "CPS indirect tail callee has no exact closure contract",
         )
     })?;
+    emit_cps_entry_transfer(ctx, block, location, callee, signature, args)
+}
+
+/// Emit a final CPS tail transfer into the `Cps` entry `signature` of the
+/// closure `callee`, the environment not yet interposed.
+pub(crate) fn emit_cps_entry_transfer(
+    ctx: &mut IrContext,
+    block: BlockRef,
+    location: Location,
+    callee: ValueRef,
+    signature: TypeRef,
+    args: impl IntoIterator<Item = ValueRef>,
+) -> Result<OpRef, TributeControlToCpsError> {
+    let args = args.into_iter().collect::<Vec<_>>();
     let callable = func::FuncSig::from_type_ref(ctx, signature).ok_or_else(|| {
         TributeControlToCpsError::post_at(
             location,

@@ -21,10 +21,11 @@ fn test_add_compiles_and_runs() {
     assert_native_output(
         "add.trb",
         r#"
+use std::io::{Io, print_line}
 fn add(x: Nat, y: Nat) -> Nat { x + y }
 
-fn main() -> Nil {
-    __tribute_print_nat(add(40, 2))
+fn main() ->{Io} Nil {
+    print_line(add(40, 2).to_string)
 }
 "#,
         "42",
@@ -38,10 +39,11 @@ fn test_generic_int_identity() {
     assert_native_output(
         "int_identity.trb",
         r#"
+use std::io::{Io, print_line}
 fn identity(x: a) ->{} a { x }
 
-fn main() -> Nil {
-    __tribute_print_nat(identity(42))
+fn main() ->{Io} Nil {
+    print_line(identity(42).to_string)
 }
 "#,
         "42",
@@ -54,11 +56,12 @@ fn test_struct_construction() {
     assert_native_output(
         "struct_construction.trb",
         r#"
+use std::io::{Io, print_line}
 struct Point { x: Nat, y: Nat }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let p = Point { x: 10, y: 20 }
-    __tribute_print_nat(42)
+    print_line(42.to_string)
 }
 "#,
         "42",
@@ -71,11 +74,12 @@ fn test_struct_accessor() {
     assert_native_output(
         "struct_accessor.trb",
         r#"
+use std::io::{Io, print_line}
 struct Point { x: Nat, y: Nat }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let p = Point { x: 10, y: 20 }
-    __tribute_print_nat(p.x())
+    print_line(p.x().to_string)
 }
 "#,
         "10",
@@ -86,7 +90,7 @@ fn main() -> Nil {
 /// This verifies issue #52 (Float boxing for generic type parameters).
 #[test]
 fn test_generic_float_identity() {
-    use tribute::database::parse_with_thread_local;
+    use tribute_front::source_file::parse_rope;
 
     // Generic identity function that boxes Float to anyref and unboxes back
     let source_code = Rope::from_str(
@@ -98,7 +102,7 @@ fn main() -> Nil { }
     );
 
     TributeDatabaseImpl::default().attach(|db| {
-        let tree = parse_with_thread_local(&source_code, None);
+        let tree = parse_rope(&source_code, None);
         let source_file = SourceCst::from_path(db, "float_identity.trb", source_code.clone(), tree);
 
         let _native_binary = compile_native_or_panic(db, source_file);
@@ -112,14 +116,15 @@ fn test_generic_struct_argument() {
     assert_native_output(
         "generic_struct.trb",
         r#"
+use std::io::{Io, print_line}
 struct Point { x: Nat, y: Nat }
 
 fn identity(x: a) ->{} a { x }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let p = Point { x: 10, y: 20 }
     let p2 = identity(p)
-    __tribute_print_nat(p2.x())
+    print_line(p2.x().to_string)
 }
 "#,
         "10",
@@ -132,12 +137,13 @@ fn test_generic_multiple_types() {
     assert_native_output(
         "generic_multiple.trb",
         r#"
+use std::io::{Io, print_line}
 fn identity(x: a) ->{} a { x }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     let i = identity(42)
     let _ = identity(3.14)
-    __tribute_print_nat(i)
+    print_line(i.to_string)
 }
 "#,
         "42",
@@ -150,10 +156,11 @@ fn test_generic_two_params() {
     assert_native_output(
         "generic_two_params.trb",
         r#"
+use std::io::{Io, print_line}
 fn first(x: a, y: b) ->{} a { x }
 
-fn main() -> Nil {
-    __tribute_print_nat(first(10, 3.14))
+fn main() ->{Io} Nil {
+    print_line(first(10, 3.14).to_string)
 }
 "#,
         "10",
@@ -166,10 +173,11 @@ fn test_generic_nested_calls() {
     assert_native_output(
         "generic_nested.trb",
         r#"
+use std::io::{Io, print_line}
 fn identity(x: a) ->{} a { x }
 
-fn main() -> Nil {
-    __tribute_print_nat(identity(identity(identity(42))))
+fn main() ->{Io} Nil {
+    print_line(identity(identity(identity(42))).to_string)
 }
 "#,
         "42",
@@ -226,6 +234,8 @@ fn test_function_type_parameter() {
     assert_native_output(
         "function_type.trb",
         r#"
+use std::io::{Io, print_line}
+
 fn apply(f: fn(Int) ->{e} Int, x: Int) ->{e} Int {
     f(x)
 }
@@ -234,8 +244,8 @@ fn double(n: Int) -> Int {
     n + n
 }
 
-fn main() -> Nil {
-    __tribute_print_int(apply(double, +21))
+fn main() ->{Io} Nil {
+    print_line(apply(double, +21).to_string)
 }
 "#,
         "42",
@@ -249,12 +259,14 @@ fn test_open_callback_root_main_executes() {
     assert_native_output(
         "open_callback_root_main.trb",
         r#"
+use std::io::{Io, print_line}
+
 fn apply(f: fn(Int) ->{e} Int, x: Int) ->{e} Int {
     f(x)
 }
 
-fn main() -> Nil {
-    __tribute_print_int(apply(fn(value) { value + +1 }, +41))
+fn main() ->{Io} Nil {
+    print_line(apply(fn(value) { value + +1 }, +41).to_string)
 }
 "#,
         "42",
@@ -265,8 +277,8 @@ fn main() -> Nil {
 /// Function that takes a function returning a function.
 #[test]
 fn test_nested_function_type() {
-    use tribute::database::parse_with_thread_local;
     use tribute::pipeline::compile_with_diagnostics;
+    use tribute_front::source_file::parse_rope;
 
     let source_code = Rope::from_str(
         r#"
@@ -285,7 +297,7 @@ fn main() -> Nil { }
     );
 
     TributeDatabaseImpl::default().attach(|db| {
-        let tree = parse_with_thread_local(&source_code, None);
+        let tree = parse_rope(&source_code, None);
         let source_file =
             SourceCst::from_path(db, "nested_function_type.trb", source_code.clone(), tree);
 
@@ -307,8 +319,8 @@ fn main() -> Nil { }
 /// Function type with type variables: `fn(a) -> b`
 #[test]
 fn test_generic_function_type() {
-    use tribute::database::parse_with_thread_local;
     use tribute::pipeline::compile_with_diagnostics;
+    use tribute_front::source_file::parse_rope;
 
     let source_code = Rope::from_str(
         r#"
@@ -328,7 +340,7 @@ fn main() -> Nil { }
     );
 
     TributeDatabaseImpl::default().attach(|db| {
-        let tree = parse_with_thread_local(&source_code, None);
+        let tree = parse_rope(&source_code, None);
         let source_file =
             SourceCst::from_path(db, "generic_function_type.trb", source_code.clone(), tree);
 
@@ -353,6 +365,8 @@ fn test_calc_eval() {
     assert_native_output(
         "calc.trb",
         r#"
+use std::io::{Io, print_line}
+
 enum Expr {
     Num(Int),
     Add(Expr, Expr),
@@ -363,23 +377,23 @@ enum Expr {
 
 fn eval(e: Expr) -> Int {
     case e {
-        Num(n) -> n,
-        Add(l, r) -> eval(l) + eval(r),
-        Sub(l, r) -> eval(l) - eval(r),
-        Mul(l, r) -> eval(l) * eval(r),
-        Div(l, r) -> eval(l) / eval(r),
+        .Num(n) -> n,
+        .Add(l, r) -> eval(l) + eval(r),
+        .Sub(l, r) -> eval(l) - eval(r),
+        .Mul(l, r) -> eval(l) * eval(r),
+        .Div(l, r) -> eval(l) / eval(r),
     }
 }
 
-fn main() -> Nil {
-    let expr = Div(
-        Mul(
-            Add(Num(+1), Num(+2)),
-            Sub(Num(+10), Num(+4))
+fn main() ->{Io} Nil {
+    let expr = .Div(
+        .Mul(
+            .Add(.Num(+1), .Num(+2)),
+            .Sub(.Num(+10), .Num(+4))
         ),
-        Num(+2)
+        .Num(+2)
     )
-    __tribute_print_int(eval(expr))
+    print_line(eval(expr).to_string)
 }
 "#,
         "9",
@@ -398,7 +412,7 @@ fn named_function(ctx: &IrContext, module: Module, name: &str) -> func::Func {
         .filter_map(|&op| {
             func::Func::from_op(ctx, op)
                 .ok()
-                .filter(|f| f.sym_name(ctx) == name)
+                .filter(|f| f.sym_name(ctx) == name || f.sym_name(ctx) == format!("pkg::{name}"))
         })
         .collect();
     assert_eq!(functions.len(), 1, "expected one physical function {name}");
@@ -476,16 +490,37 @@ fn assert_indirect_signature(ctx: &IrContext, owner: func::Func, call: OpRef) {
         assert!(ctx.op_results(call).is_empty());
         let owner_signature = func::FuncSig::from_type_ref(ctx, owner.r#type(ctx)).unwrap();
         assert_eq!(signature.results(ctx), owner_signature.results(ctx));
-        // A transfer through a convention-proven closure keeps its convention
-        // until closure lowering consumes it.
+        // A transfer through a closure keeps its convention until closure
+        // lowering consumes it.
         let callee_ty = ctx.value_ty(operands[0]);
-        let expected =
-            tribute_ir::calling_convention::get_physical_closure_convention(ctx, callee_ty)
-                .map(|_| tribute_ir::calling_convention::CallingConvention::Cps);
+        let expected = closure::Closure::matches(ctx, callee_ty)
+            .then_some(tribute_ir::calling_convention::CallingConvention::Cps);
         assert_eq!(DynConventionBearing::of(ctx, call), expected);
     } else {
         assert_eq!(ctx.op_result_types(call), signature.results(ctx));
     }
+}
+
+/// The entry function that implements a convention table's closure. The
+/// other slots hold shared adapters and trap entries, which are not lifted
+/// lambdas.
+fn implemented_entry<'a>(
+    ctx: &IrContext,
+    module: Module,
+    entries: impl IntoIterator<Item = &'a trunk_ir::SymbolPath>,
+) -> func::Func {
+    let entries: Vec<_> = entries
+        .into_iter()
+        .map(ToString::to_string)
+        .filter(|entry| {
+            !entry.starts_with("__tribute_trap_entry_")
+                && !entry.starts_with("__tribute_entry_adapter_")
+        })
+        .collect();
+    let [entry] = &entries[..] else {
+        panic!("one implemented convention entry, found {entries:?}");
+    };
+    named_function(ctx, module, entry)
 }
 
 fn source_closure(ctx: &IrContext, module: Module, name: &str) -> (closure::New, func::Func) {
@@ -494,7 +529,20 @@ fn source_closure(ctx: &IrContext, module: Module, name: &str) -> (closure::New,
     assert_indirect_signature(ctx, owner, call);
     let closure = closure::New::from_op(ctx, defining_op(ctx, ctx.op_operands(call)[0]))
         .expect("indirect callee must be the source lambda");
-    let lifted = named_function(ctx, module, &closure.func_ref(ctx).to_string());
+    let entries: Vec<_> = closure.entries(ctx).collect();
+    assert_eq!(entries.len(), 3, "one entry per convention");
+    let lifted = implemented_entry(ctx, module, entries.iter().copied());
+    let convention = DynConventionBearing::of(ctx, lifted.op_ref()).expect("lifted convention");
+    // The lifted function sits at its convention's slot.
+    assert_eq!(
+        named_function(
+            ctx,
+            module,
+            &entries[convention.slot() as usize].to_string()
+        )
+        .op_ref(),
+        lifted.op_ref()
+    );
     let closure_ty = ctx.value_ty(closure.result(ctx));
     let callable = closure::Closure::from_type_ref(ctx, closure_ty).expect("typed closure");
     let signature = func::FuncSig::from_type_ref(ctx, callable.func_type(ctx)).unwrap();
@@ -502,9 +550,7 @@ fn source_closure(ctx: &IrContext, module: Module, name: &str) -> (closure::New,
         signature.as_type_ref(),
         ctx.op_attrs(call).get_type("signature").unwrap()
     );
-    let environment_index =
-        tribute_ir::calling_convention::get_physical_closure_environment_index(ctx, closure_ty)
-            .expect("environment placement");
+    let environment_index = convention.closure_environment_index();
     let lifted_signature = func::FuncSig::from_type_ref(ctx, lifted.r#type(ctx)).unwrap();
     let entry = ctx.region(lifted.body(ctx)).blocks[0];
     let entry_types: Vec<_> = ctx
@@ -522,10 +568,6 @@ fn source_closure(ctx: &IrContext, module: Module, name: &str) -> (closure::New,
     );
     assert_eq!(expected, lifted_signature.inputs(ctx));
     assert_eq!(signature.results(ctx), lifted_signature.results(ctx));
-    assert_eq!(
-        DynConventionBearing::of(ctx, lifted.op_ref()),
-        tribute_ir::calling_convention::get_physical_closure_convention(ctx, closure_ty)
-    );
     (closure, lifted)
 }
 
@@ -585,7 +627,7 @@ fn test_lambda_with_capture() {
         let recovered = closure::Unpack::from_op(&ctx, defining_op(&ctx, addition.rhs(&ctx))).expect("captured addend");
         assert_eq!(recovered.results(&ctx), [addition.rhs(&ctx)]);
         let closure_ty = ctx.value_ty(closure.result(&ctx));
-        let env_index = tribute_ir::calling_convention::get_physical_closure_environment_index(&ctx, closure_ty).unwrap();
+        let env_index = DynConventionBearing::of(&ctx, lifted.op_ref()).unwrap().closure_environment_index();
         let entry = ctx.region(lifted.body(&ctx)).blocks[0];
         assert_eq!(recovered.closure(&ctx), ctx.block_args(entry)[env_index]);
         assert_eq!(ctx.value_ty(recovered.closure(&ctx)), closure_ty);
@@ -627,9 +669,9 @@ fn test_higher_order_function_ir() {
         let apply = named_function(&ctx, module, "apply");
         assert_indirect_signature(&ctx, apply, only_indirect_call(&ctx, apply));
         let compute = named_function(&ctx, module, "compute");
-        let call = function_ops::<func::TailCall>(&ctx, compute).into_iter().find(|call| call.callee(&ctx) == ["apply"]).expect("source apply call");
+        let call = function_ops::<func::TailCall>(&ctx, compute).into_iter().find(|call| call.callee(&ctx) == ["pkg::apply"]).expect("source apply call");
         let argument = call.args(&ctx).iter().find_map(|&value| match ctx.value_def(value) { ValueDef::OpResult(op, _) => closure::New::from_op(&ctx, op).ok(), _ => None }).expect("source lambda argument");
-        let lifted = named_function(&ctx, module, &argument.func_ref(&ctx).to_string());
+        let lifted = implemented_entry(&ctx, module, argument.entries(&ctx).collect::<Vec<_>>());
         let additions = function_ops::<arith::Addi>(&ctx, lifted);
         assert_eq!(additions.len(), 1);
         let constant = arith::Const::from_op(&ctx, defining_op(&ctx, additions[0].rhs(&ctx))).unwrap();
@@ -647,40 +689,48 @@ fn test_closure_lowering() {
         let (mut ctx, module) = tribute::pipeline::run_through_cps_lowering(db, source)
             .unwrap()
             .unwrap();
-        tribute_passes::closure_lower::lower_prepared_closures(&mut ctx, module).unwrap();
         let apply = named_function(&ctx, module, "apply");
+        let convention = DynConventionBearing::of(&ctx, only_indirect_call(&ctx, apply))
+            .expect("callback transfer convention");
+        let env_index = convention.closure_environment_index();
+        tribute_passes::closure_lower::lower_prepared_closures(&mut ctx, module).unwrap();
         let call = only_indirect_call(&ctx, apply);
         assert_indirect_signature(&ctx, apply, call);
-        let code = adt::StructGet::from_op(&ctx, defining_op(&ctx, ctx.op_operands(call)[0])).expect("projected callback code");
+        let entry = tribute_ir::dialect::tribute_rt::ConventionEntry::from_op(&ctx, defining_op(&ctx, ctx.op_operands(call)[0])).expect("callback entry");
+        assert_eq!(entry.index(&ctx), convention.slot());
+        let code = adt::StructGet::from_op(&ctx, defining_op(&ctx, entry.table(&ctx))).expect("projected callback convention table");
         assert_eq!(code.field(&ctx), 0);
         let callback = code.r#ref(&ctx);
         let closure_ty = ctx.value_ty(callback);
-        let callable = closure::Closure::from_type_ref(&ctx, closure_ty).expect("retained callback contract");
-        let env_index = tribute_ir::calling_convention::get_physical_closure_environment_index(&ctx, closure_ty).unwrap();
+        assert!(closure::Closure::matches(&ctx, closure_ty), "retained callback closure type");
         let operands = &ctx.op_operands(call)[1..];
         assert_eq!(operands[env_index], callback);
-        let signature = func::FuncSig::from_type_ref(&ctx, callable.func_type(&ctx)).unwrap();
-        let mut expected = signature.inputs(&ctx).to_vec();
-        expected.insert(env_index, closure_ty);
-        itertools::assert_equal(expected, operands.iter().map(|&value| ctx.value_ty(value)));
+        // The transfer's signature is the entry ABI, environment included.
+        let signature = trunk_ir::op_interface::DynIndirectCallLike::get(&ctx, call)
+            .and_then(|call| call.exact_signature(&ctx))
+            .and_then(|signature| func::FuncSig::from_type_ref(&ctx, signature))
+            .expect("the callback transfer carries its entry signature");
+        assert_eq!(signature.inputs(&ctx)[env_index], closure_ty);
+        itertools::assert_equal(signature.inputs(&ctx).iter().copied(), operands.iter().map(|&value| ctx.value_ty(value)));
         let entry = ctx.region(apply.body(&ctx)).blocks[0];
         assert!(ctx.block_args(entry).contains(&callback));
         assert_eq!(operands.last(), ctx.block_args(entry).last());
         assert!(function_ops::<closure::New>(&ctx, apply).is_empty());
-        assert!(function_ops::<closure::Func>(&ctx, apply).is_empty());
+        assert!(function_ops::<closure::Entry>(&ctx, apply).is_empty());
         assert!(function_ops::<closure::Unpack>(&ctx, apply).is_empty());
         let compute = named_function(&ctx, module, "compute");
-        let source_call = function_ops::<func::TailCall>(&ctx, compute).into_iter().find(|call| call.callee(&ctx) == ["apply"]).unwrap();
+        let source_call = function_ops::<func::TailCall>(&ctx, compute).into_iter().find(|call| call.callee(&ctx) == ["pkg::apply"]).unwrap();
         let pack = source_call.args(&ctx).iter().find_map(|&value| {
             let ValueDef::OpResult(cast, _) = ctx.value_def(value) else { return None };
             let cast = core::UnrealizedConversionCast::from_op(&ctx, cast).ok()?;
             (ctx.value_ty(value) == closure_ty).then(|| adt::StructNew::from_op(&ctx, defining_op(&ctx, cast.value(&ctx))).ok()).flatten()
         }).expect("source callback storage kept at its exact callable type");
         let fields = pack.fields(&ctx);
-        let function = func::Constant::from_op(&ctx, defining_op(&ctx, fields[0])).unwrap();
-        let lifted = named_function(&ctx, module, &function.func_ref(&ctx).to_string());
-        assert_eq!(ctx.value_ty(function.result(&ctx)), lifted.r#type(&ctx), "the reference carries the target's exact signature");
-        // The closure holds its capture directly after the code reference.
+        let table = tribute_ir::dialect::tribute_rt::ConventionTable::from_op(&ctx, defining_op(&ctx, fields[0])).unwrap();
+        let entries: Vec<_> = table.entries(&ctx).collect();
+        assert_eq!(entries.len(), 3, "one entry per convention");
+        let lifted = implemented_entry(&ctx, module, entries);
+        // The closure holds its capture directly after the convention table reference.
         assert_eq!(fields.len(), 2);
         assert_eq!(arith::Const::from_op(&ctx, defining_op(&ctx, fields[1])).unwrap().value(&ctx), Attribute::Int(1));
         let additions = function_ops::<arith::Addi>(&ctx, lifted);
@@ -690,7 +740,8 @@ fn test_closure_lowering() {
         assert_eq!(capture.field(&ctx), 1);
         let transfer = only_indirect_call(&ctx, lifted);
         assert_indirect_signature(&ctx, lifted, transfer);
-        assert_eq!(ctx.op_operands(transfer).last(), Some(&additions[0].result(&ctx)));
+        // `Done` takes the value ahead of its own environment.
+        assert_eq!(ctx.op_operands(transfer).get(1), Some(&additions[0].result(&ctx)));
     });
 }
 
@@ -704,9 +755,10 @@ fn test_closure_execution_simple() {
     assert_native_output(
         "closure_exec_simple.trb",
         r#"
-fn main() -> Nil {
+use std::io::{Io, print_line}
+fn main() ->{Io} Nil {
     let f = fn(x) { x + 1 }
-    __tribute_print_nat(f(41))
+    print_line(f(41).to_string)
 }
 "#,
         "42",

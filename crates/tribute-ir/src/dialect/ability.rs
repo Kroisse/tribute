@@ -191,7 +191,9 @@ mod ability {
     /// ```
     ///
     /// A `kind = "fn"` arm is the `EvidenceDirect` closure
-    /// `(Evidence, operation arguments...) -> I`. The optional
+    /// `(Evidence, operation arguments...) -> I`. A closure type records no
+    /// convention, so verification checks each callable's shape, and the
+    /// handle enters an arm through the convention its `kind` names. The optional
     /// `evidence_plan` holds only `mask`. The body entry block receives the
     /// extended Evidence and an `ability.frame<M>`, and every path ends in a
     /// proper tail transfer or `func.unreachable`.

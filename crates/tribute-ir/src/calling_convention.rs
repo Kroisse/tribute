@@ -1,37 +1,34 @@
 //! Tribute calling conventions and the IR that records them.
 
+use std::fmt;
+use std::str::FromStr;
+
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef};
-use trunk_ir::types::{Attribute, TypeDataBuilder};
+use trunk_ir::types::Attribute;
 
 use crate::dialect::closure;
 
 /// Exact attribute key of a convention on a callable type or operation.
 pub const CALLING_CONVENTION_ATTR: &str = "tribute.calling_convention";
-pub const CLOSURE_ENVIRONMENT_INDEX_ATTR: &str = "tribute.closure_environment_index";
 
 /// The ABI strength required to call a function.
 ///
 /// Ordering is significant: composing requirements selects the stronger
 /// convention with [`CallingConvention::join`].
+///
+/// It displays as, and parses from, its [keyword](Self::keyword).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[repr(u8)]
 pub enum CallingConvention {
     /// Pure function: source parameters and source result only.
-    Direct = 0,
+    Direct,
     /// Tail-resumptive effect: evidence parameter, direct source result.
-    EvidenceDirect = 1,
+    EvidenceDirect,
     /// General control effect: evidence and a typed ContinuationFrame.
-    Cps = 2,
+    Cps,
 }
-
-const CALLING_CONVENTIONS_BY_CODE: &[CallingConvention] = &[
-    CallingConvention::Direct,
-    CallingConvention::EvidenceDirect,
-    CallingConvention::Cps,
-];
 
 impl CallingConvention {
     /// Compose two requirements by selecting the stronger convention.
@@ -49,13 +46,28 @@ impl CallingConvention {
         self == Self::Cps
     }
 
-    /// Physical closure environment slot for this convention.
+    /// The environment slot of a closure entry with this convention, which
+    /// the convention alone determines.
     pub fn closure_environment_index(self) -> usize {
         usize::from(self.needs_evidence())
     }
 
-    /// Keyword in the `convention(..)` syntax of source callables.
-    pub(crate) fn keyword(self) -> &'static str {
+    /// Every convention, in convention table order.
+    pub const ALL: [Self; 3] = [Self::Direct, Self::EvidenceDirect, Self::Cps];
+
+    /// The position of this convention's entry in a closure's convention
+    /// table (`new-plans/ir.md`, "Convention entry").
+    pub fn slot(self) -> u32 {
+        match self {
+            Self::Direct => 0,
+            Self::EvidenceDirect => 1,
+            Self::Cps => 2,
+        }
+    }
+
+    /// The keyword that spells this convention, both as the stored
+    /// attribute value and in the `convention(..)` syntax.
+    pub fn keyword(self) -> &'static str {
         match self {
             Self::Direct => "direct",
             Self::EvidenceDirect => "evidence_direct",
@@ -63,42 +75,63 @@ impl CallingConvention {
         }
     }
 
-    pub(crate) fn from_keyword(keyword: &str) -> Option<Self> {
-        match keyword {
-            "direct" => Some(Self::Direct),
-            "evidence_direct" => Some(Self::EvidenceDirect),
-            "cps" => Some(Self::Cps),
+    /// The attribute value that stores this convention.
+    pub(crate) fn to_attribute(self, ctx: &mut IrContext) -> Attribute {
+        ctx.string_attr(self.keyword())
+    }
+
+    /// The convention a stored attribute value spells; `None` for any value
+    /// that is not one of the keywords.
+    pub(crate) fn from_attribute(ctx: &IrContext, value: &Attribute) -> Option<Self> {
+        match value {
+            Attribute::String(keyword) => ctx.str(*keyword).parse().ok(),
             _ => None,
         }
     }
 }
 
-impl TryFrom<u8> for CallingConvention {
-    type Error = u8;
+/// `Attr<CallingConvention>`: a keyword string. The schema checks only that
+/// the value is a string; an operation declaring it verifies the keyword.
+impl trunk_ir::attr_kind::AttrKind for CallingConvention {
+    const KIND: trunk_ir::op_schema::AttributeKind = trunk_ir::op_schema::AttributeKind::String;
+    type Out<'ctx> = CallingConvention;
+    type In = CallingConvention;
 
-    fn try_from(code: u8) -> Result<Self, Self::Error> {
-        CALLING_CONVENTIONS_BY_CODE
-            .get(usize::from(code))
-            .copied()
-            .ok_or(code)
+    fn read<'ctx>(ctx: &'ctx IrContext, attr: &'ctx Attribute) -> CallingConvention {
+        Self::from_attribute(ctx, attr).expect("unverified calling convention keyword")
+    }
+
+    fn write(ctx: &mut IrContext, value: CallingConvention) -> Attribute {
+        value.to_attribute(ctx)
     }
 }
 
-impl TryFrom<i128> for CallingConvention {
-    type Error = i128;
+impl fmt::Display for CallingConvention {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.keyword())
+    }
+}
 
-    fn try_from(code: i128) -> Result<Self, Self::Error> {
-        u8::try_from(code)
-            .ok()
-            .and_then(|code| Self::try_from(code).ok())
-            .ok_or(code)
+/// A string that is not a calling-convention keyword.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, derive_more::Display, derive_more::Error)]
+#[display("unknown calling convention")]
+pub struct UnknownConvention;
+
+impl FromStr for CallingConvention {
+    type Err = UnknownConvention;
+
+    fn from_str(keyword: &str) -> Result<Self, Self::Err> {
+        Self::ALL
+            .into_iter()
+            .find(|convention| convention.keyword() == keyword)
+            .ok_or(UnknownConvention)
     }
 }
 
 /// A convention an operation records that is not a valid one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, derive_more::Display, derive_more::Error)]
 pub enum ConventionError {
-    /// The recorded value is not `Direct`, `EvidenceDirect`, or `Cps`.
+    /// The recorded value is not one of the convention keywords.
     #[display("malformed calling-convention metadata")]
     Malformed,
     /// The operation does not implement [`ConventionBearing`].
@@ -107,12 +140,13 @@ pub enum ConventionError {
 }
 
 /// A physical operation that records the calling convention of the callable
-/// it defines, creates, or transfers to, from CPS legalization until the
-/// last reader inside the representation/ABI boundary consumes it
+/// it defines or transfers to, from CPS legalization until the last reader
+/// inside the representation/ABI boundary consumes it
 /// (`new-plans/cps-effects.md`, "CPS 변환의 호출 대상 형상").
 ///
 /// Only these operations carry a convention, and passes read, write, and
-/// consume it only through this interface.
+/// consume it only through this interface. A `closure.lambda` declares the
+/// convention of each body in its own `conventions` attribute instead.
 #[trunk_ir::op_interface]
 pub trait ConventionBearing: DialectOp {
     /// The recorded convention; `Ok(None)` when the operation records none.
@@ -124,8 +158,9 @@ pub trait ConventionBearing: DialectOp {
     }
 
     fn set_calling_convention(&self, ctx: &mut IrContext, convention: CallingConvention) {
+        let value = convention.to_attribute(ctx);
         ctx.op_attrs_mut(self.op_ref())
-            .insert(CALLING_CONVENTION_ATTR, Attribute::Int(convention as i128));
+            .insert(CALLING_CONVENTION_ATTR, value);
     }
 
     /// Consume the recorded convention.
@@ -172,21 +207,37 @@ fn read_convention(
     let Some(value) = ctx.op_attrs(op).get(CALLING_CONVENTION_ATTR) else {
         return Ok(None);
     };
-    match value {
-        Attribute::Int(code) => CallingConvention::try_from(*code)
-            .map(Some)
-            .map_err(|_| ConventionError::Malformed),
-        _ => Err(ConventionError::Malformed),
-    }
+    CallingConvention::from_attribute(ctx, value)
+        .map(Some)
+        .ok_or(ConventionError::Malformed)
 }
 
-impl ConventionBearing for closure::Lambda {}
-impl ConventionBearing for closure::New {}
 impl ConventionBearing for func::Func {}
 impl ConventionBearing for func::Call {}
-impl ConventionBearing for func::CallIndirect {}
 impl ConventionBearing for func::TailCall {}
+impl ConventionBearing for func::CallIndirect {}
 impl ConventionBearing for func::TailCallIndirect {}
+
+/// A calling-convention violation of one operation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ConventionViolation {
+    pub op: OpRef,
+    pub error: ConventionError,
+}
+
+/// Every operation under `root` whose convention is malformed or sits on an
+/// operation that cannot carry one (`new-plans/cps-effects.md`, "CPS 변환의
+/// 호출 대상 형상").
+pub fn verify_conventions(ctx: &IrContext, root: OpRef) -> Vec<ConventionViolation> {
+    let mut violations = Vec::new();
+    let _ = trunk_ir::walk::walk_op::<()>(ctx, root, &mut |op| {
+        if let Err(error) = DynConventionBearing::exact(ctx, op) {
+            violations.push(ConventionViolation { op, error });
+        }
+        std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+    });
+    violations
+}
 
 trunk_ir::register_interfaces!(
     func::Func: ConventionBearing;
@@ -200,7 +251,7 @@ trunk_ir::register_interfaces!(
 pub fn cps_done_type(ctx: &mut IrContext, result: TypeRef) -> TypeRef {
     let never = core::Never::params().intern(ctx).as_type_ref();
     let function = func::func_sig(ctx, [result], [never]).as_type_ref();
-    generated_cps_closure_type(ctx, function)
+    physical_closure_type(ctx, function)
 }
 
 /// Strict suffix continuation `Completion<X, R> = (Evidence, ContinuationFrame<R>, X) -> never`.
@@ -212,7 +263,7 @@ pub fn cps_completion_type(
 ) -> TypeRef {
     let never = core::Never::params().intern(ctx).as_type_ref();
     let function = func::func_sig(ctx, [evidence, frame, value], [never]).as_type_ref();
-    generated_cps_closure_type(ctx, function)
+    physical_closure_type(ctx, function)
 }
 
 /// Exact operation resumption `ResumeExact<I, R> = (Evidence, ContinuationFrame<R>, I) -> never`.
@@ -251,118 +302,45 @@ pub fn cps_dispatch_type(
         [never],
     )
     .as_type_ref();
-    physical_closure_type(ctx, function, CallingConvention::Cps)
+    physical_closure_type(ctx, function)
 }
 
-/// Return the underlying exact `func.func_sig` only for a provenance-bearing CPS closure.
-///
-/// Callers must reject absent or malformed outer closure provenance rather than infer a
-/// callable contract from a structurally similar type.
+/// The `Cps` entry, without the environment, of a generated continuation
+/// `closure`. Only a generated continuation's callable is its entry; a source
+/// callable value's is not (`new-plans/cps-effects.md`, "Closure type의
+/// callable").
 pub fn cps_closure_function_type(ctx: &IrContext, closure: TypeRef) -> Option<TypeRef> {
     physical_closure_function_type(ctx, closure, CallingConvention::Cps)
 }
 
-/// Return the exact `func.func_sig` contract only for a provenance-bearing physical closure
-/// with the requested convention.
-///
-/// The result comes from the closure type's explicit callable contract, never from
-/// an erased closure operand or its runtime storage shape.
+/// The entry, without the environment, of a generated closure entered
+/// through `convention`, when it is a `closure.closure` whose callable has
+/// the environment slot that `convention` places. A source callable value's
+/// closure type is not its entry, so its transfers carry their own signature.
 pub fn physical_closure_function_type(
     ctx: &IrContext,
     closure: TypeRef,
     convention: CallingConvention,
 ) -> Option<TypeRef> {
-    let environment_index = get_physical_closure_environment_index(ctx, closure)?;
-    if get_physical_closure_convention(ctx, closure) != Some(convention) {
-        return None;
-    }
-    let [function] = ctx.get_type(closure).params.as_slice() else {
-        return None;
-    };
-    let callable = func::FuncSig::from_type_ref(ctx, *function)?;
-    let argument_count = callable.inputs(ctx).len();
-    (environment_index <= argument_count).then_some(*function)
+    let function = closure::Closure::from_type_ref(ctx, closure)?.func_type(ctx);
+    let callable = func::FuncSig::from_type_ref(ctx, function)?;
+    (convention.closure_environment_index() <= callable.inputs(ctx).len()).then_some(function)
 }
 
-fn generated_cps_closure_type(ctx: &mut IrContext, function: TypeRef) -> TypeRef {
-    physical_closure_type_with_environment_index(ctx, function, CallingConvention::Cps, 0)
-}
-
-/// Build a closure type whose outer occurrence carries exact convention
-/// provenance for physical callable producers and consumers.
-pub fn physical_closure_type(
-    ctx: &mut IrContext,
-    function: TypeRef,
-    convention: CallingConvention,
-) -> TypeRef {
-    physical_closure_type_with_environment_index(
-        ctx,
-        function,
-        convention,
-        convention.closure_environment_index(),
-    )
-}
-
-/// Build a convention-proven closure type with its exact environment slot.
-///
-/// Most callables use the convention's standard slot. Generated continuation
-/// closures may have a narrower physical entry shape, so their producer must
-/// record the slot explicitly instead of asking a later consumer to infer it.
-pub fn physical_closure_type_with_environment_index(
-    ctx: &mut IrContext,
-    function: TypeRef,
-    convention: CallingConvention,
-    environment_index: usize,
-) -> TypeRef {
-    TypeDataBuilder::new(closure::Closure::NAME)
-        .param(function)
-        .attr(CALLING_CONVENTION_ATTR, Attribute::Int(convention as i128))
-        .attr(
-            CLOSURE_ENVIRONMENT_INDEX_ATTR,
-            Attribute::Int(environment_index as i128),
-        )
-        .intern(ctx)
-}
-
-/// Read exact convention provenance from an outer physical closure type.
-pub fn get_physical_closure_convention(
-    ctx: &IrContext,
-    closure: TypeRef,
-) -> Option<CallingConvention> {
-    let data = ctx.get_type(closure);
-    if data.name != closure::Closure::NAME {
-        return None;
-    }
-    data.attrs
-        .view(ctx)
-        .get_u8(CALLING_CONVENTION_ATTR)
-        .ok()??
-        .try_into()
-        .ok()
-}
-
-/// Read the exact environment slot from a convention-proven closure type.
-pub fn get_physical_closure_environment_index(ctx: &IrContext, closure: TypeRef) -> Option<usize> {
-    let data = ctx.get_type(closure);
-    if data.name != closure::Closure::NAME {
-        return None;
-    }
-    data.attrs
-        .view(ctx)
-        .get_u32(CLOSURE_ENVIRONMENT_INDEX_ATTR)
-        .ok()??
-        .try_into()
-        .ok()
+/// The closure type of the callable `function`.
+pub fn physical_closure_type(ctx: &mut IrContext, function: TypeRef) -> TypeRef {
+    closure::Closure::params(function).intern(ctx).as_type_ref()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
+    use trunk_ir::types::TypeDataBuilder;
     use trunk_ir::walk::{WalkAction, walk_op};
 
     const CONVENTIONS: &str = r#"core.module @test {
-  func.func @direct() -> core.nil attributes {tribute.calling_convention = 0} {
+  func.func @direct() -> core.nil attributes {tribute.calling_convention = "direct"} {
     func.return
   }
   func.func @untagged() -> core.nil {
@@ -371,12 +349,12 @@ mod tests {
   func.func @malformed() -> core.nil attributes {tribute.calling_convention = 3} {
     func.return
   }
-  func.func @wrong_kind() -> core.nil attributes {tribute.calling_convention = "cps"} {
+  func.func @wrong_kind() -> core.nil attributes {tribute.calling_convention = 2} {
     func.return
   }
-  func.func @calls() -> core.nil attributes {tribute.calling_convention = 1} {
-    %r = func.call {callee = @direct, tribute.calling_convention = 0} : core.nil
-    %c = arith.const {value = 0, tribute.calling_convention = 0} : core.i32
+  func.func @calls() -> core.nil attributes {tribute.calling_convention = "evidence_direct"} {
+    %r = func.call {callee = @direct, tribute.calling_convention = "direct"} : core.nil
+    %c = arith.const {value = 0, tribute.calling_convention = "direct"} : core.i32
     func.return
   }
 }"#;
@@ -435,16 +413,55 @@ mod tests {
             named(&ctx, module, "core.module")
         ));
         let location = ctx.op(module.op()).location;
-        for name in [
-            closure::Lambda::NAME,
-            closure::New::NAME,
-            func::CallIndirect::NAME,
-            func::TailCallIndirect::NAME,
-        ] {
+        for name in [func::CallIndirect::NAME, func::TailCallIndirect::NAME] {
             let op = trunk_ir::OperationDataBuilder::new(location, name).build(&mut ctx);
             let op = ctx.create_op(op);
             assert!(DynConventionBearing::is_implemented(&ctx, op), "{name:?}");
         }
+    }
+
+    fn violations(input: &str) -> Vec<(String, ConventionError)> {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+        verify_conventions(&ctx, module.op())
+            .into_iter()
+            .map(|violation| {
+                (
+                    ctx.op(violation.op).name.display(&ctx).to_string(),
+                    violation.error,
+                )
+            })
+            .collect()
+    }
+
+    const CLOSURES: &str = r#"core.module @test {
+  !fn = func.func_sig<(core.i32) -> core.i32>
+  !closure = closure.closure<!fn>
+  func.func @callee(%x: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
+    func.return %x
+  }
+  func.func @agrees(%x: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
+    %c = closure.new {entries = [@callee, @callee, @callee]} : !closure
+    %r = func.call_indirect %c, %x {signature = !fn, tribute.calling_convention = "direct"} : core.i32
+    func.return %r
+  }
+}"#;
+
+    #[test]
+    fn conventions_on_closure_operations_verify() {
+        assert_eq!(violations(CLOSURES), []);
+    }
+
+    #[test]
+    fn a_convention_on_an_operation_that_cannot_carry_one_is_rejected() {
+        assert_eq!(
+            violations(CONVENTIONS),
+            [
+                ("func.func".to_owned(), ConventionError::Malformed),
+                ("func.func".to_owned(), ConventionError::Malformed),
+                ("arith.const".to_owned(), ConventionError::Unregistered),
+            ]
+        );
     }
 
     #[test]
@@ -516,55 +533,27 @@ mod tests {
     }
 
     #[test]
-    fn integer_codes_round_trip() {
-        for convention in CALLING_CONVENTIONS_BY_CODE {
-            let code = *convention as u8;
-            assert_eq!(CallingConvention::try_from(code), Ok(*convention));
+    fn keywords_are_the_only_stored_form() {
+        let mut ctx = IrContext::new();
+        for convention in [
+            CallingConvention::Direct,
+            CallingConvention::EvidenceDirect,
+            CallingConvention::Cps,
+        ] {
+            let value = convention.to_attribute(&mut ctx);
             assert_eq!(
-                CallingConvention::try_from(i128::from(code)),
-                Ok(*convention)
+                CallingConvention::from_attribute(&ctx, &value),
+                Some(convention)
             );
-            assert_eq!(
-                CallingConvention::from_keyword(convention.keyword()),
-                Some(*convention)
-            );
+            assert_eq!(convention.to_string().parse(), Ok(convention));
         }
 
-        assert_eq!(CallingConvention::try_from(3u8), Err(3));
-        assert_eq!(CallingConvention::try_from(256i128), Err(256));
-        assert_eq!(CallingConvention::try_from(-1i128), Err(-1));
-    }
-
-    #[test]
-    fn physical_closure_convention_is_exact_type_identity() {
-        let mut ctx = IrContext::new();
-        let never = trunk_ir::dialect::core::Never::params()
-            .intern(&mut ctx)
-            .as_type_ref();
-        let function = trunk_ir::dialect::func::func_sig(&mut ctx, [], [never]).as_type_ref();
-        let direct = physical_closure_type(&mut ctx, function, CallingConvention::Direct);
-        let cps = physical_closure_type(&mut ctx, function, CallingConvention::Cps);
-
-        assert_ne!(direct, cps);
+        assert!("Cps".parse::<CallingConvention>().is_err());
+        let unknown = ctx.string_attr("tail");
+        assert_eq!(CallingConvention::from_attribute(&ctx, &unknown), None);
         assert_eq!(
-            get_physical_closure_convention(&ctx, direct),
-            Some(CallingConvention::Direct)
-        );
-        assert_eq!(
-            get_physical_closure_convention(&ctx, cps),
-            Some(CallingConvention::Cps)
-        );
-        assert_eq!(get_physical_closure_environment_index(&ctx, cps), Some(1));
-
-        let continuation = physical_closure_type_with_environment_index(
-            &mut ctx,
-            function,
-            CallingConvention::Cps,
-            0,
-        );
-        assert_eq!(
-            get_physical_closure_environment_index(&ctx, continuation),
-            Some(0)
+            CallingConvention::from_attribute(&ctx, &Attribute::Int(2)),
+            None
         );
     }
 
@@ -582,14 +571,13 @@ mod tests {
         let resume = cps_resume_type(&mut ctx, evidence, frame, anyref);
         let never = core::Never::params().intern(&mut ctx).as_type_ref();
 
-        for (closure, environment_index, expected) in [
-            (done, 0, vec![i32_ty, never]),
-            (completion, 0, vec![evidence, frame, i32_ty, never]),
-            (resume_exact, 0, vec![evidence, frame, i32_ty, never]),
-            (resume, 0, vec![evidence, frame, anyref, never]),
+        for (closure, expected) in [
+            (done, vec![i32_ty, never]),
+            (completion, vec![evidence, frame, i32_ty, never]),
+            (resume_exact, vec![evidence, frame, i32_ty, never]),
+            (resume, vec![evidence, frame, anyref, never]),
             (
                 dispatch,
-                1,
                 vec![evidence, resume, i32_ty, i32_ty, i32_ty, anyref, never],
             ),
         ] {
@@ -598,48 +586,26 @@ mod tests {
                 ctx.get_type(function).params.as_slice(),
                 expected.as_slice()
             );
-            assert_eq!(
-                get_physical_closure_environment_index(&ctx, closure),
-                Some(environment_index)
-            );
+            assert!(ctx.get_type(closure).attrs.is_empty());
         }
     }
 
     #[test]
-    fn cps_closure_readers_fail_closed_on_malformed_metadata() {
+    fn cps_closure_readers_reject_a_callable_without_an_environment_slot() {
         let mut ctx = IrContext::new();
         let never = core::Never::params().intern(&mut ctx).as_type_ref();
-        let function = func::func_sig(&mut ctx, [], [never]).as_type_ref();
-        let missing_environment = TypeDataBuilder::new("closure.closure")
-            .param(function)
-            .attr(
-                CALLING_CONVENTION_ATTR,
-                Attribute::Int(CallingConvention::Cps as i128),
-            )
-            .intern(&mut ctx);
-        let extra_outer_parameter = TypeDataBuilder::new("closure.closure")
-            .param(function)
-            .param(never)
-            .attr(
-                CALLING_CONVENTION_ATTR,
-                Attribute::Int(CallingConvention::Cps as i128),
-            )
-            .attr(CLOSURE_ENVIRONMENT_INDEX_ATTR, Attribute::Int(0))
-            .intern(&mut ctx);
-        let out_of_range_environment = TypeDataBuilder::new("closure.closure")
-            .param(function)
-            .attr(
-                CALLING_CONVENTION_ATTR,
-                Attribute::Int(CallingConvention::Cps as i128),
-            )
-            .attr(CLOSURE_ENVIRONMENT_INDEX_ATTR, Attribute::Int(1))
-            .intern(&mut ctx);
+        let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
+        let nullary = func::func_sig(&mut ctx, [], [never]).as_type_ref();
+        let unary = func::func_sig(&mut ctx, [i32_ty], [never]).as_type_ref();
+        let nullary = physical_closure_type(&mut ctx, nullary);
+        let unary_closure = physical_closure_type(&mut ctx, unary);
 
-        assert_eq!(cps_closure_function_type(&ctx, missing_environment), None);
-        assert_eq!(cps_closure_function_type(&ctx, extra_outer_parameter), None);
+        assert_eq!(cps_closure_function_type(&ctx, nullary), None);
+        assert_eq!(cps_closure_function_type(&ctx, unary_closure), Some(unary));
         assert_eq!(
-            cps_closure_function_type(&ctx, out_of_range_environment),
-            None
+            physical_closure_function_type(&ctx, nullary, CallingConvention::Direct),
+            Some(ctx.get_type(nullary).params[0])
         );
+        assert_eq!(cps_closure_function_type(&ctx, i32_ty), None);
     }
 }

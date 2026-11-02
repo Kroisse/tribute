@@ -72,3 +72,29 @@ fn successful_builds_print_warnings() {
         );
     }
 }
+
+/// A diagnostic points at its span by byte offset, past non-ASCII text,
+/// with the line numbers the file has.
+#[test]
+fn diagnostics_point_past_non_ascii_text() {
+    let mut source = tempfile::Builder::new()
+        .suffix(".trb")
+        .tempfile()
+        .expect("temporary source file");
+    source
+        .write_all("// 한글 주석\n\n\nfn main() -> Nat { missing }\n".as_bytes())
+        .expect("write source file");
+    let output = Command::new(env!("CARGO_BIN_EXE_tribute"))
+        .args(["compile", "--target", "none"])
+        .arg(source.path())
+        .output()
+        .expect("invoke tribute compile");
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    assert!(!output.status.success(), "{stderr}");
+    let location = format!("{}:4:20", source.path().display());
+    assert!(stderr.contains(&location), "{stderr}");
+    assert!(
+        stderr.contains(" 4 │ fn main() -> Nat { missing }"),
+        "{stderr}"
+    );
+}

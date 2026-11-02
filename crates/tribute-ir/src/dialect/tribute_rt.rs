@@ -1,6 +1,7 @@
-//! Tribute runtime dialect — boxing, unboxing, and reference counting.
+//! Tribute runtime dialect — boxing, unboxing, reference counting, and closure convention tables.
 
 use crate::dialect::tribute_rtti::{ManagedRef, ManagedRefType};
+use trunk_ir::attr_kind::SymbolRef;
 use trunk_ir::dialect::core::{Bytes, Ptr};
 use trunk_ir::op_flag::Pure;
 
@@ -15,6 +16,13 @@ mod tribute_rt {
     struct Intref;
     #[implements(ManagedRefType)]
     struct Anyref;
+    /// A reference to a static convention table, the type of a closure's
+    /// convention table field. It is unmanaged: the table is never released
+    /// and holds no managed reference. Each target converts it to its own
+    /// table reference, the table's address on native targets and its first
+    /// slot in the function table on Wasm, before it lowers the
+    /// `convention_table` and `convention_entry` operations that use it.
+    struct ConventionTableRef;
 
     #[flags(Pure)]
     fn box_int(value: Value<_>) -> Value<_> {}
@@ -61,6 +69,36 @@ mod tribute_rt {
     /// reference-counted object. The inverse of `into_raw`, and like it not a
     /// pure operation: dropping it would leak the unit.
     fn from_raw(ptr: Value<Ptr>) -> Value<impl ManagedRef> {}
+
+    /// A reference to the static convention table holding the entry
+    /// functions `entries` in order, the value a closure stores in its
+    /// convention table field. The reference is unmanaged and never
+    /// released. Target lowering builds one table per distinct entry list:
+    /// read-only data of function addresses on native targets, and
+    /// consecutive slots of the function table on Wasm, whose start index is
+    /// the reference. See the closure storage layout in `new-plans/ir.md`.
+    ///
+    /// ```text
+    /// %table = tribute_rt.convention_table {entries = [@f]} : tribute_rt.convention_table_ref
+    /// ```
+    ///
+    /// Its result is a `convention_table_ref` until the target converts that
+    /// type, so the schema leaves it unconstrained.
+    #[flags(Pure)]
+    fn convention_table(entries: Attr<[SymbolRef]>) -> Value<_> {}
+
+    /// The entry function at `index` of the convention table `table`, as an
+    /// indirect callee: a load of the function address on native targets,
+    /// and the function table index `table + index` on Wasm.
+    ///
+    /// ```text
+    /// %entry = tribute_rt.convention_entry %table {index = 0} : core.i32
+    /// ```
+    ///
+    /// `table` is a `convention_table_ref` until the target converts that
+    /// type, so the schema leaves it unconstrained.
+    #[flags(Pure)]
+    fn convention_entry(index: Attr<u32>, table: Value<_>) -> Value<_> {}
 }
 
 impl ManagedRefType for Intref {}
@@ -398,15 +436,27 @@ mod tests {
 
     mod fold {
         use trunk_ir::IrContext;
+        use trunk_ir::dialect::{core, func};
+        use trunk_ir::ops::DialectOp;
         use trunk_ir::parser::parse_test_module;
+        use trunk_ir::pass::PassManager;
         use trunk_ir::printer::print_module;
-        use trunk_ir::transforms::canonicalize::canonicalize;
+        use trunk_ir::transforms::Canonicalize;
 
-        fn run(input: &str) -> (String, usize) {
+        /// Canonicalize every function; the flag tells whether the IR
+        /// changed.
+        fn run(input: &str) -> (String, bool) {
             let mut ctx = IrContext::new();
             let module = parse_test_module(&mut ctx, input);
-            let changes = canonicalize(&mut ctx, module).total_changes;
-            (print_module(&ctx, module.op()), changes)
+            let before = print_module(&ctx, module.op());
+            let root = core::Module::from_op(&ctx, module.op()).expect("core.module");
+            let mut pm = PassManager::new();
+            pm.nest::<func::Func>().add_pass(Canonicalize);
+            pm.run(&mut ctx, root, &mut Default::default())
+                .expect("canonicalize");
+            let after = print_module(&ctx, module.op());
+            let changed = after != before;
+            (after, changed)
         }
 
         #[test]
@@ -417,7 +467,7 @@ mod tests {
                 ("box_float", "unbox_float", "core.f64"),
                 ("box_bool", "unbox_bool", "core.i1"),
             ] {
-                let (text, changes) = run(&format!(
+                let (text, changed) = run(&format!(
                     r#"core.module @test {{
   func.func @f(%x: {ty}) -> {ty} {{
     %b = tribute_rt.{boxed} %x : tribute_rt.anyref
@@ -426,46 +476,46 @@ mod tests {
   }}
 }}"#
                 ));
-                assert!(changes >= 1, "{unboxed}");
+                assert!(changed, "{unboxed}");
                 assert!(!text.contains(unboxed), "{unboxed}: {text}");
             }
         }
 
         #[test]
         fn unbox_of_a_different_box_kind_is_not_folded() {
-            let (text, changes) = run(r#"core.module @test {
+            let (text, changed) = run(r#"core.module @test {
   func.func @f(%x: core.i64) -> core.f64 {
     %b = tribute_rt.box_int %x : tribute_rt.anyref
     %u = tribute_rt.unbox_float %b : core.f64
     func.return %u
   }
 }"#);
-            assert_eq!(changes, 0);
+            assert!(!changed);
             assert!(text.contains("unbox_float"));
         }
 
         #[test]
         fn unbox_of_a_mistyped_box_is_not_folded() {
-            let (text, changes) = run(r#"core.module @test {
+            let (text, changed) = run(r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i64 {
     %b = tribute_rt.box_int %x : tribute_rt.anyref
     %u = tribute_rt.unbox_int %b : core.i64
     func.return %u
   }
 }"#);
-            assert_eq!(changes, 0);
+            assert!(!changed);
             assert!(text.contains("unbox_int"));
         }
 
         #[test]
         fn unbox_of_a_block_argument_is_not_folded() {
-            let (text, changes) = run(r#"core.module @test {
+            let (text, changed) = run(r#"core.module @test {
   func.func @f(%b: tribute_rt.anyref) -> core.i64 {
     %u = tribute_rt.unbox_int %b : core.i64
     func.return %u
   }
 }"#);
-            assert_eq!(changes, 0);
+            assert!(!changed);
             assert!(text.contains("unbox_int"));
         }
     }

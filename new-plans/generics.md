@@ -9,7 +9,7 @@
 | 항목               | 선택                                        | 대안 (채택하지 않음)             |
 | ------------------ | ------------------------------------------- | -------------------------------- |
 | 기본 전략          | Monomorphization                            | Type erasure, Dictionary passing |
-| 함수의 다형적 재귀 | Uniform representation (anyref)             | 에러로 거부                      |
+| 함수의 다형적 재귀 | 에러로 거부                                 | Uniform representation (anyref)  |
 | 제네릭 타입        | 완전 monomorphization                       | Uniform representation           |
 | 효과 다형성        | Evidence passing                            | Row 전체의 monomorphization      |
 
@@ -46,59 +46,47 @@ enum Result(a, e) {
 ```rust
 let box: Box(Int) = Box { value: 42 }
 let pair: Pair(Int, String) = Pair { first: 1, second: "hello" }
-let result: Result(Int, String) = Ok { value: 42 }
+let result: Result(Int, String) = .Ok { value: 42 }
 ```
 
 ### 제네릭 함수
 
 ```rust
-// 타입 파라미터는 함수 이름 뒤 소괄호에
-fn identity(a)(x: a) -> a {
+// 시그니처에 쓴 소문자 타입 이름이 함수의 타입 파라미터다
+fn identity(x: a) -> a {
     x
 }
 
-fn map(a, b)(xs: List(a), f: fn(a) -> b) -> List(b) {
+fn map(xs: List(a), f: fn(a) -> b) -> List(b) {
     // ...
 }
 
 // 효과 다형적 함수
-fn map_effect(a, b)(xs: List(a), f: fn(a) ->{e} b) ->{e} List(b) {
+fn map_effect(xs: List(a), f: fn(a) ->{e} b) ->{e} List(b) {
     // ...
 }
 ```
 
 ---
 
-## Hybrid Monomorphization
-
-### 전략
-
-```text
-제네릭 함수
-       │
-       ▼
-  다형적 재귀 감지?
-       │
-   ┌───┴───┐
-   │ No    │ Yes
-   ▼       ▼
-Monomorph  Uniform Rep
-(특수화)   (anyref/boxing)
-```
+## 특수화 전략
 
 ### 처리 방식
 
-| 대상                   | 조건            | 처리 방식              |
-| ---------------------- | --------------- | ---------------------- |
-| 제네릭 타입            | 일반            | Monomorphization       |
-| 제네릭 함수            | 일반            | Monomorphization       |
-| 제네릭 함수            | **다형적 재귀** | Uniform representation |
-| Effect만 다형적인 함수 | -               | Evidence passing       |
+| 대상                   | 조건            | 처리 방식        |
+| ---------------------- | --------------- | ---------------- |
+| 제네릭 타입            | 일반            | Monomorphization |
+| 제네릭 함수            | 일반            | Monomorphization |
+| 제네릭 함수            | **다형적 재귀** | 컴파일 에러      |
+| Effect만 다형적인 함수 | -               | Evidence passing |
 
 Ability row는 값으로 특수화하지 않는다. 실행 전략은 row 변수에 따라 정의를 따로
 만들 수 있다([아래](#row-변수의-convention-class)).
 
-이 도식의 uniform representation 선택은 함수의 다형적 재귀에 적용한다.
+모든 제네릭 함수는 monomorphization으로만 컴파일한다. 값의 표현은 컴파일러가
+고르며 코드 작성자가 제어하지 않으므로
+([runtime-types.md](runtime-types.md#표현은-의미에-드러나지-않는다)), 특수화로 컴파일할 수 없는 다형적 재귀를
+다른 표현으로 대신 컴파일하지 않고 [거부한다](#polymorphic-recursion).
 Nominal 타입의 의존 인스턴스 수집과 확장 한도는 아래의
 [Nominal 타입 수집과 재작성](#nominal-타입-수집과-재작성) 계약을 따른다.
 
@@ -146,24 +134,30 @@ CPS 전략이 row 변수의 class마다 만드는 인스턴스는, class가 모�
 
 ### 알고리즘
 
-1. **수집 (Collection)**
+1. **검증 (Validation)**
+   - 다형적 재귀와 타입 검사가 고른 인스턴스를 검사
+
+2. **수집 (Collection)**
    - 타입 추론 완료 후 모듈 순회
    - 모든 제네릭 인스턴스화 수집
    - 재귀 타입은 placeholder로 사이클 처리
 
-2. **생성 (Generation)**
+3. **생성 (Generation)**
    - 각 인스턴스화에 대해 특수화된 타입/함수 정의 생성
    - 타입 파라미터를 구체 타입으로 치환
 
-3. **재작성 (Rewriting)**
+4. **재작성 (Rewriting)**
    - 호출 사이트를 특수화된 버전으로 변환
    - 타입 참조를 맹글된 이름으로 교체
+
+5. **결과 검증 (Result check)**
+   - 출력의 불변식을 확인 ([특수화 결과](#특수화-결과))
 
 ### 예시
 
 ```rust
 // 원본
-fn identity(a)(x: a) -> a { x }
+fn identity(x: a) -> a { x }
 
 fn main() -> Nil {
     identity(42)       // identity<Int>
@@ -186,50 +180,50 @@ fn main() -> Nil {
 
 ### 정의
 
-함수 `f<a>` 가 **다형적 재귀**인 경우:
+호출 그래프에서 서로 도달 가능한 함수들은 하나의 **재귀 그룹**을 이룬다(강연결
+요소). 자기 자신을 호출하는 함수는 혼자서도 재귀 그룹이다.
 
-- `f`가 자기 자신을 호출하면서
-- 타입 인자가 원래 `a`와 다름
+함수 `f`의 본문이 같은 재귀 그룹의 함수 `g`(`f` 자신 포함)를 참조하고, 그 참조가
+선택한 타입 인자 중 하나가 `f`의 타입 매개변수를 **진부분으로 포함**하면, 이
+참조는 **다형적 재귀**다. 진부분으로 포함한다는 것은 타입 인자가 `f`의 타입
+매개변수를 언급하지만 그 매개변수 하나만으로 이루어지지 않았다는 뜻이다.
 
 ```rust
-// 다형적 재귀 예시
-fn nest(a)(n: Int, x: a) -> ??? {
+struct Pair(a) { left: a, right: a }
+
+fn depth(n: Nat, x: a) -> Nat {
     case n == 0 {
-        True -> x
-        False -> nest(n - 1, Pair(x, x))
-        //            ↑ nest<Pair<a, a>> 호출 (a가 아님!)
+        True -> 0
+        False -> 1 + depth(n - 1, Pair { left: x, right: x })
+        //           ↑ depth를 Pair(a)로 참조한다
     }
 }
 ```
 
-### 문제점
+다형적 재귀가 아닌 경우:
 
-순수 monomorphization으로는 무한 인스턴스화 발생:
+- 같은 타입 매개변수로 다시 인스턴스화하는 재귀(`f(a)`가 `f(a)`를 호출).
+- 타입 매개변수의 순서만 바꾸는 재귀(`f(a, b)`가 `f(b, a)`를 호출).
+- `f`의 타입 매개변수를 언급하지 않는 타입 인자(`f(a)`가 `f(Int)`를 호출).
+- 재귀 그룹 밖의 함수를 `Pair(a)` 같은 타입 인자로 호출하는 경우.
 
-- `nest<Int>` → `nest<Pair<Int, Int>>`
-  → `nest<Pair<Pair<Int, Int>, Pair<Int, Int>>>` → ...
+### 거부
 
-### 해결책: Uniform Representation
+Monomorphization은 다형적 재귀에서 끝나지 않는다. `depth(Int)`는
+`depth(Pair(Int))`를, 그것은 다시 `depth(Pair(Pair(Int)))`를 요구한다. Tribute는
+다형적 재귀를 지원하지 않으며 이를 컴파일 에러로 거부한다.
 
-다형적 재귀 함수는 자동으로 **uniform representation** 사용:
+이 규칙은 정의의 성질이다. 도달 여부와 관계없이 특수화 전에 모든 제네릭 함수의
+checked function instance로 검사한다. 판정은 재귀 그룹 안의 각 참조만 보고
+내리므로 보수적이다. `f(a)`가 `g`를 `Pair(a)`로 호출하고 `g`가 `f`를 `Int`로만
+호출해 실제 인스턴스가 유한하더라도 거부한다.
 
-```rust
-// 컴파일러가 자동으로 변환
-fn nest(n: Int, x: anyref) -> anyref {
-    case n == 0 {
-        True -> x
-        False -> nest(n - 1, box(Pair(unbox(x), unbox(x))))
-    }
-}
+진단은 다형적 재귀인 참조의 위치에서 보고하며, 호출하는 함수, 호출되는 함수,
+그 참조가 요구하는 타입 인자를 호출하는 함수의 타입 매개변수 이름으로 표시한다.
+
+```text
+`depth` calls itself at `Pair(a)`; polymorphic recursion is not supported
 ```
-
-### 감지 알고리즘
-
-타입 추론 중 재귀 호출 패턴 분석:
-
-1. 함수 `f<a>`의 본문에서 `f` 호출 찾기
-2. 호출 시 타입 인자가 `a`를 포함하지만 `a`와 다른지 확인
-3. 다르면 다형적 재귀로 표시
 
 ---
 
@@ -250,26 +244,6 @@ fn nest(n: Int, x: anyref) -> anyref {
   (field $second (ref $string))))
 ```
 
-### Uniform Representation
-
-다형적 재귀 함수에서는 `anyref` 사용:
-
-```wasm
-;; 타입 계층
-any (anyref) ← 다형적 값의 공통 타입
- ├─ i31      ← 31비트 정수 (힙 할당 없음!)
- └─ struct   ← 박스/사용자 정의 타입
-```
-
-**Boxing 전략:**
-
-| 원본 타입    | WasmGC 표현        | 힙 할당   |
-| ------------ | ------------------ | --------- |
-| Int (fixnum) | `i31ref`           | 없음      |
-| Int (bignum) | `(ref $BigInt)`    | 자동 승격 |
-| Float        | `(ref $BoxedF64)`  | 필요      |
-| struct/enum  | 기존 참조 업캐스트 | 없음      |
-
 ---
 
 ## Implementation
@@ -280,14 +254,23 @@ Monomorphization은 `tribute-front`의 typed AST와 명시적인 함수 인스�
 ### 파이프라인의 책임
 
 `parse_and_lower_ast()`는 이름 해석과 타입 추론·TDNR을 수행하고, 선택된 함수
-인스턴스와 semantic 메타데이터를 반환한다. `prepare_frontend_for_lowering()`은
-Prelude 병합, 도달하는 인스턴스 검증, 특수화 및 메타데이터 재작성을 담당한다.
-IR lowering은 이 준비 단계가 성공한 결과만 소비한다.
+인스턴스와 semantic 메타데이터를 반환한다. 타입 검사는 의존 패키지 `std`의
+선언을 의존성 표로 조회하며, 그 결과에는 사용자 패키지의 선언만 담긴다.
+패키지의 특수화는 그 패키지와 의존 패키지들의 checked 결과에만 의존하는 tracked
+결과이며, 그 패키지의 본문에서 도달하는 인스턴스를 검증·특수화한다. `std`의 특수화는
+사용자 패키지를 편집해도 다시 계산하지 않는다. `prepare_frontend_for_lowering()`은
+사용자 패키지를 같은 방식으로 특수화하고, 그 결과를 의존 패키지들의 특수화 결과와
+함께 하나의 특수화 결과로 병합한다
+([Implementation — 프론트엔드 단계 경계와 정보 소유권](implementation.md#프론트엔드-단계-경계와-정보-소유권)).
+IR lowering은 이 준비 단계가 성공한 결과만 소비하며, 타입 검사 결과로부터 lowering
+입력을 만드는 경로는 없다.
 
 ```text
 parse_and_lower_ast: 해석·타입 추론·TDNR·인스턴스 기록
-    ↓
-prepare_frontend_for_lowering: 병합·검증·특수화·메타데이터 재작성
+    ↓                       의존 패키지 특수화: 패키지마다 검증·특수화
+    ↓                       (자기와 의존 패키지의 checked 결과에만 의존)
+    ↓                       ↓
+prepare_frontend_for_lowering: 사용자 패키지의 검증·특수화, 패키지 결과 병합
     ↓
 ast_to_ir: IR lowering
 ```
@@ -298,17 +281,54 @@ ast_to_ir: IR lowering
 `(FuncDefId, type_arguments)`를 사용한다. `node_types`나 callable 타입에서 타입
 인자를 역추론하지 않는다. 함수 값으로 전달되는 참조도 같은 계약을 따른다.
 
-선택된 선언 스킴, 인자 개수, callable 및 row 인자의 일관성을 먼저 검사한다.
+[다형적 재귀](#polymorphic-recursion) 검사가 이 과정보다 먼저 실행된다. 이어서
+선택된 선언 스킴, 인자 개수, callable 및 row 인자의 일관성을 검사한다.
 원본 함수의 binder 순서에 맞춰 타입을 치환하고, 특수화된 정의의 모든 typed
 메타데이터에도 같은 치환을 적용한다. 스킴 본문과 합집합·차집합 제약은 함께
 변환한다. 생성된 clone 내부의 참조가 새 인스턴스를 드러내면 같은 인스턴스 키를
-재사용하며 고정점까지 수집한다. 확장 한도를 넘으면 구조적 진단을 반환한다.
+재사용하며 고정점까지 수집한다. 확장 한도는 다형적 재귀 검사가 잡지 못한 다른
+무한 확장을 막는 안전장치이며, 한도를 넘으면 구조적 진단을 반환한다.
 
 타입 인자를 갖는 함수를 이 과정으로 특수화한다. 타입 인자가 없는 함수는 정의 하나를
 그대로 쓴다. [Class 변수](#row-변수의-convention-class)에 따른 특수화는 이 과정이 아니라
-source-logical IR의 pass가 맡는다. 도달하지 않는 generic
-template은 허용하되, 도달하는 함수 인스턴스나 ability 인자가 미해결이면 타입 erasure
-전에 거부한다.
+source-logical IR의 pass가 맡는다.
+
+인스턴스 검증은 타입 매개변수가 없는 모든 함수에서 출발한다. 이 함수들은 도달
+여부와 상관없이 그대로 lowering되기 때문이다. 이 함수들과 그 함수들이 구체 타입
+인자로 도달하는 인스턴스에서 함수 인스턴스나 ability 인자가 미해결이면 특수화 전에
+거부한다. 다형적 재귀는 정의의 성질이므로 도달하지 않는 template에서도 거부한다.
+
+### 타입 순회와 binder별 치환
+
+Frontend의 타입 순회와 치환은 하나의 구조적 순회를 공유한다. 순회는 `Named`의
+타입 인자, 함수의 매개변수·결과·ability row, tuple 원소, continuation의 인자·결과·
+ability row로 내려가며, row 안에서는 각 ability 인자의 타입 인자로 내려간다. 스킴을
+순회하면 본문에 이어 보존된 합집합 제약(각 source, 그다음 result)과 차집합 제약
+(source, removed, result)의 row를 같은 규칙으로 순회한다. 순서는 이 나열 순서이며,
+등장 순서로 binder 번호를 정하는 일반화가 이 순서에 의존한다. 순회는 스킴의 binder
+목록 자체를 바꾸지 않는다. 바뀐 부분이 없는 타입과 row는 원래 값을 그대로 쓴다.
+
+치환 주체와 실패 처리는 binder 종류마다 다르다.
+
+- 스킴의 `BoundVar`는 인스턴스의 타입 인자로 치환한다. 인자 범위를 벗어난 index는
+  치환 실패로 돌려주며, 진단으로 보고할지 내부 불변식 위반으로 중단할지는 호출자가
+  정한다. 치환된 인자 안으로는 다시 내려가지 않으므로 호출자의 타입에 있는 row
+  변수는 인스턴스화의 row 변수 재명명을 받지 않는다.
+- `UniVar`는 solver가 자신의 치환으로 해석한다. 치환된 타입은 다시 해석하며, row는
+  solver의 row 치환을 먼저 적용한 뒤 그 ability 인자를 해석한다. 일반화는 남은
+  `UniVar`를 함수 스킴의 `BoundVar` 또는 지역 스킴의 `LocalBoundVar`로 바꾼다.
+- `LocalBoundVar`는 지역 binder를 소유한 typed-body 메타데이터가 해석한다. 스킴
+  인스턴스화와 solver 치환은 이를 바꾸지 않고 통과시킨다.
+
+특수화가 typed 메타데이터에 하는 세 작업, 즉 clone의 타입 인자 치환, nominal
+재작성, nominal 수집 시작점 순회는 모든 메타데이터 표의 타입을 같은 순회로 다룬다.
+함수 인스턴스 기록의 선언 스킴은 callee 자신의 binder로 쓰였으므로 호출자 쪽
+치환·재작성·수집의 대상이 아니다. 이 작업들은 그 기록의 callable, 타입 인자, row
+인자만 다룬다. 지역 callable 인스턴스의 스킴은 감싸는 함수의 binder로 쓰였으므로
+다른 타입과 함께 다룬다.
+
+이름 mangling, 표시 형식, lowering의 identity key처럼 출력 형식이 계약인 변환은
+이 순회와 다른 순서나 정렬을 쓸 수 있으며, 각자의 형식 규칙을 따른다.
 
 ### Row 변수의 convention class
 
@@ -318,6 +338,9 @@ Ability row는 타입 인자처럼 치환하지 않는다. Row의 내용은 실�
 [convention class](cps-effects.md#row-변수의-convention-class)라 한다. Class마다
 인스턴스를 만드는 일은 frontend의 특수화가 아니라 CPS 전략의
 [class 특수화 pass](cps-effects.md#class-특수화-pass)가 source-logical IR에서 한다.
+이름 있는 정의는 class 인자마다 인스턴스 하나가 되고, 람다와 함수 참조는 class마다
+[convention entry](ir.md#convention-entry)를 가진 값이 된다. 따라서 callable 값의 타입은 class에
+따라 갈라지지 않으며, 같은 값을 다른 class의 자리에서 그대로 쓴다.
 
 ### Nominal 타입 수집과 재작성
 
@@ -352,7 +375,47 @@ identity와 runtime variant tag는 유지하며, 다른 모듈이나 다른 타�
 동일 인스턴스의 재귀·상호 재귀는 중복 생성하지 않는다. 계속 새로운 타입 인자를
 만드는 확장은 최대 64회 의존성 확장과 4,096개 고유 nominal 인스턴스 한도에서
 진단한다. 한도 초과나 잘못된 constructor 스킴으로 준비가 실패하면 부분 결과를
-IR 생성에 전달하지 않는다. 이 한도는 함수의 다형적 재귀 처리 정책을 바꾸지 않는다.
+IR 생성에 전달하지 않는다. 다형적 재귀는 이 한도에 앞서 [거부한다](#polymorphic-recursion).
+
+### 특수화 결과
+
+특수화는 다섯 단계로 진행한다.
+
+1. 검증: 다형적 재귀와 인스턴스를 검사한다.
+2. 수집: 함수와 nominal 타입의 인스턴스를 고정점까지 수집한다.
+3. 생성: 인스턴스마다 구체 정의를 만든다.
+4. 재작성: 참조와 타입을 구체 정의로 바꾸고, 메타데이터에도 같은 변환을 적용한다.
+5. 결과 검증: 출력이 아래 불변식을 지키는지 확인한다.
+
+타입 매개변수가 있는 함수와 extern 함수는 template이다. Template은 타입 검사와
+다형적 재귀 검사를 통과해야 하지만 특수화 출력에서 제외한다. 그 template의 노드에
+연결된 표현식·참조별 메타데이터와 스킴도 출력에서 제외한다. Generic intrinsic의
+identity는 남긴다. Lowering은 구체 함수 정의만 받으며,
+함수의 타입 변수를 표현 하나로 소거하지 않는다. 정의 단위 source 규칙의 진단은
+특수화 전에 끝나므로, template을 제외해도 진단은 인스턴스화 여부와 상관없이 같다.
+제외는 nominal 수집보다 먼저 하므로, template 안에서만 쓰인 nominal 인스턴스는
+생성하지 않는다.
+
+타입 매개변수가 있는 struct와 enum의 원본 선언은 출력에 남는다. Row는 특수화하지
+않으므로, 타입 인자에 열린 ability row가 있는 nominal 인스턴스(예:
+`Boxed(fn() ->{e} Bool)`)는 구체 선언을 얻지 못하고 원본 선언의 표현을 쓴다. 같은
+이유로 원본 struct의 field 함수도 lowering되며, 이것이 타입 변수를 표현 하나로
+소거하는 유일한 함수다.
+
+출력은 다음 불변식을 지킨다.
+
+- 스킴은 자기 binder 밖의 `BoundVar`를 갖지 않는다. 자기 binder를 가진 스킴은
+  struct·enum 원본 선언과 그 field 함수, 본문을 병합하지 않은 의존 패키지 함수의
+  것이다.
+- 함수 선언과 표현식·참조별 메타데이터에는 스킴의 `BoundVar`가 없다. 함수 인스턴스
+  기록의 선언 스킴은 callee의 binder로 쓰였으므로 이 검사 대상이 아니다.
+- AST의 모든 함수 참조는 출력의 함수, extern 함수, struct field 함수, 또는 출력
+  스킴 표에 있는 의존 패키지 함수를 가리킨다.
+- 표현식·참조별 메타데이터와 enum variant 스킴의 key `NodeId`는 출력 AST의 노드를
+  가리킨다.
+
+Body가 소유한 지역 existential `UniVar`와 `LocalBoundVar`는 이 검사 대상이 아니다.
+불변식 위반은 컴파일러 내부 불일치이며 source 진단이 아니다.
 
 ### 이름과 identity
 
@@ -393,17 +456,22 @@ function-local quantified variables as well as declaration binders; rendering
 does not change their semantic scope or instantiate them.
 Prelude name resolution, type
 exports, and typed bodies share the same parsed declarations, including their
-nominal definition identities. Independently reparsing the same text does not
-establish declaration identity. Prelude merging, deferred
-method desugaring, and specialized AST cloning preserve the record. Clones
-substitute their enclosing type arguments into nested instance records.
+nominal definition identities. A source declaration's identity is its origin
+kind, its package-qualified path, and the number of same-named type
+declarations before it in its module (see `types.md`), so reparsing the same
+declaration yields the same identity, and an edit elsewhere changes it only
+when it changes that path or that count.
+Prelude merging, deferred method desugaring, and specialized AST cloning
+preserve the record. Clones substitute their enclosing type arguments into
+nested instance records.
 Effect-only type arguments participate in ordinary type specialization; open
 residual rows continue to use evidence passing. The recorded row arguments
 become the `row_args` of references in source-logical IR, from which the class
 specialization pass selects each instance's
 [convention classes](#row-변수의-convention-class).
-Unused generic templates are permitted, but incomplete reached instances fail
-before logical lowering.
+Generic function templates are excluded from the specialization output, and
+incomplete instances reached from a monomorphic function fail before logical
+lowering.
 
 Function quantifiers cover the callable interface and retained semantic row
 relations. Inference variables occurring only in the checked body remain

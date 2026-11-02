@@ -1,0 +1,22 @@
+---
+source: tests/integration/diagnostic_snapshots.rs
+expression: result.diagnostics
+---
+- message: "`fn` handler arm for `next` cannot call a callable that may suspend or abort: in this use of `limited`, the callee's effects include an `op` operation"
+  span:
+    start: 350
+    end: 353
+    source: 9659900100624592365
+  severity: Error
+  labels:
+    - span:
+        start: 403
+        end: 452
+        source: 9659900100624592365
+      message: "this use passes effects that include an `op` operation"
+    - span:
+        start: 511
+        end: 570
+        source: 9659900100624592365
+      message: "this use passes effects that include an `op` operation"
+  phase: Lowering

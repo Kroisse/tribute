@@ -10,8 +10,7 @@
 
 use itertools::Itertools;
 use rustc_hash::FxHashMap as HashMap;
-use salsa::Accumulator;
-use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_core::{CompilationPhase, DiagnosticSeverity};
 
 use crate::ast::visit::{Visit, walk_expr, walk_handler_arm};
 use crate::ast::{
@@ -19,6 +18,7 @@ use crate::ast::{
     TypeKind, TypedRef,
 };
 
+use super::NodeDiagnostic;
 use super::TypeChecker;
 
 impl<'db> TypeChecker<'db> {
@@ -58,7 +58,7 @@ impl<'db> TypeChecker<'db> {
             return;
         };
         let ability = ability.name(self.db());
-        Diagnostic::new(
+        NodeDiagnostic::new(
             format!(
                 "`fn` handler arm for `{ability}::{op}` cannot perform effects that suspend or abort: {}",
                 calls
@@ -66,11 +66,11 @@ impl<'db> TypeChecker<'db> {
                     .iter()
                     .format_with(", ", |id, f| f(&id.name(self.db())))
             ),
-            self.get_span(arm.id),
+            arm.id,
             DiagnosticSeverity::Error,
             CompilationPhase::TypeChecking,
         )
-        .accumulate(self.db());
+        .report(self);
     }
 
     /// Whether an ability declares an `op` operation, which may suspend.

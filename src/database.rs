@@ -1,31 +1,14 @@
-use std::cell::RefCell;
-use std::collections::hash_map::Entry;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use lsp_types::Uri;
+use lsp_types::Uri as LspUri;
 use parking_lot::RwLock;
 use ropey::Rope;
-use tree_sitter::Tree;
-use tribute_front::source_file::parse_with_rope;
-use tribute_front::{SourceCst, path_to_uri};
+use tribute_front::build_inputs::{package_inputs, source_inputs};
+use tribute_front::manifest::{MANIFEST_FILE, set_package_root};
+use tribute_front::source_file::{FileEntry, FileProvider, SourceFiles};
+use tribute_front::{SourceCst, Uri, path_to_uri, uri_to_path};
 
-thread_local! {
-    static PARSER: RefCell<tree_sitter::Parser> = {
-        let mut parser = tree_sitter::Parser::new();
-        parser
-            .set_language(&tree_sitter_tribute::LANGUAGE.into())
-            .expect("Failed to set language");
-        RefCell::new(parser)
-    };
-}
-
-pub fn parse_with_thread_local(rope: &Rope, old_tree: Option<&Tree>) -> Option<Tree> {
-    PARSER.with(|parser| {
-        let mut parser = parser.borrow_mut();
-        parse_with_rope(&mut parser, rope, old_tree)
-    })
-}
-
-#[derive(Default)]
 #[salsa::db]
 pub struct TributeDatabaseImpl {
     storage: salsa::Storage<Self>,
@@ -39,48 +22,242 @@ pub struct TributeDatabaseImpl {
 #[salsa::db]
 impl salsa::Database for TributeDatabaseImpl {}
 
+impl Default for TributeDatabaseImpl {
+    fn default() -> Self {
+        let db = Self {
+            storage: salsa::Storage::default(),
+            documents: RwLock::default(),
+        };
+        SourceFiles::new(&db, Arc::new(FileProvider::new(read_file)));
+        db
+    }
+}
+
+/// The text of the file a `file:` URI names, if it can be read.
+///
+/// The file's name must match the URI's exactly, so that a case-insensitive
+/// file system does not find `foo.trb` for `Foo.trb`.
+fn read_file(uri: &Uri<String>) -> Option<Rope> {
+    let path = uri_to_path(uri)?;
+    let name = path.file_name()?;
+    let spelled = std::fs::read_dir(path.parent()?)
+        .ok()?
+        .any(|entry| entry.is_ok_and(|entry| entry.file_name() == name));
+    if !spelled {
+        return None;
+    }
+    Rope::from_reader(std::fs::File::open(&path).ok()?).ok()
+}
+
+/// The URI the file provider keys `uri`'s file by: a `file:` URI spelled as
+/// [`path_to_uri`] spells its path, whatever encoding the client chose.
+fn provider_uri(uri: &LspUri) -> Uri<String> {
+    uri_to_path(uri).map_or_else(|| (**uri).clone(), |path| path_to_uri(&path))
+}
+
 impl TributeDatabaseImpl {
+    /// The source of the file at `path`, read from disk on its first
+    /// request. It is the same input a package's source tree finds at that
+    /// path.
     pub fn input(
         &self,
         path: std::path::PathBuf,
     ) -> Result<SourceCst, Box<dyn std::error::Error + Send + Sync>> {
         let path = path.canonicalize()?;
         let uri = path_to_uri(&path);
-        let key = uri.as_str().to_owned();
-        if let Some(entry) = self.documents.read().get(&key) {
-            Ok(*entry)
-        } else {
-            let file = std::fs::File::open(&path)?;
-            let contents = Rope::from_reader(file)?;
-            let tree = parse_with_thread_local(&contents, None);
-            let source_cst = SourceCst::new(self, uri, contents, tree);
-            let mut lock = self.documents.write();
-            match lock.entry(key) {
-                Entry::Occupied(entry) => Ok(*entry.get()),
-                Entry::Vacant(entry) => {
-                    entry.insert(source_cst);
-                    Ok(source_cst)
-                }
-            }
+        let provider = SourceFiles::get(self).provider(self).clone();
+        provider
+            .entry(self, &uri)
+            .source(self)
+            .ok_or_else(|| format!("cannot read {}", path.display()).into())
+    }
+
+    /// The manifest `tribute.toml` of the package directory `dir`, read
+    /// from disk on its first request.
+    pub fn manifest(
+        &self,
+        dir: &std::path::Path,
+    ) -> Result<FileEntry, Box<dyn std::error::Error + Send + Sync>> {
+        let dir = dir.canonicalize()?;
+        let uri = path_to_uri(&dir.join(MANIFEST_FILE));
+        let provider = SourceFiles::get(self).provider(self).clone();
+        let entry = provider.entry(self, &uri);
+        if entry.source(self).is_some() {
+            return Ok(entry);
         }
+        let misspelled = std::fs::read_dir(&dir)?
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name())
+            .find(|name| name.eq_ignore_ascii_case(MANIFEST_FILE));
+        Err(match misspelled {
+            Some(name) => format!(
+                "cannot find `{MANIFEST_FILE}` in {}; the manifest must be named `{MANIFEST_FILE}`, not `{}`",
+                dir.display(),
+                name.display()
+            ),
+            None => format!("cannot find `{MANIFEST_FILE}` in {}", dir.display()),
+        }
+        .into())
     }
 
-    pub fn open_document(&self, uri: &Uri, text: Rope) {
-        let key = uri.as_str().to_owned();
-        let tree = parse_with_thread_local(&text, None);
-        let source_cst = SourceCst::new(self, (**uri).clone(), text, tree);
-        self.documents.write().insert(key, source_cst);
+    /// Open the editor buffer `text` for `uri`. The buffer replaces the
+    /// file's text in the source input a package's source tree reads at that
+    /// path, so the packages that contain the file see its edits. A
+    /// document in a package is analyzed as a root with that package's
+    /// dependency table (`new-plans/lsp.md` § 문서가 속한 패키지).
+    pub fn open_document(&mut self, uri: &LspUri, text: Rope) {
+        let file = provider_uri(uri);
+        let provider = SourceFiles::get(self).provider(self).clone();
+        let source_cst = provider
+            .set(self, &file, Some(text))
+            .expect("a file given text has a source");
+        let manifest = document_manifest(self, &provider, &file);
+        set_package_root(self, source_cst, manifest);
+        self.documents
+            .write()
+            .insert(uri.as_str().to_owned(), source_cst);
     }
 
-    pub fn close_document(&self, uri: &Uri) {
-        let key = uri.as_str();
-        self.documents.write().remove(key);
+    /// Close the editor buffer of `uri`, returning its source input to the
+    /// file on disk.
+    pub fn close_document(&mut self, uri: &LspUri) {
+        let Some(source_cst) = self.documents.write().remove(uri.as_str()) else {
+            return;
+        };
+        set_package_root(self, source_cst, None);
+        let file = provider_uri(uri);
+        let provider = SourceFiles::get(self).provider(self).clone();
+        provider.set(self, &file, read_file(&file));
     }
 
-    pub fn source_cst(&self, uri: &Uri) -> Option<SourceCst> {
+    /// The URI and source of each open document.
+    pub fn open_documents(&self) -> Vec<(String, SourceCst)> {
+        self.documents
+            .read()
+            .iter()
+            .map(|(uri, source)| (uri.clone(), *source))
+            .collect()
+    }
+
+    pub fn source_cst(&self, uri: &LspUri) -> Option<SourceCst> {
         let key = uri.as_str();
         self.documents.read().get(key).copied()
     }
+
+    /// The files that analyzing the open documents reads, other than the
+    /// documents themselves, which the language server watches
+    /// (`new-plans/lsp.md` § 입력과 무효화): each document's source tree,
+    /// the package it belongs to with its dependencies, and the manifests
+    /// looked for to find that package.
+    pub fn watched_files(&self) -> Vec<PathBuf> {
+        let documents = self.open_documents();
+        let provider = SourceFiles::get(self).provider(self).clone();
+        let implicit = *crate::frontend_environment(self);
+        let mut files = Vec::new();
+        for (_, source) in &documents {
+            files.extend_from_slice(source_inputs(self, *source));
+            let Some(path) = uri_to_path(source.uri(self)) else {
+                continue;
+            };
+            for manifest in manifest_candidates(&path) {
+                let entry = provider.entry(self, &path_to_uri(&manifest));
+                files.push(manifest);
+                if entry.source(self).is_some() {
+                    files.extend_from_slice(package_inputs(self, entry, implicit, true));
+                    break;
+                }
+            }
+        }
+        let open: Vec<PathBuf> = documents
+            .iter()
+            .filter_map(|(_, source)| uri_to_path(source.uri(self)))
+            .collect();
+        files.retain(|file| !open.contains(file));
+        files.sort();
+        files.dedup();
+        files
+    }
+
+    /// Read the file at `uri` from disk again, after it changed there. An
+    /// open document keeps its buffer, and a file no analysis asked for is
+    /// left unread. Each open document is then analyzed in the package it
+    /// now belongs to, since a manifest may have appeared or disappeared.
+    pub fn reload_file(&mut self, uri: &LspUri) {
+        if self.refresh(&provider_uri(uri)) {
+            self.assign_packages();
+        }
+    }
+
+    /// Read each of `files` from disk again, as [`Self::reload_file`] does,
+    /// for files that were not watched and may have changed meanwhile.
+    /// Returns whether any of them changed.
+    pub fn refresh_files(&mut self, files: &[PathBuf]) -> bool {
+        let mut changed = false;
+        for file in files {
+            changed |= self.refresh(&path_to_uri(file));
+        }
+        if changed {
+            self.assign_packages();
+        }
+        changed
+    }
+
+    /// Make the input of `file` what is on disk, unless it is an open
+    /// document or no analysis asked for it. Returns whether it changed.
+    fn refresh(&mut self, file: &Uri<String>) -> bool {
+        let open = self
+            .documents
+            .read()
+            .values()
+            .any(|source| source.uri(self).as_str() == file.as_str());
+        if open {
+            return false;
+        }
+        let provider = SourceFiles::get(self).provider(self).clone();
+        let Some(entry) = provider.existing(file) else {
+            return false;
+        };
+        let text = read_file(file);
+        let current = entry.source(self).map(|source| source.text(self));
+        if current == text.as_ref() {
+            return false;
+        }
+        provider.set(self, file, text);
+        true
+    }
+
+    /// Analyze each open document in the package it belongs to now.
+    fn assign_packages(&mut self) {
+        let provider = SourceFiles::get(self).provider(self).clone();
+        for (_, source) in self.open_documents() {
+            let manifest = document_manifest(self, &provider, source.uri(self));
+            set_package_root(self, source, manifest);
+        }
+    }
+}
+
+/// The manifests that may make the document at `path` part of a package,
+/// nearest first: `tribute.toml` beside each `src` directory above it.
+fn manifest_candidates(path: &Path) -> impl Iterator<Item = PathBuf> + '_ {
+    path.ancestors()
+        .skip(1)
+        .filter(|dir| dir.file_name().is_some_and(|name| name == "src"))
+        .filter_map(|src| src.parent())
+        .map(|package| package.join(MANIFEST_FILE))
+}
+
+/// The manifest of the package the document at `file` belongs to: that of
+/// the nearest ancestor directory with a manifest whose `src/` contains the
+/// document (`new-plans/lsp.md` § 문서가 속한 패키지).
+fn document_manifest(
+    db: &dyn salsa::Database,
+    provider: &FileProvider,
+    file: &Uri<String>,
+) -> Option<FileEntry> {
+    let path = uri_to_path(file)?;
+    manifest_candidates(&path)
+        .map(|manifest| provider.entry(db, &path_to_uri(&manifest)))
+        .find(|manifest| manifest.source(db).is_some())
 }
 
 #[cfg(test)]
@@ -88,34 +265,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_with_thread_local() {
-        let source = "fn hello() { 42 }";
-        let rope = Rope::from_str(source);
-        let tree = parse_with_thread_local(&rope, None);
-        assert!(tree.is_some(), "Should successfully parse valid source");
-
-        let tree = tree.unwrap();
-        let root = tree.root_node();
-        assert_eq!(root.kind(), "source_file");
-    }
-
-    #[test]
-    fn test_parse_with_thread_local_incremental() {
-        let source1 = "fn foo() { 1 }";
-        let rope1 = Rope::from_str(source1);
-        let tree1 = parse_with_thread_local(&rope1, None).unwrap();
-
-        // Incremental parse with old tree
-        let source2 = "fn foo() { 2 }";
-        let rope2 = Rope::from_str(source2);
-        let tree2 = parse_with_thread_local(&rope2, Some(&tree1));
-        assert!(tree2.is_some(), "Should successfully parse with old tree");
-    }
-
-    #[test]
     fn test_document_lifecycle() {
-        let db = TributeDatabaseImpl::default();
-        let uri: Uri = "file:///test.trb".parse().unwrap();
+        let mut db = TributeDatabaseImpl::default();
+        let uri: LspUri = "file:///test.trb".parse().unwrap();
         let text = Rope::from_str("fn test() { }");
 
         // Initially no document
@@ -132,8 +284,8 @@ mod tests {
 
     #[test]
     fn test_open_document_overwrites() {
-        let db = TributeDatabaseImpl::default();
-        let uri: Uri = "file:///test.trb".parse().unwrap();
+        let mut db = TributeDatabaseImpl::default();
+        let uri: LspUri = "file:///test.trb".parse().unwrap();
 
         // Open with first content
         let text1 = Rope::from_str("fn first() { }");
@@ -148,5 +300,91 @@ mod tests {
 
         let cst2 = db.source_cst(&uri).unwrap();
         assert_eq!(cst2.text(&db).to_string(), "fn second() { }");
+    }
+    /// An open package root file is analyzed against its package's
+    /// dependencies until it is closed.
+    #[test]
+    fn an_open_root_file_reads_its_packages_manifest() {
+        let mut db = TributeDatabaseImpl::default();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/packages/app/src/main.trb");
+        let uri: LspUri = path_to_uri(&path).as_str().parse().unwrap();
+        let text = Rope::from_str(&std::fs::read_to_string(&path).unwrap());
+        db.open_document(&uri, text);
+        let source = db.source_cst(&uri).unwrap();
+        let names = |db: &TributeDatabaseImpl| {
+            crate::root_environment(db, source)
+                .packages(db)
+                .iter()
+                .map(|package| package.name(db).name().unwrap().to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(&db), ["geometry", "std"]);
+        db.close_document(&uri);
+        assert_eq!(names(&db), ["std"]);
+    }
+
+    /// A file module's document, which no root on disk reads here, is
+    /// analyzed with its package's dependency table.
+    #[test]
+    fn an_open_file_module_reads_its_packages_manifest() {
+        let mut db = TributeDatabaseImpl::default();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/packages/app/src/shapes/square.trb");
+        let uri: LspUri = path_to_uri(&path).as_str().parse().unwrap();
+        db.open_document(&uri, Rope::from_str("pub fn side() -> Nat { 3 }\n"));
+        let source = db.source_cst(&uri).unwrap();
+        let names = crate::root_environment(&db, source)
+            .packages(&db)
+            .iter()
+            .map(|package| package.name(&db).name().unwrap().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["geometry", "std"]);
+    }
+
+    /// A document outside any package watches the manifest that would put
+    /// it in one; once that manifest appears, it is analyzed in the package
+    /// and watches the package's files.
+    #[test]
+    fn a_new_manifest_puts_an_open_document_in_its_package() {
+        let dir = tempfile::tempdir().unwrap();
+        let geometry = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/packages/geometry");
+        let package = dir.path();
+        let main = package.join("src/main.trb");
+        let uri: LspUri = path_to_uri(&main).as_str().parse().unwrap();
+        let mut db = TributeDatabaseImpl::default();
+        db.open_document(&uri, Rope::from_str("fn main() -> Nil { }\n"));
+        let source = db.source_cst(&uri).unwrap();
+        let manifest = package.join(MANIFEST_FILE);
+        assert_eq!(db.watched_files(), [manifest.as_path()]);
+
+        // An open document keeps its buffer, though no file is on disk.
+        db.reload_file(&uri);
+        assert_eq!(source.text(&db).to_string(), "fn main() -> Nil { }\n");
+
+        std::fs::write(
+            &manifest,
+            format!(
+                "[package]\nname = \"app\"\n\n[dependencies]\ngeometry = {{ path = {:?} }}\n",
+                geometry.display().to_string()
+            ),
+        )
+        .unwrap();
+        db.reload_file(&path_to_uri(&manifest).as_str().parse().unwrap());
+        let names: Vec<_> = crate::root_environment(&db, source)
+            .packages(&db)
+            .iter()
+            .map(|package| package.name(&db).name().unwrap().to_string())
+            .collect();
+        assert_eq!(names, ["geometry", "std"]);
+        let mut expected = vec![
+            geometry.join("src/lib.trb"),
+            geometry.join(MANIFEST_FILE),
+            package.join("src/lib.trb"),
+            manifest,
+        ];
+        expected.sort();
+        assert_eq!(db.watched_files(), expected);
     }
 }

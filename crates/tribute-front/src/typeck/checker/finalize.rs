@@ -5,8 +5,11 @@
 
 use super::TypeChecker;
 use crate::ast::NodeId;
-use crate::ast::visit::{RefSite, Refs, VisitMut, walk_expr, walk_expr_mut};
-use crate::ast::{Expr, ExprKind, FuncDefId, ResolvedRef, Type, TypedRef, UniVarId};
+use crate::ast::visit::{RefSite, Refs, VisitMut, walk_expr, walk_expr_mut, walk_pattern_mut};
+use crate::ast::{
+    Expr, ExprKind, FuncDefId, LiteralPattern, Pattern, PatternKind, ResolvedRef, Type, TypedRef,
+    UniVarId,
+};
 use crate::typeck::solver::{RowSubst, TypeSubst};
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
@@ -76,13 +79,21 @@ impl<'db> Substitution<'_, 'db> {
 
 /// Applies one function's solved substitution to its checked body.
 ///
-/// Deferred method calls become direct calls, and case expressions whose
+/// Deferred method calls become direct calls, deferred implicit
+/// constructors their selected constructors, and case expressions whose
 /// substituted arms cover their scrutinee are recorded as exhaustive.
 pub(super) struct Finalize<'a, 'db> {
     pub(super) checker: &'a TypeChecker<'db>,
     pub(super) substitution: &'a Substitution<'a, 'db>,
     pub(super) deferred_resolutions: &'a HashMap<NodeId, (FuncDefId<'db>, Type<'db>)>,
+    /// The constructor each implicit constructor selected after solving, and
+    /// its instance.
+    pub(super) constructor_resolutions: &'a HashMap<NodeId, (ResolvedRef<'db>, Type<'db>)>,
     pub(super) node_types: &'a HashMap<NodeId, Type<'db>>,
+    /// The node types as inference recorded them. A diagnostic shows one
+    /// solved but not generalized, so a variable nothing determined reads
+    /// `_` rather than a binder of the function.
+    pub(super) unbound_node_types: &'a HashMap<NodeId, Type<'db>>,
     pub(super) exhaustive_cases: &'a mut Vec<NodeId>,
     pub(super) exhaustiveness_reported: &'a mut HashSet<NodeId>,
 }
@@ -94,7 +105,15 @@ impl<'db> Finalize<'_, 'db> {
 }
 
 impl<'db> VisitMut<TypedRef<'db>> for Finalize<'_, 'db> {
-    fn visit_ref_mut(&mut self, _: RefSite, _: NodeId, value: &mut TypedRef<'db>) {
+    fn visit_ref_mut(&mut self, _: RefSite, node: NodeId, value: &mut TypedRef<'db>) {
+        // An implicit constructor selected during solving becomes the
+        // constructor; one left unselected was reported.
+        if matches!(value.resolved, ResolvedRef::ImplicitConstructor { .. })
+            && let Some((resolved, instance)) = self.constructor_resolutions.get(&node)
+        {
+            value.resolved = resolved.clone();
+            value.ty = *instance;
+        }
         value.ty = self.apply(value.ty);
     }
 
@@ -128,10 +147,19 @@ impl<'db> VisitMut<TypedRef<'db>> for Finalize<'_, 'db> {
                 }
             }
             ExprKind::Case { scrutinee, arms } => {
+                let shown_ty = self.unbound_node_types.get(&scrutinee.id).map(|ty| {
+                    let substitution = self.substitution;
+                    substitution.type_subst.apply_with_rows(
+                        substitution.db,
+                        *ty,
+                        substitution.row_subst,
+                    )
+                });
                 if let Some(scrutinee_ty) = self.node_types.get(&scrutinee.id).copied()
                     && self.checker.check_exhaustiveness(
                         self.exhaustiveness_reported,
                         scrutinee_ty,
+                        shown_ty.unwrap_or(scrutinee_ty),
                         arms,
                         scrutinee.id,
                     )
@@ -141,6 +169,26 @@ impl<'db> VisitMut<TypedRef<'db>> for Finalize<'_, 'db> {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn visit_pattern_mut(&mut self, pattern: &mut Pattern<TypedRef<'db>>) {
+        walk_pattern_mut(self, pattern);
+        // A `String` or `Bytes` literal pattern compares through its type's
+        // `==`, which a program without the prelude lacks.
+        let well_known = self.checker.env.well_known_types();
+        let (equality, type_name) = match &*pattern.kind {
+            PatternKind::Literal(LiteralPattern::String(_)) => {
+                (well_known.string_equality, "String")
+            }
+            PatternKind::Literal(LiteralPattern::Bytes(_)) => (well_known.bytes_equality, "Bytes"),
+            _ => return,
+        };
+        if equality.is_none() {
+            self.checker.report_type_error(
+                pattern.id,
+                format!("{type_name} literal patterns need the prelude's `{type_name}::==`"),
+            );
         }
     }
 }

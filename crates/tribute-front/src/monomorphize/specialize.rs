@@ -7,13 +7,14 @@ use trunk_ir::SymbolPath;
 
 use trunk_ir::Symbol;
 
+use crate::ast::fold::TypeFoldable;
 use crate::ast::visit::{RefSite, Visit, VisitMut};
 use crate::ast::{
     Decl, DeclEntry, DeclTable, EnumDecl, ExternFuncDecl, FieldDecl, FuncDecl, FuncDefId, NodeId,
     StructDecl, Type, TypeAnnotation, TypeAnnotationKind, TypeDefId, TypeKind, TypeScheme,
     TypedRef, VariantDecl,
 };
-use crate::typeck::subst::substitute_bound_vars;
+use crate::typeck::subst::{BoundVarOutOfBounds, BoundVarSubst};
 
 use super::instance::InstanceKey;
 use super::mangle::{mangle_instance_path, mangle_type_path};
@@ -72,26 +73,30 @@ struct SpecializationEntry<'db> {
 
 /// Generate specialized copies of generic functions for each instantiation.
 ///
+/// The generic declarations are looked up in `module`, then in
+/// `dependencies`. An instance whose path is in `generated` already exists and
+/// is not generated again; each generated path is added to it.
+///
 /// Returns a list of new specialized `FuncDecl`s and their corresponding
 /// `(Symbol, TypeScheme)` entries for `function_types`.
 pub(super) fn generate_specializations<'db>(
     db: &'db dyn salsa::Database,
     module: &DeclTable<TypedRef<'db>>,
+    dependencies: &[&DeclTable<TypedRef<'db>>],
     instantiations: &HashMap<FuncDefId<'db>, HashSet<InstanceKey<'db>>>,
     function_types: &[(SymbolPath, TypeScheme<'db>)],
-    compiler_intrinsics: &HashMap<NodeId, Symbol>,
+    compiler_intrinsics: &crate::SortedMap<NodeId, Symbol>,
+    generated: &mut HashSet<SymbolPath>,
 ) -> GeneratedSpecializations<'db> {
-    let func_decls = collect_func_decls(module);
-    let extern_functions = collect_extern_function_decls(module);
+    let tables = || dependencies.iter().copied().chain([module]);
+    let func_decls = collect_func_decls(tables());
+    let extern_functions = collect_extern_function_decls(tables());
     let scheme_map: HashMap<SymbolPath, TypeScheme<'db>> = function_types.iter().cloned().collect();
 
     let mut entries: Vec<SpecializationEntry<'db>> = Vec::new();
     let mut extern_function_types = Vec::new();
     let mut specialized_extern_declarations = Vec::new();
     let mut compiler_intrinsic_specializations = Vec::new();
-    // Keys that differ only in how a type is spelled, such as a nominal type
-    // named by its short or its qualified name, mangle to one instance.
-    let mut generated = HashSet::default();
 
     for (func_id, keys) in instantiations {
         let path = func_id.path(db);
@@ -109,6 +114,9 @@ pub(super) fn generate_specializations<'db>(
         for key in keys {
             let type_args = key.type_args.as_slice();
             let mangled_path = mangle_instance_path(db, path, key);
+            // Keys that differ only in how a type is spelled, such as a
+            // nominal type named by its short or its qualified name, mangle
+            // to one instance.
             if !generated.insert(mangled_path.clone()) {
                 continue;
             }
@@ -116,13 +124,12 @@ pub(super) fn generate_specializations<'db>(
             let placement = Placement::at(mangled_path.clone());
             let specialized_scheme = scheme
                 .to_builder(db)
-                .map_types(db, |ty| {
-                    substitute_bound_vars(db, ty, type_args).unwrap_or_else(|index, max| {
-                        panic!(
-                            "BoundVar index out of range in specialization of {}: index={}, subst.len()={}",
-                            qualified, index, max
-                        )
-                    })
+                .try_fold_types(&mut BoundVarSubst::new(db, type_args))
+                .unwrap_or_else(|BoundVarOutOfBounds { index, max }| {
+                    panic!(
+                        "BoundVar index out of range in specialization of {}: index={}, subst.len()={}",
+                        qualified, index, max
+                    )
                 })
                 .type_params(Vec::new())
                 .build(db);
@@ -199,7 +206,7 @@ pub(super) fn generate_struct_specializations<'db>(
     module: &DeclTable<TypedRef<'db>>,
     instantiations: &HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
 ) -> Vec<(Placement, StructDecl)> {
-    let index = NominalIndex::new(db, module);
+    let index = NominalIndex::new(db, module, &[]);
     generate_struct_specializations_with_index(db, &index, instantiations)
 }
 
@@ -240,7 +247,7 @@ pub(super) fn generate_enum_specializations<'db>(
     module: &DeclTable<TypedRef<'db>>,
     instantiations: &HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
 ) -> Vec<(Placement, EnumDecl)> {
-    let index = NominalIndex::new(db, module);
+    let index = NominalIndex::new(db, module, &[]);
     generate_enum_specializations_with_index(db, &index, instantiations)
 }
 
@@ -287,6 +294,7 @@ fn specialize_struct_decl<'db>(
         id: decl.id.with_variant(variant),
         visibility: crate::ast::Visibility::Private,
         name: mangled_name,
+        disambiguator: decl.disambiguator,
         type_params: vec![],
         fields: decl
             .fields
@@ -315,6 +323,7 @@ fn specialize_enum_decl<'db>(
         id: decl.id.with_variant(variant),
         visibility: crate::ast::Visibility::Private,
         name: mangled_name,
+        disambiguator: decl.disambiguator,
         type_params: vec![],
         variants: decl
             .variants
@@ -485,12 +494,12 @@ fn type_to_annotation(db: &dyn salsa::Database, ty: Type<'_>, id: NodeId) -> Typ
 // Generic function specialization helpers
 // ============================================================================
 
-fn collect_func_decls<'a, 'db>(
-    module: &'a DeclTable<TypedRef<'db>>,
+fn collect_func_decls<'a, 'db: 'a>(
+    tables: impl IntoIterator<Item = &'a DeclTable<TypedRef<'db>>>,
 ) -> HashMap<SymbolPath, &'a FuncDecl<TypedRef<'db>>> {
-    module
-        .entries
-        .iter()
+    tables
+        .into_iter()
+        .flat_map(|table| &table.entries)
         .filter_map(|entry| match &entry.decl {
             Decl::Function(func) => Some((entry.module.child(func.name.clone()), func)),
             _ => None,
@@ -498,12 +507,12 @@ fn collect_func_decls<'a, 'db>(
         .collect()
 }
 
-fn collect_extern_function_decls<'a, 'db>(
-    module: &'a DeclTable<TypedRef<'db>>,
+fn collect_extern_function_decls<'a, 'db: 'a>(
+    tables: impl IntoIterator<Item = &'a DeclTable<TypedRef<'db>>>,
 ) -> HashMap<SymbolPath, &'a ExternFuncDecl> {
-    module
-        .entries
-        .iter()
+    tables
+        .into_iter()
+        .flat_map(|table| &table.entries)
         .filter_map(|entry| match &entry.decl {
             Decl::ExternFunction(func) => Some((entry.module.child(func.name.clone()), func)),
             _ => None,
@@ -563,11 +572,12 @@ fn subst_type<'db>(
     ty: Type<'db>,
     type_args: &[Type<'db>],
 ) -> Type<'db> {
-    substitute_bound_vars(db, ty, type_args).unwrap_or_else(|index, max| {
-        panic!(
-            "BoundVar index out of range during monomorphization: index={index}, subst.len()={max}"
-        )
-    })
+    ty.try_fold_with(&mut BoundVarSubst::new(db, type_args))
+        .unwrap_or_else(|BoundVarOutOfBounds { index, max }| {
+            panic!(
+                "BoundVar index out of range during monomorphization: index={index}, subst.len()={max}"
+            )
+        })
 }
 
 /// Substitutes the type arguments into every reference type of a copied
@@ -792,7 +802,7 @@ mod tests {
         let bv0 = Type::new(&db, TypeKind::BoundVar { index: 0 });
         let int = Type::new(&db, TypeKind::Int);
 
-        // Build a simple generic function: fn identity(a)(x: a) -> a { x }
+        // Build a simple generic function: fn identity(x: a) -> a { x }
         let body_ref = TypedRef::new(
             ResolvedRef::Local {
                 id: crate::ast::LocalId::new(0),
@@ -907,9 +917,11 @@ mod tests {
         let specializations = generate_specializations(
             &db,
             &module,
+            &[],
             &instantiations,
             &function_types,
-            &HashMap::default(),
+            &crate::SortedMap::default(),
+            &mut HashSet::default(),
         );
 
         assert_eq!(specializations.specialized_declarations.len(), 2);
@@ -1115,6 +1127,7 @@ mod tests {
             id: node_id(1),
             visibility: crate::ast::Visibility::Public,
             name: Symbol::new("Pair"),
+            disambiguator: 0,
             type_params: vec![
                 crate::ast::TypeParamDecl {
                     id: node_id(2),
@@ -1184,6 +1197,7 @@ mod tests {
             id: node_id(1),
             visibility: crate::ast::Visibility::Public,
             name: Symbol::new("Option"),
+            disambiguator: 0,
             type_params: vec![crate::ast::TypeParamDecl {
                 id: node_id(2),
                 name: Symbol::new("a"),

@@ -167,9 +167,15 @@ fn gen_op_def(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -> Tok
     });
 
     let regions = op.regions.iter().filter_map(|item| match item {
-        RegionOrSuccessor::Region { name, optional } => {
-            Some(quote!(#schema_mod::RegionSchema { name: #name, optional: #optional }))
-        }
+        RegionOrSuccessor::Region {
+            name,
+            optional,
+            variadic,
+        } => Some(quote!(#schema_mod::RegionSchema {
+            name: #name,
+            optional: #optional,
+            variadic: #variadic,
+        })),
         RegionOrSuccessor::Successor { .. } => None,
     });
     let successors = op.regions.iter().filter_map(|item| match item {
@@ -196,15 +202,16 @@ fn gen_op_def(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -> Tok
         None => quote!(None),
     };
     // Likewise for a missing `OpAsmFormat` impl and `#[asm_format]`.
-    let asm_format = match op.asm_format {
-        Some(span) => {
+    let asm_format = match (op.asm_format, &op.format) {
+        (Some(span), Some(tokens)) => crate::format::gen_format(crate_path, op, span, tokens),
+        (Some(span), None) => {
             let mut sname = struct_name(&op.name);
             sname.set_span(span);
             quote_spanned!(span=> Some(
                 <#sname as #crate_path::ops::__private::DeclaredOpAsmFormat>::ASM_HOOKS
             ))
         }
-        None => quote!(None),
+        (None, _) => quote!(None),
     };
 
     // The span points a type that is not a flag at its `#[flags]` entry.
@@ -566,6 +573,22 @@ fn gen_region_accessors(crate_path: &TokenStream, regions: &[RegionOrSuccessor])
 
     for item in regions {
         match item {
+            RegionOrSuccessor::Region {
+                name,
+                variadic: true,
+                ..
+            } => {
+                let name_ident = format_ident!("{name}");
+                let idx = region_idx;
+                methods.push(quote! {
+                    pub fn #name_ident<'a>(
+                        &self,
+                        ctx: &'a #crate_path::IrContext,
+                    ) -> impl Iterator<Item = #crate_path::RegionRef> + 'a {
+                        ctx.op_regions(self.0).skip(#idx)
+                    }
+                });
+            }
             RegionOrSuccessor::Region { name, .. } => {
                 let name_ident = format_ident!("{name}");
                 let idx = region_idx;
@@ -731,22 +754,28 @@ fn gen_fluent_builder(crate_path: &TokenStream, dialect: &str, op: &OperationDef
         .regions
         .iter()
         .filter_map(|item| match item {
-            RegionOrSuccessor::Region { name, optional } => {
-                Some((format_ident!("{name}"), *optional))
-            }
+            RegionOrSuccessor::Region {
+                name,
+                optional,
+                variadic,
+            } => Some((format_ident!("{name}"), *optional, *variadic)),
             RegionOrSuccessor::Successor { .. } => None,
         })
         .collect();
     if !regions.is_empty() {
-        let params = regions.iter().map(|(name, optional)| {
-            if *optional {
+        let params = regions.iter().map(|(name, optional, variadic)| {
+            if *variadic {
+                quote!(#name: impl IntoIterator<Item = #crate_path::RegionRef>)
+            } else if *optional {
                 quote!(#name: impl Into<Option<#crate_path::RegionRef>>)
             } else {
                 quote!(#name: #crate_path::RegionRef)
             }
         });
-        let pushes = regions.iter().map(|(name, optional)| {
-            if *optional {
+        let pushes = regions.iter().map(|(name, optional, variadic)| {
+            if *variadic {
+                quote!(__regions.extend(#name);)
+            } else if *optional {
                 quote!(__regions.extend(#name.into());)
             } else {
                 quote!(__regions.push(#name);)

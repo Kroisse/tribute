@@ -6,7 +6,7 @@ use crate::common;
 use salsa_test_macros::salsa_test;
 use tribute::pipeline::{compile_specialized_frontend, compile_to_wasm_binary};
 use tribute_front::SourceCst;
-use tribute_ir::dialect::tribute_control;
+use tribute_ir::dialect::tribute_cps;
 use trunk_ir::ops::DialectOp;
 
 // Keep the original generic frontend regression on the production path, which
@@ -30,23 +30,18 @@ fn generic_callback_selects_a_direct_instance_and_executes_wasm(db: &salsa::Data
         .expect("production frontend should lower");
     let convention = |named: &dyn Fn(&str) -> bool| {
         module.ops(&ctx).iter().copied().find_map(|op| {
-            let function = tribute_control::Func::from_op(&ctx, op).ok()?;
-            named(function.sym_name(&ctx))
-                .then(|| tribute_control::func_sig_convention(&ctx, function.r#type(&ctx)))
+            let function = tribute_cps::Func::from_op(&ctx, op).ok()?;
+            named(function.sym_name(&ctx)).then(|| function.convention(&ctx))
         })
     };
     assert_eq!(
-        convention(&|name| name == "main"),
-        Some(Some(
-            tribute_ir::calling_convention::CallingConvention::EvidenceDirect
-        )),
+        convention(&|name| name == "pkg::main"),
+        Some(tribute_ir::calling_convention::CallingConvention::EvidenceDirect),
         "a pure callback leaves the Io root as it is"
     );
     assert_eq!(
-        convention(&|name| name.starts_with("apply_open$") && name.ends_with("$9D")),
-        Some(Some(
-            tribute_ir::calling_convention::CallingConvention::Direct
-        )),
+        convention(&|name| name.starts_with("pkg::apply_open$") && name.ends_with("$9D")),
+        Some(tribute_ir::calling_convention::CallingConvention::Direct),
         "a pure callback selects the Direct instance"
     );
 
@@ -60,6 +55,13 @@ fn generic_callback_selects_a_direct_instance_and_executes_wasm(db: &salsa::Data
     assert!(output.stdout.is_empty());
 }
 
+/// Whether printed IR declares the `Cps` convention anywhere.
+fn is_cps(ir: &str) -> bool {
+    ir.contains("convention(cps)")
+        || ir.contains("convention = \"cps\"")
+        || ir.lines().any(|line| line.trim() == "cps {")
+}
+
 /// A pure callback in a pure function selects the `Direct` instance of a
 /// prelude function.
 #[salsa_test]
@@ -68,7 +70,7 @@ fn a_pure_prelude_callback_selects_the_direct_instance(db: &salsa::DatabaseImpl)
         db,
         "test.trb",
         r#"
-fn pure() ->{} Option(Int) { Option::map(Some(+1), fn(n) n + +1) }
+fn pure() ->{} Option(Int) { Option::map(.Some(+1), fn(n) n + +1) }
 
 fn main() -> Nil {
     let _ = pure()
@@ -84,19 +86,18 @@ fn main() -> Nil {
         .iter()
         .copied()
         .filter_map(|op| {
-            let function = tribute_control::Func::from_op(&ctx, op).ok()?;
+            let function = tribute_cps::Func::from_op(&ctx, op).ok()?;
             let name = function.sym_name(&ctx);
             let rest = name.strip_prefix("std::Option::map$")?;
             let class = rest.rsplit_once("$9").map_or("", |(_, class)| class);
-            let convention = tribute_control::func_sig_convention(&ctx, function.r#type(&ctx));
-            Some((class.to_owned(), convention))
+            Some((class.to_owned(), function.convention(&ctx)))
         })
         .collect();
     assert_eq!(
         instances,
         [(
             "D".to_owned(),
-            Some(tribute_ir::calling_convention::CallingConvention::Direct)
+            tribute_ir::calling_convention::CallingConvention::Direct
         )]
     );
 }
@@ -112,8 +113,8 @@ fn calls_in_one_body_select_instances_independently(db: &salsa::DatabaseImpl) {
 use std::io::{Io, print_line}
 
 fn main() ->{Io} Nil {
-    let _ = Option::map(Some(+1), fn(n) n + +1)
-    let _ = Option::map(Some("io"), fn(s) print_line(s))
+    let _ = Option::map(.Some(+1), fn(n) n + +1)
+    let _ = Option::map(.Some("io"), fn(s) print_line(s))
     Nil
 }
 "#,
@@ -126,16 +127,15 @@ fn main() ->{Io} Nil {
         .iter()
         .copied()
         .filter_map(|op| {
-            let function = tribute_control::Func::from_op(&ctx, op).ok()?;
+            let function = tribute_cps::Func::from_op(&ctx, op).ok()?;
             let name = function.sym_name(&ctx);
-            let name = if name == "main" {
-                name
+            let name = if name == "pkg::main" {
+                "main"
             } else {
                 let rest = name.strip_prefix("std::Option::map$")?;
                 rest.rsplit_once("$9").map_or("", |(_, class)| class)
             };
-            let convention = tribute_control::func_sig_convention(&ctx, function.r#type(&ctx));
-            Some((name.to_owned(), convention))
+            Some((name.to_owned(), function.convention(&ctx)))
         })
         .collect();
     functions.sort();
@@ -143,9 +143,9 @@ fn main() ->{Io} Nil {
     assert_eq!(
         functions,
         [
-            ("D".to_owned(), Some(Direct)),
-            ("E".to_owned(), Some(EvidenceDirect)),
-            ("main".to_owned(), Some(EvidenceDirect)),
+            ("D".to_owned(), Direct),
+            ("E".to_owned(), EvidenceDirect),
+            ("main".to_owned(), EvidenceDirect),
         ]
     );
 }
@@ -172,7 +172,7 @@ fn main() -> Nil {
         .expect("production frontend should lower");
     let ir = trunk_ir::printer::print_module(&ctx, module.op());
     let main = ir
-        .split("tribute_control.func @main")
+        .split("tribute_cps.func @\"pkg::main\"")
         .nth(1)
         .and_then(|rest| rest.split("\n  }\n").next())
         .expect("root main");
@@ -180,9 +180,9 @@ fn main() -> Nil {
         main.starts_with("['a0]() -> core.nil row(| 'a0) inferred convention(direct)"),
         "{main}"
     );
-    assert!(main.contains("callee = @\"apply$9D\""), "{main}");
+    assert!(main.contains("callee = @\"pkg::apply$9D\""), "{main}");
     assert!(
-        main.contains("tribute_control.lambda") && !main.contains("convention(cps)"),
+        main.contains("tribute_cps.lambda") && !is_cps(main),
         "{main}"
     );
 }
@@ -218,17 +218,17 @@ fn main() ->{Io} Nil {
         .expect("production frontend should lower");
     let ir = trunk_ir::printer::print_module(&ctx, module.op());
     let main = ir
-        .split("tribute_control.func @main")
+        .split("tribute_cps.func @\"pkg::main\"")
         .nth(1)
         .and_then(|rest| rest.split("\n  }\n").next())
         .expect("root main");
     // `both` is used with a pure and with an `Io` callback.
-    assert!(main.contains("callee = @\"app$9D\""), "{main}");
-    assert!(main.contains("callee = @\"app$9E\""), "{main}");
-    assert!(!main.contains("callee = @app}"), "{main}");
+    assert!(main.contains("callee = @\"pkg::app$9D\""), "{main}");
+    assert!(main.contains("callee = @\"pkg::app$9E\""), "{main}");
+    assert!(!main.contains("callee = @\"pkg::app\"}"), "{main}");
     // `step` is used at an empty row, so it and `each` need no Cps control.
     let each = ir
-        .split("tribute_control.func @each")
+        .split("tribute_cps.func @\"pkg::each\"")
         .nth(1)
         .and_then(|rest| rest.split("\n  }\n").next())
         .expect("each");
@@ -237,7 +237,7 @@ fn main() ->{Io} Nil {
         "{each}"
     );
     assert!(
-        each.contains("tribute_control.lambda") && !each.contains("convention(cps)"),
+        each.contains("tribute_cps.lambda") && !is_cps(each),
         "{each}"
     );
 }
@@ -271,9 +271,9 @@ fn main() -> Nil {
         .expect("class specialization accepts frontend output")
         .expect("production frontend should lower");
     let ir = trunk_ir::printer::print_module(&ctx, module.op());
-    assert!(ir.contains("callee = @\"countdown$9D\""), "{ir}");
+    assert!(ir.contains("callee = @\"pkg::countdown$9D\""), "{ir}");
     let instance = ir
-        .split("tribute_control.func @\"countdown$9D\"")
+        .split("tribute_cps.func @\"pkg::countdown$9D\"")
         .nth(1)
         .and_then(|rest| rest.split("\n  }\n").next())
         .expect("the Direct instance");
@@ -284,7 +284,7 @@ fn main() -> Nil {
         "{instance}"
     );
     assert!(
-        instance.contains("tribute_control.lambda") && !instance.contains("convention(cps)"),
+        instance.contains("tribute_cps.lambda") && !is_cps(instance),
         "{instance}"
     );
 }
@@ -339,22 +339,22 @@ fn main() ->{Io} Nil {
         .expect("production frontend should lower");
     let ir = trunk_ir::printer::print_module(&ctx, module.op());
     let function = |name: &str| {
-        ir.split(&format!("tribute_control.func @\"{name}\""))
+        ir.split(&format!("tribute_cps.func @\"{name}\""))
             .nth(1)
             .and_then(|rest| rest.split("\n  }\n").next())
             .unwrap_or_else(|| panic!("{name} in\n{ir}"))
     };
-    let run = function("m::run");
-    assert!(run.contains("callee = @\"m::app$9D\""), "{run}");
-    assert!(run.contains("callee = @\"m::app$9E\""), "{run}");
-    assert!(!run.contains("callee = @\"m::app\"}"), "{run}");
-    let each = function("m::each");
+    let run = function("pkg::m::run");
+    assert!(run.contains("callee = @\"pkg::m::app$9D\""), "{run}");
+    assert!(run.contains("callee = @\"pkg::m::app$9E\""), "{run}");
+    assert!(!run.contains("callee = @\"pkg::m::app\"}"), "{run}");
+    let each = function("pkg::m::each");
     assert!(
         each.starts_with("['a0](%0: core.i32) -> core.i32 row(| 'a0) inferred convention(direct)"),
         "{each}"
     );
     assert!(
-        each.contains("tribute_control.lambda") && !each.contains("convention(cps)"),
+        each.contains("tribute_cps.lambda") && !is_cps(each),
         "{each}"
     );
 }
@@ -396,32 +396,35 @@ fn main() ->{Io} Nil {
         .expect("production frontend should lower");
     let ir = trunk_ir::printer::print_module(&ctx, module.op());
     let function = |name: &str| {
-        ir.split(&format!("tribute_control.func {name}["))
+        ir.split(&format!("tribute_cps.func {name}["))
             .nth(1)
             .and_then(|rest| rest.split("\n  }\n").next())
             .unwrap_or_else(|| panic!("{name} in\n{ir}"))
     };
-    let countdown = function("@\"countdown$9D\"");
+    let countdown = function("@\"pkg::countdown$9D\"");
     assert!(countdown.starts_with("'a0, local 'a1]"), "{countdown}");
     assert!(
-        countdown.contains("tribute_control.lambda['a1](")
+        countdown.contains("tribute_cps.lambda['a1](")
             && countdown.contains("tribute_control.instantiate %1 {row_args = [{tail = 0}]}"),
         "{countdown}"
     );
-    let main = function("@main");
-    assert!(main.starts_with("local 'a0, local 'a1]"), "{main}");
+    let main = function("@\"pkg::main\"");
+    assert!(main.starts_with("local 'a0]"), "{main}");
     assert!(
-        main.contains("%0 = tribute_control.lambda['a0](")
-            && main.contains("%4 = tribute_control.lambda['a1](")
+        main.contains("%0 = tribute_cps.lambda['a0](")
+            && main.contains("direct {")
+            && main.contains("evidence_direct {")
             && main.contains("tribute_control.instantiate %0 {row_args = [{}]}")
             && main.contains(
-                "tribute_control.instantiate %4 {row_args = [{instances = [@\"ability_1_11_std::io::Io\"]}]}"
+                "tribute_control.instantiate %0 {row_args = [{instances = [@\"ability_1_11_std::io::Io\"]}]}"
             ),
         "{main}"
     );
     // The pure callback is lowered at the instantiated, closed row.
     assert!(
-        main.contains("tribute_control.lambda(%11: core.i32) -> core.i32 convention(direct)"),
+        main.contains(
+            "tribute_cps.lambda(%8: core.i32) -> core.i32 captures [] entries {\n        direct {"
+        ),
         "{main}"
     );
 }
@@ -452,7 +455,7 @@ fn main() ->{Io} Nil {
         .expect("production frontend should lower");
     let ir = trunk_ir::printer::print_module(&ctx, module.op());
     let main = ir
-        .split("tribute_control.func @main[")
+        .split("tribute_cps.func @\"pkg::main\"[")
         .nth(1)
         .and_then(|rest| rest.split("\n  }\n").next())
         .expect("root main");
@@ -494,11 +497,11 @@ fn main() -> Nil {
         .expect("production frontend should lower");
     let ir = trunk_ir::printer::print_module(&ctx, module.op());
     let run = ir
-        .split("tribute_control.func @run")
+        .split("tribute_cps.func @\"pkg::run\"")
         .nth(1)
         .and_then(|rest| rest.split("\n  }\n").next())
         .expect("run");
-    assert!(run.contains("tribute_control.lambda("), "{run}");
+    assert!(run.contains("tribute_cps.lambda("), "{run}");
     assert!(
         !run.contains("lambda['") && !run.contains("instantiate") && !run.contains("local '"),
         "{run}"
@@ -532,13 +535,13 @@ fn main() -> Nil {
         .expect("production frontend should lower");
     let ir = trunk_ir::printer::print_module(&ctx, module.op());
     let run = ir
-        .split("tribute_control.func @\"run$9D\"")
+        .split("tribute_cps.func @\"pkg::run$9D\"")
         .nth(1)
-        .or_else(|| ir.split("tribute_control.func @run").nth(1))
+        .or_else(|| ir.split("tribute_cps.func @\"pkg::run\"").nth(1))
         .and_then(|rest| rest.split("\n  }\n").next())
         .unwrap_or_else(|| panic!("run in\n{ir}"));
     let inner = run
-        .split("captures [%0] {")
+        .split("captures [%0] entries {")
         .nth(1)
         .unwrap_or_else(|| panic!("a lambda capturing `both` in\n{run}"));
     assert!(
@@ -637,12 +640,12 @@ fn main() -> Nil {
     );
     let ir = trunk_ir::printer::print_module(&ctx, module.op());
     let after = ir
-        .split("tribute_control.func @\"after$9D\"")
+        .split("tribute_cps.func @\"pkg::after$9D\"")
         .nth(1)
         .and_then(|rest| rest.split("\n  }\n").next())
         .unwrap_or_else(|| panic!("after$9D in\n{ir}"));
     assert!(
-        after.contains("callee = @\"app$std::String$9D\"") && !after.contains("convention(cps)"),
+        after.contains("callee = @\"pkg::app$std::String$9D\"") && !is_cps(after),
         "{after}"
     );
 }

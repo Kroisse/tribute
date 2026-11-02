@@ -18,7 +18,7 @@ use std::fmt::Write;
 use std::ops::ControlFlow;
 
 use super::context::IrContext;
-use super::ops::{DialectOp, DialectType};
+use super::ops::DialectOp;
 use super::refs::*;
 use super::types::*;
 use super::walk::{WalkAction, walk_region};
@@ -32,6 +32,14 @@ struct PrintState<'a> {
     next_block_num: usize,
     /// Reverse map: TypeRef → alias name for substitution during printing.
     type_alias_names: HashMap<TypeRef, String>,
+}
+
+/// Value names and block labels set aside while an isolated operation is
+/// printed.
+struct Numbering {
+    value_names: HashMap<ValueRef, String>,
+    block_labels: HashMap<BlockRef, String>,
+    counters: (usize, usize),
 }
 
 impl<'a> PrintState<'a> {
@@ -93,6 +101,25 @@ impl<'a> PrintState<'a> {
         self.block_labels.clear();
     }
 
+    /// Set the numbering aside for a fresh one, to restore it with
+    /// `restore_numbering`.
+    fn take_numbering(&mut self) -> Numbering {
+        Numbering {
+            value_names: std::mem::take(&mut self.value_names),
+            block_labels: std::mem::take(&mut self.block_labels),
+            counters: (
+                std::mem::take(&mut self.next_value_num),
+                std::mem::take(&mut self.next_block_num),
+            ),
+        }
+    }
+
+    fn restore_numbering(&mut self, numbering: Numbering) {
+        self.value_names = numbering.value_names;
+        self.block_labels = numbering.block_labels;
+        self.restore_counters(numbering.counters);
+    }
+
     /// Restore only counters saved by `save_counters`.
     fn restore_counters(&mut self, state: (usize, usize)) {
         self.next_value_num = state.0;
@@ -107,9 +134,6 @@ impl<'a> PrintState<'a> {
         // Check alias map first
         if let Some(alias_name) = self.type_alias_names.get(&ty) {
             return write_type_alias_name(f, alias_name);
-        }
-        if let Some((inputs, results)) = func_sig_parts(self.ctx, ty) {
-            return self.write_func_sig_type(f, ty, inputs, results);
         }
         let data = self.ctx.get_type(ty);
         if let Some(hooks) = data.name.def().and_then(|def| def.asm_format)
@@ -134,54 +158,6 @@ impl<'a> PrintState<'a> {
             if !data.params.is_empty() {
                 f.write_str(", ")?;
             }
-            self.write_attr_dict(f, attrs)?;
-        }
-        f.write_char('>')
-    }
-
-    fn write_func_sig_type(
-        &self,
-        f: &mut dyn Write,
-        ty: TypeRef,
-        inputs: &[TypeRef],
-        results: &[TypeRef],
-    ) -> fmt::Result {
-        let data = self.ctx.get_type(ty);
-        let inline_param_attrs = data.validate_param_attrs(self.ctx).is_ok();
-        write!(f, "{}<(", data.name.display(self.ctx))?;
-        for (index, &input) in inputs.iter().enumerate() {
-            if index > 0 {
-                f.write_str(", ")?;
-            }
-            self.write_param(f, data, inline_param_attrs, index, input)?;
-        }
-        f.write_str(") -> ")?;
-        let first_result = inputs.len();
-        if results.len() == 1 {
-            self.write_param(f, data, inline_param_attrs, first_result, results[0])?;
-        } else {
-            f.write_char('(')?;
-            for (index, &result) in results.iter().enumerate() {
-                if index > 0 {
-                    f.write_str(", ")?;
-                }
-                self.write_param(f, data, inline_param_attrs, first_result + index, result)?;
-            }
-            f.write_char(')')?;
-        }
-
-        let mut attrs = visible_type_attrs(
-            self.ctx,
-            data,
-            inline_param_attrs,
-            &[
-                crate::dialect::func::NUM_INPUTS_ATTR,
-                crate::dialect::func::NUM_RESULTS_ATTR,
-            ],
-        )
-        .peekable();
-        if attrs.peek().is_some() {
-            f.write_str(", ")?;
             self.write_attr_dict(f, attrs)?;
         }
         f.write_char('>')
@@ -286,46 +262,6 @@ fn visible_type_attrs<'b>(
     })
 }
 
-/// Return the delimiter-sliced storage only for a complete `*.func_sig` shape.
-/// Other types, including malformed count-shaped data, retain concrete printing.
-fn func_sig_parts(ctx: &IrContext, ty: TypeRef) -> Option<(&[TypeRef], &[TypeRef])> {
-    let data = ctx.get_type(ty);
-    if data.name.strip_dialect(ctx) != "func_sig" {
-        return None;
-    }
-    let malformed = if crate::dialect::func::FuncSig::matches(ctx, ty) {
-        crate::dialect::func::FuncSig::from_type_ref(ctx, ty).is_none()
-    } else if crate::dialect::wasm::FuncSig::matches(ctx, ty) {
-        crate::dialect::wasm::FuncSig::from_type_ref(ctx, ty).is_none()
-    } else if crate::dialect::clif::FuncSig::matches(ctx, ty) {
-        crate::dialect::clif::FuncSig::from_type_ref(ctx, ty).is_none()
-    } else {
-        false
-    };
-    if malformed {
-        return None;
-    }
-    let num_inputs = match ctx
-        .type_attrs(ty)
-        .get(crate::dialect::func::NUM_INPUTS_ATTR)
-    {
-        Some(Attribute::Int(value)) => usize::try_from(u32::try_from(*value).ok()?).ok()?,
-        _ => return None,
-    };
-    let num_results = match ctx
-        .type_attrs(ty)
-        .get(crate::dialect::func::NUM_RESULTS_ATTR)
-    {
-        Some(Attribute::Int(value)) => usize::try_from(u32::try_from(*value).ok()?).ok()?,
-        _ => return None,
-    };
-    let end = num_inputs.checked_add(num_results)?;
-    if end != data.params.len() {
-        return None;
-    }
-    Some((&data.params[..num_inputs], &data.params[num_inputs..]))
-}
-
 // ============================================================================
 // TypePrintHelper — public wrapper for custom type format printers
 // ============================================================================
@@ -415,6 +351,14 @@ impl<'a, 'ctx> OpPrintHelper<'a, 'ctx> {
         self.state.get_value_name(v)
     }
 
+    /// Give `v` the name already assigned to `like`, for a value of a
+    /// sibling region whose name the custom syntax writes only once, such
+    /// as a parameter every body of an operation shares.
+    pub fn assign_value_name_like(&mut self, v: ValueRef, like: ValueRef) {
+        let name = self.state.get_value_name(like).to_owned();
+        self.state.value_names.insert(v, name);
+    }
+
     /// Write a type using the current alias map.
     pub fn write_type(&mut self, ty: TypeRef) -> fmt::Result {
         self.state.write_type(&mut *self.f, ty)
@@ -430,6 +374,27 @@ impl<'a, 'ctx> OpPrintHelper<'a, 'ctx> {
         self.state.write_attribute(&mut *self.f, attr)
     }
 
+    /// Write `{key = value, ...}`.
+    pub fn write_attr_dict<'b>(
+        &mut self,
+        attrs: impl Iterator<Item = (StringRef, &'b Attribute)>,
+    ) -> fmt::Result {
+        self.state.write_attr_dict(&mut *self.f, attrs)
+    }
+
+    /// The label of a block, assigned when its region was printed.
+    pub fn block_label(&self, block: BlockRef) -> &str {
+        self.state.get_block_label(block)
+    }
+
+    /// Print `{ .. }` holding a region in generic form, block labels
+    /// included.
+    pub fn print_region(&mut self, region: RegionRef) -> fmt::Result {
+        self.f.write_str("{\n")?;
+        print_region(self.state, &mut *self.f, region, self.indent + 2)?;
+        write!(self.f, "{}}}", " ".repeat(self.indent))
+    }
+
     /// Print the operation with generic assembly.
     ///
     /// Custom formats use this when their concise form cannot represent the
@@ -443,6 +408,27 @@ impl<'a, 'ctx> OpPrintHelper<'a, 'ctx> {
         self.state.reset_numbering();
     }
 
+    /// Run `print` with fresh value and block numbering, restoring the
+    /// current numbering afterwards.
+    pub(crate) fn with_fresh_numbering(
+        &mut self,
+        print: impl FnOnce(&mut Self) -> fmt::Result,
+    ) -> fmt::Result {
+        let numbering = self.state.take_numbering();
+        let result = print(self);
+        self.state.restore_numbering(numbering);
+        result
+    }
+
+    /// Print `{ .. }` holding a region whose entry block arguments the
+    /// operation's signature wrote, eliding the entry block as
+    /// [`Self::print_body`] does.
+    pub fn print_region_without_entry(&mut self, region: RegionRef) -> fmt::Result {
+        self.f.write_str("{\n")?;
+        self.print_region_eliding_entry(region, self.indent + 2)?;
+        write!(self.f, "{}}}", " ".repeat(self.indent))
+    }
+
     /// Print ` { .. }` holding a region with the entry block label elided.
     ///
     /// Entry block args are assumed to have been printed externally (e.g., as
@@ -451,10 +437,25 @@ impl<'a, 'ctx> OpPrintHelper<'a, 'ctx> {
     /// block label is printed without args, and non-entry blocks are printed
     /// normally.
     pub fn print_body(&mut self, region: RegionRef) -> fmt::Result {
+        self.f.write_char(' ')?;
+        self.print_region_without_entry(region)
+    }
+
+    /// Print ` {`, a `label { .. }` line for each region one level in, and
+    /// `}`, for an operation whose regions are named. Each region's entry
+    /// block label is elided as [`Self::print_body`] elides it.
+    pub fn print_labelled_bodies<'r>(
+        &mut self,
+        bodies: impl IntoIterator<Item = (&'r str, RegionRef)>,
+    ) -> fmt::Result {
         self.f.write_str(" {\n")?;
-        self.print_region_eliding_entry(region, self.indent + 2)?;
-        let indent_str = " ".repeat(self.indent);
-        write!(self.f, "{indent_str}}}")
+        let inner = " ".repeat(self.indent + 2);
+        for (label, region) in bodies {
+            writeln!(self.f, "{inner}{label} {{")?;
+            self.print_region_eliding_entry(region, self.indent + 4)?;
+            writeln!(self.f, "{inner}}}")?;
+        }
+        write!(self.f, "{}}}", " ".repeat(self.indent))
     }
 
     fn print_region_eliding_entry(&mut self, region: RegionRef, indent: usize) -> fmt::Result {
@@ -891,10 +892,20 @@ fn print_operation(
     let indent_str = " ".repeat(indent);
     f.write_str(&indent_str)?;
     // Check the operation's custom assembly format
-    if let Some(hooks) = crate::OpDef::of(state.ctx, op).and_then(|def| def.asm_format) {
-        (hooks.print)(&mut OpPrintHelper { state, f, indent }, op)?;
-    } else {
-        print_generic_op(state, f, op, indent)?;
+    let def = crate::OpDef::of(state.ctx, op);
+    match def.and_then(|def| Some((def, def.asm_format?))) {
+        Some((_, crate::asm_format::OpAsmFormatDef::Hooks(hooks))) => {
+            (hooks.print)(&mut OpPrintHelper { state, f, indent }, op)?;
+        }
+        Some((def, crate::asm_format::OpAsmFormatDef::Declarative(format))) => {
+            crate::asm_format::declarative::print(
+                &mut OpPrintHelper { state, f, indent },
+                op,
+                def,
+                format,
+            )?;
+        }
+        None => print_generic_op(state, f, op, indent)?,
     }
     f.write_char('\n')
 }

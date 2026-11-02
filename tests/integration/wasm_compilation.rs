@@ -68,7 +68,7 @@ fn test_compile_unsupported_wasm_read_line(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
         "wasm_read_line.trb",
-        r#"use abilities::Throw
+        r#"use std::abilities::Throw
 use std::io::{Error as IoError, Io, print_line, read_line}
 
 fn next_line() ->{Io} String {
@@ -236,10 +236,14 @@ fn test_execute_dynamic_bytes_write_boundary() {
 }}"#
     );
     let module = trunk_ir::parser::parse_test_module(&mut ctx, &ir);
-    tribute_passes::wasm::lower::lower_to_wasm(&mut ctx, module, &mut Default::default())
-        .expect("lower dynamic output to Wasm");
-    tribute_passes::wasm::lower::finalize_wasm_gc_types(&mut ctx, module)
-        .expect("finalize semantic WasmGC types");
+    let root =
+        <trunk_ir::dialect::core::Module as trunk_ir::ops::DialectOp>::from_op(&ctx, module.op())
+            .expect("core.module");
+    let mut pm = trunk_ir::pass::PassManager::new();
+    tribute_passes::wasm::lower::add_lowering_passes(&mut pm);
+    pm.add_pass(tribute_passes::wasm::lower::FinalizeWasmGcTypes);
+    pm.run(&mut ctx, root, &mut Default::default())
+        .expect("lower dynamic output to Wasm and finalize its WasmGC types");
     let binary = trunk_ir_wasm_backend::emit_module_to_wasm(&mut ctx, module)
         .expect("emit dynamic output Wasm");
     let mut expected = left.into_bytes();
@@ -506,14 +510,14 @@ enum Shape {
 
 fn area(shape: Shape) -> Int {
     case shape {
-        Circle(r) -> r * r * +3
-        Square(s) -> s * s
-        Empty -> +0
+        .Circle(r) -> r * r * +3
+        .Square(s) -> s * s
+        .Empty -> +0
     }
 }
 
 fn main() ->{std::io::Io} Nil {
-    std::io::print_line(Int::to_string(area(Circle(+2)) + area(Square(+3)) + area(Empty)))
+    std::io::print_line(Int::to_string(area(.Circle(+2)) + area(.Square(+3)) + area(.Empty)))
 }
 "#,
     );

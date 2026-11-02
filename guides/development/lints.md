@@ -7,8 +7,10 @@ Run the shared lint entry point from the repository root:
 ```
 
 Codex and Claude Stop hooks use this entry point. The Git pre-commit hook uses
-`.ci/lint.sh --quick`, which skips Clippy and rustdoc. CI runs the same checks
-in separate jobs.
+`.ci/lint.sh --quick`, which skips Clippy and rustdoc. It runs the script of
+the work tree being committed, so a linked worktree that shares the main
+checkout's `core.hooksPath` lints its own files. CI runs the same checks in
+separate jobs.
 
 Project-specific checks:
 

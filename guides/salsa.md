@@ -64,6 +64,38 @@ fields have narrow `salsa_value` proofs: they own their children, and `V` must
 itself implement `SalsaValue`. Do not store a reference tied to an old database
 revision in a tracked value.
 
+A tracked struct's identity is the hash of its untracked fields. A struct that
+a query creates again on every run, such as `ParsedAst` from each reparse,
+marks its fields `#[tracked]`. Its identity then does not depend on their
+content, so the query keeps returning the same struct, and each field keeps its
+previous revision while its value compares equal. A query that reads only an
+unchanged field is not rerun. Never leave a field whose `Hash` follows an
+allocation, such as a pointer-hashed `Arc`, untracked: every run would then
+allocate a new struct, and everything that reads it would rerun.
+
+Derived data borrows what it is derived from instead of copying it into its
+own result. Source positions stay in the parse that produced them: type
+checking and specialization results hold none, and a stage that needs the
+positions of several sources, such as lowering the module merged with package
+`std`, looks them up through `SpanMaps`, which borrows each source's
+`SpanMap`.
+
+A parse keeps positions in two tracked fields. `item_spans` holds each node's
+span relative to the start of the item that owns it (a `fn`, a type, an
+ability, a `mod` or a `use` declaration). `item_layout` holds where each item
+starts and the span of the root `Module`, which no item owns. Moving items
+without changing them changes only `item_layout`; since the root spans the
+whole source, so does any edit that changes the source's length. No node's
+span covers another item, so an inline `mod` declaration's span is its
+header. `SpanMap` borrows both and computes absolute spans, so a query that
+reads it still reruns when an item moves.
+
+The parse also hands out each item as a `ParsedItem` tracked struct,
+identified by its owner key, with its declarations, the items of an inline
+module's body, and its relative spans as tracked fields. A query that reads
+one item's fields reruns only when that item changes, while `module` and
+`item_spans` are assembled from every item.
+
 ## Creating a Source Input
 
 Use the existing constructor when a test needs parsed source:
@@ -142,6 +174,13 @@ fn valid_source_has_no_diagnostics(db: &salsa::DatabaseImpl) {
 - Diagnostic tests must invoke a tracked frontend or pipeline query.
 - Incremental tests update the existing source input and assert a meaningful
   changed result; simply calling a query twice does not prove invalidation.
+- Reuse tests assert which queries an edit reruns. The `LoggingDb` in
+  `crates/tribute-front/tests/common/execution_log.rs` records each
+  `EventKind::WillExecute`, the event Salsa sends before running a query. A
+  query whose inputs did not change sends `DidValidateMemoizedValue` instead
+  and is not recorded. A query that reruns but returns an equal value keeps
+  its previous revision, so assert reuse on a query that depends on it, as
+  `tests/query_reuse.rs` does with `function_count` over `func_names`.
 - Source-logical frontend tests inspect `tribute_control` operations and
   logical signatures. CPS and backend tests enter the shared/target route.
 

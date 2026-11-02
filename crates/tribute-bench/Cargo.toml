@@ -13,6 +13,7 @@ salsa.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 tribute = { path = "../.." }
+tribute-front.workspace = true
 tribute-passes.workspace = true
 trunk-ir.workspace = true
 wasmparser.workspace = true
@@ -22,6 +23,14 @@ criterion.workspace = true
 
 [[bench]]
 name = "abi_boundary"
+harness = false
+
+[[bench]]
+name = "frontend"
+harness = false
+
+[[bench]]
+name = "editing"
 harness = false
 
 [lints.rust]

@@ -1,0 +1,5 @@
+---
+source: crates/tribute-front/tests/manifests.rs
+expression: "ws.load_errors(\"/ws/empty/tribute.toml\")"
+---
+/ws/empty/tribute.toml:1..8 `package`: the package has neither `src/lib.trb` nor `src/main.trb` beside its manifest

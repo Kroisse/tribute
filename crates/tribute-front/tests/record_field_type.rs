@@ -9,6 +9,8 @@ use self::common::{ast_pipeline_diagnostics, run_ast_pipeline, run_ast_pipeline_
 use insta::assert_snapshot;
 use salsa_test_macros::salsa_test;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_front::ast::source_hash;
+use tribute_front::path_to_uri;
 use tribute_front::{
     SourceCst,
     ast::{Decl, DeclTable, Expr, ExprKind, Type, TypeDefId, TypeKind, TypedRef},
@@ -23,9 +25,10 @@ fn diagnostics(db: &dyn salsa::Database, text: &str) -> Vec<Diagnostic> {
 
 fn shape_error(text: &str, record: &str, occurrence: usize, message: &str) -> Diagnostic {
     let start = text.match_indices(record).nth(occurrence).unwrap().0;
+    let source = source_hash(path_to_uri("record_shape.trb".as_ref()).as_str());
     Diagnostic::new(
         message,
-        Span::new(start, start + record.len()),
+        Span::new(start, start + record.len()).in_source(source),
         DiagnosticSeverity::Error,
         CompilationPhase::TypeChecking,
     )
@@ -73,8 +76,7 @@ fn declared_struct_id<'db>(
         .unwrap_or_else(|| panic!("missing struct {name}"));
     TypeDefId::source(
         db,
-        trunk_ir::SymbolPath::new([structure.name.clone()]),
-        structure.id,
+        trunk_ir::SymbolPath::new([trunk_ir::Symbol::new("pkg"), structure.name.clone()]),
     )
 }
 
@@ -112,7 +114,7 @@ fn assert_named_args(
         panic!("expected {name} named type, found {ty:?}");
     };
     assert_eq!(*id, expected_id, "{name} declaration identity");
-    actual.with_str(|actual| assert_eq!(actual, name));
+    actual.with_str(|actual| assert_eq!(actual, format!("pkg::{name}")));
     assert_eq!(actual_args.len(), args.len(), "{name} argument count");
     for (actual, expected) in actual_args.iter().zip(args) {
         assert_eq!(actual.kind(db), expected, "{name} type argument");
@@ -581,7 +583,8 @@ fn mapper() -> Mapper(Int, Bool) { Mapper { map: fn(value) { True } } }
     };
     let lambda = &fields[0].value;
     let signature = checked
-        .lambda_signatures(db)
+        .expression_types(db)
+        .lambda_signatures
         .iter()
         .find_map(|(id, signature)| (*id == lambda.id).then_some(signature))
         .expect("missing lambda signature");
@@ -773,7 +776,7 @@ fn test_record_field_type_correct(db: &salsa::DatabaseImpl) {
 struct Point { x: Int, y: Int }
 
 fn make_point() -> Point {
-    Point { x: 10, y: 20 }
+    Point { x: +10, y: +20 }
 }
 "#,
     );
@@ -791,7 +794,7 @@ fn test_record_mixed_field_types(db: &salsa::DatabaseImpl) {
 struct Person { name: String, age: Int, active: Bool }
 
 fn make_person() -> Person {
-    Person { name: "Alice", age: 30, active: True }
+    Person { name: "Alice", age: +30, active: True }
 }
 "#,
     );
@@ -810,7 +813,7 @@ fn test_record_spread_same_type(db: &salsa::DatabaseImpl) {
 struct Point { x: Int, y: Int }
 
 fn update_x(p: Point) -> Point {
-    Point { x: 100, ..p }
+    Point { x: +100, ..p }
 }
 "#,
     );
@@ -846,7 +849,7 @@ fn test_record_generic_type(db: &salsa::DatabaseImpl) {
 struct Pair(a, b) { first: a, second: b }
 
 fn make_pair() -> Pair(Int, Bool) {
-    Pair { first: 42, second: True }
+    Pair { first: +42, second: True }
 }
 "#,
     );
@@ -864,7 +867,7 @@ fn test_record_field_type_inference(db: &salsa::DatabaseImpl) {
 struct Point { x: Int, y: Int }
 
 fn test() -> Int {
-    let p = Point { x: 1, y: 2 }
+    let p = Point { x: +1, y: +2 }
     p.x
 }
 "#,
@@ -887,7 +890,7 @@ fn test_snapshot_record_construction(db: &salsa::DatabaseImpl) {
 struct Point { x: Int, y: Int }
 
 fn make_point() -> Point {
-    Point { x: 10, y: 20 }
+    Point { x: +10, y: +20 }
 }
 "#,
     );
@@ -906,7 +909,7 @@ fn test_snapshot_record_spread(db: &salsa::DatabaseImpl) {
 struct Point { x: Int, y: Int }
 
 fn update_x(p: Point) -> Point {
-    Point { x: 100, ..p }
+    Point { x: +100, ..p }
 }
 "#,
     );
@@ -925,7 +928,7 @@ fn test_snapshot_record_generic(db: &salsa::DatabaseImpl) {
 struct Pair(a, b) { first: a, second: b }
 
 fn make_pair() -> Pair(Int, Bool) {
-    Pair { first: 42, second: True }
+    Pair { first: +42, second: True }
 }
 "#,
     );
@@ -965,7 +968,7 @@ fn test_snapshot_record_spread_all_fields_explicit(db: &salsa::DatabaseImpl) {
 struct Point { x: Int, y: Int }
 
 fn replace_all(p: Point) -> Point {
-    Point { x: 1, y: 2, ..p }
+    Point { x: +1, y: +2, ..p }
 }
 "#,
     );
@@ -984,11 +987,11 @@ fn test_record_spread_complex_expr(db: &salsa::DatabaseImpl) {
 struct Point { x: Int, y: Int }
 
 fn origin() -> Point {
-    Point { x: 0, y: 0 }
+    Point { x: +0, y: +0 }
 }
 
 fn shift_x() -> Point {
-    Point { x: 10, ..origin() }
+    Point { x: +10, ..origin() }
 }
 "#,
     );
@@ -1012,7 +1015,7 @@ fn test_record_forward_reference(db: &salsa::DatabaseImpl) {
         "test.trb",
         r#"
 fn make_point() -> Point {
-    Point { x: 1, y: 2 }
+    Point { x: +1, y: +2 }
 }
 
 struct Point { x: Int, y: Int }
@@ -1038,8 +1041,8 @@ enum Wrap(a) {
     Empty,
 }
 
-fn rect() -> Shape { Rect { tall: True, width: 7 } }
-fn wrap() -> Wrap(Nat) { Box { tagged: False, value: 1 } }
+fn rect() -> Shape { .Rect { tall: True, width: 7 } }
+fn wrap() -> Wrap(Nat) { .Box { tagged: False, value: 1 } }
 "#;
     let errors: Vec<_> = diagnostics(db, valid)
         .into_iter()
@@ -1054,11 +1057,11 @@ enum Shape {
     Rect { width: Nat, tall: Bool },
 }
 
-fn unknown() -> Shape { Rect { width: 1, tall: True, depth: 2 } }
-fn missing() -> Shape { Rect { width: 1 } }
-fn mistyped() -> Shape { Rect { width: True, tall: True } }
-fn spread(shape: Shape) -> Shape { Rect { ..shape, width: 1 } }
-fn positional() -> Shape { Dot { value: 1 } }
+fn unknown() -> Shape { .Rect { width: 1, tall: True, depth: 2 } }
+fn missing() -> Shape { .Rect { width: 1 } }
+fn mistyped() -> Shape { .Rect { width: True, tall: True } }
+fn spread(shape: Shape) -> Shape { .Rect { ..shape, width: 1 } }
+fn positional() -> Shape { .Dot { value: 1 } }
 "#;
     let errors: Vec<_> = diagnostics(db, invalid)
         .into_iter()
@@ -1066,10 +1069,10 @@ fn positional() -> Shape { Dot { value: 1 } }
         .map(|diagnostic| diagnostic.inner.message)
         .collect();
     for expected in [
-        "unknown field `depth` for variant `Rect`",
+        "unknown field `depth` for variant `Shape::Rect`",
         "missing field: tall",
-        "record spread is not allowed for variant `Rect`; write every field",
-        "`Dot` has positional fields; construct it with `Dot(...)`",
+        "record spread is not allowed for variant `Shape::Rect`; write every field",
+        "`Shape::Dot` has positional fields; construct it with `.Dot(...)`",
     ] {
         assert!(
             errors.iter().any(|error| error == expected),

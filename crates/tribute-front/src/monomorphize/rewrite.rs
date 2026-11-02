@@ -4,11 +4,13 @@
 //! by matching the callee's concrete type against collected instantiations.
 //! Also rewrites Named types with type arguments to their mangled monomorphic versions.
 
+use std::convert::Infallible;
+
 use rustc_hash::FxHashMap as HashMap;
-use rustc_hash::FxHashSet as HashSet;
 
 use trunk_ir::SymbolPath;
 
+use crate::ast::fold::{TypeFoldable, TypeFolder};
 use crate::ast::visit::{RefSite, Refs, walk_decl_mut, walk_decl_table_mut};
 use crate::ast::{
     CtorId, DeclEntry, DeclTable, FuncDefId, NodeId, ResolvedRef, Type, TypeDefId, TypeKind,
@@ -16,7 +18,6 @@ use crate::ast::{
 };
 
 use super::instance::InstanceKey;
-use super::mangle::mangle_type_path;
 
 /// Rewrite map: original FuncDefId → list of (type_args, mangled_name) pairs.
 pub type RewriteMap<'db> = HashMap<FuncDefId<'db>, Vec<(InstanceKey<'db>, SymbolPath)>>;
@@ -24,12 +25,28 @@ pub type RewriteMap<'db> = HashMap<FuncDefId<'db>, Vec<(InstanceKey<'db>, Symbol
 /// Type rewrite map: declaration identity → specialized argument/name pairs.
 pub type TypeRewriteMap<'db> = HashMap<TypeDefId<'db>, Vec<(Vec<Type<'db>>, SymbolPath)>>;
 
+/// The specialized path of `id` applied to `args`, matched by identity
+/// rather than by how `args` spell their nominal types.
+fn find_mangled<'a, 'db>(
+    db: &'db dyn salsa::Database,
+    map: &'a TypeRewriteMap<'db>,
+    id: TypeDefId<'db>,
+    args: &[Type<'db>],
+) -> Option<&'a SymbolPath> {
+    let entries = map.get(&id)?;
+    let args = super::collect::canonical_args(db, args);
+    entries
+        .iter()
+        .find(|(ta, _)| *ta == args)
+        .map(|(_, mangled)| mangled)
+}
+
 /// Rewrite all generic function call sites in a module to use specialized versions.
 pub fn rewrite_module<'db>(
     db: &'db dyn salsa::Database,
     module: &mut DeclTable<TypedRef<'db>>,
     rewrite_map: &RewriteMap<'db>,
-    instances: &HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
+    instances: &crate::SortedMap<NodeId, crate::typeck::FunctionInstance<'db>>,
 ) {
     rewrite_decls(db, &mut module.entries, rewrite_map, instances);
 }
@@ -39,7 +56,7 @@ pub fn rewrite_decls<'db>(
     db: &'db dyn salsa::Database,
     decls: &mut [DeclEntry<TypedRef<'db>>],
     rewrite_map: &RewriteMap<'db>,
-    instances: &HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
+    instances: &crate::SortedMap<NodeId, crate::typeck::FunctionInstance<'db>>,
 ) {
     for entry in decls {
         let mut rewrite = Refs(|site, node, value: &mut TypedRef<'db>| {
@@ -83,23 +100,6 @@ fn specialized_callee<'db>(
 // Type rewriting: Named { name, args } → Named { mangled, args: [] }
 // ============================================================================
 
-/// Build a type rewrite map from collected type instantiations.
-pub fn build_type_rewrite_map<'db>(
-    db: &'db dyn salsa::Database,
-    instantiations: &HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
-) -> TypeRewriteMap<'db> {
-    let mut map = TypeRewriteMap::default();
-    for (id, type_arg_sets) in instantiations {
-        let mut entries: Vec<(Vec<Type<'db>>, SymbolPath)> = type_arg_sets
-            .iter()
-            .map(|type_args| (type_args.clone(), mangle_type_path(db, *id, type_args)))
-            .collect();
-        entries.sort_by(|left, right| left.1.cmp(&right.1));
-        map.insert(*id, entries);
-    }
-    map
-}
-
 /// Redirect references to a struct's field functions (`T::f`, `T::f::set`,
 /// `T::f::modify`) to the same function of the struct's specialization for
 /// the reference's type arguments.
@@ -111,7 +111,7 @@ pub fn rewrite_field_function_refs<'db>(
     db: &'db dyn salsa::Database,
     module: &mut DeclTable<TypedRef<'db>>,
     type_rewrite_map: &TypeRewriteMap<'db>,
-    instances: &mut HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
+    instances: &mut crate::SortedMap<NodeId, crate::typeck::FunctionInstance<'db>>,
 ) {
     for entry in &mut module.entries {
         let mut rewrite = Refs(|site, node, value: &mut TypedRef<'db>| {
@@ -134,11 +134,9 @@ pub fn rewrite_field_function_refs<'db>(
                 return;
             };
             let mut function = original;
-            if let Some((_, mangled)) = type_rewrite_map.get(owner).and_then(|entries| {
-                entries
-                    .iter()
-                    .find(|(args, _)| *args == instance.type_arguments)
-            }) && !instance.type_arguments.is_empty()
+            if let Some(mangled) =
+                find_mangled(db, type_rewrite_map, *owner, &instance.type_arguments)
+                && !instance.type_arguments.is_empty()
             {
                 function = FuncDefId::new(db, kind.path(mangled, field));
                 *owner = owner.with_path(db, mangled.clone());
@@ -171,134 +169,42 @@ pub fn rewrite_type<'db>(
     ty: Type<'db>,
     map: &TypeRewriteMap<'db>,
 ) -> Type<'db> {
-    match ty.kind(db) {
-        TypeKind::Named { id, name, args } if !args.is_empty() => {
-            // The rewrite map is keyed on the original (un-rewritten) args as
-            // collected from the module, so look up using `args` directly —
-            // not the recursively rewritten ones.
-            if let Some(entries) = map.get(id)
-                && let Some((_, mangled)) = entries.iter().find(|(ta, _)| ta == args)
-            {
-                return Type::new(
-                    db,
-                    TypeKind::Named {
-                        id: id.with_path(db, mangled.clone()),
-                        name: mangled.to_symbol(),
-                        args: vec![],
-                    },
-                );
-            }
-            // Not in rewrite map — recurse into args (for nested generics like
-            // List(Option(Int)) where the outer ctor is non-generic but inner
-            // args still need rewriting).
-            let rewritten_args: Vec<Type<'db>> =
-                args.iter().map(|a| rewrite_type(db, *a, map)).collect();
-            Type::new(
-                db,
-                TypeKind::Named {
-                    id: *id,
-                    name: name.clone(),
-                    args: rewritten_args,
-                },
-            )
-        }
-        TypeKind::Func {
-            params,
-            result,
-            effect,
-        } => {
-            let new_params: Vec<_> = params.iter().map(|p| rewrite_type(db, *p, map)).collect();
-            let new_result = rewrite_type(db, *result, map);
-            let new_effect = rewrite_row(db, *effect, map);
-            if new_params == *params && new_result == *result && new_effect == *effect {
-                return ty;
-            }
-            Type::new(
-                db,
-                TypeKind::Func {
-                    params: new_params,
-                    result: new_result,
-                    effect: new_effect,
-                },
-            )
-        }
-        TypeKind::Tuple(elems) => {
-            let new_elems: Vec<_> = elems.iter().map(|e| rewrite_type(db, *e, map)).collect();
-            if new_elems == *elems {
-                return ty;
-            }
-            Type::new(db, TypeKind::Tuple(new_elems))
-        }
-        TypeKind::App { ctor, args } => {
-            let new_ctor = rewrite_type(db, *ctor, map);
-            let new_args: Vec<_> = args.iter().map(|a| rewrite_type(db, *a, map)).collect();
-            if new_ctor == *ctor && new_args == *args {
-                return ty;
-            }
-            Type::new(
-                db,
-                TypeKind::App {
-                    ctor: new_ctor,
-                    args: new_args,
-                },
-            )
-        }
-        TypeKind::Continuation {
-            arg,
-            result,
-            effect,
-        } => {
-            let new_arg = rewrite_type(db, *arg, map);
-            let new_result = rewrite_type(db, *result, map);
-            let new_effect = rewrite_row(db, *effect, map);
-            if new_arg == *arg && new_result == *result && new_effect == *effect {
-                return ty;
-            }
-            Type::new(
-                db,
-                TypeKind::Continuation {
-                    arg: new_arg,
-                    result: new_result,
-                    effect: new_effect,
-                },
-            )
-        }
-        TypeKind::Named { .. }
-        | TypeKind::Int
-        | TypeKind::Nat
-        | TypeKind::Float
-        | TypeKind::Bool
-        | TypeKind::Bytes
-        | TypeKind::Rune
-        | TypeKind::Nil
-        | TypeKind::Never
-        | TypeKind::BoundVar { .. }
-        | TypeKind::LocalBoundVar { .. }
-        | TypeKind::UniVar { .. }
-        | TypeKind::Error => ty,
-    }
+    ty.fold_with(&mut NominalRewrite { db, map })
 }
 
-pub(super) fn rewrite_row<'db>(
-    db: &'db dyn salsa::Database,
-    row: crate::ast::AbilityRow<'db>,
-    map: &TypeRewriteMap<'db>,
-) -> crate::ast::AbilityRow<'db> {
-    crate::ast::AbilityRow::new(
-        db,
-        row.instances(db)
-            .iter()
-            .map(|effect| crate::ast::AbilityInstance {
-                ability_id: effect.ability_id,
-                args: effect
-                    .args
-                    .iter()
-                    .map(|ty| rewrite_type(db, *ty, map))
-                    .collect(),
-            })
-            .collect::<Vec<_>>(),
-        row.rest(db),
-    )
+pub(super) struct NominalRewrite<'a, 'db> {
+    pub(super) db: &'db dyn salsa::Database,
+    pub(super) map: &'a TypeRewriteMap<'db>,
+}
+
+impl<'db> TypeFolder<'db> for NominalRewrite<'_, 'db> {
+    type Error = Infallible;
+
+    fn db(&self) -> &'db dyn salsa::Database {
+        self.db
+    }
+
+    fn fold_type(&mut self, ty: Type<'db>) -> Result<Type<'db>, Infallible> {
+        // The rewrite map is keyed on the original (un-rewritten) args as
+        // collected from the module, so look up using `args` directly —
+        // not the recursively rewritten ones. Types not in the map still
+        // have their arguments rewritten (for nested generics like
+        // List(Option(Int)) where the outer ctor is non-generic).
+        if let TypeKind::Named { id, args, .. } = ty.kind(self.db)
+            && !args.is_empty()
+            && let Some(mangled) = find_mangled(self.db, self.map, *id, args)
+        {
+            return Ok(Type::new(
+                self.db,
+                TypeKind::Named {
+                    id: id.with_path(self.db, mangled.clone()),
+                    name: mangled.to_symbol(),
+                    args: vec![],
+                },
+            ));
+        }
+        ty.try_super_fold_with(self)
+    }
 }
 
 fn rewrite_typed_ref_type<'db>(
@@ -347,10 +253,7 @@ fn find_mangled_for_ctor<'db>(
     // Check if the result type is a Named type with args
     match result_ty.kind(db) {
         TypeKind::Named { id, args, .. } if !args.is_empty() => {
-            let entries = map.get(id)?;
-            // Match against the original args stored in the map.
-            let (_, mangled) = entries.iter().find(|(ta, _)| ta == args)?;
-            Some(mangled.clone())
+            find_mangled(db, map, *id, args).cloned()
         }
         _ => None,
     }
@@ -364,10 +267,7 @@ fn find_mangled_for_typedef<'db>(
 ) -> Option<SymbolPath> {
     match ty.kind(db) {
         TypeKind::Named { id, args, .. } if !args.is_empty() => {
-            let entries = map.get(id)?;
-            // Match against the original args stored in the map.
-            let (_, mangled) = entries.iter().find(|(ta, _)| ta == args)?;
-            Some(mangled.clone())
+            find_mangled(db, map, *id, args).cloned()
         }
         _ => None,
     }
@@ -375,9 +275,28 @@ fn find_mangled_for_typedef<'db>(
 
 #[cfg(test)]
 mod tests {
+    use super::super::mangle::mangle_type_path;
     use super::*;
     use crate::ast::AbilityRow;
+    use rustc_hash::FxHashSet as HashSet;
     use trunk_ir::Symbol;
+
+    /// Build a type rewrite map from collected type instantiations.
+    fn build_type_rewrite_map<'db>(
+        db: &'db dyn salsa::Database,
+        instantiations: &HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
+    ) -> TypeRewriteMap<'db> {
+        let mut map = TypeRewriteMap::default();
+        for (id, type_arg_sets) in instantiations {
+            let mut entries: Vec<(Vec<Type<'db>>, SymbolPath)> = type_arg_sets
+                .iter()
+                .map(|type_args| (type_args.clone(), mangle_type_path(db, *id, type_args)))
+                .collect();
+            entries.sort_by(|left, right| left.1.cmp(&right.1));
+            map.insert(*id, entries);
+        }
+        map
+    }
 
     #[salsa::db]
     #[derive(Default)]
@@ -437,26 +356,20 @@ mod tests {
     fn test_type_rewrite_map_keeps_same_spelled_types_distinct() {
         let db = TestDb::default();
         let int = Type::new(&db, TypeKind::Int);
-        let source = |name: &str, node| {
-            TypeDefId::source(
-                &db,
-                trunk_ir::SymbolPath::new([name]),
-                crate::ast::NodeId::from_raw(node),
-            )
-        };
+        let source = |name: &str| TypeDefId::source(&db, trunk_ir::SymbolPath::new([name]));
         let cases = [
             (
                 "builtin and source List",
                 [
                     (TypeDefId::builtin_list(&db), "5$List$Int"),
-                    (source("List", 1), "List$Int"),
+                    (source("List"), "List$Int"),
                 ],
             ),
             (
                 "same-spelled source types",
                 [
-                    (source("A::Thing", 1), "A::Thing$Int"),
-                    (source("B::Thing", 2), "B::Thing$Int"),
+                    (source("A::Thing"), "A::Thing$Int"),
+                    (source("B::Thing"), "B::Thing$Int"),
                 ],
             ),
         ];

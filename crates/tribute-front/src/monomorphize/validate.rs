@@ -1,22 +1,46 @@
 //! Validate checker-selected instances on executable reference paths before erasure.
-use super::{MonomorphizeMetadata, collect::is_concrete_type};
+use super::{Dependency, Expressions, collect::is_concrete_type};
+use crate::ast::fold::TypeFoldable;
 use crate::ast::{
-    Decl, DeclTable, ExprKind, FuncDecl, FuncDefId, NodeId, ResolvedRef, Type, TypeScheme, TypedRef,
+    Decl, DeclTable, ExprKind, FuncDecl, FuncDefId, NodeId, ResolvedRef, SpanMaps, Type,
+    TypeScheme, TypedRef,
 };
+use crate::typeck::subst::BoundVarSubst;
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
+use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::SymbolPath;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum InstanceErrorKind {
     MissingInstance,
     WrongDeclaration,
-    TypeArgumentArity { expected: usize, found: usize },
-    RowArgumentArity { expected: usize, found: usize },
+    TypeArgumentArity {
+        expected: usize,
+        found: usize,
+    },
+    RowArgumentArity {
+        expected: usize,
+        found: usize,
+    },
     IncompleteTypeArgument,
     IncompleteAbilityArgument,
     InconsistentCallable,
+    /// A backstop for runaway expansion that polymorphic recursion
+    /// rejection does not catch.
     ExpansionLimit,
+    /// The specialization output breaks its contract: a compiler
+    /// inconsistency, not a source error.
+    SpecializationInvariant(super::SpecializationInvariant),
+    /// A reference to a function of the caller's own recursive group at
+    /// type arguments that strictly contain the caller's type parameters,
+    /// spelled with the caller's parameter names. `callee` is `None` when
+    /// the caller references itself.
+    PolymorphicRecursion {
+        caller: String,
+        callee: Option<String>,
+        instantiation: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -25,34 +49,85 @@ pub struct InstanceError {
     pub kind: InstanceErrorKind,
 }
 
+impl InstanceError {
+    /// The source diagnostic of this error, at the reference whose instance
+    /// is invalid.
+    pub fn diagnostic(&self, spans: &SpanMaps<'_>) -> Diagnostic {
+        let message = match &self.kind {
+            InstanceErrorKind::ExpansionLimit => "specialization did not terminate: generic \
+                 definitions keep requiring instances at new type arguments"
+                .to_owned(),
+            InstanceErrorKind::PolymorphicRecursion {
+                caller,
+                callee: None,
+                instantiation,
+            } => format!(
+                "`{caller}` calls itself at `{instantiation}`; polymorphic recursion is not \
+                 supported"
+            ),
+            InstanceErrorKind::PolymorphicRecursion {
+                caller,
+                callee: Some(callee),
+                instantiation,
+            } => format!(
+                "`{caller}` calls `{callee}` of its own recursive group at `{instantiation}`; \
+                 polymorphic recursion is not supported"
+            ),
+            InstanceErrorKind::SpecializationInvariant(violation) => format!(
+                "internal compiler error: the specialization output breaks its contract at {}: \
+                 {violation:?}",
+                self.node
+            ),
+            kind => format!("invalid specialization instance at {}: {kind:?}", self.node),
+        };
+        Diagnostic::new(
+            message,
+            spans.get_or_default(self.node),
+            DiagnosticSeverity::Error,
+            CompilationPhase::TypeChecking,
+        )
+    }
+}
+
 fn substitute<'db>(
     db: &'db dyn salsa::Database,
     ty: Type<'db>,
     arguments: &[Type<'db>],
 ) -> Option<Type<'db>> {
-    match crate::typeck::subst::substitute_bound_vars(db, ty, arguments) {
-        crate::typeck::subst::SubstResult::Ok(ty) => Some(ty),
-        _ => None,
-    }
+    ty.try_fold_with(&mut BoundVarSubst::new(db, arguments))
+        .ok()
 }
 
+/// Validate the instances reached from every monomorphic function `module`
+/// declares. A reference into `dependency` is followed only to an instance
+/// of its generics; the dependency's specialization validates its own
+/// monomorphic functions.
 pub(super) fn validate<'db>(
     db: &'db dyn salsa::Database,
     module: &DeclTable<TypedRef<'db>>,
+    dependency: Option<&Dependency<'db>>,
     schemes: &HashMap<SymbolPath, TypeScheme<'db>>,
-    metadata: &MonomorphizeMetadata<'db>,
+    expressions: Expressions<'_, 'db>,
 ) -> Vec<InstanceError> {
-    let mut functions: HashMap<FuncDefId<'db>, &FuncDecl<TypedRef<'db>>> = HashMap::default();
+    // Each function, and whether `module` declares it.
+    let mut functions: HashMap<FuncDefId<'db>, (&FuncDecl<TypedRef<'db>>, bool)> =
+        HashMap::default();
     let mut fields = HashSet::default();
-    for entry in &module.entries {
+    let tables = dependency
+        .into_iter()
+        .flat_map(|dependency| dependency.modules.iter().map(|&table| (table, false)))
+        .chain([(module, true)]);
+    for (entry, own) in
+        tables.flat_map(|(table, own)| table.entries.iter().map(move |entry| (entry, own)))
+    {
         match &entry.decl {
             Decl::Function(func) => {
                 let name = entry.module.child(func.name.clone());
-                functions.insert(FuncDefId::new(db, name), func);
+                functions.insert(FuncDefId::new(db, name), (func, own));
             }
             Decl::Struct(decl) => {
                 let name = entry.module.child(decl.name.clone());
-                let owner = crate::ast::TypeDefId::source(db, name, decl.id);
+                let owner = crate::ast::TypeDefId::declared(db, name, decl.disambiguator);
                 for field in &decl.fields {
                     if let Some(name) = field.name.clone() {
                         fields.insert((owner, name));
@@ -62,14 +137,14 @@ pub(super) fn validate<'db>(
             _ => {}
         }
     }
+    // Every monomorphic function is lowered whether or not it is reached, so
+    // each one is a root.
     let mut queue: Vec<_> = functions
         .iter()
-        .filter(|(id, func)| {
-            id.path(db) == ["main"]
-                || (func.visibility == crate::ast::Visibility::Public
-                    && schemes
-                        .get(id.path(db))
-                        .is_some_and(|scheme| scheme.type_params(db).is_empty()))
+        .filter(|(id, (_, own))| {
+            *own && schemes
+                .get(id.path(db))
+                .is_some_and(|scheme| scheme.type_params(db).is_empty())
         })
         .map(|(id, _)| (*id, Vec::new()))
         .collect();
@@ -79,7 +154,7 @@ pub(super) fn validate<'db>(
         if !seen.insert((id, arguments.clone())) {
             continue;
         }
-        let Some(func) = functions.get(&id) else {
+        let Some(&(func, _)) = functions.get(&id) else {
             continue;
         };
         if seen.len() > 4096 {
@@ -92,7 +167,7 @@ pub(super) fn validate<'db>(
         let mut nodes = Vec::new();
         func.body.for_each(|node| nodes.push(node));
         for expr in nodes {
-            if let Some(op) = metadata.perform_operations.get(&expr.id)
+            if let Some(op) = expressions.get(|table| &table.perform_operations, &expr.id)
                 && op.ability_args.iter().any(|ty| {
                     substitute(db, *ty, &arguments).is_none_or(|ty| !is_concrete_type(db, ty))
                 })
@@ -104,7 +179,7 @@ pub(super) fn validate<'db>(
             }
             if let ExprKind::Handle { handlers, .. } = expr.kind.as_ref() {
                 for arm in handlers {
-                    if let Some(op) = metadata.handler_operations.get(&arm.id)
+                    if let Some(op) = expressions.get(|table| &table.handler_operations, &arm.id)
                         && op.ability_args.iter().any(|ty| {
                             substitute(db, *ty, &arguments)
                                 .is_none_or(|ty| !is_concrete_type(db, ty))
@@ -128,7 +203,8 @@ pub(super) fn validate<'db>(
                 node: expr.id,
                 kind,
             };
-            let Some(instance) = metadata.function_instances.get(&expr.id) else {
+            let Some(instance) = expressions.get(|table| &table.function_instances, &expr.id)
+            else {
                 errors.push(fail(InstanceErrorKind::MissingInstance));
                 continue;
             };
@@ -190,8 +266,7 @@ pub(super) fn validate<'db>(
             }
             let mut invalid_row = false;
             for (variable, row) in selected.row_args.iter().zip(&instance.row_arguments) {
-                let Ok(row) = crate::typeck::subst::substitute_ability_row(db, *row, &arguments)
-                else {
+                let Ok(row) = row.try_fold_with(&mut BoundVarSubst::new(db, &arguments)) else {
                     invalid_row = true;
                     break;
                 };
@@ -203,6 +278,9 @@ pub(super) fn validate<'db>(
                 || solver.finalize_relations().is_err()
             {
                 errors.push(fail(InstanceErrorKind::InconsistentCallable));
+                continue;
+            }
+            if concrete.is_empty() && functions.get(target).is_some_and(|(_, own)| !own) {
                 continue;
             }
             queue.push((*target, concrete));

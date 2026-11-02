@@ -1,9 +1,12 @@
 //! Close nominal instances over their checked constructor schemas before cloning.
+use std::ops::ControlFlow;
+
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 
+use crate::ast::fold::TypeVisitable;
 use crate::ast::{CtorId, NodeId, Type, TypeDefId, TypeKind, TypeScheme};
-use crate::typeck::subst::{SubstResult, substitute_bound_vars};
+use crate::typeck::subst::BoundVarSubst;
 
 use super::nominal_index::{Constructor, Declaration, NominalIndex};
 use super::{InstanceError, InstanceErrorKind, collect, specialize};
@@ -57,24 +60,15 @@ fn instantiate<'db>(
     if !matches!(result.kind(db), TypeKind::Named { id, .. } if *id == owner) {
         return Err(fail(InstanceErrorKind::WrongDeclaration));
     }
-    let mut invalid = false;
-    let specialized = scheme
+    Ok(scheme
         .to_builder(db)
-        .map_types(db, |ty| match substitute_bound_vars(db, ty, arguments) {
-            SubstResult::Ok(ty) => ty,
-            _ => {
-                invalid = true;
-                ty
-            }
-        })
+        .try_fold_types(&mut BoundVarSubst::new(db, arguments))
+        .map_err(|_| fail(InstanceErrorKind::IncompleteTypeArgument))?
         .type_params(Vec::new())
-        .build(db);
-    if invalid {
-        return Err(fail(InstanceErrorKind::IncompleteTypeArgument));
-    }
-    Ok(specialized)
+        .build(db))
 }
 
+/// Close `seeds` over their dependencies.
 pub(super) fn collect<'db>(
     db: &'db dyn salsa::Database,
     index: &NominalIndex<'_, 'db>,
@@ -135,9 +129,9 @@ fn close_dependencies<'db>(
                 for constructor in &declaration.constructors {
                     let scheme =
                         instantiate(db, owner, declaration, constructor, schemes, &arguments)?;
-                    scheme.for_each_type(db, |ty| {
-                        collect::collect_from_type(db, ty, index, &mut discovered)
-                    });
+                    let ControlFlow::Continue(()) = scheme.visit_with(
+                        &mut collect::NominalCollector::new(db, index, &mut discovered),
+                    );
                     if declaration.is_enum() {
                         let node = constructor
                             .node
@@ -190,10 +184,15 @@ mod tests {
         let resolved = crate::resolve::resolve_with_env(
             db,
             ast,
-            crate::resolve::build_env(db, ast),
+            &crate::resolve::build_env(db, ast, crate::resolve::Dependencies::none()),
             parsed.span_map(db),
         );
-        crate::typeck::typecheck_module(db, &resolved, parsed.span_map(db))
+        crate::typeck::typecheck_module(
+            db,
+            &resolved,
+            parsed.span_map(db),
+            crate::resolve::NameDisplay::new(&crate::resolve::PackageName::executable_root(), []),
+        )
     }
 
     #[salsa_test]
@@ -218,7 +217,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
 "#,
             ),
         );
-        let index = NominalIndex::new(db, input.module(db));
+        let index = NominalIndex::new(db, input.module(db), &[]);
         assert_eq!(index.declarations.len(), 6);
         for prefix in ["A", "B"] {
             for (suffix, generic) in [
@@ -226,8 +225,9 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 ("Nested::Choice", true),
                 ("Nested::Plain", false),
             ] {
-                let path =
-                    trunk_ir::SymbolPath::new(std::iter::once(prefix).chain(suffix.split("::")));
+                let path = trunk_ir::SymbolPath::new(
+                    ["pkg", prefix].into_iter().chain(suffix.split("::")),
+                );
                 let name = path.to_symbol();
                 let (id, entry) = index
                     .declarations
@@ -237,19 +237,22 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 assert_eq!(index.is_generic(*id), generic);
                 match entry.source {
                     NominalDeclaration::Struct(s) => {
-                        assert_eq!(*id, TypeDefId::source(db, path.clone(), s.id));
+                        assert_eq!(*id, TypeDefId::source(db, path.clone()));
                         assert_eq!(entry.constructors.len(), 1);
                         assert_eq!(entry.constructors[0].id.qualified(db), name);
                         assert_eq!(entry.constructors[0].node, s.id);
                         assert_eq!(entry.constructors[0].fields, s.fields.len());
                     }
                     NominalDeclaration::Enum(e) => {
-                        assert_eq!(*id, TypeDefId::source(db, path, e.id));
+                        assert_eq!(*id, TypeDefId::source(db, path));
                         assert_eq!(entry.constructors.len(), 2);
                         for (constructor, variant) in entry.constructors.iter().zip(&e.variants) {
                             assert_eq!(
                                 constructor.id.qualified(db),
-                                Symbol::new(&format!("{prefix}::Nested::{}", variant.name))
+                                Symbol::new(&format!(
+                                    "pkg::{prefix}::Nested::{}::{}",
+                                    e.name, variant.name
+                                ))
                             );
                             assert_eq!(constructor.node, variant.id);
                             assert_eq!(constructor.fields, variant.fields.len());
@@ -259,7 +262,8 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
             }
         }
         let roots: Vec<_> = input
-            .function_types(db)
+            .declarations(db)
+            .function_types
             .iter()
             .map(|(_, s)| s.body(db))
             .collect();
@@ -298,19 +302,24 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 "pub mod nested { pub struct Holder(a) { value: a } }\nextern \"C\" fn hold(value: nested::Holder(Int)) -> Nil",
             ),
         );
-        let index = NominalIndex::new(db, input.module(db));
+        let index = NominalIndex::new(db, input.module(db), &[]);
         let schemas: HashMap<_, _> = input
-            .constructor_types(db)
+            .declarations(db)
+            .constructor_types
             .schemes
             .iter()
             .copied()
             .collect();
-        let source_ctor = CtorId::new(db, trunk_ir::SymbolPath::new(["nested", "Holder"]));
+        let source_ctor = CtorId::new(db, trunk_ir::SymbolPath::new(["pkg", "nested", "Holder"]));
         let source_scheme = schemas[&source_ctor];
         let seeds = collect::collect_type_instantiations_with_index(
             db,
             input.module(db),
-            input.function_types(db).iter().map(|(_, s)| s.body(db)),
+            input
+                .declarations(db)
+                .function_types
+                .iter()
+                .map(|(_, s)| s.body(db)),
             &index,
         );
         let collected = collect(db, &index, &schemas, seeds).unwrap();
@@ -330,7 +339,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
             matches!(result.kind(db), TypeKind::Named { id, args, .. } if id == owner && args == &[int])
         );
         let name = super::super::mangle::mangle_type_path(db, *owner, arguments).to_symbol();
-        assert_eq!(name, Symbol::new("nested::Holder$Int"));
+        assert_eq!(name, Symbol::new("pkg::nested::Holder$Int"));
         let declarations = specialize::generate_struct_specializations_with_index(
             db,
             &index,
@@ -363,8 +372,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
             .unwrap();
         let hidden_id = TypeDefId::source(
             db,
-            trunk_ir::SymbolPath::new([hidden_decl.name.clone()]),
-            hidden_decl.id,
+            trunk_ir::SymbolPath::new([Symbol::new("pkg"), hidden_decl.name.clone()]),
         );
         let hidden = Type::new(
             db,
@@ -377,14 +385,15 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
         let row = AbilityRow::single(
             db,
             AbilityInstance {
-                ability_id: AbilityId::source(db, trunk_ir::SymbolPath::new(["Marker"])),
+                ability_id: AbilityId::source(db, trunk_ir::SymbolPath::new(["pkg", "Marker"])),
                 args: vec![hidden],
             },
         );
-        let ctor = CtorId::new(db, trunk_ir::SymbolPath::new(["Value"]));
+        let ctor = CtorId::new(db, trunk_ir::SymbolPath::new(["pkg", "Root", "Value"]));
         for removal in [false, true] {
             let mut schemas: HashMap<_, _> = input
-                .constructor_types(db)
+                .declarations(db)
+                .constructor_types
                 .schemes
                 .iter()
                 .copied()
@@ -410,12 +419,16 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
             let seeds = collect::collect_type_instantiations(
                 db,
                 input.module(db),
-                input.function_types(db).iter().map(|(_, s)| s.body(db)),
+                input
+                    .declarations(db)
+                    .function_types
+                    .iter()
+                    .map(|(_, s)| s.body(db)),
             );
             assert!(!seeds.contains_key(&hidden_id));
             let result = collect(
                 db,
-                &NominalIndex::new(db, input.module(db)),
+                &NominalIndex::new(db, input.module(db), &[]),
                 &schemas,
                 seeds,
             )
@@ -481,18 +494,23 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 db,
                 crate::SourceCst::from_source_str(db, "nominal_limits.trb", source),
             );
-            let roots = input.function_types(db).iter().map(|(_, s)| s.body(db));
+            let roots = input
+                .declarations(db)
+                .function_types
+                .iter()
+                .map(|(_, s)| s.body(db));
             let seeds = collect::collect_type_instantiations(db, input.module(db), roots);
             assert!(!seeds.is_empty());
             let schemas = input
-                .constructor_types(db)
+                .declarations(db)
+                .constructor_types
                 .schemes
                 .iter()
                 .copied()
                 .collect();
             let result = close_dependencies(
                 db,
-                &NominalIndex::new(db, input.module(db)),
+                &NominalIndex::new(db, input.module(db), &[]),
                 &schemas,
                 seeds,
                 rounds,
@@ -529,17 +547,22 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
         let seeds = collect::collect_type_instantiations(
             db,
             input.module(db),
-            input.function_types(db).iter().map(|(_, s)| s.body(db)),
+            input
+                .declarations(db)
+                .function_types
+                .iter()
+                .map(|(_, s)| s.body(db)),
         );
         let schemes = input
-            .constructor_types(db)
+            .declarations(db)
+            .constructor_types
             .schemes
             .iter()
             .copied()
             .collect();
         let result = collect(
             db,
-            &NominalIndex::new(db, input.module(db)),
+            &NominalIndex::new(db, input.module(db), &[]),
             &schemes,
             seeds,
         );
@@ -551,8 +574,11 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
     #[salsa_test]
     fn nominal_dependencies_reject_missing_wrong_owner_and_arity_schemas(db: &salsa::DatabaseImpl) {
         for (declaration, constructor) in [
-            ("enum Cell(a) { Value(a), Empty }", "Value"),
-            ("struct Cell(a) { value: a }", "Cell"),
+            (
+                "enum Cell(a) { Value(a), Empty }",
+                &["pkg", "Cell", "Value"][..],
+            ),
+            ("struct Cell(a) { value: a }", &["pkg", "Cell"][..]),
         ] {
             let source = crate::SourceCst::from_source_str(
                 db,
@@ -561,12 +587,13 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
             );
             let input = checked(db, source);
             let original: HashMap<_, _> = input
-                .constructor_types(db)
+                .declarations(db)
+                .constructor_types
                 .schemes
                 .iter()
                 .copied()
                 .collect();
-            let ctor = CtorId::new(db, trunk_ir::SymbolPath::new([constructor]));
+            let ctor = CtorId::new(db, trunk_ir::SymbolPath::new(constructor.iter().copied()));
             for kind in [
                 InstanceErrorKind::MissingInstance,
                 InstanceErrorKind::WrongDeclaration,
@@ -621,11 +648,15 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 let seeds = collect::collect_type_instantiations(
                     db,
                     input.module(db),
-                    input.function_types(db).iter().map(|(_, s)| s.body(db)),
+                    input
+                        .declarations(db)
+                        .function_types
+                        .iter()
+                        .map(|(_, s)| s.body(db)),
                 );
                 let result = collect(
                     db,
-                    &NominalIndex::new(db, input.module(db)),
+                    &NominalIndex::new(db, input.module(db), &[]),
                     &schemas,
                     seeds,
                 );
@@ -635,7 +666,8 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 assert_eq!(errors[0].kind, kind);
                 assert_eq!(
                     input
-                        .constructor_types(db)
+                        .declarations(db)
+                        .constructor_types
                         .schemes
                         .iter()
                         .copied()

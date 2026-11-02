@@ -1,0 +1,5 @@
+---
+source: tests/integration/file_modules.rs
+expression: "located_diagnostics(&db, root)"
+---
+- "/pkg/src/main.trb:9..17: the file `/pkg/src/util.trb` of module `util` is already part of this package"

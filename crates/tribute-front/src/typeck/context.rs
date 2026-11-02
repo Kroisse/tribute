@@ -8,7 +8,10 @@
 
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
+use std::sync::Arc;
 use trunk_ir::SymbolPath;
+
+use crate::resolve::PackageName;
 
 use trunk_ir::Symbol;
 
@@ -40,7 +43,7 @@ pub struct AbilityOpInfo<'db> {
 }
 
 /// Information about an ability declaration.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, salsa::SalsaValue)]
 pub struct AbilityInfo<'db> {
     /// Ability identifier (module path + name).
     pub id: AbilityId<'db>,
@@ -79,8 +82,6 @@ pub fn parameter_type_matches<'db>(
             TypeKind::Func { params: actual, .. },
         ) => declared.len() == actual.len(),
         (TypeKind::Tuple(declared), TypeKind::Tuple(actual)) => declared.len() == actual.len(),
-        (TypeKind::App { ctor, .. }, _) => parameter_type_matches(db, *ctor, actual),
-        (_, TypeKind::App { ctor, .. }) => parameter_type_matches(db, declared, *ctor),
         (TypeKind::Named { id: left, .. }, TypeKind::Named { id: right, .. }) => left == right,
         (left, right) => {
             left.primitive_name().is_some() && left.primitive_name() == right.primitive_name()
@@ -110,7 +111,12 @@ pub struct FieldFunction<'db> {
 /// function body type checking.
 pub struct ModuleTypeEnv<'db> {
     db: &'db dyn salsa::Database,
+    data: Arc<TypeEnvData<'db>>,
+}
 
+/// What a module type environment holds, apart from the database it reads.
+#[derive(Clone, PartialEq, Eq, salsa::SalsaValue)]
+pub(crate) struct TypeEnvData<'db> {
     /// Function signatures (polymorphic).
     function_types: HashMap<FuncDefId<'db>, TypeScheme<'db>>,
 
@@ -140,7 +146,78 @@ pub struct ModuleTypeEnv<'db> {
     /// Used for handler arm type checking.
     ability_defs: HashMap<AbilityId<'db>, AbilityInfo<'db>>,
 
+    /// Well-known identities this package declares; only package `std` has
+    /// them.
     well_known_types: super::WellKnownTypes<'db>,
+
+    /// What the package `std` this module depends on declares. Lookups read
+    /// it after this module's own declarations, which never copy it.
+    dependency: Option<Box<DependencyTypes<'db>>>,
+}
+
+/// The declarations a dependency package exports, indexed for lookup.
+#[derive(Clone, PartialEq, Eq, salsa::SalsaValue)]
+struct DependencyTypes<'db> {
+    function_types: HashMap<FuncDefId<'db>, TypeScheme<'db>>,
+    extern_functions: HashSet<FuncDefId<'db>>,
+    constructor_types: HashMap<CtorId<'db>, TypeScheme<'db>>,
+    type_defs: HashMap<SymbolPath, TypeScheme<'db>>,
+    struct_fields: HashMap<TypeDefId<'db>, StructFieldInfo<'db>>,
+    enum_variants: HashMap<SymbolPath, Vec<Symbol>>,
+    constructor_field_names: HashMap<CtorId<'db>, Vec<Symbol>>,
+    ability_defs: HashMap<AbilityId<'db>, AbilityInfo<'db>>,
+    well_known_types: super::WellKnownTypes<'db>,
+}
+
+impl<'db> DependencyTypes<'db> {
+    fn new() -> Self {
+        Self {
+            function_types: HashMap::default(),
+            extern_functions: HashSet::default(),
+            constructor_types: HashMap::default(),
+            type_defs: HashMap::default(),
+            struct_fields: HashMap::default(),
+            enum_variants: HashMap::default(),
+            constructor_field_names: HashMap::default(),
+            ability_defs: HashMap::default(),
+            well_known_types: super::WellKnownTypes::default(),
+        }
+    }
+
+    /// Add the declarations one more dependency package exports. Their
+    /// identities are package-qualified, so the packages' entries never
+    /// collide.
+    fn add(&mut self, db: &'db dyn salsa::Database, exports: &super::PackageExports<'db>) {
+        self.function_types
+            .extend(exports.function_types(db).iter().copied());
+        self.extern_functions
+            .extend(exports.extern_functions(db).iter().copied());
+        self.constructor_types
+            .extend(exports.constructor_types(db).iter().copied());
+        self.type_defs.extend(exports.type_defs(db).iter().cloned());
+        self.struct_fields
+            .extend(exports.struct_fields(db).iter().cloned());
+        self.enum_variants
+            .extend(exports.enum_variants(db).iter().cloned());
+        self.constructor_field_names
+            .extend(exports.constructor_field_names(db).iter().cloned());
+        self.ability_defs
+            .extend(exports.ability_definitions(db).iter().map(
+                |(ability, type_params, operations)| {
+                    let info = AbilityInfo {
+                        id: *ability,
+                        type_params: type_params.clone(),
+                        operations: operations
+                            .iter()
+                            .map(|op| (op.name.clone(), op.clone()))
+                            .collect(),
+                    };
+                    (*ability, info)
+                },
+            ));
+        // Only package `std` publishes well-known identities.
+        self.well_known_types = self.well_known_types.or(*exports.well_known_types(db));
+    }
 }
 
 impl<'db> ModuleTypeEnv<'db> {
@@ -190,7 +267,10 @@ impl<'db> ModuleTypeEnv<'db> {
         );
         let mut type_defs = HashMap::default();
         type_defs.insert(SymbolPath::new([list_name]), list_scheme);
-        type_defs.insert(SymbolPath::new(["std", "collections", "List"]), list_scheme);
+        type_defs.insert(
+            PackageName::std().identity_path_of(&["collections", "List"]),
+            list_scheme,
+        );
         type_defs.insert(slots_id.path(db).clone(), slots_scheme);
         let dispatch_id = TypeDefId::builtin_dispatch(db);
         let dispatch_ty = Type::new(
@@ -208,16 +288,29 @@ impl<'db> ModuleTypeEnv<'db> {
 
         Self {
             db,
-            function_types: HashMap::default(),
-            extern_functions: HashSet::default(),
-            constructor_types: HashMap::default(),
-            type_defs,
-            struct_fields: HashMap::default(),
-            enum_variants: HashMap::default(),
-            constructor_field_names: HashMap::default(),
-            ability_defs,
-            well_known_types: super::WellKnownTypes::empty(),
+            data: Arc::new(TypeEnvData {
+                function_types: HashMap::default(),
+                extern_functions: HashSet::default(),
+                constructor_types: HashMap::default(),
+                type_defs,
+                struct_fields: HashMap::default(),
+                enum_variants: HashMap::default(),
+                constructor_field_names: HashMap::default(),
+                ability_defs,
+                well_known_types: super::WellKnownTypes::empty(),
+                dependency: None,
+            }),
         }
+    }
+
+    /// An environment holding `data`.
+    pub(crate) fn from_data(db: &'db dyn salsa::Database, data: Arc<TypeEnvData<'db>>) -> Self {
+        Self { db, data }
+    }
+
+    /// What the environment holds.
+    pub(crate) fn data(&self) -> &Arc<TypeEnvData<'db>> {
+        &self.data
     }
 
     /// Get the database.
@@ -231,27 +324,36 @@ impl<'db> ModuleTypeEnv<'db> {
 
     /// Register a function's type scheme.
     pub fn register_function(&mut self, id: FuncDefId<'db>, scheme: TypeScheme<'db>) {
-        self.function_types.insert(id, scheme);
+        Arc::make_mut(&mut self.data)
+            .function_types
+            .insert(id, scheme);
     }
 
     /// Mark a registered function as declared `extern`.
     pub fn register_extern_function(&mut self, id: FuncDefId<'db>) {
-        self.extern_functions.insert(id);
+        Arc::make_mut(&mut self.data).extern_functions.insert(id);
     }
 
     /// Whether a function was declared `extern`.
     pub fn is_extern_function(&self, id: FuncDefId<'db>) -> bool {
-        self.extern_functions.contains(&id)
+        self.data.extern_functions.contains(&id)
+            || self
+                .data
+                .dependency
+                .as_ref()
+                .is_some_and(|dependency| dependency.extern_functions.contains(&id))
     }
 
     /// Register a constructor's type scheme.
     pub fn register_constructor(&mut self, id: CtorId<'db>, scheme: TypeScheme<'db>) {
-        self.constructor_types.insert(id, scheme);
+        Arc::make_mut(&mut self.data)
+            .constructor_types
+            .insert(id, scheme);
     }
 
     /// Register a type definition.
     pub fn register_type_def(&mut self, path: SymbolPath, scheme: TypeScheme<'db>) {
-        self.type_defs.insert(path, scheme);
+        Arc::make_mut(&mut self.data).type_defs.insert(path, scheme);
     }
 
     /// Register struct field information.
@@ -261,22 +363,28 @@ impl<'db> ModuleTypeEnv<'db> {
         type_params: Vec<TypeParam>,
         fields: Vec<(Symbol, Type<'db>)>,
     ) {
-        self.struct_fields.insert(struct_id, (type_params, fields));
+        Arc::make_mut(&mut self.data)
+            .struct_fields
+            .insert(struct_id, (type_params, fields));
     }
 
     /// Register enum variant information.
     pub fn register_enum_variants(&mut self, enum_path: SymbolPath, variants: Vec<Symbol>) {
-        self.enum_variants.insert(enum_path, variants);
+        Arc::make_mut(&mut self.data)
+            .enum_variants
+            .insert(enum_path, variants);
     }
 
     /// Register the field names of a constructor whose fields are all named.
     pub fn register_constructor_field_names(&mut self, id: CtorId<'db>, names: Vec<Symbol>) {
-        self.constructor_field_names.insert(id, names);
+        Arc::make_mut(&mut self.data)
+            .constructor_field_names
+            .insert(id, names);
     }
 
     /// Register an ability definition.
     pub fn register_ability(&mut self, id: AbilityId<'db>, info: AbilityInfo<'db>) {
-        self.ability_defs.insert(id, info);
+        Arc::make_mut(&mut self.data).ability_defs.insert(id, info);
     }
 
     // =========================================================================
@@ -285,17 +393,29 @@ impl<'db> ModuleTypeEnv<'db> {
 
     /// Look up a function's type scheme.
     pub fn lookup_function(&self, id: FuncDefId<'db>) -> Option<TypeScheme<'db>> {
-        self.function_types.get(&id).copied()
+        self.data
+            .function_types
+            .get(&id)
+            .or_else(|| self.data.dependency.as_ref()?.function_types.get(&id))
+            .copied()
     }
 
     /// Look up a constructor's type scheme.
     pub fn lookup_constructor(&self, id: CtorId<'db>) -> Option<TypeScheme<'db>> {
-        self.constructor_types.get(&id).copied()
+        self.data
+            .constructor_types
+            .get(&id)
+            .or_else(|| self.data.dependency.as_ref()?.constructor_types.get(&id))
+            .copied()
     }
 
     /// Look up a type definition.
     pub fn lookup_type_def(&self, path: &[Symbol]) -> Option<TypeScheme<'db>> {
-        self.type_defs.get(path).copied()
+        self.data
+            .type_defs
+            .get(path)
+            .or_else(|| self.data.dependency.as_ref()?.type_defs.get(path))
+            .copied()
     }
 
     /// Look up a type definition from a lexical module scope.
@@ -321,8 +441,7 @@ impl<'db> ModuleTypeEnv<'db> {
         &self,
         struct_id: TypeDefId<'db>,
     ) -> Option<&[(Symbol, Type<'db>)]> {
-        self.struct_fields
-            .get(&struct_id)
+        self.struct_field_info(struct_id)
             .map(|(_, fields)| fields.as_slice())
     }
 
@@ -333,7 +452,7 @@ impl<'db> ModuleTypeEnv<'db> {
         struct_id: TypeDefId<'db>,
         field_name: &Symbol,
     ) -> Option<(&[TypeParam], Type<'db>)> {
-        let (type_params, fields) = self.struct_fields.get(&struct_id)?;
+        let (type_params, fields) = self.struct_field_info(struct_id)?;
         for (name, ty) in fields {
             if *name == *field_name {
                 return Some((type_params.as_slice(), *ty));
@@ -436,23 +555,40 @@ impl<'db> ModuleTypeEnv<'db> {
 
     /// Return the number of registered constructors.
     pub fn constructor_count(&self) -> usize {
-        self.constructor_types.len()
+        self.data.constructor_types.len()
     }
 
     /// Look up enum variants by enum name.
     pub fn lookup_enum_variants(&self, enum_path: &[Symbol]) -> Option<&[Symbol]> {
-        self.enum_variants.get(enum_path).map(|v| v.as_slice())
+        self.data
+            .enum_variants
+            .get(enum_path)
+            .or_else(|| self.data.dependency.as_ref()?.enum_variants.get(enum_path))
+            .map(|v| v.as_slice())
     }
 
     /// Field names of a constructor in declaration order, or `None` if its
     /// fields are positional.
     pub fn lookup_constructor_field_names(&self, id: CtorId<'db>) -> Option<&[Symbol]> {
-        self.constructor_field_names.get(&id).map(Vec::as_slice)
+        self.data
+            .constructor_field_names
+            .get(&id)
+            .or_else(|| {
+                self.data
+                    .dependency
+                    .as_ref()?
+                    .constructor_field_names
+                    .get(&id)
+            })
+            .map(Vec::as_slice)
     }
 
     /// Look up an ability definition by ID.
     pub fn lookup_ability(&self, id: AbilityId<'db>) -> Option<&AbilityInfo<'db>> {
-        self.ability_defs.get(&id)
+        self.data
+            .ability_defs
+            .get(&id)
+            .or_else(|| self.data.dependency.as_ref()?.ability_defs.get(&id))
     }
 
     /// Look up an ability operation by ability ID and operation name.
@@ -461,8 +597,7 @@ impl<'db> ModuleTypeEnv<'db> {
         ability: AbilityId<'db>,
         op: &Symbol,
     ) -> Option<&AbilityOpInfo<'db>> {
-        self.ability_defs
-            .get(&ability)
+        self.lookup_ability(ability)
             .and_then(|info| info.operations.get(op))
     }
 
@@ -470,65 +605,53 @@ impl<'db> ModuleTypeEnv<'db> {
     pub fn debug_print_constructors(&self, db: &'db dyn salsa::Database) {
         eprintln!(
             "DEBUG: Registered constructors ({}):",
-            self.constructor_types.len()
+            self.data.constructor_types.len()
         );
-        for id in self.constructor_types.keys() {
+        for id in self.data.constructor_types.keys() {
             eprintln!("  - {:?} (ctor_name: {:?})", id, id.name(db));
         }
     }
 
     // =========================================================================
-    // Prelude injection
+    // Dependency
     // =========================================================================
 
-    /// Inject prelude's resolved type information into this environment.
-    ///
-    /// This is called before type checking user code to make prelude's
-    /// types available. The injected types contain only BoundVars (no UniVars).
-    pub fn inject_prelude(&mut self, exports: &super::PreludeExports<'db>) {
-        self.well_known_types = *exports.well_known_types(self.db);
-        for (id, scheme) in exports.function_types(self.db) {
-            self.function_types.insert(*id, *scheme);
-        }
-        self.extern_functions
-            .extend(exports.extern_functions(self.db).iter().copied());
-        for (id, scheme) in exports.constructor_types(self.db) {
-            self.constructor_types.insert(*id, *scheme);
-        }
-        for (name, scheme) in exports.type_defs(self.db) {
-            self.type_defs.insert(name.clone(), *scheme);
-        }
-        for (id, (type_params, fields)) in exports.struct_fields(self.db) {
-            self.register_struct_fields(*id, type_params.clone(), fields.clone());
-        }
-        for (name, variants) in exports.enum_variants(self.db) {
-            self.enum_variants.insert(name.clone(), variants.clone());
-        }
-        for (id, names) in exports.constructor_field_names(self.db) {
-            self.constructor_field_names.insert(*id, names.clone());
-        }
-        for (ability, type_params, operations) in exports.ability_definitions(self.db) {
-            self.ability_defs.insert(
-                *ability,
-                AbilityInfo {
-                    id: *ability,
-                    type_params: type_params.clone(),
-                    operations: operations
-                        .iter()
-                        .map(|op| (op.name.clone(), op.clone()))
-                        .collect(),
-                },
-            );
+    /// Read the declarations one dependency package exports after this
+    /// module's own. Called once per package the module depends on,
+    /// transitively. The module's output holds only its own declarations.
+    pub fn depend_on(&mut self, exports: &super::PackageExports<'db>) {
+        Arc::make_mut(&mut self.data)
+            .dependency
+            .get_or_insert_with(|| Box::new(DependencyTypes::new()))
+            .add(self.db, exports);
+    }
+
+    /// The struct field declarations of `struct_id`, from this module or its
+    /// dependency.
+    fn struct_field_info(&self, struct_id: TypeDefId<'db>) -> Option<&StructFieldInfo<'db>> {
+        self.data
+            .struct_fields
+            .get(&struct_id)
+            .or_else(|| self.data.dependency.as_ref()?.struct_fields.get(&struct_id))
+    }
+
+    /// The well-known identities in scope: this package's own, or those of
+    /// the package `std` it depends on.
+    pub fn well_known_types(&self) -> super::WellKnownTypes<'db> {
+        match &self.data.dependency {
+            Some(dependency) => dependency.well_known_types,
+            None => self.data.well_known_types,
         }
     }
 
-    pub fn well_known_types(&self) -> super::WellKnownTypes<'db> {
-        self.well_known_types
+    /// The well-known identities this package declares.
+    pub fn own_well_known_types(&self) -> super::WellKnownTypes<'db> {
+        self.data.well_known_types
     }
 
     /// Record the semantic identities selected from the prelude.
     pub(crate) fn set_prelude_well_known_types(&mut self, types: super::WellKnownTypes<'db>) {
-        self.well_known_types = types;
+        Arc::make_mut(&mut self.data).well_known_types = types;
     }
 
     // =========================================================================
@@ -540,6 +663,7 @@ impl<'db> ModuleTypeEnv<'db> {
     /// Results are sorted alphabetically by name for deterministic output.
     pub fn export_function_types(&self) -> Vec<(SymbolPath, TypeScheme<'db>)> {
         let mut result: Vec<_> = self
+            .data
             .function_types
             .iter()
             .map(|(id, scheme)| (id.path(self.db).clone(), *scheme))
@@ -548,20 +672,26 @@ impl<'db> ModuleTypeEnv<'db> {
         result
     }
 
-    /// Export function types with FuncDefId (for PreludeExports).
+    /// Export function types with FuncDefId (for PackageExports).
     ///
     /// Results are sorted by fully qualified function name for deterministic output.
     pub fn export_function_types_with_ids(&self) -> Vec<(FuncDefId<'db>, TypeScheme<'db>)> {
-        let mut result: Vec<_> = self.function_types.iter().map(|(k, v)| (*k, *v)).collect();
+        let mut result: Vec<_> = self
+            .data
+            .function_types
+            .iter()
+            .map(|(k, v)| (*k, *v))
+            .collect();
         result.sort_by_key(|(id, ..)| id.path(self.db));
         result
     }
 
-    /// Export constructor types for PreludeExports.
+    /// Export constructor types for PackageExports.
     ///
     /// Results are sorted by fully qualified constructor name for deterministic output.
     pub fn export_constructor_types(&self) -> Vec<(CtorId<'db>, TypeScheme<'db>)> {
         let mut result: Vec<_> = self
+            .data
             .constructor_types
             .iter()
             .map(|(k, v)| (*k, *v))
@@ -570,11 +700,12 @@ impl<'db> ModuleTypeEnv<'db> {
         result
     }
 
-    /// Export type definitions for PreludeExports.
+    /// Export type definitions for PackageExports.
     ///
     /// Results are sorted alphabetically by name for deterministic output.
     pub fn export_type_defs(&self) -> Vec<(SymbolPath, TypeScheme<'db>)> {
         let mut result: Vec<_> = self
+            .data
             .type_defs
             .iter()
             .map(|(k, v)| (k.clone(), *v))
@@ -583,11 +714,12 @@ impl<'db> ModuleTypeEnv<'db> {
         result
     }
 
-    /// Export struct field definitions for PreludeExports.
+    /// Export struct field definitions for PackageExports.
     ///
     /// Results are sorted alphabetically by struct name for deterministic output.
     pub fn export_struct_fields(&self) -> Vec<(TypeDefId<'db>, StructFieldInfo<'db>)> {
         let mut result: Vec<_> = self
+            .data
             .struct_fields
             .iter()
             .map(|(k, v)| (*k, v.clone()))
@@ -596,11 +728,12 @@ impl<'db> ModuleTypeEnv<'db> {
         result
     }
 
-    /// Export enum variant information for PreludeExports.
+    /// Export enum variant information for PackageExports.
     ///
     /// Results are sorted alphabetically by enum name for deterministic output.
     pub fn export_enum_variants(&self) -> Vec<(SymbolPath, Vec<Symbol>)> {
         let mut result: Vec<_> = self
+            .data
             .enum_variants
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
@@ -609,11 +742,12 @@ impl<'db> ModuleTypeEnv<'db> {
         result
     }
 
-    /// Export constructor field names for PreludeExports.
+    /// Export constructor field names for PackageExports.
     ///
     /// Results are sorted by constructor name for deterministic output.
     pub fn export_constructor_field_names(&self) -> Vec<(CtorId<'db>, Vec<Symbol>)> {
         let mut result: Vec<_> = self
+            .data
             .constructor_field_names
             .iter()
             .map(|(k, v)| (*k, v.clone()))
@@ -629,6 +763,7 @@ impl<'db> ModuleTypeEnv<'db> {
     /// display path.
     pub fn export_ability_defs(&self) -> Vec<(AbilityId<'db>, AbilityInfo<'db>)> {
         let mut result: Vec<_> = self
+            .data
             .ability_defs
             .iter()
             .map(|(k, v)| (*k, v.clone()))
@@ -642,6 +777,7 @@ impl<'db> ModuleTypeEnv<'db> {
         &self,
     ) -> Vec<(AbilityId<'db>, Vec<TypeParam>, Vec<AbilityOpInfo<'db>>)> {
         let mut result: Vec<_> = self
+            .data
             .ability_defs
             .iter()
             .map(|(id, info)| {
@@ -656,7 +792,7 @@ impl<'db> ModuleTypeEnv<'db> {
 
     /// Export the `extern` functions sorted by fully qualified name.
     pub fn export_extern_functions(&self) -> Vec<FuncDefId<'db>> {
-        let mut result: Vec<_> = self.extern_functions.iter().copied().collect();
+        let mut result: Vec<_> = self.data.extern_functions.iter().copied().collect();
         result.sort_by_key(|id| id.path(self.db));
         result
     }
@@ -687,7 +823,7 @@ impl<'db> ModuleTypeEnv<'db> {
 
     /// Create the String type (prelude-defined enum).
     pub fn string_type(&self) -> Type<'db> {
-        self.well_known_types
+        self.well_known_types()
             .string
             .map(|string| string.ty)
             .unwrap_or_else(|| Type::new(self.db, TypeKind::string(self.db)))
@@ -805,8 +941,8 @@ mod tests {
 
     use super::{AbilityInfo, ModuleTypeEnv};
     use crate::ast::{
-        AbilityId, AbilityOrigin, BuiltinAbility, CtorId, FuncDefId, NodeId, Type, TypeDefId,
-        TypeKind, TypeOrigin, TypeScheme,
+        AbilityId, AbilityOrigin, BuiltinAbility, CtorId, FuncDefId, Type, TypeDefId, TypeKind,
+        TypeOrigin, TypeScheme,
     };
 
     // =========================================================================
@@ -817,11 +953,7 @@ mod tests {
     fn string_type_fallback_ignores_user_string(db: &dyn salsa::Database) {
         let mut env = ModuleTypeEnv::new(db);
         let name = Symbol::new("String");
-        let user_id = TypeDefId::source(
-            db,
-            trunk_ir::SymbolPath::new([name.clone()]),
-            NodeId::from_raw(1),
-        );
+        let user_id = TypeDefId::source(db, trunk_ir::SymbolPath::new([name.clone()]));
         let user_ty = env.named_type_with_id(user_id, name.clone(), vec![]);
         env.register_type_def(
             trunk_ir::SymbolPath::new([name]),
@@ -1092,12 +1224,17 @@ mod tests {
 
     /// Test helper: create a Named type from a string.
     fn named<'db>(db: &'db dyn salsa::Database, name: &str) -> Type<'db> {
+        applied(db, name, vec![])
+    }
+
+    /// Test helper: the synthetic nominal type `name` applied to `args`.
+    fn applied<'db>(db: &'db dyn salsa::Database, name: &str, args: Vec<Type<'db>>) -> Type<'db> {
         Type::new(
             db,
             TypeKind::Named {
                 id: crate::ast::TypeDefId::synthetic(db, trunk_ir::SymbolPath::new([name])),
                 name: Symbol::new(name),
-                args: vec![],
+                args,
             },
         )
     }
@@ -1125,15 +1262,7 @@ mod tests {
         let bool = Type::new(&db, TypeKind::Bool);
         let foo = named(&db, "Foo");
         let bar = named(&db, "Bar");
-        let app = |ctor, arg| {
-            Type::new(
-                &db,
-                TypeKind::App {
-                    ctor,
-                    args: vec![arg],
-                },
-            )
-        };
+        let app = |name, arg| applied(&db, name, vec![arg]);
         let id = crate::ast::UniVarId::new(&db, crate::ast::UniVarSource::Anonymous(0), 0);
         let unknown = Type::new(&db, TypeKind::UniVar { id });
         let variable = Type::new(&db, TypeKind::BoundVar { index: 0 });
@@ -1143,15 +1272,15 @@ mod tests {
         assert!(!super::parameter_type_matches(&db, foo, bar));
         assert!(super::parameter_type_matches(
             &db,
-            app(foo, int),
-            app(foo, bool)
+            app("Foo", int),
+            app("Foo", bool)
         ));
-        assert!(super::parameter_type_matches(&db, app(foo, int), foo));
-        assert!(super::parameter_type_matches(&db, foo, app(foo, int)));
+        assert!(super::parameter_type_matches(&db, app("Foo", int), foo));
+        assert!(super::parameter_type_matches(&db, foo, app("Foo", int)));
         assert!(!super::parameter_type_matches(
             &db,
-            app(foo, int),
-            app(bar, int)
+            app("Foo", int),
+            app("Bar", int)
         ));
         assert!(super::parameter_type_matches(&db, int, int));
         assert!(!super::parameter_type_matches(&db, int, bool));

@@ -4,54 +4,89 @@
 
 use std::error::Error;
 use std::io;
+use std::path::{Path, PathBuf};
 
 use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
 use lsp_types::{
     CodeAction, CodeActionKind, CodeActionOptions, CodeActionOrCommand, CodeActionParams,
     CodeActionProviderCapability, CompletionItem, CompletionList, CompletionOptions,
     CompletionParams, Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity,
-    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-    DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams,
-    GotoDefinitionResponse, Hover, HoverContents, HoverParams, HoverProviderCapability,
-    InitializeParams, Location, MarkupContent, MarkupKind, PrepareRenameResponse,
-    PublishDiagnosticsParams, ReferenceParams, RenameOptions, RenameParams, ServerCapabilities,
-    SignatureHelp, SignatureHelpOptions, SignatureHelpParams, SymbolKind,
-    TextDocumentContentChangeEvent, TextDocumentPositionParams, TextDocumentSyncCapability,
-    TextDocumentSyncKind, TextDocumentSyncOptions, TextEdit, Uri, WorkspaceEdit,
+    DidChangeTextDocumentParams, DidChangeWatchedFilesParams,
+    DidChangeWatchedFilesRegistrationOptions, DidCloseTextDocumentParams,
+    DidOpenTextDocumentParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
+    FileSystemWatcher, GlobPattern, GotoDefinitionParams, GotoDefinitionResponse, Hover,
+    HoverContents, HoverParams, HoverProviderCapability, InitializeParams, Location, MarkupContent,
+    MarkupKind, PrepareRenameResponse, PublishDiagnosticsParams, ReferenceParams, Registration,
+    RegistrationParams, RenameOptions, RenameParams, ServerCapabilities, SignatureHelp,
+    SignatureHelpOptions, SignatureHelpParams, SymbolKind, TextDocumentContentChangeEvent,
+    TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind,
+    TextDocumentSyncOptions, TextEdit, Unregistration, UnregistrationParams, Uri, WorkspaceEdit,
     notification::{
-        DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, Notification as _,
-        PublishDiagnostics,
+        DidChangeTextDocument, DidChangeWatchedFiles, DidCloseTextDocument, DidOpenTextDocument,
+        Notification as _, PublishDiagnostics,
     },
     request::{
         CodeActionRequest, Completion, DocumentSymbolRequest, GotoDefinition, HoverRequest,
-        PrepareRenameRequest, References, Rename, SignatureHelpRequest,
+        PrepareRenameRequest, References, RegisterCapability, Rename, SignatureHelpRequest,
+        UnregisterCapability,
     },
 };
 use ropey::Rope;
 use salsa::{Database, Setter};
-use tree_sitter::{InputEdit, Point};
 
 use super::builtin_index::{builtin_at, builtin_symbols};
 use super::completion_index::{
     self, complete_keywords, completion_items, completions_in, filter_completions,
     find_callee_signature, function_signatures, module_at,
 };
-use super::definition_index::{definition_index, validate_identifier};
+use super::definition_index::{
+    AstDefinitionEntry, definition_index, package_identifiers, validate_identifier,
+};
 use super::type_index::{AstTypeIndex, print_ast_type, type_index as ast_type_index};
-use tribute::{TributeDatabaseImpl, database::parse_with_thread_local};
+use tribute::{TributeDatabaseImpl, root_environment};
+use tribute_front::SourceCst;
+use tribute_front::analysis::Package;
+use tribute_front::ast::source_hash;
 use tribute_front::keywords::unraw;
+use tribute_front::resolve::NameDisplay;
+use tribute_front::source_file::{apply_edit, new_parser, parse_with_rope};
+use tribute_front::source_tree::source_tree_of;
+
+/// The id of the server's registration for watched file changes.
+const WATCHED_FILES_REGISTRATION: &str = "tribute/build-inputs";
 
 /// Main LSP server state.
 struct LspServer {
     connection: Connection,
     db: TributeDatabaseImpl,
+    parser: tree_sitter::Parser,
+    /// Whether the client lets the server register file watchers.
+    watches_files: bool,
+    /// The files the server asked the client to watch.
+    watched: Vec<PathBuf>,
+    /// The id of the registration request for `watched` that the client
+    /// has not answered yet.
+    pending_registration: Option<RequestId>,
+    next_request_id: i32,
 }
 
 impl LspServer {
-    fn new(connection: Connection) -> Self {
+    fn new(connection: Connection, params: &InitializeParams) -> Self {
+        let watches_files = params
+            .capabilities
+            .workspace
+            .as_ref()
+            .and_then(|workspace| workspace.did_change_watched_files)
+            .and_then(|capability| capability.dynamic_registration)
+            .unwrap_or(false);
         Self {
             connection,
             db: TributeDatabaseImpl::default(),
+            parser: new_parser(),
+            watches_files,
+            watched: Vec::new(),
+            pending_registration: None,
+            next_request_id: 0,
         }
     }
 
@@ -73,8 +108,18 @@ impl LspServer {
                 }
                 self.handle_request(req)?;
             }
-            Message::Response(_) => {
-                // We don't send requests, so we shouldn't get responses
+            Message::Response(response) => {
+                let registration = self.pending_registration.as_ref() == Some(&response.id);
+                if registration {
+                    self.pending_registration = None;
+                }
+                if let Err(error) = response.response_result {
+                    tracing::warn!(id = ?response.id, message = %error.message, "Client request failed");
+                    // Nothing is watched, so the next update registers again.
+                    if registration {
+                        self.watched.clear();
+                    }
+                }
             }
             Message::Notification(notif) => {
                 self.handle_notification(notif)?;
@@ -138,10 +183,102 @@ impl LspServer {
             self.did_open(params)?;
         } else if let Some(params) = cast_notification::<DidChangeTextDocument>(notif.clone()) {
             self.did_change(params)?;
-        } else if let Some(params) = cast_notification::<DidCloseTextDocument>(notif) {
+        } else if let Some(params) = cast_notification::<DidCloseTextDocument>(notif.clone()) {
             self.did_close(params)?;
+        } else if let Some(params) = cast_notification::<DidChangeWatchedFiles>(notif) {
+            self.did_change_watched_files(params)?;
         }
         Ok(())
+    }
+
+    /// Read the changed files from disk again, and republish the open
+    /// documents' diagnostics.
+    fn did_change_watched_files(
+        &mut self,
+        params: DidChangeWatchedFilesParams,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        for change in &params.changes {
+            tracing::info!(uri = ?change.uri, "Watched file changed");
+            self.db.reload_file(&change.uri);
+        }
+        self.publish_open_documents()?;
+        self.update_watchers()
+    }
+
+    fn publish_open_documents(&self) -> Result<(), Box<dyn Error + Send + Sync>> {
+        for (key, _) in self.db.open_documents() {
+            if let Ok(uri) = key.parse() {
+                self.publish_diagnostics(&uri)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Have the client watch the files the open documents' analyses read
+    /// (`new-plans/lsp.md` § 입력과 무효화), registering again only when
+    /// they changed.
+    fn update_watchers(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
+        if !self.watches_files {
+            return Ok(());
+        }
+        // A file that was not watched may have changed on disk meanwhile,
+        // and reading it again may change the files to watch.
+        let files = loop {
+            let files = self.db.watched_files();
+            let added: Vec<PathBuf> = files
+                .iter()
+                .filter(|file| !self.watched.contains(file))
+                .cloned()
+                .collect();
+            if !self.db.refresh_files(&added) {
+                break files;
+            }
+            self.publish_open_documents()?;
+        };
+        if files == self.watched {
+            return Ok(());
+        }
+        if !self.watched.is_empty() {
+            let params = UnregistrationParams {
+                unregisterations: vec![Unregistration {
+                    id: WATCHED_FILES_REGISTRATION.to_owned(),
+                    method: DidChangeWatchedFiles::METHOD.to_owned(),
+                }],
+            };
+            self.send_request::<UnregisterCapability>(params)?;
+        }
+        if !files.is_empty() {
+            let watchers = files
+                .iter()
+                .map(|file| FileSystemWatcher {
+                    glob_pattern: GlobPattern::String(glob_literal(file)),
+                    kind: None,
+                })
+                .collect();
+            let options = DidChangeWatchedFilesRegistrationOptions { watchers };
+            let params = RegistrationParams {
+                registrations: vec![Registration {
+                    id: WATCHED_FILES_REGISTRATION.to_owned(),
+                    method: DidChangeWatchedFiles::METHOD.to_owned(),
+                    register_options: Some(serde_json::to_value(options)?),
+                }],
+            };
+            self.pending_registration = Some(self.send_request::<RegisterCapability>(params)?);
+        }
+        self.watched = files;
+        Ok(())
+    }
+
+    /// Send a request to the client, returning its id.
+    fn send_request<R: lsp_types::request::Request>(
+        &mut self,
+        params: R::Params,
+    ) -> Result<RequestId, Box<dyn Error + Send + Sync>> {
+        self.next_request_id += 1;
+        let id = RequestId::from(format!("tribute-{}", self.next_request_id));
+        let request = Request::new(id.clone(), R::METHOD.to_owned(), params);
+        self.connection.sender.send(Message::Request(request))?;
+        Ok(id)
     }
 
     fn did_open(
@@ -157,7 +294,8 @@ impl LspServer {
         self.db.open_document(&uri, rope);
 
         self.publish_diagnostics(&uri)?;
-        Ok(())
+        self.publish_dependents(&uri)?;
+        self.update_watchers()
     }
 
     fn did_change(
@@ -170,7 +308,8 @@ impl LspServer {
         }
 
         self.publish_diagnostics(&uri)?;
-        Ok(())
+        self.publish_dependents(&uri)?;
+        self.update_watchers()
     }
 
     fn did_close(
@@ -178,6 +317,9 @@ impl LspServer {
         params: DidCloseTextDocumentParams,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let uri = params.text_document.uri;
+        // The packages that read the buffer read the file on disk once it is
+        // closed, which may be missing, so find them first.
+        let dependents = self.dependent_documents(&uri);
         self.db.close_document(&uri);
 
         // Clear diagnostics
@@ -188,6 +330,62 @@ impl LspServer {
         };
         let notif = Notification::new(PublishDiagnostics::METHOD.to_string(), params);
         self.connection.sender.send(Message::Notification(notif))?;
+        for dependent in dependents {
+            self.publish_diagnostics(&dependent)?;
+        }
+        self.update_watchers()
+    }
+
+    /// The open documents other than `uri` whose packages read `uri`'s
+    /// file, as one of their file modules or as a file of a package they
+    /// depend on.
+    fn dependent_documents(&self, uri: &Uri) -> Vec<Uri> {
+        self.documents_reading(uri, |db, root, changed| {
+            reads_file(db, root, changed)
+                || root_environment(db, root)
+                    .packages(db)
+                    .iter()
+                    .any(|package| package_reads_file(db, *package, changed))
+        })
+        .into_iter()
+        .filter_map(|(key, _)| key.parse().ok())
+        .collect()
+    }
+
+    /// The roots of the open packages that read `uri`'s file as one of
+    /// their file modules.
+    fn containing_packages(&self, uri: &Uri) -> Vec<SourceCst> {
+        self.documents_reading(uri, reads_file)
+            .into_iter()
+            .map(|(_, root)| root)
+            .collect()
+    }
+
+    /// The open documents other than `uri` whose roots `reads` says read
+    /// `uri`'s file.
+    fn documents_reading(
+        &self,
+        uri: &Uri,
+        reads: impl Fn(&dyn salsa::Database, SourceCst, SourceCst) -> bool,
+    ) -> Vec<(String, SourceCst)> {
+        let Some(changed) = self.db.source_cst(uri) else {
+            return Vec::new();
+        };
+        let documents = self.db.open_documents();
+        self.db.attach(|db| {
+            documents
+                .into_iter()
+                .filter(|(key, root)| key != uri.as_str() && reads(db, *root, changed))
+                .collect()
+        })
+    }
+
+    /// Publish the diagnostics of the open documents whose packages read
+    /// `uri`'s file, which just changed.
+    fn publish_dependents(&self, uri: &Uri) -> Result<(), Box<dyn Error + Send + Sync>> {
+        for dependent in self.dependent_documents(uri) {
+            self.publish_diagnostics(&dependent)?;
+        }
         Ok(())
     }
 
@@ -208,7 +406,10 @@ impl LspServer {
         let (contents, span) = self.db.attach(|db| {
             if let Some(entry) = ast_type_index(db, source_cst)?.type_at(db, offset) {
                 return Some((
-                    format!("```tribute\n{}\n```", print_ast_type(db, entry.ty)),
+                    format!(
+                        "```tribute\n{}\n```",
+                        print_ast_type(db, &tribute::diagnostic_names(db, source_cst), entry.ty)
+                    ),
                     entry.span,
                 ));
             }
@@ -332,12 +533,16 @@ impl LspServer {
         let rope = self.db.source_cst(uri)?.text(&self.db).clone();
         let offset = offset_from_position(&rope, position.line, position.character)?;
         let source_cst = self.db.source_cst(uri)?;
+        let containing = self.containing_packages(uri);
 
         let result = self.db.attach(|db| {
             let index = definition_index(db, source_cst)?;
 
             // Check if rename is possible at this position
             let (def, span) = index.can_rename(db, offset)?;
+            if used_by_containing_packages(db, def, source_cst, &containing) {
+                return None;
+            }
 
             let range = span_to_range(&rope, span);
             let placeholder = def.name.to_string();
@@ -366,12 +571,16 @@ impl LspServer {
         let rope = self.db.source_cst(uri)?.text(&self.db).clone();
         let offset = offset_from_position(&rope, position.line, position.character)?;
         let source_cst = self.db.source_cst(uri)?;
+        let containing = self.containing_packages(uri);
 
         let text_edits = self.db.attach(|db| {
             let index = definition_index(db, source_cst)?;
 
             // Get definition and validate
             let (def, _) = index.can_rename(db, offset)?;
+            if used_by_containing_packages(db, def, source_cst, &containing) {
+                return None;
+            }
 
             // Validate new name
             if validate_identifier(new_name, def.kind.clone()).is_err() {
@@ -406,7 +615,7 @@ impl LspServer {
             // The binding keeps its source spelling (`r#type` stays raw).
             for shorthand in index.shorthand_fields_of_target(db, &target) {
                 let binding = rope
-                    .get_byte_slice(shorthand.span.start..shorthand.span.end)
+                    .get_byte_slice(shorthand.span.range())
                     .map_or_else(|| def.name.to_string(), |s| s.to_string());
                 edits.push(TextEdit {
                     range: span_to_range(&rope, shorthand.span),
@@ -451,9 +660,23 @@ impl LspServer {
         // Extract prefix from current position (for filtering)
         let prefix = extract_completion_prefix(&rope, offset);
 
+        let dot = source_cst.tree(&self.db).map_or(DotContext::Other, |tree| {
+            dot_context(&rope, tree, offset - prefix.len())
+        });
         let items = self.db.attach(|db| {
-            let all_items = completion_items(db, source_cst);
             let module = module_at(db, source_cst, offset);
+            // After the `.` of an implicit constructor, constructors fit;
+            // both a module's own and the prelude's are candidates.
+            let constructors = || {
+                filter_completions(completion_index::constructor_items(db, source_cst), &prefix)
+                    .filter(|item| item.module.as_ref().is_none_or(|own| *own == module))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            };
+            if dot == DotContext::ImplicitConstructor {
+                return Some(constructors());
+            }
+            let all_items = completion_items(db, source_cst);
 
             // Offer what the cursor's module names, filtered by prefix
             let in_scope: Vec<_> = completions_in(all_items, &module).cloned().collect();
@@ -461,6 +684,12 @@ impl LspServer {
 
             // Add keyword completions
             completions.extend(complete_keywords(&prefix));
+
+            // A line-leading `.` either continues the line before it or
+            // starts an implicit constructor.
+            if dot == DotContext::Either {
+                completions.extend(constructors());
+            }
 
             Some(completions)
         })?;
@@ -537,13 +766,17 @@ impl LspServer {
         let actions = self.db.attach(|db| {
             let result = tribute::compile_with_diagnostics(db, source_cst);
             let type_index = ast_type_index(db, source_cst);
+            let document = source_hash(source_cst.uri(db).as_str());
 
             let mut actions = Vec::new();
 
             // Find diagnostics that overlap with the requested range
             for diag in &result.diagnostics {
-                // Check if diagnostic overlaps with range
-                if diag.inner.span.end < start_offset || diag.inner.span.start > end_offset {
+                // Check if diagnostic overlaps with range in this document
+                if !in_document(diag.inner.span, document)
+                    || (diag.inner.span.end as usize) < start_offset
+                    || diag.inner.span.start as usize > end_offset
+                {
                     continue;
                 }
 
@@ -585,8 +818,10 @@ impl LspServer {
         {
             // Try to find the inferred type at the diagnostic location
             let type_index = type_index?;
-            if let Some(entry) = type_index.type_at(db, diag.inner.span.start) {
-                let type_str = print_ast_type(db, entry.ty);
+            if let Some(entry) = type_index.type_at(db, diag.inner.span.start as usize) {
+                // The annotation is inserted into source, where only the full
+                // identity path names the type from every module.
+                let type_str = print_ast_type(db, &NameDisplay::identity(), entry.ty);
 
                 // Find the position after the closing parenthesis of parameters
                 // We need to insert ": Type" before the function body
@@ -664,10 +899,10 @@ impl LspServer {
     fn find_return_type_insert_position(&self, rope: &Rope, span: trunk_ir::Span) -> Option<usize> {
         // Search from the start of the function for the closing paren
         let text: String = rope.slice(..).chars().collect();
-        if span.start >= text.len() {
+        if span.start as usize >= text.len() {
             return None;
         }
-        let func_text = &text[span.start..span.end.min(text.len())];
+        let func_text = &text[span.start as usize..(span.end as usize).min(text.len())];
 
         // Find the closing parenthesis of the parameter list
         let mut paren_depth = 0;
@@ -683,13 +918,13 @@ impl LspServer {
                     paren_depth -= 1;
                     if found_open && paren_depth == 0 {
                         // Found the closing paren, return position after it
-                        return Some(span.start + i + 1);
+                        return Some(span.start as usize + i + 1);
                     }
                 }
                 '{' if found_open && paren_depth == 0 => {
                     // Hit function body without finding return type position
                     // Insert before the opening brace
-                    return Some(span.start + i);
+                    return Some(span.start as usize + i);
                 }
                 _ => {}
             }
@@ -780,10 +1015,13 @@ impl LspServer {
             .db
             .attach(|db| tribute::compile_with_diagnostics(db, source_cst).diagnostics);
 
-        // Convert to LSP diagnostics
+        // Convert to LSP diagnostics. A span in a file module's file rather
+        // than this document is not shown in it.
+        let document = source_hash(source_cst.uri(&self.db).as_str());
         let lsp_uri = uri.clone();
         let diagnostics: Vec<Diagnostic> = diags
             .iter()
+            .filter(|d| in_document(d.inner.span, document))
             .map(|d| {
                 let range = span_to_range(rope, d.inner.span);
 
@@ -795,6 +1033,7 @@ impl LspServer {
                         d.inner
                             .labels
                             .iter()
+                            .filter(|label| in_document(label.span, document))
                             .map(|label| DiagnosticRelatedInformation {
                                 location: Location {
                                     uri: lsp_uri.clone(),
@@ -854,58 +1093,27 @@ impl LspServer {
 
         match change.range {
             Some(range) => {
-                let start = range.start;
-                let end = range.end;
-                let start_byte =
-                    offset_from_position(doc.text(&self.db), start.line, start.character).ok_or(
+                let text = doc.text(&self.db);
+                let start =
+                    offset_from_position(text, range.start.line, range.start.character).ok_or(
                         io::Error::new(io::ErrorKind::InvalidInput, "invalid start position"),
                     )?;
-                let old_end_byte =
-                    offset_from_position(doc.text(&self.db), end.line, end.character).ok_or(
-                        io::Error::new(io::ErrorKind::InvalidInput, "invalid end position"),
-                    )?;
-
-                let (start_row, start_col) = byte_line_col(doc.text(&self.db), start_byte);
-                let (old_end_row, old_end_col) = byte_line_col(doc.text(&self.db), old_end_byte);
-                let start_point = Point {
-                    row: start_row as usize,
-                    column: start_col as usize,
-                };
-                let old_end_point = Point {
-                    row: old_end_row as usize,
-                    column: old_end_col as usize,
-                };
-                let new_end_point = point_after_text(start_point, &change.text);
-                let new_end_byte = start_byte + change.text.len();
-
-                let mut rope = doc.text(&self.db).clone();
-                let start_char = rope.byte_to_char(start_byte);
-                let old_end_char = rope.byte_to_char(old_end_byte);
-                rope.remove(start_char..old_end_char);
-                rope.insert(start_char, &change.text);
-
-                let current_tree = doc.tree(&self.db).cloned();
-                let updated_tree = if let Some(mut tree) = current_tree {
-                    tree.edit(&InputEdit {
-                        start_byte,
-                        old_end_byte,
-                        new_end_byte,
-                        start_position: start_point,
-                        old_end_position: old_end_point,
-                        new_end_position: new_end_point,
-                    });
-                    parse_with_thread_local(&rope, Some(&tree))
-                } else {
-                    parse_with_thread_local(&rope, None)
-                };
-                doc.set_text(&mut self.db).to(rope.clone());
-                doc.set_tree(&mut self.db).to(updated_tree);
+                let end = offset_from_position(text, range.end.line, range.end.character).ok_or(
+                    io::Error::new(io::ErrorKind::InvalidInput, "invalid end position"),
+                )?;
+                apply_edit(
+                    &mut self.db,
+                    &mut self.parser,
+                    doc,
+                    start..end,
+                    &change.text,
+                );
             }
             None => {
                 let rope = Rope::from_str(&change.text);
                 doc.set_text(&mut self.db).to(rope.clone());
                 doc.set_tree(&mut self.db)
-                    .to(parse_with_thread_local(&rope, None));
+                    .to(parse_with_rope(&mut self.parser, &rope, None));
             }
         }
         Ok(())
@@ -956,8 +1164,8 @@ fn initialize_server(connection: Connection) -> Result<LspServer, Box<dyn Error 
     let capabilities = server_capabilities();
     let server_capabilities = serde_json::to_value(&capabilities)?;
     let init_params = connection.initialize(server_capabilities)?;
-    let _params: InitializeParams = serde_json::from_value(init_params)?;
-    Ok(LspServer::new(connection))
+    let params: InitializeParams = serde_json::from_value(init_params)?;
+    Ok(LspServer::new(connection, &params))
 }
 
 /// Start the LSP server.
@@ -990,23 +1198,64 @@ fn init_lsp_tracing(log_filter: &str, sender: crossbeam_channel::Sender<Message>
         .try_init();
 }
 
-fn point_after_text(start: Point, text: &str) -> Point {
-    let mut row = start.row;
-    let mut column = start.column;
-    let mut lines = text.split('\n');
-    if let Some(first) = lines.next() {
-        column += first.len();
+/// A glob pattern that matches `path` alone: each glob metacharacter in it
+/// is a one-character class.
+fn glob_literal(path: &Path) -> String {
+    let mut pattern = String::new();
+    for c in path.to_string_lossy().chars() {
+        match c {
+            '*' | '?' | '[' | ']' | '{' | '}' => {
+                pattern.push('[');
+                pattern.push(c);
+                pattern.push(']');
+            }
+            _ => pattern.push(c),
+        }
     }
-    for line in lines {
-        row += 1;
-        column = line.len();
-    }
-    Point { row, column }
+    pattern
+}
+
+/// Whether the source tree of the package whose root is `root` reads
+/// `file`.
+fn reads_file(db: &dyn salsa::Database, root: SourceCst, file: SourceCst) -> bool {
+    source_tree_of(db, root).is_some_and(|tree| tree.files().iter().any(|read| read.source == file))
+}
+
+/// Whether `package` or a package it depends on, transitively, reads
+/// `file`.
+fn package_reads_file(db: &dyn salsa::Database, package: Package, file: SourceCst) -> bool {
+    reads_file(db, *package.root(db), file)
+        || package
+            .dependencies(db)
+            .packages(db)
+            .iter()
+            .any(|dependency| package_reads_file(db, *dependency, file))
+}
+
+/// Whether another file of a package in `containing` that reads `source`
+/// spells the package-level name `def`, so that a rename editing only
+/// `source` would leave it unresolved.
+fn used_by_containing_packages(
+    db: &dyn salsa::Database,
+    def: &AstDefinitionEntry,
+    source: SourceCst,
+    containing: &[SourceCst],
+) -> bool {
+    def.local_id.is_none()
+        && containing
+            .iter()
+            .any(|root| package_identifiers(db, *root, source).contains(&def.name))
+}
+
+/// Whether `span` is in the document whose source hash is `document`. A span
+/// with no source belongs to the document being analyzed.
+fn in_document(span: trunk_ir::Span, document: u64) -> bool {
+    span.source == document || span.source == 0
 }
 
 fn span_to_range(rope: &Rope, span: trunk_ir::Span) -> lsp_types::Range {
-    let start = position_from_offset(rope, span.start);
-    let end = position_from_offset(rope, span.end);
+    let start = position_from_offset(rope, span.start as usize);
+    let end = position_from_offset(rope, span.end as usize);
     lsp_types::Range {
         start: lsp_types::Position {
             line: start.0,
@@ -1018,6 +1267,103 @@ fn span_to_range(rope: &Rope, span: trunk_ir::Span) -> lsp_types::Range {
         },
     }
 }
+
+/// What a `.` right before a name being completed starts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DotContext {
+    /// No `.`, or one that continues the expression right before it (a
+    /// method call) or another `.` (a spread).
+    Other,
+    /// An implicit constructor (`.Some`): no expression ends before the `.`.
+    ImplicitConstructor,
+    /// A line-leading `.`, which continues the line before it as a method
+    /// call (`.map`, `.Option::map`) or starts an implicit constructor.
+    Either,
+}
+
+/// What the `.` right before byte `start`, where the name being completed
+/// starts, begins, read from the token before it in `tree`.
+fn dot_context(rope: &Rope, tree: &tree_sitter::Tree, start: usize) -> DotContext {
+    let Some(dot) = start.checked_sub(1) else {
+        return DotContext::Other;
+    };
+    if rope
+        .get_byte_slice(dot..start)
+        .is_none_or(|text| text != ".")
+    {
+        return DotContext::Other;
+    }
+    let line = rope.byte_to_line(dot);
+    let line_start = rope.line_to_byte(line);
+    let root = tree.root_node();
+    let mut end = dot;
+    loop {
+        while end > line_start && matches!(rope.byte(end - 1), b' ' | b'\t') {
+            end -= 1;
+        }
+        if end == line_start {
+            return if line == 0 {
+                DotContext::ImplicitConstructor
+            } else {
+                DotContext::Either
+            };
+        }
+        let Some(token) = root.descendant_for_byte_range(end - 1, end) else {
+            return DotContext::Other;
+        };
+        // A comment between a receiver and its `.` changes nothing; one that
+        // began on an earlier line hides what comes before it.
+        if token.is_extra() {
+            if token.start_byte() < line_start {
+                return DotContext::Either;
+            }
+            end = token.start_byte();
+            continue;
+        }
+        // A token the `.` is part of, such as `..`, starts no constructor.
+        if token.end_byte() > end {
+            return DotContext::Other;
+        }
+        return if EXPRESSION_KEYWORDS.contains(&token.kind()) {
+            DotContext::ImplicitConstructor
+        } else if ends_expression(token) {
+            DotContext::Other
+        } else {
+            DotContext::ImplicitConstructor
+        };
+    }
+}
+
+/// Whether `token`, the last token before a `.`, ends an expression the `.`
+/// may continue as a method call's receiver.
+fn ends_expression(token: tree_sitter::Node<'_>) -> bool {
+    matches!(
+        token.kind(),
+        "identifier"
+            | "type_identifier"
+            | "number_literal"
+            | "number_suffix"
+            | "rune"
+            | "keyword_true"
+            | "keyword_false"
+            | "keyword_nil"
+            | ")"
+            | "]"
+            | "}"
+            | "\""
+    ) || token.kind().contains("string")
+        || token.kind().contains("bytes")
+}
+
+/// The keyword tokens an expression or a pattern follows, which an implicit
+/// constructor may start right after: `let .Some(x)`, `resume .None`.
+const EXPRESSION_KEYWORDS: &[&str] = &[
+    "keyword_let",
+    "keyword_case",
+    "keyword_handle",
+    "keyword_resume",
+    "keyword_become",
+];
 
 /// Extract the identifier prefix at the cursor position for completion filtering.
 fn extract_completion_prefix(rope: &Rope, offset: usize) -> String {
@@ -1089,16 +1435,6 @@ fn offset_from_position(rope: &Rope, line: u32, character: u32) -> Option<usize>
     let char_offset = slice.utf16_cu_to_char(utf16_offset);
     let char_index = line_start_char + char_offset;
     Some(rope.char_to_byte(char_index))
-}
-
-fn byte_line_col(rope: &Rope, offset: usize) -> (u32, u32) {
-    let offset = offset.min(rope.len_bytes());
-    let char_index = rope.byte_to_char(offset);
-    let line = rope.char_to_line(char_index);
-    let line_start_char = rope.line_to_char(line);
-    let line_start_byte = rope.char_to_byte(line_start_char);
-    let column = offset - line_start_byte;
-    (line as u32, column as u32)
 }
 
 /// Cast a request to a specific type.
@@ -1334,38 +1670,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_point_after_text_single_line() {
-        let start = Point { row: 0, column: 0 };
-        let result = point_after_text(start, "hello");
-        assert_eq!(result.row, 0);
-        assert_eq!(result.column, 5);
-    }
-
-    #[test]
-    fn test_point_after_text_multiline() {
-        let start = Point { row: 0, column: 0 };
-        let result = point_after_text(start, "hello\nworld");
-        assert_eq!(result.row, 1);
-        assert_eq!(result.column, 5);
-    }
-
-    #[test]
-    fn test_point_after_text_with_offset() {
-        let start = Point { row: 5, column: 10 };
-        let result = point_after_text(start, "abc");
-        assert_eq!(result.row, 5);
-        assert_eq!(result.column, 13);
-    }
-
-    #[test]
-    fn test_point_after_text_multiple_newlines() {
-        let start = Point { row: 0, column: 0 };
-        let result = point_after_text(start, "a\nb\nc");
-        assert_eq!(result.row, 2);
-        assert_eq!(result.column, 1);
-    }
-
-    #[test]
     fn test_position_from_offset_simple() {
         let rope = Rope::from_str("hello\nworld");
         // 'h' is at offset 0
@@ -1408,11 +1712,55 @@ mod tests {
     }
 
     #[test]
-    fn test_byte_line_col_simple() {
-        let rope = Rope::from_str("hello\nworld");
-        assert_eq!(byte_line_col(&rope, 0), (0, 0));
-        assert_eq!(byte_line_col(&rope, 6), (1, 0));
-        assert_eq!(byte_line_col(&rope, 8), (1, 2));
+    fn test_dot_context() {
+        // The text as it would be inside a function body being edited, or,
+        // for `at_top`, at the start of a file.
+        let classify = |text: &str| {
+            let start = text.rfind('|').expect("a cursor mark");
+            let mut rope = Rope::from_str(text);
+            rope.remove(rope.byte_to_char(start)..rope.byte_to_char(start + 1));
+            let mut parser = tree_sitter::Parser::new();
+            parser
+                .set_language(&tree_sitter_tribute::LANGUAGE.into())
+                .expect("the grammar loads");
+            let tree = parser
+                .parse(rope.to_string(), None)
+                .expect("the text parses");
+            dot_context(&rope, &tree, start)
+        };
+        let at = |text: &str| classify(&format!("fn f() {{\n{text}"));
+        let at_top = |text: &str| classify(text);
+        // Where an expression starts, `.` starts an implicit constructor.
+        assert_eq!(at("let x = .|"), DotContext::ImplicitConstructor);
+        assert_eq!(at("f(a, .|"), DotContext::ImplicitConstructor);
+        assert_eq!(at("x ==.|"), DotContext::ImplicitConstructor);
+        assert_eq!(at_top(".|"), DotContext::ImplicitConstructor);
+        assert_eq!(at("let .|"), DotContext::ImplicitConstructor);
+        assert_eq!(at("    resume .|"), DotContext::ImplicitConstructor);
+        assert_eq!(at("case .|"), DotContext::ImplicitConstructor);
+        // A line-leading `.` may continue the line before it, or start one.
+        assert_eq!(at("xs\n    .|"), DotContext::Either);
+        assert_eq!(at("case x {\n    .|"), DotContext::Either);
+        // Right after an expression, `.` continues a method call.
+        assert_eq!(at("xs.|"), DotContext::Other);
+        assert_eq!(at("outlet.|"), DotContext::Other);
+        assert_eq!(at("r#let.|"), DotContext::Other);
+        // Hash-delimited literals end an expression too.
+        assert_eq!(at("r#\"text\"#.|"), DotContext::Other);
+        assert_eq!(at("#\"text\"#.|"), DotContext::Other);
+        assert_eq!(at("?a.|"), DotContext::Other);
+        // Block comments before the `.` are skipped.
+        assert_eq!(at("xs /* why */ .|"), DotContext::Other);
+        assert_eq!(at("xs /* a /* nested */ b */.|"), DotContext::Other);
+        assert_eq!(at("f(a, /* first */ .|"), DotContext::ImplicitConstructor);
+        assert_eq!(at("xs\n    /* note */ .|"), DotContext::Either);
+        assert_eq!(at("xs /* note\n    begun */ .|"), DotContext::Either);
+        assert_eq!(at("f(x).|"), DotContext::Other);
+        assert_eq!(at("\"s\".|"), DotContext::Other);
+        // `..` is a spread, and no `.` is no constructor.
+        assert_eq!(at("User { ..|"), DotContext::Other);
+        assert_eq!(at("let x = |"), DotContext::Other);
+        assert_eq!(at_top("|"), DotContext::Other);
     }
 
     #[test]
@@ -1511,12 +1859,34 @@ mod tests {
 
     impl TestHarness {
         fn new() -> Self {
+            Self::with_params(InitializeParams::default())
+        }
+
+        /// A harness whose client lets the server register file watchers.
+        fn watching_files() -> Self {
+            Self::with_params(InitializeParams {
+                capabilities: lsp_types::ClientCapabilities {
+                    workspace: Some(lsp_types::WorkspaceClientCapabilities {
+                        did_change_watched_files: Some(
+                            lsp_types::DidChangeWatchedFilesClientCapabilities {
+                                dynamic_registration: Some(true),
+                                relative_pattern_support: None,
+                            },
+                        ),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+        }
+
+        fn with_params(init_params: InitializeParams) -> Self {
             use lsp_types::request::{Initialize, Request as _};
 
             let (server_conn, client_conn) = Connection::memory();
 
             // Send initialize request from client
-            let init_params = InitializeParams::default();
             let init_request = lsp_server::Request::new(
                 RequestId::from(0),
                 Initialize::METHOD.to_string(),
@@ -1586,6 +1956,41 @@ mod tests {
             }
         }
 
+        /// Send a notification and process it.
+        fn notify<N: lsp_types::notification::Notification>(&mut self, params: N::Params)
+        where
+            N::Params: serde::Serialize,
+        {
+            let notif = Notification::new(N::METHOD.to_string(), params);
+            self.client
+                .sender
+                .send(Message::Notification(notif))
+                .unwrap();
+            let msg = self.server.connection.receiver.recv().unwrap();
+            self.server.process_message(msg).unwrap();
+        }
+
+        /// The messages the server sent and the client has not read.
+        fn sent(&mut self) -> Vec<Message> {
+            self.client.receiver.try_iter().collect()
+        }
+
+        /// The next diagnostics the server published.
+        fn next_diagnostics(&mut self) -> PublishDiagnosticsParams {
+            let message = self
+                .client
+                .receiver
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the server published diagnostics");
+            match message {
+                Message::Notification(notif) => {
+                    assert_eq!(notif.method, PublishDiagnostics::METHOD);
+                    serde_json::from_value(notif.params).unwrap()
+                }
+                other => panic!("expected diagnostics notification, got {other:?}"),
+            }
+        }
+
         /// Send a request and get the response.
         fn request<R: lsp_types::request::Request>(&mut self, params: R::Params) -> R::Result
         where
@@ -1609,6 +2014,177 @@ mod tests {
                 other => panic!("Expected response message, got {:?}", other),
             }
         }
+    }
+
+    /// The methods of the requests among `messages`, with the paths each
+    /// watcher registration watches.
+    fn watcher_requests(messages: &[Message]) -> Vec<(String, Vec<String>)> {
+        use lsp_types::request::Request as _;
+        messages
+            .iter()
+            .filter_map(|message| match message {
+                Message::Request(request) => Some(request),
+                _ => None,
+            })
+            .map(|request| {
+                let mut patterns = Vec::new();
+                if request.method == RegisterCapability::METHOD {
+                    let params: RegistrationParams =
+                        serde_json::from_value(request.params.clone()).unwrap();
+                    for registration in params.registrations {
+                        let options: DidChangeWatchedFilesRegistrationOptions =
+                            serde_json::from_value(registration.register_options.unwrap()).unwrap();
+                        patterns.extend(options.watchers.into_iter().map(|watcher| {
+                            match watcher.glob_pattern {
+                                GlobPattern::String(pattern) => pattern,
+                                GlobPattern::Relative(_) => panic!("an absolute pattern"),
+                            }
+                        }));
+                    }
+                }
+                (request.method.clone(), patterns)
+            })
+            .collect()
+    }
+
+    /// The server watches the files an open document's package reads,
+    /// reads a watched file again when it changes, and registers again when
+    /// the files change.
+    #[test]
+    fn the_server_watches_the_files_its_documents_read() {
+        use lsp_types::request::Request as _;
+        let dir = tempfile::tempdir().expect("temporary package directory");
+        let package = dir.path();
+        std::fs::create_dir(package.join("src")).unwrap();
+        std::fs::write(package.join("tribute.toml"), "[package]\nname = \"app\"\n").unwrap();
+        std::fs::write(package.join("src/util.trb"), "pub fn f() -> Nat { 1 }\n").unwrap();
+        let main = package.join("src/main.trb");
+        let uri: Uri = tribute_front::path_to_uri(&main).as_str().parse().unwrap();
+        let source = "mod util\nmod later\n\nfn main() -> Nil { let _ = util::f() }\n";
+        let path = |relative: &str| package.join(relative).display().to_string();
+        let changed = |harness: &mut TestHarness, relative: &str| {
+            let uri = tribute_front::path_to_uri(&package.join(relative));
+            harness.notify::<DidChangeWatchedFiles>(DidChangeWatchedFilesParams {
+                changes: vec![lsp_types::FileEvent {
+                    uri: uri.as_str().parse().unwrap(),
+                    typ: lsp_types::FileChangeType::CHANGED,
+                }],
+            });
+        };
+
+        let mut harness = TestHarness::watching_files();
+        harness.open_document(&uri, source);
+        let rejected = harness.sent();
+        let registered = vec![(
+            RegisterCapability::METHOD.to_owned(),
+            vec![
+                path("src/later.trb"),
+                path("src/lib.trb"),
+                path("src/util.trb"),
+                path("tribute.toml"),
+            ],
+        )];
+        assert_eq!(watcher_requests(&rejected), registered);
+
+        // A client that rejects the registration is asked again on the next
+        // update, with no unregistration since nothing was registered.
+        let Some(Message::Request(request)) = rejected.last() else {
+            panic!("a registration: {rejected:?}");
+        };
+        let response = Response::new_err(request.id.clone(), -32603, "rejected".to_owned());
+        harness
+            .server
+            .process_message(Message::Response(response))
+            .unwrap();
+        changed(&mut harness, "src/util.trb");
+        assert_eq!(watcher_requests(&harness.sent()), registered);
+
+        // A changed module file is read again; the files stay the same.
+        std::fs::write(package.join("src/util.trb"), "pub fn g() -> Nat { 1 }\n").unwrap();
+        changed(&mut harness, "src/util.trb");
+        let sent = harness.sent();
+        assert_eq!(watcher_requests(&sent), []);
+        let Some(Message::Notification(published)) = sent.first() else {
+            panic!("diagnostics: {sent:?}");
+        };
+        let published: PublishDiagnosticsParams =
+            serde_json::from_value(published.params.clone()).unwrap();
+        assert_eq!(published.uri, uri);
+        let messages: Vec<_> = published.diagnostics.iter().map(|d| &d.message).collect();
+        assert!(
+            messages
+                .iter()
+                .any(|message| *message == "unresolved name `util::f`"),
+            "{messages:?}"
+        );
+
+        // A new module file with a module of its own adds that file.
+        std::fs::write(package.join("src/later.trb"), "pub mod deeper\n").unwrap();
+        changed(&mut harness, "src/later.trb");
+        assert_eq!(
+            watcher_requests(&harness.sent()),
+            [
+                (UnregisterCapability::METHOD.to_owned(), vec![]),
+                (
+                    RegisterCapability::METHOD.to_owned(),
+                    vec![
+                        path("src/later/deeper.trb"),
+                        path("src/later.trb"),
+                        path("src/lib.trb"),
+                        path("src/util.trb"),
+                        path("tribute.toml"),
+                    ],
+                ),
+            ]
+        );
+
+        // A module file that changed while no `mod` named it is read again
+        // when one names it again.
+        let edit = |harness: &mut TestHarness, version, text: &str| {
+            harness.notify::<DidChangeTextDocument>(DidChangeTextDocumentParams {
+                text_document: lsp_types::VersionedTextDocumentIdentifier {
+                    uri: uri.clone(),
+                    version,
+                },
+                content_changes: vec![TextDocumentContentChangeEvent {
+                    range: None,
+                    range_length: None,
+                    text: text.to_owned(),
+                }],
+            });
+            harness.sent()
+        };
+        let unwatched = edit(&mut harness, 2, "mod later\n\nfn main() -> Nil { }\n");
+        assert!(
+            !watcher_requests(&unwatched)
+                .last()
+                .unwrap()
+                .1
+                .contains(&path("src/util.trb"))
+        );
+        std::fs::write(package.join("src/util.trb"), "pub fn f() -> Nat { 1 }\n").unwrap();
+        let rewatched = edit(&mut harness, 3, source);
+        let Some(published) = rewatched.iter().rev().find_map(|message| match message {
+            Message::Notification(published) => Some(published),
+            _ => None,
+        }) else {
+            panic!("diagnostics: {rewatched:?}");
+        };
+        let published: PublishDiagnosticsParams =
+            serde_json::from_value(published.params.clone()).unwrap();
+        let messages: Vec<_> = published.diagnostics.iter().map(|d| &d.message).collect();
+        assert!(
+            !messages.iter().any(|message| message.contains("util::f")),
+            "{messages:?}"
+        );
+    }
+
+    #[test]
+    fn glob_literal_escapes_metacharacters() {
+        assert_eq!(
+            glob_literal(Path::new("/a/b[1]/{c}*?.trb")),
+            "/a/b[[]1[]]/[{]c[}][*][?].trb"
+        );
     }
 
     fn test_uri(name: &str) -> Uri {
@@ -1856,6 +2432,319 @@ mod tests {
         }
     }
 
+    /// A diagnostic's labels in the document become related information.
+    #[test]
+    fn diagnostic_labels_become_related_information() {
+        let uri = test_uri("duplicate_definition");
+        let source = "fn f() -> Nat { 1 }\n\nfn f() -> Nat { 2 }\n\nfn main() -> Nil { }\n";
+
+        let mut harness = TestHarness::new();
+        let published = harness.open_document_with_diagnostics(&uri, source);
+        let [diagnostic] = &published.diagnostics[..] else {
+            panic!("one diagnostic: {:?}", published.diagnostics);
+        };
+        assert_eq!(diagnostic.range.start.line, 2);
+        let related: Vec<_> = diagnostic
+            .related_information
+            .iter()
+            .flatten()
+            .map(|info| (info.location.uri == uri, info.location.range.start.line))
+            .collect();
+        assert_eq!(related, [(true, 0)]);
+    }
+
+    /// An open document is the root of its package: its file modules are
+    /// read from disk, and nothing located in their files lands in it.
+    #[test]
+    fn file_modules_stay_out_of_the_root_document() {
+        let dir = tempfile::tempdir().expect("temporary package directory");
+        std::fs::write(
+            dir.path().join("util.trb"),
+            "pub fn helper() -> Nat { pkg::shared() }\n\nfn broken() -> Nat { missing }\n",
+        )
+        .expect("write util.trb");
+        let root = dir.path().join("main.trb");
+        let uri: Uri = format!("file://{}", root.display()).parse().unwrap();
+        let source = "mod util\n\npub fn shared() -> Nat { 1 }\n\nfn main() -> Nil { let _ = util::helper() }\n\nfn helper() -> Nat { 2 }\n";
+
+        let mut harness = TestHarness::new();
+        let published = harness.open_document_with_diagnostics(&uri, source);
+        assert_eq!(published.diagnostics, Vec::new());
+
+        let params = ReferenceParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+                position: lsp_types::Position {
+                    line: 2,
+                    character: 8, // On `shared`
+                },
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            context: lsp_types::ReferenceContext {
+                include_declaration: true,
+            },
+        };
+        let refs = harness
+            .request::<References>(params)
+            .expect("the declaration of `shared`");
+        let lines: Vec<_> = refs
+            .iter()
+            .map(|location| (location.uri == uri, location.range.start.line))
+            .collect();
+        assert_eq!(lines, [(true, 2)]);
+
+        // A rename would edit only this document, so a name that `util.trb`
+        // also uses is not renamable; one only this document uses is.
+        let mut prepare = |line, character| {
+            harness.request::<PrepareRenameRequest>(TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+                position: lsp_types::Position { line, character },
+            })
+        };
+        assert_eq!(prepare(2, 8), None, "`shared`, called from `util.trb`");
+        assert_eq!(prepare(4, 31), None, "`util::helper`");
+        assert_eq!(prepare(6, 4), None, "`helper`, also defined in `util.trb`");
+        assert!(prepare(4, 4).is_some(), "`main`");
+    }
+
+    /// A field that a file module destructures with a shorthand pattern is
+    /// not renamable from the root document.
+    #[test]
+    fn a_field_destructured_in_a_file_module_is_not_renamable() {
+        let dir = tempfile::tempdir().expect("temporary package directory");
+        std::fs::write(
+            dir.path().join("util.trb"),
+            "use pkg::Point\n\npub fn sum(p: Point) -> Int {\n    let Point { x, y } = p\n    x + y\n}\n",
+        )
+        .expect("write util.trb");
+        let root = dir.path().join("main.trb");
+        let uri: Uri = format!("file://{}", root.display()).parse().unwrap();
+        let source = "mod util\n\npub struct Point { x: Int, y: Int }\n\nfn main() -> Nil { }\n";
+
+        let mut harness = TestHarness::new();
+        let published = harness.open_document_with_diagnostics(&uri, source);
+        assert_eq!(published.diagnostics, Vec::new());
+        let prepared = harness.request::<PrepareRenameRequest>(TextDocumentPositionParams {
+            text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+            position: lsp_types::Position {
+                line: 2,
+                character: 19, // On `x`
+            },
+        });
+        assert_eq!(prepared, None);
+    }
+
+    /// An enum whose constructor a file module calls through a qualified
+    /// path is not renamable from the root document.
+    #[test]
+    fn an_enum_constructed_in_a_file_module_is_not_renamable() {
+        let dir = tempfile::tempdir().expect("temporary package directory");
+        std::fs::write(
+            dir.path().join("util.trb"),
+            "pub fn pick() -> pkg::Choice { pkg::Choice::One(1) }\n",
+        )
+        .expect("write util.trb");
+        let root = dir.path().join("main.trb");
+        let uri: Uri = format!("file://{}", root.display()).parse().unwrap();
+        let source = "mod util\n\npub enum Choice { One(Int), Other }\n\nfn main() -> Nil { }\n";
+
+        let mut harness = TestHarness::new();
+        let published = harness.open_document_with_diagnostics(&uri, source);
+        assert_eq!(published.diagnostics, Vec::new());
+        let prepared = harness.request::<PrepareRenameRequest>(TextDocumentPositionParams {
+            text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+            position: lsp_types::Position {
+                line: 2,
+                character: 10, // On `Choice`
+            },
+        });
+        assert_eq!(prepared, None);
+    }
+
+    /// A struct that a file module names only in a type annotation is not
+    /// renamable from the root document.
+    #[test]
+    fn a_struct_annotated_in_a_file_module_is_not_renamable() {
+        let dir = tempfile::tempdir().expect("temporary package directory");
+        std::fs::write(
+            dir.path().join("util.trb"),
+            "pub fn consume(p: pkg::Point) -> Nil { }\n",
+        )
+        .expect("write util.trb");
+        let root = dir.path().join("main.trb");
+        let uri: Uri = format!("file://{}", root.display()).parse().unwrap();
+        let source = "mod util\n\npub struct Point { x: Int }\n\nfn main() -> Nil { }\n";
+
+        let mut harness = TestHarness::new();
+        let published = harness.open_document_with_diagnostics(&uri, source);
+        assert_eq!(published.diagnostics, Vec::new());
+        let mut prepare = |line, character| {
+            harness.request::<PrepareRenameRequest>(TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+                position: lsp_types::Position { line, character },
+            })
+        };
+        assert_eq!(prepare(2, 12), None, "`Point`");
+        assert!(prepare(4, 4).is_some(), "`main`");
+    }
+
+    /// A function that a file module only re-exports is not renamable from
+    /// the root document.
+    #[test]
+    fn a_function_reexported_by_a_file_module_is_not_renamable() {
+        let dir = tempfile::tempdir().expect("temporary package directory");
+        std::fs::write(dir.path().join("util.trb"), "pub use pkg::shared\n")
+            .expect("write util.trb");
+        let root = dir.path().join("main.trb");
+        let uri: Uri = format!("file://{}", root.display()).parse().unwrap();
+        let source = "pub mod util\n\npub fn shared() -> Nat { 1 }\n\nfn main() -> Nil { }\n";
+
+        let mut harness = TestHarness::new();
+        let published = harness.open_document_with_diagnostics(&uri, source);
+        assert_eq!(published.diagnostics, Vec::new());
+        let prepared = harness.request::<PrepareRenameRequest>(TextDocumentPositionParams {
+            text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+            position: lsp_types::Position {
+                line: 2,
+                character: 8, // On `shared`
+            },
+        });
+        assert_eq!(prepared, None);
+    }
+
+    /// A file module open next to the root that reads it cannot rename a
+    /// name the root calls, since the rename edits only the file module.
+    #[test]
+    fn a_file_module_does_not_rename_what_an_open_root_calls() {
+        let dir = tempfile::tempdir().expect("temporary package directory");
+        let util_text = "pub fn helper() -> Nat { 1 }\n\nfn private() -> Nat { 2 }\n";
+        std::fs::write(dir.path().join("util.trb"), util_text).expect("write util.trb");
+        let root: Uri = format!("file://{}", dir.path().join("main.trb").display())
+            .parse()
+            .unwrap();
+        let util: Uri = format!("file://{}", dir.path().join("util.trb").display())
+            .parse()
+            .unwrap();
+        let source = "mod util\n\nfn main() -> Nil { let _ = util::helper() }\n";
+
+        let mut harness = TestHarness::new();
+        harness.open_document(&root, source);
+        harness.open_document(&util, util_text);
+        assert_eq!(harness.next_diagnostics().uri, root);
+
+        let mut prepare = |line, character| {
+            harness.request::<PrepareRenameRequest>(TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri: util.clone() },
+                position: lsp_types::Position { line, character },
+            })
+        };
+        assert_eq!(prepare(0, 8), None, "`helper`, called from `main.trb`");
+        assert!(prepare(2, 4).is_some(), "`private`");
+    }
+
+    /// A file module open in the editor is the source input its package
+    /// reads: opening, editing, and closing it republishes the diagnostics of
+    /// an open root of that package.
+    /// Editing a dependency's buffer republishes the open packages that
+    /// depend on it.
+    #[test]
+    fn an_open_dependency_buffer_republishes_its_dependents() {
+        let packages =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/packages");
+        let uri = |path: &str| -> Uri {
+            tribute_front::path_to_uri(&packages.join(path))
+                .as_str()
+                .parse()
+                .unwrap()
+        };
+        let (app, geometry) = (uri("app/src/main.trb"), uri("geometry/src/lib.trb"));
+        let source = std::fs::read_to_string(packages.join("app/src/main.trb")).unwrap();
+
+        let mut harness = TestHarness::new();
+        assert_eq!(
+            harness
+                .open_document_with_diagnostics(&app, &source)
+                .diagnostics,
+            Vec::new()
+        );
+
+        harness.open_document(&geometry, "pub struct Rect { w: Nat, h: Nat }\n");
+        let republished = harness.next_diagnostics();
+        assert_eq!(republished.uri, app);
+        assert_ne!(
+            republished.diagnostics,
+            Vec::new(),
+            "the app reads the buffer, which has no `area`"
+        );
+    }
+
+    #[test]
+    fn an_open_file_module_buffer_is_what_its_package_reads() {
+        let dir = tempfile::tempdir().expect("temporary package directory");
+        std::fs::write(
+            dir.path().join("util.trb"),
+            "pub fn helper() -> Nat { 1 }\n",
+        )
+        .expect("write util.trb");
+        let root: Uri = format!("file://{}", dir.path().join("main.trb").display())
+            .parse()
+            .unwrap();
+        let util: Uri = format!("file://{}", dir.path().join("util.trb").display())
+            .parse()
+            .unwrap();
+        let source = "mod util\n\nfn main() -> Nil { let _ = util::helper() }\n";
+
+        let mut harness = TestHarness::new();
+        assert_eq!(
+            harness
+                .open_document_with_diagnostics(&root, source)
+                .diagnostics,
+            Vec::new()
+        );
+
+        // Opening the buffer publishes it, then the root that reads it.
+        harness.open_document(&util, "pub fn other() -> Nat { 1 }\n");
+        let republished = harness.next_diagnostics();
+        assert_eq!(republished.uri, root);
+        assert_ne!(
+            republished.diagnostics,
+            Vec::new(),
+            "the root reads the buffer, which has no `helper`"
+        );
+
+        // Editing the buffer back republishes the root without errors.
+        harness.notify::<DidChangeTextDocument>(DidChangeTextDocumentParams {
+            text_document: lsp_types::VersionedTextDocumentIdentifier {
+                uri: util.clone(),
+                version: 2,
+            },
+            content_changes: vec![TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: "pub fn helper() -> Nat { 2 }\n".to_owned(),
+            }],
+        });
+        assert_eq!(harness.next_diagnostics().uri, util);
+        let republished = harness.next_diagnostics();
+        assert_eq!(
+            (republished.uri, republished.diagnostics),
+            (root.clone(), Vec::new())
+        );
+
+        // Closing it clears its diagnostics, then republishes the root
+        // against the file on disk.
+        harness.notify::<DidCloseTextDocument>(DidCloseTextDocumentParams {
+            text_document: lsp_types::TextDocumentIdentifier { uri: util.clone() },
+        });
+        assert_eq!(harness.next_diagnostics().uri, util);
+        let republished = harness.next_diagnostics();
+        assert_eq!(
+            (republished.uri, republished.diagnostics),
+            (root, Vec::new())
+        );
+    }
+
     #[test]
     fn test_did_change_via_message() {
         let mut harness = TestHarness::new();
@@ -2037,6 +2926,84 @@ mod tests {
                 lsp_types::Position::new(2, 22)
             ),
             "the edit must replace the typed `r#ca`"
+        );
+    }
+
+    #[test]
+    fn test_completion_after_an_implicit_constructor_dot() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("completion_implicit");
+        let source =
+            "enum Color { Red, Green }\nfn green() -> Nat { 1 }\nfn pick() -> Color { .G }";
+
+        harness.open_document(&uri, source);
+
+        let params = CompletionParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri },
+                position: lsp_types::Position {
+                    line: 2,
+                    character: 23, // After `.G`
+                },
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            context: None,
+        };
+
+        let result: Option<lsp_types::CompletionResponse> = harness.request::<Completion>(params);
+        let Some(lsp_types::CompletionResponse::List(list)) = result else {
+            panic!("Should return a completion list");
+        };
+        let labels: Vec<_> = list.items.iter().map(|item| item.label.as_str()).collect();
+        assert_eq!(labels, ["Green"], "only constructors fit after `.`");
+        assert_eq!(list.items[0].detail.as_deref(), Some("Color::Green"));
+        assert_eq!(
+            list.items[0].kind,
+            Some(lsp_types::CompletionItemKind::CONSTRUCTOR)
+        );
+    }
+
+    #[test]
+    fn test_completion_after_a_line_leading_dot_keeps_methods() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("completion_line_dot");
+        let source = "enum Mode { Many }\nfn mapped(n: Nat) -> Nat { n }\nfn run() -> Nat {\n    1\n    .\n}";
+
+        harness.open_document(&uri, source);
+
+        let params = CompletionParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri },
+                position: lsp_types::Position {
+                    line: 4,
+                    character: 5, // After the line-leading `.`
+                },
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            context: None,
+        };
+
+        let result: Option<lsp_types::CompletionResponse> = harness.request::<Completion>(params);
+        let Some(lsp_types::CompletionResponse::List(list)) = result else {
+            panic!("Should return a completion list");
+        };
+        let kind_of = |label: &str| {
+            list.items
+                .iter()
+                .find(|item| item.label == label)
+                .and_then(|item| item.kind)
+        };
+        assert_eq!(
+            kind_of("mapped"),
+            Some(lsp_types::CompletionItemKind::FUNCTION),
+            "the `.` may continue a method chain"
+        );
+        assert_eq!(
+            kind_of("Many"),
+            Some(lsp_types::CompletionItemKind::CONSTRUCTOR),
+            "the `.` may start an implicit constructor"
         );
     }
 
@@ -2423,7 +3390,10 @@ mod tests {
         let result: Option<Hover> = harness.request::<HoverRequest>(params);
         let hover = result.expect("Hover should return type information");
         let type_str = extract_hover_type(&hover).expect("Should have type content");
-        assert_eq!(type_str, "String", "String literal should have type String");
+        assert_eq!(
+            type_str, "std::String",
+            "String literal should have the prelude's String type"
+        );
     }
 
     #[test]
@@ -2711,5 +3681,180 @@ fn main() -> Nil {
         };
         let symbol = convert_document_symbol_info(&info, &rope);
         assert_eq!(symbol.kind, lsp_types::SymbolKind::CLASS);
+    }
+
+    /// The position of the first occurrence of `needle` in `source`.
+    fn position_of(source: &str, needle: &str) -> lsp_types::Position {
+        let offset = source.find(needle).expect("the needle is in the source");
+        let (line, character) = position_from_offset(&Rope::from_str(source), offset);
+        lsp_types::Position { line, character }
+    }
+
+    /// The type a hover at the last `needle` in the open `source` shows.
+    fn hover_type_at(
+        harness: &mut TestHarness,
+        uri: &Uri,
+        source: &str,
+        needle: &str,
+    ) -> Option<String> {
+        let params = HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+                position: {
+                    let offset = source.rfind(needle).expect("the needle is in the source");
+                    let (line, character) = position_from_offset(&Rope::from_str(source), offset);
+                    lsp_types::Position { line, character }
+                },
+            },
+            work_done_progress_params: Default::default(),
+        };
+        let hover = harness.request::<HoverRequest>(params)?;
+        extract_hover_type(&hover).map(str::to_owned)
+    }
+
+    /// The labels of the completions right after the first `needle` in the
+    /// open `source`.
+    fn completion_labels_after(
+        harness: &mut TestHarness,
+        uri: &Uri,
+        source: &str,
+        needle: &str,
+    ) -> Vec<String> {
+        let mut position = position_of(source, needle);
+        position.character += needle.chars().count() as u32;
+        let params = CompletionParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+                position,
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            context: None,
+        };
+        let response = harness.request::<Completion>(params);
+        let Some(lsp_types::CompletionResponse::List(list)) = response else {
+            panic!("expected a completion list, got {response:?}");
+        };
+        list.items.into_iter().map(|item| item.label).collect()
+    }
+
+    /// Open `source`, which has errors, and return its diagnostics' messages.
+    fn open_erroneous(harness: &mut TestHarness, uri: &Uri, source: &str) -> Vec<String> {
+        let diagnostics = harness.open_document_with_diagnostics(uri, source);
+        let messages: Vec<String> = diagnostics
+            .diagnostics
+            .into_iter()
+            .map(|diagnostic| diagnostic.message)
+            .collect();
+        assert!(!messages.is_empty(), "the source should have errors");
+        messages
+    }
+
+    /// A type error in one call leaves the rest of the module typed.
+    #[test]
+    fn type_error_keeps_partial_results() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("partial_type_error");
+        let source = r#"fn add(x: Int, y: Int) -> Int { x + y }
+
+fn main() -> Nil {
+    let total = add(+1, True)
+    let label = "sum"
+    let next = add(total, +2)
+    next
+    Nil
+}
+"#;
+        let messages = open_erroneous(&mut harness, &uri, source);
+        assert_eq!(messages.len(), 1, "{messages:?}");
+
+        for (needle, ty) in [
+            ("\"sum\"", "std::String"),
+            ("total", "Int"),
+            ("next", "Int"),
+        ] {
+            assert_eq!(
+                hover_type_at(&mut harness, &uri, source, needle).as_deref(),
+                Some(ty),
+                "{needle}"
+            );
+        }
+        let labels = completion_labels_after(&mut harness, &uri, source, "let next = ad");
+        assert!(labels.iter().any(|label| label == "add"), "{labels:?}");
+    }
+
+    /// A call of a method no type declares is reported, and the other
+    /// expressions keep their types.
+    #[test]
+    fn unresolved_method_keeps_partial_results() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("partial_unresolved_method");
+        let source = r#"fn twice(n: Nat) -> Nat { n + n }
+
+fn main() -> Nil {
+    let count = 2
+    let missing = count.no_such_method()
+    let doubled = twice(count)
+    doubled
+    Nil
+}
+"#;
+        let messages = open_erroneous(&mut harness, &uri, source);
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("no_such_method")),
+            "{messages:?}"
+        );
+
+        assert_eq!(
+            hover_type_at(&mut harness, &uri, source, "count").as_deref(),
+            Some("Nat")
+        );
+        assert_eq!(
+            hover_type_at(&mut harness, &uri, source, "doubled").as_deref(),
+            Some("Nat")
+        );
+        let labels = completion_labels_after(&mut harness, &uri, source, "let doubled = tw");
+        assert!(labels.iter().any(|label| label == "twice"), "{labels:?}");
+    }
+
+    /// A generic call whose type argument an error leaves undetermined is an
+    /// incomplete instance; the module is never lowered, but the rest of it
+    /// keeps its types.
+    #[test]
+    fn incomplete_instance_keeps_partial_results() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("partial_incomplete_instance");
+        let source = r#"fn identity(x: a) -> a { x }
+
+fn main() -> Nil {
+    let unknown = identity(not_declared)
+    let known = identity(+3)
+    known
+    Nil
+}
+"#;
+        let messages = open_erroneous(&mut harness, &uri, source);
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("not_declared")),
+            "{messages:?}"
+        );
+
+        assert_eq!(
+            hover_type_at(&mut harness, &uri, source, "known").as_deref(),
+            Some("Int")
+        );
+        let identity = hover_type_at(&mut harness, &uri, source, "identity(+3)");
+        assert!(
+            identity
+                .as_deref()
+                .is_some_and(|ty| ty.starts_with("fn(Int)")),
+            "{identity:?}"
+        );
+        let labels = completion_labels_after(&mut harness, &uri, source, "let known = iden");
+        assert!(labels.iter().any(|label| label == "identity"), "{labels:?}");
     }
 }

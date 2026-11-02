@@ -1,0 +1,5 @@
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
+    print_line(geometry::area(geometry::Rect { w: 3, h: 4 }).to_string)
+}

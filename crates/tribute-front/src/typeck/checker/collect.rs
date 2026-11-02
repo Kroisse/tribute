@@ -6,8 +6,7 @@
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 
-use salsa::Accumulator;
-use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_core::{CompilationPhase, DiagnosticSeverity};
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::{
@@ -16,7 +15,9 @@ use crate::ast::{
 };
 use crate::typeck::context::{AbilityInfo, AbilityOpInfo};
 
+use super::NodeDiagnostic;
 use super::TypeChecker;
+use std::sync::Arc;
 
 /// Declared field names in order, if every field is named. A constructor
 /// without fields has an empty list.
@@ -34,6 +35,16 @@ struct SignatureVariables<'db> {
 }
 
 impl SignatureVariables<'_> {
+    /// The scheme's type parameters, each named by the variable the
+    /// signature spells for it.
+    fn type_params(&self) -> Vec<TypeParam> {
+        let mut params = vec![TypeParam::anonymous(); self.next_type as usize];
+        for (name, &index) in &self.types {
+            params[index as usize] = TypeParam::named(name.clone());
+        }
+        params
+    }
+
     fn fresh_row(&mut self) -> RowVar {
         // Zero is reserved for the implicit, omitted ability annotation.
         self.next_row += 1;
@@ -62,18 +73,18 @@ impl<'db> TypeChecker<'db> {
             let Some(getter) = self.env.field_function(function) else {
                 continue;
             };
-            Diagnostic::new(
+            NodeDiagnostic::new(
                 format!(
                     "function `{}` is already declared by field `{}` of struct `{}`",
-                    function.qualified(self.db()),
+                    self.names().path(function.path(self.db())),
                     getter.field,
                     getter.owner.name(self.db()),
                 ),
-                self.get_span(node),
+                node,
                 DiagnosticSeverity::Error,
                 CompilationPhase::TypeChecking,
             )
-            .accumulate(self.db());
+            .report(self);
         }
     }
 
@@ -147,10 +158,10 @@ impl<'db> TypeChecker<'db> {
             self.prefix = entry.module.clone();
             match &entry.decl {
                 Decl::Struct(s) => {
-                    self.predeclare_nominal_type(&s.name, s.id, &s.type_params);
+                    self.predeclare_nominal_type(&s.name, s.disambiguator, &s.type_params);
                 }
                 Decl::Enum(e) => {
-                    self.predeclare_nominal_type(&e.name, e.id, &e.type_params);
+                    self.predeclare_nominal_type(&e.name, e.disambiguator, &e.type_params);
                 }
                 _ => {}
             }
@@ -161,7 +172,7 @@ impl<'db> TypeChecker<'db> {
     fn predeclare_nominal_type(
         &mut self,
         name: &Symbol,
-        declaration: crate::ast::NodeId,
+        disambiguator: u32,
         params: &[crate::ast::TypeParamDecl],
     ) {
         let qualified = self.current_prefix().child(name.clone());
@@ -173,7 +184,7 @@ impl<'db> TypeChecker<'db> {
             .map(|index| Type::new(self.db(), TypeKind::BoundVar { index }))
             .collect();
         let ty = self.env.named_type_with_id(
-            crate::ast::TypeDefId::source(self.db(), qualified.clone(), declaration),
+            crate::ast::TypeDefId::declared(self.db(), qualified.clone(), disambiguator),
             qualified.to_symbol(),
             args,
         );
@@ -232,9 +243,7 @@ impl<'db> TypeChecker<'db> {
         let func_ty = self.env.func_type(param_types, return_ty, effect);
 
         // Build type params from the collected BoundVars
-        let type_params: Vec<TypeParam> = (0..vars.next_type)
-            .map(|_| TypeParam::anonymous())
-            .collect();
+        let type_params = vars.type_params();
 
         let mut effect_params = collect_row_vars(self.db(), func_ty);
         for union in &vars.unions {
@@ -253,10 +262,13 @@ impl<'db> TypeChecker<'db> {
         // Register the function with its FuncDefId
         let func_id = self.func_def_id(&func.name);
         if let Some(origins) = effect_origins {
-            self.effect_annotation_origins.insert(func_id, origins);
+            Arc::make_mut(&mut self.signatures)
+                .effect_annotation_origins
+                .insert(func_id, origins);
         }
-        self.signature_row_names.insert(func_id, vars.rows);
-        self.signature_type_names.insert(func_id, vars.types);
+        let signatures = Arc::make_mut(&mut self.signatures);
+        signatures.row_names.insert(func_id, vars.rows);
+        signatures.type_names.insert(func_id, vars.types);
         self.env.register_function(func_id, scheme);
 
         self.function_decls.push((func.id, func_id));
@@ -264,13 +276,13 @@ impl<'db> TypeChecker<'db> {
 
     /// Report a missing part of a function signature, typed as an error.
     fn missing_signature_type(&self, node: crate::ast::NodeId, message: String) -> Type<'db> {
-        Diagnostic::new(
+        NodeDiagnostic::new(
             message,
-            self.get_span(node),
+            node,
             DiagnosticSeverity::Error,
             CompilationPhase::TypeChecking,
         )
-        .accumulate(self.db());
+        .report(self);
         Type::new(self.db(), TypeKind::Error)
     }
 
@@ -299,9 +311,22 @@ impl<'db> TypeChecker<'db> {
         let effect = AbilityRow::pure(self.db());
         let func_ty = self.env.func_type(param_types, return_ty, effect);
 
-        let type_params: Vec<TypeParam> = (0..vars.next_type)
-            .map(|_| TypeParam::anonymous())
-            .collect();
+        let type_params = vars.type_params();
+        // One external symbol cannot serve instances of different
+        // representations (`new-plans/modules.md`, "모듈 선언과 Use").
+        if !type_params.is_empty() && func.abi != "intrinsic" {
+            NodeDiagnostic::new(
+                format!(
+                    "extern function `{}` cannot be generic; only `extern \"intrinsic\"` \
+                     functions may have type parameters",
+                    func.name
+                ),
+                func.id,
+                DiagnosticSeverity::Error,
+                CompilationPhase::TypeChecking,
+            )
+            .report(self);
+        }
 
         let mut effect_params = collect_row_vars(self.db(), func_ty);
         for union in &vars.unions {
@@ -348,7 +373,7 @@ impl<'db> TypeChecker<'db> {
             .map(|i| Type::new(self.db(), TypeKind::BoundVar { index: i }))
             .collect();
         let struct_ty = self.env.named_type_with_id(
-            crate::ast::TypeDefId::source(self.db(), qualified_name.clone(), s.id),
+            crate::ast::TypeDefId::declared(self.db(), qualified_name.clone(), s.disambiguator),
             qualified_name.to_symbol(),
             args,
         );
@@ -389,7 +414,7 @@ impl<'db> TypeChecker<'db> {
 
         // Register struct field information for accessor resolution
         self.env.register_struct_fields(
-            crate::ast::TypeDefId::source(self.db(), qualified_name, s.id),
+            crate::ast::TypeDefId::declared(self.db(), qualified_name, s.disambiguator),
             type_params,
             fields,
         );
@@ -410,7 +435,7 @@ impl<'db> TypeChecker<'db> {
             .map(|i| Type::new(self.db(), TypeKind::BoundVar { index: i }))
             .collect();
         let enum_ty = self.env.named_type_with_id(
-            crate::ast::TypeDefId::source(self.db(), qualified_name.clone(), e.id),
+            crate::ast::TypeDefId::declared(self.db(), qualified_name.clone(), e.disambiguator),
             qualified_name.to_symbol(),
             args,
         );
@@ -421,7 +446,7 @@ impl<'db> TypeChecker<'db> {
         // Register enum variant names for exhaustiveness checking
         let variant_names: Vec<Symbol> = e.variants.iter().map(|v| v.name.clone()).collect();
         self.env
-            .register_enum_variants(qualified_name, variant_names);
+            .register_enum_variants(qualified_name.clone(), variant_names);
 
         // Register constructors for each variant
         // Build name → BoundVar index lookup for type parameter resolution
@@ -450,7 +475,7 @@ impl<'db> TypeChecker<'db> {
             let effect_params = collect_row_vars(self.db(), ctor_ty);
             let ctor_scheme =
                 TypeScheme::new(self.db(), type_params.clone(), effect_params, ctor_ty);
-            let ctor_id = CtorId::new(self.db(), self.current_prefix().child(variant.name.clone()));
+            let ctor_id = CtorId::new(self.db(), qualified_name.child(variant.name.clone()));
             self.env.register_constructor(ctor_id, ctor_scheme);
             if let Some(names) = field_names(&variant.fields) {
                 self.env.register_constructor_field_names(ctor_id, names);
@@ -685,13 +710,13 @@ impl<'db> TypeChecker<'db> {
                     .filter(|ann| match &ann.kind {
                         TypeAnnotationKind::Infer => false,
                         TypeAnnotationKind::Named(name) if is_type_variable(name) => {
-                            Diagnostic::new(
+                            NodeDiagnostic::new(
                                 format!("row variable `{name}` is not bound in this declaration"),
-                                self.get_span(ann.id),
+                                ann.id,
                                 DiagnosticSeverity::Error,
                                 CompilationPhase::TypeChecking,
                             )
-                            .accumulate(self.db());
+                            .report(self);
                             false
                         }
                         _ => true,

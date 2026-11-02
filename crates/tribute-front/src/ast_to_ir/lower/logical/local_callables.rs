@@ -1,8 +1,24 @@
 //! Bounded local callable materialization, before any source lambda is emitted.
-use super::*;
-use crate::ast::{LocalId, NodeId, Type};
-use crate::monomorphize::is_concrete_type;
+
+use std::ops::ControlFlow;
+
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use tribute_ir::dialect::tribute_control;
+use trunk_ir::context::IrContext;
+use trunk_ir::ops::DialectType;
+use trunk_ir::refs::{TypeRef, ValueRef};
+
+use crate::ast::fold::{TypeVisitable, TypeVisitor};
+use crate::ast::{
+    AbilityRow, Expr, ExprKind, LocalId, NodeId, Pattern, PatternKind, ResolvedRef, Stmt, Type,
+    TypeKind, TypedRef,
+};
+use crate::ast_to_ir::context::IrLoweringCtx;
+use crate::ast_to_ir::lower::{FuncSignature, IrBuilder};
 use crate::typeck::LambdaSignature;
+
+use super::callable::{RowArguments, lower_lambda};
+use super::declarations::Declarations;
 
 type Key<'db> = (NodeId, Type<'db>, TypeRef);
 
@@ -18,7 +34,6 @@ impl<'db> Plan<'db> {
         ir: &mut IrContext,
         body: &Expr<TypedRef<'db>>,
         declarations: &Declarations<'db>,
-        parent_type_parameters: usize,
     ) -> Self {
         let mut nodes = Vec::new();
         body.for_each(|expr| nodes.push(expr));
@@ -131,23 +146,9 @@ impl<'db> Plan<'db> {
                 || instance.callable != reference.ty
                 || root.is_none_or(|root| {
                     root.scheme.body(ctx.db) != seed.function_type
-                        || !fixed_instance(
-                            ctx,
-                            body,
-                            seed,
-                            root,
-                            declarations,
-                            parent_type_parameters,
-                        )
+                        || !fixed_instance(ctx, body, seed, root, declarations)
                 })
-                || !fixed_instance(
-                    ctx,
-                    body,
-                    seed,
-                    instance,
-                    declarations,
-                    parent_type_parameters,
-                )
+                || !fixed_instance(ctx, body, seed, instance, declarations)
             {
                 unsupported.insert(binding);
                 continue;
@@ -187,33 +188,40 @@ impl<'db> Plan<'db> {
     }
 }
 
-/// Parent-owned variables are fixed within this body, including the retained
-/// generic template. Local quantifiers and unsolved variables are not fixed.
-fn fixed_in_parent<'db>(db: &'db dyn salsa::Database, ty: Type<'db>, parameters: usize) -> bool {
-    let fixed = |ty| fixed_in_parent(db, ty, parameters);
-    let fixed_row = |row: crate::ast::AbilityRow<'db>| {
-        row.rest(db).is_none()
-            && row
-                .instances(db)
-                .iter()
-                .all(|effect| effect.args.iter().copied().all(fixed))
-    };
-    match ty.kind(db) {
-        TypeKind::BoundVar { index } => (*index as usize) < parameters,
-        TypeKind::Named { args, .. } | TypeKind::Tuple(args) => args.iter().copied().all(fixed),
-        TypeKind::Func {
-            params,
-            result,
-            effect,
-            ..
-        } => params.iter().copied().all(fixed) && fixed(*result) && fixed_row(*effect),
-        TypeKind::Continuation {
-            arg,
-            result,
-            effect,
-        } => fixed(*arg) && fixed(*result) && fixed_row(*effect),
-        _ => is_concrete_type(db, ty),
+/// Whether `ty` is fixed within this body. Specialization substituted the
+/// parent's type parameters, so local quantifiers and unsolved variables are
+/// the only variables left, and neither is fixed.
+fn fixed_in_parent<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
+    struct Fixed<'db> {
+        db: &'db dyn salsa::Database,
     }
+
+    impl<'db> TypeVisitor<'db> for Fixed<'db> {
+        type Break = ();
+
+        fn db(&self) -> &'db dyn salsa::Database {
+            self.db
+        }
+
+        fn visit_type(&mut self, ty: Type<'db>) -> ControlFlow<()> {
+            match ty.kind(self.db) {
+                TypeKind::BoundVar { .. }
+                | TypeKind::LocalBoundVar { .. }
+                | TypeKind::UniVar { .. }
+                | TypeKind::Error => ControlFlow::Break(()),
+                _ => ty.super_visit_with(self),
+            }
+        }
+
+        fn visit_row(&mut self, row: AbilityRow<'db>) -> ControlFlow<()> {
+            if row.rest(self.db).is_some() {
+                return ControlFlow::Break(());
+            }
+            row.super_visit_with(self)
+        }
+    }
+
+    ty.visit_with(&mut Fixed { db }).is_continue()
 }
 
 /// This boundary instantiates only a lambda's latent row. If that row also
@@ -224,7 +232,6 @@ fn fixed_instance<'db>(
     seed: &LambdaSignature<'db>,
     instance: &crate::typeck::LocalCallableInstance<'db>,
     declarations: &Declarations<'db>,
-    parent_type_parameters: usize,
 ) -> bool {
     let db = ctx.db;
     if !instance.scheme.type_params(db).is_empty()
@@ -253,7 +260,7 @@ fn fixed_instance<'db>(
         || !params
             .iter()
             .chain(std::iter::once(result))
-            .all(|ty| fixed_in_parent(db, *ty, parent_type_parameters))
+            .all(|ty| fixed_in_parent(db, *ty))
     {
         return false;
     }
@@ -457,6 +464,6 @@ fn instantiated_parameters<'db>(
 ) -> Option<Vec<trunk_ir::refs::TypeRef>> {
     let name = function.path(ctx.db).clone();
     let declared = FuncSignature::lookup_logical(ctx, ir, &name)?;
-    let args = super::RowArguments::Instance(reference).rows(ctx, declarations, &name, &declared);
+    let args = RowArguments::Instance(reference).rows(ctx, declarations, &name, &declared);
     Some(declared.instantiate(ir, &args).param_types)
 }

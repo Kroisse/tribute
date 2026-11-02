@@ -24,8 +24,8 @@ fn assert_escape_error(db: &dyn salsa::Database, text: &str, escape: &str, messa
     assert_eq!(error.phase, CompilationPhase::AstGeneration);
     let start = text.find(escape).expect("escape must occur in the source");
     assert_eq!(
-        (error.inner.span.start, error.inner.span.end),
-        (start, start + escape.len()),
+        error.inner.span.range(),
+        start..start + escape.len(),
         "span must cover the escape sequence"
     );
     assert!(

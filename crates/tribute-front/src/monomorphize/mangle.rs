@@ -85,6 +85,9 @@ fn nominal_mangle_base(db: &dyn salsa::Database, id: TypeDefId<'_>, name: Symbol
     }
 }
 
+// The mangled form is a printer rather than a `TypeVisitor`: it brackets each
+// node and writes a function's ability row before its result, an order the
+// shared traversal does not follow.
 fn write_type_mangled(
     db: &dyn salsa::Database,
     ty: Type<'_>,
@@ -132,7 +135,7 @@ fn write_type_mangled(
         // existing uniform representation boundary, where both kinds of
         // quantified variables use their index only.
         TypeKind::LocalBoundVar { index, .. } => write!(f, "8${index}"),
-        TypeKind::UniVar { .. } | TypeKind::App { .. } | TypeKind::Continuation { .. } => {
+        TypeKind::UniVar { .. } | TypeKind::Continuation { .. } => {
             panic!("mangle_name requires fully-resolved concrete types");
         }
         TypeKind::Error => f.write_str("error"),
@@ -303,11 +306,7 @@ mod tests {
         let source = Type::new(
             &db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::source(
-                    &db,
-                    trunk_ir::SymbolPath::new([name.clone()]),
-                    crate::ast::NodeId::from_raw(1),
-                ),
+                id: crate::ast::TypeDefId::source(&db, trunk_ir::SymbolPath::new([name.clone()])),
                 name,
                 args: vec![int_ty],
             },
@@ -332,11 +331,7 @@ mod tests {
         let a_thing = Type::new(
             &db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::source(
-                    &db,
-                    trunk_ir::SymbolPath::new(["A", "Thing"]),
-                    crate::ast::NodeId::from_raw(1),
-                ),
+                id: crate::ast::TypeDefId::source(&db, trunk_ir::SymbolPath::new(["A", "Thing"])),
                 name: name.clone(),
                 args: vec![int_ty],
             },
@@ -344,11 +339,7 @@ mod tests {
         let b_thing = Type::new(
             &db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::source(
-                    &db,
-                    trunk_ir::SymbolPath::new(["B", "Thing"]),
-                    crate::ast::NodeId::from_raw(2),
-                ),
+                id: crate::ast::TypeDefId::source(&db, trunk_ir::SymbolPath::new(["B", "Thing"])),
                 name,
                 args: vec![int_ty],
             },
@@ -792,11 +783,7 @@ mod laws {
         let user_fn = Type::new(
             &db,
             TypeKind::Named {
-                id: TypeDefId::source(
-                    &db,
-                    trunk_ir::SymbolPath::new([name.clone()]),
-                    crate::ast::NodeId::from_raw(1),
-                ),
+                id: TypeDefId::source(&db, trunk_ir::SymbolPath::new([name.clone()])),
                 name,
                 args: vec![int],
             },
@@ -815,16 +802,12 @@ mod laws {
     fn source_types_spelled_like_compiler_types_mangle_distinctly() {
         let db = salsa::DatabaseImpl::new();
         let int = Type::new(&db, TypeKind::Int);
-        let source = |name: &str, node, args| {
+        let source = |name: &str, args| {
             let name = Symbol::new(name);
             Type::new(
                 &db,
                 TypeKind::Named {
-                    id: TypeDefId::source(
-                        &db,
-                        trunk_ir::SymbolPath::new([name.clone()]),
-                        crate::ast::NodeId::from_raw(node),
-                    ),
+                    id: TypeDefId::source(&db, trunk_ir::SymbolPath::new([name.clone()])),
                     name,
                     args,
                 },
@@ -840,14 +823,14 @@ mod laws {
         );
         let cases = [
             (
-                source("Tup", 1, vec![int]),
+                source("Tup", vec![int]),
                 Type::new(&db, TypeKind::Tuple(vec![int])),
             ),
             (
-                source("T0", 2, vec![]),
+                source("T0", vec![]),
                 Type::new(&db, TypeKind::BoundVar { index: 0 }),
             ),
-            (source("BuiltinList", 3, vec![int]), builtin_list),
+            (source("BuiltinList", vec![int]), builtin_list),
         ];
         let base = Symbol::new("identity");
         for (named, constructed) in cases {
@@ -857,11 +840,7 @@ mod laws {
             );
         }
         let type_name = |id, args: &[Type<'_>]| mangle_type_path(&db, id, args).to_symbol();
-        let source_list = TypeDefId::source(
-            &db,
-            trunk_ir::SymbolPath::new(["BuiltinList"]),
-            crate::ast::NodeId::from_raw(3),
-        );
+        let source_list = TypeDefId::source(&db, trunk_ir::SymbolPath::new(["BuiltinList"]));
         assert_ne!(
             type_name(TypeDefId::builtin_list(&db), &[int]),
             type_name(source_list, &[int])

@@ -53,7 +53,7 @@ fn native_pipeline_ir<'db>(db: &'db dyn salsa::Database, name: &str, code: &str)
 fn assert_shared_cps_contract(ir_text: &str) {
     for required in [
         continuation_frame::NAME_PREFIX,
-        "func.func @main",
+        "func.func @\"pkg::main\"",
         "func.tail_call_indirect",
     ] {
         assert!(
@@ -180,13 +180,14 @@ fn pipeline_contract_summary(ir_text: &str, native: bool) -> String {
         if !matches!(
             name.as_str(),
             "main"
-                | "use_console"
-                | "run"
-                | "bump"
-                | "run_state"
-                | "step"
-                | "run_state_with_console"
-                | "run_all"
+                | "pkg::main"
+                | "pkg::use_console"
+                | "pkg::run"
+                | "pkg::bump"
+                | "pkg::run_state"
+                | "pkg::step"
+                | "pkg::run_state_with_console"
+                | "pkg::run_all"
                 | "__tribute_main"
                 | "__tribute_done_k"
                 | "__tribute_unhandled"
@@ -360,7 +361,7 @@ fn shared_pipeline_direct_fn_ability_call(db: &salsa::DatabaseImpl) {
     let ir_text = shared_pipeline_ir(db, "direct_fn.trb", DIRECT_FN_SOURCE);
     assert_shared_cps_contract(&ir_text);
     insta::assert_snapshot!(pipeline_contract_summary(&ir_text, false));
-    assert!(ir_text.contains("func.func @run"), "{ir_text}");
+    assert!(ir_text.contains("func.func @\"pkg::run\""), "{ir_text}");
 }
 
 #[salsa_test]
@@ -368,7 +369,10 @@ fn shared_pipeline_resumptive_op_continuation(db: &salsa::DatabaseImpl) {
     let ir_text = shared_pipeline_ir(db, "resumptive_op.trb", RESUMPTIVE_OP_SOURCE);
     assert_shared_cps_contract(&ir_text);
     insta::assert_snapshot!(pipeline_contract_summary(&ir_text, false));
-    assert!(ir_text.contains("func.func @run_state"), "{ir_text}");
+    assert!(
+        ir_text.contains("func.func @\"pkg::run_state\""),
+        "{ir_text}"
+    );
     assert!(ir_text.contains("__tribute_one_shot_state"), "{ir_text}");
 }
 
@@ -377,7 +381,7 @@ fn shared_pipeline_mixed_nested_handler_boundary(db: &salsa::DatabaseImpl) {
     let ir_text = shared_pipeline_ir(db, "mixed_nested.trb", MIXED_NESTED_SOURCE);
     assert_shared_cps_contract(&ir_text);
     insta::assert_snapshot!(pipeline_contract_summary(&ir_text, false));
-    assert!(ir_text.contains("func.func @run_all"), "{ir_text}");
+    assert!(ir_text.contains("func.func @\"pkg::run_all\""), "{ir_text}");
 }
 
 #[salsa_test]

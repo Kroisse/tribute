@@ -37,6 +37,53 @@ fn fresh_row_var_avoids_rows_already_present_in_constraints() {
     assert_eq!(solver.fresh_row_var(), RowVar { id: 1001 });
 }
 
+/// A type variable bound to a type that contains the checked variable is an
+/// occurrence, also when only a row substitution reaches it. Missing it bound
+/// `c` to `fn() ->{State(d)} Int` with `d := #(c, Int)`, a cyclic substitution
+/// whose application never terminated.
+#[test]
+fn test_occurs_check_follows_type_bindings_inside_substituted_rows() {
+    let db = test_db();
+    let mut solver = TypeSolver::new(&db);
+
+    let c = fresh_var(&db, 0);
+    let d = fresh_var(&db, 1);
+    let int_ty = Type::new(&db, TypeKind::Int);
+    let TypeKind::UniVar { id: d_id } = d.kind(&db) else {
+        unreachable!("fresh_var must create a UniVar")
+    };
+    solver
+        .type_subst
+        .insert(*d_id, Type::new(&db, TypeKind::Tuple(vec![c, int_ty])));
+    let row_var = RowVar { id: 7 };
+    solver.row_subst.insert(
+        row_var.id,
+        AbilityRow::new(
+            &db,
+            vec![AbilityInstance {
+                ability_id: test_ability_id(&db, "State"),
+                args: vec![d],
+            }],
+            None,
+        ),
+    );
+    let func_ty = Type::new(
+        &db,
+        TypeKind::Func {
+            params: vec![],
+            result: int_ty,
+            effect: AbilityRow::open(&db, row_var),
+        },
+    );
+
+    let result = solver.unify_types(c, func_ty);
+
+    assert!(
+        matches!(result, Err(SolveError::OccursCheck { .. })),
+        "{result:?}"
+    );
+}
+
 #[test]
 fn test_occurs_check_applies_ability_row_substitution() {
     let db = test_db();
@@ -170,11 +217,7 @@ fn test_unify_named_types_rejects_builtin_and_source_with_same_spelling() {
     let source = Type::new(
         &db,
         TypeKind::Named {
-            id: TypeDefId::source(
-                &db,
-                trunk_ir::SymbolPath::new([name.clone()]),
-                crate::ast::NodeId::from_raw(1),
-            ),
+            id: TypeDefId::source(&db, trunk_ir::SymbolPath::new([name.clone()])),
             name,
             args: vec![int_ty],
         },
@@ -195,11 +238,7 @@ fn test_unify_named_types_rejects_same_spelled_source_declarations() {
     let first = Type::new(
         &db,
         TypeKind::Named {
-            id: TypeDefId::source(
-                &db,
-                trunk_ir::SymbolPath::new(["A", "Thing"]),
-                crate::ast::NodeId::from_raw(1),
-            ),
+            id: TypeDefId::source(&db, trunk_ir::SymbolPath::new(["A", "Thing"])),
             name: name.clone(),
             args: vec![int_ty],
         },
@@ -207,11 +246,7 @@ fn test_unify_named_types_rejects_same_spelled_source_declarations() {
     let second = Type::new(
         &db,
         TypeKind::Named {
-            id: TypeDefId::source(
-                &db,
-                trunk_ir::SymbolPath::new(["B", "Thing"]),
-                crate::ast::NodeId::from_raw(2),
-            ),
+            id: TypeDefId::source(&db, trunk_ir::SymbolPath::new(["B", "Thing"])),
             name,
             args: vec![int_ty],
         },

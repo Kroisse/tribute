@@ -9,12 +9,12 @@
 //! a second test running in the same process would change the count.
 
 use salsa::{Database, Setter};
-use tribute::database::parse_with_thread_local;
 use tribute::pipeline::{
     compile_frontend_for_shared_route, compile_with_diagnostics, emit_from_boundary_exit,
     run_shared_middle_end, run_target_to_boundary_exit,
 };
 use tribute::{Rope, SourceCst, TributeDatabaseImpl};
+use tribute_front::source_file::parse_rope;
 use tribute_passes::abi_boundary::TargetKind;
 use trunk_ir::symbol::live_dynamic_symbols;
 
@@ -54,7 +54,7 @@ fn compile_from_scratch(round: usize) -> usize {
     let mut alive = 0;
     for target in [TargetKind::Native, TargetKind::Wasm] {
         let frontend = TributeDatabaseImpl::default().attach(|db| {
-            let tree = parse_with_thread_local(&rope, None);
+            let tree = parse_rope(&rope, None);
             let source = SourceCst::from_path(db, "round.trb", rope.clone(), tree);
             compile_frontend_for_shared_route(db, source).expect("the program compiles")
         });
@@ -89,12 +89,12 @@ fn dynamic_symbols_are_released_with_their_database() {
     // the previous names: Salsa-interned definition ids hold them.
     let mut db = TributeDatabaseImpl::default();
     let rope = Rope::from_str(&program(100));
-    let tree = parse_with_thread_local(&rope, None);
+    let tree = parse_rope(&rope, None);
     let source = SourceCst::from_path(&db, "edited.trb", rope, tree);
     let mut after_edit = Vec::new();
     for round in 100..116 {
         let rope = Rope::from_str(&program(round));
-        let tree = parse_with_thread_local(&rope, None);
+        let tree = parse_rope(&rope, None);
         source.set_text(&mut db).to(rope);
         source.set_tree(&mut db).to(tree);
         let result = compile_with_diagnostics(&db, source);

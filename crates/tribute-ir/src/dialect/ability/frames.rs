@@ -9,7 +9,6 @@ use trunk_ir::types::{Attribute, AttributeMap, StringRef};
 use trunk_ir::{IrContext, SymbolPath};
 
 use super::{Frame, Handle, SuffixFrame, is_evidence_type_ref};
-use crate::calling_convention::{CALLING_CONVENTION_ATTR, CallingConvention};
 use crate::dialect::tribute_control::{EvidencePlanSite, verify_evidence_plan};
 
 /// Declared kind of a handled operation.
@@ -131,24 +130,18 @@ fn is_never(ctx: &IrContext, ty: TypeRef) -> bool {
     Never::from_type_ref(ctx, ty).is_some()
 }
 
-/// The convention and function signature of a convention-proven closure type.
-fn closure_signature(ctx: &IrContext, ty: TypeRef) -> Option<(CallingConvention, func::FuncSig)> {
+/// The function signature of a closure type.
+fn closure_signature(ctx: &IrContext, ty: TypeRef) -> Option<func::FuncSig> {
     let data = ctx.get_type(ty);
     if !data.name.is(ctx, "closure.closure") {
         return None;
     }
-    let convention = match ctx.type_attrs(ty).get(CALLING_CONVENTION_ATTR) {
-        Some(Attribute::Int(code)) => CallingConvention::try_from(*code).ok()?,
-        _ => return None,
-    };
-    let [function] = data.params.as_slice() else {
-        return None;
-    };
-    Some((convention, func::FuncSig::from_type_ref(ctx, *function)?))
+    let [function] = data.params.as_array()?;
+    func::FuncSig::from_type_ref(ctx, *function)
 }
 
-/// A `closure.closure` of the `Cps` convention that returns `core.never`:
-/// a continuation, completion, or `op` handler arm.
+/// A `closure.closure` that returns `core.never`: a continuation,
+/// completion, or `op` handler arm, entered through `Cps`.
 ///
 /// Provides the `Inputs` and `Results` lists of its function type.
 pub struct CpsClosure;
@@ -176,7 +169,7 @@ impl trunk_ir::type_constraint::TypeConstraint for CpsClosure {
                 if !is_cps_closure(ctx, ty) {
                     return None;
                 }
-                let (_, signature) = closure_signature(ctx, ty)?;
+                let signature = closure_signature(ctx, ty)?;
                 match index {
                     0 => Some(Projected::List(signature.inputs(ctx))),
                     1 => Some(Projected::List(signature.results(ctx))),
@@ -204,10 +197,9 @@ impl trunk_ir::type_constraint::TypeConstraint for NotNever {
 }
 
 fn is_cps_closure(ctx: &IrContext, ty: TypeRef) -> bool {
-    closure_signature(ctx, ty).is_some_and(|(convention, signature)| {
-        convention == CallingConvention::Cps
-            && matches!(signature.results(ctx), [result] if is_never(ctx, *result))
-    })
+    closure_signature(ctx, ty).is_some_and(
+        |signature| matches!(signature.results(ctx), [result] if is_never(ctx, *result)),
+    )
 }
 
 /// Check that `value` is a `Cps` closure `(Evidence, frame, rest...) -> core.never`
@@ -218,14 +210,9 @@ fn cps_closure_rest<'a>(
     frame: TypeRef,
     role: &str,
 ) -> Result<&'a [TypeRef], String> {
-    let Some((convention, signature)) = closure_signature(ctx, ctx.value_ty(value)) else {
-        return Err(format!(
-            "{role} must be a closure with a calling convention"
-        ));
+    let Some(signature) = closure_signature(ctx, ctx.value_ty(value)) else {
+        return Err(format!("{role} must be a closure"));
     };
-    if convention != CallingConvention::Cps {
-        return Err(format!("{role} must use the cps convention"));
-    }
     let results = signature.results(ctx);
     if !matches!(results, [result] if is_never(ctx, *result)) {
         return Err(format!("{role} must return core.never"));
@@ -335,16 +322,9 @@ fn verify_arm(
     let name = ctx.str(binding.op_name);
     match binding.kind {
         OperationKind::Fn => {
-            let Some((convention, signature)) = closure_signature(ctx, ctx.value_ty(arm)) else {
-                return Err(format!(
-                    "arm of fn operation {name} must be a closure with a calling convention"
-                ));
+            let Some(signature) = closure_signature(ctx, ctx.value_ty(arm)) else {
+                return Err(format!("arm of fn operation {name} must be a closure"));
             };
-            if convention != CallingConvention::EvidenceDirect {
-                return Err(format!(
-                    "arm of fn operation {name} must use the evidence_direct convention"
-                ));
-            }
             if !matches!(signature.inputs(ctx), [evidence, ..] if is_evidence_type_ref(ctx, *evidence))
             {
                 return Err(format!(
@@ -385,7 +365,7 @@ fn verify_arm(
 /// `(Evidence, frame, input) -> core.never`.
 fn is_resume_exact(ctx: &IrContext, ty: TypeRef, frame: TypeRef, input: TypeRef) -> bool {
     is_cps_closure(ctx, ty)
-        && closure_signature(ctx, ty).is_some_and(|(_, signature)| {
+        && closure_signature(ctx, ty).is_some_and(|signature| {
             matches!(
                 signature.inputs(ctx),
                 [evidence, input_frame, value]
@@ -408,11 +388,11 @@ mod tests {
   !ev = adt.array<!marker>
   !frame_i32 = ability.frame<core.i32>
   !frame_nil = ability.frame<core.nil>
-  !completion = closure.closure<func.func_sig<(!ev, !frame_i32, core.nil) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
-  !resume = closure.closure<func.func_sig<(!ev, !frame_i32, core.i32) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
-  !op_arm = closure.closure<func.func_sig<(!ev, !frame_i32, core.i32, !resume, !resume) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 1}>
-  !never_arm = closure.closure<func.func_sig<(!ev, !frame_i32, core.i32) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 1}>
-  !fn_arm = closure.closure<func.func_sig<(!ev) -> core.i32>, {tribute.calling_convention = 1, tribute.closure_environment_index = 1}>"#;
+  !completion = closure.closure<func.func_sig<(!ev, !frame_i32, core.nil) -> core.never>>
+  !resume = closure.closure<func.func_sig<(!ev, !frame_i32, core.i32) -> core.never>>
+  !op_arm = closure.closure<func.func_sig<(!ev, !frame_i32, core.i32, !resume, !resume) -> core.never>>
+  !never_arm = closure.closure<func.func_sig<(!ev, !frame_i32, core.i32) -> core.never>>
+  !fn_arm = closure.closure<func.func_sig<(!ev) -> core.i32>>"#;
 
     fn module(params: &str, body: &str) -> String {
         format!(
@@ -512,7 +492,8 @@ mod tests {
         assert_eq!(printed, print_module(&reparsed, reparsed_module.op()));
         assert_eq!(errors(&valid), "");
 
-        const NEVER: &str = "closure.closure<func.func_sig<(!ev, !frame_i32, core.never) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>";
+        const NEVER: &str =
+            "closure.closure<func.func_sig<(!ev, !frame_i32, core.never) -> core.never>>";
         let cases = [
             (
                 "resumption into another frame",
@@ -622,7 +603,7 @@ mod tests {
             (
                 "fn binding with a cps arm",
                 module(ARMS, &handle(&[binding("fn", "get", "core.i32")], ", %get", "")),
-                "must use the evidence_direct convention",
+                "must return the operation result",
             ),
             (
                 "fn arm with the wrong result",
@@ -632,7 +613,7 @@ mod tests {
             (
                 "op binding with a fn arm",
                 module(ARMS, &handle(&[binding("op", "peek", "core.i32")], ", %peek", "")),
-                "must use the cps convention",
+                "must return core.never",
             ),
             (
                 "resumptive arm without tokens",
@@ -705,14 +686,12 @@ mod tests {
 
     #[test]
     fn malformed_bindings_closures_and_bodies_are_rejected() {
-        const EXTRA: &str = r#"  !plain = closure.closure<func.func_sig<(!ev, !frame_i32, core.nil) -> core.never>>
-  !returning = closure.closure<func.func_sig<(!ev, !frame_i32, core.nil) -> core.i32>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
-  !no_evidence = closure.closure<func.func_sig<(core.i32) -> core.i32>, {tribute.calling_convention = 1, tribute.closure_environment_index = 1}>
-  !bad_code = closure.closure<func.func_sig<(!ev) -> core.i32>, {tribute.calling_convention = 7, tribute.closure_environment_index = 1}>"#;
+        const EXTRA: &str = r#"  !returning = closure.closure<func.func_sig<(!ev, !frame_i32, core.nil) -> core.i32>>
+  !no_evidence = closure.closure<func.func_sig<(core.i32) -> core.i32>>"#;
         let with_extra = |params: &str, body: &str| {
             module(params, body).replacen(TYPES, &format!("{TYPES}\n{EXTRA}"), 1)
         };
-        let extra_arms = ", %plain: !plain, %returning: !returning, %no_evidence: !no_evidence, %bad_code: !bad_code, %value: core.i32";
+        let extra_arms = ", %returning: !returning, %no_evidence: !no_evidence, %value: core.i32";
         let arms = format!("{ARMS}{extra_arms}");
         let one = |kind: &str, result: &str, arm: &str| {
             with_extra(&arms, &handle(&[binding(kind, "get", result)], arm, ""))
@@ -731,16 +710,6 @@ mod tests {
             )
         };
         let cases = [
-            (
-                "plain closure arm",
-                one("op", "core.i32", ", %plain"),
-                "must be a closure with a calling convention",
-            ),
-            (
-                "unknown convention",
-                one("fn", "core.i32", ", %bad_code"),
-                "must be a closure with a calling convention",
-            ),
             (
                 "non-closure fn arm",
                 one("fn", "core.i32", ", %value"),

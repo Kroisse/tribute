@@ -9,54 +9,54 @@ use std::io::{Io, print_line}
 // A function that may fail (simulating parsing)
 fn parse_value(code: Int) -> Result(Int, Int) {
     case code {
-        +0 -> Ok(+0),
-        +1 -> Ok(+100),
-        +2 -> Ok(+200),
-        +42 -> Ok(+4200),
-        _ -> Error(-1)  // -1 indicates parse error
+        +0 -> .Ok(+0),
+        +1 -> .Ok(+100),
+        +2 -> .Ok(+200),
+        +42 -> .Ok(+4200),
+        _ -> .Error(-1)  // -1 indicates parse error
     }
 }
 
 // Pattern matching on Result
 fn handle_result(code: Int) -> Int {
     case parse_value(code) {
-        Ok(n) -> n
-        Error(e) -> e
+        .Ok(n) -> n
+        .Error(e) -> e
     }
 }
 
 // Division that may fail
 fn divide(a: Int, b: Int) -> Result(Int, Int) {
     case b {
-        +0 -> Error(-2)  // -2 indicates division by zero,
-        _ -> Ok(a / b)
+        +0 -> .Error(-2)  // -2 indicates division by zero,
+        _ -> .Ok(a / b)
     }
 }
 
 // Get value or use default
 fn safe_parse(code: Int) -> Int {
     case parse_value(code) {
-        Ok(n) -> n
-        Error(_) -> +0
+        .Ok(n) -> n
+        .Error(_) -> +0
     }
 }
 
 // Check if parsing succeeded
 fn is_valid(code: Int) -> Bool {
     case parse_value(code) {
-        Ok(_) -> True
-        Error(_) -> False
+        .Ok(_) -> True
+        .Error(_) -> False
     }
 }
 
 // Chain two operations using nested pattern matching
 fn parse_and_divide(num_code: Int, denom_code: Int) -> Result(Int, Int) {
     case parse_value(num_code) {
-        Error(e) -> Error(e)
-        Ok(n) -> {
+        .Error(e) -> .Error(e)
+        .Ok(n) -> {
             case parse_value(denom_code) {
-                Error(e) -> Error(e)
-                Ok(d) -> divide(n, d)
+                .Error(e) -> .Error(e)
+                .Ok(d) -> divide(n, d)
             }
         }
     }
@@ -75,8 +75,8 @@ fn main() ->{Io} Nil {
         False -> print_line("42 is invalid")
     }
 
-    case parse_and_divide(+2, +1) {                      // Ok(2): 200 / 100
-        Ok(n) -> print_line(Int::to_string(n))
-        Error(e) -> print_line(Int::to_string(e))
+    case parse_and_divide(+2, +1) {                      // .Ok(2): 200 / 100
+        .Ok(n) -> print_line(Int::to_string(n))
+        .Error(e) -> print_line(Int::to_string(e))
     }
 }

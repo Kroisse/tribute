@@ -10,8 +10,8 @@ use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::helpers::split_block;
 use trunk_ir::rewrite::{
-    ConversionError, ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern,
-    TypeConverter,
+    ConversionError, ConversionTarget, Module, OpRewritePattern, PatternApplicator,
+    PatternRewriter, TypeConverter,
 };
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::{AttributeMap, TypeDataBuilder};
@@ -143,16 +143,16 @@ fn lower_observation(
 
 struct EmptyPattern;
 
-impl RewritePattern for EmptyPattern {
+impl OpRewritePattern for EmptyPattern {
+    type Op = list::Empty;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        empty: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(empty) = list::Empty::from_op(ctx, op) else {
-            return false;
-        };
+    ) -> Option<()> {
+        let op = empty.op_ref();
         let result_ty = ctx.op_result_types(op)[0];
         let node_ty = node_type(ctx, empty.element_type(ctx));
         let null = adt::RefNull::operands()
@@ -160,22 +160,22 @@ impl RewritePattern for EmptyPattern {
             .results(result_ty)
             .build(ctx, ctx.op(op).location);
         rewriter.replace_op(null.op_ref());
-        true
+        Some(())
     }
 }
 
 struct PrependPattern;
 
-impl RewritePattern for PrependPattern {
+impl OpRewritePattern for PrependPattern {
+    type Op = list::Prepend;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        prepend: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(prepend) = list::Prepend::from_op(ctx, op) else {
-            return false;
-        };
+    ) -> Option<()> {
+        let op = prepend.op_ref();
         let result_ty = ctx.op_result_types(op)[0];
         let node_ty = node_type(ctx, prepend.element_type(ctx));
         let node = adt::StructNew::operands([prepend.element(ctx), prepend.tail(ctx)])
@@ -183,28 +183,28 @@ impl RewritePattern for PrependPattern {
             .results(result_ty)
             .build(ctx, ctx.op(op).location);
         rewriter.replace_op(node.op_ref());
-        true
+        Some(())
     }
 }
 
 struct IsEmptyPattern;
 
-impl RewritePattern for IsEmptyPattern {
+impl OpRewritePattern for IsEmptyPattern {
+    type Op = list::IsEmpty;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        is_empty: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(is_empty) = list::IsEmpty::from_op(ctx, op) else {
-            return false;
-        };
+    ) -> Option<()> {
+        let op = is_empty.op_ref();
         let result_ty = ctx.op_result_types(op)[0];
         let check = adt::RefIsNull::operands(is_empty.list(ctx))
             .results(result_ty)
             .build(ctx, ctx.op(op).location);
         rewriter.replace_op(check.op_ref());
-        true
+        Some(())
     }
 }
 

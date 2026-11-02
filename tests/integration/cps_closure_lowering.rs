@@ -2,15 +2,15 @@
 
 use ropey::Rope;
 use salsa_test_macros::salsa_test;
-use tribute::database::parse_with_thread_local;
 use tribute::pipeline::{compile_with_diagnostics, run_through_cps_lowering};
 use tribute_front::SourceCst;
+use tribute_front::source_file::parse_rope;
 use trunk_ir::printer::print_module;
 use trunk_ir::validation::validate_value_integrity;
 
 fn source_from_code(db: &dyn salsa::Database, name: &str, code: &str) -> SourceCst {
     let code = Rope::from_str(code);
-    let tree = parse_with_thread_local(&code, None);
+    let tree = parse_rope(&code, None);
     SourceCst::from_path(db, name, code, tree)
 }
 
@@ -93,7 +93,7 @@ fn run() ->{State(Int)} Int {
     let base = Point { x: +0, y: +0 }
     let pair = #(read(), read())
     let point = Point { x: read(), ..base }
-    let boxed = Boxed(read())
+    let boxed = .Boxed(read())
     +0
 }
 

@@ -2,30 +2,28 @@
 
 use trunk_ir::context::{IrContext, OperationDataBuilder};
 use trunk_ir::dialect::wasm;
-use trunk_ir::ops::{DialectOp, DialectType};
+use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
-    PatternRewriter, RewritePattern, convert_signature_components, rewrite_function_signature,
+    OpRewritePattern, PatternRewriter, convert_signature_components, rewrite_function_signature,
 };
 use trunk_ir::types::Attribute;
 
 /// Converts validated `wasm.func` signatures through a `TypeConverter`.
 pub struct WasmFuncSignatureConversionPattern;
 
-impl RewritePattern for WasmFuncSignatureConversionPattern {
+impl OpRewritePattern for WasmFuncSignatureConversionPattern {
+    type Op = wasm::Func;
+
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        op: OpRef,
+        wasm_func: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(wasm_func) = wasm::Func::from_op(ctx, op) else {
-            return false;
-        };
+    ) -> Option<()> {
+        let op = wasm_func.op_ref();
         let func_type = wasm_func.r#type(ctx);
-        let Some(signature) = wasm::FuncSig::from_type_ref(ctx, func_type) else {
-            return false;
-        };
+        let signature = wasm::FuncSig::from_type_ref(ctx, func_type)?;
         let converted = convert_signature_components(
             ctx,
             rewriter.type_converter(),
@@ -34,7 +32,7 @@ impl RewritePattern for WasmFuncSignatureConversionPattern {
             signature.non_reserved_attrs(ctx),
         );
         if !converted.changed {
-            return false;
+            return None;
         }
         let new_func_type = wasm::func_sig_with_attrs(
             ctx,
@@ -92,6 +90,7 @@ mod tests {
     use trunk_ir::context::{BlockArgData, BlockData, RegionData};
     use trunk_ir::dialect::core;
     use trunk_ir::location::Span;
+    use trunk_ir::ops::DialectOp;
     use trunk_ir::rewrite::{ConversionTarget, Module, PatternApplicator, TypeConverter};
     use trunk_ir::smallvec::smallvec;
     use trunk_ir::types::TypeDataBuilder;

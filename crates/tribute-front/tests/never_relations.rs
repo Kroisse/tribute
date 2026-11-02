@@ -2,12 +2,17 @@
 
 mod common;
 
-use self::common::{ast_pipeline_error_messages, run_ast_pipeline_with_specialized_ir};
+use self::common::ast_pipeline_error_messages;
 use salsa_test_macros::salsa_test;
 use tribute_front::{
     SourceCst,
     ast::{Decl, ExprKind, Type, TypeKind},
+    resolve::{NameDisplay, PackageName},
 };
+
+fn names() -> NameDisplay {
+    NameDisplay::new(&PackageName::executable_root(), [])
+}
 
 fn type_errors(db: &salsa::DatabaseImpl, name: &str, text: &str) -> Vec<String> {
     ast_pipeline_error_messages(db, SourceCst::from_source_str(db, name, text))
@@ -177,7 +182,8 @@ fn empty() -> List(a) { [] }
                 if *name == "List"
                     && matches!(args.as_slice(), [arg] if matches!(arg.kind(db), TypeKind::Nat))
         ),
-        "the non-Never list element must determine List(Nat), got {mixed}"
+        "the non-Never list element must determine List(Nat), got {}",
+        mixed.display(db, &names())
     );
     let empty = function_tail_type(db, source, "empty");
     assert!(
@@ -192,7 +198,8 @@ fn empty() -> List(a) { [] }
                             | TypeKind::LocalBoundVar { .. }
                     ))
         ),
-        "an empty list must retain a fresh element type, got {empty}"
+        "an empty list must retain a fresh element type, got {}",
+        empty.display(db, &names())
     );
     for (name, is_never) in [("reversed", false), ("all_never", true)] {
         let TypeKind::Named { args, .. } = function_tail_type(db, source, name).kind(db) else {
@@ -218,17 +225,17 @@ fn abort() ->{Stop} Never { Stop::stop() }
 
 fn nat_first(choice: Choice) ->{Stop} Nat {
     case choice {
-        A -> 1
-        B -> abort()
-        C -> 2
+        .A -> 1
+        .B -> abort()
+        .C -> 2
     }
 }
 
 fn never_first(choice: Choice) ->{Stop} Nat {
     case choice {
-        A -> abort()
-        B -> 1
-        C -> 2
+        .A -> abort()
+        .B -> 1
+        .C -> 2
     }
 }
 
@@ -263,7 +270,8 @@ fn all_never(choice: Bool) ->{Stop} Never {
     let all_never = function_tail_type(db, source, "all_never");
     assert!(
         matches!(all_never.kind(db), TypeKind::Never),
-        "all-Never case arms must retain Never, got {all_never}"
+        "all-Never case arms must retain Never, got {}",
+        all_never.display(db, &names())
     );
     for name in ["nat_first", "never_first"] {
         assert!(
@@ -291,25 +299,25 @@ fn abort() ->{Stop} Never { Stop::stop() }
 
 fn bad(choice: Choice) ->{Stop} Nat {
     case choice {
-        A -> abort()
-        B -> 1
-        C -> True
+        .A -> abort()
+        .B -> 1
+        .C -> True
     }
 }
 
 fn never_in_middle(choice: Choice) ->{Stop} Nat {
     case choice {
-        A -> 1
-        B -> abort()
-        C -> True
+        .A -> 1
+        .B -> abort()
+        .C -> True
     }
 }
 
 fn never_last(choice: Choice) ->{Stop} Nat {
     case choice {
-        A -> 1
-        B -> True
-        C -> abort()
+        .A -> 1
+        .B -> True
+        .C -> abort()
     }
 }
 "#,
@@ -355,7 +363,8 @@ fn deferred_join() -> Nat {
     let actual = function_tail_type(db, source, "after");
     assert!(
         matches!(actual.kind(db), TypeKind::Never),
-        "the deferred method call must retain actual Never before contextual coercion, got {actual}"
+        "the deferred method call must retain actual Never before contextual coercion, got {}",
+        actual.display(db, &names())
     );
 }
 
@@ -394,50 +403,6 @@ fn partial_generalization() -> #(Nat, Bool) {
     assert!(
         errors.is_empty(),
         "pure let binding should generalize: {errors:#?}"
-    );
-}
-
-#[salsa_test]
-fn returned_callback_keeps_its_cps_convention_after_pure_let(db: &salsa::DatabaseImpl) {
-    let source = SourceCst::from_source_str(
-        db,
-        "returned_callback_preserves_cps_convention_after_pure_let.trb",
-        r#"
-extern "C" fn __tribute_print_nat(value: Nat) -> Nil
-
-fn identity(f: fn(Nat) ->{e} Nat) -> fn(Nat) ->{e} Nat { f }
-
-fn main() -> Nil {
-    let f = identity(fn(x: Nat) { x + 10 })
-    let result = f(5)
-    __tribute_print_nat(result)
-}
-"#,
-    );
-
-    let errors = ast_pipeline_error_messages(db, source);
-    assert!(errors.is_empty(), "{errors:#?}");
-    let ir = run_ast_pipeline_with_specialized_ir(db, source);
-    let main = ir
-        .lines()
-        .find(|line| line.contains("func @main(") || line.contains("func @main["))
-        .expect("IR must contain main");
-    assert!(
-        main.contains("convention(direct)"),
-        "main keeps the convention of its row around the returned callback call:\n{ir}"
-    );
-    let lambda = ir
-        .lines()
-        .find(|line| line.contains("tribute_control.lambda("))
-        .expect("IR must contain the callback lambda");
-    assert!(
-        lambda.contains("convention(cps)"),
-        "the callback lambda must retain its CPS convention:\n{ir}"
-    );
-    assert!(
-        ir.lines()
-            .any(|line| line.contains("tribute_control.call_indirect")),
-        "the returned callback must use an indirect call:\n{ir}"
     );
 }
 
@@ -564,7 +529,8 @@ fn nested_resume_only(flag: Bool) ->{Stop} Never {
     let result = function_tail_type(db, source, "handler_nat");
     assert!(
         matches!(result.kind(db), TypeKind::Nat),
-        "the handle answer should be Nat, got {result}"
+        "the handle answer should be Nat, got {}",
+        result.display(db, &names())
     );
     assert!(matches!(
         function_tail_type(db, source, "resume_only").kind(db),
@@ -594,8 +560,8 @@ fn factory() -> fn() ->{Stop} Nat { fn() { Stop::stop() } }
     assert!(errors.is_empty(), "{errors:#?}");
     let checked = tribute_front::query::type_check_output(db, source).unwrap();
     let metadata = checked.expression_types(db);
-    assert_eq!(checked.lambda_signatures(db).len(), 1);
-    let (lambda_id, signature) = &checked.lambda_signatures(db)[0];
+    assert_eq!(checked.expression_types(db).lambda_signatures.len(), 1);
+    let (lambda_id, signature) = &checked.expression_types(db).lambda_signatures[0];
     let TypeKind::Func { result, .. } = signature.function_type.kind(db) else {
         panic!("expected callable");
     };
@@ -747,7 +713,8 @@ fn result() ->{} Nat {
     assert!(errors.is_empty(), "{errors:#?}");
     let checked = tribute_front::query::type_check_output(db, source).unwrap();
     let (_, operation) = checked
-        .handler_operations(db)
+        .expression_types(db)
+        .handler_operations
         .iter()
         .find(|(_, operation)| operation.kind == tribute_front::ast::OpDeclKind::Fn)
         .unwrap();
@@ -809,7 +776,8 @@ fn late_method() -> Nat {
     assert!(errors.is_empty(), "{errors:#?}");
     let checked = tribute_front::query::type_check_output(db, source).unwrap();
     let callbacks: Vec<_> = checked
-        .lambda_signatures(db)
+        .expression_types(db)
+        .lambda_signatures
         .iter()
         .filter_map(|(_, signature)| match signature.function_type.kind(db) {
             TypeKind::Func { params, result, .. } if params.is_empty() => Some(*result),

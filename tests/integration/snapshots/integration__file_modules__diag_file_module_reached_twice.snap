@@ -1,0 +1,6 @@
+---
+source: tests/integration/file_modules.rs
+assertion_line: 170
+expression: "located_diagnostics(&db, root)"
+---
+- "/pkg/src/main.trb:0..8: the file `/pkg/src/main.trb` of module `main` is already part of this package"

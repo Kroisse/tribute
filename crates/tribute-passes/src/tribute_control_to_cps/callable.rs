@@ -13,7 +13,8 @@ impl Converter<'_> {
         let location = self.ctx.op(source).location;
         let logical_ty = self.ctx.op_result_types(source)[0];
         let callable = tribute_control::FuncSig::from_type_ref(self.ctx, logical_ty).unwrap();
-        let convention = tribute_control::func_sig_convention(self.ctx, logical_ty).unwrap();
+        let conventions = tribute_cps::body_conventions(self.ctx, source)
+            .expect("pre-CPS validation checked lambda conventions");
         let source_result = callable.result(self.ctx);
         let source_params = callable.inputs(self.ctx).to_vec();
         let result = self.convert_type(source_result);
@@ -24,49 +25,50 @@ impl Converter<'_> {
             .collect();
         let evidence = self.evidence_type();
         let frame = self.frame_type(result);
-        let abi = CallableAbi::new(convention, source_param_types, result);
-        let params = abi.lowered_params(evidence, frame);
-        let body_source = self.ctx.op_region(source, 0).ok_or_else(|| {
-            self.malformed_source(source, "tribute_control.lambda requires a body region")
-        })?;
-        let entry_source = self.ctx.region(body_source).blocks[0];
-        let block = make_block(self.ctx, location, &params);
-        let mut body_mapping = mapping.clone();
-        let offset = abi.source_param_offset();
-        for (old, new) in self
-            .ctx
-            .block_args(entry_source)
-            .to_vec()
-            .into_iter()
-            .zip(self.ctx.block_args(block)[offset..].iter().copied())
-        {
-            body_mapping.insert(old, new);
+        let sources: Vec<_> = self.ctx.op_regions(source).collect();
+        let mut bodies = Vec::with_capacity(sources.len());
+        for (&convention, body_source) in conventions.iter().zip(sources) {
+            let abi = CallableAbi::new(convention, source_param_types.clone(), result);
+            let params = abi.lowered_params(evidence, frame);
+            let entry_source = self.ctx.region(body_source).blocks[0];
+            let block = make_block(self.ctx, location, &params);
+            let mut body_mapping = mapping.clone();
+            let offset = abi.source_param_offset();
+            for (old, new) in self
+                .ctx
+                .block_args(entry_source)
+                .to_vec()
+                .into_iter()
+                .zip(self.ctx.block_args(block)[offset..].iter().copied())
+            {
+                body_mapping.insert(old, new);
+            }
+            let evidence_value = convention
+                .needs_evidence()
+                .then(|| self.ctx.block_args(block)[0]);
+            let exit_k = convention
+                .needs_continuation_frame()
+                .then(|| self.ctx.block_args(block)[usize::from(convention.needs_evidence())]);
+            let flow = Flow {
+                convention,
+                evidence: evidence_value,
+                exit_k,
+                root_exit_k: exit_k,
+                void_exit_k: None,
+                answer_type: result,
+                preserve_scf_yield: false,
+                arm: None,
+                tail_join: None,
+            };
+            self.convert_sequence(
+                self.ctx.block(entry_source).ops.clone(),
+                0,
+                block,
+                &mut body_mapping,
+                &flow,
+            )?;
+            bodies.push(single_block_region(self.ctx, location, block));
         }
-        let evidence_value = convention
-            .needs_evidence()
-            .then(|| self.ctx.block_args(block)[0]);
-        let exit_k = convention
-            .needs_continuation_frame()
-            .then(|| self.ctx.block_args(block)[usize::from(convention.needs_evidence())]);
-        let flow = Flow {
-            convention,
-            evidence: evidence_value,
-            exit_k,
-            root_exit_k: exit_k,
-            void_exit_k: None,
-            answer_type: result,
-            preserve_scf_yield: false,
-            arm: None,
-            tail_join: None,
-        };
-        self.convert_sequence(
-            self.ctx.block(entry_source).ops.clone(),
-            0,
-            block,
-            &mut body_mapping,
-            &flow,
-        )?;
-        let body = single_block_region(self.ctx, location, block);
         let captures: Vec<_> = self
             .ctx
             .op_operands(source)
@@ -74,16 +76,43 @@ impl Converter<'_> {
             .map(|capture| mapping.get(capture).copied().unwrap_or(*capture))
             .collect();
         let physical_ty = self.convert_type(logical_ty);
+        let signatures: Vec<_> = conventions
+            .iter()
+            .map(|&convention| self.lower_callable_signature(logical_ty, convention))
+            .collect();
+        let adapters = self.tables.adapters(
+            self.ctx,
+            self.module_block,
+            location,
+            physical_ty,
+            &conventions,
+        );
+        let adapters = (!adapters.is_empty()).then(|| {
+            adapters
+                .into_iter()
+                .map(|(convention, adapter)| {
+                    (
+                        convention.keyword().into(),
+                        trunk_ir::SymbolPath::new([adapter]),
+                    )
+                })
+                .collect::<Vec<_>>()
+        });
         let lambda = closure::Lambda::operands(captures)
+            .signatures(signatures)
+            .conventions(conventions)
+            .adapters(adapters)
             .results(physical_ty)
-            .regions(body)
+            .regions(bodies)
             .build(self.ctx, location);
         self.copy_extra_attrs(
             source,
             lambda.op_ref(),
-            &[tribute_control::QUANTIFIED_ROWS_ATTR],
+            &[
+                tribute_control::QUANTIFIED_ROWS_ATTR,
+                tribute_cps::CONVENTIONS_ATTR,
+            ],
         );
-        lambda.set_calling_convention(self.ctx, convention);
         Ok(lambda.op_ref())
     }
 
@@ -132,108 +161,137 @@ impl Converter<'_> {
         source: OpRef,
     ) -> Result<(Vec<OpRef>, ValueRef), TributeControlToCpsError> {
         let location = self.ctx.op(source).location;
-        let target_symbol = self
-            .ctx
-            .op_attrs(source)
-            .get_symbol_ref("func_ref")
-            .expect("pre-CPS validation checked func_ref target")
-            .clone();
-        let target = self
-            .current_func(source)
-            .expect("pre-CPS validation resolved func_ref target in this module");
+        let table = self
+            .func_tables
+            .get(&source)
+            .cloned()
+            .expect("pre-CPS validation resolved func_ref table in this module");
         let result_logical_ty = self.ctx.op_result_types(source)[0];
-        let result_convention = tribute_control::func_sig_convention(self.ctx, result_logical_ty)
-            .expect("pre-CPS validation checked func_ref convention");
-        debug_assert!(
-            !target.convention.needs_continuation_frame()
-                || result_convention.needs_continuation_frame(),
-            "pre-CPS validation rejects a weaker func_ref result convention"
-        );
-        // The adapter is the closure's callable with the environment
-        // interposed, so both share parameter attributes and metadata.
         let closure_ty = self.convert_type(result_logical_ty);
-        let function = closure::Closure::from_type_ref(self.ctx, closure_ty)
-            .expect("func_ref result lowers to a closure")
-            .func_type(self.ctx);
+        let entries = match self.table_entries.get(&(table.op, closure_ty)) {
+            Some(entries) => entries.clone(),
+            None => {
+                let entries = self.build_table_entries(&table, result_logical_ty, closure_ty)?;
+                self.table_entries
+                    .insert((table.op, closure_ty), entries.clone());
+                entries
+            }
+        };
+        let closure_new = closure::New::operands(std::iter::empty::<ValueRef>())
+            .entries(entries)
+            .results(closure_ty)
+            .build(self.ctx, location);
+        Ok((vec![closure_new.op_ref()], closure_new.result(self.ctx)))
+    }
+
+    /// The convention entries of `table` for closures of `closure_ty`: an
+    /// entry function for each target, then adapters and traps for the other
+    /// conventions.
+    fn build_table_entries(
+        &mut self,
+        table: &FuncTable,
+        logical_ty: TypeRef,
+        closure_ty: TypeRef,
+    ) -> Result<[SymbolPath; 3], TributeControlToCpsError> {
+        let location = self.ctx.op(table.op).location;
+        let mut bodies = Vec::new();
+        for (convention, callable, target) in &table.entries {
+            let info = self
+                .funcs
+                .get(callable)
+                .cloned()
+                .expect("pre-CPS validation resolved table targets");
+            if *convention != info.convention {
+                return Err(self.malformed_source(
+                    table.op,
+                    "a function table entry weaker than its target is not supported",
+                ));
+            }
+            let entry = self.func_ref_entry(location, logical_ty, &info, target);
+            bodies.push((*convention, entry));
+        }
+        let conventions: Vec<_> = bodies.iter().map(|&(convention, _)| convention).collect();
+        let adapters = self.tables.adapters(
+            self.ctx,
+            self.module_block,
+            location,
+            closure_ty,
+            &conventions,
+        );
+        Ok(self.tables.table(
+            self.ctx,
+            self.module_block,
+            location,
+            closure_ty,
+            bodies
+                .into_iter()
+                .chain(adapters)
+                .map(|(convention, entry)| (convention, SymbolPath::new([entry]))),
+        ))
+    }
+
+    /// The entry function of a closure of `logical_ty` that enters `target`,
+    /// the callable `info` describes, through its own convention.
+    fn func_ref_entry(
+        &mut self,
+        location: Location,
+        logical_ty: TypeRef,
+        info: &CallableInfo,
+        target: &SymbolPath,
+    ) -> Symbol {
+        let convention = info.convention;
+        // The entry is the closure's entry with the environment interposed,
+        // so both share parameter attributes and metadata.
+        let closure_ty = self.convert_type(logical_ty);
+        let function = self.lower_callable_signature(logical_ty, convention);
         let callable = func::FuncSig::from_type_ref(self.ctx, function)
-            .expect("func_ref result lowers to a func.func_sig callable");
-        // The adapter's environment is the capture-free closure itself.
-        let adapter = callable.rebuild(self.ctx, |inputs, _| {
-            inputs.insert(
-                usize::from(result_convention.needs_evidence()),
-                (closure_ty, AttributeMap::new()),
-            );
+            .expect("an entry signature is a func.func_sig");
+        // The entry's environment is the capture-free closure itself, right
+        // after the optional evidence.
+        let evidence = usize::from(convention.needs_evidence());
+        let entry = callable.rebuild(self.ctx, |inputs, _| {
+            inputs.insert(evidence, (closure_ty, AttributeMap::new()));
         });
-        let physical_params = adapter.inputs(self.ctx).to_vec();
-        let adapter_ty = adapter.as_type_ref();
+        let physical_params = entry.inputs(self.ctx).to_vec();
+        let entry_ty = entry.as_type_ref();
         let block = make_block(self.ctx, location, &physical_params);
         let args = self.ctx.block_args(block).to_vec();
-        let evidence_offset = usize::from(result_convention.needs_evidence());
-        // The environment is interposed immediately after optional evidence,
-        // so a present ContinuationFrame is the following slot.
-        let frame_offset = evidence_offset + 1;
-        let source_offset = usize::from(result_convention.needs_evidence())
-            + 1
-            + usize::from(result_convention.needs_continuation_frame());
-        let mut target_args = Vec::new();
-        if target.convention.needs_evidence() {
-            target_args.push(args[0]);
-        }
-        if target.convention.needs_continuation_frame() {
-            target_args.push(args[frame_offset]);
-        }
-        target_args.extend_from_slice(&args[source_offset..]);
-        let target_result = self.convert_type(target.source_result);
-        if target.convention == CallingConvention::Cps {
-            let tail = func::TailCall::operands(target_args)
-                .callee(target_symbol.clone())
-                .build(self.ctx, location);
-            tail.set_calling_convention(self.ctx, CallingConvention::Cps);
-            self.ctx.push_op(block, tail.op_ref());
-        } else if result_convention != CallingConvention::Cps
-            && !target.platform
-            && adapter.results(self.ctx) == [target_result]
+        let target_args: Vec<_> = args[..evidence]
+            .iter()
+            .chain(&args[evidence + 1..])
+            .copied()
+            .collect();
+        let target_result = self.convert_type(info.source_result);
+        if convention == CallingConvention::Cps
+            || (!info.platform && entry.results(self.ctx) == [target_result])
         {
-            // A value adapter transfers its frame to the target, so a source
-            // `become` through the adapted callable value stays a proper
-            // tail call.
+            // The entry transfers its frame to the target, so a source
+            // `become` through the callable value stays a proper tail call.
             let tail = func::TailCall::operands(target_args)
-                .callee(target_symbol.clone())
+                .callee(target.clone())
                 .build(self.ctx, location);
-            tail.set_calling_convention(self.ctx, target.convention);
+            tail.set_calling_convention(self.ctx, convention);
             self.ctx.push_op(block, tail.op_ref());
         } else {
             let call = func::Call::operands(target_args)
-                .callee(target_symbol.clone())
+                .callee(target.clone())
                 .results([target_result])
                 .build(self.ctx, location);
-            call.set_calling_convention(self.ctx, target.convention);
+            call.set_calling_convention(self.ctx, convention);
             self.ctx.push_op(block, call.op_ref());
-            if result_convention == CallingConvention::Cps {
-                let exit = ability::Exit::operands(args[frame_offset], call.result(self.ctx))
-                    .build(self.ctx, location);
-                self.ctx.push_op(block, exit.op_ref());
-            } else {
-                let ret = func::Return::operands([call.result(self.ctx)]).build(self.ctx, location);
-                self.ctx.push_op(block, ret.op_ref());
-            }
+            let ret = func::Return::operands([call.result(self.ctx)]).build(self.ctx, location);
+            self.ctx.push_op(block, ret.op_ref());
         }
         let region = single_block_region(self.ctx, location, block);
-        let adapter_symbol = self.fresh_helper("func_ref_adapter");
-        let adapter = func::Func::operands()
-            .sym_name(self.ctx.intern_symbol_text(&adapter_symbol))
-            .r#type(adapter_ty)
+        let symbol = self.fresh_helper("func_ref_adapter");
+        let entry = func::Func::operands()
+            .sym_name(self.ctx.intern_symbol_text(&symbol))
+            .r#type(entry_ty)
             .regions(region)
             .build(self.ctx, location);
-        adapter.set_calling_convention(self.ctx, result_convention);
-        self.ctx.push_op(self.module_block, adapter.op_ref());
-
-        let closure_new = closure::New::operands(std::iter::empty::<ValueRef>())
-            .func_ref(trunk_ir::SymbolPath::new([adapter_symbol]))
-            .results(closure_ty)
-            .build(self.ctx, location);
-        closure_new.set_calling_convention(self.ctx, result_convention);
-        Ok((vec![closure_new.op_ref()], closure_new.result(self.ctx)))
+        entry.set_calling_convention(self.ctx, convention);
+        self.ctx.push_op(self.module_block, entry.op_ref());
+        symbol
     }
 
     pub(super) fn convert_func(
@@ -257,7 +315,7 @@ impl Converter<'_> {
             .get(&source)
             .cloned()
             .expect("validated function is present in the callable graph");
-        let physical_type = self.physical_function_type(logical_type);
+        let physical_type = self.lower_callable_signature(logical_type, info.convention);
         if !self.ctx.op_has_regions(source) {
             let mut builder = OperationDataBuilder::new(location, "func.func")
                 .attr(
@@ -506,7 +564,7 @@ impl Converter<'_> {
         let location = self.ctx.op(source).location;
         let source_callee = self.ctx.op_operands(source)[0];
         let logical_type = self.ctx.value_ty(source_callee);
-        let convention = tribute_control::func_sig_convention(self.ctx, logical_type)
+        let convention = tribute_cps::declared_convention(self.ctx, source)
             .expect("pre-CPS validation checked indirect tail callee convention");
         let callee = mapping
             .get(&source_callee)
@@ -529,7 +587,9 @@ impl Converter<'_> {
                 self.tail_frame(source, flow)?,
             ];
             args.extend(source_args);
-            let transfer = emit_cps_tail_call_indirect(self.ctx, block, location, callee, args)?;
+            let signature = self.lower_callable_signature(logical_type, convention);
+            let transfer =
+                emit_cps_entry_transfer(self.ctx, block, location, callee, signature, args)?;
             carry_evidence_plan(self.ctx, source, transfer);
             return Ok(());
         }
@@ -538,15 +598,7 @@ impl Converter<'_> {
             args.push(self.current_evidence(source, flow)?);
         }
         args.extend(source_args);
-        let converted_callee = self.convert_type(logical_type);
-        let signature = physical_closure_function_type(self.ctx, converted_callee, convention)
-            .ok_or_else(|| {
-                TributeControlToCpsError::post_op(
-                    source,
-                    location,
-                    "indirect tail callee has no exact provenance-bearing closure contract",
-                )
-            })?;
+        let signature = self.lower_callable_signature(logical_type, convention);
         if flow.convention == CallingConvention::Cps {
             let call = func::CallIndirect::operands(callee, args)
                 .signature(signature)
@@ -584,7 +636,7 @@ impl Converter<'_> {
         let location = self.ctx.op(source).location;
         let source_callee = self.ctx.op_operands(source)[0];
         let logical_type = self.ctx.value_ty(source_callee);
-        let convention = tribute_control::func_sig_convention(self.ctx, logical_type)
+        let convention = tribute_cps::declared_convention(self.ctx, source)
             .expect("pre-CPS validation checked indirect callee convention");
         let callee = mapping
             .get(&source_callee)
@@ -607,7 +659,9 @@ impl Converter<'_> {
                     .iter()
                     .map(|arg| mapping.get(arg).copied().unwrap_or(*arg)),
             );
-            let transfer = emit_cps_tail_call_indirect(self.ctx, block, location, callee, args)?;
+            let signature = self.lower_callable_signature(logical_type, convention);
+            let transfer =
+                emit_cps_entry_transfer(self.ctx, block, location, callee, signature, args)?;
             carry_evidence_plan(self.ctx, source, transfer);
             return Ok(ControlFlow::Break(()));
         }
@@ -620,18 +674,9 @@ impl Converter<'_> {
                 .iter()
                 .map(|arg| mapping.get(arg).copied().unwrap_or(*arg)),
         );
-        // The source-data callee keeps its exact callable contract in its
-        // converted closure type. Carry that contract onto the transfer
-        // instead of inferring it from the physical operands later.
-        let converted_callee = self.convert_type(logical_type);
-        let signature = physical_closure_function_type(self.ctx, converted_callee, convention)
-            .ok_or_else(|| {
-                TributeControlToCpsError::post_op(
-                    source,
-                    location,
-                    "indirect callee has no exact provenance-bearing closure contract",
-                )
-            })?;
+        // The transfer carries the entry ABI of its convention; the
+        // callee's closure type does not.
+        let signature = self.lower_callable_signature(logical_type, convention);
         let call = func::CallIndirect::operands(callee, args)
             .signature(signature)
             .build(self.ctx, location);

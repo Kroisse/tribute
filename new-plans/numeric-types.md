@@ -114,7 +114,7 @@ Int = i31ref (fixnum) | BigInt (bignum)
 
 ### Decimal text conversion
 
-The canonical public numeric text boundary belongs to the `Int` module:
+The canonical public `Int` text boundary belongs to the `Int` module:
 
 ```tribute
 pub mod Int {
@@ -156,6 +156,22 @@ or accept a prefix of the input.
 `Int::to_string` returns canonical ASCII decimal text: `"0"` for zero, a leading
 `-` only for negative values, and no leading zeroes. It must format the minimum
 representable value without first negating it.
+
+`Nat` has the matching formatting function:
+
+```tribute
+pub mod Nat {
+    pub fn to_string(value: Nat) -> String
+}
+```
+
+`Nat::to_string` returns canonical ASCII decimal text: `"0"` for zero and no
+leading zeroes. The current representation is an unsigned 32-bit integer, so
+it formats every value from `0` through `4294967295`. Like `Int::to_string`, it
+is ordinary prelude source shared by every target; printing a `Nat` goes
+through `Nat::to_string` and `std::io::print_line`, not a runtime-specific
+print function. When the arbitrary-precision representation is implemented,
+the same signature formats every representable `Nat`.
 
 The public functions consume and produce `String`; their implementation may
 cross the existing public `String`/`Bytes` boundary or use a documented
@@ -235,7 +251,7 @@ any (anyref)
 Int는 이미 anyref 서브타입이므로, 다형적 함수에서 추가 boxing이 필요 없다:
 
 ```rust
-fn identity(a)(x: a) -> a { x }
+fn identity(x: a) -> a { x }
 
 // Int로 호출
 identity(42)
