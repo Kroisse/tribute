@@ -273,6 +273,26 @@ pub fn run_ast_pipeline(db: &dyn salsa::Database, source: SourceCst) {
     let _ = run_ast_pipeline_with_ir(db, source);
 }
 
+/// Parse, resolve, and type check `source` against the prelude.
+pub fn analyze_with_prelude(
+    db: &dyn salsa::Database,
+    source: SourceCst,
+) -> tribute_front::typeck::TypeCheckOutput<'_> {
+    *analysis::analyze(db, source, *environment(db)).expect("the source parses")
+}
+
+/// The prelude's `String` type.
+pub fn prelude_string_type(db: &dyn salsa::Database) -> tribute_front::ast::Type<'_> {
+    let prelude = analysis::checked_package(db, *std_package(db)).expect("the prelude parses");
+    prelude
+        .checked
+        .declarations(db)
+        .well_known_types
+        .string
+        .expect("the prelude declares String")
+        .ty
+}
+
 /// Run the frontend through TDNR, without lowering invalid ASTs to IR.
 pub fn ast_pipeline_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<Diagnostic> {
     analysis::diagnostics(db, source, *environment(db))

@@ -1,0 +1,11 @@
+[package]
+name = "tribute-prop"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Typed, value-carrying Tribute source strategies for property-based testing"
+publish = false
+
+[dependencies]
+proptest.workspace = true
