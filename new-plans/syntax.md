@@ -64,7 +64,7 @@ type where in
 &&  ||
 
 // 기타
-=  ->  ::  .  ,  ;  :  |  <>
+=  ->  ::  .  ,  :  |  <>
 
 // 괄호류
 (  )  {  }  [  ]
@@ -809,7 +809,7 @@ Runtime value를 기존 tail 앞에 붙이는 최소 public API는
 Block ::= '{' Statement* Expression? '}'
 
 Statement ::= LetStatement
-            | Expression ';'?
+            | Expression
 
 LetStatement ::= 'let' Pattern (':' Type)? '=' Expression
 ```
@@ -1335,13 +1335,9 @@ struct User {
 struct User { name: String, age: Nat }
 ```
 
-### 세미콜론
+### 문장 구분자
 
-세미콜론은 선택적이지만, 한 줄에 여러 문장을 쓸 때 필요:
-
-```rust
-let x = 1; let y = 2; x + y
-```
+블록 안의 문장은 개행으로 구분한다. 세미콜론은 문장 구분자가 아니다.
 
 ---
 
@@ -1435,26 +1431,26 @@ fn main() ->{Io} Nil {
 
 ### Expressions
 
-| 구문                  | 의미                   |
-| --------------------- | ---------------------- |
-| `{ stmts; expr }`     | Block / 그룹화         |
-| `fn(x) expr`          | Lambda                 |
-| `case e { pat -> e }` | Pattern matching       |
-| `handle e { arms }`   | Effect handling        |
-| `x.f`                 | UFCS (괄호 생략)       |
-| `x.f(y)`              | UFCS                   |
-| `T::f(x)`             | Qualified call         |
-| `T { f: v }`          | Record construction    |
-| `T { ..x, f: v }`     | Record update (spread) |
-| `.V`, `.V(x)`         | 암묵적 생성자          |
-| `.V { f: v }`         | 암묵적 record 생성     |
-| `[a, b, c]`           | List literal           |
-| `#(a, b, c)`          | Tuple literal          |
-| `a <> b`              | Concatenation          |
-| `a T::<> b`           | Qualified operator     |
-| `(+)`, `(T::<>)`      | Operator as function   |
-| `resume expr`         | Continuation 재개      |
-| `become f(x)`         | Proper tail call       |
+| 구문                  | 의미                                  |
+| --------------------- | ------------------------------------- |
+| `{ stmt … expr }`     | Block / 그룹화 (문장은 개행으로 구분) |
+| `fn(x) expr`          | Lambda                                |
+| `case e { pat -> e }` | Pattern matching                      |
+| `handle e { arms }`   | Effect handling                       |
+| `x.f`                 | UFCS (괄호 생략)                      |
+| `x.f(y)`              | UFCS                                  |
+| `T::f(x)`             | Qualified call                        |
+| `T { f: v }`          | Record construction                   |
+| `T { ..x, f: v }`     | Record update (spread)                |
+| `.V`, `.V(x)`         | 암묵적 생성자                         |
+| `.V { f: v }`         | 암묵적 record 생성                    |
+| `[a, b, c]`           | List literal                          |
+| `#(a, b, c)`          | Tuple literal                         |
+| `a <> b`              | Concatenation                         |
+| `a T::<> b`           | Qualified operator                    |
+| `(+)`, `(T::<>)`      | Operator as function                  |
+| `resume expr`         | Continuation 재개                     |
+| `become f(x)`         | Proper tail call                      |
 
 ### Patterns
 

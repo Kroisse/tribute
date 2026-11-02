@@ -12,7 +12,7 @@ support claim.
 
 ### Design Goals
 
-- **친숙한 문법**: ML의 의미론 + C/Rust 스타일 문법 (중괄호, 세미콜론, fn 키워드 등)
+- **친숙한 문법**: ML의 의미론 + C/Rust 스타일 문법 (중괄호, fn 키워드 등)
 - **기존 언어와 친숙한 외관**: 정적 타입 함수형 언어지만, C/Rust/TypeScript 개발자에게 낯설지 않은 문법
 - **정적 타입 시스템**: 타입 추론 + ability 추론
 - **Algebraic Effects (Abilities)**: Unison 스타일의 ability 시스템
