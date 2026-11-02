@@ -4,6 +4,7 @@
 
 use itertools::Itertools;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use trunk_ir::op_flag::OpFlag;
 use trunk_ir::op_interface::CallLike;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueDef, ValueRef};
@@ -14,9 +15,10 @@ use trunk_ir::{IrContext, SymbolPath};
 use super::{
     COMPILER_INTRINSIC_ATTR, Call, CallIndirect, CallingConvention, CompilerIntrinsicDeclaration,
     Func, FuncRef, FuncSig, Handle, Handler, Instantiate, Lambda, OperationDeclaration,
-    OperationDeclarationUse, Perform, Resume, ValidationError, Yield, compiler_intrinsic_map,
-    contains_adt_typeref, func_sig_parts, is_call_indirect, is_func, is_tail_call_indirect,
-    nominal_identity, parent_region, push_op_error, push_type_error, walk_region_ops,
+    OperationDeclarationUse, Perform, Resume, SourceCallIndirect, SourceFunc,
+    SourceTailCallIndirect, ValidationError, Yield, compiler_intrinsic_map, contains_adt_typeref,
+    func_sig_parts, nominal_identity, parent_region, push_op_error, push_type_error,
+    walk_region_ops,
 };
 use crate::dialect::{adt, list, tribute_cps};
 
@@ -212,7 +214,7 @@ impl CallableQuery<'_> {
     ) -> bool {
         self.functions
             .resolve(ctx, op, symbol)
-            .filter(|&function| is_func(ctx, function))
+            .filter(|&function| SourceFunc::is_set(ctx, function))
             .is_some_and(|function| verified_callable_declaration(ctx, function, self.registered))
     }
 
@@ -586,7 +588,7 @@ fn verified_callable_declaration(
 
 /// The callee of `op` when it is a source-logical indirect call.
 fn indirect_callee(ctx: &IrContext, op: OpRef) -> Option<ValueRef> {
-    (is_call_indirect(ctx, op) || is_tail_call_indirect(ctx, op))
+    (SourceCallIndirect::is_set(ctx, op) || SourceTailCallIndirect::is_set(ctx, op))
         .then(|| ctx.op_operands(op).first().copied())
         .flatten()
 }
@@ -622,7 +624,7 @@ pub(super) fn validate_callable_origins(
     query.resolve(ctx);
     let mut seen = HashSet::default();
     walk_region_ops(ctx, body, &mut |op| {
-        if is_func(ctx, op) {
+        if SourceFunc::is_set(ctx, op) {
             let (Some(symbol), Some(func_sig_type)) =
                 (qualified_name(ctx, op), ctx.op_attrs(op).get_type("type"))
             else {
