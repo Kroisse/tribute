@@ -2442,6 +2442,7 @@ impl<'db> TypeChecker<'db> {
             Stmt::Let {
                 pattern, value, ty, ..
             } => {
+                let outer_rows = ctx.annotation_row_names();
                 let outer_effect = ctx.current_effect();
                 ctx.set_current_effect(AbilityRow::pure(self.db()));
                 let value_ty = if let Some(ann) = ty {
@@ -2464,6 +2465,7 @@ impl<'db> TypeChecker<'db> {
                     value_ty,
                     evaluation_effect,
                 );
+                ctx.end_let_row_scope(&outer_rows);
             }
             Stmt::Expr { expr, .. } => {
                 // Just infer the type for side effects (constraints)
@@ -2485,6 +2487,7 @@ impl<'db> TypeChecker<'db> {
                 value,
                 ty,
             } => {
+                let outer_rows = ctx.annotation_row_names();
                 let outer_effect = ctx.current_effect();
                 ctx.set_current_effect(AbilityRow::pure(self.db()));
                 let value = if let Some(ann) = ty {
@@ -2513,6 +2516,7 @@ impl<'db> TypeChecker<'db> {
                     value_ty,
                     evaluation_effect,
                 );
+                ctx.end_let_row_scope(&outer_rows);
                 let pattern = self.convert_pattern_with_ctx(ctx, pattern);
 
                 Stmt::Let {

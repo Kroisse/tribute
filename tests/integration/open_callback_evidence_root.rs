@@ -471,6 +471,48 @@ fn main() ->{Io} Nil {
     );
 }
 
+/// Sibling let-bound lambdas that write one row name quantify binders of
+/// their own.
+#[salsa_test]
+fn sibling_let_bound_lambdas_quantify_their_own_binders(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn call(f: fn() ->{e} Int) ->{e} Int { f() }
+
+fn main() -> Nil {
+    let wrap = fn(k: fn() ->{e} Int) { fn() { k() } }
+    let reference = fn(k: fn() ->{e} Int) { call }
+    let pure = wrap(fn() ->{} Int { +2 })
+    let named = reference(fn() ->{} Int { +0 })
+    let _ = named(pure)
+    Nil
+}
+"#,
+    );
+    let (ctx, module) = compile_specialized_frontend(db, source)
+        .expect("class specialization accepts frontend output")
+        .expect("production frontend should lower");
+    let ir = trunk_ir::printer::print_module(&ctx, module.op());
+    // `main` has no class variables, so each lambda appears once.
+    let quantified: Vec<Vec<&str>> = ir
+        .split("tribute_cps.lambda[")
+        .skip(1)
+        .filter_map(|rest| rest.split(']').next())
+        .map(|binders| binders.split(", ").collect())
+        .collect();
+    assert!(quantified.len() >= 2, "{ir}");
+    for (index, binders) in quantified.iter().enumerate() {
+        for other in &quantified[index + 1..] {
+            assert!(
+                binders.iter().all(|binder| !other.contains(binder)),
+                "two lambdas quantify one binder: {quantified:?}\n{ir}"
+            );
+        }
+    }
+}
+
 /// A let-bound lambda lowered once for the type each use needs carries only
 /// instantiated rows, so it quantifies nothing and its rows are body rows.
 #[salsa_test]
