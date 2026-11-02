@@ -70,7 +70,7 @@ pub fn locate_diagnostics<'a, 's>(
     diagnostics: Vec<&'a Diagnostic>,
     nodes: Vec<&'a NodeDiagnostic>,
     spans: SpanMaps<'s>,
-) -> impl Iterator<Item = Diagnostic> + use<'a, 's> {
+) -> impl Iterator<Item = Diagnostic> {
     let located = nodes.into_iter().map(move |node| node.locate(&spans));
     diagnostics.into_iter().cloned().chain(located)
 }
