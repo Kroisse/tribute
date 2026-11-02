@@ -298,28 +298,6 @@ fn rename_binders(ctx: &mut IrContext, ops: &[OpRef], old: &[u32], new: &[u32]) 
     }
 }
 
-/// The own row of definition `op`: its signature's row, where a definition
-/// with an inferred row reads its own tail only when `is_class_variable`
-/// says that tail is a class variable.
-fn own_row(
-    ctx: &IrContext,
-    op: OpRef,
-    inferred: bool,
-    is_class_variable: impl Fn(u32) -> bool,
-) -> Row {
-    let ty = ctx
-        .op_attrs(op)
-        .get_type("type")
-        .expect("a definition has a signature");
-    let signature =
-        FuncSig::from_type_ref(ctx, ty).expect("a definition's signature is a func_sig");
-    let mut row = signature.row(ctx);
-    if inferred && row.tail.is_some_and(|tail| !is_class_variable(tail)) {
-        row.tail = None;
-    }
-    row
-}
-
 /// A lambda whose bodies are not yet the ones the body rule selects: the
 /// conventions of those bodies, and the binders that selection reads.
 struct Pending {
@@ -639,9 +617,7 @@ impl Instance<'_> {
             .copied()
             .zip(classes.iter().copied())
             .collect();
-        let row = own_row(ctx, definition.op, definition.inferred, |tail| {
-            params.contains_key(&tail)
-        });
+        let row = definition.own_row(ctx, definition.op, |tail| params.contains_key(&tail));
         let reader = Reader {
             binders: definition.binders.clone(),
             requirements: self.reader.requirements,
@@ -683,9 +659,9 @@ impl Instance<'_> {
 
     /// The instance's own class: the class of its own row.
     fn own_class(&self, ctx: &IrContext, op: OpRef) -> Class {
-        let row = own_row(ctx, op, self.function.inferred, |tail| {
-            self.reader.params.contains_key(&tail)
-        });
+        let row = self
+            .function
+            .own_row(ctx, op, |tail| self.reader.params.contains_key(&tail));
         self.reader.class(ctx, &row, op)
     }
 }

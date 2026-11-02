@@ -181,35 +181,38 @@ fn a_layout_keeps_its_callable_field() {
     );
 }
 
-/// A definition with an inferred row whose tail is not a class variable
-/// takes its convention from its abilities alone.
+/// A definition whose own tail is not a class variable takes its
+/// convention from its abilities alone, whether its row was written or
+/// inferred.
 #[test]
-fn an_inferred_row_without_a_class_variable_reads_its_abilities() {
-    let printed = specialized(
-        r#"core.module @m {
-  ability.decl {sym_name = "Ctl"} {
-    ability.operation {kind = "op", op_name = "ctl", param_types = [], result_type = core.i32}
-  }
-  tribute_control.func @each['a0](%x: core.i32) -> core.i32 row(| 'a0) inferred {
+fn an_own_tail_without_a_class_variable_reads_its_abilities() {
+    for inferred in ["", " inferred"] {
+        let printed = specialized(&format!(
+            r#"core.module @m {{
+  ability.decl {{sym_name = "Ctl"}} {{
+    ability.operation {{kind = "op", op_name = "ctl", param_types = [], result_type = core.i32}}
+  }}
+  tribute_control.func @each['a0](%x: core.i32) -> core.i32 row(| 'a0){inferred} {{
     tribute_control.return %x
-  }
-  tribute_control.func @ask['a0](%x: core.i32) -> core.i32 row(@Ctl | 'a0) inferred {
+  }}
+  tribute_control.func @ask['a0](%x: core.i32) -> core.i32 row(@Ctl | 'a0){inferred} {{
     tribute_control.return %x
-  }
-  tribute_control.func @main(%x: core.i32) -> core.i32 row(@Ctl) {
-    %a = tribute_control.call %x {callee = @each, row_args = [{instances = [@Ctl]}]} : core.i32
-    %b = tribute_control.call %a {callee = @ask, row_args = [{}]} : core.i32
+  }}
+  tribute_control.func @main(%x: core.i32) -> core.i32 row(@Ctl) {{
+    %a = tribute_control.call %x {{callee = @each, row_args = [{{instances = [@Ctl]}}]}} : core.i32
+    %b = tribute_control.call %a {{callee = @ask, row_args = [{{}}]}} : core.i32
     tribute_control.return %b
-  }
-}"#,
-    );
-    assert_contains(
-        &printed,
-        &[
-            "tribute_cps.func @each['a0](%0: core.i32) -> core.i32 row(| 'a0) inferred convention(direct) {",
-            "tribute_cps.func @ask['a0](%0: core.i32) -> core.i32 row(@Ctl | 'a0) inferred convention(cps) {",
-        ],
-    );
+  }}
+}}"#
+        ));
+        assert_contains(
+            &printed,
+            &[
+                format!("tribute_cps.func @each['a0](%0: core.i32) -> core.i32 row(| 'a0){inferred} convention(direct) {{").as_str(),
+                format!("tribute_cps.func @ask['a0](%0: core.i32) -> core.i32 row(@Ctl | 'a0){inferred} convention(cps) {{").as_str(),
+            ],
+        );
+    }
 }
 
 #[test]

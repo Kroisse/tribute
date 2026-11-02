@@ -214,18 +214,20 @@ fn a_func_ref_enters_its_table_no_stronger_than_the_row_of_its_value() {
 }
 
 #[test]
-fn an_inferred_row_reads_its_tail_only_when_it_is_a_class_variable() {
-    let inferred = |convention: &str| {
+fn an_own_row_reads_its_tail_only_when_it_is_a_class_variable() {
+    let own = |inferred: &str, convention: &str| {
         format!(
             r#"core.module @m {{
-  tribute_cps.func @g['a0](%x: core.i32) -> core.i32 row(| 'a0) inferred convention({convention}) {{
+  tribute_cps.func @g['a0](%x: core.i32) -> core.i32 row(| 'a0){inferred} convention({convention}) {{
     tribute_control.return %x
   }}
 }}"#
         )
     };
-    assert_eq!(rules(&inferred("direct")), [""; 0]);
-    assert_eq!(rules(&inferred("cps")), ["own"]);
+    for inferred in ["", " inferred"] {
+        assert_eq!(rules(&own(inferred, "direct")), [""; 0]);
+        assert_eq!(rules(&own(inferred, "cps")), ["own"]);
+    }
 }
 
 #[test]

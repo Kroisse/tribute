@@ -7,7 +7,10 @@
 
 use crate::common;
 
-use common::{assert_native_output, assert_output_on_both_targets};
+use common::{
+    assert_native_output, assert_output_on_both_targets,
+    assert_output_on_both_targets_with_native_asan,
+};
 
 // =============================================================================
 // Ability Row Polymorphism Tests
@@ -344,4 +347,52 @@ fn main() ->{Io} Nil {
 }
 "#;
     assert_output_on_both_targets("ability_row_deferred_method_effect.trb", code, "shout\nio");
+}
+
+/// A written own row tail that reaches no callable requires nothing, so a
+/// named function with one is not `Cps`. Its value is entered where its row
+/// is closed or names only a `fn` ability, and its `handle` that resumes
+/// runs under a value delimiter in its own body.
+#[test]
+fn test_open_row_named_function_value_enters_its_direct_instance() {
+    let code = r#"use std::io::{Io, print_line}
+
+ability Ask {
+    op ask() -> Int
+}
+
+ability Logger {
+    fn log(n: Int) -> Int
+}
+
+fn asks() ->{Ask} Int { Ask::ask() + Ask::ask() }
+
+fn work() ->{e} Int {
+    handle asks() {
+        do result { result }
+        op Ask::ask() { resume +20 }
+    }
+}
+
+fn logged() ->{e, Logger} Int { Logger::log(work()) }
+
+fn apply(f: fn() ->{} Int) -> Int { f() }
+
+fn with_log(f: fn() ->{Logger} Int) -> Int {
+    handle f() {
+        do result { result }
+        fn Logger::log(n) { n + +1 }
+    }
+}
+
+fn main() ->{Io} Nil {
+    print_line(apply(work).to_string)
+    print_line(with_log(logged).to_string)
+}
+"#;
+    assert_output_on_both_targets_with_native_asan(
+        "ability_row_open_function_value.trb",
+        code,
+        "40\n41",
+    );
 }

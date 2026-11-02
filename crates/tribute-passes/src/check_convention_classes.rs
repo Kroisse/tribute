@@ -179,20 +179,11 @@ impl<'a> Instance<'a> {
         self.check_body(disagreements);
     }
 
-    /// A definition's own convention reads its row tail only when that tail
-    /// is a class variable, if the row was inferred.
+    /// A definition's own convention is the class of its own row.
     fn check_own_convention(&self, disagreements: &mut Vec<Disagreement>) {
-        let Some(signature) = FuncSig::from_type_ref(self.ctx, self.function.ty) else {
-            return;
-        };
-        let mut row = signature.row(self.ctx);
-        if self.function.inferred
-            && row
-                .tail
-                .is_some_and(|tail| !self.reader.params.contains_key(&tail))
-        {
-            row.tail = None;
-        }
+        let row = self.function.own_row(self.ctx, self.function.op, |tail| {
+            self.reader.params.contains_key(&tail)
+        });
         let expected = self.class(&row, self.function.op).bound();
         let actual = tribute_cps::declared_convention(self.ctx, self.function.op);
         if Some(expected) != actual {

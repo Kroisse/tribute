@@ -110,10 +110,15 @@ tail이 `Cps`를 요구한다.
 
 둘째 줄은 정의 자신의 row tail 중 정의 안의 어떤 callable에도 닿지 않는 것이다.
 Annotation을 생략한 정의와 열린 row를 적은 정의가 같다. 그런 tail은 정의의 코드를
-바꾸지 않는다. 그러므로 effect-polymorphic `add`와 `fn f() ->{e} Int`는 Direct이고,
+바꾸지 않는다. 본문은 tail을 추상 변수로 두고 한 번 검사되므로, 호출하는 쪽이 그
+tail에 어떤 ability를 넘기더라도 본문은 그 ability의 operation에 닿지 못한다.
+그러므로 effect-polymorphic `add`와 `fn f() ->{e} Int`는 Direct이고,
 명시적인 `->{}`도 닫힌 빈 row이므로 Direct다. 마지막 줄에는 ability 인자에 나타난
 tail, 어느 scheme도 양화하지 않은 tail, 그리고 정의 자신의 row가 아닌 자리에 적은
-열린 row의 tail 중 class 변수가 아닌 것이 들어간다.
+열린 row의 tail 중 class 변수가 아닌 것이 들어간다. 정의 자신의 tail이라도
+[여러 tail의 합집합](ir.md#tail의-합집합)인 것은 source를 통해 callable에 닿고,
+본문이 없는 정의의 tail은 본문이 무엇에 닿는지 알 수 없으므로 둘 다 마지막 줄에
+들어간다.
 
 정의가 `Cps`가 아니면 그 row에는 `op`를 가진 ability도 class 없는 tail도 없다.
 본문의 `handle`, `resume`, `Cps` 호출은
