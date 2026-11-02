@@ -420,9 +420,11 @@ literal은 문자열 literal로 쓴다.
   parser는 SSA 이름으로 값을 찾고 값에서 타입을 얻는다.
 - **Attribute** — 그 attribute 종류의 textual 형식으로 쓴다. 기본은 generic
   attribute 문법(`"text"`, `@sym`, `[..]`, `42`)이다. `keyword(attr)`는 종류가
-  keyword codec을 정의한 attribute를 따옴표 없는 식별자로 쓴다(예: calling
-  convention의 `cps`). `symbol(attr)`는 문자열 attribute를 정의 이름 `@name`으로
-  쓴다.
+  keyword codec을 정의한 필수 attribute를 따옴표 없는 식별자로 쓴다(예: calling
+  convention의 `cps`). Keyword codec은 attribute 종류가 구현하며, 값을 그 값을
+  쓰는 keyword로, keyword를 값으로 바꾼다. 저장 형태는 종류가 정하므로 문자열이
+  아니어도 된다. Parser는 codec이 받지 않는 식별자를 거부한다. `symbol(attr)`는
+  문자열 attribute를 정의 이름 `@name`으로 쓴다.
 - **Result** — Result 이름과 `=`(`%r =`)은 형식에 쓰지 않는다. Printer가 앞에 쓰고,
   parser는 형식 parser를 부르기 전에 읽는다. Result 타입은 `type(result)`나
   `types(results)`, 또는 타입을 재구성하는 `signature`로 정확히 한 번 쓴다.

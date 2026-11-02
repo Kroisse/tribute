@@ -106,6 +106,20 @@ impl trunk_ir::attr_kind::AttrKind for CallingConvention {
     }
 }
 
+/// A convention is written as its keyword, `cps`.
+impl trunk_ir::asm_format::KeywordCodec for CallingConvention {
+    fn keyword<'a>(ctx: &'a IrContext, attr: &'a Attribute) -> Option<&'a str> {
+        Self::from_attribute(ctx, attr).map(Self::keyword)
+    }
+
+    fn attribute(word: &str) -> Option<trunk_ir::parser::raw::RawAttribute<'static>> {
+        let convention: Self = word.parse().ok()?;
+        Some(trunk_ir::parser::raw::RawAttribute::String(
+            convention.keyword().to_owned(),
+        ))
+    }
+}
+
 impl fmt::Display for CallingConvention {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.keyword())

@@ -14,8 +14,8 @@ use winnow::error::{ContextError, ErrMode, StrContext, StrContextValue};
 use winnow::prelude::*;
 
 use crate::asm_format::{
-    SignatureCodecHooks, SignatureParts, parse_signature_results, write_signature_param,
-    write_signature_results,
+    KeywordCodecHooks, SignatureCodecHooks, SignatureParts, parse_signature_results,
+    write_signature_param, write_signature_results,
 };
 use crate::op_def::OpDef;
 use crate::op_flag::IsolatedFromAbove;
@@ -46,6 +46,11 @@ pub enum FormatElement {
     Attribute(usize),
     /// A string attribute written as a definition name, `@name`.
     Symbol(usize),
+    /// An attribute written as the bare keyword its kind's codec spells.
+    Keyword {
+        attribute: usize,
+        codec: KeywordCodecHooks,
+    },
     /// The type of one fixed result.
     ResultType(usize),
     /// The comma-separated types of every result, for a variadic or optional
@@ -296,6 +301,15 @@ impl Printer<'_, '_, '_> {
                 self.token('@')?;
                 self.h.write_symbol_text(text)
             }
+            FormatElement::Keyword { attribute, codec } => {
+                let value = ctx
+                    .op_attrs(op)
+                    .get(self.schema.attributes[attribute].name)
+                    .expect("a printable keyword attribute is present");
+                let keyword = (codec.keyword)(ctx, value).expect("a printable keyword decodes");
+                self.token('k')?;
+                self.h.write_str(keyword)
+            }
             FormatElement::ResultType(index) => {
                 let ty = ctx.op_result_types(op)[index];
                 self.token('t')?;
@@ -485,6 +499,9 @@ fn written_attributes(schema: &OpSchema, format: &OpFormat) -> Vec<&'static str>
             match *element {
                 FormatElement::Attribute(index)
                 | FormatElement::Symbol(index)
+                | FormatElement::Keyword {
+                    attribute: index, ..
+                }
                 | FormatElement::Signature {
                     attribute: index, ..
                 } => names.push(schema.attributes[index].name),
@@ -561,6 +578,11 @@ fn printable(ctx: &IrContext, op: OpRef, schema: &OpSchema, format: &OpFormat) -
         FormatElement::Symbol(index) => {
             let attribute = &schema.attributes[index];
             written_ok &= matches!(attrs.get(attribute.name), Some(Attribute::String(_)));
+        }
+        FormatElement::Keyword { attribute, codec } => {
+            written_ok &= attrs
+                .get(schema.attributes[attribute].name)
+                .is_some_and(|value| (codec.keyword)(ctx, value).is_some());
         }
         FormatElement::Signature {
             attribute,
@@ -810,6 +832,15 @@ impl<'a> FormatParser<'a> {
                 self.attribute(index, RawAttribute::String(name));
                 Ok(())
             }
+            FormatElement::Keyword { attribute, codec } => {
+                let checkpoint = *input;
+                let Some(value) = opt(ident).parse_next(input)?.and_then(codec.attribute) else {
+                    *input = checkpoint;
+                    return Err(ErrMode::Backtrack(expected("keyword")));
+                };
+                self.attribute(attribute, value);
+                Ok(())
+            }
             FormatElement::ResultType(index) => {
                 let ty = raw_type
                     .parse_next(input)
@@ -998,6 +1029,42 @@ mod tests {
     use crate::op_flag::IsolatedFromAbove;
     use crate::parser::{parse_module, parse_test_module};
     use crate::printer::print_module;
+    use crate::types::Attribute;
+
+    /// A speed stored as a flag, `true` for `fast`, written as its keyword.
+    struct Speed;
+
+    impl crate::attr_kind::AttrKind for Speed {
+        const KIND: crate::op_schema::AttributeKind = crate::op_schema::AttributeKind::Bool;
+        type Out<'ctx> = bool;
+        type In = bool;
+
+        fn read<'ctx>(_: &'ctx IrContext, attr: &'ctx Attribute) -> bool {
+            matches!(attr, Attribute::Bool(true))
+        }
+
+        fn write(_: &mut IrContext, fast: bool) -> Attribute {
+            Attribute::Bool(fast)
+        }
+    }
+
+    impl crate::asm_format::KeywordCodec for Speed {
+        fn keyword<'a>(_: &'a IrContext, attr: &'a Attribute) -> Option<&'a str> {
+            match attr {
+                Attribute::Bool(true) => Some("fast"),
+                Attribute::Bool(false) => Some("slow"),
+                _ => None,
+            }
+        }
+
+        fn attribute(word: &str) -> Option<crate::parser::raw::RawAttribute<'static>> {
+            match word {
+                "fast" => Some(crate::parser::raw::RawAttribute::Bool(true)),
+                "slow" => Some(crate::parser::raw::RawAttribute::Bool(false)),
+                _ => None,
+            }
+        }
+    }
 
     #[crate::dialect]
     mod asm_format_test {
@@ -1050,6 +1117,9 @@ mod tests {
             #[region(body?)]
             {}
         }
+
+        #[asm_format("go" "(" keyword(speed) ")" attr_dict)]
+        fn drive(speed: Attr<Speed>) {}
 
         #[asm_format(callee "(" args ")" attr_dict ":" signature(signature))]
         fn apply<S: FuncSig>(
@@ -1147,6 +1217,23 @@ mod tests {
 }
 "#
         );
+    }
+
+    #[test]
+    fn keywords_write_what_their_codec_spells() {
+        assert_round_trip(
+            r#"core.module @m {
+  asm_format_test.drive go(fast)
+  asm_format_test.drive go(slow) attributes {extra = 1}
+}
+"#,
+        );
+        assert_eq!(
+            print("core.module @m {\n  asm_format_test.drive {speed = 1}\n}\n"),
+            "core.module @m {\n  asm_format_test.drive {speed = 1}\n}\n"
+        );
+        let error = parse_error("core.module @m {\n  asm_format_test.drive go(medium)\n}\n");
+        assert!(error.contains("keyword"), "{error}");
     }
 
     #[test]

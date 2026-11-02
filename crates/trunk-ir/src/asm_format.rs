@@ -12,7 +12,7 @@ pub mod declarative;
 use std::fmt;
 
 use crate::ops::{DialectOp, DialectType};
-use crate::parser::raw::{RawAttrDict, RawOperation, RawParam, RawType};
+use crate::parser::raw::{RawAttrDict, RawAttribute, RawOperation, RawParam, RawType};
 use crate::printer::{OpPrintHelper, TypePrintHelper};
 use crate::types::Attribute;
 use crate::{AttributeMap, IrContext, OpRef, StringRef, TypeRef};
@@ -180,6 +180,41 @@ impl SignatureCodecHooks {
             write_tail: T::write_tail,
             parse_tail: T::parse_tail,
             build: T::build,
+        }
+    }
+}
+
+// =============================================================================
+// KeywordCodec — an attribute written as a bare identifier
+// =============================================================================
+
+/// Conversion between an attribute of this kind and the bare identifier the
+/// `keyword` format element writes (`new-plans/ir.md`, "선언적 어셈블리 형식").
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is the kind of a `keyword` format element but does not implement `KeywordCodec`",
+    label = "`keyword(..)` requires this implementation"
+)]
+pub trait KeywordCodec: crate::attr_kind::AttrKind {
+    /// The keyword that spells `attr`, or `None` when no keyword does.
+    fn keyword<'a>(ctx: &'a IrContext, attr: &'a Attribute) -> Option<&'a str>;
+
+    /// The attribute `word` spells, or `None` when it is not a keyword.
+    fn attribute(word: &str) -> Option<RawAttribute<'static>>;
+}
+
+/// A [`KeywordCodec`]'s hooks, as a `keyword` format element stores them.
+#[derive(Clone, Copy, Debug)]
+pub struct KeywordCodecHooks {
+    pub keyword: for<'a> fn(&'a IrContext, &'a Attribute) -> Option<&'a str>,
+    pub attribute: fn(&str) -> Option<RawAttribute<'static>>,
+}
+
+impl KeywordCodecHooks {
+    /// The hooks of `T`'s codec.
+    pub const fn of<T: KeywordCodec>() -> Self {
+        Self {
+            keyword: T::keyword,
+            attribute: T::attribute,
         }
     }
 }
