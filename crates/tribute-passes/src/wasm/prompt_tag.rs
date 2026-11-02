@@ -158,7 +158,7 @@ mod tests {
             print_module(&ctx, module.op()),
             r#"core.module @test {
   wasm.global {init = 7, mutable = false, valtype = "i32"}
-  wasm.func {sym_name = "__tribute_next_tag", type = wasm.func_sig<() -> core.i32>} {
+  wasm.func @__tribute_next_tag() -> core.i32 {
       %0 = wasm.global_get {index = 1} : core.i32
       %1 = wasm.i32_const {value = 1} : core.i32
       %2 = wasm.i32_add %0, %1 : core.i32

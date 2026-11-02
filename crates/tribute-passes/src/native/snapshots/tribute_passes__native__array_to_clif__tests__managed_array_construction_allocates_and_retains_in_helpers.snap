@@ -2,8 +2,7 @@
 source: crates/tribute-passes/src/native/array_to_clif.rs
 expression: lowered
 ---
-  clif.func {sym_name = "build", type = clif.func_sig<(core.ptr, core.ptr, core.i64) -> core.ptr>} {
-    ^bb0(%0: core.ptr, %1: core.ptr, %2: core.i64):
+  clif.func @build(%0: core.ptr, %1: core.ptr, %2: core.i64) -> core.ptr {
       %3 = tribute_rt.retain %0 : !NodeRef
       %4 = tribute_rt.retain %1 : !NodeRef
       %5 = tribute_rt.retain %0 : !NodeRef
@@ -44,8 +43,8 @@ expression: lowered
       %30 = core.unrealized_conversion_cast %26 : core.ptr
       clif.return %30
   }
-  clif.func {sym_name = "__tribute_array_new_5", type = clif.func_sig<(core.i64, core.ptr) -> core.ptr>} {
-    ^bb0(%0: core.i64, %1: core.ptr):
+  clif.func @__tribute_array_new_5(%0: core.i64, %1: core.ptr) -> core.ptr {
+    ^bb0:
       %2 = clif.iconst {value = 1152921504606846973} : core.i64
       %3 = clif.icmp %0, %2 {cond = "ugt"} : core.i8
       clif.trapnz %3 {code = "array_size_overflow"}
@@ -63,11 +62,9 @@ expression: lowered
       clif.store %0, %12 {offset = 0}
       %13 = clif.iconst {value = 0} : core.i64
       clif.jump %13 [^bb1]
-
     ^bb1(%14: core.i64):
       %15 = clif.icmp %14, %0 {cond = "ult"} : core.i8
       clif.brif %15 [^bb2, ^bb3]
-
     ^bb2:
       %16 = clif.iconst {value = 8} : core.i64
       %17 = clif.imul %14, %16 : core.i64
@@ -77,12 +74,11 @@ expression: lowered
       %20 = clif.iconst {value = 1} : core.i64
       %21 = clif.iadd %14, %20 : core.i64
       clif.jump %21 [^bb1]
-
     ^bb3:
       clif.return %12
   }
-  clif.func {sym_name = "__tribute_array_splice_5", type = clif.func_sig<(core.ptr, core.i64, core.i64, core.i64) -> core.ptr>} {
-    ^bb0(%0: core.ptr, %1: core.i64, %2: core.i64, %3: core.i64):
+  clif.func @__tribute_array_splice_5(%0: core.ptr, %1: core.i64, %2: core.i64, %3: core.i64) -> core.ptr {
+    ^bb0:
       %4 = clif.load %0 {offset = 0} : core.i64
       %5 = clif.icmp %1, %2 {cond = "ugt"} : core.i8
       clif.trapnz %5 {code = "array_splice_out_of_bounds"}
@@ -110,11 +106,9 @@ expression: lowered
       clif.store %9, %21 {offset = 0}
       %22 = clif.iconst {value = 0} : core.i64
       clif.jump %22 [^bb1]
-
     ^bb1(%23: core.i64):
       %24 = clif.icmp %23, %1 {cond = "ult"} : core.i8
       clif.brif %24 [^bb2, ^bb3]
-
     ^bb2:
       %25 = clif.iconst {value = 8} : core.i64
       %26 = clif.imul %23, %25 : core.i64
@@ -128,14 +122,11 @@ expression: lowered
       %33 = clif.iconst {value = 1} : core.i64
       %34 = clif.iadd %23, %33 : core.i64
       clif.jump %34 [^bb1]
-
     ^bb3:
       clif.jump %2 [^bb4]
-
     ^bb4(%35: core.i64):
       %36 = clif.icmp %35, %4 {cond = "ult"} : core.i8
       clif.brif %36 [^bb5, ^bb6]
-
     ^bb5:
       %37 = clif.isub %35, %7 : core.i64
       %38 = clif.iadd %37, %3 : core.i64
@@ -151,7 +142,6 @@ expression: lowered
       %47 = clif.iconst {value = 1} : core.i64
       %48 = clif.iadd %35, %47 : core.i64
       clif.jump %48 [^bb4]
-
     ^bb6:
       clif.return %21
   }

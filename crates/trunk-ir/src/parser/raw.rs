@@ -39,14 +39,12 @@ pub struct RawOperation<'a> {
     pub name: &'a str,
     /// Optional symbol name parsed from `@name` after `dialect.op`.
     pub sym_name: Option<String>,
-    /// Optional function-style parameters: `(%arg: type, ...)`.
-    pub has_func_signature: bool,
+    /// The function-style parameters `(%arg: type, ...)` an operation's
+    /// format reads, as entry block arguments.
     pub func_params: Vec<(&'a str, RawType<'a>)>,
     /// The regions, by position, whose entry blocks take `func_params` as
     /// arguments.
     pub func_param_regions: Vec<usize>,
-    /// Optional return type from `-> type`.
-    pub return_type: Option<RawType<'a>>,
     pub operands: Vec<&'a str>,
     pub attributes: Vec<(Cow<'a, str>, RawAttribute<'a>)>,
     pub result_types: Vec<RawType<'a>>,
@@ -580,11 +578,6 @@ pub fn func_params<'a>(input: &mut &'a str) -> ModalResult<Vec<(&'a str, RawType
     .parse_next(input)
 }
 
-/// Parse empty parens: ()
-fn empty_parens(input: &mut &str) -> ModalResult<()> {
-    ('(', ws, ')').void().parse_next(input)
-}
-
 /// Parse return type: -> type
 pub fn return_type<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
     preceded((ws, '-', '>', ws), raw_type).parse_next(input)
@@ -652,34 +645,18 @@ pub fn raw_operation<'a>(input: &mut &'a str) -> ModalResult<RawOperation<'a>> {
         }
     }
 
-    // Parse either func-style params (%arg: type, ...) or operands (%val, %val)
-    // or empty parens ()
-    let mut has_func_signature = false;
-    let mut func_params_parsed = Vec::new();
-    let mut operands = Vec::new();
-
     ws.parse_next(input)?;
-    if input.starts_with('(') {
-        has_func_signature = true;
-        // Try func_params first (which includes empty parens)
-        if let Ok(params) = func_params.parse_next(input) {
-            func_params_parsed = params;
-        } else if empty_parens.parse_next(input).is_ok() {
-            // Empty parens: no params, no operands
-        }
-    } else if input.starts_with('%') {
-        // Operand list
-        operands = opt(operand_list).parse_next(input)?.unwrap_or_default();
-    }
+    let operands = if input.starts_with('%') {
+        opt(operand_list).parse_next(input)?.unwrap_or_default()
+    } else {
+        Vec::new()
+    };
 
     // Successor list (optional): [^bb0, ^bb1]
     // Must be parsed before attrs/types to match arena printer output order.
     let successors = opt(preceded(ws, successor_list))
         .parse_next(input)?
         .unwrap_or_default();
-
-    // Optional return type: -> type
-    let return_ty = opt(return_type).parse_next(input)?;
 
     // Attributes (optional)
     let attributes = opt(preceded(ws, raw_attr_dict))
@@ -705,10 +682,8 @@ pub fn raw_operation<'a>(input: &mut &'a str) -> ModalResult<RawOperation<'a>> {
         results,
         name,
         sym_name,
-        has_func_signature,
-        func_params: func_params_parsed,
-        func_param_regions: vec![0],
-        return_type: return_ty,
+        func_params: Vec::new(),
+        func_param_regions: Vec::new(),
         operands,
         attributes,
         result_types,

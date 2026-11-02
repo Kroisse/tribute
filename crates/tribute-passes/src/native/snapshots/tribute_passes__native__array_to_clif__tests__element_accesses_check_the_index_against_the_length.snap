@@ -2,8 +2,7 @@
 source: crates/tribute-passes/src/native/array_to_clif.rs
 expression: lowered
 ---
-  clif.func {sym_name = "access", type = clif.func_sig<(core.ptr, core.i64, core.i32) -> core.i32>} {
-    ^bb0(%0: core.ptr, %1: core.i64, %2: core.i32):
+  clif.func @access(%0: core.ptr, %1: core.i64, %2: core.i32) -> core.i32 {
       %3 = tribute_rt.retain %0 : !Ints
       %4 = core.unrealized_conversion_cast %0 : !Ints
       %5 = core.unrealized_conversion_cast %1 : core.index

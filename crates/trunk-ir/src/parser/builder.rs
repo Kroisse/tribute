@@ -20,7 +20,7 @@ use super::raw::{
     self, ParseError, RawAttrDict, RawAttribute, RawOperation, RawParam, RawRegion, RawType,
 };
 use crate::context::{IrContext, OperationDataBuilder};
-use crate::ops::{DialectOp, DialectType};
+use crate::ops::DialectOp;
 use crate::refs::*;
 use crate::rewrite::Module;
 use crate::types::*;
@@ -415,78 +415,6 @@ impl<'a> ArenaIrBuilder<'a> {
         if let Some(ref name) = raw.sym_name {
             let name = self.ctx.string_attr(name);
             attributes.view_mut(self.ctx).insert("sym_name", name);
-        }
-
-        // Handle func-style signature → func.func_sig type
-        let has_func_signature = raw.has_func_signature || raw.return_type.is_some();
-        if has_func_signature {
-            let results = match raw.return_type.as_ref() {
-                Some(t) => vec![self.build_type(t)?],
-                None => vec![],
-            };
-
-            let param_types: Vec<TypeRef> = raw
-                .func_params
-                .iter()
-                .map(|(_, raw_ty)| self.build_type(raw_ty))
-                .collect::<Result<_, _>>()?;
-
-            let func_ty = if name == crate::dialect::wasm::Func::NAME {
-                crate::dialect::wasm::func_sig(self.ctx, param_types, results).as_type_ref()
-            } else if name == crate::dialect::clif::Func::NAME {
-                crate::dialect::clif::func_sig(self.ctx, param_types, results).as_type_ref()
-            } else {
-                crate::dialect::func::func_sig(self.ctx, param_types, results).as_type_ref()
-            };
-            if attributes.view(self.ctx).contains_key("type")
-                && attributes.view(self.ctx).get_type("type").is_none()
-            {
-                return Err(ParseError {
-                    message: "explicit function type attribute must be a type".into(),
-                    offset: 0,
-                });
-            }
-            if let Some(explicit) = attributes.view(self.ctx).get_type("type") {
-                let matches =
-                    if name == crate::dialect::wasm::Func::NAME {
-                        crate::dialect::wasm::FuncSig::from_type_ref(self.ctx, explicit)
-                            .is_some_and(|signature| {
-                                let synthesized =
-                                    crate::dialect::wasm::FuncSig::from_type_ref(self.ctx, func_ty)
-                                        .unwrap();
-                                signature.inputs(self.ctx) == synthesized.inputs(self.ctx)
-                                    && signature.results(self.ctx) == synthesized.results(self.ctx)
-                            })
-                    } else if name == crate::dialect::clif::Func::NAME {
-                        crate::dialect::clif::FuncSig::from_type_ref(self.ctx, explicit)
-                            .is_some_and(|signature| {
-                                let synthesized =
-                                    crate::dialect::clif::FuncSig::from_type_ref(self.ctx, func_ty)
-                                        .unwrap();
-                                signature.inputs(self.ctx) == synthesized.inputs(self.ctx)
-                                    && signature.results(self.ctx) == synthesized.results(self.ctx)
-                            })
-                    } else {
-                        crate::dialect::func::FuncSig::from_type_ref(self.ctx, explicit)
-                            .is_some_and(|signature| {
-                                let synthesized =
-                                    crate::dialect::func::FuncSig::from_type_ref(self.ctx, func_ty)
-                                        .unwrap();
-                                signature.inputs(self.ctx) == synthesized.inputs(self.ctx)
-                                    && signature.results(self.ctx) == synthesized.results(self.ctx)
-                            })
-                    };
-                if !matches {
-                    return Err(ParseError {
-                        message: "explicit function type does not match custom signature".into(),
-                        offset: 0,
-                    });
-                }
-            } else {
-                attributes
-                    .view_mut(self.ctx)
-                    .insert("type", Attribute::Type(func_ty));
-            }
         }
 
         // Resolve successors

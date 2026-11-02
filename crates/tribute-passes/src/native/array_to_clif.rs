@@ -778,8 +778,8 @@ mod tests {
         let mut kept = String::new();
         let mut keeping = false;
         for line in print_module(&ctx, module.op()).lines() {
-            if let Some(header) = line.strip_prefix("  clif.func {sym_name = \"") {
-                keeping = keep(header.split('"').next().unwrap());
+            if let Some(header) = line.strip_prefix("  clif.func @") {
+                keeping = keep(header.split('(').next().unwrap());
             }
             if keeping {
                 kept.push_str(line);
@@ -815,7 +815,7 @@ mod tests {
         );
         // One helper of each kind serves every operation on the descriptor.
         assert_eq!(
-            lowered.matches("sym_name = \"__tribute_array_new_").count(),
+            lowered.matches("clif.func @__tribute_array_new_").count(),
             1
         );
         insta::assert_snapshot!(lowered);
@@ -837,7 +837,7 @@ mod tests {
         );
         assert!(!lowered.contains("tribute_rt.retain"), "{lowered}");
         assert!(
-            lowered.contains("clif.func_sig<(core.i64, core.i32) -> core.ptr>"),
+            lowered.contains("(%0: core.i64, %1: core.i32) -> core.ptr {"),
             "{lowered}"
         );
         // An `i32` element is four bytes wide.

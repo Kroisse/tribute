@@ -137,12 +137,17 @@ pub trait SignatureCodec: DialectType {
     /// form cannot spell it without loss.
     fn decompose(ctx: &IrContext, ty: TypeRef) -> Option<SignatureParts<'_>>;
 
-    /// Write the tail after the results; nothing when it is empty.
-    fn write_tail(w: &mut dyn SignatureWriter, tail: &[(StringRef, &Attribute)]) -> fmt::Result;
+    /// Write the tail after the results; nothing when it is empty. By
+    /// default it is a dictionary after a comma, [`write_dict_tail`].
+    fn write_tail(w: &mut dyn SignatureWriter, tail: &[(StringRef, &Attribute)]) -> fmt::Result {
+        write_dict_tail(w, tail)
+    }
 
     /// Parse the tail [`write_tail`](Self::write_tail) writes, or an empty
     /// one when its introducer is absent.
-    fn parse_tail<'a>(input: &mut &'a str) -> winnow::ModalResult<RawAttrDict<'a>>;
+    fn parse_tail<'a>(input: &mut &'a str) -> winnow::ModalResult<RawAttrDict<'a>> {
+        parse_dict_tail(input)
+    }
 
     /// Build the type's generic raw form from the parsed inputs, results,
     /// and tail. A result count or a tail attribute the type does not allow

@@ -14,6 +14,7 @@ use rustc_hash::FxHashSet as HashSet;
 #[trunk_ir::dialect]
 mod clif {
     // Module
+    #[asm_format(symbol(sym_name) signature(r#type, body) attr_dict region(body))]
     #[flags(IsolatedFromAbove)]
     fn func<S: FuncSig>(sym_name: Attr<String>, r#type: Attr<TypeOf<S>>) {
         #[region(body?)]
@@ -320,6 +321,24 @@ impl crate::asm_format::TypeAsmFormat for FuncSig {
         name: &'a str,
     ) -> winnow::ModalResult<crate::parser::raw::RawType<'a>> {
         super::func::parse_signature_type(input, name, None)
+    }
+}
+
+impl crate::asm_format::SignatureCodec for FuncSig {
+    fn decompose(
+        ctx: &crate::IrContext,
+        ty: crate::TypeRef,
+    ) -> Option<crate::asm_format::SignatureParts<'_>> {
+        Self::from_type_ref(ctx, ty)?;
+        super::func::signature_parts(ctx, ty)
+    }
+
+    fn build<'a>(
+        inputs: Vec<crate::parser::raw::RawParam<'a>>,
+        results: Vec<crate::parser::raw::RawParam<'a>>,
+        tail: crate::parser::raw::RawAttrDict<'a>,
+    ) -> winnow::ModalResult<crate::parser::raw::RawType<'a>> {
+        super::func::signature_from_parts("clif.func_sig", inputs, results, tail, None)
     }
 }
 
@@ -637,6 +656,21 @@ mod tests {
         let mut reparsed = crate::IrContext::new();
         let copy = parse_test_module(&mut reparsed, &printed);
         assert_eq!(print_module(&reparsed, copy.op()), printed);
+    }
+
+    #[test]
+    fn func_writes_its_signature_in_the_function_form() {
+        let source = r#"core.module @test {
+  clif.func @external(%arg0: core.i32) -> core.i32 attributes {abi = "C"}
+  clif.func @pair(%0: core.i32) -> (core.i32, core.i64), {call_conv = "tail"} {
+      %1 = clif.iconst {value = 1} : core.i64
+      clif.return %0, %1
+  }
+}
+"#;
+        let mut ctx = crate::IrContext::new();
+        let module = parse_test_module(&mut ctx, source);
+        assert_eq!(print_module(&ctx, module.op()), source);
     }
 
     #[test]

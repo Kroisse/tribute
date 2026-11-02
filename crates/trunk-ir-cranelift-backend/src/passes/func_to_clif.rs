@@ -781,11 +781,8 @@ mod tests {
             "{result}"
         );
         assert!(
-            result.contains("clif.call_indirect %0 {sig = !t0} : core.i32"),
-            "{result}"
-        );
-        assert!(
-            result.contains("!t0 = clif.func_sig<() -> core.i32>"),
+            result
+                .contains("clif.call_indirect %0 {sig = clif.func_sig<() -> core.i32>} : core.i32"),
             "{result}"
         );
         assert!(!result.contains("func.func_sig"), "{result}");
