@@ -806,10 +806,7 @@ mod tests {
             "{printed}"
         );
         assert!(printed.contains("Some(wasm.anyref)"), "{printed}");
-        assert!(
-            printed.contains("func.func_sig<(wasm.anyref) -> core.i32>"),
-            "{printed}"
-        );
+        assert!(printed.contains(": (wasm.anyref) -> core.i32"), "{printed}");
     }
 
     #[test]

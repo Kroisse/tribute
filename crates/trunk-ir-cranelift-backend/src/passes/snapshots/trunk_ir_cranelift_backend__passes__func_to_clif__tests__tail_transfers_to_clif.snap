@@ -10,6 +10,6 @@ core.module @test {
       clif.return_call %0 {callee = @direct_target}
   }
   clif.func @indirect_caller(%0: core.ptr, %1: core.i32) -> (), {call_conv = "tail"} {
-      clif.return_call_indirect %0, %1 {sig = clif.func_sig<(core.i32) -> (), {call_conv = "tail"}>}
+      clif.return_call_indirect %0(%1) : (core.i32) -> (), {call_conv = "tail"}
   }
 }

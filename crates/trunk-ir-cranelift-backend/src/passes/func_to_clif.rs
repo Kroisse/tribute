@@ -709,8 +709,7 @@ mod tests {
         crate::validate_clif_ir(&ctx, module).expect("logical nil call result is valid native IR");
         let printed = print_module(&ctx, module.op());
         assert!(
-            printed
-                .contains("clif.call_indirect %0 {sig = clif.func_sig<() -> core.nil>} : core.nil"),
+            printed.contains("clif.call_indirect %0() : () -> core.nil"),
             "{printed}"
         );
         assert!(printed.contains("clif.return %1"), "{printed}");
@@ -781,8 +780,7 @@ mod tests {
             "{result}"
         );
         assert!(
-            result
-                .contains("clif.call_indirect %0 {sig = clif.func_sig<() -> core.i32>} : core.i32"),
+            result.contains("clif.call_indirect %0() : () -> core.i32"),
             "{result}"
         );
         assert!(!result.contains("func.func_sig"), "{result}");
@@ -817,15 +815,12 @@ mod tests {
 
         let printed = print_module(&ctx, module.op());
         assert!(
-            printed.contains("clif.return_call_indirect")
-                && printed
-                    .contains("sig = clif.func_sig<(core.ptr) -> (), {call_conv = \"tail\"}>"),
+            printed.contains(
+                "clif.return_call_indirect %0(%1) : (core.ptr) -> (), {call_conv = \"tail\"}"
+            ),
             "{printed}"
         );
-        assert!(
-            !printed.contains("sig = clif.func_sig<(!evidence) -> ()>"),
-            "{printed}"
-        );
+        assert!(!printed.contains("(!evidence) -> ()"), "{printed}");
     }
 
     #[test]
@@ -855,14 +850,11 @@ mod tests {
 
         let printed = print_module(&ctx, module.op());
         assert!(
-            printed.contains("clif.call_indirect")
-                && printed.contains("sig = clif.func_sig<(core.ptr) -> core.i32>"),
+            printed.contains("clif.call_indirect %0(%1) : (core.ptr) -> core.i32"),
             "{printed}"
         );
         assert!(
-            printed.contains(
-                "func.call_indirect %0, %1 {signature = func.func_sig<(!evidence) -> core.i32>} : core.i32"
-            ),
+            printed.contains("func.call_indirect %0(%1) : (!evidence) -> core.i32"),
             "the mismatched call must remain unchanged: {printed}"
         );
     }

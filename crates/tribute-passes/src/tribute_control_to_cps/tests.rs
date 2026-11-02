@@ -1627,7 +1627,17 @@ fn textual_zero_result_cps_and_direct_scf_branches_lower() {
     crate::closure_lower::lower_prepared_closures(&mut ctx, module).unwrap();
     let lowered = print_module(&ctx, module.op());
     assert!(!lowered.contains("closure.new"), "{lowered}");
-    assert!(lowered.contains("signature"), "{lowered}");
+    let mut exact_transfers = 0;
+    let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
+        if trunk_ir::op_interface::DynIndirectCallLike::get(&ctx, op)
+            .and_then(|call| call.exact_signature(&ctx))
+            .is_some()
+        {
+            exact_transfers += 1;
+        }
+        std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+    });
+    assert!(exact_transfers > 0, "{lowered}");
 }
 
 #[test]

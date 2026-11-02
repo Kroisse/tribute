@@ -42,6 +42,7 @@ mod clif {
     fn call(callee: Attr<SymbolRef>, args: Variadic<_>) -> Variadic<_> {}
 
     #[verify]
+    #[asm_format(callee "(" args ")" attr_dict ":" signature(sig))]
     #[implements(IndirectCallLike)]
     fn call_indirect<S: FuncSig>(
         sig: Attr<TypeOf<S>>,
@@ -139,6 +140,7 @@ mod clif {
     #[implements(CallLike)]
     fn return_call(callee: Attr<SymbolRef>, args: Variadic<_>) {}
 
+    #[asm_format(callee "(" args ")" attr_dict ":" signature(sig))]
     #[implements(IndirectCallLike)]
     fn return_call_indirect<S: FuncSig>(
         sig: Attr<TypeOf<S>>,
@@ -632,8 +634,10 @@ mod tests {
         assert!(DynIndirectCallLike::get(&ctx, direct).is_none());
 
         let printed = print_module(&ctx, module.op());
-        assert!(printed.contains("clif.call_indirect"));
-        assert!(printed.contains("sig = clif.func_sig<(core.i32) -> core.i32>"));
+        assert!(
+            printed.contains("clif.call_indirect %0(%1) : (core.i32) -> core.i32"),
+            "{printed}"
+        );
     }
 
     #[test]

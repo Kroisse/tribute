@@ -589,7 +589,7 @@ mod tests {
                 r#"%5 = effect.dup %4 {ability = @Console} : !evidence"#,
                 r#"%6 = func.call %5, %1 {callee = @callee, tribute.calling_convention = "evidence_direct"} : core.i32"#,
                 r#"%7 = effect.dup %0 {ability = @State} : !evidence"#,
-                r#"func.tail_call_indirect %2, %7, %6 {signature = func.func_sig<(!evidence, core.i32) -> core.never>, tribute.calling_convention = "cps"}"#,
+                r#"func.tail_call_indirect %2(%7, %6) attributes {tribute.calling_convention = "cps"} : (!evidence, core.i32) -> core.never"#,
             ],
             "{body:#?}"
         );
@@ -617,7 +617,7 @@ mod tests {
                 r#"%8 = effect.with_tail %7, %0 {index = 0} : !evidence"#,
                 r#"%9 = effect.mask %0 {ability = @State} : !evidence"#,
                 r#"%10 = effect.with_tail %8, %9 {index = 1} : !evidence"#,
-                r#"func.tail_call_indirect %2, %10, %6 {signature = func.func_sig<(!evidence, core.i32) -> core.never>, tribute.calling_convention = "cps"}"#,
+                r#"func.tail_call_indirect %2(%10, %6) attributes {tribute.calling_convention = "cps"} : (!evidence, core.i32) -> core.never"#,
             ],
             "{body:#?}"
         );

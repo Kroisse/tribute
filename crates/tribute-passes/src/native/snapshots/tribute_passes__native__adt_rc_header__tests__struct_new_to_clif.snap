@@ -67,7 +67,7 @@ core.module @test {
       %14 = clif.icmp %1, %13 {cond = "eq"} : core.i8
       clif.brif %14 [^bb4, ^bb3]
     ^bb2:
-      %15 = clif.call_indirect %10, %0 {sig = clif.func_sig<(core.ptr) -> core.nil>} : core.nil
+      %15 = clif.call_indirect %10(%0) : (core.ptr) -> core.nil
       clif.return
     ^bb3:
       %16 = clif.call %3, %1 {callee = @__tribute_dealloc} : core.nil

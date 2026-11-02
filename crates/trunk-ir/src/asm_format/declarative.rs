@@ -22,7 +22,7 @@ use crate::op_flag::IsolatedFromAbove;
 use crate::op_schema::{Arity, AttributeKind, OpSchema, ResultSchema};
 use crate::parser::raw::{
     RawAttribute, RawOperation, RawParam, RawRegion, RawType, block_label, ident, raw_attr_dict,
-    raw_attr_value, raw_param, raw_region, raw_type, symbol_ref, value_ref, ws,
+    raw_attr_value, raw_param, raw_param_list, raw_region, raw_type, symbol_ref, value_ref, ws,
 };
 use crate::printer::OpPrintHelper;
 use crate::types::Attribute;
@@ -59,11 +59,14 @@ pub enum FormatElement {
     /// A successor's label, or a comma-separated list for a variadic one.
     Successor(usize),
     /// A signature type attribute in function form, `(%a: A) -> R`, whose
-    /// inputs are the entry block arguments of the listed regions.
+    /// inputs are the entry block arguments of the listed regions, or
+    /// `(A) -> R` when it lists none. With `results`, the signature's
+    /// results are the operation's result types.
     Signature {
         attribute: usize,
         regions: &'static [usize],
         codec: SignatureCodecHooks,
+        results: bool,
     },
     /// Elements written only when their anchor is present.
     Optional {
@@ -210,6 +213,8 @@ pub(crate) fn print(
 enum Spacing {
     Space,
     Glue,
+    /// After punctuation, which `(` does not glue to.
+    Punctuation,
 }
 
 struct Printer<'h, 'a, 'ctx> {
@@ -224,8 +229,12 @@ impl Printer<'_, '_, '_> {
     /// Start a token whose text begins with `first`, writing the space
     /// before it unless the spacing rules drop it.
     fn token(&mut self, first: char) -> fmt::Result {
-        let glued = matches!(first, ')' | ']' | ',' | '(');
-        if self.spacing == Spacing::Space && !glued {
+        let glued = match first {
+            ')' | ']' | ',' => true,
+            '(' => self.spacing != Spacing::Punctuation,
+            _ => false,
+        };
+        if self.spacing != Spacing::Glue && !glued {
             self.h.write_char(' ')?;
         }
         self.spacing = Spacing::Space;
@@ -247,6 +256,8 @@ impl Printer<'_, '_, '_> {
                 self.h.write_str(text)?;
                 if text.ends_with(['(', '[']) {
                     self.spacing = Spacing::Glue;
+                } else if !is_keyword(text) {
+                    self.spacing = Spacing::Punctuation;
                 }
                 Ok(())
             }
@@ -357,6 +368,7 @@ impl Printer<'_, '_, '_> {
                 attribute,
                 regions,
                 codec,
+                ..
             } => {
                 let ty = ctx
                     .op_attrs(op)
@@ -370,23 +382,29 @@ impl Printer<'_, '_, '_> {
                     if position > 0 {
                         self.h.write_str(", ")?;
                     }
-                    match entries.split_first() {
-                        Some((&first, rest)) => {
-                            let arg = ctx.block_args(first)[position];
-                            let name = self.h.assign_value_name(arg);
-                            for &other in rest {
-                                self.h
-                                    .assign_value_name_like(ctx.block_args(other)[position], arg);
+                    // A signature without regions writes its input types alone.
+                    if !regions.is_empty() {
+                        match entries.split_first() {
+                            Some((&first, rest)) => {
+                                let arg = ctx.block_args(first)[position];
+                                let name = self.h.assign_value_name(arg);
+                                for &other in rest {
+                                    self.h.assign_value_name_like(
+                                        ctx.block_args(other)[position],
+                                        arg,
+                                    );
+                                }
+                                self.h.write_str(&name)?;
                             }
-                            self.h.write_str(&name)?;
+                            None => write!(self.h, "%arg{position}")?,
                         }
-                        None => write!(self.h, "%arg{position}")?,
+                        self.h.write_str(": ")?;
                     }
-                    self.h.write_str(": ")?;
                     write_signature_param(self.h, ty, attrs)?;
                 }
                 self.h.write_char(')')?;
-                if parts.results.is_empty() && parts.tail.is_empty() {
+                // A function's header drops `-> ()`; a function type keeps it.
+                if !regions.is_empty() && parts.results.is_empty() && parts.tail.is_empty() {
                     return Ok(());
                 }
                 self.h.write_str(" -> ")?;
@@ -548,11 +566,19 @@ fn printable(ctx: &IrContext, op: OpRef, schema: &OpSchema, format: &OpFormat) -
             attribute,
             regions,
             codec,
+            results,
         } => {
             written_ok &= attrs
                 .get_type(schema.attributes[attribute].name)
                 .and_then(|ty| (codec.decompose)(ctx, ty))
-                .is_some_and(|parts| signature_fits(ctx, op, schema, regions, &parts));
+                .is_some_and(|parts| {
+                    signature_fits(ctx, op, schema, regions, &parts)
+                        && (!results
+                            || ctx
+                                .op_result_types(op)
+                                .iter()
+                                .eq(parts.results.iter().map(|(ty, _)| ty)))
+                });
         }
         FormatElement::Optional {
             anchor: FormatAnchor::Flag(index),
@@ -728,7 +754,9 @@ impl<'a> FormatParser<'a> {
                 // A leading symbol or symbol reference cannot be generic
                 // syntax's, but generic syntax may follow it.
                 let symbol_like = match *element {
-                    FormatElement::Symbol(_) => true,
+                    // Only `(` after a leading operand tells it from generic
+                    // syntax.
+                    FormatElement::Symbol(_) | FormatElement::Operand(_) => true,
                     FormatElement::Attribute(index) => {
                         self.schema.attributes[index].kind == AttributeKind::SymbolRef
                     }
@@ -847,30 +875,43 @@ impl<'a> FormatParser<'a> {
                 attribute,
                 regions,
                 codec,
+                results: writes_results,
             } => {
                 if !input.starts_with('(') {
                     return Err(ErrMode::Backtrack(expected("a signature `(..)`")));
                 }
-                let params: Vec<(&'a str, RawParam<'a>)> = delimited(
-                    ('(', ws),
-                    separated(
-                        0..,
-                        (ws, value_ref, ws, ':', ws, raw_param, ws)
-                            .map(|(_, name, _, _, _, param, _)| (name, param)),
-                        ',',
-                    ),
-                    (ws, ')'),
-                )
-                .parse_next(input)?;
+                let params: Vec<(Option<&'a str>, RawParam<'a>)> = if regions.is_empty() {
+                    raw_param_list
+                        .parse_next(input)?
+                        .into_iter()
+                        .map(|param| (None, param))
+                        .collect()
+                } else {
+                    delimited(
+                        ('(', ws),
+                        separated(
+                            0..,
+                            (ws, value_ref, ws, ':', ws, raw_param, ws)
+                                .map(|(_, name, _, _, _, param, _)| (Some(name), param)),
+                            ',',
+                        ),
+                        (ws, ')'),
+                    )
+                    .parse_next(input)?
+                };
                 let (results, tail) = if opt((ws, "->", ws)).parse_next(input)?.is_some() {
                     let results = parse_signature_results(input)?;
                     (results, (codec.parse_tail)(input)?)
                 } else {
                     (Vec::new(), Vec::new())
                 };
+                if writes_results {
+                    self.parsed.result_types[0] =
+                        results.iter().map(|result| result.ty.clone()).collect();
+                }
                 let args = params
                     .iter()
-                    .map(|(name, param)| (*name, param.ty.clone()))
+                    .filter_map(|(name, param)| Some(((*name)?, param.ty.clone())))
                     .collect();
                 let inputs = params.into_iter().map(|(_, param)| param).collect();
                 let ty = (codec.build)(inputs, results, tail)?;
@@ -916,6 +957,11 @@ impl<'a> FormatParser<'a> {
     }
 }
 
+/// Whether a literal is a keyword, read as a whole identifier.
+fn is_keyword(text: &str) -> bool {
+    text.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+}
+
 /// Read `text`; a keyword must not continue as a longer identifier or as an
 /// operation name.
 fn literal(input: &mut &str, text: &'static str) -> ModalResult<()> {
@@ -924,7 +970,7 @@ fn literal(input: &mut &str, text: &'static str) -> ModalResult<()> {
         error.push(StrContext::Expected(StrContextValue::StringLiteral(text)));
         ErrMode::Backtrack(error)
     };
-    let is_word = text.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_');
+    let is_word = is_keyword(text);
     if is_word {
         let checkpoint = *input;
         return match opt(ident).parse_next(input)? {
@@ -1004,6 +1050,14 @@ mod tests {
             #[region(body?)]
             {}
         }
+
+        #[asm_format(callee "(" args ")" attr_dict ":" signature(signature))]
+        fn apply<S: FuncSig>(
+            signature: Attr<TypeOf<S>>,
+            callee: Value<_>,
+            args: Variadic<_>,
+        ) -> Variadic<_> {
+        }
     }
 
     /// Parse `text`, check that it prints as itself, and that the printed
@@ -1056,6 +1110,42 @@ mod tests {
   }
 }
 "#,
+        );
+    }
+
+    #[test]
+    fn calls_write_the_callee_and_the_signature_as_a_function_type() {
+        assert_round_trip(
+            r#"core.module @m {
+  asm_format_test.fun @f(%0: core.ptr, %1: core.i32) -> core.i32 {
+      %2 = asm_format_test.apply %0(%1) : (core.i32) -> core.i32
+      asm_format_test.apply %0() : () -> ()
+      asm_format_test.apply %0(%2) attributes {extra = 1} : (core.i32) -> (), {call_conv = "tail"}
+      asm_format_test.invoke call @ret(%2)
+  }
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn calls_read_generic_syntax_and_print_other_results_generically() {
+        let generic = r#"core.module @m {
+  asm_format_test.fun @f(%0: core.ptr, %1: core.i32) {
+      %2 = asm_format_test.apply %0, %1 {signature = func.func_sig<(core.i32) -> core.i32>} : core.i32
+      %3 = asm_format_test.apply %0, %1 {signature = func.func_sig<(core.i32) -> core.i32>} : core.i1
+  }
+}
+"#;
+        assert_eq!(
+            print(generic),
+            r#"core.module @m {
+  asm_format_test.fun @f(%0: core.ptr, %1: core.i32) {
+      %2 = asm_format_test.apply %0(%1) : (core.i32) -> core.i32
+      %3 = asm_format_test.apply %0, %1 {signature = func.func_sig<(core.i32) -> core.i32>} : core.i1
+  }
+}
+"#
         );
     }
 
