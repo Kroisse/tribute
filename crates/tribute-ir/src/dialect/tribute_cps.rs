@@ -174,9 +174,12 @@ mod tribute_cps {
     ///   class arguments, never on the row a reference passes, so every
     ///   reference with those arguments can share the table. An entry is
     ///   the target's own convention, so legalization enters the target
-    ///   directly. When a classless tail makes the instance `Cps` and its
-    ///   convention is weaker, the entry is the `func_ref` adapter that
-    ///   calls the worker through a value delimiter
+    ///   directly, except where the definition row's tail is no class
+    ///   variable. That tail makes the one instance `Cps`, and the table
+    ///   maps every convention from the row's lower bound up to it. Each
+    ///   weaker entry is the `func_ref` adapter that calls the worker
+    ///   under a value delimiter, started on the entry's evidence or, for
+    ///   `direct`, on the initial evidence
     ///   (`new-plans/cps-effects.md`, 값 delimiter). Legalization fills the
     ///   other entries by the same rule as a lambda's, once for the table.
     /// - **Verification:** the local verifier checks the attributes and that

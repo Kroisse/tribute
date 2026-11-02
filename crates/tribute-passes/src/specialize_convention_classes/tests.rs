@@ -815,6 +815,53 @@ fn a_reference_of_an_upper_bound_enters_a_target_per_class_up_to_it() {
     );
 }
 
+/// A definition whose own tail is no class variable is `Cps`, and its table
+/// enters that one instance through every class from its row's lower bound
+/// up.
+#[test]
+fn a_reference_of_a_classless_tail_enters_its_cps_instance_from_the_lower_bound() {
+    let printed = specialized(
+        r#"core.module @m {
+  !pure = tribute_control.func_sig<() -> core.i32>
+  !ask = tribute_control.func_sig<() -> core.i32 row(@Ask)>
+  !ctl = tribute_control.func_sig<() -> core.i32 row(@Ctl)>
+  ability.decl {sym_name = "Ask"} {
+    ability.operation {kind = "fn", op_name = "ask", param_types = [], result_type = core.i32}
+  }
+  ability.decl {sym_name = "Ctl"} {
+    ability.operation {kind = "op", op_name = "ctl", param_types = [], result_type = core.i32}
+  }
+  tribute_control.func @open['a0]() -> core.i32 row(| 'a0) {
+    %x = arith.const {value = 1} : core.i32
+    tribute_control.return %x
+  }
+  tribute_control.func @asks['a0]() -> core.i32 row(@Ask | 'a0) {
+    %x = arith.const {value = 1} : core.i32
+    tribute_control.return %x
+  }
+  tribute_control.func @controls['a0]() -> core.i32 row(@Ctl | 'a0) {
+    %x = arith.const {value = 1} : core.i32
+    tribute_control.return %x
+  }
+  tribute_control.func @main(%x: core.i32) -> core.i32 {
+    %o = tribute_control.func_ref @open rows [{}] : !pure
+    %a = tribute_control.func_ref @asks rows [{}] : !ask
+    %c = tribute_control.func_ref @controls rows [{}] : !ctl
+    tribute_control.return %x
+  }
+}"#,
+    );
+    assert_contains(
+        &printed,
+        &[
+            "tribute_cps.func @open['a0]() -> core.i32 row(| 'a0) convention(cps) {",
+            "tribute_cps.func_table @\"open$8\" = {cps = @open, direct = @open, evidence_direct = @open}",
+            "tribute_cps.func_table @\"asks$8\" = {cps = @asks, evidence_direct = @asks}",
+            "tribute_cps.func_table @\"controls$8\" = {cps = @controls}",
+        ],
+    );
+}
+
 /// The layouts the context publishes keep their callable fields.
 #[test]
 fn a_published_layout_keeps_its_callable_fields() {

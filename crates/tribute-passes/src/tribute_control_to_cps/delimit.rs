@@ -1,6 +1,7 @@
 //! Value delimiters: CPS control inside a callable that is not Cps.
 
 use super::*;
+use tribute_ir::calling_convention::ConventionBearing;
 
 impl Converter<'_> {
     /// Whether `source` needs CPS control from the flow that evaluates it: a
@@ -67,6 +68,54 @@ impl Converter<'_> {
         let converted = self.convert_sequence(ops, 0, body, &mut mapping.clone(), &body_flow);
         self.ctx.remove_op(exit.op_ref());
         converted?;
+        Ok(self.delimit_region(block, location, body, answer, flow.evidence))
+    }
+
+    /// Call the Cps function `target` with `args` under a value delimiter
+    /// in `block`, a flow that is not Cps whose evidence is `evidence`, and
+    /// return its answer of type `answer`.
+    pub(super) fn delimit_call(
+        &mut self,
+        block: BlockRef,
+        location: Location,
+        target: &SymbolPath,
+        args: &[ValueRef],
+        answer: TypeRef,
+        evidence: Option<ValueRef>,
+    ) -> ValueRef {
+        let evidence_type = self.evidence_type();
+        let frame_type = self.frame_type(answer);
+        let body = make_block(self.ctx, location, &[evidence_type, frame_type]);
+        // A Cps worker takes its evidence and frame before the source
+        // arguments.
+        let target_args: Vec<_> = self
+            .ctx
+            .block_args(body)
+            .to_vec()
+            .into_iter()
+            .chain(args.iter().copied())
+            .collect();
+        let tail = func::TailCall::operands(target_args)
+            .callee(target.clone())
+            .build(self.ctx, location);
+        tail.set_calling_convention(self.ctx, CallingConvention::Cps);
+        self.ctx.push_op(body, tail.op_ref());
+        self.delimit_region(block, location, body, answer, evidence)
+    }
+
+    /// Run `body`, the entry block of a Cps closure that exits with
+    /// `answer` to the frame it receives, under a value delimiter in
+    /// `block`, and return its answer.
+    fn delimit_region(
+        &mut self,
+        block: BlockRef,
+        location: Location,
+        body: BlockRef,
+        answer: TypeRef,
+        evidence: Option<ValueRef>,
+    ) -> ValueRef {
+        let evidence_type = self.evidence_type();
+        let frame_type = self.frame_type(answer);
         let region = single_block_region(self.ctx, location, body);
         let never = self.never_type();
         let function = func::func_sig(self.ctx, [evidence_type, frame_type], [never]).as_type_ref();
@@ -81,7 +130,7 @@ impl Converter<'_> {
         self.ctx.push_op(block, closure.op_ref());
         // A Direct flow receives no evidence; its delimiter starts on the
         // initial one.
-        let evidence = match flow.evidence {
+        let evidence = match evidence {
             Some(evidence) => evidence,
             None => {
                 let initial = effect::InitialEvidence::operands()
@@ -94,6 +143,6 @@ impl Converter<'_> {
         let delimit = ability::Delimit::operands(closure.result(self.ctx), evidence)
             .build(self.ctx, location);
         self.ctx.push_op(block, delimit.op_ref());
-        Ok(delimit.result(self.ctx))
+        delimit.result(self.ctx)
     }
 }

@@ -626,7 +626,9 @@ impl Instance<'_> {
     /// convention: one per class its own row may require read with those
     /// classes, each the instance whose argument for the class variable that
     /// is that row's tail narrows to that class (`new-plans/ir.md`,
-    /// "Convention entry", 함수 참조).
+    /// "Convention entry", 함수 참조). A tail that is no class variable
+    /// gives one `Cps` instance, the target of every class from the lower
+    /// bound up.
     fn table_targets(
         &self,
         ctx: &IrContext,
@@ -651,8 +653,14 @@ impl Instance<'_> {
         let tail = row
             .tail
             .and_then(|tail| positions.iter().position(|&position| position == tail));
-        reader
-            .conventions(ctx, &row, definition.op)
+        // A tail that is not a class variable makes the instance `Cps`, and
+        // a reference's row may require any class from the lower bound up.
+        let conventions = if row.tail.is_some() && tail.is_none() {
+            Class::upto(CallingConvention::Cps).conventions(reader.lower(&row))
+        } else {
+            reader.conventions(ctx, &row, definition.op)
+        };
+        conventions
             .into_iter()
             .map(|convention| {
                 let mut classes = classes.to_vec();

@@ -400,10 +400,11 @@ arm의 `scf.yield`)를 arm 안으로 복제해 이어 legalize하고, tail call�
 arm이 감싼 callable의 것을 그대로 쓴다.
 
 `func_table`이 `Direct`/`EvidenceDirect` entry마다 만드는 entry 함수는
-target이 platform `abi`를 유지하지 않고 target 결과가 entry 결과와 같으면
-target을 `func.tail_call`로 부른다. 이 경우 callable value를 통한 `become`은
-entry frame을 남기지 않는다. Platform `abi` target의 entry 함수는 일반 호출 뒤
-반환하므로 entry frame 하나가 남는다.
+target이 같은 convention이고 platform `abi`를 유지하지 않으며 target 결과가 entry
+결과와 같으면 target을 `func.tail_call`로 부른다. 이 경우 callable value를 통한
+`become`은 entry frame을 남기지 않는다. Platform `abi` target의 entry 함수는 일반 호출
+뒤 반환하고, `Cps` target의 entry 함수는 delimiter의 답을 반환하므로 둘 다 entry
+frame 하나가 남는다.
 
 `become`이 아닌 `Direct`/`EvidenceDirect` 호출은 꼬리 위치에 있어도 legalization이
 `func.call`과 `func.call_indirect`로 만든다. Target lowering은 최적화로 이 호출을
@@ -457,6 +458,8 @@ direct/indirect call, return의 대응 관계를 검증하고 physical symbol과
   `tribute_cps.func_ref`는 그 entry들을 담은 capture 없는 `closure.new`가 된다.
   Table을 공유하는 참조들은 같은 entry 함수를 쓴다. 대상 인스턴스가 있는 entry는 그
   대상을 부르고, 없는 entry는 같은 채우기 규칙에 따라 adapter나 trap entry다.
+  `Cps` 대상을 더 약한 convention으로 가리키는 entry는 그 대상을
+  [값 delimiter](#값-delimiter) 안에서 부르고 delimiter의 답을 반환한다.
   Entry 함수는 그 entry의 convention을 사용하고 필요한 hidden operand와 source
   argument를 대상 physical worker에 전달하므로 named function도 다른 closure와 같은
   entry ABI를 갖는다. 기존 closure lowering은 이 `closure.new`를

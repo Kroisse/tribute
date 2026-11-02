@@ -1244,10 +1244,12 @@ class가 정확하면 그 class의 대상 하나를 두고, 상한이면 정의�
 instance를 그대로 가지므로, 참조된 값의 실제 class는 이 범위 안에 있다. Class `c`의
 대상은 정의의 row의 tail인 class 변수의 인자를 람다 본문과 같이 `c`로 좁힌 class
 인자가 고르는 인스턴스이며, 대상들을 본문으로 삼아 같은 규칙으로 convention entry를
-채운다. 대상이 class 없는 tail 때문에 그 값의 row가 요구하는 것보다 강한 `Cps`
-인스턴스이면, 더 약한 convention entry는
-[값 delimiter](cps-effects.md#값-delimiter)로 worker를 부르는
-[`func_ref` adapter](cps-effects.md#cps-변환의-호출-대상-형상)다.
+채운다. 정의의 row의 tail이 class 변수가 아니면 그 tail은 class 없는 tail이므로
+인스턴스는 `Cps` 하나다. 참조가 넘기는 row는 하한부터 `Cps`까지 어느 class든 요구할
+수 있으므로, table은 그 범위의 class마다 이 인스턴스를 대상으로 둔다. `Cps`보다 약한
+convention entry는 [값 delimiter](cps-effects.md#값-delimiter)로 worker를 부르는
+[`func_ref` adapter](cps-effects.md#cps-변환의-호출-대상-형상)다. 이 adapter는
+entry의 evidence로, `Direct` entry에서는 초기 evidence로 delimiter를 시작한다.
 
 **생성된 closure.** CPS legalization이 만드는 closure(continuation, handler arm,
 delimiter region)는 source callable 값이 아니다. 그 closure type의 callable은 자기

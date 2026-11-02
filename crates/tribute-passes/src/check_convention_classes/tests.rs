@@ -213,6 +213,35 @@ fn a_func_ref_enters_its_table_no_stronger_than_the_row_of_its_value() {
     assert_eq!(rules(&input("!closed", "cps")), ["func_ref"]);
 }
 
+/// A table whose `Cps` target a classless tail selects enters it through
+/// weaker conventions too, so a closed row's reference finds its entry.
+#[test]
+fn a_table_of_a_classless_tail_enters_its_cps_target_from_the_lower_bound() {
+    let input = |entries: &str| {
+        format!(
+            r#"core.module @m {{
+  !closed = tribute_control.func_sig<() -> core.i32>
+  tribute_cps.func @open['a0]() -> core.i32 row(| 'a0) convention(cps) {{
+    %x = arith.const {{value = 1}} : core.i32
+    tribute_control.return %x
+  }}
+  tribute_cps.func_table @"open$8" = {{{entries}}}
+  tribute_cps.func @f(%x: core.i32) -> core.i32 convention(direct) {{
+    %p = tribute_cps.func_ref {{func_ref = @"open$8"}} : !closed
+    tribute_control.return %x
+  }}
+}}"#
+        )
+    };
+    assert_eq!(rules(&input("cps = @open")), ["func_ref"]);
+    assert_eq!(
+        rules(&input(
+            "cps = @open, direct = @open, evidence_direct = @open"
+        )),
+        [""; 0]
+    );
+}
+
 #[test]
 fn an_inferred_row_reads_its_tail_only_when_it_is_a_class_variable() {
     let inferred = |convention: &str| {
