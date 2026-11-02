@@ -12,12 +12,14 @@
 //! 5. **Shared Legalization**: callable/control IR → CPS and explicit evidence
 //! 6. **Target Lowering**: Native or Wasm ABI, storage, and code generation
 
+pub use crate::analysis_unit::{AnalysisUnit, document_units};
 pub use crate::database::TributeDatabaseImpl;
 pub use ropey::Rope;
 pub use tribute_core::diagnostic::{Diagnostic, DiagnosticSeverity};
 pub use tribute_front::SourceCst;
 pub use tribute_front::{ParsedCst, parse_cst};
 
+pub mod analysis_unit;
 pub mod database;
 mod frontend;
 pub mod link;

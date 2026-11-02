@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use trunk_ir::{Span, Symbol};
 
+use tribute::AnalysisUnit;
 use tribute_front::SourceCst;
 use tribute_front::ast::visit::{
     RefSite, Visit, walk_decl, walk_decl_table, walk_expr, walk_field_pattern, walk_func_decl,
@@ -17,7 +18,6 @@ use tribute_front::ast::{
     LocalId, NodeId, ParamDecl, Pattern, PatternKind, ResolvedRef, SpanMap, StructDecl, TypedRef,
 };
 use tribute_front::query as ast_query;
-use tribute_front::source_tree::source_tree_of;
 
 // =============================================================================
 // Definition Index
@@ -827,41 +827,38 @@ impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for DefinitionCollector<'_, 'db
     }
 }
 
-/// Build a definition index for a source file.
+/// Build a definition index for the file `source`, as `unit`'s analysis
+/// resolves it.
 #[salsa::tracked(returns(copy))]
 pub fn definition_index<'db>(
     db: &'db dyn salsa::Database,
+    unit: AnalysisUnit,
     source: SourceCst,
 ) -> Option<AstDefinitionIndex<'db>> {
-    let module = tribute::parse_and_lower_ast(db, source)?.module(db);
-    let span_map = ast_query::span_map(db, source)?;
+    let module = unit.typed(db)?.module(db);
+    let span_map = unit.span_map(db, source)?;
 
     Some(AstDefinitionIndex::build(
         db,
         module,
         span_map,
-        foreign_identifiers(db, source),
+        package_identifiers(db, unit, source),
     ))
 }
 
-/// The names that the other files of `source`'s package spell. Not every
-/// use of a name carries a resolved reference the index sees (type
-/// annotations, `use` declarations), so these are read as identifier tokens
-/// from each file's syntax tree: a package-level name another file spells
-/// is not renamable from `source`, whose rename edits only `source`.
-fn foreign_identifiers(db: &dyn salsa::Database, source: SourceCst) -> BTreeSet<Symbol> {
-    package_identifiers(db, source, source)
-}
-
-/// The names that the files of the package rooted at `root`, other than
-/// `except`, spell as identifier tokens.
+/// The names that the files of `unit`'s source tree other than `except`
+/// spell as identifier tokens. Not every use of a name carries a resolved
+/// reference the index sees (type annotations, `use` declarations), so
+/// these are read from each file's syntax tree: a package-level name
+/// another file spells is not renamable from `except`, whose rename edits
+/// only `except`.
 pub fn package_identifiers(
     db: &dyn salsa::Database,
-    root: SourceCst,
+    unit: AnalysisUnit,
     except: SourceCst,
 ) -> BTreeSet<Symbol> {
     let mut names = BTreeSet::new();
-    let Some(tree) = source_tree_of(db, root) else {
+    let Some(tree) = unit.tree(db) else {
         return names;
     };
     for file in tree.files().iter().filter(|file| file.source != except) {
@@ -1010,7 +1007,7 @@ mod tests {
 }"#,
         );
 
-        let index = definition_index(&db, source);
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some(), "Should build definition index");
 
         let index = index.unwrap();
@@ -1030,7 +1027,7 @@ mod tests {
         let db = salsa::DatabaseImpl::default();
         let source = make_source(&db, "fn hello() { 1 }");
 
-        let index = definition_index(&db, source);
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
 
         let index = index.unwrap();
@@ -1045,7 +1042,7 @@ mod tests {
         let db = salsa::DatabaseImpl::default();
         let source = make_source(&db, "struct Point { x: Int }");
 
-        let index = definition_index(&db, source);
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
 
         let index = index.unwrap();
@@ -1066,7 +1063,7 @@ mod tests {
         let db = salsa::DatabaseImpl::default();
         let source = make_source(&db, "fn foo(x: Int) { x }");
 
-        let index = definition_index(&db, source);
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
 
         let index = index.unwrap();
@@ -1082,7 +1079,7 @@ mod tests {
         //       0123456789012345
         let source = make_source(&db, "fn foo() { 1 }");
 
-        let index = definition_index(&db, source);
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
 
         let index = index.unwrap();
@@ -1104,7 +1101,7 @@ mod tests {
 }"#,
         );
 
-        let index = definition_index(&db, source);
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
 
         let index = index.unwrap();
@@ -1120,7 +1117,7 @@ mod tests {
         let db = salsa::DatabaseImpl::default();
         let source = make_source(&db, "fn foo() { 1 }");
 
-        let index = definition_index(&db, source);
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
 
         let index = index.unwrap();
@@ -1146,7 +1143,7 @@ mod tests {
 }"#,
         );
 
-        let index = definition_index(&db, source);
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
 
         let index = index.unwrap();
@@ -1166,7 +1163,7 @@ mod tests {
 }"#,
         );
 
-        let index = definition_index(&db, source);
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
 
         let index = index.unwrap();
@@ -1192,7 +1189,7 @@ mod tests {
 }"#,
         );
 
-        let index = definition_index(&db, source);
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
 
         let index = index.unwrap();
@@ -1216,7 +1213,7 @@ mod tests {
 }"#,
         );
 
-        let index = definition_index(&db, source);
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
 
         // Wildcard should not create a definition
@@ -1240,7 +1237,7 @@ fn unwrap(opt: Option) -> Int {
 }"#,
         );
 
-        let index = definition_index(&db, source);
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
 
         let index = index.unwrap();
@@ -1286,7 +1283,7 @@ fn unwrap(opt: Option) -> Int {
 }"#,
         );
 
-        let index = definition_index(&db, source);
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
 
         let index = index.unwrap();
@@ -1330,7 +1327,7 @@ fn unwrap(opt: Option) -> Int {
 }"#,
         );
 
-        let index = definition_index(&db, source);
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
 
         let index = index.unwrap();
@@ -1377,7 +1374,7 @@ fn unwrap(opt: Option) -> Int {
 }"#,
         );
 
-        let index = definition_index(&db, source);
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
 
         let index = index.unwrap();
@@ -1404,7 +1401,7 @@ fn unwrap(opt: Option) -> Int {
 }"#,
         );
 
-        let index = definition_index(&db, source);
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
 
         let index = index.unwrap();
@@ -1501,7 +1498,7 @@ fn unwrap(opt: Option) -> Int {
         let db = salsa::DatabaseImpl::default();
         let source = make_source(&db, "fn foo() { let x = 1; x }");
 
-        let index = definition_index(&db, source);
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
         let index = index.unwrap();
 
@@ -1520,7 +1517,7 @@ fn unwrap(opt: Option) -> Int {
         let db = salsa::DatabaseImpl::default();
         let source = make_source(&db, "fn foo() { 1 }");
 
-        let index = definition_index(&db, source);
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
         let index = index.unwrap();
 
@@ -1539,7 +1536,7 @@ fn unwrap(opt: Option) -> Int {
         let db = salsa::DatabaseImpl::default();
         let source = make_source(&db, "enum Option { Some(a), None }");
 
-        let index = definition_index(&db, source);
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
         let index = index.unwrap();
 
@@ -1570,7 +1567,7 @@ fn use_point(p: Point) -> Int {
 }"#,
         );
 
-        let index = definition_index(&db, source);
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
 
         let index = index.unwrap();
@@ -1607,7 +1604,7 @@ fn f(p: Point) -> Int {
 }"#,
         );
 
-        let index = definition_index(&db, source);
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
 
         let index = index.unwrap();
@@ -1644,7 +1641,7 @@ fn f(p: Point) -> Int {
         let db = salsa::DatabaseImpl::default();
         let source = make_source(&db, "enum Color { Red, Green, Blue }");
 
-        let index = definition_index(&db, source);
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
 
         let index = index.unwrap();
@@ -1682,7 +1679,7 @@ fn f(p: Point) -> Int {
         let db = salsa::DatabaseImpl::default();
         let source = make_source(&db, "struct Point { x: Int, y: Int }");
 
-        let index = definition_index(&db, source);
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
 
         let index = index.unwrap();
@@ -1748,7 +1745,7 @@ enum Result(T, E) {
 "#,
         );
 
-        let index = definition_index(&db, source);
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
         let index = index.unwrap();
 
@@ -1792,7 +1789,7 @@ enum Result(T, E) {
         let db = salsa::DatabaseImpl::default();
         let source = make_source(&db, "fn add(x: Int, y: Int) -> Int { x + y }");
 
-        let index = definition_index(&db, source);
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
 
         let index = index.unwrap();
@@ -1823,7 +1820,7 @@ enum Result(T, E) {
         // Simple function that uses its parameter
         let source = make_source(&db, "fn identity(x: Int) -> Int { x }");
 
-        let index = definition_index(&db, source);
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
 
         let index = index.unwrap();
@@ -1856,7 +1853,7 @@ enum Result(T, E) {
         let db = salsa::DatabaseImpl::default();
         let text = "fn f(x: Int) -> Int { x }\nfn g(x: Int) -> Int { x }";
         let source = make_source(&db, text);
-        let index = definition_index(&db, source).unwrap();
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source).unwrap();
 
         for func in ["fn f", "fn g"] {
             let start = text.find(func).unwrap();
@@ -1891,7 +1888,7 @@ enum Result(T, E) {
         let db = salsa::DatabaseImpl::default();
         let source = make_source(&db, "fn foo(x: Int) -> Int { x }");
 
-        let index = definition_index(&db, source);
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
         let index = index.unwrap();
 
@@ -1916,7 +1913,7 @@ enum Result(T, E) {
         let db = salsa::DatabaseImpl::default();
         let source = make_source(&db, "fn foo() { let x = 1; x }");
 
-        let index = definition_index(&db, source);
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
         let index = index.unwrap();
 
@@ -1935,7 +1932,7 @@ enum Result(T, E) {
         let db = salsa::DatabaseImpl::default();
         let source = make_source(&db, "fn foo() { 1 }");
 
-        let index = definition_index(&db, source);
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
         let index = index.unwrap();
 
@@ -1954,7 +1951,7 @@ enum Result(T, E) {
         let db = salsa::DatabaseImpl::default();
         let source = make_source(&db, "enum Option { Some(a), None }");
 
-        let index = definition_index(&db, source);
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
         let index = index.unwrap();
 
@@ -1983,7 +1980,7 @@ enum Result(T, E) {
 struct Rect { x: Int, width: Int }"#,
         );
 
-        let index = definition_index(&db, source);
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
         let index = index.unwrap();
 
@@ -2027,7 +2024,7 @@ struct Rect { x: Int, width: Int }"#,
 enum Option { Some(a), None }"#,
         );
 
-        let index = definition_index(&db, source);
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
         let index = index.unwrap();
 
@@ -2078,7 +2075,7 @@ fn test() -> Int {
 }"#,
         );
 
-        let index = definition_index(&db, source);
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
         let index = index.unwrap();
 
@@ -2130,7 +2127,7 @@ fn test() -> Int {
 struct Rect { x: Int, width: Int }"#,
         );
 
-        let index = definition_index(&db, source);
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
         let index = index.unwrap();
 
@@ -2205,7 +2202,7 @@ fn main() {
     p
 }"#;
         let source = make_source(&db, text);
-        let index = definition_index(&db, source).unwrap();
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source).unwrap();
 
         let point_x = field_target("Point", "x");
         assert_eq!(reference_texts(&db, index, text, &point_x), ["x"]);
@@ -2238,7 +2235,7 @@ fn sum(p: Point) -> Int {
     a + y
 }"#;
         let source = make_source(&db, text);
-        let index = definition_index(&db, source).unwrap();
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source).unwrap();
 
         // `x: a` names the field, and so does the shorthand `y`.
         let x = field_target("Point", "x");
@@ -2279,7 +2276,7 @@ fn sum(p: Point) -> Int {
     x + b
 }"#;
         let source = make_source(&db, text);
-        let index = definition_index(&db, source).unwrap();
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source).unwrap();
 
         let x = field_target("Point", "x");
         let def = index.definition_of_target(&db, &x).unwrap();
@@ -2308,7 +2305,7 @@ fn main() -> Int {
     }
 }"#;
         let source = make_source(&db, text);
-        let index = definition_index(&db, source).unwrap();
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source).unwrap();
 
         let x = field_target("Point", "x");
         assert_eq!(reference_texts(&db, index, text, &x), ["x", "x"]);
@@ -2319,7 +2316,7 @@ fn main() -> Int {
         let db = salsa::DatabaseImpl::default();
         let source = make_source(&db, r#"extern "intrinsic" fn __add(a: Int, b: Int) -> Int"#);
 
-        let index = definition_index(&db, source);
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source);
         assert!(
             index.is_some(),
             "Should build definition index for extern function"
@@ -2341,7 +2338,7 @@ fn main() -> Int {
         let db = salsa::DatabaseImpl::default();
         let source = make_source(&db, r#"extern "intrinsic" fn __add(a: Int, b: Int) -> Int"#);
 
-        let index = definition_index(&db, source);
+        let index = definition_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
 
         let index = index.unwrap();
