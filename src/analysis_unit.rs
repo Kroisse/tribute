@@ -2,7 +2,7 @@
 //! (`new-plans/lsp.md` § 문서가 속한 패키지).
 
 use tribute_core::diagnostic::Diagnostic;
-use tribute_front::analysis::{self, Package};
+use tribute_front::analysis::{self, DependencyTable, Package};
 use tribute_front::ast::SpanMap;
 use tribute_front::ast::source_hash;
 use tribute_front::manifest;
@@ -73,6 +73,14 @@ impl AnalysisUnit {
         Some(self.file(db, source)?.parsed.span_map(db))
     }
 
+    /// The dependency table the package is analyzed against.
+    pub fn dependencies(self, db: &dyn salsa::Database) -> DependencyTable {
+        match self {
+            Self::Executable(root) => crate::root_environment(db, root),
+            Self::Library(package) => *package.dependencies(db),
+        }
+    }
+
     /// The package's typed AST, even when its analysis reports errors.
     pub fn typed(self, db: &dyn salsa::Database) -> Option<TypeCheckOutput<'_>> {
         match self {
@@ -113,4 +121,26 @@ impl AnalysisUnit {
             }
         }
     }
+}
+
+/// The packages the language server analyzes the file `document` in
+/// (`new-plans/lsp.md` § 문서가 속한 패키지): each root of the package the
+/// file belongs to whose source tree reads it, the library first. A file
+/// no such root reads, or in no package, is analyzed as an executable root
+/// of its own.
+#[salsa::tracked(returns(deref))]
+pub fn document_units(db: &dyn salsa::Database, document: SourceCst) -> Vec<AnalysisUnit> {
+    let own = vec![AnalysisUnit::Executable(document)];
+    let Some(manifest) = *manifest::owning_manifest(db, document) else {
+        return own;
+    };
+    let implicit = *crate::frontend_environment(db);
+    let library = manifest::library_package(db, manifest, implicit).map(AnalysisUnit::Library);
+    let executable = manifest::executable_root(db, manifest).map(AnalysisUnit::Executable);
+    let units: Vec<_> = library
+        .into_iter()
+        .chain(executable)
+        .filter(|unit| unit.reads(db, document))
+        .collect();
+    if units.is_empty() { own } else { units }
 }

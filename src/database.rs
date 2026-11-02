@@ -292,6 +292,30 @@ mod tests {
         assert_eq!(names(&cli, source), ["std"]);
     }
 
+    /// An open `src/lib.trb` is analyzed as its library package, under the
+    /// manifest's name.
+    #[test]
+    fn an_open_library_root_is_analyzed_as_its_library() {
+        let mut db = TributeDatabaseImpl::language_server();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/packages/geometry/src/lib.trb");
+        let uri: LspUri = path_to_uri(&path).as_str().parse().unwrap();
+        db.open_document(
+            &uri,
+            Rope::from_str(&std::fs::read_to_string(&path).unwrap()),
+        );
+        let source = db.source_cst(&uri).unwrap();
+        let units = crate::document_units(&db, source);
+        let [crate::AnalysisUnit::Library(package)] = units else {
+            panic!("not a library: {units:?}");
+        };
+        assert_eq!(package.name(&db).name().unwrap().to_string(), "geometry");
+        assert_eq!(
+            crate::AnalysisUnit::Library(*package).diagnostics(&db),
+            Vec::new()
+        );
+    }
+
     /// A file module's document, which no root on disk reads here, is
     /// analyzed with its package's dependency table.
     #[test]

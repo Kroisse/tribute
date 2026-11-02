@@ -140,7 +140,7 @@ pub fn load_package(
 ) -> Option<LoadedPackage> {
     let manifest = manifest(db, file)?;
     let has_library = source_at(db, &beside(file.uri(db), LIBRARY_ROOT)?).is_some();
-    let executable = source_at(db, &beside(file.uri(db), EXECUTABLE_ROOT)?);
+    let executable = executable_root(db, file);
     if !has_library && executable.is_none() {
         error(
             db,
@@ -156,6 +156,12 @@ pub fn load_package(
         library: *library_package(db, file, implicit),
         executable,
     })
+}
+
+/// The root file of the executable package of the manifest `file`, its
+/// `src/main.trb`, if there is one.
+pub fn executable_root(db: &dyn salsa::Database, file: FileEntry) -> Option<SourceCst> {
+    source_at(db, &beside(file.uri(db), EXECUTABLE_ROOT)?)
 }
 
 /// The library package of the manifest `file`, rooted at its `src/lib.trb`:
