@@ -783,7 +783,6 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
                 node,
                 super::LocalCallableInstance {
                     binding,
-                    local,
                     scheme,
                     row_arguments: instance.row_args,
                     callable,
