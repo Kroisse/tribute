@@ -36,6 +36,17 @@ mod scf {
     #[asm_format(values attr_dict_bare)]
     fn r#yield(values: Variadic<_>) {}
 
+    /// A loop whose body receives `init` as its entry block arguments on
+    /// the first iteration and the values of `scf.continue` on the next.
+    /// `scf.break` leaves it with the optional result.
+    ///
+    /// ```text
+    /// %r = scf.loop(%init) -> (core.i32) {
+    ///   ^body(%acc: core.i32):
+    ///     scf.break %acc
+    /// }
+    /// ```
+    #[asm_format("(" init ")" ("->" "(" type(result)^ ")")? attr_dict region(body))]
     #[implements(RegionBranch)]
     fn r#loop(init: Variadic<_>) -> Option<Value<_>> {
         #[region(body)]
@@ -653,6 +664,26 @@ mod canonicalize_tests {
             ControlFlow::Continue(WalkAction::Advance)
         });
         count
+    }
+
+    #[test]
+    fn loop_writes_its_init_and_optional_result() {
+        let text = r#"core.module @test {
+  func.func @f(%0: core.i32) -> core.nil {
+      %1 = scf.loop(%0) -> (core.i32) {
+        ^bb1(%2: core.i32):
+          scf.break %2
+      }
+      scf.loop() {
+          scf.continue
+      }
+      func.return
+  }
+}
+"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, text);
+        assert_eq!(print_module(&ctx, module.op()), text);
     }
 
     #[test]

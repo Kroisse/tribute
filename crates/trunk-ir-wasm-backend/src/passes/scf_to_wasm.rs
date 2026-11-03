@@ -1150,10 +1150,10 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @carry(%init: wasm_gc.array<core.i32>) -> core.nil {
-    "scf.loop"(%init) ({
+    scf.loop(%init) -> (core.nil) {
       ^header(%iter: wasm_gc.array<core.i32>):
         scf.continue %iter
-    }) : core.nil
+    }
     func.return
   }
 }"#,
@@ -1192,10 +1192,7 @@ mod tests {
                 "scf.if %cond { func.return } else { func.unreachable }",
                 vec![If::NAME],
             ),
-            (
-                "\"scf.loop\"() ({ func.return })",
-                vec![Block::NAME, Loop::NAME],
-            ),
+            ("scf.loop() { func.return }", vec![Block::NAME, Loop::NAME]),
             (
                 "%n = scf.if %cond -> (core.never) { func.tail_call @main(%cond, %choice, %unit) : (core.i1, core.i32, core.nil) -> () } else { func.unreachable }",
                 vec![If::NAME],
@@ -1205,11 +1202,11 @@ mod tests {
                 vec![If::NAME],
             ),
             (
-                "%n = \"scf.loop\"() ({ func.return }) : core.never",
+                "%n = scf.loop() -> (core.never) { func.return }",
                 vec![Block::NAME, Loop::NAME],
             ),
             (
-                "%n = \"scf.loop\"(%choice) ({ ^body(%carried: core.i32): func.return }) : core.never",
+                "%n = scf.loop(%choice) -> (core.never) { ^body(%carried: core.i32): func.return }",
                 vec![Block::NAME, Loop::NAME],
             ),
             (
@@ -1225,11 +1222,11 @@ mod tests {
                 vec![If::NAME, If::NAME],
             ),
             (
-                "%outer = scf.if %cond -> (core.never) { \"scf.loop\"() ({ func.return }) } else { func.return }",
+                "%outer = scf.if %cond -> (core.never) { scf.loop() { func.return } } else { func.return }",
                 vec![If::NAME, Block::NAME, Loop::NAME],
             ),
             (
-                "%outer = scf.if %cond -> (core.never) { %inner = \"scf.loop\"() ({ func.return }) : core.never } else { func.return }",
+                "%outer = scf.if %cond -> (core.never) { %inner = scf.loop() -> (core.never) { func.return } } else { func.return }",
                 vec![If::NAME, Block::NAME, Loop::NAME],
             ),
             (
@@ -1237,7 +1234,7 @@ mod tests {
                 vec![If::NAME, If::NAME],
             ),
             (
-                "%n = \"scf.loop\"() ({ %inner = scf.if %cond -> (core.never) { func.return } else { func.unreachable } }) : core.never",
+                "%n = scf.loop() -> (core.never) { %inner = scf.if %cond -> (core.never) { func.return } else { func.unreachable } }",
                 vec![Block::NAME, Loop::NAME, If::NAME],
             ),
             (
@@ -1294,8 +1291,8 @@ mod tests {
         for body in [
             "scf.if %cond { func.return %choice } else { func.unreachable }",
             "%n = scf.if %cond -> (core.never) { func.return %choice } else { func.unreachable }",
-            "\"scf.loop\"() ({ func.return %choice })",
-            "%n = \"scf.loop\"() ({ func.return %choice }) : core.never",
+            "scf.loop() { func.return %choice }",
+            "%n = scf.loop() -> (core.never) { func.return %choice }",
             "scf.switch %choice { scf.case 0 { func.return %choice } scf.default { func.unreachable } }",
             "scf.if %cond { scf.if %cond { func.return %choice } else { func.unreachable } } else { func.return %choice }",
         ] {
@@ -1355,15 +1352,15 @@ mod tests {
             "%n = scf.if %cond -> (core.never) { ^a: func.return ^b: func.return } else { func.return }",
             "%n = scf.if %cond -> (core.never) { \"func.unreachable\"(%unit) } else { func.return }",
             "%n = scf.if %cond -> (core.never) { scf.switch %choice { scf.case 0 { func.return } } } else { func.return }",
-            "%n = \"scf.loop\"() ({ func.return }) : core.never func.return %n",
-            "%n = \"scf.loop\"() ({ func.return }) : core.never func.unreachable",
-            "%n = \"scf.loop\"() ({ scf.continue }) : core.never",
-            "%n = \"scf.loop\"() ({ scf.break %unit }) : core.never",
-            "%n = \"scf.loop\"() ({ }) : core.never",
+            "%n = scf.loop() -> (core.never) { func.return } func.return %n",
+            "%n = scf.loop() -> (core.never) { func.return } func.unreachable",
+            "%n = scf.loop() -> (core.never) { scf.continue }",
+            "%n = scf.loop() -> (core.never) { scf.break %unit }",
+            "%n = scf.loop() -> (core.never) { }",
             "%n = scf.if %cond -> (core.never) { scf.if %cond { func.return } else { scf.yield } } else { func.return }",
-            "%n = scf.if %cond -> (core.never) { \"scf.loop\"() ({ \"scf.break\"() }) } else { func.return }",
-            "%n = scf.if %cond -> (core.never) { \"scf.loop\"() ({ scf.continue }) } else { func.return }",
-            "%n = \"scf.loop\"() ({ ^a: func.return ^b: func.return }) : core.never",
+            "%n = scf.if %cond -> (core.never) { scf.loop() { \"scf.break\"() } } else { func.return }",
+            "%n = scf.if %cond -> (core.never) { scf.loop() { scf.continue } } else { func.return }",
+            "%n = scf.loop() -> (core.never) { ^a: func.return ^b: func.return }",
         ] {
             let input = control_fixture(&format!(
                 "scf.if %cond -> (core.nil) {{ scf.yield %unit }} else {{ scf.yield %unit }} {body}"
@@ -1426,7 +1423,7 @@ mod tests {
                 format!(
                     "%v = scf.if %cond -> ({ty}) {{ scf.yield {value} }} else {{ scf.yield {value} }} func.return %v"
                 ),
-                format!("%v = \"scf.loop\"() ({{ scf.break {value} }}) : {ty} func.return %v"),
+                format!("%v = scf.loop() -> ({ty}) {{ scf.break {value} }} func.return %v"),
             ] {
                 let mut ctx = IrContext::new();
                 let input = control_fixture(&body).replace("-> core.nil", &format!("-> {ty}"));

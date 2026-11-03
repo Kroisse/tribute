@@ -1860,10 +1860,10 @@ fn tail_call_arms_must_belong_to_a_one_result_if_in_tail_position() {
     assert!(resultless_if.contains("tail position"), "{resultless_if}");
 
     let loop_arm = validate_body(
-        r#"    %value = "scf.loop"(%n) ({
+        r#"    %value = scf.loop(%n) -> (core.i32) {
     ^bb0(%i: core.i32):
       tribute_control.tail_call %i {callee = @f}
-    }) : core.i32
+    }
     tribute_control.return %value"#,
     );
     assert!(loop_arm.contains("tail position"), "{loop_arm}");

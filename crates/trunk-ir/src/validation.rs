@@ -2970,12 +2970,12 @@ mod tests {
     fn region_branch_interfaces_cover_loop_entry_backedge_and_exit() {
         let input = r#"core.module @test {
   func.func @main(%init: core.i32) -> core.i32 {
-    %result = "scf.loop"(%init) ({
+    %result = scf.loop(%init) -> (core.i32) {
       ^header(%iter: core.i32):
         scf.continue %iter
       ^exit_path(%value: core.i32):
         scf.break %value
-    }) : core.i32
+    }
     func.return %result
   }
 }"#;
@@ -3086,16 +3086,16 @@ mod tests {
         scf.yield
       }
     }
-    %looped = "scf.loop"(%value) ({
+    %looped = scf.loop(%value) -> (core.i32) {
       ^continue_path(%continue_value: core.i32):
         scf.continue %continue_value
       ^break_path(%break_value: core.i32):
         scf.break %break_value
-    }) : core.i32
-    "scf.loop"(%value) ({
+    }
+    scf.loop(%value) {
       ^resultless_break_path(%resultless_value: core.i32):
         scf.break %resultless_value
-    })
+    }
     %zero = arith.const {value = 0} : core.i32
     func.return %selected
   }
@@ -3340,10 +3340,10 @@ mod tests {
         scf.default { scf.yield }
         scf.default { scf.yield }
       }
-      %looped = "scf.loop"(%forwarded) ({
+      %looped = scf.loop(%forwarded) -> (core.i32) {
         ^loop_exit(%loop_value: core.i32):
           scf.break %loop_value
-      }) : core.i32
+      }
       func.return %selected
   }
   func.func @stray(%stray_value: core.i32) {
@@ -3432,12 +3432,12 @@ mod tests {
     fn region_branch_interfaces_reject_incomplete_loop_mappings() {
         let input = r#"core.module @test {
   func.func @main(%init: core.i32) -> core.i32 {
-    %result = "scf.loop"(%init) ({
+    %result = scf.loop(%init) -> (core.i32) {
       ^header(%iter: core.i32, %extra: core.i32):
         scf.continue
       ^exit_path(%value: core.i32):
         scf.break %value
-    }) : core.i32
+    }
     func.return %result
   }
 }"#;
