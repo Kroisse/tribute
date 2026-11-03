@@ -232,8 +232,8 @@ pub(crate) fn extract_element_def(
     ctx: &IrContext,
     elem_op: wasm_dialect::Elem,
 ) -> CompilationResult<ElementDef> {
-    let table = elem_op.table(ctx).unwrap_or(0);
-    let raw_offset = elem_op.offset(ctx).unwrap_or(0);
+    let table = elem_op.table(ctx);
+    let raw_offset = elem_op.offset(ctx);
     let offset = i32::try_from(raw_offset)
         .map_err(|_| CompilationError::invalid_module("element segment offset exceeds i32::MAX"))?;
 

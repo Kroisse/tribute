@@ -74,7 +74,7 @@ mod tribute_cps {
         convention: Attr<CallingConvention>,
         row_binders: Option<Attr<[RowBinder]>>,
         row_unions: Option<Attr<[RowUnion]>>,
-        inferred_row: Option<Attr<bool>>,
+        #[default(false)] inferred_row: Attr<bool>,
     ) {
         #[region(body?)]
         {}

@@ -1,4 +1,4 @@
-use trunk_ir::ops::DialectType;
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::parser::parse_module;
 use trunk_ir::printer::print_module;
 use trunk_ir::rewrite::Module;
@@ -369,6 +369,24 @@ fn tuple_names_keep_symbol_path_components_apart() {
         logical_tuple_name(&ctx, &[callable])
     });
     assert_ne!(names[0], names[1]);
+}
+
+#[test]
+fn a_declared_row_is_an_absent_inferred_row() {
+    let (mut ctx, module) = parse(
+        r#"core.module @test {
+  tribute_control.func @f(%x: core.i32) -> core.i32 {
+    tribute_control.return %x
+  }
+}"#,
+    );
+    let func = module.ops(&ctx)[0];
+    let source = super::super::Func::from_op(&ctx, func).unwrap();
+    assert!(!source.inferred_row(&ctx));
+    let canonical = print_module(&ctx, module.op());
+    ctx.op_attrs_mut(func)
+        .insert(INFERRED_ROW_ATTR, trunk_ir::types::Attribute::Bool(false));
+    assert_eq!(print_module(&ctx, module.op()), canonical);
 }
 
 #[test]

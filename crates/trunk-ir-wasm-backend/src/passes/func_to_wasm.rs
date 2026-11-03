@@ -233,10 +233,8 @@ fn add_function_table(ctx: &mut IrContext, module: Module, funcs: &[SymbolPath],
         parent_op: None,
     });
 
-    // Create wasm.elem with table 0 and offset 0
+    // Create wasm.elem at the default table 0 and offset 0
     let elem_op = wasm_dialect::Elem::operands()
-        .table(Some(0))
-        .offset(Some(0))
         .regions(funcs_region)
         .build(ctx, location);
 
