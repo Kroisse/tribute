@@ -211,7 +211,11 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
 
     /// `value` again as a reference to the same function under the callable
     /// type `target_ty`, if `value` is a function reference and `target_ty`
-    /// has its parameters and result under a convention at least as strong.
+    /// has its parameters and result under a row that includes its own.
+    ///
+    /// This is the only callable adaptation accepted at the source-logical
+    /// boundary: a generic `unrealized_conversion_cast` cannot change a
+    /// callable ABI.
     fn function_ref_as(
         &mut self,
         location: Location,

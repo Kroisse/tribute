@@ -63,7 +63,6 @@ impl<'db> TypeVisitable<'db> for LocalCallableInstance<'db> {
     fn visit_with<V: TypeVisitor<'db> + ?Sized>(&self, visitor: &mut V) -> ControlFlow<V::Break> {
         let Self {
             binding: _,
-            local: _,
             scheme,
             row_arguments,
             callable,
@@ -78,14 +77,12 @@ impl<'db> TypeFoldable<'db> for LocalCallableInstance<'db> {
     fn try_fold_with<F: TypeFolder<'db> + ?Sized>(self, folder: &mut F) -> Result<Self, F::Error> {
         let Self {
             binding,
-            local,
             scheme,
             row_arguments,
             callable,
         } = self;
         Ok(Self {
             binding,
-            local,
             scheme: scheme.try_fold_with(folder)?,
             callable: callable.try_fold_with(folder)?,
             row_arguments: row_arguments.try_fold_with(folder)?,

@@ -910,3 +910,46 @@ fn main() -> Nil {}
         assert!(closure.contains(body), "missing body `{body}`:\n{both}");
     }
 }
+
+/// A named function passed to a generalized computation result, directly or
+/// through an alias, takes the parameter's row, whose tail is a body binder,
+/// by a function reference at that type rather than a conversion cast.
+#[salsa_test]
+fn a_named_function_passed_to_a_generalized_result_takes_its_row(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "generalized_consumer.trb",
+        r#"
+fn make() ->{} fn(fn(Int) ->{e} Int, Int) ->{e} Int {
+    fn(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(f(x)) }
+}
+fn inc(x: Int) ->{} Int { x + +1 }
+fn direct() ->{} Int {
+    let twice = make()
+    twice(inc, +1)
+}
+fn aliased() ->{} Int {
+    let twice = make()
+    let step = inc
+    twice(step, +1)
+}
+fn main() -> Nil {}
+"#,
+    );
+    let ir = common::specialized_frontend_ir(db, source);
+    for name in ["direct", "aliased"] {
+        let function = logical_function(&ir, name);
+        let reference = function
+            .lines()
+            .find(|line| line.contains("tribute_cps.func_ref @\"pkg::inc$8\""))
+            .unwrap_or_else(|| panic!("{function}"));
+        let alias = reference.rsplit(" : ").next().unwrap();
+        assert!(
+            ir.contains(&format!(
+                "{alias} = tribute_control.func_sig<(core.i32) -> core.i32 row(| 'a0)>"
+            )) && function.matches("tribute_cps.func_ref").count() == 1
+                && !function.contains("unrealized_conversion_cast"),
+            "{ir}"
+        );
+    }
+}

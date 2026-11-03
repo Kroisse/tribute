@@ -514,3 +514,26 @@ fn body() ->{State(Int)} Int {
         "11",
     );
 }
+
+/// Named functions, closed and open, passed to a generalized computation
+/// result run through the factory's helper.
+#[test]
+fn named_functions_passed_to_a_generalized_result_run() {
+    common::assert_output_on_both_targets(
+        "generalized_named_arguments.trb",
+        r#"
+use std::io::{Io, print_line}
+fn make() ->{} fn(fn(Int) ->{e} Int, Int) ->{e} Int {
+    fn(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(f(x)) }
+}
+fn inc(x: Int) ->{} Int { x + +1 }
+fn add_two(x: Int) -> Int { x + +2 }
+fn main() ->{Io} Nil {
+    let twice = make()
+    print_line(twice(inc, +1).to_string)
+    print_line(twice(add_two, +1).to_string)
+}
+"#,
+        "3\n5",
+    );
+}

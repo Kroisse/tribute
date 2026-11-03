@@ -109,7 +109,6 @@ pub(super) fn lower_expr<'db>(
                     name.clone(),
                     RowArguments::Instance(expr.id),
                     declarations,
-                    None,
                 ))
             }
             ResolvedRef::AbilityOp { .. } => {
@@ -812,7 +811,7 @@ pub(super) fn lower_local_reference<'db>(
     local: crate::ast::LocalId,
     declarations: &Declarations<'db>,
 ) -> Option<ValueRef> {
-    if let Some(value) = lower_alias_reference(builder, node, local, declarations, None) {
+    if let Some(value) = lower_alias_reference(builder, node, local, declarations) {
         return Some(value);
     }
     let value = builder.ctx.lookup(local)?;

@@ -241,10 +241,11 @@ pub struct FunctionInstance<'db> {
     pub callable: Type<'db>,
 }
 
+/// The instantiation chosen for one use of a let-bound callable local, whose
+/// `let` pattern is `binding`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct LocalCallableInstance<'db> {
     pub binding: NodeId,
-    pub local: crate::ast::LocalId,
     /// Only schemes without local data-type quantifiers are exported here.
     pub scheme: TypeScheme<'db>,
     pub row_arguments: Vec<crate::ast::AbilityRow<'db>>,
