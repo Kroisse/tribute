@@ -296,7 +296,12 @@ source-logical IR의 pass가 맡는다.
 인스턴스 검증은 타입 매개변수가 없는 모든 함수에서 출발한다. 이 함수들은 도달
 여부와 상관없이 그대로 lowering되기 때문이다. 이 함수들과 그 함수들이 구체 타입
 인자로 도달하는 인스턴스에서 함수 인스턴스나 ability 인자가 미해결이면 특수화 전에
-거부한다. 다형적 재귀는 정의의 성질이므로 도달하지 않는 template에서도 거부한다.
+거부한다. 검사하는 ability 인자는 perform 지점과 handler arm의 것, 그리고 그 함수의
+signature와 본문의 값 타입이 적는 row 안의 모든 ability instance의 것이다. Row 변수는
+타입 인자처럼 치환되지 않으므로, ability 인자 안의 열린 row는 특수화로 해결되지
+않는 미해결 인자다. Ability instance의 선언은 instance마다 하나이고 그 operation
+타입은 module 수준에 있어 row tail을 가질 수 없으므로, 그런 instance는 선언할 수
+없다. 다형적 재귀는 정의의 성질이므로 도달하지 않는 template에서도 거부한다.
 
 ### 타입 순회와 binder별 치환
 
@@ -477,4 +482,5 @@ Function quantifiers cover the callable interface and retained semantic row
 relations. Inference variables occurring only in the checked body remain
 body-owned local existentials; they do not add phantom arguments to callers.
 The pre-erasure ability-instance check still rejects unresolved local
-existentials in reachable handler or perform ability arguments.
+existentials in reachable handler or perform ability arguments, and in the
+ability arguments of any row that a reachable function's types name.
