@@ -1157,6 +1157,50 @@ mod tests {
     }
 
     #[test]
+    fn malformed_defaults_are_rejected() {
+        let cases = [
+            (
+                quote!(
+                    fn f(#[default(1)] x: Value<_>) {}
+                ),
+                "only an attribute takes `#[default(..)]`, not `x`",
+            ),
+            (
+                quote!(
+                    fn f(#[default()] n: Attr<u32>) {}
+                ),
+                "`#[default(..)]` takes the default value",
+            ),
+            (
+                quote!(
+                    fn f(#[default = 1] n: Attr<u32>) {}
+                ),
+                "write a default as `#[default(value)]`",
+            ),
+            (
+                quote!(
+                    fn f(#[default(1)] n: Attr<[u32]>) {}
+                ),
+                "list attribute `n` takes no `#[default(..)]`",
+            ),
+            (
+                quote!(
+                    fn f(
+                        #[default(1)]
+                        #[default(2)]
+                        n: Attr<u32>,
+                    ) {
+                    }
+                ),
+                "an attribute takes at most one `#[default(..)]`",
+            ),
+        ];
+        for (item, expected) in cases {
+            assert_eq!(parse_err(item), expected);
+        }
+    }
+
+    #[test]
     fn typed_operands_bind_variables_and_results() {
         let op = parse_op(quote! {
             fn addi<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}

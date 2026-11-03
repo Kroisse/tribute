@@ -1141,7 +1141,7 @@ mod tests {
         #[asm_format("values" ("n" n^)? ("label" label^)? attr_dict)]
         fn pick(#[default(3)] n: Attr<u32>, #[default("none")] label: Attr<String>) {}
 
-        fn scale(#[default(0.0)] factor: Attr<f64>) {}
+        fn scale(#[default(0.0)] factor: Attr<f64>, #[default(0.0)] ratio: Attr<f32>) {}
 
         #[asm_format("go" "(" keyword(speed) ")" attr_dict)]
         fn drive(speed: Attr<Speed>) {}
@@ -1310,14 +1310,20 @@ mod tests {
         let mut ctx = IrContext::new();
         let path = ctx.intern_path("test.trb");
         let loc = crate::Location::new(path, crate::Span::new(0, 0));
-        let zero = Scale::operands().factor(0.0).build(&mut ctx, loc);
+        let zero = Scale::operands()
+            .factor(0.0)
+            .ratio(0.0)
+            .build(&mut ctx, loc);
         assert!(ctx.op(zero.op_ref()).attributes.is_empty());
-        let negative = Scale::operands().factor(-0.0).build(&mut ctx, loc);
-        assert_eq!(
-            ctx.op_attrs(negative.op_ref()).get("factor"),
-            Some(&Attribute::FloatBits((-0.0f64).to_bits()))
-        );
+        let negative = Scale::operands()
+            .factor(-0.0)
+            .ratio(-0.0)
+            .build(&mut ctx, loc);
+        let negative_zero = Some(&Attribute::FloatBits((-0.0f64).to_bits()));
+        assert_eq!(ctx.op_attrs(negative.op_ref()).get("factor"), negative_zero);
+        assert_eq!(ctx.op_attrs(negative.op_ref()).get("ratio"), negative_zero);
         assert!(negative.factor(&ctx).is_sign_negative());
+        assert!(negative.ratio(&ctx).is_sign_negative());
     }
 
     #[test]
