@@ -190,7 +190,9 @@ where
   `signature(t, body)` writes the `Attr<TypeOf<S>>` attribute `t` as
   `(%a: A) -> R`, through the `asm_format::SignatureCodec` of `S`'s bound,
   with the inputs as the entry block arguments of `body`, which then elides
-  its entry block, as `func.func` does. `("kw" .. x^)?`
+  its entry block, as `func.func` does. `args(r)` writes the entry block
+  arguments of region `r` as `(%a: A, ..)` with their own types, and `r`
+  elides its entry block. `("kw" .. x^)?`
   opens with a literal and is written only when its anchor `x` is present;
   an optional `bool` anchor is a flag the group's literals stand for. A
   format may begin with any element, closes each variadic successor list

@@ -69,6 +69,8 @@ enum Element {
     },
     ResultType,
     ResultTypes,
+    /// `args(r)`: the entry block arguments of a region.
+    RegionArgs(usize),
     /// `attr_dict`, or `attr_dict_bare` without the `attributes` keyword.
     AttrDict {
         bare: bool,
@@ -105,6 +107,8 @@ struct Format<'a> {
     successors: Vec<(&'a str, bool)>,
     written: Vec<Entity>,
     signature: bool,
+    /// Whether an element writes a region's entry block arguments.
+    entry_args: bool,
 }
 
 impl<'a> Format<'a> {
@@ -127,6 +131,7 @@ impl<'a> Format<'a> {
             regions,
             successors,
             written: Vec::new(),
+            entry_args: false,
             signature: false,
         }
     }
@@ -401,9 +406,25 @@ impl<'a> Format<'a> {
                 }
                 Element::Successor(i)
             }
+            ("args", Some(Entity::Region(i))) => {
+                if self.regions[i].1 || self.regions[i].2 {
+                    return err(
+                        arg_span,
+                        "`args(..)` writes the entry arguments of a fixed region",
+                    );
+                }
+                if self.entry_args {
+                    return err(
+                        arg_span,
+                        "a format writes the entry arguments of at most one region",
+                    );
+                }
+                self.entry_args = true;
+                return Ok(Element::RegionArgs(i));
+            }
             (
                 "symbol" | "keyword" | "type" | "types" | "region" | "regions" | "successor"
-                | "successors",
+                | "successors" | "args",
                 _,
             ) => {
                 return err(arg_span, format!("`{name}(..)` cannot write `{arg}`"));
@@ -412,7 +433,7 @@ impl<'a> Format<'a> {
                 return err(
                     span,
                     format!(
-                        "unknown format directive `{name}`; expected `symbol`, `keyword`, `signature`, `type`, `types`, `region`, `regions`, `successor`, or `successors`"
+                        "unknown format directive `{name}`; expected `symbol`, `keyword`, `signature`, `args`, `type`, `types`, `region`, `regions`, `successor`, or `successors`"
                     ),
                 );
             }
@@ -480,6 +501,15 @@ impl<'a> Format<'a> {
             }
         };
         self.write(Entity::Attribute(attribute), ty.span())?;
+        if !regions.is_empty() {
+            if self.entry_args {
+                return err(
+                    span,
+                    "a format writes the entry arguments of at most one region",
+                );
+            }
+            self.entry_args = true;
+        }
         let mut listed = Vec::new();
         for region in regions {
             let Some(Entity::Region(i)) = self.lookup(&name(region)) else {
@@ -801,6 +831,7 @@ fn gen_elements(
             }),
             Element::ResultType => quote!(#fmt::FormatElement::ResultType(0)),
             Element::ResultTypes => quote!(#fmt::FormatElement::ResultTypes),
+            Element::RegionArgs(i) => quote!(#fmt::FormatElement::RegionArgs(#i)),
             Element::AttrDict { bare } => quote!(#fmt::FormatElement::AttrDict { bare: #bare }),
             Element::Region(i) => quote!(#fmt::FormatElement::Region(#i)),
             Element::Successor(i) => quote!(#fmt::FormatElement::Successor(#i)),

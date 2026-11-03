@@ -56,6 +56,9 @@ pub enum FormatElement {
     /// The comma-separated types of every result, for a variadic or optional
     /// result.
     ResultTypes,
+    /// The entry block arguments of a fixed region, as `(%a: A, ..)`; the
+    /// region elides its entry block.
+    RegionArgs(usize),
     /// The attributes no other element writes, as `attributes {..}`, or as
     /// `{..}` when `bare`.
     AttrDict { bare: bool },
@@ -433,6 +436,24 @@ impl Printer<'_, '_, '_> {
                 write_signature_results(self.h, &parts.results)?;
                 (codec.write_tail)(self.h, &parts.tail)
             }
+            FormatElement::RegionArgs(index) => {
+                let region = ctx
+                    .op_region(op, index)
+                    .expect("a printable region with entry arguments is present");
+                let entry = ctx.region(region).blocks[0];
+                self.token('(')?;
+                self.h.write_char('(')?;
+                for (position, &arg) in ctx.block_args(entry).iter().enumerate() {
+                    if position > 0 {
+                        self.h.write_str(", ")?;
+                    }
+                    let name = self.h.assign_value_name(arg);
+                    self.h.write_str(&name)?;
+                    self.h.write_str(": ")?;
+                    self.h.write_type(ctx.value_ty(arg))?;
+                }
+                self.h.write_char(')')
+            }
             FormatElement::Optional { anchor, elements } => {
                 if anchor_present(ctx, op, self.schema, anchor) {
                     self.elements(elements)?;
@@ -443,13 +464,14 @@ impl Printer<'_, '_, '_> {
     }
 }
 
-/// Whether a `signature` element of the format lists region `index`.
+/// Whether an element of the format writes the entry block arguments of
+/// region `index`, which then elides its entry block.
 fn signature_lists(elements: &[FormatElement], index: usize) -> bool {
     let mut listed = false;
-    visit(elements, &mut |element| {
-        if let FormatElement::Signature { regions, .. } = element {
-            listed |= regions.contains(&index);
-        }
+    visit(elements, &mut |element| match element {
+        FormatElement::Signature { regions, .. } => listed |= regions.contains(&index),
+        FormatElement::RegionArgs(region) => listed |= *region == index,
+        _ => {}
     });
     listed
 }
@@ -613,6 +635,11 @@ fn printable(ctx: &IrContext, op: OpRef, schema: &OpSchema, format: &OpFormat) -
                                 .eq(parts.results.iter().map(|(ty, _)| ty)))
                 });
         }
+        FormatElement::RegionArgs(index) => {
+            written_ok &= ctx
+                .op_region(op, index)
+                .is_some_and(|region| !ctx.region(region).blocks.is_empty());
+        }
         FormatElement::Optional {
             anchor: FormatAnchor::Flag(index),
             ..
@@ -703,7 +730,7 @@ pub(crate) fn parse<'a>(
     let mut parser = FormatParser {
         schema,
         format,
-        signature_regions: &[],
+        signature_regions: Vec::new(),
         entry_args: Vec::new(),
         parsed: Parsed {
             operands: vec![Vec::new(); schema.operands.len()],
@@ -759,7 +786,7 @@ struct FormatParser<'a> {
     format: &'static OpFormat,
     /// The regions a signature lists, which take `entry_args` as their
     /// entry block arguments.
-    signature_regions: &'static [usize],
+    signature_regions: Vec<usize>,
     entry_args: Vec<(&'a str, RawType<'a>)>,
     parsed: Parsed<'a>,
 }
@@ -893,6 +920,23 @@ impl<'a> FormatParser<'a> {
                 self.parsed.successors[index] = labels;
                 Ok(())
             }
+            FormatElement::RegionArgs(index) => {
+                let args = delimited(
+                    ('(', ws),
+                    separated(
+                        0..,
+                        (ws, value_ref, ws, ':', ws, raw_type, ws)
+                            .map(|(_, name, _, _, _, ty, _)| (name, ty)),
+                        ',',
+                    ),
+                    (ws, ')'),
+                )
+                .parse_next(input)
+                .map_err(|e| e.map(|_| expected("entry arguments `(%a: A, ..)`")))?;
+                self.signature_regions = vec![index];
+                self.entry_args = args;
+                Ok(())
+            }
             FormatElement::Signature {
                 attribute,
                 regions,
@@ -938,7 +982,7 @@ impl<'a> FormatParser<'a> {
                 let inputs = params.into_iter().map(|(_, param)| param).collect();
                 let ty = (codec.build)(inputs, results, tail)?;
                 self.attribute(attribute, RawAttribute::Type(ty));
-                self.signature_regions = regions;
+                self.signature_regions = regions.to_vec();
                 self.entry_args = args;
                 Ok(())
             }
@@ -1135,6 +1179,14 @@ mod tests {
 
         #[asm_format(args attr_dict_bare (":" types(results)^)?)]
         fn emit(args: Variadic<_>) -> Variadic<_> {}
+
+        #[asm_format("try" region(body) "catch" args(handler) region(handler) attr_dict)]
+        fn guard() {
+            #[region(body)]
+            {}
+            #[region(handler)]
+            {}
+        }
 
         #[asm_format(callee "(" args ")" attr_dict ":" signature(signature))]
         fn apply<S: FuncSig>(
@@ -1342,6 +1394,23 @@ mod tests {
 }
 "#,
         );
+    }
+
+    #[test]
+    fn entry_arguments_are_written_in_the_header() {
+        assert_round_trip(
+            r#"core.module @m {
+  asm_format_test.guard try {
+      "test.op"()
+  } catch(%0: core.i32, %1: core.i64) {
+      "test.use"(%0, %1)
+  }
+}
+"#,
+        );
+        // A region without an entry block prints generically.
+        let empty = "core.module @m {\n  \"asm_format_test.guard\"() ({\n  }, {\n  })\n}\n";
+        assert_eq!(print(empty), empty);
     }
 
     #[test]

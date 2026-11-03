@@ -476,6 +476,11 @@ literal은 문자열 literal로 쓴다.
   타입처럼 매개변수 이름 없이 타입만 쓰고 화살표를 생략하지 않는다
   (`(A, B) -> R`, `(A) -> ()`). Operation이 result를 선언하면 signature의 결과가
   곧 그 result 타입이므로, `signature`가 result 타입을 쓴 것으로 센다.
+- **`args(r)`** — region `r`의 entry block argument를 `(%a: A, %b: B)`로 쓰고,
+  `r`은 entry block label을 생략한다. `signature`와 같은 방식이지만 타입은 block
+  argument에서 읽는다. `r`은 고정 region이며, 형식은 entry argument를 header로
+  쓰는 원소(`args`나 region을 나열한 `signature`)를 하나만 둔다. Region에 entry
+  block이 없으면 형식으로 출력하지 않는다.
 - **`region(r)`, `regions(rs)`** — `{ .. }`로 쓴다. `signature`가 entry
   argument를 쓰는 region은 entry block label을 생략하고, parser가 signature의
   매개변수를 entry block argument로 되돌린다. 다른 region은 entry label과 argument를
