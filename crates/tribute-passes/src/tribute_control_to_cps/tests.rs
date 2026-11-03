@@ -1083,7 +1083,7 @@ fn post_boundary_rejects_malformed_physical_callable_transfers() {
         (
             r#"core.module @test {
   func.func @caller(%callee: closure.closure<func.func_sig<(core.i32) -> core.never>>, %value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-    "func.tail_call_indirect"(%callee, %value)
+    func.tail_call_indirect %callee(%value) : (core.i32) -> core.never
   }
 }"#,
             "func.tail_call_indirect must carry exact Direct, EvidenceDirect, or Cps metadata",
@@ -1112,7 +1112,7 @@ fn post_boundary_rejects_malformed_physical_callable_transfers() {
         (
             r#"core.module @test {
   func.func @caller(%callee: closure.closure<func.func_sig<(core.i32) -> core.never>>, %value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-    %result = "func.call_indirect"(%callee, %value) {tribute.calling_convention = "cps"} : core.never
+    %result = func.call_indirect %callee(%value) attributes {tribute.calling_convention = "cps"} : (core.i32) -> core.never
     func.unreachable
   }
 }"#,
