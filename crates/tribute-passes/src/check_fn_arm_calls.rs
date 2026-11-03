@@ -123,7 +123,7 @@ pub fn check(ctx: &IrContext, module: Module) -> Vec<FnArmCall> {
         };
         let _ = walk_region::<()>(ctx, body, &mut |op| {
             if let Ok(handler) = tribute_control::Handler::from_op(ctx, op)
-                && handler.kind(ctx) == tribute_control::HandlerKind::Fn
+                && handler.kind(ctx) == tribute_control::OperationKind::Fn
             {
                 instance.check_arm(handler, &instances, &mut calls);
             }
@@ -310,7 +310,7 @@ impl<'a> Instance<'a> {
                     if let Ok(handler) = tribute_control::Handler::from_op(ctx, entry) {
                         inner.push(handler.ability(ctx).clone());
                         // A nested `fn` arm is checked as an arm of its own.
-                        if handler.kind(ctx) != tribute_control::HandlerKind::Fn {
+                        if handler.kind(ctx) != tribute_control::OperationKind::Fn {
                             arms.push(handler.body(ctx));
                         }
                     }

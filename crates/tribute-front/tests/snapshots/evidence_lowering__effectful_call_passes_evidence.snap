@@ -6,7 +6,7 @@ core.module @test {tribute.entry = @"pkg::main"} {
   !t0 = tribute_control.func_sig<() -> core.i32 row(@"ability_1_12_pkg::Counter")>
 
   tribute_control.func @"pkg::get_count"() -> core.i32 row(@"ability_1_12_pkg::Counter") {
-      %0 = tribute_control.perform {ability = @"ability_1_12_pkg::Counter", op_name = "inc", operation_kind = "op"} : core.i32
+      %0 = tribute_control.perform op @"ability_1_12_pkg::Counter" @inc() : () -> core.i32
       tribute_control.return %0
   }
   tribute_control.func @"std::Nat::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32

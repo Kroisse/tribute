@@ -738,7 +738,7 @@ mod tests {
     func.return %f
   }
   func.func @caller(%f: func.func_sig<() -> core.nil>) -> func.func_sig<() -> core.nil> {
-    %result = func.call %f {callee = @identity} : func.func_sig<() -> core.nil>
+    %result = func.call @identity(%f) : (func.func_sig<() -> core.nil>) -> func.func_sig<() -> core.nil>
     func.return %result
   }
 }"#,
@@ -894,7 +894,7 @@ mod tests {
     func.return
   }
   func.func @direct(%value: core.i32) -> core.nil {
-    func.tail_call %value {callee = @target}
+    func.tail_call @target(%value) : (core.i32) -> ()
   }
   func.func @indirect(%table_index: core.i32, %value: core.i32) -> core.nil {
     func.tail_call_indirect %table_index(%value) : (core.i32) -> core.nil
@@ -1155,7 +1155,7 @@ mod tests {
     func.return
   }
   func.func @direct(%value: core.i32) -> test.ref {
-    %result = func.call %value {callee = @target} : test.ref
+    %result = func.call @target(%value) : (core.i32) -> test.ref
     func.return %result
   }
   func.func @indirect(%table_index: core.i32, %value: core.i32) -> test.ref {

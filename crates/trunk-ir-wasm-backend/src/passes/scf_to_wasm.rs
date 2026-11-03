@@ -1198,7 +1198,7 @@ mod tests {
                 vec![Block::NAME, Loop::NAME],
             ),
             (
-                "%n = scf.if %cond -> (core.never) { func.tail_call %cond, %choice, %unit {callee = @main} } else { func.unreachable }",
+                "%n = scf.if %cond -> (core.never) { func.tail_call @main(%cond, %choice, %unit) : (core.i1, core.i32, core.nil) -> () } else { func.unreachable }",
                 vec![If::NAME],
             ),
             (

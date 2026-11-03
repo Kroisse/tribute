@@ -678,7 +678,7 @@ mod tests {
   !Closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @f(%c: !Closure) {
     %erased = core.unrealized_conversion_cast %c : tribute_rt.anyref
-    func.call %erased {callee = @use}
+    func.call @use(%erased) : (tribute_rt.anyref) -> ()
     func.return
   }
 }"#,

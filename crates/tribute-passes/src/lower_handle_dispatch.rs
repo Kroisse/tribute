@@ -133,16 +133,16 @@ mod tests {
   func.func @selected() -> core.never {
     %ev = mem.null : core.ptr
     %prompt = arith.const {value = 1} : core.i32
-    "ability.handle_dispatch"(%ev, %prompt) ({
-      func.tail_call {callee = @finish}
-    }) {abilities = []}
+    ability.handle_dispatch %ev, %prompt() attributes {abilities = []} {
+      func.tail_call @finish() : () -> ()
+    }
   }
   func.func @untouched() -> core.never {
     %ev = mem.null : core.ptr
     %prompt = arith.const {value = 2} : core.i32
-    "ability.handle_dispatch"(%ev, %prompt) ({
-      func.tail_call {callee = @finish}
-    }) {abilities = []}
+    ability.handle_dispatch %ev, %prompt() attributes {abilities = []} {
+      func.tail_call @finish() : () -> ()
+    }
   }
 }"#,
         );

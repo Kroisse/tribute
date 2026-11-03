@@ -77,11 +77,6 @@ impl trunk_ir::ops::Verify for Resume {
 
 impl trunk_ir::ops::Verify for Perform {
     fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
-        if let Some(kind) = ctx.op_attrs(self.op_ref()).get_str("operation_kind")
-            && !matches!(kind, "fn" | "op")
-        {
-            return Err(format!("operation_kind must be \"fn\" or \"op\", found {kind:?}").into());
-        }
         Ok(verify_resolved_types(ctx, self.op_ref())?)
     }
 }

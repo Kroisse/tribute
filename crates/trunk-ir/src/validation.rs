@@ -2306,8 +2306,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f(%x: core.i32, %y: core.i32) {
-    func.call %x {callee = @consume}
-    func.call %y {callee = @consume}
+    func.call @consume(%x) : (core.i32) -> ()
+    func.call @consume(%y) : (core.i32) -> ()
     func.return
   }
   func.func @consume(%value: core.i32)
@@ -2527,7 +2527,7 @@ mod tests {
   }
   func.func @main() -> core.i32 {
     %0 = arith.const {value = 1} : core.i32
-    %1 = func.call %0 {callee = @add} : core.i32
+    %1 = func.call @add(%0) : (core.i32) -> core.i32
     func.return %1
   }
 }"#,
@@ -2570,7 +2570,7 @@ mod tests {
   }
   func.func @main() -> core.i32 {
     %0 = arith.const {value = 1} : core.i32
-    %1 = func.call %0 {callee = @add} : core.i32
+    %1 = func.call @add(%0) : (core.i32) -> core.i32
     func.return %1
   }
 }"#,
@@ -2586,7 +2586,7 @@ mod tests {
     %0 = arith.const {value = 1} : core.i32
     %1 = arith.const {value = 2} : core.i32
     %2 = arith.const {value = 3} : core.i32
-    %3 = func.call %0, %1, %2 {callee = @add} : core.i32
+    %3 = func.call @add(%0, %1, %2) : (core.i32, core.i32, core.i32) -> core.i32
     func.return %3
   }
 }"#,
@@ -2601,7 +2601,7 @@ mod tests {
   }
   func.func @main() -> core.i32 {
     %0 = arith.const {value = 1} : core.i32
-    func.tail_call %0 {callee = @add}
+    func.tail_call @add(%0) : (core.i32) -> ()
   }
 }"#,
                 &["add", "1 argument(s), expected 2"],
@@ -2615,7 +2615,7 @@ mod tests {
   }
   func.func @main() -> core.i32 {
     %0 = arith.const {value = 1} : core.i32
-    %1 = func.call %0 {callee = @unit} : core.i32
+    %1 = func.call @unit(%0) : (core.i32) -> core.i32
     func.return %1
   }
 }"#,
@@ -2631,7 +2631,7 @@ mod tests {
   func.func @main() -> core.i32 {
     %0 = arith.const {value = 40} : core.i32
     %1 = arith.const {value = 2} : core.i32
-    %2 = func.call %0, %1 {callee = @add} : core.i32
+    %2 = func.call @add(%0, %1) : (core.i32, core.i32) -> core.i32
     func.return %2
   }
 }"#,
@@ -2642,7 +2642,7 @@ mod tests {
                 r#"core.module @test {
   func.func @main() -> core.i32 {
     %0 = arith.const {value = 1} : core.i32
-    %1 = func.call %0 {callee = @extern_fn} : core.i32
+    %1 = func.call @extern_fn(%0) : (core.i32) -> core.i32
     func.return %1
   }
 }"#,
@@ -3712,7 +3712,7 @@ mod tests {
     fn operation_verifiers_reject_a_symbol_reference_to_the_root_module() {
         let input = r#"core.module @test {
   func.func @main() -> core.i32 {
-    %r = func.call {callee = @main} : core.i32
+    %r = func.call @main() : () -> core.i32
     func.return %r
   }
 }"#;
@@ -3751,7 +3751,7 @@ mod tests {
       func.return %value
     }}
     func.func @caller(%value: core.i32) -> core.i32 {{
-      %result = func.call %value {{callee = {callee}}} : core.i32
+      %result = func.call {callee}(%value) : (core.i32) -> core.i32
       func.return %result
     }}
   }}

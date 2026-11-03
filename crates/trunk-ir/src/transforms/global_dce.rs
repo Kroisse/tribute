@@ -337,7 +337,7 @@ mod tests {
             &mut ctx,
             r#"core.module @root {
   func.func @main() {
-    func.call {callee = @a::@same}
+    func.call @a::@same() : () -> ()
     func.return
   }
   core.module @a {
@@ -395,7 +395,7 @@ mod tests {
             &mut ctx,
             r#"core.module @root {
   func.func @main() {
-    func.call {callee = @host}
+    func.call @host() : () -> ()
     func.return
   }
   func.func @host() {
@@ -456,7 +456,7 @@ mod tests {
     func.return
   }
   func.func @b() {
-    func.call {callee = @shared}
+    func.call @shared() : () -> ()
     func.return
   }
   func.func @c() {

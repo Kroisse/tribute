@@ -776,8 +776,8 @@ fn native_one_shot_wrapper_traps_on_second_invocation() {
     %not_consumed = arith.const {value = 0} : core.i1
     %state = adt.struct_new %not_consumed {type = !state} : !state
     %input = arith.const {value = 0} : core.i32
-    %first = func.call %state, %input {callee = @one_shot_wrapper, tribute.calling_convention = "direct"} : core.i32
-    %second = func.call %state, %first {callee = @one_shot_wrapper, tribute.calling_convention = "direct"} : core.i32
+    %first = func.call @one_shot_wrapper(%state, %input) attributes {tribute.calling_convention = "direct"} : (!state, core.i32) -> core.i32
+    %second = func.call @one_shot_wrapper(%state, %first) attributes {tribute.calling_convention = "direct"} : (!state, core.i32) -> core.i32
     func.return %second
   }
 }"#;
@@ -819,7 +819,7 @@ fn physical_tail_chain_module(done_call_conv: &str, reference_call_conv: &str) -
     scf.if %ok {{
       scf.yield
     }} else {{
-      func.call {{callee = @fail}}
+      func.call @fail() : () -> ()
       scf.yield
     }}
     func.return
@@ -835,12 +835,12 @@ fn physical_tail_chain_module(done_call_conv: &str, reference_call_conv: &str) -
   func.func @start(%value: core.i32) -> (), {{call_conv = "tail"}} {{
     %one = arith.const {{value = 1}} : core.i32
     %next = arith.addi %value, %one : core.i32
-    func.tail_call %next {{callee = @step}}
+    func.tail_call @step(%next) : (core.i32) -> ()
   }}
 
   func.func @main() -> core.i32 {{
     %input = arith.const {{value = 1}} : core.i32
-    func.call %input {{callee = @start}}
+    func.call @start(%input) : (core.i32) -> ()
     %exit = arith.const {{value = 0}} : core.i32
     func.return %exit
   }}

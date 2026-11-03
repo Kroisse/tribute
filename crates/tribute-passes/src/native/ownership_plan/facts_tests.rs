@@ -22,7 +22,7 @@ const BORROW_FIXTURE: &str = r#"core.module @test {
   }
   func.func @load(%owner: !BoxRef) -> core.i32 {
     %child = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
-    %value = func.call %child {callee = @observe} : core.i32
+    %value = func.call @observe(%child) : (!ChildRef) -> core.i32
     func.return %value
   }
 }"#;
@@ -115,7 +115,7 @@ fn entry_contract_views_share_one_proof_and_keep_declared_borrows() {
   !Layout = adt.struct<R(value: core.i32)>
   func.func @foreign(%value: !R) -> core.i32 attributes {abi = "C"}
   func.func @observe(%value: !R) -> core.i32 {
-    %result = func.call %value {callee = @foreign} : core.i32
+    %result = func.call @foreign(%value) : (!R) -> core.i32
     func.return %result
   }
   func.func @escape(%value: !R) -> !R {

@@ -2147,13 +2147,13 @@ mod tests {
                 func.return %nil
             }
             func.func @caller(%ev: !Evidence) attributes {tribute.calling_convention = "evidence_direct"} {
-                func.call {callee = @direct, tribute.calling_convention = "direct"}
-                func.call %ev {callee = @evidence, tribute.calling_convention = "evidence_direct"}
+                func.call @direct() attributes {tribute.calling_convention = "direct"} : () -> ()
+                func.call @evidence(%ev) attributes {tribute.calling_convention = "evidence_direct"} : (!Evidence) -> ()
                 %direct = func.constant @direct : () -> ()
                 %evidence = func.constant @evidence : (!Evidence) -> ()
                 func.call_indirect %direct() attributes {tribute.calling_convention = "direct"} : () -> ()
                 func.call_indirect %evidence(%ev) attributes {tribute.calling_convention = "evidence_direct"} : (!Evidence) -> ()
-                %nil = func.call {callee = @unit, tribute.calling_convention = "direct"} : core.nil
+                %nil = func.call @unit() attributes {tribute.calling_convention = "direct"} : () -> core.nil
                 func.return
             }
             func.func @cps() -> core.never attributes {tribute.calling_convention = "cps"} { func.unreachable }
@@ -2510,7 +2510,7 @@ mod tests {
     func.return %nil
   }
   func.func @caller(%evidence: !Evidence) -> core.nil attributes {tribute.calling_convention = "evidence_direct"} {
-    %result = func.call %evidence {callee = @main, tribute.calling_convention = "evidence_direct"} : core.nil
+    %result = func.call @main(%evidence) attributes {tribute.calling_convention = "evidence_direct"} : (!Evidence) -> core.nil
     func.return %result
   }
 }"#;
@@ -2541,7 +2541,7 @@ mod tests {
     func.return %nil
   }
   func.func @caller() -> core.nil attributes {tribute.calling_convention = "direct"} {
-    %result = func.call {callee = @main, tribute.calling_convention = "direct"} : core.nil
+    %result = func.call @main() attributes {tribute.calling_convention = "direct"} : () -> core.nil
     func.return %result
   }
 }"#,
@@ -2775,7 +2775,7 @@ mod tests {
                 r#"core.module @test {
   func.func @callee(%value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} { func.unreachable }
   func.func @run(%value: core.i1) -> core.never attributes {tribute.calling_convention = "cps"} {
-    func.tail_call %value {callee = @callee, tribute.calling_convention = "cps"}
+    func.tail_call @callee(%value) attributes {tribute.calling_convention = "cps"} : (core.i1) -> ()
   }
 }"#,
                 "operands differ",
@@ -2833,7 +2833,7 @@ mod tests {
     func.unreachable
   }
   func.func @run(%raw: !_closure) -> core.i32 attributes {tribute.calling_convention = "direct"} {
-    %result = func.call %raw {callee = @factory, tribute.calling_convention = "direct"} : core.i32
+    %result = func.call @factory(%raw) attributes {tribute.calling_convention = "direct"} : (!_closure) -> core.i32
     func.return %result
   }
 }"#,

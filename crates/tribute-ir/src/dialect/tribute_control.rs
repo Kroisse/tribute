@@ -93,19 +93,20 @@ pub use row::{
 /// Exact semantic identity copied from the trusted compiler-intrinsic registry.
 pub const COMPILER_INTRINSIC_ATTR: &str = "tribute.compiler_intrinsic";
 
-/// Whether a `tribute_control.handler` clause is a general (`op`) or a
-/// tail-resumptive (`fn`) arm.
+/// Whether an ability operation, and the `tribute_control.perform` that
+/// invokes it or the `tribute_control.handler` clause that handles it, is a
+/// general (`op`) or a tail-resumptive (`fn`) one.
 ///
 /// It is stored as a string attribute holding its [keyword](Self::keyword).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum HandlerKind {
+pub enum OperationKind {
     /// A general handler arm, which may capture the resumption.
     Op,
     /// A tail-resumptive arm, which resumes automatically.
     Fn,
 }
 
-impl HandlerKind {
+impl OperationKind {
     /// The keyword that spells this kind, both as the stored attribute
     /// value and in the `tribute_control.handler` syntax.
     pub fn keyword(self) -> &'static str {
@@ -132,28 +133,28 @@ impl HandlerKind {
     }
 }
 
-/// `Attr<HandlerKind>`: a keyword string, which the schema checks.
-impl trunk_ir::attr_kind::AttrKind for HandlerKind {
+/// `Attr<OperationKind>`: a keyword string, which the schema checks.
+impl trunk_ir::attr_kind::AttrKind for OperationKind {
     const KIND: trunk_ir::op_schema::AttributeKind = trunk_ir::op_schema::AttributeKind::String;
-    type Out<'ctx> = HandlerKind;
-    type In = HandlerKind;
+    type Out<'ctx> = OperationKind;
+    type In = OperationKind;
     const DOMAIN: Option<&'static str> = Some("one of \"op\" and \"fn\"");
 
     fn accepts(ctx: &IrContext, attr: &Attribute) -> bool {
         Self::from_attribute(ctx, attr).is_some()
     }
 
-    fn read<'ctx>(ctx: &'ctx IrContext, attr: &'ctx Attribute) -> HandlerKind {
+    fn read<'ctx>(ctx: &'ctx IrContext, attr: &'ctx Attribute) -> OperationKind {
         Self::from_attribute(ctx, attr).expect("unverified handler kind keyword")
     }
 
-    fn write(ctx: &mut IrContext, value: HandlerKind) -> Attribute {
+    fn write(ctx: &mut IrContext, value: OperationKind) -> Attribute {
         ctx.string_attr(value.keyword())
     }
 }
 
 /// A kind is written as its keyword, `op` or `fn`.
-impl trunk_ir::asm_format::KeywordCodec for HandlerKind {
+impl trunk_ir::asm_format::KeywordCodec for OperationKind {
     fn keyword<'a>(ctx: &'a IrContext, attr: &'a Attribute) -> Option<&'a str> {
         Self::from_attribute(ctx, attr).map(Self::keyword)
     }
@@ -541,11 +542,8 @@ mod tribute_control {
     /// result type.
     ///
     /// ```text
-    /// %result = tribute_control.perform %arg0, ... {
-    ///   ability = @State,
-    ///   op_name = "get",
-    ///   operation_kind = "op"
-    /// } : ResultType
+    /// %result = tribute_control.perform op @State @get(%arg0, ...)
+    ///   : (ArgType, ...) -> ResultType
     /// ```
     ///
     /// - **Operands:** zero or more already evaluated source arguments in
@@ -555,7 +553,7 @@ mod tribute_control {
     ///   result is `core.never`, and does not select a physical `Never`
     ///   control carrier.
     /// - **Attributes:** `ability: SymbolRef`, `op_name: String`, and
-    ///   `operation_kind: String` are required. `operation_kind` is exactly
+    ///   `operation_kind: OperationKind` are required. `operation_kind` is exactly
     ///   `fn` or `op`, copied from the typechecked operation declaration. It
     ///   is source-semantic metadata, not a lowering hint inferred from a body
     ///   or a use site. Every source ability invocation uses this operation,
@@ -599,11 +597,11 @@ mod tribute_control {
     ///   including the qualified callee and all arguments where possible.
     #[verify]
     #[implements(OperationDeclarationUse, CallableResultOrigin)]
-    #[asm_format(args attr_dict_bare ":" type(result))]
+    #[asm_format(keyword(operation_kind) ability symbol(op_name) "(" args ")" attr_dict ":" functional_type(args, result))]
     fn perform(
         ability: Attr<SymbolRef>,
         op_name: Attr<String>,
-        operation_kind: Attr<String>,
+        operation_kind: Attr<OperationKind>,
         args: Variadic<_>,
     ) -> Value<_> {
     }
@@ -695,7 +693,7 @@ mod tribute_control {
     /// - **Operands and results:** none. It is a declarative entry owned by
     ///   the surrounding `tribute_control.handle`.
     /// - **Attributes:** `ability: SymbolRef`, `op_name: String`,
-    ///   `kind: HandlerKind`, and `operation_result_type: Type` are required.
+    ///   `kind: OperationKind`, and `operation_result_type: Type` are required.
     ///   `kind` is exactly `fn` or `op`, written as that bare keyword.
     /// - **Regions:** exactly one executable `body` region with one block.
     /// - **Block arguments:** the source operation arguments come first, in
@@ -742,7 +740,7 @@ mod tribute_control {
     fn handler(
         ability: Attr<SymbolRef>,
         op_name: Attr<String>,
-        kind: Attr<HandlerKind>,
+        kind: Attr<OperationKind>,
         operation_result_type: Attr<Type>,
     ) {
         #[region(body)]

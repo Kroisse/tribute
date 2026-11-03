@@ -971,7 +971,7 @@ mod malformed_owner_tests {
     fn malformed_lambda_owner_never_falls_back_to_outer_function() {
         for transfer in [
             "func.tail_call_indirect %k() : () -> core.never",
-            "func.tail_call {callee = @runtime}",
+            "func.tail_call @runtime() : () -> ()",
         ] {
             let mut ctx = trunk_ir::IrContext::new();
             let input = "core.module @m {

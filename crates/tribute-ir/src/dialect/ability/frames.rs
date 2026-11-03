@@ -463,7 +463,7 @@ mod tests {
         let text = module(
             ", %k: !completion, %arg: core.i32",
             r#"    %frame = ability.suffix_frame %ev, %exit, %k {evidence_plan = [{mask = @State}]} : !frame_nil
-    "ability.abort"(%ev, %exit, %arg) {ability = @State, op_name = "fail"}"#,
+    ability.abort @State @fail(%arg) [%ev, %exit] : (core.i32) -> ()"#,
         );
         let (ctx, module) = parse(&text);
         let result = validate_operation_verifiers(&ctx, module);
@@ -481,7 +481,7 @@ mod tests {
             module(
                 params,
                 &format!(
-                    r#"    "ability.perform"(%ev, %exit, {resumption}, %arg) {{ability = @State, op_name = "set"}}"#
+                    r#"    ability.perform @State @set(%arg) [%ev, %exit, {resumption}] : (core.i32) -> ()"#
                 ),
             )
         };

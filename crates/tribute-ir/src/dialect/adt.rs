@@ -109,7 +109,12 @@ mod adt {
     /// `end = start + 1`), replacing elements, and trimming either end are
     /// all written with this operation. It requires `start ≤ end ≤ len`; the
     /// target traps an execution that violates it.
+    ///
+    /// ```text
+    /// %r = adt.array_splice %source[%start, %end](%element0, ...) attributes {type = !A} : !A
+    /// ```
     #[flags(Pure)]
+    #[asm_format(source "[" start "," end "]" "(" elements ")" attr_dict ":" type(result))]
     fn array_splice<A: Array>(
         r#type: Attr<TypeOf<A>>,
         source: Value<A>,
@@ -1009,19 +1014,19 @@ mod tests {
             "%v = adt.array_of %n, %w {type = !A} : !A"
         ));
         assert!(array_schema_ok(
-            "%v = \"adt.array_splice\"(%a, %i, %i, %n) {type = !A} : !A"
+            "%v = adt.array_splice %a[%i, %i](%n) attributes {type = !A} : !A"
         ));
         assert!(array_schema_ok(
-            "%v = \"adt.array_splice\"(%a, %i, %i) {type = !A} : !A"
+            "%v = adt.array_splice %a[%i, %i]() attributes {type = !A} : !A"
         ));
         assert!(!array_schema_ok(
-            "%v = \"adt.array_splice\"(%a, %n, %i) {type = !A} : !A"
+            "%v = adt.array_splice %a[%n, %i]() attributes {type = !A} : !A"
         ));
         assert!(!array_schema_ok(
-            "%v = \"adt.array_splice\"(%a, %i, %i, %w) {type = !A} : !A"
+            "%v = adt.array_splice %a[%i, %i](%w) attributes {type = !A} : !A"
         ));
         assert!(!array_schema_ok(
-            "%v = \"adt.array_splice\"(%a, %i, %i) {type = !B} : !B"
+            "%v = adt.array_splice %a[%i, %i]() attributes {type = !B} : !B"
         ));
     }
 

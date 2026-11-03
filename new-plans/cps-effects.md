@@ -798,8 +798,7 @@ control을 다른 runtime 장치로 구현한다면 이 pass 대신 자기 lower
 경로로 내린다:
 
 ```text
-%result = ability.call %arg
-  { ability = @Logger, op_name = "log" }
+%result = ability.call @Logger @log(%arg) : (ArgType) -> ResultType
 ```
 
 `lower_ability_call`은 enclosing callable의 exact `EvidenceDirect`/`Cps`

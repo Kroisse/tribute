@@ -191,7 +191,7 @@ mod tests {
             r#"core.module @test {
   func.func @read(%bytes: core.bytes, %index: core.i32) -> core.i32 attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::__bytes_get_or_panic"}
   func.func @user(%bytes: core.bytes, %index: core.i32) -> core.i32 {
-    %byte = func.call %bytes, %index {callee = @read} : core.i32
+    %byte = func.call @read(%bytes, %index) : (core.bytes, core.i32) -> core.i32
     %f = func.constant @read : (core.bytes, core.i32) -> core.i32
     func.return %byte
   }
@@ -213,8 +213,8 @@ mod tests {
             r#"core.module @test {
   func.func @read(%bytes: core.bytes, %index: core.i32) -> core.i32 attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::__bytes_get_or_panic"}
   func.func @user(%bytes: core.bytes, %index: core.i32) -> core.i32 {
-    %ok = func.call %bytes, %index {callee = @read} : core.i32
-    %bad = func.call %bytes {callee = @read} : core.i32
+    %ok = func.call @read(%bytes, %index) : (core.bytes, core.i32) -> core.i32
+    %bad = func.call @read(%bytes) : (core.bytes) -> core.i32
     func.return %ok
   }
 }"#,
@@ -232,7 +232,7 @@ mod tests {
         let input = r#"core.module @test {
   func.func @"std::__bytes_get_or_panic"(%bytes: core.bytes, %index: core.i32) -> core.i32 attributes {abi = "intrinsic"}
   func.func @user(%bytes: core.bytes, %index: core.i32) -> core.i32 {
-    %byte = func.call %bytes, %index {callee = @"std::__bytes_get_or_panic"} : core.i32
+    %byte = func.call @"std::__bytes_get_or_panic"(%bytes, %index) : (core.bytes, core.i32) -> core.i32
     func.return %byte
   }
 }"#;

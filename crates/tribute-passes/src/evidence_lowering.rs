@@ -573,7 +573,7 @@ mod tests {
 
         assert_shared_dialect_only(&printed);
         assert!(
-            printed.contains(r#"callee = @"std::runtime::evidence::lookup"}"#),
+            printed.contains(r#"func.call @"std::runtime::evidence::lookup"("#),
             "{printed}"
         );
         assert!(printed.contains("func.tail_call_indirect"), "{printed}");

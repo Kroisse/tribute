@@ -179,7 +179,7 @@ fn build_body(
 /// How a function body refers to its target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RefKind {
-    /// `func.call {callee = @target}`.
+    /// `func.call @target()`.
     Call,
     /// `func.constant @target`.
     Constant,

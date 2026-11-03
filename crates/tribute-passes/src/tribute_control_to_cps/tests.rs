@@ -630,7 +630,7 @@ fn source_signature_metadata_roundtrips_before_conversion() {
 fn malformed_pre_boundary_is_atomic() {
     let input = r#"core.module @test {
   tribute_cps.func @broken(%value: core.i32) -> core.i32 convention(direct) {
-    %illegal = func.call %value {callee = @broken} : core.i32
+    %illegal = func.call @broken(%value) : (core.i32) -> core.i32
     tribute_control.return %illegal
   }
 }"#;
@@ -740,7 +740,7 @@ fn malformed_lookup_inputs_fail_before_conversion_and_remain_unchanged() {
         (
             r#"core.module @test {
   tribute_cps.func @broken(%value: core.i32) -> core.i32 convention(cps) {
-    %result = tribute_control.perform %value : core.i32
+    %result = "tribute_control.perform"(%value) : core.i32
     tribute_control.return %result
   }
 }"#,
@@ -1023,7 +1023,7 @@ fn post_boundary_rejects_malformed_physical_callable_transfers() {
     func.unreachable
   }
   func.func @caller(%value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-    func.tail_call %value {tribute.calling_convention = "cps"}
+    "func.tail_call"(%value) {tribute.calling_convention = "cps"}
   }
 }"#,
             "requires a resolved callee symbol",
@@ -1034,7 +1034,7 @@ fn post_boundary_rejects_malformed_physical_callable_transfers() {
     func.unreachable
   }
   func.func @caller(%value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-    func.tail_call %value {callee = @callee}
+    func.tail_call @callee(%value) : (core.i32) -> ()
   }
 }"#,
             "func.tail_call must carry exact Direct, EvidenceDirect, or Cps metadata",
@@ -1042,7 +1042,7 @@ fn post_boundary_rejects_malformed_physical_callable_transfers() {
         (
             r#"core.module @test {
   func.func @caller(%value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-    func.tail_call %value {callee = @missing, tribute.calling_convention = "cps"}
+    func.tail_call @missing(%value) attributes {tribute.calling_convention = "cps"} : (core.i32) -> ()
   }
 }"#,
             "unresolved callee @missing",
@@ -1053,7 +1053,7 @@ fn post_boundary_rejects_malformed_physical_callable_transfers() {
     func.unreachable
   }
   func.func @caller(%value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-    func.tail_call %value {callee = @callee, tribute.calling_convention = "cps"}
+    func.tail_call @callee(%value) attributes {tribute.calling_convention = "cps"} : (core.i32) -> ()
   }
 }"#,
             "operands do not match the target signature",
@@ -1064,7 +1064,7 @@ fn post_boundary_rejects_malformed_physical_callable_transfers() {
     func.return %value
   }
   func.func @caller(%value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-    func.tail_call %value {callee = @callee, tribute.calling_convention = "cps"}
+    func.tail_call @callee(%value) attributes {tribute.calling_convention = "cps"} : (core.i32) -> ()
   }
 }"#,
             "target must have core.never result",
@@ -1075,7 +1075,7 @@ fn post_boundary_rejects_malformed_physical_callable_transfers() {
     func.unreachable
   }
   func.func @caller(%value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-    func.tail_call %value {callee = @callee, tribute.calling_convention = "cps"}
+    func.tail_call @callee(%value) attributes {tribute.calling_convention = "cps"} : (core.i32) -> ()
   }
 }"#,
             "must preserve exact Cps metadata",
@@ -1094,7 +1094,7 @@ fn post_boundary_rejects_malformed_physical_callable_transfers() {
     func.return %value
   }
   func.func @caller(%value: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
-    %result = func.call %value {callee = @callee, tribute.calling_convention = "evidence_direct"} : core.i32
+    %result = func.call @callee(%value) attributes {tribute.calling_convention = "evidence_direct"} : (core.i32) -> core.i32
     func.return %result
   }
 }"#,
@@ -1103,7 +1103,7 @@ fn post_boundary_rejects_malformed_physical_callable_transfers() {
         (
             r#"core.module @test {
   func.func @caller(%value: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
-    %result = func.call %value {callee = @missing, tribute.calling_convention = "direct"} : core.i32
+    %result = func.call @missing(%value) attributes {tribute.calling_convention = "direct"} : (core.i32) -> core.i32
     func.return %result
   }
 }"#,
@@ -1133,10 +1133,10 @@ fn post_boundary_rejects_nonphysical_dispatchers_and_residual_control_ops() {
   !evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
   !tr = closure.closure<func.func_sig<(!evidence, core.i32, tribute_rt.anyref) -> tribute_rt.anyref>>
   func.func @caller(%ev: !evidence, %prompt: core.i32, %tr: !tr) -> core.never attributes {tribute.calling_convention = "cps"} {
-    "ability.handle_dispatch"(%ev, %prompt, %tr) ({
+    ability.handle_dispatch %ev, %prompt(%tr) attributes {abilities = [@State]} {
       ^body(%inner: !evidence):
         func.unreachable
-    }) {abilities = [@State]}
+    }
   }
 }"#;
     let (ctx, module) = parse(dispatcher_input);
@@ -1154,10 +1154,10 @@ fn post_boundary_rejects_nonphysical_dispatchers_and_residual_control_ops() {
     %tr = closure.lambda evidence_direct(%inner: !evidence) -> tribute_rt.anyref {
       func.unreachable
     }
-    "ability.handle_dispatch"(%ev, %prompt, %tr) ({
+    ability.handle_dispatch %ev, %prompt(%tr) attributes {abilities = [@State]} {
       ^body(%inner: !evidence):
         func.unreachable
-    }) {abilities = [@State]}
+    }
   }
 }"#;
     let (ctx, module) = parse(wrong_abi_input);
@@ -1174,10 +1174,10 @@ fn post_boundary_rejects_nonphysical_dispatchers_and_residual_control_ops() {
     %tr = closure.lambda direct(%inner: !evidence, %op_idx: core.i32, %payload: tribute_rt.anyref) -> tribute_rt.anyref {
       func.unreachable
     }
-    "ability.handle_dispatch"(%ev, %prompt, %tr) ({
+    ability.handle_dispatch %ev, %prompt(%tr) attributes {abilities = [@State]} {
       ^body(%inner: !evidence):
         func.unreachable
-    }) {abilities = [@State]}
+    }
   }
 }"#;
     let (ctx, module) = parse(wrong_metadata_input);
@@ -1214,7 +1214,7 @@ fn textual_resumptive_handle_emits_one_resultless_delimiter() {
     let input = r#"core.module @test {
   tribute_cps.func @run(%input: core.i32) -> core.i32 convention(cps) {
     %handled = tribute_control.handle : core.i32 body {
-      %performed = tribute_control.perform %input {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
+      %performed = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
       tribute_control.yield %performed
     } completion(%value: core.i32) {
         tribute_control.yield %value
@@ -1355,7 +1355,7 @@ fn multiple_arms_for_one_ability_emit_one_dispatcher() {
     let input = r#"core.module @test {
   tribute_cps.func @run(%input: core.i32) -> core.i32 convention(cps) {
     %handled = tribute_control.handle : core.i32 body {
-      %performed = tribute_control.perform %input {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
+      %performed = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
       tribute_control.yield %performed
     } completion(%value: core.i32) {
         tribute_control.yield %value
@@ -1464,7 +1464,7 @@ fn textual_scf_branch_captures_only_the_selected_suffix() {
   tribute_cps.func @branch(%input: core.i32) -> core.i32 convention(cps) {
     %condition = arith.const {value = true} : core.i1
     %selected = scf.if %condition -> (core.i32) {
-      %performed = tribute_control.perform %input {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
+      %performed = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
       scf.yield %performed
     } else {
       %fallback = arith.const {value = 7} : core.i32
@@ -1524,10 +1524,10 @@ fn textual_zero_result_cps_and_direct_scf_branches_lower() {
       }
     }
     scf.if %condition {
-      %performed = tribute_control.perform %input {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
+      %performed = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
       scf.yield
     } else {
-      %performed = tribute_control.perform %input {ability = @State, op_name = "set", operation_kind = "op"} : core.i32
+      %performed = tribute_control.perform op @State @set(%input) : (core.i32) -> core.i32
       scf.yield
     }
     tribute_control.return %input
@@ -1678,7 +1678,7 @@ fn malformed_multi_result_effectful_scf_if_remains_unchanged() {
     let input = r#"core.module @test {
   tribute_cps.func @broken(%input: core.i32, %condition: core.i1) -> core.i32 convention(cps) {
     %left, %right = scf.if %condition -> (core.i32, core.i32) {
-      %performed = tribute_control.perform %input {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
+      %performed = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
       scf.yield %performed, %input
     } else {
       scf.yield %input, %input
@@ -1933,7 +1933,7 @@ fn a_table_of_two_targets_enters_each_through_its_convention() {
             .find(|function| function.starts_with(entry.as_str()))
             .unwrap_or_else(|| panic!("{entry}: {printed}"));
         let body = function.split("\n  }").next().unwrap();
-        assert!(body.contains(&format!("callee = {target}")), "{body}");
+        assert!(body.contains(&format!("{target}(")), "{body}");
     }
 }
 
@@ -2049,11 +2049,7 @@ fn handles_stay_abstract_until_the_frames_are_lowered() {
     let (mut ctx, module) = parse(input);
     tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
     let printed = print_module(&ctx, module.op());
-    assert_eq!(
-        printed.matches("\"ability.handle\"").count(),
-        2,
-        "{printed}"
-    );
+    assert_eq!(printed.matches("ability.handle %").count(), 2, "{printed}");
     assert!(!printed.contains("ability.handle_dispatch"), "{printed}");
     assert!(!printed.contains("effect.fresh_prompt_tag"), "{printed}");
     assert!(!printed.contains("adt.struct_new"), "{printed}");
@@ -2102,7 +2098,7 @@ fn nested_same_ability_resumes_rebuild_the_dynamic_frame_dispatcher() {
   tribute_cps.func @nested_same(%input: core.i32) -> core.i32 convention(cps) {
     %outer = tribute_control.handle : core.i32 body {
       %inner = tribute_control.handle : core.i32 body {
-        %performed = tribute_control.perform %input {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
+        %performed = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
         tribute_control.yield %performed
       } completion(%value: core.i32) {
           tribute_control.yield %value
@@ -2112,7 +2108,7 @@ fn nested_same_ability_resumes_rebuild_the_dynamic_frame_dispatcher() {
             tribute_control.yield %resumed
         }
       }
-      %performed = tribute_control.perform %inner {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
+      %performed = tribute_control.perform op @State @get(%inner) : (core.i32) -> core.i32
       tribute_control.yield %performed
     } completion(%value: core.i32) {
         tribute_control.yield %value
@@ -2143,7 +2139,7 @@ fn nested_cross_ability_resumes_rebuild_the_dynamic_frame_dispatcher() {
   tribute_cps.func @nested_cross(%input: core.i32) -> core.i32 convention(cps) {
     %outer = tribute_control.handle : core.i32 body {
       %inner = tribute_control.handle : core.i32 body {
-        %performed = tribute_control.perform %input {ability = @Console, op_name = "read", operation_kind = "op"} : core.i32
+        %performed = tribute_control.perform op @Console @read(%input) : (core.i32) -> core.i32
         tribute_control.yield %performed
       } completion(%value: core.i32) {
           tribute_control.yield %value
@@ -2153,7 +2149,7 @@ fn nested_cross_ability_resumes_rebuild_the_dynamic_frame_dispatcher() {
             tribute_control.yield %resumed
         }
       }
-      %performed = tribute_control.perform %inner {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
+      %performed = tribute_control.perform op @State @get(%inner) : (core.i32) -> core.i32
       tribute_control.yield %performed
     } completion(%value: core.i32) {
         tribute_control.yield %value
@@ -2182,7 +2178,7 @@ fn op_to_never_uses_a_typed_zero_capture_reject_continuation() {
     let input = r#"core.module @test {
   tribute_cps.func @abortable(%input: core.i32) -> core.i32 convention(cps) {
     %handled = tribute_control.handle : core.i32 body {
-      %never = tribute_control.perform %input {ability = @Abort, op_name = "abort", operation_kind = "op"} : core.never
+      %never = tribute_control.perform op @Abort @abort(%input) : (core.i32) -> core.never
       %unreachable_suffix = arith.const {value = 99} : core.i32
       tribute_control.yield %unreachable_suffix
     } completion(%value: core.i32) {
@@ -2303,7 +2299,7 @@ fn fn_operation_stays_evidence_direct_without_continuation_capture() {
     let input = r#"core.module @test {
   tribute_cps.func @read(%input: core.i32) -> core.i32 convention(cps) {
     %handled = tribute_control.handle : core.i32 body {
-      %value = tribute_control.perform %input {ability = @Reader, op_name = "read", operation_kind = "fn"} : core.i32
+      %value = tribute_control.perform fn @Reader @read(%input) : (core.i32) -> core.i32
       tribute_control.yield %value
     } completion(%value: core.i32) {
         tribute_control.yield %value
@@ -2376,7 +2372,7 @@ fn textual_scf_switch_reenters_the_shared_suffix() {
     %choice = arith.const {value = 0} : core.i32
     scf.switch %choice {
       scf.case 0 {
-        %performed = tribute_control.perform %input {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
+        %performed = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
         scf.yield
       }
       scf.default {
@@ -2423,7 +2419,7 @@ mod shared_contract_boundary_regressions {
             func.return %x
           }
           func.func @caller(%x: core.i32) -> core.i32 attributes {tribute.calling_convention = \"direct\"} {
-            %r = func.call %x {callee = @identity, tribute.calling_convention = \"direct\"} : core.i32
+            %r = func.call @identity(%x) attributes {tribute.calling_convention = \"direct\"} : (core.i32) -> core.i32
             func.return %r
           }
         }";
@@ -2431,7 +2427,11 @@ mod shared_contract_boundary_regressions {
         let module = trunk_ir::parser::parse_test_module(&mut ctx, valid);
         verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
         for (from, to, expected) in [
-            ("} : core.i32", "} : core.nil", "call result list mismatch"),
+            (
+                "} : (core.i32) -> core.i32",
+                "} : (core.i32) -> core.nil",
+                "call result list mismatch",
+            ),
             ("func.return %x", "func.return", "return count mismatch"),
         ] {
             let mut ctx = trunk_ir::IrContext::new();
@@ -2503,7 +2503,7 @@ fn a_handle_in_a_direct_callable_runs_under_a_value_delimiter() {
     let input = r#"core.module @test {
   tribute_cps.func @run(%input: core.i32) -> core.i32 convention(direct) {
     %handled = tribute_control.handle : core.i32 body {
-      %performed = tribute_control.perform %input {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
+      %performed = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
       tribute_control.yield %performed
     } completion(%value: core.i32) {
         tribute_control.yield %value
@@ -2537,7 +2537,7 @@ fn a_handle_in_a_direct_callable_runs_under_a_value_delimiter() {
 fn a_general_operation_outside_a_handle_is_rejected_in_a_direct_callable() {
     let input = r#"core.module @test {
   tribute_cps.func @run(%input: core.i32) -> core.i32 convention(direct) {
-    %performed = tribute_control.perform %input {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
+    %performed = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
     tribute_control.return %performed
   }
 }"#;

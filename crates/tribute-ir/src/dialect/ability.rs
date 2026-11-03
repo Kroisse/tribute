@@ -85,6 +85,14 @@ mod ability {
     /// runtime-unique prompt identity for the delimiter and shares it across
     /// every instance. The body entry block receives the extended evidence. Every body path ends in a proper tail transfer or
     /// `func.unreachable`.
+    ///
+    /// ```text
+    /// ability.handle_dispatch %evidence, %prompt_tag(%dispatcher0, ...) attributes {abilities = [@State]} {
+    /// ^body(%ev: Evidence):
+    ///   ...
+    /// }
+    /// ```
+    #[asm_format(evidence "," prompt_tag "(" dispatchers ")" attr_dict region(body))]
     #[implements(CallableExit)]
     fn handle_dispatch(
         abilities: Attr<[SymbolRef]>,
@@ -102,12 +110,11 @@ mod ability {
     /// The result flows inline — no CPS transformation is needed.
     ///
     /// ```text
-    /// %result = ability.call %args...
-    ///   { ability = @State, op_name = "get" }
+    /// %result = ability.call @State @get(%args...) : (ArgType, ...) -> ResultType
     /// ```
     ///
     /// Lowered to: evidence lookup → tr_dispatch_fn(op_idx, value) → result.
-    #[asm_format(values attr_dict_bare ":" type(result))]
+    #[asm_format(ability symbol(op_name) "(" values ")" attr_dict ":" functional_type(values, result))]
     fn call(ability: Attr<SymbolRef>, op_name: Attr<String>, values: Variadic<_>) -> Value<_> {}
 
     // === Abstract continuation frames ===
@@ -172,10 +179,10 @@ mod ability {
     /// the installed layer, whose completion is `completion`.
     ///
     /// ```text
-    /// "ability.handle"(%outer_ev, %exit, %completion, %arm0, ...) ({
+    /// ability.handle %outer_ev, %exit, %completion(%arm0, ...) attributes {handlers = [...]} {
     /// ^body(%ev: Evidence, %f: !ability.frame<M>):
     ///   ...
-    /// }) {handlers = [...]}
+    /// }
     /// ```
     ///
     /// A resultless terminator with one region. `evidence` is the Evidence
@@ -203,6 +210,7 @@ mod ability {
     /// extended Evidence and an `ability.frame<M>`, and every path ends in a
     /// proper tail transfer or `func.unreachable`.
     #[verify]
+    #[asm_format(evidence "," exit "," completion "(" arms ")" attr_dict region(body))]
     #[implements(CallableExit)]
     fn handle<F: Frame>(
         handlers: Attr<[HandlerBinding]>,
@@ -223,12 +231,14 @@ mod ability {
     /// operation adds the check.
     ///
     /// ```text
-    /// "ability.perform"(%ev, %f, %resumption, %arg0, ...) {ability = @State, op_name = "get"}
+    /// ability.perform @State @get(%arg0, ...) [%ev, %f, %resumption]
+    ///   : (ArgType, ...) -> ()
     /// ```
     ///
     /// A resultless terminator that takes Evidence, an `ability.frame<R>`, a
     /// raw `ResumeExact<I, R>`, and the operation arguments. `I` is not
     /// `core.never`.
+    #[asm_format(ability symbol(op_name) "(" values ")" "[" evidence "," frame "," resumption "]" attr_dict ":" functional_type(values))]
     #[implements(CallableExit)]
     fn perform<F: Frame, C>(
         ability: Attr<SymbolRef>,
@@ -246,11 +256,12 @@ mod ability {
     /// dispatcher, with no resumption.
     ///
     /// ```text
-    /// "ability.abort"(%ev, %f, %arg0, ...) {ability = @Fail, op_name = "fail"}
+    /// ability.abort @Fail @fail(%arg0, ...) [%ev, %f] : (ArgType, ...) -> ()
     /// ```
     ///
     /// The shape of `ability.perform` without the resumption, used only for
     /// source `op -> Never`.
+    #[asm_format(ability symbol(op_name) "(" values ")" "[" evidence "," frame "]" attr_dict ":" functional_type(values))]
     #[implements(CallableExit)]
     fn abort<F: Frame>(
         ability: Attr<SymbolRef>,
@@ -542,9 +553,9 @@ mod tests {
                 &format!(
                     r#"core.module @test {{
   func.func @main(%evidence: core.ptr, %prompt: core.i32) {{
-    "ability.handle_dispatch"(%evidence, %prompt) ({{
+    ability.handle_dispatch %evidence, %prompt() attributes {{abilities = {abilities}}} {{
       func.unreachable
-    }}) {{abilities = {abilities}}}
+    }}
   }}
 }}"#
                 ),

@@ -509,7 +509,7 @@ mod tests {
     func.return
   }
   func.func @direct_caller(%value: core.i32) -> (), {call_conv = "tail"} {
-    func.tail_call %value {callee = @direct_target}
+    func.tail_call @direct_target(%value) : (core.i32) -> ()
   }
   func.func @indirect_caller(%callee: core.ptr, %value: core.i32) -> (), {call_conv = "tail"} {
     func.tail_call_indirect %callee(%value) : (core.i32) -> (), {call_conv = "tail"}
@@ -572,7 +572,7 @@ mod tests {
             r#"core.module @test {
   func.func @callee() -> test.anyref
   func.func @caller() -> test.anyref {
-    %result = func.call {callee = @callee} : test.anyref
+    %result = func.call @callee() : () -> test.anyref
     func.return %result
   }
 }"#,

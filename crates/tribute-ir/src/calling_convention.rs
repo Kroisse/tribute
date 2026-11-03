@@ -372,7 +372,7 @@ mod tests {
     func.return
   }
   func.func @calls() -> core.nil attributes {tribute.calling_convention = "evidence_direct"} {
-    %r = func.call {callee = @direct, tribute.calling_convention = "direct"} : core.nil
+    %r = func.call @direct() attributes {tribute.calling_convention = "direct"} : () -> core.nil
     %c = arith.const {value = 0, tribute.calling_convention = "direct"} : core.i32
     func.return
   }
@@ -410,8 +410,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f(%x: core.i32) -> core.nil {
-    %r = func.call %x {callee = @f} : core.nil
-    func.tail_call %x {callee = @f}
+    %r = func.call @f(%x) : (core.i32) -> core.nil
+    func.tail_call @f(%x) : (core.i32) -> ()
   }
 }"#,
         );

@@ -1316,7 +1316,7 @@ core.module @test {
   func.func @main() -> core.i32 {
     %0 = arith.const {value = 40} : core.i32
     %1 = arith.const {value = 2} : core.i32
-    %2 = func.call %0, %1 {callee = @add} : core.i32
+    %2 = func.call @add(%0, %1) : (core.i32, core.i32) -> core.i32
     func.return %2
   }
 }"#;

@@ -123,7 +123,7 @@ fn builder_fixture() -> ValidFixture {
     let perform = Perform::operands([x])
         .ability(ability.clone())
         .op_name("get")
-        .operation_kind("op")
+        .operation_kind(OperationKind::Op)
         .results(i32_ty)
         .build(&mut ctx, loc);
     ctx.push_op(body_block, perform.op_ref());
@@ -153,7 +153,7 @@ fn builder_fixture() -> ValidFixture {
     let handler = Handler::operands()
         .ability(ability.clone())
         .op_name("get")
-        .kind(HandlerKind::Op)
+        .kind(OperationKind::Op)
         .operation_result_type(i32_ty)
         .regions(handler_body)
         .build(&mut ctx, loc);
@@ -209,7 +209,7 @@ const VALID_CONTROL_MODULE: &str = r#"core.module @test {
       tribute_control.return %value
     }
     %handled = tribute_control.handle : core.i32 body {
-      %performed = tribute_control.perform %value {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
+      %performed = tribute_control.perform op @State @get(%value) : (core.i32) -> core.i32
       tribute_control.yield %performed
     } completion(%completed: core.i32) {
         tribute_control.yield %completed
@@ -297,7 +297,7 @@ fn valid_fixture() -> ValidFixture {
 
 const DECLARED_PERFORM: &str = r#"core.module @test {
   tribute_control.func @run() -> core.i32 {
-    %value = tribute_control.perform {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
+    %value = tribute_control.perform op @State @get() : () -> core.i32
     tribute_control.return %value
   }
   ability.decl @State {
@@ -530,7 +530,7 @@ fn all_operations_construct_with_typed_accessors_and_preserve_locations() {
     }
 
     let handler = Handler::from_op(ctx, fixture.handler).expect("typed handler accessor");
-    assert_eq!(handler.kind(ctx), HandlerKind::Op);
+    assert_eq!(handler.kind(ctx), OperationKind::Op);
     let handle = Handle::from_op(ctx, fixture.handle).expect("typed handle accessor");
     assert_eq!(handle.result_ty(ctx), ctx.value_ty(handle.result(ctx)));
 }
@@ -777,7 +777,7 @@ fn validator_rejects_wrong_required_attribute_types() {
   tribute_control.func @malformed() -> core.i32
   %ref = "tribute_control.func_ref"() {value = 1} : !callable
   %call = tribute_control.call {callee = 1} : core.i32
-  %perform = tribute_control.perform {ability = 1, op_name = 2, operation_kind = 3} : core.i32
+  %perform = "tribute_control.perform"() {ability = 1, op_name = 2, operation_kind = 3} : core.i32
   "tribute_control.handler"() ({
     %constant = arith.const {value = 0} : core.i32
     tribute_control.yield %constant
@@ -818,7 +818,7 @@ fn validator_rejects_wrong_required_attribute_types() {
         &[
             "attribute `ability` must be a SymbolRef attribute",
             "attribute `op_name` must be a String attribute",
-            "attribute `operation_kind` must be a String attribute",
+            "attribute `operation_kind` must be one of \"op\" and \"fn\"",
         ],
     );
     assert_op_diagnostics(
@@ -841,7 +841,7 @@ fn validator_rejects_nested_unresolved_call_and_perform_types() {
   !never = core.never
   %value = arith.const {value = 0} : !wrapper
   %call = tribute_control.call %value {callee = @id} : !wrapper
-  %perform = tribute_control.perform %value {ability = @State, op_name = "get", operation_kind = "op"} : !wrapper
+  %perform = tribute_control.perform op @State @get(%value) : (!wrapper) -> !wrapper
 }"#,
     );
     let never = ctx
@@ -958,7 +958,7 @@ fn local_validator_reports_distinct_malformed_operation_contracts() {
   %non_callable = "tribute_control.call_indirect"(%integer, %boolean) : core.i32
   %callable = tribute_control.func_ref @bad_func : !direct
   %mismatched = "tribute_control.call_indirect"(%callable, %boolean) : core.i1
-  %bad_perform = tribute_control.perform %integer {ability = @State, op_name = "get", operation_kind = "bogus"} : core.i32
+  %bad_perform = "tribute_control.perform"(%integer) {ability = @State, op_name = "get", operation_kind = "bogus"} : core.i32
   "tribute_control.handler"() ({
     ^clause(%argument: core.i32):
       tribute_control.yield %argument
@@ -1070,7 +1070,7 @@ fn local_validator_reports_distinct_malformed_operation_contracts() {
     assert_op_diagnostics(
         &result,
         bad_perform,
-        &["operation_kind must be \"fn\" or \"op\", found \"bogus\""],
+        &["attribute `operation_kind` must be one of \"op\" and \"fn\""],
     );
     assert_op_diagnostics(
         &result,
@@ -1331,8 +1331,8 @@ fn whole_ir_reports_symbol_declaration_capture_and_token_contracts() {
   %missing_call = tribute_control.call {callee = @missing} : core.i32
   %false = arith.const {value = false} : core.i1
   %bad_call = tribute_control.call %false {callee = @id} : core.i1
-  %unknown_perform = tribute_control.perform {ability = @State, op_name = "missing", operation_kind = "op"} : core.i32
-  %bad_perform = tribute_control.perform %false {ability = @State, op_name = "get", operation_kind = "fn"} : core.i1
+  %unknown_perform = tribute_control.perform op @State @missing() : () -> core.i32
+  %bad_perform = tribute_control.perform fn @State @get(%false) : (core.i1) -> core.i1
   %duplicate_capture = tribute_control.lambda() -> core.i1 captures [%false, %false] {
     tribute_control.return %false
   }
@@ -1387,7 +1387,7 @@ fn whole_ir_rejects_duplicate_and_declaration_mismatched_handlers() {
         r#"core.module @test {
   %handled = tribute_control.handle : core.i32 body {
     %input = arith.const {value = 0} : core.i32
-    %performed = tribute_control.perform %input {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
+    %performed = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
     tribute_control.yield %performed
   } completion(%value: core.i32) {
       tribute_control.yield %value
@@ -2255,7 +2255,7 @@ fn performed_callable_module(declared_result: &str) -> String {
         r#"core.module @test {{
   !F = tribute_control.func_sig<(core.i32) -> core.i32>
   tribute_control.func @run(%value: core.i32) -> core.i32 {{
-    %callee = tribute_control.perform {{ability = @Reader, op_name = "read", operation_kind = "fn"}} : !F
+    %callee = tribute_control.perform fn @Reader @read() : () -> !F
     %result = tribute_control.call_indirect %callee(%value) : (core.i32) -> core.i32
     tribute_control.return %result
   }}
@@ -2293,7 +2293,7 @@ fn handled_callable_module(op_yield: &str) -> String {
     tribute_control.return %n
   }}
   %f = tribute_control.handle : !F body {{
-    %body = tribute_control.perform {{ability = @Gen, op_name = "next", operation_kind = "op"}} : core.i32
+    %body = tribute_control.perform op @Gen @next() : () -> core.i32
     tribute_control.yield %body
   }} completion(%k: core.i32) {{
       %done = tribute_control.func_ref @inc : !F
@@ -2466,7 +2466,7 @@ fn a_value_withdrawn_twice_is_not_evaluated_again() {
         r#"core.module @test {
   !F = tribute_control.func_sig<(core.i32) -> core.i32>
   %f = tribute_control.handle : !F body {
-    %body = tribute_control.perform {ability = @Gen, op_name = "next", operation_kind = "op"} : core.i32
+    %body = tribute_control.perform op @Gen @next() : () -> core.i32
     tribute_control.yield %body
   } completion(%k: core.i32) {
       %done = core.unrealized_conversion_cast %k : !F

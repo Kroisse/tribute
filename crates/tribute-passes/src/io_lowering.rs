@@ -126,8 +126,8 @@ mod tests {
                 }
                 func.func @caller(%0: core.ptr, %1: core.i1) -> core.ptr {
                 ^bb0:
-                    %2 = func.call %0, %1 {callee = @"std::io::__tribute_io_write"} : core.ptr
-                    %3 = func.call {callee = @"std::io::__tribute_io_read_line"} : core.ptr
+                    %2 = func.call @"std::io::__tribute_io_write"(%0, %1) : (core.ptr, core.i1) -> core.ptr
+                    %3 = func.call @"std::io::__tribute_io_read_line"() : () -> core.ptr
                     func.return %3
                 }
             }
@@ -158,9 +158,9 @@ mod tests {
                 }
                 func.func @caller(%0: core.ptr) -> core.ptr {
                 ^bb0:
-                    %1 = func.call %0 {callee = @"std::io::__tribute_io_write"} : core.ptr
-                    %2 = func.call %0 {callee = @"std::io::__tribute_io_read_line"} : core.ptr
-                    %3 = func.call %0 {callee = @other} : core.ptr
+                    %1 = func.call @"std::io::__tribute_io_write"(%0) : (core.ptr) -> core.ptr
+                    %2 = func.call @"std::io::__tribute_io_read_line"(%0) : (core.ptr) -> core.ptr
+                    %3 = func.call @other(%0) : (core.ptr) -> core.ptr
                     func.return %3
                 }
             }

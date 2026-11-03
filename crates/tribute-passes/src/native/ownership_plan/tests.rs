@@ -159,7 +159,7 @@ fn bodyless_scalar_declarations_need_no_target_binding_or_ownership_actions() {
         r#"core.module @test {
         func.func @external(%value: core.i32) -> core.i32
         func.func @caller(%value: core.i32) -> core.i32 {
-            %result = func.call %value {callee = @external} : core.i32
+            %result = func.call @external(%value) : (core.i32) -> core.i32
             func.return %result
         }
     }"#,
@@ -176,7 +176,7 @@ fn bodyless_scalar_declarations_need_no_target_binding_or_ownership_actions() {
         r#"core.module @test {
             func.func @external(%value: core.i32) -> core.i32
             func.func @caller() -> core.i32 {
-                %result = func.call {callee = @external} : core.i32
+                %result = func.call @external() : () -> core.i32
                 func.return %result
             }
         }"#,
@@ -288,12 +288,12 @@ fn typed_plan_options_preserve_or_elide_only_proven_parameter_and_field_borrows(
     func.return %value
   }
   func.func @forward(%child: !ChildRef) -> core.i32 {
-    %value = func.call %child {callee = @observe} : core.i32
+    %value = func.call @observe(%child) : (!ChildRef) -> core.i32
     func.return %value
   }
   func.func @load(%owner: !BoxRef) -> core.i32 {
     %child = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
-    %value = func.call %child {callee = @observe} : core.i32
+    %value = func.call @observe(%child) : (!ChildRef) -> core.i32
     func.return %value
   }
 }"#;
@@ -508,7 +508,7 @@ fn internal_closure_raw_pointer_handoff_outside_native_evidence_fails_closed() {
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
     %closure = adt.struct_new %code {type = !_closure} : !_closure
     %raw = core.unrealized_conversion_cast %closure : core.ptr
-    %result = func.call %raw {callee = @escape} : core.nil
+    %result = func.call @escape(%raw) : (core.ptr) -> core.nil
     func.return
   }
 }"#,
@@ -590,7 +590,7 @@ fn nested_field_borrow_keeps_the_outer_owner_alive_through_the_last_use() {
     %erased = adt.ref_cast %loaded {type = tribute_rt.anyref} : tribute_rt.anyref
     %restored = adt.ref_cast %erased {type = !InnerRef} : !InnerRef
     %nested = adt.struct_get %restored {field = 0, type = !Inner} : !ChildRef
-    %value = func.call %nested {callee = @observe} : core.i32
+    %value = func.call @observe(%nested) : (!ChildRef) -> core.i32
     func.return
   }
 }"#,
@@ -886,7 +886,7 @@ const LAST_USE_MOVES: &str = r#"core.module @test {
   }
   func.func @store_then_call(%child: !ChildRef) -> !BoxRef {
     %box = adt.struct_new %child {type = !Box} : !BoxRef
-    func.call %child {callee = @sink}
+    func.call @sink(%child) : (!ChildRef) -> ()
     func.return %box
   }
   func.func @store_owner_then_read(%child: !ChildRef) -> core.i32 {
@@ -897,7 +897,7 @@ const LAST_USE_MOVES: &str = r#"core.module @test {
     func.return %value
   }
   func.func @consumed_and_kept(%child: !ChildRef) -> core.nil {
-    func.call %child, %child {callee = @sink_and_keep}
+    func.call @sink_and_keep(%child, %child) : (!ChildRef, !ChildRef) -> ()
     func.return
   }
   func.func @self_store(%node: !NodeRef) -> core.nil {
@@ -909,7 +909,7 @@ const LAST_USE_MOVES: &str = r#"core.module @test {
       %box = adt.struct_new %child {type = !Box} : !BoxRef
       cf.cond_br %condition [^use, ^skip]
     ^use:
-      func.call %child {callee = @sink}
+      func.call @sink(%child) : (!ChildRef) -> ()
       func.return %box
     ^skip:
       func.return %box
@@ -1101,7 +1101,7 @@ const FIELD_MOVES: &str = r#"core.module @test {
   func.func @nested(%outer: !OuterRef {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
     %inner = adt.struct_get %outer {field = 0, type = !Outer} : !InnerRef
     %env = adt.struct_get %inner {field = 0, type = !Inner} : !EnvRef
-    func.tail_call %env {callee = @sink}
+    func.tail_call @sink(%env) : (!EnvRef) -> ()
   }
   func.func @store_one(%pair: !PairRef {tribute.ownership = "consumed"}) -> !WrapperRef {
     %left = adt.struct_get %pair {field = 0, type = !Pair} : !EnvRef
@@ -1241,7 +1241,7 @@ fn owners_released_after_the_same_operation_move_their_own_fields() {
   func.func @both(%first: !PairRef {tribute.ownership = "consumed"}, %second: !PairRef {tribute.ownership = "consumed"}) -> !PairRef {
     %left = adt.struct_get %first {field = 0, type = !Pair} : !EnvRef
     %right = adt.struct_get %second {field = 1, type = !Pair} : !EnvRef
-    func.call %first, %second {callee = @peek}
+    func.call @peek(%first, %second) : (!PairRef, !PairRef) -> ()
     %pair = adt.struct_new %left, %right {type = !Pair} : !PairRef
     func.return %pair
   }
@@ -1501,11 +1501,11 @@ fn borrowed_projection_proper_tail_transfer_acquires_before_the_owner_dies() {
   }
   func.func @owner_dies(%owner: !BoxRef {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
     %child = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
-    func.tail_call %child {callee = @sink}
+    func.tail_call @sink(%child) : (!ChildRef) -> ()
   }
   func.func @owner_moves(%owner: !BoxRef {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
     %child = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
-    func.tail_call %owner, %child {callee = @sink_both}
+    func.tail_call @sink_both(%owner, %child) : (!BoxRef, !ChildRef) -> ()
   }
 }"#,
     );
@@ -1580,7 +1580,7 @@ fn borrowed_projection_ordinary_call_to_a_consumed_parameter_acquires_its_unit()
   func.func @load(%child: !ChildRef) -> core.nil {
     %owner = adt.struct_new %child {type = !Box} : !BoxRef
     %loaded = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
-    func.call %loaded {callee = @sink}
+    func.call @sink(%loaded) : (!ChildRef) -> ()
     func.return
   }
 }"#,
@@ -1945,7 +1945,7 @@ fn cross_block_borrowed_load_keeps_owner_alive_without_releasing_the_load() {
       %loaded = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
       cf.br [^next]
     ^next:
-      %seen = func.call %loaded {callee = @observe} : core.i32
+      %seen = func.call @observe(%loaded) : (!ChildRef) -> core.i32
       func.return
   }
 }"#,
@@ -1990,7 +1990,7 @@ fn cfg_copy_and_tail_dying_value_actions_are_complete() {
       func.unreachable
   }
   func.func @tail(%sent: !R {tribute.ownership = "consumed"}, %dying: !R {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
-    func.tail_call %sent {callee = @sink}
+    func.tail_call @sink(%sent) : (!R) -> ()
   }
   func.func @sink(%value: !R {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
     func.unreachable
@@ -2054,7 +2054,7 @@ fn branch_transfer_of_a_value_live_afterwards_acquires_the_destination_unit() {
       %value = adt.struct_new %child {type = !Box} : !BoxRef
       cf.br %value [^next]
     ^next(%moved: !BoxRef):
-      func.call %value {callee = @sink}
+      func.call @sink(%value) : (!BoxRef) -> ()
       func.return
   }
   func.func @projection_used_after(%child: !ChildRef) -> core.nil {
@@ -2063,7 +2063,7 @@ fn branch_transfer_of_a_value_live_afterwards_acquires_the_destination_unit() {
       %loaded = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
       cf.br %owner [^next]
     ^next(%moved: !BoxRef):
-      %seen = func.call %loaded {callee = @observe} : core.i32
+      %seen = func.call @observe(%loaded) : (!ChildRef) -> core.i32
       func.return
   }
   func.func @moved(%child: !ChildRef) -> core.nil {
@@ -2161,7 +2161,7 @@ const EDGE_DEATHS: &str = r#"core.module @test {
       %value = adt.struct_new %child {type = !Box} : !BoxRef
       cf.cond_br %condition [^use, ^skip]
     ^use:
-      func.call %value {callee = @sink}
+      func.call @sink(%value) : (!BoxRef) -> ()
       cf.br [^join]
     ^skip:
       cf.br [^join]
@@ -2175,7 +2175,7 @@ const EDGE_DEATHS: &str = r#"core.module @test {
     ^inside:
       cf.cond_br %inner [^use, ^inner_skip]
     ^use:
-      func.call %value {callee = @sink}
+      func.call @sink(%value) : (!BoxRef) -> ()
       cf.br [^join]
     ^inner_skip:
       cf.br [^join]
@@ -2189,7 +2189,7 @@ const EDGE_DEATHS: &str = r#"core.module @test {
       %value = adt.struct_new %child {type = !Box} : !BoxRef
       cf.br [^loop]
     ^loop:
-      func.call %value {callee = @sink}
+      func.call @sink(%value) : (!BoxRef) -> ()
       cf.cond_br %condition [^loop, ^exit]
     ^exit:
       func.return
@@ -2200,7 +2200,7 @@ const EDGE_DEATHS: &str = r#"core.module @test {
       %loaded = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
       cf.cond_br %condition [^use, ^skip]
     ^use:
-      %seen = func.call %loaded {callee = @observe} : core.i32
+      %seen = func.call @observe(%loaded) : (!ChildRef) -> core.i32
       cf.br [^join]
     ^skip:
       cf.br [^join]
@@ -2353,7 +2353,7 @@ fn value_dying_on_an_edge_into_a_shared_successor_is_rejected() {
     ^inside:
       cf.cond_br %inner [^join, ^use]
     ^use:
-      func.call %value {callee = @sink}
+      func.call @sink(%value) : (!BoxRef) -> ()
       cf.br [^join]
     ^other:
       cf.br [^join]
@@ -2387,7 +2387,7 @@ fn value_dying_on_a_back_edge_to_the_entry_block_is_rejected() {
     ^back:
       cf.cond_br %again [^entry, ^use]
     ^use:
-      func.call %value {callee = @sink}
+      func.call @sink(%value) : (!BoxRef) -> ()
       func.return
   }
 }"#,
@@ -2568,7 +2568,7 @@ fn closure_release_uses_its_compiler_generated_allocation_layout() {
   }
   func.func @main() -> core.nil {
     %closure = closure.new {entries = [@target, @trap_evidence_direct, @trap_cps]} : !Closure
-    func.call %closure {callee = @consume} : core.nil
+    func.call @consume(%closure) : (!Closure) -> core.nil
     func.return
   }
 }"#,
@@ -2599,13 +2599,13 @@ fn direct_indirect_return_and_tail_contracts_are_typed() {
     func.return %seen
   }
   func.func @caller(%value: !R, %callee: func.func_sig<(!R) -> !R>) -> !R {
-    %seen = func.call %value {callee = @observe} : core.i32
-    %direct = func.call %value {callee = @ordinary} : !R
+    %seen = func.call @observe(%value) : (!R) -> core.i32
+    %direct = func.call @ordinary(%value) : (!R) -> !R
     %indirect = func.call_indirect %callee(%direct) : (!R) -> !R
     func.return %indirect
   }
   func.func @tail(%value: !R {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
-    func.tail_call %value {callee = @sink}
+    func.tail_call @sink(%value) : (!R) -> ()
   }
   func.func @sink(%value: !R {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
     func.unreachable
@@ -2638,7 +2638,7 @@ fn retained_parameter_calls_balance_retains_and_releases() {
     func.return %value
   }
   func.func @direct(%value: !R) -> core.i32 {
-    %kept = func.call %value {callee = @keep} : !R
+    %kept = func.call @keep(%value) : (!R) -> !R
     %seen = adt.struct_get %kept {field = 0, type = !Layout} : core.i32
     func.return %seen
   }
@@ -2689,7 +2689,7 @@ fn signature_consumed_contracts_drive_entries_and_call_sites() {
     func.unreachable
   }
   func.func @direct(%value: !R) -> core.i32 {
-    func.call %value, %value {callee = @pair}
+    func.call @pair(%value, %value) : (!R, !R) -> ()
     %seen = adt.struct_get %value {field = 0, type = !Layout} : core.i32
     func.return %seen
   }
@@ -2705,7 +2705,7 @@ fn signature_consumed_contracts_drive_entries_and_call_sites() {
     "func.tail_call_indirect"(%callee, %value, %count) {signature = !Consuming}
   }
   func.func @duplicate(%value: !R {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
-    func.tail_call %value, %value {callee = @pair_tail}
+    func.tail_call @pair_tail(%value, %value) : (!R, !R) -> ()
   }
   func.func @pair_tail(%left: !R {tribute.ownership = "consumed"}, %right: !R {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
     func.unreachable
@@ -2756,7 +2756,7 @@ fn proper_tail_edges_without_a_consumed_contract_are_rejected() {
   !R = adt.typeref<{name = "R"}>
   !Layout = adt.struct<R(x: core.i32)>
   func.func @tail(%value: !R {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
-    func.tail_call %value {callee = @sink}
+    func.tail_call @sink(%value) : (!R) -> ()
   }
   func.func @sink(%value: !R) -> (), {call_conv = "tail"} {
     func.unreachable
@@ -2799,7 +2799,7 @@ fn bodyless_c_ffi_borrows_managed_arguments_and_transfers_managed_results() {
   !Layout = adt.struct<R(value: core.i32)>
   func.func @foreign(%value: !R) -> !R attributes {abi = "C"}
   func.func @caller(%value: !R) -> !R {
-    %result = func.call %value {callee = @foreign} : !R
+    %result = func.call @foreign(%value) : (!R) -> !R
     func.return %result
   }
 }"#,
@@ -2866,7 +2866,7 @@ fn stale_identity_unsupported_regions_and_malformed_calls_fail_unchanged() {
   !R = adt.typeref<{name = "R"}>
   !Layout = adt.struct<R(x: core.i32)>
   func.func @f(%value: !R) -> !R {
-    %result = func.call %value {callee = @missing} : !R
+    %result = func.call @missing(%value) : (!R) -> !R
     func.return %result
   }
 }"#,
@@ -3248,8 +3248,8 @@ fn nested_same_named_functions_are_distinct_qualified_definitions() {
     }
   }
   func.func @main(%value: core.i32) -> core.i32 {
-    %left = func.call %value {callee = @left::@helper} : core.i32
-    %right = func.call %left {callee = @right::@helper} : core.i32
+    %left = func.call @left::@helper(%value) : (core.i32) -> core.i32
+    %right = func.call @right::@helper(%left) : (core.i32) -> core.i32
     func.return %right
   }
 }"#,
@@ -3270,7 +3270,7 @@ fn nested_callers_use_the_contract_of_the_callee_their_module_names() {
       func.return %value
     }
     func.func @caller(%value: adt.typeref<{name = "R"}>) -> adt.typeref<{name = "R"}> {
-      %kept = func.call %value {callee = @observe} : adt.typeref<{name = "R"}>
+      %kept = func.call @observe(%value) : (adt.typeref<{name = "R"}>) -> adt.typeref<{name ="R"}>
       func.return %kept
     }
   }
@@ -3305,7 +3305,7 @@ const ARRAYS: &str = r#"core.module @test {
     func.return %value
   }
   func.func @insert(%nodes: !Nodes, %at: core.index, %node: !NodeRef) -> !Nodes {
-    %inserted = "adt.array_splice"(%nodes, %at, %at, %node) {type = !Nodes} : !Nodes
+    %inserted = adt.array_splice %nodes[%at, %at](%node) attributes {type = !Nodes} : !Nodes
     func.return %inserted
   }
   func.func @fill(%node: !NodeRef, %count: core.index) -> !Nodes {
@@ -3434,7 +3434,7 @@ fn malformed_array_operations_are_rejected() {
         )
     };
     assert_plan_error_unchanged(
-        &module("%copy = \"adt.array_splice\"(%others, %at, %at) {type = !Nodes} : !Nodes"),
+        &module("%copy = adt.array_splice %others[%at, %at]() attributes {type = !Nodes} : !Nodes"),
         "array_splice source differs from its array type",
     );
     assert_plan_error_unchanged(

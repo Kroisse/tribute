@@ -48,8 +48,13 @@ mod func {
         {}
     }
 
+    /// Direct call to the function `callee`; its results are the call's results.
+    ///
+    /// ```text
+    /// %r = func.call @f(%a, %b) : (core.i32, core.i64) -> core.i32
+    /// ```
     #[implements(op_interface::CallLike)]
-    #[asm_format(args attr_dict_bare (":" types(results)^)?)]
+    #[asm_format(callee "(" args ")" attr_dict ":" functional_type(args, results))]
     fn call(callee: Attr<SymbolRef>, args: Variadic<_>) -> Variadic<_> {}
 
     #[verify]
@@ -62,8 +67,13 @@ mod func {
     ) -> Values<S::Results> {
     }
 
+    /// Proper tail call to the function `callee`.
+    ///
+    /// ```text
+    /// func.tail_call @f(%a) : (core.i32) -> ()
+    /// ```
     #[implements(CallableExit, op_interface::CallLike)]
-    #[asm_format(args attr_dict_bare)]
+    #[asm_format(callee "(" args ")" attr_dict ":" functional_type(args))]
     fn tail_call(callee: Attr<SymbolRef>, args: Variadic<_>) {}
 
     #[verify]
@@ -1286,12 +1296,12 @@ mod result_list_tests {
           func.func @sink(%x: core.i32)
           func.func @value(%x: core.i32) -> core.i32
           func.func @run(%k: func.func_sig<(core.i32) -> ()>, %x: core.i32) {
-            func.call %x {callee = @sink}
+            func.call @sink(%x) : (core.i32) -> ()
             func.call_indirect %k(%x) : (core.i32) -> ()
-            %r = func.call %x {callee = @value} : core.i32
+            %r = func.call @value(%x) : (core.i32) -> core.i32
             func.return
           }
-          func.func @tail(%x: core.i32) { func.tail_call %x {callee = @sink} }
+          func.func @tail(%x: core.i32) { func.tail_call @sink(%x) : (core.i32) -> () }
           func.func @logical(%k: func.func_sig<(core.i32) -> core.never>, %x: core.i32) -> core.never {
             func.tail_call_indirect %k(%x) : (core.i32) -> core.never
           }
@@ -1303,13 +1313,13 @@ mod result_list_tests {
         assert_eq!(verify(valid), "validation passed");
         for (old, new, expected) in [
             (
-                "func.call %x {callee = @sink}",
-                "%bad = func.call %x {callee = @sink} : core.nil",
+                "func.call @sink(%x) : (core.i32) -> ()",
+                "%bad = func.call @sink(%x) : (core.i32) -> core.nil",
                 "call result list mismatch",
             ),
             (
-                "func.call %x {callee = @sink}",
-                "func.call {callee = @sink}",
+                "func.call @sink(%x) : (core.i32) -> ()",
+                "func.call @sink() : () -> ()",
                 "call argument count mismatch",
             ),
             ("func.return %r", "func.return", "return count mismatch"),
@@ -1329,15 +1339,15 @@ mod result_list_tests {
                 "expected S::Inputs = (core.i64), found (core.i32)",
             ),
             (
-                "callee = @sink",
-                "callee = 1",
+                "func.call @sink(%x) : (core.i32) -> ()",
+                "\"func.call\"(%x) {callee = 1}",
                 "attribute `callee` must be a SymbolRef attribute",
             ),
         ] {
             let text = verify(&valid.replace(old, new));
             assert!(text.contains(expected), "{expected}: {text}");
         }
-        let order = "core.module @m { func.func @f(%a: core.i32, %b: core.i64) func.func @g(%a: core.i32, %b: core.i64) { func.call %b, %a {callee = @f} func.return } }";
+        let order = "core.module @m { func.func @f(%a: core.i32, %b: core.i64) func.func @g(%a: core.i32, %b: core.i64) { func.call @f(%b, %a) : (core.i64, core.i32) -> () func.return } }";
         let errors = verify(order);
         assert!(
             errors.contains("call argument #0 type mismatch"),
@@ -1376,7 +1386,7 @@ mod owner_identity_tests {
         ] {
             let mut ctx = crate::IrContext::new();
             let input = format!(
-                "core.module @m {{ {declaration} func.func @run() {{ func.call {{callee = @runtime}} func.call {{callee = @f}} func.return }} }}"
+                "core.module @m {{ {declaration} func.func @run() {{ func.call @runtime() : () -> () func.call @f() : () -> () func.return }} }}"
             );
             let module = crate::parser::parse_test_module(&mut ctx, &input);
             let result = crate::validation::validate_all(&ctx, module, &mut Default::default());
@@ -1396,7 +1406,7 @@ mod normal_validation_regressions {
     fn normal_validation_rejects_known_contract_mismatches() {
         for (body, expected) in [
             (
-                "%a, %b = func.call {callee = @runtime} : core.i32, core.i32\nfunc.return",
+                "%a, %b = func.call @runtime() : () -> (core.i32, core.i32)\nfunc.return",
                 "multiple call results",
             ),
             (
@@ -1404,7 +1414,7 @@ mod normal_validation_regressions {
                 "expected S::Results = (), found (core.i32, core.i32)",
             ),
             (
-                "%a = func.call {callee = @sink} : core.i32\nfunc.return",
+                "%a = func.call @sink() : () -> core.i32\nfunc.return",
                 "call result list mismatch",
             ),
             (
@@ -1415,7 +1425,7 @@ mod normal_validation_regressions {
         ] {
             let mut ctx = crate::IrContext::new();
             let input = format!(
-                "core.module @m {{ func.func @sink() func.func @run(%k: func.func_sig<() -> ()>) {{ func.call {{callee = @runtime}} {body} }} }}"
+                "core.module @m {{ func.func @sink() func.func @run(%k: func.func_sig<() -> ()>) {{ func.call @runtime() : () -> () {body} }} }}"
             );
             let module = crate::parser::parse_test_module(&mut ctx, &input);
             let result = crate::validation::validate_all(&ctx, module, &mut Default::default());

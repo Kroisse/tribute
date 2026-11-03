@@ -565,10 +565,10 @@ mod tests {
   func.func @user_bridge(%value: core.i32) -> core.i32 attributes {abi = "C"}
   func.func @unused_bridge(%value: core.i32) -> core.i32 attributes {abi = "C"}
   func.func @worker(%ev: core.ptr, %bytes: core.bytes) -> core.i32 {
-    %printed = func.call %bytes {callee = @__tribute_unbound_helper} : core.nil
-    %len = func.call %bytes {callee = @__tribute_bytes_len} : core.i32
-    %id = func.call %len {callee = @user_bridge} : core.i32
-    %tag = func.call {callee = @__tribute_next_tag} : core.i32
+    %printed = func.call @__tribute_unbound_helper(%bytes) : (core.bytes) -> core.nil
+    %len = func.call @__tribute_bytes_len(%bytes) : (core.bytes) -> core.i32
+    %id = func.call @user_bridge(%len) : (core.i32) -> core.i32
+    %tag = func.call @__tribute_next_tag() : () -> core.i32
     func.return %tag
   }
 }"#;

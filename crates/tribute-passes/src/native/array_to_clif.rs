@@ -807,7 +807,7 @@ mod tests {
     %pair = adt.array_of %a, %b {type = !Nodes} : !Nodes
     %filled = adt.array_new %at, %a {type = !Nodes} : !Nodes
     %again = adt.array_new %at, %b {type = !Nodes} : !Nodes
-    %spliced = "adt.array_splice"(%pair, %at, %at, %b) {type = !Nodes} : !Nodes
+    %spliced = adt.array_splice %pair[%at, %at](%b) attributes {type = !Nodes} : !Nodes
     func.return %spliced
   }
 }"#,
@@ -829,7 +829,7 @@ mod tests {
   func.func @build(%value: core.i32, %count: core.index) -> !Ints {
     %filled = adt.array_new %count, %value {type = !Ints} : !Ints
     %zero = arith.const {value = 0} : core.index
-    %trimmed = "adt.array_splice"(%filled, %zero, %count) {type = !Ints} : !Ints
+    %trimmed = adt.array_splice %filled[%zero, %count]() attributes {type = !Ints} : !Ints
     func.return %trimmed
   }
 }"#,
