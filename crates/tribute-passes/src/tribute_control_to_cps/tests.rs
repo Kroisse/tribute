@@ -784,7 +784,7 @@ fn source_successors_fail_before_conversion_and_leave_ir_unchanged() {
 fn malformed_switch_case_fails_before_conversion_and_is_atomic() {
     let input = r#"core.module @test {
   tribute_cps.func @broken(%value: core.i32) -> core.i32 convention(cps) {
-    "scf.switch"(%value) ({
+    scf.switch %value {
       "scf.case"() ({
         %identity = tribute_cps.lambda(%nested: core.i32) -> core.i32 captures [] entries {
           direct {
@@ -793,7 +793,7 @@ fn malformed_switch_case_fails_before_conversion_and_is_atomic() {
         }
         scf.yield
       })
-    })
+    }
     tribute_control.return %value
   }
 }"#;
@@ -813,9 +813,9 @@ fn source_shape_validation_rejects_every_malformed_switch_component() {
             r#"core.module @test {
   %value = arith.const {value = 0} : core.i32
   "scf.switch"() ({
-    "scf.default"() ({
+    scf.default {
       scf.yield
-    })
+    }
   })
 }"#,
             "one discriminant, no results, and one body region",
@@ -824,9 +824,9 @@ fn source_shape_validation_rejects_every_malformed_switch_component() {
             r#"core.module @test {
   %value = arith.const {value = 0} : core.i32
   %result = "scf.switch"(%value) ({
-    "scf.default"() ({
+    scf.default {
       scf.yield
-    })
+    }
   }) : core.i32
 }"#,
             "one discriminant, no results, and one body region",
@@ -834,44 +834,44 @@ fn source_shape_validation_rejects_every_malformed_switch_component() {
         (
             r#"core.module @test {
   %value = arith.const {value = 0} : core.i32
-  "scf.switch"(%value) ({
+  scf.switch %value {
     ^first:
-      "scf.default"() ({
+      scf.default {
         scf.yield
-      })
+      }
     ^second:
-  })
+  }
 }"#,
             "body region requires exactly one block",
         ),
         (
             r#"core.module @test {
   %value = arith.const {value = 0} : core.i32
-  "scf.switch"(%value) ({
+  scf.switch %value {
     %invalid = arith.const {value = 1} : core.i32
-  })
+  }
 }"#,
             "body may contain only scf.case and scf.default",
         ),
         (
             r#"core.module @test {
   %value = arith.const {value = 0} : core.i32
-  "scf.switch"(%value) ({
+  scf.switch %value {
     "scf.case"() {value = 0}
-  })
+  }
 }"#,
             "arm requires exactly one region",
         ),
         (
             r#"core.module @test {
   %value = arith.const {value = 0} : core.i32
-  "scf.switch"(%value) ({
-    "scf.default"() ({
+  scf.switch %value {
+    scf.default {
       ^first:
         scf.yield
       ^second:
-    })
-  })
+    }
+  }
 }"#,
             "arm region requires exactly one block",
         ),
@@ -2395,15 +2395,15 @@ fn textual_scf_switch_reenters_the_shared_suffix() {
     let input = r#"core.module @test {
   tribute_cps.func @switching(%input: core.i32) -> core.i32 convention(cps) {
     %choice = arith.const {value = 0} : core.i32
-    "scf.switch"(%choice) ({
-      "scf.case"() ({
+    scf.switch %choice {
+      scf.case 0 {
         %performed = tribute_control.perform %input {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
         scf.yield
-      }) {value = 0}
-      "scf.default"() ({
+      }
+      scf.default {
         scf.yield
-      })
-    })
+      }
+    }
     tribute_control.return %input
   }
 }"#;
@@ -2582,9 +2582,9 @@ fn a_general_operation_outside_a_handle_is_rejected_in_a_direct_callable() {
 fn legalization_drops_ability_rows_and_row_metadata() {
     let with_rows = r#"core.module @test {
   !open = tribute_control.func_sig<(core.i32) -> core.i32 row(| 'a0)>
-  "ability.decl"() ({
+  ability.decl @A {
     ability.operation {kind = "fn", op_name = "get", param_types = [], result_type = core.i32}
-  }) {sym_name = "A"}
+  }
   tribute_cps.func @apply['a0 = 'a1, body 'a1](%f: !open, %x: core.i32) -> core.i32 row(| 'a0) inferred convention(cps) {
     %r = "tribute_cps.call_indirect"(%f, %x) {convention = "cps"} : core.i32
     tribute_control.return %r

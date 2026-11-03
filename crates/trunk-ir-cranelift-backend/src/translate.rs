@@ -888,10 +888,10 @@ mod tests {
   clif.func @second() -> core.nil {
     clif.return
   }
-  "clif.data"() ({
+  clif.data @table attributes {bytes = b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", align = 8} {
     clif.func_reloc {offset = 16, func = @first}
     clif.func_reloc {offset = 0, func = @second}
-  }) {sym_name = "table", bytes = b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", align = 8}
+  }
   clif.func @main() -> core.i32 {
     %table = clif.symbol_addr {sym = @table} : core.ptr
     %result = clif.iconst {value = 0} : core.i32
@@ -956,9 +956,9 @@ mod tests {
   clif.func @helper() -> core.nil {{
     clif.return
   }}
-  "clif.data"() ({{
+  clif.data @table attributes {{bytes = b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", align = 8}} {{
 {relocs}
-  }}) {{sym_name = "table", bytes = b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", align = 8}}
+  }}
 }}"#
                 ),
             );
@@ -972,9 +972,9 @@ mod tests {
         for (module_text, expected) in [
             (
                 r#"core.module @test {
-  "clif.data"() ({
+  clif.data @table attributes {bytes = b"\x00\x00\x00\x00\x00\x00\x00\x00", align = 8} {
     %zero = clif.iconst {value = 0} : core.i64
-  }) {sym_name = "table", bytes = b"\x00\x00\x00\x00\x00\x00\x00\x00", align = 8}
+  }
 }"#,
                 "relocation region holds clif.iconst",
             ),

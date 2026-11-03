@@ -11,18 +11,21 @@ mod scf {
         {}
     }
 
+    #[asm_format(discriminant attr_dict region(body))]
     #[implements(RegionBranch, Fold)]
     fn switch(discriminant: Value<_>) {
         #[region(body)]
         {}
     }
 
+    #[asm_format(value attr_dict region(body))]
     #[implements(RegionBranch)]
     fn case(value: Attr<_>) {
         #[region(body)]
         {}
     }
 
+    #[asm_format(attr_dict region(body))]
     #[implements(RegionBranch)]
     fn default() {
         #[region(body)]
@@ -815,19 +818,19 @@ mod canonicalize_tests {
     const SWITCH_FALLTHROUGH: &str = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
     %sel = arith.const {value = SELECTOR} : core.i32
-    "scf.switch"(%sel) ({
-      "scf.case"() ({
+    scf.switch %sel {
+      scf.case 0 {
         %a = arith.addi %x, %x : core.i32
         scf.yield
-      }) {value = 0}
-      "scf.case"() ({
+      }
+      scf.case 1 {
         %b = arith.muli %x, %x : core.i32
         scf.yield
-      }) {value = 1}
-      "scf.default"() ({
+      }
+      scf.default {
         scf.yield
-      })
-    })
+      }
+    }
     func.return %x
   }
 }"#;
@@ -884,14 +887,14 @@ mod canonicalize_tests {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
     %sel = arith.const {value = 0} : core.i32
-    "scf.switch"(%sel) ({
-      "scf.case"() ({
+    scf.switch %sel {
+      scf.case 0 {
         func.return %x
-      }) {value = 0}
-      "scf.default"() ({
+      }
+      scf.default {
         func.unreachable
-      })
-    })
+      }
+    }
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -918,14 +921,14 @@ mod canonicalize_tests {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
     %sel = arith.const {value = 0} : core.i32
-    "scf.switch"(%sel) ({
-      "scf.case"() ({
+    scf.switch %sel {
+      scf.case 0 {
         func.return %x
-      }) {value = 0}
-      "scf.default"() ({
+      }
+      scf.default {
         func.return %x
-      })
-    })
+      }
+    }
     func.return %x
   }
 }"#;
@@ -944,14 +947,14 @@ mod canonicalize_tests {
     fn switch_non_const_selector_is_not_folded() {
         let input = r#"core.module @test {
   func.func @f(%tag: core.i32, %x: core.i32) -> core.i32 {
-    "scf.switch"(%tag) ({
-      "scf.case"() ({
+    scf.switch %tag {
+      scf.case 0 {
         scf.yield
-      }) {value = 0}
-      "scf.default"() ({
+      }
+      scf.default {
         scf.yield
-      })
-    })
+      }
+    }
     func.return %x
   }
 }"#;
@@ -971,11 +974,11 @@ mod canonicalize_tests {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
     %sel = arith.const {value = 5} : core.i32
-    "scf.switch"(%sel) ({
-      "scf.case"() ({
+    scf.switch %sel {
+      scf.case 0 {
         scf.yield
-      }) {value = 0}
-    })
+      }
+    }
     func.return %x
   }
 }"#;

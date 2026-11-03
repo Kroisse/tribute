@@ -12,9 +12,9 @@ fn rules(input: &str) -> Vec<&'static str> {
         .collect()
 }
 
-const CTL: &str = r#"  "ability.decl"() ({
+const CTL: &str = r#"  ability.decl @Ctl {
     ability.operation {kind = "op", op_name = "ctl", param_types = [], result_type = core.i32}
-  }) {sym_name = "Ctl"}"#;
+  }"#;
 
 /// `app` has one class variable, the row of its callback; `main` selects
 /// its `Direct` instance with a pure lambda.
@@ -165,9 +165,9 @@ fn instantiations_that_select_one_class_may_pass_other_classes() {
             r#"core.module @m {{
   !l0 = tribute_control.func_sig<(core.i32) -> core.i32 row(@Ctl)>
   !la = tribute_control.func_sig<(core.i32) -> core.i32 row(@Ask, @Ctl)>
-  "ability.decl"() ({{
+  ability.decl @Ask {{
     ability.operation {{kind = "fn", op_name = "ask", param_types = [], result_type = core.i32}}
-  }}) {{sym_name = "Ask"}}
+  }}
 {CTL}
   tribute_cps.func @f[local 'a0](%x: core.i32) -> core.i32 convention(direct) {{
     %g = tribute_cps.lambda['a0](%y: core.i32) -> core.i32 row(@Ctl | 'a0) captures [] entries {{

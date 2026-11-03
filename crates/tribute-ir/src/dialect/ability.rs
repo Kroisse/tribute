@@ -13,10 +13,10 @@ mod ability {
     /// One ability instance the module names, and its operations.
     ///
     /// ```text
-    /// "ability.decl"() ({
+    /// ability.decl @State {
     ///   ability.operation {kind = "op", op_name = "get", param_types = [], result_type = ResultType}
     ///   ability.operation {kind = "op", op_name = "set", param_types = [ValueType], result_type = core.nil}
-    /// }) {sym_name = "<instance key>"}
+    /// }
     /// ```
     ///
     /// - **Role:** a symbol definition that declares one ability instance the
@@ -54,6 +54,7 @@ mod ability {
     ///   naming the instance remains. The target's evidence lowering consumes
     ///   the last reference and removes the declaration. A declaration is not
     ///   a callable definition, so global DCE does not remove it.
+    #[asm_format(symbol(sym_name) attr_dict region(operations))]
     fn decl(sym_name: Attr<String>) {
         #[region(operations)]
         {}

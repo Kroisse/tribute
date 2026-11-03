@@ -122,12 +122,12 @@ mod wasm {
         {}
     }
 
-    #[asm_format(attr_dict_bare)]
-    fn import_func(
+    #[asm_format(symbol(sym_name) "from" module name attr_dict ":" signature(r#type))]
+    fn import_func<S: FuncSig>(
         module: Attr<String>,
         name: Attr<String>,
         sym_name: Attr<String>,
-        r#type: Attr<Type>,
+        r#type: Attr<TypeOf<S>>,
     ) {
     }
 

@@ -40,8 +40,8 @@ core.module @test {
       %5 = tribute_control.call %0 {callee = @"pkg::run_with_state", row_args = [{tail = 0}]} : core.i32
       tribute_control.return %5
   }
-  "ability.decl"() ({
+  ability.decl @"ability_2_10_pkg::State_3_int" {
       ability.operation {kind = "op", op_name = "get", param_types = [], result_type = core.i32}
       ability.operation {kind = "op", op_name = "set", param_types = [core.i32], result_type = core.nil}
-  }) {sym_name = "ability_2_10_pkg::State_3_int"}
+  }
 }

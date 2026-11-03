@@ -1185,10 +1185,10 @@ mod tests {
             r#"core.module @test {
   func.func @main(%bytes: core.bytes, %newline: core.i1, %choice: core.i16) -> core.nil {
     %write = tribute_io.write %bytes, %newline : core.nil
-    "scf.switch"(%choice) ({
-      "scf.case"() ({ scf.yield }) {value = 0}
-      "scf.default"() ({ scf.yield })
-    })
+    scf.switch %choice {
+      scf.case 0 { scf.yield }
+      scf.default { scf.yield }
+    }
     func.return
   }
 }"#,

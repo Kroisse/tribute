@@ -3026,14 +3026,14 @@ mod tests {
     fn region_branch_interfaces_cover_switch_case_and_default() {
         let input = r#"core.module @test {
   func.func @main(%discriminant: core.i32) -> core.nil {
-    "scf.switch"(%discriminant) ({
-      "scf.case"() ({
+    scf.switch %discriminant {
+      scf.case 0 {
         scf.yield
-      }) {value = 0}
-      "scf.default"() ({
+      }
+      scf.default {
         scf.yield
-      })
-    })
+      }
+    }
     %unit = core.nil_value : core.nil
     func.return %unit
   }
@@ -3078,14 +3078,14 @@ mod tests {
     } else {
       scf.yield %value
     }
-    "scf.switch"(%discriminant) ({
-      "scf.case"() ({
+    scf.switch %discriminant {
+      scf.case 0 {
         scf.yield
-      }) {value = 0}
-      "scf.default"() ({
+      }
+      scf.default {
         scf.yield
-      })
-    })
+      }
+    }
     %looped = "scf.loop"(%value) ({
       ^continue_path(%continue_value: core.i32):
         scf.continue %continue_value
@@ -3325,21 +3325,21 @@ mod tests {
       } else {
         scf.yield %forwarded
       }
-      "scf.switch"(%discriminant) ({
-        "scf.case"() ({ scf.yield }) {value = 0}
-      })
-      "scf.switch"(%discriminant) ({
-        "scf.case"() ({
+      scf.switch %discriminant {
+        scf.case 0 { scf.yield }
+      }
+      scf.switch %discriminant {
+        scf.case 1 {
           ^empty_case:
-        }) {value = 1}
-      })
-      "scf.switch"(%discriminant) ({
+        }
+      }
+      scf.switch %discriminant {
         %unsupported = arith.const {value = 2} : core.i32
-      })
-      "scf.switch"(%discriminant) ({
-        "scf.default"() ({ scf.yield })
-        "scf.default"() ({ scf.yield })
-      })
+      }
+      scf.switch %discriminant {
+        scf.default { scf.yield }
+        scf.default { scf.yield }
+      }
       %looped = "scf.loop"(%forwarded) ({
         ^loop_exit(%loop_value: core.i32):
           scf.break %loop_value

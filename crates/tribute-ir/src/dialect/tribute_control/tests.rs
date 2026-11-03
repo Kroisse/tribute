@@ -302,9 +302,9 @@ const DECLARED_PERFORM: &str = r#"core.module @test {
     %value = tribute_control.perform {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
     tribute_control.return %value
   }
-  "ability.decl"() ({
+  ability.decl @State {
     ability.operation {kind = "op", op_name = "get", param_types = [], result_type = core.i32}
-  }) {sym_name = "State"}
+  }
 }"#;
 
 #[test]
@@ -358,11 +358,11 @@ fn an_operation_is_checked_against_the_declaration_of_its_instance() {
     );
 
     let twice = DECLARED_PERFORM.replacen(
-        "  \"ability.decl\"",
-        r#"  "ability.decl"() ({
+        "  ability.decl",
+        r#"  ability.decl @State {
     ability.operation {kind = "op", op_name = "get", param_types = [], result_type = core.i32}
-  }) {sym_name = "State"}
-  "ability.decl""#,
+  }
+  ability.decl"#,
         1,
     );
     let (ctx, module) = parse_fixture(&twice);
@@ -1600,24 +1600,24 @@ fn whole_ir_allows_mutually_exclusive_switch_capture_paths_without_default() {
     "tribute_control.handler"() ({
       ^clause(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
         %choice = arith.const {value = 0} : core.i32
-        "scf.switch"(%choice) ({
-          "scf.case"() ({
+        scf.switch %choice {
+          scf.case 0 {
             %left = tribute_control.lambda() -> core.i32 captures [%token, %argument] {
               %left_resumed = tribute_control.resume %token, %argument : core.i32
               tribute_control.return %left_resumed
             }
             %left_called = "tribute_control.call_indirect"(%left) : core.i32
             scf.yield
-          }) {value = 0}
-          "scf.case"() ({
+          }
+          scf.case 1 {
             %right = tribute_control.lambda() -> core.i32 captures [%token, %argument] {
               %right_resumed = tribute_control.resume %token, %argument : core.i32
               tribute_control.return %right_resumed
             }
             %right_called = "tribute_control.call_indirect"(%right) : core.i32
             scf.yield
-          }) {value = 1}
-        })
+          }
+        }
         tribute_control.yield %argument
     }) {ability = @State, kind = "op", op_name = "get", operation_result_type = core.i32}
   }) : core.i32
@@ -2296,9 +2296,9 @@ fn performed_callable_module(declared_result: &str) -> String {
     %result = "tribute_control.call_indirect"(%callee, %value) : core.i32
     tribute_control.return %result
   }}
-  "ability.decl"() ({{
+  ability.decl @Reader {{
     ability.operation {{kind = "fn", op_name = "read", param_types = [], result_type = {declared_result}}}
-  }}) {{sym_name = "Reader"}}
+  }}
 }}"#
     )
 }
@@ -2354,12 +2354,12 @@ fn handled_callable_module(op_yield: &str) -> String {
   }}) : !F
   %one = arith.const {{value = 1}} : core.i32
   %result = "tribute_control.call_indirect"(%f, %one) : core.i32
-  "ability.decl"() ({{
+  ability.decl @Gen {{
     ability.operation {{kind = "op", op_name = "next", param_types = [], result_type = core.i32}}
-  }}) {{sym_name = "Gen"}}
-  "ability.decl"() ({{
+  }}
+  ability.decl @Ask {{
     ability.operation {{kind = "fn", op_name = "ask", param_types = [], result_type = core.i32}}
-  }}) {{sym_name = "Ask"}}
+  }}
 }}"#
     )
 }
@@ -2522,9 +2522,9 @@ fn a_value_withdrawn_twice_is_not_evaluated_again() {
   }) : !F
   %one = arith.const {value = 1} : core.i32
   %result = "tribute_control.call_indirect"(%f, %one) : core.i32
-  "ability.decl"() ({
+  ability.decl @Gen {
     ability.operation {kind = "op", op_name = "next", param_types = [], result_type = core.i32}
-  }) {sym_name = "Gen"}
+  }
 }"#,
     );
     let body = module.body(&ctx).unwrap();

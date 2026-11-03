@@ -11,7 +11,7 @@ core.module @test {tribute.entry = @"pkg::main"} {
       %0 = core.nil_value : core.nil
       tribute_control.return %0
   }
-  "ability.decl"() ({
+  ability.decl @"ability_1_8_pkg::Foo" {
       ability.operation {kind = "op", op_name = "bar", param_types = [], result_type = core.i32}
-  }) {sym_name = "ability_1_8_pkg::Foo"}
+  }
 }

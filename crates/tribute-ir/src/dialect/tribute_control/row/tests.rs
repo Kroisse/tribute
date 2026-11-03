@@ -13,12 +13,12 @@ const MODULE: &str = r#"core.module @test {
   !closed = tribute_control.func_sig<(core.i32) -> core.i32 row(@A, @B)>
   !applied = tribute_control.func_sig<(!closed, core.i32) -> core.i32 row(@A, @B)>
 
-  "ability.decl"() ({
+  ability.decl @A {
     ability.operation {kind = "fn", op_name = "get", param_types = [], result_type = core.i32}
-  }) {sym_name = "A"}
-  "ability.decl"() ({
+  }
+  ability.decl @B {
     ability.operation {kind = "op", op_name = "put", param_types = [core.i32], result_type = core.i32}
-  }) {sym_name = "B"}
+  }
   tribute_control.func @apply['a0](%f: !open, %x: core.i32) -> core.i32 row(| 'a0) {
     %r = "tribute_control.call_indirect"(%f, %x) : core.i32
     tribute_control.return %r
@@ -223,9 +223,9 @@ fn row_binders_put_quantified_binders_first() {
 }
 
 const UNIONS: &str = r#"core.module @test {
-  "ability.decl"() ({
+  ability.decl @A {
     ability.operation {kind = "op", op_name = "get", param_types = [], result_type = core.i32}
-  }) {sym_name = "A"}
+  }
   tribute_control.func @join['a0 = 'a1 | 'a2, 'a1, 'a2](%x: core.i32) -> core.i32 row(| 'a0) {
     tribute_control.return %x
   }
@@ -500,8 +500,8 @@ fn row_inclusion_counts_instances_and_keeps_the_tail() {
 const LOCALS: &str = r#"core.module @test {
   !step = tribute_control.func_sig<(core.i32) -> core.i32 row(| 'a1)>
   !step0 = tribute_control.func_sig<(core.i32) -> core.i32 row(| 'a0)>
-  "ability.decl"() ({
-  }) {sym_name = "A"}
+  ability.decl @A {
+  }
   tribute_control.func @f['a0, local 'a1](%x: core.i32) -> core.i32 row(| 'a0) {
     %g = tribute_control.lambda['a1](%y: core.i32) -> core.i32 row(| 'a1) captures [] {
       tribute_control.return %y
@@ -541,8 +541,8 @@ fn a_quantifying_lambda_round_trips_and_its_uses_instantiate_it() {
 fn instantiate_substitutes_only_the_quantified_binders() {
     // The lambda's own binder becomes `@A`; the enclosing `'a0` stays.
     let input = locals("{instances = [@A]}", "!closed").replace(
-        "  \"ability.decl\"",
-        "  !closed = tribute_control.func_sig<(core.i32) -> core.i32 row(@A)>\n  \"ability.decl\"",
+        "  ability.decl",
+        "  !closed = tribute_control.func_sig<(core.i32) -> core.i32 row(@A)>\n  ability.decl",
     );
     let (ctx, module) = parse(&input);
     let result = validate(&ctx, module);

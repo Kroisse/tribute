@@ -252,7 +252,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  wasm.import_func {module = "env", name = "run", sym_name = "run", type = wasm.func_sig<(core.i32) -> core.i32>}
+  wasm.import_func @run from "env" "run" : (core.i32) -> core.i32
   "wasm.func"() {abi = "C", sym_name = "helper", type = wasm.func_sig<(core.i32) -> core.i32>}
   "wasm.func"() ({
     ^bb0(%value: core.i32):

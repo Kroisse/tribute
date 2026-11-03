@@ -793,11 +793,11 @@ mod tests {
             r#""ability.handle_dispatch"(%ev, %prompt) ({
       ^body(%inner: !evidence):
         %choice = arith.const {value = 0} : core.i32
-        "scf.switch"(%choice) ({
-          "scf.default"() ({
+        scf.switch %choice {
+          scf.default {
             func.unreachable
-          })
-        })
+          }
+        }
     }) {abilities = []}"#,
         );
         let mut ctx = IrContext::new();

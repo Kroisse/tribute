@@ -816,14 +816,14 @@ mod tests {
         let output = lower_text(
             r#"core.module @test {
   func.func @main(%choice: core.i32, %callee: func.func_sig<(core.nil) -> core.never>, %unit: core.nil) -> core.never attributes {test.marker = 2} {
-    "scf.switch"(%choice) ({
-      "scf.case"() ({
+    scf.switch %choice {
+      scf.case 0 {
         "func.tail_call_indirect"(%callee, %unit) {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
-      }) {value = 0}
-      "scf.default"() ({
+      }
+      scf.default {
         func.unreachable
-      })
-    })
+      }
+    }
   }
 }"#,
         );
@@ -840,11 +840,11 @@ mod tests {
         let output = lower_text(
             r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    "scf.switch"(%choice) ({
-      "scf.case"() ({
+    scf.switch %choice {
+      scf.case 0 {
         scf.yield
-      }) {value = 0}
-    })
+      }
+    }
     func.return
   }
 }"#,
@@ -861,17 +861,17 @@ mod tests {
         let output = lower_text(
             r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    "scf.switch"(%choice) ({
-      "scf.case"() ({
+    scf.switch %choice {
+      scf.case 1 {
         scf.yield
-      }) {value = 1}
-      "scf.case"() ({
+      }
+      scf.case 2 {
         scf.yield
-      }) {value = 2}
-      "scf.default"() ({
+      }
+      scf.default {
         scf.yield
-      })
-    })
+      }
+    }
     func.return
   }
 }"#,
@@ -890,17 +890,17 @@ mod tests {
         let output = lower_text(
             r#"core.module @test {
   func.func @main(%choice: core.i64) -> core.nil {
-    "scf.switch"(%choice) ({
-      "scf.case"() ({
+    scf.switch %choice {
+      scf.case -1 {
         scf.yield
-      }) {value = -1}
-      "scf.case"() ({
+      }
+      scf.case 4294967296 {
         scf.yield
-      }) {value = 4294967296}
-      "scf.default"() ({
+      }
+      scf.default {
         scf.yield
-      })
-    })
+      }
+    }
     func.return
   }
 }"#,
@@ -930,15 +930,15 @@ mod tests {
             r#"core.module @test {
   "wasm.func"() ({
     ^entry(%choice: core.i64):
-      "scf.switch"(%choice) ({
-        "scf.case"() ({
+      scf.switch %choice {
+        scf.case 4294967296 {
           %one = wasm.i32_const {value = 1} : core.i32
           wasm.return %one
-        }) {value = 4294967296}
-        "scf.default"() ({
+        }
+        scf.default {
           scf.yield
-        })
-      })
+        }
+      }
       %zero = wasm.i32_const {value = 0} : core.i32
       wasm.return %zero
   }) {sym_name = "choose", type = wasm.func_sig<(core.i64) -> (core.i32)>}
@@ -964,18 +964,18 @@ mod tests {
         let output = lower_text(
             r#"core.module @test {
   func.func @main(%choice: core.i32, %cond: core.i1, %callee: func.func_sig<(core.nil) -> core.never>, %unit: core.nil) -> core.never attributes {test.marker = 2} {
-    "scf.switch"(%choice) ({
-      "scf.case"() ({
+    scf.switch %choice {
+      scf.case 0 {
         %never = scf.if %cond -> (core.never) {
           func.unreachable
         } else {
           "func.tail_call_indirect"(%callee, %unit) {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
         }
-      }) {value = 0}
-      "scf.default"() ({
+      }
+      scf.default {
         "func.tail_call_indirect"(%callee, %unit) {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
-      })
-    })
+      }
+    }
   }
 }"#,
         );
@@ -1004,10 +1004,10 @@ mod tests {
                 "leaves malformed switch unchanged",
                 r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    "scf.switch"(%choice) ({
-      "scf.default"() ({ scf.yield })
-      "scf.default"() ({ scf.yield })
-    })
+    scf.switch %choice {
+      scf.default { scf.yield }
+      scf.default { scf.yield }
+    }
     func.return
   }
 }"#,
@@ -1017,7 +1017,7 @@ mod tests {
                 "leaves malformed switch arm operands and entry args unchanged",
                 r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    "scf.switch"(%choice) ({
+    scf.switch %choice {
       "scf.case"(%choice) ({
         ^case_entry(%unexpected: core.i32):
           scf.yield
@@ -1025,7 +1025,7 @@ mod tests {
       "scf.default"(%choice) ({
         scf.yield
       })
-    })
+    }
     func.return
   }
 }"#,
@@ -1035,17 +1035,17 @@ mod tests {
                 "rejects shape valid narrow integer switch without mutating",
                 r#"core.module @test {
   func.func @main(%cond: core.i1, %choice: core.i16) -> core.nil {
-    "scf.switch"(%choice) ({
-      "scf.case"() ({
+    scf.switch %choice {
+      scf.case 0 {
         scf.if %cond -> (core.nil) {
           scf.yield
         } else {
           scf.yield
         }
         scf.yield
-      }) {value = 0}
-      "scf.default"() ({ scf.yield })
-    })
+      }
+      scf.default { scf.yield }
+    }
     func.return
   }
 }"#,
@@ -1055,10 +1055,10 @@ mod tests {
                 "rejects shape valid out of range case without mutating",
                 r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    "scf.switch"(%choice) ({
-      "scf.case"() ({ scf.yield }) {value = 2147483648}
-      "scf.default"() ({ scf.yield })
-    })
+    scf.switch %choice {
+      scf.case 2147483648 { scf.yield }
+      scf.default { scf.yield }
+    }
     func.return
   }
 }"#,
@@ -1068,10 +1068,10 @@ mod tests {
                 "rejects out of range i64 case without mutating",
                 r#"core.module @test {
   func.func @main(%choice: core.i64) -> core.nil {
-    "scf.switch"(%choice) ({
-      "scf.case"() ({ scf.yield }) {value = 9223372036854775808}
-      "scf.default"() ({ scf.yield })
-    })
+    scf.switch %choice {
+      scf.case 9223372036854775808 { scf.yield }
+      scf.default { scf.yield }
+    }
     func.return
   }
 }"#,
@@ -1081,10 +1081,10 @@ mod tests {
                 "rejects non integer case attribute without mutating",
                 r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    "scf.switch"(%choice) ({
-      "scf.case"() ({ scf.yield }) {value = @not_an_integer}
-      "scf.default"() ({ scf.yield })
-    })
+    scf.switch %choice {
+      scf.case @not_an_integer { scf.yield }
+      scf.default { scf.yield }
+    }
     func.return
   }
 }"#,
@@ -1100,9 +1100,9 @@ mod tests {
         let output = lower_text(
             r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    "scf.switch"(%choice) ({
-      "scf.default"() ({ scf.yield })
-    })
+    scf.switch %choice {
+      scf.default { scf.yield }
+    }
     func.return
   }
 }"#,
@@ -1214,7 +1214,7 @@ mod tests {
                 vec![Block::NAME, Loop::NAME],
             ),
             (
-                "\"scf.switch\"(%choice) ({ \"scf.case\"() ({ func.return }) {value = 0} \"scf.default\"() ({ func.unreachable }) })",
+                "scf.switch %choice { scf.case 0 { func.return } scf.default { func.unreachable } }",
                 vec![If::NAME],
             ),
             (
@@ -1234,7 +1234,7 @@ mod tests {
                 vec![If::NAME, Block::NAME, Loop::NAME],
             ),
             (
-                "\"scf.switch\"(%choice) ({ \"scf.case\"() ({ %n = scf.if %cond -> (core.never) { func.return } else { func.unreachable } }) {value = 0} \"scf.default\"() ({ func.return }) })",
+                "scf.switch %choice { scf.case 0 { %n = scf.if %cond -> (core.never) { func.return } else { func.unreachable } } scf.default { func.return } }",
                 vec![If::NAME, If::NAME],
             ),
             (
@@ -1242,7 +1242,7 @@ mod tests {
                 vec![Block::NAME, Loop::NAME, If::NAME],
             ),
             (
-                "%n = scf.if %cond -> (core.never) { \"scf.switch\"(%choice) ({ \"scf.case\"() ({ func.return }) {value = 0} \"scf.default\"() ({ func.unreachable }) }) } else { func.return }",
+                "%n = scf.if %cond -> (core.never) { scf.switch %choice { scf.case 0 { func.return } scf.default { func.unreachable } } } else { func.return }",
                 vec![If::NAME, If::NAME],
             ),
         ];
@@ -1297,7 +1297,7 @@ mod tests {
             "%n = scf.if %cond -> (core.never) { func.return %choice } else { func.unreachable }",
             "\"scf.loop\"() ({ func.return %choice })",
             "%n = \"scf.loop\"() ({ func.return %choice }) : core.never",
-            "\"scf.switch\"(%choice) ({ \"scf.case\"() ({ func.return %choice }) {value = 0} \"scf.default\"() ({ func.unreachable }) })",
+            "scf.switch %choice { scf.case 0 { func.return %choice } scf.default { func.unreachable } }",
             "scf.if %cond { scf.if %cond { func.return %choice } else { func.unreachable } } else { func.return %choice }",
         ] {
             let mut ctx = IrContext::new();
@@ -1355,7 +1355,7 @@ mod tests {
             "%n = scf.if %cond -> (core.never) { } else { func.return }",
             "%n = scf.if %cond -> (core.never) { ^a: func.return ^b: func.return } else { func.return }",
             "%n = scf.if %cond -> (core.never) { \"func.unreachable\"(%unit) } else { func.return }",
-            "%n = scf.if %cond -> (core.never) { \"scf.switch\"(%choice) ({ \"scf.case\"() ({ func.return }) {value = 0} }) } else { func.return }",
+            "%n = scf.if %cond -> (core.never) { scf.switch %choice { scf.case 0 { func.return } } } else { func.return }",
             "%n = \"scf.loop\"() ({ func.return }) : core.never func.return %n",
             "%n = \"scf.loop\"() ({ func.return }) : core.never func.unreachable",
             "%n = \"scf.loop\"() ({ scf.continue }) : core.never",
