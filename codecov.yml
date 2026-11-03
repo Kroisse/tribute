@@ -3,10 +3,6 @@ comment:
 
 # Coverage measurements vary slightly between runs even when no source
 # changed, so allow a small project-level decrease.
-# Report binaries in the benchmark crate run by hand, not under tests.
-ignore:
-  - "crates/tribute-bench/src/bin/**"
-
 coverage:
   status:
     project:
