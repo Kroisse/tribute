@@ -703,14 +703,14 @@ mod tests {
         let output = run_pass_with_64_bit_index(
             r#"core.module @test {
   func.func @f(%n: core.i32, %w: core.i64) -> core.i64 {
-    %a = "arith.index_castsi"(%n) : core.index
-    %b = "arith.index_castui"(%n) : core.index
-    %c = "arith.index_castsi"(%w) : core.index
-    %sum = "arith.addi"(%a, %b) : core.index
-    %d = "arith.addi"(%sum, %c) : core.index
-    %narrow = "arith.index_castui"(%d) : core.i32
-    %wide = "arith.index_castsi"(%d) : core.i64
-    "func.return"(%wide)
+    %a = arith.index_castsi %n : core.index
+    %b = arith.index_castui %n : core.index
+    %c = arith.index_castsi %w : core.index
+    %sum = arith.addi %a, %b : core.index
+    %d = arith.addi %sum, %c : core.index
+    %narrow = arith.index_castui %d : core.i32
+    %wide = arith.index_castsi %d : core.i64
+    func.return %wide
   }
 }"#,
         );
@@ -727,9 +727,9 @@ mod tests {
         let result = run_pass(
             r#"core.module @test {
   func.func @test_fn() -> core.i1 {
-    %0 = "arith.const"() {value = true} : core.i1
-    %1 = "arith.const"() {value = false} : core.i1
-    "func.return"(%0)
+    %0 = arith.const {value = true} : core.i1
+    %1 = arith.const {value = false} : core.i1
+    func.return %0
   }
 }"#,
         );
@@ -739,16 +739,16 @@ mod tests {
     #[test]
     fn boolean_conversions_other_than_zero_extension_are_rejected() {
         for body in [
-            "%s = \"arith.extsi\"(%b) : core.i32",
-            "%t = \"arith.trunci\"(%n) : core.i1",
-            "%f = \"arith.uitofp\"(%b) : core.f64",
-            "%u = \"arith.extui\"(%b) : core.i8",
+            "%s = arith.extsi %b : core.i32",
+            "%t = arith.trunci %n : core.i1",
+            "%f = arith.uitofp %b : core.f64",
+            "%u = arith.extui %b : core.i8",
         ] {
             let mut ctx = IrContext::new();
             let module = parse_test_module(
                 &mut ctx,
                 &format!(
-                    "core.module @test {{\n  func.func @f(%b: core.i1, %n: core.i8) {{\n    {body}\n    \"func.return\"()\n  }}\n}}"
+                    "core.module @test {{\n  func.func @f(%b: core.i1, %n: core.i8) {{\n    {body}\n    func.return\n  }}\n}}"
                 ),
             );
             let error = super::lower(&mut ctx, module, TypeConverter::new()).unwrap_err();
@@ -766,8 +766,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f() {
-    %null = "arith.const"() {value = 0} : core.ptr
-    "func.return"()
+    %null = arith.const {value = 0} : core.ptr
+    func.return
   }
 }"#,
         );
@@ -782,8 +782,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f() {
-    %opaque = "arith.const"() {value = 0} : test.opaque
-    "func.return"()
+    %opaque = arith.const {value = 0} : test.opaque
+    func.return
   }
 }"#,
         );
@@ -796,16 +796,16 @@ mod tests {
         let result = run_pass(
             r#"core.module @test {
   func.func @convert(%b: core.i1, %w: core.i64, %n: core.i32, %x: core.f32, %y: core.f64) {
-    %s = "arith.extsi"(%n) : core.i64
-    %u = "arith.extui"(%b) : core.i32
-    %t = "arith.trunci"(%w) : core.i32
-    %sf = "arith.sitofp"(%n) : core.f64
-    %uf = "arith.uitofp"(%n) : core.f32
-    %si = "arith.fptosi"(%y) : core.i32
-    %ui = "arith.fptoui"(%x) : core.i64
-    %e = "arith.extf"(%x) : core.f64
-    %r = "arith.truncf"(%y) : core.f32
-    "func.return"()
+    %s = arith.extsi %n : core.i64
+    %u = arith.extui %b : core.i32
+    %t = arith.trunci %w : core.i32
+    %sf = arith.sitofp %n : core.f64
+    %uf = arith.uitofp %n : core.f32
+    %si = arith.fptosi %y : core.i32
+    %ui = arith.fptoui %x : core.i64
+    %e = arith.extf %x : core.f64
+    %r = arith.truncf %y : core.f32
+    func.return
   }
 }"#,
         );

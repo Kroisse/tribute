@@ -457,20 +457,20 @@ mod tests {
   !"std::Option$std::runtime::Dispatch" = adt.enum<"std::Option$std::runtime::Dispatch" { None(), Some(!Closure) }>
   !OptionRef = adt.typeref<{name = "std::Option$std::runtime::Dispatch"}>
   func.func @"std::runtime::evidence::lookup"(%ev: !Evidence, %id: core.i32) -> core.i32 {
-    "func.return"(%id)
+    func.return %id
   }
   func.func @"std::runtime::evidence::lookup_tr"(%ev: !Evidence, %id: core.i32) -> !Closure {
-    %f = "adt.ref_null"() {type = !Closure} : !Closure
-    "func.return"(%f)
+    %f = adt.ref_null {type = !Closure} : !Closure
+    func.return %f
   }
   func.func @"std::runtime::evidence::extend"(%ev: !Evidence, %id: core.i32, %prompt: core.i32, %tr: !OptionRef, %outer: !Evidence) -> !Evidence {
-    "func.return"(%ev)
+    func.return %ev
   }
   func.func @"std::runtime::evidence::mask"(%ev: !Evidence, %id: core.i32) -> !Evidence {
-    "func.return"(%ev)
+    func.return %ev
   }
   func.func @"std::runtime::evidence::dup"(%ev: !Evidence, %id: core.i32) -> !Evidence {
-    "func.return"(%ev)
+    func.return %ev
   }"#;
 
     fn module_text(body: &str) -> String {
@@ -513,23 +513,23 @@ mod tests {
     }
 
     const TAIL: &str = r#"  func.func @tail(%ev: !Evidence, %payload: tribute_rt.anyref) -> tribute_rt.anyref {
-    %result = "effect.dispatch_tail"(%ev, %payload) {ability = @Console, op_name = "read"} : tribute_rt.anyref
-    "func.return"(%result)
+    %result = effect.dispatch_tail %ev, %payload {ability = @Console, op_name = "read"} : tribute_rt.anyref
+    func.return %result
   }"#;
 
     const CPS: &str = r#"  func.func @cps(%ev: !Evidence, %dispatch: !Closure, %resume: !Closure, %payload: tribute_rt.anyref) {
-    "effect.dispatch_cps"(%ev, %dispatch, %resume, %payload) {ability = @State, op_name = "get", answer_type = core.i32}
+    effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability = @State, op_name = "get", answer_type = core.i32}
   }"#;
 
     const EXTEND: &str = r#"  func.func @install(%ev: !Evidence, %prompt: core.i32, %tr: !Closure) -> !Evidence {
-    %extended = "effect.extend"(%ev, %prompt, %tr, %ev) {ability = @State} : !Evidence
-    "func.return"(%extended)
+    %extended = effect.extend %ev, %prompt, %tr, %ev {ability = @State} : !Evidence
+    func.return %extended
   }"#;
 
     const SELECT: &str = r#"  func.func @select(%ev: !Evidence) -> !Evidence {
-    %masked = "effect.mask"(%ev) {ability = @State} : !Evidence
-    %dup = "effect.dup"(%masked) {ability = @State} : !Evidence
-    "func.return"(%dup)
+    %masked = effect.mask %ev {ability = @State} : !Evidence
+    %dup = effect.dup %masked {ability = @State} : !Evidence
+    func.return %dup
   }"#;
 
     fn runtime_callee(name: &str) -> SymbolPath {
@@ -594,7 +594,7 @@ mod tests {
             "{printed}"
         );
         assert!(
-            printed.contains(r#""adt.variant_new"(%2) {tag = "Some""#),
+            printed.contains(r#"adt.variant_new %2 {tag = "Some""#),
             "{printed}"
         );
     }
@@ -606,8 +606,8 @@ mod tests {
             &mut ctx,
             &module_text(
                 r#"  func.func @tail_slot(%ev: !Evidence) -> !Evidence {
-    %tail = "effect.tail"(%ev) {index = 0} : !Evidence
-    "func.return"(%tail)
+    %tail = effect.tail %ev {index = 0} : !Evidence
+    func.return %tail
   }"#,
             ),
         );

@@ -244,20 +244,20 @@ mod tests {
             core.module @test {
                 func.func @scalar(%0: core.i32) -> tribute_rt.anyref {
                 ^bb0:
-                    %1 = "list.empty"() {element_type = core.i32} : tribute_rt.anyref
-                    %2 = "list.prepend"(%0, %1) {element_type = core.i32} : tribute_rt.anyref
-                    %3 = "list.is_empty"(%2) {element_type = core.i32} : core.i1
-                    %4 = "list.head"(%2) {element_type = core.i32} : core.i32
-                    %5 = "list.tail"(%2) {element_type = core.i32} : tribute_rt.anyref
-                    "func.return"(%5)
+                    %1 = list.empty {element_type = core.i32} : tribute_rt.anyref
+                    %2 = list.prepend %0, %1 {element_type = core.i32} : tribute_rt.anyref
+                    %3 = list.is_empty %2 {element_type = core.i32} : core.i1
+                    %4 = list.head %2 {element_type = core.i32} : core.i32
+                    %5 = list.tail %2 {element_type = core.i32} : tribute_rt.anyref
+                    func.return %5
                 }
                 func.func @reference(%0: tribute_rt.anyref) -> tribute_rt.anyref {
                 ^bb0:
-                    %1 = "list.empty"() {element_type = tribute_rt.anyref} : tribute_rt.anyref
-                    %2 = "list.prepend"(%0, %1) {element_type = tribute_rt.anyref} : tribute_rt.anyref
-                    %3 = "list.head"(%2) {element_type = tribute_rt.anyref} : tribute_rt.anyref
-                    %4 = "list.tail"(%2) {element_type = tribute_rt.anyref} : tribute_rt.anyref
-                    "func.return"(%4)
+                    %1 = list.empty {element_type = tribute_rt.anyref} : tribute_rt.anyref
+                    %2 = list.prepend %0, %1 {element_type = tribute_rt.anyref} : tribute_rt.anyref
+                    %3 = list.head %2 {element_type = tribute_rt.anyref} : tribute_rt.anyref
+                    %4 = list.tail %2 {element_type = tribute_rt.anyref} : tribute_rt.anyref
+                    func.return %4
                 }
             }
             "#,
@@ -276,10 +276,7 @@ mod tests {
         assert_eq!(output.matches("{field = 1,").count(), 2, "{output}");
         assert_eq!(output.matches("func.unreachable").count(), 4, "{output}");
         assert_eq!(output.matches("adt.ref_null").count(), 2, "{output}");
-        assert!(
-            !output.contains("\"arith.const\"() {value = 0}"),
-            "{output}"
-        );
+        assert!(!output.contains("arith.const {value = 0}"), "{output}");
 
         let validation = trunk_ir::validation::validate_all(&ctx, module, &mut Default::default());
         assert!(validation.is_ok(), "{:?}", validation.errors);
@@ -294,27 +291,27 @@ mod tests {
             core.module @test {
                 func.func @empty_scalar_head() -> core.i32 {
                 ^bb0:
-                    %0 = "list.empty"() {element_type = core.i32} : tribute_rt.anyref
-                    %1 = "list.head"(%0) {element_type = core.i32} : core.i32
-                    "func.return"(%1)
+                    %0 = list.empty {element_type = core.i32} : tribute_rt.anyref
+                    %1 = list.head %0 {element_type = core.i32} : core.i32
+                    func.return %1
                 }
                 func.func @empty_reference_head() -> tribute_rt.anyref {
                 ^bb0:
-                    %0 = "list.empty"() {element_type = tribute_rt.anyref} : tribute_rt.anyref
-                    %1 = "list.head"(%0) {element_type = tribute_rt.anyref} : tribute_rt.anyref
-                    "func.return"(%1)
+                    %0 = list.empty {element_type = tribute_rt.anyref} : tribute_rt.anyref
+                    %1 = list.head %0 {element_type = tribute_rt.anyref} : tribute_rt.anyref
+                    func.return %1
                 }
                 func.func @empty_scalar_tail() -> tribute_rt.anyref {
                 ^bb0:
-                    %0 = "list.empty"() {element_type = core.i32} : tribute_rt.anyref
-                    %1 = "list.tail"(%0) {element_type = core.i32} : tribute_rt.anyref
-                    "func.return"(%1)
+                    %0 = list.empty {element_type = core.i32} : tribute_rt.anyref
+                    %1 = list.tail %0 {element_type = core.i32} : tribute_rt.anyref
+                    func.return %1
                 }
                 func.func @empty_reference_tail() -> tribute_rt.anyref {
                 ^bb0:
-                    %0 = "list.empty"() {element_type = tribute_rt.anyref} : tribute_rt.anyref
-                    %1 = "list.tail"(%0) {element_type = tribute_rt.anyref} : tribute_rt.anyref
-                    "func.return"(%1)
+                    %0 = list.empty {element_type = tribute_rt.anyref} : tribute_rt.anyref
+                    %1 = list.tail %0 {element_type = tribute_rt.anyref} : tribute_rt.anyref
+                    func.return %1
                 }
             }
             "#,

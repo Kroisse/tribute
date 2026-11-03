@@ -821,7 +821,7 @@ mod tests {
         "func.tail_call_indirect"(%callee, %unit) {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
       }) {value = 0}
       "scf.default"() ({
-        "func.unreachable"()
+        func.unreachable
       })
     })
   }
@@ -842,10 +842,10 @@ mod tests {
   func.func @main(%choice: core.i32) -> core.nil {
     "scf.switch"(%choice) ({
       "scf.case"() ({
-        "scf.yield"()
+        scf.yield
       }) {value = 0}
     })
-    "func.return"()
+    func.return
   }
 }"#,
         );
@@ -863,16 +863,16 @@ mod tests {
   func.func @main(%choice: core.i32) -> core.nil {
     "scf.switch"(%choice) ({
       "scf.case"() ({
-        "scf.yield"()
+        scf.yield
       }) {value = 1}
       "scf.case"() ({
-        "scf.yield"()
+        scf.yield
       }) {value = 2}
       "scf.default"() ({
-        "scf.yield"()
+        scf.yield
       })
     })
-    "func.return"()
+    func.return
   }
 }"#,
         );
@@ -880,8 +880,7 @@ mod tests {
         assert_no_scf_switch_wrappers(&output);
         assert_eq!(output.matches("wasm.i32_eq").count(), 2, "{output}");
         assert!(
-            output.find("\"wasm.i32_const\"() {value = 1}")
-                < output.find("\"wasm.i32_const\"() {value = 2}"),
+            output.find("wasm.i32_const {value = 1}") < output.find("wasm.i32_const {value = 2}"),
             "case dispatch order changed: {output}"
         );
     }
@@ -893,16 +892,16 @@ mod tests {
   func.func @main(%choice: core.i64) -> core.nil {
     "scf.switch"(%choice) ({
       "scf.case"() ({
-        "scf.yield"()
+        scf.yield
       }) {value = -1}
       "scf.case"() ({
-        "scf.yield"()
+        scf.yield
       }) {value = 4294967296}
       "scf.default"() ({
-        "scf.yield"()
+        scf.yield
       })
     })
-    "func.return"()
+    func.return
   }
 }"#,
         );
@@ -911,8 +910,8 @@ mod tests {
         assert!(!output.contains("wasm.i32_eq"), "{output}");
         assert_eq!(output.matches("wasm.i64_eq").count(), 2, "{output}");
         assert!(
-            output.find("\"wasm.i64_const\"() {value = -1}")
-                < output.find("\"wasm.i64_const\"() {value = 4294967296}"),
+            output.find("wasm.i64_const {value = -1}")
+                < output.find("wasm.i64_const {value = 4294967296}"),
             "case dispatch order changed: {output}"
         );
         for line in output.lines().filter(|line| line.contains("wasm.i64_eq")) {
@@ -933,15 +932,15 @@ mod tests {
     ^entry(%choice: core.i64):
       "scf.switch"(%choice) ({
         "scf.case"() ({
-          %one = "wasm.i32_const"() {value = 1} : core.i32
-          "wasm.return"(%one)
+          %one = wasm.i32_const {value = 1} : core.i32
+          wasm.return %one
         }) {value = 4294967296}
         "scf.default"() ({
-          "scf.yield"()
+          scf.yield
         })
       })
-      %zero = "wasm.i32_const"() {value = 0} : core.i32
-      "wasm.return"(%zero)
+      %zero = wasm.i32_const {value = 0} : core.i32
+      wasm.return %zero
   }) {sym_name = "choose", type = wasm.func_sig<(core.i64) -> (core.i32)>}
 }"#,
         );
@@ -968,7 +967,7 @@ mod tests {
     "scf.switch"(%choice) ({
       "scf.case"() ({
         %never = "scf.if"(%cond) ({
-          "func.unreachable"()
+          func.unreachable
         }, {
           "func.tail_call_indirect"(%callee, %unit) {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
         }) : core.never
@@ -1006,10 +1005,10 @@ mod tests {
                 r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
     "scf.switch"(%choice) ({
-      "scf.default"() ({ "scf.yield"() })
-      "scf.default"() ({ "scf.yield"() })
+      "scf.default"() ({ scf.yield })
+      "scf.default"() ({ scf.yield })
     })
-    "func.return"()
+    func.return
   }
 }"#,
                 "malformed resultless switch shape",
@@ -1021,13 +1020,13 @@ mod tests {
     "scf.switch"(%choice) ({
       "scf.case"(%choice) ({
         ^case_entry(%unexpected: core.i32):
-          "scf.yield"()
+          scf.yield
       }) {value = 0}
       "scf.default"(%choice) ({
-        "scf.yield"()
+        scf.yield
       })
     })
-    "func.return"()
+    func.return
   }
 }"#,
                 "malformed resultless switch shape",
@@ -1039,15 +1038,15 @@ mod tests {
     "scf.switch"(%choice) ({
       "scf.case"() ({
         "scf.if"(%cond) ({
-          "scf.yield"()
+          scf.yield
         }, {
-          "scf.yield"()
+          scf.yield
         }) : core.nil
-        "scf.yield"()
+        scf.yield
       }) {value = 0}
-      "scf.default"() ({ "scf.yield"() })
+      "scf.default"() ({ scf.yield })
     })
-    "func.return"()
+    func.return
   }
 }"#,
                 "unsupported discriminant type `core.i16`; expected `core.i32` or `core.i64`",
@@ -1057,10 +1056,10 @@ mod tests {
                 r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
     "scf.switch"(%choice) ({
-      "scf.case"() ({ "scf.yield"() }) {value = 2147483648}
-      "scf.default"() ({ "scf.yield"() })
+      "scf.case"() ({ scf.yield }) {value = 2147483648}
+      "scf.default"() ({ scf.yield })
     })
-    "func.return"()
+    func.return
   }
 }"#,
                 "case integer value is outside the i32 range",
@@ -1070,10 +1069,10 @@ mod tests {
                 r#"core.module @test {
   func.func @main(%choice: core.i64) -> core.nil {
     "scf.switch"(%choice) ({
-      "scf.case"() ({ "scf.yield"() }) {value = 9223372036854775808}
-      "scf.default"() ({ "scf.yield"() })
+      "scf.case"() ({ scf.yield }) {value = 9223372036854775808}
+      "scf.default"() ({ scf.yield })
     })
-    "func.return"()
+    func.return
   }
 }"#,
                 "case integer value is outside the i64 range",
@@ -1083,10 +1082,10 @@ mod tests {
                 r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
     "scf.switch"(%choice) ({
-      "scf.case"() ({ "scf.yield"() }) {value = @not_an_integer}
-      "scf.default"() ({ "scf.yield"() })
+      "scf.case"() ({ scf.yield }) {value = @not_an_integer}
+      "scf.default"() ({ scf.yield })
     })
-    "func.return"()
+    func.return
   }
 }"#,
                 "case attribute `value` must be an integer",
@@ -1102,9 +1101,9 @@ mod tests {
             r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
     "scf.switch"(%choice) ({
-      "scf.default"() ({ "scf.yield"() })
+      "scf.default"() ({ scf.yield })
     })
-    "func.return"()
+    func.return
   }
 }"#,
         );
@@ -1122,11 +1121,11 @@ mod tests {
             r#"core.module @test {
   func.func @select(%cond: core.i1, %value: wasm_gc.array<core.i32>) -> wasm_gc.array<core.i32> {
     %result = "scf.if"(%cond) ({
-      "scf.yield"(%value)
+      scf.yield %value
     }, {
-      "scf.yield"(%value)
+      scf.yield %value
     }) : wasm_gc.array<core.i32>
-    "func.return"(%result)
+    func.return %result
   }
 }"#,
         );
@@ -1154,9 +1153,9 @@ mod tests {
   func.func @carry(%init: wasm_gc.array<core.i32>) -> core.nil {
     "scf.loop"(%init) ({
       ^header(%iter: wasm_gc.array<core.i32>):
-        "scf.continue"(%iter)
+        scf.continue %iter
     }) : core.nil
-    "func.return"()
+    func.return
   }
 }"#,
         );
@@ -1191,59 +1190,59 @@ mod tests {
         let controls_named = [If::NAME, Block::NAME, Loop::NAME];
         let cases = [
             (
-                "\"scf.if\"(%cond) ({ \"func.return\"() }, { \"func.unreachable\"() })",
+                "\"scf.if\"(%cond) ({ func.return }, { func.unreachable })",
                 vec![If::NAME],
             ),
             (
-                "\"scf.loop\"() ({ \"func.return\"() })",
+                "\"scf.loop\"() ({ func.return })",
                 vec![Block::NAME, Loop::NAME],
             ),
             (
-                "%n = \"scf.if\"(%cond) ({ \"func.tail_call\"(%cond, %choice, %unit) {callee = @main} }, { \"func.unreachable\"() }) : core.never",
+                "%n = \"scf.if\"(%cond) ({ func.tail_call %cond, %choice, %unit {callee = @main} }, { func.unreachable }) : core.never",
                 vec![If::NAME],
             ),
             (
-                "%n = \"scf.if\"(%cond) ({ \"func.return\"() }, { \"func.unreachable\"() }) : core.never",
+                "%n = \"scf.if\"(%cond) ({ func.return }, { func.unreachable }) : core.never",
                 vec![If::NAME],
             ),
             (
-                "%n = \"scf.loop\"() ({ \"func.return\"() }) : core.never",
+                "%n = \"scf.loop\"() ({ func.return }) : core.never",
                 vec![Block::NAME, Loop::NAME],
             ),
             (
-                "%n = \"scf.loop\"(%choice) ({ ^body(%carried: core.i32): \"func.return\"() }) : core.never",
+                "%n = \"scf.loop\"(%choice) ({ ^body(%carried: core.i32): func.return }) : core.never",
                 vec![Block::NAME, Loop::NAME],
             ),
             (
-                "\"scf.switch\"(%choice) ({ \"scf.case\"() ({ \"func.return\"() }) {value = 0} \"scf.default\"() ({ \"func.unreachable\"() }) })",
+                "\"scf.switch\"(%choice) ({ \"scf.case\"() ({ func.return }) {value = 0} \"scf.default\"() ({ func.unreachable }) })",
                 vec![If::NAME],
             ),
             (
-                "%outer = \"scf.if\"(%cond) ({ %inner = \"scf.if\"(%cond) ({ \"func.return\"() }, { \"func.unreachable\"() }) : core.never }, { \"func.return\"() }) : core.never",
+                "%outer = \"scf.if\"(%cond) ({ %inner = \"scf.if\"(%cond) ({ func.return }, { func.unreachable }) : core.never }, { func.return }) : core.never",
                 vec![If::NAME, If::NAME],
             ),
             (
-                "%outer = \"scf.if\"(%cond) ({ \"scf.if\"(%cond) ({ \"func.return\"() }, { \"func.unreachable\"() }) }, { \"func.return\"() }) : core.never",
+                "%outer = \"scf.if\"(%cond) ({ \"scf.if\"(%cond) ({ func.return }, { func.unreachable }) }, { func.return }) : core.never",
                 vec![If::NAME, If::NAME],
             ),
             (
-                "%outer = \"scf.if\"(%cond) ({ \"scf.loop\"() ({ \"func.return\"() }) }, { \"func.return\"() }) : core.never",
+                "%outer = \"scf.if\"(%cond) ({ \"scf.loop\"() ({ func.return }) }, { func.return }) : core.never",
                 vec![If::NAME, Block::NAME, Loop::NAME],
             ),
             (
-                "%outer = \"scf.if\"(%cond) ({ %inner = \"scf.loop\"() ({ \"func.return\"() }) : core.never }, { \"func.return\"() }) : core.never",
+                "%outer = \"scf.if\"(%cond) ({ %inner = \"scf.loop\"() ({ func.return }) : core.never }, { func.return }) : core.never",
                 vec![If::NAME, Block::NAME, Loop::NAME],
             ),
             (
-                "\"scf.switch\"(%choice) ({ \"scf.case\"() ({ %n = \"scf.if\"(%cond) ({ \"func.return\"() }, { \"func.unreachable\"() }) : core.never }) {value = 0} \"scf.default\"() ({ \"func.return\"() }) })",
+                "\"scf.switch\"(%choice) ({ \"scf.case\"() ({ %n = \"scf.if\"(%cond) ({ func.return }, { func.unreachable }) : core.never }) {value = 0} \"scf.default\"() ({ func.return }) })",
                 vec![If::NAME, If::NAME],
             ),
             (
-                "%n = \"scf.loop\"() ({ %inner = \"scf.if\"(%cond) ({ \"func.return\"() }, { \"func.unreachable\"() }) : core.never }) : core.never",
+                "%n = \"scf.loop\"() ({ %inner = \"scf.if\"(%cond) ({ func.return }, { func.unreachable }) : core.never }) : core.never",
                 vec![Block::NAME, Loop::NAME, If::NAME],
             ),
             (
-                "%n = \"scf.if\"(%cond) ({ \"scf.switch\"(%choice) ({ \"scf.case\"() ({ \"func.return\"() }) {value = 0} \"scf.default\"() ({ \"func.unreachable\"() }) }) }, { \"func.return\"() }) : core.never",
+                "%n = \"scf.if\"(%cond) ({ \"scf.switch\"(%choice) ({ \"scf.case\"() ({ func.return }) {value = 0} \"scf.default\"() ({ func.unreachable }) }) }, { func.return }) : core.never",
                 vec![If::NAME, If::NAME],
             ),
         ];
@@ -1294,12 +1293,12 @@ mod tests {
     #[test]
     fn terminal_controls_preserve_unreachability_in_value_returning_functions() {
         for body in [
-            "\"scf.if\"(%cond) ({ \"func.return\"(%choice) }, { \"func.unreachable\"() })",
-            "%n = \"scf.if\"(%cond) ({ \"func.return\"(%choice) }, { \"func.unreachable\"() }) : core.never",
-            "\"scf.loop\"() ({ \"func.return\"(%choice) })",
-            "%n = \"scf.loop\"() ({ \"func.return\"(%choice) }) : core.never",
-            "\"scf.switch\"(%choice) ({ \"scf.case\"() ({ \"func.return\"(%choice) }) {value = 0} \"scf.default\"() ({ \"func.unreachable\"() }) })",
-            "\"scf.if\"(%cond) ({ \"scf.if\"(%cond) ({ \"func.return\"(%choice) }, { \"func.unreachable\"() }) }, { \"func.return\"(%choice) })",
+            "\"scf.if\"(%cond) ({ func.return %choice }, { func.unreachable })",
+            "%n = \"scf.if\"(%cond) ({ func.return %choice }, { func.unreachable }) : core.never",
+            "\"scf.loop\"() ({ func.return %choice })",
+            "%n = \"scf.loop\"() ({ func.return %choice }) : core.never",
+            "\"scf.switch\"(%choice) ({ \"scf.case\"() ({ func.return %choice }) {value = 0} \"scf.default\"() ({ func.unreachable }) })",
+            "\"scf.if\"(%cond) ({ \"scf.if\"(%cond) ({ func.return %choice }, { func.unreachable }) }, { func.return %choice })",
         ] {
             let mut ctx = IrContext::new();
             let module = parse_test_module(
@@ -1329,7 +1328,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
             func.func @main(%cond: core.i1, %unit: core.nil) -> core.i32 {
-                "scf.if"(%cond) ({ "scf.yield"(%unit) }, { "scf.yield"(%unit) })
+                "scf.if"(%cond) ({ scf.yield %unit }, { scf.yield %unit })
             }
         }"#,
         );
@@ -1348,27 +1347,27 @@ mod tests {
     #[test]
     fn invalid_never_controls_reject_before_any_mutation() {
         for body in [
-            "%n = \"scf.if\"(%cond) ({ \"func.return\"() }, { \"func.return\"() }) : core.never \"func.return\"(%n)",
-            "%n = \"scf.if\"(%cond) ({ \"func.return\"() }, { \"func.return\"() }) : core.never \"func.unreachable\"()",
-            "%n = \"scf.if\"(%cond) ({ \"scf.yield\"() }, { \"func.return\"() }) : core.never",
-            "%n, %v = \"scf.if\"(%cond) ({ \"func.return\"() }, { \"func.return\"() }) : core.never, core.i32",
-            "%n, %v = \"scf.loop\"() ({ \"func.return\"() }) : core.never, core.i32",
-            "%n = \"scf.if\"(%cond) ({ }, { \"func.return\"() }) : core.never",
-            "%n = \"scf.if\"(%cond) ({ ^a: \"func.return\"() ^b: \"func.return\"() }, { \"func.return\"() }) : core.never",
-            "%n = \"scf.if\"(%cond) ({ \"func.unreachable\"(%unit) }, { \"func.return\"() }) : core.never",
-            "%n = \"scf.if\"(%cond) ({ \"scf.switch\"(%choice) ({ \"scf.case\"() ({ \"func.return\"() }) {value = 0} }) }, { \"func.return\"() }) : core.never",
-            "%n = \"scf.loop\"() ({ \"func.return\"() }) : core.never \"func.return\"(%n)",
-            "%n = \"scf.loop\"() ({ \"func.return\"() }) : core.never \"func.unreachable\"()",
-            "%n = \"scf.loop\"() ({ \"scf.continue\"() }) : core.never",
-            "%n = \"scf.loop\"() ({ \"scf.break\"(%unit) }) : core.never",
+            "%n = \"scf.if\"(%cond) ({ func.return }, { func.return }) : core.never func.return %n",
+            "%n = \"scf.if\"(%cond) ({ func.return }, { func.return }) : core.never func.unreachable",
+            "%n = \"scf.if\"(%cond) ({ scf.yield }, { func.return }) : core.never",
+            "%n, %v = \"scf.if\"(%cond) ({ func.return }, { func.return }) : core.never, core.i32",
+            "%n, %v = \"scf.loop\"() ({ func.return }) : core.never, core.i32",
+            "%n = \"scf.if\"(%cond) ({ }, { func.return }) : core.never",
+            "%n = \"scf.if\"(%cond) ({ ^a: func.return ^b: func.return }, { func.return }) : core.never",
+            "%n = \"scf.if\"(%cond) ({ \"func.unreachable\"(%unit) }, { func.return }) : core.never",
+            "%n = \"scf.if\"(%cond) ({ \"scf.switch\"(%choice) ({ \"scf.case\"() ({ func.return }) {value = 0} }) }, { func.return }) : core.never",
+            "%n = \"scf.loop\"() ({ func.return }) : core.never func.return %n",
+            "%n = \"scf.loop\"() ({ func.return }) : core.never func.unreachable",
+            "%n = \"scf.loop\"() ({ scf.continue }) : core.never",
+            "%n = \"scf.loop\"() ({ scf.break %unit }) : core.never",
             "%n = \"scf.loop\"() ({ }) : core.never",
-            "%n = \"scf.if\"(%cond) ({ \"scf.if\"(%cond) ({ \"func.return\"() }, { \"scf.yield\"() }) }, { \"func.return\"() }) : core.never",
-            "%n = \"scf.if\"(%cond) ({ \"scf.loop\"() ({ \"scf.break\"() }) }, { \"func.return\"() }) : core.never",
-            "%n = \"scf.if\"(%cond) ({ \"scf.loop\"() ({ \"scf.continue\"() }) }, { \"func.return\"() }) : core.never",
-            "%n = \"scf.loop\"() ({ ^a: \"func.return\"() ^b: \"func.return\"() }) : core.never",
+            "%n = \"scf.if\"(%cond) ({ \"scf.if\"(%cond) ({ func.return }, { scf.yield }) }, { func.return }) : core.never",
+            "%n = \"scf.if\"(%cond) ({ \"scf.loop\"() ({ \"scf.break\"() }) }, { func.return }) : core.never",
+            "%n = \"scf.if\"(%cond) ({ \"scf.loop\"() ({ scf.continue }) }, { func.return }) : core.never",
+            "%n = \"scf.loop\"() ({ ^a: func.return ^b: func.return }) : core.never",
         ] {
             let input = control_fixture(&format!(
-                "\"scf.if\"(%cond) ({{ \"scf.yield\"(%unit) }}, {{ \"scf.yield\"(%unit) }}) : core.nil {body}"
+                "\"scf.if\"(%cond) ({{ scf.yield %unit }}, {{ scf.yield %unit }}) : core.nil {body}"
             ));
             let mut ctx = IrContext::new();
             let module = parse_test_module(&mut ctx, &input);
@@ -1393,15 +1392,15 @@ mod tests {
     fn multiple_value_results_are_rejected_without_truncation() {
         for control in ["\"scf.if\"(%cond)", "\"scf.loop\"()"] {
             let body = if control.starts_with("\"scf.if") {
-                "({ \"scf.yield\"(%choice, %unit) }, { \"scf.yield\"(%choice, %unit) })"
+                "({ scf.yield %choice, %unit }, { scf.yield %choice, %unit })"
             } else {
-                "({ \"scf.continue\"() })"
+                "({ scf.continue })"
             };
             let mut ctx = IrContext::new();
             let module = parse_test_module(
                 &mut ctx,
                 &control_fixture(&format!(
-                    "%a, %b = {control} {body} : core.i32, core.nil \"func.return\"()"
+                    "%a, %b = {control} {body} : core.i32, core.nil func.return"
                 )),
             );
             let function = module.ops(&ctx)[0];
@@ -1426,11 +1425,9 @@ mod tests {
         for (ty, value) in [("core.nil", "%unit"), ("core.i32", "%choice")] {
             for body in [
                 format!(
-                    "%v = \"scf.if\"(%cond) ({{ \"scf.yield\"({value}) }}, {{ \"scf.yield\"({value}) }}) : {ty} \"func.return\"(%v)"
+                    "%v = \"scf.if\"(%cond) ({{ scf.yield {value} }}, {{ scf.yield {value} }}) : {ty} func.return %v"
                 ),
-                format!(
-                    "%v = \"scf.loop\"() ({{ \"scf.break\"({value}) }}) : {ty} \"func.return\"(%v)"
-                ),
+                format!("%v = \"scf.loop\"() ({{ scf.break {value} }}) : {ty} func.return %v"),
             ] {
                 let mut ctx = IrContext::new();
                 let input = control_fixture(&body).replace("-> core.nil", &format!("-> {ty}"));

@@ -694,24 +694,23 @@ mod tests {
                     let b = a + 1;
                     let operation = match projection {
                         "get" => format!(
-                            "%v = \"wasm.struct_get\"(%arg) {{type_idx = {a}, field_idx = 0}} : core.i32"
+                            "%v = wasm.struct_get %arg {{type_idx = {a}, field_idx = 0}} : core.i32"
                         ),
                         "null" => {
-                            format!("%v = \"wasm.ref_null\"() {{type_idx = {a}}} : {reference}")
+                            format!("%v = wasm.ref_null {{type_idx = {a}}} : {reference}")
                         }
                         "cast" => format!(
-                            "%v = \"wasm.ref_cast\"(%arg) {{target_type = {reference}, type_idx = {a}}} : {reference}"
+                            "%v = wasm.ref_cast %arg {{target_type = {reference}, type_idx = {a}}} : {reference}"
                         ),
                         "new" => format!(
-                            "%x = \"wasm.i32_const\"() {{value = 0}} : core.i32\n%v = \"wasm.struct_new\"(%x) {{type_idx = {a}}} : {reference}"
+                            "%x = wasm.i32_const {{value = 0}} : core.i32\n%v = wasm.struct_new %x {{type_idx = {a}}} : {reference}"
                         ),
                         _ => unreachable!(),
                     };
                     let observer = format!(
-                        "wasm.func @observe(%arg: {reference}) {{ {operation}\n\"wasm.return\"() }}"
+                        "wasm.func @observe(%arg: {reference}) {{ {operation}\nwasm.return }}"
                     );
-                    let accept =
-                        format!("wasm.func @accept(%arg: {reference}) {{ \"wasm.return\"() }}");
+                    let accept = format!("wasm.func @accept(%arg: {reference}) {{ wasm.return }}");
                     let functions = if observer_first {
                         format!("{observer}\n{accept}")
                     } else {
@@ -725,16 +724,16 @@ mod tests {
                         !A = wasm_gc.struct<core.i32>
                         !B = wasm_gc.struct<core.i64>
                         wasm.func @make_a() {{
-                            %x = "wasm.i32_const"() {{value = 0}} : core.i32
-                            %a = "wasm.struct_new"(%x) {{type_idx = {a}}} : !A
-                            "wasm.return"()
+                            %x = wasm.i32_const {{value = 0}} : core.i32
+                            %a = wasm.struct_new %x {{type_idx = {a}}} : !A
+                            wasm.return
                         }}
                         {functions}
                         wasm.func @main() {{
-                            %x = "wasm.i64_const"() {{value = 42}} : core.i64
-                            %b = "wasm.struct_new"(%x) {{type_idx = {b}}} : !B
-                            "wasm.call"(%b) {{callee = @accept}}
-                            "wasm.return"()
+                            %x = wasm.i64_const {{value = 42}} : core.i64
+                            %b = wasm.struct_new %x {{type_idx = {b}}} : !B
+                            wasm.call %b {{callee = @accept}}
+                            wasm.return
                         }}
                     }}"#
                         ),
@@ -766,13 +765,13 @@ mod tests {
                 r#"core.module @test {{
                     !A = wasm_gc.struct<core.i32>
                     wasm.func @fill() {{
-                        %x = "wasm.i32_const"() {{value = 0}} : core.i32
-                        %a = "wasm.struct_new"(%x) {{type_idx = {first}}} : !A
-                        %n = "wasm.i32_const"() {{value = 2}} : core.i32
-                        %array = "wasm.array_new"(%n, %a) {{type_idx = {array}}} : wasm_gc.array<wasm.structref>
-                        %i = "wasm.i32_const"() {{value = 1}} : core.i32
-                        "wasm.array_set"(%array, %i, %a) {{type_idx = {array}}}
-                        "wasm.return"()
+                        %x = wasm.i32_const {{value = 0}} : core.i32
+                        %a = wasm.struct_new %x {{type_idx = {first}}} : !A
+                        %n = wasm.i32_const {{value = 2}} : core.i32
+                        %array = wasm.array_new %n, %a {{type_idx = {array}}} : wasm_gc.array<wasm.structref>
+                        %i = wasm.i32_const {{value = 1}} : core.i32
+                        wasm.array_set %array, %i, %a {{type_idx = {array}}}
+                        wasm.return
                     }}
                 }}"#
             ),
@@ -810,12 +809,12 @@ mod tests {
             &format!(
                 r#"core.module @test {{
                     wasm.func @fill() {{
-                        %n = "wasm.i32_const"() {{value = 2}} : core.i32
-                        %x = "wasm.i64_const"() {{value = 7}} : core.i64
-                        %array = "wasm.array_new"(%n, %x) {{type_idx = {array}}} : wasm.arrayref
-                        %i = "wasm.i32_const"() {{value = 1}} : core.i32
-                        "wasm.array_set"(%array, %i, %x) {{type_idx = {array}}}
-                        "wasm.return"()
+                        %n = wasm.i32_const {{value = 2}} : core.i32
+                        %x = wasm.i64_const {{value = 7}} : core.i64
+                        %array = wasm.array_new %n, %x {{type_idx = {array}}} : wasm.arrayref
+                        %i = wasm.i32_const {{value = 1}} : core.i32
+                        wasm.array_set %array, %i, %x {{type_idx = {array}}}
+                        wasm.return
                     }}
                 }}"#
             ),
@@ -839,8 +838,8 @@ mod tests {
             &format!(
                 r#"core.module @test {{
                     wasm.func @empty() {{
-                        %array = "wasm.array_new_fixed"() {{type_idx = {FIRST_USER_TYPE_IDX}}} : wasm_gc.array<core.i64>
-                        "wasm.return"()
+                        %array = wasm.array_new_fixed {{type_idx = {FIRST_USER_TYPE_IDX}}} : wasm_gc.array<core.i64>
+                        wasm.return
                     }}
                 }}"#
             ),
@@ -860,16 +859,16 @@ mod tests {
                     let index = FIRST_USER_TYPE_IDX;
                     let projection = format!(
                         "wasm.func @observe(%cell: !Cell) {{
-%value = \"wasm.struct_get\"(%cell) {{type_idx = {index}, field_idx = 0}} : {projected}
-\"wasm.struct_set\"(%cell, %value) {{type_idx = {index}, field_idx = 0}}
-\"wasm.return\"()
+%value = wasm.struct_get %cell {{type_idx = {index}, field_idx = 0}} : {projected}
+wasm.struct_set %cell, %value {{type_idx = {index}, field_idx = 0}}
+wasm.return
 }}"
                     );
                     let constructor = format!(
                         "wasm.func @make() {{
-%zero = \"wasm.i32_const\"() {{value = 0}} : {stored}
-%cell = \"wasm.struct_new\"(%zero) {{type_idx = {index}}} : !Cell
-\"wasm.return\"()
+%zero = wasm.i32_const {{value = 0}} : {stored}
+%cell = wasm.struct_new %zero {{type_idx = {index}}} : !Cell
+wasm.return
 }}"
                     );
                     let functions = if projection_first {
@@ -1004,8 +1003,8 @@ mod tests {
   !Inner = wasm_gc.struct<core.i32, core.f64>
   !Outer = wasm_gc.struct<core.i32, !Inner, wasm.structref>
   wasm.func @main() -> core.nil {
-    %outer = "wasm_gc.ref_null"() {target_type = !Outer} : !Outer
-    "wasm.return"()
+    %outer = wasm_gc.ref_null {target_type = !Outer} : !Outer
+    wasm.return
   }
 }"#,
         );
@@ -1048,9 +1047,9 @@ mod tests {
             r#"core.module @test {
   !S = wasm_gc.struct<core.i32, core.f64>
   wasm.func @main() -> core.nil {
-    %s = "wasm_gc.ref_null"() {target_type = !S} : !S
-    %field = "wasm_gc.struct_get"(%s) {type = !S, field_idx = 1} : core.i32
-    "wasm.return"()
+    %s = wasm_gc.ref_null {target_type = !S} : !S
+    %field = wasm_gc.struct_get %s {type = !S, field_idx = 1} : core.i32
+    wasm.return
   }
 }"#,
         );

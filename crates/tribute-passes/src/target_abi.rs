@@ -1994,10 +1994,10 @@ mod tests {
             !Dispatch = closure.closure<func.func_sig<(!Evidence, !Resume, core.i32, core.i32, core.i32, tribute_rt.anyref) -> core.never>>
             !{frame_name} = adt.struct<{frame_name}(done: !Done, dispatch: !Dispatch), {{tribute.cps_continuation_frame_result = !Answer}}>
             func.func @run(%ev: !Evidence, %dispatch: !Dispatch, %resume: !Resume, %payload: tribute_rt.anyref) -> core.never attributes {{tribute.calling_convention = "cps"}} {{
-                "effect.dispatch_cps"(%ev, %dispatch, %resume, %payload) {{ability = @State, op_name = "get", answer_type = !Answer}}
+                effect.dispatch_cps %ev, %dispatch, %resume, %payload {{ability = @State, op_name = "get", answer_type = !Answer}}
             }}
             func.func @"std::runtime::evidence::lookup"(%ev: !Evidence, %id: core.i32) -> core.i32 {{
-                "func.return"(%id)
+                func.return %id
             }}
         }}"#
             ),
@@ -2140,23 +2140,23 @@ mod tests {
             !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
             !direct_closure = closure.closure<func.func_sig<() -> ()>>
             !evidence_closure = closure.closure<func.func_sig<(!Evidence) -> ()>>
-            func.func @direct() attributes {tribute.calling_convention = "direct"} { "func.return"() }
-            func.func @evidence(%ev: !Evidence) attributes {tribute.calling_convention = "evidence_direct"} { "func.return"() }
+            func.func @direct() attributes {tribute.calling_convention = "direct"} { func.return }
+            func.func @evidence(%ev: !Evidence) attributes {tribute.calling_convention = "evidence_direct"} { func.return }
             func.func @unit() -> core.nil attributes {tribute.calling_convention = "direct"} {
-                %nil = "core.nil_value"() : core.nil
-                "func.return"(%nil)
+                %nil = core.nil_value : core.nil
+                func.return %nil
             }
             func.func @caller(%ev: !Evidence) attributes {tribute.calling_convention = "evidence_direct"} {
-                "func.call"() {callee = @direct, tribute.calling_convention = "direct"}
-                "func.call"(%ev) {callee = @evidence, tribute.calling_convention = "evidence_direct"}
-                %direct = "func.constant"() {func_ref = @direct} : func.func_sig<() -> ()>
-                %evidence = "func.constant"() {func_ref = @evidence} : func.func_sig<(!Evidence) -> ()>
+                func.call {callee = @direct, tribute.calling_convention = "direct"}
+                func.call %ev {callee = @evidence, tribute.calling_convention = "evidence_direct"}
+                %direct = func.constant {func_ref = @direct} : func.func_sig<() -> ()>
+                %evidence = func.constant {func_ref = @evidence} : func.func_sig<(!Evidence) -> ()>
                 "func.call_indirect"(%direct) {signature = func.func_sig<() -> ()>, tribute.calling_convention = "direct"}
                 "func.call_indirect"(%evidence, %ev) {signature = func.func_sig<(!Evidence) -> ()>, tribute.calling_convention = "evidence_direct"}
-                %nil = "func.call"() {callee = @unit, tribute.calling_convention = "direct"} : core.nil
-                "func.return"()
+                %nil = func.call {callee = @unit, tribute.calling_convention = "direct"} : core.nil
+                func.return
             }
-            func.func @cps() -> core.never attributes {tribute.calling_convention = "cps"} { "func.unreachable"() }
+            func.func @cps() -> core.never attributes {tribute.calling_convention = "cps"} { func.unreachable }
         }"#,
         );
         assert_eq!(ctx.type_alias_by_text("Evidence"), Some(evidence));
@@ -2222,9 +2222,9 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !cps = closure.closure<func.func_sig<(core.i32, core.i32, core.i32, core.i32) -> core.never>>
-  func.func @direct() -> core.never attributes {tribute.calling_convention = "direct"} { "func.unreachable"() }
-  func.func @evidence() -> core.never attributes {tribute.calling_convention = "evidence_direct"} { "func.unreachable"() }
-  func.func @cps() -> core.never attributes {tribute.calling_convention = "cps"} { "func.unreachable"() }
+  func.func @direct() -> core.never attributes {tribute.calling_convention = "direct"} { func.unreachable }
+  func.func @evidence() -> core.never attributes {tribute.calling_convention = "evidence_direct"} { func.unreachable }
+  func.func @cps() -> core.never attributes {tribute.calling_convention = "cps"} { func.unreachable }
   func.func @run(%callee: core.i32, %evidence: core.i32, %env: tribute_rt.anyref, %done: core.i32, %dispatch: core.i32, %value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
     "func.tail_call_indirect"(%callee, %evidence, %env, %done, %dispatch, %value) {signature = func.func_sig<(core.i32, tribute_rt.anyref, core.i32, core.i32, core.i32) -> core.never>, tribute.calling_convention = "cps"}
   }
@@ -2301,7 +2301,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {tribute.entry = @main} {
   func.func @main(%evidence: core.i32, %frame: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-    "func.unreachable"()
+    func.unreachable
   }
 }"#,
         );
@@ -2506,12 +2506,12 @@ mod tests {
     const EVIDENCE_DIRECT_MAIN: &str = r#"core.module @test {tribute.entry = @main} {
   !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
   func.func @main(%evidence: !Evidence) -> core.nil attributes {tribute.calling_convention = "evidence_direct"} {
-    %nil = "core.nil_value"() : core.nil
-    "func.return"(%nil)
+    %nil = core.nil_value : core.nil
+    func.return %nil
   }
   func.func @caller(%evidence: !Evidence) -> core.nil attributes {tribute.calling_convention = "evidence_direct"} {
-    %result = "func.call"(%evidence) {callee = @main, tribute.calling_convention = "evidence_direct"} : core.nil
-    "func.return"(%result)
+    %result = func.call %evidence {callee = @main, tribute.calling_convention = "evidence_direct"} : core.nil
+    func.return %result
   }
 }"#;
 
@@ -2537,12 +2537,12 @@ mod tests {
             &mut ctx,
             r#"core.module @test {tribute.entry = @main} {
   func.func @main() -> core.nil attributes {tribute.calling_convention = "direct"} {
-    %nil = "core.nil_value"() : core.nil
-    "func.return"(%nil)
+    %nil = core.nil_value : core.nil
+    func.return %nil
   }
   func.func @caller() -> core.nil attributes {tribute.calling_convention = "direct"} {
-    %result = "func.call"() {callee = @main, tribute.calling_convention = "direct"} : core.nil
-    "func.return"(%result)
+    %result = func.call {callee = @main, tribute.calling_convention = "direct"} : core.nil
+    func.return %result
   }
 }"#,
         );
@@ -2582,8 +2582,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {tribute.entry = @main} {
   func.func @main() -> core.i32 attributes {tribute.calling_convention = "direct"} {
-    %zero = "arith.const"() {value = 0} : core.i32
-    "func.return"(%zero)
+    %zero = arith.const {value = 0} : core.i32
+    func.return %zero
   }
 }"#,
         );
@@ -2646,7 +2646,7 @@ mod tests {
                 &mut ctx,
                 r#"core.module @test {tribute.entry = @main} {
   func.func @main(%evidence: core.i32, %frame: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-    "func.unreachable"()
+    func.unreachable
   }
 }"#,
             );
@@ -2695,7 +2695,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {tribute.entry = @main} {
   func.func @main(%evidence: core.i32, %frame: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-    "func.unreachable"()
+    func.unreachable
   }
 }"#,
         );
@@ -2750,7 +2750,7 @@ mod tests {
                 r#"core.module @test {
   func.func @pure(%callee: func.func_sig<(core.i32, core.i32) -> core.i32>, %left: core.i32, %right: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
     %result = "func.call_indirect"(%callee, %left, %right) {tribute.calling_convention = "direct"} : core.i32
-    "func.return"(%result)
+    func.return %result
   }
 }"#,
                 "lacks exact callable signature",
@@ -2773,9 +2773,9 @@ mod tests {
             ),
             (
                 r#"core.module @test {
-  func.func @callee(%value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} { "func.unreachable"() }
+  func.func @callee(%value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} { func.unreachable }
   func.func @run(%value: core.i1) -> core.never attributes {tribute.calling_convention = "cps"} {
-    "func.tail_call"(%value) {callee = @callee, tribute.calling_convention = "cps"}
+    func.tail_call %value {callee = @callee, tribute.calling_convention = "cps"}
   }
 }"#,
                 "operands differ",
@@ -2799,7 +2799,7 @@ mod tests {
   !callback = closure.closure<func.func_sig<() -> core.i32>>
   func.func @run(%callback: !callback) -> core.i32 attributes {tribute.calling_convention = "direct"} {
     %result = "func.call_indirect"(%callback) {signature = func.func_sig<() -> core.i32>, tribute.calling_convention = "direct"} : core.i32
-    "func.return"(%result)
+    func.return %result
   }
 }"#,
         );
@@ -2830,11 +2830,11 @@ mod tests {
   !semantic = closure.closure<func.func_sig<() -> core.i32>>
   !_closure = adt.struct<_closure(func_ptr: core.i32, env: tribute_rt.anyref)>
   func.func @factory(%callback: !semantic) -> core.i32 attributes {tribute.calling_convention = "direct"} {
-    "func.unreachable"()
+    func.unreachable
   }
   func.func @run(%raw: !_closure) -> core.i32 attributes {tribute.calling_convention = "direct"} {
-    %result = "func.call"(%raw) {callee = @factory, tribute.calling_convention = "direct"} : core.i32
-    "func.return"(%result)
+    %result = func.call %raw {callee = @factory, tribute.calling_convention = "direct"} : core.i32
+    func.return %result
   }
 }"#,
         );
@@ -2851,11 +2851,11 @@ mod tests {
             r#"core.module @test {
   !Env = closure.closure<func.func_sig<(core.i32, core.i32) -> core.never>>
   func.func @defined(%evidence: core.i32, %__env: !Env, %done: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-    "func.unreachable"()
+    func.unreachable
   }
   func.func @holder() -> core.i32 {
-    %defined = "func.constant"() {func_ref = @defined} : func.func_sig<(core.i32, core.i32) -> core.never>
-    "func.unreachable"()
+    %defined = func.constant {func_ref = @defined} : func.func_sig<(core.i32, core.i32) -> core.never>
+    func.unreachable
   }
 }"#,
         );
@@ -2865,7 +2865,7 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         assert!(
             printed.contains("func.func @defined(%0: core.i32 {tribute.ownership = \"consumed\"}, %1: !Env {tribute.ownership = \"consumed\"}, %2: core.i32 {tribute.ownership = \"consumed\"}) -> (), {call_conv = \"tail\"}")
-                && printed.contains("\"func.constant\"() {func_ref = @defined} : func.func_sig<(core.i32 {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}) -> (), {call_conv = \"tail\"}>"),
+                && printed.contains("func.constant {func_ref = @defined} : func.func_sig<(core.i32 {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}) -> (), {call_conv = \"tail\"}>"),
             "{printed}"
         );
     }
@@ -2878,11 +2878,11 @@ mod tests {
             r#"core.module @test {
   !One = closure.closure<func.func_sig<(core.i32) -> core.never>>
   func.func @generated_one(%value: core.i32, %__env: !One) -> core.never attributes {tribute.calling_convention = "cps"} {
-    "func.unreachable"()
+    func.unreachable
   }
   func.func @holder() -> core.i32 {
-    %one = "func.constant"() {func_ref = @generated_one} : func.func_sig<(core.i32) -> core.never>
-    "func.unreachable"()
+    %one = func.constant {func_ref = @generated_one} : func.func_sig<(core.i32) -> core.never>
+    func.unreachable
   }
 }"#,
         );
@@ -2917,8 +2917,8 @@ mod tests {
   !Frame = adt.typeref<{name = "frame", tribute.cps_continuation_frame_result = core.i32}>
   !Body = closure.closure<func.func_sig<(!Evidence, !Frame) -> core.never>>
   func.func @run(%ev: !Evidence, %body: !Body) -> core.i32 attributes {tribute.calling_convention = "direct"} {
-    %answer = "effect.delimit"(%body, %ev) : core.i32
-    "func.return"(%answer)
+    %answer = effect.delimit %body, %ev : core.i32
+    func.return %answer
   }
 }"#,
         );
@@ -2947,7 +2947,7 @@ mod tests {
             r#"core.module @test {
   !One = closure.closure<func.func_sig<(core.i32) -> core.never>>
   func.func @generated_one(%__env: !One, %value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-    "func.unreachable"()
+    func.unreachable
   }
 }"#,
         );
@@ -2969,7 +2969,7 @@ mod tests {
                 "function reference differs",
             ),
             (
-                "func.func @external(%evidence: core.i32, %__env: core.i32, %done: core.i32) -> core.never attributes {tribute.calling_convention = \"cps\"} { \"func.unreachable\"() }",
+                "func.func @external(%evidence: core.i32, %__env: core.i32, %done: core.i32) -> core.never attributes {tribute.calling_convention = \"cps\"} { func.unreachable }",
                 "must be a closure",
             ),
         ] {
@@ -2981,8 +2981,8 @@ mod tests {
   !Env = closure.closure<func.func_sig<(core.i32, core.i32) -> core.never>>
   {function}
   func.func @holder() -> core.i32 {{
-    %function = "func.constant"() {{func_ref = @external}} : func.func_sig<(core.i32, core.i32) -> core.never>
-    "func.unreachable"()
+    %function = func.constant {{func_ref = @external}} : func.func_sig<(core.i32, core.i32) -> core.never>
+    func.unreachable
   }}
 }}"#
                 ),
@@ -3003,11 +3003,11 @@ mod tests {
   !Env2 = closure.closure<func.func_sig<() -> core.never>>
   !Env = closure.closure<func.func_sig<(!Env2) -> core.never>>
   func.func @external(%__env: !Env, %environment: !Env2) -> core.never attributes {tribute.calling_convention = "cps"} {
-    "func.unreachable"()
+    func.unreachable
   }
   func.func @holder() -> core.i32 {
-    %function = "func.constant"() {func_ref = @external} : func.func_sig<(!Env2) -> core.never>
-    "func.unreachable"()
+    %function = func.constant {func_ref = @external} : func.func_sig<(!Env2) -> core.never>
+    func.unreachable
   }
 }"#,
         );
@@ -3045,7 +3045,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @broken() -> core.never attributes {tribute.calling_convention = "cps"} { "func.unreachable"() }
+  func.func @broken() -> core.never attributes {tribute.calling_convention = "cps"} { func.unreachable }
 }"#,
         );
         let broken = function(&ctx, module, "broken");
@@ -3070,8 +3070,8 @@ mod tests {
             r#"core.module @test {
   func.func @external(%value: core.i32) -> core.i32
   func.func @holder() -> core.i32 {
-    %function = "func.constant"() {func_ref = @external} : func.func_sig<(core.i32) -> core.i32>
-    "func.unreachable"()
+    %function = func.constant {func_ref = @external} : func.func_sig<(core.i32) -> core.i32>
+    func.unreachable
   }
 }"#,
         );
@@ -3087,8 +3087,8 @@ mod tests {
             r#"core.module @test {
   func.func @external(%value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"}
   func.func @holder() -> core.i32 {
-    %function = "func.constant"() {func_ref = @external} : func.func_sig<(core.i1) -> core.never>
-    "func.unreachable"()
+    %function = func.constant {func_ref = @external} : func.func_sig<(core.i1) -> core.never>
+    func.unreachable
   }
 }"#,
         );
@@ -3104,7 +3104,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @broken() -> core.never attributes {tribute.calling_convention = 9} { "func.unreachable"() }
+  func.func @broken() -> core.never attributes {tribute.calling_convention = 9} { func.unreachable }
 }"#,
         );
         let error = assert_unchanged_on_error(&mut ctx, module, lower_cps_signatures_to_physical);
@@ -3119,9 +3119,9 @@ mod tests {
             &mut ctx,
             r#"core.module @test {tribute.entry = @main} {
   func.func @main() -> core.nil attributes {tribute.calling_convention = "direct"} {
-    %c = "arith.const"() {value = 0, tribute.calling_convention = "direct"} : core.i32
-    %n = "core.nil_value"() : core.nil
-    "func.return"(%n)
+    %c = arith.const {value = 0, tribute.calling_convention = "direct"} : core.i32
+    %n = core.nil_value : core.nil
+    func.return %n
   }
 }"#,
         );
@@ -3143,25 +3143,25 @@ mod tests {
   !fn = func.func_sig<(core.i32) -> core.i32>
   !closure = closure.closure<!fn>
   func.func @callee(%env: !closure, %x: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
-    "func.return"(%x)
+    func.return %x
   }
   func.func @callee_with_evidence(%evidence: core.i32, %env: !closure, %x: core.i32) -> core.i32 attributes {tribute.calling_convention = "evidence_direct"} {
-    "func.return"(%x)
+    func.return %x
   }
   func.func @trap_direct(%env: !closure, %x: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
-    "func.unreachable"()
+    func.unreachable
   }
   func.func @trap_evidence_direct(%evidence: core.i32, %env: !closure, %x: core.i32) -> core.i32 attributes {tribute.calling_convention = "evidence_direct"} {
-    "func.unreachable"()
+    func.unreachable
   }
   func.func @trap_cps(%evidence: core.i32, %env: !closure, %x: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-    "func.unreachable"()
+    func.unreachable
   }
   func.func @main() -> core.nil attributes {tribute.calling_convention = "direct"} {
-    %c = "closure.new"() {entries = [@callee, @trap_evidence_direct, @trap_cps]} : !closure
-    %d = "closure.new"() {entries = [@trap_direct, @callee_with_evidence, @trap_cps]} : !closure
-    %n = "core.nil_value"() : core.nil
-    "func.return"(%n)
+    %c = closure.new {entries = [@callee, @trap_evidence_direct, @trap_cps]} : !closure
+    %d = closure.new {entries = [@trap_direct, @callee_with_evidence, @trap_cps]} : !closure
+    %n = core.nil_value : core.nil
+    func.return %n
   }
 }"#,
         );

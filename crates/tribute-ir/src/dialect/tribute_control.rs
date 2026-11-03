@@ -128,7 +128,7 @@ mod tribute_control {
     /// ```text
     /// tribute_control.func @id(%x: T) -> R {
     ///   ...
-    ///   "tribute_control.return"(%value)
+    ///   tribute_control.return %value
     /// }
     /// ```
     ///
@@ -185,7 +185,7 @@ mod tribute_control {
     /// ```text
     /// %f = tribute_control.lambda(%x: T) -> R captures [%capture0, ...] {
     ///   ...
-    ///   "tribute_control.return"(%value)
+    ///   tribute_control.return %value
     /// }
     /// ```
     ///
@@ -227,7 +227,7 @@ mod tribute_control {
     /// origin when the lambda is.
     ///
     /// ```text
-    /// %s = "tribute_control.instantiate"(%lambda) {row_args = [{tail = 0}]} : !Callable
+    /// %s = tribute_control.instantiate %lambda {row_args = [{tail = 0}]} : !Callable
     /// ```
     ///
     /// - **Shape:** the operand is one result of a `tribute_control.lambda`
@@ -253,6 +253,7 @@ mod tribute_control {
     #[verify]
     #[flags(Pure)]
     #[implements(CallableResultOrigin)]
+    #[asm_format(lambda attr_dict_bare ":" type(result))]
     fn instantiate<S: FuncSig>(row_args: Attr<[Row]>, lambda: Value<S>) -> Value<impl FuncSig> {}
 
     /// A named function as a value. Its result is a callable origin when the
@@ -294,7 +295,7 @@ mod tribute_control {
     /// body or is a registered compiler intrinsic.
     ///
     /// ```text
-    /// %result = "tribute_control.call"(%arg0, ...) {callee = @f} : Result
+    /// %result = tribute_control.call %arg0, ... {callee = @f} : Result
     /// ```
     ///
     /// - **Shape:** the source arguments in declaration order, one
@@ -314,6 +315,7 @@ mod tribute_control {
     ///   arguments.
     #[verify]
     #[implements(CallLike, CallableResultOrigin)]
+    #[asm_format(args attr_dict_bare ":" type(result))]
     fn call(
         callee: Attr<SymbolRef>,
         row_args: Option<Attr<[Row]>>,
@@ -360,7 +362,7 @@ mod tribute_control {
     /// A proper tail call of a named source callable, from source `become`.
     ///
     /// ```text
-    /// "tribute_control.tail_call"(%arg0, ...) {callee = @f}
+    /// tribute_control.tail_call %arg0, ... {callee = @f}
     /// ```
     ///
     /// - **Shape:** the source arguments in declaration order,
@@ -398,6 +400,7 @@ mod tribute_control {
     ///   the call.
     #[verify]
     #[implements(CallLike, CallableExit, LocalValidation)]
+    #[asm_format(args attr_dict_bare)]
     fn tail_call(
         callee: Attr<SymbolRef>,
         row_args: Option<Attr<[Row]>>,
@@ -443,7 +446,7 @@ mod tribute_control {
     /// Return the enclosing callable's logical result.
     ///
     /// ```text
-    /// "tribute_control.return"(%value)
+    /// tribute_control.return %value
     /// ```
     ///
     /// - **Shape:** takes one source-logical result and has no results,
@@ -456,6 +459,7 @@ mod tribute_control {
     /// - **Location:** the span of the source return or of the implicit
     ///   body-result expression.
     #[implements(LocalValidation)]
+    #[asm_format(value attr_dict_bare)]
     fn r#return(value: Value<_>) {}
 
     // Direct-style control operations
@@ -464,7 +468,7 @@ mod tribute_control {
     /// result type.
     ///
     /// ```text
-    /// %result = "tribute_control.perform"(%arg0, ...) {
+    /// %result = tribute_control.perform %arg0, ... {
     ///   ability = @State,
     ///   op_name = "get",
     ///   operation_kind = "op"
@@ -522,6 +526,7 @@ mod tribute_control {
     ///   including the qualified callee and all arguments where possible.
     #[verify]
     #[implements(OperationDeclarationUse, CallableResultOrigin)]
+    #[asm_format(args attr_dict_bare ":" type(result))]
     fn perform(
         ability: Attr<SymbolRef>,
         op_name: Attr<String>,
@@ -538,11 +543,11 @@ mod tribute_control {
     /// ```text
     /// %answer = "tribute_control.handle"() ({
     ///   ...
-    ///   "tribute_control.yield"(%body_value)
+    ///   tribute_control.yield %body_value
     /// }, {
     ///   ^completion(%completed: BodyType):
     ///     ...
-    ///     "tribute_control.yield"(%answer_value)
+    ///     tribute_control.yield %answer_value
     /// }, {
     ///   "tribute_control.handler"() ({ ... }) {...}
     ///   ...
@@ -611,7 +616,7 @@ mod tribute_control {
     /// "tribute_control.handler"() ({
     ///   ^handler(%arg0: Arg0Type, ..., %resume: tribute_control.resume_token<ResultType, AnswerType>):
     ///     ...
-    ///     "tribute_control.yield"(%answer)
+    ///     tribute_control.yield %answer
     /// }) {ability = @State, kind = "op", op_name = "get", operation_result_type = ResultType}
     /// ```
     ///
@@ -676,7 +681,7 @@ mod tribute_control {
     /// to, so its result is a callable origin when that result is.
     ///
     /// ```text
-    /// %answer = "tribute_control.resume"(%resume, %value) : AnswerType
+    /// %answer = tribute_control.resume %resume, %value : AnswerType
     /// ```
     ///
     /// - **Operands:** exactly two. `%resume` is a
@@ -706,6 +711,7 @@ mod tribute_control {
     /// - **Location:** the source `resume` expression.
     #[verify]
     #[implements(CallableResultOrigin)]
+    #[asm_format(resume_token "," value attr_dict_bare ":" type(result))]
     fn resume<T: ResumeToken>(
         evidence_plan: Option<Attr<[EvidenceStep]>>,
         resume_token: Value<T>,
@@ -716,7 +722,7 @@ mod tribute_control {
     /// End an executable `tribute_control` region with a logical value.
     ///
     /// ```text
-    /// "tribute_control.yield"(%value)
+    /// tribute_control.yield %value
     /// ```
     ///
     /// - **Operands:** exactly one logical value.
@@ -731,6 +737,7 @@ mod tribute_control {
     /// - **Location:** the source expression that makes the region result. A
     ///   synthesized identity completion uses the owning `handle` location.
     #[implements(LocalValidation)]
+    #[asm_format(value attr_dict_bare)]
     fn r#yield(value: Value<_>) {}
 }
 

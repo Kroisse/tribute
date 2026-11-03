@@ -396,12 +396,12 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @selected() -> core.nil {
-    %dead = "arith.const"() {value = 1} : core.i32
-    "func.return"()
+    %dead = arith.const {value = 1} : core.i32
+    func.return
   }
   func.func @untouched() -> core.nil {
-    %dead = "arith.const"() {value = 2} : core.i32
-    "func.return"()
+    %dead = arith.const {value = 2} : core.i32
+    func.return
   }
 }"#,
         );
@@ -431,12 +431,12 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @first() -> core.nil {
-    %dead = "arith.const"() {value = 1} : core.i32
-    "func.return"()
+    %dead = arith.const {value = 1} : core.i32
+    func.return
   }
   func.func @second() -> core.nil {
-    %dead = "arith.const"() {value = 2} : core.i32
-    "func.return"()
+    %dead = arith.const {value = 2} : core.i32
+    func.return
   }
 }"#,
         );
@@ -460,8 +460,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f() -> core.nil {
-    %dead = "arith.const"() {value = 1} : core.i32
-    "func.return"()
+    %dead = arith.const {value = 1} : core.i32
+    func.return
   }
 }"#,
         );

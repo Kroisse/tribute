@@ -18,6 +18,7 @@ use crate::continuation_frame::FrameRef;
 mod effect {
     /// Allocate the runtime-unique prompt token for one dynamic handler
     /// installation. `resolve_evidence` lowers this before target lowering.
+    #[asm_format(attr_dict_bare ":" type(result))]
     fn fresh_prompt_tag() -> Value<I32> {}
 
     /// Extend the current evidence with a handler for one ability.
@@ -29,6 +30,7 @@ mod effect {
     /// - `outer`: the evidence the handler is installed on, before the
     ///   installation's selection.
     #[flags(Pure)]
+    #[asm_format(evidence "," prompt_tag "," tr_dispatch_fn "," outer attr_dict_bare ":" type(result))]
     fn extend<E: Evidence>(
         ability: Attr<SymbolRef>,
         evidence: Value<E>,
@@ -41,29 +43,35 @@ mod effect {
     /// Remove the top handler of one ability from the evidence, exposing the
     /// handler it shadows.
     #[flags(Pure)]
+    #[asm_format(evidence attr_dict_bare ":" type(result))]
     fn mask<E: Evidence>(ability: Attr<SymbolRef>, evidence: Value<E>) -> Value<E> {}
 
     /// Push a copy of the top handler of one ability onto the evidence.
     #[flags(Pure)]
+    #[asm_format(evidence attr_dict_bare ":" type(result))]
     fn dup<E: Evidence>(ability: Attr<SymbolRef>, evidence: Value<E>) -> Value<E> {}
 
     /// The evidence the top handler of one ability was installed on.
     #[flags(Pure)]
+    #[asm_format(evidence attr_dict_bare ":" type(result))]
     fn outer<E: Evidence>(ability: Attr<SymbolRef>, evidence: Value<E>) -> Value<E> {}
 
     /// The evidence of the row tail `index` of the callable that received
     /// `evidence`, or `evidence` itself when it holds no such row tail.
     #[flags(Pure)]
+    #[asm_format(evidence attr_dict_bare ":" type(result))]
     fn tail<E: Evidence>(index: Attr<u32>, evidence: Value<E>) -> Value<E> {}
 
     /// Set the evidence of the row tail `index` that a callee receives with
     /// `evidence`.
     #[flags(Pure)]
+    #[asm_format(evidence "," tail attr_dict_bare ":" type(result))]
     fn with_tail<E: Evidence>(index: Attr<u32>, evidence: Value<E>, tail: Value<E>) -> Value<E> {}
 
     /// Push the top handler that `source` holds for one ability onto
     /// `evidence`.
     #[flags(Pure)]
+    #[asm_format(evidence "," source attr_dict_bare ":" type(result))]
     fn push<E: Evidence>(
         ability: Attr<SymbolRef>,
         evidence: Value<E>,
@@ -77,6 +85,7 @@ mod effect {
     /// while the backend chooses the concrete lookup and callable layout.
     /// `payload` is the packed operation argument erased to `anyref`, and the
     /// result is the operation's result erased the same way.
+    #[asm_format(evidence "," payload attr_dict_bare ":" type(result))]
     fn dispatch_tail<E: Evidence>(
         ability: Attr<SymbolRef>,
         op_name: Attr<String>,
@@ -92,6 +101,7 @@ mod effect {
     /// to `anyref`. The operation is resultless: backend lowering performs the
     /// final proper tail transfer.
     #[implements(CallableExit)]
+    #[asm_format(evidence "," dispatch "," resume "," payload attr_dict_bare)]
     fn dispatch_cps<E: Evidence>(
         ability: Attr<SymbolRef>,
         op_name: Attr<String>,
@@ -106,6 +116,7 @@ mod effect {
     /// The evidence a computation starts on when no handler is installed
     /// around it: the root entry's, and a value delimiter's in a `Direct`
     /// flow, whose callable receives none. The target ABI boundary builds it.
+    #[asm_format(attr_dict_bare ":" type(result))]
     fn initial_evidence() -> Value<impl Evidence> {}
 
     /// Run the CPS computation `body` to completion in a flow that is not
@@ -116,6 +127,7 @@ mod effect {
     /// `core.never` result and the frame's answer; the target ABI boundary
     /// replaces the operation right after it, building the completion cell
     /// and the terminal frame.
+    #[asm_format(body "," evidence attr_dict_bare ":" type(result))]
     fn delimit<C, F: FrameRef>(body: Value<C>, evidence: Value<Evidence>) -> Value<F::Result>
     where
         C: CpsClosure<Inputs = (Evidence, F)>,
@@ -223,8 +235,8 @@ mod tests {
   !frame = adt.typeref<{{name = "frame_i32", tribute.cps_continuation_frame_result = core.i32}}>
   !body = closure.closure<func.func_sig<{body_type} -> core.never>>
   func.func @run(%ev: !ev, %body: !body) -> {result} {{
-    %answer = "effect.delimit"(%body, %ev) : {result}
-    "func.return"(%answer)
+    %answer = effect.delimit %body, %ev : {result}
+    func.return %answer
   }}
 }}"#
             );

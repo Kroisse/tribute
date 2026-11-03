@@ -117,18 +117,18 @@ mod tests {
                 func.func @"std::io::__tribute_io_write"(%0: core.ptr, %1: core.i1) -> core.ptr
                     attributes {abi = "intrinsic"} {
                 ^bb0:
-                    "func.unreachable"()
+                    func.unreachable
                 }
                 func.func @"std::io::__tribute_io_read_line"() -> core.ptr
                     attributes {abi = "intrinsic"} {
                 ^bb0:
-                    "func.unreachable"()
+                    func.unreachable
                 }
                 func.func @caller(%0: core.ptr, %1: core.i1) -> core.ptr {
                 ^bb0:
-                    %2 = "func.call"(%0, %1) {callee = @"std::io::__tribute_io_write"} : core.ptr
-                    %3 = "func.call"() {callee = @"std::io::__tribute_io_read_line"} : core.ptr
-                    "func.return"(%3)
+                    %2 = func.call %0, %1 {callee = @"std::io::__tribute_io_write"} : core.ptr
+                    %3 = func.call {callee = @"std::io::__tribute_io_read_line"} : core.ptr
+                    func.return %3
                 }
             }
             "#,
@@ -154,14 +154,14 @@ mod tests {
             core.module @test {
                 func.func @other(%0: core.ptr) -> core.ptr {
                 ^bb0:
-                    "func.return"(%0)
+                    func.return %0
                 }
                 func.func @caller(%0: core.ptr) -> core.ptr {
                 ^bb0:
-                    %1 = "func.call"(%0) {callee = @"std::io::__tribute_io_write"} : core.ptr
-                    %2 = "func.call"(%0) {callee = @"std::io::__tribute_io_read_line"} : core.ptr
-                    %3 = "func.call"(%0) {callee = @other} : core.ptr
-                    "func.return"(%3)
+                    %1 = func.call %0 {callee = @"std::io::__tribute_io_write"} : core.ptr
+                    %2 = func.call %0 {callee = @"std::io::__tribute_io_read_line"} : core.ptr
+                    %3 = func.call %0 {callee = @other} : core.ptr
+                    func.return %3
                 }
             }
             "#,

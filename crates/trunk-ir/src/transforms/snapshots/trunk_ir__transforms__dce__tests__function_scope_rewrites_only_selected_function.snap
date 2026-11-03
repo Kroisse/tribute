@@ -4,10 +4,10 @@ expression: "print_module(&ctx, module.op())"
 ---
 core.module @test {
   func.func @selected() -> core.nil {
-      "func.return"()
+      func.return
   }
   func.func @untouched() -> core.nil {
-      %0 = "arith.const"() {value = 2} : core.i32
-      "func.return"()
+      %0 = arith.const {value = 2} : core.i32
+      func.return
   }
 }

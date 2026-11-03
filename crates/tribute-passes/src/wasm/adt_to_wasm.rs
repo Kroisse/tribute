@@ -963,7 +963,7 @@ mod tests {
   !A = adt.array<core.i32>
   wasm.func @splice(%source: !A, %start: core.index, %end: core.index, %x: core.i32, %y: core.i32) -> !A {{
     %result = "adt.array_splice"(%source, %start, %end{elements}) {{type = !A}} : !A
-    "wasm.return"(%result)
+    wasm.return %result
   }}
 }}"#
             ),
@@ -1090,30 +1090,30 @@ mod tests {
   !A = adt.array<core.i32>
 
   wasm.func @main() -> core.nil {
-    %zero = "wasm.i32_const"() {value = 0} : core.i32
-    %one = "wasm.i32_const"() {value = 1} : core.i32
-    %struct = "adt.struct_new"(%zero) {type = !S} : !S
-    %field = "adt.struct_get"(%struct) {type = !S, field = 0} : core.i32
-    "adt.struct_set"(%struct, %field) {type = !S, field = 0}
+    %zero = wasm.i32_const {value = 0} : core.i32
+    %one = wasm.i32_const {value = 1} : core.i32
+    %struct = adt.struct_new %zero {type = !S} : !S
+    %field = adt.struct_get %struct {type = !S, field = 0} : core.i32
+    adt.struct_set %struct, %field {type = !S, field = 0}
 
-    %variant = "adt.variant_new"(%one) {type = !E, tag = "Some"} : !ERef
-    %is_some = "adt.variant_is"(%variant) {type = !E, tag = "Some"} : core.i32
-    %cast = "adt.variant_cast"(%variant) {type = !E, tag = "Some"} : !ERef
-    %payload = "adt.variant_get"(%cast) {type = !E, tag = "Some", field = 0} : core.i32
+    %variant = adt.variant_new %one {type = !E, tag = "Some"} : !ERef
+    %is_some = adt.variant_is %variant {type = !E, tag = "Some"} : core.i32
+    %cast = adt.variant_cast %variant {type = !E, tag = "Some"} : !ERef
+    %payload = adt.variant_get %cast {type = !E, tag = "Some", field = 0} : core.i32
 
-    %at = "arith.const"() {value = 0} : core.index
-    %count = "arith.const"() {value = 2} : core.index
-    %empty = "adt.array_of"() {type = !A} : !A
-    %filled = "adt.array_new"(%count, %zero) {type = !A} : !A
-    %array = "adt.array_of"(%one, %zero) {type = !A} : !A
-    %element = "adt.array_get"(%array, %at) : core.i32
-    "adt.array_set"(%array, %at, %element)
-    %length = "adt.array_len"(%filled) : core.index
+    %at = arith.const {value = 0} : core.index
+    %count = arith.const {value = 2} : core.index
+    %empty = adt.array_of {type = !A} : !A
+    %filled = adt.array_new %count, %zero {type = !A} : !A
+    %array = adt.array_of %one, %zero {type = !A} : !A
+    %element = adt.array_get %array, %at : core.i32
+    adt.array_set %array, %at, %element
+    %length = adt.array_len %filled : core.index
 
-    %null = "adt.ref_null"() {type = !S} : !S
-    %is_null = "adt.ref_is_null"(%null) : core.i32
-    %ref = "adt.ref_cast"(%null) {type = !S} : !S
-    "wasm.return"()
+    %null = adt.ref_null {type = !S} : !S
+    %is_null = adt.ref_is_null %null : core.i32
+    %ref = adt.ref_cast %null {type = !S} : !S
+    wasm.return
   }
 }"#,
         );
@@ -1169,17 +1169,17 @@ mod tests {
   !E = adt.enum<E { None(), Some(core.i32) }>
 
   wasm.func @main(%env: wasm.anyref) -> core.nil {
-    %one = "wasm.i32_const"() {value = 1} : core.i32
-    %first = "adt.struct_new"(%one) {type = !S} : !S
-    %second = "adt.struct_new"(%one) {type = !S} : !S
-    %field = "adt.struct_get"(%first) {type = !S, field = 0} : core.i32
-    "adt.struct_set"(%first, %field) {type = !S, field = 0}
-    %closure = "adt.struct_new"(%one) {type = !Closure} : !Closure
-    %table = "adt.struct_get"(%closure) {type = !Closure, field = 0} : core.i32
-    %some = "adt.variant_new"(%one) {type = !E, tag = "Some"} : !E
-    %none = "adt.variant_new"() {type = !E, tag = "None"} : !E
-    %payload = "adt.variant_get"(%some) {type = !E, tag = "Some", field = 0} : core.i32
-    "wasm.return"()
+    %one = wasm.i32_const {value = 1} : core.i32
+    %first = adt.struct_new %one {type = !S} : !S
+    %second = adt.struct_new %one {type = !S} : !S
+    %field = adt.struct_get %first {type = !S, field = 0} : core.i32
+    adt.struct_set %first, %field {type = !S, field = 0}
+    %closure = adt.struct_new %one {type = !Closure} : !Closure
+    %table = adt.struct_get %closure {type = !Closure, field = 0} : core.i32
+    %some = adt.variant_new %one {type = !E, tag = "Some"} : !E
+    %none = adt.variant_new {type = !E, tag = "None"} : !E
+    %payload = adt.variant_get %some {type = !E, tag = "Some", field = 0} : core.i32
+    wasm.return
   }
 }"#,
         );
@@ -1240,10 +1240,10 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.func @read(%bytes: adt.array<core.i8>, %words: adt.array<core.i32>) -> core.nil {
-    %zero = "arith.const"() {value = 0} : core.index
-    %byte = "adt.array_get"(%bytes, %zero) : core.i8
-    %word = "adt.array_get"(%words, %zero) : core.i32
-    "wasm.return"()
+    %zero = arith.const {value = 0} : core.index
+    %byte = adt.array_get %bytes, %zero : core.i8
+    %word = adt.array_get %words, %zero : core.i32
+    wasm.return
   }
 }"#,
         );
@@ -1252,11 +1252,7 @@ mod tests {
 
         let output = trunk_ir::printer::print_module(&ctx, module.op());
         assert_eq!(output.matches("wasm_gc.array_get_u").count(), 1, "{output}");
-        assert_eq!(
-            output.matches("\"wasm_gc.array_get\"").count(),
-            1,
-            "{output}"
-        );
+        assert_eq!(output.matches("wasm_gc.array_get ").count(), 1, "{output}");
     }
 
     #[test]
@@ -1269,13 +1265,13 @@ mod tests {
   !List = adt.enum<List { Empty(), Cons(core.i32, !ListRef) }>
 
   wasm.func @main(%input: !ListRef) -> core.nil {
-    %zero = "wasm.i32_const"() {value = 0} : core.i32
-    %empty = "adt.variant_new"() {type = !List, tag = "Empty"} : !ListRef
-    %list = "adt.variant_new"(%zero, %empty) {type = !List, tag = "Cons"} : !ListRef
-    %is_cons = "adt.variant_is"(%input) {type = !List, tag = "Cons"} : core.i1
-    %cast = "adt.variant_cast"(%input) {type = !List, tag = "Cons"} : !ListRef
-    %tail = "adt.variant_get"(%cast) {type = !List, tag = "Cons", field = 1} : !ListRef
-    "wasm.return"()
+    %zero = wasm.i32_const {value = 0} : core.i32
+    %empty = adt.variant_new {type = !List, tag = "Empty"} : !ListRef
+    %list = adt.variant_new %zero, %empty {type = !List, tag = "Cons"} : !ListRef
+    %is_cons = adt.variant_is %input {type = !List, tag = "Cons"} : core.i1
+    %cast = adt.variant_cast %input {type = !List, tag = "Cons"} : !ListRef
+    %tail = adt.variant_get %cast {type = !List, tag = "Cons", field = 1} : !ListRef
+    wasm.return
   }
 }"#,
         );
@@ -1381,12 +1377,12 @@ mod tests {
   !E = adt.enum<E { None(), Some(core.i32), Other() }>
 
   wasm.func @main(%input: !ERef) -> core.nil {
-    %one = "wasm.i32_const"() {value = 1} : core.i32
-    %none = "adt.variant_new"() {type = !E, tag = "None"} : !ERef
-    %some = "adt.variant_new"(%one) {type = !E, tag = "Some"} : !ERef
-    %is_some = "adt.variant_is"(%input) {type = !E, tag = "Some"} : core.i32
-    %is_other = "adt.variant_is"(%input) {type = !E, tag = "Other"} : core.i32
-    "wasm.return"()
+    %one = wasm.i32_const {value = 1} : core.i32
+    %none = adt.variant_new {type = !E, tag = "None"} : !ERef
+    %some = adt.variant_new %one {type = !E, tag = "Some"} : !ERef
+    %is_some = adt.variant_is %input {type = !E, tag = "Some"} : core.i32
+    %is_other = adt.variant_is %input {type = !E, tag = "Other"} : core.i32
+    wasm.return
   }
 }"#,
         );
@@ -1446,13 +1442,13 @@ mod tests {
   !B = adt.enum<B { Some(core.f64) }>
 
   wasm.func @main(%from_a_ref: !ARef, %from_b_ref: !BRef, %x: core.f64) -> core.nil {
-    %from_matching_typeref = "adt.variant_get"(%from_a_ref) {type = !A, tag = "Some", field = 0} : core.i32
-    %from_mismatched_typeref = "adt.variant_get"(%from_b_ref) {type = !A, tag = "Some", field = 0} : core.i32
-    %from_b = "adt.variant_new"(%x) {type = !B, tag = "Some"} : !BRef
-    %wrong_enum = "adt.variant_get"(%from_b) {type = !A, tag = "Some", field = 0} : core.i32
-    %from_a_other = "adt.variant_new"(%x) {type = !A, tag = "Other"} : !ARef
-    %wrong_tag = "adt.variant_get"(%from_a_other) {type = !A, tag = "Some", field = 0} : core.i32
-    "wasm.return"()
+    %from_matching_typeref = adt.variant_get %from_a_ref {type = !A, tag = "Some", field = 0} : core.i32
+    %from_mismatched_typeref = adt.variant_get %from_b_ref {type = !A, tag = "Some", field = 0} : core.i32
+    %from_b = adt.variant_new %x {type = !B, tag = "Some"} : !BRef
+    %wrong_enum = adt.variant_get %from_b {type = !A, tag = "Some", field = 0} : core.i32
+    %from_a_other = adt.variant_new %x {type = !A, tag = "Other"} : !ARef
+    %wrong_tag = adt.variant_get %from_a_other {type = !A, tag = "Some", field = 0} : core.i32
+    wasm.return
   }
 }"#,
         );
@@ -1503,11 +1499,11 @@ mod tests {
   !String = adt.enum<String { Leaf(!Bytes) }>
 
   wasm.func @main(%e: !ERef, %box: !BoxRef, %string: !StringRef) -> core.nil {
-    %valid = "adt.variant_get"(%e) {type = !E, tag = "Some", field = 0} : core.i32
-    %invalid = "adt.variant_get"(%e) {type = !E, tag = "Some", field = 0} : core.i64
-    %node = "adt.variant_get"(%box) {type = !Box, tag = "Next", field = 0} : wasm.structref
-    %bytes = "adt.variant_get"(%string) {type = !String, tag = "Leaf", field = 0} : wasm.anyref
-    "wasm.return"()
+    %valid = adt.variant_get %e {type = !E, tag = "Some", field = 0} : core.i32
+    %invalid = adt.variant_get %e {type = !E, tag = "Some", field = 0} : core.i64
+    %node = adt.variant_get %box {type = !Box, tag = "Next", field = 0} : wasm.structref
+    %bytes = adt.variant_get %string {type = !String, tag = "Leaf", field = 0} : wasm.anyref
+    wasm.return
   }
 }"#,
         );

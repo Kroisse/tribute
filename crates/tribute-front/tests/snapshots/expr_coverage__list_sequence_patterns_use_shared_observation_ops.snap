@@ -4,87 +4,87 @@ expression: ir_text
 ---
 core.module @test {
   tribute_control.func @"pkg::observe"['a0](%0: tribute_rt.anyref) -> core.i32 row(| 'a0) inferred {
-      %1 = "list.is_empty"(%0) {element_type = core.i32} : core.i1
+      %1 = list.is_empty %0 {element_type = core.i32} : core.i1
       %2 = "scf.if"(%1) ({
-          %3 = "arith.const"() {value = 0} : core.i32
-          "scf.yield"(%3)
+          %3 = arith.const {value = 0} : core.i32
+          scf.yield %3
       }, {
-          %4 = "list.is_empty"(%0) {element_type = core.i32} : core.i1
-          %5 = "arith.const"() {value = true} : core.i1
-          %6 = "arith.xor"(%4, %5) : core.i1
+          %4 = list.is_empty %0 {element_type = core.i32} : core.i1
+          %5 = arith.const {value = true} : core.i1
+          %6 = arith.xor %4, %5 : core.i1
           %7 = "scf.if"(%6) ({
-              %8 = "list.head"(%0) {element_type = core.i32} : core.i32
-              %9 = "arith.const"() {value = true} : core.i1
+              %8 = list.head %0 {element_type = core.i32} : core.i32
+              %9 = arith.const {value = true} : core.i1
               %10 = "scf.if"(%9) ({
-                  %11 = "list.tail"(%0) {element_type = core.i32} : tribute_rt.anyref
-                  %12 = "list.is_empty"(%11) {element_type = core.i32} : core.i1
-                  "scf.yield"(%12)
+                  %11 = list.tail %0 {element_type = core.i32} : tribute_rt.anyref
+                  %12 = list.is_empty %11 {element_type = core.i32} : core.i1
+                  scf.yield %12
               }, {
-                  %13 = "arith.const"() {value = false} : core.i1
-                  "scf.yield"(%13)
+                  %13 = arith.const {value = false} : core.i1
+                  scf.yield %13
               }) : core.i1
-              "scf.yield"(%10)
+              scf.yield %10
           }, {
-              %14 = "arith.const"() {value = false} : core.i1
-              "scf.yield"(%14)
+              %14 = arith.const {value = false} : core.i1
+              scf.yield %14
           }) : core.i1
           %15 = "scf.if"(%7) ({
-              %16 = "list.head"(%0) {element_type = core.i32} : core.i32
-              %17 = "list.tail"(%0) {element_type = core.i32} : tribute_rt.anyref
-              "scf.yield"(%16)
+              %16 = list.head %0 {element_type = core.i32} : core.i32
+              %17 = list.tail %0 {element_type = core.i32} : tribute_rt.anyref
+              scf.yield %16
           }, {
-              %18 = "list.is_empty"(%0) {element_type = core.i32} : core.i1
-              %19 = "arith.const"() {value = true} : core.i1
-              %20 = "arith.xor"(%18, %19) : core.i1
+              %18 = list.is_empty %0 {element_type = core.i32} : core.i1
+              %19 = arith.const {value = true} : core.i1
+              %20 = arith.xor %18, %19 : core.i1
               %21 = "scf.if"(%20) ({
-                  %22 = "list.head"(%0) {element_type = core.i32} : core.i32
-                  %23 = "arith.const"() {value = true} : core.i1
+                  %22 = list.head %0 {element_type = core.i32} : core.i32
+                  %23 = arith.const {value = true} : core.i1
                   %24 = "scf.if"(%23) ({
-                      %25 = "list.tail"(%0) {element_type = core.i32} : tribute_rt.anyref
-                      %26 = "list.is_empty"(%25) {element_type = core.i32} : core.i1
-                      %27 = "arith.const"() {value = true} : core.i1
-                      %28 = "arith.xor"(%26, %27) : core.i1
+                      %25 = list.tail %0 {element_type = core.i32} : tribute_rt.anyref
+                      %26 = list.is_empty %25 {element_type = core.i32} : core.i1
+                      %27 = arith.const {value = true} : core.i1
+                      %28 = arith.xor %26, %27 : core.i1
                       %29 = "scf.if"(%28) ({
-                          %30 = "list.head"(%25) {element_type = core.i32} : core.i32
-                          %31 = "arith.const"() {value = true} : core.i1
+                          %30 = list.head %25 {element_type = core.i32} : core.i32
+                          %31 = arith.const {value = true} : core.i1
                           %32 = "scf.if"(%31) ({
-                              %33 = "list.tail"(%25) {element_type = core.i32} : tribute_rt.anyref
-                              %34 = "list.is_empty"(%33) {element_type = core.i32} : core.i1
-                              "scf.yield"(%34)
+                              %33 = list.tail %25 {element_type = core.i32} : tribute_rt.anyref
+                              %34 = list.is_empty %33 {element_type = core.i32} : core.i1
+                              scf.yield %34
                           }, {
-                              %35 = "arith.const"() {value = false} : core.i1
-                              "scf.yield"(%35)
+                              %35 = arith.const {value = false} : core.i1
+                              scf.yield %35
                           }) : core.i1
-                          "scf.yield"(%32)
+                          scf.yield %32
                       }, {
-                          %36 = "arith.const"() {value = false} : core.i1
-                          "scf.yield"(%36)
+                          %36 = arith.const {value = false} : core.i1
+                          scf.yield %36
                       }) : core.i1
-                      "scf.yield"(%29)
+                      scf.yield %29
                   }, {
-                      %37 = "arith.const"() {value = false} : core.i1
-                      "scf.yield"(%37)
+                      %37 = arith.const {value = false} : core.i1
+                      scf.yield %37
                   }) : core.i1
-                  "scf.yield"(%24)
+                  scf.yield %24
               }, {
-                  %38 = "arith.const"() {value = false} : core.i1
-                  "scf.yield"(%38)
+                  %38 = arith.const {value = false} : core.i1
+                  scf.yield %38
               }) : core.i1
               %39 = "scf.if"(%21) ({
-                  %40 = "list.head"(%0) {element_type = core.i32} : core.i32
-                  %41 = "list.tail"(%0) {element_type = core.i32} : tribute_rt.anyref
-                  %42 = "list.head"(%41) {element_type = core.i32} : core.i32
-                  %43 = "list.tail"(%41) {element_type = core.i32} : tribute_rt.anyref
-                  "scf.yield"(%42)
+                  %40 = list.head %0 {element_type = core.i32} : core.i32
+                  %41 = list.tail %0 {element_type = core.i32} : tribute_rt.anyref
+                  %42 = list.head %41 {element_type = core.i32} : core.i32
+                  %43 = list.tail %41 {element_type = core.i32} : tribute_rt.anyref
+                  scf.yield %42
               }, {
-                  %44 = "list.head"(%0) {element_type = core.i32} : core.i32
-                  %45 = "list.tail"(%0) {element_type = core.i32} : tribute_rt.anyref
-                  "scf.yield"(%44)
+                  %44 = list.head %0 {element_type = core.i32} : core.i32
+                  %45 = list.tail %0 {element_type = core.i32} : tribute_rt.anyref
+                  scf.yield %44
               }) : core.i32
-              "scf.yield"(%39)
+              scf.yield %39
           }) : core.i32
-          "scf.yield"(%15)
+          scf.yield %15
       }) : core.i32
-      "tribute_control.return"(%2)
+      tribute_control.return %2
   }
 }

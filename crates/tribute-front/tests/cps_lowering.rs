@@ -160,7 +160,7 @@ fn main() -> Nil { }
     assert_in_order(run, &["adt.string_const", "tribute_control.resume"]);
     let resume = run
         .lines()
-        .find(|line| line.contains("= \"tribute_control.resume\""))
+        .find(|line| line.contains("= tribute_control.resume "))
         .expect("source-logical resume");
     assert!(resume.contains(": core.i32"), "{run}");
 }
@@ -293,7 +293,7 @@ mod Native {
     );
     let call = checked_logical_function(ir, "call");
     assert!(
-        call.contains("\"tribute_control.call\"(%0) {callee = @\"pkg::identity\"} : core.i32"),
+        call.contains("tribute_control.call %0 {callee = @\"pkg::identity\"} : core.i32"),
         "direct source call must target the logical extern declaration:\n{call}"
     );
     let nested_call = checked_logical_function(ir, "Native::call");
@@ -422,7 +422,7 @@ fn run() -> Int {
     assert!(
         run.contains("tribute_control.handle")
             && run.contains("kind = \"fn\"")
-            && run.contains("\"tribute_control.yield\"(%2)"),
+            && run.contains("tribute_control.yield %2"),
         "a no-do handler must yield the logical handled answer:\n{run}"
     );
 }
@@ -707,7 +707,7 @@ fn main() -> Nil { }
         "shadowing local must stay an indirect call:\n{ir}"
     );
     assert!(
-        !ir.contains("\"tribute_control.call\"() {callee = @\"pkg::Nested::apply\"}"),
+        !ir.contains("tribute_control.call {callee = @\"pkg::Nested::apply\"}"),
         "lowering must not reinterpret the local as the nested function:\n{ir}"
     );
 }
@@ -1672,7 +1672,7 @@ fn run() ->{Flag} Nat {
             "tribute_control.resume",
         ],
     );
-    assert_occurrences(run, "\"tribute_control.resume\"(%", 8);
+    assert_occurrences(run, "tribute_control.resume %", 8);
     assert_occurrences(run, "scf.if", 8);
     assert_in_order(
         run,
@@ -1855,7 +1855,7 @@ fn assert_case_guard_shape(function: &str) {
     assert_in_order(function, &["scf.if", "callee = @\"pkg::effectful\""]);
 }
 fn assert_handler_case_resume_shape(function: &str) {
-    assert_occurrences(function, "\"tribute_control.resume\"(%", 2);
+    assert_occurrences(function, "tribute_control.resume %", 2);
     assert!(function.contains("scf.if"));
 }
 fn assert_op_handler_shape(function: &str) {
@@ -1923,5 +1923,5 @@ fn assert_aggregate_shape(function: &str) {
     );
 }
 fn assert_multi_argument_shape(function: &str) {
-    assert!(function.contains("\"tribute_control.perform\"(%0, %1)"));
+    assert!(function.contains("tribute_control.perform %0, %1"));
 }

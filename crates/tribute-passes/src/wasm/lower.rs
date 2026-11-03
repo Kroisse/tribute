@@ -759,9 +759,9 @@ mod tests {
   !Frame = adt.struct<Frame()>
   !Env = adt.struct<Env(closure: !Closure, evidence: !Evidence, frame: !Frame)>
   wasm.func @worker(%evidence: !Evidence, %closure: !Closure, %frame: !Frame) {
-    %env = "adt.struct_new"(%closure, %evidence, %frame) {type = !Env} : !Env
-    %loaded = "adt.struct_get"(%env) {field = 1, type = !Env} : !Evidence
-    "wasm.return"()
+    %env = adt.struct_new %closure, %evidence, %frame {type = !Env} : !Env
+    %loaded = adt.struct_get %env {field = 1, type = !Env} : !Evidence
+    wasm.return
   }
 }"#,
         );
@@ -808,7 +808,7 @@ mod tests {
             ctx,
             r#"core.module @test {
   func.func @placeholder() -> core.nil {
-    "func.return"()
+    func.return
   }
 }"#,
         );
@@ -852,10 +852,10 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  "wasm.memory"() {min = 1, max = 0, shared = false, memory64 = false}
+  wasm.memory {min = 1, max = 0, shared = false, memory64 = false}
   func.func @run() -> core.i32 {
-    %value = "arith.const"() {value = 1} : core.i32
-    "func.return"(%value)
+    %value = arith.const {value = 1} : core.i32
+    func.return %value
   }
 }"#,
         );
@@ -1042,8 +1042,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.func @main() -> core.nil {
-    %value = "arith.const"() {value = 1} : core.i32
-    "wasm.return"()
+    %value = arith.const {value = 1} : core.i32
+    wasm.return
   }
 }"#,
         );
@@ -1058,8 +1058,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @run(%ev: wasm.arrayref, %payload: wasm.anyref) -> wasm.anyref {
-    %result = "effect.dispatch_tail"(%ev, %payload) {ability = @Console, op_name = "read"} : wasm.anyref
-    "func.return"(%result)
+    %result = effect.dispatch_tail %ev, %payload {ability = @Console, op_name = "read"} : wasm.anyref
+    func.return %result
   }
 }"#,
         );
@@ -1080,8 +1080,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @run() -> core.i32 {
-    %value = "arith.const"() {value = 1} : core.i32
-    "func.return"(%value)
+    %value = arith.const {value = 1} : core.i32
+    func.return %value
   }
 }"#,
         );
@@ -1097,8 +1097,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.func @main(%x: core.i32) -> core.i64 {
-    %r = "core.unrealized_conversion_cast"(%x) : core.i64
-    "wasm.return"(%r)
+    %r = core.unrealized_conversion_cast %x : core.i64
+    wasm.return %r
   }
 }"#,
         );
@@ -1122,8 +1122,8 @@ mod tests {
             r#"core.module @test {
   !String = adt.enum<String { Leaf(core.bytes), Branch(tribute_rt.anyref, tribute_rt.anyref, core.i32) }>
   func.func @main() -> core.nil {
-    %string = "adt.string_const"() {value = "wrong"} : core.i32
-    "func.return"()
+    %string = adt.string_const {value = "wrong"} : core.i32
+    func.return
   }
 }"#,
         );
@@ -1155,13 +1155,13 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @main(%bytes: core.bytes, %cond: core.i1) -> core.nil {
-    %write = "tribute_io.write"(%bytes, %cond) : core.nil
+    %write = tribute_io.write %bytes, %cond : core.nil
     %never = "scf.if"(%cond) ({
-      "func.unreachable"()
+      func.unreachable
     }, {
-      "func.unreachable"()
+      func.unreachable
     }) : core.never
-    "func.return"(%never)
+    func.return %never
   }
 }"#,
         );
@@ -1184,12 +1184,12 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @main(%bytes: core.bytes, %newline: core.i1, %choice: core.i16) -> core.nil {
-    %write = "tribute_io.write"(%bytes, %newline) : core.nil
+    %write = tribute_io.write %bytes, %newline : core.nil
     "scf.switch"(%choice) ({
-      "scf.case"() ({ "scf.yield"() }) {value = 0}
-      "scf.default"() ({ "scf.yield"() })
+      "scf.case"() ({ scf.yield }) {value = 0}
+      "scf.default"() ({ scf.yield })
     })
-    "func.return"()
+    func.return
   }
 }"#,
         );
@@ -1217,12 +1217,12 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @run(%newline: core.i1) -> core.nil {
-    %first = "adt.bytes_const"() {value = b"first"} : core.bytes
-    %second = "adt.bytes_const"() {value = b"second"} : core.bytes
-    %again = "adt.bytes_const"() {value = b"first"} : core.bytes
-    %write = "tribute_io.write"(%first, %newline) : core.nil
-    %rewrite = "tribute_io.write"(%again, %newline) : core.nil
-    "func.return"()
+    %first = adt.bytes_const {value = b"first"} : core.bytes
+    %second = adt.bytes_const {value = b"second"} : core.bytes
+    %again = adt.bytes_const {value = b"first"} : core.bytes
+    %write = tribute_io.write %first, %newline : core.nil
+    %rewrite = tribute_io.write %again, %newline : core.nil
+    func.return
   }
 }"#,
         );
@@ -1232,7 +1232,7 @@ mod tests {
 
         let output = print_module(&ctx, module.op());
         assert_eq!(output.matches("wasm.import_func").count(), 1, "{output}");
-        assert_eq!(output.matches("\"wasm.memory\"() {").count(), 1, "{output}");
+        assert_eq!(output.matches("wasm.memory {").count(), 1, "{output}");
         assert_eq!(output.matches("wasm.export_memory").count(), 1, "{output}");
         assert_eq!(output.matches("wasm.data").count(), 2, "{output}");
         assert!(!output.contains("tribute_io.write"), "{output}");

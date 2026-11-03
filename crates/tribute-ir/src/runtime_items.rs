@@ -205,12 +205,12 @@ mod tests {
 
     const FIXTURE: &str = r#"core.module @main {tribute.types = {"rt::Cell" = core.i32}} {
   func.func @"rt::probe"(%value: core.i32) -> core.i32 {
-    "func.return"(%value)
+    func.return %value
   }
   func.func @"rt::declared"(%value: core.i32) -> core.i32
   func.func @main() -> core.i32 {
-    %zero = "arith.const"() {value = 0} : core.i32
-    "func.return"(%zero)
+    %zero = arith.const {value = 0} : core.i32
+    func.return %zero
   }
 }"#;
 

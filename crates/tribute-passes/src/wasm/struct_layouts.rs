@@ -182,7 +182,7 @@ mod tests {
   !Pair = adt.struct<Pair(left: core.i64, right: core.i64)>
   !Shape = adt.enum<Shape { Dot() }>
   wasm.func @f(%pair: adt.typeref<{name = "Pair"}>, %shape: adt.typeref<{name = "Shape"}>, %unknown: adt.typeref<{name = "Missing"}>) -> core.nil {
-    "wasm.return"()
+    wasm.return
   }
 }"#,
         );

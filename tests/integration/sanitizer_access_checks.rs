@@ -23,13 +23,13 @@ fn program(body: &str) -> String {
   "clif.func"() {{abi = "C", sym_name = "__asan_init", type = clif.func_sig<() -> core.nil>}}
   "clif.func"() ({{
     ^entry:
-      %init = "clif.call"() {{callee = @__asan_init}} : core.nil
-      %size = "clif.iconst"() {{value = 16}} : core.i64
-      %object = "clif.call"(%size) {{callee = @__tribute_alloc}} : core.ptr
-      %value = "clif.iconst"() {{value = 7}} : core.i64
+      %init = clif.call {{callee = @__asan_init}} : core.nil
+      %size = clif.iconst {{value = 16}} : core.i64
+      %object = clif.call %size {{callee = @__tribute_alloc}} : core.ptr
+      %value = clif.iconst {{value = 7}} : core.i64
 {body}
-      %code = "clif.iconst"() {{value = 0}} : core.i32
-      "clif.return"(%code)
+      %code = clif.iconst {{value = 0}} : core.i32
+      clif.return %code
   }}) {{sym_name = "main", type = clif.func_sig<() -> core.i32>}}
 }}"#
     )
@@ -62,15 +62,15 @@ fn assert_reports(body: &str, report: &str) {
 }
 
 const FREE: &str =
-    "      %freed = \"clif.call\"(%object, %size) {callee = @__tribute_dealloc} : core.nil";
+    "      %freed = clif.call %object, %size {callee = @__tribute_dealloc} : core.nil";
 
 #[test]
 fn accesses_inside_a_live_allocation_pass() {
     let output = run(
         &format!(
-            r#"      "clif.store"(%value, %object) {{offset = 0}}
-      "clif.store"(%value, %object) {{offset = 8}}
-      %read = "clif.load"(%object) {{offset = 8}} : core.i64
+            r#"      clif.store %value, %object {{offset = 0}}
+      clif.store %value, %object {{offset = 8}}
+      %read = clif.load %object {{offset = 8}} : core.i64
 {FREE}"#
         ),
         true,
@@ -82,11 +82,11 @@ fn accesses_inside_a_live_allocation_pass() {
 #[test]
 fn load_past_the_end_of_an_allocation_reports_at_the_access() {
     assert_reports(
-        "      %read = \"clif.load\"(%object) {offset = 16} : core.i64",
+        "      %read = clif.load %object {offset = 16} : core.i64",
         "heap-buffer-overflow",
     );
     assert_reports(
-        "      %read = \"clif.load\"(%object) {offset = 12} : core.i64",
+        "      %read = clif.load %object {offset = 12} : core.i64",
         "READ of size 8",
     );
 }
@@ -94,11 +94,11 @@ fn load_past_the_end_of_an_allocation_reports_at_the_access() {
 #[test]
 fn store_before_the_start_of_an_allocation_reports_at_the_access() {
     assert_reports(
-        "      \"clif.store\"(%value, %object) {offset = -8}",
+        "      clif.store %value, %object {offset = -8}",
         "heap-buffer-overflow",
     );
     assert_reports(
-        "      \"clif.store\"(%value, %object) {offset = -8}",
+        "      clif.store %value, %object {offset = -8}",
         "WRITE of size 8",
     );
 }
@@ -106,14 +106,14 @@ fn store_before_the_start_of_an_allocation_reports_at_the_access() {
 #[test]
 fn access_after_free_reports_at_the_access() {
     assert_reports(
-        &format!("{FREE}\n      %read = \"clif.load\"(%object) {{offset = 0}} : core.i64"),
+        &format!("{FREE}\n      %read = clif.load %object {{offset = 0}} : core.i64"),
         "heap-use-after-free",
     );
     assert_reports(
         &format!(
             r#"{FREE}
-      %one = "clif.iconst"() {{value = 1}} : core.i32
-      %old = "clif.atomic_rmw"(%object, %one) {{bin_op = "add", offset = 0}} : core.i32"#
+      %one = clif.iconst {{value = 1}} : core.i32
+      %old = clif.atomic_rmw %object, %one {{bin_op = "add", offset = 0}} : core.i32"#
         ),
         "WRITE of size 4",
     );
@@ -128,13 +128,13 @@ fn run_to_exit_check(body: &str) -> Output {
   "clif.func"() {{abi = "C", sym_name = "__asan_exit", type = clif.func_sig<() -> core.nil>}}
   "clif.func"() ({{
     ^entry:
-      %init = "clif.call"() {{callee = @__asan_init}} : core.nil
-      %size = "clif.iconst"() {{value = 16}} : core.i64
-      %object = "clif.call"(%size) {{callee = @__tribute_alloc}} : core.ptr
+      %init = clif.call {{callee = @__asan_init}} : core.nil
+      %size = clif.iconst {{value = 16}} : core.i64
+      %object = clif.call %size {{callee = @__tribute_alloc}} : core.ptr
 {body}
-      %exit = "clif.call"() {{callee = @__asan_exit}} : core.nil
-      %code = "clif.iconst"() {{value = 0}} : core.i32
-      "clif.return"(%code)
+      %exit = clif.call {{callee = @__asan_exit}} : core.nil
+      %code = clif.iconst {{value = 0}} : core.i32
+      clif.return %code
   }}) {{sym_name = "main", type = clif.func_sig<() -> core.i32>}}
 }}"#
     );

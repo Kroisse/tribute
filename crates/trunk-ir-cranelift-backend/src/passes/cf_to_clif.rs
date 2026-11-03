@@ -190,11 +190,11 @@ mod tests {
     ^entry(%choice: {discriminant_ty}):
       "cf.switch"(%choice)[^fallback, ^first, ^second] {{cases = [7, -1]}}
     ^fallback:
-      "clif.return"()
+      clif.return
     ^first:
-      "clif.return"()
+      clif.return
     ^second:
-      "clif.return"()
+      clif.return
   }}) {{sym_name = "select", type = clif.func_sig<({discriminant_ty}) -> ()>}}
 }}"#
                 ),

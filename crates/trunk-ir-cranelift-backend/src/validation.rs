@@ -526,19 +526,19 @@ mod tests {
             r#"core.module @test {
   "clif.func"() ({
     ^entry(%value: core.i32):
-      "clif.return"()
+      clif.return
   }) {sym_name = "tail_target", type = clif.func_sig<(core.i32) -> (), {call_conv = "tail"}>}
   "clif.func"() ({
     ^entry(%value: core.i32):
-      "clif.return"()
+      clif.return
   }) {sym_name = "platform_target", type = clif.func_sig<(core.i32) -> ()>}
   "clif.func"() ({
     ^entry(%value: core.i32):
-      "clif.return_call"(%value) {callee = @tail_target}
+      clif.return_call %value {callee = @tail_target}
   }) {sym_name = "platform_caller", type = clif.func_sig<(core.i32) -> ()>}
   "clif.func"() ({
     ^entry(%value: core.i32):
-      "clif.return_call"(%value) {callee = @platform_target}
+      clif.return_call %value {callee = @platform_target}
   }) {sym_name = "to_platform", type = clif.func_sig<(core.i32) -> (), {call_conv = "tail"}>}
   "clif.func"() ({
     ^entry(%callee: core.ptr, %value: core.i32):
@@ -560,11 +560,11 @@ mod tests {
             r#"core.module @test {
   "clif.func"() ({
     ^entry(%value: core.i32):
-      "clif.return"()
+      clif.return
   }) {sym_name = "target", type = clif.func_sig<(core.i32) -> (), {call_conv = "tail"}>}
   "clif.func"() ({
     ^entry(%value: core.i32):
-      "clif.return_call"(%value) {callee = @target}
+      clif.return_call %value {callee = @target}
   }) {sym_name = "direct", type = clif.func_sig<(core.i32) -> (), {call_conv = "tail"}>}
   "clif.func"() ({
     ^entry(%callee: core.ptr, %value: core.i32):
@@ -582,7 +582,7 @@ mod tests {
   "clif.func"() {sym_name = "foreign", abi = "C", type = clif.func_sig<(core.i32) -> (), {call_conv = "tail"}>}
   "clif.func"() ({
     ^entry:
-      "clif.return"()
+      clif.return
   }) {sym_name = "main", type = clif.func_sig<() -> (), {call_conv = "tail"}>}
 }"#,
         );
@@ -601,7 +601,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
-            "core.module @test { clif.func @f() { \"clif.return\"() } }",
+            "core.module @test { clif.func @f() { clif.return } }",
         );
 
         validate_clif_ir(&ctx, module).unwrap();
@@ -623,8 +623,8 @@ mod tests {
         let error = validation_error(
             r#"core.module @test {
   clif.func @f(%x: core.i32) -> core.i64 {
-    %r = "core.unrealized_conversion_cast"(%x) : core.i64
-    "clif.return"(%r)
+    %r = core.unrealized_conversion_cast %x : core.i64
+    clif.return %r
   }
 }"#,
         );
@@ -648,16 +648,16 @@ mod tests {
     fn native_boundary_rejects_unused_direct_and_exact_indirect_result_mismatches() {
         let error = validation_error(
             r#"core.module @test {
-  clif.func @direct_target(%value: core.i32) -> core.i32 { "clif.return"(%value) }
+  clif.func @direct_target(%value: core.i32) -> core.i32 { clif.return %value }
   clif.func @direct_caller() {
-    %value = "clif.iconst"() {value = 1} : core.i32
-    %unused = "clif.call"(%value) {callee = @direct_target} : core.i64
-    "clif.return"()
+    %value = clif.iconst {value = 1} : core.i32
+    %unused = clif.call %value {callee = @direct_target} : core.i64
+    clif.return
   }
   clif.func @indirect_caller() {
-    %callee = "clif.iconst"() {value = 0} : core.ptr
+    %callee = clif.iconst {value = 0} : core.ptr
     %first, %second = "clif.call_indirect"(%callee) {sig = clif.func_sig<() -> (core.i32, core.i64)>} : core.i64, core.i32
-    "clif.return"()
+    clif.return
   }
 }"#,
         );
@@ -677,10 +677,10 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  clif.func @unit(%unit: core.nil) -> core.nil { "clif.return"(%unit) }
+  clif.func @unit(%unit: core.nil) -> core.nil { clif.return %unit }
   clif.func @caller(%unit: core.nil) {
-    %unused = "clif.call"(%unit) {callee = @unit} : core.nil
-    "clif.return"()
+    %unused = clif.call %unit {callee = @unit} : core.nil
+    clif.return
   }
 }"#,
         );
@@ -693,15 +693,15 @@ mod tests {
         let error = validation_error(
             r#"core.module @test {
   !shaped = test.record<core.i32 {name = "field"}, {name = "Impostor"}>
-  clif.func @target(%value: core.ptr) -> core.ptr { "clif.return"(%value) }
+  clif.func @target(%value: core.ptr) -> core.ptr { clif.return %value }
   clif.func @semantic(%callee: core.ptr, %value: test.anyref) -> core.ptr {
-    %direct = "clif.call"(%value) {callee = @target} : test.anyref
+    %direct = clif.call %value {callee = @target} : test.anyref
     %indirect = "clif.call_indirect"(%callee, %direct) {sig = clif.func_sig<(core.ptr) -> core.ptr>} : test.anyref
-    "clif.return"(%indirect)
+    clif.return %indirect
   }
   clif.func @shaped(%value: !shaped) -> core.ptr {
-    %direct = "clif.call"(%value) {callee = @target} : !shaped
-    "clif.return"(%direct)
+    %direct = clif.call %value {callee = @target} : !shaped
+    clif.return %direct
   }
 }"#,
         );
@@ -729,20 +729,20 @@ mod tests {
         let error = validation_error(
             r#"core.module @test {
   clif.func @takes_i64(%value: core.i64) -> core.i32 {
-    %result = "clif.iconst"() {value = 1} : core.i32
-    "clif.return"(%result)
+    %result = clif.iconst {value = 1} : core.i32
+    clif.return %result
   }
   clif.func @tail_target() -> core.i32 {
-    %result = "clif.iconst"() {value = 1} : core.i32
-    "clif.return"(%result)
+    %result = clif.iconst {value = 1} : core.i32
+    clif.return %result
   }
-  clif.func @bad_return() -> core.i32 { "clif.return"() }
+  clif.func @bad_return() -> core.i32 { clif.return }
   clif.func @bad_argument() {
-    %value = "clif.iconst"() {value = 1} : core.i32
-    %unused = "clif.call"(%value) {callee = @takes_i64} : core.i32
-    "clif.return"()
+    %value = clif.iconst {value = 1} : core.i32
+    %unused = clif.call %value {callee = @takes_i64} : core.i32
+    clif.return
   }
-  clif.func @bad_tail() { "clif.return_call"() {callee = @tail_target} }
+  clif.func @bad_tail() { clif.return_call {callee = @tail_target} }
   clif.func @bad_indirect_tail(%callee: core.ptr, %value: core.i32) {
     "clif.return_call_indirect"(%callee, %value) {sig = clif.func_sig<(core.i64) -> ()>}
   }

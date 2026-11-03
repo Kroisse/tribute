@@ -29,6 +29,7 @@ mod scf {
     }
 
     #[implements(RegionBranchTerminator)]
+    #[asm_format(values attr_dict_bare)]
     fn r#yield(values: Variadic<_>) {}
 
     #[implements(RegionBranch)]
@@ -38,9 +39,11 @@ mod scf {
     }
 
     #[implements(RegionBranchTerminator)]
+    #[asm_format(values attr_dict_bare)]
     fn r#continue(values: Variadic<_>) {}
 
     #[implements(RegionBranchTerminator)]
+    #[asm_format(value attr_dict_bare)]
     fn r#break(value: Value<_>) {}
 }
 
@@ -655,14 +658,14 @@ mod canonicalize_tests {
         // result with %a (the yield's operand).
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %t = "arith.const"() {value = 1} : core.i1
+    %t = arith.const {value = 1} : core.i1
     %r = "scf.if"(%t) ({
-      %a = "arith.addi"(%x, %x) : core.i32
-      "scf.yield"(%a)
+      %a = arith.addi %x, %x : core.i32
+      scf.yield %a
     }, {
-      "scf.yield"(%x)
+      scf.yield %x
     }) : core.i32
-    "func.return"(%r)
+    func.return %r
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -685,14 +688,14 @@ mod canonicalize_tests {
         // region is the active one.
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %f = "arith.const"() {value = 0} : core.i1
+    %f = arith.const {value = 0} : core.i1
     %r = "scf.if"(%f) ({
-      "scf.yield"(%x)
+      scf.yield %x
     }, {
-      %a = "arith.addi"(%x, %x) : core.i32
-      "scf.yield"(%a)
+      %a = arith.addi %x, %x : core.i32
+      scf.yield %a
     }) : core.i32
-    "func.return"(%r)
+    func.return %r
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -714,11 +717,11 @@ mod canonicalize_tests {
         let input = r#"core.module @test {
   func.func @f(%cond: core.i1, %x: core.i32) -> core.i32 {
     %r = "scf.if"(%cond) ({
-      "scf.yield"(%x)
+      scf.yield %x
     }, {
-      "scf.yield"(%x)
+      scf.yield %x
     }) : core.i32
-    "func.return"(%r)
+    func.return %r
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -736,13 +739,13 @@ mod canonicalize_tests {
         // validation rather than picking a branch by truthiness.
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %bad = "arith.const"() {value = 2} : core.i32
+    %bad = arith.const {value = 2} : core.i32
     %r = "scf.if"(%bad) ({
-      "scf.yield"(%x)
+      scf.yield %x
     }, {
-      "scf.yield"(%x)
+      scf.yield %x
     }) : core.i32
-    "func.return"(%r)
+    func.return %r
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -760,13 +763,13 @@ mod canonicalize_tests {
         // than the rewrite picking the then-branch by truthiness.
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %bad = "arith.const"() {value = 2} : core.i1
+    %bad = arith.const {value = 2} : core.i1
     %r = "scf.if"(%bad) ({
-      "scf.yield"(%x)
+      scf.yield %x
     }, {
-      "scf.yield"(%x)
+      scf.yield %x
     }) : core.i32
-    "func.return"(%r)
+    func.return %r
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -783,14 +786,14 @@ mod canonicalize_tests {
         // the if is erased and its result becomes the yield's operand.
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %t = "arith.const"() {value = 1} : core.i1
+    %t = arith.const {value = 1} : core.i1
     %r = "scf.if"(%t) ({
-      "scf.yield"(%x)
+      scf.yield %x
     }, {
-      %a = "arith.addi"(%x, %x) : core.i32
-      "scf.yield"(%a)
+      %a = arith.addi %x, %x : core.i32
+      scf.yield %a
     }) : core.i32
-    "func.return"(%r)
+    func.return %r
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -810,21 +813,21 @@ mod canonicalize_tests {
 
     const SWITCH_FALLTHROUGH: &str = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %sel = "arith.const"() {value = SELECTOR} : core.i32
+    %sel = arith.const {value = SELECTOR} : core.i32
     "scf.switch"(%sel) ({
       "scf.case"() ({
-        %a = "arith.addi"(%x, %x) : core.i32
-        "scf.yield"()
+        %a = arith.addi %x, %x : core.i32
+        scf.yield
       }) {value = 0}
       "scf.case"() ({
-        %b = "arith.muli"(%x, %x) : core.i32
-        "scf.yield"()
+        %b = arith.muli %x, %x : core.i32
+        scf.yield
       }) {value = 1}
       "scf.default"() ({
-        "scf.yield"()
+        scf.yield
       })
     })
-    "func.return"(%x)
+    func.return %x
   }
 }"#;
 
@@ -879,13 +882,13 @@ mod canonicalize_tests {
     fn switch_terminal_arm_is_spliced_when_switch_ends_block() {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %sel = "arith.const"() {value = 0} : core.i32
+    %sel = arith.const {value = 0} : core.i32
     "scf.switch"(%sel) ({
       "scf.case"() ({
-        "func.return"(%x)
+        func.return %x
       }) {value = 0}
       "scf.default"() ({
-        "func.unreachable"()
+        func.unreachable
       })
     })
   }
@@ -913,16 +916,16 @@ mod canonicalize_tests {
     fn switch_terminal_arm_is_kept_when_ops_follow_the_switch() {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %sel = "arith.const"() {value = 0} : core.i32
+    %sel = arith.const {value = 0} : core.i32
     "scf.switch"(%sel) ({
       "scf.case"() ({
-        "func.return"(%x)
+        func.return %x
       }) {value = 0}
       "scf.default"() ({
-        "func.return"(%x)
+        func.return %x
       })
     })
-    "func.return"(%x)
+    func.return %x
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -942,13 +945,13 @@ mod canonicalize_tests {
   func.func @f(%tag: core.i32, %x: core.i32) -> core.i32 {
     "scf.switch"(%tag) ({
       "scf.case"() ({
-        "scf.yield"()
+        scf.yield
       }) {value = 0}
       "scf.default"() ({
-        "scf.yield"()
+        scf.yield
       })
     })
-    "func.return"(%x)
+    func.return %x
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -966,13 +969,13 @@ mod canonicalize_tests {
     fn switch_without_matching_arm_or_default_is_not_folded() {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %sel = "arith.const"() {value = 5} : core.i32
+    %sel = arith.const {value = 5} : core.i32
     "scf.switch"(%sel) ({
       "scf.case"() ({
-        "scf.yield"()
+        scf.yield
       }) {value = 0}
     })
-    "func.return"(%x)
+    func.return %x
   }
 }"#;
         let mut ctx = IrContext::new();

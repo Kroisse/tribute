@@ -1206,8 +1206,8 @@ mod tests {
     fn nested_pass_requires_isolated_anchor() {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %y = "arith.addi"(%x, %x) : core.i32
-    "func.return"(%y)
+    %y = arith.addi %x, %x : core.i32
+    func.return %y
   }
 }"#;
         let mut ctx = IrContext::new();

@@ -13,7 +13,7 @@ fn rules(input: &str) -> Vec<&'static str> {
 }
 
 const CTL: &str = r#"  "ability.decl"() ({
-    "ability.operation"() {kind = "op", op_name = "ctl", param_types = [], result_type = core.i32}
+    ability.operation {kind = "op", op_name = "ctl", param_types = [], result_type = core.i32}
   }) {sym_name = "Ctl"}"#;
 
 /// `app` has one class variable, the row of its callback; `main` selects
@@ -25,16 +25,16 @@ fn calls(callback: &str, own: &str, lambda: &str, callee: &str) -> String {
 {CTL}
   tribute_cps.func @"app$9D"['a0](%x: core.i32, %f: !cb) -> core.i32 row(| 'a0) convention({own}) {{
     %r = "tribute_cps.call_indirect"(%f, %x) {{convention = "{callback}"}} : core.i32
-    "tribute_control.return"(%r)
+    tribute_control.return %r
   }}
   tribute_cps.func @main(%x: core.i32) -> core.i32 convention(direct) {{
     %f = tribute_cps.lambda(%y: core.i32) -> core.i32 captures [] entries {{
       {lambda} {{
-        "tribute_control.return"(%y)
+        tribute_control.return %y
       }}
     }}
-    %r = "tribute_control.call"(%x, %f) {{callee = @"{callee}", row_args = [{{}}]}} : core.i32
-    "tribute_control.return"(%r)
+    %r = tribute_control.call %x, %f {{callee = @"{callee}", row_args = [{{}}]}} : core.i32
+    tribute_control.return %r
   }}
 }}"#
     )
@@ -78,13 +78,13 @@ fn an_instance_of_an_upper_bound_has_a_body_per_class_up_to_it() {
 {bodies}
     }}
     %r = "tribute_cps.call_indirect"(%f, %x) {{convention = "evidence_direct"}} : core.i32
-    "tribute_control.return"(%r)
+    tribute_control.return %r
   }}
 }}"#
         )
     };
     let body = |convention: &str| {
-        format!("      {convention} {{\n        \"tribute_control.return\"(%y)\n      }}")
+        format!("      {convention} {{\n        tribute_control.return %y\n      }}")
     };
     assert_eq!(rules(&input(&body("direct"))), ["lambda"]);
     let both = format!("{}\n{}", body("direct"), body("evidence_direct"));
@@ -103,7 +103,7 @@ fn a_suffix_names_one_class_per_class_variable() {
 fn instances_of_one_definition_select_the_same_class_variables() {
     let input = calls("direct", "direct", "direct", "app$9D").replace(
         "  tribute_cps.func @main",
-        "  tribute_cps.func @\"app$9E\"['a0](%x: core.i32) -> core.i32 row(| 'a0) convention(cps) {\n    \"tribute_control.return\"(%x)\n  }\n  tribute_cps.func @main",
+        "  tribute_cps.func @\"app$9E\"['a0](%x: core.i32) -> core.i32 row(| 'a0) convention(cps) {\n    tribute_control.return %x\n  }\n  tribute_cps.func @main",
     );
     assert!(rules(&input).contains(&"siblings"), "{:?}", rules(&input));
 }
@@ -117,22 +117,22 @@ CTL
   tribute_cps.func @f[local 'a0, local 'a1](%x: core.i32) -> core.i32 convention(direct) {
     %g = tribute_cps.lambda['a0](%y: core.i32) -> core.i32 row(| 'a0) captures [] entries {
       direct {
-        "tribute_control.return"(%y)
+        tribute_control.return %y
       }
     }
     %h = tribute_cps.lambda['a1]() -> core.i32 row(| 'a1) captures [%g] entries {
       direct {
-        %s = "tribute_control.instantiate"(%g) {row_args = [{tail = 1}]} : !l1
-        %c = "arith.const"() {value = 1} : core.i32
+        %s = tribute_control.instantiate %g {row_args = [{tail = 1}]} : !l1
+        %c = arith.const {value = 1} : core.i32
         %v = "tribute_cps.call_indirect"(%s, %c) {convention = "direct"} : core.i32
-        "tribute_control.return"(%v)
+        tribute_control.return %v
       }
     }
-    %a = "tribute_control.instantiate"(%g) {row_args = [{}]} : !l0
-    %i = "tribute_control.instantiate"(%h) {row_args = [{}]} : !h0
+    %a = tribute_control.instantiate %g {row_args = [{}]} : !l0
+    %i = tribute_control.instantiate %h {row_args = [{}]} : !h0
     %r = "tribute_cps.call_indirect"(%i) {convention = "direct"} : core.i32
     USE
-    "tribute_control.return"(%r)
+    tribute_control.return %r
   }
 }"#;
 
@@ -146,12 +146,12 @@ fn a_local_class_settles_from_direct_through_other_locals() {
 fn a_lambda_has_a_body_for_each_class_its_instantiations_select() {
     let input = LOCAL.replace("CTL", CTL).replace(
         "USE",
-        "%b = \"tribute_control.instantiate\"(%g) {row_args = [{instances = [@Ctl]}]} : !lc",
+        "%b = tribute_control.instantiate %g {row_args = [{instances = [@Ctl]}]} : !lc",
     );
     assert_eq!(rules(&input), ["lambda"]);
     let input = input.replace(
-        "      direct {\n        \"tribute_control.return\"(%y)\n      }\n",
-        "      direct {\n        \"tribute_control.return\"(%y)\n      }\n      cps {\n        \"tribute_control.return\"(%y)\n      }\n",
+        "      direct {\n        tribute_control.return %y\n      }\n",
+        "      direct {\n        tribute_control.return %y\n      }\n      cps {\n        tribute_control.return %y\n      }\n",
     );
     assert_eq!(rules(&input), [""; 0]);
 }
@@ -166,18 +166,18 @@ fn instantiations_that_select_one_class_may_pass_other_classes() {
   !l0 = tribute_control.func_sig<(core.i32) -> core.i32 row(@Ctl)>
   !la = tribute_control.func_sig<(core.i32) -> core.i32 row(@Ask, @Ctl)>
   "ability.decl"() ({{
-    "ability.operation"() {{kind = "fn", op_name = "ask", param_types = [], result_type = core.i32}}
+    ability.operation {{kind = "fn", op_name = "ask", param_types = [], result_type = core.i32}}
   }}) {{sym_name = "Ask"}}
 {CTL}
   tribute_cps.func @f[local 'a0](%x: core.i32) -> core.i32 convention(direct) {{
     %g = tribute_cps.lambda['a0](%y: core.i32) -> core.i32 row(@Ctl | 'a0) captures [] entries {{
       cps {{
-        "tribute_control.return"(%y)
+        tribute_control.return %y
       }}
     }}
-    %a = "tribute_control.instantiate"(%g) {{row_args = [{{}}]}} : !l0
-    %b = "tribute_control.instantiate"(%g) {{row_args = [{second}]}} : {}
-    "tribute_control.return"(%x)
+    %a = tribute_control.instantiate %g {{row_args = [{{}}]}} : !l0
+    %b = tribute_control.instantiate %g {{row_args = [{second}]}} : {}
+    tribute_control.return %x
   }}
 }}"#,
             if second == "{}" { "!l0" } else { "!la" }
@@ -196,12 +196,12 @@ fn a_func_ref_enters_its_table_no_stronger_than_the_row_of_its_value() {
   !closed = tribute_control.func_sig<(core.i32) -> core.i32>
 {CTL}
   tribute_cps.func @pure(%x: core.i32) -> core.i32 convention(direct) {{
-    "tribute_control.return"(%x)
+    tribute_control.return %x
   }}
   tribute_cps.func_table @"pure$8" = {{{entry} = @pure}}
   tribute_cps.func @f(%x: core.i32) -> core.i32 convention(direct) {{
     %p = "tribute_cps.func_ref"() {{func_ref = @"pure$8"}} : {value}
-    "tribute_control.return"(%x)
+    tribute_control.return %x
   }}
 }}"#
         )
@@ -219,7 +219,7 @@ fn an_own_row_reads_its_tail_only_when_it_is_a_class_variable() {
         format!(
             r#"core.module @m {{
   tribute_cps.func @g['a0](%x: core.i32) -> core.i32 row(| 'a0){inferred} convention({convention}) {{
-    "tribute_control.return"(%x)
+    tribute_control.return %x
   }}
 }}"#
         )
@@ -266,13 +266,13 @@ fn a_definition_without_a_body_has_no_class_variables() {
 {CTL}
   tribute_cps.func @external['a0](%x: core.i32, %f: !cb) -> core.i32 row(| 'a0) convention(cps)
   tribute_cps.func @pure(%y: core.i32) -> core.i32 convention(direct) {{
-    "tribute_control.return"(%y)
+    tribute_control.return %y
   }}
   tribute_cps.func_table @"pure$8" = {{direct = @pure}}
   tribute_cps.func @main(%x: core.i32) -> core.i32 convention(direct) {{
     %f = "tribute_cps.func_ref"() {{func_ref = @"pure$8"}} : !closed
-    %r = "tribute_control.call"(%x, %f) {{callee = @external, row_args = [{{}}]}} : core.i32
-    "tribute_control.return"(%r)
+    %r = tribute_control.call %x, %f {{callee = @external, row_args = [{{}}]}} : core.i32
+    tribute_control.return %r
   }}
 }}"#
     );

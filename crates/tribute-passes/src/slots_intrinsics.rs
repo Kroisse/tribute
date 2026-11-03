@@ -312,13 +312,13 @@ mod tests {
   func.func @"std::runtime::Slots::replace$Nat"(%s: adt.array<core.i32>, %at: core.i32, %v: core.i32) -> adt.array<core.i32> attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::runtime::Slots::replace"}
   func.func @"std::runtime::Slots::empty"() -> adt.array<tribute_rt.anyref> attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::runtime::Slots::empty"}
   func.func @run(%at: core.i32, %v: core.i32) -> core.i32 {
-    %0 = "func.call"() {callee = @"std::runtime::Slots::empty$Nat"} : adt.array<core.i32>
-    %1 = "func.call"(%0, %at, %v) {callee = @"std::runtime::Slots::insert$Nat"} : adt.array<core.i32>
-    %2 = "func.call"(%1, %at, %v) {callee = @"std::runtime::Slots::replace$Nat"} : adt.array<core.i32>
-    %3 = "func.call"(%2, %at) {callee = @"std::runtime::Slots::remove$Nat"} : adt.array<core.i32>
-    %4 = "func.call"(%1, %at) {callee = @"std::runtime::Slots::get$Nat"} : core.i32
-    %5 = "func.call"(%3) {callee = @"std::runtime::Slots::len$Nat"} : core.i32
-    "func.return"(%5)
+    %0 = func.call {callee = @"std::runtime::Slots::empty$Nat"} : adt.array<core.i32>
+    %1 = func.call %0, %at, %v {callee = @"std::runtime::Slots::insert$Nat"} : adt.array<core.i32>
+    %2 = func.call %1, %at, %v {callee = @"std::runtime::Slots::replace$Nat"} : adt.array<core.i32>
+    %3 = func.call %2, %at {callee = @"std::runtime::Slots::remove$Nat"} : adt.array<core.i32>
+    %4 = func.call %1, %at {callee = @"std::runtime::Slots::get$Nat"} : core.i32
+    %5 = func.call %3 {callee = @"std::runtime::Slots::len$Nat"} : core.i32
+    func.return %5
   }
 }"#,
         );
@@ -354,9 +354,9 @@ mod tests {
             r#"core.module @test {
   func.func @"std::runtime::Slots::len$Nat"(%s: adt.array<core.i32>) -> core.i32 attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::runtime::Slots::len"}
   func.func @run(%s: adt.array<core.i32>) -> core.i32 {
-    %0 = "func.call"(%s) {callee = @"std::runtime::Slots::len$Nat"} : core.i32
-    %f = "func.constant"() {func_ref = @"std::runtime::Slots::len$Nat"} : func.func_sig<(adt.array<core.i32>) -> core.i32>
-    "func.return"(%0)
+    %0 = func.call %s {callee = @"std::runtime::Slots::len$Nat"} : core.i32
+    %f = func.constant {func_ref = @"std::runtime::Slots::len$Nat"} : func.func_sig<(adt.array<core.i32>) -> core.i32>
+    func.return %0
   }
 }"#,
         );
@@ -377,9 +377,9 @@ mod tests {
             r#"core.module @test {
   func.func @"std::runtime::Slots::len$Nat"(%s: adt.array<core.i32>) -> core.i32 attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::runtime::Slots::len"}
   func.func @run(%s: adt.array<core.i32>, %n: core.i32) -> core.i32 {
-    %0 = "func.call"(%s) {callee = @"std::runtime::Slots::len$Nat"} : core.i32
-    %1 = "func.call"(%s, %n) {callee = @"std::runtime::Slots::len$Nat"} : core.i32
-    "func.return"(%0)
+    %0 = func.call %s {callee = @"std::runtime::Slots::len$Nat"} : core.i32
+    %1 = func.call %s, %n {callee = @"std::runtime::Slots::len$Nat"} : core.i32
+    func.return %0
   }
 }"#,
         );
@@ -397,11 +397,11 @@ mod tests {
         let output = lower(
             r#"core.module @test {
   func.func @"std::runtime::Slots::len"(%n: core.i32) -> core.i32 {
-    "func.return"(%n)
+    func.return %n
   }
   func.func @run(%n: core.i32) -> core.i32 {
-    %0 = "func.call"(%n) {callee = @"std::runtime::Slots::len"} : core.i32
-    "func.return"(%0)
+    %0 = func.call %n {callee = @"std::runtime::Slots::len"} : core.i32
+    func.return %0
   }
 }"#,
         );

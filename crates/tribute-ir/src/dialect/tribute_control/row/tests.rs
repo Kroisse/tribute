@@ -14,22 +14,22 @@ const MODULE: &str = r#"core.module @test {
   !applied = tribute_control.func_sig<(!closed, core.i32) -> core.i32 row(@A, @B)>
 
   "ability.decl"() ({
-    "ability.operation"() {kind = "fn", op_name = "get", param_types = [], result_type = core.i32}
+    ability.operation {kind = "fn", op_name = "get", param_types = [], result_type = core.i32}
   }) {sym_name = "A"}
   "ability.decl"() ({
-    "ability.operation"() {kind = "op", op_name = "put", param_types = [core.i32], result_type = core.i32}
+    ability.operation {kind = "op", op_name = "put", param_types = [core.i32], result_type = core.i32}
   }) {sym_name = "B"}
   tribute_control.func @apply['a0](%f: !open, %x: core.i32) -> core.i32 row(| 'a0) {
     %r = "tribute_control.call_indirect"(%f, %x) : core.i32
-    "tribute_control.return"(%r)
+    tribute_control.return %r
   }
   tribute_control.func @main(%x: core.i32) -> core.i32 row(@A, @B) {
     %f = tribute_control.lambda(%y: core.i32) -> core.i32 row(@A, @B) captures [] {
-      "tribute_control.return"(%y)
+      tribute_control.return %y
     }
     %g = "tribute_control.func_ref"() {func_ref = @apply, row_args = [{instances = [@A, @B]}]} : !applied
-    %r = "tribute_control.call"(%f, %x) {callee = @apply, row_args = [{instances = [@A, @B]}]} : core.i32
-    "tribute_control.return"(%r)
+    %r = tribute_control.call %f, %x {callee = @apply, row_args = [{instances = [@A, @B]}]} : core.i32
+    tribute_control.return %r
   }
 }"#;
 
@@ -224,14 +224,14 @@ fn row_binders_put_quantified_binders_first() {
 
 const UNIONS: &str = r#"core.module @test {
   "ability.decl"() ({
-    "ability.operation"() {kind = "op", op_name = "get", param_types = [], result_type = core.i32}
+    ability.operation {kind = "op", op_name = "get", param_types = [], result_type = core.i32}
   }) {sym_name = "A"}
   tribute_control.func @join['a0 = 'a1 | 'a2, 'a1, 'a2](%x: core.i32) -> core.i32 row(| 'a0) {
-    "tribute_control.return"(%x)
+    tribute_control.return %x
   }
   tribute_control.func @caller['a0 = 'a1 | 'a2, 'a1, 'a2](%x: core.i32) -> core.i32 row(| 'a0) {
-    %r = "tribute_control.call"(%x) {callee = @join, evidence_plan = PLAN, row_args = [{tail = 0}, {tail = 1}, {tail = 2}]} : core.i32
-    "tribute_control.return"(%r)
+    %r = tribute_control.call %x {callee = @join, evidence_plan = PLAN, row_args = [{tail = 0}, {tail = 1}, {tail = 2}]} : core.i32
+    tribute_control.return %r
   }
 }"#;
 
@@ -376,7 +376,7 @@ fn a_declared_row_is_an_absent_inferred_row() {
     let (mut ctx, module) = parse(
         r#"core.module @test {
   tribute_control.func @f(%x: core.i32) -> core.i32 {
-    "tribute_control.return"(%x)
+    tribute_control.return %x
   }
 }"#,
     );
@@ -393,7 +393,7 @@ fn a_declared_row_is_an_absent_inferred_row() {
 fn binder_headers_name_kinds_unions_and_an_inferred_row() {
     let input = r#"core.module @test {
   tribute_control.func @f['a0 = 'a1 | 'a2, ability_arg 'a1, local 'a2, body 'a3](%x: core.i32) -> core.i32 row(| 'a0) inferred {
-    "tribute_control.return"(%x)
+    tribute_control.return %x
   }
 }"#;
     let (ctx, module) = parse(input);
@@ -444,11 +444,11 @@ fn a_header_may_declare_only_unquantified_binders() {
     let input = r#"core.module @test {
   tribute_control.func @run[local 'a0, body 'a1]() -> core.i32 {
     %f = tribute_control.lambda['a0]() -> core.i32 row(| 'a0) captures [] {
-      %x = "arith.const"() {value = 1} : core.i32
-      "tribute_control.return"(%x)
+      %x = arith.const {value = 1} : core.i32
+      tribute_control.return %x
     }
-    %y = "arith.const"() {value = 2} : core.i32
-    "tribute_control.return"(%y)
+    %y = arith.const {value = 2} : core.i32
+    tribute_control.return %y
   }
 }"#;
     let (ctx, module) = parse(input);
@@ -504,11 +504,11 @@ const LOCALS: &str = r#"core.module @test {
   }) {sym_name = "A"}
   tribute_control.func @f['a0, local 'a1](%x: core.i32) -> core.i32 row(| 'a0) {
     %g = tribute_control.lambda['a1](%y: core.i32) -> core.i32 row(| 'a1) captures [] {
-      "tribute_control.return"(%y)
+      tribute_control.return %y
     }
-    %s = "tribute_control.instantiate"(%g) {row_args = [ARGS]} : RESULT
+    %s = tribute_control.instantiate %g {row_args = [ARGS]} : RESULT
     %r = "tribute_control.call_indirect"(%s, %x) : core.i32
-    "tribute_control.return"(%r)
+    tribute_control.return %r
   }
 }"#;
 
@@ -530,9 +530,7 @@ fn a_quantifying_lambda_round_trips_and_its_uses_instantiate_it() {
         "{printed}"
     );
     assert!(
-        printed.contains(
-            "%3 = \"tribute_control.instantiate\"(%1) {row_args = [{tail = 0}]} : !step0"
-        ),
+        printed.contains("%3 = tribute_control.instantiate %1 {row_args = [{tail = 0}]} : !step0"),
         "{printed}"
     );
     let (reparsed, module) = parse(&printed);
@@ -584,8 +582,8 @@ fn a_lambda_quantifies_local_binders_it_alone_owns() {
     );
     assert_rejects(
         &locals("{tail = 0}", "!step0").replace(
-            "    %s = \"tribute_control.instantiate\"",
-            "    %h = tribute_control.lambda['a1](%z: core.i32) -> core.i32 row(| 'a1) captures [] {\n      \"tribute_control.return\"(%z)\n    }\n    %s = \"tribute_control.instantiate\"",
+            "    %s = tribute_control.instantiate",
+            "    %h = tribute_control.lambda['a1](%z: core.i32) -> core.i32 row(| 'a1) captures [] {\n      tribute_control.return %z\n    }\n    %s = tribute_control.instantiate",
         ),
         "local binder 1 is quantified by two lambdas",
     );
@@ -602,14 +600,14 @@ fn a_lambda_quantifies_local_binders_it_alone_owns() {
 fn a_lambda_captured_by_another_is_instantiated_in_its_body() {
     let nested = |use_: &str| {
         locals("{tail = 0}", "!step0").replace(
-            "    %s = \"tribute_control.instantiate\"(%g) {row_args = [{tail = 0}]} : !step0\n    %r = \"tribute_control.call_indirect\"(%s, %x) : core.i32\n",
+            "    %s = tribute_control.instantiate %g {row_args = [{tail = 0}]} : !step0\n    %r = \"tribute_control.call_indirect\"(%s, %x) : core.i32\n",
             &format!(
-                "    %h = tribute_control.lambda(%z: core.i32) -> core.i32 row(| 'a0) captures [%g] {{\n{use_}      \"tribute_control.return\"(%r)\n    }}\n    %r = \"tribute_control.call_indirect\"(%h, %x) : core.i32\n"
+                "    %h = tribute_control.lambda(%z: core.i32) -> core.i32 row(| 'a0) captures [%g] {{\n{use_}      tribute_control.return %r\n    }}\n    %r = \"tribute_control.call_indirect\"(%h, %x) : core.i32\n"
             ),
         )
     };
     let (ctx, module) = parse(&nested(
-        "      %s = \"tribute_control.instantiate\"(%g) {row_args = [{tail = 0}]} : !step0\n      %r = \"tribute_control.call_indirect\"(%s, %z) : core.i32\n",
+        "      %s = tribute_control.instantiate %g {row_args = [{tail = 0}]} : !step0\n      %r = \"tribute_control.call_indirect\"(%s, %z) : core.i32\n",
     ));
     let result = validate(&ctx, module);
     assert!(result.is_ok(), "{result}");
@@ -626,23 +624,23 @@ const FRONTEND: &str = r#"core.module @test {
   !applied = tribute_control.func_sig<(!pure, core.i32) -> core.i32>
   tribute_control.func @apply['a0](%f: !cb, %x: core.i32) -> core.i32 row(| 'a0) {
     %r = "tribute_control.call_indirect"(%f, %x) : core.i32
-    "tribute_control.return"(%r)
+    tribute_control.return %r
   }
   tribute_control.func @forward['a0](%f: !cb, %x: core.i32) -> core.i32 row(| 'a0) {
     "tribute_control.tail_call_indirect"(%f, %x)
   }
   tribute_control.func @main[local 'a0](%x: core.i32) -> core.i32 inferred {
     %g = tribute_control.lambda(%y: core.i32) -> core.i32 captures [] {
-      "tribute_control.return"(%y)
+      tribute_control.return %y
     }
     %h = tribute_control.lambda['a0](%z: core.i32) -> core.i32 row(| 'a0) captures [] {
-      "tribute_control.return"(%z)
+      tribute_control.return %z
     }
-    %s = "tribute_control.instantiate"(%h) {row_args = [{}]} : !pure
+    %s = tribute_control.instantiate %h {row_args = [{}]} : !pure
     %a = "tribute_control.func_ref"() {func_ref = @apply, row_args = [{}]} : !applied
     %v = "tribute_control.call_indirect"(%s, %x) : core.i32
     %r = "tribute_control.call_indirect"(%a, %g, %v) : core.i32
-    "tribute_control.return"(%r)
+    tribute_control.return %r
   }
 }"#;
 

@@ -1304,10 +1304,10 @@ mod tests {
             r#"core.module @test {
   func.func @main(%flag: core.i1, %other: core.i1) {
     ^entry(%flag: core.i1, %other: core.i1):
-      %both = "arith.and"(%flag, %other) : core.i1
-      "cf.br"(%flag)[^exit]
+      %both = arith.and %flag, %other : core.i1
+      cf.br %flag [^exit]
     ^exit(%forwarded: core.i1):
-      "func.return"()
+      func.return
   }
 }"#,
         );
@@ -1317,7 +1317,7 @@ mod tests {
             "only the operands of arith.and return to core.i1: {printed}"
         );
         assert!(
-            printed.contains(": core.i1\n      \"cf.br\"(%0)[^bb1]"),
+            printed.contains(": core.i1\n      cf.br %0 [^bb1]"),
             "{printed}"
         );
     }
@@ -1327,9 +1327,9 @@ mod tests {
         let printed = convert_booleans(
             r#"core.module @test {
   func.func @main(%left: core.i32, %right: core.i32) {
-    %less = "arith.cmpi"(%left, %right) {predicate = "slt"} : core.i1
-    %both = "arith.and"(%less, %less) : core.i1
-    "func.return"()
+    %less = arith.cmpi %left, %right {predicate = "slt"} : core.i1
+    %both = arith.and %less, %less : core.i1
+    func.return
   }
 }"#,
         );
@@ -1434,8 +1434,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %r = "arith.addi"(%x, %x) : core.i32
-    "func.return"(%r)
+    %r = arith.addi %x, %x : core.i32
+    func.return %r
   }
 }"#,
         );

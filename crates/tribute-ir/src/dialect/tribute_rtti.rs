@@ -34,6 +34,7 @@ mod tribute_rtti {
     /// `fields` lists one kind per field of that variant. For an `adt.array`,
     /// `tag` is absent and `fields` is the kind of its element.
     #[verify]
+    #[asm_format(attr_dict_bare)]
     fn layout(
         r#type: Attr<Type>,
         tag: Option<Attr<String>>,
@@ -46,6 +47,7 @@ mod tribute_rtti {
     ///
     /// Reading a null reference is undefined.
     #[flags(Pure)]
+    #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn descriptor(r#ref: Value<impl ManagedRef>) -> Value<I32> {}
 }
 
@@ -409,8 +411,8 @@ mod tests {
             r#"core.module @test {
   !Pair = adt.struct<Pair(left: tribute_rt.anyref, right: core.i64)>
   !Choice = adt.enum<Choice { None(), Some(!Pair, core.f64) }>
-  "tribute_rtti.layout"() {type = !Pair, index = 32, fields = ["dynamic", "u64"]}
-  "tribute_rtti.layout"() {type = !Choice, tag = "Some", index = 33, fields = ["managed", "f64"]}
+  tribute_rtti.layout {type = !Pair, index = 32, fields = ["dynamic", "u64"]}
+  tribute_rtti.layout {type = !Choice, tag = "Some", index = 33, fields = ["managed", "f64"]}
 }"#,
         );
         let layouts = module
@@ -457,27 +459,27 @@ mod tests {
     fn layout_verifier_rejects_fields_of_another_shape() {
         for (layout, expected) in [
             (
-                r#""tribute_rtti.layout"() {type = !Pair, index = 32, fields = ["dynamic"]}"#,
+                r#"tribute_rtti.layout {type = !Pair, index = 32, fields = ["dynamic"]}"#,
                 "expected 2 field kind(s)",
             ),
             (
-                r#""tribute_rtti.layout"() {type = !Pair, index = 32, fields = ["dynamic", "word"]}"#,
+                r#"tribute_rtti.layout {type = !Pair, index = 32, fields = ["dynamic", "word"]}"#,
                 "unknown field kind \"word\"",
             ),
             (
-                r#""tribute_rtti.layout"() {type = !Pair, index = 32, fields = ["dynamic", "i064"]}"#,
+                r#"tribute_rtti.layout {type = !Pair, index = 32, fields = ["dynamic", "i064"]}"#,
                 "unknown field kind \"i064\"",
             ),
             (
-                r#""tribute_rtti.layout"() {type = !Pair, index = 32, fields = ["dynamic", "u+8"]}"#,
+                r#"tribute_rtti.layout {type = !Pair, index = 32, fields = ["dynamic", "u+8"]}"#,
                 "unknown field kind \"u+8\"",
             ),
             (
-                r#""tribute_rtti.layout"() {type = !Choice, index = 33, fields = []}"#,
+                r#"tribute_rtti.layout {type = !Choice, index = 33, fields = []}"#,
                 "must be an adt.struct",
             ),
             (
-                r#""tribute_rtti.layout"() {type = !Choice, tag = "Other", index = 33, fields = []}"#,
+                r#"tribute_rtti.layout {type = !Choice, tag = "Other", index = 33, fields = []}"#,
                 "has no variant \"Other\"",
             ),
         ] {

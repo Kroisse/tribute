@@ -40,8 +40,8 @@ fn selection_module(selection: &Selection<'_>) -> String {
     ^entry(%index: {index_ty}):
       "{operation}"(%index)[^default{}]{attributes}
     ^default:
-      %default = "clif.iconst"() {{value = 0}} : core.i32
-      "clif.return"(%default)"#,
+      %default = clif.iconst {{value = 0}} : core.i32
+      clif.return %default"#,
         (1..=targets).fold(String::new(), |mut labels, target| {
             write!(labels, ", ^target{target}").unwrap();
             labels
@@ -52,8 +52,8 @@ fn selection_module(selection: &Selection<'_>) -> String {
         writeln!(
             text,
             r#"    ^target{target}:
-      %result{target} = "clif.iconst"() {{value = {target}}} : core.i32
-      "clif.return"(%result{target})"#
+      %result{target} = clif.iconst {{value = {target}}} : core.i32
+      clif.return %result{target}"#
         )
         .unwrap();
     }
@@ -69,22 +69,22 @@ fn selection_module(selection: &Selection<'_>) -> String {
         writeln!(
             text,
             r#"    ^check{position}:
-      %input{position} = "clif.iconst"() {{value = {input}}} : {index_ty}
-      %actual{position} = "clif.call"(%input{position}) {{callee = @select}} : core.i32
-      %expected{position} = "clif.iconst"() {{value = {result}}} : core.i32
-      %matches{position} = "clif.icmp"(%actual{position}, %expected{position}) {{cond = "eq"}} : core.i8
-      "clif.brif"(%matches{position})[^check{next}, ^fail{position}]
+      %input{position} = clif.iconst {{value = {input}}} : {index_ty}
+      %actual{position} = clif.call %input{position} {{callee = @select}} : core.i32
+      %expected{position} = clif.iconst {{value = {result}}} : core.i32
+      %matches{position} = clif.icmp %actual{position}, %expected{position} {{cond = "eq"}} : core.i8
+      clif.brif %matches{position} [^check{next}, ^fail{position}]
     ^fail{position}:
-      %code{position} = "clif.iconst"() {{value = {next}}} : core.i32
-      "clif.return"(%code{position})"#
+      %code{position} = clif.iconst {{value = {next}}} : core.i32
+      clif.return %code{position}"#
         )
         .unwrap();
     }
     writeln!(
         text,
         r#"    ^check{}:
-      %success = "clif.iconst"() {{value = 0}} : core.i32
-      "clif.return"(%success)
+      %success = clif.iconst {{value = 0}} : core.i32
+      clif.return %success
   }}) {{sym_name = "main", type = clif.func_sig<() -> core.i32>}}
 }}"#,
         expected.len()

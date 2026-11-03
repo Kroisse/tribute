@@ -181,7 +181,7 @@ mod tests {
         for recover in [true, false] {
             let mut ctx = IrContext::new();
             let cast = if recover {
-                "%closure = \"core.unrealized_conversion_cast\"(%erased) : !Closure"
+                "%closure = core.unrealized_conversion_cast %erased : !Closure"
             } else {
                 ""
             };
@@ -266,7 +266,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !S = adt.struct<S(x: core.i32)>
-  func.func @f(%x: core.i32, %s: !S, %any: tribute_rt.anyref) { "func.return"() }
+  func.func @f(%x: core.i32, %s: !S, %any: tribute_rt.anyref) { func.return }
 }"#,
         );
         let function = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
@@ -294,7 +294,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
-            "core.module @test { func.func @f(%value: tribute_rt.anyref) { \"func.return\"() } }",
+            "core.module @test { func.func @f(%value: tribute_rt.anyref) { func.return } }",
         );
         let function = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
         let block = ctx.region(function.body(&ctx)).blocks[0];

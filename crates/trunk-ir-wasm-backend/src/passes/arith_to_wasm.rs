@@ -1116,14 +1116,14 @@ mod tests {
             r#"
 core.module @test {
   func.func @f(%n: core.i32, %w: core.i64, %i: core.index) -> core.i64 {
-    %one = "arith.const"() {value = 1} : core.index
-    %a = "arith.index_castsi"(%n) : core.index
-    %b = "arith.index_castui"(%w) : core.index
-    %sum = "arith.addi"(%a, %b) : core.index
-    %next = "arith.addi"(%sum, %one) : core.index
-    %lt = "arith.cmpi"(%next, %i) {predicate = "ult"} : core.i1
-    %wide = "arith.index_castui"(%next) : core.i64
-    "func.return"(%wide)
+    %one = arith.const {value = 1} : core.index
+    %a = arith.index_castsi %n : core.index
+    %b = arith.index_castui %w : core.index
+    %sum = arith.addi %a, %b : core.index
+    %next = arith.addi %sum, %one : core.index
+    %lt = arith.cmpi %next, %i {predicate = "ult"} : core.i1
+    %wide = arith.index_castui %next : core.i64
+    func.return %wide
   }
 }
 "#,
@@ -1153,10 +1153,10 @@ core.module @test {
             r#"
 core.module @test {
   func.func @f(%a: test.opaque, %b: test.opaque, %x: core.f64, %y: core.f64) {
-    %c = "arith.const"() {value = 0} : test.opaque
-    %sum = "arith.addi"(%a, %b) : test.opaque
-    %bits = "arith.and"(%x, %y) : core.f64
-    "func.return"()
+    %c = arith.const {value = 0} : test.opaque
+    %sum = arith.addi %a, %b : test.opaque
+    %bits = arith.and %x, %y : core.f64
+    func.return
   }
 }
 "#,
@@ -1179,9 +1179,9 @@ core.module @test {
             r#"
 core.module @test {
   func.func @f(%a: core.i8, %b: core.i8, %c: core.i32, %d: core.i32) {
-    %narrow = "arith.addi"(%a, %b) : core.i8
-    %wide = "arith.addi"(%c, %d) : core.i32
-    "func.return"()
+    %narrow = arith.addi %a, %b : core.i8
+    %wide = arith.addi %c, %d : core.i32
+    func.return
   }
 }
 "#,
@@ -1191,7 +1191,7 @@ core.module @test {
 
         let output = print_module(&ctx, module.op());
         assert!(
-            output.contains("\"arith.addi\"(%0, %1) : core.i8"),
+            output.contains("arith.addi %0, %1 : core.i8"),
             "i8 addition should remain:\n{output}"
         );
         assert_eq!(output.matches("wasm.i32_add").count(), 1, "{output}");
@@ -1204,16 +1204,16 @@ core.module @test {
             &mut ctx,
             r#"core.module @test {
   func.func @convert(%n: core.i32, %w: core.i64, %x: core.f32, %y: core.f64) {
-    %s = "arith.extsi"(%n) : core.i64
-    %u = "arith.extui"(%n) : core.i64
-    %t = "arith.trunci"(%w) : core.i32
-    %sf = "arith.sitofp"(%n) : core.f64
-    %uf = "arith.uitofp"(%w) : core.f32
-    %si = "arith.fptosi"(%y) : core.i32
-    %ui = "arith.fptoui"(%x) : core.i64
-    %e = "arith.extf"(%x) : core.f64
-    %r = "arith.truncf"(%y) : core.f32
-    "func.return"()
+    %s = arith.extsi %n : core.i64
+    %u = arith.extui %n : core.i64
+    %t = arith.trunci %w : core.i32
+    %sf = arith.sitofp %n : core.f64
+    %uf = arith.uitofp %w : core.f32
+    %si = arith.fptosi %y : core.i32
+    %ui = arith.fptoui %x : core.i64
+    %e = arith.extf %x : core.f64
+    %r = arith.truncf %y : core.f32
+    func.return
   }
 }"#,
         );
@@ -1244,13 +1244,13 @@ core.module @test {
             &mut ctx,
             r#"core.module @test {
   func.func @convert(%b: core.i8, %h: core.i16, %n: core.i32, %w: core.i64) {
-    %zb = "arith.extui"(%b) : core.i32
-    %zh = "arith.extui"(%h) : core.i64
-    %sb = "arith.extsi"(%b) : core.i32
-    %sh = "arith.extsi"(%h) : core.i64
-    %tb = "arith.trunci"(%n) : core.i8
-    %th = "arith.trunci"(%w) : core.i16
-    "func.return"()
+    %zb = arith.extui %b : core.i32
+    %zh = arith.extui %h : core.i64
+    %sb = arith.extsi %b : core.i32
+    %sh = arith.extsi %h : core.i64
+    %tb = arith.trunci %n : core.i8
+    %th = arith.trunci %w : core.i16
+    func.return
   }
 }"#,
         );
@@ -1260,8 +1260,8 @@ core.module @test {
         let output = print_module(&ctx, module.op());
         assert!(!output.contains("arith."), "{output}");
         for expected in [
-            "\"wasm.i32_const\"() {value = 255}",
-            "\"wasm.i32_const\"() {value = 65535}",
+            "wasm.i32_const {value = 255}",
+            "wasm.i32_const {value = 65535}",
             "wasm.i64_extend_i32_u",
             "wasm.i32_extend8_s",
             "wasm.i32_extend16_s",
@@ -1280,14 +1280,14 @@ core.module @test {
             &mut ctx,
             r#"core.module @test {
   func.func @read(%a: core.i8, %b: core.i8, %p: core.i1) {
-    %lt = "arith.cmpi"(%a, %b) {predicate = "ult"} : core.i1
-    %q = "arith.divui"(%a, %b) : core.i8
-    %r = "arith.remsi"(%a, %b) : core.i8
-    %s = "arith.shru"(%a, %b) : core.i8
-    %f = "arith.sitofp"(%a) : core.f64
-    %e = "arith.extsi"(%p) : core.i32
-    %x = "arith.xor"(%a, %b) : core.i8
-    "func.return"()
+    %lt = arith.cmpi %a, %b {predicate = "ult"} : core.i1
+    %q = arith.divui %a, %b : core.i8
+    %r = arith.remsi %a, %b : core.i8
+    %s = arith.shru %a, %b : core.i8
+    %f = arith.sitofp %a : core.f64
+    %e = arith.extsi %p : core.i32
+    %x = arith.xor %a, %b : core.i8
+    func.return
   }
 }"#,
         );
@@ -1307,15 +1307,15 @@ core.module @test {
             r#"
 core.module @test {
   func.func @compare(%a: core.i32, %b: core.i32, %c: core.i64, %d: core.i64) {
-    %0 = "arith.cmpi"(%a, %b) {predicate = "ult"} : core.i1
-    %1 = "arith.cmpi"(%a, %b) {predicate = "ule"} : core.i1
-    %2 = "arith.cmpi"(%a, %b) {predicate = "ugt"} : core.i1
-    %3 = "arith.cmpi"(%a, %b) {predicate = "uge"} : core.i1
-    %4 = "arith.cmpi"(%c, %d) {predicate = "ult"} : core.i1
-    %5 = "arith.cmpi"(%c, %d) {predicate = "ule"} : core.i1
-    %6 = "arith.cmpi"(%c, %d) {predicate = "ugt"} : core.i1
-    %7 = "arith.cmpi"(%c, %d) {predicate = "uge"} : core.i1
-    "func.return"()
+    %0 = arith.cmpi %a, %b {predicate = "ult"} : core.i1
+    %1 = arith.cmpi %a, %b {predicate = "ule"} : core.i1
+    %2 = arith.cmpi %a, %b {predicate = "ugt"} : core.i1
+    %3 = arith.cmpi %a, %b {predicate = "uge"} : core.i1
+    %4 = arith.cmpi %c, %d {predicate = "ult"} : core.i1
+    %5 = arith.cmpi %c, %d {predicate = "ule"} : core.i1
+    %6 = arith.cmpi %c, %d {predicate = "ugt"} : core.i1
+    %7 = arith.cmpi %c, %d {predicate = "uge"} : core.i1
+    func.return
   }
 }
 "#,

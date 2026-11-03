@@ -4,23 +4,23 @@ expression: ir_text
 ---
 core.module @test {
   tribute_control.func @"pkg::nested"['a0](%0: core.i32, %1: core.i1) -> core.i32 row(| 'a0) inferred {
-      %2 = "arith.const"() {value = 0} : core.i32
-      %3 = "arith.cmpi"(%0, %2) {predicate = "eq"} : core.i1
+      %2 = arith.const {value = 0} : core.i32
+      %3 = arith.cmpi %0, %2 {predicate = "eq"} : core.i1
       %4 = "scf.if"(%3) ({
-          %5 = "arith.const"() {value = true} : core.i1
-          %6 = "arith.cmpi"(%1, %5) {predicate = "eq"} : core.i1
+          %5 = arith.const {value = true} : core.i1
+          %6 = arith.cmpi %1, %5 {predicate = "eq"} : core.i1
           %7 = "scf.if"(%6) ({
-              %8 = "arith.const"() {value = 10} : core.i32
-              "scf.yield"(%8)
+              %8 = arith.const {value = 10} : core.i32
+              scf.yield %8
           }, {
-              %9 = "arith.const"() {value = 20} : core.i32
-              "scf.yield"(%9)
+              %9 = arith.const {value = 20} : core.i32
+              scf.yield %9
           }) : core.i32
-          "scf.yield"(%7)
+          scf.yield %7
       }, {
-          %10 = "arith.const"() {value = 30} : core.i32
-          "scf.yield"(%10)
+          %10 = arith.const {value = 30} : core.i32
+          scf.yield %10
       }) : core.i32
-      "tribute_control.return"(%4)
+      tribute_control.return %4
   }
 }

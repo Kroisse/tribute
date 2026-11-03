@@ -14,17 +14,17 @@ const CROSS_BLOCK_BORROW: &str = r#"core.module @test {
   !Box = adt.struct<Box(child: !ChildRef)>
   !BoxRef = adt.typeref<{name = "Box"}>
   func.func @observe(%child: !ChildRef) -> core.i32 {
-    %value = "adt.struct_get"(%child) {field = 0, type = !Child} : core.i32
-    "func.return"(%value)
+    %value = adt.struct_get %child {field = 0, type = !Child} : core.i32
+    func.return %value
   }
   func.func @load(%child: !ChildRef) -> core.nil {
     ^entry:
-      %owner = "adt.struct_new"(%child) {type = !Box} : !BoxRef
-      %loaded = "adt.struct_get"(%owner) {field = 0, type = !Box} : !ChildRef
-      "cf.br"()[^next]
+      %owner = adt.struct_new %child {type = !Box} : !BoxRef
+      %loaded = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
+      cf.br [^next]
     ^next:
-      %seen = "func.call"(%loaded) {callee = @observe} : core.i32
-      "func.return"()
+      %seen = func.call %loaded {callee = @observe} : core.i32
+      func.return
   }
 }"#;
 
@@ -33,18 +33,18 @@ const BRANCH_LOOP: &str = r#"core.module @test {
   !Layout = adt.struct<R(x: core.i32)>
   func.func @flow(%condition: core.i1, %value: !R) -> core.nil {
     ^entry:
-      "cf.cond_br"(%condition)[^left, ^right]
+      cf.cond_br %condition [^left, ^right]
     ^left:
-      "cf.br"()[^join]
+      cf.br [^join]
     ^right:
-      "cf.br"()[^join]
+      cf.br [^join]
     ^join:
-      "cf.br"()[^loop]
+      cf.br [^loop]
     ^loop:
-      %field = "adt.struct_get"(%value) {field = 0, type = !Layout} : core.i32
-      "cf.cond_br"(%condition)[^loop, ^exit]
+      %field = adt.struct_get %value {field = 0, type = !Layout} : core.i32
+      cf.cond_br %condition [^loop, ^exit]
     ^exit:
-      "func.return"()
+      func.return
   }
 }"#;
 
@@ -55,12 +55,12 @@ const ALIAS_PROJECTION: &str = r#"core.module @test {
   !ChoiceRef = adt.typeref<{name = "Choice"}>
   func.func @load(%choice: !ChoiceRef) -> !ChildRef {
     ^entry:
-      %erased = "adt.ref_cast"(%choice) {type = tribute_rt.anyref} : tribute_rt.anyref
-      %restored = "adt.ref_cast"(%erased) {type = !ChoiceRef} : !ChoiceRef
-      %child = "adt.variant_get"(%restored) {type = !Choice, tag = "Some", field = 0} : !ChildRef
-      "cf.br"()[^next]
+      %erased = adt.ref_cast %choice {type = tribute_rt.anyref} : tribute_rt.anyref
+      %restored = adt.ref_cast %erased {type = !ChoiceRef} : !ChoiceRef
+      %child = adt.variant_get %restored {type = !Choice, tag = "Some", field = 0} : !ChildRef
+      cf.br [^next]
     ^next:
-      "func.return"(%child)
+      func.return %child
   }
 }"#;
 
@@ -71,21 +71,21 @@ const NESTED_PROJECTION: &str = r#"core.module @test {
   !InnerRef = adt.typeref<{name = "Inner"}>
   !Box = adt.struct<Box(inner: !InnerRef)>
   func.func @observe(%child: !ChildRef) -> core.i32 {
-    %value = "adt.struct_get"(%child) {field = 0, type = !Child} : core.i32
-    "func.return"(%value)
+    %value = adt.struct_get %child {field = 0, type = !Child} : core.i32
+    func.return %value
   }
   func.func @load(%child: !ChildRef) -> core.nil {
     ^entry:
-      %inner = "adt.struct_new"(%child) {type = !Inner} : !InnerRef
-      %owner = "adt.struct_new"(%inner) {type = !Box} : !Box
-      %loaded = "adt.struct_get"(%owner) {field = 0, type = !Box} : !InnerRef
-      %erased = "adt.ref_cast"(%loaded) {type = tribute_rt.anyref} : tribute_rt.anyref
-      %restored = "adt.ref_cast"(%erased) {type = !InnerRef} : !InnerRef
-      %nested = "adt.struct_get"(%restored) {field = 0, type = !Inner} : !ChildRef
-      "cf.br"()[^next]
+      %inner = adt.struct_new %child {type = !Inner} : !InnerRef
+      %owner = adt.struct_new %inner {type = !Box} : !Box
+      %loaded = adt.struct_get %owner {field = 0, type = !Box} : !InnerRef
+      %erased = adt.ref_cast %loaded {type = tribute_rt.anyref} : tribute_rt.anyref
+      %restored = adt.ref_cast %erased {type = !InnerRef} : !InnerRef
+      %nested = adt.struct_get %restored {field = 0, type = !Inner} : !ChildRef
+      cf.br [^next]
     ^next:
-      %seen = "func.call"(%nested) {callee = @observe} : core.i32
-      "func.return"()
+      %seen = func.call %nested {callee = @observe} : core.i32
+      func.return
   }
 }"#;
 
@@ -424,8 +424,8 @@ fn failed_facts_lookup_does_not_publish_liveness() {
   !R = adt.typeref<{name = "R"}>
   !Layout = adt.struct<R(x: core.i32)>
   func.func @bad(%value: !R) -> core.i32 {
-    %field = "adt.struct_get"(%value) {field = 1, type = !Layout} : core.i32
-    "func.return"(%field)
+    %field = adt.struct_get %value {field = 1, type = !Layout} : core.i32
+    func.return %field
   }
 }"#,
     );

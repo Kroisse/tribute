@@ -360,7 +360,7 @@ mod tests {
             r#"core.module @test {
   func.func @declaration(%value: tribute_rt.anyref) -> tribute_rt.anyref
   func.func @definition(%value: tribute_rt.anyref) -> tribute_rt.anyref {
-    "func.return"(%value)
+    func.return %value
   }
 }"#,
         );

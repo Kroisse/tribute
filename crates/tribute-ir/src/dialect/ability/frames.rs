@@ -434,8 +434,8 @@ mod tests {
         format!(
             r#"    "ability.handle"(%ev, %exit, %done{arms}) ({{
       ^body(%inner: !ev, %frame: !frame_nil):
-        %unit = "core.nil_value"() : core.nil
-        "ability.exit"(%frame, %unit)
+        %unit = core.nil_value : core.nil
+        ability.exit %frame, %unit
     }}) {{handlers = [{}]{attrs}}}"#,
             handlers.join(", ")
         )
@@ -462,7 +462,7 @@ mod tests {
     fn frame_operations_round_trip_and_verify() {
         let text = module(
             ", %k: !completion, %arg: core.i32",
-            r#"    %frame = "ability.suffix_frame"(%ev, %exit, %k) {evidence_plan = [{mask = @State}]} : !frame_nil
+            r#"    %frame = ability.suffix_frame %ev, %exit, %k {evidence_plan = [{mask = @State}]} : !frame_nil
     "ability.abort"(%ev, %exit, %arg) {ability = @State, op_name = "fail"}"#,
         );
         let (ctx, module) = parse(&text);
@@ -531,7 +531,7 @@ mod tests {
     fn suffix_frame_may_select_the_evidence_a_handle_was_installed_on() {
         let text = module(
             ", %k: !completion",
-            "    %frame = \"ability.suffix_frame\"(%ev, %exit, %k) {evidence_plan = [{outer = @State}]} : !frame_nil\n    \"func.unreachable\"()",
+            "    %frame = ability.suffix_frame %ev, %exit, %k {evidence_plan = [{outer = @State}]} : !frame_nil\n    func.unreachable",
         );
         assert_eq!(errors(&text), "");
     }
@@ -549,7 +549,7 @@ mod tests {
 
     #[test]
     fn exit_value_must_match_the_frame_answer() {
-        let text = module(", %value: core.nil", "    \"ability.exit\"(%exit, %value)");
+        let text = module(", %value: core.nil", "    ability.exit %exit, %value");
         assert!(!errors(&text).is_empty());
     }
 
@@ -557,15 +557,15 @@ mod tests {
     fn malformed_frames_and_handles_are_rejected() {
         let wrong_value = module(
             ", %k: !completion",
-            "    %frame = \"ability.suffix_frame\"(%ev, %exit, %k) : !frame_i32\n    \"func.unreachable\"()",
+            "    %frame = ability.suffix_frame %ev, %exit, %k : !frame_i32\n    func.unreachable",
         );
         let wrong_outer = module(
             ", %k: !completion, %other: !frame_nil",
-            "    %frame = \"ability.suffix_frame\"(%ev, %other, %k) : !frame_nil\n    \"func.unreachable\"()",
+            "    %frame = ability.suffix_frame %ev, %other, %k : !frame_nil\n    func.unreachable",
         );
         let direct_continuation = module(
             ", %k: !fn_arm",
-            "    %frame = \"ability.suffix_frame\"(%ev, %exit, %k) : !frame_nil\n    \"func.unreachable\"()",
+            "    %frame = ability.suffix_frame %ev, %exit, %k : !frame_nil\n    func.unreachable",
         );
         let cases = [
             (
@@ -704,7 +704,7 @@ mod tests {
                 &format!(
                     r#"    "ability.handle"(%ev, %exit, %done) ({{
       ^body({args}):
-        "func.unreachable"()
+        func.unreachable
     }}) {{handlers = []}}"#
                 ),
             )

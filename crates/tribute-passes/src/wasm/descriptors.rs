@@ -105,12 +105,12 @@ mod tests {
   !Closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
   !E = adt.enum<E { None(), Some(core.f64) }>
   wasm.func @main(%next: adt.typeref<{name = "S"}>, %any: tribute_rt.anyref, %n: tribute_rt.nat, %x: core.f64) -> core.nil {
-    %one = "wasm.i32_const"() {value = 1} : core.i32
-    %some = "adt.variant_new"(%x) {type = !E, tag = "Some"} : !E
-    %s = "adt.struct_new"(%next, %any, %n) {type = !S} : !S
-    %closure = "adt.struct_new"(%one) {type = !Closure} : !Closure
-    %again = "adt.variant_new"(%x) {type = !E, tag = "Some"} : !E
-    "wasm.return"()
+    %one = wasm.i32_const {value = 1} : core.i32
+    %some = adt.variant_new %x {type = !E, tag = "Some"} : !E
+    %s = adt.struct_new %next, %any, %n {type = !S} : !S
+    %closure = adt.struct_new %one {type = !Closure} : !Closure
+    %again = adt.variant_new %x {type = !E, tag = "Some"} : !E
+    wasm.return
   }
 }"#,
         );
@@ -161,11 +161,11 @@ mod tests {
   !S = adt.struct<S(x: core.f64)>
   !E = adt.enum<E { None(), Some(core.f64) }>
   wasm.func @main(%x: core.f64) -> core.nil {
-    %some = "adt.variant_new"(%x) {type = !E, tag = "Some"} : !E
-    %erased = "adt.variant_new"(%x) {type = tribute_rt.anyref, tag = "Some"} : tribute_rt.anyref
-    %missing = "adt.variant_new"(%x) {type = !E, tag = "Other"} : !E
-    %s = "adt.struct_new"(%x) {type = !S} : !S
-    "wasm.return"()
+    %some = adt.variant_new %x {type = !E, tag = "Some"} : !E
+    %erased = adt.variant_new %x {type = tribute_rt.anyref, tag = "Some"} : tribute_rt.anyref
+    %missing = adt.variant_new %x {type = !E, tag = "Other"} : !E
+    %s = adt.struct_new %x {type = !S} : !S
+    wasm.return
   }
 }"#,
         );

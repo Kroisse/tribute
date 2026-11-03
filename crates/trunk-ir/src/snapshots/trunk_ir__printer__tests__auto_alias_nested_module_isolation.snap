@@ -9,16 +9,16 @@ core.module @test {
     !InnerOnly = alias_test.record<core.i32 {name = "a"}, core.i32 {name = "b"}, {name = "InnerOnly"}>
 
     func.func @f1(%0: !InnerOnly) -> !InnerOnly {
-        "func.return"(%0)
+        func.return %0
     }
     func.func @f2(%0: !InnerOnly) -> !InnerOnly {
-        "func.return"(%0)
+        func.return %0
     }
   }
   func.func @g1(%0: !OuterOnly) -> !OuterOnly {
-      "func.return"(%0)
+      func.return %0
   }
   func.func @g2(%0: !OuterOnly) -> !OuterOnly {
-      "func.return"(%0)
+      func.return %0
   }
 }

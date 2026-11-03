@@ -804,11 +804,11 @@ mod tests {
   !NodeRef = adt.typeref<{name = "Node"}>
   !Nodes = adt.array<!NodeRef>
   func.func @build(%a: !NodeRef, %b: !NodeRef, %at: core.index) -> !Nodes {
-    %pair = "adt.array_of"(%a, %b) {type = !Nodes} : !Nodes
-    %filled = "adt.array_new"(%at, %a) {type = !Nodes} : !Nodes
-    %again = "adt.array_new"(%at, %b) {type = !Nodes} : !Nodes
+    %pair = adt.array_of %a, %b {type = !Nodes} : !Nodes
+    %filled = adt.array_new %at, %a {type = !Nodes} : !Nodes
+    %again = adt.array_new %at, %b {type = !Nodes} : !Nodes
     %spliced = "adt.array_splice"(%pair, %at, %at, %b) {type = !Nodes} : !Nodes
-    "func.return"(%spliced)
+    func.return %spliced
   }
 }"#,
             is_array_function,
@@ -827,10 +827,10 @@ mod tests {
             r#"core.module @test {
   !Ints = adt.array<core.i32>
   func.func @build(%value: core.i32, %count: core.index) -> !Ints {
-    %filled = "adt.array_new"(%count, %value) {type = !Ints} : !Ints
-    %zero = "arith.const"() {value = 0} : core.index
+    %filled = adt.array_new %count, %value {type = !Ints} : !Ints
+    %zero = arith.const {value = 0} : core.index
     %trimmed = "adt.array_splice"(%filled, %zero, %count) {type = !Ints} : !Ints
-    "func.return"(%trimmed)
+    func.return %trimmed
   }
 }"#,
             |name| name.starts_with("__tribute_array_"),
@@ -842,7 +842,7 @@ mod tests {
         );
         // An `i32` element is four bytes wide.
         assert!(
-            lowered.contains("\"clif.iconst\"() {value = 4} : core.i64"),
+            lowered.contains("clif.iconst {value = 4} : core.i64"),
             "{lowered}"
         );
     }
@@ -853,10 +853,10 @@ mod tests {
             r#"core.module @test {
   !Ints = adt.array<core.i32>
   func.func @access(%ints: !Ints, %at: core.index, %value: core.i32) -> core.i32 {
-    "adt.array_set"(%ints, %at, %value)
-    %read = "adt.array_get"(%ints, %at) : core.i32
-    %len = "adt.array_len"(%ints) : core.index
-    "func.return"(%read)
+    adt.array_set %ints, %at, %value
+    %read = adt.array_get %ints, %at : core.i32
+    %len = adt.array_len %ints : core.index
+    func.return %read
   }
 }"#,
             |name| name == "access",

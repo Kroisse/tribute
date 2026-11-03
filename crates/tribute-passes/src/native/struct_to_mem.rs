@@ -298,8 +298,8 @@ mod tests {
             r#"core.module @test {
   !Mixed = adt.struct<Mixed(flag: core.i8, count: tribute_rt.int, any: tribute_rt.anyref, byte: core.i8, raw: core.ptr, ratio: tribute_rt.float, small: core.i16)>
   func.func @read(%mixed: adt.typeref<{name = "Mixed"}>) -> core.i8 {
-    %flag = "adt.struct_get"(%mixed) {field = 0, type = !Mixed} : core.i8
-    "func.return"(%flag)
+    %flag = adt.struct_get %mixed {field = 0, type = !Mixed} : core.i8
+    func.return %flag
   }
 }"#,
         );
@@ -337,9 +337,9 @@ mod tests {
   !Point = adt.struct<Point(x: core.i32, y: core.i32)>
   !Size = adt.struct<Size(width: core.i32, height: core.i32)>
   func.func @read(%point: !Point, %size: !Size) -> core.i32 {
-    %x = "adt.struct_get"(%point) {field = 0, type = !Point} : core.i32
-    "adt.struct_set"(%size, %x) {field = 1, type = !Size}
-    "func.return"(%x)
+    %x = adt.struct_get %point {field = 0, type = !Point} : core.i32
+    adt.struct_set %size, %x {field = 1, type = !Size}
+    func.return %x
   }
 }"#,
         );
@@ -360,10 +360,10 @@ mod tests {
         let (ctx, module, layouts) = lower_module(
             r#"core.module @test {
   !Pair = adt.struct<Pair(code: core.i64, env: core.ptr)>
-  "tribute_rtti.layout"() {fields = ["raw", "dynamic"], index = 5, type = !Pair}
+  tribute_rtti.layout {fields = ["raw", "dynamic"], index = 5, type = !Pair}
   func.func @read(%pair: core.ptr) -> core.ptr {
-    %env = "adt.struct_get"(%pair) {field = 1, type = !Pair} : core.ptr
-    "func.return"(%env)
+    %env = adt.struct_get %pair {field = 1, type = !Pair} : core.ptr
+    func.return %env
   }
 }"#,
         );
@@ -385,12 +385,12 @@ mod tests {
             r#"core.module @test {
   !ChoiceRef = adt.typeref<{name = "Choice"}>
   !Choice = adt.enum<Choice { None(), Some(core.i32), Other() }>
-  "tribute_rtti.layout"() {fields = [], index = 5, type = !Choice, tag = "None"}
-  "tribute_rtti.layout"() {fields = ["u32"], index = 6, type = !Choice, tag = "Some"}
+  tribute_rtti.layout {fields = [], index = 5, type = !Choice, tag = "None"}
+  tribute_rtti.layout {fields = ["u32"], index = 6, type = !Choice, tag = "Some"}
   func.func @test(%choice: !ChoiceRef) -> core.i1 {
-    %is_some = "adt.variant_is"(%choice) {tag = "Some", type = !Choice} : core.i1
-    %is_other = "adt.variant_is"(%choice) {tag = "Other", type = !Choice} : core.i1
-    "func.return"(%is_some)
+    %is_some = adt.variant_is %choice {tag = "Some", type = !Choice} : core.i1
+    %is_other = adt.variant_is %choice {tag = "Other", type = !Choice} : core.i1
+    func.return %is_some
   }
 }"#,
         );
@@ -398,17 +398,17 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         assert!(!printed.contains("adt.variant_is"), "{printed}");
         assert!(
-            printed.contains("\"tribute_rtti.descriptor\"(%0) : core.i32"),
+            printed.contains("tribute_rtti.descriptor %0 : core.i32"),
             "{printed}"
         );
         assert!(
-            printed.contains("\"arith.const\"() {value = 6} : core.i32"),
+            printed.contains("arith.const {value = 6} : core.i32"),
             "{printed}"
         );
         assert!(printed.contains("arith.cmpi"), "{printed}");
         // `Other` is never allocated, so no object has its descriptor.
         assert!(
-            printed.contains("\"arith.const\"() {value = false} : core.i1"),
+            printed.contains("arith.const {value = false} : core.i1"),
             "{printed}"
         );
     }
@@ -421,11 +421,11 @@ mod tests {
   !ChildRef = adt.typeref<{name = "Child"}>
   !ChoiceRef = adt.typeref<{name = "Choice"}>
   !Choice = adt.enum<Choice { None(), Pair(core.i8, !ChildRef), Raw(core.ptr, core.i64) }>
-  "tribute_rtti.layout"() {fields = ["u8", "managed"], index = 6, type = !Choice, tag = "Pair"}
+  tribute_rtti.layout {fields = ["u8", "managed"], index = 6, type = !Choice, tag = "Pair"}
   func.func @test(%choice: !ChoiceRef) -> !ChildRef {
-    %child = "adt.variant_get"(%choice) {tag = "Pair", field = 1, type = !Choice} : !ChildRef
-    %raw = "adt.variant_get"(%choice) {tag = "Raw", field = 1, type = !Choice} : core.i64
-    "func.return"(%child)
+    %child = adt.variant_get %choice {tag = "Pair", field = 1, type = !Choice} : !ChildRef
+    %raw = adt.variant_get %choice {tag = "Raw", field = 1, type = !Choice} : core.i64
+    func.return %child
   }
 }"#,
         );
@@ -463,8 +463,8 @@ mod tests {
   !ChildRef = adt.typeref<{name = "Child"}>
   !Parent = adt.struct<Parent(child: !ChildRef, raw: core.ptr, bytes: core.bytes)>
   func.func @read(%parent: adt.typeref<{name = "Parent"}>) -> !ChildRef {
-    %child = "adt.struct_get"(%parent) {field = 0, type = !Parent} : !ChildRef
-    "func.return"(%child)
+    %child = adt.struct_get %parent {field = 0, type = !Parent} : !ChildRef
+    func.return %child
   }
 }"#,
         );

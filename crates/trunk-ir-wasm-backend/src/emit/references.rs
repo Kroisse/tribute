@@ -252,17 +252,17 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  "wasm.import_func"() {module = "env", name = "run", sym_name = "run", type = wasm.func_sig<(core.i32) -> core.i32>}
+  wasm.import_func {module = "env", name = "run", sym_name = "run", type = wasm.func_sig<(core.i32) -> core.i32>}
   "wasm.func"() {abi = "C", sym_name = "helper", type = wasm.func_sig<(core.i32) -> core.i32>}
   "wasm.func"() ({
     ^bb0(%value: core.i32):
-      "wasm.return"(%value)
+      wasm.return %value
   }) {abi = "C", sym_name = "c_helper", type = wasm.func_sig<(core.i32) -> core.i32>}
   "wasm.func"() ({
-    %one = "wasm.i32_const"() {value = 1} : core.i32
-    %imported = "wasm.call"(%one) {callee = @run} : core.i32
-    %local = "wasm.call"(%imported) {callee = @c_helper} : core.i32
-    "wasm.return"(%local)
+    %one = wasm.i32_const {value = 1} : core.i32
+    %imported = wasm.call %one {callee = @run} : core.i32
+    %local = wasm.call %imported {callee = @c_helper} : core.i32
+    wasm.return %local
   }) {sym_name = "main", type = wasm.func_sig<() -> core.i32>}
 }"#,
         );
@@ -298,7 +298,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   "wasm.func"() {abi = "C", sym_name = "helper", type = wasm.func_sig<(core.i32) -> core.i32>}
-  "wasm.func"() ({ "wasm.return"() }) {sym_name = "main", type = wasm.func_sig<() -> core.nil>}
+  "wasm.func"() ({ wasm.return }) {sym_name = "main", type = wasm.func_sig<() -> core.nil>}
 }"#,
         );
         let binary = crate::emit_module_to_wasm(&mut ctx, module).expect("unused extern");
@@ -311,9 +311,9 @@ mod tests {
             r#"core.module @test {{
 {UNUSED_HELPER}
   "wasm.func"() ({{
-    %arg = "wasm.i32_const"() {{value = 1}} : core.i32
-    %result = "wasm.call"(%arg) {{callee = @helper}} : core.i32
-    "wasm.return"(%result)
+    %arg = wasm.i32_const {{value = 1}} : core.i32
+    %result = wasm.call %arg {{callee = @helper}} : core.i32
+    wasm.return %result
   }}) {{sym_name = "main", type = wasm.func_sig<(core.i32) -> core.i32>}}
 }}"#
         );
@@ -327,7 +327,7 @@ mod tests {
         let tail_call = r#"core.module @test {
   "wasm.func"() {abi = "C", sym_name = "helper", type = wasm.func_sig<() -> core.i32>}
   "wasm.func"() ({
-    "wasm.return_call"() {callee = @helper}
+    wasm.return_call {callee = @helper}
   }) {sym_name = "main", type = wasm.func_sig<() -> core.i32>}
 }"#;
         assert!(
@@ -339,8 +339,8 @@ mod tests {
         let value = r#"core.module @test {
   "wasm.func"() {abi = "C", sym_name = "helper", type = wasm.func_sig<() -> core.i32>}
   "wasm.func"() ({
-    %function = "wasm.ref_func"() {func_name = @helper} : wasm.funcref
-    "wasm.return"()
+    %function = wasm.ref_func {func_name = @helper} : wasm.funcref
+    wasm.return
   }) {sym_name = "main", type = wasm.func_sig<() -> core.nil>}
 }"#;
         assert!(
@@ -352,12 +352,12 @@ mod tests {
         // The element segment is a late container: its child `wasm.ref_func` use
         // must not be hidden by the container's own lack of a symbol attribute.
         let element = r#"core.module @test {
-  "wasm.table"() {reftype = "funcref", min = 1, max = 1}
+  wasm.table {reftype = "funcref", min = 1, max = 1}
   "wasm.elem"() ({
-    "wasm.ref_func"() {func_name = @helper} : wasm.funcref
+    wasm.ref_func {func_name = @helper} : wasm.funcref
   }) {table = 0, offset = 0}
   "wasm.func"() {abi = "C", sym_name = "helper", type = wasm.func_sig<() -> core.i32>}
-  "wasm.func"() ({ "wasm.return"() }) {sym_name = "main", type = wasm.func_sig<() -> core.nil>}
+  "wasm.func"() ({ wasm.return }) {sym_name = "main", type = wasm.func_sig<() -> core.nil>}
 }"#;
         assert!(
             disposition_error(element).contains("referenced by element segment entry"),
@@ -367,7 +367,7 @@ mod tests {
 
         let export = r#"core.module @test {
   "wasm.func"() {abi = "C", sym_name = "helper", type = wasm.func_sig<() -> core.i32>}
-  "wasm.export_func"() {func = @helper, name = "helper"}
+  wasm.export_func {func = @helper, name = "helper"}
 }"#;
         assert!(
             disposition_error(export).contains("referenced by export"),
@@ -380,8 +380,8 @@ mod tests {
     fn unresolved_reference_is_reported_separately_from_an_unbound_declaration() {
         let source = r#"core.module @test {
   "wasm.func"() ({
-    %result = "wasm.call"() {callee = @missing} : core.i32
-    "wasm.return"(%result)
+    %result = wasm.call {callee = @missing} : core.i32
+    wasm.return %result
   }) {sym_name = "main", type = wasm.func_sig<() -> core.i32>}
 }"#;
         assert!(
@@ -397,10 +397,10 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  "wasm.func"() ({ "wasm.return"() }) {sym_name = "callee", type = wasm.func_sig<() -> core.nil>}
+  "wasm.func"() ({ wasm.return }) {sym_name = "callee", type = wasm.func_sig<() -> core.nil>}
   "wasm.func"() ({
-    "wasm.call"() {callee = @callee}
-    "wasm.return"()
+    wasm.call {callee = @callee}
+    wasm.return
   }) {sym_name = "main", type = wasm.func_sig<() -> core.nil>}
 }"#,
         );
@@ -428,7 +428,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  "wasm.func"() ({ "wasm.return"() }) {sym_name = "main", type = wasm.func_sig<() -> core.nil>}
+  "wasm.func"() ({ wasm.return }) {sym_name = "main", type = wasm.func_sig<() -> core.nil>}
 }"#,
         );
         let body = module.body(&ctx).unwrap();
@@ -458,7 +458,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   "wasm.func"() {abi = "C", sym_name = "helper", type = core.i32}
-  "wasm.func"() ({ "wasm.return"() }) {sym_name = "main", type = wasm.func_sig<() -> core.nil>}
+  "wasm.func"() ({ wasm.return }) {sym_name = "main", type = wasm.func_sig<() -> core.nil>}
 }"#,
         );
         let error = crate::emit_module_to_wasm(&mut ctx, module)
@@ -477,7 +477,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
-            "core.module @test { \"wasm.func\"() ({ \"wasm.return\"() }) {sym_name = \"helper\", type = wasm.func_sig<() -> ()>} }",
+            "core.module @test { \"wasm.func\"() ({ wasm.return }) {sym_name = \"helper\", type = wasm.func_sig<() -> ()>} }",
         );
         let op = module.ops(&ctx)[0];
         let extra = ctx.create_region(trunk_ir::RegionData {

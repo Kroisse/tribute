@@ -148,10 +148,10 @@ fn analyze_consts(ctx: &IrContext, module: Module) -> NativeConstAnalysis {
 /// clif.store 1, %raw, offset=0          // refcount
 /// clif.store 0, %raw, offset=4          // rtti_idx
 /// // Compute payload pointer
-/// %payload = "clif.iadd"(%raw, 8)
+/// %payload = clif.iadd %raw, 8
 /// // Store TributeBytes fields
-/// "clif.store"(%data_ptr, %payload) {offset = 0}
-/// "clif.store"(%len, %payload) {offset = 8}
+/// clif.store %data_ptr, %payload, offset=0
+/// clif.store %len, %payload, offset=8
 /// clif.store 0, %payload, offset=16     // owner: the bytes are static
 /// clif.store 0, %payload, offset=24     // cap: none stored in the object
 /// → result = %payload
@@ -528,8 +528,8 @@ mod tests {
   !PreludeString = adt.enum<String { Leaf(core.bytes), Branch(tribute_rt.anyref, tribute_rt.anyref, core.i32) }>
   !UserString = adt.enum<"user::String" { Leaf(core.bytes), Branch(tribute_rt.anyref, tribute_rt.anyref, core.i32) }>
   func.func @main() -> core.nil {
-    %string = "adt.string_const"() {value = "hello"} : tribute_rt.anyref
-    "func.return"()
+    %string = adt.string_const {value = "hello"} : tribute_rt.anyref
+    func.return
   }
 }"#,
         )
@@ -604,10 +604,10 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @main() -> core.nil {
-    %first = "adt.bytes_const"() {value = b"first"} : core.bytes
-    %second = "adt.bytes_const"() {value = b"second"} : core.bytes
-    %again = "adt.bytes_const"() {value = b"first"} : core.bytes
-    "func.return"()
+    %first = adt.bytes_const {value = b"first"} : core.bytes
+    %second = adt.bytes_const {value = b"second"} : core.bytes
+    %again = adt.bytes_const {value = b"first"} : core.bytes
+    func.return
   }
 }"#,
         );
@@ -641,12 +641,12 @@ mod tests {
   "clif.data"() {sym_name = "__tribute_rodata_0", bytes = b"kept", align = 1}
   "clif.data"() {sym_name = "aligned", bytes = b"wide", align = 8}
   func.func @__tribute_rodata_1() -> core.nil {
-    "func.return"()
+    func.return
   }
   func.func @main() -> core.nil {
-    %kept = "adt.bytes_const"() {value = b"kept"} : core.bytes
-    %wide = "adt.bytes_const"() {value = b"wide"} : core.bytes
-    "func.return"()
+    %kept = adt.bytes_const {value = b"kept"} : core.bytes
+    %wide = adt.bytes_const {value = b"wide"} : core.bytes
+    func.return
   }
 }"#,
         );
@@ -676,14 +676,14 @@ mod tests {
             r#"core.module @test {
   func.func @pick(%x: core.bytes, %flag: core.i1) -> core.bytes {
     ^entry:
-      "cf.cond_br"(%flag)[^param, ^literal]
+      cf.cond_br %flag [^param, ^literal]
     ^param:
-      "cf.br"(%x)[^merge]
+      cf.br %x [^merge]
     ^literal:
-      %no = "adt.bytes_const"() {value = b"no"} : core.bytes
-      "cf.br"(%no)[^merge]
+      %no = adt.bytes_const {value = b"no"} : core.bytes
+      cf.br %no [^merge]
     ^merge(%picked: core.bytes):
-      "func.return"(%picked)
+      func.return %picked
   }
 }"#,
         );

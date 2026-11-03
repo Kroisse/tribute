@@ -14,8 +14,8 @@ mod ability {
     ///
     /// ```text
     /// "ability.decl"() ({
-    ///   "ability.operation"() {kind = "op", op_name = "get", param_types = [], result_type = ResultType}
-    ///   "ability.operation"() {kind = "op", op_name = "set", param_types = [ValueType], result_type = core.nil}
+    ///   ability.operation {kind = "op", op_name = "get", param_types = [], result_type = ResultType}
+    ///   ability.operation {kind = "op", op_name = "set", param_types = [ValueType], result_type = core.nil}
     /// }) {sym_name = "<instance key>"}
     /// ```
     ///
@@ -66,6 +66,7 @@ mod ability {
     /// `param_types: [Type]`, and `result_type: Type`: the parameter types in
     /// source declaration order and the result type. These types are at
     /// module level, so they cannot have a row tail.
+    #[asm_format(attr_dict_bare)]
     fn operation(
         op_name: Attr<String>,
         kind: Attr<String>,
@@ -100,11 +101,12 @@ mod ability {
     /// The result flows inline — no CPS transformation is needed.
     ///
     /// ```text
-    /// %result = "ability.call"(%args...)
-    ///   {ability = @State, op_name = "get"}
+    /// %result = ability.call %args...
+    ///   { ability = @State, op_name = "get" }
     /// ```
     ///
     /// Lowered to: evidence lookup → tr_dispatch_fn(op_idx, value) → result.
+    #[asm_format(values attr_dict_bare ":" type(result))]
     fn call(ability: Attr<SymbolRef>, op_name: Attr<String>, values: Variadic<_>) -> Value<_> {}
 
     // === Abstract continuation frames ===
@@ -125,7 +127,7 @@ mod ability {
     /// Frame that enters `continuation` with a value, wrapping `outer`.
     ///
     /// ```text
-    /// %f = "ability.suffix_frame"(%ev, %outer, %k) {evidence_plan = [...]} : !ability.frame<V>
+    /// %f = ability.suffix_frame %ev, %outer, %k {evidence_plan = [...]} : !ability.frame<V>
     /// ```
     ///
     /// `evidence` is Evidence, `outer` is an `ability.frame<R>`, and
@@ -137,6 +139,7 @@ mod ability {
     /// A frame for a structured branch has none. The produced frame's type is
     /// not inferred: it is built from the continuation's value type.
     #[verify]
+    #[asm_format(evidence "," outer "," continuation attr_dict_bare ":" type(result))]
     fn suffix_frame<F: Frame, C, G: Frame>(
         evidence_plan: Option<Attr<[EvidenceStep]>>,
         evidence: Value<Evidence>,
@@ -151,13 +154,14 @@ mod ability {
     /// Deliver `value` to the frame's completion.
     ///
     /// ```text
-    /// "ability.exit"(%f, %value)
+    /// ability.exit %f, %value
     /// ```
     ///
     /// A resultless terminator that takes an `ability.frame<R>` and one value
     /// of type `R`. It appears only in a `Cps` callable, a completion, or a
     /// generated continuation body.
     #[implements(CallableExit)]
+    #[asm_format(frame "," value attr_dict_bare)]
     fn exit<F: Frame>(frame: Value<F>, value: Value<F::Result>) {}
 
     /// Install one layer of a handle around `body`, exiting to `exit`.
@@ -260,7 +264,7 @@ mod ability {
     /// Cps, and yield its answer.
     ///
     /// ```text
-    /// %r = "ability.delimit"(%body, %ev) : R
+    /// %r = ability.delimit %body, %ev : R
     /// ```
     ///
     /// The value delimiter of `new-plans/cps-effects.md`, "값 delimiter".
@@ -270,6 +274,7 @@ mod ability {
     /// evidence. It is not a terminator and appears only in a flow that is
     /// not `Cps`. Frame expansion lowers it to `effect.delimit` with the same
     /// operands and result.
+    #[asm_format(body "," evidence attr_dict_bare ":" type(result))]
     fn delimit<C, F: Frame>(body: Value<C>, evidence: Value<Evidence>) -> Value<F::Result>
     where
         C: CpsClosure<Inputs = (Evidence, F)>,
@@ -537,7 +542,7 @@ mod tests {
                     r#"core.module @test {{
   func.func @main(%evidence: core.ptr, %prompt: core.i32) {{
     "ability.handle_dispatch"(%evidence, %prompt) ({{
-      "func.unreachable"()
+      func.unreachable
     }}) {{abilities = {abilities}}}
   }}
 }}"#

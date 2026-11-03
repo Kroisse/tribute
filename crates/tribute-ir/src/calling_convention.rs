@@ -355,21 +355,21 @@ mod tests {
 
     const CONVENTIONS: &str = r#"core.module @test {
   func.func @direct() -> core.nil attributes {tribute.calling_convention = "direct"} {
-    "func.return"()
+    func.return
   }
   func.func @untagged() -> core.nil {
-    "func.return"()
+    func.return
   }
   func.func @malformed() -> core.nil attributes {tribute.calling_convention = 3} {
-    "func.return"()
+    func.return
   }
   func.func @wrong_kind() -> core.nil attributes {tribute.calling_convention = 2} {
-    "func.return"()
+    func.return
   }
   func.func @calls() -> core.nil attributes {tribute.calling_convention = "evidence_direct"} {
-    %r = "func.call"() {callee = @direct, tribute.calling_convention = "direct"} : core.nil
-    %c = "arith.const"() {value = 0, tribute.calling_convention = "direct"} : core.i32
-    "func.return"()
+    %r = func.call {callee = @direct, tribute.calling_convention = "direct"} : core.nil
+    %c = arith.const {value = 0, tribute.calling_convention = "direct"} : core.i32
+    func.return
   }
 }"#;
 
@@ -405,8 +405,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f(%x: core.i32) -> core.nil {
-    %r = "func.call"(%x) {callee = @f} : core.nil
-    "func.tail_call"(%x) {callee = @f}
+    %r = func.call %x {callee = @f} : core.nil
+    func.tail_call %x {callee = @f}
   }
 }"#,
         );
@@ -452,12 +452,12 @@ mod tests {
   !fn = func.func_sig<(core.i32) -> core.i32>
   !closure = closure.closure<!fn>
   func.func @callee(%x: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
-    "func.return"(%x)
+    func.return %x
   }
   func.func @agrees(%x: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
-    %c = "closure.new"() {entries = [@callee, @callee, @callee]} : !closure
+    %c = closure.new {entries = [@callee, @callee, @callee]} : !closure
     %r = "func.call_indirect"(%c, %x) {signature = !fn, tribute.calling_convention = "direct"} : core.i32
-    "func.return"(%r)
+    func.return %r
   }
 }"#;
 

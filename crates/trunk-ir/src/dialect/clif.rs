@@ -36,9 +36,11 @@ mod clif {
     /// Asks the linker to write the address of `func` over the pointer-sized
     /// bytes at `offset` of the enclosing `data`. Only a `data` region holds it.
     #[verify]
+    #[asm_format(attr_dict_bare)]
     fn func_reloc(offset: Attr<u32>, func: Attr<SymbolRef>) {}
 
     #[implements(CallLike)]
+    #[asm_format(args attr_dict_bare (":" types(results)^)?)]
     fn call(callee: Attr<SymbolRef>, args: Variadic<_>) -> Variadic<_> {}
 
     #[verify]
@@ -51,46 +53,72 @@ mod clif {
     ) -> Variadic<_> {
     }
 
+    #[asm_format(values attr_dict_bare)]
     fn r#return(values: Variadic<_>) {}
 
     // Constants
+    #[asm_format(attr_dict_bare ":" type(result))]
     fn iconst(value: Attr<i64>) -> Value<_> {}
 
+    #[asm_format(attr_dict_bare ":" type(result))]
     fn f32const(value: Attr<f32>) -> Value<_> {}
 
+    #[asm_format(attr_dict_bare ":" type(result))]
     fn f64const(value: Attr<f64>) -> Value<_> {}
 
     // Integer arithmetic
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn iadd(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn isub(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn imul(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn sdiv(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn udiv(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn srem(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn urem(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn ineg(operand: Value<_>) -> Value<_> {}
 
     // Float arithmetic
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn fadd(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn fsub(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn fmul(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn fdiv(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn fneg(operand: Value<_>) -> Value<_> {}
 
     // Comparisons
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn icmp(cond: Attr<String>, lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn fcmp(cond: Attr<String>, lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
     // Bitwise
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn band(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn bor(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn bxor(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn ishl(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn sshr(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn ushr(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
     // Control flow
+    #[asm_format(cond "[" successor(then_dest) "," successor(else_dest) "]" attr_dict_bare)]
     fn brif(cond: Value<_>) {
         #[successor(then_dest)]
         {}
@@ -98,6 +126,7 @@ mod clif {
         {}
     }
 
+    #[asm_format(args "[" successor(dest) "]" attr_dict_bare)]
     fn jump(args: Variadic<_>) {
         #[successor(dest)]
         {}
@@ -129,15 +158,18 @@ mod clif {
         {}
     }
 
+    #[asm_format(attr_dict_bare)]
     fn trap(code: Attr<String>) {}
 
     /// Traps when `cond` is non-zero and otherwise continues with the next
     /// operation, like Cranelift's `trapnz`. It is not a terminator, so a
     /// lowering can guard an access without splitting its block. `code`
     /// names the failed check, as `trap`'s does.
+    #[asm_format(cond attr_dict_bare)]
     fn trapnz(code: Attr<String>, cond: Value<impl IntegerLike>) {}
 
     #[implements(CallLike)]
+    #[asm_format(args attr_dict_bare)]
     fn return_call(callee: Attr<SymbolRef>, args: Variadic<_>) {}
 
     #[asm_format(callee "(" args ")" attr_dict ":" signature(sig))]
@@ -150,10 +182,13 @@ mod clif {
     }
 
     // Memory
+    #[asm_format(addr attr_dict_bare ":" type(result))]
     fn load(offset: Attr<i32>, addr: Value<_>) -> Value<_> {}
 
+    #[asm_format(value "," addr attr_dict_bare)]
     fn store(offset: Attr<i32>, value: Value<_>, addr: Value<_>) {}
 
+    #[asm_format(addr "," value attr_dict_bare ":" type(result))]
     fn atomic_rmw(
         bin_op: Attr<String>,
         offset: Attr<i32>,
@@ -162,21 +197,33 @@ mod clif {
     ) -> Value<_> {
     }
 
+    #[asm_format(attr_dict_bare ":" type(result))]
     fn stack_slot(size: Attr<u32>, align: Attr<u32>) -> Value<_> {}
 
+    #[asm_format(slot attr_dict_bare ":" type(result))]
     fn stack_addr(slot: Value<_>) -> Value<_> {}
 
+    #[asm_format(attr_dict_bare ":" type(result))]
     fn symbol_addr(sym: Attr<SymbolRef>) -> Value<_> {}
 
     // Type conversions
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn ireduce(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn uextend(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn sextend(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn fpromote(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn fdemote(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn fcvt_to_sint(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn fcvt_from_sint(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn fcvt_to_uint(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn fcvt_from_uint(operand: Value<_>) -> Value<_> {}
 }
 
@@ -597,13 +644,13 @@ mod tests {
             r#"core.module @test {
   clif.func @ordinary(%callee: core.ptr, %value: core.i32) -> core.i32 {
     %result = "clif.call_indirect"(%callee, %value) {sig = clif.func_sig<(core.i32) -> core.i32>} : core.i32
-    "clif.return"(%result)
+    clif.return %result
   }
   clif.func @tail(%callee: core.ptr, %value: core.i32) -> core.nil {
     "clif.return_call_indirect"(%callee, %value) {sig = clif.func_sig<(core.i32) -> core.nil>}
   }
   clif.func @direct() -> core.nil {
-    "clif.return"()
+    clif.return
   }
 }"#,
         );
@@ -667,8 +714,8 @@ mod tests {
         let source = r#"core.module @test {
   clif.func @external(%arg0: core.i32) -> core.i32 attributes {abi = "C"}
   clif.func @pair(%0: core.i32) -> (core.i32, core.i64), {call_conv = "tail"} {
-      %1 = "clif.iconst"() {value = 1} : core.i64
-      "clif.return"(%0, %1)
+      %1 = clif.iconst {value = 1} : core.i64
+      clif.return %0, %1
   }
 }
 "#;
@@ -703,11 +750,11 @@ mod branch_table_tests {
     ^entry(%index: core.i32):
       {branch}
     ^default:
-      "clif.return"()
+      clif.return
     ^first:
-      "clif.return"()
+      clif.return
     ^second:
-      "clif.return"()
+      clif.return
   }}) {{sym_name = "select", type = clif.func_sig<(core.i32) -> ()>}}
 }}"#
         )

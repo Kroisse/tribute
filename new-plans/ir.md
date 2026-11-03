@@ -1381,7 +1381,7 @@ binder 이름을 나열할 뿐이며, 종류나 합집합을 쓰지 않고 위�
     captures [] {
   ...
 }
-%s = "tribute_control.instantiate"(%step) {row_args = [{tail = 0}]} : !Step0
+%s = tribute_control.instantiate %step {row_args = [{tail = 0}]} : !Step0
 ```
 
 Row는 convention 앞에 `row(@A, @B | 'a1)` 형식으로 쓴다. Instance 목록과 `|` 뒤의

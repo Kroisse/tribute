@@ -6,17 +6,17 @@
 //! // Before:
 //! %k = closure.lambda [%x, %y] {
 //!   ^bb0(%param: anyref):
-//!     %r = "arith.add"(%x, %param)
-//!     "func.return"(%r)
+//!     %r = arith.add %x, %param
+//!     func.return %r
 //! }
 //!
 //! // After (inside func.func @foo):
 //! func.func @foo::__clam_0(%__env: !k, %param: anyref) -> anyref {
-//!   %x, %y = "closure.unpack"(%__env)
-//!   %r = "arith.add"(%x, %param)
-//!   "func.return"(%r)
+//!   %x, %y = closure.unpack %__env
+//!   %r = arith.add %x, %param
+//!   func.return %r
 //! }
-//! %k = "closure.new"(%x, %y) {entries = [@foo::__clam_0]}
+//! %k = closure.new %x, %y {entries = [@foo::__clam_0]}
 //! ```
 //!
 //! The entry function's environment is the closure itself, typed with the

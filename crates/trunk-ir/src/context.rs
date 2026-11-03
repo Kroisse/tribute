@@ -2207,10 +2207,10 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f() -> core.i32 {
-    %0 = "arith.const"() {value = 1} : core.i32
-    %1 = "arith.const"() {value = 2} : core.i32
-    %2 = "arith.negi"(%0) : core.i32
-    "func.return"(%2)
+    %0 = arith.const {value = 1} : core.i32
+    %1 = arith.const {value = 2} : core.i32
+    %2 = arith.negi %0 : core.i32
+    func.return %2
   }
 }"#,
         );
@@ -2288,9 +2288,9 @@ mod tests {
         let output = clone_first_func_region(
             r#"core.module @test {
   func.func @original() -> core.i32 {
-    %0 = "arith.const"() {value = 7} : core.i32
-    %1 = "arith.negi"(%0) : core.i32
-    "func.return"(%1)
+    %0 = arith.const {value = 7} : core.i32
+    %1 = arith.negi %0 : core.i32
+    func.return %1
   }
 }"#,
             "cloned",
@@ -2304,13 +2304,13 @@ mod tests {
             r#"core.module @test {
   func.func @original(%0: core.i1) -> core.i32 {
     %1 = "scf.if"(%0) ({
-      %2 = "arith.const"() {value = 1} : core.i32
-      "scf.yield"(%2)
+      %2 = arith.const {value = 1} : core.i32
+      scf.yield %2
     }, {
-      %3 = "arith.const"() {value = 2} : core.i32
-      "scf.yield"(%3)
+      %3 = arith.const {value = 2} : core.i32
+      scf.yield %3
     }) : core.i32
-    "func.return"(%1)
+    func.return %1
   }
 }"#,
             "cloned",
@@ -2324,10 +2324,10 @@ mod tests {
             r#"core.module @test {
   func.func @original() -> core.i32 {
   ^bb0:
-    %0 = "arith.const"() {value = 1} : core.i32
-    "cf.br"(%0)[^bb1]
+    %0 = arith.const {value = 1} : core.i32
+    cf.br %0 [^bb1]
   ^bb1(%1: core.i32):
-    "func.return"(%1)
+    func.return %1
   }
 }"#,
             "cloned",

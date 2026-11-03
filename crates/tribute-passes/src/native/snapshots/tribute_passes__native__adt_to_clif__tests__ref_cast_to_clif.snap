@@ -4,7 +4,7 @@ expression: result
 ---
 core.module @test {
   func.func @test_fn() -> core.ptr {
-      %0 = "clif.iconst"() {value = 100} : core.ptr
-      "func.return"(%0)
+      %0 = clif.iconst {value = 100} : core.ptr
+      func.return %0
   }
 }

@@ -1137,8 +1137,8 @@ core.module @test {
         // (parser only accepts ASCII alphanumeric + '_' for bare symbols)
         let input = r#"core.module @test {
   func.func @"π"() -> core.i32 {
-    %0 = "arith.const"() {value = 42} : core.i32
-    "func.return"(%0)
+    %0 = arith.const {value = 42} : core.i32
+    func.return %0
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1158,7 +1158,7 @@ core.module @test {
                 "undefined operand",
                 r#"core.module @test {
   func.func @f() -> core.i32 {
-    "func.return"(%missing)
+    func.return %missing
   }
 }"#,
                 "undefined value '%missing'",
@@ -1168,11 +1168,11 @@ core.module @test {
                 r#"core.module @test {
   func.func @f() -> core.i32 {
     ^bb0:
-      %0 = "arith.const"() {value = 1} : core.i32
-      "func.return"(%0)
+      %0 = arith.const {value = 1} : core.i32
+      func.return %0
     ^bb0:
-      %1 = "arith.const"() {value = 2} : core.i32
-      "func.return"(%1)
+      %1 = arith.const {value = 2} : core.i32
+      func.return %1
   }
 }"#,
                 "duplicate block label",
@@ -1182,7 +1182,7 @@ core.module @test {
                 r#"core.module @test {
   func.func @f(%0: core.i32, %1: core.i32) -> core.i32 {
     ^bb0(%2: core.i32):
-      "func.return"(%2)
+      func.return %2
   }
 }"#,
                 "entry block has 1 args but function signature has 2 params",
@@ -1191,8 +1191,8 @@ core.module @test {
                 "result count mismatch",
                 r#"core.module @test {
   func.func @f() -> core.i32 {
-    %0, %1 = "arith.const"() {value = 42} : core.i32
-    "func.return"(%0)
+    %0, %1 = arith.const {value = 42} : core.i32
+    func.return %0
   }
 }"#,
                 "declares 2 result names but 1 result types",
@@ -1202,12 +1202,12 @@ core.module @test {
                 r#"core.module @test {
   func.func @f() -> core.i32 {
     ^entry:
-      %cond = "arith.const"() {value = 1} : core.i1
+      %cond = arith.const {value = 1} : core.i1
       "scf.br"()[^left]
     ^left(%x: core.i32):
       "scf.br"()[^right]
     ^right(%x: core.i32):
-      "func.return"(%x)
+      func.return %x
   }
 }"#,
                 "duplicate SSA name '%x'",
@@ -1217,13 +1217,13 @@ core.module @test {
                 r#"core.module @test {
   func.func @f(%0: core.i32) -> core.i32 {
     ^entry:
-      %cond = "arith.const"() {value = 1} : core.i1
+      %cond = arith.const {value = 1} : core.i1
       %r = "scf.if"(%cond) ({
         "scf.br"()[^entry]
       }, {
-        "scf.yield"(%0)
+        scf.yield %0
       }) : core.i32
-      "func.return"(%r)
+      func.return %r
   }
 }"#,
                 "undefined block '^entry'",
@@ -1232,7 +1232,7 @@ core.module @test {
                 "undefined type alias error",
                 r#"core.module @test {
   func.func @f(%0: !unknown) -> core.i32 {
-    "func.return"(%0)
+    func.return %0
   }
 }"#,
                 "undefined type alias '!unknown'",
@@ -1242,8 +1242,8 @@ core.module @test {
                 r#"core.module @test {
   func.func @f() -> core.i32 {
     !bad = core.i32
-    %0 = "arith.const"() {value = 42} : !bad
-    "func.return"(%0)
+    %0 = arith.const {value = 42} : !bad
+    func.return %0
   }
 }"#,
                 "type aliases are only allowed in module regions",
@@ -1270,9 +1270,9 @@ core.module @test {
         let input = r#"core.module @test {
   func.func @f(%0: core.i32) -> core.i32 {
     ^bb0:
-      %1 = "arith.const"() {value = 1} : core.i32
-      %2 = "arith.addi"(%0, %1) : core.i32
-      "func.return"(%2)
+      %1 = arith.const {value = 1} : core.i32
+      %2 = arith.addi %0, %1 : core.i32
+      func.return %2
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1290,9 +1290,9 @@ core.module @test {
         let input = r#"core.module @test {
   func.func @f(%0: core.i32) -> core.i32 {
     ^bb0:
-      %1 = "arith.const"() {value = 1} : core.i32
-      %2 = "arith.addi"(%0, %1) : core.i32
-      "func.return"(%2)
+      %1 = arith.const {value = 1} : core.i32
+      %2 = arith.addi %0, %1 : core.i32
+      func.return %2
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1310,14 +1310,14 @@ core.module @test {
         let input = r#"core.module @test {
   func.func @add(%0: core.i32, %1: core.i32) -> core.i32 {
     ^bb0:
-      %2 = "arith.addi"(%0, %1) : core.i32
-      "func.return"(%2)
+      %2 = arith.addi %0, %1 : core.i32
+      func.return %2
   }
   func.func @main() -> core.i32 {
-    %0 = "arith.const"() {value = 40} : core.i32
-    %1 = "arith.const"() {value = 2} : core.i32
-    %2 = "func.call"(%0, %1) {callee = @add} : core.i32
-    "func.return"(%2)
+    %0 = arith.const {value = 40} : core.i32
+    %1 = arith.const {value = 2} : core.i32
+    %2 = func.call %0, %1 {callee = @add} : core.i32
+    func.return %2
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1330,8 +1330,8 @@ core.module @test {
     fn test_parse_test_module_convenience() {
         let input = r#"core.module @test {
   func.func @f() -> core.i32 {
-    %0 = "arith.const"() {value = 99} : core.i32
-    "func.return"(%0)
+    %0 = arith.const {value = 99} : core.i32
+    func.return %0
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1429,7 +1429,7 @@ core.module @test {
     #[test]
     fn wasm_assembly_keeps_an_explicit_shared_signature_shared() {
         let input = r#"core.module @test {
-  "wasm.func"() ({ "wasm.return"() }) {sym_name = "unlowered", type = func.func_sig<() -> core.nil>}
+  "wasm.func"() ({ wasm.return }) {sym_name = "unlowered", type = func.func_sig<() -> core.nil>}
 }"#;
         let mut ctx = IrContext::new();
         let module = parse_module(&mut ctx, input).expect("explicit assembly should parse");
@@ -1450,7 +1450,7 @@ core.module @test {
         let input = r#"core.module @test {
   !contract = clif.func_sig<(core.i32) -> (core.i32, core.i64), {tag = @native}>
   clif.func @id(%value: core.i32) -> core.i32 {
-    "clif.return"(%value)
+    clif.return %value
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1572,7 +1572,7 @@ core.module @test {
     fn test_no_arrow_func_op_preserves_zero_results() {
         let input = r#"core.module @test {
   func.func @consume(%value: core.i32) {
-    "func.return"()
+    func.return
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1597,7 +1597,7 @@ core.module @test {
   !marker = test.record<core.i32 {name = "ability_id"}, core.i32 {name = "prompt_tag"}, {name = "_Marker"}>
 
   func.func @foo(%0: core.array<!marker>) -> core.array<!marker> {
-    "func.return"(%0)
+    func.return %0
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1667,7 +1667,7 @@ core.module @test {
   !outer = func.func_sig<() -> !inner>
 
   func.func @foo(%0: !inner) -> !inner {
-    "func.return"(%0)
+    func.return %0
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1685,7 +1685,7 @@ core.module @test {
         // Existing IR without aliases should still round-trip
         let input = r#"core.module @test {
   func.func @f(%0: core.i32) -> core.i32 {
-    "func.return"(%0)
+    func.return %0
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1699,7 +1699,7 @@ core.module @test {
   !"test::MyStruct" = test.record<core.i32 {name = "x"}, core.i32 {name = "y"}, {name = "test::MyStruct"}>
 
   func.func @foo(%0: !"test::MyStruct") -> !"test::MyStruct" {
-    "func.return"(%0)
+    func.return %0
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1717,7 +1717,7 @@ core.module @test {
         let input = r#"core.module @test {
   func.func @f() -> core.bytes {
     %0 = "test.bytes_const"() {value = b"hello"} : core.bytes
-    "func.return"(%0)
+    func.return %0
   }
 }"#;
         let mut ctx = IrContext::new();

@@ -25,34 +25,45 @@ mod tribute_rt {
     struct ConventionTableRef;
 
     #[flags(Pure)]
+    #[asm_format(value attr_dict_bare ":" type(result))]
     fn box_int(value: Value<_>) -> Value<_> {}
     #[implements(Fold)]
     #[flags(Pure)]
+    #[asm_format(value attr_dict_bare ":" type(result))]
     fn unbox_int(value: Value<_>) -> Value<_> {}
     #[flags(Pure)]
+    #[asm_format(value attr_dict_bare ":" type(result))]
     fn box_nat(value: Value<_>) -> Value<_> {}
     #[implements(Fold)]
     #[flags(Pure)]
+    #[asm_format(value attr_dict_bare ":" type(result))]
     fn unbox_nat(value: Value<_>) -> Value<_> {}
     #[flags(Pure)]
+    #[asm_format(value attr_dict_bare ":" type(result))]
     fn box_float(value: Value<_>) -> Value<_> {}
     #[implements(Fold)]
     #[flags(Pure)]
+    #[asm_format(value attr_dict_bare ":" type(result))]
     fn unbox_float(value: Value<_>) -> Value<_> {}
     #[flags(Pure)]
+    #[asm_format(value attr_dict_bare ":" type(result))]
     fn box_bool(value: Value<_>) -> Value<_> {}
     #[implements(Fold)]
     #[flags(Pure)]
+    #[asm_format(value attr_dict_bare ":" type(result))]
     fn unbox_bool(value: Value<_>) -> Value<_> {}
 
+    #[asm_format(ptr attr_dict_bare ":" type(result))]
     fn retain(ptr: Value<_>) -> Value<_> {}
 
+    #[asm_format(ptr attr_dict_bare)]
     fn release(alloc_size: Attr<u64>, ptr: Value<_>) {}
 
     /// Release one unit of `ptr` and move the units of the fields `moved`
     /// were read from into `moved`. A unique owner releases only the managed
     /// fields at `release_offsets` before it is freed; a shared one acquires
     /// a unit for each moved value before it is released.
+    #[asm_format(ptr ("," moved^)? attr_dict_bare)]
     fn release_moving(
         alloc_size: Attr<u64>,
         release_offsets: Attr<[i32]>,
@@ -63,11 +74,13 @@ mod tribute_rt {
 
     /// Consume one managed ownership unit while crossing a native raw-pointer
     /// representation boundary. This is deliberately not a pure operation.
+    #[asm_format(value attr_dict_bare ":" type(result))]
     fn into_raw(value: Value<impl ManagedRef>) -> Value<Ptr> {}
 
     /// Receive one managed ownership unit from a raw pointer to a
     /// reference-counted object. The inverse of `into_raw`, and like it not a
     /// pure operation: dropping it would leak the unit.
+    #[asm_format(ptr attr_dict_bare ":" type(result))]
     fn from_raw(ptr: Value<Ptr>) -> Value<impl ManagedRef> {}
 
     /// A reference to the static convention table holding the entry
@@ -79,12 +92,13 @@ mod tribute_rt {
     /// the reference. See the closure storage layout in `new-plans/ir.md`.
     ///
     /// ```text
-    /// %table = "tribute_rt.convention_table"() {entries = [@f]} : tribute_rt.convention_table_ref
+    /// %table = tribute_rt.convention_table {entries = [@f]} : tribute_rt.convention_table_ref
     /// ```
     ///
     /// Its result is a `convention_table_ref` until the target converts that
     /// type, so the schema leaves it unconstrained.
     #[flags(Pure)]
+    #[asm_format(attr_dict_bare ":" type(result))]
     fn convention_table(entries: Attr<[SymbolRef]>) -> Value<_> {}
 
     /// The entry function at `index` of the convention table `table`, as an
@@ -92,12 +106,13 @@ mod tribute_rt {
     /// and the function table index `table + index` on Wasm.
     ///
     /// ```text
-    /// %entry = "tribute_rt.convention_entry"(%table) {index = 0} : core.i32
+    /// %entry = tribute_rt.convention_entry %table {index = 0} : core.i32
     /// ```
     ///
     /// `table` is a `convention_table_ref` until the target converts that
     /// type, so the schema leaves it unconstrained.
     #[flags(Pure)]
+    #[asm_format(table attr_dict_bare ":" type(result))]
     fn convention_entry(index: Attr<u32>, table: Value<_>) -> Value<_> {}
 }
 
@@ -399,7 +414,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f(%i: core.i32, %n: tribute_rt.nat, %b: core.i1, %f: core.f64, %any: tribute_rt.anyref, %p: core.ptr) {
-    "func.return"()
+    func.return
   }
 }"#,
         );
@@ -472,7 +487,7 @@ mod tests {
   func.func @f(%x: {ty}) -> {ty} {{
     %b = "tribute_rt.{boxed}"(%x) : tribute_rt.anyref
     %u = "tribute_rt.{unboxed}"(%b) : {ty}
-    "func.return"(%u)
+    func.return %u
   }}
 }}"#
                 ));
@@ -485,9 +500,9 @@ mod tests {
         fn unbox_of_a_different_box_kind_is_not_folded() {
             let (text, changed) = run(r#"core.module @test {
   func.func @f(%x: core.i64) -> core.f64 {
-    %b = "tribute_rt.box_int"(%x) : tribute_rt.anyref
-    %u = "tribute_rt.unbox_float"(%b) : core.f64
-    "func.return"(%u)
+    %b = tribute_rt.box_int %x : tribute_rt.anyref
+    %u = tribute_rt.unbox_float %b : core.f64
+    func.return %u
   }
 }"#);
             assert!(!changed);
@@ -498,9 +513,9 @@ mod tests {
         fn unbox_of_a_mistyped_box_is_not_folded() {
             let (text, changed) = run(r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i64 {
-    %b = "tribute_rt.box_int"(%x) : tribute_rt.anyref
-    %u = "tribute_rt.unbox_int"(%b) : core.i64
-    "func.return"(%u)
+    %b = tribute_rt.box_int %x : tribute_rt.anyref
+    %u = tribute_rt.unbox_int %b : core.i64
+    func.return %u
   }
 }"#);
             assert!(!changed);
@@ -511,8 +526,8 @@ mod tests {
         fn unbox_of_a_block_argument_is_not_folded() {
             let (text, changed) = run(r#"core.module @test {
   func.func @f(%b: tribute_rt.anyref) -> core.i64 {
-    %u = "tribute_rt.unbox_int"(%b) : core.i64
-    "func.return"(%u)
+    %u = tribute_rt.unbox_int %b : core.i64
+    func.return %u
   }
 }"#);
             assert!(!changed);

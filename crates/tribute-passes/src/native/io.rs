@@ -321,9 +321,9 @@ mod tests {
 
                 func.func @caller(%0: core.bytes, %1: core.i1) -> tribute_rt.anyref {
                 ^bb0:
-                    %2 = "tribute_io.write"(%0, %1) : core.nil
-                    %3 = "tribute_io.read_line"() : tribute_rt.anyref
-                    "func.return"(%3)
+                    %2 = tribute_io.write %0, %1 : core.nil
+                    %3 = tribute_io.read_line : tribute_rt.anyref
+                    func.return %3
                 }
             }
             "#,

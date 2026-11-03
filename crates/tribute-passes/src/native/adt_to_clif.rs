@@ -312,9 +312,9 @@ mod tests {
         let result = run_pass(
             r#"core.module @test {
   func.func @test_fn() -> core.i32 {
-    %0 = "clif.iconst"() {value = 0} : core.ptr
-    %1 = "adt.struct_get"(%0) {field = 1, type = mem.struct<core.i32, core.i32>} : core.i32
-    "func.return"(%1)
+    %0 = clif.iconst {value = 0} : core.ptr
+    %1 = adt.struct_get %0 {field = 1, type = mem.struct<core.i32, core.i32>} : core.i32
+    func.return %1
   }
 }"#,
         );
@@ -326,9 +326,9 @@ mod tests {
         let error = run_pass_result(
             r#"core.module @test {
   func.func @test_fn() -> core.i32 {
-    %0 = "clif.iconst"() {value = 0} : core.ptr
-    %1 = "adt.struct_get"(%0) {field = 1, type = adt.struct<Point(x: core.i32, y: core.i32)>} : core.i32
-    "func.return"(%1)
+    %0 = clif.iconst {value = 0} : core.ptr
+    %1 = adt.struct_get %0 {field = 1, type = adt.struct<Point(x: core.i32, y: core.i32)>} : core.i32
+    func.return %1
   }
 }"#,
         )
@@ -348,10 +348,10 @@ mod tests {
         let result = run_pass(
             r#"core.module @test {
   func.func @test_fn() -> core.nil {
-    %0 = "clif.iconst"() {value = 0} : core.ptr
-    %1 = "clif.iconst"() {value = 42} : core.i32
-    "adt.struct_set"(%0, %1) {field = 0, type = mem.struct<core.i32, core.i32>}
-    "func.return"()
+    %0 = clif.iconst {value = 0} : core.ptr
+    %1 = clif.iconst {value = 42} : core.i32
+    adt.struct_set %0, %1 {field = 0, type = mem.struct<core.i32, core.i32>}
+    func.return
   }
 }"#,
         );
@@ -363,8 +363,8 @@ mod tests {
         let result = run_pass(
             r#"core.module @test {
   func.func @test_fn() -> core.ptr {
-    %0 = "adt.ref_null"() {type = adt.struct<Env(x: core.i32)>} : core.ptr
-    "func.return"(%0)
+    %0 = adt.ref_null {type = adt.struct<Env(x: core.i32)>} : core.ptr
+    func.return %0
   }
 }"#,
         );
@@ -376,9 +376,9 @@ mod tests {
         let result = run_pass(
             r#"core.module @test {
   func.func @test_fn() -> core.ptr {
-    %0 = "clif.iconst"() {value = 100} : core.ptr
-    %1 = "adt.ref_cast"(%0) {type = adt.struct<Env(x: core.i32)>} : core.ptr
-    "func.return"(%1)
+    %0 = clif.iconst {value = 100} : core.ptr
+    %1 = adt.ref_cast %0 {type = adt.struct<Env(x: core.i32)>} : core.ptr
+    func.return %1
   }
 }"#,
         );
@@ -390,9 +390,9 @@ mod tests {
         let result = run_pass(
             r#"core.module @test {
   func.func @test_fn() -> core.i32 {
-    %0 = "clif.iconst"() {value = 42} : core.ptr
-    %1 = "adt.ref_is_null"(%0) : core.i32
-    "func.return"(%1)
+    %0 = clif.iconst {value = 42} : core.ptr
+    %1 = adt.ref_is_null %0 : core.i32
+    func.return %1
   }
 }"#,
         );
@@ -404,9 +404,9 @@ mod tests {
         let result = run_pass(
             r#"core.module @test {
   func.func @test_fn() -> core.i8 {
-    %0 = "clif.iconst"() {value = 42} : core.ptr
-    %1 = "adt.ref_is_null"(%0) : core.i8
-    "func.return"(%1)
+    %0 = clif.iconst {value = 42} : core.ptr
+    %1 = adt.ref_is_null %0 : core.i8
+    func.return %1
   }
 }"#,
         );
@@ -419,9 +419,9 @@ mod tests {
         let error = run_pass_result(
             r#"core.module @test {
   func.func @test_fn() -> core.i32 {
-    %0 = "clif.iconst"() {value = 42} : core.ptr
-    %1 = "adt.variant_get"(%0) {tag = "Some", field = 0, type = adt.enum<Choice { None(), Some(core.i32) }>} : core.i32
-    "func.return"(%1)
+    %0 = clif.iconst {value = 42} : core.ptr
+    %1 = adt.variant_get %0 {tag = "Some", field = 0, type = adt.enum<Choice { None(), Some(core.i32) }>} : core.i32
+    func.return %1
   }
 }"#,
         )
@@ -440,9 +440,9 @@ mod tests {
         let error = run_pass_result(
             r#"core.module @test {
   func.func @test_fn() -> core.i32 {
-    %0 = "clif.iconst"() {value = 42} : core.ptr
-    %1 = "adt.variant_is"(%0) {tag = "Some", type = adt.enum<Choice { None(), Some(core.i32) }>} : core.i32
-    "func.return"(%1)
+    %0 = clif.iconst {value = 42} : core.ptr
+    %1 = adt.variant_is %0 {tag = "Some", type = adt.enum<Choice { None(), Some(core.i32) }>} : core.i32
+    func.return %1
   }
 }"#,
         )
@@ -461,9 +461,9 @@ mod tests {
         let result = run_pass_result(
             r#"core.module @test {
   func.func @test_fn() -> core.i1 {
-    %0 = "clif.iconst"() {value = 42} : core.ptr
-    %1 = "adt.ref_is_null"(%0) : core.i1
-    "func.return"(%1)
+    %0 = clif.iconst {value = 42} : core.ptr
+    %1 = adt.ref_is_null %0 : core.i1
+    func.return %1
   }
 }"#,
         );
@@ -475,10 +475,10 @@ mod tests {
         let error = run_pass_result(
             r#"core.module @test {
   func.func @test_fn() -> core.index {
-    %0 = "clif.iconst"() {value = 42} : core.ptr
-    %1 = "core.unrealized_conversion_cast"(%0) : adt.array<core.i32>
-    %2 = "adt.array_len"(%1) : core.index
-    "func.return"(%2)
+    %0 = clif.iconst {value = 42} : core.ptr
+    %1 = core.unrealized_conversion_cast %0 : adt.array<core.i32>
+    %2 = adt.array_len %1 : core.index
+    func.return %2
   }
 }"#,
         )

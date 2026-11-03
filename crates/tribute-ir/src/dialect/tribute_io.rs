@@ -5,7 +5,9 @@
 
 #[trunk_ir::dialect]
 mod tribute_io {
+    #[asm_format(bytes "," newline attr_dict_bare ":" type(result))]
     fn write(bytes: Value<_>, newline: Value<_>) -> Value<_> {}
+    #[asm_format(attr_dict_bare ":" type(result))]
     fn read_line() -> Value<_> {}
 }
 

@@ -14,22 +14,27 @@ mod mem {
 
     /// The address of immutable data holding `bytes`.
     #[flags(Pure)]
+    #[asm_format(attr_dict_bare ":" type(result))]
     fn data(bytes: Attr<Bytes>) -> Value<Ptr> {}
 
     /// The null pointer, the only pointer constant. It has no provenance and
     /// must not be dereferenced.
     #[flags(Pure)]
+    #[asm_format(attr_dict_bare ":" type(result))]
     fn null() -> Value<Ptr> {}
 
     /// Load a scalar from `ptr` plus an immediate byte `offset`.
+    #[asm_format(ptr attr_dict_bare ":" type(result))]
     fn load(offset: Attr<u32>, ptr: Value<Ptr>) -> Value<impl ScalarLike> {}
 
     /// Store a scalar `value` at `ptr` plus an immediate byte `offset`.
+    #[asm_format(ptr "," value attr_dict_bare)]
     fn store(offset: Attr<u32>, ptr: Value<Ptr>, value: Value<impl ScalarLike>) {}
 
     /// Add a byte `offset` to `base`, keeping `base`'s provenance. No
     /// element-size scaling is applied.
     #[flags(Pure)]
+    #[asm_format(base "," offset attr_dict_bare ":" type(result))]
     fn ptr_add(base: Value<Ptr>, offset: Value<Index>) -> Value<Ptr> {}
 }
 
@@ -44,7 +49,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             &format!(
-                "core.module @test {{\n  func.func @f(%p: core.ptr, %i: core.i64, %n: core.i32, %f: core.f64, %b: core.bytes, %x: core.index) -> core.nil {{\n    {body}\n    \"func.return\"()\n  }}\n}}"
+                "core.module @test {{\n  func.func @f(%p: core.ptr, %i: core.i64, %n: core.i32, %f: core.f64, %b: core.bytes, %x: core.index) -> core.nil {{\n    {body}\n    func.return\n  }}\n}}"
             ),
         );
         validate_op_schemas(&ctx, module.op()).is_ok()
@@ -84,42 +89,36 @@ mod tests {
 
     #[test]
     fn ptr_add_takes_a_pointer_and_an_index_and_yields_a_pointer() {
-        assert!(schema_ok("%a = \"mem.ptr_add\"(%p, %x) : core.ptr"));
-        assert!(!schema_ok("%a = \"mem.ptr_add\"(%p, %i) : core.ptr"));
-        assert!(!schema_ok("%a = \"mem.ptr_add\"(%p, %n) : core.ptr"));
-        assert!(!schema_ok("%a = \"mem.ptr_add\"(%x, %x) : core.ptr"));
-        assert!(!schema_ok("%a = \"mem.ptr_add\"(%p, %f) : core.ptr"));
-        assert!(!schema_ok("%a = \"mem.ptr_add\"(%p, %x) : core.index"));
+        assert!(schema_ok("%a = mem.ptr_add %p, %x : core.ptr"));
+        assert!(!schema_ok("%a = mem.ptr_add %p, %i : core.ptr"));
+        assert!(!schema_ok("%a = mem.ptr_add %p, %n : core.ptr"));
+        assert!(!schema_ok("%a = mem.ptr_add %x, %x : core.ptr"));
+        assert!(!schema_ok("%a = mem.ptr_add %p, %f : core.ptr"));
+        assert!(!schema_ok("%a = mem.ptr_add %p, %x : core.index"));
     }
 
     #[test]
     fn memory_access_addresses_must_be_pointers() {
-        assert!(schema_ok("%a = \"mem.load\"(%p) {offset = 8} : core.i64"));
-        assert!(!schema_ok("%a = \"mem.load\"(%i) {offset = 0} : core.i64"));
-        assert!(schema_ok("\"mem.store\"(%p, %f) {offset = 0}"));
-        assert!(!schema_ok("\"mem.store\"(%n, %f) {offset = 0}"));
-        assert!(schema_ok(
-            "%a = \"mem.data\"() {bytes = b\"hi\"} : core.ptr"
-        ));
-        assert!(!schema_ok(
-            "%a = \"mem.data\"() {bytes = b\"hi\"} : core.i64"
-        ));
-        assert!(schema_ok("%a = \"mem.null\"() : core.ptr"));
-        assert!(!schema_ok("%a = \"mem.null\"() : core.i64"));
+        assert!(schema_ok("%a = mem.load %p {offset = 8} : core.i64"));
+        assert!(!schema_ok("%a = mem.load %i {offset = 0} : core.i64"));
+        assert!(schema_ok("mem.store %p, %f {offset = 0}"));
+        assert!(!schema_ok("mem.store %n, %f {offset = 0}"));
+        assert!(schema_ok("%a = mem.data {bytes = b\"hi\"} : core.ptr"));
+        assert!(!schema_ok("%a = mem.data {bytes = b\"hi\"} : core.i64"));
+        assert!(schema_ok("%a = mem.null : core.ptr"));
+        assert!(!schema_ok("%a = mem.null : core.i64"));
     }
 
     #[test]
     fn memory_access_moves_only_scalars() {
         for scalar in ["core.i8", "core.i64", "core.f64", "core.ptr"] {
             assert!(schema_ok(&format!(
-                "%a = \"mem.load\"(%p) {{offset = 0}} : {scalar}"
+                "%a = mem.load %p {{offset = 0}} : {scalar}"
             )));
         }
-        assert!(!schema_ok(
-            "%a = \"mem.load\"(%p) {offset = 0} : core.bytes"
-        ));
-        assert!(!schema_ok("%a = \"mem.load\"(%p) {offset = 0} : core.nil"));
-        assert!(schema_ok("\"mem.store\"(%p, %p) {offset = 0}"));
-        assert!(!schema_ok("\"mem.store\"(%p, %b) {offset = 0}"));
+        assert!(!schema_ok("%a = mem.load %p {offset = 0} : core.bytes"));
+        assert!(!schema_ok("%a = mem.load %p {offset = 0} : core.nil"));
+        assert!(schema_ok("mem.store %p, %p {offset = 0}"));
+        assert!(!schema_ok("mem.store %p, %b {offset = 0}"));
     }
 }

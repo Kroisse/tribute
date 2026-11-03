@@ -12,11 +12,12 @@ mod core {
     }
 
     #[implements(Fold)]
-
+    #[asm_format(value attr_dict_bare ":" type(result))]
     fn unrealized_conversion_cast(value: Value<_>) -> Value<_> {}
 
     /// The only value of `core.nil`.
     #[flags(Pure)]
+    #[asm_format(attr_dict_bare ":" type(result))]
     fn nil_value() -> Value<Nil> {}
 
     struct Nil;
@@ -429,8 +430,8 @@ mod canonicalize_tests {
     fn unrealized_cast_identity_drops_same_type_cast() {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %r = "core.unrealized_conversion_cast"(%x) : core.i32
-    "func.return"(%r)
+    %r = core.unrealized_conversion_cast %x : core.i32
+    func.return %r
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -453,8 +454,8 @@ mod canonicalize_tests {
     fn unrealized_cast_identity_does_not_match_when_types_differ() {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i64 {
-    %r = "core.unrealized_conversion_cast"(%x) : core.i64
-    "func.return"(%r)
+    %r = core.unrealized_conversion_cast %x : core.i64
+    func.return %r
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -476,9 +477,9 @@ mod canonicalize_tests {
     fn unrealized_cast_round_trip_collapses_pair() {
         let input = r#"core.module @test {
   func.func @f(%x: core.i64) -> core.i64 {
-    %a = "core.unrealized_conversion_cast"(%x) : core.i32
-    %b = "core.unrealized_conversion_cast"(%a) : core.i64
-    "func.return"(%b)
+    %a = core.unrealized_conversion_cast %x : core.i32
+    %b = core.unrealized_conversion_cast %a : core.i64
+    func.return %b
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -502,9 +503,9 @@ mod canonicalize_tests {
     fn unrealized_cast_round_trip_does_not_match_three_step_chain() {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i64 {
-    %a = "core.unrealized_conversion_cast"(%x) : core.i16
-    %b = "core.unrealized_conversion_cast"(%a) : core.i64
-    "func.return"(%b)
+    %a = core.unrealized_conversion_cast %x : core.i16
+    %b = core.unrealized_conversion_cast %a : core.i64
+    func.return %b
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -600,9 +601,9 @@ mod scalar_category_tests {
     fn index_round_trips_through_text() {
         let input = r#"core.module @test {
   func.func @f(%i: core.index, %n: core.i32) -> core.index {
-    %c = "arith.index_castsi"(%n) : core.index
-    %r = "arith.addi"(%i, %c) : core.index
-    "func.return"(%r)
+    %c = arith.index_castsi %n : core.index
+    %r = arith.addi %i, %c : core.index
+    func.return %r
   }
 }"#;
         let mut ctx = IrContext::new();

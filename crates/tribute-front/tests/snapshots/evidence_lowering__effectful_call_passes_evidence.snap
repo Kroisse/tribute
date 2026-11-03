@@ -6,21 +6,21 @@ core.module @test {tribute.entry = @"pkg::main"} {
   !t0 = tribute_control.func_sig<() -> core.i32 row(@"ability_1_12_pkg::Counter")>
 
   tribute_control.func @"pkg::get_count"() -> core.i32 row(@"ability_1_12_pkg::Counter") {
-      %0 = "tribute_control.perform"() {ability = @"ability_1_12_pkg::Counter", op_name = "inc", operation_kind = "op"} : core.i32
-      "tribute_control.return"(%0)
+      %0 = tribute_control.perform {ability = @"ability_1_12_pkg::Counter", op_name = "inc", operation_kind = "op"} : core.i32
+      tribute_control.return %0
   }
   tribute_control.func @"std::Nat::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32
   tribute_control.func @"pkg::use_counter"() -> core.i32 row(@"ability_1_12_pkg::Counter") {
-      %0 = "tribute_control.call"() {callee = @"pkg::get_count"} : core.i32
-      %1 = "tribute_control.call"() {callee = @"pkg::get_count"} : core.i32
-      %2 = "tribute_control.call"(%0, %1) {callee = @"std::Nat::+"} : core.i32
-      "tribute_control.return"(%2)
+      %0 = tribute_control.call {callee = @"pkg::get_count"} : core.i32
+      %1 = tribute_control.call {callee = @"pkg::get_count"} : core.i32
+      %2 = tribute_control.call %0, %1 {callee = @"std::Nat::+"} : core.i32
+      tribute_control.return %2
   }
   tribute_control.func @"pkg::main"['a0]() -> core.nil row(| 'a0) inferred {
-      %0 = "core.nil_value"() : core.nil
-      "tribute_control.return"(%0)
+      %0 = core.nil_value : core.nil
+      tribute_control.return %0
   }
   "ability.decl"() ({
-      "ability.operation"() {kind = "op", op_name = "inc", param_types = [], result_type = core.i32}
+      ability.operation {kind = "op", op_name = "inc", param_types = [], result_type = core.i32}
   }) {sym_name = "ability_1_12_pkg::Counter"}
 }

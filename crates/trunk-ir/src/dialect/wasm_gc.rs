@@ -23,12 +23,16 @@ mod wasm_gc {
     /// `core.array`, a value of this type is a GC reference.
     struct Array<Element>;
 
+    #[asm_format(fields attr_dict_bare ":" type(result))]
     fn struct_new(r#type: Attr<Type>, fields: Variadic<_>) -> Value<_> {}
 
+    #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn struct_get(r#type: Attr<Type>, field_idx: Attr<u32>, r#ref: Value<_>) -> Value<_> {}
 
+    #[asm_format(r#ref "," value attr_dict_bare)]
     fn struct_set(r#type: Attr<Type>, field_idx: Attr<u32>, r#ref: Value<_>, value: Value<_>) {}
 
+    #[asm_format(size "," init attr_dict_bare ":" type(result))]
     fn array_new<A: Array>(
         r#type: Attr<TypeOf<A>>,
         size: Value<I32>,
@@ -36,14 +40,17 @@ mod wasm_gc {
     ) -> Value<A> {
     }
 
+    #[asm_format(size attr_dict_bare ":" type(result))]
     fn array_new_default<A: Array>(r#type: Attr<TypeOf<A>>, size: Value<I32>) -> Value<A> {}
 
+    #[asm_format(elements attr_dict_bare ":" type(result))]
     fn array_new_fixed<A: Array>(
         r#type: Attr<TypeOf<A>>,
         elements: Variadic<A::Element>,
     ) -> Value<A> {
     }
 
+    #[asm_format(offset "," size attr_dict_bare ":" type(result))]
     fn array_new_data<A: Array>(
         r#type: Attr<TypeOf<A>>,
         data_idx: Attr<u32>,
@@ -52,6 +59,7 @@ mod wasm_gc {
     ) -> Value<A> {
     }
 
+    #[asm_format(r#ref "," index attr_dict_bare ":" type(result))]
     fn array_get<A: Array>(
         r#type: Attr<TypeOf<A>>,
         r#ref: Value<A>,
@@ -59,6 +67,7 @@ mod wasm_gc {
     ) -> Value<A::Element> {
     }
 
+    #[asm_format(r#ref "," index attr_dict_bare ":" type(result))]
     fn array_get_s<A: Array>(
         r#type: Attr<TypeOf<A>>,
         r#ref: Value<A>,
@@ -66,6 +75,7 @@ mod wasm_gc {
     ) -> Value<_> {
     }
 
+    #[asm_format(r#ref "," index attr_dict_bare ":" type(result))]
     fn array_get_u<A: Array>(
         r#type: Attr<TypeOf<A>>,
         r#ref: Value<A>,
@@ -73,6 +83,7 @@ mod wasm_gc {
     ) -> Value<_> {
     }
 
+    #[asm_format(r#ref "," index "," value attr_dict_bare)]
     fn array_set<A: Array>(
         r#type: Attr<TypeOf<A>>,
         r#ref: Value<A>,
@@ -81,6 +92,7 @@ mod wasm_gc {
     ) {
     }
 
+    #[asm_format(dst "," dst_offset "," src "," src_offset "," len attr_dict_bare)]
     fn array_copy<D: Array, S: Array>(
         dst_type: Attr<TypeOf<D>>,
         src_type: Attr<TypeOf<S>>,
@@ -92,10 +104,13 @@ mod wasm_gc {
     ) {
     }
 
+    #[asm_format(attr_dict_bare ":" type(result))]
     fn ref_null(target_type: Attr<Type>) -> Value<_> {}
 
+    #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn ref_cast(target_type: Attr<Type>, r#ref: Value<_>) -> Value<_> {}
 
+    #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn ref_test(target_type: Attr<Type>, r#ref: Value<_>) -> Value<_> {}
 }
 
@@ -110,7 +125,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             &format!(
-                "core.module @test {{\n  !A = wasm_gc.array<core.i32>\n  !B = wasm_gc.array<core.i64>\n  func.func @f(%a: !A, %b: !B, %n: core.i32, %w: core.i64, %x: core.index) -> core.nil {{\n    {body}\n    \"func.return\"()\n  }}\n}}"
+                "core.module @test {{\n  !A = wasm_gc.array<core.i32>\n  !B = wasm_gc.array<core.i64>\n  func.func @f(%a: !A, %b: !B, %n: core.i32, %w: core.i64, %x: core.index) -> core.nil {{\n    {body}\n    func.return\n  }}\n}}"
             ),
         );
         validate_op_schemas(&ctx, module.op()).is_ok()
@@ -119,68 +134,64 @@ mod tests {
     #[test]
     fn array_indices_and_lengths_are_i32() {
         assert!(schema_ok(
-            "%e = \"wasm_gc.array_get\"(%a, %n) {type = !A} : core.i32"
+            "%e = wasm_gc.array_get %a, %n {type = !A} : core.i32"
         ));
         assert!(!schema_ok(
-            "%e = \"wasm_gc.array_get\"(%a, %w) {type = !A} : core.i32"
+            "%e = wasm_gc.array_get %a, %w {type = !A} : core.i32"
         ));
         assert!(!schema_ok(
-            "%e = \"wasm_gc.array_get\"(%a, %x) {type = !A} : core.i32"
+            "%e = wasm_gc.array_get %a, %x {type = !A} : core.i32"
         ));
         assert!(!schema_ok(
-            "%e = \"wasm_gc.array_get_u\"(%a, %x) {type = !A} : core.i32"
+            "%e = wasm_gc.array_get_u %a, %x {type = !A} : core.i32"
         ));
-        assert!(!schema_ok("\"wasm_gc.array_set\"(%a, %x, %n) {type = !A}"));
+        assert!(!schema_ok("wasm_gc.array_set %a, %x, %n {type = !A}"));
         assert!(schema_ok(
-            "%v = \"wasm_gc.array_new_default\"(%n) {type = !A} : !A"
+            "%v = wasm_gc.array_new_default %n {type = !A} : !A"
         ));
         assert!(!schema_ok(
-            "%v = \"wasm_gc.array_new_default\"(%w) {type = !A} : !A"
+            "%v = wasm_gc.array_new_default %w {type = !A} : !A"
         ));
+        assert!(!schema_ok("%v = wasm_gc.array_new %x, %n {type = !A} : !A"));
         assert!(!schema_ok(
-            "%v = \"wasm_gc.array_new\"(%x, %n) {type = !A} : !A"
-        ));
-        assert!(!schema_ok(
-            "%v = \"wasm_gc.array_new_data\"(%n, %w) {type = !A, data_idx = 0} : !A"
+            "%v = wasm_gc.array_new_data %n, %w {type = !A, data_idx = 0} : !A"
         ));
     }
 
     #[test]
     fn array_new_fixed_elements_are_its_element_type() {
+        assert!(schema_ok("%v = wasm_gc.array_new_fixed {type = !A} : !A"));
         assert!(schema_ok(
-            "%v = \"wasm_gc.array_new_fixed\"() {type = !A} : !A"
-        ));
-        assert!(schema_ok(
-            "%v = \"wasm_gc.array_new_fixed\"(%n, %n) {type = !A} : !A"
+            "%v = wasm_gc.array_new_fixed %n, %n {type = !A} : !A"
         ));
         assert!(!schema_ok(
-            "%v = \"wasm_gc.array_new_fixed\"(%w) {type = !A} : !A"
+            "%v = wasm_gc.array_new_fixed %w {type = !A} : !A"
         ));
         assert!(!schema_ok(
-            "%v = \"wasm_gc.array_new_fixed\"(%n) {type = !A} : !B"
+            "%v = wasm_gc.array_new_fixed %n {type = !A} : !B"
         ));
     }
 
     #[test]
     fn array_copy_binds_its_array_types() {
         assert!(schema_ok(
-            "\"wasm_gc.array_copy\"(%a, %n, %b, %n, %n) {dst_type = !A, src_type = !B}"
+            "wasm_gc.array_copy %a, %n, %b, %n, %n {dst_type = !A, src_type = !B}"
         ));
         assert!(!schema_ok(
-            "\"wasm_gc.array_copy\"(%a, %n, %b, %n, %n) {dst_type = !A, src_type = !A}"
+            "wasm_gc.array_copy %a, %n, %b, %n, %n {dst_type = !A, src_type = !A}"
         ));
         assert!(!schema_ok(
-            "\"wasm_gc.array_copy\"(%a, %n, %b, %n, %w) {dst_type = !A, src_type = !B}"
+            "wasm_gc.array_copy %a, %n, %b, %n, %w {dst_type = !A, src_type = !B}"
         ));
     }
 
     #[test]
     fn array_new_data_result_is_its_declared_array() {
         assert!(schema_ok(
-            "%v = \"wasm_gc.array_new_data\"(%n, %n) {type = !A, data_idx = 0} : !A"
+            "%v = wasm_gc.array_new_data %n, %n {type = !A, data_idx = 0} : !A"
         ));
         assert!(!schema_ok(
-            "%v = \"wasm_gc.array_new_data\"(%n, %n) {type = !A, data_idx = 0} : !B"
+            "%v = wasm_gc.array_new_data %n, %n {type = !A, data_idx = 0} : !B"
         ));
     }
 }

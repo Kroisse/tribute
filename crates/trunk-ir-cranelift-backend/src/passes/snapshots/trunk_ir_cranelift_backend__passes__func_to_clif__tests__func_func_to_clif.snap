@@ -4,6 +4,6 @@ expression: result
 ---
 core.module @test {
   clif.func @test_fn() -> core.nil {
-      "clif.return"()
+      clif.return
   }
 }

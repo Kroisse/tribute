@@ -4,13 +4,13 @@ expression: ir_text
 ---
 core.module @test {
   tribute_control.func @"pkg::numbers"['a0]() -> tribute_rt.anyref row(| 'a0) inferred {
-      %0 = "arith.const"() {value = 1} : core.i32
-      %1 = "arith.const"() {value = 2} : core.i32
-      %2 = "arith.const"() {value = 3} : core.i32
-      %3 = "list.empty"() {element_type = core.i32} : tribute_rt.anyref
-      %4 = "list.prepend"(%2, %3) {element_type = core.i32} : tribute_rt.anyref
-      %5 = "list.prepend"(%1, %4) {element_type = core.i32} : tribute_rt.anyref
-      %6 = "list.prepend"(%0, %5) {element_type = core.i32} : tribute_rt.anyref
-      "tribute_control.return"(%6)
+      %0 = arith.const {value = 1} : core.i32
+      %1 = arith.const {value = 2} : core.i32
+      %2 = arith.const {value = 3} : core.i32
+      %3 = list.empty {element_type = core.i32} : tribute_rt.anyref
+      %4 = list.prepend %2, %3 {element_type = core.i32} : tribute_rt.anyref
+      %5 = list.prepend %1, %4 {element_type = core.i32} : tribute_rt.anyref
+      %6 = list.prepend %0, %5 {element_type = core.i32} : tribute_rt.anyref
+      tribute_control.return %6
   }
 }
