@@ -585,8 +585,7 @@ pub fn compile_for_both_targets(
     let config = CompilationConfig::new(db, false, OptimizationOptions::production());
     let native_object = compile_to_native_binary(db, source, config)
         .ok_or_else(|| {
-            let diagnostics =
-                compile_to_native_binary::accumulated::<Diagnostic>(db, source, config);
+            let diagnostics = tribute::pipeline::native_binary_diagnostics(db, source, config);
             format!("native compilation failed: {diagnostics:?}")
         })?
         .to_vec();
