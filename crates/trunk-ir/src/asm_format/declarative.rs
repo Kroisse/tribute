@@ -1141,6 +1141,8 @@ mod tests {
         #[asm_format("values" ("n" n^)? ("label" label^)? attr_dict)]
         fn pick(#[default(3)] n: Attr<u32>, #[default("none")] label: Attr<String>) {}
 
+        fn scale(#[default(0.0)] factor: Attr<f64>) {}
+
         #[asm_format("go" "(" keyword(speed) ")" attr_dict)]
         fn drive(speed: Attr<Speed>) {}
 
@@ -1301,6 +1303,21 @@ mod tests {
             ctx.op_attrs(other.op_ref()).get("n"),
             Some(&Attribute::Int(7))
         );
+    }
+
+    #[test]
+    fn a_float_default_is_its_bits() {
+        let mut ctx = IrContext::new();
+        let path = ctx.intern_path("test.trb");
+        let loc = crate::Location::new(path, crate::Span::new(0, 0));
+        let zero = Scale::operands().factor(0.0).build(&mut ctx, loc);
+        assert!(ctx.op(zero.op_ref()).attributes.is_empty());
+        let negative = Scale::operands().factor(-0.0).build(&mut ctx, loc);
+        assert_eq!(
+            ctx.op_attrs(negative.op_ref()).get("factor"),
+            Some(&Attribute::FloatBits((-0.0f64).to_bits()))
+        );
+        assert!(negative.factor(&ctx).is_sign_negative());
     }
 
     #[test]

@@ -941,7 +941,7 @@ fn gen_is_default(crate_path: &TokenStream, attr: &AttrDef) -> Option<TokenStrea
     let kind = attr_kind_trait(crate_path, attr);
     Some(quote! {
         |ctx: &#crate_path::IrContext, value: &#crate_path::Attribute| -> bool {
-            #kind::KIND.accepts(value) && #kind::read(ctx, value) == (#default)
+            #kind::KIND.accepts(value) && #kind::same(&#kind::read(ctx, value), &(#default))
         }
     })
 }

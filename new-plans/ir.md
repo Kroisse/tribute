@@ -149,8 +149,9 @@ format과 선언적 rewrite 도구는 operation 정의를 중복하지 않고 �
   선택 attribute와 같다. 없는 attribute는 `v`를 뜻하므로 accessor는 `v`를 돌려준다.
   `v`를 저장한 attribute는 없는 것과 같은 값이며, 정규형은 저장하지 않는 것이다.
   Builder와 parser는 `v`와 같은 값을 저장하지 않고, printer는 `v`와 같은 값을 쓰지
-  않는다. 목록 attribute, 선택 attribute, 타입 변수를 묶는 attribute, 타입 속성에는
-  기본값을 줄 수 없다. 타입은 속성으로 intern되므로 기본값을 저장한 타입과 저장하지
+  않는다. 같은 값인지는 attribute 종류가 정하며, 부동소수점 종류는 비트로 비교하므로
+  기본값이 `0.0`일 때 `-0.0`은 저장된다. 목록 attribute, 선택 attribute, 타입
+  변수를 묶는 attribute, 타입 속성에는 기본값을 줄 수 없다. 타입은 속성으로 intern되므로 기본값을 저장한 타입과 저장하지
   않은 타입이 다른 타입이 되기 때문이다.
   가변 operand 구간은 operand 중 마지막 하나만 허용한다.
 - Attribute 종류 `K`는 bound와 마찬가지로 Rust 타입이다. 종류는 schema가

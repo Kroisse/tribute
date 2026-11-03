@@ -29,6 +29,16 @@ pub trait AttrKind {
     fn read<'ctx>(ctx: &'ctx IrContext, attr: &'ctx Attribute) -> Self::Out<'ctx>;
 
     fn write(ctx: &mut IrContext, value: Self::In) -> Attribute;
+
+    /// Whether two values read from attributes are the same value, which
+    /// tells a stored `#[default(v)]` from another value. Floating-point
+    /// kinds compare bits, so `-0.0` is not the default `0.0`.
+    fn same<'ctx>(a: &Self::Out<'ctx>, b: &Self::Out<'ctx>) -> bool
+    where
+        Self::Out<'ctx>: PartialEq,
+    {
+        a == b
+    }
 }
 
 /// A kind whose value is a pooled handle, read without borrowing the context.
@@ -111,6 +121,13 @@ impl AttrKind for f32 {
     fn write(_: &mut IrContext, value: f32) -> Attribute {
         Attribute::FloatBits(f64::from(value).to_bits())
     }
+
+    fn same<'ctx>(a: &f32, b: &f32) -> bool
+    where
+        Self::Out<'ctx>: PartialEq,
+    {
+        a.to_bits() == b.to_bits()
+    }
 }
 
 impl AttrKind for f64 {
@@ -127,6 +144,13 @@ impl AttrKind for f64 {
 
     fn write(_: &mut IrContext, value: f64) -> Attribute {
         Attribute::FloatBits(value.to_bits())
+    }
+
+    fn same<'ctx>(a: &f64, b: &f64) -> bool
+    where
+        Self::Out<'ctx>: PartialEq,
+    {
+        a.to_bits() == b.to_bits()
     }
 }
 
