@@ -804,33 +804,31 @@ pub fn raw_region<'a>(input: &mut &'a str) -> ModalResult<RawRegion<'a>> {
 
     let mut blocks = Vec::new();
 
-    // Check if there are explicit blocks (starting with ^)
-    if input.starts_with('^') {
-        // Explicit blocks
-        loop {
-            ws.parse_next(input)?;
-            if input.starts_with('}') {
-                break;
-            }
-            let block = raw_block.parse_next(input)?;
-            blocks.push(block);
-        }
-    } else if !input.starts_with('}') {
-        // Implicit single block (operations without a block label)
+    // An entry block without arguments may omit its label, as in MLIR; the
+    // labelled blocks after it follow.
+    if !input.starts_with('^') && !input.starts_with('}') {
         let mut ops = Vec::new();
         loop {
             ws.parse_next(input)?;
-            if input.starts_with('}') || input.is_empty() {
+            if input.starts_with('^') || input.starts_with('}') || input.is_empty() {
                 break;
             }
             let op = raw_operation.parse_next(input)?;
             ops.push(op);
         }
         blocks.push(RawBlock {
-            label: "bb0",
+            label: "",
             args: vec![],
             ops,
         });
+    }
+    loop {
+        ws.parse_next(input)?;
+        if !input.starts_with('^') {
+            break;
+        }
+        let block = raw_block.parse_next(input)?;
+        blocks.push(block);
     }
 
     ws.parse_next(input)?;

@@ -400,6 +400,9 @@ lowering이 정한다.
 - Region은 attribute 사전 앞에 괄호로 감싸 쉼표로 나열한다. 그래서 attribute
   자리의 `{`는 언제나 사전이며, block 없는 region도 빈 사전과 헷갈리지 않는다.
 - Attribute 사전은 비어 있으면 쓰지 않는다. `sym_name`도 사전에 쓴다.
+- Region의 entry block은 argument가 없으면 MLIR처럼 label을 생략하고, 다른
+  block은 그 뒤에 label과 함께 쓴다. 비어 있거나 같은 region의 branch가
+  successor로 가리키는 entry block은 label을 쓴다.
 - Result 타입은 `: types`로 쓴다. MLIR과 달리 operand 타입은 쓰지 않는다.
   Operand는 정의에서 타입을 얻는다.
 
@@ -492,9 +495,9 @@ literal은 문자열 literal로 쓴다.
   쓰는 원소(`args`나 region을 나열한 `signature`)를 하나만 둔다. Region에 entry
   block이 없으면 형식으로 출력하지 않는다.
 - **`region(r)`, `regions(rs)`** — `{ .. }`로 쓴다. `signature`가 entry
-  argument를 쓰는 region은 entry block label을 생략하고, parser가 signature의
-  매개변수를 entry block argument로 되돌린다. 다른 region은 entry label과 argument를
-  generic처럼 쓴다. 선택 region이 없으면 아무것도 쓰지 않는다.
+  argument를 쓰는 region은 block이 여럿이어도 entry block label을 생략하고, parser가
+  signature의 매개변수를 entry block argument로 되돌린다. 다른 region은 entry
+  label과 argument를 generic처럼 쓴다. 선택 region이 없으면 아무것도 쓰지 않는다.
   `labelled_regions(rs, attr)`는 `{ label { .. } label { .. } }`로 쓰고 label은
   목록 attribute `attr`의 원소를 keyword로 쓴 것이다. 이 원소는 region 목록과
   `attr`를 함께 쓴다.

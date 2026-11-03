@@ -432,10 +432,8 @@ impl<'a, 'ctx> OpPrintHelper<'a, 'ctx> {
     /// Print ` { .. }` holding a region with the entry block label elided.
     ///
     /// Entry block args are assumed to have been printed externally (e.g., as
-    /// function parameters in the operation signature). For single-block regions,
-    /// the entry label is omitted entirely. For multi-block regions, the entry
-    /// block label is printed without args, and non-entry blocks are printed
-    /// normally.
+    /// function parameters in the operation signature), so the entry label is
+    /// omitted, and the other blocks are printed normally.
     pub fn print_body(&mut self, region: RegionRef) -> fmt::Result {
         self.f.write_char(' ')?;
         self.print_region_without_entry(region)
@@ -469,15 +467,15 @@ impl<'a, 'ctx> OpPrintHelper<'a, 'ctx> {
             self.state.assign_block_label(block);
         }
 
-        // An empty block keeps its label, or the region would read back
-        // without a block.
-        let is_single_block = blocks.len() == 1 && !ctx.block(blocks[0]).ops.is_empty();
+        // The entry block's arguments are printed elsewhere.
+        let elide_entry = blocks
+            .first()
+            .is_some_and(|&entry| can_elide_entry_label(ctx, blocks, entry));
 
         for (i, &block) in blocks.iter().enumerate() {
-            if i == 0 && is_single_block {
-                // Single block: elide entry block label entirely
+            if i == 0 && elide_entry {
+                // The entry block's arguments are printed elsewhere.
             } else {
-                // Multi-block: print label
                 let indent_str = " ".repeat(indent);
                 let label = self.state.get_block_label(block).to_owned();
                 write!(self.f, "{indent_str}{label}")?;
@@ -1022,6 +1020,18 @@ fn print_generic_op(
 // Region / Block printing
 // ============================================================================
 
+/// Whether `entry` reads back without its label: it has operations, or the
+/// region would read back without it, and no branch in the region names it.
+fn can_elide_entry_label(ctx: &IrContext, blocks: &[BlockRef], entry: BlockRef) -> bool {
+    !ctx.block(entry).ops.is_empty()
+        && !blocks.iter().any(|&block| {
+            ctx.block(block)
+                .ops
+                .iter()
+                .any(|&op| ctx.op_successors(op).any(|successor| successor == entry))
+        })
+}
+
 fn print_region(
     state: &mut PrintState<'_>,
     f: &mut dyn Write,
@@ -1037,14 +1047,13 @@ fn print_region(
         state.assign_block_label(block);
     }
 
-    // An empty block keeps its label, or the region would read back without
-    // a block.
-    let can_elide_label = blocks.len() == 1
-        && state.ctx.block_args(blocks[0]).is_empty()
-        && !ctx.block(blocks[0]).ops.is_empty();
+    // An entry block without arguments elides its label, as in MLIR.
+    let elide_entry = blocks.first().is_some_and(|&entry| {
+        state.ctx.block_args(entry).is_empty() && can_elide_entry_label(ctx, blocks, entry)
+    });
 
     for (i, &block) in blocks.iter().enumerate() {
-        if !can_elide_label {
+        if !(i == 0 && elide_entry) {
             let indent_str = " ".repeat(indent);
             let label = state.get_block_label(block).to_owned();
             write!(f, "{indent_str}{label}")?;

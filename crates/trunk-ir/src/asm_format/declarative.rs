@@ -1352,7 +1352,6 @@ mod tests {
       asm_format_test.invoke call @ret()
   }
   asm_format_test.fun @blocks(%0: core.i32) {
-    ^bb0:
       asm_format_test.branch to ^bb1(%0)
     ^bb1(%1: core.i32):
       asm_format_test.invoke call @ret(%1)
@@ -1620,7 +1619,6 @@ mod tests {
         assert_round_trip(
             r#"core.module @m {
   asm_format_test.def @cfg kind "c" {
-    ^bb0:
       asm_format_test.branch to ^bb1()
 
     ^bb1:
