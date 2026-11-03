@@ -20,9 +20,8 @@ use crate::common::NativeTestBinary;
 fn program(body: &str) -> String {
     format!(
         r#"core.module @test {{
-  "clif.func"() {{abi = "C", sym_name = "__asan_init", type = clif.func_sig<() -> core.nil>}}
-  "clif.func"() ({{
-    ^entry:
+  clif.func @__asan_init() -> core.nil attributes {{abi = "C"}}
+  clif.func @main() -> core.i32 {{
       %init = clif.call {{callee = @__asan_init}} : core.nil
       %size = clif.iconst {{value = 16}} : core.i64
       %object = clif.call %size {{callee = @__tribute_alloc}} : core.ptr
@@ -30,7 +29,7 @@ fn program(body: &str) -> String {
 {body}
       %code = clif.iconst {{value = 0}} : core.i32
       clif.return %code
-  }}) {{sym_name = "main", type = clif.func_sig<() -> core.i32>}}
+  }}
 }}"#
     )
 }
@@ -124,10 +123,9 @@ fn access_after_free_reports_at_the_access() {
 fn run_to_exit_check(body: &str) -> Output {
     let source = format!(
         r#"core.module @test {{
-  "clif.func"() {{abi = "C", sym_name = "__asan_init", type = clif.func_sig<() -> core.nil>}}
-  "clif.func"() {{abi = "C", sym_name = "__asan_exit", type = clif.func_sig<() -> core.nil>}}
-  "clif.func"() ({{
-    ^entry:
+  clif.func @__asan_init() -> core.nil attributes {{abi = "C"}}
+  clif.func @__asan_exit() -> core.nil attributes {{abi = "C"}}
+  clif.func @main() -> core.i32 {{
       %init = clif.call {{callee = @__asan_init}} : core.nil
       %size = clif.iconst {{value = 16}} : core.i64
       %object = clif.call %size {{callee = @__tribute_alloc}} : core.ptr
@@ -135,7 +133,7 @@ fn run_to_exit_check(body: &str) -> Output {
       %exit = clif.call {{callee = @__asan_exit}} : core.nil
       %code = clif.iconst {{value = 0}} : core.i32
       clif.return %code
-  }}) {{sym_name = "main", type = clif.func_sig<() -> core.i32>}}
+  }}
 }}"#
     );
     let mut ctx = IrContext::new();

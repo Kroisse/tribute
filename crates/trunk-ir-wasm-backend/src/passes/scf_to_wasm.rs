@@ -928,8 +928,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  "wasm.func"() ({
-    ^entry(%choice: core.i64):
+  wasm.func @choose(%choice: core.i64) -> (core.i32) {
       scf.switch %choice {
         scf.case 4294967296 {
           %one = wasm.i32_const {value = 1} : core.i32
@@ -941,7 +940,7 @@ mod tests {
       }
       %zero = wasm.i32_const {value = 0} : core.i32
       wasm.return %zero
-  }) {sym_name = "choose", type = wasm.func_sig<(core.i64) -> (core.i32)>}
+  }
 }"#,
         );
         lower(

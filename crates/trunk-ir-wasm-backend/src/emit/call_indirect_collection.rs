@@ -170,23 +170,20 @@ mod tests {
     fn indirect_call_requires_exact_signature_for_every_result_arity() {
         for source in [
             r#"core.module @m {
-  "wasm.func"() ({
-    ^entry(%table_index: core.i32):
+  wasm.func @caller(%table_index: core.i32) -> core.i32 {
       %value = "wasm.call_indirect"(%table_index) : core.i32
       wasm.return %value
-  }) {sym_name = "caller", type = wasm.func_sig<(core.i32) -> core.i32>}
+  }
 }"#,
             r#"core.module @m {
-  "wasm.func"() ({
-    ^entry(%table_index: core.i32):
+  wasm.func @caller(%table_index: core.i32) {
       "wasm.call_indirect"(%table_index)
-  }) {sym_name = "caller", type = wasm.func_sig<(core.i32) -> ()>}
+  }
 }"#,
             r#"core.module @m {
-  "wasm.func"() ({
-    ^entry(%table_index: core.i32):
+  wasm.func @caller(%table_index: core.i32) {
       %first, %second = "wasm.call_indirect"(%table_index) : core.i32, core.i64
-  }) {sym_name = "caller", type = wasm.func_sig<(core.i32) -> ()>}
+  }
 }"#,
         ] {
             let mut ctx = IrContext::new();

@@ -747,8 +747,8 @@ mod branch_table_tests {
     fn module(branch: &str) -> String {
         format!(
             r#"core.module @test {{
-  "clif.func"() ({{
-    ^entry(%index: core.i32):
+  clif.func @select(%index: core.i32) {{
+    ^entry:
       {branch}
     ^default:
       clif.return
@@ -756,7 +756,7 @@ mod branch_table_tests {
       clif.return
     ^second:
       clif.return
-  }}) {{sym_name = "select", type = clif.func_sig<(core.i32) -> ()>}}
+  }}
 }}"#
         )
     }

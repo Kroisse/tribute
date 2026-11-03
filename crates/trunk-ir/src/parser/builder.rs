@@ -1412,7 +1412,7 @@ core.module @test {
     fn generic_shared_func_assembly_remains_parseable() {
         let input = r#"core.module @test {
   !signature = func.func_sig<(core.i32) -> core.i32>
-  "func.func"() {sym_name = "generic", type = !signature}
+  func.func @generic(%0: core.i32) -> core.i32
 }"#;
         let mut ctx = IrContext::new();
         let module = parse_module(&mut ctx, input).expect("generic func assembly should parse");

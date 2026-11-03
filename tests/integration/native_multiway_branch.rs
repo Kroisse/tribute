@@ -36,8 +36,8 @@ fn selection_module(selection: &Selection<'_>) -> String {
     let mut text = String::from("core.module @test {\n");
     writeln!(
         text,
-        r#"  "clif.func"() ({{
-    ^entry(%index: {index_ty}):
+        r#"  clif.func @select(%index: {index_ty}) -> core.i32 {{
+    ^entry:
       "{operation}"(%index)[^default{}]{attributes}
     ^default:
       %default = clif.iconst {{value = 0}} : core.i32
@@ -57,11 +57,7 @@ fn selection_module(selection: &Selection<'_>) -> String {
         )
         .unwrap();
     }
-    writeln!(
-        text,
-        r#"  }}) {{sym_name = "select", type = clif.func_sig<({index_ty}) -> core.i32>}}"#
-    )
-    .unwrap();
+    writeln!(text, r#"  }}"#).unwrap();
     text.push_str(r#"  "clif.func"() ({"#);
     text.push('\n');
     for (position, (input, result)) in expected.iter().enumerate() {

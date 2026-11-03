@@ -453,46 +453,41 @@ mod tests {
     use trunk_ir::parser::parse_test_module;
 
     const NIL_ZERO_WIDTH_NATIVE: &str = r#"core.module @test {
-  "clif.func"() ({
-    ^entry(%value: core.i32, %unit: core.nil, %last: core.i64):
+  clif.func @call_target(%value: core.i32, %unit: core.nil, %last: core.i64) -> core.i32 {
       clif.return %value
-  }) {sym_name = "call_target", type = clif.func_sig<(core.i32, core.nil, core.i64) -> core.i32>}
-  "clif.func"() ({
-    ^entry(%value: core.i32, %unit: core.nil, %last: core.i64):
+  }
+  clif.func @direct_call(%value: core.i32, %unit: core.nil, %last: core.i64) -> core.i32 {
       %result = clif.call %value, %unit, %last {callee = @call_target} : core.i32
       clif.return %result
-  }) {sym_name = "direct_call", type = clif.func_sig<(core.i32, core.nil, core.i64) -> core.i32>}
-  "clif.func"() ({
-    ^entry(%callee: core.ptr, %value: core.i32, %unit: core.nil, %last: core.i64):
+  }
+  clif.func @indirect_call(%callee: core.ptr, %value: core.i32, %unit: core.nil, %last: core.i64) -> core.i32 {
       %result = clif.call_indirect %callee(%value, %unit, %last) : (core.i32, core.nil, core.i64) -> core.i32
       clif.return %result
-  }) {sym_name = "indirect_call", type = clif.func_sig<(core.ptr, core.i32, core.nil, core.i64) -> core.i32>}
-  "clif.func"() ({
-    ^entry(%value: core.i32, %unit: core.nil, %last: core.i64):
+  }
+  clif.func @direct_tail(%value: core.i32, %unit: core.nil, %last: core.i64) -> (), {call_conv = "tail"} {
       clif.return_call %value, %unit, %last {callee = @direct_tail}
-  }) {sym_name = "direct_tail", type = clif.func_sig<(core.i32, core.nil, core.i64) -> (), {call_conv = "tail"}>}
-  "clif.func"() ({
-    ^entry(%callee: core.ptr, %value: core.i32, %unit: core.nil, %last: core.i64):
+  }
+  clif.func @indirect_tail(%callee: core.ptr, %value: core.i32, %unit: core.nil, %last: core.i64) -> (), {call_conv = "tail"} {
       clif.return_call_indirect %callee(%value, %unit, %last) : (core.i32, core.nil, core.i64) -> (), {call_conv = "tail"}
-  }) {sym_name = "indirect_tail", type = clif.func_sig<(core.ptr, core.i32, core.nil, core.i64) -> (), {call_conv = "tail"}>}
-  "clif.func"() ({
-    ^entry(%value: core.i32, %unit: core.nil, %last: core.i64):
+  }
+  clif.func @jump(%value: core.i32, %unit: core.nil, %last: core.i64) -> core.nil {
+    ^entry:
       clif.jump %value, %unit, %last [^merge]
     ^merge(%next_value: core.i32, %next_unit: core.nil, %next_last: core.i64):
       clif.return
-  }) {sym_name = "jump", type = clif.func_sig<(core.i32, core.nil, core.i64) -> core.nil>}
+  }
 }"#;
 
     const ORDERED_RESULT_LISTS_NATIVE: &str = r#"core.module @test {
-  "clif.func"() ({
+  clif.func @sink() {
     clif.return
-  }) {sym_name = "sink", type = clif.func_sig<() -> ()>}
-  "clif.func"() ({
+  }
+  clif.func @pair() -> (core.i32, core.nil, core.i32) {
     %first = clif.iconst {value = 3} : core.i32
     %second = clif.iconst {value = 17} : core.i32
     clif.return %first, %second
-  }) {sym_name = "pair", type = clif.func_sig<() -> (core.i32, core.nil, core.i32)>}
-  "clif.func"() ({
+  }
+  clif.func @main() -> core.i32 {
     %first, %second = clif.call {callee = @pair} : core.i32, core.i32
     clif.call {callee = @sink}
     %sink = clif.symbol_addr {sym = @sink} : core.ptr
@@ -511,7 +506,7 @@ mod tests {
     %indirect_pair = clif.iadd %indirect_left, %indirect_right : core.i32
     %sum = clif.iadd %direct_pair, %indirect_pair : core.i32
     clif.return %sum
-  }) {sym_name = "main", type = clif.func_sig<() -> core.i32>}
+  }
 }"#;
 
     #[test]
@@ -596,26 +591,26 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
             core.module @left {
-                "clif.func"() ({
+                clif.func @helper() -> core.i32 {
                     %value = clif.iconst {value = 1} : core.i32
                     clif.return %value
-                }) {sym_name = "helper", type = clif.func_sig<() -> core.i32>}
-                "clif.func"() ({
+                }
+                clif.func @main() {
                     clif.return
-                }) {sym_name = "main", type = clif.func_sig<() -> ()>}
+                }
             }
             core.module @right {
-                "clif.func"() ({
+                clif.func @helper() -> core.i32 {
                     %value = clif.iconst {value = 2} : core.i32
                     clif.return %value
-                }) {sym_name = "helper", type = clif.func_sig<() -> core.i32>}
+                }
             }
-            "clif.func"() ({
+            clif.func @main() {
                 %left = clif.call {callee = @left::@helper} : core.i32
                 %right = clif.call {callee = @right::@helper} : core.i32
                 clif.call {callee = @left::@main}
                 clif.return
-            }) {sym_name = "main", type = clif.func_sig<() -> ()>}
+            }
         }"#,
         );
         validate_clif_ir(&ctx, module).expect("qualified names are distinct symbols");
@@ -638,12 +633,12 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-            "clif.func"() {sym_name = "used", type = clif.func_sig<() -> ()>, abi = "C"}
-            "clif.func"() {sym_name = "unused", type = clif.func_sig<() -> ()>, abi = "C"}
-            "clif.func"() ({
+            clif.func @used() attributes {abi = "C"}
+            clif.func @unused() attributes {abi = "C"}
+            clif.func @main() {
                 clif.call {callee = @used}
                 clif.return
-            }) {sym_name = "main", type = clif.func_sig<() -> ()>}
+            }
         }"#,
         );
         let bytes = emit_module_to_native(&ctx, module).expect("native object");
@@ -720,14 +715,14 @@ mod tests {
             &mut ctx,
             &format!(
                 r#"core.module @test {{
-  "clif.func"() ({{
-    ^entry(%index: {index_ty}):
+  clif.func @select(%index: {index_ty}) {{
+    ^entry:
       {branch}
     ^default:
       clif.return
     ^target{target_params}:
       clif.return
-  }}) {{sym_name = "select", type = clif.func_sig<({index_ty}) -> ()>}}
+  }}
 }}"#
             ),
         );

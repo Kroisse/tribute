@@ -223,7 +223,8 @@ mod tests {
     use wasmparser::{Parser, Payload, Validator, WasmFeatures};
 
     /// A bodyless ordinary C helper declaration with an `(i32) -> i32` contract.
-    const UNUSED_HELPER: &str = r#"  "wasm.func"() {abi = "C", sym_name = "helper", type = wasm.func_sig<(core.i32) -> core.i32>}"#;
+    const UNUSED_HELPER: &str =
+        r#"  wasm.func @helper(%0: core.i32) -> core.i32 attributes {abi = "C"}"#;
 
     fn section_count(bytes: &[u8], want_imports: bool) -> u32 {
         Parser::new(0)
@@ -253,17 +254,16 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.import_func @run from "env" "run" : (core.i32) -> core.i32
-  "wasm.func"() {abi = "C", sym_name = "helper", type = wasm.func_sig<(core.i32) -> core.i32>}
-  "wasm.func"() ({
-    ^bb0(%value: core.i32):
+  wasm.func @helper(%0: core.i32) -> core.i32 attributes {abi = "C"}
+  wasm.func @c_helper(%value: core.i32) -> core.i32 attributes {abi = "C"} {
       wasm.return %value
-  }) {abi = "C", sym_name = "c_helper", type = wasm.func_sig<(core.i32) -> core.i32>}
-  "wasm.func"() ({
+  }
+  wasm.func @main() -> core.i32 {
     %one = wasm.i32_const {value = 1} : core.i32
     %imported = wasm.call %one {callee = @run} : core.i32
     %local = wasm.call %imported {callee = @c_helper} : core.i32
     wasm.return %local
-  }) {sym_name = "main", type = wasm.func_sig<() -> core.i32>}
+  }
 }"#,
         );
         let before = print_module(&ctx, module.op());
@@ -297,8 +297,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  "wasm.func"() {abi = "C", sym_name = "helper", type = wasm.func_sig<(core.i32) -> core.i32>}
-  "wasm.func"() ({ wasm.return }) {sym_name = "main", type = wasm.func_sig<() -> core.nil>}
+  wasm.func @helper(%0: core.i32) -> core.i32 attributes {abi = "C"}
+  wasm.func @main() -> core.nil { wasm.return }
 }"#,
         );
         let binary = crate::emit_module_to_wasm(&mut ctx, module).expect("unused extern");
@@ -325,10 +325,10 @@ mod tests {
         );
 
         let tail_call = r#"core.module @test {
-  "wasm.func"() {abi = "C", sym_name = "helper", type = wasm.func_sig<() -> core.i32>}
-  "wasm.func"() ({
+  wasm.func @helper() -> core.i32 attributes {abi = "C"}
+  wasm.func @main() -> core.i32 {
     wasm.return_call {callee = @helper}
-  }) {sym_name = "main", type = wasm.func_sig<() -> core.i32>}
+  }
 }"#;
         assert!(
             disposition_error(tail_call).contains("referenced by proper tail call"),
@@ -337,11 +337,11 @@ mod tests {
         );
 
         let value = r#"core.module @test {
-  "wasm.func"() {abi = "C", sym_name = "helper", type = wasm.func_sig<() -> core.i32>}
-  "wasm.func"() ({
+  wasm.func @helper() -> core.i32 attributes {abi = "C"}
+  wasm.func @main() -> core.nil {
     %function = wasm.ref_func {func_name = @helper} : wasm.funcref
     wasm.return
-  }) {sym_name = "main", type = wasm.func_sig<() -> core.nil>}
+  }
 }"#;
         assert!(
             disposition_error(value).contains("referenced by first-class function reference"),
@@ -356,8 +356,8 @@ mod tests {
   "wasm.elem"() ({
     wasm.ref_func {func_name = @helper} : wasm.funcref
   }) {table = 0, offset = 0}
-  "wasm.func"() {abi = "C", sym_name = "helper", type = wasm.func_sig<() -> core.i32>}
-  "wasm.func"() ({ wasm.return }) {sym_name = "main", type = wasm.func_sig<() -> core.nil>}
+  wasm.func @helper() -> core.i32 attributes {abi = "C"}
+  wasm.func @main() -> core.nil { wasm.return }
 }"#;
         assert!(
             disposition_error(element).contains("referenced by element segment entry"),
@@ -366,7 +366,7 @@ mod tests {
         );
 
         let export = r#"core.module @test {
-  "wasm.func"() {abi = "C", sym_name = "helper", type = wasm.func_sig<() -> core.i32>}
+  wasm.func @helper() -> core.i32 attributes {abi = "C"}
   wasm.export_func {func = @helper, name = "helper"}
 }"#;
         assert!(
@@ -379,10 +379,10 @@ mod tests {
     #[test]
     fn unresolved_reference_is_reported_separately_from_an_unbound_declaration() {
         let source = r#"core.module @test {
-  "wasm.func"() ({
+  wasm.func @main() -> core.i32 {
     %result = wasm.call {callee = @missing} : core.i32
     wasm.return %result
-  }) {sym_name = "main", type = wasm.func_sig<() -> core.i32>}
+  }
 }"#;
         assert!(
             disposition_error(source).contains("reference to @missing is unresolved (direct call)"),
@@ -397,11 +397,11 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  "wasm.func"() ({ wasm.return }) {sym_name = "callee", type = wasm.func_sig<() -> core.nil>}
-  "wasm.func"() ({
+  wasm.func @callee() -> core.nil { wasm.return }
+  wasm.func @main() -> core.nil {
     wasm.call {callee = @callee}
     wasm.return
-  }) {sym_name = "main", type = wasm.func_sig<() -> core.nil>}
+  }
 }"#,
         );
         let body = module.body(&ctx).unwrap();
@@ -428,7 +428,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  "wasm.func"() ({ wasm.return }) {sym_name = "main", type = wasm.func_sig<() -> core.nil>}
+  wasm.func @main() -> core.nil { wasm.return }
 }"#,
         );
         let body = module.body(&ctx).unwrap();
@@ -458,7 +458,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   "wasm.func"() {abi = "C", sym_name = "helper", type = core.i32}
-  "wasm.func"() ({ wasm.return }) {sym_name = "main", type = wasm.func_sig<() -> core.nil>}
+  wasm.func @main() -> core.nil { wasm.return }
 }"#,
         );
         let error = crate::emit_module_to_wasm(&mut ctx, module)
@@ -505,7 +505,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  "wasm.func"() ({}) {abi = "C", sym_name = "helper", type = wasm.func_sig<() -> core.nil>}
+  wasm.func @helper() -> core.nil attributes {abi = "C"} {}
 }"#,
         );
         let error = crate::emit_module_to_wasm(&mut ctx, module)

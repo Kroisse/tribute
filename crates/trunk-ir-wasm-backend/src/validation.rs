@@ -905,7 +905,7 @@ mod tests {
             format!(
                 r#"core.module @test {{
   core.module @a {{
-    "wasm.func"() {{abi = "C", link_name = "abs", sym_name = "abs", type = wasm.func_sig<(core.i32) -> core.i32>}}
+    wasm.func @abs(%0: core.i32) -> core.i32 attributes {{abi = "C", link_name = "abs"}}
   }}
   core.module @b {{
     "wasm.func"() {{abi = "C", link_name = "abs", sym_name = "abs", type = {second}}}

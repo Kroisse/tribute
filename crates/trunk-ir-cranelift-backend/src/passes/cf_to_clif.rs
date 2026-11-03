@@ -186,8 +186,8 @@ mod tests {
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
-  "clif.func"() ({{
-    ^entry(%choice: {discriminant_ty}):
+  clif.func @select(%choice: {discriminant_ty}) {{
+    ^entry:
       "cf.switch"(%choice)[^fallback, ^first, ^second] {{cases = [7, -1]}}
     ^fallback:
       clif.return
@@ -195,7 +195,7 @@ mod tests {
       clif.return
     ^second:
       clif.return
-  }}) {{sym_name = "select", type = clif.func_sig<({discriminant_ty}) -> ()>}}
+  }}
 }}"#
                 ),
             );
