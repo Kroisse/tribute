@@ -173,7 +173,7 @@ fn root_dispatch_definition_matches_fixed_wasm_tail_signature_and_validates_bina
             %resume = adt.ref_null {type = !Resume} : !Resume
             %product = adt.struct_new {type = !Payload} : !Payload
             %payload = core.unrealized_conversion_cast %product : tribute_rt.anyref
-            effect.dispatch_cps %evidence, %dispatch, %resume, %payload {ability = @State, op_name = "get", answer_type = core.nil}
+            effect.dispatch_cps @State @get(%payload) [%evidence, %dispatch, %resume] -> core.nil
         "#,
     );
     run_target_to_boundary_exit(

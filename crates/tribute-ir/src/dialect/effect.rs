@@ -100,8 +100,12 @@ mod effect {
     /// types. `payload` is the single packed operation argument value, erased
     /// to `anyref`. The operation is resultless: backend lowering performs the
     /// final proper tail transfer.
+    ///
+    /// ```text
+    /// effect.dispatch_cps @State @get(%payload) [%ev, %dispatch, %resume] -> core.i32
+    /// ```
     #[implements(CallableExit)]
-    #[asm_format(evidence "," dispatch "," resume "," payload attr_dict_bare)]
+    #[asm_format(ability symbol(op_name) "(" payload ")" "[" evidence "," dispatch "," resume "]" attr_dict "->" answer_type)]
     fn dispatch_cps<E: Evidence>(
         ability: Attr<SymbolRef>,
         op_name: Attr<String>,

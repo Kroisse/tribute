@@ -528,7 +528,7 @@ mod tests {
             1,
             "{printed}"
         );
-        assert!(printed.contains("answer_type = core.i32"), "{printed}");
+        assert!(printed.contains("] -> core.i32"), "{printed}");
         assert!(printed.contains("__tribute_one_shot_state"), "{printed}");
         // The wrapper marks the state consumed before it enters the raw
         // resumption, and traps when it is already consumed.

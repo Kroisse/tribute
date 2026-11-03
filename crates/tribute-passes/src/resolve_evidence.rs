@@ -810,7 +810,7 @@ mod tests {
         let input = final_dispatch_fixture(
             r#"ability.handle_dispatch %ev, %prompt() attributes {abilities = []} {
       ^body(%inner: !evidence):
-        effect.dispatch_cps %inner, %tr, %tr2, %tr2 {ability = @State, op_name = "get"}
+        effect.dispatch_cps @State @get(%tr2) [%inner, %tr, %tr2] -> core.i32
     }"#,
         );
         let mut ctx = IrContext::new();
