@@ -334,8 +334,8 @@ mod tribute_control {
     /// ```
     ///
     /// - **Shape:** no operands or regions, and not a terminator.
-    ///   `func_ref: Symbol` is required, and the result is one
-    ///   `tribute_control.func_sig`. The concise form writes `func_ref`, then
+    ///   `value: Symbol` is required, and the result is one
+    ///   `tribute_control.func_sig`. The concise form writes `value`, then
     ///   `row_args` after `rows` when present.
     /// - **Meaning:** makes a named function a first-class source value,
     ///   which source needs because it can use a named function as a
@@ -355,10 +355,10 @@ mod tribute_control {
     /// - **Location:** the source reference span that uses the named function
     ///   as a value.
     #[verify]
-    #[asm_format(func_ref ("rows" row_args^)? ":" type(result))]
+    #[asm_format(value ("rows" row_args^)? ":" type(result))]
     #[flags(Pure, SourceFuncRef)]
     #[implements(CallableResultOrigin)]
-    fn func_ref(func_ref: Attr<SymbolRef>, row_args: Option<Attr<[Row]>>) -> Value<impl FuncSig> {}
+    fn func_ref(value: Attr<SymbolRef>, row_args: Option<Attr<[Row]>>) -> Value<impl FuncSig> {}
 
     /// A direct call. Its result is a callable origin when the callee has a
     /// body or is a registered compiler intrinsic.

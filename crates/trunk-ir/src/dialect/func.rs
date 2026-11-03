@@ -81,8 +81,8 @@ mod func {
     fn r#return(values: Variadic<_>) {}
 
     #[flags(Pure)]
-    #[asm_format(attr_dict_bare ":" type(result))]
-    fn constant(func_ref: Attr<SymbolRef>) -> Value<_> {}
+    #[asm_format(value attr_dict ":" type(result))]
+    fn constant(value: Attr<SymbolRef>) -> Value<_> {}
 
     #[implements(CallableExit)]
     #[asm_format(attr_dict_bare)]
@@ -1257,7 +1257,7 @@ mod result_list_tests {
         for results in [vec![], vec![nil]] {
             let signature = func_sig(&mut ctx, [], results.clone()).as_type_ref();
             let callee = Constant::operands()
-                .func_ref(SymbolPath::new(["f"]))
+                .value(SymbolPath::new(["f"]))
                 .results(signature)
                 .build(&mut ctx, loc)
                 .result(&ctx);

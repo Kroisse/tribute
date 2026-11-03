@@ -367,7 +367,7 @@ impl<'a> Verifier<'a> {
             }
         }
         if let Ok(constant) = func::Constant::from_op(ctx, op) {
-            let target = constant.func_ref(ctx);
+            let target = constant.value(ctx);
             let expected = functions
                 .resolve(ctx, op, target)
                 .and_then(|function| func::Func::from_op(ctx, function).ok())
@@ -606,7 +606,7 @@ mod tests {
     func.return
   }
   func.func @caller(%value: core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
-    %reference = func.constant {func_ref = @target} : func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>
+    %reference = func.constant @target : func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>
     func.tail_call_indirect %reference(%value) : (core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}
   }
 }"#,
@@ -769,7 +769,7 @@ mod tests {
   }
   func.func @caller(%value: core.i32) {
     %same = core.unrealized_conversion_cast %value : core.i32
-    %reference = func.constant {func_ref = @target} : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
+    %reference = func.constant @target : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
     func.return
   }
 }"#,
@@ -848,7 +848,7 @@ mod tests {
       func.return
   }}) {{sym_name = "target", type = {definition}}}
   func.func @caller() {{
-    %reference = func.constant {{func_ref = @target}} : {reference}
+    %reference = func.constant @target : {reference}
     func.return
   }}
 }}"#
@@ -1008,7 +1008,7 @@ mod tests {
       func.return
     }
     func.func @take() {
-      %reference = func.constant {func_ref = @same} : func.func_sig<(core.i32) -> ()>
+      %reference = func.constant @same : func.func_sig<(core.i32) -> ()>
       func.return
     }
   }
@@ -1029,7 +1029,7 @@ mod tests {
   }
   core.module @left {
     func.func @take() {
-      %reference = func.constant {func_ref = @same} : func.func_sig<(core.i32) -> ()>
+      %reference = func.constant @same : func.func_sig<(core.i32) -> ()>
       func.return
     }
   }
@@ -1063,7 +1063,7 @@ mod tests {
     func.return
   }
   func.func @caller(%callee: core.ptr, %value: core.i32) {
-    %reference = func.constant {func_ref = @target} : core.i32
+    %reference = func.constant @target : core.i32
     "func.call_indirect"(%callee, %value)
     func.return
   }

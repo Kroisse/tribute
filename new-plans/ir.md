@@ -902,7 +902,7 @@ consumer는 nested region을 재귀적으로 순회해야 하며, "사용 없음
   이름을 읽기만 하는 곳은 `&Symbol`을 받는다.
 - Symbol 해석은 MLIR 규칙을 따른다. `core.module`은 symbol table이며, 정의는 자기를
   직접 감싼 module에 `sym_name`을 등록한다. 이름 있는 `core.module`은 부모 table의
-  symbol이기도 하다. 함수 symbol 참조(`callee`, `func_ref`, target dialect의 직접
+  symbol이기도 하다. 함수 symbol 참조(`callee`, 함수 참조의 `value`, target dialect의 직접
   호출과 주소 참조)의 첫 component는 참조하는 operation을 감싼 가장 가까운 module의
   table에서 찾는다. 찾지 못해도 바깥 module로 올라가지 않는다. 나머지 component는 앞
   component가 가리킨 module의 table로 차례로 내려가며 찾으므로, 마지막이 아닌

@@ -1035,7 +1035,7 @@ mod pass {
 
         let other = build_func(&mut ctx, loc, "other", &[], i32_ty, |ctx, entry, _args| {
             let c = func::Constant::operands()
-                .func_ref(SymbolPath::new(["helper"]))
+                .value(SymbolPath::new(["helper"]))
                 .results(helper_fn_ty)
                 .build(ctx, loc);
             ctx.push_op(entry, c.op_ref());

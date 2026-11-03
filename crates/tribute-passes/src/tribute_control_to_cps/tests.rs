@@ -1657,7 +1657,7 @@ fn cps_indirect_tail_without_a_provenance_bearing_closure_fails_before_insertion
     let never = core::Never::params().intern(&mut ctx).as_type_ref();
     let raw_type = func::func_sig(&mut ctx, [], [never]).as_type_ref();
     let raw = func::Constant::operands()
-        .func_ref(SymbolPath::new(["raw"]))
+        .value(SymbolPath::new(["raw"]))
         .results(raw_type)
         .build(&mut ctx, location);
     let before = ctx.block(module_block).ops.clone();

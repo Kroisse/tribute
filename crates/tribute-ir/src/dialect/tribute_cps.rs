@@ -141,12 +141,12 @@ mod tribute_cps {
     /// %f = tribute_cps.func_ref @"id$9e$8" : !Callable
     /// ```
     ///
-    /// - **Shape:** `tribute_control.func_ref` whose `func_ref` names a
+    /// - **Shape:** `tribute_control.func_ref` whose `value` names a
     ///   `tribute_cps.func_table` instead of a function.
     /// - **Meaning:** the callable value whose convention entries are the
     ///   table's. References that share a table share its entries.
     /// - **Verification:** the local verifier checks the attributes.
-    ///   Whole-IR verification checks that `func_ref` names a
+    ///   Whole-IR verification checks that `value` names a
     ///   `tribute_cps.func_table` of the reference's own module by one name,
     ///   and checks the source signature against each of its targets as for
     ///   `tribute_control.func_ref`. Legalization builds the table's entries
@@ -155,10 +155,10 @@ mod tribute_cps {
     /// - **Flags:** `SourceFuncRef`, shared with `tribute_control.func_ref`.
     /// - **Location:** the source reference span.
     #[verify]
-    #[asm_format(func_ref ("rows" row_args^)? ":" type(result))]
+    #[asm_format(value ("rows" row_args^)? ":" type(result))]
     #[flags(Pure, SourceFuncRef)]
     #[implements(CallableResultOrigin)]
-    fn func_ref(func_ref: Attr<SymbolRef>, row_args: Option<Attr<[Row]>>) -> Value<impl FuncSig> {}
+    fn func_ref(value: Attr<SymbolRef>, row_args: Option<Attr<[Row]>>) -> Value<impl FuncSig> {}
 
     /// The convention table of a named function for one set of class
     /// arguments, with a target instance per convention its row reads.
@@ -341,7 +341,7 @@ pub fn table_entries(
 pub fn func_ref_table(ctx: &IrContext, op: trunk_ir::refs::OpRef) -> Option<trunk_ir::refs::OpRef> {
     let name = FuncRef::from_op(ctx, op)
         .ok()?
-        .func_ref(ctx)
+        .value(ctx)
         .as_simple()?
         .clone();
     let mut current = op;
@@ -669,7 +669,7 @@ impl CallableResultOrigin for FuncRef {
         query: &mut CallableQuery<'q>,
     ) -> bool {
         ctx.op_attrs(self.op_ref())
-            .get_symbol_ref("func_ref")
+            .get_symbol_ref("value")
             .is_some_and(|symbol| query.names_verified_table(ctx, self.op_ref(), symbol))
     }
 }

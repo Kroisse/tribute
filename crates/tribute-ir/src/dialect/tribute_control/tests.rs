@@ -95,7 +95,7 @@ fn builder_fixture() -> ValidFixture {
     let x = ctx.block_arg(entry, 0);
 
     let function_ref = FuncRef::operands()
-        .func_ref(SymbolPath::new(["id"]))
+        .value(SymbolPath::new(["id"]))
         .results(direct)
         .build(&mut ctx, loc);
     ctx.push_op(entry, function_ref.op_ref());
@@ -775,7 +775,7 @@ fn validator_rejects_wrong_required_attribute_types() {
         r#"core.module @test {
   !callable = tribute_control.func_sig<() -> core.i32>
   tribute_control.func @malformed() -> core.i32
-  %ref = "tribute_control.func_ref"() {func_ref = 1} : !callable
+  %ref = "tribute_control.func_ref"() {value = 1} : !callable
   %call = tribute_control.call {callee = 1} : core.i32
   %perform = tribute_control.perform {ability = 1, op_name = 2, operation_kind = 3} : core.i32
   "tribute_control.handler"() ({
@@ -805,7 +805,7 @@ fn validator_rejects_wrong_required_attribute_types() {
     assert_op_diagnostics(
         &result,
         control_op(&ctx, module, FuncRef::NAME),
-        &["attribute `func_ref` must be a SymbolRef attribute"],
+        &["attribute `value` must be a SymbolRef attribute"],
     );
     assert_op_diagnostics(
         &result,
@@ -952,7 +952,7 @@ fn local_validator_reports_distinct_malformed_operation_contracts() {
   %bad_lambda = tribute_control.lambda() -> core.i32 captures [%integer] {
     tribute_control.return %integer
   }
-  %bad_ref = "tribute_control.func_ref"() {func_ref = @bad_func, unexpected = 1} : !direct
+  %bad_ref = "tribute_control.func_ref"() {value = @bad_func, unexpected = 1} : !direct
   %bad_call0, %bad_call1 = "tribute_control.call"() ({
   }) {unexpected = 1} : core.i32, core.i1
   %non_callable = tribute_control.call_indirect %integer(%boolean) : core.i32

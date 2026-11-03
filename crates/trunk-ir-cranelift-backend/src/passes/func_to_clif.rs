@@ -470,7 +470,7 @@ impl OpRewritePattern for FuncConstantPattern {
         rewriter: &mut PatternRewriter<'_>,
     ) -> Option<()> {
         let op = const_op.op_ref();
-        let func_ref = const_op.func_ref(ctx).clone();
+        let func_ref = const_op.value(ctx).clone();
         if let &[result] = ctx.op_result_types(op)
             && func::FuncSig::matches(ctx, result)
             && self
@@ -769,7 +769,7 @@ mod tests {
     func.return %value
   }
   func.func @caller() -> core.i32 {
-    %callee = func.constant {func_ref = @target} : func.func_sig<() -> core.i32>
+    %callee = func.constant @target : func.func_sig<() -> core.i32>
     %value = func.call_indirect %callee() : () -> core.i32
     func.return %value
   }
@@ -975,7 +975,7 @@ mod tests {
     func.return
   }}
   func.func @take() {{
-    %reference = func.constant {{func_ref = @target}} : {reference}
+    %reference = func.constant @target : {reference}
     func.return
   }}
 }}"#
@@ -1002,7 +1002,7 @@ mod tests {
       func.return
     }
     func.func @take() {
-      %reference = func.constant {func_ref = @helper} : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
+      %reference = func.constant @helper : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
       func.return
     }
   }
@@ -1029,7 +1029,7 @@ mod tests {
         let unknown = lower(
             r#"core.module @test {
   func.func @take() {
-    %reference = func.constant {func_ref = @missing} : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
+    %reference = func.constant @missing : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
     func.return
   }
 }"#,
@@ -1046,7 +1046,7 @@ mod tests {
       func.return
     }
     func.func @take() {
-      %reference = func.constant {func_ref = @left::@helper} : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
+      %reference = func.constant @left::@helper : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
       func.return
     }
   }
@@ -1060,7 +1060,7 @@ mod tests {
     func.return
   }
   func.func @take() {
-    %reference = func.constant {func_ref = @target} : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
+    %reference = func.constant @target : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
     func.return
   }
 }"#,

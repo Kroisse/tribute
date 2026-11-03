@@ -192,7 +192,7 @@ mod tests {
   func.func @read(%bytes: core.bytes, %index: core.i32) -> core.i32 attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::__bytes_get_or_panic"}
   func.func @user(%bytes: core.bytes, %index: core.i32) -> core.i32 {
     %byte = func.call %bytes, %index {callee = @read} : core.i32
-    %f = func.constant {func_ref = @read} : func.func_sig<(core.bytes, core.i32) -> core.i32>
+    %f = func.constant @read : func.func_sig<(core.bytes, core.i32) -> core.i32>
     func.return %byte
   }
 }"#,

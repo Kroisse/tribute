@@ -1480,7 +1480,7 @@ mod tests {
             r#"core.module @test {
   func.func @external(%value: core.i32) -> core.i32
   func.func @caller(%value: core.i32) -> core.i32 {
-    %callee = func.constant {func_ref = @external} : func.func_sig<(core.i32) -> core.i32>
+    %callee = func.constant @external : func.func_sig<(core.i32) -> core.i32>
     %result = "func.call_indirect"(%callee, %value) : core.i32
     func.return %result
   }
@@ -1697,7 +1697,7 @@ mod tests {
     func.unreachable
   }}
   func.func @run(%callee: !outer, %evidence: {evidence}, %done: core.i32) -> core.never attributes {{tribute.calling_convention = "cps"}} {{
-    %function = func.constant {{func_ref = @actual_fn}} : func.func_sig<({evidence}, core.i32, core.i1) -> core.never>
+    %function = func.constant @actual_fn : func.func_sig<({evidence}, core.i32, core.i1) -> core.never>
     %environment = adt.ref_null {{type = tribute_rt.anyref}} : tribute_rt.anyref
     %pack = adt.struct_new %function, %environment {{type = !_closure}} : !_closure
     %argument = core.unrealized_conversion_cast %pack : !actual

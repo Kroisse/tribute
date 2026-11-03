@@ -355,7 +355,7 @@ mod tests {
   func.func @"std::runtime::Slots::len$Nat"(%s: adt.array<core.i32>) -> core.i32 attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::runtime::Slots::len"}
   func.func @run(%s: adt.array<core.i32>) -> core.i32 {
     %0 = func.call %s {callee = @"std::runtime::Slots::len$Nat"} : core.i32
-    %f = func.constant {func_ref = @"std::runtime::Slots::len$Nat"} : func.func_sig<(adt.array<core.i32>) -> core.i32>
+    %f = func.constant @"std::runtime::Slots::len$Nat" : func.func_sig<(adt.array<core.i32>) -> core.i32>
     func.return %0
   }
 }"#,

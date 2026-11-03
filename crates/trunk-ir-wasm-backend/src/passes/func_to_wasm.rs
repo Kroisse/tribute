@@ -177,7 +177,7 @@ fn collect_refs_in_region(ctx: &IrContext, region: RegionRef, refs: &mut Vec<Sym
         for &op in ctx.block(block).ops.iter() {
             // Check for func.constant
             if let Ok(const_op) = func::Constant::from_op(ctx, op) {
-                refs.push(const_op.func_ref(ctx).clone());
+                refs.push(const_op.value(ctx).clone());
             }
 
             // Recurse into nested regions
@@ -660,7 +660,7 @@ impl OpRewritePattern for FuncConstantPattern {
         rewriter: &mut PatternRewriter<'_>,
     ) -> Option<()> {
         let op = const_op.op_ref();
-        let func_ref = const_op.func_ref(ctx);
+        let func_ref = const_op.value(ctx);
 
         // All func.constant operations must be registered in the function table.
         // They are collected by collect_func_constant_refs before pattern application.
@@ -975,7 +975,7 @@ mod tests {
     func.return
   }
   func.func @caller(%value: core.i32) -> core.nil {
-    %table_index = func.constant {func_ref = @target} : core.i32
+    %table_index = func.constant @target : core.i32
     func.tail_call_indirect %table_index(%value) : (core.i32) -> core.nil
   }
 }"#,
