@@ -495,10 +495,10 @@ literal은 문자열 literal로 쓴다.
   쓴 것으로 센다. Parser는 directive가 나열하지 않은 entity의 값을 돌려주면
   거부한다.
 
-Operation 이름 뒤의 입력은 모두 형식 parser가 읽는다. Generic 형식이 operation
-이름 뒤의 `@name`을 `sym_name`으로 읽는 축약은 손으로 쓴 형식과 generic 형식에만
-해당하며, 선언적 형식에서는 `symbol(sym_name)`이나 symbol 참조 attribute처럼 `@`로
-시작하는 원소가 그 자리를 읽는다.
+Operation 이름 뒤의 입력은 모두 형식 parser가 읽는다. Operation 이름 뒤의
+`@name`을 `sym_name`으로 읽는 축약은 손으로 쓴 형식에만 해당한다. 선언적
+형식에서는 `symbol(sym_name)`이나 symbol 참조 attribute처럼 `@`로 시작하는 원소가
+그 자리를 읽고, generic 형식은 `sym_name`을 attribute 사전에 쓴다.
 
 공백은 원소 사이에 하나 쓴다. `(`, `[` 뒤와 `)`, `]`, `,` 앞에는 쓰지 않고,
 `signature`와 `"("`는 앞 원소에 붙여 쓰되, 구두점 literal 뒤에서는 한 칸 띄운다. Parser는 원소 사이의 공백을 무시한다.
