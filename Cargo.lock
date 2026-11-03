@@ -1924,6 +1924,7 @@ dependencies = [
  "rustc-hash",
  "salsa",
  "salsa-test-macros",
+ "siphasher",
  "smallvec",
  "strsim",
  "toml",

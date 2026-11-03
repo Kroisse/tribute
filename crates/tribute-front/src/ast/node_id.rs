@@ -7,6 +7,8 @@
 use std::hash::{Hash, Hasher};
 use std::num::NonZero;
 
+use siphasher::sip::SipHasher13;
+
 /// Unique identifier for an AST node within a compilation unit.
 ///
 /// A NodeId names a node by the item that owns it and the node's position
@@ -45,7 +47,7 @@ impl NodeId {
     /// file whose hash is `source`.
     ///
     /// Use [`source_hash`] to compute the source hash from a URI and
-    /// [`owner_hash`] to compute the owner from an item's key.
+    /// [`IdentityDigest`] to compute the owner from an item's key.
     #[inline]
     pub const fn new(source: u64, owner: u64, index: u32) -> Self {
         Self {
@@ -67,14 +69,18 @@ impl NodeId {
         // A copy of a copy: two nodes that differ only in their variant must
         // stay distinct, so hash the outer variant together with the new one.
         let variant = self.variant.map_or(variant, |outer| {
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            (outer, variant).hash(&mut hasher);
-            NonZero::new(hasher.finish()).unwrap_or(NonZero::<u64>::MIN)
+            Self::variant_of(IdentityDigest::new().u64(outer.get()).u64(variant.get()))
         });
         Self {
             variant: Some(variant),
             ..self
         }
+    }
+
+    /// The specialization variant whose hash `digest` has computed. A variant
+    /// is never zero, so a zero hash becomes one.
+    pub fn variant_of(digest: &IdentityDigest) -> NonZero<u64> {
+        NonZero::new(digest.finish()).unwrap_or(NonZero::<u64>::MIN)
     }
 
     /// Get the original NodeId, stripping any specialization variant.
@@ -116,11 +122,55 @@ impl NodeId {
     }
 }
 
-/// Compute the owner of an item's nodes from the item's key.
-pub fn owner_hash(key: impl Hash) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    key.hash(&mut hasher);
-    hasher.finish()
+/// The digest that computes the identity hashes in a [`NodeId`]: its owner
+/// and its variant.
+///
+/// A collision merges two items' or two specializations' nodes, so it is
+/// SipHash-1-3, a well-distributed hash. It is a specified algorithm with
+/// fixed keys, so an identity does not change with the toolchain, as the
+/// standard library's `DefaultHasher` may. Each value is written in an
+/// explicit encoding rather than through `Hash`: integers as little-endian
+/// bytes, and text and sequences prefixed with their length. It is therefore
+/// not a [`Hasher`].
+#[derive(Clone, Debug)]
+pub struct IdentityDigest(SipHasher13);
+
+impl IdentityDigest {
+    pub fn new() -> Self {
+        Self(SipHasher13::new_with_keys(0, 0))
+    }
+
+    /// Write an integer.
+    pub fn u64(&mut self, value: u64) -> &mut Self {
+        self.0.write(&value.to_le_bytes());
+        self
+    }
+
+    /// Write a string.
+    pub fn str(&mut self, text: &str) -> &mut Self {
+        self.u64(text.len() as u64);
+        self.0.write(text.as_bytes());
+        self
+    }
+
+    /// Write a sequence of strings.
+    pub fn strs<'a>(&mut self, texts: impl ExactSizeIterator<Item = &'a str>) -> &mut Self {
+        self.u64(texts.len() as u64);
+        for text in texts {
+            self.str(text);
+        }
+        self
+    }
+
+    pub fn finish(&self) -> u64 {
+        self.0.finish()
+    }
+}
+
+impl Default for IdentityDigest {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Compute a source hash from a URI string.
@@ -182,9 +232,42 @@ mod tests {
 
     #[test]
     fn test_node_id_different_owner_not_equal() {
-        let id1 = NodeId::new(0, owner_hash(("fn", "f")), 3);
-        let id2 = NodeId::new(0, owner_hash(("fn", "g")), 3);
+        let id1 = NodeId::new(0, IdentityDigest::new().str("fn").str("f").finish(), 3);
+        let id2 = NodeId::new(0, IdentityDigest::new().str("fn").str("g").finish(), 3);
         assert_ne!(id1, id2);
+    }
+
+    const PINNED_EMPTY: u64 = 15130871412783076140;
+    const PINNED_ITEM: u64 = 793205033555831425;
+    const PINNED_VARIANT: u64 = 1141703569963311043;
+
+    /// Identity hashes are pinned: a change in these values changes every
+    /// NodeId, so it must be deliberate.
+    #[test]
+    fn identity_hashes_are_pinned() {
+        assert_eq!(IdentityDigest::new().finish(), PINNED_EMPTY);
+        assert_eq!(
+            IdentityDigest::new()
+                .u64(1)
+                .strs(["std", "io"].into_iter())
+                .str("fn")
+                .str("print_line")
+                .u64(0)
+                .finish(),
+            PINNED_ITEM
+        );
+        let variant = NonZero::new(7).unwrap();
+        let copy = NodeId::new(0, 0, 0)
+            .with_variant(variant)
+            .with_variant(variant);
+        assert_eq!(copy.variant().map(NonZero::get), Some(PINNED_VARIANT));
+    }
+
+    #[test]
+    fn identity_digest_separates_strings() {
+        let joined = IdentityDigest::new().str("ab").str("c").finish();
+        let split = IdentityDigest::new().str("a").str("bc").finish();
+        assert_ne!(joined, split);
     }
 
     #[test]
