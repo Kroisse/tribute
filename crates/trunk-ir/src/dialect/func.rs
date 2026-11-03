@@ -992,7 +992,7 @@ mod tests {
     fn call_conv_is_a_signature_attribute_that_round_trips() {
         let input = r#"core.module @test {
   func.func @transfer(%callee: func.func_sig<(core.i32) -> (), {call_conv = "tail"}>, %value: core.i32) -> (), {call_conv = "tail"} {
-    "func.tail_call_indirect"(%callee, %value) {signature = func.func_sig<(core.i32) -> (), {call_conv = "tail"}>}
+    func.tail_call_indirect %callee(%value) : (core.i32) -> (), {call_conv = "tail"}
   }
 }"#;
         let mut ctx = crate::IrContext::new();
@@ -1080,7 +1080,7 @@ mod tests {
     fn indirect_signature_is_declared_and_round_trips() {
         let input = r#"core.module @test {
   func.func @run(%callee: func.func_sig<(core.i32) -> core.i32>, %value: core.i32) -> core.i32 {
-    %result = "func.call_indirect"(%callee, %value) {signature = func.func_sig<(core.i32) -> core.i32>} : core.i32
+    %result = func.call_indirect %callee(%value) : (core.i32) -> core.i32
     func.return %result
   }
 }"#;
@@ -1134,11 +1134,11 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @ordinary(%callee: func.func_sig<(core.i32) -> core.i32>, %value: core.i32) -> core.i32 {
-    %result = "func.call_indirect"(%callee, %value) {signature = func.func_sig<(core.i32) -> core.i32>} : core.i32
+    %result = func.call_indirect %callee(%value) : (core.i32) -> core.i32
     func.return %result
   }
   func.func @tail(%callee: func.func_sig<(core.i32) -> core.nil>, %value: core.i32) -> core.nil {
-    "func.tail_call_indirect"(%callee, %value) {signature = func.func_sig<(core.i32) -> core.nil>}
+    func.tail_call_indirect %callee(%value) : (core.i32) -> core.nil
   }
   func.func @direct() -> core.nil {
     func.return
@@ -1287,16 +1287,16 @@ mod result_list_tests {
           func.func @value(%x: core.i32) -> core.i32
           func.func @run(%k: func.func_sig<(core.i32) -> ()>, %x: core.i32) {
             func.call %x {callee = @sink}
-            \"func.call_indirect\"(%k, %x) {signature = func.func_sig<(core.i32) -> ()>}
+            func.call_indirect %k(%x) : (core.i32) -> ()
             %r = func.call %x {callee = @value} : core.i32
             func.return
           }
           func.func @tail(%x: core.i32) { func.tail_call %x {callee = @sink} }
           func.func @logical(%k: func.func_sig<(core.i32) -> core.never>, %x: core.i32) -> core.never {
-            \"func.tail_call_indirect\"(%k, %x) {signature = func.func_sig<(core.i32) -> core.never>}
+            func.tail_call_indirect %k(%x) : (core.i32) -> core.never
           }
           func.func @one(%k: func.func_sig<(core.i32) -> core.i32>, %x: core.i32) -> core.i32 {
-            %r = \"func.call_indirect\"(%k, %x) {signature = func.func_sig<(core.i32) -> core.i32>} : core.i32
+            %r = func.call_indirect %k(%x) : (core.i32) -> core.i32
             func.return %r
           }
         }";
@@ -1324,8 +1324,8 @@ mod result_list_tests {
                 "tail caller/callee result lists differ",
             ),
             (
-                "signature = func.func_sig<(core.i32) -> ()>",
-                "signature = func.func_sig<(core.i64) -> ()>",
+                "func.call_indirect %k(%x) : (core.i32) -> ()",
+                "func.call_indirect %k(%x) : (core.i64) -> ()",
                 "expected S::Inputs = (core.i64), found (core.i32)",
             ),
             (
@@ -1359,7 +1359,7 @@ mod owner_identity_tests {
             &mut ctx,
             "core.module @m {
           func.func @f(%k: func.func_sig<() -> core.never>) -> core.never {
-            \"test.lambda\"() ({ \"func.tail_call_indirect\"(%k) {signature = func.func_sig<() -> core.never>} }) {type = func.func_sig<() -> core.nil>}
+            \"test.lambda\"() ({ func.tail_call_indirect %k() : () -> core.never }) {type = func.func_sig<() -> core.nil>}
             func.unreachable
           }
         }",

@@ -110,7 +110,7 @@ fn empty_result_cps_root_executes_native_done_continuation() {
         r#"
             %done = adt.struct_get %frame {field = 0, type = !__tribute_continuation_frame_root_nil} : !Done
             %nil = core.nil_value : core.nil
-            "func.tail_call_indirect"(%done, %nil) {signature = func.func_sig<(core.nil) -> core.never>, tribute.calling_convention = "cps"}
+            func.tail_call_indirect %done(%nil) attributes {tribute.calling_convention = "cps"} : (core.nil) -> core.never
         "#,
     );
 
@@ -829,7 +829,7 @@ fn physical_tail_chain_module(done_call_conv: &str, reference_call_conv: &str) -
     %one = arith.const {{value = 1}} : core.i32
     %next = arith.addi %value, %one : core.i32
     %done = func.constant {{func_ref = @done}} : func.func_sig<(core.i32) -> (){reference_call_conv}>
-    "func.tail_call_indirect"(%done, %next) {{signature = func.func_sig<(core.i32) -> (), {{call_conv = "tail"}}>}}
+    func.tail_call_indirect %done(%next) : (core.i32) -> (), {{call_conv = "tail"}}
   }}
 
   func.func @start(%value: core.i32) -> (), {{call_conv = "tail"}} {{

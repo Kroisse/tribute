@@ -464,7 +464,7 @@ mod tests {
   }) {sym_name = "direct_call", type = clif.func_sig<(core.i32, core.nil, core.i64) -> core.i32>}
   "clif.func"() ({
     ^entry(%callee: core.ptr, %value: core.i32, %unit: core.nil, %last: core.i64):
-      %result = "clif.call_indirect"(%callee, %value, %unit, %last) {sig = clif.func_sig<(core.i32, core.nil, core.i64) -> core.i32>} : core.i32
+      %result = clif.call_indirect %callee(%value, %unit, %last) : (core.i32, core.nil, core.i64) -> core.i32
       clif.return %result
   }) {sym_name = "indirect_call", type = clif.func_sig<(core.ptr, core.i32, core.nil, core.i64) -> core.i32>}
   "clif.func"() ({
@@ -473,7 +473,7 @@ mod tests {
   }) {sym_name = "direct_tail", type = clif.func_sig<(core.i32, core.nil, core.i64) -> (), {call_conv = "tail"}>}
   "clif.func"() ({
     ^entry(%callee: core.ptr, %value: core.i32, %unit: core.nil, %last: core.i64):
-      "clif.return_call_indirect"(%callee, %value, %unit, %last) {sig = clif.func_sig<(core.i32, core.nil, core.i64) -> (), {call_conv = "tail"}>}
+      clif.return_call_indirect %callee(%value, %unit, %last) : (core.i32, core.nil, core.i64) -> (), {call_conv = "tail"}
   }) {sym_name = "indirect_tail", type = clif.func_sig<(core.ptr, core.i32, core.nil, core.i64) -> (), {call_conv = "tail"}>}
   "clif.func"() ({
     ^entry(%value: core.i32, %unit: core.nil, %last: core.i64):
@@ -496,7 +496,7 @@ mod tests {
     %first, %second = clif.call {callee = @pair} : core.i32, core.i32
     clif.call {callee = @sink}
     %sink = clif.symbol_addr {sym = @sink} : core.ptr
-    "clif.call_indirect"(%sink) {sig = clif.func_sig<() -> ()>}
+    clif.call_indirect %sink() : () -> ()
     %callee = clif.symbol_addr {sym = @pair} : core.ptr
     %other_first, %other_second = "clif.call_indirect"(%callee) {sig = clif.func_sig<() -> (core.i32, core.nil, core.i32)>} : core.i32, core.i32
     %seven = clif.iconst {value = 7} : core.i32

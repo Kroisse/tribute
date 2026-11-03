@@ -204,7 +204,7 @@ const VALID_CONTROL_MODULE: &str = r#"core.module @test {
   tribute_control.func @control(%value: core.i32) -> core.i32 {
     %function = "tribute_control.func_ref"() {func_ref = @id} : !callable
     %direct = tribute_control.call %value {callee = @id} : core.i32
-    %indirect = "tribute_control.call_indirect"(%function, %value) : core.i32
+    %indirect = tribute_control.call_indirect %function(%value) : core.i32
     %closure = tribute_control.lambda() -> core.i32 captures [%value] {
       tribute_control.return %value
     }
@@ -955,9 +955,9 @@ fn local_validator_reports_distinct_malformed_operation_contracts() {
   %bad_ref = "tribute_control.func_ref"() {func_ref = @bad_func, unexpected = 1} : !direct
   %bad_call0, %bad_call1 = "tribute_control.call"() ({
   }) {unexpected = 1} : core.i32, core.i1
-  %non_callable = "tribute_control.call_indirect"(%integer, %boolean) : core.i32
+  %non_callable = tribute_control.call_indirect %integer(%boolean) : core.i32
   %callable = "tribute_control.func_ref"() {func_ref = @bad_func} : !direct
-  %mismatched = "tribute_control.call_indirect"(%callable, %boolean) : core.i1
+  %mismatched = tribute_control.call_indirect %callable(%boolean) : core.i1
   %bad_perform = tribute_control.perform %integer {ability = @State, op_name = "get", operation_kind = "bogus"} : core.i32
   "tribute_control.handler"() ({
     ^clause(%argument: core.i32):
@@ -1267,7 +1267,7 @@ fn whole_ir_resolves_references_in_the_nearest_module() {
     tribute_control.func @use(%value: core.i32) -> core.i32 {
       %reference = "tribute_control.func_ref"() {func_ref = @id} : !callable
       %direct = tribute_control.call %value {callee = @id} : core.i32
-      %indirect = "tribute_control.call_indirect"(%reference, %direct) : core.i32
+      %indirect = tribute_control.call_indirect %reference(%direct) : core.i32
       tribute_control.return %indirect
     }
   }
@@ -1279,7 +1279,7 @@ fn whole_ir_resolves_references_in_the_nearest_module() {
     tribute_control.func @use(%value: core.i1) -> core.i1 {
       %reference = "tribute_control.func_ref"() {func_ref = @id} : !callable
       %direct = tribute_control.call %value {callee = @id} : core.i1
-      %indirect = "tribute_control.call_indirect"(%reference, %direct) : core.i1
+      %indirect = tribute_control.call_indirect %reference(%direct) : core.i1
       tribute_control.return %indirect
     }
   }
@@ -1462,20 +1462,20 @@ fn whole_ir_rejects_branching_and_escape_at_each_affine_carrier() {
           tribute_control.return %resumed
         }
         %wrapper = tribute_control.lambda() -> core.i32 captures [%inner] {
-          %called = "tribute_control.call_indirect"(%inner) : core.i32
+          %called = tribute_control.call_indirect %inner() : core.i32
           tribute_control.return %called
         }
         %escape = tribute_control.call %wrapper {callee = @id} : core.i32
         %first_capture = tribute_control.lambda() -> core.i32 captures [%wrapper] {
-          %called = "tribute_control.call_indirect"(%wrapper) : core.i32
+          %called = tribute_control.call_indirect %wrapper() : core.i32
           tribute_control.return %called
         }
         %second_capture = tribute_control.lambda() -> core.i32 captures [%wrapper] {
-          %called = "tribute_control.call_indirect"(%wrapper) : core.i32
+          %called = tribute_control.call_indirect %wrapper() : core.i32
           tribute_control.return %called
         }
-        %first = "tribute_control.call_indirect"(%wrapper) : core.i32
-        %second = "tribute_control.call_indirect"(%wrapper) : core.i32
+        %first = tribute_control.call_indirect %wrapper() : core.i32
+        %second = tribute_control.call_indirect %wrapper() : core.i32
         tribute_control.yield %first
     }
   }
@@ -1540,14 +1540,14 @@ fn whole_ir_allows_mutually_exclusive_lambda_capture_and_terminal_paths() {
             %resumed = tribute_control.resume %token, %argument : core.i32
             tribute_control.return %resumed
           }
-          %called = "tribute_control.call_indirect"(%left) : core.i32
+          %called = tribute_control.call_indirect %left() : core.i32
           scf.yield %called
         } else {
           %right = tribute_control.lambda() -> core.i32 captures [%token, %argument] {
             %resumed = tribute_control.resume %token, %argument : core.i32
             tribute_control.return %resumed
           }
-          %called = "tribute_control.call_indirect"(%right) : core.i32
+          %called = tribute_control.call_indirect %right() : core.i32
           scf.yield %called
         }
         tribute_control.yield %value
@@ -1585,7 +1585,7 @@ fn whole_ir_allows_mutually_exclusive_switch_capture_paths_without_default() {
               %left_resumed = tribute_control.resume %token, %argument : core.i32
               tribute_control.return %left_resumed
             }
-            %left_called = "tribute_control.call_indirect"(%left) : core.i32
+            %left_called = tribute_control.call_indirect %left() : core.i32
             scf.yield
           }
           scf.case 1 {
@@ -1593,7 +1593,7 @@ fn whole_ir_allows_mutually_exclusive_switch_capture_paths_without_default() {
               %right_resumed = tribute_control.resume %token, %argument : core.i32
               tribute_control.return %right_resumed
             }
-            %right_called = "tribute_control.call_indirect"(%right) : core.i32
+            %right_called = tribute_control.call_indirect %right() : core.i32
             scf.yield
           }
         }
@@ -1645,8 +1645,8 @@ fn whole_ir_rejects_same_path_lambda_carrier_terminals() {
           %resumed = tribute_control.resume %token, %argument : core.i32
           tribute_control.return %resumed
         }
-        %first = "tribute_control.call_indirect"(%continuation) : core.i32
-        %second = "tribute_control.call_indirect"(%continuation) : core.i32
+        %first = tribute_control.call_indirect %continuation() : core.i32
+        %second = tribute_control.call_indirect %continuation() : core.i32
         tribute_control.yield %first
     }
   }
@@ -1773,11 +1773,11 @@ fn whole_ir_rejects_branch_after_transitive_lambda_transfer() {
           tribute_control.return %resumed
         }
         %wrapper = tribute_control.lambda() -> core.i32 captures [%inner] {
-          %called = "tribute_control.call_indirect"(%inner) : core.i32
+          %called = tribute_control.call_indirect %inner() : core.i32
           tribute_control.return %called
         }
-        %first = "tribute_control.call_indirect"(%wrapper) : core.i32
-        %second = "tribute_control.call_indirect"(%wrapper) : core.i32
+        %first = tribute_control.call_indirect %wrapper() : core.i32
+        %second = tribute_control.call_indirect %wrapper() : core.i32
         tribute_control.yield %first
     }
   }
@@ -1945,7 +1945,7 @@ fn exact_registered_intrinsic_has_indirect_callable_provenance() {
     attributes {abi = "intrinsic", tribute.compiler_intrinsic = "Nat::+"}
   tribute_control.func @caller(%left: core.i32, %right: core.i32) -> core.i32 {
     %callee = "tribute_control.func_ref"() {func_ref = @"Nat::+"} : !F
-    %result = "tribute_control.call_indirect"(%callee, %left, %right) : core.i32
+    %result = tribute_control.call_indirect %callee(%left, %right) : core.i32
     tribute_control.return %result
   }
 }"#,
@@ -2136,7 +2136,7 @@ fn indirect_call_rejects_typed_callable_cast_without_semantic_provenance() {
         r#"core.module @test {
   tribute_control.func @caller(%raw: core.ptr, %value: core.i32) -> core.i32 {
     %callee = core.unrealized_conversion_cast %raw : tribute_control.func_sig<(core.i32) -> core.i32>
-    %result = "tribute_control.call_indirect"(%callee, %value) : core.i32
+    %result = tribute_control.call_indirect %callee(%value) : core.i32
     tribute_control.return %result
   }
 }"#,
@@ -2157,7 +2157,7 @@ fn indirect_call_rejects_callable_from_uncontracted_structured_block_argument() 
   tribute_control.func @caller(%condition: core.i1, %value: core.i32) -> core.i32 {
     %result = scf.if %condition -> (core.i32) {
       ^then(%callee: !F):
-        %called = "tribute_control.call_indirect"(%callee, %value) : core.i32
+        %called = tribute_control.call_indirect %callee(%value) : core.i32
         scf.yield %called
     } else {
       ^else:
@@ -2188,7 +2188,7 @@ fn callable_handle_completion_argument_traces_the_body_yield() {
       %source = "tribute_control.func_ref"() {func_ref = @id} : !F
       tribute_control.yield %source
     } completion(%callback: !F) {
-        %ignored = "tribute_control.call_indirect"(%callback, %value) : core.i32
+        %ignored = tribute_control.call_indirect %callback(%value) : core.i32
         tribute_control.yield %callback
     } handlers {
       ^handlers:
@@ -2214,7 +2214,7 @@ fn callable_handler_parameter_requires_an_exact_operation_declaration() {
         tribute_control.yield %completed
     } handlers {
       tribute_control.handler fn @Callback @apply(%callback: !F) : core.i32 {
-          %called = "tribute_control.call_indirect"(%callback, %value) : core.i32
+          %called = tribute_control.call_indirect %callback(%value) : core.i32
           tribute_control.yield %called
       }
     }
@@ -2256,7 +2256,7 @@ fn performed_callable_module(declared_result: &str) -> String {
   !F = tribute_control.func_sig<(core.i32) -> core.i32>
   tribute_control.func @run(%value: core.i32) -> core.i32 {{
     %callee = tribute_control.perform {{ability = @Reader, op_name = "read", operation_kind = "fn"}} : !F
-    %result = "tribute_control.call_indirect"(%callee, %value) : core.i32
+    %result = tribute_control.call_indirect %callee(%value) : core.i32
     tribute_control.return %result
   }}
   ability.decl @Reader {{
@@ -2302,7 +2302,7 @@ fn handled_callable_module(op_yield: &str) -> String {
     tribute_control.handler op @Gen @next(%token: tribute_control.resume_token<core.i32, !F>) : core.i32 {{
         %resumed_value = arith.const {{value = 40}} : core.i32
         %g = tribute_control.resume %token, %resumed_value : !F
-        %called = "tribute_control.call_indirect"(%g, %resumed_value) : core.i32
+        %called = tribute_control.call_indirect %g(%resumed_value) : core.i32
         %zero = arith.const {{value = 0}} : core.i32
         %bad = core.unrealized_conversion_cast %zero : !F
         tribute_control.yield {op_yield}
@@ -2313,7 +2313,7 @@ fn handled_callable_module(op_yield: &str) -> String {
     }}
   }}
   %one = arith.const {{value = 1}} : core.i32
-  %result = "tribute_control.call_indirect"(%f, %one) : core.i32
+  %result = tribute_control.call_indirect %f(%one) : core.i32
   ability.decl @Gen {{
     ability.operation {{kind = "op", op_name = "next", param_types = [], result_type = core.i32}}
   }}
@@ -2352,10 +2352,10 @@ fn resume_result_needs_a_handler_resume_token() {
   !Token = tribute_control.resume_token<core.i32, !F>
   tribute_control.func @caller(%token: !Token, %raw: core.ptr, %value: core.i32) -> core.i32 {
     %from_parameter = tribute_control.resume %token, %value : !F
-    %first = "tribute_control.call_indirect"(%from_parameter, %value) : core.i32
+    %first = tribute_control.call_indirect %from_parameter(%value) : core.i32
     %cast_token = core.unrealized_conversion_cast %raw : !Token
     %from_cast = tribute_control.resume %cast_token, %first : !F
-    %second = "tribute_control.call_indirect"(%from_cast, %first) : core.i32
+    %second = tribute_control.call_indirect %from_cast(%first) : core.i32
     tribute_control.return %second
   }
 }"#,
@@ -2379,14 +2379,14 @@ fn lambda_parameters_indirect_results_and_list_heads_have_callable_provenance() 
   tribute_control.func @caller(%list: core.ptr, %make: !H, %value: core.i32) -> core.i32 {
     %apply = "tribute_control.lambda"() ({
       ^bb0(%callback: !F, %argument: core.i32):
-        %applied = "tribute_control.call_indirect"(%callback, %argument) : core.i32
+        %applied = tribute_control.call_indirect %callback(%argument) : core.i32
         tribute_control.return %applied
     }) : !G
-    %made = "tribute_control.call_indirect"(%make, %value) : !F
-    %first = "tribute_control.call_indirect"(%made, %value) : core.i32
+    %made = tribute_control.call_indirect %make(%value) : !F
+    %first = tribute_control.call_indirect %made(%value) : core.i32
     %head = list.head %list {element_type = !F} : !F
-    %second = "tribute_control.call_indirect"(%head, %first) : core.i32
-    %third = "tribute_control.call_indirect"(%apply, %head, %second) : core.i32
+    %second = tribute_control.call_indirect %head(%first) : core.i32
+    %third = tribute_control.call_indirect %apply(%head, %second) : core.i32
     tribute_control.return %third
   }
 }"#,
@@ -2413,13 +2413,13 @@ fn indirect_calls_sharing_a_callee_chain_evaluate_each_value_once() {
     ));
     for depth in (0..CHAIN).rev() {
         text.push_str(&format!(
-            "    %v{depth} = \"tribute_control.call_indirect\"(%v{}, %x) : !F{depth}\n",
+            "    %v{depth} = tribute_control.call_indirect %v{}(%x) : !F{depth}\n",
             depth + 1
         ));
     }
     for call in 0..CALLS {
         text.push_str(&format!(
-            "    %r{call} = \"tribute_control.call_indirect\"(%v0, %x) : core.i32\n"
+            "    %r{call} = tribute_control.call_indirect %v0(%x) : core.i32\n"
         ));
     }
     text.push_str("    tribute_control.return %r0\n  }\n}");
@@ -2479,7 +2479,7 @@ fn a_value_withdrawn_twice_is_not_evaluated_again() {
     }
   }
   %one = arith.const {value = 1} : core.i32
-  %result = "tribute_control.call_indirect"(%f, %one) : core.i32
+  %result = tribute_control.call_indirect %f(%one) : core.i32
   ability.decl @Gen {
     ability.operation {kind = "op", op_name = "next", param_types = [], result_type = core.i32}
   }
@@ -2515,10 +2515,10 @@ fn exact_adt_callable_projections_have_semantic_provenance() {
   !ChoiceRef = adt.typeref<{name = "Choice"}>
   tribute_control.func @caller(%tuple: !TupleRef, %choice: !ChoiceRef, %value: core.i32) -> core.i32 {
     %tuple_callee = adt.struct_get %tuple {type = !Tuple, field = 0} : !F
-    %tuple_result = "tribute_control.call_indirect"(%tuple_callee, %value) : core.i32
+    %tuple_result = tribute_control.call_indirect %tuple_callee(%value) : core.i32
     %some = adt.variant_cast %choice {type = !Choice, tag = "Some"} : !Choice
     %choice_callee = adt.variant_get %some {type = !Choice, tag = "Some", field = 0} : !F
-    %choice_result = "tribute_control.call_indirect"(%choice_callee, %tuple_result) : core.i32
+    %choice_result = tribute_control.call_indirect %choice_callee(%tuple_result) : core.i32
     tribute_control.return %choice_result
   }
 }"#,
@@ -2539,10 +2539,10 @@ fn adt_callable_projection_requires_matching_declared_field_type() {
   !ChoiceRef = adt.typeref<{name = "Choice"}>
   tribute_control.func @caller(%tuple: !TupleRef, %choice: !ChoiceRef, %value: core.i32) -> core.i32 {
     %tuple_callee = adt.struct_get %tuple {type = !Tuple, field = 0} : !F
-    %tuple_result = "tribute_control.call_indirect"(%tuple_callee, %value) : core.i32
+    %tuple_result = tribute_control.call_indirect %tuple_callee(%value) : core.i32
     %some = adt.variant_cast %choice {type = !Choice, tag = "Some"} : !Choice
     %choice_callee = adt.variant_get %some {type = !Choice, tag = "Some", field = 0} : !F
-    %choice_result = "tribute_control.call_indirect"(%choice_callee, %tuple_result) : core.i32
+    %choice_result = tribute_control.call_indirect %choice_callee(%tuple_result) : core.i32
     tribute_control.return %choice_result
   }
 }"#,
@@ -2567,7 +2567,7 @@ fn duplicate_nominal_layout_rejects_callable_projection_spoofing() {
   tribute_control.func @caller(%tuple: !TupleRef, %value: core.i32) -> core.i32 {
     %canonical = adt.struct_new %value {type = !Canonical} : !TupleRef
     %callee = adt.struct_get %tuple {type = !Spoofed, field = 0} : !F
-    %result = "tribute_control.call_indirect"(%callee, %value) : core.i32
+    %result = tribute_control.call_indirect %callee(%value) : core.i32
     tribute_control.return %result
   }
 }"#,
@@ -2603,7 +2603,7 @@ fn indirect_call_rejects_callable_from_unclassified_external() {
   tribute_control.func @factory() -> !F attributes {abi = "C"}
   tribute_control.func @caller(%value: core.i32) -> core.i32 {
     %callee = tribute_control.call {callee = @factory} : !F
-    %result = "tribute_control.call_indirect"(%callee, %value) : core.i32
+    %result = tribute_control.call_indirect %callee(%value) : core.i32
     tribute_control.return %result
   }
 }"#,

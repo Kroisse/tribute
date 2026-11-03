@@ -138,7 +138,7 @@ mod tests {
         let text = "core.module @m {
                 \"wasm.func\"() ({
                     %callee = wasm.i32_const {value = 0} : core.i32
-                    %value = \"wasm.call_indirect\"(%callee) {signature = wasm.func_sig<() -> core.i32>} : core.i32
+                    %value = wasm.call_indirect %callee() : () -> core.i32
                     wasm.return %value
                 }) {sym_name = \"good\", type = wasm.func_sig<() -> core.i32>}
                 \"wasm.func\"() ({ wasm.return }) {sym_name = \"zero\", type = wasm.func_sig<() -> ()>}

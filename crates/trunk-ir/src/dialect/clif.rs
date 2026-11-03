@@ -644,11 +644,11 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   clif.func @ordinary(%callee: core.ptr, %value: core.i32) -> core.i32 {
-    %result = "clif.call_indirect"(%callee, %value) {sig = clif.func_sig<(core.i32) -> core.i32>} : core.i32
+    %result = clif.call_indirect %callee(%value) : (core.i32) -> core.i32
     clif.return %result
   }
   clif.func @tail(%callee: core.ptr, %value: core.i32) -> core.nil {
-    "clif.return_call_indirect"(%callee, %value) {sig = clif.func_sig<(core.i32) -> core.nil>}
+    clif.return_call_indirect %callee(%value) : (core.i32) -> core.nil
   }
   clif.func @direct() -> core.nil {
     clif.return

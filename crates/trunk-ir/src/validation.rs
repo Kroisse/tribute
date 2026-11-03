@@ -2389,7 +2389,7 @@ mod tests {
     fn tail_call_indirect_typed_cps_transfer_passes() {
         let input = r#"core.module @test {
   func.func @main(%k: core.ptr, %value: core.i32) -> core.never {
-    "func.tail_call_indirect"(%k, %value) {signature = func.func_sig<(core.i32) -> core.never>}
+    func.tail_call_indirect %k(%value) : (core.i32) -> core.never
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -2402,7 +2402,7 @@ mod tests {
     fn tail_call_indirect_rejects_non_cps_result_and_bad_arguments() {
         let input = r#"core.module @test {
   func.func @main(%k: core.ptr, %value: core.i1) -> core.never {
-    "func.tail_call_indirect"(%k, %value) {signature = func.func_sig<(core.i32) -> core.i32>}
+    func.tail_call_indirect %k(%value) : (core.i32) -> core.i32
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -3689,7 +3689,7 @@ mod tests {
         // callee whose function type differs from `signature`.
         let input = r#"core.module @test {
   func.func @main(%f: func.func_sig<(core.i32) -> core.i32>, %x: core.i64) -> core.i64 {
-    %r = "func.call_indirect"(%f, %x) {signature = func.func_sig<(core.i64) -> core.i64>} : core.i64
+    %r = func.call_indirect %f(%x) : (core.i64) -> core.i64
     func.return %r
   }
 }"#;

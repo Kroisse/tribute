@@ -818,7 +818,7 @@ mod tests {
   func.func @main(%choice: core.i32, %callee: func.func_sig<(core.nil) -> core.never>, %unit: core.nil) -> core.never attributes {test.marker = 2} {
     scf.switch %choice {
       scf.case 0 {
-        "func.tail_call_indirect"(%callee, %unit) {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
+        func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
       }
       scf.default {
         func.unreachable
@@ -969,11 +969,11 @@ mod tests {
         %never = scf.if %cond -> (core.never) {
           func.unreachable
         } else {
-          "func.tail_call_indirect"(%callee, %unit) {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
+          func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
         }
       }
       scf.default {
-        "func.tail_call_indirect"(%callee, %unit) {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
+        func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
       }
     }
   }

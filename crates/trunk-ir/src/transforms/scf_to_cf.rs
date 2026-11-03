@@ -1228,7 +1228,7 @@ mod tests {
     } else {
       scf.yield %unit
     }
-    "func.tail_call_indirect"(%callee, %selected) {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
+    func.tail_call_indirect %callee(%selected) attributes {test.marker = 2} : (core.nil) -> core.never
   }
 }"#,
             1,
@@ -1242,7 +1242,7 @@ mod tests {
     %discarded = scf.if %cond -> (core.never) {
       func.unreachable
     } else {
-      "func.tail_call_indirect"(%callee, %unit) {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
+      func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
     }
   }
 }"#;
@@ -1301,7 +1301,7 @@ mod tests {
         func.unreachable
       }
       scf.default {
-        "func.tail_call_indirect"(%callee, %unit) {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
+        func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
       }
     }
   }
@@ -1601,11 +1601,11 @@ mod tests {
         %discarded = scf.if %cond -> (core.never) {
           func.unreachable
         } else {
-          "func.tail_call_indirect"(%callee, %unit) {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
+          func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
         }
       }
       scf.default {
-        "func.tail_call_indirect"(%callee, %unit) {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
+        func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
       }
     }
   }
@@ -1651,12 +1651,12 @@ mod tests {
             func.unreachable
           }
           scf.default {
-            "func.tail_call_indirect"(%callee, %unit) {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
+            func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
           }
         }
       }
       scf.default {
-        "func.tail_call_indirect"(%callee, %unit) {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
+        func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
       }
     }
   }
@@ -1804,7 +1804,7 @@ mod tests {
     } else {
       scf.yield %inner
     }
-    "func.tail_call_indirect"(%callee, %outer) {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
+    func.tail_call_indirect %callee(%outer) attributes {test.marker = 2} : (core.nil) -> core.never
   }
 }"#,
             2,

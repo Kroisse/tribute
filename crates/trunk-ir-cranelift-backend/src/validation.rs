@@ -542,7 +542,7 @@ mod tests {
   }) {sym_name = "to_platform", type = clif.func_sig<(core.i32) -> (), {call_conv = "tail"}>}
   "clif.func"() ({
     ^entry(%callee: core.ptr, %value: core.i32):
-      "clif.return_call_indirect"(%callee, %value) {sig = clif.func_sig<(core.i32) -> ()>}
+      clif.return_call_indirect %callee(%value) : (core.i32) -> ()
   }) {sym_name = "indirect_platform", type = clif.func_sig<(core.ptr, core.i32) -> (), {call_conv = "tail"}>}
 }"#,
         );
@@ -568,7 +568,7 @@ mod tests {
   }) {sym_name = "direct", type = clif.func_sig<(core.i32) -> (), {call_conv = "tail"}>}
   "clif.func"() ({
     ^entry(%callee: core.ptr, %value: core.i32):
-      "clif.return_call_indirect"(%callee, %value) {sig = clif.func_sig<(core.i32) -> (), {call_conv = "tail"}>}
+      clif.return_call_indirect %callee(%value) : (core.i32) -> (), {call_conv = "tail"}
   }) {sym_name = "indirect", type = clif.func_sig<(core.ptr, core.i32) -> (), {call_conv = "tail"}>}
 }"#,
         );
@@ -744,10 +744,10 @@ mod tests {
   }
   clif.func @bad_tail() { clif.return_call {callee = @tail_target} }
   clif.func @bad_indirect_tail(%callee: core.ptr, %value: core.i32) {
-    "clif.return_call_indirect"(%callee, %value) {sig = clif.func_sig<(core.i64) -> ()>}
+    clif.return_call_indirect %callee(%value) : (core.i64) -> ()
   }
   clif.func @bad_indirect_tail_result(%callee: core.ptr) {
-    "clif.return_call_indirect"(%callee) {sig = clif.func_sig<() -> core.i32>}
+    clif.return_call_indirect %callee() : () -> core.i32
   }
 }"#,
         );

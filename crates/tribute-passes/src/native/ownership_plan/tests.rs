@@ -2601,7 +2601,7 @@ fn direct_indirect_return_and_tail_contracts_are_typed() {
   func.func @caller(%value: !R, %callee: func.func_sig<(!R) -> !R>) -> !R {
     %seen = func.call %value {callee = @observe} : core.i32
     %direct = func.call %value {callee = @ordinary} : !R
-    %indirect = "func.call_indirect"(%callee, %direct) {signature = func.func_sig<(!R) -> !R>} : !R
+    %indirect = func.call_indirect %callee(%direct) : (!R) -> !R
     func.return %indirect
   }
   func.func @tail(%value: !R {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
@@ -2643,7 +2643,7 @@ fn retained_parameter_calls_balance_retains_and_releases() {
     func.return %seen
   }
   func.func @indirect(%value: !R, %callee: func.func_sig<(!R) -> !R>) -> core.i32 {
-    %kept = "func.call_indirect"(%callee, %value) {signature = func.func_sig<(!R) -> !R>} : !R
+    %kept = func.call_indirect %callee(%value) : (!R) -> !R
     %seen = adt.struct_get %kept {field = 0, type = !Layout} : core.i32
     func.return %seen
   }
@@ -2829,7 +2829,7 @@ fn stale_identity_unsupported_regions_and_malformed_calls_fail_unchanged() {
   !R = adt.typeref<{name = "R"}>
   !Layout = adt.struct<R(x: core.i32)>
   func.func @f(%value: !R, %callee: func.func_sig<(!R) -> !R>) -> !R {
-    %x = "func.call_indirect"(%callee) {signature = func.func_sig<(!R) -> !R>} : !R
+    %x = func.call_indirect %callee() : (!R) -> !R
     func.return %x
   }
 }"#,

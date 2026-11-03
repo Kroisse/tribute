@@ -32,7 +32,7 @@ fn a_pure_callback_selects_the_direct_instance() {
   !cb = tribute_control.func_sig<(core.i32) -> core.i32 row(| 'a0)>
   !pure = tribute_control.func_sig<(core.i32) -> core.i32>
   tribute_control.func @app['a0](%x: core.i32, %f: !cb) -> core.i32 row(| 'a0) {
-    %r = "tribute_control.call_indirect"(%f, %x) : core.i32
+    %r = tribute_control.call_indirect %f(%x) : core.i32
     tribute_control.return %r
   }
   tribute_control.func @bang(%x: core.i32) -> core.i32 {
@@ -73,7 +73,7 @@ fn a_class_variable_reached_through_a_callee_is_selected() {
   !cb = tribute_control.func_sig<(core.i32) -> core.i32 row(| 'a0)>
   !pure = tribute_control.func_sig<(core.i32) -> core.i32>
   tribute_control.func @app['a0](%x: core.i32, %f: !cb) -> core.i32 row(| 'a0) {
-    %r = "tribute_control.call_indirect"(%f, %x) : core.i32
+    %r = tribute_control.call_indirect %f(%x) : core.i32
     tribute_control.return %r
   }
   tribute_control.func @ident['a0](%x: core.i32) -> core.i32 row(| 'a0) inferred {
@@ -85,7 +85,7 @@ fn a_class_variable_reached_through_a_callee_is_selected() {
     tribute_control.return %r
   }
   tribute_control.func @twice['a0](%x: core.i32, %g: !cb) -> core.i32 row(| 'a0) {
-    %r = "tribute_control.call_indirect"(%g, %x) : core.i32
+    %r = tribute_control.call_indirect %g(%x) : core.i32
     tribute_control.return %r
   }
   tribute_control.func @main(%x: core.i32) -> core.i32 {
@@ -118,7 +118,7 @@ fn a_recursive_instance_calls_itself() {
   !cb = tribute_control.func_sig<(core.i32) -> core.i32 row(| 'a0)>
   tribute_control.func @loop['a0](%n: core.i32, %f: !cb) -> core.i32 row(| 'a0) {
     %g = tribute_control.lambda(%y: core.i32) -> core.i32 row(| 'a0) captures [%f] {
-      %v = "tribute_control.call_indirect"(%f, %y) : core.i32
+      %v = tribute_control.call_indirect %f(%y) : core.i32
       tribute_control.return %v
     }
     tribute_control.tail_call %n, %g {callee = @loop, row_args = [{tail = 0}]}
@@ -165,7 +165,7 @@ fn a_layout_keeps_its_callable_field() {
     }
     %h = adt.struct_new %l {type = !Holder} : !HolderRef
     %f = tribute_control.call %h {callee = @"Holder::callback"} : !cb
-    %r = "tribute_control.call_indirect"(%f, %x) : core.i32
+    %r = tribute_control.call_indirect %f(%x) : core.i32
     tribute_control.return %r
   }
 }"#,
@@ -266,14 +266,14 @@ fn a_lambda_has_a_body_per_class_of_its_instantiations() {
     %h = tribute_control.lambda['a1]() -> core.i32 row(| 'a1) captures [%g] {
       %s = tribute_control.instantiate %g {row_args = [{tail = 1}]} : !l1
       %c = arith.const {value = 1} : core.i32
-      %v = "tribute_control.call_indirect"(%s, %c) : core.i32
+      %v = tribute_control.call_indirect %s(%c) : core.i32
       tribute_control.return %v
     }
     %a = tribute_control.instantiate %g {row_args = [{}]} : !l0
     %i = tribute_control.instantiate %h {row_args = [{}]} : !h0
-    %r = "tribute_control.call_indirect"(%i) : core.i32
+    %r = tribute_control.call_indirect %i() : core.i32
     %b = tribute_control.instantiate %g {row_args = [{instances = [@Ctl]}]} : !lc
-    %t = "tribute_control.call_indirect"(%b, %r) : core.i32
+    %t = tribute_control.call_indirect %b(%r) : core.i32
     tribute_control.return %t
   }
 }"#,
@@ -303,7 +303,7 @@ fn each_instance_copies_the_lambdas_inside_each_body() {
   !in1 = tribute_control.func_sig<(core.i32) -> core.i32 row(| 'a1)>
   !pure = tribute_control.func_sig<(core.i32) -> core.i32>
   tribute_control.func @app['a0](%x: core.i32, %f: !cb) -> core.i32 row(| 'a0) {
-    %r = "tribute_control.call_indirect"(%f, %x) : core.i32
+    %r = tribute_control.call_indirect %f(%x) : core.i32
     tribute_control.return %r
   }
   tribute_control.func @run['a0, local 'a1, local 'a2](%x: core.i32, %k: !cb) -> core.i32 row(| 'a0) {
@@ -312,14 +312,14 @@ fn each_instance_copies_the_lambdas_inside_each_body() {
         tribute_control.return %z
       }
       %m = tribute_control.instantiate %n {row_args = [{tail = 1}]} : !in1
-      %v = "tribute_control.call_indirect"(%m, %y) : core.i32
+      %v = tribute_control.call_indirect %m(%y) : core.i32
       tribute_control.return %v
     }
     %p = tribute_control.instantiate %o {row_args = [{}]} : !pure
     %q = tribute_control.instantiate %o {row_args = [{tail = 0}]} : !cb
     %r1 = tribute_control.call %x, %p {callee = @app, row_args = [{}]} : core.i32
     %r2 = tribute_control.call %r1, %q {callee = @app, row_args = [{tail = 0}]} : core.i32
-    %r3 = "tribute_control.call_indirect"(%k, %r2) : core.i32
+    %r3 = tribute_control.call_indirect %k(%r2) : core.i32
     tribute_control.return %r3
   }
   tribute_control.func @main(%x: core.i32) -> core.i32 {
@@ -362,21 +362,21 @@ fn a_lambda_using_a_lambda_of_two_classes_captures_it_once() {
       tribute_control.return %y
     }
     %a = tribute_control.instantiate %g {row_args = [{}]} : !l0
-    %r = "tribute_control.call_indirect"(%a, %x) : core.i32
+    %r = tribute_control.call_indirect %a(%x) : core.i32
     %h = tribute_control.lambda() -> core.i32 row(@Ctl) captures [%g, %r] {
       %s = tribute_control.instantiate %g {row_args = [{instances = [@Ctl]}]} : !lc
-      %v = "tribute_control.call_indirect"(%s, %r) : core.i32
+      %v = tribute_control.call_indirect %s(%r) : core.i32
       tribute_control.return %v
     }
     %k = tribute_control.lambda() -> core.i32 row(@Ctl) captures [%g, %r] {
       %p = tribute_control.instantiate %g {row_args = [{}]} : !l0
       %q = tribute_control.instantiate %g {row_args = [{instances = [@Ctl]}]} : !lc
-      %u = "tribute_control.call_indirect"(%p, %r) : core.i32
-      %w = "tribute_control.call_indirect"(%q, %u) : core.i32
+      %u = tribute_control.call_indirect %p(%r) : core.i32
+      %w = tribute_control.call_indirect %q(%u) : core.i32
       tribute_control.return %w
     }
-    %b = "tribute_control.call_indirect"(%h) : core.i32
-    %c = "tribute_control.call_indirect"(%k) : core.i32
+    %b = tribute_control.call_indirect %h() : core.i32
+    %c = tribute_control.call_indirect %k() : core.i32
     tribute_control.return %c
   }
 }"#,
@@ -402,11 +402,11 @@ fn a_lambda_without_binders_is_shared_by_its_consumers() {
   !cb = tribute_control.func_sig<(core.i32) -> core.i32 row(| 'a0)>
   !pure = tribute_control.func_sig<(core.i32) -> core.i32>
   tribute_control.func @pure(%f: !pure, %x: core.i32) -> core.i32 {
-    %r = "tribute_control.call_indirect"(%f, %x) : core.i32
+    %r = tribute_control.call_indirect %f(%x) : core.i32
     tribute_control.return %r
   }
   tribute_control.func @open['a0](%f: !cb, %x: core.i32) -> core.i32 row(| 'a0) {
-    %r = "tribute_control.call_indirect"(%f, %x) : core.i32
+    %r = tribute_control.call_indirect %f(%x) : core.i32
     tribute_control.return %r
   }
   tribute_control.func @main(%x: core.i32) -> core.i32 {
@@ -453,7 +453,7 @@ fn module_level_types_and_references_to_main_keep_their_shape() {
     tribute_control.return %r
   }
   tribute_control.func @app['a0](%x: core.i32, %f: !cb) -> core.i32 row(| 'a0) {
-    %r = "tribute_control.call_indirect"(%f, %x) : core.i32
+    %r = tribute_control.call_indirect %f(%x) : core.i32
     tribute_control.return %r
   }
 }"#,
@@ -492,12 +492,12 @@ fn an_instantiation_reads_the_class_variables_of_its_instance() {
     }
     %k = tribute_control.lambda(%y: core.i32) -> core.i32 row(| 'a0) captures [%g] {
       %s = tribute_control.instantiate %g {row_args = [{tail = 0}]} : !cb
-      %v = "tribute_control.call_indirect"(%s, %y) : core.i32
+      %v = tribute_control.call_indirect %s(%y) : core.i32
       tribute_control.return %v
     }
     %a = tribute_control.instantiate %g {row_args = [{}]} : !pure
-    %r = "tribute_control.call_indirect"(%a, %x) : core.i32
-    %t = "tribute_control.call_indirect"(%k, %r) : core.i32
+    %r = tribute_control.call_indirect %a(%x) : core.i32
+    %t = tribute_control.call_indirect %k(%r) : core.i32
     tribute_control.return %t
   }
   tribute_control.func @main(%x: core.i32) -> core.i32 {
@@ -530,7 +530,7 @@ fn a_reference_in_a_lambda_selects_by_the_local_class() {
     ability.operation {kind = "fn", op_name = "ask", param_types = [], result_type = core.i32}
   }
   tribute_control.func @app['a0](%x: core.i32, %f: !cb) -> core.i32 row(| 'a0) {
-    %r = "tribute_control.call_indirect"(%f, %x) : core.i32
+    %r = tribute_control.call_indirect %f(%x) : core.i32
     tribute_control.return %r
   }
   tribute_control.func @main[local 'a0](%x: core.i32) -> core.i32 row(@Ask) {
@@ -542,7 +542,7 @@ fn a_reference_in_a_lambda_selects_by_the_local_class() {
       tribute_control.return %z
     }
     %a = tribute_control.instantiate %g {row_args = [{instances = [@Ask]}]} : !ga
-    %r = "tribute_control.call_indirect"(%a, %x, %cb) : core.i32
+    %r = tribute_control.call_indirect %a(%x, %cb) : core.i32
     tribute_control.return %r
   }
 }"#,
@@ -576,14 +576,14 @@ fn a_lambda_reads_an_enclosing_binder_in_each_body() {
       }
       %d = tribute_control.instantiate %n {row_args = [{}]} : !pure
       %u = tribute_control.instantiate %n {row_args = [{tail = 0}]} : !in0
-      %v = "tribute_control.call_indirect"(%d, %y) : core.i32
-      %w = "tribute_control.call_indirect"(%u, %v) : core.i32
+      %v = tribute_control.call_indirect %d(%y) : core.i32
+      %w = tribute_control.call_indirect %u(%v) : core.i32
       tribute_control.return %w
     }
     %p = tribute_control.instantiate %o {row_args = [{}]} : !pure
     %q = tribute_control.instantiate %o {row_args = [{instances = [@Ctl]}]} : !ctl
-    %r1 = "tribute_control.call_indirect"(%p, %x) : core.i32
-    %r2 = "tribute_control.call_indirect"(%q, %r1) : core.i32
+    %r1 = tribute_control.call_indirect %p(%x) : core.i32
+    %r2 = tribute_control.call_indirect %q(%r1) : core.i32
     tribute_control.return %r2
   }
 }"#,
@@ -623,19 +623,19 @@ fn a_lambda_split_before_its_enclosing_lambda_is_one_value_in_each_copy() {
       }
       %d = tribute_control.instantiate %n {row_args = [{}]} : !pure
       %u = tribute_control.instantiate %n {row_args = [{instances = [@Ctl]}]} : !ctl
-      %v = "tribute_control.call_indirect"(%d, %y) : core.i32
+      %v = tribute_control.call_indirect %d(%y) : core.i32
       tribute_control.return %v
     }
     %w = tribute_control.lambda['a0]() -> core.i32 row(| 'a0) captures [%o] {
       %s = tribute_control.instantiate %o {row_args = [{tail = 0}]} : !in0
       %c = arith.const {value = 1} : core.i32
-      %v = "tribute_control.call_indirect"(%s, %c) : core.i32
+      %v = tribute_control.call_indirect %s(%c) : core.i32
       tribute_control.return %v
     }
     %a = tribute_control.instantiate %w {row_args = [{}]} : !h0
     %b = tribute_control.instantiate %w {row_args = [{instances = [@Ctl]}]} : !hc
-    %r = "tribute_control.call_indirect"(%a) : core.i32
-    %t = "tribute_control.call_indirect"(%b) : core.i32
+    %r = tribute_control.call_indirect %a() : core.i32
+    %t = tribute_control.call_indirect %b() : core.i32
     tribute_control.return %t
   }
 }"#,
@@ -664,9 +664,9 @@ fn folding_keeps_the_row_unions_of_the_definition() {
       tribute_control.return %y
     }
     %a = tribute_control.instantiate %g {row_args = [{}]} : !l0
-    %r = "tribute_control.call_indirect"(%a, %x) : core.i32
+    %r = tribute_control.call_indirect %a(%x) : core.i32
     %b = tribute_control.instantiate %g {row_args = [{instances = [@Ctl]}]} : !lc
-    %t = "tribute_control.call_indirect"(%b, %r) : core.i32
+    %t = tribute_control.call_indirect %b(%r) : core.i32
     tribute_control.return %t
   }
 }"#,
@@ -695,7 +695,7 @@ fn every_body_takes_parameters_over_the_lambdas_own_binders() {
   }
   tribute_control.func @f[local 'a0](%x: core.i32) -> core.i32 row(@Ctl) {
     %g = tribute_control.lambda['a0](%y: core.i32, %k: !k0) -> core.i32 row(| 'a0) captures [] {
-      %v = "tribute_control.call_indirect"(%k, %y) : core.i32
+      %v = tribute_control.call_indirect %k(%y) : core.i32
       tribute_control.return %v
     }
     %p = tribute_control.lambda(%n: core.i32) -> core.i32 captures [] {
@@ -706,8 +706,8 @@ fn every_body_takes_parameters_over_the_lambdas_own_binders() {
     }
     %a = tribute_control.instantiate %g {row_args = [{}]} : !g0
     %b = tribute_control.instantiate %g {row_args = [{instances = [@Ctl]}]} : !gc
-    %r = "tribute_control.call_indirect"(%a, %x, %p) : core.i32
-    %t = "tribute_control.call_indirect"(%b, %r, %q) : core.i32
+    %r = tribute_control.call_indirect %a(%x, %p) : core.i32
+    %t = tribute_control.call_indirect %b(%r, %q) : core.i32
     tribute_control.return %t
   }
 }"#,
@@ -746,13 +746,13 @@ fn instantiations_of_one_class_with_other_binder_classes_read_an_upper_bound() {
         tribute_control.return %z
       }
       %u = tribute_control.instantiate %n {row_args = [{tail = 0}]} : !in0
-      %v = "tribute_control.call_indirect"(%u, %y) : core.i32
+      %v = tribute_control.call_indirect %u(%y) : core.i32
       tribute_control.return %v
     }
     %a = tribute_control.instantiate %g {row_args = [{}]} : !l0
     %b = tribute_control.instantiate %g {row_args = [{instances = [@Ask]}]} : !la
-    %r = "tribute_control.call_indirect"(%a, %x) : core.i32
-    %t = "tribute_control.call_indirect"(%b, %r) : core.i32
+    %r = tribute_control.call_indirect %a(%x) : core.i32
+    %t = tribute_control.call_indirect %b(%r) : core.i32
     tribute_control.return %t
   }
 }"#,
@@ -789,7 +789,7 @@ fn a_reference_of_an_upper_bound_enters_a_target_per_class_up_to_it() {
     ability.operation {kind = "fn", op_name = "ask", param_types = [], result_type = core.i32}
   }
   tribute_control.func @call['a0](%x: core.i32, %f: !cb0) -> core.i32 row(| 'a0) {
-    %r = "tribute_control.call_indirect"(%f, %x) : core.i32
+    %r = tribute_control.call_indirect %f(%x) : core.i32
     tribute_control.return %r
   }
   tribute_control.func @main[local 'a0](%x: core.i32) -> core.i32 {
@@ -799,8 +799,8 @@ fn a_reference_of_an_upper_bound_enters_a_target_per_class_up_to_it() {
     }
     %p = tribute_control.instantiate %w {row_args = [{}]} : !wp
     %a = tribute_control.instantiate %w {row_args = [{instances = [@Ask]}]} : !wa
-    %cp = "tribute_control.call_indirect"(%p) : !callp
-    %ca = "tribute_control.call_indirect"(%a) : !calla
+    %cp = tribute_control.call_indirect %p() : !callp
+    %ca = tribute_control.call_indirect %a() : !calla
     tribute_control.return %x
   }
 }"#,

@@ -217,7 +217,7 @@ fn table_module(target: &str, entry: &str) -> String {
   tribute_cps.func_table @"target$8" = {{{entry} = @target}}
   tribute_cps.func @f() -> core.i32 convention(direct) {{
     %0 = "tribute_cps.func_ref"() {{func_ref = @"target$8"}} : tribute_control.func_sig<() -> core.i32>
-    %1 = "tribute_cps.call_indirect"(%0) {{convention = "direct"}} : core.i32
+    %1 = tribute_cps.call_indirect %0() convention(direct) : core.i32
     tribute_control.return %1
   }}
 }}

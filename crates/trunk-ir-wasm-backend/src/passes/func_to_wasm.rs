@@ -897,10 +897,10 @@ mod tests {
     func.tail_call %value {callee = @target}
   }
   func.func @indirect(%table_index: core.i32, %value: core.i32) -> core.nil {
-    "func.tail_call_indirect"(%table_index, %value) {signature = func.func_sig<(core.i32) -> core.nil>}
+    func.tail_call_indirect %table_index(%value) : (core.i32) -> core.nil
   }
   func.func @ordinary(%table_index: core.i32, %value: core.i32) -> core.i32 {
-    %result = "func.call_indirect"(%table_index, %value) {signature = func.func_sig<(core.i32) -> core.i32>} : core.i32
+    %result = func.call_indirect %table_index(%value) : (core.i32) -> core.i32
     func.return %result
   }
 }"#,
@@ -976,7 +976,7 @@ mod tests {
   }
   func.func @caller(%value: core.i32) -> core.nil {
     %table_index = func.constant {func_ref = @target} : core.i32
-    "func.tail_call_indirect"(%table_index, %value) {signature = func.func_sig<(core.i32) -> core.nil>}
+    func.tail_call_indirect %table_index(%value) : (core.i32) -> core.nil
   }
 }"#,
         );
@@ -1001,10 +1001,10 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @physical(%table_index: core.i32, %value: wasm.anyref) {
-    "func.tail_call_indirect"(%table_index, %value) {signature = func.func_sig<(tribute_rt.anyref) -> ()>, table = 7, test.marker = 2, type_idx = 9}
+    func.tail_call_indirect %table_index(%value) attributes {table = 7, test.marker = 2, type_idx = 9} : (tribute_rt.anyref) -> ()
   }
   func.func @mismatch(%table_index: core.i32, %value: core.i32) {
-    "func.tail_call_indirect"(%table_index, %value) {signature = func.func_sig<(tribute_rt.float) -> ()>, test.marker = 2}
+    func.tail_call_indirect %table_index(%value) attributes {test.marker = 2} : (tribute_rt.float) -> ()
   }
 }"#,
         );
@@ -1055,11 +1055,11 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @physical(%table_index: core.i32, %value: wasm.anyref) -> core.i32 {
-    %result = "func.call_indirect"(%table_index, %value) {signature = func.func_sig<(tribute_rt.anyref) -> core.i32>, table = 7, type_idx = 9} : core.i32
+    %result = func.call_indirect %table_index(%value) attributes {table = 7, type_idx = 9} : (tribute_rt.anyref) -> core.i32
     func.return %result
   }
   func.func @mismatch(%table_index: core.i32, %value: core.i32) -> core.i32 {
-    %result = "func.call_indirect"(%table_index, %value) {signature = func.func_sig<(tribute_rt.float) -> core.i32>} : core.i32
+    %result = func.call_indirect %table_index(%value) : (tribute_rt.float) -> core.i32
     func.return %result
   }
 }"#,
@@ -1104,7 +1104,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @transfer(%table_index: core.i32, %value: core.i32) -> (), {call_conv = "tail"} {
-    "func.tail_call_indirect"(%table_index, %value) {signature = func.func_sig<(core.i32) -> (), {call_conv = "tail"}>}
+    func.tail_call_indirect %table_index(%value) : (core.i32) -> (), {call_conv = "tail"}
   }
   func.func @nested(%callee: func.func_sig<(core.i32) -> (), {call_conv = "tail"}>) {
     func.return
@@ -1159,7 +1159,7 @@ mod tests {
     func.return %result
   }
   func.func @indirect(%table_index: core.i32, %value: core.i32) -> test.ref {
-    %result = "func.call_indirect"(%table_index, %value) {signature = func.func_sig<(core.i32) -> test.ref>} : test.ref
+    %result = func.call_indirect %table_index(%value) : (core.i32) -> test.ref
     func.return %result
   }
 }"#,

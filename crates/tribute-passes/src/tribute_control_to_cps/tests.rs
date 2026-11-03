@@ -269,11 +269,11 @@ fn textual_direct_evidence_and_cps_transfers_preserve_exact_abis() {
     %direct_result = tribute_control.call %value {callee = @direct} : core.i32
     %evidence_result = tribute_control.call %direct_result {callee = @evidence} : core.i32
     %direct_ref = "tribute_cps.func_ref"() {func_ref = @"direct$8"} : !direct
-    %direct_indirect = "tribute_cps.call_indirect"(%direct_ref, %evidence_result) {convention = "direct"} : core.i32
+    %direct_indirect = tribute_cps.call_indirect %direct_ref(%evidence_result) convention(direct) : core.i32
     %evidence_ref = "tribute_cps.func_ref"() {func_ref = @"evidence$8"} : !evidence
-    %evidence_indirect = "tribute_cps.call_indirect"(%evidence_ref, %direct_indirect) {convention = "evidence_direct"} : core.i32
+    %evidence_indirect = tribute_cps.call_indirect %evidence_ref(%direct_indirect) convention(evidence_direct) : core.i32
     %cps_ref = "tribute_cps.func_ref"() {func_ref = @"cps$8"} : !cps
-    %cps_indirect = "tribute_cps.call_indirect"(%cps_ref, %evidence_indirect) {convention = "cps"} : core.i32
+    %cps_indirect = tribute_cps.call_indirect %cps_ref(%evidence_indirect) convention(cps) : core.i32
     tribute_control.return %cps_indirect
   }
   tribute_cps.func @known_cps(%value: core.i32) -> core.i32 convention(cps) {
@@ -356,13 +356,13 @@ fn source_data_indirect_calls_carry_their_exact_signature() {
     tribute_control.return %left
   }
   tribute_cps.func @pure(%f: !direct, %left: core.i32, %right: core.i32) -> core.i32 convention(direct) {
-    %result = "tribute_cps.call_indirect"(%f, %left, %right) {convention = "direct"} : core.i32
+    %result = tribute_cps.call_indirect %f(%left, %right) convention(direct) : core.i32
     tribute_control.return %result
   }
   tribute_cps.func_table @"add$8" = {direct = @add}
   tribute_cps.func @named_ref(%left: core.i32, %right: core.i32) -> core.i32 convention(direct) {
     %ref = "tribute_cps.func_ref"() {func_ref = @"add$8"} : !direct
-    %called = "tribute_cps.call_indirect"(%ref, %left, %right) {convention = "direct"} : core.i32
+    %called = tribute_cps.call_indirect %ref(%left, %right) convention(direct) : core.i32
     tribute_control.return %called
   }
   tribute_cps.func @capturing(%captured: core.i32, %value: core.i32) -> core.i32 convention(direct) {
@@ -372,11 +372,11 @@ fn source_data_indirect_calls_carry_their_exact_signature() {
         tribute_control.return %sum
       }
     }
-    %called = "tribute_cps.call_indirect"(%lambda, %value) {convention = "direct"} : core.i32
+    %called = tribute_cps.call_indirect %lambda(%value) convention(direct) : core.i32
     tribute_control.return %called
   }
   tribute_cps.func @thunk(%f: !evidence, %value: core.i32) -> core.i32 convention(evidence_direct) {
-    %called = "tribute_cps.call_indirect"(%f, %value) {convention = "evidence_direct"} : core.i32
+    %called = tribute_cps.call_indirect %f(%value) convention(evidence_direct) : core.i32
     tribute_control.return %called
   }
 }"#;
@@ -731,7 +731,7 @@ fn malformed_lookup_inputs_fail_before_conversion_and_remain_unchanged() {
         (
             r#"core.module @test {
   tribute_cps.func @broken(%value: core.i32) -> core.i32 convention(direct) {
-    %result = "tribute_cps.call_indirect"(%value, %value) {convention = "direct"} : core.i32
+    %result = tribute_cps.call_indirect %value(%value) convention(direct) : core.i32
     tribute_control.return %result
   }
 }"#,
@@ -1725,7 +1725,7 @@ fn stronger_func_ref_builds_a_cps_adapter_without_a_null_environment() {
   tribute_cps.func_table @"id$8" = {direct = @id}
   tribute_cps.func @run(%value: core.i32) -> core.i32 convention(cps) {
     %callee = "tribute_cps.func_ref"() {func_ref = @"id$8"} : !cps
-    %result = "tribute_cps.call_indirect"(%callee, %value) {convention = "cps"} : core.i32
+    %result = tribute_cps.call_indirect %callee(%value) convention(cps) : core.i32
     tribute_control.return %result
   }
 }"#;
@@ -1752,7 +1752,7 @@ fn parameter_attributes_follow_their_parameters_to_the_physical_abi() {
   tribute_cps.func_table @"id$8" = {cps = @id}
   tribute_cps.func @run(%value: core.i32) -> core.i32 convention(cps) {
     %callee = "tribute_cps.func_ref"() {func_ref = @"id$8"} : !cps
-    %result = "tribute_cps.call_indirect"(%callee, %value) {convention = "cps"} : core.i32
+    %result = tribute_cps.call_indirect %callee(%value) convention(cps) : core.i32
     tribute_control.return %result
   }
 }"#;
@@ -2563,7 +2563,7 @@ fn legalization_drops_ability_rows_and_row_metadata() {
     ability.operation {kind = "fn", op_name = "get", param_types = [], result_type = core.i32}
   }
   tribute_cps.func @apply['a0 = 'a1, body 'a1](%f: !open, %x: core.i32) -> core.i32 row(| 'a0) inferred convention(cps) {
-    %r = "tribute_cps.call_indirect"(%f, %x) {convention = "cps"} : core.i32
+    %r = tribute_cps.call_indirect %f(%x) convention(cps) : core.i32
     tribute_control.return %r
   }
   tribute_cps.func @main(%x: core.i32) -> core.i32 row(@A) convention(cps) {
@@ -2619,11 +2619,11 @@ fn instantiate_legalizes_to_its_lambda() {
     };
     let instantiated = legalized(module(
         "['a1]",
-        "%s = tribute_control.instantiate %g {row_args = [{tail = 0}]} : !step0\n    %r = \"tribute_cps.call_indirect\"(%s, %x) {convention = \"direct\"} : core.i32",
+        "%s = tribute_control.instantiate %g {row_args = [{tail = 0}]} : !step0\n    %r = tribute_cps.call_indirect %s(%x) convention(direct) : core.i32",
     ));
     let direct = legalized(module(
         "",
-        "%r = \"tribute_cps.call_indirect\"(%g, %x) {convention = \"direct\"} : core.i32",
+        "%r = tribute_cps.call_indirect %g(%x) convention(direct) : core.i32",
     ));
     assert_eq!(instantiated, direct);
     assert!(!instantiated.contains("quantified_rows"), "{instantiated}");
@@ -2665,7 +2665,7 @@ fn a_lambda_with_two_bodies_lifts_an_entry_per_body() {
         tribute_control.return %captured
       }
     }
-    %called = "tribute_cps.call_indirect"(%lambda, %value) {convention = "cps"} : core.i32
+    %called = tribute_cps.call_indirect %lambda(%value) convention(cps) : core.i32
     tribute_control.return %called
   }
 }"#,

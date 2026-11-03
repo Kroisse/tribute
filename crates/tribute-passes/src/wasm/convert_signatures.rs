@@ -151,7 +151,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @transfer(%callee: core.i32, %value: tribute_rt.anyref) {
-    "func.tail_call_indirect"(%callee, %value) {signature = func.func_sig<(tribute_rt.anyref) -> ()>}
+    func.tail_call_indirect %callee(%value) : (tribute_rt.anyref) -> ()
   }
 }"#,
         );
@@ -170,7 +170,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @transfer(%callee: core.i32, %value: core.i32) {
-    "func.tail_call_indirect"(%callee, %value) {signature = func.func_sig<(core.i32) -> ()>}
+    func.tail_call_indirect %callee(%value) : (core.i32) -> ()
   }
 }"#,
         );

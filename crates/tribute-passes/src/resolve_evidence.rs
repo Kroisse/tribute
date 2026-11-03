@@ -574,7 +574,7 @@ mod tests {
     fn call_selections_apply_in_order_to_the_passed_evidence() {
         let input = final_dispatch_fixture(
             r#"%direct = func.call %ev, %prompt {callee = @callee, tribute.calling_convention = "evidence_direct", evidence_plan = [{mask = @State}, {dup = @Console}]} : core.i32
-    "func.tail_call_indirect"(%tr, %ev, %direct) {signature = func.func_sig<(!evidence, core.i32) -> core.never>, tribute.calling_convention = "cps", evidence_plan = [{dup = @State}]}"#,
+    func.tail_call_indirect %tr(%ev, %direct) attributes {tribute.calling_convention = "cps", evidence_plan = [{dup = @State}]} : (!evidence, core.i32) -> core.never"#,
         );
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, &input);
@@ -599,7 +599,7 @@ mod tests {
     fn row_tail_selections_read_the_evidence_the_call_starts_from() {
         let input = final_dispatch_fixture(
             r#"%direct = func.call %ev, %prompt {callee = @callee, tribute.calling_convention = "evidence_direct", evidence_plan = [{select = 1}, {push = @State}]} : core.i32
-    "func.tail_call_indirect"(%tr, %ev, %direct) {signature = func.func_sig<(!evidence, core.i32) -> core.never>, tribute.calling_convention = "cps", evidence_plan = [{dup = @State}, {tails = [[], [{mask = @State}]]}]}"#,
+    func.tail_call_indirect %tr(%ev, %direct) attributes {tribute.calling_convention = "cps", evidence_plan = [{dup = @State}, {tails = [[], [{mask = @State}]]}]} : (!evidence, core.i32) -> core.never"#,
         );
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, &input);

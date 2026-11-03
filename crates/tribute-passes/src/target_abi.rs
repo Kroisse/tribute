@@ -2151,8 +2151,8 @@ mod tests {
                 func.call %ev {callee = @evidence, tribute.calling_convention = "evidence_direct"}
                 %direct = func.constant {func_ref = @direct} : func.func_sig<() -> ()>
                 %evidence = func.constant {func_ref = @evidence} : func.func_sig<(!Evidence) -> ()>
-                "func.call_indirect"(%direct) {signature = func.func_sig<() -> ()>, tribute.calling_convention = "direct"}
-                "func.call_indirect"(%evidence, %ev) {signature = func.func_sig<(!Evidence) -> ()>, tribute.calling_convention = "evidence_direct"}
+                func.call_indirect %direct() attributes {tribute.calling_convention = "direct"} : () -> ()
+                func.call_indirect %evidence(%ev) attributes {tribute.calling_convention = "evidence_direct"} : (!Evidence) -> ()
                 %nil = func.call {callee = @unit, tribute.calling_convention = "direct"} : core.nil
                 func.return
             }
@@ -2226,7 +2226,7 @@ mod tests {
   func.func @evidence() -> core.never attributes {tribute.calling_convention = "evidence_direct"} { func.unreachable }
   func.func @cps() -> core.never attributes {tribute.calling_convention = "cps"} { func.unreachable }
   func.func @run(%callee: core.i32, %evidence: core.i32, %env: tribute_rt.anyref, %done: core.i32, %dispatch: core.i32, %value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-    "func.tail_call_indirect"(%callee, %evidence, %env, %done, %dispatch, %value) {signature = func.func_sig<(core.i32, tribute_rt.anyref, core.i32, core.i32, core.i32) -> core.never>, tribute.calling_convention = "cps"}
+    func.tail_call_indirect %callee(%evidence, %env, %done, %dispatch, %value) attributes {tribute.calling_convention = "cps"} : (core.i32, tribute_rt.anyref, core.i32, core.i32, core.i32) -> core.never
   }
 }"#,
         );
@@ -2273,7 +2273,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @run(%callee: core.i32, %value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-    "func.tail_call_indirect"(%callee, %value) {signature = func.func_sig<(core.i32) -> core.never>, tribute.calling_convention = "cps"}
+    func.tail_call_indirect %callee(%value) attributes {tribute.calling_convention = "cps"} : (core.i32) -> core.never
   }
 }"#,
         );
@@ -2798,7 +2798,7 @@ mod tests {
             r#"core.module @test {
   !callback = closure.closure<func.func_sig<() -> core.i32>>
   func.func @run(%callback: !callback) -> core.i32 attributes {tribute.calling_convention = "direct"} {
-    %result = "func.call_indirect"(%callback) {signature = func.func_sig<() -> core.i32>, tribute.calling_convention = "direct"} : core.i32
+    %result = func.call_indirect %callback() attributes {tribute.calling_convention = "direct"} : () -> core.i32
     func.return %result
   }
 }"#,

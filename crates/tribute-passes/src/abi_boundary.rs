@@ -607,7 +607,7 @@ mod tests {
   }
   func.func @caller(%value: core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
     %reference = func.constant {func_ref = @target} : func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>
-    "func.tail_call_indirect"(%reference, %value) {signature = func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>}
+    func.tail_call_indirect %reference(%value) : (core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}
   }
 }"#,
         );

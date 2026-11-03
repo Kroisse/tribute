@@ -1108,7 +1108,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.func @ordinary(%table: core.i32, %value: core.i32) -> core.i32 {
-    %result = "wasm.call_indirect"(%table, %value) {signature = wasm.func_sig<(core.i32) -> core.i32>} : core.i32
+    %result = wasm.call_indirect %table(%value) : (core.i32) -> core.i32
     wasm.return %result
   }
   wasm.func @plain(%table: core.i32, %value: core.i32) -> core.i32 {
@@ -1116,7 +1116,7 @@ mod tests {
     wasm.return %result
   }
   wasm.func @tail(%table: core.i32, %value: core.i32) -> core.nil {
-    "wasm.return_call_indirect"(%table, %value) {signature = wasm.func_sig<(core.i32) -> core.nil>}
+    wasm.return_call_indirect %table(%value) : (core.i32) -> core.nil
   }
   wasm.func @direct() -> core.nil {
     wasm.return
