@@ -606,7 +606,7 @@ mod result_list_tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
-            "core.module @m { func.func @f(%x: core.nil) { func.return } }",
+            "core.module @m { func.func @f(%x: core.nil) { \"func.return\"() } }",
         );
         let op = module.ops(&ctx)[0];
         let function = func::Func::from_op(&ctx, op).unwrap();

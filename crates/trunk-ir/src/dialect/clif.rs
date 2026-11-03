@@ -596,14 +596,14 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   clif.func @ordinary(%callee: core.ptr, %value: core.i32) -> core.i32 {
-    %result = clif.call_indirect %callee, %value {sig = clif.func_sig<(core.i32) -> core.i32>} : core.i32
-    clif.return %result
+    %result = "clif.call_indirect"(%callee, %value) {sig = clif.func_sig<(core.i32) -> core.i32>} : core.i32
+    "clif.return"(%result)
   }
   clif.func @tail(%callee: core.ptr, %value: core.i32) -> core.nil {
-    clif.return_call_indirect %callee, %value {sig = clif.func_sig<(core.i32) -> core.nil>}
+    "clif.return_call_indirect"(%callee, %value) {sig = clif.func_sig<(core.i32) -> core.nil>}
   }
   clif.func @direct() -> core.nil {
-    clif.return
+    "clif.return"()
   }
 }"#,
         );
@@ -667,8 +667,8 @@ mod tests {
         let source = r#"core.module @test {
   clif.func @external(%arg0: core.i32) -> core.i32 attributes {abi = "C"}
   clif.func @pair(%0: core.i32) -> (core.i32, core.i64), {call_conv = "tail"} {
-      %1 = clif.iconst {value = 1} : core.i64
-      clif.return %0, %1
+      %1 = "clif.iconst"() {value = 1} : core.i64
+      "clif.return"(%0, %1)
   }
 }
 "#;
@@ -744,11 +744,11 @@ mod branch_table_tests {
     fn branch_tables_round_trip() {
         assert_round_trips(
             "br_table %index [^default, ^first, ^second]",
-            "clif.br_table %0 [^bb1, ^bb2, ^bb3]",
+            "\"clif.br_table\"(%0)[^bb1, ^bb2, ^bb3]",
         );
         assert_round_trips(
             "switch %index [^default, ^first, ^second] {cases = [0, 5]}",
-            "clif.switch %0 [^bb1, ^bb2, ^bb3] {cases = [0, 5]}",
+            "\"clif.switch\"(%0)[^bb1, ^bb2, ^bb3] {cases = [0, 5]}",
         );
     }
 

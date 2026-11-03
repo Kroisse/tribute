@@ -79,7 +79,7 @@ mod tribute_rt {
     /// the reference. See the closure storage layout in `new-plans/ir.md`.
     ///
     /// ```text
-    /// %table = tribute_rt.convention_table {entries = [@f]} : tribute_rt.convention_table_ref
+    /// %table = "tribute_rt.convention_table"() {entries = [@f]} : tribute_rt.convention_table_ref
     /// ```
     ///
     /// Its result is a `convention_table_ref` until the target converts that
@@ -92,7 +92,7 @@ mod tribute_rt {
     /// and the function table index `table + index` on Wasm.
     ///
     /// ```text
-    /// %entry = tribute_rt.convention_entry %table {index = 0} : core.i32
+    /// %entry = "tribute_rt.convention_entry"(%table) {index = 0} : core.i32
     /// ```
     ///
     /// `table` is a `convention_table_ref` until the target converts that
@@ -399,7 +399,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f(%i: core.i32, %n: tribute_rt.nat, %b: core.i1, %f: core.f64, %any: tribute_rt.anyref, %p: core.ptr) {
-    func.return
+    "func.return"()
   }
 }"#,
         );
@@ -485,9 +485,9 @@ mod tests {
         fn unbox_of_a_different_box_kind_is_not_folded() {
             let (text, changed) = run(r#"core.module @test {
   func.func @f(%x: core.i64) -> core.f64 {
-    %b = tribute_rt.box_int %x : tribute_rt.anyref
-    %u = tribute_rt.unbox_float %b : core.f64
-    func.return %u
+    %b = "tribute_rt.box_int"(%x) : tribute_rt.anyref
+    %u = "tribute_rt.unbox_float"(%b) : core.f64
+    "func.return"(%u)
   }
 }"#);
             assert!(!changed);
@@ -498,9 +498,9 @@ mod tests {
         fn unbox_of_a_mistyped_box_is_not_folded() {
             let (text, changed) = run(r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i64 {
-    %b = tribute_rt.box_int %x : tribute_rt.anyref
-    %u = tribute_rt.unbox_int %b : core.i64
-    func.return %u
+    %b = "tribute_rt.box_int"(%x) : tribute_rt.anyref
+    %u = "tribute_rt.unbox_int"(%b) : core.i64
+    "func.return"(%u)
   }
 }"#);
             assert!(!changed);
@@ -511,8 +511,8 @@ mod tests {
         fn unbox_of_a_block_argument_is_not_folded() {
             let (text, changed) = run(r#"core.module @test {
   func.func @f(%b: tribute_rt.anyref) -> core.i64 {
-    %u = tribute_rt.unbox_int %b : core.i64
-    func.return %u
+    %u = "tribute_rt.unbox_int"(%b) : core.i64
+    "func.return"(%u)
   }
 }"#);
             assert!(!changed);

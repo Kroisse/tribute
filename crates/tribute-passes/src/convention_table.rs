@@ -466,12 +466,12 @@ mod tests {
             r#"core.module @test {
   func.func @main(%y: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
     %f = closure.lambda [%y] direct(%x: core.i32) -> core.i32 {
-      func.return %x
+      "func.return"(%x)
     }
     %g = closure.lambda [%y] direct(%x: core.i32) -> core.i32 {
-      func.return %y
+      "func.return"(%y)
     }
-    func.return %y
+    "func.return"(%y)
   }
 }"#,
         );
@@ -517,27 +517,27 @@ mod tests {
   tribute_cps.func @direct(%y: core.i32) -> core.i32 convention(direct) {
     %f = tribute_cps.lambda(%x: core.i32) -> core.i32 captures [%y] entries {
       direct {
-        %sum = arith.addi %x, %y : core.i32
-        tribute_control.return %sum
+        %sum = "arith.addi"(%x, %y) : core.i32
+        "tribute_control.return"(%sum)
       }
     }
     %g = tribute_cps.lambda(%x: core.i32) -> core.i32 captures [] entries {
       direct {
-        tribute_control.return %x
+        "tribute_control.return"(%x)
       }
     }
-    %a = tribute_cps.call_indirect %f, %y {convention = "direct"} : core.i32
-    %b = tribute_cps.call_indirect %g, %a {convention = "direct"} : core.i32
-    tribute_control.return %b
+    %a = "tribute_cps.call_indirect"(%f, %y) {convention = "direct"} : core.i32
+    %b = "tribute_cps.call_indirect"(%g, %a) {convention = "direct"} : core.i32
+    "tribute_control.return"(%b)
   }
   tribute_cps.func @evidence(%y: core.i32) -> core.i32 convention(evidence_direct) {
     %h = tribute_cps.lambda(%x: core.i32) -> core.i32 captures [] entries {
       evidence_direct {
-        tribute_control.return %x
+        "tribute_control.return"(%x)
       }
     }
-    %r = tribute_cps.call_indirect %h, %y {convention = "evidence_direct"} : core.i32
-    tribute_control.return %r
+    %r = "tribute_cps.call_indirect"(%h, %y) {convention = "evidence_direct"} : core.i32
+    "tribute_control.return"(%r)
   }
 }"#,
         );

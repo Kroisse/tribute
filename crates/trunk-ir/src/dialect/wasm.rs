@@ -309,7 +309,7 @@ mod wasm {
     /// before emission.
     ///
     /// ```text
-    /// %wide = wasm.ref_upcast %narrow : wasm.structref
+    /// %wide = "wasm.ref_upcast"(%narrow) : wasm.structref
     /// ```
     #[verify]
     fn ref_upcast(r#ref: Value<_>) -> Value<_> {}
@@ -898,7 +898,7 @@ mod tests {
             let module = parse_test_module(
                 &mut ctx,
                 &format!(
-                    "core.module @test {{\n  func.func @f(%s: wasm.structref) -> core.nil {{\n    %w = wasm.ref_upcast %s : {result}\n    func.return\n  }}\n}}"
+                    "core.module @test {{\n  func.func @f(%s: wasm.structref) -> core.nil {{\n    %w = \"wasm.ref_upcast\"(%s) : {result}\n    \"func.return\"()\n  }}\n}}"
                 ),
             );
             crate::validation::validate_operation_verifiers(&ctx, module).is_ok()
@@ -921,15 +921,15 @@ mod tests {
             crate::validation::validate_op_schemas(&ctx, module.op()).is_ok()
         };
         assert!(schema_ok(
-            "%e = wasm.array_get %a, %n {type_idx = 0} : core.i32"
+            "%e = \"wasm.array_get\"(%a, %n) {type_idx = 0} : core.i32"
         ));
         assert!(!schema_ok(
-            "%e = wasm.array_get %a, %w {type_idx = 0} : core.i32"
+            "%e = \"wasm.array_get\"(%a, %w) {type_idx = 0} : core.i32"
         ));
-        assert!(schema_ok("%l = wasm.array_len %a : core.i32"));
-        assert!(!schema_ok("%l = wasm.array_len %a : core.i64"));
+        assert!(schema_ok("%l = \"wasm.array_len\"(%a) : core.i32"));
+        assert!(!schema_ok("%l = \"wasm.array_len\"(%a) : core.i64"));
         assert!(!schema_ok(
-            "wasm.array_copy %a, %n, %a, %n, %w {dst_type_idx = 0, src_type_idx = 0}"
+            "\"wasm.array_copy\"(%a, %n, %a, %n, %w) {dst_type_idx = 0, src_type_idx = 0}"
         ));
     }
 
@@ -940,18 +940,18 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.func @ordinary(%table: core.i32, %value: core.i32) -> core.i32 {
-    %result = wasm.call_indirect %table, %value {signature = wasm.func_sig<(core.i32) -> core.i32>} : core.i32
-    wasm.return %result
+    %result = "wasm.call_indirect"(%table, %value) {signature = wasm.func_sig<(core.i32) -> core.i32>} : core.i32
+    "wasm.return"(%result)
   }
   wasm.func @plain(%table: core.i32, %value: core.i32) -> core.i32 {
-    %result = wasm.call_indirect %table, %value : core.i32
-    wasm.return %result
+    %result = "wasm.call_indirect"(%table, %value) : core.i32
+    "wasm.return"(%result)
   }
   wasm.func @tail(%table: core.i32, %value: core.i32) -> core.nil {
-    wasm.return_call_indirect %table, %value {signature = wasm.func_sig<(core.i32) -> core.nil>}
+    "wasm.return_call_indirect"(%table, %value) {signature = wasm.func_sig<(core.i32) -> core.nil>}
   }
   wasm.func @direct() -> core.nil {
-    wasm.return
+    "wasm.return"()
   }
 }"#,
         );
@@ -1016,8 +1016,8 @@ mod tests {
         let source = r#"core.module @test {
   wasm.func @external(%arg0: core.i32) -> core.i32 attributes {abi = "C"}
   wasm.func @pair(%0: core.i32) -> (core.i32, core.i64) {
-      %1 = wasm.i64_const {value = 1} : core.i64
-      wasm.return %0, %1
+      %1 = "wasm.i64_const"() {value = 1} : core.i64
+      "wasm.return"(%0, %1)
   }
 }
 "#;

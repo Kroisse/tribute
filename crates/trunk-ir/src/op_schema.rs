@@ -1195,12 +1195,12 @@ mod tests {
             r#"core.module @m {
   func.func @decl(%x: core.i32)
   func.func @def(%c: core.i1) {
-    scf.if %c {
-      scf.yield
-    } {
-      scf.yield
-    }
-    func.return
+    "scf.if"(%c) ({
+      "scf.yield"()
+    }, {
+      "scf.yield"()
+    })
+    "func.return"()
   }
 }"#,
         );
@@ -1214,9 +1214,9 @@ mod tests {
         let text = schema_errors(
             r#"core.module @m {
   func.func @f(%a: core.f64, %b: core.f64) {
-    %c = arith.cmpf %a, %b {predicate = @olt} : core.i1
-    %d = arith.cmpf %a : core.i1
-    func.return
+    %c = "arith.cmpf"(%a, %b) {predicate = @olt} : core.i1
+    %d = "arith.cmpf"(%a) : core.i1
+    "func.return"()
   }
 }"#,
         );

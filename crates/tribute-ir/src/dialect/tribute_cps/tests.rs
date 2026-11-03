@@ -14,12 +14,12 @@ const MODULE: &str = r#"core.module @test {
   tribute_cps.func_table @"declared$8" = {direct = @declared}
   tribute_cps.func @apply(%0: !t0, %1: core.i32) -> core.i32 convention(direct) {
       %2 = tribute_cps.call_indirect %0(%1) convention(direct) : core.i32
-      tribute_control.return %2
+      "tribute_control.return"(%2)
   }
   tribute_cps.func @outer['a0](%0: core.i32) -> core.i32 row(| 'a0) convention(cps) attributes {visibility = "private"} {
       %1 = tribute_cps.lambda(%2: core.i32) -> core.i32 row(| 'a0) captures [%0] entries {
         cps {
-            tribute_control.return %0
+            "tribute_control.return"(%0)
         }
       }
       %3 = tribute_cps.func_ref @"declared$8" : !t0
@@ -60,10 +60,10 @@ const TWO_BODIES: &str = r#"core.module @test {
   tribute_cps.func @outer(%0: core.i32) -> core.i32 convention(cps) {
       %1 = tribute_cps.lambda(%2: core.i32) -> core.i32 captures [%0] entries {
         direct {
-            tribute_control.return %0
+            "tribute_control.return"(%0)
         }
         cps {
-            tribute_control.return %2
+            "tribute_control.return"(%2)
         }
       }
       tribute_cps.tail_call_indirect %1(%0) convention(cps)
@@ -135,7 +135,7 @@ fn a_concise_function_must_write_its_convention() {
 fn a_convention_must_be_a_keyword() {
     let (ctx, module) = parse(
         r#"core.module @test {
-  tribute_cps.func {convention = "fast", sym_name = "f", type = tribute_control.func_sig<() -> core.i32>}
+  "tribute_cps.func"() {convention = "fast", sym_name = "f", type = tribute_control.func_sig<() -> core.i32>}
 }
 "#,
     );
@@ -149,7 +149,7 @@ fn a_convention_must_be_a_keyword() {
         "{errors:?}"
     );
     assert!(
-        print_module(&ctx, module.op()).contains("tribute_cps.func {"),
+        print_module(&ctx, module.op()).contains("\"tribute_cps.func\"() {"),
         "an invalid convention prints generically"
     );
 }
@@ -173,10 +173,10 @@ fn a_module_holds_one_form_of_its_callables() {
     let errors = messages(
         r#"core.module @test {
   tribute_cps.func @f(%x: core.i32) -> core.i32 convention(direct) {
-    tribute_control.return %x
+    "tribute_control.return"(%x)
   }
   tribute_control.func @g(%x: core.i32) -> core.i32 {
-    tribute_control.return %x
+    "tribute_control.return"(%x)
   }
 }
 "#,
@@ -256,13 +256,13 @@ fn a_function_reference_names_a_function_table() {
     let errors = messages(
         r#"core.module @test {
   tribute_cps.func @target() -> core.i32 convention(direct) {
-    %0 = arith.const {value = 1} : core.i32
-    tribute_control.return %0
+    %0 = "arith.const"() {value = 1} : core.i32
+    "tribute_control.return"(%0)
   }
   tribute_cps.func @f() -> core.i32 convention(direct) {
-    %0 = tribute_cps.func_ref {func_ref = @target} : tribute_control.func_sig<() -> core.i32>
+    %0 = "tribute_cps.func_ref"() {func_ref = @target} : tribute_control.func_sig<() -> core.i32>
     %1 = tribute_cps.call_indirect %0() convention(direct) : core.i32
-    tribute_control.return %1
+    "tribute_control.return"(%1)
   }
 }
 "#,
@@ -301,14 +301,14 @@ fn every_body_takes_the_parameters_and_its_own_convention() {
   tribute_cps.func @outer(%0: core.i32) -> core.i32 convention(cps) {
       %1 = tribute_cps.lambda(%2: !t0) -> core.i32 captures [%0] entries {
         direct {
-            tribute_control.return %0
+            "tribute_control.return"(%0)
         }
         cps {
             %3 = tribute_cps.call_indirect %2() convention(cps) : core.i32
-            tribute_control.return %3
+            "tribute_control.return"(%3)
         }
       }
-      tribute_control.return %0
+      "tribute_control.return"(%0)
   }
 }
 "#;
@@ -318,7 +318,7 @@ fn every_body_takes_the_parameters_and_its_own_convention() {
 
     // A transfer in the Direct body may not be stronger than that body.
     let stronger = input.replace(
-        "direct {\n            tribute_control.return %0",
+        "direct {\n            \"tribute_control.return\"(%0)",
         "direct {\n            tribute_cps.tail_call_indirect %2() convention(cps)",
     );
     assert!(
@@ -354,8 +354,8 @@ fn a_function_table_and_its_targets_are_in_the_module_of_its_references() {
         r#"core.module @test {
   core.module @inner {
     tribute_cps.func @id() -> core.i32 convention(direct) {
-      %0 = arith.const {value = 1} : core.i32
-      tribute_control.return %0
+      %0 = "arith.const"() {value = 1} : core.i32
+      "tribute_control.return"(%0)
     }
     tribute_cps.func_table @"id$8" = {direct = @id}
   }
@@ -363,7 +363,7 @@ fn a_function_table_and_its_targets_are_in_the_module_of_its_references() {
   tribute_cps.func @f() -> core.i32 convention(direct) {
     %0 = tribute_cps.func_ref @inner::@"id$8" : tribute_control.func_sig<() -> core.i32>
     %1 = tribute_cps.call_indirect %0() convention(direct) : core.i32
-    tribute_control.return %1
+    "tribute_control.return"(%1)
   }
 }
 "#,
@@ -382,11 +382,11 @@ fn the_targets_of_a_function_table_share_one_source_signature() {
     let errors = messages(
         r#"core.module @test {
   tribute_cps.func @a() -> core.i32 convention(direct) {
-    %0 = arith.const {value = 1} : core.i32
-    tribute_control.return %0
+    %0 = "arith.const"() {value = 1} : core.i32
+    "tribute_control.return"(%0)
   }
   tribute_cps.func @b(%x: core.i32) -> core.i32 convention(cps) {
-    tribute_control.return %x
+    "tribute_control.return"(%x)
   }
   tribute_cps.func_table @t = {direct = @a, cps = @b}
 }

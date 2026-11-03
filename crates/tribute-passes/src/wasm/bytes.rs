@@ -91,12 +91,12 @@ impl Pass for LowerBytesIntrinsics {
 ///
 /// Emits:
 ///   %view   = core.unrealized_conversion_cast %bytes : !bytes
-///   %data   = adt.struct_get %view {field = 0} : !bytes_data
-///   %offset = adt.struct_get %view {field = 1} : core.i32
-///   %at     = arith.addi %offset, %index : core.i32
-///   %pos    = arith.index_castui %at : core.index
-///   %byte   = adt.array_get %data, %pos : core.i8
-///   %result = arith.extui %byte : core.i32
+///   %data   = "adt.struct_get"(%view) {field = 0} : !bytes_data
+///   %offset = "adt.struct_get"(%view) {field = 1} : core.i32
+///   %at     = "arith.addi"(%offset, %index) : core.i32
+///   %pos    = "arith.index_castui"(%at) : core.index
+///   %byte   = "adt.array_get"(%data, %pos) : core.i8
+///   %result = "arith.extui"(%byte) : core.i32
 fn lower_call(ctx: &mut IrContext, call: OpRef) {
     let [bytes, index] = ctx.op_operands(call) else {
         unreachable!("call arity is validated before lowering")
@@ -177,8 +177,8 @@ mod tests {
             r#"core.module @test {
   func.func @read(%bytes: core.bytes, %index: core.i32) -> core.i32 attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::__bytes_get_or_panic"}
   func.func @user(%bytes: core.bytes, %index: core.i32) -> core.i32 {
-    %byte = func.call %bytes, %index {callee = @read} : core.i32
-    func.return %byte
+    %byte = "func.call"(%bytes, %index) {callee = @read} : core.i32
+    "func.return"(%byte)
   }
 }"#,
         );

@@ -147,7 +147,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  wasm.global {valtype = "i32", mutable = false, init = 7}
+  "wasm.global"() {valtype = "i32", mutable = false, init = 7}
   func.func @__tribute_next_tag() -> core.i32 attributes {abi = "C"}
 }"#,
         );
@@ -157,15 +157,15 @@ mod tests {
         assert_eq!(
             print_module(&ctx, module.op()),
             r#"core.module @test {
-  wasm.global {init = 7, mutable = false, valtype = "i32"}
+  "wasm.global"() {init = 7, mutable = false, valtype = "i32"}
   wasm.func @__tribute_next_tag() -> core.i32 {
-      %0 = wasm.global_get {index = 1} : core.i32
-      %1 = wasm.i32_const {value = 1} : core.i32
-      %2 = wasm.i32_add %0, %1 : core.i32
-      wasm.global_set %2 {index = 1}
-      wasm.return %0
+      %0 = "wasm.global_get"() {index = 1} : core.i32
+      %1 = "wasm.i32_const"() {value = 1} : core.i32
+      %2 = "wasm.i32_add"(%0, %1) : core.i32
+      "wasm.global_set"(%2) {index = 1}
+      "wasm.return"(%0)
   }
-  wasm.global {init = 0, mutable = true, valtype = "i32"}
+  "wasm.global"() {init = 0, mutable = true, valtype = "i32"}
 }
 "#
         );
@@ -178,8 +178,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @main() -> core.nil {
-    %nil = core.nil_value : core.nil
-    func.return %nil
+    %nil = "core.nil_value"() : core.nil
+    "func.return"(%nil)
   }
 }"#,
         );

@@ -108,9 +108,9 @@ fn source_logical_root_defers_closure_storage_until_target_finalization() {
 fn empty_result_cps_root_executes_native_done_continuation() {
     let (mut ctx, module) = source_logical_cps_root_module(
         r#"
-            %done = adt.struct_get %frame {field = 0, type = !__tribute_continuation_frame_root_nil} : !Done
-            %nil = core.nil_value : core.nil
-            func.tail_call_indirect %done, %nil {signature = func.func_sig<(core.nil) -> core.never>, tribute.calling_convention = "cps"}
+            %done = "adt.struct_get"(%frame) {field = 0, type = !__tribute_continuation_frame_root_nil} : !Done
+            %nil = "core.nil_value"() : core.nil
+            "func.tail_call_indirect"(%done, %nil) {signature = func.func_sig<(core.nil) -> core.never>, tribute.calling_convention = "cps"}
         "#,
     );
 
@@ -169,11 +169,11 @@ fn root_dispatch_definition_matches_fixed_wasm_tail_signature_and_validates_bina
     use trunk_ir::dialect::wasm;
     let (mut ctx, module) = source_logical_cps_root_module(
         r#"
-            %dispatch = adt.struct_get %frame {field = 1, type = !__tribute_continuation_frame_root_nil} : !Dispatch
-            %resume = adt.ref_null {type = !Resume} : !Resume
-            %product = adt.struct_new {type = !Payload} : !Payload
-            %payload = core.unrealized_conversion_cast %product : tribute_rt.anyref
-            effect.dispatch_cps %evidence, %dispatch, %resume, %payload {ability = @State, op_name = "get", answer_type = core.nil}
+            %dispatch = "adt.struct_get"(%frame) {field = 1, type = !__tribute_continuation_frame_root_nil} : !Dispatch
+            %resume = "adt.ref_null"() {type = !Resume} : !Resume
+            %product = "adt.struct_new"() {type = !Payload} : !Payload
+            %payload = "core.unrealized_conversion_cast"(%product) : tribute_rt.anyref
+            "effect.dispatch_cps"(%evidence, %dispatch, %resume, %payload) {ability = @State, op_name = "get", answer_type = core.nil}
         "#,
     );
     run_target_to_boundary_exit(
@@ -403,8 +403,8 @@ fn boundary_exit_enforcement_rejects_any_violation() {
         &mut ctx,
         r#"core.module @test {tribute.entry = @main} {
   func.func @main() -> core.nil attributes {tribute.calling_convention = "direct"} {
-    %nil = core.nil_value : core.nil
-    func.return %nil
+    %nil = "core.nil_value"() : core.nil
+    "func.return"(%nil)
   }
 }"#,
     );
@@ -761,24 +761,24 @@ fn native_one_shot_wrapper_traps_on_second_invocation() {
   !state = adt.struct<OneShotState(consumed: core.i1)>
 
   func.func @one_shot_wrapper(%state: !state, %value: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
-    %consumed = adt.struct_get %state {field = 0, type = !state} : core.i1
-    %answer = scf.if %consumed : core.i32 {
-      func.unreachable
-    } {
-      %consumed_true = arith.const {value = 1} : core.i1
-      adt.struct_set %state, %consumed_true {field = 0, type = !state}
-      scf.yield %value
-    }
-    func.return %answer
+    %consumed = "adt.struct_get"(%state) {field = 0, type = !state} : core.i1
+    %answer = "scf.if"(%consumed) ({
+      "func.unreachable"()
+    }, {
+      %consumed_true = "arith.const"() {value = 1} : core.i1
+      "adt.struct_set"(%state, %consumed_true) {field = 0, type = !state}
+      "scf.yield"(%value)
+    }) : core.i32
+    "func.return"(%answer)
   }
 
   func.func @main() -> core.i32 attributes {tribute.calling_convention = "direct"} {
-    %not_consumed = arith.const {value = 0} : core.i1
-    %state = adt.struct_new %not_consumed {type = !state} : !state
-    %input = arith.const {value = 0} : core.i32
-    %first = func.call %state, %input {callee = @one_shot_wrapper, tribute.calling_convention = "direct"} : core.i32
-    %second = func.call %state, %first {callee = @one_shot_wrapper, tribute.calling_convention = "direct"} : core.i32
-    func.return %second
+    %not_consumed = "arith.const"() {value = 0} : core.i1
+    %state = "adt.struct_new"(%not_consumed) {type = !state} : !state
+    %input = "arith.const"() {value = 0} : core.i32
+    %first = "func.call"(%state, %input) {callee = @one_shot_wrapper, tribute.calling_convention = "direct"} : core.i32
+    %second = "func.call"(%state, %first) {callee = @one_shot_wrapper, tribute.calling_convention = "direct"} : core.i32
+    "func.return"(%second)
   }
 }"#;
     let mut ctx = IrContext::new();
@@ -916,8 +916,8 @@ fn physical_module_with_mismatched_tail_convention_is_rejected() {
 fn debug_use_chain_verifier_reports_offending_pass() {
     let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %y = arith.addi %x, %x : core.i32
-    func.return %y
+    %y = "arith.addi"(%x, %x) : core.i32
+    "func.return"(%y)
   }
 }"#;
     let mut ctx = IrContext::new();
@@ -985,8 +985,8 @@ fn debug_use_chain_verifier_reports_offending_pass() {
 fn debug_verifier_reports_schema_violations_after_a_pass() {
     let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %y = arith.addi %x, %x : core.i32
-    func.return %y
+    %y = "arith.addi"(%x, %x) : core.i32
+    "func.return"(%y)
   }
 }"#;
     let mut ctx = IrContext::new();
@@ -1076,7 +1076,7 @@ fn main() -> Nil {
     let declared = |operation: &str| {
         logical
             .find(&format!(
-                "ability.operation {{kind = \"op\", op_name = \"{operation}\""
+                "\"ability.operation\"() {{kind = \"op\", op_name = \"{operation}\""
             ))
             .unwrap_or_else(|| panic!("missing declaration of `{operation}`:\n{logical}"))
     };

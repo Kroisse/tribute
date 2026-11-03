@@ -7,7 +7,7 @@
 //!
 //! // Output:
 //! %payload = pack %args into the canonical operation product
-//! %erased = effect.dispatch_tail %evidence, %payload
+//! %erased = "effect.dispatch_tail"(%evidence, %payload)
 //!   { ability: @State, op_name: "get" }
 //! ```
 //!
@@ -200,9 +200,9 @@ mod tests {
             &format!(
                 r#"core.module @test {{
   func.func @test_fn(%ev: {ev_ty}) -> tribute_rt.anyref attributes {{tribute.calling_convention = "evidence_direct"}} {{
-    %msg = arith.const {{value = 1}} : tribute_rt.anyref
-    %result = ability.call %msg {{ability = @Console, op_name = "print"}} : tribute_rt.anyref
-    func.return %result
+    %msg = "arith.const"() {{value = 1}} : tribute_rt.anyref
+    %result = "ability.call"(%msg) {{ability = @Console, op_name = "print"}} : tribute_rt.anyref
+    "func.return"(%result)
   }}
 }}"#
             ),
@@ -265,8 +265,8 @@ mod tests {
             &format!(
                 r#"core.module @test {{
   func.func @test_fn(%ev: {ev_ty}) -> core.i32 attributes {{tribute.calling_convention = "evidence_direct"}} {{
-    %result = ability.call {{ability = @Counter, op_name = "next"}} : core.i32
-    func.return %result
+    %result = "ability.call"() {{ability = @Counter, op_name = "next"}} : core.i32
+    "func.return"(%result)
   }}
 }}"#
             ),

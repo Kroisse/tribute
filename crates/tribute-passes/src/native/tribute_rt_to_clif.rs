@@ -521,7 +521,7 @@ mod tests {
                 r#"core.module @test {{
   func.func @f(%0: {scalar}) -> core.ptr {{
     %1 = tribute_rt.box_{kind} %0 : core.ptr
-    func.return %1
+    "func.return"(%1)
   }}
 }}"#
             ));
@@ -531,7 +531,7 @@ mod tests {
                 r#"core.module @test {{
   func.func @f(%0: core.ptr) -> {scalar} {{
     %1 = tribute_rt.unbox_{kind} %0 : {scalar}
-    func.return %1
+    "func.return"(%1)
   }}
 }}"#
             ));
@@ -544,9 +544,9 @@ mod tests {
         let mut ctx = IrContext::new();
         let ir = r#"core.module @test {
   func.func @f(%0: core.ptr) -> core.ptr {
-    %1 = tribute_rt.retain %0 : core.ptr
-    tribute_rt.release %0 {alloc_size = 0}
-    func.return %1
+    %1 = "tribute_rt.retain"(%0) : core.ptr
+    "tribute_rt.release"(%0) {alloc_size = 0}
+    "func.return"(%1)
   }
 }"#;
         let module = parse_test_module(&mut ctx, ir);

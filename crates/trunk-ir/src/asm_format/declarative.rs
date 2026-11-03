@@ -1241,8 +1241,8 @@ mod tests {
     fn calls_read_generic_syntax_and_print_other_results_generically() {
         let generic = r#"core.module @m {
   asm_format_test.fun @f(%0: core.ptr, %1: core.i32) {
-      %2 = asm_format_test.apply %0, %1 {signature = func.func_sig<(core.i32) -> core.i32>} : core.i32
-      %3 = asm_format_test.apply %0, %1 {signature = func.func_sig<(core.i32) -> core.i32>} : core.i1
+      %2 = "asm_format_test.apply"(%0, %1) {signature = func.func_sig<(core.i32) -> core.i32>} : core.i32
+      %3 = "asm_format_test.apply"(%0, %1) {signature = func.func_sig<(core.i32) -> core.i32>} : core.i1
   }
 }
 "#;
@@ -1251,7 +1251,7 @@ mod tests {
             r#"core.module @m {
   asm_format_test.fun @f(%0: core.ptr, %1: core.i32) {
       %2 = asm_format_test.apply %0(%1) : (core.i32) -> core.i32
-      %3 = asm_format_test.apply %0, %1 {signature = func.func_sig<(core.i32) -> core.i32>} : core.i1
+      %3 = "asm_format_test.apply"(%0, %1) {signature = func.func_sig<(core.i32) -> core.i32>} : core.i1
   }
 }
 "#
@@ -1271,7 +1271,7 @@ mod tests {
             print(
                 r#"core.module @m {
   asm_format_test.pick values n 3 label "none"
-  asm_format_test.pick {label = "none", n = 7}
+  "asm_format_test.pick"() {label = "none", n = 7}
 }
 "#
             ),
@@ -1336,8 +1336,8 @@ mod tests {
 "#,
         );
         assert_eq!(
-            print("core.module @m {\n  asm_format_test.drive {speed = 1}\n}\n"),
-            "core.module @m {\n  asm_format_test.drive {speed = 1}\n}\n"
+            print("core.module @m {\n  \"asm_format_test.drive\"() {speed = 1}\n}\n"),
+            "core.module @m {\n  \"asm_format_test.drive\"() {speed = 1}\n}\n"
         );
         let error = parse_error("core.module @m {\n  asm_format_test.drive go(medium)\n}\n");
         assert!(error.contains("keyword"), "{error}");
@@ -1346,10 +1346,10 @@ mod tests {
     #[test]
     fn generic_signatures_read_back() {
         let generic = r#"core.module @m {
-  asm_format_test.fun {sym_name = "g", type = func.func_sig<(core.i32) -> core.i32, {call_conv = "tail"}>} {
+  "asm_format_test.fun"() ({
     ^bb0(%0: core.i32):
       asm_format_test.invoke call @ret(%0)
-  }
+  }) {sym_name = "g", type = func.func_sig<(core.i32) -> core.i32, {call_conv = "tail"}>}
 }
 "#;
         assert_eq!(
@@ -1366,10 +1366,10 @@ mod tests {
     #[test]
     fn signatures_that_do_not_match_their_body_print_generically() {
         let text = r#"core.module @m {
-  asm_format_test.fun {sym_name = "g", type = func.func_sig<(core.i32) -> ()>} {
+  "asm_format_test.fun"() ({
     ^bb0(%0: core.i64):
       asm_format_test.invoke call @ret(%0)
-  }
+  }) {sym_name = "g", type = func.func_sig<(core.i32) -> ()>}
 }
 "#;
         assert_eq!(print(text), text);
@@ -1445,8 +1445,8 @@ mod tests {
     #[test]
     fn false_flags_print_generically_and_read_back() {
         let text = r#"core.module @m {
-  asm_format_test.mark {quick = false}
-  asm_format_test.toggle {on = false}
+  "asm_format_test.mark"() {quick = false}
+  "asm_format_test.toggle"() {on = false}
 }
 "#;
         assert_eq!(print(text), text);
@@ -1465,7 +1465,7 @@ mod tests {
       %0 = asm_format_test.reference @f note "n" : core.i32
       %1 = asm_format_test.reference @g : core.i32
       asm_format_test.mark now
-      attributes.probe
+      "attributes.probe"()
   }
 }
 "#,
@@ -1475,10 +1475,10 @@ mod tests {
     #[test]
     fn generic_syntax_reads_as_the_same_operation() {
         let generic = r#"core.module @m {
-  %0 = asm_format_test.tagged {note = "n", tag = @f} : core.i32
-  asm_format_test.def {kind = "k", sym_name = "d"}
-  %1 = asm_format_test.reference {target = @f} : core.i32
-  asm_format_test.named @t {extra = 1}
+  %0 = "asm_format_test.tagged"() {note = "n", tag = @f} : core.i32
+  "asm_format_test.def"() {kind = "k", sym_name = "d"}
+  %1 = "asm_format_test.reference"() {target = @f} : core.i32
+  "asm_format_test.named"() {extra = 1, sym_name = "t"}
 }
 "#;
         assert_eq!(
@@ -1487,7 +1487,7 @@ mod tests {
   %0 = asm_format_test.tagged ref @f note "n" : core.i32
   asm_format_test.def @d kind "k"
   %0 = asm_format_test.reference @f : core.i32
-  asm_format_test.named {extra = 1, sym_name = "t"}
+  "asm_format_test.named"() {extra = 1, sym_name = "t"}
 }
 "#
         );
@@ -1496,9 +1496,9 @@ mod tests {
     #[test]
     fn operations_the_format_cannot_spell_print_generically() {
         let text = r#"core.module @m {
-  %0 = asm_format_test.tagged {extra = 1, tag = @f} : core.i32
-  asm_format_test.def {inferred = false, kind = "k", sym_name = "d"}
-  asm_format_test.def {sym_name = "e"}
+  %0 = "asm_format_test.tagged"() {extra = 1, tag = @f} : core.i32
+  "asm_format_test.def"() {inferred = false, kind = "k", sym_name = "d"}
+  "asm_format_test.def"() {sym_name = "e"}
 }
 "#;
         assert_eq!(print(text), text);

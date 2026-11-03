@@ -172,13 +172,13 @@ mod tests {
             r#"core.module @test {
   clif.func @f() -> core.nil {
   ^entry:
-    clif.jump [^exit]
+    "clif.jump"()[^exit]
   ^exit:
-    clif.return
+    "clif.return"()
   }
   clif.func @g() -> core.nil {
   ^entry:
-    clif.return
+    "clif.return"()
   }
 }"#,
         );

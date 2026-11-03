@@ -186,16 +186,16 @@ mod tests {
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
-  clif.func {{sym_name = "select", type = clif.func_sig<({discriminant_ty}) -> ()>}} {{
+  "clif.func"() ({{
     ^entry(%choice: {discriminant_ty}):
-      cf.switch %choice [^fallback, ^first, ^second] {{cases = [7, -1]}}
+      "cf.switch"(%choice)[^fallback, ^first, ^second] {{cases = [7, -1]}}
     ^fallback:
-      clif.return
+      "clif.return"()
     ^first:
-      clif.return
+      "clif.return"()
     ^second:
-      clif.return
-  }}
+      "clif.return"()
+  }}) {{sym_name = "select", type = clif.func_sig<({discriminant_ty}) -> ()>}}
 }}"#
                 ),
             );
@@ -205,7 +205,7 @@ mod tests {
             let printed = print_module(&ctx, module.op());
             assert!(
                 printed.contains(&format!(
-                    "clif.switch %0 [^bb1, ^bb2, ^bb3] {{cases = {expected}}}"
+                    "\"clif.switch\"(%0)[^bb1, ^bb2, ^bb3] {{cases = {expected}}}"
                 )),
                 "{printed}"
             );

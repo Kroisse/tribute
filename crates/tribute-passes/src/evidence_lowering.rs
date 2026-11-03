@@ -513,23 +513,23 @@ mod tests {
     }
 
     const TAIL: &str = r#"  func.func @tail(%ev: !Evidence, %payload: tribute_rt.anyref) -> tribute_rt.anyref {
-    %result = effect.dispatch_tail %ev, %payload {ability = @Console, op_name = "read"} : tribute_rt.anyref
-    func.return %result
+    %result = "effect.dispatch_tail"(%ev, %payload) {ability = @Console, op_name = "read"} : tribute_rt.anyref
+    "func.return"(%result)
   }"#;
 
     const CPS: &str = r#"  func.func @cps(%ev: !Evidence, %dispatch: !Closure, %resume: !Closure, %payload: tribute_rt.anyref) {
-    effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability = @State, op_name = "get", answer_type = core.i32}
+    "effect.dispatch_cps"(%ev, %dispatch, %resume, %payload) {ability = @State, op_name = "get", answer_type = core.i32}
   }"#;
 
     const EXTEND: &str = r#"  func.func @install(%ev: !Evidence, %prompt: core.i32, %tr: !Closure) -> !Evidence {
-    %extended = effect.extend %ev, %prompt, %tr, %ev {ability = @State} : !Evidence
-    func.return %extended
+    %extended = "effect.extend"(%ev, %prompt, %tr, %ev) {ability = @State} : !Evidence
+    "func.return"(%extended)
   }"#;
 
     const SELECT: &str = r#"  func.func @select(%ev: !Evidence) -> !Evidence {
-    %masked = effect.mask %ev {ability = @State} : !Evidence
-    %dup = effect.dup %masked {ability = @State} : !Evidence
-    func.return %dup
+    %masked = "effect.mask"(%ev) {ability = @State} : !Evidence
+    %dup = "effect.dup"(%masked) {ability = @State} : !Evidence
+    "func.return"(%dup)
   }"#;
 
     fn runtime_callee(name: &str) -> SymbolPath {
@@ -594,7 +594,7 @@ mod tests {
             "{printed}"
         );
         assert!(
-            printed.contains(r#"adt.variant_new %2 {tag = "Some""#),
+            printed.contains(r#""adt.variant_new"(%2) {tag = "Some""#),
             "{printed}"
         );
     }
@@ -606,8 +606,8 @@ mod tests {
             &mut ctx,
             &module_text(
                 r#"  func.func @tail_slot(%ev: !Evidence) -> !Evidence {
-    %tail = effect.tail %ev {index = 0} : !Evidence
-    func.return %tail
+    %tail = "effect.tail"(%ev) {index = 0} : !Evidence
+    "func.return"(%tail)
   }"#,
             ),
         );
@@ -626,7 +626,7 @@ mod tests {
             &mut ctx,
             &module_text(
                 r#"  func.func @cps(%ev: !Evidence, %dispatch: !Closure, %resume: !Closure, %payload: tribute_rt.anyref) {
-    %bad = effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability = @State, op_name = "get", answer_type = core.i32} : core.i32
+    %bad = "effect.dispatch_cps"(%ev, %dispatch, %resume, %payload) {ability = @State, op_name = "get", answer_type = core.i32} : core.i32
   }"#,
             ),
         );

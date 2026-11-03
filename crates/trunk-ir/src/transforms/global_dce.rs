@@ -285,23 +285,23 @@ mod tests {
         let module = crate::parser::parse_test_module(
             &mut ctx,
             r#"core.module @root {
-  test.table {entries = [@exported]}
+  "test.table"() {entries = [@exported]}
   func.func @exported() {
-    test.make_closure {func_ref = @captured}
-    func.return
+    "test.make_closure"() {func_ref = @captured}
+    "func.return"()
   }
   func.func @captured() {
-    func.return
+    "func.return"()
   }
   func.func @unused() {
-    test.make_closure {func_ref = @only_from_unused}
-    func.return
+    "test.make_closure"() {func_ref = @only_from_unused}
+    "func.return"()
   }
   func.func @only_from_unused() {
-    func.return
+    "func.return"()
   }
   func.func @named_by_module() {
-    func.return
+    "func.return"()
   }
 }"#,
         );
@@ -337,17 +337,17 @@ mod tests {
             &mut ctx,
             r#"core.module @root {
   func.func @main() {
-    func.call {callee = @a::@same}
-    func.return
+    "func.call"() {callee = @a::@same}
+    "func.return"()
   }
   core.module @a {
     func.func @same() {
-      func.return
+      "func.return"()
     }
   }
   core.module @b {
     func.func @same() {
-      func.return
+      "func.return"()
     }
   }
 }"#,
@@ -372,7 +372,7 @@ mod tests {
             r#"core.module @root {
   core.module @m {
     func.func @init() {
-      func.return
+      "func.return"()
     }
   }
 }"#,
@@ -395,20 +395,20 @@ mod tests {
             &mut ctx,
             r#"core.module @root {
   func.func @main() {
-    func.call {callee = @host}
-    func.return
+    "func.call"() {callee = @host}
+    "func.return"()
   }
   func.func @host() {
     func.func @inner() {
-      func.return
+      "func.return"()
     }
-    func.return
+    "func.return"()
   }
   func.func @dead_host() {
     func.func @dead_inner() {
-      func.return
+      "func.return"()
     }
-    func.return
+    "func.return"()
   }
 }"#,
         );
@@ -442,31 +442,31 @@ mod tests {
 
     const TABLE_MODULE: &str = r#"core.module @root {
   func.func @main() {
-    test.use {table = @REFERENCE}
-    func.return
+    "test.use"() {table = @REFERENCE}
+    "func.return"()
   }
   func.func @dead() {
-    test.use {table = @from_dead}
-    func.return
+    "test.use"() {table = @from_dead}
+    "func.return"()
   }
-  test_symbol.table {sym_name = "live", targets = [@a, @b]}
-  test_symbol.table {sym_name = "from_dead", targets = [@c]}
-  test_symbol.table {sym_name = "unreferenced", targets = [@d]}
+  "test_symbol.table"() {sym_name = "live", targets = [@a, @b]}
+  "test_symbol.table"() {sym_name = "from_dead", targets = [@c]}
+  "test_symbol.table"() {sym_name = "unreferenced", targets = [@d]}
   func.func @a() {
-    func.return
+    "func.return"()
   }
   func.func @b() {
-    func.call {callee = @shared}
-    func.return
+    "func.call"() {callee = @shared}
+    "func.return"()
   }
   func.func @c() {
-    func.return
+    "func.return"()
   }
   func.func @d() {
-    func.return
+    "func.return"()
   }
   func.func @shared() {
-    func.return
+    "func.return"()
   }
 }"#;
 
@@ -503,7 +503,7 @@ mod tests {
             r#"core.module @root {
   func.func @import() attributes {abi = "C"}
   func.func @unused() {
-    func.return
+    "func.return"()
   }
 }"#,
         );

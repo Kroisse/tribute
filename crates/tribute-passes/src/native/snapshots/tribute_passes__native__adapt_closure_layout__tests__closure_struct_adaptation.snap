@@ -8,17 +8,17 @@ core.module @test {
   !_closure_captures = adt.struct<_closure_captures(entries: core.ptr, _0: core.ptr), {closure_base = adt.struct<_closure(entries: core.ptr), {layout = "closure"}>, layout = "closure_captures"}>
 
   clif.func @test_fn() -> core.i32 {
-      %0 = clif.symbol_addr {sym = @__tribute_convention_table_0} : core.ptr
-      %1 = mem.null : core.ptr
-      %2 = adt.struct_new %0, %1 {type = !_closure_captures} : !_closure_captures
-      %3 = core.unrealized_conversion_cast %2 : core.ptr
-      %4 = adt.struct_get %3 {field = 0, type = !_closure_captures} : core.ptr
-      %5 = adt.struct_get %3 {field = 1, type = !_closure_captures} : core.ptr
-      %6 = clif.load %4 {offset = 0} : core.i64
+      %0 = "clif.symbol_addr"() {sym = @__tribute_convention_table_0} : core.ptr
+      %1 = "mem.null"() : core.ptr
+      %2 = "adt.struct_new"(%0, %1) {type = !_closure_captures} : !_closure_captures
+      %3 = "core.unrealized_conversion_cast"(%2) : core.ptr
+      %4 = "adt.struct_get"(%3) {field = 0, type = !_closure_captures} : core.ptr
+      %5 = "adt.struct_get"(%3) {field = 1, type = !_closure_captures} : core.ptr
+      %6 = "clif.load"(%4) {offset = 0} : core.i64
       %7 = clif.call_indirect %6(%5) : (core.ptr) -> core.i32
-      clif.return %7
+      "clif.return"(%7)
   }
-  clif.data {align = 8, bytes = b"\0\0\0\0\0\0\0\0", sym_name = "__tribute_convention_table_0"} {
-      clif.func_reloc {func = @lifted_fn, offset = 0}
-  }
+  "clif.data"() ({
+      "clif.func_reloc"() {func = @lifted_fn, offset = 0}
+  }) {align = 8, bytes = b"\0\0\0\0\0\0\0\0", sym_name = "__tribute_convention_table_0"}
 }

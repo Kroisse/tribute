@@ -541,24 +541,24 @@ mod tests {
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  wasm.table {reftype = "funcref", min = 1, max = 1}
-  wasm.elem {table = 0, offset = 0} {
-    %r = wasm.ref_func {func_name = @constant} : wasm.funcref
-  }
+  "wasm.table"() {reftype = "funcref", min = 1, max = 1}
+  "wasm.elem"() ({
+    %r = "wasm.ref_func"() {func_name = @constant} : wasm.funcref
+  }) {table = 0, offset = 0}
   func.func @f() -> core.nil {
-    %a = tribute_rt.convention_table {entries = [@first, @second]} : tribute_rt.convention_table_ref
-    %b = tribute_rt.convention_table {entries = [@third]} : tribute_rt.convention_table_ref
-    %c = tribute_rt.convention_table {entries = [@first, @second]} : tribute_rt.convention_table_ref
-    %d = tribute_rt.convention_entry %a {index = 0} : core.i32
-    %e = tribute_rt.convention_entry %c {index = 1} : core.i32
-    func.return
+    %a = "tribute_rt.convention_table"() {entries = [@first, @second]} : tribute_rt.convention_table_ref
+    %b = "tribute_rt.convention_table"() {entries = [@third]} : tribute_rt.convention_table_ref
+    %c = "tribute_rt.convention_table"() {entries = [@first, @second]} : tribute_rt.convention_table_ref
+    %d = "tribute_rt.convention_entry"(%a) {index = 0} : core.i32
+    %e = "tribute_rt.convention_entry"(%c) {index = 1} : core.i32
+    "func.return"()
   }
 }"#,
         );
         lower(&mut ctx, module);
         let ir = trunk_ir::printer::print_module(&ctx, module.op());
         assert!(
-            ir.contains(r#"wasm.table {max = 4, min = 4, reftype = "funcref"}"#),
+            ir.contains(r#""wasm.table"() {max = 4, min = 4, reftype = "funcref"}"#),
             "{ir}"
         );
         let slots: Vec<_> = ["@constant", "@first", "@second", "@third"]
@@ -567,8 +567,12 @@ mod tests {
             .collect();
         assert!(slots.iter().all(Option::is_some), "{ir}");
         assert!(slots.is_sorted(), "{ir}");
-        assert_eq!(ir.matches("wasm.i32_const {value = 1}").count(), 3, "{ir}");
-        assert!(ir.contains("wasm.i32_const {value = 3}"), "{ir}");
+        assert_eq!(
+            ir.matches("\"wasm.i32_const\"() {value = 1}").count(),
+            3,
+            "{ir}"
+        );
+        assert!(ir.contains("\"wasm.i32_const\"() {value = 3}"), "{ir}");
         assert_eq!(ir.matches("wasm.i32_add").count(), 1, "{ir}");
         assert!(!ir.contains("tribute_rt."), "{ir}");
     }
@@ -580,21 +584,21 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f() -> core.nil {
-    %a = tribute_rt.convention_table {entries = [@only]} : tribute_rt.convention_table_ref
-    func.return
+    %a = "tribute_rt.convention_table"() {entries = [@only]} : tribute_rt.convention_table_ref
+    "func.return"()
   }
 }"#,
         );
         lower(&mut ctx, module);
         let ir = trunk_ir::printer::print_module(&ctx, module.op());
         assert!(
-            ir.contains(r#"wasm.table {max = 1, min = 1, reftype = "funcref"}"#),
+            ir.contains(r#""wasm.table"() {max = 1, min = 1, reftype = "funcref"}"#),
             "{ir}"
         );
-        assert!(ir.contains("wasm.elem {"), "{ir}");
+        assert!(ir.contains("\"wasm.elem\"() ({"), "{ir}");
         assert!(!ir.contains("offset = 0"), "{ir}");
         assert!(ir.contains("func_name = @only"), "{ir}");
-        assert!(ir.contains("wasm.i32_const {value = 0}"), "{ir}");
+        assert!(ir.contains("\"wasm.i32_const\"() {value = 0}"), "{ir}");
     }
 
     #[test]
@@ -604,9 +608,9 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f(%0: core.f64) -> core.nil {
-    %1 = tribute_rt.box_float %0 : tribute_rt.anyref
-    %2 = tribute_rt.unbox_float %1 : core.f64
-    func.return
+    %1 = "tribute_rt.box_float"(%0) : tribute_rt.anyref
+    %2 = "tribute_rt.unbox_float"(%1) : core.f64
+    "func.return"()
   }
 }"#,
         );

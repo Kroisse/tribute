@@ -405,7 +405,7 @@ fn main() ->{Io} Nil {
     assert!(countdown.starts_with("'a0, local 'a1]"), "{countdown}");
     assert!(
         countdown.contains("tribute_cps.lambda['a1](")
-            && countdown.contains("tribute_control.instantiate %1 {row_args = [{tail = 0}]}"),
+            && countdown.contains("\"tribute_control.instantiate\"(%1) {row_args = [{tail = 0}]}"),
         "{countdown}"
     );
     let main = function("@\"pkg::main\"");
@@ -414,9 +414,9 @@ fn main() ->{Io} Nil {
         main.contains("%0 = tribute_cps.lambda['a0](")
             && main.contains("direct {")
             && main.contains("evidence_direct {")
-            && main.contains("tribute_control.instantiate %0 {row_args = [{}]}")
+            && main.contains("\"tribute_control.instantiate\"(%0) {row_args = [{}]}")
             && main.contains(
-                "tribute_control.instantiate %0 {row_args = [{instances = [@\"ability_1_11_std::io::Io\"]}]}"
+                "\"tribute_control.instantiate\"(%0) {row_args = [{instances = [@\"ability_1_11_std::io::Io\"]}]}"
             ),
         "{main}"
     );
@@ -466,7 +466,7 @@ fn main() ->{Io} Nil {
         "{main}"
     );
     assert!(
-        main.contains("tribute_control.instantiate %0 {row_args = [{tail = 1}]}"),
+        main.contains("\"tribute_control.instantiate\"(%0) {row_args = [{tail = 1}]}"),
         "{main}"
     );
 }
@@ -587,7 +587,7 @@ fn main() -> Nil {
         .nth(1)
         .unwrap_or_else(|| panic!("a lambda capturing `both` in\n{run}"));
     assert!(
-        inner.contains("tribute_control.instantiate %0 {row_args = ["),
+        inner.contains("\"tribute_control.instantiate\"(%0) {row_args = ["),
         "{run}"
     );
 }

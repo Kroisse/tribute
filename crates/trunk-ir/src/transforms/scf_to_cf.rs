@@ -1223,12 +1223,12 @@ mod tests {
         assert_lowered_unit_tail_transfer(
             r#"core.module @test {
   func.func @main(%cond: core.i1, %callee: func.func_sig<(core.nil) -> core.never>, %unit: core.nil) -> core.never attributes {test.marker = 2} {
-    %selected = scf.if %cond : core.nil {
-      scf.yield %unit
-    } {
-      scf.yield %unit
-    }
-    func.tail_call_indirect %callee, %selected {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
+    %selected = "scf.if"(%cond) ({
+      "scf.yield"(%unit)
+    }, {
+      "scf.yield"(%unit)
+    }) : core.nil
+    "func.tail_call_indirect"(%callee, %selected) {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
   }
 }"#,
             1,
@@ -1239,11 +1239,11 @@ mod tests {
     fn lower_scf_if_drops_unused_never_result_for_tail_transfers() {
         let input = r#"core.module @test {
   func.func @main(%cond: core.i1, %callee: func.func_sig<(core.nil) -> core.never>, %unit: core.nil) -> core.never attributes {test.marker = 2} {
-    %discarded = scf.if %cond : core.never {
-      func.unreachable
-    } {
-      func.tail_call_indirect %callee, %unit {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
-    }
+    %discarded = "scf.if"(%cond) ({
+      "func.unreachable"()
+    }, {
+      "func.tail_call_indirect"(%callee, %unit) {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
+    }) : core.never
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1296,14 +1296,14 @@ mod tests {
     fn lower_terminal_scf_switch_without_empty_merge_block() {
         let input = r#"core.module @test {
   func.func @main(%choice: core.i32, %callee: func.func_sig<(core.nil) -> core.never>, %unit: core.nil) -> core.never attributes {test.marker = 2} {
-    scf.switch %choice {
-      scf.case {value = 0} {
-        func.unreachable
-      }
-      scf.default {
-        func.tail_call_indirect %callee, %unit {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
-      }
-    }
+    "scf.switch"(%choice) ({
+      "scf.case"() ({
+        "func.unreachable"()
+      }) {value = 0}
+      "scf.default"() ({
+        "func.tail_call_indirect"(%callee, %unit) {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
+      })
+    })
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1343,14 +1343,14 @@ mod tests {
     fn lower_terminal_scf_switch_with_ordinary_return_preserves_operands() {
         let input = r#"core.module @test {
   func.func @main(%choice: core.i32, %first: core.i32, %second: core.i32) -> core.i32 {
-    scf.switch %choice {
-      scf.case {value = 0} {
-        func.return %first
-      }
-      scf.default {
-        func.return %second
-      }
-    }
+    "scf.switch"(%choice) ({
+      "scf.case"() ({
+        "func.return"(%first)
+      }) {value = 0}
+      "scf.default"() ({
+        "func.return"(%second)
+      })
+    })
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1378,21 +1378,21 @@ mod tests {
     fn lower_nested_terminal_scf_switch_with_ordinary_returns_has_no_merge_blocks() {
         let input = r#"core.module @test {
   func.func @main(%choice: core.i32, %nested_choice: core.i32, %first: core.i32, %second: core.i32, %third: core.i32) -> core.i32 {
-    scf.switch %choice {
-      scf.case {value = 0} {
-        scf.switch %nested_choice {
-          scf.case {value = 0} {
-            func.return %first
-          }
-          scf.default {
-            func.return %second
-          }
-        }
-      }
-      scf.default {
-        func.return %third
-      }
-    }
+    "scf.switch"(%choice) ({
+      "scf.case"() ({
+        "scf.switch"(%nested_choice) ({
+          "scf.case"() ({
+            "func.return"(%first)
+          }) {value = 0}
+          "scf.default"() ({
+            "func.return"(%second)
+          })
+        })
+      }) {value = 0}
+      "scf.default"() ({
+        "func.return"(%third)
+      })
+    })
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1420,14 +1420,14 @@ mod tests {
     fn lower_terminal_scf_switch_with_zero_operand_return_has_no_merge_block() {
         let input = r#"core.module @test {
   func.func @main(%choice: core.i32) {
-    scf.switch %choice {
-      scf.case {value = 0} {
-        func.return
-      }
-      scf.default {
-        func.unreachable
-      }
-    }
+    "scf.switch"(%choice) ({
+      "scf.case"() ({
+        "func.return"()
+      }) {value = 0}
+      "scf.default"() ({
+        "func.unreachable"()
+      })
+    })
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1453,14 +1453,14 @@ mod tests {
     fn callable_exit_interface_drives_terminal_switch_lowering() {
         let input = r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    scf.switch %choice {
-      scf.case {value = 0} {
-        test_exit_dialect.exit
-      }
-      scf.default {
-        func.unreachable
-      }
-    }
+    "scf.switch"(%choice) ({
+      "scf.case"() ({
+        "test_exit_dialect.exit"()
+      }) {value = 0}
+      "scf.default"() ({
+        "func.unreachable"()
+      })
+    })
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1484,10 +1484,10 @@ mod tests {
             (
                 r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    scf.switch %choice {
-      scf.case {value = 0} { scf.yield }
-      scf.default { func.unreachable }
-    }
+    "scf.switch"(%choice) ({
+      "scf.case"() ({ "scf.yield"() }) {value = 0}
+      "scf.default"() ({ "func.unreachable"() })
+    })
   }
 }"#,
                 true,
@@ -1495,9 +1495,9 @@ mod tests {
             (
                 r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    scf.switch %choice {
-      scf.case {value = 0} { func.unreachable }
-    }
+    "scf.switch"(%choice) ({
+      "scf.case"() ({ "func.unreachable"() }) {value = 0}
+    })
   }
 }"#,
                 false,
@@ -1505,13 +1505,13 @@ mod tests {
             (
                 r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    scf.switch %choice {
-      scf.case {value = 0} {
-        func.return
-        core.nil_value : core.nil
-      }
-      scf.default { func.unreachable }
-    }
+    "scf.switch"(%choice) ({
+      "scf.case"() ({
+        "func.return"()
+        "core.nil_value"() : core.nil
+      }) {value = 0}
+      "scf.default"() ({ "func.unreachable"() })
+    })
   }
 }"#,
                 true,
@@ -1519,15 +1519,15 @@ mod tests {
             (
                 r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    scf.switch %choice {
-      scf.case {value = 0} {
+    "scf.switch"(%choice) ({
+      "scf.case"() ({
         ^first:
-          cf.br [^second]
+          "cf.br"()[^second]
         ^second:
-          func.unreachable
-      }
-      scf.default { func.unreachable }
-    }
+          "func.unreachable"()
+      }) {value = 0}
+      "scf.default"() ({ "func.unreachable"() })
+    })
   }
 }"#,
                 true,
@@ -1535,10 +1535,10 @@ mod tests {
             (
                 r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    scf.switch %choice {
-      scf.case {value = 0} { test_exit_dialect.malformed_exit }
-      scf.default { func.unreachable }
-    }
+    "scf.switch"(%choice) ({
+      "scf.case"() ({ "test_exit_dialect.malformed_exit"() }) {value = 0}
+      "scf.default"() ({ "func.unreachable"() })
+    })
   }
 }"#,
                 true,
@@ -1568,10 +1568,10 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    scf.switch %choice {
-      scf.case {value = 0} { core.nil_value : core.nil }
-      scf.default { test_exit_dialect.malformed_exit }
-    }
+    "scf.switch"(%choice) ({
+      "scf.case"() ({ "core.nil_value"() : core.nil }) {value = 0}
+      "scf.default"() ({ "test_exit_dialect.malformed_exit"() })
+    })
   }
 }"#,
         );
@@ -1596,18 +1596,18 @@ mod tests {
     fn lower_terminal_scf_switch_with_nested_never_if_has_no_merge_block() {
         let input = r#"core.module @test {
   func.func @main(%choice: core.i32, %cond: core.i1, %callee: func.func_sig<(core.nil) -> core.never>, %unit: core.nil) -> core.never attributes {test.marker = 2} {
-    scf.switch %choice {
-      scf.case {value = 0} {
-        %discarded = scf.if %cond : core.never {
-          func.unreachable
-        } {
-          func.tail_call_indirect %callee, %unit {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
-        }
-      }
-      scf.default {
-        func.tail_call_indirect %callee, %unit {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
-      }
-    }
+    "scf.switch"(%choice) ({
+      "scf.case"() ({
+        %discarded = "scf.if"(%cond) ({
+          "func.unreachable"()
+        }, {
+          "func.tail_call_indirect"(%callee, %unit) {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
+        }) : core.never
+      }) {value = 0}
+      "scf.default"() ({
+        "func.tail_call_indirect"(%callee, %unit) {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
+      })
+    })
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1644,21 +1644,21 @@ mod tests {
     fn lower_terminal_scf_switch_with_nested_terminal_switch_has_no_empty_merge_block() {
         let input = r#"core.module @test {
   func.func @main(%choice: core.i32, %nested_choice: core.i32, %callee: func.func_sig<(core.nil) -> core.never>, %unit: core.nil) -> core.never attributes {test.marker = 2} {
-    scf.switch %choice {
-      scf.case {value = 0} {
-        scf.switch %nested_choice {
-          scf.case {value = 0} {
-            func.unreachable
-          }
-          scf.default {
-            func.tail_call_indirect %callee, %unit {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
-          }
-        }
-      }
-      scf.default {
-        func.tail_call_indirect %callee, %unit {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
-      }
-    }
+    "scf.switch"(%choice) ({
+      "scf.case"() ({
+        "scf.switch"(%nested_choice) ({
+          "scf.case"() ({
+            "func.unreachable"()
+          }) {value = 0}
+          "scf.default"() ({
+            "func.tail_call_indirect"(%callee, %unit) {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
+          })
+        })
+      }) {value = 0}
+      "scf.default"() ({
+        "func.tail_call_indirect"(%callee, %unit) {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
+      })
+    })
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1692,16 +1692,16 @@ mod tests {
     fn lower_nonterminal_scf_switch_keeps_merge_continuation() {
         let input = r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    scf.switch %choice {
-      scf.case {value = 0} {
-        scf.yield
-      }
-      scf.default {
-        scf.yield
-      }
-    }
-    %unit = core.nil_value : core.nil
-    func.return %unit
+    "scf.switch"(%choice) ({
+      "scf.case"() ({
+        "scf.yield"()
+      }) {value = 0}
+      "scf.default"() ({
+        "scf.yield"()
+      })
+    })
+    %unit = "core.nil_value"() : core.nil
+    "func.return"(%unit)
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1740,19 +1740,19 @@ mod tests {
     fn lower_nonterminal_scf_switch_with_multiblock_arm_keeps_merge_continuation() {
         let input = r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    scf.switch %choice {
-      scf.case {value = 0} {
+    "scf.switch"(%choice) ({
+      "scf.case"() ({
         ^first:
-          cf.br [^second]
+          "cf.br"()[^second]
         ^second:
-          scf.yield
-      }
-      scf.default {
-        scf.yield
-      }
-    }
-    %unit = core.nil_value : core.nil
-    func.return %unit
+          "scf.yield"()
+      }) {value = 0}
+      "scf.default"() ({
+        "scf.yield"()
+      })
+    })
+    %unit = "core.nil_value"() : core.nil
+    "func.return"(%unit)
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1794,17 +1794,17 @@ mod tests {
         assert_lowered_unit_tail_transfer(
             r#"core.module @test {
   func.func @main(%cond: core.i1, %callee: func.func_sig<(core.nil) -> core.never>, %unit: core.nil) -> core.never attributes {test.marker = 2} {
-    %inner = scf.if %cond : core.nil {
-      scf.yield %unit
-    } {
-      scf.yield %unit
-    }
-    %outer = scf.if %cond : core.nil {
-      scf.yield %inner
-    } {
-      scf.yield %inner
-    }
-    func.tail_call_indirect %callee, %outer {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
+    %inner = "scf.if"(%cond) ({
+      "scf.yield"(%unit)
+    }, {
+      "scf.yield"(%unit)
+    }) : core.nil
+    %outer = "scf.if"(%cond) ({
+      "scf.yield"(%inner)
+    }, {
+      "scf.yield"(%inner)
+    }) : core.nil
+    "func.tail_call_indirect"(%callee, %outer) {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
   }
 }"#,
             2,
@@ -2122,23 +2122,23 @@ mod tests {
         let printed = lower_switch_function(
             r#"core.module @test {
   func.func @main(%choice: core.i32) {
-    scf.switch %choice {
-      scf.case {value = 7} {
-        scf.yield
-      }
-      scf.case {value = -1} {
-        scf.yield
-      }
-      scf.default {
-        scf.yield
-      }
-    }
-    func.return
+    "scf.switch"(%choice) ({
+      "scf.case"() ({
+        "scf.yield"()
+      }) {value = 7}
+      "scf.case"() ({
+        "scf.yield"()
+      }) {value = -1}
+      "scf.default"() ({
+        "scf.yield"()
+      })
+    })
+    "func.return"()
   }
 }"#,
         );
         assert!(
-            printed.contains("cf.switch %0 [^bb3, ^bb1, ^bb2] {cases = [7, -1]}"),
+            printed.contains("\"cf.switch\"(%0)[^bb3, ^bb1, ^bb2] {cases = [7, -1]}"),
             "{printed}"
         );
     }
@@ -2153,18 +2153,18 @@ mod tests {
             let printed = lower_switch_function(&format!(
                 r#"core.module @test {{
   func.func @main(%choice: {discriminant_ty}) {{
-    scf.switch %choice {{
-      scf.case {{value = {}}} {{
-        scf.yield
-      }}
-      scf.case {{value = {}}} {{
-        scf.yield
-      }}
-      scf.default {{
-        scf.yield
-      }}
-    }}
-    func.return
+    "scf.switch"(%choice) ({{
+      "scf.case"() ({{
+        "scf.yield"()
+      }}) {{value = {}}}
+      "scf.case"() ({{
+        "scf.yield"()
+      }}) {{value = {}}}
+      "scf.default"() ({{
+        "scf.yield"()
+      }})
+    }})
+    "func.return"()
   }}
 }}"#,
                 cases[0], cases[1]

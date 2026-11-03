@@ -287,13 +287,13 @@ mod tests {
   !Base = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
   !Captures = adt.struct<_closure_captures(entries: tribute_rt.convention_table_ref, _0: tribute_rt.anyref), {closure_base = !Base, layout = "closure_captures"}>
   !Other = adt.struct<Other(value: tribute_rt.anyref)>
-  tribute_rtti.layout {type = !Captures, index = 32, fields = ["raw", "dynamic"]}
-  tribute_rtti.layout {type = !Base, index = 33, fields = ["raw"]}
-  tribute_rtti.layout {type = !Other, index = 34, fields = ["dynamic"]}
+  "tribute_rtti.layout"() {type = !Captures, index = 32, fields = ["raw", "dynamic"]}
+  "tribute_rtti.layout"() {type = !Base, index = 33, fields = ["raw"]}
+  "tribute_rtti.layout"() {type = !Other, index = 34, fields = ["dynamic"]}
   func.func @make(%table: core.i32, %env: tribute_rt.anyref) -> !Captures {
-    %closure = adt.struct_new %table, %env {type = !Captures} : !Captures
-    %loaded = adt.struct_get %closure {field = 1, type = !Captures} : tribute_rt.anyref
-    func.return %closure
+    %closure = "adt.struct_new"(%table, %env) {type = !Captures} : !Captures
+    %loaded = "adt.struct_get"(%closure) {field = 1, type = !Captures} : tribute_rt.anyref
+    "func.return"(%closure)
   }
 }"#,
         );
@@ -340,13 +340,13 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  clif.data {align = 1, bytes = b"\0", sym_name = "__tribute_convention_table_0"}
+  "clif.data"() {align = 1, bytes = b"\0", sym_name = "__tribute_convention_table_0"}
   func.func @make() -> core.nil {
-    %a = tribute_rt.convention_table {entries = [@first]} : tribute_rt.convention_table_ref
-    %b = tribute_rt.convention_table {entries = [@second, @first]} : tribute_rt.convention_table_ref
-    %c = tribute_rt.convention_table {entries = [@first]} : tribute_rt.convention_table_ref
-    %d = tribute_rt.convention_entry %b {index = 1} : core.i32
-    func.return
+    %a = "tribute_rt.convention_table"() {entries = [@first]} : tribute_rt.convention_table_ref
+    %b = "tribute_rt.convention_table"() {entries = [@second, @first]} : tribute_rt.convention_table_ref
+    %c = "tribute_rt.convention_table"() {entries = [@first]} : tribute_rt.convention_table_ref
+    %d = "tribute_rt.convention_entry"(%b) {index = 1} : core.i32
+    "func.return"()
   }
 }"#,
         );
@@ -355,20 +355,20 @@ mod tests {
         assert_eq!(output.matches("clif.data").count(), 3, "{output}");
         assert_eq!(
             output
-                .matches("clif.symbol_addr {sym = @__tribute_convention_table_1}")
+                .matches("\"clif.symbol_addr\"() {sym = @__tribute_convention_table_1}")
                 .count(),
             2,
             "{output}"
         );
         assert!(
-            output.contains("clif.symbol_addr {sym = @__tribute_convention_table_2}"),
+            output.contains("\"clif.symbol_addr\"() {sym = @__tribute_convention_table_2}"),
             "{output}"
         );
         assert!(
-            output.contains("clif.func_reloc {func = @first, offset = 8}"),
+            output.contains("\"clif.func_reloc\"() {func = @first, offset = 8}"),
             "{output}"
         );
-        assert!(output.contains("clif.load %"), "{output}");
+        assert!(output.contains("\"clif.load\"(%"), "{output}");
         assert!(output.contains("{offset = 8} : core.i64"), "{output}");
         assert!(!output.contains("tribute_rt."), "{output}");
     }
@@ -403,14 +403,14 @@ mod tests {
   !Base = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
   !Captures = adt.struct<_closure_captures(entries: tribute_rt.convention_table_ref, _0: core.ptr), {closure_base = !Base, layout = "closure_captures"}>
   func.func @test_fn() -> core.i32 {
-    %0 = tribute_rt.convention_table {entries = [@lifted_fn]} : tribute_rt.convention_table_ref
-    %1 = mem.null : core.ptr
-    %2 = adt.struct_new %0, %1 {type = !Captures} : !Captures
-    %3 = adt.struct_get %2 {field = 0, type = !Captures} : tribute_rt.convention_table_ref
-    %4 = adt.struct_get %2 {field = 1, type = !Captures} : core.ptr
-    %6 = tribute_rt.convention_entry %3 {index = 0} : core.i32
-    %5 = func.call_indirect %6, %4 {signature = func.func_sig<(core.ptr) -> core.i32>} : core.i32
-    func.return %5
+    %0 = "tribute_rt.convention_table"() {entries = [@lifted_fn]} : tribute_rt.convention_table_ref
+    %1 = "mem.null"() : core.ptr
+    %2 = "adt.struct_new"(%0, %1) {type = !Captures} : !Captures
+    %3 = "adt.struct_get"(%2) {field = 0, type = !Captures} : tribute_rt.convention_table_ref
+    %4 = "adt.struct_get"(%2) {field = 1, type = !Captures} : core.ptr
+    %6 = "tribute_rt.convention_entry"(%3) {index = 0} : core.i32
+    %5 = "func.call_indirect"(%6, %4) {signature = func.func_sig<(core.ptr) -> core.i32>} : core.i32
+    "func.return"(%5)
   }
 }"#,
         );
@@ -424,13 +424,13 @@ mod tests {
   !Base = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
   !Captures = adt.struct<_closure_captures(entries: tribute_rt.convention_table_ref, _0: tribute_rt.anyref), {closure_base = !Base, layout = "closure_captures"}>
   func.func @test_fn(%1: tribute_rt.anyref) -> core.i32 {
-    %0 = tribute_rt.convention_table {entries = [@lifted_fn]} : tribute_rt.convention_table_ref
-    %2 = adt.struct_new %0, %1 {type = !Captures} : !Captures
-    %3 = adt.struct_get %2 {field = 0, type = !Captures} : tribute_rt.convention_table_ref
-    %4 = adt.struct_get %2 {field = 1, type = !Captures} : tribute_rt.anyref
-    %6 = tribute_rt.convention_entry %3 {index = 0} : core.i32
-    %5 = func.call_indirect %6, %4 {signature = func.func_sig<(core.ptr) -> core.i32>} : core.i32
-    func.return %5
+    %0 = "tribute_rt.convention_table"() {entries = [@lifted_fn]} : tribute_rt.convention_table_ref
+    %2 = "adt.struct_new"(%0, %1) {type = !Captures} : !Captures
+    %3 = "adt.struct_get"(%2) {field = 0, type = !Captures} : tribute_rt.convention_table_ref
+    %4 = "adt.struct_get"(%2) {field = 1, type = !Captures} : tribute_rt.anyref
+    %6 = "tribute_rt.convention_entry"(%3) {index = 0} : core.i32
+    %5 = "func.call_indirect"(%6, %4) {signature = func.func_sig<(core.ptr) -> core.i32>} : core.i32
+    "func.return"(%5)
   }
 }"#,
         );

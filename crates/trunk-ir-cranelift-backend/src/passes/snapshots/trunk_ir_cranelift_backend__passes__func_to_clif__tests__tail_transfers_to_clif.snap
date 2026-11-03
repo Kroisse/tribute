@@ -4,10 +4,10 @@ expression: result
 ---
 core.module @test {
   clif.func @direct_target(%0: core.i32) -> (), {call_conv = "tail"} {
-      clif.return
+      "clif.return"()
   }
   clif.func @direct_caller(%0: core.i32) -> (), {call_conv = "tail"} {
-      clif.return_call %0 {callee = @direct_target}
+      "clif.return_call"(%0) {callee = @direct_target}
   }
   clif.func @indirect_caller(%0: core.ptr, %1: core.i32) -> (), {call_conv = "tail"} {
       clif.return_call_indirect %0(%1) : (core.i32) -> (), {call_conv = "tail"}

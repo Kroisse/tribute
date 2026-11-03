@@ -965,7 +965,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
-            "core.module @test {\n  !L = core.array<core.i32>\n  func.func @f(%l: !L, %i: core.index, %n: core.i32) -> core.nil {\n    %len = adt.array_len %l : core.index\n    %v = adt.array_new %i, %n {type = !L} : !L\n    func.return\n  }\n}",
+            "core.module @test {\n  !L = core.array<core.i32>\n  func.func @f(%l: !L, %i: core.index, %n: core.i32) -> core.nil {\n    %len = \"adt.array_len\"(%l) : core.index\n    %v = \"adt.array_new\"(%i, %n) {type = !L} : !L\n    \"func.return\"()\n  }\n}",
         );
         let result = trunk_ir::validation::validate_op_schemas(&ctx, module.op());
         // `array_len` rejects its operand; `array_new` its type and result.
@@ -975,36 +975,38 @@ mod tests {
     #[test]
     fn array_construction_binds_the_element_type_and_index_operands() {
         assert!(array_schema_ok(
-            "%v = adt.array_new %i, %n {type = !A} : !A"
+            "%v = \"adt.array_new\"(%i, %n) {type = !A} : !A"
         ));
         assert!(!array_schema_ok(
-            "%v = adt.array_new %n, %n {type = !A} : !A"
+            "%v = \"adt.array_new\"(%n, %n) {type = !A} : !A"
         ));
         assert!(!array_schema_ok(
-            "%v = adt.array_new %i, %w {type = !A} : !A"
+            "%v = \"adt.array_new\"(%i, %w) {type = !A} : !A"
         ));
         assert!(!array_schema_ok(
-            "%v = adt.array_new %i, %n {type = !A} : !B"
+            "%v = \"adt.array_new\"(%i, %n) {type = !A} : !B"
         ));
-        assert!(array_schema_ok("%v = adt.array_of {type = !A} : !A"));
-        assert!(array_schema_ok("%v = adt.array_of %n, %n {type = !A} : !A"));
+        assert!(array_schema_ok("%v = \"adt.array_of\"() {type = !A} : !A"));
+        assert!(array_schema_ok(
+            "%v = \"adt.array_of\"(%n, %n) {type = !A} : !A"
+        ));
         assert!(!array_schema_ok(
-            "%v = adt.array_of %n, %w {type = !A} : !A"
+            "%v = \"adt.array_of\"(%n, %w) {type = !A} : !A"
         ));
         assert!(array_schema_ok(
-            "%v = adt.array_splice %a, %i, %i, %n {type = !A} : !A"
+            "%v = \"adt.array_splice\"(%a, %i, %i, %n) {type = !A} : !A"
         ));
         assert!(array_schema_ok(
-            "%v = adt.array_splice %a, %i, %i {type = !A} : !A"
+            "%v = \"adt.array_splice\"(%a, %i, %i) {type = !A} : !A"
         ));
         assert!(!array_schema_ok(
-            "%v = adt.array_splice %a, %n, %i {type = !A} : !A"
+            "%v = \"adt.array_splice\"(%a, %n, %i) {type = !A} : !A"
         ));
         assert!(!array_schema_ok(
-            "%v = adt.array_splice %a, %i, %i, %w {type = !A} : !A"
+            "%v = \"adt.array_splice\"(%a, %i, %i, %w) {type = !A} : !A"
         ));
         assert!(!array_schema_ok(
-            "%v = adt.array_splice %a, %i, %i {type = !B} : !B"
+            "%v = \"adt.array_splice\"(%a, %i, %i) {type = !B} : !B"
         ));
     }
 
@@ -1041,7 +1043,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  %0 = adt.string_const {value = "hi"} : core.ptr
+  %0 = "adt.string_const"() {value = "hi"} : core.ptr
 }"#,
         );
         let op = module.ops(&ctx)[0];
@@ -1095,10 +1097,10 @@ mod tests {
     fn repeated_struct_is_aliased_by_its_name() {
         let input = r#"core.module @test {
   func.func @f1(%x: adt.struct<_Marker(a: core.i32)>) -> adt.struct<_Marker(a: core.i32)> {
-    func.return %x
+    "func.return"(%x)
   }
   func.func @f2(%x: adt.struct<_Marker(a: core.i32)>) -> adt.struct<_Marker(a: core.i32)> {
-    func.return %x
+    "func.return"(%x)
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1328,9 +1330,9 @@ mod canonicalize_tests {
     const PAIR: &str = r#"core.module @test {
   !pair = adt.struct<Pair(a: core.i32, b: core.i64)>
   func.func @f(%x: core.i32, %y: core.i64) -> core.i64 {
-    %p = adt.struct_new %x, %y {type = !pair} : !pair
-    %r = adt.struct_get %p {type = !pair, field = 1} : core.i64
-    func.return %r
+    %p = "adt.struct_new"(%x, %y) {type = !pair} : !pair
+    %r = "adt.struct_get"(%p) {type = !pair, field = 1} : core.i64
+    "func.return"(%r)
   }
 }"#;
 
@@ -1339,7 +1341,7 @@ mod canonicalize_tests {
         let (ctx, module, changed) = fold(PAIR);
         assert!(changed);
         assert_eq!(count(&ctx, module, "adt.struct_get"), 0);
-        assert!(print_module(&ctx, module.op()).contains("func.return %1"));
+        assert!(print_module(&ctx, module.op()).contains("\"func.return\"(%1)"));
     }
 
     #[test]
@@ -1348,8 +1350,8 @@ mod canonicalize_tests {
             r#"core.module @test {
   !pair = adt.struct<Pair(a: core.i32, b: core.i64)>
   func.func @f(%p: !pair) -> core.i64 {
-    %r = adt.struct_get %p {type = !pair, field = 1} : core.i64
-    func.return %r
+    %r = "adt.struct_get"(%p) {type = !pair, field = 1} : core.i64
+    "func.return"(%r)
   }
 }"#,
         );
@@ -1364,9 +1366,9 @@ mod canonicalize_tests {
   !pair = adt.struct<Pair(a: core.i32, b: core.i64)>
   !other = adt.struct<Other(a: core.i32, b: core.i64)>
   func.func @f(%x: core.i32, %y: core.i64) -> core.i64 {
-    %p = adt.struct_new %x, %y {type = !pair} : !pair
-    %r = adt.struct_get %p {type = !other, field = 1} : core.i64
-    func.return %r
+    %p = "adt.struct_new"(%x, %y) {type = !pair} : !pair
+    %r = "adt.struct_get"(%p) {type = !other, field = 1} : core.i64
+    "func.return"(%r)
   }
 }"#,
         );
@@ -1380,9 +1382,9 @@ mod canonicalize_tests {
             r#"core.module @test {
   !pair = adt.struct<Pair(a: core.i32, b: core.i64)>
   func.func @f(%x: core.i32, %y: core.i64) -> core.i32 {
-    %p = adt.struct_new %x, %y {type = !pair} : !pair
-    %r = adt.struct_get %p {type = !pair, field = 1} : core.i32
-    func.return %r
+    %p = "adt.struct_new"(%x, %y) {type = !pair} : !pair
+    %r = "adt.struct_get"(%p) {type = !pair, field = 1} : core.i32
+    "func.return"(%r)
   }
 }"#,
         );
@@ -1396,9 +1398,9 @@ mod canonicalize_tests {
             r#"core.module @test {
   !pair = adt.struct<Pair(a: core.i32, b: core.i64)>
   func.func @f(%x: core.i32, %y: core.i64) -> core.i64 {
-    %p = adt.struct_new %x, %y {type = !pair} : !pair
-    %r = adt.struct_get %p {type = !pair, field = 2} : core.i64
-    func.return %r
+    %p = "adt.struct_new"(%x, %y) {type = !pair} : !pair
+    %r = "adt.struct_get"(%p) {type = !pair, field = 2} : core.i64
+    "func.return"(%r)
   }
 }"#,
         );
@@ -1412,12 +1414,12 @@ mod canonicalize_tests {
             r#"core.module @test {
   !pair = adt.struct<Pair(a: core.i32, b: core.i64)>
   func.func @f(%x: core.i32, %y: core.i64, %z: core.i64) -> core.i64 {
-    %p = adt.struct_new %x, %y {type = !pair} : !pair
-    %any = adt.ref_cast %p {type = tribute_rt.anyref} : tribute_rt.anyref
-    %alias = adt.ref_cast %any {type = !pair} : !pair
-    adt.struct_set %alias, %z {type = !pair, field = 1}
-    %r = adt.struct_get %p {type = !pair, field = 1} : core.i64
-    func.return %r
+    %p = "adt.struct_new"(%x, %y) {type = !pair} : !pair
+    %any = "adt.ref_cast"(%p) {type = tribute_rt.anyref} : tribute_rt.anyref
+    %alias = "adt.ref_cast"(%any) {type = !pair} : !pair
+    "adt.struct_set"(%alias, %z) {type = !pair, field = 1}
+    %r = "adt.struct_get"(%p) {type = !pair, field = 1} : core.i64
+    "func.return"(%r)
   }
 }"#,
         );
@@ -1431,13 +1433,13 @@ mod canonicalize_tests {
             r#"core.module @test {
   !pair = adt.struct<Pair(a: core.i32, b: core.i64)>
   func.func @write(%p: !pair, %z: core.i64) {
-    adt.struct_set %p, %z {type = !pair, field = 1}
-    func.return
+    "adt.struct_set"(%p, %z) {type = !pair, field = 1}
+    "func.return"()
   }
   func.func @f(%x: core.i32, %y: core.i64) -> core.i64 {
-    %p = adt.struct_new %x, %y {type = !pair} : !pair
-    %r = adt.struct_get %p {type = !pair, field = 1} : core.i64
-    func.return %r
+    %p = "adt.struct_new"(%x, %y) {type = !pair} : !pair
+    %r = "adt.struct_get"(%p) {type = !pair, field = 1} : core.i64
+    "func.return"(%r)
   }
 }"#,
         );
@@ -1451,10 +1453,10 @@ mod canonicalize_tests {
             r#"core.module @test {
   !pair = adt.struct<Pair(a: core.i32, b: core.i64)>
   func.func @f(%x: core.i32, %y: core.i64, %z: core.i64) -> core.i64 {
-    %p = adt.struct_new %x, %y {type = !pair} : !pair
-    adt.struct_set %p, %z {type = !pair, field = 1}
-    %r = adt.struct_get %p {type = !pair, field = 1} : core.i64
-    func.return %r
+    %p = "adt.struct_new"(%x, %y) {type = !pair} : !pair
+    "adt.struct_set"(%p, %z) {type = !pair, field = 1}
+    %r = "adt.struct_get"(%p) {type = !pair, field = 1} : core.i64
+    "func.return"(%r)
   }
 }"#,
         );
@@ -1468,10 +1470,10 @@ mod canonicalize_tests {
             r#"core.module @test {
   !pair = adt.struct<Pair(a: core.i32, b: core.i64)>
   func.func @f(%x: core.i32, %y: core.i64) -> core.i64 {
-    %p = adt.struct_new %x, %y {type = !pair} : !pair
-    %r = adt.struct_get %p {type = !pair, field = 1} : core.i64
-    tribute_rt.release %p {alloc_size = 24}
-    func.return %r
+    %p = "adt.struct_new"(%x, %y) {type = !pair} : !pair
+    %r = "adt.struct_get"(%p) {type = !pair, field = 1} : core.i64
+    "tribute_rt.release"(%p) {alloc_size = 24}
+    "func.return"(%r)
   }
 }"#,
         );
@@ -1485,8 +1487,8 @@ mod canonicalize_tests {
             r#"core.module @test {
   !pair = adt.struct<Pair(a: core.i32, b: core.i64)>
   func.func @f(%p: !pair) -> !pair {
-    %r = adt.ref_cast %p {type = !pair} : !pair
-    func.return %r
+    %r = "adt.ref_cast"(%p) {type = !pair} : !pair
+    "func.return"(%r)
   }
 }"#,
         );
@@ -1500,8 +1502,8 @@ mod canonicalize_tests {
             r#"core.module @test {
   !pair = adt.struct<Pair(a: core.i32, b: core.i64)>
   func.func @f(%p: !pair) -> tribute_rt.anyref {
-    %r = adt.ref_cast %p {type = tribute_rt.anyref} : tribute_rt.anyref
-    func.return %r
+    %r = "adt.ref_cast"(%p) {type = tribute_rt.anyref} : tribute_rt.anyref
+    "func.return"(%r)
   }
 }"#,
         );

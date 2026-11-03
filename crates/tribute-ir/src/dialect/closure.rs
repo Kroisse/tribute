@@ -44,7 +44,7 @@ mod closure {
     ///   captures; see the closure storage layout in `new-plans/ir.md`.
     ///
     /// ```text
-    /// %c = closure.new %x, %y {entries = [@f, @trap_e, @trap_c]} : closure.closure<S>
+    /// %c = "closure.new"(%x, %y) {entries = [@f, @trap_e, @trap_c]} : closure.closure<S>
     /// ```
     #[flags(Pure)]
     fn new(entries: Attr<[SymbolRef]>, captures: Variadic<_>) -> Value<_> {}
@@ -56,7 +56,7 @@ mod closure {
     /// table field and `tribute_rt.convention_entry`.
     ///
     /// ```text
-    /// %f = closure.entry %c {index = 2} : core.i32
+    /// %f = "closure.entry"(%c) {index = 2} : core.i32
     /// ```
     #[flags(Pure)]
     fn entry(index: Attr<u32>, closure: Value<_>) -> Value<_> {}
@@ -773,7 +773,7 @@ mod tests {
     fn a_lambda_whose_closure_is_not_its_signature_prints_the_closure() {
         let text = r#"core.module @test {
   %f = closure.lambda direct(%ev: core.i64, %x: core.i32) -> core.i32 {
-    func.return %x
+    "func.return"(%x)
   } : closure.closure<func.func_sig<(core.i32) -> core.i32>>
 }"#;
         let mut ctx = IrContext::new();
@@ -793,7 +793,7 @@ mod tests {
     fn a_lambda_result_must_be_a_closure() {
         let text = r#"core.module @test {
   %f = closure.lambda direct(%x: core.i32) -> core.i32 {
-    func.return %x
+    "func.return"(%x)
   } : core.i32
 }"#;
         let mut ctx = IrContext::new();
@@ -807,12 +807,12 @@ mod tests {
         assert_roundtrip(
             r#"core.module @test {
   func.func @main() -> core.i32 {
-    %0 = arith.const {value = 10} : core.i32
+    %0 = "arith.const"() {value = 10} : core.i32
     %1 = closure.lambda [%0] direct(%2: core.i32) -> core.i32 {
-        %3 = arith.addi %2, %0 : core.i32
-        func.return %3
+        %3 = "arith.addi"(%2, %0) : core.i32
+        "func.return"(%3)
     }
-    func.return %1
+    "func.return"(%1)
   }
 }"#,
         );
@@ -824,9 +824,9 @@ mod tests {
             r#"core.module @test {
   func.func @main() -> core.i32 {
     %0 = closure.lambda direct(%1: core.i32) -> core.i32 {
-        func.return %1
+        "func.return"(%1)
     }
-    func.return %0
+    "func.return"(%0)
   }
 }"#,
         );
@@ -838,10 +838,10 @@ mod tests {
             r#"core.module @test {
   func.func @main() -> core.i32 {
     %0 = closure.lambda direct() -> core.i32 {
-        %1 = arith.const {value = 42} : core.i32
-        func.return %1
+        %1 = "arith.const"() {value = 42} : core.i32
+        "func.return"(%1)
     }
-    func.return %0
+    "func.return"(%0)
   }
 }"#,
         );
@@ -853,9 +853,9 @@ mod tests {
             r#"core.module @test {
   func.func @main() -> core.i32 {
     %0 = closure.lambda {tag = 42} direct(%1: core.i32) -> core.i32 {
-        func.return %1
+        "func.return"(%1)
     }
-    func.return %0
+    "func.return"(%0)
   }
 }"#,
         );
@@ -866,11 +866,11 @@ mod tests {
         let text = r#"core.module @test {
   func.func @main(%y: core.i32) {
     %f = closure.lambda {adapters = {evidence_direct = @a0}} [%y] direct(%x: core.i32) -> core.i32 {
-      func.return %y
+      "func.return"(%y)
     } cps(%ev: core.i64, %k: core.i64, %x2: core.i32) -> core.i32 {
-      func.return %x2
+      "func.return"(%x2)
     } : closure.closure<func.func_sig<(core.i32) -> core.i32>>
-    func.return
+    "func.return"()
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -908,11 +908,11 @@ mod tests {
             let text = format!(
                 r#"core.module @test {{
   %f = closure.lambda direct() -> core.i32 {{
-    %0 = arith.const {{value = 0}} : core.i32
-    func.return %0
+    %0 = "arith.const"() {{value = 0}} : core.i32
+    "func.return"(%0)
   }} cps() -> core.i32 {{
-    %1 = arith.const {{value = 1}} : core.i32
-    func.return %1
+    %1 = "arith.const"() {{value = 1}} : core.i32
+    "func.return"(%1)
   }} : closure.closure<{signature}>
 }}"#
             );
@@ -922,7 +922,7 @@ mod tests {
             let conventions = trunk_ir::parser::parse_test_module(
                 &mut ctx,
                 &format!(
-                    "core.module @a {{ test.op {{conventions = {conventions}, signatures = [{signatures}]}} }}"
+                    "core.module @a {{ \"test.op\"() {{conventions = {conventions}, signatures = [{signatures}]}} }}"
                 ),
             );
             let source = conventions.ops(&ctx)[0];
@@ -942,15 +942,15 @@ mod tests {
         assert_roundtrip(
             r#"core.module @test {
   func.func @main() -> core.i32 {
-    %0 = arith.const {value = 1} : core.i32
-    %1 = arith.const {value = 2} : core.i32
+    %0 = "arith.const"() {value = 1} : core.i32
+    %1 = "arith.const"() {value = 2} : core.i32
     %2 = closure.lambda [%0, %1] direct(%3: core.i32, %4: core.i32) -> core.i32 {
-        %5 = arith.addi %3, %4 : core.i32
-        %6 = arith.addi %5, %0 : core.i32
-        %7 = arith.addi %6, %1 : core.i32
-        func.return %7
+        %5 = "arith.addi"(%3, %4) : core.i32
+        %6 = "arith.addi"(%5, %0) : core.i32
+        %7 = "arith.addi"(%6, %1) : core.i32
+        "func.return"(%7)
     }
-    func.return %2
+    "func.return"(%2)
   }
 }"#,
         );
@@ -967,19 +967,19 @@ mod malformed_owner_tests {
     #[test]
     fn malformed_lambda_owner_never_falls_back_to_outer_function() {
         for transfer in [
-            "func.tail_call_indirect %k {signature = func.func_sig<() -> core.never>}",
-            "func.tail_call {callee = @runtime}",
+            "\"func.tail_call_indirect\"(%k) {signature = func.func_sig<() -> core.never>}",
+            "\"func.tail_call\"() {callee = @runtime}",
         ] {
             let mut ctx = trunk_ir::IrContext::new();
             let input = "core.module @m {
           func.func @host() -> core.never {
             %lambda = closure.lambda direct(%k: func.func_sig<() -> core.never>) -> core.never {
-              func.tail_call_indirect %k
+              \"func.tail_call_indirect\"(%k)
             }
-            func.unreachable
+            \"func.unreachable\"()
           }
         }";
-            let input = input.replace("func.tail_call_indirect %k", transfer);
+            let input = input.replace("\"func.tail_call_indirect\"(%k)", transfer);
             let module = trunk_ir::parser::parse_test_module(&mut ctx, &input);
             assert!(
                 trunk_ir::validation::validate_all(&ctx, module, &mut Default::default()).is_ok()
@@ -1020,12 +1020,12 @@ mod callable_owner_regressions {
               func.func @host() {{
                 %outer = closure.lambda direct() -> core.i32 {{
                   %inner = closure.lambda direct(%k: func.func_sig<() -> {callee_result}>) -> core.never {{
-                    func.tail_call_indirect %k {{signature = func.func_sig<() -> {callee_result}>}}
+                    \"func.tail_call_indirect\"(%k) {{signature = func.func_sig<() -> {callee_result}>}}
                   }}
-                  %v = arith.const {{value = 0}} : core.i32
-                  func.return %v
+                  %v = \"arith.const\"() {{value = 0}} : core.i32
+                  \"func.return\"(%v)
                 }}
-                func.return
+                \"func.return\"()
               }}
             }}"
             );

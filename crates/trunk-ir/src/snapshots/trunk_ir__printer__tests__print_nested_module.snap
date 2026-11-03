@@ -5,11 +5,11 @@ expression: output
 core.module @test {
   core.module @Point {
     func.func @get_x(%0: core.i32) -> core.i32 {
-        func.return %0
+        "func.return"(%0)
     }
   }
   func.func @make() -> core.i32 {
-      %0 = arith.const {value = 1} : core.i32
-      func.return %0
+      %0 = "arith.const"() {value = 1} : core.i32
+      "func.return"(%0)
   }
 }

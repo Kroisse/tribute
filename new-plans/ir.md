@@ -379,6 +379,28 @@ Structured-to-CFG 변환은 case가 이 조건을 만족하는 정수 discrimina
 비교하는 `cf.cond_br` 사슬로 내린다. Case 값의 분포에 따른 분기 전략은 target
 lowering이 정한다.
 
+### Generic 형식
+
+모든 operation은 generic 형식으로 읽고 쓸 수 있다. Generic 형식은 MLIR의 generic
+형식을 따른다.
+
+```text
+%r = "test.op"(%a, %b)[^bb1] ({
+  ...
+}, {
+}) {attr = 1} : core.i32
+```
+
+- Operation 이름은 문자열로 쓴다. 따옴표 없는 이름 뒤에는 그 operation의 전용
+  형식이 온다.
+- Operand는 언제나 괄호 안에 쓰며, 없으면 `()`다. Successor는 그 뒤에
+  `[^bb..]`로 쓴다.
+- Region은 attribute 사전 앞에 괄호로 감싸 쉼표로 나열한다. 그래서 attribute
+  자리의 `{`는 언제나 사전이며, block 없는 region도 빈 사전과 헷갈리지 않는다.
+- Attribute 사전은 비어 있으면 쓰지 않는다. `sym_name`도 사전에 쓴다.
+- Result 타입은 `: types`로 쓴다. MLIR과 달리 operand 타입은 쓰지 않는다.
+  Operand는 정의에서 타입을 얻는다.
+
 ### 선언적 어셈블리 형식
 
 Operation의 전용 textual 형식은 그 operation의 `#[dialect]` 선언에 형식 기술로
@@ -1360,7 +1382,7 @@ binder 이름을 나열할 뿐이며, 종류나 합집합을 쓰지 않고 위�
     captures [] {
   ...
 }
-%s = tribute_control.instantiate %step {row_args = [{tail = 0}]} : !Step0
+%s = "tribute_control.instantiate"(%step) {row_args = [{tail = 0}]} : !Step0
 ```
 
 Row는 convention 앞에 `row(@A, @B | 'a1)` 형식으로 쓴다. Instance 목록과 `|` 뒤의

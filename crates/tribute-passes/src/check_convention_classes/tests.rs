@@ -12,9 +12,9 @@ fn rules(input: &str) -> Vec<&'static str> {
         .collect()
 }
 
-const CTL: &str = r#"  ability.decl {sym_name = "Ctl"} {
-    ability.operation {kind = "op", op_name = "ctl", param_types = [], result_type = core.i32}
-  }"#;
+const CTL: &str = r#"  "ability.decl"() ({
+    "ability.operation"() {kind = "op", op_name = "ctl", param_types = [], result_type = core.i32}
+  }) {sym_name = "Ctl"}"#;
 
 /// `app` has one class variable, the row of its callback; `main` selects
 /// its `Direct` instance with a pure lambda.
@@ -146,7 +146,7 @@ fn a_local_class_settles_from_direct_through_other_locals() {
 fn a_lambda_has_a_body_for_each_class_its_instantiations_select() {
     let input = LOCAL.replace("CTL", CTL).replace(
         "USE",
-        "%b = tribute_control.instantiate %g {row_args = [{instances = [@Ctl]}]} : !lc",
+        "%b = \"tribute_control.instantiate\"(%g) {row_args = [{instances = [@Ctl]}]} : !lc",
     );
     assert_eq!(rules(&input), ["lambda"]);
     let input = input.replace(

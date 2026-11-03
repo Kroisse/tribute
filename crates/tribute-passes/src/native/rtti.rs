@@ -1155,7 +1155,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let ir = r#"core.module @test {
   func.func @f(%0: core.i32) -> core.i32 {
-    func.return %0
+    "func.return"(%0)
   }
 }"#;
         let module = trunk_ir::parser::parse_test_module(&mut ctx, ir);
@@ -1170,9 +1170,9 @@ mod tests {
         let mut ctx = IrContext::new();
         let ir = r#"core.module @test {
   func.func @f(%0: core.i32, %1: core.f64) -> core.nil {
-    %2 = tribute_rt.box_int %0 : tribute_rt.anyref
-    %3 = tribute_rt.box_float %1 : tribute_rt.anyref
-    func.return
+    %2 = "tribute_rt.box_int"(%0) : tribute_rt.anyref
+    %3 = "tribute_rt.box_float"(%1) : tribute_rt.anyref
+    "func.return"()
   }
 }"#;
         let module = trunk_ir::parser::parse_test_module(&mut ctx, ir);
@@ -1206,9 +1206,9 @@ mod tests {
             r#"core.module @test {
   !Choice = adt.enum<Choice { None(), Pair(core.i32, tribute_rt.anyref) }>
   func.func @f(%n: core.i32, %v: tribute_rt.anyref) -> core.nil {
-    %none = adt.variant_new {type = !Choice, tag = "None"} : !Choice
-    %pair = adt.variant_new %n, %v {type = !Choice, tag = "Pair"} : !Choice
-    func.return
+    %none = "adt.variant_new"() {type = !Choice, tag = "None"} : !Choice
+    %pair = "adt.variant_new"(%n, %v) {type = !Choice, tag = "Pair"} : !Choice
+    "func.return"()
   }
 }"#,
         );
@@ -1284,12 +1284,12 @@ mod tests {
   !Nodes = adt.array<!NodeRef>
   !Shorts = adt.array<core.i16>
   func.func @nodes(%node: !NodeRef) -> !Nodes {
-    %nodes = adt.array_of %node {type = !Nodes} : !Nodes
-    func.return %nodes
+    %nodes = "adt.array_of"(%node) {type = !Nodes} : !Nodes
+    "func.return"(%nodes)
   }
   func.func @shorts(%short: core.i16) -> !Shorts {
-    %shorts = adt.array_of %short {type = !Shorts} : !Shorts
-    func.return %shorts
+    %shorts = "adt.array_of"(%short) {type = !Shorts} : !Shorts
+    "func.return"(%shorts)
   }
 }"#,
         );

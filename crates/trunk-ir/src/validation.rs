@@ -1410,7 +1410,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = crate::parser::parse_test_module(
             &mut ctx,
-            "core.module @m { func.func @f() { func.return } }",
+            "core.module @m { func.func @f() { \"func.return\"() } }",
         );
         ctx.op_attrs_mut(module.op()).remove("sym_name");
         let text = validate_all(&ctx, module, &mut Default::default()).to_string();
@@ -2306,9 +2306,9 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f(%x: core.i32, %y: core.i32) {
-    func.call %x {callee = @consume}
-    func.call %y {callee = @consume}
-    func.return
+    "func.call"(%x) {callee = @consume}
+    "func.call"(%y) {callee = @consume}
+    "func.return"()
   }
   func.func @consume(%value: core.i32)
 }"#,
@@ -2339,8 +2339,8 @@ mod tests {
                     &mut ctx,
                     r#"core.module @test {
   func.func @f(%x: core.i32) {
-    %unused = arith.const {value = 0} : core.i32
-    func.return
+    %unused = "arith.const"() {value = 0} : core.i32
+    "func.return"()
   }
 }"#,
                 );
@@ -2360,7 +2360,7 @@ mod tests {
                     "other_module" => {
                         let other = crate::parser::parse_test_module(
                             &mut ctx,
-                            "core.module @other { func.func @g() { func.return } }",
+                            "core.module @other { func.func @g() { \"func.return\"() } }",
                         );
                         let other_block = ctx.region(other.body(&ctx).unwrap()).blocks[0];
                         ctx.push_op(other_block, user);
@@ -2389,7 +2389,7 @@ mod tests {
     fn tail_call_indirect_typed_cps_transfer_passes() {
         let input = r#"core.module @test {
   func.func @main(%k: core.ptr, %value: core.i32) -> core.never {
-    func.tail_call_indirect %k, %value {signature = func.func_sig<(core.i32) -> core.never>}
+    "func.tail_call_indirect"(%k, %value) {signature = func.func_sig<(core.i32) -> core.never>}
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -2402,7 +2402,7 @@ mod tests {
     fn tail_call_indirect_rejects_non_cps_result_and_bad_arguments() {
         let input = r#"core.module @test {
   func.func @main(%k: core.ptr, %value: core.i1) -> core.never {
-    func.tail_call_indirect %k, %value {signature = func.func_sig<(core.i32) -> core.i32>}
+    "func.tail_call_indirect"(%k, %value) {signature = func.func_sig<(core.i32) -> core.i32>}
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -2422,29 +2422,29 @@ mod tests {
   !never = func.func_sig<() -> core.never>
   !unary = func.func_sig<(core.i32) -> core.never>
   func.func @result(%k: !never) -> core.never {
-    %bad = func.tail_call_indirect %k {signature = !never} : core.i32
+    %bad = "func.tail_call_indirect"(%k) {signature = !never} : core.i32
   }
   func.func @not_last(%k: !never) -> core.never {
-    func.tail_call_indirect %k {signature = !never}
-    func.unreachable
+    "func.tail_call_indirect"(%k) {signature = !never}
+    "func.unreachable"()
   }
   func.func @missing() -> core.never {
-    func.tail_call_indirect {signature = !never}
+    "func.tail_call_indirect"() {signature = !never}
   }
   func.func @unsigned(%k: !never) -> core.never {
-    func.tail_call_indirect %k
+    "func.tail_call_indirect"(%k)
   }
   func.func @mismatched(%k: !unary) -> core.never {
-    func.tail_call_indirect %k {signature = !never}
+    "func.tail_call_indirect"(%k) {signature = !never}
   }
   func.func @erased(%k: core.ptr) -> core.never {
-    func.tail_call_indirect %k {signature = !never}
+    "func.tail_call_indirect"(%k) {signature = !never}
   }
   func.func @direct_function(%k: !never) -> core.never {
-    func.tail_call_indirect %k {signature = !never}
+    "func.tail_call_indirect"(%k) {signature = !never}
   }
   func.func @arity(%k: core.ptr) -> core.never {
-    func.tail_call_indirect %k {signature = !unary}
+    "func.tail_call_indirect"(%k) {signature = !unary}
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -2468,15 +2468,15 @@ mod tests {
     fn scf_never_regions_accept_every_proper_tail_surface() {
         let input = r#"core.module @test {
   func.func @main(%cond: core.i1) -> core.never {
-    %outer = scf.if %cond : core.never {
-      ability.perform
-    } {
-      %nested = scf.if %cond : core.never {
-        func.unreachable
-      } {
-        ability.handle_dispatch
-      }
-    }
+    %outer = "scf.if"(%cond) ({
+      "ability.perform"()
+    }, {
+      %nested = "scf.if"(%cond) ({
+        "func.unreachable"()
+      }, {
+        "ability.handle_dispatch"()
+      }) : core.never
+    }) : core.never
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -2489,12 +2489,12 @@ mod tests {
     fn resultless_scf_regions_still_require_yield() {
         let input = r#"core.module @test {
   func.func @main(%cond: core.i1) {
-    scf.if %cond {
-      func.unreachable
-    } {
-      func.unreachable
-    }
-    func.return
+    "scf.if"(%cond) ({
+      "func.unreachable"()
+    }, {
+      "func.unreachable"()
+    })
+    "func.return"()
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -2522,13 +2522,13 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @add(%0: core.i32, %1: core.i32) -> core.i32 {
-    %2 = arith.addi %0, %1 : core.i32
-    func.return %2
+    %2 = "arith.addi"(%0, %1) : core.i32
+    "func.return"(%2)
   }
   func.func @main() -> core.i32 {
-    %0 = arith.const {value = 1} : core.i32
-    %1 = func.call %0 {callee = @add} : core.i32
-    func.return %1
+    %0 = "arith.const"() {value = 1} : core.i32
+    %1 = "func.call"(%0) {callee = @add} : core.i32
+    "func.return"(%1)
   }
 }"#,
         );
@@ -2565,13 +2565,13 @@ mod tests {
                 "too few args: add expects 2 params, caller passes 1",
                 r#"core.module @test {
   func.func @add(%0: core.i32, %1: core.i32) -> core.i32 {
-    %2 = arith.addi %0, %1 : core.i32
-    func.return %2
+    %2 = "arith.addi"(%0, %1) : core.i32
+    "func.return"(%2)
   }
   func.func @main() -> core.i32 {
-    %0 = arith.const {value = 1} : core.i32
-    %1 = func.call %0 {callee = @add} : core.i32
-    func.return %1
+    %0 = "arith.const"() {value = 1} : core.i32
+    %1 = "func.call"(%0) {callee = @add} : core.i32
+    "func.return"(%1)
   }
 }"#,
                 &["main", "add", "1 argument(s), expected 2"],
@@ -2580,14 +2580,14 @@ mod tests {
                 "too many args: add expects 1 param, caller passes 3",
                 r#"core.module @test {
   func.func @add(%0: core.i32) -> core.i32 {
-    func.return %0
+    "func.return"(%0)
   }
   func.func @main() -> core.i32 {
-    %0 = arith.const {value = 1} : core.i32
-    %1 = arith.const {value = 2} : core.i32
-    %2 = arith.const {value = 3} : core.i32
-    %3 = func.call %0, %1, %2 {callee = @add} : core.i32
-    func.return %3
+    %0 = "arith.const"() {value = 1} : core.i32
+    %1 = "arith.const"() {value = 2} : core.i32
+    %2 = "arith.const"() {value = 3} : core.i32
+    %3 = "func.call"(%0, %1, %2) {callee = @add} : core.i32
+    "func.return"(%3)
   }
 }"#,
                 &["3 argument(s), expected 1"],
@@ -2596,12 +2596,12 @@ mod tests {
                 "tail_call passes 1 arg to a 2-param callee",
                 r#"core.module @test {
   func.func @add(%0: core.i32, %1: core.i32) -> core.i32 {
-    %2 = arith.addi %0, %1 : core.i32
-    func.return %2
+    %2 = "arith.addi"(%0, %1) : core.i32
+    "func.return"(%2)
   }
   func.func @main() -> core.i32 {
-    %0 = arith.const {value = 1} : core.i32
-    func.tail_call %0 {callee = @add}
+    %0 = "arith.const"() {value = 1} : core.i32
+    "func.tail_call"(%0) {callee = @add}
   }
 }"#,
                 &["add", "1 argument(s), expected 2"],
@@ -2610,13 +2610,13 @@ mod tests {
                 "args passed to a zero-param function",
                 r#"core.module @test {
   func.func @unit() -> core.i32 {
-    %0 = arith.const {value = 0} : core.i32
-    func.return %0
+    %0 = "arith.const"() {value = 0} : core.i32
+    "func.return"(%0)
   }
   func.func @main() -> core.i32 {
-    %0 = arith.const {value = 1} : core.i32
-    %1 = func.call %0 {callee = @unit} : core.i32
-    func.return %1
+    %0 = "arith.const"() {value = 1} : core.i32
+    %1 = "func.call"(%0) {callee = @unit} : core.i32
+    "func.return"(%1)
   }
 }"#,
                 &["1 argument(s), expected 0"],
@@ -2625,14 +2625,14 @@ mod tests {
                 "correct arity passes",
                 r#"core.module @test {
   func.func @add(%0: core.i32, %1: core.i32) -> core.i32 {
-    %2 = arith.addi %0, %1 : core.i32
-    func.return %2
+    %2 = "arith.addi"(%0, %1) : core.i32
+    "func.return"(%2)
   }
   func.func @main() -> core.i32 {
-    %0 = arith.const {value = 40} : core.i32
-    %1 = arith.const {value = 2} : core.i32
-    %2 = func.call %0, %1 {callee = @add} : core.i32
-    func.return %2
+    %0 = "arith.const"() {value = 40} : core.i32
+    %1 = "arith.const"() {value = 2} : core.i32
+    %2 = "func.call"(%0, %1) {callee = @add} : core.i32
+    "func.return"(%2)
   }
 }"#,
                 &[],
@@ -2641,9 +2641,9 @@ mod tests {
                 "callee not defined in this module is skipped",
                 r#"core.module @test {
   func.func @main() -> core.i32 {
-    %0 = arith.const {value = 1} : core.i32
-    %1 = func.call %0 {callee = @extern_fn} : core.i32
-    func.return %1
+    %0 = "arith.const"() {value = 1} : core.i32
+    %1 = "func.call"(%0) {callee = @extern_fn} : core.i32
+    "func.return"(%1)
   }
 }"#,
                 &[],
@@ -2680,8 +2680,8 @@ mod tests {
     fn cmpf_subset_predicate_passes() {
         let input = r#"core.module @test {
   func.func @main(%0: core.f64, %1: core.f64) -> core.i1 {
-    %2 = arith.cmpf %0, %1 {predicate = "une"} : core.i1
-    func.return %2
+    %2 = "arith.cmpf"(%0, %1) {predicate = "une"} : core.i1
+    "func.return"(%2)
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -2699,8 +2699,8 @@ mod tests {
                 "arith.cmpf",
                 r#"core.module @test {
   func.func @main(%0: core.f64, %1: core.f64) -> core.i1 {
-    %2 = arith.cmpf %0, %1 {predicate = "ueq"} : core.i1
-    func.return %2
+    %2 = "arith.cmpf"(%0, %1) {predicate = "ueq"} : core.i1
+    "func.return"(%2)
   }
 }"#,
                 &["unsupported predicate 'ueq'"],
@@ -2709,8 +2709,8 @@ mod tests {
                 "arith.cmpf",
                 r#"core.module @test {
   func.func @main(%0: core.f64, %1: core.f64) -> core.i1 {
-    %2 = arith.cmpf %0, %1 : core.i1
-    func.return %2
+    %2 = "arith.cmpf"(%0, %1) : core.i1
+    "func.return"(%2)
   }
 }"#,
                 &["missing required attribute `predicate`"],
@@ -2719,12 +2719,12 @@ mod tests {
                 "scf.if",
                 r#"core.module @test {
   func.func @main(%cond: core.i1, %x: core.i32) -> core.i32 {
-    %r = scf.if %cond : core.i32 {
-      scf.yield
-    } {
-      scf.yield %x
-    }
-    func.return %r
+    %r = "scf.if"(%cond) ({
+      "scf.yield"()
+    }, {
+      "scf.yield"(%x)
+    }) : core.i32
+    "func.return"(%r)
   }
 }"#,
                 &["forwards 0 value(s)", "successor expects 1 input(s)"],
@@ -2733,12 +2733,12 @@ mod tests {
                 "scf.if",
                 r#"core.module @test {
   func.func @main(%cond: core.i1, %x: core.i32) -> core.i32 {
-    %r = scf.if %cond : core.i32 {
-      %zero = arith.const {value = 0} : core.i32
-    } {
-      scf.yield %x
-    }
-    func.return %r
+    %r = "scf.if"(%cond) ({
+      %zero = "arith.const"() {value = 0} : core.i32
+    }, {
+      "scf.yield"(%x)
+    }) : core.i32
+    "func.return"(%r)
   }
 }"#,
                 &["then_region must terminate with scf.yield"],
@@ -2771,9 +2771,9 @@ mod tests {
         let input = r#"core.module @test {
   func.func @main(%x: core.i32) -> core.i32 {
     ^entry:
-      cf.br %x [^exit]
+      "cf.br"(%x)[^exit]
     ^exit(%forwarded: core.i32):
-      func.return %forwarded
+      "func.return"(%forwarded)
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -2864,13 +2864,13 @@ mod tests {
         let input = r#"core.module @test {
   func.func @main(%condition: core.i1, %value: core.i32) -> core.i32 {
     ^entry:
-      cf.cond_br %condition [^left, ^right]
+      "cf.cond_br"(%condition)[^left, ^right]
     ^left:
-      cf.br %value [^exit]
+      "cf.br"(%value)[^exit]
     ^right:
-      cf.br %value [^exit]
+      "cf.br"(%value)[^exit]
     ^exit(%forwarded: core.i32):
-      func.return %forwarded
+      "func.return"(%forwarded)
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -2899,15 +2899,15 @@ mod tests {
         let input = r#"core.module @test {
   func.func @missing(%x: core.i32) -> core.i32 {
     ^entry:
-      cf.br [^exit]
+      "cf.br"()[^exit]
     ^exit(%forwarded: core.i32):
-      func.return %forwarded
+      "func.return"(%forwarded)
   }
   func.func @wrong_type(%flag: core.i1) -> core.i32 {
     ^entry:
-      cf.br %flag [^exit]
+      "cf.br"(%flag)[^exit]
     ^exit(%forwarded: core.i32):
-      func.return %forwarded
+      "func.return"(%forwarded)
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -2931,17 +2931,17 @@ mod tests {
     fn region_branch_interfaces_cover_nested_if_forwarding() {
         let input = r#"core.module @test {
   func.func @main(%cond: core.i1, %x: core.i32) -> core.i32 {
-    %outer = scf.if %cond : core.i32 {
-      %inner = scf.if %cond : core.i32 {
-        scf.yield %x
-      } {
-        scf.yield %x
-      }
-      scf.yield %inner
-    } {
-      scf.yield %x
-    }
-    func.return %outer
+    %outer = "scf.if"(%cond) ({
+      %inner = "scf.if"(%cond) ({
+        "scf.yield"(%x)
+      }, {
+        "scf.yield"(%x)
+      }) : core.i32
+      "scf.yield"(%inner)
+    }, {
+      "scf.yield"(%x)
+    }) : core.i32
+    "func.return"(%outer)
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -2970,13 +2970,13 @@ mod tests {
     fn region_branch_interfaces_cover_loop_entry_backedge_and_exit() {
         let input = r#"core.module @test {
   func.func @main(%init: core.i32) -> core.i32 {
-    %result = scf.loop %init : core.i32 {
+    %result = "scf.loop"(%init) ({
       ^header(%iter: core.i32):
-        scf.continue %iter
+        "scf.continue"(%iter)
       ^exit_path(%value: core.i32):
-        scf.break %value
-    }
-    func.return %result
+        "scf.break"(%value)
+    }) : core.i32
+    "func.return"(%result)
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -3026,16 +3026,16 @@ mod tests {
     fn region_branch_interfaces_cover_switch_case_and_default() {
         let input = r#"core.module @test {
   func.func @main(%discriminant: core.i32) -> core.nil {
-    scf.switch %discriminant {
-      scf.case {value = 0} {
-        scf.yield
-      }
-      scf.default {
-        scf.yield
-      }
-    }
-    %unit = core.nil_value : core.nil
-    func.return %unit
+    "scf.switch"(%discriminant) ({
+      "scf.case"() ({
+        "scf.yield"()
+      }) {value = 0}
+      "scf.default"() ({
+        "scf.yield"()
+      })
+    })
+    %unit = "core.nil_value"() : core.nil
+    "func.return"(%unit)
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -3073,37 +3073,37 @@ mod tests {
     fn typed_region_models_fail_closed_for_invalid_semantic_queries() {
         let input = r#"core.module @test {
   func.func @main(%cond: core.i1, %discriminant: core.i32, %value: core.i32) -> core.i32 {
-    %selected = scf.if %cond : core.i32 {
-      scf.yield %value
-    } {
-      scf.yield %value
-    }
-    scf.switch %discriminant {
-      scf.case {value = 0} {
-        scf.yield
-      }
-      scf.default {
-        scf.yield
-      }
-    }
-    %looped = scf.loop %value : core.i32 {
+    %selected = "scf.if"(%cond) ({
+      "scf.yield"(%value)
+    }, {
+      "scf.yield"(%value)
+    }) : core.i32
+    "scf.switch"(%discriminant) ({
+      "scf.case"() ({
+        "scf.yield"()
+      }) {value = 0}
+      "scf.default"() ({
+        "scf.yield"()
+      })
+    })
+    %looped = "scf.loop"(%value) ({
       ^continue_path(%continue_value: core.i32):
-        scf.continue %continue_value
+        "scf.continue"(%continue_value)
       ^break_path(%break_value: core.i32):
-        scf.break %break_value
-    }
-    scf.loop %value {
+        "scf.break"(%break_value)
+    }) : core.i32
+    "scf.loop"(%value) ({
       ^resultless_break_path(%resultless_value: core.i32):
-        scf.break %resultless_value
-    }
-    %zero = arith.const {value = 0} : core.i32
-    func.return %selected
+        "scf.break"(%resultless_value)
+    })
+    %zero = "arith.const"() {value = 0} : core.i32
+    "func.return"(%selected)
   }
   func.func @stray(%value: core.i32) {
-    scf.break %value
+    "scf.break"(%value)
   }
   func.func @stray_continue(%other_value: core.i32) {
-    scf.continue %other_value
+    "scf.continue"(%other_value)
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -3313,41 +3313,41 @@ mod tests {
         let input = r#"core.module @test {
   func.func @main(%cond: core.i1, %discriminant: core.i32, %value: core.i32) -> core.i32 {
     ^entry:
-      cf.cond_br %cond [^left, ^right]
+      "cf.cond_br"(%cond)[^left, ^right]
     ^left:
-      cf.br %value [^merge]
-      %after_branch = arith.const {value = 0} : core.i32
+      "cf.br"(%value)[^merge]
+      %after_branch = "arith.const"() {value = 0} : core.i32
     ^right:
-      cf.br %value [^merge]
+      "cf.br"(%value)[^merge]
     ^merge(%forwarded: core.i32):
-      %selected = scf.if %cond : core.i32 {
-        scf.yield %forwarded
-      } {
-        scf.yield %forwarded
-      }
-      scf.switch %discriminant {
-        scf.case {value = 0} { scf.yield }
-      }
-      scf.switch %discriminant {
-        scf.case {value = 1} {
+      %selected = "scf.if"(%cond) ({
+        "scf.yield"(%forwarded)
+      }, {
+        "scf.yield"(%forwarded)
+      }) : core.i32
+      "scf.switch"(%discriminant) ({
+        "scf.case"() ({ "scf.yield"() }) {value = 0}
+      })
+      "scf.switch"(%discriminant) ({
+        "scf.case"() ({
           ^empty_case:
-        }
-      }
-      scf.switch %discriminant {
-        %unsupported = arith.const {value = 2} : core.i32
-      }
-      scf.switch %discriminant {
-        scf.default { scf.yield }
-        scf.default { scf.yield }
-      }
-      %looped = scf.loop %forwarded : core.i32 {
+        }) {value = 1}
+      })
+      "scf.switch"(%discriminant) ({
+        %unsupported = "arith.const"() {value = 2} : core.i32
+      })
+      "scf.switch"(%discriminant) ({
+        "scf.default"() ({ "scf.yield"() })
+        "scf.default"() ({ "scf.yield"() })
+      })
+      %looped = "scf.loop"(%forwarded) ({
         ^loop_exit(%loop_value: core.i32):
-          scf.break %loop_value
-      }
-      func.return %selected
+          "scf.break"(%loop_value)
+      }) : core.i32
+      "func.return"(%selected)
   }
   func.func @stray(%stray_value: core.i32) {
-    scf.break %stray_value
+    "scf.break"(%stray_value)
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -3432,13 +3432,13 @@ mod tests {
     fn region_branch_interfaces_reject_incomplete_loop_mappings() {
         let input = r#"core.module @test {
   func.func @main(%init: core.i32) -> core.i32 {
-    %result = scf.loop %init : core.i32 {
+    %result = "scf.loop"(%init) ({
       ^header(%iter: core.i32, %extra: core.i32):
-        scf.continue
+        "scf.continue"()
       ^exit_path(%value: core.i32):
-        scf.break %value
-    }
-    func.return %result
+        "scf.break"(%value)
+    }) : core.i32
+    "func.return"(%result)
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -3461,12 +3461,12 @@ mod tests {
     fn region_branch_interface_rejects_textual_forwarding_type_mismatch() {
         let input = r#"core.module @test {
   func.func @main(%cond: core.i1, %x: core.i32) -> core.i32 {
-    %result = scf.if %cond : core.i32 {
-      scf.yield %cond
-    } {
-      scf.yield %x
-    }
-    func.return %result
+    %result = "scf.if"(%cond) ({
+      "scf.yield"(%cond)
+    }, {
+      "scf.yield"(%x)
+    }) : core.i32
+    "func.return"(%result)
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -3671,8 +3671,8 @@ mod tests {
     fn validate_all_includes_cmpf_predicate_errors() {
         let input = r#"core.module @test {
   func.func @main(%0: core.f64, %1: core.f64) -> core.i1 {
-    %2 = arith.cmpf %0, %1 {predicate = "one"} : core.i1
-    func.return %2
+    %2 = "arith.cmpf"(%0, %1) {predicate = "one"} : core.i1
+    "func.return"(%2)
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -3689,8 +3689,8 @@ mod tests {
         // callee whose function type differs from `signature`.
         let input = r#"core.module @test {
   func.func @main(%f: func.func_sig<(core.i32) -> core.i32>, %x: core.i64) -> core.i64 {
-    %r = func.call_indirect %f, %x {signature = func.func_sig<(core.i64) -> core.i64>} : core.i64
-    func.return %r
+    %r = "func.call_indirect"(%f, %x) {signature = func.func_sig<(core.i64) -> core.i64>} : core.i64
+    "func.return"(%r)
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -3712,8 +3712,8 @@ mod tests {
     fn operation_verifiers_reject_a_symbol_reference_to_the_root_module() {
         let input = r#"core.module @test {
   func.func @main() -> core.i32 {
-    %r = func.call {callee = @main} : core.i32
-    func.return %r
+    %r = "func.call"() {callee = @main} : core.i32
+    "func.return"(%r)
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -3744,15 +3744,15 @@ mod tests {
                 &format!(
                     r#"core.module @test {{
   func.func @target(%value: core.i32) -> core.i32 {{
-    func.return %value
+    "func.return"(%value)
   }}
   core.module @inner {{
     func.func @target(%value: core.i64) -> core.i64 {{
-      func.return %value
+      "func.return"(%value)
     }}
     func.func @caller(%value: core.i32) -> core.i32 {{
-      %result = func.call %value {{callee = {callee}}} : core.i32
-      func.return %result
+      %result = "func.call"(%value) {{callee = {callee}}} : core.i32
+      "func.return"(%result)
     }}
   }}
 }}"#

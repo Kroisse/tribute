@@ -110,14 +110,14 @@ mod tests {
             r#"core.module @test {
   !_closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @f(%closure: !_closure) -> core.ptr {
-    %raw = tribute_rt.into_raw %closure : core.ptr
-    func.return %raw
+    %raw = "tribute_rt.into_raw"(%closure) : core.ptr
+    "func.return"(%raw)
   }
 }"#,
         );
         assert!(!output.contains("tribute_rt.into_raw"), "{output}");
         assert!(
-            output.contains("core.unrealized_conversion_cast %0 : core.ptr"),
+            output.contains("\"core.unrealized_conversion_cast\"(%0) : core.ptr"),
             "{output}"
         );
     }
@@ -127,14 +127,14 @@ mod tests {
         let output = run_pass(
             r#"core.module @test {
   func.func @f(%raw: core.ptr) -> core.bytes {
-    %bytes = tribute_rt.from_raw %raw : core.bytes
-    func.return %bytes
+    %bytes = "tribute_rt.from_raw"(%raw) : core.bytes
+    "func.return"(%bytes)
   }
 }"#,
         );
         assert!(!output.contains("tribute_rt.from_raw"), "{output}");
         assert!(
-            output.contains("core.unrealized_conversion_cast %0 : core.bytes"),
+            output.contains("\"core.unrealized_conversion_cast\"(%0) : core.bytes"),
             "{output}"
         );
     }

@@ -942,21 +942,21 @@ mod pass {
             &mut ctx,
             r#"core.module @root {
   func.func @main() -> core.i32 {
-    %0 = func.call {callee = @inner::@helper} : core.i32
-    func.return %0
+    %0 = "func.call"() {callee = @inner::@helper} : core.i32
+    "func.return"(%0)
   }
   core.module @inner {
     func.func @helper() -> core.i32 {
-      %0 = arith.const {value = 42} : core.i32
-      func.return %0
+      %0 = "arith.const"() {value = 42} : core.i32
+      "func.return"(%0)
     }
     func.func @caller() -> core.i32 {
-      %0 = func.call {callee = @local} : core.i32
-      func.return %0
+      %0 = "func.call"() {callee = @local} : core.i32
+      "func.return"(%0)
     }
     func.func @local() -> core.i32 {
-      %0 = arith.const {value = 7} : core.i32
-      func.return %0
+      %0 = "arith.const"() {value = 7} : core.i32
+      "func.return"(%0)
     }
   }
 }"#,
@@ -1177,12 +1177,12 @@ mod pass {
         // rewrite drops the cached CallGraph.
         let input = r#"core.module @test {
   func.func @helper() -> core.i32 {
-    %0 = arith.const {value = 42} : core.i32
-    func.return %0
+    %0 = "arith.const"() {value = 42} : core.i32
+    "func.return"(%0)
   }
   func.func @main() -> core.i32 {
-    %0 = func.call {callee = @helper} : core.i32
-    func.return %0
+    %0 = "func.call"() {callee = @helper} : core.i32
+    "func.return"(%0)
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1214,8 +1214,8 @@ mod pass {
         // the cached graph should still be valid.
         let input = r#"core.module @test {
   func.func @helper() -> core.i32 {
-    %0 = func.call {callee = @helper} : core.i32
-    func.return %0
+    %0 = "func.call"() {callee = @helper} : core.i32
+    "func.return"(%0)
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1318,16 +1318,16 @@ mod pass {
         // a fixed point that eliminates both `func.call` sites in one run.
         let input = r#"core.module @test {
   func.func @inner() -> core.i32 {
-    %0 = arith.const {value = 1} : core.i32
-    func.return %0
+    %0 = "arith.const"() {value = 1} : core.i32
+    "func.return"(%0)
   }
   func.func @helper() -> core.i32 {
-    %0 = func.call {callee = @inner} : core.i32
-    func.return %0
+    %0 = "func.call"() {callee = @inner} : core.i32
+    "func.return"(%0)
   }
   func.func @main() -> core.i32 {
-    %0 = func.call {callee = @helper} : core.i32
-    func.return %0
+    %0 = "func.call"() {callee = @helper} : core.i32
+    "func.return"(%0)
   }
 }"#;
         let mut ctx = IrContext::new();

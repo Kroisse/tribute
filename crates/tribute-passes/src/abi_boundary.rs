@@ -565,11 +565,11 @@ mod tests {
   func.func @user_bridge(%value: core.i32) -> core.i32 attributes {abi = "C"}
   func.func @unused_bridge(%value: core.i32) -> core.i32 attributes {abi = "C"}
   func.func @worker(%ev: core.ptr, %bytes: core.bytes) -> core.i32 {
-    %printed = func.call %bytes {callee = @__tribute_unbound_helper} : core.nil
-    %len = func.call %bytes {callee = @__tribute_bytes_len} : core.i32
-    %id = func.call %len {callee = @user_bridge} : core.i32
-    %tag = func.call {callee = @__tribute_next_tag} : core.i32
-    func.return %tag
+    %printed = "func.call"(%bytes) {callee = @__tribute_unbound_helper} : core.nil
+    %len = "func.call"(%bytes) {callee = @__tribute_bytes_len} : core.i32
+    %id = "func.call"(%len) {callee = @user_bridge} : core.i32
+    %tag = "func.call"() {callee = @__tribute_next_tag} : core.i32
+    "func.return"(%tag)
   }
 }"#;
 
@@ -603,11 +603,11 @@ mod tests {
         let violations = kinds(
             r#"core.module @test {
   func.func @target(%value: core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} attributes {tribute.types = {"std::String" = core.i32}} {
-    func.return
+    "func.return"()
   }
   func.func @caller(%value: core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
-    %reference = func.constant {func_ref = @target} : func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>
-    func.tail_call_indirect %reference, %value {signature = func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>}
+    %reference = "func.constant"() {func_ref = @target} : func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>
+    "func.tail_call_indirect"(%reference, %value) {signature = func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>}
   }
 }"#,
         );
@@ -619,7 +619,7 @@ mod tests {
         let violations = kinds(
             r#"core.module @test {tribute.types = {"std::String" = core.i32, "std::runtime::evidence::Marker" = core.i64}} {
   func.func @helper() {
-    func.return
+    "func.return"()
   }
 }"#,
         );
@@ -632,7 +632,7 @@ mod tests {
             r#"core.module @test {
   !closure = closure.closure<func.func_sig<(core.i32) -> core.i32>>
   func.func @run(%callback: !closure) -> !closure {
-    func.return %callback
+    "func.return"(%callback)
   }
 }"#,
         );
@@ -643,8 +643,8 @@ mod tests {
         let violations = kinds(
             r#"core.module @test {
   func.func @run(%evidence: core.ptr) {
-    %created = closure.new {entries = [@run]} : core.ptr
-    func.return
+    %created = "closure.new"() {entries = [@run]} : core.ptr
+    "func.return"()
   }
 }"#,
         );
@@ -660,7 +660,7 @@ mod tests {
             kinds(
                 r#"core.module @test {
   func.func @run() attributes {tribute.calling_convention = "cps"} {
-    func.return
+    "func.return"()
   }
 }"#
             ),
@@ -680,7 +680,7 @@ mod tests {
             kinds(
                 r#"core.module @test {
   func.func @run() attributes {evidence = [func.func_sig<(adt.typeref<{name = "Frame", tribute.cps_continuation_frame_result = core.nil}>) -> ()>]} {
-    func.return
+    "func.return"()
   }
 }"#
             ),
@@ -691,7 +691,7 @@ mod tests {
             kinds(
                 r#"core.module @test {
   func.func @run() attributes {meta = [{tribute.calling_convention = "cps"}]} {
-    func.return
+    "func.return"()
   }
 }"#
             ),
@@ -709,7 +709,7 @@ mod tests {
             kinds(
                 r#"core.module @test {
   func.func @run() attributes {meta = {ty = adt.typeref<{name = "Frame", tribute.cps_continuation_frame_result = core.nil}>}} {
-    func.return
+    "func.return"()
   }
 }"#
             ),
@@ -722,7 +722,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @run(%value: core.i32) {
-    func.return
+    "func.return"()
   }
 }"#,
         );
@@ -747,7 +747,7 @@ mod tests {
             kinds(
                 r#"core.module @test {
   func.func @run() attributes {tribute.renamed_convention = 2, tribute.definition = loc("test.trb" 1:2)} {
-    func.return
+    "func.return"()
   }
 }"#
             ),
@@ -762,15 +762,15 @@ mod tests {
         let violations = kinds(
             r#"core.module @test {
   func.func @never() -> core.never {
-    func.unreachable
+    "func.unreachable"()
   }
   func.func @target(%env: core.ptr, %value: core.i32) -> (), {call_conv = "tail"} {
-    func.return
+    "func.return"()
   }
   func.func @caller(%value: core.i32) {
-    %same = core.unrealized_conversion_cast %value : core.i32
-    %reference = func.constant {func_ref = @target} : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
-    func.return
+    %same = "core.unrealized_conversion_cast"(%value) : core.i32
+    %reference = "func.constant"() {func_ref = @target} : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
+    "func.return"()
   }
 }"#,
         );
@@ -793,9 +793,9 @@ mod tests {
             let module = format!(
                 r#"core.module @test {{
   func.func @run(%value: {scalar}, %erased: tribute_rt.anyref) {{
-    %boxed = core.unrealized_conversion_cast %value : tribute_rt.anyref
-    %unboxed = core.unrealized_conversion_cast %erased : {scalar}
-    func.return
+    %boxed = "core.unrealized_conversion_cast"(%value) : tribute_rt.anyref
+    %unboxed = "core.unrealized_conversion_cast"(%erased) : {scalar}
+    "func.return"()
   }}
 }}"#
             );
@@ -812,10 +812,10 @@ mod tests {
             kinds(
                 r#"core.module @test {
   func.func @run(%pointer: core.ptr, %erased: tribute_rt.anyref, %value: core.i32) {
-    %retyped = core.unrealized_conversion_cast %pointer : tribute_rt.anyref
-    %restored = core.unrealized_conversion_cast %erased : core.ptr
-    %widened = core.unrealized_conversion_cast %value : core.i64
-    func.return
+    %retyped = "core.unrealized_conversion_cast"(%pointer) : tribute_rt.anyref
+    %restored = "core.unrealized_conversion_cast"(%erased) : core.ptr
+    %widened = "core.unrealized_conversion_cast"(%value) : core.i64
+    "func.return"()
   }
 }"#
             ),
@@ -843,13 +843,13 @@ mod tests {
     fn reference_module(definition: &str, reference: &str) -> String {
         format!(
             r#"core.module @test {{
-  func.func {{sym_name = "target", type = {definition}}} {{
+  "func.func"() ({{
     ^bb0(%value: core.i32):
-      func.return
-  }}
+      "func.return"()
+  }}) {{sym_name = "target", type = {definition}}}
   func.func @caller() {{
-    %reference = func.constant {{func_ref = @target}} : {reference}
-    func.return
+    %reference = "func.constant"() {{func_ref = @target}} : {reference}
+    "func.return"()
   }}
 }}"#
         )
@@ -873,7 +873,7 @@ mod tests {
             entry(
                 "() -> core.i32",
                 "",
-                "%zero = arith.const {value = 0} : core.i32\n    func.return %zero",
+                "%zero = \"arith.const\"() {value = 0} : core.i32\n    \"func.return\"(%zero)",
             ),
             entry("() -> (), {call_conv = \"tail\"}", "", "func.return"),
         ] {
@@ -928,7 +928,7 @@ mod tests {
   !frame = adt.typeref<{name = "Frame", tribute.cps_continuation_frame_result = core.nil}>
   !holder = adt.struct<Holder(callback: func.func_sig<(core.ptr) -> !frame>)>
   func.func @run(%value: !holder) {
-    func.return
+    "func.return"()
   }
 }"#,
         );
@@ -973,8 +973,8 @@ mod tests {
             r#"core.module @test {
   !frame = adt.typeref<{name = "Frame"}>
   func.func @run(%frame: !frame) attributes {tribute.calling_convention = "cps"} {
-    %same = core.unrealized_conversion_cast %frame : !frame
-    func.return
+    %same = "core.unrealized_conversion_cast"(%frame) : !frame
+    "func.return"()
   }
 }"#,
             false,
@@ -983,8 +983,8 @@ mod tests {
             r#"core.module @test {
   !frame = adt.typeref<{name = "Frame", tribute.definition = loc("test.trb" 10:20)}>
   func.func @run(%frame: !frame) attributes {tribute.calling_convention = "cps", tribute.definition = loc("test.trb" 30:40)} {
-    %same = core.unrealized_conversion_cast %frame : !frame
-    func.return
+    %same = "core.unrealized_conversion_cast"(%frame) : !frame
+    "func.return"()
   }
 }"#,
             true,
@@ -1005,16 +1005,16 @@ mod tests {
             r#"core.module @test {
   core.module @left {
     func.func @same(%value: core.i32) {
-      func.return
+      "func.return"()
     }
     func.func @take() {
-      %reference = func.constant {func_ref = @same} : func.func_sig<(core.i32) -> ()>
-      func.return
+      %reference = "func.constant"() {func_ref = @same} : func.func_sig<(core.i32) -> ()>
+      "func.return"()
     }
   }
   core.module @right {
     func.func @same(%value: core.i64) -> core.i64 {
-      func.return %value
+      "func.return"(%value)
     }
   }
 }"#,
@@ -1025,12 +1025,12 @@ mod tests {
         let violations = kinds(
             r#"core.module @test {
   func.func @same(%value: core.i32) {
-    func.return
+    "func.return"()
   }
   core.module @left {
     func.func @take() {
-      %reference = func.constant {func_ref = @same} : func.func_sig<(core.i32) -> ()>
-      func.return
+      %reference = "func.constant"() {func_ref = @same} : func.func_sig<(core.i32) -> ()>
+      "func.return"()
     }
   }
 }"#,
@@ -1043,12 +1043,12 @@ mod tests {
         let violations = kinds(
             r#"core.module @test {
   func.func @target(%value: core.i32) {
-    func.return
+    "func.return"()
   }
   func.func @make() {
-    %table = tribute_rt.convention_table {entries = [@target]} : tribute_rt.convention_table_ref
-    %missing = tribute_rt.convention_table {entries = [@target, @missing]} : tribute_rt.convention_table_ref
-    func.return
+    %table = "tribute_rt.convention_table"() {entries = [@target]} : tribute_rt.convention_table_ref
+    %missing = "tribute_rt.convention_table"() {entries = [@target, @missing]} : tribute_rt.convention_table_ref
+    "func.return"()
   }
 }"#,
         );
@@ -1060,12 +1060,12 @@ mod tests {
         let violations = kinds(
             r#"core.module @test {
   func.func @target(%value: core.i32) {
-    func.return
+    "func.return"()
   }
   func.func @caller(%callee: core.ptr, %value: core.i32) {
-    %reference = func.constant {func_ref = @target} : core.i32
-    func.call_indirect %callee, %value
-    func.return
+    %reference = "func.constant"() {func_ref = @target} : core.i32
+    "func.call_indirect"(%callee, %value)
+    "func.return"()
   }
 }"#,
         );
@@ -1079,7 +1079,7 @@ mod tests {
             kinds(
                 r#"core.module @test {
   func.func @run() attributes {tribute.definition.convention = 2} {
-    func.return
+    "func.return"()
   }
 }"#
             ),
@@ -1095,7 +1095,7 @@ mod tests {
             kinds(
                 r#"core.module @test {
   func.func @run(%value: tribute_rt.anyref {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
-    func.unreachable
+    "func.unreachable"()
   }
 }"#
             ),
@@ -1110,10 +1110,10 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @first() -> core.never {
-    func.unreachable
+    "func.unreachable"()
   }
   func.func @second() -> core.never {
-    func.unreachable
+    "func.unreachable"()
   }
 }"#,
         );

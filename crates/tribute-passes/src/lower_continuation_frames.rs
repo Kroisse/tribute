@@ -397,7 +397,7 @@ mod tests {
     use trunk_ir::types::Attribute;
 
     const MODULE: &str = "core.module @m {
-  func.func @f(%x: core.i32) -> core.i32 { func.return %x }
+  func.func @f(%x: core.i32) -> core.i32 { \"func.return\"(%x) }
 }";
 
     fn parse(text: &str) -> (IrContext, Module) {
@@ -473,7 +473,7 @@ mod tests {
                 &format!(
                     "core.module @m {{
   func.func @f(%a: ability.frame<{first}>, %b: ability.frame<{second}>) -> core.never {{
-    func.unreachable
+    \"func.unreachable\"()
   }}
 }}"
                 ),
@@ -520,7 +520,7 @@ mod tests {
     fn a_perform_dispatches_through_the_frame_with_a_one_shot_resumption() {
         let printed = lowered(
             ", %f: !frame, %k: !resume, %arg: core.i32",
-            r#"    ability.perform %ev, %f, %k, %arg {ability = @State, op_name = "set"}"#,
+            r#"    "ability.perform"(%ev, %f, %k, %arg) {ability = @State, op_name = "set"}"#,
         );
         assert!(!printed.contains("ability.perform"), "{printed}");
         assert_eq!(
@@ -545,7 +545,7 @@ mod tests {
     fn an_abort_dispatches_with_a_resumption_that_captures_nothing() {
         let (mut ctx, module) = frame_module(
             ", %f: !frame, %arg: core.i32",
-            r#"    ability.abort %ev, %f, %arg {ability = @State, op_name = "fail"}"#,
+            r#"    "ability.abort"(%ev, %f, %arg) {ability = @State, op_name = "fail"}"#,
         );
         lower_continuation_frames(&mut ctx, module).unwrap();
         let printed = trunk_ir::printer::print_module(&ctx, module.op());
@@ -571,7 +571,7 @@ mod tests {
     fn a_frame_whose_answer_mentions_a_frame_lowers_both() {
         let printed = lowered(
             ", %outer: !nested, %k: !resume",
-            "    ability.exit %outer, %k",
+            "    \"ability.exit\"(%outer, %k)",
         );
         assert!(!printed.contains("ability.exit"), "{printed}");
         assert_eq!(
@@ -591,10 +591,10 @@ mod tests {
     fn suffix_frames_of_one_shape_share_a_dispatch_adapter_factory() {
         let printed = lowered(
             ", %outer: !frame, %k: !resume",
-            r#"    %a = ability.suffix_frame %ev, %outer, %k : !frame
-    %b = ability.suffix_frame %ev, %outer, %k : !frame
-    %c = ability.suffix_frame %ev, %outer, %k {evidence_plan = [{mask = @State}]} : !frame
-    func.unreachable"#,
+            r#"    %a = "ability.suffix_frame"(%ev, %outer, %k) : !frame
+    %b = "ability.suffix_frame"(%ev, %outer, %k) : !frame
+    %c = "ability.suffix_frame"(%ev, %outer, %k) {evidence_plan = [{mask = @State}]} : !frame
+    "func.unreachable"()"#,
         );
         assert!(!printed.contains("ability.suffix_frame"), "{printed}");
         // One factory for the two frames without a selection, one for the
@@ -617,7 +617,7 @@ mod tests {
     fn a_perform_without_an_exact_resumption_is_rejected() {
         let (mut ctx, module) = frame_module(
             ", %f: !frame, %k: core.i32",
-            r#"    ability.perform %ev, %f, %k {ability = @State, op_name = "get"}"#,
+            r#"    "ability.perform"(%ev, %f, %k) {ability = @State, op_name = "get"}"#,
         );
         assert!(lower_continuation_frames(&mut ctx, module).is_err());
     }
@@ -626,10 +626,10 @@ mod tests {
     fn a_handle_with_fewer_handlers_than_arms_is_rejected() {
         let (mut ctx, module) = frame_module(
             ", %exit: !frame, %done: !resume",
-            r#"    ability.handle %ev, %exit, %done, %done {handlers = []} {
+            r#"    "ability.handle"(%ev, %exit, %done, %done) ({
       ^body(%inner: !ev, %frame: !frame):
-        func.unreachable
-    }"#,
+        "func.unreachable"()
+    }) {handlers = []}"#,
         );
         assert!(lower_continuation_frames(&mut ctx, module).is_err());
     }

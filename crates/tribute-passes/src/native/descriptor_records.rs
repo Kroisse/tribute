@@ -360,7 +360,7 @@ mod tests {
             r#"core.module @test {
   !Choice = adt.enum<Choice { None(), Some(tribute_rt.anyref) }>
   func.func @f() -> core.nil {
-    func.return
+    "func.return"()
   }
 }"#,
         );

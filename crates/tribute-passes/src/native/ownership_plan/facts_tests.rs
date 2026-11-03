@@ -17,13 +17,13 @@ const BORROW_FIXTURE: &str = r#"core.module @test {
   !Box = adt.struct<Box(child: !ChildRef)>
   !BoxRef = adt.typeref<{name = "Box"}>
   func.func @observe(%child: !ChildRef) -> core.i32 {
-    %value = adt.struct_get %child {field = 0, type = !Child} : core.i32
-    func.return %value
+    %value = "adt.struct_get"(%child) {field = 0, type = !Child} : core.i32
+    "func.return"(%value)
   }
   func.func @load(%owner: !BoxRef) -> core.i32 {
-    %child = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
-    %value = func.call %child {callee = @observe} : core.i32
-    func.return %value
+    %child = "adt.struct_get"(%owner) {field = 0, type = !Box} : !ChildRef
+    %value = "func.call"(%child) {callee = @observe} : core.i32
+    "func.return"(%value)
   }
 }"#;
 
@@ -33,10 +33,10 @@ const CAST_FIXTURE: &str = r#"core.module @test {
   !Choice = adt.enum<Choice { Some(!ChildRef) }>
   !ChoiceRef = adt.typeref<{name = "Choice"}>
   func.func @load(%choice: !ChoiceRef) -> !ChildRef {
-    %erased = adt.ref_cast %choice {type = tribute_rt.anyref} : tribute_rt.anyref
-    %restored = adt.ref_cast %erased {type = !ChoiceRef} : !ChoiceRef
-    %child = adt.variant_get %restored {type = !Choice, tag = "Some", field = 0} : !ChildRef
-    func.return %child
+    %erased = "adt.ref_cast"(%choice) {type = tribute_rt.anyref} : tribute_rt.anyref
+    %restored = "adt.ref_cast"(%erased) {type = !ChoiceRef} : !ChoiceRef
+    %child = "adt.variant_get"(%restored) {type = !Choice, tag = "Some", field = 0} : !ChildRef
+    "func.return"(%child)
   }
 }"#;
 
@@ -115,11 +115,11 @@ fn entry_contract_views_share_one_proof_and_keep_declared_borrows() {
   !Layout = adt.struct<R(value: core.i32)>
   func.func @foreign(%value: !R) -> core.i32 attributes {abi = "C"}
   func.func @observe(%value: !R) -> core.i32 {
-    %result = func.call %value {callee = @foreign} : core.i32
-    func.return %result
+    %result = "func.call"(%value) {callee = @foreign} : core.i32
+    "func.return"(%result)
   }
   func.func @escape(%value: !R) -> !R {
-    func.return %value
+    "func.return"(%value)
   }
 }"#,
     );
@@ -257,8 +257,8 @@ fn malformed_projection_fails_closed_without_publishing_facts() {
   !Child = adt.struct<Child(value: core.i32)>
   !ChildRef = adt.typeref<{name = "Child"}>
   func.func @load(%child: !ChildRef) -> core.i32 {
-    %value = adt.struct_get %child {field = 1, type = !Child} : core.i32
-    func.return %value
+    %value = "adt.struct_get"(%child) {field = 1, type = !Child} : core.i32
+    "func.return"(%value)
   }
 }"#,
     );
@@ -291,7 +291,7 @@ fn nested_functions_depend_on_the_outermost_module_facts() {
         r#"core.module @outer {
   core.module @inner {
     func.func @load(%value: core.i32) -> core.i32 {
-      func.return %value
+      "func.return"(%value)
     }
   }
 }"#,

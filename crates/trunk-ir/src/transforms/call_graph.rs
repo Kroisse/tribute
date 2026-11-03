@@ -525,19 +525,19 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @called() {
-    func.return
+    "func.return"()
   }
   func.func @captured() {
-    func.return
+    "func.return"()
   }
   func.func @listed() {
-    func.return
+    "func.return"()
   }
   func.func @holder() {
-    func.call {callee = @called}
-    test.make_closure {func_ref = @captured}
-    test.table {entries = [{target = @listed}], callee = @called}
-    func.return
+    "func.call"() {callee = @called}
+    "test.make_closure"() {func_ref = @captured}
+    "test.table"() {entries = [{target = @listed}], callee = @called}
+    "func.return"()
   }
 }"#,
         );
@@ -617,22 +617,22 @@ mod tests {
 
     const INLINE_FIXTURE: &str = r#"core.module @test {
   func.func @leaf() -> core.i32 {
-    %0 = arith.const {value = 0} : core.i32
-    func.return %0
+    %0 = "arith.const"() {value = 0} : core.i32
+    "func.return"(%0)
   }
   func.func @other() -> core.i32 {
-    %0 = arith.const {value = 1} : core.i32
-    func.return %0
+    %0 = "arith.const"() {value = 1} : core.i32
+    "func.return"(%0)
   }
   func.func @helper() -> core.i32 {
-    %0 = func.call {callee = @leaf} : core.i32
-    %1 = func.constant {func_ref = @other} : core.ptr
-    func.return %0
+    %0 = "func.call"() {callee = @leaf} : core.i32
+    %1 = "func.constant"() {func_ref = @other} : core.ptr
+    "func.return"(%0)
   }
   func.func @main() -> core.i32 {
-    %0 = func.call {callee = @helper} : core.i32
-    %1 = func.call {callee = @helper} : core.i32
-    func.return %1
+    %0 = "func.call"() {callee = @helper} : core.i32
+    %1 = "func.call"() {callee = @helper} : core.i32
+    "func.return"(%1)
   }
 }"#;
 
@@ -714,12 +714,12 @@ mod tests {
 
         let input = r#"core.module @test {
   func.func @leaf() -> core.i32 {
-    %0 = arith.const {value = 0} : core.i32
-    func.return %0
+    %0 = "arith.const"() {value = 0} : core.i32
+    "func.return"(%0)
   }
   func.func @main() -> core.i32 {
-    %0 = func.call {callee = @leaf} : core.i32
-    func.return %0
+    %0 = "func.call"() {callee = @leaf} : core.i32
+    "func.return"(%0)
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -748,19 +748,19 @@ mod tests {
             &mut ctx,
             r#"core.module @root {
   func.func @main() {
-    func.call {callee = @outer::@same}
-    func.return
+    "func.call"() {callee = @outer::@same}
+    "func.return"()
   }
   core.module @outer {
     func.func @same() {
-      func.call {callee = @inner::@same}
-      func.call {callee = @main}
-      func.return
+      "func.call"() {callee = @inner::@same}
+      "func.call"() {callee = @main}
+      "func.return"()
     }
     core.module @inner {
       func.func @same() {
-        func.call {callee = @same}
-        func.return
+        "func.call"() {callee = @same}
+        "func.return"()
       }
     }
   }
@@ -785,14 +785,14 @@ mod tests {
             &mut ctx,
             r#"core.module @root {
   func.func @twice() {
-    func.call {callee = @leaf}
-    func.return
+    "func.call"() {callee = @leaf}
+    "func.return"()
   }
   func.func @twice() {
-    func.return
+    "func.return"()
   }
   func.func @leaf() {
-    func.return
+    "func.return"()
   }
 }"#,
         );

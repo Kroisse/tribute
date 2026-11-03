@@ -14,13 +14,13 @@
 //! liveness.
 //!
 //! ```text
-//! %v = clif.load %p {offset = 8} : core.i32
+//! %v = "clif.load"(%p) {offset = 8} : core.i32
 //! // becomes
-//! %o = clif.iconst {value = 8} : core.i64
-//! %a = clif.iadd %p, %o : core.ptr
-//! %n = clif.iconst {value = 4} : core.i64
-//! %_ = clif.call %a, %n {callee = @__tribute_asan_load} : core.nil
-//! %v = clif.load %p {offset = 8} : core.i32
+//! %o = "clif.iconst"() {value = 8} : core.i64
+//! %a = "clif.iadd"(%p, %o) : core.ptr
+//! %n = "clif.iconst"() {value = 4} : core.i64
+//! %_ = "clif.call"(%a, %n) {callee = @__tribute_asan_load} : core.nil
+//! %v = "clif.load"(%p) {offset = 8} : core.i32
 //! ```
 
 use std::ops::ControlFlow;
@@ -290,11 +290,11 @@ mod tests {
         let result = run_pass(
             r#"core.module @test {
   clif.func @f(%p: core.ptr, %v: core.i64) -> core.i32 {
-    %field = clif.load %p {offset = 8} : core.i32
-    clif.store %v, %p {offset = 0}
-    %one = clif.iconst {value = 1} : core.i32
-    %old = clif.atomic_rmw %p, %one {bin_op = "add", offset = -8} : core.i32
-    clif.return %field
+    %field = "clif.load"(%p) {offset = 8} : core.i32
+    "clif.store"(%v, %p) {offset = 0}
+    %one = "clif.iconst"() {value = 1} : core.i32
+    %old = "clif.atomic_rmw"(%p, %one) {bin_op = "add", offset = -8} : core.i32
+    "clif.return"(%field)
   }
 }"#,
         );
@@ -306,7 +306,7 @@ mod tests {
         let result = run_pass(
             r#"core.module @test {
   clif.func @f(%p: core.ptr) -> core.ptr {
-    clif.return %p
+    "clif.return"(%p)
   }
 }"#,
         );
@@ -319,8 +319,8 @@ mod tests {
         let once = run_pass(
             r#"core.module @test {
   clif.func @f(%p: core.ptr) -> core.i64 {
-    %field = clif.load %p {offset = 0} : core.i64
-    clif.return %field
+    %field = "clif.load"(%p) {offset = 0} : core.i64
+    "clif.return"(%field)
   }
 }"#,
         );
@@ -337,8 +337,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   clif.func @f(%p: core.ptr) -> core.nil {
-    %field = clif.load %p {offset = 0} : core.bytes
-    clif.return
+    %field = "clif.load"(%p) {offset = 0} : core.bytes
+    "clif.return"()
   }
 }"#,
         );

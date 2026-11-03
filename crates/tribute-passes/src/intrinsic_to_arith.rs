@@ -441,7 +441,7 @@ mod tests {
                 func.func @"std::Nat::+"(%0: core.i32, %1: core.i32) -> core.i32
                     attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::Nat::+"} {
                 ^bb0:
-                    func.unreachable
+                    "func.unreachable"()
                 }
             }
         "#,
@@ -481,7 +481,7 @@ mod tests {
                 func.func @"std::Int::=="(%0: core.i32, %1: core.i32) -> core.i1
                     attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::Int::=="} {
                 ^bb0:
-                    func.unreachable
+                    "func.unreachable"()
                 }
             }
         "#,
@@ -511,8 +511,8 @@ mod tests {
                     attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::Nat::+"}
                 func.func @caller(%0: core.i32, %1: core.i32) -> core.i32 {
                 ^bb0:
-                    %2 = func.call %0, %1 {callee = @"std::Nat::+"} : core.i32
-                    func.return %2
+                    %2 = "func.call"(%0, %1) {callee = @"std::Nat::+"} : core.i32
+                    "func.return"(%2)
                 }
             }
         "#,
@@ -536,8 +536,8 @@ mod tests {
                     attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::Nat::+"}
                 func.func @user() -> func.func_sig<(core.i32, core.i32) -> core.i32> {
                 ^bb0:
-                    %f = func.constant {func_ref = @"std::Nat::+"} : func.func_sig<(core.i32, core.i32) -> core.i32>
-                    func.return %f
+                    %f = "func.constant"() {func_ref = @"std::Nat::+"} : func.func_sig<(core.i32, core.i32) -> core.i32>
+                    "func.return"(%f)
                 }
             }
         "#,
@@ -563,7 +563,7 @@ mod tests {
                 func.func @"std::Nat::+"(%0: core.f64, %1: core.f64) -> core.f64
                     attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::Nat::+"} {
                 ^bb0:
-                    func.unreachable
+                    "func.unreachable"()
                 }
             }
         "#,
@@ -584,12 +584,12 @@ mod tests {
                 func.func @"std::Nat::+"(%0: core.i32, %1: core.i32) -> core.i32
                     attributes {abi = "intrinsic"} {
                 ^bb0:
-                    func.return %0
+                    "func.return"(%0)
                 }
                 func.func @caller(%0: core.i32, %1: core.i32) -> core.i32 {
                 ^bb0:
-                    %2 = func.call %0, %1 {callee = @"std::Nat::+"} : core.i32
-                    func.return %2
+                    %2 = "func.call"(%0, %1) {callee = @"std::Nat::+"} : core.i32
+                    "func.return"(%2)
                 }
             }
         "#,
@@ -610,12 +610,12 @@ mod tests {
                 func.func @"std::Nat::+"(%0: core.i32, %1: core.i32) -> core.i32
                     attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::Nat::+"} {
                 ^bb0:
-                    func.unreachable
+                    "func.unreachable"()
                 }
                 func.func @caller(%0: core.i32, %1: core.i32) -> core.i32 {
                 ^bb0:
-                    %2 = func.call %0, %1 {callee = @"std::Nat::+"} : core.i32
-                    func.return %2
+                    %2 = "func.call"(%0, %1) {callee = @"std::Nat::+"} : core.i32
+                    "func.return"(%2)
                 }
             }
         "#,

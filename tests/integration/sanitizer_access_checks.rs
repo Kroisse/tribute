@@ -62,7 +62,7 @@ fn assert_reports(body: &str, report: &str) {
 }
 
 const FREE: &str =
-    "      %freed = clif.call %object, %size {callee = @__tribute_dealloc} : core.nil";
+    "      %freed = \"clif.call\"(%object, %size) {callee = @__tribute_dealloc} : core.nil";
 
 #[test]
 fn accesses_inside_a_live_allocation_pass() {
@@ -82,11 +82,11 @@ fn accesses_inside_a_live_allocation_pass() {
 #[test]
 fn load_past_the_end_of_an_allocation_reports_at_the_access() {
     assert_reports(
-        "      %read = clif.load %object {offset = 16} : core.i64",
+        "      %read = \"clif.load\"(%object) {offset = 16} : core.i64",
         "heap-buffer-overflow",
     );
     assert_reports(
-        "      %read = clif.load %object {offset = 12} : core.i64",
+        "      %read = \"clif.load\"(%object) {offset = 12} : core.i64",
         "READ of size 8",
     );
 }
@@ -94,11 +94,11 @@ fn load_past_the_end_of_an_allocation_reports_at_the_access() {
 #[test]
 fn store_before_the_start_of_an_allocation_reports_at_the_access() {
     assert_reports(
-        "      clif.store %value, %object {offset = -8}",
+        "      \"clif.store\"(%value, %object) {offset = -8}",
         "heap-buffer-overflow",
     );
     assert_reports(
-        "      clif.store %value, %object {offset = -8}",
+        "      \"clif.store\"(%value, %object) {offset = -8}",
         "WRITE of size 8",
     );
 }

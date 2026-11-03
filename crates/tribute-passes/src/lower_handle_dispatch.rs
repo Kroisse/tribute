@@ -115,8 +115,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @run() -> core.i32 {
-    %value = arith.const {value = 42} : core.i32
-    func.return %value
+    %value = "arith.const"() {value = 42} : core.i32
+    "func.return"(%value)
   }
 }"#,
         );
@@ -131,18 +131,18 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @selected() -> core.never {
-    %ev = mem.null : core.ptr
-    %prompt = arith.const {value = 1} : core.i32
-    ability.handle_dispatch %ev, %prompt {abilities = []} {
-      func.tail_call {callee = @finish}
-    }
+    %ev = "mem.null"() : core.ptr
+    %prompt = "arith.const"() {value = 1} : core.i32
+    "ability.handle_dispatch"(%ev, %prompt) ({
+      "func.tail_call"() {callee = @finish}
+    }) {abilities = []}
   }
   func.func @untouched() -> core.never {
-    %ev = mem.null : core.ptr
-    %prompt = arith.const {value = 2} : core.i32
-    ability.handle_dispatch %ev, %prompt {abilities = []} {
-      func.tail_call {callee = @finish}
-    }
+    %ev = "mem.null"() : core.ptr
+    %prompt = "arith.const"() {value = 2} : core.i32
+    "ability.handle_dispatch"(%ev, %prompt) ({
+      "func.tail_call"() {callee = @finish}
+    }) {abilities = []}
   }
 }"#,
         );
@@ -173,8 +173,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @run(%k: tribute_rt.anyref) -> tribute_rt.anyref {
-    %result = ability.perform %k {ability = @State, op_name = "get"} : tribute_rt.anyref
-    func.return %result
+    %result = "ability.perform"(%k) {ability = @State, op_name = "get"} : tribute_rt.anyref
+    "func.return"(%result)
   }
 }"#,
         );
@@ -191,17 +191,17 @@ mod tests {
     #[test]
     fn malformed_final_delimiters_are_not_structurally_spliced() {
         let malformed = [
-            r#"ability.handle_dispatch %ev {abilities = []} {
+            r#""ability.handle_dispatch"(%ev) ({
       ^first(%inner: !evidence):
-        func.unreachable
+        "func.unreachable"()
       ^second:
-        func.unreachable
-    }"#,
-            r#"ability.handle_dispatch %ev {abilities = []} {
+        "func.unreachable"()
+    }) {abilities = []}"#,
+            r#""ability.handle_dispatch"(%ev) ({
       ^body(%inner: !evidence):
-        test.consume %inner
-        func.unreachable
-    }"#,
+        "test.consume"(%inner)
+        "func.unreachable"()
+    }) {abilities = []}"#,
         ];
         for operation in malformed {
             let mut ctx = IrContext::new();

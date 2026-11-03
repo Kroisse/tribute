@@ -182,12 +182,12 @@ mod tests {
                 func.func @"std::collections::List::__tribute_list_prepend_intrinsic"(%0: tribute_rt.anyref, %1: tribute_rt.anyref) -> tribute_rt.anyref
                     attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::collections::List::__tribute_list_prepend_intrinsic"} {
                 ^bb0:
-                    func.unreachable
+                    "func.unreachable"()
                 }
                 func.func @caller(%0: tribute_rt.anyref, %1: tribute_rt.anyref) -> tribute_rt.anyref {
                 ^bb0:
-                    %2 = func.call %0, %1 {callee = @"std::collections::List::__tribute_list_prepend_intrinsic$String"} : tribute_rt.anyref
-                    func.return %2
+                    %2 = "func.call"(%0, %1) {callee = @"std::collections::List::__tribute_list_prepend_intrinsic$String"} : tribute_rt.anyref
+                    "func.return"(%2)
                 }
             }
             "#,
@@ -215,12 +215,12 @@ mod tests {
             core.module @test {
                 func.func @"List::prepend"(%0: tribute_rt.int, %1: tribute_rt.int) -> tribute_rt.int {
                 ^bb0:
-                    func.return %0
+                    "func.return"(%0)
                 }
                 func.func @caller(%0: tribute_rt.int, %1: tribute_rt.int) -> tribute_rt.int {
                 ^bb0:
-                    %2 = func.call %0, %1 {callee = @"List::prepend"} : tribute_rt.int
-                    func.return %2
+                    %2 = "func.call"(%0, %1) {callee = @"List::prepend"} : tribute_rt.int
+                    "func.return"(%2)
                 }
             }
             "#,
@@ -246,12 +246,12 @@ mod tests {
                 func.func @"std::collections::List::__tribute_list_prepend_intrinsic"(%0: tribute_rt.int, %1: tribute_rt.int) -> tribute_rt.int
                     attributes {tribute.compiler_intrinsic = "std::collections::List::__tribute_list_prepend_intrinsic"} {
                 ^bb0:
-                    func.return %0
+                    "func.return"(%0)
                 }
                 func.func @caller(%0: tribute_rt.int, %1: tribute_rt.int) -> tribute_rt.int {
                 ^bb0:
-                    %2 = func.call %0, %1 {callee = @"std::collections::List::__tribute_list_prepend_intrinsic"} : tribute_rt.int
-                    func.return %2
+                    %2 = "func.call"(%0, %1) {callee = @"std::collections::List::__tribute_list_prepend_intrinsic"} : tribute_rt.int
+                    "func.return"(%2)
                 }
             }
             "#,
@@ -280,16 +280,16 @@ mod tests {
                 func.func @"std::collections::List::__tribute_list_prepend_intrinsic"(%0: tribute_rt.anyref, %1: tribute_rt.anyref) -> tribute_rt.anyref
                     attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::collections::List::__tribute_list_prepend_intrinsic"} {
                 ^bb0:
-                    func.unreachable
+                    "func.unreachable"()
                 }
                 func.func @"std::collections::List::__tribute_list_prepend_intrinsic$String"(%0: tribute_rt.anyref, %1: tribute_rt.anyref) -> tribute_rt.anyref {
                 ^bb0:
-                    func.return %0
+                    "func.return"(%0)
                 }
                 func.func @caller(%0: tribute_rt.anyref, %1: tribute_rt.anyref) -> tribute_rt.anyref {
                 ^bb0:
-                    %2 = func.call %0, %1 {callee = @"std::collections::List::__tribute_list_prepend_intrinsic$String"} : tribute_rt.anyref
-                    func.return %2
+                    %2 = "func.call"(%0, %1) {callee = @"std::collections::List::__tribute_list_prepend_intrinsic$String"} : tribute_rt.anyref
+                    "func.return"(%2)
                 }
             }
             "#,

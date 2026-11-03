@@ -410,9 +410,9 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.func @main() -> core.nil {
-    %string = adt.string_const {value = "shared"} : tribute_rt.anyref
-    %bytes = adt.bytes_const {value = b"shared"} : core.bytes
-    wasm.return
+    %string = "adt.string_const"() {value = "shared"} : tribute_rt.anyref
+    %bytes = "adt.bytes_const"() {value = b"shared"} : core.bytes
+    "wasm.return"()
   }
 }"#,
         );
@@ -430,8 +430,8 @@ mod tests {
             r#"core.module @test {
   !String = adt.enum<String { Leaf(core.bytes), Branch(wasm.anyref, wasm.anyref, core.i32) }>
   wasm.func @main() -> core.nil {
-    %string = adt.string_const {value = "hello"} : wasm.anyref
-    wasm.return
+    %string = "adt.string_const"() {value = "hello"} : wasm.anyref
+    "wasm.return"()
   }
 }"#,
         );
@@ -456,8 +456,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.func @main() -> core.nil {
-    %string = adt.string_const {value = "hello"} : wasm.anyref
-    wasm.return
+    %string = "adt.string_const"() {value = "hello"} : wasm.anyref
+    "wasm.return"()
   }
 }"#,
         );
@@ -478,8 +478,8 @@ mod tests {
   !PreludeString = adt.enum<String { Leaf(core.bytes), Branch(wasm.anyref, wasm.anyref, core.i32) }>
   !UserString = adt.enum<"user::String" { Leaf(core.bytes), Branch(wasm.anyref, wasm.anyref, core.i32) }>
   wasm.func @main() -> core.nil {
-    %string = adt.string_const {value = "hello"} : wasm.anyref
-    wasm.return
+    %string = "adt.string_const"() {value = "hello"} : wasm.anyref
+    "wasm.return"()
   }
 }"#,
         );
@@ -501,8 +501,8 @@ mod tests {
             r#"core.module @test {
   !String = adt.enum<String { Leaf(core.bytes), Branch(wasm.anyref, wasm.anyref, core.i32) }>
   wasm.func @main() -> core.nil {
-    %string = adt.string_const {value = "hello"} : wasm.anyref
-    wasm.return
+    %string = "adt.string_const"() {value = "hello"} : wasm.anyref
+    "wasm.return"()
   }
 }"#,
         );
@@ -578,10 +578,10 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.func @main() -> core.nil {
-    %first = adt.bytes_const {value = b"first"} : core.bytes
-    %second = adt.bytes_const {value = b"second"} : core.bytes
-    %again = adt.bytes_const {value = b"first"} : core.bytes
-    wasm.return
+    %first = "adt.bytes_const"() {value = b"first"} : core.bytes
+    %second = "adt.bytes_const"() {value = b"second"} : core.bytes
+    %again = "adt.bytes_const"() {value = b"first"} : core.bytes
+    "wasm.return"()
   }
 }"#,
         );
@@ -607,13 +607,13 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  wasm.data {offset = 0, bytes = b"active", passive = false}
-  wasm.data {offset = 0, bytes = b"kept", passive = true}
+  "wasm.data"() {offset = 0, bytes = b"active", passive = false}
+  "wasm.data"() {offset = 0, bytes = b"kept", passive = true}
   wasm.func @main() -> core.nil {
-    %new = adt.bytes_const {value = b"new"} : core.bytes
-    %kept = adt.bytes_const {value = b"kept"} : core.bytes
-    %active = adt.bytes_const {value = b"active"} : core.bytes
-    wasm.return
+    %new = "adt.bytes_const"() {value = b"new"} : core.bytes
+    %kept = "adt.bytes_const"() {value = b"kept"} : core.bytes
+    %active = "adt.bytes_const"() {value = b"active"} : core.bytes
+    "wasm.return"()
   }
 }"#,
         );

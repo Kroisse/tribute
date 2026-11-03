@@ -677,9 +677,9 @@ mod tests {
             r#"core.module @test {
   !Closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @f(%c: !Closure) {
-    %erased = core.unrealized_conversion_cast %c : tribute_rt.anyref
-    func.call %erased {callee = @use}
-    func.return
+    %erased = "core.unrealized_conversion_cast"(%c) : tribute_rt.anyref
+    "func.call"(%erased) {callee = @use}
+    "func.return"()
   }
 }"#,
         );
@@ -698,7 +698,7 @@ mod tests {
         let printed = trunk_ir::printer::print_module(&ctx, module.op());
         assert!(!printed.contains("unrealized_conversion_cast"), "{printed}");
         assert!(
-            printed.contains("wasm.ref_upcast %0 : wasm.anyref"),
+            printed.contains("\"wasm.ref_upcast\"(%0) : wasm.anyref"),
             "{printed}"
         );
     }
@@ -739,8 +739,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f(%value: wasm.anyref) -> core.nil {
-    %unit = core.unrealized_conversion_cast %value : core.nil
-    func.return %unit
+    %unit = "core.unrealized_conversion_cast"(%value) : core.nil
+    "func.return"(%unit)
   }
 }"#,
         );
@@ -761,7 +761,7 @@ mod tests {
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
             r#"core.module @test {
-            func.func @test(%value: core.i32) -> core.i32 { func.return %value }
+            func.func @test(%value: core.i32) -> core.i32 { "func.return"(%value) }
         }"#,
         );
         let function = trunk_ir::dialect::func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
@@ -787,10 +787,10 @@ mod tests {
   !Option = adt.enum<Option { None(), Some(tribute_rt.anyref) }>
   !Sample = adt.struct<Sample(count: tribute_rt.nat, delta: tribute_rt.int, flag: tribute_rt.bool, ratio: tribute_rt.float, small: tribute_rt.intref, any: tribute_rt.anyref)>
   func.func @f(%sample: !Sample, %callee: core.i32, %value: tribute_rt.anyref) -> tribute_rt.int {
-    %null = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-    %some = adt.variant_new %null {tag = "Some", type = !Option} : !Option
-    %result = func.call_indirect %callee, %value {signature = func.func_sig<(tribute_rt.anyref) -> tribute_rt.int>} : tribute_rt.int
-    func.return %result
+    %null = "adt.ref_null"() {type = tribute_rt.anyref} : tribute_rt.anyref
+    %some = "adt.variant_new"(%null) {tag = "Some", type = !Option} : !Option
+    %result = "func.call_indirect"(%callee, %value) {signature = func.func_sig<(tribute_rt.anyref) -> tribute_rt.int>} : tribute_rt.int
+    "func.return"(%result)
   }
 }"#,
         );

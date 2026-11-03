@@ -149,10 +149,10 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @byte(%base: core.ptr, %index: core.index) -> core.i8 {
-    %data = mem.load %base {offset = 0} : core.ptr
-    %addr = mem.ptr_add %data, %index : core.ptr
-    %byte = mem.load %addr {offset = 0} : core.i8
-    func.return %byte
+    %data = "mem.load"(%base) {offset = 0} : core.ptr
+    %addr = "mem.ptr_add"(%data, %index) : core.ptr
+    %byte = "mem.load"(%addr) {offset = 0} : core.i8
+    "func.return"(%byte)
   }
 }"#,
         );
@@ -178,8 +178,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @null() -> core.ptr {
-    %null = mem.null : core.ptr
-    func.return %null
+    %null = "mem.null"() : core.ptr
+    "func.return"(%null)
   }
 }"#,
         );
@@ -188,7 +188,7 @@ mod tests {
 
         let printed = print_module(&ctx, module.op());
         assert!(
-            printed.contains("clif.iconst {value = 0} : core.ptr"),
+            printed.contains("\"clif.iconst\"() {value = 0} : core.ptr"),
             "{printed}"
         );
     }

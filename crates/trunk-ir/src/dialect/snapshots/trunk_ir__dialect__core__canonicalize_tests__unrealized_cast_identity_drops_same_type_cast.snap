@@ -4,6 +4,6 @@ expression: "print_module(&ctx, module.op())"
 ---
 core.module @test {
   func.func @f(%0: core.i32) -> core.i32 {
-      func.return %0
+      "func.return"(%0)
   }
 }

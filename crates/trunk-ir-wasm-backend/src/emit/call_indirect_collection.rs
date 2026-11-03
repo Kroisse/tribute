@@ -136,12 +136,12 @@ mod tests {
     fn resultless_target_functions_do_not_abort_indirect_collection() {
         let mut ctx = IrContext::new();
         let text = "core.module @m {
-                wasm.func {sym_name = \"good\", type = wasm.func_sig<() -> core.i32>} {
-                    %callee = wasm.i32_const {value = 0} : core.i32
-                    %value = wasm.call_indirect %callee {signature = wasm.func_sig<() -> core.i32>} : core.i32
-                    wasm.return %value
-                }
-                wasm.func {sym_name = \"zero\", type = wasm.func_sig<() -> ()>} { wasm.return }
+                \"wasm.func\"() ({
+                    %callee = \"wasm.i32_const\"() {value = 0} : core.i32
+                    %value = \"wasm.call_indirect\"(%callee) {signature = wasm.func_sig<() -> core.i32>} : core.i32
+                    \"wasm.return\"(%value)
+                }) {sym_name = \"good\", type = wasm.func_sig<() -> core.i32>}
+                \"wasm.func\"() ({ \"wasm.return\"() }) {sym_name = \"zero\", type = wasm.func_sig<() -> ()>}
             }";
         let module = trunk_ir::parser::parse_test_module(&mut ctx, text);
         let seed = wasm_dialect::func_sig(&mut ctx, [], []).as_type_ref();
@@ -156,7 +156,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
-            "core.module @m { wasm.func {sym_name = \"f\", type = wasm.func_sig<() -> ()>} { wasm.return } }",
+            "core.module @m { \"wasm.func\"() ({ \"wasm.return\"() }) {sym_name = \"f\", type = wasm.func_sig<() -> ()>} }",
         );
         let before = trunk_ir::printer::print_module(&ctx, module.op());
         let mut indices = HashMap::default();
@@ -170,23 +170,23 @@ mod tests {
     fn indirect_call_requires_exact_signature_for_every_result_arity() {
         for source in [
             r#"core.module @m {
-  wasm.func {sym_name = "caller", type = wasm.func_sig<(core.i32) -> core.i32>} {
+  "wasm.func"() ({
     ^entry(%table_index: core.i32):
-      %value = wasm.call_indirect %table_index : core.i32
-      wasm.return %value
-  }
+      %value = "wasm.call_indirect"(%table_index) : core.i32
+      "wasm.return"(%value)
+  }) {sym_name = "caller", type = wasm.func_sig<(core.i32) -> core.i32>}
 }"#,
             r#"core.module @m {
-  wasm.func {sym_name = "caller", type = wasm.func_sig<(core.i32) -> ()>} {
+  "wasm.func"() ({
     ^entry(%table_index: core.i32):
-      wasm.call_indirect %table_index
-  }
+      "wasm.call_indirect"(%table_index)
+  }) {sym_name = "caller", type = wasm.func_sig<(core.i32) -> ()>}
 }"#,
             r#"core.module @m {
-  wasm.func {sym_name = "caller", type = wasm.func_sig<(core.i32) -> ()>} {
+  "wasm.func"() ({
     ^entry(%table_index: core.i32):
-      %first, %second = wasm.call_indirect %table_index : core.i32, core.i64
-  }
+      %first, %second = "wasm.call_indirect"(%table_index) : core.i32, core.i64
+  }) {sym_name = "caller", type = wasm.func_sig<(core.i32) -> ()>}
 }"#,
         ] {
             let mut ctx = IrContext::new();

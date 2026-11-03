@@ -1,12 +1,13 @@
 //! Text format printer for arena-based IR.
 //!
-//! Prints IR in a format similar to the Salsa-based printer:
+//! Prints IR in its textual form. An operation without a custom format
+//! prints in the generic form:
 //!
 //! ```text
 //! core.module @name {
 //!   func.func @main(%arg0: core.i32) -> core.i32 {
-//!     %0 = arith.const {value = 42} : core.i32
-//!     func.return %0
+//!     %0 = "arith.const"() {value = 42} : core.i32
+//!     "func.return"(%0)
 //!   }
 //! }
 //! ```
@@ -937,26 +938,24 @@ fn print_generic_op(
         f.write_str(" = ")?;
     }
 
-    // Dialect.op
+    // "dialect.op"
     let data = state.ctx.op(op);
-    write!(f, "{}", data.name.display(state.ctx))?;
+    write!(f, "\"{}\"", data.name.display(state.ctx))?;
 
     // Operands
-    let operands = state.ctx.op_operands(op);
-    if !operands.is_empty() {
-        f.write_char(' ')?;
-        for (i, &v) in operands.iter().enumerate() {
-            if i > 0 {
-                f.write_str(", ")?;
-            }
-            f.write_str(state.get_value_name(v))?;
+    f.write_char('(')?;
+    for (i, &v) in state.ctx.op_operands(op).iter().enumerate() {
+        if i > 0 {
+            f.write_str(", ")?;
         }
+        f.write_str(state.get_value_name(v))?;
     }
+    f.write_char(')')?;
 
     // Successors
     let successors = state.ctx.op_successors(op);
     if successors.len() != 0 {
-        f.write_str(" [")?;
+        f.write_char('[')?;
         for (i, b) in successors.enumerate() {
             if i > 0 {
                 f.write_str(", ")?;
@@ -964,6 +963,21 @@ fn print_generic_op(
             f.write_str(state.get_block_label(b))?;
         }
         f.write_char(']')?;
+    }
+
+    // Regions, before the attributes so that a brace there is always the
+    // dictionary
+    if state.ctx.op_has_regions(op) {
+        f.write_str(" (")?;
+        for (i, region) in state.ctx.op_regions(op).enumerate() {
+            if i > 0 {
+                f.write_str(", ")?;
+            }
+            f.write_str("{\n")?;
+            print_region(state, f, region, indent + 2)?;
+            write!(f, "{indent_str}}}")?;
+        }
+        f.write_char(')')?;
     }
 
     // Attributes, without the declared defaults the canonical form leaves
@@ -1000,13 +1014,6 @@ fn print_generic_op(
             }
             state.write_type(f, ty)?;
         }
-    }
-
-    // Regions
-    for region in state.ctx.op_regions(op) {
-        f.write_str(" {\n")?;
-        print_region(state, f, region, indent + 2)?;
-        write!(f, "{indent_str}}}")?;
     }
 
     Ok(())
@@ -1239,7 +1246,7 @@ mod tests {
                 "core.module @m {{
                 !scalar = core.i32
                 !callable = func.func_sig<(!scalar) -> {result}, {{nested = [!scalar]}}>
-                func.func @f(%x: !callable) {{ func.return }}
+                func.func @f(%x: !callable) {{ \"func.return\"() }}
             }}"
             );
             let module = crate::parser::parse_module(&mut ctx, &input).unwrap();
@@ -1321,7 +1328,7 @@ mod tests {
             .results(i32_ty)
             .build(&mut ctx, loc);
         let output = print_op(&ctx, c.op_ref());
-        assert_eq!(output, "%0 = arith.const {value = 42} : core.i32\n");
+        assert_eq!(output, "%0 = \"arith.const\"() {value = 42} : core.i32\n");
     }
 
     #[test]
@@ -1403,8 +1410,8 @@ mod tests {
         assert!(output.contains("func.func @add"));
         assert!(output.contains("%0: core.i32"));
         assert!(output.contains("%1: core.i32"));
-        assert!(output.contains("arith.addi %0, %1"));
-        assert!(output.contains("func.return %2"));
+        assert!(output.contains("\"arith.addi\"(%0, %1)"));
+        assert!(output.contains("\"func.return\"(%2)"));
     }
 
     #[test]
@@ -1465,8 +1472,8 @@ mod tests {
         let output = print_module(&ctx, module.op_ref());
         assert!(output.contains("core.module @test"));
         assert!(output.contains("func.func @main"));
-        assert!(output.contains("arith.const {value = 42}"));
-        assert!(output.contains("func.return %0"));
+        assert!(output.contains("\"arith.const\"() {value = 42}"));
+        assert!(output.contains("\"func.return\"(%0)"));
     }
 
     #[test]
@@ -1971,10 +1978,10 @@ core.module @test {
     #[test]
     fn an_empty_block_survives_a_round_trip() {
         let input = r#"core.module @m {
-  test.op {
+  "test.op"() ({
   ^bb0:
-  } {
-  }
+  }, {
+  })
 }
 "#;
         let mut ctx = IrContext::new();

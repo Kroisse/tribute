@@ -84,36 +84,42 @@ mod tests {
 
     #[test]
     fn ptr_add_takes_a_pointer_and_an_index_and_yields_a_pointer() {
-        assert!(schema_ok("%a = mem.ptr_add %p, %x : core.ptr"));
-        assert!(!schema_ok("%a = mem.ptr_add %p, %i : core.ptr"));
-        assert!(!schema_ok("%a = mem.ptr_add %p, %n : core.ptr"));
-        assert!(!schema_ok("%a = mem.ptr_add %x, %x : core.ptr"));
-        assert!(!schema_ok("%a = mem.ptr_add %p, %f : core.ptr"));
-        assert!(!schema_ok("%a = mem.ptr_add %p, %x : core.index"));
+        assert!(schema_ok("%a = \"mem.ptr_add\"(%p, %x) : core.ptr"));
+        assert!(!schema_ok("%a = \"mem.ptr_add\"(%p, %i) : core.ptr"));
+        assert!(!schema_ok("%a = \"mem.ptr_add\"(%p, %n) : core.ptr"));
+        assert!(!schema_ok("%a = \"mem.ptr_add\"(%x, %x) : core.ptr"));
+        assert!(!schema_ok("%a = \"mem.ptr_add\"(%p, %f) : core.ptr"));
+        assert!(!schema_ok("%a = \"mem.ptr_add\"(%p, %x) : core.index"));
     }
 
     #[test]
     fn memory_access_addresses_must_be_pointers() {
-        assert!(schema_ok("%a = mem.load %p {offset = 8} : core.i64"));
-        assert!(!schema_ok("%a = mem.load %i {offset = 0} : core.i64"));
-        assert!(schema_ok("mem.store %p, %f {offset = 0}"));
-        assert!(!schema_ok("mem.store %n, %f {offset = 0}"));
-        assert!(schema_ok("%a = mem.data {bytes = b\"hi\"} : core.ptr"));
-        assert!(!schema_ok("%a = mem.data {bytes = b\"hi\"} : core.i64"));
-        assert!(schema_ok("%a = mem.null : core.ptr"));
-        assert!(!schema_ok("%a = mem.null : core.i64"));
+        assert!(schema_ok("%a = \"mem.load\"(%p) {offset = 8} : core.i64"));
+        assert!(!schema_ok("%a = \"mem.load\"(%i) {offset = 0} : core.i64"));
+        assert!(schema_ok("\"mem.store\"(%p, %f) {offset = 0}"));
+        assert!(!schema_ok("\"mem.store\"(%n, %f) {offset = 0}"));
+        assert!(schema_ok(
+            "%a = \"mem.data\"() {bytes = b\"hi\"} : core.ptr"
+        ));
+        assert!(!schema_ok(
+            "%a = \"mem.data\"() {bytes = b\"hi\"} : core.i64"
+        ));
+        assert!(schema_ok("%a = \"mem.null\"() : core.ptr"));
+        assert!(!schema_ok("%a = \"mem.null\"() : core.i64"));
     }
 
     #[test]
     fn memory_access_moves_only_scalars() {
         for scalar in ["core.i8", "core.i64", "core.f64", "core.ptr"] {
             assert!(schema_ok(&format!(
-                "%a = mem.load %p {{offset = 0}} : {scalar}"
+                "%a = \"mem.load\"(%p) {{offset = 0}} : {scalar}"
             )));
         }
-        assert!(!schema_ok("%a = mem.load %p {offset = 0} : core.bytes"));
-        assert!(!schema_ok("%a = mem.load %p {offset = 0} : core.nil"));
-        assert!(schema_ok("mem.store %p, %p {offset = 0}"));
-        assert!(!schema_ok("mem.store %p, %b {offset = 0}"));
+        assert!(!schema_ok(
+            "%a = \"mem.load\"(%p) {offset = 0} : core.bytes"
+        ));
+        assert!(!schema_ok("%a = \"mem.load\"(%p) {offset = 0} : core.nil"));
+        assert!(schema_ok("\"mem.store\"(%p, %p) {offset = 0}"));
+        assert!(!schema_ok("\"mem.store\"(%p, %b) {offset = 0}"));
     }
 }

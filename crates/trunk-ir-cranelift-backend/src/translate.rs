@@ -453,65 +453,65 @@ mod tests {
     use trunk_ir::parser::parse_test_module;
 
     const NIL_ZERO_WIDTH_NATIVE: &str = r#"core.module @test {
-  clif.func {sym_name = "call_target", type = clif.func_sig<(core.i32, core.nil, core.i64) -> core.i32>} {
+  "clif.func"() ({
     ^entry(%value: core.i32, %unit: core.nil, %last: core.i64):
-      clif.return %value
-  }
-  clif.func {sym_name = "direct_call", type = clif.func_sig<(core.i32, core.nil, core.i64) -> core.i32>} {
+      "clif.return"(%value)
+  }) {sym_name = "call_target", type = clif.func_sig<(core.i32, core.nil, core.i64) -> core.i32>}
+  "clif.func"() ({
     ^entry(%value: core.i32, %unit: core.nil, %last: core.i64):
-      %result = clif.call %value, %unit, %last {callee = @call_target} : core.i32
-      clif.return %result
-  }
-  clif.func {sym_name = "indirect_call", type = clif.func_sig<(core.ptr, core.i32, core.nil, core.i64) -> core.i32>} {
+      %result = "clif.call"(%value, %unit, %last) {callee = @call_target} : core.i32
+      "clif.return"(%result)
+  }) {sym_name = "direct_call", type = clif.func_sig<(core.i32, core.nil, core.i64) -> core.i32>}
+  "clif.func"() ({
     ^entry(%callee: core.ptr, %value: core.i32, %unit: core.nil, %last: core.i64):
-      %result = clif.call_indirect %callee, %value, %unit, %last {sig = clif.func_sig<(core.i32, core.nil, core.i64) -> core.i32>} : core.i32
-      clif.return %result
-  }
-  clif.func {sym_name = "direct_tail", type = clif.func_sig<(core.i32, core.nil, core.i64) -> (), {call_conv = "tail"}>} {
+      %result = "clif.call_indirect"(%callee, %value, %unit, %last) {sig = clif.func_sig<(core.i32, core.nil, core.i64) -> core.i32>} : core.i32
+      "clif.return"(%result)
+  }) {sym_name = "indirect_call", type = clif.func_sig<(core.ptr, core.i32, core.nil, core.i64) -> core.i32>}
+  "clif.func"() ({
     ^entry(%value: core.i32, %unit: core.nil, %last: core.i64):
-      clif.return_call %value, %unit, %last {callee = @direct_tail}
-  }
-  clif.func {sym_name = "indirect_tail", type = clif.func_sig<(core.ptr, core.i32, core.nil, core.i64) -> (), {call_conv = "tail"}>} {
+      "clif.return_call"(%value, %unit, %last) {callee = @direct_tail}
+  }) {sym_name = "direct_tail", type = clif.func_sig<(core.i32, core.nil, core.i64) -> (), {call_conv = "tail"}>}
+  "clif.func"() ({
     ^entry(%callee: core.ptr, %value: core.i32, %unit: core.nil, %last: core.i64):
-      clif.return_call_indirect %callee, %value, %unit, %last {sig = clif.func_sig<(core.i32, core.nil, core.i64) -> (), {call_conv = "tail"}>}
-  }
-  clif.func {sym_name = "jump", type = clif.func_sig<(core.i32, core.nil, core.i64) -> core.nil>} {
+      "clif.return_call_indirect"(%callee, %value, %unit, %last) {sig = clif.func_sig<(core.i32, core.nil, core.i64) -> (), {call_conv = "tail"}>}
+  }) {sym_name = "indirect_tail", type = clif.func_sig<(core.ptr, core.i32, core.nil, core.i64) -> (), {call_conv = "tail"}>}
+  "clif.func"() ({
     ^entry(%value: core.i32, %unit: core.nil, %last: core.i64):
-      clif.jump %value, %unit, %last [^merge]
+      "clif.jump"(%value, %unit, %last)[^merge]
     ^merge(%next_value: core.i32, %next_unit: core.nil, %next_last: core.i64):
-      clif.return
-  }
+      "clif.return"()
+  }) {sym_name = "jump", type = clif.func_sig<(core.i32, core.nil, core.i64) -> core.nil>}
 }"#;
 
     const ORDERED_RESULT_LISTS_NATIVE: &str = r#"core.module @test {
-  clif.func {sym_name = "sink", type = clif.func_sig<() -> ()>} {
-    clif.return
-  }
-  clif.func {sym_name = "pair", type = clif.func_sig<() -> (core.i32, core.nil, core.i32)>} {
-    %first = clif.iconst {value = 3} : core.i32
-    %second = clif.iconst {value = 17} : core.i32
-    clif.return %first, %second
-  }
-  clif.func {sym_name = "main", type = clif.func_sig<() -> core.i32>} {
-    %first, %second = clif.call {callee = @pair} : core.i32, core.i32
-    clif.call {callee = @sink}
-    %sink = clif.symbol_addr {sym = @sink} : core.ptr
-    clif.call_indirect %sink {sig = clif.func_sig<() -> ()>}
-    %callee = clif.symbol_addr {sym = @pair} : core.ptr
-    %other_first, %other_second = clif.call_indirect %callee {sig = clif.func_sig<() -> (core.i32, core.nil, core.i32)>} : core.i32, core.i32
-    %seven = clif.iconst {value = 7} : core.i32
-    %eleven = clif.iconst {value = 11} : core.i32
-    %thirteen = clif.iconst {value = 13} : core.i32
-    %seventeen = clif.iconst {value = 17} : core.i32
-    %direct_left = clif.imul %first, %seven : core.i32
-    %direct_right = clif.imul %second, %eleven : core.i32
-    %direct_pair = clif.iadd %direct_left, %direct_right : core.i32
-    %indirect_left = clif.imul %other_first, %thirteen : core.i32
-    %indirect_right = clif.imul %other_second, %seventeen : core.i32
-    %indirect_pair = clif.iadd %indirect_left, %indirect_right : core.i32
-    %sum = clif.iadd %direct_pair, %indirect_pair : core.i32
-    clif.return %sum
-  }
+  "clif.func"() ({
+    "clif.return"()
+  }) {sym_name = "sink", type = clif.func_sig<() -> ()>}
+  "clif.func"() ({
+    %first = "clif.iconst"() {value = 3} : core.i32
+    %second = "clif.iconst"() {value = 17} : core.i32
+    "clif.return"(%first, %second)
+  }) {sym_name = "pair", type = clif.func_sig<() -> (core.i32, core.nil, core.i32)>}
+  "clif.func"() ({
+    %first, %second = "clif.call"() {callee = @pair} : core.i32, core.i32
+    "clif.call"() {callee = @sink}
+    %sink = "clif.symbol_addr"() {sym = @sink} : core.ptr
+    "clif.call_indirect"(%sink) {sig = clif.func_sig<() -> ()>}
+    %callee = "clif.symbol_addr"() {sym = @pair} : core.ptr
+    %other_first, %other_second = "clif.call_indirect"(%callee) {sig = clif.func_sig<() -> (core.i32, core.nil, core.i32)>} : core.i32, core.i32
+    %seven = "clif.iconst"() {value = 7} : core.i32
+    %eleven = "clif.iconst"() {value = 11} : core.i32
+    %thirteen = "clif.iconst"() {value = 13} : core.i32
+    %seventeen = "clif.iconst"() {value = 17} : core.i32
+    %direct_left = "clif.imul"(%first, %seven) : core.i32
+    %direct_right = "clif.imul"(%second, %eleven) : core.i32
+    %direct_pair = "clif.iadd"(%direct_left, %direct_right) : core.i32
+    %indirect_left = "clif.imul"(%other_first, %thirteen) : core.i32
+    %indirect_right = "clif.imul"(%other_second, %seventeen) : core.i32
+    %indirect_pair = "clif.iadd"(%indirect_left, %indirect_right) : core.i32
+    %sum = "clif.iadd"(%direct_pair, %indirect_pair) : core.i32
+    "clif.return"(%sum)
+  }) {sym_name = "main", type = clif.func_sig<() -> core.i32>}
 }"#;
 
     #[test]
@@ -546,7 +546,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
-            "core.module @test { clif.func {sym_name = \"helper\", type = clif.func_sig<() -> ()>} { clif.return } }",
+            "core.module @test { \"clif.func\"() ({ \"clif.return\"() }) {sym_name = \"helper\", type = clif.func_sig<() -> ()>} }",
         );
         let op = module.ops(&ctx)[0];
         let extra = ctx.create_region(trunk_ir::RegionData {
@@ -571,7 +571,7 @@ mod tests {
             let module = parse_test_module(
                 &mut ctx,
                 &format!(
-                    "core.module @test {{ clif.func {{sym_name = \"helper\", type = clif.func_sig<{signature}>, abi = \"C\"}} }}"
+                    "core.module @test {{ \"clif.func\"() {{sym_name = \"helper\", type = clif.func_sig<{signature}>, abi = \"C\"}} }}"
                 ),
             );
             let before = trunk_ir::printer::print_module(&ctx, module.op());
@@ -596,26 +596,26 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
             core.module @left {
-                clif.func {sym_name = "helper", type = clif.func_sig<() -> core.i32>} {
-                    %value = clif.iconst {value = 1} : core.i32
-                    clif.return %value
-                }
-                clif.func {sym_name = "main", type = clif.func_sig<() -> ()>} {
-                    clif.return
-                }
+                "clif.func"() ({
+                    %value = "clif.iconst"() {value = 1} : core.i32
+                    "clif.return"(%value)
+                }) {sym_name = "helper", type = clif.func_sig<() -> core.i32>}
+                "clif.func"() ({
+                    "clif.return"()
+                }) {sym_name = "main", type = clif.func_sig<() -> ()>}
             }
             core.module @right {
-                clif.func {sym_name = "helper", type = clif.func_sig<() -> core.i32>} {
-                    %value = clif.iconst {value = 2} : core.i32
-                    clif.return %value
-                }
+                "clif.func"() ({
+                    %value = "clif.iconst"() {value = 2} : core.i32
+                    "clif.return"(%value)
+                }) {sym_name = "helper", type = clif.func_sig<() -> core.i32>}
             }
-            clif.func {sym_name = "main", type = clif.func_sig<() -> ()>} {
-                %left = clif.call {callee = @left::@helper} : core.i32
-                %right = clif.call {callee = @right::@helper} : core.i32
-                clif.call {callee = @left::@main}
-                clif.return
-            }
+            "clif.func"() ({
+                %left = "clif.call"() {callee = @left::@helper} : core.i32
+                %right = "clif.call"() {callee = @right::@helper} : core.i32
+                "clif.call"() {callee = @left::@main}
+                "clif.return"()
+            }) {sym_name = "main", type = clif.func_sig<() -> ()>}
         }"#,
         );
         validate_clif_ir(&ctx, module).expect("qualified names are distinct symbols");
@@ -638,12 +638,12 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-            clif.func {sym_name = "used", type = clif.func_sig<() -> ()>, abi = "C"}
-            clif.func {sym_name = "unused", type = clif.func_sig<() -> ()>, abi = "C"}
-            clif.func {sym_name = "main", type = clif.func_sig<() -> ()>} {
-                clif.call {callee = @used}
-                clif.return
-            }
+            "clif.func"() {sym_name = "used", type = clif.func_sig<() -> ()>, abi = "C"}
+            "clif.func"() {sym_name = "unused", type = clif.func_sig<() -> ()>, abi = "C"}
+            "clif.func"() ({
+                "clif.call"() {callee = @used}
+                "clif.return"()
+            }) {sym_name = "main", type = clif.func_sig<() -> ()>}
         }"#,
         );
         let bytes = emit_module_to_native(&ctx, module).expect("native object");
@@ -705,8 +705,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   clif.func @main() -> core.i32 {
-    %result = clif.iconst {value = 0} : core.i32
-    clif.return %result
+    %result = "clif.iconst"() {value = 0} : core.i32
+    "clif.return"(%result)
   }
 }"#,
         );
@@ -783,11 +783,11 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  clif.data {sym_name = "greeting", bytes = b"hi there", align = 1}
+  "clif.data"() {sym_name = "greeting", bytes = b"hi there", align = 1}
   clif.func @main() -> core.i32 {
-    %greeting = clif.symbol_addr {sym = @greeting} : core.ptr
-    %result = clif.iconst {value = 0} : core.i32
-    clif.return %result
+    %greeting = "clif.symbol_addr"() {sym = @greeting} : core.ptr
+    %result = "clif.iconst"() {value = 0} : core.i32
+    "clif.return"(%result)
   }
 }"#,
         );
@@ -816,16 +816,16 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   core.module @left {
-    clif.data {sym_name = "text", bytes = b"left", align = 1}
+    "clif.data"() {sym_name = "text", bytes = b"left", align = 1}
   }
   core.module @right {
-    clif.data {sym_name = "text", bytes = b"right", align = 1}
+    "clif.data"() {sym_name = "text", bytes = b"right", align = 1}
   }
   clif.func @main() -> core.i32 {
-    %left = clif.symbol_addr {sym = @left::@text} : core.ptr
-    %right = clif.symbol_addr {sym = @right::@text} : core.ptr
-    %result = clif.iconst {value = 0} : core.i32
-    clif.return %result
+    %left = "clif.symbol_addr"() {sym = @left::@text} : core.ptr
+    %right = "clif.symbol_addr"() {sym = @right::@text} : core.ptr
+    %result = "clif.iconst"() {value = 0} : core.i32
+    "clif.return"(%result)
   }
 }"#,
         );
@@ -861,7 +861,7 @@ mod tests {
             let module = parse_test_module(
                 &mut ctx,
                 &format!(
-                    "core.module @test {{ clif.data {{sym_name = \"{name}\", bytes = b\"x\", align = 1}} }}"
+                    "core.module @test {{ \"clif.data\"() {{sym_name = \"{name}\", bytes = b\"x\", align = 1}} }}"
                 ),
             );
             let error = emit_module_to_native(&ctx, module).expect_err("reserved data name");
@@ -883,19 +883,19 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   clif.func @first() -> core.nil {
-    clif.return
+    "clif.return"()
   }
   clif.func @second() -> core.nil {
-    clif.return
+    "clif.return"()
   }
-  clif.data {sym_name = "table", bytes = b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", align = 8} {
-    clif.func_reloc {offset = 16, func = @first}
-    clif.func_reloc {offset = 0, func = @second}
-  }
+  "clif.data"() ({
+    "clif.func_reloc"() {offset = 16, func = @first}
+    "clif.func_reloc"() {offset = 0, func = @second}
+  }) {sym_name = "table", bytes = b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", align = 8}
   clif.func @main() -> core.i32 {
-    %table = clif.symbol_addr {sym = @table} : core.ptr
-    %result = clif.iconst {value = 0} : core.i32
-    clif.return %result
+    %table = "clif.symbol_addr"() {sym = @table} : core.ptr
+    %result = "clif.iconst"() {value = 0} : core.i32
+    "clif.return"(%result)
   }
 }"#,
         );
@@ -972,18 +972,18 @@ mod tests {
         for (module_text, expected) in [
             (
                 r#"core.module @test {
-  clif.data {sym_name = "table", bytes = b"\x00\x00\x00\x00\x00\x00\x00\x00", align = 8} {
-    %zero = clif.iconst {value = 0} : core.i64
-  }
+  "clif.data"() ({
+    %zero = "clif.iconst"() {value = 0} : core.i64
+  }) {sym_name = "table", bytes = b"\x00\x00\x00\x00\x00\x00\x00\x00", align = 8}
 }"#,
                 "relocation region holds clif.iconst",
             ),
             (
                 r#"core.module @test {
   clif.func @helper() -> core.nil {
-    clif.return
+    "clif.return"()
   }
-  clif.func_reloc {offset = 0, func = @helper}
+  "clif.func_reloc"() {offset = 0, func = @helper}
 }"#,
                 "must be inside a clif.data relocation region",
             ),
@@ -1002,7 +1002,7 @@ mod tests {
             let module = parse_test_module(
                 &mut ctx,
                 &format!(
-                    "core.module @test {{ clif.data {{sym_name = \"bad\", bytes = b\"x\", align = {align}}} }}"
+                    "core.module @test {{ \"clif.data\"() {{sym_name = \"bad\", bytes = b\"x\", align = {align}}} }}"
                 ),
             );
             let error = emit_module_to_native(&ctx, module).expect_err("invalid alignment");

@@ -156,17 +156,17 @@ mod tests {
         let (ctx, module) = run_pass(
             r#"core.module @test {
   clif.func @f(%0: core.ptr) -> core.i32 {
-    %1 = tribute_rt.retain %0 : core.ptr
-    %2 = clif.load %1 {offset = 0} : core.i32
-    tribute_rt.release %0 {alloc_size = 12}
-    clif.return %2
+    %1 = "tribute_rt.retain"(%0) : core.ptr
+    %2 = "clif.load"(%1) {offset = 0} : core.i32
+    "tribute_rt.release"(%0) {alloc_size = 12}
+    "clif.return"(%2)
   }
 }"#,
         );
         let output = print_module(&ctx, module.op());
         assert!(!output.contains("tribute_rt.retain"));
         assert!(!output.contains("tribute_rt.release"));
-        assert!(output.contains("clif.load %0"));
+        assert!(output.contains("\"clif.load\"(%0)"));
         assert!(validate_use_chains(&ctx, module).is_ok());
     }
 
@@ -175,11 +175,11 @@ mod tests {
         let output = printed_after_pass(
             r#"core.module @test {
   clif.func @f(%0: core.ptr, %1: core.i32) -> core.i32 {
-    %2 = tribute_rt.retain %0 : core.ptr
-    %3 = clif.load %0 {offset = 0} : core.i32
-    clif.store %1, %2 {offset = 4}
-    tribute_rt.release %0 {alloc_size = 12}
-    clif.return %3
+    %2 = "tribute_rt.retain"(%0) : core.ptr
+    %3 = "clif.load"(%0) {offset = 0} : core.i32
+    "clif.store"(%1, %2) {offset = 4}
+    "tribute_rt.release"(%0) {alloc_size = 12}
+    "clif.return"(%3)
   }
 }"#,
         );
@@ -193,16 +193,16 @@ mod tests {
         let output = printed_after_pass(
             r#"core.module @test {
   clif.func @f(%0: core.ptr, %1: core.ptr) -> core.nil {
-    %2 = tribute_rt.retain %0 : core.ptr
-    %3 = clif.load %1 {offset = 0} : core.ptr
-    tribute_rt.release_moving %1, %3 {alloc_size = 24, release_offsets = [8]}
-    tribute_rt.release %0 {alloc_size = 12}
-    clif.return
+    %2 = "tribute_rt.retain"(%0) : core.ptr
+    %3 = "clif.load"(%1) {offset = 0} : core.ptr
+    "tribute_rt.release_moving"(%1, %3) {alloc_size = 24, release_offsets = [8]}
+    "tribute_rt.release"(%0) {alloc_size = 12}
+    "clif.return"()
   }
 }"#,
         );
         assert!(output.contains("tribute_rt.retain"), "{output}");
-        assert!(output.contains("tribute_rt.release %0"), "{output}");
+        assert!(output.contains("\"tribute_rt.release\"(%0)"), "{output}");
     }
 
     #[test]
@@ -210,10 +210,10 @@ mod tests {
         let output = printed_after_pass(
             r#"core.module @test {
   clif.func @f(%0: core.ptr, %1: core.ptr) -> core.nil {
-    %2 = tribute_rt.retain %0 : core.ptr
-    clif.store %0, %1 {offset = 0}
-    tribute_rt.release %0 {alloc_size = 12}
-    clif.return
+    %2 = "tribute_rt.retain"(%0) : core.ptr
+    "clif.store"(%0, %1) {offset = 0}
+    "tribute_rt.release"(%0) {alloc_size = 12}
+    "clif.return"()
   }
 }"#,
         );
@@ -227,10 +227,10 @@ mod tests {
             r#"core.module @test {
   clif.func @f(%0: core.ptr) -> core.nil {
   ^bb0:
-    %1 = tribute_rt.retain %0 : core.ptr
-    %2 = clif.call %0 {callee = @consume} : core.nil
-    tribute_rt.release %0 {alloc_size = 12}
-    clif.return
+    %1 = "tribute_rt.retain"(%0) : core.ptr
+    %2 = "clif.call"(%0) {callee = @consume} : core.nil
+    "tribute_rt.release"(%0) {alloc_size = 12}
+    "clif.return"()
   }
 }"#,
         );
@@ -244,11 +244,11 @@ mod tests {
             r#"core.module @test {
   clif.func @f(%0: core.ptr) -> core.nil {
   ^bb0:
-    %1 = tribute_rt.retain %0 : core.ptr
-    clif.jump %0 [^bb1]
+    %1 = "tribute_rt.retain"(%0) : core.ptr
+    "clif.jump"(%0)[^bb1]
   ^bb1(%2: core.ptr):
-    tribute_rt.release %2 {alloc_size = 12}
-    clif.return
+    "tribute_rt.release"(%2) {alloc_size = 12}
+    "clif.return"()
   }
 }"#,
         );
@@ -261,10 +261,10 @@ mod tests {
         let output = printed_after_pass(
             r#"core.module @test {
   clif.func @f(%0: core.ptr) -> core.nil {
-    %1 = tribute_rt.retain %0 : core.ptr
-    %2 = core.unrealized_conversion_cast %0 : core.ptr
-    tribute_rt.release %0 {alloc_size = 12}
-    clif.return
+    %1 = "tribute_rt.retain"(%0) : core.ptr
+    %2 = "core.unrealized_conversion_cast"(%0) : core.ptr
+    "tribute_rt.release"(%0) {alloc_size = 12}
+    "clif.return"()
   }
 }"#,
         );
@@ -277,12 +277,12 @@ mod tests {
         let output = printed_after_pass(
             r#"core.module @test {
   clif.func @f(%0: core.ptr) -> core.i32 {
-    %1 = clif.load %0 {offset = 0} : core.ptr
-    %2 = tribute_rt.retain %1 : core.ptr
-    tribute_rt.release %0 {alloc_size = 16}
-    %3 = clif.load %2 {offset = 0} : core.i32
-    tribute_rt.release %2 {alloc_size = 12}
-    clif.return %3
+    %1 = "clif.load"(%0) {offset = 0} : core.ptr
+    %2 = "tribute_rt.retain"(%1) : core.ptr
+    "tribute_rt.release"(%0) {alloc_size = 16}
+    %3 = "clif.load"(%2) {offset = 0} : core.i32
+    "tribute_rt.release"(%2) {alloc_size = 12}
+    "clif.return"(%3)
   }
 }"#,
         );
@@ -295,9 +295,9 @@ mod tests {
         let different = printed_after_pass(
             r#"core.module @test {
   clif.func @f(%0: core.ptr, %1: core.ptr) -> core.nil {
-    %2 = tribute_rt.retain %0 : core.ptr
-    tribute_rt.release %1 {alloc_size = 12}
-    clif.return
+    %2 = "tribute_rt.retain"(%0) : core.ptr
+    "tribute_rt.release"(%1) {alloc_size = 12}
+    "clif.return"()
   }
 }"#,
         );
@@ -308,11 +308,11 @@ mod tests {
             r#"core.module @test {
   clif.func @f(%0: core.ptr) -> core.nil {
   ^bb0:
-    %1 = tribute_rt.retain %0 : core.ptr
-    clif.jump [^bb1]
+    %1 = "tribute_rt.retain"(%0) : core.ptr
+    "clif.jump"()[^bb1]
   ^bb1:
-    tribute_rt.release %0 {alloc_size = 12}
-    clif.return
+    "tribute_rt.release"(%0) {alloc_size = 12}
+    "clif.return"()
   }
 }"#,
         );
@@ -327,9 +327,9 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   clif.func @f(%0: core.ptr) -> core.nil {
-    %1 = tribute_rt.retain %0 : core.ptr
-    tribute_rt.release %0 {alloc_size = 12}
-    clif.return
+    %1 = "tribute_rt.retain"(%0) : core.ptr
+    "tribute_rt.release"(%0) {alloc_size = 12}
+    "clif.return"()
   }
 }"#,
         );

@@ -607,6 +607,11 @@ pub fn raw_operation<'a>(input: &mut &'a str) -> ModalResult<RawOperation<'a>> {
     let results = opt(result_list).parse_next(input)?.unwrap_or_default();
     ws.parse_next(input)?;
 
+    // A quoted name begins the generic form.
+    if input.starts_with('"') {
+        return generic_operation(input, results);
+    }
+
     // dialect.op
     let name = qualified_name.parse_next(input)?;
     let def = crate::OpDef::lookup(name);
@@ -682,6 +687,49 @@ pub fn raw_operation<'a>(input: &mut &'a str) -> ModalResult<RawOperation<'a>> {
         results,
         name,
         sym_name,
+        func_params: Vec::new(),
+        func_param_regions: Vec::new(),
+        operands,
+        attributes,
+        result_types,
+        regions,
+        successors,
+    })
+}
+
+/// Parse the generic form after the results:
+/// `"dialect.op"(operands)[successors] (regions) {attrs} : types`.
+fn generic_operation<'a>(
+    input: &mut &'a str,
+    results: Vec<&'a str>,
+) -> ModalResult<RawOperation<'a>> {
+    let name = delimited('"', qualified_name, '"').parse_next(input)?;
+    let operands = delimited(
+        ('(', ws),
+        opt(operand_list).map(Option::unwrap_or_default),
+        (ws, ')'),
+    )
+    .parse_next(input)?;
+    let successors = opt(successor_list).parse_next(input)?.unwrap_or_default();
+    let regions = opt(preceded(
+        ws,
+        delimited(
+            ('(', ws),
+            separated(1.., (ws, raw_region, ws).map(|(_, r, _)| r), ','),
+            (ws, ')'),
+        ),
+    ))
+    .parse_next(input)?
+    .unwrap_or_default();
+    let attributes = opt(preceded(ws, raw_attr_dict))
+        .parse_next(input)?
+        .unwrap_or_default();
+    let result_types = opt(type_annotation).parse_next(input)?.unwrap_or_default();
+
+    Ok(RawOperation {
+        results,
+        name,
+        sym_name: None,
         func_params: Vec::new(),
         func_param_regions: Vec::new(),
         operands,

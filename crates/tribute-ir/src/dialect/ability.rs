@@ -13,10 +13,10 @@ mod ability {
     /// One ability instance the module names, and its operations.
     ///
     /// ```text
-    /// ability.decl {sym_name = "<instance key>"} {
-    ///   ability.operation {kind = "op", op_name = "get", param_types = [], result_type = ResultType}
-    ///   ability.operation {kind = "op", op_name = "set", param_types = [ValueType], result_type = core.nil}
-    /// }
+    /// "ability.decl"() ({
+    ///   "ability.operation"() {kind = "op", op_name = "get", param_types = [], result_type = ResultType}
+    ///   "ability.operation"() {kind = "op", op_name = "set", param_types = [ValueType], result_type = core.nil}
+    /// }) {sym_name = "<instance key>"}
     /// ```
     ///
     /// - **Role:** a symbol definition that declares one ability instance the
@@ -100,8 +100,8 @@ mod ability {
     /// The result flows inline — no CPS transformation is needed.
     ///
     /// ```text
-    /// %result = ability.call %args...
-    ///   { ability = @State, op_name = "get" }
+    /// %result = "ability.call"(%args...)
+    ///   {ability = @State, op_name = "get"}
     /// ```
     ///
     /// Lowered to: evidence lookup → tr_dispatch_fn(op_idx, value) → result.
@@ -125,7 +125,7 @@ mod ability {
     /// Frame that enters `continuation` with a value, wrapping `outer`.
     ///
     /// ```text
-    /// %f = ability.suffix_frame %ev, %outer, %k {evidence_plan = [...]} : !ability.frame<V>
+    /// %f = "ability.suffix_frame"(%ev, %outer, %k) {evidence_plan = [...]} : !ability.frame<V>
     /// ```
     ///
     /// `evidence` is Evidence, `outer` is an `ability.frame<R>`, and
@@ -151,7 +151,7 @@ mod ability {
     /// Deliver `value` to the frame's completion.
     ///
     /// ```text
-    /// ability.exit %f, %value
+    /// "ability.exit"(%f, %value)
     /// ```
     ///
     /// A resultless terminator that takes an `ability.frame<R>` and one value
@@ -167,10 +167,10 @@ mod ability {
     /// the installed layer, whose completion is `completion`.
     ///
     /// ```text
-    /// ability.handle %outer_ev, %exit, %completion, %arm0, ... {handlers = [...]} {
+    /// "ability.handle"(%outer_ev, %exit, %completion, %arm0, ...) ({
     /// ^body(%ev: Evidence, %f: !ability.frame<M>):
     ///   ...
-    /// }
+    /// }) {handlers = [...]}
     /// ```
     ///
     /// A resultless terminator with one region. `evidence` is the Evidence
@@ -218,7 +218,7 @@ mod ability {
     /// operation adds the check.
     ///
     /// ```text
-    /// ability.perform %ev, %f, %resumption, %arg0, ... {ability = @State, op_name = "get"}
+    /// "ability.perform"(%ev, %f, %resumption, %arg0, ...) {ability = @State, op_name = "get"}
     /// ```
     ///
     /// A resultless terminator that takes Evidence, an `ability.frame<R>`, a
@@ -241,7 +241,7 @@ mod ability {
     /// dispatcher, with no resumption.
     ///
     /// ```text
-    /// ability.abort %ev, %f, %arg0, ... {ability = @Fail, op_name = "fail"}
+    /// "ability.abort"(%ev, %f, %arg0, ...) {ability = @Fail, op_name = "fail"}
     /// ```
     ///
     /// The shape of `ability.perform` without the resumption, used only for
@@ -260,7 +260,7 @@ mod ability {
     /// Cps, and yield its answer.
     ///
     /// ```text
-    /// %r = ability.delimit %body, %ev : R
+    /// %r = "ability.delimit"(%body, %ev) : R
     /// ```
     ///
     /// The value delimiter of `new-plans/cps-effects.md`, "값 delimiter".
@@ -536,9 +536,9 @@ mod tests {
                 &format!(
                     r#"core.module @test {{
   func.func @main(%evidence: core.ptr, %prompt: core.i32) {{
-    ability.handle_dispatch %evidence, %prompt {{abilities = {abilities}}} {{
-      func.unreachable
-    }}
+    "ability.handle_dispatch"(%evidence, %prompt) ({{
+      "func.unreachable"()
+    }}) {{abilities = {abilities}}}
   }}
 }}"#
                 ),

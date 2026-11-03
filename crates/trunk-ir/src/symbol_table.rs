@@ -230,15 +230,15 @@ mod tests {
 
     const NESTED: &str = r#"core.module @root {
   func.func @top() {
-    func.return
+    "func.return"()
   }
   core.module @outer {
     func.func @same() {
-      func.return
+      "func.return"()
     }
     core.module @inner {
       func.func @same() {
-        func.return
+        "func.return"()
       }
     }
   }
@@ -257,11 +257,11 @@ mod tests {
             &mut ctx,
             r#"core.module @root {
   func.func @"outer::flat"() {
-    func.return
+    "func.return"()
   }
   core.module @outer {
     func.func @nested() {
-      func.return
+      "func.return"()
     }
   }
 }"#,
@@ -337,10 +337,10 @@ mod tests {
             r#"core.module @root {
   core.module @outer {
     func.func @twice() {
-      func.return
+      "func.return"()
     }
     func.func @twice() {
-      func.return
+      "func.return"()
     }
   }
 }"#,
@@ -368,11 +368,11 @@ mod tests {
             &mut ctx,
             r#"core.module @root {
   func.func @item() {
-    func.return
+    "func.return"()
   }
   core.module @item {
     func.func @inner() {
-      func.return
+      "func.return"()
     }
   }
 }"#,
@@ -399,9 +399,9 @@ mod tests {
   core.module @outer {
     func.func @host() {
       func.func @hidden() {
-        func.return
+        "func.return"()
       }
-      func.return
+      "func.return"()
     }
   }
 }"#,

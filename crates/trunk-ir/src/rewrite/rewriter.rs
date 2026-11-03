@@ -331,7 +331,7 @@ mod tests {
             let module = parse_test_module(
                 &mut ctx,
                 &format!(
-                    "core.module @test {{ func.func @main() -> core.nil {{ %v = arith.const {{value = 1}} : core.i32 func.return {} }} }}",
+                    "core.module @test {{ func.func @main() -> core.nil {{ %v = \"arith.const\"() {{value = 1}} : core.i32 func.return {} }} }}",
                     if used { "%v" } else { "" },
                 ),
             );
@@ -365,7 +365,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
-            "core.module @test { %a = arith.const {value = 1} : core.i32 %b = arith.const {value = 2} : core.i32 }",
+            "core.module @test { %a = \"arith.const\"() {value = 1} : core.i32 %b = \"arith.const\"() {value = 2} : core.i32 }",
         );
         let ops = &ctx.block(module.first_block(&ctx).unwrap()).ops;
         let converter = TypeConverter::new();

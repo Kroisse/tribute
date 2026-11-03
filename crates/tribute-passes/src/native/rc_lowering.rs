@@ -733,8 +733,8 @@ mod tests {
         let result = run_pass(
             r#"core.module @test {
   clif.func @f(%0: core.ptr) -> core.ptr {
-    %1 = tribute_rt.retain %0 : core.ptr
-    clif.return %0
+    %1 = "tribute_rt.retain"(%0) : core.ptr
+    "clif.return"(%0)
   }
 }"#,
         );
@@ -746,8 +746,8 @@ mod tests {
         let result = run_pass(
             r#"core.module @test {
   clif.func @f(%0: core.ptr) -> core.nil {
-    tribute_rt.release %0 {alloc_size = 12}
-    clif.return
+    "tribute_rt.release"(%0) {alloc_size = 12}
+    "clif.return"()
   }
 }"#,
         );
@@ -762,9 +762,9 @@ mod tests {
         let result = run_pass(
             r#"core.module @test {
   clif.func @f(%0: core.ptr) -> core.ptr {
-    %1 = clif.load %0 {offset = 0} : core.ptr
-    tribute_rt.release_moving %0, %1 {alloc_size = 24, release_offsets = [8]}
-    clif.return %1
+    %1 = "clif.load"(%0) {offset = 0} : core.ptr
+    "tribute_rt.release_moving"(%0, %1) {alloc_size = 24, release_offsets = [8]}
+    "clif.return"(%1)
   }
 }"#,
         );
@@ -777,9 +777,9 @@ mod tests {
         let result = run_pass(
             r#"core.module @test {
   clif.func @f(%0: core.ptr) -> core.nil {
-    %1 = tribute_rt.retain %0 : core.ptr
-    tribute_rt.release %0 {alloc_size = 12}
-    clif.return
+    %1 = "tribute_rt.retain"(%0) : core.ptr
+    "tribute_rt.release"(%0) {alloc_size = 12}
+    "clif.return"()
   }
 }"#,
         );
@@ -792,9 +792,9 @@ mod tests {
         let output = run_pass(
             r#"core.module @test {
   clif.func @f(%0: core.ptr) -> core.ptr {
-    %1 = tribute_rt.retain %0 : core.ptr
-    %2 = tribute_rt.retain %0 : core.ptr
-    clif.return %0
+    %1 = "tribute_rt.retain"(%0) : core.ptr
+    %2 = "tribute_rt.retain"(%0) : core.ptr
+    "clif.return"(%0)
   }
 }"#,
         );
@@ -815,12 +815,12 @@ mod tests {
         let output = run_pass(
             r#"core.module @test {
   clif.func @f(%0: core.ptr) -> core.ptr {
-    %1 = tribute_rt.retain %0 : core.ptr
-    clif.return %0
+    %1 = "tribute_rt.retain"(%0) : core.ptr
+    "clif.return"(%0)
   }
   clif.func @g(%0: core.ptr) -> core.nil {
-    tribute_rt.release %0 {alloc_size = 16}
-    clif.return
+    "tribute_rt.release"(%0) {alloc_size = 16}
+    "clif.return"()
   }
 }"#,
         );
@@ -835,7 +835,7 @@ mod tests {
         let output = run_pass(
             r#"core.module @test {
   clif.func @f(%0: core.i32) -> core.i32 {
-    clif.return %0
+    "clif.return"(%0)
   }
 }"#,
         );
@@ -855,8 +855,8 @@ mod tests {
         let mut ctx = IrContext::new();
         let ir = r#"core.module @test {
   clif.func @f(%0: core.ptr) -> core.nil {
-    tribute_rt.release %0 {alloc_size = 12}
-    clif.return
+    "tribute_rt.release"(%0) {alloc_size = 12}
+    "clif.return"()
   }
 }"#;
         let module = parse_test_module(&mut ctx, ir);

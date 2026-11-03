@@ -119,64 +119,68 @@ mod tests {
     #[test]
     fn array_indices_and_lengths_are_i32() {
         assert!(schema_ok(
-            "%e = wasm_gc.array_get %a, %n {type = !A} : core.i32"
+            "%e = \"wasm_gc.array_get\"(%a, %n) {type = !A} : core.i32"
         ));
         assert!(!schema_ok(
-            "%e = wasm_gc.array_get %a, %w {type = !A} : core.i32"
+            "%e = \"wasm_gc.array_get\"(%a, %w) {type = !A} : core.i32"
         ));
         assert!(!schema_ok(
-            "%e = wasm_gc.array_get %a, %x {type = !A} : core.i32"
+            "%e = \"wasm_gc.array_get\"(%a, %x) {type = !A} : core.i32"
         ));
         assert!(!schema_ok(
-            "%e = wasm_gc.array_get_u %a, %x {type = !A} : core.i32"
+            "%e = \"wasm_gc.array_get_u\"(%a, %x) {type = !A} : core.i32"
         ));
-        assert!(!schema_ok("wasm_gc.array_set %a, %x, %n {type = !A}"));
+        assert!(!schema_ok("\"wasm_gc.array_set\"(%a, %x, %n) {type = !A}"));
         assert!(schema_ok(
-            "%v = wasm_gc.array_new_default %n {type = !A} : !A"
+            "%v = \"wasm_gc.array_new_default\"(%n) {type = !A} : !A"
         ));
         assert!(!schema_ok(
-            "%v = wasm_gc.array_new_default %w {type = !A} : !A"
+            "%v = \"wasm_gc.array_new_default\"(%w) {type = !A} : !A"
         ));
-        assert!(!schema_ok("%v = wasm_gc.array_new %x, %n {type = !A} : !A"));
         assert!(!schema_ok(
-            "%v = wasm_gc.array_new_data %n, %w {type = !A, data_idx = 0} : !A"
+            "%v = \"wasm_gc.array_new\"(%x, %n) {type = !A} : !A"
+        ));
+        assert!(!schema_ok(
+            "%v = \"wasm_gc.array_new_data\"(%n, %w) {type = !A, data_idx = 0} : !A"
         ));
     }
 
     #[test]
     fn array_new_fixed_elements_are_its_element_type() {
-        assert!(schema_ok("%v = wasm_gc.array_new_fixed {type = !A} : !A"));
         assert!(schema_ok(
-            "%v = wasm_gc.array_new_fixed %n, %n {type = !A} : !A"
+            "%v = \"wasm_gc.array_new_fixed\"() {type = !A} : !A"
+        ));
+        assert!(schema_ok(
+            "%v = \"wasm_gc.array_new_fixed\"(%n, %n) {type = !A} : !A"
         ));
         assert!(!schema_ok(
-            "%v = wasm_gc.array_new_fixed %w {type = !A} : !A"
+            "%v = \"wasm_gc.array_new_fixed\"(%w) {type = !A} : !A"
         ));
         assert!(!schema_ok(
-            "%v = wasm_gc.array_new_fixed %n {type = !A} : !B"
+            "%v = \"wasm_gc.array_new_fixed\"(%n) {type = !A} : !B"
         ));
     }
 
     #[test]
     fn array_copy_binds_its_array_types() {
         assert!(schema_ok(
-            "wasm_gc.array_copy %a, %n, %b, %n, %n {dst_type = !A, src_type = !B}"
+            "\"wasm_gc.array_copy\"(%a, %n, %b, %n, %n) {dst_type = !A, src_type = !B}"
         ));
         assert!(!schema_ok(
-            "wasm_gc.array_copy %a, %n, %b, %n, %n {dst_type = !A, src_type = !A}"
+            "\"wasm_gc.array_copy\"(%a, %n, %b, %n, %n) {dst_type = !A, src_type = !A}"
         ));
         assert!(!schema_ok(
-            "wasm_gc.array_copy %a, %n, %b, %n, %w {dst_type = !A, src_type = !B}"
+            "\"wasm_gc.array_copy\"(%a, %n, %b, %n, %w) {dst_type = !A, src_type = !B}"
         ));
     }
 
     #[test]
     fn array_new_data_result_is_its_declared_array() {
         assert!(schema_ok(
-            "%v = wasm_gc.array_new_data %n, %n {type = !A, data_idx = 0} : !A"
+            "%v = \"wasm_gc.array_new_data\"(%n, %n) {type = !A, data_idx = 0} : !A"
         ));
         assert!(!schema_ok(
-            "%v = wasm_gc.array_new_data %n, %n {type = !A, data_idx = 0} : !B"
+            "%v = \"wasm_gc.array_new_data\"(%n, %n) {type = !A, data_idx = 0} : !B"
         ));
     }
 }

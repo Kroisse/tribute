@@ -341,14 +341,14 @@ mod tests {
         // to fire.
         let input = r#"core.module @test {
   func.func @f(%cond: core.i1, %x: core.i32) -> core.i32 {
-    %r = scf.if %cond : core.i32 {
-      %z = arith.const {value = 0} : core.i32
-      %s = arith.addi %x, %z : core.i32
-      scf.yield %s
-    } {
-      scf.yield %x
-    }
-    func.return %r
+    %r = "scf.if"(%cond) ({
+      %z = "arith.const"() {value = 0} : core.i32
+      %s = "arith.addi"(%x, %z) : core.i32
+      "scf.yield"(%s)
+    }, {
+      "scf.yield"(%x)
+    }) : core.i32
+    "func.return"(%r)
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -368,10 +368,10 @@ mod tests {
         // call. The applicator iterates until no pattern fires.
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %z = arith.const {value = 0} : core.i32
-    %t = arith.addi %x, %z : core.i32
-    %r = arith.addi %t, %z : core.i32
-    func.return %r
+    %z = "arith.const"() {value = 0} : core.i32
+    %t = "arith.addi"(%x, %z) : core.i32
+    %r = "arith.addi"(%t, %z) : core.i32
+    "func.return"(%r)
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -390,14 +390,14 @@ mod tests {
     fn canonicalize_rewrites_only_selected_function_scope() {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %z = arith.const {value = 0} : core.i32
-    %r = arith.addi %x, %z : core.i32
-    func.return %r
+    %z = "arith.const"() {value = 0} : core.i32
+    %r = "arith.addi"(%x, %z) : core.i32
+    "func.return"(%r)
   }
   func.func @g(%x: core.i32) -> core.i32 {
-    %z = arith.const {value = 0} : core.i32
-    %r = arith.addi %x, %z : core.i32
-    func.return %r
+    %z = "arith.const"() {value = 0} : core.i32
+    %r = "arith.addi"(%x, %z) : core.i32
+    "func.return"(%r)
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -433,13 +433,13 @@ mod tests {
         // `5`, then the same fold (on the outer addi) erases `_ + 0`.
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %a = arith.const {value = 2} : core.i32
-    %b = arith.const {value = 3} : core.i32
-    %s = arith.addi %a, %b : core.i32
-    %m = arith.muli %s, %x : core.i32
-    %z = arith.const {value = 0} : core.i32
-    %r = arith.addi %m, %z : core.i32
-    func.return %r
+    %a = "arith.const"() {value = 2} : core.i32
+    %b = "arith.const"() {value = 3} : core.i32
+    %s = "arith.addi"(%a, %b) : core.i32
+    %m = "arith.muli"(%s, %x) : core.i32
+    %z = "arith.const"() {value = 0} : core.i32
+    %r = "arith.addi"(%m, %z) : core.i32
+    "func.return"(%r)
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -468,17 +468,17 @@ mod tests {
         // with the erased `scf.if` op.
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %t = arith.const {value = 1} : core.i1
-    %r = scf.if %t : core.i32 {
-      %z = arith.const {value = 0} : core.i32
-      %a = arith.addi %x, %z : core.i32
-      scf.yield %a
-    } {
-      %two = arith.const {value = 2} : core.i32
-      %m = arith.muli %x, %two : core.i32
-      scf.yield %m
-    }
-    func.return %r
+    %t = "arith.const"() {value = 1} : core.i1
+    %r = "scf.if"(%t) ({
+      %z = "arith.const"() {value = 0} : core.i32
+      %a = "arith.addi"(%x, %z) : core.i32
+      "scf.yield"(%a)
+    }, {
+      %two = "arith.const"() {value = 2} : core.i32
+      %m = "arith.muli"(%x, %two) : core.i32
+      "scf.yield"(%m)
+    }) : core.i32
+    "func.return"(%r)
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -509,7 +509,7 @@ mod tests {
         // reached_fixpoint) must reflect that exactly.
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    func.return %x
+    "func.return"(%x)
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -531,10 +531,10 @@ mod tests {
         // `Canonicalize` logs about.
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %z = arith.const {value = 0} : core.i32
-    %t = arith.addi %x, %z : core.i32
-    %r = arith.addi %t, %z : core.i32
-    func.return %r
+    %z = "arith.const"() {value = 0} : core.i32
+    %t = "arith.addi"(%x, %z) : core.i32
+    %r = "arith.addi"(%t, %z) : core.i32
+    "func.return"(%r)
   }
 }"#;
         let mut ctx = IrContext::new();

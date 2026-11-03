@@ -40,7 +40,7 @@ mod tribute_cps {
     /// ```text
     /// tribute_cps.func @id(%x: T) -> R convention(direct) {
     ///   ...
-    ///   tribute_control.return %value
+    ///   "tribute_control.return"(%value)
     /// }
     /// ```
     ///
@@ -86,7 +86,7 @@ mod tribute_cps {
     /// %f = tribute_cps.lambda(%x: T) -> R captures [%capture0, ...] entries {
     ///   direct {
     ///     ...
-    ///     tribute_control.return %value
+    ///     "tribute_control.return"(%value)
     ///   }
     ///   cps {
     ///     ...

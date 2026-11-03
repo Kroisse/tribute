@@ -199,12 +199,12 @@ mod tests {
 
     const WRAPPER_MAIN: &str = r#"core.module @test {
   func.func @__tribute_main() -> core.nil {
-    %nil = core.nil_value : core.nil
-    func.return %nil
+    %nil = "core.nil_value"() : core.nil
+    "func.return"(%nil)
   }
   func.func @main() -> core.nil {
-    %result = func.call {callee = @__tribute_main} : core.nil
-    func.return %result
+    %result = "func.call"() {callee = @__tribute_main} : core.nil
+    "func.return"(%result)
   }
 }"#;
 
@@ -217,14 +217,14 @@ mod tests {
             r#"core.module @test {
   func.func @__tribute_init() -> core.nil attributes {abi = "C"}
   func.func @__tribute_main() -> core.nil {
-      %0 = core.nil_value : core.nil
-      func.return %0
+      %0 = "core.nil_value"() : core.nil
+      "func.return"(%0)
   }
   func.func @main() -> core.i32 {
-      %0 = func.call {callee = @__tribute_init} : core.nil
-      %1 = func.call {callee = @__tribute_main} : core.nil
-      %2 = arith.const {value = 0} : core.i32
-      func.return %2
+      %0 = "func.call"() {callee = @__tribute_init} : core.nil
+      %1 = "func.call"() {callee = @__tribute_main} : core.nil
+      %2 = "arith.const"() {value = 0} : core.i32
+      "func.return"(%2)
   }
 }
 "#
@@ -236,16 +236,16 @@ mod tests {
         let printed = adapt(WRAPPER_MAIN, true);
 
         let asan = printed
-            .find("func.call {callee = @__asan_init}")
+            .find("\"func.call\"() {callee = @__asan_init}")
             .expect("asan init call");
         let init = printed
-            .find("func.call {callee = @__tribute_init}")
+            .find("\"func.call\"() {callee = @__tribute_init}")
             .expect("runtime init call");
         let worker = printed
-            .find("func.call {callee = @__tribute_main}")
+            .find("\"func.call\"() {callee = @__tribute_main}")
             .expect("worker call");
         let exit = printed
-            .find("func.call {callee = @__asan_exit}")
+            .find("\"func.call\"() {callee = @__asan_exit}")
             .expect("asan exit call");
         let ret = printed.rfind("func.return").expect("exit return");
         assert!(
@@ -260,8 +260,8 @@ mod tests {
     fn module_without_main_is_unchanged() {
         let input = r#"core.module @test {
   func.func @helper() -> core.i32 {
-    %one = arith.const {value = 1} : core.i32
-    func.return %one
+    %one = "arith.const"() {value = 1} : core.i32
+    "func.return"(%one)
   }
 }"#;
         let printed = adapt(input, false);
@@ -279,7 +279,7 @@ mod tests {
         adapt(
             r#"core.module @test {
   func.func @main(%evidence: core.i32) -> core.nil {
-    func.return
+    "func.return"()
   }
 }"#,
             false,

@@ -1304,10 +1304,10 @@ mod tests {
             r#"core.module @test {
   func.func @main(%flag: core.i1, %other: core.i1) {
     ^entry(%flag: core.i1, %other: core.i1):
-      %both = arith.and %flag, %other : core.i1
-      cf.br %flag [^exit]
+      %both = "arith.and"(%flag, %other) : core.i1
+      "cf.br"(%flag)[^exit]
     ^exit(%forwarded: core.i1):
-      func.return
+      "func.return"()
   }
 }"#,
         );
@@ -1317,7 +1317,7 @@ mod tests {
             "only the operands of arith.and return to core.i1: {printed}"
         );
         assert!(
-            printed.contains(": core.i1\n      cf.br %0 [^bb1]"),
+            printed.contains(": core.i1\n      \"cf.br\"(%0)[^bb1]"),
             "{printed}"
         );
     }
@@ -1327,9 +1327,9 @@ mod tests {
         let printed = convert_booleans(
             r#"core.module @test {
   func.func @main(%left: core.i32, %right: core.i32) {
-    %less = arith.cmpi %left, %right {predicate = "slt"} : core.i1
-    %both = arith.and %less, %less : core.i1
-    func.return
+    %less = "arith.cmpi"(%left, %right) {predicate = "slt"} : core.i1
+    %both = "arith.and"(%less, %less) : core.i1
+    "func.return"()
   }
 }"#,
         );
@@ -1378,9 +1378,9 @@ mod tests {
         let module = crate::parser::parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  %0 = test.source {tag = "first"} : core.i32
-  %1 = test.source {tag = "second"} : core.i32
-  %2 = test.source {tag = "third"} : core.i32
+  %0 = "test.source"() {tag = "first"} : core.i32
+  %1 = "test.source"() {tag = "second"} : core.i32
+  %2 = "test.source"() {tag = "third"} : core.i32
 }"#,
         );
 
@@ -1399,7 +1399,7 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         assert_eq!(printed.matches("test.target").count(), 2, "{printed}");
         assert!(
-            printed.contains(r#"test.source {tag = "second"}"#),
+            printed.contains(r#""test.source"() {tag = "second"}"#),
             "{printed}"
         );
     }
@@ -1434,8 +1434,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %r = arith.addi %x, %x : core.i32
-    func.return %r
+    %r = "arith.addi"(%x, %x) : core.i32
+    "func.return"(%r)
   }
 }"#,
         );
@@ -1514,8 +1514,8 @@ mod tests {
         let module = crate::parser::parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  %0 = test.source : core.i32
-  test.sink %0
+  %0 = "test.source"() : core.i32
+  "test.sink"(%0)
 }"#,
         );
 
@@ -1593,8 +1593,8 @@ mod tests {
         let module = crate::parser::parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  test.waiting
-  test.source
+  "test.waiting"()
+  "test.source"()
 }"#,
         );
 
@@ -1649,7 +1649,7 @@ mod tests {
         let module = crate::parser::parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  test.source
+  "test.source"()
 }"#,
         );
         let i32_ty = i32_type(&mut ctx);

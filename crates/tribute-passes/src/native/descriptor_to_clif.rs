@@ -83,8 +83,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @test(%choice: adt.typeref<{name = "Choice"}>) -> core.i32 {
-    %0 = tribute_rtti.descriptor %choice : core.i32
-    func.return %0
+    %0 = "tribute_rtti.descriptor"(%choice) : core.i32
+    "func.return"(%0)
   }
 }"#,
         );
@@ -95,7 +95,7 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         // The RTTI index sits in the RC header, 4 bytes before the payload.
         assert!(
-            printed.contains("clif.load %0 {offset = -4} : core.i32"),
+            printed.contains("\"clif.load\"(%0) {offset = -4} : core.i32"),
             "{printed}"
         );
         assert!(!printed.contains("tribute_rtti."), "{printed}");
@@ -108,12 +108,12 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @first(%value: tribute_rt.anyref) -> core.i32 {
-    %0 = tribute_rtti.descriptor %value : core.i32
-    func.return %0
+    %0 = "tribute_rtti.descriptor"(%value) : core.i32
+    "func.return"(%0)
   }
   func.func @second(%value: adt.typeref<{name = "Choice"}>) -> core.i32 {
-    %0 = tribute_rtti.descriptor %value : core.i32
-    func.return %0
+    %0 = "tribute_rtti.descriptor"(%value) : core.i32
+    "func.return"(%0)
   }
 }"#,
         );
@@ -142,8 +142,8 @@ mod tests {
                 &format!(
                     r#"core.module @test {{
   func.func @test(%value: {ty}) -> core.i32 {{
-    %0 = tribute_rtti.descriptor %value : core.i32
-    func.return %0
+    %0 = "tribute_rtti.descriptor"(%value) : core.i32
+    "func.return"(%0)
   }}
 }}"#
                 ),
@@ -161,8 +161,8 @@ mod tests {
                 &format!(
                     r#"core.module @test {{
   func.func @test(%value: {ty}) -> core.i32 {{
-    %0 = tribute_rtti.descriptor %value : core.i32
-    func.return %0
+    %0 = "tribute_rtti.descriptor"(%value) : core.i32
+    "func.return"(%0)
   }}
 }}"#
                 ),
