@@ -604,7 +604,7 @@ fn printable(ctx: &IrContext, op: OpRef, schema: &OpSchema, format: &OpFormat) -
         FormatElement::Attribute(index) => {
             let attribute = &schema.attributes[index];
             written_ok &= match attrs.get(attribute.name) {
-                Some(value) => attribute.kind.accepts(value),
+                Some(value) => (attribute.accepts)(ctx, value),
                 None => attribute.optional,
             };
         }

@@ -90,12 +90,17 @@ impl CallingConvention {
     }
 }
 
-/// `Attr<CallingConvention>`: a keyword string. The schema checks only that
-/// the value is a string; an operation declaring it verifies the keyword.
+/// `Attr<CallingConvention>`: a keyword string, which the schema checks.
 impl trunk_ir::attr_kind::AttrKind for CallingConvention {
     const KIND: trunk_ir::op_schema::AttributeKind = trunk_ir::op_schema::AttributeKind::String;
     type Out<'ctx> = CallingConvention;
     type In = CallingConvention;
+    const DOMAIN: Option<&'static str> =
+        Some("one of \"direct\", \"evidence_direct\", and \"cps\"");
+
+    fn accepts(ctx: &IrContext, attr: &Attribute) -> bool {
+        Self::from_attribute(ctx, attr).is_some()
+    }
 
     fn read<'ctx>(ctx: &'ctx IrContext, attr: &'ctx Attribute) -> CallingConvention {
         Self::from_attribute(ctx, attr).expect("unverified calling convention keyword")

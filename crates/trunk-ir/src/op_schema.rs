@@ -173,6 +173,10 @@ pub struct AttributeSchema {
     /// For an attribute declared with `#[default(v)]`, whether a value is
     /// `v`. Absence is the canonical form of that value.
     pub is_default: Option<fn(&IrContext, &Attribute) -> bool>,
+    /// Whether a value is of the attribute's kind (`AttrKind::accepts`).
+    pub accepts: fn(&IrContext, &Attribute) -> bool,
+    /// The kind's narrower domain, when it has one (`AttrKind::DOMAIN`).
+    pub domain: Option<&'static str>,
 }
 
 impl AttributeSchema {
@@ -277,6 +281,8 @@ pub enum SchemaViolation {
     AttributeKind {
         name: &'static str,
         expected: AttributeKind,
+        /// The kind's narrower domain, when it has one.
+        domain: Option<&'static str>,
     },
     /// A type does not satisfy a bound.
     TypeConstraint {
@@ -430,7 +436,12 @@ impl fmt::Display for SchemaViolation {
             SchemaViolation::MissingAttribute { name } => {
                 write!(f, "missing required attribute `{name}`")
             }
-            SchemaViolation::AttributeKind { name, expected } => {
+            SchemaViolation::AttributeKind {
+                name,
+                domain: Some(domain),
+                ..
+            } => write!(f, "attribute `{name}` must be {domain}"),
+            SchemaViolation::AttributeKind { name, expected, .. } => {
                 write!(f, "attribute `{name}` must be a {expected} attribute")
             }
             SchemaViolation::TypeConstraint {
@@ -611,10 +622,11 @@ impl OpSchema {
             match ctx.op_attrs(op).get(attr.name) {
                 None if attr.optional => {}
                 None => violations.push(SchemaViolation::MissingAttribute { name: attr.name }),
-                Some(value) if attr.kind.accepts(value) => {}
+                Some(value) if (attr.accepts)(ctx, value) => {}
                 Some(_) => violations.push(SchemaViolation::AttributeKind {
                     name: attr.name,
                     expected: attr.kind,
+                    domain: attr.domain,
                 }),
             }
         }

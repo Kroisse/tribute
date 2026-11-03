@@ -86,15 +86,6 @@ impl trunk_ir::ops::Verify for Perform {
     }
 }
 
-impl trunk_ir::ops::Verify for Handler {
-    fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
-        match ctx.op_attrs(self.op_ref()).get_str("kind") {
-            Some("fn" | "op") | None => Ok(()),
-            Some(kind) => Err(format!("kind must be \"fn\" or \"op\", found {kind:?}").into()),
-        }
-    }
-}
-
 impl trunk_ir::ops::Verify for Handle {
     fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
         Ok(verify_evidence_plan(

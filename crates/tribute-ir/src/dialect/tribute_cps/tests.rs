@@ -145,7 +145,7 @@ fn a_convention_must_be_a_keyword() {
     assert!(
         errors[0]
             .to_string()
-            .contains("`convention` must be one of"),
+            .contains("attribute `convention` must be one of"),
         "{errors:?}"
     );
     assert!(

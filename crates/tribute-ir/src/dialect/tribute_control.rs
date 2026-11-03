@@ -132,12 +132,16 @@ impl HandlerKind {
     }
 }
 
-/// `Attr<HandlerKind>`: a keyword string. The schema checks only that the
-/// value is a string; the handler's local validation checks the keyword.
+/// `Attr<HandlerKind>`: a keyword string, which the schema checks.
 impl trunk_ir::attr_kind::AttrKind for HandlerKind {
     const KIND: trunk_ir::op_schema::AttributeKind = trunk_ir::op_schema::AttributeKind::String;
     type Out<'ctx> = HandlerKind;
     type In = HandlerKind;
+    const DOMAIN: Option<&'static str> = Some("one of \"op\" and \"fn\"");
+
+    fn accepts(ctx: &IrContext, attr: &Attribute) -> bool {
+        Self::from_attribute(ctx, attr).is_some()
+    }
 
     fn read<'ctx>(ctx: &'ctx IrContext, attr: &'ctx Attribute) -> HandlerKind {
         Self::from_attribute(ctx, attr).expect("unverified handler kind keyword")
@@ -734,7 +738,6 @@ mod tribute_control {
     /// - **Location:** the source handler arm, including the operation
     ///   header.
     #[asm_format(keyword(kind) ability symbol(op_name) args(body) ":" operation_result_type attr_dict region(body))]
-    #[verify]
     #[implements(OperationDeclarationUse, CallableArgumentOrigin, LocalValidation)]
     fn handler(
         ability: Attr<SymbolRef>,

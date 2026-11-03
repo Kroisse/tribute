@@ -132,7 +132,10 @@ where
   `u64`, `f32`, `f64`), `String`, and the markers
   `attr_kind::{Type, SymbolRef, Bytes}`. A kind defines its schema domain
   and the values its accessor returns and its builder setter takes, so a
-  dialect adds a kind by implementing the trait. `_` accepts any attribute.
+  dialect adds a kind by implementing the trait. A kind narrower than its
+  `KIND`, such as a keyword, checks the rest in `AttrKind::accepts` and names
+  its values in `DOMAIN`, as `CallingConvention` does. `_` accepts any
+  attribute.
 - `Attr<TypeOf<V>>` is a type attribute whose value binds the type variable
   `V`. `V` needs no bound.
 - A list attribute's accessor iterates its elements, and its builder setter

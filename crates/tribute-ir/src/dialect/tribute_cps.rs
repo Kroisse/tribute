@@ -52,7 +52,7 @@ mod tribute_cps {
     ///   instance's classes (`new-plans/cps-effects.md`, "Row와 호출 규약").
     ///   The signature, row, and body keep the meaning they have on
     ///   `tribute_control.func`.
-    /// - **Verification:** the local verifier checks the convention keyword.
+    /// - **Verification:** the schema checks the convention keyword.
     ///   Otherwise as `tribute_control.func`.
     /// - **Ownership and value flow:** as `tribute_control.func`.
     /// - **Symbol:** as `tribute_control.func`.
@@ -220,7 +220,7 @@ mod tribute_cps {
     /// - **Meaning:** calls the callee's convention entry of `convention`,
     ///   which class specialization computed from the callee type's row
     ///   with the enclosing instance's classes.
-    /// - **Verification:** the local verifier checks the convention keyword.
+    /// - **Verification:** the schema checks the convention keyword.
     ///   Otherwise as `tribute_control.call_indirect`.
     /// - **Ownership and value flow:** as `tribute_control.call_indirect`.
     /// - **Flags:** `SourceCallIndirect`, shared with `tribute_control.call_indirect`.
@@ -248,8 +248,9 @@ mod tribute_cps {
     /// - **Placement:** as `tribute_control.tail_call`.
     /// - **Meaning:** a proper tail call of the callee's convention entry of
     ///   `convention`.
-    /// - **Verification:** the local verifier checks the convention keyword,
-    ///   and that `convention` is not stronger than the enclosing callable's.
+    /// - **Verification:** the schema checks the convention keyword, and the
+    ///   local verifier that `convention` is not stronger than the enclosing
+    ///   callable's.
     ///   Otherwise as `tribute_control.tail_call_indirect`.
     /// - **Ownership and value flow:** as
     ///   `tribute_control.tail_call_indirect`.
@@ -267,11 +268,6 @@ mod tribute_cps {
     ) {
     }
 }
-
-/// Why a `tribute_cps` operation's convention is not one.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, derive_more::Display, derive_more::Error)]
-#[display("`convention` must be one of \"direct\", \"evidence_direct\", and \"cps\"")]
-pub struct MalformedConvention;
 
 /// The convention `op` declares, when it is a `tribute_cps` operation with a
 /// valid one. A `tribute_cps.lambda` declares one per body instead; see
@@ -453,19 +449,8 @@ pub fn replace_control_op(
     replacement
 }
 
-fn verify_convention(
-    ctx: &IrContext,
-    op: trunk_ir::refs::OpRef,
-) -> Result<(), trunk_ir::ops::VerificationError> {
-    match declared_convention(ctx, op) {
-        Some(_) => Ok(()),
-        None => Err(MalformedConvention.into()),
-    }
-}
-
 impl trunk_ir::ops::Verify for Func {
     fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
-        verify_convention(ctx, self.op_ref())?;
         Ok(tribute_control::verify_row_declarations(
             ctx,
             self.op_ref(),
@@ -499,7 +484,6 @@ impl trunk_ir::ops::Verify for FuncTable {
 
 impl trunk_ir::ops::Verify for CallIndirect {
     fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
-        verify_convention(ctx, self.op_ref())?;
         Ok(tribute_control::verify_evidence_plan(
             ctx,
             self.op_ref(),
@@ -510,7 +494,6 @@ impl trunk_ir::ops::Verify for CallIndirect {
 
 impl trunk_ir::ops::Verify for TailCallIndirect {
     fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
-        verify_convention(ctx, self.op_ref())?;
         tribute_control::verify_resolved_types(ctx, self.op_ref())?;
         Ok(tribute_control::verify_evidence_plan(
             ctx,

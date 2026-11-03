@@ -827,7 +827,7 @@ fn validator_rejects_wrong_required_attribute_types() {
         &[
             "attribute `ability` must be a SymbolRef attribute",
             "attribute `op_name` must be a String attribute",
-            "attribute `kind` must be a String attribute",
+            "attribute `kind` must be one of \"op\" and \"fn\"",
             "attribute `operation_result_type` must be a Type attribute",
         ],
     );
@@ -1075,7 +1075,7 @@ fn local_validator_reports_distinct_malformed_operation_contracts() {
     assert_op_diagnostics(
         &result,
         bad_handler,
-        &["kind must be \"fn\" or \"op\", found \"bogus\""],
+        &["attribute `kind` must be one of \"op\" and \"fn\""],
     );
     assert_op_diagnostics(
         &result,
