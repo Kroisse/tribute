@@ -29,8 +29,12 @@ mod effect {
     /// - `tr_dispatch_fn`: tail-resumptive dispatch closure.
     /// - `outer`: the evidence the handler is installed on, before the
     ///   installation's selection.
+    ///
+    /// ```text
+    /// %extended = effect.extend @State %ev, %prompt, %dispatch, %ev : !Evidence
+    /// ```
     #[flags(Pure)]
-    #[asm_format(evidence "," prompt_tag "," tr_dispatch_fn "," outer attr_dict_bare ":" type(result))]
+    #[asm_format(ability evidence "," prompt_tag "," tr_dispatch_fn "," outer attr_dict ":" type(result))]
     fn extend<E: Evidence>(
         ability: Attr<SymbolRef>,
         evidence: Value<E>,
@@ -43,17 +47,17 @@ mod effect {
     /// Remove the top handler of one ability from the evidence, exposing the
     /// handler it shadows.
     #[flags(Pure)]
-    #[asm_format(evidence attr_dict_bare ":" type(result))]
+    #[asm_format(ability evidence attr_dict ":" type(result))]
     fn mask<E: Evidence>(ability: Attr<SymbolRef>, evidence: Value<E>) -> Value<E> {}
 
     /// Push a copy of the top handler of one ability onto the evidence.
     #[flags(Pure)]
-    #[asm_format(evidence attr_dict_bare ":" type(result))]
+    #[asm_format(ability evidence attr_dict ":" type(result))]
     fn dup<E: Evidence>(ability: Attr<SymbolRef>, evidence: Value<E>) -> Value<E> {}
 
     /// The evidence the top handler of one ability was installed on.
     #[flags(Pure)]
-    #[asm_format(evidence attr_dict_bare ":" type(result))]
+    #[asm_format(ability evidence attr_dict ":" type(result))]
     fn outer<E: Evidence>(ability: Attr<SymbolRef>, evidence: Value<E>) -> Value<E> {}
 
     /// The evidence of the row tail `index` of the callable that received
@@ -71,7 +75,7 @@ mod effect {
     /// Push the top handler that `source` holds for one ability onto
     /// `evidence`.
     #[flags(Pure)]
-    #[asm_format(evidence "," source attr_dict_bare ":" type(result))]
+    #[asm_format(ability evidence "," source attr_dict ":" type(result))]
     fn push<E: Evidence>(
         ability: Attr<SymbolRef>,
         evidence: Value<E>,
@@ -85,7 +89,11 @@ mod effect {
     /// while the backend chooses the concrete lookup and callable layout.
     /// `payload` is the packed operation argument erased to `anyref`, and the
     /// result is the operation's result erased the same way.
-    #[asm_format(evidence "," payload attr_dict_bare ":" type(result))]
+    ///
+    /// ```text
+    /// %result = effect.dispatch_tail @Console @read(%payload) [%ev] : tribute_rt.anyref
+    /// ```
+    #[asm_format(ability symbol(op_name) "(" payload ")" "[" evidence "]" attr_dict ":" type(result))]
     fn dispatch_tail<E: Evidence>(
         ability: Attr<SymbolRef>,
         op_name: Attr<String>,
@@ -322,7 +330,7 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_ops_round_trip_and_print_generically() {
+    fn dispatch_ops_round_trip_and_print_their_operation() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
         let anyref_ty = crate::dialect::tribute_rt::Anyref::params()
@@ -359,8 +367,9 @@ mod tests {
         assert_eq!(cps_wrapper.op_name(&ctx), "get");
 
         let tail_printed = print_op(&ctx, tail.op_ref());
-        assert!(tail_printed.contains("effect.dispatch_tail"));
-        assert!(tail_printed.contains("ability"));
-        assert!(tail_printed.contains("op_name = \"print\""));
+        assert!(
+            tail_printed.contains("effect.dispatch_tail @Console @print("),
+            "{tail_printed}"
+        );
     }
 }

@@ -562,8 +562,8 @@ mod tests {
         assert_eq!(
             body[..2],
             [
-                r#"%4 = effect.mask %0 {ability = @State} : !evidence"#,
-                r#"%5 = effect.extend %4, %1, %2, %0 {ability = @State} : !evidence"#,
+                r#"%4 = effect.mask @State %0 : !evidence"#,
+                r#"%5 = effect.extend @State %4, %1, %2, %0 : !evidence"#,
             ],
             "{body:#?}"
         );
@@ -585,10 +585,10 @@ mod tests {
         assert_eq!(
             body,
             [
-                r#"%4 = effect.mask %0 {ability = @State} : !evidence"#,
-                r#"%5 = effect.dup %4 {ability = @Console} : !evidence"#,
+                r#"%4 = effect.mask @State %0 : !evidence"#,
+                r#"%5 = effect.dup @Console %4 : !evidence"#,
                 r#"%6 = func.call @callee(%5, %1) attributes {tribute.calling_convention = "evidence_direct"} : (!evidence, core.i32) -> core.i32"#,
-                r#"%7 = effect.dup %0 {ability = @State} : !evidence"#,
+                r#"%7 = effect.dup @State %0 : !evidence"#,
                 r#"func.tail_call_indirect %2(%7, %6) attributes {tribute.calling_convention = "cps"} : (!evidence, core.i32) -> core.never"#,
             ],
             "{body:#?}"
@@ -611,11 +611,11 @@ mod tests {
             body,
             [
                 r#"%4 = effect.tail %0 {index = 1} : !evidence"#,
-                r#"%5 = effect.push %4, %0 {ability = @State} : !evidence"#,
+                r#"%5 = effect.push @State %4, %0 : !evidence"#,
                 r#"%6 = func.call @callee(%5, %1) attributes {tribute.calling_convention = "evidence_direct"} : (!evidence, core.i32) -> core.i32"#,
-                r#"%7 = effect.dup %0 {ability = @State} : !evidence"#,
+                r#"%7 = effect.dup @State %0 : !evidence"#,
                 r#"%8 = effect.with_tail %7, %0 {index = 0} : !evidence"#,
-                r#"%9 = effect.mask %0 {ability = @State} : !evidence"#,
+                r#"%9 = effect.mask @State %0 : !evidence"#,
                 r#"%10 = effect.with_tail %8, %9 {index = 1} : !evidence"#,
                 r#"func.tail_call_indirect %2(%10, %6) attributes {tribute.calling_convention = "cps"} : (!evidence, core.i32) -> core.never"#,
             ],

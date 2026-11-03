@@ -1058,7 +1058,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @run(%ev: wasm.arrayref, %payload: wasm.anyref) -> wasm.anyref {
-    %result = effect.dispatch_tail %ev, %payload {ability = @Console, op_name = "read"} : wasm.anyref
+    %result = effect.dispatch_tail @Console @read(%payload) [%ev] : wasm.anyref
     func.return %result
   }
 }"#,

@@ -469,7 +469,7 @@ fn native_evidence_hands_the_dispatcher_to_the_runtime_as_a_managed_value() {
   func.func @install(%evidence: !Evidence, %prompt: core.i32) -> !Evidence {
     %code = arith.const {value = 0} : core.i32
     %closure = adt.struct_new %code {type = !_closure} : !_closure
-    %extended = effect.extend %evidence, %prompt, %closure, %evidence {ability = @State} : !Evidence
+    %extended = effect.extend @State %evidence, %prompt, %closure, %evidence : !Evidence
     func.return %extended
   }
 }"#,

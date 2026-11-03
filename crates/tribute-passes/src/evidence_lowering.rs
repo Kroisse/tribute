@@ -513,7 +513,7 @@ mod tests {
     }
 
     const TAIL: &str = r#"  func.func @tail(%ev: !Evidence, %payload: tribute_rt.anyref) -> tribute_rt.anyref {
-    %result = effect.dispatch_tail %ev, %payload {ability = @Console, op_name = "read"} : tribute_rt.anyref
+    %result = effect.dispatch_tail @Console @read(%payload) [%ev] : tribute_rt.anyref
     func.return %result
   }"#;
 
@@ -522,13 +522,13 @@ mod tests {
   }"#;
 
     const EXTEND: &str = r#"  func.func @install(%ev: !Evidence, %prompt: core.i32, %tr: !Closure) -> !Evidence {
-    %extended = effect.extend %ev, %prompt, %tr, %ev {ability = @State} : !Evidence
+    %extended = effect.extend @State %ev, %prompt, %tr, %ev : !Evidence
     func.return %extended
   }"#;
 
     const SELECT: &str = r#"  func.func @select(%ev: !Evidence) -> !Evidence {
-    %masked = effect.mask %ev {ability = @State} : !Evidence
-    %dup = effect.dup %masked {ability = @State} : !Evidence
+    %masked = effect.mask @State %ev : !Evidence
+    %dup = effect.dup @State %masked : !Evidence
     func.return %dup
   }"#;
 

@@ -999,8 +999,7 @@ CPS legalization은 선택을 계산하거나 바꾸지 않고 만든 호출로 
 이 pass는 함수 signature나 본문 형상에서 hidden evidence를 추론하지 않는다.
 
 ```text
-%ev2 = effect.extend %ev, %prompt_tag, %tr_dispatch_fn, %outer
-  { ability = @State }
+%ev2 = effect.extend @State %ev, %prompt_tag, %tr_dispatch_fn, %outer : !Evidence
 ```
 
 Marker와 Evidence는
