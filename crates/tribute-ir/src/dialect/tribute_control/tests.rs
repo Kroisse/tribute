@@ -202,7 +202,7 @@ const VALID_CONTROL_MODULE: &str = r#"core.module @test {
     tribute_control.return %value
   }
   tribute_control.func @control(%value: core.i32) -> core.i32 {
-    %function = "tribute_control.func_ref"() {func_ref = @id} : !callable
+    %function = tribute_control.func_ref @id : !callable
     %direct = tribute_control.call %value {callee = @id} : core.i32
     %indirect = tribute_control.call_indirect %function(%value) : core.i32
     %closure = tribute_control.lambda() -> core.i32 captures [%value] {
@@ -956,7 +956,7 @@ fn local_validator_reports_distinct_malformed_operation_contracts() {
   %bad_call0, %bad_call1 = "tribute_control.call"() ({
   }) {unexpected = 1} : core.i32, core.i1
   %non_callable = tribute_control.call_indirect %integer(%boolean) : core.i32
-  %callable = "tribute_control.func_ref"() {func_ref = @bad_func} : !direct
+  %callable = tribute_control.func_ref @bad_func : !direct
   %mismatched = tribute_control.call_indirect %callable(%boolean) : core.i1
   %bad_perform = tribute_control.perform %integer {ability = @State, op_name = "get", operation_kind = "bogus"} : core.i32
   "tribute_control.handler"() ({
@@ -1265,7 +1265,7 @@ fn whole_ir_resolves_references_in_the_nearest_module() {
       tribute_control.return %value
     }
     tribute_control.func @use(%value: core.i32) -> core.i32 {
-      %reference = "tribute_control.func_ref"() {func_ref = @id} : !callable
+      %reference = tribute_control.func_ref @id : !callable
       %direct = tribute_control.call %value {callee = @id} : core.i32
       %indirect = tribute_control.call_indirect %reference(%direct) : core.i32
       tribute_control.return %indirect
@@ -1277,7 +1277,7 @@ fn whole_ir_resolves_references_in_the_nearest_module() {
       tribute_control.return %value
     }
     tribute_control.func @use(%value: core.i1) -> core.i1 {
-      %reference = "tribute_control.func_ref"() {func_ref = @id} : !callable
+      %reference = tribute_control.func_ref @id : !callable
       %direct = tribute_control.call %value {callee = @id} : core.i1
       %indirect = tribute_control.call_indirect %reference(%direct) : core.i1
       tribute_control.return %indirect
@@ -1325,9 +1325,9 @@ fn whole_ir_reports_symbol_declaration_capture_and_token_contracts() {
   tribute_control.func @cps_target(%value: core.i32) -> core.i32 {
     tribute_control.return %value
   }
-  %weak = "tribute_control.func_ref"() {func_ref = @cps_target} : !direct
-  %wrong_signature = "tribute_control.func_ref"() {func_ref = @id} : !different
-  %missing_ref = "tribute_control.func_ref"() {func_ref = @missing} : !direct
+  %weak = tribute_control.func_ref @cps_target : !direct
+  %wrong_signature = tribute_control.func_ref @id : !different
+  %missing_ref = tribute_control.func_ref @missing : !direct
   %missing_call = tribute_control.call {callee = @missing} : core.i32
   %false = arith.const {value = false} : core.i1
   %bad_call = tribute_control.call %false {callee = @id} : core.i1
@@ -1944,7 +1944,7 @@ fn exact_registered_intrinsic_has_indirect_callable_provenance() {
   tribute_control.func @"Nat::+"(%left: core.i32, %right: core.i32) -> core.i32
     attributes {abi = "intrinsic", tribute.compiler_intrinsic = "Nat::+"}
   tribute_control.func @caller(%left: core.i32, %right: core.i32) -> core.i32 {
-    %callee = "tribute_control.func_ref"() {func_ref = @"Nat::+"} : !F
+    %callee = tribute_control.func_ref @"Nat::+" : !F
     %result = tribute_control.call_indirect %callee(%left, %right) : core.i32
     tribute_control.return %result
   }
@@ -2185,7 +2185,7 @@ fn callable_handle_completion_argument_traces_the_body_yield() {
   }
   tribute_control.func @caller(%value: core.i32) -> !F {
     %callback = tribute_control.handle : !F body {
-      %source = "tribute_control.func_ref"() {func_ref = @id} : !F
+      %source = tribute_control.func_ref @id : !F
       tribute_control.yield %source
     } completion(%callback: !F) {
         %ignored = tribute_control.call_indirect %callback(%value) : core.i32
@@ -2296,7 +2296,7 @@ fn handled_callable_module(op_yield: &str) -> String {
     %body = tribute_control.perform {{ability = @Gen, op_name = "next", operation_kind = "op"}} : core.i32
     tribute_control.yield %body
   }} completion(%k: core.i32) {{
-      %done = "tribute_control.func_ref"() {{func_ref = @inc}} : !F
+      %done = tribute_control.func_ref @inc : !F
       tribute_control.yield %done
   }} handlers {{
     tribute_control.handler op @Gen @next(%token: tribute_control.resume_token<core.i32, !F>) : core.i32 {{

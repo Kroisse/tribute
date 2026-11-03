@@ -27,7 +27,7 @@ const MODULE: &str = r#"core.module @test {
     %f = tribute_control.lambda(%y: core.i32) -> core.i32 row(@A, @B) captures [] {
       tribute_control.return %y
     }
-    %g = "tribute_control.func_ref"() {func_ref = @apply, row_args = [{instances = [@A, @B]}]} : !applied
+    %g = tribute_control.func_ref @apply rows [{instances = [@A, @B]}] : !applied
     %r = tribute_control.call %f, %x {callee = @apply, row_args = [{instances = [@A, @B]}]} : core.i32
     tribute_control.return %r
   }
@@ -145,8 +145,8 @@ fn a_row_argument_that_changes_the_callee_signature_is_rejected() {
     );
     assert_rejects(
         &MODULE.replace(
-            "{func_ref = @apply, row_args = [{instances = [@A, @B]}]}",
-            "{func_ref = @apply, row_args = [{instances = [@B]}]}",
+            "@apply rows [{instances = [@A, @B]}]",
+            "@apply rows [{instances = [@B]}]",
         ),
         "func_ref result source signature does not match its target",
     );
@@ -468,8 +468,8 @@ fn a_header_may_declare_only_unquantified_binders() {
 #[test]
 fn a_function_reference_may_widen_the_row_of_its_target() {
     let input = MODULE.replace(
-        "{func_ref = @apply, row_args = [{instances = [@A, @B]}]}",
-        "{func_ref = @apply, row_args = [{instances = [@A]}]}",
+        "@apply rows [{instances = [@A, @B]}]",
+        "@apply rows [{instances = [@A]}]",
     );
     let narrowed = input.replace(
         "!applied = tribute_control.func_sig<(!closed, core.i32) -> core.i32 row(@A, @B)>",
@@ -637,7 +637,7 @@ const FRONTEND: &str = r#"core.module @test {
       tribute_control.return %z
     }
     %s = tribute_control.instantiate %h {row_args = [{}]} : !pure
-    %a = "tribute_control.func_ref"() {func_ref = @apply, row_args = [{}]} : !applied
+    %a = tribute_control.func_ref @apply rows [{}] : !applied
     %v = tribute_control.call_indirect %s(%x) : core.i32
     %r = tribute_control.call_indirect %a(%g, %v) : core.i32
     tribute_control.return %r

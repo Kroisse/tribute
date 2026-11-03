@@ -268,11 +268,11 @@ fn textual_direct_evidence_and_cps_transfers_preserve_exact_abis() {
   tribute_cps.func @exercise(%value: core.i32) -> core.i32 convention(cps) {
     %direct_result = tribute_control.call %value {callee = @direct} : core.i32
     %evidence_result = tribute_control.call %direct_result {callee = @evidence} : core.i32
-    %direct_ref = "tribute_cps.func_ref"() {func_ref = @"direct$8"} : !direct
+    %direct_ref = tribute_cps.func_ref @"direct$8" : !direct
     %direct_indirect = tribute_cps.call_indirect %direct_ref(%evidence_result) convention(direct) : core.i32
-    %evidence_ref = "tribute_cps.func_ref"() {func_ref = @"evidence$8"} : !evidence
+    %evidence_ref = tribute_cps.func_ref @"evidence$8" : !evidence
     %evidence_indirect = tribute_cps.call_indirect %evidence_ref(%direct_indirect) convention(evidence_direct) : core.i32
-    %cps_ref = "tribute_cps.func_ref"() {func_ref = @"cps$8"} : !cps
+    %cps_ref = tribute_cps.func_ref @"cps$8" : !cps
     %cps_indirect = tribute_cps.call_indirect %cps_ref(%evidence_indirect) convention(cps) : core.i32
     tribute_control.return %cps_indirect
   }
@@ -361,7 +361,7 @@ fn source_data_indirect_calls_carry_their_exact_signature() {
   }
   tribute_cps.func_table @"add$8" = {direct = @add}
   tribute_cps.func @named_ref(%left: core.i32, %right: core.i32) -> core.i32 convention(direct) {
-    %ref = "tribute_cps.func_ref"() {func_ref = @"add$8"} : !direct
+    %ref = tribute_cps.func_ref @"add$8" : !direct
     %called = tribute_cps.call_indirect %ref(%left, %right) convention(direct) : core.i32
     tribute_control.return %called
   }
@@ -1724,7 +1724,7 @@ fn stronger_func_ref_builds_a_cps_adapter_without_a_null_environment() {
   }
   tribute_cps.func_table @"id$8" = {direct = @id}
   tribute_cps.func @run(%value: core.i32) -> core.i32 convention(cps) {
-    %callee = "tribute_cps.func_ref"() {func_ref = @"id$8"} : !cps
+    %callee = tribute_cps.func_ref @"id$8" : !cps
     %result = tribute_cps.call_indirect %callee(%value) convention(cps) : core.i32
     tribute_control.return %result
   }
@@ -1751,7 +1751,7 @@ fn parameter_attributes_follow_their_parameters_to_the_physical_abi() {
   }
   tribute_cps.func_table @"id$8" = {cps = @id}
   tribute_cps.func @run(%value: core.i32) -> core.i32 convention(cps) {
-    %callee = "tribute_cps.func_ref"() {func_ref = @"id$8"} : !cps
+    %callee = tribute_cps.func_ref @"id$8" : !cps
     %result = tribute_cps.call_indirect %callee(%value) convention(cps) : core.i32
     tribute_control.return %result
   }
@@ -1850,12 +1850,12 @@ fn references_sharing_a_table_share_its_entries() {
   tribute_cps.func_table @"evidence$8" = {evidence_direct = @evidence}
   tribute_cps.func_table @"cps$8" = {cps = @cps}
   tribute_cps.func @refs(%value: core.i32) -> core.i32 convention(cps) {
-    %direct_direct = "tribute_cps.func_ref"() {func_ref = @"direct$8"} : !direct
-    %direct_evidence = "tribute_cps.func_ref"() {func_ref = @"direct$8"} : !evidence
-    %direct_cps = "tribute_cps.func_ref"() {func_ref = @"direct$8"} : !cps
-    %evidence_evidence = "tribute_cps.func_ref"() {func_ref = @"evidence$8"} : !evidence
-    %evidence_cps = "tribute_cps.func_ref"() {func_ref = @"evidence$8"} : !cps
-    %cps_cps = "tribute_cps.func_ref"() {func_ref = @"cps$8"} : !cps
+    %direct_direct = tribute_cps.func_ref @"direct$8" : !direct
+    %direct_evidence = tribute_cps.func_ref @"direct$8" : !evidence
+    %direct_cps = tribute_cps.func_ref @"direct$8" : !cps
+    %evidence_evidence = tribute_cps.func_ref @"evidence$8" : !evidence
+    %evidence_cps = tribute_cps.func_ref @"evidence$8" : !cps
+    %cps_cps = tribute_cps.func_ref @"cps$8" : !cps
     tribute_control.return %value
   }
 }"#;
@@ -1900,7 +1900,7 @@ fn a_table_of_two_targets_enters_each_through_its_convention() {
   }
   tribute_cps.func_table @"id$8" = {direct = @direct, evidence_direct = @evidence}
   tribute_cps.func @refs(%value: core.i32) -> core.i32 convention(cps) {
-    %reference = "tribute_cps.func_ref"() {func_ref = @"id$8"} : !callable
+    %reference = tribute_cps.func_ref @"id$8" : !callable
     tribute_control.return %value
   }
 }"#;
@@ -1949,7 +1949,7 @@ fn func_ref_in_a_nested_module_is_adapted_in_that_module() {
     }
     tribute_cps.func_table @"id$8" = {direct = @id}
     tribute_cps.func @refs(%value: core.i32) -> core.i32 convention(direct) {
-      %reference = "tribute_cps.func_ref"() {func_ref = @"id$8"} : !direct
+      %reference = tribute_cps.func_ref @"id$8" : !direct
       tribute_control.return %value
     }
   }
@@ -1993,7 +1993,7 @@ fn a_table_entry_weaker_than_its_cps_target_is_rejected_before_mutation() {
   }
   tribute_cps.func_table @"cps$8" = {evidence_direct = @cps}
   tribute_cps.func @broken(%value: core.i32) -> core.i32 convention(evidence_direct) {
-    %callee = "tribute_cps.func_ref"() {func_ref = @"cps$8"} : !evidence
+    %callee = tribute_cps.func_ref @"cps$8" : !evidence
     tribute_control.return %value
   }
 }"#;

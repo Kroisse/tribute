@@ -39,7 +39,7 @@ fn a_pure_callback_selects_the_direct_instance() {
     tribute_control.return %x
   }
   tribute_control.func @main(%x: core.i32) -> core.i32 {
-    %f = "tribute_control.func_ref"() {func_ref = @bang} : !pure
+    %f = tribute_control.func_ref @bang : !pure
     %r = tribute_control.call %x, %f {callee = @app, row_args = [{}]} : core.i32
     tribute_control.return %r
   }
@@ -80,7 +80,7 @@ fn a_class_variable_reached_through_a_callee_is_selected() {
     tribute_control.return %x
   }
   tribute_control.func @bang['a0](%x: core.i32) -> core.i32 row(| 'a0) inferred {
-    %f = "tribute_control.func_ref"() {func_ref = @ident, row_args = [{tail = 0}]} : !cb
+    %f = tribute_control.func_ref @ident rows [{tail = 0}] : !cb
     %r = tribute_control.call %x, %f {callee = @app, row_args = [{tail = 0}]} : core.i32
     tribute_control.return %r
   }
@@ -89,7 +89,7 @@ fn a_class_variable_reached_through_a_callee_is_selected() {
     tribute_control.return %r
   }
   tribute_control.func @main(%x: core.i32) -> core.i32 {
-    %g = "tribute_control.func_ref"() {func_ref = @bang, row_args = [{}]} : !pure
+    %g = tribute_control.func_ref @bang rows [{}] : !pure
     %r = tribute_control.call %x, %g {callee = @twice, row_args = [{}]} : core.i32
     tribute_control.return %r
   }
@@ -447,8 +447,8 @@ fn module_level_types_and_references_to_main_keep_their_shape() {
   }
   tribute_control.func @ext(%x: core.i32) -> core.i32 attributes {abi = "C"}
   tribute_control.func @main(%x: core.i32) -> core.i32 {
-    %m = "tribute_control.func_ref"() {func_ref = @main} : !pure
-    %f = "tribute_control.func_ref"() {func_ref = @ext} : !pure
+    %m = tribute_control.func_ref @main : !pure
+    %f = tribute_control.func_ref @ext : !pure
     %r = tribute_control.call %x, %f {callee = @app, row_args = [{}]} : core.i32
     tribute_control.return %r
   }

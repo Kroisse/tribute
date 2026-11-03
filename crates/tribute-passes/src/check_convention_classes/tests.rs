@@ -200,7 +200,7 @@ fn a_func_ref_enters_its_table_no_stronger_than_the_row_of_its_value() {
   }}
   tribute_cps.func_table @"pure$8" = {{{entry} = @pure}}
   tribute_cps.func @f(%x: core.i32) -> core.i32 convention(direct) {{
-    %p = "tribute_cps.func_ref"() {{func_ref = @"pure$8"}} : {value}
+    %p = tribute_cps.func_ref @"pure$8" : {value}
     tribute_control.return %x
   }}
 }}"#
@@ -270,7 +270,7 @@ fn a_definition_without_a_body_has_no_class_variables() {
   }}
   tribute_cps.func_table @"pure$8" = {{direct = @pure}}
   tribute_cps.func @main(%x: core.i32) -> core.i32 convention(direct) {{
-    %f = "tribute_cps.func_ref"() {{func_ref = @"pure$8"}} : !closed
+    %f = tribute_cps.func_ref @"pure$8" : !closed
     %r = tribute_control.call %x, %f {{callee = @external, row_args = [{{}}]}} : core.i32
     tribute_control.return %r
   }}
