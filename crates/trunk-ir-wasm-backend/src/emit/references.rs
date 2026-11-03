@@ -353,9 +353,9 @@ mod tests {
         // must not be hidden by the container's own lack of a symbol attribute.
         let element = r#"core.module @test {
   wasm.table {reftype = "funcref", min = 1, max = 1}
-  "wasm.elem"() ({
+  wasm.elem {
     wasm.ref_func {func_name = @helper} : wasm.funcref
-  }) {table = 0, offset = 0}
+  }
   wasm.func @helper() -> core.i32 attributes {abi = "C"}
   wasm.func @main() -> core.nil { wasm.return }
 }"#;

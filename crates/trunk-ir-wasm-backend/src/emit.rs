@@ -1241,9 +1241,9 @@ mod tests {
             ctx,
             r#"core.module @test {
   wasm.table {reftype = "funcref", min = 1, max = 1}
-  "wasm.elem"() ({
+  wasm.elem {
     wasm.ref_func {func_name = @target} : wasm.funcref
-  }) {table = 0, offset = 0}
+  }
   wasm.func @target(%value: core.i32) -> core.nil {
     wasm.return
   }
@@ -1399,7 +1399,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.table {reftype = "funcref", min = 8, max = 8}
-  "wasm.elem"() ({
+  wasm.elem {
     wasm.ref_func {func_name = @f7} : wasm.funcref
     wasm.ref_func {func_name = @f6} : wasm.funcref
     wasm.ref_func {func_name = @f5} : wasm.funcref
@@ -1408,7 +1408,7 @@ mod tests {
     wasm.ref_func {func_name = @f2} : wasm.funcref
     wasm.ref_func {func_name = @f1} : wasm.funcref
     wasm.ref_func {func_name = @f0} : wasm.funcref
-  }) {table = 0, offset = 0}
+  }
   wasm.func @f0() -> core.nil {
     wasm.return
   }
@@ -1561,9 +1561,9 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.table {reftype = "funcref", min = 1, max = 1}
-  "wasm.elem"() ({
+  wasm.elem {
     wasm.ref_func {func_name = @pair} : wasm.funcref
-  }) {table = 0, offset = 0}
+  }
   wasm.func @pair() -> (core.i32, core.i64) {
     %a = wasm.i32_const {value = 7} : core.i32
     %b = wasm.i64_const {value = 9} : core.i64
@@ -1827,9 +1827,9 @@ mod tests {
             r#"core.module @test {
   wasm.table {reftype = "funcref", min = 1, max = 1}
   wasm.global {valtype = "i32", mutable = true, init = 0}
-  "wasm.elem"() ({
+  wasm.elem {
     wasm.ref_func {func_name = @add_two} : wasm.funcref
-  }) {table = 0, offset = 0}
+  }
   wasm.func @set_one() {
     %one = wasm.i32_const {value = 1} : core.i32
     wasm.global_set %one {index = 0}
@@ -1922,9 +1922,9 @@ mod tests {
         invoke(
             r#"core.module @test {
   wasm.table {reftype = "funcref", min = 1, max = 1}
-  "wasm.elem"() ({
+  wasm.elem {
     wasm.ref_func {func_name = @pair} : wasm.funcref
-  }) {table = 0, offset = 0}
+  }
   wasm.func @pair() -> (core.i32, core.i64) {
     %a = wasm.i32_const {value = 7} : core.i32
     %b = wasm.i64_const {value = 9} : core.i64

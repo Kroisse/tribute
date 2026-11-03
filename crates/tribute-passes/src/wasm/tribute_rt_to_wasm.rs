@@ -542,9 +542,9 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.table {reftype = "funcref", min = 1, max = 1}
-  "wasm.elem"() ({
+  wasm.elem {
     %r = wasm.ref_func {func_name = @constant} : wasm.funcref
-  }) {table = 0, offset = 0}
+  }
   func.func @f() -> core.nil {
     %a = tribute_rt.convention_table {entries = [@first, @second]} : tribute_rt.convention_table_ref
     %b = tribute_rt.convention_table {entries = [@third]} : tribute_rt.convention_table_ref
@@ -591,7 +591,7 @@ mod tests {
             ir.contains(r#"wasm.table {max = 1, min = 1, reftype = "funcref"}"#),
             "{ir}"
         );
-        assert!(ir.contains("\"wasm.elem\"() ({"), "{ir}");
+        assert!(ir.contains("wasm.elem {"), "{ir}");
         assert!(!ir.contains("offset = 0"), "{ir}");
         assert!(ir.contains("func_name = @only"), "{ir}");
         assert!(ir.contains("wasm.i32_const {value = 0}"), "{ir}");

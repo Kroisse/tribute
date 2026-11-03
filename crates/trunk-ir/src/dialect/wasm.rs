@@ -153,6 +153,18 @@ mod wasm {
     #[asm_format(attr_dict_bare)]
     fn table(reftype: Attr<String>, min: Attr<u32>, max: Option<Attr<u32>>) {}
 
+    /// An active element segment that writes the functions its `funcs` region
+    /// names, in order, to `table` from `offset` at instantiation.
+    ///
+    /// ```text
+    /// wasm.elem {
+    ///   wasm.ref_func {func_name = @f} : wasm.funcref
+    /// }
+    /// wasm.elem table 1 offset 4 {
+    ///   wasm.ref_func {func_name = @g} : wasm.funcref
+    /// }
+    /// ```
+    #[asm_format(("table" table^)? ("offset" offset^)? attr_dict region(funcs))]
     fn elem(#[default(0)] table: Attr<u32>, #[default(0)] offset: Attr<u32>) {
         #[region(funcs)]
         {}
@@ -1065,6 +1077,29 @@ mod tests {
     use crate::op_interface::DynIndirectCallLike;
     use crate::parser::parse_test_module;
     use crate::printer::print_module;
+
+    #[test]
+    fn elem_writes_only_a_non_default_table_and_offset() {
+        let text = r#"core.module @test {
+  wasm.elem {
+      %0 = wasm.ref_func {func_name = @f} : wasm.funcref
+  }
+  wasm.elem table 1 offset 4 {
+      %0 = wasm.ref_func {func_name = @g} : wasm.funcref
+  }
+}
+"#;
+        let mut ctx = crate::IrContext::new();
+        let module = parse_test_module(&mut ctx, text);
+        assert_eq!(print_module(&ctx, module.op()), text);
+        let elems: Vec<_> = module
+            .ops(&ctx)
+            .iter()
+            .map(|&op| Elem::from_op(&ctx, op).unwrap())
+            .collect();
+        assert_eq!((elems[0].table(&ctx), elems[0].offset(&ctx)), (0, 0));
+        assert_eq!((elems[1].table(&ctx), elems[1].offset(&ctx)), (1, 4));
+    }
 
     #[test]
     fn ref_upcast_result_is_an_abstract_gc_reference() {
