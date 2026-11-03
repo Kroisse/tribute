@@ -9,9 +9,8 @@
 //! vectors, strings, and maps the value owns. Interned Salsa values and
 //! reference-counted symbols are shared, so their storage is not counted.
 //! The copy time is the mean time of that clone, an estimate of what
-//! assembling or merging the value costs on each edit. The span map, which
-//! has no `Clone`, is measured by merging the items' spans again, as each
-//! parse does.
+//! assembling or merging the value costs on each edit. The clones are
+//! dropped after the timer stops, so the time excludes their deallocation.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::hint::black_box;
@@ -62,11 +61,14 @@ fn measure<T>(make: impl Fn() -> T) -> (isize, f64) {
     let bytes = LIVE_BYTES.load(Ordering::Relaxed) - before;
     drop(value);
     const RUNS: u32 = 200;
+    let mut kept = Vec::with_capacity(RUNS as usize);
     let start = Instant::now();
     for _ in 0..RUNS {
-        black_box(make());
+        kept.push(black_box(make()));
     }
-    (bytes, start.elapsed().as_secs_f64() * 1e6 / f64::from(RUNS))
+    let elapsed = start.elapsed();
+    drop(kept);
+    (bytes, elapsed.as_secs_f64() * 1e6 / f64::from(RUNS))
 }
 
 fn row(name: &str, (bytes, micros): (isize, f64)) {
