@@ -2697,12 +2697,12 @@ fn signature_consumed_contracts_drive_entries_and_call_sites() {
     func.return
   }
   func.func @indirect(%value: !R, %callee: !Consuming, %count: core.i32) -> core.i32 {
-    "func.call_indirect"(%callee, %value, %count) {signature = !Consuming}
+    func.call_indirect %callee(%value, %count) : (!R {tribute.ownership = "consumed"}, core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}
     %seen = adt.struct_get %value {field = 0, type = !Layout} : core.i32
     func.return %seen
   }
   func.func @tail(%value: !R {tribute.ownership = "consumed"}, %callee: !Consuming {tribute.ownership = "consumed"}, %count: core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
-    "func.tail_call_indirect"(%callee, %value, %count) {signature = !Consuming}
+    func.tail_call_indirect %callee(%value, %count) : (!R {tribute.ownership = "consumed"}, core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}
   }
   func.func @duplicate(%value: !R {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
     func.tail_call @pair_tail(%value, %value) : (!R, !R) -> ()
@@ -2770,7 +2770,7 @@ fn proper_tail_edges_without_a_consumed_contract_are_rejected() {
   !Layout = adt.struct<R(x: core.i32)>
   !Unmarked = func.func_sig<(!R) -> (), {call_conv = "tail"}>
   func.func @tail(%value: !R {tribute.ownership = "consumed"}, %callee: !Unmarked {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
-    "func.tail_call_indirect"(%callee, %value) {signature = !Unmarked}
+    func.tail_call_indirect %callee(%value) : (!R) -> (), {call_conv = "tail"}
   }
 }"#,
         "proper-tail managed parameter is not consumed",
