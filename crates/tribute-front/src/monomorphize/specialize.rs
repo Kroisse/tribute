@@ -547,7 +547,7 @@ pub(crate) fn type_args_variant(type_args: &[Type<'_>]) -> NonZero<u64> {
     for ty in type_args {
         hasher.u64(ty.as_id().as_bits());
     }
-    hasher.finish_nonzero()
+    NodeId::variant_of(&hasher)
 }
 
 fn specialize_func_decl<'db>(

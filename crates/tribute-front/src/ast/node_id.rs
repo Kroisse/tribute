@@ -69,15 +69,18 @@ impl NodeId {
         // A copy of a copy: two nodes that differ only in their variant must
         // stay distinct, so hash the outer variant together with the new one.
         let variant = self.variant.map_or(variant, |outer| {
-            IdentityHasher::new()
-                .u64(outer.get())
-                .u64(variant.get())
-                .finish_nonzero()
+            Self::variant_of(IdentityHasher::new().u64(outer.get()).u64(variant.get()))
         });
         Self {
             variant: Some(variant),
             ..self
         }
+    }
+
+    /// The specialization variant whose hash `hasher` has computed. A variant
+    /// is never zero, so a zero hash becomes one.
+    pub fn variant_of(hasher: &IdentityHasher) -> NonZero<u64> {
+        NonZero::new(hasher.finish()).unwrap_or(NonZero::<u64>::MIN)
     }
 
     /// Get the original NodeId, stripping any specialization variant.
@@ -160,11 +163,6 @@ impl IdentityHasher {
 
     pub fn finish(&self) -> u64 {
         self.0.finish()
-    }
-
-    /// The hash, with zero replaced by one.
-    pub fn finish_nonzero(&self) -> NonZero<u64> {
-        NonZero::new(self.finish()).unwrap_or(NonZero::<u64>::MIN)
     }
 }
 
