@@ -192,13 +192,11 @@ where
   its entry block, as `func.func` does. `("kw" .. x^)?`
   opens with a literal and is written only when its anchor `x` is present;
   an optional `bool` anchor is a flag the group's literals stand for. A
-  format begins with a literal (after any `symbol(..)` or symbol reference,
-  or a `signature(..)` after them),
-  closes each variadic
-  list with `")"` or `"]"`, and ends with `(":" types(..)^)?` for results
-  that may be absent. The macro reports a broken rule, a missing entity, or
-  one written twice at the element at fault. An operation the format cannot
-  spell without loss prints generically.
+  format may begin with any element, closes each variadic list with `")"` or
+  `"]"`, and ends with `(":" types(..)^)?` for results that may be absent.
+  The macro reports a broken rule, a missing entity, or one written twice at
+  the element at fault. An operation the format cannot spell without loss
+  prints generically, as `"dialect.op"(%a)` with a quoted name.
 - `#[asm_format]` without elements on an operation requires
   `trunk_ir::asm_format::OpAsmFormat` for its wrapper, which prints and
   parses the operation's custom syntax by hand. Generic syntax stays

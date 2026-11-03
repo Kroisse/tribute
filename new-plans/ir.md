@@ -392,7 +392,8 @@ lowering이 정한다.
 ```
 
 - Operation 이름은 문자열로 쓴다. 따옴표 없는 이름 뒤에는 그 operation의 전용
-  형식이 온다.
+  형식이 오며, 전용 형식이 없는 operation은 generic 형식으로만 쓴다.
+  `core.module`은 printer와 parser가 따로 다루는 전용 형식을 가진다.
 - Operand는 언제나 괄호 안에 쓰며, 없으면 `()`다. Successor는 그 뒤에
   `[^bb..]`로 쓴다.
 - Region은 attribute 사전 앞에 괄호로 감싸 쉼표로 나열한다. 그래서 attribute
@@ -513,15 +514,9 @@ Macro는 형식 기술을 선언과 대조해 다음을 어기면 그 원소를 
   세지 않는다.
 - Attribute는 많아야 한 번 명시하고, 명시하지 않은 attribute가 있으면
   `attr_dict`가 있어야 한다. 같은 entity를 두 원소가 쓰지 않는다.
-- 형식은 원소를 하나 이상 쓰고, `symbol`과 symbol 참조 attribute로 시작할 수
-  있다. Generic 형식은 `@`로 시작하지 않기 때문이다. 그 뒤, 또는 그런 원소가
-  없으면 처음에는 literal이 온다. 고정 operand 하나가 literal `"("` 앞에서 이
-  literal을 대신할 수 있다. Generic 형식은 operand 바로 뒤에 `(`를 쓰지 않기
-  때문이다. 앞에 symbol이 있으면 이 literal로 여는 선택
-  묶음이나 `(`로 시작하는 `signature`도 된다. 이 literal은 `{`, `%`, `:`, `[`,
-  `^`, `}`로 시작하지 않는다. 앞의 넷은 generic 형식이 operation 이름 뒤에 쓰는
-  것이고, 나머지는 operation 이름만 쓴 generic 형식 뒤의 다음 줄이 시작할 수 있는
-  것이다.
+- 형식은 원소를 하나 이상 쓴다. 첫 원소는 어느 원소든 될 수 있다. Generic
+  형식은 따옴표로 쓴 이름으로 시작하므로, 따옴표 없는 이름 뒤는 언제나 그
+  operation의 형식이 읽는다.
 - 선택 묶음은 여는 literal로 시작하고, 그 뒤에는 literal과 anchor 하나만 둔다.
   여는 literal은 keyword(값이 시작하는 `true`, `false`, `unit`, `loc`, `b`는
   제외)이거나 값, `attr_dict`, 다음 줄이 시작할 수 없는 구두점이며, 형식의 다른
@@ -560,11 +555,10 @@ parser는 그 attribute가 없는 정규형으로 읽는다. 두 operation은 ac
 같다. 같은 operation을 generic 형식으로 쓴 텍스트도 같은 operation으로
 읽힌다. Parser는 operation schema를 검증하지 않는다.
 
-Parser는 `symbol`과 맨 앞 operand가 아닌 원소가 첫 token을 읽기 전에만
-backtrack하고, 그 뒤의 실패는 기대한 원소를 밝힌 오류로 끝낸다. 원소 사이의 공백은 token이 아니다. Keyword
-literal과 `attr_dict`의 `attributes`는 식별자 전체로 읽으며, 바로 뒤에 `.`이 오면
-다음 operation 이름의 일부로 보고 읽지 않는다. 첫 token에서 backtrack한 입력은 generic
-형식으로 다시 읽는다.
+형식 parser의 실패는 기대한 원소를 밝힌 오류로 끝나며, 같은 입력을 generic
+형식으로 다시 읽지 않는다. 원소 사이의 공백은 token이 아니다. Keyword literal과
+`attr_dict`의 `attributes`는 식별자 전체로 읽으며, 바로 뒤에 `.`이 오면 다음
+operation 이름의 일부로 보고 읽지 않는다.
 
 `signature`가 entry argument를 쓰는 region이 여럿이면 printer는 둘째 이후
 region의 entry argument에 첫 region과 같은 이름을 주고, parser는 매개변수를 모든

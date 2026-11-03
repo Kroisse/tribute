@@ -683,10 +683,6 @@ struct Parsed<'a> {
 }
 
 /// Parse an operation written with `format` after its `dialect.name`.
-///
-/// Until the first element that is not a symbol has read its token, a
-/// mismatch backtracks so that the caller reads generic syntax instead;
-/// after that, it is an error.
 pub(crate) fn parse<'a>(
     input: &mut &'a str,
     name: &'a str,
@@ -702,7 +698,6 @@ pub(crate) fn parse<'a>(
     let mut parser = FormatParser {
         schema,
         format,
-        committed: false,
         signature_regions: &[],
         entry_args: Vec::new(),
         parsed: Parsed {
@@ -714,11 +709,7 @@ pub(crate) fn parse<'a>(
         },
     };
     for element in format.elements {
-        parser.committed_element(input, element)?;
-    }
-    // A format of symbols alone reads only a prefix of generic syntax.
-    if !parser.committed && input.trim_start().starts_with(['{', ':', '[']) {
-        return Err(ErrMode::Backtrack(expected("the end of the operation")));
+        parser.element(input, element)?;
     }
     let Parsed {
         operands,
@@ -761,7 +752,6 @@ fn expected(description: &'static str) -> ContextError {
 struct FormatParser<'a> {
     schema: &'static OpSchema,
     format: &'static OpFormat,
-    committed: bool,
     /// The regions a signature lists, which take `entry_args` as their
     /// entry block arguments.
     signature_regions: &'static [usize],
@@ -770,37 +760,6 @@ struct FormatParser<'a> {
 }
 
 impl<'a> FormatParser<'a> {
-    /// Parse one element, committing once it reads a token.
-    fn committed_element(
-        &mut self,
-        input: &mut &'a str,
-        element: &FormatElement,
-    ) -> ModalResult<()> {
-        ws.parse_next(input)?;
-        let before = input.len();
-        match self.element(input, element) {
-            Ok(()) => {
-                // A leading symbol or symbol reference cannot be generic
-                // syntax's, but generic syntax may follow it.
-                let symbol_like = match *element {
-                    // Only `(` after a leading operand tells it from generic
-                    // syntax.
-                    FormatElement::Symbol(_) | FormatElement::Operand(_) => true,
-                    FormatElement::Attribute(index) => {
-                        self.schema.attributes[index].kind == AttributeKind::SymbolRef
-                    }
-                    _ => false,
-                };
-                if input.len() != before && !symbol_like {
-                    self.committed = true;
-                }
-                Ok(())
-            }
-            Err(ErrMode::Backtrack(error)) if self.committed => Err(ErrMode::Cut(error)),
-            Err(error) => Err(error),
-        }
-    }
-
     fn element(&mut self, input: &mut &'a str, element: &FormatElement) -> ModalResult<()> {
         ws.parse_next(input)?;
         match *element {
@@ -819,8 +778,7 @@ impl<'a> FormatParser<'a> {
                 Ok(())
             }
             FormatElement::Attribute(index) => {
-                // Only `@` begins a symbol reference; generic syntax's
-                // dictionary must not be read as its value.
+                // Only `@` begins a symbol reference.
                 if self.schema.attributes[index].kind == AttributeKind::SymbolRef
                     && !input.starts_with('@')
                 {
@@ -969,12 +927,12 @@ impl<'a> FormatParser<'a> {
                     Err(ErrMode::Backtrack(_)) => return Ok(()),
                     Err(error) => return Err(error),
                 }
-                self.committed = true;
                 if let FormatAnchor::Flag(index) = anchor {
                     self.attribute(index, RawAttribute::Bool(true));
                 }
-                rest.iter()
-                    .try_for_each(|element| self.committed_element(input, element))?;
+                rest.iter().try_for_each(|element| {
+                    self.element(input, element).map_err(|error| error.cut())
+                })?;
                 // The printer writes a group only for a present anchor.
                 let present = match anchor {
                     FormatAnchor::Attribute(_) | FormatAnchor::Flag(_) => true,
@@ -1145,6 +1103,9 @@ mod tests {
 
         #[asm_format("go" "(" keyword(speed) ")" attr_dict)]
         fn drive(speed: Attr<Speed>) {}
+
+        #[asm_format(lhs "," rhs attr_dict ":" type(result))]
+        fn add(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
         #[asm_format(callee "(" args ")" attr_dict ":" signature(signature))]
         fn apply<S: FuncSig>(
@@ -1324,6 +1285,19 @@ mod tests {
         assert_eq!(ctx.op_attrs(negative.op_ref()).get("ratio"), negative_zero);
         assert!(negative.factor(&ctx).is_sign_negative());
         assert!(negative.ratio(&ctx).is_sign_negative());
+    }
+
+    #[test]
+    fn a_format_may_begin_with_an_operand() {
+        assert_round_trip(
+            r#"core.module @m {
+  asm_format_test.fun @f(%0: core.i32) {
+      %1 = asm_format_test.add %0, %0 : core.i32
+      %2 = asm_format_test.add %1, %0 attributes {extra = 1} : core.i32
+  }
+}
+"#,
+        );
     }
 
     #[test]

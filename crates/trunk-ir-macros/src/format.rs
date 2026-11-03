@@ -693,48 +693,8 @@ fn check(
         }
     }
 
-    // Generic syntax never begins with `@`, so symbols and symbol references
-    // may lead. After them a literal decides custom against generic syntax,
-    // which begins with `{`, `%`, `:`, or `[`, or ends the operation before a
-    // line beginning with `%`, `^`, or `}`; a group or a signature's `(` may
-    // stand in for it once a symbol has decided. Generic syntax never writes
-    // `(` after an operand, so a fixed operand before `"("` decides as well.
-    let symbol_like = |element: &Element| match *element {
-        Element::Symbol(_) => true,
-        Element::Attribute(i) => {
-            let attr = &op.attrs[i];
-            !attr.list && matches!(&attr.kind, AttrKind::Path(path) if path.is_ident("SymbolRef"))
-        }
-        _ => false,
-    };
-    let decides =
-        |text: &str| !text.is_empty() && !text.starts_with(['{', '%', ':', '[', '^', '}']);
-    let leading = elements
-        .iter()
-        .take_while(|(element, _)| symbol_like(element))
-        .count();
     if elements.is_empty() {
         return err(attr_span, "a format writes at least one element");
-    }
-    if let Some((first, span)) = elements.get(leading) {
-        let decided = match first {
-            Element::Literal(text) => decides(text),
-            Element::Optional { elements, .. } if leading > 0 => {
-                matches!(&elements[0].0, Element::Literal(text) if decides(text))
-            }
-            Element::Signature { .. } => leading > 0,
-            Element::Operand(i) if !op.operands[*i].variadic => matches!(
-                elements.get(leading + 1),
-                Some((Element::Literal(text), _)) if text == "("
-            ),
-            _ => false,
-        };
-        if !decided {
-            return err(
-                *span,
-                "a format begins with a literal, after any symbols or symbol references, and not with `{`, `%`, `:`, `[`, `^`, or `}`; a `signature(..)` may follow a symbol, and a fixed operand may come before `\"(\"`",
-            );
-        }
     }
 
     for (element, span) in &elements {
@@ -1219,34 +1179,6 @@ mod tests {
                 quote!(
                     fn op() {}
                 ),
-                quote!("[" "x"),
-                "a format begins with a literal",
-            ),
-            (
-                quote!(
-                    fn op(a: Value<_>) {}
-                ),
-                quote!(a "x"),
-                "a format begins with a literal",
-            ),
-            (
-                quote!(
-                    fn op(a: Option<Attr<bool>>) {}
-                ),
-                quote!(("y" a^)? "x"),
-                "a format begins with a literal",
-            ),
-            (
-                quote!(
-                    fn op(a: Attr<SymbolRef>, b: Attr<u32>) {}
-                ),
-                quote!(a b),
-                "a format begins with a literal",
-            ),
-            (
-                quote!(
-                    fn op() {}
-                ),
                 quote!("run" "" "."),
                 "is not empty",
             ),
@@ -1299,16 +1231,6 @@ mod tests {
                 ),
                 quote!("run" ("b" on^)? payload),
                 "begins with a keyword or punctuation",
-            ),
-            (
-                quote!(
-                    fn op<S: FuncSig>(t: Attr<TypeOf<S>>) {
-                        #[region(body)]
-                        {}
-                    }
-                ),
-                quote!(signature(t, body) region(body)),
-                "may follow a symbol",
             ),
             (
                 quote!(
