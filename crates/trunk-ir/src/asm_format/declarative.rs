@@ -59,6 +59,9 @@ pub enum FormatElement {
     /// The entry block arguments of a fixed region, as `(%a: A, ..)`; the
     /// region elides its entry block.
     RegionArgs(usize),
+    /// The types of an operand and of the results as a function type,
+    /// `(A, B) -> R`, `(A) -> (R, S)`, or `(A) -> ()`.
+    FunctionalType(usize),
     /// The attributes no other element writes, as `attributes {..}`, or as
     /// `{..}` when `bare`.
     AttrDict { bare: bool },
@@ -468,6 +471,35 @@ impl Printer<'_, '_, '_> {
                 self.h.write_str(" -> ")?;
                 write_signature_results(self.h, &parts.results)?;
                 (codec.write_tail)(self.h, &parts.tail)
+            }
+            FormatElement::FunctionalType(index) => {
+                let operands = ctx.op_operands(op);
+                let range = operand_range(self.schema, index, operands.len());
+                self.token('(')?;
+                self.h.write_char('(')?;
+                for (position, &value) in operands[range].iter().enumerate() {
+                    if position > 0 {
+                        self.h.write_str(", ")?;
+                    }
+                    self.h.write_type(ctx.value_ty(value))?;
+                }
+                self.h.write_str(") -> ")?;
+                let results = ctx.op_result_types(op);
+                let parenthesized = results.len() != 1;
+                if parenthesized {
+                    self.h.write_char('(')?;
+                }
+                for (position, &ty) in results.iter().enumerate() {
+                    if position > 0 {
+                        self.h.write_str(", ")?;
+                    }
+                    self.h.write_type(ty)?;
+                }
+                if parenthesized {
+                    self.h.write_char(')')?;
+                }
+                self.spacing = Spacing::Space;
+                Ok(())
             }
             FormatElement::RegionArgs(index) => {
                 let region = ctx
@@ -957,6 +989,36 @@ impl<'a> FormatParser<'a> {
                 self.parsed.successors[index] = labels;
                 Ok(())
             }
+            FormatElement::FunctionalType(_) => {
+                let mut list = |input: &mut &'a str| {
+                    delimited(
+                        ('(', ws),
+                        separated(0.., (ws, raw_type, ws).map(|(_, t, _)| t), ','),
+                        (ws, ')'),
+                    )
+                    .parse_next(input)
+                };
+                // The operand types are those of the operands' definitions.
+                let _: Vec<RawType<'a>> = list
+                    .parse_next(input)
+                    .map_err(|e| e.map(|_| expected("operand types `(A, ..)`")))?;
+                (ws, "->", ws).parse_next(input)?;
+                let results: Vec<RawType<'a>> = if input.starts_with('(') {
+                    list.parse_next(input)?
+                } else {
+                    vec![
+                        raw_type
+                            .parse_next(input)
+                            .map_err(|e| e.map(|_| expected("result type")))?,
+                    ]
+                };
+                match self.parsed.result_types.first_mut() {
+                    Some(slot) => *slot = results,
+                    None if results.is_empty() => {}
+                    None => return Err(ErrMode::Cut(expected("`-> ()` for no results"))),
+                }
+                Ok(())
+            }
             FormatElement::RegionArgs(index) => {
                 let args = delimited(
                     ('(', ws),
@@ -1224,6 +1286,12 @@ mod tests {
         #[asm_format(args attr_dict_bare (":" types(results)^)?)]
         fn emit(args: Variadic<_>) -> Variadic<_> {}
 
+        #[asm_format(callee "(" args ")" attr_dict ":" functional_type(args, results))]
+        fn call_fn(callee: Attr<SymbolRef>, args: Variadic<_>) -> Variadic<_> {}
+
+        #[asm_format(callee "(" args ")" attr_dict ":" functional_type(args))]
+        fn tail_fn(callee: Attr<SymbolRef>, args: Variadic<_>) {}
+
         #[asm_format("try" region(body) "catch" args(handler) region(handler) attr_dict)]
         fn guard() {
             #[region(body)]
@@ -1455,6 +1523,21 @@ mod tests {
         // A region without an entry block prints generically.
         let empty = "core.module @m {\n  \"asm_format_test.guard\"() ({\n  }, {\n  })\n}\n";
         assert_eq!(print(empty), empty);
+    }
+
+    #[test]
+    fn calls_write_their_operand_and_result_types_as_a_function_type() {
+        assert_round_trip(
+            r#"core.module @m {
+  asm_format_test.fun @f(%0: core.i32, %1: core.i64) {
+      %2 = asm_format_test.call_fn @g(%0, %1) : (core.i32, core.i64) -> core.i32
+      %3, %4 = asm_format_test.call_fn @g(%0) attributes {extra = 1} : (core.i32) -> (core.i32, core.i64)
+      asm_format_test.call_fn @g() : () -> ()
+      asm_format_test.tail_fn @g(%0) : (core.i32) -> ()
+  }
+}
+"#,
+        );
     }
 
     #[test]

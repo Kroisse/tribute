@@ -79,6 +79,9 @@ enum Element {
     ResultTypes,
     /// `args(r)`: the entry block arguments of a region.
     RegionArgs(usize),
+    /// `functional_type(xs, results)`: the types of an operand and of the
+    /// results as a function type.
+    FunctionalType(usize),
     /// `attr_dict`, or `attr_dict_bare` without the `attributes` keyword.
     AttrDict {
         bare: bool,
@@ -341,6 +344,9 @@ impl<'a> Format<'a> {
         if name == "signature" {
             return self.signature(args, span);
         }
+        if name == "functional_type" {
+            return self.functional_type(args, span);
+        }
         let args: Vec<TokenTree> = args.into_iter().collect();
         let [TokenTree::Ident(arg)] = &args[..] else {
             return err(span, format!("`{name}(..)` takes one name"));
@@ -441,13 +447,46 @@ impl<'a> Format<'a> {
                 return err(
                     span,
                     format!(
-                        "unknown format directive `{name}`; expected `symbol`, `keyword`, `signature`, `args`, `type`, `types`, `region`, `regions`, `successor`, or `successors`"
+                        "unknown format directive `{name}`; expected `symbol`, `keyword`, `signature`, `functional_type`, `args`, `type`, `types`, `region`, `regions`, `successor`, or `successors`"
                     ),
                 );
             }
         };
         self.write(entity.expect("matched above"), arg_span)?;
         Ok(element)
+    }
+
+    /// `functional_type(xs, results)`: the types of operand `xs` and of the
+    /// results as `(A, B) -> R`. An operation without results names only the
+    /// operand and writes `-> ()`.
+    fn functional_type(&mut self, args: TokenStream, span: Span) -> Result<Element, FormatError> {
+        let names: Vec<String> = args
+            .into_iter()
+            .filter_map(|token| match token {
+                TokenTree::Ident(name) => {
+                    let name = name.to_string();
+                    Some(name.strip_prefix("r#").unwrap_or(&name).to_owned())
+                }
+                _ => None,
+            })
+            .collect();
+        let operand = match names.first().and_then(|name| self.lookup(name)) {
+            Some(Entity::Operand(i)) => i,
+            _ => return err(span, "`functional_type(..)` names an operand first"),
+        };
+        match (&names[1..], self.result_name()) {
+            ([], None) => {}
+            ([results], Some(name)) if results == name => {
+                self.write(Entity::Results, span)?;
+            }
+            _ => {
+                return err(
+                    span,
+                    "`functional_type(xs, results)` names the operation's results after its operand",
+                );
+            }
+        }
+        Ok(Element::FunctionalType(operand))
     }
 
     /// `signature(t, regions..)`: the type attribute `t` in function form,
@@ -869,6 +908,7 @@ fn gen_elements(
             Element::ResultType => quote!(#fmt::FormatElement::ResultType(0)),
             Element::ResultTypes => quote!(#fmt::FormatElement::ResultTypes),
             Element::RegionArgs(i) => quote!(#fmt::FormatElement::RegionArgs(#i)),
+            Element::FunctionalType(i) => quote!(#fmt::FormatElement::FunctionalType(#i)),
             Element::AttrDict { bare } => quote!(#fmt::FormatElement::AttrDict { bare: #bare }),
             Element::Region(i) => quote!(#fmt::FormatElement::Region(#i)),
             Element::Successor(i) => quote!(#fmt::FormatElement::Successor(#i)),

@@ -196,7 +196,10 @@ where
   with the inputs as the entry block arguments of `body`, which then elides
   its entry block, as `func.func` does. `args(r)` writes the entry block
   arguments of region `r` as `(%a: A, ..)` with their own types, and `r`
-  elides its entry block. `("kw" .. x^)?`
+  elides its entry block. `functional_type(xs, results)` writes the types
+  of operand `xs` and of the results as `(A, B) -> R`, as MLIR's
+  `functional-type` does for `func.call @f(%a) : (A) -> R`; an operation
+  without results names only `xs` and writes `-> ()`. `("kw" .. x^)?`
   opens with a literal and is written only when its anchor `x` is present;
   an optional `bool` anchor is a flag the group's literals stand for. A
   format may begin with any element, closes each variadic successor list
