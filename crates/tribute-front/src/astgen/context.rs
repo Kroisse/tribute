@@ -9,7 +9,7 @@ use salsa::Accumulator;
 use tree_sitter::Node;
 use trunk_ir::{Span, Symbol, SymbolPath};
 
-use crate::ast::{IdentityHasher, ItemSpans, ModuleItem, NodeId, SpanMapBuilder, UnresolvedName};
+use crate::ast::{IdentityDigest, ItemSpans, ModuleItem, NodeId, SpanMapBuilder, UnresolvedName};
 use tribute_core::diagnostic::{CompilationPhase, DiagnosticSeverity, SpanDiagnostic};
 
 /// Context for lowering CST to AST.
@@ -137,7 +137,7 @@ impl<'db> AstLoweringCtx<'db> {
             .or_default();
         let occurrence = *count;
         *count += 1;
-        let item = IdentityHasher::new()
+        let item = IdentityDigest::new()
             .u64(ITEM_OWNER)
             .strs(self.module_path.iter().map(Symbol::as_str))
             .str(kind)
@@ -285,7 +285,7 @@ const MODULE_OWNER: u64 = 1;
 
 /// The owner of the module-level nodes of the module at `path`.
 fn module_owner(path: &[Symbol]) -> u64 {
-    IdentityHasher::new()
+    IdentityDigest::new()
         .u64(MODULE_OWNER)
         .strs(path.iter().map(Symbol::as_str))
         .finish()

@@ -47,7 +47,7 @@ impl NodeId {
     /// file whose hash is `source`.
     ///
     /// Use [`source_hash`] to compute the source hash from a URI and
-    /// [`IdentityHasher`] to compute the owner from an item's key.
+    /// [`IdentityDigest`] to compute the owner from an item's key.
     #[inline]
     pub const fn new(source: u64, owner: u64, index: u32) -> Self {
         Self {
@@ -69,7 +69,7 @@ impl NodeId {
         // A copy of a copy: two nodes that differ only in their variant must
         // stay distinct, so hash the outer variant together with the new one.
         let variant = self.variant.map_or(variant, |outer| {
-            Self::variant_of(IdentityHasher::new().u64(outer.get()).u64(variant.get()))
+            Self::variant_of(IdentityDigest::new().u64(outer.get()).u64(variant.get()))
         });
         Self {
             variant: Some(variant),
@@ -77,10 +77,10 @@ impl NodeId {
         }
     }
 
-    /// The specialization variant whose hash `hasher` has computed. A variant
+    /// The specialization variant whose hash `digest` has computed. A variant
     /// is never zero, so a zero hash becomes one.
-    pub fn variant_of(hasher: &IdentityHasher) -> NonZero<u64> {
-        NonZero::new(hasher.finish()).unwrap_or(NonZero::<u64>::MIN)
+    pub fn variant_of(digest: &IdentityDigest) -> NonZero<u64> {
+        NonZero::new(digest.finish()).unwrap_or(NonZero::<u64>::MIN)
     }
 
     /// Get the original NodeId, stripping any specialization variant.
@@ -122,19 +122,20 @@ impl NodeId {
     }
 }
 
-/// The hasher of the identity hashes in a [`NodeId`]: its owner and its
-/// variant.
+/// The digest that computes the identity hashes in a [`NodeId`]: its owner
+/// and its variant.
 ///
 /// A collision merges two items' or two specializations' nodes, so it is
 /// SipHash-1-3, a well-distributed hash. It is a specified algorithm with
 /// fixed keys, so an identity does not change with the toolchain, as the
 /// standard library's `DefaultHasher` may. Each value is written in an
 /// explicit encoding rather than through `Hash`: integers as little-endian
-/// bytes, and text and sequences prefixed with their length.
+/// bytes, and text and sequences prefixed with their length. It is therefore
+/// not a [`Hasher`].
 #[derive(Clone, Debug)]
-pub struct IdentityHasher(SipHasher13);
+pub struct IdentityDigest(SipHasher13);
 
-impl IdentityHasher {
+impl IdentityDigest {
     pub fn new() -> Self {
         Self(SipHasher13::new_with_keys(0, 0))
     }
@@ -166,7 +167,7 @@ impl IdentityHasher {
     }
 }
 
-impl Default for IdentityHasher {
+impl Default for IdentityDigest {
     fn default() -> Self {
         Self::new()
     }
@@ -231,8 +232,8 @@ mod tests {
 
     #[test]
     fn test_node_id_different_owner_not_equal() {
-        let id1 = NodeId::new(0, IdentityHasher::new().str("fn").str("f").finish(), 3);
-        let id2 = NodeId::new(0, IdentityHasher::new().str("fn").str("g").finish(), 3);
+        let id1 = NodeId::new(0, IdentityDigest::new().str("fn").str("f").finish(), 3);
+        let id2 = NodeId::new(0, IdentityDigest::new().str("fn").str("g").finish(), 3);
         assert_ne!(id1, id2);
     }
 
@@ -244,9 +245,9 @@ mod tests {
     /// NodeId, so it must be deliberate.
     #[test]
     fn identity_hashes_are_pinned() {
-        assert_eq!(IdentityHasher::new().finish(), PINNED_EMPTY);
+        assert_eq!(IdentityDigest::new().finish(), PINNED_EMPTY);
         assert_eq!(
-            IdentityHasher::new()
+            IdentityDigest::new()
                 .u64(1)
                 .strs(["std", "io"].into_iter())
                 .str("fn")
@@ -263,9 +264,9 @@ mod tests {
     }
 
     #[test]
-    fn identity_hasher_separates_strings() {
-        let joined = IdentityHasher::new().str("ab").str("c").finish();
-        let split = IdentityHasher::new().str("a").str("bc").finish();
+    fn identity_digest_separates_strings() {
+        let joined = IdentityDigest::new().str("ab").str("c").finish();
+        let split = IdentityDigest::new().str("a").str("bc").finish();
         assert_ne!(joined, split);
     }
 

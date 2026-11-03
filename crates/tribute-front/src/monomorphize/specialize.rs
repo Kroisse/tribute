@@ -11,7 +11,7 @@ use crate::ast::fold::TypeFoldable;
 use crate::ast::visit::{RefSite, Visit, VisitMut};
 use crate::ast::{
     Decl, DeclEntry, DeclTable, EnumDecl, ExternFuncDecl, FieldDecl, FuncDecl, FuncDefId,
-    IdentityHasher, NodeId, StructDecl, Type, TypeAnnotation, TypeAnnotationKind, TypeDefId,
+    IdentityDigest, NodeId, StructDecl, Type, TypeAnnotation, TypeAnnotationKind, TypeDefId,
     TypeKind, TypeScheme, TypedRef, VariantDecl,
 };
 use crate::typeck::subst::{BoundVarOutOfBounds, BoundVarSubst};
@@ -542,12 +542,12 @@ fn specialize_extern_decl(
 /// A type is written as its interned id, so the variant is stable within a
 /// database.
 pub(crate) fn type_args_variant(type_args: &[Type<'_>]) -> NonZero<u64> {
-    let mut hasher = IdentityHasher::new();
-    hasher.u64(type_args.len() as u64);
+    let mut digest = IdentityDigest::new();
+    digest.u64(type_args.len() as u64);
     for ty in type_args {
-        hasher.u64(ty.as_id().as_bits());
+        digest.u64(ty.as_id().as_bits());
     }
-    NodeId::variant_of(&hasher)
+    NodeId::variant_of(&digest)
 }
 
 fn specialize_func_decl<'db>(
