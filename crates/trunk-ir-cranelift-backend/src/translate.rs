@@ -778,7 +778,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  "clif.data"() {sym_name = "greeting", bytes = b"hi there", align = 1}
+  clif.data @greeting(b"hi there") align 1
   clif.func @main() -> core.i32 {
     %greeting = clif.symbol_addr {sym = @greeting} : core.ptr
     %result = clif.iconst {value = 0} : core.i32
@@ -811,10 +811,10 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   core.module @left {
-    "clif.data"() {sym_name = "text", bytes = b"left", align = 1}
+    clif.data @text(b"left") align 1
   }
   core.module @right {
-    "clif.data"() {sym_name = "text", bytes = b"right", align = 1}
+    clif.data @text(b"right") align 1
   }
   clif.func @main() -> core.i32 {
     %left = clif.symbol_addr {sym = @left::@text} : core.ptr
@@ -855,9 +855,7 @@ mod tests {
             let mut ctx = IrContext::new();
             let module = parse_test_module(
                 &mut ctx,
-                &format!(
-                    "core.module @test {{ \"clif.data\"() {{sym_name = \"{name}\", bytes = b\"x\", align = 1}} }}"
-                ),
+                &format!("core.module @test {{ clif.data @{name}(b\"x\") align 1 }}"),
             );
             let error = emit_module_to_native(&ctx, module).expect_err("reserved data name");
             assert!(
@@ -883,7 +881,7 @@ mod tests {
   clif.func @second() -> core.nil {
     clif.return
   }
-  clif.data @table attributes {bytes = b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", align = 8} {
+  clif.data @table(b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00") align 8 {
     clif.func_reloc {offset = 16, func = @first}
     clif.func_reloc {offset = 0, func = @second}
   }
@@ -951,7 +949,7 @@ mod tests {
   clif.func @helper() -> core.nil {{
     clif.return
   }}
-  clif.data @table attributes {{bytes = b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", align = 8}} {{
+  clif.data @table(b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00") align 8 {{
 {relocs}
   }}
 }}"#
@@ -967,7 +965,7 @@ mod tests {
         for (module_text, expected) in [
             (
                 r#"core.module @test {
-  clif.data @table attributes {bytes = b"\x00\x00\x00\x00\x00\x00\x00\x00", align = 8} {
+  clif.data @table(b"\x00\x00\x00\x00\x00\x00\x00\x00") align 8 {
     %zero = clif.iconst {value = 0} : core.i64
   }
 }"#,
@@ -996,9 +994,7 @@ mod tests {
             let mut ctx = IrContext::new();
             let module = parse_test_module(
                 &mut ctx,
-                &format!(
-                    "core.module @test {{ \"clif.data\"() {{sym_name = \"bad\", bytes = b\"x\", align = {align}}} }}"
-                ),
+                &format!("core.module @test {{ clif.data @bad(b\"x\") align {align} }}"),
             );
             let error = emit_module_to_native(&ctx, module).expect_err("invalid alignment");
             assert!(

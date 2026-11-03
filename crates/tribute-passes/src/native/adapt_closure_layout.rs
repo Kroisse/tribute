@@ -340,7 +340,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  "clif.data"() {align = 1, bytes = b"\0", sym_name = "__tribute_convention_table_0"}
+  clif.data @__tribute_convention_table_0(b"\0") align 1
   func.func @make() -> core.nil {
     %a = tribute_rt.convention_table {entries = [@first]} : tribute_rt.convention_table_ref
     %b = tribute_rt.convention_table {entries = [@second, @first]} : tribute_rt.convention_table_ref

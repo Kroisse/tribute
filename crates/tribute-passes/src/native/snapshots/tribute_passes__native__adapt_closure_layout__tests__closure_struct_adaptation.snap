@@ -1,5 +1,6 @@
 ---
 source: crates/tribute-passes/src/native/adapt_closure_layout.rs
+assertion_line: 417
 expression: result
 ---
 core.module @test {
@@ -18,7 +19,7 @@ core.module @test {
       %7 = clif.call_indirect %6(%5) : (core.ptr) -> core.i32
       clif.return %7
   }
-  clif.data @__tribute_convention_table_0 attributes {align = 8, bytes = b"\0\0\0\0\0\0\0\0"} {
+  clif.data @__tribute_convention_table_0(b"\0\0\0\0\0\0\0\0") align 8 {
       clif.func_reloc {func = @lifted_fn, offset = 0}
   }
 }

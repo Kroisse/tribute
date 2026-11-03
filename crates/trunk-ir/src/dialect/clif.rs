@@ -28,7 +28,13 @@ mod clif {
     /// pointer-width ranges must fit in `bytes` and must not overlap;
     /// emission checks both against the target pointer width.
     #[verify]
-    #[asm_format(symbol(sym_name) attr_dict region(relocs))]
+    ///
+    /// ```text
+    /// clif.data @table(b"\0\0\0\0\0\0\0\0") align 8 {
+    ///   clif.func_reloc {offset = 0, func = @f}
+    /// }
+    /// ```
+    #[asm_format(symbol(sym_name) "(" bytes ")" "align" align attr_dict region(relocs))]
     fn data(sym_name: Attr<String>, bytes: Attr<Bytes>, align: Attr<u32>) {
         #[region(relocs?)]
         {}

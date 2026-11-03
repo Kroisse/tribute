@@ -140,8 +140,15 @@ mod wasm {
     #[asm_format(attr_dict_bare)]
     fn memory(min: Attr<u32>, max: Attr<u32>, shared: Attr<bool>, memory64: Attr<bool>) {}
 
-    #[asm_format(attr_dict_bare)]
-    fn data(offset: Attr<u32>, bytes: Attr<Bytes>, passive: Attr<bool>) {}
+    /// A data segment holding `bytes`. An active segment is copied to
+    /// `offset` of the memory at instantiation; a passive one is not.
+    ///
+    /// ```text
+    /// wasm.data(b"active") offset 16
+    /// wasm.data(b"kept") offset 0 passive
+    /// ```
+    #[asm_format("(" bytes ")" "offset" offset ("passive" passive^)? attr_dict)]
+    fn data(offset: Attr<u32>, bytes: Attr<Bytes>, #[default(false)] passive: Attr<bool>) {}
 
     #[asm_format(attr_dict_bare)]
     fn table(reftype: Attr<String>, min: Attr<u32>, max: Option<Attr<u32>>) {}

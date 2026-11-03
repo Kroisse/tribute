@@ -607,8 +607,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  wasm.data {offset = 0, bytes = b"active", passive = false}
-  wasm.data {offset = 0, bytes = b"kept", passive = true}
+  wasm.data(b"active") offset 0
+  wasm.data(b"kept") offset 0 passive
   wasm.func @main() -> core.nil {
     %new = adt.bytes_const {value = b"new"} : core.bytes
     %kept = adt.bytes_const {value = b"kept"} : core.bytes
