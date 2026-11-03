@@ -432,11 +432,11 @@ mod tests {
 
     fn handle(handlers: &[String], arms: &str, attrs: &str) -> String {
         format!(
-            r#"    "ability.handle"(%ev, %exit, %done{arms}) ({{
+            r#"    ability.handle %ev, %exit, %done({arms}) attributes {{handlers = [{}]{attrs}}} {{
       ^body(%inner: !ev, %frame: !frame_nil):
         %unit = core.nil_value : core.nil
         ability.exit %frame, %unit
-    }}) {{handlers = [{}]{attrs}}}"#,
+    }}"#,
             handlers.join(", ")
         )
     }
@@ -452,7 +452,7 @@ mod tests {
                     binding("op", "fail", "core.never"),
                     binding("fn", "peek", "core.i32"),
                 ],
-                ", %get, %fail, %peek",
+                "%get, %fail, %peek",
                 "",
             ),
         )
@@ -542,7 +542,7 @@ mod tests {
         // function argument of the operation would.
         let text = module(
             ARMS,
-            &handle(&[binding("op", "get", "core.never")], ", %get", ""),
+            &handle(&[binding("op", "get", "core.never")], "%get", ""),
         );
         assert_eq!(errors(&text), "");
     }
@@ -589,7 +589,7 @@ mod tests {
                     ARMS,
                     &handle(
                         &[binding("op", "get", "core.i32"), binding("op", "get", "core.i32")],
-                        ", %get, %get",
+                        "%get, %get",
                         "",
                     ),
                 ),
@@ -602,22 +602,22 @@ mod tests {
             ),
             (
                 "fn binding with a cps arm",
-                module(ARMS, &handle(&[binding("fn", "get", "core.i32")], ", %get", "")),
+                module(ARMS, &handle(&[binding("fn", "get", "core.i32")], "%get", "")),
                 "must return the operation result",
             ),
             (
                 "fn arm with the wrong result",
-                module(ARMS, &handle(&[binding("fn", "peek", "core.nil")], ", %peek", "")),
+                module(ARMS, &handle(&[binding("fn", "peek", "core.nil")], "%peek", "")),
                 "must return the operation result",
             ),
             (
                 "op binding with a fn arm",
-                module(ARMS, &handle(&[binding("op", "peek", "core.i32")], ", %peek", "")),
+                module(ARMS, &handle(&[binding("op", "peek", "core.i32")], "%peek", "")),
                 "must return core.never",
             ),
             (
                 "resumptive arm without tokens",
-                module(ARMS, &handle(&[binding("op", "fail", "core.i32")], ", %fail", "")),
+                module(ARMS, &handle(&[binding("op", "fail", "core.i32")], "%fail", "")),
                 "must end with two resumptions",
             ),
             (
@@ -626,7 +626,7 @@ mod tests {
                     ARMS,
                     &handle(
                         &[binding("op", "get", "core.i32")],
-                        ", %get",
+                        "%get",
                         ", evidence_plan = [{dup = @State}]",
                     ),
                 ),
@@ -638,7 +638,7 @@ mod tests {
                     ARMS,
                     &handle(
                         &[r#"{ability = @State, kind = "ctl", op_name = "get", operation_result_type = core.i32}"#.to_string()],
-                        ", %get",
+                        "%get",
                         "",
                     ),
                 ),
@@ -697,32 +697,32 @@ mod tests {
             with_extra(&arms, &handle(&[binding(kind, "get", result)], arm, ""))
         };
         let raw_binding =
-            |entries: &str| with_extra(&arms, &handle(&[format!("{{{entries}}}")], ", %get", ""));
+            |entries: &str| with_extra(&arms, &handle(&[format!("{{{entries}}}")], "%get", ""));
         let body = |args: &str| {
             with_extra(
                 &arms,
                 &format!(
-                    r#"    "ability.handle"(%ev, %exit, %done) ({{
+                    r#"    ability.handle %ev, %exit, %done() attributes {{handlers = []}} {{
       ^body({args}):
         func.unreachable
-    }}) {{handlers = []}}"#
+    }}"#
                 ),
             )
         };
         let cases = [
             (
                 "non-closure fn arm",
-                one("fn", "core.i32", ", %value"),
+                one("fn", "core.i32", "%value"),
                 "`arms`: expected closure.closure",
             ),
             (
                 "returning cps arm",
-                one("op", "core.i32", ", %returning"),
+                one("op", "core.i32", "%returning"),
                 "must return core.never",
             ),
             (
                 "fn arm without evidence",
-                one("fn", "core.i32", ", %no_evidence"),
+                one("fn", "core.i32", "%no_evidence"),
                 "must take the evidence first",
             ),
             (
@@ -780,7 +780,7 @@ mod tests {
             ),
             (
                 "binding that is not a dictionary",
-                with_extra(&arms, &handle(&["1".to_string()], ", %get", "")),
+                with_extra(&arms, &handle(&["1".to_string()], "%get", "")),
                 "must be a [Dict<any>] attribute",
             ),
         ];
