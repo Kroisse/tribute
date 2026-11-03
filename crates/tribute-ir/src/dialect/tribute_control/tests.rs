@@ -2377,11 +2377,10 @@ fn lambda_parameters_indirect_results_and_list_heads_have_callable_provenance() 
   !G = tribute_control.func_sig<(!F, core.i32) -> core.i32>
   !H = tribute_control.func_sig<(core.i32) -> !F>
   tribute_control.func @caller(%list: core.ptr, %make: !H, %value: core.i32) -> core.i32 {
-    %apply = "tribute_control.lambda"() ({
-      ^bb0(%callback: !F, %argument: core.i32):
-        %applied = tribute_control.call_indirect %callback(%argument) : (core.i32) -> core.i32
-        tribute_control.return %applied
-    }) : !G
+    %apply = tribute_control.lambda(%callback: !F, %argument: core.i32) -> core.i32 captures [] {
+      %applied = tribute_control.call_indirect %callback(%argument) : (core.i32) -> core.i32
+      tribute_control.return %applied
+    }
     %made = tribute_control.call_indirect %make(%value) : (core.i32) -> !F
     %first = tribute_control.call_indirect %made(%value) : (core.i32) -> core.i32
     %head = list.head %list {element_type = !F} : !F
