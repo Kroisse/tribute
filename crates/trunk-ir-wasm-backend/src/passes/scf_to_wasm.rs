@@ -984,7 +984,7 @@ mod tests {
         assert_eq!(output.matches("wasm.if").count(), 2, "{output}");
         for line in output.lines().filter(|line| line.contains("wasm.if")) {
             assert!(
-                !line.contains(" = ") && !line.contains(" : "),
+                !line.contains(" = ") && !line.contains(" -> "),
                 "both the switch dispatch and nested tail-transfer if must be resultless: {line}"
             );
         }
@@ -1138,7 +1138,7 @@ mod tests {
         let output = print_module(&ctx, module.op());
         assert!(!output.contains("scf."), "{output}");
         assert!(
-            output.contains("wasm.if") && output.contains(": wasm.arrayref"),
+            output.contains("wasm.if") && output.contains("-> (wasm.arrayref)"),
             "the created wasm.if must declare the converted result: {output}"
         );
     }

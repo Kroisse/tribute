@@ -20,16 +20,37 @@ mod wasm {
     struct Externref;
 
     // Control flow
+    /// ```text
+    /// %r = wasm.block -> (core.i32) {
+    ///   wasm.br {target = 0}
+    /// }
+    /// ```
+    #[asm_format(("->" "(" types(results)^ ")")? attr_dict region(body))]
     fn block() -> Variadic<_> {
         #[region(body)]
         {}
     }
 
+    /// ```text
+    /// wasm.loop(%init) {
+    ///   ^body(%acc: core.i32):
+    ///     wasm.br {target = 0}
+    /// }
+    /// ```
+    #[asm_format("(" init ")" ("->" "(" types(results)^ ")")? attr_dict region(body))]
     fn r#loop(init: Variadic<_>) -> Variadic<_> {
         #[region(body)]
         {}
     }
 
+    /// ```text
+    /// %r = wasm.if %cond -> (core.i32) {
+    ///   wasm.yield %a
+    /// } else {
+    ///   wasm.yield %b
+    /// }
+    /// ```
+    #[asm_format(cond ("->" "(" types(results)^ ")")? attr_dict region(then_region) "else" region(else_region))]
     fn r#if(cond: Value<_>) -> Variadic<_> {
         #[region(then_region)]
         {}
@@ -1077,6 +1098,36 @@ mod tests {
     use crate::op_interface::DynIndirectCallLike;
     use crate::parser::parse_test_module;
     use crate::printer::print_module;
+
+    #[test]
+    fn structured_control_writes_its_results_only_when_present() {
+        let text = r#"core.module @test {
+  wasm.func @f(%0: core.i32) -> core.i32 {
+      %1 = wasm.if %0 -> (core.i32) {
+          wasm.yield %0
+      } else {
+          wasm.yield %0
+      }
+      wasm.if %0 {
+          wasm.unreachable
+      } else {
+          wasm.unreachable
+      }
+      %2 = wasm.block -> (core.i32) {
+          wasm.yield %1
+      }
+      wasm.loop(%2) {
+        ^bb6(%3: core.i32):
+          wasm.br {target = 0}
+      }
+      wasm.return %2
+  }
+}
+"#;
+        let mut ctx = crate::IrContext::new();
+        let module = parse_test_module(&mut ctx, text);
+        assert_eq!(print_module(&ctx, module.op()), text);
+    }
 
     #[test]
     fn elem_writes_only_a_non_default_table_and_offset() {

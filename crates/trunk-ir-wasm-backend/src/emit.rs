@@ -1717,9 +1717,9 @@ mod tests {
                 wasm.func @main() {{
                     %unit = {producer} : core.nil
                     %condition = wasm.i32_const {{value = 1}} : core.i32
-                    "wasm.if"(%condition) ({{
+                    wasm.if %condition {{
                         wasm.return_call %unit {{callee = @consume}}
-                    }}, {{ wasm.unreachable }})
+                    }} else {{ wasm.unreachable }}
                 }}
             }}"#
                 ),
