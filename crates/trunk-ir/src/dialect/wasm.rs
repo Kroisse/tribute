@@ -70,7 +70,7 @@ mod wasm {
     #[asm_format(callee "(" args ")" ("table" table^)? attr_dict ":" signature(signature))]
     #[implements(IndirectCallLike)]
     fn call_indirect<S: FuncSig>(
-        table: Option<Attr<u32>>,
+        #[default(0)] table: Attr<u32>,
         signature: Attr<TypeOf<S>>,
         callee: Value<I32>,
         args: Variadic<_>,
@@ -95,7 +95,7 @@ mod wasm {
     #[asm_format(callee "(" args ")" ("table" table^)? attr_dict ":" signature(signature))]
     #[implements(IndirectCallLike)]
     fn return_call_indirect<S: FuncSig>(
-        table: Option<Attr<u32>>,
+        #[default(0)] table: Attr<u32>,
         signature: Attr<TypeOf<S>>,
         callee: Value<I32>,
         args: Variadic<_>,

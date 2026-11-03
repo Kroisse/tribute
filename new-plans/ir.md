@@ -145,6 +145,14 @@ format과 선언적 rewrite 도구는 operation 정의를 중복하지 않고 �
   `Variadic<C>`는 같은 제약을 만족하는 0개 이상의 operand, `Values<L>`는
   타입 목록 `L`과 개수·순서·타입이 정확히 일치하는 operand 목록이다.
   `Attr<K>`는 attribute이고, `Option<Attr<K>>`는 선택 attribute다.
+  `#[default(v)] name: Attr<K>`는 기본값이 있는 operation attribute로, schema에서는
+  선택 attribute와 같다. 없는 attribute는 `v`를 뜻하므로 accessor는 `v`를 돌려준다.
+  `v`를 저장한 attribute는 없는 것과 같은 값이며, 정규형은 저장하지 않는 것이다.
+  Builder와 parser는 `v`와 같은 값을 저장하지 않고, printer는 `v`와 같은 값을 쓰지
+  않는다. 같은 값인지는 attribute 종류가 정하며, 부동소수점 종류는 비트로 비교하므로
+  기본값이 `0.0`일 때 `-0.0`은 저장된다. 목록 attribute, 선택 attribute, 타입
+  변수를 묶는 attribute, 타입 속성에는 기본값을 줄 수 없다. 타입은 속성으로 intern되므로 기본값을 저장한 타입과 저장하지
+  않은 타입이 다른 타입이 되기 때문이다.
   가변 operand 구간은 operand 중 마지막 하나만 허용한다.
 - Attribute 종류 `K`는 bound와 마찬가지로 Rust 타입이다. 종류는 schema가
   검사하는 값 영역, accessor가 돌려주는 값, builder가 받는 값을 스스로
@@ -525,7 +533,9 @@ Printer는 쓰기 전에 operation이 형식으로 손실 없이 표현되는지
 - 각 custom directive가 출력 가능하다고 판정한다.
 
 이 판정을 통과한 operation은 parser가 같은 operation으로 다시 읽고, 다시 출력하면
-같은 텍스트가 된다. 같은 operation을 generic 형식으로 쓴 텍스트도 같은 operation으로
+같은 텍스트가 된다. 기본값을 저장한 attribute는 예외로, printer가 쓰지 않으므로
+parser는 그 attribute가 없는 정규형으로 읽는다. 두 operation은 accessor가 보기에
+같다. 같은 operation을 generic 형식으로 쓴 텍스트도 같은 operation으로
 읽힌다. Parser는 operation schema를 검증하지 않는다.
 
 Parser는 `symbol`과 맨 앞 operand가 아닌 원소가 첫 token을 읽기 전에만

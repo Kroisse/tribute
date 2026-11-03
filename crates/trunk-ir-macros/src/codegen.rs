@@ -163,7 +163,17 @@ fn gen_op_def(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -> Tok
             Some(i) => quote!(Some(#i)),
             None => quote!(None),
         };
-        quote!(#schema_mod::AttributeSchema { name: #name, kind: #kind, optional: #optional, binds: #binds })
+        let is_default = match gen_is_default(crate_path, attr) {
+            Some(check) => quote!(Some(#check)),
+            None => quote!(None),
+        };
+        quote!(#schema_mod::AttributeSchema {
+            name: #name,
+            kind: #kind,
+            optional: #optional,
+            binds: #binds,
+            is_default: #is_default,
+        })
     });
 
     let regions = op.regions.iter().filter_map(|item| match item {
@@ -519,8 +529,21 @@ fn gen_map_attr_accessor(
     let name_str = &attr.name;
     let kind = attr_kind_trait(crate_path, attr);
     let docs = &attr.docs;
-    let accessor = |method: &proc_macro2::Ident, out: TokenStream, read: TokenStream| {
-        if attr.optional {
+    let accessor = |method: &proc_macro2::Ident,
+                    out: TokenStream,
+                    read: TokenStream,
+                    default: Option<&TokenStream>| {
+        if let Some(default) = default {
+            quote! {
+                #(# #docs)*
+                pub fn #method<'ctx>(&self, ctx: &'ctx #crate_path::IrContext) -> #out {
+                    match #attrs.get(#name_str) {
+                        Some(attr) => #read,
+                        None => #default,
+                    }
+                }
+            }
+        } else if attr.optional {
             quote! {
                 #(# #docs)*
                 pub fn #method<'ctx>(&self, ctx: &'ctx #crate_path::IrContext) -> Option<#out> {
@@ -543,6 +566,7 @@ fn gen_map_attr_accessor(
         name,
         quote!(#kind::Out<'ctx>),
         quote!(#kind::read(ctx, attr)),
+        attr.default.as_ref(),
     );
     if !attr.kind.is_string() {
         return value;
@@ -558,6 +582,7 @@ fn gen_map_attr_accessor(
         &format_ident!("{}_ref", attr.name),
         quote!(#handle_kind::Handle<'ctx>),
         quote!(#handle_kind::handle(attr)),
+        None,
     );
     quote!(#value #handle)
 }
@@ -732,7 +757,16 @@ fn gen_fluent_builder(crate_path: &TokenStream, dialect: &str, op: &OperationDef
             let #field = self.#field.map(|value| #kind::write(ctx, value));
         });
         methods.push(gen_attr_setter(crate_path, attr));
-        if attr.optional {
+        if let Some(is_default) = gen_is_default(crate_path, attr) {
+            // Absence is the canonical form of the default.
+            build_stmts.push(quote! {
+                if let Some(value) = #field
+                    && !(#is_default)(ctx, &value)
+                {
+                    __builder = __builder.attr(#name_str, value);
+                }
+            });
+        } else if attr.optional {
             build_stmts.push(quote! {
                 if let Some(value) = #field {
                     __builder = __builder.attr(#name_str, value);
@@ -900,6 +934,18 @@ fn gen_fluent_builder(crate_path: &TokenStream, dialect: &str, op: &OperationDef
     }
 }
 
+/// For an attribute declared with `#[default(v)]`, a function telling
+/// whether an attribute value is `v`.
+fn gen_is_default(crate_path: &TokenStream, attr: &AttrDef) -> Option<TokenStream> {
+    let default = attr.default.as_ref()?;
+    let kind = attr_kind_trait(crate_path, attr);
+    Some(quote! {
+        |ctx: &#crate_path::IrContext, value: &#crate_path::Attribute| -> bool {
+            #kind::KIND.accepts(value) && #kind::same(&#kind::read(ctx, value), &(#default))
+        }
+    })
+}
+
 /// A builder's setter for one attribute. A list is set from its elements. A
 /// string takes a handle or text to intern. An optional attribute is absent
 /// unless set.
@@ -931,7 +977,7 @@ fn gen_attr_setter(crate_path: &TokenStream, attr: &AttrDef) -> TokenStream {
                 self
             }
         },
-        (false, false) if attr.optional => quote! {
+        (false, false) if attr.optional && attr.default.is_none() => quote! {
             pub fn #name(mut self, value: impl Into<Option<#kind::In>>) -> Self {
                 self.#field = value.into();
                 self

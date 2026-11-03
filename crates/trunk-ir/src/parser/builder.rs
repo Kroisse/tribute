@@ -481,6 +481,10 @@ impl<'a> ArenaIrBuilder<'a> {
         }
         let data = builder.build(self.ctx);
         let op_ref = self.ctx.create_op(data);
+        // A declared default is read in its canonical form, absent.
+        if let Some(def) = crate::op_def::OpDef::of(self.ctx, op_ref) {
+            def.schema.remove_defaults(self.ctx, op_ref);
+        }
 
         // Register result values, rejecting duplicates
         for (i, name) in raw.results.iter().enumerate() {

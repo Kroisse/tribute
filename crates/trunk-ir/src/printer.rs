@@ -966,11 +966,21 @@ fn print_generic_op(
         f.write_char(']')?;
     }
 
-    // Attributes
-    let attrs = &state.ctx.op(op).attributes;
+    // Attributes, without the declared defaults the canonical form leaves
+    // absent
+    let ctx = state.ctx;
+    let schema = crate::op_def::OpDef::of(ctx, op).map(|def| &def.schema);
+    let attrs: Vec<_> = ctx
+        .op(op)
+        .attributes
+        .iter()
+        .filter(|&(key, val)| {
+            !schema.is_some_and(|schema| schema.holds_default(ctx, ctx.str(key), val))
+        })
+        .collect();
     if !attrs.is_empty() {
         f.write_str(" {")?;
-        for (i, (key, val)) in attrs.iter().enumerate() {
+        for (i, (key, val)) in attrs.into_iter().enumerate() {
             if i > 0 {
                 f.write_str(", ")?;
             }

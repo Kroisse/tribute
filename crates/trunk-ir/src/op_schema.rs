@@ -170,6 +170,17 @@ pub struct AttributeSchema {
     pub optional: bool,
     /// Type variable bound by an `Attr<TypeOf<S>>` attribute.
     pub binds: Option<usize>,
+    /// For an attribute declared with `#[default(v)]`, whether a value is
+    /// `v`. Absence is the canonical form of that value.
+    pub is_default: Option<fn(&IrContext, &Attribute) -> bool>,
+}
+
+impl AttributeSchema {
+    /// Whether `value` is this attribute's declared default.
+    pub fn holds_default(&self, ctx: &IrContext, value: &Attribute) -> bool {
+        self.is_default
+            .is_some_and(|is_default| is_default(ctx, value))
+    }
 }
 
 /// The attribute value domain accepted by a declared attribute.
@@ -480,6 +491,25 @@ impl fmt::Display for SchemaViolation {
 }
 
 impl OpSchema {
+    /// Whether attribute `name` of an operation with this schema holds its
+    /// declared default, which the canonical form leaves absent.
+    pub fn holds_default(&self, ctx: &IrContext, name: &str, value: &Attribute) -> bool {
+        self.attributes
+            .iter()
+            .any(|attribute| attribute.name == name && attribute.holds_default(ctx, value))
+    }
+
+    /// Remove the attributes of `op` that hold their declared default.
+    pub fn remove_defaults(&self, ctx: &mut IrContext, op: OpRef) {
+        for attribute in self.attributes {
+            if let Some(value) = ctx.op_attrs(op).get(attribute.name)
+                && attribute.holds_default(ctx, value)
+            {
+                ctx.op_attrs_mut(op).remove(attribute.name);
+            }
+        }
+    }
+
     /// Allowed operand count.
     pub fn operand_count(&self) -> CountRange {
         let mut count = CountRange::exactly(0);

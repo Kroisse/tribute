@@ -116,8 +116,16 @@ where
 ```
 
 - Parameters are `Value<C>`, `Variadic<C>`, `Values<L>`, `Attr<K>`,
-  `Attr<[K]>` (a list whose every element has kind `K`), and
-  `Option<Attr<..>>`. Results are `Value<C>` or `Option<Value<C>>` (accessor
+  `Attr<[K]>` (a list whose every element has kind `K`),
+  `Option<Attr<..>>`, and `#[default(v)] name: Attr<K>`, an optional
+  attribute whose absence means `v`. `v` is an expression of the kind's
+  accessor type that also converts into its builder type, and the accessor
+  type must implement `PartialEq`. `AttrKind::same` decides equality, comparing
+  floating-point values by their bits, so `-0.0` is not the default `0.0`.
+  The accessor returns `v` when the
+  attribute is absent, and the builder, the parser, and the printer drop a
+  value equal to `v`, so absence is the canonical form. Type attributes take
+  no default. Results are `Value<C>` or `Option<Value<C>>` (accessor
   `result`) or `Variadic<C>` / `Values<L>` (accessor `results`).
 - Attribute kinds are Rust types implementing `attr_kind::AttrKind`, resolved
   in the dialect's scope like bounds: primitives (`bool`, `i32`, `i64`, `u32`,
