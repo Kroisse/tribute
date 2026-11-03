@@ -1218,11 +1218,11 @@ core.module @test {
   func.func @f(%0: core.i32) -> core.i32 {
     ^entry:
       %cond = arith.const {value = 1} : core.i1
-      %r = "scf.if"(%cond) ({
+      %r = scf.if %cond -> (core.i32) {
         "scf.br"()[^entry]
-      }, {
+      } else {
         scf.yield %0
-      }) : core.i32
+      }
       func.return %r
   }
 }"#,

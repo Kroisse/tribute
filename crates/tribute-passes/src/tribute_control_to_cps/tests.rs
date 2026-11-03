@@ -1468,13 +1468,13 @@ fn textual_scf_branch_captures_only_the_selected_suffix() {
     let input = r#"core.module @test {
   tribute_cps.func @branch(%input: core.i32) -> core.i32 convention(cps) {
     %condition = arith.const {value = true} : core.i1
-    %selected = "scf.if"(%condition) ({
+    %selected = scf.if %condition -> (core.i32) {
       %performed = tribute_control.perform %input {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
       scf.yield %performed
-    }, {
+    } else {
       %fallback = arith.const {value = 7} : core.i32
       scf.yield %fallback
-    }) : core.i32
+    }
     %one = arith.const {value = 1} : core.i32
     %sum = arith.addi %selected, %one : core.i32
     tribute_control.return %sum
@@ -1503,7 +1503,7 @@ fn textual_scf_branch_captures_only_the_selected_suffix() {
     lower_continuation_frames(&mut ctx, module).unwrap();
     let printed = print_module(&ctx, module.op());
     assert!(printed.contains("scf.if"));
-    assert!(printed.contains(" : core.never"));
+    assert!(printed.contains("-> (core.never)"));
     assert!(converted.contains("ability.perform"));
     assert!(printed.contains("func.tail_call_indirect"));
     assert!(printed.contains("arith.addi"));
@@ -1519,22 +1519,22 @@ fn textual_zero_result_cps_and_direct_scf_branches_lower() {
   tribute_cps.func @branch(%input: core.i32, %condition: core.i1) -> core.i32 convention(cps) {
     %direct = tribute_cps.lambda(%value: core.i32) -> core.i32 captures [%condition] entries {
       direct {
-        %selected = "scf.if"(%condition) ({
+        %selected = scf.if %condition -> (core.i32) {
           %called = tribute_control.call %value {callee = @identity} : core.i32
           scf.yield %called
-        }, {
+        } else {
           scf.yield %value
-        }) : core.i32
+        }
         tribute_control.return %selected
       }
     }
-    "scf.if"(%condition) ({
+    scf.if %condition {
       %performed = tribute_control.perform %input {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
       scf.yield
-    }, {
+    } else {
       %performed = tribute_control.perform %input {ability = @State, op_name = "set", operation_kind = "op"} : core.i32
       scf.yield
-    })
+    }
     tribute_control.return %input
   }
 }"#;
@@ -1682,12 +1682,12 @@ fn cps_indirect_tail_without_a_provenance_bearing_closure_fails_before_insertion
 fn malformed_multi_result_effectful_scf_if_remains_unchanged() {
     let input = r#"core.module @test {
   tribute_cps.func @broken(%input: core.i32, %condition: core.i1) -> core.i32 convention(cps) {
-    %left, %right = "scf.if"(%condition) ({
+    %left, %right = scf.if %condition -> (core.i32, core.i32) {
       %performed = tribute_control.perform %input {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
       scf.yield %performed, %input
-    }, {
+    } else {
       scf.yield %input, %input
-    }) : core.i32, core.i32
+    }
     tribute_control.return %left
   }
 }"#;

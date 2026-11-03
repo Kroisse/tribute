@@ -1223,11 +1223,11 @@ mod tests {
         assert_lowered_unit_tail_transfer(
             r#"core.module @test {
   func.func @main(%cond: core.i1, %callee: func.func_sig<(core.nil) -> core.never>, %unit: core.nil) -> core.never attributes {test.marker = 2} {
-    %selected = "scf.if"(%cond) ({
+    %selected = scf.if %cond -> (core.nil) {
       scf.yield %unit
-    }, {
+    } else {
       scf.yield %unit
-    }) : core.nil
+    }
     "func.tail_call_indirect"(%callee, %selected) {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
   }
 }"#,
@@ -1239,11 +1239,11 @@ mod tests {
     fn lower_scf_if_drops_unused_never_result_for_tail_transfers() {
         let input = r#"core.module @test {
   func.func @main(%cond: core.i1, %callee: func.func_sig<(core.nil) -> core.never>, %unit: core.nil) -> core.never attributes {test.marker = 2} {
-    %discarded = "scf.if"(%cond) ({
+    %discarded = scf.if %cond -> (core.never) {
       func.unreachable
-    }, {
+    } else {
       "func.tail_call_indirect"(%callee, %unit) {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
-    }) : core.never
+    }
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1598,11 +1598,11 @@ mod tests {
   func.func @main(%choice: core.i32, %cond: core.i1, %callee: func.func_sig<(core.nil) -> core.never>, %unit: core.nil) -> core.never attributes {test.marker = 2} {
     "scf.switch"(%choice) ({
       "scf.case"() ({
-        %discarded = "scf.if"(%cond) ({
+        %discarded = scf.if %cond -> (core.never) {
           func.unreachable
-        }, {
+        } else {
           "func.tail_call_indirect"(%callee, %unit) {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
-        }) : core.never
+        }
       }) {value = 0}
       "scf.default"() ({
         "func.tail_call_indirect"(%callee, %unit) {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
@@ -1794,16 +1794,16 @@ mod tests {
         assert_lowered_unit_tail_transfer(
             r#"core.module @test {
   func.func @main(%cond: core.i1, %callee: func.func_sig<(core.nil) -> core.never>, %unit: core.nil) -> core.never attributes {test.marker = 2} {
-    %inner = "scf.if"(%cond) ({
+    %inner = scf.if %cond -> (core.nil) {
       scf.yield %unit
-    }, {
+    } else {
       scf.yield %unit
-    }) : core.nil
-    %outer = "scf.if"(%cond) ({
+    }
+    %outer = scf.if %cond -> (core.nil) {
       scf.yield %inner
-    }, {
+    } else {
       scf.yield %inner
-    }) : core.nil
+    }
     "func.tail_call_indirect"(%callee, %outer) {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
   }
 }"#,

@@ -2303,13 +2303,13 @@ mod tests {
         let output = clone_first_func_region(
             r#"core.module @test {
   func.func @original(%0: core.i1) -> core.i32 {
-    %1 = "scf.if"(%0) ({
+    %1 = scf.if %0 -> (core.i32) {
       %2 = arith.const {value = 1} : core.i32
       scf.yield %2
-    }, {
+    } else {
       %3 = arith.const {value = 2} : core.i32
       scf.yield %3
-    }) : core.i32
+    }
     func.return %1
   }
 }"#,

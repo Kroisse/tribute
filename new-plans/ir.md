@@ -523,8 +523,9 @@ Macro는 형식 기술을 선언과 대조해 다음을 어기면 그 원소를 
   literal과 같지 않고 구두점끼리는 접두사도 겹치지 않는다. Parser는 여는 literal을
   읽으면 묶음이 있다고 정한다.
 - Anchor는 선택 attribute, 가변 operand, 가변 result 중 하나다.
-- 가변 result나 선택 result의 타입은 `(":" types(..)^)?`처럼 선택 묶음의
-  마지막에 쓰고, 그 묶음은 형식의 마지막 원소다.
+- 가변 result나 선택 result의 타입은 선택 묶음 안에 쓴다. 타입 목록 바로 뒤에는
+  `,`가 아닌 literal이 오거나, 형식을 끝내는 묶음의 끝이 온다
+  (`(":" types(..)^)?`, `("->" "(" types(..)^ ")")?`).
 - 가변 successor 목록 바로 뒤에는 선택 묶음이 아닌 닫는 literal `")"`나 `"]"`가
   온다. 가변 operand 목록 바로 뒤에는 operand나 `,`로 시작하는 literal이 오지
   않는다. 목록이 쉼표를 자기 구분자로 읽거나 뒤의 operand를 제 항목으로 읽는 일이

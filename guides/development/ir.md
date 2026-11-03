@@ -195,7 +195,9 @@ where
   an optional `bool` anchor is a flag the group's literals stand for. A
   format may begin with any element, closes each variadic successor list
   with `")"` or `"]"`, writes no operand or `,` right after a variadic operand
-  list, and ends with `(":" types(..)^)?` for results that may be absent. An
+  list, and writes results that may be absent in an optional group that ends
+  the format or comes before a literal, as `(":" types(..)^)?` or
+  `("->" "(" types(..)^ ")")?`. An
   operand list stays on its line, so an empty one does not read the next
   line's `%r = ..`.
   The macro reports a broken rule, a missing entity, or one written twice at

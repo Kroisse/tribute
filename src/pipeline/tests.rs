@@ -762,13 +762,13 @@ fn native_one_shot_wrapper_traps_on_second_invocation() {
 
   func.func @one_shot_wrapper(%state: !state, %value: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
     %consumed = adt.struct_get %state {field = 0, type = !state} : core.i1
-    %answer = "scf.if"(%consumed) ({
+    %answer = scf.if %consumed -> (core.i32) {
       func.unreachable
-    }, {
+    } else {
       %consumed_true = arith.const {value = 1} : core.i1
       adt.struct_set %state, %consumed_true {field = 0, type = !state}
       scf.yield %value
-    }) : core.i32
+    }
     func.return %answer
   }
 
@@ -816,12 +816,12 @@ fn physical_tail_chain_module(done_call_conv: &str, reference_call_conv: &str) -
   func.func @done(%value: core.i32) -> (){done_call_conv} {{
     %expected = arith.const {{value = 3}} : core.i32
     %ok = arith.cmpi %value, %expected {{predicate = "eq"}} : core.i1
-    "scf.if"(%ok) ({{
+    scf.if %ok {{
       scf.yield
-    }}, {{
+    }} else {{
       func.call {{callee = @fail}}
       scf.yield
-    }})
+    }}
     func.return
   }}
 

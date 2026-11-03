@@ -2468,15 +2468,15 @@ mod tests {
     fn scf_never_regions_accept_every_proper_tail_surface() {
         let input = r#"core.module @test {
   func.func @main(%cond: core.i1) -> core.never {
-    %outer = "scf.if"(%cond) ({
+    %outer = scf.if %cond -> (core.never) {
       "ability.perform"()
-    }, {
-      %nested = "scf.if"(%cond) ({
+    } else {
+      %nested = scf.if %cond -> (core.never) {
         func.unreachable
-      }, {
+      } else {
         "ability.handle_dispatch"()
-      }) : core.never
-    }) : core.never
+      }
+    }
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -2489,11 +2489,11 @@ mod tests {
     fn resultless_scf_regions_still_require_yield() {
         let input = r#"core.module @test {
   func.func @main(%cond: core.i1) {
-    "scf.if"(%cond) ({
+    scf.if %cond {
       func.unreachable
-    }, {
+    } else {
       func.unreachable
-    })
+    }
     func.return
   }
 }"#;
@@ -2719,11 +2719,11 @@ mod tests {
                 "scf.if",
                 r#"core.module @test {
   func.func @main(%cond: core.i1, %x: core.i32) -> core.i32 {
-    %r = "scf.if"(%cond) ({
+    %r = scf.if %cond -> (core.i32) {
       scf.yield
-    }, {
+    } else {
       scf.yield %x
-    }) : core.i32
+    }
     func.return %r
   }
 }"#,
@@ -2733,11 +2733,11 @@ mod tests {
                 "scf.if",
                 r#"core.module @test {
   func.func @main(%cond: core.i1, %x: core.i32) -> core.i32 {
-    %r = "scf.if"(%cond) ({
+    %r = scf.if %cond -> (core.i32) {
       %zero = arith.const {value = 0} : core.i32
-    }, {
+    } else {
       scf.yield %x
-    }) : core.i32
+    }
     func.return %r
   }
 }"#,
@@ -2931,16 +2931,16 @@ mod tests {
     fn region_branch_interfaces_cover_nested_if_forwarding() {
         let input = r#"core.module @test {
   func.func @main(%cond: core.i1, %x: core.i32) -> core.i32 {
-    %outer = "scf.if"(%cond) ({
-      %inner = "scf.if"(%cond) ({
+    %outer = scf.if %cond -> (core.i32) {
+      %inner = scf.if %cond -> (core.i32) {
         scf.yield %x
-      }, {
+      } else {
         scf.yield %x
-      }) : core.i32
+      }
       scf.yield %inner
-    }, {
+    } else {
       scf.yield %x
-    }) : core.i32
+    }
     func.return %outer
   }
 }"#;
@@ -3073,11 +3073,11 @@ mod tests {
     fn typed_region_models_fail_closed_for_invalid_semantic_queries() {
         let input = r#"core.module @test {
   func.func @main(%cond: core.i1, %discriminant: core.i32, %value: core.i32) -> core.i32 {
-    %selected = "scf.if"(%cond) ({
+    %selected = scf.if %cond -> (core.i32) {
       scf.yield %value
-    }, {
+    } else {
       scf.yield %value
-    }) : core.i32
+    }
     "scf.switch"(%discriminant) ({
       "scf.case"() ({
         scf.yield
@@ -3320,11 +3320,11 @@ mod tests {
     ^right:
       cf.br %value [^merge]
     ^merge(%forwarded: core.i32):
-      %selected = "scf.if"(%cond) ({
+      %selected = scf.if %cond -> (core.i32) {
         scf.yield %forwarded
-      }, {
+      } else {
         scf.yield %forwarded
-      }) : core.i32
+      }
       "scf.switch"(%discriminant) ({
         "scf.case"() ({ scf.yield }) {value = 0}
       })
@@ -3461,11 +3461,11 @@ mod tests {
     fn region_branch_interface_rejects_textual_forwarding_type_mismatch() {
         let input = r#"core.module @test {
   func.func @main(%cond: core.i1, %x: core.i32) -> core.i32 {
-    %result = "scf.if"(%cond) ({
+    %result = scf.if %cond -> (core.i32) {
       scf.yield %cond
-    }, {
+    } else {
       scf.yield %x
-    }) : core.i32
+    }
     func.return %result
   }
 }"#;

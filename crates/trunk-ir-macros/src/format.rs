@@ -619,10 +619,15 @@ impl<'a> Format<'a> {
                         );
                     }
                 }
-                Element::ResultTypes if !(last && next.is_none()) => {
+                // A list of types ends at a literal or at the end of the
+                // format, so nothing after it reads as one more type.
+                Element::ResultTypes
+                    if !(last && next.is_none())
+                        && !next_text.is_some_and(|text| !text.starts_with(',')) =>
+                {
                     return err(
                         *span,
-                        "result types that may be absent come last, as `(\":\" types(..)^)?` ending the format",
+                        "result types that may be absent end the format or come before a literal other than `,`, as `(\":\" types(..)^)?` or `(\"->\" \"(\" types(..)^ \")\")?`",
                     );
                 }
                 // Optional groups may be omitted, so the first element after
@@ -1143,7 +1148,7 @@ mod tests {
                     fn op() -> Variadic<_> {}
                 ),
                 quote!("x" (":" types(results)^)? "y"),
-                "come last",
+                "end the format or come before a literal",
             ),
             (
                 quote!(

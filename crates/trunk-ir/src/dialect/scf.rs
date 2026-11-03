@@ -2,6 +2,7 @@
 
 #[trunk_ir::dialect]
 mod scf {
+    #[asm_format(cond ("->" "(" type(result)^ ")")? attr_dict region(then_region) "else" region(else_region))]
     #[implements(RegionBranch, Fold)]
     fn r#if(cond: Value<_>) -> Option<Value<_>> {
         #[region(then_region)]
@@ -659,12 +660,12 @@ mod canonicalize_tests {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
     %t = arith.const {value = 1} : core.i1
-    %r = "scf.if"(%t) ({
+    %r = scf.if %t -> (core.i32) {
       %a = arith.addi %x, %x : core.i32
       scf.yield %a
-    }, {
+    } else {
       scf.yield %x
-    }) : core.i32
+    }
     func.return %r
   }
 }"#;
@@ -689,12 +690,12 @@ mod canonicalize_tests {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
     %f = arith.const {value = 0} : core.i1
-    %r = "scf.if"(%f) ({
+    %r = scf.if %f -> (core.i32) {
       scf.yield %x
-    }, {
+    } else {
       %a = arith.addi %x, %x : core.i32
       scf.yield %a
-    }) : core.i32
+    }
     func.return %r
   }
 }"#;
@@ -716,11 +717,11 @@ mod canonicalize_tests {
         // which branch runs at compile time, so the if must stay.
         let input = r#"core.module @test {
   func.func @f(%cond: core.i1, %x: core.i32) -> core.i32 {
-    %r = "scf.if"(%cond) ({
+    %r = scf.if %cond -> (core.i32) {
       scf.yield %x
-    }, {
+    } else {
       scf.yield %x
-    }) : core.i32
+    }
     func.return %r
   }
 }"#;
@@ -740,11 +741,11 @@ mod canonicalize_tests {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
     %bad = arith.const {value = 2} : core.i32
-    %r = "scf.if"(%bad) ({
+    %r = scf.if %bad -> (core.i32) {
       scf.yield %x
-    }, {
+    } else {
       scf.yield %x
-    }) : core.i32
+    }
     func.return %r
   }
 }"#;
@@ -764,11 +765,11 @@ mod canonicalize_tests {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
     %bad = arith.const {value = 2} : core.i1
-    %r = "scf.if"(%bad) ({
+    %r = scf.if %bad -> (core.i32) {
       scf.yield %x
-    }, {
+    } else {
       scf.yield %x
-    }) : core.i32
+    }
     func.return %r
   }
 }"#;
@@ -787,12 +788,12 @@ mod canonicalize_tests {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
     %t = arith.const {value = 1} : core.i1
-    %r = "scf.if"(%t) ({
+    %r = scf.if %t -> (core.i32) {
       scf.yield %x
-    }, {
+    } else {
       %a = arith.addi %x, %x : core.i32
       scf.yield %a
-    }) : core.i32
+    }
     func.return %r
   }
 }"#;

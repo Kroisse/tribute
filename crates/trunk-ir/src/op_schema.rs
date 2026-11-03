@@ -1195,11 +1195,11 @@ mod tests {
             r#"core.module @m {
   func.func @decl(%x: core.i32)
   func.func @def(%c: core.i1) {
-    "scf.if"(%c) ({
+    scf.if %c {
       scf.yield
-    }, {
+    } else {
       scf.yield
-    })
+    }
     func.return
   }
 }"#,

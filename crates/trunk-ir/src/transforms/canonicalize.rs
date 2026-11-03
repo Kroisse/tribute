@@ -341,13 +341,13 @@ mod tests {
         // to fire.
         let input = r#"core.module @test {
   func.func @f(%cond: core.i1, %x: core.i32) -> core.i32 {
-    %r = "scf.if"(%cond) ({
+    %r = scf.if %cond -> (core.i32) {
       %z = arith.const {value = 0} : core.i32
       %s = arith.addi %x, %z : core.i32
       scf.yield %s
-    }, {
+    } else {
       scf.yield %x
-    }) : core.i32
+    }
     func.return %r
   }
 }"#;
@@ -469,15 +469,15 @@ mod tests {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
     %t = arith.const {value = 1} : core.i1
-    %r = "scf.if"(%t) ({
+    %r = scf.if %t -> (core.i32) {
       %z = arith.const {value = 0} : core.i32
       %a = arith.addi %x, %z : core.i32
       scf.yield %a
-    }, {
+    } else {
       %two = arith.const {value = 2} : core.i32
       %m = arith.muli %x, %two : core.i32
       scf.yield %m
-    }) : core.i32
+    }
     func.return %r
   }
 }"#;

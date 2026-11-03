@@ -1554,21 +1554,21 @@ fn whole_ir_allows_mutually_exclusive_lambda_capture_and_terminal_paths() {
     "tribute_control.handler"() ({
       ^clause(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
         %flag = arith.const {value = true} : core.i1
-        %value = "scf.if"(%flag) ({
+        %value = scf.if %flag -> (core.i32) {
           %left = tribute_control.lambda() -> core.i32 captures [%token, %argument] {
             %resumed = tribute_control.resume %token, %argument : core.i32
             tribute_control.return %resumed
           }
           %called = "tribute_control.call_indirect"(%left) : core.i32
           scf.yield %called
-        }, {
+        } else {
           %right = tribute_control.lambda() -> core.i32 captures [%token, %argument] {
             %resumed = tribute_control.resume %token, %argument : core.i32
             tribute_control.return %resumed
           }
           %called = "tribute_control.call_indirect"(%right) : core.i32
           scf.yield %called
-        }) : core.i32
+        }
         tribute_control.yield %value
     }) {ability = @State, kind = "op", op_name = "get", operation_result_type = core.i32}
   }) : core.i32
@@ -1874,21 +1874,21 @@ fn tail_call_arms_must_belong_to_a_one_result_if_in_tail_position() {
     };
 
     let tail_if = validate_body(
-        r#"    %value = "scf.if"(%flag) ({
+        r#"    %value = scf.if %flag -> (core.i32) {
       tribute_control.tail_call %n {callee = @f}
-    }, {
+    } else {
       scf.yield %n
-    }) : core.i32
+    }
     tribute_control.return %value"#,
     );
     assert!(!tail_if.contains("tail position"), "{tail_if}");
 
     let resultless_if = validate_body(
-        r#"    "scf.if"(%flag) ({
+        r#"    scf.if %flag {
       tribute_control.tail_call %n {callee = @f}
-    }, {
+    } else {
       scf.yield
-    })
+    }
     tribute_control.return %n"#,
     );
     assert!(resultless_if.contains("tail position"), "{resultless_if}");
@@ -2189,14 +2189,14 @@ fn indirect_call_rejects_callable_from_uncontracted_structured_block_argument() 
         r#"core.module @test {
   !F = tribute_control.func_sig<(core.i32) -> core.i32>
   tribute_control.func @caller(%condition: core.i1, %value: core.i32) -> core.i32 {
-    %result = "scf.if"(%condition) ({
+    %result = scf.if %condition -> (core.i32) {
       ^then(%callee: !F):
         %called = "tribute_control.call_indirect"(%callee, %value) : core.i32
         scf.yield %called
-    }, {
+    } else {
       ^else:
         scf.yield %value
-    }) : core.i32
+    }
     tribute_control.return %result
   }
 }"#,

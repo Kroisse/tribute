@@ -1156,11 +1156,11 @@ mod tests {
             r#"core.module @test {
   func.func @main(%bytes: core.bytes, %cond: core.i1) -> core.nil {
     %write = tribute_io.write %bytes, %cond : core.nil
-    %never = "scf.if"(%cond) ({
+    %never = scf.if %cond -> (core.never) {
       func.unreachable
-    }, {
+    } else {
       func.unreachable
-    }) : core.never
+    }
     func.return %never
   }
 }"#,
