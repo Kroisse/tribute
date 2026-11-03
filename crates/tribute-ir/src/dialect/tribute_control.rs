@@ -93,6 +93,75 @@ pub use row::{
 /// Exact semantic identity copied from the trusted compiler-intrinsic registry.
 pub const COMPILER_INTRINSIC_ATTR: &str = "tribute.compiler_intrinsic";
 
+/// Whether a `tribute_control.handler` clause is a general (`op`) or a
+/// tail-resumptive (`fn`) arm.
+///
+/// It is stored as a string attribute holding its [keyword](Self::keyword).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum HandlerKind {
+    /// A general handler arm, which may capture the resumption.
+    Op,
+    /// A tail-resumptive arm, which resumes automatically.
+    Fn,
+}
+
+impl HandlerKind {
+    /// The keyword that spells this kind, both as the stored attribute
+    /// value and in the `tribute_control.handler` syntax.
+    pub fn keyword(self) -> &'static str {
+        match self {
+            Self::Op => "op",
+            Self::Fn => "fn",
+        }
+    }
+
+    /// The kind a keyword spells; `None` for any other string.
+    pub fn from_keyword(word: &str) -> Option<Self> {
+        match word {
+            "op" => Some(Self::Op),
+            "fn" => Some(Self::Fn),
+            _ => None,
+        }
+    }
+
+    fn from_attribute(ctx: &IrContext, value: &Attribute) -> Option<Self> {
+        match value {
+            Attribute::String(keyword) => Self::from_keyword(ctx.str(*keyword)),
+            _ => None,
+        }
+    }
+}
+
+/// `Attr<HandlerKind>`: a keyword string. The schema checks only that the
+/// value is a string; the handler's local validation checks the keyword.
+impl trunk_ir::attr_kind::AttrKind for HandlerKind {
+    const KIND: trunk_ir::op_schema::AttributeKind = trunk_ir::op_schema::AttributeKind::String;
+    type Out<'ctx> = HandlerKind;
+    type In = HandlerKind;
+
+    fn read<'ctx>(ctx: &'ctx IrContext, attr: &'ctx Attribute) -> HandlerKind {
+        Self::from_attribute(ctx, attr).expect("unverified handler kind keyword")
+    }
+
+    fn write(ctx: &mut IrContext, value: HandlerKind) -> Attribute {
+        ctx.string_attr(value.keyword())
+    }
+}
+
+/// A kind is written as its keyword, `op` or `fn`.
+impl trunk_ir::asm_format::KeywordCodec for HandlerKind {
+    fn keyword<'a>(ctx: &'a IrContext, attr: &'a Attribute) -> Option<&'a str> {
+        Self::from_attribute(ctx, attr).map(Self::keyword)
+    }
+
+    fn attribute(word: &str) -> Option<trunk_ir::parser::raw::RawAttribute<'static>> {
+        let kind = Self::from_keyword(word)?;
+        Some(trunk_ir::parser::raw::RawAttribute::String(
+            kind.keyword().to_owned(),
+        ))
+    }
+}
+
 /// A source named function in either dialect: `tribute_control.func`, or the
 /// `tribute_cps.func` class specialization makes of one.
 #[trunk_ir::op_flag]
@@ -541,17 +610,16 @@ mod tribute_control {
     /// is.
     ///
     /// ```text
-    /// %answer = "tribute_control.handle"() ({
+    /// %answer = tribute_control.handle : AnswerType body {
     ///   ...
     ///   tribute_control.yield %body_value
-    /// }, {
-    ///   ^completion(%completed: BodyType):
-    ///     ...
-    ///     tribute_control.yield %answer_value
-    /// }, {
-    ///   "tribute_control.handler"() ({ ... }) {...}
+    /// } completion(%completed: BodyType) {
     ///   ...
-    /// }) : AnswerType
+    ///   tribute_control.yield %answer_value
+    /// } handlers {
+    ///   tribute_control.handler op @Ability @name(%arg: ArgType) : ResultType { ... }
+    ///   ...
+    /// }
     /// ```
     ///
     /// - **Operands:** none. Values the executable regions capture use
@@ -597,6 +665,7 @@ mod tribute_control {
     /// source has no `do` arm, the region is the identity on the body result.
     /// This removes an optional structural case from conversion without
     /// changing source semantics.
+    #[asm_format(attr_dict ":" type(result) "body" region(body) "completion" args(completion) region(completion) "handlers" region(handlers))]
     #[verify]
     #[implements(CallableResultOrigin, CallableArgumentOrigin, LocalValidation)]
     fn handle(evidence_plan: Option<Attr<[EvidenceStep]>>) -> Value<_> {
@@ -613,18 +682,17 @@ mod tribute_control {
     /// declaration's parameter type at its position.
     ///
     /// ```text
-    /// "tribute_control.handler"() ({
-    ///   ^handler(%arg0: Arg0Type, ..., %resume: tribute_control.resume_token<ResultType, AnswerType>):
-    ///     ...
-    ///     tribute_control.yield %answer
-    /// }) {ability = @State, kind = "op", op_name = "get", operation_result_type = ResultType}
+    /// tribute_control.handler op @State @get(%arg0: Arg0Type, ..., %resume: tribute_control.resume_token<ResultType, AnswerType>) : ResultType {
+    ///   ...
+    ///   tribute_control.yield %answer
+    /// }
     /// ```
     ///
     /// - **Operands and results:** none. It is a declarative entry owned by
     ///   the surrounding `tribute_control.handle`.
     /// - **Attributes:** `ability: SymbolRef`, `op_name: String`,
-    ///   `kind: String`, and `operation_result_type: Type` are required.
-    ///   `kind` is exactly `fn` or `op`.
+    ///   `kind: HandlerKind`, and `operation_result_type: Type` are required.
+    ///   `kind` is exactly `fn` or `op`, written as that bare keyword.
     /// - **Regions:** exactly one executable `body` region with one block.
     /// - **Block arguments:** the source operation arguments come first, in
     ///   declaration order and with their logical types. A resumptive `op`
@@ -665,12 +733,13 @@ mod tribute_control {
     ///   arm or an `op -> Never` arm has no continuation capability.
     /// - **Location:** the source handler arm, including the operation
     ///   header.
+    #[asm_format(keyword(kind) ability symbol(op_name) args(body) ":" operation_result_type attr_dict region(body))]
     #[verify]
     #[implements(OperationDeclarationUse, CallableArgumentOrigin, LocalValidation)]
     fn handler(
         ability: Attr<SymbolRef>,
         op_name: Attr<String>,
-        kind: Attr<String>,
+        kind: Attr<HandlerKind>,
         operation_result_type: Attr<Type>,
     ) {
         #[region(body)]

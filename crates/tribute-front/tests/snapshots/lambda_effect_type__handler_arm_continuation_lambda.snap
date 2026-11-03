@@ -15,24 +15,21 @@ core.module @test {
       tribute_control.return %3
   }
   tribute_control.func @"pkg::run_state$Int$Int"['a0](%0: !t0, %1: core.i32) -> core.i32 row(| 'a0) {
-      %2 = "tribute_control.handle"() ({
+      %2 = tribute_control.handle : core.i32 body {
           %3 = tribute_control.call_indirect %0() : core.i32
           tribute_control.yield %3
-      }, {
-        ^bb2(%4: core.i32):
+      } completion(%4: core.i32) {
           tribute_control.yield %4
-      }, {
-          "tribute_control.handler"() ({
-            ^bb4(%5: tribute_control.resume_token<core.i32, core.i32>):
+      } handlers {
+          tribute_control.handler op @"ability_2_10_pkg::State_3_int" @get(%5: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
               %6 = tribute_control.lambda() -> core.i32 row(@"ability_2_10_pkg::State_3_int" | 'a0) captures [%1, %5] {
                   %7 = tribute_control.resume %5, %1 : core.i32
                   tribute_control.return %7
               }
               %8 = tribute_control.call %6, %1 {callee = @"pkg::run_state$Int$Int", row_args = [{tail = 0}]} : core.i32
               tribute_control.yield %8
-          }) {ability = @"ability_2_10_pkg::State_3_int", kind = "op", op_name = "get", operation_result_type = core.i32}
-          "tribute_control.handler"() ({
-            ^bb6(%9: core.i32, %10: tribute_control.resume_token<core.nil, core.i32>):
+          }
+          tribute_control.handler op @"ability_2_10_pkg::State_3_int" @set(%9: core.i32, %10: tribute_control.resume_token<core.nil, core.i32>) : core.nil {
               %11 = tribute_control.lambda() -> core.i32 row(@"ability_2_10_pkg::State_3_int" | 'a0) captures [%10] {
                   %12 = core.nil_value : core.nil
                   %13 = tribute_control.resume %10, %12 : core.i32
@@ -40,8 +37,8 @@ core.module @test {
               }
               %14 = tribute_control.call %11, %9 {callee = @"pkg::run_state$Int$Int", row_args = [{tail = 0}]} : core.i32
               tribute_control.yield %14
-          }) {ability = @"ability_2_10_pkg::State_3_int", kind = "op", op_name = "set", operation_result_type = core.nil}
-      }) : core.i32
+          }
+      }
       tribute_control.return %2
   }
   ability.decl @"ability_2_10_pkg::State_3_int" {

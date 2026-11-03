@@ -1863,13 +1863,13 @@ fn assert_op_handler_shape(function: &str) {
         function,
         &[
             "tribute_control.handle",
-            "kind = \"op\"",
+            "tribute_control.handler op ",
             "tribute_control.resume",
         ],
     );
 }
 fn assert_fn_handler_shape(function: &str) {
-    assert!(function.contains("kind = \"fn\""));
+    assert!(function.contains("tribute_control.handler fn "));
 }
 fn assert_handle_strict_value_shape(function: &str) {
     assert_in_order(

@@ -1213,19 +1213,17 @@ fn conversion_error_display_handles_diagnostics_without_an_operation() {
 fn textual_resumptive_handle_emits_one_resultless_delimiter() {
     let input = r#"core.module @test {
   tribute_cps.func @run(%input: core.i32) -> core.i32 convention(cps) {
-    %handled = "tribute_control.handle"() ({
+    %handled = tribute_control.handle : core.i32 body {
       %performed = tribute_control.perform %input {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
       tribute_control.yield %performed
-    }, {
-      ^completion(%value: core.i32):
+    } completion(%value: core.i32) {
         tribute_control.yield %value
-    }, {
-      "tribute_control.handler"() ({
-        ^arm(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
+    } handlers {
+      tribute_control.handler op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
           %resumed = tribute_control.resume %token, %argument : core.i32
           tribute_control.yield %resumed
-      }) {ability = @State, kind = "op", op_name = "get", operation_result_type = core.i32}
-    }) : core.i32
+      }
+    }
     tribute_control.return %handled
   }
 }"#;
@@ -1356,24 +1354,21 @@ fn textual_resumptive_handle_emits_one_resultless_delimiter() {
 fn multiple_arms_for_one_ability_emit_one_dispatcher() {
     let input = r#"core.module @test {
   tribute_cps.func @run(%input: core.i32) -> core.i32 convention(cps) {
-    %handled = "tribute_control.handle"() ({
+    %handled = tribute_control.handle : core.i32 body {
       %performed = tribute_control.perform %input {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
       tribute_control.yield %performed
-    }, {
-      ^completion(%value: core.i32):
+    } completion(%value: core.i32) {
         tribute_control.yield %value
-    }, {
-      "tribute_control.handler"() ({
-        ^get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
+    } handlers {
+      tribute_control.handler op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
           %resumed = tribute_control.resume %token, %argument : core.i32
           tribute_control.yield %resumed
-      }) {ability = @State, kind = "op", op_name = "get", operation_result_type = core.i32}
-      "tribute_control.handler"() ({
-        ^set(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
+      }
+      tribute_control.handler op @State @set(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
           %fallback = arith.const {value = 9} : core.i32
           tribute_control.yield %fallback
-      }) {ability = @State, kind = "op", op_name = "set", operation_result_type = core.i32}
-    }) : core.i32
+      }
+    }
     tribute_control.return %handled
   }
 }"#;
@@ -2034,22 +2029,20 @@ fn raw_pointer_managed_masquerade_is_rejected_before_mutation() {
 fn handles_stay_abstract_until_the_frames_are_lowered() {
     let input = r#"core.module @test {
   tribute_cps.func @nested(%input: core.i32) -> core.i32 convention(cps) {
-    %outer = "tribute_control.handle"() ({
-      %inner = "tribute_control.handle"() ({
+    %outer = tribute_control.handle : core.i32 body {
+      %inner = tribute_control.handle : core.i32 body {
         tribute_control.yield %input
-      }, {
-        ^inner_completion(%value: core.i32):
+      } completion(%value: core.i32) {
           tribute_control.yield %value
-      }, {
+      } handlers {
         ^inner_handlers:
-      }) : core.i32
+      }
       tribute_control.yield %inner
-    }, {
-      ^outer_completion(%value: core.i32):
+    } completion(%value: core.i32) {
         tribute_control.yield %value
-    }, {
+    } handlers {
       ^outer_handlers:
-    }) : core.i32
+    }
     tribute_control.return %outer
   }
 }"#;
@@ -2074,22 +2067,20 @@ fn handles_stay_abstract_until_the_frames_are_lowered() {
 fn nested_textual_handles_keep_distinct_delimiters() {
     let input = r#"core.module @test {
   tribute_cps.func @nested(%input: core.i32) -> core.i32 convention(cps) {
-    %outer = "tribute_control.handle"() ({
-      %inner = "tribute_control.handle"() ({
+    %outer = tribute_control.handle : core.i32 body {
+      %inner = tribute_control.handle : core.i32 body {
         tribute_control.yield %input
-      }, {
-        ^inner_completion(%value: core.i32):
+      } completion(%value: core.i32) {
           tribute_control.yield %value
-      }, {
+      } handlers {
         ^inner_handlers:
-      }) : core.i32
+      }
       tribute_control.yield %inner
-    }, {
-      ^outer_completion(%value: core.i32):
+    } completion(%value: core.i32) {
         tribute_control.yield %value
-    }, {
+    } handlers {
       ^outer_handlers:
-    }) : core.i32
+    }
     tribute_control.return %outer
   }
 }"#;
@@ -2109,32 +2100,28 @@ fn nested_textual_handles_keep_distinct_delimiters() {
 fn nested_same_ability_resumes_rebuild_the_dynamic_frame_dispatcher() {
     let input = r#"core.module @test {
   tribute_cps.func @nested_same(%input: core.i32) -> core.i32 convention(cps) {
-    %outer = "tribute_control.handle"() ({
-      %inner = "tribute_control.handle"() ({
+    %outer = tribute_control.handle : core.i32 body {
+      %inner = tribute_control.handle : core.i32 body {
         %performed = tribute_control.perform %input {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
         tribute_control.yield %performed
-      }, {
-        ^inner_completion(%value: core.i32):
+      } completion(%value: core.i32) {
           tribute_control.yield %value
-      }, {
-        "tribute_control.handler"() ({
-          ^inner_arm(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
+      } handlers {
+        tribute_control.handler op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
             %resumed = tribute_control.resume %token, %argument : core.i32
             tribute_control.yield %resumed
-        }) {ability = @State, kind = "op", op_name = "get", operation_result_type = core.i32}
-      }) : core.i32
+        }
+      }
       %performed = tribute_control.perform %inner {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
       tribute_control.yield %performed
-    }, {
-      ^outer_completion(%value: core.i32):
+    } completion(%value: core.i32) {
         tribute_control.yield %value
-    }, {
-      "tribute_control.handler"() ({
-        ^outer_arm(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
+    } handlers {
+      tribute_control.handler op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
           %resumed = tribute_control.resume %token, %argument : core.i32
           tribute_control.yield %resumed
-      }) {ability = @State, kind = "op", op_name = "get", operation_result_type = core.i32}
-    }) : core.i32
+      }
+    }
     tribute_control.return %outer
   }
 }"#;
@@ -2154,32 +2141,28 @@ fn nested_same_ability_resumes_rebuild_the_dynamic_frame_dispatcher() {
 fn nested_cross_ability_resumes_rebuild_the_dynamic_frame_dispatcher() {
     let input = r#"core.module @test {
   tribute_cps.func @nested_cross(%input: core.i32) -> core.i32 convention(cps) {
-    %outer = "tribute_control.handle"() ({
-      %inner = "tribute_control.handle"() ({
+    %outer = tribute_control.handle : core.i32 body {
+      %inner = tribute_control.handle : core.i32 body {
         %performed = tribute_control.perform %input {ability = @Console, op_name = "read", operation_kind = "op"} : core.i32
         tribute_control.yield %performed
-      }, {
-        ^inner_completion(%value: core.i32):
+      } completion(%value: core.i32) {
           tribute_control.yield %value
-      }, {
-        "tribute_control.handler"() ({
-          ^inner_arm(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
+      } handlers {
+        tribute_control.handler op @Console @read(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
             %resumed = tribute_control.resume %token, %argument : core.i32
             tribute_control.yield %resumed
-        }) {ability = @Console, kind = "op", op_name = "read", operation_result_type = core.i32}
-      }) : core.i32
+        }
+      }
       %performed = tribute_control.perform %inner {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
       tribute_control.yield %performed
-    }, {
-      ^outer_completion(%value: core.i32):
+    } completion(%value: core.i32) {
         tribute_control.yield %value
-    }, {
-      "tribute_control.handler"() ({
-        ^outer_arm(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
+    } handlers {
+      tribute_control.handler op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
           %resumed = tribute_control.resume %token, %argument : core.i32
           tribute_control.yield %resumed
-      }) {ability = @State, kind = "op", op_name = "get", operation_result_type = core.i32}
-    }) : core.i32
+      }
+    }
     tribute_control.return %outer
   }
 }"#;
@@ -2198,20 +2181,18 @@ fn nested_cross_ability_resumes_rebuild_the_dynamic_frame_dispatcher() {
 fn op_to_never_uses_a_typed_zero_capture_reject_continuation() {
     let input = r#"core.module @test {
   tribute_cps.func @abortable(%input: core.i32) -> core.i32 convention(cps) {
-    %handled = "tribute_control.handle"() ({
+    %handled = tribute_control.handle : core.i32 body {
       %never = tribute_control.perform %input {ability = @Abort, op_name = "abort", operation_kind = "op"} : core.never
       %unreachable_suffix = arith.const {value = 99} : core.i32
       tribute_control.yield %unreachable_suffix
-    }, {
-      ^completion(%value: core.i32):
+    } completion(%value: core.i32) {
         tribute_control.yield %value
-    }, {
-      "tribute_control.handler"() ({
-        ^arm(%argument: core.i32):
+    } handlers {
+      tribute_control.handler op @Abort @abort(%argument: core.i32) : core.never {
           %fallback = arith.const {value = 7} : core.i32
           tribute_control.yield %fallback
-      }) {ability = @Abort, kind = "op", op_name = "abort", operation_result_type = core.never}
-    }) : core.i32
+      }
+    }
     tribute_control.return %handled
   }
 }"#;
@@ -2321,18 +2302,16 @@ fn op_to_never_uses_a_typed_zero_capture_reject_continuation() {
 fn fn_operation_stays_evidence_direct_without_continuation_capture() {
     let input = r#"core.module @test {
   tribute_cps.func @read(%input: core.i32) -> core.i32 convention(cps) {
-    %handled = "tribute_control.handle"() ({
+    %handled = tribute_control.handle : core.i32 body {
       %value = tribute_control.perform %input {ability = @Reader, op_name = "read", operation_kind = "fn"} : core.i32
       tribute_control.yield %value
-    }, {
-      ^completion(%value: core.i32):
+    } completion(%value: core.i32) {
         tribute_control.yield %value
-    }, {
-      "tribute_control.handler"() ({
-        ^arm(%argument: core.i32):
+    } handlers {
+      tribute_control.handler fn @Reader @read(%argument: core.i32) : core.i32 {
           tribute_control.yield %argument
-      }) {ability = @Reader, kind = "fn", op_name = "read", operation_result_type = core.i32}
-    }) : core.i32
+      }
+    }
     tribute_control.return %handled
   }
 }"#;
@@ -2523,19 +2502,17 @@ fn a_cps_call_in_a_callable_that_is_not_cps_runs_under_a_value_delimiter() {
 fn a_handle_in_a_direct_callable_runs_under_a_value_delimiter() {
     let input = r#"core.module @test {
   tribute_cps.func @run(%input: core.i32) -> core.i32 convention(direct) {
-    %handled = "tribute_control.handle"() ({
+    %handled = tribute_control.handle : core.i32 body {
       %performed = tribute_control.perform %input {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
       tribute_control.yield %performed
-    }, {
-      ^completion(%value: core.i32):
+    } completion(%value: core.i32) {
         tribute_control.yield %value
-    }, {
-      "tribute_control.handler"() ({
-        ^arm(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
+    } handlers {
+      tribute_control.handler op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
           %resumed = tribute_control.resume %token, %argument : core.i32
           tribute_control.yield %resumed
-      }) {ability = @State, kind = "op", op_name = "get", operation_result_type = core.i32}
-    }) : core.i32
+      }
+    }
     tribute_control.return %handled
   }
 }"#;
