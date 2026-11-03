@@ -860,7 +860,7 @@ mod tests {
                 &format!(
                     "core.module @test {{
   wasm.func @caller() -> core.nil {{
-    wasm.call{callee}
+    \"wasm.call\"(){callee}
     \"wasm.return\"()
   }}
 }}"

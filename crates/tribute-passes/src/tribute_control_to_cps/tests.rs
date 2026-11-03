@@ -2456,7 +2456,7 @@ mod shared_contract_boundary_regressions {
             ("} : core.i32", "} : core.nil", "call result list mismatch"),
             (
                 "\"func.return\"(%x)",
-                "func.return",
+                "\"func.return\"()",
                 "return count mismatch",
             ),
         ] {
@@ -2631,11 +2631,11 @@ fn instantiate_legalizes_to_its_lambda() {
   tribute_cps.func @f['a0, {kind} 'a1](%x: core.i32) -> core.i32 row(| 'a0) convention(direct) {{
     %g = tribute_cps.lambda{header}(%y: core.i32) -> core.i32 row(| 'a1) captures [] entries {{
       direct {{
-        tribute_control.return %y
+        "tribute_control.return"(%y)
       }}
     }}
     {use_}
-    tribute_control.return %r
+    "tribute_control.return"(%r)
   }}
 }}"#
         )

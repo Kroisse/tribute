@@ -470,9 +470,9 @@ mod tests {
                 let (text, changed) = run(&format!(
                     r#"core.module @test {{
   func.func @f(%x: {ty}) -> {ty} {{
-    %b = tribute_rt.{boxed} %x : tribute_rt.anyref
-    %u = tribute_rt.{unboxed} %b : {ty}
-    func.return %u
+    %b = "tribute_rt.{boxed}"(%x) : tribute_rt.anyref
+    %u = "tribute_rt.{unboxed}"(%b) : {ty}
+    "func.return"(%u)
   }}
 }}"#
                 ));

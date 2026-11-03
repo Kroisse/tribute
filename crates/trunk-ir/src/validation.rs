@@ -2799,13 +2799,13 @@ mod tests {
                 r#"core.module @test {{
   func.func @main(%choice: core.i32) {{
     ^entry:
-      cf.switch %choice [{successors}] {{cases = {cases}}}
+      "cf.switch"(%choice)[{successors}] {{cases = {cases}}}
     ^fallback:
-      func.return
+      "func.return"()
     ^first:
-      func.return
+      "func.return"()
     ^second:
-      func.return
+      "func.return"()
   }}
 }}"#
             )

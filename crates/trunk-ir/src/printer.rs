@@ -1952,20 +1952,20 @@ core.module @test {
   core.module @inner {
     func.func @f1(%0: alias_test.record<core.i32 {name = \"a\"}, core.i32 {name = \"b\"}, {name = \"InnerOnly\"}>) -> alias_test.record<core.i32 {name = \"a\"}, core.i32 {name = \"b\"}, {name = \"InnerOnly\"}> {
     ^bb0:
-      func.return %0
+      \"func.return\"(%0)
     }
     func.func @f2(%0: alias_test.record<core.i32 {name = \"a\"}, core.i32 {name = \"b\"}, {name = \"InnerOnly\"}>) -> alias_test.record<core.i32 {name = \"a\"}, core.i32 {name = \"b\"}, {name = \"InnerOnly\"}> {
     ^bb0:
-      func.return %0
+      \"func.return\"(%0)
     }
   }
   func.func @g1(%0: alias_test.record<core.i32 {name = \"x\"}, core.i32 {name = \"y\"}, {name = \"OuterOnly\"}>) -> alias_test.record<core.i32 {name = \"x\"}, core.i32 {name = \"y\"}, {name = \"OuterOnly\"}> {
   ^bb0:
-    func.return %0
+    \"func.return\"(%0)
   }
   func.func @g2(%0: alias_test.record<core.i32 {name = \"x\"}, core.i32 {name = \"y\"}, {name = \"OuterOnly\"}>) -> alias_test.record<core.i32 {name = \"x\"}, core.i32 {name = \"y\"}, {name = \"OuterOnly\"}> {
   ^bb0:
-    func.return %0
+    \"func.return\"(%0)
   }
 }
 ";

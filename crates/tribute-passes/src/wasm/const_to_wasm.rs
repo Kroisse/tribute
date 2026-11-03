@@ -366,7 +366,7 @@ mod tests {
             .enumerate()
             .map(|(index, value)| {
                 format!(
-                    "    %value{index} = adt.string_const {{value = \"{value}\"}} : tribute_rt.anyref"
+                    "    %value{index} = \"adt.string_const\"() {{value = \"{value}\"}} : tribute_rt.anyref"
                 )
             })
             .collect::<Vec<_>>()
@@ -374,7 +374,7 @@ mod tests {
         parse_test_module(
             ctx,
             &format!(
-                "core.module @test {{\n  wasm.func @main() -> core.nil {{\n{constants}\n    wasm.return\n  }}\n}}"
+                "core.module @test {{\n  wasm.func @main() -> core.nil {{\n{constants}\n    \"wasm.return\"()\n  }}\n}}"
             ),
         )
     }

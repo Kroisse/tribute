@@ -1368,7 +1368,7 @@ mod tests {
             "%n = \"scf.loop\"() ({ ^a: \"func.return\"() ^b: \"func.return\"() }) : core.never",
         ] {
             let input = control_fixture(&format!(
-                "scf.if %cond : core.nil {{ scf.yield %unit }} {{ scf.yield %unit }} {body}"
+                "\"scf.if\"(%cond) ({{ \"scf.yield\"(%unit) }}, {{ \"scf.yield\"(%unit) }}) : core.nil {body}"
             ));
             let mut ctx = IrContext::new();
             let module = parse_test_module(&mut ctx, &input);
@@ -1426,9 +1426,11 @@ mod tests {
         for (ty, value) in [("core.nil", "%unit"), ("core.i32", "%choice")] {
             for body in [
                 format!(
-                    "%v = \"scf.if\"(%cond) ({{ scf.yield {value} }}, {{ scf.yield {value} }}) : {ty} \"func.return\"(%v)"
+                    "%v = \"scf.if\"(%cond) ({{ \"scf.yield\"({value}) }}, {{ \"scf.yield\"({value}) }}) : {ty} \"func.return\"(%v)"
                 ),
-                format!("%v = \"scf.loop\"() ({{ scf.break {value} }}) : {ty} \"func.return\"(%v)"),
+                format!(
+                    "%v = \"scf.loop\"() ({{ \"scf.break\"({value}) }}) : {ty} \"func.return\"(%v)"
+                ),
             ] {
                 let mut ctx = IrContext::new();
                 let input = control_fixture(&body).replace("-> core.nil", &format!("-> {ty}"));

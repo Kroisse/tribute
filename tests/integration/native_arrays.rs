@@ -23,21 +23,21 @@ fn program(body: &str, expected: i32) -> String {
   !Ints = adt.array<core.i32>
   func.func @main() -> core.nil {{
     ^entry:
-      %i0 = arith.const {{value = 0}} : core.index
-      %i1 = arith.const {{value = 1}} : core.index
-      %i2 = arith.const {{value = 2}} : core.index
-      %i3 = arith.const {{value = 3}} : core.index
-      %one = arith.const {{value = 1}} : core.i32
-      %two = arith.const {{value = 2}} : core.i32
+      %i0 = "arith.const"() {{value = 0}} : core.index
+      %i1 = "arith.const"() {{value = 1}} : core.index
+      %i2 = "arith.const"() {{value = 2}} : core.index
+      %i3 = "arith.const"() {{value = 3}} : core.index
+      %one = "arith.const"() {{value = 1}} : core.i32
+      %two = "arith.const"() {{value = 2}} : core.i32
 {body}
-      %expected = arith.const {{value = {expected}}} : core.i32
-      %ok = arith.cmpi %sum, %expected {{predicate = "eq"}} : core.i1
-      cf.cond_br %ok [^done, ^wrong]
+      %expected = "arith.const"() {{value = {expected}}} : core.i32
+      %ok = "arith.cmpi"(%sum, %expected) {{predicate = "eq"}} : core.i1
+      "cf.cond_br"(%ok)[^done, ^wrong]
     ^done:
-      %nil = core.nil_value : core.nil
-      func.return %nil
+      %nil = "core.nil_value"() : core.nil
+      "func.return"(%nil)
     ^wrong:
-      func.unreachable
+      "func.unreachable"()
   }}
 }}"#
     )

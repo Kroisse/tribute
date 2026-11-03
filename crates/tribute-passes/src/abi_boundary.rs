@@ -866,16 +866,16 @@ mod tests {
 }}"#
             )
         };
-        assert_eq!(kinds(&entry("() -> core.nil", "", "func.return")), []);
+        assert_eq!(kinds(&entry("() -> core.nil", "", "\"func.return\"()")), []);
         for malformed in [
-            entry("()", "", "func.return"),
-            entry("(%value: core.i32) -> core.nil", "", "func.return"),
+            entry("()", "", "\"func.return\"()"),
+            entry("(%value: core.i32) -> core.nil", "", "\"func.return\"()"),
             entry(
                 "() -> core.i32",
                 "",
                 "%zero = \"arith.const\"() {value = 0} : core.i32\n    \"func.return\"(%zero)",
             ),
-            entry("() -> (), {call_conv = \"tail\"}", "", "func.return"),
+            entry("() -> (), {call_conv = \"tail\"}", "", "\"func.return\"()"),
         ] {
             assert_eq!(
                 kinds(&malformed),

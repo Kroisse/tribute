@@ -82,8 +82,8 @@ mod tests {
                 &format!(
                     r#"core.module @test {{
   func.func @f(%value: {from}) -> {to} {{
-    %result = tribute_rt.{op} %value : {to}
-    func.return %result
+    %result = "tribute_rt.{op}"(%value) : {to}
+    "func.return"(%result)
   }}
 }}"#
                 ),

@@ -310,11 +310,11 @@ mod tests {
         let direct_call = format!(
             r#"core.module @test {{
 {UNUSED_HELPER}
-  wasm.func {{sym_name = "main", type = wasm.func_sig<(core.i32) -> core.i32>}} {{
-    %arg = wasm.i32_const {{value = 1}} : core.i32
-    %result = wasm.call %arg {{callee = @helper}} : core.i32
-    wasm.return %result
-  }}
+  "wasm.func"() ({{
+    %arg = "wasm.i32_const"() {{value = 1}} : core.i32
+    %result = "wasm.call"(%arg) {{callee = @helper}} : core.i32
+    "wasm.return"(%result)
+  }}) {{sym_name = "main", type = wasm.func_sig<(core.i32) -> core.i32>}}
 }}"#
         );
         assert!(

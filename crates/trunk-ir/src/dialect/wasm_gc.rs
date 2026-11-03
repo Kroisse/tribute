@@ -110,7 +110,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             &format!(
-                "core.module @test {{\n  !A = wasm_gc.array<core.i32>\n  !B = wasm_gc.array<core.i64>\n  func.func @f(%a: !A, %b: !B, %n: core.i32, %w: core.i64, %x: core.index) -> core.nil {{\n    {body}\n    func.return\n  }}\n}}"
+                "core.module @test {{\n  !A = wasm_gc.array<core.i32>\n  !B = wasm_gc.array<core.i64>\n  func.func @f(%a: !A, %b: !B, %n: core.i32, %w: core.i64, %x: core.index) -> core.nil {{\n    {body}\n    \"func.return\"()\n  }}\n}}"
             ),
         );
         validate_op_schemas(&ctx, module.op()).is_ok()

@@ -718,7 +718,7 @@ mod canonicalize_tests {
                 "",
                 "core.index",
                 &format!(
-                    "    %c = arith.const {{value = -1}} : core.i32\n    %r = arith.{op} %c : core.index\n    func.return %r"
+                    "    %c = \"arith.const\"() {{value = -1}} : core.i32\n    %r = \"arith.{op}\"(%c) : core.index\n    \"func.return\"(%r)"
                 ),
             );
             assert_eq!(value, Some(expected), "{op}");
@@ -743,7 +743,7 @@ mod canonicalize_tests {
                 "",
                 ty,
                 &format!(
-                    "    %c = arith.const {{value = {value}}} : core.index\n    %r = arith.{op} %c : {ty}\n    func.return %r"
+                    "    %c = \"arith.const\"() {{value = {value}}} : core.index\n    %r = \"arith.{op}\"(%c) : {ty}\n    \"func.return\"(%r)"
                 ),
             )
             .2
@@ -768,7 +768,7 @@ mod canonicalize_tests {
                 &format!("%x: {ty}"),
                 ty,
                 &format!(
-                    "    %i = arith.index_castui %x : core.index\n    %r = arith.index_castsi %i : {ty}\n    func.return %r"
+                    "    %i = \"arith.index_castui\"(%x) : core.index\n    %r = \"arith.index_castsi\"(%i) : {ty}\n    \"func.return\"(%r)"
                 ),
             );
             count_ops(&ctx, module, crate::dialect::arith::IndexCastsi::NAME)
@@ -1255,10 +1255,10 @@ mod canonicalize_tests {
             let input = format!(
                 "core.module @test {{
   func.func @f() -> core.i{width} {{
-    %a = arith.const {{value = {a}}} : core.i{width}
-    %b = arith.const {{value = {b}}} : core.i{width}
-    %r = {op} %a, %b : core.i{width}
-    func.return %r
+    %a = \"arith.const\"() {{value = {a}}} : core.i{width}
+    %b = \"arith.const\"() {{value = {b}}} : core.i{width}
+    %r = \"{op}\"(%a, %b) : core.i{width}
+    \"func.return\"(%r)
   }}
 }}"
             );

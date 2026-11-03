@@ -20,17 +20,17 @@ use crate::common::NativeTestBinary;
 fn program(body: &str) -> String {
     format!(
         r#"core.module @test {{
-  clif.func {{abi = "C", sym_name = "__asan_init", type = clif.func_sig<() -> core.nil>}}
-  clif.func {{sym_name = "main", type = clif.func_sig<() -> core.i32>}} {{
+  "clif.func"() {{abi = "C", sym_name = "__asan_init", type = clif.func_sig<() -> core.nil>}}
+  "clif.func"() ({{
     ^entry:
-      %init = clif.call {{callee = @__asan_init}} : core.nil
-      %size = clif.iconst {{value = 16}} : core.i64
-      %object = clif.call %size {{callee = @__tribute_alloc}} : core.ptr
-      %value = clif.iconst {{value = 7}} : core.i64
+      %init = "clif.call"() {{callee = @__asan_init}} : core.nil
+      %size = "clif.iconst"() {{value = 16}} : core.i64
+      %object = "clif.call"(%size) {{callee = @__tribute_alloc}} : core.ptr
+      %value = "clif.iconst"() {{value = 7}} : core.i64
 {body}
-      %code = clif.iconst {{value = 0}} : core.i32
-      clif.return %code
-  }}
+      %code = "clif.iconst"() {{value = 0}} : core.i32
+      "clif.return"(%code)
+  }}) {{sym_name = "main", type = clif.func_sig<() -> core.i32>}}
 }}"#
     )
 }
@@ -68,9 +68,9 @@ const FREE: &str =
 fn accesses_inside_a_live_allocation_pass() {
     let output = run(
         &format!(
-            r#"      clif.store %value, %object {{offset = 0}}
-      clif.store %value, %object {{offset = 8}}
-      %read = clif.load %object {{offset = 8}} : core.i64
+            r#"      "clif.store"(%value, %object) {{offset = 0}}
+      "clif.store"(%value, %object) {{offset = 8}}
+      %read = "clif.load"(%object) {{offset = 8}} : core.i64
 {FREE}"#
         ),
         true,
@@ -106,14 +106,14 @@ fn store_before_the_start_of_an_allocation_reports_at_the_access() {
 #[test]
 fn access_after_free_reports_at_the_access() {
     assert_reports(
-        &format!("{FREE}\n      %read = clif.load %object {{offset = 0}} : core.i64"),
+        &format!("{FREE}\n      %read = \"clif.load\"(%object) {{offset = 0}} : core.i64"),
         "heap-use-after-free",
     );
     assert_reports(
         &format!(
             r#"{FREE}
-      %one = clif.iconst {{value = 1}} : core.i32
-      %old = clif.atomic_rmw %object, %one {{bin_op = "add", offset = 0}} : core.i32"#
+      %one = "clif.iconst"() {{value = 1}} : core.i32
+      %old = "clif.atomic_rmw"(%object, %one) {{bin_op = "add", offset = 0}} : core.i32"#
         ),
         "WRITE of size 4",
     );
@@ -124,18 +124,18 @@ fn access_after_free_reports_at_the_access() {
 fn run_to_exit_check(body: &str) -> Output {
     let source = format!(
         r#"core.module @test {{
-  clif.func {{abi = "C", sym_name = "__asan_init", type = clif.func_sig<() -> core.nil>}}
-  clif.func {{abi = "C", sym_name = "__asan_exit", type = clif.func_sig<() -> core.nil>}}
-  clif.func {{sym_name = "main", type = clif.func_sig<() -> core.i32>}} {{
+  "clif.func"() {{abi = "C", sym_name = "__asan_init", type = clif.func_sig<() -> core.nil>}}
+  "clif.func"() {{abi = "C", sym_name = "__asan_exit", type = clif.func_sig<() -> core.nil>}}
+  "clif.func"() ({{
     ^entry:
-      %init = clif.call {{callee = @__asan_init}} : core.nil
-      %size = clif.iconst {{value = 16}} : core.i64
-      %object = clif.call %size {{callee = @__tribute_alloc}} : core.ptr
+      %init = "clif.call"() {{callee = @__asan_init}} : core.nil
+      %size = "clif.iconst"() {{value = 16}} : core.i64
+      %object = "clif.call"(%size) {{callee = @__tribute_alloc}} : core.ptr
 {body}
-      %exit = clif.call {{callee = @__asan_exit}} : core.nil
-      %code = clif.iconst {{value = 0}} : core.i32
-      clif.return %code
-  }}
+      %exit = "clif.call"() {{callee = @__asan_exit}} : core.nil
+      %code = "clif.iconst"() {{value = 0}} : core.i32
+      "clif.return"(%code)
+  }}) {{sym_name = "main", type = clif.func_sig<() -> core.i32>}}
 }}"#
     );
     let mut ctx = IrContext::new();

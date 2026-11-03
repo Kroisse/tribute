@@ -699,16 +699,16 @@ mod branch_table_tests {
     fn module(branch: &str) -> String {
         format!(
             r#"core.module @test {{
-  clif.func {{sym_name = "select", type = clif.func_sig<(core.i32) -> ()>}} {{
+  "clif.func"() ({{
     ^entry(%index: core.i32):
-      clif.{branch}
+      {branch}
     ^default:
-      clif.return
+      "clif.return"()
     ^first:
-      clif.return
+      "clif.return"()
     ^second:
-      clif.return
-  }}
+      "clif.return"()
+  }}) {{sym_name = "select", type = clif.func_sig<(core.i32) -> ()>}}
 }}"#
         )
     }
@@ -743,11 +743,11 @@ mod branch_table_tests {
     #[test]
     fn branch_tables_round_trip() {
         assert_round_trips(
-            "br_table %index [^default, ^first, ^second]",
+            r#""clif.br_table"(%index)[^default, ^first, ^second]"#,
             "\"clif.br_table\"(%0)[^bb1, ^bb2, ^bb3]",
         );
         assert_round_trips(
-            "switch %index [^default, ^first, ^second] {cases = [0, 5]}",
+            r#""clif.switch"(%index)[^default, ^first, ^second] {cases = [0, 5]}"#,
             "\"clif.switch\"(%0)[^bb1, ^bb2, ^bb3] {cases = [0, 5]}",
         );
     }
@@ -755,7 +755,7 @@ mod branch_table_tests {
     #[test]
     fn branch_table_builders_take_the_default_then_the_rest() {
         let mut ctx = crate::IrContext::new();
-        let parsed = parse_test_module(&mut ctx, &module("br_table %index [^default]"));
+        let parsed = parse_test_module(&mut ctx, &module(r#""clif.br_table"(%index)[^default]"#));
         let func = Func::from_op(&ctx, parsed.ops(&ctx)[0]).unwrap();
         let blocks = ctx.region(func.body(&ctx)).blocks.clone();
         let index = ctx.block_args(blocks[0])[0];
@@ -779,17 +779,21 @@ mod branch_table_tests {
     #[test]
     fn switch_requires_one_target_per_distinct_case() {
         assert_eq!(
-            switch_violations("switch %index [^default, ^first, ^second] {cases = [0, 5]}"),
+            switch_violations(
+                r#""clif.switch"(%index)[^default, ^first, ^second] {cases = [0, 5]}"#
+            ),
             ""
         );
         assert_eq!(
-            switch_violations("switch %index [^default] {cases = []}"),
+            switch_violations(r#""clif.switch"(%index)[^default] {cases = []}"#),
             ""
         );
-        let mismatch = switch_violations("switch %index [^default, ^first] {cases = [0, 5]}");
+        let mismatch =
+            switch_violations(r#""clif.switch"(%index)[^default, ^first] {cases = [0, 5]}"#);
         assert!(mismatch.contains("2 case(s) but 1 target(s)"), "{mismatch}");
-        let duplicate =
-            switch_violations("switch %index [^default, ^first, ^second] {cases = [5, 5]}");
+        let duplicate = switch_violations(
+            r#""clif.switch"(%index)[^default, ^first, ^second] {cases = [5, 5]}"#,
+        );
         assert!(duplicate.contains("duplicate case 5"), "{duplicate}");
     }
 }

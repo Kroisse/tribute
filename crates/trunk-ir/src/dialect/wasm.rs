@@ -915,7 +915,7 @@ mod tests {
             let module = parse_test_module(
                 &mut ctx,
                 &format!(
-                    "core.module @test {{\n  func.func @f(%a: wasm.arrayref, %n: core.i32, %w: core.i64) -> core.nil {{\n    {body}\n    func.return\n  }}\n}}"
+                    "core.module @test {{\n  func.func @f(%a: wasm.arrayref, %n: core.i32, %w: core.i64) -> core.nil {{\n    {body}\n    \"func.return\"()\n  }}\n}}"
                 ),
             );
             crate::validation::validate_op_schemas(&ctx, module.op()).is_ok()

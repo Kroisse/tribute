@@ -708,7 +708,7 @@ mod tests {
                         _ => unreachable!(),
                     };
                     let observer = format!(
-                        "wasm.func @observe(%arg: {reference}) {{ {operation}\nwasm.return }}"
+                        "wasm.func @observe(%arg: {reference}) {{ {operation}\n\"wasm.return\"() }}"
                     );
                     let accept =
                         format!("wasm.func @accept(%arg: {reference}) {{ \"wasm.return\"() }}");
@@ -725,16 +725,16 @@ mod tests {
                         !A = wasm_gc.struct<core.i32>
                         !B = wasm_gc.struct<core.i64>
                         wasm.func @make_a() {{
-                            %x = wasm.i32_const {{value = 0}} : core.i32
-                            %a = wasm.struct_new %x {{type_idx = {a}}} : !A
-                            wasm.return
+                            %x = "wasm.i32_const"() {{value = 0}} : core.i32
+                            %a = "wasm.struct_new"(%x) {{type_idx = {a}}} : !A
+                            "wasm.return"()
                         }}
                         {functions}
                         wasm.func @main() {{
-                            %x = wasm.i64_const {{value = 42}} : core.i64
-                            %b = wasm.struct_new %x {{type_idx = {b}}} : !B
-                            wasm.call %b {{callee = @accept}}
-                            wasm.return
+                            %x = "wasm.i64_const"() {{value = 42}} : core.i64
+                            %b = "wasm.struct_new"(%x) {{type_idx = {b}}} : !B
+                            "wasm.call"(%b) {{callee = @accept}}
+                            "wasm.return"()
                         }}
                     }}"#
                         ),

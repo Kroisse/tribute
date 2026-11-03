@@ -1251,16 +1251,16 @@ mod pass {
         let mut input = String::from(
             "core.module @test {\n\
   func.func @a() -> core.i32 {\n\
-    %0 = func.call {callee = @wrapper} : core.i32\n\
-    func.return %0\n\
+    %0 = \"func.call\"() {callee = @wrapper} : core.i32\n\
+    \"func.return\"(%0)\n\
   }\n\
   func.func @b() -> core.i32 {\n\
-    %0 = func.call {callee = @wrapper} : core.i32\n\
-    func.return %0\n\
+    %0 = \"func.call\"() {callee = @wrapper} : core.i32\n\
+    \"func.return\"(%0)\n\
   }\n\
   func.func @wrapper() -> core.i32 {\n\
-    %0 = func.call {callee = @large} : core.i32\n\
-    func.return %0\n\
+    %0 = \"func.call\"() {callee = @large} : core.i32\n\
+    \"func.return\"(%0)\n\
   }\n\
   func.func @large() -> core.i32 {\n",
         );
@@ -1268,10 +1268,10 @@ mod pass {
         // `arith.const` ops + the `func.return`.
         for i in 0..18 {
             input.push_str(&format!(
-                "    %{i} = arith.const {{value = {i}}} : core.i32\n"
+                "    %{i} = \"arith.const\"() {{value = {i}}} : core.i32\n"
             ));
         }
-        input.push_str("    func.return %17\n  }\n}");
+        input.push_str("    \"func.return\"(%17)\n  }\n}");
 
         let mut ctx = IrContext::new();
         let module = crate::parser::parse_test_module(&mut ctx, &input);

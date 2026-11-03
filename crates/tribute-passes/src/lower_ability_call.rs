@@ -242,8 +242,8 @@ mod tests {
                     r#"core.module @test {{
   !Evidence = {evidence}
   func.func @test_fn({params}) -> core.i32 {attributes} {{
-    %result = ability.call {{ability = @Counter, op_name = "next"}} : core.i32
-    func.return %result
+    %result = "ability.call"() {{ability = @Counter, op_name = "next"}} : core.i32
+    "func.return"(%result)
   }}
 }}"#
                 ),

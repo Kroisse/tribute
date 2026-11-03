@@ -432,11 +432,11 @@ mod tests {
 
     fn handle(handlers: &[String], arms: &str, attrs: &str) -> String {
         format!(
-            r#"    ability.handle %ev, %exit, %done{arms} {{handlers = [{}]{attrs}}} {{
+            r#"    "ability.handle"(%ev, %exit, %done{arms}) ({{
       ^body(%inner: !ev, %frame: !frame_nil):
-        %unit = core.nil_value : core.nil
-        ability.exit %frame, %unit
-    }}"#,
+        %unit = "core.nil_value"() : core.nil
+        "ability.exit"(%frame, %unit)
+    }}) {{handlers = [{}]{attrs}}}"#,
             handlers.join(", ")
         )
     }
@@ -481,7 +481,7 @@ mod tests {
             module(
                 params,
                 &format!(
-                    r#"    ability.perform %ev, %exit, {resumption}, %arg {{ability = @State, op_name = "set"}}"#
+                    r#"    "ability.perform"(%ev, %exit, {resumption}, %arg) {{ability = @State, op_name = "set"}}"#
                 ),
             )
         };
@@ -702,10 +702,10 @@ mod tests {
             with_extra(
                 &arms,
                 &format!(
-                    r#"    ability.handle %ev, %exit, %done {{handlers = []}} {{
+                    r#"    "ability.handle"(%ev, %exit, %done) ({{
       ^body({args}):
-        func.unreachable
-    }}"#
+        "func.unreachable"()
+    }}) {{handlers = []}}"#
                 ),
             )
         };

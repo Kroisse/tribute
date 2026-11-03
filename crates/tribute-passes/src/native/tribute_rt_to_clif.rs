@@ -520,7 +520,7 @@ mod tests {
             let boxed = run_pass(&format!(
                 r#"core.module @test {{
   func.func @f(%0: {scalar}) -> core.ptr {{
-    %1 = tribute_rt.box_{kind} %0 : core.ptr
+    %1 = "tribute_rt.box_{kind}"(%0) : core.ptr
     "func.return"(%1)
   }}
 }}"#
@@ -530,7 +530,7 @@ mod tests {
             let unboxed = run_pass(&format!(
                 r#"core.module @test {{
   func.func @f(%0: core.ptr) -> {scalar} {{
-    %1 = tribute_rt.unbox_{kind} %0 : {scalar}
+    %1 = "tribute_rt.unbox_{kind}"(%0) : {scalar}
     "func.return"(%1)
   }}
 }}"#

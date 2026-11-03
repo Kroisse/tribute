@@ -1200,7 +1200,7 @@ mod result_list_tests {
     fn function_assembly_preserves_arity_and_type_attributes() {
         for inputs in ["", "%x: core.i32, %y: core.i64"] {
             for result in ["", " -> core.nil"] {
-                for body in ["", " { func.unreachable }"] {
+                for body in ["", " { \"func.unreachable\"() }"] {
                     let input =
                         format!("core.module @m {{ func.func @f({inputs}){result}{body} }}");
                     let mut ctx = IrContext::new();
@@ -1309,7 +1309,7 @@ mod result_list_tests {
             ),
             (
                 "\"func.return\"(%r)",
-                "func.return",
+                "\"func.return\"()",
                 "return count mismatch",
             ),
             (
@@ -1375,7 +1375,7 @@ mod owner_identity_tests {
         ] {
             let mut ctx = crate::IrContext::new();
             let input = format!(
-                "core.module @m {{ {declaration} func.func @run() {{ func.call {{callee = @runtime}} func.call {{callee = @f}} func.return }} }}"
+                "core.module @m {{ {declaration} func.func @run() {{ \"func.call\"() {{callee = @runtime}} \"func.call\"() {{callee = @f}} \"func.return\"() }} }}"
             );
             let module = crate::parser::parse_test_module(&mut ctx, &input);
             let result = crate::validation::validate_all(&ctx, module, &mut Default::default());
@@ -1414,7 +1414,7 @@ mod normal_validation_regressions {
         ] {
             let mut ctx = crate::IrContext::new();
             let input = format!(
-                "core.module @m {{ func.func @sink() func.func @run(%k: func.func_sig<() -> ()>) {{ func.call {{callee = @runtime}} {body} }} }}"
+                "core.module @m {{ func.func @sink() func.func @run(%k: func.func_sig<() -> ()>) {{ \"func.call\"() {{callee = @runtime}} {body} }} }}"
             );
             let module = crate::parser::parse_test_module(&mut ctx, &input);
             let result = crate::validation::validate_all(&ctx, module, &mut Default::default());

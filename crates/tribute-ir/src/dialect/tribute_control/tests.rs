@@ -711,8 +711,8 @@ fn parser_rejects_conventions_on_control_callables() {
 }"#,
         r#"core.module @test {
   %0 = tribute_control.lambda() -> core.i32 convention(cps) captures [] {
-    %1 = arith.const {value = 1} : core.i32
-    tribute_control.return %1
+    %1 = "arith.const"() {value = 1} : core.i32
+    "tribute_control.return"(%1)
   }
 }"#,
         r#"core.module @test {
@@ -726,8 +726,8 @@ fn parser_rejects_conventions_on_control_callables() {
 }"#,
         r#"core.module @test {
   %0 = tribute_control.lambda() -> core.i32 captures [] attributes {tribute.calling_convention = "cps"} {
-    %1 = arith.const {value = 1} : core.i32
-    tribute_control.return %1
+    %1 = "arith.const"() {value = 1} : core.i32
+    "tribute_control.return"(%1)
   }
 }"#,
         r#"core.module @test {
@@ -735,8 +735,8 @@ fn parser_rejects_conventions_on_control_callables() {
 }"#,
         r#"core.module @test {
   %0 = tribute_control.lambda() -> core.i32 signature_attributes {metadata = @retired} captures [] {
-    %1 = arith.const {value = 1} : core.i32
-    tribute_control.return %1
+    %1 = "arith.const"() {value = 1} : core.i32
+    "tribute_control.return"(%1)
   }
 }"#,
     ] {
@@ -1863,7 +1863,7 @@ fn tail_call_arms_must_belong_to_a_one_result_if_in_tail_position() {
         let (ctx, module) = parse_fixture(&format!(
             r#"core.module @test {{
   tribute_control.func @f(%n: core.i32) -> core.i32 {{
-    tribute_control.return %n
+    "tribute_control.return"(%n)
   }}
   tribute_control.func @g(%n: core.i32, %flag: core.i1) -> core.i32 {{
 {body}
@@ -2344,7 +2344,7 @@ fn handled_callable_module(op_yield: &str) -> String {
         %called = "tribute_control.call_indirect"(%g, %resumed_value) : core.i32
         %zero = "arith.const"() {{value = 0}} : core.i32
         %bad = "core.unrealized_conversion_cast"(%zero) : !F
-        tribute_control.yield {op_yield}
+        "tribute_control.yield"({op_yield})
     }}) {{ability = @Gen, kind = "op", op_name = "next", operation_result_type = core.i32}}
     "tribute_control.handler"() ({{
       ^ask:
@@ -2453,16 +2453,16 @@ fn indirect_calls_sharing_a_callee_chain_evaluate_each_value_once() {
     ));
     for depth in (0..CHAIN).rev() {
         text.push_str(&format!(
-            "    %v{depth} = tribute_control.call_indirect %v{}, %x : !F{depth}\n",
+            "    %v{depth} = \"tribute_control.call_indirect\"(%v{}, %x) : !F{depth}\n",
             depth + 1
         ));
     }
     for call in 0..CALLS {
         text.push_str(&format!(
-            "    %r{call} = tribute_control.call_indirect %v0, %x : core.i32\n"
+            "    %r{call} = \"tribute_control.call_indirect\"(%v0, %x) : core.i32\n"
         ));
     }
-    text.push_str("    tribute_control.return %r0\n  }\n}");
+    text.push_str("    \"tribute_control.return\"(%r0)\n  }\n}");
     let (ctx, module) = parse_fixture(&text);
     let body = module.body(&ctx).unwrap();
     let functions = SymbolTable::collect(&ctx, module);

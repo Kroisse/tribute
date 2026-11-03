@@ -593,12 +593,12 @@ fn successor_list<'a>(input: &mut &'a str) -> ModalResult<Vec<&'a str>> {
     .parse_next(input)
 }
 
-/// Parse a single operation.
+/// Parse a single operation: the generic form after a quoted name, or the
+/// operation's custom syntax after a bare one.
 ///
-/// Grammar:
 /// ```text
-/// [results =] dialect.op [@symbol] [(%arg: type, ...) | () | operands]
-///   [-> type] [effects type] [{attrs}] [: types] [[successors]] [regions]
+/// [results =] "dialect.op"(operands)[successors] (regions) {attrs} : types
+/// [results =] dialect.op custom-syntax
 /// ```
 pub fn raw_operation<'a>(input: &mut &'a str) -> ModalResult<RawOperation<'a>> {
     ws.parse_next(input)?;
@@ -612,88 +612,66 @@ pub fn raw_operation<'a>(input: &mut &'a str) -> ModalResult<RawOperation<'a>> {
         return generic_operation(input, results);
     }
 
-    // dialect.op
+    // A bare name begins the operation's custom syntax.
     let name = qualified_name.parse_next(input)?;
-    let def = crate::OpDef::lookup(name);
-
-    // A declarative format reads everything after the name, `@name` included.
-    if let Some(def) = def
-        && let Some(crate::asm_format::OpAsmFormatDef::Declarative(format)) = def.asm_format
-    {
-        let checkpoint = *input;
-        match crate::asm_format::declarative::parse(input, name, results.clone(), def, format) {
-            Ok(operation) => return Ok(operation),
-            Err(winnow::error::ErrMode::Backtrack(_)) => *input = checkpoint,
-            Err(error) => return Err(error),
+    if name == "core.module" {
+        return module_operation(input, results, name);
+    }
+    let format = crate::OpDef::lookup(name).and_then(|def| Some((def, def.asm_format?)));
+    match format {
+        Some((def, crate::asm_format::OpAsmFormatDef::Declarative(format))) => {
+            crate::asm_format::declarative::parse(input, name, results, def, format)
+                .map_err(|error| error.cut())
+        }
+        Some((_, crate::asm_format::OpAsmFormatDef::Hooks(hooks))) => {
+            // Hand-written formats read `@name` after the operation name as
+            // `sym_name`.
+            let sym_name = opt(preceded(ws, symbol_ref)).parse_next(input)?;
+            ws.parse_next(input)?;
+            (hooks.parse)(input, results, sym_name).map_err(|error| error.cut())
+        }
+        None => {
+            let mut error = winnow::error::ContextError::new();
+            error.push(winnow::error::StrContext::Expected(
+                winnow::error::StrContextValue::Description(
+                    "a quoted name: an operation without a custom format is written in generic form",
+                ),
+            ));
+            Err(winnow::error::ErrMode::Cut(error))
         }
     }
+}
 
-    // Optional @symbol (e.g., core.module @test, func.func @main)
+/// Parse `core.module` after its name: `[@name] [{attrs}] {body}`.
+fn module_operation<'a>(
+    input: &mut &'a str,
+    results: Vec<&'a str>,
+    name: &'a str,
+) -> ModalResult<RawOperation<'a>> {
     let sym_name = opt(preceded(ws, symbol_ref)).parse_next(input)?;
-
-    ws.parse_next(input)?;
-    // Generic operations begin with attributes or operands. Only those shapes
-    // may recover from a custom parser's Backtrack into generic parsing.
-    let generic_custom_shape =
-        input.starts_with('{') || input.starts_with('%') || input.starts_with(':');
-    // Check the operation's custom assembly format
-    if let Some(crate::asm_format::OpAsmFormatDef::Hooks(hooks)) =
-        def.and_then(|def| def.asm_format)
-    {
-        let checkpoint = *input;
-        match (hooks.parse)(input, results.clone(), sym_name.clone()) {
-            Ok(operation) => return Ok(operation),
-            Err(winnow::error::ErrMode::Backtrack(_)) if generic_custom_shape => {
-                *input = checkpoint;
-            }
-            Err(error) => return Err(error),
-        }
-    }
-
-    ws.parse_next(input)?;
-    let operands = if input.starts_with('%') {
-        opt(operand_list).parse_next(input)?.unwrap_or_default()
-    } else {
-        Vec::new()
-    };
-
-    // Successor list (optional): [^bb0, ^bb1]
-    // Must be parsed before attrs/types to match arena printer output order.
-    let successors = opt(preceded(ws, successor_list))
-        .parse_next(input)?
-        .unwrap_or_default();
-
-    // Attributes (optional)
     let attributes = opt(preceded(ws, raw_attr_dict))
         .parse_next(input)?
         .unwrap_or_default();
-
-    // Type annotation (optional): : type1, type2
-    let result_types = opt(type_annotation).parse_next(input)?.unwrap_or_default();
-
-    // Regions (optional, zero or more)
     let mut regions = Vec::new();
     loop {
         ws.parse_next(input)?;
         if input.starts_with('{') {
-            let region = raw_region.parse_next(input)?;
-            regions.push(region);
+            regions.push(raw_region.parse_next(input)?);
         } else {
             break;
         }
     }
-
     Ok(RawOperation {
         results,
         name,
         sym_name,
         func_params: Vec::new(),
         func_param_regions: Vec::new(),
-        operands,
+        operands: Vec::new(),
         attributes,
-        result_types,
+        result_types: Vec::new(),
         regions,
-        successors,
+        successors: Vec::new(),
     })
 }
 

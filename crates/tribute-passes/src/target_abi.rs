@@ -1994,10 +1994,10 @@ mod tests {
             !Dispatch = closure.closure<func.func_sig<(!Evidence, !Resume, core.i32, core.i32, core.i32, tribute_rt.anyref) -> core.never>>
             !{frame_name} = adt.struct<{frame_name}(done: !Done, dispatch: !Dispatch), {{tribute.cps_continuation_frame_result = !Answer}}>
             func.func @run(%ev: !Evidence, %dispatch: !Dispatch, %resume: !Resume, %payload: tribute_rt.anyref) -> core.never attributes {{tribute.calling_convention = "cps"}} {{
-                effect.dispatch_cps %ev, %dispatch, %resume, %payload {{ability = @State, op_name = "get", answer_type = !Answer}}
+                "effect.dispatch_cps"(%ev, %dispatch, %resume, %payload) {{ability = @State, op_name = "get", answer_type = !Answer}}
             }}
             func.func @"std::runtime::evidence::lookup"(%ev: !Evidence, %id: core.i32) -> core.i32 {{
-                func.return %id
+                "func.return"(%id)
             }}
         }}"#
             ),
@@ -2981,8 +2981,8 @@ mod tests {
   !Env = closure.closure<func.func_sig<(core.i32, core.i32) -> core.never>>
   {function}
   func.func @holder() -> core.i32 {{
-    %function = func.constant {{func_ref = @external}} : func.func_sig<(core.i32, core.i32) -> core.never>
-    func.unreachable
+    %function = "func.constant"() {{func_ref = @external}} : func.func_sig<(core.i32, core.i32) -> core.never>
+    "func.unreachable"()
   }}
 }}"#
                 ),

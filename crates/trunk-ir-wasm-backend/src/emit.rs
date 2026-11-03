@@ -1709,19 +1709,22 @@ mod tests {
 
     #[test]
     fn nil_value_producers_consume_their_stack_result_before_control_flow() {
-        for producer in ["wasm.nop", "\"wasm.ref_null\"() {heap_type = \"none\"}"] {
+        for producer in [
+            "\"wasm.nop\"()",
+            "\"wasm.ref_null\"() {heap_type = \"none\"}",
+        ] {
             let mut ctx = IrContext::new();
             let module = parse_test_module(
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
-                wasm.func @consume(%unit: core.nil) {{ wasm.return }}
+                wasm.func @consume(%unit: core.nil) {{ "wasm.return"() }}
                 wasm.func @main() {{
                     %unit = {producer} : core.nil
-                    %condition = wasm.i32_const {{value = 1}} : core.i32
-                    wasm.if %condition {{
-                        wasm.return_call %unit {{callee = @consume}}
-                    }} {{ wasm.unreachable }}
+                    %condition = "wasm.i32_const"() {{value = 1}} : core.i32
+                    "wasm.if"(%condition) ({{
+                        "wasm.return_call"(%unit) {{callee = @consume}}
+                    }}, {{ "wasm.unreachable"() }})
                 }}
             }}"#
                 ),

@@ -962,8 +962,8 @@ mod tests {
                 r#"core.module @test {{
   !A = adt.array<core.i32>
   wasm.func @splice(%source: !A, %start: core.index, %end: core.index, %x: core.i32, %y: core.i32) -> !A {{
-    %result = adt.array_splice %source, %start, %end{elements} {{type = !A}} : !A
-    wasm.return %result
+    %result = "adt.array_splice"(%source, %start, %end{elements}) {{type = !A}} : !A
+    "wasm.return"(%result)
   }}
 }}"#
             ),

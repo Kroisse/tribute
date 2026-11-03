@@ -223,8 +223,8 @@ mod tests {
   !frame = adt.typeref<{{name = "frame_i32", tribute.cps_continuation_frame_result = core.i32}}>
   !body = closure.closure<func.func_sig<{body_type} -> core.never>>
   func.func @run(%ev: !ev, %body: !body) -> {result} {{
-    %answer = effect.delimit %body, %ev : {result}
-    func.return %answer
+    %answer = "effect.delimit"(%body, %ev) : {result}
+    "func.return"(%answer)
   }}
 }}"#
             );

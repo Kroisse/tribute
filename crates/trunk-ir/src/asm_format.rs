@@ -74,7 +74,7 @@ pub trait OpAsmFormat: DialectOp {
 
     /// Parse the operation. Called after `dialect.op` and optional
     /// `@sym_name` are consumed; `results` and `sym_name` are already parsed
-    /// by the generic parser.
+    /// by the caller.
     fn parse<'a>(
         input: &mut &'a str,
         results: Vec<&'a str>,

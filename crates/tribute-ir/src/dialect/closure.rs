@@ -744,7 +744,7 @@ mod tests {
         for result in [None, Some("core.nil"), Some("core.never"), Some("core.i32")] {
             let arrow = result.map(|ty| format!(" -> {ty}")).unwrap_or_default();
             let text = format!(
-                "core.module @test {{ %f = closure.lambda direct(){arrow} {{ func.unreachable }} }}"
+                "core.module @test {{ %f = closure.lambda direct(){arrow} {{ \"func.unreachable\"() }} }}"
             );
             let mut ctx = IrContext::new();
             let module = trunk_ir::parser::parse_test_module(&mut ctx, &text);

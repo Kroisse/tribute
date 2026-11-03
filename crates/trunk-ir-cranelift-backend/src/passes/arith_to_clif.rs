@@ -748,7 +748,7 @@ mod tests {
             let module = parse_test_module(
                 &mut ctx,
                 &format!(
-                    "core.module @test {{\n  func.func @f(%b: core.i1, %n: core.i8) {{\n    {body}\n    func.return\n  }}\n}}"
+                    "core.module @test {{\n  func.func @f(%b: core.i1, %n: core.i8) {{\n    {body}\n    \"func.return\"()\n  }}\n}}"
                 ),
             );
             let error = super::lower(&mut ctx, module, TypeConverter::new()).unwrap_err();

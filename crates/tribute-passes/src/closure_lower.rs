@@ -1016,25 +1016,25 @@ mod tests {
   !closure = closure.closure<func.func_sig<({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref>>
 
   func.func @callee(%ev: {ev_ty}, %env: !closure, %arg: tribute_rt.anyref) -> tribute_rt.anyref attributes {{tribute.calling_convention = "evidence_direct"}} {{
-      func.return %arg
+      "func.return"(%arg)
   }}
   func.func @trap_direct(%env: !closure, %ev: {ev_ty}, %arg: tribute_rt.anyref) -> tribute_rt.anyref attributes {{tribute.calling_convention = "direct"}} {{
-      func.unreachable
+      "func.unreachable"()
   }}
   func.func @trap_cps(%ev: {ev_ty}, %env: !closure, %arg: tribute_rt.anyref) -> core.never attributes {{tribute.calling_convention = "cps"}} {{
-      func.unreachable
+      "func.unreachable"()
   }}
 
   func.func @selected(%ev: {ev_ty}, %payload: tribute_rt.anyref) -> tribute_rt.anyref {{
-      %closure = closure.new {{entries = [@trap_direct, @callee, @trap_cps]}} : !closure
-      %result = func.call_indirect %closure, %ev, %payload {{tribute.calling_convention = "evidence_direct", signature = func.func_sig<({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref>}} : tribute_rt.anyref
-      func.return %result
+      %closure = "closure.new"() {{entries = [@trap_direct, @callee, @trap_cps]}} : !closure
+      %result = "func.call_indirect"(%closure, %ev, %payload) {{tribute.calling_convention = "evidence_direct", signature = func.func_sig<({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref>}} : tribute_rt.anyref
+      "func.return"(%result)
   }}
 
   func.func @untouched(%ev: {ev_ty}, %payload: tribute_rt.anyref) -> tribute_rt.anyref {{
-      %closure = closure.new {{entries = [@trap_direct, @callee, @trap_cps]}} : !closure
-      %result = func.call_indirect %closure, %ev, %payload {{tribute.calling_convention = "evidence_direct", signature = func.func_sig<({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref>}} : tribute_rt.anyref
-      func.return %result
+      %closure = "closure.new"() {{entries = [@trap_direct, @callee, @trap_cps]}} : !closure
+      %result = "func.call_indirect"(%closure, %ev, %payload) {{tribute.calling_convention = "evidence_direct", signature = func.func_sig<({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref>}} : tribute_rt.anyref
+      "func.return"(%result)
   }}
 }}"#
             ),
@@ -1091,22 +1091,22 @@ mod tests {
   !closure = closure.closure<func.func_sig<({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref>>
 
   func.func @callee(%ev: {ev_ty}, %env: !closure, %arg: tribute_rt.anyref) -> tribute_rt.anyref attributes {{tribute.calling_convention = "evidence_direct"}} {{
-      func.return %arg
+      "func.return"(%arg)
   }}
   func.func @trap_direct(%env: !closure, %ev: {ev_ty}, %arg: tribute_rt.anyref) -> tribute_rt.anyref attributes {{tribute.calling_convention = "direct"}} {{
-      func.unreachable
+      "func.unreachable"()
   }}
   func.func @trap_cps(%ev: {ev_ty}, %env: !closure, %arg: tribute_rt.anyref) -> core.never attributes {{tribute.calling_convention = "cps"}} {{
-      func.unreachable
+      "func.unreachable"()
   }}
 
   func.func @outer(%outer_ev: {ev_ty}, %payload: tribute_rt.anyref) -> tribute_rt.anyref {{
       func.func @inner(%inner_ev: {ev_ty}, %inner_payload: tribute_rt.anyref) -> tribute_rt.anyref {{
-          %closure = closure.new {{entries = [@trap_direct, @callee, @trap_cps]}} : !closure
-          %result = func.call_indirect %closure, %inner_ev, %inner_payload {{tribute.calling_convention = "evidence_direct", signature = func.func_sig<({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref>}} : tribute_rt.anyref
-          func.return %result
+          %closure = "closure.new"() {{entries = [@trap_direct, @callee, @trap_cps]}} : !closure
+          %result = "func.call_indirect"(%closure, %inner_ev, %inner_payload) {{tribute.calling_convention = "evidence_direct", signature = func.func_sig<({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref>}} : tribute_rt.anyref
+          "func.return"(%result)
       }}
-      func.return %payload
+      "func.return"(%payload)
   }}
 }}"#
             ),
@@ -1255,12 +1255,12 @@ mod tests {
             !Callback = closure.closure<func.func_sig<() -> core.i32>>
             func.func @invalid(%callee: !Callback) -> core.i32 {{
                 {call}
-                %zero = arith.constant {{value = 0}} : core.i32
-                func.return %zero
+                %zero = "arith.constant"() {{value = 0}} : core.i32
+                "func.return"(%zero)
             }}
             func.func @otherwise_lowerable(%callee: !Callback) -> core.i32 {{
-                %code = closure.func %callee : core.i32
-                func.return %code
+                %code = "closure.func"(%callee) : core.i32
+                "func.return"(%code)
             }}
         }}"#,
                 ),

@@ -75,7 +75,7 @@ fn source_logical_cps_root_module(body: &str) -> (IrContext, Module) {
                 BODY
             }
             func.func @"std::runtime::evidence::lookup"(%ev: !Evidence, %id: core.i32) -> core.i32 {
-                func.return %id
+                "func.return"(%id)
             }
         }"#.replace("BODY", body);
     let module = trunk_ir::parser::parse_test_module(&mut ctx, &source);
@@ -84,7 +84,7 @@ fn source_logical_cps_root_module(body: &str) -> (IrContext, Module) {
 
 #[test]
 fn source_logical_root_defers_closure_storage_until_target_finalization() {
-    let (mut ctx, module) = source_logical_cps_root_module("func.unreachable");
+    let (mut ctx, module) = source_logical_cps_root_module("\"func.unreachable\"()");
     let root = core_module(&ctx, module);
     let mut pm = PassManager::new();
     pm.add_pass(tribute_passes::target_abi::PhysicalizeCpsCallables)
@@ -810,39 +810,39 @@ fn physical_tail_chain_module(done_call_conv: &str, reference_call_conv: &str) -
     format!(
         r#"core.module @physical {{tribute.entry = @main}} {{
   func.func @fail() {{
-    func.unreachable
+    "func.unreachable"()
   }}
 
   func.func @done(%value: core.i32) -> (){done_call_conv} {{
-    %expected = arith.const {{value = 3}} : core.i32
-    %ok = arith.cmpi %value, %expected {{predicate = "eq"}} : core.i1
-    scf.if %ok {{
-      scf.yield
-    }} {{
-      func.call {{callee = @fail}}
-      scf.yield
-    }}
-    func.return
+    %expected = "arith.const"() {{value = 3}} : core.i32
+    %ok = "arith.cmpi"(%value, %expected) {{predicate = "eq"}} : core.i1
+    "scf.if"(%ok) ({{
+      "scf.yield"()
+    }}, {{
+      "func.call"() {{callee = @fail}}
+      "scf.yield"()
+    }})
+    "func.return"()
   }}
 
   func.func @step(%value: core.i32) -> (), {{call_conv = "tail"}} {{
-    %one = arith.const {{value = 1}} : core.i32
-    %next = arith.addi %value, %one : core.i32
-    %done = func.constant {{func_ref = @done}} : func.func_sig<(core.i32) -> (){reference_call_conv}>
-    func.tail_call_indirect %done, %next {{signature = func.func_sig<(core.i32) -> (), {{call_conv = "tail"}}>}}
+    %one = "arith.const"() {{value = 1}} : core.i32
+    %next = "arith.addi"(%value, %one) : core.i32
+    %done = "func.constant"() {{func_ref = @done}} : func.func_sig<(core.i32) -> (){reference_call_conv}>
+    "func.tail_call_indirect"(%done, %next) {{signature = func.func_sig<(core.i32) -> (), {{call_conv = "tail"}}>}}
   }}
 
   func.func @start(%value: core.i32) -> (), {{call_conv = "tail"}} {{
-    %one = arith.const {{value = 1}} : core.i32
-    %next = arith.addi %value, %one : core.i32
-    func.tail_call %next {{callee = @step}}
+    %one = "arith.const"() {{value = 1}} : core.i32
+    %next = "arith.addi"(%value, %one) : core.i32
+    "func.tail_call"(%next) {{callee = @step}}
   }}
 
   func.func @main() -> core.i32 {{
-    %input = arith.const {{value = 1}} : core.i32
-    func.call %input {{callee = @start}}
-    %exit = arith.const {{value = 0}} : core.i32
-    func.return %exit
+    %input = "arith.const"() {{value = 1}} : core.i32
+    "func.call"(%input) {{callee = @start}}
+    %exit = "arith.const"() {{value = 0}} : core.i32
+    "func.return"(%exit)
   }}
 }}"#
     )

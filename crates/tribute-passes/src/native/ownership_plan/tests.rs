@@ -557,13 +557,13 @@ fn into_raw_fixture(transfers: &str) -> String {
         r#"core.module @test {
   !_closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @transfers() -> core.nil {
-    %code = arith.const {value = 0} : core.i32
-    %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-    %closure = adt.struct_new %code {type = !_closure} : !_closure
+    %code = "arith.const"() {value = 0} : core.i32
+    %env = "adt.ref_null"() {type = tribute_rt.anyref} : tribute_rt.anyref
+    %closure = "adt.struct_new"(%code) {type = !_closure} : !_closure
 "#,
         transfers,
         r#"
-    func.return
+    "func.return"()
   }
 }"#,
     ]
@@ -3430,7 +3430,7 @@ fn malformed_array_operations_are_rejected() {
   !Others = adt.array<!OtherRef>
   func.func @f(%nodes: !Nodes, %others: !Others, %other: !OtherRef, %at: core.index) -> core.nil {{
     {body}
-    func.return
+    "func.return"()
   }}
 }}"#
         )

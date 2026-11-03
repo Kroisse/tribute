@@ -457,20 +457,20 @@ mod tests {
   !"std::Option$std::runtime::Dispatch" = adt.enum<"std::Option$std::runtime::Dispatch" { None(), Some(!Closure) }>
   !OptionRef = adt.typeref<{name = "std::Option$std::runtime::Dispatch"}>
   func.func @"std::runtime::evidence::lookup"(%ev: !Evidence, %id: core.i32) -> core.i32 {
-    func.return %id
+    "func.return"(%id)
   }
   func.func @"std::runtime::evidence::lookup_tr"(%ev: !Evidence, %id: core.i32) -> !Closure {
-    %f = adt.ref_null {type = !Closure} : !Closure
-    func.return %f
+    %f = "adt.ref_null"() {type = !Closure} : !Closure
+    "func.return"(%f)
   }
   func.func @"std::runtime::evidence::extend"(%ev: !Evidence, %id: core.i32, %prompt: core.i32, %tr: !OptionRef, %outer: !Evidence) -> !Evidence {
-    func.return %ev
+    "func.return"(%ev)
   }
   func.func @"std::runtime::evidence::mask"(%ev: !Evidence, %id: core.i32) -> !Evidence {
-    func.return %ev
+    "func.return"(%ev)
   }
   func.func @"std::runtime::evidence::dup"(%ev: !Evidence, %id: core.i32) -> !Evidence {
-    func.return %ev
+    "func.return"(%ev)
   }"#;
 
     fn module_text(body: &str) -> String {

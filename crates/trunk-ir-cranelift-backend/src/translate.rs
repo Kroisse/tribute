@@ -518,11 +518,11 @@ mod tests {
     fn invalid_callable_shapes_and_bindings_return_diagnostics_without_mutation() {
         for (attributes, body, expected) in [
             ("", "", "no external binding (`abi`)"),
-            ("", "{}", "no entry block"),
-            (", abi = \"C\"", "{}", "no entry block"),
+            ("", "({})", "no entry block"),
+            (", abi = \"C\"", "({})", "no entry block"),
             (
                 ", abi = \"C\"",
-                "{ clif.return }",
+                "({ \"clif.return\"() })",
                 "both a body and an external binding",
             ),
         ] {
@@ -530,7 +530,7 @@ mod tests {
             let module = parse_test_module(
                 &mut ctx,
                 &format!(
-                    "core.module @test {{ clif.func {{sym_name = \"helper\", type = clif.func_sig<() -> ()>{attributes}}} {body} }}"
+                    "core.module @test {{ \"clif.func\"() {body} {{sym_name = \"helper\", type = clif.func_sig<() -> ()>{attributes}}} }}"
                 ),
             );
             let before = trunk_ir::printer::print_module(&ctx, module.op());
@@ -720,14 +720,14 @@ mod tests {
             &mut ctx,
             &format!(
                 r#"core.module @test {{
-  clif.func {{sym_name = "select", type = clif.func_sig<({index_ty}) -> ()>}} {{
+  "clif.func"() ({{
     ^entry(%index: {index_ty}):
-      clif.{branch}
+      {branch}
     ^default:
-      clif.return
+      "clif.return"()
     ^target{target_params}:
-      clif.return
-  }}
+      "clif.return"()
+  }}) {{sym_name = "select", type = clif.func_sig<({index_ty}) -> ()>}}
 }}"#
             ),
         );
@@ -738,7 +738,7 @@ mod tests {
 
     #[test]
     fn br_table_requires_an_i32_index_and_parameterless_successors() {
-        let branch = "br_table %index [^default, ^target]";
+        let branch = r#""clif.br_table"(%index)[^default, ^target]"#;
         let wide_index = branch_error("core.i64", branch, "");
         assert!(
             wide_index.contains("operand #0 `index`: expected core.i32, found core.i64"),
@@ -755,14 +755,14 @@ mod tests {
     fn switch_rejects_what_the_index_cannot_select() {
         let too_wide = branch_error(
             "core.i8",
-            "switch %index [^default, ^target] {cases = [256]}",
+            r#""clif.switch"(%index)[^default, ^target] {cases = [256]}"#,
             "",
         );
         assert!(
             too_wide.contains("case 256 does not fit the i8 index"),
             "{too_wide}"
         );
-        let branch = "switch %index [^default, ^target] {cases = [1]}";
+        let branch = r#""clif.switch"(%index)[^default, ^target] {cases = [1]}"#;
         let parameters = branch_error("core.i32", branch, "(%value: core.i32)");
         assert!(
             parameters.contains("clif.switch: a successor block has parameters"),
@@ -945,7 +945,7 @@ mod tests {
         ] {
             let relocs = relocs.iter().format_with("\n", |(offset, func), f| {
                 f(&format_args!(
-                    "    clif.func_reloc {{offset = {offset}, func = @{func}}}"
+                    "    \"clif.func_reloc\"() {{offset = {offset}, func = @{func}}}"
                 ))
             });
             let mut ctx = IrContext::new();
@@ -954,11 +954,11 @@ mod tests {
                 &format!(
                     r#"core.module @test {{
   clif.func @helper() -> core.nil {{
-    clif.return
+    "clif.return"()
   }}
-  clif.data {{sym_name = "table", bytes = b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", align = 8}} {{
+  "clif.data"() ({{
 {relocs}
-  }}
+  }}) {{sym_name = "table", bytes = b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", align = 8}}
 }}"#
                 ),
             );

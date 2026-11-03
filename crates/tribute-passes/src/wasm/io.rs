@@ -737,8 +737,8 @@ mod tests {
                     r#"core.module @test {{
   {import}
   func.func @main(%bytes: core.bytes, %newline: core.i1) -> core.nil {{
-    %write = tribute_io.write %bytes, %newline : core.nil
-    func.return
+    %write = "tribute_io.write"(%bytes, %newline) : core.nil
+    "func.return"()
   }}
 }}"#
                 ),

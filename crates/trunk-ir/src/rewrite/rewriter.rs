@@ -331,7 +331,7 @@ mod tests {
             let module = parse_test_module(
                 &mut ctx,
                 &format!(
-                    "core.module @test {{ func.func @main() -> core.nil {{ %v = \"arith.const\"() {{value = 1}} : core.i32 func.return {} }} }}",
+                    "core.module @test {{ func.func @main() -> core.nil {{ %v = \"arith.const\"() {{value = 1}} : core.i32 \"func.return\"({}) }} }}",
                     if used { "%v" } else { "" },
                 ),
             );
