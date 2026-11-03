@@ -213,6 +213,8 @@ pub(crate) struct Function {
     /// Tails that select a class variable without looking at callees.
     pub(crate) selecting: HashSet<u32>,
     pub(crate) references: Vec<Reference>,
+    /// Its own tail where that tail reads `Cps` without a class variable.
+    pub(crate) cps_tail: Option<u32>,
     /// The selected class variables, by binder index.
     pub(crate) selected: Vec<u32>,
 }
@@ -276,7 +278,7 @@ impl Function {
                 ControlFlow::Continue(WalkAction::Advance)
             });
         }
-        Some(Self {
+        let mut function = Self {
             op,
             name,
             base,
@@ -286,8 +288,11 @@ impl Function {
             root_entry,
             selecting,
             references,
+            cps_tail: None,
             selected: Vec::new(),
-        })
+        };
+        function.cps_tail = function.own_row(ctx, op, |_| false).tail;
+        Some(function)
     }
 
     /// The own row of `op`, an instance of this definition, read with its
@@ -403,9 +408,14 @@ pub(crate) fn body_value_types(ctx: &IrContext, body: RegionRef) -> Vec<TypeRef>
 /// Select the class variables of every definition: a `param` binder that is
 /// the tail of a callable type in its signature or body, of a row it
 /// instantiates a let-bound lambda with, or of a row it passes for a class
-/// variable of a definition it references. Returns the class variable
-/// positions of each base definition.
+/// variable of a definition it references or for that definition's own tail
+/// that reads `Cps`. Returns the class variable positions of each base
+/// definition.
 pub(crate) fn settle_class_variables(functions: &mut [Function]) -> HashMap<String, Vec<u32>> {
+    let cps_tails: HashMap<String, u32> = functions
+        .iter()
+        .filter_map(|function| Some((function.base.clone(), function.cps_tail?)))
+        .collect();
     for function in functions.iter_mut() {
         let mut selected: Vec<u32> = function
             .selecting
@@ -423,7 +433,8 @@ pub(crate) fn settle_class_variables(functions: &mut [Function]) -> HashMap<Stri
             let mut added = Vec::new();
             for reference in &function.references {
                 let (callee, _) = split_name(&reference.callee);
-                for &position in positions.get(callee).into_iter().flatten() {
+                let cps_tail = cps_tails.get(callee);
+                for &position in positions.get(callee).into_iter().flatten().chain(cps_tail) {
                     let tail = usize::try_from(position)
                         .ok()
                         .and_then(|position| reference.rows.get(position))

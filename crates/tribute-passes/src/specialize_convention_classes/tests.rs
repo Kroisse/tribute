@@ -837,3 +837,40 @@ fn a_published_layout_keeps_its_callable_fields() {
     specialize(&mut ctx, module).expect("specializes");
     assert_eq!(ctx.type_alias_by_name(&name), Some(before));
 }
+
+/// A tail a definition passes for an own tail that its callee reads as
+/// `Cps` is a class variable: the callee takes evidence for the row the
+/// caller passes.
+#[test]
+fn a_tail_passed_for_a_cps_own_tail_is_a_class_variable() {
+    let printed = specialized(
+        r#"core.module @m {
+  tribute_control.func @ext['a0](%x: core.i32) -> core.i32 row(| 'a0) attributes {abi = "C"}
+  tribute_control.func @held[ability_arg 'a0](%x: core.i32) -> core.i32 row(| 'a0) {
+    tribute_control.return %x
+  }
+  tribute_control.func @foreign['a0](%x: core.i32) -> core.i32 row(| 'a0) {
+    %r = tribute_control.call %x {callee = @ext, row_args = [{tail = 0}]} : core.i32
+    tribute_control.return %r
+  }
+  tribute_control.func @holding['a0](%x: core.i32) -> core.i32 row(| 'a0) {
+    %r = tribute_control.call %x {callee = @held, row_args = [{tail = 0}]} : core.i32
+    tribute_control.return %r
+  }
+  tribute_control.func @main(%x: core.i32) -> core.i32 {
+    %a = tribute_control.call %x {callee = @foreign, row_args = [{}]} : core.i32
+    %b = tribute_control.call %a {callee = @holding, row_args = [{}]} : core.i32
+    tribute_control.return %b
+  }
+}"#,
+    );
+    assert_contains(
+        &printed,
+        &[
+            "tribute_cps.func @\"foreign$9D\"['a0](%0: core.i32) -> core.i32 row(| 'a0) convention(direct) {",
+            "tribute_cps.func @\"holding$9D\"['a0](%0: core.i32) -> core.i32 row(| 'a0) convention(direct) {",
+            "callee = @\"foreign$9D\"",
+            "callee = @\"holding$9D\"",
+        ],
+    );
+}
