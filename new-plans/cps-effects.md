@@ -818,11 +818,10 @@ payload를 pack한다.
 ```text
 %product = pack %args into the canonical operation payload product
 %payload = cast %product to anyref
-effect.dispatch_cps %ev, %dispatch, %resume, %payload
-  { ability = @State, op_name = "get", answer_type = R }
+effect.dispatch_cps @State @get(%payload) [%ev, %dispatch, %resume] -> R
 ```
 
-필수 `answer_type: Type`은 `ContinuationFrame<R>`의 의미적 `R`이다. 호출 결과,
+`->` 뒤에 쓰는 필수 `answer_type: Type`은 `ContinuationFrame<R>`의 의미적 `R`이다. 호출 결과,
 물리화 완료 marker 또는 callable provenance가 아니며 `ability.perform`에 중복하지
 않는다. Dispatch가 요구하는 resume과 실제 resume의 exact 타입이 같아야 한다.
 같은 `R`을 가진 서로 다른 nominal frame도 호환되지 않는다. Dispatch와 resume의
