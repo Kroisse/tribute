@@ -20,7 +20,6 @@ use std::time::Instant;
 
 use tribute_bench::editing::{EditSession, workloads};
 use tribute_front::analysis;
-use tribute_front::ast::ItemSpans;
 use tribute_front::astgen::{ParsedItem, lower_source_to_parsed_ast};
 
 /// Tracks the bytes currently allocated.
@@ -115,13 +114,8 @@ fn main() {
             }),
         );
         row(
-            "`ParsedAst::item_spans`, merged from the items",
-            measure(|| {
-                items
-                    .iter()
-                    .map(|item| item.spans(db))
-                    .collect::<ItemSpans>()
-            }),
+            "`ParsedAst::items_by_owner`",
+            measure(|| parsed.items_by_owner(db).clone()),
         );
 
         let resolved = analysis::resolved_module(db, source, table).expect("the program resolves");

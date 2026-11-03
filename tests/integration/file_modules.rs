@@ -203,7 +203,7 @@ fn the_tree_finds_the_files_under_a_module() {
         "SpanMap { files: 4, .. }"
     );
     let root_spans = format!("{:?}", tree.root().parsed.span_map(&db));
-    assert!(root_spans.starts_with("SpanMap { spans: "), "{root_spans}");
+    assert!(root_spans.starts_with("SpanMap { items: "), "{root_spans}");
 }
 
 #[test]
