@@ -181,7 +181,8 @@ where
 
   String literals are keywords and punctuation, a bare name is an operand
   or attribute, and `symbol(..)`, `keyword(..)`, `type(..)`/`types(..)`, `attr_dict`
-  (`attributes {..}`), `region(..)`/`regions(..)`, and
+  (`attributes {..}`) or `attr_dict_bare` (`{..}`, not before a region),
+  `region(..)`/`regions(..)`, and
   `successor(..)`/`successors(..)` write the other entities.
   `keyword(a)` writes the attribute `a` as a bare identifier through the
   `asm_format::KeywordCodec` of its kind, as `tribute_cps` writes
@@ -192,8 +193,11 @@ where
   its entry block, as `func.func` does. `("kw" .. x^)?`
   opens with a literal and is written only when its anchor `x` is present;
   an optional `bool` anchor is a flag the group's literals stand for. A
-  format may begin with any element, closes each variadic list with `")"` or
-  `"]"`, and ends with `(":" types(..)^)?` for results that may be absent.
+  format may begin with any element, closes each variadic successor list
+  with `")"` or `"]"`, writes no operand or `,` right after a variadic operand
+  list, and ends with `(":" types(..)^)?` for results that may be absent. An
+  operand list stays on its line, so an empty one does not read the next
+  line's `%r = ..`.
   The macro reports a broken rule, a missing entity, or one written twice at
   the element at fault. An operation the format cannot spell without loss
   prints generically, as `"dialect.op"(%a)` with a quoted name.

@@ -461,11 +461,11 @@ literal은 문자열 literal로 쓴다.
   `types(results)`, 또는 타입을 재구성하는 `signature`로 정확히 한 번 쓴다.
   `types`는 결과 목록을 쉼표로 구분해 쓰며, 결과가 없을 수 있으면 앞의 구두점과
   함께 선택 묶음에 둔다.
-- **`attr_dict`** — 형식의 다른 원소가 쓰지 않은 모든 attribute를
-  `attributes {..}`로 쓴다. Keyword 없는 `{..}`는 region이나 generic 형식과
-  첫 token이 겹치므로 쓰지 않는다. 남은 attribute가 없으면 아무
-  것도 쓰지 않는다. 다른 원소가 쓰는 attribute는 자동으로 제외하며, parser는 그런
-  key를 dictionary에서 만나면 거부한다.
+- **`attr_dict`, `attr_dict_bare`** — 형식의 다른 원소가 쓰지 않은 모든
+  attribute를 `attr_dict`는 `attributes {..}`로, `attr_dict_bare`는 keyword 없이
+  `{..}`로 쓴다. 형식은 둘 중 하나만 쓴다. 남은 attribute가 없으면 아무 것도 쓰지
+  않는다. 다른 원소가 쓰는 attribute는 자동으로 제외하며, parser는 그런 key를
+  dictionary에서 만나면 거부한다.
 - **`signature(t, regions..)`** — 함수 형태 `(%a: A, %b: B) -> R`을 쓴다. `t`는
   필수 `Attr<TypeOf<S>>` attribute나 `Value<S>` result이고, `S`는 bound를
   하나만 가지며 그 bound가 signature codec을 구현해야 한다. 나머지 인자는 이 signature의 매개변수를 entry block
@@ -525,9 +525,14 @@ Macro는 형식 기술을 선언과 대조해 다음을 어기면 그 원소를 
 - Anchor는 선택 attribute, 가변 operand, 가변 result 중 하나다.
 - 가변 result나 선택 result의 타입은 `(":" types(..)^)?`처럼 선택 묶음의
   마지막에 쓰고, 그 묶음은 형식의 마지막 원소다.
-- 가변 operand·successor 목록 바로 뒤에는 선택 묶음이 아닌 닫는 literal `")"`나
-  `"]"`가 온다. 빈 목록이 뒤의 원소를 읽거나 목록이 쉼표를 자기 구분자로 읽는
-  일이 없게 하기 위해서다.
+- 가변 successor 목록 바로 뒤에는 선택 묶음이 아닌 닫는 literal `")"`나 `"]"`가
+  온다. 가변 operand 목록 바로 뒤에는 operand나 `,`로 시작하는 literal이 오지
+  않는다. 목록이 쉼표를 자기 구분자로 읽거나 뒤의 operand를 제 항목으로 읽는 일이
+  없게 하기 위해서다. Printer는 operand 목록을 한 줄에 쓰고, parser는 줄바꿈 뒤의
+  operand를 목록의 첫 항목으로 읽지 않는다. 그래서 빈 목록은 다음 줄의
+  `%r = ..`를 읽지 않는다.
+- `attr_dict_bare` 뒤에서 선택 묶음을 건너뛴 첫 원소는 region이 아니다. Region도
+  `{`로 시작하기 때문이다.
 - 선택 region과 가변 region 목록 뒤에서 선택 묶음을 건너뛴 첫 원소는 없거나
   `{`로 시작하지 않는 literal이다.
 - Literal `attributes`는 `attr_dict`만 쓴다.
@@ -574,7 +579,7 @@ region의 entry block에 되돌린다. Printer는 `IsolatedFromAbove` operation�
 - Symbol을 정의하는 operation은 operation 이름 바로 뒤에 `symbol(sym_name)`으로
   `@name`을 쓴다.
 - 남은 attribute는 `attr_dict`로 region 바로 앞에 쓰고, region이 없으면 끝에
-  쓴다.
+  쓴다. Region이 없는 operation은 `attr_dict_bare`로 `{..}`만 쓸 수 있다.
 - Capture operand 목록은 비어 있어도 `captures [..]`로 쓴다.
 - Convention처럼 keyword로 쓰는 attribute 하나는 `name(keyword)`로 쓴다
   (`convention(cps)`).

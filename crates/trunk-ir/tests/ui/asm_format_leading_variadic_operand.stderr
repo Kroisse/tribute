@@ -1,5 +1,0 @@
-error: a variadic list is closed by a literal `")"` or `"]"` right after it
- --> tests/ui/asm_format_leading_variadic_operand.rs:4:22
-  |
-4 |         #[asm_format(args "(" ")" attr_dict)]
-  |                      ^^^^

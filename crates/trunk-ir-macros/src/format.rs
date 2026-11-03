@@ -69,7 +69,10 @@ enum Element {
     },
     ResultType,
     ResultTypes,
-    AttrDict,
+    /// `attr_dict`, or `attr_dict_bare` without the `attributes` keyword.
+    AttrDict {
+        bare: bool,
+    },
     Region(usize),
     Successor(usize),
     /// `signature(t, regions..)`, with the bound whose codec spells `t`,
@@ -277,9 +280,11 @@ impl<'a> Format<'a> {
     }
 
     fn entity(&mut self, name: &str, span: Span) -> Result<Element, FormatError> {
-        if name == "attr_dict" {
+        if name == "attr_dict" || name == "attr_dict_bare" {
             self.write(Entity::AttrDict, span)?;
-            return Ok(Element::AttrDict);
+            return Ok(Element::AttrDict {
+                bare: name == "attr_dict_bare",
+            });
         }
         let Some(entity) = self.lookup(name) else {
             return err(span, format!("the operation declares no `{name}`"));
@@ -317,8 +322,8 @@ impl<'a> Format<'a> {
         args: TokenStream,
         span: Span,
     ) -> Result<Element, FormatError> {
-        if name == "attr_dict" {
-            return err(span, "`attr_dict` takes no arguments");
+        if name == "attr_dict" || name == "attr_dict_bare" {
+            return err(span, format!("`{name}` takes no arguments"));
         }
         if name == "signature" {
             return self.signature(args, span);
@@ -579,14 +584,31 @@ impl<'a> Format<'a> {
                 _ => None,
             };
             match *element {
-                // A list reads items while it sees `,`, and an empty one would
-                // read whatever follows as its first item.
+                // A list reads items while it sees `,`, so nothing after it
+                // may begin with `,` or an operand.
                 Element::Operand(i) if self.op.operands[i].variadic => {
-                    if !matches!(next_text, Some(")" | "]")) {
+                    let opens_with_comma = match next {
+                        Some(Element::Literal(text)) => text.starts_with(','),
+                        Some(Element::Optional { elements, .. }) => matches!(
+                            elements.first(),
+                            Some((Element::Literal(text), _)) if text.starts_with(',')
+                        ),
+                        _ => false,
+                    };
+                    if opens_with_comma || matches!(next, Some(Element::Operand(_))) {
                         return err(
                             *span,
-                            "a variadic list is closed by a literal `\")\"` or `\"]\"` right after it",
+                            "a variadic operand list is followed by neither an operand nor a literal beginning with `,`",
                         );
+                    }
+                }
+                // A region also begins with `{`.
+                Element::AttrDict { bare: true } => {
+                    let required = elements[position + 1..]
+                        .iter()
+                        .find(|(element, _)| !matches!(element, Element::Optional { .. }));
+                    if required.is_some_and(|(element, _)| matches!(element, Element::Region(_))) {
+                        return err(*span, "`attr_dict_bare` is not followed by a region");
                     }
                 }
                 Element::Successor(i) if self.successors[i].1 => {
@@ -774,7 +796,7 @@ fn gen_elements(
             }),
             Element::ResultType => quote!(#fmt::FormatElement::ResultType(0)),
             Element::ResultTypes => quote!(#fmt::FormatElement::ResultTypes),
-            Element::AttrDict => quote!(#fmt::FormatElement::AttrDict),
+            Element::AttrDict { bare } => quote!(#fmt::FormatElement::AttrDict { bare: #bare }),
             Element::Region(i) => quote!(#fmt::FormatElement::Region(#i)),
             Element::Successor(i) => quote!(#fmt::FormatElement::Successor(#i)),
             Element::Signature {
@@ -1132,17 +1154,20 @@ mod tests {
             ),
             (
                 quote!(
-                    fn op(a: Variadic<_>) {}
+                    fn op(r: Option<Attr<u32>>) {
+                        #[region(body)]
+                        {}
+                    }
                 ),
-                quote!("x" a),
-                "closed by a literal",
+                quote!("x" attr_dict_bare region(body)),
+                "is not followed by a region",
             ),
             (
                 quote!(
                     fn op(a: Value<_>, b: Variadic<_>) {}
                 ),
                 quote!("x" "(" b "," a ")"),
-                "closed by a literal",
+                "followed by neither an operand",
             ),
             (
                 quote!(
@@ -1188,13 +1213,6 @@ mod tests {
                 ),
                 quote!(),
                 "at least one element",
-            ),
-            (
-                quote!(
-                    fn op(args: Variadic<_>, on: Option<Attr<bool>>) {}
-                ),
-                quote!("run" "(" args (")" on^)?),
-                "closed by a literal",
             ),
             (
                 quote!(

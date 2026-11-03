@@ -9,7 +9,7 @@ use std::borrow::Cow;
 use std::fmt::{self, Write};
 use std::ops::Range;
 
-use winnow::combinator::{delimited, opt, separated};
+use winnow::combinator::{delimited, opt, preceded, repeat, separated};
 use winnow::error::{ContextError, ErrMode, StrContext, StrContextValue};
 use winnow::prelude::*;
 
@@ -56,8 +56,9 @@ pub enum FormatElement {
     /// The comma-separated types of every result, for a variadic or optional
     /// result.
     ResultTypes,
-    /// The attributes no other element writes, as `attributes {..}`.
-    AttrDict,
+    /// The attributes no other element writes, as `attributes {..}`, or as
+    /// `{..}` when `bare`.
+    AttrDict { bare: bool },
     /// A region in generic form, or each region of a variadic list. A region
     /// a [`Signature`](Self::Signature) lists elides its entry block.
     Region(usize),
@@ -329,7 +330,7 @@ impl Printer<'_, '_, '_> {
                 }
                 Ok(())
             }
-            FormatElement::AttrDict => {
+            FormatElement::AttrDict { bare } => {
                 let written = written_attributes(self.schema, self.format);
                 let mut rest = ctx
                     .op(op)
@@ -343,8 +344,12 @@ impl Printer<'_, '_, '_> {
                 if rest.peek().is_none() {
                     return Ok(());
                 }
-                self.token('a')?;
-                self.h.write_str("attributes ")?;
+                if bare {
+                    self.token('{')?;
+                } else {
+                    self.token('a')?;
+                    self.h.write_str("attributes ")?;
+                }
                 self.h.write_attr_dict(rest)
             }
             FormatElement::Region(index) => {
@@ -626,7 +631,7 @@ fn printable(ctx: &IrContext, op: OpRef, schema: &OpSchema, format: &OpFormat) -
     let has_dict = {
         let mut found = false;
         visit(format.elements, &mut |element| {
-            found |= matches!(element, FormatElement::AttrDict)
+            found |= matches!(element, FormatElement::AttrDict { .. })
         });
         found
     };
@@ -761,12 +766,27 @@ struct FormatParser<'a> {
 
 impl<'a> FormatParser<'a> {
     fn element(&mut self, input: &mut &'a str, element: &FormatElement) -> ModalResult<()> {
+        let before = *input;
         ws.parse_next(input)?;
+        let new_line = before[..before.len() - input.len()].contains('\n');
         match *element {
             FormatElement::Literal(text) => literal(input, text),
             FormatElement::Operand(index) => {
                 let values = if self.schema.operands[index].arity == Arity::Variadic {
-                    separated(0.., (ws, value_ref, ws).map(|(_, v, _)| v), ',').parse_next(input)?
+                    // A list is written on one line, so an operand after a
+                    // line break begins the next operation.
+                    if new_line {
+                        Vec::new()
+                    } else {
+                        let first = opt(value_ref).parse_next(input)?;
+                        let mut values: Vec<_> = first.into_iter().collect();
+                        if !values.is_empty() {
+                            let rest: Vec<_> = repeat(0.., preceded((ws, ',', ws), value_ref))
+                                .parse_next(input)?;
+                            values.extend(rest);
+                        }
+                        values
+                    }
                 } else {
                     vec![
                         value_ref
@@ -819,8 +839,14 @@ impl<'a> FormatParser<'a> {
                 self.parsed.result_types[0] = types;
                 Ok(())
             }
-            FormatElement::AttrDict => {
-                let dict = if literal(input, "attributes").is_ok() {
+            FormatElement::AttrDict { bare } => {
+                let dict = if bare {
+                    if input.starts_with('{') {
+                        Some(raw_attr_dict.parse_next(input)?)
+                    } else {
+                        None
+                    }
+                } else if literal(input, "attributes").is_ok() {
                     ws.parse_next(input)?;
                     Some(raw_attr_dict.parse_next(input)?)
                 } else {
@@ -1107,6 +1133,9 @@ mod tests {
         #[asm_format(lhs "," rhs attr_dict ":" type(result))]
         fn add(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
+        #[asm_format(args attr_dict_bare (":" types(results)^)?)]
+        fn emit(args: Variadic<_>) -> Variadic<_> {}
+
         #[asm_format(callee "(" args ")" attr_dict ":" signature(signature))]
         fn apply<S: FuncSig>(
             signature: Attr<TypeOf<S>>,
@@ -1294,6 +1323,21 @@ mod tests {
   asm_format_test.fun @f(%0: core.i32) {
       %1 = asm_format_test.add %0, %0 : core.i32
       %2 = asm_format_test.add %1, %0 attributes {extra = 1} : core.i32
+  }
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn a_bare_dictionary_follows_an_operand_list_on_its_line() {
+        assert_round_trip(
+            r#"core.module @m {
+  asm_format_test.fun @f(%0: core.i32) {
+      asm_format_test.emit
+      %1 = asm_format_test.emit %0, %0 {tag = 1} : core.i32
+      %2, %3 = asm_format_test.emit %1 : core.i32, core.i32
+      asm_format_test.emit {tag = 2}
   }
 }
 "#,
