@@ -626,7 +626,7 @@ mod tests {
   }
   func.func @helper() -> core.i32 {
     %0 = func.call {callee = @leaf} : core.i32
-    %1 = func.constant @other : core.ptr
+    %1 = "func.constant"() {value = @other} : core.ptr
     func.return %0
   }
   func.func @main() -> core.i32 {

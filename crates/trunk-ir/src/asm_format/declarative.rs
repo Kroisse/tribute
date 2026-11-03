@@ -67,12 +67,12 @@ pub enum FormatElement {
     Region(usize),
     /// A successor's label, or a comma-separated list for a variadic one.
     Successor(usize),
-    /// A signature type attribute in function form, `(%a: A) -> R`, whose
-    /// inputs are the entry block arguments of the listed regions, or
-    /// `(A) -> R` when it lists none. With `results`, the signature's
-    /// results are the operation's result types.
+    /// A signature type in function form, `(%a: A) -> R`, whose inputs are
+    /// the entry block arguments of the listed regions, or `(A) -> R` when
+    /// it lists none. With `results`, the signature's results are the
+    /// operation's result types.
     Signature {
-        attribute: usize,
+        source: SignatureSource,
         regions: &'static [usize],
         codec: SignatureCodecHooks,
         results: bool,
@@ -82,6 +82,41 @@ pub enum FormatElement {
         anchor: FormatAnchor,
         elements: &'static [FormatElement],
     },
+}
+
+/// What a [`FormatElement::Signature`] writes the type of.
+#[derive(Clone, Copy, Debug)]
+pub enum SignatureSource {
+    /// A type attribute, which the signature writes.
+    Attribute(usize),
+    /// A fixed operand, which another element writes; the signature writes
+    /// only its type.
+    Operand(usize),
+    /// The single result, whose type the signature writes.
+    Result,
+}
+
+/// The type a signature element writes, if `op` has it.
+fn signature_type(
+    ctx: &IrContext,
+    op: OpRef,
+    schema: &OpSchema,
+    source: SignatureSource,
+) -> Option<crate::TypeRef> {
+    match source {
+        SignatureSource::Attribute(index) => {
+            ctx.op_attrs(op).get_type(schema.attributes[index].name)
+        }
+        SignatureSource::Operand(index) => {
+            let operands = ctx.op_operands(op);
+            let range = operand_range(schema, index, operands.len());
+            (range.len() == 1).then(|| ctx.value_ty(operands[range.start]))
+        }
+        SignatureSource::Result => match ctx.op_result_types(op) {
+            [ty] => Some(*ty),
+            _ => None,
+        },
+    }
 }
 
 /// What decides whether an optional group is written.
@@ -390,14 +425,12 @@ impl Printer<'_, '_, '_> {
                 Ok(())
             }
             FormatElement::Signature {
-                attribute,
+                source,
                 regions,
                 codec,
                 ..
             } => {
-                let ty = ctx
-                    .op_attrs(op)
-                    .get_type(self.schema.attributes[attribute].name)
+                let ty = signature_type(ctx, op, self.schema, source)
                     .expect("a printable signature is a type");
                 let parts = (codec.decompose)(ctx, ty).expect("a printable signature decomposes");
                 let entries = signature_entries(ctx, op, self.schema, regions);
@@ -484,7 +517,11 @@ pub(crate) fn signature_attributes(def: &OpDef) -> Vec<&'static str> {
     };
     let mut names = Vec::new();
     visit(format.elements, &mut |element| {
-        if let FormatElement::Signature { attribute, .. } = *element {
+        if let FormatElement::Signature {
+            source: SignatureSource::Attribute(attribute),
+            ..
+        } = *element
+        {
             names.push(def.schema.attributes[attribute].name);
         }
     });
@@ -533,7 +570,8 @@ fn written_attributes(schema: &OpSchema, format: &OpFormat) -> Vec<&'static str>
                     attribute: index, ..
                 }
                 | FormatElement::Signature {
-                    attribute: index, ..
+                    source: SignatureSource::Attribute(index),
+                    ..
                 } => names.push(schema.attributes[index].name),
                 FormatElement::Optional { anchor, elements } => {
                     if let FormatAnchor::Flag(index) = anchor {
@@ -618,13 +656,12 @@ fn printable(ctx: &IrContext, op: OpRef, schema: &OpSchema, format: &OpFormat) -
                 .is_some_and(|value| (codec.keyword)(ctx, value).is_some());
         }
         FormatElement::Signature {
-            attribute,
+            source,
             regions,
             codec,
             results,
         } => {
-            written_ok &= attrs
-                .get_type(schema.attributes[attribute].name)
+            written_ok &= signature_type(ctx, op, schema, source)
                 .and_then(|ty| (codec.decompose)(ctx, ty))
                 .is_some_and(|parts| {
                     signature_fits(ctx, op, schema, regions, &parts)
@@ -938,7 +975,7 @@ impl<'a> FormatParser<'a> {
                 Ok(())
             }
             FormatElement::Signature {
-                attribute,
+                source,
                 regions,
                 codec,
                 results: writes_results,
@@ -981,7 +1018,14 @@ impl<'a> FormatParser<'a> {
                     .collect();
                 let inputs = params.into_iter().map(|(_, param)| param).collect();
                 let ty = (codec.build)(inputs, results, tail)?;
-                self.attribute(attribute, RawAttribute::Type(ty));
+                match source {
+                    SignatureSource::Attribute(attribute) => {
+                        self.attribute(attribute, RawAttribute::Type(ty));
+                    }
+                    // The operand's definition gives its type.
+                    SignatureSource::Operand(_) => {}
+                    SignatureSource::Result => self.parsed.result_types[0] = vec![ty],
+                }
                 self.signature_regions = regions.to_vec();
                 self.entry_args = args;
                 Ok(())

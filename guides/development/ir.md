@@ -188,9 +188,10 @@ where
   `region(..)`/`regions(..)`, and
   `successor(..)`/`successors(..)` write the other entities.
   `keyword(a)` writes the attribute `a` as a bare identifier through the
-  `asm_format::KeywordCodec` of its kind, as `tribute_cps` writes
-  `convention(cps)`.
-  `signature(t, body)` writes the `Attr<TypeOf<S>>` attribute `t` as
+  `asm_format::KeywordCodec` of its kind, as `tribute_control.handler`
+  writes its kind `op`.
+  `signature(t, body)` writes the type of `t`, an `Attr<TypeOf<S>>`
+  attribute, a fixed `Value<S>` operand, or a `Value<S>` result, as
   `(%a: A) -> R`, through the `asm_format::SignatureCodec` of `S`'s bound,
   with the inputs as the entry block arguments of `body`, which then elides
   its entry block, as `func.func` does. `args(r)` writes the entry block

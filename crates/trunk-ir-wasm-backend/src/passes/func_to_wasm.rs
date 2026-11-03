@@ -975,7 +975,7 @@ mod tests {
     func.return
   }
   func.func @caller(%value: core.i32) -> core.nil {
-    %table_index = func.constant @target : core.i32
+    %table_index = "func.constant"() {value = @target} : core.i32
     func.tail_call_indirect %table_index(%value) : (core.i32) -> core.nil
   }
 }"#,

@@ -468,9 +468,12 @@ literal은 문자열 literal로 쓴다.
   않는다. 다른 원소가 쓰는 attribute는 자동으로 제외하며, parser는 그런 key를
   dictionary에서 만나면 거부한다.
 - **`signature(t, regions..)`** — 함수 형태 `(%a: A, %b: B) -> R`을 쓴다. `t`는
-  필수 `Attr<TypeOf<S>>` attribute나 `Value<S>` result이고, `S`는 bound를
-  하나만 가지며 그 bound가 signature codec을 구현해야 한다. 나머지 인자는 이 signature의 매개변수를 entry block
-  argument로 받는 region이다. 결과는 [타입 textual form](#타입-textual-form)의
+  필수 `Attr<TypeOf<S>>` attribute, `Value<S>` result, 고정 `Value<S>` operand 중
+  하나이고, `S`는 bound를 하나만 가지며 그 bound가 signature codec을 구현해야
+  한다. Operand는 자기 원소가 따로 쓰고 `signature`는 그 타입만 쓴다. Parser는
+  operand의 타입을 그 정의에서 얻으므로, 읽은 signature로는 result 타입만
+  재구성한다(`func.call_indirect %f(%x) : (A) -> R`). 나머지 인자는 이
+  signature의 매개변수를 entry block argument로 받는 region이다. 결과는 [타입 textual form](#타입-textual-form)의
   함수 형태처럼 쓰되, region을 나열한 형식은 결과도 꼬리 표기도 없으면 화살표를
   쓰지 않는다. 매개변수 이름은 첫 region의 entry block argument 이름이고, 그
   region이 없으면 `%arg0`, `%arg1`, …이다. 형식이 region을 나열하지 않으면 함수
@@ -588,8 +591,10 @@ region의 entry block에 되돌린다. Printer는 `IsolatedFromAbove` operation�
 - 남은 attribute는 `attr_dict`로 region 바로 앞에 쓰고, region이 없으면 끝에
   쓴다. Region이 없는 operation은 `attr_dict_bare`로 `{..}`만 쓸 수 있다.
 - Capture operand 목록은 비어 있어도 `captures [..]`로 쓴다.
-- Convention처럼 keyword로 쓰는 attribute 하나는 `name(keyword)`로 쓴다
-  (`convention(cps)`).
+- Callable 정의의 convention처럼 keyword로 쓰는 attribute 하나는
+  `name(keyword)`로 쓴다(`convention(cps)`). 간접 호출은 MLIR
+  `func.call_indirect`처럼 callee의 signature를 쓰고, convention은 attribute
+  사전에 둔다.
 - 이름 붙은 본문이 여럿이면 `entries { label { .. } .. }`로 쓴다. 본문마다
   signature가 다르면 label 뒤에 그 본문의 signature를 쓴다
   (`label(%x: T) -> R { .. }`). 모든 본문이 같은 signature를 받으면 signature는

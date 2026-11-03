@@ -526,8 +526,8 @@ mod tests {
         tribute_control.return %x
       }
     }
-    %a = tribute_cps.call_indirect %f(%y) convention(direct) : core.i32
-    %b = tribute_cps.call_indirect %g(%a) convention(direct) : core.i32
+    %a = tribute_cps.call_indirect %f(%y) attributes {convention = "direct"} : (core.i32) -> core.i32
+    %b = tribute_cps.call_indirect %g(%a) attributes {convention = "direct"} : (core.i32) -> core.i32
     tribute_control.return %b
   }
   tribute_cps.func @evidence(%y: core.i32) -> core.i32 convention(evidence_direct) {
@@ -536,7 +536,7 @@ mod tests {
         tribute_control.return %x
       }
     }
-    %r = tribute_cps.call_indirect %h(%y) convention(evidence_direct) : core.i32
+    %r = tribute_cps.call_indirect %h(%y) attributes {convention = "evidence_direct"} : (core.i32) -> core.i32
     tribute_control.return %r
   }
 }"#,

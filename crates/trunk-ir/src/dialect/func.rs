@@ -81,8 +81,8 @@ mod func {
     fn r#return(values: Variadic<_>) {}
 
     #[flags(Pure)]
-    #[asm_format(value attr_dict ":" type(result))]
-    fn constant(value: Attr<SymbolRef>) -> Value<_> {}
+    #[asm_format(value attr_dict ":" signature(result))]
+    fn constant<S: FuncSig>(value: Attr<SymbolRef>) -> Value<S> {}
 
     #[implements(CallableExit)]
     #[asm_format(attr_dict_bare)]

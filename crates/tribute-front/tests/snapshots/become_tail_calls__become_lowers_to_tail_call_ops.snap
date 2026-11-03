@@ -57,7 +57,7 @@ core.module @test {
       tribute_control.return %5
   }
   tribute_control.func @"pkg::apply"['a0](%0: !t0, %1: core.i32) -> core.i32 row(| 'a0) {
-      tribute_control.tail_call_indirect %0(%1)
+      tribute_control.tail_call_indirect %0(%1) : (core.i32) -> core.i32 row(| 'a0)
   }
   tribute_control.func @"pkg::countdown"['a0, local 'a1](%0: core.i32) -> core.i32 row(| 'a0) inferred {
       %1 = tribute_control.lambda['a1](%2: core.i32) -> core.i32 row(| 'a1) captures [] {
@@ -75,7 +75,7 @@ core.module @test {
           tribute_control.return %7
       }
       %10 = tribute_control.instantiate %1 {row_args = [{tail = 0}]} : !t0
-      %11 = tribute_control.call_indirect %10(%0) : core.i32
+      %11 = tribute_control.call_indirect %10(%0) : (core.i32) -> core.i32 row(| 'a0)
       tribute_control.return %11
   }
 }

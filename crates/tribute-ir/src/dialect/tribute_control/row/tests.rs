@@ -20,7 +20,7 @@ const MODULE: &str = r#"core.module @test {
     ability.operation {kind = "op", op_name = "put", param_types = [core.i32], result_type = core.i32}
   }
   tribute_control.func @apply['a0](%f: !open, %x: core.i32) -> core.i32 row(| 'a0) {
-    %r = tribute_control.call_indirect %f(%x) : core.i32
+    %r = tribute_control.call_indirect %f(%x) : (core.i32) -> core.i32 row(| 'a0)
     tribute_control.return %r
   }
   tribute_control.func @main(%x: core.i32) -> core.i32 row(@A, @B) {
@@ -507,13 +507,22 @@ const LOCALS: &str = r#"core.module @test {
       tribute_control.return %y
     }
     %s = tribute_control.instantiate %g {row_args = [ARGS]} : RESULT
-    %r = tribute_control.call_indirect %s(%x) : core.i32
+    %r = tribute_control.call_indirect %s(%x) : CALLTY
     tribute_control.return %r
   }
 }"#;
 
 fn locals(args: &str, result: &str) -> String {
-    LOCALS.replace("ARGS", args).replace("RESULT", result)
+    let callee = match result {
+        "!step0" => "(core.i32) -> core.i32 row(| 'a0)",
+        "!step" => "(core.i32) -> core.i32 row(| 'a1)",
+        "!closed" => "(core.i32) -> core.i32 row(@A)",
+        other => panic!("unknown callee type {other}"),
+    };
+    LOCALS
+        .replace("ARGS", args)
+        .replace("RESULT", result)
+        .replace("CALLTY", callee)
 }
 
 #[test]
@@ -589,8 +598,8 @@ fn a_lambda_quantifies_local_binders_it_alone_owns() {
     );
     assert_rejects(
         &locals("{tail = 0}", "!step0").replace(
-            "tribute_control.call_indirect %s(%x)",
-            "tribute_control.call_indirect %g(%x)",
+            "tribute_control.call_indirect %s(%x) : (core.i32) -> core.i32 row(| 'a0)",
+            "tribute_control.call_indirect %g(%x) : (core.i32) -> core.i32 row(| 'a1)",
         ),
         "a lambda that quantifies rows is used only through instantiate",
     );
@@ -600,19 +609,21 @@ fn a_lambda_quantifies_local_binders_it_alone_owns() {
 fn a_lambda_captured_by_another_is_instantiated_in_its_body() {
     let nested = |use_: &str| {
         locals("{tail = 0}", "!step0").replace(
-            "    %s = tribute_control.instantiate %g {row_args = [{tail = 0}]} : !step0\n    %r = tribute_control.call_indirect %s(%x) : core.i32\n",
+            "    %s = tribute_control.instantiate %g {row_args = [{tail = 0}]} : !step0\n    %r = tribute_control.call_indirect %s(%x) : (core.i32) -> core.i32 row(| 'a0)\n",
             &format!(
-                "    %h = tribute_control.lambda(%z: core.i32) -> core.i32 row(| 'a0) captures [%g] {{\n{use_}      tribute_control.return %r\n    }}\n    %r = tribute_control.call_indirect %h(%x) : core.i32\n"
+                "    %h = tribute_control.lambda(%z: core.i32) -> core.i32 row(| 'a0) captures [%g] {{\n{use_}      tribute_control.return %r\n    }}\n    %r = tribute_control.call_indirect %h(%x) : (core.i32) -> core.i32 row(| 'a0)\n"
             ),
         )
     };
     let (ctx, module) = parse(&nested(
-        "      %s = tribute_control.instantiate %g {row_args = [{tail = 0}]} : !step0\n      %r = tribute_control.call_indirect %s(%z) : core.i32\n",
+        "      %s = tribute_control.instantiate %g {row_args = [{tail = 0}]} : !step0\n      %r = tribute_control.call_indirect %s(%z) : (core.i32) -> core.i32 row(| 'a0)\n",
     ));
     let result = validate(&ctx, module);
     assert!(result.is_ok(), "{result}");
     assert_rejects(
-        &nested("      %r = tribute_control.call_indirect %g(%z) : core.i32\n"),
+        &nested(
+            "      %r = tribute_control.call_indirect %g(%z) : (core.i32) -> core.i32 row(| 'a1)\n",
+        ),
         "a lambda that quantifies rows is used only through instantiate",
     );
 }
@@ -623,11 +634,11 @@ const FRONTEND: &str = r#"core.module @test {
   !pure = tribute_control.func_sig<(core.i32) -> core.i32>
   !applied = tribute_control.func_sig<(!pure, core.i32) -> core.i32>
   tribute_control.func @apply['a0](%f: !cb, %x: core.i32) -> core.i32 row(| 'a0) {
-    %r = tribute_control.call_indirect %f(%x) : core.i32
+    %r = tribute_control.call_indirect %f(%x) : (core.i32) -> core.i32 row(| 'a0)
     tribute_control.return %r
   }
   tribute_control.func @forward['a0](%f: !cb, %x: core.i32) -> core.i32 row(| 'a0) {
-    tribute_control.tail_call_indirect %f(%x)
+    tribute_control.tail_call_indirect %f(%x) : (core.i32) -> core.i32 row(| 'a0)
   }
   tribute_control.func @main[local 'a0](%x: core.i32) -> core.i32 inferred {
     %g = tribute_control.lambda(%y: core.i32) -> core.i32 captures [] {
@@ -638,8 +649,8 @@ const FRONTEND: &str = r#"core.module @test {
     }
     %s = tribute_control.instantiate %h {row_args = [{}]} : !pure
     %a = tribute_control.func_ref @apply rows [{}] : !applied
-    %v = tribute_control.call_indirect %s(%x) : core.i32
-    %r = tribute_control.call_indirect %a(%g, %v) : core.i32
+    %v = tribute_control.call_indirect %s(%x) : (core.i32) -> core.i32
+    %r = tribute_control.call_indirect %a(%g, %v) : (!pure, core.i32) -> core.i32
     tribute_control.return %r
   }
 }"#;

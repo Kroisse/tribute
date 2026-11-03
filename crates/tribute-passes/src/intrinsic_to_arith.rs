@@ -536,7 +536,7 @@ mod tests {
                     attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::Nat::+"}
                 func.func @user() -> func.func_sig<(core.i32, core.i32) -> core.i32> {
                 ^bb0:
-                    %f = func.constant @"std::Nat::+" : func.func_sig<(core.i32, core.i32) -> core.i32>
+                    %f = func.constant @"std::Nat::+" : (core.i32, core.i32) -> core.i32
                     func.return %f
                 }
             }

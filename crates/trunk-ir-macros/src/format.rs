@@ -6,7 +6,7 @@
 use proc_macro2::{Delimiter, Span, TokenStream, TokenTree};
 use quote::{quote, quote_spanned};
 
-use crate::parse::{AttrKind, OperationDef, RegionOrSuccessor, ResultDef};
+use crate::parse::{AttrKind, OperationDef, RegionOrSuccessor, ResultDef, TypeExpr, ValueExpr};
 
 /// A format rule broken by the element at `span`.
 struct FormatError {
@@ -57,6 +57,14 @@ enum Entity {
     AttrDict,
 }
 
+/// What a `signature(..)` writes the type of.
+#[derive(Clone, Copy)]
+enum SignatureSource {
+    Attribute(usize),
+    Operand(usize),
+    Result,
+}
+
 enum Element {
     Literal(String),
     Operand(usize),
@@ -80,7 +88,7 @@ enum Element {
     /// `signature(t, regions..)`, with the bound whose codec spells `t`,
     /// and whether its results are the operation's result types.
     Signature {
-        attribute: usize,
+        source: SignatureSource,
         regions: Vec<usize>,
         codec: TokenStream,
         results: bool,
@@ -471,36 +479,64 @@ impl<'a> Format<'a> {
             let name = ident.to_string();
             name.strip_prefix("r#").unwrap_or(&name).to_owned()
         };
-        let attribute = match self.lookup(&name(ty)) {
-            Some(Entity::Attribute(i)) => i,
-            _ => {
-                return err(
-                    ty.span(),
-                    "`signature(..)` writes an `Attr<TypeOf<S>>` attribute first",
-                );
-            }
+        let codec_of = |var: usize| match &self.op.type_vars[var].bounds[..] {
+            [bound] => Ok(quote!(#bound)),
+            _ => err(
+                ty.span(),
+                "the signature's type variable has one bound, whose `SignatureCodec` spells it",
+            ),
         };
-        let attr = &self.op.attrs[attribute];
-        let codec = match (&attr.kind, attr.binds) {
-            (crate::parse::AttrKind::BoundType, Some(var)) if !attr.list && !attr.optional => {
-                match &self.op.type_vars[var].bounds[..] {
-                    [bound] => quote!(#bound),
+        let (source, codec) = match self.lookup(&name(ty)) {
+            Some(Entity::Attribute(attribute)) => {
+                let attr = &self.op.attrs[attribute];
+                match (&attr.kind, attr.binds) {
+                    (crate::parse::AttrKind::BoundType, Some(var))
+                        if !attr.list && !attr.optional =>
+                    {
+                        self.write(Entity::Attribute(attribute), ty.span())?;
+                        (SignatureSource::Attribute(attribute), codec_of(var)?)
+                    }
                     _ => {
                         return err(
                             ty.span(),
-                            "the signature's type variable has one bound, whose `SignatureCodec` spells it",
+                            "`signature(..)` writes a required `Attr<TypeOf<S>>` attribute",
                         );
                     }
                 }
             }
+            // The operand itself is written by its own element.
+            Some(Entity::Operand(operand)) => match &self.op.operands[operand] {
+                crate::parse::Operand {
+                    variadic: false,
+                    constraint: ValueExpr::Each(TypeExpr::Var(var)),
+                    ..
+                } => (SignatureSource::Operand(operand), codec_of(*var)?),
+                _ => {
+                    return err(
+                        ty.span(),
+                        "`signature(..)` writes the type of a fixed `Value<S>` operand",
+                    );
+                }
+            },
+            Some(Entity::Results) => match (&self.op.results, &self.op.result_constraint) {
+                (ResultDef::Single(_), ValueExpr::Each(TypeExpr::Var(var))) => {
+                    self.write(Entity::Results, ty.span())?;
+                    (SignatureSource::Result, codec_of(*var)?)
+                }
+                _ => {
+                    return err(
+                        ty.span(),
+                        "`signature(..)` writes the type of a single `Value<S>` result",
+                    );
+                }
+            },
             _ => {
                 return err(
                     ty.span(),
-                    "`signature(..)` writes a required `Attr<TypeOf<S>>` attribute",
+                    "`signature(..)` writes an `Attr<TypeOf<S>>` attribute, a `Value<S>` operand, or a `Value<S>` result first",
                 );
             }
         };
-        self.write(Entity::Attribute(attribute), ty.span())?;
         if !regions.is_empty() {
             if self.entry_args {
                 return err(
@@ -523,13 +559,14 @@ impl<'a> Format<'a> {
             }
             listed.push(i);
         }
-        // The signature's results are the operation's result types.
-        let results = self.result_name().is_some();
+        // The signature's results are the operation's result types, unless
+        // the signature is that result's own type.
+        let results = !matches!(source, SignatureSource::Result) && self.result_name().is_some();
         if results {
             self.write(Entity::Results, ty.span())?;
         }
         Ok(Element::Signature {
-            attribute,
+            source,
             regions: listed,
             codec,
             results,
@@ -836,16 +873,23 @@ fn gen_elements(
             Element::Region(i) => quote!(#fmt::FormatElement::Region(#i)),
             Element::Successor(i) => quote!(#fmt::FormatElement::Successor(#i)),
             Element::Signature {
-                attribute,
+                source,
                 regions,
                 codec,
                 results,
-            } => quote!(#fmt::FormatElement::Signature {
-                attribute: #attribute,
+            } => {
+                let source = match *source {
+                    SignatureSource::Attribute(i) => quote!(#fmt::SignatureSource::Attribute(#i)),
+                    SignatureSource::Operand(i) => quote!(#fmt::SignatureSource::Operand(#i)),
+                    SignatureSource::Result => quote!(#fmt::SignatureSource::Result),
+                };
+                quote!(#fmt::FormatElement::Signature {
+                source: #source,
                 regions: &[#(#regions),*],
                 codec: #crate_path::asm_format::SignatureCodecHooks::of::<#codec>(),
                 results: #results,
-            }),
+            })
+            }
             Element::Optional { anchor, elements } => {
                 let anchor = match *anchor {
                     Anchor::Attribute(i) => quote!(#fmt::FormatAnchor::Attribute(#i)),

@@ -24,7 +24,7 @@ fn calls(callback: &str, own: &str, lambda: &str, callee: &str) -> String {
   !cb = tribute_control.func_sig<(core.i32) -> core.i32 row(| 'a0)>
 {CTL}
   tribute_cps.func @"app$9D"['a0](%x: core.i32, %f: !cb) -> core.i32 row(| 'a0) convention({own}) {{
-    %r = tribute_cps.call_indirect %f(%x) convention({callback}) : core.i32
+    %r = tribute_cps.call_indirect %f(%x) attributes {{convention = "{callback}"}} : (core.i32) -> core.i32 row(| 'a0)
     tribute_control.return %r
   }}
   tribute_cps.func @main(%x: core.i32) -> core.i32 convention(direct) {{
@@ -77,7 +77,7 @@ fn an_instance_of_an_upper_bound_has_a_body_per_class_up_to_it() {
     %f = tribute_cps.lambda(%y: core.i32) -> core.i32 row(| 'a0) captures [] entries {{
 {bodies}
     }}
-    %r = tribute_cps.call_indirect %f(%x) convention(evidence_direct) : core.i32
+    %r = tribute_cps.call_indirect %f(%x) attributes {{convention = "evidence_direct"}} : (core.i32) -> core.i32 row(| 'a0)
     tribute_control.return %r
   }}
 }}"#
@@ -124,13 +124,13 @@ CTL
       direct {
         %s = tribute_control.instantiate %g {row_args = [{tail = 1}]} : !l1
         %c = arith.const {value = 1} : core.i32
-        %v = tribute_cps.call_indirect %s(%c) convention(direct) : core.i32
+        %v = tribute_cps.call_indirect %s(%c) attributes {convention = "direct"} : (core.i32) -> core.i32 row(| 'a1)
         tribute_control.return %v
       }
     }
     %a = tribute_control.instantiate %g {row_args = [{}]} : !l0
     %i = tribute_control.instantiate %h {row_args = [{}]} : !h0
-    %r = tribute_cps.call_indirect %i() convention(direct) : core.i32
+    %r = tribute_cps.call_indirect %i() attributes {convention = "direct"} : () -> core.i32
     USE
     tribute_control.return %r
   }

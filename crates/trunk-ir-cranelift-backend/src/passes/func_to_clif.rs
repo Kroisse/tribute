@@ -769,7 +769,7 @@ mod tests {
     func.return %value
   }
   func.func @caller() -> core.i32 {
-    %callee = func.constant @target : func.func_sig<() -> core.i32>
+    %callee = func.constant @target : () -> core.i32
     %value = func.call_indirect %callee() : () -> core.i32
     func.return %value
   }
@@ -975,7 +975,7 @@ mod tests {
     func.return
   }}
   func.func @take() {{
-    %reference = func.constant @target : {reference}
+    %reference = "func.constant"() {{value = @target}} : {reference}
     func.return
   }}
 }}"#
@@ -1002,7 +1002,7 @@ mod tests {
       func.return
     }
     func.func @take() {
-      %reference = func.constant @helper : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
+      %reference = func.constant @helper : (core.i32) -> (), {call_conv = "tail"}
       func.return
     }
   }
@@ -1029,7 +1029,7 @@ mod tests {
         let unknown = lower(
             r#"core.module @test {
   func.func @take() {
-    %reference = func.constant @missing : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
+    %reference = func.constant @missing : (core.i32) -> (), {call_conv = "tail"}
     func.return
   }
 }"#,
@@ -1046,7 +1046,7 @@ mod tests {
       func.return
     }
     func.func @take() {
-      %reference = func.constant @left::@helper : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
+      %reference = func.constant @left::@helper : (core.i32) -> (), {call_conv = "tail"}
       func.return
     }
   }
@@ -1060,7 +1060,7 @@ mod tests {
     func.return
   }
   func.func @take() {
-    %reference = func.constant @target : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
+    %reference = func.constant @target : (core.i32) -> (), {call_conv = "tail"}
     func.return
   }
 }"#,

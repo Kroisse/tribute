@@ -2149,8 +2149,8 @@ mod tests {
             func.func @caller(%ev: !Evidence) attributes {tribute.calling_convention = "evidence_direct"} {
                 func.call {callee = @direct, tribute.calling_convention = "direct"}
                 func.call %ev {callee = @evidence, tribute.calling_convention = "evidence_direct"}
-                %direct = func.constant @direct : func.func_sig<() -> ()>
-                %evidence = func.constant @evidence : func.func_sig<(!Evidence) -> ()>
+                %direct = func.constant @direct : () -> ()
+                %evidence = func.constant @evidence : (!Evidence) -> ()
                 func.call_indirect %direct() attributes {tribute.calling_convention = "direct"} : () -> ()
                 func.call_indirect %evidence(%ev) attributes {tribute.calling_convention = "evidence_direct"} : (!Evidence) -> ()
                 %nil = func.call {callee = @unit, tribute.calling_convention = "direct"} : core.nil
@@ -2854,7 +2854,7 @@ mod tests {
     func.unreachable
   }
   func.func @holder() -> core.i32 {
-    %defined = func.constant @defined : func.func_sig<(core.i32, core.i32) -> core.never>
+    %defined = func.constant @defined : (core.i32, core.i32) -> core.never
     func.unreachable
   }
 }"#,
@@ -2865,7 +2865,7 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         assert!(
             printed.contains("func.func @defined(%0: core.i32 {tribute.ownership = \"consumed\"}, %1: !Env {tribute.ownership = \"consumed\"}, %2: core.i32 {tribute.ownership = \"consumed\"}) -> (), {call_conv = \"tail\"}")
-                && printed.contains("func.constant @defined : func.func_sig<(core.i32 {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}) -> (), {call_conv = \"tail\"}>"),
+                && printed.contains("func.constant @defined : (core.i32 {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}) -> (), {call_conv = \"tail\"}"),
             "{printed}"
         );
     }
@@ -2881,7 +2881,7 @@ mod tests {
     func.unreachable
   }
   func.func @holder() -> core.i32 {
-    %one = func.constant @generated_one : func.func_sig<(core.i32) -> core.never>
+    %one = func.constant @generated_one : (core.i32) -> core.never
     func.unreachable
   }
 }"#,
@@ -2901,7 +2901,7 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         assert!(
             printed.contains(
-                ": func.func_sig<(core.i32 {tribute.ownership = \"consumed\"}) -> (), {call_conv = \"tail\"}>"
+                "func.constant @generated_one : (core.i32 {tribute.ownership = \"consumed\"}) -> (), {call_conv = \"tail\"}"
             ),
             "{printed}"
         );
@@ -2981,7 +2981,7 @@ mod tests {
   !Env = closure.closure<func.func_sig<(core.i32, core.i32) -> core.never>>
   {function}
   func.func @holder() -> core.i32 {{
-    %function = func.constant @external : func.func_sig<(core.i32, core.i32) -> core.never>
+    %function = func.constant @external : (core.i32, core.i32) -> core.never
     func.unreachable
   }}
 }}"#
@@ -3006,7 +3006,7 @@ mod tests {
     func.unreachable
   }
   func.func @holder() -> core.i32 {
-    %function = func.constant @external : func.func_sig<(!Env2) -> core.never>
+    %function = func.constant @external : (!Env2) -> core.never
     func.unreachable
   }
 }"#,
@@ -3070,7 +3070,7 @@ mod tests {
             r#"core.module @test {
   func.func @external(%value: core.i32) -> core.i32
   func.func @holder() -> core.i32 {
-    %function = func.constant @external : func.func_sig<(core.i32) -> core.i32>
+    %function = func.constant @external : (core.i32) -> core.i32
     func.unreachable
   }
 }"#,
@@ -3087,7 +3087,7 @@ mod tests {
             r#"core.module @test {
   func.func @external(%value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"}
   func.func @holder() -> core.i32 {
-    %function = func.constant @external : func.func_sig<(core.i1) -> core.never>
+    %function = func.constant @external : (core.i1) -> core.never
     func.unreachable
   }
 }"#,

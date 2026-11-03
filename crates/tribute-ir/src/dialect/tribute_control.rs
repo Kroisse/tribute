@@ -400,7 +400,7 @@ mod tribute_control {
     /// An indirect call. Its result is a callable origin when its callee is.
     ///
     /// ```text
-    /// %result = tribute_control.call_indirect %callee(%arg0, ...) : Result
+    /// %result = tribute_control.call_indirect %callee(%arg0, ...) : (Arg0, ...) -> Result
     /// ```
     ///
     /// - **Shape:** a `tribute_control.func_sig` callee, the source
@@ -422,7 +422,7 @@ mod tribute_control {
     /// - **Location:** the source indirect-call span, including the callee
     ///   and the arguments.
     #[verify]
-    #[asm_format(callee "(" args ")" attr_dict ":" type(result))]
+    #[asm_format(callee "(" args ")" attr_dict ":" signature(callee))]
     #[flags(SourceCallIndirect)]
     #[implements(CallableResultOrigin)]
     fn call_indirect<S: FuncSig>(
@@ -485,7 +485,7 @@ mod tribute_control {
     /// A proper tail call of a callable value, from source `become`.
     ///
     /// ```text
-    /// tribute_control.tail_call_indirect %callee(%arg0, ...)
+    /// tribute_control.tail_call_indirect %callee(%arg0, ...) : (Arg0, ...) -> Result
     /// ```
     ///
     /// - **Shape:** a `tribute_control.func_sig` callee, the source
@@ -506,7 +506,7 @@ mod tribute_control {
     /// - **Location:** the source span including the `become` keyword and
     ///   the indirect call.
     #[verify]
-    #[asm_format(callee "(" args ")" attr_dict)]
+    #[asm_format(callee "(" args ")" attr_dict ":" signature(callee))]
     #[flags(SourceTailCallIndirect)]
     #[implements(CallableExit, LocalValidation)]
     fn tail_call_indirect<S: FuncSig>(
