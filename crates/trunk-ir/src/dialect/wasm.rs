@@ -131,7 +131,7 @@ mod wasm {
 
     fn table(reftype: Attr<String>, min: Attr<u32>, max: Option<Attr<u32>>) {}
 
-    fn elem(table: Option<Attr<u32>>, offset: Option<Attr<u32>>) {
+    fn elem(#[default(0)] table: Attr<u32>, #[default(0)] offset: Attr<u32>) {
         #[region(funcs)]
         {}
     }

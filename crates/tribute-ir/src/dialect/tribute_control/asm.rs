@@ -47,7 +47,7 @@ impl BinderHeader {
                 && results.insert(union.result)
         });
         let inferred = match ctx.op_attrs(op).get(INFERRED_ROW_ATTR) {
-            None => false,
+            None | Some(Attribute::Bool(false)) => false,
             Some(Attribute::Bool(true)) => true,
             Some(_) => return None,
         };
