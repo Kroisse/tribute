@@ -20,7 +20,7 @@ use trunk_ir::rewrite::Module;
 use trunk_ir::walk::{WalkAction, walk_region};
 
 use crate::convention_classes::{
-    Class, Function, Locals, Reader, class_suffix, func_tables, instantiation, requirements,
+    Class, Function, Reader, class_suffix, func_tables, instantiation, requirements,
     settle_class_variables, split_name,
 };
 
@@ -145,12 +145,10 @@ impl<'a> Instance<'a> {
                 None => vec![Class::CPS; variables.len()],
             }
         };
-        let mut reader = Reader {
-            binders: function.binders.clone(),
+        let mut reader = function.reader(
             requirements,
-            params: variables.iter().copied().zip(claimed).collect(),
-            locals: Locals::default(),
-        };
+            variables.iter().copied().zip(claimed).collect(),
+        );
         if let Some(body) = ctx.op_region(function.op, 0) {
             reader.settle_locals(ctx, body);
         }

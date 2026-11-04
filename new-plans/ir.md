@@ -1126,7 +1126,10 @@ binder가 없다. `ability_arg`는 ability instance의 symbol이 그 인자를 �
 값이 람다가 아닌 binding은 한 번 계산되므로 그 지역 scheme의 변수를 인스턴스화하는
 사용이 없고, 그 변수는 `body`다. Binder 종류는 row의 구조만 기록하며 실행 전략을 담지
 않는다. CPS 전략의 class 특수화는 tail의 class를 binder 종류에 따라 읽는다. `param`은
-그 인스턴스가 고정한 class, `ability_arg`와 `body`는 `Cps`다. `local`의 class는 그것을
+그 인스턴스가 고정한 class, `ability_arg`는 `Cps`다. `body`는 정의 안의 어느 callable
+type의 매개변수 타입에도 나타나지 않으면 요구 없음이고, 나타나면 `Cps`다
+([tail 규칙](cps-effects.md#row와-호출-규약)). 이 판정은 binder마다 정의 전체에서 한
+번 하므로 그 binder를 읽는 모든 자리가 같은 class를 읽는다. `local`의 class는 그것을
 소유한 람다의 본문마다 다르며, [convention entry](#convention-entry)의 class 읽기가
 정한다.
 
@@ -1168,8 +1171,12 @@ binder를 공유하며, entry마다 그 binder에 class를 하나씩 고정한�
 지역 scheme이 양화한 변수는 `body`다. 람다가 아닌 binding의 사용은 `instantiate`를
 거치지 않으므로, 타입 검사가 사용마다 그 scheme을 새로 인스턴스화하더라도 IR의 값
 type에는 그 `body` binder가 그대로 남는다. 그래서 별칭이나 일반화된 계산 결과를 통한
-간접 이전은 그 자리를 `Cps`로 읽고, 별칭 자리의 인스턴스화도 `Cps`를 고르므로 값은
-그 entry를 가진다. 그런 값의 매개변수 row tail이 그 `body` binder이면, 그 row는 타입
+간접 이전과 별칭 자리의 인스턴스화는 그 binder를 같은
+[tail 규칙](cps-effects.md#row와-호출-규약)으로 읽어 같은 class를 고르며, 값은 그
+entry를 가진다. 그 binder가 정의 안의 어느 매개변수 타입에도 나타나지 않으면 둘 다
+요구 없음으로 읽는다. 값은 binder를 추상 변수로 두고 만들어졌고, binder가 정체를 잃는
+매개변수 자리가 없으므로 그 binder를 통해 어떤 operation에도 닿지 못한다. 나타나면
+둘 다 `Cps`로 읽는다. 그런 값의 매개변수 row tail이 그 `body` binder이면, 그 row는 타입
 검사가 고른 row와 달라진다. 그 자리에 넘기는 람다는 매개변수의 callable type으로 만들고, 함수
 참조는 그 type의 `tribute_control.func_ref`로 다시 만든다. Conversion cast는 callable의
 ABI를 바꿀 수 없기 때문이다.
@@ -1319,8 +1326,8 @@ convention entry들이 adapter 하나를 공유하게 할 수 있다.
 trap하는 함수이며, target은 signature가 같은 trap entry들이 하나를 공유하게 한다.
 Trap entry는 실행되지 않는다. 값이 놓이는 자리의 class는 그 값의 실제 class보다
 약하지 않고, 값은 실제 class부터 자기가 읽힌 상한까지의 본문을 모두 갖기 때문이다.
-Class는 row의 tail에서 계산하고, 값이 tail의 정체를 잃는 자리(람다의 별칭, class 없는
-tail)는 `Cps`로만 읽는다. Class 특수화는 확인할 수 있는 것을 확인한다. 모든 간접
+Class는 row의 tail에서 계산하고, 값이 tail의 정체를 잃을 수 있는 자리(`ability_arg`
+tail, 매개변수 타입에 나타나는 `body` tail)는 `Cps`로만 읽는다. Class 특수화는 확인할 수 있는 것을 확인한다. 모든 간접
 이전의 convention은 그 이전을 담은 인스턴스와 본문의 class 읽기로 callee type을 읽은
 class(상한이면 상한)와 같아야 하며, 다르면 컴파일 오류다. Trap entry는 값의 흐름을 따라가야만 드러나는
 위반을 실행 중에 멈추게 하는 안전망이다.

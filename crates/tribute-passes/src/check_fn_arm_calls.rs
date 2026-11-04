@@ -26,8 +26,7 @@ use trunk_ir::types::Location;
 use trunk_ir::walk::{WalkAction, walk_region};
 
 use crate::convention_classes::{
-    Class, Function, Locals, Reader, func_tables, reference_callee, requirements,
-    settle_class_variables,
+    Class, Function, Reader, func_tables, reference_callee, requirements, settle_class_variables,
 };
 use crate::unreferenced_source_functions::source_dce_config;
 
@@ -177,12 +176,10 @@ impl<'a> Instance<'a> {
                 .clone()
                 .unwrap_or_else(|| vec![Class::CPS; variables.len()])
         };
-        let mut reader = Reader {
-            binders: function.binders.clone(),
+        let mut reader = function.reader(
             requirements,
-            params: variables.iter().copied().zip(claimed).collect(),
-            locals: Locals::default(),
-        };
+            variables.iter().copied().zip(claimed).collect(),
+        );
         if let Some(body) = ctx.op_region(function.op, 0) {
             reader.settle_locals(ctx, body);
         }

@@ -805,7 +805,7 @@ fn main() -> Nil {}
 }
 
 #[salsa_test]
-fn returned_callback_keeps_its_cps_convention_after_pure_let(db: &salsa::DatabaseImpl) {
+fn returned_callback_through_a_body_tail_is_direct_after_pure_let(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
         "returned_callback_preserves_cps_convention_after_pure_let.trb",
@@ -831,22 +831,23 @@ fn main() -> Nil {
         main.contains("convention(direct)"),
         "main keeps the convention of its row around the returned callback call:\n{ir}"
     );
-    // The lambda's row is a body binder of `main` that its closed row does not
-    // fix, so its class stays `Cps` while `main` itself is `Direct`.
+    // The lambda's row is a body binder of `main` that occurs in no parameter
+    // type, so it requires nothing: the lambda and the call through `f` are
+    // both `Direct`.
     let main_body = logical_function(&ir, "main");
     let lambda = lambda_headers(main_body)
         .into_iter()
         .find(|line| line.contains("tribute_cps.lambda("))
         .expect("IR must contain the callback lambda");
     assert!(
-        lambda.ends_with(" cps {"),
-        "the callback lambda must retain its CPS convention:\n{ir}"
+        lambda.ends_with(" direct {"),
+        "the callback lambda must have a direct body:\n{ir}"
     );
     assert!(
-        main_body
-            .lines()
-            .any(|line| line.contains("tribute_cps.call_indirect")),
-        "the returned callback must use an indirect call:\n{ir}"
+        main_body.lines().any(|line| {
+            line.contains("tribute_cps.call_indirect") && line.contains("convention = \"direct\"")
+        }),
+        "the returned callback must use a direct indirect call:\n{ir}"
     );
 }
 

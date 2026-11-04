@@ -38,7 +38,7 @@ use trunk_ir::types::Attribute;
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::convention_classes::{
-    Class, Function, Locals, Reader, TABLE_SUFFIX, class_suffix, instantiation, requirements,
+    Class, Function, Reader, TABLE_SUFFIX, class_suffix, instantiation, requirements,
     settle_class_variables,
 };
 
@@ -118,16 +118,14 @@ pub fn specialize(ctx: &mut IrContext, module: Module) -> Result<(), ClassSpecia
             function,
             positions: &positions,
             by_name: &by_name,
-            reader: Reader {
-                binders: function.binders.clone(),
-                requirements: &requirements,
-                params: variables(&function.name)
+            reader: function.reader(
+                &requirements,
+                variables(&function.name)
                     .iter()
                     .copied()
                     .zip(classes)
                     .collect(),
-                locals: Locals::default(),
-            },
+            ),
         };
         let selected = instance.rewrite(ctx, op, &mut tables);
         instances.push((op, instance.own_class(ctx, op).bound()));
@@ -618,12 +616,7 @@ impl Instance<'_> {
             .zip(classes.iter().copied())
             .collect();
         let row = definition.own_row(ctx, definition.op, |tail| params.contains_key(&tail));
-        let reader = Reader {
-            binders: definition.binders.clone(),
-            requirements: self.reader.requirements,
-            params,
-            locals: Locals::default(),
-        };
+        let reader = definition.reader(self.reader.requirements, params);
         let tail = row
             .tail
             .and_then(|tail| positions.iter().position(|&position| position == tail));
