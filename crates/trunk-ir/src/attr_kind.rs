@@ -2,15 +2,22 @@
 //!
 //! `Attr<K>` in a `#[dialect]` declaration names a Rust type `K` implementing
 //! [`AttrKind`]. The kind defines the schema domain of the attribute, the
-//! value its accessor returns, and the value its builder setter takes; the
-//! macro emits `<K as AttrKind>` without interpreting `K`.
+//! value its accessor returns, the value its builder setter takes, and how a
+//! declarative assembly format spells its values; the macro emits
+//! `<K as AttrKind>` without interpreting `K`.
 
+use std::fmt;
 use std::marker::PhantomData;
+
+use winnow::{ModalResult, Parser};
 
 use smallvec::SmallVec;
 
+use crate::asm_format::expected;
 use crate::context::IrContext;
 use crate::op_schema::AttributeKind;
+use crate::parser::raw::{RawAttribute, raw_attr_value};
+use crate::printer::OpPrintHelper;
 use crate::refs::TypeRef;
 use crate::symbol::SymbolPath;
 use crate::types::{Attribute, AttributeIter, AttributeKey, AttributeMap, StringArg, StringRef};
@@ -40,6 +47,21 @@ pub trait AttrKind {
     fn accepts(ctx: &IrContext, attr: &Attribute) -> bool {
         let _ = ctx;
         Self::KIND.accepts(attr)
+    }
+
+    /// Write `attr`, a value `accepts` admits, as a declarative assembly
+    /// format spells it: by default in generic attribute syntax. A keyword
+    /// kind writes its keyword (`new-plans/ir.md`, "선언적 어셈블리 형식").
+    fn print_text(h: &mut OpPrintHelper<'_, '_>, attr: &Attribute) -> fmt::Result {
+        h.write_attribute(attr)
+    }
+
+    /// Read a value as [`Self::print_text`] writes it, as an unverified
+    /// attribute that the schema checks later.
+    fn parse_text<'a>(input: &mut &'a str) -> ModalResult<RawAttribute<'a>> {
+        raw_attr_value
+            .parse_next(input)
+            .map_err(|e| e.map(|_| expected("attribute value")))
     }
 
     /// Whether two values read from attributes are the same value, which
@@ -230,6 +252,16 @@ impl AttrKind for SymbolRef {
 
     fn write(_: &mut IrContext, value: SymbolPath) -> Attribute {
         Attribute::SymbolRef(value)
+    }
+
+    /// Only `@` begins a symbol reference, so another value is not read as one.
+    fn parse_text<'a>(input: &mut &'a str) -> ModalResult<RawAttribute<'a>> {
+        if !input.starts_with('@') {
+            return Err(winnow::error::ErrMode::Backtrack(expected("`@name`")));
+        }
+        raw_attr_value
+            .parse_next(input)
+            .map_err(|e| e.map(|_| expected("attribute value")))
     }
 }
 

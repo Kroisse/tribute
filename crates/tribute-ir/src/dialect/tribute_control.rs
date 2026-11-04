@@ -151,19 +151,24 @@ impl trunk_ir::attr_kind::AttrKind for OperationKind {
     fn write(ctx: &mut IrContext, value: OperationKind) -> Attribute {
         ctx.string_attr(value.keyword())
     }
-}
 
-/// A kind is written as its keyword, `op` or `fn`.
-impl trunk_ir::asm_format::KeywordCodec for OperationKind {
-    fn keyword<'a>(ctx: &'a IrContext, attr: &'a Attribute) -> Option<&'a str> {
-        Self::from_attribute(ctx, attr).map(Self::keyword)
+    /// A kind is written as its keyword, `op` or `fn`.
+    fn print_text(
+        h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>,
+        attr: &Attribute,
+    ) -> fmt::Result {
+        fmt::Write::write_str(h, Self::read(h.ctx(), attr).keyword())
     }
 
-    fn attribute(word: &str) -> Option<trunk_ir::parser::raw::RawAttribute<'static>> {
-        let kind = Self::from_keyword(word)?;
-        Some(trunk_ir::parser::raw::RawAttribute::String(
-            kind.keyword().to_owned(),
-        ))
+    fn parse_text<'a>(
+        input: &mut &'a str,
+    ) -> winnow::ModalResult<trunk_ir::parser::raw::RawAttribute<'a>> {
+        trunk_ir::asm_format::parse_keyword(input, |word| {
+            let kind = Self::from_keyword(word)?;
+            Some(trunk_ir::parser::raw::RawAttribute::String(
+                kind.keyword().to_owned(),
+            ))
+        })
     }
 }
 
@@ -597,7 +602,7 @@ mod tribute_control {
     ///   including the qualified callee and all arguments where possible.
     #[verify]
     #[implements(OperationDeclarationUse, CallableResultOrigin)]
-    #[asm_format(keyword(operation_kind) ability symbol(op_name) "(" args ")" attr_dict ":" functional_type(args, result))]
+    #[asm_format(operation_kind ability symbol(op_name) "(" args ")" attr_dict ":" functional_type(args, result))]
     fn perform(
         ability: Attr<SymbolRef>,
         op_name: Attr<String>,
@@ -735,7 +740,7 @@ mod tribute_control {
     ///   arm or an `op -> Never` arm has no continuation capability.
     /// - **Location:** the source handler arm, including the operation
     ///   header.
-    #[asm_format(keyword(kind) ability symbol(op_name) args(body) ":" operation_result_type attr_dict region(body))]
+    #[asm_format(kind ability symbol(op_name) args(body) ":" operation_result_type attr_dict region(body))]
     #[implements(OperationDeclarationUse, CallableArgumentOrigin, LocalValidation)]
     fn handler(
         ability: Attr<SymbolRef>,

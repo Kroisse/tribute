@@ -14,15 +14,15 @@ use winnow::error::{ContextError, ErrMode, StrContext, StrContextValue};
 use winnow::prelude::*;
 
 use crate::asm_format::{
-    CustomEntity, KeywordCodecHooks, OpAsmDirectiveHooks, RawCustomEntity, SignatureCodecHooks,
-    SignatureParts, parse_signature_results, write_signature_param, write_signature_results,
+    CustomEntity, OpAsmDirectiveHooks, RawCustomEntity, SignatureCodecHooks, SignatureParts,
+    expected, parse_signature_results, write_signature_param, write_signature_results,
 };
 use crate::op_def::OpDef;
 use crate::op_flag::IsolatedFromAbove;
-use crate::op_schema::{Arity, AttributeKind, OpSchema, ResultSchema};
+use crate::op_schema::{Arity, OpSchema, ResultSchema};
 use crate::parser::raw::{
     RawAttribute, RawOperation, RawParam, RawRegion, RawType, block_label, ident, raw_attr_dict,
-    raw_attr_value, raw_param, raw_param_list, raw_region, raw_type, symbol_ref, value_ref, ws,
+    raw_param, raw_param_list, raw_region, raw_type, symbol_ref, value_ref, ws,
 };
 use crate::printer::OpPrintHelper;
 use crate::types::Attribute;
@@ -42,15 +42,11 @@ pub enum FormatElement {
     Literal(&'static str),
     /// An operand: `%name`, or a comma-separated list for a variadic one.
     Operand(usize),
-    /// An attribute in generic attribute syntax.
+    /// An attribute: the keyword its kind's codec spells, if the kind has
+    /// one, or generic attribute syntax.
     Attribute(usize),
     /// A string attribute written as a definition name, `@name`.
     Symbol(usize),
-    /// An attribute written as the bare keyword its kind's codec spells.
-    Keyword {
-        attribute: usize,
-        codec: KeywordCodecHooks,
-    },
     /// The type of one fixed result.
     ResultType(usize),
     /// The comma-separated types of every result, for a variadic or optional
@@ -368,14 +364,12 @@ impl Printer<'_, '_, '_> {
                 Ok(())
             }
             FormatElement::Attribute(index) => {
-                let name = self.schema.attributes[index].name;
-                match ctx.op_attrs(op).get(name) {
-                    Some(value) => {
-                        self.token('a')?;
-                        self.h.write_attribute(value)
-                    }
-                    None => Ok(()),
-                }
+                let attribute = &self.schema.attributes[index];
+                let Some(value) = ctx.op_attrs(op).get(attribute.name) else {
+                    return Ok(());
+                };
+                self.token('a')?;
+                (attribute.print_text)(self.h, value)
             }
             FormatElement::Symbol(index) => {
                 let name = self.schema.attributes[index].name;
@@ -385,15 +379,6 @@ impl Printer<'_, '_, '_> {
                     .expect("a printable symbol attribute is a string");
                 self.token('@')?;
                 self.h.write_symbol_text(text)
-            }
-            FormatElement::Keyword { attribute, codec } => {
-                let value = ctx
-                    .op_attrs(op)
-                    .get(self.schema.attributes[attribute].name)
-                    .expect("a printable keyword attribute is present");
-                let keyword = (codec.keyword)(ctx, value).expect("a printable keyword decodes");
-                self.token('k')?;
-                self.h.write_str(keyword)
             }
             FormatElement::ResultType(index) => {
                 let ty = ctx.op_result_types(op)[index];
@@ -646,9 +631,6 @@ fn written_attributes(schema: &OpSchema, format: &OpFormat) -> Vec<&'static str>
             match *element {
                 FormatElement::Attribute(index)
                 | FormatElement::Symbol(index)
-                | FormatElement::Keyword {
-                    attribute: index, ..
-                }
                 | FormatElement::Signature {
                     source: SignatureSource::Attribute(index),
                     ..
@@ -738,11 +720,6 @@ fn printable(ctx: &IrContext, op: OpRef, schema: &OpSchema, format: &OpFormat) -
         }
         FormatElement::Custom { hooks, entities } => {
             written_ok &= (hooks.fits)(ctx, &custom_entities(ctx, op, schema, entities));
-        }
-        FormatElement::Keyword { attribute, codec } => {
-            written_ok &= attrs
-                .get(schema.attributes[attribute].name)
-                .is_some_and(|value| (codec.keyword)(ctx, value).is_some());
         }
         FormatElement::Signature {
             source,
@@ -899,14 +876,6 @@ pub(crate) fn parse<'a>(
     })
 }
 
-fn expected(description: &'static str) -> ContextError {
-    let mut error = ContextError::new();
-    error.push(StrContext::Expected(StrContextValue::Description(
-        description,
-    )));
-    error
-}
-
 struct FormatParser<'a> {
     schema: &'static OpSchema,
     format: &'static OpFormat,
@@ -951,15 +920,7 @@ impl<'a> FormatParser<'a> {
                 Ok(())
             }
             FormatElement::Attribute(index) => {
-                // Only `@` begins a symbol reference.
-                if self.schema.attributes[index].kind == AttributeKind::SymbolRef
-                    && !input.starts_with('@')
-                {
-                    return Err(ErrMode::Backtrack(expected("`@name`")));
-                }
-                let value = raw_attr_value
-                    .parse_next(input)
-                    .map_err(|e| e.map(|_| expected("attribute value")))?;
+                let value = (self.schema.attributes[index].parse_text)(input)?;
                 self.attribute(index, value);
                 Ok(())
             }
@@ -968,15 +929,6 @@ impl<'a> FormatParser<'a> {
                     .parse_next(input)
                     .map_err(|e| e.map(|_| expected("`@name`")))?;
                 self.attribute(index, RawAttribute::String(name));
-                Ok(())
-            }
-            FormatElement::Keyword { attribute, codec } => {
-                let checkpoint = *input;
-                let Some(value) = opt(ident).parse_next(input)?.and_then(codec.attribute) else {
-                    *input = checkpoint;
-                    return Err(ErrMode::Backtrack(expected("keyword")));
-                };
-                self.attribute(attribute, value);
                 Ok(())
             }
             FormatElement::Custom { hooks, entities } => {
@@ -1266,7 +1218,6 @@ mod tests {
         const KIND: crate::op_schema::AttributeKind = crate::op_schema::AttributeKind::Bool;
         type Out<'ctx> = bool;
         type In = bool;
-
         fn read<'ctx>(_: &'ctx IrContext, attr: &'ctx Attribute) -> bool {
             matches!(attr, Attribute::Bool(true))
         }
@@ -1274,23 +1225,29 @@ mod tests {
         fn write(_: &mut IrContext, fast: bool) -> Attribute {
             Attribute::Bool(fast)
         }
-    }
 
-    impl crate::asm_format::KeywordCodec for Speed {
-        fn keyword<'a>(_: &'a IrContext, attr: &'a Attribute) -> Option<&'a str> {
-            match attr {
-                Attribute::Bool(true) => Some("fast"),
-                Attribute::Bool(false) => Some("slow"),
-                _ => None,
-            }
+        fn print_text(
+            h: &mut crate::printer::OpPrintHelper<'_, '_>,
+            attr: &Attribute,
+        ) -> std::fmt::Result {
+            std::fmt::Write::write_str(
+                h,
+                if matches!(attr, Attribute::Bool(true)) {
+                    "fast"
+                } else {
+                    "slow"
+                },
+            )
         }
 
-        fn attribute(word: &str) -> Option<crate::parser::raw::RawAttribute<'static>> {
-            match word {
+        fn parse_text<'a>(
+            input: &mut &'a str,
+        ) -> winnow::ModalResult<crate::parser::raw::RawAttribute<'a>> {
+            crate::asm_format::parse_keyword(input, |word| match word {
                 "fast" => Some(crate::parser::raw::RawAttribute::Bool(true)),
                 "slow" => Some(crate::parser::raw::RawAttribute::Bool(false)),
                 _ => None,
-            }
+            })
         }
     }
 
@@ -1363,7 +1320,7 @@ mod tests {
 
         fn scale(#[default(0.0)] factor: Attr<f64>, #[default(0.0)] ratio: Attr<f32>) {}
 
-        #[asm_format("go" "(" keyword(speed) ")" attr_dict)]
+        #[asm_format("go" "(" speed ")" attr_dict)]
         fn drive(speed: Attr<Speed>) {}
 
         #[asm_format(lhs "," rhs attr_dict ":" type(result))]
