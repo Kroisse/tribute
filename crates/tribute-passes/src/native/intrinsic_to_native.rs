@@ -114,7 +114,7 @@ mod tests {
             r#"core.module @test {
   func.func @read(%bytes: core.bytes, %index: core.i32) -> core.i32 attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::__bytes_get_or_panic"}
   func.func @user(%bytes: core.bytes, %index: core.i32) -> core.i32 {
-    %byte = func.call %bytes, %index {callee = @read} : core.i32
+    %byte = func.call @read(%bytes, %index) : (core.bytes, core.i32) -> core.i32
     func.return %byte
   }
 }"#,
@@ -130,7 +130,7 @@ mod tests {
         );
         assert!(
             printed
-                .contains("func.call %0, %1 {callee = @__tribute_bytes_get_or_panic} : core.i32"),
+                .contains("func.call @__tribute_bytes_get_or_panic(%0, %1) : (core.bytes, core.i32) -> core.i32"),
             "{printed}"
         );
         assert!(!printed.contains("mem."), "{printed}");

@@ -1,6 +1,5 @@
 ---
 source: crates/tribute-front/tests/block_scope.rs
-assertion_line: 34
 expression: ir_text
 ---
 core.module @test {

@@ -47,6 +47,7 @@ mod closure {
     /// %c = closure.new %x, %y {entries = [@f, @trap_e, @trap_c]} : closure.closure<S>
     /// ```
     #[flags(Pure)]
+    #[asm_format(captures attr_dict_bare ":" type(result))]
     fn new(entries: Attr<[SymbolRef]>, captures: Variadic<_>) -> Value<_> {}
 
     /// The entry function at `index` of the convention table of `closure`,
@@ -59,11 +60,13 @@ mod closure {
     /// %f = closure.entry %c {index = 2} : core.i32
     /// ```
     #[flags(Pure)]
+    #[asm_format(closure attr_dict_bare ":" type(result))]
     fn entry(index: Attr<u32>, closure: Value<_>) -> Value<_> {}
 
     /// The captures of `closure`, read by its entry functions from their
     /// environment parameter. Its results are the closure's capture types.
     #[flags(Pure)]
+    #[asm_format(closure attr_dict_bare (":" types(results)^)?)]
     fn unpack(closure: Value<_>) -> Variadic<_> {}
 
     /// A closure with one body per convention entry it implements,
@@ -922,7 +925,7 @@ mod tests {
             let conventions = trunk_ir::parser::parse_test_module(
                 &mut ctx,
                 &format!(
-                    "core.module @a {{ test.op {{conventions = {conventions}, signatures = [{signatures}]}} }}"
+                    "core.module @a {{ \"test.op\"() {{conventions = {conventions}, signatures = [{signatures}]}} }}"
                 ),
             );
             let source = conventions.ops(&ctx)[0];
@@ -967,19 +970,19 @@ mod malformed_owner_tests {
     #[test]
     fn malformed_lambda_owner_never_falls_back_to_outer_function() {
         for transfer in [
-            "func.tail_call_indirect %k {signature = func.func_sig<() -> core.never>}",
-            "func.tail_call {callee = @runtime}",
+            "func.tail_call_indirect %k() : () -> core.never",
+            "func.tail_call @runtime() : () -> ()",
         ] {
             let mut ctx = trunk_ir::IrContext::new();
             let input = "core.module @m {
           func.func @host() -> core.never {
             %lambda = closure.lambda direct(%k: func.func_sig<() -> core.never>) -> core.never {
-              func.tail_call_indirect %k
+              \"func.tail_call_indirect\"(%k)
             }
             func.unreachable
           }
         }";
-            let input = input.replace("func.tail_call_indirect %k", transfer);
+            let input = input.replace("\"func.tail_call_indirect\"(%k)", transfer);
             let module = trunk_ir::parser::parse_test_module(&mut ctx, &input);
             assert!(
                 trunk_ir::validation::validate_all(&ctx, module, &mut Default::default()).is_ok()
@@ -1020,7 +1023,7 @@ mod callable_owner_regressions {
               func.func @host() {{
                 %outer = closure.lambda direct() -> core.i32 {{
                   %inner = closure.lambda direct(%k: func.func_sig<() -> {callee_result}>) -> core.never {{
-                    func.tail_call_indirect %k {{signature = func.func_sig<() -> {callee_result}>}}
+                    func.tail_call_indirect %k() : () -> {callee_result}
                   }}
                   %v = arith.const {{value = 0}} : core.i32
                   func.return %v

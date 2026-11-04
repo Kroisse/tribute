@@ -42,15 +42,31 @@ fn main() -> Nil {
 }
 "#;
 
-/// The lines of `ir` that carry an evidence selection.
-fn planned_lines(ir: &str) -> Vec<&str> {
-    ir.lines()
-        .map(str::trim)
-        .filter(|line| line.contains("evidence_plan"))
-        .collect()
+/// The lines of `ir` that carry an evidence selection. A generic operation
+/// with regions writes its attributes after them, so that line is prefixed
+/// with the name the operation opened its regions with.
+fn planned_lines(ir: &str) -> Vec<String> {
+    let mut open = Vec::new();
+    let mut lines = Vec::new();
+    for line in ir.lines().map(str::trim) {
+        let mut planned = line.to_owned();
+        if line.starts_with("})") {
+            let name: &str = open
+                .pop()
+                .expect("a generic region list closes what it opened");
+            planned = format!("{name} {line}");
+        }
+        if line.ends_with("({") {
+            open.push(line.split('"').nth(1).expect("a generic operation name"));
+        }
+        if planned.contains("evidence_plan") {
+            lines.push(planned);
+        }
+    }
+    lines
 }
 
-fn assert_line(lines: &[&str], op: &str, plan: &str, ir: &str) {
+fn assert_line(lines: &[String], op: &str, plan: &str, ir: &str) {
     assert!(
         lines
             .iter()

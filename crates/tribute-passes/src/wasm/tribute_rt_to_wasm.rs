@@ -169,7 +169,7 @@ fn function_table(ctx: &mut IrContext, module: Module) -> Option<(wasm_dialect::
     let elem = ops
         .iter()
         .filter_map(|&op| wasm_dialect::Elem::from_op(ctx, op).ok())
-        .find(|elem| elem.table(ctx).unwrap_or(0) == 0 && elem.offset(ctx).unwrap_or(0) == 0);
+        .find(|elem| elem.table(ctx) == 0 && elem.offset(ctx) == 0);
     if let (Some(table), Some(elem)) = (table, elem) {
         let funcs = ctx.region(elem.funcs(ctx)).blocks[0];
         return Some((table, funcs));
@@ -192,8 +192,6 @@ fn function_table(ctx: &mut IrContext, module: Module) -> Option<(wasm_dialect::
         parent_op: None,
     });
     let elem = wasm_dialect::Elem::operands()
-        .table(Some(0))
-        .offset(Some(0))
         .regions(region)
         .build(ctx, location);
     if let Some(&first) = ops.first() {
@@ -544,7 +542,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.table {reftype = "funcref", min = 1, max = 1}
-  wasm.elem {table = 0, offset = 0} {
+  wasm.elem {
     %r = wasm.ref_func {func_name = @constant} : wasm.funcref
   }
   func.func @f() -> core.nil {
@@ -593,7 +591,8 @@ mod tests {
             ir.contains(r#"wasm.table {max = 1, min = 1, reftype = "funcref"}"#),
             "{ir}"
         );
-        assert!(ir.contains("wasm.elem {offset = 0, table = 0}"), "{ir}");
+        assert!(ir.contains("wasm.elem {"), "{ir}");
+        assert!(!ir.contains("offset = 0"), "{ir}");
         assert!(ir.contains("func_name = @only"), "{ir}");
         assert!(ir.contains("wasm.i32_const {value = 0}"), "{ir}");
     }

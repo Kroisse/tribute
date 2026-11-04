@@ -507,7 +507,7 @@ fn verifier_reports_constraints_before_bindings() {
     let text = verify_errors(
         r#"core.module @m {
   func.func @f(%a: core.f64, %b: core.i32) {
-    %c = test_typed.add %a, %b : core.i32
+    %c = "test_typed.add"(%a, %b) : core.i32
     func.return
   }
 }"#,
@@ -525,8 +525,8 @@ fn verifier_reports_binding_mismatches() {
     let text = verify_errors(
         r#"core.module @m {
   func.func @f(%a: core.i32, %b: core.i64) {
-    %c = test_typed.add %a, %b : core.i32
-    %d = test_typed.add %a, %a : core.i64
+    %c = "test_typed.add"(%a, %b) : core.i32
+    %d = "test_typed.add"(%a, %a) : core.i64
     func.return
   }
 }"#,
@@ -550,9 +550,9 @@ fn verifier_reports_projection_and_list_mismatches() {
     let text = verify_errors(
         r#"core.module @m {
   func.func @f(%p: test_typed.pair<core.i64, core.i1>, %callee: core.ptr, %x: core.i1) {
-    %a = test_typed.first %p : core.i1
-    %b = test_typed.call %callee, %x {sig = func.func_sig<(core.i32) -> core.i1>} : core.i1
-    %c = test_typed.call %callee, %x {sig = core.i32} : core.i1
+    %a = "test_typed.first"(%p) : core.i1
+    %b = "test_typed.call"(%callee, %x) {sig = func.func_sig<(core.i32) -> core.i1>} : core.i1
+    %c = "test_typed.call"(%callee, %x) {sig = core.i32} : core.i1
     func.return
   }
 }"#,
@@ -576,9 +576,9 @@ fn verifier_counts_explicit_lists_and_runs_verify_hooks_last() {
     let text = verify_errors(
         r#"core.module @m {
   func.func @f(%a: core.i32, %b: core.f64) {
-    test_typed.pack %a, %a
-    test_typed.nonempty
-    test_typed.nonempty %b
+    "test_typed.pack"(%a, %a)
+    "test_typed.nonempty"()
+    "test_typed.nonempty"(%b)
     func.return
   }
 }"#,
@@ -602,8 +602,8 @@ fn verifier_rejects_projections_of_unbound_variables() {
     let text = verify_errors(
         r#"core.module @m {
   func.func @f(%x: core.i32) {
-    test_typed.maybe_call %x
-    test_typed.maybe_call %x {sig = func.func_sig<(core.i32) -> core.nil>}
+    "test_typed.maybe_call"(%x)
+    "test_typed.maybe_call"(%x) {sig = func.func_sig<(core.i32) -> core.nil>}
     func.return
   }
 }"#,
@@ -620,9 +620,9 @@ fn verifier_checks_explicit_list_elements_and_result_segments() {
     let text = verify_errors(
         r#"core.module @m {
   func.func @f(%a: core.i32, %b: core.i64, %c: core.f64, %callee: core.ptr) {
-    %p = test_typed.pack %a, %a, %c : core.nil
-    %q = test_typed.pack %a, %b, %a : core.nil
-    %r = test_typed.call %callee, %a, %b {sig = func.func_sig<(core.i32, core.i64) -> core.i1>} : core.i32
+    %p = "test_typed.pack"(%a, %a, %c) : core.nil
+    %q = "test_typed.pack"(%a, %b, %a) : core.nil
+    %r = "test_typed.call"(%callee, %a, %b) {sig = func.func_sig<(core.i32, core.i64) -> core.i1>} : core.i32
     func.return
   }
 }"#,
@@ -906,12 +906,12 @@ fn verifier_checks_types_reached_through_bound_constraints() {
     let text = verify_errors(&format!(
         r#"core.module @m {{
   func.func @f(%ok: func.func_sig<({PAIR}, core.i32) -> core.i64>, %not_pair: func.func_sig<(core.i32, core.i32) -> core.i64>, %short: func.func_sig<({PAIR}) -> core.i64>, %first: func.func_sig<({PAIR}, core.i32) -> core.i1>, %float: func.func_sig<({PAIR}, core.f64) -> core.i64>) {{
-    %a = test_typed.unpack %ok : core.i1
-    %b = test_typed.unpack %ok : core.i64
-    %c = test_typed.unpack %not_pair : core.i1
-    %d = test_typed.unpack %short : core.i1
-    %e = test_typed.unpack %first : core.i1
-    %g = test_typed.unpack %float : core.i1
+    %a = "test_typed.unpack"(%ok) : core.i1
+    %b = "test_typed.unpack"(%ok) : core.i64
+    %c = "test_typed.unpack"(%not_pair) : core.i1
+    %d = "test_typed.unpack"(%short) : core.i1
+    %e = "test_typed.unpack"(%first) : core.i1
+    %g = "test_typed.unpack"(%float) : core.i1
     func.return
   }}
 }}"#
@@ -933,9 +933,9 @@ fn verifier_requires_variables_reached_twice_to_agree() {
     let text = verify_errors(
         r#"core.module @m {
   func.func @f(%x: core.i32, %y: core.i64) {
-    test_typed.maybe_unpack %x {sig = func.func_sig<(core.i32) -> core.nil>}
-    test_typed.maybe_unpack %y {sig = func.func_sig<(core.i32) -> core.nil>}
-    test_typed.maybe_unpack %x
+    "test_typed.maybe_unpack"(%x) {sig = func.func_sig<(core.i32) -> core.nil>}
+    "test_typed.maybe_unpack"(%y) {sig = func.func_sig<(core.i32) -> core.nil>}
+    "test_typed.maybe_unpack"(%x)
     func.return
   }
 }"#,
@@ -958,8 +958,8 @@ fn verifier_compares_projections_equated_by_bound_constraints() {
     let text = verify_errors(
         r#"core.module @m {
   func.func @f(%a: func.func_sig<(core.i32) -> core.nil>, %b: func.func_sig<(core.i32) -> core.i1>, %c: func.func_sig<(core.i64) -> core.nil>) {
-    test_typed.same_inputs %a, %b
-    test_typed.same_inputs %a, %c
+    "test_typed.same_inputs"(%a, %b)
+    "test_typed.same_inputs"(%a, %c)
     func.return
   }
 }"#,

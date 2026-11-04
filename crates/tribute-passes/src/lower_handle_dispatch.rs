@@ -133,15 +133,15 @@ mod tests {
   func.func @selected() -> core.never {
     %ev = mem.null : core.ptr
     %prompt = arith.const {value = 1} : core.i32
-    ability.handle_dispatch %ev, %prompt {abilities = []} {
-      func.tail_call {callee = @finish}
+    ability.handle_dispatch %ev, %prompt() attributes {abilities = []} {
+      func.tail_call @finish() : () -> ()
     }
   }
   func.func @untouched() -> core.never {
     %ev = mem.null : core.ptr
     %prompt = arith.const {value = 2} : core.i32
-    ability.handle_dispatch %ev, %prompt {abilities = []} {
-      func.tail_call {callee = @finish}
+    ability.handle_dispatch %ev, %prompt() attributes {abilities = []} {
+      func.tail_call @finish() : () -> ()
     }
   }
 }"#,
@@ -173,7 +173,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @run(%k: tribute_rt.anyref) -> tribute_rt.anyref {
-    %result = ability.perform %k {ability = @State, op_name = "get"} : tribute_rt.anyref
+    %result = "ability.perform"(%k) {ability = @State, op_name = "get"} : tribute_rt.anyref
     func.return %result
   }
 }"#,
@@ -191,17 +191,17 @@ mod tests {
     #[test]
     fn malformed_final_delimiters_are_not_structurally_spliced() {
         let malformed = [
-            r#"ability.handle_dispatch %ev {abilities = []} {
+            r#""ability.handle_dispatch"(%ev) ({
       ^first(%inner: !evidence):
         func.unreachable
       ^second:
         func.unreachable
-    }"#,
-            r#"ability.handle_dispatch %ev {abilities = []} {
+    }) {abilities = []}"#,
+            r#""ability.handle_dispatch"(%ev) ({
       ^body(%inner: !evidence):
-        test.consume %inner
+        "test.consume"(%inner)
         func.unreachable
-    }"#,
+    }) {abilities = []}"#,
         ];
         for operation in malformed {
             let mut ctx = IrContext::new();

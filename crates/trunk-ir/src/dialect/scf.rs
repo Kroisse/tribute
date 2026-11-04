@@ -2,6 +2,7 @@
 
 #[trunk_ir::dialect]
 mod scf {
+    #[asm_format(cond ("->" "(" type(result)^ ")")? attr_dict region(then_region) "else" region(else_region))]
     #[implements(RegionBranch, Fold)]
     fn r#if(cond: Value<_>) -> Option<Value<_>> {
         #[region(then_region)]
@@ -10,18 +11,21 @@ mod scf {
         {}
     }
 
+    #[asm_format(discriminant attr_dict region(body))]
     #[implements(RegionBranch, Fold)]
     fn switch(discriminant: Value<_>) {
         #[region(body)]
         {}
     }
 
+    #[asm_format(value attr_dict region(body))]
     #[implements(RegionBranch)]
     fn case(value: Attr<_>) {
         #[region(body)]
         {}
     }
 
+    #[asm_format(attr_dict region(body))]
     #[implements(RegionBranch)]
     fn default() {
         #[region(body)]
@@ -29,8 +33,20 @@ mod scf {
     }
 
     #[implements(RegionBranchTerminator)]
+    #[asm_format(values attr_dict_bare)]
     fn r#yield(values: Variadic<_>) {}
 
+    /// A loop whose body receives `init` as its entry block arguments on
+    /// the first iteration and the values of `scf.continue` on the next.
+    /// `scf.break` leaves it with the optional result.
+    ///
+    /// ```text
+    /// %r = scf.loop(%init) -> (core.i32) {
+    ///   ^body(%acc: core.i32):
+    ///     scf.break %acc
+    /// }
+    /// ```
+    #[asm_format("(" init ")" ("->" "(" type(result)^ ")")? attr_dict region(body))]
     #[implements(RegionBranch)]
     fn r#loop(init: Variadic<_>) -> Option<Value<_>> {
         #[region(body)]
@@ -38,9 +54,11 @@ mod scf {
     }
 
     #[implements(RegionBranchTerminator)]
+    #[asm_format(values attr_dict_bare)]
     fn r#continue(values: Variadic<_>) {}
 
     #[implements(RegionBranchTerminator)]
+    #[asm_format(value attr_dict_bare)]
     fn r#break(value: Value<_>) {}
 }
 
@@ -649,6 +667,26 @@ mod canonicalize_tests {
     }
 
     #[test]
+    fn loop_writes_its_init_and_optional_result() {
+        let text = r#"core.module @test {
+  func.func @f(%0: core.i32) -> core.nil {
+      %1 = scf.loop(%0) -> (core.i32) {
+        ^bb1(%2: core.i32):
+          scf.break %2
+      }
+      scf.loop() {
+          scf.continue
+      }
+      func.return
+  }
+}
+"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, text);
+        assert_eq!(print_module(&ctx, module.op()), text);
+    }
+
+    #[test]
     fn if_const_true_splices_then_region() {
         // `scf.if(const true) { %a = arith.addi %x, %x; yield %a } { yield %x }`
         // → splice the addi into the parent block, replace the if's
@@ -656,10 +694,10 @@ mod canonicalize_tests {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
     %t = arith.const {value = 1} : core.i1
-    %r = scf.if %t : core.i32 {
+    %r = scf.if %t -> (core.i32) {
       %a = arith.addi %x, %x : core.i32
       scf.yield %a
-    } {
+    } else {
       scf.yield %x
     }
     func.return %r
@@ -686,9 +724,9 @@ mod canonicalize_tests {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
     %f = arith.const {value = 0} : core.i1
-    %r = scf.if %f : core.i32 {
+    %r = scf.if %f -> (core.i32) {
       scf.yield %x
-    } {
+    } else {
       %a = arith.addi %x, %x : core.i32
       scf.yield %a
     }
@@ -713,9 +751,9 @@ mod canonicalize_tests {
         // which branch runs at compile time, so the if must stay.
         let input = r#"core.module @test {
   func.func @f(%cond: core.i1, %x: core.i32) -> core.i32 {
-    %r = scf.if %cond : core.i32 {
+    %r = scf.if %cond -> (core.i32) {
       scf.yield %x
-    } {
+    } else {
       scf.yield %x
     }
     func.return %r
@@ -737,9 +775,9 @@ mod canonicalize_tests {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
     %bad = arith.const {value = 2} : core.i32
-    %r = scf.if %bad : core.i32 {
+    %r = scf.if %bad -> (core.i32) {
       scf.yield %x
-    } {
+    } else {
       scf.yield %x
     }
     func.return %r
@@ -761,9 +799,9 @@ mod canonicalize_tests {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
     %bad = arith.const {value = 2} : core.i1
-    %r = scf.if %bad : core.i32 {
+    %r = scf.if %bad -> (core.i32) {
       scf.yield %x
-    } {
+    } else {
       scf.yield %x
     }
     func.return %r
@@ -784,9 +822,9 @@ mod canonicalize_tests {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
     %t = arith.const {value = 1} : core.i1
-    %r = scf.if %t : core.i32 {
+    %r = scf.if %t -> (core.i32) {
       scf.yield %x
-    } {
+    } else {
       %a = arith.addi %x, %x : core.i32
       scf.yield %a
     }
@@ -812,11 +850,11 @@ mod canonicalize_tests {
   func.func @f(%x: core.i32) -> core.i32 {
     %sel = arith.const {value = SELECTOR} : core.i32
     scf.switch %sel {
-      scf.case {value = 0} {
+      scf.case 0 {
         %a = arith.addi %x, %x : core.i32
         scf.yield
       }
-      scf.case {value = 1} {
+      scf.case 1 {
         %b = arith.muli %x, %x : core.i32
         scf.yield
       }
@@ -881,7 +919,7 @@ mod canonicalize_tests {
   func.func @f(%x: core.i32) -> core.i32 {
     %sel = arith.const {value = 0} : core.i32
     scf.switch %sel {
-      scf.case {value = 0} {
+      scf.case 0 {
         func.return %x
       }
       scf.default {
@@ -915,7 +953,7 @@ mod canonicalize_tests {
   func.func @f(%x: core.i32) -> core.i32 {
     %sel = arith.const {value = 0} : core.i32
     scf.switch %sel {
-      scf.case {value = 0} {
+      scf.case 0 {
         func.return %x
       }
       scf.default {
@@ -941,7 +979,7 @@ mod canonicalize_tests {
         let input = r#"core.module @test {
   func.func @f(%tag: core.i32, %x: core.i32) -> core.i32 {
     scf.switch %tag {
-      scf.case {value = 0} {
+      scf.case 0 {
         scf.yield
       }
       scf.default {
@@ -968,7 +1006,7 @@ mod canonicalize_tests {
   func.func @f(%x: core.i32) -> core.i32 {
     %sel = arith.const {value = 5} : core.i32
     scf.switch %sel {
-      scf.case {value = 0} {
+      scf.case 0 {
         scf.yield
       }
     }

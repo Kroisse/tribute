@@ -470,7 +470,7 @@ impl OpRewritePattern for FuncConstantPattern {
         rewriter: &mut PatternRewriter<'_>,
     ) -> Option<()> {
         let op = const_op.op_ref();
-        let func_ref = const_op.func_ref(ctx).clone();
+        let func_ref = const_op.value(ctx).clone();
         if let &[result] = ctx.op_result_types(op)
             && func::FuncSig::matches(ctx, result)
             && self
@@ -509,10 +509,10 @@ mod tests {
     func.return
   }
   func.func @direct_caller(%value: core.i32) -> (), {call_conv = "tail"} {
-    func.tail_call %value {callee = @direct_target}
+    func.tail_call @direct_target(%value) : (core.i32) -> ()
   }
   func.func @indirect_caller(%callee: core.ptr, %value: core.i32) -> (), {call_conv = "tail"} {
-    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> (), {call_conv = "tail"}>}
+    func.tail_call_indirect %callee(%value) : (core.i32) -> (), {call_conv = "tail"}
   }
 }"#;
 
@@ -572,7 +572,7 @@ mod tests {
             r#"core.module @test {
   func.func @callee() -> test.anyref
   func.func @caller() -> test.anyref {
-    %result = func.call {callee = @callee} : test.anyref
+    %result = func.call @callee() : () -> test.anyref
     func.return %result
   }
 }"#,
@@ -666,7 +666,7 @@ mod tests {
   func.func @test_fn() -> core.i32 {
     %0 = arith.const {value = 0} : core.i32
     %1 = arith.const {value = 42} : core.i32
-    %2 = func.call_indirect %0, %1 {signature = func.func_sig<(core.i32) -> core.i32>} : core.i32
+    %2 = func.call_indirect %0(%1) : (core.i32) -> core.i32
     func.return %2
   }
 }"#,
@@ -679,14 +679,14 @@ mod tests {
         let result = run_pass(
             r#"core.module @test {
   func.func @test_fn(%callee: core.ptr) -> core.nil {
-    func.call_indirect %callee {signature = func.func_sig<() -> core.nil>}
+    "func.call_indirect"(%callee) {signature = func.func_sig<() -> core.nil>}
     func.return
   }
 }"#,
         );
 
         assert!(
-            result.contains("clif.call_indirect %0 {sig = clif.func_sig<() -> core.nil>}"),
+            result.contains("\"clif.call_indirect\"(%0) {sig = clif.func_sig<() -> core.nil>}"),
             "{result}"
         );
         assert!(!result.contains("func.call_indirect"), "{result}");
@@ -699,7 +699,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @caller(%callee: core.ptr) -> core.nil {
-    %unit = func.call_indirect %callee {signature = func.func_sig<() -> core.nil>} : core.nil
+    %unit = func.call_indirect %callee() : () -> core.nil
     func.return %unit
   }
 }"#,
@@ -727,7 +727,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @caller(%callee: core.ptr) -> core.nil {
-    %unit = func.call_indirect %callee : core.nil
+    %unit = "func.call_indirect"(%callee) : core.nil
     func.return %unit
   }
 }"#,
@@ -747,7 +747,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @caller(%callee: core.ptr) -> core.nil {
-    %unit = func.call_indirect %callee {signature = func.func_sig<() -> ()>} : core.nil
+    %unit = "func.call_indirect"(%callee) {signature = func.func_sig<() -> ()>} : core.nil
     func.return %unit
   }
 }"#,
@@ -769,8 +769,8 @@ mod tests {
     func.return %value
   }
   func.func @caller() -> core.i32 {
-    %callee = func.constant {func_ref = @target} : func.func_sig<() -> core.i32>
-    %value = func.call_indirect %callee {signature = func.func_sig<() -> core.i32>} : core.i32
+    %callee = func.constant @target : () -> core.i32
+    %value = func.call_indirect %callee() : () -> core.i32
     func.return %value
   }
 }"#,
@@ -800,7 +800,7 @@ mod tests {
             r#"core.module @test {
   !evidence = core.array<core.i32>
   func.func @caller(%callee: core.ptr, %evidence: !evidence) -> (), {call_conv = "tail"} {
-    func.tail_call_indirect %callee, %evidence {signature = func.func_sig<(!evidence) -> (), {call_conv = "tail"}>}
+    func.tail_call_indirect %callee(%evidence) : (!evidence) -> (), {call_conv = "tail"}
   }
 }"#,
         );
@@ -831,11 +831,11 @@ mod tests {
             r#"core.module @test {
   !evidence = core.array<core.i32>
   func.func @physical(%callee: core.ptr, %evidence: core.ptr) -> core.i32 {
-    %result = func.call_indirect %callee, %evidence {signature = func.func_sig<(!evidence) -> core.i32>} : core.i32
+    %result = func.call_indirect %callee(%evidence) : (!evidence) -> core.i32
     func.return %result
   }
   func.func @mismatch(%callee: core.ptr, %value: core.i32) -> core.i32 {
-    %result = func.call_indirect %callee, %value {signature = func.func_sig<(!evidence) -> core.i32>} : core.i32
+    %result = func.call_indirect %callee(%value) : (!evidence) -> core.i32
     func.return %result
   }
 }"#,
@@ -866,7 +866,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @caller(%callee: core.ptr, %value: core.i32) -> core.nil {
-    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i64) -> core.nil>}
+    func.tail_call_indirect %callee(%value) : (core.i64) -> core.nil
   }
 }"#,
         );
@@ -898,7 +898,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @caller(%callee: core.ptr, %value: core.i32) -> core.nil {
-    func.tail_call_indirect %callee, %value
+    "func.tail_call_indirect"(%callee, %value)
   }
 }"#,
         );
@@ -915,7 +915,7 @@ mod tests {
         let output = run_pass(
             r#"core.module @test {
   func.func @caller(%callee: core.ptr, %value: core.i32) -> core.i32, {call_conv = "tail"} {
-    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> core.i32, {call_conv = "tail"}>}
+    func.tail_call_indirect %callee(%value) : (core.i32) -> core.i32, {call_conv = "tail"}
   }
 }"#,
         );
@@ -930,7 +930,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @caller(%callee: core.ptr, %value: core.i32) -> core.nil {
-    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> core.i32>}
+    func.tail_call_indirect %callee(%value) : (core.i32) -> core.i32
   }
 }"#,
         );
@@ -949,7 +949,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @caller(%callee: core.ptr, %value: core.i32) -> core.nil {
-    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> core.nil>}
+    func.tail_call_indirect %callee(%value) : (core.i32) -> core.nil
   }
 }"#,
         );
@@ -975,7 +975,7 @@ mod tests {
     func.return
   }}
   func.func @take() {{
-    %reference = func.constant {{func_ref = @target}} : {reference}
+    %reference = "func.constant"() {{value = @target}} : {reference}
     func.return
   }}
 }}"#
@@ -1002,7 +1002,7 @@ mod tests {
       func.return
     }
     func.func @take() {
-      %reference = func.constant {func_ref = @helper} : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
+      %reference = func.constant @helper : (core.i32) -> (), {call_conv = "tail"}
       func.return
     }
   }
@@ -1029,7 +1029,7 @@ mod tests {
         let unknown = lower(
             r#"core.module @test {
   func.func @take() {
-    %reference = func.constant {func_ref = @missing} : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
+    %reference = func.constant @missing : (core.i32) -> (), {call_conv = "tail"}
     func.return
   }
 }"#,
@@ -1046,7 +1046,7 @@ mod tests {
       func.return
     }
     func.func @take() {
-      %reference = func.constant {func_ref = @left::@helper} : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
+      %reference = func.constant @left::@helper : (core.i32) -> (), {call_conv = "tail"}
       func.return
     }
   }
@@ -1060,7 +1060,7 @@ mod tests {
     func.return
   }
   func.func @take() {
-    %reference = func.constant {func_ref = @target} : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
+    %reference = func.constant @target : (core.i32) -> (), {call_conv = "tail"}
     func.return
   }
 }"#,
@@ -1078,7 +1078,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @caller(%callee: core.ptr, %value: core.i32) {
-    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> ()>}
+    func.tail_call_indirect %callee(%value) : (core.i32) -> ()
   }
 }"#,
         );

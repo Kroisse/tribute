@@ -30,6 +30,18 @@ pub trait AttrKind {
 
     fn write(ctx: &mut IrContext, value: Self::In) -> Attribute;
 
+    /// The values `accepts` admits, as a schema violation names them, when
+    /// they are narrower than `KIND`'s domain.
+    const DOMAIN: Option<&'static str> = None;
+
+    /// Whether `attr` is a value of this kind, which the schema checks: by
+    /// default, whether it is in `KIND`'s domain. A narrower kind, such as a
+    /// keyword, also checks the rest and names it in `DOMAIN`.
+    fn accepts(ctx: &IrContext, attr: &Attribute) -> bool {
+        let _ = ctx;
+        Self::KIND.accepts(attr)
+    }
+
     /// Whether two values read from attributes are the same value, which
     /// tells a stored `#[default(v)]` from another value. Floating-point
     /// kinds compare bits, so `-0.0` is not the default `0.0`.
@@ -253,6 +265,14 @@ impl<K: AttrKind> AttrKind for [K] {
     const KIND: AttributeKind = AttributeKind::List(&K::KIND);
     type Out<'ctx> = ListIter<'ctx, K>;
     type In = Vec<K::In>;
+    const DOMAIN: Option<&'static str> = K::DOMAIN;
+
+    fn accepts(ctx: &IrContext, attr: &Attribute) -> bool {
+        match attr {
+            Attribute::List(items) => items.iter().all(|item| K::accepts(ctx, item)),
+            _ => false,
+        }
+    }
 
     fn read<'ctx>(ctx: &'ctx IrContext, attr: &'ctx Attribute) -> ListIter<'ctx, K> {
         ListIter {
@@ -290,6 +310,14 @@ impl<V: AttrKind + ?Sized> AttrKind for Dict<V> {
     const KIND: AttributeKind = AttributeKind::Dict(&V::KIND);
     type Out<'ctx> = DictView<'ctx, V>;
     type In = Vec<(StringArg, V::In)>;
+    const DOMAIN: Option<&'static str> = V::DOMAIN;
+
+    fn accepts(ctx: &IrContext, attr: &Attribute) -> bool {
+        match attr {
+            Attribute::Dict(entries) => entries.values().all(|value| V::accepts(ctx, value)),
+            _ => false,
+        }
+    }
 
     fn read<'ctx>(ctx: &'ctx IrContext, attr: &'ctx Attribute) -> DictView<'ctx, V> {
         match attr {

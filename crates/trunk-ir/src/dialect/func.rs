@@ -48,7 +48,13 @@ mod func {
         {}
     }
 
+    /// Direct call to the function `callee`; its results are the call's results.
+    ///
+    /// ```text
+    /// %r = func.call @f(%a, %b) : (core.i32, core.i64) -> core.i32
+    /// ```
     #[implements(op_interface::CallLike)]
+    #[asm_format(callee "(" args ")" attr_dict ":" functional_type(args, results))]
     fn call(callee: Attr<SymbolRef>, args: Variadic<_>) -> Variadic<_> {}
 
     #[verify]
@@ -61,7 +67,13 @@ mod func {
     ) -> Values<S::Results> {
     }
 
+    /// Proper tail call to the function `callee`.
+    ///
+    /// ```text
+    /// func.tail_call @f(%a) : (core.i32) -> ()
+    /// ```
     #[implements(CallableExit, op_interface::CallLike)]
+    #[asm_format(callee "(" args ")" attr_dict ":" functional_type(args))]
     fn tail_call(callee: Attr<SymbolRef>, args: Variadic<_>) {}
 
     #[verify]
@@ -75,12 +87,15 @@ mod func {
     }
 
     #[implements(CallableExit)]
+    #[asm_format(values attr_dict_bare)]
     fn r#return(values: Variadic<_>) {}
 
     #[flags(Pure)]
-    fn constant(func_ref: Attr<SymbolRef>) -> Value<_> {}
+    #[asm_format(value attr_dict ":" signature(result))]
+    fn constant<S: FuncSig>(value: Attr<SymbolRef>) -> Value<S> {}
 
     #[implements(CallableExit)]
+    #[asm_format(attr_dict_bare)]
     fn unreachable() {}
 }
 
@@ -987,7 +1002,7 @@ mod tests {
     fn call_conv_is_a_signature_attribute_that_round_trips() {
         let input = r#"core.module @test {
   func.func @transfer(%callee: func.func_sig<(core.i32) -> (), {call_conv = "tail"}>, %value: core.i32) -> (), {call_conv = "tail"} {
-    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> (), {call_conv = "tail"}>}
+    func.tail_call_indirect %callee(%value) : (core.i32) -> (), {call_conv = "tail"}
   }
 }"#;
         let mut ctx = crate::IrContext::new();
@@ -1075,7 +1090,7 @@ mod tests {
     fn indirect_signature_is_declared_and_round_trips() {
         let input = r#"core.module @test {
   func.func @run(%callee: func.func_sig<(core.i32) -> core.i32>, %value: core.i32) -> core.i32 {
-    %result = func.call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> core.i32>} : core.i32
+    %result = func.call_indirect %callee(%value) : (core.i32) -> core.i32
     func.return %result
   }
 }"#;
@@ -1106,9 +1121,9 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @run(%callee: core.ptr, %value: core.i32) {
-    func.call_indirect %callee, %value {signature = core.i32}
-    clif.call_indirect %callee, %value {sig = core.i32}
-    clif.return_call_indirect %callee, %value {sig = core.i32}
+    "func.call_indirect"(%callee, %value) {signature = core.i32}
+    "clif.call_indirect"(%callee, %value) {sig = core.i32}
+    "clif.return_call_indirect"(%callee, %value) {sig = core.i32}
   }
 }"#,
         );
@@ -1129,11 +1144,11 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @ordinary(%callee: func.func_sig<(core.i32) -> core.i32>, %value: core.i32) -> core.i32 {
-    %result = func.call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> core.i32>} : core.i32
+    %result = func.call_indirect %callee(%value) : (core.i32) -> core.i32
     func.return %result
   }
   func.func @tail(%callee: func.func_sig<(core.i32) -> core.nil>, %value: core.i32) -> core.nil {
-    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> core.nil>}
+    func.tail_call_indirect %callee(%value) : (core.i32) -> core.nil
   }
   func.func @direct() -> core.nil {
     func.return
@@ -1172,7 +1187,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @tail(%callee: func.func_sig<() -> ()>) {
-    func.tail_call_indirect %callee
+    "func.tail_call_indirect"(%callee)
   }
 }"#,
         );
@@ -1218,7 +1233,7 @@ mod result_list_tests {
             }
         }
         for input in [
-            "core.module @m { func.func {sym_name = \"f\", type = func.func_sig<(core.i32) -> (), {tag = @kept, nested = [core.i64]}>} }",
+            "core.module @m { \"func.func\"() {sym_name = \"f\", type = func.func_sig<(core.i32) -> (), {tag = @kept, nested = [core.i64]}>} }",
             "core.module @m { func.func @f(%x: core.i32) -> (), {tag = @kept, nested = [core.i64]} { func.return } }",
         ] {
             let mut ctx = IrContext::new();
@@ -1252,7 +1267,7 @@ mod result_list_tests {
         for results in [vec![], vec![nil]] {
             let signature = func_sig(&mut ctx, [], results.clone()).as_type_ref();
             let callee = Constant::operands()
-                .func_ref(SymbolPath::new(["f"]))
+                .value(SymbolPath::new(["f"]))
                 .results(signature)
                 .build(&mut ctx, loc)
                 .result(&ctx);
@@ -1281,30 +1296,30 @@ mod result_list_tests {
           func.func @sink(%x: core.i32)
           func.func @value(%x: core.i32) -> core.i32
           func.func @run(%k: func.func_sig<(core.i32) -> ()>, %x: core.i32) {
-            func.call %x {callee = @sink}
-            func.call_indirect %k, %x {signature = func.func_sig<(core.i32) -> ()>}
-            %r = func.call %x {callee = @value} : core.i32
+            func.call @sink(%x) : (core.i32) -> ()
+            func.call_indirect %k(%x) : (core.i32) -> ()
+            %r = func.call @value(%x) : (core.i32) -> core.i32
             func.return
           }
-          func.func @tail(%x: core.i32) { func.tail_call %x {callee = @sink} }
+          func.func @tail(%x: core.i32) { func.tail_call @sink(%x) : (core.i32) -> () }
           func.func @logical(%k: func.func_sig<(core.i32) -> core.never>, %x: core.i32) -> core.never {
-            func.tail_call_indirect %k, %x {signature = func.func_sig<(core.i32) -> core.never>}
+            func.tail_call_indirect %k(%x) : (core.i32) -> core.never
           }
           func.func @one(%k: func.func_sig<(core.i32) -> core.i32>, %x: core.i32) -> core.i32 {
-            %r = func.call_indirect %k, %x {signature = func.func_sig<(core.i32) -> core.i32>} : core.i32
+            %r = func.call_indirect %k(%x) : (core.i32) -> core.i32
             func.return %r
           }
         }";
         assert_eq!(verify(valid), "validation passed");
         for (old, new, expected) in [
             (
-                "func.call %x {callee = @sink}",
-                "%bad = func.call %x {callee = @sink} : core.nil",
+                "func.call @sink(%x) : (core.i32) -> ()",
+                "%bad = func.call @sink(%x) : (core.i32) -> core.nil",
                 "call result list mismatch",
             ),
             (
-                "func.call %x {callee = @sink}",
-                "func.call {callee = @sink}",
+                "func.call @sink(%x) : (core.i32) -> ()",
+                "func.call @sink() : () -> ()",
                 "call argument count mismatch",
             ),
             ("func.return %r", "func.return", "return count mismatch"),
@@ -1319,20 +1334,20 @@ mod result_list_tests {
                 "tail caller/callee result lists differ",
             ),
             (
-                "signature = func.func_sig<(core.i32) -> ()>",
-                "signature = func.func_sig<(core.i64) -> ()>",
+                "func.call_indirect %k(%x) : (core.i32) -> ()",
+                "func.call_indirect %k(%x) : (core.i64) -> ()",
                 "expected S::Inputs = (core.i64), found (core.i32)",
             ),
             (
-                "callee = @sink",
-                "callee = 1",
+                "func.call @sink(%x) : (core.i32) -> ()",
+                "\"func.call\"(%x) {callee = 1}",
                 "attribute `callee` must be a SymbolRef attribute",
             ),
         ] {
             let text = verify(&valid.replace(old, new));
             assert!(text.contains(expected), "{expected}: {text}");
         }
-        let order = "core.module @m { func.func @f(%a: core.i32, %b: core.i64) func.func @g(%a: core.i32, %b: core.i64) { func.call %b, %a {callee = @f} func.return } }";
+        let order = "core.module @m { func.func @f(%a: core.i32, %b: core.i64) func.func @g(%a: core.i32, %b: core.i64) { func.call @f(%b, %a) : (core.i64, core.i32) -> () func.return } }";
         let errors = verify(order);
         assert!(
             errors.contains("call argument #0 type mismatch"),
@@ -1354,7 +1369,7 @@ mod owner_identity_tests {
             &mut ctx,
             "core.module @m {
           func.func @f(%k: func.func_sig<() -> core.never>) -> core.never {
-            test.lambda {type = func.func_sig<() -> core.nil>} { func.tail_call_indirect %k {signature = func.func_sig<() -> core.never>} }
+            \"test.lambda\"() ({ func.tail_call_indirect %k() : () -> core.never }) {type = func.func_sig<() -> core.nil>}
             func.unreachable
           }
         }",
@@ -1367,11 +1382,11 @@ mod owner_identity_tests {
     fn missing_runtime_symbols_do_not_hide_known_invalid_declarations() {
         for declaration in [
             "func.func @f() func.func @f()",
-            "test.object {sym_name = \"f\"}",
+            "\"test.object\"() {sym_name = \"f\"}",
         ] {
             let mut ctx = crate::IrContext::new();
             let input = format!(
-                "core.module @m {{ {declaration} func.func @run() {{ func.call {{callee = @runtime}} func.call {{callee = @f}} func.return }} }}"
+                "core.module @m {{ {declaration} func.func @run() {{ func.call @runtime() : () -> () func.call @f() : () -> () func.return }} }}"
             );
             let module = crate::parser::parse_test_module(&mut ctx, &input);
             let result = crate::validation::validate_all(&ctx, module, &mut Default::default());
@@ -1391,26 +1406,26 @@ mod normal_validation_regressions {
     fn normal_validation_rejects_known_contract_mismatches() {
         for (body, expected) in [
             (
-                "%a, %b = func.call {callee = @runtime} : core.i32, core.i32\nfunc.return",
+                "%a, %b = func.call @runtime() : () -> (core.i32, core.i32)\nfunc.return",
                 "multiple call results",
             ),
             (
-                "%a, %b = func.call_indirect %k {signature = func.func_sig<() -> ()>} : core.i32, core.i32\nfunc.return",
+                "%a, %b = \"func.call_indirect\"(%k) {signature = func.func_sig<() -> ()>} : core.i32, core.i32\nfunc.return",
                 "expected S::Results = (), found (core.i32, core.i32)",
             ),
             (
-                "%a = func.call {callee = @sink} : core.i32\nfunc.return",
+                "%a = func.call @sink() : () -> core.i32\nfunc.return",
                 "call result list mismatch",
             ),
             (
-                "%a = func.call_indirect %k {signature = func.func_sig<() -> ()>} : core.i32\nfunc.return",
+                "%a = \"func.call_indirect\"(%k) {signature = func.func_sig<() -> ()>} : core.i32\nfunc.return",
                 "expected S::Results = (), found (core.i32)",
             ),
             ("func.return %k", "return count mismatch"),
         ] {
             let mut ctx = crate::IrContext::new();
             let input = format!(
-                "core.module @m {{ func.func @sink() func.func @run(%k: func.func_sig<() -> ()>) {{ func.call {{callee = @runtime}} {body} }} }}"
+                "core.module @m {{ func.func @sink() func.func @run(%k: func.func_sig<() -> ()>) {{ func.call @runtime() : () -> () {body} }} }}"
             );
             let module = crate::parser::parse_test_module(&mut ctx, &input);
             let result = crate::validation::validate_all(&ctx, module, &mut Default::default());

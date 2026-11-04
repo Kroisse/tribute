@@ -542,9 +542,7 @@ pub fn assert_wasm_output(binary: &[u8], expected_stdout: impl AsRef<[u8]>) {
 }
 
 fn run_wasm_impl(binary: &[u8], invoke: Option<&str>) -> Output {
-    wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
-        .validate_all(binary)
-        .expect("compiled source must produce a valid Wasm binary");
+    validate_wasm(binary).expect("compiled source must produce a valid Wasm binary");
     let mut wasm = tempfile::NamedTempFile::new().expect("temporary Wasm file");
     wasm.write_all(binary).expect("write Wasm module");
     let mut command = Command::new("wasmtime");
@@ -556,6 +554,64 @@ fn run_wasm_impl(binary: &[u8], invoke: Option<&str>) -> Output {
         .arg(wasm.path())
         .output()
         .expect("run Wasm module with wasmtime")
+}
+
+fn validate_wasm(binary: &[u8]) -> Result<(), wasmparser::BinaryReaderError> {
+    wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
+        .validate_all(binary)
+        .map(|_| ())
+}
+
+/// A program compiled in a caller's database for both targets: the native
+/// object file and a validated Wasm module.
+#[allow(dead_code)]
+pub struct TargetBinaries {
+    pub native_object: Vec<u8>,
+    pub wasm: Vec<u8>,
+}
+
+/// Compile `source_code` in `db` for the native and Wasm targets.
+///
+/// A caller that compiles many programs passes one database, so the prelude
+/// is checked once. Returns the diagnostics of the first target that fails,
+/// or the reason the Wasm module is invalid.
+#[allow(dead_code)]
+pub fn compile_for_both_targets(
+    db: &dyn salsa::Database,
+    source_name: &str,
+    source_code: &str,
+) -> Result<TargetBinaries, String> {
+    let source = SourceCst::from_source_str(db, source_name, source_code);
+    let config = CompilationConfig::new(db, false, OptimizationOptions::production());
+    let native_object = compile_to_native_binary(db, source, config)
+        .ok_or_else(|| {
+            let diagnostics = tribute::pipeline::native_binary_diagnostics(db, source, config);
+            format!("native compilation failed: {diagnostics:?}")
+        })?
+        .to_vec();
+    let wasm = tribute::pipeline::compile_to_wasm_binary(db, source)
+        .map_err(|diagnostics| format!("Wasm compilation failed: {diagnostics:?}"))?
+        .to_vec();
+    validate_wasm(&wasm).map_err(|error| format!("invalid Wasm module: {error}"))?;
+    Ok(TargetBinaries {
+        native_object,
+        wasm,
+    })
+}
+
+/// Compile `source_code` in `db`, then link and run it on the native target
+/// and run it on the Wasm target. Returns the native and Wasm outputs.
+#[allow(dead_code)]
+pub fn run_on_both_targets(
+    db: &dyn salsa::Database,
+    source_name: &str,
+    source_code: &str,
+) -> Result<(Output, Output), String> {
+    let binaries = compile_for_both_targets(db, source_name, source_code)?;
+    let native =
+        NativeTestBinary::from_object_bytes(&binaries.native_object).run(NativeStdin::Null);
+    let wasm = run_wasm(&binaries.wasm);
+    Ok((native, wasm))
 }
 
 /// Run a program on the native and Wasm targets and assert that both print

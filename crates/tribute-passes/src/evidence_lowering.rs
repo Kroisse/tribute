@@ -513,22 +513,22 @@ mod tests {
     }
 
     const TAIL: &str = r#"  func.func @tail(%ev: !Evidence, %payload: tribute_rt.anyref) -> tribute_rt.anyref {
-    %result = effect.dispatch_tail %ev, %payload {ability = @Console, op_name = "read"} : tribute_rt.anyref
+    %result = effect.dispatch_tail @Console @read(%payload) [%ev] : tribute_rt.anyref
     func.return %result
   }"#;
 
     const CPS: &str = r#"  func.func @cps(%ev: !Evidence, %dispatch: !Closure, %resume: !Closure, %payload: tribute_rt.anyref) {
-    effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability = @State, op_name = "get", answer_type = core.i32}
+    effect.dispatch_cps @State @get(%payload) [%ev, %dispatch, %resume] -> core.i32
   }"#;
 
     const EXTEND: &str = r#"  func.func @install(%ev: !Evidence, %prompt: core.i32, %tr: !Closure) -> !Evidence {
-    %extended = effect.extend %ev, %prompt, %tr, %ev {ability = @State} : !Evidence
+    %extended = effect.extend @State %ev, %prompt, %tr, %ev : !Evidence
     func.return %extended
   }"#;
 
     const SELECT: &str = r#"  func.func @select(%ev: !Evidence) -> !Evidence {
-    %masked = effect.mask %ev {ability = @State} : !Evidence
-    %dup = effect.dup %masked {ability = @State} : !Evidence
+    %masked = effect.mask @State %ev : !Evidence
+    %dup = effect.dup @State %masked : !Evidence
     func.return %dup
   }"#;
 
@@ -573,7 +573,7 @@ mod tests {
 
         assert_shared_dialect_only(&printed);
         assert!(
-            printed.contains(r#"callee = @"std::runtime::evidence::lookup"}"#),
+            printed.contains(r#"func.call @"std::runtime::evidence::lookup"("#),
             "{printed}"
         );
         assert!(printed.contains("func.tail_call_indirect"), "{printed}");
@@ -626,7 +626,7 @@ mod tests {
             &mut ctx,
             &module_text(
                 r#"  func.func @cps(%ev: !Evidence, %dispatch: !Closure, %resume: !Closure, %payload: tribute_rt.anyref) {
-    %bad = effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability = @State, op_name = "get", answer_type = core.i32} : core.i32
+    %bad = "effect.dispatch_cps"(%ev, %dispatch, %resume, %payload) {ability = @State, op_name = "get", answer_type = core.i32} : core.i32
   }"#,
             ),
         );

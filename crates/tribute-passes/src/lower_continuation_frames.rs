@@ -520,7 +520,7 @@ mod tests {
     fn a_perform_dispatches_through_the_frame_with_a_one_shot_resumption() {
         let printed = lowered(
             ", %f: !frame, %k: !resume, %arg: core.i32",
-            r#"    ability.perform %ev, %f, %k, %arg {ability = @State, op_name = "set"}"#,
+            r#"    ability.perform @State @set(%arg) [%ev, %f, %k] : (core.i32) -> ()"#,
         );
         assert!(!printed.contains("ability.perform"), "{printed}");
         assert_eq!(
@@ -528,7 +528,7 @@ mod tests {
             1,
             "{printed}"
         );
-        assert!(printed.contains("answer_type = core.i32"), "{printed}");
+        assert!(printed.contains("] -> core.i32"), "{printed}");
         assert!(printed.contains("__tribute_one_shot_state"), "{printed}");
         // The wrapper marks the state consumed before it enters the raw
         // resumption, and traps when it is already consumed.
@@ -545,7 +545,7 @@ mod tests {
     fn an_abort_dispatches_with_a_resumption_that_captures_nothing() {
         let (mut ctx, module) = frame_module(
             ", %f: !frame, %arg: core.i32",
-            r#"    ability.abort %ev, %f, %arg {ability = @State, op_name = "fail"}"#,
+            r#"    ability.abort @State @fail(%arg) [%ev, %f] : (core.i32) -> ()"#,
         );
         lower_continuation_frames(&mut ctx, module).unwrap();
         let printed = trunk_ir::printer::print_module(&ctx, module.op());
@@ -606,7 +606,7 @@ mod tests {
         let calls = |index: usize| {
             printed
                 .matches(&format!(
-                    "callee = @__tribute_make_dispatch_adapter_{index},"
+                    "func.call @__tribute_make_dispatch_adapter_{index}("
                 ))
                 .count()
         };
@@ -617,7 +617,7 @@ mod tests {
     fn a_perform_without_an_exact_resumption_is_rejected() {
         let (mut ctx, module) = frame_module(
             ", %f: !frame, %k: core.i32",
-            r#"    ability.perform %ev, %f, %k {ability = @State, op_name = "get"}"#,
+            r#"    ability.perform @State @get() [%ev, %f, %k] : () -> ()"#,
         );
         assert!(lower_continuation_frames(&mut ctx, module).is_err());
     }
@@ -626,7 +626,7 @@ mod tests {
     fn a_handle_with_fewer_handlers_than_arms_is_rejected() {
         let (mut ctx, module) = frame_module(
             ", %exit: !frame, %done: !resume",
-            r#"    ability.handle %ev, %exit, %done, %done {handlers = []} {
+            r#"    ability.handle %ev, %exit, %done(%done) attributes {handlers = []} {
       ^body(%inner: !ev, %frame: !frame):
         func.unreachable
     }"#,

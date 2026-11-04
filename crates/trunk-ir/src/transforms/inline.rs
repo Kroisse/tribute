@@ -942,7 +942,7 @@ mod pass {
             &mut ctx,
             r#"core.module @root {
   func.func @main() -> core.i32 {
-    %0 = func.call {callee = @inner::@helper} : core.i32
+    %0 = func.call @inner::@helper() : () -> core.i32
     func.return %0
   }
   core.module @inner {
@@ -951,7 +951,7 @@ mod pass {
       func.return %0
     }
     func.func @caller() -> core.i32 {
-      %0 = func.call {callee = @local} : core.i32
+      %0 = func.call @local() : () -> core.i32
       func.return %0
     }
     func.func @local() -> core.i32 {
@@ -1035,7 +1035,7 @@ mod pass {
 
         let other = build_func(&mut ctx, loc, "other", &[], i32_ty, |ctx, entry, _args| {
             let c = func::Constant::operands()
-                .func_ref(SymbolPath::new(["helper"]))
+                .value(SymbolPath::new(["helper"]))
                 .results(helper_fn_ty)
                 .build(ctx, loc);
             ctx.push_op(entry, c.op_ref());
@@ -1181,7 +1181,7 @@ mod pass {
     func.return %0
   }
   func.func @main() -> core.i32 {
-    %0 = func.call {callee = @helper} : core.i32
+    %0 = func.call @helper() : () -> core.i32
     func.return %0
   }
 }"#;
@@ -1214,7 +1214,7 @@ mod pass {
         // the cached graph should still be valid.
         let input = r#"core.module @test {
   func.func @helper() -> core.i32 {
-    %0 = func.call {callee = @helper} : core.i32
+    %0 = func.call @helper() : () -> core.i32
     func.return %0
   }
 }"#;
@@ -1251,15 +1251,15 @@ mod pass {
         let mut input = String::from(
             "core.module @test {\n\
   func.func @a() -> core.i32 {\n\
-    %0 = func.call {callee = @wrapper} : core.i32\n\
+    %0 = func.call @wrapper() : () -> core.i32\n\
     func.return %0\n\
   }\n\
   func.func @b() -> core.i32 {\n\
-    %0 = func.call {callee = @wrapper} : core.i32\n\
+    %0 = func.call @wrapper() : () -> core.i32\n\
     func.return %0\n\
   }\n\
   func.func @wrapper() -> core.i32 {\n\
-    %0 = func.call {callee = @large} : core.i32\n\
+    %0 = func.call @large() : () -> core.i32\n\
     func.return %0\n\
   }\n\
   func.func @large() -> core.i32 {\n",
@@ -1322,11 +1322,11 @@ mod pass {
     func.return %0
   }
   func.func @helper() -> core.i32 {
-    %0 = func.call {callee = @inner} : core.i32
+    %0 = func.call @inner() : () -> core.i32
     func.return %0
   }
   func.func @main() -> core.i32 {
-    %0 = func.call {callee = @helper} : core.i32
+    %0 = func.call @helper() : () -> core.i32
     func.return %0
   }
 }"#;

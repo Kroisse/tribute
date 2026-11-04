@@ -6,7 +6,7 @@
 use proc_macro2::{Delimiter, Span, TokenStream, TokenTree};
 use quote::{quote, quote_spanned};
 
-use crate::parse::{AttrKind, OperationDef, RegionOrSuccessor, ResultDef};
+use crate::parse::{AttrKind, OperationDef, RegionOrSuccessor, ResultDef, TypeExpr, ValueExpr};
 
 /// A format rule broken by the element at `span`.
 struct FormatError {
@@ -57,6 +57,14 @@ enum Entity {
     AttrDict,
 }
 
+/// What a `signature(..)` writes the type of.
+#[derive(Clone, Copy)]
+enum SignatureSource {
+    Attribute(usize),
+    Operand(usize),
+    Result,
+}
+
 enum Element {
     Literal(String),
     Operand(usize),
@@ -69,16 +77,29 @@ enum Element {
     },
     ResultType,
     ResultTypes,
-    AttrDict,
+    /// `args(r)`: the entry block arguments of a region.
+    RegionArgs(usize),
+    /// `functional_type(xs, results)`: the types of an operand and of the
+    /// results as a function type.
+    FunctionalType(usize),
+    /// `attr_dict`, or `attr_dict_bare` without the `attributes` keyword.
+    AttrDict {
+        bare: bool,
+    },
     Region(usize),
     Successor(usize),
     /// `signature(t, regions..)`, with the bound whose codec spells `t`,
     /// and whether its results are the operation's result types.
     Signature {
-        attribute: usize,
+        source: SignatureSource,
         regions: Vec<usize>,
         codec: TokenStream,
         results: bool,
+    },
+    /// `custom(D(entities..))`: entities directive `D` writes by hand.
+    Custom {
+        directive: TokenStream,
+        entities: Vec<Entity>,
     },
     Optional {
         anchor: Anchor,
@@ -102,6 +123,8 @@ struct Format<'a> {
     successors: Vec<(&'a str, bool)>,
     written: Vec<Entity>,
     signature: bool,
+    /// Whether an element writes a region's entry block arguments.
+    entry_args: bool,
 }
 
 impl<'a> Format<'a> {
@@ -124,6 +147,7 @@ impl<'a> Format<'a> {
             regions,
             successors,
             written: Vec::new(),
+            entry_args: false,
             signature: false,
         }
     }
@@ -277,9 +301,11 @@ impl<'a> Format<'a> {
     }
 
     fn entity(&mut self, name: &str, span: Span) -> Result<Element, FormatError> {
-        if name == "attr_dict" {
+        if name == "attr_dict" || name == "attr_dict_bare" {
             self.write(Entity::AttrDict, span)?;
-            return Ok(Element::AttrDict);
+            return Ok(Element::AttrDict {
+                bare: name == "attr_dict_bare",
+            });
         }
         let Some(entity) = self.lookup(name) else {
             return err(span, format!("the operation declares no `{name}`"));
@@ -317,11 +343,17 @@ impl<'a> Format<'a> {
         args: TokenStream,
         span: Span,
     ) -> Result<Element, FormatError> {
-        if name == "attr_dict" {
-            return err(span, "`attr_dict` takes no arguments");
+        if name == "attr_dict" || name == "attr_dict_bare" {
+            return err(span, format!("`{name}` takes no arguments"));
         }
         if name == "signature" {
             return self.signature(args, span);
+        }
+        if name == "functional_type" {
+            return self.functional_type(args, span);
+        }
+        if name == "custom" {
+            return self.custom(args, span);
         }
         let args: Vec<TokenTree> = args.into_iter().collect();
         let [TokenTree::Ident(arg)] = &args[..] else {
@@ -396,9 +428,25 @@ impl<'a> Format<'a> {
                 }
                 Element::Successor(i)
             }
+            ("args", Some(Entity::Region(i))) => {
+                if self.regions[i].1 || self.regions[i].2 {
+                    return err(
+                        arg_span,
+                        "`args(..)` writes the entry arguments of a fixed region",
+                    );
+                }
+                if self.entry_args {
+                    return err(
+                        arg_span,
+                        "a format writes the entry arguments of at most one region",
+                    );
+                }
+                self.entry_args = true;
+                return Ok(Element::RegionArgs(i));
+            }
             (
                 "symbol" | "keyword" | "type" | "types" | "region" | "regions" | "successor"
-                | "successors",
+                | "successors" | "args",
                 _,
             ) => {
                 return err(arg_span, format!("`{name}(..)` cannot write `{arg}`"));
@@ -407,13 +455,102 @@ impl<'a> Format<'a> {
                 return err(
                     span,
                     format!(
-                        "unknown format directive `{name}`; expected `symbol`, `keyword`, `signature`, `type`, `types`, `region`, `regions`, `successor`, or `successors`"
+                        "unknown format directive `{name}`; expected `symbol`, `keyword`, `signature`, `functional_type`, `args`, `type`, `types`, `region`, `regions`, `successor`, `successors`, or `custom`"
                     ),
                 );
             }
         };
         self.write(entity.expect("matched above"), arg_span)?;
         Ok(element)
+    }
+
+    /// `custom(D(a, b, ..))`: operands, attributes, and successors that
+    /// directive `D` writes by hand.
+    fn custom(&mut self, args: TokenStream, span: Span) -> Result<Element, FormatError> {
+        let mut tokens: Vec<TokenTree> = args.into_iter().collect();
+        let Some(TokenTree::Group(group)) = tokens.pop() else {
+            return err(
+                span,
+                "`custom(D(..))` names the entities directive `D` writes",
+            );
+        };
+        if group.delimiter() != Delimiter::Parenthesis || tokens.is_empty() {
+            return err(
+                span,
+                "`custom(D(..))` names the entities directive `D` writes",
+            );
+        }
+        let directive: TokenStream = tokens.into_iter().collect();
+        let mut entities = Vec::new();
+        let mut tokens = group.stream().into_iter();
+        while let Some(token) = tokens.next() {
+            let TokenTree::Ident(ident) = token else {
+                return err(token.span(), "`custom(D(..))` takes names separated by `,`");
+            };
+            let name = ident.to_string();
+            let name = name.strip_prefix("r#").unwrap_or(&name);
+            let entity = match self.lookup(name) {
+                Some(
+                    entity @ (Entity::Operand(_) | Entity::Attribute(_) | Entity::Successor(_)),
+                ) => entity,
+                Some(_) => {
+                    return err(
+                        ident.span(),
+                        "`custom(D(..))` writes operands, attributes, and successors",
+                    );
+                }
+                None => return err(ident.span(), format!("the operation declares no `{name}`")),
+            };
+            self.write(entity, ident.span())?;
+            entities.push(entity);
+            match tokens.next() {
+                None => break,
+                Some(TokenTree::Punct(p)) if p.as_char() == ',' => {}
+                Some(other) => {
+                    return err(other.span(), "`custom(D(..))` takes names separated by `,`");
+                }
+            }
+        }
+        if entities.is_empty() {
+            return err(span, "`custom(D(..))` names at least one entity");
+        }
+        Ok(Element::Custom {
+            directive,
+            entities,
+        })
+    }
+
+    /// `functional_type(xs, results)`: the types of operand `xs` and of the
+    /// results as `(A, B) -> R`. An operation without results names only the
+    /// operand and writes `-> ()`.
+    fn functional_type(&mut self, args: TokenStream, span: Span) -> Result<Element, FormatError> {
+        let names: Vec<String> = args
+            .into_iter()
+            .filter_map(|token| match token {
+                TokenTree::Ident(name) => {
+                    let name = name.to_string();
+                    Some(name.strip_prefix("r#").unwrap_or(&name).to_owned())
+                }
+                _ => None,
+            })
+            .collect();
+        let operand = match names.first().and_then(|name| self.lookup(name)) {
+            Some(Entity::Operand(i)) => i,
+            _ => return err(span, "`functional_type(..)` names an operand first"),
+        };
+        match (&names[1..], self.result_name()) {
+            ([], None) => {}
+            ([results], Some(name)) if results == name => {
+                self.write(Entity::Results, span)?;
+            }
+            _ => {
+                return err(
+                    span,
+                    "`functional_type(xs, results)` names the operation's results after its operand",
+                );
+            }
+        }
+        Ok(Element::FunctionalType(operand))
     }
 
     /// `signature(t, regions..)`: the type attribute `t` in function form,
@@ -445,36 +582,73 @@ impl<'a> Format<'a> {
             let name = ident.to_string();
             name.strip_prefix("r#").unwrap_or(&name).to_owned()
         };
-        let attribute = match self.lookup(&name(ty)) {
-            Some(Entity::Attribute(i)) => i,
-            _ => {
-                return err(
-                    ty.span(),
-                    "`signature(..)` writes an `Attr<TypeOf<S>>` attribute first",
-                );
-            }
+        let codec_of = |var: usize| match &self.op.type_vars[var].bounds[..] {
+            [bound] => Ok(quote!(#bound)),
+            _ => err(
+                ty.span(),
+                "the signature's type variable has one bound, whose `SignatureCodec` spells it",
+            ),
         };
-        let attr = &self.op.attrs[attribute];
-        let codec = match (&attr.kind, attr.binds) {
-            (crate::parse::AttrKind::BoundType, Some(var)) if !attr.list && !attr.optional => {
-                match &self.op.type_vars[var].bounds[..] {
-                    [bound] => quote!(#bound),
+        let (source, codec) = match self.lookup(&name(ty)) {
+            Some(Entity::Attribute(attribute)) => {
+                let attr = &self.op.attrs[attribute];
+                match (&attr.kind, attr.binds) {
+                    (crate::parse::AttrKind::BoundType, Some(var))
+                        if !attr.list && !attr.optional =>
+                    {
+                        self.write(Entity::Attribute(attribute), ty.span())?;
+                        (SignatureSource::Attribute(attribute), codec_of(var)?)
+                    }
                     _ => {
                         return err(
                             ty.span(),
-                            "the signature's type variable has one bound, whose `SignatureCodec` spells it",
+                            "`signature(..)` writes a required `Attr<TypeOf<S>>` attribute",
                         );
                     }
                 }
             }
+            // The operand itself is written by its own element.
+            Some(Entity::Operand(operand)) => match &self.op.operands[operand] {
+                crate::parse::Operand {
+                    variadic: false,
+                    constraint: ValueExpr::Each(TypeExpr::Var(var)),
+                    ..
+                } => (SignatureSource::Operand(operand), codec_of(*var)?),
+                _ => {
+                    return err(
+                        ty.span(),
+                        "`signature(..)` writes the type of a fixed `Value<S>` operand",
+                    );
+                }
+            },
+            Some(Entity::Results) => match (&self.op.results, &self.op.result_constraint) {
+                (ResultDef::Single(_), ValueExpr::Each(TypeExpr::Var(var))) => {
+                    self.write(Entity::Results, ty.span())?;
+                    (SignatureSource::Result, codec_of(*var)?)
+                }
+                _ => {
+                    return err(
+                        ty.span(),
+                        "`signature(..)` writes the type of a single `Value<S>` result",
+                    );
+                }
+            },
             _ => {
                 return err(
                     ty.span(),
-                    "`signature(..)` writes a required `Attr<TypeOf<S>>` attribute",
+                    "`signature(..)` writes an `Attr<TypeOf<S>>` attribute, a `Value<S>` operand, or a `Value<S>` result first",
                 );
             }
         };
-        self.write(Entity::Attribute(attribute), ty.span())?;
+        if !regions.is_empty() {
+            if self.entry_args {
+                return err(
+                    span,
+                    "a format writes the entry arguments of at most one region",
+                );
+            }
+            self.entry_args = true;
+        }
         let mut listed = Vec::new();
         for region in regions {
             let Some(Entity::Region(i)) = self.lookup(&name(region)) else {
@@ -488,13 +662,14 @@ impl<'a> Format<'a> {
             }
             listed.push(i);
         }
-        // The signature's results are the operation's result types.
-        let results = self.result_name().is_some();
+        // The signature's results are the operation's result types, unless
+        // the signature is that result's own type.
+        let results = !matches!(source, SignatureSource::Result) && self.result_name().is_some();
         if results {
             self.write(Entity::Results, ty.span())?;
         }
         Ok(Element::Signature {
-            attribute,
+            source,
             regions: listed,
             codec,
             results,
@@ -579,14 +754,31 @@ impl<'a> Format<'a> {
                 _ => None,
             };
             match *element {
-                // A list reads items while it sees `,`, and an empty one would
-                // read whatever follows as its first item.
+                // A list reads items while it sees `,`, so nothing after it
+                // may begin with `,` or an operand.
                 Element::Operand(i) if self.op.operands[i].variadic => {
-                    if !matches!(next_text, Some(")" | "]")) {
+                    let opens_with_comma = match next {
+                        Some(Element::Literal(text)) => text.starts_with(','),
+                        Some(Element::Optional { elements, .. }) => matches!(
+                            elements.first(),
+                            Some((Element::Literal(text), _)) if text.starts_with(',')
+                        ),
+                        _ => false,
+                    };
+                    if opens_with_comma || matches!(next, Some(Element::Operand(_))) {
                         return err(
                             *span,
-                            "a variadic list is closed by a literal `\")\"` or `\"]\"` right after it",
+                            "a variadic operand list is followed by neither an operand nor a literal beginning with `,`",
                         );
+                    }
+                }
+                // A region also begins with `{`.
+                Element::AttrDict { bare: true } => {
+                    let required = elements[position + 1..]
+                        .iter()
+                        .find(|(element, _)| !matches!(element, Element::Optional { .. }));
+                    if required.is_some_and(|(element, _)| matches!(element, Element::Region(_))) {
+                        return err(*span, "`attr_dict_bare` is not followed by a region");
                     }
                 }
                 Element::Successor(i) if self.successors[i].1 => {
@@ -597,10 +789,15 @@ impl<'a> Format<'a> {
                         );
                     }
                 }
-                Element::ResultTypes if !(last && next.is_none()) => {
+                // A list of types ends at a literal or at the end of the
+                // format, so nothing after it reads as one more type.
+                Element::ResultTypes
+                    if !(last && next.is_none())
+                        && !next_text.is_some_and(|text| !text.starts_with(',')) =>
+                {
                     return err(
                         *span,
-                        "result types that may be absent come last, as `(\":\" types(..)^)?` ending the format",
+                        "result types that may be absent end the format or come before a literal other than `,`, as `(\":\" types(..)^)?` or `(\"->\" \"(\" types(..)^ \")\")?`",
                     );
                 }
                 // Optional groups may be omitted, so the first element after
@@ -693,48 +890,8 @@ fn check(
         }
     }
 
-    // Generic syntax never begins with `@`, so symbols and symbol references
-    // may lead. After them a literal decides custom against generic syntax,
-    // which begins with `{`, `%`, `:`, or `[`, or ends the operation before a
-    // line beginning with `%`, `^`, or `}`; a group or a signature's `(` may
-    // stand in for it once a symbol has decided. Generic syntax never writes
-    // `(` after an operand, so a fixed operand before `"("` decides as well.
-    let symbol_like = |element: &Element| match *element {
-        Element::Symbol(_) => true,
-        Element::Attribute(i) => {
-            let attr = &op.attrs[i];
-            !attr.list && matches!(&attr.kind, AttrKind::Path(path) if path.is_ident("SymbolRef"))
-        }
-        _ => false,
-    };
-    let decides =
-        |text: &str| !text.is_empty() && !text.starts_with(['{', '%', ':', '[', '^', '}']);
-    let leading = elements
-        .iter()
-        .take_while(|(element, _)| symbol_like(element))
-        .count();
     if elements.is_empty() {
         return err(attr_span, "a format writes at least one element");
-    }
-    if let Some((first, span)) = elements.get(leading) {
-        let decided = match first {
-            Element::Literal(text) => decides(text),
-            Element::Optional { elements, .. } if leading > 0 => {
-                matches!(&elements[0].0, Element::Literal(text) if decides(text))
-            }
-            Element::Signature { .. } => leading > 0,
-            Element::Operand(i) if !op.operands[*i].variadic => matches!(
-                elements.get(leading + 1),
-                Some((Element::Literal(text), _)) if text == "("
-            ),
-            _ => false,
-        };
-        if !decided {
-            return err(
-                *span,
-                "a format begins with a literal, after any symbols or symbol references, and not with `{`, `%`, `:`, `[`, `^`, or `}`; a `signature(..)` may follow a symbol, and a fixed operand may come before `\"(\"`",
-            );
-        }
     }
 
     for (element, span) in &elements {
@@ -814,20 +971,44 @@ fn gen_elements(
             }),
             Element::ResultType => quote!(#fmt::FormatElement::ResultType(0)),
             Element::ResultTypes => quote!(#fmt::FormatElement::ResultTypes),
-            Element::AttrDict => quote!(#fmt::FormatElement::AttrDict),
+            Element::RegionArgs(i) => quote!(#fmt::FormatElement::RegionArgs(#i)),
+            Element::FunctionalType(i) => quote!(#fmt::FormatElement::FunctionalType(#i)),
+            Element::AttrDict { bare } => quote!(#fmt::FormatElement::AttrDict { bare: #bare }),
             Element::Region(i) => quote!(#fmt::FormatElement::Region(#i)),
             Element::Successor(i) => quote!(#fmt::FormatElement::Successor(#i)),
             Element::Signature {
-                attribute,
+                source,
                 regions,
                 codec,
                 results,
-            } => quote!(#fmt::FormatElement::Signature {
-                attribute: #attribute,
+            } => {
+                let source = match *source {
+                    SignatureSource::Attribute(i) => quote!(#fmt::SignatureSource::Attribute(#i)),
+                    SignatureSource::Operand(i) => quote!(#fmt::SignatureSource::Operand(#i)),
+                    SignatureSource::Result => quote!(#fmt::SignatureSource::Result),
+                };
+                quote!(#fmt::FormatElement::Signature {
+                source: #source,
                 regions: &[#(#regions),*],
                 codec: #crate_path::asm_format::SignatureCodecHooks::of::<#codec>(),
                 results: #results,
-            }),
+            })
+            }
+            Element::Custom {
+                directive,
+                entities,
+            } => {
+                let entities = entities.iter().map(|entity| match *entity {
+                    Entity::Operand(i) => quote!(#fmt::CustomSlot::Operand(#i)),
+                    Entity::Attribute(i) => quote!(#fmt::CustomSlot::Attribute(#i)),
+                    Entity::Successor(i) => quote!(#fmt::CustomSlot::Successor(#i)),
+                    _ => unreachable!("`custom` writes operands, attributes, and successors"),
+                });
+                quote!(#fmt::FormatElement::Custom {
+                    hooks: #crate_path::asm_format::OpAsmDirectiveHooks::of::<#directive>(),
+                    entities: &[#(#entities),*],
+                })
+            }
             Element::Optional { anchor, elements } => {
                 let anchor = match *anchor {
                     Anchor::Attribute(i) => quote!(#fmt::FormatAnchor::Attribute(#i)),
@@ -1078,6 +1259,30 @@ mod tests {
             ),
             (
                 quote!(
+                    fn op() {
+                        #[region(r)]
+                        {}
+                    }
+                ),
+                quote!("x" custom(D(r))),
+                "writes operands, attributes, and successors",
+            ),
+            (
+                quote!(
+                    fn op(a: Value<_>) {}
+                ),
+                quote!("x" custom(D(a)) a),
+                "writes operand `a` twice",
+            ),
+            (
+                quote!(
+                    fn op(a: Value<_>) {}
+                ),
+                quote!("x" custom(D)),
+                "names the entities",
+            ),
+            (
+                quote!(
                     fn op(a: Option<Attr<bool>>) {}
                 ),
                 quote!("x" (a^)?),
@@ -1161,7 +1366,7 @@ mod tests {
                     fn op() -> Variadic<_> {}
                 ),
                 quote!("x" (":" types(results)^)? "y"),
-                "come last",
+                "end the format or come before a literal",
             ),
             (
                 quote!(
@@ -1172,17 +1377,20 @@ mod tests {
             ),
             (
                 quote!(
-                    fn op(a: Variadic<_>) {}
+                    fn op(r: Option<Attr<u32>>) {
+                        #[region(body)]
+                        {}
+                    }
                 ),
-                quote!("x" a),
-                "closed by a literal",
+                quote!("x" attr_dict_bare region(body)),
+                "is not followed by a region",
             ),
             (
                 quote!(
                     fn op(a: Value<_>, b: Variadic<_>) {}
                 ),
                 quote!("x" "(" b "," a ")"),
-                "closed by a literal",
+                "followed by neither an operand",
             ),
             (
                 quote!(
@@ -1219,34 +1427,6 @@ mod tests {
                 quote!(
                     fn op() {}
                 ),
-                quote!("[" "x"),
-                "a format begins with a literal",
-            ),
-            (
-                quote!(
-                    fn op(a: Value<_>) {}
-                ),
-                quote!(a "x"),
-                "a format begins with a literal",
-            ),
-            (
-                quote!(
-                    fn op(a: Option<Attr<bool>>) {}
-                ),
-                quote!(("y" a^)? "x"),
-                "a format begins with a literal",
-            ),
-            (
-                quote!(
-                    fn op(a: Attr<SymbolRef>, b: Attr<u32>) {}
-                ),
-                quote!(a b),
-                "a format begins with a literal",
-            ),
-            (
-                quote!(
-                    fn op() {}
-                ),
                 quote!("run" "" "."),
                 "is not empty",
             ),
@@ -1256,13 +1436,6 @@ mod tests {
                 ),
                 quote!(),
                 "at least one element",
-            ),
-            (
-                quote!(
-                    fn op(args: Variadic<_>, on: Option<Attr<bool>>) {}
-                ),
-                quote!("run" "(" args (")" on^)?),
-                "closed by a literal",
             ),
             (
                 quote!(
@@ -1299,16 +1472,6 @@ mod tests {
                 ),
                 quote!("run" ("b" on^)? payload),
                 "begins with a keyword or punctuation",
-            ),
-            (
-                quote!(
-                    fn op<S: FuncSig>(t: Attr<TypeOf<S>>) {
-                        #[region(body)]
-                        {}
-                    }
-                ),
-                quote!(signature(t, body) region(body)),
-                "may follow a symbol",
             ),
             (
                 quote!(

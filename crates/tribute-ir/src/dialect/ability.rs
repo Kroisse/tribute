@@ -13,7 +13,7 @@ mod ability {
     /// One ability instance the module names, and its operations.
     ///
     /// ```text
-    /// ability.decl {sym_name = "<instance key>"} {
+    /// ability.decl @State {
     ///   ability.operation {kind = "op", op_name = "get", param_types = [], result_type = ResultType}
     ///   ability.operation {kind = "op", op_name = "set", param_types = [ValueType], result_type = core.nil}
     /// }
@@ -54,6 +54,7 @@ mod ability {
     ///   naming the instance remains. The target's evidence lowering consumes
     ///   the last reference and removes the declaration. A declaration is not
     ///   a callable definition, so global DCE does not remove it.
+    #[asm_format(symbol(sym_name) attr_dict region(operations))]
     fn decl(sym_name: Attr<String>) {
         #[region(operations)]
         {}
@@ -66,6 +67,7 @@ mod ability {
     /// `param_types: [Type]`, and `result_type: Type`: the parameter types in
     /// source declaration order and the result type. These types are at
     /// module level, so they cannot have a row tail.
+    #[asm_format(attr_dict_bare)]
     fn operation(
         op_name: Attr<String>,
         kind: Attr<String>,
@@ -83,6 +85,14 @@ mod ability {
     /// runtime-unique prompt identity for the delimiter and shares it across
     /// every instance. The body entry block receives the extended evidence. Every body path ends in a proper tail transfer or
     /// `func.unreachable`.
+    ///
+    /// ```text
+    /// ability.handle_dispatch %evidence, %prompt_tag(%dispatcher0, ...) attributes {abilities = [@State]} {
+    /// ^body(%ev: Evidence):
+    ///   ...
+    /// }
+    /// ```
+    #[asm_format(evidence "," prompt_tag "(" dispatchers ")" attr_dict region(body))]
     #[implements(CallableExit)]
     fn handle_dispatch(
         abilities: Attr<[SymbolRef]>,
@@ -100,11 +110,11 @@ mod ability {
     /// The result flows inline — no CPS transformation is needed.
     ///
     /// ```text
-    /// %result = ability.call %args...
-    ///   { ability = @State, op_name = "get" }
+    /// %result = ability.call @State @get(%args...) : (ArgType, ...) -> ResultType
     /// ```
     ///
     /// Lowered to: evidence lookup → tr_dispatch_fn(op_idx, value) → result.
+    #[asm_format(ability symbol(op_name) "(" values ")" attr_dict ":" functional_type(values, result))]
     fn call(ability: Attr<SymbolRef>, op_name: Attr<String>, values: Variadic<_>) -> Value<_> {}
 
     // === Abstract continuation frames ===
@@ -137,6 +147,7 @@ mod ability {
     /// A frame for a structured branch has none. The produced frame's type is
     /// not inferred: it is built from the continuation's value type.
     #[verify]
+    #[asm_format(evidence "," outer "," continuation attr_dict_bare ":" type(result))]
     fn suffix_frame<F: Frame, C, G: Frame>(
         evidence_plan: Option<Attr<[EvidenceStep]>>,
         evidence: Value<Evidence>,
@@ -158,6 +169,7 @@ mod ability {
     /// of type `R`. It appears only in a `Cps` callable, a completion, or a
     /// generated continuation body.
     #[implements(CallableExit)]
+    #[asm_format(frame "," value attr_dict_bare)]
     fn exit<F: Frame>(frame: Value<F>, value: Value<F::Result>) {}
 
     /// Install one layer of a handle around `body`, exiting to `exit`.
@@ -167,7 +179,7 @@ mod ability {
     /// the installed layer, whose completion is `completion`.
     ///
     /// ```text
-    /// ability.handle %outer_ev, %exit, %completion, %arm0, ... {handlers = [...]} {
+    /// ability.handle %outer_ev, %exit, %completion(%arm0, ...) attributes {handlers = [...]} {
     /// ^body(%ev: Evidence, %f: !ability.frame<M>):
     ///   ...
     /// }
@@ -198,6 +210,7 @@ mod ability {
     /// extended Evidence and an `ability.frame<M>`, and every path ends in a
     /// proper tail transfer or `func.unreachable`.
     #[verify]
+    #[asm_format(evidence "," exit "," completion "(" arms ")" attr_dict region(body))]
     #[implements(CallableExit)]
     fn handle<F: Frame>(
         handlers: Attr<[HandlerBinding]>,
@@ -218,12 +231,14 @@ mod ability {
     /// operation adds the check.
     ///
     /// ```text
-    /// ability.perform %ev, %f, %resumption, %arg0, ... {ability = @State, op_name = "get"}
+    /// ability.perform @State @get(%arg0, ...) [%ev, %f, %resumption]
+    ///   : (ArgType, ...) -> ()
     /// ```
     ///
     /// A resultless terminator that takes Evidence, an `ability.frame<R>`, a
     /// raw `ResumeExact<I, R>`, and the operation arguments. `I` is not
     /// `core.never`.
+    #[asm_format(ability symbol(op_name) "(" values ")" "[" evidence "," frame "," resumption "]" attr_dict ":" functional_type(values))]
     #[implements(CallableExit)]
     fn perform<F: Frame, C>(
         ability: Attr<SymbolRef>,
@@ -241,11 +256,12 @@ mod ability {
     /// dispatcher, with no resumption.
     ///
     /// ```text
-    /// ability.abort %ev, %f, %arg0, ... {ability = @Fail, op_name = "fail"}
+    /// ability.abort @Fail @fail(%arg0, ...) [%ev, %f] : (ArgType, ...) -> ()
     /// ```
     ///
     /// The shape of `ability.perform` without the resumption, used only for
     /// source `op -> Never`.
+    #[asm_format(ability symbol(op_name) "(" values ")" "[" evidence "," frame "]" attr_dict ":" functional_type(values))]
     #[implements(CallableExit)]
     fn abort<F: Frame>(
         ability: Attr<SymbolRef>,
@@ -270,6 +286,7 @@ mod ability {
     /// evidence. It is not a terminator and appears only in a flow that is
     /// not `Cps`. Frame expansion lowers it to `effect.delimit` with the same
     /// operands and result.
+    #[asm_format(body "," evidence attr_dict_bare ":" type(result))]
     fn delimit<C, F: Frame>(body: Value<C>, evidence: Value<Evidence>) -> Value<F::Result>
     where
         C: CpsClosure<Inputs = (Evidence, F)>,
@@ -536,7 +553,7 @@ mod tests {
                 &format!(
                     r#"core.module @test {{
   func.func @main(%evidence: core.ptr, %prompt: core.i32) {{
-    ability.handle_dispatch %evidence, %prompt {{abilities = {abilities}}} {{
+    ability.handle_dispatch %evidence, %prompt() attributes {{abilities = {abilities}}} {{
       func.unreachable
     }}
   }}

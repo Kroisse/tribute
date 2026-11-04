@@ -143,12 +143,12 @@ mod tests {
 
     const NESTED_CONTROL: &str = r#"core.module @test {
   func.func @first(%cond: core.i1, %tag: core.i32) -> core.nil {
-    %never = scf.if %cond : core.never {
+    %never = scf.if %cond -> (core.never) {
       scf.switch %tag {
-        scf.case {value = 0} { func.return }
+        scf.case 0 { func.return }
         scf.default { func.unreachable }
       }
-    } { func.unreachable }
+    } else { func.unreachable }
   }
   func.func @second() -> core.nil { func.return }
 }"#;

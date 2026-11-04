@@ -1,6 +1,5 @@
 ---
 source: crates/trunk-ir/src/dialect/scf.rs
-assertion_line: 858
 expression: "print_module(&ctx, module.op())"
 ---
 core.module @test {

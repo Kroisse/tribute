@@ -93,6 +93,80 @@ pub use row::{
 /// Exact semantic identity copied from the trusted compiler-intrinsic registry.
 pub const COMPILER_INTRINSIC_ATTR: &str = "tribute.compiler_intrinsic";
 
+/// Whether an ability operation, and the `tribute_control.perform` that
+/// invokes it or the `tribute_control.handler` clause that handles it, is a
+/// general (`op`) or a tail-resumptive (`fn`) one.
+///
+/// It is stored as a string attribute holding its [keyword](Self::keyword).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum OperationKind {
+    /// A general handler arm, which may capture the resumption.
+    Op,
+    /// A tail-resumptive arm, which resumes automatically.
+    Fn,
+}
+
+impl OperationKind {
+    /// The keyword that spells this kind, both as the stored attribute
+    /// value and in the `tribute_control.handler` syntax.
+    pub fn keyword(self) -> &'static str {
+        match self {
+            Self::Op => "op",
+            Self::Fn => "fn",
+        }
+    }
+
+    /// The kind a keyword spells; `None` for any other string.
+    pub fn from_keyword(word: &str) -> Option<Self> {
+        match word {
+            "op" => Some(Self::Op),
+            "fn" => Some(Self::Fn),
+            _ => None,
+        }
+    }
+
+    fn from_attribute(ctx: &IrContext, value: &Attribute) -> Option<Self> {
+        match value {
+            Attribute::String(keyword) => Self::from_keyword(ctx.str(*keyword)),
+            _ => None,
+        }
+    }
+}
+
+/// `Attr<OperationKind>`: a keyword string, which the schema checks.
+impl trunk_ir::attr_kind::AttrKind for OperationKind {
+    const KIND: trunk_ir::op_schema::AttributeKind = trunk_ir::op_schema::AttributeKind::String;
+    type Out<'ctx> = OperationKind;
+    type In = OperationKind;
+    const DOMAIN: Option<&'static str> = Some("one of \"op\" and \"fn\"");
+
+    fn accepts(ctx: &IrContext, attr: &Attribute) -> bool {
+        Self::from_attribute(ctx, attr).is_some()
+    }
+
+    fn read<'ctx>(ctx: &'ctx IrContext, attr: &'ctx Attribute) -> OperationKind {
+        Self::from_attribute(ctx, attr).expect("unverified handler kind keyword")
+    }
+
+    fn write(ctx: &mut IrContext, value: OperationKind) -> Attribute {
+        ctx.string_attr(value.keyword())
+    }
+}
+
+/// A kind is written as its keyword, `op` or `fn`.
+impl trunk_ir::asm_format::KeywordCodec for OperationKind {
+    fn keyword<'a>(ctx: &'a IrContext, attr: &'a Attribute) -> Option<&'a str> {
+        Self::from_attribute(ctx, attr).map(Self::keyword)
+    }
+
+    fn attribute(word: &str) -> Option<trunk_ir::parser::raw::RawAttribute<'static>> {
+        let kind = Self::from_keyword(word)?;
+        Some(trunk_ir::parser::raw::RawAttribute::String(
+            kind.keyword().to_owned(),
+        ))
+    }
+}
+
 /// A source named function in either dialect: `tribute_control.func`, or the
 /// `tribute_cps.func` class specialization makes of one.
 #[trunk_ir::op_flag]
@@ -173,7 +247,7 @@ mod tribute_control {
         r#type: Attr<TypeOf<S>>,
         row_binders: Option<Attr<[RowBinder]>>,
         row_unions: Option<Attr<[RowUnion]>>,
-        inferred_row: Option<Attr<bool>>,
+        #[default(false)] inferred_row: Attr<bool>,
     ) {
         #[region(body?)]
         {}
@@ -253,6 +327,7 @@ mod tribute_control {
     #[verify]
     #[flags(Pure)]
     #[implements(CallableResultOrigin)]
+    #[asm_format(lambda attr_dict_bare ":" type(result))]
     fn instantiate<S: FuncSig>(row_args: Attr<[Row]>, lambda: Value<S>) -> Value<impl FuncSig> {}
 
     /// A named function as a value. Its result is a callable origin when the
@@ -264,8 +339,8 @@ mod tribute_control {
     /// ```
     ///
     /// - **Shape:** no operands or regions, and not a terminator.
-    ///   `func_ref: Symbol` is required, and the result is one
-    ///   `tribute_control.func_sig`. The concise form writes `func_ref`, then
+    ///   `value: Symbol` is required, and the result is one
+    ///   `tribute_control.func_sig`. The concise form writes `value`, then
     ///   `row_args` after `rows` when present.
     /// - **Meaning:** makes a named function a first-class source value,
     ///   which source needs because it can use a named function as a
@@ -285,10 +360,10 @@ mod tribute_control {
     /// - **Location:** the source reference span that uses the named function
     ///   as a value.
     #[verify]
-    #[asm_format(func_ref ("rows" row_args^)? ":" type(result))]
+    #[asm_format(value ("rows" row_args^)? ":" type(result))]
     #[flags(Pure, SourceFuncRef)]
     #[implements(CallableResultOrigin)]
-    fn func_ref(func_ref: Attr<SymbolRef>, row_args: Option<Attr<[Row]>>) -> Value<impl FuncSig> {}
+    fn func_ref(value: Attr<SymbolRef>, row_args: Option<Attr<[Row]>>) -> Value<impl FuncSig> {}
 
     /// A direct call. Its result is a callable origin when the callee has a
     /// body or is a registered compiler intrinsic.
@@ -314,6 +389,7 @@ mod tribute_control {
     ///   arguments.
     #[verify]
     #[implements(CallLike, CallableResultOrigin)]
+    #[asm_format(args attr_dict_bare ":" type(result))]
     fn call(
         callee: Attr<SymbolRef>,
         row_args: Option<Attr<[Row]>>,
@@ -325,7 +401,7 @@ mod tribute_control {
     /// An indirect call. Its result is a callable origin when its callee is.
     ///
     /// ```text
-    /// %result = tribute_control.call_indirect %callee(%arg0, ...) : Result
+    /// %result = tribute_control.call_indirect %callee(%arg0, ...) : (Arg0, ...) -> Result
     /// ```
     ///
     /// - **Shape:** a `tribute_control.func_sig` callee, the source
@@ -347,7 +423,7 @@ mod tribute_control {
     /// - **Location:** the source indirect-call span, including the callee
     ///   and the arguments.
     #[verify]
-    #[asm_format(callee "(" args ")" attr_dict ":" type(result))]
+    #[asm_format(callee "(" args ")" attr_dict ":" signature(callee))]
     #[flags(SourceCallIndirect)]
     #[implements(CallableResultOrigin)]
     fn call_indirect<S: FuncSig>(
@@ -398,6 +474,7 @@ mod tribute_control {
     ///   the call.
     #[verify]
     #[implements(CallLike, CallableExit, LocalValidation)]
+    #[asm_format(args attr_dict_bare)]
     fn tail_call(
         callee: Attr<SymbolRef>,
         row_args: Option<Attr<[Row]>>,
@@ -409,7 +486,7 @@ mod tribute_control {
     /// A proper tail call of a callable value, from source `become`.
     ///
     /// ```text
-    /// tribute_control.tail_call_indirect %callee(%arg0, ...)
+    /// tribute_control.tail_call_indirect %callee(%arg0, ...) : (Arg0, ...) -> Result
     /// ```
     ///
     /// - **Shape:** a `tribute_control.func_sig` callee, the source
@@ -430,7 +507,7 @@ mod tribute_control {
     /// - **Location:** the source span including the `become` keyword and
     ///   the indirect call.
     #[verify]
-    #[asm_format(callee "(" args ")" attr_dict)]
+    #[asm_format(callee "(" args ")" attr_dict ":" signature(callee))]
     #[flags(SourceTailCallIndirect)]
     #[implements(CallableExit, LocalValidation)]
     fn tail_call_indirect<S: FuncSig>(
@@ -456,6 +533,7 @@ mod tribute_control {
     /// - **Location:** the span of the source return or of the implicit
     ///   body-result expression.
     #[implements(LocalValidation)]
+    #[asm_format(value attr_dict_bare)]
     fn r#return(value: Value<_>) {}
 
     // Direct-style control operations
@@ -464,11 +542,8 @@ mod tribute_control {
     /// result type.
     ///
     /// ```text
-    /// %result = tribute_control.perform %arg0, ... {
-    ///   ability = @State,
-    ///   op_name = "get",
-    ///   operation_kind = "op"
-    /// } : ResultType
+    /// %result = tribute_control.perform op @State @get(%arg0, ...)
+    ///   : (ArgType, ...) -> ResultType
     /// ```
     ///
     /// - **Operands:** zero or more already evaluated source arguments in
@@ -478,7 +553,7 @@ mod tribute_control {
     ///   result is `core.never`, and does not select a physical `Never`
     ///   control carrier.
     /// - **Attributes:** `ability: SymbolRef`, `op_name: String`, and
-    ///   `operation_kind: String` are required. `operation_kind` is exactly
+    ///   `operation_kind: OperationKind` are required. `operation_kind` is exactly
     ///   `fn` or `op`, copied from the typechecked operation declaration. It
     ///   is source-semantic metadata, not a lowering hint inferred from a body
     ///   or a use site. Every source ability invocation uses this operation,
@@ -522,10 +597,11 @@ mod tribute_control {
     ///   including the qualified callee and all arguments where possible.
     #[verify]
     #[implements(OperationDeclarationUse, CallableResultOrigin)]
+    #[asm_format(keyword(operation_kind) ability symbol(op_name) "(" args ")" attr_dict ":" functional_type(args, result))]
     fn perform(
         ability: Attr<SymbolRef>,
         op_name: Attr<String>,
-        operation_kind: Attr<String>,
+        operation_kind: Attr<OperationKind>,
         args: Variadic<_>,
     ) -> Value<_> {
     }
@@ -536,15 +612,14 @@ mod tribute_control {
     /// is.
     ///
     /// ```text
-    /// %answer = tribute_control.handle : AnswerType {
+    /// %answer = tribute_control.handle : AnswerType body {
     ///   ...
     ///   tribute_control.yield %body_value
-    /// } {
-    ///   ^completion(%completed: BodyType):
-    ///     ...
-    ///     tribute_control.yield %answer_value
-    /// } {
-    ///   tribute_control.handler {...} { ... }
+    /// } completion(%completed: BodyType) {
+    ///   ...
+    ///   tribute_control.yield %answer_value
+    /// } handlers {
+    ///   tribute_control.handler op @Ability @name(%arg: ArgType) : ResultType { ... }
     ///   ...
     /// }
     /// ```
@@ -592,6 +667,7 @@ mod tribute_control {
     /// source has no `do` arm, the region is the identity on the body result.
     /// This removes an optional structural case from conversion without
     /// changing source semantics.
+    #[asm_format(attr_dict ":" type(result) "body" region(body) "completion" args(completion) region(completion) "handlers" region(handlers))]
     #[verify]
     #[implements(CallableResultOrigin, CallableArgumentOrigin, LocalValidation)]
     fn handle(evidence_plan: Option<Attr<[EvidenceStep]>>) -> Value<_> {
@@ -608,18 +684,17 @@ mod tribute_control {
     /// declaration's parameter type at its position.
     ///
     /// ```text
-    /// tribute_control.handler {ability = @State, kind = "op", op_name = "get", operation_result_type = ResultType} {
-    ///   ^handler(%arg0: Arg0Type, ..., %resume: tribute_control.resume_token<ResultType, AnswerType>):
-    ///     ...
-    ///     tribute_control.yield %answer
+    /// tribute_control.handler op @State @get(%arg0: Arg0Type, ..., %resume: tribute_control.resume_token<ResultType, AnswerType>) : ResultType {
+    ///   ...
+    ///   tribute_control.yield %answer
     /// }
     /// ```
     ///
     /// - **Operands and results:** none. It is a declarative entry owned by
     ///   the surrounding `tribute_control.handle`.
     /// - **Attributes:** `ability: SymbolRef`, `op_name: String`,
-    ///   `kind: String`, and `operation_result_type: Type` are required.
-    ///   `kind` is exactly `fn` or `op`.
+    ///   `kind: OperationKind`, and `operation_result_type: Type` are required.
+    ///   `kind` is exactly `fn` or `op`, written as that bare keyword.
     /// - **Regions:** exactly one executable `body` region with one block.
     /// - **Block arguments:** the source operation arguments come first, in
     ///   declaration order and with their logical types. A resumptive `op`
@@ -660,12 +735,12 @@ mod tribute_control {
     ///   arm or an `op -> Never` arm has no continuation capability.
     /// - **Location:** the source handler arm, including the operation
     ///   header.
-    #[verify]
+    #[asm_format(keyword(kind) ability symbol(op_name) args(body) ":" operation_result_type attr_dict region(body))]
     #[implements(OperationDeclarationUse, CallableArgumentOrigin, LocalValidation)]
     fn handler(
         ability: Attr<SymbolRef>,
         op_name: Attr<String>,
-        kind: Attr<String>,
+        kind: Attr<OperationKind>,
         operation_result_type: Attr<Type>,
     ) {
         #[region(body)]
@@ -706,6 +781,7 @@ mod tribute_control {
     /// - **Location:** the source `resume` expression.
     #[verify]
     #[implements(CallableResultOrigin)]
+    #[asm_format(resume_token "," value attr_dict_bare ":" type(result))]
     fn resume<T: ResumeToken>(
         evidence_plan: Option<Attr<[EvidenceStep]>>,
         resume_token: Value<T>,
@@ -731,6 +807,7 @@ mod tribute_control {
     /// - **Location:** the source expression that makes the region result. A
     ///   synthesized identity completion uses the owning `handle` location.
     #[implements(LocalValidation)]
+    #[asm_format(value attr_dict_bare)]
     fn r#yield(value: Value<_>) {}
 }
 

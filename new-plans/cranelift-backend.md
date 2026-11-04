@@ -155,7 +155,7 @@ operation은 이 dialect에 두지 않는다. 전체 연산 목록은
 `clif.br_table`은 Cranelift의 `br_table` 명령과 같은 의미를 가진다.
 
 ```text
-clif.br_table %index [^default, ^entry0, ^entry1, ^entry2]
+"clif.br_table"(%index)[^default, ^entry0, ^entry1, ^entry2]
 ```
 
 - Successor는 `default`가 먼저이고, 그 뒤가 0번부터의 table 항목이다.
@@ -171,7 +171,7 @@ clif.br_table %index [^default, ^entry0, ^entry1, ^entry2]
 `clif.switch`는 `cranelift_frontend::Switch`와 같은 의미를 가진다.
 
 ```text
-clif.switch %index [^default, ^a, ^b, ^c] {cases = [0, 1, 7]}
+"clif.switch"(%index)[^default, ^a, ^b, ^c] {cases = [0, 1, 7]}
 ```
 
 - Successor는 `default`가 먼저이고, 그 뒤로 `cases`의 값마다 하나씩 같은 순서로

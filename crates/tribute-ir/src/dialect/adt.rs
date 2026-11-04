@@ -54,23 +54,30 @@ mod adt {
     }
 
     #[flags(Pure)]
+    #[asm_format(fields attr_dict_bare ":" type(result))]
     fn struct_new(r#type: Attr<Type>, fields: Variadic<_>) -> Value<_> {}
 
     #[flags(Pure)]
+    #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn struct_get(r#type: Attr<Type>, field: Attr<u32>, r#ref: Value<_>) -> Value<_> {}
 
+    #[asm_format(r#ref "," value attr_dict_bare)]
     fn struct_set(r#type: Attr<Type>, field: Attr<u32>, r#ref: Value<_>, value: Value<_>) {}
 
     #[flags(Pure)]
+    #[asm_format(fields attr_dict_bare ":" type(result))]
     fn variant_new(r#type: Attr<Type>, tag: Attr<String>, fields: Variadic<_>) -> Value<_> {}
 
     #[flags(Pure)]
+    #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn variant_is(r#type: Attr<Type>, tag: Attr<String>, r#ref: Value<_>) -> Value<_> {}
 
     #[flags(Pure)]
+    #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn variant_cast(r#type: Attr<Type>, tag: Attr<String>, r#ref: Value<_>) -> Value<_> {}
 
     #[flags(Pure)]
+    #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn variant_get(
         r#type: Attr<Type>,
         tag: Attr<String>,
@@ -81,6 +88,7 @@ mod adt {
 
     /// A `length`-element array whose every element is `initial`.
     #[flags(Pure)]
+    #[asm_format(length "," initial attr_dict_bare ":" type(result))]
     fn array_new<A: Array>(
         r#type: Attr<TypeOf<A>>,
         length: Value<Index>,
@@ -91,6 +99,7 @@ mod adt {
     /// An array of `elements` in order. Its length is the number of
     /// operands, which may be zero.
     #[flags(Pure)]
+    #[asm_format(elements attr_dict_bare ":" type(result))]
     fn array_of<A: Array>(r#type: Attr<TypeOf<A>>, elements: Variadic<A::Element>) -> Value<A> {}
 
     /// A new array of `source[0, start)`, `elements`, and `source[end, len)`.
@@ -100,7 +109,12 @@ mod adt {
     /// `end = start + 1`), replacing elements, and trimming either end are
     /// all written with this operation. It requires `start ≤ end ≤ len`; the
     /// target traps an execution that violates it.
+    ///
+    /// ```text
+    /// %r = adt.array_splice %source[%start, %end](%element0, ...) attributes {type = !A} : !A
+    /// ```
     #[flags(Pure)]
+    #[asm_format(source "[" start "," end "]" "(" elements ")" attr_dict ":" type(result))]
     fn array_splice<A: Array>(
         r#type: Attr<TypeOf<A>>,
         source: Value<A>,
@@ -113,6 +127,7 @@ mod adt {
     /// The element at `index`. It requires `index < len`; the target traps
     /// an execution that violates it.
     #[flags(Pure)]
+    #[asm_format(r#ref "," index attr_dict_bare ":" type(result))]
     fn array_get<A: Array>(r#ref: Value<A>, index: Value<Index>) -> Value<A::Element> {}
 
     /// Replace the element at `index` in place. Every value that refers to
@@ -120,26 +135,33 @@ mod adt {
     /// a shared array builds the changed array with `adt.array_splice`
     /// instead. It requires `index < len`; the target traps an execution that
     /// violates it.
+    #[asm_format(r#ref "," index "," value attr_dict_bare)]
     fn array_set<A: Array>(r#ref: Value<A>, index: Value<Index>, value: Value<A::Element>) {}
 
     /// The number of elements.
     #[flags(Pure)]
+    #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn array_len(r#ref: Value<impl Array>) -> Value<Index> {}
 
     #[flags(Pure)]
+    #[asm_format(attr_dict_bare ":" type(result))]
     fn ref_null(r#type: Attr<Type>) -> Value<_> {}
 
     #[flags(Pure)]
+    #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn ref_is_null(r#ref: Value<_>) -> Value<_> {}
 
     #[implements(Fold)]
     #[flags(Pure)]
+    #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn ref_cast(r#type: Attr<Type>, r#ref: Value<_>) -> Value<_> {}
 
     #[flags(Pure)]
+    #[asm_format(attr_dict_bare ":" type(result))]
     fn string_const(value: Attr<String>) -> Value<_> {}
 
     #[flags(Pure)]
+    #[asm_format(attr_dict_bare ":" type(result))]
     fn bytes_const(value: Attr<Bytes>) -> Value<_> {}
 }
 
@@ -992,19 +1014,19 @@ mod tests {
             "%v = adt.array_of %n, %w {type = !A} : !A"
         ));
         assert!(array_schema_ok(
-            "%v = adt.array_splice %a, %i, %i, %n {type = !A} : !A"
+            "%v = adt.array_splice %a[%i, %i](%n) attributes {type = !A} : !A"
         ));
         assert!(array_schema_ok(
-            "%v = adt.array_splice %a, %i, %i {type = !A} : !A"
+            "%v = adt.array_splice %a[%i, %i]() attributes {type = !A} : !A"
         ));
         assert!(!array_schema_ok(
-            "%v = adt.array_splice %a, %n, %i {type = !A} : !A"
+            "%v = adt.array_splice %a[%n, %i]() attributes {type = !A} : !A"
         ));
         assert!(!array_schema_ok(
-            "%v = adt.array_splice %a, %i, %i, %w {type = !A} : !A"
+            "%v = adt.array_splice %a[%i, %i](%w) attributes {type = !A} : !A"
         ));
         assert!(!array_schema_ok(
-            "%v = adt.array_splice %a, %i, %i {type = !B} : !B"
+            "%v = adt.array_splice %a[%i, %i]() attributes {type = !B} : !B"
         ));
     }
 

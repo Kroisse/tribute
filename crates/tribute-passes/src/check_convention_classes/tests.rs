@@ -12,7 +12,7 @@ fn rules(input: &str) -> Vec<&'static str> {
         .collect()
 }
 
-const CTL: &str = r#"  ability.decl {sym_name = "Ctl"} {
+const CTL: &str = r#"  ability.decl @Ctl {
     ability.operation {kind = "op", op_name = "ctl", param_types = [], result_type = core.i32}
   }"#;
 
@@ -24,7 +24,7 @@ fn calls(callback: &str, own: &str, lambda: &str, callee: &str) -> String {
   !cb = tribute_control.func_sig<(core.i32) -> core.i32 row(| 'a0)>
 {CTL}
   tribute_cps.func @"app$9D"['a0](%x: core.i32, %f: !cb) -> core.i32 row(| 'a0) convention({own}) {{
-    %r = tribute_cps.call_indirect %f, %x {{convention = "{callback}"}} : core.i32
+    %r = tribute_cps.call_indirect %f(%x) attributes {{convention = "{callback}"}} : (core.i32) -> core.i32 row(| 'a0)
     tribute_control.return %r
   }}
   tribute_cps.func @main(%x: core.i32) -> core.i32 convention(direct) {{
@@ -77,7 +77,7 @@ fn an_instance_of_an_upper_bound_has_a_body_per_class_up_to_it() {
     %f = tribute_cps.lambda(%y: core.i32) -> core.i32 row(| 'a0) captures [] entries {{
 {bodies}
     }}
-    %r = tribute_cps.call_indirect %f, %x {{convention = "evidence_direct"}} : core.i32
+    %r = tribute_cps.call_indirect %f(%x) attributes {{convention = "evidence_direct"}} : (core.i32) -> core.i32 row(| 'a0)
     tribute_control.return %r
   }}
 }}"#
@@ -124,13 +124,13 @@ CTL
       direct {
         %s = tribute_control.instantiate %g {row_args = [{tail = 1}]} : !l1
         %c = arith.const {value = 1} : core.i32
-        %v = tribute_cps.call_indirect %s, %c {convention = "direct"} : core.i32
+        %v = tribute_cps.call_indirect %s(%c) attributes {convention = "direct"} : (core.i32) -> core.i32 row(| 'a1)
         tribute_control.return %v
       }
     }
     %a = tribute_control.instantiate %g {row_args = [{}]} : !l0
     %i = tribute_control.instantiate %h {row_args = [{}]} : !h0
-    %r = tribute_cps.call_indirect %i {convention = "direct"} : core.i32
+    %r = tribute_cps.call_indirect %i() attributes {convention = "direct"} : () -> core.i32
     USE
     tribute_control.return %r
   }
@@ -165,7 +165,7 @@ fn instantiations_that_select_one_class_may_pass_other_classes() {
             r#"core.module @m {{
   !l0 = tribute_control.func_sig<(core.i32) -> core.i32 row(@Ctl)>
   !la = tribute_control.func_sig<(core.i32) -> core.i32 row(@Ask, @Ctl)>
-  ability.decl {{sym_name = "Ask"}} {{
+  ability.decl @Ask {{
     ability.operation {{kind = "fn", op_name = "ask", param_types = [], result_type = core.i32}}
   }}
 {CTL}
@@ -200,7 +200,7 @@ fn a_func_ref_enters_its_table_no_stronger_than_the_row_of_its_value() {
   }}
   tribute_cps.func_table @"pure$8" = {{{entry} = @pure}}
   tribute_cps.func @f(%x: core.i32) -> core.i32 convention(direct) {{
-    %p = tribute_cps.func_ref {{func_ref = @"pure$8"}} : {value}
+    %p = tribute_cps.func_ref @"pure$8" : {value}
     tribute_control.return %x
   }}
 }}"#
@@ -270,7 +270,7 @@ fn a_definition_without_a_body_has_no_class_variables() {
   }}
   tribute_cps.func_table @"pure$8" = {{direct = @pure}}
   tribute_cps.func @main(%x: core.i32) -> core.i32 convention(direct) {{
-    %f = tribute_cps.func_ref {{func_ref = @"pure$8"}} : !closed
+    %f = tribute_cps.func_ref @"pure$8" : !closed
     %r = tribute_control.call %x, %f {{callee = @external, row_args = [{{}}]}} : core.i32
     tribute_control.return %r
   }}

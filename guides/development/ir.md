@@ -132,7 +132,10 @@ where
   `u64`, `f32`, `f64`), `String`, and the markers
   `attr_kind::{Type, SymbolRef, Bytes}`. A kind defines its schema domain
   and the values its accessor returns and its builder setter takes, so a
-  dialect adds a kind by implementing the trait. `_` accepts any attribute.
+  dialect adds a kind by implementing the trait. A kind narrower than its
+  `KIND`, such as a keyword, checks the rest in `AttrKind::accepts` and names
+  its values in `DOMAIN`, as `CallingConvention` does. `_` accepts any
+  attribute.
 - `Attr<TypeOf<V>>` is a type attribute whose value binds the type variable
   `V`. `V` needs no bound.
 - A list attribute's accessor iterates its elements, and its builder setter
@@ -181,24 +184,37 @@ where
 
   String literals are keywords and punctuation, a bare name is an operand
   or attribute, and `symbol(..)`, `keyword(..)`, `type(..)`/`types(..)`, `attr_dict`
-  (`attributes {..}`), `region(..)`/`regions(..)`, and
+  (`attributes {..}`) or `attr_dict_bare` (`{..}`, not before a region),
+  `region(..)`/`regions(..)`, and
   `successor(..)`/`successors(..)` write the other entities.
   `keyword(a)` writes the attribute `a` as a bare identifier through the
-  `asm_format::KeywordCodec` of its kind, as `tribute_cps` writes
-  `convention(cps)`.
-  `signature(t, body)` writes the `Attr<TypeOf<S>>` attribute `t` as
+  `asm_format::KeywordCodec` of its kind, as `tribute_control.handler`
+  writes its kind `op`. `custom(D(a, b))` leaves the operands, attributes,
+  and successors it names to `D`'s `asm_format::OpAsmDirective`, as MLIR's
+  `custom<D>` does; `clif.switch` writes each case with its target as
+  `[0: ^first, 5: ^second]` this way.
+  `signature(t, body)` writes the type of `t`, an `Attr<TypeOf<S>>`
+  attribute, a fixed `Value<S>` operand, or a `Value<S>` result, as
   `(%a: A) -> R`, through the `asm_format::SignatureCodec` of `S`'s bound,
   with the inputs as the entry block arguments of `body`, which then elides
-  its entry block, as `func.func` does. `("kw" .. x^)?`
+  its entry block, as `func.func` does. `args(r)` writes the entry block
+  arguments of region `r` as `(%a: A, ..)` with their own types, and `r`
+  elides its entry block. `functional_type(xs, results)` writes the types
+  of operand `xs` and of the results as `(A, B) -> R`, as MLIR's
+  `functional-type` does for `func.call @f(%a) : (A) -> R`; an operation
+  without results names only `xs` and writes `-> ()`. `("kw" .. x^)?`
   opens with a literal and is written only when its anchor `x` is present;
   an optional `bool` anchor is a flag the group's literals stand for. A
-  format begins with a literal (after any `symbol(..)` or symbol reference,
-  or a `signature(..)` after them),
-  closes each variadic
-  list with `")"` or `"]"`, and ends with `(":" types(..)^)?` for results
-  that may be absent. The macro reports a broken rule, a missing entity, or
-  one written twice at the element at fault. An operation the format cannot
-  spell without loss prints generically.
+  format may begin with any element, closes each variadic successor list
+  with `")"` or `"]"`, writes no operand or `,` right after a variadic operand
+  list, and writes results that may be absent in an optional group that ends
+  the format or comes before a literal, as `(":" types(..)^)?` or
+  `("->" "(" types(..)^ ")")?`. An
+  operand list stays on its line, so an empty one does not read the next
+  line's `%r = ..`.
+  The macro reports a broken rule, a missing entity, or one written twice at
+  the element at fault. An operation the format cannot spell without loss
+  prints generically, as `"dialect.op"(%a)` with a quoted name.
 - `#[asm_format]` without elements on an operation requires
   `trunk_ir::asm_format::OpAsmFormat` for its wrapper, which prints and
   parses the operation's custom syntax by hand. Generic syntax stays

@@ -90,12 +90,17 @@ impl CallingConvention {
     }
 }
 
-/// `Attr<CallingConvention>`: a keyword string. The schema checks only that
-/// the value is a string; an operation declaring it verifies the keyword.
+/// `Attr<CallingConvention>`: a keyword string, which the schema checks.
 impl trunk_ir::attr_kind::AttrKind for CallingConvention {
     const KIND: trunk_ir::op_schema::AttributeKind = trunk_ir::op_schema::AttributeKind::String;
     type Out<'ctx> = CallingConvention;
     type In = CallingConvention;
+    const DOMAIN: Option<&'static str> =
+        Some("one of \"direct\", \"evidence_direct\", and \"cps\"");
+
+    fn accepts(ctx: &IrContext, attr: &Attribute) -> bool {
+        Self::from_attribute(ctx, attr).is_some()
+    }
 
     fn read<'ctx>(ctx: &'ctx IrContext, attr: &'ctx Attribute) -> CallingConvention {
         Self::from_attribute(ctx, attr).expect("unverified calling convention keyword")
@@ -367,7 +372,7 @@ mod tests {
     func.return
   }
   func.func @calls() -> core.nil attributes {tribute.calling_convention = "evidence_direct"} {
-    %r = func.call {callee = @direct, tribute.calling_convention = "direct"} : core.nil
+    %r = func.call @direct() attributes {tribute.calling_convention = "direct"} : () -> core.nil
     %c = arith.const {value = 0, tribute.calling_convention = "direct"} : core.i32
     func.return
   }
@@ -405,8 +410,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f(%x: core.i32) -> core.nil {
-    %r = func.call %x {callee = @f} : core.nil
-    func.tail_call %x {callee = @f}
+    %r = func.call @f(%x) : (core.i32) -> core.nil
+    func.tail_call @f(%x) : (core.i32) -> ()
   }
 }"#,
         );
@@ -456,7 +461,7 @@ mod tests {
   }
   func.func @agrees(%x: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
     %c = closure.new {entries = [@callee, @callee, @callee]} : !closure
-    %r = func.call_indirect %c, %x {signature = !fn, tribute.calling_convention = "direct"} : core.i32
+    %r = "func.call_indirect"(%c, %x) {signature = !fn, tribute.calling_convention = "direct"} : core.i32
     func.return %r
   }
 }"#;
