@@ -881,6 +881,8 @@ fn example() ->{State(Int)} Nil {
     let read = fn() State::get()
     // evaluating the lambda is pure; State is a latent call effect
     // read : fn() ->{State(s)} s, where `s` is shared by every use
+    let m = read()
+    // the enclosing row `{State(Int)}` fixes `s` to `Int`
 
     let run = fn(f) f()
     // run : forall e. fn(fn() ->{e} r) ->{e} r
@@ -896,7 +898,8 @@ fn example() ->{State(Int)} Nil {
 타입 인자를 가진 struct·enum 값도 사용처가 고른 인스턴스다.
 `let mk = fn(x) { Option::Some(x) }`를 `mk(41)`로 쓰면 `x`는 `Nat`이 되고, 람다는
 `Option(Nat)`을 만든다. 사용하는 곳이 없어 아무것도 고정하지 않은 변수는 함수 본문이
-소유한 existential로 남는다(아래).
+소유한 existential로 남는다(아래). 다만 그런 변수가 ability 인자에 남으면 특수화 전
+인스턴스 검증이 미해결 ability 인자로 거부한다(`generics.md`).
 
 Row 사용처 간 독립성은 각 row 인스턴스가 자기의 구체 ability나 그 ability의 타입
 인자를 가질 수 있다는 뜻이다. 이것이 binding에 이미 있는 공유 data 타입 변수를
