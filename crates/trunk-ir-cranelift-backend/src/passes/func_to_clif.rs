@@ -257,6 +257,12 @@ impl OpRewritePattern for FuncCallIndirectPattern {
         let signature = call.exact_signature(ctx)?;
         let sig_ty = convert_to_clif_func_type(ctx, signature, rewriter.type_converter())?;
         let callable = clif::FuncSig::from_type_ref(ctx, sig_ty)?;
+        let runtime_result_types = callable
+            .results(ctx)
+            .iter()
+            .copied()
+            .filter(|ty| !crate::function::is_nil_type(ctx, *ty))
+            .collect::<Vec<_>>();
         let args = CallLike::call_args(&call, ctx);
         rewriter.ensure(
             callable.inputs(ctx).len() == args.len()
@@ -266,6 +272,12 @@ impl OpRewritePattern for FuncCallIndirectPattern {
                     .zip(args)
                     .all(|(&param, &arg)| param == ctx.value_ty(arg)),
             "arguments do not match the indirect call signature",
+        )?;
+        // The converted results must still match the converted signature.
+        rewriter.ensure(
+            result_types.as_slice() == callable.results(ctx)
+                || result_types == runtime_result_types,
+            "results do not match the indirect call signature",
         )?;
 
         let new_op = crate::passes::cf_to_clif::rebuild_op_as(ctx, op, "clif.call_indirect");
