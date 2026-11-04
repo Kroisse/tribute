@@ -156,8 +156,9 @@ format과 선언적 rewrite 도구는 operation 정의를 중복하지 않고 �
   가변 operand 구간은 operand 중 마지막 하나만 허용한다.
 - Attribute 종류 `K`는 bound와 마찬가지로 Rust 타입이다. 종류는 schema가
   검사하는 값 영역, accessor가 돌려주는 값, builder가 받는 값을 스스로
-  정의하며, 정의 문법은 종류의 이름을 해석하지 않는다. 새 종류는 그 타입을
-  정의하는 것으로 추가된다. `[K]`는 모든 원소가 종류 `K`인 목록 종류이고,
+  정의하며, 정의 문법은 종류의 이름을 해석하지 않는다. Keyword처럼 기본 attribute
+  영역보다 좁은 종류는 그 영역도 스스로 검사하므로, 그 값을 operation verifier가
+  다시 검사하지 않는다. 새 종류는 그 타입을 정의하는 것으로 추가된다. `[K]`는 모든 원소가 종류 `K`인 목록 종류이고,
   원소 종류는 이름 있는 종류여야 한다. `Dict<V>`는 모든 값이 종류 `V`인
   dictionary 종류다. `_`는 모든 attribute 값을 받는다.
   문자열 종류만 예외로, 정의 문법이 알아보고 pool handle을 돌려주는 accessor를
@@ -379,6 +380,32 @@ Structured-to-CFG 변환은 case가 이 조건을 만족하는 정수 discrimina
 비교하는 `cf.cond_br` 사슬로 내린다. Case 값의 분포에 따른 분기 전략은 target
 lowering이 정한다.
 
+### Generic 형식
+
+모든 operation은 generic 형식으로 읽고 쓸 수 있다. Generic 형식은 MLIR의 generic
+형식을 따른다.
+
+```text
+%r = "test.op"(%a, %b)[^bb1] ({
+  ...
+}, {
+}) {attr = 1} : core.i32
+```
+
+- Operation 이름은 문자열로 쓴다. 따옴표 없는 이름 뒤에는 그 operation의 전용
+  형식이 오며, 전용 형식이 없는 operation은 generic 형식으로만 쓴다.
+  `core.module`은 printer와 parser가 따로 다루는 전용 형식을 가진다.
+- Operand는 언제나 괄호 안에 쓰며, 없으면 `()`다. Successor는 그 뒤에
+  `[^bb..]`로 쓴다.
+- Region은 attribute 사전 앞에 괄호로 감싸 쉼표로 나열한다. 그래서 attribute
+  자리의 `{`는 언제나 사전이며, block 없는 region도 빈 사전과 헷갈리지 않는다.
+- Attribute 사전은 비어 있으면 쓰지 않는다. `sym_name`도 사전에 쓴다.
+- Region의 entry block은 argument가 없으면 MLIR처럼 label을 생략하고, 다른
+  block은 그 뒤에 label과 함께 쓴다. 비어 있거나 같은 region의 branch가
+  successor로 가리키는 entry block은 label을 쓴다.
+- Result 타입은 `: types`로 쓴다. MLIR과 달리 operand 타입은 쓰지 않는다.
+  Operand는 정의에서 타입을 얻는다.
+
 ### 선언적 어셈블리 형식
 
 Operation의 전용 textual 형식은 그 operation의 `#[dialect]` 선언에 형식 기술로
@@ -438,25 +465,39 @@ literal은 문자열 literal로 쓴다.
   `types(results)`, 또는 타입을 재구성하는 `signature`로 정확히 한 번 쓴다.
   `types`는 결과 목록을 쉼표로 구분해 쓰며, 결과가 없을 수 있으면 앞의 구두점과
   함께 선택 묶음에 둔다.
-- **`attr_dict`** — 형식의 다른 원소가 쓰지 않은 모든 attribute를
-  `attributes {..}`로 쓴다. Keyword 없는 `{..}`는 region이나 generic 형식과
-  첫 token이 겹치므로 쓰지 않는다. 남은 attribute가 없으면 아무
-  것도 쓰지 않는다. 다른 원소가 쓰는 attribute는 자동으로 제외하며, parser는 그런
-  key를 dictionary에서 만나면 거부한다.
+- **`attr_dict`, `attr_dict_bare`** — 형식의 다른 원소가 쓰지 않은 모든
+  attribute를 `attr_dict`는 `attributes {..}`로, `attr_dict_bare`는 keyword 없이
+  `{..}`로 쓴다. 형식은 둘 중 하나만 쓴다. 남은 attribute가 없으면 아무 것도 쓰지
+  않는다. 다른 원소가 쓰는 attribute는 자동으로 제외하며, parser는 그런 key를
+  dictionary에서 만나면 거부한다.
 - **`signature(t, regions..)`** — 함수 형태 `(%a: A, %b: B) -> R`을 쓴다. `t`는
-  필수 `Attr<TypeOf<S>>` attribute나 `Value<S>` result이고, `S`는 bound를
-  하나만 가지며 그 bound가 signature codec을 구현해야 한다. 나머지 인자는 이 signature의 매개변수를 entry block
-  argument로 받는 region이다. 결과는 [타입 textual form](#타입-textual-form)의
+  필수 `Attr<TypeOf<S>>` attribute, `Value<S>` result, 고정 `Value<S>` operand 중
+  하나이고, `S`는 bound를 하나만 가지며 그 bound가 signature codec을 구현해야
+  한다. Operand는 자기 원소가 따로 쓰고 `signature`는 그 타입만 쓴다. Parser는
+  operand의 타입을 그 정의에서 얻으므로, 읽은 signature로는 result 타입만
+  재구성한다(`func.call_indirect %f(%x) : (A) -> R`). 나머지 인자는 이
+  signature의 매개변수를 entry block argument로 받는 region이다. 결과는 [타입 textual form](#타입-textual-form)의
   함수 형태처럼 쓰되, region을 나열한 형식은 결과도 꼬리 표기도 없으면 화살표를
   쓰지 않는다. 매개변수 이름은 첫 region의 entry block argument 이름이고, 그
   region이 없으면 `%arg0`, `%arg1`, …이다. 형식이 region을 나열하지 않으면 함수
   타입처럼 매개변수 이름 없이 타입만 쓰고 화살표를 생략하지 않는다
   (`(A, B) -> R`, `(A) -> ()`). Operation이 result를 선언하면 signature의 결과가
   곧 그 result 타입이므로, `signature`가 result 타입을 쓴 것으로 센다.
+- **`functional_type(xs, results)`** — operand `xs`의 타입과 result 타입을 함수
+  타입으로 쓴다(MLIR `functional-type`, `func.call @f(%a) : (A) -> R`). Result가
+  하나면 괄호 없이, 없거나 여럿이면 괄호로 묶어 쓴다(`-> ()`, `-> (R, S)`).
+  Result를 선언하지 않은 operation은 operand만 나열하고 `-> ()`를 쓴다. Parser는
+  operand 타입을 그 정의에서 얻으므로, 읽은 operand 타입은 쓰지 않고 result
+  타입만 재구성한다.
+- **`args(r)`** — region `r`의 entry block argument를 `(%a: A, %b: B)`로 쓰고,
+  `r`은 entry block label을 생략한다. `signature`와 같은 방식이지만 타입은 block
+  argument에서 읽는다. `r`은 고정 region이며, 형식은 entry argument를 header로
+  쓰는 원소(`args`나 region을 나열한 `signature`)를 하나만 둔다. Region에 entry
+  block이 없으면 형식으로 출력하지 않는다.
 - **`region(r)`, `regions(rs)`** — `{ .. }`로 쓴다. `signature`가 entry
-  argument를 쓰는 region은 entry block label을 생략하고, parser가 signature의
-  매개변수를 entry block argument로 되돌린다. 다른 region은 entry label과 argument를
-  generic처럼 쓴다. 선택 region이 없으면 아무것도 쓰지 않는다.
+  argument를 쓰는 region은 block이 여럿이어도 entry block label을 생략하고, parser가
+  signature의 매개변수를 entry block argument로 되돌린다. 다른 region은 entry
+  label과 argument를 generic처럼 쓴다. 선택 region이 없으면 아무것도 쓰지 않는다.
   `labelled_regions(rs, attr)`는 `{ label { .. } label { .. } }`로 쓰고 label은
   목록 attribute `attr`의 원소를 keyword로 쓴 것이다. 이 원소는 region 목록과
   `attr`를 함께 쓴다.
@@ -468,15 +509,17 @@ literal은 문자열 literal로 쓴다.
   묶음에서 값을 쓰지 않으면 표시 flag다. `true`면 묶음을 쓰고 parser는 묶음을
   만나면 `true`를 저장한다.
 - **`custom(D(entities..))`** — 선언적으로 쓸 수 없는 부분을 Rust 타입 `D`에
-  맡긴다. `D`는 `OpAsmDirective`를 구현하며, 나열한 entity의 출력, 손실 없는
-  출력 가능 여부 판정, 파싱을 맡는다. 형식 검증은 나열한 entity를 이 directive가
+  맡긴다(MLIR `custom<D>`). `D`는 `OpAsmDirective`를 구현하며, 나열한 entity의
+  출력, 손실 없는 출력 가능 여부 판정, 파싱을 맡는다. 나열할 수 있는 entity는
+  operand, attribute, successor이다. 예를 들어 `clif.switch`는 case 값과 그
+  successor를 짝지어 `[0: ^first, 5: ^second]`로 쓴다. 형식 검증은 나열한 entity를 이 directive가
   쓴 것으로 센다. Parser는 directive가 나열하지 않은 entity의 값을 돌려주면
   거부한다.
 
-Operation 이름 뒤의 입력은 모두 형식 parser가 읽는다. Generic 형식이 operation
-이름 뒤의 `@name`을 `sym_name`으로 읽는 축약은 손으로 쓴 형식과 generic 형식에만
-해당하며, 선언적 형식에서는 `symbol(sym_name)`이나 symbol 참조 attribute처럼 `@`로
-시작하는 원소가 그 자리를 읽는다.
+Operation 이름 뒤의 입력은 모두 형식 parser가 읽는다. Operation 이름 뒤의
+`@name`을 `sym_name`으로 읽는 축약은 손으로 쓴 형식에만 해당한다. 선언적
+형식에서는 `symbol(sym_name)`이나 symbol 참조 attribute처럼 `@`로 시작하는 원소가
+그 자리를 읽고, generic 형식은 `sym_name`을 attribute 사전에 쓴다.
 
 공백은 원소 사이에 하나 쓴다. `(`, `[` 뒤와 `)`, `]`, `,` 앞에는 쓰지 않고,
 `signature`와 `"("`는 앞 원소에 붙여 쓰되, 구두점 literal 뒤에서는 한 칸 띄운다. Parser는 원소 사이의 공백을 무시한다.
@@ -491,26 +534,26 @@ Macro는 형식 기술을 선언과 대조해 다음을 어기면 그 원소를 
   세지 않는다.
 - Attribute는 많아야 한 번 명시하고, 명시하지 않은 attribute가 있으면
   `attr_dict`가 있어야 한다. 같은 entity를 두 원소가 쓰지 않는다.
-- 형식은 원소를 하나 이상 쓰고, `symbol`과 symbol 참조 attribute로 시작할 수
-  있다. Generic 형식은 `@`로 시작하지 않기 때문이다. 그 뒤, 또는 그런 원소가
-  없으면 처음에는 literal이 온다. 고정 operand 하나가 literal `"("` 앞에서 이
-  literal을 대신할 수 있다. Generic 형식은 operand 바로 뒤에 `(`를 쓰지 않기
-  때문이다. 앞에 symbol이 있으면 이 literal로 여는 선택
-  묶음이나 `(`로 시작하는 `signature`도 된다. 이 literal은 `{`, `%`, `:`, `[`,
-  `^`, `}`로 시작하지 않는다. 앞의 넷은 generic 형식이 operation 이름 뒤에 쓰는
-  것이고, 나머지는 operation 이름만 쓴 generic 형식 뒤의 다음 줄이 시작할 수 있는
-  것이다.
+- 형식은 원소를 하나 이상 쓴다. 첫 원소는 어느 원소든 될 수 있다. Generic
+  형식은 따옴표로 쓴 이름으로 시작하므로, 따옴표 없는 이름 뒤는 언제나 그
+  operation의 형식이 읽는다.
 - 선택 묶음은 여는 literal로 시작하고, 그 뒤에는 literal과 anchor 하나만 둔다.
   여는 literal은 keyword(값이 시작하는 `true`, `false`, `unit`, `loc`, `b`는
   제외)이거나 값, `attr_dict`, 다음 줄이 시작할 수 없는 구두점이며, 형식의 다른
   literal과 같지 않고 구두점끼리는 접두사도 겹치지 않는다. Parser는 여는 literal을
   읽으면 묶음이 있다고 정한다.
 - Anchor는 선택 attribute, 가변 operand, 가변 result 중 하나다.
-- 가변 result나 선택 result의 타입은 `(":" types(..)^)?`처럼 선택 묶음의
-  마지막에 쓰고, 그 묶음은 형식의 마지막 원소다.
-- 가변 operand·successor 목록 바로 뒤에는 선택 묶음이 아닌 닫는 literal `")"`나
-  `"]"`가 온다. 빈 목록이 뒤의 원소를 읽거나 목록이 쉼표를 자기 구분자로 읽는
-  일이 없게 하기 위해서다.
+- 가변 result나 선택 result의 타입은 선택 묶음 안에 쓴다. 타입 목록 바로 뒤에는
+  `,`가 아닌 literal이 오거나, 형식을 끝내는 묶음의 끝이 온다
+  (`(":" types(..)^)?`, `("->" "(" types(..)^ ")")?`).
+- 가변 successor 목록 바로 뒤에는 선택 묶음이 아닌 닫는 literal `")"`나 `"]"`가
+  온다. 가변 operand 목록 바로 뒤에는 operand나 `,`로 시작하는 literal이 오지
+  않는다. 목록이 쉼표를 자기 구분자로 읽거나 뒤의 operand를 제 항목으로 읽는 일이
+  없게 하기 위해서다. Printer는 operand 목록을 한 줄에 쓰고, parser는 줄바꿈 뒤의
+  operand를 목록의 첫 항목으로 읽지 않는다. 그래서 빈 목록은 다음 줄의
+  `%r = ..`를 읽지 않는다.
+- `attr_dict_bare` 뒤에서 선택 묶음을 건너뛴 첫 원소는 region이 아니다. Region도
+  `{`로 시작하기 때문이다.
 - 선택 region과 가변 region 목록 뒤에서 선택 묶음을 건너뛴 첫 원소는 없거나
   `{`로 시작하지 않는 literal이다.
 - Literal `attributes`는 `attr_dict`만 쓴다.
@@ -538,11 +581,10 @@ parser는 그 attribute가 없는 정규형으로 읽는다. 두 operation은 ac
 같다. 같은 operation을 generic 형식으로 쓴 텍스트도 같은 operation으로
 읽힌다. Parser는 operation schema를 검증하지 않는다.
 
-Parser는 `symbol`과 맨 앞 operand가 아닌 원소가 첫 token을 읽기 전에만
-backtrack하고, 그 뒤의 실패는 기대한 원소를 밝힌 오류로 끝낸다. 원소 사이의 공백은 token이 아니다. Keyword
-literal과 `attr_dict`의 `attributes`는 식별자 전체로 읽으며, 바로 뒤에 `.`이 오면
-다음 operation 이름의 일부로 보고 읽지 않는다. 첫 token에서 backtrack한 입력은 generic
-형식으로 다시 읽는다.
+형식 parser의 실패는 기대한 원소를 밝힌 오류로 끝나며, 같은 입력을 generic
+형식으로 다시 읽지 않는다. 원소 사이의 공백은 token이 아니다. Keyword literal과
+`attr_dict`의 `attributes`는 식별자 전체로 읽으며, 바로 뒤에 `.`이 오면 다음
+operation 이름의 일부로 보고 읽지 않는다.
 
 `signature`가 entry argument를 쓰는 region이 여럿이면 printer는 둘째 이후
 region의 entry argument에 첫 region과 같은 이름을 주고, parser는 매개변수를 모든
@@ -558,10 +600,12 @@ region의 entry block에 되돌린다. Printer는 `IsolatedFromAbove` operation�
 - Symbol을 정의하는 operation은 operation 이름 바로 뒤에 `symbol(sym_name)`으로
   `@name`을 쓴다.
 - 남은 attribute는 `attr_dict`로 region 바로 앞에 쓰고, region이 없으면 끝에
-  쓴다.
+  쓴다. Region이 없는 operation은 `attr_dict_bare`로 `{..}`만 쓸 수 있다.
 - Capture operand 목록은 비어 있어도 `captures [..]`로 쓴다.
-- Convention처럼 keyword로 쓰는 attribute 하나는 `name(keyword)`로 쓴다
-  (`convention(cps)`).
+- Callable 정의의 convention처럼 keyword로 쓰는 attribute 하나는
+  `name(keyword)`로 쓴다(`convention(cps)`). 간접 호출은 MLIR
+  `func.call_indirect`처럼 callee의 signature를 쓰고, convention은 attribute
+  사전에 둔다.
 - 이름 붙은 본문이 여럿이면 `entries { label { .. } .. }`로 쓴다. 본문마다
   signature가 다르면 label 뒤에 그 본문의 signature를 쓴다
   (`label(%x: T) -> R { .. }`). 모든 본문이 같은 signature를 받으면 signature는
@@ -875,7 +919,7 @@ consumer는 nested region을 재귀적으로 순회해야 하며, "사용 없음
   이름을 읽기만 하는 곳은 `&Symbol`을 받는다.
 - Symbol 해석은 MLIR 규칙을 따른다. `core.module`은 symbol table이며, 정의는 자기를
   직접 감싼 module에 `sym_name`을 등록한다. 이름 있는 `core.module`은 부모 table의
-  symbol이기도 하다. 함수 symbol 참조(`callee`, `func_ref`, target dialect의 직접
+  symbol이기도 하다. 함수 symbol 참조(`callee`, 함수 참조의 `value`, target dialect의 직접
   호출과 주소 참조)의 첫 component는 참조하는 operation을 감싼 가장 가까운 module의
   table에서 찾는다. 찾지 못해도 바깥 module로 올라가지 않는다. 나머지 component는 앞
   component가 가리킨 module의 table로 차례로 내려가며 찾으므로, 마지막이 아닌

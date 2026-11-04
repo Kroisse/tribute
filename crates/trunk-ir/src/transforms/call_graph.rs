@@ -534,9 +534,9 @@ mod tests {
     func.return
   }
   func.func @holder() {
-    func.call {callee = @called}
-    test.make_closure {func_ref = @captured}
-    test.table {entries = [{target = @listed}], callee = @called}
+    func.call @called() : () -> ()
+    "test.make_closure"() {func_ref = @captured}
+    "test.table"() {entries = [{target = @listed}], callee = @called}
     func.return
   }
 }"#,
@@ -625,13 +625,13 @@ mod tests {
     func.return %0
   }
   func.func @helper() -> core.i32 {
-    %0 = func.call {callee = @leaf} : core.i32
-    %1 = func.constant {func_ref = @other} : core.ptr
+    %0 = func.call @leaf() : () -> core.i32
+    %1 = func.constant @other : () -> core.i32
     func.return %0
   }
   func.func @main() -> core.i32 {
-    %0 = func.call {callee = @helper} : core.i32
-    %1 = func.call {callee = @helper} : core.i32
+    %0 = func.call @helper() : () -> core.i32
+    %1 = func.call @helper() : () -> core.i32
     func.return %1
   }
 }"#;
@@ -718,7 +718,7 @@ mod tests {
     func.return %0
   }
   func.func @main() -> core.i32 {
-    %0 = func.call {callee = @leaf} : core.i32
+    %0 = func.call @leaf() : () -> core.i32
     func.return %0
   }
 }"#;
@@ -748,18 +748,18 @@ mod tests {
             &mut ctx,
             r#"core.module @root {
   func.func @main() {
-    func.call {callee = @outer::@same}
+    func.call @outer::@same() : () -> ()
     func.return
   }
   core.module @outer {
     func.func @same() {
-      func.call {callee = @inner::@same}
-      func.call {callee = @main}
+      func.call @inner::@same() : () -> ()
+      func.call @main() : () -> ()
       func.return
     }
     core.module @inner {
       func.func @same() {
-        func.call {callee = @same}
+        func.call @same() : () -> ()
         func.return
       }
     }
@@ -785,7 +785,7 @@ mod tests {
             &mut ctx,
             r#"core.module @root {
   func.func @twice() {
-    func.call {callee = @leaf}
+    func.call @leaf() : () -> ()
     func.return
   }
   func.func @twice() {

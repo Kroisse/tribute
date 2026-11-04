@@ -107,7 +107,7 @@ pub(super) fn lower_function_ref<'db>(
         |builder| {
             let builder = builder
                 .result(ty)
-                .attr("func_ref", Attribute::SymbolRef(SymbolPath::new([symbol])));
+                .attr("value", Attribute::SymbolRef(SymbolPath::new([symbol])));
             match row_args {
                 Some(row_args) => builder.attr(tribute_control::ROW_ARGS_ATTR, row_args),
                 None => builder,

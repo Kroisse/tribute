@@ -1,6 +1,5 @@
 ---
 source: crates/tribute-front/tests/expr_coverage.rs
-assertion_line: 102
 expression: ir_text
 ---
 core.module @test {

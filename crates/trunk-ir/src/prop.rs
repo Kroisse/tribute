@@ -179,9 +179,9 @@ fn build_body(
 /// How a function body refers to its target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RefKind {
-    /// `func.call {callee = @target}`.
+    /// `func.call @target()`.
     Call,
-    /// `func.constant {func_ref = @target}`.
+    /// `func.constant @target`.
     Constant,
     /// `test.ref {callee = @target}`: `callee` on an operation that is not a
     /// registered call.
@@ -465,7 +465,7 @@ fn build_reference(
             .build(ctx, loc)
             .op_ref(),
         RefKind::Constant => func::Constant::operands()
-            .func_ref(target)
+            .value(target)
             .results(sig)
             .build(ctx, loc)
             .op_ref(),

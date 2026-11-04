@@ -10,107 +10,140 @@
 mod arith {
     #[verify]
     #[flags(Pure)]
+    #[asm_format(attr_dict_bare ":" type(result))]
     fn r#const(value: Attr<_>) -> Value<impl NumericLike> {}
 
     // Integer arithmetic
     #[implements(Fold)]
     #[flags(Pure)]
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn addi<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[implements(Fold)]
     #[flags(Pure)]
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn subi<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[implements(Fold)]
     #[flags(Pure)]
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn muli<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[implements(Fold)]
     #[flags(Pure)]
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn divsi<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[implements(Fold)]
     #[flags(Pure)]
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn divui<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[implements(Fold)]
     #[flags(Pure)]
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn remsi<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[implements(Fold)]
     #[flags(Pure)]
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn remui<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[flags(Pure)]
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn negi<T: IntegerOrIndex>(operand: Value<T>) -> Value<T> {}
 
     // Float arithmetic
     #[flags(Pure)]
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn addf<T: FloatLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[flags(Pure)]
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn subf<T: FloatLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[flags(Pure)]
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn mulf<T: FloatLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[flags(Pure)]
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn divf<T: FloatLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[flags(Pure)]
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn negf<T: FloatLike>(operand: Value<T>) -> Value<T> {}
 
     // Comparisons
     #[flags(Pure)]
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn cmpi<T: IntegerOrIndex>(predicate: Attr<String>, lhs: Value<T>, rhs: Value<T>) -> Value<I1> {
     }
 
     #[verify]
     #[flags(Pure)]
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn cmpf<T: FloatLike>(predicate: Attr<String>, lhs: Value<T>, rhs: Value<T>) -> Value<I1> {}
 
     // Bitwise (integer-only)
     #[implements(Fold)]
     #[flags(Pure)]
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn and<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[implements(Fold)]
     #[flags(Pure)]
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn or<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[implements(Fold)]
     #[flags(Pure)]
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn xor<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[flags(Pure)]
+    #[asm_format(value "," amount attr_dict_bare ":" type(result))]
     fn shl<T: IntegerOrIndex>(value: Value<T>, amount: Value<T>) -> Value<T> {}
     #[flags(Pure)]
+    #[asm_format(value "," amount attr_dict_bare ":" type(result))]
     fn shr<T: IntegerOrIndex>(value: Value<T>, amount: Value<T>) -> Value<T> {}
     #[flags(Pure)]
+    #[asm_format(value "," amount attr_dict_bare ":" type(result))]
     fn shru<T: IntegerOrIndex>(value: Value<T>, amount: Value<T>) -> Value<T> {}
 
     // Conversions. Integers are signless; each sign-dependent conversion is
     // an explicit signed/unsigned pair.
     #[verify]
     #[flags(Pure)]
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn extsi(operand: Value<impl IntegerLike>) -> Value<impl IntegerLike> {}
     #[verify]
     #[flags(Pure)]
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn extui(operand: Value<impl IntegerLike>) -> Value<impl IntegerLike> {}
     #[verify]
     #[flags(Pure)]
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn trunci(operand: Value<impl IntegerLike>) -> Value<impl IntegerLike> {}
     #[flags(Pure)]
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn sitofp(operand: Value<impl IntegerLike>) -> Value<impl FloatLike> {}
     #[flags(Pure)]
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn uitofp(operand: Value<impl IntegerLike>) -> Value<impl FloatLike> {}
     /// Traps on out-of-range values and NaN.
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn fptosi(operand: Value<impl FloatLike>) -> Value<impl IntegerLike> {}
     /// Traps on out-of-range values and NaN.
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn fptoui(operand: Value<impl FloatLike>) -> Value<impl IntegerLike> {}
     /// Convert between a fixed-width integer and `core.index`, in either
     /// direction, extending the sign when the result is wider.
     #[verify]
     #[implements(Fold)]
     #[flags(Pure)]
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn index_castsi(operand: Value<impl IntegerOrIndex>) -> Value<impl IntegerOrIndex> {}
     /// Convert between a fixed-width integer and `core.index`, in either
     /// direction, extending with zeros when the result is wider.
     #[verify]
     #[implements(Fold)]
     #[flags(Pure)]
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn index_castui(operand: Value<impl IntegerOrIndex>) -> Value<impl IntegerOrIndex> {}
     #[verify]
     #[flags(Pure)]
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn extf(operand: Value<impl FloatLike>) -> Value<impl FloatLike> {}
     #[verify]
     #[flags(Pure)]
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn truncf(operand: Value<impl FloatLike>) -> Value<impl FloatLike> {}
 }
 
@@ -718,7 +751,7 @@ mod canonicalize_tests {
                 "",
                 "core.index",
                 &format!(
-                    "    %c = arith.const {{value = -1}} : core.i32\n    %r = arith.{op} %c : core.index\n    func.return %r"
+                    "    %c = arith.const {{value = -1}} : core.i32\n    %r = \"arith.{op}\"(%c) : core.index\n    func.return %r"
                 ),
             );
             assert_eq!(value, Some(expected), "{op}");
@@ -743,7 +776,7 @@ mod canonicalize_tests {
                 "",
                 ty,
                 &format!(
-                    "    %c = arith.const {{value = {value}}} : core.index\n    %r = arith.{op} %c : {ty}\n    func.return %r"
+                    "    %c = arith.const {{value = {value}}} : core.index\n    %r = \"arith.{op}\"(%c) : {ty}\n    func.return %r"
                 ),
             )
             .2
@@ -1257,7 +1290,7 @@ mod canonicalize_tests {
   func.func @f() -> core.i{width} {{
     %a = arith.const {{value = {a}}} : core.i{width}
     %b = arith.const {{value = {b}}} : core.i{width}
-    %r = {op} %a, %b : core.i{width}
+    %r = \"{op}\"(%a, %b) : core.i{width}
     func.return %r
   }}
 }}"

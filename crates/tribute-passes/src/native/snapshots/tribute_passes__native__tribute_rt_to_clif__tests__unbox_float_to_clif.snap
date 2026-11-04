@@ -1,6 +1,6 @@
 ---
 source: crates/tribute-passes/src/native/tribute_rt_to_clif.rs
-expression: result
+expression: unboxed
 ---
 core.module @test {
   func.func @f(%0: core.ptr) -> core.f64 {

@@ -341,7 +341,7 @@ impl Function {
 /// The name a `call`, `tail_call`, or `tribute_control.func_ref` refers to.
 pub(crate) fn reference_callee(ctx: &IrContext, op: OpRef) -> Option<String> {
     let key = if tribute_control::FuncRef::matches(ctx, op) {
-        "func_ref"
+        "value"
     } else if tribute_control::Call::matches(ctx, op) || tribute_control::TailCall::matches(ctx, op)
     {
         "callee"
@@ -375,7 +375,7 @@ fn table_callee(
     tables: &HashMap<String, OpRef>,
 ) -> Option<(String, Vec<String>)> {
     let reference = tribute_cps::FuncRef::from_op(ctx, op).ok()?;
-    let name = reference.func_ref(ctx).as_simple()?.as_str();
+    let name = reference.value(ctx).as_simple()?.as_str();
     let table = *tables.get(name)?;
     let targets = tribute_cps::table_entries(ctx, table)?
         .into_iter()

@@ -79,7 +79,7 @@ fn assert_native_delimiter_contract(ir_text: &str) {
         "func.func @__tribute_delimit_done_0",
         "func.func @__tribute_delimit_unhandled_0",
         "func.tail_call_indirect",
-        "callee = @__tribute_main",
+        "func.call @__tribute_main(",
     ] {
         assert!(
             ir_text.contains(required),

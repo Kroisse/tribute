@@ -962,7 +962,7 @@ mod tests {
                 r#"core.module @test {{
   !A = adt.array<core.i32>
   wasm.func @splice(%source: !A, %start: core.index, %end: core.index, %x: core.i32, %y: core.i32) -> !A {{
-    %result = adt.array_splice %source, %start, %end{elements} {{type = !A}} : !A
+    %result = adt.array_splice %source[%start, %end]({elements}) attributes {{type = !A}} : !A
     wasm.return %result
   }}
 }}"#
@@ -986,7 +986,7 @@ mod tests {
 
     #[test]
     fn array_splice_fills_with_its_first_element_and_copies_the_kept_ranges() {
-        let (ctx, ops, returned) = lower_splice(", %x, %y");
+        let (ctx, ops, returned) = lower_splice("%x, %y");
 
         assert_eq!(
             op_names(&ctx, &ops),

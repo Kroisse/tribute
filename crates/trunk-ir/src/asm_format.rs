@@ -74,7 +74,7 @@ pub trait OpAsmFormat: DialectOp {
 
     /// Parse the operation. Called after `dialect.op` and optional
     /// `@sym_name` are consumed; `results` and `sym_name` are already parsed
-    /// by the generic parser.
+    /// by the caller.
     fn parse<'a>(
         input: &mut &'a str,
         results: Vec<&'a str>,
@@ -217,6 +217,94 @@ impl KeywordCodecHooks {
             attribute: T::attribute,
         }
     }
+}
+
+// =============================================================================
+// OpAsmDirective — a part of a declarative format written by hand
+// =============================================================================
+
+/// The syntax of the entities a `custom(D(a, b, ..))` format element names,
+/// written by hand inside an otherwise declarative format, as MLIR's
+/// `custom<D>` directive is (`new-plans/ir.md`, "선언적 어셈블리 형식").
+///
+/// The element passes the entities in the order it names them: operands,
+/// attributes, and successors, each as a [`CustomEntity`] when printing and
+/// a [`RawCustomEntity`] when parsing.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is named by a `custom(..)` format element but does not implement `OpAsmDirective`",
+    label = "`custom(..)` requires this implementation"
+)]
+pub trait OpAsmDirective {
+    /// What [`Self::decompose`] reads from the entities for [`Self::print`].
+    type Parts<'a>;
+
+    /// The parts [`Self::print`] writes so that [`Self::parse`] reads the
+    /// entities back, or `None` when it cannot; the operation then prints
+    /// generically.
+    fn decompose<'a>(
+        ctx: &'a IrContext,
+        entities: &'a [CustomEntity<'a>],
+    ) -> Option<Self::Parts<'a>>;
+
+    /// Write the parts [`Self::decompose`] read.
+    fn print(h: &mut OpPrintHelper<'_, '_>, parts: Self::Parts<'_>) -> fmt::Result;
+
+    /// Read the entities back, one for each the element names, in order.
+    fn parse<'a>(input: &mut &'a str) -> winnow::ModalResult<Vec<RawCustomEntity<'a>>>;
+}
+
+/// An entity a [`OpAsmDirective`] prints.
+#[derive(Clone, Debug)]
+pub enum CustomEntity<'a> {
+    /// An operand, or the operands of a variadic one.
+    Operands(&'a [crate::ValueRef]),
+    /// An attribute, if the operation has it.
+    Attribute(Option<&'a Attribute>),
+    /// A successor, or the successors of a variadic one.
+    Successors(crate::BlockList),
+}
+
+/// An entity a [`OpAsmDirective`] parses.
+#[derive(Clone, Debug)]
+pub enum RawCustomEntity<'a> {
+    /// Operand names, without `%`.
+    Operands(Vec<&'a str>),
+    /// An attribute, or `None` when it is absent.
+    Attribute(Option<RawAttribute<'a>>),
+    /// Successor labels, without `^`.
+    Successors(Vec<&'a str>),
+}
+
+/// A [`OpAsmDirective`]'s hooks, as a `custom` format element stores them.
+#[derive(Clone, Copy, Debug)]
+pub struct OpAsmDirectiveHooks {
+    pub fits: fn(&IrContext, &[CustomEntity<'_>]) -> bool,
+    pub print: fn(&mut OpPrintHelper<'_, '_>, &[CustomEntity<'_>]) -> fmt::Result,
+    pub parse: for<'a> fn(&mut &'a str) -> winnow::ModalResult<Vec<RawCustomEntity<'a>>>,
+}
+
+impl OpAsmDirectiveHooks {
+    /// The hooks of `T`'s directive.
+    pub const fn of<T: OpAsmDirective>() -> Self {
+        Self {
+            fits: directive_fits::<T>,
+            print: directive_print::<T>,
+            parse: T::parse,
+        }
+    }
+}
+
+fn directive_fits<T: OpAsmDirective>(ctx: &IrContext, entities: &[CustomEntity<'_>]) -> bool {
+    T::decompose(ctx, entities).is_some()
+}
+
+fn directive_print<T: OpAsmDirective>(
+    h: &mut OpPrintHelper<'_, '_>,
+    entities: &[CustomEntity<'_>],
+) -> fmt::Result {
+    let parts =
+        T::decompose(h.ctx(), entities).expect("the printer checked that the directive fits");
+    T::print(h, parts)
 }
 
 /// A printer that writes the parts of a function form: an operation's or a

@@ -1,6 +1,5 @@
 ---
 source: crates/tribute-front/tests/tuple_pattern.rs
-assertion_line: 135
 expression: ir_text
 ---
 core.module @test {

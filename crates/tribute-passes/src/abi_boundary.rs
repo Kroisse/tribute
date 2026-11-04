@@ -367,7 +367,7 @@ impl<'a> Verifier<'a> {
             }
         }
         if let Ok(constant) = func::Constant::from_op(ctx, op) {
-            let target = constant.func_ref(ctx);
+            let target = constant.value(ctx);
             let expected = functions
                 .resolve(ctx, op, target)
                 .and_then(|function| func::Func::from_op(ctx, function).ok())
@@ -565,10 +565,10 @@ mod tests {
   func.func @user_bridge(%value: core.i32) -> core.i32 attributes {abi = "C"}
   func.func @unused_bridge(%value: core.i32) -> core.i32 attributes {abi = "C"}
   func.func @worker(%ev: core.ptr, %bytes: core.bytes) -> core.i32 {
-    %printed = func.call %bytes {callee = @__tribute_unbound_helper} : core.nil
-    %len = func.call %bytes {callee = @__tribute_bytes_len} : core.i32
-    %id = func.call %len {callee = @user_bridge} : core.i32
-    %tag = func.call {callee = @__tribute_next_tag} : core.i32
+    %printed = func.call @__tribute_unbound_helper(%bytes) : (core.bytes) -> core.nil
+    %len = func.call @__tribute_bytes_len(%bytes) : (core.bytes) -> core.i32
+    %id = func.call @user_bridge(%len) : (core.i32) -> core.i32
+    %tag = func.call @__tribute_next_tag() : () -> core.i32
     func.return %tag
   }
 }"#;
@@ -606,8 +606,8 @@ mod tests {
     func.return
   }
   func.func @caller(%value: core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
-    %reference = func.constant {func_ref = @target} : func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>
-    func.tail_call_indirect %reference, %value {signature = func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>}
+    %reference = func.constant @target : (core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}
+    func.tail_call_indirect %reference(%value) : (core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}
   }
 }"#,
         );
@@ -769,7 +769,7 @@ mod tests {
   }
   func.func @caller(%value: core.i32) {
     %same = core.unrealized_conversion_cast %value : core.i32
-    %reference = func.constant {func_ref = @target} : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
+    %reference = func.constant @target : (core.i32) -> (), {call_conv = "tail"}
     func.return
   }
 }"#,
@@ -843,12 +843,12 @@ mod tests {
     fn reference_module(definition: &str, reference: &str) -> String {
         format!(
             r#"core.module @test {{
-  func.func {{sym_name = "target", type = {definition}}} {{
+  "func.func"() ({{
     ^bb0(%value: core.i32):
       func.return
-  }}
+  }}) {{sym_name = "target", type = {definition}}}
   func.func @caller() {{
-    %reference = func.constant {{func_ref = @target}} : {reference}
+    %reference = "func.constant"() {{value = @target}} : {reference}
     func.return
   }}
 }}"#
@@ -1008,7 +1008,7 @@ mod tests {
       func.return
     }
     func.func @take() {
-      %reference = func.constant {func_ref = @same} : func.func_sig<(core.i32) -> ()>
+      %reference = func.constant @same : (core.i32) -> ()
       func.return
     }
   }
@@ -1029,7 +1029,7 @@ mod tests {
   }
   core.module @left {
     func.func @take() {
-      %reference = func.constant {func_ref = @same} : func.func_sig<(core.i32) -> ()>
+      %reference = func.constant @same : (core.i32) -> ()
       func.return
     }
   }
@@ -1063,8 +1063,8 @@ mod tests {
     func.return
   }
   func.func @caller(%callee: core.ptr, %value: core.i32) {
-    %reference = func.constant {func_ref = @target} : core.i32
-    func.call_indirect %callee, %value
+    %reference = "func.constant"() {value = @target} : core.i32
+    "func.call_indirect"(%callee, %value)
     func.return
   }
 }"#,

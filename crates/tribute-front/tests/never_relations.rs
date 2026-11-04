@@ -682,7 +682,7 @@ fn choose(flag: Bool) ->{Stop} Nat {
     let ir = common::run_ast_pipeline_with_ir(db, source);
     assert!(
         ir.lines()
-            .any(|line| line.contains("tribute_control.perform") && line.ends_with(": core.never")),
+            .any(|line| line.contains("tribute_control.perform") && line.ends_with("-> core.never")),
         "{ir}"
     );
     assert!(

@@ -498,10 +498,10 @@ mod tests {
             format!(
                 r#"core.module @test {{
   core.module @a {{
-    clif.func {{abi = "C", link_name = "abs", sym_name = "abs", type = clif.func_sig<(core.i32) -> core.i32>}}
+    clif.func @abs(%0: core.i32) -> core.i32 attributes {{abi = "C", link_name = "abs"}}
   }}
   core.module @b {{
-    clif.func {{abi = "C", link_name = "abs", sym_name = "abs", type = {second}}}
+    "clif.func"() {{abi = "C", link_name = "abs", sym_name = "abs", type = {second}}}
   }}
 }}"#
             )
@@ -524,25 +524,20 @@ mod tests {
     fn tail_transfers_require_tail_call_conv_on_both_signatures() {
         let error = validation_error(
             r#"core.module @test {
-  clif.func {sym_name = "tail_target", type = clif.func_sig<(core.i32) -> (), {call_conv = "tail"}>} {
-    ^entry(%value: core.i32):
+  clif.func @tail_target(%value: core.i32) -> (), {call_conv = "tail"} {
       clif.return
   }
-  clif.func {sym_name = "platform_target", type = clif.func_sig<(core.i32) -> ()>} {
-    ^entry(%value: core.i32):
+  clif.func @platform_target(%value: core.i32) {
       clif.return
   }
-  clif.func {sym_name = "platform_caller", type = clif.func_sig<(core.i32) -> ()>} {
-    ^entry(%value: core.i32):
+  clif.func @platform_caller(%value: core.i32) {
       clif.return_call %value {callee = @tail_target}
   }
-  clif.func {sym_name = "to_platform", type = clif.func_sig<(core.i32) -> (), {call_conv = "tail"}>} {
-    ^entry(%value: core.i32):
+  clif.func @to_platform(%value: core.i32) -> (), {call_conv = "tail"} {
       clif.return_call %value {callee = @platform_target}
   }
-  clif.func {sym_name = "indirect_platform", type = clif.func_sig<(core.ptr, core.i32) -> (), {call_conv = "tail"}>} {
-    ^entry(%callee: core.ptr, %value: core.i32):
-      clif.return_call_indirect %callee, %value {sig = clif.func_sig<(core.i32) -> ()>}
+  clif.func @indirect_platform(%callee: core.ptr, %value: core.i32) -> (), {call_conv = "tail"} {
+      clif.return_call_indirect %callee(%value) : (core.i32) -> ()
   }
 }"#,
         );
@@ -558,17 +553,14 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  clif.func {sym_name = "target", type = clif.func_sig<(core.i32) -> (), {call_conv = "tail"}>} {
-    ^entry(%value: core.i32):
+  clif.func @target(%value: core.i32) -> (), {call_conv = "tail"} {
       clif.return
   }
-  clif.func {sym_name = "direct", type = clif.func_sig<(core.i32) -> (), {call_conv = "tail"}>} {
-    ^entry(%value: core.i32):
+  clif.func @direct(%value: core.i32) -> (), {call_conv = "tail"} {
       clif.return_call %value {callee = @target}
   }
-  clif.func {sym_name = "indirect", type = clif.func_sig<(core.ptr, core.i32) -> (), {call_conv = "tail"}>} {
-    ^entry(%callee: core.ptr, %value: core.i32):
-      clif.return_call_indirect %callee, %value {sig = clif.func_sig<(core.i32) -> (), {call_conv = "tail"}>}
+  clif.func @indirect(%callee: core.ptr, %value: core.i32) -> (), {call_conv = "tail"} {
+      clif.return_call_indirect %callee(%value) : (core.i32) -> (), {call_conv = "tail"}
   }
 }"#,
         );
@@ -579,9 +571,8 @@ mod tests {
     fn external_boundaries_cannot_use_tail_call_conv() {
         let error = validation_error(
             r#"core.module @test {
-  clif.func {sym_name = "foreign", abi = "C", type = clif.func_sig<(core.i32) -> (), {call_conv = "tail"}>}
-  clif.func {sym_name = "main", type = clif.func_sig<() -> (), {call_conv = "tail"}>} {
-    ^entry:
+  clif.func @foreign(%0: core.i32) -> (), {call_conv = "tail"} attributes {abi = "C"}
+  clif.func @main() -> (), {call_conv = "tail"} {
       clif.return
   }
 }"#,
@@ -635,7 +626,7 @@ mod tests {
     fn native_boundary_rejects_malformed_target_signature_storage() {
         let error = validation_error(
             r#"core.module @test {
-  clif.func {sym_name = "bad", type = clif.func_sig<core.i32, {num_inputs = 2, num_results = 1}>}
+  "clif.func"() {sym_name = "bad", type = clif.func_sig<core.i32, {num_inputs = 2, num_results = 1}>}
 }"#,
         );
         assert!(
@@ -656,7 +647,7 @@ mod tests {
   }
   clif.func @indirect_caller() {
     %callee = clif.iconst {value = 0} : core.ptr
-    %first, %second = clif.call_indirect %callee {sig = clif.func_sig<() -> (core.i32, core.i64)>} : core.i64, core.i32
+    %first, %second = "clif.call_indirect"(%callee) {sig = clif.func_sig<() -> (core.i32, core.i64)>} : core.i64, core.i32
     clif.return
   }
 }"#,
@@ -696,7 +687,7 @@ mod tests {
   clif.func @target(%value: core.ptr) -> core.ptr { clif.return %value }
   clif.func @semantic(%callee: core.ptr, %value: test.anyref) -> core.ptr {
     %direct = clif.call %value {callee = @target} : test.anyref
-    %indirect = clif.call_indirect %callee, %direct {sig = clif.func_sig<(core.ptr) -> core.ptr>} : test.anyref
+    %indirect = "clif.call_indirect"(%callee, %direct) {sig = clif.func_sig<(core.ptr) -> core.ptr>} : test.anyref
     clif.return %indirect
   }
   clif.func @shaped(%value: !shaped) -> core.ptr {
@@ -744,10 +735,10 @@ mod tests {
   }
   clif.func @bad_tail() { clif.return_call {callee = @tail_target} }
   clif.func @bad_indirect_tail(%callee: core.ptr, %value: core.i32) {
-    clif.return_call_indirect %callee, %value {sig = clif.func_sig<(core.i64) -> ()>}
+    clif.return_call_indirect %callee(%value) : (core.i64) -> ()
   }
   clif.func @bad_indirect_tail_result(%callee: core.ptr) {
-    clif.return_call_indirect %callee {sig = clif.func_sig<() -> core.i32>}
+    clif.return_call_indirect %callee() : () -> core.i32
   }
 }"#,
         );

@@ -176,7 +176,7 @@ fn validate_symbol_use(
 ) {
     {
         if SourceFuncRef::is_set(ctx, op) {
-            let Some(symbol) = ctx.op_attrs(op).get_symbol_ref("func_ref") else {
+            let Some(symbol) = ctx.op_attrs(op).get_symbol_ref("value") else {
                 return;
             };
             if tribute_cps::FuncRef::matches(ctx, op) {

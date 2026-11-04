@@ -171,7 +171,7 @@ pub(crate) fn lower_cps_signatures_to_physical(
         {
             let converted = if let Ok(constant) = func::Constant::from_op(converter.ctx, op) {
                 if let Some(identity) =
-                    function_for_symbol_optional(constant.func_ref(converter.ctx), &functions)
+                    function_for_symbol_optional(constant.value(converter.ctx), &functions)
                 {
                     validate_constant(converter.ctx, constant, identity, never)?;
                     converter.convert_callable(ty, identity.convention)?
@@ -1322,7 +1322,7 @@ fn rewrite_symbol_refs(ctx: &mut IrContext, op: OpRef, old: &SymbolPath, new: &S
     if core::Module::from_op(ctx, op).is_ok() {
         return;
     }
-    for key in ["callee", "func_ref"] {
+    for key in ["callee", "value"] {
         if ctx.op_attrs(op).get_symbol_ref(key) == Some(old) {
             ctx.op_attrs_mut(op).insert(key, new.clone());
         }
@@ -1994,7 +1994,7 @@ mod tests {
             !Dispatch = closure.closure<func.func_sig<(!Evidence, !Resume, core.i32, core.i32, core.i32, tribute_rt.anyref) -> core.never>>
             !{frame_name} = adt.struct<{frame_name}(done: !Done, dispatch: !Dispatch), {{tribute.cps_continuation_frame_result = !Answer}}>
             func.func @run(%ev: !Evidence, %dispatch: !Dispatch, %resume: !Resume, %payload: tribute_rt.anyref) -> core.never attributes {{tribute.calling_convention = "cps"}} {{
-                effect.dispatch_cps %ev, %dispatch, %resume, %payload {{ability = @State, op_name = "get", answer_type = !Answer}}
+                effect.dispatch_cps @State @get(%payload) [%ev, %dispatch, %resume] -> !Answer
             }}
             func.func @"std::runtime::evidence::lookup"(%ev: !Evidence, %id: core.i32) -> core.i32 {{
                 func.return %id
@@ -2147,13 +2147,13 @@ mod tests {
                 func.return %nil
             }
             func.func @caller(%ev: !Evidence) attributes {tribute.calling_convention = "evidence_direct"} {
-                func.call {callee = @direct, tribute.calling_convention = "direct"}
-                func.call %ev {callee = @evidence, tribute.calling_convention = "evidence_direct"}
-                %direct = func.constant {func_ref = @direct} : func.func_sig<() -> ()>
-                %evidence = func.constant {func_ref = @evidence} : func.func_sig<(!Evidence) -> ()>
-                func.call_indirect %direct {signature = func.func_sig<() -> ()>, tribute.calling_convention = "direct"}
-                func.call_indirect %evidence, %ev {signature = func.func_sig<(!Evidence) -> ()>, tribute.calling_convention = "evidence_direct"}
-                %nil = func.call {callee = @unit, tribute.calling_convention = "direct"} : core.nil
+                func.call @direct() attributes {tribute.calling_convention = "direct"} : () -> ()
+                func.call @evidence(%ev) attributes {tribute.calling_convention = "evidence_direct"} : (!Evidence) -> ()
+                %direct = func.constant @direct : () -> ()
+                %evidence = func.constant @evidence : (!Evidence) -> ()
+                func.call_indirect %direct() attributes {tribute.calling_convention = "direct"} : () -> ()
+                func.call_indirect %evidence(%ev) attributes {tribute.calling_convention = "evidence_direct"} : (!Evidence) -> ()
+                %nil = func.call @unit() attributes {tribute.calling_convention = "direct"} : () -> core.nil
                 func.return
             }
             func.func @cps() -> core.never attributes {tribute.calling_convention = "cps"} { func.unreachable }
@@ -2226,7 +2226,7 @@ mod tests {
   func.func @evidence() -> core.never attributes {tribute.calling_convention = "evidence_direct"} { func.unreachable }
   func.func @cps() -> core.never attributes {tribute.calling_convention = "cps"} { func.unreachable }
   func.func @run(%callee: core.i32, %evidence: core.i32, %env: tribute_rt.anyref, %done: core.i32, %dispatch: core.i32, %value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-    func.tail_call_indirect %callee, %evidence, %env, %done, %dispatch, %value {signature = func.func_sig<(core.i32, tribute_rt.anyref, core.i32, core.i32, core.i32) -> core.never>, tribute.calling_convention = "cps"}
+    func.tail_call_indirect %callee(%evidence, %env, %done, %dispatch, %value) attributes {tribute.calling_convention = "cps"} : (core.i32, tribute_rt.anyref, core.i32, core.i32, core.i32) -> core.never
   }
 }"#,
         );
@@ -2273,7 +2273,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @run(%callee: core.i32, %value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> core.never>, tribute.calling_convention = "cps"}
+    func.tail_call_indirect %callee(%value) attributes {tribute.calling_convention = "cps"} : (core.i32) -> core.never
   }
 }"#,
         );
@@ -2510,7 +2510,7 @@ mod tests {
     func.return %nil
   }
   func.func @caller(%evidence: !Evidence) -> core.nil attributes {tribute.calling_convention = "evidence_direct"} {
-    %result = func.call %evidence {callee = @main, tribute.calling_convention = "evidence_direct"} : core.nil
+    %result = func.call @main(%evidence) attributes {tribute.calling_convention = "evidence_direct"} : (!Evidence) -> core.nil
     func.return %result
   }
 }"#;
@@ -2541,7 +2541,7 @@ mod tests {
     func.return %nil
   }
   func.func @caller() -> core.nil attributes {tribute.calling_convention = "direct"} {
-    %result = func.call {callee = @main, tribute.calling_convention = "direct"} : core.nil
+    %result = func.call @main() attributes {tribute.calling_convention = "direct"} : () -> core.nil
     func.return %result
   }
 }"#,
@@ -2741,7 +2741,7 @@ mod tests {
             (
                 r#"core.module @test {
   func.func @run(%callee: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-    func.tail_call_indirect %callee {tribute.calling_convention = "cps"}
+    "func.tail_call_indirect"(%callee) {tribute.calling_convention = "cps"}
   }
 }"#,
                 "lacks exact callable signature",
@@ -2749,7 +2749,7 @@ mod tests {
             (
                 r#"core.module @test {
   func.func @pure(%callee: func.func_sig<(core.i32, core.i32) -> core.i32>, %left: core.i32, %right: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
-    %result = func.call_indirect %callee, %left, %right {tribute.calling_convention = "direct"} : core.i32
+    %result = "func.call_indirect"(%callee, %left, %right) {tribute.calling_convention = "direct"} : core.i32
     func.return %result
   }
 }"#,
@@ -2758,7 +2758,7 @@ mod tests {
             (
                 r#"core.module @test {
   func.func @run(%callee: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-    func.tail_call_indirect %callee {signature = core.i32, tribute.calling_convention = "cps"}
+    "func.tail_call_indirect"(%callee) {signature = core.i32, tribute.calling_convention = "cps"}
   }
 }"#,
                 "lacks exact callable signature",
@@ -2766,7 +2766,7 @@ mod tests {
             (
                 r#"core.module @test {
   func.func @run(%callee: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-    func.tail_call_indirect %callee {signature = core.i32}
+    "func.tail_call_indirect"(%callee) {signature = core.i32}
   }
 }"#,
                 "indirect signature has no convention metadata",
@@ -2775,7 +2775,7 @@ mod tests {
                 r#"core.module @test {
   func.func @callee(%value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} { func.unreachable }
   func.func @run(%value: core.i1) -> core.never attributes {tribute.calling_convention = "cps"} {
-    func.tail_call %value {callee = @callee, tribute.calling_convention = "cps"}
+    func.tail_call @callee(%value) attributes {tribute.calling_convention = "cps"} : (core.i1) -> ()
   }
 }"#,
                 "operands differ",
@@ -2798,7 +2798,7 @@ mod tests {
             r#"core.module @test {
   !callback = closure.closure<func.func_sig<() -> core.i32>>
   func.func @run(%callback: !callback) -> core.i32 attributes {tribute.calling_convention = "direct"} {
-    %result = func.call_indirect %callback {signature = func.func_sig<() -> core.i32>, tribute.calling_convention = "direct"} : core.i32
+    %result = func.call_indirect %callback() attributes {tribute.calling_convention = "direct"} : () -> core.i32
     func.return %result
   }
 }"#,
@@ -2833,7 +2833,7 @@ mod tests {
     func.unreachable
   }
   func.func @run(%raw: !_closure) -> core.i32 attributes {tribute.calling_convention = "direct"} {
-    %result = func.call %raw {callee = @factory, tribute.calling_convention = "direct"} : core.i32
+    %result = func.call @factory(%raw) attributes {tribute.calling_convention = "direct"} : (!_closure) -> core.i32
     func.return %result
   }
 }"#,
@@ -2854,7 +2854,7 @@ mod tests {
     func.unreachable
   }
   func.func @holder() -> core.i32 {
-    %defined = func.constant {func_ref = @defined} : func.func_sig<(core.i32, core.i32) -> core.never>
+    %defined = func.constant @defined : (core.i32, core.i32) -> core.never
     func.unreachable
   }
 }"#,
@@ -2865,7 +2865,7 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         assert!(
             printed.contains("func.func @defined(%0: core.i32 {tribute.ownership = \"consumed\"}, %1: !Env {tribute.ownership = \"consumed\"}, %2: core.i32 {tribute.ownership = \"consumed\"}) -> (), {call_conv = \"tail\"}")
-                && printed.contains("func.constant {func_ref = @defined} : func.func_sig<(core.i32 {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}) -> (), {call_conv = \"tail\"}>"),
+                && printed.contains("func.constant @defined : (core.i32 {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}) -> (), {call_conv = \"tail\"}"),
             "{printed}"
         );
     }
@@ -2881,7 +2881,7 @@ mod tests {
     func.unreachable
   }
   func.func @holder() -> core.i32 {
-    %one = func.constant {func_ref = @generated_one} : func.func_sig<(core.i32) -> core.never>
+    %one = func.constant @generated_one : (core.i32) -> core.never
     func.unreachable
   }
 }"#,
@@ -2901,7 +2901,7 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         assert!(
             printed.contains(
-                ": func.func_sig<(core.i32 {tribute.ownership = \"consumed\"}) -> (), {call_conv = \"tail\"}>"
+                "func.constant @generated_one : (core.i32 {tribute.ownership = \"consumed\"}) -> (), {call_conv = \"tail\"}"
             ),
             "{printed}"
         );
@@ -2981,7 +2981,7 @@ mod tests {
   !Env = closure.closure<func.func_sig<(core.i32, core.i32) -> core.never>>
   {function}
   func.func @holder() -> core.i32 {{
-    %function = func.constant {{func_ref = @external}} : func.func_sig<(core.i32, core.i32) -> core.never>
+    %function = func.constant @external : (core.i32, core.i32) -> core.never
     func.unreachable
   }}
 }}"#
@@ -3006,7 +3006,7 @@ mod tests {
     func.unreachable
   }
   func.func @holder() -> core.i32 {
-    %function = func.constant {func_ref = @external} : func.func_sig<(!Env2) -> core.never>
+    %function = func.constant @external : (!Env2) -> core.never
     func.unreachable
   }
 }"#,
@@ -3070,7 +3070,7 @@ mod tests {
             r#"core.module @test {
   func.func @external(%value: core.i32) -> core.i32
   func.func @holder() -> core.i32 {
-    %function = func.constant {func_ref = @external} : func.func_sig<(core.i32) -> core.i32>
+    %function = func.constant @external : (core.i32) -> core.i32
     func.unreachable
   }
 }"#,
@@ -3087,7 +3087,7 @@ mod tests {
             r#"core.module @test {
   func.func @external(%value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"}
   func.func @holder() -> core.i32 {
-    %function = func.constant {func_ref = @external} : func.func_sig<(core.i1) -> core.never>
+    %function = func.constant @external : (core.i1) -> core.never
     func.unreachable
   }
 }"#,

@@ -1058,7 +1058,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @run(%ev: wasm.arrayref, %payload: wasm.anyref) -> wasm.anyref {
-    %result = effect.dispatch_tail %ev, %payload {ability = @Console, op_name = "read"} : wasm.anyref
+    %result = effect.dispatch_tail @Console @read(%payload) [%ev] : wasm.anyref
     func.return %result
   }
 }"#,
@@ -1156,9 +1156,9 @@ mod tests {
             r#"core.module @test {
   func.func @main(%bytes: core.bytes, %cond: core.i1) -> core.nil {
     %write = tribute_io.write %bytes, %cond : core.nil
-    %never = scf.if %cond : core.never {
+    %never = scf.if %cond -> (core.never) {
       func.unreachable
-    } {
+    } else {
       func.unreachable
     }
     func.return %never
@@ -1186,7 +1186,7 @@ mod tests {
   func.func @main(%bytes: core.bytes, %newline: core.i1, %choice: core.i16) -> core.nil {
     %write = tribute_io.write %bytes, %newline : core.nil
     scf.switch %choice {
-      scf.case {value = 0} { scf.yield }
+      scf.case 0 { scf.yield }
       scf.default { scf.yield }
     }
     func.return

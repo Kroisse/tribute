@@ -234,14 +234,14 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
         {
             return None;
         }
-        let function = named.func_ref(self.ir).clone();
+        let function = named.value(self.ir).clone();
         let row_args = self
             .ir
             .op_attrs(producer)
             .get(tribute_control::ROW_ARGS_ATTR)
             .cloned();
         let reference = tribute_control::FuncRef::operands()
-            .func_ref(function)
+            .value(function)
             .results(target_ty)
             .build(self.ir, location);
         if let Some(row_args) = row_args {

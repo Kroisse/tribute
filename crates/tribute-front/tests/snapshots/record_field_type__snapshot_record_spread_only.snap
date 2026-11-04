@@ -21,7 +21,7 @@ core.module @test {
   }
   tribute_control.func @"pkg::Config::debug::modify"['a0](%0: !"pkg::Config_1", %1: !t2) -> !"pkg::Config_1" row(| 'a0) {
       %2 = adt.struct_get %0 {field = 0, type = !"pkg::Config"} : core.i1
-      %3 = tribute_control.call_indirect %1(%2) : core.i1
+      %3 = tribute_control.call_indirect %1(%2) : (core.i1) -> core.i1 row(| 'a0)
       %4 = adt.struct_get %0 {field = 1, type = !"pkg::Config"} : core.i1
       %5 = adt.struct_new %3, %4 {type = !"pkg::Config"} : !"pkg::Config_1"
       tribute_control.return %5
@@ -37,7 +37,7 @@ core.module @test {
   }
   tribute_control.func @"pkg::Config::verbose::modify"['a0](%0: !"pkg::Config_1", %1: !t2) -> !"pkg::Config_1" row(| 'a0) {
       %2 = adt.struct_get %0 {field = 1, type = !"pkg::Config"} : core.i1
-      %3 = tribute_control.call_indirect %1(%2) : core.i1
+      %3 = tribute_control.call_indirect %1(%2) : (core.i1) -> core.i1 row(| 'a0)
       %4 = adt.struct_get %0 {field = 0, type = !"pkg::Config"} : core.i1
       %5 = adt.struct_new %4, %3 {type = !"pkg::Config"} : !"pkg::Config_1"
       tribute_control.return %5

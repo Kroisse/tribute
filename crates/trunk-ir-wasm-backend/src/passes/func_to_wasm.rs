@@ -177,7 +177,7 @@ fn collect_refs_in_region(ctx: &IrContext, region: RegionRef, refs: &mut Vec<Sym
         for &op in ctx.block(block).ops.iter() {
             // Check for func.constant
             if let Ok(const_op) = func::Constant::from_op(ctx, op) {
-                refs.push(const_op.func_ref(ctx).clone());
+                refs.push(const_op.value(ctx).clone());
             }
 
             // Recurse into nested regions
@@ -660,7 +660,7 @@ impl OpRewritePattern for FuncConstantPattern {
         rewriter: &mut PatternRewriter<'_>,
     ) -> Option<()> {
         let op = const_op.op_ref();
-        let func_ref = const_op.func_ref(ctx);
+        let func_ref = const_op.value(ctx);
 
         // All func.constant operations must be registered in the function table.
         // They are collected by collect_func_constant_refs before pattern application.
@@ -738,7 +738,7 @@ mod tests {
     func.return %f
   }
   func.func @caller(%f: func.func_sig<() -> core.nil>) -> func.func_sig<() -> core.nil> {
-    %result = func.call %f {callee = @identity} : func.func_sig<() -> core.nil>
+    %result = func.call @identity(%f) : (func.func_sig<() -> core.nil>) -> func.func_sig<() -> core.nil>
     func.return %result
   }
 }"#,
@@ -894,13 +894,13 @@ mod tests {
     func.return
   }
   func.func @direct(%value: core.i32) -> core.nil {
-    func.tail_call %value {callee = @target}
+    func.tail_call @target(%value) : (core.i32) -> ()
   }
   func.func @indirect(%table_index: core.i32, %value: core.i32) -> core.nil {
-    func.tail_call_indirect %table_index, %value {signature = func.func_sig<(core.i32) -> core.nil>}
+    func.tail_call_indirect %table_index(%value) : (core.i32) -> core.nil
   }
   func.func @ordinary(%table_index: core.i32, %value: core.i32) -> core.i32 {
-    %result = func.call_indirect %table_index, %value {signature = func.func_sig<(core.i32) -> core.i32>} : core.i32
+    %result = func.call_indirect %table_index(%value) : (core.i32) -> core.i32
     func.return %result
   }
 }"#,
@@ -930,7 +930,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @caller(%table_index: core.i32, %value: core.i32) -> core.i32 {
-    %result = func.call_indirect %table_index, %value : core.i32
+    %result = "func.call_indirect"(%table_index, %value) : core.i32
     func.return %result
   }
 }"#,
@@ -948,7 +948,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @caller(%table_index: core.i32) -> core.nil {
-    func.call_indirect %table_index {signature = func.func_sig<() -> core.nil>}
+    "func.call_indirect"(%table_index) {signature = func.func_sig<() -> core.nil>}
     func.return
   }
 }"#,
@@ -958,7 +958,8 @@ mod tests {
 
         let output = print_module(&ctx, module.op());
         assert!(
-            output.contains("wasm.call_indirect %0 {signature = wasm.func_sig<() -> core.nil>}"),
+            output
+                .contains("\"wasm.call_indirect\"(%0) {signature = wasm.func_sig<() -> core.nil>}"),
             "{output}"
         );
         assert!(!output.contains("func.call_indirect"), "{output}");
@@ -974,8 +975,8 @@ mod tests {
     func.return
   }
   func.func @caller(%value: core.i32) -> core.nil {
-    %table_index = func.constant {func_ref = @target} : core.i32
-    func.tail_call_indirect %table_index, %value {signature = func.func_sig<(core.i32) -> core.nil>}
+    %table_index = func.constant @target : (core.i32) -> core.nil
+    func.tail_call_indirect %table_index(%value) : (core.i32) -> core.nil
   }
 }"#,
         );
@@ -1000,10 +1001,10 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @physical(%table_index: core.i32, %value: wasm.anyref) {
-    func.tail_call_indirect %table_index, %value {signature = func.func_sig<(tribute_rt.anyref) -> ()>, table = 7, test.marker = 2, type_idx = 9}
+    func.tail_call_indirect %table_index(%value) attributes {table = 7, test.marker = 2, type_idx = 9} : (tribute_rt.anyref) -> ()
   }
   func.func @mismatch(%table_index: core.i32, %value: core.i32) {
-    func.tail_call_indirect %table_index, %value {signature = func.func_sig<(tribute_rt.float) -> ()>, test.marker = 2}
+    func.tail_call_indirect %table_index(%value) attributes {test.marker = 2} : (tribute_rt.float) -> ()
   }
 }"#,
         );
@@ -1054,11 +1055,11 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @physical(%table_index: core.i32, %value: wasm.anyref) -> core.i32 {
-    %result = func.call_indirect %table_index, %value {signature = func.func_sig<(tribute_rt.anyref) -> core.i32>, table = 7, type_idx = 9} : core.i32
+    %result = func.call_indirect %table_index(%value) attributes {table = 7, type_idx = 9} : (tribute_rt.anyref) -> core.i32
     func.return %result
   }
   func.func @mismatch(%table_index: core.i32, %value: core.i32) -> core.i32 {
-    %result = func.call_indirect %table_index, %value {signature = func.func_sig<(tribute_rt.float) -> core.i32>} : core.i32
+    %result = func.call_indirect %table_index(%value) : (tribute_rt.float) -> core.i32
     func.return %result
   }
 }"#,
@@ -1103,7 +1104,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @transfer(%table_index: core.i32, %value: core.i32) -> (), {call_conv = "tail"} {
-    func.tail_call_indirect %table_index, %value {signature = func.func_sig<(core.i32) -> (), {call_conv = "tail"}>}
+    func.tail_call_indirect %table_index(%value) : (core.i32) -> (), {call_conv = "tail"}
   }
   func.func @nested(%callee: func.func_sig<(core.i32) -> (), {call_conv = "tail"}>) {
     func.return
@@ -1125,10 +1126,10 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @indirect(%table_index: core.i32, %value: core.i32) -> core.nil {
-    func.tail_call_indirect %table_index, %value
+    "func.tail_call_indirect"(%table_index, %value)
   }
   func.func @malformed(%table_index: core.i32, %value: core.i32) -> core.nil {
-    func.tail_call_indirect %table_index, %value {signature = core.i32}
+    "func.tail_call_indirect"(%table_index, %value) {signature = core.i32}
   }
 }"#,
         );
@@ -1154,11 +1155,11 @@ mod tests {
     func.return
   }
   func.func @direct(%value: core.i32) -> test.ref {
-    %result = func.call %value {callee = @target} : test.ref
+    %result = func.call @target(%value) : (core.i32) -> test.ref
     func.return %result
   }
   func.func @indirect(%table_index: core.i32, %value: core.i32) -> test.ref {
-    %result = func.call_indirect %table_index, %value {signature = func.func_sig<(core.i32) -> test.ref>} : test.ref
+    %result = func.call_indirect %table_index(%value) : (core.i32) -> test.ref
     func.return %result
   }
 }"#,

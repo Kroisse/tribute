@@ -7,7 +7,7 @@ core.module @test {
 
   tribute_control.func @"pkg::read_state"['a0]() -> core.i32 row(| 'a0) inferred {
       %0 = tribute_control.lambda() -> core.i32 row(@"ability_2_10_pkg::State_3_nat" | 'a0) captures [] {
-          %1 = tribute_control.perform {ability = @"ability_2_10_pkg::State_3_nat", op_name = "get", operation_kind = "op"} : core.i32
+          %1 = tribute_control.perform op @"ability_2_10_pkg::State_3_nat" @get() : () -> core.i32
           tribute_control.return %1
       }
       %2 = arith.const {value = 42} : core.i32
@@ -15,15 +15,13 @@ core.module @test {
       tribute_control.return %3
   }
   tribute_control.func @"pkg::with_state$Nat$Nat"['a0](%0: !t0, %1: core.i32) -> core.i32 row(| 'a0) {
-      %2 = tribute_control.handle : core.i32 {
-          %3 = tribute_control.call_indirect %0() : core.i32
+      %2 = tribute_control.handle : core.i32 body {
+          %3 = tribute_control.call_indirect %0() : () -> core.i32 row(@"ability_2_10_pkg::State_3_nat" | 'a0)
           tribute_control.yield %3
-      } {
-        ^bb2(%4: core.i32):
+      } completion(%4: core.i32) {
           tribute_control.yield %4
-      } {
-          tribute_control.handler {ability = @"ability_2_10_pkg::State_3_nat", kind = "op", op_name = "get", operation_result_type = core.i32} {
-            ^bb4(%5: tribute_control.resume_token<core.i32, core.i32>):
+      } handlers {
+          tribute_control.handler op @"ability_2_10_pkg::State_3_nat" @get(%5: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
               %6 = tribute_control.lambda() -> core.i32 row(@"ability_2_10_pkg::State_3_nat" | 'a0) captures [%1, %5] {
                   %7 = tribute_control.resume %5, %1 : core.i32
                   tribute_control.return %7
@@ -31,8 +29,7 @@ core.module @test {
               %8 = tribute_control.call %6, %1 {callee = @"pkg::with_state$Nat$Nat", row_args = [{tail = 0}]} : core.i32
               tribute_control.yield %8
           }
-          tribute_control.handler {ability = @"ability_2_10_pkg::State_3_nat", kind = "op", op_name = "set", operation_result_type = core.nil} {
-            ^bb6(%9: core.i32, %10: tribute_control.resume_token<core.nil, core.i32>):
+          tribute_control.handler op @"ability_2_10_pkg::State_3_nat" @set(%9: core.i32, %10: tribute_control.resume_token<core.nil, core.i32>) : core.nil {
               %11 = tribute_control.lambda() -> core.i32 row(@"ability_2_10_pkg::State_3_nat" | 'a0) captures [%10] {
                   %12 = core.nil_value : core.nil
                   %13 = tribute_control.resume %10, %12 : core.i32
@@ -44,7 +41,7 @@ core.module @test {
       }
       tribute_control.return %2
   }
-  ability.decl {sym_name = "ability_2_10_pkg::State_3_nat"} {
+  ability.decl @"ability_2_10_pkg::State_3_nat" {
       ability.operation {kind = "op", op_name = "get", param_types = [], result_type = core.i32}
       ability.operation {kind = "op", op_name = "set", param_types = [core.i32], result_type = core.nil}
   }

@@ -110,7 +110,7 @@ fn empty_result_cps_root_executes_native_done_continuation() {
         r#"
             %done = adt.struct_get %frame {field = 0, type = !__tribute_continuation_frame_root_nil} : !Done
             %nil = core.nil_value : core.nil
-            func.tail_call_indirect %done, %nil {signature = func.func_sig<(core.nil) -> core.never>, tribute.calling_convention = "cps"}
+            func.tail_call_indirect %done(%nil) attributes {tribute.calling_convention = "cps"} : (core.nil) -> core.never
         "#,
     );
 
@@ -173,7 +173,7 @@ fn root_dispatch_definition_matches_fixed_wasm_tail_signature_and_validates_bina
             %resume = adt.ref_null {type = !Resume} : !Resume
             %product = adt.struct_new {type = !Payload} : !Payload
             %payload = core.unrealized_conversion_cast %product : tribute_rt.anyref
-            effect.dispatch_cps %evidence, %dispatch, %resume, %payload {ability = @State, op_name = "get", answer_type = core.nil}
+            effect.dispatch_cps @State @get(%payload) [%evidence, %dispatch, %resume] -> core.nil
         "#,
     );
     run_target_to_boundary_exit(
@@ -762,9 +762,9 @@ fn native_one_shot_wrapper_traps_on_second_invocation() {
 
   func.func @one_shot_wrapper(%state: !state, %value: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
     %consumed = adt.struct_get %state {field = 0, type = !state} : core.i1
-    %answer = scf.if %consumed : core.i32 {
+    %answer = scf.if %consumed -> (core.i32) {
       func.unreachable
-    } {
+    } else {
       %consumed_true = arith.const {value = 1} : core.i1
       adt.struct_set %state, %consumed_true {field = 0, type = !state}
       scf.yield %value
@@ -776,8 +776,8 @@ fn native_one_shot_wrapper_traps_on_second_invocation() {
     %not_consumed = arith.const {value = 0} : core.i1
     %state = adt.struct_new %not_consumed {type = !state} : !state
     %input = arith.const {value = 0} : core.i32
-    %first = func.call %state, %input {callee = @one_shot_wrapper, tribute.calling_convention = "direct"} : core.i32
-    %second = func.call %state, %first {callee = @one_shot_wrapper, tribute.calling_convention = "direct"} : core.i32
+    %first = func.call @one_shot_wrapper(%state, %input) attributes {tribute.calling_convention = "direct"} : (!state, core.i32) -> core.i32
+    %second = func.call @one_shot_wrapper(%state, %first) attributes {tribute.calling_convention = "direct"} : (!state, core.i32) -> core.i32
     func.return %second
   }
 }"#;
@@ -818,8 +818,8 @@ fn physical_tail_chain_module(done_call_conv: &str, reference_call_conv: &str) -
     %ok = arith.cmpi %value, %expected {{predicate = "eq"}} : core.i1
     scf.if %ok {{
       scf.yield
-    }} {{
-      func.call {{callee = @fail}}
+    }} else {{
+      func.call @fail() : () -> ()
       scf.yield
     }}
     func.return
@@ -828,19 +828,19 @@ fn physical_tail_chain_module(done_call_conv: &str, reference_call_conv: &str) -
   func.func @step(%value: core.i32) -> (), {{call_conv = "tail"}} {{
     %one = arith.const {{value = 1}} : core.i32
     %next = arith.addi %value, %one : core.i32
-    %done = func.constant {{func_ref = @done}} : func.func_sig<(core.i32) -> (){reference_call_conv}>
-    func.tail_call_indirect %done, %next {{signature = func.func_sig<(core.i32) -> (), {{call_conv = "tail"}}>}}
+    %done = func.constant @done : (core.i32) -> (){reference_call_conv}
+    func.tail_call_indirect %done(%next) : (core.i32) -> (), {{call_conv = "tail"}}
   }}
 
   func.func @start(%value: core.i32) -> (), {{call_conv = "tail"}} {{
     %one = arith.const {{value = 1}} : core.i32
     %next = arith.addi %value, %one : core.i32
-    func.tail_call %next {{callee = @step}}
+    func.tail_call @step(%next) : (core.i32) -> ()
   }}
 
   func.func @main() -> core.i32 {{
     %input = arith.const {{value = 1}} : core.i32
-    func.call %input {{callee = @start}}
+    func.call @start(%input) : (core.i32) -> ()
     %exit = arith.const {{value = 0}} : core.i32
     func.return %exit
   }}

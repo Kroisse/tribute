@@ -678,7 +678,7 @@ mod tests {
   !Closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @f(%c: !Closure) {
     %erased = core.unrealized_conversion_cast %c : tribute_rt.anyref
-    func.call %erased {callee = @use}
+    func.call @use(%erased) : (tribute_rt.anyref) -> ()
     func.return
   }
 }"#,
@@ -789,7 +789,7 @@ mod tests {
   func.func @f(%sample: !Sample, %callee: core.i32, %value: tribute_rt.anyref) -> tribute_rt.int {
     %null = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
     %some = adt.variant_new %null {tag = "Some", type = !Option} : !Option
-    %result = func.call_indirect %callee, %value {signature = func.func_sig<(tribute_rt.anyref) -> tribute_rt.int>} : tribute_rt.int
+    %result = func.call_indirect %callee(%value) : (tribute_rt.anyref) -> tribute_rt.int
     func.return %result
   }
 }"#,

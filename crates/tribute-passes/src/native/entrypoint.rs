@@ -203,7 +203,7 @@ mod tests {
     func.return %nil
   }
   func.func @main() -> core.nil {
-    %result = func.call {callee = @__tribute_main} : core.nil
+    %result = func.call @__tribute_main() : () -> core.nil
     func.return %result
   }
 }"#;
@@ -221,8 +221,8 @@ mod tests {
       func.return %0
   }
   func.func @main() -> core.i32 {
-      %0 = func.call {callee = @__tribute_init} : core.nil
-      %1 = func.call {callee = @__tribute_main} : core.nil
+      %0 = func.call @__tribute_init() : () -> core.nil
+      %1 = func.call @__tribute_main() : () -> core.nil
       %2 = arith.const {value = 0} : core.i32
       func.return %2
   }
@@ -236,16 +236,16 @@ mod tests {
         let printed = adapt(WRAPPER_MAIN, true);
 
         let asan = printed
-            .find("func.call {callee = @__asan_init}")
+            .find("func.call @__asan_init(")
             .expect("asan init call");
         let init = printed
-            .find("func.call {callee = @__tribute_init}")
+            .find("func.call @__tribute_init(")
             .expect("runtime init call");
         let worker = printed
-            .find("func.call {callee = @__tribute_main}")
+            .find("func.call @__tribute_main(")
             .expect("worker call");
         let exit = printed
-            .find("func.call {callee = @__asan_exit}")
+            .find("func.call @__asan_exit(")
             .expect("asan exit call");
         let ret = printed.rfind("func.return").expect("exit return");
         assert!(

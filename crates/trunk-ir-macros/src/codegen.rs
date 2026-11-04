@@ -156,8 +156,8 @@ fn gen_op_def(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -> Tok
 
     let attributes = op.attrs.iter().map(|attr| {
         let name = &attr.name;
-        let kind = attr_kind_trait(crate_path, attr);
-        let kind = quote!(#kind::KIND);
+        let kind_trait = attr_kind_trait(crate_path, attr);
+        let kind = quote!(#kind_trait::KIND);
         let optional = attr.optional;
         let binds = match attr.binds {
             Some(i) => quote!(Some(#i)),
@@ -173,6 +173,8 @@ fn gen_op_def(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -> Tok
             optional: #optional,
             binds: #binds,
             is_default: #is_default,
+            accepts: #kind_trait::accepts,
+            domain: #kind_trait::DOMAIN,
         })
     });
 
@@ -941,7 +943,7 @@ fn gen_is_default(crate_path: &TokenStream, attr: &AttrDef) -> Option<TokenStrea
     let kind = attr_kind_trait(crate_path, attr);
     Some(quote! {
         |ctx: &#crate_path::IrContext, value: &#crate_path::Attribute| -> bool {
-            #kind::KIND.accepts(value) && #kind::same(&#kind::read(ctx, value), &(#default))
+            #kind::accepts(ctx, value) && #kind::same(&#kind::read(ctx, value), &(#default))
         }
     })
 }
@@ -1252,9 +1254,9 @@ fn gen_type_shape_check(crate_path: &TokenStream, td: &TypeDefData) -> TokenStre
         let name = &attr.name;
         let kind = attr_kind_trait(crate_path, attr);
         if attr.optional {
-            quote!(attrs.view(ctx).get(#name).is_none_or(|attr| #kind::KIND.accepts(attr)))
+            quote!(attrs.view(ctx).get(#name).is_none_or(|attr| #kind::accepts(ctx, attr)))
         } else {
-            quote!(attrs.view(ctx).get(#name).is_some_and(|attr| #kind::KIND.accepts(attr)))
+            quote!(attrs.view(ctx).get(#name).is_some_and(|attr| #kind::accepts(ctx, attr)))
         }
     });
     quote!({

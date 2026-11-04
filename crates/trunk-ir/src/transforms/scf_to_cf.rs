@@ -1223,12 +1223,12 @@ mod tests {
         assert_lowered_unit_tail_transfer(
             r#"core.module @test {
   func.func @main(%cond: core.i1, %callee: func.func_sig<(core.nil) -> core.never>, %unit: core.nil) -> core.never attributes {test.marker = 2} {
-    %selected = scf.if %cond : core.nil {
+    %selected = scf.if %cond -> (core.nil) {
       scf.yield %unit
-    } {
+    } else {
       scf.yield %unit
     }
-    func.tail_call_indirect %callee, %selected {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
+    func.tail_call_indirect %callee(%selected) attributes {test.marker = 2} : (core.nil) -> core.never
   }
 }"#,
             1,
@@ -1239,10 +1239,10 @@ mod tests {
     fn lower_scf_if_drops_unused_never_result_for_tail_transfers() {
         let input = r#"core.module @test {
   func.func @main(%cond: core.i1, %callee: func.func_sig<(core.nil) -> core.never>, %unit: core.nil) -> core.never attributes {test.marker = 2} {
-    %discarded = scf.if %cond : core.never {
+    %discarded = scf.if %cond -> (core.never) {
       func.unreachable
-    } {
-      func.tail_call_indirect %callee, %unit {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
+    } else {
+      func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
     }
   }
 }"#;
@@ -1297,11 +1297,11 @@ mod tests {
         let input = r#"core.module @test {
   func.func @main(%choice: core.i32, %callee: func.func_sig<(core.nil) -> core.never>, %unit: core.nil) -> core.never attributes {test.marker = 2} {
     scf.switch %choice {
-      scf.case {value = 0} {
+      scf.case 0 {
         func.unreachable
       }
       scf.default {
-        func.tail_call_indirect %callee, %unit {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
+        func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
       }
     }
   }
@@ -1344,7 +1344,7 @@ mod tests {
         let input = r#"core.module @test {
   func.func @main(%choice: core.i32, %first: core.i32, %second: core.i32) -> core.i32 {
     scf.switch %choice {
-      scf.case {value = 0} {
+      scf.case 0 {
         func.return %first
       }
       scf.default {
@@ -1379,9 +1379,9 @@ mod tests {
         let input = r#"core.module @test {
   func.func @main(%choice: core.i32, %nested_choice: core.i32, %first: core.i32, %second: core.i32, %third: core.i32) -> core.i32 {
     scf.switch %choice {
-      scf.case {value = 0} {
+      scf.case 0 {
         scf.switch %nested_choice {
-          scf.case {value = 0} {
+          scf.case 0 {
             func.return %first
           }
           scf.default {
@@ -1421,7 +1421,7 @@ mod tests {
         let input = r#"core.module @test {
   func.func @main(%choice: core.i32) {
     scf.switch %choice {
-      scf.case {value = 0} {
+      scf.case 0 {
         func.return
       }
       scf.default {
@@ -1454,8 +1454,8 @@ mod tests {
         let input = r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
     scf.switch %choice {
-      scf.case {value = 0} {
-        test_exit_dialect.exit
+      scf.case 0 {
+        "test_exit_dialect.exit"()
       }
       scf.default {
         func.unreachable
@@ -1485,7 +1485,7 @@ mod tests {
                 r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
     scf.switch %choice {
-      scf.case {value = 0} { scf.yield }
+      scf.case 0 { scf.yield }
       scf.default { func.unreachable }
     }
   }
@@ -1496,7 +1496,7 @@ mod tests {
                 r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
     scf.switch %choice {
-      scf.case {value = 0} { func.unreachable }
+      scf.case 0 { func.unreachable }
     }
   }
 }"#,
@@ -1506,7 +1506,7 @@ mod tests {
                 r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
     scf.switch %choice {
-      scf.case {value = 0} {
+      scf.case 0 {
         func.return
         core.nil_value : core.nil
       }
@@ -1520,7 +1520,7 @@ mod tests {
                 r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
     scf.switch %choice {
-      scf.case {value = 0} {
+      scf.case 0 {
         ^first:
           cf.br [^second]
         ^second:
@@ -1536,7 +1536,7 @@ mod tests {
                 r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
     scf.switch %choice {
-      scf.case {value = 0} { test_exit_dialect.malformed_exit }
+      scf.case 0 { "test_exit_dialect.malformed_exit"() }
       scf.default { func.unreachable }
     }
   }
@@ -1569,8 +1569,8 @@ mod tests {
             r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
     scf.switch %choice {
-      scf.case {value = 0} { core.nil_value : core.nil }
-      scf.default { test_exit_dialect.malformed_exit }
+      scf.case 0 { core.nil_value : core.nil }
+      scf.default { "test_exit_dialect.malformed_exit"() }
     }
   }
 }"#,
@@ -1597,15 +1597,15 @@ mod tests {
         let input = r#"core.module @test {
   func.func @main(%choice: core.i32, %cond: core.i1, %callee: func.func_sig<(core.nil) -> core.never>, %unit: core.nil) -> core.never attributes {test.marker = 2} {
     scf.switch %choice {
-      scf.case {value = 0} {
-        %discarded = scf.if %cond : core.never {
+      scf.case 0 {
+        %discarded = scf.if %cond -> (core.never) {
           func.unreachable
-        } {
-          func.tail_call_indirect %callee, %unit {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
+        } else {
+          func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
         }
       }
       scf.default {
-        func.tail_call_indirect %callee, %unit {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
+        func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
       }
     }
   }
@@ -1645,18 +1645,18 @@ mod tests {
         let input = r#"core.module @test {
   func.func @main(%choice: core.i32, %nested_choice: core.i32, %callee: func.func_sig<(core.nil) -> core.never>, %unit: core.nil) -> core.never attributes {test.marker = 2} {
     scf.switch %choice {
-      scf.case {value = 0} {
+      scf.case 0 {
         scf.switch %nested_choice {
-          scf.case {value = 0} {
+          scf.case 0 {
             func.unreachable
           }
           scf.default {
-            func.tail_call_indirect %callee, %unit {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
+            func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
           }
         }
       }
       scf.default {
-        func.tail_call_indirect %callee, %unit {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
+        func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
       }
     }
   }
@@ -1693,7 +1693,7 @@ mod tests {
         let input = r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
     scf.switch %choice {
-      scf.case {value = 0} {
+      scf.case 0 {
         scf.yield
       }
       scf.default {
@@ -1741,7 +1741,7 @@ mod tests {
         let input = r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
     scf.switch %choice {
-      scf.case {value = 0} {
+      scf.case 0 {
         ^first:
           cf.br [^second]
         ^second:
@@ -1794,17 +1794,17 @@ mod tests {
         assert_lowered_unit_tail_transfer(
             r#"core.module @test {
   func.func @main(%cond: core.i1, %callee: func.func_sig<(core.nil) -> core.never>, %unit: core.nil) -> core.never attributes {test.marker = 2} {
-    %inner = scf.if %cond : core.nil {
+    %inner = scf.if %cond -> (core.nil) {
       scf.yield %unit
-    } {
+    } else {
       scf.yield %unit
     }
-    %outer = scf.if %cond : core.nil {
+    %outer = scf.if %cond -> (core.nil) {
       scf.yield %inner
-    } {
+    } else {
       scf.yield %inner
     }
-    func.tail_call_indirect %callee, %outer {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
+    func.tail_call_indirect %callee(%outer) attributes {test.marker = 2} : (core.nil) -> core.never
   }
 }"#,
             2,
@@ -2123,10 +2123,10 @@ mod tests {
             r#"core.module @test {
   func.func @main(%choice: core.i32) {
     scf.switch %choice {
-      scf.case {value = 7} {
+      scf.case 7 {
         scf.yield
       }
-      scf.case {value = -1} {
+      scf.case -1 {
         scf.yield
       }
       scf.default {
@@ -2138,7 +2138,7 @@ mod tests {
 }"#,
         );
         assert!(
-            printed.contains("cf.switch %0 [^bb3, ^bb1, ^bb2] {cases = [7, -1]}"),
+            printed.contains("\"cf.switch\"(%0)[^bb3, ^bb1, ^bb2] {cases = [7, -1]}"),
             "{printed}"
         );
     }
@@ -2154,10 +2154,10 @@ mod tests {
                 r#"core.module @test {{
   func.func @main(%choice: {discriminant_ty}) {{
     scf.switch %choice {{
-      scf.case {{value = {}}} {{
+      scf.case {} {{
         scf.yield
       }}
-      scf.case {{value = {}}} {{
+      scf.case {} {{
         scf.yield
       }}
       scf.default {{

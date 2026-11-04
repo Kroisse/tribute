@@ -354,7 +354,7 @@ impl CallableResultOrigin for FuncRef {
         query: &mut CallableQuery<'q>,
     ) -> bool {
         ctx.op_attrs(self.op_ref())
-            .get_symbol_ref("func_ref")
+            .get_symbol_ref("value")
             .is_some_and(|symbol| query.names_verified_function(ctx, self.op_ref(), symbol))
     }
 }

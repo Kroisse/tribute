@@ -186,7 +186,7 @@ mod tests {
                 }
                 func.func @caller(%0: tribute_rt.anyref, %1: tribute_rt.anyref) -> tribute_rt.anyref {
                 ^bb0:
-                    %2 = func.call %0, %1 {callee = @"std::collections::List::__tribute_list_prepend_intrinsic$String"} : tribute_rt.anyref
+                    %2 = func.call @"std::collections::List::__tribute_list_prepend_intrinsic$String"(%0, %1) : (tribute_rt.anyref, tribute_rt.anyref) -> tribute_rt.anyref
                     func.return %2
                 }
             }
@@ -219,7 +219,7 @@ mod tests {
                 }
                 func.func @caller(%0: tribute_rt.int, %1: tribute_rt.int) -> tribute_rt.int {
                 ^bb0:
-                    %2 = func.call %0, %1 {callee = @"List::prepend"} : tribute_rt.int
+                    %2 = func.call @"List::prepend"(%0, %1) : (tribute_rt.int, tribute_rt.int) -> tribute_rt.int
                     func.return %2
                 }
             }
@@ -250,7 +250,7 @@ mod tests {
                 }
                 func.func @caller(%0: tribute_rt.int, %1: tribute_rt.int) -> tribute_rt.int {
                 ^bb0:
-                    %2 = func.call %0, %1 {callee = @"std::collections::List::__tribute_list_prepend_intrinsic"} : tribute_rt.int
+                    %2 = func.call @"std::collections::List::__tribute_list_prepend_intrinsic"(%0, %1) : (tribute_rt.int, tribute_rt.int) -> tribute_rt.int
                     func.return %2
                 }
             }
@@ -288,7 +288,7 @@ mod tests {
                 }
                 func.func @caller(%0: tribute_rt.anyref, %1: tribute_rt.anyref) -> tribute_rt.anyref {
                 ^bb0:
-                    %2 = func.call %0, %1 {callee = @"std::collections::List::__tribute_list_prepend_intrinsic$String"} : tribute_rt.anyref
+                    %2 = func.call @"std::collections::List::__tribute_list_prepend_intrinsic$String"(%0, %1) : (tribute_rt.anyref, tribute_rt.anyref) -> tribute_rt.anyref
                     func.return %2
                 }
             }

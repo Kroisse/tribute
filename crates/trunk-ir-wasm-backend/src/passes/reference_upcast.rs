@@ -106,7 +106,7 @@ mod tests {
     %r_struct = core.unrealized_conversion_cast %r : wasm.structref
     %s_any = core.unrealized_conversion_cast %s : wasm.anyref
     %a_array = core.unrealized_conversion_cast %a : wasm.arrayref
-    func.call %c_struct, %c_any, %r_struct, %s_any, %a_array {callee = @use}
+    func.call @use(%c_struct, %c_any, %r_struct, %s_any, %a_array) : (wasm.structref, wasm.anyref, wasm.structref, wasm.anyref, wasm.arrayref) -> ()
     func.return
   }
 }"#,
@@ -126,7 +126,7 @@ mod tests {
     %r_struct = wasm.ref_upcast %r : wasm.structref
     %s_any = wasm.ref_upcast %s : wasm.anyref
     %a_array = wasm.ref_upcast %a : wasm.arrayref
-    func.call %c_struct, %c_any, %r_struct, %s_any, %a_array {callee = @use}
+    func.call @use(%c_struct, %c_any, %r_struct, %s_any, %a_array) : (wasm.structref, wasm.anyref, wasm.structref, wasm.anyref, wasm.arrayref) -> ()
     func.return
   }
 }"#,
@@ -140,7 +140,7 @@ mod tests {
   func.func @f(%any: wasm.anyref, %plain: !Plain) {
     %down = core.unrealized_conversion_cast %any : wasm.structref
     %plain_struct = core.unrealized_conversion_cast %plain : wasm.structref
-    func.call %down, %plain_struct {callee = @use}
+    func.call @use(%down, %plain_struct) : (wasm.structref, wasm.structref) -> ()
     func.return
   }
 }"#;
@@ -158,7 +158,7 @@ mod tests {
   !Closure = test.layout<core.i32, wasm.anyref, {layout = "closure"}>
   func.func @f(%c: !Closure) {
     %r = core.unrealized_conversion_cast %c : wasm.structref
-    func.call %r {callee = @use}
+    func.call @use(%r) : (wasm.structref) -> ()
     func.return
   }
 }"#;

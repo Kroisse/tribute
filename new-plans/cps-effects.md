@@ -806,8 +806,7 @@ control을 다른 runtime 장치로 구현한다면 이 pass 대신 자기 lower
 경로로 내린다:
 
 ```text
-%result = ability.call %arg
-  { ability = @Logger, op_name = "log" }
+%result = ability.call @Logger @log(%arg) : (ArgType) -> ResultType
 ```
 
 `lower_ability_call`은 enclosing callable의 exact `EvidenceDirect`/`Cps`
@@ -827,11 +826,10 @@ payload를 pack한다.
 ```text
 %product = pack %args into the canonical operation payload product
 %payload = cast %product to anyref
-effect.dispatch_cps %ev, %dispatch, %resume, %payload
-  { ability = @State, op_name = "get", answer_type = R }
+effect.dispatch_cps @State @get(%payload) [%ev, %dispatch, %resume] -> R
 ```
 
-필수 `answer_type: Type`은 `ContinuationFrame<R>`의 의미적 `R`이다. 호출 결과,
+`->` 뒤에 쓰는 필수 `answer_type: Type`은 `ContinuationFrame<R>`의 의미적 `R`이다. 호출 결과,
 물리화 완료 marker 또는 callable provenance가 아니며 `ability.perform`에 중복하지
 않는다. Dispatch가 요구하는 resume과 실제 resume의 exact 타입이 같아야 한다.
 같은 `R`을 가진 서로 다른 nominal frame도 호환되지 않는다. Dispatch와 resume의
@@ -1009,8 +1007,7 @@ CPS legalization은 선택을 계산하거나 바꾸지 않고 만든 호출로 
 이 pass는 함수 signature나 본문 형상에서 hidden evidence를 추론하지 않는다.
 
 ```text
-%ev2 = effect.extend %ev, %prompt_tag, %tr_dispatch_fn, %outer
-  { ability = @State }
+%ev2 = effect.extend @State %ev, %prompt_tag, %tr_dispatch_fn, %outer : !Evidence
 ```
 
 Marker와 Evidence는
