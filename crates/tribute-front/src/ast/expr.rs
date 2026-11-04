@@ -219,8 +219,15 @@ pub enum ExprKind<V> {
         arms: Vec<Arm<V>>,
     },
 
-    /// Lambda expression: `|x, y| expr` or `|x, y| { stmts }`
-    Lambda { params: Vec<Param>, body: Expr<V> },
+    /// Lambda expression: `fn(x, y) expr` or `fn(x) ->{E} T { stmts }`
+    Lambda {
+        params: Vec<Param>,
+        /// Return type annotation (optional, can be inferred).
+        return_ty: Option<TypeAnnotation>,
+        /// Ability row annotation (optional); `Some(vec![])` is `->{}`.
+        effects: Option<Vec<TypeAnnotation>>,
+        body: Expr<V>,
+    },
 
     /// Handle expression: `handle expr { handlers }`
     Handle {

@@ -291,6 +291,8 @@ fn lambda_variant(env_size: usize, max_depth: usize) -> BoxedStrategy<Expr<Unres
                                 ty: None,
                                 local_id: None,
                             }],
+                            return_ty: None,
+                            effects: None,
                             body,
                         },
                     )
@@ -324,6 +326,8 @@ fn lambda_variant(env_size: usize, max_depth: usize) -> BoxedStrategy<Expr<Unres
                                     local_id: None,
                                 },
                             ],
+                            return_ty: None,
+                            effects: None,
                             body,
                         },
                     )
@@ -364,6 +368,8 @@ fn lambda_variant(env_size: usize, max_depth: usize) -> BoxedStrategy<Expr<Unres
                                     local_id: None,
                                 },
                             ],
+                            return_ty: None,
+                            effects: None,
                             body,
                         },
                     )
@@ -780,7 +786,7 @@ fn all_vars_bound<'a>(expr: &'a Expr<UnresolvedName>, bound: &[&'a Symbol]) -> b
             }
             all_vars_bound(value, &scope)
         }
-        ExprKind::Lambda { params, body } => {
+        ExprKind::Lambda { params, body, .. } => {
             let mut scope = bound.to_vec();
             scope.extend(params.iter().map(|p| &p.name));
             all_vars_bound(body, &scope)

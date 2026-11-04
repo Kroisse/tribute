@@ -202,7 +202,7 @@ pub(super) fn lower_expr<'db>(
             )
         }
         ExprKind::Become { call } => lower_become(builder, location, call, declarations),
-        ExprKind::Lambda { params, body } => {
+        ExprKind::Lambda { params, body, .. } => {
             let signature = declarations
                 .lambda_signatures
                 .get(&expr.id)

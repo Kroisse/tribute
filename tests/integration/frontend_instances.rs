@@ -381,3 +381,27 @@ fn main() -> Nil { let _ = identity(5) }
             .all(|(path, _)| *path != ["identity"] && *path != ["unreached"])
     );
 }
+
+/// A lambda's result annotation fixes the ability argument of the operation
+/// its body performs, so specialization sees a complete instance.
+#[salsa_test]
+fn annotated_lambda_fixes_its_ability_argument(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "annotated_lambda.trb",
+        r#"
+ability State(s) { op get() -> s }
+fn run() ->{State(Int)} Int {
+    let read = fn() -> Int { State::get() }
+    read() + +1
+}
+fn main() -> Nil {
+    let _ = handle run() {
+        do value { value }
+        op State::get() { resume +0 }
+    }
+}
+"#,
+    );
+    assert!(prepares(db, source));
+}
