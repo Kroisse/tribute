@@ -123,7 +123,7 @@ Wasm 코드 생성기는 함수 본문이나 테이블 인덱스에서 CPS 여�
 
 ### Switch 지원 조건
 
-`scf_to_wasm`은 결과 없는 `scf.switch`를 case 순서대로 중첩된 비교와
+`scf_to_wasm`은 `scf.index_switch`를 case 순서대로 중첩된 비교와
 `wasm.if`로 낮춘다. Wasm이 정수를 직접 비교하는 폭은 `i32`와 `i64`뿐이므로
 discriminant는 `core.i32` 또는 `core.i64`여야 하고, 각각 `wasm.i32_eq`와
 `wasm.i64_eq`로 비교한다. 두 비교 모두 `core.i32` 조건을 만든다. 모든 case

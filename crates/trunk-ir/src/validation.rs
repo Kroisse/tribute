@@ -1082,7 +1082,7 @@ pub fn is_proper_tail_terminator(ctx: &IrContext, op: OpRef) -> bool {
             ))
         || name.is(ctx, "effect.dispatch_cps")
         || scf::If::matches(ctx, op)
-        || scf::Switch::matches(ctx, op)
+        || scf::IndexSwitch::matches(ctx, op)
 }
 
 fn validate_scf_if_structure(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
@@ -2782,12 +2782,12 @@ mod tests {
 
     #[test]
     fn cf_switch_interface_reports_the_default_and_every_target() {
-        let module_text = |cases: &str, successors: &str| {
+        let module_text = |arms: &str| {
             format!(
                 r#"core.module @test {{
   func.func @main(%choice: core.i32) {{
     ^entry:
-      "cf.switch"(%choice)[{successors}] {{cases = {cases}}}
+      cf.switch %choice : core.i32, [default: ^fallback, {arms}]
     ^fallback:
       func.return
     ^first:
@@ -2799,10 +2799,8 @@ mod tests {
             )
         };
         let mut ctx = IrContext::new();
-        let module = crate::parser::parse_test_module(
-            &mut ctx,
-            &module_text("[4, -1]", "^fallback, ^first, ^second"),
-        );
+        let module =
+            crate::parser::parse_test_module(&mut ctx, &module_text("4: ^first, -1: ^second"));
 
         let result = validate_operation_verifiers(&ctx, module);
         assert!(result.is_ok(), "{result}");
@@ -2821,23 +2819,19 @@ mod tests {
                 .all(|(edge, &block)| edge.block == block && edge.forwarded.is_empty())
         );
 
-        for (cases, successors, expected) in [
-            ("[4, -1]", "^fallback, ^first", "2 case(s) but 1 target(s)"),
-            ("[4, 4]", "^fallback, ^first, ^second", "duplicate case 4"),
+        for (arms, expected) in [
+            ("4: ^first, 4: ^second", "duplicate case 4"),
             (
-                "[-1, 4294967295]",
-                "^fallback, ^first, ^second",
+                "-1: ^first, 4294967295: ^second",
                 "duplicate case 4294967295",
             ),
             (
-                "[4, 4294967296]",
-                "^fallback, ^first, ^second",
+                "4: ^first, 4294967296: ^second",
                 "case 4294967296 is not a value of a 32-bit integer",
             ),
         ] {
             let mut ctx = IrContext::new();
-            let module =
-                crate::parser::parse_test_module(&mut ctx, &module_text(cases, successors));
+            let module = crate::parser::parse_test_module(&mut ctx, &module_text(arms));
             let result = validate_operation_verifiers(&ctx, module);
             let errors = operation_error_messages(&result);
             assert!(
@@ -3011,16 +3005,15 @@ mod tests {
     }
 
     #[test]
-    fn region_branch_interfaces_cover_switch_case_and_default() {
+    fn region_branch_interfaces_cover_every_switch_region() {
         let input = r#"core.module @test {
   func.func @main(%discriminant: core.i32) -> core.nil {
-    scf.switch %discriminant {
-      scf.case 0 {
-        scf.yield
-      }
-      scf.default {
-        scf.yield
-      }
+    scf.index_switch %discriminant
+    case 0 {
+      scf.yield
+    }
+    default {
+      scf.yield
     }
     %unit = core.nil_value : core.nil
     func.return %unit
@@ -3031,7 +3024,7 @@ mod tests {
 
         let result = validate_operation_verifiers(&ctx, module);
         assert!(result.is_ok(), "{result}");
-        let switches = operations_named(&ctx, module, crate::dialect::scf::Switch::NAME);
+        let switches = operations_named(&ctx, module, crate::dialect::scf::IndexSwitch::NAME);
         assert_eq!(switches.len(), 1);
         let switch = switches[0];
         let interface = DynRegionBranch::get(&ctx, switch).unwrap();
@@ -3045,16 +3038,6 @@ mod tests {
                 .iter()
                 .all(|successor| matches!(successor, RegionSuccessor::Region(_)))
         );
-        for wrapper in operations_named(&ctx, module, crate::dialect::scf::Case::NAME)
-            .into_iter()
-            .chain(operations_named(
-                &ctx,
-                module,
-                crate::dialect::scf::Default::NAME,
-            ))
-        {
-            assert!(DynRegionBranch::get(&ctx, wrapper).is_some());
-        }
     }
 
     #[test]
@@ -3066,13 +3049,12 @@ mod tests {
     } else {
       scf.yield %value
     }
-    scf.switch %discriminant {
-      scf.case 0 {
-        scf.yield
-      }
-      scf.default {
-        scf.yield
-      }
+    scf.index_switch %discriminant
+    case 0 {
+      scf.yield
+    }
+    default {
+      scf.yield
     }
     %looped = scf.loop(%value) -> (core.i32) {
       ^continue_path(%continue_value: core.i32):
@@ -3104,9 +3086,7 @@ mod tests {
         };
 
         let if_op = operations_named(&ctx, module, crate::dialect::scf::If::NAME)[0];
-        let switch = operations_named(&ctx, module, crate::dialect::scf::Switch::NAME)[0];
-        let case = operations_named(&ctx, module, crate::dialect::scf::Case::NAME)[0];
-        let default = operations_named(&ctx, module, crate::dialect::scf::Default::NAME)[0];
+        let switch = operations_named(&ctx, module, crate::dialect::scf::IndexSwitch::NAME)[0];
         let yields = operations_named(&ctx, module, crate::dialect::scf::Yield::NAME);
         let if_yield = *yields
             .iter()
@@ -3114,7 +3094,7 @@ mod tests {
             .unwrap();
         let case_yield = *yields
             .iter()
-            .find(|&&op| direct_owner(op) == Some(case))
+            .find(|&&op| direct_owner(op) == Some(switch))
             .unwrap();
 
         let if_interface = DynRegionBranch::get(&ctx, if_op).unwrap();
@@ -3148,21 +3128,6 @@ mod tests {
                 .entry_successor_operands(&ctx, RegionSuccessor::Parent)
                 .is_err()
         );
-
-        for wrapper in [case, default] {
-            let interface = DynRegionBranch::get(&ctx, wrapper).unwrap();
-            assert!(
-                interface
-                    .successors(&ctx, RegionBranchPoint::Terminator(if_yield),)
-                    .unwrap_err()
-                    .is_not_applicable()
-            );
-            assert!(
-                interface
-                    .entry_successor_operands(&ctx, RegionSuccessor::Parent)
-                    .is_err()
-            );
-        }
 
         let loops = operations_named(&ctx, module, crate::dialect::scf::Loop::NAME);
         let result_loop = *loops
@@ -3207,7 +3172,7 @@ mod tests {
                 .successor_operands(&ctx, RegionSuccessor::Parent)
                 .is_err()
         );
-        let unrelated_region = ctx.op_region(case, 0).unwrap();
+        let unrelated_region = ctx.op_region(switch, 0).unwrap();
         assert!(
             DynRegionBranchTerminator::get(&ctx, continue_op)
                 .unwrap()
@@ -3313,21 +3278,11 @@ mod tests {
       } else {
         scf.yield %forwarded
       }
-      scf.switch %discriminant {
-        scf.case 0 { scf.yield }
+      scf.index_switch %discriminant
+      case 1 {
+        ^empty_case:
       }
-      scf.switch %discriminant {
-        scf.case 1 {
-          ^empty_case:
-        }
-      }
-      scf.switch %discriminant {
-        %unsupported = arith.const {value = 2} : core.i32
-      }
-      scf.switch %discriminant {
-        scf.default { scf.yield }
-        scf.default { scf.yield }
-      }
+      default { scf.yield }
       %looped = scf.loop(%forwarded) -> (core.i32) {
         ^loop_exit(%loop_value: core.i32):
           scf.break %loop_value
@@ -3346,8 +3301,6 @@ mod tests {
         for expected in [
             "Branch operation must be the final operation in its block",
             "contains an empty block",
-            "body contains unsupported operation",
-            "contains multiple default regions",
             "has no complete owning RegionBranch mapping",
         ] {
             assert!(
@@ -3358,9 +3311,7 @@ mod tests {
 
         let branch = operations_named(&ctx, module, crate::dialect::cf::Br::NAME)[0];
         let cond_branch = operations_named(&ctx, module, crate::dialect::cf::CondBr::NAME)[0];
-        let switches = operations_named(&ctx, module, crate::dialect::scf::Switch::NAME);
         let loop_op = operations_named(&ctx, module, crate::dialect::scf::Loop::NAME)[0];
-        let case = operations_named(&ctx, module, crate::dialect::scf::Case::NAME)[0];
         let break_op = operations_named(&ctx, module, crate::dialect::scf::Break::NAME)[0];
 
         ctx.truncate_op_successors(branch, 0);
@@ -3381,28 +3332,6 @@ mod tests {
         ctx.clear_op_regions(loop_op);
         assert!(
             DynRegionBranch::get(&ctx, loop_op)
-                .unwrap()
-                .successors(&ctx, RegionBranchPoint::Parent)
-                .is_err()
-        );
-        ctx.remove_op_operand(switches[0], 0);
-        assert!(
-            DynRegionBranch::get(&ctx, switches[0])
-                .unwrap()
-                .successors(&ctx, RegionBranchPoint::Parent)
-                .is_err()
-        );
-        let second_switch_body = ctx.op_region(switches[1], 0).unwrap();
-        ctx.region_mut(second_switch_body).blocks.clear();
-        assert!(
-            DynRegionBranch::get(&ctx, switches[1])
-                .unwrap()
-                .successors(&ctx, RegionBranchPoint::Parent)
-                .is_err()
-        );
-        ctx.clear_op_regions(case);
-        assert!(
-            DynRegionBranch::get(&ctx, case)
                 .unwrap()
                 .successors(&ctx, RegionBranchPoint::Parent)
                 .is_err()
@@ -3560,7 +3489,7 @@ mod tests {
     }
 
     #[test]
-    fn scf_loop_and_switch_result_arity_is_rejected() {
+    fn scf_loop_result_arity_is_rejected() {
         let mut ctx = IrContext::new();
         let loc = test_location(&mut ctx);
         let i32_ty = make_i32_type(&mut ctx);
@@ -3589,30 +3518,6 @@ mod tests {
             .build(&mut ctx);
         let loop_op = ctx.create_op(loop_data);
         ctx.push_op(entry, loop_op);
-
-        let discriminant = arith::Const::operands()
-            .value(Attribute::Int(0))
-            .results(i32_ty)
-            .build(&mut ctx, loc);
-        ctx.push_op(entry, discriminant.op_ref());
-        let switch_body = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        let switch_region = ctx.create_region(RegionData {
-            location: loc,
-            blocks: smallvec![switch_body],
-            parent_op: None,
-        });
-        let switch_data = OperationDataBuilder::new(loc, "scf.switch")
-            .operand(discriminant.result(&ctx))
-            .result(i32_ty)
-            .region(switch_region)
-            .build(&mut ctx);
-        let switch_op = ctx.create_op(switch_data);
-        ctx.push_op(entry, switch_op);
 
         let ret = func::Return::operands(std::iter::empty()).build(&mut ctx, loc);
         ctx.push_op(entry, ret.op_ref());
@@ -3646,13 +3551,8 @@ mod tests {
 
         let result = validate_operation_verifiers(&ctx, module);
         let messages = operation_error_messages(&result);
-        assert_eq!(messages.len(), 2, "{result}");
+        assert_eq!(messages.len(), 1, "{result}");
         assert!(messages.iter().any(|message| message.contains("scf.loop")));
-        assert!(
-            messages
-                .iter()
-                .any(|message| message.contains("scf.switch"))
-        );
     }
 
     #[test]

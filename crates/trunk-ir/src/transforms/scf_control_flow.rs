@@ -48,7 +48,7 @@ impl Analysis for StructuredControlAnalysis {
             }
             if !(scf::If::matches(ir, op)
                 || scf::Loop::matches(ir, op)
-                || scf::Switch::matches(ir, op))
+                || scf::IndexSwitch::matches(ir, op))
             {
                 continue;
             }
@@ -80,7 +80,7 @@ impl Analysis for StructuredControlAnalysis {
             {
                 analysis.unused_never_controls.insert(op);
             }
-            if scf::Switch::matches(ir, op) && results.is_empty() {
+            if scf::IndexSwitch::matches(ir, op) && results.is_empty() {
                 analysis.terminal_switches.insert(op);
             }
         }
@@ -124,7 +124,7 @@ impl StructuredControlAnalysis {
             self.has_terminal_unused_never_result(last)
                 || (ctx.op_results(last).is_empty()
                     && self.has_only_terminal_region_successors(last))
-        } else if scf::Switch::matches(ctx, last) {
+        } else if scf::IndexSwitch::matches(ctx, last) {
             self.is_terminal_resultless_switch(last)
         } else {
             DynCallableExit::prove(ctx, last).is_ok()
@@ -144,10 +144,9 @@ mod tests {
     const NESTED_CONTROL: &str = r#"core.module @test {
   func.func @first(%cond: core.i1, %tag: core.i32) -> core.nil {
     %never = scf.if %cond -> (core.never) {
-      scf.switch %tag {
-        scf.case 0 { func.return }
-        scf.default { func.unreachable }
-      }
+      scf.index_switch %tag
+      case 0 { func.return }
+      default { func.unreachable }
     } else { func.unreachable }
   }
   func.func @second() -> core.nil { func.return }
@@ -171,7 +170,7 @@ mod tests {
         let _ = walk_op::<()>(&ctx, first.op_ref(), &mut |op| {
             if scf::If::matches(&ctx, op) {
                 assert!(scoped.has_terminal_unused_never_result(op));
-            } else if scf::Switch::matches(&ctx, op) {
+            } else if scf::IndexSwitch::matches(&ctx, op) {
                 assert!(scoped.is_terminal_resultless_switch(op));
                 assert!(scoped.has_only_terminal_region_successors(op));
             }

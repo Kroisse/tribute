@@ -509,7 +509,8 @@ fn build_local_dispatcher_instance(
         build_local_foreign_dispatch(ctx, location, layer, values, parent_dispatch)?;
     ctx.push_op(block, foreign_op);
     let never = core::Never::params().intern(ctx).as_type_ref();
-    let switch_block = make_block(ctx, location, &[]);
+    let mut cases = Vec::new();
+    let mut case_regions = Vec::new();
     let general_arms = layer
         .arms
         .iter()
@@ -576,11 +577,8 @@ fn build_local_dispatcher_instance(
             .build(ctx, location);
         ctx.push_op(case_block, choose.op_ref());
         let case_region = single_block_region(ctx, location, case_block);
-        let case = scf::Case::operands()
-            .value(Attribute::Int(arm.op_index(ctx) as i128))
-            .regions(case_region)
-            .build(ctx, location);
-        ctx.push_op(switch_block, case.op_ref());
+        cases.push(i64::from(arm.op_index(ctx)));
+        case_regions.push(case_region);
     }
     let default_block = make_block(ctx, location, &[]);
     emit_cps_tail_call_indirect(
@@ -591,13 +589,9 @@ fn build_local_dispatcher_instance(
         [args[0], args[1], args[2], args[3], args[4], args[5]],
     )?;
     let foreign_region = single_block_region(ctx, location, default_block);
-    let default = scf::Default::operands()
-        .regions(foreign_region)
-        .build(ctx, location);
-    ctx.push_op(switch_block, default.op_ref());
-    let switch_region = single_block_region(ctx, location, switch_block);
-    let switch = scf::Switch::operands(args[4])
-        .regions(switch_region)
+    let switch = scf::IndexSwitch::operands(args[4])
+        .cases(cases)
+        .regions(foreign_region, case_regions)
         .build(ctx, location);
     ctx.push_op(block, switch.op_ref());
     let region = single_block_region(ctx, location, block);
@@ -664,7 +658,8 @@ fn build_tail_dispatcher(
     let args = ctx.block_args(block).to_vec();
     let (op_idx, payload) = (args[1], args[2]);
 
-    let switch_block = make_block(ctx, location, &[]);
+    let mut cases = Vec::new();
+    let mut case_regions = Vec::new();
     for &(arm, arm_value) in arms {
         let case_block = make_block(ctx, location, &[]);
         let mut call_args = vec![outer_evidence];
@@ -692,23 +687,16 @@ fn build_tail_dispatcher(
         let ret = func::Return::operands([ctx.op_result(erased, 0)]).build(ctx, location);
         ctx.push_op(case_block, ret.op_ref());
         let case_region = single_block_region(ctx, location, case_block);
-        let case = scf::Case::operands()
-            .value(Attribute::Int(arm.op_index(ctx) as i128))
-            .regions(case_region)
-            .build(ctx, location);
-        ctx.push_op(switch_block, case.op_ref());
+        cases.push(i64::from(arm.op_index(ctx)));
+        case_regions.push(case_region);
     }
     let reject_block = make_block(ctx, location, &[]);
     let unreachable = func::Unreachable::operands().build(ctx, location);
     ctx.push_op(reject_block, unreachable.op_ref());
     let reject_region = single_block_region(ctx, location, reject_block);
-    let default = scf::Default::operands()
-        .regions(reject_region)
-        .build(ctx, location);
-    ctx.push_op(switch_block, default.op_ref());
-    let switch_region = single_block_region(ctx, location, switch_block);
-    let switch = scf::Switch::operands(op_idx)
-        .regions(switch_region)
+    let switch = scf::IndexSwitch::operands(op_idx)
+        .cases(cases)
+        .regions(reject_region, case_regions)
         .build(ctx, location);
     ctx.push_op(block, switch.op_ref());
 

@@ -188,7 +188,7 @@ mod tests {
                     r#"core.module @test {{
   clif.func @select(%choice: {discriminant_ty}) {{
     ^entry:
-      "cf.switch"(%choice)[^fallback, ^first, ^second] {{cases = [7, -1]}}
+      cf.switch %choice : {discriminant_ty}, [default: ^fallback, 7: ^first, -1: ^second]
     ^fallback:
       clif.return
     ^first:

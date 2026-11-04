@@ -366,13 +366,28 @@ view must likewise reject operations for which the applicable interface is not
 registered; interfaces describe possible transfers and do not materialize a
 flat CFG.
 
-`scf.switch` keeps its existing textual container region of `scf.case` and
-`scf.default` wrapper operations. That container is declarative rather than an
-executable successor. The switch's `RegionBranch` successors are the case and
-default body regions derived from those direct wrappers (or `Parent` for the
-implicit unmatched path when no default exists). The wrappers also expose
-their own parent/body boundary, so generic nested-region walkers never need to
-decode the switch's container shape themselves.
+`scf.index_switch`는 MLIR의 같은 이름 operation처럼 정수(`IntegerOrIndex`)
+discriminant에 대한 구조적 다중 분기다. `cases`는 서로 다른 `i64` 값의 목록이고,
+operation은 필수 `default` region 하나와 case마다 하나씩 같은 순서로 case region을
+가진다. Discriminant가 어떤 case와 같으면 그 case region을, 아니면 `default`
+region을 실행한다. 각 region은 `scf.yield` 또는 자기 terminator로 끝난다. MLIR과
+달리 결과를 만들지 않으므로 `scf.yield`는 값을 넘기지 않는다. `RegionBranch`
+successor는 case region들과 `default` region이며, 각 region의 `scf.yield`는
+`Parent`로 돌아간다. 선택할 region이 항상 있으므로 parent에서 바로 `Parent`로
+가는 경로는 없다.
+
+```text
+scf.index_switch %x
+case 0 {
+    scf.yield
+}
+case 7 {
+    scf.yield
+}
+default {
+    scf.yield
+}
+```
 
 `cf.switch`는 정수 타입(`IntegerLike`) discriminant에 대한 CFG 수준의 다중 분기다. Successor는
 `default`가 먼저이고 그 뒤로 `cases`의 값마다 하나씩 같은 순서로 오며, block
@@ -380,9 +395,14 @@ argument를 받지 않는다. Case는 discriminant 타입의 값이어야 한다
 있는 정수나 부호 없는 정수로 표현할 수 있어야 하고, 같은 폭에서 같은 비트열이
 되는 두 표기는 같은 값이다. Case는 서로 달라야 한다.
 Structured-to-CFG 변환은 case가 이 조건을 만족하는 정수 discriminant의
-`scf.switch`를 `cf.switch`로 내리고, 그렇게 표현할 수 없는 switch는 case마다
+`scf.index_switch`를 `cf.switch`로 내리고, 그렇게 표현할 수 없는 switch는 case마다
 비교하는 `cf.cond_br` 사슬로 내린다. Case 값의 분포에 따른 분기 전략은 target
-lowering이 정한다.
+lowering이 정한다. 형식은 MLIR `cf.switch`와 같이 discriminant 타입을 쓰고 default를
+case 목록의 첫 항목으로 쓴다.
+
+```text
+cf.switch %flag : core.i32, [default: ^bb1, 42: ^bb2, -1: ^bb3]
+```
 
 ### Generic 형식
 
@@ -467,6 +487,9 @@ literal은 문자열 literal로 쓴다.
   schema가 받는 값이며, 받지 않는 값을 가진 operation은 generic 형식으로 쓴다.
   `symbol(attr)`는
   문자열 attribute를 정의 이름 `@name`으로 쓴다.
+- **Operand 타입** — `type(x)`는 하나뿐인 operand `x`의 타입을 쓴다
+  (`cf.switch %flag : core.i32, ..`). Operand는 자기 원소가 따로 쓴다. Parser는
+  `functional_type`처럼 읽은 타입이 operand 정의의 타입과 같은지 확인한다.
 - **Result** — Result 이름과 `=`(`%r =`)은 형식에 쓰지 않는다. Printer가 앞에 쓰고,
   parser는 형식 parser를 부르기 전에 읽는다. Result 타입은 `type(result)`나
   `types(results)`, 또는 타입을 재구성하는 `signature`로 정확히 한 번 쓴다.
@@ -519,8 +542,9 @@ literal은 문자열 literal로 쓴다.
 - **`custom(D(entities..))`** — 선언적으로 쓸 수 없는 부분을 Rust 타입 `D`에
   맡긴다(MLIR `custom<D>`). `D`는 `OpAsmDirective`를 구현하며, 나열한 entity의
   출력, 손실 없는 출력 가능 여부 판정, 파싱을 맡는다. 나열할 수 있는 entity는
-  operand, attribute, successor이다. 예를 들어 `clif.switch`는 case 값과 그
-  successor를 짝지어 `[0: ^first, 5: ^second]`로 쓴다. 형식 검증은 나열한 entity를 이 directive가
+  operand, attribute, successor, region이다. 예를 들어 `clif.switch`는 case 값과
+  그 successor를 짝지어 `[0: ^first, 5: ^second]`로 쓰고, `scf.index_switch`는
+  case 값과 그 region을 짝지어 줄마다 `case 0 {..}`로 쓴다. 형식 검증은 나열한 entity를 이 directive가
   쓴 것으로 센다. Parser는 directive가 나열하지 않은 entity의 값을 돌려주면
   거부한다.
 

@@ -10,8 +10,6 @@
 use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
 
-use itertools::Itertools;
-
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::{BlockData, IrContext, OpList, RegionData};
 use trunk_ir::dialect::core;
@@ -25,7 +23,6 @@ use trunk_ir::rewrite::{
 };
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::transforms::scf_control_flow::StructuredControlAnalysis;
-use trunk_ir::types::Attribute;
 use trunk_ir::walk::{WalkAction, walk_op};
 
 const SCF_TO_WASM_BOUNDARY: &str = "scf-to-wasm";
@@ -161,7 +158,7 @@ pub fn validate_lowerable_switches(ctx: &IrContext, module: Module) -> Result<()
     Ok(())
 }
 
-/// Validated data for a resultless `scf.switch` that this target can lower.
+/// Validated data for an `scf.index_switch` that this target can lower.
 ///
 /// Wasm compares integers natively only as `i32` or `i64`, so the discriminant
 /// must be `core.i32` or `core.i64` and every case value must be representable
@@ -171,7 +168,7 @@ struct ScfSwitchArms {
     discriminant: ValueRef,
     width: SwitchWidth,
     cases: Vec<(i64, RegionRef)>,
-    default: Option<RegionRef>,
+    default: RegionRef,
 }
 
 /// The Wasm integer type a switch compares its discriminant in.
@@ -183,15 +180,14 @@ enum SwitchWidth {
 
 struct ScfSwitchShape {
     discriminant: ValueRef,
-    cases: Vec<(Attribute, RegionRef)>,
-    default: Option<RegionRef>,
+    cases: Vec<(i64, RegionRef)>,
+    default: RegionRef,
 }
 
 #[derive(Debug)]
 enum SwitchLoweringReason {
     MalformedShape,
     UnsupportedDiscriminantType(String),
-    NonIntegerCaseAttribute,
     CaseValueOutsideRange(SwitchWidth),
 }
 
@@ -204,9 +200,6 @@ impl std::fmt::Display for SwitchLoweringReason {
                     f,
                     "unsupported discriminant type `{ty}`; expected `core.i32` or `core.i64`"
                 )
-            }
-            Self::NonIntegerCaseAttribute => {
-                write!(f, "case attribute `value` must be an integer")
             }
             Self::CaseValueOutsideRange(SwitchWidth::I32) => {
                 write!(f, "case integer value is outside the i32 range")
@@ -229,48 +222,21 @@ fn switch_width(ctx: &IrContext, value: ValueRef) -> Option<SwitchWidth> {
     }
 }
 
-/// Validate the complete declarative switch container before rewriting any
-/// nested region. This keeps malformed arms from being partly lowered by the
-/// recursive pattern walk.
+/// Validate every region of the switch before rewriting any of them. This
+/// keeps a malformed region from being partly lowered by the recursive
+/// pattern walk.
 fn switch_shape(ctx: &IrContext, op: OpRef) -> Option<ScfSwitchShape> {
-    if !ctx.op_results(op).is_empty() {
-        return None;
-    }
-    let [discriminant] = ctx.op_operands(op).as_array()?;
-    let switch_body = ctx.op_regions(op).exactly_one().ok()?;
-    let [body_block] = ctx.region(switch_body).blocks.as_array()?;
-    if !ctx.block_args(*body_block).is_empty() {
-        return None;
-    }
-
-    let mut cases = Vec::new();
-    let mut default = None;
-    for &arm in &ctx.block(*body_block).ops {
-        if !ctx.op_results(arm).is_empty() || !ctx.op_operands(arm).is_empty() {
-            return None;
-        }
-        let body = ctx.op_regions(arm).exactly_one().ok()?;
-        let [entry] = ctx.region(body).blocks.as_array()?;
+    let switch = scf::IndexSwitch::from_op(ctx, op).ok()?;
+    let cases: Vec<(i64, RegionRef)> = switch.cases(ctx).zip(switch.case_regions(ctx)).collect();
+    let default = switch.default_region(ctx);
+    for region in cases.iter().map(|(_, region)| *region).chain([default]) {
+        let [entry] = ctx.region(region).blocks.as_array()?;
         if !ctx.block_args(*entry).is_empty() {
             return None;
         }
-        if scf::Case::matches(ctx, arm) {
-            cases.push((ctx.op_attrs(arm).get("value")?.clone(), body));
-        } else if scf::Default::matches(ctx, arm) {
-            if default.replace(body).is_some() {
-                return None;
-            }
-        } else {
-            return None;
-        }
     }
-
-    if cases.is_empty() && default.is_none() {
-        return None;
-    }
-
     Some(ScfSwitchShape {
-        discriminant: *discriminant,
+        discriminant: switch.discriminant(ctx),
         cases,
         default,
     })
@@ -287,12 +253,9 @@ fn switch_arms(ctx: &IrContext, op: OpRef) -> Result<ScfSwitchArms, SwitchLoweri
     };
     let mut cases = Vec::with_capacity(shape.cases.len());
     for (value, body) in shape.cases {
-        let Attribute::Int(value) = value else {
-            return Err(SwitchLoweringReason::NonIntegerCaseAttribute);
-        };
         let value = match width {
             SwitchWidth::I32 => i32::try_from(value).map(i64::from).ok(),
-            SwitchWidth::I64 => i64::try_from(value).ok(),
+            SwitchWidth::I64 => Some(value),
         }
         .ok_or(SwitchLoweringReason::CaseValueOutsideRange(width))?;
         cases.push((value, body));
@@ -307,7 +270,7 @@ fn switch_arms(ctx: &IrContext, op: OpRef) -> Result<ScfSwitchArms, SwitchLoweri
 
 /// Find the first switch rejected by the same acceptance contract as lowering.
 fn find_nonlowerable_switch(ctx: &IrContext, op: OpRef) -> Option<(OpRef, SwitchLoweringReason)> {
-    if scf::Switch::matches(ctx, op)
+    if scf::IndexSwitch::matches(ctx, op)
         && let Err(reason) = switch_arms(ctx, op)
     {
         return Some((op, reason));
@@ -356,11 +319,11 @@ fn take_region_ops(ctx: &mut IrContext, region: RegionRef) -> OpList {
     ops
 }
 
-/// Pattern for a resultless `scf.switch` -> nested `wasm.if` comparisons.
+/// Pattern for an `scf.index_switch` -> nested `wasm.if` comparisons.
 struct ScfSwitchPattern<'a>(&'a ScfLoweringPlan);
 
 impl OpRewritePattern for ScfSwitchPattern<'_> {
-    type Op = scf::Switch;
+    type Op = scf::IndexSwitch;
 
     fn match_and_rewrite(
         &self,
@@ -381,15 +344,11 @@ impl OpRewritePattern for ScfSwitchPattern<'_> {
         for &(_, body) in &arms.cases {
             ctx.detach_region(body);
         }
-        if let Some(body) = arms.default {
-            ctx.detach_region(body);
-        }
+        ctx.detach_region(arms.default);
 
         if arms.cases.is_empty() {
-            if let Some(default) = arms.default {
-                for child in take_region_ops(ctx, default) {
-                    rewriter.insert_op(child);
-                }
+            for child in take_region_ops(ctx, arms.default) {
+                rewriter.insert_op(child);
             }
             rewriter.erase_op(vec![]);
             return Some(());
@@ -399,9 +358,7 @@ impl OpRewritePattern for ScfSwitchPattern<'_> {
         let discriminant_ty = ctx.value_ty(discriminant);
         let condition_ty = core::I32::type_ref(ctx);
         let case_count = arms.cases.len();
-        let mut next = arms
-            .default
-            .unwrap_or_else(|| region_with_ops(ctx, loc, vec![]));
+        let mut next = arms.default;
         let mut outer_ops = None;
         for (index, (value, body)) in arms.cases.into_iter().rev().enumerate() {
             let (case, matches) = match arms.width {
@@ -796,13 +753,16 @@ mod tests {
             Some(reason),
             "{case}"
         );
-        assert!(error.to_string().contains("scf.switch"), "{case}: {error}");
+        assert!(
+            error.to_string().contains("scf.index_switch"),
+            "{case}: {error}"
+        );
         assert!(error.to_string().contains(reason), "{case}: {error}");
         assert_eq!(print_module(&ctx, module.op()), before, "{case}");
     }
 
-    fn assert_no_scf_switch_wrappers(output: &str) {
-        for name in ["scf.switch", "scf.case", "scf.default", "scf.yield"] {
+    fn assert_no_scf_switch(output: &str) {
+        for name in ["scf.index_switch", "scf.yield"] {
             assert!(!output.contains(name), "residual {name}:\n{output}");
         }
     }
@@ -812,19 +772,18 @@ mod tests {
         let output = lower_text(
             r#"core.module @test {
   func.func @main(%choice: core.i32, %callee: func.func_sig<(core.nil) -> core.never>, %unit: core.nil) -> core.never attributes {test.marker = 2} {
-    scf.switch %choice {
-      scf.case 0 {
-        func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
-      }
-      scf.default {
-        func.unreachable
-      }
+    scf.index_switch %choice
+    case 0 {
+      func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
+    }
+    default {
+      func.unreachable
     }
   }
 }"#,
         );
 
-        assert_no_scf_switch_wrappers(&output);
+        assert_no_scf_switch(&output);
         assert!(output.contains("wasm.i32_eq"), "{output}");
         assert!(output.contains("wasm.if"), "{output}");
         assert!(output.contains("func.tail_call_indirect"), "{output}");
@@ -836,17 +795,19 @@ mod tests {
         let output = lower_text(
             r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    scf.switch %choice {
-      scf.case 0 {
-        scf.yield
-      }
+    scf.index_switch %choice
+    case 0 {
+      scf.yield
+    }
+    default {
+      scf.yield
     }
     func.return
   }
 }"#,
         );
 
-        assert_no_scf_switch_wrappers(&output);
+        assert_no_scf_switch(&output);
         assert!(output.contains("wasm.i32_eq"), "{output}");
         assert!(output.contains("wasm.if"), "{output}");
         assert!(output.contains("func.return"), "{output}");
@@ -857,23 +818,22 @@ mod tests {
         let output = lower_text(
             r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    scf.switch %choice {
-      scf.case 1 {
-        scf.yield
-      }
-      scf.case 2 {
-        scf.yield
-      }
-      scf.default {
-        scf.yield
-      }
+    scf.index_switch %choice
+    case 1 {
+      scf.yield
+    }
+    case 2 {
+      scf.yield
+    }
+    default {
+      scf.yield
     }
     func.return
   }
 }"#,
         );
 
-        assert_no_scf_switch_wrappers(&output);
+        assert_no_scf_switch(&output);
         assert_eq!(output.matches("wasm.i32_eq").count(), 2, "{output}");
         assert!(
             output.find("wasm.i32_const {value = 1}") < output.find("wasm.i32_const {value = 2}"),
@@ -886,23 +846,22 @@ mod tests {
         let output = lower_text(
             r#"core.module @test {
   func.func @main(%choice: core.i64) -> core.nil {
-    scf.switch %choice {
-      scf.case -1 {
-        scf.yield
-      }
-      scf.case 4294967296 {
-        scf.yield
-      }
-      scf.default {
-        scf.yield
-      }
+    scf.index_switch %choice
+    case -1 {
+      scf.yield
+    }
+    case 4294967296 {
+      scf.yield
+    }
+    default {
+      scf.yield
     }
     func.return
   }
 }"#,
         );
 
-        assert_no_scf_switch_wrappers(&output);
+        assert_no_scf_switch(&output);
         assert!(!output.contains("wasm.i32_eq"), "{output}");
         assert_eq!(output.matches("wasm.i64_eq").count(), 2, "{output}");
         assert!(
@@ -925,14 +884,13 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.func @choose(%choice: core.i64) -> (core.i32) {
-      scf.switch %choice {
-        scf.case 4294967296 {
-          %one = wasm.i32_const {value = 1} : core.i32
-          wasm.return %one
-        }
-        scf.default {
-          scf.yield
-        }
+      scf.index_switch %choice
+      case 4294967296 {
+        %one = wasm.i32_const {value = 1} : core.i32
+        wasm.return %one
+      }
+      default {
+        scf.yield
       }
       %zero = wasm.i32_const {value = 0} : core.i32
       wasm.return %zero
@@ -959,23 +917,22 @@ mod tests {
         let output = lower_text(
             r#"core.module @test {
   func.func @main(%choice: core.i32, %cond: core.i1, %callee: func.func_sig<(core.nil) -> core.never>, %unit: core.nil) -> core.never attributes {test.marker = 2} {
-    scf.switch %choice {
-      scf.case 0 {
-        %never = scf.if %cond -> (core.never) {
-          func.unreachable
-        } else {
-          func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
-        }
-      }
-      scf.default {
+    scf.index_switch %choice
+    case 0 {
+      %never = scf.if %cond -> (core.never) {
+        func.unreachable
+      } else {
         func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
       }
+    }
+    default {
+      func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
     }
   }
 }"#,
         );
 
-        assert_no_scf_switch_wrappers(&output);
+        assert_no_scf_switch(&output);
         assert!(output.contains("wasm.i32_eq"), "{output}");
         assert_eq!(output.matches("wasm.if").count(), 2, "{output}");
         for line in output.lines().filter(|line| line.contains("wasm.if")) {
@@ -996,29 +953,15 @@ mod tests {
         // (case, input, rejection reason)
         for (case, input, reason) in [
             (
-                "leaves malformed switch unchanged",
-                r#"core.module @test {
-  func.func @main(%choice: core.i32) -> core.nil {
-    scf.switch %choice {
-      scf.default { scf.yield }
-      scf.default { scf.yield }
-    }
-    func.return
-  }
-}"#,
-                "malformed resultless switch shape",
-            ),
-            (
                 "leaves malformed switch arm entry args unchanged",
                 r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    scf.switch %choice {
-      scf.case 0 {
-        ^case_entry(%unexpected: core.i32):
-          scf.yield
-      }
-      scf.default { scf.yield }
+    scf.index_switch %choice
+    case 0 {
+      ^case_entry(%unexpected: core.i32):
+        scf.yield
     }
+    default { scf.yield }
     func.return
   }
 }"#,
@@ -1028,17 +971,16 @@ mod tests {
                 "rejects shape valid narrow integer switch without mutating",
                 r#"core.module @test {
   func.func @main(%cond: core.i1, %choice: core.i16) -> core.nil {
-    scf.switch %choice {
-      scf.case 0 {
-        scf.if %cond -> (core.nil) {
-          scf.yield
-        } else {
-          scf.yield
-        }
+    scf.index_switch %choice
+    case 0 {
+      scf.if %cond -> (core.nil) {
+        scf.yield
+      } else {
         scf.yield
       }
-      scf.default { scf.yield }
+      scf.yield
     }
+    default { scf.yield }
     func.return
   }
 }"#,
@@ -1048,40 +990,13 @@ mod tests {
                 "rejects shape valid out of range case without mutating",
                 r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    scf.switch %choice {
-      scf.case 2147483648 { scf.yield }
-      scf.default { scf.yield }
-    }
+    scf.index_switch %choice
+    case 2147483648 { scf.yield }
+    default { scf.yield }
     func.return
   }
 }"#,
                 "case integer value is outside the i32 range",
-            ),
-            (
-                "rejects out of range i64 case without mutating",
-                r#"core.module @test {
-  func.func @main(%choice: core.i64) -> core.nil {
-    scf.switch %choice {
-      scf.case 9223372036854775808 { scf.yield }
-      scf.default { scf.yield }
-    }
-    func.return
-  }
-}"#,
-                "case integer value is outside the i64 range",
-            ),
-            (
-                "rejects non integer case attribute without mutating",
-                r#"core.module @test {
-  func.func @main(%choice: core.i32) -> core.nil {
-    scf.switch %choice {
-      scf.case @not_an_integer { scf.yield }
-      scf.default { scf.yield }
-    }
-    func.return
-  }
-}"#,
-                "case attribute `value` must be an integer",
             ),
         ] {
             assert_switch_rejected_unchanged(case, input, reason);
@@ -1093,15 +1008,14 @@ mod tests {
         let output = lower_text(
             r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    scf.switch %choice {
-      scf.default { scf.yield }
-    }
+    scf.index_switch %choice
+    default { scf.yield }
     func.return
   }
 }"#,
         );
 
-        assert_no_scf_switch_wrappers(&output);
+        assert_no_scf_switch(&output);
         assert!(!output.contains("wasm.i32_eq"), "{output}");
         assert!(output.contains("func.return"), "{output}");
     }
@@ -1204,7 +1118,7 @@ mod tests {
                 vec![Block::NAME, Loop::NAME],
             ),
             (
-                "scf.switch %choice { scf.case 0 { func.return } scf.default { func.unreachable } }",
+                "scf.index_switch %choice case 0 { func.return } default { func.unreachable }",
                 vec![If::NAME],
             ),
             (
@@ -1224,7 +1138,7 @@ mod tests {
                 vec![If::NAME, Block::NAME, Loop::NAME],
             ),
             (
-                "scf.switch %choice { scf.case 0 { %n = scf.if %cond -> (core.never) { func.return } else { func.unreachable } } scf.default { func.return } }",
+                "scf.index_switch %choice case 0 { %n = scf.if %cond -> (core.never) { func.return } else { func.unreachable } } default { func.return }",
                 vec![If::NAME, If::NAME],
             ),
             (
@@ -1232,7 +1146,7 @@ mod tests {
                 vec![Block::NAME, Loop::NAME, If::NAME],
             ),
             (
-                "%n = scf.if %cond -> (core.never) { scf.switch %choice { scf.case 0 { func.return } scf.default { func.unreachable } } } else { func.return }",
+                "%n = scf.if %cond -> (core.never) { scf.index_switch %choice case 0 { func.return } default { func.unreachable } } else { func.return }",
                 vec![If::NAME, If::NAME],
             ),
         ];
@@ -1287,7 +1201,7 @@ mod tests {
             "%n = scf.if %cond -> (core.never) { func.return %choice } else { func.unreachable }",
             "scf.loop() { func.return %choice }",
             "%n = scf.loop() -> (core.never) { func.return %choice }",
-            "scf.switch %choice { scf.case 0 { func.return %choice } scf.default { func.unreachable } }",
+            "scf.index_switch %choice case 0 { func.return %choice } default { func.unreachable }",
             "scf.if %cond { scf.if %cond { func.return %choice } else { func.unreachable } } else { func.return %choice }",
         ] {
             let mut ctx = IrContext::new();
@@ -1343,7 +1257,7 @@ mod tests {
             "%n, %v = scf.if %cond -> (core.never, core.i32) { func.return } else { func.return }",
             "%n = scf.if %cond -> (core.never) { } else { func.return }",
             "%n = scf.if %cond -> (core.never) { ^a: func.return ^b: func.return } else { func.return }",
-            "%n = scf.if %cond -> (core.never) { scf.switch %choice { scf.case 0 { func.return } } } else { func.return }",
+            "%n = scf.if %cond -> (core.never) { scf.index_switch %choice case 0 { func.return } default { scf.yield } } else { func.return }",
             "%n = scf.loop() -> (core.never) { func.return } func.return %n",
             "%n = scf.loop() -> (core.never) { func.return } func.unreachable",
             "%n = scf.loop() -> (core.never) { scf.continue }",

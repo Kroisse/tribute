@@ -24,8 +24,13 @@ mod cf {
     /// `cases` holds the discriminant's value, or to `default` when no case
     /// matches. A case is a value of the discriminant's type. Successors
     /// receive no arguments.
+    ///
+    /// ```text
+    /// cf.switch %flag : core.i32, [default: ^bb1, 42: ^bb2, -1: ^bb3]
+    /// ```
     #[verify]
     #[implements(Branch)]
+    #[asm_format(discriminant ":" type(discriminant) "," "[" custom(SwitchCases(default, cases, targets)) "]" attr_dict)]
     fn switch(cases: Attr<[i64]>, discriminant: Value<impl IntegerLike>) {
         #[successor(default)]
         {}
@@ -34,9 +39,9 @@ mod cf {
     }
 }
 
-use crate::IrContext;
 use crate::dialect::core::IntegerLike;
 use crate::op_interface::{Branch, BranchSuccessor, BranchSuccessors, ControlFlowInterfaceError};
+use crate::{Attribute, BlockRef, IrContext};
 
 impl Branch for Br {
     fn successors(&self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
@@ -111,6 +116,88 @@ impl crate::ops::Verify for Switch {
     }
 }
 
+/// `default: ^d, 0: ^a, 5: ^b`: the default successor, then each case with
+/// its target.
+pub struct SwitchCases;
+
+impl crate::asm_format::OpAsmDirective for SwitchCases {
+    type Parts<'a> = (BlockRef, Vec<(i64, BlockRef)>);
+
+    fn decompose<'a>(
+        _ctx: &'a IrContext,
+        entities: &'a [crate::asm_format::CustomEntity<'a>],
+    ) -> Option<Self::Parts<'a>> {
+        use crate::asm_format::CustomEntity;
+        let [
+            CustomEntity::Successors(default),
+            CustomEntity::Attribute(Some(Attribute::List(cases))),
+            CustomEntity::Successors(targets),
+        ] = entities
+        else {
+            return None;
+        };
+        let [default] = default.as_slice() else {
+            return None;
+        };
+        if cases.len() != targets.len() {
+            return None;
+        }
+        let arms = cases
+            .iter()
+            .zip(targets)
+            .map(|(case, &target)| match *case {
+                Attribute::Int(case) => Some((i64::try_from(case).ok()?, target)),
+                _ => None,
+            })
+            .collect::<Option<_>>()?;
+        Some((*default, arms))
+    }
+
+    fn print(
+        h: &mut crate::printer::OpPrintHelper<'_, '_>,
+        (default, arms): Self::Parts<'_>,
+    ) -> std::fmt::Result {
+        use std::fmt::Write as _;
+
+        let label = h.block_label(default).to_owned();
+        write!(h, "default: {label}")?;
+        for (case, target) in arms {
+            let label = h.block_label(target).to_owned();
+            write!(h, ", {case}: {label}")?;
+        }
+        Ok(())
+    }
+
+    fn parse<'a>(
+        input: &mut &'a str,
+    ) -> winnow::ModalResult<Vec<crate::asm_format::RawCustomEntity<'a>>> {
+        use crate::asm_format::RawCustomEntity;
+        use crate::parser::raw::{RawAttribute, block_label, integer_lit, ws};
+        use winnow::Parser as _;
+        use winnow::combinator::{preceded, repeat, separated_pair};
+
+        let (_, default) =
+            separated_pair("default", (ws, ':', ws), block_label).parse_next(input)?;
+        let arms: Vec<(i128, &str)> = repeat(
+            0..,
+            preceded(
+                (ws, ',', ws),
+                separated_pair(integer_lit, (ws, ':', ws), block_label),
+            ),
+        )
+        .parse_next(input)?;
+        let (cases, targets): (Vec<_>, Vec<_>) = arms
+            .into_iter()
+            .map(|(case, target)| (RawAttribute::Int(case), target))
+            .unzip();
+        Ok(vec![
+            RawCustomEntity::Successors(vec![default]),
+            RawCustomEntity::Attribute(Some(RawAttribute::List(cases))),
+            RawCustomEntity::Successors(targets),
+        ])
+    }
+}
+
 impl Branch for Switch {
     fn successors(&self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
         let op = self.op_ref();
@@ -123,5 +210,31 @@ impl Branch for Switch {
             ctx.op_successors(op)
                 .map(|block| BranchSuccessor::new(block, [])),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::IrContext;
+    use crate::parser::parse_test_module;
+    use crate::printer::print_module;
+
+    #[test]
+    fn switch_writes_its_type_and_default_first_as_mlir_does() {
+        let text = r#"core.module @test {
+  func.func @f(%0: core.i32) -> core.nil {
+      cf.switch %0 : core.i32, [default: ^bb1, 42: ^bb2, -1: ^bb3]
+    ^bb1:
+      func.return
+    ^bb2:
+      func.return
+    ^bb3:
+      cf.switch %0 : core.i32, [default: ^bb1]
+  }
+}
+"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, text);
+        assert_eq!(print_module(&ctx, module.op()), text);
     }
 }

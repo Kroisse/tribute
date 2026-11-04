@@ -1,6 +1,6 @@
 //! Lower structured control flow (scf) to CFG-based control flow (cf) for arena IR.
 //!
-//! Converts `scf.if`, `scf.loop`, and `scf.switch` operations into explicit
+//! Converts `scf.if`, `scf.loop`, and `scf.index_switch` operations into explicit
 //! `cf.br` and `cf.cond_br` branch operations with basic block splitting.
 //!
 //! Unlike the Salsa-based version, this pass uses RAUW (`replace_all_uses`)
@@ -29,7 +29,6 @@
 //!   %2 = op_after(%1)
 //! ```
 
-use itertools::Itertools;
 use rustc_hash::FxHashSet as HashSet;
 use smallvec::SmallVec;
 use std::ops::ControlFlow;
@@ -156,14 +155,14 @@ fn transform_block(ctx: &mut IrContext, block: BlockRef, plan: &ScfToCfPlan) {
         lower_scf_if(ctx, block, scf_op, loc, plan);
     } else if scf::Loop::matches(ctx, scf_op) {
         lower_scf_loop(ctx, block, scf_op, loc, plan);
-    } else if scf::Switch::matches(ctx, scf_op) {
+    } else if scf::IndexSwitch::matches(ctx, scf_op) {
         lower_scf_switch(ctx, block, scf_op, loc, plan);
     }
 }
 
 /// Check if an op is an scf control-flow op (if/loop/switch).
 fn is_scf_control_flow(ctx: &IrContext, op: OpRef) -> bool {
-    scf::If::matches(ctx, op) || scf::Loop::matches(ctx, op) || scf::Switch::matches(ctx, op)
+    scf::If::matches(ctx, op) || scf::Loop::matches(ctx, op) || scf::IndexSwitch::matches(ctx, op)
 }
 
 /// Lower a terminal `scf.if : core.never` without creating a merge block.
@@ -338,7 +337,7 @@ fn lower_scf_loop(
 struct SwitchArms {
     discriminant: ValueRef,
     cases: Vec<(Attribute, RegionRef)>,
-    default_region: Option<RegionRef>,
+    default_region: RegionRef,
 }
 
 /// Immutable switch dispatch inputs after all arm blocks have been inlined.
@@ -351,43 +350,26 @@ struct SwitchDispatch<'a> {
     insert_before: Option<BlockRef>,
 }
 
-/// Collect a well-formed resultless switch's discriminant and arms.
-///
-/// The lowering intentionally leaves malformed switches untouched so the
-/// operation and interface verifiers can report the source shape.
+/// Collect a switch's discriminant and regions. A region without blocks
+/// leaves the switch untouched for the verifiers to report.
 fn switch_arms(ctx: &IrContext, scf_op: OpRef) -> Option<SwitchArms> {
-    if !ctx.op_results(scf_op).is_empty() {
+    let switch = scf::IndexSwitch::from_op(ctx, scf_op).ok()?;
+    let cases: Vec<(Attribute, RegionRef)> = switch
+        .cases(ctx)
+        .map(|case| Attribute::Int(i128::from(case)))
+        .zip(switch.case_regions(ctx))
+        .collect();
+    let default_region = switch.default_region(ctx);
+    if cases
+        .iter()
+        .map(|(_, region)| *region)
+        .chain([default_region])
+        .any(|region| ctx.region(region).blocks.is_empty())
+    {
         return None;
     }
-
-    let [discriminant] = ctx.op_operands(scf_op).as_array()?;
-    let Ok(body_region) = ctx.op_regions(scf_op).exactly_one() else {
-        return None;
-    };
-    let [body_block] = ctx.region(body_region).blocks.as_array()?;
-
-    let mut cases = Vec::new();
-    let mut default_region = None;
-    for &arm in &ctx.block(*body_block).ops {
-        let Ok(arm_region) = ctx.op_regions(arm).exactly_one() else {
-            return None;
-        };
-        if ctx.region(arm_region).blocks.is_empty() {
-            return None;
-        }
-        if scf::Case::matches(ctx, arm) {
-            cases.push((ctx.op_attrs(arm).get("value")?.clone(), arm_region));
-        } else if scf::Default::matches(ctx, arm) {
-            if default_region.replace(arm_region).is_some() {
-                return None;
-            }
-        } else {
-            return None;
-        }
-    }
-
     Some(SwitchArms {
-        discriminant: *discriminant,
+        discriminant: switch.discriminant(ctx),
         cases,
         default_region,
     })
@@ -443,7 +425,7 @@ fn lower_terminal_resultless_switch(
     }
 }
 
-/// Lower `scf.switch` to chained cond_br comparisons.
+/// Lower `scf.index_switch` to `cf.switch` or chained cond_br comparisons.
 fn lower_scf_switch(
     ctx: &mut IrContext,
     block: BlockRef,
@@ -463,7 +445,7 @@ fn lower_scf_switch(
             plan,
             arms.discriminant,
             arms.cases,
-            arms.default_region.unwrap(),
+            arms.default_region,
         );
         return;
     }
@@ -494,37 +476,10 @@ fn lower_scf_switch(
     }
 
     // Inline default region
-    let default_entry = if let Some(def_region) = default_region {
-        let inlined = inline_region_blocks(ctx, def_region, parent_region, Some(merge_block));
-        replace_yield_with_br(ctx, &inlined, merge_block, loc);
-        let entry = inlined[0];
-        all_inlined.push(inlined);
-        entry
-    } else {
-        // No default: create a block that branches to merge with no args
-        let default_block = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: SmallVec::new(),
-            parent_region: None,
-        });
-        let br = cf::Br::operands(std::iter::empty::<crate::refs::ValueRef>())
-            .successors(merge_block)
-            .build(ctx, loc);
-        ctx.push_op(default_block, br.op_ref());
-        // Insert into parent region before merge
-        let merge_pos = ctx
-            .region(parent_region)
-            .blocks
-            .iter()
-            .position(|&b| b == merge_block)
-            .unwrap();
-        ctx.region_mut(parent_region)
-            .blocks
-            .insert(merge_pos, default_block);
-        ctx.block_mut(default_block).parent_region = Some(parent_region);
-        default_block
-    };
+    let inlined = inline_region_blocks(ctx, default_region, parent_region, Some(merge_block));
+    replace_yield_with_br(ctx, &inlined, merge_block, loc);
+    let default_entry = inlined[0];
+    all_inlined.push(inlined);
     ctx.remove_op(scf_op);
 
     SwitchDispatch {
@@ -821,11 +776,12 @@ mod tests {
             .ops
             .iter()
             .copied()
-            .find(|&op| scf::Switch::matches(ctx, op))
+            .find(|&op| scf::IndexSwitch::matches(ctx, op))
             .expect("switch");
-        let switch_body = ctx.op_region(switch, 0).unwrap();
-        let arm = ctx.block(ctx.region(switch_body).blocks[0]).ops[0];
-        (switch, ctx.op_region(arm, 0).unwrap())
+        let arm = scf::IndexSwitch::from_op(ctx, switch)
+            .unwrap()
+            .arm_regions(ctx)[0];
+        (switch, arm)
     }
 
     /// Collect all op names from a region (dialect.name format).
@@ -1296,13 +1252,12 @@ mod tests {
     fn lower_terminal_scf_switch_without_empty_merge_block() {
         let input = r#"core.module @test {
   func.func @main(%choice: core.i32, %callee: func.func_sig<(core.nil) -> core.never>, %unit: core.nil) -> core.never attributes {test.marker = 2} {
-    scf.switch %choice {
-      scf.case 0 {
-        func.unreachable
-      }
-      scf.default {
-        func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
-      }
+    scf.index_switch %choice
+    case 0 {
+      func.unreachable
+    }
+    default {
+      func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
     }
   }
 }"#;
@@ -1343,13 +1298,12 @@ mod tests {
     fn lower_terminal_scf_switch_with_ordinary_return_preserves_operands() {
         let input = r#"core.module @test {
   func.func @main(%choice: core.i32, %first: core.i32, %second: core.i32) -> core.i32 {
-    scf.switch %choice {
-      scf.case 0 {
-        func.return %first
-      }
-      scf.default {
-        func.return %second
-      }
+    scf.index_switch %choice
+    case 0 {
+      func.return %first
+    }
+    default {
+      func.return %second
     }
   }
 }"#;
@@ -1378,20 +1332,18 @@ mod tests {
     fn lower_nested_terminal_scf_switch_with_ordinary_returns_has_no_merge_blocks() {
         let input = r#"core.module @test {
   func.func @main(%choice: core.i32, %nested_choice: core.i32, %first: core.i32, %second: core.i32, %third: core.i32) -> core.i32 {
-    scf.switch %choice {
-      scf.case 0 {
-        scf.switch %nested_choice {
-          scf.case 0 {
-            func.return %first
-          }
-          scf.default {
-            func.return %second
-          }
-        }
+    scf.index_switch %choice
+    case 0 {
+      scf.index_switch %nested_choice
+      case 0 {
+        func.return %first
       }
-      scf.default {
-        func.return %third
+      default {
+        func.return %second
       }
+    }
+    default {
+      func.return %third
     }
   }
 }"#;
@@ -1420,13 +1372,12 @@ mod tests {
     fn lower_terminal_scf_switch_with_zero_operand_return_has_no_merge_block() {
         let input = r#"core.module @test {
   func.func @main(%choice: core.i32) {
-    scf.switch %choice {
-      scf.case 0 {
-        func.return
-      }
-      scf.default {
-        func.unreachable
-      }
+    scf.index_switch %choice
+    case 0 {
+      func.return
+    }
+    default {
+      func.unreachable
     }
   }
 }"#;
@@ -1453,13 +1404,12 @@ mod tests {
     fn callable_exit_interface_drives_terminal_switch_lowering() {
         let input = r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    scf.switch %choice {
-      scf.case 0 {
-        "test_exit_dialect.exit"()
-      }
-      scf.default {
-        func.unreachable
-      }
+    scf.index_switch %choice
+    case 0 {
+      "test_exit_dialect.exit"()
+    }
+    default {
+      func.unreachable
     }
   }
 }"#;
@@ -1484,10 +1434,9 @@ mod tests {
             (
                 r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    scf.switch %choice {
-      scf.case 0 { scf.yield }
-      scf.default { func.unreachable }
-    }
+    scf.index_switch %choice
+    case 0 { scf.yield }
+    default { func.unreachable }
   }
 }"#,
                 true,
@@ -1495,8 +1444,10 @@ mod tests {
             (
                 r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    scf.switch %choice {
-      scf.case 0 { func.unreachable }
+    scf.index_switch %choice
+    case 0 { func.unreachable }
+    default {
+      scf.yield
     }
   }
 }"#,
@@ -1505,13 +1456,12 @@ mod tests {
             (
                 r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    scf.switch %choice {
-      scf.case 0 {
-        func.return
-        core.nil_value : core.nil
-      }
-      scf.default { func.unreachable }
+    scf.index_switch %choice
+    case 0 {
+      func.return
+      core.nil_value : core.nil
     }
+    default { func.unreachable }
   }
 }"#,
                 true,
@@ -1519,15 +1469,14 @@ mod tests {
             (
                 r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    scf.switch %choice {
-      scf.case 0 {
-        ^first:
-          cf.br [^second]
-        ^second:
-          func.unreachable
-      }
-      scf.default { func.unreachable }
+    scf.index_switch %choice
+    case 0 {
+      ^first:
+        cf.br [^second]
+      ^second:
+        func.unreachable
     }
+    default { func.unreachable }
   }
 }"#,
                 true,
@@ -1535,10 +1484,9 @@ mod tests {
             (
                 r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    scf.switch %choice {
-      scf.case 0 { "test_exit_dialect.malformed_exit"() }
-      scf.default { func.unreachable }
-    }
+    scf.index_switch %choice
+    case 0 { "test_exit_dialect.malformed_exit"() }
+    default { func.unreachable }
   }
 }"#,
                 true,
@@ -1568,19 +1516,18 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    scf.switch %choice {
-      scf.case 0 { core.nil_value : core.nil }
-      scf.default { "test_exit_dialect.malformed_exit"() }
-    }
+    scf.index_switch %choice
+    case 0 { core.nil_value : core.nil }
+    default { "test_exit_dialect.malformed_exit"() }
   }
 }"#,
         );
         let (switch, arm) = first_switch_and_arm_region(&ctx, module);
         let unregistered = ctx.block(ctx.region(arm).blocks[0]).ops[0];
-        let switch_body = ctx.op_region(switch, 0).unwrap();
-        let malformed_wrapper = ctx.block(ctx.region(switch_body).blocks[0]).ops[1];
-        let malformed_region = ctx.op_region(malformed_wrapper, 0).unwrap();
-        let malformed = ctx.block(ctx.region(malformed_region).blocks[0]).ops[0];
+        let default_region = scf::IndexSwitch::from_op(&ctx, switch)
+            .unwrap()
+            .default_region(&ctx);
+        let malformed = ctx.block(ctx.region(default_region).blocks[0]).ops[0];
         let malformed_func_exit_data =
             OperationDataBuilder::new(ctx.op(unregistered).location, "func.unreachable")
                 .result(ctx.value_ty(ctx.op_results(unregistered)[0]))
@@ -1596,17 +1543,16 @@ mod tests {
     fn lower_terminal_scf_switch_with_nested_never_if_has_no_merge_block() {
         let input = r#"core.module @test {
   func.func @main(%choice: core.i32, %cond: core.i1, %callee: func.func_sig<(core.nil) -> core.never>, %unit: core.nil) -> core.never attributes {test.marker = 2} {
-    scf.switch %choice {
-      scf.case 0 {
-        %discarded = scf.if %cond -> (core.never) {
-          func.unreachable
-        } else {
-          func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
-        }
-      }
-      scf.default {
+    scf.index_switch %choice
+    case 0 {
+      %discarded = scf.if %cond -> (core.never) {
+        func.unreachable
+      } else {
         func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
       }
+    }
+    default {
+      func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
     }
   }
 }"#;
@@ -1644,20 +1590,18 @@ mod tests {
     fn lower_terminal_scf_switch_with_nested_terminal_switch_has_no_empty_merge_block() {
         let input = r#"core.module @test {
   func.func @main(%choice: core.i32, %nested_choice: core.i32, %callee: func.func_sig<(core.nil) -> core.never>, %unit: core.nil) -> core.never attributes {test.marker = 2} {
-    scf.switch %choice {
-      scf.case 0 {
-        scf.switch %nested_choice {
-          scf.case 0 {
-            func.unreachable
-          }
-          scf.default {
-            func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
-          }
-        }
+    scf.index_switch %choice
+    case 0 {
+      scf.index_switch %nested_choice
+      case 0 {
+        func.unreachable
       }
-      scf.default {
+      default {
         func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
       }
+    }
+    default {
+      func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
     }
   }
 }"#;
@@ -1692,13 +1636,12 @@ mod tests {
     fn lower_nonterminal_scf_switch_keeps_merge_continuation() {
         let input = r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    scf.switch %choice {
-      scf.case 0 {
-        scf.yield
-      }
-      scf.default {
-        scf.yield
-      }
+    scf.index_switch %choice
+    case 0 {
+      scf.yield
+    }
+    default {
+      scf.yield
     }
     %unit = core.nil_value : core.nil
     func.return %unit
@@ -1740,16 +1683,15 @@ mod tests {
     fn lower_nonterminal_scf_switch_with_multiblock_arm_keeps_merge_continuation() {
         let input = r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    scf.switch %choice {
-      scf.case 0 {
-        ^first:
-          cf.br [^second]
-        ^second:
-          scf.yield
-      }
-      scf.default {
+    scf.index_switch %choice
+    case 0 {
+      ^first:
+        cf.br [^second]
+      ^second:
         scf.yield
-      }
+    }
+    default {
+      scf.yield
     }
     %unit = core.nil_value : core.nil
     func.return %unit
@@ -1980,115 +1922,25 @@ mod tests {
 
     #[test]
     fn lower_scf_switch_basic() {
-        let (mut ctx, loc) = test_ctx();
-        let i32_ty = i32_type(&mut ctx);
-        let fn_ty = fn_type(&mut ctx);
-
-        let entry = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-
-        let disc = arith::Const::operands()
-            .value(Attribute::Int(1))
-            .results(i32_ty)
-            .build(&mut ctx, loc);
-        ctx.push_op(entry, disc.op_ref());
-
-        // Case 0: resultless yield
-        let case0_block = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        let case0_yield = scf::Yield::operands(std::iter::empty()).build(&mut ctx, loc);
-        ctx.push_op(case0_block, case0_yield.op_ref());
-        let case0_region = ctx.create_region(RegionData {
-            location: loc,
-            blocks: smallvec![case0_block],
-            parent_op: None,
-        });
-        let case0_op = scf::Case::operands()
-            .value(Attribute::Int(0))
-            .regions(case0_region)
-            .build(&mut ctx, loc);
-
-        // Case 1: resultless yield
-        let case1_block = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        let case1_yield = scf::Yield::operands(std::iter::empty()).build(&mut ctx, loc);
-        ctx.push_op(case1_block, case1_yield.op_ref());
-        let case1_region = ctx.create_region(RegionData {
-            location: loc,
-            blocks: smallvec![case1_block],
-            parent_op: None,
-        });
-        let case1_op = scf::Case::operands()
-            .value(Attribute::Int(1))
-            .regions(case1_region)
-            .build(&mut ctx, loc);
-
-        // Default: resultless yield
-        let default_block = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        let default_yield = scf::Yield::operands(std::iter::empty()).build(&mut ctx, loc);
-        ctx.push_op(default_block, default_yield.op_ref());
-        let default_region = ctx.create_region(RegionData {
-            location: loc,
-            blocks: smallvec![default_block],
-            parent_op: None,
-        });
-        let default_op = scf::Default::operands()
-            .regions(default_region)
-            .build(&mut ctx, loc);
-
-        // Switch body region containing case and default ops
-        let switch_body_block = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        ctx.push_op(switch_body_block, case0_op.op_ref());
-        ctx.push_op(switch_body_block, case1_op.op_ref());
-        ctx.push_op(switch_body_block, default_op.op_ref());
-        let switch_body = ctx.create_region(RegionData {
-            location: loc,
-            blocks: smallvec![switch_body_block],
-            parent_op: None,
-        });
-
-        let disc_v = disc.result(&ctx);
-        let switch = scf::Switch::operands(disc_v)
-            .regions(switch_body)
-            .build(&mut ctx, loc);
-        ctx.push_op(entry, switch.op_ref());
-
-        let ret = func::Return::operands(std::iter::empty()).build(&mut ctx, loc);
-        ctx.push_op(entry, ret.op_ref());
-
-        let func_body = ctx.create_region(RegionData {
-            location: loc,
-            blocks: smallvec![entry],
-            parent_op: None,
-        });
-        let func_op = func::Func::operands()
-            .sym_name("test")
-            .r#type(fn_ty)
-            .regions(func_body)
-            .build(&mut ctx, loc);
-        let module = build_module(&mut ctx, loc, vec![func_op.op_ref()]);
+        let input = r#"core.module @test {
+  func.func @test() {
+    %disc = arith.const {value = 1} : core.i32
+    scf.index_switch %disc
+    case 0 {
+      scf.yield
+    }
+    case 1 {
+      scf.yield
+    }
+    default {
+      scf.yield
+    }
+    func.return
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+        let func_op = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
 
         lower_scf_to_cf(&mut ctx, module, &mut Default::default());
 
@@ -2122,23 +1974,22 @@ mod tests {
         let printed = lower_switch_function(
             r#"core.module @test {
   func.func @main(%choice: core.i32) {
-    scf.switch %choice {
-      scf.case 7 {
-        scf.yield
-      }
-      scf.case -1 {
-        scf.yield
-      }
-      scf.default {
-        scf.yield
-      }
+    scf.index_switch %choice
+    case 7 {
+      scf.yield
+    }
+    case -1 {
+      scf.yield
+    }
+    default {
+      scf.yield
     }
     func.return
   }
 }"#,
         );
         assert!(
-            printed.contains("\"cf.switch\"(%0)[^bb3, ^bb1, ^bb2] {cases = [7, -1]}"),
+            printed.contains("cf.switch %0 : core.i32, [default: ^bb3, 7: ^bb1, -1: ^bb2]"),
             "{printed}"
         );
     }
@@ -2153,16 +2004,15 @@ mod tests {
             let printed = lower_switch_function(&format!(
                 r#"core.module @test {{
   func.func @main(%choice: {discriminant_ty}) {{
-    scf.switch %choice {{
-      scf.case {} {{
-        scf.yield
-      }}
-      scf.case {} {{
-        scf.yield
-      }}
-      scf.default {{
-        scf.yield
-      }}
+    scf.index_switch %choice
+    case  {} {{
+      scf.yield
+    }}
+    case  {} {{
+      scf.yield
+    }}
+    default {{
+      scf.yield
     }}
     func.return
   }}
@@ -2176,97 +2026,25 @@ mod tests {
 
     #[test]
     fn lower_scf_switch_no_result() {
-        // scf.switch doesn't produce a result, so case regions yield no values.
-        let (mut ctx, loc) = test_ctx();
-        let i32_ty = i32_type(&mut ctx);
-        let fn_ty = fn_type(&mut ctx);
-
-        let entry = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-
-        let disc = arith::Const::operands()
-            .value(Attribute::Int(1))
-            .results(i32_ty)
-            .build(&mut ctx, loc);
-        ctx.push_op(entry, disc.op_ref());
-
-        // Case 0: void yield (no values)
-        let case0_block = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        let case0_yield = scf::Yield::operands(std::iter::empty()).build(&mut ctx, loc);
-        ctx.push_op(case0_block, case0_yield.op_ref());
-        let case0_region = ctx.create_region(RegionData {
-            location: loc,
-            blocks: smallvec![case0_block],
-            parent_op: None,
-        });
-        let case0_op = scf::Case::operands()
-            .value(Attribute::Int(0))
-            .regions(case0_region)
-            .build(&mut ctx, loc);
-
-        // Case 1: resultless yield
-        let case1_block = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        let case1_yield = scf::Yield::operands(std::iter::empty()).build(&mut ctx, loc);
-        ctx.push_op(case1_block, case1_yield.op_ref());
-        let case1_region = ctx.create_region(RegionData {
-            location: loc,
-            blocks: smallvec![case1_block],
-            parent_op: None,
-        });
-        let case1_op = scf::Case::operands()
-            .value(Attribute::Int(1))
-            .regions(case1_region)
-            .build(&mut ctx, loc);
-
-        // Switch body
-        let switch_body_block = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        ctx.push_op(switch_body_block, case0_op.op_ref());
-        ctx.push_op(switch_body_block, case1_op.op_ref());
-        let switch_body = ctx.create_region(RegionData {
-            location: loc,
-            blocks: smallvec![switch_body_block],
-            parent_op: None,
-        });
-
-        let disc_v = disc.result(&ctx);
-        let switch = scf::Switch::operands(disc_v)
-            .regions(switch_body)
-            .build(&mut ctx, loc);
-        ctx.push_op(entry, switch.op_ref());
-
-        let ret = func::Return::operands(std::iter::empty()).build(&mut ctx, loc);
-        ctx.push_op(entry, ret.op_ref());
-
-        let func_body = ctx.create_region(RegionData {
-            location: loc,
-            blocks: smallvec![entry],
-            parent_op: None,
-        });
-        let func_op = func::Func::operands()
-            .sym_name("test")
-            .r#type(fn_ty)
-            .regions(func_body)
-            .build(&mut ctx, loc);
-        let module = build_module(&mut ctx, loc, vec![func_op.op_ref()]);
+        let input = r#"core.module @test {
+  func.func @test() {
+    %disc = arith.const {value = 1} : core.i32
+    scf.index_switch %disc
+    case 0 {
+      scf.yield
+    }
+    case 1 {
+      scf.yield
+    }
+    default {
+      scf.yield
+    }
+    func.return
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+        let func_op = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
 
         lower_scf_to_cf(&mut ctx, module, &mut Default::default());
 
@@ -2277,64 +2055,15 @@ mod tests {
             "scf ops remain: {names:?}"
         );
 
-        // scf.switch has no result, so merge block should have 0 args
+        // scf.index_switch has no result, so merge block should have 0 args
         let blocks = &ctx.region(body).blocks;
         let merge = blocks.last().unwrap();
         let merge_args = ctx.block_args(*merge);
         assert_eq!(
             merge_args.len(),
             0,
-            "merge block should have 0 args since scf.switch has no result"
+            "merge block should have 0 args since scf.index_switch has no result"
         );
-    }
-
-    #[test]
-    fn lower_scf_switch_with_result_and_empty_body_fails_closed() {
-        let (mut ctx, loc) = test_ctx();
-        let i32_ty = i32_type(&mut ctx);
-        let fn_ty = fn_type(&mut ctx);
-        let entry = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        let disc = arith::Const::operands()
-            .value(Attribute::Int(0))
-            .results(i32_ty)
-            .build(&mut ctx, loc);
-        ctx.push_op(entry, disc.op_ref());
-        let body = ctx.create_region(RegionData {
-            location: loc,
-            blocks: smallvec![],
-            parent_op: None,
-        });
-        let switch_data = OperationDataBuilder::new(loc, "scf.switch")
-            .operand(disc.result(&ctx))
-            .result(i32_ty)
-            .region(body)
-            .build(&mut ctx);
-        let switch = ctx.create_op(switch_data);
-        ctx.push_op(entry, switch);
-        let ret = func::Return::operands(std::iter::empty()).build(&mut ctx, loc);
-        ctx.push_op(entry, ret.op_ref());
-        let func_body = ctx.create_region(RegionData {
-            location: loc,
-            blocks: smallvec![entry],
-            parent_op: None,
-        });
-        let func_op = func::Func::operands()
-            .sym_name("test")
-            .r#type(fn_ty)
-            .regions(func_body)
-            .build(&mut ctx, loc);
-        let module = build_module(&mut ctx, loc, vec![func_op.op_ref()]);
-
-        lower_scf_to_cf(&mut ctx, module, &mut Default::default());
-
-        let names = collect_op_names(&ctx, func_op.body(&ctx));
-        assert!(names.iter().any(|name| name == "scf.switch"));
-        assert!(!names.iter().any(|name| name == "cf.cond_br"));
     }
 
     #[test]

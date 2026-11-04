@@ -27,7 +27,7 @@
 //!   `x*0`, `x*1`) and constant folding at the result type's bit-width.
 //! - `core.unrealized_conversion_cast` — identity (same source/target
 //!   type) and round-trip elimination (`A → B → A`).
-//! - `scf.if` / `scf.switch` with a constant condition or selector — splice
+//! - `scf.if` / `scf.index_switch` with a constant condition or selector — splice
 //!   the chosen arm.
 //! - `adt.struct_get` of an `adt.struct_new`, and identity `adt.ref_cast`.
 //! - `tribute_rt.unbox_*` of the matching `box_*`.

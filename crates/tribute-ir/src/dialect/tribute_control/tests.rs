@@ -1369,7 +1369,7 @@ fn whole_ir_allows_mutually_exclusive_lambda_capture_and_terminal_paths() {
 }
 
 #[test]
-fn whole_ir_allows_mutually_exclusive_switch_capture_paths_without_default() {
+fn whole_ir_allows_mutually_exclusive_switch_capture_paths() {
     let (ctx, module) = parse_fixture(
         r#"core.module @test {
   %handled = tribute_control.handle : core.i32 body {
@@ -1380,23 +1380,25 @@ fn whole_ir_allows_mutually_exclusive_switch_capture_paths_without_default() {
   } handlers {
     tribute_control.handler op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
         %choice = arith.const {value = 0} : core.i32
-        scf.switch %choice {
-          scf.case 0 {
-            %left = tribute_control.lambda() -> core.i32 captures [%token, %argument] {
-              %left_resumed = tribute_control.resume %token, %argument : core.i32
-              tribute_control.return %left_resumed
-            }
-            %left_called = tribute_control.call_indirect %left() : () -> core.i32
-            scf.yield
+        scf.index_switch %choice
+        case 0 {
+          %left = tribute_control.lambda() -> core.i32 captures [%token, %argument] {
+            %left_resumed = tribute_control.resume %token, %argument : core.i32
+            tribute_control.return %left_resumed
           }
-          scf.case 1 {
-            %right = tribute_control.lambda() -> core.i32 captures [%token, %argument] {
-              %right_resumed = tribute_control.resume %token, %argument : core.i32
-              tribute_control.return %right_resumed
-            }
-            %right_called = tribute_control.call_indirect %right() : () -> core.i32
-            scf.yield
+          %left_called = tribute_control.call_indirect %left() : () -> core.i32
+          scf.yield
+        }
+        case 1 {
+          %right = tribute_control.lambda() -> core.i32 captures [%token, %argument] {
+            %right_resumed = tribute_control.resume %token, %argument : core.i32
+            tribute_control.return %right_resumed
           }
+          %right_called = tribute_control.call_indirect %right() : () -> core.i32
+          scf.yield
+        }
+        default {
+          scf.yield
         }
         tribute_control.yield %argument
     }
@@ -1420,7 +1422,7 @@ fn whole_ir_allows_mutually_exclusive_switch_capture_paths_without_default() {
         let data = ctx.op(op);
         if data.name.is(&ctx, "tribute_control.lambda") {
             branch_lambda.get_or_insert(op);
-        } else if data.name.is(&ctx, "scf.switch") {
+        } else if data.name.is(&ctx, "scf.index_switch") {
             switch = Some(op);
         }
     });

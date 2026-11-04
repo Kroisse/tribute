@@ -11,24 +11,34 @@ mod scf {
         {}
     }
 
-    #[asm_format(discriminant attr_dict region(body))]
+    /// A structured multi-way branch on an integer discriminant, as MLIR's
+    /// `scf.index_switch`.
+    ///
+    /// ```text
+    /// scf.index_switch %x
+    /// case 0 {
+    ///     scf.yield
+    /// }
+    /// default {
+    ///     scf.yield
+    /// }
+    /// ```
+    ///
+    /// - **Shape:** distinct `cases`, the required `default_region`, and one
+    ///   `case_regions` entry per case in the same order. Unlike MLIR's, it
+    ///   has no results, so its `scf.yield`s forward no values.
+    /// - **Meaning:** runs the case region whose value equals the
+    ///   discriminant, or `default_region` when none does. Each region ends
+    ///   in `scf.yield`, which returns to the parent, or in its own
+    ///   terminator.
+    /// - **Verification:** one region per case, and no case twice.
+    #[verify]
+    #[asm_format(discriminant attr_dict custom(SwitchArms(cases, case_regions, default_region)))]
     #[implements(RegionBranch, Fold)]
-    fn switch(discriminant: Value<_>) {
-        #[region(body)]
+    fn index_switch(cases: Attr<[i64]>, discriminant: Value<impl IntegerOrIndex>) {
+        #[region(default_region)]
         {}
-    }
-
-    #[asm_format(value attr_dict region(body))]
-    #[implements(RegionBranch)]
-    fn case(value: Attr<_>) {
-        #[region(body)]
-        {}
-    }
-
-    #[asm_format(attr_dict region(body))]
-    #[implements(RegionBranch)]
-    fn default() {
-        #[region(body)]
+        #[regions(case_regions)]
         {}
     }
 
@@ -213,74 +223,42 @@ impl RegionBranch for Loop {
     }
 }
 
-impl Switch {
-    fn successor_regions(
-        self,
-        ctx: &IrContext,
-    ) -> Result<Vec<crate::refs::RegionRef>, ControlFlowInterfaceError> {
-        let op = self.op_ref();
-        if ctx.op_operands(op).len() != 1 || ctx.op_region_count(op) != 1 {
-            return Err(ControlFlowInterfaceError::new(
-                "scf.switch requires one discriminant and exactly one body region",
-            ));
-        }
-        let body = ctx.region(self.body(ctx));
-        let [block] = body.blocks.as_slice() else {
-            return Err(ControlFlowInterfaceError::new(format!(
-                "scf.switch body must contain one block, found {}",
-                body.blocks.len()
-            )));
-        };
-        let mut regions = Vec::new();
-        let mut default_count = 0usize;
-        for &child in &ctx.block(*block).ops {
-            if let Ok(case) = Case::from_op(ctx, child) {
-                regions.push(case.body(ctx));
-            } else if let Ok(default) = Default::from_op(ctx, child) {
-                default_count += 1;
-                regions.push(default.body(ctx));
-            } else {
-                return Err(ControlFlowInterfaceError::new(format!(
-                    "scf.switch body contains unsupported operation {child}"
-                )));
-            }
-        }
-        if default_count > 1 {
-            return Err(ControlFlowInterfaceError::new(
-                "scf.switch contains multiple default regions",
-            ));
-        }
-        Ok(regions)
-    }
-
-    fn has_default(ctx: &IrContext, regions: &[crate::refs::RegionRef]) -> bool {
-        regions.iter().any(|region| {
-            ctx.region(*region)
-                .parent_op
-                .is_some_and(|parent| Default::matches(ctx, parent))
-        })
+impl IndexSwitch {
+    /// The case regions in order, then the default region.
+    pub fn arm_regions(self, ctx: &IrContext) -> crate::RegionList {
+        let mut regions: crate::RegionList = self.case_regions(ctx).collect();
+        regions.push(self.default_region(ctx));
+        regions
     }
 }
 
-impl RegionBranch for Switch {
+impl crate::ops::Verify for IndexSwitch {
+    /// One region per case, and no case twice.
+    fn verify(&self, ctx: &IrContext) -> Result<(), crate::ops::VerificationError> {
+        let cases: Vec<i64> = self.cases(ctx).collect();
+        let regions = self.case_regions(ctx).count();
+        if cases.len() != regions {
+            return Err(format!("{} case(s) but {regions} case region(s)", cases.len()).into());
+        }
+        let mut seen = rustc_hash::FxHashSet::default();
+        if let Some(case) = cases.iter().find(|case| !seen.insert(**case)) {
+            return Err(format!("case {case} appears twice").into());
+        }
+        Ok(())
+    }
+}
+
+impl RegionBranch for IndexSwitch {
     fn successors(
         &self,
         ctx: &IrContext,
         point: RegionBranchPoint,
     ) -> Result<RegionSuccessors, ControlFlowInterfaceError> {
-        let regions = self.successor_regions(ctx)?;
+        let regions = self.arm_regions(ctx);
         match point {
-            RegionBranchPoint::Parent => {
-                let mut successors: Vec<_> = regions
-                    .iter()
-                    .copied()
-                    .map(RegionSuccessor::Region)
-                    .collect();
-                if !Self::has_default(ctx, &regions) {
-                    successors.push(RegionSuccessor::Parent);
-                }
-                Ok(RegionSuccessors::new(successors))
-            }
+            RegionBranchPoint::Parent => Ok(RegionSuccessors::new(
+                regions.iter().copied().map(RegionSuccessor::Region),
+            )),
             RegionBranchPoint::Terminator(terminator)
                 if Yield::matches(ctx, terminator)
                     && op_parent_region(ctx, terminator)
@@ -290,7 +268,7 @@ impl RegionBranch for Switch {
             }
             RegionBranchPoint::Terminator(terminator) => {
                 Err(ControlFlowInterfaceError::not_applicable(format!(
-                    "{terminator} is not a yield from this scf.switch"
+                    "{terminator} is not a yield from this scf.index_switch"
                 )))
             }
         }
@@ -301,118 +279,95 @@ impl RegionBranch for Switch {
         ctx: &IrContext,
         successor: RegionSuccessor,
     ) -> Result<ForwardedValues, ControlFlowInterfaceError> {
-        let regions = self.successor_regions(ctx)?;
         match successor {
-            RegionSuccessor::Region(region) if regions.contains(&region) => {
-                Ok(ForwardedValues::default())
-            }
-            RegionSuccessor::Parent if !Self::has_default(ctx, &regions) => {
+            RegionSuccessor::Region(region) if self.arm_regions(ctx).contains(&region) => {
                 Ok(ForwardedValues::default())
             }
             _ => Err(ControlFlowInterfaceError::new(
-                "successor is not an scf.switch entry target",
+                "successor is not an scf.index_switch region",
             )),
         }
     }
 }
 
-trait SwitchArmModel: DialectOp {
-    fn body_region(&self, ctx: &IrContext) -> crate::refs::RegionRef;
+/// `case 0 {..}` on its own line for each case, then `default {..}`, as
+/// MLIR's `scf.index_switch` writes them.
+pub struct SwitchArms;
 
-    fn checked_body(
-        &self,
-        ctx: &IrContext,
-    ) -> Result<crate::refs::RegionRef, ControlFlowInterfaceError> {
-        if ctx.op_region_count(self.op_ref()) != 1 {
-            return Err(ControlFlowInterfaceError::new(
-                "scf.case/default requires exactly one body region",
-            ));
+impl crate::asm_format::OpAsmDirective for SwitchArms {
+    type Parts<'a> = (Vec<(i64, crate::refs::RegionRef)>, crate::refs::RegionRef);
+
+    const SPACED: bool = false;
+
+    fn decompose<'a>(
+        _ctx: &'a IrContext,
+        entities: &'a [crate::asm_format::CustomEntity<'a>],
+    ) -> Option<Self::Parts<'a>> {
+        use crate::asm_format::CustomEntity;
+        let [
+            CustomEntity::Attribute(Some(Attribute::List(cases))),
+            CustomEntity::Regions(regions),
+            CustomEntity::Regions(default),
+        ] = entities
+        else {
+            return None;
+        };
+        let [default] = default.as_slice() else {
+            return None;
+        };
+        if cases.len() != regions.len() {
+            return None;
         }
-        Ok(self.body_region(ctx))
+        let arms = cases
+            .iter()
+            .zip(regions)
+            .map(|(case, &region)| match *case {
+                Attribute::Int(case) => Some((i64::try_from(case).ok()?, region)),
+                _ => None,
+            })
+            .collect::<Option<_>>()?;
+        Some((arms, *default))
     }
 
-    fn arm_successors(
-        &self,
-        ctx: &IrContext,
-        point: RegionBranchPoint,
-    ) -> Result<RegionSuccessors, ControlFlowInterfaceError> {
-        let body = self.checked_body(ctx)?;
-        match point {
-            RegionBranchPoint::Parent => Ok(RegionSuccessors::new([RegionSuccessor::Region(body)])),
-            RegionBranchPoint::Terminator(terminator)
-                if Yield::matches(ctx, terminator)
-                    && immediate_region_owner(ctx, terminator) == Some(self.op_ref()) =>
-            {
-                Ok(RegionSuccessors::new([RegionSuccessor::Parent]))
-            }
-            RegionBranchPoint::Terminator(terminator) => {
-                Err(ControlFlowInterfaceError::not_applicable(format!(
-                    "{terminator} is not a yield from this switch arm"
-                )))
-            }
+    fn print(
+        h: &mut crate::printer::OpPrintHelper<'_, '_>,
+        (arms, default): Self::Parts<'_>,
+    ) -> std::fmt::Result {
+        use std::fmt::Write as _;
+
+        for (case, region) in arms {
+            h.newline()?;
+            write!(h, "case {case} ")?;
+            h.print_region(region)?;
         }
+        h.newline()?;
+        h.write_str("default ")?;
+        h.print_region(default)
     }
 
-    fn arm_entry_operands(
-        self,
-        ctx: &IrContext,
-        successor: RegionSuccessor,
-    ) -> Result<ForwardedValues, ControlFlowInterfaceError> {
-        let body = self.checked_body(ctx)?;
-        match successor {
-            RegionSuccessor::Region(region) if region == body => Ok(ForwardedValues::default()),
-            _ => Err(ControlFlowInterfaceError::new(
-                "successor is not this switch arm's body",
-            )),
-        }
-    }
-}
+    fn parse<'a>(
+        input: &mut &'a str,
+    ) -> winnow::ModalResult<Vec<crate::asm_format::RawCustomEntity<'a>>> {
+        use crate::asm_format::RawCustomEntity;
+        use crate::parser::raw::{RawAttribute, integer_lit, raw_region, ws};
+        use winnow::Parser as _;
+        use winnow::combinator::{preceded, repeat};
 
-impl SwitchArmModel for Case {
-    fn body_region(&self, ctx: &IrContext) -> crate::refs::RegionRef {
-        self.body(ctx)
-    }
-}
-
-impl SwitchArmModel for Default {
-    fn body_region(&self, ctx: &IrContext) -> crate::refs::RegionRef {
-        self.body(ctx)
-    }
-}
-
-impl RegionBranch for Case {
-    fn successors(
-        &self,
-        ctx: &IrContext,
-        point: RegionBranchPoint,
-    ) -> Result<RegionSuccessors, ControlFlowInterfaceError> {
-        self.arm_successors(ctx, point)
-    }
-
-    fn entry_successor_operands(
-        &self,
-        ctx: &IrContext,
-        successor: RegionSuccessor,
-    ) -> Result<ForwardedValues, ControlFlowInterfaceError> {
-        self.arm_entry_operands(ctx, successor)
-    }
-}
-
-impl RegionBranch for Default {
-    fn successors(
-        &self,
-        ctx: &IrContext,
-        point: RegionBranchPoint,
-    ) -> Result<RegionSuccessors, ControlFlowInterfaceError> {
-        self.arm_successors(ctx, point)
-    }
-
-    fn entry_successor_operands(
-        &self,
-        ctx: &IrContext,
-        successor: RegionSuccessor,
-    ) -> Result<ForwardedValues, ControlFlowInterfaceError> {
-        self.arm_entry_operands(ctx, successor)
+        let arms: Vec<(i128, _)> = repeat(
+            0..,
+            preceded((ws, "case", ws), (integer_lit, preceded(ws, raw_region))),
+        )
+        .parse_next(input)?;
+        let default = preceded((ws, "default", ws), raw_region).parse_next(input)?;
+        let (cases, regions): (Vec<_>, Vec<_>) = arms
+            .into_iter()
+            .map(|(case, region)| (RawAttribute::Int(case), region))
+            .unzip();
+        Ok(vec![
+            RawCustomEntity::Attribute(Some(RawAttribute::List(cases))),
+            RawCustomEntity::Regions(regions),
+            RawCustomEntity::Regions(vec![default]),
+        ])
     }
 }
 
@@ -492,7 +447,7 @@ impl RegionBranchTerminator for Break {
 
 use crate::context::IrContext;
 use crate::dialect::arith::const_int_value;
-use crate::dialect::core::BoolLike;
+use crate::dialect::core::{BoolLike, IntegerOrIndex};
 use crate::ops::DialectOp;
 use crate::refs::{OpRef, ValueRef};
 use crate::transforms::canonicalize::{Fold, FoldResult};
@@ -557,53 +512,35 @@ impl Fold for If {
     }
 }
 
-/// `scf.switch(arith.const Int(c))` → splice the matching arm's body into
-/// the parent block.
+/// `scf.index_switch(arith.const Int(c))` → splice the selected region's
+/// body into the parent block.
 ///
-/// The arm is the `scf.case` whose `value` equals the selector, or the
-/// `scf.default` when no case matches. A switch has no results, so an arm
+/// The region is the case region whose value equals the selector, or the
+/// default region when no case matches. A switch has no results, so a region
 /// either falls through with an operand-less `scf.yield` (dropped) or ends in
 /// its own terminator (kept, which requires the switch to end its block so
 /// nothing is left after the terminator).
 ///
-/// Bails on anything but a well-formed single-block arm set with integer case
-/// values. Falling back to the default is declined when the selector or any
-/// case value is negative: a sign-extended constant may alias an unsigned
-/// case value at the discriminant's width.
-impl Fold for Switch {
+/// Bails on a multi-block region. Falling back to the default is declined
+/// when the selector or any case value is negative: a sign-extended constant
+/// may alias an unsigned case value at the discriminant's width.
+impl Fold for IndexSwitch {
     fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
         let op = self.op_ref();
-        let switch = self;
-        if !ctx.op_results(op).is_empty() {
-            return None;
-        }
-        let selector = const_int_value(ctx, switch.discriminant(ctx))?;
-        let [body_block] = ctx.region(switch.body(ctx)).blocks.as_array()?;
-
-        let mut matched = None;
-        let mut default_region = None;
+        let selector = const_int_value(ctx, self.discriminant(ctx))?;
         let mut any_negative = selector < 0;
-        for &arm in &ctx.block(*body_block).ops {
-            if let Ok(case) = Case::from_op(ctx, arm) {
-                let Attribute::Int(value) = case.value(ctx) else {
-                    return None;
-                };
-                any_negative |= value < 0;
-                if value == selector && matched.is_none() {
-                    matched = Some(case.body(ctx));
-                }
-            } else if let Ok(default) = Default::from_op(ctx, arm) {
-                if default_region.replace(default.body(ctx)).is_some() {
-                    return None;
-                }
-            } else {
-                return None;
+        let mut matched = None;
+        for (case, region) in self.cases(ctx).zip(self.case_regions(ctx)) {
+            let case = i128::from(case);
+            any_negative |= case < 0;
+            if case == selector && matched.is_none() {
+                matched = Some(region);
             }
         }
         let active_region = match matched {
             Some(region) => region,
             None if any_negative => return None,
-            None => default_region?,
+            None => self.default_region(ctx),
         };
 
         let [active_block] = ctx.region(active_region).blocks.as_array()?;
@@ -684,6 +621,36 @@ mod canonicalize_tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, text);
         assert_eq!(print_module(&ctx, module.op()), text);
+    }
+
+    #[test]
+    fn index_switch_writes_each_region_on_its_own_line() {
+        let text = r#"core.module @test {
+  func.func @f(%0: core.i32) -> core.nil {
+      scf.index_switch %0 attributes {note = 1}
+      case 0 {
+          scf.yield
+      }
+      case -7 {
+          func.return
+      }
+      default {
+          scf.yield
+      }
+      scf.index_switch %0
+      default {
+          scf.yield
+      }
+      func.return
+  }
+}
+"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, text);
+        assert_eq!(print_module(&ctx, module.op()), text);
+        let one_line = "core.module @test {\n  func.func @f(%0: core.i32) {\n    scf.index_switch %0 case 1 { scf.yield } default { scf.yield }\n    func.return\n  }\n}";
+        let mut ctx = IrContext::new();
+        parse_test_module(&mut ctx, one_line);
     }
 
     #[test]
@@ -849,18 +816,17 @@ mod canonicalize_tests {
     const SWITCH_FALLTHROUGH: &str = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
     %sel = arith.const {value = SELECTOR} : core.i32
-    scf.switch %sel {
-      scf.case 0 {
-        %a = arith.addi %x, %x : core.i32
-        scf.yield
-      }
-      scf.case 1 {
-        %b = arith.muli %x, %x : core.i32
-        scf.yield
-      }
-      scf.default {
-        scf.yield
-      }
+    scf.index_switch %sel
+    case 0 {
+      %a = arith.addi %x, %x : core.i32
+      scf.yield
+    }
+    case 1 {
+      %b = arith.muli %x, %x : core.i32
+      scf.yield
+    }
+    default {
+      scf.yield
     }
     func.return %x
   }
@@ -878,7 +844,7 @@ mod canonicalize_tests {
         let result = run_scf_patterns(&mut ctx, module);
         assert!(result.total_changes >= 1);
         assert_eq!(
-            count_ops(&ctx, module, crate::dialect::scf::Switch::NAME),
+            count_ops(&ctx, module, crate::dialect::scf::IndexSwitch::NAME),
             0
         );
         assert_eq!(
@@ -900,7 +866,7 @@ mod canonicalize_tests {
         let result = run_scf_patterns(&mut ctx, module);
         assert!(result.total_changes >= 1);
         assert_eq!(
-            count_ops(&ctx, module, crate::dialect::scf::Switch::NAME),
+            count_ops(&ctx, module, crate::dialect::scf::IndexSwitch::NAME),
             0
         );
         assert_eq!(
@@ -918,13 +884,12 @@ mod canonicalize_tests {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
     %sel = arith.const {value = 0} : core.i32
-    scf.switch %sel {
-      scf.case 0 {
-        func.return %x
-      }
-      scf.default {
-        func.unreachable
-      }
+    scf.index_switch %sel
+    case 0 {
+      func.return %x
+    }
+    default {
+      func.unreachable
     }
   }
 }"#;
@@ -934,7 +899,7 @@ mod canonicalize_tests {
         let result = run_scf_patterns(&mut ctx, module);
         assert!(result.total_changes >= 1);
         assert_eq!(
-            count_ops(&ctx, module, crate::dialect::scf::Switch::NAME),
+            count_ops(&ctx, module, crate::dialect::scf::IndexSwitch::NAME),
             0
         );
         assert_eq!(
@@ -952,13 +917,12 @@ mod canonicalize_tests {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
     %sel = arith.const {value = 0} : core.i32
-    scf.switch %sel {
-      scf.case 0 {
-        func.return %x
-      }
-      scf.default {
-        func.return %x
-      }
+    scf.index_switch %sel
+    case 0 {
+      func.return %x
+    }
+    default {
+      func.return %x
     }
     func.return %x
   }
@@ -969,7 +933,7 @@ mod canonicalize_tests {
         let result = run_scf_patterns(&mut ctx, module);
         assert_eq!(result.total_changes, 0);
         assert_eq!(
-            count_ops(&ctx, module, crate::dialect::scf::Switch::NAME),
+            count_ops(&ctx, module, crate::dialect::scf::IndexSwitch::NAME),
             1
         );
     }
@@ -978,13 +942,12 @@ mod canonicalize_tests {
     fn switch_non_const_selector_is_not_folded() {
         let input = r#"core.module @test {
   func.func @f(%tag: core.i32, %x: core.i32) -> core.i32 {
-    scf.switch %tag {
-      scf.case 0 {
-        scf.yield
-      }
-      scf.default {
-        scf.yield
-      }
+    scf.index_switch %tag
+    case 0 {
+      scf.yield
+    }
+    default {
+      scf.yield
     }
     func.return %x
   }
@@ -995,31 +958,7 @@ mod canonicalize_tests {
         let result = run_scf_patterns(&mut ctx, module);
         assert_eq!(result.total_changes, 0);
         assert_eq!(
-            count_ops(&ctx, module, crate::dialect::scf::Switch::NAME),
-            1
-        );
-    }
-
-    #[test]
-    fn switch_without_matching_arm_or_default_is_not_folded() {
-        let input = r#"core.module @test {
-  func.func @f(%x: core.i32) -> core.i32 {
-    %sel = arith.const {value = 5} : core.i32
-    scf.switch %sel {
-      scf.case 0 {
-        scf.yield
-      }
-    }
-    func.return %x
-  }
-}"#;
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, input);
-
-        let result = run_scf_patterns(&mut ctx, module);
-        assert_eq!(result.total_changes, 0);
-        assert_eq!(
-            count_ops(&ctx, module, crate::dialect::scf::Switch::NAME),
+            count_ops(&ctx, module, crate::dialect::scf::IndexSwitch::NAME),
             1
         );
     }
@@ -1032,7 +971,7 @@ mod canonicalize_tests {
         let result = run_scf_patterns(&mut ctx, module);
         assert_eq!(result.total_changes, 0);
         assert_eq!(
-            count_ops(&ctx, module, crate::dialect::scf::Switch::NAME),
+            count_ops(&ctx, module, crate::dialect::scf::IndexSwitch::NAME),
             1
         );
     }
