@@ -3008,7 +3008,7 @@ mod tests {
     fn region_branch_interfaces_cover_every_switch_region() {
         let input = r#"core.module @test {
   func.func @main(%discriminant: core.i32) -> core.nil {
-    scf.index_switch %discriminant
+    scf.index_switch %discriminant : (core.i32) -> ()
     case 0 {
       scf.yield
     }
@@ -3049,7 +3049,7 @@ mod tests {
     } else {
       scf.yield %value
     }
-    scf.index_switch %discriminant
+    scf.index_switch %discriminant : (core.i32) -> ()
     case 0 {
       scf.yield
     }
@@ -3278,7 +3278,7 @@ mod tests {
       } else {
         scf.yield %forwarded
       }
-      scf.index_switch %discriminant
+      scf.index_switch %discriminant : (core.i32) -> ()
       case 1 {
         ^empty_case:
       }

@@ -15,31 +15,31 @@ mod scf {
     /// `scf.index_switch`.
     ///
     /// ```text
-    /// scf.index_switch %x
+    /// %r = scf.index_switch %x : (core.i32) -> core.i32
     /// case 0 {
-    ///     scf.yield
+    ///     scf.yield %a
     /// }
     /// default {
-    ///     scf.yield
+    ///     scf.yield %b
     /// }
     /// ```
     ///
     /// - **Shape:** a fixed-width integer discriminant, distinct `cases`, the
-    ///   required `default_region`, and one `case_regions` entry per case in
-    ///   the same order. Unlike MLIR's, the discriminant is not `index` and
-    ///   the operation has no results, so its `scf.yield`s forward no values.
+    ///   required `default_region`, one `case_regions` entry per case in the
+    ///   same order, and any number of results. Unlike MLIR's, the
+    ///   discriminant is not `index`.
     /// - **Meaning:** runs the case region whose value equals the
     ///   discriminant, or `default_region` when none does. Each region ends
-    ///   in `scf.yield`, which returns to the parent, or in its own
+    ///   in `scf.yield`, whose values become the results, or in its own
     ///   terminator.
     /// - **Verification:** one region per case, and no case twice.
     ///
     /// [`IndexSwitch::build_with_arms`] builds it from each case with its
     /// region.
     #[verify]
-    #[asm_format(discriminant attr_dict custom(SwitchArms(cases, case_regions, default_region)))]
+    #[asm_format(discriminant attr_dict ":" functional_type(discriminant, results) custom(SwitchArms(cases, case_regions, default_region)))]
     #[implements(RegionBranch, Fold)]
-    fn index_switch(cases: Attr<[i64]>, discriminant: Value<impl IntegerLike>) {
+    fn index_switch(cases: Attr<[i64]>, discriminant: Value<impl IntegerLike>) -> Variadic<_> {
         #[region(default_region)]
         {}
         #[regions(case_regions)]
@@ -228,18 +228,21 @@ impl RegionBranch for Loop {
 }
 
 impl IndexSwitch {
-    /// Build a switch from each case value with its region, in order, and
-    /// the default region, so a case cannot drift from its region.
+    /// Build a switch with `results` from each case value with its region,
+    /// in order, and the default region, so a case cannot drift from its
+    /// region.
     pub fn build_with_arms(
         ctx: &mut IrContext,
         location: crate::types::Location,
         discriminant: ValueRef,
+        results: impl IntoIterator<Item = crate::refs::TypeRef>,
         arms: impl IntoIterator<Item = (i64, crate::refs::RegionRef)>,
         default_region: crate::refs::RegionRef,
     ) -> Self {
         let (cases, case_regions): (Vec<_>, Vec<_>) = arms.into_iter().unzip();
         Self::operands(discriminant)
             .cases(cases)
+            .results(results)
             .regions(default_region, case_regions)
             .build(ctx, location)
     }
@@ -536,10 +539,10 @@ impl Fold for If {
 /// body into the parent block.
 ///
 /// The region is the case region whose value equals the selector, or the
-/// default region when no case matches. A switch has no results, so a region
-/// either falls through with an operand-less `scf.yield` (dropped) or ends in
-/// its own terminator (kept, which requires the switch to end its block so
-/// nothing is left after the terminator).
+/// default region when no case matches. A region either ends in `scf.yield`,
+/// whose values replace the results, or in its own terminator (kept, which
+/// requires a resultless switch to end its block so nothing is left after
+/// the terminator).
 ///
 /// Bails on a multi-block region. Falling back to the default is declined
 /// when the selector or any case value is negative: a sign-extended constant
@@ -566,21 +569,22 @@ impl Fold for IndexSwitch {
         let [active_block] = ctx.region(active_region).blocks.as_array()?;
         let arm_ops = &ctx.block(*active_block).ops;
         let (last, rest) = arm_ops.split_last()?;
-        let body = if let Ok(yield_op) = Yield::from_op(ctx, *last) {
-            if !yield_op.values(ctx).is_empty() {
+        if let Ok(yield_op) = Yield::from_op(ctx, *last) {
+            let results = yield_op.values(ctx).to_vec();
+            if results.len() != ctx.op_results(op).len() {
                 return None;
             }
-            rest.to_vec()
-        } else {
-            let parent = ctx.op(op).parent_block?;
-            if ctx.block(parent).ops.last() != Some(&op) {
-                return None;
-            }
-            arm_ops.to_vec()
-        };
-
+            return Some(FoldResult::Splice {
+                body: rest.to_vec(),
+                results,
+            });
+        }
+        let parent = ctx.op(op).parent_block?;
+        if !ctx.op_results(op).is_empty() || ctx.block(parent).ops.last() != Some(&op) {
+            return None;
+        }
         Some(FoldResult::Splice {
-            body,
+            body: arm_ops.to_vec(),
             results: Vec::new(),
         })
     }
@@ -647,7 +651,7 @@ mod canonicalize_tests {
     fn index_switch_writes_each_region_on_its_own_line() {
         let text = r#"core.module @test {
   func.func @f(%0: core.i32) -> core.nil {
-      scf.index_switch %0 attributes {note = 1}
+      scf.index_switch %0 attributes {note = 1} : (core.i32) -> ()
       case 0 {
           scf.yield
       }
@@ -657,7 +661,7 @@ mod canonicalize_tests {
       default {
           scf.yield
       }
-      scf.index_switch %0
+      scf.index_switch %0 : (core.i32) -> ()
       default {
           scf.yield
       }
@@ -668,7 +672,7 @@ mod canonicalize_tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, text);
         assert_eq!(print_module(&ctx, module.op()), text);
-        let one_line = "core.module @test {\n  func.func @f(%0: core.i32) {\n    scf.index_switch %0 case 1 { scf.yield } default { scf.yield }\n    func.return\n  }\n}";
+        let one_line = "core.module @test {\n  func.func @f(%0: core.i32) {\n    scf.index_switch %0 : (core.i32) -> () case 1 { scf.yield } default { scf.yield }\n    func.return\n  }\n}";
         let mut ctx = IrContext::new();
         parse_test_module(&mut ctx, one_line);
     }
@@ -677,7 +681,7 @@ mod canonicalize_tests {
     fn index_switch_builds_from_case_region_pairs() {
         let text = r#"core.module @test {
   func.func @f(%0: core.i32) -> core.nil {
-      scf.index_switch %0
+      scf.index_switch %0 : (core.i32) -> ()
       case 3 {
           scf.yield
       }
@@ -706,6 +710,7 @@ mod canonicalize_tests {
             &mut ctx,
             location,
             discriminant,
+            [],
             [(3, regions[0]), (1, regions[1])],
             regions[2],
         );
@@ -877,7 +882,7 @@ mod canonicalize_tests {
     const SWITCH_FALLTHROUGH: &str = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
     %sel = arith.const {value = SELECTOR} : core.i32
-    scf.index_switch %sel
+    scf.index_switch %sel : (core.i32) -> ()
     case 0 {
       %a = arith.addi %x, %x : core.i32
       scf.yield
@@ -895,6 +900,43 @@ mod canonicalize_tests {
 
     fn switch_input(selector: i64) -> String {
         SWITCH_FALLTHROUGH.replace("SELECTOR", &selector.to_string())
+    }
+
+    #[test]
+    fn index_switch_yields_its_results() {
+        let text = r#"core.module @test {
+  func.func @f(%0: core.i32, %1: core.i64) -> core.i64 {
+      %2 = scf.index_switch %0 : (core.i32) -> core.i64
+      case 0 {
+          scf.yield %1
+      }
+      default {
+          %3 = arith.addi %1, %1 : core.i64
+          scf.yield %3
+      }
+      func.return %2
+  }
+}
+"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, text);
+        assert_eq!(print_module(&ctx, module.op()), text);
+        let result = crate::validation::validate_operation_verifiers(&ctx, module);
+        assert!(result.is_ok(), "{result}");
+
+        let folded = text.replace(
+            "      %2 = scf.index_switch %0",
+            "      %4 = arith.const {value = 5} : core.i32\n      %2 = scf.index_switch %4",
+        );
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, &folded);
+        run_scf_patterns(&mut ctx, module);
+        assert_eq!(count_ops(&ctx, module, IndexSwitch::NAME), 0);
+        let printed = print_module(&ctx, module.op());
+        assert!(
+            printed.contains("%3 = arith.addi %1, %1 : core.i64\n      func.return %3"),
+            "{printed}"
+        );
     }
 
     #[test]
@@ -945,7 +987,7 @@ mod canonicalize_tests {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
     %sel = arith.const {value = 0} : core.i32
-    scf.index_switch %sel
+    scf.index_switch %sel : (core.i32) -> ()
     case 0 {
       func.return %x
     }
@@ -978,7 +1020,7 @@ mod canonicalize_tests {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
     %sel = arith.const {value = 0} : core.i32
-    scf.index_switch %sel
+    scf.index_switch %sel : (core.i32) -> ()
     case 0 {
       func.return %x
     }
@@ -1003,7 +1045,7 @@ mod canonicalize_tests {
     fn switch_non_const_selector_is_not_folded() {
         let input = r#"core.module @test {
   func.func @f(%tag: core.i32, %x: core.i32) -> core.i32 {
-    scf.index_switch %tag
+    scf.index_switch %tag : (core.i32) -> ()
     case 0 {
       scf.yield
     }

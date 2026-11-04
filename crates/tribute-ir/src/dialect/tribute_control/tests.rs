@@ -1380,7 +1380,7 @@ fn whole_ir_allows_mutually_exclusive_switch_capture_paths() {
   } handlers {
     tribute_control.handler op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
         %choice = arith.const {value = 0} : core.i32
-        scf.index_switch %choice
+        scf.index_switch %choice : (core.i32) -> ()
         case 0 {
           %left = tribute_control.lambda() -> core.i32 captures [%token, %argument] {
             %left_resumed = tribute_control.resume %token, %argument : core.i32

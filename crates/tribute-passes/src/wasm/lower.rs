@@ -1185,7 +1185,7 @@ mod tests {
             r#"core.module @test {
   func.func @main(%bytes: core.bytes, %newline: core.i1, %choice: core.i16) -> core.nil {
     %write = tribute_io.write %bytes, %newline : core.nil
-    scf.index_switch %choice
+    scf.index_switch %choice : (core.i16) -> ()
     case 0 { scf.yield }
     default { scf.yield }
     func.return

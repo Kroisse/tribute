@@ -129,7 +129,9 @@ discriminant는 `core.i32` 또는 `core.i64`여야 하고, 각각 `wasm.i32_eq`�
 `wasm.i64_eq`로 비교한다. 두 비교 모두 `core.i32` 조건을 만든다. 모든 case
 값은 discriminant 타입의 부호 있는 범위에 들어가야 한다. 다른 discriminant 타입과
 범위를 벗어난 case 값은 변환을 시작하기 전에 해당 switch와 이유를 담은
-conversion 오류로 거부한다.
+conversion 오류로 거부한다. 결과가 있는 switch는 각 `wasm.if`가 그 결과 타입을
+선언하고, 안쪽 `wasm.if`의 결과를 바깥 region이 `wasm.yield`로 넘긴다.
+`scf.yield` 변환과 같이 결과는 하나까지만 낮춘다.
 
 ### Terminal structured-control 결과
 

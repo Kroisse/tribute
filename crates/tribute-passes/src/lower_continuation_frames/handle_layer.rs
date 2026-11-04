@@ -588,7 +588,7 @@ fn build_local_dispatcher_instance(
     )?;
     let foreign_region = single_block_region(ctx, location, default_block);
     let switch =
-        scf::IndexSwitch::build_with_arms(ctx, location, args[4], switch_arms, foreign_region);
+        scf::IndexSwitch::build_with_arms(ctx, location, args[4], [], switch_arms, foreign_region);
     ctx.push_op(block, switch.op_ref());
     let region = single_block_region(ctx, location, block);
     let lambda = closure_over(
@@ -689,7 +689,7 @@ fn build_tail_dispatcher(
     ctx.push_op(reject_block, unreachable.op_ref());
     let reject_region = single_block_region(ctx, location, reject_block);
     let switch =
-        scf::IndexSwitch::build_with_arms(ctx, location, op_idx, switch_arms, reject_region);
+        scf::IndexSwitch::build_with_arms(ctx, location, op_idx, [], switch_arms, reject_region);
     ctx.push_op(block, switch.op_ref());
 
     let region = single_block_region(ctx, location, block);

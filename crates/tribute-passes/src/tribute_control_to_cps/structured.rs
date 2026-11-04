@@ -534,6 +534,7 @@ impl Converter<'_> {
             self.ctx,
             location,
             discriminant,
+            [],
             cases.into_iter().zip(converted_regions),
             default_region,
         );

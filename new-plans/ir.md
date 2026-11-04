@@ -368,25 +368,26 @@ flat CFG.
 
 `scf.index_switch`는 MLIR의 같은 이름 operation처럼 discriminant에 대한 구조적
 다중 분기다. MLIR과 달리 discriminant는 `index`가 아니라 고정 폭 정수
-(`IntegerLike`)이다. `cases`는 서로 다른 `i64` 값의 목록이고,
-operation은 필수 `default` region 하나와 case마다 하나씩 같은 순서로 case region을
-가진다. Discriminant가 어떤 case와 같으면 그 case region을, 아니면 `default`
-region을 실행한다. 각 region은 `scf.yield` 또는 자기 terminator로 끝난다. MLIR과
-달리 결과를 만들지 않으므로 `scf.yield`는 값을 넘기지 않는다. `RegionBranch`
-successor는 case region들과 `default` region이며, 각 region의 `scf.yield`는
-`Parent`로 돌아간다. 선택할 region이 항상 있으므로 parent에서 바로 `Parent`로
-가는 경로는 없다.
+(`IntegerLike`)이다. `cases`는 서로 다른 `i64` 값의 목록이고, operation은 필수
+`default` region 하나와 case마다 하나씩 같은 순서로 case region을 가진다.
+Discriminant가 어떤 case와 같으면 그 case region을, 아니면 `default` region을
+실행한다. 각 region은 `scf.yield` 또는 자기 terminator로 끝나며, `scf.yield`가
+넘기는 값이 operation의 결과가 된다. 결과는 없거나 여럿일 수 있다. 형식은
+`func.call`처럼 discriminant와 결과의 타입을 `: (A) -> R`로 쓰고, 결과가 없으면
+`-> ()`로 쓴다. `RegionBranch` successor는 case region들과 `default` region이며,
+각 region의 `scf.yield`는 `Parent`로 돌아간다. 선택할 region이 항상 있으므로
+parent에서 바로 `Parent`로 가는 경로는 없다.
 
 ```text
-scf.index_switch %x
+%r = scf.index_switch %x : (core.i32) -> core.i32
 case 0 {
-    scf.yield
+    scf.yield %a
 }
 case 7 {
-    scf.yield
+    scf.yield %b
 }
 default {
-    scf.yield
+    scf.yield %c
 }
 ```
 

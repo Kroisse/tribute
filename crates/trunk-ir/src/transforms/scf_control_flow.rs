@@ -120,12 +120,13 @@ impl StructuredControlAnalysis {
         let Some(&last) = ctx.block(*block).ops.last() else {
             return false;
         };
-        if scf::If::matches(ctx, last) || scf::Loop::matches(ctx, last) {
+        if scf::If::matches(ctx, last)
+            || scf::Loop::matches(ctx, last)
+            || scf::IndexSwitch::matches(ctx, last)
+        {
             self.has_terminal_unused_never_result(last)
                 || (ctx.op_results(last).is_empty()
                     && self.has_only_terminal_region_successors(last))
-        } else if scf::IndexSwitch::matches(ctx, last) {
-            self.is_terminal_resultless_switch(last)
         } else {
             DynCallableExit::prove(ctx, last).is_ok()
         }
@@ -144,7 +145,7 @@ mod tests {
     const NESTED_CONTROL: &str = r#"core.module @test {
   func.func @first(%cond: core.i1, %tag: core.i32) -> core.nil {
     %never = scf.if %cond -> (core.never) {
-      scf.index_switch %tag
+      scf.index_switch %tag : (core.i32) -> ()
       case 0 { func.return }
       default { func.unreachable }
     } else { func.unreachable }

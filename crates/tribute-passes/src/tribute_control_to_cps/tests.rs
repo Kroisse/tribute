@@ -747,7 +747,7 @@ fn source_shape_validation_rejects_every_malformed_switch_component() {
     let malformed = [(
         r#"core.module @test {
   %value = arith.const {value = 0} : core.i32
-  scf.index_switch %value
+  scf.index_switch %value : (core.i32) -> ()
   default {
     ^first:
       scf.yield
@@ -2245,7 +2245,7 @@ fn textual_scf_switch_reenters_the_shared_suffix() {
     let input = r#"core.module @test {
   tribute_cps.func @switching(%input: core.i32) -> core.i32 convention(cps) {
     %choice = arith.const {value = 0} : core.i32
-    scf.index_switch %choice
+    scf.index_switch %choice : (core.i32) -> ()
     case 0 {
       %performed = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
       scf.yield

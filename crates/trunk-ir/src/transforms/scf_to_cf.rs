@@ -459,6 +459,20 @@ fn lower_scf_switch(
     // Split block at scf op: ops after go to merge block
     let merge_block = split_block(ctx, block, scf_op);
 
+    // Each result becomes a merge block argument that the yields branch with.
+    let results = ctx.op_results(scf_op).to_vec();
+    for result in results {
+        let ty = ctx.value_ty(result);
+        let merge_arg = ctx.add_block_arg(
+            merge_block,
+            BlockArgData {
+                ty,
+                attrs: Default::default(),
+            },
+        );
+        ctx.replace_all_uses(result, merge_arg);
+    }
+
     // Remove the scf op (split_block moved it to merge_block)
     ctx.detach_op(scf_op);
 
@@ -1252,7 +1266,7 @@ mod tests {
     fn lower_terminal_scf_switch_without_empty_merge_block() {
         let input = r#"core.module @test {
   func.func @main(%choice: core.i32, %callee: func.func_sig<(core.nil) -> core.never>, %unit: core.nil) -> core.never attributes {test.marker = 2} {
-    scf.index_switch %choice
+    scf.index_switch %choice : (core.i32) -> ()
     case 0 {
       func.unreachable
     }
@@ -1298,7 +1312,7 @@ mod tests {
     fn lower_terminal_scf_switch_with_ordinary_return_preserves_operands() {
         let input = r#"core.module @test {
   func.func @main(%choice: core.i32, %first: core.i32, %second: core.i32) -> core.i32 {
-    scf.index_switch %choice
+    scf.index_switch %choice : (core.i32) -> ()
     case 0 {
       func.return %first
     }
@@ -1332,9 +1346,9 @@ mod tests {
     fn lower_nested_terminal_scf_switch_with_ordinary_returns_has_no_merge_blocks() {
         let input = r#"core.module @test {
   func.func @main(%choice: core.i32, %nested_choice: core.i32, %first: core.i32, %second: core.i32, %third: core.i32) -> core.i32 {
-    scf.index_switch %choice
+    scf.index_switch %choice : (core.i32) -> ()
     case 0 {
-      scf.index_switch %nested_choice
+      scf.index_switch %nested_choice : (core.i32) -> ()
       case 0 {
         func.return %first
       }
@@ -1372,7 +1386,7 @@ mod tests {
     fn lower_terminal_scf_switch_with_zero_operand_return_has_no_merge_block() {
         let input = r#"core.module @test {
   func.func @main(%choice: core.i32) {
-    scf.index_switch %choice
+    scf.index_switch %choice : (core.i32) -> ()
     case 0 {
       func.return
     }
@@ -1404,7 +1418,7 @@ mod tests {
     fn callable_exit_interface_drives_terminal_switch_lowering() {
         let input = r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    scf.index_switch %choice
+    scf.index_switch %choice : (core.i32) -> ()
     case 0 {
       "test_exit_dialect.exit"()
     }
@@ -1434,7 +1448,7 @@ mod tests {
             (
                 r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    scf.index_switch %choice
+    scf.index_switch %choice : (core.i32) -> ()
     case 0 { scf.yield }
     default { func.unreachable }
   }
@@ -1444,7 +1458,7 @@ mod tests {
             (
                 r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    scf.index_switch %choice
+    scf.index_switch %choice : (core.i32) -> ()
     case 0 { func.unreachable }
     default {
       scf.yield
@@ -1456,7 +1470,7 @@ mod tests {
             (
                 r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    scf.index_switch %choice
+    scf.index_switch %choice : (core.i32) -> ()
     case 0 {
       func.return
       core.nil_value : core.nil
@@ -1469,7 +1483,7 @@ mod tests {
             (
                 r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    scf.index_switch %choice
+    scf.index_switch %choice : (core.i32) -> ()
     case 0 {
       ^first:
         cf.br [^second]
@@ -1484,7 +1498,7 @@ mod tests {
             (
                 r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    scf.index_switch %choice
+    scf.index_switch %choice : (core.i32) -> ()
     case 0 { "test_exit_dialect.malformed_exit"() }
     default { func.unreachable }
   }
@@ -1516,7 +1530,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    scf.index_switch %choice
+    scf.index_switch %choice : (core.i32) -> ()
     case 0 { core.nil_value : core.nil }
     default { "test_exit_dialect.malformed_exit"() }
   }
@@ -1543,7 +1557,7 @@ mod tests {
     fn lower_terminal_scf_switch_with_nested_never_if_has_no_merge_block() {
         let input = r#"core.module @test {
   func.func @main(%choice: core.i32, %cond: core.i1, %callee: func.func_sig<(core.nil) -> core.never>, %unit: core.nil) -> core.never attributes {test.marker = 2} {
-    scf.index_switch %choice
+    scf.index_switch %choice : (core.i32) -> ()
     case 0 {
       %discarded = scf.if %cond -> (core.never) {
         func.unreachable
@@ -1590,9 +1604,9 @@ mod tests {
     fn lower_terminal_scf_switch_with_nested_terminal_switch_has_no_empty_merge_block() {
         let input = r#"core.module @test {
   func.func @main(%choice: core.i32, %nested_choice: core.i32, %callee: func.func_sig<(core.nil) -> core.never>, %unit: core.nil) -> core.never attributes {test.marker = 2} {
-    scf.index_switch %choice
+    scf.index_switch %choice : (core.i32) -> ()
     case 0 {
-      scf.index_switch %nested_choice
+      scf.index_switch %nested_choice : (core.i32) -> ()
       case 0 {
         func.unreachable
       }
@@ -1636,7 +1650,7 @@ mod tests {
     fn lower_nonterminal_scf_switch_keeps_merge_continuation() {
         let input = r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    scf.index_switch %choice
+    scf.index_switch %choice : (core.i32) -> ()
     case 0 {
       scf.yield
     }
@@ -1683,7 +1697,7 @@ mod tests {
     fn lower_nonterminal_scf_switch_with_multiblock_arm_keeps_merge_continuation() {
         let input = r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
-    scf.index_switch %choice
+    scf.index_switch %choice : (core.i32) -> ()
     case 0 {
       ^first:
         cf.br [^second]
@@ -1925,7 +1939,7 @@ mod tests {
         let input = r#"core.module @test {
   func.func @test() {
     %disc = arith.const {value = 1} : core.i32
-    scf.index_switch %disc
+    scf.index_switch %disc : (core.i32) -> ()
     case 0 {
       scf.yield
     }
@@ -1974,7 +1988,7 @@ mod tests {
         let printed = lower_switch_function(
             r#"core.module @test {
   func.func @main(%choice: core.i32) {
-    scf.index_switch %choice
+    scf.index_switch %choice : (core.i32) -> ()
     case 7 {
       scf.yield
     }
@@ -1995,6 +2009,32 @@ mod tests {
     }
 
     #[test]
+    fn switch_results_become_merge_block_arguments() {
+        let printed = lower_switch_function(
+            r#"core.module @test {
+  func.func @main(%choice: core.i32, %a: core.i64, %b: core.i64) -> core.i64 {
+    %r = scf.index_switch %choice : (core.i32) -> core.i64
+    case 7 {
+      scf.yield %a
+    }
+    default {
+      scf.yield %b
+    }
+    func.return %r
+  }
+}"#,
+        );
+        assert!(
+            printed.contains("cf.switch %0 : core.i32, [default: ^bb2, 7: ^bb1]"),
+            "{printed}"
+        );
+        assert!(printed.contains("cf.br %1 [^bb3]"), "{printed}");
+        assert!(printed.contains("cf.br %2 [^bb3]"), "{printed}");
+        assert!(printed.contains("^bb3(%3: core.i64):"), "{printed}");
+        assert!(printed.contains("func.return %3"), "{printed}");
+    }
+
+    #[test]
     fn switch_whose_cases_are_not_distinct_discriminant_values_compares_case_by_case() {
         for (discriminant_ty, cases) in [
             ("core.i32", ["3", "3"]),
@@ -2004,7 +2044,7 @@ mod tests {
             let printed = lower_switch_function(&format!(
                 r#"core.module @test {{
   func.func @main(%choice: {discriminant_ty}) {{
-    scf.index_switch %choice
+    scf.index_switch %choice : ({discriminant_ty}) -> ()
     case  {} {{
       scf.yield
     }}
@@ -2029,7 +2069,7 @@ mod tests {
         let input = r#"core.module @test {
   func.func @test() {
     %disc = arith.const {value = 1} : core.i32
-    scf.index_switch %disc
+    scf.index_switch %disc : (core.i32) -> ()
     case 0 {
       scf.yield
     }
