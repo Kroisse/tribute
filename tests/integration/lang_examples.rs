@@ -9,7 +9,7 @@ use salsa::Database;
 use tribute::TributeDatabaseImpl;
 
 /// Examples that must fail, each with a message its diagnostics contain.
-const EXPECTED_FAILURES: &[(&str, &str)] = &[
+pub(crate) const EXPECTED_FAILURES: &[(&str, &str)] = &[
     // The canonical invalid example.
     (
         "invalid_unresolved_name.trb",

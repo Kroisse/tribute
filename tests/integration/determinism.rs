@@ -23,7 +23,7 @@ use tribute_front::SourceCst;
 use tribute_prop::program::program;
 use trunk_ir::Symbol;
 
-use crate::lang_examples::examples;
+use crate::lang_examples::{EXPECTED_FAILURES, examples};
 
 /// What one compilation produces. A target that fails to compile has no
 /// artifact; its diagnostics are not compared.
@@ -50,13 +50,76 @@ fn compile_fresh(load: &impl Fn(&TributeDatabaseImpl) -> SourceCst) -> Artifacts
     db.attach(|db| compile(db, source))
 }
 
-/// The number of times each check compiles its input again,
-/// `TRIBUTE_DETERMINISM_REPEAT` or 1.
+/// The number of times each check compiles its input again: a positive
+/// `TRIBUTE_DETERMINISM_REPEAT`, or 1.
 fn repeat() -> usize {
     std::env::var("TRIBUTE_DETERMINISM_REPEAT")
         .ok()
         .and_then(|repeat| repeat.parse().ok())
+        .filter(|&repeat| repeat > 0)
         .unwrap_or(1)
+}
+
+/// The artifacts an input must produce, so that a check never passes by
+/// comparing two failed compilations.
+#[derive(Clone, Copy)]
+struct Required {
+    ir: bool,
+    native_object: bool,
+    wasm_module: bool,
+}
+
+impl Required {
+    const EVERYTHING: Self = Self {
+        ir: true,
+        native_object: true,
+        wasm_module: true,
+    };
+}
+
+/// Examples that lower for both targets but build no Wasm module.
+const NO_WASM_MODULE: &[&str] = &[
+    // `List` has no Wasm lowering.
+    "let-destructuring.trb",
+    // `std::io::read_line` has no Wasm lowering.
+    "native_calculator.trb",
+];
+
+fn required(example: &str) -> Required {
+    if EXPECTED_FAILURES.iter().any(|(name, _)| *name == example) {
+        Required {
+            ir: false,
+            native_object: false,
+            wasm_module: false,
+        }
+    } else {
+        Required {
+            wasm_module: !NO_WASM_MODULE.contains(&example),
+            ..Required::EVERYTHING
+        }
+    }
+}
+
+/// The required artifacts a compilation did not produce. `dump_ir` gives
+/// empty text when the frontend fails, so IR must also be nonempty.
+fn missing(artifacts: &Artifacts, required: Required) -> Option<String> {
+    let has_ir = |ir: &Option<String>| ir.as_deref().is_some_and(|ir| !ir.is_empty());
+    let missing = [
+        ("native IR", required.ir && !has_ir(&artifacts.native_ir)),
+        ("Wasm IR", required.ir && !has_ir(&artifacts.wasm_ir)),
+        (
+            "native object",
+            required.native_object && artifacts.native_object.is_none(),
+        ),
+        (
+            "Wasm module",
+            required.wasm_module && artifacts.wasm.is_none(),
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(what, missing)| missing.then_some(what))
+    .collect_vec();
+    (!missing.is_empty()).then(|| format!("produced no {}", missing.iter().format(", ")))
 }
 
 /// Symbols and allocations that a later compilation runs beside, so the
@@ -82,9 +145,13 @@ impl Perturbation {
 /// database beside a perturbation, and report the first difference.
 fn check_deterministic(
     label: &str,
+    required: Required,
     load: impl Fn(&TributeDatabaseImpl) -> SourceCst,
 ) -> Result<(), String> {
     let first = compile_fresh(&load);
+    if let Some(missing) = missing(&first, required) {
+        return Err(format!("{label}: {missing}"));
+    }
     for round in 0..repeat() {
         let perturbation = Perturbation::new(round);
         let again = compile_fresh(&load);
@@ -188,6 +255,10 @@ fn lang_examples() -> (PathBuf, Vec<PathBuf>) {
     (root, files)
 }
 
+fn example_name(file: &Path) -> String {
+    file.to_string_lossy().replace('\\', "/")
+}
+
 /// Every example compiles to the same artifacts in two fresh databases.
 /// The examples reach abilities, closures, enums, and modules, which the
 /// generated programs do not.
@@ -197,7 +268,8 @@ fn lang_examples_compile_deterministically() {
     let failures = files
         .iter()
         .filter_map(|file| {
-            check_deterministic(&file.to_string_lossy(), |db| {
+            let name = example_name(file);
+            check_deterministic(&name, required(&name), |db| {
                 db.input(root.join(file)).expect("example source")
             })
             .err()
@@ -218,24 +290,17 @@ proptest! {
     #[test]
     fn generated_programs_compile_deterministically(program in program()) {
         let source = program.source();
-        check_deterministic("generated.trb", |db| {
+        check_deterministic("generated.trb", Required::EVERYTHING, |db| {
             SourceCst::from_source_str(db, "generated.trb", &source)
         })
         .map_err(|error| TestCaseError::fail(format!("{error}\n{source}")))?;
     }
 }
 
-/// The outputs of one CLI run for one example: both targets' IR dumps and
-/// the Wasm module, each with its exit status.
-struct CliRun {
-    native_ir: Output,
-    wasm_ir: Output,
-    wasm: Option<Vec<u8>>,
-}
-
 /// Compile `file` with the CLI. `padding` sets the size of an unused
-/// environment variable, which moves the process's stack and heap.
-fn cli_run(file: &Path, out: &Path, padding: usize) -> CliRun {
+/// environment variable, which moves the process's stack and heap. The CLI
+/// writes no native object, so the result has none.
+fn cli_run(file: &Path, out: &Path, padding: usize) -> Artifacts {
     let compile = |args: &[&str]| {
         Command::new(env!("CARGO_BIN_EXE_tribute"))
             .arg("compile")
@@ -247,30 +312,21 @@ fn cli_run(file: &Path, out: &Path, padding: usize) -> CliRun {
     };
     let _ = std::fs::remove_file(out);
     let out_arg = out.to_str().expect("UTF-8 temporary path");
-    let wasm_status = compile(&["--target", "wasm", "-o", out_arg]).status;
-    CliRun {
-        native_ir: compile(&["--target", "native", "--dump-ir"]),
-        wasm_ir: compile(&["--target", "wasm", "--dump-ir"]),
-        wasm: wasm_status
-            .success()
-            .then(|| std::fs::read(out).expect("read the Wasm module")),
-    }
-}
-
-fn cli_difference(first: &CliRun, again: &CliRun) -> Option<String> {
-    let dump = |output: &Output| {
+    let dump = |output: Output| {
         output
             .status
             .success()
             .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
     };
-    text_difference(
-        "native IR",
-        &dump(&first.native_ir),
-        &dump(&again.native_ir),
-    )
-    .or_else(|| text_difference("Wasm IR", &dump(&first.wasm_ir), &dump(&again.wasm_ir)))
-    .or_else(|| bytes_difference("Wasm module", &first.wasm, &again.wasm))
+    let wasm_status = compile(&["--target", "wasm", "-o", out_arg]).status;
+    Artifacts {
+        native_ir: dump(compile(&["--target", "native", "--dump-ir"])),
+        wasm_ir: dump(compile(&["--target", "wasm", "--dump-ir"])),
+        native_object: None,
+        wasm: wasm_status
+            .success()
+            .then(|| std::fs::read(out).expect("read the Wasm module")),
+    }
 }
 
 /// Every example compiles to the same IR dumps and Wasm module in two CLI
@@ -285,12 +341,18 @@ fn lang_examples_compile_deterministically_across_processes_slow() {
     let failures = files
         .iter()
         .filter_map(|file| {
-            let path = root.join(file);
+            let (name, path) = (example_name(file), root.join(file));
             let first = cli_run(&path, &out, 0);
+            let required = Required {
+                native_object: false,
+                ..required(&name)
+            };
+            if let Some(missing) = missing(&first, required) {
+                return Some(format!("{name}: {missing}"));
+            }
             (0..repeat()).find_map(|round| {
                 let again = cli_run(&path, &out, 4096 + 1024 * round);
-                cli_difference(&first, &again)
-                    .map(|difference| format!("{}: {difference}", file.display()))
+                difference(&first, &again).map(|difference| format!("{name}: {difference}"))
             })
         })
         .collect_vec();
