@@ -11,9 +11,6 @@ pub struct Fragment {
     pub value: Value,
     /// The names the text refers to that it does not bind itself.
     pub free: BTreeSet<String>,
-    /// Whether the value is a `case` result, directly or as a block's
-    /// last expression.
-    pub(crate) yields_case: bool,
 }
 
 impl Fragment {
@@ -26,7 +23,6 @@ impl Fragment {
             src,
             value,
             free: BTreeSet::new(),
-            yields_case: false,
         }
     }
 
@@ -39,12 +35,7 @@ impl Fragment {
             .into_iter()
             .flat_map(|child| child.free.iter().cloned())
             .collect();
-        Self {
-            src,
-            value,
-            free,
-            yields_case: false,
-        }
+        Self { src, value, free }
     }
 
     /// The value of a fragment generated for a `Nat` goal.

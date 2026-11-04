@@ -62,7 +62,6 @@ fn leaf(env: &Env, goal: Goal) -> BoxedStrategy<Fragment> {
             free: BTreeSet::from([binding.name.clone()]),
             src: binding.name,
             value: binding.value,
-            yields_case: false,
         })
         .boxed();
     prop_oneof![literal, var].boxed()

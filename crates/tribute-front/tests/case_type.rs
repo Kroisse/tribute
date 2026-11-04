@@ -861,3 +861,34 @@ fn unused(value: a, name: String) -> Nat {
         Vec::<String>::new()
     );
 }
+
+/// An arithmetic operator in a `case` arm whose operands are both `case`
+/// results is selected by the operands' common results.
+#[salsa_test]
+fn test_operator_on_case_results_in_case_arm(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn add() -> Nat {
+    case 1 { _ -> { case 9 { _ -> 5 } } + { case 9 { _ -> 5 } } }
+}
+
+fn mul() -> Nat {
+    case 1 { _ -> { case 9 { _ -> 5 } } * { case 9 { _ -> 5 } } }
+}
+
+fn block_operand() -> Nat {
+    case 1 { _ -> { {
+        let v0 = 0
+        { case 9 { _ -> 5 } }
+    } + { case 9 { _ -> 5 } } } }
+}
+"#,
+    );
+
+    assert_eq!(
+        ast_pipeline_error_messages(db, source),
+        Vec::<String>::new()
+    );
+}
