@@ -96,7 +96,8 @@ fn lower_region(ctx: &mut IrContext, target: OpRef, body: RegionRef, analyses: &
         without_merge: HashSet::default(),
     };
     let _ = walk_op::<()>(ctx, target, &mut |op| {
-        if (scf::If::matches(ctx, op) && analysis.has_terminal_unused_never_result(op))
+        if ((scf::If::matches(ctx, op) || scf::IndexSwitch::matches(ctx, op))
+            && analysis.has_terminal_unused_never_result(op))
             || analysis.is_terminal_resultless_switch(op)
         {
             plan.without_merge.insert(op);
@@ -375,10 +376,10 @@ fn switch_arms(ctx: &IrContext, scf_op: OpRef) -> Option<SwitchArms> {
     })
 }
 
-/// Lower a terminal resultless switch without manufacturing an unreachable
-/// merge block. The explicit default is required because an unmatched switch
-/// must also transfer control.
-fn lower_terminal_resultless_switch(
+/// Lower a terminal switch, resultless or with one unused Never result,
+/// without manufacturing an unreachable merge block. The explicit default is
+/// required because an unmatched switch must also transfer control.
+fn lower_terminal_switch(
     ctx: &mut IrContext,
     block: BlockRef,
     scf_op: OpRef,
@@ -438,7 +439,7 @@ fn lower_scf_switch(
     };
 
     if plan.without_merge.contains(&scf_op) {
-        lower_terminal_resultless_switch(
+        lower_terminal_switch(
             ctx,
             block,
             scf_op,
@@ -1339,6 +1340,36 @@ mod tests {
             .collect();
         assert_eq!(returns, vec![vec![args[1]], vec![args[2]]]);
         assert_eq!(count_blocks(&ctx, function.body(&ctx)), 3);
+        assert!(crate::validation::validate_all(&ctx, module, &mut Default::default()).is_ok());
+    }
+
+    #[test]
+    fn terminal_switch_with_an_unused_never_result_has_no_merge_block() {
+        let input = r#"core.module @test {
+  func.func @main(%choice: core.i32, %first: core.i32, %second: core.i32) -> core.i32 {
+    %never = scf.index_switch %choice : (core.i32) -> core.never
+    case 0 {
+      func.return %first
+    }
+    default {
+      func.return %second
+    }
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+        let function = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
+
+        lower_scf_to_cf(&mut ctx, module, &mut Default::default());
+
+        assert_eq!(count_blocks(&ctx, function.body(&ctx)), 3);
+        let blocks = ctx.region(function.body(&ctx)).blocks.clone();
+        assert!(blocks.iter().all(|&block| ctx.block_args(block).len() <= 3));
+        assert!(
+            blocks[1..]
+                .iter()
+                .all(|&block| ctx.block_args(block).is_empty())
+        );
         assert!(crate::validation::validate_all(&ctx, module, &mut Default::default()).is_ok());
     }
 
