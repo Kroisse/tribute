@@ -682,3 +682,27 @@ fn main() ->{Io} Nil {
         "effect\n3",
     );
 }
+
+/// A local whose uses fix none of its data types lowers on both targets:
+/// the variables nothing fixes stay owned by the function body.
+#[test]
+fn unused_generic_locals_lower() {
+    common::assert_output_on_both_targets(
+        "unused_locals.trb",
+        &format!(
+            "{}\n{}",
+            common::PRINT_EXTERNS,
+            r#"
+use std::io::{Io, print_line}
+enum Boxed(a) { Box(a), EmptyBox }
+fn main() ->{Io} Nil {
+    let mk = fn(x) { Boxed::Box(x) }
+    let id = fn(x) x
+    let empty = Boxed::EmptyBox
+    print_line("ok")
+}
+"#
+        ),
+        "ok",
+    );
+}
