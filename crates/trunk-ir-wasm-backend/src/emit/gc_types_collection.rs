@@ -697,7 +697,9 @@ mod tests {
                             "%v = wasm.struct_get %arg {{type_idx = {a}, field_idx = 0}} : core.i32"
                         ),
                         "null" => {
-                            format!("%v = wasm.ref_null {{type_idx = {a}}} : {reference}")
+                            format!(
+                                "%v = wasm.ref_null {{heap_type = \"none\", type_idx = {a}}} : {reference}"
+                            )
                         }
                         "cast" => format!(
                             "%v = wasm.ref_cast %arg {{target_type = {reference}, type_idx = {a}}} : {reference}"

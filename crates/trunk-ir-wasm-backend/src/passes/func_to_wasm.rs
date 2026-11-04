@@ -924,24 +924,6 @@ mod tests {
     }
 
     #[test]
-    fn indirect_call_without_exact_signature_is_not_lowered() {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  func.func @caller(%table_index: core.i32, %value: core.i32) -> core.i32 {
-    %result = "func.call_indirect"(%table_index, %value) : core.i32
-    func.return %result
-  }
-}"#,
-        );
-        lower(&mut ctx, module, TypeConverter::new());
-        let output = print_module(&ctx, module.op());
-        assert!(output.contains("func.call_indirect"), "{output}");
-        assert!(!output.contains("wasm.call_indirect"), "{output}");
-    }
-
-    #[test]
     fn lowers_exact_unit_call_indirect_without_an_ssa_result() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
@@ -1117,32 +1099,6 @@ mod tests {
         let output = print_module(&ctx, module.op());
         assert!(output.contains("wasm.return_call_indirect"), "{output}");
         assert!(!output.contains("call_conv"), "{output}");
-    }
-
-    #[test]
-    fn leaves_indirect_tail_transfers_without_an_exact_signature_unconverted() {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  func.func @indirect(%table_index: core.i32, %value: core.i32) -> core.nil {
-    "func.tail_call_indirect"(%table_index, %value)
-  }
-  func.func @malformed(%table_index: core.i32, %value: core.i32) -> core.nil {
-    "func.tail_call_indirect"(%table_index, %value) {signature = core.i32}
-  }
-}"#,
-        );
-
-        lower(&mut ctx, module, TypeConverter::new());
-
-        let output = print_module(&ctx, module.op());
-        assert_eq!(
-            output.matches("func.tail_call_indirect").count(),
-            2,
-            "{output}"
-        );
-        assert!(!output.contains("wasm.return_call_indirect"), "{output}");
     }
 
     #[test]

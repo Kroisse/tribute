@@ -101,9 +101,8 @@ pub(crate) fn extract_function_def(
         .unwrap_or_else(|| SymbolPath::new([func_op.sym_name(ctx)]));
     let ty = func_op.r#type(ctx);
 
-    let function = wasm_dialect::FuncSig::from_type_ref(ctx, ty).ok_or_else(|| {
-        CompilationError::type_error("wasm.func requires valid wasm.func_sig type")
-    })?;
+    let function = wasm_dialect::FuncSig::from_type_ref(ctx, ty)
+        .expect("schema-verified wasm.func has a wasm.func_sig type");
 
     if let Some(result_ty) = function.single_result(ctx) {
         let result_data = ctx.get_type(result_ty);

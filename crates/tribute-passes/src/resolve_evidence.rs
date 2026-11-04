@@ -678,39 +678,11 @@ mod tests {
     fn malformed_final_handle_dispatches_fail_before_mutation() {
         let malformed = [
             (
-                r#"%result = "ability.handle_dispatch"(%ev, %prompt) ({
-      ^body(%inner: !evidence):
-        func.unreachable
-    }) {abilities = []} : core.i32"#,
-                "must be resultless",
-            ),
-            (
-                r#""ability.handle_dispatch"() ({
-      ^body(%inner: !evidence):
-        func.unreachable
-    }) {abilities = []}"#,
-                "requires an evidence operand",
-            ),
-            (
-                r#""ability.handle_dispatch"(%ev) ({
-      ^body(%inner: !evidence):
-        func.unreachable
-    })"#,
-                "requires a prompt-tag operand",
-            ),
-            (
                 r#"ability.handle_dispatch %ev, %tr() attributes {abilities = []} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
                 "prompt-tag operand must have type core.i32",
-            ),
-            (
-                r#""ability.handle_dispatch"(%ev, %prompt) ({
-      ^body(%inner: !evidence):
-        func.unreachable
-    })"#,
-                "requires an abilities list",
             ),
             (
                 r#"ability.handle_dispatch %ev, %prompt(%tr) attributes {abilities = []} {

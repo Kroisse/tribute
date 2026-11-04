@@ -1221,37 +1221,21 @@ mod tests {
 
     #[test]
     fn ordinary_closure_call_result_counts_are_checked_before_mutation() {
-        for (signature_results, call, supported) in [
+        for (call, supported) in [
             (
-                "core.i32",
-                "\"func.call_indirect\"(%callee) {tribute.calling_convention = \"direct\"}",
+                "func.call_indirect %callee() attributes {tribute.calling_convention = \"direct\"} : () -> ()",
                 false,
             ),
             (
-                "core.i32",
-                "%first, %extra = \"func.call_indirect\"(%callee) {tribute.calling_convention = \"direct\"} : core.i32, core.i32",
-                false,
-            ),
-            (
-                "()",
-                "\"func.call_indirect\"(%callee) {tribute.calling_convention = \"direct\"}",
-                false,
-            ),
-            (
-                "core.i32",
-                "%result = \"func.call_indirect\"(%callee) {tribute.calling_convention = \"direct\"} : core.i32",
+                "%result = func.call_indirect %callee() attributes {tribute.calling_convention = \"direct\"} : () -> core.i32",
                 true,
             ),
         ] {
-            // The transfer carries its entry signature; the closure type's
-            // callable is not one.
-            let call = call.replace("{tribute", "{signature = !Entry, tribute");
             let mut ctx = IrContext::new();
             let module = parse_test_module(
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
-            !Entry = func.func_sig<() -> {signature_results}>
             !Callback = closure.closure<func.func_sig<() -> core.i32>>
             func.func @invalid(%callee: !Callback) -> core.i32 {{
                 {call}

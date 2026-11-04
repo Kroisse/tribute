@@ -257,12 +257,6 @@ impl OpRewritePattern for FuncCallIndirectPattern {
         let signature = call.exact_signature(ctx)?;
         let sig_ty = convert_to_clif_func_type(ctx, signature, rewriter.type_converter())?;
         let callable = clif::FuncSig::from_type_ref(ctx, sig_ty)?;
-        let runtime_result_types = callable
-            .results(ctx)
-            .iter()
-            .copied()
-            .filter(|ty| !crate::function::is_nil_type(ctx, *ty))
-            .collect::<Vec<_>>();
         let args = CallLike::call_args(&call, ctx);
         rewriter.ensure(
             callable.inputs(ctx).len() == args.len()
@@ -272,11 +266,6 @@ impl OpRewritePattern for FuncCallIndirectPattern {
                     .zip(args)
                     .all(|(&param, &arg)| param == ctx.value_ty(arg)),
             "arguments do not match the indirect call signature",
-        )?;
-        rewriter.ensure(
-            result_types.as_slice() == callable.results(ctx)
-                || result_types == runtime_result_types,
-            "results do not match the indirect call signature",
         )?;
 
         let new_op = crate::passes::cf_to_clif::rebuild_op_as(ctx, op, "clif.call_indirect");
@@ -721,46 +710,6 @@ mod tests {
     }
 
     #[test]
-    fn indirect_call_without_exact_signature_is_rejected_before_mutation() {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  func.func @caller(%callee: core.ptr) -> core.nil {
-    %unit = "func.call_indirect"(%callee) : core.nil
-    func.return %unit
-  }
-}"#,
-        );
-
-        let error = super::lower(&mut ctx, module, TypeConverter::new()).unwrap_err();
-        assert!(error.to_string().contains("func.call_indirect"), "{error}");
-        let printed = print_module(&ctx, module.op());
-        assert!(printed.contains("func.call_indirect"), "{printed}");
-        assert!(!printed.contains("clif.call_indirect"), "{printed}");
-    }
-
-    #[test]
-    fn indirect_call_does_not_equate_nil_contract_with_no_result() {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  func.func @caller(%callee: core.ptr) -> core.nil {
-    %unit = "func.call_indirect"(%callee) {signature = func.func_sig<() -> ()>} : core.nil
-    func.return %unit
-  }
-}"#,
-        );
-
-        let error = super::lower(&mut ctx, module, TypeConverter::new()).unwrap_err();
-        assert!(error.to_string().contains("func.call_indirect"), "{error}");
-        let printed = print_module(&ctx, module.op());
-        assert!(printed.contains("func.call_indirect"), "{printed}");
-        assert!(!printed.contains("clif.call_indirect"), "{printed}");
-    }
-
-    #[test]
     fn callable_value_is_erased_while_its_exact_contract_stays_target_owned() {
         let result = run_pass(
             r#"core.module @test {
@@ -889,25 +838,6 @@ mod tests {
 
         let object = crate::emit_module_to_native(&ctx, module).unwrap();
         assert!(!object.is_empty());
-    }
-
-    #[test]
-    fn tail_call_indirect_without_exact_signature_is_rejected() {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  func.func @caller(%callee: core.ptr, %value: core.i32) -> core.nil {
-    "func.tail_call_indirect"(%callee, %value)
-  }
-}"#,
-        );
-
-        let error = super::lower(&mut ctx, module, TypeConverter::new()).unwrap_err();
-        assert!(
-            error.to_string().contains("func.tail_call_indirect"),
-            "{error}"
-        );
     }
 
     #[test]

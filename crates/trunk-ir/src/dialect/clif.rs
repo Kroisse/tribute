@@ -725,6 +725,7 @@ pub fn set_indirect_call_signature(
 mod tests {
     use super::*;
     use crate::dialect::func;
+    use crate::op_def::OpDef;
     use crate::op_interface::DynIndirectCallLike;
     use crate::parser::parse_test_module;
     use crate::printer::print_module;
@@ -777,6 +778,55 @@ mod tests {
         assert!(
             printed.contains("clif.call_indirect %0(%1) : (core.i32) -> core.i32"),
             "{printed}"
+        );
+    }
+
+    #[test]
+    fn indirect_call_results_match_the_signature_or_its_runtime_projection() {
+        let violations = |call: &str| {
+            let mut ctx = crate::IrContext::new();
+            let module = parse_test_module(
+                &mut ctx,
+                &format!(
+                    r#"core.module @test {{
+  clif.func @caller(%callee: core.ptr) {{
+    {call}
+    clif.return
+  }}
+}}"#
+                ),
+            );
+            let mut found = String::new();
+            let _ = crate::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
+                if CallIndirect::matches(&ctx, op) {
+                    found = OpDef::of(&ctx, op)
+                        .expect("clif.call_indirect is registered")
+                        .verify(&ctx, op)
+                        .iter()
+                        .format("\n")
+                        .to_string();
+                }
+                std::ops::ControlFlow::Continue(crate::walk::WalkAction::Advance)
+            });
+            found
+        };
+
+        assert_eq!(
+            violations("%a, %b = clif.call_indirect %callee() : () -> (core.i32, core.i64)"),
+            ""
+        );
+        assert_eq!(
+            violations(
+                r#"%a = "clif.call_indirect"(%callee) {sig = clif.func_sig<() -> (core.nil, core.i32)>} : core.i32"#
+            ),
+            ""
+        );
+        let mismatch = violations(
+            r#"%a, %b = "clif.call_indirect"(%callee) {sig = clif.func_sig<() -> (core.i32, core.i64)>} : core.i64, core.i32"#,
+        );
+        assert!(
+            mismatch.contains("results (core.i64, core.i32) match neither"),
+            "{mismatch}"
         );
     }
 

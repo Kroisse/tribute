@@ -709,53 +709,15 @@ fn raw_malformed_source_signature_storage_fails_before_conversion() {
 
 #[test]
 fn malformed_lookup_inputs_fail_before_conversion_and_remain_unchanged() {
-    let malformed = [
-        (
-            r#"core.module @test {
-  tribute_cps.func @broken(%value: core.i32) -> core.i32 convention(direct) {
-    %result = tribute_control.call %value : core.i32
-    tribute_control.return %result
-  }
-}"#,
-            "missing required attribute `callee`",
-        ),
-        (
-            r#"core.module @test {
+    let malformed = [(
+        r#"core.module @test {
   tribute_cps.func @broken(%value: core.i32) -> core.i32 convention(direct) {
     %result = tribute_control.call %value {callee = @missing} : core.i32
     tribute_control.return %result
   }
 }"#,
-            "unresolved callee @missing",
-        ),
-        (
-            r#"core.module @test {
-  tribute_cps.func @broken(%value: core.i32) -> core.i32 convention(direct) {
-    %result = "tribute_cps.call_indirect"(%value, %value) {convention = "direct"} : core.i32
-    tribute_control.return %result
-  }
-}"#,
-            "expected S: tribute_control.func_sig",
-        ),
-        (
-            r#"core.module @test {
-  tribute_cps.func @broken(%value: core.i32) -> core.i32 convention(cps) {
-    %result = "tribute_control.perform"(%value) : core.i32
-    tribute_control.return %result
-  }
-}"#,
-            "missing required attribute `ability`",
-        ),
-        (
-            r#"core.module @test {
-  tribute_cps.func @broken(%value: core.i32) -> core.i32 convention(cps) {
-    %result = "tribute_control.handle"() : core.i32
-    tribute_control.return %result
-  }
-}"#,
-            "expected 3 region(s)",
-        ),
-    ];
+        "unresolved callee @missing",
+    )];
     for (input, expected) in malformed {
         let (mut ctx, module) = parse(input);
         let error = assert_unchanged_on_error(&mut ctx, module, run_pre_cps);
@@ -785,14 +747,11 @@ fn malformed_switch_case_fails_before_conversion_and_is_atomic() {
     let input = r#"core.module @test {
   tribute_cps.func @broken(%value: core.i32) -> core.i32 convention(cps) {
     scf.switch %value {
-      "scf.case"() ({
-        %identity = tribute_cps.lambda(%nested: core.i32) -> core.i32 captures [] entries {
-          direct {
-            tribute_control.return %nested
-          }
+      %identity = tribute_cps.lambda(%nested: core.i32) -> core.i32 captures [] entries {
+        direct {
+          tribute_control.return %nested
         }
-        scf.yield
-      })
+      }
     }
     tribute_control.return %value
   }
@@ -801,7 +760,9 @@ fn malformed_switch_case_fails_before_conversion_and_is_atomic() {
     let error = assert_unchanged_on_error(&mut ctx, module, run_pre_cps);
     assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
     assert!(
-        error.to_string().contains("scf.case requires a value"),
+        error
+            .to_string()
+            .contains("scf.switch body may contain only scf.case and scf.default"),
         "{error}"
     );
 }
@@ -809,28 +770,6 @@ fn malformed_switch_case_fails_before_conversion_and_is_atomic() {
 #[test]
 fn source_shape_validation_rejects_every_malformed_switch_component() {
     let malformed = [
-        (
-            r#"core.module @test {
-  %value = arith.const {value = 0} : core.i32
-  "scf.switch"() ({
-    scf.default {
-      scf.yield
-    }
-  })
-}"#,
-            "one discriminant, no results, and one body region",
-        ),
-        (
-            r#"core.module @test {
-  %value = arith.const {value = 0} : core.i32
-  %result = "scf.switch"(%value) ({
-    scf.default {
-      scf.yield
-    }
-  }) : core.i32
-}"#,
-            "one discriminant, no results, and one body region",
-        ),
         (
             r#"core.module @test {
   %value = arith.const {value = 0} : core.i32
@@ -852,15 +791,6 @@ fn source_shape_validation_rejects_every_malformed_switch_component() {
   }
 }"#,
             "body may contain only scf.case and scf.default",
-        ),
-        (
-            r#"core.module @test {
-  %value = arith.const {value = 0} : core.i32
-  scf.switch %value {
-    "scf.case"() {value = 0}
-  }
-}"#,
-            "arm requires exactly one region",
         ),
         (
             r#"core.module @test {
@@ -962,16 +892,19 @@ fn named_boundaries_report_local_and_core_validation_errors() {
 
     let malformed_delimiter = r#"core.module @test {
   !evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
-  func.func @broken() -> core.never attributes {tribute.calling_convention = "cps"} {
-    "ability.handle_dispatch"() ({
-      ^body(%inner: !evidence):
+  func.func @broken(%ev: !evidence, %prompt: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
+    ability.handle_dispatch %ev, %prompt() attributes {abilities = []} {
+      ^body:
         func.unreachable
-    }) {abilities = []}
+    }
   }
 }"#;
     let (ctx, module) = parse(malformed_delimiter);
     let error = verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap_err();
-    assert!(error.to_string().contains("requires an evidence operand"));
+    assert!(
+        error.to_string().contains("one evidence argument"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -1017,17 +950,6 @@ fn pre_boundary_rejects_recursively_nested_physical_signatures() {
 #[test]
 fn post_boundary_rejects_malformed_physical_callable_transfers() {
     let malformed = [
-        (
-            r#"core.module @test {
-  func.func @callee(%value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-    func.unreachable
-  }
-  func.func @caller(%value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-    "func.tail_call"(%value) {tribute.calling_convention = "cps"}
-  }
-}"#,
-            "requires a resolved callee symbol",
-        ),
         (
             r#"core.module @test {
   func.func @callee(%value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {

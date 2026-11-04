@@ -192,8 +192,7 @@ pub(crate) fn cps_dispatch_signature(ctx: &mut IrContext) -> TypeRef {
 /// and an `anyref` payload. A malformed one is left for the conversion target
 /// to report, before any helper op is inserted.
 pub(crate) fn is_valid_cps_dispatch(ctx: &mut IrContext, op: OpRef) -> bool {
-    if !ctx.op_result_types(op).is_empty()
-        || ctx.op_attrs(op).get_type("answer_type").is_none()
+    if ctx.op_attrs(op).get_type("answer_type").is_none()
         || ctx.op_attrs(op).get_symbol_ref("ability").is_none()
         || ctx.op_attrs(op).get_string_ref("op_name").is_none()
         || ctx.op_operands(op).len() != 4

@@ -183,10 +183,6 @@ fn bodyless_scalar_declarations_need_no_target_binding_or_ownership_actions() {
         "call arguments differ from the exact callable signature",
     );
     assert_plan_error_unchanged(
-        "core.module @test { \"func.func\"() {sym_name = \"bad\", type = core.i32} }",
-        "bodyless function lacks exact signature",
-    );
-    assert_plan_error_unchanged(
         "core.module @test { func.func @managed(%value: tribute_rt.anyref) -> tribute_rt.anyref }",
         "bodyless native declaration exposes a managed reference",
     );
@@ -201,7 +197,7 @@ fn malformed_callable_bodies_fail_before_ownership_analysis_without_mutation() {
     let mut ctx = IrContext::new();
     let module = parse_test_module(
         &mut ctx,
-        "core.module @test { \"func.func\"() ({ func.return }) {sym_name = \"extra\", type = func.func_sig<() -> ()>} }",
+        "core.module @test { func.func @extra() { func.return } }",
     );
     let op = module.ops(&ctx)[0];
     let extra = ctx.create_region(trunk_ir::RegionData {
@@ -223,9 +219,7 @@ fn malformed_callable_bodies_fail_before_ownership_analysis_without_mutation() {
 
 #[test]
 fn revalidation_rejects_a_declaration_changed_to_an_empty_body() {
-    let (mut ctx, module, plan) = build(
-        "core.module @test { \"func.func\"() {sym_name = \"external\", type = func.func_sig<() -> ()>} }",
-    );
+    let (mut ctx, module, plan) = build("core.module @test { func.func @external() }");
     let op = module.ops(&ctx)[0];
     let body = ctx.create_region(trunk_ir::RegionData {
         location: ctx.op(op).location,
@@ -1777,23 +1771,6 @@ fn compatible_cast_and_enum_projection_preserve_borrowed_ownership() {
 }
 
 #[test]
-fn malformed_projection_arity_fails_before_mutation() {
-    assert_plan_error_unchanged(
-        r#"core.module @test {
-  !Child = adt.struct<Child(value: core.i32)>
-  !ChildRef = adt.typeref<{name = "Child"}>
-  !Box = adt.struct<Box(child: !ChildRef)>
-  !BoxRef = adt.typeref<{name = "Box"}>
-  func.func @load(%owner: !BoxRef) -> !ChildRef {
-    %child, %extra = "adt.struct_get"(%owner) {field = 0, type = !Box} : !ChildRef, !ChildRef
-    func.return %child
-  }
-}"#,
-        "ADT projection must have exactly one result",
-    );
-}
-
-#[test]
 fn mismatched_projection_managed_types_fail_before_mutation() {
     for (source_ty, result_ty) in [("!BoxRef", "!BoxRef"), ("!ChildRef", "!ChildRef")] {
         assert_plan_error_unchanged(
@@ -2820,8 +2797,12 @@ fn stale_identity_unsupported_regions_and_malformed_calls_fail_unchanged() {
         r#"core.module @test {
   !R = adt.typeref<{name = "R"}>
   !Layout = adt.struct<R(x: core.i32)>
-  func.func @f(%value: !R) -> !R {
-    %x = "scf.if"(%value) ({ func.return %value }) : !R
+  func.func @f(%value: !R, %cond: core.i1) -> !R {
+    %x = scf.if %cond -> (!R) {
+      scf.yield %value
+    } else {
+      scf.yield %value
+    }
     func.return %x
   }
 }"#,
@@ -2879,14 +2860,6 @@ fn stale_identity_unsupported_regions_and_malformed_calls_fail_unchanged() {
   func.func @f(%value: !BRef) -> core.nil {
     %env = adt.struct_new %value {type = !Env} : !Env
     func.return
-  }
-}"#,
-        r#"core.module @test {
-  !R = adt.typeref<{name = "R"}>
-  !Layout = adt.struct<R(x: core.i32)>
-  func.func @f(%value: !R, %callee: func.func_sig<(!R) -> !R>) -> !R {
-    %result = "func.call_indirect"(%callee, %value) : !R
-    func.return %result
   }
 }"#,
         r#"core.module @test {

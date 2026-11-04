@@ -618,35 +618,4 @@ mod tests {
         let module = parse_test_module(&mut ctx, &module_text(SELECT));
         assert!(prepare_evidence_runtime(&ctx, module).is_ok());
     }
-
-    #[test]
-    fn malformed_cps_dispatch_is_rejected_without_mutation() {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(
-            &mut ctx,
-            &module_text(
-                r#"  func.func @cps(%ev: !Evidence, %dispatch: !Closure, %resume: !Closure, %payload: tribute_rt.anyref) {
-    %bad = "effect.dispatch_cps"(%ev, %dispatch, %resume, %payload) {ability = @State, op_name = "get", answer_type = core.i32} : core.i32
-  }"#,
-            ),
-        );
-        let runtime = prepare_evidence_runtime(&ctx, module).unwrap();
-        let before = print_module(&ctx, module.op());
-        let function = module
-            .ops(&ctx)
-            .iter()
-            .copied()
-            .find_map(|op| {
-                func::Func::from_op(&ctx, op)
-                    .ok()
-                    .filter(|f| f.sym_name(&ctx) == "cps")
-            })
-            .unwrap();
-
-        let error = lower_evidence_func(&mut ctx, function, &runtime)
-            .expect_err("a result-bearing final dispatch is malformed");
-
-        assert!(error.to_string().contains("effect.dispatch_cps"), "{error}");
-        assert_eq!(print_module(&ctx, module.op()), before);
-    }
 }

@@ -271,10 +271,13 @@ variable bindings, then projections and type lists. `OpDef::verify` adds the
 `#[verify]` hook after them; each stage runs only if the earlier ones passed.
 `validate_operation_verifiers` runs `OpDef::verify` on each operation.
 Remaining operation-specific checks run afterwards and may assume the
-declared shape. The `tribute_control` local validator and the native backend
-boundary (`validate_clif_ir`) run `OpDef::verify` the same way before their
-own checks, so those checks cover only what the definition cannot express,
-such as symbol lookups, enclosing callables, and region contents. A check
+declared shape. The `tribute_control` local validator and the native and Wasm
+backend boundaries (`validate_clif_ir`, `validate_wasm_ir`) run
+`OpDef::verify` the same way before their own checks, so those checks
+cover only what the definition cannot express, such as symbol lookups,
+enclosing callables, and region contents. Passes and backends assume
+schema-valid input and do not repeat these checks; a test does not write a
+schema-violating operation in generic form to exercise a pass. A check
 that reads only the operation itself belongs in its `#[verify]` hook; the
 `tribute_control` local validator reaches each operation's checks on its
 placement and regions through the `LocalValidation` interface.

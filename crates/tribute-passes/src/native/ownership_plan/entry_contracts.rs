@@ -250,7 +250,7 @@ fn validate_bodyless_signature(
         .op_attrs(op)
         .get_type("type")
         .and_then(|ty| func::FuncSig::from_type_ref(ctx, ty))
-        .ok_or_else(|| OwnershipPlanError::new("bodyless function lacks exact signature"))?;
+        .expect("a schema-valid function declares a func signature");
     if ctx.op_attrs(op).get_str("abi") == Some("C") {
         return Ok(signature);
     }

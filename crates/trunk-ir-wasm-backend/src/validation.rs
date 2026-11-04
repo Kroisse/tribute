@@ -9,6 +9,7 @@ use trunk_ir::IrContext;
 use trunk_ir::Module;
 use trunk_ir::SymbolPath;
 use trunk_ir::dialect::wasm as wasm_dialect;
+use trunk_ir::op_def::OpDef;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::symbol_table::{SymbolTable, qualified_name};
@@ -92,6 +93,21 @@ fn validate_operation(
             op_data.name.display(ctx)
         ));
     }
+    // Operation-specific checks below assume the declared schema.
+    if let Some(def) = OpDef::of(ctx, op) {
+        let violations = def.verify(ctx, op);
+        if !violations.is_empty() {
+            errors.extend(
+                violations
+                    .iter()
+                    .map(|violation| format!("{}: {violation}", op_data.name.display(ctx))),
+            );
+            for region in ctx.op_regions(op) {
+                validate_region(ctx, region, depth + 1, symbols, errors);
+            }
+            return;
+        }
+    }
     if wasm_dialect::CallIndirect::matches(ctx, op)
         && let Err(error) = crate::emit::helpers::exact_call_indirect_signature(ctx, op)
     {
@@ -107,22 +123,11 @@ fn validate_operation(
     }
 }
 
-/// A `wasm.ref_upcast` must satisfy its definition and widen its operand
-/// without a runtime cast.
+/// A `wasm.ref_upcast` must widen its operand without a runtime cast.
 fn validate_ref_upcast(ctx: &IrContext, op: OpRef, errors: &mut Vec<String>) {
     let Ok(upcast) = wasm_dialect::RefUpcast::from_op(ctx, op) else {
         return;
     };
-    // The assignability check below reads the declared operand and result.
-    let violations = <wasm_dialect::RefUpcast as DialectOp>::DEF.verify(ctx, op);
-    if !violations.is_empty() {
-        errors.extend(
-            violations
-                .iter()
-                .map(|violation| format!("wasm.ref_upcast: {violation}")),
-        );
-        return;
-    }
     let operand = ctx.value_ty(upcast.r#ref(ctx));
     let result = upcast.result_ty(ctx);
     if !crate::is_wasm_physical_argument_assignable(ctx, operand, result) {
@@ -278,13 +283,10 @@ fn validate_direct_callable_contracts(
     if !is_direct {
         return;
     }
-    let Some(callee) = ctx.op_attrs(op).get_symbol_ref("callee") else {
-        errors.push(format!(
-            "wasm.{} requires a symbol callee attribute",
-            ctx.op(op).name.display(ctx)
-        ));
-        return;
-    };
+    let callee = ctx
+        .op_attrs(op)
+        .get_symbol_ref("callee")
+        .expect("schema-verified direct call has a symbol callee");
     let Some(resolved) = resolve_wasm_callee(ctx, symbols, op, callee) else {
         return;
     };
@@ -355,25 +357,23 @@ fn validate_return_call_indirect(ctx: &IrContext, op: OpRef, errors: &mut Vec<St
     if !wasm_dialect::ReturnCallIndirect::matches(ctx, op) {
         return;
     }
-    if let Err(error) = crate::emit::helpers::exact_return_call_indirect_signature(ctx, op) {
-        errors.push(error.to_string());
-        return;
-    }
+    let signature = match crate::emit::helpers::exact_return_call_indirect_signature(ctx, op) {
+        Ok(signature) => signature,
+        Err(error) => {
+            errors.push(error.to_string());
+            return;
+        }
+    };
     let Some(caller) = enclosing_wasm_func_signature(ctx, op) else {
         errors.push(
             "wasm.return_call_indirect requires a valid enclosing wasm.func signature".into(),
         );
         return;
     };
-    let Some(signature) = ctx
-        .op_attrs(op)
-        .get_type("signature")
-        .and_then(|ty| wasm_dialect::FuncSig::from_type_ref(ctx, ty))
-    else {
-        // The exact helper above already produced the local diagnostic.
-        return;
-    };
-    if !tail_results_agree(ctx, caller.results(ctx), signature.results(ctx)) {
+    let signature = crate::emit::helpers::func_type_parts(ctx, signature)
+        .map(|(_, results)| results)
+        .expect("schema-verified wasm.return_call_indirect has a wasm.func_sig signature");
+    if !tail_results_agree(ctx, caller.results(ctx), signature) {
         errors.push("wasm.return_call_indirect tail caller/callee result lists differ".into());
     }
 }
@@ -456,24 +456,6 @@ mod tests {
         rejects(
             r#"core.module @test {
   wasm.func @caller(%table_index: core.i32, %value: core.i32) -> core.nil {
-    "wasm.return_call_indirect"(%table_index, %value)
-  }
-}"#,
-            "lacks signature",
-        );
-
-        rejects(
-            r#"core.module @test {
-  wasm.func @caller(%table_index: core.i32, %value: core.i32) -> core.nil {
-    "wasm.return_call_indirect"(%table_index, %value) {signature = core.i32}
-  }
-}"#,
-            "lacks signature",
-        );
-
-        rejects(
-            r#"core.module @test {
-  wasm.func @caller(%table_index: core.i32, %value: core.i32) -> core.nil {
     wasm.return_call_indirect %table_index(%value) : (core.i32) -> core.i32
   }
 }"#,
@@ -482,20 +464,11 @@ mod tests {
 
         rejects(
             r#"core.module @test {
-  wasm.func @caller() -> core.nil {
-    "wasm.return_call_indirect"() {signature = wasm.func_sig<() -> core.nil>}
-  }
-}"#,
-            "requires a table index operand",
-        );
-
-        rejects(
-            r#"core.module @test {
   wasm.func @caller(%table_index: core.i64, %value: core.i32) -> core.nil {
     wasm.return_call_indirect %table_index(%value) : (core.i32) -> core.nil
   }
 }"#,
-            "first operand must be an i32 table index",
+            "wasm.return_call_indirect:",
         );
 
         rejects(
@@ -825,7 +798,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_direct_result_narrowing_and_missing_callee_contracts() {
+    fn rejects_direct_result_narrowing() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
@@ -852,28 +825,6 @@ mod tests {
             error.to_string().contains("wasm.call result list mismatch"),
             "{error}"
         );
-
-        for callee in ["", " {callee = 0}"] {
-            let mut ctx = IrContext::new();
-            let module = parse_test_module(
-                &mut ctx,
-                &format!(
-                    "core.module @test {{
-  wasm.func @caller() -> core.nil {{
-    wasm.call{callee}
-    wasm.return
-  }}
-}}"
-                ),
-            );
-            let error = validate_wasm_ir(&ctx, module).expect_err("callee must be a symbol");
-            assert!(
-                error
-                    .to_string()
-                    .contains("wasm.call requires a symbol callee attribute"),
-                "{error}"
-            );
-        }
     }
 
     #[test]
