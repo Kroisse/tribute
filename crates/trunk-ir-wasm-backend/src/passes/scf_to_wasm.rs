@@ -189,6 +189,8 @@ enum SwitchLoweringReason {
     MalformedShape,
     UnsupportedDiscriminantType(String),
     CaseValueOutsideRange(SwitchWidth),
+    TooManyResults(usize),
+    ResultDefaultWithoutYield,
 }
 
 impl std::fmt::Display for SwitchLoweringReason {
@@ -206,6 +208,15 @@ impl std::fmt::Display for SwitchLoweringReason {
             }
             Self::CaseValueOutsideRange(SwitchWidth::I64) => {
                 write!(f, "case integer value is outside the i64 range")
+            }
+            Self::TooManyResults(count) => {
+                write!(f, "switch has {count} results; at most one is supported")
+            }
+            Self::ResultDefaultWithoutYield => {
+                write!(
+                    f,
+                    "a switch with a result and no cases needs a default ending in scf.yield"
+                )
             }
         }
     }
@@ -244,6 +255,27 @@ fn switch_shape(ctx: &IrContext, op: OpRef) -> Option<ScfSwitchShape> {
 
 fn switch_arms(ctx: &IrContext, op: OpRef) -> Result<ScfSwitchArms, SwitchLoweringReason> {
     let shape = switch_shape(ctx, op).ok_or(SwitchLoweringReason::MalformedShape)?;
+    let result_count = ctx.op_results(op).len();
+    if result_count > 1 {
+        return Err(SwitchLoweringReason::TooManyResults(result_count));
+    }
+    // Without cases the default's ops replace the switch, so its yield must
+    // provide the result.
+    if result_count == 1
+        && shape.cases.is_empty()
+        && !ctx
+            .region(shape.default)
+            .blocks
+            .first()
+            .is_some_and(|&entry| {
+                ctx.block(entry)
+                    .ops
+                    .last()
+                    .is_some_and(|&last| scf::Yield::matches(ctx, last))
+            })
+    {
+        return Err(SwitchLoweringReason::ResultDefaultWithoutYield);
+    }
     let Some(width) = switch_width(ctx, shape.discriminant) else {
         let ty = ctx.get_type(ctx.value_ty(shape.discriminant));
         return Err(SwitchLoweringReason::UnsupportedDiscriminantType(format!(
@@ -337,9 +369,6 @@ impl OpRewritePattern for ScfSwitchPattern<'_> {
         // A switch with a result yields it from each nested `wasm.if`, so
         // the created ifs declare its target type.
         let switch_results = rewriter.result_types(ctx, op);
-        if switch_results.len() > 1 {
-            return None;
-        }
         let has_result = !switch_results.is_empty();
         let result_types = if has_result {
             switch_results
@@ -1028,6 +1057,28 @@ mod tests {
   }
 }"#,
                 "case integer value is outside the i32 range",
+            ),
+            (
+                "rejects a switch with two results without mutating",
+                r#"core.module @test {
+  func.func @main(%choice: core.i32, %a: core.i32) -> core.nil {
+    %r, %s = scf.index_switch %choice : (core.i32) -> (core.i32, core.i32)
+    case 0 { scf.yield %a, %a }
+    default { scf.yield %a, %a }
+    func.return
+  }
+}"#,
+                "switch has 2 results; at most one is supported",
+            ),
+            (
+                "rejects a caseless result switch whose default does not yield",
+                r#"core.module @test {
+  func.func @main(%choice: core.i32) -> core.i32 {
+    %r = scf.index_switch %choice : (core.i32) -> core.i32
+    default { func.unreachable }
+  }
+}"#,
+                "a switch with a result and no cases needs a default ending in scf.yield",
             ),
         ] {
             assert_switch_rejected_unchanged(case, input, reason);
