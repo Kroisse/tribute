@@ -1047,6 +1047,52 @@ fn main() -> Nil {
     insta::assert_yaml_snapshot!(result.diagnostics);
 }
 
+/// A `fn` arm that passes a callable with an `op` operation to a generalized
+/// value whose row variable occurs in a parameter type is rejected: each use
+/// of the value instantiates the row variable, so the argument's row reaches
+/// the arm.
+#[salsa_test]
+fn diag_fn_arm_passes_op_callback_to_generalized_value(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability Counter {
+    fn next() -> Int
+}
+
+ability Stop {
+    op stop() -> Never
+}
+
+fn make() ->{} fn(fn() ->{e} Int) ->{e} Int {
+    fn(k: fn() ->{e} Int) ->{e} Int { k() }
+}
+
+fn stopper() ->{Stop} Int { Stop::stop() }
+
+fn run(comp: fn() ->{Counter} Int) ->{Stop} Int {
+    handle comp() {
+        fn Counter::next() {
+            let h = make()
+            h(stopper)
+        }
+    }
+}
+
+fn main() -> Nil {
+    let _ = handle run(fn() { Counter::next() }) {
+        op Stop::stop() { +0 }
+    }
+    Nil
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
 /// A `handle` inside a `fn` arm that handles the callable's concrete label
 /// does not cover an `op` operation the instance passes through the row
 /// variable.

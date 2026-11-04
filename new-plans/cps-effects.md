@@ -99,9 +99,10 @@ fn(a) -> b ≡ fn(a) ->{e} b
 바뀌지 않는다. Row의 tail은 다음과 같이 읽는다.
 
 ```text
-class 변수인 tail                       → 그 인스턴스에 고정된 class(상한이면 상한)
-정의 자신의 tail 중 class 변수가 아닌 것 → 요구 없음
-그 밖의 tail                            → Cps
+class 변수인 tail                            → 그 인스턴스에 고정된 class(상한이면 상한)
+정의 자신의 tail 중 class 변수가 아닌 것      → 요구 없음
+매개변수 타입에 나타나지 않는 `body` tail     → 요구 없음
+그 밖의 tail                                 → Cps
 ```
 
 [Class 변수](#row-변수의-convention-class)의 requirement는 인스턴스가
@@ -113,14 +114,34 @@ Annotation을 생략한 정의와 열린 row를 적은 정의가 같다. 그런 
 바꾸지 않는다. 본문은 tail을 추상 변수로 두고 한 번 검사되므로, 호출하는 쪽이 그
 tail에 어떤 ability를 넘기더라도 본문은 그 ability의 operation에 닿지 못한다.
 그러므로 effect-polymorphic `add`와 `fn f() ->{e} Int`는 Direct이고,
-명시적인 `->{}`도 닫힌 빈 row이므로 Direct다. 마지막 줄에는 ability 인자에 나타난
-tail, 어느 scheme도 양화하지 않은 tail, 그리고 정의 자신의 row가 아닌 자리에 적은
-열린 row의 tail 중 class 변수가 아닌 것이 들어간다. 정의 자신의 tail이라도
+명시적인 `->{}`도 닫힌 빈 row이므로 Direct다.
+
+셋째 줄은 정의 안의 어느 callable type의 매개변수 타입에도 나타나지 않는
+[`body` binder](ir.md#row-binder)의 tail이다. 정의의 signature와 본문의 모든 값
+type을 보며, 매개변수 타입 안에 중첩된 callable type의 row도 그 매개변수 타입에
+나타난 것으로 본다. 판정은 binder마다 정의 전체에서 한 번 하므로, 정의 안에서 그
+tail의 callable을 만드는 쪽과 부르는 쪽이 같은 class를 읽는다. 이렇게 읽어도
+되는 것은 매개변수성 때문이다.
+
+- `body` binder는 정의의 scheme이 양화하지 않으므로 호출자가 그 자리에 row를
+  넘기지 않는다. 그 tail을 row에 가진 값은 정의 안의 람다이거나, 그 tail을 row
+  인자로 받은 참조나 그 tail의 값이 돌려준 것이다. 그 값들은 tail을 추상 변수로
+  두고 만들어졌으므로 그 tail을 통해 어떤 ability의 operation에도 닿지 못한다.
+- Tail의 정체를 잃는 자리는 매개변수뿐이다. 람다의 별칭과 일반화된 계산 결과의
+  사용은 `instantiate`를 거치지 않는다. 그래서 타입 검사가 사용마다 그 tail을 다른
+  row로 인스턴스화해도 IR의 값 type에는 `body` binder가 남는다. 그 값의 매개변수
+  자리에 넘긴 인자는 그 row의 operation에 닿을 수 있으며, 그 인자를 받은 값이 다시
+  돌려주는 callable도 그렇다
+  ([지역 람다의 양화와 인스턴스화](ir.md#지역-람다의-양화와-인스턴스화)).
+
+그래서 매개변수 타입에 나타나는 `body` tail은 마지막 줄에 든다. 마지막 줄에는 ability
+인자에 나타난 tail, 매개변수 타입에 나타나는 `body` tail, 그리고 정의 자신의 row가
+아닌 자리에 적은 열린 row의 tail 중 class 변수가 아닌 것이 들어간다. 정의 자신의 tail이라도
 [여러 tail의 합집합](ir.md#tail의-합집합)인 것은 source를 통해 callable에 닿고,
 본문이 없는 정의의 tail은 본문이 무엇에 닿는지 알 수 없으므로 둘 다 마지막 줄에
 들어간다.
 
-정의가 `Cps`가 아니면 그 row에는 `op`를 가진 ability도 class 없는 tail도 없다.
+정의가 `Cps`가 아니면 그 row에는 `op`를 가진 ability도 `Cps`로 읽는 tail도 없다.
 본문의 `handle`, `resume`, `Cps` 호출은
 [값 delimiter](#값-delimiter) 안에서 실행한다. 호출자의 convention은
 호출 대상의 본문 때문에 달라지지 않는다.
@@ -208,6 +229,7 @@ class({A₁, ..., Aₙ | e}) = 위 값 ⊔ class(e)
 
 class(e) = 참조를 포함한 인스턴스가 e에 고정한 class   (e가 그 인스턴스의 class 변수)
          = 참조를 담은 본문이 e를 읽는 class          (e가 람다가 양화한 local binder)
+         = Direct                                       (e가 매개변수 타입에 나타나지 않는 body binder)
          = Cps                                          (그 밖의 row 변수)
 ```
 
@@ -308,10 +330,12 @@ pass가 정한 convention이 아니다. Arm의 정의에 드러나는 위반은 
   `instantiate`가 넘기는 row로 읽는다. 선언을 읽을 수 없는 ability는 `op`를 선언한
   것으로 본다.
 - [abilities.md](abilities.md#fn-operation-handler)의 tail 예외 가운데 `body`
-  tail은 이렇게 읽는다. `body` tail은 callee 값 type의 어느 매개변수 타입에도 나타나지 않으면 ability를 더하지
-  않고, 나타나면 `op`를 선언한 ability를 담을 수 있다고 본다. 람다의 별칭과 일반화된
-  계산 결과의 사용에는 `instantiate`가 없어서 인자의 row를 그 tail에 이어 읽을 수 없기
-  때문이다.
+  tail은 [tail 규칙](#row와-호출-규약)대로 읽는다. 정의 안의 어느 매개변수 타입에도
+  나타나지 않는 `body` tail은 ability를 더하지 않고, 나타나면 `op`를 선언한 ability를
+  담을 수 있다고 본다. 람다의 별칭과 일반화된 계산 결과의 사용에는 `instantiate`가
+  없어서 인자의 row를 그 tail에 이어 읽을 수 없기 때문이다. Callee 값 type의 매개변수
+  타입에 나타나는 tail은 정의 안의 매개변수 타입에도 나타나므로, 이 판정은 callee 값
+  type만 보는 것보다 보수적이며 class 특수화와 같은 class를 읽는다.
 - 직접 호출은 callee 인스턴스의 row를, 간접 호출은 callee 값 type의 row를 이 표로
   읽는다. Arm 안의 `handle` body에 있는 호출은 그 row에서 둘러싼 `handle`들이 처리하는
   label을 뺀다. 남은 row가 `op`를 선언한 ability를 담으면 위반이다.
@@ -320,11 +344,15 @@ pass가 정한 convention이 아니다. Arm의 정의에 드러나는 위반은 
   바깥 arm의 일부로 검사한다.
 
 이 검사가 받아들인 호출의 convention은 `Cps`가 아니다. `fn` arm은 continuation frame
-없이 실행되기 때문이다. 정의 자신의 tail 가운데 어떤 callable에도 닿지 않는 것은
-[tail 규칙](#row와-호출-규약)이 요구 없음으로 읽으므로 convention을 강하게 하지
-않는다. Class 특수화가 `Cps`로 읽는 그 밖의 class 없는 tail(`body`, `ability_arg`)을
-거치는 호출도 검사를 통과하면, class 특수화는 그 호출을 `Cps`가 아닌 convention으로
-부를 수 있어야 한다.
+없이 실행되기 때문이다. 검사가 ability를 더하지 않는 class 없는 tail은 정의 자신의
+tail 가운데 어떤 callable에도 닿지 않는 것과 매개변수 타입에 나타나지 않는 `body`
+tail이며, [tail 규칙](#row와-호출-규약)이 둘 다 요구 없음으로 읽으므로 convention을
+강하게 하지 않는다. 매개변수 타입에 나타나는 `body` tail은 `op`를 선언한 ability를
+담을 수 있다고 보므로 그 tail을 거치는 호출은 검사를 통과하지 못한다. 그래서
+`body` tail을 거치는 호출 가운데 검사가 받아들인 것은 class 특수화가 `Cps`로 읽는
+tail을 거치지 않으며, 만드는 쪽과 부르는 쪽이 같은 class를 읽으므로 값의 trap entry에
+들어가지 않는다. Class 특수화가 `Cps`로 읽는 `ability_arg` tail을 거치는 호출도 검사를
+통과하면, class 특수화는 그 호출을 `Cps`가 아닌 convention으로 부를 수 있어야 한다.
 
 위반은 그 호출의 source 위치를 가진 컴파일 에러다. 진단은 arm이 처리하는 operation과
 callee가 닿는 `op` ability를 밝힌다. 그 ability가 인스턴스의 row 인자에서 오면, 진단은

@@ -2079,3 +2079,65 @@ fn main() ->{Io} Nil {
 "#;
     assert_output_on_both_targets("fn_arm_handles_row_variable_label.trb", source, "6");
 }
+
+/// A `fn` arm may call a value whose generalized row variable occurs in no
+/// parameter type: the value cannot perform through it, so the call does not
+/// suspend.
+#[test]
+fn test_fn_arm_calls_generalized_value_without_parameter_rows() {
+    let source = r#"
+use std::io::{Io, print_line}
+
+ability Counter {
+    fn next() -> Int
+}
+
+fn make() ->{} fn() ->{e} Int {
+    fn() { +7 }
+}
+
+fn run(comp: fn() ->{Counter} Int) -> Int {
+    handle comp() {
+        fn Counter::next() {
+            let h = make()
+            h()
+        }
+    }
+}
+
+fn main() ->{Io} Nil {
+    let r = run(fn() { Counter::next() + Counter::next() })
+    print_line(r.to_string)
+}
+"#;
+    assert_output_on_both_targets("fn_arm_generalized_value_call.trb", source, "14");
+}
+
+/// A generalized value whose row variable occurs in no parameter type can be
+/// passed where a row with abilities is expected.
+#[test]
+fn test_generalized_value_without_parameter_rows_passed_to_ability_row() {
+    let source = r#"
+use std::io::{Io, print_line}
+
+ability Counter {
+    fn next() -> Int
+}
+
+fn make() ->{} fn() ->{e} Int {
+    fn() { +7 }
+}
+
+fn run(comp: fn() ->{Counter} Int) -> Int {
+    handle comp() {
+        fn Counter::next() { +1 }
+    }
+}
+
+fn main() ->{Io} Nil {
+    let h = make()
+    print_line(run(h).to_string)
+}
+"#;
+    assert_output_on_both_targets("generalized_value_to_ability_row.trb", source, "7");
+}

@@ -874,3 +874,75 @@ fn a_tail_passed_for_a_cps_own_tail_is_a_class_variable() {
         ],
     );
 }
+
+/// A `body` tail that occurs in no parameter type requires nothing, so the
+/// definition that makes the callable and the transfer through it both read
+/// it as `Direct`.
+#[test]
+fn a_body_tail_outside_parameter_types_requires_nothing() {
+    let printed = specialized(
+        r#"core.module @m {
+  tribute_control.func @make['a0]() -> tribute_control.func_sig<() -> core.i32 row(| 'a0)> {
+    %f = tribute_control.lambda() -> core.i32 row(| 'a0) captures [] {
+      %c = arith.const {value = 7} : core.i32
+      tribute_control.return %c
+    }
+    tribute_control.return %f
+  }
+  tribute_control.func @main[body 'a0]() -> core.i32 {
+    %h = tribute_control.call @make() attributes {row_args = [{tail = 0}]} : () -> tribute_control.func_sig<() -> core.i32 row(| 'a0)>
+    %r = tribute_control.call_indirect %h() : () -> core.i32 row(| 'a0)
+    tribute_control.return %r
+  }
+}"#,
+    );
+    assert_contains(
+        &printed,
+        &[
+            "tribute_cps.func @\"make$9D\"['a0]() -> !t0 convention(direct) {",
+            "captures [] entries {\n        direct {",
+            "call @\"make$9D\"() attributes {row_args = [{tail = 0}]}",
+            "tribute_cps.call_indirect %0() attributes {convention = \"direct\"} : () -> core.i32 row(| 'a0)",
+        ],
+    );
+}
+
+/// A `body` tail that occurs in a parameter type of any value of the
+/// definition reads `Cps` everywhere in it: an argument there may reach an
+/// operation through the tail.
+#[test]
+fn a_body_tail_in_a_parameter_type_reads_cps() {
+    let printed = specialized(
+        r#"core.module @m {
+  tribute_control.func @make['a0]() -> tribute_control.func_sig<() -> core.i32 row(| 'a0)> {
+    %f = tribute_control.lambda() -> core.i32 row(| 'a0) captures [] {
+      %c = arith.const {value = 7} : core.i32
+      tribute_control.return %c
+    }
+    tribute_control.return %f
+  }
+  tribute_control.func @wrap['a0]() -> tribute_control.func_sig<(tribute_control.func_sig<() -> core.i32 row(| 'a0)>) -> core.i32 row(| 'a0)> {
+    %f = tribute_control.lambda(%k: tribute_control.func_sig<() -> core.i32 row(| 'a0)>) -> core.i32 row(| 'a0) captures [] {
+      %r = tribute_control.call_indirect %k() : () -> core.i32 row(| 'a0)
+      tribute_control.return %r
+    }
+    tribute_control.return %f
+  }
+  tribute_control.func @main[body 'a0]() -> core.i32 {
+    %h = tribute_control.call @make() attributes {row_args = [{tail = 0}]} : () -> tribute_control.func_sig<() -> core.i32 row(| 'a0)>
+    %w = tribute_control.call @wrap() attributes {row_args = [{tail = 0}]} : () -> tribute_control.func_sig<(tribute_control.func_sig<() -> core.i32 row(| 'a0)>) -> core.i32 row(| 'a0)>
+    %r = tribute_control.call_indirect %h() : () -> core.i32 row(| 'a0)
+    tribute_control.return %r
+  }
+}"#,
+    );
+    assert_contains(
+        &printed,
+        &[
+            "call @make() attributes {row_args = [{tail = 0}]}",
+            "call @wrap() attributes {row_args = [{tail = 0}]}",
+            "tribute_cps.call_indirect %0() attributes {convention = \"cps\"} : () -> core.i32 row(| 'a0)",
+        ],
+    );
+    assert!(!printed.contains("make$9"), "{printed}");
+}

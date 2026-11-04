@@ -212,6 +212,9 @@ pub(crate) struct Function {
     pub(crate) root_entry: bool,
     /// Tails that select a class variable without looking at callees.
     pub(crate) selecting: HashSet<u32>,
+    /// Tails that occur in a parameter type of a callable type in its
+    /// signature or body, at any depth.
+    pub(crate) parameter_tails: HashSet<u32>,
     pub(crate) references: Vec<Reference>,
     /// Its own tail where that tail reads `Cps` without a class variable.
     pub(crate) cps_tail: Option<u32>,
@@ -246,6 +249,7 @@ impl Function {
                 }
             });
         };
+        let mut parameter_tails = HashSet::default();
         let mut references = Vec::new();
         // A definition without a body is one external symbol with one ABI,
         // so it has no class variables.
@@ -253,8 +257,10 @@ impl Function {
             for &ty in signature.inputs(ctx).iter().chain(signature.results(ctx)) {
                 tail_of(ty);
             }
+            parameter_tails_in(ctx, ty, &mut parameter_tails);
             for ty in body_value_types(ctx, body) {
                 tail_of(ty);
+                parameter_tails_in(ctx, ty, &mut parameter_tails);
             }
             let _ = walk_region::<()>(ctx, body, &mut |inner| {
                 let rows = tribute_control::row_args(ctx, inner).unwrap_or_default();
@@ -287,6 +293,7 @@ impl Function {
             ty,
             root_entry,
             selecting,
+            parameter_tails,
             references,
             cps_tail: None,
             selected: Vec::new(),
@@ -327,6 +334,22 @@ impl Function {
             row.tail = None;
         }
         row
+    }
+
+    /// How an instance of this definition reads rows, with `params` the
+    /// classes of its class variables.
+    pub(crate) fn reader<'a>(
+        &'a self,
+        requirements: &'a HashMap<SymbolPath, CallingConvention>,
+        params: HashMap<u32, Class>,
+    ) -> Reader<'a> {
+        Reader {
+            binders: self.binders.clone(),
+            parameter_tails: &self.parameter_tails,
+            requirements,
+            params,
+            locals: Locals::default(),
+        }
     }
 
     /// Whether binder `index` may be a class variable.
@@ -382,6 +405,36 @@ fn table_callee(
         .map(|(_, target)| Some(target.leaf()?.to_string()))
         .collect::<Option<Vec<_>>>()?;
     Some((name.strip_suffix(TABLE_SUFFIX)?.to_owned(), targets))
+}
+
+/// Add to `tails` the tails of the rows `ty` holds in a parameter type of a
+/// callable type, at any depth: every row inside a callable's input, and
+/// those the callables in its results and elements hold.
+fn parameter_tails_in(ctx: &IrContext, ty: TypeRef, tails: &mut HashSet<u32>) {
+    let mut seen = HashSet::default();
+    let mut pending = vec![ty];
+    while let Some(ty) = pending.pop() {
+        if !seen.insert(ty) {
+            continue;
+        }
+        if let Some(signature) = FuncSig::from_type_ref(ctx, ty) {
+            for &input in signature.inputs(ctx).iter() {
+                tribute_control::visit_rows(ctx, input, &mut |row| {
+                    if let Ok(Row {
+                        tail: Some(tail), ..
+                    }) = row
+                    {
+                        tails.insert(tail);
+                    }
+                });
+            }
+            pending.extend(signature.results(ctx));
+        } else if let Some(elements) = tribute_control::logical_tuple_elements(ctx, ty) {
+            pending.extend(elements);
+        } else {
+            pending.extend(ctx.get_type(ty).params.iter().copied());
+        }
+    }
 }
 
 /// The types of every value a body defines: operation results and block
@@ -478,6 +531,8 @@ pub(crate) fn class_positions(functions: &[Function]) -> HashMap<String, Vec<u32
 /// bodies.
 pub(crate) struct Reader<'a> {
     pub(crate) binders: Vec<RowBinder>,
+    /// The tails of its definition that occur in a parameter type.
+    pub(crate) parameter_tails: &'a HashSet<u32>,
     pub(crate) requirements: &'a HashMap<SymbolPath, CallingConvention>,
     pub(crate) params: HashMap<u32, Class>,
     pub(crate) locals: Locals,
@@ -519,7 +574,11 @@ impl Reader<'_> {
     }
 
     /// The class of binder `tail` at `at`. A local binder not yet settled
-    /// reads as `Direct`, the start of their least fixed point.
+    /// reads as `Direct`, the start of their least fixed point. A `body`
+    /// binder that occurs in no parameter type requires nothing: every value
+    /// whose row has it was made with it abstract, and no argument of
+    /// another row reaches it (`new-plans/cps-effects.md`, "Row와 호출
+    /// 규약").
     fn tail(&self, ctx: &IrContext, tail: u32, at: OpRef) -> Class {
         let kind = usize::try_from(tail)
             .ok()
@@ -527,6 +586,7 @@ impl Reader<'_> {
         let class = match kind {
             Some(RowBinder::Param) => self.params.get(&tail).copied().unwrap_or(Class::CPS),
             Some(RowBinder::Local) => self.locals.get(ctx, tail, at).unwrap_or(Class::DIRECT),
+            Some(RowBinder::Body) if !self.parameter_tails.contains(&tail) => Class::DIRECT,
             _ => Class::CPS,
         };
         narrowed(ctx, tail, at, class)
