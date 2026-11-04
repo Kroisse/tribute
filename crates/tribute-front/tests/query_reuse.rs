@@ -54,11 +54,7 @@ fn moving_code_without_changing_it_reuses_the_parsed_module() {
     db.record(|db| {
         function_count(db, source);
     })
-    .assert_reuse(
-        &baseline,
-        &[],
-        &["parsed_ast", "func_names", "function_count"],
-    );
+    .assert_reuse(&baseline, &[], &["func_names", "function_count"]);
 }
 
 /// A body edit changes the module, so `func_names` reruns, but its result
@@ -151,7 +147,7 @@ fn moving_items_changes_only_their_layout() {
             "lower_source_to_parsed_ast_with_module_path",
             "has_item_layout",
         ],
-        &["parsed_ast", "has_item_spans"],
+        &["has_item_spans"],
     );
 }
 

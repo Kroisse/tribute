@@ -270,7 +270,7 @@ fn lang_examples_compile_deterministically() {
         .filter_map(|file| {
             let name = example_name(file);
             check_deterministic(&name, required(&name), |db| {
-                db.input(root.join(file)).expect("example source")
+                *db.input(root.join(file)).expect("example source")
             })
             .err()
         })

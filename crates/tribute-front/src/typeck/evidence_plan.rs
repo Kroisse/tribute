@@ -100,8 +100,8 @@ pub(crate) struct EvidenceTracker<'db> {
 /// them, and the row tails that tail is a declared union of.
 struct ScopeEvidence<'db> {
     explicit: Vec<AbilityInstance<'db>>,
-    tail: Option<RowVar>,
-    tails: Vec<RowVar>,
+    tail: Option<&'db RowVar>,
+    tails: Vec<&'db RowVar>,
 }
 
 impl<'db> EvidenceTracker<'db> {
@@ -237,7 +237,7 @@ impl<'db> EvidenceTracker<'db> {
                             .map(|source| {
                                 let source = resolve(source);
                                 let positions = unique(source.instances(db).iter().cloned());
-                                caller.select(&positions, source.rest(db).copied())
+                                caller.select(&positions, source.rest(db))
                             })
                             .collect();
                         plan.push(EvidenceStep::Tails(plans));
@@ -277,23 +277,18 @@ impl<'db> EvidenceTracker<'db> {
     fn declared_tails(
         &self,
         db: &'db dyn salsa::Database,
-        tail: Option<RowVar>,
+        tail: Option<&'db RowVar>,
         resolve: &impl Fn(AbilityRow<'db>) -> AbilityRow<'db>,
-    ) -> Vec<RowVar> {
+    ) -> Vec<&'db RowVar> {
         let Some(tail) = tail else {
             return Vec::new();
         };
         self.own_unions
             .iter()
-            .filter(|union| resolve(union.result).rest(db) == Some(&tail))
+            .filter(|union| resolve(union.result).rest(db) == Some(tail))
             .find_map(|union| {
                 let tails: Vec<_> = open_sources(db, union)
-                    .map(|source| {
-                        resolve(source)
-                            .rest(db)
-                            .copied()
-                            .filter(|source| *source != tail)
-                    })
+                    .map(|source| resolve(source).rest(db).filter(|source| *source != tail))
                     .collect::<Option<_>>()?;
                 (tails.len() > 1).then_some(tails)
             })
@@ -323,8 +318,8 @@ impl<'db> EvidenceTracker<'db> {
         db: &'db dyn salsa::Database,
         scope: usize,
         resolve: &impl Fn(AbilityRow<'db>) -> AbilityRow<'db>,
-        memo: &mut HashMap<usize, (Vec<AbilityInstance<'db>>, Option<RowVar>)>,
-    ) -> (Vec<AbilityInstance<'db>>, Option<RowVar>) {
+        memo: &mut HashMap<usize, (Vec<AbilityInstance<'db>>, Option<&'db RowVar>)>,
+    ) -> (Vec<AbilityInstance<'db>>, Option<&'db RowVar>) {
         if let Some(found) = memo.get(&scope) {
             return found.clone();
         }
@@ -337,7 +332,7 @@ impl<'db> EvidenceTracker<'db> {
                     .iter()
                     .filter(|instance| !instance.ability_id.is_builtin_io(db))
                     .cloned();
-                (unique(selectable), row.rest(db).copied())
+                (unique(selectable), row.rest(db))
             }
             EvidenceScope::Callable(None) => (Vec::new(), None),
             EvidenceScope::HandleBody { parent, handled } => {
@@ -359,7 +354,7 @@ fn callee_positions<'db>(
     db: &'db dyn salsa::Database,
     callee: AbilityRow<'db>,
     resolve: &impl Fn(AbilityRow<'db>) -> AbilityRow<'db>,
-) -> (Vec<AbilityInstance<'db>>, Option<RowVar>) {
+) -> (Vec<AbilityInstance<'db>>, Option<&'db RowVar>) {
     // Resolve the declared instances and the tail separately so an instance
     // named by both keeps both positions. Within one part, an instance takes
     // one position however many times solving left it in the row.
@@ -370,7 +365,7 @@ fn callee_positions<'db>(
         positions.extend(unique(tail.instances(db).iter().cloned()));
         tail.rest(db)
     });
-    (positions, tail.copied())
+    (positions, tail)
 }
 
 /// The sources of a union that its declaration leaves open: one row tail
@@ -392,7 +387,7 @@ impl<'db> ScopeEvidence<'db> {
     fn select(
         &self,
         positions: &[AbilityInstance<'db>],
-        target: Option<RowVar>,
+        target: Option<&'db RowVar>,
     ) -> Vec<EvidenceStep<'db>> {
         let index = target.and_then(|target| self.tails.iter().position(|tail| *tail == target));
         let Some(index) = index else {
@@ -415,7 +410,7 @@ impl<'db> ScopeEvidence<'db> {
 }
 
 /// Whether operations through a callee's row tail reach the caller's tail.
-fn opens_into(callee_tail: Option<RowVar>, caller_tail: Option<RowVar>) -> bool {
+fn opens_into(callee_tail: Option<&RowVar>, caller_tail: Option<&RowVar>) -> bool {
     callee_tail.is_some() && callee_tail == caller_tail
 }
 

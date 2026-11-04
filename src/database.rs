@@ -71,14 +71,13 @@ impl TributeDatabaseImpl {
     pub fn input(
         &self,
         path: std::path::PathBuf,
-    ) -> Result<SourceCst, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<&SourceCst, Box<dyn std::error::Error + Send + Sync>> {
         let path = path.canonicalize()?;
         let uri = path_to_uri(&path);
         let provider = SourceFiles::get(self).provider(self).clone();
         provider
             .entry(self, &uri)
             .source(self)
-            .copied()
             .ok_or_else(|| format!("cannot read {}", path.display()).into())
     }
 
@@ -289,7 +288,7 @@ mod tests {
 
         // The CLI compiles the same file without its manifest.
         let cli = TributeDatabaseImpl::default();
-        let source = cli.input(path).unwrap();
+        let &source = cli.input(path).unwrap();
         assert_eq!(names(&cli, source), ["std"]);
     }
 

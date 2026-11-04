@@ -48,7 +48,7 @@ pub(crate) fn examples(dir: &Path, root: &Path, out: &mut Vec<PathBuf>) {
 
 fn frontend_messages(path: &Path) -> Vec<String> {
     let db = TributeDatabaseImpl::default();
-    let source = db.input(path.to_path_buf()).expect("example source");
+    let &source = db.input(path.to_path_buf()).expect("example source");
     db.attach(|db| {
         tribute::pipeline::frontend_diagnostics(db, source)
             .into_iter()

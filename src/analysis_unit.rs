@@ -137,7 +137,8 @@ pub fn document_units(db: &dyn salsa::Database, document: SourceCst) -> Vec<Anal
     };
     let implicit = *crate::frontend_environment(db);
     let library = manifest::library_package(db, manifest, implicit).map(AnalysisUnit::Library);
-    let executable = manifest::executable_root(db, manifest).map(AnalysisUnit::Executable);
+    let executable =
+        manifest::executable_root(db, manifest).map(|&root| AnalysisUnit::Executable(root));
     let units: Vec<_> = library
         .into_iter()
         .chain(executable)
