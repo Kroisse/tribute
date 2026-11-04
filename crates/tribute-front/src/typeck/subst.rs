@@ -120,12 +120,10 @@ impl<'db> TypeFolder<'db> for Instantiate<'_, 'db> {
     fn fold_row(&mut self, row: AbilityRow<'db>) -> Result<AbilityRow<'db>, Infallible> {
         let db = self.types.db;
         let row = row.try_super_fold_with(self)?;
-        Ok(
-            match row.rest(db).copied().and_then(|var| self.rows.get(&var)) {
-                Some(fresh) => AbilityRow::new(db, row.instances(db).to_vec(), Some(*fresh)),
-                None => row,
-            },
-        )
+        Ok(match row.rest(db).and_then(|var| self.rows.get(var)) {
+            Some(fresh) => AbilityRow::new(db, row.instances(db).to_vec(), Some(*fresh)),
+            None => row,
+        })
     }
 }
 
@@ -282,7 +280,7 @@ mod tests {
                 .chain(instance.row_unions[0].sources.iter())
                 .chain(std::iter::once(&instance.row_unions[0].result))
             {
-                assert_eq!(row.rest(db).copied(), Some(fresh));
+                assert_eq!(row.rest(db), Some(&fresh));
                 assert_eq!(row.instances(db)[0].args, vec![callback]);
             }
         }

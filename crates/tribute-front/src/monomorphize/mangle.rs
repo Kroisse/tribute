@@ -184,13 +184,13 @@ fn write_ability_row_mangled(
             f.write_str("$1")?;
         }
     }
-    match row.rest(db).copied() {
+    match row.rest(db) {
         Some(var) => {
             let index = row_vars
                 .iter()
-                .position(|seen| *seen == var)
+                .position(|seen| seen == var)
                 .unwrap_or_else(|| {
-                    row_vars.push(var);
+                    row_vars.push(*var);
                     row_vars.len() - 1
                 });
             write!(f, "$3${index}$")

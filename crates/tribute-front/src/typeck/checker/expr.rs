@@ -407,7 +407,7 @@ impl<'db> TypeChecker<'db> {
                 ctx.pop_scope();
                 ctx.evidence.restore(outer_evidence);
                 let resume_effect = ctx.exit_lambda();
-                let inferred_effect = match (accumulated.rest(self.db()).copied(), resume_effect) {
+                let inferred_effect = match (accumulated.rest(self.db()), resume_effect) {
                     // Resuming performs the continuation's effects, so a closed
                     // local row joins the continuation row instead of naming
                     // its tail.
@@ -423,9 +423,8 @@ impl<'db> TypeChecker<'db> {
                     (None, None) => AbilityRow::new(
                         self.db(),
                         accumulated.instances(self.db()),
-                        expected_effect.and_then(|effect| {
-                            effect.rest(self.db()).copied().map(|_| ctx.fresh_row_var())
-                        }),
+                        expected_effect
+                            .and_then(|effect| effect.rest(self.db()).map(|_| ctx.fresh_row_var())),
                     ),
                     (Some(_), _) => accumulated,
                 };

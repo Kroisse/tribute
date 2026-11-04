@@ -112,13 +112,12 @@ impl FileProvider {
 
     /// The source of the requested or set file whose URI has the source id
     /// `source`, the id its spans carry.
-    pub fn find(&self, db: &dyn salsa::Database, source: u64) -> Option<SourceCst> {
+    pub fn find<'db>(&self, db: &'db dyn salsa::Database, source: u64) -> Option<&'db SourceCst> {
         let entries = self.entries.lock().expect("file entries lock");
         entries
             .iter()
             .find(|(uri, _)| source_hash(uri) == source)
             .and_then(|(_, entry)| entry.source(db))
-            .copied()
     }
 
     /// Make `text` the file at `uri`, or remove the file if `text` is
@@ -137,8 +136,8 @@ impl FileProvider {
             entries.insert(uri.as_str().to_owned(), entry);
             return source;
         };
-        match (entry.source(db).copied(), text) {
-            (Some(source), Some(text)) => {
+        match (entry.source(db), text) {
+            (Some(&source), Some(text)) => {
                 let tree = parse_rope(&text, None);
                 source.set_text(db).to(text);
                 source.set_tree(db).to(tree);
@@ -169,8 +168,8 @@ impl std::fmt::Debug for FileProvider {
 /// The source of the file at `uri`, or `None` if there is none or the
 /// database has no [`SourceFiles`]. Inside a query, records a dependency on
 /// whether the file exists.
-pub fn source_at(db: &dyn salsa::Database, uri: &Uri<String>) -> Option<SourceCst> {
-    file_at(db, uri)?.source(db).copied()
+pub fn source_at<'db>(db: &'db dyn salsa::Database, uri: &Uri<String>) -> Option<&'db SourceCst> {
+    file_at(db, uri)?.source(db)
 }
 
 /// The entry of the file at `uri`, or `None` if the database has no

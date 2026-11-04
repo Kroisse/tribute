@@ -103,7 +103,7 @@ pub fn parsed_ast<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Option<crate::astgen::ParsedAst<'db>> {
-    crate::astgen::lower_source_to_parsed_ast(db, source)
+    crate::astgen::lower_source_to_parsed_ast(db, source).copied()
 }
 
 /// Parse a source file to an AST module.

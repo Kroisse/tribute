@@ -285,7 +285,7 @@ impl<'db> EvidenceTracker<'db> {
         };
         self.own_unions
             .iter()
-            .filter(|union| resolve(union.result).rest(db).copied() == Some(tail))
+            .filter(|union| resolve(union.result).rest(db) == Some(&tail))
             .find_map(|union| {
                 let tails: Vec<_> = open_sources(db, union)
                     .map(|source| {
@@ -307,11 +307,11 @@ impl<'db> EvidenceTracker<'db> {
         db: &'db dyn salsa::Database,
         callee: AbilityRow<'db>,
     ) -> Option<impl Iterator<Item = AbilityRow<'db>>> {
-        let tail = callee.rest(db).copied()?;
+        let tail = callee.rest(db)?;
         self.unions
             .iter()
             .find(|union| {
-                union.result.rest(db).copied() == Some(tail) && open_sources(db, union).count() > 1
+                union.result.rest(db) == Some(tail) && open_sources(db, union).count() > 1
             })
             .map(|union| open_sources(db, union))
     }
@@ -365,12 +365,12 @@ fn callee_positions<'db>(
     // one position however many times solving left it in the row.
     let declared = resolve(AbilityRow::new(db, callee.instances(db).to_vec(), None));
     let mut positions = unique(declared.instances(db).iter().cloned());
-    let tail = callee.rest(db).copied().and_then(|tail| {
-        let tail = resolve(AbilityRow::open(db, tail));
+    let tail = callee.rest(db).and_then(|tail| {
+        let tail = resolve(AbilityRow::open(db, *tail));
         positions.extend(unique(tail.instances(db).iter().cloned()));
-        tail.rest(db).copied()
+        tail.rest(db)
     });
-    (positions, tail)
+    (positions, tail.copied())
 }
 
 /// The sources of a union that its declaration leaves open: one row tail

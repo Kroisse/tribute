@@ -84,7 +84,7 @@ fn package_files(
             // A manifest without a valid name builds no library package, but
             // its root file is still the package's.
             None => {
-                if let Some(root) = source_at(db, &uri) {
+                if let Some(&root) = source_at(db, &uri) {
                     inputs.extend(tree_inputs(db, root));
                 }
             }
@@ -92,7 +92,7 @@ fn package_files(
     }
     if executable && let Some(uri) = beside(file.uri(db), EXECUTABLE_ROOT) {
         inputs.extend(uri_to_path(&uri));
-        if let Some(root) = source_at(db, &uri) {
+        if let Some(&root) = source_at(db, &uri) {
             inputs.extend(tree_inputs(db, root));
         }
     }

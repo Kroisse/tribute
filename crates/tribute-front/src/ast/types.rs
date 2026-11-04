@@ -439,10 +439,10 @@ pub fn collect_row_vars<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> Vec
 
         fn visit_row(&mut self, row: AbilityRow<'db>) -> ControlFlow<Infallible> {
             row.super_visit_with(self)?;
-            if let Some(var) = row.rest(self.db).copied()
-                && !self.vars.contains(&var)
+            if let Some(var) = row.rest(self.db)
+                && !self.vars.contains(var)
             {
-                self.vars.push(var);
+                self.vars.push(*var);
             }
             ControlFlow::Continue(())
         }

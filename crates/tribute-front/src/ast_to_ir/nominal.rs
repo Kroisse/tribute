@@ -118,11 +118,11 @@ impl<'db> NominalTypes<'db> {
             .instances(self.db)
             .iter()
             .map(|effect| self.ability_symbol(&effect.ability_id.qualified(self.db), &effect.args));
-        let tail = row.rest(self.db).copied().map(|variable| {
+        let tail = row.rest(self.db).map(|variable| {
             let index = self
                 .current_row_binders
                 .iter()
-                .position(|(bound, _)| *bound == variable)
+                .position(|(bound, _)| bound == variable)
                 .unwrap_or_else(|| {
                     panic!(
                         "row variable {} has no binder in the current definition",
@@ -147,16 +147,17 @@ impl<'db> NominalTypes<'db> {
             .row_unions(self.db)
             .iter()
             .filter_map(|union| {
-                let result = union.result.rest(self.db).copied()?;
+                let result = union.result.rest(self.db)?;
                 let sources: Vec<_> = union
                     .sources
                     .iter()
-                    .filter_map(|source| source.rest(self.db).copied())
+                    .filter_map(|source| source.rest(self.db))
                     .filter(|source| *source != result)
+                    .copied()
                     .map(index)
                     .collect::<Option<_>>()?;
                 (sources.len() > 1).then_some(RowUnion {
-                    result: index(result)?,
+                    result: index(*result)?,
                     sources,
                 })
             })
@@ -436,13 +437,13 @@ impl<'db> NominalTypes<'db> {
             })
             .collect();
         effects.sort();
-        let rest = match row.rest(self.db).copied() {
+        let rest = match row.rest(self.db) {
             Some(var) => {
                 let index = row_vars
                     .iter()
-                    .position(|seen| *seen == var)
+                    .position(|seen| seen == var)
                     .unwrap_or_else(|| {
-                        row_vars.push(var);
+                        row_vars.push(*var);
                         row_vars.len() - 1
                     });
                 logical_key("open", [index.to_string()])

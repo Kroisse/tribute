@@ -67,6 +67,7 @@ impl<'a> SpanFiles<'a> {
     fn file(&self, source: u64) -> SourceCst {
         SourceFiles::try_get(self.db)
             .and_then(|files| files.provider(self.db).find(self.db, source))
+            .copied()
             .unwrap_or(self.root)
     }
 

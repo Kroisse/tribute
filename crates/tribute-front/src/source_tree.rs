@@ -235,7 +235,7 @@ impl<'db> Loader<'db> {
                 continue;
             }
             self.changed = true;
-            let Some(source) = found else {
+            let Some(&source) = found else {
                 self.error(
                     span,
                     format!("cannot find the file `{shown}` of module `{}`", module.name),

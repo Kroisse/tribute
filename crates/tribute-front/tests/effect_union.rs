@@ -32,7 +32,7 @@ fn combine(left: fn() ->{e1} Nil, right: fn() ->{e2} Nil) ->{e1, e2} Nil {
         panic!()
     };
     let tail = |ty: tribute_front::ast::Type<'_>| match ty.kind(db) {
-        TypeKind::Func { effect, .. } => effect.rest(db).copied().unwrap(),
+        TypeKind::Func { effect, .. } => *effect.rest(db).unwrap(),
         _ => panic!(),
     };
     assert_ne!(tail(params[0]), tail(params[1]));
@@ -41,7 +41,7 @@ fn combine(left: fn() ->{e1} Nil, right: fn() ->{e2} Nil) ->{e1, e2} Nil {
         scheme
             .row_unions(db)
             .iter()
-            .any(|union| union.result.rest(db).copied() == effect.rest(db).copied())
+            .any(|union| union.result.rest(db) == effect.rest(db))
     );
 }
 
@@ -77,7 +77,7 @@ fn local(left: fn() ->{e1} Nil, right: fn() ->{e2} Nil) ->{e1, e2} Nil {
         panic!("function")
     };
     let tail = |ty: tribute_front::ast::Type<'_>| match ty.kind(db) {
-        TypeKind::Func { effect, .. } => effect.rest(db).copied().unwrap(),
+        TypeKind::Func { effect, .. } => *effect.rest(db).unwrap(),
         _ => panic!("callback"),
     };
     assert_ne!(tail(params[0]), tail(params[1]));

@@ -1670,18 +1670,9 @@ mod tests {
 
         let (first_outer, first_callback) = extract_rows(db, first);
         let (second_outer, second_callback) = extract_rows(db, second);
-        assert_eq!(
-            first_outer.rest(db).copied(),
-            first_callback.rest(db).copied()
-        );
-        assert_eq!(
-            second_outer.rest(db).copied(),
-            second_callback.rest(db).copied()
-        );
-        assert_ne!(
-            first_outer.rest(db).copied(),
-            second_outer.rest(db).copied()
-        );
+        assert_eq!(first_outer.rest(db), first_callback.rest(db));
+        assert_eq!(second_outer.rest(db), second_callback.rest(db));
+        assert_ne!(first_outer.rest(db), second_outer.rest(db));
     }
 
     #[salsa_test]
@@ -1723,10 +1714,7 @@ mod tests {
         };
 
         assert_ne!(first_params[0], second_params[0]);
-        assert_ne!(
-            first_effect.rest(db).copied(),
-            second_effect.rest(db).copied()
-        );
+        assert_ne!(first_effect.rest(db), second_effect.rest(db));
     }
 
     #[salsa_test]
@@ -1765,11 +1753,8 @@ mod tests {
         let first_effect = continuation_effect(db, elements[0]);
         let second_effect = continuation_effect(db, elements[1]);
 
-        assert_eq!(
-            first_effect.rest(db).copied(),
-            second_effect.rest(db).copied()
-        );
-        assert_ne!(first_effect.rest(db).copied(), shared.rest(db).copied());
+        assert_eq!(first_effect.rest(db), second_effect.rest(db));
+        assert_ne!(first_effect.rest(db), shared.rest(db));
     }
 
     #[salsa_test]
@@ -2014,7 +1999,7 @@ mod merge_effect_tests {
             proptest::prop_assert_eq!(result.instances(&db), effects.as_slice());
             match (current.rest, incoming.rest) {
                 (Some(a), Some(b)) if a != b => {
-                    let tail = result.rest(&db).copied().expect("open result");
+                    let tail = result.rest(&db).expect("open result");
                     proptest::prop_assert!(tail.id != a && tail.id != b);
                     proptest::prop_assert!(matches!(
                         constraints.as_slice(),

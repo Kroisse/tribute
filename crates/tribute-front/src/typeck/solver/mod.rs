@@ -212,7 +212,7 @@ impl<'db> TypeSolver<'db> {
                     .iter()
                     .flat_map(|effect| effect.args.clone()),
             );
-            effects.extend(row.rest(self.db).copied());
+            effects.extend(row.rest(self.db));
         }
         for ty in types {
             let ty = self
@@ -397,8 +397,8 @@ impl<'db> TypeSolver<'db> {
     }
 
     pub(crate) fn reserve_row_vars_in_row(&mut self, row: AbilityRow<'db>) {
-        if let Some(var) = row.rest(self.db).copied() {
-            self.reserve_row_var(var);
+        if let Some(var) = row.rest(self.db) {
+            self.reserve_row_var(*var);
         }
         for effect in row.instances(self.db) {
             for arg in &effect.args {

@@ -154,9 +154,9 @@ impl<'db> ParsedItem<'db> {
 pub fn lower_source_to_parsed_ast<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
-) -> Option<ParsedAst<'db>> {
+) -> Option<&'db ParsedAst<'db>> {
     let module_name = derive_module_name_from_uri(source.uri(db));
-    lower_source_to_parsed_ast_with_module_path(db, source, module_name).copied()
+    lower_source_to_parsed_ast_with_module_path(db, source, module_name)
 }
 
 /// Parse and lower a source file to AST with a specific module path.

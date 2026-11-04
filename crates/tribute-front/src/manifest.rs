@@ -161,7 +161,7 @@ pub fn load_package(
 /// The root file of the executable package of the manifest `file`, its
 /// `src/main.trb`, if there is one.
 pub fn executable_root(db: &dyn salsa::Database, file: FileEntry) -> Option<SourceCst> {
-    source_at(db, &beside(file.uri(db), EXECUTABLE_ROOT)?)
+    source_at(db, &beside(file.uri(db), EXECUTABLE_ROOT)?).copied()
 }
 
 /// The library package of the manifest `file`, rooted at its `src/lib.trb`:
@@ -177,7 +177,7 @@ pub fn library_package(
     implicit: DependencyTable,
 ) -> Option<Package> {
     let name = package_name(db, file).clone()?;
-    let root = source_at(db, &beside(file.uri(db), LIBRARY_ROOT)?)?;
+    let &root = source_at(db, &beside(file.uri(db), LIBRARY_ROOT)?)?;
     Some(Package::new(
         db,
         PackageName::library(name),

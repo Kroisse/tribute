@@ -439,8 +439,7 @@ impl<'db> TypeSolver<'db> {
                         .filter(|(other, (union, _))| {
                             defined
                                 && *other != index
-                                && self.normalize_row(union.result).rest(self.db).copied()
-                                    == Some(tail)
+                                && self.normalize_row(union.result).rest(self.db) == Some(&tail)
                         })
                         .collect();
                     if definitions.is_empty() {
@@ -492,8 +491,8 @@ impl<'db> TypeSolver<'db> {
                             let (free, removed_from): (Vec<_>, Vec<_>) =
                                 free.into_iter().partition(|tail| {
                                     !self.pending_row_removals.iter().any(|(removal, _)| {
-                                        self.normalize_row(removal.source).rest(self.db).copied()
-                                            == Some(*tail)
+                                        self.normalize_row(removal.source).rest(self.db)
+                                            == Some(tail)
                                     })
                                 });
                             let settled = !free.is_empty()
@@ -534,10 +533,9 @@ impl<'db> TypeSolver<'db> {
     /// Whether `tail`, a source tail of `union`, is a body-local row that no
     /// signature row or other relation determines.
     fn is_unconstrained_tail(&self, tail: RowVar, union: &crate::ast::RowUnion<'db>) -> bool {
-        let is_tail =
-            |row: AbilityRow<'db>| self.normalize_row(row).rest(self.db).copied() == Some(tail);
+        let is_tail = |row: AbilityRow<'db>| self.normalize_row(row).rest(self.db) == Some(&tail);
         !self.rigid_rows.contains(&tail)
-            && union.result.rest(self.db).copied() != Some(tail)
+            && union.result.rest(self.db) != Some(&tail)
             && !self
                 .pending_row_unions
                 .iter()
@@ -824,7 +822,7 @@ impl<'db> TypeSolver<'db> {
         let row = self.row_subst.apply(self.db, row);
 
         // Check if the row's rest is the same variable
-        if row.rest(self.db).copied() == Some(var) {
+        if row.rest(self.db) == Some(&var) {
             return true;
         }
 
@@ -970,7 +968,7 @@ impl<'db> TypeSolver<'db> {
                     && (names_labels(other) || other.rest(self.db).is_none())
                     && ((unions
                         && self.pending_row_unions.iter().any(|(union, _)| {
-                            self.normalize_row(union.result).rest(self.db).copied() == Some(tail)
+                            self.normalize_row(union.result).rest(self.db) == Some(&tail)
                         }))
                         || self.awaits_expression(tail, &mut Vec::new()))
             })
@@ -989,9 +987,7 @@ impl<'db> TypeSolver<'db> {
         let sources: Vec<_> = self
             .pending_row_unions
             .iter()
-            .filter(|(union, _)| {
-                self.normalize_row(union.result).rest(self.db).copied() == Some(tail)
-            })
+            .filter(|(union, _)| self.normalize_row(union.result).rest(self.db) == Some(&tail))
             .flat_map(|(union, _)| &union.sources)
             .filter_map(|source| self.normalize_row(*source).rest(self.db).copied())
             .collect();
@@ -1003,9 +999,11 @@ impl<'db> TypeSolver<'db> {
     /// Whether the types of a pending expression relation, or the row of a
     /// call still to be resolved, mention `tail`.
     fn pending_relation_mentions(&self, tail: RowVar) -> bool {
-        if self.pending_producers.iter().any(|producer| {
-            self.normalize_row(producer.effect).rest(self.db).copied() == Some(tail)
-        }) {
+        if self
+            .pending_producers
+            .iter()
+            .any(|producer| self.normalize_row(producer.effect).rest(self.db) == Some(&tail))
+        {
             return true;
         }
         let mentions = |ty: Type<'db>| {

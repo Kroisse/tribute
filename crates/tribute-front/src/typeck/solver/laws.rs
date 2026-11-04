@@ -322,7 +322,7 @@ proptest! {
         prop_assert!(result.is_ok(), "{:?}", result);
         let (left, right) = (solver.row_subst.apply(&db, left), solver.row_subst.apply(&db, right));
         prop_assert!(rows_equiv(&db, left, right, RowRelation::SetEqual), "{:?} vs {:?}", left, right);
-        prop_assert!(left.rest(&db).copied().is_some_and(|tail| tail.id > base + 1));
+        prop_assert!(left.rest(&db).is_some_and(|tail| tail.id > base + 1));
     }
 
     /// Row unification does not depend on the order effects are listed in:

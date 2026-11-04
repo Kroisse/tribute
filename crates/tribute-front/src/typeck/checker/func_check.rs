@@ -1024,7 +1024,7 @@ impl<'db> TypeChecker<'db> {
         row_subst: &crate::typeck::solver::RowSubst<'db>,
     ) -> bool {
         let db = self.db();
-        let tail = |row: &crate::ast::AbilityRow<'db>| row_subst.apply(db, *row).rest(db).copied();
+        let tail = |row: &crate::ast::AbilityRow<'db>| row_subst.apply(db, *row).rest(db);
         let Some(own) = (match instance.ty.kind(db) {
             TypeKind::Func { effect, .. } => tail(effect),
             _ => None,
@@ -1051,7 +1051,7 @@ impl<'db> TypeChecker<'db> {
         for union in retained {
             if let Some(result) = tail(&union.result) {
                 for source in union.sources.iter().filter_map(tail) {
-                    flows.entry(source).or_default().push(result);
+                    flows.entry(*source).or_default().push(*result);
                 }
             }
         }
@@ -1059,7 +1059,7 @@ impl<'db> TypeChecker<'db> {
             let mut seen = [start].into_iter().collect::<HashSet<_>>();
             let mut pending = vec![start];
             while let Some(row) = pending.pop() {
-                if row == own {
+                if row == *own {
                     return true;
                 }
                 for next in flows.get(&row).into_iter().flatten() {
@@ -1074,7 +1074,7 @@ impl<'db> TypeChecker<'db> {
         let mut reported = HashSet::default();
         for (index, row) in instance.row_args.iter().enumerate() {
             let Some(row) = tail(row) else { continue };
-            if declared.contains(&row) || !reaches_own(row) || !reported.insert(row) {
+            if declared.contains(&row) || !reaches_own(*row) || !reported.insert(row) {
                 continue;
             }
             NodeDiagnostic::new(
@@ -1107,8 +1107,8 @@ impl<'db> TypeChecker<'db> {
     ) -> bool {
         let db = self.db();
         let scheme = *scheme;
-        let row_name = |var: Option<crate::ast::RowVar>| match var
-            .and_then(|var| scheme.effect_params(db).iter().position(|p| *p == var))
+        let row_name = |var: Option<&crate::ast::RowVar>| match var
+            .and_then(|var| scheme.effect_params(db).iter().position(|p| p == var))
         {
             Some(index) => self.signature_row_name(func_id, scheme, index),
             None => "an inferred ability row".to_owned(),
@@ -1142,7 +1142,7 @@ impl<'db> TypeChecker<'db> {
                         .instances(db)
                         .iter()
                         .format_with(", ", |effect, f| f(&effect.display(db, self.names()))),
-                    row_name(removal.source.rest(db).copied()),
+                    row_name(removal.source.rest(db)),
                 ));
                 continue;
             }
@@ -1153,7 +1153,7 @@ impl<'db> TypeChecker<'db> {
                 removed
                     .iter()
                     .format_with(", ", |effect, f| f(&effect.display(db, self.names()))),
-                row_name(removal.source.rest(db).copied()),
+                row_name(removal.source.rest(db)),
                 if removed.len() == 1 { "it" } else { "them" },
                 if removed.len() == 1 { "it" } else { "them" },
             ));
@@ -1165,7 +1165,7 @@ impl<'db> TypeChecker<'db> {
                 union
                     .sources
                     .iter()
-                    .map(|row| row_name(row.rest(db).copied()))
+                    .map(|row| row_name(row.rest(db)))
                     .unique()
                     .format(" and "),
             ));
@@ -1337,13 +1337,13 @@ impl<'db> TypeChecker<'db> {
                 )
         };
         let own_tail = match instance.ty.kind(db) {
-            TypeKind::Func { effect, .. } => effect.rest(db).copied(),
+            TypeKind::Func { effect, .. } => effect.rest(db),
             _ => None,
         };
         let mut seen_rows: HashMap<crate::ast::RowVar, usize> = HashMap::default();
         for (index, row) in instance.row_args.iter().enumerate() {
             let resolved = row_subst.apply(db, *row);
-            let Some(tail) = resolved.rest(db).copied() else {
+            let Some(tail) = resolved.rest(db) else {
                 report(format!(
                     "{} in the signature of `{}` is closed in its body",
                     row_name(index),
@@ -1351,7 +1351,7 @@ impl<'db> TypeChecker<'db> {
                 ));
                 continue;
             };
-            if let Some(first) = seen_rows.insert(tail, index) {
+            if let Some(first) = seen_rows.insert(*tail, index) {
                 report(format!(
                     "{} and {} in the signature of `{}` are the same row in its body",
                     row_name(first),
@@ -1359,7 +1359,7 @@ impl<'db> TypeChecker<'db> {
                     func.name,
                 ));
             }
-            if row.rest(db).copied() != own_tail && !resolved.instances(db).is_empty() {
+            if row.rest(db) != own_tail && !resolved.instances(db).is_empty() {
                 report(format!(
                     "{} in the signature of `{}` has {} in its body",
                     row_name(index),

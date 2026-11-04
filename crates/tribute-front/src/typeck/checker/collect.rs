@@ -249,10 +249,10 @@ impl<'db> TypeChecker<'db> {
         let mut effect_params = collect_row_vars(self.db(), func_ty);
         for union in &vars.unions {
             for row in union.sources.iter().chain(std::iter::once(&union.result)) {
-                if let Some(var) = row.rest(self.db()).copied()
-                    && !effect_params.contains(&var)
+                if let Some(var) = row.rest(self.db())
+                    && !effect_params.contains(var)
                 {
-                    effect_params.push(var);
+                    effect_params.push(*var);
                 }
             }
         }
@@ -332,10 +332,10 @@ impl<'db> TypeChecker<'db> {
         let mut effect_params = collect_row_vars(self.db(), func_ty);
         for union in &vars.unions {
             for row in union.sources.iter().chain(std::iter::once(&union.result)) {
-                if let Some(var) = row.rest(self.db()).copied()
-                    && !effect_params.contains(&var)
+                if let Some(var) = row.rest(self.db())
+                    && !effect_params.contains(var)
                 {
-                    effect_params.push(var);
+                    effect_params.push(*var);
                 }
             }
         }

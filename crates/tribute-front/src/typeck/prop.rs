@@ -1024,7 +1024,7 @@ pub(crate) fn rows_equiv<'db>(
                     .all(|(a, b)| types_equiv(db, *a, *b, relation))
         })
     };
-    left.rest(db).copied() == right.rest(db).copied()
+    left.rest(db) == right.rest(db)
         && left
             .instances(db)
             .iter()
