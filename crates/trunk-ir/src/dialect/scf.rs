@@ -33,6 +33,9 @@ mod scf {
     ///   in `scf.yield`, which returns to the parent, or in its own
     ///   terminator.
     /// - **Verification:** one region per case, and no case twice.
+    ///
+    /// [`IndexSwitch::build_with_arms`] builds it from each case with its
+    /// region.
     #[verify]
     #[asm_format(discriminant attr_dict custom(SwitchArms(cases, case_regions, default_region)))]
     #[implements(RegionBranch, Fold)]
@@ -225,6 +228,22 @@ impl RegionBranch for Loop {
 }
 
 impl IndexSwitch {
+    /// Build a switch from each case value with its region, in order, and
+    /// the default region, so a case cannot drift from its region.
+    pub fn build_with_arms(
+        ctx: &mut IrContext,
+        location: crate::types::Location,
+        discriminant: ValueRef,
+        arms: impl IntoIterator<Item = (i64, crate::refs::RegionRef)>,
+        default_region: crate::refs::RegionRef,
+    ) -> Self {
+        let (cases, case_regions): (Vec<_>, Vec<_>) = arms.into_iter().unzip();
+        Self::operands(discriminant)
+            .cases(cases)
+            .regions(default_region, case_regions)
+            .build(ctx, location)
+    }
+
     /// The case regions in order, then the default region.
     pub fn arm_regions(self, ctx: &IrContext) -> crate::RegionList {
         let mut regions: crate::RegionList = self.case_regions(ctx).collect();
@@ -652,6 +671,47 @@ mod canonicalize_tests {
         let one_line = "core.module @test {\n  func.func @f(%0: core.i32) {\n    scf.index_switch %0 case 1 { scf.yield } default { scf.yield }\n    func.return\n  }\n}";
         let mut ctx = IrContext::new();
         parse_test_module(&mut ctx, one_line);
+    }
+
+    #[test]
+    fn index_switch_builds_from_case_region_pairs() {
+        let text = r#"core.module @test {
+  func.func @f(%0: core.i32) -> core.nil {
+      scf.index_switch %0
+      case 3 {
+          scf.yield
+      }
+      case 1 {
+          func.return
+      }
+      default {
+          scf.yield
+      }
+      func.return
+  }
+}
+"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, text);
+        let function = crate::dialect::func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
+        let entry = ctx.region(function.body(&ctx)).blocks[0];
+        let parsed = IndexSwitch::from_op(&ctx, ctx.block(entry).ops[0]).unwrap();
+        let regions = parsed.arm_regions(&ctx);
+        let location = ctx.op(parsed.op_ref()).location;
+        let discriminant = parsed.discriminant(&ctx);
+        for &region in &regions {
+            ctx.detach_region(region);
+        }
+        let built = IndexSwitch::build_with_arms(
+            &mut ctx,
+            location,
+            discriminant,
+            [(3, regions[0]), (1, regions[1])],
+            regions[2],
+        );
+        ctx.insert_op_before(entry, parsed.op_ref(), built.op_ref());
+        ctx.remove_op_from_block(entry, parsed.op_ref());
+        assert_eq!(print_module(&ctx, module.op()), text);
     }
 
     #[test]

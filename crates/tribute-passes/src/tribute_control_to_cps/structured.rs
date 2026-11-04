@@ -530,10 +530,13 @@ impl Converter<'_> {
             .expect("arm_regions ends with the default region");
         let discriminant = switch.discriminant(self.ctx);
         let discriminant = mapping.get(&discriminant).copied().unwrap_or(discriminant);
-        let lowered = scf::IndexSwitch::operands(discriminant)
-            .cases(cases)
-            .regions(default_region, converted_regions)
-            .build(self.ctx, location);
+        let lowered = scf::IndexSwitch::build_with_arms(
+            self.ctx,
+            location,
+            discriminant,
+            cases.into_iter().zip(converted_regions),
+            default_region,
+        );
         self.copy_extra_attrs(source, lowered.op_ref(), &[]);
         self.ctx.push_op(block, lowered.op_ref());
         Ok(())
