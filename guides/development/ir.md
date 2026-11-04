@@ -183,16 +183,17 @@ where
   ```
 
   String literals are keywords and punctuation, a bare name is an operand
-  or attribute, and `symbol(..)`, `keyword(..)`, `type(..)`/`types(..)`, `attr_dict`
+  or attribute, and `symbol(..)`, `type(..)`/`types(..)`, `attr_dict`
   (`attributes {..}`) or `attr_dict_bare` (`{..}`, not before a region),
   `region(..)`/`regions(..)`, and
   `successor(..)`/`successors(..)` write the other entities.
-  `keyword(a)` writes the attribute `a` as a bare identifier through the
-  `asm_format::KeywordCodec` of its kind, as `tribute_control.handler`
-  writes its kind `op`. `custom(D(a, b))` leaves the operands, attributes,
-  and successors it names to `D`'s `asm_format::OpAsmDirective`, as MLIR's
-  `custom<D>` does; `clif.switch` writes each case with its target as
-  `[0: ^first, 5: ^second]` this way.
+  An attribute is written with its kind's syntax: a kind whose
+  `AttrKind::KEYWORD` holds its `asm_format::KeywordCodec` is written as a
+  bare identifier, as `tribute_control.handler` writes its kind `op`, and
+  any other in generic attribute syntax. `custom(D(a, b))` leaves the
+  operands, attributes, and successors it names to `D`'s
+  `asm_format::OpAsmDirective`, as MLIR's `custom<D>` does; `clif.switch`
+  writes each case with its target as `[0: ^first, 5: ^second]` this way.
   `signature(t, body)` writes the type of `t`, an `Attr<TypeOf<S>>`
   attribute, a fixed `Value<S>` operand, or a `Value<S>` result, as
   `(%a: A) -> R`, through the `asm_format::SignatureCodec` of `S`'s bound,

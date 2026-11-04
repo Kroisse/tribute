@@ -177,6 +177,9 @@ pub struct AttributeSchema {
     pub accepts: fn(&IrContext, &Attribute) -> bool,
     /// The kind's narrower domain, when it has one (`AttrKind::DOMAIN`).
     pub domain: Option<&'static str>,
+    /// The keywords that spell the kind's values in a declarative format,
+    /// when it has them (`AttrKind::KEYWORD`).
+    pub keyword: Option<crate::asm_format::KeywordCodecHooks>,
 }
 
 impl AttributeSchema {

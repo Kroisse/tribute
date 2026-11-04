@@ -175,6 +175,7 @@ fn gen_op_def(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -> Tok
             is_default: #is_default,
             accepts: #kind_trait::accepts,
             domain: #kind_trait::DOMAIN,
+            keyword: #kind_trait::KEYWORD,
         })
     });
 

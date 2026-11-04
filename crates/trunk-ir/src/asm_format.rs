@@ -188,12 +188,11 @@ impl SignatureCodecHooks {
 // KeywordCodec — an attribute written as a bare identifier
 // =============================================================================
 
-/// Conversion between an attribute of this kind and the bare identifier the
-/// `keyword` format element writes (`new-plans/ir.md`, "선언적 어셈블리 형식").
-#[diagnostic::on_unimplemented(
-    message = "`{Self}` is the kind of a `keyword` format element but does not implement `KeywordCodec`",
-    label = "`keyword(..)` requires this implementation"
-)]
+/// Conversion between an attribute of this kind and the bare identifier a
+/// declarative format writes for it (`new-plans/ir.md`, "선언적 어셈블리
+/// 형식"). The kind exposes the codec through
+/// [`AttrKind::KEYWORD`](crate::attr_kind::AttrKind::KEYWORD), so every format
+/// that names an attribute of the kind writes it as a keyword.
 pub trait KeywordCodec: crate::attr_kind::AttrKind {
     /// The keyword that spells `attr`, or `None` when no keyword does.
     fn keyword<'a>(ctx: &'a IrContext, attr: &'a Attribute) -> Option<&'a str>;
@@ -202,7 +201,7 @@ pub trait KeywordCodec: crate::attr_kind::AttrKind {
     fn attribute(word: &str) -> Option<RawAttribute<'static>>;
 }
 
-/// A [`KeywordCodec`]'s hooks, as a `keyword` format element stores them.
+/// A [`KeywordCodec`]'s hooks, as an attribute's schema stores them.
 #[derive(Clone, Copy, Debug)]
 pub struct KeywordCodecHooks {
     pub keyword: for<'a> fn(&'a IrContext, &'a Attribute) -> Option<&'a str>,

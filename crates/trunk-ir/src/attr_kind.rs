@@ -34,6 +34,13 @@ pub trait AttrKind {
     /// they are narrower than `KIND`'s domain.
     const DOMAIN: Option<&'static str> = None;
 
+    /// The bare identifiers that spell this kind's values in a declarative
+    /// assembly format, for a kind that implements
+    /// [`KeywordCodec`](crate::asm_format::KeywordCodec): set it to
+    /// `Some(KeywordCodecHooks::of::<Self>())`. Without them, a format writes
+    /// the value in generic attribute syntax.
+    const KEYWORD: Option<crate::asm_format::KeywordCodecHooks> = None;
+
     /// Whether `attr` is a value of this kind, which the schema checks: by
     /// default, whether it is in `KIND`'s domain. A narrower kind, such as a
     /// keyword, also checks the rest and names it in `DOMAIN`.

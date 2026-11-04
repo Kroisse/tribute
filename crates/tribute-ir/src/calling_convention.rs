@@ -97,6 +97,8 @@ impl trunk_ir::attr_kind::AttrKind for CallingConvention {
     type In = CallingConvention;
     const DOMAIN: Option<&'static str> =
         Some("one of \"direct\", \"evidence_direct\", and \"cps\"");
+    const KEYWORD: Option<trunk_ir::asm_format::KeywordCodecHooks> =
+        Some(trunk_ir::asm_format::KeywordCodecHooks::of::<Self>());
 
     fn accepts(ctx: &IrContext, attr: &Attribute) -> bool {
         Self::from_attribute(ctx, attr).is_some()

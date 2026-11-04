@@ -70,11 +70,6 @@ enum Element {
     Operand(usize),
     Attribute(usize),
     Symbol(usize),
-    /// `keyword(attr)`, with the attribute kind whose codec spells it.
-    Keyword {
-        attribute: usize,
-        codec: TokenStream,
-    },
     ResultType,
     ResultTypes,
     /// `args(r)`: the entry block arguments of a region.
@@ -372,21 +367,6 @@ impl<'a> Format<'a> {
                 }
                 Element::Symbol(i)
             }
-            ("keyword", Some(Entity::Attribute(i))) => {
-                let attr = &self.op.attrs[i];
-                match &attr.kind {
-                    AttrKind::Path(path) if !attr.list && !attr.optional => Element::Keyword {
-                        attribute: i,
-                        codec: quote!(#path),
-                    },
-                    _ => {
-                        return err(
-                            arg_span,
-                            "`keyword(..)` writes a required attribute whose kind implements `KeywordCodec`",
-                        );
-                    }
-                }
-            }
             ("type" | "types", Some(Entity::Results)) => match (&self.op.results, plural) {
                 (ResultDef::Single(_), false) => Element::ResultType,
                 (ResultDef::Optional(_), false) | (ResultDef::Variadic(_), true) => {
@@ -445,8 +425,8 @@ impl<'a> Format<'a> {
                 return Ok(Element::RegionArgs(i));
             }
             (
-                "symbol" | "keyword" | "type" | "types" | "region" | "regions" | "successor"
-                | "successors" | "args",
+                "symbol" | "type" | "types" | "region" | "regions" | "successor" | "successors"
+                | "args",
                 _,
             ) => {
                 return err(arg_span, format!("`{name}(..)` cannot write `{arg}`"));
@@ -455,7 +435,7 @@ impl<'a> Format<'a> {
                 return err(
                     span,
                     format!(
-                        "unknown format directive `{name}`; expected `symbol`, `keyword`, `signature`, `functional_type`, `args`, `type`, `types`, `region`, `regions`, `successor`, `successors`, or `custom`"
+                        "unknown format directive `{name}`; expected `symbol`, `signature`, `functional_type`, `args`, `type`, `types`, `region`, `regions`, `successor`, `successors`, or `custom`"
                     ),
                 );
             }
@@ -965,10 +945,6 @@ fn gen_elements(
             Element::Operand(i) => quote!(#fmt::FormatElement::Operand(#i)),
             Element::Attribute(i) => quote!(#fmt::FormatElement::Attribute(#i)),
             Element::Symbol(i) => quote!(#fmt::FormatElement::Symbol(#i)),
-            Element::Keyword { attribute, codec } => quote!(#fmt::FormatElement::Keyword {
-                attribute: #attribute,
-                codec: #crate_path::asm_format::KeywordCodecHooks::of::<#codec>(),
-            }),
             Element::ResultType => quote!(#fmt::FormatElement::ResultType(0)),
             Element::ResultTypes => quote!(#fmt::FormatElement::ResultTypes),
             Element::RegionArgs(i) => quote!(#fmt::FormatElement::RegionArgs(#i)),
