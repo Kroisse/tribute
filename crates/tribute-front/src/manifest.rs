@@ -233,7 +233,6 @@ fn loaded_dependencies(db: &dyn salsa::Database, file: FileEntry) -> Vec<FileEnt
 /// with `by_path`.
 #[salsa::input(singleton, debug)]
 pub struct PackageRoots {
-    #[returns(ref)]
     pub manifests: HashMap<SourceCst, FileEntry>,
     /// Whether a source no manifest is registered for is analyzed with the
     /// manifest of the package its path puts it in ([`owning_manifest`]).

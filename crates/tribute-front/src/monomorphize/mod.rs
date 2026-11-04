@@ -1001,7 +1001,7 @@ mod tests {
             NodeId::from_raw(2).with_variant(key.variant())
         );
         assert_eq!(local.callable, specialized_function);
-        assert_eq!(local.scheme.body(&db), specialized_function);
+        assert_eq!(*local.scheme.body(&db), specialized_function);
         assert_eq!(
             metadata
                 .expressions

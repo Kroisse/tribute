@@ -315,7 +315,7 @@ impl<'db> RowSubst<'db> {
     /// that resolved to concrete effects or no tail is left unchanged.
     pub(crate) fn make_representative(&mut self, db: &'db dyn salsa::Database, var: RowVar) {
         let resolved = self.apply(db, AbilityRow::open(db, var));
-        if let Some(alias) = resolved.rest(db)
+        if let Some(alias) = resolved.rest(db).copied()
             && alias != var
             && resolved.instances(db).is_empty()
         {
@@ -328,7 +328,7 @@ impl<'db> RowSubst<'db> {
     pub fn apply(&self, db: &'db dyn salsa::Database, row: AbilityRow<'db>) -> AbilityRow<'db> {
         let mut row = row;
         let mut visited = SmallVec::<[u64; 8]>::new();
-        while let Some(var) = row.rest(db) {
+        while let Some(var) = row.rest(db).copied() {
             let Some(subst_row) = self.get(var.id) else {
                 break;
             };
@@ -343,7 +343,7 @@ impl<'db> RowSubst<'db> {
                     effects.push(effect.clone());
                 }
             }
-            let rest = subst_row.rest(db);
+            let rest = subst_row.rest(db).copied();
             row = AbilityRow::new(db, effects, rest);
         }
         row

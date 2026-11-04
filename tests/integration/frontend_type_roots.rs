@@ -21,7 +21,7 @@ enum Root {
     ConstructorUnion,
 }
 
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked]
 fn prepare_root<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
@@ -85,7 +85,7 @@ fn prepare_root<'db>(
             *scheme = tribute_front::ast::TypeScheme::builder(
                 scheme.type_params(db).to_vec(),
                 vec![RowVar { id: 999 }],
-                scheme.body(db),
+                *scheme.body(db),
             )
             .build(db);
             instance.row_arguments = vec![row];

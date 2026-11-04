@@ -285,7 +285,7 @@ fn load_package_dir(db: &TributeDatabaseImpl, dir: &Path, target: &str) -> Packa
         let failed = diags
             .iter()
             .any(|diag| diag.severity == DiagnosticSeverity::Error);
-        print_diagnostics(db, source, &manifest_path, &mut diags);
+        print_diagnostics(db, *source, &manifest_path, &mut diags);
         let loaded = loaded.as_ref().filter(|_| !failed);
         let Some(loaded) = loaded else {
             std::process::exit(1);

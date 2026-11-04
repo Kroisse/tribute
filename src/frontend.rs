@@ -284,7 +284,7 @@ mod tests {
     use tribute_front::source_file::parse_rope;
 
     /// Std's bodies merged into the user's and specialized with them.
-    #[salsa::tracked(returns(copy))]
+    #[salsa::tracked(returns(as_ref))]
     fn merged_specialization<'db>(
         db: &'db dyn salsa::Database,
         source: SourceCst,

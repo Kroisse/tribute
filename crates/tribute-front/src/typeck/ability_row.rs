@@ -79,7 +79,7 @@ pub fn add_effect<'db>(
     if !effects.contains(&effect) {
         effects.push(effect);
     }
-    AbilityRow::new(db, effects, row.rest(db))
+    AbilityRow::new(db, effects, row.rest(db).copied())
 }
 
 /// Remove an effect from an ability row, returning a new row.
@@ -94,7 +94,7 @@ pub fn remove_effect<'db>(
     if let Some(pos) = effects.iter().position(|e| e == effect) {
         let mut new_effects = effects.to_vec();
         new_effects.remove(pos);
-        Some(AbilityRow::new(db, new_effects, row.rest(db)))
+        Some(AbilityRow::new(db, new_effects, row.rest(db).copied()))
     } else {
         None
     }
@@ -114,7 +114,7 @@ pub fn remove_with_constraint<'db>(
         // Direct removal
         let new_row = remove_effect(db, row, effect).unwrap();
         RemoveResult::Removed(new_row)
-    } else if let Some(tail) = row.rest(db) {
+    } else if let Some(tail) = row.rest(db).copied() {
         // Row variable decomposition
         let fresh = fresh_var();
         RemoveResult::NeedsConstraint {
@@ -141,8 +141,9 @@ pub fn union<'db>(
             effects.push(effect.clone());
         }
     }
-    let independent = matches!((row1.rest(db), row2.rest(db)), (Some(a), Some(b)) if a != b);
-    let rest = match (row1.rest(db), row2.rest(db)) {
+    let independent =
+        matches!((row1.rest(db).copied(), row2.rest(db).copied()), (Some(a), Some(b)) if a != b);
+    let rest = match (row1.rest(db).copied(), row2.rest(db).copied()) {
         (None, None) => None,
         (Some(v), None) | (None, Some(v)) => Some(v),
         (Some(a), Some(b)) if a == b => Some(a),
@@ -366,7 +367,7 @@ mod laws {
             match (left.rest, right.rest) {
                 (Some(a), Some(b)) if a != b => {
                     prop_assert_eq!(fresh.used(), 1);
-                    prop_assert_eq!(result.rest(&db), Some(RowVar { id: fresh.0 }));
+                    prop_assert_eq!(result.rest(&db).copied(), Some(RowVar { id: fresh.0 }));
                     prop_assert_eq!(
                         relation,
                         Some(RowUnion { sources: vec![left_row, right_row], result })
@@ -374,7 +375,7 @@ mod laws {
                 }
                 (a, b) => {
                     prop_assert_eq!(fresh.used(), 0);
-                    prop_assert_eq!(result.rest(&db), a.or(b).map(|id| RowVar { id }));
+                    prop_assert_eq!(result.rest(&db).copied(), a.or(b).map(|id| RowVar { id }));
                     prop_assert_eq!(relation, None);
                 }
             }
@@ -408,8 +409,8 @@ mod laws {
             let (ab, ba) = (join(a, b), join(b, a));
             prop_assert!(set_eq(&db, ab, ba));
             prop_assert_eq!(ab.rest(&db).is_some(), ba.rest(&db).is_some());
-            if a.rest(&db) == b.rest(&db) || a.rest(&db).is_none() || b.rest(&db).is_none() {
-                prop_assert_eq!(ab.rest(&db), ba.rest(&db));
+            if a.rest(&db).copied() == b.rest(&db).copied() || a.rest(&db).is_none() || b.rest(&db).is_none() {
+                prop_assert_eq!(ab.rest(&db).copied(), ba.rest(&db).copied());
             }
             let left = join(ab, c);
             let bc = join(b, c);
@@ -433,7 +434,7 @@ mod laws {
                 prop_assert_eq!(added, row);
                 let removed = remove_effect(&db, row, &effect).expect("present effect");
                 prop_assert!(!contains(&db, removed, &effect));
-                prop_assert_eq!(removed.rest(&db), row.rest(&db));
+                prop_assert_eq!(removed.rest(&db).copied(), row.rest(&db).copied());
                 prop_assert_eq!(removed.instances(&db).len() + 1, row.instances(&db).len());
                 prop_assert!(row.instances(&db).iter().all(|e| *e == effect || contains(&db, removed, e)));
                 prop_assert!(set_eq(&db, add_effect(&db, removed, effect.clone()), row));

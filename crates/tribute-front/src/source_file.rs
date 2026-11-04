@@ -58,9 +58,8 @@ pub struct SourceFiles {
 /// creating a file it looked for invalidates it.
 #[salsa::input(debug)]
 pub struct FileEntry {
-    #[returns(ref)]
     pub uri: Uri<String>,
-    #[returns(copy)]
+    #[returns(as_ref)]
     pub source: Option<SourceCst>,
 }
 
@@ -119,6 +118,7 @@ impl FileProvider {
             .iter()
             .find(|(uri, _)| source_hash(uri) == source)
             .and_then(|(_, entry)| entry.source(db))
+            .copied()
     }
 
     /// Make `text` the file at `uri`, or remove the file if `text` is
@@ -137,7 +137,7 @@ impl FileProvider {
             entries.insert(uri.as_str().to_owned(), entry);
             return source;
         };
-        match (entry.source(db), text) {
+        match (entry.source(db).copied(), text) {
             (Some(source), Some(text)) => {
                 let tree = parse_rope(&text, None);
                 source.set_text(db).to(text);
@@ -170,7 +170,7 @@ impl std::fmt::Debug for FileProvider {
 /// database has no [`SourceFiles`]. Inside a query, records a dependency on
 /// whether the file exists.
 pub fn source_at(db: &dyn salsa::Database, uri: &Uri<String>) -> Option<SourceCst> {
-    file_at(db, uri)?.source(db)
+    file_at(db, uri)?.source(db).copied()
 }
 
 /// The entry of the file at `uri`, or `None` if the database has no

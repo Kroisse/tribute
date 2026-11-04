@@ -355,7 +355,7 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
         let body = self.checker.env.lookup_constructor(id)?.body(db);
         Some(match body.kind(db) {
             TypeKind::Func { params, result, .. } => (params.len(), *result),
-            _ => (0, body),
+            _ => (0, *body),
         })
     }
 }

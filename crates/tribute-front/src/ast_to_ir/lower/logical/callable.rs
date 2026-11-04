@@ -325,7 +325,7 @@ pub(super) fn row_effects<'db>(
             && let Some(scheme) =
                 ctx.lookup_function_type(&entry.module.child(function.name.clone()))
         {
-            visit(db, scheme.body(db), &mut found);
+            visit(db, *scheme.body(db), &mut found);
         }
     }
     for ty in ctx.node_types().values() {

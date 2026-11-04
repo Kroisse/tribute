@@ -290,7 +290,7 @@ pub fn module_declarations<'db>(
 /// declarations. It reads only `function`'s declaration and those
 /// declarations, and no source position, so it reruns only when one of them
 /// changes.
-#[salsa::tracked(returns(ref))]
+#[salsa::tracked]
 pub fn check_function<'db>(
     db: &'db dyn salsa::Database,
     function: ResolvedFunction<'db>,

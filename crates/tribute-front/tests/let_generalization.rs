@@ -237,11 +237,11 @@ fn pass(value: a) -> a {
     assert_eq!(pair_scheme.type_params(db).len(), 0);
     assert_eq!(pass_scheme.type_params(db).len(), 1);
     assert!(
-        !type_contains_out_of_scope_bound(db, pair_scheme.body(db), 0),
+        !type_contains_out_of_scope_bound(db, *pair_scheme.body(db), 0),
         "pair must not acquire enclosing function binders"
     );
     assert!(
-        !type_contains_out_of_scope_bound(db, pass_scheme.body(db), 1),
+        !type_contains_out_of_scope_bound(db, *pass_scheme.body(db), 1),
         "pass scheme must not contain phantom binders"
     );
     assert!(matches!(
@@ -254,7 +254,7 @@ fn pass(value: a) -> a {
         .declarations(db)
         .function_types
         .iter()
-        .map(|(_, scheme)| scheme.body(db))
+        .map(|(_, scheme)| *scheme.body(db))
         .chain(
             output
                 .expression_types(db)

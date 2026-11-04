@@ -237,7 +237,7 @@ impl<'db> EvidenceTracker<'db> {
                             .map(|source| {
                                 let source = resolve(source);
                                 let positions = unique(source.instances(db).iter().cloned());
-                                caller.select(&positions, source.rest(db))
+                                caller.select(&positions, source.rest(db).copied())
                             })
                             .collect();
                         plan.push(EvidenceStep::Tails(plans));
@@ -285,10 +285,15 @@ impl<'db> EvidenceTracker<'db> {
         };
         self.own_unions
             .iter()
-            .filter(|union| resolve(union.result).rest(db) == Some(tail))
+            .filter(|union| resolve(union.result).rest(db).copied() == Some(tail))
             .find_map(|union| {
                 let tails: Vec<_> = open_sources(db, union)
-                    .map(|source| resolve(source).rest(db).filter(|source| *source != tail))
+                    .map(|source| {
+                        resolve(source)
+                            .rest(db)
+                            .copied()
+                            .filter(|source| *source != tail)
+                    })
                     .collect::<Option<_>>()?;
                 (tails.len() > 1).then_some(tails)
             })
@@ -302,11 +307,11 @@ impl<'db> EvidenceTracker<'db> {
         db: &'db dyn salsa::Database,
         callee: AbilityRow<'db>,
     ) -> Option<impl Iterator<Item = AbilityRow<'db>>> {
-        let tail = callee.rest(db)?;
+        let tail = callee.rest(db).copied()?;
         self.unions
             .iter()
             .find(|union| {
-                union.result.rest(db) == Some(tail) && open_sources(db, union).count() > 1
+                union.result.rest(db).copied() == Some(tail) && open_sources(db, union).count() > 1
             })
             .map(|union| open_sources(db, union))
     }
@@ -332,7 +337,7 @@ impl<'db> EvidenceTracker<'db> {
                     .iter()
                     .filter(|instance| !instance.ability_id.is_builtin_io(db))
                     .cloned();
-                (unique(selectable), row.rest(db))
+                (unique(selectable), row.rest(db).copied())
             }
             EvidenceScope::Callable(None) => (Vec::new(), None),
             EvidenceScope::HandleBody { parent, handled } => {
@@ -360,10 +365,10 @@ fn callee_positions<'db>(
     // one position however many times solving left it in the row.
     let declared = resolve(AbilityRow::new(db, callee.instances(db).to_vec(), None));
     let mut positions = unique(declared.instances(db).iter().cloned());
-    let tail = callee.rest(db).and_then(|tail| {
+    let tail = callee.rest(db).copied().and_then(|tail| {
         let tail = resolve(AbilityRow::open(db, tail));
         positions.extend(unique(tail.instances(db).iter().cloned()));
-        tail.rest(db)
+        tail.rest(db).copied()
     });
     (positions, tail)
 }

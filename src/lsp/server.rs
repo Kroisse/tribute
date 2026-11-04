@@ -817,9 +817,7 @@ impl LspServer {
                 }
 
                 // Generate code actions based on diagnostic type
-                if let Some(action) =
-                    self.action_for_diagnostic(db, diag, &rope, uri, type_index.as_ref())
-                {
+                if let Some(action) = self.action_for_diagnostic(db, diag, &rope, uri, type_index) {
                     actions.push(CodeActionOrCommand::CodeAction(action));
                 }
             }
@@ -1280,7 +1278,7 @@ fn renamable_index<'db>(
         index?.can_rename(db, offset)?;
     }
     let (def, _) = first.can_rename(db, offset)?;
-    (!used_by_containing_packages(db, def, source, containing)).then_some(first)
+    (!used_by_containing_packages(db, def, source, containing)).then_some(*first)
 }
 
 /// Whether the source tree of the package whose root is `root` reads

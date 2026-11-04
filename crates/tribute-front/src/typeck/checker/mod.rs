@@ -201,7 +201,7 @@ impl<'db> TypeChecker<'db> {
         let qualified = root.child(name.clone());
         let ty = self.env.lookup_type_def(&qualified)?.body(self.db());
         Some(WellKnownType {
-            ty,
+            ty: *ty,
             definition: crate::ast::TypeDefId::declared(self.db(), qualified, disambiguator),
         })
     }

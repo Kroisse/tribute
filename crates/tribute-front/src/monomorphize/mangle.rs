@@ -184,7 +184,7 @@ fn write_ability_row_mangled(
             f.write_str("$1")?;
         }
     }
-    match row.rest(db) {
+    match row.rest(db).copied() {
         Some(var) => {
             let index = row_vars
                 .iter()

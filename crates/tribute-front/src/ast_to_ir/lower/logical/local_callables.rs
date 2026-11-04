@@ -152,7 +152,7 @@ fn substitute<'db>(
     row: AbilityRow<'db>,
     rows: &HashMap<RowVar, AbilityRow<'db>>,
 ) -> AbilityRow<'db> {
-    let Some(replacement) = row.rest(db).and_then(|tail| rows.get(&tail)) else {
+    let Some(replacement) = row.rest(db).copied().and_then(|tail| rows.get(&tail)) else {
         return row;
     };
     let mut instances = row.instances(db).to_vec();
@@ -161,7 +161,7 @@ fn substitute<'db>(
             instances.push(instance.clone());
         }
     }
-    AbilityRow::new(db, instances, replacement.rest(db))
+    AbilityRow::new(db, instances, replacement.rest(db).copied())
 }
 
 /// Source order of actual external SSA uses, with duplicates removed.

@@ -118,7 +118,7 @@ impl<'db> NominalTypes<'db> {
             .instances(self.db)
             .iter()
             .map(|effect| self.ability_symbol(&effect.ability_id.qualified(self.db), &effect.args));
-        let tail = row.rest(self.db).map(|variable| {
+        let tail = row.rest(self.db).copied().map(|variable| {
             let index = self
                 .current_row_binders
                 .iter()
@@ -147,11 +147,11 @@ impl<'db> NominalTypes<'db> {
             .row_unions(self.db)
             .iter()
             .filter_map(|union| {
-                let result = union.result.rest(self.db)?;
+                let result = union.result.rest(self.db).copied()?;
                 let sources: Vec<_> = union
                     .sources
                     .iter()
-                    .filter_map(|source| source.rest(self.db))
+                    .filter_map(|source| source.rest(self.db).copied())
                     .filter(|source| *source != result)
                     .map(index)
                     .collect::<Option<_>>()?;
@@ -407,7 +407,7 @@ impl<'db> NominalTypes<'db> {
         logical_key(
             "nominal",
             [
-                nominal_origin_key(id.origin(self.db)),
+                nominal_origin_key(*id.origin(self.db)),
                 id.qualified(self.db).with_str(str::to_owned),
             ],
         )
@@ -436,7 +436,7 @@ impl<'db> NominalTypes<'db> {
             })
             .collect();
         effects.sort();
-        let rest = match row.rest(self.db) {
+        let rest = match row.rest(self.db).copied() {
             Some(var) => {
                 let index = row_vars
                     .iter()
@@ -457,7 +457,7 @@ impl<'db> NominalTypes<'db> {
         logical_key(
             "nominal",
             [
-                nominal_origin_key(id.origin(self.db)),
+                nominal_origin_key(*id.origin(self.db)),
                 name.with_str(str::to_owned),
             ],
         )

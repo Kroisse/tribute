@@ -179,7 +179,7 @@ fn test_salsa_incremental_computation_detailed() {
 
 static FUNCTION_COUNT_EXECUTIONS: AtomicUsize = AtomicUsize::new(0);
 
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked]
 fn observed_function_count(db: &dyn salsa::Database, source: SourceCst) -> usize {
     FUNCTION_COUNT_EXECUTIONS.fetch_add(1, Ordering::SeqCst);
     tribute_front::query::func_names(db, source).len()
@@ -201,19 +201,19 @@ fn equal_query_results_do_not_reexecute_downstream() {
     );
     FUNCTION_COUNT_EXECUTIONS.store(0, Ordering::SeqCst);
 
-    assert_eq!(observed_function_count(&db, source), 1);
+    assert_eq!(*observed_function_count(&db, source), 1);
     assert_eq!(FUNCTION_COUNT_EXECUTIONS.load(Ordering::SeqCst), 1);
 
     let same_names = "fn one() { 1 }";
     source.set_text(&mut db).to(same_names.into());
     source.set_tree(&mut db).to(parser.parse(same_names, None));
-    assert_eq!(observed_function_count(&db, source), 1);
+    assert_eq!(*observed_function_count(&db, source), 1);
     assert_eq!(FUNCTION_COUNT_EXECUTIONS.load(Ordering::SeqCst), 1);
 
     let added_name = "fn one() { 1 }\nfn two() {}";
     source.set_text(&mut db).to(added_name.into());
     source.set_tree(&mut db).to(parser.parse(added_name, None));
-    assert_eq!(observed_function_count(&db, source), 2);
+    assert_eq!(*observed_function_count(&db, source), 2);
     assert_eq!(FUNCTION_COUNT_EXECUTIONS.load(Ordering::SeqCst), 2);
 }
 

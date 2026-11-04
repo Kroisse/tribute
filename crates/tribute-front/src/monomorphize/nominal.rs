@@ -52,7 +52,7 @@ fn instantiate<'db>(
     }
     let (fields, result) = match scheme.body(db).kind(db) {
         TypeKind::Func { params, result, .. } => (params.len(), *result),
-        _ => (0, scheme.body(db)),
+        _ => (0, *scheme.body(db)),
     };
     if fields != constructor.fields {
         return Err(fail(InstanceErrorKind::InconsistentCallable));
@@ -174,7 +174,7 @@ mod tests {
     use salsa_test_macros::salsa_test;
     use trunk_ir::Symbol;
 
-    #[salsa::tracked(returns(clone))]
+    #[salsa::tracked]
     fn checked<'db>(
         db: &'db dyn salsa::Database,
         source: crate::SourceCst,
@@ -263,7 +263,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
             .declarations(db)
             .function_types
             .iter()
-            .map(|(_, s)| s.body(db))
+            .map(|(_, s)| *s.body(db))
             .collect();
         let seeds = collect::collect_type_instantiations_with_index(
             db,
@@ -317,7 +317,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 .declarations(db)
                 .function_types
                 .iter()
-                .map(|(_, s)| s.body(db)),
+                .map(|(_, s)| *s.body(db)),
             &index,
         );
         let collected = collect(db, &index, &schemas, seeds).unwrap();
@@ -421,7 +421,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                     .declarations(db)
                     .function_types
                     .iter()
-                    .map(|(_, s)| s.body(db)),
+                    .map(|(_, s)| *s.body(db)),
             );
             assert!(!seeds.contains_key(&hidden_id));
             let result = collect(
@@ -496,7 +496,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 .declarations(db)
                 .function_types
                 .iter()
-                .map(|(_, s)| s.body(db));
+                .map(|(_, s)| *s.body(db));
             let seeds = collect::collect_type_instantiations(db, input.module(db), roots);
             assert!(!seeds.is_empty());
             let schemas = input
@@ -549,7 +549,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 .declarations(db)
                 .function_types
                 .iter()
-                .map(|(_, s)| s.body(db)),
+                .map(|(_, s)| *s.body(db)),
         );
         let schemes = input
             .declarations(db)
@@ -639,7 +639,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                         ctor,
                         scheme
                             .to_builder(db)
-                            .map_types(db, |ty| if ty == scheme.body(db) { body } else { ty })
+                            .map_types(db, |ty| if ty == *scheme.body(db) { body } else { ty })
                             .build(db),
                     );
                 }
@@ -650,7 +650,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                         .declarations(db)
                         .function_types
                         .iter()
-                        .map(|(_, s)| s.body(db)),
+                        .map(|(_, s)| *s.body(db)),
                 );
                 let result = collect(
                     db,

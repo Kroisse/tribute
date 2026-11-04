@@ -78,6 +78,7 @@ impl TributeDatabaseImpl {
         provider
             .entry(self, &uri)
             .source(self)
+            .copied()
             .ok_or_else(|| format!("cannot read {}", path.display()).into())
     }
 
@@ -306,7 +307,7 @@ mod tests {
         );
         let source = db.source_cst(&uri).unwrap();
         let units = crate::document_units(&db, source);
-        let [crate::AnalysisUnit::Library(package)] = units else {
+        let [crate::AnalysisUnit::Library(package)] = units.as_slice() else {
             panic!("not a library: {units:?}");
         };
         assert_eq!(package.name(&db).name().unwrap().to_string(), "geometry");

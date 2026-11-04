@@ -268,13 +268,17 @@ fn lower_monomorphized_source(
     (ir, output)
 }
 
-#[salsa::tracked(returns(clone))]
+#[salsa::tracked]
+fn monomorphized_ir_text(db: &dyn salsa::Database, source: SourceCst) -> String {
+    let (ir, output) = lower_monomorphized_source(db, source);
+    print_module(&ir, output.module.op())
+}
+
 fn generic_specialization_transports_direct_callee_metadata_inner(
     db: &dyn salsa::Database,
     source: SourceCst,
-) -> String {
-    let (ir, output) = lower_monomorphized_source(db, source);
-    let ir_text = print_module(&ir, output.module.op());
+) -> &str {
+    let ir_text = monomorphized_ir_text(db, source);
     assert!(
         ir_text.contains("tribute_control.func @\"pkg::apply$Int\""),
         "the specialized generic function must preserve its checked concrete call type:\n{ir_text}"

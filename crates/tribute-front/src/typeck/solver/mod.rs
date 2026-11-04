@@ -53,7 +53,7 @@ pub(super) fn map_ability_row_type_args<'db>(
         })
         .collect();
     if new_effects != *effects {
-        AbilityRow::new(db, new_effects, row.rest(db))
+        AbilityRow::new(db, new_effects, row.rest(db).copied())
     } else {
         row
     }
@@ -212,7 +212,7 @@ impl<'db> TypeSolver<'db> {
                     .iter()
                     .flat_map(|effect| effect.args.clone()),
             );
-            effects.extend(row.rest(self.db));
+            effects.extend(row.rest(self.db).copied());
         }
         for ty in types {
             let ty = self
@@ -397,7 +397,7 @@ impl<'db> TypeSolver<'db> {
     }
 
     pub(crate) fn reserve_row_vars_in_row(&mut self, row: AbilityRow<'db>) {
-        if let Some(var) = row.rest(self.db) {
+        if let Some(var) = row.rest(self.db).copied() {
             self.reserve_row_var(var);
         }
         for effect in row.instances(self.db) {

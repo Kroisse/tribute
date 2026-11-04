@@ -1658,7 +1658,7 @@ fn main() -> Nil {}
                     }
                     _ => {
                         assert!(v.fields.is_empty());
-                        scheme.body(db)
+                        *scheme.body(db)
                     }
                 };
                 assert!(matches!(result.kind(db), TypeKind::Named { id, args, .. }

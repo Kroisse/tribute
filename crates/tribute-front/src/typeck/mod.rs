@@ -459,36 +459,28 @@ impl<'db> TypeCheckOutput<'db> {
 #[salsa::tracked]
 pub struct PackageExports<'db> {
     /// Function type schemes keyed by FuncDefId.
-    #[returns(deref)]
     pub function_types: Vec<(FuncDefId<'db>, TypeScheme<'db>)>,
 
     /// Functions declared `extern`, sorted by fully qualified name.
-    #[returns(deref)]
     pub extern_functions: Vec<FuncDefId<'db>>,
 
     /// Constructor type schemes keyed by CtorId.
-    #[returns(deref)]
     pub constructor_types: Vec<(CtorId<'db>, TypeScheme<'db>)>,
 
     /// Type definitions keyed by name.
-    #[returns(deref)]
     pub type_defs: Vec<(SymbolPath, TypeScheme<'db>)>,
 
     /// Struct field definitions keyed by nominal declaration identity.
-    #[returns(deref)]
     pub struct_fields: Vec<(TypeDefId<'db>, (Vec<TypeParam>, Vec<(Symbol, Type<'db>)>))>,
 
     /// Enum variant information: enum_name → [variant_names].
-    #[returns(deref)]
     pub enum_variants: Vec<(SymbolPath, Vec<Symbol>)>,
 
     /// Field names of constructors whose fields are all named.
-    #[returns(deref)]
     pub constructor_field_names: Vec<(CtorId<'db>, Vec<Symbol>)>,
 
     /// Ability operation schemas exported by the prelude as deterministic
     /// vectors (a dependent module's environment indexes them for lookup).
-    #[returns(deref)]
     pub ability_definitions: Vec<(
         AbilityId<'db>,
         Vec<TypeParam>,

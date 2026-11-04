@@ -41,7 +41,7 @@ pub fn print_ast_type(db: &dyn salsa::Database, names: &NameDisplay, ty: Type<'_
         TypeKind::UniVar { id } => {
             // Unification variables are displayed as lowercase letters
             // Use the index for polymorphic sources, or the counter for anonymous/function-local sources
-            let display_index = match id.source(db) {
+            let display_index = match *id.source(db) {
                 UniVarSource::FunctionLocal { index, .. } => index as u32 + id.index(db),
                 UniVarSource::Anonymous(counter) => counter as u32 + id.index(db),
                 UniVarSource::Solver { index } => index as u32 + id.index(db),
@@ -157,7 +157,6 @@ pub struct AstTypeEntry<'db> {
 #[salsa::tracked]
 pub struct AstTypeIndex<'db> {
     /// Entries sorted by span start for efficient lookup.
-    #[returns(deref)]
     entries: Vec<AstTypeEntry<'db>>,
     /// Map from NodeId to index for direct lookup.
     by_node_id: BTreeMap<NodeId, usize>,
@@ -273,7 +272,7 @@ impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for TypeCollector<'_, 'db> {
 /// This is a Salsa tracked query that returns an index mapping source
 /// positions to type information. The index is invalidated when the
 /// typed AST changes.
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked(returns(as_ref))]
 pub fn type_index<'db>(
     db: &'db dyn salsa::Database,
     unit: AnalysisUnit,
