@@ -177,9 +177,9 @@ mod tests {
     #[test]
     fn switch_cases_become_bit_patterns_of_the_discriminant_width() {
         for (discriminant_ty, expected) in [
-            ("core.i8", "[7, 255]"),
-            ("core.i32", "[7, 4294967295]"),
-            ("core.i64", "[7, 18446744073709551615]"),
+            ("core.i8", "7: ^bb2, 255: ^bb3"),
+            ("core.i32", "7: ^bb2, 4294967295: ^bb3"),
+            ("core.i64", "7: ^bb2, 18446744073709551615: ^bb3"),
         ] {
             let mut ctx = IrContext::new();
             let module = parse_test_module(
@@ -204,9 +204,7 @@ mod tests {
 
             let printed = print_module(&ctx, module.op());
             assert!(
-                printed.contains(&format!(
-                    "\"clif.switch\"(%0)[^bb1, ^bb2, ^bb3] {{cases = {expected}}}"
-                )),
+                printed.contains(&format!("clif.switch %0, ^bb1 [{expected}]")),
                 "{printed}"
             );
         }

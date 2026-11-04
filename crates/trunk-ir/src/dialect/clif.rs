@@ -144,6 +144,11 @@ mod clif {
     /// `index` is an unsigned 32-bit position in `table`. Control transfers
     /// to the successor at that position, or to `default` when the index is
     /// out of bounds. Successors take no block arguments.
+    ///
+    /// ```text
+    /// clif.br_table %index, ^default [^first, ^second]
+    /// ```
+    #[asm_format(index "," successor(default) "[" successors(table) "]" attr_dict)]
     fn br_table(index: Value<I32>) {
         #[successor(default)]
         {}
@@ -157,7 +162,14 @@ mod clif {
     /// `cases` holds the unsigned value of `index`, or to `default` when no
     /// case matches. Cases may be sparse and need not start at 0. Successors
     /// take no block arguments.
+    ///
+    /// Each case is written with its target:
+    ///
+    /// ```text
+    /// clif.switch %index, ^default [0: ^first, 5: ^second]
+    /// ```
     #[verify]
+    #[asm_format]
     fn switch(cases: Attr<[u64]>, index: Value<impl IntegerLike>) {
         #[successor(default)]
         {}
@@ -537,6 +549,86 @@ impl crate::ops::Verify for Switch {
     }
 }
 
+impl crate::asm_format::OpAsmFormat for Switch {
+    fn print(&self, h: &mut crate::printer::OpPrintHelper<'_, '_>) -> std::fmt::Result {
+        use std::fmt::Write as _;
+
+        let ctx = h.ctx();
+        let op = self.op_ref();
+        let attrs = &ctx.op(op).attributes;
+        let cases = match ctx.op_attrs(op).get("cases") {
+            Some(Attribute::List(cases)) if attrs.len() == 1 => cases,
+            _ => return h.print_generic(op),
+        };
+        let successors: crate::BlockList = ctx.op_successors(op).collect();
+        let well_formed = ctx.op_operands(op).len() == 1
+            && ctx.op_results(op).is_empty()
+            && !ctx.op_has_regions(op)
+            && successors.len() == cases.len() + 1
+            && cases.iter().all(|case| matches!(case, Attribute::Int(_)));
+        if !well_formed {
+            return h.print_generic(op);
+        }
+        let index = h.get_value_name(ctx.op_operands(op)[0]).to_owned();
+        let default = h.block_label(successors[0]).to_owned();
+        write!(h, "clif.switch {index}, {default} [")?;
+        for (position, (case, &target)) in cases.iter().zip(&successors[1..]).enumerate() {
+            let Attribute::Int(case) = case else {
+                unreachable!("checked above")
+            };
+            if position > 0 {
+                h.write_str(", ")?;
+            }
+            let target = h.block_label(target).to_owned();
+            write!(h, "{case}: {target}")?;
+        }
+        h.write_char(']')
+    }
+
+    fn parse<'a>(
+        input: &mut &'a str,
+        results: Vec<&'a str>,
+        sym_name: Option<String>,
+    ) -> winnow::ModalResult<crate::parser::raw::RawOperation<'a>> {
+        use crate::parser::raw::{
+            RawAttribute, RawOperation, block_label, integer_lit, value_ref, ws,
+        };
+        use winnow::Parser as _;
+        use winnow::combinator::{delimited, separated, separated_pair};
+
+        let index = value_ref.parse_next(input)?;
+        (ws, ',', ws).parse_next(input)?;
+        let default = block_label.parse_next(input)?;
+        ws.parse_next(input)?;
+        let arms: Vec<(i128, &str)> = delimited(
+            ('[', ws),
+            separated(
+                0..,
+                separated_pair(integer_lit, (ws, ':', ws), block_label),
+                (ws, ',', ws),
+            ),
+            (ws, ']'),
+        )
+        .parse_next(input)?;
+        let (cases, targets): (Vec<_>, Vec<_>) = arms
+            .into_iter()
+            .map(|(case, target)| (RawAttribute::Int(case), target))
+            .unzip();
+        Ok(RawOperation {
+            results,
+            name: "clif.switch",
+            sym_name,
+            func_params: Vec::new(),
+            func_param_regions: Vec::new(),
+            operands: vec![index],
+            attributes: vec![("cases".into(), RawAttribute::List(cases))],
+            result_types: Vec::new(),
+            regions: Vec::new(),
+            successors: std::iter::once(default).chain(targets).collect(),
+        })
+    }
+}
+
 impl crate::ops::Verify for Data {
     /// The relocation region holds only `func_reloc` declarations at distinct
     /// offsets.
@@ -797,19 +889,29 @@ mod branch_table_tests {
     #[test]
     fn branch_tables_round_trip() {
         assert_round_trips(
-            r#""clif.br_table"(%index)[^default, ^first, ^second]"#,
-            "\"clif.br_table\"(%0)[^bb1, ^bb2, ^bb3]",
+            "clif.br_table %index, ^default [^first, ^second]",
+            "clif.br_table %0, ^bb1 [^bb2, ^bb3]",
         );
         assert_round_trips(
-            r#""clif.switch"(%index)[^default, ^first, ^second] {cases = [0, 5]}"#,
-            "\"clif.switch\"(%0)[^bb1, ^bb2, ^bb3] {cases = [0, 5]}",
+            "clif.br_table %index, ^default []",
+            "clif.br_table %0, ^bb1 []",
+        );
+        assert_round_trips(
+            "clif.switch %index, ^default [0: ^first, 18446744073709551615: ^second]",
+            "clif.switch %0, ^bb1 [0: ^bb2, 18446744073709551615: ^bb3]",
+        );
+        assert_round_trips("clif.switch %index, ^default []", "clif.switch %0, ^bb1 []");
+        // A switch whose cases and targets disagree has no custom form.
+        assert_round_trips(
+            r#""clif.switch"(%index)[^default, ^first] {cases = [0, 5]}"#,
+            "\"clif.switch\"(%0)[^bb1, ^bb2] {cases = [0, 5]}",
         );
     }
 
     #[test]
     fn branch_table_builders_take_the_default_then_the_rest() {
         let mut ctx = crate::IrContext::new();
-        let parsed = parse_test_module(&mut ctx, &module(r#""clif.br_table"(%index)[^default]"#));
+        let parsed = parse_test_module(&mut ctx, &module("clif.br_table %index, ^default []"));
         let func = Func::from_op(&ctx, parsed.ops(&ctx)[0]).unwrap();
         let blocks = ctx.region(func.body(&ctx)).blocks.clone();
         let index = ctx.block_args(blocks[0])[0];
@@ -833,21 +935,14 @@ mod branch_table_tests {
     #[test]
     fn switch_requires_one_target_per_distinct_case() {
         assert_eq!(
-            switch_violations(
-                r#""clif.switch"(%index)[^default, ^first, ^second] {cases = [0, 5]}"#
-            ),
+            switch_violations("clif.switch %index, ^default [0: ^first, 5: ^second]"),
             ""
         );
-        assert_eq!(
-            switch_violations(r#""clif.switch"(%index)[^default] {cases = []}"#),
-            ""
-        );
+        assert_eq!(switch_violations("clif.switch %index, ^default []"), "");
         let mismatch =
             switch_violations(r#""clif.switch"(%index)[^default, ^first] {cases = [0, 5]}"#);
         assert!(mismatch.contains("2 case(s) but 1 target(s)"), "{mismatch}");
-        let duplicate = switch_violations(
-            r#""clif.switch"(%index)[^default, ^first, ^second] {cases = [5, 5]}"#,
-        );
+        let duplicate = switch_violations("clif.switch %index, ^default [5: ^first, 5: ^second]");
         assert!(duplicate.contains("duplicate case 5"), "{duplicate}");
     }
 }
