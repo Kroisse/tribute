@@ -263,7 +263,7 @@ impl<'a> Converter<'a> {
                 self.emit_exit(block, location, value, flow)?;
                 return Ok(());
             }
-            if name == scf::Switch::NAME && self.contains_tribute_control(source) {
+            if name == scf::IndexSwitch::NAME && self.contains_tribute_control(source) {
                 self.lower_structured_switch(source, rest, block, mapping, flow)?;
                 return Ok(());
             }

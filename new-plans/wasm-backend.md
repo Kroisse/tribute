@@ -123,19 +123,21 @@ Wasm 코드 생성기는 함수 본문이나 테이블 인덱스에서 CPS 여�
 
 ### Switch 지원 조건
 
-`scf_to_wasm`은 결과 없는 `scf.switch`를 case 순서대로 중첩된 비교와
+`scf_to_wasm`은 `scf.index_switch`를 case 순서대로 중첩된 비교와
 `wasm.if`로 낮춘다. Wasm이 정수를 직접 비교하는 폭은 `i32`와 `i64`뿐이므로
 discriminant는 `core.i32` 또는 `core.i64`여야 하고, 각각 `wasm.i32_eq`와
 `wasm.i64_eq`로 비교한다. 두 비교 모두 `core.i32` 조건을 만든다. 모든 case
-값은 정수 attribute이고 discriminant 타입의 부호 있는 범위에 들어가야 한다.
-다른 discriminant 타입, 정수가 아닌 case 값, 범위를 벗어난 case 값은 변환을
-시작하기 전에 해당 switch와 이유를 담은 conversion 오류로 거부한다.
+값은 discriminant 타입의 부호 있는 범위에 들어가야 한다. 다른 discriminant 타입과
+범위를 벗어난 case 값은 변환을 시작하기 전에 해당 switch와 이유를 담은
+conversion 오류로 거부한다. 결과가 있는 switch는 각 `wasm.if`가 그 결과 타입을
+선언하고, 안쪽 `wasm.if`의 결과를 바깥 region이 `wasm.yield`로 넘긴다.
+`scf.yield` 변환과 같이 결과는 하나까지만 낮춘다.
 
 ### Terminal structured-control 결과
 
 `scf_to_wasm`은 결과가 정확히 하나의 `core.never`이고 사용되지 않으며 블록의
-마지막 operation인 `scf.if`와 `scf.loop`를 zero-result Wasm 제어 연산으로
-낮춘다. 모든 진입 successor의 region은 단일 블록이고, 마지막 operation이
+마지막 operation인 `scf.if`, `scf.loop`, `scf.index_switch`를 zero-result Wasm
+제어 연산으로 낮춘다. 모든 진입 successor의 region은 단일 블록이고, 마지막 operation이
 검증된 `CallableExit` 또는 같은 terminal 판정을 만족하는 중첩 if/loop/switch여야
 한다. Native structured-to-CFG lowering과 같은 `RegionBranch`/`CallableExit`
 판정을 사용하며, parent 복귀, 불완전한 interface 응답, 오류는 terminal 증거가

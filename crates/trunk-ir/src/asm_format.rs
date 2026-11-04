@@ -231,8 +231,8 @@ pub(crate) fn expected(description: &'static str) -> winnow::error::ContextError
 /// `custom<D>` directive is (`new-plans/ir.md`, "선언적 어셈블리 형식").
 ///
 /// The element passes the entities in the order it names them: operands,
-/// attributes, and successors, each as a [`CustomEntity`] when printing and
-/// a [`RawCustomEntity`] when parsing.
+/// attributes, successors, and regions, each as a [`CustomEntity`] when
+/// printing and a [`RawCustomEntity`] when parsing.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is named by a `custom(..)` format element but does not implement `OpAsmDirective`",
     label = "`custom(..)` requires this implementation"
@@ -240,6 +240,11 @@ pub(crate) fn expected(description: &'static str) -> winnow::error::ContextError
 pub trait OpAsmDirective {
     /// What [`Self::decompose`] reads from the entities for [`Self::print`].
     type Parts<'a>;
+
+    /// Whether the printer writes a space before the directive, as before
+    /// other elements. A directive that starts on its own line with
+    /// [`OpPrintHelper::newline`] writes none.
+    const SPACED: bool = true;
 
     /// The parts [`Self::print`] writes so that [`Self::parse`] reads the
     /// entities back, or `None` when it cannot; the operation then prints
@@ -265,6 +270,8 @@ pub enum CustomEntity<'a> {
     Attribute(Option<&'a Attribute>),
     /// A successor, or the successors of a variadic one.
     Successors(crate::BlockList),
+    /// A region, or the regions of a variadic or optional one.
+    Regions(crate::RegionList),
 }
 
 /// An entity a [`OpAsmDirective`] parses.
@@ -276,6 +283,8 @@ pub enum RawCustomEntity<'a> {
     Attribute(Option<RawAttribute<'a>>),
     /// Successor labels, without `^`.
     Successors(Vec<&'a str>),
+    /// Regions, in order.
+    Regions(Vec<crate::parser::raw::RawRegion<'a>>),
 }
 
 /// A [`OpAsmDirective`]'s hooks, as a `custom` format element stores them.
@@ -284,6 +293,7 @@ pub struct OpAsmDirectiveHooks {
     pub fits: fn(&IrContext, &[CustomEntity<'_>]) -> bool,
     pub print: fn(&mut OpPrintHelper<'_, '_>, &[CustomEntity<'_>]) -> fmt::Result,
     pub parse: for<'a> fn(&mut &'a str) -> winnow::ModalResult<Vec<RawCustomEntity<'a>>>,
+    pub spaced: bool,
 }
 
 impl OpAsmDirectiveHooks {
@@ -293,6 +303,7 @@ impl OpAsmDirectiveHooks {
             fits: directive_fits::<T>,
             print: directive_print::<T>,
             parse: T::parse,
+            spaced: T::SPACED,
         }
     }
 }

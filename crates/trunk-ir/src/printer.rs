@@ -395,6 +395,12 @@ impl<'a, 'ctx> OpPrintHelper<'a, 'ctx> {
         write!(self.f, "{}}}", " ".repeat(self.indent))
     }
 
+    /// Start a new line at the operation's indentation, as MLIR's
+    /// `printNewline` does.
+    pub fn newline(&mut self) -> fmt::Result {
+        write!(self.f, "\n{}", " ".repeat(self.indent))
+    }
+
     /// Print the operation with generic assembly.
     ///
     /// Custom formats use this when their concise form cannot represent the

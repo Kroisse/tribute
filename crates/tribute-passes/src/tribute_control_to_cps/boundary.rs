@@ -498,37 +498,17 @@ pub(super) fn verify_source_conversion_shapes(
         }
         // `validate_all` reports an operation that breaks its definition; the
         // rules below read only well-formed ones.
-        if let Ok(switch) = scf::Switch::from_op(ctx, op)
+        if let Ok(switch) = scf::IndexSwitch::from_op(ctx, op)
             && satisfies_definition(ctx, op)
         {
-            if let [body] = ctx.region(switch.body(ctx)).blocks.as_slice() {
-                for arm in ctx.block(*body).ops.iter().copied() {
-                    let arm_body = if let Ok(case) = scf::Case::from_op(ctx, arm) {
-                        case.body(ctx)
-                    } else if let Ok(default) = scf::Default::from_op(ctx, arm) {
-                        default.body(ctx)
-                    } else {
-                        failures.push(failure(
-                            ctx,
-                            arm,
-                            "scf.switch body may contain only scf.case and scf.default",
-                        ));
-                        continue;
-                    };
-                    if satisfies_definition(ctx, arm) && ctx.region(arm_body).blocks.len() != 1 {
-                        failures.push(failure(
-                            ctx,
-                            arm,
-                            "scf switch arm region requires exactly one block",
-                        ));
-                    }
+            for region in switch.arm_regions(ctx) {
+                if ctx.region(region).blocks.len() != 1 {
+                    failures.push(failure(
+                        ctx,
+                        op,
+                        "scf.index_switch region requires exactly one block",
+                    ));
                 }
-            } else {
-                failures.push(failure(
-                    ctx,
-                    op,
-                    "scf.switch body region requires exactly one block",
-                ));
             }
         }
         for region in ctx.op_regions(op) {

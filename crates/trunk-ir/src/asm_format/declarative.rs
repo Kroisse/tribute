@@ -47,6 +47,9 @@ pub enum FormatElement {
     Attribute(usize),
     /// A string attribute written as a definition name, `@name`.
     Symbol(usize),
+    /// The type of a single operand, which the parser checks against the
+    /// operand's definition.
+    OperandType(usize),
     /// The type of one fixed result.
     ResultType(usize),
     /// The comma-separated types of every result, for a variadic or optional
@@ -95,6 +98,7 @@ pub enum CustomSlot {
     Operand(usize),
     Attribute(usize),
     Successor(usize),
+    Region(usize),
 }
 
 /// The entities a custom element names, as its directive prints them.
@@ -119,6 +123,14 @@ fn custom_entities<'c>(
                 CustomEntity::Successors(
                     range
                         .filter_map(|position| ctx.op_successor(op, position))
+                        .collect(),
+                )
+            }
+            CustomSlot::Region(index) => {
+                let range = region_range(schema, index, ctx.op_region_count(op));
+                CustomEntity::Regions(
+                    range
+                        .filter_map(|position| ctx.op_region(op, position))
                         .collect(),
                 )
             }
@@ -380,6 +392,12 @@ impl Printer<'_, '_, '_> {
                 self.token('@')?;
                 self.h.write_symbol_text(text)
             }
+            FormatElement::OperandType(index) => {
+                let operands = ctx.op_operands(op);
+                let range = operand_range(self.schema, index, operands.len());
+                self.token('t')?;
+                self.h.write_type(ctx.value_ty(operands[range.start]))
+            }
             FormatElement::ResultType(index) => {
                 let ty = ctx.op_result_types(op)[index];
                 self.token('t')?;
@@ -457,7 +475,11 @@ impl Printer<'_, '_, '_> {
             }
             FormatElement::Custom { hooks, entities } => {
                 let entities = custom_entities(ctx, op, self.schema, entities);
-                self.token('c')?;
+                if hooks.spaced {
+                    self.token('c')?;
+                } else {
+                    self.spacing = Spacing::Space;
+                }
                 (hooks.print)(self.h, &entities)
             }
             FormatElement::Signature {
@@ -963,6 +985,9 @@ impl<'a> FormatParser<'a> {
                         (CustomSlot::Successor(index), RawCustomEntity::Successors(labels)) => {
                             self.parsed.successors[index] = labels;
                         }
+                        (CustomSlot::Region(index), RawCustomEntity::Regions(regions)) => {
+                            self.parsed.regions[index] = regions;
+                        }
                         _ => {
                             return Err(ErrMode::Cut(expected(
                                 "the kind of entity the custom element names",
@@ -970,6 +995,13 @@ impl<'a> FormatParser<'a> {
                         }
                     }
                 }
+                Ok(())
+            }
+            FormatElement::OperandType(index) => {
+                let ty = raw_type
+                    .parse_next(input)
+                    .map_err(|e| e.map(|_| expected("operand type")))?;
+                self.parsed.operand_types.push((index, vec![ty]));
                 Ok(())
             }
             FormatElement::ResultType(index) => {
@@ -1338,6 +1370,9 @@ mod tests {
         #[asm_format(lhs "," rhs attr_dict ":" type(result))]
         fn add(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
+        #[asm_format(value ":" type(value) attr_dict)]
+        fn consume(value: Value<_>) {}
+
         #[asm_format(args attr_dict_bare (":" types(results)^)?)]
         fn emit(args: Variadic<_>) -> Variadic<_> {}
 
@@ -1591,6 +1626,31 @@ mod tests {
   }
 }
 "#,
+        );
+    }
+
+    #[test]
+    fn operand_types_are_written_and_checked() {
+        assert_round_trip(
+            r#"core.module @m {
+  asm_format_test.fun @f(%0: core.i32) {
+      asm_format_test.consume %0 : core.i32
+      asm_format_test.consume %0 : core.i32 attributes {extra = 1}
+  }
+}
+"#,
+        );
+        let error = parse_error(
+            r#"core.module @m {
+  asm_format_test.fun @f(%0: core.i32) {
+      asm_format_test.consume %0 : core.i64
+  }
+}
+"#,
+        );
+        assert!(
+            error.contains("operand '%0' of 'asm_format_test.consume' is written as core.i64"),
+            "{error}"
         );
     }
 

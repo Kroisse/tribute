@@ -72,6 +72,8 @@ enum Element {
     Symbol(usize),
     ResultType,
     ResultTypes,
+    /// `type(x)`: the type of a single operand.
+    OperandType(usize),
     /// `args(r)`: the entry block arguments of a region.
     RegionArgs(usize),
     /// `functional_type(xs, results)`: the types of an operand and of the
@@ -367,6 +369,12 @@ impl<'a> Format<'a> {
                 }
                 Element::Symbol(i)
             }
+            ("type", Some(Entity::Operand(i))) => {
+                if self.op.operands[i].variadic {
+                    return err(arg_span, "`type(..)` writes the type of a single operand");
+                }
+                return Ok(Element::OperandType(i));
+            }
             ("type" | "types", Some(Entity::Results)) => match (&self.op.results, plural) {
                 (ResultDef::Single(_), false) => Element::ResultType,
                 (ResultDef::Optional(_), false) | (ResultDef::Variadic(_), true) => {
@@ -444,7 +452,7 @@ impl<'a> Format<'a> {
         Ok(element)
     }
 
-    /// `custom(D(a, b, ..))`: operands, attributes, and successors that
+    /// `custom(D(a, b, ..))`: operands, attributes, successors, and regions that
     /// directive `D` writes by hand.
     fn custom(&mut self, args: TokenStream, span: Span) -> Result<Element, FormatError> {
         let mut tokens: Vec<TokenTree> = args.into_iter().collect();
@@ -471,12 +479,15 @@ impl<'a> Format<'a> {
             let name = name.strip_prefix("r#").unwrap_or(&name);
             let entity = match self.lookup(name) {
                 Some(
-                    entity @ (Entity::Operand(_) | Entity::Attribute(_) | Entity::Successor(_)),
+                    entity @ (Entity::Operand(_)
+                    | Entity::Attribute(_)
+                    | Entity::Successor(_)
+                    | Entity::Region(_)),
                 ) => entity,
                 Some(_) => {
                     return err(
                         ident.span(),
-                        "`custom(D(..))` writes operands, attributes, and successors",
+                        "`custom(D(..))` writes operands, attributes, successors, and regions",
                     );
                 }
                 None => return err(ident.span(), format!("the operation declares no `{name}`")),
@@ -947,6 +958,7 @@ fn gen_elements(
             Element::Symbol(i) => quote!(#fmt::FormatElement::Symbol(#i)),
             Element::ResultType => quote!(#fmt::FormatElement::ResultType(0)),
             Element::ResultTypes => quote!(#fmt::FormatElement::ResultTypes),
+            Element::OperandType(i) => quote!(#fmt::FormatElement::OperandType(#i)),
             Element::RegionArgs(i) => quote!(#fmt::FormatElement::RegionArgs(#i)),
             Element::FunctionalType(i) => quote!(#fmt::FormatElement::FunctionalType(#i)),
             Element::AttrDict { bare } => quote!(#fmt::FormatElement::AttrDict { bare: #bare }),
@@ -978,7 +990,8 @@ fn gen_elements(
                     Entity::Operand(i) => quote!(#fmt::CustomSlot::Operand(#i)),
                     Entity::Attribute(i) => quote!(#fmt::CustomSlot::Attribute(#i)),
                     Entity::Successor(i) => quote!(#fmt::CustomSlot::Successor(#i)),
-                    _ => unreachable!("`custom` writes operands, attributes, and successors"),
+                    Entity::Region(i) => quote!(#fmt::CustomSlot::Region(#i)),
+                    _ => unreachable!("`custom` writes operands, attributes, successors, and regions"),
                 });
                 quote!(#fmt::FormatElement::Custom {
                     hooks: #crate_path::asm_format::OpAsmDirectiveHooks::of::<#directive>(),
@@ -1235,13 +1248,10 @@ mod tests {
             ),
             (
                 quote!(
-                    fn op() {
-                        #[region(r)]
-                        {}
-                    }
+                    fn op() -> Value<_> {}
                 ),
-                quote!("x" custom(D(r))),
-                "writes operands, attributes, and successors",
+                quote!("x" custom(D(result)) ":" type(result)),
+                "writes operands, attributes, successors, and regions",
             ),
             (
                 quote!(

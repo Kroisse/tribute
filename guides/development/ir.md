@@ -193,9 +193,12 @@ where
   keyword kind writes a bare identifier, read back with
   `asm_format::parse_keyword`, as `tribute_control.handler` writes its kind
   `op`. `custom(D(a, b))` leaves the
-  operands, attributes, and successors it names to `D`'s
+  operands, attributes, successors, and regions it names to `D`'s
   `asm_format::OpAsmDirective`, as MLIR's `custom<D>` does; `clif.switch`
-  writes each case with its target as `[0: ^first, 5: ^second]` this way.
+  writes each case with its target as `[0: ^first, 5: ^second]` this way,
+  and `scf.index_switch` writes each case with its region on its own line
+  through `OpPrintHelper::newline`. `type(x)` on a single operand writes
+  its type, which the parser checks against the operand's definition.
   `signature(t, body)` writes the type of `t`, an `Attr<TypeOf<S>>`
   attribute, a fixed `Value<S>` operand, or a `Value<S>` result, as
   `(%a: A) -> R`, through the `asm_format::SignatureCodec` of `S`'s bound,

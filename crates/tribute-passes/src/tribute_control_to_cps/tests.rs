@@ -743,69 +743,19 @@ fn source_successors_fail_before_conversion_and_leave_ir_unchanged() {
 }
 
 #[test]
-fn malformed_switch_case_fails_before_conversion_and_is_atomic() {
-    let input = r#"core.module @test {
-  tribute_cps.func @broken(%value: core.i32) -> core.i32 convention(cps) {
-    scf.switch %value {
-      %identity = tribute_cps.lambda(%nested: core.i32) -> core.i32 captures [] entries {
-        direct {
-          tribute_control.return %nested
-        }
-      }
-    }
-    tribute_control.return %value
-  }
-}"#;
-    let (mut ctx, module) = parse(input);
-    let error = assert_unchanged_on_error(&mut ctx, module, run_pre_cps);
-    assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
-    assert!(
-        error
-            .to_string()
-            .contains("scf.switch body may contain only scf.case and scf.default"),
-        "{error}"
-    );
-}
-
-#[test]
 fn source_shape_validation_rejects_every_malformed_switch_component() {
-    let malformed = [
-        (
-            r#"core.module @test {
+    let malformed = [(
+        r#"core.module @test {
   %value = arith.const {value = 0} : core.i32
-  scf.switch %value {
+  scf.index_switch %value : (core.i32) -> ()
+  default {
     ^first:
-      scf.default {
-        scf.yield
-      }
+      scf.yield
     ^second:
   }
 }"#,
-            "body region requires exactly one block",
-        ),
-        (
-            r#"core.module @test {
-  %value = arith.const {value = 0} : core.i32
-  scf.switch %value {
-    %invalid = arith.const {value = 1} : core.i32
-  }
-}"#,
-            "body may contain only scf.case and scf.default",
-        ),
-        (
-            r#"core.module @test {
-  %value = arith.const {value = 0} : core.i32
-  scf.switch %value {
-    scf.default {
-      ^first:
-        scf.yield
-      ^second:
-    }
-  }
-}"#,
-            "arm region requires exactly one block",
-        ),
-    ];
+        "scf.index_switch region requires exactly one block",
+    )];
 
     for (input, expected) in malformed {
         let (ctx, module) = parse(input);
@@ -2295,14 +2245,13 @@ fn textual_scf_switch_reenters_the_shared_suffix() {
     let input = r#"core.module @test {
   tribute_cps.func @switching(%input: core.i32) -> core.i32 convention(cps) {
     %choice = arith.const {value = 0} : core.i32
-    scf.switch %choice {
-      scf.case 0 {
-        %performed = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
-        scf.yield
-      }
-      scf.default {
-        scf.yield
-      }
+    scf.index_switch %choice : (core.i32) -> ()
+    case 0 {
+      %performed = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
+      scf.yield
+    }
+    default {
+      scf.yield
     }
     tribute_control.return %input
   }
@@ -2327,8 +2276,8 @@ fn textual_scf_switch_reenters_the_shared_suffix() {
     }
     .unwrap();
     let printed = print_module(&ctx, module.op());
-    assert!(printed.contains("scf.switch"));
-    assert!(printed.contains("scf.case"));
+    assert!(printed.contains("scf.index_switch"));
+    assert!(printed.contains("case 0"));
     assert!(printed.contains("ability.perform"));
     assert!(printed.matches("func.tail_call_indirect").count() >= 2);
     assert!(!printed.contains("tribute_control."));

@@ -480,7 +480,7 @@ impl Converter<'_> {
             return Err(TributeControlToCpsError::post_op(
                 source,
                 self.ctx.op(source).location,
-                "effectful scf.switch must be resultless inside a CPS callable",
+                "effectful scf.index_switch must be resultless inside a CPS callable",
             ));
         }
         let location = self.ctx.op(source).location;
@@ -491,51 +491,20 @@ impl Converter<'_> {
         };
         self.ctx.push_op(block, continuation_op);
 
-        let Ok(source_body) = self.ctx.op_regions(source).exactly_one() else {
-            return Err(TributeControlToCpsError::post_op(
-                source,
-                location,
-                "scf.switch requires exactly one body region",
-            ));
-        };
-        let source_body_blocks = self.ctx.region(source_body).blocks.clone();
-        let [source_body_block] = source_body_blocks.as_slice() else {
-            return Err(TributeControlToCpsError::post_op(
-                source,
-                location,
-                "scf.switch body requires exactly one block",
-            ));
-        };
-        let switch_block = make_block(self.ctx, location, &[]);
-        let source_cases = self.ctx.block(*source_body_block).ops.clone();
-        for case in source_cases {
-            let case_data = self.ctx.op(case);
-            let case_location = case_data.location;
-            let is_case = case_data.name.is(self.ctx, "scf.case");
-            let is_default = case_data.name.is(self.ctx, "scf.default");
-            if !is_case && !is_default {
-                return Err(TributeControlToCpsError::post_op(
-                    case,
-                    case_location,
-                    "scf.switch body may contain only scf.case and scf.default",
-                ));
-            }
-            let case_value = self.ctx.op_attrs(case).get("value").cloned();
-            let Ok(source_region) = self.ctx.op_regions(case).exactly_one() else {
-                return Err(TributeControlToCpsError::post_op(
-                    case,
-                    case_location,
-                    "scf switch arm requires exactly one region",
-                ));
-            };
+        let switch = scf::IndexSwitch::from_op(self.ctx, source)
+            .map_err(|_| self.malformed_source(source, "expected scf.index_switch"))?;
+        let cases: Vec<i64> = switch.cases(self.ctx).collect();
+        let mut converted_regions = Vec::new();
+        for source_region in switch.arm_regions(self.ctx) {
             let source_case_blocks = &self.ctx.region(source_region).blocks;
             let [source_case_block] = source_case_blocks.as_slice() else {
                 return Err(TributeControlToCpsError::post_op(
-                    case,
-                    case_location,
-                    "scf switch arm requires exactly one block",
+                    source,
+                    location,
+                    "scf.index_switch region requires exactly one block",
                 ));
             };
+            let case_location = self.ctx.block(*source_case_block).location;
             let source_case_ops = self.ctx.block(*source_case_block).ops.clone();
             let converted_block = make_block(self.ctx, case_location, &[]);
             let mut case_mapping = mapping.clone();
@@ -550,30 +519,25 @@ impl Converter<'_> {
                 &mut case_mapping,
                 &case_flow,
             )?;
-            let converted_region = single_block_region(self.ctx, case_location, converted_block);
-            let converted = if is_case {
-                let Some(case_value) = case_value else {
-                    return Err(self.malformed_source(case, "scf.case requires a value attribute"));
-                };
-                scf::Case::operands()
-                    .value(case_value)
-                    .regions(converted_region)
-                    .build(self.ctx, case_location)
-                    .op_ref()
-            } else {
-                scf::Default::operands()
-                    .regions(converted_region)
-                    .build(self.ctx, case_location)
-                    .op_ref()
-            };
-            self.ctx.push_op(switch_block, converted);
+            converted_regions.push(single_block_region(
+                self.ctx,
+                case_location,
+                converted_block,
+            ));
         }
-        let switch_region = single_block_region(self.ctx, location, switch_block);
-        let discriminant = self.ctx.op_operands(source)[0];
+        let default_region = converted_regions
+            .pop()
+            .expect("arm_regions ends with the default region");
+        let discriminant = switch.discriminant(self.ctx);
         let discriminant = mapping.get(&discriminant).copied().unwrap_or(discriminant);
-        let lowered = scf::Switch::operands(discriminant)
-            .regions(switch_region)
-            .build(self.ctx, location);
+        let lowered = scf::IndexSwitch::build_with_arms(
+            self.ctx,
+            location,
+            discriminant,
+            [],
+            cases.into_iter().zip(converted_regions),
+            default_region,
+        );
         self.copy_extra_attrs(source, lowered.op_ref(), &[]);
         self.ctx.push_op(block, lowered.op_ref());
         Ok(())
