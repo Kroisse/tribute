@@ -80,7 +80,8 @@ impl InstanceError {
             ),
             InstanceErrorKind::IncompleteNominalArgument => "a generic struct or enum is used at \
                  a type argument that holds an open ability row or a type variable of a \
-                 `let`-bound function; these do not specialize, so give the argument a concrete type"
+                 `let`-bound value whose type contains a function; these do not specialize, so \
+                 give the argument a concrete type"
                 .to_owned(),
             InstanceErrorKind::SpecializationInvariant(violation) => format!(
                 "internal compiler error: the specialization output breaks its contract at {}: \
