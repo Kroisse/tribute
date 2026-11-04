@@ -808,7 +808,7 @@ fn main() -> Nil {}
 fn returned_callback_through_a_body_tail_is_direct_after_pure_let(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
-        "returned_callback_preserves_cps_convention_after_pure_let.trb",
+        "returned_callback_through_body_tail_after_pure_let.trb",
         r#"
 fn consume(value: Nat) -> Nil { Nil }
 
