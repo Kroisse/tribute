@@ -541,7 +541,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
-            "core.module @test { \"clif.func\"() ({ clif.return }) {sym_name = \"helper\", type = clif.func_sig<() -> ()>} }",
+            "core.module @test { clif.func @helper() { clif.return } }",
         );
         let op = module.ops(&ctx)[0];
         let extra = ctx.create_region(trunk_ir::RegionData {
@@ -561,12 +561,12 @@ mod tests {
 
     #[test]
     fn unsupported_bound_declaration_signatures_are_rejected_even_when_unreferenced() {
-        for signature in ["(core.bytes) -> ()", "() -> core.bytes"] {
+        for signature in ["(%bytes: core.bytes)", "() -> core.bytes"] {
             let mut ctx = IrContext::new();
             let module = parse_test_module(
                 &mut ctx,
                 &format!(
-                    "core.module @test {{ \"clif.func\"() {{sym_name = \"helper\", type = clif.func_sig<{signature}>, abi = \"C\"}} }}"
+                    "core.module @test {{ clif.func @helper{signature} attributes {{abi = \"C\"}} }}"
                 ),
             );
             let before = trunk_ir::printer::print_module(&ctx, module.op());

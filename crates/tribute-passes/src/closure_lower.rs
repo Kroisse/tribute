@@ -1140,7 +1140,7 @@ mod tests {
             "module entrypoint should lower closure.new:\n{ir}"
         );
         assert!(
-            !ir.contains("closure.func") && !ir.contains("closure.unpack"),
+            !ir.contains("closure.entry") && !ir.contains("closure.unpack"),
             "module entrypoint should lower closure accessors:\n{ir}"
         );
         let exact_calls = collect_ops(&ctx, module.op())
@@ -1184,7 +1184,7 @@ mod tests {
             "module lowering must revisit nested functions:\n{inner_ir}"
         );
         assert!(
-            !inner_ir.contains("closure.func") && !inner_ir.contains("closure.unpack"),
+            !inner_ir.contains("closure.entry") && !inner_ir.contains("closure.unpack"),
             "nested closure accessors must be fully lowered:\n{inner_ir}"
         );
         let inner_calls = call_indirect_operands_in_func(&ctx, inner);
@@ -1204,10 +1204,10 @@ mod tests {
             r#"core.module @test {
             !Cps = closure.closure<func.func_sig<(core.i32) -> core.never>>
             func.func @invalid(%callee: !Cps, %value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-                "func.tail_call_indirect"(%callee, %value)
+                func.tail_call_indirect %callee(%value) : (core.i32) -> core.never
             }
             func.func @otherwise_lowerable(%callee: !Cps) -> core.i32 {
-                %code = "closure.func"(%callee) : core.i32
+                %code = closure.entry %callee {index = 0} : core.i32
                 func.return %code
             }
         }"#,
@@ -1255,11 +1255,11 @@ mod tests {
             !Callback = closure.closure<func.func_sig<() -> core.i32>>
             func.func @invalid(%callee: !Callback) -> core.i32 {{
                 {call}
-                %zero = "arith.constant"() {{value = 0}} : core.i32
+                %zero = arith.const {{value = 0}} : core.i32
                 func.return %zero
             }}
             func.func @otherwise_lowerable(%callee: !Callback) -> core.i32 {{
-                %code = "closure.func"(%callee) : core.i32
+                %code = closure.entry %callee {{index = 0}} : core.i32
                 func.return %code
             }}
         }}"#,
@@ -1331,7 +1331,7 @@ mod tests {
   !nested = core.tuple<!closure>
   func.func @run(%callback: !closure) -> !nested {
     %created = closure.new {entries = [@callback]} : !closure
-    %packed = "core.tuple_pack"(%created) : !nested
+    %packed = core.unrealized_conversion_cast %created : !nested
     func.return %packed
   }
 }"#,
@@ -1444,7 +1444,7 @@ mod tests {
   }}
   func.func @run(%evidence: {evidence}, %done: core.i32) -> core.never attributes {{tribute.calling_convention = "cps"}} {{
     %callee = closure.new {{entries = [@callee]}} : !cps
-    "func.tail_call_indirect"(%callee, %evidence, %done)
+    func.tail_call_indirect %callee(%evidence, %done) : ({evidence}, core.i32) -> core.never
   }}
 }}"#
             ),
@@ -1481,7 +1481,7 @@ mod tests {
   func.func @external(%value: core.i32) -> core.i32
   func.func @caller(%value: core.i32) -> core.i32 {
     %callee = func.constant @external : (core.i32) -> core.i32
-    %result = "func.call_indirect"(%callee, %value) : core.i32
+    %result = func.call_indirect %callee(%value) : (core.i32) -> core.i32
     func.return %result
   }
 }"#,
@@ -1701,7 +1701,7 @@ mod tests {
     %environment = adt.ref_null {{type = tribute_rt.anyref}} : tribute_rt.anyref
     %pack = adt.struct_new %function, %environment {{type = !_closure}} : !_closure
     %argument = core.unrealized_conversion_cast %pack : !actual
-    "func.tail_call_indirect"(%callee, %evidence, %done, %argument) {{tribute.calling_convention = "cps"}}
+    func.tail_call_indirect %callee(%evidence, %done, %argument) attributes {{tribute.calling_convention = "cps"}} : ({evidence}, core.i32, !expected) -> core.never
   }}
 }}"#
             ),
