@@ -28,7 +28,7 @@ const MODULE: &str = r#"core.module @test {
       tribute_control.return %y
     }
     %g = tribute_control.func_ref @apply rows [{instances = [@A, @B]}] : !applied
-    %r = tribute_control.call @apply(%f, %x) attributes {row_args = [{instances = [@A, @B]}]} : (!closed, core.i32) -> core.i32
+    %r = tribute_control.call @apply(%f, %x) attributes {row_args = [{instances = [@A, @B]}]} : (tribute_control.func_sig<(core.i32) -> core.i32 row(@A, @B)>, core.i32) -> core.i32
     tribute_control.return %r
   }
 }"#;

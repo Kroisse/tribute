@@ -493,9 +493,10 @@ literal은 문자열 literal로 쓴다.
 - **`functional_type(xs, results)`** — operand `xs`의 타입과 result 타입을 함수
   타입으로 쓴다(MLIR `functional-type`, `func.call @f(%a) : (A) -> R`). Result가
   하나면 괄호 없이, 없거나 여럿이면 괄호로 묶어 쓴다(`-> ()`, `-> (R, S)`).
-  Result를 선언하지 않은 operation은 operand만 나열하고 `-> ()`를 쓴다. Parser는
-  operand 타입을 그 정의에서 얻으므로, 읽은 operand 타입은 쓰지 않고 result
-  타입만 재구성한다.
+  Result를 선언하지 않은 operation은 operand만 나열하고 `-> ()`를 쓴다. Operand
+  타입은 그 정의에서 얻으므로 parser는 읽은 operand 타입이 operand마다 하나씩
+  있고 정의의 타입과 같은지 확인하며, 다르면 거부한다(MLIR과 같다). Result
+  타입은 읽은 대로 재구성한다.
 - **`args(r)`** — region `r`의 entry block argument를 `(%a: A, %b: B)`로 쓰고,
   `r`은 entry block label을 생략한다. `signature`와 같은 방식이지만 타입은 block
   argument에서 읽는다. `r`은 고정 region이며, 형식은 entry argument를 header로

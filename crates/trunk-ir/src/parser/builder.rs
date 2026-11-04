@@ -401,6 +401,28 @@ impl<'a> ArenaIrBuilder<'a> {
             })
             .collect::<Result<_, _>>()?;
 
+        // Check the operand types the format writes
+        for (name, raw_ty) in &raw.operand_types {
+            let written = self.build_type(raw_ty)?;
+            let value = self.resolve_value(name).ok_or_else(|| ParseError {
+                message: format!("undefined value '%{}' in operation '{}'", name, raw.name),
+                offset: 0,
+            })?;
+            let actual = self.ctx.value_ty(value);
+            if written != actual {
+                return Err(ParseError {
+                    message: format!(
+                        "operand '%{}' of '{}' is written as {}, but its type is {}",
+                        name,
+                        raw.name,
+                        crate::printer::print_type(self.ctx, written),
+                        crate::printer::print_type(self.ctx, actual),
+                    ),
+                    offset: 0,
+                });
+            }
+        }
+
         // Build result types
         let result_types: Vec<TypeRef> = raw
             .result_types

@@ -811,6 +811,8 @@ fn visit(elements: &[FormatElement], f: &mut impl FnMut(&FormatElement)) {
 /// The entities parsed so far, by schema position.
 struct Parsed<'a> {
     operands: Vec<Vec<&'a str>>,
+    /// The types written for an operand entity, by its schema position.
+    operand_types: Vec<(usize, Vec<RawType<'a>>)>,
     attributes: Vec<(Cow<'a, str>, RawAttribute<'a>)>,
     result_types: Vec<Vec<RawType<'a>>>,
     regions: Vec<Vec<RawRegion<'a>>>,
@@ -837,6 +839,7 @@ pub(crate) fn parse<'a>(
         entry_args: Vec::new(),
         parsed: Parsed {
             operands: vec![Vec::new(); schema.operands.len()],
+            operand_types: Vec::new(),
             attributes: Vec::new(),
             result_types: vec![Vec::new(); result_slots],
             regions: vec![Vec::new(); schema.regions.len()],
@@ -848,6 +851,7 @@ pub(crate) fn parse<'a>(
     }
     let Parsed {
         operands,
+        operand_types: written,
         attributes,
         result_types,
         regions,
@@ -862,6 +866,13 @@ pub(crate) fn parse<'a>(
         }
         position += parsed.len();
     }
+    let mut operand_types = Vec::new();
+    for (index, types) in written {
+        if types.len() != operands[index].len() {
+            return Err(ErrMode::Cut(expected("one type for each operand")));
+        }
+        operand_types.extend(operands[index].iter().copied().zip(types));
+    }
     Ok(RawOperation {
         results,
         name,
@@ -869,6 +880,7 @@ pub(crate) fn parse<'a>(
         func_params: parser.entry_args,
         func_param_regions,
         operands: operands.into_iter().flatten().collect(),
+        operand_types,
         attributes,
         result_types: result_types.into_iter().flatten().collect(),
         regions: regions.into_iter().flatten().collect(),
@@ -1027,7 +1039,7 @@ impl<'a> FormatParser<'a> {
                 self.parsed.successors[index] = labels;
                 Ok(())
             }
-            FormatElement::FunctionalType(_) => {
+            FormatElement::FunctionalType(index) => {
                 let mut list = |input: &mut &'a str| {
                     delimited(
                         ('(', ws),
@@ -1036,10 +1048,10 @@ impl<'a> FormatParser<'a> {
                     )
                     .parse_next(input)
                 };
-                // The operand types are those of the operands' definitions.
-                let _: Vec<RawType<'a>> = list
+                let types: Vec<RawType<'a>> = list
                     .parse_next(input)
                     .map_err(|e| e.map(|_| expected("operand types `(A, ..)`")))?;
+                self.parsed.operand_types.push((index, types));
                 (ws, "->", ws).parse_next(input)?;
                 let results: Vec<RawType<'a>> = if input.starts_with('(') {
                     list.parse_next(input)?
@@ -1580,6 +1592,31 @@ mod tests {
 }
 "#,
         );
+    }
+
+    #[test]
+    fn written_operand_types_must_match_the_operands() {
+        let error = parse_error(
+            r#"core.module @m {
+  asm_format_test.fun @f(%0: core.i32) {
+      asm_format_test.tail_fn @g(%0) : (core.i64) -> ()
+  }
+}
+"#,
+        );
+        assert!(
+            error.contains("operand '%0' of 'asm_format_test.tail_fn' is written as core.i64, but its type is core.i32"),
+            "{error}"
+        );
+        let error = parse_error(
+            r#"core.module @m {
+  asm_format_test.fun @f(%0: core.i32) {
+      asm_format_test.tail_fn @g(%0) : (core.i32, core.i32) -> ()
+  }
+}
+"#,
+        );
+        assert!(error.contains("one type for each operand"), "{error}");
     }
 
     #[test]

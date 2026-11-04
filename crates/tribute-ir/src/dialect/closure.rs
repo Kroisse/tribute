@@ -448,6 +448,7 @@ fn parse_closure_lambda<'a>(
         func_params: vec![],
         func_param_regions: vec![],
         operands: captures,
+        operand_types: Vec::new(),
         attributes,
         result_types: vec![closure_raw_ty],
         regions,
