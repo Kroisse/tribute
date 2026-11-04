@@ -1056,24 +1056,6 @@ mod tests {
     }
 
     #[test]
-    fn untyped_references_and_indirect_calls_without_signatures_are_reported() {
-        let violations = kinds(
-            r#"core.module @test {
-  func.func @target(%value: core.i32) {
-    func.return
-  }
-  func.func @caller(%callee: core.ptr, %value: core.i32) {
-    %reference = "func.constant"() {value = @target} : core.i32
-    "func.call_indirect"(%callee, %value)
-    func.return
-  }
-}"#,
-        );
-        assert!(violations.contains(&ViolationKind::ReferenceSignatureMismatch));
-        assert!(violations.contains(&ViolationKind::MissingExactSignature));
-    }
-
-    #[test]
     fn unknown_keys_under_preserved_prefixes_must_be_classified() {
         assert_eq!(
             kinds(

@@ -232,7 +232,11 @@ exact bound 충돌)는 컴파일 시점에 거부한다. 다른 crate의 dialect
 선언적 제약은 verifier checkpoint에서만 강제한다. Parser, raw operation
 builder, operation clone, 결과 타입 재지정은 제약을 우회할 수 있으며, rewrite
 중간 상태가 일시적으로 제약을 위반하는 것도 허용한다. Pass 경계는 checkpoint다.
-각 pass가 끝나면 IR은 선언된 제약을 다시 만족해야 한다. 값의 타입만 먼저 바꾸는
+각 pass가 끝나면 IR은 선언된 제약을 다시 만족해야 한다. 따라서 pass와 backend는
+입력이 선언된 제약과 `#[verify]` hook을 만족한다고 가정하며, 그 검사를 자기
+코드에서 반복하지 않는다. Target 경계처럼 IR을 받아 검증하는 validator는
+operation별 검사 전에 정의의 검증을 먼저 수행하고, 자기 검사는 정의가 표현하지
+못하는 계약(symbol 해석, enclosing callable, region 내용 등)만 맡는다. 값의 타입만 먼저 바꾸는
 부분 변환은 `core.unrealized_conversion_cast`로 use가 선언한 타입을 유지하며,
 target 타입 변환이 양쪽 타입을 같게 만든 뒤에 cast를 해소한다. 표현이 같다는
 이유만으로 타입이 다른 값을 cast 없이 대입하지 않는다.

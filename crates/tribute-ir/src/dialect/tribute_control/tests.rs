@@ -671,10 +671,6 @@ fn malformed_func_sig_storage_uses_generic_assembly_without_loss() {
     let errors = validate_local(&ctx, module);
     let errors = messages(&errors);
     assert!(
-        errors.contains("missing required attribute `type`"),
-        "{errors}"
-    );
-    assert!(
         errors.contains("malformed tribute_control.func_sig"),
         "{errors}"
     );
@@ -767,70 +763,6 @@ fn validator_rejects_invalid_convention_and_duplicate_op_metadata() {
     let messages = messages(&result);
     assert!(messages.contains("malformed tribute_control.func_sig: Convention"));
     assert!(messages.contains("belongs only on physical operations"));
-}
-
-#[test]
-fn validator_rejects_wrong_required_attribute_types() {
-    let (mut ctx, module) = parse_fixture(
-        r#"core.module @test {
-  !callable = tribute_control.func_sig<() -> core.i32>
-  tribute_control.func @malformed() -> core.i32
-  %ref = "tribute_control.func_ref"() {value = 1} : !callable
-  %call = tribute_control.call {callee = 1} : core.i32
-  %perform = "tribute_control.perform"() {ability = 1, op_name = 2, operation_kind = 3} : core.i32
-  "tribute_control.handler"() ({
-    %constant = arith.const {value = 0} : core.i32
-    tribute_control.yield %constant
-  }) {ability = 1, op_name = 2, kind = 3, operation_result_type = 4}
-}"#,
-    );
-
-    // The custom func parser derives and hides sym_name/type, so malformed
-    // values for those two required attributes are not text-representable.
-    let malformed_func = control_op(&ctx, module, Func::NAME);
-    ctx.op_attrs_mut(malformed_func)
-        .insert("sym_name", Attribute::Int(1));
-    ctx.op_attrs_mut(malformed_func)
-        .insert("type", Attribute::Int(2));
-
-    let result = validate_local(&ctx, module);
-    assert_op_diagnostics(
-        &result,
-        malformed_func,
-        &[
-            "attribute `sym_name` must be a String attribute",
-            "attribute `type` must be a Type attribute",
-        ],
-    );
-    assert_op_diagnostics(
-        &result,
-        control_op(&ctx, module, FuncRef::NAME),
-        &["attribute `value` must be a SymbolRef attribute"],
-    );
-    assert_op_diagnostics(
-        &result,
-        control_op(&ctx, module, Call::NAME),
-        &["attribute `callee` must be a SymbolRef attribute"],
-    );
-    assert_op_diagnostics(
-        &result,
-        control_op(&ctx, module, Perform::NAME),
-        &[
-            "attribute `ability` must be a SymbolRef attribute",
-            "attribute `op_name` must be a String attribute",
-            "attribute `operation_kind` must be one of \"op\" and \"fn\"",
-        ],
-    );
-    assert_op_diagnostics(
-        &result,
-        control_op(&ctx, module, Handler::NAME),
-        &[
-            "attribute `ability` must be a SymbolRef attribute",
-            "attribute `op_name` must be a String attribute",
-            "attribute `kind` must be one of \"op\" and \"fn\"",
-            "attribute `operation_result_type` must be a Type attribute",
-        ],
-    );
 }
 
 #[test]
@@ -938,158 +870,27 @@ fn validator_rejects_structure_arity_type_and_terminator_errors() {
 }
 
 #[test]
-fn local_validator_reports_distinct_malformed_operation_contracts() {
+fn local_validator_reports_unknown_and_unattached_operations() {
     let (mut ctx, module) = parse_fixture(
         r#"core.module @test {
-  !direct = tribute_control.func_sig<(core.i32) -> core.i32>
-  !token = tribute_control.resume_token<core.i32, core.i32>
   %integer = arith.const {value = 1} : core.i32
-  %boolean = arith.const {value = true} : core.i1
-
-  tribute_control.func @bad_func() -> core.i32 {
-    tribute_control.return %integer
-  }
-  %bad_lambda = tribute_control.lambda() -> core.i32 captures [%integer] {
-    tribute_control.return %integer
-  }
-  %bad_ref = "tribute_control.func_ref"() {value = @bad_func, unexpected = 1} : !direct
-  %bad_call0, %bad_call1 = "tribute_control.call"() ({
-  }) {unexpected = 1} : core.i32, core.i1
-  %non_callable = "tribute_control.call_indirect"(%integer, %boolean) : core.i32
-  %callable = tribute_control.func_ref @bad_func : !direct
-  %mismatched = "tribute_control.call_indirect"(%callable, %boolean) : core.i1
-  %bad_perform = "tribute_control.perform"(%integer) {ability = @State, op_name = "get", operation_kind = "bogus"} : core.i32
-  "tribute_control.handler"() ({
-    ^clause(%argument: core.i32):
-      tribute_control.yield %argument
-  }) {ability = @State, op_name = "get", kind = "bogus", operation_result_type = core.i32}
-  %bad_resume = tribute_control.resume %integer, %boolean : core.i1
-  %token = "test.token"() : !token
-  %mismatched_resume = tribute_control.resume %token, %boolean : core.i1
   "tribute_control.unknown"()
 }"#,
     );
     let loc = location(&mut ctx);
-    let i32_ty = ctx
-        .types()
-        .iter()
-        .find_map(|(ty, data)| (data.name.is(&ctx, "core.i32")).then_some(ty))
-        .unwrap();
     let i32_value = module
         .ops(&ctx)
         .iter()
         .copied()
-        .find(|op| ctx.op(*op).name.is(&ctx, "arith.const") && ctx.op_result_types(*op) == [i32_ty])
+        .find(|op| ctx.op(*op).name.is(&ctx, "arith.const"))
         .map(|op| ctx.op_result(op, 0))
         .unwrap();
-
-    // Custom func assembly requires its symbol and callable type, so the
-    // parser cannot represent their simultaneous absence.
-    let missing_func = trunk_ir::OperationDataBuilder::new(loc, "tribute_control.func")
-        .operand(i32_value)
-        .build(&mut ctx);
-    let missing_func = ctx.create_op(missing_func);
-    append_module_op(&mut ctx, module, missing_func);
-
-    let bad_func = control_ops(&ctx, module, Func::NAME)
-        .into_iter()
-        .find(|op| ctx.op_attrs(*op).get_str("sym_name") == Some("bad_func"))
-        .unwrap();
-    // Custom assembly always derives a callable type and permits at most one
-    // body. Mutate only those parser-enforced fields.
-    ctx.op_attrs_mut(bad_func)
-        .insert("type", Attribute::Type(i32_ty));
-    let extra_block = block(&mut ctx, loc, &[]);
-    let extra_region = region(&mut ctx, loc, extra_block);
-    ctx.push_op_region(bad_func, extra_region);
-
-    let bad_lambda = control_op(&ctx, module, Lambda::NAME);
-    ctx.set_op_result_type(bad_lambda, 0, i32_ty);
-
-    let bad_func_ref = control_ops(&ctx, module, FuncRef::NAME)
-        .into_iter()
-        .find(|op| ctx.op_attrs(*op).contains_key("unexpected"))
-        .unwrap();
-    let bad_call = control_op(&ctx, module, Call::NAME);
-    let indirects = control_ops(&ctx, module, CallIndirect::NAME);
-    let non_callable_indirect = indirects[0];
-    let mismatched_indirect = indirects[1];
-    let bad_perform = control_op(&ctx, module, Perform::NAME);
-    let bad_handler = control_op(&ctx, module, Handler::NAME);
-    let resumes = control_ops(&ctx, module, Resume::NAME);
-    let bad_resume = resumes[0];
-    let mismatched_resume = resumes[1];
     let unknown_name = ctx
         .lookup_op_name("tribute_control.unknown")
         .expect("the fixture uses tribute_control.unknown");
     let unknown = control_op(&ctx, module, unknown_name);
 
     let result = validate_local(&ctx, module);
-    assert_op_diagnostics(
-        &result,
-        missing_func,
-        &[
-            "expected 0 operand(s), found 1",
-            "missing required attribute `sym_name`",
-            "missing required attribute `type`",
-        ],
-    );
-    assert_op_diagnostics(&result, bad_func, &["expected 0 to 1 region(s), found 2"]);
-    assert_op_diagnostics(
-        &result,
-        bad_lambda,
-        &["result #0 `result`: expected tribute_control.func_sig, found core.i32"],
-    );
-    assert_op_diagnostics(
-        &result,
-        bad_func_ref,
-        &["has unsupported attribute 'unexpected'"],
-    );
-    assert_op_diagnostics(
-        &result,
-        bad_call,
-        &[
-            "expected 1 result(s), found 2",
-            "expected 0 region(s), found 1",
-            "missing required attribute `callee`",
-        ],
-    );
-    assert_op_diagnostics(
-        &result,
-        non_callable_indirect,
-        &["operand #0 `callee`: expected S: tribute_control.func_sig, found core.i32"],
-    );
-    assert_op_diagnostics(
-        &result,
-        mismatched_indirect,
-        &[
-            "operands `args`: expected S::Inputs = (core.i32), found (core.i1)",
-            "result #0 `result`: expected S::Result = core.i32, found core.i1",
-        ],
-    );
-    assert_op_diagnostics(
-        &result,
-        bad_perform,
-        &["attribute `operation_kind` must be one of \"op\" and \"fn\""],
-    );
-    assert_op_diagnostics(
-        &result,
-        bad_handler,
-        &["attribute `kind` must be one of \"op\" and \"fn\""],
-    );
-    assert_op_diagnostics(
-        &result,
-        bad_resume,
-        &["operand #0 `resume_token`: expected T: tribute_control.resume_token, found core.i32"],
-    );
-    assert_op_diagnostics(
-        &result,
-        mismatched_resume,
-        &[
-            "operand #1 `value`: expected T::Input = core.i32, found core.i1",
-            "result #0 `result`: expected T::Answer = core.i32, found core.i1",
-        ],
-    );
     assert_op_diagnostics(
         &result,
         unknown,

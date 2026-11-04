@@ -1338,11 +1338,6 @@ mod result_list_tests {
                 "func.call_indirect %k(%x) : (core.i64) -> ()",
                 "expected S::Inputs = (core.i64), found (core.i32)",
             ),
-            (
-                "func.call @sink(%x) : (core.i32) -> ()",
-                "\"func.call\"(%x) {callee = 1}",
-                "attribute `callee` must be a SymbolRef attribute",
-            ),
         ] {
             let text = verify(&valid.replace(old, new));
             assert!(text.contains(expected), "{expected}: {text}");
@@ -1410,16 +1405,8 @@ mod normal_validation_regressions {
                 "multiple call results",
             ),
             (
-                "%a, %b = \"func.call_indirect\"(%k) {signature = func.func_sig<() -> ()>} : core.i32, core.i32\nfunc.return",
-                "expected S::Results = (), found (core.i32, core.i32)",
-            ),
-            (
                 "%a = func.call @sink() : () -> core.i32\nfunc.return",
                 "call result list mismatch",
-            ),
-            (
-                "%a = \"func.call_indirect\"(%k) {signature = func.func_sig<() -> ()>} : core.i32\nfunc.return",
-                "expected S::Results = (), found (core.i32)",
             ),
             ("func.return %k", "return count mismatch"),
         ] {

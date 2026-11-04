@@ -1730,29 +1730,6 @@ mod tests {
     }
 
     #[test]
-    fn indirect_call_without_exact_signature_is_rejected_before_emission() {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  wasm.func @caller(%table_index: core.i32) -> core.i32 {
-    %result = "wasm.call_indirect"(%table_index) : core.i32
-    wasm.return %result
-  }
-}"#,
-        );
-        let error = crate::emit_module_to_wasm(&mut ctx, module)
-            .err()
-            .expect("an indirect call without its exact signature is not emitted");
-        assert!(
-            error
-                .to_string()
-                .contains("wasm.call_indirect lacks signature"),
-            "{error}"
-        );
-    }
-
-    #[test]
     fn indirect_funcref_result_uses_its_explicit_signature() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(

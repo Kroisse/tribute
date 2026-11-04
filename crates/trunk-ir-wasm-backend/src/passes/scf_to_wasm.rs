@@ -470,11 +470,9 @@ impl OpRewritePattern for ScfIfPattern<'_> {
         let op = scf_if_op.op_ref();
         let loc = ctx.op(op).location;
 
-        // Preserve the result list; reject multi-result. The
-        // created `wasm.if` must declare target types, so read them through the
-        // converter instead of copying the shared IR spelling.
+        // The created `wasm.if` must declare target types, so read them through
+        // the converter instead of copying the shared IR spelling.
         let mut result_types = rewriter.result_types(ctx, op);
-        rewriter.ensure(result_types.len() <= 1, "more than one result")?;
         let drop_result = self.0.drop_never_results.contains(&op);
         if drop_result {
             result_types.clear();
@@ -525,10 +523,8 @@ impl OpRewritePattern for ScfLoopPattern<'_> {
         let op = loop_op.op_ref();
         let loc = ctx.op(op).location;
 
-        // Get result type; reject multi-result loops. The created
-        // `wasm.block`/`wasm.loop` must declare target types.
+        // The created `wasm.block`/`wasm.loop` must declare target types.
         let mut result_types = rewriter.result_types(ctx, op);
-        rewriter.ensure(result_types.len() <= 1, "more than one result")?;
         let drop_result = self.0.drop_never_results.contains(&op);
         if drop_result {
             result_types.clear();
@@ -1013,17 +1009,15 @@ mod tests {
                 "malformed resultless switch shape",
             ),
             (
-                "leaves malformed switch arm operands and entry args unchanged",
+                "leaves malformed switch arm entry args unchanged",
                 r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
     scf.switch %choice {
-      "scf.case"(%choice) ({
+      scf.case 0 {
         ^case_entry(%unexpected: core.i32):
           scf.yield
-      }) {value = 0}
-      "scf.default"(%choice) ({
-        scf.yield
-      })
+      }
+      scf.default { scf.yield }
     }
     func.return
   }
@@ -1347,10 +1341,8 @@ mod tests {
             "%n = scf.if %cond -> (core.never) { func.return } else { func.return } func.unreachable",
             "%n = scf.if %cond -> (core.never) { scf.yield } else { func.return }",
             "%n, %v = scf.if %cond -> (core.never, core.i32) { func.return } else { func.return }",
-            "%n, %v = \"scf.loop\"() ({ func.return }) : core.never, core.i32",
             "%n = scf.if %cond -> (core.never) { } else { func.return }",
             "%n = scf.if %cond -> (core.never) { ^a: func.return ^b: func.return } else { func.return }",
-            "%n = scf.if %cond -> (core.never) { \"func.unreachable\"(%unit) } else { func.return }",
             "%n = scf.if %cond -> (core.never) { scf.switch %choice { scf.case 0 { func.return } } } else { func.return }",
             "%n = scf.loop() -> (core.never) { func.return } func.return %n",
             "%n = scf.loop() -> (core.never) { func.return } func.unreachable",
@@ -1381,38 +1373,6 @@ mod tests {
                 "{error}"
             );
             assert_eq!(print_module(&ctx, module.op()), before, "{body}");
-        }
-    }
-
-    #[test]
-    fn multiple_value_results_are_rejected_without_truncation() {
-        for control in ["\"scf.if\"(%cond)", "\"scf.loop\"()"] {
-            let body = if control.starts_with("\"scf.if") {
-                "({ scf.yield %choice, %unit }, { scf.yield %choice, %unit })"
-            } else {
-                "({ scf.continue })"
-            };
-            let mut ctx = IrContext::new();
-            let module = parse_test_module(
-                &mut ctx,
-                &control_fixture(&format!(
-                    "%a, %b = {control} {body} : core.i32, core.nil func.return"
-                )),
-            );
-            let function = module.ops(&ctx)[0];
-            let block = ctx.region(ctx.op_region(function, 0).unwrap()).blocks[0];
-            let original = ctx.block(block).ops[0];
-            let result_types = ctx.op_result_types(original).to_vec();
-            assert!(
-                lower(
-                    &mut ctx,
-                    module,
-                    TypeConverter::new(),
-                    &mut Default::default()
-                )
-                .is_err()
-            );
-            assert_eq!(ctx.op_result_types(original), result_types);
         }
     }
 

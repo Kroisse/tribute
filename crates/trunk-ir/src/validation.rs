@@ -2421,30 +2421,21 @@ mod tests {
         let input = r#"core.module @test {
   !never = func.func_sig<() -> core.never>
   !unary = func.func_sig<(core.i32) -> core.never>
-  func.func @result(%k: !never) -> core.never {
-    %bad = "func.tail_call_indirect"(%k) {signature = !never} : core.i32
-  }
   func.func @not_last(%k: !never) -> core.never {
-    "func.tail_call_indirect"(%k) {signature = !never}
+    func.tail_call_indirect %k() : () -> core.never
     func.unreachable
   }
-  func.func @missing() -> core.never {
-    "func.tail_call_indirect"() {signature = !never}
-  }
-  func.func @unsigned(%k: !never) -> core.never {
-    "func.tail_call_indirect"(%k)
-  }
   func.func @mismatched(%k: !unary) -> core.never {
-    "func.tail_call_indirect"(%k) {signature = !never}
+    func.tail_call_indirect %k() : () -> core.never
   }
   func.func @erased(%k: core.ptr) -> core.never {
-    "func.tail_call_indirect"(%k) {signature = !never}
+    func.tail_call_indirect %k() : () -> core.never
   }
   func.func @direct_function(%k: !never) -> core.never {
-    "func.tail_call_indirect"(%k) {signature = !never}
+    func.tail_call_indirect %k() : () -> core.never
   }
   func.func @arity(%k: core.ptr) -> core.never {
-    "func.tail_call_indirect"(%k) {signature = !unary}
+    func.tail_call_indirect %k() : (core.i32) -> core.never
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -2452,16 +2443,13 @@ mod tests {
         let result = validate_operation_verifiers(&ctx, module);
         let text = result.to_string();
         for expected in [
-            "expected 0 result(s), found 1",
             "must terminate its block",
-            "expected at least 1 operand(s), found 0",
-            "missing required attribute `signature`",
             "exact indirect signature differs from typed callee",
             "operands `args`: expected S::Inputs = (core.i32), found ()",
         ] {
             assert!(text.contains(expected), "missing `{expected}`:\n{text}");
         }
-        assert_eq!(result.errors.len(), 6, "{text}");
+        assert_eq!(result.errors.len(), 3, "{text}");
     }
 
     #[test]

@@ -461,7 +461,7 @@ mod tests {
   }
   func.func @agrees(%x: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
     %c = closure.new {entries = [@callee, @callee, @callee]} : !closure
-    %r = "func.call_indirect"(%c, %x) {signature = !fn, tribute.calling_convention = "direct"} : core.i32
+    %r = func.call_indirect %c(%x) attributes {tribute.calling_convention = "direct"} : (core.i32) -> core.i32
     func.return %r
   }
 }"#;

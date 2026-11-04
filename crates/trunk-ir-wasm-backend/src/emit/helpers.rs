@@ -77,7 +77,7 @@ pub(crate) fn exact_call_indirect_signature(
 ) -> CompilationResult<TypeRef> {
     let signature = DynIndirectCallLike::get(ctx, op)
         .and_then(|call| call.exact_signature(ctx))
-        .ok_or_else(|| CompilationError::invalid_module("wasm.call_indirect lacks signature"))?;
+        .expect("schema-verified indirect call has a signature attribute");
     exact_call_indirect_signature_with(ctx, op, signature)
 }
 
@@ -106,24 +106,9 @@ pub(crate) fn exact_call_indirect_signature_with_results(
     results: &[TypeRef],
     argument_type: &dyn Fn(TypeRef) -> TypeRef,
 ) -> CompilationResult<TypeRef> {
-    let (params, signature_results) = func_type_parts(ctx, signature).ok_or_else(|| {
-        CompilationError::invalid_module("wasm.call_indirect signature must be wasm.func_sig")
-    })?;
-    let Some(call) = DynIndirectCallLike::get(ctx, op) else {
-        return Err(CompilationError::invalid_module(
-            "wasm.call_indirect is not an indirect call",
-        ));
-    };
-    let Some(_table_index) = call.indirect_callee(ctx) else {
-        return Err(CompilationError::invalid_module(
-            "wasm.call_indirect requires a table index operand",
-        ));
-    };
-    let Some(args) = call.indirect_arguments(ctx) else {
-        return Err(CompilationError::invalid_module(
-            "wasm.call_indirect has malformed operands",
-        ));
-    };
+    let (params, signature_results) = func_type_parts(ctx, signature)
+        .expect("converted indirect call signature is a wasm.func_sig");
+    let (_, args) = indirect_call_operands(ctx, op);
     // Unit result slots produce no Wasm stack result. A `[nil]` signature
     // therefore permits a resultless call; nil operands remain nullable refs.
     let results_match = results == signature_results
@@ -142,6 +127,19 @@ pub(crate) fn exact_call_indirect_signature_with_results(
     Ok(signature)
 }
 
+/// The table index and arguments of a schema-verified indirect call.
+pub(crate) fn indirect_call_operands(ctx: &IrContext, op: OpRef) -> (ValueRef, &[ValueRef]) {
+    let call =
+        DynIndirectCallLike::get(ctx, op).expect("wasm indirect call implements IndirectCallLike");
+    let table_index = call
+        .indirect_callee(ctx)
+        .expect("schema-verified indirect call has a table index operand");
+    let args = call
+        .indirect_arguments(ctx)
+        .expect("schema-verified indirect call has argument operands");
+    (table_index, args)
+}
+
 /// Read and validate the exact physical function type required by an indirect
 /// proper tail transfer. This backend deliberately does not infer the type
 /// from the runtime table index and operands.
@@ -151,9 +149,7 @@ pub(crate) fn exact_return_call_indirect_signature(
 ) -> CompilationResult<TypeRef> {
     let signature = DynIndirectCallLike::get(ctx, op)
         .and_then(|call| call.exact_signature(ctx))
-        .ok_or_else(|| {
-            CompilationError::invalid_module("wasm.return_call_indirect lacks signature")
-        })?;
+        .expect("schema-verified indirect call has a signature attribute");
     exact_return_call_indirect_signature_with(ctx, op, signature, &|ty| ty)
 }
 
@@ -168,31 +164,9 @@ pub(crate) fn exact_return_call_indirect_signature_with(
 ) -> CompilationResult<TypeRef> {
     // Tail legality is the caller/callee result-list agreement checked by the
     // emission validator; this helper validates only the exact call shape.
-    let (params, _results) = func_type_parts(ctx, signature).ok_or_else(|| {
-        CompilationError::invalid_module(
-            "wasm.return_call_indirect signature must be wasm.func_sig",
-        )
-    })?;
-    let Some(call) = DynIndirectCallLike::get(ctx, op) else {
-        return Err(CompilationError::invalid_module(
-            "wasm.return_call_indirect is not an indirect call",
-        ));
-    };
-    let Some(table_index) = call.indirect_callee(ctx) else {
-        return Err(CompilationError::invalid_module(
-            "wasm.return_call_indirect requires a table index operand",
-        ));
-    };
-    let Some(args) = call.indirect_arguments(ctx) else {
-        return Err(CompilationError::invalid_module(
-            "wasm.return_call_indirect has malformed operands",
-        ));
-    };
-    if !trunk_ir::dialect::core::I32::matches(ctx, value_type(ctx, table_index)) {
-        return Err(CompilationError::invalid_module(
-            "wasm.return_call_indirect first operand must be an i32 table index",
-        ));
-    }
+    let (params, _results) = func_type_parts(ctx, signature)
+        .expect("converted indirect call signature is a wasm.func_sig");
+    let (_, args) = indirect_call_operands(ctx, op);
     if params.len() != args.len()
         || params.iter().zip(args).any(|(param, arg)| {
             !is_wasm_physical_argument_assignable(ctx, argument_type(value_type(ctx, *arg)), *param)

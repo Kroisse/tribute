@@ -636,7 +636,7 @@ mod tests {
     }
 
     #[test]
-    fn native_boundary_rejects_unused_direct_and_exact_indirect_result_mismatches() {
+    fn native_boundary_rejects_unused_direct_result_mismatches() {
         let error = validation_error(
             r#"core.module @test {
   clif.func @direct_target(%value: core.i32) -> core.i32 { clif.return %value }
@@ -645,19 +645,10 @@ mod tests {
     %unused = clif.call %value {callee = @direct_target} : core.i64
     clif.return
   }
-  clif.func @indirect_caller() {
-    %callee = clif.iconst {value = 0} : core.ptr
-    %first, %second = "clif.call_indirect"(%callee) {sig = clif.func_sig<() -> (core.i32, core.i64)>} : core.i64, core.i32
-    clif.return
-  }
 }"#,
         );
         assert!(
             error.contains("clif.call call result list mismatch"),
-            "{error}"
-        );
-        assert!(
-            error.contains("clif.call_indirect: results (core.i64, core.i32) match neither"),
             "{error}"
         );
     }

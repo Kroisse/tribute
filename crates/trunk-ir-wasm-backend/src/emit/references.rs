@@ -452,54 +452,6 @@ mod tests {
     }
 
     #[test]
-    fn malformed_bodyless_declaration_is_rejected_even_when_unreferenced() {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  "wasm.func"() {abi = "C", sym_name = "helper", type = core.i32}
-  wasm.func @main() -> core.nil { wasm.return }
-}"#,
-        );
-        let error = crate::emit_module_to_wasm(&mut ctx, module)
-            .err()
-            .expect("a bodyless declaration without a func_sig type is not well-formed");
-        assert!(
-            error
-                .to_string()
-                .contains("requires valid wasm.func_sig type"),
-            "{error}"
-        );
-    }
-
-    #[test]
-    fn multiple_body_regions_are_rejected_before_disposition() {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(
-            &mut ctx,
-            "core.module @test { wasm.func @helper() { wasm.return } }",
-        );
-        let op = module.ops(&ctx)[0];
-        let extra = ctx.create_region(trunk_ir::RegionData {
-            location: ctx.op(op).location,
-            blocks: Default::default(),
-            parent_op: None,
-        });
-        ctx.push_op_region(op, extra);
-        let before = print_module(&ctx, module.op());
-        let error = crate::emit_module_to_wasm(&mut ctx, module)
-            .err()
-            .expect("multiple bodies");
-        assert!(
-            error
-                .to_string()
-                .contains("wasm.func @helper: has more than one body region"),
-            "{error}"
-        );
-        assert_eq!(print_module(&ctx, module.op()), before);
-    }
-
-    #[test]
     fn present_but_empty_body_is_a_malformed_definition_not_a_declaration() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(

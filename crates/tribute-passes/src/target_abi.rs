@@ -1463,9 +1463,7 @@ fn validate_transfers(
         // The interface yields only valid `func.func_sig` contracts.
         let callable = signature
             .and_then(|signature| func::FuncSig::from_type_ref(ctx, signature))
-            .ok_or_else(|| {
-                TargetAbiError::new("target ABI: indirect transfer lacks exact callable signature")
-            })?;
+            .expect("a schema-valid indirect transfer declares a func signature");
         let signature = callable.as_type_ref();
         let callee = call
             .indirect_callee(ctx)
@@ -2740,33 +2738,8 @@ mod tests {
         for (input, expected) in [
             (
                 r#"core.module @test {
-  func.func @run(%callee: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-    "func.tail_call_indirect"(%callee) {tribute.calling_convention = "cps"}
-  }
-}"#,
-                "lacks exact callable signature",
-            ),
-            (
-                r#"core.module @test {
-  func.func @pure(%callee: func.func_sig<(core.i32, core.i32) -> core.i32>, %left: core.i32, %right: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
-    %result = "func.call_indirect"(%callee, %left, %right) {tribute.calling_convention = "direct"} : core.i32
-    func.return %result
-  }
-}"#,
-                "lacks exact callable signature",
-            ),
-            (
-                r#"core.module @test {
-  func.func @run(%callee: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-    "func.tail_call_indirect"(%callee) {signature = core.i32, tribute.calling_convention = "cps"}
-  }
-}"#,
-                "lacks exact callable signature",
-            ),
-            (
-                r#"core.module @test {
-  func.func @run(%callee: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-    "func.tail_call_indirect"(%callee) {signature = core.i32}
+  func.func @run(%callee: func.func_sig<() -> core.never>) -> core.never attributes {tribute.calling_convention = "cps"} {
+    func.tail_call_indirect %callee() : () -> core.never
   }
 }"#,
                 "indirect signature has no convention metadata",

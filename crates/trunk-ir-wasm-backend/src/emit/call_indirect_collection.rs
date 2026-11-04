@@ -165,33 +165,4 @@ mod tests {
         assert!(indices.is_empty());
         assert_eq!(trunk_ir::printer::print_module(&ctx, module.op()), before);
     }
-
-    #[test]
-    fn indirect_call_requires_exact_signature_for_every_result_arity() {
-        for source in [
-            r#"core.module @m {
-  wasm.func @caller(%table_index: core.i32) -> core.i32 {
-      %value = "wasm.call_indirect"(%table_index) : core.i32
-      wasm.return %value
-  }
-}"#,
-            r#"core.module @m {
-  wasm.func @caller(%table_index: core.i32) {
-      "wasm.call_indirect"(%table_index)
-  }
-}"#,
-            r#"core.module @m {
-  wasm.func @caller(%table_index: core.i32) {
-      %first, %second = "wasm.call_indirect"(%table_index) : core.i32, core.i64
-  }
-}"#,
-        ] {
-            let mut ctx = IrContext::new();
-            let module = trunk_ir::parser::parse_test_module(&mut ctx, source);
-            let error =
-                collect_call_indirect_types(&mut ctx, module, &mut HashMap::default(), 0, 1)
-                    .expect_err("missing exact signature must fail before type collection");
-            assert!(error.to_string().contains("lacks signature"), "{error}");
-        }
-    }
 }

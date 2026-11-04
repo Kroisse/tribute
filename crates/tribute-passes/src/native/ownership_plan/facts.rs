@@ -457,14 +457,10 @@ fn collect_borrowed_loads(
                 None
             };
             let Some(source) = source else { continue };
-            let [result] = ctx.op_results(op) else {
-                return Err(OwnershipPlanError::new(
-                    "ADT projection must have exactly one result",
-                ));
-            };
-            validate_projection_contract(ctx, op, source, *result, managed_layouts)?;
-            if is_managed_value(ctx, *result, managed_layouts) {
-                borrowed.insert(*result, root_value(aliases, source));
+            let result = ctx.op_results(op)[0];
+            validate_projection_contract(ctx, op, source, result, managed_layouts)?;
+            if is_managed_value(ctx, result, managed_layouts) {
+                borrowed.insert(result, root_value(aliases, source));
             }
         }
     }

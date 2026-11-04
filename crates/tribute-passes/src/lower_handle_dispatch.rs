@@ -172,9 +172,12 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @run(%k: tribute_rt.anyref) -> tribute_rt.anyref {
-    %result = "ability.perform"(%k) {ability = @State, op_name = "get"} : tribute_rt.anyref
-    func.return %result
+  !marker = adt.typeref<{name = "std::runtime::evidence::Marker"}>
+  !ev = adt.array<!marker>
+  !frame = ability.frame<core.i32>
+  !resume = closure.closure<func.func_sig<(!ev, !frame, core.i32) -> core.never>>
+  func.func @run(%ev: !ev, %f: !frame, %k: !resume, %arg: core.i32) -> core.never {
+    ability.perform @State @set(%arg) [%ev, %f, %k] : (core.i32) -> ()
   }
 }"#,
         );
@@ -191,17 +194,17 @@ mod tests {
     #[test]
     fn malformed_final_delimiters_are_not_structurally_spliced() {
         let malformed = [
-            r#""ability.handle_dispatch"(%ev) ({
+            r#"ability.handle_dispatch %ev, %prompt() attributes {abilities = []} {
       ^first(%inner: !evidence):
         func.unreachable
       ^second:
         func.unreachable
-    }) {abilities = []}"#,
-            r#""ability.handle_dispatch"(%ev) ({
+    }"#,
+            r#"ability.handle_dispatch %ev, %prompt() attributes {abilities = []} {
       ^body(%inner: !evidence):
         "test.consume"(%inner)
         func.unreachable
-    }) {abilities = []}"#,
+    }"#,
         ];
         for operation in malformed {
             let mut ctx = IrContext::new();
@@ -211,7 +214,7 @@ mod tests {
                     r#"core.module @test {{
   !marker = adt.typeref<{{name = "std::runtime::evidence::Marker"}}>
   !evidence = adt.array<!marker>
-  func.func @run(%ev: !evidence) -> core.never {{
+  func.func @run(%ev: !evidence, %prompt: core.i32) -> core.never {{
     {operation}
   }}
 }}"#

@@ -101,9 +101,8 @@ pub(crate) fn extract_function_def(
         .unwrap_or_else(|| SymbolPath::new([func_op.sym_name(ctx)]));
     let ty = func_op.r#type(ctx);
 
-    let function = wasm_dialect::FuncSig::from_type_ref(ctx, ty).ok_or_else(|| {
-        CompilationError::type_error("wasm.func requires valid wasm.func_sig type")
-    })?;
+    let function = wasm_dialect::FuncSig::from_type_ref(ctx, ty)
+        .expect("schema-verified wasm.func has a wasm.func_sig type");
 
     if let Some(result_ty) = function.single_result(ctx) {
         let result_data = ctx.get_type(result_ty);
@@ -138,12 +137,6 @@ pub(crate) fn extract_import_def(
     let sym = qualified_name(ctx, import_op.op_ref())
         .unwrap_or_else(|| SymbolPath::new([import_op.sym_name(ctx)]));
     let ty = import_op.r#type(ctx);
-
-    if wasm_dialect::FuncSig::from_type_ref(ctx, ty).is_none() {
-        return Err(CompilationError::type_error(
-            "wasm.import_func requires valid wasm.func_sig type",
-        ));
-    }
 
     Ok(ImportFuncDef {
         sym,
@@ -293,33 +286,4 @@ pub(crate) fn extract_global_def(
         mutable,
         init,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use trunk_ir::Span;
-    use trunk_ir::refs::PathRef;
-    use trunk_ir::types::{Location, TypeDataBuilder};
-
-    #[test]
-    fn import_function_requires_valid_func_sig_counts() {
-        let mut ctx = IrContext::new();
-        let location = Location::new(PathRef::from_u32(0), Span::default());
-        let malformed = TypeDataBuilder::new("wasm.func_sig").intern(&mut ctx);
-        let import = wasm_dialect::ImportFunc::operands()
-            .module("env")
-            .name("run")
-            .sym_name("run")
-            .r#type(malformed)
-            .build(&mut ctx, location);
-
-        let error = extract_import_def(&ctx, import).expect_err("malformed import signature");
-        assert!(
-            error
-                .to_string()
-                .contains("requires valid wasm.func_sig type"),
-            "{error}"
-        );
-    }
 }
