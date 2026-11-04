@@ -1193,7 +1193,7 @@ enum Boxed(a) {
     Boxed(a)
 }
 
-fn run() ->{Trace} Boxed(fn() -> Bool) {
+fn run() ->{Trace} Boxed(fn() ->{} Bool) {
     Trace::before()
     // `fn` is atomic to normalization, so this constructor argument exercises
     // the mode-preserving Cons strict-child path from a normalized CPS parent.

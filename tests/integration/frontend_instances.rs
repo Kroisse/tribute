@@ -255,6 +255,87 @@ fn main() -> Nil {{
     }
 }
 
+/// Neither a row variable nor a quantifier of a `let` that binds a callable
+/// is specialized, so a generic struct or enum named at an argument holding
+/// one gets no specialized declaration. Such a program is rejected; the same program
+/// with a concrete argument is accepted.
+#[salsa_test]
+fn nominal_arguments_that_do_not_specialize_are_rejected(db: &salsa::DatabaseImpl) {
+    let cases = [
+        (
+            "fn wrap(f: fn() ->{e} Nat) -> Boxed(fn() ->{e} Nat) { Boxed::Box(f) }",
+            "fn wrap(f: fn() ->{} Nat) -> Boxed(fn() ->{} Nat) { Boxed::Box(f) }",
+            "let _ = wrap(fn() { 41 })",
+        ),
+        (
+            "",
+            "",
+            "let mk = fn(x) { Boxed::Box(x) }\n    let _ = mk(41)",
+        ),
+        (
+            "",
+            "",
+            "let mk = fn(x) { Cell { v: x } }\n    let _ = mk(41).v",
+        ),
+        (
+            "",
+            "",
+            "let mk = { fn(x) { Boxed::Box(x) } }\n    let _ = mk(41)",
+        ),
+        (
+            "",
+            "",
+            "let p = #(fn(x) { Boxed::Box(x) }, 0)\n    let #(mk, _) = p\n    let _ = mk(41)",
+        ),
+    ];
+    for (rejected, accepted, body) in cases {
+        let program = |item: &str, body: &str| {
+            format!(
+                r#"
+enum Boxed(a) {{ Box(a), EmptyBox }}
+struct Cell(a) {{ v: a }}
+{item}
+fn main() -> Nil {{
+    {body}
+}}
+"#
+            )
+        };
+        let source = SourceCst::from_source_str(db, "nominal.trb", &program(rejected, body));
+        assert!(!prepares(db, source), "{rejected} {body}");
+        let messages: Vec<_> = prepares::accumulated::<SpanDiagnostic>(db, source)
+            .iter()
+            .map(|diagnostic| diagnostic.inner.message.to_string())
+            .collect();
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("these do not specialize")),
+            "{rejected} {body}: {messages:?}"
+        );
+        let concrete = body.replace("fn(x)", "fn(x: Nat)");
+        let source = SourceCst::from_source_str(db, "nominal.trb", &program(accepted, &concrete));
+        assert!(prepares(db, source), "{accepted} {concrete}");
+    }
+    // A quantifier of a `let` whose value holds no callable types no value,
+    // so it is accepted.
+    let source = SourceCst::from_source_str(
+        db,
+        "nominal_value.trb",
+        r#"
+enum Boxed(a) { Box(a), EmptyBox }
+fn main() -> Nil {
+    let empty = Boxed::EmptyBox
+    let _ = case empty {
+        .Box(n) -> n + 1
+        .EmptyBox -> 0
+    }
+}
+"#,
+    );
+    assert!(prepares(db, source));
+}
+
 /// The specialization output holds a generic function's instances, never
 /// the function itself, nor nominal instances only its body mentions.
 #[salsa_test]
