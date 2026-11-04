@@ -2020,7 +2020,20 @@ impl<'r, 'e, 'db> FunctionResolver<'r, 'e, 'db> {
                 ExprKind::Case { scrutinee, arms }
             }
 
-            ExprKind::Lambda { params, body } => {
+            ExprKind::Lambda {
+                params,
+                return_ty,
+                effects,
+                body,
+            } => {
+                let mut return_ty = return_ty.clone();
+                if let Some(ty) = &mut return_ty {
+                    self.module.resolve_annotation_paths(ty);
+                }
+                let mut effects = effects.clone();
+                if let Some(effects) = &mut effects {
+                    self.module.resolve_effect_annotations(effects);
+                }
                 self.push_scope();
                 let params: Vec<Param> = params
                     .iter()
@@ -2035,7 +2048,12 @@ impl<'r, 'e, 'db> FunctionResolver<'r, 'e, 'db> {
                     .collect();
                 let body = self.resolve_expr(body);
                 self.pop_scope();
-                ExprKind::Lambda { params, body }
+                ExprKind::Lambda {
+                    params,
+                    return_ty,
+                    effects,
+                    body,
+                }
             }
 
             ExprKind::Handle { body, handlers } => {
