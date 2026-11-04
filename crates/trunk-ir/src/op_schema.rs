@@ -177,9 +177,12 @@ pub struct AttributeSchema {
     pub accepts: fn(&IrContext, &Attribute) -> bool,
     /// The kind's narrower domain, when it has one (`AttrKind::DOMAIN`).
     pub domain: Option<&'static str>,
-    /// The keywords that spell the kind's values in a declarative format,
-    /// when it has them (`AttrKind::KEYWORD`).
-    pub keyword: Option<crate::asm_format::KeywordCodecHooks>,
+    /// Write a value as a declarative format spells it
+    /// (`AttrKind::print_text`).
+    pub print_text: fn(&mut crate::printer::OpPrintHelper<'_, '_>, &Attribute) -> std::fmt::Result,
+    /// Read a value as a declarative format spells it (`AttrKind::parse_text`).
+    pub parse_text:
+        for<'a> fn(&mut &'a str) -> winnow::ModalResult<crate::parser::raw::RawAttribute<'a>>,
 }
 
 impl AttributeSchema {

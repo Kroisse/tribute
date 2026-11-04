@@ -139,8 +139,6 @@ impl trunk_ir::attr_kind::AttrKind for OperationKind {
     type Out<'ctx> = OperationKind;
     type In = OperationKind;
     const DOMAIN: Option<&'static str> = Some("one of \"op\" and \"fn\"");
-    const KEYWORD: Option<trunk_ir::asm_format::KeywordCodecHooks> =
-        Some(trunk_ir::asm_format::KeywordCodecHooks::of::<Self>());
 
     fn accepts(ctx: &IrContext, attr: &Attribute) -> bool {
         Self::from_attribute(ctx, attr).is_some()
@@ -153,19 +151,24 @@ impl trunk_ir::attr_kind::AttrKind for OperationKind {
     fn write(ctx: &mut IrContext, value: OperationKind) -> Attribute {
         ctx.string_attr(value.keyword())
     }
-}
 
-/// A kind is written as its keyword, `op` or `fn`.
-impl trunk_ir::asm_format::KeywordCodec for OperationKind {
-    fn keyword<'a>(ctx: &'a IrContext, attr: &'a Attribute) -> Option<&'a str> {
-        Self::from_attribute(ctx, attr).map(Self::keyword)
+    /// A kind is written as its keyword, `op` or `fn`.
+    fn print_text(
+        h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>,
+        attr: &Attribute,
+    ) -> fmt::Result {
+        fmt::Write::write_str(h, Self::read(h.ctx(), attr).keyword())
     }
 
-    fn attribute(word: &str) -> Option<trunk_ir::parser::raw::RawAttribute<'static>> {
-        let kind = Self::from_keyword(word)?;
-        Some(trunk_ir::parser::raw::RawAttribute::String(
-            kind.keyword().to_owned(),
-        ))
+    fn parse_text<'a>(
+        input: &mut &'a str,
+    ) -> winnow::ModalResult<trunk_ir::parser::raw::RawAttribute<'a>> {
+        trunk_ir::asm_format::parse_keyword(input, |word| {
+            let kind = Self::from_keyword(word)?;
+            Some(trunk_ir::parser::raw::RawAttribute::String(
+                kind.keyword().to_owned(),
+            ))
+        })
     }
 }
 

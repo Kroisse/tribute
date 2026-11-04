@@ -130,9 +130,10 @@ where
 - Attribute kinds are Rust types implementing `attr_kind::AttrKind`, resolved
   in the dialect's scope like bounds: primitives (`bool`, `i32`, `i64`, `u32`,
   `u64`, `f32`, `f64`), `String`, and the markers
-  `attr_kind::{Type, SymbolRef, Bytes}`. A kind defines its schema domain
-  and the values its accessor returns and its builder setter takes, so a
-  dialect adds a kind by implementing the trait. A kind narrower than its
+  `attr_kind::{Type, SymbolRef, Bytes}`. A kind defines its schema domain,
+  the values its accessor returns and its builder setter takes, and how a
+  declarative format writes and reads its values, so a dialect adds a kind
+  by implementing the trait. A kind narrower than its
   `KIND`, such as a keyword, checks the rest in `AttrKind::accepts` and names
   its values in `DOMAIN`, as `CallingConvention` does. `_` accepts any
   attribute.
@@ -187,10 +188,11 @@ where
   (`attributes {..}`) or `attr_dict_bare` (`{..}`, not before a region),
   `region(..)`/`regions(..)`, and
   `successor(..)`/`successors(..)` write the other entities.
-  An attribute is written with its kind's syntax: a kind whose
-  `AttrKind::KEYWORD` holds its `asm_format::KeywordCodec` is written as a
-  bare identifier, as `tribute_control.handler` writes its kind `op`, and
-  any other in generic attribute syntax. `custom(D(a, b))` leaves the
+  An attribute is written with its kind's syntax, `AttrKind::print_text`
+  and `AttrKind::parse_text`, which default to the attribute syntax; a
+  keyword kind writes a bare identifier, read back with
+  `asm_format::parse_keyword`, as `tribute_control.handler` writes its kind
+  `op`. `custom(D(a, b))` leaves the
   operands, attributes, and successors it names to `D`'s
   `asm_format::OpAsmDirective`, as MLIR's `custom<D>` does; `clif.switch`
   writes each case with its target as `[0: ^first, 5: ^second]` this way.

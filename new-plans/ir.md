@@ -457,13 +457,14 @@ literal은 문자열 literal로 쓴다.
 - **Operand** — `%name`으로 쓰고, 가변 operand는 쉼표로 구분한 목록이다. 목록을
   감싸는 괄호는 literal로 쓴다. Operand 타입은 쓰지 않는다. Generic 형식처럼
   parser는 SSA 이름으로 값을 찾고 값에서 타입을 얻는다.
-- **Attribute** — 그 attribute 종류의 textual 형식으로 쓴다(MLIR이 attribute
-  변수를 그 attribute의 문법으로 쓰는 것과 같다). 기본은 generic attribute
-  문법(`"text"`, `@sym`, `[..]`, `42`)이다. 종류가 keyword codec을 정의하면 형식은
-  그 attribute를 따옴표 없는 식별자로 쓴다(예: calling convention의 `cps`).
-  철자는 종류가 정하므로 operation마다 따로 지정하지 않는다. Keyword codec은
-  값을 그 값을 쓰는 keyword로, keyword를 값으로 바꾼다. 저장 형태는 종류가
-  정하므로 문자열이 아니어도 된다. Parser는 codec이 받지 않는 식별자를 거부한다.
+- **Attribute** — 그 attribute 종류가 정한 textual 형식으로 쓴다(MLIR이
+  attribute 변수를 그 attribute의 문법으로 쓰는 것과 같다). 모든 종류는 자기 값의
+  출력과 파싱을 정의하며, 철자는 종류가 정하므로 operation마다 따로 지정하지
+  않는다. 따로 정의하지 않은 종류는 attribute 문법(`"text"`, `@sym`, `[..]`,
+  `42`)으로 쓴다. Keyword 종류는 값을 따옴표 없는 식별자로 쓴다(예: calling
+  convention의 `cps`). 저장 형태는 종류가 정하므로 문자열이 아니어도 되고,
+  parser는 그 종류가 받지 않는 식별자를 거부한다. 형식이 쓰는 값은 종류의
+  schema가 받는 값이며, 받지 않는 값을 가진 operation은 generic 형식으로 쓴다.
   `symbol(attr)`는
   문자열 attribute를 정의 이름 `@name`으로 쓴다.
 - **Result** — Result 이름과 `=`(`%r =`)은 형식에 쓰지 않는다. Printer가 앞에 쓰고,

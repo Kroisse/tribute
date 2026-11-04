@@ -15,14 +15,14 @@ use winnow::prelude::*;
 
 use crate::asm_format::{
     CustomEntity, OpAsmDirectiveHooks, RawCustomEntity, SignatureCodecHooks, SignatureParts,
-    parse_signature_results, write_signature_param, write_signature_results,
+    expected, parse_signature_results, write_signature_param, write_signature_results,
 };
 use crate::op_def::OpDef;
 use crate::op_flag::IsolatedFromAbove;
-use crate::op_schema::{Arity, AttributeKind, OpSchema, ResultSchema};
+use crate::op_schema::{Arity, OpSchema, ResultSchema};
 use crate::parser::raw::{
     RawAttribute, RawOperation, RawParam, RawRegion, RawType, block_label, ident, raw_attr_dict,
-    raw_attr_value, raw_param, raw_param_list, raw_region, raw_type, symbol_ref, value_ref, ws,
+    raw_param, raw_param_list, raw_region, raw_type, symbol_ref, value_ref, ws,
 };
 use crate::printer::OpPrintHelper;
 use crate::types::Attribute;
@@ -369,14 +369,7 @@ impl Printer<'_, '_, '_> {
                     return Ok(());
                 };
                 self.token('a')?;
-                match attribute.keyword {
-                    Some(codec) => {
-                        let keyword =
-                            (codec.keyword)(ctx, value).expect("a printable keyword decodes");
-                        self.h.write_str(keyword)
-                    }
-                    None => self.h.write_attribute(value),
-                }
+                (attribute.print_text)(self.h, value)
             }
             FormatElement::Symbol(index) => {
                 let name = self.schema.attributes[index].name;
@@ -717,12 +710,7 @@ fn printable(ctx: &IrContext, op: OpRef, schema: &OpSchema, format: &OpFormat) -
         FormatElement::Attribute(index) => {
             let attribute = &schema.attributes[index];
             written_ok &= match attrs.get(attribute.name) {
-                Some(value) => {
-                    (attribute.accepts)(ctx, value)
-                        && attribute
-                            .keyword
-                            .is_none_or(|codec| (codec.keyword)(ctx, value).is_some())
-                }
+                Some(value) => (attribute.accepts)(ctx, value),
                 None => attribute.optional,
             };
         }
@@ -888,14 +876,6 @@ pub(crate) fn parse<'a>(
     })
 }
 
-fn expected(description: &'static str) -> ContextError {
-    let mut error = ContextError::new();
-    error.push(StrContext::Expected(StrContextValue::Description(
-        description,
-    )));
-    error
-}
-
 struct FormatParser<'a> {
     schema: &'static OpSchema,
     format: &'static OpFormat,
@@ -940,25 +920,7 @@ impl<'a> FormatParser<'a> {
                 Ok(())
             }
             FormatElement::Attribute(index) => {
-                if let Some(codec) = self.schema.attributes[index].keyword {
-                    let checkpoint = *input;
-                    let Some(value) = opt(ident).parse_next(input)?.and_then(codec.attribute)
-                    else {
-                        *input = checkpoint;
-                        return Err(ErrMode::Backtrack(expected("keyword")));
-                    };
-                    self.attribute(index, value);
-                    return Ok(());
-                }
-                // Only `@` begins a symbol reference.
-                if self.schema.attributes[index].kind == AttributeKind::SymbolRef
-                    && !input.starts_with('@')
-                {
-                    return Err(ErrMode::Backtrack(expected("`@name`")));
-                }
-                let value = raw_attr_value
-                    .parse_next(input)
-                    .map_err(|e| e.map(|_| expected("attribute value")))?;
+                let value = (self.schema.attributes[index].parse_text)(input)?;
                 self.attribute(index, value);
                 Ok(())
             }
@@ -1256,9 +1218,6 @@ mod tests {
         const KIND: crate::op_schema::AttributeKind = crate::op_schema::AttributeKind::Bool;
         type Out<'ctx> = bool;
         type In = bool;
-        const KEYWORD: Option<crate::asm_format::KeywordCodecHooks> =
-            Some(crate::asm_format::KeywordCodecHooks::of::<Self>());
-
         fn read<'ctx>(_: &'ctx IrContext, attr: &'ctx Attribute) -> bool {
             matches!(attr, Attribute::Bool(true))
         }
@@ -1266,23 +1225,29 @@ mod tests {
         fn write(_: &mut IrContext, fast: bool) -> Attribute {
             Attribute::Bool(fast)
         }
-    }
 
-    impl crate::asm_format::KeywordCodec for Speed {
-        fn keyword<'a>(_: &'a IrContext, attr: &'a Attribute) -> Option<&'a str> {
-            match attr {
-                Attribute::Bool(true) => Some("fast"),
-                Attribute::Bool(false) => Some("slow"),
-                _ => None,
-            }
+        fn print_text(
+            h: &mut crate::printer::OpPrintHelper<'_, '_>,
+            attr: &Attribute,
+        ) -> std::fmt::Result {
+            std::fmt::Write::write_str(
+                h,
+                if matches!(attr, Attribute::Bool(true)) {
+                    "fast"
+                } else {
+                    "slow"
+                },
+            )
         }
 
-        fn attribute(word: &str) -> Option<crate::parser::raw::RawAttribute<'static>> {
-            match word {
+        fn parse_text<'a>(
+            input: &mut &'a str,
+        ) -> winnow::ModalResult<crate::parser::raw::RawAttribute<'a>> {
+            crate::asm_format::parse_keyword(input, |word| match word {
                 "fast" => Some(crate::parser::raw::RawAttribute::Bool(true)),
                 "slow" => Some(crate::parser::raw::RawAttribute::Bool(false)),
                 _ => None,
-            }
+            })
         }
     }
 

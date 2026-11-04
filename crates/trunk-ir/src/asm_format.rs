@@ -185,37 +185,41 @@ impl SignatureCodecHooks {
 }
 
 // =============================================================================
-// KeywordCodec — an attribute written as a bare identifier
+// Keywords — attribute kinds spelled as bare identifiers
 // =============================================================================
 
-/// Conversion between an attribute of this kind and the bare identifier a
-/// declarative format writes for it (`new-plans/ir.md`, "선언적 어셈블리
-/// 형식"). The kind exposes the codec through
-/// [`AttrKind::KEYWORD`](crate::attr_kind::AttrKind::KEYWORD), so every format
-/// that names an attribute of the kind writes it as a keyword.
-pub trait KeywordCodec: crate::attr_kind::AttrKind {
-    /// The keyword that spells `attr`, or `None` when no keyword does.
-    fn keyword<'a>(ctx: &'a IrContext, attr: &'a Attribute) -> Option<&'a str>;
+/// Read a bare identifier as the attribute `attribute` makes of it, for an
+/// attribute kind whose values are keywords
+/// ([`AttrKind::parse_text`](crate::attr_kind::AttrKind::parse_text)).
+/// A word `attribute` rejects leaves the input where it was.
+pub fn parse_keyword<'a>(
+    input: &mut &'a str,
+    attribute: impl FnOnce(&str) -> Option<RawAttribute<'a>>,
+) -> winnow::ModalResult<RawAttribute<'a>> {
+    use winnow::Parser as _;
 
-    /// The attribute `word` spells, or `None` when it is not a keyword.
-    fn attribute(word: &str) -> Option<RawAttribute<'static>>;
-}
-
-/// A [`KeywordCodec`]'s hooks, as an attribute's schema stores them.
-#[derive(Clone, Copy, Debug)]
-pub struct KeywordCodecHooks {
-    pub keyword: for<'a> fn(&'a IrContext, &'a Attribute) -> Option<&'a str>,
-    pub attribute: fn(&str) -> Option<RawAttribute<'static>>,
-}
-
-impl KeywordCodecHooks {
-    /// The hooks of `T`'s codec.
-    pub const fn of<T: KeywordCodec>() -> Self {
-        Self {
-            keyword: T::keyword,
-            attribute: T::attribute,
+    let checkpoint = *input;
+    match winnow::combinator::opt(crate::parser::raw::ident)
+        .parse_next(input)?
+        .and_then(attribute)
+    {
+        Some(value) => Ok(value),
+        None => {
+            *input = checkpoint;
+            Err(winnow::error::ErrMode::Backtrack(expected("keyword")))
         }
     }
+}
+
+/// A parse error that names what the input should have held.
+pub(crate) fn expected(description: &'static str) -> winnow::error::ContextError {
+    use winnow::error::{ContextError, StrContext, StrContextValue};
+
+    let mut error = ContextError::new();
+    error.push(StrContext::Expected(StrContextValue::Description(
+        description,
+    )));
+    error
 }
 
 // =============================================================================
