@@ -253,6 +253,14 @@ fn switch_shape(ctx: &IrContext, op: OpRef) -> Option<ScfSwitchShape> {
     })
 }
 
+/// The yield that ends a region, before or after `ScfYieldPattern` rewrote
+/// it: the applicator lowers a region's terminator before its parent.
+fn default_yield(ctx: &IrContext, region: RegionRef) -> Option<OpRef> {
+    let entry = *ctx.region(region).blocks.first()?;
+    let last = *ctx.block(entry).ops.last()?;
+    (scf::Yield::matches(ctx, last) || wasm_dialect::Yield::matches(ctx, last)).then_some(last)
+}
+
 fn switch_arms(ctx: &IrContext, op: OpRef) -> Result<ScfSwitchArms, SwitchLoweringReason> {
     let shape = switch_shape(ctx, op).ok_or(SwitchLoweringReason::MalformedShape)?;
     let result_count = ctx.op_results(op).len();
@@ -261,19 +269,7 @@ fn switch_arms(ctx: &IrContext, op: OpRef) -> Result<ScfSwitchArms, SwitchLoweri
     }
     // Without cases the default's ops replace the switch, so its yield must
     // provide the result.
-    if result_count == 1
-        && shape.cases.is_empty()
-        && !ctx
-            .region(shape.default)
-            .blocks
-            .first()
-            .is_some_and(|&entry| {
-                ctx.block(entry)
-                    .ops
-                    .last()
-                    .is_some_and(|&last| scf::Yield::matches(ctx, last))
-            })
-    {
+    if result_count == 1 && shape.cases.is_empty() && default_yield(ctx, shape.default).is_none() {
         return Err(SwitchLoweringReason::ResultDefaultWithoutYield);
     }
     let Some(width) = switch_width(ctx, shape.discriminant) else {
@@ -384,14 +380,12 @@ impl OpRewritePattern for ScfSwitchPattern<'_> {
         ctx.detach_region(arms.default);
 
         if arms.cases.is_empty() {
+            let terminator = default_yield(ctx, arms.default).filter(|_| has_result);
+            let values = terminator.map_or_else(Vec::new, |last| ctx.op_operands(last).to_vec());
             let mut children = take_region_ops(ctx, arms.default);
-            let mut values = Vec::new();
-            if has_result
-                && let Some(&last) = children.last()
-                && let Ok(yield_op) = scf::Yield::from_op(ctx, last)
-            {
-                values = yield_op.values(ctx).to_vec();
+            if let Some(terminator) = terminator {
                 children.pop();
+                ctx.remove_op(terminator);
             }
             for child in children {
                 rewriter.insert_op(child);
@@ -1108,6 +1102,26 @@ mod tests {
         assert_no_scf_switch(&output);
         assert_eq!(output.matches("wasm.if").count(), 2, "{output}");
         assert_eq!(output.matches("wasm.yield").count(), 4, "{output}");
+    }
+
+    #[test]
+    fn default_only_switch_yields_its_result() {
+        let output = lower_text(
+            r#"core.module @test {
+  func.func @main(%choice: core.i32, %a: core.i64) -> core.i64 {
+    %r = scf.index_switch %choice : (core.i32) -> core.i64
+    default {
+      %b = wasm.i64_add %a, %a : core.i64
+      scf.yield %b
+    }
+    func.return %r
+  }
+}"#,
+        );
+
+        assert_no_scf_switch(&output);
+        assert!(!output.contains("wasm.yield"), "{output}");
+        assert!(output.contains("func.return %2"), "{output}");
     }
 
     #[test]
