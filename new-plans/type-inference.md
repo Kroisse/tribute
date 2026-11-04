@@ -855,6 +855,13 @@ fn example() ->{State(Int)} Nil {
 }
 ```
 
+지역 `let`의 type quantifier는 특수화가 치환하지 않는다. 그래서 lambda를 묶는
+`let`의 quantifier가 타입 인자를 가진 struct·enum의 인자에 남거나, 어떤 지역
+quantifier든 ability 인자에 남으면, 타입 검사를 통과해도 특수화 전 인스턴스 검증이
+거부한다(`generics.md`). 예를 들어 `let mk = fn(x) { Option::Some(x) }`는
+`forall a. fn(a) -> Option(a)`로 일반화되고 본문의 값이 `Option(a)` 타입이므로
+거부된다. `fn(x: Nat)`처럼 인자를 구체 타입으로 정하면 받아들여진다.
+
 For a destructuring pattern, each introduced name receives the corresponding
 component scheme under the same decision. Function parameters, handler
 continuations, and pattern bindings not introduced by `let` are monomorphic.

@@ -301,7 +301,12 @@ signature와 본문의 값 타입이 적는 row 안의 모든 ability instance�
 타입 인자처럼 치환되지 않으므로, ability 인자 안의 열린 row는 특수화로 해결되지
 않는 미해결 인자다. Ability instance의 선언은 instance마다 하나이고 그 operation
 타입은 module 수준에 있어 row tail을 가질 수 없으므로, 그런 instance는 선언할 수
-없다. 다형적 재귀는 정의의 성질이므로 도달하지 않는 template에서도 거부한다.
+없다. 같은 이유로, 같은 함수들의 signature와 본문의 값 타입이 타입 인자를 가진
+struct·enum을 적을 때 그 인자에 열린 row나, lambda를 묶는 지역 `let`의
+quantifier(`LocalBoundVar`)가 있으면 거부한다. 둘 다 특수화가 치환하지 않으므로 그
+nominal 인스턴스는 구체 선언을 얻지 못한다. Lambda가 아닌 값을 묶는 `let`의
+quantifier는 그 타입의 값을 만들 수 없으므로(`let empty = Option::None`) 표현과
+상관없어 거부하지 않는다. 다형적 재귀는 정의의 성질이므로 도달하지 않는 template에서도 거부한다.
 
 ### 타입 순회와 binder별 치환
 
@@ -401,11 +406,12 @@ identity는 남긴다. Lowering은 구체 함수 정의만 받으며,
 제외는 nominal 수집보다 먼저 하므로, template 안에서만 쓰인 nominal 인스턴스는
 생성하지 않는다.
 
-타입 매개변수가 있는 struct와 enum의 원본 선언은 출력에 남는다. Row는 특수화하지
-않으므로, 타입 인자에 열린 ability row가 있는 nominal 인스턴스(예:
-`Boxed(fn() ->{e} Bool)`)는 구체 선언을 얻지 못하고 원본 선언의 표현을 쓴다. 같은
-이유로 원본 struct의 field 함수도 lowering되며, 이것이 타입 변수를 표현 하나로
-소거하는 유일한 함수다.
+타입 매개변수가 있는 struct와 enum의 원본 선언은 출력에 남는다. 원본 선언의 표현은
+타입 변수를 표현 하나로 소거하므로 같은 타입의 구체 선언과 표현이 다르고, 두 표현
+사이를 오가는 값을 변환하지 않는다. 그래서 구체 선언을 얻지 못하는 nominal
+인스턴스(예: `Boxed(fn() ->{e} Bool)`, 지역 `let` `fn(x) { Option::Some(x) }`가
+일반화한 `a`의 `Option(a)`)는 인스턴스 검증이 거부한다. 원본 struct의 field 함수도 lowering되며,
+이것이 타입 변수를 표현 하나로 소거하는 유일한 함수다.
 
 출력은 다음 불변식을 지킨다.
 
