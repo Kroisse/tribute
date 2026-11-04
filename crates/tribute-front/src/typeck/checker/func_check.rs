@@ -164,7 +164,6 @@ impl<'db> TypeChecker<'db> {
         let func_handler_operations = ctx.take_handler_operations();
         let func_perform_operations = ctx.take_perform_operations();
         let func_lambda_signatures = ctx.take_lambda_signatures();
-        let local_generalizations = ctx.take_local_generalizations();
         // Save the accumulated ability row from the body before dropping ctx
         let body_ability_row = ctx.current_effect();
         // Take deferred methods for post-solve resolution
@@ -175,7 +174,6 @@ impl<'db> TypeChecker<'db> {
         let next_row_var = ctx.next_row_var();
         // Drop ctx now to release the borrow of self.env
         drop(ctx);
-        checked.local_generalizations = local_generalizations;
 
         let mut solver = TypeSolver::new(self.db());
         solver.reserve_row_vars(next_row_var);
@@ -289,24 +287,6 @@ impl<'db> TypeChecker<'db> {
         // The declared signature is the function's type; the body is checked
         // against it and never refines it.
         let inferred_func_ty = instantiated_func_ty;
-
-        // Solver aliases can point at a representative created after a local
-        // scheme was generalized. Preserve both spellings before collecting
-        // body and deferred metadata variables for finalization.
-        for (var, binding) in checked.local_generalizations.clone() {
-            let resolved = type_subst.apply_with_rows(
-                self.db(),
-                Type::new(self.db(), TypeKind::UniVar { id: var }),
-                row_subst,
-            );
-            if let TypeKind::UniVar { id } = resolved.kind(self.db()) {
-                let owner = *checked.local_generalizations.entry(*id).or_insert(binding);
-                debug_assert_eq!(
-                    owner, binding,
-                    "solver representative {id:?} aliases local quantifiers of two owners"
-                );
-            }
-        }
 
         // Only interface and retained-relation variables are function binders.
         // Body-local existentials (for example an unused constructor argument)
