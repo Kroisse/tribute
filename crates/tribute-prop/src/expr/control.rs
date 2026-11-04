@@ -23,7 +23,6 @@ pub(super) fn block(env: Env, goal: Goal, depth: u32) -> BoxedStrategy<Fragment>
                     src,
                     value: body.value,
                     free,
-                    yields_case: body.yields_case,
                 }
             })
         })
@@ -57,10 +56,7 @@ pub(super) fn case(env: Env, goal: Goal, depth: u32) -> BoxedStrategy<Fragment> 
                 let wildcard = bodies.last().expect("a case has a wildcard arm");
                 write!(src, "_ -> {} }} }}", wildcard.src).expect("writing to a String");
                 let value = bodies[taken].value.clone();
-                Fragment {
-                    yields_case: true,
-                    ..Fragment::compound(src, value, std::iter::once(&scrutinee).chain(&bodies))
-                }
+                Fragment::compound(src, value, std::iter::once(&scrutinee).chain(&bodies))
             })
         })
         .boxed()

@@ -1629,11 +1629,14 @@ impl<'db> TypeChecker<'db> {
         }
 
         // For known operator methods, add type constraints eagerly so that
-        // type inference can propagate before the method is selected.
+        // type inference can propagate before the method is selected. The
+        // result is a variable of its own, not an operand's type: an operand
+        // that is a `case` result would otherwise be this call's result, and
+        // a common result waits while a deferred call produces it.
         let result_ty = match (method.to_string().as_str(), &arg_types[..]) {
             ("+" | "-" | "*" | "/" | "%", [lhs, rhs]) => {
                 ctx.constrain_eq(*lhs, *rhs);
-                *lhs
+                ctx.fresh_type_var()
             }
             ("==" | "!=" | "<" | "<=" | ">" | ">=", [lhs, rhs]) => {
                 ctx.constrain_eq(*lhs, *rhs);
