@@ -108,10 +108,17 @@ mod inner {
 fn f(x: Int) -> Int { x }
 ";
 
-/// A query that depends on the parse's relative spans only.
+/// A query that depends on the parse's items and their relative spans only.
+/// It reads every item's spans, so a change to any of them reruns it.
 #[salsa::tracked(returns(copy))]
 fn has_item_spans(db: &dyn salsa::Database, source: SourceCst) -> bool {
-    parsed_ast(db, source).is_some_and(|parsed| *parsed.item_spans(db) != ItemSpans::default())
+    parsed_ast(db, source).is_some_and(|parsed| {
+        parsed
+            .items_by_owner(db)
+            .values()
+            .map(|item| *item.spans(db) != ItemSpans::default())
+            .fold(false, |any, nonempty| any | nonempty)
+    })
 }
 
 /// A query that depends on the parse's item layout only.

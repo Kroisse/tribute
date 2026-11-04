@@ -13,6 +13,7 @@ use rustc_hash::{FxBuildHasher, FxHashMap as HashMap};
 use trunk_ir::Span;
 
 use super::NodeId;
+use crate::astgen::ParsedItem;
 use crate::source_tree::SourceTree;
 
 /// Builder for constructing a SpanMap during AST lowering.
@@ -115,17 +116,23 @@ impl ItemLayout {
 /// package's source tree.
 ///
 /// The parts belong to the parse that built them (`ParsedAst`, a Salsa
-/// tracked struct); the map borrows them and adds each item node's relative
-/// span to its item's start. They compare by content, so a reparse that
-/// moves no item leaves both unchanged, and one that only moves items leaves
-/// the relative spans unchanged. A tree's map finds a node's file by the
-/// source hash its `NodeId` carries and reads that file's parts only.
+/// tracked struct); the map finds a node's item by the owner its `NodeId`
+/// carries, reads that item's relative spans, and adds its item's start.
+/// The parts compare by content, so a reparse that moves no item leaves
+/// them unchanged, and one that only moves items leaves every item's spans
+/// unchanged. A tree's map finds a node's file by the source hash its
+/// `NodeId` carries and reads that file's parts only.
 #[derive(Clone, Copy)]
 pub struct SpanMap<'a>(Parts<'a>);
 
 #[derive(Clone, Copy)]
 enum Parts<'a> {
     File {
+        db: &'a dyn salsa::Database,
+        items: &'a HashMap<u64, ParsedItem<'a>>,
+        layout: &'a ItemLayout,
+    },
+    Spans {
         spans: &'a ItemSpans,
         layout: &'a ItemLayout,
     },
@@ -138,7 +145,12 @@ enum Parts<'a> {
 impl std::fmt::Debug for SpanMap<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.0 {
-            Parts::File { spans, layout } => f
+            Parts::File { items, layout, .. } => f
+                .debug_struct("SpanMap")
+                .field("items", &items.len())
+                .field("layout", layout)
+                .finish_non_exhaustive(),
+            Parts::Spans { spans, layout } => f
                 .debug_struct("SpanMap")
                 .field("spans", spans)
                 .field("layout", layout)
@@ -152,9 +164,20 @@ impl std::fmt::Debug for SpanMap<'_> {
 }
 
 impl<'a> SpanMap<'a> {
-    /// The map that positions `spans` by `layout`.
-    pub fn new(spans: &'a ItemSpans, layout: &'a ItemLayout) -> Self {
-        Self(Parts::File { spans, layout })
+    /// The map that positions the spans of the items `items` indexes by
+    /// `layout`.
+    pub fn new(
+        db: &'a dyn salsa::Database,
+        items: &'a HashMap<u64, ParsedItem<'a>>,
+        layout: &'a ItemLayout,
+    ) -> Self {
+        Self(Parts::File { db, items, layout })
+    }
+
+    /// The map that positions `spans`, a builder's spans not taken by an
+    /// item, by `layout`.
+    pub fn from_spans(spans: &'a ItemSpans, layout: &'a ItemLayout) -> Self {
+        Self(Parts::Spans { spans, layout })
     }
 
     /// The map of the files of `tree`.
@@ -169,7 +192,7 @@ impl<'a> SpanMap<'a> {
             starts: HashMap::with_hasher(FxBuildHasher),
             module: None,
         };
-        SpanMap::new(&SPANS, &LAYOUT)
+        SpanMap::from_spans(&SPANS, &LAYOUT)
     }
 
     /// Look up a span by NodeId.
@@ -187,13 +210,15 @@ impl<'a> SpanMap<'a> {
 
     fn get_exact(&self, id: NodeId) -> Option<Span> {
         let (spans, layout) = match self.0 {
-            Parts::File { spans, layout } => (spans, layout),
+            Parts::File { db, items, layout } => (Self::item_spans(db, items, id), layout),
+            Parts::Spans { spans, layout } => (Some(spans), layout),
             Parts::Tree { db, tree } => {
                 let parsed = tree.file(id.source())?.parsed;
-                (parsed.item_spans(db), parsed.item_layout(db))
+                let layout = parsed.item_layout(db);
+                (Self::item_spans(db, parsed.items_by_owner(db), id), layout)
             }
         };
-        if let Some(relative) = spans.0.get(&id) {
+        if let Some(relative) = spans.and_then(|spans| spans.0.get(&id)) {
             let start = layout.start(id);
             return Some(Span {
                 start: relative.start + start,
@@ -204,6 +229,15 @@ impl<'a> SpanMap<'a> {
         layout
             .module
             .and_then(|(module, span)| (module == id).then_some(span))
+    }
+
+    /// The spans of the item that owns `id`, if an item does.
+    fn item_spans<'b>(
+        db: &'b dyn salsa::Database,
+        items: &HashMap<u64, ParsedItem<'b>>,
+        id: NodeId,
+    ) -> Option<&'b ItemSpans> {
+        Some(items.get(&id.owner())?.spans(db))
     }
 
     /// Look up a span by NodeId, returning a default span if not found.
@@ -255,7 +289,7 @@ mod tests {
         builder.insert(id2, Span::new(30, 40));
 
         let (spans, layout) = builder.finish();
-        let span_map = SpanMap::new(&spans, &layout);
+        let span_map = SpanMap::from_spans(&spans, &layout);
 
         assert_eq!(span_map.get(id1), Some(Span::new(10, 20)));
         assert_eq!(span_map.get(id2), Some(Span::new(30, 40)));
@@ -269,7 +303,7 @@ mod tests {
         builder.insert(id1, Span::new(10, 20));
 
         let (spans, layout) = builder.finish();
-        let span_map = SpanMap::new(&spans, &layout);
+        let span_map = SpanMap::from_spans(&spans, &layout);
 
         assert_eq!(span_map.get_or_default(id1), Span::new(10, 20));
         assert_eq!(
@@ -288,8 +322,8 @@ mod tests {
         let (dependency_spans, dependency_layout) = dependency.finish();
 
         let spans = SpanMaps::new([
-            SpanMap::new(&user_spans, &user_layout),
-            SpanMap::new(&dependency_spans, &dependency_layout),
+            SpanMap::from_spans(&user_spans, &user_layout),
+            SpanMap::from_spans(&dependency_spans, &dependency_layout),
         ]);
         assert_eq!(spans.get(NodeId::from_raw(0)), Some(Span::new(10, 20)));
         assert_eq!(spans.get(NodeId::new(1, 0, 0)), Some(Span::new(30, 40)));
@@ -303,7 +337,7 @@ mod tests {
         builder.insert(id, Span::new(0, 50));
 
         let (spans, layout) = builder.finish();
-        let span_map = SpanMap::new(&spans, &layout);
+        let span_map = SpanMap::from_spans(&spans, &layout);
 
         assert!(span_map.contains(id));
         assert!(!span_map.contains(NodeId::from_raw(999)));
@@ -317,7 +351,7 @@ mod tests {
         builder.insert(origin, span);
 
         let (spans, layout) = builder.finish();
-        let span_map = SpanMap::new(&spans, &layout);
+        let span_map = SpanMap::from_spans(&spans, &layout);
 
         // Specialized NodeId should fall back to origin's span
         let variant = std::num::NonZero::new(12345u64).unwrap();
@@ -347,7 +381,7 @@ mod tests {
             "moving an owner keeps its relative spans"
         );
         assert_ne!(layout, moved_layout);
-        let span_map = SpanMap::new(&moved_spans, &moved_layout);
+        let span_map = SpanMap::from_spans(&moved_spans, &moved_layout);
         assert_eq!(span_map.get(NodeId::new(0, 7, 1)), Some(Span::new(39, 41)));
         assert_eq!(span_map.get(NodeId::new(0, 3, 0)), Some(Span::new(0, 2)));
         assert_eq!(span_map.get(NodeId::new(0, 3, 1)), Some(Span::new(0, 45)));

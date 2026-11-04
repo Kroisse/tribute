@@ -19,6 +19,8 @@ mod numeric;
 mod patterns;
 mod text_literal;
 
+use rustc_hash::FxHashMap as HashMap;
+
 use crate::ast::{ItemLayout, ItemSpans, Module, ModuleItem, SpanMap, UnresolvedName};
 use crate::query::ParsedCst;
 use crate::source_file::SourceCst;
@@ -76,10 +78,12 @@ pub fn lower_cst_to_ast(source: &Rope, cst: &ParsedCst) -> Module<UnresolvedName
 ///
 /// Every reparse creates this struct again, so its fields are tracked: its
 /// identity then does not depend on their content, and a field equal to the
-/// previous revision's keeps that revision. The module and its spans are
-/// assembled from `items`, so a reader of them reruns when any item changes;
-/// a reader of one `ParsedItem`'s fields reruns only when that item changes.
-/// Moving items without changing them changes only `item_layout`.
+/// previous revision's keeps that revision. The module is assembled from
+/// `items`, so a reader of it reruns when any item changes; a reader of one
+/// `ParsedItem`'s fields reruns only when that item changes. The span map
+/// reads each node's span from its item, so it reads only the items whose
+/// nodes it looks up. Moving items without changing them changes only
+/// `item_layout`.
 #[salsa::tracked]
 pub struct ParsedAst<'db> {
     /// The parsed AST module with unresolved names.
@@ -89,19 +93,22 @@ pub struct ParsedAst<'db> {
     /// items changes this list; editing one item does not.
     #[tracked]
     pub items: Vec<ParsedItem<'db>>,
-    /// Each item node's span relative to the start of its item.
+    /// Each item, nested ones included, by the owner key of its nodes.
+    /// Adding, removing or renaming items changes this map; editing or
+    /// moving one does not.
     #[tracked]
-    pub item_spans: ItemSpans,
+    pub items_by_owner: HashMap<u64, ParsedItem<'db>>,
     /// Where each item starts, and the span of the root `Module`.
     #[tracked]
     pub item_layout: ItemLayout,
 }
 
 impl<'db> ParsedAst<'db> {
-    /// The span map for looking up source locations, which reads both
-    /// `item_spans` and `item_layout`.
+    /// The span map for looking up source locations, which reads
+    /// `items_by_owner`, `item_layout`, and the spans of the items whose
+    /// nodes it looks up.
     pub fn span_map(self, db: &'db dyn salsa::Database) -> SpanMap<'db> {
-        SpanMap::new(self.item_spans(db), self.item_layout(db))
+        SpanMap::new(db, self.items_by_owner(db), self.item_layout(db))
     }
 }
 
@@ -184,21 +191,25 @@ fn parse<'db>(
     let (untaken, item_layout) = ctx.finish().finish();
     debug_assert_eq!(untaken, ItemSpans::default(), "every node is an item's");
     module.decls = assemble_decls(&items);
-    let item_spans = all_spans(&items).chain([&untaken]).collect();
-    let items = items
+    let items: Vec<_> = items
         .into_iter()
         .map(|item| ParsedItem::create(db, item))
         .collect();
-    ParsedAst::new(db, module, items, item_spans, item_layout)
+    let mut items_by_owner = HashMap::default();
+    index_items(db, &items, &mut items_by_owner);
+    ParsedAst::new(db, module, items, items_by_owner, item_layout)
 }
 
-/// The spans of `items` and the items in them.
-fn all_spans(items: &[LoweredItem]) -> Box<dyn Iterator<Item = &ItemSpans> + '_> {
-    Box::new(
-        items
-            .iter()
-            .flat_map(|item| std::iter::once(&item.spans).chain(all_spans(&item.children))),
-    )
+/// Add `items` and the items in them to `index` by their owner keys.
+fn index_items<'db>(
+    db: &'db dyn salsa::Database,
+    items: &[ParsedItem<'db>],
+    index: &mut HashMap<u64, ParsedItem<'db>>,
+) {
+    for &item in items {
+        index.insert(*item.owner(db), item);
+        index_items(db, item.children(db), index);
+    }
 }
 
 /// Parse and lower the file of the file module at `path` in its package,
