@@ -34,7 +34,7 @@ fn main() -> Nil {
             .unwrap_or_else(|| panic!("{module}::abs is declared by its path:\n{ir}"));
         assert!(declaration.contains("link_name = \"abs\""), "{declaration}");
         assert!(
-            ir.contains(&format!("@\"pkg::{module}::abs\"(")),
+            ir.contains(&format!("call @\"pkg::{module}::abs\"(")),
             "calls name {module}::abs by its path:\n{ir}"
         );
     }

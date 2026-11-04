@@ -465,7 +465,7 @@ fn module_level_types_and_references_to_main_keep_their_shape() {
             "tribute_cps.func @ext(%arg0: core.i32) -> core.i32 convention(direct) attributes {abi = \"C\"}",
             "%1 = tribute_cps.func_ref @\"main$8\" : !pure",
             "tribute_cps.func_table @\"main$8\" = {direct = @main}",
-            "@\"app$9D\"(",
+            "call @\"app$9D\"(",
         ],
     );
     let base = printed
@@ -869,8 +869,8 @@ fn a_tail_passed_for_a_cps_own_tail_is_a_class_variable() {
         &[
             "tribute_cps.func @\"foreign$9D\"['a0](%0: core.i32) -> core.i32 row(| 'a0) convention(direct) {",
             "tribute_cps.func @\"holding$9D\"['a0](%0: core.i32) -> core.i32 row(| 'a0) convention(direct) {",
-            "@\"foreign$9D\"(",
-            "@\"holding$9D\"(",
+            "call @\"foreign$9D\"(",
+            "call @\"holding$9D\"(",
         ],
     );
 }
