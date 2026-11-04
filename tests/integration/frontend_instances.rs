@@ -211,6 +211,50 @@ fn incomplete_instances_are_rejected_whether_or_not_reached(db: &salsa::Database
     }
 }
 
+/// Rows are not specialized, so a row variable inside an ability argument
+/// stays unresolved. A function whose signature names such an instance is
+/// rejected even when nothing performs or handles that instance.
+#[salsa_test]
+fn an_open_row_inside_an_ability_argument_is_rejected(db: &salsa::DatabaseImpl) {
+    for row in ["Hold(fn() ->{e} Int), e", "Hold(fn() ->{e} Int)"] {
+        let source = SourceCst::from_source_str(
+            db,
+            "open_ability_argument.trb",
+            &format!(
+                r#"
+ability Hold(a) {{
+    fn held() -> a
+}}
+
+fn g() ->{{{row}}} Int {{ +1 }}
+
+fn apply(f: fn() ->{{Hold(fn() ->{{}} Int)}} Int) -> Int {{
+    handle f() {{
+        do result {{ result }}
+        fn Hold::held() {{ fn() {{ +2 }} }}
+    }}
+}}
+
+fn main() -> Nil {{
+    let _ = apply(g)
+}}
+"#
+            ),
+        );
+        assert!(!prepares(db, source), "{row}");
+        let messages: Vec<_> = prepares::accumulated::<SpanDiagnostic>(db, source)
+            .iter()
+            .map(|diagnostic| diagnostic.inner.message.to_string())
+            .collect();
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("IncompleteAbilityArgument")),
+            "{row}: {messages:?}"
+        );
+    }
+}
+
 /// The specialization output holds a generic function's instances, never
 /// the function itself, nor nominal instances only its body mentions.
 #[salsa_test]

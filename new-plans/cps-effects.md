@@ -161,13 +161,21 @@ Ability row는 타입 인자처럼 치환하지 않는다. Row의 내용은 실�
 
 - 매개변수 타입이나 결과 타입에 포함된 함수 타입의 row tail
 - 본문의 람다나 지역 callable 타입의 row tail
-- 본문이 참조하는 정의의 class 변수 자리에 넘기는 row의 tail
+- 본문이 참조하는 정의의 class 변수 자리나, 그 정의의 자기 tail 중 `Cps`로 읽는
+  자리에 넘기는 row의 tail
 - 본문이 `let`에 묶인 람다의 row 변수 자리에 넘기는 row의 tail
 
 결과 타입의 함수 타입도 정의의 코드를 바꾼다. 정의가 돌려주는 callable이 채울 수
 있는 [convention entry](ir.md#convention-entry)가 그 row의 class에 달려 있고, 호출한 쪽은 그
 결과를 자기가 고정한 row의 class로 부르기 때문이다. 이름 붙은 함수를 그대로 돌려주는 정의는 본문에 람다가 없어도
 이 조건으로 class 변수를 가진다.
+
+셋째 조건의 `Cps`로 읽는 자기 tail은 참조되는 정의의 row tail 중 class 변수가 아니면서
+[tail 규칙](#row와-호출-규약)의 마지막 줄에 드는 것이다. 본문이 없는 정의의 tail,
+ability 인자에 나타난 tail, 여러 tail의 합집합이 그렇다. 그런 정의는 호출자가 그
+자리에 넘긴 row의 evidence를 받는다. 그래서 그 자리에 자기 tail을 넘기는 정의는 그
+tail의 class에 따라 evidence를 받고 넘기는 코드가 달라지며, 그 tail을 요구 없음으로
+읽을 수 없다.
 
 셋째 조건은 참조되는 정의의 class 변수에 의존하므로, 모든 정의에 대한 최소
 고정점으로 정한다. 정의 자신의 row에만 나타나는 tail도 이 조건으로 class 변수가 될

@@ -1,13 +1,14 @@
 //! Validate checker-selected instances on executable reference paths before erasure.
 use super::{Dependency, Expressions, collect::is_concrete_type};
-use crate::ast::fold::TypeFoldable;
+use crate::ast::fold::{TypeFoldable, TypeVisitable, TypeVisitor};
 use crate::ast::{
-    Decl, DeclTable, ExprKind, FuncDecl, FuncDefId, NodeId, ResolvedRef, SpanMaps, Type,
-    TypeScheme, TypedRef,
+    AbilityRow, Decl, DeclTable, ExprKind, FuncDecl, FuncDefId, NodeId, ResolvedRef, SpanMaps,
+    Type, TypeScheme, TypedRef,
 };
 use crate::typeck::subst::BoundVarSubst;
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
+use std::ops::ControlFlow;
 use tribute_core::diagnostic::{CompilationPhase, DiagnosticSeverity, SpanDiagnostic};
 use trunk_ir::SymbolPath;
 
@@ -98,6 +99,40 @@ fn substitute<'db>(
         .ok()
 }
 
+/// Whether a row that `ty` spells, at the type arguments `arguments`, names
+/// an ability instance whose argument is not concrete. A row variable is
+/// never substituted, so an open row inside an ability argument stays
+/// unresolved.
+fn names_incomplete_ability_argument<'db>(
+    db: &'db dyn salsa::Database,
+    ty: Type<'db>,
+    arguments: &[Type<'db>],
+) -> bool {
+    struct Incomplete<'db> {
+        db: &'db dyn salsa::Database,
+    }
+    impl<'db> TypeVisitor<'db> for Incomplete<'db> {
+        type Break = ();
+
+        fn db(&self) -> &'db dyn salsa::Database {
+            self.db
+        }
+
+        fn visit_row(&mut self, row: AbilityRow<'db>) -> ControlFlow<()> {
+            if row
+                .instances(self.db)
+                .iter()
+                .flat_map(|ability| &ability.args)
+                .any(|argument| !is_concrete_type(self.db, *argument))
+            {
+                return ControlFlow::Break(());
+            }
+            row.super_visit_with(self)
+        }
+    }
+    substitute(db, ty, arguments).is_some_and(|ty| ty.visit_with(&mut Incomplete { db }).is_break())
+}
+
 /// Validate the instances reached from every monomorphic function `module`
 /// declares. A reference into `dependency` is followed only to an instance
 /// of its generics; the dependency's specialization validates its own
@@ -164,9 +199,26 @@ pub(super) fn validate<'db>(
             });
             break;
         }
+        if schemes.get(id.path(db)).is_some_and(|scheme| {
+            names_incomplete_ability_argument(db, scheme.body(db), &arguments)
+        }) {
+            errors.push(InstanceError {
+                node: func.id,
+                kind: InstanceErrorKind::IncompleteAbilityArgument,
+            });
+        }
         let mut nodes = Vec::new();
         func.body.for_each(|node| nodes.push(node));
         for expr in nodes {
+            if expressions
+                .get(|table| &table.node_types, &expr.id)
+                .is_some_and(|ty| names_incomplete_ability_argument(db, *ty, &arguments))
+            {
+                errors.push(InstanceError {
+                    node: expr.id,
+                    kind: InstanceErrorKind::IncompleteAbilityArgument,
+                });
+            }
             if let Some(op) = expressions.get(|table| &table.perform_operations, &expr.id)
                 && op.ability_args.iter().any(|ty| {
                     substitute(db, *ty, &arguments).is_none_or(|ty| !is_concrete_type(db, ty))
