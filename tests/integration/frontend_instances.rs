@@ -255,9 +255,9 @@ fn main() -> Nil {{
     }
 }
 
-/// Neither a row variable nor a local `let` quantifier is specialized, so a
-/// generic struct or enum named at an argument holding one gets no
-/// specialized declaration. Such a program is rejected; the same program
+/// Neither a row variable nor a quantifier of a `let` that binds a callable
+/// is specialized, so a generic struct or enum named at an argument holding
+/// one gets no specialized declaration. Such a program is rejected; the same program
 /// with a concrete argument is accepted.
 #[salsa_test]
 fn nominal_arguments_that_do_not_specialize_are_rejected(db: &salsa::DatabaseImpl) {
@@ -276,6 +276,16 @@ fn nominal_arguments_that_do_not_specialize_are_rejected(db: &salsa::DatabaseImp
             "",
             "",
             "let mk = fn(x) { Cell { v: x } }\n    let _ = mk(41).v",
+        ),
+        (
+            "",
+            "",
+            "let mk = { fn(x) { Boxed::Box(x) } }\n    let _ = mk(41)",
+        ),
+        (
+            "",
+            "",
+            "let p = #(fn(x) { Boxed::Box(x) }, 0)\n    let #(mk, _) = p\n    let _ = mk(41)",
         ),
     ];
     for (rejected, accepted, body) in cases {
@@ -307,8 +317,8 @@ fn main() -> Nil {{
         let source = SourceCst::from_source_str(db, "nominal.trb", &program(accepted, &concrete));
         assert!(prepares(db, source), "{accepted} {concrete}");
     }
-    // A quantifier of a `let` that binds no lambda has no value of its type
-    // to store, so it is accepted.
+    // A quantifier of a `let` whose value holds no callable types no value,
+    // so it is accepted.
     let source = SourceCst::from_source_str(
         db,
         "nominal_value.trb",

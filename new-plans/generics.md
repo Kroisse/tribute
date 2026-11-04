@@ -302,11 +302,12 @@ signature와 본문의 값 타입이 적는 row 안의 모든 ability instance�
 않는 미해결 인자다. Ability instance의 선언은 instance마다 하나이고 그 operation
 타입은 module 수준에 있어 row tail을 가질 수 없으므로, 그런 instance는 선언할 수
 없다. 같은 이유로, 같은 함수들의 signature와 본문의 값 타입이 타입 인자를 가진
-struct·enum을 적을 때 그 인자에 열린 row나, lambda를 묶는 지역 `let`의
-quantifier(`LocalBoundVar`)가 있으면 거부한다. 둘 다 특수화가 치환하지 않으므로 그
-nominal 인스턴스는 구체 선언을 얻지 못한다. Lambda가 아닌 값을 묶는 `let`의
-quantifier는 그 타입의 값을 만들 수 없으므로(`let empty = Option::None`) 표현과
-상관없어 거부하지 않는다. 다형적 재귀는 정의의 성질이므로 도달하지 않는 template에서도 거부한다.
+struct·enum을 적을 때 그 인자에 열린 row나, 값 타입에 함수 타입이 있는 지역
+`let`의 quantifier(`LocalBoundVar`)가 있으면 거부한다. 둘 다 특수화가 치환하지
+않으므로 그 nominal 인스턴스는 구체 선언을 얻지 못한다. 값 타입에 함수 타입이 없는
+`let`의 quantifier는 그 타입의 값을 받을 매개변수가 없어 값을 만들 수 없으므로
+(`let empty = Option::None`) 표현과 상관없고, 거부하지 않는다. 다형적 재귀는
+정의의 성질이므로 도달하지 않는 template에서도 거부한다.
 
 ### 타입 순회와 binder별 치환
 

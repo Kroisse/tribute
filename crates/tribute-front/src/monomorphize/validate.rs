@@ -27,8 +27,8 @@ pub enum InstanceErrorKind {
     IncompleteTypeArgument,
     IncompleteAbilityArgument,
     /// A generic struct or enum named at an argument that specialization
-    /// cannot make concrete: an open row, or a quantifier of a `let`-bound
-    /// lambda.
+    /// cannot make concrete: an open row, or a quantifier of a `let` that
+    /// binds a callable.
     IncompleteNominalArgument,
     InconsistentCallable,
     /// A backstop for runaway expansion that polymorphic recursion
@@ -80,7 +80,7 @@ impl InstanceError {
             ),
             InstanceErrorKind::IncompleteNominalArgument => "a generic struct or enum is used at \
                  a type argument that holds an open ability row or a type variable of a \
-                 `let`-bound lambda; these do not specialize, so give the argument a concrete type"
+                 `let`-bound function; these do not specialize, so give the argument a concrete type"
                 .to_owned(),
             InstanceErrorKind::SpecializationInvariant(violation) => format!(
                 "internal compiler error: the specialization output breaks its contract at {}: \
@@ -141,18 +141,40 @@ fn names_incomplete_ability_argument<'db>(
     substitute(db, ty, arguments).is_some_and(|ty| ty.visit_with(&mut Incomplete { db }).is_break())
 }
 
-/// The declarations and lambda quantifiers a nominal argument check reads.
+/// The declarations and local quantifiers a nominal argument check reads.
 struct NominalScope<'a, 'db> {
     /// Generic struct and enum declarations.
     generic: &'a HashSet<TypeDefId<'db>>,
-    /// The `let` patterns that bind a lambda, which own the local
-    /// quantifiers a lambda parameter can carry a value of.
-    lambda_lets: &'a HashSet<NodeId>,
+    /// The `let` patterns whose value type holds a callable. Only their
+    /// quantifiers can type a value, one a callable's parameter carries.
+    callable_lets: &'a HashSet<NodeId>,
+}
+
+/// Whether `ty` contains a function type.
+fn holds_callable<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
+    struct Callable<'db> {
+        db: &'db dyn salsa::Database,
+    }
+    impl<'db> TypeVisitor<'db> for Callable<'db> {
+        type Break = ();
+
+        fn db(&self) -> &'db dyn salsa::Database {
+            self.db
+        }
+
+        fn visit_type(&mut self, ty: Type<'db>) -> ControlFlow<()> {
+            if matches!(ty.kind(self.db), TypeKind::Func { .. }) {
+                return ControlFlow::Break(());
+            }
+            ty.super_visit_with(self)
+        }
+    }
+    ty.visit_with(&mut Callable { db }).is_break()
 }
 
 /// Whether `ty`, at the type arguments `arguments`, names a generic struct
-/// or enum at an argument holding an open row or a lambda's local
-/// quantifier. Neither is substituted, so the instance would get no
+/// or enum at an argument holding an open row or a quantifier of a `let`
+/// that binds a callable. Neither is substituted, so the instance would get no
 /// specialized declaration.
 fn names_incomplete_nominal_argument<'db>(
     db: &'db dyn salsa::Database,
@@ -175,7 +197,7 @@ fn names_incomplete_nominal_argument<'db>(
         fn visit_type(&mut self, ty: Type<'db>) -> ControlFlow<()> {
             match ty.kind(self.db) {
                 TypeKind::LocalBoundVar { scope, .. }
-                    if self.in_argument && self.scope.lambda_lets.contains(scope) =>
+                    if self.in_argument && self.scope.callable_lets.contains(scope) =>
                 {
                     ControlFlow::Break(())
                 }
@@ -284,7 +306,7 @@ pub(super) fn validate<'db>(
         }
         let mut nodes = Vec::new();
         func.body.for_each(|node| nodes.push(node));
-        let lambda_lets: HashSet<_> = nodes
+        let callable_lets: HashSet<_> = nodes
             .iter()
             .filter_map(|expr| match expr.kind.as_ref() {
                 ExprKind::Block { stmts, .. } => Some(stmts),
@@ -293,7 +315,9 @@ pub(super) fn validate<'db>(
             .flatten()
             .filter_map(|stmt| match stmt {
                 Stmt::Let { pattern, value, .. }
-                    if matches!(value.kind.as_ref(), ExprKind::Lambda { .. }) =>
+                    if expressions
+                        .get(|table| &table.node_types, &value.id)
+                        .is_some_and(|ty| holds_callable(db, *ty)) =>
                 {
                     Some(pattern.id)
                 }
@@ -302,7 +326,7 @@ pub(super) fn validate<'db>(
             .collect();
         let scope = NominalScope {
             generic: &generic,
-            lambda_lets: &lambda_lets,
+            callable_lets: &callable_lets,
         };
         let mut nominal_reported = false;
         if let Some(scheme) = schemes.get(id.path(db)) {
