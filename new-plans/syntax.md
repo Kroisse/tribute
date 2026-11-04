@@ -754,8 +754,12 @@ fn pure_add(x: Int, y: Int) ->{} Int {
 ### Lambda Expression
 
 ```ebnf
-Lambda ::= 'fn' '(' ParamList? ')' Expression
+Lambda ::= 'fn' '(' ParamList? ')' ReturnType? Expression
 ```
+
+람다는 반환 타입과 ability row를 `ReturnType`으로 적을 수 있다. 적은 반환 타입은
+본문을 검사하는 기대 타입이고, 적은 row는 람다의 callable row이다. 생략한 부분은
+추론한다([타입 추론](type-inference.md#람다-주석)).
 
 **예시:**
 
@@ -766,6 +770,8 @@ fn(x) {
     let y = x + 1
     y * 2
 }
+fn(x: Int) -> Bool { x > 0 }
+fn() ->{State(Int)} Int { State::get() }
 ```
 
 ---

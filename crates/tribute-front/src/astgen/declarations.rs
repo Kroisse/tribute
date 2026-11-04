@@ -402,7 +402,7 @@ fn lower_type_node(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<TypeAnnot
 /// Grammar: `ability_row = "{" ability_list? "}"`
 /// where `ability_list` contains `ability_item` (e.g. `State(Int)`) and
 /// `ability_tail` (row variable, e.g. `e`).
-fn lower_ability_row(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<TypeAnnotation> {
+pub(super) fn lower_ability_row(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<TypeAnnotation> {
     let mut effects = Vec::new();
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {

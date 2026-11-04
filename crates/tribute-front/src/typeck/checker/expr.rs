@@ -325,16 +325,47 @@ impl<'db> TypeChecker<'db> {
                 ctx.finish_result_join(expr.id);
                 result_ty
             }
-            ExprKind::Lambda { params, body } => {
+            ExprKind::Lambda {
+                params,
+                return_ty,
+                effects,
+                body,
+            } => {
                 // Extract expected effect from mode if checking against a function type.
                 // This is crucial for lambdas passed to higher-order functions with effects.
-                let expected_effect = if let Mode::Check(expected_ty) = &mode
+                let contextual_effect = if let Mode::Check(expected_ty) = &mode
                     && let TypeKind::Func { effect, .. } = expected_ty.kind(self.db())
                 {
                     Some(*effect)
                 } else {
                     None
                 };
+                let contextual_result = match &mode {
+                    Mode::Check(expected) => match expected.kind(self.db()) {
+                        TypeKind::Func { result, .. } => Some(*result),
+                        _ => None,
+                    },
+                    Mode::Infer => None,
+                };
+                // A written result or row is the lambda's own signature: the
+                // body is checked against it, and the context is matched with
+                // it (`new-plans/type-inference.md`, lambda annotations).
+                let annotated_result = return_ty
+                    .as_ref()
+                    .map(|ann| self.annotation_to_type_with_ctx(ctx, ann));
+                let annotated_effect = effects
+                    .as_deref()
+                    .map(|abilities| self.ability_annotations_to_row_with_ctx(ctx, abilities));
+                if let (Some(annotated), Some(contextual)) = (annotated_effect, contextual_effect) {
+                    ctx.constrain_row_eq_at(
+                        contextual,
+                        annotated,
+                        expr.id,
+                        ConstraintOriginKind::Lambda,
+                    );
+                }
+                let expected_effect = annotated_effect.or(contextual_effect);
+                let expected_result = annotated_result.or(contextual_result);
 
                 // A revisited lambda keeps the parameter types of its first
                 // visit. Its nested lambdas are cached with those types, so
@@ -371,13 +402,7 @@ impl<'db> TypeChecker<'db> {
                 // Use a new scope for lambda parameters so they don't leak out
                 ctx.push_scope();
                 ctx.enter_lambda();
-                ctx.push_callable_result(match &mode {
-                    Mode::Check(expected) => match expected.kind(self.db()) {
-                        TypeKind::Func { result, .. } => Some(*result),
-                        _ => None,
-                    },
-                    Mode::Infer => None,
-                });
+                ctx.push_callable_result(expected_result);
                 let (lambda_evidence, outer_evidence) = ctx.evidence.enter_callable(None);
 
                 // Bind lambda parameters in the new scope
@@ -388,14 +413,9 @@ impl<'db> TypeChecker<'db> {
                     ctx.bind_local_by_name(param.name.clone(), *ty);
                 }
 
-                let body_ty = match &mode {
-                    Mode::Check(expected) => match expected.kind(self.db()) {
-                        TypeKind::Func { result, .. } => {
-                            self.infer_expr_with_expected(ctx, body, *result)
-                        }
-                        _ => self.infer_expr_type_with_ctx(ctx, body),
-                    },
-                    Mode::Infer => self.infer_expr_type_with_ctx(ctx, body),
+                let body_ty = match expected_result {
+                    Some(result) => self.infer_expr_with_expected(ctx, body, result),
+                    None => self.infer_expr_type_with_ctx(ctx, body),
                 };
 
                 // Match omitted-effect named functions: retain an already-open
@@ -470,15 +490,12 @@ impl<'db> TypeChecker<'db> {
                     }
                     None => body_ty,
                 };
-                let result_ty = match mode {
-                    Mode::Check(expected) => match expected.kind(self.db()) {
-                        TypeKind::Func { result, .. } => {
-                            ctx.constrain_coerce(body_ty, *result, body.id);
-                            *result
-                        }
-                        _ => inferred_result,
-                    },
-                    Mode::Infer => inferred_result,
+                let result_ty = match expected_result {
+                    Some(result) => {
+                        ctx.constrain_coerce(body_ty, result, body.id);
+                        result
+                    }
+                    None => inferred_result,
                 };
                 let lambda_type = ctx.func_type(param_types, result_ty, lambda_effect);
                 ctx.record_lambda_signature(
@@ -983,7 +1000,7 @@ impl<'db> TypeChecker<'db> {
         expr: &Expr<ResolvedRef<'db>>,
     ) -> Option<Type<'db>> {
         match &*expr.kind {
-            ExprKind::Lambda { params, body } => {
+            ExprKind::Lambda { params, body, .. } => {
                 let params = params.iter().map(|_| ctx.fresh_type_var()).collect();
                 let result =
                     Self::literal_callable_shape(ctx, body).unwrap_or_else(|| ctx.fresh_type_var());
@@ -2276,7 +2293,12 @@ impl<'db> TypeChecker<'db> {
                     arms: converted_arms,
                 }
             }
-            ExprKind::Lambda { params, body } => {
+            ExprKind::Lambda {
+                params,
+                return_ty,
+                effects,
+                body,
+            } => {
                 // Save and restore effect context for lambda body,
                 // just like in the infer phase. This prevents lambda
                 // body effects from leaking into the enclosing scope.
@@ -2338,6 +2360,8 @@ impl<'db> TypeChecker<'db> {
                 ctx.set_current_effect(outer_effect);
                 ExprKind::Lambda {
                     params: params.clone(),
+                    return_ty: return_ty.clone(),
+                    effects: effects.clone(),
                     body: converted_body,
                 }
             }
@@ -3842,42 +3866,7 @@ impl<'db> TypeChecker<'db> {
                     .map(|p| self.annotation_to_type_with_ctx(ctx, p))
                     .collect();
                 let result_ty = self.annotation_to_type_with_ctx(ctx, result);
-                let mut rows = Vec::new();
-                for ability in abilities {
-                    let row = match &ability.kind {
-                        TypeAnnotationKind::Named(name) if crate::ast::is_type_variable(name) => {
-                            ctx.annotation_row(name.clone())
-                        }
-                        TypeAnnotationKind::Infer => ctx.fresh_row_var(),
-                        _ => continue,
-                    };
-                    if !rows.contains(&row) {
-                        rows.push(row);
-                    }
-                }
-                let rest = match rows.as_slice() {
-                    [] => None,
-                    [row] => Some(*row),
-                    _ => {
-                        let result = ctx.fresh_row_var();
-                        ctx.constrain_row_union(crate::ast::RowUnion {
-                            sources: rows
-                                .into_iter()
-                                .map(|row| AbilityRow::open(self.db(), row))
-                                .collect(),
-                            result: AbilityRow::open(self.db(), result),
-                        });
-                        Some(result)
-                    }
-                };
-                let converted = crate::ast::abilities_to_ability_row(
-                    self.db(),
-                    abilities,
-                    self.current_prefix(),
-                    &mut |a| self.annotation_to_type_with_ctx(ctx, a),
-                    || rest.expect("row annotations allocate a tail"),
-                );
-                let effect = AbilityRow::new(self.db(), converted.instances(self.db()), rest);
+                let effect = self.ability_annotations_to_row_with_ctx(ctx, abilities);
                 ctx.func_type(param_types, result_ty, effect)
             }
             TypeAnnotationKind::Tuple(elems) => {
@@ -3892,6 +3881,53 @@ impl<'db> TypeChecker<'db> {
         };
         ctx.record_annotation_type(ann.id, ty);
         ty
+    }
+
+    /// Convert the ability row written in a function type or a lambda's
+    /// return annotation. Row-variable entries share one tail.
+    fn ability_annotations_to_row_with_ctx(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        abilities: &[crate::ast::TypeAnnotation],
+    ) -> AbilityRow<'db> {
+        use crate::ast::TypeAnnotationKind;
+
+        let mut rows = Vec::new();
+        for ability in abilities {
+            let row = match &ability.kind {
+                TypeAnnotationKind::Named(name) if crate::ast::is_type_variable(name) => {
+                    ctx.annotation_row(name.clone())
+                }
+                TypeAnnotationKind::Infer => ctx.fresh_row_var(),
+                _ => continue,
+            };
+            if !rows.contains(&row) {
+                rows.push(row);
+            }
+        }
+        let rest = match rows.as_slice() {
+            [] => None,
+            [row] => Some(*row),
+            _ => {
+                let result = ctx.fresh_row_var();
+                ctx.constrain_row_union(crate::ast::RowUnion {
+                    sources: rows
+                        .into_iter()
+                        .map(|row| AbilityRow::open(self.db(), row))
+                        .collect(),
+                    result: AbilityRow::open(self.db(), result),
+                });
+                Some(result)
+            }
+        };
+        let converted = crate::ast::abilities_to_ability_row(
+            self.db(),
+            abilities,
+            self.current_prefix(),
+            &mut |a| self.annotation_to_type_with_ctx(ctx, a),
+            || rest.expect("row annotations allocate a tail"),
+        );
+        AbilityRow::new(self.db(), converted.instances(self.db()), rest)
     }
 
     // =========================================================================
@@ -4162,6 +4198,8 @@ mod tests {
             NodeId::from_raw(1),
             ExprKind::Lambda {
                 params: vec![],
+                return_ty: None,
+                effects: None,
                 body: Expr::new(NodeId::from_raw(2), ExprKind::NatLit(42)),
             },
         );
@@ -4193,6 +4231,8 @@ mod tests {
                 NodeId::from_raw(3),
                 ExprKind::Lambda {
                     params: vec![],
+                    return_ty: None,
+                    effects: None,
                     body: local_expr(4, name, source),
                 },
             ),

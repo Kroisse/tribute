@@ -197,7 +197,7 @@ pub(super) fn lower_expr_for_callable_parameter<'db>(
     declarations: &mut Declarations<'db>,
 ) -> Option<ValueRef> {
     match &*expr.kind {
-        ExprKind::Lambda { params, body } => {
+        ExprKind::Lambda { params, body, .. } => {
             let signature = declarations
                 .lambda_signatures
                 .get(&expr.id)
