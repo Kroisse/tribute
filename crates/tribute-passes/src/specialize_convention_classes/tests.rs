@@ -40,7 +40,7 @@ fn a_pure_callback_selects_the_direct_instance() {
   }
   tribute_control.func @main(%x: core.i32) -> core.i32 {
     %f = tribute_control.func_ref @bang : !pure
-    %r = tribute_control.call %x, %f {callee = @app, row_args = [{}]} : core.i32
+    %r = tribute_control.call @app(%x, %f) attributes {row_args = [{}]} : (core.i32, !pure) -> core.i32
     tribute_control.return %r
   }
 }"#,
@@ -51,7 +51,7 @@ fn a_pure_callback_selects_the_direct_instance() {
         "tribute_cps.func @\"app$9D\"['a0](%0: core.i32, %1: !cb) -> core.i32 row(| 'a0) convention(direct) {",
         "%2 = tribute_cps.call_indirect %1(%0) attributes {convention = \"cps\"} : (core.i32) -> core.i32 row(| 'a0)",
         "tribute_cps.func @bang(%0: core.i32) -> core.i32 convention(direct) {",
-        "%2 = tribute_control.call %0, %1 {callee = @\"app$9D\", row_args = [{}]} : core.i32",
+        "%2 = tribute_control.call @\"app$9D\"(%0, %1) attributes {row_args = [{}]} : (core.i32, !pure) -> core.i32",
     ] {
         assert!(printed.contains(expected), "{expected}\n{printed}");
     }
@@ -81,7 +81,7 @@ fn a_class_variable_reached_through_a_callee_is_selected() {
   }
   tribute_control.func @bang['a0](%x: core.i32) -> core.i32 row(| 'a0) inferred {
     %f = tribute_control.func_ref @ident rows [{tail = 0}] : !cb
-    %r = tribute_control.call %x, %f {callee = @app, row_args = [{tail = 0}]} : core.i32
+    %r = tribute_control.call @app(%x, %f) attributes {row_args = [{tail = 0}]} : (core.i32, !cb) -> core.i32
     tribute_control.return %r
   }
   tribute_control.func @twice['a0](%x: core.i32, %g: !cb) -> core.i32 row(| 'a0) {
@@ -90,7 +90,7 @@ fn a_class_variable_reached_through_a_callee_is_selected() {
   }
   tribute_control.func @main(%x: core.i32) -> core.i32 {
     %g = tribute_control.func_ref @bang rows [{}] : !pure
-    %r = tribute_control.call %x, %g {callee = @twice, row_args = [{}]} : core.i32
+    %r = tribute_control.call @twice(%x, %g) attributes {row_args = [{}]} : (core.i32, !pure) -> core.i32
     tribute_control.return %r
   }
 }"#,
@@ -100,10 +100,10 @@ fn a_class_variable_reached_through_a_callee_is_selected() {
         &[
             "tribute_cps.func @bang['a0](%0: core.i32) -> core.i32 row(| 'a0) inferred convention(cps) {",
             "tribute_cps.func @\"bang$9D\"['a0](%0: core.i32) -> core.i32 row(| 'a0) inferred convention(direct) {",
-            "%2 = tribute_control.call %0, %1 {callee = @\"app$9D\", row_args = [{tail = 0}]} : core.i32",
+            "%2 = tribute_control.call @\"app$9D\"(%0, %1) attributes {row_args = [{tail = 0}]} : (core.i32, !cb) -> core.i32",
             "%1 = tribute_cps.func_ref @\"bang$9D$8\" rows [{}] : ",
             "tribute_cps.func_table @\"bang$9D$8\" = {direct = @\"bang$9D\"}",
-            "%2 = tribute_control.call %0, %1 {callee = @\"twice$9D\", row_args = [{}]} : core.i32",
+            "%2 = tribute_control.call @\"twice$9D\"(%0, %1) attributes {row_args = [{}]} : (core.i32, !pure) -> core.i32",
             "tribute_cps.func @ident['a0](%0: core.i32) -> core.i32 row(| 'a0) inferred convention(direct) {",
         ],
     );
@@ -121,13 +121,13 @@ fn a_recursive_instance_calls_itself() {
       %v = tribute_control.call_indirect %f(%y) : (core.i32) -> core.i32 row(| 'a0)
       tribute_control.return %v
     }
-    tribute_control.tail_call %n, %g {callee = @loop, row_args = [{tail = 0}]}
+    tribute_control.tail_call @loop(%n, %g) attributes {row_args = [{tail = 0}]} : (core.i32, !cb) -> ()
   }
   tribute_control.func @main(%x: core.i32) -> core.i32 {
     %h = tribute_control.lambda(%y: core.i32) -> core.i32 captures [] {
       tribute_control.return %y
     }
-    %r = tribute_control.call %x, %h {callee = @loop, row_args = [{}]} : core.i32
+    %r = tribute_control.call @loop(%x, %h) attributes {row_args = [{}]} : (core.i32, tribute_control.func_sig<(core.i32) -> core.i32>) -> core.i32
     tribute_control.return %r
   }
 }"#,
@@ -141,7 +141,7 @@ fn a_recursive_instance_calls_itself() {
             "tribute_cps.func @\"loop$9D\"['a0](%0: core.i32, %1: !cb) -> core.i32 row(| 'a0) convention(direct) {",
             "%2 = tribute_cps.lambda(%3: core.i32) -> core.i32 row(| 'a0) captures [%1] entries {\n        direct {",
             "%4 = tribute_cps.call_indirect %1(%3) attributes {convention = \"cps\"} : (core.i32) -> core.i32 row(| 'a0)",
-            "tribute_control.tail_call %0, %2 {callee = @\"loop$9D\", row_args = [{tail = 0}]}",
+            "tribute_control.tail_call @\"loop$9D\"(%0, %2) attributes {row_args = [{tail = 0}]}",
         ],
     );
 }
@@ -164,7 +164,7 @@ fn a_layout_keeps_its_callable_field() {
       tribute_control.return %y
     }
     %h = adt.struct_new %l {type = !Holder} : !HolderRef
-    %f = tribute_control.call %h {callee = @"Holder::callback"} : !cb
+    %f = tribute_control.call @"Holder::callback"(%h) : (!HolderRef) -> !cb
     %r = tribute_control.call_indirect %f(%x) : (core.i32) -> core.i32
     tribute_control.return %r
   }
@@ -199,8 +199,8 @@ fn an_own_tail_without_a_class_variable_reads_its_abilities() {
     tribute_control.return %x
   }}
   tribute_control.func @main(%x: core.i32) -> core.i32 row(@Ctl) {{
-    %a = tribute_control.call %x {{callee = @each, row_args = [{{instances = [@Ctl]}}]}} : core.i32
-    %b = tribute_control.call %a {{callee = @ask, row_args = [{{}}]}} : core.i32
+    %a = tribute_control.call @each(%x) attributes {{row_args = [{{instances = [@Ctl]}}]}} : (core.i32) -> core.i32
+    %b = tribute_control.call @ask(%a) attributes {{row_args = [{{}}]}} : (core.i32) -> core.i32
     tribute_control.return %b
   }}
 }}"#
@@ -317,8 +317,8 @@ fn each_instance_copies_the_lambdas_inside_each_body() {
     }
     %p = tribute_control.instantiate %o {row_args = [{}]} : !pure
     %q = tribute_control.instantiate %o {row_args = [{tail = 0}]} : !cb
-    %r1 = tribute_control.call %x, %p {callee = @app, row_args = [{}]} : core.i32
-    %r2 = tribute_control.call %r1, %q {callee = @app, row_args = [{tail = 0}]} : core.i32
+    %r1 = tribute_control.call @app(%x, %p) attributes {row_args = [{}]} : (core.i32, !pure) -> core.i32
+    %r2 = tribute_control.call @app(%r1, %q) attributes {row_args = [{tail = 0}]} : (core.i32, !cb) -> core.i32
     %r3 = tribute_control.call_indirect %k(%r2) : (core.i32) -> core.i32 row(| 'a0)
     tribute_control.return %r3
   }
@@ -326,7 +326,7 @@ fn each_instance_copies_the_lambdas_inside_each_body() {
     %l = tribute_control.lambda(%y: core.i32) -> core.i32 captures [] {
       tribute_control.return %y
     }
-    %r = tribute_control.call %x, %l {callee = @run, row_args = [{}]} : core.i32
+    %r = tribute_control.call @run(%x, %l) attributes {row_args = [{}]} : (core.i32, !pure) -> core.i32
     tribute_control.return %r
   }
 }"#,
@@ -413,8 +413,8 @@ fn a_lambda_without_binders_is_shared_by_its_consumers() {
     %l = tribute_control.lambda(%y: core.i32) -> core.i32 captures [] {
       tribute_control.return %y
     }
-    %a = tribute_control.call %l, %x {callee = @pure} : core.i32
-    %b = tribute_control.call %l, %a {callee = @open, row_args = [{}]} : core.i32
+    %a = tribute_control.call @pure(%l, %x) : (!pure, core.i32) -> core.i32
+    %b = tribute_control.call @open(%l, %a) attributes {row_args = [{}]} : (!pure, core.i32) -> core.i32
     tribute_control.return %b
   }
 }"#,
@@ -427,8 +427,8 @@ fn a_lambda_without_binders_is_shared_by_its_consumers() {
         main,
         &[
             "%1 = tribute_cps.lambda(%2: core.i32) -> core.i32 captures [] entries {\n        direct {",
-            "%3 = tribute_control.call %1, %0 {callee = @pure} : core.i32",
-            "%4 = tribute_control.call %1, %3 {callee = @\"open$9D\", row_args = [{}]} : core.i32",
+            "%3 = tribute_control.call @pure(%1, %0) : (!pure, core.i32) -> core.i32",
+            "%4 = tribute_control.call @\"open$9D\"(%1, %3) attributes {row_args = [{}]} : (!pure, core.i32) -> core.i32",
         ],
     );
 }
@@ -449,7 +449,7 @@ fn module_level_types_and_references_to_main_keep_their_shape() {
   tribute_control.func @main(%x: core.i32) -> core.i32 {
     %m = tribute_control.func_ref @main : !pure
     %f = tribute_control.func_ref @ext : !pure
-    %r = tribute_control.call %x, %f {callee = @app, row_args = [{}]} : core.i32
+    %r = tribute_control.call @app(%x, %f) attributes {row_args = [{}]} : (core.i32, !pure) -> core.i32
     tribute_control.return %r
   }
   tribute_control.func @app['a0](%x: core.i32, %f: !cb) -> core.i32 row(| 'a0) {
@@ -465,7 +465,7 @@ fn module_level_types_and_references_to_main_keep_their_shape() {
             "tribute_cps.func @ext(%arg0: core.i32) -> core.i32 convention(direct) attributes {abi = \"C\"}",
             "%1 = tribute_cps.func_ref @\"main$8\" : !pure",
             "tribute_cps.func_table @\"main$8\" = {direct = @main}",
-            "callee = @\"app$9D\"",
+            "call @\"app$9D\"(",
         ],
     );
     let base = printed
@@ -501,7 +501,7 @@ fn an_instantiation_reads_the_class_variables_of_its_instance() {
     tribute_control.return %t
   }
   tribute_control.func @main(%x: core.i32) -> core.i32 {
-    %r = tribute_control.call %x {callee = @f, row_args = [{}]} : core.i32
+    %r = tribute_control.call @f(%x) attributes {row_args = [{}]} : (core.i32) -> core.i32
     tribute_control.return %r
   }
 }"#,
@@ -535,7 +535,7 @@ fn a_reference_in_a_lambda_selects_by_the_local_class() {
   }
   tribute_control.func @main[local 'a0](%x: core.i32) -> core.i32 row(@Ask) {
     %g = tribute_control.lambda['a0](%y: core.i32, %f: !cb) -> core.i32 row(| 'a0) captures [] {
-      %v = tribute_control.call %y, %f {callee = @app, row_args = [{tail = 0}]} : core.i32
+      %v = tribute_control.call @app(%y, %f) attributes {row_args = [{tail = 0}]} : (core.i32, !cb) -> core.i32
       tribute_control.return %v
     }
     %cb = tribute_control.lambda(%z: core.i32) -> core.i32 row(@Ask) captures [] {
@@ -551,7 +551,7 @@ fn a_reference_in_a_lambda_selects_by_the_local_class() {
         &printed,
         &[
             "tribute_cps.func @\"app$9E\"['a0]",
-            "%4 = tribute_control.call %2, %3 {callee = @\"app$9E\", row_args = [{tail = 0}]} : core.i32",
+            "%4 = tribute_control.call @\"app$9E\"(%2, %3) attributes {row_args = [{tail = 0}]} : (core.i32, !cb) -> core.i32",
         ],
     );
 }
@@ -850,16 +850,16 @@ fn a_tail_passed_for_a_cps_own_tail_is_a_class_variable() {
     tribute_control.return %x
   }
   tribute_control.func @foreign['a0](%x: core.i32) -> core.i32 row(| 'a0) {
-    %r = tribute_control.call %x {callee = @ext, row_args = [{tail = 0}]} : core.i32
+    %r = tribute_control.call @ext(%x) attributes {row_args = [{tail = 0}]} : (core.i32) -> core.i32
     tribute_control.return %r
   }
   tribute_control.func @holding['a0](%x: core.i32) -> core.i32 row(| 'a0) {
-    %r = tribute_control.call %x {callee = @held, row_args = [{tail = 0}]} : core.i32
+    %r = tribute_control.call @held(%x) attributes {row_args = [{tail = 0}]} : (core.i32) -> core.i32
     tribute_control.return %r
   }
   tribute_control.func @main(%x: core.i32) -> core.i32 {
-    %a = tribute_control.call %x {callee = @foreign, row_args = [{}]} : core.i32
-    %b = tribute_control.call %a {callee = @holding, row_args = [{}]} : core.i32
+    %a = tribute_control.call @foreign(%x) attributes {row_args = [{}]} : (core.i32) -> core.i32
+    %b = tribute_control.call @holding(%a) attributes {row_args = [{}]} : (core.i32) -> core.i32
     tribute_control.return %b
   }
 }"#,
@@ -869,8 +869,8 @@ fn a_tail_passed_for_a_cps_own_tail_is_a_class_variable() {
         &[
             "tribute_cps.func @\"foreign$9D\"['a0](%0: core.i32) -> core.i32 row(| 'a0) convention(direct) {",
             "tribute_cps.func @\"holding$9D\"['a0](%0: core.i32) -> core.i32 row(| 'a0) convention(direct) {",
-            "callee = @\"foreign$9D\"",
-            "callee = @\"holding$9D\"",
+            "call @\"foreign$9D\"(",
+            "call @\"holding$9D\"(",
         ],
     );
 }

@@ -14,7 +14,7 @@ core.module @test {
           tribute_control.return %1
       }
       %2 = arith.const {value = 1} : core.i32
-      %3 = tribute_control.call %0, %2 {callee = @"pkg::apply", row_args = [{tail = 0}]} : core.i32
+      %3 = tribute_control.call @"pkg::apply"(%0, %2) attributes {row_args = [{tail = 0}]} : (!t0, core.i32) -> core.i32
       tribute_control.return %3
   }
 }

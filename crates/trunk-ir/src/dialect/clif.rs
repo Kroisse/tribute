@@ -31,7 +31,7 @@ mod clif {
     ///
     /// ```text
     /// clif.data @table(b"\0\0\0\0\0\0\0\0") align 8 {
-    ///   clif.func_reloc {offset = 0, func = @f}
+    ///   clif.func_reloc @f at 0
     /// }
     /// ```
     #[asm_format(symbol(sym_name) "(" bytes ")" "align" align attr_dict region(relocs))]
@@ -43,11 +43,11 @@ mod clif {
     /// Asks the linker to write the address of `func` over the pointer-sized
     /// bytes at `offset` of the enclosing `data`. Only a `data` region holds it.
     #[verify]
-    #[asm_format(attr_dict_bare)]
+    #[asm_format(func "at" offset attr_dict)]
     fn func_reloc(offset: Attr<u32>, func: Attr<SymbolRef>) {}
 
     #[implements(CallLike)]
-    #[asm_format(args attr_dict_bare (":" types(results)^)?)]
+    #[asm_format(callee "(" args ")" attr_dict ":" functional_type(args, results))]
     fn call(callee: Attr<SymbolRef>, args: Variadic<_>) -> Variadic<_> {}
 
     #[verify]
@@ -188,7 +188,7 @@ mod clif {
     fn trapnz(code: Attr<String>, cond: Value<impl IntegerLike>) {}
 
     #[implements(CallLike)]
-    #[asm_format(args attr_dict_bare)]
+    #[asm_format(callee "(" args ")" attr_dict ":" functional_type(args))]
     fn return_call(callee: Attr<SymbolRef>, args: Variadic<_>) {}
 
     #[asm_format(callee "(" args ")" attr_dict ":" signature(sig))]
@@ -222,7 +222,7 @@ mod clif {
     #[asm_format(slot attr_dict_bare ":" type(result))]
     fn stack_addr(slot: Value<_>) -> Value<_> {}
 
-    #[asm_format(attr_dict_bare ":" type(result))]
+    #[asm_format(sym attr_dict ":" type(result))]
     fn symbol_addr(sym: Attr<SymbolRef>) -> Value<_> {}
 
     // Type conversions

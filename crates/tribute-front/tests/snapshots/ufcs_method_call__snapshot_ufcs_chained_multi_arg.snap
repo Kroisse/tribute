@@ -102,24 +102,24 @@ core.module @test {
       tribute_control.return %6
   }
   tribute_control.func @"pkg::Pair::extend"['a0](%0: !"pkg::Pair_1", %1: core.i32) -> !"pkg::Triple_1" row(| 'a0) inferred {
-      %2 = tribute_control.call %0 {callee = @"pkg::Pair::x"} : core.i32
-      %3 = tribute_control.call %0 {callee = @"pkg::Pair::y"} : core.i32
+      %2 = tribute_control.call @"pkg::Pair::x"(%0) : (!"pkg::Pair_1") -> core.i32
+      %3 = tribute_control.call @"pkg::Pair::y"(%0) : (!"pkg::Pair_1") -> core.i32
       %4 = adt.struct_new %2, %3, %1 {type = !"pkg::Triple"} : !"pkg::Triple_1"
       tribute_control.return %4
   }
   tribute_control.func @"std::Nat::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32
   tribute_control.func @"pkg::Triple::sum"['a0](%0: !"pkg::Triple_1") -> core.i32 row(| 'a0) inferred {
-      %1 = tribute_control.call %0 {callee = @"pkg::Triple::x"} : core.i32
-      %2 = tribute_control.call %0 {callee = @"pkg::Triple::y"} : core.i32
-      %3 = tribute_control.call %1, %2 {callee = @"std::Nat::+"} : core.i32
-      %4 = tribute_control.call %0 {callee = @"pkg::Triple::z"} : core.i32
-      %5 = tribute_control.call %3, %4 {callee = @"std::Nat::+"} : core.i32
+      %1 = tribute_control.call @"pkg::Triple::x"(%0) : (!"pkg::Triple_1") -> core.i32
+      %2 = tribute_control.call @"pkg::Triple::y"(%0) : (!"pkg::Triple_1") -> core.i32
+      %3 = tribute_control.call @"std::Nat::+"(%1, %2) : (core.i32, core.i32) -> core.i32
+      %4 = tribute_control.call @"pkg::Triple::z"(%0) : (!"pkg::Triple_1") -> core.i32
+      %5 = tribute_control.call @"std::Nat::+"(%3, %4) : (core.i32, core.i32) -> core.i32
       tribute_control.return %5
   }
   tribute_control.func @"pkg::test"['a0](%0: !"pkg::Pair_1") -> core.i32 row(| 'a0) inferred {
       %1 = arith.const {value = 3} : core.i32
-      %2 = tribute_control.call %0, %1 {callee = @"pkg::Pair::extend", row_args = [{tail = 0}]} : !"pkg::Triple_1"
-      %3 = tribute_control.call %2 {callee = @"pkg::Triple::sum", row_args = [{tail = 0}]} : core.i32
+      %2 = tribute_control.call @"pkg::Pair::extend"(%0, %1) attributes {row_args = [{tail = 0}]} : (!"pkg::Pair_1", core.i32) -> !"pkg::Triple_1"
+      %3 = tribute_control.call @"pkg::Triple::sum"(%2) attributes {row_args = [{tail = 0}]} : (!"pkg::Triple_1") -> core.i32
       tribute_control.return %3
   }
 }

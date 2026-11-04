@@ -493,9 +493,10 @@ literal은 문자열 literal로 쓴다.
 - **`functional_type(xs, results)`** — operand `xs`의 타입과 result 타입을 함수
   타입으로 쓴다(MLIR `functional-type`, `func.call @f(%a) : (A) -> R`). Result가
   하나면 괄호 없이, 없거나 여럿이면 괄호로 묶어 쓴다(`-> ()`, `-> (R, S)`).
-  Result를 선언하지 않은 operation은 operand만 나열하고 `-> ()`를 쓴다. Parser는
-  operand 타입을 그 정의에서 얻으므로, 읽은 operand 타입은 쓰지 않고 result
-  타입만 재구성한다.
+  Result를 선언하지 않은 operation은 operand만 나열하고 `-> ()`를 쓴다. Operand
+  타입은 그 정의에서 얻으므로 parser는 읽은 operand 타입이 operand마다 하나씩
+  있고 정의의 타입과 같은지 확인하며, 다르면 거부한다(MLIR과 같다). Result
+  타입은 읽은 대로 재구성한다.
 - **`args(r)`** — region `r`의 entry block argument를 `(%a: A, %b: B)`로 쓰고,
   `r`은 entry block label을 생략한다. `signature`와 같은 방식이지만 타입은 block
   argument에서 읽는다. `r`은 고정 region이며, 형식은 entry argument를 header로
@@ -606,6 +607,13 @@ region의 entry block에 되돌린다. Printer는 `IsolatedFromAbove` operation�
 
 - Symbol을 정의하는 operation은 operation 이름 바로 뒤에 `symbol(sym_name)`으로
   `@name`을 쓴다.
+- Symbol을 참조하는 필수 attribute는 attribute 사전에 두지 않고 위치로 쓴다.
+  직접 호출은 MLIR `func.call`처럼 `@callee(%args) : (A) -> R`로 쓰고, 그 밖의
+  참조는 operand보다 앞에 쓴다(`clif.symbol_addr @f`). Operation 종류를
+  keyword로 쓰는 operation은 그 keyword 뒤에 쓴다
+  (`tribute_control.perform fn @State @get(..)`). 참조 목록도 종류의 문법
+  `[@a, @b]`로 같은 자리에 쓴다. 선택 attribute 안의 참조(`evidence_plan`,
+  `adapters`)는 attribute 사전에 남는다.
 - 남은 attribute는 `attr_dict`로 region 바로 앞에 쓰고, region이 없으면 끝에
   쓴다. Region이 없는 operation은 `attr_dict_bare`로 `{..}`만 쓸 수 있다.
 - Capture operand 목록은 비어 있어도 `captures [..]`로 쓴다.

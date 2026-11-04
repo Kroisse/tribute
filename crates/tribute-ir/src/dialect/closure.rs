@@ -44,10 +44,10 @@ mod closure {
     ///   captures; see the closure storage layout in `new-plans/ir.md`.
     ///
     /// ```text
-    /// %c = closure.new %x, %y {entries = [@f, @trap_e, @trap_c]} : closure.closure<S>
+    /// %c = closure.new [@f, @trap_e, @trap_c] %x, %y : closure.closure<S>
     /// ```
     #[flags(Pure)]
-    #[asm_format(captures attr_dict_bare ":" type(result))]
+    #[asm_format(entries captures attr_dict ":" type(result))]
     fn new(entries: Attr<[SymbolRef]>, captures: Variadic<_>) -> Value<_> {}
 
     /// The entry function at `index` of the convention table of `closure`,
@@ -448,6 +448,7 @@ fn parse_closure_lambda<'a>(
         func_params: vec![],
         func_param_regions: vec![],
         operands: captures,
+        operand_types: Vec::new(),
         attributes,
         result_types: vec![closure_raw_ty],
         regions,

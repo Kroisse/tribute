@@ -46,6 +46,10 @@ pub struct RawOperation<'a> {
     /// arguments.
     pub func_param_regions: Vec<usize>,
     pub operands: Vec<&'a str>,
+    /// The types an operation's format writes for operands, as
+    /// `functional_type` does. Each must be the type of the operand's
+    /// definition.
+    pub operand_types: Vec<(&'a str, RawType<'a>)>,
     pub attributes: Vec<(Cow<'a, str>, RawAttribute<'a>)>,
     pub result_types: Vec<RawType<'a>>,
     pub regions: Vec<RawRegion<'a>>,
@@ -668,6 +672,7 @@ fn module_operation<'a>(
         func_params: Vec::new(),
         func_param_regions: Vec::new(),
         operands: Vec::new(),
+        operand_types: Vec::new(),
         attributes,
         result_types: Vec::new(),
         regions,
@@ -711,6 +716,7 @@ fn generic_operation<'a>(
         func_params: Vec::new(),
         func_param_regions: Vec::new(),
         operands,
+        operand_types: Vec::new(),
         attributes,
         result_types,
         regions,

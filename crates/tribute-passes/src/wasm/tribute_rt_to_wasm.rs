@@ -543,12 +543,12 @@ mod tests {
             r#"core.module @test {
   wasm.table {reftype = "funcref", min = 1, max = 1}
   wasm.elem {
-    %r = wasm.ref_func {func_name = @constant} : wasm.funcref
+    %r = wasm.ref_func @constant : wasm.funcref
   }
   func.func @f() -> core.nil {
-    %a = tribute_rt.convention_table {entries = [@first, @second]} : tribute_rt.convention_table_ref
-    %b = tribute_rt.convention_table {entries = [@third]} : tribute_rt.convention_table_ref
-    %c = tribute_rt.convention_table {entries = [@first, @second]} : tribute_rt.convention_table_ref
+    %a = tribute_rt.convention_table [@first, @second] : tribute_rt.convention_table_ref
+    %b = tribute_rt.convention_table [@third] : tribute_rt.convention_table_ref
+    %c = tribute_rt.convention_table [@first, @second] : tribute_rt.convention_table_ref
     %d = tribute_rt.convention_entry %a {index = 0} : core.i32
     %e = tribute_rt.convention_entry %c {index = 1} : core.i32
     func.return
@@ -563,7 +563,7 @@ mod tests {
         );
         let slots: Vec<_> = ["@constant", "@first", "@second", "@third"]
             .into_iter()
-            .map(|name| ir.find(&format!("func_name = {name}")))
+            .map(|name| ir.find(&format!("wasm.ref_func {name}")))
             .collect();
         assert!(slots.iter().all(Option::is_some), "{ir}");
         assert!(slots.is_sorted(), "{ir}");
@@ -580,7 +580,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f() -> core.nil {
-    %a = tribute_rt.convention_table {entries = [@only]} : tribute_rt.convention_table_ref
+    %a = tribute_rt.convention_table [@only] : tribute_rt.convention_table_ref
     func.return
   }
 }"#,
@@ -593,7 +593,7 @@ mod tests {
         );
         assert!(ir.contains("wasm.elem {"), "{ir}");
         assert!(!ir.contains("offset = 0"), "{ir}");
-        assert!(ir.contains("func_name = @only"), "{ir}");
+        assert!(ir.contains("wasm.ref_func @only"), "{ir}");
         assert!(ir.contains("wasm.i32_const {value = 0}"), "{ir}");
     }
 

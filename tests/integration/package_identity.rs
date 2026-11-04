@@ -42,7 +42,7 @@ fn a_user_std_module_has_its_own_symbols(db: &salsa::DatabaseImpl) {
         ir.contains(r#"tribute_control.func @"pkg::std::Int::probe""#),
         "{ir}"
     );
-    assert!(ir.contains(r#"callee = @"pkg::std::Int::probe""#), "{ir}");
+    assert!(ir.contains(r#"call @"pkg::std::Int::probe"("#), "{ir}");
     // The prelude's declarations keep their package paths.
     assert!(ir.contains(r#"@"std::Int::to_string""#), "{ir}");
     assert!(!ir.contains(r#"@"std::Int::probe""#), "{ir}");

@@ -180,7 +180,7 @@ fn main() -> Nil {
         main.starts_with("['a0]() -> core.nil row(| 'a0) inferred convention(direct)"),
         "{main}"
     );
-    assert!(main.contains("callee = @\"pkg::apply$9D\""), "{main}");
+    assert!(main.contains("call @\"pkg::apply$9D\"("), "{main}");
     assert!(
         main.contains("tribute_cps.lambda") && !is_cps(main),
         "{main}"
@@ -223,9 +223,9 @@ fn main() ->{Io} Nil {
         .and_then(|rest| rest.split("\n  }\n").next())
         .expect("root main");
     // `both` is used with a pure and with an `Io` callback.
-    assert!(main.contains("callee = @\"pkg::app$9D\""), "{main}");
-    assert!(main.contains("callee = @\"pkg::app$9E\""), "{main}");
-    assert!(!main.contains("callee = @\"pkg::app\"}"), "{main}");
+    assert!(main.contains("call @\"pkg::app$9D\"("), "{main}");
+    assert!(main.contains("call @\"pkg::app$9E\"("), "{main}");
+    assert!(!main.contains("call @\"pkg::app\"("), "{main}");
     // `step` is used at an empty row, so it and `each` need no Cps control.
     let each = ir
         .split("tribute_cps.func @\"pkg::each\"")
@@ -271,7 +271,7 @@ fn main() -> Nil {
         .expect("class specialization accepts frontend output")
         .expect("production frontend should lower");
     let ir = trunk_ir::printer::print_module(&ctx, module.op());
-    assert!(ir.contains("callee = @\"pkg::countdown$9D\""), "{ir}");
+    assert!(ir.contains("call @\"pkg::countdown$9D\"("), "{ir}");
     let instance = ir
         .split("tribute_cps.func @\"pkg::countdown$9D\"")
         .nth(1)
@@ -345,9 +345,9 @@ fn main() ->{Io} Nil {
             .unwrap_or_else(|| panic!("{name} in\n{ir}"))
     };
     let run = function("pkg::m::run");
-    assert!(run.contains("callee = @\"pkg::m::app$9D\""), "{run}");
-    assert!(run.contains("callee = @\"pkg::m::app$9E\""), "{run}");
-    assert!(!run.contains("callee = @\"pkg::m::app\"}"), "{run}");
+    assert!(run.contains("call @\"pkg::m::app$9D\"("), "{run}");
+    assert!(run.contains("call @\"pkg::m::app$9E\"("), "{run}");
+    assert!(!run.contains("call @\"pkg::m::app\"("), "{run}");
     let each = function("pkg::m::each");
     assert!(
         each.starts_with("['a0](%0: core.i32) -> core.i32 row(| 'a0) inferred convention(direct)"),
@@ -687,7 +687,7 @@ fn main() -> Nil {
         .and_then(|rest| rest.split("\n  }\n").next())
         .unwrap_or_else(|| panic!("after$9D in\n{ir}"));
     assert!(
-        after.contains("callee = @\"pkg::app$std::String$9D\"") && !is_cps(after),
+        after.contains("call @\"pkg::app$std::String$9D\"(") && !is_cps(after),
         "{after}"
     );
 }

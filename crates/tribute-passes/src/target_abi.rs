@@ -3131,8 +3131,8 @@ mod tests {
     func.unreachable
   }
   func.func @main() -> core.nil attributes {tribute.calling_convention = "direct"} {
-    %c = closure.new {entries = [@callee, @trap_evidence_direct, @trap_cps]} : !closure
-    %d = closure.new {entries = [@trap_direct, @callee_with_evidence, @trap_cps]} : !closure
+    %c = closure.new [@callee, @trap_evidence_direct, @trap_cps] : !closure
+    %d = closure.new [@trap_direct, @callee_with_evidence, @trap_cps] : !closure
     %n = core.nil_value : core.nil
     func.return %n
   }

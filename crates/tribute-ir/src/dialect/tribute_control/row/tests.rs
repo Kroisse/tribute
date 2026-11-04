@@ -28,7 +28,7 @@ const MODULE: &str = r#"core.module @test {
       tribute_control.return %y
     }
     %g = tribute_control.func_ref @apply rows [{instances = [@A, @B]}] : !applied
-    %r = tribute_control.call %f, %x {callee = @apply, row_args = [{instances = [@A, @B]}]} : core.i32
+    %r = tribute_control.call @apply(%f, %x) attributes {row_args = [{instances = [@A, @B]}]} : (tribute_control.func_sig<(core.i32) -> core.i32 row(@A, @B)>, core.i32) -> core.i32
     tribute_control.return %r
   }
 }"#;
@@ -138,8 +138,8 @@ fn concise_syntax_does_not_write_the_closed_empty_row() {
 fn a_row_argument_that_changes_the_callee_signature_is_rejected() {
     assert_rejects(
         &MODULE.replace(
-            "{callee = @apply, row_args = [{instances = [@A, @B]}]}",
-            "{callee = @apply, row_args = [{instances = [@A]}]}",
+            "attributes {row_args = [{instances = [@A, @B]}]}",
+            "attributes {row_args = [{instances = [@A]}]}",
         ),
         "call argument types do not match the logical signature",
     );
@@ -155,10 +155,7 @@ fn a_row_argument_that_changes_the_callee_signature_is_rejected() {
 #[test]
 fn a_reference_passes_one_row_for_each_quantified_binder() {
     assert_rejects(
-        &MODULE.replace(
-            ", row_args = [{instances = [@A, @B]}]} : core.i32",
-            "} : core.i32",
-        ),
+        &MODULE.replace(" attributes {row_args = [{instances = [@A, @B]}]} :", " :"),
         "passes 0 row arguments, but its target quantifies 1 row binders",
     );
 }
@@ -230,7 +227,7 @@ const UNIONS: &str = r#"core.module @test {
     tribute_control.return %x
   }
   tribute_control.func @caller['a0 = 'a1 | 'a2, 'a1, 'a2](%x: core.i32) -> core.i32 row(| 'a0) {
-    %r = tribute_control.call %x {callee = @join, evidence_plan = PLAN, row_args = [{tail = 0}, {tail = 1}, {tail = 2}]} : core.i32
+    %r = tribute_control.call @join(%x) attributes {evidence_plan = PLAN, row_args = [{tail = 0}, {tail = 1}, {tail = 2}]} : (core.i32) -> core.i32
     tribute_control.return %r
   }
 }"#;

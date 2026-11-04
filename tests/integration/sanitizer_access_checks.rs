@@ -22,9 +22,9 @@ fn program(body: &str) -> String {
         r#"core.module @test {{
   clif.func @__asan_init() -> core.nil attributes {{abi = "C"}}
   clif.func @main() -> core.i32 {{
-      %init = clif.call {{callee = @__asan_init}} : core.nil
+      %init = clif.call @__asan_init() : () -> core.nil
       %size = clif.iconst {{value = 16}} : core.i64
-      %object = clif.call %size {{callee = @__tribute_alloc}} : core.ptr
+      %object = clif.call @__tribute_alloc(%size) : (core.i64) -> core.ptr
       %value = clif.iconst {{value = 7}} : core.i64
 {body}
       %code = clif.iconst {{value = 0}} : core.i32
@@ -60,8 +60,7 @@ fn assert_reports(body: &str, report: &str) {
     assert!(stderr.contains(report), "stderr: {stderr}");
 }
 
-const FREE: &str =
-    "      %freed = clif.call %object, %size {callee = @__tribute_dealloc} : core.nil";
+const FREE: &str = "      %freed = clif.call @__tribute_dealloc(%object, %size) : (core.ptr, core.i64) -> core.nil";
 
 #[test]
 fn accesses_inside_a_live_allocation_pass() {
@@ -126,11 +125,11 @@ fn run_to_exit_check(body: &str) -> Output {
   clif.func @__asan_init() -> core.nil attributes {{abi = "C"}}
   clif.func @__asan_exit() -> core.nil attributes {{abi = "C"}}
   clif.func @main() -> core.i32 {{
-      %init = clif.call {{callee = @__asan_init}} : core.nil
+      %init = clif.call @__asan_init() : () -> core.nil
       %size = clif.iconst {{value = 16}} : core.i64
-      %object = clif.call %size {{callee = @__tribute_alloc}} : core.ptr
+      %object = clif.call @__tribute_alloc(%size) : (core.i64) -> core.ptr
 {body}
-      %exit = clif.call {{callee = @__asan_exit}} : core.nil
+      %exit = clif.call @__asan_exit() : () -> core.nil
       %code = clif.iconst {{value = 0}} : core.i32
       clif.return %code
   }}

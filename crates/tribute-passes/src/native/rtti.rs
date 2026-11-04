@@ -1187,13 +1187,13 @@ mod tests {
             .nth(1)
             .expect("boxed Int must have a reserved RTTI release entry");
         assert!(int_release.contains("value = 12"));
-        assert!(int_release.contains("callee = @__tribute_dealloc"));
+        assert!(int_release.contains("call @__tribute_dealloc("));
         let float_release = output
             .split("clif.func @__tribute_release_4(")
             .nth(1)
             .expect("boxed Float must have a reserved RTTI release entry");
         assert!(float_release.contains("value = 16"));
-        assert!(float_release.contains("callee = @__tribute_dealloc"));
+        assert!(float_release.contains("call @__tribute_dealloc("));
     }
 
     #[test]

@@ -1,6 +1,5 @@
 ---
 source: crates/tribute-passes/src/native/array_to_clif.rs
-assertion_line: 821
 expression: lowered
 ---
   clif.func @build(%0: core.ptr, %1: core.ptr, %2: core.i64) -> core.ptr {
@@ -11,7 +10,7 @@ expression: lowered
       %7 = core.unrealized_conversion_cast %0 : !NodeRef
       %8 = core.unrealized_conversion_cast %1 : !NodeRef
       %9 = clif.iconst {value = 32} : core.i64
-      %10 = clif.call %9 {callee = @__tribute_alloc} : core.ptr
+      %10 = clif.call @__tribute_alloc(%9) : (core.i64) -> core.ptr
       %11 = clif.iconst {value = 1} : core.i32
       clif.store %11, %10 {offset = 0}
       %12 = clif.iconst {value = 5} : core.i32
@@ -24,18 +23,18 @@ expression: lowered
       clif.store %8, %14 {offset = 16}
       %16 = core.unrealized_conversion_cast %0 : !NodeRef
       %17 = core.unrealized_conversion_cast %2 : core.index
-      %18 = clif.call %17, %16 {callee = @__tribute_array_new_5} : core.ptr
+      %18 = clif.call @__tribute_array_new_5(%17, %16) : (core.index, !NodeRef) -> core.ptr
       tribute_rt.release %0 {alloc_size = 12}
       tribute_rt.release %18 {alloc_size = 0}
       %19 = core.unrealized_conversion_cast %1 : !NodeRef
       %20 = core.unrealized_conversion_cast %2 : core.index
-      %21 = clif.call %20, %19 {callee = @__tribute_array_new_5} : core.ptr
+      %21 = clif.call @__tribute_array_new_5(%20, %19) : (core.index, !NodeRef) -> core.ptr
       tribute_rt.release %21 {alloc_size = 0}
       %22 = core.unrealized_conversion_cast %1 : !NodeRef
       %23 = core.unrealized_conversion_cast %2 : core.index
       %24 = core.unrealized_conversion_cast %2 : core.index
       %25 = clif.iconst {value = 1} : core.i64
-      %26 = clif.call %14, %23, %24, %25 {callee = @__tribute_array_splice_5} : core.ptr
+      %26 = clif.call @__tribute_array_splice_5(%14, %23, %24, %25) : (core.ptr, core.index, core.index, core.i64) -> core.ptr
       %27 = clif.iconst {value = 8} : core.i64
       %28 = clif.imul %23, %27 : core.i64
       %29 = clif.iadd %26, %28 : core.ptr
@@ -52,7 +51,7 @@ expression: lowered
       %5 = clif.imul %0, %4 : core.i64
       %6 = clif.iconst {value = 16} : core.i64
       %7 = clif.iadd %6, %5 : core.i64
-      %8 = clif.call %7 {callee = @__tribute_alloc} : core.ptr
+      %8 = clif.call @__tribute_alloc(%7) : (core.i64) -> core.ptr
       %9 = clif.iconst {value = 1} : core.i32
       clif.store %9, %8 {offset = 0}
       %10 = clif.iconst {value = 5} : core.i32
@@ -95,7 +94,7 @@ expression: lowered
       %14 = clif.imul %9, %13 : core.i64
       %15 = clif.iconst {value = 16} : core.i64
       %16 = clif.iadd %15, %14 : core.i64
-      %17 = clif.call %16 {callee = @__tribute_alloc} : core.ptr
+      %17 = clif.call @__tribute_alloc(%16) : (core.i64) -> core.ptr
       %18 = clif.iconst {value = 1} : core.i32
       clif.store %18, %17 {offset = 0}
       %19 = clif.iconst {value = 5} : core.i32

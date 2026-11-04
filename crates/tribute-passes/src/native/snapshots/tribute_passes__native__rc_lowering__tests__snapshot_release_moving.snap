@@ -1,12 +1,11 @@
 ---
 source: crates/tribute-passes/src/native/rc_lowering.rs
-assertion_line: 772
 expression: result
 ---
 core.module @test {
   clif.func @f(%0: core.ptr) -> core.ptr {
       %1 = clif.load %0 {offset = 0} : core.ptr
-      %2 = clif.call %0, %1 {callee = @__tribute_release_moving_0} : core.nil
+      %2 = clif.call @__tribute_release_moving_0(%0, %1) : (core.ptr, core.ptr) -> core.nil
       clif.return %1
   }
   clif.func @__tribute_release_moving_0(%0: core.ptr, %1: core.ptr) -> core.nil {
@@ -34,11 +33,11 @@ core.module @test {
       clif.brif %16 [^bb4, ^bb5]
     ^bb4:
       %17 = clif.iconst {value = 0} : core.i64
-      %18 = clif.call %9, %17 {callee = @__tribute_deep_release} : core.nil
+      %18 = clif.call @__tribute_deep_release(%9, %17) : (core.ptr, core.i64) -> core.nil
       clif.jump [^bb5]
     ^bb5:
       %19 = clif.iconst {value = 24} : core.i64
-      %20 = clif.call %5, %19 {callee = @__tribute_dealloc} : core.nil
+      %20 = clif.call @__tribute_dealloc(%5, %19) : (core.ptr, core.i64) -> core.nil
       clif.jump [^bb12]
     ^bb6:
       %21 = clif.iconst {value = 0} : core.ptr
@@ -63,7 +62,7 @@ core.module @test {
       clif.brif %33 [^bb10, ^bb11]
     ^bb10:
       %34 = clif.iconst {value = 24} : core.i64
-      %35 = clif.call %0, %34 {callee = @__tribute_deep_release} : core.nil
+      %35 = clif.call @__tribute_deep_release(%0, %34) : (core.ptr, core.i64) -> core.nil
       clif.jump [^bb11]
     ^bb11:
       clif.jump [^bb12]

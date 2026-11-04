@@ -205,7 +205,8 @@ where
   elides its entry block. `functional_type(xs, results)` writes the types
   of operand `xs` and of the results as `(A, B) -> R`, as MLIR's
   `functional-type` does for `func.call @f(%a) : (A) -> R`; an operation
-  without results names only `xs` and writes `-> ()`. `("kw" .. x^)?`
+  without results names only `xs` and writes `-> ()`. The parser rejects
+  written operand types that differ from the operands' types. `("kw" .. x^)?`
   opens with a literal and is written only when its anchor `x` is present;
   an optional `bool` anchor is a flag the group's literals stand for. A
   format may begin with any element, closes each variadic successor list

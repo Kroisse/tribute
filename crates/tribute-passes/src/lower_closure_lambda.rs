@@ -16,7 +16,7 @@
 //!   %r = arith.add %x, %param
 //!   func.return %r
 //! }
-//! %k = closure.new %x, %y {entries = [@foo::__clam_0]}
+//! %k = closure.new [@foo::__clam_0] %x, %y
 //! ```
 //!
 //! The entry function's environment is the closure itself, typed with the

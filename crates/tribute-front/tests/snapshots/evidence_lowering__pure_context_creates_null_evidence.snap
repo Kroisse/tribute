@@ -9,7 +9,7 @@ core.module @test {tribute.entry = @"pkg::main"} {
   }
   tribute_control.func @"pkg::main"['a0]() -> core.nil row(| 'a0) inferred {
       %0 = tribute_control.handle : core.i32 body {
-          %1 = tribute_control.call {callee = @"pkg::use_ask"} : core.i32
+          %1 = tribute_control.call @"pkg::use_ask"() : () -> core.i32
           tribute_control.yield %1
       } completion(%2: core.i32) {
           tribute_control.yield %2

@@ -374,7 +374,7 @@ mod tribute_control {
     /// body or is a registered compiler intrinsic.
     ///
     /// ```text
-    /// %result = tribute_control.call %arg0, ... {callee = @f} : Result
+    /// %result = tribute_control.call @f(%arg0, ...) : (Arg0, ...) -> Result
     /// ```
     ///
     /// - **Shape:** the source arguments in declaration order, one
@@ -394,7 +394,7 @@ mod tribute_control {
     ///   arguments.
     #[verify]
     #[implements(CallLike, CallableResultOrigin)]
-    #[asm_format(args attr_dict_bare ":" type(result))]
+    #[asm_format(callee "(" args ")" attr_dict ":" functional_type(args, result))]
     fn call(
         callee: Attr<SymbolRef>,
         row_args: Option<Attr<[Row]>>,
@@ -441,7 +441,7 @@ mod tribute_control {
     /// A proper tail call of a named source callable, from source `become`.
     ///
     /// ```text
-    /// tribute_control.tail_call %arg0, ... {callee = @f}
+    /// tribute_control.tail_call @f(%arg0, ...) : (Arg0, ...) -> ()
     /// ```
     ///
     /// - **Shape:** the source arguments in declaration order,
@@ -479,7 +479,7 @@ mod tribute_control {
     ///   the call.
     #[verify]
     #[implements(CallLike, CallableExit, LocalValidation)]
-    #[asm_format(args attr_dict_bare)]
+    #[asm_format(callee "(" args ")" attr_dict ":" functional_type(args))]
     fn tail_call(
         callee: Attr<SymbolRef>,
         row_args: Option<Attr<[Row]>>,

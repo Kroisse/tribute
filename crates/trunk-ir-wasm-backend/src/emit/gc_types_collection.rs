@@ -734,7 +734,7 @@ mod tests {
                         wasm.func @main() {{
                             %x = wasm.i64_const {{value = 42}} : core.i64
                             %b = wasm.struct_new %x {{type_idx = {b}}} : !B
-                            wasm.call %b {{callee = @accept}}
+                            wasm.call @accept(%b) : (!B) -> ()
                             wasm.return
                         }}
                     }}"#

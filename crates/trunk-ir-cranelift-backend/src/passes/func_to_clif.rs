@@ -590,7 +590,7 @@ mod tests {
             .lines()
             .find(|line| line.contains("clif.call"))
             .expect("lowered direct call");
-        assert!(call.contains(": core.ptr"), "{printed}");
+        assert!(call.contains("-> core.ptr"), "{printed}");
         assert!(!call.contains("test.anyref"), "{printed}");
     }
 
@@ -737,7 +737,7 @@ mod tests {
 }"#,
         );
         assert!(
-            result.contains("clif.symbol_addr {sym = @target} : core.ptr"),
+            result.contains("clif.symbol_addr @target : core.ptr"),
             "{result}"
         );
         assert!(

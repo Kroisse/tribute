@@ -2544,7 +2544,7 @@ fn closure_release_uses_its_compiler_generated_allocation_layout() {
     func.return
   }
   func.func @main() -> core.nil {
-    %closure = closure.new {entries = [@target, @trap_evidence_direct, @trap_cps]} : !Closure
+    %closure = closure.new [@target, @trap_evidence_direct, @trap_cps] : !Closure
     func.call @consume(%closure) : (!Closure) -> core.nil
     func.return
   }

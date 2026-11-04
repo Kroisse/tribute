@@ -203,7 +203,7 @@ const VALID_CONTROL_MODULE: &str = r#"core.module @test {
   }
   tribute_control.func @control(%value: core.i32) -> core.i32 {
     %function = tribute_control.func_ref @id : !callable
-    %direct = tribute_control.call %value {callee = @id} : core.i32
+    %direct = tribute_control.call @id(%value) : (core.i32) -> core.i32
     %indirect = tribute_control.call_indirect %function(%value) : (core.i32) -> core.i32
     %closure = tribute_control.lambda() -> core.i32 captures [%value] {
       tribute_control.return %value
@@ -756,7 +756,7 @@ fn validator_rejects_invalid_convention_and_duplicate_op_metadata() {
     let (ctx, module) = parse_fixture(
         r#"core.module @test {
   !bad = tribute_control.func_sig<() -> core.i32, {tribute.calling_convention = 3}>
-  %call = tribute_control.call {callee = @missing, tribute.calling_convention = "direct"} : core.i32
+  %call = tribute_control.call @missing() attributes {tribute.calling_convention = "direct"} : () -> core.i32
 }"#,
     );
     let result = validate_local(&ctx, module);
@@ -772,7 +772,7 @@ fn validator_rejects_nested_unresolved_call_and_perform_types() {
   !wrapper = core.tuple<type.var>
   !never = core.never
   %value = arith.const {value = 0} : !wrapper
-  %call = tribute_control.call %value {callee = @id} : !wrapper
+  %call = tribute_control.call @id(%value) : (!wrapper) -> !wrapper
   %perform = tribute_control.perform op @State @get(%value) : (!wrapper) -> !wrapper
 }"#,
     );
@@ -1067,7 +1067,7 @@ fn whole_ir_resolves_references_in_the_nearest_module() {
     }
     tribute_control.func @use(%value: core.i32) -> core.i32 {
       %reference = tribute_control.func_ref @id : !callable
-      %direct = tribute_control.call %value {callee = @id} : core.i32
+      %direct = tribute_control.call @id(%value) : (core.i32) -> core.i32
       %indirect = tribute_control.call_indirect %reference(%direct) : (core.i32) -> core.i32
       tribute_control.return %indirect
     }
@@ -1079,7 +1079,7 @@ fn whole_ir_resolves_references_in_the_nearest_module() {
     }
     tribute_control.func @use(%value: core.i1) -> core.i1 {
       %reference = tribute_control.func_ref @id : !callable
-      %direct = tribute_control.call %value {callee = @id} : core.i1
+      %direct = tribute_control.call @id(%value) : (core.i1) -> core.i1
       %indirect = tribute_control.call_indirect %reference(%direct) : (core.i1) -> core.i1
       tribute_control.return %indirect
     }
@@ -1098,7 +1098,7 @@ fn whole_ir_resolves_references_in_the_nearest_module() {
   }
   core.module @integers {
     tribute_control.func @use(%value: core.i32) -> core.i32 {
-      %direct = tribute_control.call %value {callee = @id} : core.i32
+      %direct = tribute_control.call @id(%value) : (core.i32) -> core.i32
       tribute_control.return %direct
     }
   }
@@ -1129,9 +1129,9 @@ fn whole_ir_reports_symbol_declaration_capture_and_token_contracts() {
   %weak = tribute_control.func_ref @cps_target : !direct
   %wrong_signature = tribute_control.func_ref @id : !different
   %missing_ref = tribute_control.func_ref @missing : !direct
-  %missing_call = tribute_control.call {callee = @missing} : core.i32
+  %missing_call = tribute_control.call @missing() : () -> core.i32
   %false = arith.const {value = false} : core.i1
-  %bad_call = tribute_control.call %false {callee = @id} : core.i1
+  %bad_call = tribute_control.call @id(%false) : (core.i1) -> core.i1
   %unknown_perform = tribute_control.perform op @State @missing() : () -> core.i32
   %bad_perform = tribute_control.perform fn @State @get(%false) : (core.i1) -> core.i1
   %duplicate_capture = tribute_control.lambda() -> core.i1 captures [%false, %false] {
@@ -1266,7 +1266,7 @@ fn whole_ir_rejects_branching_and_escape_at_each_affine_carrier() {
           %called = tribute_control.call_indirect %inner() : () -> core.i32
           tribute_control.return %called
         }
-        %escape = tribute_control.call %wrapper {callee = @id} : core.i32
+        %escape = tribute_control.call @id(%wrapper) : (tribute_control.func_sig<() -> core.i32>) -> core.i32
         %first_capture = tribute_control.lambda() -> core.i32 captures [%wrapper] {
           %called = tribute_control.call_indirect %wrapper() : () -> core.i32
           tribute_control.return %called
@@ -1642,7 +1642,7 @@ fn tail_call_arms_must_belong_to_a_one_result_if_in_tail_position() {
 
     let tail_if = validate_body(
         r#"    %value = scf.if %flag -> (core.i32) {
-      tribute_control.tail_call %n {callee = @f}
+      tribute_control.tail_call @f(%n) : (core.i32) -> ()
     } else {
       scf.yield %n
     }
@@ -1652,7 +1652,7 @@ fn tail_call_arms_must_belong_to_a_one_result_if_in_tail_position() {
 
     let resultless_if = validate_body(
         r#"    scf.if %flag {
-      tribute_control.tail_call %n {callee = @f}
+      tribute_control.tail_call @f(%n) : (core.i32) -> ()
     } else {
       scf.yield
     }
@@ -1663,7 +1663,7 @@ fn tail_call_arms_must_belong_to_a_one_result_if_in_tail_position() {
     let loop_arm = validate_body(
         r#"    %value = scf.loop(%n) -> (core.i32) {
     ^bb0(%i: core.i32):
-      tribute_control.tail_call %i {callee = @f}
+      tribute_control.tail_call @f(%i) : (core.i32) -> ()
     }
     tribute_control.return %value"#,
     );
@@ -2402,7 +2402,7 @@ fn indirect_call_rejects_callable_from_unclassified_external() {
   !F = tribute_control.func_sig<(core.i32) -> core.i32>
   tribute_control.func @factory() -> !F attributes {abi = "C"}
   tribute_control.func @caller(%value: core.i32) -> core.i32 {
-    %callee = tribute_control.call {callee = @factory} : !F
+    %callee = tribute_control.call @factory() : () -> !F
     %result = tribute_control.call_indirect %callee(%value) : (core.i32) -> core.i32
     tribute_control.return %result
   }
@@ -2446,7 +2446,7 @@ fn nested_self_calls_are_recognized_in_their_module() {
         r#"core.module @outer {
   core.module @inner {
     tribute_control.func @loop(%value: core.i32) -> core.i32 {
-      %again = tribute_control.call %value {callee = @loop} : core.i32
+      %again = tribute_control.call @loop(%value) : (core.i32) -> core.i32
       tribute_control.return %again
     }
   }
@@ -2468,8 +2468,8 @@ fn nested_self_calls_are_recognized_in_their_module() {
 fn evidence_plan_module(call: &str, handle: &str) -> String {
     VALID_CONTROL_MODULE
         .replace(
-            "{callee = @id}",
-            &format!("{{callee = @id, evidence_plan = {call}}}"),
+            "tribute_control.call @id(%value)",
+            &format!("tribute_control.call @id(%value) attributes {{evidence_plan = {call}}}"),
         )
         .replace(
             "(%function, %value) : core.i32",

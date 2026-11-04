@@ -19,8 +19,8 @@ core.module @test {
       %6 = adt.struct_get %4 {field = 1, type = !__logical_tuple_tuple_2_10_coreZ2ei32_35_tuple_2_10_coreZ2ei32_10_coreZ2ei32} : !__logical_tuple_tuple_2_10_coreZ2ei32_10_coreZ2ei32_1
       %7 = adt.struct_get %6 {field = 0, type = !__logical_tuple_tuple_2_10_coreZ2ei32_10_coreZ2ei32} : core.i32
       %8 = adt.struct_get %6 {field = 1, type = !__logical_tuple_tuple_2_10_coreZ2ei32_10_coreZ2ei32} : core.i32
-      %9 = tribute_control.call %5, %7 {callee = @"std::Nat::+"} : core.i32
-      %10 = tribute_control.call %9, %8 {callee = @"std::Nat::+"} : core.i32
+      %9 = tribute_control.call @"std::Nat::+"(%5, %7) : (core.i32, core.i32) -> core.i32
+      %10 = tribute_control.call @"std::Nat::+"(%9, %8) : (core.i32, core.i32) -> core.i32
       tribute_control.return %10
   }
 }

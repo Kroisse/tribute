@@ -475,7 +475,7 @@ mod tests {
     #[test]
     fn final_handle_dispatch_extends_each_ability_and_lowers_resultlessly() {
         let input = final_dispatch_fixture(
-            r#"ability.handle_dispatch %ev, %prompt(%tr, %tr2) attributes {abilities = [@State, @Console]} {
+            r#"ability.handle_dispatch [@State, @Console] %ev, %prompt(%tr, %tr2) {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
@@ -527,7 +527,7 @@ mod tests {
     #[test]
     fn handle_selection_masks_the_outer_evidence_before_extending() {
         let input = final_dispatch_fixture(
-            r#"ability.handle_dispatch %ev, %prompt(%tr) attributes {abilities = [@State], evidence_plan = [{mask = @State}]} {
+            r#"ability.handle_dispatch [@State] %ev, %prompt(%tr) attributes {evidence_plan = [{mask = @State}]} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
@@ -620,7 +620,7 @@ mod tests {
     fn final_handle_dispatch_materializes_a_fresh_prompt_tag_once() {
         let input = final_dispatch_fixture(
             r#"%fresh = effect.fresh_prompt_tag : core.i32
-    ability.handle_dispatch %ev, %fresh(%tr) attributes {abilities = [@State]} {
+    ability.handle_dispatch [@State] %ev, %fresh(%tr) {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
@@ -658,40 +658,40 @@ mod tests {
         let malformed = [
             // The definition is checked before the delimiter's own rules.
             (
-                r#"ability.handle_dispatch %ev, %prompt(%tr) attributes {abilities = [1]} {
+                r#"ability.handle_dispatch [1] %ev, %prompt(%tr) {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
                 "final ability.handle_dispatch: attribute `abilities`",
             ),
             (
-                r#"ability.handle_dispatch %ev, %tr() attributes {abilities = []} {
+                r#"ability.handle_dispatch [] %ev, %tr() {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
                 "prompt-tag operand must have type core.i32",
             ),
             (
-                r#"ability.handle_dispatch %ev, %prompt(%tr) attributes {abilities = []} {
+                r#"ability.handle_dispatch [] %ev, %prompt(%tr) {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
                 "cardinality",
             ),
             (
-                r#"ability.handle_dispatch %prompt, %prompt() attributes {abilities = []} {
+                r#"ability.handle_dispatch [] %prompt, %prompt() {
       ^body(%inner: core.i32):
         func.unreachable
     }"#,
                 "must have the evidence type",
             ),
             (
-                r#"ability.handle_dispatch %ev, %prompt() attributes {abilities = []} {
+                r#"ability.handle_dispatch [] %ev, %prompt() {
     }"#,
                 "exactly one block",
             ),
             (
-                r#"ability.handle_dispatch %ev, %prompt() attributes {abilities = []} {
+                r#"ability.handle_dispatch [] %ev, %prompt() {
       ^first(%inner: !evidence):
         func.unreachable
       ^second:
@@ -700,20 +700,20 @@ mod tests {
                 "exactly one block",
             ),
             (
-                r#"ability.handle_dispatch %ev, %prompt() attributes {abilities = []} {
+                r#"ability.handle_dispatch [] %ev, %prompt() {
       ^body:
         func.unreachable
     }"#,
                 "one evidence argument",
             ),
             (
-                r#"ability.handle_dispatch %ev, %prompt() attributes {abilities = []} {
+                r#"ability.handle_dispatch [] %ev, %prompt() {
       ^body(%inner: !evidence):
     }"#,
                 "must end in a proper tail transfer",
             ),
             (
-                r#"ability.handle_dispatch %ev, %prompt() attributes {abilities = []} {
+                r#"ability.handle_dispatch [] %ev, %prompt() {
       ^body(%inner: !evidence):
         func.return
     }"#,
@@ -735,7 +735,7 @@ mod tests {
     #[test]
     fn structured_final_delimiter_is_a_valid_proper_tail_body() {
         let input = final_dispatch_fixture(
-            r#"ability.handle_dispatch %ev, %prompt() attributes {abilities = []} {
+            r#"ability.handle_dispatch [] %ev, %prompt() {
       ^body(%inner: !evidence):
         %choice = arith.const {value = 0} : core.i32
         scf.switch %choice {
@@ -753,7 +753,7 @@ mod tests {
     #[test]
     fn final_delimiter_accepts_resultless_effect_cps_dispatch() {
         let input = final_dispatch_fixture(
-            r#"ability.handle_dispatch %ev, %prompt() attributes {abilities = []} {
+            r#"ability.handle_dispatch [] %ev, %prompt() {
       ^body(%inner: !evidence):
         effect.dispatch_cps @State @get(%tr2) [%inner, %tr, %tr2] -> core.i32
     }"#,
@@ -771,7 +771,7 @@ mod tests {
   func.func @plain_external() -> core.i32
   func.func @evidence_external(%ev: !evidence) -> !marker
   func.func @body(%ev: !evidence, %prompt: core.i32) -> core.never {
-    ability.handle_dispatch %ev, %prompt() attributes {abilities = []} {
+    ability.handle_dispatch [] %ev, %prompt() {
       ^body(%inner: !evidence):
         func.tail_call @finish(%inner) : (!evidence) -> ()
     }
