@@ -127,9 +127,9 @@ Wasm 코드 생성기는 함수 본문이나 테이블 인덱스에서 CPS 여�
 `wasm.if`로 낮춘다. Wasm이 정수를 직접 비교하는 폭은 `i32`와 `i64`뿐이므로
 discriminant는 `core.i32` 또는 `core.i64`여야 하고, 각각 `wasm.i32_eq`와
 `wasm.i64_eq`로 비교한다. 두 비교 모두 `core.i32` 조건을 만든다. 모든 case
-값은 정수 attribute이고 discriminant 타입의 부호 있는 범위에 들어가야 한다.
-다른 discriminant 타입, 정수가 아닌 case 값, 범위를 벗어난 case 값은 변환을
-시작하기 전에 해당 switch와 이유를 담은 conversion 오류로 거부한다.
+값은 discriminant 타입의 부호 있는 범위에 들어가야 한다. 다른 discriminant 타입과
+범위를 벗어난 case 값은 변환을 시작하기 전에 해당 switch와 이유를 담은
+conversion 오류로 거부한다.
 
 ### Terminal structured-control 결과
 

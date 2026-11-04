@@ -366,8 +366,9 @@ view must likewise reject operations for which the applicable interface is not
 registered; interfaces describe possible transfers and do not materialize a
 flat CFG.
 
-`scf.index_switch`는 MLIR의 같은 이름 operation처럼 정수(`IntegerOrIndex`)
-discriminant에 대한 구조적 다중 분기다. `cases`는 서로 다른 `i64` 값의 목록이고,
+`scf.index_switch`는 MLIR의 같은 이름 operation처럼 discriminant에 대한 구조적
+다중 분기다. MLIR과 달리 discriminant는 `index`가 아니라 고정 폭 정수
+(`IntegerLike`)이다. `cases`는 서로 다른 `i64` 값의 목록이고,
 operation은 필수 `default` region 하나와 case마다 하나씩 같은 순서로 case region을
 가진다. Discriminant가 어떤 case와 같으면 그 case region을, 아니면 `default`
 region을 실행한다. 각 region은 `scf.yield` 또는 자기 terminator로 끝난다. MLIR과
@@ -645,6 +646,8 @@ region의 entry block에 되돌린다. Printer는 `IsolatedFromAbove` operation�
   `name(keyword)`로 쓴다(`convention(cps)`). 간접 호출은 MLIR
   `func.call_indirect`처럼 callee의 signature를 쓰고, convention은 attribute
   사전에 둔다.
+- MLIR에 대응하는 operation이 있으면 그 표기를 따른다(`scf.index_switch`의
+  `case 0 {..}`와 `default {..}`). 아래 관례는 그렇지 않은 operation에 적용한다.
 - 이름 붙은 본문이 여럿이면 `entries { label { .. } .. }`로 쓴다. 본문마다
   signature가 다르면 label 뒤에 그 본문의 signature를 쓴다
   (`label(%x: T) -> R { .. }`). 모든 본문이 같은 signature를 받으면 signature는
