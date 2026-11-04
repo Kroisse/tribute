@@ -136,8 +136,8 @@ conversion 오류로 거부한다. 결과가 있는 switch는 각 `wasm.if`가 �
 ### Terminal structured-control 결과
 
 `scf_to_wasm`은 결과가 정확히 하나의 `core.never`이고 사용되지 않으며 블록의
-마지막 operation인 `scf.if`와 `scf.loop`를 zero-result Wasm 제어 연산으로
-낮춘다. 모든 진입 successor의 region은 단일 블록이고, 마지막 operation이
+마지막 operation인 `scf.if`, `scf.loop`, `scf.index_switch`를 zero-result Wasm
+제어 연산으로 낮춘다. 모든 진입 successor의 region은 단일 블록이고, 마지막 operation이
 검증된 `CallableExit` 또는 같은 terminal 판정을 만족하는 중첩 if/loop/switch여야
 한다. Native structured-to-CFG lowering과 같은 `RegionBranch`/`CallableExit`
 판정을 사용하며, parent 복귀, 불완전한 interface 응답, 오류는 terminal 증거가

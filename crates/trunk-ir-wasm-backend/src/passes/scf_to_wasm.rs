@@ -15,7 +15,7 @@ use trunk_ir::context::{BlockData, IrContext, OpList, RegionData};
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::scf;
 use trunk_ir::dialect::wasm as wasm_dialect;
-use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, RegionRef, ValueRef};
 use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, IllegalOp, LegalityCheck, Module, OpRewritePattern,
@@ -106,7 +106,9 @@ fn validate_structured_control(
 ) -> Result<(), ConversionError> {
     validate_lowerable_switches(ctx, module)?;
     let result = walk_op(ctx, module.op(), &mut |op| {
-        let has_never = (scf::If::matches(ctx, op) || scf::Loop::matches(ctx, op))
+        let has_never = (scf::If::matches(ctx, op)
+            || scf::Loop::matches(ctx, op)
+            || scf::IndexSwitch::matches(ctx, op))
             && ctx.op_results(op).iter().any(|&value| {
                 let ty = ctx.get_type(ctx.value_ty(value));
                 ty.name.is(ctx, "core.never")
@@ -268,8 +270,13 @@ fn switch_arms(ctx: &IrContext, op: OpRef) -> Result<ScfSwitchArms, SwitchLoweri
         return Err(SwitchLoweringReason::TooManyResults(result_count));
     }
     // Without cases the default's ops replace the switch, so its yield must
-    // provide the result.
-    if result_count == 1 && shape.cases.is_empty() && default_yield(ctx, shape.default).is_none() {
+    // provide the result. A Never result is instead dropped, and the Never
+    // control check requires the default to be terminal.
+    let yields_result = ctx
+        .op_results(op)
+        .first()
+        .is_some_and(|&result| !core::Never::matches(ctx, ctx.value_ty(result)));
+    if yields_result && shape.cases.is_empty() && default_yield(ctx, shape.default).is_none() {
         return Err(SwitchLoweringReason::ResultDefaultWithoutYield);
     }
     let Some(width) = switch_width(ctx, shape.discriminant) else {
@@ -364,11 +371,12 @@ impl OpRewritePattern for ScfSwitchPattern<'_> {
         let loc = ctx.op(op).location;
         // A switch with a result yields it from each nested `wasm.if`, so
         // the created ifs declare its target type.
+        let drop_result = self.0.drop_never_results.contains(&op);
         let switch_results = rewriter.result_types(ctx, op);
-        let has_result = !switch_results.is_empty();
+        let has_result = !switch_results.is_empty() && !drop_result;
         let result_types = if has_result {
             switch_results
-        } else if self.0.resultless_switches.contains(&op) {
+        } else if drop_result || self.0.resultless_switches.contains(&op) {
             vec![]
         } else {
             vec![core::Nil::params().intern(ctx).as_type_ref()]
@@ -387,10 +395,17 @@ impl OpRewritePattern for ScfSwitchPattern<'_> {
                 children.pop();
                 ctx.remove_op(terminator);
             }
+            // A dropped Never result leaves the default's terminal op in the
+            // switch's place, so it stays last in the block.
+            let last = if drop_result { children.pop() } else { None };
             for child in children {
                 rewriter.insert_op(child);
             }
-            rewriter.erase_op(values);
+            if let Some(last) = last {
+                assert!(rewriter.replace_op_dropping_unused_results(ctx, op, last));
+            } else {
+                rewriter.erase_op(values);
+            }
             return Some(());
         }
 
@@ -451,6 +466,11 @@ impl OpRewritePattern for ScfSwitchPattern<'_> {
         let (outer_ops, outer) = outer_ops.expect("nonempty switch cases build an outer dispatch");
         for inserted in outer_ops {
             rewriter.insert_op(inserted);
+        }
+        if drop_result {
+            let unreachable = wasm_dialect::Unreachable::operands().build(ctx, loc);
+            assert!(rewriter.replace_op_dropping_unused_results(ctx, op, unreachable.op_ref()));
+            return Some(());
         }
         if self.0.terminal_controls.contains(&op) {
             let unreachable = wasm_dialect::Unreachable::operands().build(ctx, loc);
@@ -1241,6 +1261,14 @@ mod tests {
             (
                 "scf.index_switch %choice : (core.i32) -> () case 0 { func.return } default { func.unreachable }",
                 vec![If::NAME],
+            ),
+            (
+                "%n = scf.index_switch %choice : (core.i32) -> core.never case 0 { func.return } case 1 { func.unreachable } default { func.return }",
+                vec![If::NAME, If::NAME],
+            ),
+            (
+                "%n = scf.index_switch %choice : (core.i32) -> core.never default { func.return }",
+                vec![],
             ),
             (
                 "%outer = scf.if %cond -> (core.never) { %inner = scf.if %cond -> (core.never) { func.return } else { func.unreachable } } else { func.return }",
