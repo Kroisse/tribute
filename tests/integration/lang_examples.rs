@@ -26,7 +26,7 @@ const EXPECTED_FAILURES: &[(&str, &str)] = &[
     ),
 ];
 
-fn examples(dir: &Path, root: &Path, out: &mut Vec<PathBuf>) {
+pub(crate) fn examples(dir: &Path, root: &Path, out: &mut Vec<PathBuf>) {
     for entry in std::fs::read_dir(dir).expect("lang-examples directory") {
         let path = entry.expect("directory entry").path();
         if path.is_dir() {

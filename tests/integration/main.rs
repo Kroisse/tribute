@@ -7,6 +7,7 @@ mod cli_diagnostics;
 mod constructor_instances;
 mod convention_classes;
 mod cps_closure_lowering;
+mod determinism;
 mod diagnostic_snapshots;
 mod differential;
 mod e2e_ability_core;

@@ -711,6 +711,20 @@ frontend 경계까지 전달한다. AST-to-IR은 declaration identity로 exact T
 라이브러리 source 뒤에 덧붙인 source를 패키지 `std`의 일부로 compile해, 사용자 패키지가 가리킬 수 없는 패키지 내부 항목
 (`std::runtime`)을 사용자 프로그램이 부를 수 있는 함수로 감싸 시험한다.
 
+### 출력 결정성
+
+같은 compiler binary에 같은 입력(source와 `CompilationConfig`)을 주면 target의
+representation/ABI 경계 출구의 IR text와 두 target의 산출물 바이트가 같다. 새
+database에서 compile하든, 다른 process에서 compile하든 결과는 달라지지 않는다.
+
+- Pass는 시간, 메모리 주소, thread 스케줄에 기대어 결정하지 않는다. 최적화
+  예산은 시간이 아니라 fuel이나 반복 횟수로 센다.
+- 순서 없는 컨테이너의 순회 순서는 출력에 드러내지 않는다. 그런 컨테이너를
+  출력에 반영할 때는 정렬하거나, 삽입 순서가 결정적인 컨테이너를 쓴다.
+- 병렬로 계산한 결과는 완료 순서가 아니라 정해진 순서로 합친다.
+
+다른 기계나 OS 사이의 재현성과 source 경로의 정규화는 이 계약에 포함하지 않는다.
+
 ### 파이프라인 구조
 
 직접형 callable/control부터 backend-ready 검증까지의 topology는 다음과 같다:
