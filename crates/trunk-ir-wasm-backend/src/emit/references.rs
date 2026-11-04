@@ -310,11 +310,11 @@ mod tests {
         let direct_call = format!(
             r#"core.module @test {{
 {UNUSED_HELPER}
-  "wasm.func"() ({{
+  wasm.func @main(%input: core.i32) -> core.i32 {{
     %arg = wasm.i32_const {{value = 1}} : core.i32
     %result = wasm.call %arg {{callee = @helper}} : core.i32
     wasm.return %result
-  }}) {{sym_name = "main", type = wasm.func_sig<(core.i32) -> core.i32>}}
+  }}
 }}"#
         );
         assert!(
@@ -477,7 +477,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
-            "core.module @test { \"wasm.func\"() ({ wasm.return }) {sym_name = \"helper\", type = wasm.func_sig<() -> ()>} }",
+            "core.module @test { wasm.func @helper() { wasm.return } }",
         );
         let op = module.ops(&ctx)[0];
         let extra = ctx.create_region(trunk_ir::RegionData {

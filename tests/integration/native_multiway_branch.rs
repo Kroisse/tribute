@@ -58,7 +58,7 @@ fn selection_module(selection: &Selection<'_>) -> String {
         .unwrap();
     }
     writeln!(text, r#"  }}"#).unwrap();
-    text.push_str(r#"  "clif.func"() ({"#);
+    text.push_str("  clif.func @main() -> core.i32 {");
     text.push('\n');
     for (position, (input, result)) in expected.iter().enumerate() {
         let next = position + 1;
@@ -81,7 +81,7 @@ fn selection_module(selection: &Selection<'_>) -> String {
         r#"    ^check{}:
       %success = clif.iconst {{value = 0}} : core.i32
       clif.return %success
-  }}) {{sym_name = "main", type = clif.func_sig<() -> core.i32>}}
+  }}
 }}"#,
         expected.len()
     )

@@ -136,12 +136,12 @@ mod tests {
     fn resultless_target_functions_do_not_abort_indirect_collection() {
         let mut ctx = IrContext::new();
         let text = "core.module @m {
-                \"wasm.func\"() ({
+                wasm.func @good() -> core.i32 {
                     %callee = wasm.i32_const {value = 0} : core.i32
                     %value = wasm.call_indirect %callee() : () -> core.i32
                     wasm.return %value
-                }) {sym_name = \"good\", type = wasm.func_sig<() -> core.i32>}
-                \"wasm.func\"() ({ wasm.return }) {sym_name = \"zero\", type = wasm.func_sig<() -> ()>}
+                }
+                wasm.func @zero() { wasm.return }
             }";
         let module = trunk_ir::parser::parse_test_module(&mut ctx, text);
         let seed = wasm_dialect::func_sig(&mut ctx, [], []).as_type_ref();
@@ -156,7 +156,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
-            "core.module @m { \"wasm.func\"() ({ wasm.return }) {sym_name = \"f\", type = wasm.func_sig<() -> ()>} }",
+            "core.module @m { wasm.func @f() { wasm.return } }",
         );
         let before = trunk_ir::printer::print_module(&ctx, module.op());
         let mut indices = HashMap::default();
