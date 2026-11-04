@@ -235,12 +235,19 @@ impl KeywordCodecHooks {
     label = "`custom(..)` requires this implementation"
 )]
 pub trait OpAsmDirective {
-    /// Whether [`Self::print`] writes `entities` so that [`Self::parse`]
-    /// reads them back. When it does not, the operation prints generically.
-    fn fits(ctx: &IrContext, entities: &[CustomEntity<'_>]) -> bool;
+    /// What [`Self::decompose`] reads from the entities for [`Self::print`].
+    type Parts<'a>;
 
-    /// Write `entities`, which [`Self::fits`] accepted.
-    fn print(h: &mut OpPrintHelper<'_, '_>, entities: &[CustomEntity<'_>]) -> fmt::Result;
+    /// The parts [`Self::print`] writes so that [`Self::parse`] reads the
+    /// entities back, or `None` when it cannot; the operation then prints
+    /// generically.
+    fn decompose<'a>(
+        ctx: &'a IrContext,
+        entities: &'a [CustomEntity<'a>],
+    ) -> Option<Self::Parts<'a>>;
+
+    /// Write the parts [`Self::decompose`] read.
+    fn print(h: &mut OpPrintHelper<'_, '_>, parts: Self::Parts<'_>) -> fmt::Result;
 
     /// Read the entities back, one for each the element names, in order.
     fn parse<'a>(input: &mut &'a str) -> winnow::ModalResult<Vec<RawCustomEntity<'a>>>;
@@ -280,11 +287,24 @@ impl OpAsmDirectiveHooks {
     /// The hooks of `T`'s directive.
     pub const fn of<T: OpAsmDirective>() -> Self {
         Self {
-            fits: T::fits,
-            print: T::print,
+            fits: directive_fits::<T>,
+            print: directive_print::<T>,
             parse: T::parse,
         }
     }
+}
+
+fn directive_fits<T: OpAsmDirective>(ctx: &IrContext, entities: &[CustomEntity<'_>]) -> bool {
+    T::decompose(ctx, entities).is_some()
+}
+
+fn directive_print<T: OpAsmDirective>(
+    h: &mut OpPrintHelper<'_, '_>,
+    entities: &[CustomEntity<'_>],
+) -> fmt::Result {
+    let parts =
+        T::decompose(h.ctx(), entities).expect("the printer checked that the directive fits");
+    T::print(h, parts)
 }
 
 /// A printer that writes the parts of a function form: an operation's or a

@@ -554,41 +554,44 @@ impl crate::ops::Verify for Switch {
 pub struct SwitchCases;
 
 impl crate::asm_format::OpAsmDirective for SwitchCases {
-    fn fits(_ctx: &crate::IrContext, entities: &[crate::asm_format::CustomEntity<'_>]) -> bool {
-        use crate::asm_format::CustomEntity;
-        match entities {
-            [
-                CustomEntity::Attribute(Some(Attribute::List(cases))),
-                CustomEntity::Successors(targets),
-            ] => {
-                cases.len() == targets.len()
-                    && cases.iter().all(|case| matches!(case, Attribute::Int(_)))
-            }
-            _ => false,
-        }
-    }
+    /// Each case with its target.
+    type Parts<'a> = Vec<(i128, crate::BlockRef)>;
 
-    fn print(
-        h: &mut crate::printer::OpPrintHelper<'_, '_>,
-        entities: &[crate::asm_format::CustomEntity<'_>],
-    ) -> std::fmt::Result {
+    fn decompose<'a>(
+        _ctx: &'a crate::IrContext,
+        entities: &'a [crate::asm_format::CustomEntity<'a>],
+    ) -> Option<Self::Parts<'a>> {
         use crate::asm_format::CustomEntity;
-        use std::fmt::Write as _;
-
         let [
             CustomEntity::Attribute(Some(Attribute::List(cases))),
             CustomEntity::Successors(targets),
         ] = entities
         else {
-            unreachable!("`fits` accepted the cases and their targets")
+            return None;
         };
-        for (position, (case, &target)) in cases.iter().zip(targets).enumerate() {
+        if cases.len() != targets.len() {
+            return None;
+        }
+        cases
+            .iter()
+            .zip(targets)
+            .map(|(case, &target)| match *case {
+                Attribute::Int(case) => Some((case, target)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn print(
+        h: &mut crate::printer::OpPrintHelper<'_, '_>,
+        parts: Self::Parts<'_>,
+    ) -> std::fmt::Result {
+        use std::fmt::Write as _;
+
+        for (position, (case, target)) in parts.into_iter().enumerate() {
             if position > 0 {
                 h.write_str(", ")?;
             }
-            let Attribute::Int(case) = case else {
-                unreachable!("`fits` accepted integer cases")
-            };
             let label = h.block_label(target).to_owned();
             write!(h, "{case}: {label}")?;
         }
