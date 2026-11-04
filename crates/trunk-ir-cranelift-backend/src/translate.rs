@@ -457,7 +457,7 @@ mod tests {
       clif.return %value
   }
   clif.func @direct_call(%value: core.i32, %unit: core.nil, %last: core.i64) -> core.i32 {
-      %result = clif.call %value, %unit, %last {callee = @call_target} : core.i32
+      %result = clif.call @call_target(%value, %unit, %last) : core.i32
       clif.return %result
   }
   clif.func @indirect_call(%callee: core.ptr, %value: core.i32, %unit: core.nil, %last: core.i64) -> core.i32 {
@@ -465,7 +465,7 @@ mod tests {
       clif.return %result
   }
   clif.func @direct_tail(%value: core.i32, %unit: core.nil, %last: core.i64) -> (), {call_conv = "tail"} {
-      clif.return_call %value, %unit, %last {callee = @direct_tail}
+      clif.return_call @direct_tail(%value, %unit, %last)
   }
   clif.func @indirect_tail(%callee: core.ptr, %value: core.i32, %unit: core.nil, %last: core.i64) -> (), {call_conv = "tail"} {
       clif.return_call_indirect %callee(%value, %unit, %last) : (core.i32, core.nil, core.i64) -> (), {call_conv = "tail"}
@@ -488,11 +488,11 @@ mod tests {
     clif.return %first, %second
   }
   clif.func @main() -> core.i32 {
-    %first, %second = clif.call {callee = @pair} : core.i32, core.i32
-    clif.call {callee = @sink}
-    %sink = clif.symbol_addr {sym = @sink} : core.ptr
+    %first, %second = clif.call @pair() : core.i32, core.i32
+    clif.call @sink()
+    %sink = clif.symbol_addr @sink : core.ptr
     clif.call_indirect %sink() : () -> ()
-    %callee = clif.symbol_addr {sym = @pair} : core.ptr
+    %callee = clif.symbol_addr @pair : core.ptr
     %other_first, %other_second = "clif.call_indirect"(%callee) {sig = clif.func_sig<() -> (core.i32, core.nil, core.i32)>} : core.i32, core.i32
     %seven = clif.iconst {value = 7} : core.i32
     %eleven = clif.iconst {value = 11} : core.i32
@@ -606,9 +606,9 @@ mod tests {
                 }
             }
             clif.func @main() {
-                %left = clif.call {callee = @left::@helper} : core.i32
-                %right = clif.call {callee = @right::@helper} : core.i32
-                clif.call {callee = @left::@main}
+                %left = clif.call @left::@helper() : core.i32
+                %right = clif.call @right::@helper() : core.i32
+                clif.call @left::@main()
                 clif.return
             }
         }"#,
@@ -636,7 +636,7 @@ mod tests {
             clif.func @used() attributes {abi = "C"}
             clif.func @unused() attributes {abi = "C"}
             clif.func @main() {
-                clif.call {callee = @used}
+                clif.call @used()
                 clif.return
             }
         }"#,
@@ -776,7 +776,7 @@ mod tests {
             r#"core.module @test {
   clif.data @greeting(b"hi there") align 1
   clif.func @main() -> core.i32 {
-    %greeting = clif.symbol_addr {sym = @greeting} : core.ptr
+    %greeting = clif.symbol_addr @greeting : core.ptr
     %result = clif.iconst {value = 0} : core.i32
     clif.return %result
   }
@@ -813,8 +813,8 @@ mod tests {
     clif.data @text(b"right") align 1
   }
   clif.func @main() -> core.i32 {
-    %left = clif.symbol_addr {sym = @left::@text} : core.ptr
-    %right = clif.symbol_addr {sym = @right::@text} : core.ptr
+    %left = clif.symbol_addr @left::@text : core.ptr
+    %right = clif.symbol_addr @right::@text : core.ptr
     %result = clif.iconst {value = 0} : core.i32
     clif.return %result
   }
@@ -878,11 +878,11 @@ mod tests {
     clif.return
   }
   clif.data @table(b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00") align 8 {
-    clif.func_reloc {offset = 16, func = @first}
-    clif.func_reloc {offset = 0, func = @second}
+    clif.func_reloc @first at 16
+    clif.func_reloc @second at 0
   }
   clif.func @main() -> core.i32 {
-    %table = clif.symbol_addr {sym = @table} : core.ptr
+    %table = clif.symbol_addr @table : core.ptr
     %result = clif.iconst {value = 0} : core.i32
     clif.return %result
   }
@@ -933,9 +933,7 @@ mod tests {
             ),
         ] {
             let relocs = relocs.iter().format_with("\n", |(offset, func), f| {
-                f(&format_args!(
-                    "    clif.func_reloc {{offset = {offset}, func = @{func}}}"
-                ))
+                f(&format_args!("    clif.func_reloc @{func} at {offset}"))
             });
             let mut ctx = IrContext::new();
             let module = parse_test_module(
@@ -972,7 +970,7 @@ mod tests {
   clif.func @helper() -> core.nil {
     clif.return
   }
-  clif.func_reloc {offset = 0, func = @helper}
+  clif.func_reloc @helper at 0
 }"#,
                 "must be inside a clif.data relocation region",
             ),

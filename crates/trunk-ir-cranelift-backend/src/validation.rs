@@ -531,10 +531,10 @@ mod tests {
       clif.return
   }
   clif.func @platform_caller(%value: core.i32) {
-      clif.return_call %value {callee = @tail_target}
+      clif.return_call @tail_target(%value)
   }
   clif.func @to_platform(%value: core.i32) -> (), {call_conv = "tail"} {
-      clif.return_call %value {callee = @platform_target}
+      clif.return_call @platform_target(%value)
   }
   clif.func @indirect_platform(%callee: core.ptr, %value: core.i32) -> (), {call_conv = "tail"} {
       clif.return_call_indirect %callee(%value) : (core.i32) -> ()
@@ -557,7 +557,7 @@ mod tests {
       clif.return
   }
   clif.func @direct(%value: core.i32) -> (), {call_conv = "tail"} {
-      clif.return_call %value {callee = @target}
+      clif.return_call @target(%value)
   }
   clif.func @indirect(%callee: core.ptr, %value: core.i32) -> (), {call_conv = "tail"} {
       clif.return_call_indirect %callee(%value) : (core.i32) -> (), {call_conv = "tail"}
@@ -642,7 +642,7 @@ mod tests {
   clif.func @direct_target(%value: core.i32) -> core.i32 { clif.return %value }
   clif.func @direct_caller() {
     %value = clif.iconst {value = 1} : core.i32
-    %unused = clif.call %value {callee = @direct_target} : core.i64
+    %unused = clif.call @direct_target(%value) : core.i64
     clif.return
   }
 }"#,
@@ -661,7 +661,7 @@ mod tests {
             r#"core.module @test {
   clif.func @unit(%unit: core.nil) -> core.nil { clif.return %unit }
   clif.func @caller(%unit: core.nil) {
-    %unused = clif.call %unit {callee = @unit} : core.nil
+    %unused = clif.call @unit(%unit) : core.nil
     clif.return
   }
 }"#,
@@ -677,12 +677,12 @@ mod tests {
   !shaped = test.record<core.i32 {name = "field"}, {name = "Impostor"}>
   clif.func @target(%value: core.ptr) -> core.ptr { clif.return %value }
   clif.func @semantic(%callee: core.ptr, %value: test.anyref) -> core.ptr {
-    %direct = clif.call %value {callee = @target} : test.anyref
+    %direct = clif.call @target(%value) : test.anyref
     %indirect = "clif.call_indirect"(%callee, %direct) {sig = clif.func_sig<(core.ptr) -> core.ptr>} : test.anyref
     clif.return %indirect
   }
   clif.func @shaped(%value: !shaped) -> core.ptr {
-    %direct = clif.call %value {callee = @target} : !shaped
+    %direct = clif.call @target(%value) : !shaped
     clif.return %direct
   }
 }"#,
@@ -721,10 +721,10 @@ mod tests {
   clif.func @bad_return() -> core.i32 { clif.return }
   clif.func @bad_argument() {
     %value = clif.iconst {value = 1} : core.i32
-    %unused = clif.call %value {callee = @takes_i64} : core.i32
+    %unused = clif.call @takes_i64(%value) : core.i32
     clif.return
   }
-  clif.func @bad_tail() { clif.return_call {callee = @tail_target} }
+  clif.func @bad_tail() { clif.return_call @tail_target() }
   clif.func @bad_indirect_tail(%callee: core.ptr, %value: core.i32) {
     clif.return_call_indirect %callee(%value) : (core.i64) -> ()
   }

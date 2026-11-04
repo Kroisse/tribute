@@ -1242,7 +1242,7 @@ mod tests {
             r#"core.module @test {
   wasm.table {reftype = "funcref", min = 1, max = 1}
   wasm.elem {
-    wasm.ref_func {func_name = @target} : wasm.funcref
+    wasm.ref_func @target : wasm.funcref
   }
   wasm.func @target(%value: core.i32) -> core.nil {
     wasm.return
@@ -1250,7 +1250,7 @@ mod tests {
   wasm.func @caller(%table_index: core.i32, %value: core.i32) -> core.nil {
     wasm.return_call_indirect %table_index(%value) : (core.i32) -> core.nil
   }
-  wasm.export_func {name = "caller", func = @caller}
+  wasm.export_func @caller as "caller"
 }"#,
         )
     }
@@ -1400,14 +1400,14 @@ mod tests {
             r#"core.module @test {
   wasm.table {reftype = "funcref", min = 8, max = 8}
   wasm.elem {
-    wasm.ref_func {func_name = @f7} : wasm.funcref
-    wasm.ref_func {func_name = @f6} : wasm.funcref
-    wasm.ref_func {func_name = @f5} : wasm.funcref
-    wasm.ref_func {func_name = @f4} : wasm.funcref
-    wasm.ref_func {func_name = @f3} : wasm.funcref
-    wasm.ref_func {func_name = @f2} : wasm.funcref
-    wasm.ref_func {func_name = @f1} : wasm.funcref
-    wasm.ref_func {func_name = @f0} : wasm.funcref
+    wasm.ref_func @f7 : wasm.funcref
+    wasm.ref_func @f6 : wasm.funcref
+    wasm.ref_func @f5 : wasm.funcref
+    wasm.ref_func @f4 : wasm.funcref
+    wasm.ref_func @f3 : wasm.funcref
+    wasm.ref_func @f2 : wasm.funcref
+    wasm.ref_func @f1 : wasm.funcref
+    wasm.ref_func @f0 : wasm.funcref
   }
   wasm.func @f0() -> core.nil {
     wasm.return
@@ -1541,7 +1541,7 @@ mod tests {
     wasm.return %a, %b
   }
   wasm.func @use_pair() -> (core.i32, core.i64) {
-    %a, %b = wasm.call {callee = @pair} : core.i32, core.i64
+    %a, %b = wasm.call @pair() : core.i32, core.i64
     wasm.return %a, %b
   }
 }"#,
@@ -1562,7 +1562,7 @@ mod tests {
             r#"core.module @test {
   wasm.table {reftype = "funcref", min = 1, max = 1}
   wasm.elem {
-    wasm.ref_func {func_name = @pair} : wasm.funcref
+    wasm.ref_func @pair : wasm.funcref
   }
   wasm.func @pair() -> (core.i32, core.i64) {
     %a = wasm.i32_const {value = 7} : core.i32
@@ -1618,7 +1618,7 @@ mod tests {
     wasm.return %a, %b
   }
   wasm.func @use_pair() -> (core.i32, core.i64) {
-    %a, %unit, %b = wasm.call {callee = @pair} : core.i32, core.nil, core.i64
+    %a, %unit, %b = wasm.call @pair() : core.i32, core.nil, core.i64
     wasm.return %a, %b
   }
 }"#,
@@ -1718,7 +1718,7 @@ mod tests {
                     %unit = {producer} : core.nil
                     %condition = wasm.i32_const {{value = 1}} : core.i32
                     wasm.if %condition {{
-                        wasm.return_call %unit {{callee = @consume}}
+                        wasm.return_call @consume(%unit)
                     }} else {{ wasm.unreachable }}
                 }}
             }}"#
@@ -1805,7 +1805,7 @@ mod tests {
   wasm.table {reftype = "funcref", min = 1, max = 1}
   wasm.global {valtype = "i32", mutable = true, init = 0}
   wasm.elem {
-    wasm.ref_func {func_name = @add_two} : wasm.funcref
+    wasm.ref_func @add_two : wasm.funcref
   }
   wasm.func @set_one() {
     %one = wasm.i32_const {value = 1} : core.i32
@@ -1820,13 +1820,13 @@ mod tests {
     wasm.return
   }
   wasm.func @caller() -> core.i32 {
-    wasm.call {callee = @set_one}
+    wasm.call @set_one()
     %table_index = wasm.i32_const {value = 0} : core.i32
     wasm.call_indirect %table_index() : () -> ()
     %result = wasm.global_get {index = 0} : core.i32
     wasm.return %result
   }
-  wasm.export_func {name = "zero_pair", func = @caller}
+  wasm.export_func @caller as "zero_pair"
 }"#,
         );
         let bytes = crate::emit_module_to_wasm(&mut ctx, module)
@@ -1888,10 +1888,10 @@ mod tests {
     wasm.return %a, %b
   }
   wasm.func @caller() -> (core.i32, core.i64) {
-    %a, %b = wasm.call {callee = @pair} : core.i32, core.i64
+    %a, %b = wasm.call @pair() : core.i32, core.i64
     wasm.return %a, %b
   }
-  wasm.export_func {name = "direct_pair", func = @caller}
+  wasm.export_func @caller as "direct_pair"
 }"#,
             "direct_pair",
             &[],
@@ -1900,7 +1900,7 @@ mod tests {
             r#"core.module @test {
   wasm.table {reftype = "funcref", min = 1, max = 1}
   wasm.elem {
-    wasm.ref_func {func_name = @pair} : wasm.funcref
+    wasm.ref_func @pair : wasm.funcref
   }
   wasm.func @pair() -> (core.i32, core.i64) {
     %a = wasm.i32_const {value = 7} : core.i32
@@ -1911,7 +1911,7 @@ mod tests {
       %a, %b = wasm.call_indirect %table_index() : () -> (core.i32, core.i64)
       wasm.return %a, %b
   }
-  wasm.export_func {name = "indirect_pair", func = @caller}
+  wasm.export_func @caller as "indirect_pair"
 }"#,
             "indirect_pair",
             &["0"],

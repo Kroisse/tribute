@@ -33,7 +33,7 @@ fn calls(callback: &str, own: &str, lambda: &str, callee: &str) -> String {
         tribute_control.return %y
       }}
     }}
-    %r = tribute_control.call %x, %f {{callee = @"{callee}", row_args = [{{}}]}} : core.i32
+    %r = tribute_control.call @"{callee}"(%x, %f) attributes {{row_args = [{{}}]}} : core.i32
     tribute_control.return %r
   }}
 }}"#
@@ -271,7 +271,7 @@ fn a_definition_without_a_body_has_no_class_variables() {
   tribute_cps.func_table @"pure$8" = {{direct = @pure}}
   tribute_cps.func @main(%x: core.i32) -> core.i32 convention(direct) {{
     %f = tribute_cps.func_ref @"pure$8" : !closed
-    %r = tribute_control.call %x, %f {{callee = @external, row_args = [{{}}]}} : core.i32
+    %r = tribute_control.call @external(%x, %f) attributes {{row_args = [{{}}]}} : core.i32
     tribute_control.return %r
   }}
 }}"#

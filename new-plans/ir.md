@@ -606,6 +606,11 @@ region의 entry block에 되돌린다. Printer는 `IsolatedFromAbove` operation�
 
 - Symbol을 정의하는 operation은 operation 이름 바로 뒤에 `symbol(sym_name)`으로
   `@name`을 쓴다.
+- Symbol을 참조하는 필수 attribute는 attribute 사전에 두지 않고 위치로 쓴다.
+  직접 호출은 MLIR `func.call`처럼 `@callee(%args)`로 쓰고, 그 밖의 참조는
+  operation 이름 바로 뒤에 쓴다(`clif.symbol_addr @f`). 참조 목록도 종류의 문법
+  `[@a, @b]`로 같은 자리에 쓴다. 선택 attribute 안의 참조(`evidence_plan`,
+  `adapters`)는 attribute 사전에 남는다.
 - 남은 attribute는 `attr_dict`로 region 바로 앞에 쓰고, region이 없으면 끝에
   쓴다. Region이 없는 operation은 `attr_dict_bare`로 `{..}`만 쓸 수 있다.
 - Capture operand 목록은 비어 있어도 `captures [..]`로 쓴다.

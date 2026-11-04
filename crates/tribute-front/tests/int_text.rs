@@ -72,7 +72,7 @@ fn format_box(value: Int) -> String {
         .find(r#"adt.variant_new %0 {tag = "Box", type = !"pkg::Boxed$Int"}"#)
         .expect("Box(value) must construct the specialized pkg::Boxed$Int");
     let int_to_string = format_box
-        .find("callee = @\"std::Int::to_string\"")
+        .find("@\"std::Int::to_string\"(")
         .expect("Box payload must be passed to Int::to_string");
     assert!(
         format_box[construct..int_to_string].contains(

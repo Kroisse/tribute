@@ -417,7 +417,7 @@ fn main() -> Nil {
         "root main must contain the direct worker call:\n{main}"
     );
     assert!(
-        main.contains("callee = @\"pkg::forward_open$Int$Int$9D\""),
+        main.contains("@\"pkg::forward_open$Int$Int$9D\"("),
         "root main must call the Direct instance of the monomorphized forward_open worker:\n{main}"
     );
     assert!(
@@ -426,7 +426,7 @@ fn main() -> Nil {
     );
     assert!(
         logical_function(&ir_text, "pkg::Nested::unwrap$Int")
-            .contains("callee = @\"pkg::Nested::Box$Int::value\""),
+            .contains("@\"pkg::Nested::Box$Int::value\"("),
         "nested worker must call the exact qualified accessor:\n{ir_text}"
     );
     assert!(
@@ -686,7 +686,7 @@ fn main() -> Nil {{}}
         // type is the one `pure` takes.
         let entry = logical_function(&ir, "entry");
         assert_eq!(entry.matches("tribute_cps.lambda").count(), 1, "{ir}");
-        assert!(entry.contains("callee = @\"pkg::open$9D\""), "{ir}");
+        assert!(entry.contains("@\"pkg::open$9D\"("), "{ir}");
         assert!(!entry.contains("unrealized_conversion_cast"), "{ir}");
     }
 }

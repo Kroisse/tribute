@@ -17,7 +17,7 @@ core.module @test {
       clif.brif %7 [^bb2, ^bb3]
     ^bb2:
       %8 = clif.iconst {value = 12} : core.i64
-      %9 = clif.call %0, %8 {callee = @__tribute_deep_release} : core.nil
+      %9 = clif.call @__tribute_deep_release(%0, %8) : core.nil
       clif.jump [^bb3]
     ^bb3:
       clif.return

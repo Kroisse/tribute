@@ -737,7 +737,7 @@ mod tests {
 }"#,
         );
         assert!(
-            result.contains("clif.symbol_addr {sym = @target} : core.ptr"),
+            result.contains("clif.symbol_addr @target : core.ptr"),
             "{result}"
         );
         assert!(

@@ -73,7 +73,7 @@ mod wasm {
 
     // Functions
     #[implements(CallLike)]
-    #[asm_format(args attr_dict_bare (":" types(results)^)?)]
+    #[asm_format(callee "(" args ")" attr_dict (":" types(results)^)?)]
     fn call(callee: Attr<SymbolRef>, args: Variadic<_>) -> Variadic<_> {}
 
     /// Call the function at a table index through its exact signature.
@@ -105,7 +105,7 @@ mod wasm {
     }
 
     #[implements(CallLike)]
-    #[asm_format(args attr_dict_bare)]
+    #[asm_format(callee "(" args ")" attr_dict)]
     fn return_call(callee: Attr<SymbolRef>, args: Variadic<_>) {}
 
     /// A tail call of the function at a table index through its exact
@@ -152,7 +152,7 @@ mod wasm {
     ) {
     }
 
-    #[asm_format(attr_dict_bare)]
+    #[asm_format(func "as" name attr_dict)]
     fn export_func(name: Attr<String>, func: Attr<SymbolRef>) {}
 
     #[asm_format(attr_dict_bare)]
@@ -179,10 +179,10 @@ mod wasm {
     ///
     /// ```text
     /// wasm.elem {
-    ///   wasm.ref_func {func_name = @f} : wasm.funcref
+    ///   wasm.ref_func @f : wasm.funcref
     /// }
     /// wasm.elem table 1 offset 4 {
-    ///   wasm.ref_func {func_name = @g} : wasm.funcref
+    ///   wasm.ref_func @g : wasm.funcref
     /// }
     /// ```
     #[asm_format(("table" table^)? ("offset" offset^)? attr_dict region(funcs))]
@@ -435,7 +435,7 @@ mod wasm {
     #[asm_format(attr_dict_bare ":" type(result))]
     fn ref_null(heap_type: Attr<String>, type_idx: Option<Attr<u32>>) -> Value<_> {}
 
-    #[asm_format(attr_dict_bare ":" type(result))]
+    #[asm_format(func_name attr_dict ":" type(result))]
     fn ref_func(func_name: Attr<SymbolRef>) -> Value<_> {}
 
     #[asm_format(r#ref attr_dict_bare ":" type(result))]
@@ -1133,10 +1133,10 @@ mod tests {
     fn elem_writes_only_a_non_default_table_and_offset() {
         let text = r#"core.module @test {
   wasm.elem {
-      %0 = wasm.ref_func {func_name = @f} : wasm.funcref
+      %0 = wasm.ref_func @f : wasm.funcref
   }
   wasm.elem table 1 offset 4 {
-      %0 = wasm.ref_func {func_name = @g} : wasm.funcref
+      %0 = wasm.ref_func @g : wasm.funcref
   }
 }
 "#;

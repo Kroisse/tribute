@@ -293,12 +293,12 @@ mod Native {
     );
     let call = checked_logical_function(ir, "call");
     assert!(
-        call.contains("tribute_control.call %0 {callee = @\"pkg::identity\"} : core.i32"),
+        call.contains("tribute_control.call @\"pkg::identity\"(%0) : core.i32"),
         "direct source call must target the logical extern declaration:\n{call}"
     );
     let nested_call = checked_logical_function(ir, "Native::call");
     assert!(
-        nested_call.contains("callee = @\"pkg::Native::identity\"")
+        nested_call.contains("@\"pkg::Native::identity\"(")
             && ir.contains(
                 "tribute_control.func @\"pkg::Native::identity\"(%arg0: core.i32) -> core.i32 attributes {abi = \"intrinsic\"}"
             ),
@@ -386,7 +386,7 @@ pub mod Nested {
     );
     let read = checked_logical_function(ir_text, "Nested::read");
     assert!(
-        read.contains("callee = @\"pkg::Nested::Holder::callback\"")
+        read.contains("@\"pkg::Nested::Holder::callback\"(")
             && read.contains("tribute_control.call"),
         "field access must call the matching logical accessor:\n{read}"
     );
@@ -708,7 +708,7 @@ fn main() -> Nil { }
         "shadowing local must stay an indirect call:\n{ir}"
     );
     assert!(
-        !ir.contains("tribute_control.call {callee = @\"pkg::Nested::apply\"}"),
+        !ir.contains("tribute_control.call @\"pkg::Nested::apply\"()"),
         "lowering must not reinterpret the local as the nested function:\n{ir}"
     );
 }
@@ -1662,7 +1662,7 @@ fn run() ->{Flag} Nat {
         &[
             "tribute_control.handler",
             "scf.if",
-            "callee = @\"pkg::allowed\"",
+            "@\"pkg::allowed\"(",
             "tribute_control.resume",
         ],
     );
@@ -1673,7 +1673,7 @@ fn run() ->{Flag} Nat {
         &[
             "adt.struct_get",
             "list.head",
-            "callee = @\"pkg::allowed\"",
+            "@\"pkg::allowed\"(",
             "tribute_control.resume",
             "op_name = \"choose\"",
         ],
@@ -1768,13 +1768,10 @@ fn assert_sequential_performs_shape(function: &str) {
     assert_in_order(function, &["@set(", "@get("]);
 }
 fn assert_nested_argument_shape(function: &str) {
-    assert_in_order(
-        function,
-        &["callee = @\"pkg::read\"", "callee = @\"pkg::add_one\""],
-    );
+    assert_in_order(function, &["@\"pkg::read\"(", "@\"pkg::add_one\"("]);
 }
 fn assert_exact_integer_addition(function: &str) -> &'static str {
-    let callee = ["callee = @\"std::Int::+\"", "callee = @\"std::Nat::+\""]
+    let callee = ["@\"std::Int::+\"(", "@\"std::Nat::+\"("]
         .into_iter()
         .find(|callee| function.contains(callee))
         .unwrap_or_else(|| {
@@ -1800,17 +1797,17 @@ fn assert_indirect_lambda_shape(function: &str) {
 }
 fn assert_case_arm_shape(function: &str) {
     let callee = assert_exact_integer_addition(function);
-    assert_in_order(function, &["scf.if", "callee = @\"pkg::read\"", callee]);
+    assert_in_order(function, &["scf.if", "@\"pkg::read\"(", callee]);
 }
 fn assert_short_circuit_shape(function: &str) {
-    assert_in_order(function, &["scf.if", "callee = @\"pkg::read\""]);
+    assert_in_order(function, &["scf.if", "@\"pkg::read\"("]);
 }
 fn assert_handle_body_shape(function: &str) {
     assert_in_order(
         function,
         &[
             "tribute_control.handle",
-            "callee = @\"pkg::read\"",
+            "@\"pkg::read\"(",
             "tribute_control.resume",
         ],
     );
@@ -1820,7 +1817,7 @@ fn assert_handler_arm_shape(function: &str) {
         function,
         &[
             "tribute_control.handler",
-            "callee = @\"pkg::read_log\"",
+            "@\"pkg::read_log\"(",
             "tribute_control.resume",
         ],
     );
@@ -1828,25 +1825,17 @@ fn assert_handler_arm_shape(function: &str) {
 fn assert_case_scrutinee_shape(function: &str) {
     assert_in_order(
         function,
-        &[
-            "callee = @\"pkg::effectful\"",
-            "scf.if",
-            "callee = @\"pkg::after\"",
-        ],
+        &["@\"pkg::effectful\"(", "scf.if", "@\"pkg::after\"("],
     );
 }
 fn assert_short_circuit_consumer_shape(function: &str) {
     assert_in_order(
         function,
-        &[
-            "scf.if",
-            "callee = @\"pkg::effectful\"",
-            "callee = @\"pkg::after\"",
-        ],
+        &["scf.if", "@\"pkg::effectful\"(", "@\"pkg::after\"("],
     );
 }
 fn assert_case_guard_shape(function: &str) {
-    assert_in_order(function, &["scf.if", "callee = @\"pkg::effectful\""]);
+    assert_in_order(function, &["scf.if", "@\"pkg::effectful\"("]);
 }
 fn assert_handler_case_resume_shape(function: &str) {
     assert_occurrences(function, "tribute_control.resume %", 2);
@@ -1910,7 +1899,7 @@ fn assert_record_spread_shape(function: &str) {
     );
 }
 fn assert_aggregate_shape(function: &str) {
-    assert_occurrences(function, "callee = @\"pkg::read\"", 4);
+    assert_occurrences(function, "@\"pkg::read\"(", 4);
     assert_in_order(
         function,
         &["adt.struct_new", "adt.struct_new", "adt.variant_new"],

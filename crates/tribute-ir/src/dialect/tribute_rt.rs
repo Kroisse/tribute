@@ -92,13 +92,13 @@ mod tribute_rt {
     /// the reference. See the closure storage layout in `new-plans/ir.md`.
     ///
     /// ```text
-    /// %table = tribute_rt.convention_table {entries = [@f]} : tribute_rt.convention_table_ref
+    /// %table = tribute_rt.convention_table [@f] : tribute_rt.convention_table_ref
     /// ```
     ///
     /// Its result is a `convention_table_ref` until the target converts that
     /// type, so the schema leaves it unconstrained.
     #[flags(Pure)]
-    #[asm_format(attr_dict_bare ":" type(result))]
+    #[asm_format(entries attr_dict ":" type(result))]
     fn convention_table(entries: Attr<[SymbolRef]>) -> Value<_> {}
 
     /// The entry function at `index` of the convention table `table`, as an

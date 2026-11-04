@@ -19,7 +19,7 @@
 //! %o = clif.iconst {value = 8} : core.i64
 //! %a = clif.iadd %p, %o : core.ptr
 //! %n = clif.iconst {value = 4} : core.i64
-//! %_ = clif.call %a, %n {callee = @__tribute_asan_load} : core.nil
+//! %_ = clif.call @__tribute_asan_load(%a, %n) : core.nil
 //! %v = clif.load %p {offset = 8} : core.i32
 //! ```
 

@@ -9,19 +9,19 @@ core.module @test {
   tribute_control.func @"pkg::counter"() -> core.i32 row(@"ability_2_10_pkg::State_3_int") {
       %0 = tribute_control.perform op @"ability_2_10_pkg::State_3_int" @get() : () -> core.i32
       %1 = arith.const {value = 1} : core.i32
-      %2 = tribute_control.call %0, %1 {callee = @"std::Int::+"} : core.i32
+      %2 = tribute_control.call @"std::Int::+"(%0, %1) : core.i32
       %3 = tribute_control.perform op @"ability_2_10_pkg::State_3_int" @set(%2) : (core.i32) -> core.nil
       tribute_control.return %0
   }
   tribute_control.func @"pkg::count_three"['a0]() -> core.i32 row(| 'a0) inferred {
       %0 = tribute_control.lambda() -> core.i32 row(@"ability_2_10_pkg::State_3_int" | 'a0) captures [] {
-          %1 = tribute_control.call {callee = @"pkg::counter"} : core.i32
-          %2 = tribute_control.call {callee = @"pkg::counter"} : core.i32
-          %3 = tribute_control.call {callee = @"pkg::counter"} : core.i32
+          %1 = tribute_control.call @"pkg::counter"() : core.i32
+          %2 = tribute_control.call @"pkg::counter"() : core.i32
+          %3 = tribute_control.call @"pkg::counter"() : core.i32
           tribute_control.return %3
       }
       %4 = arith.const {value = 0} : core.i32
-      %5 = tribute_control.call %0, %4 {callee = @"pkg::run_state$Int$Int", row_args = [{tail = 0}]} : core.i32
+      %5 = tribute_control.call @"pkg::run_state$Int$Int"(%0, %4) attributes {row_args = [{tail = 0}]} : core.i32
       tribute_control.return %5
   }
   tribute_control.func @"pkg::run_state$Int$Int"['a0](%0: !t0, %1: core.i32) -> core.i32 row(| 'a0) {
@@ -36,7 +36,7 @@ core.module @test {
                   %7 = tribute_control.resume %5, %1 : core.i32
                   tribute_control.return %7
               }
-              %8 = tribute_control.call %6, %1 {callee = @"pkg::run_state$Int$Int", row_args = [{tail = 0}]} : core.i32
+              %8 = tribute_control.call @"pkg::run_state$Int$Int"(%6, %1) attributes {row_args = [{tail = 0}]} : core.i32
               tribute_control.yield %8
           }
           tribute_control.handler op @"ability_2_10_pkg::State_3_int" @set(%9: core.i32, %10: tribute_control.resume_token<core.nil, core.i32>) : core.nil {
@@ -45,7 +45,7 @@ core.module @test {
                   %13 = tribute_control.resume %10, %12 : core.i32
                   tribute_control.return %13
               }
-              %14 = tribute_control.call %11, %9 {callee = @"pkg::run_state$Int$Int", row_args = [{tail = 0}]} : core.i32
+              %14 = tribute_control.call @"pkg::run_state$Int$Int"(%11, %9) attributes {row_args = [{tail = 0}]} : core.i32
               tribute_control.yield %14
           }
       }

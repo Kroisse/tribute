@@ -87,12 +87,12 @@ mod ability {
     /// `func.unreachable`.
     ///
     /// ```text
-    /// ability.handle_dispatch %evidence, %prompt_tag(%dispatcher0, ...) attributes {abilities = [@State]} {
+    /// ability.handle_dispatch [@State] %evidence, %prompt_tag(%dispatcher0, ...) {
     /// ^body(%ev: Evidence):
     ///   ...
     /// }
     /// ```
-    #[asm_format(evidence "," prompt_tag "(" dispatchers ")" attr_dict region(body))]
+    #[asm_format(abilities evidence "," prompt_tag "(" dispatchers ")" attr_dict region(body))]
     #[implements(CallableExit)]
     fn handle_dispatch(
         abilities: Attr<[SymbolRef]>,
@@ -553,7 +553,7 @@ mod tests {
                 &format!(
                     r#"core.module @test {{
   func.func @main(%evidence: core.ptr, %prompt: core.i32) {{
-    ability.handle_dispatch %evidence, %prompt() attributes {{abilities = {abilities}}} {{
+    ability.handle_dispatch {abilities} %evidence, %prompt() {{
       func.unreachable
     }}
   }}

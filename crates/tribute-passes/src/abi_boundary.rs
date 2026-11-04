@@ -643,7 +643,7 @@ mod tests {
         let violations = kinds(
             r#"core.module @test {
   func.func @run(%evidence: core.ptr) {
-    %created = closure.new {entries = [@run]} : core.ptr
+    %created = closure.new [@run] : core.ptr
     func.return
   }
 }"#,
@@ -1046,8 +1046,8 @@ mod tests {
     func.return
   }
   func.func @make() {
-    %table = tribute_rt.convention_table {entries = [@target]} : tribute_rt.convention_table_ref
-    %missing = tribute_rt.convention_table {entries = [@target, @missing]} : tribute_rt.convention_table_ref
+    %table = tribute_rt.convention_table [@target] : tribute_rt.convention_table_ref
+    %missing = tribute_rt.convention_table [@target, @missing] : tribute_rt.convention_table_ref
     func.return
   }
 }"#,

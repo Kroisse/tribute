@@ -5,7 +5,7 @@ expression: boxed
 core.module @test {
   func.func @f(%0: core.i32) -> core.ptr {
       %1 = clif.iconst {value = 12} : core.i64
-      %2 = clif.call %1 {callee = @__tribute_alloc} : core.ptr
+      %2 = clif.call @__tribute_alloc(%1) : core.ptr
       %3 = clif.iconst {value = 1} : core.i32
       clif.store %3, %2 {offset = 0}
       %4 = clif.iconst {value = 3} : core.i32

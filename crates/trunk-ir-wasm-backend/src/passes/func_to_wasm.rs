@@ -909,10 +909,7 @@ mod tests {
         lower(&mut ctx, module, TypeConverter::new());
 
         let output = print_module(&ctx, module.op());
-        assert!(
-            output.contains("wasm.return_call %0 {callee = @target}"),
-            "{output}"
-        );
+        assert!(output.contains("wasm.return_call @target(%0)"), "{output}");
         assert!(
             output.contains("wasm.return_call_indirect %0(%1) : (core.i32) -> core.nil"),
             "{output}"
@@ -968,10 +965,7 @@ mod tests {
         let output = print_module(&ctx, module.op());
         assert!(output.contains("wasm.table"), "{output}");
         assert!(output.contains("wasm.elem"), "{output}");
-        assert!(
-            output.contains("wasm.ref_func {func_name = @target}"),
-            "{output}"
-        );
+        assert!(output.contains("wasm.ref_func @target"), "{output}");
         assert!(output.contains("wasm.i32_const {value = 0}"), "{output}");
         assert!(output.contains("wasm.return_call_indirect"), "{output}");
     }

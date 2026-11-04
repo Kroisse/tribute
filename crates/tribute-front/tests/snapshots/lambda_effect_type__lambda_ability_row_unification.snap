@@ -11,7 +11,7 @@ core.module @test {
           tribute_control.return %1
       }
       %2 = arith.const {value = 42} : core.i32
-      %3 = tribute_control.call %0, %2 {callee = @"pkg::with_state$Nat$Nat", row_args = [{tail = 0}]} : core.i32
+      %3 = tribute_control.call @"pkg::with_state$Nat$Nat"(%0, %2) attributes {row_args = [{tail = 0}]} : core.i32
       tribute_control.return %3
   }
   tribute_control.func @"pkg::with_state$Nat$Nat"['a0](%0: !t0, %1: core.i32) -> core.i32 row(| 'a0) {
@@ -26,7 +26,7 @@ core.module @test {
                   %7 = tribute_control.resume %5, %1 : core.i32
                   tribute_control.return %7
               }
-              %8 = tribute_control.call %6, %1 {callee = @"pkg::with_state$Nat$Nat", row_args = [{tail = 0}]} : core.i32
+              %8 = tribute_control.call @"pkg::with_state$Nat$Nat"(%6, %1) attributes {row_args = [{tail = 0}]} : core.i32
               tribute_control.yield %8
           }
           tribute_control.handler op @"ability_2_10_pkg::State_3_nat" @set(%9: core.i32, %10: tribute_control.resume_token<core.nil, core.i32>) : core.nil {
@@ -35,7 +35,7 @@ core.module @test {
                   %13 = tribute_control.resume %10, %12 : core.i32
                   tribute_control.return %13
               }
-              %14 = tribute_control.call %11, %9 {callee = @"pkg::with_state$Nat$Nat", row_args = [{tail = 0}]} : core.i32
+              %14 = tribute_control.call @"pkg::with_state$Nat$Nat"(%11, %9) attributes {row_args = [{tail = 0}]} : core.i32
               tribute_control.yield %14
           }
       }

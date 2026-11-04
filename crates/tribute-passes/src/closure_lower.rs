@@ -5,13 +5,13 @@
 //!
 //! Before:
 //! ```text
-//! %closure = closure.new %captures... {entries = [@lifted_func]}
+//! %closure = closure.new [@lifted_func] %captures...
 //! %result = func.call_indirect %closure, %args...
 //! ```
 //!
 //! After:
 //! ```text
-//! %closure = closure.new %captures... {entries = [@lifted_func]}
+//! %closure = closure.new [@lifted_func] %captures...
 //! %entry = closure.entry %closure {index = 0}
 //! %result = func.call_indirect %entry, %closure, %args...
 //! ```
@@ -143,7 +143,7 @@ impl OpRewritePattern for LowerClosureNewArena<'_> {
         let captures = closure_new.captures(ctx).to_vec();
         let result_ty = ctx.op_result_types(op)[0];
 
-        // %table = tribute_rt.convention_table {entries = [...]}
+        // %table = tribute_rt.convention_table [...]
         let table_ty = tribute_rt::ConventionTableRef::params()
             .intern(ctx)
             .as_type_ref();
@@ -1026,13 +1026,13 @@ mod tests {
   }}
 
   func.func @selected(%ev: {ev_ty}, %payload: tribute_rt.anyref) -> tribute_rt.anyref {{
-      %closure = closure.new {{entries = [@trap_direct, @callee, @trap_cps]}} : !closure
+      %closure = closure.new [@trap_direct, @callee, @trap_cps] : !closure
       %result = func.call_indirect %closure(%ev, %payload) attributes {{tribute.calling_convention = "evidence_direct"}} : ({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref
       func.return %result
   }}
 
   func.func @untouched(%ev: {ev_ty}, %payload: tribute_rt.anyref) -> tribute_rt.anyref {{
-      %closure = closure.new {{entries = [@trap_direct, @callee, @trap_cps]}} : !closure
+      %closure = closure.new [@trap_direct, @callee, @trap_cps] : !closure
       %result = func.call_indirect %closure(%ev, %payload) attributes {{tribute.calling_convention = "evidence_direct"}} : ({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref
       func.return %result
   }}
@@ -1102,7 +1102,7 @@ mod tests {
 
   func.func @outer(%outer_ev: {ev_ty}, %payload: tribute_rt.anyref) -> tribute_rt.anyref {{
       func.func @inner(%inner_ev: {ev_ty}, %inner_payload: tribute_rt.anyref) -> tribute_rt.anyref {{
-          %closure = closure.new {{entries = [@trap_direct, @callee, @trap_cps]}} : !closure
+          %closure = closure.new [@trap_direct, @callee, @trap_cps] : !closure
           %result = func.call_indirect %closure(%inner_ev, %inner_payload) attributes {{tribute.calling_convention = "evidence_direct"}} : ({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref
           func.return %result
       }}
@@ -1314,7 +1314,7 @@ mod tests {
   !closure = closure.closure<func.func_sig<(core.i32) -> core.i32>>
   !nested = core.tuple<!closure>
   func.func @run(%callback: !closure) -> !nested {
-    %created = closure.new {entries = [@callback]} : !closure
+    %created = closure.new [@callback] : !closure
     %packed = core.unrealized_conversion_cast %created : !nested
     func.return %packed
   }
@@ -1427,7 +1427,7 @@ mod tests {
     func.unreachable
   }}
   func.func @run(%evidence: {evidence}, %done: core.i32) -> core.never attributes {{tribute.calling_convention = "cps"}} {{
-    %callee = closure.new {{entries = [@callee]}} : !cps
+    %callee = closure.new [@callee] : !cps
     func.tail_call_indirect %callee(%evidence, %done) : ({evidence}, core.i32) -> core.never
   }}
 }}"#
@@ -1525,7 +1525,7 @@ mod tests {
     func.unreachable
   }}
   func.func @make(%first: core.i64, %second: core.i32) -> !closure {{
-    %created = closure.new %first, %second {{entries = [@code, @trap_evidence_direct, @trap_cps]}} : !closure
+    %created = closure.new [@code, @trap_evidence_direct, @trap_cps] %first, %second : !closure
     func.return %created
   }}
 }}"#
@@ -1638,7 +1638,7 @@ mod tests {
     func.unreachable
   }}
   func.func @make() -> !closure {{
-    %created = closure.new {{entries = [{reference}, @trap_evidence_direct, @trap_cps]}} : !closure
+    %created = closure.new [{reference}, @trap_evidence_direct, @trap_cps] : !closure
     func.return %created
   }}
 }}"#
@@ -1651,7 +1651,7 @@ mod tests {
         let ir = print_module(&ctx, module.op());
         assert!(!ir.contains("closure.new"), "{ir}");
         assert!(
-            ir.contains(r#"tribute_rt.convention_table {entries = [@left::@helper, @trap_evidence_direct, @trap_cps]} : tribute_rt.convention_table_ref"#),
+            ir.contains(r#"tribute_rt.convention_table [@left::@helper, @trap_evidence_direct, @trap_cps] : tribute_rt.convention_table_ref"#),
             "{ir}"
         );
 
