@@ -94,16 +94,9 @@ pub fn parse_cst(db: &dyn salsa::Database, source: SourceCst) -> Option<ParsedCs
 // Module-level queries
 // =============================================================================
 
-/// Parse a source file to AST.
-///
-/// Both `parsed_module` and `span_map` derive from this, and
-/// [`crate::astgen::lower_source_to_parsed_ast_with_module_path`] tracks it.
-pub fn parsed_ast<'db>(
-    db: &'db dyn salsa::Database,
-    source: SourceCst,
-) -> Option<&'db crate::astgen::ParsedAst<'db>> {
-    crate::astgen::lower_source_to_parsed_ast(db, source)
-}
+/// Parse a source file to AST. Both `parsed_module` and `span_map` derive
+/// from this.
+pub use crate::astgen::lower_source_to_parsed_ast as parsed_ast;
 
 /// Parse a source file to an AST module.
 ///
