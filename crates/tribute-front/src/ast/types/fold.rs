@@ -340,7 +340,7 @@ impl<'db> AbilityRow<'db> {
     ) -> Result<Self, F::Error> {
         let db = folder.db();
         Ok(match fold_slice(self.instances(db), folder)? {
-            Some(instances) => AbilityRow::new(db, instances, self.rest(db).copied()),
+            Some(instances) => self.with_instances(db, instances),
             None => self,
         })
     }

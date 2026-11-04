@@ -65,10 +65,9 @@ impl<'a> SpanFiles<'a> {
     /// build read, such as a file module, a manifest, or a dependency's
     /// file, or else the root.
     fn file(&self, source: u64) -> SourceCst {
-        SourceFiles::try_get(self.db)
+        *SourceFiles::try_get(self.db)
             .and_then(|files| files.provider(self.db).find(self.db, source))
-            .copied()
-            .unwrap_or(self.root)
+            .unwrap_or(&self.root)
     }
 
     /// Read the lines that `spans`, byte ranges in their files, cover.

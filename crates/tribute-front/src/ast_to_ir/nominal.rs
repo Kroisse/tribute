@@ -137,10 +137,10 @@ impl<'db> NominalTypes<'db> {
     /// The tail unions `scheme` declares, numbered by the current binders.
     /// Only a union of several open sources selects evidence by tail.
     pub(crate) fn row_unions(&self, scheme: TypeScheme<'db>) -> Vec<RowUnion> {
-        let index = |variable: RowVar| {
+        let index = |variable: &RowVar| {
             self.current_row_binders
                 .iter()
-                .position(|(bound, _)| *bound == variable)
+                .position(|(bound, _)| bound == variable)
                 .and_then(|index| u32::try_from(index).ok())
         };
         scheme
@@ -153,11 +153,10 @@ impl<'db> NominalTypes<'db> {
                     .iter()
                     .filter_map(|source| source.rest(self.db))
                     .filter(|source| *source != result)
-                    .copied()
                     .map(index)
                     .collect::<Option<_>>()?;
                 (sources.len() > 1).then_some(RowUnion {
-                    result: index(*result)?,
+                    result: index(result)?,
                     sources,
                 })
             })

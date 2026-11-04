@@ -79,7 +79,7 @@ pub fn add_effect<'db>(
     if !effects.contains(&effect) {
         effects.push(effect);
     }
-    AbilityRow::new(db, effects, row.rest(db).copied())
+    row.with_instances(db, effects)
 }
 
 /// Remove an effect from an ability row, returning a new row.
@@ -94,7 +94,7 @@ pub fn remove_effect<'db>(
     if let Some(pos) = effects.iter().position(|e| e == effect) {
         let mut new_effects = effects.to_vec();
         new_effects.remove(pos);
-        Some(AbilityRow::new(db, new_effects, row.rest(db).copied()))
+        Some(row.with_instances(db, new_effects))
     } else {
         None
     }
@@ -374,7 +374,7 @@ mod laws {
                 }
                 (a, b) => {
                     prop_assert_eq!(fresh.used(), 0);
-                    prop_assert_eq!(result.rest(&db).copied(), a.or(b).map(|id| RowVar { id }));
+                    prop_assert_eq!(result.rest(&db).map(|var| var.id), a.or(b));
                     prop_assert_eq!(relation, None);
                 }
             }

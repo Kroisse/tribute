@@ -418,7 +418,7 @@ impl<'db> TypeChecker<'db> {
                                 effects.push(effect.clone());
                             }
                         }
-                        AbilityRow::new(self.db(), effects, resume_effect.rest(self.db()).copied())
+                        resume_effect.with_instances(self.db(), effects)
                     }
                     (None, None) => AbilityRow::new(
                         self.db(),
@@ -2623,7 +2623,7 @@ impl<'db> TypeChecker<'db> {
         solver.make_row_representatives(
             ctx.deferred_methods()
                 .iter()
-                .filter_map(|method| method.effect.rest(self.db()).copied()),
+                .filter_map(|method| method.effect.rest(self.db())),
         );
 
         let type_subst = solver.type_subst().clone();

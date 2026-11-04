@@ -360,10 +360,7 @@ mod tests {
                     let TypeKind::Func { effect, .. } = element.kind(db) else {
                         panic!("tuple element should remain a function");
                     };
-                    effect
-                        .rest(db)
-                        .copied()
-                        .expect("ability row should remain open")
+                    *effect.rest(db).expect("ability row should remain open")
                 })
                 .collect::<Vec<_>>()
         };

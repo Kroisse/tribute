@@ -343,8 +343,7 @@ impl<'db> RowSubst<'db> {
                     effects.push(effect.clone());
                 }
             }
-            let rest = subst_row.rest(db).copied();
-            row = AbilityRow::new(db, effects, rest);
+            row = subst_row.with_instances(db, effects);
         }
         row
     }

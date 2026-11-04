@@ -161,7 +161,7 @@ fn substitute<'db>(
             instances.push(instance.clone());
         }
     }
-    AbilityRow::new(db, instances, replacement.rest(db).copied())
+    replacement.with_instances(db, instances)
 }
 
 /// Source order of actual external SSA uses, with duplicates removed.

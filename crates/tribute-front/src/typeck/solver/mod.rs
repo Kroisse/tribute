@@ -53,7 +53,7 @@ pub(super) fn map_ability_row_type_args<'db>(
         })
         .collect();
     if new_effects != *effects {
-        AbilityRow::new(db, new_effects, row.rest(db).copied())
+        row.with_instances(db, new_effects)
     } else {
         row
     }
@@ -144,8 +144,11 @@ impl<'db> TypeSolver<'db> {
     }
 
     /// Make each `var` the representative of the bare open row it resolved to.
-    pub(crate) fn make_row_representatives(&mut self, vars: impl IntoIterator<Item = RowVar>) {
-        for var in vars {
+    pub(crate) fn make_row_representatives<'a>(
+        &mut self,
+        vars: impl IntoIterator<Item = &'a RowVar>,
+    ) {
+        for &var in vars {
             self.row_subst.make_representative(self.db, var);
         }
     }

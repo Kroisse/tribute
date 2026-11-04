@@ -85,9 +85,8 @@ impl<'db> TypeChecker<'db> {
                     .iter()
                     .position(|row| row == original)
                     .expect("named signature row must be quantified");
-                let row = instance.row_args[index]
+                let &row = instance.row_args[index]
                     .rest(self.db())
-                    .copied()
                     .expect("fresh signature row must be open");
                 ctx.bind_annotation_row(name.clone(), row);
             }
@@ -270,7 +269,7 @@ impl<'db> TypeChecker<'db> {
             }
             // The declared rows name the function's row parameters in every
             // finalized type, whichever alias the solver chose for them.
-            solver.make_row_representatives(scheme.effect_params(self.db()).iter().copied());
+            solver.make_row_representatives(scheme.effect_params(self.db()));
         }
         // No later type can decide an effect equality left ambiguous here.
         if !solve_failed && let Some(error) = solver.unsettled_ambiguity() {

@@ -402,6 +402,15 @@ impl<'db> AbilityRow<'db> {
         Self::new(db, Vec::new(), Some(var))
     }
 
+    /// The row that names `instances` and keeps this row's tail.
+    pub fn with_instances(
+        self,
+        db: &'db dyn salsa::Database,
+        instances: Vec<AbilityInstance<'db>>,
+    ) -> Self {
+        Self::new(db, instances, self.rest(db).copied())
+    }
+
     /// Check if this row is pure (no effects and closed).
     pub fn is_pure(&self, db: &'db dyn salsa::Database) -> bool {
         self.instances(db).is_empty() && self.rest(db).is_none()
