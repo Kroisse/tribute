@@ -1,6 +1,5 @@
 ---
 source: crates/trunk-ir/src/transforms/dce.rs
-assertion_line: 384
 expression: "print_module(&ctx, module.op())"
 ---
 core.module @test {

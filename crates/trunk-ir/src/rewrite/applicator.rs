@@ -1378,9 +1378,9 @@ mod tests {
         let module = crate::parser::parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  %0 = test.source {tag = "first"} : core.i32
-  %1 = test.source {tag = "second"} : core.i32
-  %2 = test.source {tag = "third"} : core.i32
+  %0 = "test.source"() {tag = "first"} : core.i32
+  %1 = "test.source"() {tag = "second"} : core.i32
+  %2 = "test.source"() {tag = "third"} : core.i32
 }"#,
         );
 
@@ -1399,7 +1399,7 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         assert_eq!(printed.matches("test.target").count(), 2, "{printed}");
         assert!(
-            printed.contains(r#"test.source {tag = "second"}"#),
+            printed.contains(r#""test.source"() {tag = "second"}"#),
             "{printed}"
         );
     }
@@ -1514,8 +1514,8 @@ mod tests {
         let module = crate::parser::parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  %0 = test.source : core.i32
-  test.sink %0
+  %0 = "test.source"() : core.i32
+  "test.sink"(%0)
 }"#,
         );
 
@@ -1593,8 +1593,8 @@ mod tests {
         let module = crate::parser::parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  test.waiting
-  test.source
+  "test.waiting"()
+  "test.source"()
 }"#,
         );
 
@@ -1649,7 +1649,7 @@ mod tests {
         let module = crate::parser::parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  test.source
+  "test.source"()
 }"#,
         );
         let i32_ty = i32_type(&mut ctx);

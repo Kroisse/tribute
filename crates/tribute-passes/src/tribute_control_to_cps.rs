@@ -421,7 +421,7 @@ fn collect_callable_graph(ctx: &IrContext, module: Module, symbols: &SymbolTable
     let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
         if let Ok(reference) = tribute_cps::FuncRef::from_op(ctx, op)
             && let Some(table) = symbols
-                .resolve(ctx, op, reference.func_ref(ctx))
+                .resolve(ctx, op, reference.value(ctx))
                 .filter(|&table| tribute_cps::FuncTable::matches(ctx, table))
         {
             let entries = tribute_cps::table_entries(ctx, table)
@@ -441,7 +441,7 @@ fn collect_callable_graph(ctx: &IrContext, module: Module, symbols: &SymbolTable
         if let Some(target) = attributes
             .view(ctx)
             .get_symbol_ref("callee")
-            .or_else(|| attributes.view(ctx).get_symbol_ref("func_ref"))
+            .or_else(|| attributes.view(ctx).get_symbol_ref("value"))
             .and_then(|reference| symbols.resolve(ctx, op, reference))
             .filter(|target| funcs.contains_key(target))
         {

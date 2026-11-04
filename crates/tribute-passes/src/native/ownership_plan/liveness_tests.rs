@@ -23,7 +23,7 @@ const CROSS_BLOCK_BORROW: &str = r#"core.module @test {
       %loaded = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
       cf.br [^next]
     ^next:
-      %seen = func.call %loaded {callee = @observe} : core.i32
+      %seen = func.call @observe(%loaded) : (!ChildRef) -> core.i32
       func.return
   }
 }"#;
@@ -84,7 +84,7 @@ const NESTED_PROJECTION: &str = r#"core.module @test {
       %nested = adt.struct_get %restored {field = 0, type = !Inner} : !ChildRef
       cf.br [^next]
     ^next:
-      %seen = func.call %nested {callee = @observe} : core.i32
+      %seen = func.call @observe(%nested) : (!ChildRef) -> core.i32
       func.return
   }
 }"#;

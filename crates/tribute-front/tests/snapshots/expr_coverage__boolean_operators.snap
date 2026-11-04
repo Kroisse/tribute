@@ -1,18 +1,17 @@
 ---
 source: crates/tribute-front/tests/expr_coverage.rs
-assertion_line: 118
 expression: ir_text
 ---
 core.module @test {
   tribute_control.func @"pkg::logic"['a0](%0: core.i1, %1: core.i1) -> core.i1 row(| 'a0) inferred {
-      %2 = scf.if %0 : core.i1 {
+      %2 = scf.if %0 -> (core.i1) {
           %3 = arith.const {value = true} : core.i1
           scf.yield %3
-      } {
-          %4 = scf.if %1 : core.i1 {
+      } else {
+          %4 = scf.if %1 -> (core.i1) {
               %5 = arith.const {value = false} : core.i1
               scf.yield %5
-          } {
+          } else {
               %6 = arith.const {value = false} : core.i1
               scf.yield %6
           }

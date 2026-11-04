@@ -1027,13 +1027,13 @@ mod tests {
 
   func.func @selected(%ev: {ev_ty}, %payload: tribute_rt.anyref) -> tribute_rt.anyref {{
       %closure = closure.new {{entries = [@trap_direct, @callee, @trap_cps]}} : !closure
-      %result = func.call_indirect %closure, %ev, %payload {{tribute.calling_convention = "evidence_direct", signature = func.func_sig<({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref>}} : tribute_rt.anyref
+      %result = func.call_indirect %closure(%ev, %payload) attributes {{tribute.calling_convention = "evidence_direct"}} : ({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref
       func.return %result
   }}
 
   func.func @untouched(%ev: {ev_ty}, %payload: tribute_rt.anyref) -> tribute_rt.anyref {{
       %closure = closure.new {{entries = [@trap_direct, @callee, @trap_cps]}} : !closure
-      %result = func.call_indirect %closure, %ev, %payload {{tribute.calling_convention = "evidence_direct", signature = func.func_sig<({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref>}} : tribute_rt.anyref
+      %result = func.call_indirect %closure(%ev, %payload) attributes {{tribute.calling_convention = "evidence_direct"}} : ({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref
       func.return %result
   }}
 }}"#
@@ -1103,7 +1103,7 @@ mod tests {
   func.func @outer(%outer_ev: {ev_ty}, %payload: tribute_rt.anyref) -> tribute_rt.anyref {{
       func.func @inner(%inner_ev: {ev_ty}, %inner_payload: tribute_rt.anyref) -> tribute_rt.anyref {{
           %closure = closure.new {{entries = [@trap_direct, @callee, @trap_cps]}} : !closure
-          %result = func.call_indirect %closure, %inner_ev, %inner_payload {{tribute.calling_convention = "evidence_direct", signature = func.func_sig<({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref>}} : tribute_rt.anyref
+          %result = func.call_indirect %closure(%inner_ev, %inner_payload) attributes {{tribute.calling_convention = "evidence_direct"}} : ({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref
           func.return %result
       }}
       func.return %payload
@@ -1140,7 +1140,7 @@ mod tests {
             "module entrypoint should lower closure.new:\n{ir}"
         );
         assert!(
-            !ir.contains("closure.func") && !ir.contains("closure.unpack"),
+            !ir.contains("closure.entry") && !ir.contains("closure.unpack"),
             "module entrypoint should lower closure accessors:\n{ir}"
         );
         let exact_calls = collect_ops(&ctx, module.op())
@@ -1184,7 +1184,7 @@ mod tests {
             "module lowering must revisit nested functions:\n{inner_ir}"
         );
         assert!(
-            !inner_ir.contains("closure.func") && !inner_ir.contains("closure.unpack"),
+            !inner_ir.contains("closure.entry") && !inner_ir.contains("closure.unpack"),
             "nested closure accessors must be fully lowered:\n{inner_ir}"
         );
         let inner_calls = call_indirect_operands_in_func(&ctx, inner);
@@ -1204,10 +1204,10 @@ mod tests {
             r#"core.module @test {
             !Cps = closure.closure<func.func_sig<(core.i32) -> core.never>>
             func.func @invalid(%callee: !Cps, %value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-                func.tail_call_indirect %callee, %value
+                func.tail_call_indirect %callee(%value) : (core.i32) -> core.never
             }
             func.func @otherwise_lowerable(%callee: !Cps) -> core.i32 {
-                %code = closure.func %callee : core.i32
+                %code = closure.entry %callee {index = 0} : core.i32
                 func.return %code
             }
         }"#,
@@ -1224,22 +1224,22 @@ mod tests {
         for (signature_results, call, supported) in [
             (
                 "core.i32",
-                "func.call_indirect %callee {tribute.calling_convention = \"direct\"}",
+                "\"func.call_indirect\"(%callee) {tribute.calling_convention = \"direct\"}",
                 false,
             ),
             (
                 "core.i32",
-                "%first, %extra = func.call_indirect %callee {tribute.calling_convention = \"direct\"} : core.i32, core.i32",
+                "%first, %extra = \"func.call_indirect\"(%callee) {tribute.calling_convention = \"direct\"} : core.i32, core.i32",
                 false,
             ),
             (
                 "()",
-                "func.call_indirect %callee {tribute.calling_convention = \"direct\"}",
+                "\"func.call_indirect\"(%callee) {tribute.calling_convention = \"direct\"}",
                 false,
             ),
             (
                 "core.i32",
-                "%result = func.call_indirect %callee {tribute.calling_convention = \"direct\"} : core.i32",
+                "%result = \"func.call_indirect\"(%callee) {tribute.calling_convention = \"direct\"} : core.i32",
                 true,
             ),
         ] {
@@ -1255,11 +1255,11 @@ mod tests {
             !Callback = closure.closure<func.func_sig<() -> core.i32>>
             func.func @invalid(%callee: !Callback) -> core.i32 {{
                 {call}
-                %zero = arith.constant {{value = 0}} : core.i32
+                %zero = arith.const {{value = 0}} : core.i32
                 func.return %zero
             }}
             func.func @otherwise_lowerable(%callee: !Callback) -> core.i32 {{
-                %code = closure.func %callee : core.i32
+                %code = closure.entry %callee {{index = 0}} : core.i32
                 func.return %code
             }}
         }}"#,
@@ -1331,7 +1331,7 @@ mod tests {
   !nested = core.tuple<!closure>
   func.func @run(%callback: !closure) -> !nested {
     %created = closure.new {entries = [@callback]} : !closure
-    %packed = core.tuple_pack %created : !nested
+    %packed = core.unrealized_conversion_cast %created : !nested
     func.return %packed
   }
 }"#,
@@ -1373,7 +1373,7 @@ mod tests {
                 r#"core.module @test {{
   !cps = closure.closure<func.func_sig<({ev}, core.i32, core.i32, core.i32) -> core.never>>
   func.func @run(%callee: !cps, %evidence: {ev}, %done: core.i32, %dispatch: core.i32, %value: core.i32) -> core.never attributes {{tribute.calling_convention = "cps"}} {{
-    func.tail_call_indirect %callee, %evidence, %done, %dispatch, %value {{tribute.calling_convention = "cps", signature = func.func_sig<({ev}, core.i32, core.i32, core.i32) -> core.never>}}
+    func.tail_call_indirect %callee(%evidence, %done, %dispatch, %value) attributes {{tribute.calling_convention = "cps"}} : ({ev}, core.i32, core.i32, core.i32) -> core.never
   }}
 }}"#
             ),
@@ -1444,7 +1444,7 @@ mod tests {
   }}
   func.func @run(%evidence: {evidence}, %done: core.i32) -> core.never attributes {{tribute.calling_convention = "cps"}} {{
     %callee = closure.new {{entries = [@callee]}} : !cps
-    func.tail_call_indirect %callee, %evidence, %done
+    func.tail_call_indirect %callee(%evidence, %done) : ({evidence}, core.i32) -> core.never
   }}
 }}"#
             ),
@@ -1480,8 +1480,8 @@ mod tests {
             r#"core.module @test {
   func.func @external(%value: core.i32) -> core.i32
   func.func @caller(%value: core.i32) -> core.i32 {
-    %callee = func.constant {func_ref = @external} : func.func_sig<(core.i32) -> core.i32>
-    %result = func.call_indirect %callee, %value : core.i32
+    %callee = func.constant @external : (core.i32) -> core.i32
+    %result = func.call_indirect %callee(%value) : (core.i32) -> core.i32
     func.return %result
   }
 }"#,
@@ -1500,7 +1500,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @caller(%callee: func.func_sig<(core.i32) -> core.i32>, %value: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
-    %result = func.call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> core.i32>, tribute.calling_convention = "direct"} : core.i32
+    %result = func.call_indirect %callee(%value) attributes {tribute.calling_convention = "direct"} : (core.i32) -> core.i32
     func.return %result
   }
 }"#,
@@ -1697,11 +1697,11 @@ mod tests {
     func.unreachable
   }}
   func.func @run(%callee: !outer, %evidence: {evidence}, %done: core.i32) -> core.never attributes {{tribute.calling_convention = "cps"}} {{
-    %function = func.constant {{func_ref = @actual_fn}} : func.func_sig<({evidence}, core.i32, core.i1) -> core.never>
+    %function = func.constant @actual_fn : ({evidence}, core.i32, core.i1) -> core.never
     %environment = adt.ref_null {{type = tribute_rt.anyref}} : tribute_rt.anyref
     %pack = adt.struct_new %function, %environment {{type = !_closure}} : !_closure
     %argument = core.unrealized_conversion_cast %pack : !actual
-    func.tail_call_indirect %callee, %evidence, %done, %argument {{tribute.calling_convention = "cps"}}
+    func.tail_call_indirect %callee(%evidence, %done, %argument) attributes {{tribute.calling_convention = "cps"}} : ({evidence}, core.i32, !expected) -> core.never
   }}
 }}"#
             ),

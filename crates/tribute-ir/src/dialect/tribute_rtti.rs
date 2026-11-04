@@ -34,6 +34,7 @@ mod tribute_rtti {
     /// `fields` lists one kind per field of that variant. For an `adt.array`,
     /// `tag` is absent and `fields` is the kind of its element.
     #[verify]
+    #[asm_format(attr_dict_bare)]
     fn layout(
         r#type: Attr<Type>,
         tag: Option<Attr<String>>,
@@ -46,6 +47,7 @@ mod tribute_rtti {
     ///
     /// Reading a null reference is undefined.
     #[flags(Pure)]
+    #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn descriptor(r#ref: Value<impl ManagedRef>) -> Value<I32> {}
 }
 

@@ -340,7 +340,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  clif.data {align = 1, bytes = b"\0", sym_name = "__tribute_convention_table_0"}
+  clif.data @__tribute_convention_table_0(b"\0") align 1
   func.func @make() -> core.nil {
     %a = tribute_rt.convention_table {entries = [@first]} : tribute_rt.convention_table_ref
     %b = tribute_rt.convention_table {entries = [@second, @first]} : tribute_rt.convention_table_ref
@@ -409,7 +409,7 @@ mod tests {
     %3 = adt.struct_get %2 {field = 0, type = !Captures} : tribute_rt.convention_table_ref
     %4 = adt.struct_get %2 {field = 1, type = !Captures} : core.ptr
     %6 = tribute_rt.convention_entry %3 {index = 0} : core.i32
-    %5 = func.call_indirect %6, %4 {signature = func.func_sig<(core.ptr) -> core.i32>} : core.i32
+    %5 = func.call_indirect %6(%4) : (core.ptr) -> core.i32
     func.return %5
   }
 }"#,
@@ -429,7 +429,7 @@ mod tests {
     %3 = adt.struct_get %2 {field = 0, type = !Captures} : tribute_rt.convention_table_ref
     %4 = adt.struct_get %2 {field = 1, type = !Captures} : tribute_rt.anyref
     %6 = tribute_rt.convention_entry %3 {index = 0} : core.i32
-    %5 = func.call_indirect %6, %4 {signature = func.func_sig<(core.ptr) -> core.i32>} : core.i32
+    %5 = func.call_indirect %6(%4) : (core.ptr) -> core.i32
     func.return %5
   }
 }"#,

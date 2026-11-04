@@ -3,12 +3,14 @@
 #[trunk_ir::dialect]
 mod cf {
     #[implements(Branch)]
+    #[asm_format(args "[" successor(dest) "]" attr_dict_bare)]
     fn br(args: Variadic<_>) {
         #[successor(dest)]
         {}
     }
 
     #[implements(Branch)]
+    #[asm_format(cond "[" successor(then_dest) "," successor(else_dest) "]" attr_dict_bare)]
     fn cond_br(cond: Value<_>) {
         #[successor(then_dest)]
         {}

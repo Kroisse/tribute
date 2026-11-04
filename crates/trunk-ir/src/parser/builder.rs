@@ -663,7 +663,7 @@ mod tests {
     fn test_roundtrip_namespaced_type_attribute_key() {
         let input = r#"
 core.module @test {
-  %0 = test.make : test.value<{test.marker = 2}>
+  %0 = "test.make"() : test.value<{test.marker = 2}>
 }
 "#;
         let mut ctx = IrContext::new();
@@ -678,7 +678,7 @@ core.module @test {
         let input = r#"core.module @test {test.flag = 1, test.string = test.value<{name = @Str}>} {
   !Str = test.value<{name = @Str}>
 
-  %0 = test.make : !Str
+  %0 = "test.make"() : !Str
 }
 "#;
         let mut ctx = IrContext::new();
@@ -689,9 +689,30 @@ core.module @test {
     }
 
     #[test]
+    fn regions_without_blocks_are_not_read_as_an_attribute_dictionary() {
+        let input = r#"core.module @test {
+  "test.op"() ({
+  }, {
+  })
+  "test.op"() ({
+  }) {test.flag = 1}
+}
+"#;
+        let mut ctx = IrContext::new();
+        let root = parse_module(&mut ctx, input).expect("empty regions parse");
+        let module = Module::new(&ctx, root).unwrap();
+        let ops = module.ops(&ctx);
+        assert_eq!(ctx.op_region_count(ops[0]), 2);
+        assert!(ctx.op(ops[0]).attributes.is_empty());
+        assert_eq!(ctx.op_region_count(ops[1]), 1);
+        assert_eq!(print_module(&ctx, root), input);
+        assert_roundtrip(&ctx, root);
+    }
+
+    #[test]
     fn test_roundtrip_module_attribute_keys_that_need_quoting() {
         let input = r#"core.module @test {"test.dash-key" = 1, test.plain = 2} {
-  %0 = test.make : core.i32
+  %0 = "test.make"() : core.i32
 }
 "#;
         let mut ctx = IrContext::new();
@@ -705,7 +726,7 @@ core.module @test {
     fn test_roundtrip_dict_attributes() {
         let input = r#"
 core.module @test {
-  %0 = test.make {meta = {b = [{}, {k = @v}], a = core.i32}, nested = test.value<{b = {}}>} : test.value<{param = {x = 1}}>
+  %0 = "test.make"() {meta = {b = [{}, {k = @v}], a = core.i32}, nested = test.value<{b = {}}>} : test.value<{param = {x = 1}}>
 }
 "#;
         let mut ctx = IrContext::new();
@@ -728,7 +749,7 @@ core.module @test {
     fn test_roundtrip_dict_keys_that_need_quoting() {
         let input = r#"
 core.module @test {
-  %0 = test.make {meta = {"1st" = 1, "a b" = 2, "q\"uote" = 3, "x::y" = 4, plain.key = 5}} : core.i32
+  %0 = "test.make"() {meta = {"1st" = 1, "a b" = 2, "q\"uote" = 3, "x::y" = 4, plain.key = 5}} : core.i32
 }
 "#;
         let mut ctx = IrContext::new();
@@ -801,7 +822,7 @@ core.module @test {
 
     #[test]
     fn test_dict_attribute_rejects_duplicate_keys() {
-        let input = "core.module @test { %0 = test.make {meta = {a = 1, a = 2}} : core.i32 }";
+        let input = "core.module @test { %0 = \"test.make\"() {meta = {a = 1, a = 2}} : core.i32 }";
         let mut ctx = IrContext::new();
         let error = parse_module(&mut ctx, input).expect_err("duplicate key must be rejected");
         assert!(
@@ -1182,9 +1203,9 @@ core.module @test {
   func.func @f() -> core.i32 {
     ^entry:
       %cond = arith.const {value = 1} : core.i1
-      scf.br [^left]
+      "scf.br"()[^left]
     ^left(%x: core.i32):
-      scf.br [^right]
+      "scf.br"()[^right]
     ^right(%x: core.i32):
       func.return %x
   }
@@ -1197,9 +1218,9 @@ core.module @test {
   func.func @f(%0: core.i32) -> core.i32 {
     ^entry:
       %cond = arith.const {value = 1} : core.i1
-      %r = scf.if %cond : core.i32 {
-        scf.br [^entry]
-      } {
+      %r = scf.if %cond -> (core.i32) {
+        "scf.br"()[^entry]
+      } else {
         scf.yield %0
       }
       func.return %r
@@ -1295,7 +1316,7 @@ core.module @test {
   func.func @main() -> core.i32 {
     %0 = arith.const {value = 40} : core.i32
     %1 = arith.const {value = 2} : core.i32
-    %2 = func.call %0, %1 {callee = @add} : core.i32
+    %2 = func.call @add(%0, %1) : (core.i32, core.i32) -> core.i32
     func.return %2
   }
 }"#;
@@ -1391,7 +1412,7 @@ core.module @test {
     fn generic_shared_func_assembly_remains_parseable() {
         let input = r#"core.module @test {
   !signature = func.func_sig<(core.i32) -> core.i32>
-  func.func {sym_name = "generic", type = !signature}
+  func.func @generic(%0: core.i32) -> core.i32
 }"#;
         let mut ctx = IrContext::new();
         let module = parse_module(&mut ctx, input).expect("generic func assembly should parse");
@@ -1408,7 +1429,7 @@ core.module @test {
     #[test]
     fn wasm_assembly_keeps_an_explicit_shared_signature_shared() {
         let input = r#"core.module @test {
-  wasm.func {sym_name = "unlowered", type = func.func_sig<() -> core.nil>} { wasm.return }
+  "wasm.func"() ({ wasm.return }) {sym_name = "unlowered", type = func.func_sig<() -> core.nil>}
 }"#;
         let mut ctx = IrContext::new();
         let module = parse_module(&mut ctx, input).expect("explicit assembly should parse");
@@ -1695,7 +1716,7 @@ core.module @test {
     fn test_roundtrip_bytes_const() {
         let input = r#"core.module @test {
   func.func @f() -> core.bytes {
-    %0 = test.bytes_const {value = b"hello"} : core.bytes
+    %0 = "test.bytes_const"() {value = b"hello"} : core.bytes
     func.return %0
   }
 }"#;

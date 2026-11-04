@@ -1,6 +1,5 @@
 ---
 source: crates/tribute-passes/src/native/adt_to_clif.rs
-assertion_line: 395
 expression: result
 ---
 core.module @test {

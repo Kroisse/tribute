@@ -294,7 +294,7 @@ impl<'a> Instance<'a> {
         let expected = self.conventions(&signature.row(self.ctx), op)[0];
         let weakest = tribute_cps::FuncRef::from_op(self.ctx, op)
             .ok()
-            .and_then(|reference| reference.func_ref(self.ctx).as_simple().cloned())
+            .and_then(|reference| reference.value(self.ctx).as_simple().cloned())
             .and_then(|name| self.tables.get(name.as_str()))
             .and_then(|&table| tribute_cps::table_entries(self.ctx, table))
             .and_then(|entries| entries.first().map(|&(convention, _)| convention));

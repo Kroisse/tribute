@@ -353,7 +353,7 @@ fn terminate() ->{Abort} Never {
     let ir_text = run_ast_pipeline_with_ir(db, source);
     let terminate = checked_logical_function(ir_text, "terminate");
     assert!(
-        terminate.contains("tribute_control.perform") && terminate.contains(": core.never"),
+        terminate.contains("tribute_control.perform") && terminate.contains(": () -> core.never"),
         "a Never perform must retain its logical result type:\n{terminate}"
     );
 }
@@ -459,11 +459,12 @@ fn main() -> Nil { }
     let instance = |name: &str| {
         let function = logical_function(ir_text, name);
         let start = function
-            .find("ability = @")
+            .find("tribute_control.perform ")
             .unwrap_or_else(|| panic!("{name} performs an ability:\n{function}"))
-            + "ability = @".len();
+            + "tribute_control.perform ".len();
         let symbol = &function[start..];
-        symbol[..symbol.find([',', '}']).unwrap()].to_owned()
+        let symbol = &symbol[symbol.find('@').unwrap() + 1..];
+        symbol[..symbol.find(" @").unwrap()].to_owned()
     };
     assert_ne!(
         instance("read_a"),
@@ -1306,16 +1307,9 @@ fn run() ->{Trace} Pair {
     );
     let ir = run_ast_pipeline_with_ir(db, source);
     let run = checked_logical_function(ir, "run");
-    assert_in_order(
-        run,
-        &[
-            "op_name = \"spread\"",
-            "op_name = \"field\"",
-            "adt.struct_new",
-        ],
-    );
-    assert_occurrences(run, "op_name = \"spread\", operation_kind", 1);
-    assert_occurrences(run, "op_name = \"field\", operation_kind", 1);
+    assert_in_order(run, &["@spread(", "@field(", "adt.struct_new"]);
+    assert_occurrences(run, "@spread(", 1);
+    assert_occurrences(run, "@field(", 1);
 }
 
 /// Logical aggregate construction and matching must preserve callable fields
@@ -1677,11 +1671,11 @@ fn run() ->{Flag} Nat {
     assert_in_order(
         run,
         &[
-            "op_name = \"choose\"",
             "adt.struct_get",
             "list.head",
             "callee = @\"pkg::allowed\"",
             "tribute_control.resume",
+            "op_name = \"choose\"",
         ],
     );
 }
@@ -1765,13 +1759,13 @@ fn assert_resume_shape(function: &str) {
     );
 }
 fn assert_single_perform_shape(function: &str) {
-    assert!(function.contains("operation_kind = \"op\""));
+    assert!(function.contains("tribute_control.perform op "));
 }
 fn assert_perform_then_value_shape(function: &str) {
-    assert_in_order(function, &["op_name = \"get\"", "tribute_control.return"]);
+    assert_in_order(function, &["@get(", "tribute_control.return"]);
 }
 fn assert_sequential_performs_shape(function: &str) {
-    assert_in_order(function, &["op_name = \"set\"", "op_name = \"get\""]);
+    assert_in_order(function, &["@set(", "@get("]);
 }
 fn assert_nested_argument_shape(function: &str) {
     assert_in_order(
@@ -1863,13 +1857,13 @@ fn assert_op_handler_shape(function: &str) {
         function,
         &[
             "tribute_control.handle",
-            "kind = \"op\"",
+            "tribute_control.handler op ",
             "tribute_control.resume",
         ],
     );
 }
 fn assert_fn_handler_shape(function: &str) {
-    assert!(function.contains("kind = \"fn\""));
+    assert!(function.contains("tribute_control.handler fn "));
 }
 fn assert_handle_strict_value_shape(function: &str) {
     assert_in_order(
@@ -1923,5 +1917,5 @@ fn assert_aggregate_shape(function: &str) {
     );
 }
 fn assert_multi_argument_shape(function: &str) {
-    assert!(function.contains("tribute_control.perform %0, %1"));
+    assert!(function.contains("(%0, %1) : ("));
 }

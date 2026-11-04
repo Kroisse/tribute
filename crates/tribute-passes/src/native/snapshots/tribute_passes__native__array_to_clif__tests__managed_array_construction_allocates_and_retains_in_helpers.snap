@@ -1,5 +1,6 @@
 ---
 source: crates/tribute-passes/src/native/array_to_clif.rs
+assertion_line: 821
 expression: lowered
 ---
   clif.func @build(%0: core.ptr, %1: core.ptr, %2: core.i64) -> core.ptr {
@@ -44,7 +45,6 @@ expression: lowered
       clif.return %30
   }
   clif.func @__tribute_array_new_5(%0: core.i64, %1: core.ptr) -> core.ptr {
-    ^bb0:
       %2 = clif.iconst {value = 1152921504606846973} : core.i64
       %3 = clif.icmp %0, %2 {cond = "ugt"} : core.i8
       clif.trapnz %3 {code = "array_size_overflow"}
@@ -78,7 +78,6 @@ expression: lowered
       clif.return %12
   }
   clif.func @__tribute_array_splice_5(%0: core.ptr, %1: core.i64, %2: core.i64, %3: core.i64) -> core.ptr {
-    ^bb0:
       %4 = clif.load %0 {offset = 0} : core.i64
       %5 = clif.icmp %1, %2 {cond = "ugt"} : core.i8
       clif.trapnz %5 {code = "array_splice_out_of_bounds"}

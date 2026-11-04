@@ -511,7 +511,7 @@ mod tests {
                     attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::Nat::+"}
                 func.func @caller(%0: core.i32, %1: core.i32) -> core.i32 {
                 ^bb0:
-                    %2 = func.call %0, %1 {callee = @"std::Nat::+"} : core.i32
+                    %2 = func.call @"std::Nat::+"(%0, %1) : (core.i32, core.i32) -> core.i32
                     func.return %2
                 }
             }
@@ -536,7 +536,7 @@ mod tests {
                     attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::Nat::+"}
                 func.func @user() -> func.func_sig<(core.i32, core.i32) -> core.i32> {
                 ^bb0:
-                    %f = func.constant {func_ref = @"std::Nat::+"} : func.func_sig<(core.i32, core.i32) -> core.i32>
+                    %f = func.constant @"std::Nat::+" : (core.i32, core.i32) -> core.i32
                     func.return %f
                 }
             }
@@ -588,7 +588,7 @@ mod tests {
                 }
                 func.func @caller(%0: core.i32, %1: core.i32) -> core.i32 {
                 ^bb0:
-                    %2 = func.call %0, %1 {callee = @"std::Nat::+"} : core.i32
+                    %2 = func.call @"std::Nat::+"(%0, %1) : (core.i32, core.i32) -> core.i32
                     func.return %2
                 }
             }
@@ -614,7 +614,7 @@ mod tests {
                 }
                 func.func @caller(%0: core.i32, %1: core.i32) -> core.i32 {
                 ^bb0:
-                    %2 = func.call %0, %1 {callee = @"std::Nat::+"} : core.i32
+                    %2 = func.call @"std::Nat::+"(%0, %1) : (core.i32, core.i32) -> core.i32
                     func.return %2
                 }
             }

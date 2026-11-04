@@ -541,7 +541,7 @@ impl Instance<'_> {
     ) -> Vec<(String, Vec<Class>)> {
         let is_func_ref = tribute_control::FuncRef::matches(ctx, op);
         let key = if is_func_ref {
-            "func_ref"
+            "value"
         } else if tribute_control::Call::matches(ctx, op)
             || tribute_control::TailCall::matches(ctx, op)
         {

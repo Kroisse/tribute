@@ -542,7 +542,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.table {reftype = "funcref", min = 1, max = 1}
-  wasm.elem {table = 0, offset = 0} {
+  wasm.elem {
     %r = wasm.ref_func {func_name = @constant} : wasm.funcref
   }
   func.func @f() -> core.nil {

@@ -23,12 +23,16 @@ mod wasm_gc {
     /// `core.array`, a value of this type is a GC reference.
     struct Array<Element>;
 
+    #[asm_format(fields attr_dict_bare ":" type(result))]
     fn struct_new(r#type: Attr<Type>, fields: Variadic<_>) -> Value<_> {}
 
+    #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn struct_get(r#type: Attr<Type>, field_idx: Attr<u32>, r#ref: Value<_>) -> Value<_> {}
 
+    #[asm_format(r#ref "," value attr_dict_bare)]
     fn struct_set(r#type: Attr<Type>, field_idx: Attr<u32>, r#ref: Value<_>, value: Value<_>) {}
 
+    #[asm_format(size "," init attr_dict_bare ":" type(result))]
     fn array_new<A: Array>(
         r#type: Attr<TypeOf<A>>,
         size: Value<I32>,
@@ -36,14 +40,17 @@ mod wasm_gc {
     ) -> Value<A> {
     }
 
+    #[asm_format(size attr_dict_bare ":" type(result))]
     fn array_new_default<A: Array>(r#type: Attr<TypeOf<A>>, size: Value<I32>) -> Value<A> {}
 
+    #[asm_format(elements attr_dict_bare ":" type(result))]
     fn array_new_fixed<A: Array>(
         r#type: Attr<TypeOf<A>>,
         elements: Variadic<A::Element>,
     ) -> Value<A> {
     }
 
+    #[asm_format(offset "," size attr_dict_bare ":" type(result))]
     fn array_new_data<A: Array>(
         r#type: Attr<TypeOf<A>>,
         data_idx: Attr<u32>,
@@ -52,6 +59,7 @@ mod wasm_gc {
     ) -> Value<A> {
     }
 
+    #[asm_format(r#ref "," index attr_dict_bare ":" type(result))]
     fn array_get<A: Array>(
         r#type: Attr<TypeOf<A>>,
         r#ref: Value<A>,
@@ -59,6 +67,7 @@ mod wasm_gc {
     ) -> Value<A::Element> {
     }
 
+    #[asm_format(r#ref "," index attr_dict_bare ":" type(result))]
     fn array_get_s<A: Array>(
         r#type: Attr<TypeOf<A>>,
         r#ref: Value<A>,
@@ -66,6 +75,7 @@ mod wasm_gc {
     ) -> Value<_> {
     }
 
+    #[asm_format(r#ref "," index attr_dict_bare ":" type(result))]
     fn array_get_u<A: Array>(
         r#type: Attr<TypeOf<A>>,
         r#ref: Value<A>,
@@ -73,6 +83,7 @@ mod wasm_gc {
     ) -> Value<_> {
     }
 
+    #[asm_format(r#ref "," index "," value attr_dict_bare)]
     fn array_set<A: Array>(
         r#type: Attr<TypeOf<A>>,
         r#ref: Value<A>,
@@ -81,6 +92,7 @@ mod wasm_gc {
     ) {
     }
 
+    #[asm_format(dst "," dst_offset "," src "," src_offset "," len attr_dict_bare)]
     fn array_copy<D: Array, S: Array>(
         dst_type: Attr<TypeOf<D>>,
         src_type: Attr<TypeOf<S>>,
@@ -92,10 +104,13 @@ mod wasm_gc {
     ) {
     }
 
+    #[asm_format(attr_dict_bare ":" type(result))]
     fn ref_null(target_type: Attr<Type>) -> Value<_> {}
 
+    #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn ref_cast(target_type: Attr<Type>, r#ref: Value<_>) -> Value<_> {}
 
+    #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn ref_test(target_type: Attr<Type>, r#ref: Value<_>) -> Value<_> {}
 }
 

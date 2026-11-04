@@ -12,11 +12,12 @@ mod core {
     }
 
     #[implements(Fold)]
-
+    #[asm_format(value attr_dict_bare ":" type(result))]
     fn unrealized_conversion_cast(value: Value<_>) -> Value<_> {}
 
     /// The only value of `core.nil`.
     #[flags(Pure)]
+    #[asm_format(attr_dict_bare ":" type(result))]
     fn nil_value() -> Value<Nil> {}
 
     struct Nil;

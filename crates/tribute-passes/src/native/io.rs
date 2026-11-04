@@ -333,9 +333,12 @@ mod tests {
 
         let output = print_module(&ctx, module.op());
         assert!(!output.contains("tribute_io."), "{output}");
-        assert!(output.contains("callee = @__tribute_io_write"), "{output}");
         assert!(
-            output.contains("callee = @__tribute_io_read_line"),
+            output.contains("func.call @__tribute_io_write("),
+            "{output}"
+        );
+        assert!(
+            output.contains("func.call @__tribute_io_read_line("),
             "{output}"
         );
         assert!(output.contains("tag = \"ReadLine\""), "{output}");

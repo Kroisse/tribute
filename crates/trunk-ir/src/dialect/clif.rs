@@ -28,6 +28,13 @@ mod clif {
     /// pointer-width ranges must fit in `bytes` and must not overlap;
     /// emission checks both against the target pointer width.
     #[verify]
+    ///
+    /// ```text
+    /// clif.data @table(b"\0\0\0\0\0\0\0\0") align 8 {
+    ///   clif.func_reloc {offset = 0, func = @f}
+    /// }
+    /// ```
+    #[asm_format(symbol(sym_name) "(" bytes ")" "align" align attr_dict region(relocs))]
     fn data(sym_name: Attr<String>, bytes: Attr<Bytes>, align: Attr<u32>) {
         #[region(relocs?)]
         {}
@@ -36,9 +43,11 @@ mod clif {
     /// Asks the linker to write the address of `func` over the pointer-sized
     /// bytes at `offset` of the enclosing `data`. Only a `data` region holds it.
     #[verify]
+    #[asm_format(attr_dict_bare)]
     fn func_reloc(offset: Attr<u32>, func: Attr<SymbolRef>) {}
 
     #[implements(CallLike)]
+    #[asm_format(args attr_dict_bare (":" types(results)^)?)]
     fn call(callee: Attr<SymbolRef>, args: Variadic<_>) -> Variadic<_> {}
 
     #[verify]
@@ -51,46 +60,72 @@ mod clif {
     ) -> Variadic<_> {
     }
 
+    #[asm_format(values attr_dict_bare)]
     fn r#return(values: Variadic<_>) {}
 
     // Constants
+    #[asm_format(attr_dict_bare ":" type(result))]
     fn iconst(value: Attr<i64>) -> Value<_> {}
 
+    #[asm_format(attr_dict_bare ":" type(result))]
     fn f32const(value: Attr<f32>) -> Value<_> {}
 
+    #[asm_format(attr_dict_bare ":" type(result))]
     fn f64const(value: Attr<f64>) -> Value<_> {}
 
     // Integer arithmetic
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn iadd(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn isub(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn imul(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn sdiv(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn udiv(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn srem(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn urem(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn ineg(operand: Value<_>) -> Value<_> {}
 
     // Float arithmetic
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn fadd(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn fsub(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn fmul(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn fdiv(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn fneg(operand: Value<_>) -> Value<_> {}
 
     // Comparisons
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn icmp(cond: Attr<String>, lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn fcmp(cond: Attr<String>, lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
     // Bitwise
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn band(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn bor(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn bxor(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn ishl(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn sshr(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn ushr(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
     // Control flow
+    #[asm_format(cond "[" successor(then_dest) "," successor(else_dest) "]" attr_dict_bare)]
     fn brif(cond: Value<_>) {
         #[successor(then_dest)]
         {}
@@ -98,6 +133,7 @@ mod clif {
         {}
     }
 
+    #[asm_format(args "[" successor(dest) "]" attr_dict_bare)]
     fn jump(args: Variadic<_>) {
         #[successor(dest)]
         {}
@@ -108,6 +144,11 @@ mod clif {
     /// `index` is an unsigned 32-bit position in `table`. Control transfers
     /// to the successor at that position, or to `default` when the index is
     /// out of bounds. Successors take no block arguments.
+    ///
+    /// ```text
+    /// clif.br_table %index, ^default [^first, ^second]
+    /// ```
+    #[asm_format(index "," successor(default) "[" successors(table) "]" attr_dict)]
     fn br_table(index: Value<I32>) {
         #[successor(default)]
         {}
@@ -121,7 +162,14 @@ mod clif {
     /// `cases` holds the unsigned value of `index`, or to `default` when no
     /// case matches. Cases may be sparse and need not start at 0. Successors
     /// take no block arguments.
+    ///
+    /// Each case is written with its target:
+    ///
+    /// ```text
+    /// clif.switch %index, ^default [0: ^first, 5: ^second]
+    /// ```
     #[verify]
+    #[asm_format(index "," successor(default) "[" custom(SwitchCases(cases, targets)) "]" attr_dict)]
     fn switch(cases: Attr<[u64]>, index: Value<impl IntegerLike>) {
         #[successor(default)]
         {}
@@ -129,15 +177,18 @@ mod clif {
         {}
     }
 
+    #[asm_format(attr_dict_bare)]
     fn trap(code: Attr<String>) {}
 
     /// Traps when `cond` is non-zero and otherwise continues with the next
     /// operation, like Cranelift's `trapnz`. It is not a terminator, so a
     /// lowering can guard an access without splitting its block. `code`
     /// names the failed check, as `trap`'s does.
+    #[asm_format(cond attr_dict_bare)]
     fn trapnz(code: Attr<String>, cond: Value<impl IntegerLike>) {}
 
     #[implements(CallLike)]
+    #[asm_format(args attr_dict_bare)]
     fn return_call(callee: Attr<SymbolRef>, args: Variadic<_>) {}
 
     #[asm_format(callee "(" args ")" attr_dict ":" signature(sig))]
@@ -150,10 +201,13 @@ mod clif {
     }
 
     // Memory
+    #[asm_format(addr attr_dict_bare ":" type(result))]
     fn load(offset: Attr<i32>, addr: Value<_>) -> Value<_> {}
 
+    #[asm_format(value "," addr attr_dict_bare)]
     fn store(offset: Attr<i32>, value: Value<_>, addr: Value<_>) {}
 
+    #[asm_format(addr "," value attr_dict_bare ":" type(result))]
     fn atomic_rmw(
         bin_op: Attr<String>,
         offset: Attr<i32>,
@@ -162,21 +216,33 @@ mod clif {
     ) -> Value<_> {
     }
 
+    #[asm_format(attr_dict_bare ":" type(result))]
     fn stack_slot(size: Attr<u32>, align: Attr<u32>) -> Value<_> {}
 
+    #[asm_format(slot attr_dict_bare ":" type(result))]
     fn stack_addr(slot: Value<_>) -> Value<_> {}
 
+    #[asm_format(attr_dict_bare ":" type(result))]
     fn symbol_addr(sym: Attr<SymbolRef>) -> Value<_> {}
 
     // Type conversions
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn ireduce(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn uextend(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn sextend(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn fpromote(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn fdemote(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn fcvt_to_sint(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn fcvt_from_sint(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn fcvt_to_uint(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn fcvt_from_uint(operand: Value<_>) -> Value<_> {}
 }
 
@@ -483,6 +549,80 @@ impl crate::ops::Verify for Switch {
     }
 }
 
+/// The cases of a `clif.switch` paired with their targets, as
+/// `0: ^first, 5: ^second`.
+pub struct SwitchCases;
+
+impl crate::asm_format::OpAsmDirective for SwitchCases {
+    /// Each case with its target.
+    type Parts<'a> = Vec<(i128, crate::BlockRef)>;
+
+    fn decompose<'a>(
+        _ctx: &'a crate::IrContext,
+        entities: &'a [crate::asm_format::CustomEntity<'a>],
+    ) -> Option<Self::Parts<'a>> {
+        use crate::asm_format::CustomEntity;
+        let [
+            CustomEntity::Attribute(Some(Attribute::List(cases))),
+            CustomEntity::Successors(targets),
+        ] = entities
+        else {
+            return None;
+        };
+        if cases.len() != targets.len() {
+            return None;
+        }
+        cases
+            .iter()
+            .zip(targets)
+            .map(|(case, &target)| match *case {
+                Attribute::Int(case) => Some((case, target)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn print(
+        h: &mut crate::printer::OpPrintHelper<'_, '_>,
+        parts: Self::Parts<'_>,
+    ) -> std::fmt::Result {
+        use std::fmt::Write as _;
+
+        for (position, (case, target)) in parts.into_iter().enumerate() {
+            if position > 0 {
+                h.write_str(", ")?;
+            }
+            let label = h.block_label(target).to_owned();
+            write!(h, "{case}: {label}")?;
+        }
+        Ok(())
+    }
+
+    fn parse<'a>(
+        input: &mut &'a str,
+    ) -> winnow::ModalResult<Vec<crate::asm_format::RawCustomEntity<'a>>> {
+        use crate::asm_format::RawCustomEntity;
+        use crate::parser::raw::{RawAttribute, block_label, integer_lit, ws};
+        use winnow::Parser as _;
+        use winnow::combinator::{separated, separated_pair};
+
+        let arms: Vec<(i128, &str)> = separated(
+            0..,
+            separated_pair(integer_lit, (ws, ':', ws), block_label),
+            (ws, ',', ws),
+        )
+        .parse_next(input)?;
+        let (cases, targets): (Vec<_>, Vec<_>) = arms
+            .into_iter()
+            .map(|(case, target)| (RawAttribute::Int(case), target))
+            .unzip();
+        Ok(vec![
+            RawCustomEntity::Attribute(Some(RawAttribute::List(cases))),
+            RawCustomEntity::Successors(targets),
+        ])
+    }
+}
+
 impl crate::ops::Verify for Data {
     /// The relocation region holds only `func_reloc` declarations at distinct
     /// offsets.
@@ -596,11 +736,11 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   clif.func @ordinary(%callee: core.ptr, %value: core.i32) -> core.i32 {
-    %result = clif.call_indirect %callee, %value {sig = clif.func_sig<(core.i32) -> core.i32>} : core.i32
+    %result = clif.call_indirect %callee(%value) : (core.i32) -> core.i32
     clif.return %result
   }
   clif.func @tail(%callee: core.ptr, %value: core.i32) -> core.nil {
-    clif.return_call_indirect %callee, %value {sig = clif.func_sig<(core.i32) -> core.nil>}
+    clif.return_call_indirect %callee(%value) : (core.i32) -> core.nil
   }
   clif.func @direct() -> core.nil {
     clif.return
@@ -699,9 +839,9 @@ mod branch_table_tests {
     fn module(branch: &str) -> String {
         format!(
             r#"core.module @test {{
-  clif.func {{sym_name = "select", type = clif.func_sig<(core.i32) -> ()>}} {{
-    ^entry(%index: core.i32):
-      clif.{branch}
+  clif.func @select(%index: core.i32) {{
+    ^entry:
+      {branch}
     ^default:
       clif.return
     ^first:
@@ -743,19 +883,29 @@ mod branch_table_tests {
     #[test]
     fn branch_tables_round_trip() {
         assert_round_trips(
-            "br_table %index [^default, ^first, ^second]",
-            "clif.br_table %0 [^bb1, ^bb2, ^bb3]",
+            "clif.br_table %index, ^default [^first, ^second]",
+            "clif.br_table %0, ^bb1 [^bb2, ^bb3]",
         );
         assert_round_trips(
-            "switch %index [^default, ^first, ^second] {cases = [0, 5]}",
-            "clif.switch %0 [^bb1, ^bb2, ^bb3] {cases = [0, 5]}",
+            "clif.br_table %index, ^default []",
+            "clif.br_table %0, ^bb1 []",
+        );
+        assert_round_trips(
+            "clif.switch %index, ^default [0: ^first, 18446744073709551615: ^second]",
+            "clif.switch %0, ^bb1 [0: ^bb2, 18446744073709551615: ^bb3]",
+        );
+        assert_round_trips("clif.switch %index, ^default []", "clif.switch %0, ^bb1 []");
+        // A switch whose cases and targets disagree has no custom form.
+        assert_round_trips(
+            r#""clif.switch"(%index)[^default, ^first] {cases = [0, 5]}"#,
+            "\"clif.switch\"(%0)[^bb1, ^bb2] {cases = [0, 5]}",
         );
     }
 
     #[test]
     fn branch_table_builders_take_the_default_then_the_rest() {
         let mut ctx = crate::IrContext::new();
-        let parsed = parse_test_module(&mut ctx, &module("br_table %index [^default]"));
+        let parsed = parse_test_module(&mut ctx, &module("clif.br_table %index, ^default []"));
         let func = Func::from_op(&ctx, parsed.ops(&ctx)[0]).unwrap();
         let blocks = ctx.region(func.body(&ctx)).blocks.clone();
         let index = ctx.block_args(blocks[0])[0];
@@ -779,17 +929,14 @@ mod branch_table_tests {
     #[test]
     fn switch_requires_one_target_per_distinct_case() {
         assert_eq!(
-            switch_violations("switch %index [^default, ^first, ^second] {cases = [0, 5]}"),
+            switch_violations("clif.switch %index, ^default [0: ^first, 5: ^second]"),
             ""
         );
-        assert_eq!(
-            switch_violations("switch %index [^default] {cases = []}"),
-            ""
-        );
-        let mismatch = switch_violations("switch %index [^default, ^first] {cases = [0, 5]}");
+        assert_eq!(switch_violations("clif.switch %index, ^default []"), "");
+        let mismatch =
+            switch_violations(r#""clif.switch"(%index)[^default, ^first] {cases = [0, 5]}"#);
         assert!(mismatch.contains("2 case(s) but 1 target(s)"), "{mismatch}");
-        let duplicate =
-            switch_violations("switch %index [^default, ^first, ^second] {cases = [5, 5]}");
+        let duplicate = switch_violations("clif.switch %index, ^default [5: ^first, 5: ^second]");
         assert!(duplicate.contains("duplicate case 5"), "{duplicate}");
     }
 }
