@@ -373,11 +373,11 @@ impl<'db> TypeSolver<'db> {
         let declared: Vec<_> = declared_unions
             .iter()
             .filter_map(|union| {
-                let &result = self.normalize_row(union.result).rest(self.db)?;
+                let result = self.normalize_row(union.result).rest(self.db)?;
                 let sources = union
                     .sources
                     .iter()
-                    .filter_map(|row| self.normalize_row(*row).rest(self.db).copied())
+                    .filter_map(|row| self.normalize_row(*row).rest(self.db))
                     .collect::<Vec<_>>();
                 Some((result, sources))
             })
@@ -461,14 +461,14 @@ impl<'db> TypeSolver<'db> {
                 let cover = declared.iter().find(|(result, sources)| {
                     let covered = tails
                         .iter()
-                        .all(|tail| tail == result || sources.contains(tail));
+                        .all(|tail| tail == *result || sources.contains(&tail));
                     let complete =
                         tails.contains(result) || sources.iter().all(|row| tails.contains(row));
                     tails.len() > 1 && covered && complete
                 });
                 match cover {
-                    Some((result, _)) => {
-                        let row = AbilityRow::new(self.db, known, Some(*result));
+                    Some(&(&result, _)) => {
+                        let row = AbilityRow::new(self.db, known, Some(result));
                         self.unify_rows(normalized.result, row)
                             .map_err(|error| LocatedSolveError { error, origin })?;
                     }
