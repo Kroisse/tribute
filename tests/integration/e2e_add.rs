@@ -572,6 +572,8 @@ fn source_closure(ctx: &IrContext, module: Module, name: &str) -> (closure::New,
 }
 
 /// Lambda lifting must preserve the identity result and empty environment.
+/// The `let` shares its data type with its use, so the lambda takes `Int`
+/// directly rather than a boxed value.
 #[test]
 fn test_lambda_identity() {
     TributeDatabaseImpl::default().attach(|db| {
@@ -586,19 +588,9 @@ fn test_lambda_identity() {
         let (closure, lifted) = source_closure(&ctx, module, "compute");
         assert!(closure.captures(&ctx).is_empty());
         let call = only_indirect_call(&ctx, named_function(&ctx, module, "compute"));
-        let boxed = *ctx.op_operands(call).last().unwrap();
-        assert!(tribute_ir::dialect::tribute_rt::Anyref::matches(
-            &ctx,
-            ctx.value_ty(boxed)
-        ));
-        let box_int = defining_op(&ctx, boxed);
-        assert!(tribute_ir::dialect::tribute_rt::BoxInt::matches(
-            &ctx, box_int
-        ));
-        let input = ctx.op_operands(box_int);
-        assert_eq!(input.len(), 1);
-        assert!(core::I32::matches(&ctx, ctx.value_ty(input[0])));
-        let argument = arith::Const::from_op(&ctx, defining_op(&ctx, input[0])).unwrap();
+        let input = *ctx.op_operands(call).last().unwrap();
+        assert!(core::I32::matches(&ctx, ctx.value_ty(input)));
+        let argument = arith::Const::from_op(&ctx, defining_op(&ctx, input)).unwrap();
         assert_eq!(argument.value(&ctx), Attribute::Int(42));
         let entry = ctx.region(lifted.body(&ctx)).blocks[0];
         let value = *ctx.block_args(entry).last().unwrap();
