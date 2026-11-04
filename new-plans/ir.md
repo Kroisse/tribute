@@ -509,8 +509,10 @@ literal은 문자열 literal로 쓴다.
   묶음에서 값을 쓰지 않으면 표시 flag다. `true`면 묶음을 쓰고 parser는 묶음을
   만나면 `true`를 저장한다.
 - **`custom(D(entities..))`** — 선언적으로 쓸 수 없는 부분을 Rust 타입 `D`에
-  맡긴다. `D`는 `OpAsmDirective`를 구현하며, 나열한 entity의 출력, 손실 없는
-  출력 가능 여부 판정, 파싱을 맡는다. 형식 검증은 나열한 entity를 이 directive가
+  맡긴다(MLIR `custom<D>`). `D`는 `OpAsmDirective`를 구현하며, 나열한 entity의
+  출력, 손실 없는 출력 가능 여부 판정, 파싱을 맡는다. 나열할 수 있는 entity는
+  operand, attribute, successor이다. 예를 들어 `clif.switch`는 case 값과 그
+  successor를 짝지어 `[0: ^first, 5: ^second]`로 쓴다. 형식 검증은 나열한 entity를 이 directive가
   쓴 것으로 센다. Parser는 directive가 나열하지 않은 entity의 값을 돌려주면
   거부한다.
 

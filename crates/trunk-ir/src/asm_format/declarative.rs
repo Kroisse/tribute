@@ -14,8 +14,8 @@ use winnow::error::{ContextError, ErrMode, StrContext, StrContextValue};
 use winnow::prelude::*;
 
 use crate::asm_format::{
-    KeywordCodecHooks, SignatureCodecHooks, SignatureParts, parse_signature_results,
-    write_signature_param, write_signature_results,
+    CustomEntity, KeywordCodecHooks, OpAsmDirectiveHooks, RawCustomEntity, SignatureCodecHooks,
+    SignatureParts, parse_signature_results, write_signature_param, write_signature_results,
 };
 use crate::op_def::OpDef;
 use crate::op_flag::IsolatedFromAbove;
@@ -80,11 +80,54 @@ pub enum FormatElement {
         codec: SignatureCodecHooks,
         results: bool,
     },
+    /// The entities a [`OpAsmDirective`](crate::asm_format::OpAsmDirective)
+    /// writes by hand, in order.
+    Custom {
+        hooks: OpAsmDirectiveHooks,
+        entities: &'static [CustomSlot],
+    },
     /// Elements written only when their anchor is present.
     Optional {
         anchor: FormatAnchor,
         elements: &'static [FormatElement],
     },
+}
+
+/// An entity a [`FormatElement::Custom`] writes.
+#[derive(Clone, Copy, Debug)]
+pub enum CustomSlot {
+    Operand(usize),
+    Attribute(usize),
+    Successor(usize),
+}
+
+/// The entities a custom element names, as its directive prints them.
+fn custom_entities<'c>(
+    ctx: &'c IrContext,
+    op: OpRef,
+    schema: &OpSchema,
+    slots: &[CustomSlot],
+) -> Vec<CustomEntity<'c>> {
+    slots
+        .iter()
+        .map(|&slot| match slot {
+            CustomSlot::Operand(index) => {
+                let operands = ctx.op_operands(op);
+                CustomEntity::Operands(&operands[operand_range(schema, index, operands.len())])
+            }
+            CustomSlot::Attribute(index) => {
+                CustomEntity::Attribute(ctx.op_attrs(op).get(schema.attributes[index].name))
+            }
+            CustomSlot::Successor(index) => {
+                let range = successor_range(schema, index, ctx.op_successor_count(op));
+                CustomEntity::Successors(
+                    range
+                        .filter_map(|position| ctx.op_successor(op, position))
+                        .collect(),
+                )
+            }
+        })
+        .collect()
 }
 
 /// What a [`FormatElement::Signature`] writes the type of.
@@ -427,6 +470,11 @@ impl Printer<'_, '_, '_> {
                 }
                 Ok(())
             }
+            FormatElement::Custom { hooks, entities } => {
+                let entities = custom_entities(ctx, op, self.schema, entities);
+                self.token('c')?;
+                (hooks.print)(self.h, &entities)
+            }
             FormatElement::Signature {
                 source,
                 regions,
@@ -605,6 +653,12 @@ fn written_attributes(schema: &OpSchema, format: &OpFormat) -> Vec<&'static str>
                     source: SignatureSource::Attribute(index),
                     ..
                 } => names.push(schema.attributes[index].name),
+                FormatElement::Custom { entities, .. } => {
+                    names.extend(entities.iter().filter_map(|&slot| match slot {
+                        CustomSlot::Attribute(index) => Some(schema.attributes[index].name),
+                        _ => None,
+                    }));
+                }
                 FormatElement::Optional { anchor, elements } => {
                     if let FormatAnchor::Flag(index) = anchor {
                         names.push(schema.attributes[index].name);
@@ -681,6 +735,9 @@ fn printable(ctx: &IrContext, op: OpRef, schema: &OpSchema, format: &OpFormat) -
         FormatElement::Symbol(index) => {
             let attribute = &schema.attributes[index];
             written_ok &= matches!(attrs.get(attribute.name), Some(Attribute::String(_)));
+        }
+        FormatElement::Custom { hooks, entities } => {
+            written_ok &= (hooks.fits)(ctx, &custom_entities(ctx, op, schema, entities));
         }
         FormatElement::Keyword { attribute, codec } => {
             written_ok &= attrs
@@ -920,6 +977,35 @@ impl<'a> FormatParser<'a> {
                     return Err(ErrMode::Backtrack(expected("keyword")));
                 };
                 self.attribute(attribute, value);
+                Ok(())
+            }
+            FormatElement::Custom { hooks, entities } => {
+                let parsed = (hooks.parse)(input)?;
+                if parsed.len() != entities.len() {
+                    return Err(ErrMode::Cut(expected(
+                        "one entity for each the custom element names",
+                    )));
+                }
+                for (&slot, entity) in entities.iter().zip(parsed) {
+                    match (slot, entity) {
+                        (CustomSlot::Operand(index), RawCustomEntity::Operands(values)) => {
+                            self.parsed.operands[index] = values;
+                        }
+                        (CustomSlot::Attribute(index), RawCustomEntity::Attribute(value)) => {
+                            if let Some(value) = value {
+                                self.attribute(index, value);
+                            }
+                        }
+                        (CustomSlot::Successor(index), RawCustomEntity::Successors(labels)) => {
+                            self.parsed.successors[index] = labels;
+                        }
+                        _ => {
+                            return Err(ErrMode::Cut(expected(
+                                "the kind of entity the custom element names",
+                            )));
+                        }
+                    }
+                }
                 Ok(())
             }
             FormatElement::ResultType(index) => {

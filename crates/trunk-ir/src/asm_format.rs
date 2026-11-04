@@ -219,6 +219,74 @@ impl KeywordCodecHooks {
     }
 }
 
+// =============================================================================
+// OpAsmDirective — a part of a declarative format written by hand
+// =============================================================================
+
+/// The syntax of the entities a `custom(D(a, b, ..))` format element names,
+/// written by hand inside an otherwise declarative format, as MLIR's
+/// `custom<D>` directive is (`new-plans/ir.md`, "선언적 어셈블리 형식").
+///
+/// The element passes the entities in the order it names them: operands,
+/// attributes, and successors, each as a [`CustomEntity`] when printing and
+/// a [`RawCustomEntity`] when parsing.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is named by a `custom(..)` format element but does not implement `OpAsmDirective`",
+    label = "`custom(..)` requires this implementation"
+)]
+pub trait OpAsmDirective {
+    /// Whether [`Self::print`] writes `entities` so that [`Self::parse`]
+    /// reads them back. When it does not, the operation prints generically.
+    fn fits(ctx: &IrContext, entities: &[CustomEntity<'_>]) -> bool;
+
+    /// Write `entities`, which [`Self::fits`] accepted.
+    fn print(h: &mut OpPrintHelper<'_, '_>, entities: &[CustomEntity<'_>]) -> fmt::Result;
+
+    /// Read the entities back, one for each the element names, in order.
+    fn parse<'a>(input: &mut &'a str) -> winnow::ModalResult<Vec<RawCustomEntity<'a>>>;
+}
+
+/// An entity a [`OpAsmDirective`] prints.
+#[derive(Clone, Debug)]
+pub enum CustomEntity<'a> {
+    /// An operand, or the operands of a variadic one.
+    Operands(&'a [crate::ValueRef]),
+    /// An attribute, if the operation has it.
+    Attribute(Option<&'a Attribute>),
+    /// A successor, or the successors of a variadic one.
+    Successors(crate::BlockList),
+}
+
+/// An entity a [`OpAsmDirective`] parses.
+#[derive(Clone, Debug)]
+pub enum RawCustomEntity<'a> {
+    /// Operand names, without `%`.
+    Operands(Vec<&'a str>),
+    /// An attribute, or `None` when it is absent.
+    Attribute(Option<RawAttribute<'a>>),
+    /// Successor labels, without `^`.
+    Successors(Vec<&'a str>),
+}
+
+/// A [`OpAsmDirective`]'s hooks, as a `custom` format element stores them.
+#[derive(Clone, Copy, Debug)]
+pub struct OpAsmDirectiveHooks {
+    pub fits: fn(&IrContext, &[CustomEntity<'_>]) -> bool,
+    pub print: fn(&mut OpPrintHelper<'_, '_>, &[CustomEntity<'_>]) -> fmt::Result,
+    pub parse: for<'a> fn(&mut &'a str) -> winnow::ModalResult<Vec<RawCustomEntity<'a>>>,
+}
+
+impl OpAsmDirectiveHooks {
+    /// The hooks of `T`'s directive.
+    pub const fn of<T: OpAsmDirective>() -> Self {
+        Self {
+            fits: T::fits,
+            print: T::print,
+            parse: T::parse,
+        }
+    }
+}
+
 /// A printer that writes the parts of a function form: an operation's or a
 /// signature type's.
 pub trait SignatureWriter: fmt::Write {

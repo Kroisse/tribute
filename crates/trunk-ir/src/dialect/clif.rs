@@ -169,7 +169,7 @@ mod clif {
     /// clif.switch %index, ^default [0: ^first, 5: ^second]
     /// ```
     #[verify]
-    #[asm_format]
+    #[asm_format(index "," successor(default) "[" custom(SwitchCases(cases, targets)) "]" attr_dict)]
     fn switch(cases: Attr<[u64]>, index: Value<impl IntegerLike>) {
         #[successor(default)]
         {}
@@ -549,83 +549,74 @@ impl crate::ops::Verify for Switch {
     }
 }
 
-impl crate::asm_format::OpAsmFormat for Switch {
-    fn print(&self, h: &mut crate::printer::OpPrintHelper<'_, '_>) -> std::fmt::Result {
+/// The cases of a `clif.switch` paired with their targets, as
+/// `0: ^first, 5: ^second`.
+pub struct SwitchCases;
+
+impl crate::asm_format::OpAsmDirective for SwitchCases {
+    fn fits(_ctx: &crate::IrContext, entities: &[crate::asm_format::CustomEntity<'_>]) -> bool {
+        use crate::asm_format::CustomEntity;
+        match entities {
+            [
+                CustomEntity::Attribute(Some(Attribute::List(cases))),
+                CustomEntity::Successors(targets),
+            ] => {
+                cases.len() == targets.len()
+                    && cases.iter().all(|case| matches!(case, Attribute::Int(_)))
+            }
+            _ => false,
+        }
+    }
+
+    fn print(
+        h: &mut crate::printer::OpPrintHelper<'_, '_>,
+        entities: &[crate::asm_format::CustomEntity<'_>],
+    ) -> std::fmt::Result {
+        use crate::asm_format::CustomEntity;
         use std::fmt::Write as _;
 
-        let ctx = h.ctx();
-        let op = self.op_ref();
-        let attrs = &ctx.op(op).attributes;
-        let cases = match ctx.op_attrs(op).get("cases") {
-            Some(Attribute::List(cases)) if attrs.len() == 1 => cases,
-            _ => return h.print_generic(op),
+        let [
+            CustomEntity::Attribute(Some(Attribute::List(cases))),
+            CustomEntity::Successors(targets),
+        ] = entities
+        else {
+            unreachable!("`fits` accepted the cases and their targets")
         };
-        let successors: crate::BlockList = ctx.op_successors(op).collect();
-        let well_formed = ctx.op_operands(op).len() == 1
-            && ctx.op_results(op).is_empty()
-            && !ctx.op_has_regions(op)
-            && successors.len() == cases.len() + 1
-            && cases.iter().all(|case| matches!(case, Attribute::Int(_)));
-        if !well_formed {
-            return h.print_generic(op);
-        }
-        let index = h.get_value_name(ctx.op_operands(op)[0]).to_owned();
-        let default = h.block_label(successors[0]).to_owned();
-        write!(h, "clif.switch {index}, {default} [")?;
-        for (position, (case, &target)) in cases.iter().zip(&successors[1..]).enumerate() {
-            let Attribute::Int(case) = case else {
-                unreachable!("checked above")
-            };
+        for (position, (case, &target)) in cases.iter().zip(targets).enumerate() {
             if position > 0 {
                 h.write_str(", ")?;
             }
-            let target = h.block_label(target).to_owned();
-            write!(h, "{case}: {target}")?;
+            let Attribute::Int(case) = case else {
+                unreachable!("`fits` accepted integer cases")
+            };
+            let label = h.block_label(target).to_owned();
+            write!(h, "{case}: {label}")?;
         }
-        h.write_char(']')
+        Ok(())
     }
 
     fn parse<'a>(
         input: &mut &'a str,
-        results: Vec<&'a str>,
-        sym_name: Option<String>,
-    ) -> winnow::ModalResult<crate::parser::raw::RawOperation<'a>> {
-        use crate::parser::raw::{
-            RawAttribute, RawOperation, block_label, integer_lit, value_ref, ws,
-        };
+    ) -> winnow::ModalResult<Vec<crate::asm_format::RawCustomEntity<'a>>> {
+        use crate::asm_format::RawCustomEntity;
+        use crate::parser::raw::{RawAttribute, block_label, integer_lit, ws};
         use winnow::Parser as _;
-        use winnow::combinator::{delimited, separated, separated_pair};
+        use winnow::combinator::{separated, separated_pair};
 
-        let index = value_ref.parse_next(input)?;
-        (ws, ',', ws).parse_next(input)?;
-        let default = block_label.parse_next(input)?;
-        ws.parse_next(input)?;
-        let arms: Vec<(i128, &str)> = delimited(
-            ('[', ws),
-            separated(
-                0..,
-                separated_pair(integer_lit, (ws, ':', ws), block_label),
-                (ws, ',', ws),
-            ),
-            (ws, ']'),
+        let arms: Vec<(i128, &str)> = separated(
+            0..,
+            separated_pair(integer_lit, (ws, ':', ws), block_label),
+            (ws, ',', ws),
         )
         .parse_next(input)?;
         let (cases, targets): (Vec<_>, Vec<_>) = arms
             .into_iter()
             .map(|(case, target)| (RawAttribute::Int(case), target))
             .unzip();
-        Ok(RawOperation {
-            results,
-            name: "clif.switch",
-            sym_name,
-            func_params: Vec::new(),
-            func_param_regions: Vec::new(),
-            operands: vec![index],
-            attributes: vec![("cases".into(), RawAttribute::List(cases))],
-            result_types: Vec::new(),
-            regions: Vec::new(),
-            successors: std::iter::once(default).chain(targets).collect(),
-        })
+        Ok(vec![
+            RawCustomEntity::Attribute(Some(RawAttribute::List(cases))),
+            RawCustomEntity::Successors(targets),
+        ])
     }
 }
 

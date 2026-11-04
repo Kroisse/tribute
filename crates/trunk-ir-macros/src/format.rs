@@ -96,6 +96,11 @@ enum Element {
         codec: TokenStream,
         results: bool,
     },
+    /// `custom(D(entities..))`: entities directive `D` writes by hand.
+    Custom {
+        directive: TokenStream,
+        entities: Vec<Entity>,
+    },
     Optional {
         anchor: Anchor,
         elements: Vec<(Element, Span)>,
@@ -347,6 +352,9 @@ impl<'a> Format<'a> {
         if name == "functional_type" {
             return self.functional_type(args, span);
         }
+        if name == "custom" {
+            return self.custom(args, span);
+        }
         let args: Vec<TokenTree> = args.into_iter().collect();
         let [TokenTree::Ident(arg)] = &args[..] else {
             return err(span, format!("`{name}(..)` takes one name"));
@@ -447,13 +455,69 @@ impl<'a> Format<'a> {
                 return err(
                     span,
                     format!(
-                        "unknown format directive `{name}`; expected `symbol`, `keyword`, `signature`, `functional_type`, `args`, `type`, `types`, `region`, `regions`, `successor`, or `successors`"
+                        "unknown format directive `{name}`; expected `symbol`, `keyword`, `signature`, `functional_type`, `args`, `type`, `types`, `region`, `regions`, `successor`, `successors`, or `custom`"
                     ),
                 );
             }
         };
         self.write(entity.expect("matched above"), arg_span)?;
         Ok(element)
+    }
+
+    /// `custom(D(a, b, ..))`: operands, attributes, and successors that
+    /// directive `D` writes by hand.
+    fn custom(&mut self, args: TokenStream, span: Span) -> Result<Element, FormatError> {
+        let mut tokens: Vec<TokenTree> = args.into_iter().collect();
+        let Some(TokenTree::Group(group)) = tokens.pop() else {
+            return err(
+                span,
+                "`custom(D(..))` names the entities directive `D` writes",
+            );
+        };
+        if group.delimiter() != Delimiter::Parenthesis || tokens.is_empty() {
+            return err(
+                span,
+                "`custom(D(..))` names the entities directive `D` writes",
+            );
+        }
+        let directive: TokenStream = tokens.into_iter().collect();
+        let mut entities = Vec::new();
+        let mut tokens = group.stream().into_iter();
+        while let Some(token) = tokens.next() {
+            let TokenTree::Ident(ident) = token else {
+                return err(token.span(), "`custom(D(..))` takes names separated by `,`");
+            };
+            let name = ident.to_string();
+            let name = name.strip_prefix("r#").unwrap_or(&name);
+            let entity = match self.lookup(name) {
+                Some(
+                    entity @ (Entity::Operand(_) | Entity::Attribute(_) | Entity::Successor(_)),
+                ) => entity,
+                Some(_) => {
+                    return err(
+                        ident.span(),
+                        "`custom(D(..))` writes operands, attributes, and successors",
+                    );
+                }
+                None => return err(ident.span(), format!("the operation declares no `{name}`")),
+            };
+            self.write(entity, ident.span())?;
+            entities.push(entity);
+            match tokens.next() {
+                None => break,
+                Some(TokenTree::Punct(p)) if p.as_char() == ',' => {}
+                Some(other) => {
+                    return err(other.span(), "`custom(D(..))` takes names separated by `,`");
+                }
+            }
+        }
+        if entities.is_empty() {
+            return err(span, "`custom(D(..))` names at least one entity");
+        }
+        Ok(Element::Custom {
+            directive,
+            entities,
+        })
     }
 
     /// `functional_type(xs, results)`: the types of operand `xs` and of the
@@ -930,6 +994,21 @@ fn gen_elements(
                 results: #results,
             })
             }
+            Element::Custom {
+                directive,
+                entities,
+            } => {
+                let entities = entities.iter().map(|entity| match *entity {
+                    Entity::Operand(i) => quote!(#fmt::CustomSlot::Operand(#i)),
+                    Entity::Attribute(i) => quote!(#fmt::CustomSlot::Attribute(#i)),
+                    Entity::Successor(i) => quote!(#fmt::CustomSlot::Successor(#i)),
+                    _ => unreachable!("`custom` writes operands, attributes, and successors"),
+                });
+                quote!(#fmt::FormatElement::Custom {
+                    hooks: #crate_path::asm_format::OpAsmDirectiveHooks::of::<#directive>(),
+                    entities: &[#(#entities),*],
+                })
+            }
             Element::Optional { anchor, elements } => {
                 let anchor = match *anchor {
                     Anchor::Attribute(i) => quote!(#fmt::FormatAnchor::Attribute(#i)),
@@ -1177,6 +1256,30 @@ mod tests {
                 ),
                 quote!("x" unknown(a)),
                 "unknown format directive",
+            ),
+            (
+                quote!(
+                    fn op() {
+                        #[region(r)]
+                        {}
+                    }
+                ),
+                quote!("x" custom(D(r))),
+                "writes operands, attributes, and successors",
+            ),
+            (
+                quote!(
+                    fn op(a: Value<_>) {}
+                ),
+                quote!("x" custom(D(a)) a),
+                "writes operand `a` twice",
+            ),
+            (
+                quote!(
+                    fn op(a: Value<_>) {}
+                ),
+                quote!("x" custom(D)),
+                "names the entities",
             ),
             (
                 quote!(

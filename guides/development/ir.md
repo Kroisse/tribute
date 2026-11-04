@@ -189,7 +189,10 @@ where
   `successor(..)`/`successors(..)` write the other entities.
   `keyword(a)` writes the attribute `a` as a bare identifier through the
   `asm_format::KeywordCodec` of its kind, as `tribute_control.handler`
-  writes its kind `op`.
+  writes its kind `op`. `custom(D(a, b))` leaves the operands, attributes,
+  and successors it names to `D`'s `asm_format::OpAsmDirective`, as MLIR's
+  `custom<D>` does; `clif.switch` writes each case with its target as
+  `[0: ^first, 5: ^second]` this way.
   `signature(t, body)` writes the type of `t`, an `Attr<TypeOf<S>>`
   attribute, a fixed `Value<S>` operand, or a `Value<S>` result, as
   `(%a: A) -> R`, through the `asm_format::SignatureCodec` of `S`'s bound,
