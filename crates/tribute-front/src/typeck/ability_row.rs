@@ -79,7 +79,7 @@ pub fn add_effect<'db>(
     if !effects.contains(&effect) {
         effects.push(effect);
     }
-    AbilityRow::new(db, effects, row.rest(db))
+    row.with_instances(db, effects)
 }
 
 /// Remove an effect from an ability row, returning a new row.
@@ -94,7 +94,7 @@ pub fn remove_effect<'db>(
     if let Some(pos) = effects.iter().position(|e| e == effect) {
         let mut new_effects = effects.to_vec();
         new_effects.remove(pos);
-        Some(AbilityRow::new(db, new_effects, row.rest(db)))
+        Some(row.with_instances(db, new_effects))
     } else {
         None
     }
@@ -118,7 +118,7 @@ pub fn remove_with_constraint<'db>(
         // Row variable decomposition
         let fresh = fresh_var();
         RemoveResult::NeedsConstraint {
-            var: tail,
+            var: *tail,
             must_contain: effect.clone(),
             remainder: fresh,
         }
@@ -144,8 +144,8 @@ pub fn union<'db>(
     let independent = matches!((row1.rest(db), row2.rest(db)), (Some(a), Some(b)) if a != b);
     let rest = match (row1.rest(db), row2.rest(db)) {
         (None, None) => None,
-        (Some(v), None) | (None, Some(v)) => Some(v),
-        (Some(a), Some(b)) if a == b => Some(a),
+        (Some(&v), None) | (None, Some(&v)) => Some(v),
+        (Some(&a), Some(&b)) if a == b => Some(a),
         (Some(_), Some(_)) => Some(fresh_var()),
     };
     let result = AbilityRow::new(db, effects, rest);
@@ -366,7 +366,7 @@ mod laws {
             match (left.rest, right.rest) {
                 (Some(a), Some(b)) if a != b => {
                     prop_assert_eq!(fresh.used(), 1);
-                    prop_assert_eq!(result.rest(&db), Some(RowVar { id: fresh.0 }));
+                    prop_assert_eq!(result.rest(&db), Some(&RowVar { id: fresh.0 }));
                     prop_assert_eq!(
                         relation,
                         Some(RowUnion { sources: vec![left_row, right_row], result })
@@ -374,7 +374,7 @@ mod laws {
                 }
                 (a, b) => {
                     prop_assert_eq!(fresh.used(), 0);
-                    prop_assert_eq!(result.rest(&db), a.or(b).map(|id| RowVar { id }));
+                    prop_assert_eq!(result.rest(&db).map(|var| var.id), a.or(b));
                     prop_assert_eq!(relation, None);
                 }
             }

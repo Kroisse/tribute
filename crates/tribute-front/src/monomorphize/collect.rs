@@ -56,7 +56,7 @@ fn extract_type_args<'db>(
         return None;
     }
     let mut type_args: Vec<Option<Type<'db>>> = vec![None; num_params];
-    if !extract_recursive(db, scheme.body(db), concrete, &mut type_args) {
+    if !extract_recursive(db, *scheme.body(db), concrete, &mut type_args) {
         return None;
     }
     type_args.into_iter().collect()

@@ -37,9 +37,9 @@ struct Artifacts {
 fn compile(db: &dyn salsa::Database, source: SourceCst) -> Artifacts {
     let config = CompilationConfig::new(db, false, OptimizationOptions::production());
     Artifacts {
-        native_ir: dump_ir(db, source, true).ok().map(str::to_owned),
-        wasm_ir: dump_ir(db, source, false).ok().map(str::to_owned),
-        native_object: compile_to_native_binary(db, source, config).map(<[u8]>::to_vec),
+        native_ir: dump_ir(db, source, true).ok().cloned(),
+        wasm_ir: dump_ir(db, source, false).ok().cloned(),
+        native_object: compile_to_native_binary(db, source, config).cloned(),
         wasm: compile_to_wasm_binary(db, source).ok().map(<[u8]>::to_vec),
     }
 }
@@ -270,7 +270,7 @@ fn lang_examples_compile_deterministically() {
         .filter_map(|file| {
             let name = example_name(file);
             check_deterministic(&name, required(&name), |db| {
-                db.input(root.join(file)).expect("example source")
+                *db.input(root.join(file)).expect("example source")
             })
             .err()
         })

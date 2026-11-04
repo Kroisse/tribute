@@ -122,7 +122,7 @@ impl<'db> NominalTypes<'db> {
             let index = self
                 .current_row_binders
                 .iter()
-                .position(|(bound, _)| *bound == variable)
+                .position(|(bound, _)| bound == variable)
                 .unwrap_or_else(|| {
                     panic!(
                         "row variable {} has no binder in the current definition",
@@ -137,10 +137,10 @@ impl<'db> NominalTypes<'db> {
     /// The tail unions `scheme` declares, numbered by the current binders.
     /// Only a union of several open sources selects evidence by tail.
     pub(crate) fn row_unions(&self, scheme: TypeScheme<'db>) -> Vec<RowUnion> {
-        let index = |variable: RowVar| {
+        let index = |variable: &RowVar| {
             self.current_row_binders
                 .iter()
-                .position(|(bound, _)| *bound == variable)
+                .position(|(bound, _)| bound == variable)
                 .and_then(|index| u32::try_from(index).ok())
         };
         scheme
@@ -407,7 +407,7 @@ impl<'db> NominalTypes<'db> {
         logical_key(
             "nominal",
             [
-                nominal_origin_key(id.origin(self.db)),
+                nominal_origin_key(*id.origin(self.db)),
                 id.qualified(self.db).with_str(str::to_owned),
             ],
         )
@@ -440,9 +440,9 @@ impl<'db> NominalTypes<'db> {
             Some(var) => {
                 let index = row_vars
                     .iter()
-                    .position(|seen| *seen == var)
+                    .position(|seen| seen == var)
                     .unwrap_or_else(|| {
-                        row_vars.push(var);
+                        row_vars.push(*var);
                         row_vars.len() - 1
                     });
                 logical_key("open", [index.to_string()])
@@ -457,7 +457,7 @@ impl<'db> NominalTypes<'db> {
         logical_key(
             "nominal",
             [
-                nominal_origin_key(id.origin(self.db)),
+                nominal_origin_key(*id.origin(self.db)),
                 name.with_str(str::to_owned),
             ],
         )

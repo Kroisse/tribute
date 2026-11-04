@@ -82,7 +82,7 @@ pub(crate) fn local_instantiations<'a, 'db: 'a>(
         };
         // The lambda's own type spells the rows its scheme quantifies with
         // the variables its body uses.
-        let quantified = collect_row_vars(db, instance.scheme.body(db));
+        let quantified = collect_row_vars(db, *instance.scheme.body(db));
         let spelled = collect_row_vars(db, signature.function_type);
         if quantified.len() != spelled.len() {
             return;

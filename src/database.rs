@@ -71,7 +71,7 @@ impl TributeDatabaseImpl {
     pub fn input(
         &self,
         path: std::path::PathBuf,
-    ) -> Result<SourceCst, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<&SourceCst, Box<dyn std::error::Error + Send + Sync>> {
         let path = path.canonicalize()?;
         let uri = path_to_uri(&path);
         let provider = SourceFiles::get(self).provider(self).clone();
@@ -288,7 +288,7 @@ mod tests {
 
         // The CLI compiles the same file without its manifest.
         let cli = TributeDatabaseImpl::default();
-        let source = cli.input(path).unwrap();
+        let &source = cli.input(path).unwrap();
         assert_eq!(names(&cli, source), ["std"]);
     }
 
@@ -306,7 +306,7 @@ mod tests {
         );
         let source = db.source_cst(&uri).unwrap();
         let units = crate::document_units(&db, source);
-        let [crate::AnalysisUnit::Library(package)] = units else {
+        let [crate::AnalysisUnit::Library(package)] = units.as_slice() else {
             panic!("not a library: {units:?}");
         };
         assert_eq!(package.name(&db).name().unwrap().to_string(), "geometry");

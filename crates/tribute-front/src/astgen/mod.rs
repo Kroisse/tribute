@@ -154,7 +154,7 @@ impl<'db> ParsedItem<'db> {
 pub fn lower_source_to_parsed_ast<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
-) -> Option<ParsedAst<'db>> {
+) -> Option<&'db ParsedAst<'db>> {
     let module_name = derive_module_name_from_uri(source.uri(db));
     lower_source_to_parsed_ast_with_module_path(db, source, module_name)
 }
@@ -164,7 +164,7 @@ pub fn lower_source_to_parsed_ast<'db>(
 /// This variant allows specifying a custom module path for the AST nodes,
 /// which is useful for parsing library modules (like the prelude) where
 /// NodeIds need a different path to avoid collisions with user code.
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked(returns(as_ref))]
 pub fn lower_source_to_parsed_ast_with_module_path<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
@@ -216,7 +216,7 @@ fn index_items<'db>(
 /// like [`lower_source_to_parsed_ast_with_module_path`]. Its items are owned
 /// as the same items declared inline would be
 /// (`new-plans/implementation.md` § 패키지 source 트리와 파일 입력).
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked(returns(as_ref))]
 pub fn lower_file_module<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,

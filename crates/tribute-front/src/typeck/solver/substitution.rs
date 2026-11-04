@@ -316,7 +316,7 @@ impl<'db> RowSubst<'db> {
     pub(crate) fn make_representative(&mut self, db: &'db dyn salsa::Database, var: RowVar) {
         let resolved = self.apply(db, AbilityRow::open(db, var));
         if let Some(alias) = resolved.rest(db)
-            && alias != var
+            && *alias != var
             && resolved.instances(db).is_empty()
         {
             self.map.remove(&var.id);
@@ -343,8 +343,7 @@ impl<'db> RowSubst<'db> {
                     effects.push(effect.clone());
                 }
             }
-            let rest = subst_row.rest(db);
-            row = AbilityRow::new(db, effects, rest);
+            row = subst_row.with_instances(db, effects);
         }
         row
     }

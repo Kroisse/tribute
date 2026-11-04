@@ -127,10 +127,8 @@ impl From<PassError> for DumpIrError {
 #[salsa::input]
 pub struct CompilationConfig {
     /// Enable AddressSanitizer instrumentation.
-    #[returns(copy)]
     pub sanitize_address: bool,
     /// Stage-specific optimization policies.
-    #[returns(copy)]
     pub optimizations: OptimizationOptions,
 }
 
@@ -781,7 +779,7 @@ fn emit_native(ctx: &mut IrContext, m: Module) -> NativeCompilationResult<Vec<u8
 ///
 /// Optimization options apply to the native portion of the pipeline.
 /// Native emission is intentionally skipped.
-#[salsa::tracked(returns(as_deref))]
+#[salsa::tracked(returns(as_ref))]
 pub fn dump_native_ir_at_stage(
     db: &dyn salsa::Database,
     source: SourceCst,
@@ -810,7 +808,7 @@ pub fn dump_native_ir_at_stage(
 /// A module that violates the exit contract is an error.
 /// Returns the IR text borrowed from the database, or an error. Diagnostics are
 /// accumulated.
-#[salsa::tracked(returns(as_deref))]
+#[salsa::tracked(returns(as_ref))]
 pub fn dump_ir(
     db: &dyn salsa::Database,
     source: SourceCst,
@@ -843,7 +841,7 @@ fn dump_staged(db: &dyn salsa::Database, staged: StagedCompilation) -> Result<St
     ))
 }
 
-#[salsa::tracked(returns(as_deref))]
+#[salsa::tracked(returns(as_ref))]
 fn compile_to_wasm_binary_tracked(db: &dyn salsa::Database, source: SourceCst) -> Option<Vec<u8>> {
     let (mut ctx, m) = run_stages_from_source(
         db,
@@ -872,7 +870,9 @@ pub fn compile_to_wasm_binary(
     db: &dyn salsa::Database,
     source: SourceCst,
 ) -> Result<&[u8], Vec<Diagnostic<'_>>> {
-    compile_to_wasm_binary_tracked(db, source).ok_or_else(|| wasm_binary_diagnostics(db, source))
+    compile_to_wasm_binary_tracked(db, source)
+        .map(Vec::as_slice)
+        .ok_or_else(|| wasm_binary_diagnostics(db, source))
 }
 
 /// Diagnostics accumulated by [`compile_to_wasm_binary`], including the
@@ -921,7 +921,7 @@ pub fn native_binary_diagnostics(
 /// in a single arena session, avoiding Salsa↔Arena round-trips after ast_to_ir.
 ///
 /// Returns `None` if compilation fails, with diagnostics accumulated.
-#[salsa::tracked(returns(as_deref))]
+#[salsa::tracked(returns(as_ref))]
 pub fn compile_to_native_binary(
     db: &dyn salsa::Database,
     source: SourceCst,
@@ -929,7 +929,7 @@ pub fn compile_to_native_binary(
 ) -> Option<Vec<u8>> {
     let stages = StageConfig {
         native: NativeLowering {
-            sanitize: config.sanitize_address(db),
+            sanitize: *config.sanitize_address(db),
             optimizations: config.optimizations(db).native,
             stop_after: None,
         },
@@ -1008,7 +1008,7 @@ fn report_pass_error(db: &dyn salsa::Database, names: &NameDisplay, error: &Pass
 /// during compilation can be collected via `compile_ast_tracked::accumulated`.
 /// Returns `false` if the frontend fails or a pass fails; pass failures are
 /// converted to accumulated diagnostics. Otherwise returns `true`.
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked]
 fn compile_ast_tracked(db: &dyn salsa::Database, source: SourceCst) -> bool {
     // Diagnostics are accumulated as side effects
     run_stages_from_source(
@@ -1060,7 +1060,7 @@ pub fn compile_with_diagnostics(
     diagnostics.sort_by(tribute_core::diagnostic::compare_diagnostics);
 
     CompilationResult {
-        produced_module,
+        produced_module: *produced_module,
         diagnostics,
     }
 }

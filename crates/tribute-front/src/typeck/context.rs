@@ -768,7 +768,7 @@ impl<'db> ModuleTypeEnv<'db> {
             .iter()
             .map(|(k, v)| (*k, v.clone()))
             .collect();
-        result.sort_by_key(|(id, ..)| (id.path(self.db), ability_origin_rank(id.origin(self.db))));
+        result.sort_by_key(|(id, ..)| (id.path(self.db), ability_origin_rank(*id.origin(self.db))));
         result
     }
 
@@ -786,7 +786,7 @@ impl<'db> ModuleTypeEnv<'db> {
                 (*id, info.type_params.clone(), operations)
             })
             .collect();
-        result.sort_by_key(|(id, ..)| (id.path(self.db), ability_origin_rank(id.origin(self.db))));
+        result.sort_by_key(|(id, ..)| (id.path(self.db), ability_origin_rank(*id.origin(self.db))));
         result
     }
 
@@ -965,7 +965,7 @@ mod tests {
             panic!("String fallback should be nominal");
         };
         assert_ne!(*id, user_id);
-        assert_eq!(id.origin(db), TypeOrigin::Synthetic);
+        assert_eq!(*id.origin(db), TypeOrigin::Synthetic);
     }
 
     #[salsa_test]
@@ -1098,7 +1098,7 @@ mod tests {
         let ability_keys = |ids: Vec<AbilityId<'_>>| {
             ids.into_iter()
                 .filter(|id| id.name(db) == "Audit")
-                .map(|id| (id.qualified(db).clone(), id.origin(db)))
+                .map(|id| (id.qualified(db).clone(), *id.origin(db)))
                 .collect::<Vec<_>>()
         };
         assert_eq!(

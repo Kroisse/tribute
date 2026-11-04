@@ -250,9 +250,9 @@ impl<'db> TypeChecker<'db> {
         for union in &vars.unions {
             for row in union.sources.iter().chain(std::iter::once(&union.result)) {
                 if let Some(var) = row.rest(self.db())
-                    && !effect_params.contains(&var)
+                    && !effect_params.contains(var)
                 {
-                    effect_params.push(var);
+                    effect_params.push(*var);
                 }
             }
         }
@@ -333,9 +333,9 @@ impl<'db> TypeChecker<'db> {
         for union in &vars.unions {
             for row in union.sources.iter().chain(std::iter::once(&union.result)) {
                 if let Some(var) = row.rest(self.db())
-                    && !effect_params.contains(&var)
+                    && !effect_params.contains(var)
                 {
-                    effect_params.push(var);
+                    effect_params.push(*var);
                 }
             }
         }

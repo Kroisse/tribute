@@ -139,10 +139,8 @@ impl ResolvedTarget {
 #[salsa::tracked]
 pub struct AstDefinitionIndex<'db> {
     /// All definitions, sorted by span.
-    #[returns(deref)]
     pub definitions: Vec<AstDefinitionEntry>,
     /// All references, sorted by span.
-    #[returns(deref)]
     pub references: Vec<AstReferenceEntry>,
     /// Map from name to definition indices.
     by_name: BTreeMap<Symbol, Vec<usize>>,
@@ -829,7 +827,7 @@ impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for DefinitionCollector<'_, 'db
 
 /// Build a definition index for the file `source`, as `unit`'s analysis
 /// resolves it.
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked(returns(as_ref))]
 pub fn definition_index<'db>(
     db: &'db dyn salsa::Database,
     unit: AnalysisUnit,
@@ -2205,11 +2203,11 @@ fn main() {
         let index = definition_index(&db, AnalysisUnit::Executable(source), source).unwrap();
 
         let point_x = field_target("Point", "x");
-        assert_eq!(reference_texts(&db, index, text, &point_x), ["x"]);
+        assert_eq!(reference_texts(&db, *index, text, &point_x), ["x"]);
         let rect_x = field_target("Rect", "x");
-        assert_eq!(reference_texts(&db, index, text, &rect_x), ["x"]);
+        assert_eq!(reference_texts(&db, *index, text, &rect_x), ["x"]);
         let width = field_target("Rect", "width");
-        assert_eq!(reference_texts(&db, index, text, &width), ["width"]);
+        assert_eq!(reference_texts(&db, *index, text, &width), ["width"]);
 
         // Go-to-definition from the field name in the expression lands on the
         // declaring struct's field.
@@ -2239,9 +2237,9 @@ fn sum(p: Point) -> Int {
 
         // `x: a` names the field, and so does the shorthand `y`.
         let x = field_target("Point", "x");
-        assert_eq!(reference_texts(&db, index, text, &x), ["x"]);
+        assert_eq!(reference_texts(&db, *index, text, &x), ["x"]);
         let y = field_target("Point", "y");
-        assert_eq!(reference_texts(&db, index, text, &y), ["y"]);
+        assert_eq!(reference_texts(&db, *index, text, &y), ["y"]);
 
         // The cursor on the shorthand resolves to the field, not the binding.
         let offset = text.find("y }").unwrap();
@@ -2308,7 +2306,7 @@ fn main() -> Int {
         let index = definition_index(&db, AnalysisUnit::Executable(source), source).unwrap();
 
         let x = field_target("Point", "x");
-        assert_eq!(reference_texts(&db, index, text, &x), ["x", "x"]);
+        assert_eq!(reference_texts(&db, *index, text, &x), ["x", "x"]);
     }
 
     #[test]

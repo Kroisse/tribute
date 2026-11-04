@@ -22,7 +22,7 @@ pub(super) struct BodyTypes<'a, 'db> {
 /// The binders of a declaration without a body: those its scheme quantifies.
 pub(super) fn of_scheme(db: &dyn salsa::Database, scheme: TypeScheme<'_>) -> RowBinders {
     let mut in_arguments = HashSet::default();
-    collect_ability_argument_tails(db, scheme.body(db), &mut in_arguments);
+    collect_ability_argument_tails(db, *scheme.body(db), &mut in_arguments);
     quantified(db, scheme, &in_arguments)
 }
 
@@ -90,10 +90,10 @@ pub(super) fn of_definition<'db>(
         body,
         in_arguments: HashSet::default(),
         local: local.iter().copied().collect(),
-        seen: collect_row_vars(db, scheme.body(db)),
+        seen: collect_row_vars(db, *scheme.body(db)),
     };
     collect.visit_func_decl(function);
-    collect_ability_argument_tails(db, scheme.body(db), &mut collect.in_arguments);
+    collect_ability_argument_tails(db, *scheme.body(db), &mut collect.in_arguments);
 
     let mut binders = quantified(db, scheme, &collect.in_arguments);
     for &variable in collect.seen.iter().chain(local) {

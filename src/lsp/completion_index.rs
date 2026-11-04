@@ -94,7 +94,7 @@ fn module_decls<'a, 'db>(
 /// Build completion items from a typed module: the declarations of each of
 /// its modules, which that module's body names, then the prelude's public
 /// root items, which every module of the package names.
-#[salsa::tracked(returns(deref))]
+#[salsa::tracked]
 pub fn completion_items(db: &dyn salsa::Database, unit: AnalysisUnit) -> Vec<AstCompletionItem> {
     let Some(output) = unit.typed(db) else {
         return Vec::new();
@@ -166,7 +166,7 @@ pub fn completion_items(db: &dyn salsa::Database, unit: AnalysisUnit) -> Vec<Ast
 /// module's body names, then those of the prelude's types, which every
 /// module names. Each item's detail is the constructor's path through its
 /// type as the module names the type.
-#[salsa::tracked(returns(deref))]
+#[salsa::tracked]
 pub fn constructor_items(db: &dyn salsa::Database, unit: AnalysisUnit) -> Vec<AstCompletionItem> {
     use rustc_hash::FxHashMap as HashMap;
 
@@ -462,7 +462,7 @@ pub struct DocumentSymbolInfo {
 /// Build document symbols from a parsed module.
 ///
 /// Uses the parsed module (before type checking) for faster response.
-#[salsa::tracked(returns(deref))]
+#[salsa::tracked]
 pub fn document_symbols(db: &dyn salsa::Database, source: SourceCst) -> Vec<DocumentSymbolInfo> {
     let Some(module) = ast_query::parsed_module(db, source) else {
         return Vec::new();

@@ -134,7 +134,7 @@ pub fn source_tree<'db>(
     let root_file = PackageFile {
         path: SymbolPath::root(),
         source: root,
-        parsed,
+        parsed: *parsed,
     };
     let module = parsed.module(db);
     if !module
@@ -235,7 +235,7 @@ impl<'db> Loader<'db> {
                 continue;
             }
             self.changed = true;
-            let Some(source) = found else {
+            let Some(&source) = found else {
                 self.error(
                     span,
                     format!("cannot find the file `{shown}` of module `{}`", module.name),
@@ -274,7 +274,7 @@ impl<'db> Loader<'db> {
             self.files.push(PackageFile {
                 path: sub_path,
                 source,
-                parsed,
+                parsed: *parsed,
             });
             module.body = Some(body);
         }

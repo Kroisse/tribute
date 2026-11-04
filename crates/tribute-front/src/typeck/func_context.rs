@@ -2008,7 +2008,7 @@ mod merge_effect_tests {
                     ));
                 }
                 (a, b) => {
-                    proptest::prop_assert_eq!(result.rest(&db), a.or(b).map(|id| RowVar { id }));
+                    proptest::prop_assert_eq!(result.rest(&db).map(|var| var.id), a.or(b));
                     proptest::prop_assert!(constraints.is_empty());
                 }
             }

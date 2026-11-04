@@ -105,7 +105,7 @@ fn compile_file(
     } else {
         note_package_root_file(&input_path);
         let source = match db.input(input_path.clone()) {
-            Ok(source) => source,
+            Ok(&source) => source,
             Err(e) => {
                 eprintln!("Error reading file {}: {}", input_path.display(), e);
                 std::process::exit(1);
@@ -285,7 +285,7 @@ fn load_package_dir(db: &TributeDatabaseImpl, dir: &Path, target: &str) -> Packa
         let failed = diags
             .iter()
             .any(|diag| diag.severity == DiagnosticSeverity::Error);
-        print_diagnostics(db, source, &manifest_path, &mut diags);
+        print_diagnostics(db, *source, &manifest_path, &mut diags);
         let loaded = loaded.as_ref().filter(|_| !failed);
         let Some(loaded) = loaded else {
             std::process::exit(1);
@@ -357,7 +357,7 @@ fn list_files(input: &Path, deps: bool, candidates: bool) {
         let implicit = *tribute::frontend_environment(&db);
         package_inputs(&db, manifest, implicit, deps).clone()
     } else {
-        let source = db.input(input.to_owned()).unwrap_or_else(|e| {
+        let &source = db.input(input.to_owned()).unwrap_or_else(|e| {
             eprintln!("Error reading file {}: {e}", input.display());
             std::process::exit(1);
         });
@@ -377,7 +377,7 @@ fn list_files(input: &Path, deps: bool, candidates: bool) {
 fn debug_file(path: std::path::PathBuf, show_env: bool) {
     let db = TributeDatabaseImpl::default();
     let source = match db.input(path.clone()) {
-        Ok(source) => source,
+        Ok(&source) => source,
         Err(e) => {
             eprintln!("Error reading file: {e}");
             std::process::exit(1);

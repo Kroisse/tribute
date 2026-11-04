@@ -418,7 +418,7 @@ impl<'db> TypeChecker<'db> {
                                 effects.push(effect.clone());
                             }
                         }
-                        AbilityRow::new(self.db(), effects, resume_effect.rest(self.db()))
+                        resume_effect.with_instances(self.db(), effects)
                     }
                     (None, None) => AbilityRow::new(
                         self.db(),
@@ -2026,7 +2026,7 @@ impl<'db> TypeChecker<'db> {
         let (scheme, _) = self.env.function_scheme(function)?;
         Some(crate::typeck::MethodEntry {
             func_id: function,
-            func_ty: scheme.body(self.db()),
+            func_ty: *scheme.body(self.db()),
         })
     }
 
@@ -2647,7 +2647,7 @@ impl<'db> TypeChecker<'db> {
             }
             for scheme in ctx.visible_local_schemes() {
                 let body =
-                    type_subst.apply_with_rows(self.db(), scheme.body(self.db()), &row_subst);
+                    type_subst.apply_with_rows(self.db(), *scheme.body(self.db()), &row_subst);
                 type_subst.collect_univars_from_type(
                     self.db(),
                     body,

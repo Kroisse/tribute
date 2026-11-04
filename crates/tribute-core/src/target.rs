@@ -11,13 +11,10 @@ pub struct TargetInfo {
     /// Target triple (e.g., "x86_64-unknown-linux-gnu")
     pub triple: Triple,
     /// Pointer size in bytes (4 for 32-bit, 8 for 64-bit)
-    #[returns(copy)]
     pub pointer_size: u8,
     /// Byte order of the target platform
-    #[returns(copy)]
     pub endianness: Endianness,
     /// Native integer size in bytes
-    #[returns(copy)]
     pub native_int_size: u8,
 }
 
@@ -57,17 +54,17 @@ impl TargetInfo {
 
     /// Check if this is a 64-bit target
     pub fn is_64bit(&self, db: &dyn salsa::Database) -> bool {
-        self.pointer_size(db) == 8
+        *self.pointer_size(db) == 8
     }
 
     /// Check if this is a 32-bit target
     pub fn is_32bit(&self, db: &dyn salsa::Database) -> bool {
-        self.pointer_size(db) == 4
+        *self.pointer_size(db) == 4
     }
 
     /// Check if this target uses little endian byte order
     pub fn is_little_endian(&self, db: &dyn salsa::Database) -> bool {
-        self.endianness(db) == Endianness::Little
+        *self.endianness(db) == Endianness::Little
     }
 
     /// Get the architecture of this target
@@ -92,9 +89,9 @@ mod tests {
         let target = TargetInfo::host(&db);
 
         // Should have reasonable values
-        let pointer_size = target.pointer_size(&db);
+        let pointer_size = *target.pointer_size(&db);
         assert!(pointer_size == 4 || pointer_size == 8);
-        assert_eq!(target.native_int_size(&db), pointer_size);
+        assert_eq!(*target.native_int_size(&db), pointer_size);
     }
 
     #[test]
@@ -103,9 +100,9 @@ mod tests {
         let triple = Triple::from_str("x86_64-unknown-linux-gnu").unwrap();
         let target = TargetInfo::from_triple(&db, triple);
 
-        assert_eq!(target.pointer_size(&db), 8);
-        assert_eq!(target.native_int_size(&db), 8);
-        assert_eq!(target.endianness(&db), Endianness::Little);
+        assert_eq!(*target.pointer_size(&db), 8);
+        assert_eq!(*target.native_int_size(&db), 8);
+        assert_eq!(*target.endianness(&db), Endianness::Little);
         assert!(target.is_64bit(&db));
         assert!(!target.is_32bit(&db));
         assert!(target.is_little_endian(&db));
@@ -117,9 +114,9 @@ mod tests {
         let triple = Triple::from_str("i386-unknown-linux-gnu").unwrap();
         let target = TargetInfo::from_triple(&db, triple);
 
-        assert_eq!(target.pointer_size(&db), 4);
-        assert_eq!(target.native_int_size(&db), 4);
-        assert_eq!(target.endianness(&db), Endianness::Little);
+        assert_eq!(*target.pointer_size(&db), 4);
+        assert_eq!(*target.native_int_size(&db), 4);
+        assert_eq!(*target.endianness(&db), Endianness::Little);
         assert!(!target.is_64bit(&db));
         assert!(target.is_32bit(&db));
         assert!(target.is_little_endian(&db));

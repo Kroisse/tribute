@@ -140,7 +140,7 @@ pub fn load_package(
 ) -> Option<LoadedPackage> {
     let manifest = manifest(db, file)?;
     let has_library = source_at(db, &beside(file.uri(db), LIBRARY_ROOT)?).is_some();
-    let executable = executable_root(db, file);
+    let executable = executable_root(db, file).copied();
     if !has_library && executable.is_none() {
         error(
             db,
@@ -160,7 +160,7 @@ pub fn load_package(
 
 /// The root file of the executable package of the manifest `file`, its
 /// `src/main.trb`, if there is one.
-pub fn executable_root(db: &dyn salsa::Database, file: FileEntry) -> Option<SourceCst> {
+pub fn executable_root(db: &dyn salsa::Database, file: FileEntry) -> Option<&SourceCst> {
     source_at(db, &beside(file.uri(db), EXECUTABLE_ROOT)?)
 }
 
@@ -177,7 +177,7 @@ pub fn library_package(
     implicit: DependencyTable,
 ) -> Option<Package> {
     let name = package_name(db, file).clone()?;
-    let root = source_at(db, &beside(file.uri(db), LIBRARY_ROOT)?)?;
+    let &root = source_at(db, &beside(file.uri(db), LIBRARY_ROOT)?)?;
     Some(Package::new(
         db,
         PackageName::library(name),
@@ -233,7 +233,6 @@ fn loaded_dependencies(db: &dyn salsa::Database, file: FileEntry) -> Vec<FileEnt
 /// with `by_path`.
 #[salsa::input(singleton, debug)]
 pub struct PackageRoots {
-    #[returns(ref)]
     pub manifests: HashMap<SourceCst, FileEntry>,
     /// Whether a source no manifest is registered for is analyzed with the
     /// manifest of the package its path puts it in ([`owning_manifest`]).

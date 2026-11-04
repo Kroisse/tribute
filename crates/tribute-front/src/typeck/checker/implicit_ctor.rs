@@ -205,16 +205,17 @@ impl<'db> TypeChecker<'db> {
         let body = scheme.body(db);
         let result = match body.kind(db) {
             TypeKind::Func { result, .. } => *result,
-            _ => body,
+            _ => *body,
         };
-        let constructs_owner = matches!(result.kind(db), TypeKind::Named { id, .. } if id == owner);
+        let constructs_owner =
+            matches!(result.kind(db), TypeKind::Named { id, .. } if *id == *owner);
         if !constructs_owner
             || !scheme.effect_params(db).is_empty()
             || scheme.type_params(db).len() != args.len()
         {
             return;
         }
-        if let Ok(instance) = crate::typeck::subst::substitute_bound_vars(db, body, args) {
+        if let Ok(instance) = crate::typeck::subst::substitute_bound_vars(db, *body, args) {
             ctx.record_constructor_reference_type(node, instance);
         }
     }

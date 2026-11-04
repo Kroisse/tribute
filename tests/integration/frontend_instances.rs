@@ -8,7 +8,7 @@ use tribute_front::{
     typeck::TypeCheckOutput,
 };
 
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked]
 fn prepare_damaged(db: &dyn salsa::Database, source: SourceCst, damage: u8) -> bool {
     let typed = parse_and_lower_ast(db, source).unwrap();
     let mut metadata = typed.expression_types(db).clone();
@@ -176,7 +176,7 @@ fn effect_only_nominal_instance_matches_handlers_and_performs(db: &salsa::Databa
     }));
 }
 
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked]
 fn prepares(db: &dyn salsa::Database, source: SourceCst) -> bool {
     let typed = parse_and_lower_ast(db, source).unwrap();
     prepare_frontend_for_lowering(db, typed, source).is_some()

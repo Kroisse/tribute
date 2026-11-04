@@ -17,7 +17,7 @@ pub struct BuiltinSymbolEntry {
 
 /// Compiler-owned symbol references in the file `source`, as `unit`'s
 /// analysis resolves them.
-#[salsa::tracked(returns(deref))]
+#[salsa::tracked]
 pub fn builtin_symbols(
     db: &dyn salsa::Database,
     unit: AnalysisUnit,

@@ -129,7 +129,7 @@ impl AnalysisUnit {
 /// file belongs to whose source tree reads it, the library first. A file
 /// no such root reads, or in no package, is analyzed as an executable root
 /// of its own.
-#[salsa::tracked(returns(deref))]
+#[salsa::tracked]
 pub fn document_units(db: &dyn salsa::Database, document: SourceCst) -> Vec<AnalysisUnit> {
     let own = vec![AnalysisUnit::Executable(document)];
     let Some(manifest) = *manifest::owning_manifest(db, document) else {
@@ -137,7 +137,8 @@ pub fn document_units(db: &dyn salsa::Database, document: SourceCst) -> Vec<Anal
     };
     let implicit = *crate::frontend_environment(db);
     let library = manifest::library_package(db, manifest, implicit).map(AnalysisUnit::Library);
-    let executable = manifest::executable_root(db, manifest).map(AnalysisUnit::Executable);
+    let executable =
+        manifest::executable_root(db, manifest).map(|&root| AnalysisUnit::Executable(root));
     let units: Vec<_> = library
         .into_iter()
         .chain(executable)

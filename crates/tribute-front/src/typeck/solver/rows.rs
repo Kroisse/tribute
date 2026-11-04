@@ -14,7 +14,7 @@ impl<'db> TypeSolver<'db> {
         let mut rows = Vec::new();
         for row in union.sources.iter().chain(std::iter::once(&union.result)) {
             let row = self.normalize_row(*row);
-            if let Some(var) = row.rest(self.db)
+            if let Some(&var) = row.rest(self.db)
                 && !rows.contains(&var)
             {
                 rows.push(var);
@@ -373,11 +373,11 @@ impl<'db> TypeSolver<'db> {
         let declared: Vec<_> = declared_unions
             .iter()
             .filter_map(|union| {
-                let result = self.normalize_row(union.result).rest(self.db)?;
+                let &result = self.normalize_row(union.result).rest(self.db)?;
                 let sources = union
                     .sources
                     .iter()
-                    .filter_map(|row| self.normalize_row(*row).rest(self.db))
+                    .filter_map(|row| self.normalize_row(*row).rest(self.db).copied())
                     .collect::<Vec<_>>();
                 Some((result, sources))
             })
@@ -390,7 +390,7 @@ impl<'db> TypeSolver<'db> {
                 normalized.for_each_row_mut(|row| *row = self.normalize_row(*row));
                 let source_effects = normalized.source.instances(self.db);
                 match normalized.source.rest(self.db) {
-                    Some(tail)
+                    Some(&tail)
                         if normalized
                             .removed
                             .instances(self.db)
@@ -427,7 +427,7 @@ impl<'db> TypeSolver<'db> {
                             known.push(effect.clone());
                         }
                     }
-                    let Some(tail) = source.rest(self.db) else {
+                    let Some(&tail) = source.rest(self.db) else {
                         continue;
                     };
                     // A signature row is not defined by the unions it
@@ -439,7 +439,7 @@ impl<'db> TypeSolver<'db> {
                         .filter(|(other, (union, _))| {
                             defined
                                 && *other != index
-                                && self.normalize_row(union.result).rest(self.db) == Some(tail)
+                                && self.normalize_row(union.result).rest(self.db) == Some(&tail)
                         })
                         .collect();
                     if definitions.is_empty() {
@@ -492,7 +492,7 @@ impl<'db> TypeSolver<'db> {
                                 free.into_iter().partition(|tail| {
                                     !self.pending_row_removals.iter().any(|(removal, _)| {
                                         self.normalize_row(removal.source).rest(self.db)
-                                            == Some(*tail)
+                                            == Some(tail)
                                     })
                                 });
                             let settled = !free.is_empty()
@@ -533,9 +533,9 @@ impl<'db> TypeSolver<'db> {
     /// Whether `tail`, a source tail of `union`, is a body-local row that no
     /// signature row or other relation determines.
     fn is_unconstrained_tail(&self, tail: RowVar, union: &crate::ast::RowUnion<'db>) -> bool {
-        let is_tail = |row: AbilityRow<'db>| self.normalize_row(row).rest(self.db) == Some(tail);
+        let is_tail = |row: AbilityRow<'db>| self.normalize_row(row).rest(self.db) == Some(&tail);
         !self.rigid_rows.contains(&tail)
-            && union.result.rest(self.db) != Some(tail)
+            && union.result.rest(self.db) != Some(&tail)
             && !self
                 .pending_row_unions
                 .iter()
@@ -611,7 +611,7 @@ impl<'db> TypeSolver<'db> {
                 .cloned()
                 .collect();
             return Err(SolveError::RowMismatch {
-                expected: AbilityRow::new(self.db, allowed, removal.result.rest(self.db)),
+                expected: removal.result.with_instances(self.db, allowed),
                 actual: removal.result,
             });
         }
@@ -642,7 +642,7 @@ impl<'db> TypeSolver<'db> {
         }
         // Propagate only effects proven not to be removed. Do not decide the
         // membership of an unresolved type argument by unification.
-        if let Some(tail) = removal.result.rest(self.db) {
+        if let Some(&tail) = removal.result.rest(self.db) {
             let missing: Vec<_> = known
                 .instances(self.db)
                 .iter()
@@ -723,7 +723,7 @@ impl<'db> TypeSolver<'db> {
                     known.push(effect.clone());
                 }
             }
-            if let Some(tail) = source.rest(self.db)
+            if let Some(&tail) = source.rest(self.db)
                 && !tails.contains(&tail)
             {
                 tails.push(tail);
@@ -783,7 +783,7 @@ impl<'db> TypeSolver<'db> {
                 .filter(|effect| !union.result.instances(self.db).contains(effect))
                 .collect();
             if !missing.is_empty() {
-                let rest = union.result.rest(self.db).expect("open result");
+                let &rest = union.result.rest(self.db).expect("open result");
                 let fresh = self.fresh_row_var();
                 self.row_subst
                     .insert(rest.id, AbilityRow::new(self.db, missing, Some(fresh)));
@@ -812,7 +812,7 @@ impl<'db> TypeSolver<'db> {
         if unique.len() == effects.len() {
             row
         } else {
-            AbilityRow::new(self.db, unique, row.rest(self.db))
+            row.with_instances(self.db, unique)
         }
     }
 
@@ -822,7 +822,7 @@ impl<'db> TypeSolver<'db> {
         let row = self.row_subst.apply(self.db, row);
 
         // Check if the row's rest is the same variable
-        if row.rest(self.db) == Some(var) {
+        if row.rest(self.db) == Some(&var) {
             return true;
         }
 
@@ -960,7 +960,7 @@ impl<'db> TypeSolver<'db> {
         [(left, right), (right, left)]
             .into_iter()
             .any(|(row, other)| {
-                let Some(tail) = row.rest(self.db) else {
+                let Some(&tail) = row.rest(self.db) else {
                     return false;
                 };
                 let names_labels = |row: AbilityRow<'db>| !row.instances(self.db).is_empty();
@@ -968,7 +968,7 @@ impl<'db> TypeSolver<'db> {
                     && (names_labels(other) || other.rest(self.db).is_none())
                     && ((unions
                         && self.pending_row_unions.iter().any(|(union, _)| {
-                            self.normalize_row(union.result).rest(self.db) == Some(tail)
+                            self.normalize_row(union.result).rest(self.db) == Some(&tail)
                         }))
                         || self.awaits_expression(tail, &mut Vec::new()))
             })
@@ -987,13 +987,13 @@ impl<'db> TypeSolver<'db> {
         let sources: Vec<_> = self
             .pending_row_unions
             .iter()
-            .filter(|(union, _)| self.normalize_row(union.result).rest(self.db) == Some(tail))
+            .filter(|(union, _)| self.normalize_row(union.result).rest(self.db) == Some(&tail))
             .flat_map(|(union, _)| &union.sources)
             .filter_map(|source| self.normalize_row(*source).rest(self.db))
             .collect();
         sources
             .into_iter()
-            .any(|source| self.awaits_expression(source, visited))
+            .any(|&source| self.awaits_expression(source, visited))
     }
 
     /// Whether the types of a pending expression relation, or the row of a
@@ -1002,7 +1002,7 @@ impl<'db> TypeSolver<'db> {
         if self
             .pending_producers
             .iter()
-            .any(|producer| self.normalize_row(producer.effect).rest(self.db) == Some(tail))
+            .any(|producer| self.normalize_row(producer.effect).rest(self.db) == Some(&tail))
         {
             return true;
         }
@@ -1072,15 +1072,12 @@ impl<'db> TypeSolver<'db> {
 
         let effects1 = r1.instances(self.db);
         let effects2 = r2.instances(self.db);
-        let rest1 = r1.rest(self.db);
-        let rest2 = r2.rest(self.db);
-
-        match (rest1, rest2) {
+        match (r1.rest(self.db), r2.rest(self.db)) {
             // Both closed: effects must match as sets
             (None, None) => self.unify_effects_as_sets(effects1, effects2, r1, r2),
 
             // r1 is open, r2 is closed: var1 = r2's effects minus r1's effects
-            (Some(var1), None) => {
+            (Some(&var1), None) => {
                 // Compute difference: effects in r2 but not in r1
                 // First check that all effects in r1 have matches in r2
                 let mut pairs = Vec::new();
@@ -1114,7 +1111,7 @@ impl<'db> TypeSolver<'db> {
             }
 
             // r1 is closed, r2 is open: var2 = r1's effects minus r2's effects
-            (None, Some(var2)) => {
+            (None, Some(&var2)) => {
                 // Pure subsumption: if r1 is pure (closed empty) and r2 has existing effects,
                 // it means a pure function is being called from an effectful context.
                 // This is always valid, and the caller's ability row should remain unchanged.
@@ -1165,7 +1162,7 @@ impl<'db> TypeSolver<'db> {
             // Both open with different variables: create a fresh variable for the common tail
             // r1 = {A | v1}, r2 = {B | v2}
             // Unify: v1 = {B's not in A | v3}, v2 = {A's not in B | v3}
-            (Some(v1), Some(v2)) => {
+            (Some(&v1), Some(&v2)) => {
                 let (only_r1, only_r2) =
                     self.compute_effect_split_with_unify(effects1, effects2)?;
 

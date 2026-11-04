@@ -215,17 +215,22 @@ fn collect_tdnr_summary<'db>(
     }
 }
 
+/// Parse and lower `source`, for the diagnostics it accumulates.
+#[salsa::tracked]
+fn parse(db: &dyn salsa::Database, source: SourceCst) {
+    tribute_front::query::parsed_ast(db, source);
+}
+
 /// Run the full AST pipeline (parse -> resolve -> typecheck -> TDNR -> IR)
 /// with the prelude loaded, and return the IR text.
 ///
 /// Panics if any parse error diagnostics were emitted for the test source.
 ///
-/// Uses `parsed_ast` to check only the test source for parse errors,
+/// Uses [`parse`] to check only the test source for parse errors,
 /// avoiding false positives from prelude diagnostics.
 pub fn run_ast_pipeline_with_ir(db: &dyn salsa::Database, source: SourceCst) -> &str {
     // Check for parse errors in the test source (not prelude)
-    let parse_diagnostics =
-        tribute_front::query::parsed_ast::accumulated::<SpanDiagnostic>(db, source);
+    let parse_diagnostics = parse::accumulated::<SpanDiagnostic>(db, source);
     let parse_errors: Vec<_> = parse_diagnostics
         .iter()
         .filter(|d| {

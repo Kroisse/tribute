@@ -14,7 +14,7 @@ fn g(y: Int) -> Int { y }
 ";
 
 /// A query that depends on the function names only.
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked]
 fn function_count(db: &dyn salsa::Database, source: SourceCst) -> usize {
     func_names(db, source).len()
 }
@@ -54,11 +54,7 @@ fn moving_code_without_changing_it_reuses_the_parsed_module() {
     db.record(|db| {
         function_count(db, source);
     })
-    .assert_reuse(
-        &baseline,
-        &[],
-        &["parsed_ast", "func_names", "function_count"],
-    );
+    .assert_reuse(&baseline, &[], &["func_names", "function_count"]);
 }
 
 /// A body edit changes the module, so `func_names` reruns, but its result
@@ -67,7 +63,7 @@ fn moving_code_without_changing_it_reuses_the_parsed_module() {
 fn a_body_edit_keeps_the_function_names() {
     let (mut db, source, baseline) = computed();
     db.replace(source, "{ x }", "{ x + 1 }");
-    db.record(|db| assert_eq!(function_count(db, source), 2))
+    db.record(|db| assert_eq!(*function_count(db, source), 2))
         .assert_reuse(&baseline, &["func_names"], &["function_count"]);
 }
 
@@ -75,7 +71,7 @@ fn a_body_edit_keeps_the_function_names() {
 fn adding_a_function_reruns_what_depends_on_the_names() {
     let (mut db, source, baseline) = computed();
     db.replace(source, "{ y }\n", "{ y }\nfn h() -> Int { 1 }\n");
-    db.record(|db| assert_eq!(function_count(db, source), 3))
+    db.record(|db| assert_eq!(*function_count(db, source), 3))
         .assert_reuse(&baseline, &["func_names", "function_count"], &[]);
 }
 
@@ -110,7 +106,7 @@ fn f(x: Int) -> Int { x }
 
 /// A query that depends on the parse's items and their relative spans only.
 /// It reads every item's spans, so a change to any of them reruns it.
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked]
 fn has_item_spans(db: &dyn salsa::Database, source: SourceCst) -> bool {
     parsed_ast(db, source).is_some_and(|parsed| {
         parsed
@@ -122,7 +118,7 @@ fn has_item_spans(db: &dyn salsa::Database, source: SourceCst) -> bool {
 }
 
 /// A query that depends on the parse's item layout only.
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked]
 fn has_item_layout(db: &dyn salsa::Database, source: SourceCst) -> bool {
     parsed_ast(db, source).is_some_and(|parsed| *parsed.item_layout(db) != ItemLayout::default())
 }
@@ -151,7 +147,7 @@ fn moving_items_changes_only_their_layout() {
             "lower_source_to_parsed_ast_with_module_path",
             "has_item_layout",
         ],
-        &["parsed_ast", "has_item_spans"],
+        &["has_item_spans"],
     );
 }
 
@@ -190,13 +186,13 @@ fn read_items(db: &dyn salsa::Database, source: SourceCst, owners: &[u64]) -> us
 }
 
 /// A query that reads the item `h`, in `ITEMS`'s inline module.
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked]
 fn edited_item(db: &dyn salsa::Database, source: SourceCst, owner: u64) -> usize {
     read_items(db, source, &[owner])
 }
 
 /// A query that reads every other item of `ITEMS`.
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked]
 fn other_items(db: &dyn salsa::Database, source: SourceCst, owners: Vec<u64>) -> usize {
     read_items(db, source, &owners)
 }
@@ -242,13 +238,13 @@ fn moving_items_keeps_every_item() {
 }
 
 /// A query that reads one item's fields, keyed by the item.
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked]
 fn item_fields<'db>(db: &'db dyn salsa::Database, item: ParsedItem<'db>) -> usize {
     item.decls(db).len() + usize::from(*item.spans(db) != ItemSpans::default())
 }
 
 /// The item of `source` that `owner` names, read through `item_fields`.
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked]
 fn item_by_owner(db: &dyn salsa::Database, source: SourceCst, owner: u64) -> usize {
     let parsed = parsed_ast(db, source).expect("the source parses");
     let item = parsed
@@ -256,7 +252,7 @@ fn item_by_owner(db: &dyn salsa::Database, source: SourceCst, owner: u64) -> usi
         .iter()
         .find(|item| *item.owner(db) == owner)
         .expect("the item exists");
-    item_fields(db, *item)
+    *item_fields(db, *item)
 }
 
 /// The Salsa ids of the top-level items of `source`, by owner key.

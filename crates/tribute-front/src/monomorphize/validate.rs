@@ -200,7 +200,7 @@ pub(super) fn validate<'db>(
             break;
         }
         if schemes.get(id.path(db)).is_some_and(|scheme| {
-            names_incomplete_ability_argument(db, scheme.body(db), &arguments)
+            names_incomplete_ability_argument(db, *scheme.body(db), &arguments)
         }) {
             errors.push(InstanceError {
                 node: func.id,

@@ -167,7 +167,7 @@ impl<'db, T: TypeFoldable<'db>> TypeFoldable<'db> for Vec<T> {
 impl<'db> TypeVisitable<'db> for TypeScheme<'db> {
     fn visit_with<V: TypeVisitor<'db> + ?Sized>(&self, visitor: &mut V) -> ControlFlow<V::Break> {
         let db = visitor.db();
-        visitor.visit_type(self.body(db))?;
+        visitor.visit_type(*self.body(db))?;
         self.row_unions(db)
             .iter()
             .try_for_each(|union| union.visit_with(visitor))?;
@@ -180,10 +180,10 @@ impl<'db> TypeVisitable<'db> for TypeScheme<'db> {
 impl<'db> TypeFoldable<'db> for TypeScheme<'db> {
     fn try_fold_with<F: TypeFolder<'db> + ?Sized>(self, folder: &mut F) -> Result<Self, F::Error> {
         let db = folder.db();
-        let body = folder.fold_type(self.body(db))?;
+        let body = folder.fold_type(*self.body(db))?;
         let row_unions = fold_slice(self.row_unions(db), folder)?;
         let row_removals = fold_slice(self.row_removals(db), folder)?;
-        if body == self.body(db) && row_unions.is_none() && row_removals.is_none() {
+        if body == *self.body(db) && row_unions.is_none() && row_removals.is_none() {
             return Ok(self);
         }
         let mut builder = self.to_builder(db);
@@ -340,7 +340,7 @@ impl<'db> AbilityRow<'db> {
     ) -> Result<Self, F::Error> {
         let db = folder.db();
         Ok(match fold_slice(self.instances(db), folder)? {
-            Some(instances) => AbilityRow::new(db, instances, self.rest(db)),
+            Some(instances) => self.with_instances(db, instances),
             None => self,
         })
     }

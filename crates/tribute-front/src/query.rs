@@ -94,17 +94,9 @@ pub fn parse_cst(db: &dyn salsa::Database, source: SourceCst) -> Option<ParsedCs
 // Module-level queries
 // =============================================================================
 
-/// Parse a source file to AST.
-///
-/// This is the single tracking point for CST → AST conversion.
-/// Both `parsed_module` and `span_map` derive from this query.
-#[salsa::tracked(returns(copy))]
-pub fn parsed_ast<'db>(
-    db: &'db dyn salsa::Database,
-    source: SourceCst,
-) -> Option<crate::astgen::ParsedAst<'db>> {
-    crate::astgen::lower_source_to_parsed_ast(db, source)
-}
+/// Parse a source file to AST. Both `parsed_module` and `span_map` derive
+/// from this.
+pub use crate::astgen::lower_source_to_parsed_ast as parsed_ast;
 
 /// Parse a source file to an AST module.
 ///
@@ -131,7 +123,7 @@ pub fn span_map(db: &dyn salsa::Database, source: SourceCst) -> Option<SpanMap<'
 /// Get the list of function names in a module.
 ///
 /// This is used to iterate over functions for batch processing.
-#[salsa::tracked(returns(clone))]
+#[salsa::tracked]
 pub fn func_names(db: &dyn salsa::Database, source: SourceCst) -> Vec<Symbol> {
     let Some(module) = parsed_module(db, source) else {
         return Vec::new();
@@ -523,7 +515,7 @@ fn explicit() ->{} Nil { Nil }
         for (name, scheme) in schemes {
             let body = scheme.body(&db);
             assert!(
-                !contains_univar(&db, body),
+                !contains_univar(&db, *body),
                 "Function '{}' scheme body should not contain UniVar, got: {:?}",
                 name,
                 body.kind(&db),
@@ -548,7 +540,7 @@ fn explicit() ->{} Nil { Nil }
 
         let body = add.1.body(&db);
         assert!(
-            !contains_univar(&db, body),
+            !contains_univar(&db, *body),
             "Fully annotated function 'add' scheme body should not contain UniVar, got: {:?}",
             body.kind(&db),
         );
@@ -647,7 +639,7 @@ fn explicit() ->{} Nil { Nil }
 
         // No UniVars should remain
         assert!(
-            !contains_univar(&db, body),
+            !contains_univar(&db, *body),
             "apply scheme body should not contain UniVar, got: {:?}",
             body.kind(&db),
         );
