@@ -31,10 +31,10 @@ core.module @test {
               %2 = tribute_control.perform op @"ability_2_10_pkg::State_3_int" @get() : () -> core.i32
               tribute_control.return %2
           }
-          %3 = tribute_control.call @"pkg::run_with_state"(%1) attributes {row_args = [{tail = 0}]} : core.i32
+          %3 = tribute_control.call @"pkg::run_with_state"(%1) attributes {row_args = [{tail = 0}]} : (!t1) -> core.i32
           tribute_control.return %3
       }
-      %4 = tribute_control.call @"pkg::apply_thunk"(%0) attributes {row_args = [{tail = 0}]} : core.i32
+      %4 = tribute_control.call @"pkg::apply_thunk"(%0) attributes {row_args = [{tail = 0}]} : (!t0) -> core.i32
       tribute_control.return %4
   }
   ability.decl @"ability_2_10_pkg::State_3_int" {

@@ -1,6 +1,5 @@
 ---
 source: crates/tribute-passes/src/native/rc_lowering.rs
-assertion_line: 786
 expression: result
 ---
 core.module @test {
@@ -27,7 +26,7 @@ core.module @test {
       clif.brif %13 [^bb4, ^bb5]
     ^bb4:
       %14 = clif.iconst {value = 12} : core.i64
-      %15 = clif.call @__tribute_deep_release(%0, %14) : core.nil
+      %15 = clif.call @__tribute_deep_release(%0, %14) : (core.ptr, core.i64) -> core.nil
       clif.jump [^bb5]
     ^bb5:
       clif.return

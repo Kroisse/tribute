@@ -1541,7 +1541,7 @@ mod tests {
     wasm.return %a, %b
   }
   wasm.func @use_pair() -> (core.i32, core.i64) {
-    %a, %b = wasm.call @pair() : core.i32, core.i64
+    %a, %b = wasm.call @pair() : () -> (core.i32, core.i64)
     wasm.return %a, %b
   }
 }"#,
@@ -1618,7 +1618,7 @@ mod tests {
     wasm.return %a, %b
   }
   wasm.func @use_pair() -> (core.i32, core.i64) {
-    %a, %unit, %b = wasm.call @pair() : core.i32, core.nil, core.i64
+    %a, %unit, %b = wasm.call @pair() : () -> (core.i32, core.nil, core.i64)
     wasm.return %a, %b
   }
 }"#,
@@ -1718,7 +1718,7 @@ mod tests {
                     %unit = {producer} : core.nil
                     %condition = wasm.i32_const {{value = 1}} : core.i32
                     wasm.if %condition {{
-                        wasm.return_call @consume(%unit)
+                        wasm.return_call @consume(%unit) : (core.nil) -> ()
                     }} else {{ wasm.unreachable }}
                 }}
             }}"#
@@ -1820,7 +1820,7 @@ mod tests {
     wasm.return
   }
   wasm.func @caller() -> core.i32 {
-    wasm.call @set_one()
+    wasm.call @set_one() : () -> ()
     %table_index = wasm.i32_const {value = 0} : core.i32
     wasm.call_indirect %table_index() : () -> ()
     %result = wasm.global_get {index = 0} : core.i32
@@ -1888,7 +1888,7 @@ mod tests {
     wasm.return %a, %b
   }
   wasm.func @caller() -> (core.i32, core.i64) {
-    %a, %b = wasm.call @pair() : core.i32, core.i64
+    %a, %b = wasm.call @pair() : () -> (core.i32, core.i64)
     wasm.return %a, %b
   }
   wasm.export_func @caller as "direct_pair"

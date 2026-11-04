@@ -11,9 +11,9 @@ core.module @test {tribute.entry = @"pkg::main"} {
   }
   tribute_control.func @"std::Nat::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32
   tribute_control.func @"pkg::use_counter"() -> core.i32 row(@"ability_1_12_pkg::Counter") {
-      %0 = tribute_control.call @"pkg::get_count"() : core.i32
-      %1 = tribute_control.call @"pkg::get_count"() : core.i32
-      %2 = tribute_control.call @"std::Nat::+"(%0, %1) : core.i32
+      %0 = tribute_control.call @"pkg::get_count"() : () -> core.i32
+      %1 = tribute_control.call @"pkg::get_count"() : () -> core.i32
+      %2 = tribute_control.call @"std::Nat::+"(%0, %1) : (core.i32, core.i32) -> core.i32
       tribute_control.return %2
   }
   tribute_control.func @"pkg::main"['a0]() -> core.nil row(| 'a0) inferred {

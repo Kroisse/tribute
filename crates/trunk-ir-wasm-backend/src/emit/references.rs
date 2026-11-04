@@ -260,8 +260,8 @@ mod tests {
   }
   wasm.func @main() -> core.i32 {
     %one = wasm.i32_const {value = 1} : core.i32
-    %imported = wasm.call @run(%one) : core.i32
-    %local = wasm.call @c_helper(%imported) : core.i32
+    %imported = wasm.call @run(%one) : (core.i32) -> core.i32
+    %local = wasm.call @c_helper(%imported) : (core.i32) -> core.i32
     wasm.return %local
   }
 }"#,
@@ -312,7 +312,7 @@ mod tests {
 {UNUSED_HELPER}
   wasm.func @main(%input: core.i32) -> core.i32 {{
     %arg = wasm.i32_const {{value = 1}} : core.i32
-    %result = wasm.call @helper(%arg) : core.i32
+    %result = wasm.call @helper(%arg) : (core.i32) -> core.i32
     wasm.return %result
   }}
 }}"#
@@ -327,7 +327,7 @@ mod tests {
         let tail_call = r#"core.module @test {
   wasm.func @helper() -> core.i32 attributes {abi = "C"}
   wasm.func @main() -> core.i32 {
-    wasm.return_call @helper()
+    wasm.return_call @helper() : () -> ()
   }
 }"#;
         assert!(
@@ -380,7 +380,7 @@ mod tests {
     fn unresolved_reference_is_reported_separately_from_an_unbound_declaration() {
         let source = r#"core.module @test {
   wasm.func @main() -> core.i32 {
-    %result = wasm.call @missing() : core.i32
+    %result = wasm.call @missing() : () -> core.i32
     wasm.return %result
   }
 }"#;
@@ -399,7 +399,7 @@ mod tests {
             r#"core.module @test {
   wasm.func @callee() -> core.nil { wasm.return }
   wasm.func @main() -> core.nil {
-    wasm.call @callee()
+    wasm.call @callee() : () -> ()
     wasm.return
   }
 }"#,

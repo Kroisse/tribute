@@ -457,7 +457,7 @@ mod tests {
       clif.return %value
   }
   clif.func @direct_call(%value: core.i32, %unit: core.nil, %last: core.i64) -> core.i32 {
-      %result = clif.call @call_target(%value, %unit, %last) : core.i32
+      %result = clif.call @call_target(%value, %unit, %last) : (core.i32, core.nil, core.i64) -> core.i32
       clif.return %result
   }
   clif.func @indirect_call(%callee: core.ptr, %value: core.i32, %unit: core.nil, %last: core.i64) -> core.i32 {
@@ -465,7 +465,7 @@ mod tests {
       clif.return %result
   }
   clif.func @direct_tail(%value: core.i32, %unit: core.nil, %last: core.i64) -> (), {call_conv = "tail"} {
-      clif.return_call @direct_tail(%value, %unit, %last)
+      clif.return_call @direct_tail(%value, %unit, %last) : (core.i32, core.nil, core.i64) -> ()
   }
   clif.func @indirect_tail(%callee: core.ptr, %value: core.i32, %unit: core.nil, %last: core.i64) -> (), {call_conv = "tail"} {
       clif.return_call_indirect %callee(%value, %unit, %last) : (core.i32, core.nil, core.i64) -> (), {call_conv = "tail"}
@@ -488,8 +488,8 @@ mod tests {
     clif.return %first, %second
   }
   clif.func @main() -> core.i32 {
-    %first, %second = clif.call @pair() : core.i32, core.i32
-    clif.call @sink()
+    %first, %second = clif.call @pair() : () -> (core.i32, core.i32)
+    clif.call @sink() : () -> ()
     %sink = clif.symbol_addr @sink : core.ptr
     clif.call_indirect %sink() : () -> ()
     %callee = clif.symbol_addr @pair : core.ptr
@@ -606,9 +606,9 @@ mod tests {
                 }
             }
             clif.func @main() {
-                %left = clif.call @left::@helper() : core.i32
-                %right = clif.call @right::@helper() : core.i32
-                clif.call @left::@main()
+                %left = clif.call @left::@helper() : () -> core.i32
+                %right = clif.call @right::@helper() : () -> core.i32
+                clif.call @left::@main() : () -> ()
                 clif.return
             }
         }"#,
@@ -636,7 +636,7 @@ mod tests {
             clif.func @used() attributes {abi = "C"}
             clif.func @unused() attributes {abi = "C"}
             clif.func @main() {
-                clif.call @used()
+                clif.call @used() : () -> ()
                 clif.return
             }
         }"#,

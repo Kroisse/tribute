@@ -1,6 +1,5 @@
 ---
 source: crates/tribute-passes/src/native/rtti.rs
-assertion_line: 1313
 expression: "format!(\"{}\\n{}\", release_function(RTTI_USER_START),\nrelease_function(RTTI_USER_START + 1))"
 ---
 clif.func @__tribute_release_5(%0: core.ptr) -> core.nil {
@@ -26,7 +25,7 @@ clif.func @__tribute_release_5(%0: core.ptr) -> core.nil {
       %14 = clif.iadd %13, %12 : core.i64
       %15 = clif.iconst {value = 8} : core.i64
       %16 = clif.isub %0, %15 : core.ptr
-      %17 = clif.call @__tribute_dealloc(%16, %14) : core.nil
+      %17 = clif.call @__tribute_dealloc(%16, %14) : (core.ptr, core.i64) -> core.nil
       clif.return
   }
 clif.func @__tribute_release_6(%0: core.ptr) -> core.nil {
@@ -37,6 +36,6 @@ clif.func @__tribute_release_6(%0: core.ptr) -> core.nil {
       %5 = clif.iconst {value = 2} : core.i64
       %6 = clif.imul %4, %5 : core.i64
       %7 = clif.iadd %3, %6 : core.i64
-      %8 = clif.call @__tribute_dealloc(%2, %7) : core.nil
+      %8 = clif.call @__tribute_dealloc(%2, %7) : (core.ptr, core.i64) -> core.nil
       clif.return
   }

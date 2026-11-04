@@ -13,11 +13,11 @@ core.module @test {
   tribute_control.func @"pkg::answer"['a0]() -> core.i32 row(| 'a0) inferred {
       %0 = tribute_control.lambda(%1: core.i32) -> core.i32 row(| 'a0) captures [] {
           %2 = arith.const {value = 1} : core.i32
-          %3 = tribute_control.call @"std::Int::+"(%1, %2) : core.i32
+          %3 = tribute_control.call @"std::Int::+"(%1, %2) : (core.i32, core.i32) -> core.i32
           tribute_control.return %3
       }
       %4 = arith.const {value = 41} : core.i32
-      %5 = tribute_control.call @"pkg::apply"(%0, %4) attributes {row_args = [{tail = 0}]} : core.i32
+      %5 = tribute_control.call @"pkg::apply"(%0, %4) attributes {row_args = [{tail = 0}]} : (!t0, core.i32) -> core.i32
       tribute_control.return %5
   }
 }

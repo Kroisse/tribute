@@ -102,14 +102,14 @@ core.module @test {
       tribute_control.return %6
   }
   tribute_control.func @"pkg::Pair::extend"['a0](%0: !"pkg::Pair_1", %1: core.i32) -> !"pkg::Triple_1" row(| 'a0) inferred {
-      %2 = tribute_control.call @"pkg::Pair::x"(%0) : core.i32
-      %3 = tribute_control.call @"pkg::Pair::y"(%0) : core.i32
+      %2 = tribute_control.call @"pkg::Pair::x"(%0) : (!"pkg::Pair_1") -> core.i32
+      %3 = tribute_control.call @"pkg::Pair::y"(%0) : (!"pkg::Pair_1") -> core.i32
       %4 = adt.struct_new %2, %3, %1 {type = !"pkg::Triple"} : !"pkg::Triple_1"
       tribute_control.return %4
   }
   tribute_control.func @"pkg::test"['a0](%0: !"pkg::Pair_1") -> !"pkg::Triple_1" row(| 'a0) inferred {
       %1 = arith.const {value = 3} : core.i32
-      %2 = tribute_control.call @"pkg::Pair::extend"(%0, %1) attributes {row_args = [{tail = 0}]} : !"pkg::Triple_1"
+      %2 = tribute_control.call @"pkg::Pair::extend"(%0, %1) attributes {row_args = [{tail = 0}]} : (!"pkg::Pair_1", core.i32) -> !"pkg::Triple_1"
       tribute_control.return %2
   }
 }

@@ -266,8 +266,8 @@ fn textual_direct_evidence_and_cps_transfers_preserve_exact_abis() {
   tribute_cps.func_table @"evidence$8" = {evidence_direct = @evidence}
   tribute_cps.func_table @"cps$8" = {cps = @cps}
   tribute_cps.func @exercise(%value: core.i32) -> core.i32 convention(cps) {
-    %direct_result = tribute_control.call @direct(%value) : core.i32
-    %evidence_result = tribute_control.call @evidence(%direct_result) : core.i32
+    %direct_result = tribute_control.call @direct(%value) : (core.i32) -> core.i32
+    %evidence_result = tribute_control.call @evidence(%direct_result) : (core.i32) -> core.i32
     %direct_ref = tribute_cps.func_ref @"direct$8" : !direct
     %direct_indirect = tribute_cps.call_indirect %direct_ref(%evidence_result) attributes {convention = "direct"} : (core.i32) -> core.i32
     %evidence_ref = tribute_cps.func_ref @"evidence$8" : !evidence
@@ -277,7 +277,7 @@ fn textual_direct_evidence_and_cps_transfers_preserve_exact_abis() {
     tribute_control.return %cps_indirect
   }
   tribute_cps.func @known_cps(%value: core.i32) -> core.i32 convention(cps) {
-    %result = tribute_control.call @cps(%value) : core.i32
+    %result = tribute_control.call @cps(%value) : (core.i32) -> core.i32
     tribute_control.return %result
   }
 }"#;
@@ -475,7 +475,7 @@ fn nested_modules_resolve_same_named_callables_in_their_own_module() {
     tribute_control.return %value
   }
   tribute_cps.func @outer_call(%value: core.i32) -> core.i32 convention(direct) {
-    %result = tribute_control.call @same(%value) : core.i32
+    %result = tribute_control.call @same(%value) : (core.i32) -> core.i32
     tribute_control.return %result
   }
   core.module @inner {
@@ -483,7 +483,7 @@ fn nested_modules_resolve_same_named_callables_in_their_own_module() {
       tribute_control.return %value
     }
     tribute_cps.func @inner_call(%value: core.i1) -> core.i1 convention(evidence_direct) {
-      %result = tribute_control.call @same(%value) : core.i1
+      %result = tribute_control.call @same(%value) : (core.i1) -> core.i1
       tribute_control.return %result
     }
   }
@@ -712,7 +712,7 @@ fn malformed_lookup_inputs_fail_before_conversion_and_remain_unchanged() {
     let malformed = [(
         r#"core.module @test {
   tribute_cps.func @broken(%value: core.i32) -> core.i32 convention(direct) {
-    %result = tribute_control.call @missing(%value) : core.i32
+    %result = tribute_control.call @missing(%value) : (core.i32) -> core.i32
     tribute_control.return %result
   }
 }"#,
@@ -1440,7 +1440,7 @@ fn textual_zero_result_cps_and_direct_scf_branches_lower() {
     %direct = tribute_cps.lambda(%value: core.i32) -> core.i32 captures [%condition] entries {
       direct {
         %selected = scf.if %condition -> (core.i32) {
-          %called = tribute_control.call @identity(%value) : core.i32
+          %called = tribute_control.call @identity(%value) : (core.i32) -> core.i32
           scf.yield %called
         } else {
           scf.yield %value
@@ -2400,11 +2400,11 @@ fn a_cps_call_in_a_callable_that_is_not_cps_runs_under_a_value_delimiter() {
     tribute_control.return %value
   }
   tribute_cps.func @direct(%value: core.i32) -> core.i32 convention(direct) {
-    %answer = tribute_control.call @cps_identity(%value) : core.i32
+    %answer = tribute_control.call @cps_identity(%value) : (core.i32) -> core.i32
     tribute_control.return %answer
   }
   tribute_cps.func @with_evidence(%value: core.i32) -> core.i32 convention(evidence_direct) {
-    %answer = tribute_control.call @cps_identity(%value) : core.i32
+    %answer = tribute_control.call @cps_identity(%value) : (core.i32) -> core.i32
     tribute_control.return %answer
   }
 }"#;
@@ -2497,7 +2497,7 @@ fn legalization_drops_ability_rows_and_row_metadata() {
         tribute_control.return %y
       }
     }
-    %r = tribute_control.call @apply(%f, %x) attributes {row_args = [{instances = [@A]}]} : core.i32
+    %r = tribute_control.call @apply(%f, %x) attributes {row_args = [{instances = [@A]}]} : (tribute_control.func_sig<(core.i32) -> core.i32 row(@A)>, core.i32) -> core.i32
     tribute_control.return %r
   }
 }"#;

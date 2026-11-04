@@ -434,7 +434,7 @@ mod tests {
     wasm.return
   }
   wasm.func @direct(%value: core.i32) -> core.nil {
-    wasm.return_call @target(%value)
+    wasm.return_call @target(%value) : (core.i32) -> ()
   }
   wasm.func @indirect(%table_index: core.i32, %value: core.i32) -> core.nil {
     wasm.return_call_indirect %table_index(%value) : (core.i32) -> ()
@@ -611,10 +611,10 @@ mod tests {
   wasm.func @byRef(%value: wasm.structref) -> core.nil { wasm.return }
   wasm.func @byArray(%value: wasm.arrayref) -> core.nil { wasm.return }
   wasm.func @caller(%leaf: !Leaf, %bytes: !Bytes, %closure: !Closure, %data: !Data) -> core.nil {
-    wasm.call @byRef(%leaf)
-    wasm.call @byRef(%bytes)
-    wasm.call @byRef(%closure)
-    wasm.call @byArray(%data)
+    wasm.call @byRef(%leaf) : (!Leaf) -> ()
+    wasm.call @byRef(%bytes) : (!Bytes) -> ()
+    wasm.call @byRef(%closure) : (!Closure) -> ()
+    wasm.call @byArray(%data) : (!Data) -> ()
     wasm.return
   }
 }"#,
@@ -635,10 +635,10 @@ mod tests {
   !Bytes = test.layout<!Data, core.i32, core.i32, {layout = "bytes"}>
   wasm.func @byAny(%value: wasm.anyref) -> core.nil { wasm.return }
   wasm.func @caller(%bytes: !Bytes, %data: !Data, %array: !Array, %structural: wasm_gc.struct<core.i32>) -> core.nil {
-    wasm.call @byAny(%bytes)
-    wasm.call @byAny(%data)
-    wasm.call @byAny(%array)
-    wasm.call @byAny(%structural)
+    wasm.call @byAny(%bytes) : (!Bytes) -> ()
+    wasm.call @byAny(%data) : (!Data) -> ()
+    wasm.call @byAny(%array) : (!Array) -> ()
+    wasm.call @byAny(%structural) : (wasm_gc.struct<core.i32>) -> ()
     wasm.return
   }
 }"#,
@@ -659,7 +659,7 @@ mod tests {
   !Unregistered = test.opaque<core.i32>
   wasm.func @byAny(%value: wasm.anyref) -> core.nil {{ wasm.return }}
   wasm.func @caller(%value: {value_ty}) -> core.nil {{
-    wasm.call @byAny(%value)
+    wasm.call @byAny(%value) : ({value_ty}) -> ()
     wasm.return
   }}
 }}"#
@@ -698,7 +698,7 @@ mod tests {
   !Bytes = test.layout<!Data, core.i32, core.i32, {{layout = "bytes"}}>
   wasm.func @callee(%value: {parameter_ty}) -> core.nil {{ wasm.return }}
   wasm.func @caller(%value: {value_ty}) -> core.nil {{
-    wasm.call @callee(%value)
+    wasm.call @callee(%value) : ({value_ty}) -> ()
     wasm.return
   }}
 }}"#
@@ -723,7 +723,7 @@ mod tests {
   !Leaf = wasm_gc.struct<core.i32>
   wasm.func @produces(%leaf: !Leaf) -> !Leaf { wasm.return %leaf }
   wasm.func @caller(%leaf: !Leaf) -> core.nil {
-    %value = wasm.call @produces(%leaf) : wasm.structref
+    %value = wasm.call @produces(%leaf) : (!Leaf) -> wasm.structref
     wasm.return
   }
 }"#,
@@ -738,7 +738,7 @@ mod tests {
   !Leaf = wasm_gc.struct<core.i32>
   wasm.func @produces(%value: wasm.structref) -> wasm.structref { wasm.return %value }
   wasm.func @caller(%value: wasm.structref) -> core.nil {
-    %leaf = wasm.call @produces(%value) : !Leaf
+    %leaf = wasm.call @produces(%value) : (wasm.structref) -> !Leaf
     wasm.return
   }
 }"#,
@@ -767,7 +767,7 @@ mod tests {
     wasm.return %value
   }
   wasm.func @caller() -> core.nil {
-    %value = wasm.call @callee() : core.i64
+    %value = wasm.call @callee() : () -> core.i64
     wasm.return
   }
 }"#,
@@ -789,7 +789,7 @@ mod tests {
             r#"core.module @test {
   wasm.func @unit() -> core.nil { wasm.return }
   wasm.func @caller() -> core.nil {
-    wasm.call @unit()
+    wasm.call @unit() : () -> ()
     wasm.return
   }
 }"#,
@@ -808,7 +808,7 @@ mod tests {
     wasm.return %value
   }
   wasm.func @caller() -> wasm.structref {
-    %value = wasm.call @source() : wasm.structref
+    %value = wasm.call @source() : () -> wasm.structref
     wasm.return %value
   }
 }"#,
@@ -894,7 +894,7 @@ mod tests {
   }}
   core.module @inner {{
     wasm.func @target() -> core.nil {{ wasm.return }}
-    wasm.func @caller() -> core.i32 {{ wasm.return_call {callee}() }}
+    wasm.func @caller() -> core.i32 {{ wasm.return_call {callee}() : () -> () }}
   }}
 }}"#
             )

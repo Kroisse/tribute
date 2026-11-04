@@ -47,7 +47,7 @@ mod clif {
     fn func_reloc(offset: Attr<u32>, func: Attr<SymbolRef>) {}
 
     #[implements(CallLike)]
-    #[asm_format(callee "(" args ")" attr_dict (":" types(results)^)?)]
+    #[asm_format(callee "(" args ")" attr_dict ":" functional_type(args, results))]
     fn call(callee: Attr<SymbolRef>, args: Variadic<_>) -> Variadic<_> {}
 
     #[verify]
@@ -188,7 +188,7 @@ mod clif {
     fn trapnz(code: Attr<String>, cond: Value<impl IntegerLike>) {}
 
     #[implements(CallLike)]
-    #[asm_format(callee "(" args ")" attr_dict)]
+    #[asm_format(callee "(" args ")" attr_dict ":" functional_type(args))]
     fn return_call(callee: Attr<SymbolRef>, args: Variadic<_>) {}
 
     #[asm_format(callee "(" args ")" attr_dict ":" signature(sig))]

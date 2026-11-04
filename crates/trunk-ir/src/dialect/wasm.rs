@@ -73,7 +73,7 @@ mod wasm {
 
     // Functions
     #[implements(CallLike)]
-    #[asm_format(callee "(" args ")" attr_dict (":" types(results)^)?)]
+    #[asm_format(callee "(" args ")" attr_dict ":" functional_type(args, results))]
     fn call(callee: Attr<SymbolRef>, args: Variadic<_>) -> Variadic<_> {}
 
     /// Call the function at a table index through its exact signature.
@@ -105,7 +105,7 @@ mod wasm {
     }
 
     #[implements(CallLike)]
-    #[asm_format(callee "(" args ")" attr_dict)]
+    #[asm_format(callee "(" args ")" attr_dict ":" functional_type(args))]
     fn return_call(callee: Attr<SymbolRef>, args: Variadic<_>) {}
 
     /// A tail call of the function at a table index through its exact

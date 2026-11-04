@@ -293,7 +293,7 @@ mod Native {
     );
     let call = checked_logical_function(ir, "call");
     assert!(
-        call.contains("tribute_control.call @\"pkg::identity\"(%0) : core.i32"),
+        call.contains("tribute_control.call @\"pkg::identity\"(%0) : (core.i32) -> core.i32"),
         "direct source call must target the logical extern declaration:\n{call}"
     );
     let nested_call = checked_logical_function(ir, "Native::call");

@@ -142,7 +142,7 @@ pub(super) fn rc_allocation(
 /// Generates:
 /// ```text
 /// %size      = clif.iconst(layout.total_size + 8)
-/// %raw_ptr   = clif.call @__tribute_alloc(%size)
+/// %raw_ptr   = clif.call @__tribute_alloc(%size) : (core.i64) -> ()
 /// %rc_one    = clif.iconst(1)
 /// clif.store(%rc_one, %raw_ptr, offset=0)        // refcount
 /// %rtti_idx  = clif.iconst(<rtti_idx>)
@@ -256,7 +256,7 @@ impl OpRewritePattern for StructNewPattern {
 /// Generates:
 /// ```text
 /// %size      = clif.iconst(variant_layout.total_size + 8)
-/// %raw_ptr   = clif.call @__tribute_alloc(%size)
+/// %raw_ptr   = clif.call @__tribute_alloc(%size) : (core.i64) -> ()
 /// %rc_one    = clif.iconst(1)
 /// clif.store(%rc_one, %raw_ptr, offset=0)        // refcount
 /// %rtti_idx  = clif.iconst(<rtti_idx>)

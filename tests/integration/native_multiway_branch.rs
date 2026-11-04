@@ -76,7 +76,7 @@ fn selection_module(selection: &Selection<'_>) -> String {
             text,
             r#"    ^check{position}:
       %input{position} = clif.iconst {{value = {input}}} : {index_ty}
-      %actual{position} = clif.call @select(%input{position}) : core.i32
+      %actual{position} = clif.call @select(%input{position}) : ({index_ty}) -> core.i32
       %expected{position} = clif.iconst {{value = {result}}} : core.i32
       %matches{position} = clif.icmp %actual{position}, %expected{position} {{cond = "eq"}} : core.i8
       clif.brif %matches{position} [^check{next}, ^fail{position}]

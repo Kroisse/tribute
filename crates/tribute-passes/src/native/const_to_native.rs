@@ -143,7 +143,7 @@ fn analyze_consts(ctx: &IrContext, module: Module) -> NativeConstAnalysis {
 /// ```text
 /// %data_ptr = clif.symbol_addr @__tribute_rodata_0
 /// %len = clif.iconst 5
-/// %raw = clif.call @__tribute_alloc(40)  // RC(8) + ptr, len, owner, cap
+/// %raw = clif.call @__tribute_alloc(40) : (core.i64) -> ()  // RC(8) + ptr, len, owner, cap
 /// // Store RC header
 /// clif.store 1, %raw, offset=0          // refcount
 /// clif.store 0, %raw, offset=4          // rtti_idx

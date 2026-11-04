@@ -228,7 +228,7 @@ mod tests {
   clif.func @f(%0: core.ptr) -> core.nil {
   ^bb0:
     %1 = tribute_rt.retain %0 : core.ptr
-    %2 = clif.call @consume(%0) : core.nil
+    %2 = clif.call @consume(%0) : (core.ptr) -> core.nil
     tribute_rt.release %0 {alloc_size = 12}
     clif.return
   }

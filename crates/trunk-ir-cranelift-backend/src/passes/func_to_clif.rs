@@ -590,7 +590,7 @@ mod tests {
             .lines()
             .find(|line| line.contains("clif.call"))
             .expect("lowered direct call");
-        assert!(call.contains(": core.ptr"), "{printed}");
+        assert!(call.contains("-> core.ptr"), "{printed}");
         assert!(!call.contains("test.anyref"), "{printed}");
     }
 
