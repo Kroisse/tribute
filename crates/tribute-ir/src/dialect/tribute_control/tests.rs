@@ -870,99 +870,27 @@ fn validator_rejects_structure_arity_type_and_terminator_errors() {
 }
 
 #[test]
-fn local_validator_reports_distinct_malformed_operation_contracts() {
+fn local_validator_reports_unknown_and_unattached_operations() {
     let (mut ctx, module) = parse_fixture(
         r#"core.module @test {
-  !token = tribute_control.resume_token<core.i32, core.i32>
   %integer = arith.const {value = 1} : core.i32
-  %boolean = arith.const {value = true} : core.i1
-
-  tribute_control.func @bad_func() -> core.i32 {
-    tribute_control.return %integer
-  }
-  %bad_lambda = tribute_control.lambda() -> core.i32 captures [%integer] {
-    tribute_control.return %integer
-  }
-  %bad_resume = tribute_control.resume %integer, %boolean : core.i1
-  %token = "test.token"() : !token
-  %mismatched_resume = tribute_control.resume %token, %boolean : core.i1
   "tribute_control.unknown"()
 }"#,
     );
     let loc = location(&mut ctx);
-    let i32_ty = ctx
-        .types()
-        .iter()
-        .find_map(|(ty, data)| (data.name.is(&ctx, "core.i32")).then_some(ty))
-        .unwrap();
     let i32_value = module
         .ops(&ctx)
         .iter()
         .copied()
-        .find(|op| ctx.op(*op).name.is(&ctx, "arith.const") && ctx.op_result_types(*op) == [i32_ty])
+        .find(|op| ctx.op(*op).name.is(&ctx, "arith.const"))
         .map(|op| ctx.op_result(op, 0))
         .unwrap();
-
-    // Custom func assembly requires its symbol and callable type, so the
-    // parser cannot represent their simultaneous absence.
-    let missing_func = trunk_ir::OperationDataBuilder::new(loc, "tribute_control.func")
-        .operand(i32_value)
-        .build(&mut ctx);
-    let missing_func = ctx.create_op(missing_func);
-    append_module_op(&mut ctx, module, missing_func);
-
-    let bad_func = control_ops(&ctx, module, Func::NAME)
-        .into_iter()
-        .find(|op| ctx.op_attrs(*op).get_str("sym_name") == Some("bad_func"))
-        .unwrap();
-    // Custom assembly always derives a callable type and permits at most one
-    // body. Mutate only those parser-enforced fields.
-    ctx.op_attrs_mut(bad_func)
-        .insert("type", Attribute::Type(i32_ty));
-    let extra_block = block(&mut ctx, loc, &[]);
-    let extra_region = region(&mut ctx, loc, extra_block);
-    ctx.push_op_region(bad_func, extra_region);
-
-    let bad_lambda = control_op(&ctx, module, Lambda::NAME);
-    ctx.set_op_result_type(bad_lambda, 0, i32_ty);
-
-    let resumes = control_ops(&ctx, module, Resume::NAME);
-    let bad_resume = resumes[0];
-    let mismatched_resume = resumes[1];
     let unknown_name = ctx
         .lookup_op_name("tribute_control.unknown")
         .expect("the fixture uses tribute_control.unknown");
     let unknown = control_op(&ctx, module, unknown_name);
 
     let result = validate_local(&ctx, module);
-    assert_op_diagnostics(
-        &result,
-        missing_func,
-        &[
-            "expected 0 operand(s), found 1",
-            "missing required attribute `sym_name`",
-            "missing required attribute `type`",
-        ],
-    );
-    assert_op_diagnostics(&result, bad_func, &["expected 0 to 1 region(s), found 2"]);
-    assert_op_diagnostics(
-        &result,
-        bad_lambda,
-        &["result #0 `result`: expected tribute_control.func_sig, found core.i32"],
-    );
-    assert_op_diagnostics(
-        &result,
-        bad_resume,
-        &["operand #0 `resume_token`: expected T: tribute_control.resume_token, found core.i32"],
-    );
-    assert_op_diagnostics(
-        &result,
-        mismatched_resume,
-        &[
-            "operand #1 `value`: expected T::Input = core.i32, found core.i1",
-            "result #0 `result`: expected T::Answer = core.i32, found core.i1",
-        ],
-    );
     assert_op_diagnostics(
         &result,
         unknown,

@@ -70,44 +70,20 @@ fn final_handle_dispatch_shape(
     ctx: &IrContext,
     op: OpRef,
 ) -> Result<FinalHandleDispatchShape, ResolveEvidenceError> {
-    let data = ctx.op(op);
-    let error = |message: String| ResolveEvidenceError {
-        op,
-        source_location: format!(
-            "{}:{}:{}",
-            ctx.paths().get(data.location.path),
-            data.location.span.start,
-            data.location.span.end
-        ),
-        message,
-    };
-    let operands = ctx.op_operands(op);
-    if !ctx.op_result_types(op).is_empty() {
-        return Err(error(
-            "final ability.handle_dispatch must be resultless".into(),
-        ));
-    }
-    let Some((&evidence, rest)) = operands.split_first() else {
-        return Err(error(
-            "final ability.handle_dispatch requires an evidence operand".into(),
-        ));
-    };
-    let Some((&prompt_tag, dispatchers)) = rest.split_first() else {
-        return Err(error(
-            "final ability.handle_dispatch requires a prompt-tag operand".into(),
-        ));
-    };
+    let error = |message: String| resolve_error(ctx, op, message);
+    // The operation's definition fixes its operands, result, and region.
+    let dispatch = ability::HandleDispatch::from_op(ctx, op)
+        .expect("final_handle_dispatch_shape reads an ability.handle_dispatch");
+    let evidence = dispatch.evidence(ctx);
+    let prompt_tag = dispatch.prompt_tag(ctx);
     let prompt_ty = ctx.get_type(ctx.value_ty(prompt_tag));
     if !prompt_ty.name.is(ctx, "core.i32") {
         return Err(error(
             "final ability.handle_dispatch prompt-tag operand must have type core.i32".into(),
         ));
     }
-    let Some(Attribute::List(abilities)) = ctx.op_attrs(op).get("abilities") else {
-        return Err(error(
-            "final ability.handle_dispatch requires an abilities list".into(),
-        ));
-    };
+    let dispatchers = dispatch.dispatchers(ctx);
+    let abilities = dispatch.abilities(ctx);
     if abilities.len() != dispatchers.len() {
         return Err(error(format!(
             "abilities cardinality {} does not match {} dispatcher operands",
@@ -115,20 +91,11 @@ fn final_handle_dispatch_shape(
             dispatchers.len()
         )));
     }
-    let mut handled = Vec::with_capacity(abilities.len());
-    for (ability, &tr_dispatch) in abilities.iter().zip(dispatchers) {
-        let Attribute::SymbolRef(ability) = ability else {
-            return Err(error(
-                "every abilities entry must name an ability instance".into(),
-            ));
-        };
-        handled.push((ability.clone(), tr_dispatch));
-    }
-    let Ok(body) = ctx.op_regions(op).exactly_one() else {
-        return Err(error(
-            "final ability.handle_dispatch requires exactly one body region".into(),
-        ));
-    };
+    let handled = abilities
+        .zip(dispatchers)
+        .map(|(ability, &tr_dispatch)| (ability.clone(), tr_dispatch))
+        .collect();
+    let body = dispatch.body(ctx);
     let [body_block] = ctx.region(body).blocks.as_slice() else {
         return Err(error(
             "final ability.handle_dispatch body must have exactly one block".into(),
@@ -171,6 +138,18 @@ pub(crate) fn validate_final_handle_dispatches(
 ) -> Result<(), ResolveEvidenceError> {
     fn visit(ctx: &IrContext, op: OpRef) -> Result<(), ResolveEvidenceError> {
         if ability::HandleDispatch::matches(ctx, op) {
+            // The shape checks below assume the operation's definition.
+            let violations = ability::HandleDispatch::DEF.verify(ctx, op);
+            if !violations.is_empty() {
+                return Err(resolve_error(
+                    ctx,
+                    op,
+                    format!(
+                        "final ability.handle_dispatch: {}",
+                        violations.iter().format("; ")
+                    ),
+                ));
+            }
             final_handle_dispatch_shape(ctx, op)?;
         }
         for region in ctx.op_regions(op) {
@@ -677,6 +656,14 @@ mod tests {
     #[test]
     fn malformed_final_handle_dispatches_fail_before_mutation() {
         let malformed = [
+            // The definition is checked before the delimiter's own rules.
+            (
+                r#"ability.handle_dispatch %ev, %prompt(%tr) attributes {abilities = [1]} {
+      ^body(%inner: !evidence):
+        func.unreachable
+    }"#,
+                "final ability.handle_dispatch: attribute `abilities`",
+            ),
             (
                 r#"ability.handle_dispatch %ev, %tr() attributes {abilities = []} {
       ^body(%inner: !evidence):
@@ -690,20 +677,6 @@ mod tests {
         func.unreachable
     }"#,
                 "cardinality",
-            ),
-            (
-                r#"ability.handle_dispatch %ev, %prompt(%tr) attributes {abilities = [1]} {
-      ^body(%inner: !evidence):
-        func.unreachable
-    }"#,
-                "must name an ability instance",
-            ),
-            (
-                r#"ability.handle_dispatch %ev, %prompt(%tr) attributes {abilities = [core.i32]} {
-      ^body(%inner: !evidence):
-        func.unreachable
-    }"#,
-                "must name an ability instance",
             ),
             (
                 r#"ability.handle_dispatch %prompt, %prompt() attributes {abilities = []} {
