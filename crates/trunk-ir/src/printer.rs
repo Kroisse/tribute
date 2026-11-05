@@ -576,10 +576,7 @@ impl<'a> OpAsmPrinter<'a> {
             })
             .peekable();
         if attrs.peek().is_some() {
-            let entries = attrs.format_with(", ", |(key, val), f| {
-                f(&format_args!("{} = {}", ctx.str(key), state.attr(val)))
-            });
-            write!(self, " {{{entries}}}")?;
+            write!(self, " {}", state.attr_dict(attrs))?;
         }
 
         let result_types = ctx.op_result_types(op);
@@ -1947,6 +1944,18 @@ core.module @test {
         let root = crate::parser::parse_module(&mut ctx, input).expect("parse failed");
         let output = root.display(&ctx).to_string();
         insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn a_generic_attribute_key_that_is_not_bare_is_quoted() {
+        let input = r#"core.module @m {
+  "test.op"() {"a-b" = 1, plain = 2}
+}
+"#;
+        let mut ctx = IrContext::new();
+        let root = crate::parser::parse_module(&mut ctx, input).expect("parse failed");
+        let printed = root.display(&ctx).to_string();
+        assert_eq!(printed, input);
     }
 
     #[test]
