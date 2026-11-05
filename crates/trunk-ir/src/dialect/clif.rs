@@ -619,14 +619,19 @@ impl crate::ops::Verify for Switch {
 /// `0: ^first, 5: ^second`.
 pub struct SwitchCases;
 
-impl crate::asm_format::OpAsmDirective for SwitchCases {
+impl crate::asm_format::syntax::SyntaxDirective for SwitchCases {
     /// Each case with its target.
-    type Parts<'a> = Vec<(i128, crate::BlockRef)>;
+    type Value = Vec<(i128, crate::BlockRef)>;
 
-    fn decompose<'a>(
-        _ctx: &'a crate::IrContext,
-        entities: &'a [crate::asm_format::CustomEntity<'a>],
-    ) -> Option<Self::Parts<'a>> {
+    fn syntax() -> impl crate::asm_format::syntax::Syntax<Value = Self::Value> {
+        use crate::asm_format::syntax::{int, lit, separated, successor, terminated};
+        separated((terminated(int(), lit(": ")), successor()), ", ")
+    }
+
+    fn from_entities(
+        _ctx: &crate::IrContext,
+        entities: &[crate::asm_format::CustomEntity<'_>],
+    ) -> Option<Self::Value> {
         use crate::asm_format::CustomEntity;
         let [
             CustomEntity::Attribute(Some(Attribute::List(cases))),
@@ -648,42 +653,23 @@ impl crate::asm_format::OpAsmDirective for SwitchCases {
             .collect()
     }
 
-    fn print(p: &mut crate::printer::OpAsmPrinter<'_>, parts: Self::Parts<'_>) -> std::fmt::Result {
-        use itertools::Itertools as _;
-        use std::fmt::Write as _;
-
-        let s = p.state();
-        let cases = parts.into_iter().format_with(", ", |(case, target), f| {
-            f(&format_args!("{case}: {}", s.block(target)))
-        });
-        write!(p, "{cases}")
-    }
-
-    fn parse(
-        p: &mut crate::parser::OpAsmParser<'_>,
-    ) -> crate::parser::ParseResult<Vec<crate::asm_format::ParsedEntity>> {
+    fn into_entities(
+        _ctx: &mut crate::IrContext,
+        cases: Self::Value,
+    ) -> Vec<crate::asm_format::ParsedEntity> {
         use crate::asm_format::ParsedEntity;
-        use crate::parser::lexer::integer_lit;
-
-        let mut cases = Vec::new();
-        let mut targets = Vec::new();
-        let mut case = p.parse_optional_token("a case", integer_lit)?;
-        while let Some(value) = case {
-            cases.push(crate::Attribute::Int(value));
-            p.parse_punct(":")?;
-            targets.push(p.parse_successor()?);
-            case = if p.parse_optional_punct(",") {
-                Some(p.parse_integer()?)
-            } else {
-                None
-            };
-        }
-        Ok(vec![
-            ParsedEntity::Attribute(Some(crate::Attribute::List(cases))),
+        let (cases, targets): (Vec<_>, Vec<_>) = cases
+            .into_iter()
+            .map(|(case, target)| (Attribute::Int(case), target))
+            .unzip();
+        vec![
+            ParsedEntity::Attribute(Some(Attribute::List(cases))),
             ParsedEntity::Successors(targets),
-        ])
+        ]
     }
 }
+
+crate::syntax_directive!(SwitchCases);
 
 impl crate::ops::Verify for Data {
     /// The relocation region holds only `func_reloc` declarations at distinct

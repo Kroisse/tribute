@@ -202,6 +202,14 @@ where
   through `OpAsmPrinter::newline`, and `tribute_control.handle` writes
   each arm after its binding with the arm's entry block arguments, through
   `AsmState::entry_args` and `OpAsmParser::parse_region_with_entry`.
+  A directive can describe its syntax once with the combinators of
+  `asm_format::syntax` instead of writing `print`, `parse`, and
+  `assign_names` by hand: it implements `SyntaxDirective` (a `Syntax`
+  value, and the conversion between the entities and that value) and
+  `syntax_directive!` derives the hooks, so the text it prints is the text
+  it reads back. `scf.index_switch`, `cf.switch`, `clif.switch`,
+  `tribute_control.handle`, and the `ability` handle directives are written
+  this way.
   `type(x)` on a single operand writes its type, which the parser checks
   against the operand's definition.
   `signature(t, body)` writes the type of `t`, an `Attr<TypeOf<S>>`

@@ -120,13 +120,25 @@ impl crate::ops::Verify for Switch {
 /// its target.
 pub struct SwitchCases;
 
-impl crate::asm_format::OpAsmDirective for SwitchCases {
-    type Parts<'a> = (BlockRef, Vec<(i64, BlockRef)>);
+impl crate::asm_format::syntax::SyntaxDirective for SwitchCases {
+    /// The default successor, then each case with its target.
+    type Value = (BlockRef, Vec<(i128, BlockRef)>);
 
-    fn decompose<'a>(
-        _ctx: &'a IrContext,
-        entities: &'a [crate::asm_format::CustomEntity<'a>],
-    ) -> Option<Self::Parts<'a>> {
+    fn syntax() -> impl crate::asm_format::syntax::Syntax<Value = Self::Value> {
+        use crate::asm_format::syntax::{int, lit, many, preceded, successor, terminated};
+        (
+            preceded(lit("default: "), successor()),
+            many(preceded(
+                lit(", "),
+                (terminated(int(), lit(": ")), successor()),
+            )),
+        )
+    }
+
+    fn from_entities(
+        _ctx: &IrContext,
+        entities: &[crate::asm_format::CustomEntity<'_>],
+    ) -> Option<Self::Value> {
         use crate::asm_format::CustomEntity;
         let [
             CustomEntity::Successors(default),
@@ -146,49 +158,31 @@ impl crate::asm_format::OpAsmDirective for SwitchCases {
             .iter()
             .zip(targets)
             .map(|(case, &target)| match *case {
-                Attribute::Int(case) => Some((i64::try_from(case).ok()?, target)),
+                Attribute::Int(case) => Some((case, target)),
                 _ => None,
             })
             .collect::<Option<_>>()?;
         Some((*default, arms))
     }
 
-    fn print(
-        p: &mut crate::printer::OpAsmPrinter<'_>,
-        (default, arms): Self::Parts<'_>,
-    ) -> std::fmt::Result {
-        use std::fmt::Write as _;
-
-        let s = p.state();
-        write!(p, "default: {}", s.block(default))?;
-        for (case, target) in arms {
-            write!(p, ", {case}: {}", s.block(target))?;
-        }
-        Ok(())
-    }
-
-    fn parse(
-        p: &mut crate::parser::OpAsmParser<'_>,
-    ) -> crate::parser::ParseResult<Vec<crate::asm_format::ParsedEntity>> {
+    fn into_entities(
+        _ctx: &mut IrContext,
+        (default, arms): Self::Value,
+    ) -> Vec<crate::asm_format::ParsedEntity> {
         use crate::asm_format::ParsedEntity;
-
-        p.parse_keyword("default")?;
-        p.parse_punct(":")?;
-        let default = p.parse_successor()?;
-        let mut cases = Vec::new();
-        let mut targets = Vec::new();
-        while p.parse_optional_punct(",") {
-            cases.push(Attribute::Int(p.parse_integer()?));
-            p.parse_punct(":")?;
-            targets.push(p.parse_successor()?);
-        }
-        Ok(vec![
+        let (cases, targets): (Vec<_>, Vec<_>) = arms
+            .into_iter()
+            .map(|(case, target)| (Attribute::Int(case), target))
+            .unzip();
+        vec![
             ParsedEntity::Successors(vec![default]),
             ParsedEntity::Attribute(Some(Attribute::List(cases))),
             ParsedEntity::Successors(targets),
-        ])
+        ]
     }
 }
+
+crate::syntax_directive!(SwitchCases);
 
 impl Branch for Switch {
     fn successors(&self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError> {

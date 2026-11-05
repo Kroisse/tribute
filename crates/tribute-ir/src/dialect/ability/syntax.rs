@@ -1,13 +1,11 @@
 //! The custom syntax that writes each element of an `ability` operation's
 //! list attribute together with the operand it pairs with.
 
-use std::fmt::{self, Write as _};
-
-use itertools::Itertools as _;
-
-use trunk_ir::asm_format::{CustomEntity, OpAsmDirective, ParsedEntity};
-use trunk_ir::parser::{OpAsmParser, ParseResult};
-use trunk_ir::printer::{OpAsmPrinter, display_symbol_ref};
+use trunk_ir::asm_format::syntax::{
+    Syntax, SyntaxDirective, delimited, lit, map, operand, optional, preceded, separated,
+    symbol_ref, terminated, ty,
+};
+use trunk_ir::asm_format::{CustomEntity, ParsedEntity};
 use trunk_ir::refs::ValueRef;
 use trunk_ir::types::Attribute;
 use trunk_ir::{IrContext, SymbolPath};
@@ -18,13 +16,35 @@ use super::HandlerBinding;
 /// `[op @State @get : core.i32 = %get, ..]`.
 pub struct HandlerArms;
 
-impl OpAsmDirective for HandlerArms {
-    type Parts<'a> = Vec<(HandlerBinding, ValueRef)>;
+impl SyntaxDirective for HandlerArms {
+    type Value = Vec<(HandlerBinding, ValueRef)>;
 
-    fn decompose<'a>(
-        ctx: &'a IrContext,
-        entities: &'a [CustomEntity<'a>],
-    ) -> Option<Self::Parts<'a>> {
+    fn syntax() -> impl Syntax<Value = Self::Value> {
+        // Each arm on its own line; the printer indents each line.
+        let arm = map(
+            (
+                preceded(lit("\n  "), HandlerBinding::header_syntax()),
+                preceded(lit(" : "), ty()),
+                preceded(lit(" = "), operand()),
+            ),
+            |(header, result, arm)| (HandlerBinding::from_header(header, result), arm),
+            |(binding, arm)| {
+                let (header, result) = binding.header();
+                (header, result, *arm)
+            },
+        );
+        map(
+            delimited(
+                lit("["),
+                optional(terminated(separated(arm, ","), lit("\n"))),
+                lit("]"),
+            ),
+            Option::unwrap_or_default,
+            |arms| (!arms.is_empty()).then(|| arms.clone()),
+        )
+    }
+
+    fn from_entities(ctx: &IrContext, entities: &[CustomEntity<'_>]) -> Option<Self::Value> {
         let [
             CustomEntity::Attribute(Some(Attribute::List(handlers))),
             CustomEntity::Operands(arms),
@@ -42,51 +62,36 @@ impl OpAsmDirective for HandlerArms {
             .collect()
     }
 
-    fn print(p: &mut OpAsmPrinter<'_>, arms: Self::Parts<'_>) -> fmt::Result {
-        let s = p.state();
-        // Each arm on its own line; the printer indents each line.
-        let entries = arms.iter().format_with(",", |(binding, arm), f| {
-            f(&format_args!(
-                "\n  {} : {} = {}",
-                binding.header(s.ctx()),
-                s.ty(binding.operation_result_type),
-                s.value(*arm)
-            ))
-        });
-        let end = if arms.is_empty() { "" } else { "\n" };
-        write!(p, "[{entries}{end}]")
-    }
-
-    fn parse(p: &mut OpAsmParser<'_>) -> ParseResult<Vec<ParsedEntity>> {
-        let arms = p.parse_delimited("[", "]", |p| {
-            let header = HandlerBinding::parse_header(p)?
-                .ok_or_else(|| p.expected("a handler binding `op @Ability @name`"))?;
-            p.parse_punct(":")?;
-            let ty = p.parse_type()?;
-            p.parse_punct("=")?;
-            let arm = p.parse_operand()?;
-            let binding = header.with_result_type(p.ctx_mut(), ty);
-            Ok((binding.to_attribute(p.ctx_mut()), arm))
-        })?;
-        let (handlers, arms) = arms.into_iter().unzip();
-        Ok(vec![
+    fn into_entities(ctx: &mut IrContext, arms: Self::Value) -> Vec<ParsedEntity> {
+        let (handlers, arms) = arms
+            .into_iter()
+            .map(|(binding, arm)| (binding.to_attribute(ctx), arm))
+            .unzip();
+        vec![
             ParsedEntity::Attribute(Some(Attribute::List(handlers))),
             ParsedEntity::Operands(arms),
-        ])
+        ]
     }
 }
+
+trunk_ir::syntax_directive!(HandlerArms);
 
 /// `ability.handle_dispatch`'s abilities, each with its dispatcher:
 /// `[@State: %d0, @Console: %d1]`.
 pub struct Dispatchers;
 
-impl OpAsmDirective for Dispatchers {
-    type Parts<'a> = Vec<(&'a SymbolPath, ValueRef)>;
+impl SyntaxDirective for Dispatchers {
+    type Value = Vec<(SymbolPath, ValueRef)>;
 
-    fn decompose<'a>(
-        _ctx: &'a IrContext,
-        entities: &'a [CustomEntity<'a>],
-    ) -> Option<Self::Parts<'a>> {
+    fn syntax() -> impl Syntax<Value = Self::Value> {
+        delimited(
+            lit("["),
+            separated((terminated(symbol_ref(), lit(": ")), operand()), ", "),
+            lit("]"),
+        )
+    }
+
+    fn from_entities(_ctx: &IrContext, entities: &[CustomEntity<'_>]) -> Option<Self::Value> {
         let [
             CustomEntity::Attribute(Some(Attribute::List(abilities))),
             CustomEntity::Operands(dispatchers),
@@ -101,36 +106,22 @@ impl OpAsmDirective for Dispatchers {
             .iter()
             .zip(dispatchers.iter())
             .map(|(ability, &dispatcher)| match ability {
-                Attribute::SymbolRef(ability) => Some((ability, dispatcher)),
+                Attribute::SymbolRef(ability) => Some((ability.clone(), dispatcher)),
                 _ => None,
             })
             .collect()
     }
 
-    fn print(p: &mut OpAsmPrinter<'_>, dispatchers: Self::Parts<'_>) -> fmt::Result {
-        let s = p.state();
-        let dispatchers = dispatchers
+    fn into_entities(_ctx: &mut IrContext, dispatchers: Self::Value) -> Vec<ParsedEntity> {
+        let (abilities, dispatchers) = dispatchers
             .into_iter()
-            .format_with(", ", |(ability, dispatcher), f| {
-                f(&format_args!(
-                    "{}: {}",
-                    display_symbol_ref(ability),
-                    s.value(dispatcher)
-                ))
-            });
-        write!(p, "[{dispatchers}]")
-    }
-
-    fn parse(p: &mut OpAsmParser<'_>) -> ParseResult<Vec<ParsedEntity>> {
-        let dispatchers = p.parse_delimited("[", "]", |p| {
-            let ability = p.parse_symbol_ref()?;
-            p.parse_punct(":")?;
-            Ok((Attribute::SymbolRef(ability), p.parse_operand()?))
-        })?;
-        let (abilities, dispatchers) = dispatchers.into_iter().unzip();
-        Ok(vec![
+            .map(|(ability, dispatcher)| (Attribute::SymbolRef(ability), dispatcher))
+            .unzip();
+        vec![
             ParsedEntity::Attribute(Some(Attribute::List(abilities))),
             ParsedEntity::Operands(dispatchers),
-        ])
+        ]
     }
 }
+
+trunk_ir::syntax_directive!(Dispatchers);

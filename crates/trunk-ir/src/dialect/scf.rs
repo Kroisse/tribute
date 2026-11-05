@@ -317,15 +317,24 @@ impl RegionBranch for IndexSwitch {
 /// MLIR's `scf.index_switch` writes them.
 pub struct SwitchArms;
 
-impl crate::asm_format::OpAsmDirective for SwitchArms {
-    type Parts<'a> = (Vec<(i64, crate::refs::RegionRef)>, crate::refs::RegionRef);
+impl crate::asm_format::syntax::SyntaxDirective for SwitchArms {
+    type Value = (Vec<(i128, crate::refs::RegionRef)>, crate::refs::RegionRef);
 
-    const SPACED: bool = false;
+    fn syntax() -> impl crate::asm_format::syntax::Syntax<Value = Self::Value> {
+        use crate::asm_format::syntax::{int, lit, many, preceded, region};
+        (
+            many((
+                preceded(lit("\ncase "), int()),
+                preceded(lit(" "), region()),
+            )),
+            preceded(lit("\ndefault "), region()),
+        )
+    }
 
-    fn decompose<'a>(
-        _ctx: &'a IrContext,
-        entities: &'a [crate::asm_format::CustomEntity<'a>],
-    ) -> Option<Self::Parts<'a>> {
+    fn from_entities(
+        _ctx: &IrContext,
+        entities: &[crate::asm_format::CustomEntity<'_>],
+    ) -> Option<Self::Value> {
         use crate::asm_format::CustomEntity;
         let [
             CustomEntity::Attribute(Some(Attribute::List(cases))),
@@ -345,49 +354,31 @@ impl crate::asm_format::OpAsmDirective for SwitchArms {
             .iter()
             .zip(regions)
             .map(|(case, &region)| match *case {
-                Attribute::Int(case) => Some((i64::try_from(case).ok()?, region)),
+                Attribute::Int(case) => Some((case, region)),
                 _ => None,
             })
             .collect::<Option<_>>()?;
         Some((arms, *default))
     }
 
-    fn print(
-        p: &mut crate::printer::OpAsmPrinter<'_>,
-        (arms, default): Self::Parts<'_>,
-    ) -> std::fmt::Result {
-        use std::fmt::Write as _;
-
-        for (case, region) in arms {
-            p.newline()?;
-            write!(p, "case {case} ")?;
-            p.print_region(region)?;
-        }
-        p.newline()?;
-        p.write_str("default ")?;
-        p.print_region(default)
-    }
-
-    fn parse(
-        p: &mut crate::parser::OpAsmParser<'_>,
-    ) -> crate::parser::ParseResult<Vec<crate::asm_format::ParsedEntity>> {
+    fn into_entities(
+        _ctx: &mut IrContext,
+        (arms, default): Self::Value,
+    ) -> Vec<crate::asm_format::ParsedEntity> {
         use crate::asm_format::ParsedEntity;
-
-        let mut cases = Vec::new();
-        let mut regions = Vec::new();
-        while p.parse_optional_keyword("case") {
-            cases.push(Attribute::Int(p.parse_integer()?));
-            regions.push(p.parse_region()?);
-        }
-        p.parse_keyword("default")?;
-        let default = p.parse_region()?;
-        Ok(vec![
+        let (cases, regions): (Vec<_>, Vec<_>) = arms
+            .into_iter()
+            .map(|(case, region)| (Attribute::Int(case), region))
+            .unzip();
+        vec![
             ParsedEntity::Attribute(Some(Attribute::List(cases))),
             ParsedEntity::Regions(regions),
             ParsedEntity::Regions(vec![default]),
-        ])
+        ]
     }
 }
+
+crate::syntax_directive!(SwitchArms, spaced = false);
 
 impl RegionBranchTerminator for Yield {
     fn successor_operands(

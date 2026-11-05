@@ -1,13 +1,13 @@
 //! The operation a handler arm handles, and the syntax that writes each arm
 //! of `tribute_control.handle` together with its binding.
 
-use std::fmt::{self, Write as _};
-
-use trunk_ir::asm_format::{CustomEntity, OpAsmDirective, ParsedEntity};
+use trunk_ir::asm_format::syntax::{
+    Syntax, SyntaxDirective, delimited, keyword_of, lit, many, map, preceded, region_with_entry,
+    symbol_name, symbol_ref, ty,
+};
+use trunk_ir::asm_format::{CustomEntity, ParsedEntity};
 use trunk_ir::dialect::core::Never;
 use trunk_ir::ops::DialectType;
-use trunk_ir::parser::{AsmParser, OpAsmParser, ParseResult, lexer};
-use trunk_ir::printer::{OpAsmPrinter, display_symbol_ref, display_symbol_text};
 use trunk_ir::refs::{RegionRef, TypeRef};
 use trunk_ir::types::{Attribute, AttributeMap, StringRef};
 use trunk_ir::{IrContext, SymbolPath};
@@ -102,67 +102,57 @@ impl HandlerBinding {
             && Never::from_type_ref(ctx, self.operation_result_type).is_none()
     }
 
-    /// The header the handle formats write for this binding,
-    /// `op @Ability @name`.
-    pub fn header<'a>(&'a self, ctx: &'a IrContext) -> impl fmt::Display + 'a {
-        fmt::from_fn(move |f| {
-            write!(
-                f,
-                "{} {} {}",
-                self.kind.keyword(),
-                display_symbol_ref(&self.ability),
-                display_symbol_text(ctx.str(self.op_name))
-            )
-        })
+    /// The syntax of the header the handle formats write for a binding,
+    /// `op @Ability @name`. It declines when no kind keyword is next, so a
+    /// list of arms ends there.
+    pub fn header_syntax() -> impl Syntax<Value = BindingHeader> {
+        map(
+            (
+                keyword_of(
+                    "an operation kind",
+                    OperationKind::from_keyword,
+                    |kind: &OperationKind| kind.keyword(),
+                ),
+                preceded(lit(" "), symbol_ref()),
+                preceded(lit(" "), symbol_name()),
+            ),
+            |(kind, ability, op_name)| BindingHeader {
+                kind,
+                ability,
+                op_name,
+            },
+            |header| (header.kind, header.ability.clone(), header.op_name),
+        )
     }
 
-    /// Parse the header [`Self::header`] writes, or `None`, leaving the
-    /// text as it was, when no kind keyword is next, so a list of arms ends
-    /// there.
-    pub fn parse_header(p: &mut AsmParser<'_>) -> ParseResult<Option<BindingHeader>> {
-        use winnow::Parser as _;
+    /// The binding with `header` and the result type written after it.
+    pub fn from_header(header: BindingHeader, operation_result_type: TypeRef) -> Self {
+        Self {
+            ability: header.ability,
+            op_name: header.op_name,
+            kind: header.kind,
+            operation_result_type,
+        }
+    }
 
-        let Some(kind) = p.parse_optional_token("an operation kind", |input| {
-            lexer::ident
-                .verify_map(OperationKind::from_keyword)
-                .parse_next(input)
-        })?
-        else {
-            return Ok(None);
+    /// The header and the result type a format writes for this binding.
+    pub fn header(&self) -> (BindingHeader, TypeRef) {
+        let header = BindingHeader {
+            kind: self.kind,
+            ability: self.ability.clone(),
+            op_name: self.op_name,
         };
-        let ability = p.parse_symbol_ref()?;
-        let op_name = p.parse_symbol_name()?;
-        Ok(Some(BindingHeader {
-            kind,
-            ability,
-            op_name,
-        }))
+        (header, self.operation_result_type)
     }
 }
 
-/// A binding header as [`HandlerBinding::parse_header`] reads it, still
-/// without its result type.
+/// A binding header, `op @Ability @name`: the binding without its result
+/// type.
 #[derive(Clone, Debug)]
 pub struct BindingHeader {
     pub kind: OperationKind,
     pub ability: SymbolPath,
-    pub op_name: String,
-}
-
-impl BindingHeader {
-    /// The binding, with the result type written after it.
-    pub fn with_result_type(
-        self,
-        ctx: &mut IrContext,
-        operation_result_type: TypeRef,
-    ) -> HandlerBinding {
-        HandlerBinding {
-            ability: self.ability,
-            op_name: ctx.intern_str(&self.op_name),
-            kind: self.kind,
-            operation_result_type,
-        }
-    }
+    pub op_name: StringRef,
 }
 
 impl trunk_ir::attr_kind::AttrKind for HandlerBinding {
@@ -186,15 +176,24 @@ impl trunk_ir::attr_kind::AttrKind for HandlerBinding {
 /// block arguments, the operation result type, and the arm region.
 pub struct HandleArms;
 
-impl OpAsmDirective for HandleArms {
-    type Parts<'a> = Vec<(HandlerBinding, RegionRef)>;
+impl SyntaxDirective for HandleArms {
+    type Value = Vec<(HandlerBinding, RegionRef)>;
 
-    const SPACED: bool = false;
+    fn syntax() -> impl Syntax<Value = Self::Value> {
+        many(map(
+            (
+                preceded(lit(" "), HandlerBinding::header_syntax()),
+                region_with_entry(delimited(lit(" : "), ty(), lit(" "))),
+            ),
+            |(header, (arm, result))| (HandlerBinding::from_header(header, result), arm),
+            |(binding, arm)| {
+                let (header, result) = binding.header();
+                (header, (*arm, result))
+            },
+        ))
+    }
 
-    fn decompose<'a>(
-        ctx: &'a IrContext,
-        entities: &'a [CustomEntity<'a>],
-    ) -> Option<Self::Parts<'a>> {
+    fn from_entities(ctx: &IrContext, entities: &[CustomEntity<'_>]) -> Option<Self::Value> {
         let [
             CustomEntity::Attribute(Some(Attribute::List(handlers))),
             CustomEntity::Regions(arms),
@@ -215,35 +214,16 @@ impl OpAsmDirective for HandleArms {
             .collect()
     }
 
-    fn print(p: &mut OpAsmPrinter<'_>, arms: Self::Parts<'_>) -> fmt::Result {
-        let s = p.state();
-        for (binding, arm) in arms {
-            write!(
-                p,
-                " {}{} : {} ",
-                binding.header(s.ctx()),
-                s.entry_args(arm),
-                s.ty(binding.operation_result_type)
-            )?;
-            p.print_region_without_entry(arm)?;
-        }
-        Ok(())
-    }
-
-    fn parse(p: &mut OpAsmParser<'_>) -> ParseResult<Vec<ParsedEntity>> {
-        let mut handlers = Vec::new();
-        let mut regions = Vec::new();
-        while let Some(header) = HandlerBinding::parse_header(p)? {
-            let args = p.parse_entry_args()?;
-            p.parse_punct(":")?;
-            let result = p.parse_type()?;
-            regions.push(p.parse_region_with_entry(&args)?);
-            let binding = header.with_result_type(p.ctx_mut(), result);
-            handlers.push(binding.to_attribute(p.ctx_mut()));
-        }
-        Ok(vec![
+    fn into_entities(ctx: &mut IrContext, arms: Self::Value) -> Vec<ParsedEntity> {
+        let (handlers, regions) = arms
+            .into_iter()
+            .map(|(binding, arm)| (binding.to_attribute(ctx), arm))
+            .unzip();
+        vec![
             ParsedEntity::Attribute(Some(Attribute::List(handlers))),
             ParsedEntity::Regions(regions),
-        ])
+        ]
     }
 }
+
+trunk_ir::syntax_directive!(HandleArms, spaced = false);

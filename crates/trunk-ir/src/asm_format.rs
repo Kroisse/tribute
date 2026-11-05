@@ -8,6 +8,7 @@
 //! `#[asm_format(..)]`, which [`declarative`] interprets.
 
 pub mod declarative;
+pub mod syntax;
 
 use std::fmt::{self, Write as _};
 
