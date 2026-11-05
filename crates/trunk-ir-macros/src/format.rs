@@ -858,11 +858,11 @@ fn check(
         .map(Entity::Operand)
         .chain((0..format.regions.len()).map(Entity::Region))
         .chain((0..format.successors.len()).map(Entity::Successor))
-        // The parser infers result types the builder can infer.
+        // The parser takes fixed result types from the schema.
         .chain(
             format
                 .result_name()
-                .filter(|_| !crate::codegen::results_inferable(op))
+                .filter(|_| !crate::codegen::results_fixed(op))
                 .map(|_| Entity::Results),
         )
         .chain(

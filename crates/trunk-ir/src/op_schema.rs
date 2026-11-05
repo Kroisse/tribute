@@ -953,6 +953,23 @@ impl OpSchema {
         }
     }
 
+    /// The bound that fixes each result's type, when every result has one,
+    /// as `-> Value<I1>` does. A declarative format may leave these result
+    /// types unwritten.
+    pub fn fixed_results(&self) -> Option<Vec<&'static ConstraintDesc>> {
+        let fixed = |spec: &TypeSpec| match *spec {
+            TypeSpec::Anon(bounds) => bounds.iter().copied().find(|bound| bound.fixed.is_some()),
+            _ => None,
+        };
+        match (&self.results, &self.result_constraint) {
+            (ResultSchema::Fixed([_]), ValueConstraint::Each(spec)) => fixed(spec).map(|b| vec![b]),
+            (ResultSchema::Variadic(_), ValueConstraint::List(ListSpec::Types(specs))) => {
+                specs.iter().map(fixed).collect()
+            }
+            _ => None,
+        }
+    }
+
     /// Infer result types for a generated builder.
     ///
     /// The `#[dialect]` macro calls this only when every result type is a

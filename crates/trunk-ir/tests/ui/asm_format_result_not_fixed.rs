@@ -4,7 +4,7 @@ mod d {
     #[trunk_ir::dialect]
     mod d {
         #[asm_format(value ":" type(value))]
-        fn widen(value: Value<impl IntegerLike>) -> Value<impl IntegerLike> {}
+        fn same<T: IntegerLike>(value: Value<T>) -> Value<T> {}
     }
 }
 

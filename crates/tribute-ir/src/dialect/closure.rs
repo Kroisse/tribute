@@ -451,7 +451,7 @@ fn parse_closure_lambda<'a>(
         operand_types: Vec::new(),
         attributes,
         result_types: vec![closure_raw_ty],
-        infer_results: false,
+        fixed_results: false,
         regions,
         successors: vec![],
     })

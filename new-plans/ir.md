@@ -493,15 +493,13 @@ literal은 문자열 literal로 쓴다.
   (`cf.switch %flag : core.i32, ..`). Operand는 자기 원소가 따로 쓴다. Parser는
   `functional_type`처럼 읽은 타입이 operand 정의의 타입과 같은지 확인한다.
 - **Result** — Result 이름과 `=`(`%r =`)은 형식에 쓰지 않는다. Printer가 앞에 쓰고,
-  parser는 형식 parser를 부르기 전에 읽는다. Builder가 추론하지 못하는 result
-  타입은 `type(result)`나 `types(results)`, 또는 타입을 재구성하는 `signature`로
-  정확히 한 번 쓴다. `types`는 결과 목록을 쉼표로 구분해 쓰며, 결과가 없을 수
-  있으면 앞의 구두점과 함께 선택 묶음에 둔다. Builder가 추론하는 result 타입(고정
-  타입, 단일 operand나 필수 attribute로 바인딩된 변수와 그 투영)은 쓰지 않아도
-  된다. 그러면 parser가
-  읽은 operand와 attribute로 schema에서 추론하고, printer는 schema를 만족하는
-  operation만 이 형식으로 쓴다(`arith.cmpi slt, %a, %b : core.i32`의 결과
-  `core.i1`).
+  parser는 형식 parser를 부르기 전에 읽는다. Result 타입은 `type(result)`나
+  `types(results)`, 또는 타입을 재구성하는 `signature`로 정확히 한 번 쓴다.
+  `types`는 결과 목록을 쉼표로 구분해 쓰며, 결과가 없을 수 있으면 앞의 구두점과
+  함께 선택 묶음에 둔다. 선언이 고정한 result 타입(`-> Value<I1>`)만은 쓰지 않아도
+  된다. 그러면 parser가 schema에서 그 타입을 가져오고, printer는 result 타입이
+  고정 타입과 같은 operation만 이 형식으로 쓴다(`arith.cmpi slt, %a, %b :
+  core.i32`의 결과 `core.i1`).
 - **`attr_dict`, `attr_dict_bare`** — 형식의 다른 원소가 쓰지 않은 모든
   attribute를 `attr_dict`는 `attributes {..}`로, `attr_dict_bare`는 keyword 없이
   `{..}`로 쓴다. 형식은 둘 중 하나만 쓴다. 남은 attribute가 없으면 아무 것도 쓰지

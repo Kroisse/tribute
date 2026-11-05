@@ -1000,7 +1000,7 @@ fn gen_attr_setter(crate_path: &TokenStream, attr: &AttrDef) -> TokenStream {
 /// variable bound by a single operand, a required attribute, or a bound
 /// constraint on such a variable, or a projection of such a variable. Must
 /// agree with `OpSchema::infer_result_types`.
-pub(crate) fn results_inferable(op: &OperationDef) -> bool {
+fn results_inferable(op: &OperationDef) -> bool {
     let mut bound: Vec<bool> = (0..op.type_vars.len())
         .map(|var| {
             op.attrs
@@ -1036,6 +1036,20 @@ pub(crate) fn results_inferable(op: &OperationDef) -> bool {
         (ResultDef::Single(_), ValueExpr::Each(expr)) => one(expr),
         (ResultDef::Variadic(_), ValueExpr::List(ListExpr::Types(exprs))) => exprs.iter().all(one),
         (ResultDef::Variadic(_), ValueExpr::List(ListExpr::Proj(proj))) => bound[proj.var],
+        _ => false,
+    }
+}
+
+/// Whether every result type is one fixed type (`-> Value<I1>`), which a
+/// declarative format may leave unwritten. Must agree with
+/// `OpSchema::fixed_results`.
+pub(crate) fn results_fixed(op: &OperationDef) -> bool {
+    let fixed = |expr: &TypeExpr| matches!(expr, TypeExpr::Exact(_));
+    match (&op.results, &op.result_constraint) {
+        (ResultDef::Single(_), ValueExpr::Each(expr)) => fixed(expr),
+        (ResultDef::Variadic(_), ValueExpr::List(ListExpr::Types(exprs))) => {
+            exprs.iter().all(fixed)
+        }
         _ => false,
     }
 }

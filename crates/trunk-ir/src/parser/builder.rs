@@ -434,41 +434,14 @@ impl<'a> ArenaIrBuilder<'a> {
         let mut attributes = self.build_attr_dict(&raw.attributes)?;
 
         // A format that does not write the result types leaves them to the
-        // schema, as the builder infers them.
-        if raw.infer_results
-            && let Some(def) = name.def()
+        // schema, which fixes them.
+        if raw.fixed_results
+            && let Some(bounds) = name.def().and_then(|def| def.schema.fixed_results())
         {
-            let schema = &def.schema;
-            // Only an attribute that binds a type variable can supply a
-            // result type; the verifier reports any other.
-            if let Some(missing) = schema.attributes.iter().find(|attr| {
-                attr.binds.is_some()
-                    && !attr.optional
-                    && !attributes
-                        .view(self.ctx)
-                        .get(attr.name)
-                        .is_some_and(|value| (attr.accepts)(self.ctx, value))
-            }) {
-                return Err(ParseError {
-                    message: format!(
-                        "operation '{}' needs a valid attribute '{}' to infer its result types",
-                        raw.name, missing.name
-                    ),
-                    offset: 0,
-                });
-            }
-            let values: Vec<Option<Attribute>> = schema
-                .attributes
+            result_types = bounds
                 .iter()
-                .map(|attr| attributes.view(self.ctx).get(attr.name).cloned())
+                .map(|bound| (bound.fixed.expect("fixed result bounds construct a type"))(self.ctx))
                 .collect();
-            let attrs: Vec<(&str, Option<&Attribute>)> = schema
-                .attributes
-                .iter()
-                .zip(&values)
-                .map(|(attr, value)| (attr.name, value.as_ref()))
-                .collect();
-            result_types = schema.infer_result_types(self.ctx, &operands, &attrs);
         }
 
         // Add sym_name if present
