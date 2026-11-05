@@ -819,9 +819,13 @@ single instantiation.
 
 Local scopes store `TypeScheme` bindings. At each `let`, the checker solves the
 constraint prefix through that binding and separately tracks the effect of
-evaluating the right-hand side. A closed-pure evaluation generalizes type and
+evaluating the right-hand side. A closed-pure evaluation generalizes the
 ability-row variables not free in the surrounding local environment; an
-effectful evaluation stores a monomorphic scheme. Latent effects inside a
+effectful evaluation stores a monomorphic scheme. A local scheme never
+quantifies data-type variables: they stay solver variables that every use of
+the binding shares, and the function's solve fixes them. Those its uses leave
+unconstrained become body-owned existentials (`LocalBoundVar` scoped to the
+function). Latent effects inside a
 lambda's function type do not make evaluation of the lambda effectful.
 
 Constraints produced from calls, lambdas, and handler boundaries retain their

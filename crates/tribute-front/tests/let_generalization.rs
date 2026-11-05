@@ -127,33 +127,6 @@ fn func_ref_has_param_and_result(
         if params.as_slice() == [expected] && *result == expected)
 }
 
-fn is_local_identity_signature(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
-    local_identity_scope(db, ty).is_some()
-}
-
-fn local_identity_scope(db: &dyn salsa::Database, ty: Type<'_>) -> Option<NodeId> {
-    let TypeKind::Func { params, result, .. } = ty.kind(db) else {
-        return None;
-    };
-    let [param] = params.as_slice() else {
-        return None;
-    };
-    matches!(
-        (param.kind(db), result.kind(db)),
-        (
-            TypeKind::LocalBoundVar { scope, index: 0 },
-            TypeKind::LocalBoundVar {
-                scope: result_scope,
-                index: 0,
-            },
-        ) if scope == result_scope
-    )
-    .then(|| match param.kind(db) {
-        TypeKind::LocalBoundVar { scope, .. } => *scope,
-        _ => unreachable!(),
-    })
-}
-
 fn typed_function_body<'a, 'db>(
     module: &'a DeclTable<TypedRef<'db>>,
     name: &Symbol,
@@ -186,9 +159,20 @@ fn type_errors(db: &dyn salsa::Database, source: SourceCst) -> Vec<String> {
     phase_errors(db, source, CompilationPhase::TypeChecking)
 }
 
+/// Whether `errors` report one data type found where another was expected:
+/// the uses of a `let` share its data-type variables.
+fn reports_mismatch(errors: &[String], left: &str, right: &str) -> bool {
+    errors.iter().any(|error| {
+        error.contains(&format!("expected `{left}`, found `{right}`"))
+            || error.contains(&format!("expected `{right}`, found `{left}`"))
+    })
+}
+
+/// The uses of a local identity share its data type: one at `Nat` and one
+/// at `Bool` are rejected, repeated uses at `Nat` are accepted.
 #[salsa_test]
-fn pure_local_identity_is_polymorphic(db: &salsa::DatabaseImpl) {
-    let source = SourceCst::from_source_str(
+fn pure_local_identity_is_monomorphic_in_data_types(db: &salsa::DatabaseImpl) {
+    let rejected = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -198,20 +182,32 @@ fn pair() -> #(Nat, Bool) {
 }
 "#,
     );
+    let errors = type_errors(db, rejected);
+    assert!(reports_mismatch(&errors, "Nat", "Bool"), "{errors:#?}");
 
-    let errors = type_errors(db, source);
+    let accepted = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn pair() -> #(Nat, Nat) {
+    let identity = fn(value) value
+    #(identity(1), identity(2))
+}
+"#,
+    );
+    let errors = type_errors(db, accepted);
     assert!(errors.is_empty(), "unexpected type errors: {errors:#?}");
 }
 
 #[salsa_test]
-fn local_callable_instantiations_keep_their_owner_after_solving(db: &salsa::DatabaseImpl) {
+fn local_callable_uses_share_the_solved_data_type(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
-fn pair() -> #(Nat, Bool) {
+fn pair() -> #(Nat, Nat) {
     let identity = fn(value) value
-    #(identity(1), identity(True))
+    #(identity(1), identity(2))
 }
 
 fn pass(value: a) -> a {
@@ -311,19 +307,15 @@ fn pass(value: a) -> a {
             }
         }
     }
+    let nat = Type::new(db, TypeKind::Nat);
     let pair_identities =
         local_call_callee_types(typed_function_body(module, &Symbol::new("pair")));
+    assert_eq!(pair_identities.len(), 2);
     assert!(
         pair_identities
             .iter()
-            .any(|ty| func_ref_has_param_and_result(db, *ty, Type::new(db, TypeKind::Nat))),
-        "identity(1) must have a concrete Nat callable type"
-    );
-    assert!(
-        pair_identities
-            .iter()
-            .any(|ty| func_ref_has_param_and_result(db, *ty, Type::new(db, TypeKind::Bool))),
-        "identity(True) must have a concrete Bool callable type"
+            .all(|ty| func_ref_has_param_and_result(db, *ty, nat)),
+        "both uses must have the concrete Nat callable type"
     );
     let pass_identities =
         local_call_callee_types(typed_function_body(module, &Symbol::new("pass")));
@@ -335,13 +327,24 @@ fn pass(value: a) -> a {
         }),
         "identity(value) must alias the enclosing function binder"
     );
+    let bound = Type::new(db, TypeKind::BoundVar { index: 0 });
+    let mut signatures: Vec<_> = output
+        .expression_types(db)
+        .lambda_signatures
+        .iter()
+        .map(|(_, signature)| signature.function_type)
+        .collect();
+    signatures.sort_by_key(|ty| func_ref_has_param_and_result(db, *ty, bound));
+    assert_eq!(signatures.len(), 2);
     assert!(
-        output
-            .expression_types(db)
-            .lambda_signatures
-            .iter()
-            .all(|(_, signature)| is_local_identity_signature(db, signature.function_type)),
-        "each identity definition must retain one LocalBoundVar owner"
+        func_ref_has_param_and_result(db, signatures[0], nat),
+        "the identity in pair is built at its uses' type: {:?}",
+        signatures[0]
+    );
+    assert!(
+        func_ref_has_param_and_result(db, signatures[1], bound),
+        "the identity in pass uses the enclosing binder: {:?}",
+        signatures[1]
     );
 }
 
@@ -380,7 +383,7 @@ fn pair() -> Nil {
             .iter()
             .flat_map(|effect| effect.args.iter())
             .any(|arg| matches!(arg.kind(db), TypeKind::LocalBoundVar { .. })),
-        "the lambda ability row must retain its local quantifier provenance"
+        "an unused reader's ability argument stays a body-local existential"
     );
     let local = Type::new(
         db,
@@ -516,67 +519,87 @@ fn run_writer(comp: fn() ->{e, Writer(w)} a) ->{e, Audit} a {
     );
 }
 
+/// Destructuring and `as` aliases share one `let`'s data-type variables:
+/// the names they bind take one data type, across names and across uses.
 #[salsa_test]
-fn variant_destructuring_preserves_polymorphism(db: &salsa::DatabaseImpl) {
-    let source = SourceCst::from_source_str(
-        db,
-        "test.trb",
-        r#"
-enum Wrapped(a) {
+fn destructured_and_aliased_names_share_data_types(db: &salsa::DatabaseImpl) {
+    let program = |result: &str, body: &str| {
+        format!(
+            r#"
+enum Wrapped(a) {{
     Wrapped(a),
+}}
+
+fn pair() -> {result} {{
+    {body}
+}}
+"#
+        )
+    };
+    for (body, uses) in [
+        (
+            "let .Wrapped(identity) = Wrapped::Wrapped(fn(value) value)",
+            ("identity(1)", "identity(True)"),
+        ),
+        (
+            "let _ as identity = fn(value) value",
+            ("identity(1)", "identity(True)"),
+        ),
+        ("let f as g = fn(value) value", ("f(1)", "g(True)")),
+        (
+            "let #(h as k, n) = #(fn(value) value, 1)",
+            ("h(n)", "k(False)"),
+        ),
+    ] {
+        let rejected = format!("{body}\n    #({}, {})", uses.0, uses.1);
+        let source =
+            SourceCst::from_source_str(db, "test.trb", &program("#(Nat, Bool)", &rejected));
+        let errors = type_errors(db, source);
+        assert!(
+            reports_mismatch(&errors, "Nat", "Bool"),
+            "{body}: {errors:#?}"
+        );
+
+        let same = |call: &str| call.replace("True", "2").replace("False", "3");
+        let accepted = format!("{body}\n    #({}, {})", same(uses.0), same(uses.1));
+        let source = SourceCst::from_source_str(db, "test.trb", &program("#(Nat, Nat)", &accepted));
+        let errors = type_errors(db, source);
+        assert!(errors.is_empty(), "{body}: {errors:#?}");
+    }
 }
 
-fn pair() -> #(Nat, Bool) {
-    let .Wrapped(identity) = Wrapped::Wrapped(fn(value) value)
-    #(identity(1), identity(True))
-}
-"#,
-    );
-
-    let errors = type_errors(db, source);
-    assert!(errors.is_empty(), "unexpected type errors: {errors:#?}");
-}
-
-#[salsa_test]
-fn as_pattern_alias_preserves_polymorphism(db: &salsa::DatabaseImpl) {
-    let source = SourceCst::from_source_str(
-        db,
-        "test.trb",
-        r#"
-fn pair() -> #(Nat, Bool) {
-    let _ as identity = fn(value) value
-    #(identity(1), identity(True))
-}
-"#,
-    );
-
-    let errors = type_errors(db, source);
-    assert!(errors.is_empty(), "unexpected type errors: {errors:#?}");
-}
-
+/// A lambda evaluates purely, so binding one that performs `Source` when
+/// called is not restricted by that effect. The ability's data argument is
+/// still shared: repeated uses at `Source(Nat)` are accepted, uses at
+/// `Source(Nat)` and `Source(Bool)` are rejected.
 #[salsa_test]
 fn latent_function_effect_does_not_trigger_value_restriction(db: &salsa::DatabaseImpl) {
-    let source = SourceCst::from_source_str(
-        db,
-        "test.trb",
-        r#"
-ability Source(s) {
+    let program = |second: &str| {
+        format!(
+            r#"
+ability Source(s) {{
     op get() -> s
-}
+}}
 
-extern "intrinsic" fn take_nat_reader(reader: fn() ->{Source(Nat)} Nat) ->{} Nil
-extern "intrinsic" fn take_bool_reader(reader: fn() ->{Source(Bool)} Bool) ->{} Nil
+extern "intrinsic" fn take_nat_reader(reader: fn() ->{{Source(Nat)}} Nat) ->{{}} Nil
+extern "intrinsic" fn keep_nat_reader(reader: fn() ->{{Source(Nat)}} Nat) ->{{}} Nil
+extern "intrinsic" fn take_bool_reader(reader: fn() ->{{Source(Bool)}} Bool) ->{{}} Nil
 
-fn accepted() ->{} Nil {
+fn accepted() ->{{}} Nil {{
     let read = fn() Source::get()
     take_nat_reader(read)
-    take_bool_reader(read)
-}
-"#,
-    );
-
+    {second}(read)
+}}
+"#
+        )
+    };
+    let source = SourceCst::from_source_str(db, "test.trb", &program("keep_nat_reader"));
     let errors = type_errors(db, source);
     assert!(errors.is_empty(), "unexpected type errors: {errors:#?}");
+
+    let source = SourceCst::from_source_str(db, "test.trb", &program("take_bool_reader"));
+    let errors = type_errors(db, source);
+    assert!(!errors.is_empty(), "Source(Nat) and Source(Bool) share `s`");
 }
 
 #[salsa_test]
@@ -723,69 +746,5 @@ fn make() ->{} fn(a) ->{} a {
     for (_, instance) in instances {
         assert!(instance.scheme.type_params(db).is_empty());
         assert!(func_ref_has_param_and_result(db, instance.callable, bound));
-    }
-}
-
-/// Each top-level `let` in a function body, as its root pattern and the
-/// nodes of its right-hand side.
-fn let_rhs_nodes(body: &Expr<TypedRef<'_>>) -> Vec<(NodeId, Vec<NodeId>)> {
-    let ExprKind::Block { stmts, .. } = &*body.kind else {
-        panic!("function body must be a block");
-    };
-    stmts
-        .iter()
-        .filter_map(|stmt| match stmt {
-            tribute_front::ast::Stmt::Let { pattern, value, .. } => {
-                let mut nodes = Vec::new();
-                body_node_ids(value, &mut nodes);
-                Some((pattern.id, nodes))
-            }
-            _ => None,
-        })
-        .collect()
-}
-
-/// A `let` that gives several names one generalized variable owns that
-/// variable once, at its root pattern, whichever name is recorded last.
-/// Several such `let`s in one body each keep their own owner.
-#[salsa_test]
-fn names_sharing_a_generalized_variable_have_one_owner(db: &salsa::DatabaseImpl) {
-    let source = SourceCst::from_source_str(
-        db,
-        "test.trb",
-        r#"
-fn shared() -> #(Nat, Bool, Nat, Bool, Nat) {
-    let f as g = fn(value) value
-    let #(h as k, n) = #(fn(value) value, 1)
-    #(f(1), g(True), h(n), k(False), n)
-}
-"#,
-    );
-
-    let errors = type_errors(db, source);
-    assert!(errors.is_empty(), "unexpected type errors: {errors:#?}");
-
-    let output = tribute_front::query::type_check_output(db, source)
-        .expect("type checking should produce output");
-    let lets = let_rhs_nodes(typed_function_body(
-        output.module(db),
-        &Symbol::new("shared"),
-    ));
-    assert_eq!(lets.len(), 2, "shared has two lets");
-    assert_ne!(lets[0].0, lets[1].0, "the lets have distinct root patterns");
-
-    let signatures = &output.expression_types(db).lambda_signatures;
-    assert_eq!(signatures.len(), 2, "each let has one identity lambda");
-    for (lambda, signature) in signatures.iter() {
-        let (root, _) = lets
-            .iter()
-            .find(|(_, nodes)| nodes.contains(lambda))
-            .unwrap_or_else(|| panic!("lambda {lambda:?} must belong to one let"));
-        assert_eq!(
-            local_identity_scope(db, signature.function_type),
-            Some(*root),
-            "the identity lambda's local quantifier must be owned by its let's root pattern: {:?}",
-            signature.function_type
-        );
     }
 }
