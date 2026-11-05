@@ -1713,7 +1713,19 @@ mod tests {
 "#,
         );
         assert!(
-            error.contains("needs attribute 'ty' to infer its result types"),
+            error.contains("needs a valid attribute 'ty' to infer its result types"),
+            "{error}"
+        );
+        let error = parse_error(
+            r#"core.module @m {
+  asm_format_test.fun @f() {
+      %0 = asm_format_test.pin attributes {ty = 1}
+  }
+}
+"#,
+        );
+        assert!(
+            error.contains("needs a valid attribute 'ty' to infer its result types"),
             "{error}"
         );
         // A result the schema would not infer prints generically.

@@ -439,14 +439,16 @@ impl<'a> ArenaIrBuilder<'a> {
             && let Some(def) = name.def()
         {
             let schema = &def.schema;
-            if let Some(missing) = schema
-                .attributes
-                .iter()
-                .find(|attr| !attr.optional && !attributes.view(self.ctx).contains_key(attr.name))
-            {
+            if let Some(missing) = schema.attributes.iter().find(|attr| {
+                !attr.optional
+                    && !attributes
+                        .view(self.ctx)
+                        .get(attr.name)
+                        .is_some_and(|value| (attr.accepts)(self.ctx, value))
+            }) {
                 return Err(ParseError {
                     message: format!(
-                        "operation '{}' needs attribute '{}' to infer its result types",
+                        "operation '{}' needs a valid attribute '{}' to infer its result types",
                         raw.name, missing.name
                     ),
                     offset: 0,

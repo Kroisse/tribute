@@ -493,11 +493,12 @@ literal은 문자열 literal로 쓴다.
   (`cf.switch %flag : core.i32, ..`). Operand는 자기 원소가 따로 쓴다. Parser는
   `functional_type`처럼 읽은 타입이 operand 정의의 타입과 같은지 확인한다.
 - **Result** — Result 이름과 `=`(`%r =`)은 형식에 쓰지 않는다. Printer가 앞에 쓰고,
-  parser는 형식 parser를 부르기 전에 읽는다. Result 타입은 `type(result)`나
-  `types(results)`, 또는 타입을 재구성하는 `signature`로 정확히 한 번 쓴다.
-  `types`는 결과 목록을 쉼표로 구분해 쓰며, 결과가 없을 수 있으면 앞의 구두점과
-  함께 선택 묶음에 둔다. Builder가 추론하는 result 타입(고정 타입, 단일 operand나
-  필수 attribute로 바인딩된 변수와 그 투영)은 쓰지 않아도 된다. 그러면 parser가
+  parser는 형식 parser를 부르기 전에 읽는다. Builder가 추론하지 못하는 result
+  타입은 `type(result)`나 `types(results)`, 또는 타입을 재구성하는 `signature`로
+  정확히 한 번 쓴다. `types`는 결과 목록을 쉼표로 구분해 쓰며, 결과가 없을 수
+  있으면 앞의 구두점과 함께 선택 묶음에 둔다. Builder가 추론하는 result 타입(고정
+  타입, 단일 operand나 필수 attribute로 바인딩된 변수와 그 투영)은 쓰지 않아도
+  된다. 그러면 parser가
   읽은 operand와 attribute로 schema에서 추론하고, printer는 schema를 만족하는
   operation만 이 형식으로 쓴다(`arith.cmpi slt, %a, %b : core.i32`의 결과
   `core.i1`).
