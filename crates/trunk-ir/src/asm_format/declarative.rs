@@ -718,7 +718,9 @@ fn printable(ctx: &IrContext, op: OpRef, schema: &OpSchema, format: &OpFormat) -
     let regions_fit = region_count >= required_regions
         && (schema.regions.last().is_some_and(|region| region.variadic)
             || region_count <= schema.regions.len());
+    // A schema-valid operation has the result types the schema infers.
     if !results_fit
+        || (infers_results(schema, format) && !schema.verify(ctx, op).is_empty())
         || !count_fits(operands, ctx.op_operands(op).len())
         || !count_fits(successors, ctx.op_successor_count(op))
         || !regions_fit
@@ -817,6 +819,30 @@ fn signature_fits(
     })
 }
 
+/// Whether `format` leaves the operation's result types to the schema to
+/// infer, which the macro accepts only when the builder can infer them.
+fn infers_results(schema: &OpSchema, format: &OpFormat) -> bool {
+    let has_results = match schema.results {
+        ResultSchema::Fixed(names) => !names.is_empty(),
+        ResultSchema::Optional(_) | ResultSchema::Variadic(_) => true,
+    };
+    let mut written = false;
+    visit(format.elements, &mut |element| {
+        written |= matches!(
+            element,
+            FormatElement::ResultType(_)
+                | FormatElement::ResultTypes
+                | FormatElement::FunctionalType(_)
+                | FormatElement::Signature { results: true, .. }
+                | FormatElement::Signature {
+                    source: SignatureSource::Result,
+                    ..
+                }
+        );
+    });
+    has_results && !written
+}
+
 fn visit(elements: &[FormatElement], f: &mut impl FnMut(&FormatElement)) {
     for element in elements {
         f(element);
@@ -905,6 +931,7 @@ pub(crate) fn parse<'a>(
         operand_types,
         attributes,
         result_types: result_types.into_iter().flatten().collect(),
+        infer_results: infers_results(schema, format),
         regions: regions.into_iter().flatten().collect(),
         successors: successors.into_iter().flatten().collect(),
     })
@@ -1248,6 +1275,7 @@ fn literal(input: &mut &str, text: &'static str) -> ModalResult<()> {
 mod tests {
     use crate::IrContext;
     use crate::attr_kind::SymbolRef;
+    use crate::dialect::core::I1;
     use crate::dialect::func::FuncSig;
     use crate::op_flag::IsolatedFromAbove;
     use crate::ops::DialectOp;
@@ -1372,6 +1400,12 @@ mod tests {
 
         #[asm_format(value ":" type(value) attr_dict)]
         fn consume(value: Value<_>) {}
+
+        #[asm_format(lhs "," rhs attr_dict_bare ":" type(lhs))]
+        fn compare<T>(lhs: Value<T>, rhs: Value<T>) -> Value<I1> {}
+
+        #[asm_format(lhs "," rhs attr_dict_bare ":" type(lhs))]
+        fn max<T>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
 
         #[asm_format(args attr_dict_bare (":" types(results)^)?)]
         fn emit(args: Variadic<_>) -> Variadic<_> {}
@@ -1652,6 +1686,30 @@ mod tests {
             error.contains("operand '%0' of 'asm_format_test.consume' is written as core.i64"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn result_types_a_format_does_not_write_are_inferred() {
+        assert_round_trip(
+            r#"core.module @m {
+  asm_format_test.fun @f(%0: core.i32, %1: core.i32) {
+      %2 = asm_format_test.compare %0, %1 : core.i32
+      %3 = asm_format_test.max %0, %1 : core.i32
+      asm_format_test.consume %2 : core.i1
+      asm_format_test.consume %3 : core.i32
+  }
+}
+"#,
+        );
+        // A result the schema would not infer prints generically.
+        let text = r#"core.module @m {
+  asm_format_test.fun @f(%0: core.i32, %1: core.i32) {
+      %2 = "asm_format_test.compare"(%0, %1) : core.i32
+      %3 = "asm_format_test.max"(%0, %1) : core.i64
+  }
+}
+"#;
+        assert_eq!(print(text), text);
     }
 
     #[test]

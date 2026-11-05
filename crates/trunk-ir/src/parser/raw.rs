@@ -52,6 +52,9 @@ pub struct RawOperation<'a> {
     pub operand_types: Vec<(&'a str, RawType<'a>)>,
     pub attributes: Vec<(Cow<'a, str>, RawAttribute<'a>)>,
     pub result_types: Vec<RawType<'a>>,
+    /// Whether the result types are left to the schema to infer from the
+    /// operands and attributes, as a format that does not write them reads.
+    pub infer_results: bool,
     pub regions: Vec<RawRegion<'a>>,
     /// Optional successor list from `[^bb0, ^bb1]`.
     pub successors: Vec<&'a str>,
@@ -675,6 +678,7 @@ fn module_operation<'a>(
         operand_types: Vec::new(),
         attributes,
         result_types: Vec::new(),
+        infer_results: false,
         regions,
         successors: Vec::new(),
     })
@@ -719,6 +723,7 @@ fn generic_operation<'a>(
         operand_types: Vec::new(),
         attributes,
         result_types,
+        infer_results: false,
         regions,
         successors,
     })

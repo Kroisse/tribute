@@ -1000,7 +1000,7 @@ fn gen_attr_setter(crate_path: &TokenStream, attr: &AttrDef) -> TokenStream {
 /// variable bound by a single operand, a required attribute, or a bound
 /// constraint on such a variable, or a projection of such a variable. Must
 /// agree with `OpSchema::infer_result_types`.
-fn results_inferable(op: &OperationDef) -> bool {
+pub(crate) fn results_inferable(op: &OperationDef) -> bool {
     let mut bound: Vec<bool> = (0..op.type_vars.len())
         .map(|var| {
             op.attrs

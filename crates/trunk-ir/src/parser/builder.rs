@@ -424,7 +424,7 @@ impl<'a> ArenaIrBuilder<'a> {
         }
 
         // Build result types
-        let result_types: Vec<TypeRef> = raw
+        let mut result_types: Vec<TypeRef> = raw
             .result_types
             .iter()
             .map(|t| self.build_type(t))
@@ -432,6 +432,26 @@ impl<'a> ArenaIrBuilder<'a> {
 
         // Build attributes from explicit attr dict
         let mut attributes = self.build_attr_dict(&raw.attributes)?;
+
+        // A format that does not write the result types leaves them to the
+        // schema, as the builder infers them.
+        if raw.infer_results
+            && let Some(def) = name.def()
+        {
+            let schema = &def.schema;
+            let values: Vec<Option<Attribute>> = schema
+                .attributes
+                .iter()
+                .map(|attr| attributes.view(self.ctx).get(attr.name).cloned())
+                .collect();
+            let attrs: Vec<(&str, Option<&Attribute>)> = schema
+                .attributes
+                .iter()
+                .zip(&values)
+                .map(|(attr, value)| (attr.name, value.as_ref()))
+                .collect();
+            result_types = schema.infer_result_types(self.ctx, &operands, &attrs);
+        }
 
         // Add sym_name if present
         if let Some(ref name) = raw.sym_name {

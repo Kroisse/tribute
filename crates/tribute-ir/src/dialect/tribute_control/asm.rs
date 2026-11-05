@@ -519,6 +519,7 @@ pub(crate) fn parse_func<'a>(
         operand_types: Vec::new(),
         attributes,
         result_types: vec![],
+        infer_results: false,
         regions,
         successors: vec![],
     })
@@ -785,6 +786,7 @@ pub(crate) fn parse_lambda<'a>(
         operand_types: Vec::new(),
         attributes,
         result_types: vec![func_sig_raw_type(result, &params, row)],
+        infer_results: false,
         regions,
         successors: vec![],
     })

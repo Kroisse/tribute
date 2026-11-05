@@ -858,7 +858,13 @@ fn check(
         .map(Entity::Operand)
         .chain((0..format.regions.len()).map(Entity::Region))
         .chain((0..format.successors.len()).map(Entity::Successor))
-        .chain(format.result_name().map(|_| Entity::Results))
+        // The parser infers result types the builder can infer.
+        .chain(
+            format
+                .result_name()
+                .filter(|_| !crate::codegen::results_inferable(op))
+                .map(|_| Entity::Results),
+        )
         .chain(
             (0..op.attrs.len())
                 .filter(|_| !has_dict)
