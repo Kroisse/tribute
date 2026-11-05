@@ -187,14 +187,13 @@ impl trunk_ir::attr_kind::AttrKind for HandlerBinding {
     }
 }
 
-/// The arms of a `tribute_control.handle` after its body: the completion
-/// as ` do (%v: B) { .. }`, then each operation arm as
-/// ` op @State @get(%x: A, %k: K) : R { .. }`, with its binding, entry block
-/// arguments, operation result type, and region.
+/// Each arm of a `tribute_control.handle` after its completion, as
+/// ` op @State @get(%x: A, %k: K) : R { .. }`: the binding, the arm's entry
+/// block arguments, the operation result type, and the arm region.
 pub struct HandleArms;
 
 impl OpAsmDirective for HandleArms {
-    type Parts<'a> = (RegionRef, Vec<(HandlerBinding, RegionRef)>);
+    type Parts<'a> = Vec<(HandlerBinding, RegionRef)>;
 
     const SPACED: bool = false;
 
@@ -204,31 +203,22 @@ impl OpAsmDirective for HandleArms {
     ) -> Option<Self::Parts<'a>> {
         let [
             CustomEntity::Attribute(Some(Attribute::List(handlers))),
-            CustomEntity::Regions(completion),
             CustomEntity::Regions(arms),
         ] = entities
         else {
             return None;
         };
-        let [completion] = completion.as_slice() else {
-            return None;
-        };
         if handlers.len() != arms.len() {
             return None;
         }
-        let arms = handlers
+        handlers
             .iter()
             .zip(arms)
             .map(|(binding, &arm)| Some((HandlerBinding::from_attribute(ctx, binding).ok()?, arm)))
-            .collect::<Option<_>>()?;
-        Some((*completion, arms))
+            .collect()
     }
 
-    fn print(h: &mut OpPrintHelper<'_, '_>, (completion, arms): Self::Parts<'_>) -> fmt::Result {
-        h.write_str(" do ")?;
-        write_entry_args(h, completion)?;
-        h.write_char(' ')?;
-        h.print_region_without_entry(completion)?;
+    fn print(h: &mut OpPrintHelper<'_, '_>, arms: Self::Parts<'_>) -> fmt::Result {
         for (binding, arm) in arms {
             h.write_char(' ')?;
             binding.write_header(h)?;
@@ -245,14 +235,10 @@ impl OpAsmDirective for HandleArms {
         use winnow::Parser as _;
         use winnow::combinator::{preceded, repeat};
 
-        let (_, _, _, args, _, mut completion) =
-            (ws, "do", ws, parse_entry_args, ws, raw_region).parse_next(input)?;
-        attach_entry_args(&mut completion, args)?;
         let arms: Vec<_> = repeat(0.., preceded(ws, parse_arm)).parse_next(input)?;
         let (handlers, regions) = arms.into_iter().unzip();
         Ok(vec![
             RawCustomEntity::Attribute(Some(RawAttribute::List(handlers))),
-            RawCustomEntity::Regions(vec![completion]),
             RawCustomEntity::Regions(regions),
         ])
     }

@@ -96,7 +96,9 @@ mod ability {
     /// }
     /// ```
     ///
-    /// The format writes each ability with its dispatcher.
+    /// The format writes each ability with its dispatcher. The verifier
+    /// checks that there is one dispatcher per ability.
+    #[verify]
     #[asm_format(evidence "," prompt_tag custom(Dispatchers(abilities, dispatchers)) attr_dict region(body))]
     #[implements(CallableExit)]
     fn handle_dispatch(
@@ -410,6 +412,18 @@ impl CallableExit for Perform {
                 "ability.perform CallableExit has an invalid CPS shape",
             ))
         }
+    }
+}
+
+impl trunk_ir::ops::Verify for HandleDispatch {
+    /// One dispatcher per ability.
+    fn verify(&self, ctx: &trunk_ir::IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
+        let abilities = self.abilities(ctx).len();
+        let dispatchers = self.dispatchers(ctx).len();
+        if abilities != dispatchers {
+            return Err(format!("{abilities} abilities but {dispatchers} dispatchers").into());
+        }
+        Ok(())
     }
 }
 

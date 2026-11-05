@@ -623,7 +623,7 @@ mod tribute_control {
     /// %answer = tribute_control.handle : AnswerType {
     ///   ...
     ///   tribute_control.yield %body_value
-    /// } do (%completed: BodyType) {
+    /// } do(%completed: BodyType) {
     ///   ...
     ///   tribute_control.yield %answer_value
     /// } op @State @get(%arg: ArgType, %k: tribute_control.resume_token<ResultType, AnswerType>) : ResultType {
@@ -703,7 +703,7 @@ mod tribute_control {
     /// changing source semantics.
     ///
     /// [`Handle::build_with_arms`] builds it from each binding with its arm.
-    #[asm_format(attr_dict ":" type(result) region(body) custom(HandleArms(handlers, completion, arms)))]
+    #[asm_format(attr_dict ":" type(result) region(body) "do" args(completion) region(completion) custom(HandleArms(handlers, arms)))]
     #[verify]
     #[implements(
         CallableResultOrigin,

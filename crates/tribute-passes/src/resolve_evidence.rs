@@ -82,17 +82,9 @@ fn final_handle_dispatch_shape(
             "final ability.handle_dispatch prompt-tag operand must have type core.i32".into(),
         ));
     }
-    let dispatchers = dispatch.dispatchers(ctx);
-    let abilities = dispatch.abilities(ctx);
-    if abilities.len() != dispatchers.len() {
-        return Err(error(format!(
-            "abilities cardinality {} does not match {} dispatcher operands",
-            abilities.len(),
-            dispatchers.len()
-        )));
-    }
-    let handled = abilities
-        .zip(dispatchers)
+    let handled = dispatch
+        .abilities(ctx)
+        .zip(dispatch.dispatchers(ctx))
         .map(|(ability, &tr_dispatch)| (ability.clone(), tr_dispatch))
         .collect();
     let body = dispatch.body(ctx);
@@ -656,27 +648,12 @@ mod tests {
     #[test]
     fn malformed_final_handle_dispatches_fail_before_mutation() {
         let malformed = [
-            // The definition is checked before the delimiter's own rules.
-            (
-                r#""ability.handle_dispatch"(%ev, %prompt, %tr) ({
-      ^body(%inner: !evidence):
-        func.unreachable
-    }) {abilities = [1]}"#,
-                "final ability.handle_dispatch: attribute `abilities`",
-            ),
             (
                 r#"ability.handle_dispatch %ev, %tr [] {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
                 "prompt-tag operand must have type core.i32",
-            ),
-            (
-                r#""ability.handle_dispatch"(%ev, %prompt, %tr) ({
-      ^body(%inner: !evidence):
-        func.unreachable
-    }) {abilities = []}"#,
-                "cardinality",
             ),
             (
                 r#"ability.handle_dispatch %prompt, %prompt [] {

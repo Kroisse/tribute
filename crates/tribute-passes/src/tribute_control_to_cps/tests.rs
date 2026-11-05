@@ -1088,7 +1088,7 @@ fn textual_resumptive_handle_emits_one_resultless_delimiter() {
     %handled = tribute_control.handle : core.i32 {
       %performed = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
       tribute_control.yield %performed
-    } do (%value: core.i32) {
+    } do(%value: core.i32) {
         tribute_control.yield %value
     } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
         %resumed = tribute_control.resume %token, %argument : core.i32
@@ -1227,7 +1227,7 @@ fn multiple_arms_for_one_ability_emit_one_dispatcher() {
     %handled = tribute_control.handle : core.i32 {
       %performed = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
       tribute_control.yield %performed
-    } do (%value: core.i32) {
+    } do(%value: core.i32) {
         tribute_control.yield %value
     } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
         %resumed = tribute_control.resume %token, %argument : core.i32
@@ -1899,11 +1899,11 @@ fn handles_stay_abstract_until_the_frames_are_lowered() {
     %outer = tribute_control.handle : core.i32 {
       %inner = tribute_control.handle : core.i32 {
         tribute_control.yield %input
-      } do (%value: core.i32) {
+      } do(%value: core.i32) {
           tribute_control.yield %value
       }
       tribute_control.yield %inner
-    } do (%value: core.i32) {
+    } do(%value: core.i32) {
         tribute_control.yield %value
     }
     tribute_control.return %outer
@@ -1929,11 +1929,11 @@ fn nested_textual_handles_keep_distinct_delimiters() {
     %outer = tribute_control.handle : core.i32 {
       %inner = tribute_control.handle : core.i32 {
         tribute_control.yield %input
-      } do (%value: core.i32) {
+      } do(%value: core.i32) {
           tribute_control.yield %value
       }
       tribute_control.yield %inner
-    } do (%value: core.i32) {
+    } do(%value: core.i32) {
         tribute_control.yield %value
     }
     tribute_control.return %outer
@@ -1959,7 +1959,7 @@ fn nested_same_ability_resumes_rebuild_the_dynamic_frame_dispatcher() {
       %inner = tribute_control.handle : core.i32 {
         %performed = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
         tribute_control.yield %performed
-      } do (%value: core.i32) {
+      } do(%value: core.i32) {
           tribute_control.yield %value
       } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
           %resumed = tribute_control.resume %token, %argument : core.i32
@@ -1967,7 +1967,7 @@ fn nested_same_ability_resumes_rebuild_the_dynamic_frame_dispatcher() {
       }
       %performed = tribute_control.perform op @State @get(%inner) : (core.i32) -> core.i32
       tribute_control.yield %performed
-    } do (%value: core.i32) {
+    } do(%value: core.i32) {
         tribute_control.yield %value
     } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
         %resumed = tribute_control.resume %token, %argument : core.i32
@@ -1996,7 +1996,7 @@ fn nested_cross_ability_resumes_rebuild_the_dynamic_frame_dispatcher() {
       %inner = tribute_control.handle : core.i32 {
         %performed = tribute_control.perform op @Console @read(%input) : (core.i32) -> core.i32
         tribute_control.yield %performed
-      } do (%value: core.i32) {
+      } do(%value: core.i32) {
           tribute_control.yield %value
       } op @Console @read(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
           %resumed = tribute_control.resume %token, %argument : core.i32
@@ -2004,7 +2004,7 @@ fn nested_cross_ability_resumes_rebuild_the_dynamic_frame_dispatcher() {
       }
       %performed = tribute_control.perform op @State @get(%inner) : (core.i32) -> core.i32
       tribute_control.yield %performed
-    } do (%value: core.i32) {
+    } do(%value: core.i32) {
         tribute_control.yield %value
     } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
         %resumed = tribute_control.resume %token, %argument : core.i32
@@ -2032,7 +2032,7 @@ fn op_to_never_uses_a_typed_zero_capture_reject_continuation() {
       %never = tribute_control.perform op @Abort @abort(%input) : (core.i32) -> core.never
       %unreachable_suffix = arith.const {value = 99} : core.i32
       tribute_control.yield %unreachable_suffix
-    } do (%value: core.i32) {
+    } do(%value: core.i32) {
         tribute_control.yield %value
     } op @Abort @abort(%argument: core.i32) : core.never {
         %fallback = arith.const {value = 7} : core.i32
@@ -2150,7 +2150,7 @@ fn fn_operation_stays_evidence_direct_without_continuation_capture() {
     %handled = tribute_control.handle : core.i32 {
       %value = tribute_control.perform fn @Reader @read(%input) : (core.i32) -> core.i32
       tribute_control.yield %value
-    } do (%value: core.i32) {
+    } do(%value: core.i32) {
         tribute_control.yield %value
     } fn @Reader @read(%argument: core.i32) : core.i32 {
         tribute_control.yield %argument
@@ -2351,7 +2351,7 @@ fn a_handle_in_a_direct_callable_runs_under_a_value_delimiter() {
     %handled = tribute_control.handle : core.i32 {
       %performed = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
       tribute_control.yield %performed
-    } do (%value: core.i32) {
+    } do(%value: core.i32) {
         tribute_control.yield %value
     } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
         %resumed = tribute_control.resume %token, %argument : core.i32

@@ -11,7 +11,7 @@ core.module @test {tribute.entry = @"pkg::main"} {
       %0 = tribute_control.handle : core.i32 {
           %1 = tribute_control.call @"pkg::use_ask"() : () -> core.i32
           tribute_control.yield %1
-      } do (%2: core.i32) {
+      } do(%2: core.i32) {
           tribute_control.yield %2
       } op @"ability_1_8_pkg::Ask" @ask(%3: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
           %4 = arith.const {value = 42} : core.i32

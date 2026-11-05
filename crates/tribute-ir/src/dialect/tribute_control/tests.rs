@@ -208,7 +208,7 @@ const VALID_CONTROL_MODULE: &str = r#"core.module @test {
     %handled = tribute_control.handle : core.i32 {
       %performed = tribute_control.perform op @State @get(%value) : (core.i32) -> core.i32
       tribute_control.yield %performed
-    } do (%completed: core.i32) {
+    } do(%completed: core.i32) {
         tribute_control.yield %completed
     } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
         %resumed = tribute_control.resume %token, %argument : core.i32
@@ -799,7 +799,7 @@ fn a_handle_without_handler_clauses_survives_a_round_trip() {
   %handled = tribute_control.handle : core.i32 {
     %body = arith.const {value = 0} : core.i32
     tribute_control.yield %body
-  } do (%value: core.i32) {
+  } do(%value: core.i32) {
       tribute_control.yield %value
   }
 }"#,
@@ -900,7 +900,7 @@ fn local_validator_checks_handle_and_handler_region_contracts() {
     ^body(%unexpected: core.i32):
       %body_value = arith.const {value = 0} : core.i32
       tribute_control.yield %body_value
-  } do (%value: core.i1, %extra: core.i32) {
+  } do(%value: core.i1, %extra: core.i32) {
       tribute_control.yield %value
   } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i1, core.i1>) : core.i32 {
       %wrong = arith.const {value = false} : core.i1
@@ -926,7 +926,7 @@ fn local_validator_checks_handle_and_handler_region_contracts() {
   %handled = tribute_control.handle : core.i32 {
     %body_value = arith.const {value = 0} : core.i32
     tribute_control.yield %body_value
-  } do (%value: core.i32) {
+  } do(%value: core.i32) {
       tribute_control.yield %value
   } fn @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i1 {
       tribute_control.yield %argument
@@ -1151,7 +1151,7 @@ fn whole_ir_rejects_duplicate_and_declaration_mismatched_handlers() {
     %input = arith.const {value = 0} : core.i32
     %performed = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
     tribute_control.yield %performed
-  } do (%value: core.i32) {
+  } do(%value: core.i32) {
       tribute_control.yield %value
   } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
       %resumed = tribute_control.resume %token, %argument : core.i32
@@ -1190,7 +1190,7 @@ fn whole_ir_rejects_multiple_resume_token_paths() {
   %handled = tribute_control.handle : core.i32 {
     %body = arith.const {value = 0} : core.i32
     tribute_control.yield %body
-  } do (%value: core.i32) {
+  } do(%value: core.i32) {
       tribute_control.yield %value
   } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
       %first = tribute_control.resume %token, %argument : core.i32
@@ -1210,7 +1210,7 @@ fn whole_ir_rejects_branching_and_escape_at_each_affine_carrier() {
   %handled = tribute_control.handle : core.i32 {
     %body = arith.const {value = 0} : core.i32
     tribute_control.yield %body
-  } do (%value: core.i32) {
+  } do(%value: core.i32) {
       tribute_control.yield %value
   } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
       %inner = tribute_control.lambda() -> core.i32 captures [%token, %argument] {
@@ -1254,7 +1254,7 @@ fn whole_ir_rejects_sibling_token_capture_paths() {
   %handled = tribute_control.handle : core.i32 {
     %body = arith.const {value = 0} : core.i32
     tribute_control.yield %body
-  } do (%value: core.i32) {
+  } do(%value: core.i32) {
       tribute_control.yield %value
   } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
       %first = tribute_control.lambda() -> core.i32 captures [%token, %argument] {
@@ -1283,7 +1283,7 @@ fn whole_ir_allows_mutually_exclusive_lambda_capture_and_terminal_paths() {
   %handled = tribute_control.handle : core.i32 {
     %body = arith.const {value = 0} : core.i32
     tribute_control.yield %body
-  } do (%value: core.i32) {
+  } do(%value: core.i32) {
       tribute_control.yield %value
   } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
       %flag = arith.const {value = true} : core.i1
@@ -1325,7 +1325,7 @@ fn whole_ir_allows_mutually_exclusive_switch_capture_paths() {
   %handled = tribute_control.handle : core.i32 {
     %body = arith.const {value = 0} : core.i32
     tribute_control.yield %body
-  } do (%value: core.i32) {
+  } do(%value: core.i32) {
       tribute_control.yield %value
   } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
       %choice = arith.const {value = 0} : core.i32
@@ -1388,7 +1388,7 @@ fn whole_ir_rejects_same_path_lambda_carrier_terminals() {
   %handled = tribute_control.handle : core.i32 {
     %body = arith.const {value = 0} : core.i32
     tribute_control.yield %body
-  } do (%value: core.i32) {
+  } do(%value: core.i32) {
       tribute_control.yield %value
   } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
       %continuation = tribute_control.lambda() -> core.i32 captures [%token, %argument] {
@@ -1414,7 +1414,7 @@ fn validators_reject_resume_token_escape_and_never_clause_capability() {
   %handled = tribute_control.handle : core.i32 {
     %body = arith.const {value = 0} : core.i32
     tribute_control.yield %body
-  } do (%value: core.i32) {
+  } do(%value: core.i32) {
       tribute_control.yield %value
   } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
       tribute_control.yield %token
@@ -1431,7 +1431,7 @@ fn validators_reject_resume_token_escape_and_never_clause_capability() {
   %handled = tribute_control.handle : core.i32 {
     %body = arith.const {value = 0} : core.i32
     tribute_control.yield %body
-  } do (%value: core.i32) {
+  } do(%value: core.i32) {
       tribute_control.yield %value
   } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.never {
       %resumed = tribute_control.resume %token, %argument : core.i32
@@ -1467,7 +1467,7 @@ fn validator_reports_malformed_resume_token_uses_without_panicking() {
   %handled = tribute_control.handle : core.i32 {
     %body = arith.const {value = 0} : core.i32
     tribute_control.yield %body
-  } do (%completed: core.i32) {
+  } do(%completed: core.i32) {
     tribute_control.yield %completed
   } op @State @get(%value: core.i32, %token: !malformed) : core.i32 {
     %resumed = tribute_control.resume %token, %value : core.i32
@@ -1514,7 +1514,7 @@ fn whole_ir_rejects_branch_after_transitive_lambda_transfer() {
   %handled = tribute_control.handle : core.i32 {
     %body = arith.const {value = 0} : core.i32
     tribute_control.yield %body
-  } do (%value: core.i32) {
+  } do(%value: core.i32) {
       tribute_control.yield %value
   } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
       %inner = tribute_control.lambda() -> core.i32 captures [%token, %argument] {
@@ -1545,12 +1545,12 @@ fn whole_ir_rejects_outer_token_resumed_in_nested_handler() {
   %outer = tribute_control.handle : core.i32 {
     %body = arith.const {value = 0} : core.i32
     tribute_control.yield %body
-  } do (%value: core.i32) {
+  } do(%value: core.i32) {
       tribute_control.yield %value
   } op @State @get(%argument: core.i32, %outer_token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
       %nested = tribute_control.handle : core.i32 {
         tribute_control.yield %argument
-      } do (%value: core.i32) {
+      } do(%value: core.i32) {
           tribute_control.yield %value
       } fn @State @get(%inner_argument: core.i32) : core.i32 {
           %crossed = tribute_control.resume %outer_token, %inner_argument : core.i32
@@ -1931,7 +1931,7 @@ fn callable_handle_completion_argument_traces_the_body_yield() {
     %callback = tribute_control.handle : !F {
       %source = tribute_control.func_ref @id : !F
       tribute_control.yield %source
-    } do (%callback: !F) {
+    } do(%callback: !F) {
         %ignored = tribute_control.call_indirect %callback(%value) : (core.i32) -> core.i32
         tribute_control.yield %callback
     }
@@ -1952,7 +1952,7 @@ fn callable_handler_parameter_requires_an_exact_operation_declaration() {
   tribute_control.func @caller(%value: core.i32) -> core.i32 {
     %handled = tribute_control.handle : core.i32 {
       tribute_control.yield %value
-    } do (%completed: core.i32) {
+    } do(%completed: core.i32) {
         tribute_control.yield %completed
     } fn @Callback @apply(%callback: !F) : core.i32 {
         %called = tribute_control.call_indirect %callback(%value) : (core.i32) -> core.i32
@@ -2027,7 +2027,7 @@ fn handled_callable_module(op_yield: &str) -> String {
   %f = tribute_control.handle : !F {{
     %body = tribute_control.perform op @Gen @next() : () -> core.i32
     tribute_control.yield %body
-  }} do (%k: core.i32) {{
+  }} do(%k: core.i32) {{
       %done = tribute_control.func_ref @inc : !F
       tribute_control.yield %done
   }} op @Gen @next(%token: tribute_control.resume_token<core.i32, !F>) : core.i32 {{
@@ -2196,7 +2196,7 @@ fn a_value_withdrawn_twice_is_not_evaluated_again() {
   %f = tribute_control.handle : !F {
     %body = tribute_control.perform op @Gen @next() : () -> core.i32
     tribute_control.yield %body
-  } do (%k: core.i32) {
+  } do(%k: core.i32) {
       %done = core.unrealized_conversion_cast %k : !F
       tribute_control.yield %done
   } op @Gen @next(%token: tribute_control.resume_token<core.i32, !F>) : core.i32 {
