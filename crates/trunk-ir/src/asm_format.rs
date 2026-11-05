@@ -308,6 +308,61 @@ impl OpAsmDirectiveHooks {
     }
 }
 
+/// Write the entry block arguments of `region` as `(%a: A, ..)`, naming
+/// them, for a format that then prints the region with
+/// [`OpPrintHelper::print_region_without_entry`]. [`parse_entry_args`] and
+/// [`attach_entry_args`] read them back.
+pub fn write_entry_args(h: &mut OpPrintHelper<'_, '_>, region: crate::RegionRef) -> fmt::Result {
+    let ctx = h.ctx();
+    let args = ctx
+        .region(region)
+        .blocks
+        .first()
+        .map_or(&[][..], |&entry| ctx.block_args(entry));
+    fmt::Write::write_char(h, '(')?;
+    for (position, &arg) in args.iter().enumerate() {
+        if position > 0 {
+            fmt::Write::write_str(h, ", ")?;
+        }
+        let name = h.assign_value_name(arg);
+        fmt::Write::write_str(h, &name)?;
+        fmt::Write::write_str(h, ": ")?;
+        h.write_type(ctx.value_ty(arg))?;
+    }
+    fmt::Write::write_char(h, ')')
+}
+
+/// Parse the entry block arguments [`write_entry_args`] writes.
+pub fn parse_entry_args<'a>(
+    input: &mut &'a str,
+) -> winnow::ModalResult<Vec<(&'a str, RawType<'a>)>> {
+    crate::parser::raw::func_params(input)
+}
+
+/// Give `region`, parsed with its entry block elided, the entry block
+/// arguments [`parse_entry_args`] read. Fails when the region's entry block
+/// already writes arguments of its own.
+pub fn attach_entry_args<'a>(
+    region: &mut crate::parser::raw::RawRegion<'a>,
+    args: Vec<(&'a str, RawType<'a>)>,
+) -> winnow::ModalResult<()> {
+    match region.blocks.first_mut() {
+        None => region.blocks.push(crate::parser::raw::RawBlock {
+            label: "",
+            args,
+            ops: Vec::new(),
+        }),
+        Some(entry) if entry.args.is_empty() => entry.args = args,
+        Some(_) if args.is_empty() => {}
+        Some(_) => {
+            return Err(winnow::error::ErrMode::Cut(expected(
+                "a region whose entry block writes no arguments",
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn directive_fits<T: OpAsmDirective>(ctx: &IrContext, entities: &[CustomEntity<'_>]) -> bool {
     T::decompose(ctx, entities).is_some()
 }

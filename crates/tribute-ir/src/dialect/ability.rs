@@ -1,8 +1,11 @@
 //! Ability dialect — evidence-based handler dispatch.
 
 mod frames;
+mod syntax;
 
-pub use frames::{CpsClosure, HandlerBinding, NotNever, OperationKind};
+pub use crate::dialect::tribute_control::{HandlerBinding, OperationKind};
+pub use frames::{CpsClosure, NotNever};
+pub use syntax::{Dispatchers, HandlerArms};
 
 use super::closure::Closure;
 use super::tribute_control::EvidenceStep;
@@ -87,12 +90,16 @@ mod ability {
     /// `func.unreachable`.
     ///
     /// ```text
-    /// ability.handle_dispatch [@State] %evidence, %prompt_tag(%dispatcher0, ...) {
+    /// ability.handle_dispatch %evidence, %prompt_tag [@State: %dispatcher0, @Console: %dispatcher1] {
     /// ^body(%ev: Evidence):
     ///   ...
     /// }
     /// ```
-    #[asm_format(abilities evidence "," prompt_tag "(" dispatchers ")" attr_dict region(body))]
+    ///
+    /// The format writes each ability with its dispatcher. The verifier
+    /// checks that there is one dispatcher per ability.
+    #[verify]
+    #[asm_format(evidence "," prompt_tag custom(Dispatchers(abilities, dispatchers)) attr_dict region(body))]
     #[implements(CallableExit)]
     fn handle_dispatch(
         abilities: Attr<[SymbolRef]>,
@@ -179,11 +186,17 @@ mod ability {
     /// the installed layer, whose completion is `completion`.
     ///
     /// ```text
-    /// ability.handle %outer_ev, %exit, %completion(%arm0, ...) attributes {handlers = [...]} {
+    /// ability.handle %outer_ev, %exit, %completion [
+    ///   op @State @get : core.i32 = %get,
+    ///   fn @State @peek : core.i32 = %peek
+    /// ] {
     /// ^body(%ev: Evidence, %f: !ability.frame<M>):
     ///   ...
     /// }
     /// ```
+    ///
+    /// The format writes each binding with its arm, as
+    /// `kind @Ability @op_name : operation_result_type = %arm`.
     ///
     /// A resultless terminator with one region. `evidence` is the Evidence
     /// where the handle is installed, `exit` is an `ability.frame<R>`, and
@@ -210,7 +223,7 @@ mod ability {
     /// extended Evidence and an `ability.frame<M>`, and every path ends in a
     /// proper tail transfer or `func.unreachable`.
     #[verify]
-    #[asm_format(evidence "," exit "," completion "(" arms ")" attr_dict region(body))]
+    #[asm_format(evidence "," exit "," completion custom(HandlerArms(handlers, arms)) attr_dict region(body))]
     #[implements(CallableExit)]
     fn handle<F: Frame>(
         handlers: Attr<[HandlerBinding]>,
@@ -402,6 +415,18 @@ impl CallableExit for Perform {
     }
 }
 
+impl trunk_ir::ops::Verify for HandleDispatch {
+    /// One dispatcher per ability.
+    fn verify(&self, ctx: &trunk_ir::IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
+        let abilities = self.abilities(ctx).len();
+        let dispatchers = self.dispatchers(ctx).len();
+        if abilities != dispatchers {
+            return Err(format!("{abilities} abilities but {dispatchers} dispatchers").into());
+        }
+        Ok(())
+    }
+}
+
 impl CallableExit for HandleDispatch {
     fn allows_nested_regions(&self, _ctx: &trunk_ir::IrContext) -> bool {
         true
@@ -553,9 +578,9 @@ mod tests {
                 &format!(
                     r#"core.module @test {{
   func.func @main(%evidence: core.ptr, %prompt: core.i32) {{
-    ability.handle_dispatch {abilities} %evidence, %prompt() {{
+    "ability.handle_dispatch"(%evidence, %prompt) ({{
       func.unreachable
-    }}
+    }}) {{abilities = {abilities}}}
   }}
 }}"#
                 ),

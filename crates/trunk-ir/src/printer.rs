@@ -644,6 +644,17 @@ fn write_symbol_path(f: &mut dyn Write, path: &crate::symbol::SymbolPath) -> fmt
     Ok(())
 }
 
+/// A symbol reference as the printer writes it, `@outer::@name`, for a
+/// format that writes it among other text.
+pub fn display_symbol_ref(path: &crate::symbol::SymbolPath) -> impl fmt::Display + '_ {
+    fmt::from_fn(move |f| write_symbol_path(f, path))
+}
+
+/// `@name` for symbol text as the printer writes it, quoted when needed.
+pub fn display_symbol_text(name: &str) -> impl fmt::Display + '_ {
+    fmt::from_fn(move |f| write_symbol_text(f, name))
+}
+
 /// Write `@name` for symbol text, quoting it when needed.
 fn write_symbol_text(f: &mut dyn Write, s: &str) -> fmt::Result {
     let needs_quoting = s.is_empty() || !s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');

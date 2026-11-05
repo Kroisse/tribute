@@ -560,19 +560,8 @@ impl Printer<'_, '_, '_> {
                 let region = ctx
                     .op_region(op, index)
                     .expect("a printable region with entry arguments is present");
-                let entry = ctx.region(region).blocks[0];
                 self.token('(')?;
-                self.h.write_char('(')?;
-                for (position, &arg) in ctx.block_args(entry).iter().enumerate() {
-                    if position > 0 {
-                        self.h.write_str(", ")?;
-                    }
-                    let name = self.h.assign_value_name(arg);
-                    self.h.write_str(&name)?;
-                    self.h.write_str(": ")?;
-                    self.h.write_type(ctx.value_ty(arg))?;
-                }
-                self.h.write_char(')')
+                super::write_entry_args(self.h, region)
             }
             FormatElement::Optional { anchor, elements } => {
                 if anchor_present(ctx, op, self.schema, anchor) {
@@ -1150,18 +1139,8 @@ impl<'a> FormatParser<'a> {
                 Ok(())
             }
             FormatElement::RegionArgs(index) => {
-                let args = delimited(
-                    ('(', ws),
-                    separated(
-                        0..,
-                        (ws, value_ref, ws, ':', ws, raw_type, ws)
-                            .map(|(_, name, _, _, _, ty, _)| (name, ty)),
-                        ',',
-                    ),
-                    (ws, ')'),
-                )
-                .parse_next(input)
-                .map_err(|e| e.map(|_| expected("entry arguments `(%a: A, ..)`")))?;
+                let args = super::parse_entry_args(input)
+                    .map_err(|e| e.map(|_| expected("entry arguments `(%a: A, ..)`")))?;
                 self.signature_regions = vec![index];
                 self.entry_args = args;
                 Ok(())

@@ -82,11 +82,26 @@ impl trunk_ir::ops::Verify for Perform {
 }
 
 impl trunk_ir::ops::Verify for Handle {
+    /// One arm per binding, no operation bound twice, and the evidence plan.
     fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
-        Ok(verify_evidence_plan(
-            ctx,
-            self.op_ref(),
-            EvidencePlanSite::Handle,
-        )?)
+        let op = self.op_ref();
+        let bindings = HandlerBinding::list(ctx, ctx.op_attrs(op).get("handlers"))?;
+        let arms = self.arms(ctx).count();
+        if bindings.len() != arms {
+            return Err(format!("{} handlers but {arms} arms", bindings.len()).into());
+        }
+        let mut seen = HashSet::default();
+        if let Some(binding) = bindings
+            .iter()
+            .find(|binding| !seen.insert((&binding.ability, binding.op_name)))
+        {
+            return Err(format!(
+                "duplicate handler arm for {}::{}",
+                binding.ability,
+                ctx.str(binding.op_name)
+            )
+            .into());
+        }
+        Ok(verify_evidence_plan(ctx, op, EvidencePlanSite::Handle)?)
     }
 }

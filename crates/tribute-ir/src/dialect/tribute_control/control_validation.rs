@@ -84,53 +84,59 @@ pub(super) fn validate_declaration_uses(
         let Some(declared) = DynOperationDeclarationUse::get(ctx, op) else {
             return;
         };
-        let (Some(claim), Some(args)) = (
-            declared.declaration_use(ctx),
-            declared.declared_arguments(ctx),
-        ) else {
-            return;
-        };
-        let Some(declaration) = declarations.get(&(claim.ability, claim.op_name)) else {
-            push_op_error(
-                ctx,
-                op,
-                errors,
-                format!(
-                    "no resolved operation declaration for {}::{}",
-                    claim.ability,
-                    ctx.str(claim.op_name)
-                ),
-            );
-            return;
-        };
-        if claim.kind != Some(declaration.kind) {
-            push_op_error(
-                ctx,
-                op,
-                errors,
-                format!(
-                    "{} does not match the resolved declaration",
-                    claim.kind_attr
-                ),
-            );
-        }
-        check_types_equal(
-            ctx,
-            op,
-            &value_types(ctx, args),
-            &declaration.parameter_types,
-            "operation argument",
-            errors,
-        );
-        if declared.declared_result_type(ctx) != Some(declaration.result_type) {
-            push_op_error(
-                ctx,
-                op,
-                errors,
-                "operation result type does not match the resolved declaration",
-            );
+        for claim in declared.declaration_uses(ctx) {
+            validate_declaration_use(ctx, op, &claim, declarations, errors);
         }
     });
+}
+
+fn validate_declaration_use(
+    ctx: &IrContext,
+    op: OpRef,
+    claim: &DeclarationUse<'_>,
+    declarations: &HashMap<(&SymbolPath, StringRef), &OperationDeclaration>,
+    errors: &mut Vec<ValidationError>,
+) {
+    let Some(declaration) = declarations.get(&(claim.ability, claim.op_name)) else {
+        push_op_error(
+            ctx,
+            op,
+            errors,
+            format!(
+                "no resolved operation declaration for {}::{}",
+                claim.ability,
+                ctx.str(claim.op_name)
+            ),
+        );
+        return;
+    };
+    if claim.kind != Some(declaration.kind) {
+        push_op_error(
+            ctx,
+            op,
+            errors,
+            format!(
+                "{} does not match the resolved declaration",
+                claim.kind_attr
+            ),
+        );
+    }
+    check_types_equal(
+        ctx,
+        op,
+        &value_types(ctx, claim.arguments),
+        &declaration.parameter_types,
+        "operation argument",
+        errors,
+    );
+    if claim.result_type != Some(declaration.result_type) {
+        push_op_error(
+            ctx,
+            op,
+            errors,
+            "operation result type does not match the resolved declaration",
+        );
+    }
 }
 
 fn op_is_within_region(ctx: &IrContext, op: OpRef, target: RegionRef) -> bool {
@@ -147,13 +153,15 @@ fn op_is_within_region(ctx: &IrContext, op: OpRef, target: RegionRef) -> bool {
     false
 }
 
-fn nearest_enclosing_handler(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
-    let mut owner = parent_op(ctx, op);
-    while let Some(current) = owner {
-        if Handler::matches(ctx, current) {
+/// The innermost handle arm that contains `op`.
+fn nearest_enclosing_arm(ctx: &IrContext, op: OpRef) -> Option<RegionRef> {
+    let mut region = parent_region(ctx, op);
+    while let Some(current) = region {
+        let owner = ctx.region(current).parent_op?;
+        if Handle::matches(ctx, owner) && ctx.op_regions(owner).skip(2).any(|arm| arm == current) {
             return Some(current);
         }
-        owner = parent_op(ctx, current);
+        region = parent_region(ctx, owner);
     }
     None
 }
@@ -184,7 +192,8 @@ pub(super) fn direct_call_reenters_enclosing_func(ctx: &IrContext, op: OpRef) ->
 
 fn validate_affine_lambda_carrier(
     ctx: &IrContext,
-    handler: OpRef,
+    handle: OpRef,
+    arm: RegionRef,
     carrier: ValueRef,
     visited: &mut HashSet<ValueRef>,
     errors: &mut Vec<ValidationError>,
@@ -192,7 +201,7 @@ fn validate_affine_lambda_carrier(
     if !visited.insert(carrier) {
         push_op_error(
             ctx,
-            handler,
+            handle,
             errors,
             "resume-token carrier path contains a cycle",
         );
@@ -202,10 +211,10 @@ fn validate_affine_lambda_carrier(
     let mut captures = Vec::new();
     let mut terminals = Vec::new();
     for use_ in ctx.uses(carrier) {
-        if nearest_enclosing_handler(ctx, use_.user) != Some(handler) {
+        if nearest_enclosing_arm(ctx, use_.user) != Some(arm) {
             push_op_error(
                 ctx,
-                handler,
+                handle,
                 errors,
                 format!(
                     "resume-token carrier crosses into a different handler at {}",
@@ -227,7 +236,7 @@ fn validate_affine_lambda_carrier(
         } else {
             push_op_error(
                 ctx,
-                handler,
+                handle,
                 errors,
                 format!(
                     "resume-token carrier escapes through {} at operand {}",
@@ -240,7 +249,7 @@ fn validate_affine_lambda_carrier(
     if has_nonexclusive_pair(ctx, &captures) {
         push_op_error(
             ctx,
-            handler,
+            handle,
             errors,
             "resume-token carrier branches into multiple lambda captures",
         );
@@ -248,7 +257,7 @@ fn validate_affine_lambda_carrier(
     if has_nonexclusive_pair(ctx, &terminals) {
         push_op_error(
             ctx,
-            handler,
+            handle,
             errors,
             "resume-token carrier has multiple static terminal uses",
         );
@@ -264,7 +273,7 @@ fn validate_affine_lambda_carrier(
             {
                 push_op_error(
                     ctx,
-                    handler,
+                    handle,
                     errors,
                     "resume-token carrier call is outside its capture path",
                 );
@@ -275,29 +284,30 @@ fn validate_affine_lambda_carrier(
         let Some(&next_carrier) = ctx.op_results(capture).first() else {
             push_op_error(
                 ctx,
-                handler,
+                handle,
                 errors,
                 "lambda capture carrying a resume token must produce one callable value",
             );
             return;
         };
-        validate_affine_lambda_carrier(ctx, handler, next_carrier, visited, errors);
+        validate_affine_lambda_carrier(ctx, handle, arm, next_carrier, visited, errors);
     }
 }
 
 fn validate_token_path(
     ctx: &IrContext,
-    handler: OpRef,
+    handle: OpRef,
+    arm: RegionRef,
     token_value: ValueRef,
     errors: &mut Vec<ValidationError>,
 ) {
     let mut resumes = Vec::new();
     let mut captures = Vec::new();
     for use_ in ctx.uses(token_value) {
-        if nearest_enclosing_handler(ctx, use_.user) != Some(handler) {
+        if nearest_enclosing_arm(ctx, use_.user) != Some(arm) {
             push_op_error(
                 ctx,
-                handler,
+                handle,
                 errors,
                 format!(
                     "resume token crosses into a different handler at {}",
@@ -313,7 +323,7 @@ fn validate_token_path(
         } else {
             push_op_error(
                 ctx,
-                handler,
+                handle,
                 errors,
                 format!(
                     "resume token has forbidden use by {} at operand {}",
@@ -325,7 +335,7 @@ fn validate_token_path(
     if has_nonexclusive_pair(ctx, &resumes) {
         push_op_error(
             ctx,
-            handler,
+            handle,
             errors,
             "resume token reaches more than one tribute_control.resume",
         );
@@ -338,7 +348,7 @@ fn validate_token_path(
         if !comparable && !ops_are_mutually_exclusive(ctx, left, right) {
             push_op_error(
                 ctx,
-                handler,
+                handle,
                 errors,
                 "resume token is copied into multiple capture paths",
             );
@@ -354,7 +364,7 @@ fn validate_token_path(
         {
             push_op_error(
                 ctx,
-                handler,
+                handle,
                 errors,
                 "resume token capture does not form a single path to resume",
             );
@@ -363,7 +373,7 @@ fn validate_token_path(
     let mut visited = HashSet::default();
     for capture in captures {
         if let Some(&closure_value) = ctx.op_results(capture).first() {
-            validate_affine_lambda_carrier(ctx, handler, closure_value, &mut visited, errors);
+            validate_affine_lambda_carrier(ctx, handle, arm, closure_value, &mut visited, errors);
         }
     }
 }
@@ -413,20 +423,19 @@ pub(super) fn validate_resume_ownership(
     errors: &mut Vec<ValidationError>,
 ) {
     walk_region_ops(ctx, body, &mut |op| {
-        if !Handler::matches(ctx, op) {
+        if !Handle::matches(ctx, op) {
             return;
         }
-        let Some(region) = ctx.op_region(op, 0) else {
-            return;
-        };
-        let Some(&block) = ctx.region(region).blocks.first() else {
-            return;
-        };
-        let Some(&token) = ctx.block_args(block).last() else {
-            return;
-        };
-        if ResumeToken::matches(ctx, ctx.value_ty(token)) {
-            validate_token_path(ctx, op, token, errors);
+        for arm in ctx.op_regions(op).skip(2) {
+            let Some(&block) = ctx.region(arm).blocks.first() else {
+                continue;
+            };
+            let Some(&token) = ctx.block_args(block).last() else {
+                continue;
+            };
+            if ResumeToken::matches(ctx, ctx.value_ty(token)) {
+                validate_token_path(ctx, op, arm, token, errors);
+            }
         }
     });
 }
@@ -453,14 +462,16 @@ pub(super) fn validate_token_placements(
                     if !ResumeToken::matches(ctx, ctx.value_ty(arg)) {
                         continue;
                     }
-                    let allowed =
-                        Handler::matches(ctx, op) && index + 1 == ctx.block_args(block).len();
+                    let allowed = Handle::matches(ctx, op)
+                        && ctx.op_regions(op).skip(2).any(|arm| arm == region)
+                        && ctx.region(region).blocks.first() == Some(&block)
+                        && index + 1 == ctx.block_args(block).len();
                     if !allowed {
                         push_op_error(
                             ctx,
                             op,
                             errors,
-                            "resume_token block arguments are allowed only as the final handler argument",
+                            "resume_token block arguments are allowed only as the final argument of a handle arm",
                         );
                     }
                 }
