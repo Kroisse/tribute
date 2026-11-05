@@ -115,7 +115,7 @@ inputs by kind: operands start it, attributes are set by name, and result
 types, regions, and successors are each one call:
 
 ```rust
-let value = arith::Const::operands()
+let value = arith::Constant::operands()
     .value(Attribute::Int(42))
     .results(i32_ty)
     .build(ctx, location);
@@ -126,12 +126,12 @@ The builder infers result types the declaration fixes:
 
 ```rust
 // fn cmpi<T: IntegerLike>(
-//     predicate: Attr<String>,
+//     predicate: Attr<CmpiPredicate>,
 //     lhs: Value<T>,
 //     rhs: Value<T>,
 // ) -> Value<I1> {}
 let cmp = arith::Cmpi::operands(lhs, rhs)
-    .predicate("slt")
+    .predicate(CmpiPredicate::Slt)
     .build(ctx, location);
 ```
 

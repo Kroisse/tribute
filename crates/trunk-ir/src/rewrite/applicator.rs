@@ -1304,7 +1304,7 @@ mod tests {
             r#"core.module @test {
   func.func @main(%flag: core.i1, %other: core.i1) {
     ^entry(%flag: core.i1, %other: core.i1):
-      %both = arith.and %flag, %other : core.i1
+      %both = arith.andi %flag, %other : core.i1
       cf.br %flag [^exit]
     ^exit(%forwarded: core.i1):
       func.return
@@ -1314,7 +1314,7 @@ mod tests {
         assert_eq!(
             printed.matches("core.unrealized_conversion_cast").count(),
             2,
-            "only the operands of arith.and return to core.i1: {printed}"
+            "only the operands of arith.andi return to core.i1: {printed}"
         );
         assert!(
             printed.contains(": core.i1\n      cf.br %0 [^bb1]"),
@@ -1327,8 +1327,8 @@ mod tests {
         let printed = convert_booleans(
             r#"core.module @test {
   func.func @main(%left: core.i32, %right: core.i32) {
-    %less = arith.cmpi %left, %right {predicate = "slt"} : core.i1
-    %both = arith.and %less, %less : core.i1
+    %less = arith.cmpi slt, %left, %right : core.i32
+    %both = arith.andi %less, %less : core.i1
     func.return
   }
 }"#,

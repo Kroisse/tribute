@@ -2580,7 +2580,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {tribute.entry = @main} {
   func.func @main() -> core.i32 attributes {tribute.calling_convention = "direct"} {
-    %zero = arith.const {value = 0} : core.i32
+    %zero = arith.constant 0 : core.i32
     func.return %zero
   }
 }"#,
@@ -3092,7 +3092,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {tribute.entry = @main} {
   func.func @main() -> core.nil attributes {tribute.calling_convention = "direct"} {
-    %c = arith.const {value = 0, tribute.calling_convention = "direct"} : core.i32
+    %c = arith.constant {tribute.calling_convention = "direct"} 0 : core.i32
     %n = core.nil_value : core.nil
     func.return %n
   }
@@ -3101,7 +3101,7 @@ mod tests {
         let error = assert_unchanged_on_error(&mut ctx, module, lower_cps_signatures_to_physical);
         assert!(
             error.to_string().contains(
-                "arith.const: calling-convention metadata on an operation that cannot carry it"
+                "arith.constant: calling-convention metadata on an operation that cannot carry it"
             ),
             "{error}"
         );

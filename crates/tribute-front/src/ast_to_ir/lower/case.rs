@@ -48,7 +48,7 @@ pub(super) fn emit_logical_pattern_check<'db>(
     let bool_ty = builder.ctx.bool_type(builder.ir);
     match &*pattern.kind {
         PatternKind::Wildcard | PatternKind::Bind { .. } | PatternKind::Error => {
-            let op = arith::Const::operands()
+            let op = arith::Constant::operands()
                 .value(Attribute::Bool(true))
                 .results(bool_ty)
                 .build(builder.ir, location);
@@ -125,7 +125,7 @@ fn combine_conditions(
 ) -> ValueRef {
     let Some((first, rest)) = conditions.split_first() else {
         let bool_ty = builder.ctx.bool_type(builder.ir);
-        let op = arith::Const::operands()
+        let op = arith::Constant::operands()
             .value(Attribute::Bool(true))
             .results(bool_ty)
             .build(builder.ir, location);
@@ -134,7 +134,7 @@ fn combine_conditions(
     };
     let mut result = *first;
     for condition in rest {
-        let and = arith::And::operands(result, *condition).build(builder.ir, location);
+        let and = arith::Andi::operands(result, *condition).build(builder.ir, location);
         builder.ir.push_op(builder.block, and.op_ref());
         result = and.result(builder.ir);
     }
@@ -290,7 +290,7 @@ fn emit_logical_variant_pattern_check<'db>(
         }
         let mut combined = conditions[0];
         for condition in conditions.into_iter().skip(1) {
-            let and = arith::And::operands(combined, condition).build(nested.ir, location);
+            let and = arith::Andi::operands(combined, condition).build(nested.ir, location);
             nested.ir.push_op(nested.block, and.op_ref());
             combined = and.result(nested.ir);
         }
@@ -309,7 +309,7 @@ fn emit_logical_variant_pattern_check<'db>(
         ops: Default::default(),
         parent_region: None,
     });
-    let false_value = arith::Const::operands()
+    let false_value = arith::Constant::operands()
         .value(Attribute::Bool(false))
         .results(bool_ty)
         .build(builder.ir, location);
@@ -378,7 +378,7 @@ fn emit_logical_list_pattern_suffix<'db>(
                 .build(builder.ir, location)
                 .op_ref()
         } else {
-            arith::Const::operands()
+            arith::Constant::operands()
                 .value(Attribute::Bool(true))
                 .results(bool_ty)
                 .build(builder.ir, location)
@@ -392,12 +392,12 @@ fn emit_logical_list_pattern_suffix<'db>(
         .results(bool_ty)
         .build(builder.ir, location);
     builder.ir.push_op(builder.block, empty.op_ref());
-    let true_value = arith::Const::operands()
+    let true_value = arith::Constant::operands()
         .value(Attribute::Bool(true))
         .results(bool_ty)
         .build(builder.ir, location);
     builder.ir.push_op(builder.block, true_value.op_ref());
-    let non_empty = arith::Xor::operands(empty.result(builder.ir), true_value.result(builder.ir))
+    let non_empty = arith::Xori::operands(empty.result(builder.ir), true_value.result(builder.ir))
         .build(builder.ir, location);
     builder.ir.push_op(builder.block, non_empty.op_ref());
     let then_block = builder.ir.create_block(BlockData {
@@ -449,7 +449,7 @@ fn emit_logical_list_pattern_suffix<'db>(
             ops: Default::default(),
             parent_region: None,
         });
-        let false_value = arith::Const::operands()
+        let false_value = arith::Constant::operands()
             .value(Attribute::Bool(false))
             .results(bool_ty)
             .build(nested.ir, location);
@@ -482,7 +482,7 @@ fn emit_logical_list_pattern_suffix<'db>(
         ops: Default::default(),
         parent_region: None,
     });
-    let false_value = arith::Const::operands()
+    let false_value = arith::Constant::operands()
         .value(Attribute::Bool(false))
         .results(bool_ty)
         .build(builder.ir, location);
@@ -542,7 +542,7 @@ fn emit_literal_check<'db>(
                 f64_ty,
             );
             let cmp_op = arith::Cmpf::operands(scrutinee, literal)
-                .predicate("oeq")
+                .predicate(arith::CmpfPredicate::Oeq)
                 .build(builder.ir, location);
             builder.ir.push_op(builder.block, cmp_op.op_ref());
             Some(cmp_op.result(builder.ir))
@@ -590,7 +590,7 @@ fn emit_const(
     value: Attribute,
     ty: TypeRef,
 ) -> ValueRef {
-    let const_op = arith::Const::operands()
+    let const_op = arith::Constant::operands()
         .value(value)
         .results(ty)
         .build(builder.ir, location);
@@ -605,7 +605,7 @@ fn emit_cmpi_eq(
     literal: ValueRef,
 ) -> ValueRef {
     let cmp_op = arith::Cmpi::operands(scrutinee, literal)
-        .predicate("eq")
+        .predicate(arith::CmpiPredicate::Eq)
         .build(builder.ir, location);
     builder.ir.push_op(builder.block, cmp_op.op_ref());
     cmp_op.result(builder.ir)

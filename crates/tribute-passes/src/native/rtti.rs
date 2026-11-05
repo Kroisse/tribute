@@ -59,7 +59,6 @@ struct ClifTypes {
     nil: TypeRef,
     i64: TypeRef,
     i32: TypeRef,
-    i8: TypeRef,
 }
 
 impl ClifTypes {
@@ -73,7 +72,6 @@ impl ClifTypes {
                 .as_type_ref(),
             i64: trunk_ir::dialect::core::I64::type_ref(ctx),
             i32: trunk_ir::dialect::core::I32::type_ref(ctx),
-            i8: trunk_ir::dialect::core::I8::type_ref(ctx),
         }
     }
 }
@@ -378,8 +376,7 @@ fn generate_deep_release_function(ctx: &mut IrContext, loc: Location) -> OpRef {
     push(ctx, entry, release_fn.op_ref());
     let null = iconst(ctx, entry, 0, tys.ptr);
     let is_null = clif::Icmp::operands(release_fn.result(ctx), null)
-        .cond("eq")
-        .results(tys.i8)
+        .cond(clif::IntCond::Eq)
         .build(ctx, loc);
     push(ctx, entry, is_null.op_ref());
     let branch = clif::Brif::operands(is_null.result(ctx))
@@ -400,8 +397,7 @@ fn generate_deep_release_function(ctx: &mut IrContext, loc: Location) -> OpRef {
 
     let zero = iconst(ctx, shallow, 0, tys.i64);
     let is_dynamic = clif::Icmp::operands(alloc_size, zero)
-        .cond("eq")
-        .results(tys.i8)
+        .cond(clif::IntCond::Eq)
         .build(ctx, loc);
     push(ctx, shallow, is_dynamic.op_ref());
     let branch = clif::Brif::operands(is_dynamic.result(ctx))
@@ -613,7 +609,6 @@ fn generate_release_function(
     let ptr_ty = tys.ptr;
     let nil_ty = tys.nil;
     let i64_ty = tys.i64;
-    let i8_ty = tys.i8;
 
     let func_name = format!("{}{}", RELEASE_FN_PREFIX, rtti_idx);
 
@@ -717,8 +712,7 @@ fn generate_release_function(
             .build(ctx, loc);
         ctx.push_op(check_block, null_const.op_ref());
         let is_null = clif::Icmp::operands(load.result(ctx), null_const.result(ctx))
-            .cond("eq")
-            .results(i8_ty)
+            .cond(clif::IntCond::Eq)
             .build(ctx, loc);
         ctx.push_op(check_block, is_null.op_ref());
         let brif = clif::Brif::operands(is_null.result(ctx))
@@ -823,8 +817,7 @@ fn generate_reference_array_release_function(
     ctx.push_op(entry, enter.op_ref());
 
     let more = clif::Icmp::operands(index, len)
-        .cond("ult")
-        .results(tys.i8)
+        .cond(clif::IntCond::Ult)
         .build(ctx, loc);
     ctx.push_op(head, more.op_ref());
     let branch = clif::Brif::operands(more.result(ctx))
@@ -1186,13 +1179,13 @@ mod tests {
             .split("clif.func @__tribute_release_3(")
             .nth(1)
             .expect("boxed Int must have a reserved RTTI release entry");
-        assert!(int_release.contains("value = 12"));
+        assert!(int_release.contains("clif.iconst 12 :"));
         assert!(int_release.contains("call @__tribute_dealloc("));
         let float_release = output
             .split("clif.func @__tribute_release_4(")
             .nth(1)
             .expect("boxed Float must have a reserved RTTI release entry");
-        assert!(float_release.contains("value = 16"));
+        assert!(float_release.contains("clif.iconst 16 :"));
         assert!(float_release.contains("call @__tribute_dealloc("));
     }
 

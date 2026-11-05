@@ -117,7 +117,7 @@ mod tests {
         );
         assert!(!output.contains("tribute_rt.into_raw"), "{output}");
         assert!(
-            output.contains("core.unrealized_conversion_cast %0 : core.ptr"),
+            output.contains("core.unrealized_conversion_cast %0 : !_closure to core.ptr"),
             "{output}"
         );
     }
@@ -134,7 +134,7 @@ mod tests {
         );
         assert!(!output.contains("tribute_rt.from_raw"), "{output}");
         assert!(
-            output.contains("core.unrealized_conversion_cast %0 : core.bytes"),
+            output.contains("core.unrealized_conversion_cast %0 : core.ptr to core.bytes"),
             "{output}"
         );
     }

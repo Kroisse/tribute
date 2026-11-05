@@ -165,7 +165,7 @@ impl OpRewritePattern for LowerClosureNewArena<'_> {
             .r#type(struct_ty)
             .results(struct_ty)
             .build(ctx, loc);
-        // %closure = core.unrealized_conversion_cast %pack : closure.closure<...>
+        // %closure = core.unrealized_conversion_cast %pack : adt.struct<..> to closure.closure<..>
         let cast = core::UnrealizedConversionCast::operands(struct_new_op.result(ctx))
             .results(result_ty)
             .build(ctx, loc);
@@ -1239,7 +1239,7 @@ mod tests {
             !Callback = closure.closure<func.func_sig<() -> core.i32>>
             func.func @invalid(%callee: !Callback) -> core.i32 {{
                 {call}
-                %zero = arith.const {{value = 0}} : core.i32
+                %zero = arith.constant 0 : core.i32
                 func.return %zero
             }}
             func.func @otherwise_lowerable(%callee: !Callback) -> core.i32 {{
@@ -1315,7 +1315,7 @@ mod tests {
   !nested = core.tuple<!closure>
   func.func @run(%callback: !closure) -> !nested {
     %created = closure.new [@callback] : !closure
-    %packed = core.unrealized_conversion_cast %created : !nested
+    %packed = core.unrealized_conversion_cast %created : !closure to !nested
     func.return %packed
   }
 }"#,
@@ -1627,7 +1627,7 @@ mod tests {
   }}
   core.module @right {{
     func.func @helper(%env: !closure, %value: core.i64) -> core.i32 {{
-      %zero = arith.const {{value = 0}} : core.i32
+      %zero = arith.constant 0 : core.i32
       func.return %zero
     }}
   }}
@@ -1684,7 +1684,7 @@ mod tests {
     %function = func.constant @actual_fn : ({evidence}, core.i32, core.i1) -> core.never
     %environment = adt.ref_null {{type = tribute_rt.anyref}} : tribute_rt.anyref
     %pack = adt.struct_new %function, %environment {{type = !_closure}} : !_closure
-    %argument = core.unrealized_conversion_cast %pack : !actual
+    %argument = core.unrealized_conversion_cast %pack : !_closure to !actual
     func.tail_call_indirect %callee(%evidence, %done, %argument) attributes {{tribute.calling_convention = "cps"}} : ({evidence}, core.i32, !expected) -> core.never
   }}
 }}"#

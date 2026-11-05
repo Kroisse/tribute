@@ -337,7 +337,7 @@ impl RewritePattern for LowerEffectTailOp<'_> {
         let loc = ctx.op(op).location;
         let i32_ty = effect_dispatch::i32_type(ctx);
         let mut slot = |ctx: &mut IrContext, index: u32| {
-            let slot = trunk_ir::dialect::arith::Const::operands()
+            let slot = trunk_ir::dialect::arith::Constant::operands()
                 .value(Attribute::Int(i128::from(ability::tail_slot_id(index))))
                 .results(i32_ty)
                 .build(ctx, loc);

@@ -156,7 +156,7 @@ mod tests {
     }
 
     fn make_const(ctx: &mut IrContext, loc: Location, ty: TypeRef, val: i128) -> OpRef {
-        let data = OperationDataBuilder::new(loc, "arith.const")
+        let data = OperationDataBuilder::new(loc, "arith.constant")
             .result(ty)
             .attr("value", Attribute::Int(val))
             .build(ctx);

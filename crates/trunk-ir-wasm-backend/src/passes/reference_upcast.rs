@@ -101,11 +101,11 @@ mod tests {
   !Closure = test.layout<core.i32, wasm.anyref, {layout = "closure"}>
   !Ref = wasm_gc.struct<core.i32>
   func.func @f(%c: !Closure, %r: !Ref, %s: wasm.structref, %a: wasm_gc.array<core.i32>) {
-    %c_struct = core.unrealized_conversion_cast %c : wasm.structref
-    %c_any = core.unrealized_conversion_cast %c : wasm.anyref
-    %r_struct = core.unrealized_conversion_cast %r : wasm.structref
-    %s_any = core.unrealized_conversion_cast %s : wasm.anyref
-    %a_array = core.unrealized_conversion_cast %a : wasm.arrayref
+    %c_struct = core.unrealized_conversion_cast %c : !Closure to wasm.structref
+    %c_any = core.unrealized_conversion_cast %c : !Closure to wasm.anyref
+    %r_struct = core.unrealized_conversion_cast %r : !Ref to wasm.structref
+    %s_any = core.unrealized_conversion_cast %s : wasm.structref to wasm.anyref
+    %a_array = core.unrealized_conversion_cast %a : wasm_gc.array<core.i32> to wasm.arrayref
     func.call @use(%c_struct, %c_any, %r_struct, %s_any, %a_array) : (wasm.structref, wasm.anyref, wasm.structref, wasm.anyref, wasm.arrayref) -> ()
     func.return
   }
@@ -138,8 +138,8 @@ mod tests {
         let input = r#"core.module @test {
   !Plain = test.opaque<core.i32>
   func.func @f(%any: wasm.anyref, %plain: !Plain) {
-    %down = core.unrealized_conversion_cast %any : wasm.structref
-    %plain_struct = core.unrealized_conversion_cast %plain : wasm.structref
+    %down = core.unrealized_conversion_cast %any : wasm.anyref to wasm.structref
+    %plain_struct = core.unrealized_conversion_cast %plain : !Plain to wasm.structref
     func.call @use(%down, %plain_struct) : (wasm.structref, wasm.structref) -> ()
     func.return
   }
@@ -157,7 +157,7 @@ mod tests {
         let input = r#"core.module @test {
   !Closure = test.layout<core.i32, wasm.anyref, {layout = "closure"}>
   func.func @f(%c: !Closure) {
-    %r = core.unrealized_conversion_cast %c : wasm.structref
+    %r = core.unrealized_conversion_cast %c : !Closure to wasm.structref
     func.call @use(%r) : (wasm.structref) -> ()
     func.return
   }

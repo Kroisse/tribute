@@ -46,7 +46,7 @@ mod tests {
             .intern(&mut ctx)
             .as_type_ref();
         let bool_ty = TypeDataBuilder::new("core.i1").intern(&mut ctx);
-        let element = trunk_ir::dialect::arith::Const::operands()
+        let element = trunk_ir::dialect::arith::Constant::operands()
             .value(Attribute::Int(1))
             .results(element_ty)
             .build(&mut ctx, loc)

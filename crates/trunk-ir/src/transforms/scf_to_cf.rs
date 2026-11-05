@@ -553,14 +553,14 @@ impl SwitchDispatch<'_> {
                 let is_last = i == cases.len() - 1;
 
                 // Create comparison: discriminant == case_value
-                let case_const = arith::Const::operands()
+                let case_const = arith::Constant::operands()
                     .value(case_attr.clone())
                     .results(disc_ty)
                     .build(ctx, loc);
                 ctx.push_op(current_block, case_const.op_ref());
 
                 let cmp = arith::Cmpi::operands(discriminant, case_const.result(ctx))
-                    .predicate("eq")
+                    .predicate(arith::CmpiPredicate::Eq)
                     .build(ctx, loc);
                 ctx.push_op(current_block, cmp.op_ref());
 
@@ -855,7 +855,7 @@ mod tests {
             parent_region: None,
         });
 
-        let cond_const = arith::Const::operands()
+        let cond_const = arith::Constant::operands()
             .value(Attribute::Bool(true))
             .results(i1_ty)
             .build(ctx, loc);
@@ -921,8 +921,8 @@ mod tests {
             parent_region: None,
         });
 
-        // %cond = arith.const true
-        let cond_const = arith::Const::operands()
+        // %cond = arith.constant true
+        let cond_const = arith::Constant::operands()
             .value(Attribute::Bool(true))
             .results(i1_ty)
             .build(&mut ctx, loc);
@@ -935,7 +935,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let then_val = arith::Const::operands()
+        let then_val = arith::Constant::operands()
             .value(Attribute::Int(42))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -956,7 +956,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let else_val = arith::Const::operands()
+        let else_val = arith::Constant::operands()
             .value(Attribute::Int(0))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -1086,7 +1086,7 @@ mod tests {
             parent_region: None,
         });
 
-        let cond_const = arith::Const::operands()
+        let cond_const = arith::Constant::operands()
             .value(Attribute::Bool(true))
             .results(i1_ty)
             .build(&mut ctx, loc);
@@ -1812,7 +1812,7 @@ mod tests {
         });
 
         // init value
-        let init = arith::Const::operands()
+        let init = arith::Constant::operands()
             .value(Attribute::Int(0))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -1889,7 +1889,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let init = arith::Const::operands()
+        let init = arith::Constant::operands()
             .value(Attribute::Int(0))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -1969,7 +1969,7 @@ mod tests {
     fn lower_scf_switch_basic() {
         let input = r#"core.module @test {
   func.func @test() {
-    %disc = arith.const {value = 1} : core.i32
+    %disc = arith.constant 1 : core.i32
     scf.index_switch %disc : (core.i32) -> ()
     case 0 {
       scf.yield
@@ -2099,7 +2099,7 @@ mod tests {
     fn lower_scf_switch_no_result() {
         let input = r#"core.module @test {
   func.func @test() {
-    %disc = arith.const {value = 1} : core.i32
+    %disc = arith.constant 1 : core.i32
     scf.index_switch %disc : (core.i32) -> ()
     case 0 {
       scf.yield
@@ -2149,7 +2149,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let val = arith::Const::operands()
+        let val = arith::Constant::operands()
             .value(Attribute::Int(1))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -2192,7 +2192,7 @@ mod tests {
             parent_region: None,
         });
 
-        let cond = arith::Const::operands()
+        let cond = arith::Constant::operands()
             .value(Attribute::Bool(true))
             .results(i1_ty)
             .build(&mut ctx, loc);
@@ -2205,7 +2205,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let t_val = arith::Const::operands()
+        let t_val = arith::Constant::operands()
             .value(Attribute::Int(1))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -2226,7 +2226,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let e_val = arith::Const::operands()
+        let e_val = arith::Constant::operands()
             .value(Attribute::Int(2))
             .results(i32_ty)
             .build(&mut ctx, loc);

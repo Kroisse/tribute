@@ -43,8 +43,8 @@ core.module @test {
       tribute_control.return %5
   }
   tribute_control.func @"pkg::make_point"['a0]() -> !"pkg::Point_1" row(| 'a0) inferred {
-      %0 = arith.const {value = 10} : core.i32
-      %1 = arith.const {value = 20} : core.i32
+      %0 = arith.constant 10 : core.i32
+      %1 = arith.constant 20 : core.i32
       %2 = adt.struct_new %0, %1 {type = !"pkg::Point"} : !"pkg::Point_1"
       tribute_control.return %2
   }

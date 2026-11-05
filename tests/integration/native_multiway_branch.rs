@@ -54,7 +54,7 @@ fn selection_module(selection: &Selection<'_>) -> String {
     ^entry:
       {operation} %index, ^default [{arms}]
     ^default:
-      %default = clif.iconst {{value = 0}} : core.i32
+      %default = clif.iconst 0 : core.i32
       clif.return %default"#
     )
     .unwrap();
@@ -62,7 +62,7 @@ fn selection_module(selection: &Selection<'_>) -> String {
         writeln!(
             text,
             r#"    ^target{target}:
-      %result{target} = clif.iconst {{value = {target}}} : core.i32
+      %result{target} = clif.iconst {target} : core.i32
       clif.return %result{target}"#
         )
         .unwrap();
@@ -75,13 +75,13 @@ fn selection_module(selection: &Selection<'_>) -> String {
         writeln!(
             text,
             r#"    ^check{position}:
-      %input{position} = clif.iconst {{value = {input}}} : {index_ty}
+      %input{position} = clif.iconst {input} : {index_ty}
       %actual{position} = clif.call @select(%input{position}) : ({index_ty}) -> core.i32
-      %expected{position} = clif.iconst {{value = {result}}} : core.i32
-      %matches{position} = clif.icmp %actual{position}, %expected{position} {{cond = "eq"}} : core.i8
+      %expected{position} = clif.iconst {result} : core.i32
+      %matches{position} = clif.icmp eq, %actual{position}, %expected{position} : core.i32
       clif.brif %matches{position} [^check{next}, ^fail{position}]
     ^fail{position}:
-      %code{position} = clif.iconst {{value = {next}}} : core.i32
+      %code{position} = clif.iconst {next} : core.i32
       clif.return %code{position}"#
         )
         .unwrap();
@@ -89,7 +89,7 @@ fn selection_module(selection: &Selection<'_>) -> String {
     writeln!(
         text,
         r#"    ^check{}:
-      %success = clif.iconst {{value = 0}} : core.i32
+      %success = clif.iconst 0 : core.i32
       clif.return %success
   }}
 }}"#,

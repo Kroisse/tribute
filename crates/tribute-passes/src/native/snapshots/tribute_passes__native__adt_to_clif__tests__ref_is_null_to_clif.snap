@@ -4,10 +4,10 @@ expression: result
 ---
 core.module @test {
   func.func @test_fn() -> core.i32 {
-      %0 = clif.iconst {value = 42} : core.ptr
-      %1 = clif.iconst {value = 0} : core.ptr
-      %2 = clif.icmp %0, %1 {cond = "eq"} : core.i8
-      %3 = clif.uextend %2 : core.i32
+      %0 = clif.iconst 42 : core.ptr
+      %1 = clif.iconst 0 : core.ptr
+      %2 = clif.icmp eq, %0, %1 : core.ptr
+      %3 = clif.uextend %2 : core.i8 to core.i32
       func.return %3
   }
 }

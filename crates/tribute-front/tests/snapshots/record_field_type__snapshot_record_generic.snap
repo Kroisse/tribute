@@ -45,8 +45,8 @@ core.module @test {
       tribute_control.return %5
   }
   tribute_control.func @"pkg::make_pair"['a0]() -> !"pkg::Pair$Int$Bool_1" row(| 'a0) inferred {
-      %0 = arith.const {value = 42} : core.i32
-      %1 = arith.const {value = true} : core.i1
+      %0 = arith.constant 42 : core.i32
+      %1 = arith.constant true : core.i1
       %2 = adt.struct_new %0, %1 {type = !"pkg::Pair$Int$Bool"} : !"pkg::Pair$Int$Bool_1"
       tribute_control.return %2
   }

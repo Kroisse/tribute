@@ -30,12 +30,12 @@ mod tests {
             .intern(&mut ctx)
             .as_type_ref();
         let bool_ty = TypeDataBuilder::new("core.i1").intern(&mut ctx);
-        let bytes = trunk_ir::dialect::arith::Const::operands()
+        let bytes = trunk_ir::dialect::arith::Constant::operands()
             .value(Attribute::Int(0))
             .results(ty)
             .build(&mut ctx, loc)
             .result(&ctx);
-        let newline = trunk_ir::dialect::arith::Const::operands()
+        let newline = trunk_ir::dialect::arith::Constant::operands()
             .value(Attribute::Int(1))
             .results(bool_ty)
             .build(&mut ctx, loc)

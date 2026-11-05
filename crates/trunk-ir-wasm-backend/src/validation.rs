@@ -763,7 +763,7 @@ mod tests {
         rejects(
             r#"core.module @test {
   wasm.func @callee() -> core.i32 {
-    %value = wasm.i32_const {value = 1} : core.i32
+    %value = wasm.i32_const 1 : core.i32
     wasm.return %value
   }
   wasm.func @caller() -> core.nil {
@@ -776,7 +776,7 @@ mod tests {
         rejects(
             r#"core.module @test {
   wasm.func @caller() -> core.i32 {
-    %value = wasm.i64_const {value = 1} : core.i64
+    %value = wasm.i64_const 1 : core.i64
     wasm.return %value
   }
 }"#,
@@ -889,7 +889,7 @@ mod tests {
             format!(
                 r#"core.module @outer {{
   wasm.func @target() -> core.i32 {{
-    %value = wasm.i32_const {{value = 1}} : core.i32
+    %value = wasm.i32_const 1 : core.i32
     wasm.return %value
   }}
   core.module @inner {{

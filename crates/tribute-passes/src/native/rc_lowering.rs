@@ -256,7 +256,6 @@ fn lower_rc_in_block(ctx: &mut IrContext, region: RegionRef, block: BlockRef) {
     let ptr_ty = core::Ptr::params().intern(ctx).as_type_ref();
     let i64_ty = core::I64::type_ref(ctx);
     let i32_ty = core::I32::type_ref(ctx);
-    let i8_ty = core::I8::type_ref(ctx);
     let nil_ty = core::Nil::params().intern(ctx).as_type_ref();
 
     // Process the block: iterate ops, when we hit an RC op, split.
@@ -295,8 +294,7 @@ fn lower_rc_in_block(ctx: &mut IrContext, region: RegionRef, block: BlockRef) {
                 .build(ctx, loc);
             ctx.push_op(current_block, null_val.op_ref());
             let is_null = clif::Icmp::operands(ptr, null_val.result(ctx))
-                .cond("eq")
-                .results(i8_ty)
+                .cond(clif::IntCond::Eq)
                 .build(ctx, loc);
             ctx.push_op(current_block, is_null.op_ref());
 
@@ -376,8 +374,7 @@ fn lower_rc_in_block(ctx: &mut IrContext, region: RegionRef, block: BlockRef) {
                 .build(ctx, loc);
             ctx.push_op(current_block, null_val.op_ref());
             let is_null = clif::Icmp::operands(ptr, null_val.result(ctx))
-                .cond("eq")
-                .results(i8_ty)
+                .cond(clif::IntCond::Eq)
                 .build(ctx, loc);
             ctx.push_op(current_block, is_null.op_ref());
 
@@ -388,16 +385,8 @@ fn lower_rc_in_block(ctx: &mut IrContext, region: RegionRef, block: BlockRef) {
             ctx.push_op(current_block, brif_op.op_ref());
 
             // Generate release decrement ops in do_release_block
-            let is_last_val = gen_release_decrement(
-                ctx,
-                loc,
-                do_release_block,
-                ptr,
-                ptr_ty,
-                i64_ty,
-                i32_ty,
-                i8_ty,
-            );
+            let is_last_val =
+                gen_release_decrement(ctx, loc, do_release_block, ptr, ptr_ty, i64_ty, i32_ty);
 
             // brif: if last ref → free, else → skip
             let last_brif = clif::Brif::operands(is_last_val)
@@ -459,8 +448,7 @@ fn lower_rc_in_block(ctx: &mut IrContext, region: RegionRef, block: BlockRef) {
                 .build(ctx, loc);
             ctx.push_op(current_block, null_val.op_ref());
             let is_null = clif::Icmp::operands(ptr, null_val.result(ctx))
-                .cond("eq")
-                .results(i8_ty)
+                .cond(clif::IntCond::Eq)
                 .build(ctx, loc);
             ctx.push_op(current_block, is_null.op_ref());
             let brif_op = clif::Brif::operands(is_null.result(ctx))
@@ -490,8 +478,7 @@ fn lower_rc_in_block(ctx: &mut IrContext, region: RegionRef, block: BlockRef) {
                 .build(ctx, loc);
             ctx.push_op(check_block, one.op_ref());
             let is_unique = clif::Icmp::operands(rc.result(ctx), one.result(ctx))
-                .cond("eq")
-                .results(i8_ty)
+                .cond(clif::IntCond::Eq)
                 .build(ctx, loc);
             ctx.push_op(check_block, is_unique.op_ref());
             let unique_brif = clif::Brif::operands(is_unique.result(ctx))
@@ -613,7 +600,6 @@ fn gen_retain_rc_ops(
 
 /// Generate release decrement ops in a block.
 /// Returns a flag indicating the old refcount was 1 (i.e., now zero after atomic decrement).
-#[allow(clippy::too_many_arguments)]
 fn gen_release_decrement(
     ctx: &mut IrContext,
     loc: trunk_ir::Location,
@@ -622,7 +608,6 @@ fn gen_release_decrement(
     ptr_ty: TypeRef,
     i64_ty: TypeRef,
     i32_ty: TypeRef,
-    i8_ty: TypeRef,
 ) -> ValueRef {
     // rc_addr = ptr - RC_HEADER_SIZE
     let hdr_sz = clif::Iconst::operands()
@@ -650,8 +635,7 @@ fn gen_release_decrement(
 
     // is_last = (old_rc == 1) means refcount was 1 before decrement, now 0
     let is_last = clif::Icmp::operands(old_rc.result(ctx), one.result(ctx))
-        .cond("eq")
-        .results(i8_ty)
+        .cond(clif::IntCond::Eq)
         .build(ctx, loc);
     ctx.push_op(block, is_last.op_ref());
 

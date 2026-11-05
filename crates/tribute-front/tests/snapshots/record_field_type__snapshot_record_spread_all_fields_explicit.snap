@@ -43,8 +43,8 @@ core.module @test {
       tribute_control.return %5
   }
   tribute_control.func @"pkg::replace_all"['a0](%0: !"pkg::Point_1") -> !"pkg::Point_1" row(| 'a0) inferred {
-      %1 = arith.const {value = 1} : core.i32
-      %2 = arith.const {value = 2} : core.i32
+      %1 = arith.constant 1 : core.i32
+      %2 = arith.constant 2 : core.i32
       %3 = adt.struct_new %1, %2 {type = !"pkg::Point"} : !"pkg::Point_1"
       tribute_control.return %3
   }

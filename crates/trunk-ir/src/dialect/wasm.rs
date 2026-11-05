@@ -201,7 +201,7 @@ mod wasm {
     fn global_set(index: Attr<u32>, value: Value<_>) {}
 
     // i32
-    #[asm_format(attr_dict_bare ":" type(result))]
+    #[asm_format(attr_dict_bare value ":" type(result))]
     fn i32_const(value: Attr<i32>) -> Value<_> {}
 
     #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
@@ -254,7 +254,7 @@ mod wasm {
     fn i32_shr_u(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
     // i64
-    #[asm_format(attr_dict_bare ":" type(result))]
+    #[asm_format(attr_dict_bare value ":" type(result))]
     fn i64_const(value: Attr<i64>) -> Value<_> {}
 
     #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
@@ -307,7 +307,7 @@ mod wasm {
     fn i64_shr_u(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
     // f32
-    #[asm_format(attr_dict_bare ":" type(result))]
+    #[asm_format(attr_dict_bare value ":" type(result))]
     fn f32_const(value: Attr<f32>) -> Value<_> {}
 
     #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
@@ -335,7 +335,7 @@ mod wasm {
     fn f32_ge(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
     // f64
-    #[asm_format(attr_dict_bare ":" type(result))]
+    #[asm_format(attr_dict_bare value ":" type(result))]
     fn f64_const(value: Attr<f64>) -> Value<_> {}
 
     #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
@@ -1277,7 +1277,7 @@ mod tests {
         let source = r#"core.module @test {
   wasm.func @external(%arg0: core.i32) -> core.i32 attributes {abi = "C"}
   wasm.func @pair(%0: core.i32) -> (core.i32, core.i64) {
-      %1 = wasm.i64_const {value = 1} : core.i64
+      %1 = wasm.i64_const 1 : core.i64
       wasm.return %0, %1
   }
 }

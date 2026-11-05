@@ -211,7 +211,7 @@ fn table_module(target: &str, entry: &str) -> String {
     format!(
         r#"core.module @test {{
   tribute_cps.func @target() -> core.i32 convention({target}) {{
-    %0 = arith.const {{value = 1}} : core.i32
+    %0 = arith.constant 1 : core.i32
     tribute_control.return %0
   }}
   tribute_cps.func_table @"target$8" = {{{entry} = @target}}
@@ -256,7 +256,7 @@ fn a_function_reference_names_a_function_table() {
     let errors = messages(
         r#"core.module @test {
   tribute_cps.func @target() -> core.i32 convention(direct) {
-    %0 = arith.const {value = 1} : core.i32
+    %0 = arith.constant 1 : core.i32
     tribute_control.return %0
   }
   tribute_cps.func @f() -> core.i32 convention(direct) {
@@ -354,7 +354,7 @@ fn a_function_table_and_its_targets_are_in_the_module_of_its_references() {
         r#"core.module @test {
   core.module @inner {
     tribute_cps.func @id() -> core.i32 convention(direct) {
-      %0 = arith.const {value = 1} : core.i32
+      %0 = arith.constant 1 : core.i32
       tribute_control.return %0
     }
     tribute_cps.func_table @"id$8" = {direct = @id}
@@ -382,7 +382,7 @@ fn the_targets_of_a_function_table_share_one_source_signature() {
     let errors = messages(
         r#"core.module @test {
   tribute_cps.func @a() -> core.i32 convention(direct) {
-    %0 = arith.const {value = 1} : core.i32
+    %0 = arith.constant 1 : core.i32
     tribute_control.return %0
   }
   tribute_cps.func @b(%x: core.i32) -> core.i32 convention(cps) {

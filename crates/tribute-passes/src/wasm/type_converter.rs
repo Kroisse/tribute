@@ -677,7 +677,7 @@ mod tests {
             r#"core.module @test {
   !Closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @f(%c: !Closure) {
-    %erased = core.unrealized_conversion_cast %c : tribute_rt.anyref
+    %erased = core.unrealized_conversion_cast %c : !Closure to tribute_rt.anyref
     func.call @use(%erased) : (tribute_rt.anyref) -> ()
     func.return
   }
@@ -739,7 +739,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f(%value: wasm.anyref) -> core.nil {
-    %unit = core.unrealized_conversion_cast %value : core.nil
+    %unit = core.unrealized_conversion_cast %value : wasm.anyref to core.nil
     func.return %unit
   }
 }"#,
