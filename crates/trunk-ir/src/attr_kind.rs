@@ -17,7 +17,7 @@ use crate::asm_format::expected;
 use crate::context::IrContext;
 use crate::op_schema::AttributeKind;
 use crate::parser::raw::{RawAttribute, raw_attr_value};
-use crate::printer::OpPrintHelper;
+use crate::printer::AsmPrinter;
 use crate::refs::TypeRef;
 use crate::symbol::SymbolPath;
 use crate::types::{Attribute, AttributeIter, AttributeKey, AttributeMap, StringArg, StringRef};
@@ -52,8 +52,8 @@ pub trait AttrKind {
     /// Write `attr`, a value `accepts` admits, as a declarative assembly
     /// format spells it: by default in generic attribute syntax. A keyword
     /// kind writes its keyword (`new-plans/ir.md`, "선언적 어셈블리 형식").
-    fn print_text(h: &mut OpPrintHelper<'_, '_>, attr: &Attribute) -> fmt::Result {
-        h.write_attribute(attr)
+    fn print_text(p: &mut AsmPrinter<'_>, attr: &Attribute) -> fmt::Result {
+        p.print_attribute(attr)
     }
 
     /// Read a value as [`Self::print_text`] writes it, as an unverified
@@ -212,10 +212,10 @@ macro_rules! keyword_kind {
             }
 
             fn print_text(
-                h: &mut $crate::printer::OpPrintHelper<'_, '_>,
+                p: &mut $crate::printer::AsmPrinter<'_>,
                 attr: &$crate::types::Attribute,
             ) -> ::std::fmt::Result {
-                ::std::fmt::Write::write_str(h, Self::read(h.ctx(), attr).keyword())
+                ::std::fmt::Write::write_str(p, Self::read(p.ctx(), attr).keyword())
             }
 
             fn parse_text<'a>(

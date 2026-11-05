@@ -164,9 +164,9 @@ mod tests {
     }
 
     impl crate::asm_format::TypeAsmFormat for Custom {
-        fn print(&self, h: &mut crate::printer::TypePrintHelper<'_, '_>) -> std::fmt::Result {
+        fn print(&self, p: &mut crate::printer::AsmPrinter<'_>) -> std::fmt::Result {
             use std::fmt::Write;
-            h.write_str("type_hooks_test.custom<!>")
+            p.write_str("type_hooks_test.custom<!>")
         }
 
         fn parse<'a>(

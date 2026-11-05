@@ -353,8 +353,8 @@ static FUNC_SIG_DEF: crate::type_def::TypeDef = crate::type_def::TypeDef::new("f
 crate::register_type_def!(&FUNC_SIG_DEF);
 
 impl crate::asm_format::TypeAsmFormat for FuncSig {
-    fn print(&self, h: &mut crate::printer::TypePrintHelper<'_, '_>) -> std::fmt::Result {
-        print_signature_type(h, self.0)
+    fn print(&self, p: &mut crate::printer::AsmPrinter<'_>) -> std::fmt::Result {
+        print_signature_type(p, self.0)
     }
 
     fn parse<'a>(input: &mut &'a str, name: &'a str) -> winnow::ModalResult<RawType<'a>> {
@@ -403,27 +403,27 @@ fn signature_tail_attrs<'a>(
 /// [`parse_signature_type`] in their
 /// [`TypeAsmFormat`](crate::asm_format::TypeAsmFormat).
 pub fn print_signature_type(
-    h: &mut crate::printer::TypePrintHelper<'_, '_>,
+    p: &mut crate::printer::AsmPrinter<'_>,
     ty: TypeRef,
 ) -> std::fmt::Result {
     use crate::asm_format::{write_dict_tail, write_signature_param, write_signature_results};
     use std::fmt::Write;
 
-    let ctx = h.ctx();
+    let ctx = p.ctx();
     let data = ctx.get_type(ty);
     let parts = signature_parts(ctx, ty);
 
-    write!(h, "{}<(", data.name.display(ctx))?;
+    write!(p, "{}<(", data.name.display(ctx))?;
     for (index, &(input, attrs)) in parts.inputs.iter().enumerate() {
         if index > 0 {
-            h.write_str(", ")?;
+            p.write_str(", ")?;
         }
-        write_signature_param(h, input, attrs)?;
+        write_signature_param(p, input, attrs)?;
     }
-    h.write_str(") -> ")?;
-    write_signature_results(h, &parts.results)?;
-    write_dict_tail(h, &parts.tail)?;
-    h.write_char('>')
+    p.write_str(") -> ")?;
+    write_signature_results(p, &parts.results)?;
+    write_dict_tail(p, &parts.tail)?;
+    p.write_char('>')
 }
 
 /// The inputs, results, and remaining type attributes of a validated

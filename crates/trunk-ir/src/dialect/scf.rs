@@ -353,19 +353,19 @@ impl crate::asm_format::OpAsmDirective for SwitchArms {
     }
 
     fn print(
-        h: &mut crate::printer::OpPrintHelper<'_, '_>,
+        p: &mut crate::printer::OpAsmPrinter<'_>,
         (arms, default): Self::Parts<'_>,
     ) -> std::fmt::Result {
         use std::fmt::Write as _;
 
         for (case, region) in arms {
-            h.newline()?;
-            write!(h, "case {case} ")?;
-            h.print_region(region)?;
+            p.newline()?;
+            write!(p, "case {case} ")?;
+            p.print_region(region)?;
         }
-        h.newline()?;
-        h.write_str("default ")?;
-        h.print_region(default)
+        p.newline()?;
+        p.write_str("default ")?;
+        p.print_region(default)
     }
 
     fn parse<'a>(

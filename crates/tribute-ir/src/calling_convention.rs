@@ -111,11 +111,8 @@ impl trunk_ir::attr_kind::AttrKind for CallingConvention {
     }
 
     /// A convention is written as its keyword, `cps`.
-    fn print_text(
-        h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>,
-        attr: &Attribute,
-    ) -> fmt::Result {
-        fmt::Write::write_str(h, Self::read(h.ctx(), attr).keyword())
+    fn print_text(p: &mut trunk_ir::printer::AsmPrinter<'_>, attr: &Attribute) -> fmt::Result {
+        fmt::Write::write_str(p, Self::read(p.ctx(), attr).keyword())
     }
 
     fn parse_text<'a>(

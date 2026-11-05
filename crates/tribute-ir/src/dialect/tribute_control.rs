@@ -59,7 +59,7 @@ use symbol_validation::*;
 use type_validation::*;
 use validation::*;
 
-pub(crate) use asm::{parse_func, parse_lambda, print_func, print_lambda};
+pub(crate) use asm::{assign_lambda_names, parse_func, parse_lambda, print_func, print_lambda};
 pub use declarations::{
     CompilerIntrinsicDeclaration, OperationDeclaration, declare_abilities, declare_operations,
     operation_declarations,
@@ -154,11 +154,8 @@ impl trunk_ir::attr_kind::AttrKind for OperationKind {
     }
 
     /// A kind is written as its keyword, `op` or `fn`.
-    fn print_text(
-        h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>,
-        attr: &Attribute,
-    ) -> fmt::Result {
-        fmt::Write::write_str(h, Self::read(h.ctx(), attr).keyword())
+    fn print_text(p: &mut trunk_ir::printer::AsmPrinter<'_>, attr: &Attribute) -> fmt::Result {
+        fmt::Write::write_str(p, Self::read(p.ctx(), attr).keyword())
     }
 
     fn parse_text<'a>(

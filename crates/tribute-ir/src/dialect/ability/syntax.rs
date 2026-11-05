@@ -3,9 +3,11 @@
 
 use std::fmt::{self, Write as _};
 
+use itertools::Itertools as _;
+
 use trunk_ir::asm_format::{CustomEntity, OpAsmDirective, RawCustomEntity};
 use trunk_ir::parser::raw::{RawAttribute, raw_type, symbol_path, value_ref, ws};
-use trunk_ir::printer::{OpPrintHelper, display_symbol_ref};
+use trunk_ir::printer::{OpAsmPrinter, display_symbol_ref};
 use trunk_ir::refs::ValueRef;
 use trunk_ir::types::Attribute;
 use trunk_ir::{IrContext, SymbolPath};
@@ -40,22 +42,26 @@ impl OpAsmDirective for HandlerArms {
             .collect()
     }
 
-    fn print(h: &mut OpPrintHelper<'_, '_>, arms: Self::Parts<'_>) -> fmt::Result {
-        h.write_char('[')?;
+    fn print(p: &mut OpAsmPrinter<'_>, arms: Self::Parts<'_>) -> fmt::Result {
+        let s = p.state();
+        p.write_char('[')?;
         for (index, (binding, arm)) in arms.iter().enumerate() {
             if index > 0 {
-                h.write_char(',')?;
+                p.write_char(',')?;
             }
-            h.newline()?;
-            write!(h, "  {} : ", binding.header(h.ctx()))?;
-            h.write_type(binding.operation_result_type)?;
-            let arm = h.get_value_name(*arm).to_owned();
-            write!(h, " = {arm}")?;
+            p.newline()?;
+            write!(
+                p,
+                "  {} : {} = {}",
+                binding.header(s.ctx()),
+                s.ty(binding.operation_result_type),
+                s.value(*arm)
+            )?;
         }
         if !arms.is_empty() {
-            h.newline()?;
+            p.newline()?;
         }
-        h.write_char(']')
+        p.write_char(']')
     }
 
     fn parse<'a>(input: &mut &'a str) -> winnow::ModalResult<Vec<RawCustomEntity<'a>>> {
@@ -126,16 +132,18 @@ impl OpAsmDirective for Dispatchers {
             .collect()
     }
 
-    fn print(h: &mut OpPrintHelper<'_, '_>, dispatchers: Self::Parts<'_>) -> fmt::Result {
-        h.write_char('[')?;
-        for (index, (ability, dispatcher)) in dispatchers.into_iter().enumerate() {
-            if index > 0 {
-                h.write_str(", ")?;
-            }
-            let dispatcher = h.get_value_name(dispatcher).to_owned();
-            write!(h, "{}: {dispatcher}", display_symbol_ref(ability))?;
-        }
-        h.write_char(']')
+    fn print(p: &mut OpAsmPrinter<'_>, dispatchers: Self::Parts<'_>) -> fmt::Result {
+        let s = p.state();
+        let dispatchers = dispatchers
+            .into_iter()
+            .format_with(", ", |(ability, dispatcher), f| {
+                f(&format_args!(
+                    "{}: {}",
+                    display_symbol_ref(ability),
+                    s.value(dispatcher)
+                ))
+            });
+        write!(p, "[{dispatchers}]")
     }
 
     fn parse<'a>(input: &mut &'a str) -> winnow::ModalResult<Vec<RawCustomEntity<'a>>> {

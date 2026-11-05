@@ -165,9 +165,13 @@ pub mod __private {
     #[diagnostic::do_not_recommend]
     impl<T: OpAsmFormat> DeclaredOpAsmFormat for T {
         const ASM_HOOKS: OpAsmFormatDef = OpAsmFormatDef::Hooks(OpAsmHooks {
-            print: |h, op| match T::from_op(h.ctx(), op) {
-                Ok(op) => op.print(h),
+            print: |p, op| match T::from_op(p.ctx(), op) {
+                Ok(op) => op.print(p),
                 Err(_) => Err(std::fmt::Error),
+            },
+            assign_names: |namer, op| match T::from_op(namer.ctx(), op) {
+                Ok(op) => op.assign_names(namer),
+                Err(_) => namer.generic_op(op),
             },
             parse: T::parse,
         });

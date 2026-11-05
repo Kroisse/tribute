@@ -445,8 +445,8 @@ crate::register_type_def!(&FUNC_SIG_DEF);
 /// The function syntax `func.func_sig` also uses, `clif.func_sig<(A) -> R>`,
 /// with any number of results.
 impl crate::asm_format::TypeAsmFormat for FuncSig {
-    fn print(&self, h: &mut crate::printer::TypePrintHelper<'_, '_>) -> std::fmt::Result {
-        super::func::print_signature_type(h, self.0)
+    fn print(&self, p: &mut crate::printer::AsmPrinter<'_>) -> std::fmt::Result {
+        super::func::print_signature_type(p, self.0)
     }
 
     fn parse<'a>(
@@ -647,20 +647,15 @@ impl crate::asm_format::OpAsmDirective for SwitchCases {
             .collect()
     }
 
-    fn print(
-        h: &mut crate::printer::OpPrintHelper<'_, '_>,
-        parts: Self::Parts<'_>,
-    ) -> std::fmt::Result {
+    fn print(p: &mut crate::printer::OpAsmPrinter<'_>, parts: Self::Parts<'_>) -> std::fmt::Result {
+        use itertools::Itertools as _;
         use std::fmt::Write as _;
 
-        for (position, (case, target)) in parts.into_iter().enumerate() {
-            if position > 0 {
-                h.write_str(", ")?;
-            }
-            let label = h.block_label(target).to_owned();
-            write!(h, "{case}: {label}")?;
-        }
-        Ok(())
+        let s = p.state();
+        let cases = parts.into_iter().format_with(", ", |(case, target), f| {
+            f(&format_args!("{case}: {}", s.block(target)))
+        });
+        write!(p, "{cases}")
     }
 
     fn parse<'a>(

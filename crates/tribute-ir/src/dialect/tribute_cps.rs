@@ -504,12 +504,12 @@ impl trunk_ir::ops::Verify for TailCallIndirect {
 }
 
 impl trunk_ir::asm_format::OpAsmFormat for Func {
-    fn print(&self, h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>) -> std::fmt::Result {
-        match declared_convention(h.ctx(), self.op_ref()) {
+    fn print(&self, p: &mut trunk_ir::printer::OpAsmPrinter<'_>) -> std::fmt::Result {
+        match declared_convention(p.ctx(), self.op_ref()) {
             Some(convention) => {
-                tribute_control::print_func(h, self.op_ref(), "tribute_cps.func", Some(convention))
+                tribute_control::print_func(p, self.op_ref(), "tribute_cps.func", Some(convention))
             }
-            None => h.print_generic(self.op_ref()),
+            None => p.print_generic(self.op_ref()),
         }
     }
 
@@ -523,16 +523,21 @@ impl trunk_ir::asm_format::OpAsmFormat for Func {
 }
 
 impl trunk_ir::asm_format::OpAsmFormat for Lambda {
-    fn print(&self, h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>) -> std::fmt::Result {
-        match body_conventions(h.ctx(), self.op_ref()) {
+    fn print(&self, p: &mut trunk_ir::printer::OpAsmPrinter<'_>) -> std::fmt::Result {
+        match body_conventions(p.ctx(), self.op_ref()) {
             Some(conventions) => tribute_control::print_lambda(
-                h,
+                p,
                 self.op_ref(),
                 "tribute_cps.lambda",
                 Some(&conventions),
             ),
-            None => h.print_generic(self.op_ref()),
+            None => p.print_generic(self.op_ref()),
         }
+    }
+
+    fn assign_names(&self, namer: &mut trunk_ir::printer::AsmNamer<'_>) {
+        let entries = body_conventions(namer.ctx(), self.op_ref()).is_some();
+        tribute_control::assign_lambda_names(namer, self.op_ref(), entries);
     }
 
     fn parse<'a>(

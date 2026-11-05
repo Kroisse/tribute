@@ -10,429 +10,611 @@
 //!   }
 //! }
 //! ```
+//!
+//! Printing is split as MLIR splits it. A pre-pass computes an immutable
+//! [`AsmState`]: the name of every value and block label the printer
+//! writes, in the order it writes them ([`AsmNamer`]), and the type aliases
+//! of each module. Its leaves are [`Display`](fmt::Display) values, such as
+//! [`AsmState::ty`] and [`AsmState::value`]. The mutable [`AsmPrinter`] and
+//! [`OpAsmPrinter`] write them, with `write!`, to any [`fmt::Write`], and own
+//! the indentation.
 
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 use std::fmt;
 use std::fmt::Write;
-use std::ops::ControlFlow;
+use std::ops::{ControlFlow, Deref, DerefMut};
+use std::rc::Rc;
+
+use itertools::Itertools;
 
 use super::context::IrContext;
 use super::ops::DialectOp;
 use super::refs::*;
 use super::types::*;
 use super::walk::{WalkAction, walk_region};
+use crate::dialect::core;
 
-/// Print state for value numbering and block labeling.
-struct PrintState<'a> {
+// ============================================================================
+// AsmState — names and aliases computed before printing
+// ============================================================================
+
+/// What printing reads and never changes: the context, the name of each
+/// value and block label, and the type aliases in scope, as MLIR's
+/// `AsmState` holds them.
+///
+/// [`AsmState::new`] runs the naming pre-pass for an operation. The
+/// leaves of the printed form are [`Display`](fmt::Display) values a
+/// format writes with `write!`:
+///
+/// ```ignore
+/// let s = p.state();
+/// write!(p, "{} : {}", s.value(value), s.ty(ty))?;
+/// ```
+pub struct AsmState<'a> {
     ctx: &'a IrContext,
-    value_names: HashMap<ValueRef, String>,
-    block_labels: HashMap<BlockRef, String>,
-    next_value_num: usize,
-    next_block_num: usize,
-    /// Reverse map: TypeRef → alias name for substitution during printing.
-    type_alias_names: HashMap<TypeRef, String>,
+    names: Rc<AsmNames>,
+    /// The alias of each aliased type in scope.
+    aliases: HashMap<TypeRef, String>,
+    /// The state of each module printed inside this scope.
+    modules: HashMap<OpRef, ModuleState<'a>>,
 }
 
-/// Value names and block labels set aside while an isolated operation is
-/// printed.
-struct Numbering {
-    value_names: HashMap<ValueRef, String>,
-    block_labels: HashMap<BlockRef, String>,
-    counters: (usize, usize),
+/// A module's type alias definitions and the state of its body.
+struct ModuleState<'a> {
+    /// The context's aliases, which every module defines, in the order it
+    /// writes them, each with the state its definition is written in when
+    /// it differs from the enclosing scope's.
+    manual: Vec<ManualAlias<'a>>,
+    /// The aliases the printer generates for this module's body, in the
+    /// order it writes them.
+    auto: Vec<(String, TypeRef)>,
+    body: AsmState<'a>,
 }
 
-impl<'a> PrintState<'a> {
-    fn new(ctx: &'a IrContext) -> Self {
-        let mut state = Self::without_aliases(ctx);
-        state.type_alias_names = ctx
-            .type_aliases()
-            .iter()
-            .map(|(name, ty)| (*ty, name.to_string()))
-            .collect();
+/// A manual alias definition of a module.
+struct ManualAlias<'a> {
+    name: String,
+    ty: TypeRef,
+    /// Each definition makes its alias the one later lines use, so when
+    /// two aliases name one type, a definition after the first is written
+    /// with that alias.
+    state: Option<AsmState<'a>>,
+}
+
+impl<'a> AsmState<'a> {
+    /// Name every value and block `op` prints, and compute the type aliases
+    /// of each module it holds.
+    pub fn new(ctx: &'a IrContext, op: OpRef) -> Self {
+        let mut namer = AsmNamer::new(ctx);
+        namer.op(op);
+        Self::with_names(ctx, namer.finish(), op, core::Module::matches(ctx, op))
+    }
+
+    /// The state for printing `root` as a module.
+    fn for_module(ctx: &'a IrContext, root: OpRef) -> Self {
+        let mut namer = AsmNamer::new(ctx);
+        namer.module(root);
+        Self::with_names(ctx, namer.finish(), root, true)
+    }
+
+    /// A state that names nothing and writes every type in full, for a type
+    /// or an attribute printed on its own.
+    pub fn without_aliases(ctx: &'a IrContext) -> Self {
+        Self {
+            ctx,
+            names: Rc::default(),
+            aliases: HashMap::default(),
+            modules: HashMap::default(),
+        }
+    }
+
+    fn with_names(ctx: &'a IrContext, names: AsmNames, root: OpRef, root_is_module: bool) -> Self {
+        let mut state = Self {
+            ctx,
+            names: Rc::new(names),
+            aliases: ctx
+                .type_aliases()
+                .iter()
+                .map(|(name, ty)| (*ty, name.to_string()))
+                .collect(),
+            modules: HashMap::default(),
+        };
+        if root_is_module {
+            state.add_module(root);
+        } else {
+            for region in ctx.op_regions(root) {
+                state.add_modules_in(region);
+            }
+        }
         state
     }
 
-    fn without_aliases(ctx: &'a IrContext) -> Self {
-        Self {
+    /// Add the state of each module `region` holds, at any depth outside
+    /// another module.
+    fn add_modules_in(&mut self, region: RegionRef) {
+        let ctx = self.ctx;
+        let _ = walk_region::<()>(ctx, region, &mut |op| {
+            if core::Module::matches(ctx, op) {
+                self.add_module(op);
+                ControlFlow::Continue(WalkAction::Skip)
+            } else {
+                ControlFlow::Continue(WalkAction::Advance)
+            }
+        });
+    }
+
+    /// Add the state of `module`: it defines the context's aliases again,
+    /// then aliases of its own, which only its body uses.
+    fn add_module(&mut self, module: OpRef) {
+        let ctx = self.ctx;
+        let mut manual: Vec<_> = ctx
+            .type_aliases()
+            .iter()
+            .map(|(name, ty)| (name.to_string(), *ty))
+            .collect();
+        manual.sort_by(|a, b| a.0.cmp(&b.0));
+        topological_sort_aliases(ctx, &mut manual);
+        let mut aliases = self.aliases.clone();
+        let manual: Vec<_> = manual
+            .into_iter()
+            .map(|(name, ty)| {
+                let state = (aliases != self.aliases).then(|| Self {
+                    ctx,
+                    names: self.names.clone(),
+                    aliases: aliases.clone(),
+                    modules: HashMap::default(),
+                });
+                aliases.insert(ty, name.clone());
+                ManualAlias { name, ty, state }
+            })
+            .collect();
+        let region = ctx.op_region(module, 0);
+        let auto = region
+            .map(|region| generate_auto_aliases(ctx, region, &aliases))
+            .unwrap_or_default();
+        for (name, ty) in &auto {
+            aliases.insert(*ty, name.clone());
+        }
+        let mut body = Self {
             ctx,
-            value_names: HashMap::default(),
-            block_labels: HashMap::default(),
-            next_value_num: 0,
-            next_block_num: 0,
-            type_alias_names: HashMap::default(),
+            names: self.names.clone(),
+            aliases,
+            modules: HashMap::default(),
+        };
+        if let Some(region) = region {
+            body.add_modules_in(region);
         }
+        self.modules
+            .insert(module, ModuleState { manual, auto, body });
     }
 
-    fn assign_value_name(&mut self, v: ValueRef) -> String {
-        let name = format!("%{}", self.next_value_num);
-        self.next_value_num += 1;
-        self.value_names.insert(v, name.clone());
-        name
+    /// The IR context.
+    pub fn ctx(&self) -> &'a IrContext {
+        self.ctx
     }
 
-    fn get_value_name(&self, v: ValueRef) -> &str {
-        self.value_names.get(&v).map(|s| s.as_str()).unwrap_or("%?")
+    /// A type, written as its alias when it has one in scope.
+    pub fn ty(&self, ty: TypeRef) -> impl fmt::Display + '_ {
+        fmt::from_fn(move |f| AsmPrinter::inline(self, f).print_type(ty))
     }
 
-    fn assign_block_label(&mut self, b: BlockRef) -> String {
-        let label = format!("^bb{}", self.next_block_num);
-        self.next_block_num += 1;
-        self.block_labels.insert(b, label.clone());
-        label
+    /// A type written in full even when it has an alias, as its alias
+    /// definition writes it.
+    fn ty_expanded(&self, ty: TypeRef) -> impl fmt::Display + '_ {
+        fmt::from_fn(move |f| AsmPrinter::inline(self, f).print_type_expanded(ty))
     }
 
-    fn get_block_label(&self, b: BlockRef) -> &str {
-        self.block_labels
-            .get(&b)
-            .map(|s| s.as_str())
-            .unwrap_or("^bb?")
+    /// An attribute value.
+    pub fn attr<'s>(&'s self, attr: &'s Attribute) -> impl fmt::Display + 's {
+        fmt::from_fn(move |f| AsmPrinter::inline(self, f).print_attribute(attr))
     }
 
-    /// Save only counters (not maps). Use with `restore_counters`.
-    fn save_counters(&self) -> (usize, usize) {
-        (self.next_value_num, self.next_block_num)
+    /// `{key = value, ..}`. Like [`Itertools::format`], it can be written
+    /// only once.
+    pub fn attr_dict<'s>(
+        &'s self,
+        attrs: impl IntoIterator<Item = (StringRef, &'s Attribute)> + 's,
+    ) -> impl fmt::Display + 's {
+        let ctx = self.ctx;
+        let entries = attrs.into_iter().format_with(", ", move |(key, value), f| {
+            f(&format_args!(
+                "{} = {}",
+                display_attribute_key(ctx.str(key)),
+                self.attr(value)
+            ))
+        });
+        fmt::from_fn(move |f| write!(f, "{{{entries}}}"))
     }
 
-    fn reset_numbering(&mut self) {
-        self.next_value_num = 0;
-        self.next_block_num = 0;
-        self.value_names.clear();
-        self.block_labels.clear();
+    /// A value's name, `%N`, or `%?` for a value the printed operation does
+    /// not name.
+    pub fn value(&self, value: ValueRef) -> impl fmt::Display + '_ {
+        fmt::from_fn(move |f| match self.names.value(value) {
+            Some(number) => write!(f, "%{number}"),
+            None => f.write_str("%?"),
+        })
     }
 
-    /// Set the numbering aside for a fresh one, to restore it with
-    /// `restore_numbering`.
-    fn take_numbering(&mut self) -> Numbering {
-        Numbering {
-            value_names: std::mem::take(&mut self.value_names),
-            block_labels: std::mem::take(&mut self.block_labels),
-            counters: (
-                std::mem::take(&mut self.next_value_num),
-                std::mem::take(&mut self.next_block_num),
-            ),
-        }
+    /// The names of `values`, separated by commas.
+    pub fn values<'s>(&'s self, values: &'s [ValueRef]) -> impl fmt::Display + 's {
+        fmt::from_fn(move |f| {
+            write!(
+                f,
+                "{}",
+                values.iter().map(|&value| self.value(value)).format(", ")
+            )
+        })
     }
 
-    fn restore_numbering(&mut self, numbering: Numbering) {
-        self.value_names = numbering.value_names;
-        self.block_labels = numbering.block_labels;
-        self.restore_counters(numbering.counters);
+    /// A block's label, `^bbN`, or `^bb?` for a block the printed operation
+    /// does not label.
+    pub fn block(&self, block: BlockRef) -> impl fmt::Display + '_ {
+        fmt::from_fn(move |f| match self.names.block(block) {
+            Some(number) => write!(f, "^bb{number}"),
+            None => f.write_str("^bb?"),
+        })
     }
 
-    /// Restore only counters saved by `save_counters`.
-    fn restore_counters(&mut self, state: (usize, usize)) {
-        self.next_value_num = state.0;
-        self.next_block_num = state.1;
+    /// The entry block arguments of `region` as `(%a: A, ..)`, for a format
+    /// that then prints the region with
+    /// [`OpAsmPrinter::print_region_without_entry`]; [`AsmNamer::entry_args`]
+    /// names them. [`parse_entry_args`](crate::asm_format::parse_entry_args)
+    /// and [`attach_entry_args`](crate::asm_format::attach_entry_args) read
+    /// them back.
+    pub fn entry_args(&self, region: RegionRef) -> impl fmt::Display + '_ {
+        fmt::from_fn(move |f| write!(f, "({})", self.typed_values(entry_args(self.ctx, region))))
     }
 
-    // ====================================================================
-    // Type / Attribute writing (with alias support)
-    // ====================================================================
-
-    fn write_type(&self, f: &mut dyn Write, ty: TypeRef) -> fmt::Result {
-        // Check alias map first
-        if let Some(alias_name) = self.type_alias_names.get(&ty) {
-            return write_type_alias_name(f, alias_name);
-        }
-        let data = self.ctx.get_type(ty);
-        if let Some(hooks) = data.name.def().and_then(|def| def.asm_format)
-            && let Some(result) = (hooks.print)(&mut TypePrintHelper { state: self, f }, ty)
-        {
-            return result;
-        }
-        write!(f, "{}", data.name.display(self.ctx))?;
-        let inline_param_attrs = data.validate_param_attrs(self.ctx).is_ok();
-        let mut attrs = visible_type_attrs(self.ctx, data, inline_param_attrs, &[]).peekable();
-        if data.params.is_empty() && attrs.peek().is_none() {
-            return Ok(());
-        }
-        f.write_char('<')?;
-        for (index, &param) in data.params.iter().enumerate() {
-            if index > 0 {
-                f.write_str(", ")?;
-            }
-            self.write_param(f, data, inline_param_attrs, index, param)?;
-        }
-        if attrs.peek().is_some() {
-            if !data.params.is_empty() {
-                f.write_str(", ")?;
-            }
-            self.write_attr_dict(f, attrs)?;
-        }
-        f.write_char('>')
-    }
-
-    /// Write type parameter `index` of `data`, followed by its attributes when
-    /// they are printed inline.
-    fn write_param(
-        &self,
-        f: &mut dyn Write,
-        data: &TypeData,
-        inline_param_attrs: bool,
-        index: usize,
-        param: TypeRef,
-    ) -> fmt::Result {
-        self.write_type(f, param)?;
-        let attrs = data.param_attrs(self.ctx, index);
-        if inline_param_attrs && !attrs.is_empty() {
-            f.write_char(' ')?;
-            self.write_attr_dict(f, attrs.iter())?;
-        }
-        Ok(())
-    }
-
-    fn write_attr_dict<'b>(
-        &self,
-        f: &mut dyn Write,
-        attrs: impl Iterator<Item = (StringRef, &'b Attribute)>,
-    ) -> fmt::Result {
-        f.write_char('{')?;
-        for (index, (key, value)) in attrs.enumerate() {
-            if index > 0 {
-                f.write_str(", ")?;
-            }
-            write_attribute_key(f, self.ctx.str(key))?;
-            f.write_str(" = ")?;
-            self.write_attribute(f, value)?;
-        }
-        f.write_char('}')
-    }
-
-    fn write_attribute(&self, f: &mut dyn Write, attr: &Attribute) -> fmt::Result {
-        match attr {
-            Attribute::Unit => f.write_str("unit"),
-            Attribute::Bool(b) => write!(f, "{b}"),
-            Attribute::Int(v) => write!(f, "{v}"),
-            Attribute::FloatBits(bits) => {
-                let v = f64::from_bits(*bits);
-                let s = format!("{v}");
-                f.write_str(&s)?;
-                if v.is_finite() && !s.contains('.') && !s.contains('e') && !s.contains('E') {
-                    f.write_str(".0")?;
-                }
-                Ok(())
-            }
-            Attribute::String(s) => {
-                f.write_char('"')?;
-                write_escaped_string(f, self.ctx.str(*s))?;
-                f.write_char('"')
-            }
-            Attribute::Bytes(bytes) => {
-                f.write_str("b\"")?;
-                write_escaped_bytes(f, bytes)?;
-                f.write_char('"')
-            }
-            Attribute::SymbolRef(path) => write_symbol_path(f, path),
-            Attribute::Type(ty) => self.write_type(f, *ty),
-            Attribute::List(list) => {
-                f.write_char('[')?;
-                for (i, item) in list.iter().enumerate() {
-                    if i > 0 {
-                        f.write_str(", ")?;
-                    }
-                    self.write_attribute(f, item)?;
-                }
-                f.write_char(']')
-            }
-            Attribute::Dict(dict) => self.write_attr_dict(f, dict.iter()),
-            Attribute::Location(loc) => {
-                let path_str = self.ctx.paths().get(loc.path);
-                f.write_str("loc(\"")?;
-                write_escaped_string(f, path_str)?;
-                write!(f, "\" {}:{})", loc.span.start, loc.span.end)
-            }
-        }
+    /// `%a: A, %b: B`.
+    fn typed_values<'s>(&'s self, values: &'s [ValueRef]) -> impl fmt::Display + 's {
+        fmt::from_fn(move |f| {
+            let entries = values.iter().format_with(", ", |&value, f| {
+                f(&format_args!(
+                    "{}: {}",
+                    self.value(value),
+                    self.ty(self.ctx.value_ty(value))
+                ))
+            });
+            write!(f, "{entries}")
+        })
     }
 }
 
 /// The type attributes printed in a type's attribute dictionary: all of them
-/// except `hidden` and, when they are printed inline after each parameter, the
-/// parameter attributes. Malformed parameter attributes stay in the dictionary
-/// so the printed form shows them.
+/// except, when they are printed inline after each parameter, the parameter
+/// attributes. Malformed parameter attributes stay in the dictionary so the
+/// printed form shows them.
 fn visible_type_attrs<'b>(
     ctx: &'b IrContext,
     data: &'b TypeData,
     inline_param_attrs: bool,
-    hidden: &'b [&'static str],
-) -> impl Iterator<Item = (StringRef, &'b Attribute)> {
-    data.attrs.iter().filter(move |&(key, _)| {
-        let key = ctx.str(key);
-        !(inline_param_attrs && key == PARAM_ATTRS_ATTR) && !hidden.contains(&key)
-    })
+) -> impl Iterator<Item = (StringRef, &'b Attribute)> + Clone {
+    data.attrs
+        .iter()
+        .filter(move |&(key, _)| !(inline_param_attrs && ctx.str(key) == PARAM_ATTRS_ATTR))
 }
 
 // ============================================================================
-// TypePrintHelper — public wrapper for custom type format printers
+// AsmPrinter — writes types, attributes, and symbols
 // ============================================================================
 
-/// Printer access for custom
-/// [`TypeAsmFormat`](crate::asm_format::TypeAsmFormat) implementations.
+/// Writes the printed form to a [`fmt::Write`], as MLIR's `AsmPrinter`
+/// does: types, attributes, and symbols, and through `write!` any
+/// [`Display`](fmt::Display) of its [`AsmState`].
 ///
-/// Implements `fmt::Write` so `write!(helper, ...)` can be used directly.
-pub struct TypePrintHelper<'a, 'ctx> {
-    state: &'a PrintState<'ctx>,
-    f: &'a mut dyn Write,
-}
-
-impl<'a, 'ctx> TypePrintHelper<'a, 'ctx> {
-    /// Access the IR context.
-    pub fn ctx(&self) -> &'ctx IrContext {
-        self.state.ctx
-    }
-
-    /// Write a nested type using the current alias map.
-    pub fn write_type(&mut self, ty: TypeRef) -> fmt::Result {
-        self.state.write_type(&mut *self.f, ty)
-    }
-
-    /// Write an attribute value.
-    pub fn write_attribute(&mut self, attr: &Attribute) -> fmt::Result {
-        self.state.write_attribute(&mut *self.f, attr)
-    }
-
-    /// Write `{key = value, ...}`.
-    pub fn write_attr_dict<'b>(
-        &mut self,
-        attrs: impl Iterator<Item = (StringRef, &'b Attribute)>,
-    ) -> fmt::Result {
-        self.state.write_attr_dict(&mut *self.f, attrs)
-    }
-
-    /// Write `@name`, quoting it when needed.
-    pub fn write_symbol(&mut self, symbol: crate::Symbol) -> fmt::Result {
-        write_symbol(&mut *self.f, &symbol)
-    }
-
-    /// Write a name as a bare identifier, or as a quoted string when it is not
-    /// one.
-    pub fn write_name(&mut self, name: &str) -> fmt::Result {
-        write_name(&mut *self.f, name)
-    }
-}
-
-impl Write for TypePrintHelper<'_, '_> {
-    fn write_str(&mut self, s: &str) -> fmt::Result {
-        self.f.write_str(s)
-    }
-}
-
-// ============================================================================
-// OpPrintHelper — public wrapper for custom assembly format printers
-// ============================================================================
-
-/// Public wrapper around printer state for custom
-/// [`OpAsmFormat`](crate::asm_format::OpAsmFormat) implementations.
-///
-/// Provides access to IR context, value naming, type/attribute printing, and
-/// region printing without exposing `PrintState` internals.
-///
-/// Implements `fmt::Write` so `write!(helper, ...)` can be used directly.
-pub struct OpPrintHelper<'a, 'ctx> {
-    state: &'a mut PrintState<'ctx>,
-    f: &'a mut dyn Write,
-    /// The indentation of the operation's line.
+/// It owns the indentation: it writes the current indentation before the
+/// first character of each line, so text written through it, `Display`
+/// output included, is indented, and an empty line stays empty.
+/// [`TypeAsmFormat`](crate::asm_format::TypeAsmFormat) and
+/// [`AttrKind::print_text`](crate::attr_kind::AttrKind::print_text) take
+/// it.
+pub struct AsmPrinter<'a> {
+    state: &'a AsmState<'a>,
+    out: &'a mut (dyn Write + 'a),
+    /// The indentation of the current line.
     indent: usize,
+    /// Whether nothing is written on the current line yet, so the next
+    /// character writes the indentation first.
+    at_line_start: bool,
 }
 
-impl<'a, 'ctx> OpPrintHelper<'a, 'ctx> {
-    /// Access the IR context.
-    pub fn ctx(&self) -> &'ctx IrContext {
+impl<'a> AsmPrinter<'a> {
+    /// A printer of `state` that writes to `out`, at the start of a line.
+    pub fn new(state: &'a AsmState<'a>, out: &'a mut (dyn Write + 'a)) -> Self {
+        Self {
+            state,
+            out,
+            indent: 0,
+            at_line_start: true,
+        }
+    }
+
+    /// A printer inside a line another printer indents, for a `Display`
+    /// value written through it.
+    fn inline(state: &'a AsmState<'a>, out: &'a mut (dyn Write + 'a)) -> Self {
+        Self {
+            state,
+            out,
+            indent: 0,
+            at_line_start: false,
+        }
+    }
+
+    /// The state the printer reads, for its `Display` values:
+    /// `let s = p.state(); write!(p, "{}", s.ty(ty))`.
+    pub fn state(&self) -> &'a AsmState<'a> {
+        self.state
+    }
+
+    /// The IR context.
+    pub fn ctx(&self) -> &'a IrContext {
         self.state.ctx
     }
 
-    /// Assign a sequential name (%0, %1, ...) to a value.
-    pub fn assign_value_name(&mut self, v: ValueRef) -> String {
-        self.state.assign_value_name(v)
+    /// Write a type, as its alias when it has one in scope.
+    pub fn print_type(&mut self, ty: TypeRef) -> fmt::Result {
+        if let Some(alias) = self.state.aliases.get(&ty) {
+            return write!(self, "{}", display_alias(alias));
+        }
+        self.print_type_expanded(ty)
     }
 
-    /// Get the previously assigned name of a value.
-    pub fn get_value_name(&self, v: ValueRef) -> &str {
-        self.state.get_value_name(v)
-    }
-
-    /// Give `v` the name already assigned to `like`, for a value of a
-    /// sibling region whose name the custom syntax writes only once, such
-    /// as a parameter every body of an operation shares.
-    pub fn assign_value_name_like(&mut self, v: ValueRef, like: ValueRef) {
-        let name = self.state.get_value_name(like).to_owned();
-        self.state.value_names.insert(v, name);
-    }
-
-    /// Write a type using the current alias map.
-    pub fn write_type(&mut self, ty: TypeRef) -> fmt::Result {
-        self.state.write_type(&mut *self.f, ty)
-    }
-
-    /// Write `@name` for a definition name held as text, quoting it when needed.
-    pub fn write_symbol_text(&mut self, name: &str) -> fmt::Result {
-        write_symbol_text(&mut *self.f, name)
+    fn print_type_expanded(&mut self, ty: TypeRef) -> fmt::Result {
+        let state = self.state;
+        let ctx = state.ctx;
+        let data = ctx.get_type(ty);
+        if let Some(hooks) = data.name.def().and_then(|def| def.asm_format)
+            && let Some(result) = (hooks.print)(self, ty)
+        {
+            return result;
+        }
+        write!(self, "{}", data.name.display(ctx))?;
+        let inline_param_attrs = data.validate_param_attrs(ctx).is_ok();
+        let attrs = visible_type_attrs(ctx, data, inline_param_attrs);
+        let has_attrs = attrs.clone().next().is_some();
+        if data.params.is_empty() && !has_attrs {
+            return Ok(());
+        }
+        let params = data
+            .params
+            .iter()
+            .enumerate()
+            .format_with(", ", |(index, &param), f| {
+                let param_attrs = data.param_attrs(ctx, index);
+                if inline_param_attrs && !param_attrs.is_empty() {
+                    f(&format_args!(
+                        "{} {}",
+                        state.ty(param),
+                        state.attr_dict(param_attrs.iter())
+                    ))
+                } else {
+                    f(&state.ty(param))
+                }
+            });
+        write!(self, "<{params}")?;
+        if has_attrs {
+            if !data.params.is_empty() {
+                self.write_str(", ")?;
+            }
+            write!(self, "{}", state.attr_dict(attrs))?;
+        }
+        self.write_char('>')
     }
 
     /// Write an attribute value.
-    pub fn write_attribute(&mut self, attr: &Attribute) -> fmt::Result {
-        self.state.write_attribute(&mut *self.f, attr)
+    pub fn print_attribute(&mut self, attr: &Attribute) -> fmt::Result {
+        let state = self.state;
+        match attr {
+            Attribute::Unit => self.write_str("unit"),
+            Attribute::Bool(b) => write!(self, "{b}"),
+            Attribute::Int(v) => write!(self, "{v}"),
+            Attribute::FloatBits(bits) => {
+                let v = f64::from_bits(*bits);
+                let s = format!("{v}");
+                self.write_str(&s)?;
+                if v.is_finite() && !s.contains('.') && !s.contains('e') && !s.contains('E') {
+                    self.write_str(".0")?;
+                }
+                Ok(())
+            }
+            Attribute::String(s) => {
+                self.write_char('"')?;
+                write_escaped_string(self, state.ctx.str(*s))?;
+                self.write_char('"')
+            }
+            Attribute::Bytes(bytes) => {
+                self.write_str("b\"")?;
+                write_escaped_bytes(self, bytes)?;
+                self.write_char('"')
+            }
+            Attribute::SymbolRef(path) => write_symbol_path(self, path),
+            Attribute::Type(ty) => self.print_type(*ty),
+            Attribute::List(list) => write!(
+                self,
+                "[{}]",
+                list.iter().map(|item| state.attr(item)).format(", ")
+            ),
+            Attribute::Dict(dict) => write!(self, "{}", state.attr_dict(dict.iter())),
+            Attribute::Location(loc) => {
+                let path_str = state.ctx.paths().get(loc.path);
+                self.write_str("loc(\"")?;
+                write_escaped_string(self, path_str)?;
+                write!(self, "\" {}:{})", loc.span.start, loc.span.end)
+            }
+        }
+    }
+}
+
+impl Write for AsmPrinter<'_> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        for (index, line) in s.split('\n').enumerate() {
+            if index > 0 {
+                self.out.write_char('\n')?;
+                self.at_line_start = true;
+            }
+            if line.is_empty() {
+                continue;
+            }
+            if self.at_line_start {
+                for _ in 0..self.indent {
+                    self.out.write_char(' ')?;
+                }
+                self.at_line_start = false;
+            }
+            self.out.write_str(line)?;
+        }
+        Ok(())
+    }
+}
+
+// ============================================================================
+// OpAsmPrinter — writes operations
+// ============================================================================
+
+/// Writes operations, as MLIR's `OpAsmPrinter` does: what an
+/// [`AsmPrinter`] writes, which it dereferences to, and the structure of
+/// operations, such as regions and new lines. Value names come from its
+/// [`AsmState`]: `write!(p, "{}", p.state().value(v))`.
+///
+/// [`OpAsmFormat`](crate::asm_format::OpAsmFormat) and
+/// [`OpAsmDirective`](crate::asm_format::OpAsmDirective) take it.
+pub struct OpAsmPrinter<'a> {
+    printer: AsmPrinter<'a>,
+}
+
+impl<'a> Deref for OpAsmPrinter<'a> {
+    type Target = AsmPrinter<'a>;
+
+    fn deref(&self) -> &AsmPrinter<'a> {
+        &self.printer
+    }
+}
+
+impl DerefMut for OpAsmPrinter<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.printer
+    }
+}
+
+impl Write for OpAsmPrinter<'_> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        self.printer.write_str(s)
+    }
+}
+
+impl<'a> OpAsmPrinter<'a> {
+    /// A printer of `state` that writes to `out`, at the start of a line.
+    pub fn new(state: &'a AsmState<'a>, out: &'a mut (dyn Write + 'a)) -> Self {
+        Self {
+            printer: AsmPrinter::new(state, out),
+        }
     }
 
-    /// Write `{key = value, ...}`.
-    pub fn write_attr_dict<'b>(
-        &mut self,
-        attrs: impl Iterator<Item = (StringRef, &'b Attribute)>,
-    ) -> fmt::Result {
-        self.state.write_attr_dict(&mut *self.f, attrs)
+    /// Print `op` on its own line, at the current indentation, followed by
+    /// a newline.
+    pub fn print_operation(&mut self, op: OpRef) -> fmt::Result {
+        let ctx = self.ctx();
+        if core::Module::matches(ctx, op) {
+            return self.print_module_op(op);
+        }
+        let def = crate::OpDef::of(ctx, op);
+        match def.and_then(|def| Some((def, def.asm_format?))) {
+            Some((_, crate::asm_format::OpAsmFormatDef::Hooks(hooks))) => (hooks.print)(self, op)?,
+            Some((def, crate::asm_format::OpAsmFormatDef::Declarative(format))) => {
+                crate::asm_format::declarative::print(self, op, def, format)?
+            }
+            None => self.print_generic(op)?,
+        }
+        self.write_char('\n')
     }
 
-    /// The label of a block, assigned when its region was printed.
-    pub fn block_label(&self, block: BlockRef) -> &str {
-        self.state.get_block_label(block)
+    /// Print the operation with generic assembly, after its line's
+    /// indentation and before its newline.
+    ///
+    /// Custom formats use this when their concise form cannot represent the
+    /// complete operation without loss.
+    pub fn print_generic(&mut self, op: OpRef) -> fmt::Result {
+        let state = self.state();
+        let ctx = state.ctx;
+
+        let results = ctx.op_results(op);
+        if !results.is_empty() {
+            write!(self, "{} = ", state.values(results))?;
+        }
+        write!(
+            self,
+            "\"{}\"({})",
+            ctx.op(op).name.display(ctx),
+            state.values(ctx.op_operands(op))
+        )?;
+
+        let successors = ctx.op_successors(op);
+        if successors.len() != 0 {
+            write!(
+                self,
+                "[{}]",
+                successors.map(|block| state.block(block)).format(", ")
+            )?;
+        }
+
+        // Regions, before the attributes so that a brace there is always the
+        // dictionary
+        if ctx.op_has_regions(op) {
+            self.write_str(" (")?;
+            for (index, region) in ctx.op_regions(op).enumerate() {
+                if index > 0 {
+                    self.write_str(", ")?;
+                }
+                self.print_region(region)?;
+            }
+            self.write_char(')')?;
+        }
+
+        // Attributes, without the declared defaults the canonical form leaves
+        // absent
+        let schema = crate::op_def::OpDef::of(ctx, op).map(|def| &def.schema);
+        let mut attrs = ctx
+            .op(op)
+            .attributes
+            .iter()
+            .filter(|&(key, val)| {
+                !schema.is_some_and(|schema| schema.holds_default(ctx, ctx.str(key), val))
+            })
+            .peekable();
+        if attrs.peek().is_some() {
+            let entries = attrs.format_with(", ", |(key, val), f| {
+                f(&format_args!("{} = {}", ctx.str(key), state.attr(val)))
+            });
+            write!(self, " {{{entries}}}")?;
+        }
+
+        let result_types = ctx.op_result_types(op);
+        if !result_types.is_empty() {
+            write!(
+                self,
+                " : {}",
+                result_types.iter().map(|&ty| state.ty(ty)).format(", ")
+            )?;
+        }
+        Ok(())
     }
 
     /// Print `{ .. }` holding a region in generic form, block labels
     /// included.
     pub fn print_region(&mut self, region: RegionRef) -> fmt::Result {
-        self.f.write_str("{\n")?;
-        print_region(self.state, &mut *self.f, region, self.indent + 2)?;
-        write!(self.f, "{}}}", " ".repeat(self.indent))
-    }
-
-    /// Start a new line at the operation's indentation, as MLIR's
-    /// `printNewline` does.
-    pub fn newline(&mut self) -> fmt::Result {
-        write!(self.f, "\n{}", " ".repeat(self.indent))
-    }
-
-    /// Print the operation with generic assembly.
-    ///
-    /// Custom formats use this when their concise form cannot represent the
-    /// complete operation without loss.
-    pub fn print_generic(&mut self, op: OpRef) -> fmt::Result {
-        print_generic_op(self.state, &mut *self.f, op, self.indent)
-    }
-
-    /// Reset value and block numbering (for func.func — each function restarts at %0).
-    pub fn reset_numbering(&mut self) {
-        self.state.reset_numbering();
-    }
-
-    /// Run `print` with fresh value and block numbering, restoring the
-    /// current numbering afterwards.
-    pub(crate) fn with_fresh_numbering(
-        &mut self,
-        print: impl FnOnce(&mut Self) -> fmt::Result,
-    ) -> fmt::Result {
-        let numbering = self.state.take_numbering();
-        let result = print(self);
-        self.state.restore_numbering(numbering);
-        result
+        self.write_str("{\n")?;
+        self.print_blocks(region, false)?;
+        self.write_char('}')
     }
 
     /// Print `{ .. }` holding a region whose entry block arguments the
     /// operation's signature wrote, eliding the entry block as
     /// [`Self::print_body`] does.
     pub fn print_region_without_entry(&mut self, region: RegionRef) -> fmt::Result {
-        self.f.write_str("{\n")?;
-        self.print_region_eliding_entry(region, self.indent + 2)?;
-        write!(self.f, "{}}}", " ".repeat(self.indent))
+        self.write_str("{\n")?;
+        self.print_blocks(region, true)?;
+        self.write_char('}')
     }
 
     /// Print ` { .. }` holding a region with the entry block label elided.
@@ -441,7 +623,7 @@ impl<'a, 'ctx> OpPrintHelper<'a, 'ctx> {
     /// function parameters in the operation signature), so the entry label is
     /// omitted, and the other blocks are printed normally.
     pub fn print_body(&mut self, region: RegionRef) -> fmt::Result {
-        self.f.write_char(' ')?;
+        self.write_char(' ')?;
         self.print_region_without_entry(region)
     }
 
@@ -452,72 +634,136 @@ impl<'a, 'ctx> OpPrintHelper<'a, 'ctx> {
         &mut self,
         bodies: impl IntoIterator<Item = (&'r str, RegionRef)>,
     ) -> fmt::Result {
-        self.f.write_str(" {\n")?;
-        let inner = " ".repeat(self.indent + 2);
+        self.write_str(" {\n")?;
+        self.indent += 2;
         for (label, region) in bodies {
-            writeln!(self.f, "{inner}{label} {{")?;
-            self.print_region_eliding_entry(region, self.indent + 4)?;
-            writeln!(self.f, "{inner}}}")?;
+            writeln!(self, "{label} {{")?;
+            self.print_blocks(region, true)?;
+            self.write_str("}\n")?;
         }
-        write!(self.f, "{}}}", " ".repeat(self.indent))
+        self.indent -= 2;
+        self.write_char('}')
     }
 
-    fn print_region_eliding_entry(&mut self, region: RegionRef, indent: usize) -> fmt::Result {
-        // The context outlives `self`, so the child lists are read in place
-        // while the print state is updated.
-        let ctx = self.state.ctx;
+    /// Start a new line at the operation's indentation, as MLIR's
+    /// `printNewline` does.
+    pub fn newline(&mut self) -> fmt::Result {
+        self.write_char('\n')
+    }
+
+    /// Print the blocks of `region` one level in, and their operations two.
+    /// With `entry_args_written`, the operation wrote the entry block
+    /// arguments, so the entry block writes none and elides its label when
+    /// it can; otherwise it elides its label only without arguments, and a
+    /// blank line separates the blocks.
+    fn print_blocks(&mut self, region: RegionRef, entry_args_written: bool) -> fmt::Result {
+        let state = self.state();
+        let ctx = state.ctx;
         let blocks = &ctx.region(region).blocks;
+        let elide_entry = blocks.first().is_some_and(|&entry| {
+            (entry_args_written || ctx.block_args(entry).is_empty())
+                && can_elide_entry_label(ctx, blocks, entry)
+        });
 
-        // Pre-assign block labels for all blocks
-        for &block in blocks {
-            self.state.assign_block_label(block);
-        }
-
-        // The entry block's arguments are printed elsewhere.
-        let elide_entry = blocks
-            .first()
-            .is_some_and(|&entry| can_elide_entry_label(ctx, blocks, entry));
-
-        for (i, &block) in blocks.iter().enumerate() {
-            if i == 0 && elide_entry {
-                // The entry block's arguments are printed elsewhere.
-            } else {
-                let indent_str = " ".repeat(indent);
-                let label = self.state.get_block_label(block).to_owned();
-                write!(self.f, "{indent_str}{label}")?;
-                if i > 0 {
-                    // Non-entry blocks: print args
-                    let args = self.state.ctx.block_args(block);
-                    if !args.is_empty() {
-                        self.f.write_char('(')?;
-                        for (j, &arg) in args.iter().enumerate() {
-                            if j > 0 {
-                                self.f.write_str(", ")?;
-                            }
-                            let name = self.state.assign_value_name(arg);
-                            let ty = self.state.ctx.value_ty(arg);
-                            write!(self.f, "{name}: ")?;
-                            self.state.write_type(&mut *self.f, ty)?;
-                        }
-                        self.f.write_char(')')?;
-                    }
+        self.indent += 2;
+        for (index, &block) in blocks.iter().enumerate() {
+            if !(index == 0 && elide_entry) {
+                write!(self, "{}", state.block(block))?;
+                let args = ctx.block_args(block);
+                if !(index == 0 && entry_args_written) && !args.is_empty() {
+                    write!(self, "({})", state.typed_values(args))?;
                 }
-                self.f.write_str(":\n")?;
+                self.write_str(":\n")?;
             }
-
-            // Print ops in block
+            self.indent += 2;
             for &op in &ctx.block(block).ops {
-                print_operation(self.state, &mut *self.f, op, indent + 2)?;
+                self.print_operation(op)?;
+            }
+            self.indent -= 2;
+            if !entry_args_written && index + 1 < blocks.len() {
+                // A blank line between blocks for readability
+                self.write_char('\n')?;
             }
         }
-
+        self.indent -= 2;
         Ok(())
     }
-}
 
-impl fmt::Write for OpPrintHelper<'_, '_> {
-    fn write_str(&mut self, s: &str) -> fmt::Result {
-        self.f.write_str(s)
+    fn print_module_op(&mut self, op: OpRef) -> fmt::Result {
+        let state = self.state();
+        let ctx = state.ctx;
+        self.write_str("core.module")?;
+
+        if let Some(name) = ctx.op_attrs(op).get_str("sym_name") {
+            write!(self, " {}", display_symbol_text(name))?;
+        }
+
+        // Type aliases are declared inside the body, so these attributes spell
+        // their types out.
+        let mut attrs = ctx
+            .op(op)
+            .attributes
+            .iter()
+            .filter(|&(key, _)| ctx.str(key) != "sym_name")
+            .peekable();
+        if attrs.peek().is_some() {
+            let expanded = AsmState::without_aliases(ctx);
+            write!(self, " {}", expanded.attr_dict(attrs))?;
+        }
+
+        let regions = ctx.op_region_count(op);
+        assert!(
+            regions <= 1,
+            "print_module_op: expected at most one region, found {regions}",
+        );
+        let Some(region) = ctx.op_region(op, 0) else {
+            return self.write_char('\n');
+        };
+        let module = state
+            .modules
+            .get(&op)
+            .expect("the naming pre-pass visited every printed module");
+        self.write_str(" {\n")?;
+        self.indent += 2;
+        for alias in &module.manual {
+            let scope = alias.state.as_ref().unwrap_or(state);
+            writeln!(
+                self,
+                "{} = {}",
+                display_alias(&alias.name),
+                scope.ty_expanded(alias.ty)
+            )?;
+        }
+        for (name, ty) in &module.auto {
+            writeln!(
+                self,
+                "{} = {}",
+                display_alias(name),
+                module.body.ty_expanded(*ty)
+            )?;
+        }
+        if !module.manual.is_empty() || !module.auto.is_empty() {
+            // A blank line after the alias definitions
+            self.write_char('\n')?;
+        }
+
+        let mut body = OpAsmPrinter {
+            printer: AsmPrinter {
+                state: &module.body,
+                out: &mut *self.printer.out,
+                indent: self.printer.indent,
+                at_line_start: self.printer.at_line_start,
+            },
+        };
+        for &block in &ctx.region(region).blocks {
+            for &child in &ctx.block(block).ops {
+                body.print_operation(child)?;
+            }
+        }
+        let at_line_start = body.printer.at_line_start;
+        self.printer.at_line_start = at_line_start;
+        self.indent -= 2;
+        self.write_str("}\n")
     }
 }
 
@@ -527,32 +773,32 @@ impl fmt::Write for OpPrintHelper<'_, '_> {
 
 /// Print an operation as IR text.
 pub fn print_op(ctx: &IrContext, op: OpRef) -> String {
-    let mut state = PrintState::new(ctx);
+    let state = AsmState::new(ctx, op);
     let mut out = String::new();
-    print_operation(&mut state, &mut out, op, 0).expect("fmt::Write to String never fails");
+    OpAsmPrinter::new(&state, &mut out)
+        .print_operation(op)
+        .expect("fmt::Write to String never fails");
     out
 }
 
 /// Print a type as IR text.
 pub fn print_type(ctx: &IrContext, ty: TypeRef) -> String {
-    let mut out = String::new();
-    PrintState::without_aliases(ctx)
-        .write_type(&mut out, ty)
-        .expect("fmt::Write to String never fails");
-    out
+    AsmState::without_aliases(ctx).ty(ty).to_string()
 }
 
 /// Print a module (root operation with nested functions) as IR text.
 pub fn print_module(ctx: &IrContext, root: OpRef) -> String {
-    let mut state = PrintState::new(ctx);
+    let state = AsmState::for_module(ctx, root);
     let mut out = String::new();
-    print_module_op(&mut state, &mut out, root, 0).expect("fmt::Write to String never fails");
+    OpAsmPrinter::new(&state, &mut out)
+        .print_module_op(root)
+        .expect("fmt::Write to String never fails");
     out
 }
 
 #[cfg(test)]
 fn write_attribute(ctx: &IrContext, f: &mut impl Write, attr: &Attribute) -> fmt::Result {
-    PrintState::without_aliases(ctx).write_attribute(f, attr)
+    write!(f, "{}", AsmState::without_aliases(ctx).attr(attr))
 }
 
 pub(crate) fn write_escaped_bytes(f: &mut dyn Write, bytes: &[u8]) -> fmt::Result {
@@ -587,49 +833,52 @@ pub(crate) fn write_escaped_string(f: &mut dyn Write, s: &str) -> fmt::Result {
     Ok(())
 }
 
-/// Write a type alias name with `!` prefix. Quotes if name contains non-ident chars.
-fn write_type_alias_name(f: &mut dyn Write, name: &str) -> fmt::Result {
-    let needs_quoting =
-        name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
-    if needs_quoting {
-        f.write_str("!\"")?;
-        write_escaped_string(f, name)?;
-        f.write_char('"')
-    } else {
-        write!(f, "!{name}")
-    }
+/// A type alias name with its `!` prefix, quoted when it is not an
+/// identifier.
+fn display_alias(name: &str) -> impl fmt::Display + '_ {
+    fmt::from_fn(move |f| {
+        let needs_quoting =
+            name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        if needs_quoting {
+            f.write_str("!\"")?;
+            write_escaped_string(f, name)?;
+            f.write_char('"')
+        } else {
+            write!(f, "!{name}")
+        }
+    })
 }
 
-/// Write a dictionary key bare when the reader accepts it, otherwise quoted.
-fn write_attribute_key(f: &mut dyn Write, key: &str) -> fmt::Result {
-    if crate::parser::raw::is_bare_attribute_key(key) {
-        f.write_str(key)
-    } else {
-        f.write_char('"')?;
-        write_escaped_string(f, key)?;
-        f.write_char('"')
-    }
+/// A dictionary key, bare when the reader accepts it, otherwise quoted.
+fn display_attribute_key(key: &str) -> impl fmt::Display + '_ {
+    fmt::from_fn(move |f| {
+        if crate::parser::raw::is_bare_attribute_key(key) {
+            f.write_str(key)
+        } else {
+            f.write_char('"')?;
+            write_escaped_string(f, key)?;
+            f.write_char('"')
+        }
+    })
 }
 
-/// Write `name` bare when it is an identifier (`[A-Za-z_][A-Za-z0-9_]*`),
-/// and as a quoted string otherwise.
-fn write_name(f: &mut dyn Write, name: &str) -> fmt::Result {
-    let mut chars = name.chars();
-    let is_ident = chars
-        .next()
-        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
-    if is_ident {
-        f.write_str(name)
-    } else {
-        f.write_char('"')?;
-        write_escaped_string(f, name)?;
-        f.write_char('"')
-    }
-}
-
-fn write_symbol(f: &mut dyn Write, sym: &crate::symbol::Symbol) -> fmt::Result {
-    sym.with_str(|s| write_symbol_text(f, s))
+/// `name` bare when it is an identifier (`[A-Za-z_][A-Za-z0-9_]*`), and as
+/// a quoted string otherwise.
+pub fn display_name(name: &str) -> impl fmt::Display + '_ {
+    fmt::from_fn(move |f| {
+        let mut chars = name.chars();
+        let is_ident = chars
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+        if is_ident {
+            f.write_str(name)
+        } else {
+            f.write_char('"')?;
+            write_escaped_string(f, name)?;
+            f.write_char('"')
+        }
+    })
 }
 
 /// Write a symbol path as `@outer::@name`, each component quoted when
@@ -891,149 +1140,6 @@ fn collect_attr_type_deps(
 }
 
 // ============================================================================
-// Operation printing
-// ============================================================================
-
-fn print_operation(
-    state: &mut PrintState<'_>,
-    f: &mut dyn Write,
-    op: OpRef,
-    indent: usize,
-) -> fmt::Result {
-    // Check for special ops
-    if crate::dialect::core::Module::matches(state.ctx, op) {
-        return print_module_op(state, f, op, indent);
-    }
-
-    let indent_str = " ".repeat(indent);
-    f.write_str(&indent_str)?;
-    // Check the operation's custom assembly format
-    let def = crate::OpDef::of(state.ctx, op);
-    match def.and_then(|def| Some((def, def.asm_format?))) {
-        Some((_, crate::asm_format::OpAsmFormatDef::Hooks(hooks))) => {
-            (hooks.print)(&mut OpPrintHelper { state, f, indent }, op)?;
-        }
-        Some((def, crate::asm_format::OpAsmFormatDef::Declarative(format))) => {
-            crate::asm_format::declarative::print(
-                &mut OpPrintHelper { state, f, indent },
-                op,
-                def,
-                format,
-            )?;
-        }
-        None => print_generic_op(state, f, op, indent)?,
-    }
-    f.write_char('\n')
-}
-
-/// Print an operation in generic syntax, after its line's indentation and
-/// before its newline.
-fn print_generic_op(
-    state: &mut PrintState<'_>,
-    f: &mut dyn Write,
-    op: OpRef,
-    indent: usize,
-) -> fmt::Result {
-    let indent_str = " ".repeat(indent);
-
-    // Results
-    let results = state.ctx.op_results(op);
-    if results.len() == 1 {
-        let name = state.assign_value_name(results[0]);
-        write!(f, "{name} = ")?;
-    } else if results.len() > 1 {
-        for (i, &v) in results.iter().enumerate() {
-            if i > 0 {
-                f.write_str(", ")?;
-            }
-            let name = state.assign_value_name(v);
-            f.write_str(&name)?;
-        }
-        f.write_str(" = ")?;
-    }
-
-    // "dialect.op"
-    let data = state.ctx.op(op);
-    write!(f, "\"{}\"", data.name.display(state.ctx))?;
-
-    // Operands
-    f.write_char('(')?;
-    for (i, &v) in state.ctx.op_operands(op).iter().enumerate() {
-        if i > 0 {
-            f.write_str(", ")?;
-        }
-        f.write_str(state.get_value_name(v))?;
-    }
-    f.write_char(')')?;
-
-    // Successors
-    let successors = state.ctx.op_successors(op);
-    if successors.len() != 0 {
-        f.write_char('[')?;
-        for (i, b) in successors.enumerate() {
-            if i > 0 {
-                f.write_str(", ")?;
-            }
-            f.write_str(state.get_block_label(b))?;
-        }
-        f.write_char(']')?;
-    }
-
-    // Regions, before the attributes so that a brace there is always the
-    // dictionary
-    if state.ctx.op_has_regions(op) {
-        f.write_str(" (")?;
-        for (i, region) in state.ctx.op_regions(op).enumerate() {
-            if i > 0 {
-                f.write_str(", ")?;
-            }
-            f.write_str("{\n")?;
-            print_region(state, f, region, indent + 2)?;
-            write!(f, "{indent_str}}}")?;
-        }
-        f.write_char(')')?;
-    }
-
-    // Attributes, without the declared defaults the canonical form leaves
-    // absent
-    let ctx = state.ctx;
-    let schema = crate::op_def::OpDef::of(ctx, op).map(|def| &def.schema);
-    let attrs: Vec<_> = ctx
-        .op(op)
-        .attributes
-        .iter()
-        .filter(|&(key, val)| {
-            !schema.is_some_and(|schema| schema.holds_default(ctx, ctx.str(key), val))
-        })
-        .collect();
-    if !attrs.is_empty() {
-        f.write_str(" {")?;
-        for (i, (key, val)) in attrs.into_iter().enumerate() {
-            if i > 0 {
-                f.write_str(", ")?;
-            }
-            write!(f, "{} = ", state.ctx.str(key))?;
-            state.write_attribute(f, val)?;
-        }
-        f.write_char('}')?;
-    }
-
-    // Result types
-    let result_types = state.ctx.op_result_types(op);
-    if !result_types.is_empty() {
-        f.write_str(" : ")?;
-        for (i, &ty) in result_types.iter().enumerate() {
-            if i > 0 {
-                f.write_str(", ")?;
-            }
-            state.write_type(f, ty)?;
-        }
-    }
-
-    Ok(())
-}
-
-// ============================================================================
 // Region / Block printing
 // ============================================================================
 
@@ -1049,179 +1155,12 @@ fn can_elide_entry_label(ctx: &IrContext, blocks: &[BlockRef], entry: BlockRef) 
         })
 }
 
-fn print_region(
-    state: &mut PrintState<'_>,
-    f: &mut dyn Write,
-    region: RegionRef,
-    indent: usize,
-) -> fmt::Result {
-    // The context outlives `state`, so the child lists are read in place.
-    let ctx = state.ctx;
-    let blocks = &ctx.region(region).blocks;
-
-    // Pre-assign block labels
-    for &block in blocks {
-        state.assign_block_label(block);
-    }
-
-    // An entry block without arguments elides its label, as in MLIR.
-    let elide_entry = blocks.first().is_some_and(|&entry| {
-        state.ctx.block_args(entry).is_empty() && can_elide_entry_label(ctx, blocks, entry)
-    });
-
-    for (i, &block) in blocks.iter().enumerate() {
-        if !(i == 0 && elide_entry) {
-            let indent_str = " ".repeat(indent);
-            let label = state.get_block_label(block).to_owned();
-            write!(f, "{indent_str}{label}")?;
-            let args = state.ctx.block_args(block);
-            if !args.is_empty() {
-                f.write_char('(')?;
-                for (j, &arg) in args.iter().enumerate() {
-                    if j > 0 {
-                        f.write_str(", ")?;
-                    }
-                    let arg_name = state.assign_value_name(arg);
-                    let ty = state.ctx.value_ty(arg);
-                    write!(f, "{arg_name}: ")?;
-                    state.write_type(f, ty)?;
-                }
-                f.write_char(')')?;
-            }
-            f.write_str(":\n")?;
-        }
-
-        // Print ops in this block
-        for &op in &ctx.block(block).ops {
-            print_operation(state, f, op, indent + 2)?;
-        }
-        if i + 1 < blocks.len() {
-            // Add blank line between blocks for readability
-            f.write_char('\n')?;
-        }
-    }
-
-    Ok(())
-}
-
-// ============================================================================
-// Special operation printers
-// ============================================================================
-
-fn print_module_op(
-    state: &mut PrintState<'_>,
-    f: &mut dyn Write,
-    op: OpRef,
-    indent: usize,
-) -> fmt::Result {
-    let indent_str = " ".repeat(indent);
-    let data = state.ctx.op(op);
-    write!(f, "{indent_str}core.module")?;
-
-    // Module name
-    if let Some(name) = state.ctx.op_attrs(op).get_str("sym_name") {
-        f.write_char(' ')?;
-        write_symbol_text(f, name)?;
-    }
-
-    // Type aliases are declared inside the body, so these attributes spell
-    // their types out.
-    let mut attrs = data
-        .attributes
-        .iter()
-        .filter(|&(key, _)| state.ctx.str(key) != "sym_name")
-        .peekable();
-    if attrs.peek().is_some() {
-        let expanded = PrintState::without_aliases(state.ctx);
-        f.write_str(" {")?;
-        for (i, (key, val)) in attrs.enumerate() {
-            if i > 0 {
-                f.write_str(", ")?;
-            }
-            write_attribute_key(f, state.ctx.str(key))?;
-            f.write_str(" = ")?;
-            expanded.write_attribute(f, val)?;
-        }
-        f.write_char('}')?;
-    }
-
-    let regions = state.ctx.op_region_count(op);
-    assert!(
-        regions <= 1,
-        "print_module_op: expected at most one region, found {regions}",
-    );
-    if let Some(region) = state.ctx.op_region(op, 0) {
-        f.write_str(" {\n")?;
-
-        let inner_indent = format!("{}  ", indent_str);
-
-        // Snapshot alias state so auto aliases are module-local.
-        let saved_aliases = state.type_alias_names.clone();
-
-        // 1. Emit manual type alias definitions
-        let mut manual_aliases: Vec<_> = state
-            .ctx
-            .type_aliases()
-            .iter()
-            .map(|(name, ty)| (name.to_string(), *ty))
-            .collect();
-        manual_aliases.sort_by(|a, b| a.0.cmp(&b.0));
-        topological_sort_aliases(state.ctx, &mut manual_aliases);
-        for (name, ty) in &manual_aliases {
-            write!(f, "{inner_indent}")?;
-            write_type_alias_name(f, name)?;
-            f.write_str(" = ")?;
-            // Temporarily remove this alias from the map so we print the
-            // full type definition, while earlier aliases can still be used.
-            state.type_alias_names.remove(ty);
-            state.write_type(f, *ty)?;
-            // Re-insert so subsequent aliases and ops can reference it
-            state.type_alias_names.insert(*ty, name.clone());
-            f.write_char('\n')?;
-        }
-
-        // 2. Generate and emit auto aliases
-        let auto_aliases = generate_auto_aliases(state.ctx, region, &state.type_alias_names);
-        for (name, ty) in &auto_aliases {
-            write!(f, "{inner_indent}")?;
-            write_type_alias_name(f, name)?;
-            f.write_str(" = ")?;
-            state.write_type(f, *ty)?;
-            // Register so subsequent aliases and ops can reference it
-            state.type_alias_names.insert(*ty, name.clone());
-            f.write_char('\n')?;
-        }
-
-        // Blank line after all alias definitions
-        if !manual_aliases.is_empty() || !auto_aliases.is_empty() {
-            f.write_char('\n')?;
-        }
-
-        // Print each top-level op with reset numbering
-        let ctx = state.ctx;
-        for &block in &ctx.region(region).blocks {
-            for &child_op in &ctx.block(block).ops {
-                let saved = state.save_counters();
-                state.reset_numbering();
-                print_operation(state, f, child_op, indent + 2)?;
-                state.reset_numbering();
-                state.restore_counters(saved);
-            }
-        }
-
-        // Restore alias state — auto aliases are scoped to this module.
-        state.type_alias_names = saved_aliases;
-
-        writeln!(f, "{indent_str}}}")?;
-    } else {
-        f.write_char('\n')?;
-    }
-
-    Ok(())
-}
-
+mod names;
 #[cfg(test)]
 mod prop_tests;
+
+use names::AsmNames;
+pub use names::{AsmNamer, entry_args};
 
 #[cfg(test)]
 mod tests {
@@ -1244,6 +1183,18 @@ mod tests {
     /// Create a one-result `func.func_sig` type.
     fn make_func_type(ctx: &mut IrContext, params: &[TypeRef], ret: TypeRef) -> TypeRef {
         crate::dialect::func::func_sig(ctx, params.iter().copied(), [ret]).as_type_ref()
+    }
+
+    #[test]
+    fn printer_indents_each_line_and_leaves_empty_lines_empty() {
+        let ctx = IrContext::new();
+        let state = AsmState::without_aliases(&ctx);
+        let mut out = String::new();
+        let mut p = AsmPrinter::new(&state, &mut out);
+        p.indent = 4;
+        let nested = fmt::from_fn(|f| f.write_str("b\nc"));
+        write!(p, "a\n\n{nested}\n").unwrap();
+        assert_eq!(out, "    a\n\n    b\n    c\n");
     }
 
     #[test]
@@ -1665,9 +1616,10 @@ mod tests {
         );
 
         // Empty symbol (should quote)
-        out.clear();
-        write_symbol(&mut out, &Symbol::new("")).unwrap();
-        assert_eq!(out, r#"@"""#);
+        assert_eq!(
+            display_symbol_text(Symbol::new("").as_str()).to_string(),
+            r#"@"""#
+        );
 
         // Float infinity (should not append .0)
         out.clear();
