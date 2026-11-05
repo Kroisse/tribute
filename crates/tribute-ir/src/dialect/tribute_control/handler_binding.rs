@@ -107,14 +107,12 @@ impl HandlerBinding {
             && Never::from_type_ref(ctx, self.operation_result_type).is_none()
     }
 
-    /// Write `op @Ability @name`.
-    pub fn write_header(&self, h: &mut OpPrintHelper<'_, '_>) -> fmt::Result {
-        h.write_str(self.kind.keyword())?;
-        h.write_char(' ')?;
+    /// Write `prefix`, then `op @Ability @name`.
+    pub fn write_header(&self, h: &mut OpPrintHelper<'_, '_>, prefix: &str) -> fmt::Result {
+        write!(h, "{prefix}{} ", self.kind.keyword())?;
         h.write_attribute(&Attribute::SymbolRef(self.ability.clone()))?;
         h.write_char(' ')?;
-        let name = h.ctx().str(self.op_name);
-        h.write_symbol_text(name)
+        h.write_symbol_text(h.ctx().str(self.op_name))
     }
 
     /// Parse the header [`Self::write_header`] writes. It backtracks when
@@ -223,8 +221,7 @@ impl OpAsmDirective for HandleArms {
 
     fn print(h: &mut OpPrintHelper<'_, '_>, arms: Self::Parts<'_>) -> fmt::Result {
         for (binding, arm) in arms {
-            h.write_char(' ')?;
-            binding.write_header(h)?;
+            binding.write_header(h, " ")?;
             write_entry_args(h, arm)?;
             h.write_str(" : ")?;
             h.write_type(binding.operation_result_type)?;

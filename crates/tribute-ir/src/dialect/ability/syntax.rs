@@ -47,13 +47,11 @@ impl OpAsmDirective for HandlerArms {
                 h.write_char(',')?;
             }
             h.newline()?;
-            h.write_str("  ")?;
-            binding.write_header(h)?;
+            binding.write_header(h, "  ")?;
             h.write_str(" : ")?;
             h.write_type(binding.operation_result_type)?;
-            h.write_str(" = ")?;
-            let name = h.get_value_name(*arm).to_owned();
-            h.write_str(&name)?;
+            let arm = h.get_value_name(*arm).to_owned();
+            write!(h, " = {arm}")?;
         }
         if !arms.is_empty() {
             h.newline()?;
@@ -136,9 +134,8 @@ impl OpAsmDirective for Dispatchers {
                 h.write_str(", ")?;
             }
             h.write_attribute(&Attribute::SymbolRef(ability.clone()))?;
-            h.write_str(": ")?;
-            let name = h.get_value_name(dispatcher).to_owned();
-            h.write_str(&name)?;
+            let dispatcher = h.get_value_name(dispatcher).to_owned();
+            write!(h, ": {dispatcher}")?;
         }
         h.write_char(']')
     }
