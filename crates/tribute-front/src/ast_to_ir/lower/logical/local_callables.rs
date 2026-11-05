@@ -6,8 +6,8 @@ use trunk_ir::context::IrContext;
 use trunk_ir::refs::ValueRef;
 
 use crate::ast::{
-    AbilityRow, Expr, ExprKind, FuncDefId, LocalId, NodeId, PatternKind, ResolvedRef, RowVar, Stmt,
-    TypedRef,
+    AbilityRow, Expr, ExprKind, FuncDefId, LocalId, NodeId, ResolvedRef, RowVar, Stmt, TypedRef,
+    reference_binding,
 };
 use crate::ast_to_ir::context::IrLoweringCtx;
 
@@ -48,14 +48,7 @@ impl<'db> Aliases<'db> {
                 let Stmt::Let { pattern, value, .. } = stmt else {
                     continue;
                 };
-                let (
-                    PatternKind::Bind {
-                        local_id: Some(local),
-                        ..
-                    },
-                    ExprKind::Var(reference),
-                ) = (&*pattern.kind, &*value.kind)
-                else {
+                let Some((local, reference)) = reference_binding(pattern, value) else {
                     continue;
                 };
                 let target = match reference.resolved {
@@ -66,7 +59,7 @@ impl<'db> Aliases<'db> {
                     _ => continue,
                 };
                 aliases.links.insert(
-                    *local,
+                    local,
                     Link {
                         value: value.id,
                         target,

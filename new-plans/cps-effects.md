@@ -127,11 +127,9 @@ tail의 callable을 만드는 쪽과 부르는 쪽이 같은 class를 읽는다.
   넘기지 않는다. 그 tail을 row에 가진 값은 정의 안의 람다이거나, 그 tail을 row
   인자로 받은 참조나 그 tail의 값이 돌려준 것이다. 그 값들은 tail을 추상 변수로
   두고 만들어졌으므로 그 tail을 통해 어떤 ability의 operation에도 닿지 못한다.
-- Tail의 정체를 잃는 자리는 매개변수뿐이다. 람다의 별칭과 일반화된 계산 결과의
-  사용은 `instantiate`를 거치지 않는다. 그래서 타입 검사가 사용마다 그 tail을 다른
-  row로 인스턴스화해도 IR의 값 type에는 `body` binder가 남는다. 그 값의 매개변수
-  자리에 넘긴 인자는 그 row의 operation에 닿을 수 있으며, 그 인자를 받은 값이 다시
-  돌려주는 callable도 그렇다
+- Tail의 정체를 잃는 자리는 매개변수뿐이다. 그 값의 매개변수 자리에 넘긴 인자는
+  그 tail을 추상 변수로 두고 만들어지지 않았으므로 그 row의 operation에 닿을 수 있으며,
+  그 인자를 받은 값이 다시 돌려주는 callable도 그렇다
   ([지역 람다의 양화와 인스턴스화](ir.md#지역-람다의-양화와-인스턴스화)).
 
 그래서 매개변수 타입에 나타나는 `body` tail은 마지막 줄에 든다. 마지막 줄에는 ability
@@ -332,8 +330,8 @@ pass가 정한 convention이 아니다. Arm의 정의에 드러나는 위반은 
 - [abilities.md](abilities.md#fn-operation-handler)의 tail 예외 가운데 `body`
   tail은 [tail 규칙](#row와-호출-규약)대로 읽는다. 정의 안의 어느 매개변수 타입에도
   나타나지 않는 `body` tail은 ability를 더하지 않고, 나타나면 `op`를 선언한 ability를
-  담을 수 있다고 본다. 람다의 별칭과 일반화된 계산 결과의 사용에는 `instantiate`가
-  없어서 인자의 row를 그 tail에 이어 읽을 수 없기 때문이다. Callee 값 type의 매개변수
+  담을 수 있다고 본다. 그 자리의 인자는 tail을 추상 변수로 두고 만들어지지 않았고,
+  IR의 값 type은 인자의 row를 그 tail에 적지 않기 때문이다. Callee 값 type의 매개변수
   타입에 나타나는 tail은 정의 안의 매개변수 타입에도 나타나므로, 이 판정은 callee 값
   type만 보는 것보다 보수적이며 class 특수화와 같은 class를 읽는다.
 - 직접 호출은 callee 인스턴스의 row를, 간접 호출은 callee 값 type의 row를 이 표로

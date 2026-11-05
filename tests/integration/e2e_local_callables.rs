@@ -299,19 +299,60 @@ fn local_helper_with_a_nested_callable_signature() {
     );
 }
 
+/// An alias of a helper is not a lambda: its uses share one row, which the
+/// pure callback leaves open.
 #[test]
-fn local_helper_alias_and_capture_keep_their_rows() {
+fn local_helper_alias_and_capture_share_one_row() {
     assert_state_program(
         r#"fn body() ->{State(Int)} Int {
     let k = +100
     let twice = fn(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(f(x + k)) }
     let alias = twice
-    let a = alias(fn(x: Int) ->{} Int { x + +1 }, +1)
+    let a = alias(fn(x: Int) { x + +1 }, +1)
     alias(fn(x: Int) { State::set(State::get() + x)
                        State::get() }, a)
 }"#,
         "426",
     );
+}
+
+/// Uses of a value that is not a lambda or a function reference share its
+/// rows, so a callback closed to `{}` fixes the row every other use sees.
+#[salsa_test]
+fn shared_row_rejects_callbacks_with_different_rows(db: &salsa::DatabaseImpl) {
+    for (name, binding) in [
+        (
+            "alias.trb",
+            "let helper = fn(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(f(x)) }\n    let twice = helper",
+        ),
+        ("factory.trb", "let twice = make()"),
+    ] {
+        let text = format!(
+            r#"
+ability State(s) {{ fn get() -> s }}
+fn make() ->{{}} fn(fn(Int) ->{{e}} Int, Int) ->{{e}} Int {{
+    fn(f: fn(Int) ->{{e}} Int, x: Int) ->{{e}} Int {{ f(f(x)) }}
+}}
+fn body() ->{{State(Int)}} Int {{
+    {binding}
+    let a = twice(fn(x: Int) ->{{}} Int {{ x + +1 }}, +1)
+    twice(fn(x: Int) {{ State::get() + x }}, a)
+}}
+fn main() -> Nil {{}}
+"#
+        );
+        let source = SourceCst::from_source_str(db, name, &text);
+        let errors: Vec<_> = frontend_diagnostics(db, source)
+            .into_iter()
+            .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
+            .collect();
+        assert!(
+            errors
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("ability row mismatch")),
+            "{name}: {errors:?}"
+        );
+    }
 }
 
 #[test]
@@ -406,16 +447,16 @@ fn body() ->{State(Int)} Int {
     );
 }
 
-/// A pure factory's result is generalized like a lambda but stays one value.
+/// A factory's result is one value whose uses share its row.
 #[test]
-fn local_helper_from_a_factory_takes_callbacks_with_different_rows() {
+fn local_helper_from_a_factory_shares_one_row() {
     assert_state_program(
         r#"fn make() ->{} fn(fn(Int) ->{e} Int, Int) ->{e} Int {
     fn(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(f(x)) }
 }
 fn body() ->{State(Int)} Int {
     let twice = make()
-    let a = twice(fn(x: Int) ->{} Int { x + +1 }, +1)
+    let a = twice(fn(x: Int) { x + +1 }, +1)
     twice(fn(x: Int) { State::set(State::get() + x)
                        State::get() }, a)
 }"#,
@@ -704,5 +745,49 @@ fn main() ->{Io} Nil {
 "#
         ),
         "ok",
+    );
+}
+
+/// A computed value whose row occurs in a parameter type takes the row its
+/// use fixes, so a site with a weaker class calls the entry it was built for.
+#[test]
+fn computed_value_takes_the_row_of_a_pure_use() {
+    common::assert_output_on_both_targets(
+        "computed_value_pure_use.trb",
+        r#"
+use std::io::{Io, print_line}
+
+fn make() ->{} fn(fn() ->{e} Int) ->{e} Int {
+    fn(k: fn() ->{e} Int) ->{e} Int { k() }
+}
+
+fn apply_pure(f: fn(fn() ->{} Int) ->{} Int) -> Int {
+    f(fn() { +3 })
+}
+
+fn main() ->{Io} Nil {
+    let h = make()
+    let r = apply_pure(h)
+    print_line(r.to_string)
+}
+"#,
+        "3",
+    );
+}
+
+/// A chain of named-function aliases references the function again at each
+/// use, so a use closed to `{}` leaves the other use its own row.
+#[test]
+fn named_function_alias_chain_takes_callbacks_with_different_rows() {
+    assert_state_program(
+        r#"fn twice(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(f(x)) }
+fn body() ->{State(Int)} Int {
+    let f = twice
+    let g = f
+    let a = g(fn(x: Int) ->{} Int { x + +1 }, +1)
+    g(fn(x: Int) { State::set(State::get() + x)
+                   State::get() }, a)
+}"#,
+        "26",
     );
 }
