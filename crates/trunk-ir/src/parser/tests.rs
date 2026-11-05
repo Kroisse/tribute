@@ -690,6 +690,39 @@ func.return %0
 }"#,
             "type aliases are only allowed in module regions",
         ),
+        (
+            "duplicate block argument name",
+            r#"core.module @test {
+  func.func @f() {
+    "test.br"()[^next]
+  ^next(%a: core.i32, %a: core.i32):
+    func.return
+  }
+}"#,
+            "duplicate block argument name 'a' at index 1",
+        ),
+        (
+            "entry block argument type mismatch",
+            r#"core.module @test {
+  func.func @f(%0: core.i32) -> core.i32 {
+^bb0(%1: core.i64):
+  func.return %1
+  }
+}"#,
+            "entry block arg 0 type mismatch: block has core.i64 but function param has core.i32",
+        ),
+        (
+            "unquoted operation without a custom format",
+            r#"core.module @test {
+  test.nothing
+}"#,
+            "expected a quoted name",
+        ),
+        (
+            "trailing input after the module",
+            "core.module @a {\n}\ncore.module @b {\n}",
+            "trailing input after top-level operation",
+        ),
     ] {
         let mut ctx = IrContext::new();
         let err = parse_module(&mut ctx, input)
@@ -1345,6 +1378,31 @@ fn a_value_defined_only_in_a_sibling_region_stays_undefined() {
     assert!(error.message.contains("undefined value '%x'"), "{error}");
 }
 
+#[test]
+fn forward_references_from_sibling_regions_meet_at_the_definition() {
+    let input = r#"core.module @test {
+  func.func @f() -> core.i32 {
+      "test.pair"() ({
+        "test.use"(%x)
+      }, {
+        "test.use"(%x)
+      })
+      "test.br"()[^next]
+    ^next(%x: core.i32):
+      func.return %x
+  }
+}"#;
+    let mut ctx = IrContext::new();
+    let module = parse_test_module(&mut ctx, input);
+    let function = module.ops(&ctx)[0];
+    let body = ctx.op_region(function, 0).unwrap();
+    let next = ctx.region(body).blocks[1];
+    assert_eq!(ctx.uses(ctx.block_arg(next, 0)).len(), 3);
+    assert!(validation::validate_use_chains(&ctx, module).is_ok());
+    assert!(validation::validate_value_integrity(&ctx, module).is_ok());
+    assert_roundtrip(&ctx, module.op());
+}
+
 // ================================================================
 // Types and attributes on their own
 // ================================================================
@@ -1409,6 +1467,40 @@ mod types {
             symbol,
             Attribute::SymbolRef(crate::SymbolPath::new(["a", "b"]))
         );
+    }
+
+    #[test]
+    fn locations_bytes_and_escapes_read_back() {
+        let mut ctx = IrContext::new();
+        let Attribute::Location(location) =
+            parse_attribute(&mut ctx, r#"loc("main.trb" 3:7)"#).unwrap()
+        else {
+            panic!("a location")
+        };
+        assert_eq!(location.span, crate::location::Span::new(3, 7));
+        assert_eq!(
+            parse_attribute(&mut ctx, r#"b"a\x00\xff""#).unwrap(),
+            Attribute::Bytes([b'a', 0, 0xff].into_iter().collect())
+        );
+        for (text, expected) in [
+            (r#""\x41""#, "A"),
+            (r#""\xZZ""#, "\\xZZ"),
+            (r#""\q""#, "\\q"),
+        ] {
+            let value = parse_attribute(&mut ctx, text).unwrap();
+            assert_eq!(value, ctx.string_attr(expected), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_whole_attribute_text_rejects_trailing_input() {
+        let mut ctx = IrContext::new();
+        let error = parse_attribute(&mut ctx, "1 2").expect_err("trailing input");
+        assert!(
+            error.message.contains("trailing input after attribute"),
+            "{error}"
+        );
+        assert_eq!(error.offset, 2);
     }
 
     #[test]

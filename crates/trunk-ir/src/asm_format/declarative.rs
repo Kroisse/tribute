@@ -1060,11 +1060,7 @@ impl<'a> FormatParser<'a> {
                         (CustomSlot::Operand(index), ParsedEntity::Operands(values)) => {
                             self.parsed.operands[index] = values
                                 .into_iter()
-                                .map(|value| Operand {
-                                    value,
-                                    name: "?",
-                                    offset,
-                                })
+                                .map(|value| Operand { value, name: "?" })
                                 .collect();
                         }
                         (CustomSlot::Attribute(index), ParsedEntity::Attribute(value)) => {

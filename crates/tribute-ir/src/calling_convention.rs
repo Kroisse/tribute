@@ -565,7 +565,16 @@ mod tests {
                 Some(convention)
             );
             assert_eq!(convention.to_string().parse(), Ok(convention));
+            let mut p = trunk_ir::parser::AsmParser::new(&mut ctx, convention.keyword());
+            let parsed = <CallingConvention as trunk_ir::attr_kind::AttrKind>::parse_text(&mut p)
+                .expect("a convention keyword");
+            assert_eq!(
+                CallingConvention::from_attribute(&ctx, &parsed),
+                Some(convention)
+            );
         }
+        let mut p = trunk_ir::parser::AsmParser::new(&mut ctx, "tail");
+        assert!(<CallingConvention as trunk_ir::attr_kind::AttrKind>::parse_text(&mut p).is_err());
 
         assert!("Cps".parse::<CallingConvention>().is_err());
         let unknown = ctx.string_attr("tail");

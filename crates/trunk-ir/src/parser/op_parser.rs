@@ -63,11 +63,6 @@ impl OperationState {
             self.attributes.view_mut(ctx).insert(key, value);
         }
     }
-
-    /// Whether the attribute `key` is set.
-    pub fn has_attribute(&self, ctx: &IrContext, key: &str) -> bool {
-        self.attributes.view(ctx).contains_key(key)
-    }
 }
 
 /// A block argument the text names, `%name: T`, as an operation's header
@@ -85,7 +80,6 @@ pub struct Argument {
 pub(crate) struct Operand<'a> {
     pub value: ValueRef,
     pub name: &'a str,
-    pub offset: usize,
 }
 
 /// How a region's entry block takes the arguments a header wrote.
@@ -226,51 +220,12 @@ impl<'a> OpAsmParser<'a> {
         Ok(self.parse_operand_ref()?.value)
     }
 
-    /// Read an operand if one is next.
-    pub fn parse_optional_operand(&mut self) -> ParseResult<Option<ValueRef>> {
-        Ok(self
-            .parse_optional_operand_ref()?
-            .map(|operand| operand.value))
-    }
-
-    /// Read an operand whose type must be `ty`.
-    pub fn parse_operand_of_type(&mut self, ty: TypeRef) -> ParseResult<ValueRef> {
-        let operand = self.parse_operand_ref()?;
-        self.check_operand_type(operand, ty, operand.offset)?;
-        Ok(operand.value)
-    }
-
-    /// Read operands separated by commas on the current line, as
-    /// [`AsmState::values`](crate::printer::AsmState::values) writes them:
-    /// none when the next one would follow a line break, which begins the
-    /// next operation.
-    pub fn parse_operand_list(&mut self) -> ParseResult<Vec<ValueRef>> {
-        Ok(self
-            .parse_operand_refs()?
-            .into_iter()
-            .map(|operand| operand.value)
-            .collect())
-    }
-
     pub(crate) fn parse_operand_ref(&mut self) -> ParseResult<Operand<'a>> {
         self.skip_ws();
         let offset = self.offset();
         let name = self.parse_token("an operand", lexer::value_ref)?;
         let value = self.resolve_value(name, offset);
-        Ok(Operand {
-            value,
-            name,
-            offset,
-        })
-    }
-
-    fn parse_optional_operand_ref(&mut self) -> ParseResult<Option<Operand<'a>>> {
-        let checkpoint = self.checkpoint();
-        if self.peek().starts_with('%') {
-            return self.parse_operand_ref().map(Some);
-        }
-        self.reset(checkpoint);
-        Ok(None)
+        Ok(Operand { value, name })
     }
 
     pub(crate) fn parse_operand_refs(&mut self) -> ParseResult<Vec<Operand<'a>>> {
@@ -436,16 +391,6 @@ impl<'a> OpAsmParser<'a> {
         Ok(self.refer_block(label, offset))
     }
 
-    /// Read a successor if one is next.
-    pub fn parse_optional_successor(&mut self) -> ParseResult<Option<BlockRef>> {
-        let checkpoint = self.checkpoint();
-        if self.peek().starts_with('^') {
-            return self.parse_successor().map(Some);
-        }
-        self.reset(checkpoint);
-        Ok(None)
-    }
-
     fn refer_block(&mut self, label: &str, offset: usize) -> BlockRef {
         let op_name = self.op_name();
         let location = self.location();
@@ -574,11 +519,6 @@ impl<'a> OpAsmParser<'a> {
         Ok(())
     }
 
-    /// Read a block argument, `%name: T`.
-    pub fn parse_argument(&mut self) -> ParseResult<Argument> {
-        Self::parse_argument_of(&mut self.parser)
-    }
-
     /// Read the entry block arguments
     /// [`AsmState::entry_args`](crate::printer::AsmState::entry_args)
     /// writes, `(%a: A, ..)`, for a region read after them with
@@ -609,16 +549,6 @@ impl<'a> OpAsmParser<'a> {
     /// writes it.
     pub fn parse_region(&mut self) -> ParseResult<RegionRef> {
         self.region(EntryArgs::None, false)
-    }
-
-    /// Read a region if one is next.
-    pub fn parse_optional_region(&mut self) -> ParseResult<Option<RegionRef>> {
-        let checkpoint = self.checkpoint();
-        if self.peek().starts_with('{') {
-            return self.parse_region().map(Some);
-        }
-        self.reset(checkpoint);
-        Ok(None)
     }
 
     /// Read a region whose entry block takes `args`, which a header wrote
