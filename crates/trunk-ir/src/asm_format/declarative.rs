@@ -26,7 +26,7 @@ use crate::parser::raw::{
 };
 use crate::printer::OpPrintHelper;
 use crate::types::Attribute;
-use crate::{BlockRef, IrContext, OpRef};
+use crate::{BlockRef, IrContext, OpRef, TypeRef};
 
 /// The format elements of an operation, in order.
 #[derive(Debug)]
@@ -825,12 +825,18 @@ fn fixed_results_fit(ctx: &IrContext, op: OpRef, schema: &OpSchema, format: &OpF
         return true;
     }
     let results = ctx.op_result_types(op);
+    // A fixed type is the bare type of its name, so a result with type
+    // parameters or attributes would not survive the round trip.
+    let bare = |ty: TypeRef| {
+        let data = ctx.get_type(ty);
+        data.params.is_empty() && data.attrs.is_empty()
+    };
     schema.fixed_results().is_some_and(|bounds| {
         bounds.len() == results.len()
             && bounds
                 .iter()
                 .zip(results.iter())
-                .all(|(bound, &ty)| (bound.matches)(ctx, ty))
+                .all(|(bound, &ty)| (bound.matches)(ctx, ty) && bare(ty))
     })
 }
 
@@ -1419,6 +1425,11 @@ mod tests {
         #[asm_format(lhs "," rhs attr_dict_bare ":" type(lhs))]
         fn compare<T>(lhs: Value<T>, rhs: Value<T>) -> Value<I1> {}
 
+        struct Token;
+
+        #[asm_format(attr_dict)]
+        fn make_token() -> Value<Token> {}
+
         #[asm_format(args attr_dict_bare (":" types(results)^)?)]
         fn emit(args: Variadic<_>) -> Variadic<_> {}
 
@@ -1707,14 +1718,17 @@ mod tests {
   asm_format_test.fun @f(%0: core.i32, %1: core.i32) {
       %2 = asm_format_test.compare %0, %1 : core.i32
       asm_format_test.consume %2 : core.i1
+      %3 = asm_format_test.make_token
   }
 }
 "#,
         );
-        // A result of another type prints generically.
+        // A result of another type, or with attributes the fixed type does
+        // not have, prints generically.
         let text = r#"core.module @m {
   asm_format_test.fun @f(%0: core.i32, %1: core.i32) {
       %2 = "asm_format_test.compare"(%0, %1) : core.i32
+      %3 = "asm_format_test.make_token"() : asm_format_test.token<{note = 1}>
   }
 }
 "#;
