@@ -449,11 +449,11 @@ impl crate::asm_format::TypeAsmFormat for FuncSig {
         super::func::print_signature_type(p, self.0)
     }
 
-    fn parse<'a>(
-        input: &mut &'a str,
-        name: &'a str,
-    ) -> winnow::ModalResult<crate::parser::raw::RawType<'a>> {
-        super::func::parse_signature_type(input, name, None)
+    fn parse(
+        p: &mut crate::parser::AsmParser<'_>,
+        name: &str,
+    ) -> crate::parser::ParseResult<Option<crate::TypeRef>> {
+        super::func::parse_signature_type(p, name, None)
     }
 }
 
@@ -466,12 +466,13 @@ impl crate::asm_format::SignatureCodec for FuncSig {
         super::func::signature_codec_parts(ctx, ty)
     }
 
-    fn build<'a>(
-        inputs: Vec<crate::parser::raw::RawParam<'a>>,
-        results: Vec<crate::parser::raw::RawParam<'a>>,
-        tail: crate::parser::raw::RawAttrDict<'a>,
-    ) -> winnow::ModalResult<crate::parser::raw::RawType<'a>> {
-        super::func::signature_from_parts("clif.func_sig", inputs, results, tail, None)
+    fn build(
+        p: &mut crate::parser::AsmParser<'_>,
+        inputs: Vec<(crate::TypeRef, crate::AttributeMap)>,
+        results: Vec<(crate::TypeRef, crate::AttributeMap)>,
+        tail: crate::AttributeMap,
+    ) -> crate::parser::ParseResult<crate::TypeRef> {
+        super::func::signature_from_parts(p, "clif.func_sig", inputs, results, tail, None)
     }
 }
 
@@ -658,27 +659,28 @@ impl crate::asm_format::OpAsmDirective for SwitchCases {
         write!(p, "{cases}")
     }
 
-    fn parse<'a>(
-        input: &mut &'a str,
-    ) -> winnow::ModalResult<Vec<crate::asm_format::RawCustomEntity<'a>>> {
-        use crate::asm_format::RawCustomEntity;
-        use crate::parser::raw::{RawAttribute, block_label, integer_lit, ws};
-        use winnow::Parser as _;
-        use winnow::combinator::{separated, separated_pair};
+    fn parse(
+        p: &mut crate::parser::OpAsmParser<'_>,
+    ) -> crate::parser::ParseResult<Vec<crate::asm_format::ParsedEntity>> {
+        use crate::asm_format::ParsedEntity;
+        use crate::parser::lexer::integer_lit;
 
-        let arms: Vec<(i128, &str)> = separated(
-            0..,
-            separated_pair(integer_lit, (ws, ':', ws), block_label),
-            (ws, ',', ws),
-        )
-        .parse_next(input)?;
-        let (cases, targets): (Vec<_>, Vec<_>) = arms
-            .into_iter()
-            .map(|(case, target)| (RawAttribute::Int(case), target))
-            .unzip();
+        let mut cases = Vec::new();
+        let mut targets = Vec::new();
+        let mut case = p.parse_optional_token("a case", integer_lit)?;
+        while let Some(value) = case {
+            cases.push(crate::Attribute::Int(value));
+            p.parse_punct(":")?;
+            targets.push(p.parse_successor()?);
+            case = if p.parse_optional_punct(",") {
+                Some(p.parse_integer()?)
+            } else {
+                None
+            };
+        }
         Ok(vec![
-            RawCustomEntity::Attribute(Some(RawAttribute::List(cases))),
-            RawCustomEntity::Successors(targets),
+            ParsedEntity::Attribute(Some(crate::Attribute::List(cases))),
+            ParsedEntity::Successors(targets),
         ])
     }
 }

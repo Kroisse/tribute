@@ -259,8 +259,8 @@ impl<'a> AsmState<'a> {
     /// The entry block arguments of `region` as `(%a: A, ..)`, for a format
     /// that then prints the region with
     /// [`OpAsmPrinter::print_region_without_entry`]; [`AsmNamer::entry_args`]
-    /// names them. [`parse_entry_args`](crate::asm_format::parse_entry_args)
-    /// and [`attach_entry_args`](crate::asm_format::attach_entry_args) read
+    /// names them. [`OpAsmParser::parse_entry_args`](crate::parser::OpAsmParser::parse_entry_args)
+    /// and [`OpAsmParser::parse_region_with_entry`](crate::parser::OpAsmParser::parse_region_with_entry) read
     /// them back.
     pub fn entry_args(&self, region: RegionRef) -> impl fmt::Display + '_ {
         fmt::from_fn(move |f| write!(f, "({})", self.typed_values(entry_args(self.ctx, region))))
@@ -852,7 +852,7 @@ fn display_alias(name: &str) -> impl fmt::Display + '_ {
 /// A dictionary key, bare when the reader accepts it, otherwise quoted.
 fn display_attribute_key(key: &str) -> impl fmt::Display + '_ {
     fmt::from_fn(move |f| {
-        if crate::parser::raw::is_bare_attribute_key(key) {
+        if crate::parser::lexer::is_bare_attribute_key(key) {
             f.write_str(key)
         } else {
             f.write_char('"')?;
@@ -1606,7 +1606,7 @@ mod tests {
         write_attribute(&ctx, &mut out, &Attribute::SymbolRef(nested.clone())).unwrap();
         assert_eq!(out, r#"@outer::@"odd::name"::@leaf"#);
         let mut input = out.as_str();
-        let parsed = crate::parser::raw::symbol_path(&mut input).expect("a symbol path");
+        let parsed = crate::parser::lexer::symbol_path(&mut input).expect("a symbol path");
         assert!(input.is_empty());
         assert!(
             parsed

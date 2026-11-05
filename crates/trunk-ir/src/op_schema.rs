@@ -181,8 +181,7 @@ pub struct AttributeSchema {
     /// (`AttrKind::print_text`).
     pub print_text: fn(&mut crate::printer::AsmPrinter<'_>, &Attribute) -> std::fmt::Result,
     /// Read a value as a declarative format spells it (`AttrKind::parse_text`).
-    pub parse_text:
-        for<'a> fn(&mut &'a str) -> winnow::ModalResult<crate::parser::raw::RawAttribute<'a>>,
+    pub parse_text: fn(&mut crate::parser::AsmParser<'_>) -> crate::parser::ParseResult<Attribute>,
 }
 
 impl AttributeSchema {

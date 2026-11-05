@@ -368,28 +368,23 @@ impl crate::asm_format::OpAsmDirective for SwitchArms {
         p.print_region(default)
     }
 
-    fn parse<'a>(
-        input: &mut &'a str,
-    ) -> winnow::ModalResult<Vec<crate::asm_format::RawCustomEntity<'a>>> {
-        use crate::asm_format::RawCustomEntity;
-        use crate::parser::raw::{RawAttribute, integer_lit, raw_region, ws};
-        use winnow::Parser as _;
-        use winnow::combinator::{preceded, repeat};
+    fn parse(
+        p: &mut crate::parser::OpAsmParser<'_>,
+    ) -> crate::parser::ParseResult<Vec<crate::asm_format::ParsedEntity>> {
+        use crate::asm_format::ParsedEntity;
 
-        let arms: Vec<(i128, _)> = repeat(
-            0..,
-            preceded((ws, "case", ws), (integer_lit, preceded(ws, raw_region))),
-        )
-        .parse_next(input)?;
-        let default = preceded((ws, "default", ws), raw_region).parse_next(input)?;
-        let (cases, regions): (Vec<_>, Vec<_>) = arms
-            .into_iter()
-            .map(|(case, region)| (RawAttribute::Int(case), region))
-            .unzip();
+        let mut cases = Vec::new();
+        let mut regions = Vec::new();
+        while p.parse_optional_keyword("case") {
+            cases.push(Attribute::Int(p.parse_integer()?));
+            regions.push(p.parse_region()?);
+        }
+        p.parse_keyword("default")?;
+        let default = p.parse_region()?;
         Ok(vec![
-            RawCustomEntity::Attribute(Some(RawAttribute::List(cases))),
-            RawCustomEntity::Regions(regions),
-            RawCustomEntity::Regions(vec![default]),
+            ParsedEntity::Attribute(Some(Attribute::List(cases))),
+            ParsedEntity::Regions(regions),
+            ParsedEntity::Regions(vec![default]),
         ])
     }
 }

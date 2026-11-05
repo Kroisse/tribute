@@ -167,32 +167,25 @@ impl crate::asm_format::OpAsmDirective for SwitchCases {
         Ok(())
     }
 
-    fn parse<'a>(
-        input: &mut &'a str,
-    ) -> winnow::ModalResult<Vec<crate::asm_format::RawCustomEntity<'a>>> {
-        use crate::asm_format::RawCustomEntity;
-        use crate::parser::raw::{RawAttribute, block_label, integer_lit, ws};
-        use winnow::Parser as _;
-        use winnow::combinator::{preceded, repeat, separated_pair};
+    fn parse(
+        p: &mut crate::parser::OpAsmParser<'_>,
+    ) -> crate::parser::ParseResult<Vec<crate::asm_format::ParsedEntity>> {
+        use crate::asm_format::ParsedEntity;
 
-        let (_, default) =
-            separated_pair("default", (ws, ':', ws), block_label).parse_next(input)?;
-        let arms: Vec<(i128, &str)> = repeat(
-            0..,
-            preceded(
-                (ws, ',', ws),
-                separated_pair(integer_lit, (ws, ':', ws), block_label),
-            ),
-        )
-        .parse_next(input)?;
-        let (cases, targets): (Vec<_>, Vec<_>) = arms
-            .into_iter()
-            .map(|(case, target)| (RawAttribute::Int(case), target))
-            .unzip();
+        p.parse_keyword("default")?;
+        p.parse_punct(":")?;
+        let default = p.parse_successor()?;
+        let mut cases = Vec::new();
+        let mut targets = Vec::new();
+        while p.parse_optional_punct(",") {
+            cases.push(Attribute::Int(p.parse_integer()?));
+            p.parse_punct(":")?;
+            targets.push(p.parse_successor()?);
+        }
         Ok(vec![
-            RawCustomEntity::Successors(vec![default]),
-            RawCustomEntity::Attribute(Some(RawAttribute::List(cases))),
-            RawCustomEntity::Successors(targets),
+            ParsedEntity::Successors(vec![default]),
+            ParsedEntity::Attribute(Some(Attribute::List(cases))),
+            ParsedEntity::Successors(targets),
         ])
     }
 }
