@@ -6,7 +6,6 @@ use tribute_ir::dialect::{adt, effect};
 use trunk_ir::SymbolPath;
 use trunk_ir::ops::DialectType;
 use trunk_ir::parser::parse_test_module;
-use trunk_ir::printer::print_module;
 use trunk_ir::symbol_table::nearest_table;
 
 use crate::lower_continuation_frames::lower_continuation_frames;
@@ -218,7 +217,7 @@ fn textual_callable_graph_converts_and_reparses() {
     tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
     lower_continuation_frames(&mut ctx, module).unwrap();
     verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert!(!printed.contains("tribute_control.func "));
     assert!(!printed.contains("tribute_control.func_ref "));
     assert!(!printed.contains("tribute_control.call_indirect "));
@@ -284,7 +283,7 @@ fn textual_direct_evidence_and_cps_transfers_preserve_exact_abis() {
     let (mut ctx, module) = parse(input);
     tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
     lower_continuation_frames(&mut ctx, module).unwrap();
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert!(printed.contains("func.call "));
     assert!(printed.contains("func.call_indirect"));
     assert!(printed.contains("func.tail_call "));
@@ -311,7 +310,7 @@ fn textual_direct_evidence_and_cps_transfers_preserve_exact_abis() {
     assert!(ctx.get_type(closure_ty).attrs.is_empty());
     crate::lower_closure_lambda::lower_closure_lambda(&mut ctx, module);
     crate::closure_lower::lower_prepared_closures(&mut ctx, module).unwrap();
-    let lowered = print_module(&ctx, module.op());
+    let lowered = module.op().display(&ctx).to_string();
     assert!(
         !lowered.contains("closure.lambda") && !lowered.contains("closure.new"),
         "{lowered}"
@@ -412,7 +411,7 @@ fn source_data_indirect_calls_carry_their_exact_signature() {
             CallingConvention::EvidenceDirect,
         ],
         "every source-data indirect call must convert: {}",
-        print_module(&ctx, module.op())
+        module.op().display(&ctx)
     );
 
     for transfer in &transfers {
@@ -434,7 +433,7 @@ fn source_data_indirect_calls_carry_their_exact_signature() {
             (&entry.inputs(&ctx)[hidden..], entry.results(&ctx)),
             (source.inputs(&ctx), source.results(&ctx)),
             "{convention:?} transfer must carry its exact entry contract: {}",
-            print_module(&ctx, module.op())
+            module.op().display(&ctx)
         );
     }
 
@@ -457,7 +456,7 @@ fn nested_textual_module_converts_its_callable_graph_atomically() {
     let (mut ctx, module) = parse(input);
     tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
     lower_continuation_frames(&mut ctx, module).unwrap();
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert!(printed.contains("core.module @inner"));
     assert!(printed.contains("func.func @nested"));
     assert!(printed.contains("func.tail_call_indirect"));
@@ -491,7 +490,7 @@ fn nested_modules_resolve_same_named_callables_in_their_own_module() {
     let (mut ctx, module) = parse(input);
     tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
     verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert_eq!(printed.matches("func.func @same").count(), 2, "{printed}");
     assert!(printed.contains("func.func @outer_call"), "{printed}");
     assert!(printed.contains("func.func @inner_call"), "{printed}");
@@ -514,7 +513,7 @@ fn textual_nested_attribute_types_convert_atomically() {
 }"#;
     let (mut ctx, module) = parse(input);
     tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert!(printed.contains("adt.struct<CallbackRecord("));
     assert!(
         printed.contains("closure.closure<func.func_sig<(core.i32) -> core.i32, {metadata"),
@@ -547,7 +546,7 @@ fn source_signature_metadata_roundtrips_before_conversion() {
   }) {convention = "direct", sym_name = "outer", type = !outer}
 }"#;
     let (ctx, module) = parse(source);
-    let printed_source = print_module(&ctx, module.op());
+    let printed_source = module.op().display(&ctx).to_string();
     assert!(
         printed_source.contains(
             "!outer = tribute_control.func_sig<() -> core.i32, {metadata = [[!inner, @function]]}>"
@@ -681,12 +680,12 @@ fn malformed_or_retired_source_signatures_fail_before_conversion() {
         ctx.op_attrs_mut(function)
             .insert("type", Attribute::Type(malformed));
 
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
         let error =
             tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap_err();
         assert_eq!(error.boundary, PRE_CPS_BOUNDARY, "{name}: {error}");
         assert!(error.to_string().contains(expected), "{name}: {error}");
-        assert_eq!(print_module(&ctx, module.op()), before, "{name}");
+        assert_eq!(module.op().display(&ctx).to_string(), before, "{name}");
     }
 }
 
@@ -778,7 +777,7 @@ fn post_candidate_failure_restores_alias_maps_and_canonical_ir() {
   }
 }"#;
     let (mut ctx, candidate) = parse(input);
-    let before = print_module(&ctx, candidate.op());
+    let before = candidate.op().display(&ctx).to_string();
     let source_aliases = ctx.type_aliases().to_vec();
     let (alias_name, source_type) = source_aliases[0].clone();
     let converted_type = TypeDataBuilder::new("core.i32").intern(&mut ctx);
@@ -795,7 +794,7 @@ fn post_candidate_failure_restores_alias_maps_and_canonical_ir() {
     assert_eq!(ctx.type_alias_by_name(&alias_name), Some(source_type));
     assert_eq!(ctx.type_alias_by_type(source_type), Some(alias_name));
     assert_eq!(ctx.type_alias_by_type(converted_type), None);
-    assert_eq!(print_module(&ctx, candidate.op()), before);
+    assert_eq!(candidate.op().display(&ctx).to_string(), before);
 }
 
 #[test]
@@ -1153,7 +1152,7 @@ fn textual_resumptive_handle_emits_one_resultless_delimiter() {
     assert!(
         tribute_ir::dialect::tribute_rt::Anyref::matches(&ctx, erased.inputs(&ctx)[2]),
         "ability.perform must receive Resume<anyref, R>, not the exact continuation: {}",
-        print_module(&ctx, module.op())
+        module.op().display(&ctx)
     );
     let trunk_ir::ValueDef::OpResult(wrapper_op, _) = ctx.value_def(perform_resume) else {
         panic!("ability.perform resume must be the one-shot adapter closure");
@@ -1169,7 +1168,7 @@ fn textual_resumptive_handle_emits_one_resultless_delimiter() {
                 })
         }),
         "the erased adapter must capture the declared ResumeExact<I, R>: {}",
-        print_module(&ctx, module.op())
+        module.op().display(&ctx)
     );
     let mut consumed_get = None;
     let mut consumed_set = None;
@@ -1206,7 +1205,7 @@ fn textual_resumptive_handle_emits_one_resultless_delimiter() {
     find_one_shot_state_ops(&ctx, module.op(), &mut consumed_get, &mut consumed_set);
     assert_eq!(consumed_get, consumed_set);
     assert!(consumed_get.is_some(), "one-shot state was not emitted");
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     // One installation under a fresh prompt, and one more in the function
     // every resumption of the handle shares to install the layer again.
     assert_eq!(printed.matches("effect.fresh_prompt_tag").count(), 1);
@@ -1293,7 +1292,7 @@ fn multiple_arms_for_one_ability_emit_one_dispatcher() {
         };
         assert_eq!(abilities.len(), 1);
     }
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert!(printed.contains("arith.constant 9 :"));
     assert!(printed.contains("func.tail_call_indirect"));
     assert!(
@@ -1361,9 +1360,9 @@ fn textual_scf_branch_captures_only_the_selected_suffix() {
         tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default())
     }
     .unwrap();
-    let converted = print_module(&ctx, module.op());
+    let converted = module.op().display(&ctx).to_string();
     lower_continuation_frames(&mut ctx, module).unwrap();
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert!(printed.contains("scf.if"));
     assert!(printed.contains("-> (core.never)"));
     assert!(converted.contains("ability.perform"));
@@ -1428,9 +1427,9 @@ fn textual_zero_result_cps_and_direct_scf_branches_lower() {
         tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default())
     }
     .unwrap();
-    let converted = print_module(&ctx, module.op());
+    let converted = module.op().display(&ctx).to_string();
     lower_continuation_frames(&mut ctx, module).unwrap();
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     let mut if_results = Vec::new();
     collect_if_results(&ctx, module.op(), &mut if_results);
     let value_if_count = if_results.iter().filter(|ty| *ty == "core.i32").count();
@@ -1492,10 +1491,10 @@ fn textual_zero_result_cps_and_direct_scf_branches_lower() {
     assert!(generated_param_counts.contains(&2), "{printed}");
 
     crate::lower_closure_lambda::lower_closure_lambda(&mut ctx, module);
-    let lifted = print_module(&ctx, module.op());
+    let lifted = module.op().display(&ctx).to_string();
     assert!(!lifted.contains("closure.lambda"), "{lifted}");
     crate::closure_lower::lower_prepared_closures(&mut ctx, module).unwrap();
-    let lowered = print_module(&ctx, module.op());
+    let lowered = module.op().display(&ctx).to_string();
     assert!(!lowered.contains("closure.new"), "{lowered}");
     let mut exact_transfers = 0;
     let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
@@ -1568,7 +1567,7 @@ fn malformed_multi_result_effectful_scf_if_remains_unchanged() {
         i32_type,
     )];
     tribute_control::declare_operations(&mut ctx, module, &declarations);
-    let before = print_module(&ctx, module.op());
+    let before = module.op().display(&ctx).to_string();
     let error = tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap_err();
     assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
     assert!(
@@ -1577,7 +1576,7 @@ fn malformed_multi_result_effectful_scf_if_remains_unchanged() {
             .contains("scf.if (op3): expected 0 to 1 result(s), found 2"),
         "{error}"
     );
-    assert_eq!(print_module(&ctx, module.op()), before);
+    assert_eq!(module.op().display(&ctx).to_string(), before);
 }
 
 /// A function reference called through a stronger convention than its
@@ -1598,7 +1597,7 @@ fn stronger_func_ref_builds_a_cps_adapter_without_a_null_environment() {
 }"#;
     let (mut ctx, module) = parse(input);
     tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert!(printed.contains("__tribute_func_ref_adapter"));
     assert!(printed.contains("closure.new"));
     assert!(printed.contains("func.tail_call_indirect"));
@@ -1692,7 +1691,7 @@ fn parameter_attributes_follow_their_parameters_to_the_physical_abi() {
         references,
         [physical.as_type_ref(), physical.as_type_ref()],
         "{}",
-        print_module(&ctx, module.op())
+        module.op().display(&ctx)
     );
 }
 
@@ -1729,7 +1728,7 @@ fn references_sharing_a_table_share_its_entries() {
     let (mut ctx, module) = parse(input);
     tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
     verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert_eq!(
         printed
             .matches("func.func @__tribute_func_ref_adapter")
@@ -1774,7 +1773,7 @@ fn a_table_of_two_targets_enters_each_through_its_convention() {
     let (mut ctx, module) = parse(input);
     tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
     verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     let mut tables = Vec::new();
     let _ = walk_op::<()>(&ctx, module.op(), &mut |op| {
         if let Ok(closure) = closure::New::from_op(&ctx, op) {
@@ -1911,13 +1910,13 @@ fn handles_stay_abstract_until_the_frames_are_lowered() {
 }"#;
     let (mut ctx, module) = parse(input);
     tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert_eq!(printed.matches("ability.handle %").count(), 2, "{printed}");
     assert!(!printed.contains("ability.handle_dispatch"), "{printed}");
     assert!(!printed.contains("effect.fresh_prompt_tag"), "{printed}");
     assert!(!printed.contains("adt.struct_new"), "{printed}");
     lower_continuation_frames(&mut ctx, module).unwrap();
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert!(!printed.contains("ability.handle "), "{printed}");
     assert!(!printed.contains("ability.frame"), "{printed}");
 }
@@ -1942,7 +1941,7 @@ fn nested_textual_handles_keep_distinct_delimiters() {
     let (mut ctx, module) = parse(input);
     tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
     lower_continuation_frames(&mut ctx, module).unwrap();
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     // Each handle is installed in place, and again in the layer a
     // resumed continuation rebuilds.
     assert_eq!(printed.matches("effect.fresh_prompt_tag").count(), 2);
@@ -1983,9 +1982,9 @@ fn nested_same_ability_resumes_rebuild_the_dynamic_frame_dispatcher() {
         tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default())
     }
     .unwrap();
-    let converted = print_module(&ctx, module.op());
+    let converted = module.op().display(&ctx).to_string();
     lower_continuation_frames(&mut ctx, module).unwrap();
-    assert_nested_resume_frames(&converted, &print_module(&ctx, module.op()));
+    assert_nested_resume_frames(&converted, &module.op().display(&ctx).to_string());
 }
 
 #[test]
@@ -2020,9 +2019,9 @@ fn nested_cross_ability_resumes_rebuild_the_dynamic_frame_dispatcher() {
         tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default())
     }
     .unwrap();
-    let converted = print_module(&ctx, module.op());
+    let converted = module.op().display(&ctx).to_string();
     lower_continuation_frames(&mut ctx, module).unwrap();
-    assert_nested_resume_frames(&converted, &print_module(&ctx, module.op()));
+    assert_nested_resume_frames(&converted, &module.op().display(&ctx).to_string());
 }
 #[test]
 fn op_to_never_uses_a_typed_zero_capture_reject_continuation() {
@@ -2110,7 +2109,7 @@ fn op_to_never_uses_a_typed_zero_capture_reject_continuation() {
     let body = ctx.region(body).blocks[0];
     assert!(func::Unreachable::matches(&ctx, ctx.block(body).ops[0]));
     crate::lower_ability_call::lower_ability_call(&mut ctx, module);
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert!(!printed.contains("ability.perform"), "{printed}");
     assert!(printed.contains("effect.dispatch_cps"), "{printed}");
     let mut dispatch_cps = None;
@@ -2178,7 +2177,7 @@ fn fn_operation_stays_evidence_direct_without_continuation_capture() {
     }
     .unwrap();
     lower_continuation_frames(&mut ctx, module).unwrap();
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert!(printed.contains("ability.call"));
     assert!(!printed.contains("ability.perform"));
     assert!(!printed.contains("tribute.ownership"));
@@ -2247,7 +2246,7 @@ fn textual_scf_switch_reenters_the_shared_suffix() {
         tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default())
     }
     .unwrap();
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert!(printed.contains("scf.index_switch"));
     assert!(printed.contains("case 0"));
     assert!(printed.contains("ability.perform"));
@@ -2340,7 +2339,7 @@ fn a_cps_call_in_a_callable_that_is_not_cps_runs_under_a_value_delimiter() {
         delimiters(&ctx, module, "with_evidence"),
         [(false, i32_type)]
     );
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert!(!printed.contains("ability.frame"), "{printed}");
 }
 
@@ -2371,7 +2370,7 @@ fn a_handle_in_a_direct_callable_runs_under_a_value_delimiter() {
     verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
     let i32_type = TypeDataBuilder::new("core.i32").intern(&mut ctx);
     assert_eq!(delimiters(&ctx, module, "run"), [(true, i32_type)]);
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     // The handle and its operation are in the delimited Cps closure.
     assert!(printed.contains("ability.handle_dispatch"), "{printed}");
     assert!(printed.contains("effect.dispatch_cps"), "{printed}");
@@ -2430,7 +2429,7 @@ fn legalization_drops_ability_rows_and_row_metadata() {
         let (mut ctx, module) = parse(input);
         run_pre_cps(&mut ctx, module).unwrap();
         verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
-        print_module(&ctx, module.op())
+        module.op().display(&ctx).to_string()
     };
     assert_eq!(legalize(with_rows), legalize(&without_rows));
 }
@@ -2459,7 +2458,7 @@ fn instantiate_legalizes_to_its_lambda() {
     let legalized = |input: String| {
         let (mut ctx, module) = parse(&input);
         run_pre_cps(&mut ctx, module).expect("legalizes");
-        print_module(&ctx, module.op())
+        module.op().display(&ctx).to_string()
     };
     let instantiated = legalized(module(
         "['a1]",
@@ -2548,7 +2547,7 @@ fn a_lambda_with_two_bodies_lifts_an_entry_per_body() {
     assert_eq!(ctx.op_operands(source.op_ref()).len(), 1);
 
     crate::lower_closure_lambda::lower_closure_lambda(&mut ctx, module);
-    let lifted = print_module(&ctx, module.op());
+    let lifted = module.op().display(&ctx).to_string();
     assert!(!lifted.contains("closure.lambda"), "{lifted}");
     let mut news = Vec::new();
     let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
@@ -2571,6 +2570,6 @@ fn a_lambda_with_two_bodies_lifts_an_entry_per_body() {
     );
     assert_eq!(ctx.op_operands(new.op_ref()).len(), 1, "{lifted}");
     crate::closure_lower::lower_prepared_closures(&mut ctx, module).unwrap();
-    let lowered = print_module(&ctx, module.op());
+    let lowered = module.op().display(&ctx).to_string();
     assert!(!lowered.contains("closure.new"), "{lowered}");
 }

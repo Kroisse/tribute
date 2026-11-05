@@ -80,7 +80,7 @@ mod tests {
         assert_eq!(pair.fields(&ctx), [i32_ty, ptr_ty]);
         let empty = super::Struct::from_type_ref(&ctx, alias(&ctx, "Empty")).expect("mem.struct");
         assert!(empty.fields(&ctx).is_empty());
-        let printed = crate::printer::print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(
             printed.contains("mem.struct<core.i32, core.ptr>"),
             "{printed}"

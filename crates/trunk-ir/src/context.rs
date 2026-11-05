@@ -2200,7 +2200,6 @@ mod tests {
 
     fn assert_clone_is_independent(clone_context: fn(&IrContext) -> IrContext) {
         use crate::parser::parse_test_module;
-        use crate::printer::print_module;
 
         let mut ctx = IrContext::new();
         let module = parse_test_module(
@@ -2214,12 +2213,12 @@ mod tests {
   }
 }"#,
         );
-        let original_text = print_module(&ctx, module.op());
+        let original_text = module.op().display(&ctx).to_string();
 
         let mut clone = clone_context(&ctx);
         assert_ne!(clone.analysis_stamp().0, ctx.analysis_stamp().0);
         assert_eq!(clone.analysis_stamp().1, ctx.analysis_stamp().1);
-        assert_eq!(print_module(&clone, module.op()), original_text);
+        assert_eq!(module.op().display(&clone).to_string(), original_text);
 
         // Redirect the negation to the other constant in the clone only.
         let func_body = clone.op_region(module.op(), 0).unwrap();
@@ -2233,19 +2232,18 @@ mod tests {
         clone.replace_all_uses(one, two);
         TypeDataBuilder::new("core.i64").intern(&mut clone);
 
-        assert_eq!(print_module(&ctx, module.op()), original_text);
+        assert_eq!(module.op().display(&ctx).to_string(), original_text);
         assert_eq!(ctx.uses(one).len(), 1);
         assert!(ctx.uses(two).is_empty());
         assert!(clone.uses(one).is_empty());
         assert_eq!(clone.uses(two).len(), 1);
-        assert_ne!(print_module(&clone, module.op()), original_text);
+        assert_ne!(module.op().display(&clone).to_string(), original_text);
     }
 
     /// Helper: parse IR, clone the first func's body region, add the
     /// clone as a new func, and print the whole module.
     fn clone_first_func_region(input: &str, new_name: &'static str) -> String {
         use crate::parser::parse_test_module;
-        use crate::printer::print_module;
 
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, input);
@@ -2280,7 +2278,7 @@ mod tests {
         let module_block = ctx.region(module_region).blocks[0];
         ctx.push_op(module_block, new_func_op);
 
-        print_module(&ctx, module.op())
+        module.op().display(&ctx).to_string()
     }
 
     #[test]
@@ -2339,7 +2337,6 @@ mod tests {
     fn clone_external_values_passthrough() {
         // External values (defined outside the cloned region) pass through
         // unchanged. We test this by cloning a flat op directly.
-        use crate::printer::print_op;
 
         let mut ctx = IrContext::new();
         let loc = test_location(&mut ctx);
@@ -2364,7 +2361,10 @@ mod tests {
         assert_eq!(ctx.op_operands(cloned), &[ext_val]);
 
         // Both original and clone should print the same textual form
-        assert_eq!(print_op(&ctx, op), print_op(&ctx, cloned));
+        assert_eq!(
+            op.display(&ctx).to_string(),
+            cloned.display(&ctx).to_string()
+        );
     }
 
     #[test]

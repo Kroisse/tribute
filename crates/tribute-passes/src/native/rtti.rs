@@ -1003,7 +1003,6 @@ mod tests {
     use trunk_ir::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder};
     use trunk_ir::dialect::core;
     use trunk_ir::dialect::func;
-    use trunk_ir::printer::print_module;
     use trunk_ir::rewrite::Module;
     use trunk_ir::types::Attribute;
 
@@ -1174,7 +1173,7 @@ mod tests {
         generate_rtti(&mut ctx, module, &tc).expect("declared layouts");
         assert!(tribute_rtti::Layout::declared_indices(&ctx, module).is_empty());
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         let int_release = output
             .split("clif.func @__tribute_release_3(")
             .nth(1)
@@ -1290,7 +1289,7 @@ mod tests {
         declare_planned_layouts(&mut ctx, module);
         generate_rtti(&mut ctx, module, &tc).expect("declared layouts");
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         let release_function = |index: u32| {
             let start = output
                 .find(&format!("clif.func @{RELEASE_FN_PREFIX}{index}("))
@@ -1323,7 +1322,7 @@ mod tests {
         declare_planned_layouts(&mut ctx, module);
         generate_rtti(&mut ctx, module, &tc).expect("declared layouts");
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         insta::assert_snapshot!(output);
     }
 
@@ -1341,7 +1340,7 @@ mod tests {
         declare_planned_layouts(&mut ctx, module);
         generate_rtti(&mut ctx, module, &tc).expect("declared layouts");
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         insta::assert_snapshot!(output);
     }
 
@@ -1444,7 +1443,7 @@ mod tests {
         assert!(indices.contains_key(&(node_ty, None)));
 
         // Should generate both release functions
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         let point_idx = indices[&(point_ty, None)];
         let node_idx = indices[&(node_ty, None)];
         assert!(output.contains(&format!("__tribute_release_{point_idx}")));
@@ -1465,7 +1464,7 @@ mod tests {
         declare_planned_layouts(&mut ctx, module);
         generate_rtti(&mut ctx, module, &tc).expect("declared layouts");
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         // The closure's release function releases only the env field, not
         // func_ptr.
         let index = tribute_rtti::Layout::declared_indices(&ctx, module)[&(closure_ty, None)];

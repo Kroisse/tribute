@@ -170,7 +170,7 @@ fn main() -> Nil {
     let (ctx, module) = compile_specialized_frontend(db, source)
         .expect("class specialization accepts frontend output")
         .expect("production frontend should lower");
-    let ir = trunk_ir::printer::print_module(&ctx, module.op());
+    let ir = module.op().display(&ctx).to_string();
     let main = ir
         .split("tribute_cps.func @\"pkg::main\"")
         .nth(1)
@@ -216,7 +216,7 @@ fn main() ->{Io} Nil {
     let (ctx, module) = compile_specialized_frontend(db, source)
         .expect("class specialization accepts frontend output")
         .expect("production frontend should lower");
-    let ir = trunk_ir::printer::print_module(&ctx, module.op());
+    let ir = module.op().display(&ctx).to_string();
     let main = ir
         .split("tribute_cps.func @\"pkg::main\"")
         .nth(1)
@@ -270,7 +270,7 @@ fn main() -> Nil {
     let (ctx, module) = compile_specialized_frontend(db, source)
         .expect("class specialization accepts frontend output")
         .expect("production frontend should lower");
-    let ir = trunk_ir::printer::print_module(&ctx, module.op());
+    let ir = module.op().display(&ctx).to_string();
     assert!(ir.contains("call @\"pkg::countdown$9D\"("), "{ir}");
     let instance = ir
         .split("tribute_cps.func @\"pkg::countdown$9D\"")
@@ -337,7 +337,7 @@ fn main() ->{Io} Nil {
     let (ctx, module) = compile_specialized_frontend(db, source)
         .expect("class specialization accepts frontend output")
         .expect("production frontend should lower");
-    let ir = trunk_ir::printer::print_module(&ctx, module.op());
+    let ir = module.op().display(&ctx).to_string();
     let function = |name: &str| {
         ir.split(&format!("tribute_cps.func @\"{name}\""))
             .nth(1)
@@ -394,7 +394,7 @@ fn main() ->{Io} Nil {
     let (ctx, module) = compile_specialized_frontend(db, source)
         .expect("class specialization accepts frontend output")
         .expect("production frontend should lower");
-    let ir = trunk_ir::printer::print_module(&ctx, module.op());
+    let ir = module.op().display(&ctx).to_string();
     let function = |name: &str| {
         ir.split(&format!("tribute_cps.func {name}["))
             .nth(1)
@@ -453,7 +453,7 @@ fn main() ->{Io} Nil {
     let (ctx, module) = compile_specialized_frontend(db, source)
         .expect("class specialization accepts frontend output")
         .expect("production frontend should lower");
-    let ir = trunk_ir::printer::print_module(&ctx, module.op());
+    let ir = module.op().display(&ctx).to_string();
     let main = ir
         .split("tribute_cps.func @\"pkg::main\"[")
         .nth(1)
@@ -494,7 +494,7 @@ fn main() -> Nil {
     let (ctx, module) = compile_specialized_frontend(db, source)
         .expect("class specialization accepts frontend output")
         .expect("production frontend should lower");
-    let ir = trunk_ir::printer::print_module(&ctx, module.op());
+    let ir = module.op().display(&ctx).to_string();
     // `main` has no class variables, so each lambda appears once.
     let quantified: Vec<Vec<&str>> = ir
         .split("tribute_cps.lambda[")
@@ -537,7 +537,7 @@ fn main() -> Nil {
     let (ctx, module) = compile_specialized_frontend(db, source)
         .expect("class specialization accepts frontend output")
         .expect("production frontend should lower");
-    let ir = trunk_ir::printer::print_module(&ctx, module.op());
+    let ir = module.op().display(&ctx).to_string();
     let run = ir
         .split("tribute_cps.func @\"pkg::run\"")
         .nth(1)
@@ -575,7 +575,7 @@ fn main() -> Nil {
     let (ctx, module) = compile_specialized_frontend(db, source)
         .expect("class specialization accepts frontend output")
         .expect("production frontend should lower");
-    let ir = trunk_ir::printer::print_module(&ctx, module.op());
+    let ir = module.op().display(&ctx).to_string();
     let run = ir
         .split("tribute_cps.func @\"pkg::run$9D\"")
         .nth(1)
@@ -680,7 +680,7 @@ fn main() -> Nil {
         tribute_passes::check_convention_classes::check(&ctx, module),
         []
     );
-    let ir = trunk_ir::printer::print_module(&ctx, module.op());
+    let ir = module.op().display(&ctx).to_string();
     let after = ir
         .split("tribute_cps.func @\"pkg::after$9D\"")
         .nth(1)

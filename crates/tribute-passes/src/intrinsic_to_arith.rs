@@ -429,7 +429,6 @@ fn exact_signature(
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
 
     #[test]
     fn intrinsic_decl_gets_real_body() {
@@ -449,7 +448,7 @@ mod tests {
 
         lower_intrinsic_to_arith(&mut ctx, module);
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         // The declaration should still exist with a real body (not erased)
         assert!(
             output.contains(r#"@"std::Nat::+""#),
@@ -489,7 +488,7 @@ mod tests {
 
         lower_intrinsic_to_arith(&mut ctx, module);
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(
             output.contains("arith.cmpi"),
             "body should have arith.cmpi:\n{output}"
@@ -519,7 +518,7 @@ mod tests {
         );
 
         lower_intrinsic_to_arith(&mut ctx, module);
-        let after = print_module(&ctx, module.op());
+        let after = module.op().display(&ctx).to_string();
 
         assert!(after.contains("arith.addi"), "{after}");
         assert!(!after.contains(r#"@"std::Nat::+""#), "{after}");
@@ -544,7 +543,7 @@ mod tests {
         );
 
         lower_intrinsic_to_arith(&mut ctx, module);
-        let after = print_module(&ctx, module.op());
+        let after = module.op().display(&ctx).to_string();
 
         assert!(
             after.contains(r#"func.func @"std::Nat::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32 attributes {abi = "intrinsic"}"#)
@@ -569,9 +568,9 @@ mod tests {
         "#,
         );
 
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
         lower_intrinsic_to_arith(&mut ctx, module);
-        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
     }
 
     #[test]
@@ -595,9 +594,9 @@ mod tests {
         "#,
         );
 
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
         lower_intrinsic_to_arith(&mut ctx, module);
-        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
     }
 
     #[test]
@@ -623,7 +622,7 @@ mod tests {
 
         lower_intrinsic_to_arith(&mut ctx, module);
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         // Direct call should be replaced by arith.addi in @caller
         assert!(
             output.contains("arith.addi"),

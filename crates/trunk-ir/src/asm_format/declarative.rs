@@ -1331,7 +1331,6 @@ mod tests {
     use crate::op_flag::IsolatedFromAbove;
     use crate::ops::DialectOp;
     use crate::parser::{parse_module, parse_test_module};
-    use crate::printer::print_module;
     use crate::types::Attribute;
 
     /// A speed stored as a flag, `true` for `fast`, written as its keyword.
@@ -1491,17 +1490,17 @@ mod tests {
     fn assert_round_trip(text: &str) {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, text);
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert_eq!(printed, text);
         let mut reparsed_ctx = IrContext::new();
         let reparsed = parse_test_module(&mut reparsed_ctx, &printed);
-        assert_eq!(print_module(&reparsed_ctx, reparsed.op()), printed);
+        assert_eq!(reparsed.op().display(&reparsed_ctx).to_string(), printed);
     }
 
     fn print(text: &str) -> String {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, text);
-        print_module(&ctx, module.op())
+        module.op().display(&ctx).to_string()
     }
 
     fn parse_error(text: &str) -> String {
@@ -1623,7 +1622,7 @@ mod tests {
         // The printer leaves out a stored default, however it was stored.
         let first = picks[0].op_ref();
         ctx.op_attrs_mut(first).insert("n", Attribute::Int(3));
-        assert_eq!(print_module(&ctx, module.op()), canonical);
+        assert_eq!(module.op().display(&ctx).to_string(), canonical);
 
         let loc = ctx.op(first).location;
         let default = Pick::operands().n(3).label("none").build(&mut ctx, loc);

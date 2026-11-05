@@ -695,7 +695,7 @@ mod tests {
             .unwrap();
 
         assert!(result.reached_fixpoint);
-        let printed = trunk_ir::printer::print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(!printed.contains("unrealized_conversion_cast"), "{printed}");
         assert!(
             printed.contains("wasm.ref_upcast %0 : wasm.anyref"),
@@ -750,7 +750,7 @@ mod tests {
             .add_pattern(trunk_ir::conversion::UnrealizedCastConversionPattern)
             .apply_partial(&mut ctx, module);
 
-        let printed = trunk_ir::printer::print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(!printed.contains("unrealized_conversion_cast"), "{printed}");
         assert!(printed.contains("wasm.nop"), "{printed}");
     }
@@ -797,7 +797,7 @@ mod tests {
 
         convert_builtin_layouts(&mut ctx, module);
 
-        let printed = trunk_ir::printer::print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(!printed.contains("tribute_rt."), "{printed}");
         assert!(
             printed.contains(

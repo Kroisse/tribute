@@ -211,7 +211,6 @@ mod tests {
     use crate::OperationDataBuilder;
     use crate::dialect::core;
     use crate::parser::parse_test_module;
-    use crate::printer::print_module;
     use crate::rewrite::TypeConverter;
     use crate::rewrite::type_converter::MaterializeResult;
 
@@ -225,8 +224,8 @@ mod tests {
         let mut expected_ctx = IrContext::new();
         let expected_module = parse_test_module(&mut expected_ctx, expected);
         assert_eq!(
-            print_module(ctx, module.op()),
-            print_module(&expected_ctx, expected_module.op())
+            module.op().display(ctx).to_string(),
+            expected_module.op().display(&expected_ctx).to_string()
         );
     }
 
@@ -308,7 +307,7 @@ mod tests {
         apply_cast_pattern(&mut ctx, module, tc);
 
         assert_eq!(cast_count(&ctx, module), 0);
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(printed.contains("test.box"), "{printed}");
     }
 

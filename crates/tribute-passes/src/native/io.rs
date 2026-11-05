@@ -308,7 +308,6 @@ impl trunk_ir::pass::Pass for IoToNative {
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
 
     #[test]
     fn lowers_native_io_and_builds_read_line_variants() {
@@ -331,7 +330,7 @@ mod tests {
 
         lower(&mut ctx, module).expect("native I/O lowering");
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(!output.contains("tribute_io."), "{output}");
         assert!(
             output.contains("func.call @__tribute_io_write("),

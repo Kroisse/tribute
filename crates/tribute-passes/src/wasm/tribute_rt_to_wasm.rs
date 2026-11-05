@@ -556,7 +556,7 @@ mod tests {
 }"#,
         );
         lower(&mut ctx, module);
-        let ir = trunk_ir::printer::print_module(&ctx, module.op());
+        let ir = module.op().display(&ctx).to_string();
         assert!(
             ir.contains(r#"wasm.table {max = 4, min = 4, reftype = "funcref"}"#),
             "{ir}"
@@ -586,7 +586,7 @@ mod tests {
 }"#,
         );
         lower(&mut ctx, module);
-        let ir = trunk_ir::printer::print_module(&ctx, module.op());
+        let ir = module.op().display(&ctx).to_string();
         assert!(
             ir.contains(r#"wasm.table {max = 1, min = 1, reftype = "funcref"}"#),
             "{ir}"

@@ -957,16 +957,15 @@ mod tests {
     use super::*;
     use rustc_hash::FxHashMap as HashMap;
     use trunk_ir::parser::{parse_module, parse_test_module};
-    use trunk_ir::printer::print_module;
     use trunk_ir::rewrite::Module;
     use trunk_ir::validation::validate_operation_verifiers;
 
     /// Print `module`, parse the output, and check that it prints the same.
     fn assert_roundtrip(ctx: &IrContext, module: trunk_ir::refs::OpRef) {
-        let printed = print_module(ctx, module);
+        let printed = module.display(ctx).to_string();
         let mut reparsed = IrContext::new();
         let module = parse_module(&mut reparsed, &printed).expect("printed IR must parse");
-        assert_eq!(printed, print_module(&reparsed, module));
+        assert_eq!(printed, module.display(&reparsed).to_string());
     }
 
     fn array_schema_ok(body: &str) -> bool {
@@ -1099,7 +1098,7 @@ mod tests {
         assert_eq!(point.field_attrs(&ctx, 1).count(), 1);
         let empty = Struct::from_type_ref(&ctx, aliases["empty"]).unwrap();
         assert_eq!(empty.field_count(&ctx), 0);
-        let printed = print_module(&ctx, module);
+        let printed = module.display(&ctx).to_string();
         for expected in [
             "!point = adt.struct<Point(x: core.i32, y: core.i32 {k = @v})>",
             "adt.struct<\"Nested::Closure\"(func_ptr: func.func_sig<(core.i32) -> core.i32, {k = 1}>, env: core.tuple<core.ptr>), {layout = \"closure\"}>",
@@ -1123,7 +1122,7 @@ mod tests {
 }"#;
         let mut ctx = IrContext::new();
         let module = parse_module(&mut ctx, input).expect("struct types should parse");
-        let printed = print_module(&ctx, module);
+        let printed = module.display(&ctx).to_string();
         assert!(
             printed.contains("!_Marker = adt.struct<_Marker(a: core.i32)>"),
             "{printed}"
@@ -1179,7 +1178,7 @@ mod tests {
         );
         assert_eq!(built.variant_count(&ctx), 2);
 
-        let printed = print_module(&ctx, module);
+        let printed = module.display(&ctx).to_string();
         for expected in [
             "!option = adt.enum<Option { None(), Some(value: core.i32) }>",
             "adt.enum<\"geo::Shape\" { Dot(), Rect(core.f64, core.f64 {k = 1}), Named(label: core.ptr {k = 2}) }, {layout = \"x\"}>",
@@ -1320,12 +1319,11 @@ mod canonicalize_tests {
     use trunk_ir::ops::DialectOp;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::pass::PassManager;
-    use trunk_ir::printer::print_module;
     use trunk_ir::rewrite::Module;
     use trunk_ir::transforms::Canonicalize;
 
     fn count(ctx: &IrContext, module: Module, name: &str) -> usize {
-        print_module(ctx, module.op()).matches(name).count()
+        module.op().display(ctx).to_string().matches(name).count()
     }
 
     /// Forward struct reads and canonicalize; the flag tells whether the IR
@@ -1333,7 +1331,7 @@ mod canonicalize_tests {
     fn fold(input: &str) -> (IrContext, Module, bool) {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, input);
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
         let root = core::Module::from_op(&ctx, module.op()).expect("core.module");
         let mut pm = PassManager::new();
         pm.add_pass(ForwardStructGets)
@@ -1341,7 +1339,7 @@ mod canonicalize_tests {
             .add_pass(Canonicalize);
         pm.run(&mut ctx, root, &mut Default::default())
             .expect("fold passes");
-        let changed = print_module(&ctx, module.op()) != before;
+        let changed = module.op().display(&ctx).to_string() != before;
         (ctx, module, changed)
     }
 
@@ -1359,7 +1357,13 @@ mod canonicalize_tests {
         let (ctx, module, changed) = fold(PAIR);
         assert!(changed);
         assert_eq!(count(&ctx, module, "adt.struct_get"), 0);
-        assert!(print_module(&ctx, module.op()).contains("func.return %1"));
+        assert!(
+            module
+                .op()
+                .display(&ctx)
+                .to_string()
+                .contains("func.return %1")
+        );
     }
 
     #[test]

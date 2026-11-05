@@ -4,7 +4,6 @@
 use salsa_test_macros::salsa_test;
 use tribute::pipeline::compile_frontend;
 use tribute_front::SourceCst;
-use trunk_ir::printer::print_module;
 
 use super::common::assert_native_output;
 
@@ -36,7 +35,7 @@ fn main() ->{Io} Nil {
 fn a_user_std_module_has_its_own_symbols(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(db, "package_identity.trb", PROGRAM);
     let (ctx, module) = compile_frontend(db, source).expect("frontend output");
-    let ir = print_module(&ctx, module.op());
+    let ir = module.op().display(&ctx).to_string();
 
     assert!(
         ir.contains(r#"tribute_control.func @"pkg::std::Int::probe""#),

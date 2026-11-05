@@ -72,7 +72,6 @@ fn is_abstract_gc_reference(ctx: &IrContext, ty: TypeRef) -> bool {
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
     use trunk_ir::rewrite::{Module, PatternApplicator, TypeConverter};
 
     fn upcast(ctx: &mut IrContext, module: Module, tc: TypeConverter) {
@@ -87,8 +86,8 @@ mod tests {
         let mut expected_ctx = IrContext::new();
         let expected_module = parse_test_module(&mut expected_ctx, expected);
         assert_eq!(
-            print_module(ctx, module.op()),
-            print_module(&expected_ctx, expected_module.op())
+            module.op().display(ctx).to_string(),
+            expected_module.op().display(&expected_ctx).to_string()
         );
     }
 

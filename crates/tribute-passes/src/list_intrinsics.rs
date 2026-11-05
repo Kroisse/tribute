@@ -170,7 +170,6 @@ impl OpRewritePattern for PrependDeclarationPattern<'_> {
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
 
     #[test]
     fn lowers_specialized_prepend_and_removes_declaration() {
@@ -198,7 +197,7 @@ mod tests {
             .run(&mut ctx, core, &mut Default::default())
             .unwrap();
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(output.contains("list.prepend"), "{output}");
         assert!(
             !output.contains("std::collections::List::__tribute_list_prepend_intrinsic"),
@@ -231,7 +230,7 @@ mod tests {
             .run(&mut ctx, core, &mut Default::default())
             .unwrap();
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(!output.contains("list.prepend"), "{output}");
         assert!(output.contains("List::prepend"), "{output}");
     }
@@ -262,7 +261,7 @@ mod tests {
             .run(&mut ctx, core, &mut Default::default())
             .unwrap();
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(!output.contains("list.prepend"), "{output}");
         assert!(
             output.contains("std::collections::List::__tribute_list_prepend_intrinsic"),
@@ -300,7 +299,7 @@ mod tests {
             .run(&mut ctx, core, &mut Default::default())
             .unwrap();
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(!output.contains("list.prepend"), "{output}");
         assert!(output.contains("func.call"), "{output}");
         assert!(

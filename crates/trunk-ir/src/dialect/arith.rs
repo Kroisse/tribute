@@ -216,7 +216,7 @@ impl crate::ops::Verify for Constant {
             Err(format!(
                 "value {:?} does not fit result type {}",
                 self.value(ctx),
-                crate::printer::print_type(ctx, ty)
+                ty.display(ctx)
             )
             .into())
         }
@@ -281,8 +281,8 @@ fn verify_index_cast(ctx: &IrContext, op: OpRef) -> Result<(), String> {
     } else {
         Err(format!(
             "index cast converts between core.index and a fixed-width integer, not {} to {}",
-            crate::printer::print_type(ctx, from),
-            crate::printer::print_type(ctx, to)
+            from.display(ctx),
+            to.display(ctx)
         ))
     }
 }
@@ -700,7 +700,6 @@ mod canonicalize_tests {
     use super::*;
 
     use crate::parser::parse_test_module;
-    use crate::printer::print_module;
     use crate::rewrite::{ApplyResult, Module, PatternApplicator, TypeConverter};
     use crate::transforms::canonicalize::{FoldDispatchPattern, fold_ops_for_dialect};
     use crate::walk::{WalkAction, walk_op};
@@ -870,7 +869,7 @@ mod canonicalize_tests {
             count_ops(&ctx, module, crate::dialect::arith::Addi::NAME),
             0
         );
-        insta::assert_snapshot!(print_module(&ctx, module.op()));
+        insta::assert_snapshot!(module.op().display(&ctx).to_string());
     }
 
     #[test]
@@ -954,7 +953,7 @@ mod canonicalize_tests {
             count_ops(&ctx, module, crate::dialect::arith::Constant::NAME),
             2
         );
-        insta::assert_snapshot!(print_module(&ctx, module.op()));
+        insta::assert_snapshot!(module.op().display(&ctx).to_string());
     }
 
     #[test]
@@ -1016,7 +1015,7 @@ mod canonicalize_tests {
             count_ops(&ctx, module, crate::dialect::arith::Addi::NAME),
             0
         );
-        insta::assert_snapshot!(print_module(&ctx, module.op()));
+        insta::assert_snapshot!(module.op().display(&ctx).to_string());
     }
 
     #[test]
@@ -1628,7 +1627,6 @@ mod schema_tests {
 mod format_tests {
     use crate::context::IrContext;
     use crate::parser::parse_test_module;
-    use crate::printer::print_module;
 
     fn round_trip(body: &str) -> String {
         let input = format!(
@@ -1636,10 +1634,10 @@ mod format_tests {
         );
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, &input);
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         let mut reparsed = IrContext::new();
         let module = parse_test_module(&mut reparsed, &printed);
-        assert_eq!(print_module(&reparsed, module.op()), printed);
+        assert_eq!(module.op().display(&reparsed).to_string(), printed);
         printed
     }
 

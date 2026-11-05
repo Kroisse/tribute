@@ -155,7 +155,6 @@ mod tests {
     use super::*;
     use tribute_ir::runtime_layout::has_runtime_layout;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
 
     #[test]
     fn layout_types_carry_their_identifiers() {
@@ -185,7 +184,7 @@ mod tests {
 
         lower(&mut ctx, module).expect("bytes intrinsic lowering");
 
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(!printed.contains("func.call"), "{printed}");
         assert!(!printed.contains("@read"), "{printed}");
         assert!(!printed.contains("tribute.compiler_intrinsic"), "{printed}");

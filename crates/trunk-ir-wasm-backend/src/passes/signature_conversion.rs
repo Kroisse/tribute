@@ -301,7 +301,7 @@ mod tests {
         let signature = wasm::func_sig(&mut ctx, [i32, i32], []).as_type_ref();
         let func = make_wasm_func(&mut ctx, loc, "bad", signature, &[i32]);
         let module = make_module(&mut ctx, loc, vec![func]);
-        let before = trunk_ir::printer::print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
 
         let result = PatternApplicator::new(i32_to_i64(i32, i64))
             .add_pattern(WasmFuncSignatureConversionPattern)
@@ -313,7 +313,7 @@ mod tests {
         assert_eq!(function.r#type(&ctx), signature);
         let entry = ctx.region(function.body(&ctx)).blocks[0];
         assert_eq!(ctx.value_ty(ctx.block_arg(entry, 0)), i32);
-        assert_eq!(trunk_ir::printer::print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
     }
 
     #[test]
@@ -325,7 +325,7 @@ mod tests {
         let bad = ctx.intern_str("bad");
         let func = make_bodyless_wasm_func(&mut ctx, loc, bad, malformed);
         let module = make_module(&mut ctx, loc, vec![func]);
-        let before = trunk_ir::printer::print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
 
         let result = PatternApplicator::new(i32_to_i64(i32, i64))
             .add_pattern(WasmFuncSignatureConversionPattern)
@@ -337,6 +337,6 @@ mod tests {
             ctx.op_attrs(module.ops(&ctx)[0]).get_type("type"),
             Some(malformed)
         );
-        assert_eq!(trunk_ir::printer::print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
     }
 }

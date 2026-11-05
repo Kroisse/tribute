@@ -922,7 +922,6 @@ mod tests {
     use crate::op_interface::{DynCallableExit, DynIndirectCallLike};
     use crate::ops::DialectOp;
     use crate::parser::parse_test_module;
-    use crate::printer::print_module;
 
     fn parse_raw_signature(text: &str) -> RawType<'_> {
         use winnow::prelude::*;
@@ -991,7 +990,7 @@ mod tests {
 }"#;
         let mut ctx = crate::IrContext::new();
         let module = parse_test_module(&mut ctx, input);
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(
             printed.contains("!generic = func.func_sig<(core.i32 {a = 1}) -> core.i64>"),
             "{printed}"
@@ -1011,11 +1010,11 @@ mod tests {
         let signature = FuncSig::from_type_ref(&ctx, function.r#type(&ctx)).expect("signature");
         assert_eq!(signature.call_conv(&ctx), Some(CallConv::Tail));
 
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(printed.contains("call_conv = \"tail\""), "{printed}");
         let mut reparsed_ctx = crate::IrContext::new();
         let reparsed = parse_test_module(&mut reparsed_ctx, &printed);
-        assert_eq!(print_module(&reparsed_ctx, reparsed.op()), printed);
+        assert_eq!(reparsed.op().display(&reparsed_ctx).to_string(), printed);
     }
 
     #[test]
@@ -1106,7 +1105,7 @@ mod tests {
             "declared signature"
         );
 
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(
             printed.contains("func.call_indirect %0(%1) : (core.i32) -> core.i32"),
             "{printed}"
@@ -1207,7 +1206,6 @@ mod result_list_tests {
     use crate::SymbolPath;
     use crate::dialect::core;
     use crate::parser::parse_module;
-    use crate::printer::print_module;
     use crate::rewrite::Module;
     use crate::validation::validate_all;
 
@@ -1220,7 +1218,7 @@ mod result_list_tests {
                         format!("core.module @m {{ func.func @f({inputs}){result}{body} }}");
                     let mut ctx = IrContext::new();
                     let op = parse_module(&mut ctx, &input).unwrap();
-                    let printed = print_module(&ctx, op);
+                    let printed = op.display(&ctx).to_string();
                     let copy = parse_module(&mut ctx, &printed).unwrap();
                     let a = Module::new(&ctx, op).unwrap().ops(&ctx)[0];
                     let b = Module::new(&ctx, copy).unwrap().ops(&ctx)[0];
@@ -1228,7 +1226,7 @@ mod result_list_tests {
                         ctx.op_attrs(a).get_type("type"),
                         ctx.op_attrs(b).get_type("type")
                     );
-                    assert_eq!(print_module(&ctx, copy), printed);
+                    assert_eq!(copy.display(&ctx).to_string(), printed);
                 }
             }
         }
@@ -1238,7 +1236,7 @@ mod result_list_tests {
         ] {
             let mut ctx = IrContext::new();
             let op = parse_module(&mut ctx, input).unwrap();
-            let printed = print_module(&ctx, op);
+            let printed = op.display(&ctx).to_string();
             assert!(printed.contains("tag = @kept"), "{printed}");
             let copy = parse_module(&mut ctx, &printed).unwrap();
             let a = Module::new(&ctx, op).unwrap().ops(&ctx)[0];

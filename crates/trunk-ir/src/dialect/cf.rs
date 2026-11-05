@@ -216,7 +216,6 @@ impl Branch for Switch {
 mod tests {
     use crate::IrContext;
     use crate::parser::parse_test_module;
-    use crate::printer::print_module;
 
     #[test]
     fn switch_writes_its_type_and_default_first_as_mlir_does() {
@@ -234,6 +233,6 @@ mod tests {
 "#;
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, text);
-        assert_eq!(print_module(&ctx, module.op()), text);
+        assert_eq!(module.op().display(&ctx).to_string(), text);
     }
 }

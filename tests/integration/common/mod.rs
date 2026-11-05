@@ -739,5 +739,5 @@ pub fn specialized_frontend_ir(db: &dyn salsa::Database, source: SourceCst) -> S
         .expect("class specialization accepts frontend output");
     let disagreements = tribute_passes::check_convention_classes::check(&ctx, module);
     assert!(disagreements.is_empty(), "{disagreements:?}");
-    trunk_ir::printer::print_module(&ctx, module.op())
+    module.op().display(&ctx).to_string()
 }

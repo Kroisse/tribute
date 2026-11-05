@@ -835,10 +835,7 @@ pub fn dump_ir(
 fn dump_staged(db: &dyn salsa::Database, staged: StagedCompilation) -> Result<String, DumpIrError> {
     report_context_diagnostics(db, &staged.context);
     staged.result?;
-    Ok(trunk_ir::printer::print_module(
-        &staged.context,
-        staged.module.op(),
-    ))
+    Ok(staged.module.op().display(&staged.context).to_string())
 }
 
 #[salsa::tracked(returns(as_ref))]
