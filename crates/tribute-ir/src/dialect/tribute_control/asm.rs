@@ -1,30 +1,29 @@
 //! Custom assembly of `tribute_control.func` and `tribute_control.lambda`.
 
 use super::*;
+use fmt::Write as _;
+use trunk_ir::printer::{
+    AsmNamer, OpAsmPrinter, display_symbol_ref, display_symbol_text, entry_args,
+};
 
 // === Custom assembly: tribute_control.func ===
 
-pub(super) fn print_row(
-    h: &mut dyn trunk_ir::asm_format::SignatureWriter,
-    row: &Row,
-) -> fmt::Result {
-    if row.is_empty() {
-        return Ok(());
-    }
-    write!(h, " row(")?;
-    for (index, instance) in row.instances.iter().enumerate() {
-        if index > 0 {
-            write!(h, ", ")?;
+/// ` row(@A, @B | 'a0)`, or nothing for an empty row.
+pub(super) fn display_row(row: &Row) -> impl fmt::Display + '_ {
+    fmt::from_fn(move |f| {
+        if row.is_empty() {
+            return Ok(());
         }
-        h.write_attribute(&Attribute::SymbolRef(instance.clone()))?;
-    }
-    if let Some(tail) = row.tail {
-        if !row.instances.is_empty() {
-            write!(h, " ")?;
+        let instances = row.instances.iter().map(display_symbol_ref).format(", ");
+        write!(f, " row({instances}")?;
+        if let Some(tail) = row.tail {
+            if !row.instances.is_empty() {
+                f.write_str(" ")?;
+            }
+            write!(f, "| 'a{tail}")?;
         }
-        write!(h, "| 'a{tail}")?;
-    }
-    write!(h, ")")
+        f.write_str(")")
+    })
 }
 
 /// A definition's row binders as its header declares them, or `None` when
@@ -61,36 +60,38 @@ impl BinderHeader {
             inferred,
         })
     }
+}
 
-    fn print(&self, h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>) -> fmt::Result {
-        use fmt::Write;
+/// The binder list `['a0, effect 'a1 = 'a0 | 'a2]`, or nothing without
+/// binders.
+impl fmt::Display for BinderHeader {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.binders.is_empty() {
             return Ok(());
         }
-        write!(h, "[")?;
-        for (index, binder) in self.binders.iter().enumerate() {
-            if index > 0 {
-                write!(h, ", ")?;
-            }
-            if *binder != RowBinder::Param {
-                write!(h, "{} ", binder.keyword())?;
-            }
-            write!(h, "'a{index}")?;
-            let union = self
-                .unions
-                .iter()
-                .find(|union| usize::try_from(union.result).ok() == Some(index));
-            if let Some(union) = union {
-                write!(h, " = ")?;
-                for (position, source) in union.sources.iter().enumerate() {
-                    if position > 0 {
-                        write!(h, " | ")?;
-                    }
-                    write!(h, "'a{source}")?;
+        let binders = self
+            .binders
+            .iter()
+            .enumerate()
+            .format_with(", ", |(index, binder), f| {
+                if *binder != RowBinder::Param {
+                    f(&format_args!("{} ", binder.keyword()))?;
                 }
-            }
-        }
-        write!(h, "]")
+                f(&format_args!("'a{index}"))?;
+                let union = self
+                    .unions
+                    .iter()
+                    .find(|union| usize::try_from(union.result).ok() == Some(index));
+                if let Some(union) = union {
+                    let sources = union
+                        .sources
+                        .iter()
+                        .format_with(" | ", |source, f| f(&format_args!("'a{source}")));
+                    f(&format_args!(" = {sources}"))?;
+                }
+                Ok(())
+            });
+        write!(f, "[{binders}]")
     }
 }
 
@@ -210,113 +211,87 @@ fn has_concise_func_sig(ctx: &IrContext, ty: Option<TypeRef>) -> bool {
         .is_some_and(|signature| !signature.has_nonreserved_attrs(ctx))
 }
 
-fn print_extra_attributes(
-    h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>,
-    op: OpRef,
-    excluded: &[&str],
-) -> fmt::Result {
-    use fmt::Write;
-    let ctx = h.ctx();
-    let attrs: Vec<_> = ctx
+/// ` attributes {..}` holding the attributes other than `excluded`, or
+/// nothing.
+fn print_extra_attributes(p: &mut OpAsmPrinter<'_>, op: OpRef, excluded: &[&str]) -> fmt::Result {
+    let s = p.state();
+    let mut attrs = s
+        .ctx()
         .op_attrs(op)
         .iter()
         .filter(|(key, _)| !excluded.contains(key))
-        .collect();
-    if attrs.is_empty() {
+        .peekable();
+    if attrs.peek().is_none() {
         return Ok(());
     }
-    write!(h, " attributes {{")?;
-    for (index, (key, value)) in attrs.iter().enumerate() {
-        if index > 0 {
-            write!(h, ", ")?;
-        }
-        write!(h, "{key} = ")?;
-        h.write_attribute(value)?;
-    }
-    write!(h, "}}")
+    let attrs = attrs.format_with(", ", |(key, value), f| {
+        f(&format_args!("{key} = {}", s.attr(value)))
+    });
+    write!(p, " attributes {{{attrs}}}")
 }
 
+/// The parameters of a header, `(%a: A, ..)`: the entry block arguments of
+/// `region`, or without one, `param_types` named by position.
 fn print_signature_params(
-    h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>,
+    p: &mut OpAsmPrinter<'_>,
     region: Option<RegionRef>,
     param_types: &[TypeRef],
 ) -> fmt::Result {
-    use fmt::Write;
-    write!(h, "(")?;
-    if let Some(region) = region {
-        let args = h
-            .ctx()
-            .region(region)
-            .blocks
-            .first()
-            .map(|block| h.ctx().block_args(*block).to_vec())
-            .unwrap_or_default();
-        for (index, arg) in args.iter().copied().enumerate() {
-            if index > 0 {
-                write!(h, ", ")?;
-            }
-            let name = h.assign_value_name(arg);
-            write!(h, "{name}: ")?;
-            h.write_type(h.ctx().value_ty(arg))?;
-        }
-    } else {
-        for (index, ty) in param_types.iter().copied().enumerate() {
-            if index > 0 {
-                write!(h, ", ")?;
-            }
-            write!(h, "%arg{index}: ")?;
-            h.write_type(ty)?;
+    let s = p.state();
+    match region {
+        Some(region) => write!(p, "{}", s.entry_args(region)),
+        None => {
+            let params = param_types
+                .iter()
+                .enumerate()
+                .format_with(", ", |(index, &ty), f| {
+                    f(&format_args!("%arg{index}: {}", s.ty(ty)))
+                });
+            write!(p, "({params})")
         }
     }
-    write!(h, ")")
 }
 
 /// Print a source function as `name`, with the convention the operation
 /// declares, if any.
 pub(crate) fn print_func(
-    h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>,
+    p: &mut OpAsmPrinter<'_>,
     op: OpRef,
     name: &str,
     convention: Option<CallingConvention>,
 ) -> fmt::Result {
-    use fmt::Write;
-
-    let symbol = h.ctx().op_attrs(op).get_str("sym_name");
-    let callable_ty = h.ctx().op_attrs(op).get_type("type");
-    let region = h.ctx().op_region(op, 0);
-    let header = BinderHeader::of(h.ctx(), op);
-    let Some(header) = header.filter(|_| has_concise_func_sig(h.ctx(), callable_ty)) else {
-        return h.print_generic(op);
+    let s = p.state();
+    let ctx = s.ctx();
+    let symbol = ctx.op_attrs(op).get_str("sym_name");
+    let callable_ty = ctx.op_attrs(op).get_type("type");
+    let region = ctx.op_region(op, 0);
+    let header = BinderHeader::of(ctx, op);
+    let Some(header) = header.filter(|_| has_concise_func_sig(ctx, callable_ty)) else {
+        return p.print_generic(op);
     };
-    let parts = callable_ty.and_then(|ty| func_sig_parts(h.ctx(), ty));
+    let parts = callable_ty.and_then(|ty| func_sig_parts(ctx, ty));
 
-    write!(h, "{name} ")?;
-    if let Some(symbol) = symbol {
-        h.write_symbol_text(symbol)?;
-    } else {
-        write!(h, "@<missing>")?;
+    match symbol {
+        Some(symbol) => write!(p, "{name} {}{header}", display_symbol_text(symbol))?,
+        None => write!(p, "{name} @<missing>{header}")?,
     }
-    header.print(h)?;
-    h.reset_numbering();
 
     let param_types = parts
         .as_ref()
         .map(|(_, params)| params.as_slice())
         .unwrap_or(&[]);
-    print_signature_params(h, region, param_types)?;
+    print_signature_params(p, region, param_types)?;
 
     if let Some((result, _)) = parts {
-        write!(h, " -> ")?;
-        h.write_type(result)?;
+        write!(p, " -> {}", s.ty(result))?;
         if let Some(ty) = callable_ty {
-            let row = FuncSig(ty).row(h.ctx());
-            print_row(h, &row)?;
+            write!(p, "{}", display_row(&FuncSig(ty).row(ctx)))?;
         }
         if header.inferred {
-            write!(h, " inferred")?;
+            write!(p, " inferred")?;
         }
         if let Some(convention) = convention {
-            write!(h, " convention({convention})")?;
+            write!(p, " convention({convention})")?;
         }
     }
     let mut excluded = vec![
@@ -330,10 +305,10 @@ pub(crate) fn print_func(
     if convention.is_some() {
         excluded.push(tribute_cps::CONVENTION_ATTR);
     }
-    print_extra_attributes(h, op, &excluded)?;
+    print_extra_attributes(p, op, &excluded)?;
 
     match region {
-        Some(region) => h.print_body(region),
+        Some(region) => p.print_body(region),
         None => Ok(()),
     }
 }
@@ -526,8 +501,8 @@ pub(crate) fn parse_func<'a>(
 }
 
 impl trunk_ir::asm_format::OpAsmFormat for Func {
-    fn print(&self, h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>) -> std::fmt::Result {
-        print_func(h, self.op_ref(), "tribute_control.func", None)
+    fn print(&self, p: &mut trunk_ir::printer::OpAsmPrinter<'_>) -> std::fmt::Result {
+        print_func(p, self.op_ref(), "tribute_control.func", None)
     }
 
     fn parse<'a>(
@@ -545,104 +520,99 @@ impl trunk_ir::asm_format::OpAsmFormat for Func {
 /// operation declares, each body is written under its convention in
 /// `entries`; without them, the one body follows the captures.
 pub(crate) fn print_lambda(
-    h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>,
+    p: &mut OpAsmPrinter<'_>,
     op: OpRef,
     name: &str,
     entries: Option<&[CallingConvention]>,
 ) -> fmt::Result {
-    use fmt::Write;
-
-    let result_types = h.ctx().op_result_types(op);
-    let callable_ty = result_types.first().copied();
-    // An empty list written out has no header form.
-    let quantified = quantified_rows(h.ctx(), op).ok().filter(|quantified| {
-        !quantified.is_empty() || !h.ctx().op_attrs(op).contains_key(QUANTIFIED_ROWS_ATTR)
-    });
-    let Some(quantified) = quantified
-        .filter(|_| result_types.len() == 1 && has_concise_func_sig(h.ctx(), callable_ty))
-    else {
-        return h.print_generic(op);
+    let s = p.state();
+    let ctx = s.ctx();
+    let callable_ty = ctx.op_result_types(op).first().copied();
+    let Some(quantified) = concise_lambda_rows(ctx, op) else {
+        return p.print_generic(op);
     };
 
-    let result = h.ctx().op_results(op).first().copied();
-    let result_name = result.map(|value| h.assign_value_name(value));
-    let parts = callable_ty.and_then(|ty| func_sig_parts(h.ctx(), ty));
-    let region = h.ctx().op_region(op, 0);
-
-    if let Some(name) = result_name {
-        write!(h, "{name} = ")?;
+    let results = ctx.op_results(op);
+    if !results.is_empty() {
+        write!(p, "{} = ", s.values(results))?;
     }
-    write!(h, "{name}")?;
+    p.write_str(name)?;
     if !quantified.is_empty() {
-        write!(h, "[")?;
-        for (index, binder) in quantified.iter().enumerate() {
-            if index > 0 {
-                write!(h, ", ")?;
-            }
-            write!(h, "'a{binder}")?;
-        }
-        write!(h, "]")?;
+        let binders = quantified
+            .iter()
+            .format_with(", ", |binder, f| f(&format_args!("'a{binder}")));
+        write!(p, "[{binders}]")?;
     }
 
+    let parts = callable_ty.and_then(|ty| func_sig_parts(ctx, ty));
+    let region = ctx.op_region(op, 0);
     let param_types = parts
         .as_ref()
         .map(|(_, params)| params.as_slice())
         .unwrap_or(&[]);
-    print_signature_params(h, region, param_types)?;
+    print_signature_params(p, region, param_types)?;
     if let Some((result, _)) = parts {
-        write!(h, " -> ")?;
-        h.write_type(result)?;
+        write!(p, " -> {}", s.ty(result))?;
         if let Some(ty) = callable_ty {
-            let row = FuncSig(ty).row(h.ctx());
-            print_row(h, &row)?;
+            write!(p, "{}", display_row(&FuncSig(ty).row(ctx)))?;
         }
     }
-    write!(h, " captures [")?;
-    let captures: Vec<String> = h
-        .ctx()
-        .op_operands(op)
-        .iter()
-        .map(|value| h.get_value_name(*value).to_owned())
-        .collect();
-    for (index, capture) in captures.iter().enumerate() {
-        if index > 0 {
-            write!(h, ", ")?;
-        }
-        write!(h, "{capture}")?;
-    }
-    write!(h, "]")?;
+    write!(p, " captures [{}]", s.values(ctx.op_operands(op)))?;
     let mut excluded = vec![CALLING_CONVENTION_ATTR, QUANTIFIED_ROWS_ATTR];
     if entries.is_some() {
         excluded.push(tribute_cps::CONVENTIONS_ATTR);
     }
-    print_extra_attributes(h, op, &excluded)?;
+    print_extra_attributes(p, op, &excluded)?;
 
     match (region, entries) {
-        (Some(first), Some(entries)) => {
-            // Every body takes the parameters the header names.
-            let ctx = h.ctx();
-            let entry_args = |region: RegionRef| {
-                ctx.region(region)
-                    .blocks
-                    .first()
-                    .map_or(&[][..], |&block| ctx.block_args(block))
-            };
-            let bodies: Vec<_> = ctx.op_regions(op).collect();
-            for &body in &bodies[1..] {
-                for (&arg, &like) in entry_args(body).iter().zip(entry_args(first)) {
-                    h.assign_value_name_like(arg, like);
-                }
-            }
-            write!(h, " entries")?;
-            h.print_labelled_bodies(
+        (Some(_), Some(entries)) => {
+            // Every body takes the parameters the header names, which
+            // `assign_lambda_names` gives them.
+            write!(p, " entries")?;
+            p.print_labelled_bodies(
                 entries
                     .iter()
                     .map(|convention| convention.keyword())
-                    .zip(bodies),
+                    .zip(ctx.op_regions(op)),
             )
         }
-        (Some(region), None) => h.print_body(region),
+        (Some(region), None) => p.print_body(region),
         (None, _) => Ok(()),
+    }
+}
+
+/// The quantified rows of a lambda its concise form writes, or `None` when
+/// it prints generically.
+fn concise_lambda_rows(ctx: &IrContext, op: OpRef) -> Option<Vec<u32>> {
+    let result_types = ctx.op_result_types(op);
+    // An empty list written out has no header form.
+    let quantified = quantified_rows(ctx, op).ok().filter(|quantified| {
+        !quantified.is_empty() || !ctx.op_attrs(op).contains_key(QUANTIFIED_ROWS_ATTR)
+    });
+    quantified.filter(|_| {
+        result_types.len() == 1 && has_concise_func_sig(ctx, result_types.first().copied())
+    })
+}
+
+/// Name a lambda as [`print_lambda`] writes it: with the conventions of its
+/// bodies, every body shares the parameters the header names.
+pub(crate) fn assign_lambda_names(namer: &mut AsmNamer<'_>, op: OpRef, entries: bool) {
+    let ctx = namer.ctx();
+    if !entries || concise_lambda_rows(ctx, op).is_none() {
+        return namer.default_op(op);
+    }
+    namer.results(op);
+    let bodies: Vec<_> = ctx.op_regions(op).collect();
+    let Some((&first, rest)) = bodies.split_first() else {
+        return;
+    };
+    let params = entry_args(ctx, first);
+    namer.values(params);
+    for &body in rest {
+        namer.share(entry_args(ctx, body), params);
+    }
+    for body in bodies {
+        namer.region_without_entry(body);
     }
 }
 
@@ -793,8 +763,12 @@ pub(crate) fn parse_lambda<'a>(
 }
 
 impl trunk_ir::asm_format::OpAsmFormat for Lambda {
-    fn print(&self, h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>) -> std::fmt::Result {
-        print_lambda(h, self.op_ref(), "tribute_control.lambda", None)
+    fn print(&self, p: &mut trunk_ir::printer::OpAsmPrinter<'_>) -> std::fmt::Result {
+        print_lambda(p, self.op_ref(), "tribute_control.lambda", None)
+    }
+
+    fn assign_names(&self, namer: &mut AsmNamer<'_>) {
+        assign_lambda_names(namer, self.op_ref(), false);
     }
 
     fn parse<'a>(

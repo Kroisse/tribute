@@ -39,27 +39,25 @@ trunk_ir::register_type_def!(&FUNC_SIG_DEF);
 /// row(@A | 'a0)>`. A signature with any other type attribute writes them
 /// all after a comma, as `func.func_sig` does.
 impl trunk_ir::asm_format::TypeAsmFormat for FuncSig {
-    fn print(&self, h: &mut trunk_ir::printer::TypePrintHelper<'_, '_>) -> fmt::Result {
+    fn print(&self, p: &mut trunk_ir::printer::AsmPrinter<'_>) -> fmt::Result {
         use fmt::Write;
-        use trunk_ir::asm_format::{write_signature_param, write_signature_results};
 
-        let ctx = h.ctx();
+        let s = p.state();
+        let ctx = s.ctx();
         if self.has_nonreserved_attrs(ctx) {
-            return trunk_ir::dialect::func::print_signature_type(h, self.0);
+            return trunk_ir::dialect::func::print_signature_type(p, self.0);
         }
-        let (inputs, result, row) = (self.inputs(ctx).to_vec(), self.result(ctx), self.row(ctx));
-        let no_attrs = AttributeMap::new();
-        h.write_str("tribute_control.func_sig<(")?;
-        for (index, &input) in inputs.iter().enumerate() {
-            if index > 0 {
-                h.write_str(", ")?;
-            }
-            write_signature_param(h, input, &no_attrs)?;
-        }
-        h.write_str(") -> ")?;
-        write_signature_results(h, &[(result, &no_attrs)])?;
-        print_row(h, &row)?;
-        h.write_char('>')
+        let inputs = self
+            .inputs(ctx)
+            .iter()
+            .map(|&input| s.ty(input))
+            .format(", ");
+        write!(
+            p,
+            "tribute_control.func_sig<({inputs}) -> {}{}>",
+            s.ty(self.result(ctx)),
+            display_row(&self.row(ctx))
+        )
     }
 
     fn parse<'a>(
@@ -112,7 +110,7 @@ impl trunk_ir::asm_format::SignatureCodec for FuncSig {
     }
 
     fn write_tail(
-        w: &mut dyn trunk_ir::asm_format::SignatureWriter,
+        p: &mut trunk_ir::printer::AsmPrinter<'_>,
         tail: &[(StringRef, &Attribute)],
     ) -> fmt::Result {
         let Some(&(_, Attribute::Dict(entries))) = tail.first() else {
@@ -134,7 +132,7 @@ impl trunk_ir::asm_format::SignatureCodec for FuncSig {
                 _ => {}
             }
         }
-        print_row(w, &row)
+        fmt::Write::write_fmt(p, format_args!("{}", display_row(&row)))
     }
 
     fn parse_tail<'a>(
@@ -412,67 +410,29 @@ impl FuncSigBuilder {
 mod signature_codec_tests {
     use super::*;
     use trunk_ir::asm_format::{
-        SignatureCodec, SignatureWriter, parse_signature_results, write_signature_param,
-        write_signature_results,
+        SignatureCodec, parse_signature_results, write_signature_param, write_signature_results,
     };
     use trunk_ir::parser::raw::{RawAttribute, RawType, raw_param_list, ws};
+    use trunk_ir::printer::{AsmPrinter, AsmState};
     use winnow::prelude::*;
-
-    struct Writer<'c> {
-        ctx: &'c IrContext,
-        out: String,
-    }
-
-    impl fmt::Write for Writer<'_> {
-        fn write_str(&mut self, s: &str) -> fmt::Result {
-            self.out.push_str(s);
-            Ok(())
-        }
-    }
-
-    impl SignatureWriter for Writer<'_> {
-        fn write_type(&mut self, ty: TypeRef) -> fmt::Result {
-            self.out
-                .push_str(&trunk_ir::printer::print_type(self.ctx, ty));
-            Ok(())
-        }
-
-        fn write_attribute(&mut self, attr: &Attribute) -> fmt::Result {
-            match attr {
-                Attribute::SymbolRef(path) => {
-                    use fmt::Write;
-                    write!(self, "@{path}")
-                }
-                _ => Err(fmt::Error),
-            }
-        }
-
-        fn write_attr_dict(
-            &mut self,
-            _: &mut dyn Iterator<Item = (StringRef, &Attribute)>,
-        ) -> fmt::Result {
-            Err(fmt::Error)
-        }
-    }
 
     fn function_form(ctx: &IrContext, ty: TypeRef) -> Option<String> {
         use fmt::Write;
         let parts = FuncSig::decompose(ctx, ty)?;
-        let mut w = Writer {
-            ctx,
-            out: String::new(),
-        };
-        w.write_char('(').ok()?;
+        let state = AsmState::without_aliases(ctx);
+        let mut out = String::new();
+        let mut p = AsmPrinter::new(&state, &mut out);
+        p.write_char('(').ok()?;
         for (index, &(input, attrs)) in parts.inputs.iter().enumerate() {
             if index > 0 {
-                w.write_str(", ").ok()?;
+                p.write_str(", ").ok()?;
             }
-            write_signature_param(&mut w, input, attrs).ok()?;
+            write_signature_param(&mut p, input, attrs).ok()?;
         }
-        w.write_str(") -> ").ok()?;
-        write_signature_results(&mut w, &parts.results).ok()?;
-        FuncSig::write_tail(&mut w, &parts.tail).ok()?;
-        Some(w.out)
+        p.write_str(") -> ").ok()?;
+        write_signature_results(&mut p, &parts.results).ok()?;
+        FuncSig::write_tail(&mut p, &parts.tail).ok()?;
+        Some(out)
     }
 
     fn attribute(ctx: &mut IrContext, raw: &RawAttribute<'_>) -> Attribute {

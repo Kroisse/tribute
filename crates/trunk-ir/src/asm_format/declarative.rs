@@ -9,6 +9,7 @@ use std::borrow::Cow;
 use std::fmt::{self, Write};
 use std::ops::Range;
 
+use itertools::Itertools as _;
 use winnow::combinator::{delimited, opt, preceded, repeat, separated};
 use winnow::error::{ContextError, ErrMode, StrContext, StrContextValue};
 use winnow::prelude::*;
@@ -24,7 +25,7 @@ use crate::parser::raw::{
     RawAttribute, RawOperation, RawParam, RawRegion, RawType, block_label, ident, raw_attr_dict,
     raw_param, raw_param_list, raw_region, raw_type, symbol_ref, value_ref, ws,
 };
-use crate::printer::OpPrintHelper;
+use crate::printer::{AsmNamer, OpAsmPrinter, display_symbol_text};
 use crate::types::Attribute;
 use crate::{BlockRef, IrContext, OpRef, TypeRef};
 
@@ -268,41 +269,119 @@ fn count_fits((fixed, variadic): (usize, bool), count: usize) -> bool {
 /// Print `op` with `format`, or generically when the format cannot spell it
 /// without loss.
 pub(crate) fn print(
-    h: &mut OpPrintHelper<'_, '_>,
+    p: &mut OpAsmPrinter<'_>,
     op: OpRef,
     def: &'static OpDef,
     format: &OpFormat,
 ) -> fmt::Result {
-    if !printable(h.ctx(), op, &def.schema, format) {
-        return h.print_generic(op);
+    let ctx = p.ctx();
+    if !printable(ctx, op, &def.schema, format) {
+        return p.print_generic(op);
     }
-    let ctx = h.ctx();
     let results = ctx.op_results(op);
     if !results.is_empty() {
-        for (index, &result) in results.iter().enumerate() {
-            if index > 0 {
-                h.write_str(", ")?;
-            }
-            let name = h.assign_value_name(result);
-            h.write_str(&name)?;
-        }
-        h.write_str(" = ")?;
+        write!(p, "{} = ", p.state().values(results))?;
     }
-    write!(h, "{}", ctx.op(op).name.display(ctx))?;
-    let print_elements = |h: &mut OpPrintHelper<'_, '_>| {
-        Printer {
-            h,
-            op,
-            schema: &def.schema,
-            format,
-            spacing: Spacing::Space,
-        }
-        .elements(format.elements)
+    write!(p, "{}", ctx.op(op).name.display(ctx))?;
+    Printer {
+        p,
+        op,
+        schema: &def.schema,
+        format,
+        spacing: Spacing::Space,
+    }
+    .elements(format.elements)
+}
+
+/// Name the values and blocks [`print`] writes, in the order it writes them.
+pub(crate) fn assign_names(
+    namer: &mut AsmNamer<'_>,
+    op: OpRef,
+    def: &'static OpDef,
+    format: &OpFormat,
+) {
+    if !printable(namer.ctx(), op, &def.schema, format) {
+        return namer.generic_op(op);
+    }
+    namer.results(op);
+    let mut naming = Naming {
+        op,
+        schema: &def.schema,
+        format,
     };
     if def.has_flag::<IsolatedFromAbove>() {
-        h.with_fresh_numbering(print_elements)
+        namer.fresh_scope(|namer| naming.elements(namer, format.elements));
     } else {
-        print_elements(h)
+        naming.elements(namer, format.elements);
+    }
+}
+
+/// The naming counterpart of [`Printer`].
+struct Naming<'f> {
+    op: OpRef,
+    schema: &'static OpSchema,
+    format: &'f OpFormat,
+}
+
+impl Naming<'_> {
+    fn elements(&mut self, namer: &mut AsmNamer<'_>, elements: &[FormatElement]) {
+        for element in elements {
+            self.element(namer, element);
+        }
+    }
+
+    fn element(&mut self, namer: &mut AsmNamer<'_>, element: &FormatElement) {
+        let ctx = namer.ctx();
+        let op = self.op;
+        match *element {
+            FormatElement::Region(index) => {
+                let count = ctx.op_region_count(op);
+                for position in region_range(self.schema, index, count) {
+                    let region = ctx
+                        .op_region(op, position)
+                        .expect("a region within the counted list");
+                    if signature_lists(self.format.elements, index) {
+                        namer.region_without_entry(region);
+                    } else {
+                        namer.region(region);
+                    }
+                }
+            }
+            FormatElement::Signature {
+                source,
+                regions,
+                codec,
+                ..
+            } if !regions.is_empty() => {
+                let ty = signature_type(ctx, op, self.schema, source)
+                    .expect("a printable signature is a type");
+                let parts = (codec.decompose)(ctx, ty).expect("a printable signature decomposes");
+                let entries = signature_entries(ctx, op, self.schema, regions);
+                if let Some((&first, rest)) = entries.split_first() {
+                    let args = &ctx.block_args(first)[..parts.inputs.len()];
+                    namer.values(args);
+                    for &other in rest {
+                        namer.share(&ctx.block_args(other)[..parts.inputs.len()], args);
+                    }
+                }
+            }
+            FormatElement::RegionArgs(index) => {
+                let region = ctx
+                    .op_region(op, index)
+                    .expect("a printable region with entry arguments is present");
+                namer.entry_args(region);
+            }
+            FormatElement::Custom { hooks, entities } => {
+                let entities = custom_entities(ctx, op, self.schema, entities);
+                (hooks.assign_names)(namer, &entities);
+            }
+            FormatElement::Optional { anchor, elements }
+                if anchor_present(ctx, op, self.schema, anchor) =>
+            {
+                self.elements(namer, elements);
+            }
+            _ => {}
+        }
     }
 }
 
@@ -315,15 +394,15 @@ enum Spacing {
     Punctuation,
 }
 
-struct Printer<'h, 'a, 'ctx> {
-    h: &'h mut OpPrintHelper<'a, 'ctx>,
+struct Printer<'p, 'a> {
+    p: &'p mut OpAsmPrinter<'a>,
     op: OpRef,
     schema: &'static OpSchema,
-    format: &'h OpFormat,
+    format: &'p OpFormat,
     spacing: Spacing,
 }
 
-impl Printer<'_, '_, '_> {
+impl Printer<'_, '_> {
     /// Start a token whose text begins with `first`, writing the space
     /// before it unless the spacing rules drop it.
     fn token(&mut self, first: char) -> fmt::Result {
@@ -333,7 +412,7 @@ impl Printer<'_, '_, '_> {
             _ => false,
         };
         if self.spacing != Spacing::Glue && !glued {
-            self.h.write_char(' ')?;
+            self.p.write_char(' ')?;
         }
         self.spacing = Spacing::Space;
         Ok(())
@@ -346,12 +425,13 @@ impl Printer<'_, '_, '_> {
     }
 
     fn element(&mut self, element: &FormatElement) -> fmt::Result {
-        let ctx = self.h.ctx();
+        let state = self.p.state();
+        let ctx = state.ctx();
         let op = self.op;
         match *element {
             FormatElement::Literal(text) => {
                 self.token(text.chars().next().unwrap_or(' '))?;
-                self.h.write_str(text)?;
+                self.p.write_str(text)?;
                 if text.ends_with(['(', '[']) {
                     self.spacing = Spacing::Glue;
                 } else if !is_keyword(text) {
@@ -366,14 +446,7 @@ impl Printer<'_, '_, '_> {
                     return Ok(());
                 }
                 self.token('%')?;
-                for (position, &value) in operands[range].iter().enumerate() {
-                    if position > 0 {
-                        self.h.write_str(", ")?;
-                    }
-                    let name = self.h.get_value_name(value).to_owned();
-                    self.h.write_str(&name)?;
-                }
-                Ok(())
+                write!(self.p, "{}", state.values(&operands[range]))
             }
             FormatElement::Attribute(index) => {
                 let attribute = &self.schema.attributes[index];
@@ -381,7 +454,7 @@ impl Printer<'_, '_, '_> {
                     return Ok(());
                 };
                 self.token('a')?;
-                (attribute.print_text)(self.h, value)
+                (attribute.print_text)(self.p, value)
             }
             FormatElement::Symbol(index) => {
                 let name = self.schema.attributes[index].name;
@@ -390,18 +463,18 @@ impl Printer<'_, '_, '_> {
                     .get_str(name)
                     .expect("a printable symbol attribute is a string");
                 self.token('@')?;
-                self.h.write_symbol_text(text)
+                write!(self.p, "{}", display_symbol_text(text))
             }
             FormatElement::OperandType(index) => {
                 let operands = ctx.op_operands(op);
                 let range = operand_range(self.schema, index, operands.len());
                 self.token('t')?;
-                self.h.write_type(ctx.value_ty(operands[range.start]))
+                write!(self.p, "{}", state.ty(ctx.value_ty(operands[range.start])))
             }
             FormatElement::ResultType(index) => {
                 let ty = ctx.op_result_types(op)[index];
                 self.token('t')?;
-                self.h.write_type(ty)
+                write!(self.p, "{}", state.ty(ty))
             }
             FormatElement::ResultTypes => {
                 let types = ctx.op_result_types(op);
@@ -409,23 +482,22 @@ impl Printer<'_, '_, '_> {
                     return Ok(());
                 }
                 self.token('t')?;
-                for (position, &ty) in types.iter().enumerate() {
-                    if position > 0 {
-                        self.h.write_str(", ")?;
-                    }
-                    self.h.write_type(ty)?;
-                }
-                Ok(())
+                write!(
+                    self.p,
+                    "{}",
+                    types.iter().map(|&ty| state.ty(ty)).format(", ")
+                )
             }
             FormatElement::AttrDict { bare } => {
                 let written = written_attributes(self.schema, self.format);
+                let schema = self.schema;
                 let mut rest = ctx
                     .op(op)
                     .attributes
                     .iter()
-                    .filter(|&(key, value)| {
+                    .filter(move |&(key, value)| {
                         let key = ctx.str(key);
-                        !written.contains(&key) && !self.schema.holds_default(ctx, key, value)
+                        !written.contains(&key) && !schema.holds_default(ctx, key, value)
                     })
                     .peekable();
                 if rest.peek().is_none() {
@@ -435,9 +507,9 @@ impl Printer<'_, '_, '_> {
                     self.token('{')?;
                 } else {
                     self.token('a')?;
-                    self.h.write_str("attributes ")?;
+                    self.p.write_str("attributes ")?;
                 }
-                self.h.write_attr_dict(rest)
+                write!(self.p, "{}", state.attr_dict(rest))
             }
             FormatElement::Region(index) => {
                 let count = ctx.op_region_count(op);
@@ -447,9 +519,9 @@ impl Printer<'_, '_, '_> {
                         .expect("a region within the counted list");
                     self.token('{')?;
                     if signature_lists(self.format.elements, index) {
-                        self.h.print_region_without_entry(region)?;
+                        self.p.print_region_without_entry(region)?;
                     } else {
-                        self.h.print_region(region)?;
+                        self.p.print_region(region)?;
                     }
                 }
                 Ok(())
@@ -461,17 +533,13 @@ impl Printer<'_, '_, '_> {
                     return Ok(());
                 }
                 self.token('^')?;
-                for (position, successor) in range.enumerate() {
-                    if position > 0 {
-                        self.h.write_str(", ")?;
-                    }
+                let labels = range.map(|successor| {
                     let block = ctx
                         .op_successor(op, successor)
                         .expect("a successor within the counted list");
-                    let label = self.h.block_label(block).to_owned();
-                    self.h.write_str(&label)?;
-                }
-                Ok(())
+                    state.block(block)
+                });
+                write!(self.p, "{}", labels.format(", "))
             }
             FormatElement::Custom { hooks, entities } => {
                 let entities = custom_entities(ctx, op, self.schema, entities);
@@ -480,7 +548,7 @@ impl Printer<'_, '_, '_> {
                 } else {
                     self.spacing = Spacing::Space;
                 }
-                (hooks.print)(self.h, &entities)
+                (hooks.print)(self.p, &entities)
             }
             FormatElement::Signature {
                 source,
@@ -493,65 +561,48 @@ impl Printer<'_, '_, '_> {
                 let parts = (codec.decompose)(ctx, ty).expect("a printable signature decomposes");
                 let entries = signature_entries(ctx, op, self.schema, regions);
                 self.token('(')?;
-                self.h.write_char('(')?;
+                self.p.write_char('(')?;
                 for (position, &(ty, attrs)) in parts.inputs.iter().enumerate() {
                     if position > 0 {
-                        self.h.write_str(", ")?;
+                        self.p.write_str(", ")?;
                     }
                     // A signature without regions writes its input types alone.
                     if !regions.is_empty() {
-                        match entries.split_first() {
-                            Some((&first, rest)) => {
+                        match entries.first() {
+                            Some(&first) => {
                                 let arg = ctx.block_args(first)[position];
-                                let name = self.h.assign_value_name(arg);
-                                for &other in rest {
-                                    self.h.assign_value_name_like(
-                                        ctx.block_args(other)[position],
-                                        arg,
-                                    );
-                                }
-                                self.h.write_str(&name)?;
+                                write!(self.p, "{}", state.value(arg))?;
                             }
-                            None => write!(self.h, "%arg{position}")?,
+                            None => write!(self.p, "%arg{position}")?,
                         }
-                        self.h.write_str(": ")?;
+                        self.p.write_str(": ")?;
                     }
-                    write_signature_param(self.h, ty, attrs)?;
+                    write_signature_param(self.p, ty, attrs)?;
                 }
-                self.h.write_char(')')?;
+                self.p.write_char(')')?;
                 // A function's header drops `-> ()`; a function type keeps it.
                 if !regions.is_empty() && parts.results.is_empty() && parts.tail.is_empty() {
                     return Ok(());
                 }
-                self.h.write_str(" -> ")?;
-                write_signature_results(self.h, &parts.results)?;
-                (codec.write_tail)(self.h, &parts.tail)
+                self.p.write_str(" -> ")?;
+                write_signature_results(self.p, &parts.results)?;
+                (codec.write_tail)(self.p, &parts.tail)
             }
             FormatElement::FunctionalType(index) => {
                 let operands = ctx.op_operands(op);
                 let range = operand_range(self.schema, index, operands.len());
                 self.token('(')?;
-                self.h.write_char('(')?;
-                for (position, &value) in operands[range].iter().enumerate() {
-                    if position > 0 {
-                        self.h.write_str(", ")?;
-                    }
-                    self.h.write_type(ctx.value_ty(value))?;
-                }
-                self.h.write_str(") -> ")?;
+                let inputs = operands[range]
+                    .iter()
+                    .map(|&value| state.ty(ctx.value_ty(value)))
+                    .format(", ");
+                write!(self.p, "({inputs}) -> ")?;
                 let results = ctx.op_result_types(op);
-                let parenthesized = results.len() != 1;
-                if parenthesized {
-                    self.h.write_char('(')?;
-                }
-                for (position, &ty) in results.iter().enumerate() {
-                    if position > 0 {
-                        self.h.write_str(", ")?;
-                    }
-                    self.h.write_type(ty)?;
-                }
-                if parenthesized {
-                    self.h.write_char(')')?;
+                let types = results.iter().map(|&ty| state.ty(ty)).format(", ");
+                if results.len() == 1 {
+                    write!(self.p, "{types}")?;
+                } else {
+                    write!(self.p, "({types})")?;
                 }
                 self.spacing = Spacing::Space;
                 Ok(())
@@ -561,7 +612,7 @@ impl Printer<'_, '_, '_> {
                     .op_region(op, index)
                     .expect("a printable region with entry arguments is present");
                 self.token('(')?;
-                super::write_entry_args(self.h, region)
+                write!(self.p, "{}", state.entry_args(region))
             }
             FormatElement::Optional { anchor, elements } => {
                 if anchor_present(ctx, op, self.schema, anchor) {
@@ -1299,11 +1350,11 @@ mod tests {
         }
 
         fn print_text(
-            h: &mut crate::printer::OpPrintHelper<'_, '_>,
+            p: &mut crate::printer::AsmPrinter<'_>,
             attr: &Attribute,
         ) -> std::fmt::Result {
             std::fmt::Write::write_str(
-                h,
+                p,
                 if matches!(attr, Attribute::Bool(true)) {
                     "fast"
                 } else {

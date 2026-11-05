@@ -628,6 +628,13 @@ region의 entry argument에 첫 region과 같은 이름을 주고, parser는 매
 region의 entry block에 되돌린다. Printer는 `IsolatedFromAbove` operation의 형식을
 쓰는 동안 값과 block 번호를 새로 매기고, 쓴 뒤에는 바깥 번호를 이어 간다.
 
+Printer는 쓰기 전에 이름을 정한다. 출력할 operation마다 pre-pass가 형식이 쓰는
+순서대로 값 번호(`%N`)와 block label(`^bbN`)을 매기고, module마다 type alias를
+정한다. 형식은 출력하는 동안 이름을 새로 매기지 않고 이 결과를 읽기만 하므로,
+타입·attribute·값 이름은 다른 텍스트 안에 그대로 쓸 수 있는 값이다. 손으로 쓴
+형식이 기본 순서(result, 그다음 region을 차례로)와 다른 순서로 이름을 쓰거나 여러
+region의 값에 이름 하나를 쓰면, 그 순서와 공유를 pre-pass에 선언한다.
+
 #### 표기 관례
 
 여러 operation이 같은 개념을 쓰면 같은 원소 배열로 쓴다. 전용 형식을 선언적

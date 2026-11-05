@@ -154,16 +154,15 @@ impl crate::asm_format::OpAsmDirective for SwitchCases {
     }
 
     fn print(
-        h: &mut crate::printer::OpPrintHelper<'_, '_>,
+        p: &mut crate::printer::OpAsmPrinter<'_>,
         (default, arms): Self::Parts<'_>,
     ) -> std::fmt::Result {
         use std::fmt::Write as _;
 
-        let label = h.block_label(default).to_owned();
-        write!(h, "default: {label}")?;
+        let s = p.state();
+        write!(p, "default: {}", s.block(default))?;
         for (case, target) in arms {
-            let label = h.block_label(target).to_owned();
-            write!(h, ", {case}: {label}")?;
+            write!(p, ", {case}: {}", s.block(target))?;
         }
         Ok(())
     }

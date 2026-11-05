@@ -228,13 +228,15 @@ fn spells_signature(
 /// with attributes of its own, or whose inputs are not its body's
 /// parameters, prints generically.
 fn print_closure_lambda(
-    h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>,
+    p: &mut trunk_ir::printer::OpAsmPrinter<'_>,
     op: trunk_ir::OpRef,
 ) -> std::fmt::Result {
+    use itertools::Itertools as _;
     use std::fmt::Write;
     use trunk_ir::ops::{DialectOp, DialectType};
 
-    let ctx = h.ctx();
+    let s = p.state();
+    let ctx = s.ctx();
     let Some(entries) = Lambda::from_op(ctx, op)
         .ok()
         .and_then(|lambda| lambda.entries(ctx))
@@ -244,7 +246,7 @@ fn print_closure_lambda(
                 .all(|entry| spells_signature(ctx, entry.signature, entry.body))
         })
     else {
-        return h.print_generic(op);
+        return p.print_generic(op);
     };
     let result_ty = ctx.op_result_types(op)[0];
     let result_data = ctx.get_type(result_ty);
@@ -253,75 +255,43 @@ fn print_closure_lambda(
             && result_data.params.as_slice() == [entry.signature.as_type_ref()]
             && result_data.attrs.is_empty());
 
-    let results = h.ctx().op_results(op);
-    let name = h.assign_value_name(results[0]);
-    write!(h, "{name} = closure.lambda")?;
+    write!(p, "{} = closure.lambda", s.value(ctx.op_results(op)[0]))?;
 
     // " {key = val, ...}" — attributes other than the entry lists (if any)
-    let attrs: Vec<_> = h
-        .ctx()
+    let mut attrs = ctx
         .op_attrs(op)
         .iter()
         .filter(|(key, _)| *key != "signatures" && *key != "conventions")
-        .map(|(key, val)| (key.to_owned(), val.clone()))
-        .collect();
-    if !attrs.is_empty() {
-        write!(h, " {{")?;
-        for (i, (key, val)) in attrs.iter().enumerate() {
-            if i > 0 {
-                write!(h, ", ")?;
-            }
-            write!(h, "{key} = ")?;
-            h.write_attribute(val)?;
-        }
-        write!(h, "}}")?;
+        .peekable();
+    if attrs.peek().is_some() {
+        let attrs = attrs.format_with(", ", |(key, val), f| {
+            f(&format_args!("{key} = {}", s.attr(val)))
+        });
+        write!(p, " {{{attrs}}}")?;
     }
 
     // " [%x, %y]" — captures (operands)
-    let capture_names: Vec<String> = h
-        .ctx()
-        .op_operands(op)
-        .iter()
-        .map(|&v| h.get_value_name(v).to_owned())
-        .collect();
-    if !capture_names.is_empty() {
-        write!(h, " [")?;
-        for (i, name) in capture_names.iter().enumerate() {
-            if i > 0 {
-                write!(h, ", ")?;
-            }
-            write!(h, "{name}")?;
-        }
-        write!(h, "]")?;
+    let captures = ctx.op_operands(op);
+    if !captures.is_empty() {
+        write!(p, " [{}]", s.values(captures))?;
     }
 
     // " <convention>(%param: type, ...) -> ret { body }" — entry label elided
     for entry in entries {
-        let entry_args = {
-            let block = h.ctx().region(entry.body).blocks[0];
-            h.ctx().block_args(block).to_vec()
-        };
-        write!(h, " {}(", entry.convention.keyword())?;
-        for (i, &arg) in entry_args.iter().enumerate() {
-            if i > 0 {
-                write!(h, ", ")?;
-            }
-            let n = h.assign_value_name(arg);
-            let ty = h.ctx().value_ty(arg);
-            write!(h, "{n}: ")?;
-            h.write_type(ty)?;
+        write!(
+            p,
+            " {}{}",
+            entry.convention.keyword(),
+            s.entry_args(entry.body)
+        )?;
+        if let Some(return_ty) = entry.signature.single_result(ctx) {
+            write!(p, " -> {}", s.ty(return_ty))?;
         }
-        write!(h, ")")?;
-        if let Some(return_ty) = entry.signature.single_result(h.ctx()) {
-            write!(h, " -> ")?;
-            h.write_type(return_ty)?;
-        }
-        h.print_body(entry.body)?;
+        p.print_body(entry.body)?;
     }
 
     if !closure_of_signature {
-        write!(h, " : ")?;
-        h.write_type(result_ty)?;
+        write!(p, " : {}", s.ty(result_ty))?;
     }
     Ok(())
 }
@@ -458,8 +428,8 @@ fn parse_closure_lambda<'a>(
 }
 
 impl trunk_ir::asm_format::OpAsmFormat for Lambda {
-    fn print(&self, h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>) -> std::fmt::Result {
-        print_closure_lambda(h, self.op_ref())
+    fn print(&self, p: &mut trunk_ir::printer::OpAsmPrinter<'_>) -> std::fmt::Result {
+        print_closure_lambda(p, self.op_ref())
     }
 
     fn parse<'a>(

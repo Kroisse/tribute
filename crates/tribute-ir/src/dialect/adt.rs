@@ -583,8 +583,8 @@ fn finish_struct_type(
 // Names are bare identifiers, or quoted strings when they are not identifiers.
 
 impl trunk_ir::asm_format::TypeAsmFormat for Struct {
-    fn print(&self, h: &mut trunk_ir::printer::TypePrintHelper<'_, '_>) -> std::fmt::Result {
-        write_struct_type(h, *self)
+    fn print(&self, p: &mut trunk_ir::printer::AsmPrinter<'_>) -> std::fmt::Result {
+        write_struct_type(p, *self)
     }
 
     fn parse<'a>(
@@ -596,35 +596,36 @@ impl trunk_ir::asm_format::TypeAsmFormat for Struct {
 }
 
 fn write_struct_type(
-    h: &mut trunk_ir::printer::TypePrintHelper<'_, '_>,
+    p: &mut trunk_ir::printer::AsmPrinter<'_>,
     adt_struct: Struct,
 ) -> std::fmt::Result {
+    use itertools::Itertools as _;
     use std::fmt::Write;
+    use trunk_ir::printer::display_name;
 
-    let ctx = h.ctx();
-    h.write_str("adt.struct<")?;
-    h.write_name(adt_struct.name(ctx))?;
-    h.write_char('(')?;
-    for (index, (name, ty)) in adt_struct.fields(ctx).enumerate() {
-        if index > 0 {
-            h.write_str(", ")?;
-        }
-        h.write_name(name)?;
-        h.write_str(": ")?;
-        h.write_type(ty)?;
-        let mut attrs = adt_struct.field_attrs(ctx, index).peekable();
-        if attrs.peek().is_some() {
-            h.write_char(' ')?;
-            h.write_attr_dict(attrs)?;
-        }
-    }
-    h.write_char(')')?;
+    let s = p.state();
+    let ctx = s.ctx();
+    let fields = adt_struct
+        .fields(ctx)
+        .enumerate()
+        .format_with(", ", |(index, (name, ty)), f| {
+            f(&format_args!("{}: {}", display_name(name), s.ty(ty)))?;
+            let mut attrs = adt_struct.field_attrs(ctx, index).peekable();
+            if attrs.peek().is_some() {
+                f(&format_args!(" {}", s.attr_dict(attrs)))?;
+            }
+            Ok(())
+        });
+    write!(
+        p,
+        "adt.struct<{}({fields})",
+        display_name(adt_struct.name(ctx))
+    )?;
     let mut attrs = adt_struct.extra_attrs(ctx).peekable();
     if attrs.peek().is_some() {
-        h.write_str(", ")?;
-        h.write_attr_dict(attrs)?;
+        write!(p, ", {}", s.attr_dict(attrs))?;
     }
-    h.write_char('>')
+    p.write_char('>')
 }
 
 /// Parse the rest of `adt.struct<Name(field: type {attrs}, ...), {attrs}>`
@@ -811,8 +812,8 @@ impl Enum {
 // by the field's other attributes.
 
 impl trunk_ir::asm_format::TypeAsmFormat for Enum {
-    fn print(&self, h: &mut trunk_ir::printer::TypePrintHelper<'_, '_>) -> std::fmt::Result {
-        write_enum_type(h, *self)
+    fn print(&self, p: &mut trunk_ir::printer::AsmPrinter<'_>) -> std::fmt::Result {
+        write_enum_type(p, *self)
     }
 
     fn parse<'a>(
@@ -823,51 +824,48 @@ impl trunk_ir::asm_format::TypeAsmFormat for Enum {
     }
 }
 
-fn write_enum_type(
-    h: &mut trunk_ir::printer::TypePrintHelper<'_, '_>,
-    adt_enum: Enum,
-) -> std::fmt::Result {
+fn write_enum_type(p: &mut trunk_ir::printer::AsmPrinter<'_>, adt_enum: Enum) -> std::fmt::Result {
+    use itertools::Itertools as _;
     use std::fmt::Write;
+    use trunk_ir::printer::display_name;
 
-    let ctx = h.ctx();
+    let s = p.state();
+    let ctx = s.ctx();
     let data = ctx.get_type(adt_enum.as_type_ref());
-    h.write_str("adt.enum<")?;
-    h.write_name(adt_enum.name(ctx))?;
-    h.write_str(" {")?;
+    write!(p, "adt.enum<{} {{", display_name(adt_enum.name(ctx)))?;
     for (index, &variant) in data.params.iter().enumerate() {
-        h.write_str(if index > 0 { ", " } else { " " })?;
         let variant_data = ctx.get_type(variant);
         let name = variant_name(ctx, variant).expect("validated adt.enum variant");
-        h.write_name(ctx.str(name))?;
-        h.write_char('(')?;
-        for (field, &field_ty) in variant_data.params.iter().enumerate() {
-            if field > 0 {
-                h.write_str(", ")?;
-            }
-            let field_attrs = variant_data.param_attrs(ctx, field);
-            if let Some(field_name) = field_attrs.view(ctx).get_string_ref(STRUCT_NAME_ATTR) {
-                h.write_name(ctx.str(field_name))?;
-                h.write_str(": ")?;
-            }
-            h.write_type(field_ty)?;
-            let mut attrs = field_attrs
+        let fields =
+            variant_data
+                .params
                 .iter()
-                .filter(|&(key, _)| ctx.str(key) != STRUCT_NAME_ATTR)
-                .peekable();
-            if attrs.peek().is_some() {
-                h.write_char(' ')?;
-                h.write_attr_dict(attrs)?;
-            }
-        }
-        h.write_char(')')?;
+                .enumerate()
+                .format_with(", ", |(field, &field_ty), f| {
+                    let field_attrs = variant_data.param_attrs(ctx, field);
+                    if let Some(field_name) = field_attrs.view(ctx).get_string_ref(STRUCT_NAME_ATTR)
+                    {
+                        f(&format_args!("{}: ", display_name(ctx.str(field_name))))?;
+                    }
+                    f(&s.ty(field_ty))?;
+                    let mut attrs = field_attrs
+                        .iter()
+                        .filter(|&(key, _)| ctx.str(key) != STRUCT_NAME_ATTR)
+                        .peekable();
+                    if attrs.peek().is_some() {
+                        f(&format_args!(" {}", s.attr_dict(attrs)))?;
+                    }
+                    Ok(())
+                });
+        let separator = if index > 0 { ", " } else { " " };
+        write!(p, "{separator}{}({fields})", display_name(ctx.str(name)))?;
     }
-    h.write_str(if data.params.is_empty() { "}" } else { " }" })?;
+    p.write_str(if data.params.is_empty() { "}" } else { " }" })?;
     let mut attrs = adt_enum.extra_attrs(ctx).peekable();
     if attrs.peek().is_some() {
-        h.write_str(", ")?;
-        h.write_attr_dict(attrs)?;
+        write!(p, ", {}", s.attr_dict(attrs))?;
     }
-    h.write_char('>')
+    p.write_char('>')
 }
 
 /// Parse the rest of `adt.enum<Name { Variant(field: type, ...), ... }, {attrs}>`
