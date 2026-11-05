@@ -13,7 +13,9 @@ use std::fmt::{self, Write as _};
 
 use crate::ops::{DialectOp, DialectType};
 use crate::parser::raw::{RawAttrDict, RawAttribute, RawOperation, RawParam, RawType};
-use crate::printer::{AsmNamer, AsmPrinter, OpAsmPrinter};
+use itertools::Itertools as _;
+
+use crate::printer::{AsmNamer, AsmPrinter, AsmState, OpAsmPrinter};
 use crate::types::Attribute;
 use crate::{AttributeMap, IrContext, OpRef, StringRef, TypeRef};
 
@@ -379,43 +381,41 @@ fn directive_print<T: OpAsmDirective>(
     T::print(p, parts)
 }
 
-/// Write a function form's parameter type and its attributes, `T {k = v}`.
-pub fn write_signature_param(
-    p: &mut AsmPrinter<'_>,
+/// A function form's parameter type and its attributes, `T {k = v}`.
+pub fn display_signature_param<'s>(
+    s: &'s AsmState<'s>,
     ty: TypeRef,
-    attrs: &AttributeMap,
-) -> fmt::Result {
-    let s = p.state();
-    write!(p, "{}", s.ty(ty))?;
-    if !attrs.is_empty() {
-        write!(p, " {}", s.attr_dict(attrs.iter()))?;
-    }
-    Ok(())
+    attrs: &'s AttributeMap,
+) -> impl fmt::Display + 's {
+    fmt::from_fn(move |f| {
+        write!(f, "{}", s.ty(ty))?;
+        if !attrs.is_empty() {
+            write!(f, " {}", s.attr_dict(attrs.iter()))?;
+        }
+        Ok(())
+    })
 }
 
-/// Write a function form's results after `->`: one result without
-/// attributes bare, and otherwise a parenthesized list, `(R {k = v})`.
-pub fn write_signature_results(
-    p: &mut AsmPrinter<'_>,
-    results: &[(TypeRef, &AttributeMap)],
-) -> fmt::Result {
-    if let [(ty, attrs)] = results
-        && attrs.is_empty()
-    {
-        return p.print_type(*ty);
-    }
-    p.write_char('(')?;
-    for (index, &(ty, attrs)) in results.iter().enumerate() {
-        if index > 0 {
-            p.write_str(", ")?;
+/// A function form's results after `->`: one result without attributes
+/// bare, and otherwise a parenthesized list, `(R {k = v})`.
+pub fn display_signature_results<'s>(
+    s: &'s AsmState<'s>,
+    results: &'s [(TypeRef, &'s AttributeMap)],
+) -> impl fmt::Display + 's {
+    fmt::from_fn(move |f| match results {
+        [(ty, attrs)] if attrs.is_empty() => write!(f, "{}", s.ty(*ty)),
+        _ => {
+            let results = results
+                .iter()
+                .map(|&(ty, attrs)| display_signature_param(s, ty, attrs))
+                .format(", ");
+            write!(f, "({results})")
         }
-        write_signature_param(p, ty, attrs)?;
-    }
-    p.write_char(')')
+    })
 }
 
 /// Parse a function form's results after `->` as
-/// [`write_signature_results`] writes them.
+/// [`display_signature_results`] writes them.
 pub fn parse_signature_results<'a>(input: &mut &'a str) -> winnow::ModalResult<Vec<RawParam<'a>>> {
     use crate::parser::raw::{raw_param_list, raw_type};
     use winnow::prelude::*;

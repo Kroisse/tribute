@@ -869,13 +869,11 @@ pub fn display_name(name: &str) -> impl fmt::Display + '_ {
 /// Write a symbol path as `@outer::@name`, each component quoted when
 /// needed.
 fn write_symbol_path(f: &mut dyn Write, path: &crate::symbol::SymbolPath) -> fmt::Result {
-    for (index, component) in path.iter().enumerate() {
-        if index != 0 {
-            f.write_str(crate::symbol::SymbolPath::SEPARATOR)?;
-        }
-        write_symbol_text(f, component.as_str())?;
-    }
-    Ok(())
+    let components = path
+        .iter()
+        .map(|component| display_symbol_text(component.as_str()))
+        .format(crate::symbol::SymbolPath::SEPARATOR);
+    write!(f, "{components}")
 }
 
 /// A symbol reference as the printer writes it, `@outer::@name`, for a

@@ -16,7 +16,7 @@ use winnow::prelude::*;
 
 use crate::asm_format::{
     CustomEntity, OpAsmDirectiveHooks, RawCustomEntity, SignatureCodecHooks, SignatureParts,
-    expected, parse_signature_results, write_signature_param, write_signature_results,
+    display_signature_param, display_signature_results, expected, parse_signature_results,
 };
 use crate::op_def::OpDef;
 use crate::op_flag::IsolatedFromAbove;
@@ -561,31 +561,32 @@ impl Printer<'_, '_> {
                 let parts = (codec.decompose)(ctx, ty).expect("a printable signature decomposes");
                 let entries = signature_entries(ctx, op, self.schema, regions);
                 self.token('(')?;
-                self.p.write_char('(')?;
-                for (position, &(ty, attrs)) in parts.inputs.iter().enumerate() {
-                    if position > 0 {
-                        self.p.write_str(", ")?;
-                    }
-                    // A signature without regions writes its input types alone.
-                    if !regions.is_empty() {
-                        match entries.first() {
-                            Some(&first) => {
-                                let arg = ctx.block_args(first)[position];
-                                write!(self.p, "{}", state.value(arg))?;
+                let inputs = parts.inputs.iter().enumerate().format_with(
+                    ", ",
+                    |(position, &(ty, attrs)), f| {
+                        // A signature without regions writes its input types alone.
+                        if !regions.is_empty() {
+                            match entries.first() {
+                                Some(&first) => f(&format_args!(
+                                    "{}: ",
+                                    state.value(ctx.block_args(first)[position])
+                                ))?,
+                                None => f(&format_args!("%arg{position}: "))?,
                             }
-                            None => write!(self.p, "%arg{position}")?,
                         }
-                        self.p.write_str(": ")?;
-                    }
-                    write_signature_param(self.p, ty, attrs)?;
-                }
-                self.p.write_char(')')?;
+                        f(&display_signature_param(state, ty, attrs))
+                    },
+                );
+                write!(self.p, "({inputs})")?;
                 // A function's header drops `-> ()`; a function type keeps it.
                 if !regions.is_empty() && parts.results.is_empty() && parts.tail.is_empty() {
                     return Ok(());
                 }
-                self.p.write_str(" -> ")?;
-                write_signature_results(self.p, &parts.results)?;
+                write!(
+                    self.p,
+                    " -> {}",
+                    display_signature_results(state, &parts.results)
+                )?;
                 (codec.write_tail)(self.p, &parts.tail)
             }
             FormatElement::FunctionalType(index) => {

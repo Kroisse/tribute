@@ -410,7 +410,7 @@ impl FuncSigBuilder {
 mod signature_codec_tests {
     use super::*;
     use trunk_ir::asm_format::{
-        SignatureCodec, parse_signature_results, write_signature_param, write_signature_results,
+        SignatureCodec, display_signature_param, display_signature_results, parse_signature_results,
     };
     use trunk_ir::parser::raw::{RawAttribute, RawType, raw_param_list, ws};
     use trunk_ir::printer::{AsmPrinter, AsmState};
@@ -422,15 +422,17 @@ mod signature_codec_tests {
         let state = AsmState::without_aliases(ctx);
         let mut out = String::new();
         let mut p = AsmPrinter::new(&state, &mut out);
-        p.write_char('(').ok()?;
-        for (index, &(input, attrs)) in parts.inputs.iter().enumerate() {
-            if index > 0 {
-                p.write_str(", ").ok()?;
-            }
-            write_signature_param(&mut p, input, attrs).ok()?;
-        }
-        p.write_str(") -> ").ok()?;
-        write_signature_results(&mut p, &parts.results).ok()?;
+        let inputs = parts
+            .inputs
+            .iter()
+            .map(|&(input, attrs)| display_signature_param(&state, input, attrs))
+            .format(", ");
+        write!(
+            p,
+            "({inputs}) -> {}",
+            display_signature_results(&state, &parts.results)
+        )
+        .ok()?;
         FuncSig::write_tail(&mut p, &parts.tail).ok()?;
         Some(out)
     }

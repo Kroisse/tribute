@@ -833,15 +833,13 @@ fn write_enum_type(p: &mut trunk_ir::printer::AsmPrinter<'_>, adt_enum: Enum) ->
     let ctx = s.ctx();
     let data = ctx.get_type(adt_enum.as_type_ref());
     write!(p, "adt.enum<{} {{", display_name(adt_enum.name(ctx)))?;
-    for (index, &variant) in data.params.iter().enumerate() {
-        let variant_data = ctx.get_type(variant);
-        let name = variant_name(ctx, variant).expect("validated adt.enum variant");
-        let fields =
-            variant_data
-                .params
-                .iter()
-                .enumerate()
-                .format_with(", ", |(field, &field_ty), f| {
+    let variants =
+        data.params.iter().format_with(", ", |&variant, f| {
+            let variant_data = ctx.get_type(variant);
+            let name = variant_name(ctx, variant).expect("validated adt.enum variant");
+            let fields = variant_data.params.iter().enumerate().format_with(
+                ", ",
+                |(field, &field_ty), f| {
                     let field_attrs = variant_data.param_attrs(ctx, field);
                     if let Some(field_name) = field_attrs.view(ctx).get_string_ref(STRUCT_NAME_ATTR)
                     {
@@ -856,11 +854,14 @@ fn write_enum_type(p: &mut trunk_ir::printer::AsmPrinter<'_>, adt_enum: Enum) ->
                         f(&format_args!(" {}", s.attr_dict(attrs)))?;
                     }
                     Ok(())
-                });
-        let separator = if index > 0 { ", " } else { " " };
-        write!(p, "{separator}{}({fields})", display_name(ctx.str(name)))?;
+                },
+            );
+            f(&format_args!("{}({fields})", display_name(ctx.str(name))))
+        });
+    if !data.params.is_empty() {
+        write!(p, " {variants} ")?;
     }
-    p.write_str(if data.params.is_empty() { "}" } else { " }" })?;
+    p.write_char('}')?;
     let mut attrs = adt_enum.extra_attrs(ctx).peekable();
     if attrs.peek().is_some() {
         write!(p, ", {}", s.attr_dict(attrs))?;

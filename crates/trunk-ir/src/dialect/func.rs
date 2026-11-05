@@ -406,22 +406,26 @@ pub fn print_signature_type(
     p: &mut crate::printer::AsmPrinter<'_>,
     ty: TypeRef,
 ) -> std::fmt::Result {
-    use crate::asm_format::{write_dict_tail, write_signature_param, write_signature_results};
+    use crate::asm_format::{display_signature_param, display_signature_results, write_dict_tail};
+    use itertools::Itertools as _;
     use std::fmt::Write;
 
-    let ctx = p.ctx();
+    let s = p.state();
+    let ctx = s.ctx();
     let data = ctx.get_type(ty);
     let parts = signature_parts(ctx, ty);
 
-    write!(p, "{}<(", data.name.display(ctx))?;
-    for (index, &(input, attrs)) in parts.inputs.iter().enumerate() {
-        if index > 0 {
-            p.write_str(", ")?;
-        }
-        write_signature_param(p, input, attrs)?;
-    }
-    p.write_str(") -> ")?;
-    write_signature_results(p, &parts.results)?;
+    let inputs = parts
+        .inputs
+        .iter()
+        .map(|&(input, attrs)| display_signature_param(s, input, attrs))
+        .format(", ");
+    write!(
+        p,
+        "{}<({inputs}) -> {}",
+        data.name.display(ctx),
+        display_signature_results(s, &parts.results)
+    )?;
     write_dict_tail(p, &parts.tail)?;
     p.write_char('>')
 }
