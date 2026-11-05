@@ -811,6 +811,36 @@ fn a_handle_without_handler_clauses_survives_a_round_trip() {
 }
 
 #[test]
+fn a_handle_with_an_arm_without_blocks_prints_generically() {
+    let mut ctx = IrContext::new();
+    let loc = location(&mut ctx);
+    let i32_ty = core::I32::type_ref(&mut ctx);
+    let body_block = block(&mut ctx, loc, &[]);
+    let body = region(&mut ctx, loc, body_block);
+    let completion_block = block(&mut ctx, loc, &[i32_ty]);
+    let completion = region(&mut ctx, loc, completion_block);
+    let arm = ctx.create_region(RegionData {
+        location: loc,
+        blocks: Default::default(),
+        parent_op: None,
+    });
+    let binding = HandlerBinding {
+        ability: SymbolPath::new(["State"]),
+        op_name: ctx.intern_str("get"),
+        kind: OperationKind::Fn,
+        operation_result_type: i32_ty,
+    };
+    let handle = Handle::build_with_arms(&mut ctx, loc, i32_ty, body, completion, [(binding, arm)]);
+    let module = module(&mut ctx, loc, &[handle.op_ref()]);
+
+    let printed = assert_round_trip(&ctx, module);
+    assert!(
+        printed.contains("\"tribute_control.handle\"()"),
+        "{printed}"
+    );
+}
+
+#[test]
 fn validator_rejects_structure_arity_type_and_terminator_errors() {
     let (ctx, module) = parse_fixture(
         r#"core.module @test {

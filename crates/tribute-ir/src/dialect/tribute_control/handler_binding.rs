@@ -208,7 +208,10 @@ impl OpAsmDirective for HandleArms {
         else {
             return None;
         };
-        if handlers.len() != arms.len() {
+        // An arm without an entry block has no arguments to write, so the
+        // handle prints generically.
+        if handlers.len() != arms.len() || arms.iter().any(|&arm| ctx.region(arm).blocks.is_empty())
+        {
             return None;
         }
         handlers
