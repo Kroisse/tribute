@@ -1055,16 +1055,8 @@ fn segment_count(constraint: &ValueConstraint) -> CountRange {
 }
 
 fn print_type_list(ctx: &IrContext, types: &[TypeRef]) -> String {
-    use std::fmt::Write;
-    let mut out = String::from("(");
-    for (i, ty) in types.iter().enumerate() {
-        if i > 0 {
-            out.push_str(", ");
-        }
-        write!(out, "{}", ty.display(ctx)).expect("fmt::Write to String never fails");
-    }
-    out.push(')');
-    out
+    use itertools::Itertools as _;
+    format!("({})", types.iter().map(|ty| ty.display(ctx)).format(", "))
 }
 
 /// One type checked against a single-type constraint.

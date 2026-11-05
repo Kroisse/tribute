@@ -552,7 +552,7 @@ denote their union.
 같은 이름은 같은 row를 가리키고, 다른 이름은 독립적으로 유지한다. 다만 `let`의
 주석과 오른쪽 식에서 처음 나온 이름은 그 `let`의 범위에 속한다. 그 `let`이 끝나면
 이름은 다시 쓸 수 있고, 다른 `let`이나 뒤의 주석에서 같은 이름은 새 row다. 오른쪽
-식이 effect를 수행해 일반화하지 않는 `let`도 같다. 그래서
+식이 row를 일반화하지 않는 `let`도 같다. 그래서
 `let`이 일반화한 row는 그 `let`만 소유하며, 형제 `let` 둘이 같은 이름을 적어도
 서로 다른 row를 양화한다. 서명이나 바깥 범위에 이미 있는 이름은 그 row를
 가리키므로 `let`이 일반화하지 않는다. `{e1, e2}`는
@@ -844,14 +844,30 @@ unify_row(ρ₁, ρ₂):
       unify_row(e, ρ)
 ```
 
+Row unification은 대칭인 동치이며, 닫힌 빈 row `{}`도 effect를 적은 row와
+unify되지 않는다. 더 적은 effect를 가진 callee를 부르는 호출은 unification이 아니라
+호출의 effect 관계로 표현한다. 함수 타입 안의 row는 불변 위치이므로, `fn() ->{} Int`
+값을 `fn() ->{State(Int)} Int` 자리에 넘기면 타입 오류다.
+
 ### Generalization
 
-Let generalization distinguishes the effect of **evaluating the right-hand
-side now** from effects latent in a function value. After solving the
-constraints generated up to the binding, `let p = e` generalizes the ability-row
-variables in the type of `e` exactly when evaluating `e` has the closed-empty
-effect `{}`. Row variables free in the surrounding environment are never
-generalized.
+`let`은 사용마다 row를 고를 수 있는 오른쪽 식에서만 ability-row 변수를 일반화한다.
+그런 식은 두 가지다.
+
+- 람다 literal. Lowering은 람다를 한 번 만들고 사용마다 그 사용의 row로
+  인스턴스화한다.
+- 이름 붙은 함수를 가리키는 참조, 또는 그런 binding을 가리키는 참조를 그대로 이름 하나에
+  묶은 별칭. 사용은 묶인 값을 읽지 않고 함수를 다시 참조하며, 그 참조가 사용의 row를
+  넘긴다.
+
+`let p = e`는 binding까지 생성된 제약을 푼 뒤, `e`가 이 둘 중 하나이면 `e`의 타입에
+남은 row 변수를 일반화한다. 둘 다 평가에 효과가 없다. 주변 환경에 자유로운 row
+변수는 일반화하지 않는다. 다른 모든 `let`(호출 결과, 람다를 다시 묶은 별칭,
+destructuring, 람다를 감싼 block)은 row 변수도 양화하지 않으므로, 그 binding의 모든
+사용이 data 타입 변수처럼 row 변수를 공유한다. 그런 값은 한 번 만들어진 callable
+하나이고 사용마다 다른 row로 인스턴스화할 수 없기 때문이다. 사용이 row를 고정하면
+값을 만드는 쪽도 그 row로 만들어지고, 아무 사용도 고정하지 않은 row는 함수 본문이
+소유한다.
 
 `let`은 data 타입 변수를 양화하지 않는다. `let`의 값 타입에 남은 data 타입
 변수는 그 binding의 모든 사용이 공유하며, 지역 참조는 그 변수를 사용마다 새로
@@ -865,9 +881,8 @@ Data 타입의 다형성은 generic 함수 선언이 제공한다.
 평가하는 효과와 구별한다. 따라서 local callable의 generalization은 실제로 추론된
 row의 변수만 대상으로 하며, generalization을 위해 새 open tail을 만들지 않는다.
 
-This is an effect-based value restriction, not a restriction to a syntactic
-class of values. A lambda evaluates purely, so its row can be generalized even
-when calling the resulting function later performs effects:
+람다의 row는 결과 함수를 나중에 호출할 때 효과가 있더라도 일반화된다. 람다를
+평가하는 일 자체는 순수하기 때문이다.
 
 다음은 toplevel function 본문 안의 local `let` binding이다.
 
@@ -889,7 +904,11 @@ fn example() ->{State(Int)} Nil {
     // each use chooses its own row `e`; `r` is shared
 
     let current = State::get()
-    // evaluating the RHS performs State, so current remains monomorphic
+    // not a lambda or a function reference: current is monomorphic
+
+    let r = run
+    // an alias of a lambda: r : fn(fn() ->{e'} r) ->{e'} r, where the
+    // `let r` instantiates `run` once and every use of `r` shares `e'`
     Nil
 }
 ```
@@ -905,9 +924,9 @@ Row 사용처 간 독립성은 각 row 인스턴스가 자기의 구체 ability�
 인자를 가질 수 있다는 뜻이다. 이것이 binding에 이미 있는 공유 data 타입 변수를
 사용마다 새로 만들 근거가 되지는 않는다.
 
-For a destructuring pattern, each introduced name receives the corresponding
-component scheme under the same decision. Function parameters, handler
-continuations, and pattern bindings not introduced by `let` are monomorphic.
+Destructuring 패턴의 오른쪽 식은 위 두 형태가 아니므로 각 이름은 단형 타입을 받는다.
+Function parameters, handler continuations, and pattern bindings not introduced
+by `let` are monomorphic.
 
 A function declaration's type scheme quantifies both type variables and
 ability-row variables:

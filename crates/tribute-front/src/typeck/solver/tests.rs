@@ -168,9 +168,10 @@ fn test_occurs_check_not_triggered_for_different_var_in_effect() {
 // =========================================================================
 
 #[test]
-fn test_pure_callee_in_effectful_context() {
-    // Test that calling a pure function from an effectful context succeeds
-    // without modifying the caller's ability row.
+fn pure_row_does_not_unify_with_a_row_naming_effects() {
+    // Row unification is equality: a closed empty row is not a row that
+    // names `State`, on either side. A call's effect relates the callee's
+    // row to the caller's through `call_effect_constraint` instead.
     let db = test_db();
     let mut solver = TypeSolver::new(&db);
 
@@ -185,19 +186,8 @@ fn test_pure_callee_in_effectful_context() {
     };
     let effectful_row = AbilityRow::new(&db, vec![state_effect], Some(row_var));
 
-    // Unifying pure with effectful should succeed
-    let result = solver.unify_rows(pure_effect, effectful_row);
-    assert!(
-        result.is_ok(),
-        "Pure callee should be callable from effectful context"
-    );
-
-    // The row variable should NOT be bound - caller's effect stays unchanged
-    let resolved = solver.row_subst.get(row_var.id);
-    assert!(
-        resolved.is_none(),
-        "Caller's row variable should not be modified when calling pure function"
-    );
+    assert!(solver.unify_rows(pure_effect, effectful_row).is_err());
+    assert!(solver.unify_rows(effectful_row, pure_effect).is_err());
 }
 
 #[test]

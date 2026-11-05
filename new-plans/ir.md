@@ -1227,19 +1227,20 @@ binder를 공유하며, entry마다 그 binder에 class를 하나씩 고정한�
 식은 `tribute_control.lambda` 하나이고, 사용처마다 따로 만들지 않는다. Class
 특수화도 람다를 값 하나로 두며 [본문](#convention-entry)만 class마다 늘린다. 쓰이지 않는
 람다는 양화할 사용이 없으므로 그 변수는 `body`다. 다른 `let`의 값으로 람다를 다시
-묶는 별칭은 람다가 아닌 값이다. 별칭 자리에서 람다를 한 번 인스턴스화하며, 별칭의
-지역 scheme이 양화한 변수는 `body`다. 람다가 아닌 binding의 사용은 `instantiate`를
-거치지 않으므로, 타입 검사가 사용마다 그 scheme을 새로 인스턴스화하더라도 IR의 값
-type에는 그 `body` binder가 그대로 남는다. 그래서 별칭이나 일반화된 계산 결과를 통한
+묶는 별칭은 람다가 아닌 값이다. 별칭 자리에서 람다를 한 번 인스턴스화한다.
+람다나 함수 참조가 아닌 `let`은 row 변수를 양화하지 않으므로
+([일반화](type-inference.md#generalization)), 그런 binding의 모든 사용은 값을 만든
+쪽과 같은 row를 본다. 사용이 고정한 row는 값의 type에도 그대로 들어가고, 아무 사용도
+고정하지 않은 row 변수만 `body` binder로 남는다. 그래서 별칭이나 계산 결과를 통한
 간접 이전과 별칭 자리의 인스턴스화는 그 binder를 같은
 [tail 규칙](cps-effects.md#row와-호출-규약)으로 읽어 같은 class를 고르며, 값은 그
 entry를 가진다. 그 binder가 정의 안의 어느 매개변수 타입에도 나타나지 않으면 둘 다
 요구 없음으로 읽는다. 값은 binder를 추상 변수로 두고 만들어졌고, binder가 정체를 잃는
 매개변수 자리가 없으므로 그 binder를 통해 어떤 operation에도 닿지 못한다. 나타나면
-둘 다 `Cps`로 읽는다. 그런 값의 매개변수 row tail이 그 `body` binder이면, 그 row는 타입
-검사가 고른 row와 달라진다. 그 자리에 넘기는 람다는 매개변수의 callable type으로 만들고, 함수
-참조는 그 type의 `tribute_control.func_ref`로 다시 만든다. Conversion cast는 callable의
-ABI를 바꿀 수 없기 때문이다.
+둘 다 `Cps`로 읽는다. 그런 값의 매개변수 row tail이 그 `body` binder이면, 그 자리에
+넘기는 람다는 매개변수의 callable type으로 만들고, 함수 참조는 그 type의
+`tribute_control.func_ref`로 다시 만든다. Conversion cast는 callable의 ABI를 바꿀 수
+없기 때문이다.
 
 람다의 별칭과 달리, 이름 붙은 함수를 그대로 묶은 binding과 그런 binding을 다시
 묶은 별칭은 값을 묶지 않는다. 함수 참조는 할당도 효과도 없으므로, 그 binding의

@@ -925,9 +925,6 @@ fn renumber_placeholders(shape: TypeShape) -> TypeShape {
 pub(crate) enum RowRelation {
     /// The same effects as a set and the same tail.
     SetEqual,
-    /// [`RowRelation::SetEqual`], or a closed empty row on the left against a
-    /// row naming effects on the right (row unification's pure subsumption).
-    PureSubsumes,
     /// Rows are not compared.
     Ignore,
 }
@@ -1006,12 +1003,8 @@ pub(crate) fn rows_equiv<'db>(
     right: AbilityRow<'db>,
     relation: RowRelation,
 ) -> bool {
-    match relation {
-        RowRelation::Ignore => return true,
-        RowRelation::PureSubsumes if left.is_pure(db) && !right.instances(db).is_empty() => {
-            return true;
-        }
-        _ => {}
+    if relation == RowRelation::Ignore {
+        return true;
     }
     let contains = |row: AbilityRow<'db>, effect: &AbilityInstance<'db>| {
         row.instances(db).iter().any(|candidate| {

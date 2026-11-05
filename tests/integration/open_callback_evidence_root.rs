@@ -430,7 +430,7 @@ fn main() ->{Io} Nil {
 }
 
 /// An alias of a let-bound lambda is a value that is not a lambda: the alias
-/// instantiates the lambda once, and its own rows are body rows.
+/// instantiates the lambda once, at the row its uses share.
 #[salsa_test]
 fn an_alias_of_a_let_bound_lambda_instantiates_it_once(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
@@ -459,14 +459,16 @@ fn main() ->{Io} Nil {
         .nth(1)
         .and_then(|rest| rest.split("\n  }\n").next())
         .expect("root main");
-    assert!(main.starts_with("local 'a0, body 'a1]"), "{main}");
+    assert!(main.starts_with("local 'a0]"), "{main}");
     assert_eq!(
         main.matches("tribute_control.instantiate").count(),
         1,
         "{main}"
     );
     assert!(
-        main.contains("tribute_control.instantiate %0 {row_args = [{tail = 1}]}"),
+        main.contains(
+            "tribute_control.instantiate %0 {row_args = [{instances = [@\"ability_1_11_std::io::Io\"]}]}"
+        ),
         "{main}"
     );
 }
