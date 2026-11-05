@@ -774,3 +774,20 @@ fn main() ->{Io} Nil {
         "3",
     );
 }
+
+/// A chain of named-function aliases references the function again at each
+/// use, so a use closed to `{}` leaves the other use its own row.
+#[test]
+fn named_function_alias_chain_takes_callbacks_with_different_rows() {
+    assert_state_program(
+        r#"fn twice(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(f(x)) }
+fn body() ->{State(Int)} Int {
+    let f = twice
+    let g = f
+    let a = g(fn(x: Int) ->{} Int { x + +1 }, +1)
+    g(fn(x: Int) { State::set(State::get() + x)
+                   State::get() }, a)
+}"#,
+        "26",
+    );
+}
