@@ -5,7 +5,7 @@ use std::fmt::{self, Write as _};
 
 use trunk_ir::asm_format::{CustomEntity, OpAsmDirective, RawCustomEntity};
 use trunk_ir::parser::raw::{RawAttribute, raw_type, symbol_path, value_ref, ws};
-use trunk_ir::printer::OpPrintHelper;
+use trunk_ir::printer::{OpPrintHelper, display_symbol_ref};
 use trunk_ir::refs::ValueRef;
 use trunk_ir::types::Attribute;
 use trunk_ir::{IrContext, SymbolPath};
@@ -47,8 +47,7 @@ impl OpAsmDirective for HandlerArms {
                 h.write_char(',')?;
             }
             h.newline()?;
-            binding.write_header(h, "  ")?;
-            h.write_str(" : ")?;
+            write!(h, "  {} : ", binding.header(h.ctx()))?;
             h.write_type(binding.operation_result_type)?;
             let arm = h.get_value_name(*arm).to_owned();
             write!(h, " = {arm}")?;
@@ -133,9 +132,8 @@ impl OpAsmDirective for Dispatchers {
             if index > 0 {
                 h.write_str(", ")?;
             }
-            h.write_attribute(&Attribute::SymbolRef(ability.clone()))?;
             let dispatcher = h.get_value_name(dispatcher).to_owned();
-            write!(h, ": {dispatcher}")?;
+            write!(h, "{}: {dispatcher}", display_symbol_ref(ability))?;
         }
         h.write_char(']')
     }

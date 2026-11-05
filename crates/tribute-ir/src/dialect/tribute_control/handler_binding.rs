@@ -12,7 +12,7 @@ use trunk_ir::ops::DialectType;
 use trunk_ir::parser::raw::{
     RawAttribute, RawType, ident, raw_region, raw_type, symbol_path, symbol_ref, ws,
 };
-use trunk_ir::printer::OpPrintHelper;
+use trunk_ir::printer::{OpPrintHelper, display_symbol_ref, display_symbol_text};
 use trunk_ir::refs::{RegionRef, TypeRef};
 use trunk_ir::types::{Attribute, AttributeMap, StringRef};
 use trunk_ir::{IrContext, SymbolPath};
@@ -107,15 +107,21 @@ impl HandlerBinding {
             && Never::from_type_ref(ctx, self.operation_result_type).is_none()
     }
 
-    /// Write `prefix`, then `op @Ability @name`.
-    pub fn write_header(&self, h: &mut OpPrintHelper<'_, '_>, prefix: &str) -> fmt::Result {
-        write!(h, "{prefix}{} ", self.kind.keyword())?;
-        h.write_attribute(&Attribute::SymbolRef(self.ability.clone()))?;
-        h.write_char(' ')?;
-        h.write_symbol_text(h.ctx().str(self.op_name))
+    /// The header the handle formats write for this binding,
+    /// `op @Ability @name`.
+    pub fn header<'a>(&'a self, ctx: &'a IrContext) -> impl fmt::Display + 'a {
+        fmt::from_fn(move |f| {
+            write!(
+                f,
+                "{} {} {}",
+                self.kind.keyword(),
+                display_symbol_ref(&self.ability),
+                display_symbol_text(ctx.str(self.op_name))
+            )
+        })
     }
 
-    /// Parse the header [`Self::write_header`] writes. It backtracks when
+    /// Parse the header [`Self::header`] writes. It backtracks when
     /// the input does not start with a kind keyword, so a list of arms ends
     /// there.
     pub fn parse_header(input: &mut &str) -> winnow::ModalResult<RawHeader> {
@@ -221,7 +227,7 @@ impl OpAsmDirective for HandleArms {
 
     fn print(h: &mut OpPrintHelper<'_, '_>, arms: Self::Parts<'_>) -> fmt::Result {
         for (binding, arm) in arms {
-            binding.write_header(h, " ")?;
+            write!(h, " {}", binding.header(h.ctx()))?;
             write_entry_args(h, arm)?;
             h.write_str(" : ")?;
             h.write_type(binding.operation_result_type)?;
