@@ -432,8 +432,7 @@ impl<'a> AsmParser<'a> {
     }
 
     pub(crate) fn push_alias_scope(&mut self) {
-        let scope = self.aliases.last().cloned().unwrap_or_default();
-        self.aliases.push(scope);
+        self.aliases.push(HashMap::default());
     }
 
     pub(crate) fn pop_alias_scope(&mut self) {
