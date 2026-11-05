@@ -513,8 +513,8 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx);
         let closure_ty = make_closure_type(&mut ctx);
 
-        // Create an env value via arith.const
-        let env_op = trunk_ir::dialect::arith::Const::operands()
+        // Create an env value via arith.constant
+        let env_op = trunk_ir::dialect::arith::Constant::operands()
             .value(Attribute::Int(0))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -544,7 +544,7 @@ mod tests {
         let closure_ty = make_closure_type(&mut ctx);
 
         // Create a closure value
-        let env_op = trunk_ir::dialect::arith::Const::operands()
+        let env_op = trunk_ir::dialect::arith::Constant::operands()
             .value(Attribute::Int(0))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -580,7 +580,7 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx);
         let closure_ty = make_closure_type(&mut ctx);
 
-        let capture_op = trunk_ir::dialect::arith::Const::operands()
+        let capture_op = trunk_ir::dialect::arith::Constant::operands()
             .value(Attribute::Int(0))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -616,7 +616,7 @@ mod tests {
         let closure_ty = make_closure_type(&mut ctx);
 
         // Create a capture value
-        let cap_op = trunk_ir::dialect::arith::Const::operands()
+        let cap_op = trunk_ir::dialect::arith::Constant::operands()
             .value(Attribute::Int(7))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -686,8 +686,8 @@ mod tests {
         let loc = dummy_location();
         let i32_ty = make_i32_type(&mut ctx);
 
-        // Create an arith.const — should not match closure ops
-        let c = trunk_ir::dialect::arith::Const::operands()
+        // Create an arith.constant — should not match closure ops
+        let c = trunk_ir::dialect::arith::Constant::operands()
             .value(Attribute::Int(1))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -703,7 +703,7 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx);
         let closure_ty = make_closure_type(&mut ctx);
 
-        let env_op = trunk_ir::dialect::arith::Const::operands()
+        let env_op = trunk_ir::dialect::arith::Constant::operands()
             .value(Attribute::Int(0))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -812,7 +812,7 @@ mod tests {
         assert_roundtrip(
             r#"core.module @test {
   func.func @main() -> core.i32 {
-    %0 = arith.const {value = 10} : core.i32
+    %0 = arith.constant 10 : core.i32
     %1 = closure.lambda [%0] direct(%2: core.i32) -> core.i32 {
         %3 = arith.addi %2, %0 : core.i32
         func.return %3
@@ -843,7 +843,7 @@ mod tests {
             r#"core.module @test {
   func.func @main() -> core.i32 {
     %0 = closure.lambda direct() -> core.i32 {
-        %1 = arith.const {value = 42} : core.i32
+        %1 = arith.constant 42 : core.i32
         func.return %1
     }
     func.return %0
@@ -913,10 +913,10 @@ mod tests {
             let text = format!(
                 r#"core.module @test {{
   %f = closure.lambda direct() -> core.i32 {{
-    %0 = arith.const {{value = 0}} : core.i32
+    %0 = arith.constant 0 : core.i32
     func.return %0
   }} cps() -> core.i32 {{
-    %1 = arith.const {{value = 1}} : core.i32
+    %1 = arith.constant 1 : core.i32
     func.return %1
   }} : closure.closure<{signature}>
 }}"#
@@ -947,8 +947,8 @@ mod tests {
         assert_roundtrip(
             r#"core.module @test {
   func.func @main() -> core.i32 {
-    %0 = arith.const {value = 1} : core.i32
-    %1 = arith.const {value = 2} : core.i32
+    %0 = arith.constant 1 : core.i32
+    %1 = arith.constant 2 : core.i32
     %2 = closure.lambda [%0, %1] direct(%3: core.i32, %4: core.i32) -> core.i32 {
         %5 = arith.addi %3, %4 : core.i32
         %6 = arith.addi %5, %0 : core.i32
@@ -1027,7 +1027,7 @@ mod callable_owner_regressions {
                   %inner = closure.lambda direct(%k: func.func_sig<() -> {callee_result}>) -> core.never {{
                     func.tail_call_indirect %k() : () -> {callee_result}
                   }}
-                  %v = arith.const {{value = 0}} : core.i32
+                  %v = arith.constant 0 : core.i32
                   func.return %v
                 }}
                 func.return

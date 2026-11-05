@@ -140,6 +140,99 @@ macro_rules! int_kind {
 
 int_kind!(i32 => I32, i64 => I64, u32 => U32, u64 => U64);
 
+/// Declare a keyword attribute kind: an enum stored as a string attribute
+/// holding its keyword, which a declarative format writes bare, as MLIR
+/// writes `arith.cmpi slt, %a, %b`.
+macro_rules! keyword_kind {
+    (
+        $(#[$meta:meta])*
+        $vis:vis enum $name:ident {
+            $($(#[$variant_meta:meta])* $variant:ident = $word:literal),+ $(,)?
+        }
+    ) => {
+        $(#[$meta])*
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        $vis enum $name {
+            $($(#[$variant_meta])* $variant),+
+        }
+
+        impl $name {
+            /// The keyword that spells this value.
+            pub fn keyword(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $word),+
+                }
+            }
+
+            /// The value a keyword spells; `None` for any other word.
+            pub fn from_keyword(word: &str) -> Option<Self> {
+                match word {
+                    $($word => Some(Self::$variant),)+
+                    _ => None,
+                }
+            }
+
+            fn from_attribute(
+                ctx: &$crate::context::IrContext,
+                attr: &$crate::types::Attribute,
+            ) -> Option<Self> {
+                match attr {
+                    $crate::types::Attribute::String(word) => Self::from_keyword(ctx.str(*word)),
+                    _ => None,
+                }
+            }
+        }
+
+        impl ::std::fmt::Display for $name {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str(self.keyword())
+            }
+        }
+
+        impl $crate::attr_kind::AttrKind for $name {
+            const KIND: $crate::op_schema::AttributeKind = $crate::op_schema::AttributeKind::String;
+            type Out<'ctx> = $name;
+            type In = $name;
+            const DOMAIN: Option<&'static str> = Some(concat!("one of:" $(, " ", $word)+));
+
+            fn accepts(ctx: &$crate::context::IrContext, attr: &$crate::types::Attribute) -> bool {
+                Self::from_attribute(ctx, attr).is_some()
+            }
+
+            fn read<'ctx>(
+                ctx: &'ctx $crate::context::IrContext,
+                attr: &'ctx $crate::types::Attribute,
+            ) -> $name {
+                Self::from_attribute(ctx, attr)
+                    .expect(concat!("unverified ", stringify!($name), " keyword"))
+            }
+
+            fn write(ctx: &mut $crate::context::IrContext, value: $name) -> $crate::types::Attribute {
+                ctx.string_attr(value.keyword())
+            }
+
+            fn print_text(
+                h: &mut $crate::printer::OpPrintHelper<'_, '_>,
+                attr: &$crate::types::Attribute,
+            ) -> ::std::fmt::Result {
+                ::std::fmt::Write::write_str(h, Self::read(h.ctx(), attr).keyword())
+            }
+
+            fn parse_text<'a>(
+                input: &mut &'a str,
+            ) -> ::winnow::ModalResult<$crate::parser::raw::RawAttribute<'a>> {
+                $crate::asm_format::parse_keyword(input, |word| {
+                    Self::from_keyword(word).map(|value| {
+                        $crate::parser::raw::RawAttribute::String(value.keyword().to_owned())
+                    })
+                })
+            }
+        }
+    };
+}
+
+pub(crate) use keyword_kind;
+
 impl AttrKind for f32 {
     const KIND: AttributeKind = AttributeKind::F32;
     type Out<'ctx> = f32;

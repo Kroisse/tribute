@@ -10,14 +10,14 @@ help: the trait `AttrKind` is not implemented for `NotAKind`
 1 | struct NotAKind;
   | ^^^^^^^^^^^^^^^
   = help: the following other types implement trait `AttrKind`:
+            CmpfPredicate
+            CmpiPredicate
+            FloatCond
+            IntCond
             [K]
             bool
             f32
             f64
-            i32
-            i64
-            std::string::String
-            trunk_ir::Attribute
           and $N others
   = note: this error originates in the attribute macro `trunk_ir::dialect` (in Nightly builds, run with -Z macro-backtrace for more info)
 
@@ -33,12 +33,12 @@ help: the trait `AttrKind` is not implemented for `NotAKind`
 1 | struct NotAKind;
   | ^^^^^^^^^^^^^^^
   = help: the following other types implement trait `AttrKind`:
+            CmpfPredicate
+            CmpiPredicate
+            FloatCond
+            IntCond
             [K]
             bool
             f32
             f64
-            i32
-            i64
-            std::string::String
-            trunk_ir::Attribute
           and $N others

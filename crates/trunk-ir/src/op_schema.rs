@@ -1232,14 +1232,16 @@ mod tests {
         let text = schema_errors(
             r#"core.module @m {
   func.func @f(%a: core.f64, %b: core.f64) {
-    %c = arith.cmpf %a, %b {predicate = @olt} : core.i1
+    %c = "arith.cmpf"(%a, %b) {predicate = @olt} : core.i1
     %d = "arith.cmpf"(%a) : core.i1
     func.return
   }
 }"#,
         );
         assert!(
-            text.contains("arith.cmpf (op0): attribute `predicate` must be a String attribute"),
+            text.contains(
+                "arith.cmpf (op0): attribute `predicate` must be one of: oeq une olt ole ogt oge"
+            ),
             "{text}"
         );
         assert!(text.contains("expected 2 operand(s), found 1"), "{text}");

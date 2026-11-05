@@ -854,7 +854,7 @@ mod tests {
             r#"core.module @test {
   wasm.memory {min = 1, max = 0, shared = false, memory64 = false}
   func.func @run() -> core.i32 {
-    %value = arith.const {value = 1} : core.i32
+    %value = arith.constant 1 : core.i32
     func.return %value
   }
 }"#,
@@ -1042,7 +1042,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.func @main() -> core.nil {
-    %value = arith.const {value = 1} : core.i32
+    %value = arith.constant 1 : core.i32
     wasm.return
   }
 }"#,
@@ -1080,7 +1080,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @run() -> core.i32 {
-    %value = arith.const {value = 1} : core.i32
+    %value = arith.constant 1 : core.i32
     func.return %value
   }
 }"#,
@@ -1097,7 +1097,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.func @main(%x: core.i32) -> core.i64 {
-    %r = core.unrealized_conversion_cast %x : core.i64
+    %r = core.unrealized_conversion_cast %x : core.i32 to core.i64
     wasm.return %r
   }
 }"#,

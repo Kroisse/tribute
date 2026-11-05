@@ -187,9 +187,6 @@ mod tests {
         lower(&mut ctx, module, TypeConverter::new()).expect("mem.null lowers to clif");
 
         let printed = print_module(&ctx, module.op());
-        assert!(
-            printed.contains("clif.iconst {value = 0} : core.ptr"),
-            "{printed}"
-        );
+        assert!(printed.contains("clif.iconst 0 : core.ptr"), "{printed}");
     }
 }

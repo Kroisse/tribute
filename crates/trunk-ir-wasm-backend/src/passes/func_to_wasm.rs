@@ -966,7 +966,7 @@ mod tests {
         assert!(output.contains("wasm.table"), "{output}");
         assert!(output.contains("wasm.elem"), "{output}");
         assert!(output.contains("wasm.ref_func @target"), "{output}");
-        assert!(output.contains("wasm.i32_const {value = 0}"), "{output}");
+        assert!(output.contains("wasm.i32_const 0"), "{output}");
         assert!(output.contains("wasm.return_call_indirect"), "{output}");
     }
 

@@ -137,7 +137,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let text = "core.module @m {
                 wasm.func @good() -> core.i32 {
-                    %callee = wasm.i32_const {value = 0} : core.i32
+                    %callee = wasm.i32_const 0 : core.i32
                     %value = wasm.call_indirect %callee() : () -> core.i32
                     wasm.return %value
                 }

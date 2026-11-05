@@ -1,12 +1,12 @@
 //! Lower arith dialect operations to wasm dialect (arena IR).
 //!
 //! This pass converts arithmetic operations to their wasm equivalents:
-//! - `arith.const` -> `wasm.{i32,i64,f32,f64}_const`
+//! - `arith.constant` -> `wasm.{i32,i64,f32,f64}_const`
 //! - `core.nil_value` -> `wasm.nop`
 //! - `arith.{add,sub,mul,div,rem}` -> `wasm.{type}_{op}`
 //! - `arith.cmp_*` -> `wasm.{type}_{cmp}`
 //! - `arith.neg` -> `wasm.{f32,f64}_neg` or 0 - x for integers
-//! - `arith.{and,or,xor,shl,shr,shru}` -> `wasm.i{32,64}_{op}`
+//! - `arith.{andi,ori,xori,shli,shrsi,shrui}` -> `wasm.i{32,64}_{op}`
 //! - `arith.{extsi,extui,trunci,sitofp,uitofp,fptosi,fptoui,extf,truncf}` ->
 //!   the wasm conversion with the same signedness
 //! - operations on `core.index` -> the same operations on `core.i32`, the
@@ -155,10 +155,10 @@ impl RewritePattern for ArithIndexPattern {
     }
 }
 
-/// Whether `op` is `arith.index_castsi` (`true`) or `arith.index_castui`
+/// Whether `op` is `arith.index_cast` (`true`) or `arith.index_castui`
 /// (`false`).
 fn index_cast_signedness(ctx: &IrContext, op: OpRef) -> Option<bool> {
-    if arith::IndexCastsi::matches(ctx, op) {
+    if arith::IndexCast::matches(ctx, op) {
         Some(true)
     } else if arith::IndexCastui::matches(ctx, op) {
         Some(false)
@@ -192,11 +192,11 @@ impl OpRewritePattern for NilValuePattern {
     }
 }
 
-/// Pattern for `arith.const` -> `wasm.{type}_const`
+/// Pattern for `arith.constant` -> `wasm.{type}_const`
 struct ArithConstPattern;
 
 impl OpRewritePattern for ArithConstPattern {
-    type Op = arith::Const;
+    type Op = arith::Constant;
 
     fn match_and_rewrite(
         &self,
@@ -510,86 +510,84 @@ impl RewritePattern for ArithCmpPattern {
             )?;
             let predicate = cmpi.predicate(ctx);
             let suffix = type_suffix(ctx, ctx.value_ty(lhs))?;
-
-            let pred_str = predicate.to_string();
-            let new_op = match (suffix, pred_str.as_str()) {
-                ("i32", "eq") => wasm_dialect::I32Eq::operands(lhs, rhs)
+            let new_op = match (suffix, predicate) {
+                ("i32", arith::CmpiPredicate::Eq) => wasm_dialect::I32Eq::operands(lhs, rhs)
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                ("i64", "eq") => wasm_dialect::I64Eq::operands(lhs, rhs)
+                ("i64", arith::CmpiPredicate::Eq) => wasm_dialect::I64Eq::operands(lhs, rhs)
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                ("i32", "ne") => wasm_dialect::I32Ne::operands(lhs, rhs)
+                ("i32", arith::CmpiPredicate::Ne) => wasm_dialect::I32Ne::operands(lhs, rhs)
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                ("i64", "ne") => wasm_dialect::I64Ne::operands(lhs, rhs)
+                ("i64", arith::CmpiPredicate::Ne) => wasm_dialect::I64Ne::operands(lhs, rhs)
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                ("i32", "slt") => wasm_dialect::I32LtS::operands(lhs, rhs)
+                ("i32", arith::CmpiPredicate::Slt) => wasm_dialect::I32LtS::operands(lhs, rhs)
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                ("i64", "slt") => wasm_dialect::I64LtS::operands(lhs, rhs)
+                ("i64", arith::CmpiPredicate::Slt) => wasm_dialect::I64LtS::operands(lhs, rhs)
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                ("i32", "sle") => wasm_dialect::I32LeS::operands(lhs, rhs)
+                ("i32", arith::CmpiPredicate::Sle) => wasm_dialect::I32LeS::operands(lhs, rhs)
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                ("i64", "sle") => wasm_dialect::I64LeS::operands(lhs, rhs)
+                ("i64", arith::CmpiPredicate::Sle) => wasm_dialect::I64LeS::operands(lhs, rhs)
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                ("i32", "sgt") => wasm_dialect::I32GtS::operands(lhs, rhs)
+                ("i32", arith::CmpiPredicate::Sgt) => wasm_dialect::I32GtS::operands(lhs, rhs)
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                ("i64", "sgt") => wasm_dialect::I64GtS::operands(lhs, rhs)
+                ("i64", arith::CmpiPredicate::Sgt) => wasm_dialect::I64GtS::operands(lhs, rhs)
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                ("i32", "sge") => wasm_dialect::I32GeS::operands(lhs, rhs)
+                ("i32", arith::CmpiPredicate::Sge) => wasm_dialect::I32GeS::operands(lhs, rhs)
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                ("i64", "sge") => wasm_dialect::I64GeS::operands(lhs, rhs)
+                ("i64", arith::CmpiPredicate::Sge) => wasm_dialect::I64GeS::operands(lhs, rhs)
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                ("i32", "ult") => wasm_dialect::I32LtU::operands(lhs, rhs)
+                ("i32", arith::CmpiPredicate::Ult) => wasm_dialect::I32LtU::operands(lhs, rhs)
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                ("i64", "ult") => wasm_dialect::I64LtU::operands(lhs, rhs)
+                ("i64", arith::CmpiPredicate::Ult) => wasm_dialect::I64LtU::operands(lhs, rhs)
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                ("i32", "ule") => wasm_dialect::I32LeU::operands(lhs, rhs)
+                ("i32", arith::CmpiPredicate::Ule) => wasm_dialect::I32LeU::operands(lhs, rhs)
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                ("i64", "ule") => wasm_dialect::I64LeU::operands(lhs, rhs)
+                ("i64", arith::CmpiPredicate::Ule) => wasm_dialect::I64LeU::operands(lhs, rhs)
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                ("i32", "ugt") => wasm_dialect::I32GtU::operands(lhs, rhs)
+                ("i32", arith::CmpiPredicate::Ugt) => wasm_dialect::I32GtU::operands(lhs, rhs)
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                ("i64", "ugt") => wasm_dialect::I64GtU::operands(lhs, rhs)
+                ("i64", arith::CmpiPredicate::Ugt) => wasm_dialect::I64GtU::operands(lhs, rhs)
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                ("i32", "uge") => wasm_dialect::I32GeU::operands(lhs, rhs)
+                ("i32", arith::CmpiPredicate::Uge) => wasm_dialect::I32GeU::operands(lhs, rhs)
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                ("i64", "uge") => wasm_dialect::I64GeU::operands(lhs, rhs)
+                ("i64", arith::CmpiPredicate::Uge) => wasm_dialect::I64GeU::operands(lhs, rhs)
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
@@ -600,54 +598,52 @@ impl RewritePattern for ArithCmpPattern {
         } else if let Ok(cmpf) = arith::Cmpf::from_op(ctx, op) {
             let predicate = cmpf.predicate(ctx);
             let suffix = type_suffix(ctx, ctx.value_ty(lhs))?;
-
-            let pred_str = predicate.to_string();
-            let new_op = match (suffix, pred_str.as_str()) {
-                ("f32", "oeq") => wasm_dialect::F32Eq::operands(lhs, rhs)
+            let new_op = match (suffix, predicate) {
+                ("f32", arith::CmpfPredicate::Oeq) => wasm_dialect::F32Eq::operands(lhs, rhs)
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                ("f64", "oeq") => wasm_dialect::F64Eq::operands(lhs, rhs)
+                ("f64", arith::CmpfPredicate::Oeq) => wasm_dialect::F64Eq::operands(lhs, rhs)
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                ("f32", "une") => wasm_dialect::F32Ne::operands(lhs, rhs)
+                ("f32", arith::CmpfPredicate::Une) => wasm_dialect::F32Ne::operands(lhs, rhs)
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                ("f64", "une") => wasm_dialect::F64Ne::operands(lhs, rhs)
+                ("f64", arith::CmpfPredicate::Une) => wasm_dialect::F64Ne::operands(lhs, rhs)
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                ("f32", "olt") => wasm_dialect::F32Lt::operands(lhs, rhs)
+                ("f32", arith::CmpfPredicate::Olt) => wasm_dialect::F32Lt::operands(lhs, rhs)
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                ("f64", "olt") => wasm_dialect::F64Lt::operands(lhs, rhs)
+                ("f64", arith::CmpfPredicate::Olt) => wasm_dialect::F64Lt::operands(lhs, rhs)
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                ("f32", "ole") => wasm_dialect::F32Le::operands(lhs, rhs)
+                ("f32", arith::CmpfPredicate::Ole) => wasm_dialect::F32Le::operands(lhs, rhs)
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                ("f64", "ole") => wasm_dialect::F64Le::operands(lhs, rhs)
+                ("f64", arith::CmpfPredicate::Ole) => wasm_dialect::F64Le::operands(lhs, rhs)
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                ("f32", "ogt") => wasm_dialect::F32Gt::operands(lhs, rhs)
+                ("f32", arith::CmpfPredicate::Ogt) => wasm_dialect::F32Gt::operands(lhs, rhs)
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                ("f64", "ogt") => wasm_dialect::F64Gt::operands(lhs, rhs)
+                ("f64", arith::CmpfPredicate::Ogt) => wasm_dialect::F64Gt::operands(lhs, rhs)
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                ("f32", "oge") => wasm_dialect::F32Ge::operands(lhs, rhs)
+                ("f32", arith::CmpfPredicate::Oge) => wasm_dialect::F32Ge::operands(lhs, rhs)
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                ("f64", "oge") => wasm_dialect::F64Ge::operands(lhs, rhs)
+                ("f64", arith::CmpfPredicate::Oge) => wasm_dialect::F64Ge::operands(lhs, rhs)
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
@@ -743,18 +739,18 @@ impl RewritePattern for ArithNegPattern {
     }
 }
 
-/// Pattern for `arith.{and,or,xor,shl,shr,shru}` -> `wasm.i{32,64}_{op}`
+/// Pattern for `arith.{andi,ori,xori,shli,shrsi,shrui}` -> `wasm.i{32,64}_{op}`
 struct ArithBitwisePattern;
 
 impl RewritePattern for ArithBitwisePattern {
     fn roots(&self) -> Option<&[OpName]> {
         Some(&[
-            arith::And::NAME,
-            arith::Or::NAME,
-            arith::Xor::NAME,
-            arith::Shl::NAME,
-            arith::Shr::NAME,
-            arith::Shru::NAME,
+            arith::Andi::NAME,
+            arith::Ori::NAME,
+            arith::Xori::NAME,
+            arith::Shli::NAME,
+            arith::Shrsi::NAME,
+            arith::Shrui::NAME,
         ])
     }
 
@@ -771,12 +767,12 @@ impl RewritePattern for ArithBitwisePattern {
 
         let name = data.name;
         let is_bitwise = [
-            arith::And::NAME,
-            arith::Or::NAME,
-            arith::Xor::NAME,
-            arith::Shl::NAME,
-            arith::Shr::NAME,
-            arith::Shru::NAME,
+            arith::Andi::NAME,
+            arith::Ori::NAME,
+            arith::Xori::NAME,
+            arith::Shli::NAME,
+            arith::Shrsi::NAME,
+            arith::Shrui::NAME,
         ]
         .contains(&name);
 
@@ -793,13 +789,14 @@ impl RewritePattern for ArithBitwisePattern {
         // A right shift moves the unspecified upper bits of a narrow integer
         // into the result.
         rewriter.ensure(
-            !(is_narrow(ctx, result_ty) && (name == arith::Shr::NAME || name == arith::Shru::NAME)),
+            !(is_narrow(ctx, result_ty)
+                && (name == arith::Shrsi::NAME || name == arith::Shrui::NAME)),
             "right shift of a narrow integer is not lowered",
         )?;
         let suffix = type_suffix(ctx, result_ty)?;
         let loc = ctx.op(op).location;
 
-        let new_op = if name == arith::And::NAME {
+        let new_op = if name == arith::Andi::NAME {
             match suffix {
                 "i64" => wasm_dialect::I64And::operands(lhs, rhs)
                     .results(result_ty)
@@ -811,7 +808,7 @@ impl RewritePattern for ArithBitwisePattern {
                     .op_ref(),
                 _ => return None,
             }
-        } else if name == arith::Or::NAME {
+        } else if name == arith::Ori::NAME {
             match suffix {
                 "i64" => wasm_dialect::I64Or::operands(lhs, rhs)
                     .results(result_ty)
@@ -823,7 +820,7 @@ impl RewritePattern for ArithBitwisePattern {
                     .op_ref(),
                 _ => return None,
             }
-        } else if name == arith::Xor::NAME {
+        } else if name == arith::Xori::NAME {
             match suffix {
                 "i64" => wasm_dialect::I64Xor::operands(lhs, rhs)
                     .results(result_ty)
@@ -835,7 +832,7 @@ impl RewritePattern for ArithBitwisePattern {
                     .op_ref(),
                 _ => return None,
             }
-        } else if name == arith::Shl::NAME {
+        } else if name == arith::Shli::NAME {
             match suffix {
                 "i64" => wasm_dialect::I64Shl::operands(lhs, rhs)
                     .results(result_ty)
@@ -847,7 +844,7 @@ impl RewritePattern for ArithBitwisePattern {
                     .op_ref(),
                 _ => return None,
             }
-        } else if name == arith::Shr::NAME {
+        } else if name == arith::Shrsi::NAME {
             match suffix {
                 "i64" => wasm_dialect::I64ShrS::operands(lhs, rhs)
                     .results(result_ty)
@@ -859,7 +856,7 @@ impl RewritePattern for ArithBitwisePattern {
                     .op_ref(),
                 _ => return None,
             }
-        } else if name == arith::Shru::NAME {
+        } else if name == arith::Shrui::NAME {
             match suffix {
                 "i64" => wasm_dialect::I64ShrU::operands(lhs, rhs)
                     .results(result_ty)
@@ -1116,13 +1113,13 @@ mod tests {
             r#"
 core.module @test {
   func.func @f(%n: core.i32, %w: core.i64, %i: core.index) -> core.i64 {
-    %one = arith.const {value = 1} : core.index
-    %a = arith.index_castsi %n : core.index
-    %b = arith.index_castui %w : core.index
+    %one = arith.constant 1 : core.index
+    %a = arith.index_cast %n : core.i32 to core.index
+    %b = arith.index_castui %w : core.i64 to core.index
     %sum = arith.addi %a, %b : core.index
     %next = arith.addi %sum, %one : core.index
-    %lt = arith.cmpi %next, %i {predicate = "ult"} : core.i1
-    %wide = arith.index_castui %next : core.i64
+    %lt = arith.cmpi ult, %next, %i : core.index
+    %wide = arith.index_castui %next : core.index to core.i64
     func.return %wide
   }
 }
@@ -1153,9 +1150,9 @@ core.module @test {
             r#"
 core.module @test {
   func.func @f(%a: test.opaque, %b: test.opaque, %x: core.f64, %y: core.f64) {
-    %c = arith.const {value = 0} : test.opaque
+    %c = arith.constant 0 : test.opaque
     %sum = arith.addi %a, %b : test.opaque
-    %bits = arith.and %x, %y : core.f64
+    %bits = arith.andi %x, %y : core.f64
     func.return
   }
 }
@@ -1165,7 +1162,7 @@ core.module @test {
         lower(&mut ctx, module, TypeConverter::new());
 
         let output = print_module(&ctx, module.op());
-        for op in ["arith.const", "arith.addi", "arith.and"] {
+        for op in ["arith.constant", "arith.addi", "arith.andi"] {
             assert!(output.contains(op), "{op} should remain:\n{output}");
         }
         assert!(!output.contains("wasm.i32"), "{output}");
@@ -1204,15 +1201,15 @@ core.module @test {
             &mut ctx,
             r#"core.module @test {
   func.func @convert(%n: core.i32, %w: core.i64, %x: core.f32, %y: core.f64) {
-    %s = arith.extsi %n : core.i64
-    %u = arith.extui %n : core.i64
-    %t = arith.trunci %w : core.i32
-    %sf = arith.sitofp %n : core.f64
-    %uf = arith.uitofp %w : core.f32
-    %si = arith.fptosi %y : core.i32
-    %ui = arith.fptoui %x : core.i64
-    %e = arith.extf %x : core.f64
-    %r = arith.truncf %y : core.f32
+    %s = arith.extsi %n : core.i32 to core.i64
+    %u = arith.extui %n : core.i32 to core.i64
+    %t = arith.trunci %w : core.i64 to core.i32
+    %sf = arith.sitofp %n : core.i32 to core.f64
+    %uf = arith.uitofp %w : core.i64 to core.f32
+    %si = arith.fptosi %y : core.f64 to core.i32
+    %ui = arith.fptoui %x : core.f32 to core.i64
+    %e = arith.extf %x : core.f32 to core.f64
+    %r = arith.truncf %y : core.f64 to core.f32
     func.return
   }
 }"#,
@@ -1244,12 +1241,12 @@ core.module @test {
             &mut ctx,
             r#"core.module @test {
   func.func @convert(%b: core.i8, %h: core.i16, %n: core.i32, %w: core.i64) {
-    %zb = arith.extui %b : core.i32
-    %zh = arith.extui %h : core.i64
-    %sb = arith.extsi %b : core.i32
-    %sh = arith.extsi %h : core.i64
-    %tb = arith.trunci %n : core.i8
-    %th = arith.trunci %w : core.i16
+    %zb = arith.extui %b : core.i8 to core.i32
+    %zh = arith.extui %h : core.i16 to core.i64
+    %sb = arith.extsi %b : core.i8 to core.i32
+    %sh = arith.extsi %h : core.i16 to core.i64
+    %tb = arith.trunci %n : core.i32 to core.i8
+    %th = arith.trunci %w : core.i64 to core.i16
     func.return
   }
 }"#,
@@ -1260,8 +1257,8 @@ core.module @test {
         let output = print_module(&ctx, module.op());
         assert!(!output.contains("arith."), "{output}");
         for expected in [
-            "wasm.i32_const {value = 255}",
-            "wasm.i32_const {value = 65535}",
+            "wasm.i32_const 255",
+            "wasm.i32_const 65535",
             "wasm.i64_extend_i32_u",
             "wasm.i32_extend8_s",
             "wasm.i32_extend16_s",
@@ -1280,13 +1277,13 @@ core.module @test {
             &mut ctx,
             r#"core.module @test {
   func.func @read(%a: core.i8, %b: core.i8, %p: core.i1) {
-    %lt = arith.cmpi %a, %b {predicate = "ult"} : core.i1
+    %lt = arith.cmpi ult, %a, %b : core.i8
     %q = arith.divui %a, %b : core.i8
     %r = arith.remsi %a, %b : core.i8
-    %s = arith.shru %a, %b : core.i8
-    %f = arith.sitofp %a : core.f64
-    %e = arith.extsi %p : core.i32
-    %x = arith.xor %a, %b : core.i8
+    %s = arith.shrui %a, %b : core.i8
+    %f = arith.sitofp %a : core.i8 to core.f64
+    %e = arith.extsi %p : core.i1 to core.i32
+    %x = arith.xori %a, %b : core.i8
     func.return
   }
 }"#,
@@ -1307,14 +1304,14 @@ core.module @test {
             r#"
 core.module @test {
   func.func @compare(%a: core.i32, %b: core.i32, %c: core.i64, %d: core.i64) {
-    %0 = arith.cmpi %a, %b {predicate = "ult"} : core.i1
-    %1 = arith.cmpi %a, %b {predicate = "ule"} : core.i1
-    %2 = arith.cmpi %a, %b {predicate = "ugt"} : core.i1
-    %3 = arith.cmpi %a, %b {predicate = "uge"} : core.i1
-    %4 = arith.cmpi %c, %d {predicate = "ult"} : core.i1
-    %5 = arith.cmpi %c, %d {predicate = "ule"} : core.i1
-    %6 = arith.cmpi %c, %d {predicate = "ugt"} : core.i1
-    %7 = arith.cmpi %c, %d {predicate = "uge"} : core.i1
+    %0 = arith.cmpi ult, %a, %b : core.i32
+    %1 = arith.cmpi ule, %a, %b : core.i32
+    %2 = arith.cmpi ugt, %a, %b : core.i32
+    %3 = arith.cmpi uge, %a, %b : core.i32
+    %4 = arith.cmpi ult, %c, %d : core.i64
+    %5 = arith.cmpi ule, %c, %d : core.i64
+    %6 = arith.cmpi ugt, %c, %d : core.i64
+    %7 = arith.cmpi uge, %c, %d : core.i64
     func.return
   }
 }

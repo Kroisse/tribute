@@ -737,7 +737,7 @@ mod tests {
         let input = final_dispatch_fixture(
             r#"ability.handle_dispatch [] %ev, %prompt() {
       ^body(%inner: !evidence):
-        %choice = arith.const {value = 0} : core.i32
+        %choice = arith.constant 0 : core.i32
         scf.index_switch %choice : (core.i32) -> ()
         default {
           func.unreachable

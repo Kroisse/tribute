@@ -1,21 +1,20 @@
 //! Lower arith dialect operations to clif dialect.
 //!
 //! This pass converts arithmetic operations to their Cranelift equivalents:
-//! - `arith.const` -> `clif.iconst` / `clif.f32const` / `clif.f64const`
+//! - `arith.constant` -> `clif.iconst` / `clif.f32const` / `clif.f64const`
 //! - `core.nil_value` -> `clif.iconst 0`
 //! - `arith.{add,sub,mul,div,rem}` -> `clif.{iadd,isub,imul,sdiv,srem}` / `clif.{fadd,fsub,fmul,fdiv}`
 //! - `arith.cmp_*` -> `clif.icmp` / `clif.fcmp` with `cond` attribute
 //! - `arith.neg` -> `clif.ineg` / `clif.fneg` (native support, no expansion needed)
-//! - `arith.{and,or,xor,shl,shr,shru}` -> `clif.{band,bor,bxor,ishl,sshr,ushr}`
+//! - `arith.{andi,ori,xori,shli,shrsi,shrui}` -> `clif.{band,bor,bxor,ishl,sshr,ushr}`
 //! - `arith.{extsi,extui,trunci}` -> `clif.{sextend,uextend,ireduce}`
 //! - `arith.{sitofp,uitofp,fptosi,fptoui}` -> `clif.fcvt_{from,to}_{sint,uint}`
 //! - `arith.{extf,truncf}` -> `clif.{fpromote,fdemote}`
 
 use trunk_ir::OpName;
-use trunk_ir::StringArg;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::arith;
-use trunk_ir::dialect::clif;
+use trunk_ir::dialect::arith::{self, CmpfPredicate, CmpiPredicate};
+use trunk_ir::dialect::clif::{self, FloatCond, IntCond};
 use trunk_ir::dialect::core::{self, FloatLike, IntegerLike};
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef};
@@ -111,7 +110,7 @@ fn integer_immediate(value: i128, width: u32) -> Option<i64> {
 struct ArithConstPattern;
 
 impl OpRewritePattern for ArithConstPattern {
-    type Op = arith::Const;
+    type Op = arith::Constant;
 
     fn match_and_rewrite(
         &self,
@@ -330,11 +329,19 @@ impl RewritePattern for ArithCmpPattern {
         if let Ok(cmpi) = arith::Cmpi::from_op(ctx, op) {
             let lhs = cmpi.lhs(ctx);
             let rhs = cmpi.rhs(ctx);
-            let cond = cmpi.predicate_ref(ctx);
-            let cmp_op = clif::Icmp::operands(lhs, rhs)
-                .cond(cond)
-                .results(i8_ty)
-                .build(ctx, loc);
+            let cond = match cmpi.predicate(ctx) {
+                CmpiPredicate::Eq => IntCond::Eq,
+                CmpiPredicate::Ne => IntCond::Ne,
+                CmpiPredicate::Slt => IntCond::Slt,
+                CmpiPredicate::Sle => IntCond::Sle,
+                CmpiPredicate::Sgt => IntCond::Sgt,
+                CmpiPredicate::Sge => IntCond::Sge,
+                CmpiPredicate::Ult => IntCond::Ult,
+                CmpiPredicate::Ule => IntCond::Ule,
+                CmpiPredicate::Ugt => IntCond::Ugt,
+                CmpiPredicate::Uge => IntCond::Uge,
+            };
+            let cmp_op = clif::Icmp::operands(lhs, rhs).cond(cond).build(ctx, loc);
             finalize_cmp(
                 ctx,
                 loc,
@@ -348,20 +355,15 @@ impl RewritePattern for ArithCmpPattern {
         } else if let Ok(cmpf) = arith::Cmpf::from_op(ctx, op) {
             let lhs = cmpf.lhs(ctx);
             let rhs = cmpf.rhs(ctx);
-            // Map arith float predicates to clif conditions
-            let cond: StringArg = match cmpf.predicate(ctx) {
-                "oeq" => "eq".into(),
-                "une" => "ne".into(),
-                "olt" => "lt".into(),
-                "ole" => "le".into(),
-                "ogt" => "gt".into(),
-                "oge" => "ge".into(),
-                _ => cmpf.predicate_ref(ctx).into(),
+            let cond = match cmpf.predicate(ctx) {
+                CmpfPredicate::Oeq => FloatCond::Eq,
+                CmpfPredicate::Une => FloatCond::Ne,
+                CmpfPredicate::Olt => FloatCond::Lt,
+                CmpfPredicate::Ole => FloatCond::Le,
+                CmpfPredicate::Ogt => FloatCond::Gt,
+                CmpfPredicate::Oge => FloatCond::Ge,
             };
-            let cmp_op = clif::Fcmp::operands(lhs, rhs)
-                .cond(cond)
-                .results(i8_ty)
-                .build(ctx, loc);
+            let cmp_op = clif::Fcmp::operands(lhs, rhs).cond(cond).build(ctx, loc);
             finalize_cmp(
                 ctx,
                 loc,
@@ -423,12 +425,12 @@ struct ArithBitwisePattern;
 impl RewritePattern for ArithBitwisePattern {
     fn roots(&self) -> Option<&[OpName]> {
         Some(&[
-            arith::And::NAME,
-            arith::Or::NAME,
-            arith::Xor::NAME,
-            arith::Shl::NAME,
-            arith::Shr::NAME,
-            arith::Shru::NAME,
+            arith::Andi::NAME,
+            arith::Ori::NAME,
+            arith::Xori::NAME,
+            arith::Shli::NAME,
+            arith::Shrsi::NAME,
+            arith::Shrui::NAME,
         ])
     }
 
@@ -445,12 +447,12 @@ impl RewritePattern for ArithBitwisePattern {
 
         let name = data.name;
         let is_bitwise = [
-            arith::And::NAME,
-            arith::Or::NAME,
-            arith::Xor::NAME,
-            arith::Shl::NAME,
-            arith::Shr::NAME,
-            arith::Shru::NAME,
+            arith::Andi::NAME,
+            arith::Ori::NAME,
+            arith::Xori::NAME,
+            arith::Shli::NAME,
+            arith::Shrsi::NAME,
+            arith::Shrui::NAME,
         ]
         .contains(&name);
         if !is_bitwise {
@@ -464,32 +466,32 @@ impl RewritePattern for ArithBitwisePattern {
         };
         let loc = ctx.op(op).location;
 
-        let new_op = if name == arith::And::NAME {
+        let new_op = if name == arith::Andi::NAME {
             clif::Band::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
-        } else if name == arith::Or::NAME {
+        } else if name == arith::Ori::NAME {
             clif::Bor::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
-        } else if name == arith::Xor::NAME {
+        } else if name == arith::Xori::NAME {
             clif::Bxor::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
-        } else if name == arith::Shl::NAME {
+        } else if name == arith::Shli::NAME {
             clif::Ishl::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
-        } else if name == arith::Shr::NAME {
+        } else if name == arith::Shrsi::NAME {
             clif::Sshr::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
-        } else if name == arith::Shru::NAME {
+        } else if name == arith::Shrui::NAME {
             clif::Ushr::operands(lhs, rhs)
                 .results(result_ty)
                 .build(ctx, loc)
@@ -596,14 +598,14 @@ impl RewritePattern for ArithConversionPattern {
     }
 }
 
-/// `arith.index_castsi` / `arith.index_castui` between the fixed-width
+/// `arith.index_cast` / `arith.index_castui` between the fixed-width
 /// integers that type conversion gave both sides: an extension by the
 /// operation's signedness, a reduction, or nothing when the widths agree.
 struct ArithIndexCastPattern;
 
 impl RewritePattern for ArithIndexCastPattern {
     fn roots(&self) -> Option<&[OpName]> {
-        Some(&[arith::IndexCastsi::NAME, arith::IndexCastui::NAME])
+        Some(&[arith::IndexCast::NAME, arith::IndexCastui::NAME])
     }
 
     fn match_and_rewrite(
@@ -612,7 +614,7 @@ impl RewritePattern for ArithIndexCastPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> Option<()> {
-        let signed = arith::IndexCastsi::matches(ctx, op);
+        let signed = arith::IndexCast::matches(ctx, op);
         if !signed && !arith::IndexCastui::matches(ctx, op) {
             return None;
         }
@@ -703,13 +705,13 @@ mod tests {
         let output = run_pass_with_64_bit_index(
             r#"core.module @test {
   func.func @f(%n: core.i32, %w: core.i64) -> core.i64 {
-    %a = arith.index_castsi %n : core.index
-    %b = arith.index_castui %n : core.index
-    %c = arith.index_castsi %w : core.index
+    %a = arith.index_cast %n : core.i32 to core.index
+    %b = arith.index_castui %n : core.i32 to core.index
+    %c = arith.index_cast %w : core.i64 to core.index
     %sum = arith.addi %a, %b : core.index
     %d = arith.addi %sum, %c : core.index
-    %narrow = arith.index_castui %d : core.i32
-    %wide = arith.index_castsi %d : core.i64
+    %narrow = arith.index_castui %d : core.index to core.i32
+    %wide = arith.index_cast %d : core.index to core.i64
     func.return %wide
   }
 }"#,
@@ -727,8 +729,8 @@ mod tests {
         let result = run_pass(
             r#"core.module @test {
   func.func @test_fn() -> core.i1 {
-    %0 = arith.const {value = true} : core.i1
-    %1 = arith.const {value = false} : core.i1
+    %0 = arith.constant true : core.i1
+    %1 = arith.constant false : core.i1
     func.return %0
   }
 }"#,
@@ -739,10 +741,10 @@ mod tests {
     #[test]
     fn boolean_conversions_other_than_zero_extension_are_rejected() {
         for body in [
-            "%s = arith.extsi %b : core.i32",
-            "%t = arith.trunci %n : core.i1",
-            "%f = arith.uitofp %b : core.f64",
-            "%u = arith.extui %b : core.i8",
+            "%s = arith.extsi %b : core.i1 to core.i32",
+            "%t = arith.trunci %n : core.i8 to core.i1",
+            "%f = arith.uitofp %b : core.i1 to core.f64",
+            "%u = arith.extui %b : core.i1 to core.i8",
         ] {
             let mut ctx = IrContext::new();
             let module = parse_test_module(
@@ -766,7 +768,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f() {
-    %null = arith.const {value = 0} : core.ptr
+    %null = arith.constant 0 : core.ptr
     func.return
   }
 }"#,
@@ -782,7 +784,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f() {
-    %opaque = arith.const {value = 0} : test.opaque
+    %opaque = arith.constant 0 : test.opaque
     func.return
   }
 }"#,
@@ -796,15 +798,15 @@ mod tests {
         let result = run_pass(
             r#"core.module @test {
   func.func @convert(%b: core.i1, %w: core.i64, %n: core.i32, %x: core.f32, %y: core.f64) {
-    %s = arith.extsi %n : core.i64
-    %u = arith.extui %b : core.i32
-    %t = arith.trunci %w : core.i32
-    %sf = arith.sitofp %n : core.f64
-    %uf = arith.uitofp %n : core.f32
-    %si = arith.fptosi %y : core.i32
-    %ui = arith.fptoui %x : core.i64
-    %e = arith.extf %x : core.f64
-    %r = arith.truncf %y : core.f32
+    %s = arith.extsi %n : core.i32 to core.i64
+    %u = arith.extui %b : core.i1 to core.i32
+    %t = arith.trunci %w : core.i64 to core.i32
+    %sf = arith.sitofp %n : core.i32 to core.f64
+    %uf = arith.uitofp %n : core.i32 to core.f32
+    %si = arith.fptosi %y : core.f64 to core.i32
+    %ui = arith.fptoui %x : core.f32 to core.i64
+    %e = arith.extf %x : core.f32 to core.f64
+    %r = arith.truncf %y : core.f64 to core.f32
     func.return
   }
 }"#,

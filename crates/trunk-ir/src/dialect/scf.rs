@@ -476,7 +476,7 @@ use crate::refs::{OpRef, ValueRef};
 use crate::transforms::canonicalize::{Fold, FoldResult};
 use crate::types::Attribute;
 
-/// `scf.if(arith.const Int(c) : core.i1)` → splice the chosen region's
+/// `scf.if(arith.constant Int(c) : core.i1)` → splice the chosen region's
 /// body into the parent block.
 ///
 /// When the condition is a compile-time constant, exactly one branch
@@ -496,7 +496,7 @@ impl Fold for If {
         let if_op = self;
         let cond = if_op.cond(ctx);
         // Guard against malformed IR: only fold when the cond's type is
-        // `core.i1`. Without this, an `arith.const value=2 : core.i32`
+        // `core.i1`. Without this, an `arith.constant value=2 : core.i32`
         // wired into the cond slot would be treated as truthy here,
         // burning the dead branch before the validator gets to reject it.
         if !BoolLike::matches(ctx, ctx.value_ty(cond)) {
@@ -505,7 +505,7 @@ impl Fold for If {
         let cond_value = const_int_value(ctx, cond)?;
         // We've gated on cond's type being `core.i1`; the only valid
         // payloads are 0 and 1. Reject anything else (e.g.
-        // `arith.const value=2 : core.i1`) so the validator surfaces the
+        // `arith.constant value=2 : core.i1`) so the validator surfaces the
         // malformed const instead of the fold silently picking a branch.
         let active_region = match cond_value {
             0 => if_op.else_region(ctx),
@@ -535,7 +535,7 @@ impl Fold for If {
     }
 }
 
-/// `scf.index_switch(arith.const Int(c))` → splice the selected region's
+/// `scf.index_switch(arith.constant Int(c))` → splice the selected region's
 /// body into the parent block.
 ///
 /// The region is the case region whose value equals the selector, or the
@@ -726,7 +726,7 @@ mod canonicalize_tests {
         // result with %a (the yield's operand).
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %t = arith.const {value = 1} : core.i1
+    %t = arith.constant 1 : core.i1
     %r = scf.if %t -> (core.i32) {
       %a = arith.addi %x, %x : core.i32
       scf.yield %a
@@ -756,7 +756,7 @@ mod canonicalize_tests {
         // region is the active one.
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %f = arith.const {value = 0} : core.i1
+    %f = arith.constant 0 : core.i1
     %r = scf.if %f -> (core.i32) {
       scf.yield %x
     } else {
@@ -807,7 +807,7 @@ mod canonicalize_tests {
         // validation rather than picking a branch by truthiness.
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %bad = arith.const {value = 2} : core.i32
+    %bad = arith.constant 2 : core.i32
     %r = scf.if %bad -> (core.i32) {
       scf.yield %x
     } else {
@@ -831,7 +831,7 @@ mod canonicalize_tests {
         // than the rewrite picking the then-branch by truthiness.
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %bad = arith.const {value = 2} : core.i1
+    %bad = arith.constant 2 : core.i1
     %r = scf.if %bad -> (core.i32) {
       scf.yield %x
     } else {
@@ -854,7 +854,7 @@ mod canonicalize_tests {
         // the if is erased and its result becomes the yield's operand.
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %t = arith.const {value = 1} : core.i1
+    %t = arith.constant 1 : core.i1
     %r = scf.if %t -> (core.i32) {
       scf.yield %x
     } else {
@@ -881,7 +881,7 @@ mod canonicalize_tests {
 
     const SWITCH_FALLTHROUGH: &str = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %sel = arith.const {value = SELECTOR} : core.i32
+    %sel = arith.constant SELECTOR : core.i32
     scf.index_switch %sel : (core.i32) -> ()
     case 0 {
       %a = arith.addi %x, %x : core.i32
@@ -926,7 +926,7 @@ mod canonicalize_tests {
 
         let folded = text.replace(
             "      %2 = scf.index_switch %0",
-            "      %4 = arith.const {value = 5} : core.i32\n      %2 = scf.index_switch %4",
+            "      %4 = arith.constant 5 : core.i32\n      %2 = scf.index_switch %4",
         );
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, &folded);
@@ -986,7 +986,7 @@ mod canonicalize_tests {
     fn switch_terminal_arm_is_spliced_when_switch_ends_block() {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %sel = arith.const {value = 0} : core.i32
+    %sel = arith.constant 0 : core.i32
     scf.index_switch %sel : (core.i32) -> ()
     case 0 {
       func.return %x
@@ -1019,7 +1019,7 @@ mod canonicalize_tests {
     fn switch_terminal_arm_is_kept_when_ops_follow_the_switch() {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %sel = arith.const {value = 0} : core.i32
+    %sel = arith.constant 0 : core.i32
     scf.index_switch %sel : (core.i32) -> ()
     case 0 {
       func.return %x

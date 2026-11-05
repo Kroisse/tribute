@@ -1265,7 +1265,7 @@ mod tests {
   !Holder = wasm_gc.struct<wasm.arrayref>
 
   wasm.func @main() -> core.i32 {
-    %zero = wasm.i32_const {value = 0} : core.i32
+    %zero = wasm.i32_const 0 : core.i32
     %items = wasm_gc.array_new_default %zero {type = !Items} : !Items
     %holder = wasm_gc.struct_new %items {type = !Holder} : !Holder
     %field = wasm_gc.struct_get %holder {type = !Holder, field_idx = 0} : !Items
@@ -1294,8 +1294,8 @@ mod tests {
   !Plain = wasm_gc.struct<core.i32, core.i64>
 
   wasm.func @main() -> core.nil {
-    %zero = wasm.i32_const {value = 0} : core.i32
-    %wide = wasm.i64_const {value = 0} : core.i64
+    %zero = wasm.i32_const 0 : core.i32
+    %wide = wasm.i64_const 0 : core.i64
     %sub = wasm_gc.struct_new %zero, %wide {type = !Sub} : !Sub
     %plain = wasm_gc.struct_new %zero, %wide {type = !Plain} : !Plain
     %base = wasm_gc.struct_get %sub {type = !Base, field_idx = 0} : core.i32
@@ -1536,8 +1536,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.func @pair() -> (core.i32, core.i64) {
-    %a = wasm.i32_const {value = 7} : core.i32
-    %b = wasm.i64_const {value = 9} : core.i64
+    %a = wasm.i32_const 7 : core.i32
+    %b = wasm.i64_const 9 : core.i64
     wasm.return %a, %b
   }
   wasm.func @use_pair() -> (core.i32, core.i64) {
@@ -1565,8 +1565,8 @@ mod tests {
     wasm.ref_func @pair : wasm.funcref
   }
   wasm.func @pair() -> (core.i32, core.i64) {
-    %a = wasm.i32_const {value = 7} : core.i32
-    %b = wasm.i64_const {value = 9} : core.i64
+    %a = wasm.i32_const 7 : core.i32
+    %b = wasm.i64_const 9 : core.i64
     wasm.return %a, %b
   }
   wasm.func @caller(%table_index: core.i32) -> (core.i32, core.i64) {
@@ -1593,7 +1593,7 @@ mod tests {
   wasm.func @caller(%index: core.i32) -> (wasm.funcref, core.i32) {
       %ignored = wasm.call_indirect %index() : () -> wasm.anyref
       %function = wasm.nop : wasm.funcref
-      %integer = wasm.i32_const {value = 0} : core.i32
+      %integer = wasm.i32_const 0 : core.i32
       wasm.return %function, %integer
   }
 }"#,
@@ -1613,8 +1613,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.func @pair() -> (core.i32, core.nil, core.i64) {
-    %a = wasm.i32_const {value = 7} : core.i32
-    %b = wasm.i64_const {value = 9} : core.i64
+    %a = wasm.i32_const 7 : core.i32
+    %b = wasm.i64_const 9 : core.i64
     wasm.return %a, %b
   }
   wasm.func @use_pair() -> (core.i32, core.i64) {
@@ -1716,7 +1716,7 @@ mod tests {
                 wasm.func @consume(%unit: core.nil) {{ wasm.return }}
                 wasm.func @main() {{
                     %unit = {producer} : core.nil
-                    %condition = wasm.i32_const {{value = 1}} : core.i32
+                    %condition = wasm.i32_const 1 : core.i32
                     wasm.if %condition {{
                         wasm.return_call @consume(%unit) : (core.nil) -> ()
                     }} else {{ wasm.unreachable }}
@@ -1808,20 +1808,20 @@ mod tests {
     wasm.ref_func @add_two : wasm.funcref
   }
   wasm.func @set_one() {
-    %one = wasm.i32_const {value = 1} : core.i32
+    %one = wasm.i32_const 1 : core.i32
     wasm.global_set %one {index = 0}
     wasm.return
   }
   wasm.func @add_two() {
     %current = wasm.global_get {index = 0} : core.i32
-    %two = wasm.i32_const {value = 2} : core.i32
+    %two = wasm.i32_const 2 : core.i32
     %next = wasm.i32_add %current, %two : core.i32
     wasm.global_set %next {index = 0}
     wasm.return
   }
   wasm.func @caller() -> core.i32 {
     wasm.call @set_one() : () -> ()
-    %table_index = wasm.i32_const {value = 0} : core.i32
+    %table_index = wasm.i32_const 0 : core.i32
     wasm.call_indirect %table_index() : () -> ()
     %result = wasm.global_get {index = 0} : core.i32
     wasm.return %result
@@ -1883,8 +1883,8 @@ mod tests {
         invoke(
             r#"core.module @test {
   wasm.func @pair() -> (core.i32, core.i64) {
-    %a = wasm.i32_const {value = 7} : core.i32
-    %b = wasm.i64_const {value = 9} : core.i64
+    %a = wasm.i32_const 7 : core.i32
+    %b = wasm.i64_const 9 : core.i64
     wasm.return %a, %b
   }
   wasm.func @caller() -> (core.i32, core.i64) {
@@ -1903,8 +1903,8 @@ mod tests {
     wasm.ref_func @pair : wasm.funcref
   }
   wasm.func @pair() -> (core.i32, core.i64) {
-    %a = wasm.i32_const {value = 7} : core.i32
-    %b = wasm.i64_const {value = 9} : core.i64
+    %a = wasm.i32_const 7 : core.i32
+    %b = wasm.i64_const 9 : core.i64
     wasm.return %a, %b
   }
   wasm.func @caller(%table_index: core.i32) -> (core.i32, core.i64) {

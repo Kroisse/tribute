@@ -90,7 +90,7 @@ smallest layer that can state an invariant precisely.
 
 | Layer | Responsibility | Failure timing | Examples |
 | ---- | ---- | ---- | ---- |
-| Operation verifier | Local invariants of one operation: operand/result/successor counts, operand/result/type-attribute type constraints and their equality or projection relations, required attributes, attribute domains, region shape, and terminator requirements that can be checked without global analysis. | At explicit operation validation checkpoints. Parsers, raw builders, and intermediate rewrites may temporarily violate schema constraints; only checks outside the schema, such as custom assembly parsing, may also fail at parse time. | `arith.cmpf` accepts only supported predicates; an op with regions requires the expected region count and terminator form. |
+| Operation verifier | Local invariants of one operation: operand/result/successor counts, operand/result/type-attribute type constraints and their equality or projection relations, required attributes, attribute domains, region shape, and terminator requirements that can be checked without global analysis. | At explicit operation validation checkpoints. Parsers, raw builders, and intermediate rewrites may temporarily violate schema constraints; only checks outside the schema, such as custom assembly parsing, may also fail at parse time. | `arith.cmpf` accepts only the predicates its kind lists; an op with regions requires the expected region count and terminator form. |
 | Conversion target | Dialect and type legality at a named lowering boundary. | Immediately after a pass or pass group claims a conversion boundary. Partial conversion rejects explicitly illegal operations; full conversion also rejects unknown operations. | Ability lowering leaves no `ability.perform`; backend-ready native IR contains only `clif.*` plus allowed infrastructure ops. |
 | Pass-manager verifier | Whole-IR consistency after transformations, with the offending pass identified. | After each pass registered in a `PassManager` when a verifier hook is installed. | SSA use-chain consistency, value visibility across isolated regions, or other graph-wide invariants. |
 | Operation interface and flag | Shared behavior or property queried generically across dialects. | At the consumer that needs dialect-independent behavior. Interfaces and flags should be introduced only for multiple concrete consumers or one generic transform. | `CallLike` for direct callees; the `Pure` flag for DCE removability; the `IsolatedFromAbove` flag for nested pass-manager anchoring. |
@@ -496,7 +496,11 @@ literal은 문자열 literal로 쓴다.
   parser는 형식 parser를 부르기 전에 읽는다. Result 타입은 `type(result)`나
   `types(results)`, 또는 타입을 재구성하는 `signature`로 정확히 한 번 쓴다.
   `types`는 결과 목록을 쉼표로 구분해 쓰며, 결과가 없을 수 있으면 앞의 구두점과
-  함께 선택 묶음에 둔다.
+  함께 선택 묶음에 둔다. Builder가 추론하는 result 타입(고정 타입, 단일 operand나
+  필수 attribute로 바인딩된 변수와 그 투영)은 쓰지 않아도 된다. 그러면 parser가
+  읽은 operand와 attribute로 schema에서 추론하고, printer는 schema를 만족하는
+  operation만 이 형식으로 쓴다(`arith.cmpi slt, %a, %b : core.i32`의 결과
+  `core.i1`).
 - **`attr_dict`, `attr_dict_bare`** — 형식의 다른 원소가 쓰지 않은 모든
   attribute를 `attr_dict`는 `attributes {..}`로, `attr_dict_bare`는 keyword 없이
   `{..}`로 쓴다. 형식은 둘 중 하나만 쓴다. 남은 attribute가 없으면 아무 것도 쓰지
@@ -647,8 +651,15 @@ region의 entry block에 되돌린다. Printer는 `IsolatedFromAbove` operation�
   `name(keyword)`로 쓴다(`convention(cps)`). 간접 호출은 MLIR
   `func.call_indirect`처럼 callee의 signature를 쓰고, convention은 attribute
   사전에 둔다.
-- MLIR에 대응하는 operation이 있으면 그 표기를 따른다(`scf.index_switch`의
-  `case 0 {..}`와 `default {..}`). 아래 관례는 그렇지 않은 operation에 적용한다.
+- MLIR에 대응하는 operation이 있으면 그 이름과 표기를 따른다(`scf.index_switch`의
+  `case 0 {..}`와 `default {..}`, `arith.constant 42 : core.i32`,
+  `arith.cmpi slt, %a, %b : core.i32`, `arith.extsi %a : core.i32 to core.i64`,
+  `core.unrealized_conversion_cast %v : A to B`). 같은 모양의 다른 dialect
+  operation도 같은 표기를 쓴다: 상수는 값을 자리로(`clif.iconst 0 : core.i64`,
+  `wasm.i32_const 1 : core.i32`), 비교는 조건을 keyword로 앞에 두고 operand
+  타입을 쓰며(`clif.icmp eq, %a, %b : core.i64`), 결과 타입이 연산으로 정해지지
+  않는 변환은 `: A to B`로 쓴다(`clif.uextend %a : core.i8 to core.i32`). 아래
+  관례는 그렇지 않은 operation에 적용한다.
 - 이름 붙은 본문이 여럿이면 `entries { label { .. } .. }`로 쓴다. 본문마다
   signature가 다르면 label 뒤에 그 본문의 signature를 쓴다
   (`label(%x: T) -> R { .. }`). 모든 본문이 같은 signature를 받으면 signature는
@@ -932,7 +943,7 @@ consumer는 nested region을 재귀적으로 순회해야 하며, "사용 없음
   않으므로 이 cast는 callable의 호출 방식을 바꾸지 않으며 callable adapter를
   생성하지 않는다. 한 callable 값을 다른 convention으로 부르는 일은 그 값의
   [convention entry](#convention-entry)가 맡는다.
-- `core.nil`의 유일한 값은 속성 없는 `core.nil_value`가 만든다. `arith.const`는
+- `core.nil`의 유일한 값은 속성 없는 `core.nil_value`가 만든다. `arith.constant`는
   nil을 만들지 않는다.
 - Operation과 type의 이름은 `<dialect>.<name>` 텍스트 하나로 표기한다. Dialect
   identifier에는 점이 없으므로 첫 점이 dialect와 이름의 경계이고, 이름 쪽에는 점이
@@ -1749,7 +1760,7 @@ RC가 배열 operation에 두는 ownership 규칙과 제자리 쓰기의 순환 
 `adt.array_get`과 `adt.array_set`의 index, `adt.array_splice`의 `start`와 `end`,
 `adt.array_new`의 `length`, `adt.array_len`의 결과는
 [`core.index`](#coreindex-주소-폭-정수)다. 배열의 원소 개수와 위치는 target의 주소
-폭으로 센다. 고정 폭 정수에서 온 index는 `arith.index_castsi`나
+폭으로 센다. 고정 폭 정수에서 온 index는 `arith.index_cast`나
 `arith.index_castui`로 명시적으로 바꾼다.
 
 Index는 부호 없는 값으로 해석한다. Target은 각 operation이 선언한 범위 전제를
@@ -1892,11 +1903,11 @@ tail-call lowering.
 
 `arith.*` represents constants, integer and floating arithmetic, comparisons,
 bit operations, and numeric conversions.
-`arith.const`는 정수와 부동소수 값만 만든다. 정수 결과는 `Int` 속성을 받고,
+`arith.constant`는 정수와 부동소수 값만 만든다. 정수 결과는 `Int` 속성을 받고,
 `core.i1`은 `Bool` 속성도 받는다. 부동소수 결과는 `FloatBits` 속성을 받는다.
 정수 타입 `core.i{N}`은 부호가 없다(signless). 부호는 타입이 아니라 각 operation이
 정한다. 부호에 따라 결과가 달라지는 operation은 모두 부호 있는 쪽과 없는 쪽을 명시한
-쌍으로 둔다: `divsi`/`divui`, `remsi`/`remui`, `shr`/`shru`, `cmpi` predicate,
+쌍으로 둔다: `divsi`/`divui`, `remsi`/`remui`, `shrsi`/`shrui`, `cmpi` predicate,
 그리고 아래 변환이다. 부호와 무관한 operation(`addi`, `subi`, `muli`, 비트 연산)은
 하나만 둔다.
 
@@ -1907,16 +1918,16 @@ bit operations, and numeric conversions.
 | 정수 → 부동소수 | `sitofp` / `uitofp` | |
 | 부동소수 → 정수 | `fptosi` / `fptoui` | 범위 밖 값과 NaN은 trap한다 |
 | 부동소수 폭 | `extf` / `truncf` | 넓히기 / 좁히기 |
-| 정수 ↔ index | `index_castsi` / `index_castui` | 한쪽은 `core.index`, 다른 쪽은 고정 폭 정수 |
+| 정수 ↔ index | `index_cast` / `index_castui` | 한쪽은 `core.index`, 다른 쪽은 고정 폭 정수 |
 
 정수 산술(`addi`, `subi`, `muli`, `divsi`/`divui`, `remsi`/`remui`, `negi`), 비트
-연산, `cmpi`, `arith.const`는 고정 폭 정수와 함께 [`core.index`](#coreindex-주소-폭-정수)도
+연산, `cmpi`, `arith.constant`는 고정 폭 정수와 함께 [`core.index`](#coreindex-주소-폭-정수)도
 받는다(`IntegerOrIndex`). `core.index` 연산의 의미는 target의 index 폭을 가진
 고정 폭 정수의 같은 연산과 같다. 폭을 직접 다루는 연산(`extsi`/`extui`/`trunci`,
 정수와 부동소수 사이의 변환, `cf.switch`)은 고정 폭 정수만 받는다.
-`arith.const`의 `Int` 값은 index 폭으로 자른 값으로 읽는다.
+`arith.constant`의 `Int` 값은 index 폭으로 자른 값으로 읽는다.
 
-`index_castsi`와 `index_castui`는 고정 폭 정수와 `core.index` 사이를 어느 방향으로든
+`index_cast`와 `index_castui`는 고정 폭 정수와 `core.index` 사이를 어느 방향으로든
 바꾼다. 결과가 더 넓으면 각각 부호 확장과 0 확장을 하고, 더 좁으면 자르며, 폭이
 같으면 값을 그대로 둔다. Index 폭에 따라 결과가 달라지는 상수 접기는 하지 않는다.
 상수 피연산자의 cast는 index 폭과 무관하게 같은 값이 나오고 그 값이 64비트 부호 있는
@@ -1927,7 +1938,7 @@ bit operations, and numeric conversions.
 
 `arith`는 포인터를 다루지 않는다. 정수는 포인터가 되지 않으며, 포인터와 정수 사이의
 변환 operation은 없다. 포인터는 할당, runtime, `mem.data`에서 나오고 `mem.ptr_add`로만
-파생되므로 모든 포인터의 출처를 추적할 수 있다. `arith.const`는 `core.ptr` 값을 만들지
+파생되므로 모든 포인터의 출처를 추적할 수 있다. `arith.constant`는 `core.ptr` 값을 만들지
 않는다.
 
 `mem.*` represents low-level data, load, and store operations for runtime or FFI
@@ -2255,7 +2266,8 @@ Symbol 참조는 symbol table의 정의를 component path로 가리키며(`calle
 참조를 가진 operation에서 가장 가까운 module부터 해석한다. 참조가 아닌 이름 값은
 문자열이다. 비교 조건(`predicate`, `cond`), trap code, wasm value·heap
 type 이름, import의 module·name처럼 정해진 짧은 이름(atom)이 여기에 해당하며
-`predicate = "slt"`로 쓴다. Operation
+generic 형식에서는 `predicate = "slt"`로 쓴다. 비교 조건처럼 값의 집합이 정해진
+keyword 종류는 전용 형식에서 따옴표 없이 쓴다(`arith.cmpi slt, ..`). Operation
 이름(`op_name`), operation kind(`"fn"`, `"op"`), compiler intrinsic identity
 (`tribute.compiler_intrinsic`)도 symbol table의 정의가 아니므로 문자열이다. 기계 호출
 규약(`call_conv = "tail"`), 매개변수 ownership 계약(`tribute.ownership = "consumed"`),

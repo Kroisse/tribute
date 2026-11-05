@@ -237,7 +237,7 @@ impl Lowering<'_, '_> {
     /// The index after `at`.
     fn successor(&mut self, at: ValueRef) -> ValueRef {
         let index_ty = self.index_type();
-        let one = arith::Const::operands()
+        let one = arith::Constant::operands()
             .value(Attribute::Int(1))
             .results(index_ty)
             .build(self.ctx, self.location);

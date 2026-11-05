@@ -138,7 +138,7 @@ fn build_body(
                 .build(ctx, loc)
                 .op_ref(),
             &[then_dest, else_dest] => {
-                let cond = arith::Const::operands()
+                let cond = arith::Constant::operands()
                     .value(Attribute::Int(1))
                     .results(i1)
                     .build(ctx, loc);
@@ -150,7 +150,7 @@ fn build_body(
                     .op_ref()
             }
             [default, cases @ ..] => {
-                let discriminant = arith::Const::operands()
+                let discriminant = arith::Constant::operands()
                     .value(Attribute::Int(0))
                     .results(i32_ty)
                     .build(ctx, loc);

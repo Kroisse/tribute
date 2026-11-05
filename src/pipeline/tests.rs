@@ -172,7 +172,7 @@ fn root_dispatch_definition_matches_fixed_wasm_tail_signature_and_validates_bina
             %dispatch = adt.struct_get %frame {field = 1, type = !__tribute_continuation_frame_root_nil} : !Dispatch
             %resume = adt.ref_null {type = !Resume} : !Resume
             %product = adt.struct_new {type = !Payload} : !Payload
-            %payload = core.unrealized_conversion_cast %product : tribute_rt.anyref
+            %payload = core.unrealized_conversion_cast %product : !Payload to tribute_rt.anyref
             effect.dispatch_cps @State @get(%payload) [%evidence, %dispatch, %resume] -> core.nil
         "#,
     );
@@ -765,7 +765,7 @@ fn native_one_shot_wrapper_traps_on_second_invocation() {
     %answer = scf.if %consumed -> (core.i32) {
       func.unreachable
     } else {
-      %consumed_true = arith.const {value = 1} : core.i1
+      %consumed_true = arith.constant 1 : core.i1
       adt.struct_set %state, %consumed_true {field = 0, type = !state}
       scf.yield %value
     }
@@ -773,9 +773,9 @@ fn native_one_shot_wrapper_traps_on_second_invocation() {
   }
 
   func.func @main() -> core.i32 attributes {tribute.calling_convention = "direct"} {
-    %not_consumed = arith.const {value = 0} : core.i1
+    %not_consumed = arith.constant 0 : core.i1
     %state = adt.struct_new %not_consumed {type = !state} : !state
-    %input = arith.const {value = 0} : core.i32
+    %input = arith.constant 0 : core.i32
     %first = func.call @one_shot_wrapper(%state, %input) attributes {tribute.calling_convention = "direct"} : (!state, core.i32) -> core.i32
     %second = func.call @one_shot_wrapper(%state, %first) attributes {tribute.calling_convention = "direct"} : (!state, core.i32) -> core.i32
     func.return %second
@@ -814,8 +814,8 @@ fn physical_tail_chain_module(done_call_conv: &str, reference_call_conv: &str) -
   }}
 
   func.func @done(%value: core.i32) -> (){done_call_conv} {{
-    %expected = arith.const {{value = 3}} : core.i32
-    %ok = arith.cmpi %value, %expected {{predicate = "eq"}} : core.i1
+    %expected = arith.constant 3 : core.i32
+    %ok = arith.cmpi eq, %value, %expected : core.i32
     scf.if %ok {{
       scf.yield
     }} else {{
@@ -826,22 +826,22 @@ fn physical_tail_chain_module(done_call_conv: &str, reference_call_conv: &str) -
   }}
 
   func.func @step(%value: core.i32) -> (), {{call_conv = "tail"}} {{
-    %one = arith.const {{value = 1}} : core.i32
+    %one = arith.constant 1 : core.i32
     %next = arith.addi %value, %one : core.i32
     %done = func.constant @done : (core.i32) -> (){reference_call_conv}
     func.tail_call_indirect %done(%next) : (core.i32) -> (), {{call_conv = "tail"}}
   }}
 
   func.func @start(%value: core.i32) -> (), {{call_conv = "tail"}} {{
-    %one = arith.const {{value = 1}} : core.i32
+    %one = arith.constant 1 : core.i32
     %next = arith.addi %value, %one : core.i32
     func.tail_call @step(%next) : (core.i32) -> ()
   }}
 
   func.func @main() -> core.i32 {{
-    %input = arith.const {{value = 1}} : core.i32
+    %input = arith.constant 1 : core.i32
     func.call @start(%input) : (core.i32) -> ()
-    %exit = arith.const {{value = 0}} : core.i32
+    %exit = arith.constant 0 : core.i32
     func.return %exit
   }}
 }}"#
@@ -1135,7 +1135,7 @@ fn main() ->{std::io::Io} Nil {
         if let Ok(write) = tribute_ir::dialect::tribute_io::Write::from_op(&ctx, op)
             && let trunk_ir::refs::ValueDef::OpResult(producer, _) =
                 ctx.value_def(write.newline(&ctx))
-            && let Ok(constant) = trunk_ir::dialect::arith::Const::from_op(&ctx, producer)
+            && let Ok(constant) = trunk_ir::dialect::arith::Constant::from_op(&ctx, producer)
             && let trunk_ir::Attribute::Bool(value) = constant.value(&ctx)
         {
             newline_values.push(value);

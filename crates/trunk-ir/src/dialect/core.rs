@@ -12,7 +12,7 @@ mod core {
     }
 
     #[implements(Fold)]
-    #[asm_format(value attr_dict_bare ":" type(result))]
+    #[asm_format(value attr_dict_bare ":" type(value) "to" type(result))]
     fn unrealized_conversion_cast(value: Value<_>) -> Value<_> {}
 
     /// The only value of `core.nil`.
@@ -430,7 +430,7 @@ mod canonicalize_tests {
     fn unrealized_cast_identity_drops_same_type_cast() {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %r = core.unrealized_conversion_cast %x : core.i32
+    %r = core.unrealized_conversion_cast %x : core.i32 to core.i32
     func.return %r
   }
 }"#;
@@ -454,7 +454,7 @@ mod canonicalize_tests {
     fn unrealized_cast_identity_does_not_match_when_types_differ() {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i64 {
-    %r = core.unrealized_conversion_cast %x : core.i64
+    %r = core.unrealized_conversion_cast %x : core.i32 to core.i64
     func.return %r
   }
 }"#;
@@ -477,8 +477,8 @@ mod canonicalize_tests {
     fn unrealized_cast_round_trip_collapses_pair() {
         let input = r#"core.module @test {
   func.func @f(%x: core.i64) -> core.i64 {
-    %a = core.unrealized_conversion_cast %x : core.i32
-    %b = core.unrealized_conversion_cast %a : core.i64
+    %a = core.unrealized_conversion_cast %x : core.i64 to core.i32
+    %b = core.unrealized_conversion_cast %a : core.i32 to core.i64
     func.return %b
   }
 }"#;
@@ -503,8 +503,8 @@ mod canonicalize_tests {
     fn unrealized_cast_round_trip_does_not_match_three_step_chain() {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i64 {
-    %a = core.unrealized_conversion_cast %x : core.i16
-    %b = core.unrealized_conversion_cast %a : core.i64
+    %a = core.unrealized_conversion_cast %x : core.i32 to core.i16
+    %b = core.unrealized_conversion_cast %a : core.i16 to core.i64
     func.return %b
   }
 }"#;
@@ -601,7 +601,7 @@ mod scalar_category_tests {
     fn index_round_trips_through_text() {
         let input = r#"core.module @test {
   func.func @f(%i: core.index, %n: core.i32) -> core.index {
-    %c = arith.index_castsi %n : core.index
+    %c = arith.index_cast %n : core.i32 to core.index
     %r = arith.addi %i, %c : core.index
     func.return %r
   }
@@ -613,7 +613,7 @@ mod scalar_category_tests {
             printed.contains("(%0: core.index, %1: core.i32) -> core.index"),
             "{printed}"
         );
-        assert!(printed.contains("arith.index_castsi"), "{printed}");
+        assert!(printed.contains("arith.index_cast"), "{printed}");
         let mut reparsed_ctx = IrContext::new();
         let reparsed = crate::parser::parse_test_module(&mut reparsed_ctx, &printed);
         assert_eq!(

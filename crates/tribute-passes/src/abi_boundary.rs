@@ -768,7 +768,7 @@ mod tests {
     func.return
   }
   func.func @caller(%value: core.i32) {
-    %same = core.unrealized_conversion_cast %value : core.i32
+    %same = core.unrealized_conversion_cast %value : core.i32 to core.i32
     %reference = func.constant @target : (core.i32) -> (), {call_conv = "tail"}
     func.return
   }
@@ -793,8 +793,8 @@ mod tests {
             let module = format!(
                 r#"core.module @test {{
   func.func @run(%value: {scalar}, %erased: tribute_rt.anyref) {{
-    %boxed = core.unrealized_conversion_cast %value : tribute_rt.anyref
-    %unboxed = core.unrealized_conversion_cast %erased : {scalar}
+    %boxed = core.unrealized_conversion_cast %value : {scalar} to tribute_rt.anyref
+    %unboxed = core.unrealized_conversion_cast %erased : tribute_rt.anyref to {scalar}
     func.return
   }}
 }}"#
@@ -812,9 +812,9 @@ mod tests {
             kinds(
                 r#"core.module @test {
   func.func @run(%pointer: core.ptr, %erased: tribute_rt.anyref, %value: core.i32) {
-    %retyped = core.unrealized_conversion_cast %pointer : tribute_rt.anyref
-    %restored = core.unrealized_conversion_cast %erased : core.ptr
-    %widened = core.unrealized_conversion_cast %value : core.i64
+    %retyped = core.unrealized_conversion_cast %pointer : core.ptr to tribute_rt.anyref
+    %restored = core.unrealized_conversion_cast %erased : tribute_rt.anyref to core.ptr
+    %widened = core.unrealized_conversion_cast %value : core.i32 to core.i64
     func.return
   }
 }"#
@@ -873,7 +873,7 @@ mod tests {
             entry(
                 "() -> core.i32",
                 "",
-                "%zero = arith.const {value = 0} : core.i32\n    func.return %zero",
+                "%zero = arith.constant 0 : core.i32\n    func.return %zero",
             ),
             entry("() -> (), {call_conv = \"tail\"}", "", "func.return"),
         ] {
@@ -973,7 +973,7 @@ mod tests {
             r#"core.module @test {
   !frame = adt.typeref<{name = "Frame"}>
   func.func @run(%frame: !frame) attributes {tribute.calling_convention = "cps"} {
-    %same = core.unrealized_conversion_cast %frame : !frame
+    %same = core.unrealized_conversion_cast %frame : !frame to !frame
     func.return
   }
 }"#,
@@ -983,7 +983,7 @@ mod tests {
             r#"core.module @test {
   !frame = adt.typeref<{name = "Frame", tribute.definition = loc("test.trb" 10:20)}>
   func.func @run(%frame: !frame) attributes {tribute.calling_convention = "cps", tribute.definition = loc("test.trb" 30:40)} {
-    %same = core.unrealized_conversion_cast %frame : !frame
+    %same = core.unrealized_conversion_cast %frame : !frame to !frame
     func.return
   }
 }"#,

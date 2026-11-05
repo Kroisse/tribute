@@ -133,9 +133,9 @@ enum ArithMapping {
     /// Binary arithmetic: addi, addf, subi, etc.
     BinaryOp(fn(&mut IrContext, Location, ValueRef, ValueRef) -> OpRef),
     /// Integer comparison with predicate.
-    CmpI(&'static str),
+    CmpI(arith::CmpiPredicate),
     /// Float comparison with predicate.
-    CmpF(&'static str),
+    CmpF(arith::CmpfPredicate),
 }
 
 /// The `arith` lowering of each arithmetic intrinsic, keyed by its path.
@@ -174,12 +174,12 @@ fn arith_intrinsic_map() -> HashMap<SymbolPath, ArithMapping> {
     binary!("std::Int::%", |ctx, loc, l, r| arith::Remsi::operands(l, r)
         .build(ctx, loc)
         .op_ref());
-    cmpi!("std::Int::==", "eq");
-    cmpi!("std::Int::!=", "ne");
-    cmpi!("std::Int::<", "slt");
-    cmpi!("std::Int::<=", "sle");
-    cmpi!("std::Int::>", "sgt");
-    cmpi!("std::Int::>=", "sge");
+    cmpi!("std::Int::==", arith::CmpiPredicate::Eq);
+    cmpi!("std::Int::!=", arith::CmpiPredicate::Ne);
+    cmpi!("std::Int::<", arith::CmpiPredicate::Slt);
+    cmpi!("std::Int::<=", arith::CmpiPredicate::Sle);
+    cmpi!("std::Int::>", arith::CmpiPredicate::Sgt);
+    cmpi!("std::Int::>=", arith::CmpiPredicate::Sge);
 
     // --- Nat (unsigned) ---
     binary!("std::Nat::+", |ctx, loc, l, r| arith::Addi::operands(l, r)
@@ -197,12 +197,12 @@ fn arith_intrinsic_map() -> HashMap<SymbolPath, ArithMapping> {
     binary!("std::Nat::%", |ctx, loc, l, r| arith::Remui::operands(l, r)
         .build(ctx, loc)
         .op_ref());
-    cmpi!("std::Nat::==", "eq");
-    cmpi!("std::Nat::!=", "ne");
-    cmpi!("std::Nat::<", "ult");
-    cmpi!("std::Nat::<=", "ule");
-    cmpi!("std::Nat::>", "ugt");
-    cmpi!("std::Nat::>=", "uge");
+    cmpi!("std::Nat::==", arith::CmpiPredicate::Eq);
+    cmpi!("std::Nat::!=", arith::CmpiPredicate::Ne);
+    cmpi!("std::Nat::<", arith::CmpiPredicate::Ult);
+    cmpi!("std::Nat::<=", arith::CmpiPredicate::Ule);
+    cmpi!("std::Nat::>", arith::CmpiPredicate::Ugt);
+    cmpi!("std::Nat::>=", arith::CmpiPredicate::Uge);
 
     // --- Float ---
     binary!("std::Float::+", |ctx, loc, l, r| arith::Addf::operands(
@@ -225,12 +225,12 @@ fn arith_intrinsic_map() -> HashMap<SymbolPath, ArithMapping> {
     )
     .build(ctx, loc)
     .op_ref());
-    cmpf!("std::Float::==", "oeq");
-    cmpf!("std::Float::!=", "une");
-    cmpf!("std::Float::<", "olt");
-    cmpf!("std::Float::<=", "ole");
-    cmpf!("std::Float::>", "ogt");
-    cmpf!("std::Float::>=", "oge");
+    cmpf!("std::Float::==", arith::CmpfPredicate::Oeq);
+    cmpf!("std::Float::!=", arith::CmpfPredicate::Une);
+    cmpf!("std::Float::<", arith::CmpfPredicate::Olt);
+    cmpf!("std::Float::<=", arith::CmpfPredicate::Ole);
+    cmpf!("std::Float::>", arith::CmpfPredicate::Ogt);
+    cmpf!("std::Float::>=", arith::CmpfPredicate::Oge);
 
     map
 }

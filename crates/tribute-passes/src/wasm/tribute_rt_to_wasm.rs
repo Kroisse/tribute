@@ -567,8 +567,8 @@ mod tests {
             .collect();
         assert!(slots.iter().all(Option::is_some), "{ir}");
         assert!(slots.is_sorted(), "{ir}");
-        assert_eq!(ir.matches("wasm.i32_const {value = 1}").count(), 3, "{ir}");
-        assert!(ir.contains("wasm.i32_const {value = 3}"), "{ir}");
+        assert_eq!(ir.matches("wasm.i32_const 1").count(), 3, "{ir}");
+        assert!(ir.contains("wasm.i32_const 3"), "{ir}");
         assert_eq!(ir.matches("wasm.i32_add").count(), 1, "{ir}");
         assert!(!ir.contains("tribute_rt."), "{ir}");
     }
@@ -594,7 +594,7 @@ mod tests {
         assert!(ir.contains("wasm.elem {"), "{ir}");
         assert!(!ir.contains("offset = 0"), "{ir}");
         assert!(ir.contains("wasm.ref_func @only"), "{ir}");
-        assert!(ir.contains("wasm.i32_const {value = 0}"), "{ir}");
+        assert!(ir.contains("wasm.i32_const 0"), "{ir}");
     }
 
     #[test]

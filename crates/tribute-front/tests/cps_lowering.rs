@@ -326,7 +326,7 @@ fn scalars() -> #(Float, Bytes, Rune, Nil) {
         scalars.contains("adt.struct_new")
             && scalars.contains("core.f64")
             && scalars.contains("core.bytes")
-            && scalars.contains("value = 120")
+            && scalars.contains("arith.constant 120 :")
             && scalars.contains("core.nil"),
         "scalar tuple layout must preserve each source value type:\n{scalars}"
     );
@@ -1559,7 +1559,7 @@ fn choose_pair(pair: #(fn(Int) ->{e} Int, Bool), fallback: fn(Int) ->{e} Int) ->
     let tuple_case = checked_logical_function(ir, "choose_pair");
     assert!(
         tuple_case.contains("adt.struct_get")
-            && tuple_case.contains("arith.and")
+            && tuple_case.contains("arith.andi")
             && tuple_case.contains("scf.if"),
         "callable tuple pattern check must stay in logical aggregate IR:\n{tuple_case}"
     );
@@ -1598,7 +1598,7 @@ fn classify_list(values: List(Int)) -> Int {
     assert!(
         pair.contains("adt.variant_is")
             && pair.contains("adt.variant_cast")
-            && pair.contains("arith.and"),
+            && pair.contains("arith.andi"),
         "two-field variant checks must combine both source patterns:\n{pair}"
     );
     assert_occurrences(pair, "adt.variant_get", 8);

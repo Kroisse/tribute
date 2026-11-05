@@ -678,7 +678,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let c = arith::Const::operands()
+        let c = arith::Constant::operands()
             .value(Attribute::Int(42))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -940,7 +940,7 @@ core.module @test {
         let param = ctx.block_arg(entry, 0);
 
         // Condition
-        let cond = arith::Const::operands()
+        let cond = arith::Constant::operands()
             .value(Attribute::Int(1))
             .results(i1_ty)
             .build(&mut ctx, loc);
@@ -972,7 +972,7 @@ core.module @test {
             ops: smallvec![],
             parent_region: None,
         });
-        let c1 = arith::Const::operands()
+        let c1 = arith::Constant::operands()
             .value(Attribute::Int(1))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -1034,7 +1034,7 @@ core.module @test {
             ops: smallvec![],
             parent_region: None,
         });
-        let c = arith::Const::operands()
+        let c = arith::Constant::operands()
             .value(Attribute::Int(7))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -1072,7 +1072,7 @@ core.module @test {
                 ops: smallvec![],
                 parent_region: None,
             });
-            let c = arith::Const::operands()
+            let c = arith::Constant::operands()
                 .value(Attribute::Int(*val))
                 .results(i32_ty)
                 .build(&mut ctx, loc);
@@ -1111,7 +1111,7 @@ core.module @test {
             ops: smallvec![],
             parent_region: None,
         });
-        let c = arith::Const::operands()
+        let c = arith::Constant::operands()
             .value(Attribute::Int(42))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -1179,7 +1179,7 @@ core.module @test {
         // (parser only accepts ASCII alphanumeric + '_' for bare symbols)
         let input = r#"core.module @test {
   func.func @"π"() -> core.i32 {
-    %0 = arith.const {value = 42} : core.i32
+    %0 = arith.constant 42 : core.i32
     func.return %0
   }
 }"#;
@@ -1210,10 +1210,10 @@ core.module @test {
                 r#"core.module @test {
   func.func @f() -> core.i32 {
     ^bb0:
-      %0 = arith.const {value = 1} : core.i32
+      %0 = arith.constant 1 : core.i32
       func.return %0
     ^bb0:
-      %1 = arith.const {value = 2} : core.i32
+      %1 = arith.constant 2 : core.i32
       func.return %1
   }
 }"#,
@@ -1233,7 +1233,7 @@ core.module @test {
                 "result count mismatch",
                 r#"core.module @test {
   func.func @f() -> core.i32 {
-    %0, %1 = arith.const {value = 42} : core.i32
+    %0, %1 = arith.constant 42 : core.i32
     func.return %0
   }
 }"#,
@@ -1244,7 +1244,7 @@ core.module @test {
                 r#"core.module @test {
   func.func @f() -> core.i32 {
     ^entry:
-      %cond = arith.const {value = 1} : core.i1
+      %cond = arith.constant 1 : core.i1
       "scf.br"()[^left]
     ^left(%x: core.i32):
       "scf.br"()[^right]
@@ -1259,7 +1259,7 @@ core.module @test {
                 r#"core.module @test {
   func.func @f(%0: core.i32) -> core.i32 {
     ^entry:
-      %cond = arith.const {value = 1} : core.i1
+      %cond = arith.constant 1 : core.i1
       %r = scf.if %cond -> (core.i32) {
         "scf.br"()[^entry]
       } else {
@@ -1284,7 +1284,7 @@ core.module @test {
                 r#"core.module @test {
   func.func @f() -> core.i32 {
     !bad = core.i32
-    %0 = arith.const {value = 42} : !bad
+    %0 = arith.constant 42 : !bad
     func.return %0
   }
 }"#,
@@ -1312,7 +1312,7 @@ core.module @test {
         let input = r#"core.module @test {
   func.func @f(%0: core.i32) -> core.i32 {
     ^bb0:
-      %1 = arith.const {value = 1} : core.i32
+      %1 = arith.constant 1 : core.i32
       %2 = arith.addi %0, %1 : core.i32
       func.return %2
   }
@@ -1332,7 +1332,7 @@ core.module @test {
         let input = r#"core.module @test {
   func.func @f(%0: core.i32) -> core.i32 {
     ^bb0:
-      %1 = arith.const {value = 1} : core.i32
+      %1 = arith.constant 1 : core.i32
       %2 = arith.addi %0, %1 : core.i32
       func.return %2
   }
@@ -1356,8 +1356,8 @@ core.module @test {
       func.return %2
   }
   func.func @main() -> core.i32 {
-    %0 = arith.const {value = 40} : core.i32
-    %1 = arith.const {value = 2} : core.i32
+    %0 = arith.constant 40 : core.i32
+    %1 = arith.constant 2 : core.i32
     %2 = func.call @add(%0, %1) : (core.i32, core.i32) -> core.i32
     func.return %2
   }
@@ -1372,7 +1372,7 @@ core.module @test {
     fn test_parse_test_module_convenience() {
         let input = r#"core.module @test {
   func.func @f() -> core.i32 {
-    %0 = arith.const {value = 99} : core.i32
+    %0 = arith.constant 99 : core.i32
     func.return %0
   }
 }"#;

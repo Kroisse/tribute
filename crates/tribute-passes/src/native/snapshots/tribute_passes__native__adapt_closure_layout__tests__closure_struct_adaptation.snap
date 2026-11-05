@@ -12,7 +12,7 @@ core.module @test {
       %0 = clif.symbol_addr @__tribute_convention_table_0 : core.ptr
       %1 = mem.null : core.ptr
       %2 = adt.struct_new %0, %1 {type = !_closure_captures} : !_closure_captures
-      %3 = core.unrealized_conversion_cast %2 : core.ptr
+      %3 = core.unrealized_conversion_cast %2 : !_closure_captures to core.ptr
       %4 = adt.struct_get %3 {field = 0, type = !_closure_captures} : core.ptr
       %5 = adt.struct_get %3 {field = 1, type = !_closure_captures} : core.ptr
       %6 = clif.load %4 {offset = 0} : core.i64

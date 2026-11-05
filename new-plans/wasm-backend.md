@@ -559,7 +559,7 @@ Wasm에는 `i8`과 `i16` 값 타입이 없다. `core.i8`과 `core.i16` 값은 `i
   `trunci`는 `i64` 입력이면 `i32.wrap_i64`로, `i32` 입력이면 결과 폭의 mask로
   낮춘다.
 - 상위 비트가 결과에 영향을 주는 연산(`cmpi`, `divsi`/`divui`, `remsi`/`remui`,
-  `shr`/`shru`, `sitofp`/`uitofp`)은 좁은 정수에서 낮추지 않는다. 이 연산은
+  `shrsi`/`shrui`, `sitofp`/`uitofp`)은 좁은 정수에서 낮추지 않는다. 이 연산은
   target 변환 경계에서 거부된다.
 - Packed 배열(`adt.array<core.i8>`, `adt.array<core.i16>`)의 원소 읽기는
   `array.get_u`로 낮춘다. 상위 비트를 정하지 않으므로 `array.get_s`도 맞지만 하나로

@@ -46,14 +46,14 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx);
 
         // Create i32.const with value attribute
-        let op = super::arith::Const::operands()
+        let op = super::arith::Constant::operands()
             .value(Attribute::Int(42))
             .results(i32_ty)
             .build(&mut ctx, loc);
 
         // Verify from_op
-        let op2 =
-            super::arith::Const::from_op(&ctx, op.op_ref()).expect("should match arith.const");
+        let op2 = super::arith::Constant::from_op(&ctx, op.op_ref())
+            .expect("should match arith.constant");
         assert_eq!(op.op_ref(), op2.op_ref());
 
         // Verify accessor
@@ -71,12 +71,12 @@ mod tests {
         let loc = dummy_location();
         let i32_ty = make_i32_type(&mut ctx);
 
-        // Create two values to use as arguments: use arith.const to produce them
-        let c1 = super::arith::Const::operands()
+        // Create two values to use as arguments: use arith.constant to produce them
+        let c1 = super::arith::Constant::operands()
             .value(Attribute::Int(1))
             .results(i32_ty)
             .build(&mut ctx, loc);
-        let c2 = super::arith::Const::operands()
+        let c2 = super::arith::Constant::operands()
             .value(Attribute::Int(2))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -114,7 +114,7 @@ mod tests {
         let loc = dummy_location();
         let i32_ty = make_i32_type(&mut ctx);
 
-        let c1 = super::arith::Const::operands()
+        let c1 = super::arith::Constant::operands()
             .value(Attribute::Int(99))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -179,7 +179,7 @@ mod tests {
         let loc = dummy_location();
         let i32_ty = make_i32_type(&mut ctx);
 
-        let cond_op = super::arith::Const::operands()
+        let cond_op = super::arith::Constant::operands()
             .value(Attribute::Int(1))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -230,7 +230,7 @@ mod tests {
         let loc = dummy_location();
         let i32_ty = make_i32_type(&mut ctx);
 
-        let cond_op = super::arith::Const::operands()
+        let cond_op = super::arith::Constant::operands()
             .value(Attribute::Int(1))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -308,7 +308,7 @@ mod tests {
         let loc = dummy_location();
         let i32_ty = make_i32_type(&mut ctx);
 
-        let c = super::arith::Const::operands()
+        let c = super::arith::Constant::operands()
             .value(Attribute::Int(1))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -328,12 +328,12 @@ mod tests {
         let loc = dummy_location();
         let i32_ty = make_i32_type(&mut ctx);
 
-        let c = super::arith::Const::operands()
+        let c = super::arith::Constant::operands()
             .value(Attribute::Int(42))
             .results(i32_ty)
             .build(&mut ctx, loc);
 
-        assert!(super::arith::Const::matches(&ctx, c.op_ref()));
+        assert!(super::arith::Constant::matches(&ctx, c.op_ref()));
         assert!(!super::func::Call::matches(&ctx, c.op_ref()));
     }
 
@@ -371,11 +371,11 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx);
 
         // Create values for the call
-        let c1 = super::arith::Const::operands()
+        let c1 = super::arith::Constant::operands()
             .value(Attribute::Int(1))
             .results(i32_ty)
             .build(&mut ctx, loc);
-        let c2 = super::arith::Const::operands()
+        let c2 = super::arith::Constant::operands()
             .value(Attribute::Int(2))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -402,7 +402,7 @@ mod tests {
         let loc = dummy_location();
         let i32_ty = make_i32_type(&mut ctx);
 
-        let c = super::arith::Const::operands()
+        let c = super::arith::Constant::operands()
             .value(Attribute::Int(42))
             .results(i32_ty)
             .build(&mut ctx, loc);

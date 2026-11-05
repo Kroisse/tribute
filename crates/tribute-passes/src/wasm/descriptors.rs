@@ -105,7 +105,7 @@ mod tests {
   !Closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
   !E = adt.enum<E { None(), Some(core.f64) }>
   wasm.func @main(%next: adt.typeref<{name = "S"}>, %any: tribute_rt.anyref, %n: tribute_rt.nat, %x: core.f64) -> core.nil {
-    %one = wasm.i32_const {value = 1} : core.i32
+    %one = wasm.i32_const 1 : core.i32
     %some = adt.variant_new %x {type = !E, tag = "Some"} : !E
     %s = adt.struct_new %next, %any, %n {type = !S} : !S
     %closure = adt.struct_new %one {type = !Closure} : !Closure

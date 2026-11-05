@@ -149,7 +149,7 @@ fn replace_with_exit_code(
     i32_ty: trunk_ir::refs::TypeRef,
     location: Location,
 ) {
-    let zero = arith::Const::operands()
+    let zero = arith::Constant::operands()
         .value(Attribute::Int(0))
         .results(i32_ty)
         .build(ctx, location);
@@ -223,7 +223,7 @@ mod tests {
   func.func @main() -> core.i32 {
       %0 = func.call @__tribute_init() : () -> core.nil
       %1 = func.call @__tribute_main() : () -> core.nil
-      %2 = arith.const {value = 0} : core.i32
+      %2 = arith.constant 0 : core.i32
       func.return %2
   }
 }
@@ -260,7 +260,7 @@ mod tests {
     fn module_without_main_is_unchanged() {
         let input = r#"core.module @test {
   func.func @helper() -> core.i32 {
-    %one = arith.const {value = 1} : core.i32
+    %one = arith.constant 1 : core.i32
     func.return %one
   }
 }"#;

@@ -61,7 +61,7 @@ fn push_one_shot_resume(
         AttributeMap::new(),
     )
     .as_type_ref();
-    let not_consumed = arith::Const::operands()
+    let not_consumed = arith::Constant::operands()
         .value(Attribute::Int(0))
         .results(i1_type)
         .build(ctx, location);
@@ -112,7 +112,7 @@ fn push_one_shot_resume(
     let reject_region = single_block_region(ctx, location, reject_block);
 
     let enter_block = make_block(ctx, location, &[]);
-    let consumed_true = arith::Const::operands()
+    let consumed_true = arith::Constant::operands()
         .value(Attribute::Int(1))
         .results(i1_type)
         .build(ctx, location);

@@ -665,8 +665,8 @@ mod tests {
         let result = run_pass(
             r#"core.module @test {
   func.func @test_fn() -> core.i32 {
-    %0 = arith.const {value = 0} : core.i32
-    %1 = arith.const {value = 42} : core.i32
+    %0 = arith.constant 0 : core.i32
+    %1 = arith.constant 42 : core.i32
     %2 = func.call_indirect %0(%1) : (core.i32) -> core.i32
     func.return %2
   }
@@ -726,7 +726,7 @@ mod tests {
         let result = run_pass(
             r#"core.module @test {
   func.func @target() -> core.i32 {
-    %value = arith.const {value = 7} : core.i32
+    %value = arith.constant 7 : core.i32
     func.return %value
   }
   func.func @caller() -> core.i32 {

@@ -1698,7 +1698,7 @@ mod tests {
         let loc = test_location(&mut ctx);
         let i32_ty = i32_type(&mut ctx);
 
-        let data = OperationDataBuilder::new(loc, "arith.const")
+        let data = OperationDataBuilder::new(loc, "arith.constant")
             .result(i32_ty)
             .attr("value", Attribute::Int(42))
             .build(&mut ctx);
@@ -1707,7 +1707,7 @@ mod tests {
 
         assert_eq!(
             ctx.op(op).name,
-            <crate::dialect::arith::Const as crate::ops::DialectOp>::NAME
+            <crate::dialect::arith::Constant as crate::ops::DialectOp>::NAME
         );
         assert_eq!(ctx.op_result_types(op), &[i32_ty]);
         assert_eq!(ctx.op_attrs(op).get("value"), Some(&Attribute::Int(42)));
@@ -1788,7 +1788,7 @@ mod tests {
         });
 
         // Create an op
-        let data = OperationDataBuilder::new(loc, "arith.const")
+        let data = OperationDataBuilder::new(loc, "arith.constant")
             .result(i32_ty)
             .build(&mut ctx);
         let op = ctx.create_op(data);
@@ -2207,8 +2207,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f() -> core.i32 {
-    %0 = arith.const {value = 1} : core.i32
-    %1 = arith.const {value = 2} : core.i32
+    %0 = arith.constant 1 : core.i32
+    %1 = arith.constant 2 : core.i32
     %2 = arith.negi %0 : core.i32
     func.return %2
   }
@@ -2288,7 +2288,7 @@ mod tests {
         let output = clone_first_func_region(
             r#"core.module @test {
   func.func @original() -> core.i32 {
-    %0 = arith.const {value = 7} : core.i32
+    %0 = arith.constant 7 : core.i32
     %1 = arith.negi %0 : core.i32
     func.return %1
   }
@@ -2304,10 +2304,10 @@ mod tests {
             r#"core.module @test {
   func.func @original(%0: core.i1) -> core.i32 {
     %1 = scf.if %0 -> (core.i32) {
-      %2 = arith.const {value = 1} : core.i32
+      %2 = arith.constant 1 : core.i32
       scf.yield %2
     } else {
-      %3 = arith.const {value = 2} : core.i32
+      %3 = arith.constant 2 : core.i32
       scf.yield %3
     }
     func.return %1
@@ -2324,7 +2324,7 @@ mod tests {
             r#"core.module @test {
   func.func @original() -> core.i32 {
   ^bb0:
-    %0 = arith.const {value = 1} : core.i32
+    %0 = arith.constant 1 : core.i32
     cf.br %0 [^bb1]
   ^bb1(%1: core.i32):
     func.return %1
@@ -2345,7 +2345,7 @@ mod tests {
         let loc = test_location(&mut ctx);
         let i32_ty = i32_type(&mut ctx);
 
-        let ext_data = OperationDataBuilder::new(loc, "arith.const")
+        let ext_data = OperationDataBuilder::new(loc, "arith.constant")
             .result(i32_ty)
             .build(&mut ctx);
         let ext_op = ctx.create_op(ext_data);

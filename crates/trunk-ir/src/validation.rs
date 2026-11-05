@@ -1573,7 +1573,7 @@ mod tests {
         if_op: super::super::refs::OpRef,
     ) -> Module {
         ctx.push_op(entry, if_op);
-        let zero = arith::Const::operands()
+        let zero = arith::Constant::operands()
             .value(Attribute::Int(0))
             .results(i32_ty)
             .build(ctx, loc);
@@ -1624,14 +1624,14 @@ mod tests {
             parent_region: None,
         });
 
-        let c0 = arith::Const::operands()
+        let c0 = arith::Constant::operands()
             .value(Attribute::Int(40))
             .results(i32_ty)
             .build(ctx, loc);
         ctx.push_op(entry_block, c0.op_ref());
         let c0_val = c0.result(ctx);
 
-        let c1 = arith::Const::operands()
+        let c1 = arith::Constant::operands()
             .value(Attribute::Int(2))
             .results(i32_ty)
             .build(ctx, loc);
@@ -1700,7 +1700,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let const_a = arith::Const::operands()
+        let const_a = arith::Constant::operands()
             .value(Attribute::Int(99))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -1767,7 +1767,7 @@ mod tests {
         let stale_errors = stale_value_errors(&result);
         assert_eq!(stale_errors.len(), 1);
         assert_eq!(stale_errors[0].0, "func_b");
-        assert!(stale_errors[0].2.contains("arith.const"));
+        assert!(stale_errors[0].2.contains("arith.constant"));
 
         // In debug builds the check pass rejects the module.
         if cfg!(debug_assertions) {
@@ -1907,7 +1907,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let c1 = arith::Const::operands()
+        let c1 = arith::Constant::operands()
             .value(Attribute::Int(1))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -1929,7 +1929,7 @@ mod tests {
 
         // Create a bool condition
         let i1_ty = TypeDataBuilder::new("core.i1").intern(&mut ctx);
-        let cond = arith::Const::operands()
+        let cond = arith::Constant::operands()
             .value(Attribute::Int(1))
             .results(i1_ty)
             .build(&mut ctx, loc);
@@ -2001,7 +2001,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let const_a = arith::Const::operands()
+        let const_a = arith::Constant::operands()
             .value(Attribute::Int(42))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -2028,7 +2028,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let local = arith::Const::operands()
+        let local = arith::Constant::operands()
             .value(Attribute::Int(1))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -2094,7 +2094,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let const_a = arith::Const::operands()
+        let const_a = arith::Constant::operands()
             .value(Attribute::Int(99))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -2187,7 +2187,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let inner_const = arith::Const::operands()
+        let inner_const = arith::Constant::operands()
             .value(Attribute::Int(42))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -2211,7 +2211,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let else_const = arith::Const::operands()
+        let else_const = arith::Constant::operands()
             .value(Attribute::Int(0))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -2229,7 +2229,7 @@ mod tests {
         });
 
         // Condition
-        let cond_op = arith::Const::operands()
+        let cond_op = arith::Constant::operands()
             .value(Attribute::Int(1))
             .results(i1_ty)
             .build(&mut ctx, loc);
@@ -2339,7 +2339,7 @@ mod tests {
                     &mut ctx,
                     r#"core.module @test {
   func.func @f(%x: core.i32) {
-    %unused = arith.const {value = 0} : core.i32
+    %unused = arith.constant 0 : core.i32
     func.return
   }
 }"#,
@@ -2514,7 +2514,7 @@ mod tests {
     func.return %2
   }
   func.func @main() -> core.i32 {
-    %0 = arith.const {value = 1} : core.i32
+    %0 = arith.constant 1 : core.i32
     %1 = func.call @add(%0) : (core.i32) -> core.i32
     func.return %1
   }
@@ -2557,7 +2557,7 @@ mod tests {
     func.return %2
   }
   func.func @main() -> core.i32 {
-    %0 = arith.const {value = 1} : core.i32
+    %0 = arith.constant 1 : core.i32
     %1 = func.call @add(%0) : (core.i32) -> core.i32
     func.return %1
   }
@@ -2571,9 +2571,9 @@ mod tests {
     func.return %0
   }
   func.func @main() -> core.i32 {
-    %0 = arith.const {value = 1} : core.i32
-    %1 = arith.const {value = 2} : core.i32
-    %2 = arith.const {value = 3} : core.i32
+    %0 = arith.constant 1 : core.i32
+    %1 = arith.constant 2 : core.i32
+    %2 = arith.constant 3 : core.i32
     %3 = func.call @add(%0, %1, %2) : (core.i32, core.i32, core.i32) -> core.i32
     func.return %3
   }
@@ -2588,7 +2588,7 @@ mod tests {
     func.return %2
   }
   func.func @main() -> core.i32 {
-    %0 = arith.const {value = 1} : core.i32
+    %0 = arith.constant 1 : core.i32
     func.tail_call @add(%0) : (core.i32) -> ()
   }
 }"#,
@@ -2598,11 +2598,11 @@ mod tests {
                 "args passed to a zero-param function",
                 r#"core.module @test {
   func.func @unit() -> core.i32 {
-    %0 = arith.const {value = 0} : core.i32
+    %0 = arith.constant 0 : core.i32
     func.return %0
   }
   func.func @main() -> core.i32 {
-    %0 = arith.const {value = 1} : core.i32
+    %0 = arith.constant 1 : core.i32
     %1 = func.call @unit(%0) : (core.i32) -> core.i32
     func.return %1
   }
@@ -2617,8 +2617,8 @@ mod tests {
     func.return %2
   }
   func.func @main() -> core.i32 {
-    %0 = arith.const {value = 40} : core.i32
-    %1 = arith.const {value = 2} : core.i32
+    %0 = arith.constant 40 : core.i32
+    %1 = arith.constant 2 : core.i32
     %2 = func.call @add(%0, %1) : (core.i32, core.i32) -> core.i32
     func.return %2
   }
@@ -2629,7 +2629,7 @@ mod tests {
                 "callee not defined in this module is skipped",
                 r#"core.module @test {
   func.func @main() -> core.i32 {
-    %0 = arith.const {value = 1} : core.i32
+    %0 = arith.constant 1 : core.i32
     %1 = func.call @extern_fn(%0) : (core.i32) -> core.i32
     func.return %1
   }
@@ -2668,7 +2668,7 @@ mod tests {
     fn cmpf_subset_predicate_passes() {
         let input = r#"core.module @test {
   func.func @main(%0: core.f64, %1: core.f64) -> core.i1 {
-    %2 = arith.cmpf %0, %1 {predicate = "une"} : core.i1
+    %2 = arith.cmpf une, %0, %1 : core.f64
     func.return %2
   }
 }"#;
@@ -2687,17 +2687,17 @@ mod tests {
                 "arith.cmpf",
                 r#"core.module @test {
   func.func @main(%0: core.f64, %1: core.f64) -> core.i1 {
-    %2 = arith.cmpf %0, %1 {predicate = "ueq"} : core.i1
+    %2 = "arith.cmpf"(%0, %1) {predicate = "ueq"} : core.i1
     func.return %2
   }
 }"#,
-                &["unsupported predicate 'ueq'"],
+                &["attribute `predicate` must be one of: oeq une olt ole ogt oge"],
             ),
             (
                 "arith.cmpf",
                 r#"core.module @test {
   func.func @main(%0: core.f64, %1: core.f64) -> core.i1 {
-    %2 = arith.cmpf %0, %1 : core.i1
+    %2 = "arith.cmpf"(%0, %1) : core.i1
     func.return %2
   }
 }"#,
@@ -2722,7 +2722,7 @@ mod tests {
                 r#"core.module @test {
   func.func @main(%cond: core.i1, %x: core.i32) -> core.i32 {
     %r = scf.if %cond -> (core.i32) {
-      %zero = arith.const {value = 0} : core.i32
+      %zero = arith.constant 0 : core.i32
     } else {
       scf.yield %x
     }
@@ -3066,7 +3066,7 @@ mod tests {
       ^resultless_break_path(%resultless_value: core.i32):
         scf.break %resultless_value
     }
-    %zero = arith.const {value = 0} : core.i32
+    %zero = arith.constant 0 : core.i32
     func.return %selected
   }
   func.func @stray(%value: core.i32) {
@@ -3236,7 +3236,7 @@ mod tests {
                 .contains("no enclosing scf.loop")
         );
 
-        let constant = operations_named(&ctx, module, crate::dialect::arith::Const::NAME)[0];
+        let constant = operations_named(&ctx, module, crate::dialect::arith::Constant::NAME)[0];
         assert!(
             DynRegionBranch::value_transfer(
                 &ctx,
@@ -3269,7 +3269,7 @@ mod tests {
       cf.cond_br %cond [^left, ^right]
     ^left:
       cf.br %value [^merge]
-      %after_branch = arith.const {value = 0} : core.i32
+      %after_branch = arith.constant 0 : core.i32
     ^right:
       cf.br %value [^merge]
     ^merge(%forwarded: core.i32):
@@ -3458,7 +3458,7 @@ mod tests {
             });
             let mut if_op = OperationDataBuilder::new(loc, "scf.if");
             for index in 0..condition_count {
-                let cond = arith::Const::operands()
+                let cond = arith::Constant::operands()
                     .value(Attribute::Int(i128::from(1 - index)))
                     .results(i1_ty)
                     .build(&mut ctx, loc);
@@ -3559,7 +3559,7 @@ mod tests {
     fn validate_all_includes_cmpf_predicate_errors() {
         let input = r#"core.module @test {
   func.func @main(%0: core.f64, %1: core.f64) -> core.i1 {
-    %2 = arith.cmpf %0, %1 {predicate = "one"} : core.i1
+    %2 = "arith.cmpf"(%0, %1) {predicate = "one"} : core.i1
     func.return %2
   }
 }"#;

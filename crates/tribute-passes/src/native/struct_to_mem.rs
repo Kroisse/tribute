@@ -191,7 +191,7 @@ impl OpRewritePattern for VariantIsPattern {
         let result_ty = variant_is.result_ty(ctx);
         let descriptor = (variant_is.r#type(ctx), Some(variant_is.tag_ref(ctx)));
         let Some(&number) = self.numbers.get(&descriptor) else {
-            let never = arith::Const::operands()
+            let never = arith::Constant::operands()
                 .value(Attribute::Bool(false))
                 .results(result_ty)
                 .build(ctx, loc);
@@ -205,12 +205,12 @@ impl OpRewritePattern for VariantIsPattern {
         )?;
         let actual = tribute_rtti::Descriptor::operands(variant_is.r#ref(ctx)).build(ctx, loc);
         let i32_ty = ctx.value_ty(actual.result(ctx));
-        let expected = arith::Const::operands()
+        let expected = arith::Constant::operands()
             .value(Attribute::Int(i128::from(number)))
             .results(i32_ty)
             .build(ctx, loc);
         let matches = arith::Cmpi::operands(actual.result(ctx), expected.result(ctx))
-            .predicate("eq")
+            .predicate(arith::CmpiPredicate::Eq)
             .build(ctx, loc);
         rewriter.insert_op(actual.op_ref());
         rewriter.insert_op(expected.op_ref());
@@ -401,14 +401,11 @@ mod tests {
             printed.contains("tribute_rtti.descriptor %0 : core.i32"),
             "{printed}"
         );
-        assert!(
-            printed.contains("arith.const {value = 6} : core.i32"),
-            "{printed}"
-        );
+        assert!(printed.contains("arith.constant 6 : core.i32"), "{printed}");
         assert!(printed.contains("arith.cmpi"), "{printed}");
         // `Other` is never allocated, so no object has its descriptor.
         assert!(
-            printed.contains("arith.const {value = false} : core.i1"),
+            printed.contains("arith.constant false : core.i1"),
             "{printed}"
         );
     }

@@ -16,9 +16,9 @@
 //! ```text
 //! %v = clif.load %p {offset = 8} : core.i32
 //! // becomes
-//! %o = clif.iconst {value = 8} : core.i64
+//! %o = clif.iconst 8 : core.i64
 //! %a = clif.iadd %p, %o : core.ptr
-//! %n = clif.iconst {value = 4} : core.i64
+//! %n = clif.iconst 4 : core.i64
 //! %_ = clif.call @__tribute_asan_load(%a, %n) : (core.ptr, core.i64) -> core.nil
 //! %v = clif.load %p {offset = 8} : core.i32
 //! ```
@@ -292,7 +292,7 @@ mod tests {
   clif.func @f(%p: core.ptr, %v: core.i64) -> core.i32 {
     %field = clif.load %p {offset = 8} : core.i32
     clif.store %v, %p {offset = 0}
-    %one = clif.iconst {value = 1} : core.i32
+    %one = clif.iconst 1 : core.i32
     %old = clif.atomic_rmw %p, %one {bin_op = "add", offset = -8} : core.i32
     clif.return %field
   }

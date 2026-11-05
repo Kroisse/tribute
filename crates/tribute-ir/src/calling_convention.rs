@@ -378,7 +378,7 @@ mod tests {
   }
   func.func @calls() -> core.nil attributes {tribute.calling_convention = "evidence_direct"} {
     %r = func.call @direct() attributes {tribute.calling_convention = "direct"} : () -> core.nil
-    %c = arith.const {value = 0, tribute.calling_convention = "direct"} : core.i32
+    %c = arith.constant {tribute.calling_convention = "direct"} 0 : core.i32
     func.return
   }
 }"#;
@@ -483,7 +483,7 @@ mod tests {
             [
                 ("func.func".to_owned(), ConventionError::Malformed),
                 ("func.func".to_owned(), ConventionError::Malformed),
-                ("arith.const".to_owned(), ConventionError::Unregistered),
+                ("arith.constant".to_owned(), ConventionError::Unregistered),
             ]
         );
     }
@@ -517,7 +517,7 @@ mod tests {
             );
             assert_eq!(DynConventionBearing::of(&ctx, op), None);
         }
-        let constant = named(&ctx, module, "arith.const");
+        let constant = named(&ctx, module, "arith.constant");
         assert_eq!(
             DynConventionBearing::exact(&ctx, constant),
             Err(ConventionError::Unregistered)
@@ -552,7 +552,7 @@ mod tests {
     fn setting_a_convention_on_an_unregistered_operation_panics() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, CONVENTIONS);
-        let constant = named(&ctx, module, "arith.const");
+        let constant = named(&ctx, module, "arith.constant");
         DynConventionBearing::set(&mut ctx, constant, CallingConvention::Direct);
     }
 

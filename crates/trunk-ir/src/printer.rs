@@ -5,7 +5,7 @@
 //! ```text
 //! core.module @name {
 //!   func.func @main(%arg0: core.i32) -> core.i32 {
-//!     %0 = arith.const {value = 42} : core.i32
+//!     %0 = arith.constant 42 : core.i32
 //!     func.return %0
 //!   }
 //! }
@@ -1337,12 +1337,12 @@ mod tests {
         let loc = test_location(&mut ctx);
         let i32_ty = make_i32_type(&mut ctx);
 
-        let c = arith::Const::operands()
+        let c = arith::Constant::operands()
             .value(Attribute::Int(42))
             .results(i32_ty)
             .build(&mut ctx, loc);
         let output = print_op(&ctx, c.op_ref());
-        assert_eq!(output, "%0 = arith.const {value = 42} : core.i32\n");
+        assert_eq!(output, "%0 = arith.constant 42 : core.i32\n");
     }
 
     #[test]
@@ -1351,11 +1351,11 @@ mod tests {
         let loc = test_location(&mut ctx);
         let i32_ty = make_i32_type(&mut ctx);
 
-        let c1 = arith::Const::operands()
+        let c1 = arith::Constant::operands()
             .value(Attribute::Int(1))
             .results(i32_ty)
             .build(&mut ctx, loc);
-        let c2 = arith::Const::operands()
+        let c2 = arith::Constant::operands()
             .value(Attribute::Int(2))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -1443,7 +1443,7 @@ mod tests {
             parent_region: None,
         });
 
-        let c = arith::Const::operands()
+        let c = arith::Constant::operands()
             .value(Attribute::Int(42))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -1486,7 +1486,7 @@ mod tests {
         let output = print_module(&ctx, module.op_ref());
         assert!(output.contains("core.module @test"));
         assert!(output.contains("func.func @main"));
-        assert!(output.contains("arith.const {value = 42}"));
+        assert!(output.contains("arith.constant 42"));
         assert!(output.contains("func.return %0"));
     }
 
@@ -1548,7 +1548,7 @@ mod tests {
             ops: Default::default(),
             parent_region: None,
         });
-        let one = arith::Const::operands()
+        let one = arith::Constant::operands()
             .value(Attribute::Int(1))
             .results(i32_ty)
             .build(&mut ctx, loc);

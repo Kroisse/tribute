@@ -23,15 +23,15 @@ fn program(body: &str, expected: i32) -> String {
   !Ints = adt.array<core.i32>
   func.func @main() -> core.nil {{
     ^entry:
-      %i0 = arith.const {{value = 0}} : core.index
-      %i1 = arith.const {{value = 1}} : core.index
-      %i2 = arith.const {{value = 2}} : core.index
-      %i3 = arith.const {{value = 3}} : core.index
-      %one = arith.const {{value = 1}} : core.i32
-      %two = arith.const {{value = 2}} : core.i32
+      %i0 = arith.constant 0 : core.index
+      %i1 = arith.constant 1 : core.index
+      %i2 = arith.constant 2 : core.index
+      %i3 = arith.constant 3 : core.index
+      %one = arith.constant 1 : core.i32
+      %two = arith.constant 2 : core.i32
 {body}
-      %expected = arith.const {{value = {expected}}} : core.i32
-      %ok = arith.cmpi %sum, %expected {{predicate = "eq"}} : core.i1
+      %expected = arith.constant {expected} : core.i32
+      %ok = arith.cmpi eq, %sum, %expected : core.i32
       cf.cond_br %ok [^done, ^wrong]
     ^done:
       %nil = core.nil_value : core.nil
@@ -76,7 +76,7 @@ const ARRAY_OPERATIONS: &str = r#"
       %w0 = adt.array_get %joined, %i2 : core.i32
       %w1 = adt.array_get %more, %i0 : core.i32
       %n0 = adt.array_len %replaced : core.index
-      %n1 = arith.index_castui %n0 : core.i32
+      %n1 = arith.index_castui %n0 : core.index to core.i32
       %s0 = arith.addi %v0, %v1 : core.i32
       %s1 = arith.addi %s0, %v2 : core.i32
       %s2 = arith.addi %s1, %v3 : core.i32
@@ -116,7 +116,7 @@ fn an_index_at_the_length_traps_before_the_access() {
         r#"
       %ints = adt.array_new %i2, %one {type = !Ints} : !Ints
       adt.array_set %ints, %i3, %two
-      %sum = arith.const {value = 0} : core.i32"#,
+      %sum = arith.constant 0 : core.i32"#,
     );
 }
 
@@ -126,12 +126,12 @@ fn a_splice_range_outside_the_source_traps() {
         r#"
       %ints = adt.array_of %one, %two {type = !Ints} : !Ints
       %spliced = adt.array_splice %ints[%i1, %i3]() attributes {type = !Ints} : !Ints
-      %sum = arith.const {value = 0} : core.i32"#,
+      %sum = arith.constant 0 : core.i32"#,
     );
     assert_traps_without_access(
         r#"
       %ints = adt.array_of %one, %two {type = !Ints} : !Ints
       %spliced = adt.array_splice %ints[%i2, %i1]() attributes {type = !Ints} : !Ints
-      %sum = arith.const {value = 0} : core.i32"#,
+      %sum = arith.constant 0 : core.i32"#,
     );
 }
