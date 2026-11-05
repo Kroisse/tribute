@@ -68,7 +68,7 @@ pub(crate) fn lower_get_or_panic(
             return Err(BytesIntrinsicError::new(format!(
                 "`{}` must have the exact signature {}",
                 function.sym_name(ctx),
-                trunk_ir::printer::print_type(ctx, expected),
+                expected.display(ctx),
             )));
         }
     }
@@ -159,7 +159,6 @@ fn references_any(ctx: &IrContext, op: OpRef, names: &[SymbolPath]) -> bool {
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
 
     /// Run the shared validation with a rewrite that must not be reached.
     fn validate(ctx: &mut IrContext, module: Module) -> Result<(), BytesIntrinsicError> {
@@ -197,12 +196,12 @@ mod tests {
   }
 }"#,
         );
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
 
         let error = validate(&mut ctx, module).expect_err("a first-class use cannot be lowered");
 
         assert!(error.to_string().contains("func.constant"), "{error}");
-        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
     }
 
     #[test]
@@ -219,12 +218,12 @@ mod tests {
   }
 }"#,
         );
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
 
         let error = validate(&mut ctx, module).expect_err("a call must have two operands");
 
         assert!(error.to_string().contains("expected 2 and 1"), "{error}");
-        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
     }
 
     #[test]
@@ -238,10 +237,10 @@ mod tests {
 }"#;
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, input);
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
 
         validate(&mut ctx, module).expect("nothing to lower");
 
-        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
     }
 }

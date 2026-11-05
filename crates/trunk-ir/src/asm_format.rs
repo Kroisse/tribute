@@ -9,11 +9,13 @@
 
 pub mod declarative;
 
-use std::fmt;
+use std::fmt::{self, Write as _};
 
 use crate::ops::{DialectOp, DialectType};
 use crate::parser::raw::{RawAttrDict, RawAttribute, RawOperation, RawParam, RawType};
-use crate::printer::{OpPrintHelper, TypePrintHelper};
+use itertools::Itertools as _;
+
+use crate::printer::{AsmNamer, AsmPrinter, AsmState, OpAsmPrinter};
 use crate::types::Attribute;
 use crate::{AttributeMap, IrContext, OpRef, StringRef, TypeRef};
 
@@ -69,8 +71,17 @@ pub fn suggest_type_alias_name(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
 )]
 pub trait OpAsmFormat: DialectOp {
     /// Print the operation. Called instead of generic printing, after the
-    /// line's indentation and before its newline.
-    fn print(&self, h: &mut OpPrintHelper<'_, '_>) -> fmt::Result;
+    /// line's indentation and before its newline. The names it writes come
+    /// from [`Self::assign_names`], through the printer's state.
+    fn print(&self, p: &mut OpAsmPrinter<'_>) -> fmt::Result;
+
+    /// Name the values and blocks [`Self::print`] writes, in the order it
+    /// writes them, before printing. By default the results, then each
+    /// region, with fresh numbering when the operation is isolated from
+    /// above ([`AsmNamer::default_op`]).
+    fn assign_names(&self, namer: &mut AsmNamer<'_>) {
+        namer.default_op(self.op_ref());
+    }
 
     /// Parse the operation. Called after `dialect.op` and optional
     /// `@sym_name` are consumed; `results` and `sym_name` are already parsed
@@ -97,7 +108,9 @@ pub enum OpAsmFormatDef {
 #[derive(Clone, Copy, Debug)]
 pub struct OpAsmHooks {
     /// Custom printer. Called instead of generic printing.
-    pub print: fn(&mut OpPrintHelper<'_, '_>, OpRef) -> fmt::Result,
+    pub print: fn(&mut OpAsmPrinter<'_>, OpRef) -> fmt::Result,
+    /// Names the values and blocks the printer writes, before printing.
+    pub assign_names: fn(&mut AsmNamer<'_>, OpRef),
     /// Custom parser. Called after `dialect.op` and optional `@sym_name` are consumed.
     pub parse: for<'a> fn(
         input: &mut &'a str,
@@ -139,8 +152,8 @@ pub trait SignatureCodec: DialectType {
 
     /// Write the tail after the results; nothing when it is empty. By
     /// default it is a dictionary after a comma, [`write_dict_tail`].
-    fn write_tail(w: &mut dyn SignatureWriter, tail: &[(StringRef, &Attribute)]) -> fmt::Result {
-        write_dict_tail(w, tail)
+    fn write_tail(p: &mut AsmPrinter<'_>, tail: &[(StringRef, &Attribute)]) -> fmt::Result {
+        write_dict_tail(p, tail)
     }
 
     /// Parse the tail [`write_tail`](Self::write_tail) writes, or an empty
@@ -163,7 +176,7 @@ pub trait SignatureCodec: DialectType {
 #[derive(Clone, Copy, Debug)]
 pub struct SignatureCodecHooks {
     pub decompose: for<'c> fn(&'c IrContext, TypeRef) -> Option<SignatureParts<'c>>,
-    pub write_tail: fn(&mut dyn SignatureWriter, &[(StringRef, &Attribute)]) -> fmt::Result,
+    pub write_tail: fn(&mut AsmPrinter<'_>, &[(StringRef, &Attribute)]) -> fmt::Result,
     pub parse_tail: for<'a> fn(&mut &'a str) -> winnow::ModalResult<RawAttrDict<'a>>,
     pub build: for<'a> fn(
         Vec<RawParam<'a>>,
@@ -243,7 +256,7 @@ pub trait OpAsmDirective {
 
     /// Whether the printer writes a space before the directive, as before
     /// other elements. A directive that starts on its own line with
-    /// [`OpPrintHelper::newline`] writes none.
+    /// [`OpAsmPrinter::newline`] writes none.
     const SPACED: bool = true;
 
     /// The parts [`Self::print`] writes so that [`Self::parse`] reads the
@@ -255,7 +268,20 @@ pub trait OpAsmDirective {
     ) -> Option<Self::Parts<'a>>;
 
     /// Write the parts [`Self::decompose`] read.
-    fn print(h: &mut OpPrintHelper<'_, '_>, parts: Self::Parts<'_>) -> fmt::Result;
+    fn print(p: &mut OpAsmPrinter<'_>, parts: Self::Parts<'_>) -> fmt::Result;
+
+    /// Name the values and blocks [`Self::print`] writes, in the order it
+    /// writes them, before printing: by default each region the entities
+    /// hold, in order, as [`AsmNamer::region`] names it.
+    fn assign_names(namer: &mut AsmNamer<'_>, entities: &[CustomEntity<'_>]) {
+        for entity in entities {
+            if let CustomEntity::Regions(regions) = entity {
+                for &region in regions {
+                    namer.region(region);
+                }
+            }
+        }
+    }
 
     /// Read the entities back, one for each the element names, in order.
     fn parse<'a>(input: &mut &'a str) -> winnow::ModalResult<Vec<RawCustomEntity<'a>>>;
@@ -291,7 +317,8 @@ pub enum RawCustomEntity<'a> {
 #[derive(Clone, Copy, Debug)]
 pub struct OpAsmDirectiveHooks {
     pub fits: fn(&IrContext, &[CustomEntity<'_>]) -> bool,
-    pub print: fn(&mut OpPrintHelper<'_, '_>, &[CustomEntity<'_>]) -> fmt::Result,
+    pub print: fn(&mut OpAsmPrinter<'_>, &[CustomEntity<'_>]) -> fmt::Result,
+    pub assign_names: fn(&mut AsmNamer<'_>, &[CustomEntity<'_>]),
     pub parse: for<'a> fn(&mut &'a str) -> winnow::ModalResult<Vec<RawCustomEntity<'a>>>,
     pub spaced: bool,
 }
@@ -302,37 +329,15 @@ impl OpAsmDirectiveHooks {
         Self {
             fits: directive_fits::<T>,
             print: directive_print::<T>,
+            assign_names: T::assign_names,
             parse: T::parse,
             spaced: T::SPACED,
         }
     }
 }
 
-/// Write the entry block arguments of `region` as `(%a: A, ..)`, naming
-/// them, for a format that then prints the region with
-/// [`OpPrintHelper::print_region_without_entry`]. [`parse_entry_args`] and
-/// [`attach_entry_args`] read them back.
-pub fn write_entry_args(h: &mut OpPrintHelper<'_, '_>, region: crate::RegionRef) -> fmt::Result {
-    let ctx = h.ctx();
-    let args = ctx
-        .region(region)
-        .blocks
-        .first()
-        .map_or(&[][..], |&entry| ctx.block_args(entry));
-    fmt::Write::write_char(h, '(')?;
-    for (position, &arg) in args.iter().enumerate() {
-        if position > 0 {
-            fmt::Write::write_str(h, ", ")?;
-        }
-        let name = h.assign_value_name(arg);
-        fmt::Write::write_str(h, &name)?;
-        fmt::Write::write_str(h, ": ")?;
-        h.write_type(ctx.value_ty(arg))?;
-    }
-    fmt::Write::write_char(h, ')')
-}
-
-/// Parse the entry block arguments [`write_entry_args`] writes.
+/// Parse the entry block arguments
+/// [`AsmState::entry_args`](crate::printer::AsmState::entry_args) writes.
 pub fn parse_entry_args<'a>(
     input: &mut &'a str,
 ) -> winnow::ModalResult<Vec<(&'a str, RawType<'a>)>> {
@@ -368,96 +373,49 @@ fn directive_fits<T: OpAsmDirective>(ctx: &IrContext, entities: &[CustomEntity<'
 }
 
 fn directive_print<T: OpAsmDirective>(
-    h: &mut OpPrintHelper<'_, '_>,
+    p: &mut OpAsmPrinter<'_>,
     entities: &[CustomEntity<'_>],
 ) -> fmt::Result {
     let parts =
-        T::decompose(h.ctx(), entities).expect("the printer checked that the directive fits");
-    T::print(h, parts)
+        T::decompose(p.ctx(), entities).expect("the printer checked that the directive fits");
+    T::print(p, parts)
 }
 
-/// A printer that writes the parts of a function form: an operation's or a
-/// signature type's.
-pub trait SignatureWriter: fmt::Write {
-    fn write_type(&mut self, ty: TypeRef) -> fmt::Result;
-    fn write_attribute(&mut self, attr: &Attribute) -> fmt::Result;
-    fn write_attr_dict(
-        &mut self,
-        attrs: &mut dyn Iterator<Item = (StringRef, &Attribute)>,
-    ) -> fmt::Result;
-}
-
-impl SignatureWriter for OpPrintHelper<'_, '_> {
-    fn write_type(&mut self, ty: TypeRef) -> fmt::Result {
-        OpPrintHelper::write_type(self, ty)
-    }
-
-    fn write_attribute(&mut self, attr: &Attribute) -> fmt::Result {
-        OpPrintHelper::write_attribute(self, attr)
-    }
-
-    fn write_attr_dict(
-        &mut self,
-        attrs: &mut dyn Iterator<Item = (StringRef, &Attribute)>,
-    ) -> fmt::Result {
-        OpPrintHelper::write_attr_dict(self, attrs)
-    }
-}
-
-impl SignatureWriter for TypePrintHelper<'_, '_> {
-    fn write_type(&mut self, ty: TypeRef) -> fmt::Result {
-        TypePrintHelper::write_type(self, ty)
-    }
-
-    fn write_attribute(&mut self, attr: &Attribute) -> fmt::Result {
-        TypePrintHelper::write_attribute(self, attr)
-    }
-
-    fn write_attr_dict(
-        &mut self,
-        attrs: &mut dyn Iterator<Item = (StringRef, &Attribute)>,
-    ) -> fmt::Result {
-        TypePrintHelper::write_attr_dict(self, attrs)
-    }
-}
-
-/// Write a function form's parameter type and its attributes, `T {k = v}`.
-pub fn write_signature_param(
-    w: &mut dyn SignatureWriter,
+/// A function form's parameter type and its attributes, `T {k = v}`.
+pub fn display_signature_param<'s>(
+    s: &'s AsmState<'s>,
     ty: TypeRef,
-    attrs: &AttributeMap,
-) -> fmt::Result {
-    w.write_type(ty)?;
-    if !attrs.is_empty() {
-        w.write_char(' ')?;
-        w.write_attr_dict(&mut attrs.iter())?;
-    }
-    Ok(())
+    attrs: &'s AttributeMap,
+) -> impl fmt::Display + 's {
+    fmt::from_fn(move |f| {
+        write!(f, "{}", s.ty(ty))?;
+        if !attrs.is_empty() {
+            write!(f, " {}", s.attr_dict(attrs.iter()))?;
+        }
+        Ok(())
+    })
 }
 
-/// Write a function form's results after `->`: one result without
-/// attributes bare, and otherwise a parenthesized list, `(R {k = v})`.
-pub fn write_signature_results(
-    w: &mut dyn SignatureWriter,
-    results: &[(TypeRef, &AttributeMap)],
-) -> fmt::Result {
-    if let [(ty, attrs)] = results
-        && attrs.is_empty()
-    {
-        return w.write_type(*ty);
-    }
-    w.write_char('(')?;
-    for (index, &(ty, attrs)) in results.iter().enumerate() {
-        if index > 0 {
-            w.write_str(", ")?;
+/// A function form's results after `->`: one result without attributes
+/// bare, and otherwise a parenthesized list, `(R {k = v})`.
+pub fn display_signature_results<'s>(
+    s: &'s AsmState<'s>,
+    results: &'s [(TypeRef, &'s AttributeMap)],
+) -> impl fmt::Display + 's {
+    fmt::from_fn(move |f| match results {
+        [(ty, attrs)] if attrs.is_empty() => write!(f, "{}", s.ty(*ty)),
+        _ => {
+            let results = results
+                .iter()
+                .map(|&(ty, attrs)| display_signature_param(s, ty, attrs))
+                .format(", ");
+            write!(f, "({results})")
         }
-        write_signature_param(w, ty, attrs)?;
-    }
-    w.write_char(')')
+    })
 }
 
 /// Parse a function form's results after `->` as
-/// [`write_signature_results`] writes them.
+/// [`display_signature_results`] writes them.
 pub fn parse_signature_results<'a>(input: &mut &'a str) -> winnow::ModalResult<Vec<RawParam<'a>>> {
     use crate::parser::raw::{raw_param_list, raw_type};
     use winnow::prelude::*;
@@ -471,15 +429,11 @@ pub fn parse_signature_results<'a>(input: &mut &'a str) -> winnow::ModalResult<V
 
 /// Write a tail of type attributes as a dictionary after a comma,
 /// `, {k = v}`, as the `func.func_sig` family does.
-pub fn write_dict_tail(
-    w: &mut dyn SignatureWriter,
-    tail: &[(StringRef, &Attribute)],
-) -> fmt::Result {
+pub fn write_dict_tail(p: &mut AsmPrinter<'_>, tail: &[(StringRef, &Attribute)]) -> fmt::Result {
     if tail.is_empty() {
         return Ok(());
     }
-    w.write_str(", ")?;
-    w.write_attr_dict(&mut tail.iter().copied())
+    write!(p, ", {}", p.state().attr_dict(tail.iter().copied()))
 }
 
 /// Parse the tail [`write_dict_tail`] writes.
@@ -517,7 +471,7 @@ pub trait TypeAsmFormat: DialectType {
     /// Print the whole type, including `dialect.name<` and the closing `>`.
     /// A type the wrapper does not accept, such as a malformed one, is left
     /// to generic printing.
-    fn print(&self, h: &mut TypePrintHelper<'_, '_>) -> fmt::Result;
+    fn print(&self, p: &mut AsmPrinter<'_>) -> fmt::Result;
 
     /// Parse the type after `dialect.name<` is consumed, including the
     /// closing `>`, into its generic raw form, so the parser builds it like
@@ -530,7 +484,7 @@ pub trait TypeAsmFormat: DialectType {
 #[derive(Clone, Copy, Debug)]
 pub struct TypeAsmHooks {
     /// Custom printer, or `None` to leave the type to generic printing.
-    pub print: fn(&mut TypePrintHelper<'_, '_>, TypeRef) -> Option<fmt::Result>,
+    pub print: fn(&mut AsmPrinter<'_>, TypeRef) -> Option<fmt::Result>,
     /// Custom parser. Called after `dialect.name<` is consumed.
     pub parse: for<'a> fn(input: &mut &'a str, name: &'a str) -> winnow::ModalResult<RawType<'a>>,
 }
@@ -545,10 +499,7 @@ impl TypeAsmHooks {
     }
 }
 
-fn print_type<T: TypeAsmFormat>(
-    h: &mut TypePrintHelper<'_, '_>,
-    ty: TypeRef,
-) -> Option<fmt::Result> {
-    let ty = T::from_type_ref(h.ctx(), ty)?;
-    Some(ty.print(h))
+fn print_type<T: TypeAsmFormat>(p: &mut AsmPrinter<'_>, ty: TypeRef) -> Option<fmt::Result> {
+    let ty = T::from_type_ref(p.ctx(), ty)?;
+    Some(ty.print(p))
 }

@@ -445,8 +445,8 @@ crate::register_type_def!(&FUNC_SIG_DEF);
 /// The function syntax `func.func_sig` also uses, `clif.func_sig<(A) -> R>`,
 /// with any number of results.
 impl crate::asm_format::TypeAsmFormat for FuncSig {
-    fn print(&self, h: &mut crate::printer::TypePrintHelper<'_, '_>) -> std::fmt::Result {
-        super::func::print_signature_type(h, self.0)
+    fn print(&self, p: &mut crate::printer::AsmPrinter<'_>) -> std::fmt::Result {
+        super::func::print_signature_type(p, self.0)
     }
 
     fn parse<'a>(
@@ -566,11 +566,11 @@ impl crate::ops::Verify for CallIndirect {
             "results ({}) match neither the signature results ({}) nor their runtime projection",
             actual
                 .iter()
-                .map(|&ty| crate::printer::print_type(ctx, ty))
+                .map(|&ty| ty.display(ctx).to_string())
                 .format(", "),
             expected
                 .iter()
-                .map(|&ty| crate::printer::print_type(ctx, ty))
+                .map(|&ty| ty.display(ctx).to_string())
                 .format(", "),
         )
         .into())
@@ -647,20 +647,15 @@ impl crate::asm_format::OpAsmDirective for SwitchCases {
             .collect()
     }
 
-    fn print(
-        h: &mut crate::printer::OpPrintHelper<'_, '_>,
-        parts: Self::Parts<'_>,
-    ) -> std::fmt::Result {
+    fn print(p: &mut crate::printer::OpAsmPrinter<'_>, parts: Self::Parts<'_>) -> std::fmt::Result {
+        use itertools::Itertools as _;
         use std::fmt::Write as _;
 
-        for (position, (case, target)) in parts.into_iter().enumerate() {
-            if position > 0 {
-                h.write_str(", ")?;
-            }
-            let label = h.block_label(target).to_owned();
-            write!(h, "{case}: {label}")?;
-        }
-        Ok(())
+        let s = p.state();
+        let cases = parts.into_iter().format_with(", ", |(case, target), f| {
+            f(&format_args!("{case}: {}", s.block(target)))
+        });
+        write!(p, "{cases}")
     }
 
     fn parse<'a>(
@@ -793,7 +788,6 @@ mod tests {
     use crate::op_def::OpDef;
     use crate::op_interface::DynIndirectCallLike;
     use crate::parser::parse_test_module;
-    use crate::printer::print_module;
 
     #[test]
     fn indirect_call_interface_uses_clif_owned_sig() {
@@ -839,7 +833,7 @@ mod tests {
         }
         assert!(DynIndirectCallLike::get(&ctx, direct).is_none());
 
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(
             printed.contains("clif.call_indirect %0(%1) : (core.i32) -> core.i32"),
             "{printed}"
@@ -905,7 +899,7 @@ mod tests {
   !callable = clif.func_sig<(!scalar) -> (!scalar, !scalar), {nested = [!scalar]}>
 }"#,
         );
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(
             printed.contains(
                 "!callable = clif.func_sig<(!scalar) -> (!scalar, !scalar), {nested = [!scalar]}>"
@@ -914,7 +908,7 @@ mod tests {
         );
         let mut reparsed = crate::IrContext::new();
         let copy = parse_test_module(&mut reparsed, &printed);
-        assert_eq!(print_module(&reparsed, copy.op()), printed);
+        assert_eq!(copy.op().display(&reparsed).to_string(), printed);
     }
 
     #[test]
@@ -929,7 +923,7 @@ mod tests {
 "#;
         let mut ctx = crate::IrContext::new();
         let module = parse_test_module(&mut ctx, source);
-        assert_eq!(print_module(&ctx, module.op()), source);
+        assert_eq!(module.op().display(&ctx).to_string(), source);
     }
 
     #[test]
@@ -949,7 +943,6 @@ mod branch_table_tests {
     use super::*;
     use crate::op_def::OpDef;
     use crate::parser::parse_test_module;
-    use crate::printer::print_module;
 
     fn module(branch: &str) -> String {
         format!(
@@ -971,11 +964,11 @@ mod branch_table_tests {
     fn assert_round_trips(branch: &str, printed_branch: &str) {
         let mut ctx = crate::IrContext::new();
         let parsed = parse_test_module(&mut ctx, &module(branch));
-        let printed = print_module(&ctx, parsed.op());
+        let printed = parsed.op().display(&ctx).to_string();
         assert!(printed.contains(printed_branch), "{printed}");
         let mut reparsed_ctx = crate::IrContext::new();
         let reparsed = parse_test_module(&mut reparsed_ctx, &printed);
-        assert_eq!(print_module(&reparsed_ctx, reparsed.op()), printed);
+        assert_eq!(reparsed.op().display(&reparsed_ctx).to_string(), printed);
     }
 
     /// The violations of the `clif.switch` in [`module`], one per line.

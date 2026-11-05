@@ -201,7 +201,7 @@ fn the_program_specializes_the_library_bodies() {
         &mut Default::default(),
     );
     assert!(validation.is_ok(), "the program validates: {validation}");
-    let ir = trunk_ir::printer::print_module(&ir, module.module.op());
+    let ir = module.module.op().display(&ir).to_string();
     for function in ["lib::origin", "lib::x_of", "pkg::run"] {
         assert!(
             ir.contains(&format!("tribute_control.func @\"{function}\"")),

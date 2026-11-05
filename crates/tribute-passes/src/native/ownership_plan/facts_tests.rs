@@ -7,7 +7,6 @@ use std::sync::Arc;
 
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::parser::parse_test_module;
-use trunk_ir::printer::print_module;
 
 use super::*;
 
@@ -264,7 +263,7 @@ fn malformed_projection_fails_closed_without_publishing_facts() {
     );
     let op = function_op(&ctx, module, "load");
     let mut cache = AnalysisCache::new();
-    let before = print_module(&ctx, module.op());
+    let before = module.op().display(&ctx).to_string();
 
     // The module boundary still validates; only the function contract fails.
     assert!(
@@ -280,7 +279,7 @@ fn malformed_projection_fails_closed_without_publishing_facts() {
     );
     // A retry revalidates from scratch instead of reusing a partial result.
     assert!(cache.get::<NativeOwnershipFunctionFacts>(&ctx, op).is_err());
-    assert_eq!(print_module(&ctx, module.op()), before);
+    assert_eq!(module.op().display(&ctx).to_string(), before);
 }
 
 #[test]

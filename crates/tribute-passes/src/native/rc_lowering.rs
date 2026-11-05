@@ -702,13 +702,12 @@ mod tests {
     use super::*;
     use trunk_ir::context::IrContext;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
 
     fn run_pass(ir: &str) -> String {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, ir);
         lower_rc(&mut ctx, module);
-        print_module(&ctx, module.op())
+        module.op().display(&ctx).to_string()
     }
 
     #[test]

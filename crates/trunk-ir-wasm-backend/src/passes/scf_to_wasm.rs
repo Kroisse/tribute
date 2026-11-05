@@ -778,7 +778,6 @@ fn replace_control(
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
 
     fn lower_text(ir: &str) -> String {
         let mut ctx = IrContext::new();
@@ -794,7 +793,7 @@ mod tests {
         assert!(use_chains.is_ok(), "{use_chains}");
         let verifiers = trunk_ir::validation::validate_operation_verifiers(&ctx, module);
         assert!(verifiers.is_ok(), "{verifiers}");
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(
             !output.contains("scf."),
             "residual scf operation:\n{output}"
@@ -805,7 +804,7 @@ mod tests {
     fn assert_switch_rejected_unchanged(case: &str, input: &str, reason: &str) {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, input);
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
 
         let error = lower(
             &mut ctx,
@@ -832,7 +831,7 @@ mod tests {
             "{case}: {error}"
         );
         assert!(error.to_string().contains(reason), "{case}: {error}");
-        assert_eq!(print_module(&ctx, module.op()), before, "{case}");
+        assert_eq!(module.op().display(&ctx).to_string(), before, "{case}");
     }
 
     fn assert_no_scf_switch(output: &str) {
@@ -1183,7 +1182,7 @@ mod tests {
 
         let use_chains = trunk_ir::validation::validate_use_chains(&ctx, module);
         assert!(use_chains.is_ok(), "{use_chains}");
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(!output.contains("scf."), "{output}");
         assert!(
             output.contains("wasm.if") && output.contains("-> (wasm.arrayref)"),
@@ -1213,7 +1212,7 @@ mod tests {
 
         let use_chains = trunk_ir::validation::validate_use_chains(&ctx, module);
         assert!(use_chains.is_ok(), "{use_chains}");
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(!output.contains("scf."), "{output}");
         assert!(
             output.contains("wasm.loop") && output.contains(": wasm.arrayref)"),
@@ -1421,7 +1420,7 @@ mod tests {
             ));
             let mut ctx = IrContext::new();
             let module = parse_test_module(&mut ctx, &input);
-            let before = print_module(&ctx, module.op());
+            let before = module.op().display(&ctx).to_string();
             let error = lower(
                 &mut ctx,
                 module,
@@ -1434,7 +1433,7 @@ mod tests {
                 error.to_string().contains("Never control requires"),
                 "{error}"
             );
-            assert_eq!(print_module(&ctx, module.op()), before, "{body}");
+            assert_eq!(module.op().display(&ctx).to_string(), before, "{body}");
         }
     }
 

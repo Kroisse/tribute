@@ -154,16 +154,15 @@ impl crate::asm_format::OpAsmDirective for SwitchCases {
     }
 
     fn print(
-        h: &mut crate::printer::OpPrintHelper<'_, '_>,
+        p: &mut crate::printer::OpAsmPrinter<'_>,
         (default, arms): Self::Parts<'_>,
     ) -> std::fmt::Result {
         use std::fmt::Write as _;
 
-        let label = h.block_label(default).to_owned();
-        write!(h, "default: {label}")?;
+        let s = p.state();
+        write!(p, "default: {}", s.block(default))?;
         for (case, target) in arms {
-            let label = h.block_label(target).to_owned();
-            write!(h, ", {case}: {label}")?;
+            write!(p, ", {case}: {}", s.block(target))?;
         }
         Ok(())
     }
@@ -217,7 +216,6 @@ impl Branch for Switch {
 mod tests {
     use crate::IrContext;
     use crate::parser::parse_test_module;
-    use crate::printer::print_module;
 
     #[test]
     fn switch_writes_its_type_and_default_first_as_mlir_does() {
@@ -235,6 +233,6 @@ mod tests {
 "#;
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, text);
-        assert_eq!(print_module(&ctx, module.op()), text);
+        assert_eq!(module.op().display(&ctx).to_string(), text);
     }
 }

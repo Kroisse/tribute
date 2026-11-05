@@ -80,8 +80,7 @@ proptest! {
 
     #[test]
     fn symbol_refs_round_trip_and_quote_only_non_identifiers(name in text()) {
-        let mut printed = String::new();
-        write_symbol(&mut printed, &Symbol::new(&name)).unwrap();
+        let printed = display_symbol_text(Symbol::new(&name).as_str()).to_string();
 
         let bare = is_bare_symbol(&name);
         prop_assert_eq!(!printed.starts_with("@\""), bare, "printed `{}`", printed);

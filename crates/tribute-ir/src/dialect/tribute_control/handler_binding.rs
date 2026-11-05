@@ -5,14 +5,13 @@ use std::fmt::{self, Write as _};
 
 use trunk_ir::asm_format::{
     CustomEntity, OpAsmDirective, RawCustomEntity, attach_entry_args, parse_entry_args,
-    write_entry_args,
 };
 use trunk_ir::dialect::core::Never;
 use trunk_ir::ops::DialectType;
 use trunk_ir::parser::raw::{
     RawAttribute, RawType, ident, raw_region, raw_type, symbol_path, symbol_ref, ws,
 };
-use trunk_ir::printer::{OpPrintHelper, display_symbol_ref, display_symbol_text};
+use trunk_ir::printer::{OpAsmPrinter, display_symbol_ref, display_symbol_text};
 use trunk_ir::refs::{RegionRef, TypeRef};
 use trunk_ir::types::{Attribute, AttributeMap, StringRef};
 use trunk_ir::{IrContext, SymbolPath};
@@ -225,14 +224,17 @@ impl OpAsmDirective for HandleArms {
             .collect()
     }
 
-    fn print(h: &mut OpPrintHelper<'_, '_>, arms: Self::Parts<'_>) -> fmt::Result {
+    fn print(p: &mut OpAsmPrinter<'_>, arms: Self::Parts<'_>) -> fmt::Result {
+        let s = p.state();
         for (binding, arm) in arms {
-            write!(h, " {}", binding.header(h.ctx()))?;
-            write_entry_args(h, arm)?;
-            h.write_str(" : ")?;
-            h.write_type(binding.operation_result_type)?;
-            h.write_char(' ')?;
-            h.print_region_without_entry(arm)?;
+            write!(
+                p,
+                " {}{} : {} ",
+                binding.header(s.ctx()),
+                s.entry_args(arm),
+                s.ty(binding.operation_result_type)
+            )?;
+            p.print_region_without_entry(arm)?;
         }
         Ok(())
     }

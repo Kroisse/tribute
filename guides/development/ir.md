@@ -199,9 +199,9 @@ where
   `asm_format::OpAsmDirective`, as MLIR's `custom<D>` does; `clif.switch`
   writes each case with its target as `[0: ^first, 5: ^second]` this way,
   `scf.index_switch` writes each case with its region on its own line
-  through `OpPrintHelper::newline`, and `tribute_control.handle` writes
+  through `OpAsmPrinter::newline`, and `tribute_control.handle` writes
   each arm after its binding with the arm's entry block arguments, through
-  `asm_format::write_entry_args` and `attach_entry_args`. `type(x)` on a
+  `AsmState::entry_args` and `asm_format::attach_entry_args`. `type(x)` on a
   single operand writes its type, which the parser checks against the
   operand's definition.
   `signature(t, body)` writes the type of `t`, an `Attr<TypeOf<S>>`
@@ -234,7 +234,8 @@ where
 - `#[asm_format]` without elements on an operation requires
   `trunk_ir::asm_format::OpAsmFormat` for its wrapper, which prints and
   parses the operation's custom syntax by hand. Generic syntax stays
-  readable for every operation.
+  readable for every operation. See [printing](#printing) for the printer
+  a custom format writes through.
 - On a type `struct`, `#[verify]` requires `trunk_ir::type_verifier::VerifyType`
   and `#[asm_format]` requires `trunk_ir::asm_format::TypeAsmFormat`. A
   hand-written `TypeDef` adds the same hooks with `with_verifier` and
@@ -325,6 +326,56 @@ inspect the operation before calling the accessor. An interface queried on
 unverified IR, such as `Branch` for the validator, reads attributes fallibly
 and reports failure in its result; an interface queried only on IR that
 satisfies its schema, such as `CallLike`, reads through the accessors.
+
+### Printing
+
+The printer is split as MLIR's is. A pre-pass builds an immutable
+`printer::AsmState` before anything is written: the name of every value
+(`%N`) and block label (`^bbN`) the printed operation writes, numbered in
+the order the printer writes them, and the type aliases of each module.
+The mutable `printer::AsmPrinter` writes to any `fmt::Write` and owns the
+indentation: it writes the current indentation before the first character
+of each line, so text written through it is indented and an empty line
+stays empty. `printer::OpAsmPrinter` dereferences to it and adds the
+structure of operations: regions, a region whose entry block the format
+wrote (`print_region_without_entry`, `print_body`), new lines, and generic
+form. `TypeAsmFormat::print`, `AttrKind::print_text`, and
+`SignatureCodec::write_tail` take an `AsmPrinter`; `OpAsmFormat::print` and
+`OpAsmDirective::print` take an `OpAsmPrinter`.
+
+The leaves of the printed form are `Display` values of the state, written
+with `write!` and the `Itertools::format` adapters
+([code conventions](conventions.md#formatting-utilities)):
+
+```rust
+fn print(&self, p: &mut OpAsmPrinter<'_>) -> fmt::Result {
+    let s = p.state();
+    write!(p, "{} = my.op {} : {}", s.value(result), s.values(operands), s.ty(ty))?;
+    write!(p, " {}", s.entry_args(body))?;
+    p.print_region_without_entry(body)
+}
+```
+
+`AsmState` offers `ty`, `attr`, `attr_dict`, `value`, `values`, `block`,
+and `entry_args`; `printer::display_symbol_ref`, `display_symbol_text`, and
+`display_name` need no state. A format names nothing while printing. The
+pre-pass, `printer::AsmNamer`, names each operation as its format writes it:
+generic form names the results, then each region; a declarative format
+follows its elements; a hand-written format names by default its results,
+then each region in order, with fresh numbering for an operation isolated
+from above. A hand-written format that writes names in another order, or
+writes one name for values of several regions, overrides
+`OpAsmFormat::assign_names` (or `OpAsmDirective::assign_names`), as
+`tribute_control.lambda` shares each parameter across its bodies with
+`AsmNamer::share`.
+
+The entry points are `Display` values rather than functions that return a
+`String`, as `Path::display` is: `op.display(ctx)` writes an operation, a
+module with its type aliases, and runs the pre-pass for it on each write;
+`ty.display(ctx)` writes a type in full. Write them with `write!` or
+`format!`, and call `to_string()` only where a `String` is the result. A
+tool that keeps the state across writes builds `AsmState::new(ctx, op)` and
+writes through `OpAsmPrinter::new(&state, &mut out)`.
 
 ## Operation Interfaces
 

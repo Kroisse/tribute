@@ -7,7 +7,6 @@ use tribute_front::SourceCst;
 use tribute_front::analysis;
 use tribute_front::ast::{Decl, DeclTable, Expr, ExprKind, ResolvedRef, Stmt, TypedRef};
 use trunk_ir::context::IrContext;
-use trunk_ir::printer::print_module;
 
 /// Prelude source, loaded at compile time relative to this file.
 const PRELUDE_SOURCE: &str = include_str!("../../../../lib/std/prelude.trb");
@@ -84,7 +83,7 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
         validation.is_ok(),
         "logical frontend output must validate: {validation}"
     );
-    print_module(&ir, module.module.op())
+    module.module.op().display(&ir).to_string()
 }
 
 /// Run the AST pipeline through TDNR and summarize one function body.

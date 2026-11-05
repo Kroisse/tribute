@@ -757,7 +757,6 @@ mod tests {
     use trunk_ir::ops::DialectOp;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::pass::PassManager;
-    use trunk_ir::printer::print_module;
 
     use crate::native::adt_rc_header::AdtRcHeader;
     use crate::native::clif_lowering::{CfToClif, FuncToClif};
@@ -787,7 +786,7 @@ mod tests {
 
         let mut kept = String::new();
         let mut keeping = false;
-        for line in print_module(&ctx, module.op()).lines() {
+        for line in module.op().display(&ctx).to_string().lines() {
             if let Some(header) = line.strip_prefix("  clif.func @") {
                 keeping = keep(header.split('(').next().unwrap());
             }

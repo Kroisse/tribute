@@ -164,9 +164,9 @@ mod tests {
     }
 
     impl crate::asm_format::TypeAsmFormat for Custom {
-        fn print(&self, h: &mut crate::printer::TypePrintHelper<'_, '_>) -> std::fmt::Result {
+        fn print(&self, p: &mut crate::printer::AsmPrinter<'_>) -> std::fmt::Result {
             use std::fmt::Write;
-            h.write_str("type_hooks_test.custom<!>")
+            p.write_str("type_hooks_test.custom<!>")
         }
 
         fn parse<'a>(
@@ -233,10 +233,7 @@ mod tests {
         assert!(Checked::from_type_ref(&ctx, good).is_some());
 
         let ty = crate::TypeDataBuilder::new(Custom::NAME).intern(&mut ctx);
-        assert_eq!(
-            crate::printer::print_type(&ctx, ty),
-            "type_hooks_test.custom<!>"
-        );
+        assert_eq!(ty.display(&ctx).to_string(), "type_hooks_test.custom<!>");
         let mut input = "type_hooks_test.custom<!>";
         let raw = crate::parser::raw::raw_type(&mut input).unwrap();
         assert!(input.is_empty());

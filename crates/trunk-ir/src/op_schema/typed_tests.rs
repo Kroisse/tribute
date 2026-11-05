@@ -8,7 +8,6 @@ use crate::dialect::core;
 use crate::dialect::core::{BoolLike, I32, IntegerLike, Ptr};
 use crate::dialect::func;
 use crate::ops::DialectOp;
-use crate::printer::print_op;
 use crate::type_constraint::{ProjectionKind, TypeConstraint};
 use crate::{BlockArgData, BlockData, Location, RegionData, TypeDataBuilder, TypeRef, ValueRef};
 
@@ -354,7 +353,12 @@ fn fluent_builders_group_inputs_by_kind() {
         .results(i1_ty)
         .build(&mut ctx, loc);
     assert_eq!(cmp.predicate(&ctx), Symbol::new("slt"));
-    assert!(print_op(&ctx, cmp.op_ref()).contains("predicate = \"slt\""));
+    assert!(
+        cmp.op_ref()
+            .display(&ctx)
+            .to_string()
+            .contains("predicate = \"slt\"")
+    );
 
     let call = test_typed::Call::operands(callee, [a])
         .sig(sig)

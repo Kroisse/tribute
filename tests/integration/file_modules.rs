@@ -10,7 +10,6 @@ use tribute_front::ast::{Decl, ModuleItem, UnresolvedName};
 use tribute_front::source_tree::{PackageFile, source_tree_of};
 use tribute_front::testing::LoggingDb;
 use trunk_ir::SymbolPath;
-use trunk_ir::printer::print_module;
 
 const ROOT: &str = "/pkg/src/main.trb";
 
@@ -100,12 +99,12 @@ fn file_modules_lower_like_inline_modules() {
     let root = package(&mut db);
     assert_eq!(located_diagnostics(&db, root), Vec::<String>::new());
     let (ctx, module) = compile_frontend(&db, root).expect("frontend output");
-    let files = print_module(&ctx, module.op());
+    let files = module.op().display(&ctx).to_string();
 
     let mut db = LoggingDb::default();
     let root = db.file(ROOT, INLINE);
     let (ctx, module) = compile_frontend(&db, root).expect("frontend output");
-    let inline = print_module(&ctx, module.op());
+    let inline = module.op().display(&ctx).to_string();
 
     assert_eq!(files, inline);
 }
