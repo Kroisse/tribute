@@ -13,8 +13,8 @@
 
 use trunk_ir::OpName;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::arith::{self, CmpfPredicate, CmpiPredicate};
-use trunk_ir::dialect::clif::{self, FloatCond, IntCond};
+use trunk_ir::dialect::arith;
+use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core::{self, FloatLike, IntegerLike};
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef};
@@ -329,19 +329,9 @@ impl RewritePattern for ArithCmpPattern {
         if let Ok(cmpi) = arith::Cmpi::from_op(ctx, op) {
             let lhs = cmpi.lhs(ctx);
             let rhs = cmpi.rhs(ctx);
-            let cond = match cmpi.predicate(ctx) {
-                CmpiPredicate::Eq => IntCond::Eq,
-                CmpiPredicate::Ne => IntCond::Ne,
-                CmpiPredicate::Slt => IntCond::Slt,
-                CmpiPredicate::Sle => IntCond::Sle,
-                CmpiPredicate::Sgt => IntCond::Sgt,
-                CmpiPredicate::Sge => IntCond::Sge,
-                CmpiPredicate::Ult => IntCond::Ult,
-                CmpiPredicate::Ule => IntCond::Ule,
-                CmpiPredicate::Ugt => IntCond::Ugt,
-                CmpiPredicate::Uge => IntCond::Uge,
-            };
-            let cmp_op = clif::Icmp::operands(lhs, rhs).cond(cond).build(ctx, loc);
+            let cmp_op = clif::Icmp::operands(lhs, rhs)
+                .cond(cmpi.predicate(ctx).into())
+                .build(ctx, loc);
             finalize_cmp(
                 ctx,
                 loc,
@@ -355,15 +345,9 @@ impl RewritePattern for ArithCmpPattern {
         } else if let Ok(cmpf) = arith::Cmpf::from_op(ctx, op) {
             let lhs = cmpf.lhs(ctx);
             let rhs = cmpf.rhs(ctx);
-            let cond = match cmpf.predicate(ctx) {
-                CmpfPredicate::Oeq => FloatCond::Eq,
-                CmpfPredicate::Une => FloatCond::Ne,
-                CmpfPredicate::Olt => FloatCond::Lt,
-                CmpfPredicate::Ole => FloatCond::Le,
-                CmpfPredicate::Ogt => FloatCond::Gt,
-                CmpfPredicate::Oge => FloatCond::Ge,
-            };
-            let cmp_op = clif::Fcmp::operands(lhs, rhs).cond(cond).build(ctx, loc);
+            let cmp_op = clif::Fcmp::operands(lhs, rhs)
+                .cond(cmpf.predicate(ctx).into())
+                .build(ctx, loc);
             finalize_cmp(
                 ctx,
                 loc,

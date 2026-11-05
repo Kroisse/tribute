@@ -2,6 +2,7 @@
 
 use crate::attr_kind::Bytes;
 use crate::attr_kind::SymbolRef;
+use crate::dialect::arith;
 use crate::dialect::core::{I8, I32, IntegerLike};
 use crate::op_flag::IsolatedFromAbove;
 use crate::op_interface::{CallLike, IndirectCallLike};
@@ -37,6 +38,38 @@ crate::attr_kind::keyword_kind! {
         Le = "le",
         Gt = "gt",
         Ge = "ge",
+    }
+}
+
+impl From<arith::CmpiPredicate> for IntCond {
+    fn from(predicate: arith::CmpiPredicate) -> Self {
+        use arith::CmpiPredicate as P;
+        match predicate {
+            P::Eq => Self::Eq,
+            P::Ne => Self::Ne,
+            P::Slt => Self::Slt,
+            P::Sle => Self::Sle,
+            P::Sgt => Self::Sgt,
+            P::Sge => Self::Sge,
+            P::Ult => Self::Ult,
+            P::Ule => Self::Ule,
+            P::Ugt => Self::Ugt,
+            P::Uge => Self::Uge,
+        }
+    }
+}
+
+impl From<arith::CmpfPredicate> for FloatCond {
+    fn from(predicate: arith::CmpfPredicate) -> Self {
+        use arith::CmpfPredicate as P;
+        match predicate {
+            P::Oeq => Self::Eq,
+            P::Une => Self::Ne,
+            P::Olt => Self::Lt,
+            P::Ole => Self::Le,
+            P::Ogt => Self::Gt,
+            P::Oge => Self::Ge,
+        }
     }
 }
 
