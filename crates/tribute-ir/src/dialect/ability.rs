@@ -592,4 +592,32 @@ mod tests {
             assert!(DynCallableExit::prove(&ctx, handle).is_err());
         }
     }
+
+    #[test]
+    fn handle_dispatch_writes_each_ability_with_its_dispatcher() {
+        let input = r#"core.module @test {
+  func.func @main(%0: core.ptr, %1: core.i32, %2: core.ptr, %3: core.ptr) {
+      ability.handle_dispatch %0, %1 [@State: %2, @Console: %3] {
+          func.unreachable
+      }
+  }
+}
+"#;
+        let mut ctx = IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(&mut ctx, input);
+        let function =
+            trunk_ir::dialect::func::Func::from_op(&ctx, module.ops(&ctx)[0]).expect("function");
+        let entry = ctx.region(function.body(&ctx)).blocks[0];
+        let handle = HandleDispatch::from_op(&ctx, ctx.block(entry).ops[0]).expect("handle");
+        let abilities: Vec<_> = handle
+            .abilities(&ctx)
+            .map(|ability| ability.to_string())
+            .collect();
+        assert_eq!(abilities, ["State", "Console"]);
+        assert_eq!(
+            handle.dispatchers(&ctx),
+            [ctx.block_arg(entry, 2), ctx.block_arg(entry, 3)]
+        );
+        assert_eq!(module.op().display(&ctx).to_string(), input);
+    }
 }

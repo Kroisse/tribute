@@ -67,7 +67,7 @@ pub use declarations::{
 pub use evidence::{EVIDENCE_PLAN_ATTR, EvidenceStep};
 pub(crate) use evidence::{EvidencePlanSite, verify_evidence_plan};
 pub use func_sig::{FuncSig, FuncSigBuilder, FuncSigTypeError};
-pub use handler_binding::{HandleArms, HandlerBinding, RawHeader};
+pub use handler_binding::{BindingHeader, HandleArms, HandlerBinding};
 pub use interfaces::{
     DeclarationUse, DynLocalValidation, DynOperationDeclarationUse, DynSourceCallable,
     LocalValidation, OperationDeclarationUse, SourceCallable,
@@ -158,14 +158,12 @@ impl trunk_ir::attr_kind::AttrKind for OperationKind {
         fmt::Write::write_str(p, Self::read(p.ctx(), attr).keyword())
     }
 
-    fn parse_text<'a>(
-        input: &mut &'a str,
-    ) -> winnow::ModalResult<trunk_ir::parser::raw::RawAttribute<'a>> {
-        trunk_ir::asm_format::parse_keyword(input, |word| {
+    fn parse_text(
+        p: &mut trunk_ir::parser::AsmParser<'_>,
+    ) -> trunk_ir::parser::ParseResult<Attribute> {
+        trunk_ir::asm_format::parse_keyword(p, |ctx, word| {
             let kind = Self::from_keyword(word)?;
-            Some(trunk_ir::parser::raw::RawAttribute::String(
-                kind.keyword().to_owned(),
-            ))
+            Some(ctx.string_attr(kind.keyword()))
         })
     }
 }

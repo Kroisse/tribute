@@ -60,37 +60,28 @@ impl trunk_ir::asm_format::TypeAsmFormat for FuncSig {
         )
     }
 
-    fn parse<'a>(
-        input: &mut &'a str,
-        name: &'a str,
-    ) -> winnow::ModalResult<trunk_ir::parser::raw::RawType<'a>> {
+    fn parse(
+        p: &mut trunk_ir::parser::AsmParser<'_>,
+        name: &str,
+    ) -> trunk_ir::parser::ParseResult<Option<TypeRef>> {
         use trunk_ir::asm_format::{parse_dict_tail, parse_signature_results};
-        use trunk_ir::parser::raw::{raw_param_list, ws};
-        use winnow::error::{ContextError, ErrMode, StrContext, StrContextValue};
-        use winnow::prelude::*;
 
-        if !input.starts_with('(') {
-            return Err(ErrMode::Backtrack(ContextError::new()));
+        if !p.peek().starts_with('(') {
+            return Ok(None);
         }
-        let inputs = raw_param_list.parse_next(input)?;
-        ws.parse_next(input)?;
-        "->".parse_next(input)?;
-        ws.parse_next(input)?;
-        let results = parse_signature_results(input)?;
-        let mut tail = parse_dict_tail(input)?;
-        if let Some(row) = parse_row(input)? {
-            if tail.iter().any(|(key, _)| key == ABILITY_ROW_ATTR) {
-                let mut error = ContextError::new();
-                error.push(StrContext::Expected(StrContextValue::Description(
-                    "the row once, as either `row(..)` or `ability_row`",
-                )));
-                return Err(ErrMode::Cut(error));
+        let inputs = p.parse_param_list()?;
+        p.parse_punct("->")?;
+        let results = parse_signature_results(p)?;
+        let mut tail = parse_dict_tail(p)?;
+        if let Some(row) = parse_row(p)? {
+            if tail.view(p.ctx()).contains_key(ABILITY_ROW_ATTR) {
+                return Err(p.expected("the row once, as either `row(..)` or `ability_row`"));
             }
-            tail.push((ABILITY_ROW_ATTR.into(), row));
+            tail.view_mut(p.ctx_mut()).insert(ABILITY_ROW_ATTR, row);
         }
-        ws.parse_next(input)?;
-        '>'.parse_next(input)?;
-        trunk_ir::dialect::func::signature_from_parts(name, inputs, results, tail, Some(1))
+        p.parse_punct(">")?;
+        trunk_ir::dialect::func::signature_from_parts(p, name, inputs, results, tail, Some(1))
+            .map(Some)
     }
 }
 
@@ -135,30 +126,27 @@ impl trunk_ir::asm_format::SignatureCodec for FuncSig {
         fmt::Write::write_fmt(p, format_args!("{}", display_row(&row)))
     }
 
-    fn parse_tail<'a>(
-        input: &mut &'a str,
-    ) -> winnow::ModalResult<trunk_ir::parser::raw::RawAttrDict<'a>> {
-        Ok(parse_row(input)?
-            .map(|row| (ABILITY_ROW_ATTR.into(), row))
-            .into_iter()
-            .collect())
+    fn parse_tail(
+        p: &mut trunk_ir::parser::AsmParser<'_>,
+    ) -> trunk_ir::parser::ParseResult<AttributeMap> {
+        let mut tail = AttributeMap::new();
+        if let Some(row) = parse_row(p)? {
+            tail.view_mut(p.ctx_mut()).insert(ABILITY_ROW_ATTR, row);
+        }
+        Ok(tail)
     }
 
-    fn build<'a>(
-        inputs: Vec<trunk_ir::parser::raw::RawParam<'a>>,
-        results: Vec<trunk_ir::parser::raw::RawParam<'a>>,
-        tail: trunk_ir::parser::raw::RawAttrDict<'a>,
-    ) -> winnow::ModalResult<trunk_ir::parser::raw::RawType<'a>> {
-        use winnow::error::{ContextError, ErrMode, StrContext, StrContextValue};
-
+    fn build(
+        p: &mut trunk_ir::parser::AsmParser<'_>,
+        inputs: Vec<(TypeRef, AttributeMap)>,
+        results: Vec<(TypeRef, AttributeMap)>,
+        tail: AttributeMap,
+    ) -> trunk_ir::parser::ParseResult<TypeRef> {
         if results.len() != 1 {
-            let mut error = ContextError::new();
-            error.push(StrContext::Expected(StrContextValue::Description(
-                "exactly one result",
-            )));
-            return Err(ErrMode::Cut(error));
+            return Err(p.expected("exactly one result"));
         }
         trunk_ir::dialect::func::signature_from_parts(
+            p,
             "tribute_control.func_sig",
             inputs,
             results,
@@ -412,9 +400,8 @@ mod signature_codec_tests {
     use trunk_ir::asm_format::{
         SignatureCodec, display_signature_param, display_signature_results, parse_signature_results,
     };
-    use trunk_ir::parser::raw::{RawAttribute, RawType, raw_param_list, ws};
+    use trunk_ir::parser::AsmParser;
     use trunk_ir::printer::{AsmPrinter, AsmState};
-    use winnow::prelude::*;
 
     fn function_form(ctx: &IrContext, ty: TypeRef) -> Option<String> {
         use fmt::Write;
@@ -437,58 +424,14 @@ mod signature_codec_tests {
         Some(out)
     }
 
-    fn attribute(ctx: &mut IrContext, raw: &RawAttribute<'_>) -> Attribute {
-        match raw {
-            RawAttribute::Int(value) => Attribute::Int(*value),
-            RawAttribute::SymbolRef(path) => {
-                Attribute::SymbolRef(SymbolPath::new(path.iter().map(|part| Symbol::new(part))))
-            }
-            RawAttribute::List(items) => {
-                Attribute::List(items.iter().map(|item| attribute(ctx, item)).collect())
-            }
-            RawAttribute::Dict(entries) => {
-                let entries: Vec<_> = entries
-                    .iter()
-                    .map(|(key, value)| (key.to_string(), attribute(ctx, value)))
-                    .collect();
-                Attribute::Dict(AttributeMap::from_entries(ctx, entries))
-            }
-            other => panic!("unexpected raw attribute {other:?}"),
-        }
-    }
-
-    fn intern(ctx: &mut IrContext, raw: &RawType<'_>) -> TypeRef {
-        let RawType::Concrete {
-            name,
-            params,
-            attrs,
-        } = raw
-        else {
-            panic!("unexpected alias");
-        };
-        let params: Vec<_> = params.iter().map(|param| intern(ctx, &param.ty)).collect();
-        let attrs: Vec<_> = attrs
-            .iter()
-            .map(|(key, value)| (key.to_string(), attribute(ctx, value)))
-            .collect();
-        let mut builder = TypeDataBuilder::new(ctx.intern_type_name(name)).params(params);
-        for (key, value) in attrs {
-            builder = builder.attr(key, value);
-        }
-        builder.intern(ctx)
-    }
-
     fn parse_function_form(ctx: &mut IrContext, text: &str) -> TypeRef {
-        let mut input = text;
-        let inputs = raw_param_list.parse_next(&mut input).unwrap();
-        ws.parse_next(&mut input).unwrap();
-        input = input.strip_prefix("->").unwrap();
-        ws.parse_next(&mut input).unwrap();
-        let results = parse_signature_results(&mut input).unwrap();
-        let tail = FuncSig::parse_tail(&mut input).unwrap();
-        assert_eq!(input, "", "unparsed rest of `{text}`");
-        let raw = FuncSig::build(inputs, results, tail).unwrap();
-        intern(ctx, &raw)
+        let mut p = AsmParser::new(ctx, text);
+        let inputs = p.parse_param_list().unwrap();
+        p.parse_punct("->").unwrap();
+        let results = parse_signature_results(&mut p).unwrap();
+        let tail = FuncSig::parse_tail(&mut p).unwrap();
+        assert!(p.at_end(), "unparsed rest of `{text}`");
+        FuncSig::build(&mut p, inputs, results, tail).unwrap()
     }
 
     #[test]
@@ -542,9 +485,9 @@ mod signature_codec_tests {
             .intern(&mut ctx);
         assert!(FuncSig::decompose(&ctx, sig.as_type_ref()).is_none());
 
-        let mut input = "(core.i32, core.i32)";
-        let params = raw_param_list.parse_next(&mut input).unwrap();
-        assert!(FuncSig::build(Vec::new(), Vec::new(), Vec::new()).is_err());
-        assert!(FuncSig::build(Vec::new(), params, Vec::new()).is_err());
+        let mut p = AsmParser::new(&mut ctx, "(core.i32, core.i32)");
+        let params = p.parse_param_list().unwrap();
+        assert!(FuncSig::build(&mut p, Vec::new(), Vec::new(), AttributeMap::new()).is_err());
+        assert!(FuncSig::build(&mut p, Vec::new(), params, AttributeMap::new()).is_err());
     }
 }

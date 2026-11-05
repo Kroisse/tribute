@@ -9,14 +9,11 @@
 use std::fmt;
 use std::marker::PhantomData;
 
-use winnow::{ModalResult, Parser};
-
 use smallvec::SmallVec;
 
-use crate::asm_format::expected;
 use crate::context::IrContext;
 use crate::op_schema::AttributeKind;
-use crate::parser::raw::{RawAttribute, raw_attr_value};
+use crate::parser::{AsmParser, ParseResult};
 use crate::printer::AsmPrinter;
 use crate::refs::TypeRef;
 use crate::symbol::SymbolPath;
@@ -58,10 +55,8 @@ pub trait AttrKind {
 
     /// Read a value as [`Self::print_text`] writes it, as an unverified
     /// attribute that the schema checks later.
-    fn parse_text<'a>(input: &mut &'a str) -> ModalResult<RawAttribute<'a>> {
-        raw_attr_value
-            .parse_next(input)
-            .map_err(|e| e.map(|_| expected("attribute value")))
+    fn parse_text(p: &mut AsmParser<'_>) -> ParseResult<Attribute> {
+        p.parse_attribute()
     }
 
     /// Whether two values read from attributes are the same value, which
@@ -218,13 +213,11 @@ macro_rules! keyword_kind {
                 ::std::fmt::Write::write_str(p, Self::read(p.ctx(), attr).keyword())
             }
 
-            fn parse_text<'a>(
-                input: &mut &'a str,
-            ) -> ::winnow::ModalResult<$crate::parser::raw::RawAttribute<'a>> {
-                $crate::asm_format::parse_keyword(input, |word| {
-                    Self::from_keyword(word).map(|value| {
-                        $crate::parser::raw::RawAttribute::String(value.keyword().to_owned())
-                    })
+            fn parse_text(
+                p: &mut $crate::parser::AsmParser<'_>,
+            ) -> $crate::parser::ParseResult<$crate::types::Attribute> {
+                $crate::asm_format::parse_keyword(p, |ctx, word| {
+                    Self::from_keyword(word).map(|value| ctx.string_attr(value.keyword()))
                 })
             }
         }
@@ -348,13 +341,11 @@ impl AttrKind for SymbolRef {
     }
 
     /// Only `@` begins a symbol reference, so another value is not read as one.
-    fn parse_text<'a>(input: &mut &'a str) -> ModalResult<RawAttribute<'a>> {
-        if !input.starts_with('@') {
-            return Err(winnow::error::ErrMode::Backtrack(expected("`@name`")));
+    fn parse_text(p: &mut AsmParser<'_>) -> ParseResult<Attribute> {
+        if !p.peek().starts_with('@') {
+            return Err(p.expected("`@name`"));
         }
-        raw_attr_value
-            .parse_next(input)
-            .map_err(|e| e.map(|_| expected("attribute value")))
+        p.parse_attribute()
     }
 }
 

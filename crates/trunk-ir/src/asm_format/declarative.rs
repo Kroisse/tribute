@@ -5,29 +5,23 @@
 //! the definition's [`OpSchema`], so one declaration gives both directions
 //! (`new-plans/ir.md`, "선언적 어셈블리 형식").
 
-use std::borrow::Cow;
 use std::fmt::{self, Write};
 use std::ops::Range;
 
 use itertools::Itertools as _;
-use winnow::combinator::{delimited, opt, preceded, repeat, separated};
-use winnow::error::{ContextError, ErrMode, StrContext, StrContextValue};
-use winnow::prelude::*;
+use winnow::Parser as _;
 
 use crate::asm_format::{
-    CustomEntity, OpAsmDirectiveHooks, RawCustomEntity, SignatureCodecHooks, SignatureParts,
-    display_signature_param, display_signature_results, expected, parse_signature_results,
+    CustomEntity, OpAsmDirectiveHooks, ParsedEntity, SignatureCodecHooks, SignatureParts,
+    display_signature_param, display_signature_results, parse_signature_results,
 };
 use crate::op_def::OpDef;
 use crate::op_flag::IsolatedFromAbove;
 use crate::op_schema::{Arity, OpSchema, ResultSchema};
-use crate::parser::raw::{
-    RawAttribute, RawOperation, RawParam, RawRegion, RawType, block_label, ident, raw_attr_dict,
-    raw_param, raw_param_list, raw_region, raw_type, symbol_ref, value_ref, ws,
-};
+use crate::parser::{Argument, OpAsmParser, Operand, OperationState, ParseResult, lexer};
 use crate::printer::{AsmNamer, OpAsmPrinter, display_symbol_text};
 use crate::types::Attribute;
-use crate::{BlockRef, IrContext, OpRef, TypeRef};
+use crate::{AttributeMap, BlockRef, IrContext, OpRef, RegionRef, TypeRef};
 
 /// The format elements of an operation, in order.
 #[derive(Debug)]
@@ -434,7 +428,7 @@ impl Printer<'_, '_> {
                 self.p.write_str(text)?;
                 if text.ends_with(['(', '[']) {
                     self.spacing = Spacing::Glue;
-                } else if !is_keyword(text) {
+                } else if !crate::parser::is_keyword(text) {
                     self.spacing = Spacing::Punctuation;
                 }
                 Ok(())
@@ -918,25 +912,34 @@ fn visit(elements: &[FormatElement], f: &mut impl FnMut(&FormatElement)) {
 // Parsing
 // =============================================================================
 
-/// The entities parsed so far, by schema position.
-struct Parsed<'a> {
-    operands: Vec<Vec<&'a str>>,
-    /// The types written for an operand entity, by its schema position.
-    operand_types: Vec<(usize, Vec<RawType<'a>>)>,
-    attributes: Vec<(Cow<'a, str>, RawAttribute<'a>)>,
-    result_types: Vec<Vec<RawType<'a>>>,
-    regions: Vec<Vec<RawRegion<'a>>>,
-    successors: Vec<Vec<&'a str>>,
+/// The types a format writes for an operand entity.
+struct WrittenTypes {
+    /// The operand entity's schema position.
+    index: usize,
+    /// Where the list of types begins.
+    offset: usize,
+    /// Each type, with where it is written.
+    types: Vec<(TypeRef, usize)>,
 }
 
-/// Parse an operation written with `format` after its `dialect.name`.
-pub(crate) fn parse<'a>(
-    input: &mut &'a str,
-    name: &'a str,
-    results: Vec<&'a str>,
+/// The entities parsed so far, by schema position.
+struct Parsed<'a> {
+    operands: Vec<Vec<Operand<'a>>>,
+    operand_types: Vec<WrittenTypes>,
+    attributes: AttributeMap,
+    result_types: Vec<Vec<TypeRef>>,
+    regions: Vec<Vec<RegionRef>>,
+    successors: Vec<Vec<BlockRef>>,
+}
+
+/// Parse an operation written with `format` after its `dialect.name` into
+/// `state`.
+pub(crate) fn parse(
+    p: &mut OpAsmParser<'_>,
+    state: &mut OperationState,
     def: &'static OpDef,
     format: &'static OpFormat,
-) -> ModalResult<RawOperation<'a>> {
+) -> ParseResult<()> {
     let schema = &def.schema;
     let result_slots = match schema.results {
         ResultSchema::Fixed(names) => names.len(),
@@ -950,53 +953,56 @@ pub(crate) fn parse<'a>(
         parsed: Parsed {
             operands: vec![Vec::new(); schema.operands.len()],
             operand_types: Vec::new(),
-            attributes: Vec::new(),
+            attributes: AttributeMap::new(),
             result_types: vec![Vec::new(); result_slots],
             regions: vec![Vec::new(); schema.regions.len()],
             successors: vec![Vec::new(); schema.successors.len()],
         },
     };
     for element in format.elements {
-        parser.element(input, element)?;
+        parser.element(p, element)?;
     }
     let Parsed {
         operands,
-        operand_types: written,
+        operand_types,
         attributes,
         result_types,
         regions,
         successors,
     } = parser.parsed;
-    // A signature's inputs are the entry block arguments of its regions.
-    let mut func_param_regions = Vec::new();
-    let mut position = 0;
-    for (index, parsed) in regions.iter().enumerate() {
-        if parser.signature_regions.contains(&index) {
-            func_param_regions.extend(position..position + parsed.len());
-        }
-        position += parsed.len();
-    }
-    let mut operand_types = Vec::new();
-    for (index, types) in written {
+    for WrittenTypes {
+        index,
+        offset,
+        types,
+    } in operand_types
+    {
         if types.len() != operands[index].len() {
-            return Err(ErrMode::Cut(expected("one type for each operand")));
+            return Err(p.error_at(offset, "expected one type for each operand"));
         }
-        operand_types.extend(operands[index].iter().copied().zip(types));
+        for (&operand, (ty, offset)) in operands[index].iter().zip(types) {
+            p.check_operand_type(operand, ty, offset)?;
+        }
     }
-    Ok(RawOperation {
-        results,
-        name,
-        sym_name: None,
-        func_params: parser.entry_args,
-        func_param_regions,
-        operands: operands.into_iter().flatten().collect(),
-        operand_types,
-        attributes,
-        result_types: result_types.into_iter().flatten().collect(),
-        fixed_results: leaves_results_unwritten(schema, format),
-        regions: regions.into_iter().flatten().collect(),
-        successors: successors.into_iter().flatten().collect(),
-    })
+    state.operands = operands
+        .into_iter()
+        .flatten()
+        .map(|operand| operand.value)
+        .collect();
+    state.attributes = attributes;
+    state.result_types = result_types.into_iter().flatten().collect();
+    // A format that does not write the result types leaves them to the
+    // schema, which fixes them.
+    if leaves_results_unwritten(schema, format)
+        && let Some(bounds) = schema.fixed_results()
+    {
+        state.result_types = bounds
+            .iter()
+            .map(|bound| (bound.fixed.expect("fixed result bounds construct a type"))(p.ctx_mut()))
+            .collect();
+    }
+    state.regions = regions.into_iter().flatten().collect();
+    state.successors = successors.into_iter().flatten().collect();
+    Ok(())
 }
 
 struct FormatParser<'a> {
@@ -1005,196 +1011,187 @@ struct FormatParser<'a> {
     /// The regions a signature lists, which take `entry_args` as their
     /// entry block arguments.
     signature_regions: Vec<usize>,
-    entry_args: Vec<(&'a str, RawType<'a>)>,
+    entry_args: Vec<Argument>,
     parsed: Parsed<'a>,
 }
 
 impl<'a> FormatParser<'a> {
-    fn element(&mut self, input: &mut &'a str, element: &FormatElement) -> ModalResult<()> {
-        let before = *input;
-        ws.parse_next(input)?;
-        let new_line = before[..before.len() - input.len()].contains('\n');
+    fn element(&mut self, p: &mut OpAsmParser<'a>, element: &FormatElement) -> ParseResult<()> {
+        let new_line = p.skip_ws();
         match *element {
-            FormatElement::Literal(text) => literal(input, text),
+            FormatElement::Literal(text) => p.parse_literal(text),
             FormatElement::Operand(index) => {
-                let values = if self.schema.operands[index].arity == Arity::Variadic {
+                let operands = if self.schema.operands[index].arity == Arity::Variadic {
                     // A list is written on one line, so an operand after a
                     // line break begins the next operation.
                     if new_line {
                         Vec::new()
                     } else {
-                        let first = opt(value_ref).parse_next(input)?;
-                        let mut values: Vec<_> = first.into_iter().collect();
-                        if !values.is_empty() {
-                            let rest: Vec<_> = repeat(0.., preceded((ws, ',', ws), value_ref))
-                                .parse_next(input)?;
-                            values.extend(rest);
-                        }
-                        values
+                        p.parse_operand_refs()?
                     }
                 } else {
-                    vec![
-                        value_ref
-                            .parse_next(input)
-                            .map_err(|e| e.map(|_| expected("operand")))?,
-                    ]
+                    vec![p.parse_operand_ref()?]
                 };
-                self.parsed.operands[index] = values;
+                self.parsed.operands[index] = operands;
                 Ok(())
             }
             FormatElement::Attribute(index) => {
-                let value = (self.schema.attributes[index].parse_text)(input)?;
-                self.attribute(index, value);
+                let value = (self.schema.attributes[index].parse_text)(p)?;
+                self.attribute(p, index, value);
                 Ok(())
             }
             FormatElement::Symbol(index) => {
-                let name = symbol_ref
-                    .parse_next(input)
-                    .map_err(|e| e.map(|_| expected("`@name`")))?;
-                self.attribute(index, RawAttribute::String(name));
+                let name = p.parse_symbol_name()?;
+                let value = p.ctx_mut().string_attr(&name);
+                self.attribute(p, index, value);
                 Ok(())
             }
             FormatElement::Custom { hooks, entities } => {
-                let parsed = (hooks.parse)(input)?;
+                let offset = p.offset();
+                let parsed = (hooks.parse)(p)?;
                 if parsed.len() != entities.len() {
-                    return Err(ErrMode::Cut(expected(
-                        "one entity for each the custom element names",
-                    )));
+                    return Err(p.error_at(
+                        offset,
+                        "expected one entity for each the custom element names",
+                    ));
                 }
                 for (&slot, entity) in entities.iter().zip(parsed) {
                     match (slot, entity) {
-                        (CustomSlot::Operand(index), RawCustomEntity::Operands(values)) => {
-                            self.parsed.operands[index] = values;
+                        (CustomSlot::Operand(index), ParsedEntity::Operands(values)) => {
+                            self.parsed.operands[index] = values
+                                .into_iter()
+                                .map(|value| Operand { value, name: "?" })
+                                .collect();
                         }
-                        (CustomSlot::Attribute(index), RawCustomEntity::Attribute(value)) => {
+                        (CustomSlot::Attribute(index), ParsedEntity::Attribute(value)) => {
                             if let Some(value) = value {
-                                self.attribute(index, value);
+                                self.attribute(p, index, value);
                             }
                         }
-                        (CustomSlot::Successor(index), RawCustomEntity::Successors(labels)) => {
-                            self.parsed.successors[index] = labels;
+                        (CustomSlot::Successor(index), ParsedEntity::Successors(blocks)) => {
+                            self.parsed.successors[index] = blocks;
                         }
-                        (CustomSlot::Region(index), RawCustomEntity::Regions(regions)) => {
+                        (CustomSlot::Region(index), ParsedEntity::Regions(regions)) => {
                             self.parsed.regions[index] = regions;
                         }
                         _ => {
-                            return Err(ErrMode::Cut(expected(
-                                "the kind of entity the custom element names",
-                            )));
+                            return Err(p.error_at(
+                                offset,
+                                "expected the kind of entity the custom element names",
+                            ));
                         }
                     }
                 }
                 Ok(())
             }
             FormatElement::OperandType(index) => {
-                let ty = raw_type
-                    .parse_next(input)
-                    .map_err(|e| e.map(|_| expected("operand type")))?;
-                self.parsed.operand_types.push((index, vec![ty]));
+                let offset = p.offset();
+                let ty = p.parse_type()?;
+                self.parsed.operand_types.push(WrittenTypes {
+                    index,
+                    offset,
+                    types: vec![(ty, offset)],
+                });
                 Ok(())
             }
             FormatElement::ResultType(index) => {
-                let ty = raw_type
-                    .parse_next(input)
-                    .map_err(|e| e.map(|_| expected("result type")))?;
-                self.parsed.result_types[index] = vec![ty];
+                self.parsed.result_types[index] = vec![p.parse_type()?];
                 Ok(())
             }
             FormatElement::ResultTypes => {
-                let types: Vec<RawType<'a>> =
-                    separated(0.., (ws, raw_type, ws).map(|(_, t, _)| t), ',').parse_next(input)?;
-                self.parsed.result_types[0] = types;
+                self.parsed.result_types[0] = parse_optional_types(p)?;
                 Ok(())
             }
             FormatElement::AttrDict { bare } => {
+                let offset = p.offset();
                 let dict = if bare {
-                    if input.starts_with('{') {
-                        Some(raw_attr_dict.parse_next(input)?)
-                    } else {
-                        None
-                    }
-                } else if literal(input, "attributes").is_ok() {
-                    ws.parse_next(input)?;
-                    Some(raw_attr_dict.parse_next(input)?)
+                    p.parse_optional_attr_dict()?
+                } else if p.parse_optional_keyword("attributes") {
+                    Some(p.parse_attr_dict()?)
                 } else {
                     None
                 };
                 let written = written_attributes(self.schema, self.format);
                 for (key, value) in dict.into_iter().flatten() {
-                    if written.contains(&key.as_ref()) {
-                        return Err(ErrMode::Cut(expected(
-                            "an attribute dictionary without the attributes the format writes",
-                        )));
+                    if written.contains(&p.ctx().str(key)) {
+                        return Err(p.error_at(
+                            offset,
+                            "expected an attribute dictionary without the attributes the format writes",
+                        ));
                     }
-                    self.parsed.attributes.push((key, value));
+                    self.parsed
+                        .attributes
+                        .view_mut(p.ctx_mut())
+                        .insert(key, value);
                 }
                 Ok(())
             }
             FormatElement::Region(index) => {
                 let region = &self.schema.regions[index];
                 let mut regions = Vec::new();
-                while input.starts_with('{') {
-                    regions.push(raw_region.parse_next(input)?);
+                while p.peek().starts_with('{') {
+                    let parsed = if self.signature_regions.contains(&index) {
+                        p.parse_region_with_args(&self.entry_args)?
+                    } else {
+                        p.parse_region()?
+                    };
+                    regions.push(parsed);
                     if !region.variadic {
                         break;
                     }
-                    ws.parse_next(input)?;
                 }
                 if regions.is_empty() && !region.optional && !region.variadic {
-                    return Err(ErrMode::Backtrack(expected("region")));
+                    return Err(p.expected("region"));
                 }
                 self.parsed.regions[index] = regions;
                 Ok(())
             }
             FormatElement::Successor(index) => {
-                let labels = if self.schema.successors[index].variadic {
-                    separated(0.., (ws, block_label, ws).map(|(_, l, _)| l), ',')
-                        .parse_next(input)?
+                let blocks = if self.schema.successors[index].variadic {
+                    let mut blocks = Vec::new();
+                    if p.peek().starts_with('^') {
+                        loop {
+                            blocks.push(p.parse_successor()?);
+                            if !p.parse_optional_punct(",") {
+                                break;
+                            }
+                        }
+                    }
+                    blocks
                 } else {
-                    vec![
-                        block_label
-                            .parse_next(input)
-                            .map_err(|e| e.map(|_| expected("successor")))?,
-                    ]
+                    vec![p.parse_successor()?]
                 };
-                self.parsed.successors[index] = labels;
+                self.parsed.successors[index] = blocks;
                 Ok(())
             }
             FormatElement::FunctionalType(index) => {
-                let mut list = |input: &mut &'a str| {
-                    delimited(
-                        ('(', ws),
-                        separated(0.., (ws, raw_type, ws).map(|(_, t, _)| t), ','),
-                        (ws, ')'),
-                    )
-                    .parse_next(input)
-                };
-                let types: Vec<RawType<'a>> = list
-                    .parse_next(input)
-                    .map_err(|e| e.map(|_| expected("operand types `(A, ..)`")))?;
-                self.parsed.operand_types.push((index, types));
-                (ws, "->", ws).parse_next(input)?;
-                let results: Vec<RawType<'a>> = if input.starts_with('(') {
-                    list.parse_next(input)?
+                let offset = p.offset();
+                let types = p.parse_delimited("(", ")", |p| {
+                    p.peek();
+                    let offset = p.offset();
+                    Ok((p.parse_type()?, offset))
+                })?;
+                self.parsed.operand_types.push(WrittenTypes {
+                    index,
+                    offset,
+                    types,
+                });
+                p.parse_punct("->")?;
+                let results = if p.peek().starts_with('(') {
+                    p.parse_delimited("(", ")", |p| p.parse_type())?
                 } else {
-                    vec![
-                        raw_type
-                            .parse_next(input)
-                            .map_err(|e| e.map(|_| expected("result type")))?,
-                    ]
+                    vec![p.parse_type()?]
                 };
                 match self.parsed.result_types.first_mut() {
                     Some(slot) => *slot = results,
                     None if results.is_empty() => {}
-                    None => return Err(ErrMode::Cut(expected("`-> ()` for no results"))),
+                    None => return Err(p.expected("`-> ()` for no results")),
                 }
                 Ok(())
             }
             FormatElement::RegionArgs(index) => {
-                let args = super::parse_entry_args(input)
-                    .map_err(|e| e.map(|_| expected("entry arguments `(%a: A, ..)`")))?;
+                self.entry_args = p.parse_entry_args()?;
                 self.signature_regions = vec![index];
-                self.entry_args = args;
                 Ok(())
             }
             FormatElement::Signature {
@@ -1203,54 +1200,51 @@ impl<'a> FormatParser<'a> {
                 codec,
                 results: writes_results,
             } => {
-                if !input.starts_with('(') {
-                    return Err(ErrMode::Backtrack(expected("a signature `(..)`")));
+                if !p.peek().starts_with('(') {
+                    return Err(p.expected("a signature `(..)`"));
                 }
-                let params: Vec<(Option<&'a str>, RawParam<'a>)> = if regions.is_empty() {
-                    raw_param_list
-                        .parse_next(input)?
+                let params: Vec<(Option<Argument>, (TypeRef, AttributeMap))> = if regions.is_empty()
+                {
+                    p.parse_param_list()?
                         .into_iter()
                         .map(|param| (None, param))
                         .collect()
                 } else {
-                    delimited(
-                        ('(', ws),
-                        separated(
-                            0..,
-                            (ws, value_ref, ws, ':', ws, raw_param, ws)
-                                .map(|(_, name, _, _, _, param, _)| (Some(name), param)),
-                            ',',
-                        ),
-                        (ws, ')'),
-                    )
-                    .parse_next(input)?
+                    p.parse_delimited("(", ")", |p| {
+                        p.peek();
+                        let offset = p.offset();
+                        let name = p.parse_token("an argument `%name`", lexer::value_ref)?;
+                        p.parse_punct(":")?;
+                        let param = p.parse_param()?;
+                        let argument = Argument {
+                            name: name.to_owned(),
+                            ty: param.0,
+                            offset,
+                        };
+                        Ok((Some(argument), param))
+                    })?
                 };
-                let (results, tail) = if opt((ws, "->", ws)).parse_next(input)?.is_some() {
-                    let results = parse_signature_results(input)?;
-                    (results, (codec.parse_tail)(input)?)
+                let (results, tail) = if p.parse_optional_punct("->") {
+                    let results = parse_signature_results(p)?;
+                    (results, (codec.parse_tail)(p)?)
                 } else {
-                    (Vec::new(), Vec::new())
+                    (Vec::new(), AttributeMap::new())
                 };
                 if writes_results {
-                    self.parsed.result_types[0] =
-                        results.iter().map(|result| result.ty.clone()).collect();
+                    self.parsed.result_types[0] = results.iter().map(|&(ty, _)| ty).collect();
                 }
-                let args = params
-                    .iter()
-                    .filter_map(|(name, param)| Some(((*name)?, param.ty.clone())))
-                    .collect();
-                let inputs = params.into_iter().map(|(_, param)| param).collect();
-                let ty = (codec.build)(inputs, results, tail)?;
+                let (args, inputs): (Vec<_>, Vec<_>) = params.into_iter().unzip();
+                let ty = (codec.build)(p, inputs, results, tail)?;
                 match source {
                     SignatureSource::Attribute(attribute) => {
-                        self.attribute(attribute, RawAttribute::Type(ty));
+                        self.attribute(p, attribute, Attribute::Type(ty));
                     }
                     // The operand's definition gives its type.
                     SignatureSource::Operand(_) => {}
                     SignatureSource::Result => self.parsed.result_types[0] = vec![ty],
                 }
                 self.signature_regions = regions.to_vec();
-                self.entry_args = args;
+                self.entry_args = args.into_iter().flatten().collect();
                 Ok(())
             }
             FormatElement::Optional { anchor, elements } => {
@@ -1259,17 +1253,20 @@ impl<'a> FormatParser<'a> {
                 let Some((first, rest)) = elements.split_first() else {
                     return Ok(());
                 };
-                match self.element(input, first) {
-                    Ok(()) => {}
-                    Err(ErrMode::Backtrack(_)) => return Ok(()),
-                    Err(error) => return Err(error),
+                match *first {
+                    FormatElement::Literal(text) => {
+                        if !p.parse_optional_literal(text) {
+                            return Ok(());
+                        }
+                    }
+                    _ => self.element(p, first)?,
                 }
                 if let FormatAnchor::Flag(index) = anchor {
-                    self.attribute(index, RawAttribute::Bool(true));
+                    self.attribute(p, index, Attribute::Bool(true));
                 }
-                rest.iter().try_for_each(|element| {
-                    self.element(input, element).map_err(|error| error.cut())
-                })?;
+                for element in rest {
+                    self.element(p, element)?;
+                }
                 // The printer writes a group only for a present anchor.
                 let present = match anchor {
                     FormatAnchor::Attribute(_) | FormatAnchor::Flag(_) => true,
@@ -1277,50 +1274,33 @@ impl<'a> FormatParser<'a> {
                     FormatAnchor::Results => !self.parsed.result_types[0].is_empty(),
                 };
                 if !present {
-                    return Err(ErrMode::Cut(expected("the optional group's anchor")));
+                    return Err(p.expected("the optional group's anchor"));
                 }
                 Ok(())
             }
         }
     }
 
-    fn attribute(&mut self, index: usize, value: RawAttribute<'a>) {
+    fn attribute(&mut self, p: &mut OpAsmParser<'_>, index: usize, value: Attribute) {
         let name = self.schema.attributes[index].name;
-        self.parsed.attributes.push((name.into(), value));
+        self.parsed
+            .attributes
+            .view_mut(p.ctx_mut())
+            .insert(name, value);
     }
 }
 
-/// Whether a literal is a keyword, read as a whole identifier.
-fn is_keyword(text: &str) -> bool {
-    text.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
-}
-
-/// Read `text`; a keyword must not continue as a longer identifier or as an
-/// operation name.
-fn literal(input: &mut &str, text: &'static str) -> ModalResult<()> {
-    let error = || {
-        let mut error = ContextError::new();
-        error.push(StrContext::Expected(StrContextValue::StringLiteral(text)));
-        ErrMode::Backtrack(error)
-    };
-    let is_word = is_keyword(text);
-    if is_word {
-        let checkpoint = *input;
-        return match opt(ident).parse_next(input)? {
-            Some(word) if word == text && !input.starts_with('.') => Ok(()),
-            _ => {
-                *input = checkpoint;
-                Err(error())
-            }
-        };
+/// Types separated by commas, or none when no type is next.
+fn parse_optional_types(p: &mut OpAsmParser<'_>) -> ParseResult<Vec<TypeRef>> {
+    let rest = p.peek();
+    if !rest.starts_with('!') && lexer::qualified_name.parse_peek(rest).is_err() {
+        return Ok(Vec::new());
     }
-    match input.strip_prefix(text) {
-        Some(rest) => {
-            *input = rest;
-            Ok(())
-        }
-        None => Err(error()),
+    let mut types = vec![p.parse_type()?];
+    while p.parse_optional_punct(",") {
+        types.push(p.parse_type()?);
     }
+    Ok(types)
 }
 
 #[cfg(test)]
@@ -1363,12 +1343,12 @@ mod tests {
             )
         }
 
-        fn parse_text<'a>(
-            input: &mut &'a str,
-        ) -> winnow::ModalResult<crate::parser::raw::RawAttribute<'a>> {
-            crate::asm_format::parse_keyword(input, |word| match word {
-                "fast" => Some(crate::parser::raw::RawAttribute::Bool(true)),
-                "slow" => Some(crate::parser::raw::RawAttribute::Bool(false)),
+        fn parse_text(
+            p: &mut crate::parser::AsmParser<'_>,
+        ) -> crate::parser::ParseResult<Attribute> {
+            crate::asm_format::parse_keyword(p, |_, word| match word {
+                "fast" => Some(Attribute::Bool(true)),
+                "slow" => Some(Attribute::Bool(false)),
                 _ => None,
             })
         }
@@ -1997,6 +1977,6 @@ mod tests {
   asm_format_test.invoke call @f(%0
 }"#,
         );
-        assert!(error.contains(r#"StringLiteral(")")"#), "{error}");
+        assert!(error.contains("expected `)`"), "{error}");
     }
 }

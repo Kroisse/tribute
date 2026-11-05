@@ -901,11 +901,11 @@ impl crate::asm_format::TypeAsmFormat for FuncSig {
         super::func::print_signature_type(p, self.0)
     }
 
-    fn parse<'a>(
-        input: &mut &'a str,
-        name: &'a str,
-    ) -> winnow::ModalResult<crate::parser::raw::RawType<'a>> {
-        super::func::parse_signature_type(input, name, None)
+    fn parse(
+        p: &mut crate::parser::AsmParser<'_>,
+        name: &str,
+    ) -> crate::parser::ParseResult<Option<crate::TypeRef>> {
+        super::func::parse_signature_type(p, name, None)
     }
 }
 
@@ -918,12 +918,13 @@ impl crate::asm_format::SignatureCodec for FuncSig {
         super::func::signature_codec_parts(ctx, ty)
     }
 
-    fn build<'a>(
-        inputs: Vec<crate::parser::raw::RawParam<'a>>,
-        results: Vec<crate::parser::raw::RawParam<'a>>,
-        tail: crate::parser::raw::RawAttrDict<'a>,
-    ) -> winnow::ModalResult<crate::parser::raw::RawType<'a>> {
-        super::func::signature_from_parts("wasm.func_sig", inputs, results, tail, None)
+    fn build(
+        p: &mut crate::parser::AsmParser<'_>,
+        inputs: Vec<(crate::TypeRef, crate::AttributeMap)>,
+        results: Vec<(crate::TypeRef, crate::AttributeMap)>,
+        tail: crate::AttributeMap,
+    ) -> crate::parser::ParseResult<crate::TypeRef> {
+        super::func::signature_from_parts(p, "wasm.func_sig", inputs, results, tail, None)
     }
 }
 
