@@ -291,7 +291,6 @@ impl trunk_ir::pass::Pass for AdtToClif {
 mod tests {
     use trunk_ir::context::IrContext;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
     use trunk_ir::rewrite::TypeConverter;
 
     fn run_pass_result(ir: &str) -> Result<String, trunk_ir::rewrite::ConversionError> {
@@ -299,7 +298,7 @@ mod tests {
         let module = parse_test_module(&mut ctx, ir);
         let type_converter = TypeConverter::new();
         super::lower(&mut ctx, module, type_converter)?;
-        Ok(print_module(&ctx, module.op()))
+        Ok(module.op().display(&ctx).to_string())
     }
 
     fn run_pass(ir: &str) -> String {

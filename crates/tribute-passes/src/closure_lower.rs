@@ -954,7 +954,6 @@ impl Pass for LowerPreparedClosures {
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
     use trunk_ir::walk::{WalkAction, walk_op};
 
     #[test]
@@ -989,7 +988,7 @@ mod tests {
         let canonical = closure_struct_type_ref(&mut ctx);
         let printed = format!(
             "core.module @test {{\n  !C = {}\n}}",
-            trunk_ir::printer::print_type(&ctx, canonical)
+            canonical.display(&ctx)
         );
         assert!(printed.contains("layout = \"closure\""), "{printed}");
 
@@ -1134,7 +1133,7 @@ mod tests {
 
         lower_prepared_closures(&mut ctx, module).unwrap();
 
-        let ir = print_module(&ctx, module.op());
+        let ir = module.op().display(&ctx).to_string();
         assert!(
             !ir.contains("closure.new"),
             "module entrypoint should lower closure.new:\n{ir}"
@@ -1178,7 +1177,7 @@ mod tests {
         assert_module_is_structurally_valid(&ctx, module);
 
         let inner = func_by_name_recursive(&ctx, module, "inner");
-        let inner_ir = print_module(&ctx, inner.op_ref());
+        let inner_ir = inner.op_ref().display(&ctx).to_string();
         assert!(
             !inner_ir.contains("closure.new"),
             "module lowering must revisit nested functions:\n{inner_ir}"
@@ -1212,10 +1211,10 @@ mod tests {
             }
         }"#,
         );
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
         let ops = collect_ops(&ctx, module.op());
         assert!(lower_prepared_closures(&mut ctx, module).is_err());
-        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
         assert_eq!(collect_ops(&ctx, module.op()), ops);
     }
 
@@ -1249,7 +1248,7 @@ mod tests {
         }}"#,
                 ),
             );
-            let before = print_module(&ctx, module.op());
+            let before = module.op().display(&ctx).to_string();
             let ops = collect_ops(&ctx, module.op());
             let invalid = func_by_name(&ctx, module, "invalid");
             if supported {
@@ -1277,11 +1276,11 @@ mod tests {
                 error.to_string(),
                 "closure lowering: exact caller/callee/indirect result contract mismatch"
             );
-            assert_eq!(print_module(&ctx, module.op()), before);
+            assert_eq!(module.op().display(&ctx).to_string(), before);
             assert_eq!(collect_ops(&ctx, module.op()), ops);
             // The rewrite pattern must also decline unsupported arities safely.
             rewrite_validated_closures_in_func(&mut ctx, invalid, &SymbolTable::default());
-            assert_eq!(print_module(&ctx, module.op()), before);
+            assert_eq!(module.op().display(&ctx).to_string(), before);
             assert_eq!(collect_ops(&ctx, module.op()), ops);
         }
     }
@@ -1298,7 +1297,7 @@ mod tests {
         assert_module_is_structurally_valid(&ctx, module);
 
         let inner = func_by_name_recursive(&ctx, module, "inner");
-        let inner_ir = print_module(&ctx, inner.op_ref());
+        let inner_ir = inner.op_ref().display(&ctx).to_string();
         assert!(
             !inner_ir.contains("closure.new"),
             "prepared module worklist must lower nested functions:\n{inner_ir}"
@@ -1340,7 +1339,7 @@ mod tests {
             physical
         );
         assert_eq!(ctx.op_result_types(pack), [physical]);
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(printed.contains("!closure = adt.struct"), "{printed}");
         assert!(
             printed.contains("!nested = core.tuple<!closure>"),
@@ -1433,11 +1432,11 @@ mod tests {
 }}"#
             ),
         );
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
 
         assert!(lower_prepared_closures(&mut ctx, module).is_err());
 
-        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
     }
 
     #[test]
@@ -1449,11 +1448,11 @@ mod tests {
   func.func @external(%value: core.i32) -> core.i32
 }"#,
         );
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
 
         lower_prepared_closures(&mut ctx, module).unwrap();
 
-        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
     }
 
     #[test]
@@ -1470,11 +1469,11 @@ mod tests {
   }
 }"#,
         );
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
 
         lower_prepared_closures(&mut ctx, module).unwrap();
 
-        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
     }
 
     #[test]
@@ -1609,7 +1608,7 @@ mod tests {
         }
 
         finalize_closure_storage_layout(&mut ctx, module);
-        let ir = print_module(&ctx, module.op());
+        let ir = module.op().display(&ctx).to_string();
         assert!(!ir.contains("core.unrealized_conversion_cast"), "{ir}");
         assert!(!ir.contains("closure.closure"), "{ir}");
     }
@@ -1648,7 +1647,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, &source("@left::@helper"));
         lower_prepared_closures(&mut ctx, module).unwrap();
-        let ir = print_module(&ctx, module.op());
+        let ir = module.op().display(&ctx).to_string();
         assert!(!ir.contains("closure.new"), "{ir}");
         assert!(
             ir.contains(r#"tribute_rt.convention_table [@left::@helper, @trap_evidence_direct, @trap_cps] : tribute_rt.convention_table_ref"#),
@@ -1659,7 +1658,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, &source("@helper"));
         lower_prepared_closures(&mut ctx, module).unwrap();
-        let ir = print_module(&ctx, module.op());
+        let ir = module.op().display(&ctx).to_string();
         assert!(ir.contains("closure.new"), "{ir}");
         assert!(!ir.contains("tribute_rt.convention_table"), "{ir}");
     }
@@ -1690,10 +1689,10 @@ mod tests {
 }}"#
             ),
         );
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
 
         assert!(lower_prepared_closures(&mut ctx, module).is_err());
 
-        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
     }
 }

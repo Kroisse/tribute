@@ -598,7 +598,6 @@ impl Fold for IndexSwitch {
 mod canonicalize_tests {
     use super::*;
     use crate::parser::parse_test_module;
-    use crate::printer::print_module;
     use crate::rewrite::{ApplyResult, Module, PatternApplicator, TypeConverter};
 
     use crate::transforms::canonicalize::{FoldDispatchPattern, fold_ops_for_dialect};
@@ -644,7 +643,7 @@ mod canonicalize_tests {
 "#;
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, text);
-        assert_eq!(print_module(&ctx, module.op()), text);
+        assert_eq!(module.op().display(&ctx).to_string(), text);
     }
 
     #[test]
@@ -671,7 +670,7 @@ mod canonicalize_tests {
 "#;
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, text);
-        assert_eq!(print_module(&ctx, module.op()), text);
+        assert_eq!(module.op().display(&ctx).to_string(), text);
         let one_line = "core.module @test {\n  func.func @f(%0: core.i32) {\n    scf.index_switch %0 : (core.i32) -> () case 1 { scf.yield } default { scf.yield }\n    func.return\n  }\n}";
         let mut ctx = IrContext::new();
         parse_test_module(&mut ctx, one_line);
@@ -716,7 +715,7 @@ mod canonicalize_tests {
         );
         ctx.insert_op_before(entry, parsed.op_ref(), built.op_ref());
         ctx.remove_op_from_block(entry, parsed.op_ref());
-        assert_eq!(print_module(&ctx, module.op()), text);
+        assert_eq!(module.op().display(&ctx).to_string(), text);
     }
 
     #[test]
@@ -747,7 +746,7 @@ mod canonicalize_tests {
             count_ops(&ctx, module, crate::dialect::arith::Addi::NAME),
             1
         );
-        insta::assert_snapshot!(print_module(&ctx, module.op()));
+        insta::assert_snapshot!(module.op().display(&ctx).to_string());
     }
 
     #[test]
@@ -920,7 +919,7 @@ mod canonicalize_tests {
 "#;
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, text);
-        assert_eq!(print_module(&ctx, module.op()), text);
+        assert_eq!(module.op().display(&ctx).to_string(), text);
         let result = crate::validation::validate_operation_verifiers(&ctx, module);
         assert!(result.is_ok(), "{result}");
 
@@ -932,7 +931,7 @@ mod canonicalize_tests {
         let module = parse_test_module(&mut ctx, &folded);
         run_scf_patterns(&mut ctx, module);
         assert_eq!(count_ops(&ctx, module, IndexSwitch::NAME), 0);
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(
             printed.contains("%3 = arith.addi %1, %1 : core.i64\n      func.return %3"),
             "{printed}"
@@ -958,7 +957,7 @@ mod canonicalize_tests {
             count_ops(&ctx, module, crate::dialect::arith::Addi::NAME),
             0
         );
-        insta::assert_snapshot!(print_module(&ctx, module.op()));
+        insta::assert_snapshot!(module.op().display(&ctx).to_string());
     }
 
     #[test]

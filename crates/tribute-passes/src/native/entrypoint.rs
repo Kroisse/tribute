@@ -188,13 +188,12 @@ impl trunk_ir::pass::Pass for GenerateNativeEntrypoint {
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
 
     fn adapt(input: &str, sanitize: bool) -> String {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, input);
         generate_native_entrypoint(&mut ctx, module, sanitize);
-        print_module(&ctx, module.op())
+        module.op().display(&ctx).to_string()
     }
 
     const WRAPPER_MAIN: &str = r#"core.module @test {

@@ -1250,7 +1250,7 @@ mod tests {
 
         lower(&mut ctx, module, TypeConverter::new());
 
-        let output = trunk_ir::printer::print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert_eq!(output.matches("wasm_gc.array_get_u").count(), 1, "{output}");
         assert_eq!(output.matches("wasm_gc.array_get ").count(), 1, "{output}");
     }
@@ -1389,7 +1389,7 @@ mod tests {
 
         lower(&mut ctx, module, TypeConverter::new());
 
-        let printed = trunk_ir::printer::print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(!printed.contains("ref_test"), "{printed}");
         assert!(!printed.contains("adt.variant_is"), "{printed}");
         let func = module.ops(&ctx)[0];

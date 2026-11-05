@@ -744,7 +744,6 @@ mod tests {
     use trunk_ir::Span;
     use trunk_ir::dialect::wasm_gc;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
     use trunk_ir::refs::PathRef;
     use trunk_ir::rewrite::LegalityCheck;
 
@@ -945,7 +944,7 @@ mod tests {
             .build(&mut ctx, location);
         ctx.push_op(module_block, memory_func.op_ref());
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert_eq!(output.matches("wasm.memory").count(), 1, "{output}");
         assert_eq!(output.matches("wasm.export_memory").count(), 1, "{output}");
 
@@ -1165,7 +1164,7 @@ mod tests {
   }
 }"#,
         );
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
         let error = lower_to_wasm(&mut ctx, module, &mut Default::default())
             .expect_err("used Never must reject");
         assert_eq!(error.pass_name(), "check-lowerable-structured-control");
@@ -1174,7 +1173,7 @@ mod tests {
             error.to_string().contains("Never control requires"),
             "{error}"
         );
-        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
     }
 
     #[test]
@@ -1192,7 +1191,7 @@ mod tests {
   }
 }"#,
         );
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
         assert!(before.contains("tribute_io.write"), "{before}");
 
         let error = lower_to_wasm(&mut ctx, module, &mut Default::default())
@@ -1206,7 +1205,7 @@ mod tests {
             ),
             "{error}"
         );
-        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
     }
 
     #[test]
@@ -1229,7 +1228,7 @@ mod tests {
         lower_to_wasm(&mut ctx, module, &mut Default::default())
             .expect("module with output and constants should lower to wasm");
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert_eq!(output.matches("wasm.import_func").count(), 1, "{output}");
         assert_eq!(output.matches("wasm.memory {").count(), 1, "{output}");
         assert_eq!(output.matches("wasm.export_memory").count(), 1, "{output}");

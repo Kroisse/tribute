@@ -649,7 +649,6 @@ mod tests {
     use super::integer_immediate;
     use trunk_ir::context::IrContext;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
     use trunk_ir::rewrite::TypeConverter;
 
     fn run_pass(ir: &str) -> String {
@@ -657,7 +656,7 @@ mod tests {
         let module = parse_test_module(&mut ctx, ir);
         let type_converter = TypeConverter::new();
         super::lower(&mut ctx, module, type_converter).unwrap();
-        print_module(&ctx, module.op())
+        module.op().display(&ctx).to_string()
     }
 
     /// Lower `ir` with `core.index` converted to `core.i64`.
@@ -670,7 +669,7 @@ mod tests {
         type_converter
             .add_conversion(move |ctx, ty| core::Index::matches(ctx, ty).then_some(i64_ty));
         super::lower(&mut ctx, module, type_converter).unwrap();
-        print_module(&ctx, module.op())
+        module.op().display(&ctx).to_string()
     }
 
     #[test]

@@ -261,7 +261,6 @@ fn is_resume_exact(ctx: &IrContext, ty: TypeRef, frame: TypeRef, input: TypeRef)
 mod tests {
     use trunk_ir::IrContext;
     use trunk_ir::parser::parse_module;
-    use trunk_ir::printer::print_module;
     use trunk_ir::rewrite::Module;
     use trunk_ir::validation::validate_operation_verifiers;
 
@@ -357,16 +356,16 @@ mod tests {
         let result = validate_operation_verifiers(&ctx, module);
         assert!(result.is_ok(), "{result}");
 
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         let (reparsed, reparsed_module) = parse(&printed);
-        assert_eq!(printed, print_module(&reparsed, reparsed_module.op()));
+        assert_eq!(printed, reparsed_module.op().display(&reparsed).to_string());
         assert_eq!(errors(&valid_handle()), "");
     }
 
     #[test]
     fn handle_writes_each_binding_with_its_arm() {
         let (ctx, module) = parse(&valid_handle());
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         let handle = printed
             .lines()
             .skip_while(|line| !line.contains("ability.handle"))
@@ -385,7 +384,7 @@ mod tests {
             "{printed}"
         );
         let (reparsed, reparsed_module) = parse(&printed);
-        assert_eq!(printed, print_module(&reparsed, reparsed_module.op()));
+        assert_eq!(printed, reparsed_module.op().display(&reparsed).to_string());
     }
 
     #[test]
@@ -400,9 +399,9 @@ mod tests {
         };
         let valid = perform(", %k: !resume, %arg: core.i32", "%k");
         let (ctx, parsed) = parse(&valid);
-        let printed = print_module(&ctx, parsed.op());
+        let printed = parsed.op().display(&ctx).to_string();
         let (reparsed, reparsed_module) = parse(&printed);
-        assert_eq!(printed, print_module(&reparsed, reparsed_module.op()));
+        assert_eq!(printed, reparsed_module.op().display(&reparsed).to_string());
         assert_eq!(errors(&valid), "");
 
         const NEVER: &str =

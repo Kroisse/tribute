@@ -455,7 +455,6 @@ mod tests {
         use trunk_ir::ops::DialectOp;
         use trunk_ir::parser::parse_test_module;
         use trunk_ir::pass::PassManager;
-        use trunk_ir::printer::print_module;
         use trunk_ir::transforms::Canonicalize;
 
         /// Canonicalize every function; the flag tells whether the IR
@@ -463,13 +462,13 @@ mod tests {
         fn run(input: &str) -> (String, bool) {
             let mut ctx = IrContext::new();
             let module = parse_test_module(&mut ctx, input);
-            let before = print_module(&ctx, module.op());
+            let before = module.op().display(&ctx).to_string();
             let root = core::Module::from_op(&ctx, module.op()).expect("core.module");
             let mut pm = PassManager::new();
             pm.nest::<func::Func>().add_pass(Canonicalize);
             pm.run(&mut ctx, root, &mut Default::default())
                 .expect("canonicalize");
-            let after = print_module(&ctx, module.op());
+            let after = module.op().display(&ctx).to_string();
             let changed = after != before;
             (after, changed)
         }

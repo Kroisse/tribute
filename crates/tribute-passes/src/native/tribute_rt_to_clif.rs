@@ -499,14 +499,13 @@ mod tests {
     use super::*;
     use trunk_ir::context::IrContext;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
 
     fn run_pass(ir: &str) -> String {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, ir);
         let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
         lower(&mut ctx, module, tc).unwrap();
-        print_module(&ctx, module.op())
+        module.op().display(&ctx).to_string()
     }
 
     #[test]
@@ -553,7 +552,7 @@ mod tests {
         let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
         lower(&mut ctx, module, tc).unwrap();
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(
             output.contains("tribute_rt.retain"),
             "retain should be preserved"

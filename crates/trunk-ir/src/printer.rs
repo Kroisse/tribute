@@ -91,13 +91,6 @@ impl<'a> AsmState<'a> {
         Self::with_names(ctx, namer.finish(), op, core::Module::matches(ctx, op))
     }
 
-    /// The state for printing `root` as a module.
-    fn for_module(ctx: &'a IrContext, root: OpRef) -> Self {
-        let mut namer = AsmNamer::new(ctx);
-        namer.module(root);
-        Self::with_names(ctx, namer.finish(), root, true)
-    }
-
     /// A state that names nothing and writes every type in full, for a type
     /// or an attribute printed on its own.
     pub fn without_aliases(ctx: &'a IrContext) -> Self {
@@ -771,29 +764,24 @@ impl<'a> OpAsmPrinter<'a> {
 // Public API
 // ============================================================================
 
-/// Print an operation as IR text.
-pub fn print_op(ctx: &IrContext, op: OpRef) -> String {
-    let state = AsmState::new(ctx, op);
-    let mut out = String::new();
-    OpAsmPrinter::new(&state, &mut out)
-        .print_operation(op)
-        .expect("fmt::Write to String never fails");
-    out
+impl OpRef {
+    /// The operation as IR text, on its own line, as
+    /// [`Path::display`](std::path::Path::display) writes a path: a module
+    /// with its type aliases, anything else as its format writes it. Each
+    /// write runs the naming pre-pass for it.
+    pub fn display(self, ctx: &IrContext) -> impl fmt::Display + '_ {
+        fmt::from_fn(move |f| {
+            let state = AsmState::new(ctx, self);
+            OpAsmPrinter::new(&state, f).print_operation(self)
+        })
+    }
 }
 
-/// Print a type as IR text.
-pub fn print_type(ctx: &IrContext, ty: TypeRef) -> String {
-    AsmState::without_aliases(ctx).ty(ty).to_string()
-}
-
-/// Print a module (root operation with nested functions) as IR text.
-pub fn print_module(ctx: &IrContext, root: OpRef) -> String {
-    let state = AsmState::for_module(ctx, root);
-    let mut out = String::new();
-    OpAsmPrinter::new(&state, &mut out)
-        .print_module_op(root)
-        .expect("fmt::Write to String never fails");
-    out
+impl TypeRef {
+    /// The type as IR text, written in full without aliases.
+    pub fn display(self, ctx: &IrContext) -> impl fmt::Display + '_ {
+        fmt::from_fn(move |f| write!(f, "{}", AsmState::without_aliases(ctx).ty(self)))
+    }
 }
 
 #[cfg(test)]
@@ -1003,7 +991,7 @@ fn generate_auto_aliases(
         if eligible {
             // `TypeRef` is an allocation detail. The alias-free type printer
             // gives equivalent types the same stable structural ordering.
-            candidates.push((ty, count, complexity, print_type(ctx, ty)));
+            candidates.push((ty, count, complexity, ty.display(ctx).to_string()));
         }
     }
 
@@ -1201,7 +1189,7 @@ mod tests {
     fn test_print_type_simple() {
         let mut ctx = IrContext::new();
         let i32_ty = make_i32_type(&mut ctx);
-        assert_eq!(print_type(&ctx, i32_ty), "core.i32");
+        assert_eq!(i32_ty.display(&ctx).to_string(), "core.i32");
     }
 
     #[test]
@@ -1211,7 +1199,10 @@ mod tests {
         let tuple_ty = crate::dialect::core::Tuple::params([i32_ty, i32_ty])
             .intern(&mut ctx)
             .as_type_ref();
-        assert_eq!(print_type(&ctx, tuple_ty), "core.tuple<core.i32, core.i32>");
+        assert_eq!(
+            tuple_ty.display(&ctx).to_string(),
+            "core.tuple<core.i32, core.i32>"
+        );
     }
 
     #[test]
@@ -1229,10 +1220,10 @@ mod tests {
             let callable = ctx.type_alias_by_text("callable").unwrap();
             let expanded_result = if result == "()" { "()" } else { "core.i32" };
             assert_eq!(
-                print_type(&ctx, callable),
+                callable.display(&ctx).to_string(),
                 format!("func.func_sig<(core.i32) -> {expanded_result}, {{nested = [core.i32]}}>")
             );
-            let printed = print_module(&ctx, module);
+            let printed = module.display(&ctx).to_string();
             assert!(
                 printed.contains(&format!(
                     "func.func_sig<(!scalar) -> {result}, {{nested = [!scalar]}}>"
@@ -1241,7 +1232,7 @@ mod tests {
             );
             let mut reparsed = IrContext::new();
             let module = crate::parser::parse_module(&mut reparsed, &printed).unwrap();
-            assert_eq!(print_module(&reparsed, module), printed);
+            assert_eq!(module.display(&reparsed).to_string(), printed);
         }
     }
 
@@ -1254,14 +1245,20 @@ mod tests {
         let zero_one = func::func_sig(&mut ctx, [], [i32_ty]).as_type_ref();
         let many_one = func::func_sig(&mut ctx, [i32_ty, i32_ty], [i32_ty]).as_type_ref();
 
-        assert_eq!(print_type(&ctx, zero_zero), "func.func_sig<() -> ()>");
         assert_eq!(
-            print_type(&ctx, many_zero),
+            zero_zero.display(&ctx).to_string(),
+            "func.func_sig<() -> ()>"
+        );
+        assert_eq!(
+            many_zero.display(&ctx).to_string(),
             "func.func_sig<(core.i32, core.i32) -> ()>"
         );
-        assert_eq!(print_type(&ctx, zero_one), "func.func_sig<() -> core.i32>");
         assert_eq!(
-            print_type(&ctx, many_one),
+            zero_one.display(&ctx).to_string(),
+            "func.func_sig<() -> core.i32>"
+        );
+        assert_eq!(
+            many_one.display(&ctx).to_string(),
             "func.func_sig<(core.i32, core.i32) -> core.i32>"
         );
     }
@@ -1276,7 +1273,7 @@ mod tests {
             .attr(func::NUM_RESULTS_ATTR, Attribute::Int(1))
             .intern(&mut ctx);
         assert_eq!(
-            print_type(&ctx, foreign),
+            foreign.display(&ctx).to_string(),
             "foreign.func_sig<core.i32, {num_inputs = 2, num_results = 1}>"
         );
 
@@ -1288,7 +1285,7 @@ mod tests {
             .attr(func::NUM_RESULTS_ATTR, Attribute::Int(2))
             .intern(&mut ctx);
         assert_eq!(
-            print_type(&ctx, shared),
+            shared.display(&ctx).to_string(),
             "func.func_sig<core.i32, core.i32, core.i32, {num_inputs = 1, num_results = 2}>"
         );
     }
@@ -1303,7 +1300,7 @@ mod tests {
             .value(Attribute::Int(42))
             .results(i32_ty)
             .build(&mut ctx, loc);
-        let output = print_op(&ctx, c.op_ref());
+        let output = c.op_ref().display(&ctx).to_string();
         assert_eq!(output, "%0 = arith.constant 42 : core.i32\n");
     }
 
@@ -1327,7 +1324,7 @@ mod tests {
         let add = arith::Addi::operands(v1, v2).build(&mut ctx, loc);
         // Printer assigns names based on what it sees - standalone op print
         // only numbers the result of THIS op since it can't see c1/c2
-        let output = print_op(&ctx, add.op_ref());
+        let output = add.op_ref().display(&ctx).to_string();
         // %0 = arith.addi %?, %? : core.i32 (operands unknown since not in scope)
         assert!(output.contains("arith.addi"));
         assert!(output.contains("core.i32"));
@@ -1382,7 +1379,7 @@ mod tests {
             .regions(body)
             .build(&mut ctx, loc);
 
-        let output = print_op(&ctx, f.op_ref());
+        let output = f.op_ref().display(&ctx).to_string();
         assert!(output.contains("func.func @add"));
         assert!(output.contains("%0: core.i32"));
         assert!(output.contains("%1: core.i32"));
@@ -1445,7 +1442,7 @@ mod tests {
             .regions(mod_region)
             .build(&mut ctx, loc);
 
-        let output = print_module(&ctx, module.op_ref());
+        let output = module.op_ref().display(&ctx).to_string();
         assert!(output.contains("core.module @test"));
         assert!(output.contains("func.func @main"));
         assert!(output.contains("arith.constant 42"));
@@ -1551,7 +1548,7 @@ mod tests {
             .regions(outer_mod_region)
             .build(&mut ctx, loc);
 
-        let output = print_module(&ctx, outer_module.op_ref());
+        let output = outer_module.op_ref().display(&ctx).to_string();
         insta::assert_snapshot!(output);
     }
 
@@ -1751,7 +1748,7 @@ mod tests {
         let f3 = make_identity_func(&mut ctx, loc, "f3", struct_ty, struct_ty);
 
         let module = make_module_with_funcs(&mut ctx, loc, vec![f1, f2, f3]);
-        let output = print_module(&ctx, module);
+        let output = module.display(&ctx).to_string();
 
         // The struct type should be auto-aliased with its name
         assert!(
@@ -1777,7 +1774,7 @@ mod tests {
         let f3 = make_identity_func(&mut ctx, loc, "f3", i32_ty, i32_ty);
 
         let module = make_module_with_funcs(&mut ctx, loc, vec![f1, f2, f3]);
-        let output = print_module(&ctx, module);
+        let output = module.display(&ctx).to_string();
 
         // No auto aliases should be generated — core.i32 is a leaf type and
         // func.func_sig has no dialect-provided name hint
@@ -1802,7 +1799,7 @@ mod tests {
         let f2 = make_identity_func(&mut ctx, loc, "f2", struct_ty, struct_ty);
 
         let module = make_module_with_funcs(&mut ctx, loc, vec![f1, f2]);
-        let output = print_module(&ctx, module);
+        let output = module.display(&ctx).to_string();
 
         // Should use the manual alias, not auto-generate one
         assert!(
@@ -1843,7 +1840,7 @@ mod tests {
             }
 
             let module = make_module_with_funcs(&mut ctx, loc, vec![]);
-            print_module(&ctx, module)
+            module.display(&ctx).to_string()
         }
 
         let output = print_with_aliases(false);
@@ -1863,7 +1860,7 @@ mod tests {
         let mut reparsed_ctx = IrContext::new();
         let reparsed =
             crate::parser::parse_module(&mut reparsed_ctx, &output).expect("parse failed");
-        assert_eq!(output, print_module(&reparsed_ctx, reparsed));
+        assert_eq!(output, reparsed.display(&reparsed_ctx).to_string());
     }
 
     #[test]
@@ -1878,12 +1875,12 @@ mod tests {
         let f2 = make_identity_func(&mut ctx, loc, "f2", struct_ty, struct_ty);
 
         let module = make_module_with_funcs(&mut ctx, loc, vec![f1, f2]);
-        let output1 = print_module(&ctx, module);
+        let output1 = module.display(&ctx).to_string();
 
         // Parse the output back
         let mut ctx2 = IrContext::new();
         let root2 = crate::parser::parse_module(&mut ctx2, &output1).expect("parse failed");
-        let output2 = print_module(&ctx2, root2);
+        let output2 = root2.display(&ctx2).to_string();
 
         assert_eq!(output1, output2, "Round-trip mismatch");
     }
@@ -1905,7 +1902,7 @@ mod tests {
         let f3 = make_identity_func(&mut ctx, loc, "f3", b_ty, b_ty);
 
         let module = make_module_with_funcs(&mut ctx, loc, vec![f1, f2, f3]);
-        let output = print_module(&ctx, module);
+        let output = module.display(&ctx).to_string();
 
         // B (Inner) should appear before A (Outer) in alias definitions
         let inner_pos = output.find("!Inner").expect("Expected !Inner alias");
@@ -1948,7 +1945,7 @@ core.module @test {
 ";
         let mut ctx = IrContext::new();
         let root = crate::parser::parse_module(&mut ctx, input).expect("parse failed");
-        let output = print_module(&ctx, root);
+        let output = root.display(&ctx).to_string();
         insta::assert_snapshot!(output);
     }
 
@@ -1973,7 +1970,7 @@ core.module @test {
         };
         assert_eq!(counts(&ctx), [1, 0]);
 
-        let printed = print_module(&ctx, root);
+        let printed = root.display(&ctx).to_string();
         let mut reparsed = IrContext::new();
         let root = crate::parser::parse_module(&mut reparsed, &printed).expect("parse failed");
         let op = reparsed
@@ -2000,7 +1997,7 @@ core.module @test {
         let f2 = make_identity_func(&mut ctx, loc, "f2", s2_ty, s2_ty);
 
         let module = make_module_with_funcs(&mut ctx, loc, vec![f1, f2]);
-        let output = print_module(&ctx, module);
+        let output = module.display(&ctx).to_string();
 
         // Both should exist, one as !Point and other as !Point_1
         assert!(
@@ -2037,7 +2034,7 @@ core.module @test {
                 make_identity_func(&mut ctx, loc, "zebra_2", zebra_point, zebra_point),
             ];
             let module = make_module_with_funcs(&mut ctx, loc, funcs);
-            print_module(&ctx, module)
+            module.display(&ctx).to_string()
         }
 
         let output = print_module_with_point_types(false);
@@ -2052,7 +2049,7 @@ core.module @test {
         let mut reparsed_ctx = IrContext::new();
         let reparsed =
             crate::parser::parse_module(&mut reparsed_ctx, &output).expect("parse failed");
-        assert_eq!(output, print_module(&reparsed_ctx, reparsed));
+        assert_eq!(output, reparsed.display(&reparsed_ctx).to_string());
     }
 
     /// Documents the escape spellings; `prop_tests` checks that they round-trip.

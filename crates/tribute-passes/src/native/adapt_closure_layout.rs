@@ -276,7 +276,6 @@ impl OpRewritePattern for AdaptClosureStructGet {
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
 
     #[test]
     fn adapts_closure_allocations_and_their_rtti_declaration() {
@@ -330,7 +329,7 @@ mod tests {
         );
         assert_eq!(layouts[1].r#type(&ctx), native_base);
         assert_eq!(layouts[2].r#type(&ctx), other);
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(!output.contains("type = !Captures}"), "{output}");
     }
 
@@ -351,7 +350,7 @@ mod tests {
 }"#,
         );
         lower(&mut ctx, module);
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert_eq!(output.matches("clif.data").count(), 3, "{output}");
         assert_eq!(
             output
@@ -390,7 +389,7 @@ mod tests {
             &mut trunk_ir::analysis::AnalysisCache::new(),
         )
         .unwrap();
-        print_module(&ctx, module.op())
+        module.op().display(&ctx).to_string()
     }
 
     #[test]

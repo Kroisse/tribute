@@ -288,7 +288,6 @@ impl OpRewritePattern for SlotsDeclarationPattern<'_> {
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
 
     fn lower(input: &str) -> String {
         let mut ctx = IrContext::new();
@@ -297,7 +296,7 @@ mod tests {
         LowerSlotsIntrinsics
             .run(&mut ctx, core, &mut Default::default())
             .unwrap();
-        print_module(&ctx, module.op())
+        module.op().display(&ctx).to_string()
     }
 
     #[test]
@@ -360,13 +359,13 @@ mod tests {
   }
 }"#,
         );
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
         let core = core::Module::from_op(&ctx, module.op()).expect("core.module");
         let error = LowerSlotsIntrinsics
             .run(&mut ctx, core, &mut Default::default())
             .expect_err("a function value is rejected");
         assert!(error.to_string().contains("func.constant"), "{error}");
-        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
     }
 
     #[test]
@@ -383,13 +382,13 @@ mod tests {
   }
 }"#,
         );
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
         let core = core::Module::from_op(&ctx, module.op()).expect("core.module");
         let error = LowerSlotsIntrinsics
             .run(&mut ctx, core, &mut Default::default())
             .expect_err("a call of another shape is rejected");
         assert!(error.to_string().contains("func.call"), "{error}");
-        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
     }
 
     #[test]

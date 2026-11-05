@@ -136,7 +136,6 @@ impl trunk_ir::pass::Pass for EliminatePairedRc {
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
     use trunk_ir::validation::validate_use_chains;
 
     fn run_pass(ir: &str) -> (IrContext, Module) {
@@ -148,7 +147,7 @@ mod tests {
 
     fn printed_after_pass(ir: &str) -> String {
         let (ctx, module) = run_pass(ir);
-        print_module(&ctx, module.op())
+        module.op().display(&ctx).to_string()
     }
 
     #[test]
@@ -163,7 +162,7 @@ mod tests {
   }
 }"#,
         );
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(!output.contains("tribute_rt.retain"));
         assert!(!output.contains("tribute_rt.release"));
         assert!(output.contains("clif.load %0"));
@@ -334,8 +333,8 @@ mod tests {
 }"#,
         );
         eliminate_paired_rc(&mut ctx, module);
-        let once = print_module(&ctx, module.op());
+        let once = module.op().display(&ctx).to_string();
         eliminate_paired_rc(&mut ctx, module);
-        assert_eq!(once, print_module(&ctx, module.op()));
+        assert_eq!(once, module.op().display(&ctx).to_string());
     }
 }

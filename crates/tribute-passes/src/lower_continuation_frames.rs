@@ -511,7 +511,7 @@ mod tests {
     fn lowered(params: &str, body: &str) -> String {
         let (mut ctx, module) = frame_module(params, body);
         lower_continuation_frames(&mut ctx, module).expect("the frames lower");
-        let printed = trunk_ir::printer::print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(!printed.contains("ability.frame"), "{printed}");
         printed
     }
@@ -548,7 +548,7 @@ mod tests {
             r#"    ability.abort @State @fail(%arg) [%ev, %f] : (core.i32) -> ()"#,
         );
         lower_continuation_frames(&mut ctx, module).unwrap();
-        let printed = trunk_ir::printer::print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(!printed.contains("ability.abort"), "{printed}");
         assert!(!printed.contains("one_shot_state"), "{printed}");
         let mut dispatches = Vec::new();

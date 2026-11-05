@@ -248,7 +248,6 @@ mod tests {
 
     use crate::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder, RegionData};
     use crate::location::Span;
-    use crate::printer::print_module;
     use crate::rewrite::{ConversionTarget, Module, PatternApplicator, TypeConverter};
     use crate::types::{Attribute, TypeDataBuilder};
     use smallvec::smallvec;
@@ -465,7 +464,7 @@ mod tests {
                 assert_eq!(function.results(&ctx), vec![i64_ty; result_count]);
             }
 
-            let text = print_module(&ctx, module.op());
+            let text = module.op().display(&ctx).to_string();
             let arrow = if result_count == 0 {
                 ""
             } else {
@@ -615,7 +614,7 @@ mod result_list_tests {
         let bad_signature = func::func_sig(&mut ctx, [nil, nil], []).as_type_ref();
         ctx.op_attrs_mut(op)
             .insert("type", Attribute::Type(bad_signature));
-        let before = crate::printer::print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
         let mut converter = TypeConverter::new();
         converter.add_conversion(move |_, ty| (ty == nil).then_some(ptr));
         let mut rewriter = PatternRewriter::new(&converter);
@@ -631,6 +630,6 @@ mod result_list_tests {
         assert_eq!(ctx.op_attrs(op).get_type("type"), Some(bad_signature));
         let entry = ctx.region(function.body(&ctx)).blocks[0];
         assert_eq!(ctx.value_ty(ctx.block_arg(entry, 0)), nil);
-        assert_eq!(crate::printer::print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
     }
 }

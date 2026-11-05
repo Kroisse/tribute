@@ -255,7 +255,6 @@ mod tests {
     use tribute_ir::dialect::adt::layout::{compute_mem_struct_layout, compute_struct_layout};
     use trunk_ir::dialect::core;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
 
     fn type_alias(ctx: &IrContext, name: &str) -> TypeRef {
         ctx.type_aliases()
@@ -348,7 +347,7 @@ mod tests {
             panic!("two struct accesses")
         };
         assert_eq!(point, size);
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(
             printed.contains("type = mem.struct<core.i32, core.i32>"),
             "{printed}"
@@ -371,7 +370,7 @@ mod tests {
         let [structural] = layouts[..] else {
             panic!("one struct access")
         };
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(mem::Struct::matches(&ctx, structural));
         assert!(
             printed.contains("type = mem.struct<core.i64, tribute_rt.anyref>"),
@@ -395,7 +394,7 @@ mod tests {
 }"#,
         );
 
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(!printed.contains("adt.variant_is"), "{printed}");
         assert!(
             printed.contains("tribute_rtti.descriptor %0 : core.i32"),
@@ -427,7 +426,7 @@ mod tests {
 }"#,
         );
 
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(!printed.contains("adt.variant_get"), "{printed}");
         // `Pair` is declared, `Raw` reads its fields from the ownership plan.
         let [pair, raw] = layouts[..] else {
@@ -466,7 +465,7 @@ mod tests {
 }"#,
         );
 
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(
             printed.contains("type = mem.struct<tribute_rt.anyref, core.ptr, tribute_rt.anyref>"),
             "{printed}"
