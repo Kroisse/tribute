@@ -1660,7 +1660,7 @@ fn run() ->{Flag} Nat {
     assert_in_order(
         run,
         &[
-            "tribute_control.handler",
+            "} op @",
             "scf.if",
             "call @\"pkg::allowed\"(",
             "tribute_control.resume",
@@ -1819,7 +1819,7 @@ fn assert_handler_arm_shape(function: &str) {
     assert_in_order(
         function,
         &[
-            "tribute_control.handler",
+            "} op @",
             "call @\"pkg::read_log\"(",
             "tribute_control.resume",
         ],
@@ -1855,15 +1855,11 @@ fn assert_handler_case_resume_shape(function: &str) {
 fn assert_op_handler_shape(function: &str) {
     assert_in_order(
         function,
-        &[
-            "tribute_control.handle",
-            "tribute_control.handler op ",
-            "tribute_control.resume",
-        ],
+        &["tribute_control.handle", "} op @", "tribute_control.resume"],
     );
 }
 fn assert_fn_handler_shape(function: &str) {
-    assert!(function.contains("tribute_control.handler fn "));
+    assert!(function.contains("} fn @"));
 }
 fn assert_handle_strict_value_shape(function: &str) {
     assert_in_order(

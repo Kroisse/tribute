@@ -121,10 +121,12 @@ pub fn check(ctx: &IrContext, module: Module) -> Vec<FnArmCall> {
             continue;
         };
         let _ = walk_region::<()>(ctx, body, &mut |op| {
-            if let Ok(handler) = tribute_control::Handler::from_op(ctx, op)
-                && handler.kind(ctx) == tribute_control::OperationKind::Fn
-            {
-                instance.check_arm(handler, &instances, &mut calls);
+            if let Ok(handle) = tribute_control::Handle::from_op(ctx, op) {
+                for (binding, arm) in handle.handlers(ctx).zip(handle.arms(ctx)) {
+                    if binding.kind == tribute_control::OperationKind::Fn {
+                        instance.check_arm(&binding, arm, &instances, &mut calls);
+                    }
+                }
             }
             ControlFlow::Continue(WalkAction::Advance)
         });
@@ -207,12 +209,13 @@ impl<'a> Instance<'a> {
 
     fn check_arm(
         &self,
-        handler: tribute_control::Handler,
+        binding: &tribute_control::HandlerBinding,
+        arm: RegionRef,
         instances: &[Instance],
         calls: &mut Vec<FnArmCall>,
     ) {
-        let op_name = handler.op_name(self.ctx);
-        self.check_region(handler.body(self.ctx), &[], &mut |call, tail| {
+        let op_name = self.ctx.str(binding.op_name);
+        self.check_region(arm, &[], &mut |call, tail| {
             let mut origins = Vec::new();
             if let Some(tail) = tail {
                 let mut seen = Vec::new();
@@ -302,16 +305,12 @@ impl<'a> Instance<'a> {
         if let Ok(handle) = tribute_control::Handle::from_op(ctx, op) {
             let mut inner = handled.to_vec();
             let mut arms = Vec::new();
-            for &block in &ctx.region(handle.handlers(ctx)).blocks {
-                for &entry in &ctx.block(block).ops {
-                    if let Ok(handler) = tribute_control::Handler::from_op(ctx, entry) {
-                        inner.push(handler.ability(ctx).clone());
-                        // A nested `fn` arm is checked as an arm of its own.
-                        if handler.kind(ctx) != tribute_control::OperationKind::Fn {
-                            arms.push(handler.body(ctx));
-                        }
-                    }
+            for (binding, arm) in handle.handlers(ctx).zip(handle.arms(ctx)) {
+                // A nested `fn` arm is checked as an arm of its own.
+                if binding.kind != tribute_control::OperationKind::Fn {
+                    arms.push(arm);
                 }
+                inner.push(binding.ability);
             }
             self.check_region(handle.body(ctx), &inner, report);
             self.check_region(handle.completion(ctx), handled, report);

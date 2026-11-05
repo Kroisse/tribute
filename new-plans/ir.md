@@ -1060,8 +1060,7 @@ convention 속성과 physical `func.func_sig`나 `closure.closure` component를
 | `tribute_control.tail_call_indirect` | source `become`의 callable value 간접 proper tail call |
 | `tribute_control.return` | `func` 또는 `lambda` body의 logical result 반환 |
 | `tribute_control.perform` | source `fn` 또는 general `op` 하나를 semantic kind를 보존한 직접형으로 호출 |
-| `tribute_control.handle` | 직접형 computation, completion arm, handler table의 경계를 설정 |
-| `tribute_control.handler` | handle 안의 `fn` 또는 general `op` handler arm을 기술 |
+| `tribute_control.handle` | 직접형 computation, completion arm, handler arm의 경계를 설정. 각 arm은 처리하는 operation의 binding과 짝을 이루는 region이다 |
 | `tribute_control.resume` | resumptive general handler arm에 바인딩된 affine resumption을 소비 |
 | `tribute_control.yield` | 실행 가능한 `tribute_control` region을 logical value로 종료 |
 

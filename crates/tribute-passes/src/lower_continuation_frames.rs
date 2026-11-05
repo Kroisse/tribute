@@ -626,10 +626,10 @@ mod tests {
     fn a_handle_with_fewer_handlers_than_arms_is_rejected() {
         let (mut ctx, module) = frame_module(
             ", %exit: !frame, %done: !resume",
-            r#"    ability.handle %ev, %exit, %done(%done) attributes {handlers = []} {
+            r#"    "ability.handle"(%ev, %exit, %done, %done) ({
       ^body(%inner: !ev, %frame: !frame):
         func.unreachable
-    }"#,
+    }) {handlers = []}"#,
         );
         assert!(lower_continuation_frames(&mut ctx, module).is_err());
     }

@@ -1053,58 +1053,52 @@ pub(super) fn lower_handle<'db>(
         blocks: trunk_ir::smallvec::smallvec![completion_block],
         parent_op: None,
     });
-    let handlers_block = builder.ir.create_block(BlockData {
-        location,
-        args: vec![],
-        ops: Default::default(),
-        parent_region: None,
-    });
+    let mut bindings = Vec::new();
+    let mut arms = Vec::new();
     for arm in handlers
         .into_iter()
         .filter(|arm| !matches!(arm.kind, HandlerKind::Do { .. }))
     {
-        lower_handler(
+        let (binding, arm) = lower_handler(
             builder.ctx,
             builder.ir,
-            handlers_block,
             location,
             result_ty,
             arm,
             declarations,
         )
         .expect("typechecked handler failed logical IR metadata lowering");
+        bindings.push(binding.to_attribute(builder.ir));
+        arms.push(arm);
     }
-    let handlers_region = builder.ir.create_region(RegionData {
-        location,
-        blocks: trunk_ir::smallvec::smallvec![handlers_block],
-        parent_op: None,
-    });
     let handle = op(
         builder.ir,
         builder.block,
         location,
         tribute_control::Handle::DEF,
         |builder| {
-            builder
+            let builder = builder
+                .attr("handlers", Attribute::List(bindings))
                 .result(result_ty)
                 .region(body_region)
-                .region(completion_region)
-                .region(handlers_region)
+                .region(completion_region);
+            arms.into_iter()
+                .fold(builder, |builder, arm| builder.region(arm))
         },
     );
     attach_evidence_plan(builder.ctx, builder.ir, handle, handle_id, declarations);
     Some(result(builder.ir, handle))
 }
 
+/// Lower one operation arm of a handle to its binding and arm region.
 pub(super) fn lower_handler<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     ir: &mut IrContext,
-    table: BlockRef,
     location: Location,
     answer_ty: TypeRef,
     arm: HandlerArm<TypedRef<'db>>,
     declarations: &mut Declarations<'db>,
-) -> Option<()> {
+) -> Option<(tribute_control::HandlerBinding, trunk_ir::refs::RegionRef)> {
     let (ability, operation, kind, params, resume) = match arm.kind {
         HandlerKind::Fn {
             ability,
@@ -1117,7 +1111,7 @@ pub(super) fn lower_handler<'db>(
             params,
             resume_local_id,
         } => (ability, op, OpDeclKind::Op, params, resume_local_id),
-        HandlerKind::Do { .. } => return Some(()),
+        HandlerKind::Do { .. } => panic!("a completion arm is not an operation arm"),
     };
     let ability_id = match ability.resolved {
         ResolvedRef::Ability { id } => id,
@@ -1184,6 +1178,15 @@ pub(super) fn lower_handler<'db>(
     let operation_result = ctx.convert_logical_type(ir, expected_result);
     let op_name = ir.intern_symbol_text(&operation);
     let kind_name = ir.intern_str(operation_kind_text(kind));
+    let binding = tribute_control::HandlerBinding {
+        ability: instance.clone(),
+        op_name,
+        kind: match kind {
+            OpDeclKind::Op => tribute_control::OperationKind::Op,
+            OpDeclKind::Fn => tribute_control::OperationKind::Fn,
+        },
+        operation_result_type: operation_result,
+    };
     let declaration = OperationDeclaration::new(
         instance.clone(),
         op_name,
@@ -1253,19 +1256,5 @@ pub(super) fn lower_handler<'db>(
         blocks: trunk_ir::smallvec::smallvec![block],
         parent_op: None,
     });
-    op(
-        ir,
-        table,
-        location,
-        tribute_control::Handler::DEF,
-        |builder| {
-            builder
-                .attr("ability", Attribute::SymbolRef(instance))
-                .attr("op_name", Attribute::String(op_name))
-                .attr("kind", Attribute::String(kind_name))
-                .attr("operation_result_type", Attribute::Type(operation_result))
-                .region(region)
-        },
-    );
-    Some(())
+    Some((binding, region))
 }

@@ -9,7 +9,6 @@ use rustc_hash::FxHashSet as HashSet;
 use std::fmt;
 use std::ops::ControlFlow;
 use trunk_ir::attr_kind::SymbolRef;
-use trunk_ir::attr_kind::Type;
 use trunk_ir::op_flag::{IsolatedFromAbove, OpFlag, Pure};
 
 use crate::calling_convention::{CALLING_CONVENTION_ATTR, CallingConvention};
@@ -36,6 +35,7 @@ mod control_validation;
 mod declarations;
 mod evidence;
 mod func_sig;
+mod handler_binding;
 mod interfaces;
 mod local_validation;
 mod row;
@@ -67,6 +67,7 @@ pub use declarations::{
 pub use evidence::{EVIDENCE_PLAN_ATTR, EvidenceStep};
 pub(crate) use evidence::{EvidencePlanSite, verify_evidence_plan};
 pub use func_sig::{FuncSig, FuncSigBuilder, FuncSigTypeError};
+pub use handler_binding::{HandleArms, HandlerBinding, RawHeader};
 pub use interfaces::{
     DeclarationUse, DynLocalValidation, DynOperationDeclarationUse, DynSourceCallable,
     LocalValidation, OperationDeclarationUse, SourceCallable,
@@ -94,7 +95,7 @@ pub use row::{
 pub const COMPILER_INTRINSIC_ATTR: &str = "tribute.compiler_intrinsic";
 
 /// Whether an ability operation, and the `tribute_control.perform` that
-/// invokes it or the `tribute_control.handler` clause that handles it, is a
+/// invokes it or the `tribute_control.handle` arm that handles it, is a
 /// general (`op`) or a tail-resumptive (`fn`) one.
 ///
 /// It is stored as a string attribute holding its [keyword](Self::keyword).
@@ -108,7 +109,7 @@ pub enum OperationKind {
 
 impl OperationKind {
     /// The keyword that spells this kind, both as the stored attribute
-    /// value and in the `tribute_control.handler` syntax.
+    /// value and in the syntax of a handle arm.
     pub fn keyword(self) -> &'static str {
         match self {
             Self::Op => "op",
@@ -457,7 +458,7 @@ mod tribute_control {
     ///   directly into the terminator of the enclosing region: the `return`
     ///   of a callable body, or the `scf.yield` of an outer arm that is
     ///   itself in tail position. It is invalid inside a
-    ///   `tribute_control.handle` body or handler region.
+    ///   `tribute_control.handle` body or arm.
     /// - **Meaning:** a proper tail call of a named source callable. When the
     ///   call finishes, the callee's result becomes the enclosing callable's
     ///   result, and no caller frame remains.
@@ -584,8 +585,8 @@ mod tribute_control {
     ///   type of the `ability.decl` that `ability` and `op_name` name agree
     ///   with the attributes, operands, and result. No verifier may infer the
     ///   kind from control flow, handlers, result type, or calling convention.
-    ///   The `tribute_control.handler` and containing-handle verifiers apply
-    ///   the per-kind shape of the handler contract to handler entries.
+    ///   The `tribute_control.handle` verifier applies the per-kind shape of
+    ///   the handler contract to each arm.
     /// - **Ownership and value flow:** the operands are ordinary SSA uses.
     ///   This operation makes no source-visible continuation value;
     ///   continuation construction belongs to shared CPS conversion. A `"fn"`
@@ -613,142 +614,112 @@ mod tribute_control {
 
     /// A handled body. Its result is a callable origin when every value that
     /// becomes it is: the completion region's yield and each general (`op`)
-    /// handler's yield. The completion argument is one when the body's yield
-    /// is.
+    /// arm's yield. The completion argument is one when the body's yield is.
+    /// An arm argument is one when the arm claims the kind of the
+    /// declaration it names and the argument has the declaration's
+    /// parameter type at its position.
     ///
     /// ```text
-    /// %answer = tribute_control.handle : AnswerType body {
+    /// %answer = tribute_control.handle : AnswerType {
     ///   ...
     ///   tribute_control.yield %body_value
-    /// } completion(%completed: BodyType) {
+    /// } do (%completed: BodyType) {
     ///   ...
     ///   tribute_control.yield %answer_value
-    /// } handlers {
-    ///   tribute_control.handler op @Ability @name(%arg: ArgType) : ResultType { ... }
+    /// } op @State @get(%arg: ArgType, %k: tribute_control.resume_token<ResultType, AnswerType>) : ResultType {
     ///   ...
+    ///   tribute_control.yield %answer
+    /// } fn @State @peek() : ResultType {
+    ///   ...
+    ///   tribute_control.yield %result
     /// }
     /// ```
     ///
     /// - **Operands:** none. Values the executable regions capture use
     ///   ordinary enclosing SSA visibility.
     /// - **Results:** exactly one logical handle result.
-    /// - **Attributes:** none required. The optional `evidence_plan`
+    /// - **Attributes:** `handlers` is required: one `HandlerBinding` per
+    ///   arm, in the order of `arms`, each with `ability: SymbolRef`,
+    ///   `op_name: String`, `kind: OperationKind`, and
+    ///   `operation_result_type: Type`. The optional `evidence_plan`
     ///   (`new-plans/ir.md`, "Evidence 선택 속성") selects the handlers to
     ///   mask in the outer evidence before the body evidence is made. Dynamic
     ///   prompt/owner tags and the physical tail-call representation are
     ///   legalization contracts, not semantic attributes of this operation.
-    /// - **Regions:** exactly three, in the fixed order `body`, `completion`,
-    ///   `handlers`.
+    /// - **Regions:** `body`, `completion`, then one region in `arms` for
+    ///   each `handlers` element, in the same order. The format writes the
+    ///   completion after `do`, and each arm after its binding's kind,
+    ///   ability, and operation name, with its entry block arguments and
+    ///   `: operation_result_type`.
     /// - **Block arguments:** `body` is one block with no arguments.
     ///   `completion` is one block with exactly one argument, whose type is
-    ///   the type of the value `body` yields. `handlers` is one block with no
-    ///   arguments that holds only `tribute_control.handler` entries.
-    /// - **Terminators:** `body` and `completion` end in
-    ///   `tribute_control.yield`. The `handlers` block is a declarative table
-    ///   with no terminator.
+    ///   the type of the value `body` yields. Each arm is one block whose
+    ///   arguments are the source operation arguments, in declaration order
+    ///   and with their logical types; a resumptive `op` arm has one last
+    ///   argument, `resume_token<operation_result_type, handle-result-type>`.
+    ///   An `op` arm whose `operation_result_type` is source `Never` has no
+    ///   token, and neither does a `fn` arm.
+    /// - **Terminators:** every region ends in `tribute_control.yield`.
     /// - **Meaning:** when `body` completes normally, `completion` is
-    ///   evaluated exactly once and its value is returned. A general handler
-    ///   arm that completes without resuming returns the arm value as the
-    ///   handle result and skips `completion`. A tail-resumptive `fn` arm
-    ///   returns the operation result supplied automatically to the suspended
+    ///   evaluated exactly once and its value is returned. A general arm
+    ///   that completes without resuming returns the arm value as the handle
+    ///   result and skips `completion`. A tail-resumptive `fn` arm returns
+    ///   the operation result supplied automatically to the suspended
     ///   computation.
-    /// - **Local verification:** enforces the fixed region count, the
-    ///   single-block shapes, the block-argument counts, the terminators, and
-    ///   yield type equality. It also checks that every direct child of
-    ///   `handlers` is a `tribute_control.handler` with a unique
-    ///   `(ability, op_name)`. The result type must equal the completion yield
-    ///   type and the answer type of every general handler.
+    /// - **Verification:** the verifier checks that there is one arm per
+    ///   binding and that no `(ability, op_name)` is bound twice. The local
+    ///   verifier enforces the single-block shapes, the block-argument
+    ///   counts, the terminators, and yield type equality: the result type
+    ///   equals the completion yield type and the yield type of every
+    ///   general arm, including an `op -> Never` arm, and a `fn` arm yields
+    ///   its `operation_result_type`. It checks the token's position and
+    ///   parameters, and that an `op -> Never` arm has no token and no
+    ///   `tribute_control.resume` anywhere in it, nested regions included;
+    ///   the converter checks the same before rewriting and reports a
+    ///   violation as a conversion failure. The symbol-aware frontend
+    ///   conformance check also confirms that each arm's `kind`, argument
+    ///   types, and `operation_result_type` are those of the declaration it
+    ///   names. No verifier reclassifies a general `op` from the shape of its
+    ///   arm.
     /// - **Ownership and value flow:** this operation owns the delimited
     ///   resumption capability that arises when the body performs a
     ///   resumptive general operation. That capability is exposed only as the
-    ///   `resume_token` block argument of a resumptive general handler entry.
-    ///   Values leave an executable region only through
-    ///   `tribute_control.yield`.
+    ///   `resume_token` argument of a resumptive general arm, which is
+    ///   affine. It may go unused, dropping the continuation, or have one
+    ///   static ownership path to a `tribute_control.resume`. When a closure
+    ///   captures it, that static path moves into the closure. A copy, store,
+    ///   return, yield, or any other escape is invalid. Static SSA validation
+    ///   cannot prove that a capturing closure is called at most once
+    ///   dynamically, so the lowered resumption must also enforce one-shot
+    ///   consumption at run time and reject or trap on a second call. Values
+    ///   leave an executable region only through `tribute_control.yield`.
     /// - **Location:** the whole source `handle` expression. Region and block
-    ///   locations use the matching body, completion arm, and handler-list
+    ///   locations use the matching body, completion arm, and handler arm
     ///   spans.
     ///
     /// The frontend always materializes the completion region. When the
     /// source has no `do` arm, the region is the identity on the body result.
     /// This removes an optional structural case from conversion without
     /// changing source semantics.
-    #[asm_format(attr_dict ":" type(result) "body" region(body) "completion" args(completion) region(completion) "handlers" region(handlers))]
+    ///
+    /// [`Handle::build_with_arms`] builds it from each binding with its arm.
+    #[asm_format(attr_dict ":" type(result) region(body) custom(HandleArms(handlers, completion, arms)))]
     #[verify]
-    #[implements(CallableResultOrigin, CallableArgumentOrigin, LocalValidation)]
-    fn handle(evidence_plan: Option<Attr<[EvidenceStep]>>) -> Value<_> {
+    #[implements(
+        CallableResultOrigin,
+        CallableArgumentOrigin,
+        LocalValidation,
+        OperationDeclarationUse
+    )]
+    fn handle(
+        handlers: Attr<[HandlerBinding]>,
+        evidence_plan: Option<Attr<[EvidenceStep]>>,
+    ) -> Value<_> {
         #[region(body)]
         {}
         #[region(completion)]
         {}
-        #[region(handlers)]
-        {}
-    }
-
-    /// One handler clause. An argument is a callable origin when the clause
-    /// claims the kind of the declaration it names and the argument has the
-    /// declaration's parameter type at its position.
-    ///
-    /// ```text
-    /// tribute_control.handler op @State @get(%arg0: Arg0Type, ..., %resume: tribute_control.resume_token<ResultType, AnswerType>) : ResultType {
-    ///   ...
-    ///   tribute_control.yield %answer
-    /// }
-    /// ```
-    ///
-    /// - **Operands and results:** none. It is a declarative entry owned by
-    ///   the surrounding `tribute_control.handle`.
-    /// - **Attributes:** `ability: SymbolRef`, `op_name: String`,
-    ///   `kind: OperationKind`, and `operation_result_type: Type` are required.
-    ///   `kind` is exactly `fn` or `op`, written as that bare keyword.
-    /// - **Regions:** exactly one executable `body` region with one block.
-    /// - **Block arguments:** the source operation arguments come first, in
-    ///   declaration order and with their logical types. A resumptive `op`
-    ///   entry has one last argument,
-    ///   `resume_token<operation_result_type, handle-result-type>`. An `op`
-    ///   whose `operation_result_type` is source `Never` has no token, and
-    ///   neither does a `fn` entry.
-    /// - **Terminator:** the body ends in `tribute_control.yield`. For `fn`,
-    ///   the yield type equals `operation_result_type` and resumes
-    ///   automatically. For `op`, the yield type equals the token's `answer`
-    ///   type, and when the arm completes without passing control through
-    ///   `resume`, the yield becomes the enclosing handle result. An `op`
-    ///   whose `operation_result_type` is source `Never` has no token, and its
-    ///   yield type must equal the enclosing `tribute_control.handle` result
-    ///   type.
-    /// - **Local verification:** checks the required attributes and their
-    ///   domains, the single block, the last terminator, the token's position
-    ///   and parameters, and the yield rules above. A general handler whose
-    ///   `operation_result_type` is `Never` must have no token argument and no
-    ///   `tribute_control.resume` anywhere in its body, nested regions
-    ///   included. The containing handle's local verifier checks
-    ///   `ContinuationFrame` placement, uniqueness, and equality with the
-    ///   enclosing handle result, including the `op -> Never` yield; the
-    ///   converter checks the same equality and the absence of `resume` before
-    ///   rewriting and reports a violation as a conversion failure. The
-    ///   symbol-aware frontend conformance check also confirms that the
-    ///   referenced declaration's `kind`, argument types, and
-    ///   `operation_result_type` are the same. No verifier reclassifies a
-    ///   general `op` from the shape of its body.
-    /// - **Ownership and value flow:** the last token argument, when present,
-    ///   is affine. It may go unused, dropping the continuation, or have one
-    ///   static ownership path to a `tribute_control.resume`. When a closure
-    ///   captures it, that static path moves into the closure. A copy, store,
-    ///   return, yield, or any other escape is invalid. Static SSA validation
-    ///   cannot prove that a capturing closure is called at most once
-    ///   dynamically, so the lowered resumption must also enforce one-shot
-    ///   consumption at run time and reject or trap on a second call. A `fn`
-    ///   arm or an `op -> Never` arm has no continuation capability.
-    /// - **Location:** the source handler arm, including the operation
-    ///   header.
-    #[asm_format(kind ability symbol(op_name) args(body) ":" operation_result_type attr_dict region(body))]
-    #[implements(OperationDeclarationUse, CallableArgumentOrigin, LocalValidation)]
-    fn handler(
-        ability: Attr<SymbolRef>,
-        op_name: Attr<String>,
-        kind: Attr<OperationKind>,
-        operation_result_type: Attr<Type>,
-    ) {
-        #[region(body)]
+        #[regions(arms)]
         {}
     }
 
@@ -802,8 +773,8 @@ mod tribute_control {
     ///
     /// - **Operands:** exactly one logical value.
     /// - **Results, attributes, and regions:** none.
-    /// - **Terminator:** of a `handle` body, completion region, or handler
-    ///   body. It is invalid anywhere else.
+    /// - **Terminator:** of a `handle` body, completion region, or arm. It
+    ///   is invalid anywhere else.
     /// - **Local verification:** enforces its own shape. The owning operation
     ///   checks the placement and the yield type.
     /// - **Ownership and value flow:** passes an ordinary logical value to
@@ -848,4 +819,60 @@ impl Func {
     pub fn compiler_intrinsic_identity<'a>(&self, ctx: &'a IrContext) -> Option<&'a str> {
         ctx.op_attrs(self.op_ref()).get_str(COMPILER_INTRINSIC_ATTR)
     }
+}
+
+impl Handle {
+    /// Build a handle with result type `result` from its body, its
+    /// completion, and each binding with its arm, in order, so a binding
+    /// cannot drift from its arm.
+    pub fn build_with_arms(
+        ctx: &mut IrContext,
+        location: Location,
+        result: TypeRef,
+        body: RegionRef,
+        completion: RegionRef,
+        arms: impl IntoIterator<Item = (HandlerBinding, RegionRef)>,
+    ) -> Self {
+        let (handlers, arms): (Vec<_>, Vec<_>) = arms.into_iter().unzip();
+        Self::operands()
+            .handlers(handlers)
+            .results(result)
+            .regions(body, completion, arms)
+            .build(ctx, location)
+    }
+
+    /// The binding of each arm with the arm, read fallibly for IR whose
+    /// schema may not hold: `None` for a malformed binding.
+    pub fn arm_bindings(
+        self,
+        ctx: &IrContext,
+    ) -> impl Iterator<Item = (Option<HandlerBinding>, RegionRef)> + '_ {
+        let handlers = match ctx.op_attrs(self.op_ref()).get("handlers") {
+            Some(Attribute::List(items)) => items.as_slice(),
+            _ => &[],
+        };
+        ctx.op_regions(self.op_ref())
+            .skip(2)
+            .enumerate()
+            .map(move |(index, arm)| {
+                let binding = handlers
+                    .get(index)
+                    .and_then(|item| HandlerBinding::from_attribute(ctx, item).ok());
+                (binding, arm)
+            })
+    }
+
+    /// The binding of `arm`, when it is one of this handle's arms with a
+    /// well-formed binding.
+    pub fn binding_of(self, ctx: &IrContext, arm: RegionRef) -> Option<HandlerBinding> {
+        self.arm_bindings(ctx)
+            .find(|&(_, region)| region == arm)
+            .and_then(|(binding, _)| binding)
+    }
+}
+
+/// The handle `region` is an arm of, with the arm's binding.
+pub fn enclosing_arm(ctx: &IrContext, region: RegionRef) -> Option<(Handle, HandlerBinding)> {
+    let handle = Handle::from_op(ctx, ctx.region(region).parent_op?).ok()?;
+    Some((handle, handle.binding_of(ctx, region)?))
 }

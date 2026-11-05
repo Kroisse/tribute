@@ -4,7 +4,6 @@
 //! `ability` surface. It does not run closure extraction, evidence lowering,
 //! or target-specific conversion.
 
-use itertools::Itertools;
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 use std::error::Error;

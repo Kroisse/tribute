@@ -95,8 +95,8 @@ pub(super) fn is_tail_call(ctx: &IrContext, op: OpRef) -> bool {
 }
 
 /// The callable whose body contains `op` and its source signature, or an
-/// error when `op` is not in its tail position or a handle or handler lies
-/// between them.
+/// error when `op` is not in its tail position or a handle lies between
+/// them.
 pub(super) fn tail_call_owner(
     ctx: &IrContext,
     op: OpRef,
@@ -112,8 +112,8 @@ pub(super) fn tail_call_owner(
                 .map(|ty| (owner, ty))
                 .ok_or("must be inside a tribute_control.func or lambda body");
         }
-        if Handle::matches(ctx, owner) || Handler::matches(ctx, owner) {
-            return Err("must not be inside a tribute_control.handle body or handler");
+        if Handle::matches(ctx, owner) {
+            return Err("must not be inside a tribute_control.handle body or arm");
         }
         // A structured arm may end with a tail call only when the structured
         // operation is a one-result `scf.if` whose value flows straight into
@@ -191,9 +191,8 @@ pub(crate) fn validate_tail_call(ctx: &IrContext, op: OpRef, errors: &mut Vec<Va
 }
 
 pub(super) fn validate_handle(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
-    let Some((body_region, completion_region, handlers_region)) =
-        ctx.op_regions(op).collect_tuple()
-    else {
+    let mut regions = ctx.op_regions(op);
+    let (Some(body_region), Some(completion_region)) = (regions.next(), regions.next()) else {
         return;
     };
     let Some(body_block) = single_block(ctx, op, body_region, "body", errors) else {
@@ -201,9 +200,6 @@ pub(super) fn validate_handle(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valid
     };
     let Some(completion_block) = single_block(ctx, op, completion_region, "completion", errors)
     else {
-        return;
-    };
-    let Some(handlers_block) = single_block(ctx, op, handlers_region, "handlers", errors) else {
         return;
     };
     if !ctx.block_args(body_block).is_empty() {
@@ -215,14 +211,6 @@ pub(super) fn validate_handle(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valid
             op,
             errors,
             "completion block must have exactly one argument",
-        );
-    }
-    if !ctx.block_args(handlers_block).is_empty() {
-        push_op_error(
-            ctx,
-            op,
-            errors,
-            "handlers table block must not have arguments",
         );
     }
     let body_yield = terminator(ctx, op, body_block, Yield::DEF, errors);
@@ -251,45 +239,10 @@ pub(super) fn validate_handle(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valid
             "completion yield type must match handle result type",
         );
     }
-    let mut clauses = HashSet::default();
-    for child in ctx.block(handlers_block).ops.iter().copied() {
-        if !Handler::matches(ctx, child) {
-            push_op_error(
-                ctx,
-                op,
-                errors,
-                format!("handlers block may contain only tribute_control.handler, found {child}"),
-            );
-            continue;
-        }
-        let attrs = ctx.op_attrs(child);
-        if let (Some(ability), Some(name)) = (
-            attrs.get_symbol_ref("ability"),
-            attrs.get_string_ref("op_name"),
-        ) && !clauses.insert((ability, name))
-        {
-            push_op_error(
-                ctx,
-                child,
-                errors,
-                format!("duplicate handler clause for {ability}::{}", ctx.str(name)),
-            );
-        }
-        if let Some(result) = handle_result
-            && let Some(region) = ctx.op_region(child, 0)
-            && let Some(&block) = ctx.region(region).blocks.first()
-            && let Some(&yield_op) = ctx.block(block).ops.last()
-            && Yield::matches(ctx, yield_op)
-            && ctx.op_attrs(child).get_str("kind") == Some("op")
-            && let Some(&value) = ctx.op_operands(yield_op).first()
-            && ctx.value_ty(value) != result
-        {
-            push_op_error(
-                ctx,
-                child,
-                errors,
-                "general handler yield type must match enclosing handle result type",
-            );
+    let handle = Handle::from_op(ctx, op).expect("the local validator runs on a handle");
+    for (binding, arm) in handle.arm_bindings(ctx) {
+        if let Some(binding) = binding {
+            validate_arm(ctx, op, &binding, arm, handle_result, errors);
         }
     }
 }
@@ -302,109 +255,82 @@ fn region_contains_resume(ctx: &IrContext, region: RegionRef) -> bool {
     found
 }
 
-pub(super) fn validate_handler(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
-    let kind = ctx.op_attrs(op).get_str("kind");
-    let Some(body) = ctx.op_region(op, 0) else {
-        return;
-    };
-    let Some(block) = single_block(ctx, op, body, "body", errors) else {
+/// The checks of one arm of the handle `op`, whose result is
+/// `handle_result`.
+fn validate_arm(
+    ctx: &IrContext,
+    op: OpRef,
+    binding: &HandlerBinding,
+    arm: RegionRef,
+    handle_result: Option<TypeRef>,
+    errors: &mut Vec<ValidationError>,
+) {
+    let name = format!("{}::{}", binding.ability, ctx.str(binding.op_name));
+    let Some(block) = single_block(ctx, op, arm, "arm", errors) else {
         return;
     };
     let yield_op = terminator(ctx, op, block, Yield::DEF, errors);
-    let result_type = ctx.op_attrs(op).get_type("operation_result_type");
-    let handle_result = parent_op(ctx, op)
-        .filter(|parent| Handle::matches(ctx, *parent))
-        .and_then(|parent| ctx.op_result_types(parent).first().copied());
-    let args = ctx.block_args(block);
-    let last_token = args
+    let yielded = yield_op
+        .and_then(|yield_op| ctx.op_operands(yield_op).first().copied())
+        .map(|value| ctx.value_ty(value));
+    let operation_result = binding.operation_result_type;
+    let last_token = ctx
+        .block_args(block)
         .last()
         .copied()
         .and_then(|value| resume_token_parts(ctx, ctx.value_ty(value)));
-    match (kind, result_type) {
-        (Some(kind), Some(operation_result))
-            if kind == "op" && !is_never(ctx, operation_result) =>
+    if binding.is_resumptive(ctx) {
+        let Some((token_input, token_answer)) = last_token else {
+            push_op_error(
+                ctx,
+                op,
+                errors,
+                format!("resumptive op arm {name} requires a final resume_token block argument"),
+            );
+            return;
+        };
+        if token_input != operation_result
+            || handle_result.is_some_and(|answer| token_answer != answer)
         {
-            let Some((token_input, token_answer)) = last_token else {
-                push_op_error(
-                    ctx,
-                    op,
-                    errors,
-                    "resumptive op handler requires a final resume_token block argument",
-                );
-                return;
-            };
-            if token_input != operation_result
-                || handle_result.is_some_and(|answer| token_answer != answer)
-            {
-                push_op_error(
-                    ctx,
-                    op,
-                    errors,
-                    "resume token input/answer types do not match operation and handle results",
-                );
-            }
-            if let (Some(yield_op), Some(answer)) = (yield_op, handle_result)
-                && let Some(&value) = ctx.op_operands(yield_op).first()
-                && ctx.value_ty(value) != answer
-            {
-                push_op_error(
-                    ctx,
-                    op,
-                    errors,
-                    "general handler yield type must match handle result type",
-                );
-            }
+            push_op_error(
+                ctx,
+                op,
+                errors,
+                format!(
+                    "resume token input/answer types of arm {name} do not match operation and handle results"
+                ),
+            );
         }
-        (Some(kind), Some(operation_result)) => {
-            if last_token.is_some() {
-                push_op_error(
-                    ctx,
-                    op,
-                    errors,
-                    "fn and op -> core.never handlers must not receive a resume token",
-                );
-            }
-            if kind == "op" && is_never(ctx, operation_result) && region_contains_resume(ctx, body)
-            {
-                push_op_error(
-                    ctx,
-                    op,
-                    errors,
-                    "op -> core.never handler must not contain tribute_control.resume",
-                );
-            }
-            let expected = if kind == "fn" {
-                Some(operation_result)
-            } else {
-                handle_result
-            };
-            if let (Some(yield_op), Some(expected)) = (yield_op, expected)
-                && let Some(&value) = ctx.op_operands(yield_op).first()
-                && ctx.value_ty(value) != expected
-            {
-                push_op_error(
-                    ctx,
-                    op,
-                    errors,
-                    "handler yield type does not match its kind-specific result",
-                );
-            }
+    } else {
+        if last_token.is_some() {
+            push_op_error(
+                ctx,
+                op,
+                errors,
+                format!("fn and op -> core.never arm {name} must not receive a resume token"),
+            );
         }
-        _ => {}
+        if binding.kind == OperationKind::Op && region_contains_resume(ctx, arm) {
+            push_op_error(
+                ctx,
+                op,
+                errors,
+                format!("op -> core.never arm {name} must not contain tribute_control.resume"),
+            );
+        }
     }
-
-    let placed = parent_op(ctx, op).is_some_and(|parent| {
-        Handle::matches(ctx, parent)
-            && ctx
-                .op_region(parent, 2)
-                .is_some_and(|handlers| parent_region(ctx, op) == Some(handlers))
-    });
-    if !placed {
+    let expected = match binding.kind {
+        OperationKind::Fn => Some(operation_result),
+        OperationKind::Op => handle_result,
+    };
+    if let (Some(yielded), Some(expected)) = (yielded, expected)
+        && yielded != expected
+    {
         push_op_error(
             ctx,
             op,
             errors,
-            "must be a direct child of a tribute_control.handle handlers region",
+            format!("arm {name} yield type does not match its kind-specific result"),
         );
     }
 }
@@ -416,22 +342,13 @@ pub(super) fn validate_yield(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valida
     {
         push_op_error(ctx, op, errors, "must not yield a resume token");
     }
-    let valid_owner = parent_op(ctx, op).is_some_and(|owner| {
-        if Handler::matches(ctx, owner) {
-            true
-        } else if Handle::matches(ctx, owner) {
-            let region = parent_region(ctx, op);
-            ctx.op_region(owner, 0) == region || ctx.op_region(owner, 1) == region
-        } else {
-            false
-        }
-    });
+    let valid_owner = parent_op(ctx, op).is_some_and(|owner| Handle::matches(ctx, owner));
     if !valid_owner {
         push_op_error(
             ctx,
             op,
             errors,
-            "must terminate a handle body/completion or handler body",
+            "must terminate a handle body, completion, or arm",
         );
     }
 }

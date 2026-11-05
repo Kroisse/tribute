@@ -14,11 +14,10 @@ use trunk_ir::{IrContext, SymbolPath};
 
 use super::{
     COMPILER_INTRINSIC_ATTR, Call, CallIndirect, CallingConvention, CompilerIntrinsicDeclaration,
-    Func, FuncRef, FuncSig, Handle, Handler, Instantiate, Lambda, OperationDeclaration,
+    DeclarationUse, Func, FuncRef, FuncSig, Handle, Instantiate, Lambda, OperationDeclaration,
     OperationDeclarationUse, Perform, Resume, SourceCallIndirect, SourceCallable, SourceFunc,
     SourceTailCallIndirect, ValidationError, Yield, compiler_intrinsic_map, contains_adt_typeref,
-    func_sig_parts, nominal_identity, parent_region, push_op_error, push_type_error,
-    walk_region_ops,
+    func_sig_parts, nominal_identity, push_op_error, push_type_error, walk_region_ops,
 };
 use crate::dialect::{adt, list, tribute_cps};
 
@@ -191,13 +190,8 @@ impl CallableQuery<'_> {
         self.origins.get(&value) == Some(&true)
     }
 
-    /// The declaration `declared` names, when it claims that declaration's kind.
-    fn claimed_declaration(
-        &self,
-        ctx: &IrContext,
-        declared: &impl OperationDeclarationUse,
-    ) -> Option<&OperationDeclaration> {
-        let claim = declared.declaration_use(ctx)?;
+    /// The declaration `claim` names, when it claims that declaration's kind.
+    fn claimed_declaration(&self, claim: &DeclarationUse<'_>) -> Option<&OperationDeclaration> {
         self.declarations
             .get(&(claim.ability, claim.op_name))
             .copied()
@@ -398,27 +392,11 @@ impl CallableResultOrigin for Perform {
     ) -> bool {
         let result_type = ctx.value_ty(result);
         ctx.op_result_types(self.op_ref()) == [result_type]
-            && self.declared_result_type(ctx) == Some(result_type)
-            && query
-                .claimed_declaration(ctx, self)
-                .is_some_and(|declaration| declaration.result_type == result_type)
-    }
-}
-
-impl CallableArgumentOrigin for Handler {
-    fn argument_is_callable_origin<'q>(
-        &self,
-        ctx: &IrContext,
-        _region: RegionRef,
-        _index: u32,
-        argument: ValueRef,
-        query: &mut CallableQuery<'q>,
-    ) -> bool {
-        self.declared_arguments(ctx)
-            .and_then(|arguments| arguments.iter().position(|&value| value == argument))
-            .zip(query.claimed_declaration(ctx, self))
-            .is_some_and(|(position, declaration)| {
-                declaration.parameter_types.get(position) == Some(&ctx.value_ty(argument))
+            && self.declaration_uses(ctx).first().is_some_and(|claim| {
+                claim.result_type == Some(result_type)
+                    && query
+                        .claimed_declaration(claim)
+                        .is_some_and(|declaration| declaration.result_type == result_type)
             })
     }
 }
@@ -430,7 +408,7 @@ impl CallableResultOrigin for Handle {
         result: ValueRef,
         query: &mut CallableQuery<'q>,
     ) -> bool {
-        handle_result_sources(ctx, self.op_ref()).is_some_and(|sources| {
+        handle_result_sources(ctx, *self).is_some_and(|sources| {
             sources.into_iter().all(|source| {
                 ctx.value_ty(source) == ctx.value_ty(result) && query.accepts(ctx, source)
             })
@@ -447,14 +425,29 @@ impl CallableArgumentOrigin for Handle {
         argument: ValueRef,
         query: &mut CallableQuery<'q>,
     ) -> bool {
-        ctx.op_regions(self.op_ref())
-            .collect_tuple()
-            .is_some_and(|(body, completion, _)| {
-                completion == region
-                    && index == 0
-                    && region_yield_value(ctx, body).is_some_and(|value| {
-                        ctx.value_ty(value) == ctx.value_ty(argument) && query.accepts(ctx, value)
-                    })
+        let mut regions = ctx.op_regions(self.op_ref());
+        let (Some(body), Some(completion)) = (regions.next(), regions.next()) else {
+            return false;
+        };
+        if region == completion {
+            return index == 0
+                && region_yield_value(ctx, body).is_some_and(|value| {
+                    ctx.value_ty(value) == ctx.value_ty(argument) && query.accepts(ctx, value)
+                });
+        }
+        // An arm argument takes the type its declaration gives it.
+        self.declaration_uses(ctx)
+            .iter()
+            .find(|claim| claim.region == Some(region))
+            .and_then(|claim| {
+                let position = claim
+                    .arguments
+                    .iter()
+                    .position(|&value| value == argument)?;
+                Some((position, query.claimed_declaration(claim)?))
+            })
+            .is_some_and(|(position, declaration)| {
+                declaration.parameter_types.get(position) == Some(&ctx.value_ty(argument))
             })
     }
 }
@@ -536,35 +529,28 @@ fn region_yield_value(ctx: &IrContext, region: RegionRef) -> Option<ValueRef> {
 }
 
 /// The values that become a `handle`'s result: the completion region's
-/// yield and the yield of each general (`op`) handler. A `fn` handler yields
-/// to its `perform` instead.
-fn handle_result_sources(ctx: &IrContext, handle: OpRef) -> Option<Vec<ValueRef>> {
-    let (_, completion, handlers) = ctx.op_regions(handle).collect_tuple()?;
+/// yield and the yield of each general (`op`) arm. A `fn` arm yields to its
+/// `perform` instead.
+fn handle_result_sources(ctx: &IrContext, handle: Handle) -> Option<Vec<ValueRef>> {
+    let completion = ctx.op_region(handle.op_ref(), 1)?;
     let mut sources = vec![region_yield_value(ctx, completion)?];
-    for &block in &ctx.region(handlers).blocks {
-        for &handler in &ctx.block(block).ops {
-            if Handler::matches(ctx, handler) && ctx.op_attrs(handler).get_str("kind") == Some("op")
-            {
-                sources.push(region_yield_value(ctx, ctx.op_region(handler, 0)?)?);
-            }
+    for (binding, arm) in handle.arm_bindings(ctx) {
+        if binding?.kind == super::OperationKind::Op {
+            sources.push(region_yield_value(ctx, arm)?);
         }
     }
     Some(sources)
 }
 
-/// The result of the `handle` whose handler holds the resume token that
+/// The result of the `handle` whose arm holds the resume token that
 /// `resume` consumes.
 fn resumed_handle_result(ctx: &IrContext, resume: OpRef) -> Option<ValueRef> {
     let token = *ctx.op_operands(resume).first()?;
     let ValueDef::BlockArg(block, _) = ctx.value_def(token) else {
         return None;
     };
-    let handler = ctx.region(ctx.block(block).parent_region?).parent_op?;
-    let handle = ctx.region(parent_region(ctx, handler)?).parent_op?;
-    if !Handler::matches(ctx, handler) || !Handle::matches(ctx, handle) {
-        return None;
-    }
-    ctx.op_results(handle).first().copied()
+    let (handle, _) = super::enclosing_arm(ctx, ctx.block(block).parent_region?)?;
+    ctx.op_results(handle.op_ref()).first().copied()
 }
 
 fn verified_callable_declaration(

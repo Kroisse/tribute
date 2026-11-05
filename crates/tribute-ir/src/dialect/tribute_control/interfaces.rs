@@ -13,13 +13,21 @@ impl CallLike for TailCall {
     }
 }
 
-/// The ability operation declaration an operation names, and the kind it
-/// claims through the attribute `kind_attr`.
+/// The ability operation declaration an operation names, the kind it claims
+/// through the attribute `kind_attr`, and the values and result whose types
+/// the declaration fixes.
 pub struct DeclarationUse<'a> {
     pub ability: &'a SymbolPath,
     pub op_name: StringRef,
     pub kind: Option<StringRef>,
     pub kind_attr: &'static str,
+    /// The values that take the declaration's parameter types, in order.
+    pub arguments: &'a [ValueRef],
+    /// The type that the declaration's result type must equal.
+    pub result_type: Option<TypeRef>,
+    /// The region the use belongs to when the operation names several
+    /// declarations, one per region.
+    pub region: Option<RegionRef>,
 }
 
 /// The local checks of a `tribute_control` or `tribute_cps` operation that
@@ -102,81 +110,78 @@ impl LocalValidation for Handle {
     }
 }
 
-impl LocalValidation for Handler {
-    fn validate(&self, ctx: &IrContext, errors: &mut Vec<ValidationError>) {
-        validate_handler(ctx, self.op_ref(), errors);
-    }
-}
-
 impl LocalValidation for Yield {
     fn validate(&self, ctx: &IrContext, errors: &mut Vec<ValidationError>) {
         validate_yield(ctx, self.op_ref(), errors);
     }
 }
 
-/// An operation that names one ability operation declaration, whose
-/// parameter and result types fix the types of values the operation supplies.
+/// An operation that names ability operation declarations, whose parameter
+/// and result types fix the types of values the operation supplies.
 ///
 /// Whole-IR validation queries it on operations whose schema may not hold,
 /// so implementations read attributes and regions fallibly.
 #[trunk_ir::op_interface]
 pub trait OperationDeclarationUse: DialectOp {
-    /// The declaration this operation names; `None` without its ability or
-    /// operation name.
-    fn declaration_use<'a>(&self, ctx: &'a IrContext) -> Option<DeclarationUse<'a>>;
-
-    /// The values that take the declaration's parameter types, in order.
-    fn declared_arguments<'a>(&self, ctx: &'a IrContext) -> Option<&'a [ValueRef]>;
-
-    /// The type that the declaration's result type must equal.
-    fn declared_result_type(&self, ctx: &IrContext) -> Option<TypeRef>;
+    /// Each declaration this operation names, skipping one without its
+    /// ability, operation name, or argument values.
+    fn declaration_uses<'a>(&self, ctx: &'a IrContext) -> Vec<DeclarationUse<'a>>;
 }
 
 impl OperationDeclarationUse for Perform {
-    fn declaration_use<'a>(&self, ctx: &'a IrContext) -> Option<DeclarationUse<'a>> {
+    fn declaration_uses<'a>(&self, ctx: &'a IrContext) -> Vec<DeclarationUse<'a>> {
         let attrs = ctx.op_attrs(self.op_ref());
-        Some(DeclarationUse {
-            ability: attrs.get_symbol_ref("ability")?,
-            op_name: attrs.get_string_ref("op_name")?,
+        let (Some(ability), Some(op_name)) = (
+            attrs.get_symbol_ref("ability"),
+            attrs.get_string_ref("op_name"),
+        ) else {
+            return Vec::new();
+        };
+        vec![DeclarationUse {
+            ability,
+            op_name,
             kind: attrs.get_string_ref("operation_kind"),
             kind_attr: "operation_kind",
-        })
-    }
-
-    fn declared_arguments<'a>(&self, ctx: &'a IrContext) -> Option<&'a [ValueRef]> {
-        Some(ctx.op_operands(self.op_ref()))
-    }
-
-    fn declared_result_type(&self, ctx: &IrContext) -> Option<TypeRef> {
-        ctx.op_result_types(self.op_ref()).first().copied()
+            arguments: ctx.op_operands(self.op_ref()),
+            result_type: ctx.op_result_types(self.op_ref()).first().copied(),
+            region: None,
+        }]
     }
 }
 
-impl OperationDeclarationUse for Handler {
-    fn declaration_use<'a>(&self, ctx: &'a IrContext) -> Option<DeclarationUse<'a>> {
-        let attrs = ctx.op_attrs(self.op_ref());
-        Some(DeclarationUse {
-            ability: attrs.get_symbol_ref("ability")?,
-            op_name: attrs.get_string_ref("op_name")?,
-            kind: attrs.get_string_ref("kind"),
-            kind_attr: "kind",
-        })
-    }
-
-    /// The clause's block arguments without its trailing resume token.
-    fn declared_arguments<'a>(&self, ctx: &'a IrContext) -> Option<&'a [ValueRef]> {
-        let region = ctx.op_region(self.op_ref(), 0)?;
-        let &block = ctx.region(region).blocks.first()?;
-        let args = ctx.block_args(block);
-        Some(match args.split_last() {
-            Some((token, rest)) if ResumeToken::matches(ctx, ctx.value_ty(*token)) => rest,
-            _ => args,
-        })
-    }
-
-    fn declared_result_type(&self, ctx: &IrContext) -> Option<TypeRef> {
-        ctx.op_attrs(self.op_ref())
-            .get_type("operation_result_type")
+/// Each arm names its binding's declaration. Its arguments are the arm's
+/// entry block arguments without the trailing resume token.
+impl OperationDeclarationUse for Handle {
+    fn declaration_uses<'a>(&self, ctx: &'a IrContext) -> Vec<DeclarationUse<'a>> {
+        let Some(Attribute::List(handlers)) = ctx.op_attrs(self.op_ref()).get("handlers") else {
+            return Vec::new();
+        };
+        handlers
+            .iter()
+            .zip(ctx.op_regions(self.op_ref()).skip(2))
+            .filter_map(|(binding, arm)| {
+                let Attribute::Dict(binding) = binding else {
+                    return None;
+                };
+                let binding = binding.view(ctx);
+                let &block = ctx.region(arm).blocks.first()?;
+                let args = ctx.block_args(block);
+                Some(DeclarationUse {
+                    ability: binding.get_symbol_ref("ability")?,
+                    op_name: binding.get_string_ref("op_name")?,
+                    kind: binding.get_string_ref("kind"),
+                    kind_attr: "kind",
+                    arguments: match args.split_last() {
+                        Some((token, rest)) if ResumeToken::matches(ctx, ctx.value_ty(*token)) => {
+                            rest
+                        }
+                        _ => args,
+                    },
+                    result_type: binding.get_type("operation_result_type"),
+                    region: Some(arm),
+                })
+            })
+            .collect()
     }
 }
 

@@ -133,14 +133,14 @@ mod tests {
   func.func @selected() -> core.never {
     %ev = mem.null : core.ptr
     %prompt = arith.const {value = 1} : core.i32
-    ability.handle_dispatch [] %ev, %prompt() {
+    ability.handle_dispatch %ev, %prompt [] {
       func.tail_call @finish() : () -> ()
     }
   }
   func.func @untouched() -> core.never {
     %ev = mem.null : core.ptr
     %prompt = arith.const {value = 2} : core.i32
-    ability.handle_dispatch [] %ev, %prompt() {
+    ability.handle_dispatch %ev, %prompt [] {
       func.tail_call @finish() : () -> ()
     }
   }
@@ -194,13 +194,13 @@ mod tests {
     #[test]
     fn malformed_final_delimiters_are_not_structurally_spliced() {
         let malformed = [
-            r#"ability.handle_dispatch [] %ev, %prompt() {
+            r#"ability.handle_dispatch %ev, %prompt [] {
       ^first(%inner: !evidence):
         func.unreachable
       ^second:
         func.unreachable
     }"#,
-            r#"ability.handle_dispatch [] %ev, %prompt() {
+            r#"ability.handle_dispatch %ev, %prompt [] {
       ^body(%inner: !evidence):
         "test.consume"(%inner)
         func.unreachable

@@ -80,11 +80,6 @@ pub(super) fn parent_region(ctx: &IrContext, op: OpRef) -> Option<RegionRef> {
     ctx.block(block).parent_region
 }
 
-pub(super) fn is_never(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.get_type(ty);
-    data.name.is(ctx, "core.never")
-}
-
 fn is_unresolved_type(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
     let unresolved_name = matches!(data.name.strip_dialect(ctx), "var" | "infer" | "unresolved");

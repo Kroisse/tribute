@@ -8,17 +8,15 @@ core.module @test {tribute.entry = @"pkg::main"} {
       tribute_control.return %0
   }
   tribute_control.func @"pkg::main"['a0]() -> core.nil row(| 'a0) inferred {
-      %0 = tribute_control.handle : core.i32 body {
+      %0 = tribute_control.handle : core.i32 {
           %1 = tribute_control.call @"pkg::use_ask"() : () -> core.i32
           tribute_control.yield %1
-      } completion(%2: core.i32) {
+      } do (%2: core.i32) {
           tribute_control.yield %2
-      } handlers {
-          tribute_control.handler op @"ability_1_8_pkg::Ask" @ask(%3: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
-              %4 = arith.const {value = 42} : core.i32
-              %5 = tribute_control.resume %3, %4 : core.i32
-              tribute_control.yield %5
-          }
+      } op @"ability_1_8_pkg::Ask" @ask(%3: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
+          %4 = arith.const {value = 42} : core.i32
+          %5 = tribute_control.resume %3, %4 : core.i32
+          tribute_control.yield %5
       }
       %6 = core.nil_value : core.nil
       tribute_control.return %6
