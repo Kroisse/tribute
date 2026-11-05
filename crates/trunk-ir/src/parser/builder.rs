@@ -439,6 +439,19 @@ impl<'a> ArenaIrBuilder<'a> {
             && let Some(def) = name.def()
         {
             let schema = &def.schema;
+            if let Some(missing) = schema
+                .attributes
+                .iter()
+                .find(|attr| !attr.optional && !attributes.view(self.ctx).contains_key(attr.name))
+            {
+                return Err(ParseError {
+                    message: format!(
+                        "operation '{}' needs attribute '{}' to infer its result types",
+                        raw.name, missing.name
+                    ),
+                    offset: 0,
+                });
+            }
             let values: Vec<Option<Attribute>> = schema
                 .attributes
                 .iter()

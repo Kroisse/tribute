@@ -3556,7 +3556,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_all_includes_cmpf_predicate_errors() {
+    fn validate_all_includes_attribute_domain_errors() {
         let input = r#"core.module @test {
   func.func @main(%0: core.f64, %1: core.f64) -> core.i1 {
     %2 = "arith.cmpf"(%0, %1) {predicate = "one"} : core.i1

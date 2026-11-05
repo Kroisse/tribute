@@ -1407,6 +1407,9 @@ mod tests {
         #[asm_format(lhs "," rhs attr_dict_bare ":" type(lhs))]
         fn max<T>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
 
+        #[asm_format(attr_dict)]
+        fn pin<V>(ty: Attr<TypeOf<V>>) -> Value<V> {}
+
         #[asm_format(args attr_dict_bare (":" types(results)^)?)]
         fn emit(args: Variadic<_>) -> Variadic<_> {}
 
@@ -1700,6 +1703,18 @@ mod tests {
   }
 }
 "#,
+        );
+        let error = parse_error(
+            r#"core.module @m {
+  asm_format_test.fun @f() {
+      %0 = asm_format_test.pin
+  }
+}
+"#,
+        );
+        assert!(
+            error.contains("needs attribute 'ty' to infer its result types"),
+            "{error}"
         );
         // A result the schema would not infer prints generically.
         let text = r#"core.module @m {
