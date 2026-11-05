@@ -1410,6 +1410,9 @@ mod tests {
         #[asm_format(attr_dict)]
         fn pin<V>(ty: Attr<TypeOf<V>>) -> Value<V> {}
 
+        #[asm_format(lhs attr_dict_bare ":" type(lhs))]
+        fn labeled<T>(label: Attr<String>, lhs: Value<T>) -> Value<T> {}
+
         #[asm_format(args attr_dict_bare (":" types(results)^)?)]
         fn emit(args: Variadic<_>) -> Variadic<_> {}
 
@@ -1727,6 +1730,23 @@ mod tests {
         assert!(
             error.contains("needs a valid attribute 'ty' to infer its result types"),
             "{error}"
+        );
+        // An attribute that binds no result type is left to the verifier,
+        // and an operation without it prints generically.
+        let text = r#"core.module @m {
+  asm_format_test.fun @f(%0: core.i32) {
+      %1 = asm_format_test.labeled %0 : core.i32
+  }
+}
+"#;
+        assert_eq!(
+            print(text),
+            r#"core.module @m {
+  asm_format_test.fun @f(%0: core.i32) {
+      %1 = "asm_format_test.labeled"(%0) : core.i32
+  }
+}
+"#
         );
         // A result the schema would not infer prints generically.
         let text = r#"core.module @m {

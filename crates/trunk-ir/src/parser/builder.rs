@@ -439,8 +439,11 @@ impl<'a> ArenaIrBuilder<'a> {
             && let Some(def) = name.def()
         {
             let schema = &def.schema;
+            // Only an attribute that binds a type variable can supply a
+            // result type; the verifier reports any other.
             if let Some(missing) = schema.attributes.iter().find(|attr| {
-                !attr.optional
+                attr.binds.is_some()
+                    && !attr.optional
                     && !attributes
                         .view(self.ctx)
                         .get(attr.name)
