@@ -234,8 +234,9 @@ where
 - `#[asm_format]` without elements on an operation requires
   `trunk_ir::asm_format::OpAsmFormat` for its wrapper, which prints and
   parses the operation's custom syntax by hand. Generic syntax stays
-  readable for every operation. See [printing](#printing) for the printer
-  a custom format writes through.
+  readable for every operation. See [printing](#printing) and
+  [parsing](#parsing) for the printer and parser a custom format works
+  through.
 - On a type `struct`, `#[verify]` requires `trunk_ir::type_verifier::VerifyType`
   and `#[asm_format]` requires `trunk_ir::asm_format::TypeAsmFormat`. A
   hand-written `TypeDef` adds the same hooks with `with_verifier` and

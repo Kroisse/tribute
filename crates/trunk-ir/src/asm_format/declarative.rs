@@ -1061,7 +1061,7 @@ impl<'a> FormatParser<'a> {
                                 .into_iter()
                                 .map(|value| Operand {
                                     value,
-                                    name: "",
+                                    name: "?",
                                     offset,
                                 })
                                 .collect();

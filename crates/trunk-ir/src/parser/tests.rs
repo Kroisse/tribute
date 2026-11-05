@@ -1250,6 +1250,7 @@ fn a_value_may_be_used_before_its_block_argument_is_defined() {
     assert_eq!(ctx.op_operands(used), [arg]);
     assert_eq!(ctx.uses(arg).len(), 2);
     assert!(validation::validate_use_chains(&ctx, module).is_ok());
+    assert!(validation::validate_value_integrity(&ctx, module).is_ok());
     assert_roundtrip(&ctx, module.op());
 }
 
@@ -1271,6 +1272,8 @@ fn a_nested_region_may_use_a_later_block_argument_of_an_enclosing_one() {
     let body = ctx.op_region(function, 0).unwrap();
     let next = ctx.region(body).blocks[1];
     assert_eq!(ctx.uses(ctx.block_arg(next, 0)).len(), 2);
+    assert!(validation::validate_use_chains(&ctx, module).is_ok());
+    assert!(validation::validate_value_integrity(&ctx, module).is_ok());
     assert_roundtrip(&ctx, module.op());
 }
 
