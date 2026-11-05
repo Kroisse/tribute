@@ -69,42 +69,6 @@ impl<'db> TypeSubst<'db> {
         (generalized, type_params)
     }
 
-    /// Generalize unresolved variables except those free in the environment.
-    pub fn generalize_excluding(
-        &self,
-        db: &'db dyn salsa::Database,
-        ty: Type<'db>,
-        row_subst: &RowSubst<'db>,
-        excluded: &[UniVarId<'db>],
-    ) -> (Type<'db>, Vec<TypeParam>) {
-        let (generalized, type_params, _) =
-            self.generalize_excluding_with_mapping(db, ty, row_subst, excluded);
-        (generalized, type_params)
-    }
-
-    /// Generalize unresolved variables except those free in the environment,
-    /// retaining the variable-to-local-scheme mapping for typed-body metadata.
-    pub fn generalize_excluding_with_mapping(
-        &self,
-        db: &'db dyn salsa::Database,
-        ty: Type<'db>,
-        row_subst: &RowSubst<'db>,
-        excluded: &[UniVarId<'db>],
-    ) -> (Type<'db>, Vec<TypeParam>, HashMap<UniVarId<'db>, u32>) {
-        let mut univars = Vec::new();
-        self.collect_univars_from_type(db, ty, row_subst, &mut univars);
-        univars.retain(|id| !excluded.contains(id));
-
-        let var_to_index: HashMap<UniVarId<'db>, u32> = univars
-            .iter()
-            .enumerate()
-            .map(|(index, &id)| (id, index as u32))
-            .collect();
-        let generalized = self.replace_univars_with_bound(db, ty, row_subst, &var_to_index);
-        let type_params = univars.iter().map(|_| TypeParam::anonymous()).collect();
-        (generalized, type_params, var_to_index)
-    }
-
     /// Generalize a type and return the UniVar → BoundVar index mapping.
     ///
     /// This is used when you need to apply the same generalization mapping
@@ -155,8 +119,8 @@ impl<'db> TypeSubst<'db> {
 
     /// Finalize a typed body or its semantic metadata.
     ///
-    /// Function-interface variables become `BoundVar`; variables owned by a
-    /// local generalized scheme become `LocalBoundVar`.
+    /// Function-interface variables become `BoundVar`; body-local existentials
+    /// become `LocalBoundVar`.
     pub(crate) fn apply_generalization_with_local_vars(
         &self,
         db: &'db dyn salsa::Database,

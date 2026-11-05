@@ -101,11 +101,6 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// and conversion so phantom arguments and callable field rows stay linked.
     constructor_reference_types: HashMap<NodeId, Type<'db>>,
 
-    /// Function-local quantifiers introduced by pure `let` generalization.
-    /// These are distinct from the enclosing function scheme's binders when
-    /// the solved typed body and callable metadata are materialized.
-    local_generalizations: HashMap<UniVarId<'db>, (NodeId, u32)>,
-
     /// The schemes each generalized `let` pattern bound on its first visit,
     /// rebound unchanged when inference and conversion revisit it.
     let_schemes: HashMap<NodeId, Vec<LetSchemeBinding<'db>>>,
@@ -335,7 +330,6 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             checked_lambdas: HashMap::default(),
             checked_record_shapes: HashSet::default(),
             constructor_reference_types: HashMap::default(),
-            local_generalizations: HashMap::default(),
             let_schemes: HashMap::default(),
             function_instances: HashMap::default(),
             quantified_local_reference_types: HashMap::default(),
@@ -706,28 +700,6 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         std::mem::take(&mut self.node_types)
     }
 
-    /// Record the local quantifiers owned by one generalized `let` pattern.
-    ///
-    /// A variable free in the environment is never generalized, so no
-    /// variable can be owned by two `let`s; the first owner is kept if one is.
-    pub fn record_local_generalization(
-        &mut self,
-        scope: NodeId,
-        mapping: HashMap<UniVarId<'db>, u32>,
-    ) {
-        for (var, index) in mapping {
-            let owner = *self
-                .local_generalizations
-                .entry(var)
-                .or_insert((scope, index));
-            debug_assert_eq!(
-                owner,
-                (scope, index),
-                "local quantifier {var:?} is owned by two let patterns"
-            );
-        }
-    }
-
     /// Record the schemes a `let` pattern bound when it was generalized.
     /// The first visit decides; a revisit must not generalize again.
     pub(crate) fn record_let_schemes(
@@ -741,10 +713,6 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     /// The schemes `pattern` bound on its first visit, if it was generalized.
     pub(crate) fn let_schemes(&self, pattern: NodeId) -> Option<Vec<LetSchemeBinding<'db>>> {
         self.let_schemes.get(&pattern).cloned()
-    }
-
-    pub fn take_local_generalizations(&mut self) -> HashMap<UniVarId<'db>, (NodeId, u32)> {
-        std::mem::take(&mut self.local_generalizations)
     }
 
     pub fn get_function_reference_type(&self, node: NodeId) -> Option<Type<'db>> {
@@ -770,12 +738,10 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         {
             return Some(instance.callable);
         }
-        if scheme.type_params(self.db).is_empty()
-            && matches!(
-                scheme.body(self.db).kind(self.db),
-                crate::ast::TypeKind::Func { .. }
-            )
-            && let Some(binding) = self.local_binding_owners.get(&local).copied()
+        if matches!(
+            scheme.body(self.db).kind(self.db),
+            crate::ast::TypeKind::Func { .. }
+        ) && let Some(binding) = self.local_binding_owners.get(&local).copied()
         {
             let instance = self.instantiate_scheme_details(scheme);
             let callable = instance.ty;
@@ -790,7 +756,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             );
             return Some(callable);
         }
-        if !scheme.type_params(self.db).is_empty() || !scheme.effect_params(self.db).is_empty() {
+        if !scheme.effect_params(self.db).is_empty() {
             if let Some(ty) = self.quantified_local_reference_types.get(&node).copied() {
                 return Some(ty);
             }

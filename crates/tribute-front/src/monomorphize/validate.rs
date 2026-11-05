@@ -3,7 +3,7 @@ use super::{Dependency, Expressions, collect::is_concrete_type};
 use crate::ast::fold::{TypeFoldable, TypeVisitable, TypeVisitor};
 use crate::ast::{
     AbilityRow, Decl, DeclTable, ExprKind, FuncDecl, FuncDefId, NodeId, ResolvedRef, SpanMaps,
-    Stmt, Type, TypeDefId, TypeKind, TypeScheme, TypedRef,
+    Type, TypeDefId, TypeKind, TypeScheme, TypedRef,
 };
 use crate::typeck::subst::BoundVarSubst;
 use rustc_hash::FxHashMap as HashMap;
@@ -26,9 +26,8 @@ pub enum InstanceErrorKind {
     },
     IncompleteTypeArgument,
     IncompleteAbilityArgument,
-    /// A generic struct or enum named at an argument that specialization
-    /// cannot make concrete: an open row, or a quantifier of a `let` that
-    /// binds a callable.
+    /// A generic struct or enum named at an argument that holds an open
+    /// row, which specialization cannot make concrete.
     IncompleteNominalArgument,
     InconsistentCallable,
     /// A backstop for runaway expansion that polymorphic recursion
@@ -79,9 +78,8 @@ impl InstanceError {
                  polymorphic recursion is not supported"
             ),
             InstanceErrorKind::IncompleteNominalArgument => "a generic struct or enum is used at \
-                 a type argument that holds an open ability row or a type variable of a \
-                 `let`-bound value whose type contains a function; these do not specialize, so \
-                 give the argument a concrete type"
+                 a type argument that holds an open ability row; it does not specialize, so give \
+                 the argument a closed row"
                 .to_owned(),
             InstanceErrorKind::SpecializationInvariant(violation) => format!(
                 "internal compiler error: the specialization output breaks its contract at {}: \
@@ -142,50 +140,18 @@ fn names_incomplete_ability_argument<'db>(
     substitute(db, ty, arguments).is_some_and(|ty| ty.visit_with(&mut Incomplete { db }).is_break())
 }
 
-/// The declarations and local quantifiers a nominal argument check reads.
-struct NominalScope<'a, 'db> {
-    /// Generic struct and enum declarations.
-    generic: &'a HashSet<TypeDefId<'db>>,
-    /// The `let` patterns whose value type holds a callable. Only their
-    /// quantifiers can type a value, one a callable's parameter carries.
-    callable_lets: &'a HashSet<NodeId>,
-}
-
-/// Whether `ty` contains a function type.
-fn holds_callable<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
-    struct Callable<'db> {
-        db: &'db dyn salsa::Database,
-    }
-    impl<'db> TypeVisitor<'db> for Callable<'db> {
-        type Break = ();
-
-        fn db(&self) -> &'db dyn salsa::Database {
-            self.db
-        }
-
-        fn visit_type(&mut self, ty: Type<'db>) -> ControlFlow<()> {
-            if matches!(ty.kind(self.db), TypeKind::Func { .. }) {
-                return ControlFlow::Break(());
-            }
-            ty.super_visit_with(self)
-        }
-    }
-    ty.visit_with(&mut Callable { db }).is_break()
-}
-
 /// Whether `ty`, at the type arguments `arguments`, names a generic struct
-/// or enum at an argument holding an open row or a quantifier of a `let`
-/// that binds a callable. Neither is substituted, so the instance would get no
-/// specialized declaration.
+/// or enum at an argument holding an open row. A row variable is not
+/// substituted, so the instance would get no specialized declaration.
 fn names_incomplete_nominal_argument<'db>(
     db: &'db dyn salsa::Database,
-    scope: &NominalScope<'_, 'db>,
+    generic: &HashSet<TypeDefId<'db>>,
     ty: Type<'db>,
     arguments: &[Type<'db>],
 ) -> bool {
     struct Incomplete<'a, 'db> {
         db: &'db dyn salsa::Database,
-        scope: &'a NominalScope<'a, 'db>,
+        generic: &'a HashSet<TypeDefId<'db>>,
         in_argument: bool,
     }
     impl<'db> TypeVisitor<'db> for Incomplete<'_, 'db> {
@@ -197,14 +163,7 @@ fn names_incomplete_nominal_argument<'db>(
 
         fn visit_type(&mut self, ty: Type<'db>) -> ControlFlow<()> {
             match ty.kind(self.db) {
-                TypeKind::LocalBoundVar { scope, .. }
-                    if self.in_argument && self.scope.callable_lets.contains(scope) =>
-                {
-                    ControlFlow::Break(())
-                }
-                TypeKind::Named { id, .. }
-                    if !self.in_argument && self.scope.generic.contains(id) =>
-                {
+                TypeKind::Named { id, .. } if !self.in_argument && self.generic.contains(id) => {
                     self.in_argument = true;
                     let flow = ty.super_visit_with(self);
                     self.in_argument = false;
@@ -224,7 +183,7 @@ fn names_incomplete_nominal_argument<'db>(
     substitute(db, ty, arguments).is_some_and(|ty| {
         ty.visit_with(&mut Incomplete {
             db,
-            scope,
+            generic,
             in_argument: false,
         })
         .is_break()
@@ -307,28 +266,6 @@ pub(super) fn validate<'db>(
         }
         let mut nodes = Vec::new();
         func.body.for_each(|node| nodes.push(node));
-        let callable_lets: HashSet<_> = nodes
-            .iter()
-            .filter_map(|expr| match expr.kind.as_ref() {
-                ExprKind::Block { stmts, .. } => Some(stmts),
-                _ => None,
-            })
-            .flatten()
-            .filter_map(|stmt| match stmt {
-                Stmt::Let { pattern, value, .. }
-                    if expressions
-                        .get(|table| &table.node_types, &value.id)
-                        .is_some_and(|ty| holds_callable(db, *ty)) =>
-                {
-                    Some(pattern.id)
-                }
-                _ => None,
-            })
-            .collect();
-        let scope = NominalScope {
-            generic: &generic,
-            callable_lets: &callable_lets,
-        };
         let mut nominal_reported = false;
         if let Some(scheme) = schemes.get(id.path(db)) {
             if names_incomplete_ability_argument(db, *scheme.body(db), &arguments) {
@@ -338,7 +275,7 @@ pub(super) fn validate<'db>(
                 });
             }
             nominal_reported =
-                names_incomplete_nominal_argument(db, &scope, *scheme.body(db), &arguments);
+                names_incomplete_nominal_argument(db, &generic, *scheme.body(db), &arguments);
             if nominal_reported {
                 errors.push(InstanceError {
                     node: func.id,
@@ -357,7 +294,7 @@ pub(super) fn validate<'db>(
                 // One argument shows up in every type that names it, so
                 // only its first occurrence in a function is reported.
                 if !nominal_reported
-                    && names_incomplete_nominal_argument(db, &scope, *ty, &arguments)
+                    && names_incomplete_nominal_argument(db, &generic, *ty, &arguments)
                 {
                     nominal_reported = true;
                     errors.push(InstanceError {

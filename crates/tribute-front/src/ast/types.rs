@@ -91,11 +91,13 @@ pub enum TypeKind<'db> {
     /// Index 0 refers to the innermost binder, following De Bruijn convention.
     BoundVar { index: u32 },
 
-    /// Type variable quantified by a local `let` binding.
+    /// Body-local existential type variable: one that a function body uses
+    /// but that neither its signature nor a retained relation names. `scope`
+    /// is the function that owns it.
     ///
-    /// Local binders have no enclosing `TypeScheme`, so their owner must remain
-    /// part of typed-body metadata instead of being confused with a function
-    /// scheme's `BoundVar`.
+    /// It has no enclosing `TypeScheme`, so its owner must remain part of
+    /// typed-body metadata instead of being confused with a function scheme's
+    /// `BoundVar`.
     LocalBoundVar { scope: NodeId, index: u32 },
 
     /// Unification variable (unknown during inference).
