@@ -373,7 +373,6 @@ mod canonicalize_tests {
     use crate::SymbolPath;
     use crate::dialect::func::{FuncSig, NUM_INPUTS_ATTR, NUM_RESULTS_ATTR};
     use crate::parser::parse_test_module;
-    use crate::printer::print_module;
     use crate::rewrite::{ApplyResult, Module, PatternApplicator, TypeConverter};
     use crate::walk::{WalkAction, walk_op};
     use crate::{Attribute, AttributeMap};
@@ -447,7 +446,7 @@ mod canonicalize_tests {
             ),
             0
         );
-        insta::assert_snapshot!(print_module(&ctx, module.op()));
+        insta::assert_snapshot!(module.op().display(&ctx).to_string());
     }
 
     #[test]
@@ -496,7 +495,7 @@ mod canonicalize_tests {
             ),
             1
         );
-        insta::assert_snapshot!(print_module(&ctx, module.op()));
+        insta::assert_snapshot!(module.op().display(&ctx).to_string());
     }
 
     #[test]
@@ -608,7 +607,7 @@ mod scalar_category_tests {
 }"#;
         let mut ctx = IrContext::new();
         let module = crate::parser::parse_test_module(&mut ctx, input);
-        let printed = crate::printer::print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(
             printed.contains("(%0: core.index, %1: core.i32) -> core.index"),
             "{printed}"
@@ -616,11 +615,8 @@ mod scalar_category_tests {
         assert!(printed.contains("arith.index_cast"), "{printed}");
         let mut reparsed_ctx = IrContext::new();
         let reparsed = crate::parser::parse_test_module(&mut reparsed_ctx, &printed);
-        assert_eq!(
-            crate::printer::print_module(&reparsed_ctx, reparsed.op()),
-            printed
-        );
+        assert_eq!(reparsed.op().display(&reparsed_ctx).to_string(), printed);
         let index = core::Index::type_ref(&mut ctx);
-        assert_eq!(crate::printer::print_type(&ctx, index), "core.index");
+        assert_eq!(index.display(&ctx).to_string(), "core.index");
     }
 }

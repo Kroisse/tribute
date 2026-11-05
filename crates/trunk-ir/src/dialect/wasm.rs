@@ -1098,7 +1098,6 @@ mod tests {
     use super::*;
     use crate::op_interface::DynIndirectCallLike;
     use crate::parser::parse_test_module;
-    use crate::printer::print_module;
 
     #[test]
     fn structured_control_writes_its_results_only_when_present() {
@@ -1127,7 +1126,7 @@ mod tests {
 "#;
         let mut ctx = crate::IrContext::new();
         let module = parse_test_module(&mut ctx, text);
-        assert_eq!(print_module(&ctx, module.op()), text);
+        assert_eq!(module.op().display(&ctx).to_string(), text);
     }
 
     #[test]
@@ -1143,7 +1142,7 @@ mod tests {
 "#;
         let mut ctx = crate::IrContext::new();
         let module = parse_test_module(&mut ctx, text);
-        assert_eq!(print_module(&ctx, module.op()), text);
+        assert_eq!(module.op().display(&ctx).to_string(), text);
         let elems: Vec<_> = module
             .ops(&ctx)
             .iter()
@@ -1240,7 +1239,7 @@ mod tests {
         assert!(plain_call.indirect_arguments(&ctx).is_some());
         assert!(DynIndirectCallLike::get(&ctx, direct).is_none());
 
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(
             printed.contains("wasm.call_indirect %0(%1) : (core.i32) -> core.i32"),
             "{printed}"
@@ -1259,7 +1258,7 @@ mod tests {
 "#;
         let mut ctx = crate::IrContext::new();
         let module = parse_test_module(&mut ctx, text);
-        assert_eq!(print_module(&ctx, module.op()), text);
+        assert_eq!(module.op().display(&ctx).to_string(), text);
     }
 
     #[test]
@@ -1285,6 +1284,6 @@ mod tests {
 "#;
         let mut ctx = crate::IrContext::new();
         let module = parse_test_module(&mut ctx, source);
-        assert_eq!(print_module(&ctx, module.op()), source);
+        assert_eq!(module.op().display(&ctx).to_string(), source);
     }
 }

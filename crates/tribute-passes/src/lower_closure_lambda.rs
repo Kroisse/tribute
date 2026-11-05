@@ -435,7 +435,6 @@ mod tests {
     use trunk_ir::SymbolPath;
     use trunk_ir::context::RegionData;
     use trunk_ir::dialect::{arith, core};
-    use trunk_ir::printer::print_module;
     use trunk_ir::refs::PathRef;
     use trunk_ir::types::Location;
     use trunk_ir::types::TypeDataBuilder;
@@ -664,9 +663,9 @@ mod tests {
                 .build(&mut ctx, loc);
             ctx.push_op(module_block, outer.op_ref());
 
-            let before = print_module(&ctx, module.op());
+            let before = module.op().display(&ctx).to_string();
             lower_closure_lambda(&mut ctx, module);
-            assert_eq!(print_module(&ctx, module.op()), before);
+            assert_eq!(module.op().display(&ctx).to_string(), before);
         }
     }
 

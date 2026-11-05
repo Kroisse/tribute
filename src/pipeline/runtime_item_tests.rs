@@ -141,7 +141,7 @@ fn frontend_publishes_runtime_types_with_the_prelude_types() {
 
     let cell = runtime_type(&ctx, m, &["pkg", "rt", "Cell"]).expect("published runtime type");
     assert_eq!(
-        trunk_ir::printer::print_type(&ctx, cell),
+        cell.display(&ctx).to_string(),
         r#"adt.struct<"pkg::rt::Cell"(value: core.i32)>"#
     );
     assert!(

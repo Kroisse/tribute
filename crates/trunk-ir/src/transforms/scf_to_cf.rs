@@ -1061,7 +1061,7 @@ mod tests {
             .build(&mut ctx);
         let func_op = ctx.create_op(func_data);
         let module = build_module(&mut ctx, loc, vec![func_op]);
-        let before = crate::printer::print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
         let func = func::Func::from_op(&ctx, func_op).unwrap();
 
         ScfToCf
@@ -1070,7 +1070,7 @@ mod tests {
 
         assert!(func.body_if_present(&ctx).is_none());
         assert!(!ctx.op_has_regions(func_op));
-        assert_eq!(crate::printer::print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
     }
 
     #[test]
@@ -1181,7 +1181,7 @@ mod tests {
             .count();
         assert_eq!(nil_merge_args, expected_nil_merge_args);
 
-        let printed = crate::printer::print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(
             printed.contains("attributes {test.marker = 2} : (core.nil) -> core.never"),
             "{printed}"
@@ -2011,7 +2011,7 @@ mod tests {
         lower_scf_to_cf(&mut ctx, module, &mut Default::default());
         let operation_verifiers = crate::validation::validate_operation_verifiers(&ctx, module);
         assert!(operation_verifiers.is_ok(), "{operation_verifiers}");
-        crate::printer::print_module(&ctx, module.op())
+        module.op().display(&ctx).to_string()
     }
 
     #[test]

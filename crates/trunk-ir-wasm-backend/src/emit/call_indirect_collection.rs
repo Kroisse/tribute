@@ -158,11 +158,11 @@ mod tests {
             &mut ctx,
             "core.module @m { wasm.func @f() { wasm.return } }",
         );
-        let before = trunk_ir::printer::print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
         let mut indices = HashMap::default();
         let added = collect_call_indirect_types(&mut ctx, module, &mut indices, 0, 0).unwrap();
         assert!(added.is_empty());
         assert!(indices.is_empty());
-        assert_eq!(trunk_ir::printer::print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
     }
 }

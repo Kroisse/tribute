@@ -323,8 +323,8 @@ impl<'a> OpAsmParser<'a> {
             offset,
             format!(
                 "operand '%{name}' of '{op_name}' is written as {}, but its type is {}",
-                crate::printer::print_type(self.ctx(), written),
-                crate::printer::print_type(self.ctx(), actual),
+                written.display(self.ctx()),
+                actual.display(self.ctx()),
             ),
         )
     }

@@ -105,7 +105,6 @@ mod tests {
 
     use trunk_ir::context::IrContext;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
     use trunk_ir::rewrite::LegalityCheck;
 
     #[test]
@@ -156,12 +155,21 @@ mod tests {
 
         lower_handle_dispatch(&mut ctx, selected).unwrap();
 
-        let ir_text = print_module(&ctx, module.op());
+        let ir_text = module.op().display(&ctx).to_string();
         assert_eq!(ir_text.matches("ability.handle_dispatch").count(), 1);
         assert!(ir_text.contains("func.func @untouched"));
-        assert!(trunk_ir::printer::print_op(&ctx, selected.op_ref()).contains("func.tail_call"));
         assert!(
-            !trunk_ir::printer::print_op(&ctx, selected.op_ref())
+            selected
+                .op_ref()
+                .display(&ctx)
+                .to_string()
+                .contains("func.tail_call")
+        );
+        assert!(
+            !selected
+                .op_ref()
+                .display(&ctx)
+                .to_string()
                 .contains("ability.handle_dispatch")
         );
     }
@@ -220,10 +228,10 @@ mod tests {
 }}"#
                 ),
             );
-            let before = print_module(&ctx, module.op());
+            let before = module.op().display(&ctx).to_string();
             let error = lower_handle_dispatch(&mut ctx, module).unwrap_err();
             assert_eq!(error.boundary(), "ability-lowered");
-            assert_eq!(print_module(&ctx, module.op()), before);
+            assert_eq!(module.op().display(&ctx).to_string(), before);
         }
     }
 }

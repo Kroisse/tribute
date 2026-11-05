@@ -528,11 +528,11 @@ mod tests {
                     "core.module @test {{ \"clif.func\"() {body} {{sym_name = \"helper\", type = clif.func_sig<() -> ()>{attributes}}} }}"
                 ),
             );
-            let before = trunk_ir::printer::print_module(&ctx, module.op());
+            let before = module.op().display(&ctx).to_string();
             let error = emit_module_to_native(&ctx, module).expect_err("invalid callable");
             assert!(error.to_string().contains("clif.func @helper"), "{error}");
             assert!(error.to_string().contains(expected), "{error}");
-            assert_eq!(trunk_ir::printer::print_module(&ctx, module.op()), before);
+            assert_eq!(module.op().display(&ctx).to_string(), before);
         }
     }
 
@@ -569,7 +569,7 @@ mod tests {
                     "core.module @test {{ clif.func @helper{signature} attributes {{abi = \"C\"}} }}"
                 ),
             );
-            let before = trunk_ir::printer::print_module(&ctx, module.op());
+            let before = module.op().display(&ctx).to_string();
             let error = emit_module_to_native(&ctx, module)
                 .expect_err("unsupported declarations must not be silently omitted");
             assert!(error.to_string().contains("clif.func @helper"), "{error}");
@@ -579,7 +579,7 @@ mod tests {
                     .contains("unsupported type for Cranelift: core.bytes"),
                 "{error}"
             );
-            assert_eq!(trunk_ir::printer::print_module(&ctx, module.op()), before);
+            assert_eq!(module.op().display(&ctx).to_string(), before);
         }
     }
 

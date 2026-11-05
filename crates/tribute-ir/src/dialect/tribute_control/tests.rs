@@ -5,7 +5,6 @@ use trunk_ir::context::{BlockArgData, BlockData, RegionData};
 use trunk_ir::dialect::core;
 use trunk_ir::op_flag::OpFlag;
 use trunk_ir::parser::parse_module;
-use trunk_ir::printer::print_module;
 use trunk_ir::types::AttributeMap;
 
 fn location(ctx: &mut IrContext) -> Location {
@@ -355,11 +354,11 @@ fn an_operation_is_checked_against_the_declaration_of_its_instance() {
 }
 
 fn assert_round_trip(ctx: &IrContext, module: Module) -> String {
-    let printed = print_module(ctx, module.op());
+    let printed = module.op().display(ctx).to_string();
     let mut reparsed_ctx = IrContext::new();
     let reparsed = parse_module(&mut reparsed_ctx, &printed)
         .unwrap_or_else(|error| panic!("failed to reparse:\n{error}\n\n{printed}"));
-    let reprinted = print_module(&reparsed_ctx, reparsed);
+    let reprinted = reparsed.display(&reparsed_ctx).to_string();
     assert_eq!(printed, reprinted);
     printed
 }
@@ -804,7 +803,7 @@ fn a_handle_without_handler_clauses_survives_a_round_trip() {
   }
 }"#,
     );
-    let printed = trunk_ir::printer::print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     let (reparsed, module) = parse_fixture(&printed);
     let result = validate_local(&reparsed, module);
     assert!(result.is_ok(), "{result}\n{printed}");
@@ -2493,7 +2492,7 @@ fn evidence_plans_with_row_tails_validate_and_round_trip() {
         tails[1].as_slice(),
         [EvidenceStep::Select(0), EvidenceStep::Mask(_)]
     ));
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert!(
         printed.contains("{tails = [[], [{select = 0}, {mask = @Log}]]}"),
         "{printed}"

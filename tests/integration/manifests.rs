@@ -11,7 +11,6 @@ use tribute_front::manifest::set_package_root;
 use tribute_front::path_to_uri;
 use tribute_front::source_file::file_at;
 use tribute_front::testing::LoggingDb;
-use trunk_ir::printer::print_module;
 
 /// The packages `app` and `geometry`, where `app` depends on `geometry`.
 const PACKAGES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/packages");
@@ -89,7 +88,7 @@ fn an_app_lowers_its_dependency_at_its_identity_paths() {
         .collect();
     assert_eq!(messages, Vec::<String>::new());
     let (ctx, module) = compile_frontend(&db, app).expect("frontend output");
-    let ir = print_module(&ctx, module.op());
+    let ir = module.op().display(&ctx).to_string();
     for function in ["geometry::area", "pkg::main"] {
         assert!(
             ir.contains(&format!("tribute_control.func @\"{function}\"")),

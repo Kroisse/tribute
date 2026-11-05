@@ -44,24 +44,17 @@ impl OpAsmDirective for HandlerArms {
 
     fn print(p: &mut OpAsmPrinter<'_>, arms: Self::Parts<'_>) -> fmt::Result {
         let s = p.state();
-        p.write_char('[')?;
-        for (index, (binding, arm)) in arms.iter().enumerate() {
-            if index > 0 {
-                p.write_char(',')?;
-            }
-            p.newline()?;
-            write!(
-                p,
-                "  {} : {} = {}",
+        // Each arm on its own line; the printer indents each line.
+        let entries = arms.iter().format_with(",", |(binding, arm), f| {
+            f(&format_args!(
+                "\n  {} : {} = {}",
                 binding.header(s.ctx()),
                 s.ty(binding.operation_result_type),
                 s.value(*arm)
-            )?;
-        }
-        if !arms.is_empty() {
-            p.newline()?;
-        }
-        p.write_char(']')
+            ))
+        });
+        let end = if arms.is_empty() { "" } else { "\n" };
+        write!(p, "[{entries}{end}]")
     }
 
     fn parse(p: &mut OpAsmParser<'_>) -> ParseResult<Vec<ParsedEntity>> {

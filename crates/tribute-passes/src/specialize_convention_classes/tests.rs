@@ -1,5 +1,4 @@
 use trunk_ir::parser::parse_test_module;
-use trunk_ir::printer::print_module;
 
 use super::*;
 
@@ -10,7 +9,7 @@ fn specialized(input: &str) -> String {
     let mut ctx = IrContext::new();
     let module = parse_test_module(&mut ctx, input);
     specialize(&mut ctx, module).expect("specializes");
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert_eq!(
         tribute_control::specialized(&ctx, module),
         Some(true),

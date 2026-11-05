@@ -90,7 +90,7 @@ fn source_logical_root_defers_closure_storage_until_target_finalization() {
     pm.add_pass(tribute_passes::target_abi::PhysicalizeCpsCallables)
         .add_pass(tribute_passes::closure_lower::LowerPreparedClosures);
     pm.run(&mut ctx, root, &mut Default::default()).unwrap();
-    let after_abi = trunk_ir::printer::print_module(&ctx, module.op());
+    let after_abi = module.op().display(&ctx).to_string();
     assert!(after_abi.contains("closure.closure"), "{after_abi}");
 
     run_pass(
@@ -100,7 +100,7 @@ fn source_logical_root_defers_closure_storage_until_target_finalization() {
     )
     .unwrap();
 
-    let physical = trunk_ir::printer::print_module(&ctx, module.op());
+    let physical = module.op().display(&ctx).to_string();
     assert!(!physical.contains("closure.closure"), "{physical}");
 }
 
@@ -182,12 +182,8 @@ fn root_dispatch_definition_matches_fixed_wasm_tail_signature_and_validates_bina
         tribute_passes::abi_boundary::TargetKind::Wasm,
     )
     .unwrap();
-    let binary = lower_and_emit_wasm(&mut ctx, module).unwrap_or_else(|error| {
-        panic!(
-            "{error}\n{}",
-            trunk_ir::printer::print_module(&ctx, module.op())
-        )
-    });
+    let binary = lower_and_emit_wasm(&mut ctx, module)
+        .unwrap_or_else(|error| panic!("{error}\n{}", module.op().display(&ctx)));
     let dispatch_definition = module
         .ops(&ctx)
         .iter()
@@ -361,10 +357,10 @@ fn assert_boundary_exit_programs_meet_the_contract(
         let (mut ctx, module) = run_shared_pipeline(db, source)
             .expect("shared pipeline must succeed")
             .unwrap_or_else(|| panic!("{path} must lower"));
-        let shared = trunk_ir::printer::print_module(&ctx, module.op());
+        let shared = module.op().display(&ctx).to_string();
         run_target_to_boundary_exit(&mut ctx, module, target)
             .unwrap_or_else(|error| panic!("{path}: target boundary failed: {error}"));
-        let exit = trunk_ir::printer::print_module(&ctx, module.op());
+        let exit = module.op().display(&ctx).to_string();
         assert!(
             !exit.contains("ability.decl"),
             "{path}: evidence lowering removes ability declarations:\n{exit}"
@@ -429,7 +425,7 @@ fn boundary_exit_enforcement_rejects_any_violation() {
 
 /// Print `module` and parse the text into a fresh context.
 fn reparse_module(ctx: &IrContext, module: Module, path: &str) -> (IrContext, Module) {
-    let text = trunk_ir::printer::print_module(ctx, module.op());
+    let text = module.op().display(ctx).to_string();
     let mut reparsed = IrContext::new();
     let op = trunk_ir::parser::parse_module(&mut reparsed, &text).unwrap_or_else(|error| {
         panic!(
@@ -460,10 +456,10 @@ fn assert_boundary_exit_round_trips(
 
         // Parsing registers every alias explicitly, which can change how
         // the first reprint spells types; the text is stable from then on.
-        let reprinted = trunk_ir::printer::print_module(&reparsed, reparsed_module.op());
+        let reprinted = reparsed_module.op().display(&reparsed).to_string();
         let (again, again_module) = reparse_module(&reparsed, reparsed_module, path);
         assert_eq!(
-            trunk_ir::printer::print_module(&again, again_module.op()),
+            again_module.op().display(&again).to_string(),
             reprinted,
             "{path}: reparsed boundary-exit IR must print stably"
         );
@@ -525,7 +521,7 @@ fn assert_tail_signatures_consume_every_input(
                 assert!(
                     consumed(&ctx, signature),
                     "{path}: {target:?} tail signature lacks the consumed contract: {}",
-                    trunk_ir::printer::print_type(&ctx, signature.as_type_ref())
+                    signature.as_type_ref().display(&ctx)
                 );
             }
             ControlFlow::Continue(WalkAction::Advance)
@@ -1068,7 +1064,7 @@ fn main() -> Nil {
     );
     let frontend = compile_frontend_for_shared_route(db, source)
         .expect("production frontend route should lower");
-    let logical = trunk_ir::printer::print_module(&frontend.context, frontend.module.op());
+    let logical = frontend.module.op().display(&frontend.context).to_string();
     assert!(
         logical.contains("tribute_control.perform"),
         "frontend must retain source logical perform:\n{logical}"
@@ -1087,7 +1083,7 @@ fn main() -> Nil {
     let (ctx, module) = compile_ast(db, source)
         .expect("shared lowering should succeed")
         .expect("shared lowering should produce a module");
-    let output = trunk_ir::printer::print_module(&ctx, module.op());
+    let output = module.op().display(&ctx).to_string();
     for forbidden in [
         "tribute_control.",
         "tribute_control.func_sig",
@@ -1124,7 +1120,7 @@ fn main() ->{std::io::Io} Nil {
     let (ctx, module) = compile_ast(db, source)
         .expect("pipeline should not fail")
         .expect("pipeline should produce a module");
-    let output = trunk_ir::printer::print_module(&ctx, module.op());
+    let output = module.op().display(&ctx).to_string();
 
     assert!(output.contains("tribute_io.write"), "{output}");
     assert!(output.contains("tribute_io.read_line"), "{output}");
@@ -1492,7 +1488,7 @@ fn main() -> Nil {
             }),
             "the concrete specialization must retain its base intrinsic identity"
         );
-        let logical = trunk_ir::printer::print_module(&frontend.context, frontend.module.op());
+        let logical = frontend.module.op().display(&frontend.context).to_string();
         assert!(
             logical.contains(
                 r#"tribute.compiler_intrinsic = "std::collections::List::__tribute_list_prepend_intrinsic""#
@@ -1503,7 +1499,7 @@ fn main() -> Nil {
         let (ctx, module) = compile_ast(db, source)
             .expect("shared pipeline must lower the concrete intrinsic specialization")
             .expect("shared pipeline must produce a module");
-        let lowered = trunk_ir::printer::print_module(&ctx, module.op());
+        let lowered = module.op().display(&ctx).to_string();
         assert!(lowered.contains("list.prepend"), "{lowered}");
         assert!(
             !lowered.contains("std::collections::List::__tribute_list_prepend_intrinsic"),
@@ -1745,7 +1741,7 @@ fn main() -> Nil {}
             assert_eq!(ir.str(variants[0].0), "Item");
             assert_eq!(ir.get_type(variants[0].1[0]).name, primitive);
         }
-        let output = trunk_ir::printer::print_module(&ir, module.op());
+        let output = module.op().display(&ir).to_string();
         for (name, primitive) in [
             ("pkg::Boxed$Int", "core.i32"),
             ("pkg::Boxed$Bool", "core.i1"),

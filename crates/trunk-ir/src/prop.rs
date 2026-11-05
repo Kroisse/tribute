@@ -20,7 +20,6 @@ use smallvec::smallvec;
 
 use crate::dialect::{arith, cf, core, func, wasm};
 use crate::location::Span;
-use crate::printer::print_module;
 use crate::rewrite::Module;
 use crate::symbol::SymbolPath;
 use crate::{
@@ -44,7 +43,7 @@ pub(crate) struct Built<S> {
 impl<S: fmt::Debug> fmt::Debug for Built<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "{:?}", self.spec)?;
-        f.write_str(&print_module(&self.ctx, self.module.op()))
+        f.write_str(&self.module.op().display(&self.ctx).to_string())
     }
 }
 

@@ -229,10 +229,7 @@ mod tests {
         assert!(Checked::from_type_ref(&ctx, good).is_some());
 
         let ty = crate::TypeDataBuilder::new(Custom::NAME).intern(&mut ctx);
-        assert_eq!(
-            crate::printer::print_type(&ctx, ty),
-            "type_hooks_test.custom<!>"
-        );
+        assert_eq!(ty.display(&ctx).to_string(), "type_hooks_test.custom<!>");
         let parsed = crate::parser::parse_type(&mut ctx, "type_hooks_test.custom<!>").unwrap();
         assert_eq!(parsed, ty);
     }

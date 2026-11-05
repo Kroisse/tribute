@@ -1292,8 +1292,8 @@ pub fn link_name_conflicts(ctx: &IrContext, module: Module) -> Vec<String> {
                 Some((first, first_ty)) if *first_ty != ty => errors.push(format!(
                     "declarations @{first} and @{path} link as `{name}` with different \
                      signatures {} and {}",
-                    crate::printer::print_type(ctx, *first_ty),
-                    crate::printer::print_type(ctx, ty),
+                    first_ty.display(ctx),
+                    ty.display(ctx),
                 )),
                 Some(_) => {}
                 None => {

@@ -305,7 +305,6 @@ mod tests {
     use super::*;
     use crate::dialect::func;
     use crate::parser::parse_test_module;
-    use crate::printer::print_module;
 
     #[test]
     fn require_and_ensure_record_the_rejection_reason() {
@@ -343,14 +342,14 @@ mod tests {
             let replacement = func::Unreachable::operands().build(&mut ctx, loc).op_ref();
             let converter = TypeConverter::new();
             let mut rewriter = PatternRewriter::new(&converter);
-            let before = print_module(&ctx, module.op());
+            let before = module.op().display(&ctx).to_string();
             assert_eq!(
                 rewriter.replace_op_dropping_unused_results(&ctx, old, replacement),
                 !used
             );
             if used {
                 assert!(!rewriter.has_mutations());
-                assert_eq!(print_module(&ctx, module.op()), before);
+                assert_eq!(module.op().display(&ctx).to_string(), before);
             } else {
                 apply_mutations(&mut ctx, old, rewriter.take_mutations(), None);
                 assert_eq!(ctx.block(block).ops[0], replacement);

@@ -677,7 +677,7 @@ mod tests {
                 e.offset, e.message, input
             );
         });
-        let printed = trunk_ir::printer::print_module(&ctx, op);
+        let printed = op.display(&ctx).to_string();
 
         let mut ctx2 = IrContext::new();
         let op2 = trunk_ir::parser::parse_module(&mut ctx2, &printed).unwrap_or_else(|e| {
@@ -686,7 +686,7 @@ mod tests {
                 e.offset, e.message, printed
             );
         });
-        let reprinted = trunk_ir::printer::print_module(&ctx2, op2);
+        let reprinted = op2.display(&ctx2).to_string();
         assert_eq!(printed, reprinted, "Round-trip mismatch:\n{printed}");
     }
 
@@ -714,7 +714,7 @@ mod tests {
                     name
                 );
             }
-            let printed = trunk_ir::printer::print_module(&ctx, module.op());
+            let printed = module.op().display(&ctx).to_string();
             assert_roundtrip(&printed);
             assert_eq!(printed.contains(" -> "), result.is_some());
         }
@@ -735,7 +735,7 @@ mod tests {
         };
         let signature = entry.signature;
         assert_eq!(signature.inputs(&ctx).len(), 2);
-        let printed = trunk_ir::printer::print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(printed.contains(" : closure.closure<"), "{printed}");
         assert_roundtrip(&printed);
     }

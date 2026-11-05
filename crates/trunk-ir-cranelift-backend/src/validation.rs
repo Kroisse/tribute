@@ -13,7 +13,6 @@ use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{clif, func};
 use trunk_ir::op_def::OpDef;
 use trunk_ir::ops::{DialectOp, DialectType};
-use trunk_ir::printer::print_type;
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{ConversionTarget, Module};
 use trunk_ir::symbol_table::qualified_name;
@@ -147,8 +146,8 @@ fn check_value_types(
             errors.push(format!(
                 "clif.{} {role} #{index} type mismatch: expected {}, found {}",
                 ctx.op(op).name.display(ctx),
-                print_type(ctx, ty),
-                print_type(ctx, ctx.value_ty(value))
+                ty.display(ctx),
+                ctx.value_ty(value).display(ctx)
             ));
         }
     }

@@ -1103,7 +1103,6 @@ pub(crate) fn intern_i64_type(ctx: &mut IrContext) -> TypeRef {
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
 
     #[test]
     fn index_operations_lower_on_i32_between_unrealized_casts() {
@@ -1128,7 +1127,7 @@ core.module @test {
 
         lower(&mut ctx, module, TypeConverter::new());
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(!output.contains("arith."), "{output}");
         for op in [
             "wasm.i32_const",
@@ -1161,7 +1160,7 @@ core.module @test {
 
         lower(&mut ctx, module, TypeConverter::new());
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         for op in ["arith.constant", "arith.addi", "arith.andi"] {
             assert!(output.contains(op), "{op} should remain:\n{output}");
         }
@@ -1186,7 +1185,7 @@ core.module @test {
 
         lower(&mut ctx, module, TypeConverter::new());
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(
             output.contains("arith.addi %0, %1 : core.i8"),
             "i8 addition should remain:\n{output}"
@@ -1217,7 +1216,7 @@ core.module @test {
 
         lower(&mut ctx, module, TypeConverter::new());
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         for op in [
             "wasm.i64_extend_i32_s",
             "wasm.i64_extend_i32_u",
@@ -1254,7 +1253,7 @@ core.module @test {
 
         lower(&mut ctx, module, TypeConverter::new());
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(!output.contains("arith."), "{output}");
         for expected in [
             "wasm.i32_const 255",
@@ -1291,7 +1290,7 @@ core.module @test {
 
         lower(&mut ctx, module, TypeConverter::new());
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert_eq!(output.matches("arith.").count(), 6, "{output}");
         assert!(output.contains("wasm.i32_xor"), "{output}");
     }
@@ -1320,7 +1319,7 @@ core.module @test {
 
         lower(&mut ctx, module, TypeConverter::new());
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(!output.contains("arith.cmpi"), "{output}");
         for expected in [
             "wasm.i32_lt_u",

@@ -219,7 +219,6 @@ mod tests {
     use super::*;
     use trunk_ir::Attribute;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
     use wasmparser::{Parser, Payload, Validator, WasmFeatures};
 
     /// A bodyless ordinary C helper declaration with an `(i32) -> i32` contract.
@@ -266,7 +265,7 @@ mod tests {
   }
 }"#,
         );
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
 
         let binary = crate::emit_module_to_wasm(&mut ctx, module)
             .expect("an unused ordinary extern requires no body");
@@ -285,7 +284,7 @@ mod tests {
             "only body-bearing definitions are emitted"
         );
         assert_eq!(
-            print_module(&ctx, module.op()),
+            module.op().display(&ctx).to_string(),
             before,
             "emission disposition must not mutate the IR"
         );

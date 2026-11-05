@@ -200,7 +200,6 @@ mod tests {
     use crate::location::Span;
     use crate::ops::DialectOp;
     use crate::parser::parse_test_module;
-    use crate::printer::print_module;
     use crate::rewrite::Module;
 
     use crate::*;
@@ -421,7 +420,7 @@ mod tests {
         let untouched_block = ctx.region(untouched.body(&ctx)).blocks[0];
         assert_eq!(ctx.block(selected_block).ops.len(), 1);
         assert_eq!(ctx.block(untouched_block).ops.len(), 2);
-        insta::assert_snapshot!(print_module(&ctx, module.op()));
+        insta::assert_snapshot!(module.op().display(&ctx).to_string());
     }
 
     #[test]

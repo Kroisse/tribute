@@ -268,7 +268,6 @@ mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::pass::{PassManager, PassResult};
-    use trunk_ir::printer::print_module;
 
     fn instrument(ctx: &mut IrContext, module: Module) -> PassResult {
         let mut pm = PassManager::new();
@@ -282,7 +281,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, ir);
         instrument(&mut ctx, module).expect("instrumentation");
-        print_module(&ctx, module.op())
+        module.op().display(&ctx).to_string()
     }
 
     #[test]
@@ -327,7 +326,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, &once);
         instrument(&mut ctx, module).expect("instrumentation");
-        assert_eq!(print_module(&ctx, module.op()), once);
+        assert_eq!(module.op().display(&ctx).to_string(), once);
     }
 
     #[test]

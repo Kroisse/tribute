@@ -164,7 +164,6 @@ pub fn rebuild_op_as(
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
 
     #[test]
     fn unsigned_cases_are_the_bit_patterns_clif_switch_can_hold() {
@@ -202,7 +201,7 @@ mod tests {
 
             lower(&mut ctx, module, TypeConverter::new()).expect("cf.switch lowers");
 
-            let printed = print_module(&ctx, module.op());
+            let printed = module.op().display(&ctx).to_string();
             assert!(
                 printed.contains(&format!("clif.switch %0, ^bb1 [{expected}]")),
                 "{printed}"

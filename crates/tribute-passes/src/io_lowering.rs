@@ -105,7 +105,6 @@ mod tests {
     use trunk_ir::ops::DialectOp;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::pass::Pass;
-    use trunk_ir::printer::print_module;
 
     #[test]
     fn lowers_calls_and_removes_private_declarations() {
@@ -139,7 +138,7 @@ mod tests {
             .run(&mut ctx, core, &mut Default::default())
             .unwrap();
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(output.contains("tribute_io.write"), "{output}");
         assert!(output.contains("tribute_io.read_line"), "{output}");
         assert!(!output.contains("__tribute_io_"), "{output}");
@@ -172,7 +171,7 @@ mod tests {
             .run(&mut ctx, core, &mut Default::default())
             .unwrap();
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(!output.contains("tribute_io."), "{output}");
         assert!(output.contains("std::io::__tribute_io_write"), "{output}");
         assert!(

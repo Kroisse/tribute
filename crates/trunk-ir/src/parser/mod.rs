@@ -45,7 +45,7 @@ pub fn parse_module(ctx: &mut IrContext, input: &str) -> Result<OpRef, ParseErro
     OpAsmParser::new(ctx, input).parse_top_level()
 }
 
-/// Parse a type on its own, as [`print_type`](crate::printer::print_type)
+/// Parse a type on its own, as [`TypeRef::display`](crate::refs::TypeRef::display)
 /// writes it.
 pub fn parse_type(ctx: &mut IrContext, input: &str) -> Result<crate::TypeRef, ParseError> {
     let mut p = AsmParser::new(ctx, input);

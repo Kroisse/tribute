@@ -461,7 +461,7 @@ fn main() -> Nil { }
         assert_eq!(signature.inputs(&ctx).len(), 1);
         assert_eq!(signature.results(&ctx), signature.inputs(&ctx));
         assert_eq!(
-            trunk_ir::printer::print_type(&ctx, signature.inputs(&ctx)[0]),
+            signature.inputs(&ctx)[0].display(&ctx).to_string(),
             "core.i32"
         );
     });

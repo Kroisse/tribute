@@ -5,7 +5,6 @@ use salsa_test_macros::salsa_test;
 use tribute::pipeline::{compile_with_diagnostics, run_through_cps_lowering};
 use tribute_front::SourceCst;
 use tribute_front::source_file::parse_rope;
-use trunk_ir::printer::print_module;
 use trunk_ir::validation::validate_value_integrity;
 
 fn source_from_code(db: &dyn salsa::Database, name: &str, code: &str) -> SourceCst {
@@ -32,7 +31,7 @@ fn assert_cps_closures_lower(db: &dyn salsa::Database, source: SourceCst) {
         "closure lowering must not leave cross-function SSA references:\n{validation}"
     );
 
-    let ir = print_module(&ctx, module.op());
+    let ir = module.op().display(&ctx).to_string();
     assert!(
         ir.contains("run::__clam_"),
         "CPS source must produce a continuation closure for lowering:\n{ir}"

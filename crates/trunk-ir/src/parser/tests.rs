@@ -7,7 +7,6 @@ use super::{parse_module, parse_test_module};
 use crate::context::{IrContext, OperationDataBuilder};
 use crate::dialect::{arith, clif, core, func};
 use crate::ops::{DialectOp, DialectType};
-use crate::printer::print_module;
 use crate::refs::*;
 use crate::rewrite::Module;
 use crate::types::*;
@@ -16,7 +15,7 @@ use crate::{BlockArgData, BlockData, RegionData, Symbol, SymbolPath};
 
 /// Build IR → print → parse → print, verify texts match.
 fn assert_roundtrip(ctx: &IrContext, module_op: OpRef) {
-    let printed = print_module(ctx, module_op);
+    let printed = module_op.display(ctx).to_string();
     let mut ctx2 = IrContext::new();
     let parsed_op = parse_module(&mut ctx2, &printed).unwrap_or_else(|e| {
         panic!(
@@ -24,7 +23,7 @@ fn assert_roundtrip(ctx: &IrContext, module_op: OpRef) {
             e.offset, e.message, printed
         );
     });
-    let reprinted = print_module(&ctx2, parsed_op);
+    let reprinted = parsed_op.display(&ctx2).to_string();
     assert_eq!(printed, reprinted, "Round-trip mismatch");
 }
 
@@ -112,7 +111,7 @@ core.module @test {
 "#;
     let mut ctx = IrContext::new();
     let root = parse_module(&mut ctx, input).expect("namespaced attribute key should parse");
-    let printed = print_module(&ctx, root);
+    let printed = root.display(&ctx).to_string();
     assert!(printed.contains("test.marker = 2"));
     assert_roundtrip(&ctx, root);
 }
@@ -127,7 +126,7 @@ fn test_roundtrip_module_attributes() {
 "#;
     let mut ctx = IrContext::new();
     let root = parse_module(&mut ctx, input).expect("module attributes should parse");
-    let printed = print_module(&ctx, root);
+    let printed = root.display(&ctx).to_string();
     assert_eq!(printed, input);
     assert_roundtrip(&ctx, root);
 }
@@ -149,7 +148,7 @@ fn regions_without_blocks_are_not_read_as_an_attribute_dictionary() {
     assert_eq!(ctx.op_region_count(ops[0]), 2);
     assert!(ctx.op(ops[0]).attributes.is_empty());
     assert_eq!(ctx.op_region_count(ops[1]), 1);
-    assert_eq!(print_module(&ctx, root), input);
+    assert_eq!(root.display(&ctx).to_string(), input);
     assert_roundtrip(&ctx, root);
 }
 
@@ -161,7 +160,7 @@ fn test_roundtrip_module_attribute_keys_that_need_quoting() {
 "#;
     let mut ctx = IrContext::new();
     let root = parse_module(&mut ctx, input).expect("quoted module attribute keys parse");
-    let printed = print_module(&ctx, root);
+    let printed = root.display(&ctx).to_string();
     assert_eq!(printed, input);
     assert_roundtrip(&ctx, root);
 }
@@ -175,7 +174,7 @@ core.module @test {
 "#;
     let mut ctx = IrContext::new();
     let root = parse_module(&mut ctx, input).expect("dictionary attributes should parse");
-    let printed = print_module(&ctx, root);
+    let printed = root.display(&ctx).to_string();
     assert!(
         printed
             .contains("{meta = {a = core.i32, b = [{}, {k = @v}]}, nested = test.value<{b = {}}>}"),
@@ -197,7 +196,7 @@ core.module @test {
 "#;
     let mut ctx = IrContext::new();
     let root = parse_module(&mut ctx, input).expect("quoted dictionary keys should parse");
-    let printed = print_module(&ctx, root);
+    let printed = root.display(&ctx).to_string();
     assert!(
         printed.contains(
             r#"{meta = {"1st" = 1, "a b" = 2, plain.key = 5, "q\"uote" = 3, "x::y" = 4}}"#
@@ -216,7 +215,7 @@ fn test_roundtrip_parameter_attributes() {
 }"#;
     let mut ctx = IrContext::new();
     let module = parse_module(&mut ctx, input).expect("parameter attributes should parse");
-    let printed = print_module(&ctx, module);
+    let printed = module.display(&ctx).to_string();
     assert!(
         printed.contains("core.tuple<core.i32, core.ptr {k = @v}>"),
         "{printed}"
@@ -811,7 +810,7 @@ fn review_function_result_type_preserves_empty_body() {
             "empty body must not become a declaration"
         );
         assert_roundtrip(&ctx, module);
-        let printed = print_module(&ctx, module);
+        let printed = module.display(&ctx).to_string();
         let mut reparsed = IrContext::new();
         let module2 = parse_module(&mut reparsed, &printed).unwrap();
         let function2 = reparsed
@@ -883,7 +882,10 @@ fn wasm_assembly_keeps_an_explicit_shared_signature_shared() {
     assert!(func::FuncSig::from_type_ref(&ctx, signature).is_some());
     assert!(crate::dialect::wasm::FuncSig::from_type_ref(&ctx, signature).is_none());
     assert!(
-        print_module(&ctx, module).contains("type = func.func_sig<() -> core.nil>"),
+        module
+            .display(&ctx)
+            .to_string()
+            .contains("type = func.func_sig<() -> core.nil>"),
         "the parser must not apply an implicit target conversion"
     );
 }
@@ -928,7 +930,7 @@ fn test_func_type_preserves_non_reserved_attributes() {
 }"#;
     let mut ctx = IrContext::new();
     let module = parse_module(&mut ctx, input).expect("function type attribute should parse");
-    let printed = print_module(&ctx, module);
+    let printed = module.display(&ctx).to_string();
     assert!(
         printed.contains("!with_attr = func.func_sig<(core.i32) -> core.i64, {effect = core.nil}>"),
         "{printed}"
@@ -973,7 +975,7 @@ fn unregistered_func_sig_uses_generic_syntax() {
 }"#;
     let mut ctx = IrContext::new();
     let module = parse_module(&mut ctx, input).expect("generic storage should parse");
-    let printed = print_module(&ctx, module);
+    let printed = module.display(&ctx).to_string();
     assert!(printed.contains("!foreign = foreign.func_sig<core.i32, core.i64, core.i1, core.i32, {nested = core.array<core.i32>, num_inputs = 2, num_results = 2}>"), "{printed}");
     assert_roundtrip(&ctx, module);
 
@@ -993,7 +995,7 @@ fn malformed_func_sig_storage_roundtrips_as_concrete_type() {
 }"#;
     let mut ctx = IrContext::new();
     let module = parse_module(&mut ctx, input).expect("raw storage should remain parseable");
-    let printed = print_module(&ctx, module);
+    let printed = module.display(&ctx).to_string();
     assert!(
         printed
             .contains("!foreign = foreign.func_sig<core.i32, {num_inputs = 2, num_results = 1}>"),
@@ -1017,7 +1019,7 @@ func.return
 }"#;
     let mut ctx = IrContext::new();
     let module = parse_module(&mut ctx, input).expect("Unit function should parse");
-    let printed = print_module(&ctx, module);
+    let printed = module.display(&ctx).to_string();
     assert!(
         printed.contains("func.func @consume(%0: core.i32) {"),
         "{printed}"
@@ -1088,7 +1090,7 @@ fn test_programmatic_type_alias() {
         .build(&mut ctx, loc);
     let module_op = wrap_in_module(&mut ctx, loc, vec![f.op_ref()]);
 
-    let printed = print_module(&ctx, module_op);
+    let printed = module_op.display(&ctx).to_string();
     // Alias should appear in output
     assert!(
         printed.contains("!point = core.tuple<core.i32, core.i32>"),
@@ -1204,7 +1206,7 @@ mod escaped_attribute_roundtrip {
             let op = ctx.create_op(data);
             let module_op = wrap_in_module(&mut ctx, loc, vec![op]);
 
-            let printed = print_module(&ctx, module_op);
+            let printed = module_op.display(&ctx).to_string();
             let mut parsed_ctx = IrContext::new();
             let parsed = parse_module(&mut parsed_ctx, &printed).map_err(|e| {
                 TestCaseError::fail(format!("parse failed: {}\n{printed}", e.message))
@@ -1219,7 +1221,7 @@ mod escaped_attribute_roundtrip {
             );
             prop_assert_eq!(attrs.view(&parsed_ctx).get_str("text"), Some(string.as_str()));
             prop_assert_eq!(attrs.view(&parsed_ctx).get_symbol_ref("callee"), Some(&callee));
-            prop_assert_eq!(print_module(&parsed_ctx, parsed), printed);
+            prop_assert_eq!(parsed.display(&parsed_ctx).to_string(), printed);
         }
     }
 }

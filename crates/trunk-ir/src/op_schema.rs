@@ -16,7 +16,6 @@
 
 use std::fmt;
 
-use crate::printer::print_type;
 use crate::type_constraint::{ConstraintDesc, Projected};
 use crate::types::Attribute;
 use crate::{IrContext, OpRef, TypeRef, ValueRef};
@@ -759,8 +758,8 @@ impl OpSchema {
                 violations.push(SchemaViolation::ProjectionMismatch {
                     site: slot.site,
                     projection: self.projection_name(p),
-                    expected: print_type(ctx, expected),
-                    found: print_type(ctx, slot.ty),
+                    expected: expected.display(ctx).to_string(),
+                    found: slot.ty.display(ctx).to_string(),
                 });
             }
         }
@@ -823,7 +822,7 @@ impl OpSchema {
                     site: slot.site,
                     var,
                     expected: bound.name,
-                    found: print_type(ctx, slot.ty),
+                    found: slot.ty.display(ctx).to_string(),
                 });
             }
         }
@@ -850,8 +849,8 @@ impl OpSchema {
                     site: slot.site,
                     var: self.type_vars[v].name,
                     bound_by,
-                    expected: print_type(ctx, ty),
-                    found: print_type(ctx, slot.ty),
+                    expected: ty.display(ctx).to_string(),
+                    found: slot.ty.display(ctx).to_string(),
                 }),
             }
         }
@@ -1004,7 +1003,7 @@ impl OpSchema {
                     self.dialect,
                     self.name,
                     self.type_vars[p.var].name,
-                    print_type(ctx, ty),
+                    ty.display(ctx),
                     self.projection_name(p),
                 ),
             }
@@ -1042,7 +1041,7 @@ fn projected_eq(a: Projected<'_>, b: Projected<'_>) -> bool {
 
 fn print_projected(ctx: &IrContext, projected: Projected<'_>) -> String {
     match projected {
-        Projected::One(ty) => print_type(ctx, ty),
+        Projected::One(ty) => ty.display(ctx).to_string(),
         Projected::List(types) => print_type_list(ctx, types),
     }
 }
@@ -1062,7 +1061,7 @@ fn print_type_list(ctx: &IrContext, types: &[TypeRef]) -> String {
         if i > 0 {
             out.push_str(", ");
         }
-        write!(out, "{}", print_type(ctx, *ty)).expect("fmt::Write to String never fails");
+        write!(out, "{}", ty.display(ctx)).expect("fmt::Write to String never fails");
     }
     out.push(')');
     out

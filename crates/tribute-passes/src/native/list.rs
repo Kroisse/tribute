@@ -233,7 +233,6 @@ impl trunk_ir::pass::Pass for ListToNative {
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
 
     #[test]
     fn lowers_all_shared_list_ops_to_private_native_representation() {
@@ -265,7 +264,7 @@ mod tests {
 
         lower(&mut ctx, module).expect("native List lowering");
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(!output.contains("list."), "{output}");
         assert!(output.contains("adt.struct_new"), "{output}");
         assert!(output.contains("adt.ref_is_null"), "{output}");
@@ -319,7 +318,7 @@ mod tests {
 
         lower(&mut ctx, module).expect("native List lowering");
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(!output.contains("list."), "{output}");
         assert_eq!(output.matches("func.unreachable").count(), 4, "{output}");
         assert_eq!(output.matches("cf.cond_br").count(), 4, "{output}");

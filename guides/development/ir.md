@@ -368,10 +368,15 @@ from above. A hand-written format that writes names in another order, or
 writes one name for values of several regions, overrides
 `OpAsmFormat::assign_names` (or `OpAsmDirective::assign_names`), as
 `tribute_control.lambda` shares each parameter across its bodies with
-`AsmNamer::share`. `print_op` and `print_module` run the pre-pass for the
-operation they print; a test or tool that prints otherwise builds
-`AsmState::new(ctx, op)` and writes through `OpAsmPrinter::new(&state, &mut
-out)`.
+`AsmNamer::share`.
+
+The entry points are `Display` values rather than functions that return a
+`String`, as `Path::display` is: `op.display(ctx)` writes an operation, a
+module with its type aliases, and runs the pre-pass for it on each write;
+`ty.display(ctx)` writes a type in full. Write them with `write!` or
+`format!`, and call `to_string()` only where a `String` is the result. A
+tool that keeps the state across writes builds `AsmState::new(ctx, op)` and
+writes through `OpAsmPrinter::new(&state, &mut out)`.
 
 ### Parsing
 

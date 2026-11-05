@@ -836,7 +836,6 @@ mod tests {
     use crate::dialect::{func, wasm};
     use crate::location::Span;
     use crate::ops::DialectOp;
-    use crate::printer::print_module;
     use crate::rewrite::conversion_target::ConversionTarget;
 
     use crate::*;
@@ -1229,12 +1228,12 @@ mod tests {
         let bodyful = make_func_container(&mut ctx, loc, "defined", vec![nested]);
         let module = make_module(&mut ctx, loc, vec![bodyless, bodyful.op_ref()]);
 
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
         let bodyless = func::Func::from_op(&ctx, bodyless).unwrap();
         PatternApplicator::new(TypeConverter::new())
             .add_pattern(RenamePattern)
             .apply_partial(&mut ctx, bodyless);
-        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
 
         let result = PatternApplicator::new(TypeConverter::new())
             .add_pattern(RenamePattern)
@@ -1259,12 +1258,12 @@ mod tests {
         let bodyful = make_wasm_func_container(&mut ctx, loc, "defined", vec![nested]);
         let module = make_module(&mut ctx, loc, vec![bodyless, bodyful.op_ref()]);
 
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
         let bodyless = wasm::Func::from_op(&ctx, bodyless).unwrap();
         PatternApplicator::new(TypeConverter::new())
             .add_pattern(RenamePattern)
             .apply_partial(&mut ctx, bodyless);
-        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
 
         let result = PatternApplicator::new(TypeConverter::new())
             .add_pattern(RenamePattern)
@@ -1295,7 +1294,7 @@ mod tests {
             .apply_partial(&mut ctx, module);
         let schemas = crate::validation::validate_op_schemas(&ctx, module.op());
         assert!(schemas.is_ok(), "{schemas}");
-        print_module(&ctx, module.op())
+        module.op().display(&ctx).to_string()
     }
 
     #[test]
@@ -1396,7 +1395,7 @@ mod tests {
         assert!(result.reached_fixpoint);
         assert_eq!(result.total_changes, 2);
         assert_eq!(renamed.into_inner(), ["first", "third"]);
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert_eq!(printed.matches("test.target").count(), 2, "{printed}");
         assert!(
             printed.contains(r#""test.source"() {tag = "second"}"#),
@@ -1530,7 +1529,7 @@ mod tests {
 
         assert!(result.reached_fixpoint);
         assert_eq!(result.total_changes, 2);
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(printed.contains("test.dead"), "{printed}");
         assert!(!printed.contains("test.sink"), "{printed}");
     }

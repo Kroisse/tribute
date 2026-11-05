@@ -437,7 +437,6 @@ mod tests {
     use super::*;
     use std::ops::ControlFlow;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
     use trunk_ir::walk::{WalkAction, walk_op};
 
     #[test]
@@ -475,7 +474,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, &input);
         resolve_evidence_dispatch(&mut ctx, module).unwrap();
-        let resolved = print_module(&ctx, module.op());
+        let resolved = module.op().display(&ctx).to_string();
         assert_eq!(resolved.matches("effect.extend").count(), 2);
         assert_eq!(resolved.matches("func.call").count(), 0);
         assert!(!resolved.contains("__tribute_next_tag"));
@@ -494,7 +493,7 @@ mod tests {
             "all abilities in one delimiter must share one runtime prompt tag"
         );
         crate::lower_handle_dispatch::lower_handle_dispatch(&mut ctx, module).unwrap();
-        let lowered = print_module(&ctx, module.op());
+        let lowered = module.op().display(&ctx).to_string();
         assert!(!lowered.contains("ability."));
         assert!(!lowered.contains("__tribute_cps_control"));
         assert!(lowered.contains("func.unreachable"));
@@ -506,7 +505,10 @@ mod tests {
     /// The printed operations of `@test`, one per line. `%0`..`%3` are its
     /// parameters `%ev`, `%prompt`, `%tr`, `%tr2`.
     fn test_body(ctx: &IrContext, module: Module) -> Vec<String> {
-        print_module(ctx, module.op())
+        module
+            .op()
+            .display(ctx)
+            .to_string()
             .lines()
             .map(str::trim)
             .skip_while(|line| !line.starts_with("func.func @test"))
@@ -622,7 +624,7 @@ mod tests {
 
         resolve_evidence_dispatch(&mut ctx, module).unwrap();
 
-        let resolved = print_module(&ctx, module.op());
+        let resolved = module.op().display(&ctx).to_string();
         assert!(!resolved.contains("effect.fresh_prompt_tag"), "{resolved}");
         assert_eq!(
             resolved
@@ -701,11 +703,11 @@ mod tests {
             let input = final_dispatch_fixture(operation);
             let mut ctx = IrContext::new();
             let module = parse_test_module(&mut ctx, &input);
-            let before = print_module(&ctx, module.op());
+            let before = module.op().display(&ctx).to_string();
             let error = resolve_evidence_dispatch(&mut ctx, module).unwrap_err();
             assert!(error.to_string().contains(expected), "{error}");
             assert!(error.to_string().contains("textual-ir:0:0"), "{error}");
-            assert_eq!(print_module(&ctx, module.op()), before);
+            assert_eq!(module.op().display(&ctx).to_string(), before);
         }
     }
 
@@ -758,7 +760,7 @@ mod tests {
 
         resolve_evidence_dispatch(&mut ctx, module).unwrap();
 
-        let resolved = print_module(&ctx, module.op());
+        let resolved = module.op().display(&ctx).to_string();
         assert!(
             resolved.contains("func.func @plain_external() -> core.i32\n"),
             "plain external declaration changed or disappeared:\n{resolved}"
