@@ -47,7 +47,7 @@ fn insert_op_idx(
 ) -> ValueRef {
     let i32_ty = i32_type(ctx);
     let op_idx = compute_op_idx(ability, ctx.str(op_name));
-    let constant = arith::Const::operands()
+    let constant = arith::Constant::operands()
         .value(Attribute::Int(op_idx as i128))
         .results(i32_ty)
         .build(ctx, loc);

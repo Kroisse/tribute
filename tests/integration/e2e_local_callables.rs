@@ -145,18 +145,52 @@ fn main() ->{{Io}} Nil {{ print_line(run().to_string) }}
     }
 }
 
+/// A `let` shares its data type with every use, so direct calls of one
+/// local identity at `Int` and `Bool` are rejected.
+#[salsa_test]
+fn local_direct_calls_share_one_data_type(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "local_direct_calls.trb",
+        &format!(
+            "{}\n{}",
+            common::PRINT_EXTERNS,
+            r#"
+use std::io::{Io, print_line}
+fn main() ->{Io} Nil {
+    let identity = fn(x) x
+    print_line(identity(+3).to_string)
+    case identity(True) {
+        True -> print_line({ +4 }.to_string)
+        False -> print_line({ +0 }.to_string)
+    }
+}
+"#
+        ),
+    );
+    let errors: Vec<_> = frontend_diagnostics(db, source)
+        .into_iter()
+        .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
+        .map(|diagnostic| diagnostic.message.to_string())
+        .collect();
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("expected `Bool`, found `Int`")
+                || error.contains("expected `Int`, found `Bool`")),
+        "{errors:?}"
+    );
+}
+
 #[test]
-fn existing_generalized_local_direct_calls() {
+fn local_direct_calls_at_one_data_type_run() {
     assert_native(
         r#"
 use std::io::{Io, print_line}
 fn main() ->{Io} Nil {
     let identity = fn(x) x
     print_line(identity(+3).to_string)
-    case identity(True) {
-        True -> print_line({{ +4 }}.to_string)
-        False -> print_line({{ +0 }}.to_string)
-    }
+    print_line(identity(+4).to_string)
 }
 "#,
         b"3\n4\n",
@@ -535,5 +569,140 @@ fn main() ->{Io} Nil {
 }
 "#,
         "3\n5",
+    );
+}
+
+/// A `let` shares its data-type variables with every use: a local callable
+/// whose parameter carries no annotation takes the type its uses select.
+#[test]
+fn unannotated_local_builds_the_instance_of_its_uses() {
+    common::assert_output_on_both_targets(
+        "local_nominal.trb",
+        &format!(
+            "{}\n{}",
+            common::PRINT_EXTERNS,
+            r#"
+use std::io::{Io, print_line}
+enum Boxed(a) { Box(a), EmptyBox }
+fn main() ->{Io} Nil {
+    let mk = fn(x) { Boxed::Box(x) }
+    let first = case mk(+41) {
+        .Box(n) -> n
+        .EmptyBox -> +0
+    }
+    let second = case mk(+1) {
+        .Box(n) -> n
+        .EmptyBox -> +0
+    }
+    print_line(first.to_string)
+    print_line(second.to_string)
+}
+"#
+        ),
+        "41\n1",
+    );
+}
+
+/// An ability data argument of a `let`-bound callable is shared, so the
+/// use's row fixes it.
+#[test]
+fn local_reader_takes_the_state_of_its_use() {
+    common::assert_output_on_both_targets(
+        "local_reader.trb",
+        &format!(
+            "{}\n{}",
+            common::PRINT_EXTERNS,
+            r#"
+use std::io::{Io, print_line}
+ability State(s) { op get() -> s }
+fn run() ->{State(Int)} Int {
+    let read = fn() { State::get() }
+    read() + read() + +1
+}
+fn main() ->{Io} Nil {
+    let value = handle run() {
+        do result { result }
+        op State::get() { resume +20 }
+    }
+    print_line(value.to_string)
+}
+"#
+        ),
+        "41",
+    );
+}
+
+/// A local callable keeps using the enclosing function's type parameter at
+/// each specialization of that function.
+#[test]
+fn local_using_an_enclosing_parameter_follows_its_specialization() {
+    common::assert_output_on_both_targets(
+        "local_enclosing.trb",
+        &format!(
+            "{}\n{}",
+            common::PRINT_EXTERNS,
+            r#"
+use std::io::{Io, print_line}
+fn twice(x: a, f: fn(a) ->{} a) -> a {
+    let step = fn(v) { f(v) }
+    step(step(x))
+}
+fn main() ->{Io} Nil {
+    print_line(twice(+3, fn(n: Int) { n + +1 }).to_string)
+    print_line(twice("a", fn(s: String) { s <> "b" }))
+}
+"#
+        ),
+        "5\nabb",
+    );
+}
+
+/// Row variables of a pure `let` are still quantified: one local callable
+/// runs callbacks with different rows.
+#[test]
+fn row_polymorphic_local_runs_callbacks_of_different_rows() {
+    common::assert_output_on_both_targets(
+        "local_rows.trb",
+        &format!(
+            "{}\n{}",
+            common::PRINT_EXTERNS,
+            r#"
+use std::io::{Io, print_line}
+fn main() ->{Io} Nil {
+    let run = fn(f) { f() }
+    let pure = run(fn() { +1 })
+    let printed = run(fn() {
+        print_line("effect")
+        +2
+    })
+    print_line({ pure + printed }.to_string)
+}
+"#
+        ),
+        "effect\n3",
+    );
+}
+
+/// A local whose uses fix none of its data types lowers on both targets:
+/// the variables nothing fixes stay owned by the function body.
+#[test]
+fn unused_generic_locals_lower() {
+    common::assert_output_on_both_targets(
+        "unused_locals.trb",
+        &format!(
+            "{}\n{}",
+            common::PRINT_EXTERNS,
+            r#"
+use std::io::{Io, print_line}
+enum Boxed(a) { Box(a), EmptyBox }
+fn main() ->{Io} Nil {
+    let mk = fn(x) { Boxed::Box(x) }
+    let id = fn(x) x
+    let empty = Boxed::EmptyBox
+    print_line("ok")
+}
+"#
+        ),
+        "ok",
     );
 }

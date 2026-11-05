@@ -115,7 +115,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @run() -> core.i32 {
-    %value = arith.const {value = 42} : core.i32
+    %value = arith.constant 42 : core.i32
     func.return %value
   }
 }"#,
@@ -132,14 +132,14 @@ mod tests {
             r#"core.module @test {
   func.func @selected() -> core.never {
     %ev = mem.null : core.ptr
-    %prompt = arith.const {value = 1} : core.i32
+    %prompt = arith.constant 1 : core.i32
     ability.handle_dispatch %ev, %prompt [] {
       func.tail_call @finish() : () -> ()
     }
   }
   func.func @untouched() -> core.never {
     %ev = mem.null : core.ptr
-    %prompt = arith.const {value = 2} : core.i32
+    %prompt = arith.constant 2 : core.i32
     ability.handle_dispatch %ev, %prompt [] {
       func.tail_call @finish() : () -> ()
     }

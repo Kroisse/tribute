@@ -2700,11 +2700,9 @@ impl<'db> TypeChecker<'db> {
             &mut bindings,
         );
 
-        // Every name of this `let` shares one set of local quantifiers owned
-        // by the root pattern: the right-hand side is checked once, so a
-        // variable shared by several names (`let f as g = ...`) must have a
-        // single owner.
-        let mut let_quantifiers = HashMap::default();
+        // A `let` quantifies only ability-row variables. Its data-type
+        // variables stay solver variables that every name and every use of
+        // the binding shares (`let f as g = ...`, `State(s)`).
         let mut let_schemes = Vec::new();
         for PatternBinding {
             name,
@@ -2714,53 +2712,32 @@ impl<'db> TypeChecker<'db> {
         } in bindings
         {
             let scheme = if should_generalize {
-                let (_, mut type_params, mut mapping) = type_subst
-                    .generalize_excluding_with_mapping(
-                        self.db(),
-                        ty,
-                        &row_subst,
-                        &environment_type_vars,
-                    );
                 let retained = solver.row_unions_for_type(ty);
                 let removals = solver.row_removals_for_type(ty);
-                let (mut union_types, mut union_rows) = solver.row_union_variables(&retained);
-                let (removed_types, removed_rows) = solver.row_removal_variables(&removals);
-                union_types.extend(removed_types);
-                union_rows.extend(removed_rows);
-                for var in union_types {
-                    if !environment_type_vars.contains(&var) && !mapping.contains_key(&var) {
-                        mapping.insert(var, type_params.len() as u32);
-                        type_params.push(crate::ast::TypeParam::anonymous());
-                    }
-                }
-                let generalized =
-                    type_subst.apply_generalization(self.db(), ty, &row_subst, &mapping);
-                let unions = retained
-                    .iter()
-                    .map(|union| solver.generalize_row_union(union, &mapping))
-                    .collect();
-                let mut by_index: Vec<_> =
-                    mapping.iter().map(|(var, index)| (*index, *var)).collect();
-                by_index.sort_unstable_by_key(|(index, _)| *index);
-                for (_, var) in by_index {
-                    let next = let_quantifiers.len() as u32;
-                    let_quantifiers.entry(var).or_insert(next);
-                }
+                let (_, union_rows) = solver.row_union_variables(&retained);
+                let (_, removed_rows) = solver.row_removal_variables(&removals);
+                let no_types = HashMap::default();
                 let mut effect_params = Vec::new();
-                for var in collect_row_vars(self.db(), generalized)
+                for var in collect_row_vars(self.db(), ty)
                     .into_iter()
                     .chain(union_rows)
+                    .chain(removed_rows)
                 {
                     if !environment_row_vars.contains(&var) && !effect_params.contains(&var) {
                         effect_params.push(var);
                     }
                 }
-                TypeScheme::builder(type_params, effect_params, generalized)
-                    .row_unions(unions)
+                TypeScheme::builder(Vec::new(), effect_params, ty)
+                    .row_unions(
+                        retained
+                            .iter()
+                            .map(|union| solver.generalize_row_union(union, &no_types))
+                            .collect(),
+                    )
                     .row_removals(
                         removals
                             .iter()
-                            .map(|r| solver.generalize_row_removal(r, &mapping))
+                            .map(|r| solver.generalize_row_removal(r, &no_types))
                             .collect(),
                     )
                     .build(self.db())
@@ -2780,9 +2757,6 @@ impl<'db> TypeChecker<'db> {
             });
         }
         ctx.record_let_schemes(pattern.id, let_schemes);
-        if !let_quantifiers.is_empty() {
-            ctx.record_local_generalization(pattern.id, let_quantifiers);
-        }
     }
 
     fn collect_pattern_bindings_with_ctx(

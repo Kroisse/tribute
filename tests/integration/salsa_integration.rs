@@ -63,7 +63,7 @@ fn returned_constant(ctx: &IrContext, module: &Module, name: &str) -> i128 {
     let ValueDef::OpResult(op, _) = ctx.value_def(returned.value(ctx)) else {
         panic!("expected returned constant");
     };
-    let constant = arith::Const::from_op(ctx, op).expect("returned value must be constant");
+    let constant = arith::Constant::from_op(ctx, op).expect("returned value must be constant");
     let Attribute::Int(value) = constant.value(ctx) else {
         panic!("expected integer");
     };

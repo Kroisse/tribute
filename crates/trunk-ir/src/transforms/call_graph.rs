@@ -617,11 +617,11 @@ mod tests {
 
     const INLINE_FIXTURE: &str = r#"core.module @test {
   func.func @leaf() -> core.i32 {
-    %0 = arith.const {value = 0} : core.i32
+    %0 = arith.constant 0 : core.i32
     func.return %0
   }
   func.func @other() -> core.i32 {
-    %0 = arith.const {value = 1} : core.i32
+    %0 = arith.constant 1 : core.i32
     func.return %0
   }
   func.func @helper() -> core.i32 {
@@ -714,7 +714,7 @@ mod tests {
 
         let input = r#"core.module @test {
   func.func @leaf() -> core.i32 {
-    %0 = arith.const {value = 0} : core.i32
+    %0 = arith.constant 0 : core.i32
     func.return %0
   }
   func.func @main() -> core.i32 {

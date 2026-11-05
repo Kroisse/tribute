@@ -2,7 +2,8 @@
 
 use crate::attr_kind::Bytes;
 use crate::attr_kind::SymbolRef;
-use crate::dialect::core::{I32, IntegerLike};
+use crate::dialect::arith;
+use crate::dialect::core::{I8, I32, IntegerLike};
 use crate::op_flag::IsolatedFromAbove;
 use crate::op_interface::{CallLike, IndirectCallLike};
 use crate::ops::{DialectOp, DialectType};
@@ -10,6 +11,67 @@ use crate::types::{Attribute, AttributeMap, TypeDataBuilder};
 use crate::{IrContext, SymbolPath};
 use itertools::Itertools;
 use rustc_hash::FxHashSet as HashSet;
+
+crate::attr_kind::keyword_kind! {
+    /// The condition of `clif.icmp`, Cranelift's `IntCC`.
+    pub enum IntCond {
+        Eq = "eq",
+        Ne = "ne",
+        Slt = "slt",
+        Sle = "sle",
+        Sgt = "sgt",
+        Sge = "sge",
+        Ult = "ult",
+        Ule = "ule",
+        Ugt = "ugt",
+        Uge = "uge",
+    }
+}
+
+crate::attr_kind::keyword_kind! {
+    /// The condition of `clif.fcmp`, the ordered comparisons and unordered
+    /// inequality of Cranelift's `FloatCC`.
+    pub enum FloatCond {
+        Eq = "eq",
+        Ne = "ne",
+        Lt = "lt",
+        Le = "le",
+        Gt = "gt",
+        Ge = "ge",
+    }
+}
+
+impl From<arith::CmpiPredicate> for IntCond {
+    fn from(predicate: arith::CmpiPredicate) -> Self {
+        use arith::CmpiPredicate as P;
+        match predicate {
+            P::Eq => Self::Eq,
+            P::Ne => Self::Ne,
+            P::Slt => Self::Slt,
+            P::Sle => Self::Sle,
+            P::Sgt => Self::Sgt,
+            P::Sge => Self::Sge,
+            P::Ult => Self::Ult,
+            P::Ule => Self::Ule,
+            P::Ugt => Self::Ugt,
+            P::Uge => Self::Uge,
+        }
+    }
+}
+
+impl From<arith::CmpfPredicate> for FloatCond {
+    fn from(predicate: arith::CmpfPredicate) -> Self {
+        use arith::CmpfPredicate as P;
+        match predicate {
+            P::Oeq => Self::Eq,
+            P::Une => Self::Ne,
+            P::Olt => Self::Lt,
+            P::Ole => Self::Le,
+            P::Ogt => Self::Gt,
+            P::Oge => Self::Ge,
+        }
+    }
+}
 
 #[trunk_ir::dialect]
 mod clif {
@@ -64,13 +126,13 @@ mod clif {
     fn r#return(values: Variadic<_>) {}
 
     // Constants
-    #[asm_format(attr_dict_bare ":" type(result))]
+    #[asm_format(attr_dict_bare value ":" type(result))]
     fn iconst(value: Attr<i64>) -> Value<_> {}
 
-    #[asm_format(attr_dict_bare ":" type(result))]
+    #[asm_format(attr_dict_bare value ":" type(result))]
     fn f32const(value: Attr<f32>) -> Value<_> {}
 
-    #[asm_format(attr_dict_bare ":" type(result))]
+    #[asm_format(attr_dict_bare value ":" type(result))]
     fn f64const(value: Attr<f64>) -> Value<_> {}
 
     // Integer arithmetic
@@ -104,11 +166,14 @@ mod clif {
     fn fneg(operand: Value<_>) -> Value<_> {}
 
     // Comparisons
-    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
-    fn icmp(cond: Attr<String>, lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    /// Compare two integers, yielding `1` or `0` as Cranelift's `icmp`
+    /// does.
+    #[asm_format(cond "," lhs "," rhs attr_dict_bare ":" type(lhs))]
+    fn icmp(cond: Attr<IntCond>, lhs: Value<_>, rhs: Value<_>) -> Value<I8> {}
 
-    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
-    fn fcmp(cond: Attr<String>, lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    /// Compare two floats, yielding `1` or `0` as Cranelift's `fcmp` does.
+    #[asm_format(cond "," lhs "," rhs attr_dict_bare ":" type(lhs))]
+    fn fcmp(cond: Attr<FloatCond>, lhs: Value<_>, rhs: Value<_>) -> Value<I8> {}
 
     // Bitwise
     #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
@@ -226,23 +291,23 @@ mod clif {
     fn symbol_addr(sym: Attr<SymbolRef>) -> Value<_> {}
 
     // Type conversions
-    #[asm_format(operand attr_dict_bare ":" type(result))]
+    #[asm_format(operand attr_dict_bare ":" type(operand) "to" type(result))]
     fn ireduce(operand: Value<_>) -> Value<_> {}
-    #[asm_format(operand attr_dict_bare ":" type(result))]
+    #[asm_format(operand attr_dict_bare ":" type(operand) "to" type(result))]
     fn uextend(operand: Value<_>) -> Value<_> {}
-    #[asm_format(operand attr_dict_bare ":" type(result))]
+    #[asm_format(operand attr_dict_bare ":" type(operand) "to" type(result))]
     fn sextend(operand: Value<_>) -> Value<_> {}
-    #[asm_format(operand attr_dict_bare ":" type(result))]
+    #[asm_format(operand attr_dict_bare ":" type(operand) "to" type(result))]
     fn fpromote(operand: Value<_>) -> Value<_> {}
-    #[asm_format(operand attr_dict_bare ":" type(result))]
+    #[asm_format(operand attr_dict_bare ":" type(operand) "to" type(result))]
     fn fdemote(operand: Value<_>) -> Value<_> {}
-    #[asm_format(operand attr_dict_bare ":" type(result))]
+    #[asm_format(operand attr_dict_bare ":" type(operand) "to" type(result))]
     fn fcvt_to_sint(operand: Value<_>) -> Value<_> {}
-    #[asm_format(operand attr_dict_bare ":" type(result))]
+    #[asm_format(operand attr_dict_bare ":" type(operand) "to" type(result))]
     fn fcvt_from_sint(operand: Value<_>) -> Value<_> {}
-    #[asm_format(operand attr_dict_bare ":" type(result))]
+    #[asm_format(operand attr_dict_bare ":" type(operand) "to" type(result))]
     fn fcvt_to_uint(operand: Value<_>) -> Value<_> {}
-    #[asm_format(operand attr_dict_bare ":" type(result))]
+    #[asm_format(operand attr_dict_bare ":" type(operand) "to" type(result))]
     fn fcvt_from_uint(operand: Value<_>) -> Value<_> {}
 }
 
@@ -857,7 +922,7 @@ mod tests {
         let source = r#"core.module @test {
   clif.func @external(%arg0: core.i32) -> core.i32 attributes {abi = "C"}
   clif.func @pair(%0: core.i32) -> (core.i32, core.i64), {call_conv = "tail"} {
-      %1 = clif.iconst {value = 1} : core.i64
+      %1 = clif.iconst 1 : core.i64
       clif.return %0, %1
   }
 }

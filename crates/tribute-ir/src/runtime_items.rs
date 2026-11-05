@@ -209,7 +209,7 @@ mod tests {
   }
   func.func @"rt::declared"(%value: core.i32) -> core.i32
   func.func @main() -> core.i32 {
-    %zero = arith.const {value = 0} : core.i32
+    %zero = arith.constant 0 : core.i32
     func.return %zero
   }
 }"#;

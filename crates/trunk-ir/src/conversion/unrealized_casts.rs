@@ -268,7 +268,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %r = core.unrealized_conversion_cast %x : core.i64
+    %r = core.unrealized_conversion_cast %x : core.i32 to core.i64
     func.return %r
   }
 }"#,
@@ -282,7 +282,7 @@ mod tests {
             module,
             r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %r = core.unrealized_conversion_cast %x : core.i32
+    %r = core.unrealized_conversion_cast %x : core.i32 to core.i32
     func.return %r
   }
 }"#,
@@ -298,7 +298,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f(%x: core.i32) -> core.f64 {
-    %r = core.unrealized_conversion_cast %x : core.f64
+    %r = core.unrealized_conversion_cast %x : core.i32 to core.f64
     func.return %r
   }
 }"#,
@@ -319,8 +319,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f(%x: core.i32, %y: core.f32) -> core.i16 {
-    %noop = core.unrealized_conversion_cast %x : core.i16
-    %none = core.unrealized_conversion_cast %y : core.i64
+    %noop = core.unrealized_conversion_cast %x : core.i32 to core.i16
+    %none = core.unrealized_conversion_cast %y : core.f32 to core.i64
     func.return %noop
   }
 }"#,
@@ -343,8 +343,8 @@ mod tests {
             module,
             r#"core.module @test {
   func.func @f(%x: core.i32, %y: core.f32) -> core.i16 {
-    %noop = core.unrealized_conversion_cast %x : core.i16
-    %none = core.unrealized_conversion_cast %y : core.i32
+    %noop = core.unrealized_conversion_cast %x : core.i32 to core.i16
+    %none = core.unrealized_conversion_cast %y : core.f32 to core.i32
     func.return %noop
   }
 }"#,
@@ -358,7 +358,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %r = core.unrealized_conversion_cast %x : core.i32
+    %r = core.unrealized_conversion_cast %x : core.i32 to core.i32
     func.return %r
   }
 }"#,
@@ -384,8 +384,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f(%x: core.i64) -> core.i64 {
-    %a = core.unrealized_conversion_cast %x : core.i32
-    %b = core.unrealized_conversion_cast %a : core.i64
+    %a = core.unrealized_conversion_cast %x : core.i64 to core.i32
+    %b = core.unrealized_conversion_cast %a : core.i32 to core.i64
     func.return %b
   }
 }"#,
@@ -411,9 +411,9 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f(%x: core.i64) -> core.i64 {
-    %a = core.unrealized_conversion_cast %x : core.i32
-    %b = core.unrealized_conversion_cast %a : core.i16
-    %c = core.unrealized_conversion_cast %b : core.i64
+    %a = core.unrealized_conversion_cast %x : core.i64 to core.i32
+    %b = core.unrealized_conversion_cast %a : core.i32 to core.i16
+    %c = core.unrealized_conversion_cast %b : core.i16 to core.i64
     func.return %c
   }
 }"#,
@@ -431,8 +431,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f(%x: core.i64) -> core.i64 {
-    %a = core.unrealized_conversion_cast %x : core.i32
-    %b = core.unrealized_conversion_cast %a : core.i16
+    %a = core.unrealized_conversion_cast %x : core.i64 to core.i32
+    %b = core.unrealized_conversion_cast %a : core.i32 to core.i16
     func.return %x
   }
 }"#,
@@ -450,9 +450,9 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f(%x: core.i64) -> core.i32 {
-    %a = core.unrealized_conversion_cast %x : core.i32
-    %b = core.unrealized_conversion_cast %a : core.i64
-    %c = core.unrealized_conversion_cast %b : core.i32
+    %a = core.unrealized_conversion_cast %x : core.i64 to core.i32
+    %b = core.unrealized_conversion_cast %a : core.i32 to core.i64
+    %c = core.unrealized_conversion_cast %b : core.i64 to core.i32
     func.return %a
   }
 }"#,
@@ -466,7 +466,7 @@ mod tests {
             module,
             r#"core.module @test {
   func.func @f(%x: core.i64) -> core.i32 {
-    %a = core.unrealized_conversion_cast %x : core.i32
+    %a = core.unrealized_conversion_cast %x : core.i64 to core.i32
     func.return %a
   }
 }"#,
@@ -480,8 +480,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i64 {
-    %a = core.unrealized_conversion_cast %x : core.i16
-    %b = core.unrealized_conversion_cast %a : core.i64
+    %a = core.unrealized_conversion_cast %x : core.i32 to core.i16
+    %b = core.unrealized_conversion_cast %a : core.i16 to core.i64
     func.return %b
   }
 }"#,

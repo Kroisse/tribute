@@ -23,11 +23,11 @@ fn program(body: &str) -> String {
   clif.func @__asan_init() -> core.nil attributes {{abi = "C"}}
   clif.func @main() -> core.i32 {{
       %init = clif.call @__asan_init() : () -> core.nil
-      %size = clif.iconst {{value = 16}} : core.i64
+      %size = clif.iconst 16 : core.i64
       %object = clif.call @__tribute_alloc(%size) : (core.i64) -> core.ptr
-      %value = clif.iconst {{value = 7}} : core.i64
+      %value = clif.iconst 7 : core.i64
 {body}
-      %code = clif.iconst {{value = 0}} : core.i32
+      %code = clif.iconst 0 : core.i32
       clif.return %code
   }}
 }}"#
@@ -110,7 +110,7 @@ fn access_after_free_reports_at_the_access() {
     assert_reports(
         &format!(
             r#"{FREE}
-      %one = clif.iconst {{value = 1}} : core.i32
+      %one = clif.iconst 1 : core.i32
       %old = clif.atomic_rmw %object, %one {{bin_op = "add", offset = 0}} : core.i32"#
         ),
         "WRITE of size 4",
@@ -126,11 +126,11 @@ fn run_to_exit_check(body: &str) -> Output {
   clif.func @__asan_exit() -> core.nil attributes {{abi = "C"}}
   clif.func @main() -> core.i32 {{
       %init = clif.call @__asan_init() : () -> core.nil
-      %size = clif.iconst {{value = 16}} : core.i64
+      %size = clif.iconst 16 : core.i64
       %object = clif.call @__tribute_alloc(%size) : (core.i64) -> core.ptr
 {body}
       %exit = clif.call @__asan_exit() : () -> core.nil
-      %code = clif.iconst {{value = 0}} : core.i32
+      %code = clif.iconst 0 : core.i32
       clif.return %code
   }}
 }}"#

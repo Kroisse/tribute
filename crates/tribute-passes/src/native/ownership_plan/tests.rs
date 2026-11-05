@@ -431,7 +431,7 @@ fn nested_continuation_frame_closure_releases_use_exact_header_inclusive_sizes()
   !Base = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
   !_closure = adt.struct<_closure_captures(entries: tribute_rt.convention_table_ref, _0: !FrameRef), {closure_base = !Base, layout = "closure_captures"}>
   func.func @capture(%frame: !FrameRef) -> core.nil {
-    %code = arith.const {value = 0} : core.i32
+    %code = arith.constant 0 : core.i32
     %closure = adt.struct_new %code, %frame {type = !_closure} : !_closure
     func.return
   }
@@ -461,7 +461,7 @@ fn native_evidence_hands_the_dispatcher_to_the_runtime_as_a_managed_value() {
     func.return %ev
   }
   func.func @install(%evidence: !Evidence, %prompt: core.i32) -> !Evidence {
-    %code = arith.const {value = 0} : core.i32
+    %code = arith.constant 0 : core.i32
     %closure = adt.struct_new %code {type = !_closure} : !_closure
     %extended = effect.extend @State %evidence, %prompt, %closure, %evidence : !Evidence
     func.return %extended
@@ -498,10 +498,10 @@ fn internal_closure_raw_pointer_handoff_outside_native_evidence_fails_closed() {
     func.unreachable
   }
   func.func @install() -> core.nil {
-    %code = arith.const {value = 0} : core.i32
+    %code = arith.constant 0 : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
     %closure = adt.struct_new %code {type = !_closure} : !_closure
-    %raw = core.unrealized_conversion_cast %closure : core.ptr
+    %raw = core.unrealized_conversion_cast %closure : !_closure to core.ptr
     %result = func.call @escape(%raw) : (core.ptr) -> core.nil
     func.return
   }
@@ -516,7 +516,7 @@ fn into_raw_transfers_one_exact_closure_unit_without_materializing_rc() {
         r#"core.module @test {
   !_closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @install() -> core.nil {
-    %code = arith.const {value = 0} : core.i32
+    %code = arith.constant 0 : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
     %closure = adt.struct_new %code {type = !_closure} : !_closure
     %raw = tribute_rt.into_raw %closure : core.ptr
@@ -551,7 +551,7 @@ fn into_raw_fixture(transfers: &str) -> String {
         r#"core.module @test {
   !_closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @transfers() -> core.nil {
-    %code = arith.const {value = 0} : core.i32
+    %code = arith.constant 0 : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
     %closure = adt.struct_new %code {type = !_closure} : !_closure
 "#,
@@ -670,7 +670,7 @@ fn into_raw_group_validation_ignores_preserved_field_borrow_acquire() {
   !_closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
   !Owner = adt.struct<Owner(closure: !_closure)>
   func.func @transfers() -> core.nil {
-    %code = arith.const {value = 0} : core.i32
+    %code = arith.constant 0 : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
     %stored = adt.struct_new %code {type = !_closure} : !_closure
     %owner = adt.struct_new %stored {type = !Owner} : !Owner
@@ -717,7 +717,7 @@ fn into_raw_rejects_non_transfer_and_cross_block_uses_before_mutation() {
         r#"core.module @test {
   !_closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @later_use() -> !_closure {
-    %code = arith.const {value = 0} : core.i32
+    %code = arith.constant 0 : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
     %closure = adt.struct_new %code {type = !_closure} : !_closure
     %raw = tribute_rt.into_raw %closure : core.ptr
@@ -731,7 +731,7 @@ fn into_raw_rejects_non_transfer_and_cross_block_uses_before_mutation() {
   !_closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @cross_block() -> core.nil {
     ^entry:
-      %code = arith.const {value = 0} : core.i32
+      %code = arith.constant 0 : core.i32
       %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
       %closure = adt.struct_new %code {type = !_closure} : !_closure
       %first = tribute_rt.into_raw %closure : core.ptr
@@ -1892,7 +1892,7 @@ fn physical_empty_results_reject_values_before_mutation() {
         let ir = format!(
             r#"core.module @test {{
   func.func @f() -> {result} {{
-    %value = arith.const {{value = 1}} : core.i32
+    %value = arith.constant 1 : core.i32
     func.return %value
   }}
 }}"#
@@ -2488,7 +2488,7 @@ fn only_explicit_transfers_cross_between_raw_pointers_and_managed_references() {
     assert_plan_error_unchanged(
         r#"core.module @test {
   func.func @receive(%raw: core.ptr) -> core.bytes {
-    %bytes = core.unrealized_conversion_cast %raw : core.bytes
+    %bytes = core.unrealized_conversion_cast %raw : core.ptr to core.bytes
     func.return %bytes
   }
 }"#,
@@ -2497,7 +2497,7 @@ fn only_explicit_transfers_cross_between_raw_pointers_and_managed_references() {
     assert_plan_error_unchanged(
         r#"core.module @test {
   func.func @view(%bytes: core.bytes) -> core.ptr {
-    %raw = core.unrealized_conversion_cast %bytes : core.ptr
+    %raw = core.unrealized_conversion_cast %bytes : core.bytes to core.ptr
     func.return %raw
   }
 }"#,
@@ -3272,7 +3272,7 @@ const ARRAYS: &str = r#"core.module @test {
     func.return %pair
   }
   func.func @first(%nodes: !Nodes) -> core.i32 {
-    %at = arith.const {value = 0} : core.index
+    %at = arith.constant 0 : core.index
     %node = adt.array_get %nodes, %at : !NodeRef
     %value = adt.struct_get %node {field = 0, type = !Node} : core.i32
     func.return %value
@@ -3351,7 +3351,7 @@ fn a_written_array_type_is_replaceable() {
   !NodeRef = adt.typeref<{name = "Node"}>
   !Nodes = adt.array<!NodeRef>
   func.func @first(%nodes: !Nodes) -> core.i32 {
-    %at = arith.const {value = 0} : core.index
+    %at = arith.constant 0 : core.index
     %node = adt.array_get %nodes, %at : !NodeRef
     %value = adt.struct_get %node {field = 0, type = !Node} : core.i32
     func.return %value

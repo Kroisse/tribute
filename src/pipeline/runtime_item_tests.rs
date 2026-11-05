@@ -73,7 +73,7 @@ fn call_probe_from_main(ctx: &mut IrContext, m: Module) -> OpRef {
     let first = ctx.block(entry).ops[0];
     let location = ctx.op(first).location;
     let input = probe.signature(ctx).inputs(ctx)[0];
-    let argument = trunk_ir::dialect::arith::Const::operands()
+    let argument = trunk_ir::dialect::arith::Constant::operands()
         .value(Attribute::Int(7))
         .results(input)
         .build(ctx, location);

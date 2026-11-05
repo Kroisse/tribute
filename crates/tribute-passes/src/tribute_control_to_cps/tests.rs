@@ -539,10 +539,10 @@ fn source_signature_metadata_roundtrips_before_conversion() {
   !lambda = tribute_control.func_sig<() -> core.i32, {metadata = [[!inner, @lambda]]}>
   "tribute_cps.func"() ({
     %lambda = "tribute_cps.lambda"() ({
-      %inner = arith.const {value = 1} : core.i32
+      %inner = arith.constant 1 : core.i32
       tribute_control.return %inner
     }) {conventions = ["direct"]} : !lambda
-    %result = arith.const {value = 2} : core.i32
+    %result = arith.constant 2 : core.i32
     tribute_control.return %result
   }) {convention = "direct", sym_name = "outer", type = !outer}
 }"#;
@@ -746,7 +746,7 @@ fn source_successors_fail_before_conversion_and_leave_ir_unchanged() {
 fn source_shape_validation_rejects_every_malformed_switch_component() {
     let malformed = [(
         r#"core.module @test {
-  %value = arith.const {value = 0} : core.i32
+  %value = arith.constant 0 : core.i32
   scf.index_switch %value : (core.i32) -> ()
   default {
     ^first:
@@ -1233,7 +1233,7 @@ fn multiple_arms_for_one_ability_emit_one_dispatcher() {
         %resumed = tribute_control.resume %token, %argument : core.i32
         tribute_control.yield %resumed
     } op @State @set(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
-        %fallback = arith.const {value = 9} : core.i32
+        %fallback = arith.constant 9 : core.i32
         tribute_control.yield %fallback
     }
     tribute_control.return %handled
@@ -1294,7 +1294,7 @@ fn multiple_arms_for_one_ability_emit_one_dispatcher() {
         assert_eq!(abilities.len(), 1);
     }
     let printed = print_module(&ctx, module.op());
-    assert!(printed.contains("value = 9"));
+    assert!(printed.contains("arith.constant 9 :"));
     assert!(printed.contains("func.tail_call_indirect"));
     assert!(
         printed.contains("@__tribute_make_dispatch_adapter_"),
@@ -1329,15 +1329,15 @@ fn multiple_arms_for_one_ability_emit_one_dispatcher() {
 fn textual_scf_branch_captures_only_the_selected_suffix() {
     let input = r#"core.module @test {
   tribute_cps.func @branch(%input: core.i32) -> core.i32 convention(cps) {
-    %condition = arith.const {value = true} : core.i1
+    %condition = arith.constant true : core.i1
     %selected = scf.if %condition -> (core.i32) {
       %performed = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
       scf.yield %performed
     } else {
-      %fallback = arith.const {value = 7} : core.i32
+      %fallback = arith.constant 7 : core.i32
       scf.yield %fallback
     }
-    %one = arith.const {value = 1} : core.i32
+    %one = arith.constant 1 : core.i32
     %sum = arith.addi %selected, %one : core.i32
     tribute_control.return %sum
   }
@@ -1881,8 +1881,8 @@ fn raw_pointer_managed_masquerade_is_rejected_before_mutation() {
   !S = adt.struct<S()>
   !R = adt.typeref<{name = "S"}>
   tribute_cps.func @broken(%raw: core.ptr) -> !R convention(direct) {
-    %middle = core.unrealized_conversion_cast %raw : core.i64
-    %managed = core.unrealized_conversion_cast %middle : !R
+    %middle = core.unrealized_conversion_cast %raw : core.ptr to core.i64
+    %managed = core.unrealized_conversion_cast %middle : core.i64 to !R
     tribute_control.return %managed
   }
 }"#;
@@ -2030,12 +2030,12 @@ fn op_to_never_uses_a_typed_zero_capture_reject_continuation() {
   tribute_cps.func @abortable(%input: core.i32) -> core.i32 convention(cps) {
     %handled = tribute_control.handle : core.i32 {
       %never = tribute_control.perform op @Abort @abort(%input) : (core.i32) -> core.never
-      %unreachable_suffix = arith.const {value = 99} : core.i32
+      %unreachable_suffix = arith.constant 99 : core.i32
       tribute_control.yield %unreachable_suffix
     } do(%value: core.i32) {
         tribute_control.yield %value
     } op @Abort @abort(%argument: core.i32) : core.never {
-        %fallback = arith.const {value = 7} : core.i32
+        %fallback = arith.constant 7 : core.i32
         tribute_control.yield %fallback
     }
     tribute_control.return %handled
@@ -2137,7 +2137,7 @@ fn op_to_never_uses_a_typed_zero_capture_reject_continuation() {
         Some(i32_type)
     );
     assert!(printed.contains("func.unreachable"));
-    assert!(!printed.contains("value = 99"));
+    assert!(!printed.contains("arith.constant 99 :"));
     assert!(!printed.contains("tribute.ownership"));
     assert!(!printed.contains("adt.struct_set"));
     assert!(!printed.contains("adt.ref_null"));
@@ -2216,7 +2216,7 @@ fn fn_operation_stays_evidence_direct_without_continuation_capture() {
 fn textual_scf_switch_reenters_the_shared_suffix() {
     let input = r#"core.module @test {
   tribute_cps.func @switching(%input: core.i32) -> core.i32 convention(cps) {
-    %choice = arith.const {value = 0} : core.i32
+    %choice = arith.constant 0 : core.i32
     scf.index_switch %choice : (core.i32) -> ()
     case 0 {
       %performed = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32

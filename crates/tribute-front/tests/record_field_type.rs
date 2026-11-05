@@ -669,14 +669,30 @@ fn tagged() -> Tagged(Int) { Tagged { value: 1 } }
     assert_named_args(db, *result, tagged_id, "Tagged", &expected);
 }
 
+/// A pure `let` of a phantom record shares its type argument with every use:
+/// uses at `Tag(Int)` and `Tag(Bool)` are rejected, repeated uses at
+/// `Tag(Int)` take that instance.
 #[salsa_test]
-fn pure_let_phantom_record_remains_polymorphic(db: &salsa::DatabaseImpl) {
-    let source = SourceCst::from_source_str(
+fn pure_let_phantom_record_is_monomorphic(db: &salsa::DatabaseImpl) {
+    let rejected = SourceCst::from_source_str(
         db,
         "pure_let_phantom_record.trb",
         r#"
 struct Tag(a) {}
 fn tags() -> #(Tag(Int), Tag(Bool)) {
+    let tag = Tag {}
+    #(tag, tag)
+}
+"#,
+    );
+    assert!(!ast_pipeline_diagnostics(db, rejected).is_empty());
+
+    let source = SourceCst::from_source_str(
+        db,
+        "pure_let_phantom_record.trb",
+        r#"
+struct Tag(a) {}
+fn tags() -> #(Tag(Int), Tag(Int)) {
     let tag = Tag {}
     #(tag, tag)
 }
@@ -691,20 +707,15 @@ fn tags() -> #(Tag(Int), Tag(Bool)) {
         panic!("tags must end in a tuple");
     };
     assert_eq!(uses.len(), 2);
-    assert_named_args(
-        db,
-        node_type(checked.expression_types(db), &uses[0]),
-        tag_id,
-        "Tag",
-        &[TypeKind::Int],
-    );
-    assert_named_args(
-        db,
-        node_type(checked.expression_types(db), &uses[1]),
-        tag_id,
-        "Tag",
-        &[TypeKind::Bool],
-    );
+    for use_ in uses {
+        assert_named_args(
+            db,
+            node_type(checked.expression_types(db), use_),
+            tag_id,
+            "Tag",
+            &[TypeKind::Int],
+        );
+    }
 }
 
 #[salsa_test]

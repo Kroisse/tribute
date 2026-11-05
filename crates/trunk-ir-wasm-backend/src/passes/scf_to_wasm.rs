@@ -910,7 +910,7 @@ mod tests {
         assert_no_scf_switch(&output);
         assert_eq!(output.matches("wasm.i32_eq").count(), 2, "{output}");
         assert!(
-            output.find("wasm.i32_const {value = 1}") < output.find("wasm.i32_const {value = 2}"),
+            output.find("wasm.i32_const 1") < output.find("wasm.i32_const 2"),
             "case dispatch order changed: {output}"
         );
     }
@@ -939,8 +939,7 @@ mod tests {
         assert!(!output.contains("wasm.i32_eq"), "{output}");
         assert_eq!(output.matches("wasm.i64_eq").count(), 2, "{output}");
         assert!(
-            output.find("wasm.i64_const {value = -1}")
-                < output.find("wasm.i64_const {value = 4294967296}"),
+            output.find("wasm.i64_const -1") < output.find("wasm.i64_const 4294967296"),
             "case dispatch order changed: {output}"
         );
         for line in output.lines().filter(|line| line.contains("wasm.i64_eq")) {
@@ -960,13 +959,13 @@ mod tests {
   wasm.func @choose(%choice: core.i64) -> (core.i32) {
       scf.index_switch %choice : (core.i64) -> ()
       case 4294967296 {
-        %one = wasm.i32_const {value = 1} : core.i32
+        %one = wasm.i32_const 1 : core.i32
         wasm.return %one
       }
       default {
         scf.yield
       }
-      %zero = wasm.i32_const {value = 0} : core.i32
+      %zero = wasm.i32_const 0 : core.i32
       wasm.return %zero
   }
 }"#,

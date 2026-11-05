@@ -518,7 +518,7 @@ fn build_local_dispatcher_instance(
     for (arm, &arm_value) in general_arms {
         let case_block = make_block(ctx, location, &[]);
         let same_prompt = arith::Cmpi::operands(args[2], values.prompt)
-            .predicate("eq")
+            .predicate(arith::CmpiPredicate::Eq)
             .build(ctx, location);
         ctx.push_op(case_block, same_prompt.op_ref());
 

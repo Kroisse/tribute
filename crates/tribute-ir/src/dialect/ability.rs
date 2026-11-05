@@ -378,15 +378,15 @@ pub fn remove_declarations(ctx: &mut IrContext, module: trunk_ir::rewrite::Modul
     }
 }
 
-/// Build an `arith.const` for the stable runtime ability ID.
+/// Build an `arith.constant` for the stable runtime ability ID.
 pub fn ability_id_const(
     ctx: &mut IrContext,
     loc: Location,
     i32_ty: TypeRef,
     ability: &SymbolPath,
-) -> arith::Const {
+) -> arith::Constant {
     let ability_id = compute_ability_id(ability);
-    arith::Const::operands()
+    arith::Constant::operands()
         .value(Attribute::Int(ability_id as i128))
         .results(i32_ty)
         .build(ctx, loc)

@@ -262,7 +262,7 @@ mod tests {
             r#"core.module @test {
   clif.func @f(%0: core.ptr) -> core.nil {
     %1 = tribute_rt.retain %0 : core.ptr
-    %2 = core.unrealized_conversion_cast %0 : core.ptr
+    %2 = core.unrealized_conversion_cast %0 : core.ptr to core.ptr
     tribute_rt.release %0 {alloc_size = 12}
     clif.return
   }

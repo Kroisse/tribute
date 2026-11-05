@@ -135,12 +135,12 @@ mod tests {
   }
   tribute_cps.func_table @"used$8" = {direct = @"used$9D"}
   tribute_cps.func @"used$9D"() -> core.i32 convention(direct) {
-    %c = arith.const {value = 1} : core.i32
+    %c = arith.constant 1 : core.i32
     tribute_control.return %c
   }
   tribute_cps.func_table @"unused$8" = {direct = @"unused$9D"}
   tribute_cps.func @"unused$9D"() -> core.i32 convention(direct) {
-    %c = arith.const {value = 2} : core.i32
+    %c = arith.constant 2 : core.i32
     tribute_control.return %c
   }
 }"#,

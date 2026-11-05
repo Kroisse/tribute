@@ -368,42 +368,54 @@ fn deferred_join() -> Nat {
     );
 }
 
+/// A pure `let` quantifies no data type: whether its value is a lambda, a
+/// join of lambdas, or a component of a destructured tuple, its uses at
+/// `Nat` and `Bool` are rejected and its uses at `Nat` alone are accepted.
 #[salsa_test]
-fn pure_let_remains_polymorphic(db: &salsa::DatabaseImpl) {
-    let errors = type_errors(
-        db,
-        "pure_let_remains_polymorphic.trb",
-        r#"
-fn pair() -> #(Nat, Bool) {
+fn pure_let_is_monomorphic_in_data_types(db: &salsa::DatabaseImpl) {
+    let program = |second: &str| {
+        format!(
+            r#"
+fn pair() -> #(Nat, {second}) {{
     let identity = fn(value) value
-    #(identity(1), identity(True))
-}
+    #(identity(1), identity({second}::VALUE))
+}}
 
-fn generic_join() -> #(Nat, Bool) {
-    let select = fn(flag, value) {
-        case flag {
+fn generic_join() -> #(Nat, {second}) {{
+    let select = fn(flag, value) {{
+        case flag {{
             True -> value
             False -> value
-        }
-    }
-    #(select(True, 1), select(False, True))
-}
+        }}
+    }}
+    #(select(True, 1), select(False, {second}::VALUE))
+}}
 
-struct Bomb {}
-pub mod Bomb { pub extern "intrinsic" fn explode(value: Bomb) -> Never }
+struct Bomb {{}}
+pub mod Bomb {{ pub extern "intrinsic" fn explode(value: Bomb) -> Never }}
 
-fn partial_generalization() -> #(Nat, Bool) {
+fn partial_generalization() -> #(Nat, {second}) {{
     let #(explode, identity) = #(fn(bomb) bomb.explode(), fn(value) value)
-    explode(Bomb {})
-    #(identity(1), identity(True))
-}
-"#,
+    explode(Bomb {{}})
+    #(identity(1), identity({second}::VALUE))
+}}
+"#
+        )
+    };
+    let rejected = program("Bool").replace("Bool::VALUE", "True");
+    let errors = type_errors(db, "pure_let_rejected.trb", &rejected);
+    assert_eq!(
+        errors
+            .iter()
+            .filter(|error| error.contains("expected `Nat`, found `Bool`")
+                || error.contains("expected `Bool`, found `Nat`"))
+            .count(),
+        3,
+        "each function shares one data type: {errors:#?}"
     );
-
-    assert!(
-        errors.is_empty(),
-        "pure let binding should generalize: {errors:#?}"
-    );
+    let accepted = program("Nat").replace("Nat::VALUE", "2");
+    let errors = type_errors(db, "pure_let_accepted.trb", &accepted);
+    assert!(errors.is_empty(), "{errors:#?}");
 }
 
 #[salsa_test]
@@ -640,23 +652,39 @@ fn bad() -> Nat {
     );
 }
 
+/// A pure join of a callable generalizes its row variables but not its data
+/// types: the thunks it runs may perform different effects, but must return
+/// one type.
 #[salsa_test]
-fn a_pure_join_generalizes_callable_type_and_row_variables(db: &salsa::DatabaseImpl) {
-    let errors = type_errors(
-        db,
-        "generic_callable_join.trb",
-        r#"
-extern "intrinsic" fn diverge() ->{} Never
-fn both() -> #(Nat, Bool) {
-    let apply = case True {
+fn a_pure_join_generalizes_callable_row_variables(db: &salsa::DatabaseImpl) {
+    let program = |second: &str| {
+        format!(
+            r#"
+ability Mark {{ op mark() -> Nil }}
+extern "intrinsic" fn diverge() ->{{}} Never
+fn both() ->{{Mark}} #(Nat, Nat) {{
+    let apply = case True {{
         True -> diverge()
         False -> fn(thunk) thunk()
-    }
-    #(apply(fn() { 1 }), apply(fn() { True }))
-}
-"#,
-    );
+    }}
+    #(apply(fn() {{ 1 }}), apply(fn() {{
+        Mark::mark()
+        {second}
+    }}))
+}}
+"#
+        )
+    };
+    let errors = type_errors(db, "generic_callable_join.trb", &program("2"));
     assert!(errors.is_empty(), "{errors:#?}");
+    let errors = type_errors(db, "generic_callable_join.trb", &program("True"));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("expected `Nat`, found `Bool`")
+                || error.contains("expected `Bool`, found `Nat`")),
+        "{errors:#?}"
+    );
 }
 
 #[salsa_test]

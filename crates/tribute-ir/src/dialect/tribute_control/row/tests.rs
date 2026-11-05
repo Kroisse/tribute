@@ -441,10 +441,10 @@ fn a_header_may_declare_only_unquantified_binders() {
     let input = r#"core.module @test {
   tribute_control.func @run[local 'a0, body 'a1]() -> core.i32 {
     %f = tribute_control.lambda['a0]() -> core.i32 row(| 'a0) captures [] {
-      %x = arith.const {value = 1} : core.i32
+      %x = arith.constant 1 : core.i32
       tribute_control.return %x
     }
-    %y = arith.const {value = 2} : core.i32
+    %y = arith.constant 2 : core.i32
     tribute_control.return %y
   }
 }"#;

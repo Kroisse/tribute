@@ -239,13 +239,13 @@ fn tag_equals(
     tag: ValueRef,
     expected: i128,
     i32_ty: TypeRef,
-) -> (arith::Const, arith::Cmpi) {
-    let constant = arith::Const::operands()
+) -> (arith::Constant, arith::Cmpi) {
+    let constant = arith::Constant::operands()
         .value(Attribute::Int(expected))
         .results(i32_ty)
         .build(ctx, loc);
     let comparison = arith::Cmpi::operands(tag, constant.result(ctx))
-        .predicate("eq")
+        .predicate(arith::CmpiPredicate::Eq)
         .build(ctx, loc);
     (constant, comparison)
 }

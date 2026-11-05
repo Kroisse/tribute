@@ -33,7 +33,7 @@ pub(super) fn lower_expr<'db>(
     match *expr.kind {
         ExprKind::NatLit(value) => {
             let ty = builder.ctx.i32_type(builder.ir);
-            let value = arith::Const::operands()
+            let value = arith::Constant::operands()
                 .value(Attribute::Int(value as i128))
                 .results(ty)
                 .build(builder.ir, location);
@@ -42,7 +42,7 @@ pub(super) fn lower_expr<'db>(
         }
         ExprKind::IntLit(value) => {
             let ty = builder.ctx.i32_type(builder.ir);
-            let value = arith::Const::operands()
+            let value = arith::Constant::operands()
                 .value(Attribute::Int(value as i128))
                 .results(ty)
                 .build(builder.ir, location);
@@ -51,7 +51,7 @@ pub(super) fn lower_expr<'db>(
         }
         ExprKind::BoolLit(value) => {
             let ty = builder.ctx.bool_type(builder.ir);
-            let value = arith::Const::operands()
+            let value = arith::Constant::operands()
                 .value(Attribute::Bool(value))
                 .results(ty)
                 .build(builder.ir, location);
@@ -60,7 +60,7 @@ pub(super) fn lower_expr<'db>(
         }
         ExprKind::FloatLit(value) => {
             let ty = builder.ctx.f64_type(builder.ir);
-            let value = arith::Const::operands()
+            let value = arith::Constant::operands()
                 .value(Attribute::FloatBits(value.value().to_bits()))
                 .results(ty)
                 .build(builder.ir, location);
@@ -70,7 +70,7 @@ pub(super) fn lower_expr<'db>(
         ExprKind::Nil => Some(builder.emit_nil(location)),
         ExprKind::RuneLit(value) => {
             let ty = builder.ctx.i32_type(builder.ir);
-            let value = arith::Const::operands()
+            let value = arith::Constant::operands()
                 .value(Attribute::Int(value as i32 as i128))
                 .results(ty)
                 .build(builder.ir, location);
@@ -759,7 +759,7 @@ pub(super) fn emit_bool(
     value: bool,
 ) -> ValueRef {
     let ty = builder.ctx.bool_type(builder.ir);
-    let op = arith::Const::operands()
+    let op = arith::Constant::operands()
         .value(Attribute::Bool(value))
         .results(ty)
         .build(builder.ir, location);

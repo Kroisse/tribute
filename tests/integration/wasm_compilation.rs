@@ -229,7 +229,7 @@ fn test_execute_dynamic_bytes_write_boundary() {
     %left = adt.bytes_const {{value = b"{left}"}} : core.bytes
     %right = adt.bytes_const {{value = b"{right}"}} : core.bytes
     %joined = func.call @__tribute_bytes_concat(%left, %right) : (core.bytes, core.bytes) -> core.bytes
-    %newline = arith.const {{value = 1}} : core.i1
+    %newline = arith.constant 1 : core.i1
     %result = tribute_io.write %joined, %newline : core.nil
     func.return
   }}

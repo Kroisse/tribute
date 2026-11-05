@@ -1040,6 +1040,20 @@ fn results_inferable(op: &OperationDef) -> bool {
     }
 }
 
+/// Whether every result type is one fixed type (`-> Value<I1>`), which a
+/// declarative format may leave unwritten. Must agree with
+/// `OpSchema::fixed_results`.
+pub(crate) fn results_fixed(op: &OperationDef) -> bool {
+    let fixed = |expr: &TypeExpr| matches!(expr, TypeExpr::Exact(_));
+    match (&op.results, &op.result_constraint) {
+        (ResultDef::Single(_), ValueExpr::Each(expr)) => fixed(expr),
+        (ResultDef::Variadic(_), ValueExpr::List(ListExpr::Types(exprs))) => {
+            exprs.iter().all(fixed)
+        }
+        _ => false,
+    }
+}
+
 /// Compile-time checks that directly named result bounds denote one type,
 /// whether or not the builder infers them.
 fn fixed_result_checks(crate_path: &TokenStream, op: &OperationDef) -> Vec<TokenStream> {

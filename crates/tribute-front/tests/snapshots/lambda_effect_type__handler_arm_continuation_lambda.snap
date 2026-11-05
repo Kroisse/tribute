@@ -10,7 +10,7 @@ core.module @test {
           %1 = tribute_control.perform op @"ability_2_10_pkg::State_3_int" @get() : () -> core.i32
           tribute_control.return %1
       }
-      %2 = arith.const {value = 0} : core.i32
+      %2 = arith.constant 0 : core.i32
       %3 = tribute_control.call @"pkg::run_state$Int$Int"(%0, %2) attributes {row_args = [{tail = 0}]} : (!t0, core.i32) -> core.i32
       tribute_control.return %3
   }

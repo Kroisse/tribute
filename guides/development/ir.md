@@ -92,7 +92,7 @@ fn addi<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
 fn i32_add(lhs: Value<I32>, rhs: Value<I32>) -> Value<I32> {}
 
 fn cmpi<T: IntegerLike>(
-    predicate: Attr<String>,
+    predicate: Attr<CmpiPredicate>,
     lhs: Value<T>,
     rhs: Value<T>,
 ) -> Value<I1> {}
@@ -135,8 +135,10 @@ where
   declarative format writes and reads its values, so a dialect adds a kind
   by implementing the trait. A kind narrower than its
   `KIND`, such as a keyword, checks the rest in `AttrKind::accepts` and names
-  its values in `DOMAIN`, as `CallingConvention` does. `_` accepts any
-  attribute.
+  its values in `DOMAIN`, as `CallingConvention` does. Inside trunk-ir,
+  `attr_kind::keyword_kind!` declares such a kind as an enum stored as its
+  keyword string, as `arith::CmpiPredicate` and `clif::IntCond` are. `_`
+  accepts any attribute.
 - `Attr<TypeOf<V>>` is a type attribute whose value binds the type variable
   `V`. `V` needs no bound.
 - A list attribute's accessor iterates its elements, and its builder setter
@@ -219,7 +221,11 @@ where
   with `")"` or `"]"`, writes no operand or `,` right after a variadic operand
   list, and writes results that may be absent in an optional group that ends
   the format or comes before a literal, as `(":" types(..)^)?` or
-  `("->" "(" types(..)^ ")")?`. An
+  `("->" "(" types(..)^ ")")?`. A format need not write a result type the
+  declaration fixes; the parser then takes it from the schema, and the
+  printer uses the format only for operations whose results have that
+  type, as `arith.cmpi slt, %a, %b : core.i32` leaves out its `core.i1`
+  result. An
   operand list stays on its line, so an empty one does not read the next
   line's `%r = ..`.
   The macro reports a broken rule, a missing entity, or one written twice at
@@ -257,7 +263,7 @@ declarations above:
 ```rust
 let sum = arith::Addi::operands(lhs, rhs).build(ctx, loc); // result is `T`
 let cmp = arith::Cmpi::operands(lhs, rhs) // or `Op::operands()` without operands
-    .predicate("slt")                      // attributes by name
+    .predicate(CmpiPredicate::Slt)         // attributes by name
     .build(ctx, loc);                       // result is `core.i1`
 let resumed = Resume::operands(token, value).build(ctx, loc); // `T::Answer`
 ```
@@ -486,8 +492,8 @@ let value: &str = string_const.value(ctx); // generated accessor
 
 A builder setter for a string attribute takes a `StringArg`: a `StringRef`,
 or text as a `Cow<'static, str>` (a `&'static str` or an owned `String`).
-The builder interns text when it creates the operation, so
-`.predicate("slt")` and `.sym_name("main")` need no context. Pass text directly
+The builder interns text when it creates the operation, so `.code("oob")`
+and `.sym_name("main")` need no context. Pass text directly
 instead of constructing a `Symbol` solely for a string attribute. For a borrowed
 runtime name, pass `ctx.intern_str(name)`. `Symbol` and `SymbolPath` do not convert
 to a string argument automatically. For an existing symbol, pass
@@ -646,7 +652,7 @@ the same ownership contract as the callable's other inputs.
 Operations are created with their builders:
 
 ```rust
-let c = arith::Const::operands()
+let c = arith::Constant::operands()
     .value(Attribute::Int(42))
     .results(i32_ty)
     .build(&mut ctx, loc);

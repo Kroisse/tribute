@@ -387,7 +387,12 @@ fn shared_pipeline_float_comparison_predicates(db: &salsa::DatabaseImpl) {
     assert_shared_cps_contract(&ir_text);
     insta::assert_snapshot!(pipeline_contract_summary(&ir_text, false));
     for predicate in [
-        "\"oeq\"", "\"une\"", "\"olt\"", "\"ole\"", "\"ogt\"", "\"oge\"",
+        "cmpf oeq,",
+        "cmpf une,",
+        "cmpf olt,",
+        "cmpf ole,",
+        "cmpf ogt,",
+        "cmpf oge,",
     ] {
         assert!(
             ir_text.contains(predicate),

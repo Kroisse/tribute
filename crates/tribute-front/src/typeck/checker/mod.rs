@@ -128,8 +128,9 @@ pub(crate) struct FunctionCheck<'db> {
         HashMap<NodeId, crate::typeck::InstantiatedPerformOperation<'db>>,
     pub(super) lambda_signatures: HashMap<NodeId, crate::typeck::LambdaSignature<'db>>,
     pub(super) exhaustive_cases: Vec<NodeId>,
-    /// Quantifiers owned by generalized local schemes in this function. They
-    /// remain separate from exported function schemes.
+    /// Body-local existentials: variables of this function's body that
+    /// neither its signature nor a retained relation names. They remain
+    /// separate from exported function schemes.
     pub(super) local_generalizations: HashMap<UniVarId<'db>, (NodeId, u32)>,
     /// Case scrutinees whose exhaustiveness diagnostics were already reported.
     pub(super) exhaustiveness_reported: HashSet<NodeId>,
