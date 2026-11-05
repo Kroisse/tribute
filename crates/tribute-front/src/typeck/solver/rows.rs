@@ -1112,19 +1112,6 @@ impl<'db> TypeSolver<'db> {
 
             // r1 is closed, r2 is open: var2 = r1's effects minus r2's effects
             (None, Some(&var2)) => {
-                // Pure subsumption: if r1 is pure (closed empty) and r2 has existing effects,
-                // it means a pure function is being called from an effectful context.
-                // This is always valid, and the caller's ability row should remain unchanged.
-                //
-                // Example: calling `identity: fn(Int) -> Int` (effect: {}) from a context
-                // with effect `{State(Int) | var}` should not modify the caller's ability row.
-                //
-                // However, if r2 has no effects (just a bare variable `{|var}`), we should
-                // bind the variable to the closed row as normal instantiation behavior.
-                if r1.is_pure(self.db) && !effects2.is_empty() {
-                    return Ok(());
-                }
-
                 // Compute difference: effects in r1 but not in r2
                 let mut pairs = Vec::new();
                 let only_r1 = self.compute_effect_difference(effects2, effects1, &mut pairs)?;

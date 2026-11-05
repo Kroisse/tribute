@@ -279,6 +279,25 @@ pub enum Stmt<V> {
     Expr { id: NodeId, expr: Expr<V> },
 }
 
+/// The local a `let` binds, by name alone, to a reference, and that
+/// reference. A named-function alias has this shape; its uses reference the
+/// function again (`new-plans/type-inference.md`, Generalization).
+pub fn reference_binding<'a, V>(
+    pattern: &Pattern<V>,
+    value: &'a Expr<V>,
+) -> Option<(LocalId, &'a V)> {
+    match (&*pattern.kind, &*value.kind) {
+        (
+            super::pattern::PatternKind::Bind {
+                local_id: Some(local),
+                ..
+            },
+            ExprKind::Var(reference),
+        ) => Some((*local, reference)),
+        _ => None,
+    }
+}
+
 /// A case arm in pattern matching.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct Arm<V> {

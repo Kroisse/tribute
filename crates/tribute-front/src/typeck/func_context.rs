@@ -105,6 +105,10 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// rebound unchanged when inference and conversion revisit it.
     let_schemes: HashMap<NodeId, Vec<LetSchemeBinding<'db>>>,
 
+    /// The locals a `let` binds to a named function, directly or through
+    /// another such local. Their schemes quantify rows.
+    function_aliases: HashSet<LocalId>,
+
     /// The solved function type selected for each direct call callee.
     function_instances: HashMap<NodeId, super::FunctionInstance<'db>>,
 
@@ -331,6 +335,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             checked_record_shapes: HashSet::default(),
             constructor_reference_types: HashMap::default(),
             let_schemes: HashMap::default(),
+            function_aliases: HashSet::default(),
             function_instances: HashMap::default(),
             quantified_local_reference_types: HashMap::default(),
             local_binding_owners: HashMap::default(),
@@ -708,6 +713,14 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         bindings: Vec<LetSchemeBinding<'db>>,
     ) {
         self.let_schemes.entry(pattern).or_insert(bindings);
+    }
+
+    pub(crate) fn record_function_alias(&mut self, local: LocalId) {
+        self.function_aliases.insert(local);
+    }
+
+    pub(crate) fn is_function_alias(&self, local: LocalId) -> bool {
+        self.function_aliases.contains(&local)
     }
 
     /// The schemes `pattern` bound on its first visit, if it was generalized.

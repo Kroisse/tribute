@@ -4,9 +4,6 @@
 //! and the intentional exceptions these laws exclude:
 //!
 //! - `Error` unifies with every type, so generated types here omit it.
-//! - A closed empty row unified against a row that names effects succeeds
-//!   without binding (pure subsumption); [`RowRelation::PureSubsumes`]
-//!   accounts for it.
 //!
 //! The tests at the end are minimal examples of cases the laws once found
 //! failing, kept as regressions.
@@ -151,7 +148,7 @@ proptest! {
         if result.is_ok() && solver.settled() {
             let (left, right) = (solver.resolved(left), solver.resolved(right));
             prop_assert!(
-                types_equiv(&db, left, right, RowRelation::PureSubsumes),
+                types_equiv(&db, left, right, RowRelation::SetEqual),
                 "resolved sides differ: {:?} vs {:?}",
                 left,
                 right,
@@ -173,11 +170,7 @@ proptest! {
     }
 
     /// Symmetry: when one order of the sides finds a unifier (both sides
-    /// resolve equal, rows as sets), so does the other. Success alone is not
-    /// symmetric: pure subsumption accepts a closed empty row on the left
-    /// against a row naming effects, but not the reverse, and which side a
-    /// row lands on can depend on bindings made earlier in the traversal
-    /// (`test_pure_callee_in_effectful_context`).
+    /// resolve equal, rows as sets), so does the other.
     #[test]
     fn unification_is_symmetric((left, right) in related_pair()) {
         let db = salsa::DatabaseImpl::new();
@@ -284,10 +277,8 @@ proptest! {
         let (left, right) = if open_first { (open_row, closed_row) } else { (closed_row, open_row) };
         let (solver, result) = solve_rows(&db, left, right);
         let subset = open.effects.iter().all(|effect| closed.effects.contains(effect));
-        // Pure subsumption: a closed empty row accepts any row naming effects.
-        let subsumed = !open_first && closed.effects.is_empty() && !open.effects.is_empty();
-        prop_assert_eq!(result.is_ok(), subset || subsumed, "{:?}", result);
-        if subset && !subsumed {
+        prop_assert_eq!(result.is_ok(), subset, "{:?}", result);
+        if subset {
             let bound = solver.row_subst.get(tail).expect("tail bound");
             let difference = RowShape::closed(
                 closed

@@ -15,7 +15,7 @@ use crate::ast::{
     AbilityId, AbilityInstance, AbilityRow, Arm, BinOpKind, Candidates, Expr, ExprKind, FieldInit,
     FieldPattern, HandlerArm, HandlerKind, LiteralPattern, LocalId, ModulePath, NodeId, OpDeclKind,
     Pattern, PatternKind, ResolvedRef, Stmt, Type, TypeKind, TypeScheme, TypedRef,
-    collect_row_vars,
+    collect_row_vars, reference_binding,
 };
 
 use super::super::constraint::ConstraintOriginKind;
@@ -2487,12 +2487,7 @@ impl<'db> TypeChecker<'db> {
                 // Constrain pattern type to match value type
                 let pattern_ty = self.infer_pattern_type_with_ctx(ctx, pattern, Some(value_ty));
                 ctx.constrain_eq(pattern_ty, value_ty);
-                self.generalize_and_bind_pattern_with_ctx(
-                    ctx,
-                    pattern,
-                    value_ty,
-                    evaluation_effect,
-                );
+                self.generalize_and_bind_pattern_with_ctx(ctx, pattern, value, value_ty);
                 ctx.end_let_row_scope(&outer_rows);
             }
             Stmt::Expr { expr, .. } => {
@@ -2518,7 +2513,7 @@ impl<'db> TypeChecker<'db> {
                 let outer_rows = ctx.annotation_row_names();
                 let outer_effect = ctx.current_effect();
                 ctx.set_current_effect(AbilityRow::pure(self.db()));
-                let value = if let Some(ann) = ty {
+                let checked = if let Some(ann) = ty {
                     let expected = self.annotation_to_type_with_ctx(ctx, ann);
                     self.check_expr_with_ctx(ctx, value, Mode::Check(expected))
                 } else {
@@ -2527,7 +2522,7 @@ impl<'db> TypeChecker<'db> {
                 let value_ty = if let Some(ann) = ty {
                     self.annotation_to_type_with_ctx(ctx, ann)
                 } else {
-                    ctx.get_node_type(value.id)
+                    ctx.get_node_type(checked.id)
                         .unwrap_or_else(|| ctx.fresh_type_var())
                 };
                 let evaluation_effect = ctx.current_effect();
@@ -2538,19 +2533,14 @@ impl<'db> TypeChecker<'db> {
                 let pattern_ty = self.infer_pattern_type_with_ctx(ctx, pattern, Some(value_ty));
                 ctx.constrain_eq(pattern_ty, value_ty);
 
-                self.generalize_and_bind_pattern_with_ctx(
-                    ctx,
-                    pattern,
-                    value_ty,
-                    evaluation_effect,
-                );
+                self.generalize_and_bind_pattern_with_ctx(ctx, pattern, value, value_ty);
                 ctx.end_let_row_scope(&outer_rows);
                 let pattern = self.convert_pattern_with_ctx(ctx, pattern);
 
                 Stmt::Let {
                     id: *id,
                     pattern,
-                    value,
+                    value: checked,
                     ty: ty.clone(),
                 }
             }
@@ -2594,8 +2584,8 @@ impl<'db> TypeChecker<'db> {
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
         pattern: &Pattern<ResolvedRef<'db>>,
+        value: &Expr<ResolvedRef<'db>>,
         value_ty: Type<'db>,
-        evaluation_effect: AbilityRow<'db>,
     ) {
         // A revisited `let` keeps the schemes of its first visit. Solving
         // again can fail once an unrelated error has been constrained, and a
@@ -2655,9 +2645,7 @@ impl<'db> TypeChecker<'db> {
 
         let type_subst = solver.type_subst().clone();
         let row_subst = solver.row_subst().clone();
-        let should_generalize = row_subst
-            .apply(self.db(), evaluation_effect)
-            .is_pure(self.db());
+        let should_generalize = self.generalizes_rows(ctx, pattern, value);
 
         let (mut environment_type_vars, mut environment_row_vars) = solver.pending_variables();
         if should_generalize {
@@ -2757,6 +2745,29 @@ impl<'db> TypeChecker<'db> {
             });
         }
         ctx.record_let_schemes(pattern.id, let_schemes);
+    }
+
+    /// Whether a `let` of `value` quantifies rows: a use of a lambda or of a
+    /// named-function alias chooses its own rows, and every other binding's
+    /// uses share them (`new-plans/type-inference.md`, Generalization).
+    fn generalizes_rows(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        pattern: &Pattern<ResolvedRef<'db>>,
+        value: &Expr<ResolvedRef<'db>>,
+    ) -> bool {
+        let Some((local, reference)) = reference_binding(pattern, value) else {
+            return matches!(*value.kind, ExprKind::Lambda { .. });
+        };
+        let alias = match reference {
+            ResolvedRef::Function { .. } => true,
+            ResolvedRef::Local { id, .. } => ctx.is_function_alias(*id),
+            _ => false,
+        };
+        if alias {
+            ctx.record_function_alias(local);
+        }
+        alias
     }
 
     fn collect_pattern_bindings_with_ctx(

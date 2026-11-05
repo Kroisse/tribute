@@ -912,11 +912,12 @@ fn main() -> Nil {}
     }
 }
 
-/// A named function passed to a generalized computation result, directly or
-/// through an alias, takes the parameter's row, whose tail is a body binder,
-/// by a function reference at that type rather than a conversion cast.
+/// A named function passed to a computation result whose parameter row no
+/// use fixes, directly or through an alias, takes the parameter's row, whose
+/// tail is a body binder, by a function reference at that type rather than a
+/// conversion cast.
 #[salsa_test]
-fn a_named_function_passed_to_a_generalized_result_takes_its_row(db: &salsa::DatabaseImpl) {
+fn a_named_function_passed_at_an_unfixed_row_takes_its_row(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
         "generalized_consumer.trb",
@@ -924,15 +925,16 @@ fn a_named_function_passed_to_a_generalized_result_takes_its_row(db: &salsa::Dat
 fn make() ->{} fn(fn(Int) ->{e} Int, Int) ->{e} Int {
     fn(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(f(x)) }
 }
-fn inc(x: Int) ->{} Int { x + +1 }
+fn inc(x: Int) ->{e} Int { x + +1 }
+fn keep(f: fn() ->{e} Int) ->{} Int { +0 }
 fn direct() ->{} Int {
     let twice = make()
-    twice(inc, +1)
+    keep(fn() twice(inc, +1))
 }
 fn aliased() ->{} Int {
     let twice = make()
     let step = inc
-    twice(step, +1)
+    keep(fn() twice(step, +1))
 }
 fn main() -> Nil {}
 "#,
