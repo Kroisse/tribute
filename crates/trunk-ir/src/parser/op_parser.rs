@@ -173,6 +173,38 @@ impl<'a> OpAsmParser<'a> {
         }
     }
 
+    /// [`AsmParser::parse_list`] for items that read operations' pieces.
+    pub fn parse_list<T>(
+        &mut self,
+        close: &str,
+        mut item: impl FnMut(&mut Self) -> ParseResult<T>,
+    ) -> ParseResult<Vec<T>> {
+        let mut items = Vec::new();
+        if self.peek().starts_with(close) {
+            return Ok(items);
+        }
+        loop {
+            items.push(item(self)?);
+            if !self.parse_optional_punct(",") {
+                return Ok(items);
+            }
+        }
+    }
+
+    /// [`AsmParser::parse_delimited`] for items that read operations'
+    /// pieces.
+    pub fn parse_delimited<T>(
+        &mut self,
+        open: &str,
+        close: &str,
+        item: impl FnMut(&mut Self) -> ParseResult<T>,
+    ) -> ParseResult<Vec<T>> {
+        self.parse_punct(open)?;
+        let items = self.parse_list(close, item)?;
+        self.parse_punct(close)?;
+        Ok(items)
+    }
+
     /// How many result names the text writes before the operation's `=`.
     pub fn num_results(&self) -> usize {
         self.frames.last().map_or(0, |frame| frame.results)
@@ -552,7 +584,7 @@ impl<'a> OpAsmParser<'a> {
     /// writes, `(%a: A, ..)`, for a region read after them with
     /// [`Self::parse_region_with_args`] or [`Self::parse_region_with_entry`].
     pub fn parse_entry_args(&mut self) -> ParseResult<Vec<Argument>> {
-        self.parse_delimited("(", ")", Self::parse_argument_of)
+        self.parse_delimited("(", ")", |p| Self::parse_argument_of(p))
     }
 
     fn parse_argument_of(p: &mut AsmParser<'a>) -> ParseResult<Argument> {
@@ -652,7 +684,7 @@ impl<'a> OpAsmParser<'a> {
             let offset = self.offset();
             let label = self.parse_token("a block label", lexer::block_label)?;
             let written = if self.peek().starts_with('(') {
-                self.parse_delimited("(", ")", Self::parse_argument_of)?
+                self.parse_delimited("(", ")", |p| Self::parse_argument_of(p))?
             } else {
                 Vec::new()
             };

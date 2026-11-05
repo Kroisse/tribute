@@ -513,12 +513,11 @@ impl trunk_ir::asm_format::OpAsmFormat for Func {
         }
     }
 
-    fn parse<'a>(
-        input: &mut &'a str,
-        results: Vec<&'a str>,
-        sym_name: Option<String>,
-    ) -> winnow::ModalResult<trunk_ir::parser::raw::RawOperation<'a>> {
-        tribute_control::parse_func(input, results, sym_name, "tribute_cps.func", true)
+    fn parse(
+        p: &mut trunk_ir::parser::OpAsmParser<'_>,
+        state: &mut trunk_ir::parser::OperationState,
+    ) -> trunk_ir::parser::ParseResult<()> {
+        tribute_control::parse_func(p, state, true)
     }
 }
 
@@ -540,12 +539,11 @@ impl trunk_ir::asm_format::OpAsmFormat for Lambda {
         tribute_control::assign_lambda_names(namer, self.op_ref(), entries);
     }
 
-    fn parse<'a>(
-        input: &mut &'a str,
-        results: Vec<&'a str>,
-        sym_name: Option<String>,
-    ) -> winnow::ModalResult<trunk_ir::parser::raw::RawOperation<'a>> {
-        tribute_control::parse_lambda(input, results, sym_name, "tribute_cps.lambda", true)
+    fn parse(
+        p: &mut trunk_ir::parser::OpAsmParser<'_>,
+        state: &mut trunk_ir::parser::OperationState,
+    ) -> trunk_ir::parser::ParseResult<()> {
+        tribute_control::parse_lambda(p, state, true)
     }
 }
 

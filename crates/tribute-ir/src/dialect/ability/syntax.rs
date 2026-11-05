@@ -5,8 +5,8 @@ use std::fmt::{self, Write as _};
 
 use itertools::Itertools as _;
 
-use trunk_ir::asm_format::{CustomEntity, OpAsmDirective, RawCustomEntity};
-use trunk_ir::parser::raw::{RawAttribute, raw_type, symbol_path, value_ref, ws};
+use trunk_ir::asm_format::{CustomEntity, OpAsmDirective, ParsedEntity};
+use trunk_ir::parser::{OpAsmParser, ParseResult};
 use trunk_ir::printer::{OpAsmPrinter, display_symbol_ref};
 use trunk_ir::refs::ValueRef;
 use trunk_ir::types::Attribute;
@@ -64,39 +64,21 @@ impl OpAsmDirective for HandlerArms {
         p.write_char(']')
     }
 
-    fn parse<'a>(input: &mut &'a str) -> winnow::ModalResult<Vec<RawCustomEntity<'a>>> {
-        use winnow::Parser as _;
-        use winnow::combinator::{delimited, separated};
-
-        let arms: Vec<(RawAttribute<'a>, &'a str)> = delimited(
-            ('[', ws),
-            separated(
-                0..,
-                (
-                    ws,
-                    HandlerBinding::parse_header,
-                    ws,
-                    ':',
-                    ws,
-                    raw_type,
-                    ws,
-                    '=',
-                    ws,
-                    value_ref,
-                    ws,
-                )
-                    .map(|(_, header, _, _, _, ty, _, _, _, arm, _)| {
-                        (header.into_attribute(ty), arm)
-                    }),
-                ',',
-            ),
-            (ws, ']'),
-        )
-        .parse_next(input)?;
+    fn parse(p: &mut OpAsmParser<'_>) -> ParseResult<Vec<ParsedEntity>> {
+        let arms = p.parse_delimited("[", "]", |p| {
+            let header = HandlerBinding::parse_header(p)?
+                .ok_or_else(|| p.expected("a handler binding `op @Ability @name`"))?;
+            p.parse_punct(":")?;
+            let ty = p.parse_type()?;
+            p.parse_punct("=")?;
+            let arm = p.parse_operand()?;
+            let binding = header.with_result_type(p.ctx_mut(), ty);
+            Ok((binding.to_attribute(p.ctx_mut()), arm))
+        })?;
         let (handlers, arms) = arms.into_iter().unzip();
         Ok(vec![
-            RawCustomEntity::Attribute(Some(RawAttribute::List(handlers))),
-            RawCustomEntity::Operands(arms),
+            ParsedEntity::Attribute(Some(Attribute::List(handlers))),
+            ParsedEntity::Operands(arms),
         ])
     }
 }
@@ -146,27 +128,16 @@ impl OpAsmDirective for Dispatchers {
         write!(p, "[{dispatchers}]")
     }
 
-    fn parse<'a>(input: &mut &'a str) -> winnow::ModalResult<Vec<RawCustomEntity<'a>>> {
-        use winnow::Parser as _;
-        use winnow::combinator::{delimited, separated};
-
-        let dispatchers: Vec<(Vec<String>, &'a str)> = delimited(
-            ('[', ws),
-            separated(
-                0..,
-                (ws, symbol_path, ws, ':', ws, value_ref, ws)
-                    .map(|(_, ability, _, _, _, dispatcher, _)| (ability, dispatcher)),
-                ',',
-            ),
-            (ws, ']'),
-        )
-        .parse_next(input)?;
-        let (abilities, dispatchers): (Vec<_>, _) = dispatchers.into_iter().unzip();
+    fn parse(p: &mut OpAsmParser<'_>) -> ParseResult<Vec<ParsedEntity>> {
+        let dispatchers = p.parse_delimited("[", "]", |p| {
+            let ability = p.parse_symbol_ref()?;
+            p.parse_punct(":")?;
+            Ok((Attribute::SymbolRef(ability), p.parse_operand()?))
+        })?;
+        let (abilities, dispatchers) = dispatchers.into_iter().unzip();
         Ok(vec![
-            RawCustomEntity::Attribute(Some(RawAttribute::List(
-                abilities.into_iter().map(RawAttribute::SymbolRef).collect(),
-            ))),
-            RawCustomEntity::Operands(dispatchers),
+            ParsedEntity::Attribute(Some(Attribute::List(abilities))),
+            ParsedEntity::Operands(dispatchers),
         ])
     }
 }

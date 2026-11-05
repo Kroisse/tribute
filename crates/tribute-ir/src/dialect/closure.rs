@@ -314,117 +314,94 @@ fn starts_attr_dict(input: &str) -> bool {
     after_ws.starts_with('=')
 }
 
-/// Parse closure.lambda custom format back into a RawOperation.
-fn parse_closure_lambda<'a>(
-    input: &mut &'a str,
-    results: Vec<&'a str>,
-    sym_name: Option<String>,
-) -> winnow::ModalResult<trunk_ir::parser::raw::RawOperation<'a>> {
-    use trunk_ir::parser::raw::*;
-    use winnow::combinator::{delimited, opt, repeat, separated};
-    use winnow::prelude::*;
+/// Parse the `closure.lambda` custom format [`print_closure_lambda`] writes.
+fn parse_closure_lambda(
+    p: &mut trunk_ir::parser::OpAsmParser<'_>,
+    state: &mut trunk_ir::parser::OperationState,
+) -> trunk_ir::parser::ParseResult<()> {
+    use trunk_ir::parser::lexer::ident;
+    use trunk_ir::{Attribute, AttributeMap};
+    use winnow::Parser as _;
 
     // " {key = val, ...}" (optional attributes)
-    ws.parse_next(input)?;
-    let mut attributes = if starts_attr_dict(input) {
-        raw_attr_dict.parse_next(input)?
+    let attributes = if starts_attr_dict(p.peek()) {
+        p.parse_attr_dict()?
     } else {
-        vec![]
+        AttributeMap::new()
     };
-    if attributes
-        .iter()
-        .any(|(key, _)| key == "signatures" || key == "conventions")
-    {
-        return Err(winnow::error::ErrMode::Backtrack(
-            winnow::error::ContextError::new(),
-        ));
+    let view = attributes.view(p.ctx());
+    if view.contains_key("signatures") || view.contains_key("conventions") {
+        return Err(p.expected("attributes without `signatures` or `conventions`"));
     }
 
     // " [%x, %y]" (optional captures)
-    ws.parse_next(input)?;
-    let captures: Vec<&'a str> = if input.starts_with('[') {
-        delimited(
-            ('[', ws),
-            separated(0.., (ws, value_ref, ws).map(|(_, v, _)| v), ','),
-            (ws, ']'),
-        )
-        .parse_next(input)?
+    let captures = if p.peek().starts_with('[') {
+        p.parse_delimited("[", "]", |p| p.parse_operand())?
     } else {
-        vec![]
+        Vec::new()
     };
 
     // " <convention>(%param: type, ...) -> ret { body }", one or more
-    let entries: Vec<_> = repeat(
-        1..,
-        (
-            ws,
-            ident.try_map(str::parse::<CallingConvention>),
-            func_params,
-            opt(return_type),
-            ws,
-            raw_region,
-        )
-            .map(|(_, convention, params, ret_ty, _, region)| (convention, params, ret_ty, region)),
-    )
-    .parse_next(input)?;
-
-    // ": closure_type" (optional; the closure of the one signature when omitted)
-    ws.parse_next(input)?;
-    let closure_ty = opt((':', ws, raw_type).map(|(_, _, ty)| ty)).parse_next(input)?;
-
     let mut conventions = Vec::new();
     let mut signatures = Vec::new();
     let mut regions = Vec::new();
-    for (convention, params, ret_ty, mut region) in entries {
-        // Inject formal params into entry block args
-        if !params.is_empty() && !region.blocks.is_empty() {
-            let mut merged = params.clone();
-            merged.append(&mut region.blocks[0].args);
-            region.blocks[0].args = merged;
-        }
-        conventions.push(RawAttribute::String(convention.keyword().to_owned()));
+    while let Some(convention) = p.parse_optional_token("a calling convention", |input| {
+        ident
+            .try_map(str::parse::<CallingConvention>)
+            .parse_next(input)
+    })? {
+        let params = p.parse_entry_args()?;
+        let result = if p.parse_optional_punct("->") {
+            Some(p.parse_type()?)
+        } else {
+            None
+        };
+        regions.push(p.parse_region_with_args(&params)?);
+        conventions.push(p.ctx_mut().string_attr(convention.keyword()));
         // The signature is func.func_sig<(param_types...) -> return_ty>.
-        signatures.push(trunk_ir::dialect::func::signature_raw_type(
+        let signature = trunk_ir::dialect::func::build_signature_type(
+            p,
             "func.func_sig",
-            params.iter().map(|(_, ty)| ty.clone().into()).collect(),
-            ret_ty.into_iter().map(Into::into).collect(),
-            vec![],
-        ));
-        regions.push(region);
+            params
+                .iter()
+                .map(|param| (param.ty, AttributeMap::new()))
+                .collect(),
+            result
+                .into_iter()
+                .map(|ty| (ty, AttributeMap::new()))
+                .collect(),
+            AttributeMap::new(),
+        )?;
+        signatures.push(signature);
     }
-    let closure_raw_ty = match (closure_ty, &signatures[..]) {
-        (Some(ty), _) => ty,
-        (None, [signature]) => RawType::Concrete {
-            name: "closure.closure",
-            params: vec![signature.clone().into()],
-            attrs: vec![],
-        },
-        (None, _) => {
-            return Err(winnow::error::ErrMode::Cut(
-                winnow::error::ContextError::new(),
-            ));
-        }
-    };
-    attributes.push(("conventions".into(), RawAttribute::List(conventions)));
-    attributes.push((
-        "signatures".into(),
-        RawAttribute::List(signatures.into_iter().map(RawAttribute::Type).collect()),
-    ));
+    if regions.is_empty() {
+        return Err(p.expected("an entry `<convention>(..) { .. }`"));
+    }
 
-    Ok(RawOperation {
-        results,
-        name: "closure.lambda",
-        sym_name,
-        func_params: vec![],
-        func_param_regions: vec![],
-        operands: captures,
-        operand_types: Vec::new(),
-        attributes,
-        result_types: vec![closure_raw_ty],
-        fixed_results: false,
-        regions,
-        successors: vec![],
-    })
+    // ": closure_type" (optional; the closure of the one signature when omitted)
+    let closure_ty = if p.parse_optional_punct(":") {
+        p.parse_type()?
+    } else if let [signature] = signatures[..] {
+        p.build_type(
+            "closure.closure",
+            vec![(signature, AttributeMap::new())],
+            AttributeMap::new(),
+        )?
+    } else {
+        return Err(p.expected("`: type` for a closure with several entries"));
+    };
+
+    state.add_attributes(p.ctx_mut(), attributes);
+    state.add_attribute(p.ctx_mut(), "conventions", Attribute::List(conventions));
+    state.add_attribute(
+        p.ctx_mut(),
+        "signatures",
+        Attribute::List(signatures.into_iter().map(Attribute::Type).collect()),
+    );
+    state.operands = captures;
+    state.result_types = vec![closure_ty];
+    state.regions = regions;
+    Ok(())
 }
 
 impl trunk_ir::asm_format::OpAsmFormat for Lambda {
@@ -432,12 +409,11 @@ impl trunk_ir::asm_format::OpAsmFormat for Lambda {
         print_closure_lambda(p, self.op_ref())
     }
 
-    fn parse<'a>(
-        input: &mut &'a str,
-        results: Vec<&'a str>,
-        sym_name: Option<String>,
-    ) -> winnow::ModalResult<trunk_ir::parser::raw::RawOperation<'a>> {
-        parse_closure_lambda(input, results, sym_name)
+    fn parse(
+        p: &mut trunk_ir::parser::OpAsmParser<'_>,
+        state: &mut trunk_ir::parser::OperationState,
+    ) -> trunk_ir::parser::ParseResult<()> {
+        parse_closure_lambda(p, state)
     }
 }
 

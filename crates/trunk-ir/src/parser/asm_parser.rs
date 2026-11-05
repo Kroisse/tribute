@@ -42,7 +42,9 @@ pub struct AsmParser<'a> {
 }
 
 impl<'a> AsmParser<'a> {
-    pub(crate) fn new(ctx: &'a mut IrContext, source: &'a str) -> Self {
+    /// A parser of `source`, a type, an attribute, or a part of one, outside
+    /// any module.
+    pub fn new(ctx: &'a mut IrContext, source: &'a str) -> Self {
         let path = ctx.intern_path("textual-ir");
         let location = Location::new(path, crate::location::Span::new(0, 0));
         Self {
@@ -117,7 +119,7 @@ impl<'a> AsmParser<'a> {
     }
 
     /// Whether only whitespace is left.
-    pub(crate) fn at_end(&mut self) -> bool {
+    pub fn at_end(&mut self) -> bool {
         self.peek().is_empty()
     }
 

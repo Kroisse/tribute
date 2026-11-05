@@ -18,9 +18,7 @@ use crate::asm_format::{
 use crate::op_def::OpDef;
 use crate::op_flag::IsolatedFromAbove;
 use crate::op_schema::{Arity, OpSchema, ResultSchema};
-use crate::parser::{
-    Argument, AsmParser, OpAsmParser, Operand, OperationState, ParseResult, lexer,
-};
+use crate::parser::{Argument, OpAsmParser, Operand, OperationState, ParseResult, lexer};
 use crate::printer::{AsmNamer, OpAsmPrinter, display_symbol_text};
 use crate::types::Attribute;
 use crate::{AttributeMap, BlockRef, IrContext, OpRef, RegionRef, TypeRef};
@@ -913,12 +911,20 @@ fn visit(elements: &[FormatElement], f: &mut impl FnMut(&FormatElement)) {
 // Parsing
 // =============================================================================
 
+/// The types a format writes for an operand entity.
+struct WrittenTypes {
+    /// The operand entity's schema position.
+    index: usize,
+    /// Where the list of types begins.
+    offset: usize,
+    /// Each type, with where it is written.
+    types: Vec<(TypeRef, usize)>,
+}
+
 /// The entities parsed so far, by schema position.
 struct Parsed<'a> {
     operands: Vec<Vec<Operand<'a>>>,
-    /// The types written for an operand entity, by its schema position, each
-    /// with its offset.
-    operand_types: Vec<(usize, usize, Vec<(TypeRef, usize)>)>,
+    operand_types: Vec<WrittenTypes>,
     attributes: AttributeMap,
     result_types: Vec<Vec<TypeRef>>,
     regions: Vec<Vec<RegionRef>>,
@@ -963,7 +969,12 @@ pub(crate) fn parse(
         regions,
         successors,
     } = parser.parsed;
-    for (index, offset, types) in operand_types {
+    for WrittenTypes {
+        index,
+        offset,
+        types,
+    } in operand_types
+    {
         if types.len() != operands[index].len() {
             return Err(p.error_at(offset, "expected one type for each operand"));
         }
@@ -1079,9 +1090,11 @@ impl<'a> FormatParser<'a> {
             FormatElement::OperandType(index) => {
                 let offset = p.offset();
                 let ty = p.parse_type()?;
-                self.parsed
-                    .operand_types
-                    .push((index, offset, vec![(ty, offset)]));
+                self.parsed.operand_types.push(WrittenTypes {
+                    index,
+                    offset,
+                    types: vec![(ty, offset)],
+                });
                 Ok(())
             }
             FormatElement::ResultType(index) => {
@@ -1161,10 +1174,14 @@ impl<'a> FormatParser<'a> {
                     let offset = p.offset();
                     Ok((p.parse_type()?, offset))
                 })?;
-                self.parsed.operand_types.push((index, offset, types));
+                self.parsed.operand_types.push(WrittenTypes {
+                    index,
+                    offset,
+                    types,
+                });
                 p.parse_punct("->")?;
                 let results = if p.peek().starts_with('(') {
-                    p.parse_delimited("(", ")", AsmParser::parse_type)?
+                    p.parse_delimited("(", ")", |p| p.parse_type())?
                 } else {
                     vec![p.parse_type()?]
                 };

@@ -3,14 +3,10 @@
 
 use std::fmt::{self, Write as _};
 
-use trunk_ir::asm_format::{
-    CustomEntity, OpAsmDirective, RawCustomEntity, attach_entry_args, parse_entry_args,
-};
+use trunk_ir::asm_format::{CustomEntity, OpAsmDirective, ParsedEntity};
 use trunk_ir::dialect::core::Never;
 use trunk_ir::ops::DialectType;
-use trunk_ir::parser::raw::{
-    RawAttribute, RawType, ident, raw_region, raw_type, symbol_path, symbol_ref, ws,
-};
+use trunk_ir::parser::{AsmParser, OpAsmParser, ParseResult, lexer};
 use trunk_ir::printer::{OpAsmPrinter, display_symbol_ref, display_symbol_text};
 use trunk_ir::refs::{RegionRef, TypeRef};
 use trunk_ir::types::{Attribute, AttributeMap, StringRef};
@@ -120,57 +116,52 @@ impl HandlerBinding {
         })
     }
 
-    /// Parse the header [`Self::header`] writes. It backtracks when
-    /// the input does not start with a kind keyword, so a list of arms ends
+    /// Parse the header [`Self::header`] writes, or `None`, leaving the
+    /// text as it was, when no kind keyword is next, so a list of arms ends
     /// there.
-    pub fn parse_header(input: &mut &str) -> winnow::ModalResult<RawHeader> {
+    pub fn parse_header(p: &mut AsmParser<'_>) -> ParseResult<Option<BindingHeader>> {
         use winnow::Parser as _;
 
-        let checkpoint = *input;
-        let Some(kind) = winnow::combinator::opt(ident)
-            .parse_next(input)?
-            .and_then(OperationKind::from_keyword)
+        let Some(kind) = p.parse_optional_token("an operation kind", |input| {
+            lexer::ident
+                .verify_map(OperationKind::from_keyword)
+                .parse_next(input)
+        })?
         else {
-            *input = checkpoint;
-            return Err(winnow::error::ErrMode::Backtrack(
-                winnow::error::ContextError::new(),
-            ));
+            return Ok(None);
         };
-        let (_, ability, _, op_name) = (ws, symbol_path, ws, symbol_ref)
-            .parse_next(input)
-            .map_err(|e| e.cut())?;
-        Ok(RawHeader {
+        let ability = p.parse_symbol_ref()?;
+        let op_name = p.parse_symbol_name()?;
+        Ok(Some(BindingHeader {
             kind,
             ability,
             op_name,
-        })
+        }))
     }
 }
 
 /// A binding header as [`HandlerBinding::parse_header`] reads it, still
 /// without its result type.
 #[derive(Clone, Debug)]
-pub struct RawHeader {
+pub struct BindingHeader {
     pub kind: OperationKind,
-    pub ability: Vec<String>,
+    pub ability: SymbolPath,
     pub op_name: String,
 }
 
-impl RawHeader {
-    /// The binding as a raw `handlers` element, with its result type.
-    pub fn into_attribute(self, operation_result_type: RawType<'_>) -> RawAttribute<'_> {
-        RawAttribute::Dict(vec![
-            ("ability".into(), RawAttribute::SymbolRef(self.ability)),
-            ("op_name".into(), RawAttribute::String(self.op_name)),
-            (
-                "kind".into(),
-                RawAttribute::String(self.kind.keyword().to_owned()),
-            ),
-            (
-                "operation_result_type".into(),
-                RawAttribute::Type(operation_result_type),
-            ),
-        ])
+impl BindingHeader {
+    /// The binding, with the result type written after it.
+    pub fn with_result_type(
+        self,
+        ctx: &mut IrContext,
+        operation_result_type: TypeRef,
+    ) -> HandlerBinding {
+        HandlerBinding {
+            ability: self.ability,
+            op_name: ctx.intern_str(&self.op_name),
+            kind: self.kind,
+            operation_result_type,
+        }
     }
 }
 
@@ -239,29 +230,20 @@ impl OpAsmDirective for HandleArms {
         Ok(())
     }
 
-    fn parse<'a>(input: &mut &'a str) -> winnow::ModalResult<Vec<RawCustomEntity<'a>>> {
-        use winnow::Parser as _;
-        use winnow::combinator::{preceded, repeat};
-
-        let arms: Vec<_> = repeat(0.., preceded(ws, parse_arm)).parse_next(input)?;
-        let (handlers, regions) = arms.into_iter().unzip();
+    fn parse(p: &mut OpAsmParser<'_>) -> ParseResult<Vec<ParsedEntity>> {
+        let mut handlers = Vec::new();
+        let mut regions = Vec::new();
+        while let Some(header) = HandlerBinding::parse_header(p)? {
+            let args = p.parse_entry_args()?;
+            p.parse_punct(":")?;
+            let result = p.parse_type()?;
+            regions.push(p.parse_region_with_entry(&args)?);
+            let binding = header.with_result_type(p.ctx_mut(), result);
+            handlers.push(binding.to_attribute(p.ctx_mut()));
+        }
         Ok(vec![
-            RawCustomEntity::Attribute(Some(RawAttribute::List(handlers))),
-            RawCustomEntity::Regions(regions),
+            ParsedEntity::Attribute(Some(Attribute::List(handlers))),
+            ParsedEntity::Regions(regions),
         ])
     }
-}
-
-fn parse_arm<'a>(
-    input: &mut &'a str,
-) -> winnow::ModalResult<(RawAttribute<'a>, trunk_ir::parser::raw::RawRegion<'a>)> {
-    use winnow::Parser as _;
-
-    let header = HandlerBinding::parse_header(input)?;
-    let (args, _, _, _, result, _, mut region) =
-        (parse_entry_args, ws, ':', ws, raw_type, ws, raw_region)
-            .parse_next(input)
-            .map_err(|e| e.cut())?;
-    attach_entry_args(&mut region, args)?;
-    Ok((header.into_attribute(result), region))
 }

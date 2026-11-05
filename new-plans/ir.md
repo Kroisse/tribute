@@ -618,6 +618,22 @@ parser는 그 attribute가 없는 정규형으로 읽는다. 두 operation은 ac
 같다. 같은 operation을 generic 형식으로 쓴 텍스트도 같은 operation으로
 읽힌다. Parser는 operation schema를 검증하지 않는다.
 
+Parser는 텍스트를 읽으면서 바로 IR을 만들며, 중간 표현을 거치지 않는다. 값
+이름은 읽는 즉시 같은 region이나 바깥 region에서 보이는 정의로 해석한다. 정의보다
+먼저 쓰인 이름(뒤 block의 argument 등)은 자리표시 값을 받고, 정의가 그 값을
+대신한다. 끝까지 정의되지 않은 이름은 처음 쓰인 곳의 오류다. Block label은 같은
+region의 block을 가리키며, 처음 언급될 때 만들어지고 label이 정의된 곳에서
+채워진다. 형식이 쓴 operand 타입은 정의의 타입과 같아야 하고, 아직 정의되지 않은
+값이면 정의할 때 검사한다. 모든 parse 오류는 텍스트의 byte offset을 밝힌다.
+
+형식 parser는 생략 가능한 원소를 읽기 전에 다음 token으로 그 원소가 있는지
+정하고, 없으면 텍스트를 소비하지 않는다. 원소를 읽기 시작한 뒤의 실패는 오류이며
+다른 해석으로 되돌아가지 않는다. 그래서 operation, block, region, 값은 그 구성을
+읽기로 확정한 뒤에만 만들어지고, 없다고 판정된 원소는 context에 아무것도 남기지
+않는다. 타입과 문자열의 intern은 같은 값을 다시 만들지 않으므로 IR을 바꾸지
+않는다. 타입 전용 문법은 자기 문법이 아니면 아무것도 읽기 전에 그렇다고 답하고,
+parser는 그 자리에서 generic 표기를 읽는다.
+
 형식 parser의 실패는 기대한 원소를 밝힌 오류로 끝나며, 같은 입력을 generic
 형식으로 다시 읽지 않는다. 원소 사이의 공백은 token이 아니다. Keyword literal과
 `attr_dict`의 `attributes`는 식별자 전체로 읽으며, 바로 뒤에 `.`이 오면 다음
@@ -698,8 +714,8 @@ dialect 이름을 알지 못하며, `signature`는 형식이 묶은 타입 변�
 - 분해는 입력과 결과(각각의 매개변수 속성 포함), 그리고 codec이 소유하는 꼬리
   표기를 돌려준다. 손실 없이 분해할 수 없는 타입이면 분해하지 않으며, 그
   operation은 generic 형식으로 출력한다.
-- 재구성은 parser가 읽은 입력·결과와 꼬리 표기를 그 타입의 generic raw 형태로
-  만든다. Codec은 허용하는 결과 개수를 정한다.
+- 재구성은 parser가 읽은 입력·결과와 꼬리 표기로 그 타입을 만든다. Codec은
+  허용하는 결과 개수를 정한다.
 - 꼬리 표기는 결과 뒤에 오는 codec 고유의 절이며, codec이 출력과 파싱을 모두
   맡는다. `func.func_sig` 계열은 매개변수 속성을 매개변수 뒤에 `%a: A {k = v}`로
   쓰고, 두 count 밖의 type attribute를 결과 뒤에 쉼표로 이어 dictionary로 쓴다

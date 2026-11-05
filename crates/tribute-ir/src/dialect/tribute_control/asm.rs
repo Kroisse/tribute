@@ -2,6 +2,7 @@
 
 use super::*;
 use fmt::Write as _;
+use trunk_ir::parser::{Argument, AsmParser, OpAsmParser, OperationState, ParseResult};
 use trunk_ir::printer::{
     AsmNamer, OpAsmPrinter, display_symbol_ref, display_symbol_text, entry_args,
 };
@@ -104,97 +105,72 @@ fn parse_binder_name(input: &mut &str) -> winnow::ModalResult<u32> {
     digit1.try_map(str::parse::<u32>).parse_next(input)
 }
 
-/// A definition header's `[...]` binder list, as the raw `row_binders` and
+/// A definition header's `[...]` binder list, as the `row_binders` and
 /// `row_unions` attributes; nothing when the header has none.
-fn parse_binders<'a>(
-    input: &mut &'a str,
-) -> winnow::ModalResult<
-    Vec<(
-        std::borrow::Cow<'a, str>,
-        trunk_ir::parser::raw::RawAttribute<'a>,
-    )>,
-> {
-    use trunk_ir::parser::raw::{RawAttribute, ident, ws};
-    use winnow::combinator::{opt, separated};
-    use winnow::prelude::*;
-
-    let reject = || winnow::error::ErrMode::Backtrack(winnow::error::ContextError::new());
-    let checkpoint = *input;
-    ws.parse_next(input)?;
-    if opt('[').parse_next(input)?.is_none() {
-        *input = checkpoint;
+fn parse_binders(p: &mut AsmParser<'_>) -> ParseResult<Vec<(&'static str, Attribute)>> {
+    if !p.parse_optional_punct("[") {
         return Ok(Vec::new());
     }
     let mut kinds = Vec::new();
     let mut unions = Vec::new();
     loop {
-        ws.parse_next(input)?;
-        let kind = match opt(ident).parse_next(input)?.map(RowBinder::from_keyword) {
-            Some(Some(kind)) if kind != RowBinder::Param => {
-                ws.parse_next(input)?;
-                kind
-            }
+        p.peek();
+        let offset = p.offset();
+        let kind = match p.parse_optional_identifier() {
             None => RowBinder::Param,
-            Some(_) => return Err(reject()),
+            Some(word) => match RowBinder::from_keyword(word) {
+                Some(kind) if kind != RowBinder::Param => kind,
+                _ => return Err(p.error_at(offset, "expected a row binder kind")),
+            },
         };
-        let index = parse_binder_name(input)?;
+        p.peek();
+        let offset = p.offset();
+        let index = p.parse_token("a row binder `'aN`", parse_binder_name)?;
         if usize::try_from(index).ok() != Some(kinds.len()) {
-            return Err(reject());
+            return Err(p.error_at(offset, "expected row binders numbered in order"));
         }
-        kinds.push(RawAttribute::String(kind.keyword().to_owned()));
-        ws.parse_next(input)?;
-        if opt('=').parse_next(input)?.is_some() {
-            let sources: Vec<u32> = separated(
-                1..,
-                (ws, parse_binder_name, ws).map(|(_, source, _)| source),
-                '|',
-            )
-            .parse_next(input)?;
-            unions.push(RawAttribute::Dict(vec![
-                ("result".into(), RawAttribute::Int(i128::from(index))),
-                (
-                    "sources".into(),
-                    RawAttribute::List(
-                        sources
-                            .into_iter()
-                            .map(|source| RawAttribute::Int(i128::from(source)))
-                            .collect(),
-                    ),
-                ),
-            ]));
+        kinds.push(p.ctx_mut().string_attr(kind.keyword()));
+        if p.parse_optional_punct("=") {
+            let mut sources = vec![p.parse_token("a row binder `'aN`", parse_binder_name)?];
+            while p.parse_optional_punct("|") {
+                sources.push(p.parse_token("a row binder `'aN`", parse_binder_name)?);
+            }
+            let sources = sources
+                .into_iter()
+                .map(|source| Attribute::Int(i128::from(source)))
+                .collect();
+            unions.push(Attribute::Dict(AttributeMap::from_entries(
+                p.ctx_mut(),
+                [
+                    ("result", Attribute::Int(i128::from(index))),
+                    ("sources", Attribute::List(sources)),
+                ],
+            )));
         }
-        ws.parse_next(input)?;
-        if opt(',').parse_next(input)?.is_none() {
+        if !p.parse_optional_punct(",") {
             break;
         }
     }
-    ']'.parse_next(input)?;
-    let mut attributes = vec![(ROW_BINDERS_ATTR.into(), RawAttribute::List(kinds))];
+    p.parse_punct("]")?;
+    let mut attributes = vec![(ROW_BINDERS_ATTR, Attribute::List(kinds))];
     if !unions.is_empty() {
-        attributes.push((ROW_UNIONS_ATTR.into(), RawAttribute::List(unions)));
+        attributes.push((ROW_UNIONS_ATTR, Attribute::List(unions)));
     }
     Ok(attributes)
 }
 
 /// The `inferred` keyword before a definition's convention.
-fn parse_inferred(input: &mut &str) -> winnow::ModalResult<bool> {
-    use trunk_ir::parser::raw::ws;
-    use winnow::combinator::opt;
+fn parse_inferred(p: &mut AsmParser<'_>) -> ParseResult<bool> {
     use winnow::prelude::*;
 
-    let checkpoint = *input;
-    ws.parse_next(input)?;
-    if opt((
-        "inferred",
-        winnow::combinator::peek(winnow::ascii::multispace1),
-    ))
-    .parse_next(input)?
-    .is_some()
-    {
-        return Ok(true);
-    }
-    *input = checkpoint;
-    Ok(false)
+    let inferred = p.parse_optional_token("`inferred`", |input| {
+        (
+            "inferred",
+            winnow::combinator::peek(winnow::ascii::multispace1),
+        )
+            .parse_next(input)
+    })?;
+    Ok(inferred.is_some())
 }
 
 pub(super) fn func_sig_parts(ctx: &IrContext, ty: TypeRef) -> Option<(TypeRef, Vec<TypeRef>)> {
@@ -314,190 +290,160 @@ pub(crate) fn print_func(
 }
 
 /// The concise ` convention(...)`; `None` when the signature has none yet.
-fn parse_convention(input: &mut &str) -> winnow::ModalResult<Option<CallingConvention>> {
-    use trunk_ir::parser::raw::{ident, ws};
-    use winnow::combinator::opt;
-    use winnow::prelude::*;
-
-    let checkpoint = *input;
-    ws.parse_next(input)?;
-    if opt("convention").parse_next(input)?.is_none() {
-        *input = checkpoint;
+fn parse_convention(p: &mut AsmParser<'_>) -> ParseResult<Option<CallingConvention>> {
+    if !p.parse_optional_keyword("convention") {
         return Ok(None);
     }
-    ws.parse_next(input)?;
-    '('.parse_next(input)?;
-    ws.parse_next(input)?;
-    let keyword = ident.parse_next(input)?;
-    let Ok(convention) = keyword.parse::<CallingConvention>() else {
-        return Err(winnow::error::ErrMode::Backtrack(
-            winnow::error::ContextError::new(),
-        ));
-    };
-    ws.parse_next(input)?;
-    ')'.parse_next(input)?;
+    p.parse_punct("(")?;
+    p.peek();
+    let offset = p.offset();
+    let keyword = p.parse_identifier()?;
+    let convention = keyword
+        .parse::<CallingConvention>()
+        .map_err(|_| p.error_at(offset, "expected a calling convention"))?;
+    p.parse_punct(")")?;
     Ok(Some(convention))
 }
 
-/// The concise row of a source signature, `row(@A, @B | 'a1)`, as the raw
+/// The concise row of a source signature, `row(@A, @B | 'a1)`, as the
 /// `ability_row` attribute; `None` when the signature writes no row.
-pub(super) fn parse_row<'a>(
-    input: &mut &'a str,
-) -> winnow::ModalResult<Option<trunk_ir::parser::raw::RawAttribute<'a>>> {
-    use trunk_ir::parser::raw::{RawAttribute, symbol_path, ws};
-    use winnow::combinator::{opt, separated};
-    use winnow::prelude::*;
-
-    let checkpoint = *input;
-    ws.parse_next(input)?;
-    if opt("row(").parse_next(input)?.is_none() {
-        *input = checkpoint;
+pub(super) fn parse_row(p: &mut AsmParser<'_>) -> ParseResult<Option<Attribute>> {
+    if !p.parse_optional_punct("row(") {
         return Ok(None);
     }
-    ws.parse_next(input)?;
-    let instances: Vec<Vec<String>> =
-        separated(0.., (ws, symbol_path, ws).map(|(_, path, _)| path), ',').parse_next(input)?;
-    ws.parse_next(input)?;
-    let tail = opt(('|', ws, parse_binder_name, ws))
-        .parse_next(input)?
-        .map(|(_, _, tail, _)| tail);
-    ')'.parse_next(input)?;
+    let mut instances = Vec::new();
+    if p.peek().starts_with('@') {
+        loop {
+            instances.push(Attribute::SymbolRef(p.parse_symbol_ref()?));
+            if !p.parse_optional_punct(",") {
+                break;
+            }
+        }
+    }
+    let tail = if p.parse_optional_punct("|") {
+        Some(p.parse_token("a row variable `'aN`", parse_binder_name)?)
+    } else {
+        None
+    };
+    p.parse_punct(")")?;
     if instances.is_empty() && tail.is_none() {
-        return Err(winnow::error::ErrMode::Backtrack(
-            winnow::error::ContextError::new(),
-        ));
+        return Err(p.expected("a row with abilities or a tail"));
     }
     let mut entries = Vec::new();
     if !instances.is_empty() {
-        entries.push((
-            "instances".into(),
-            RawAttribute::List(instances.into_iter().map(RawAttribute::SymbolRef).collect()),
-        ));
+        entries.push(("instances", Attribute::List(instances)));
     }
     if let Some(tail) = tail {
-        entries.push(("tail".into(), RawAttribute::Int(i128::from(tail))));
+        entries.push(("tail", Attribute::Int(i128::from(tail))));
     }
-    Ok(Some(RawAttribute::Dict(entries)))
+    Ok(Some(Attribute::Dict(AttributeMap::from_entries(
+        p.ctx_mut(),
+        entries,
+    ))))
 }
 
-fn func_sig_raw_type<'a>(
-    result: trunk_ir::parser::raw::RawType<'a>,
-    params: &[(&'a str, trunk_ir::parser::raw::RawType<'a>)],
-    row: Option<trunk_ir::parser::raw::RawAttribute<'a>>,
-) -> trunk_ir::parser::raw::RawType<'a> {
-    let attrs = row
-        .map(|row| (ABILITY_ROW_ATTR.into(), row))
-        .into_iter()
-        .collect();
-    trunk_ir::dialect::func::signature_raw_type(
+/// The source signature `(params) -> result` with `row`.
+fn func_sig_type(
+    p: &mut AsmParser<'_>,
+    result: TypeRef,
+    params: &[Argument],
+    row: Option<Attribute>,
+) -> ParseResult<TypeRef> {
+    let mut attrs = AttributeMap::new();
+    if let Some(row) = row {
+        attrs.view_mut(p.ctx_mut()).insert(ABILITY_ROW_ATTR, row);
+    }
+    trunk_ir::dialect::func::build_signature_type(
+        p,
         "tribute_control.func_sig",
-        params.iter().map(|(_, ty)| ty.clone().into()).collect(),
-        vec![result.into()],
+        params
+            .iter()
+            .map(|param| (param.ty, AttributeMap::new()))
+            .collect(),
+        vec![(result, AttributeMap::new())],
         attrs,
     )
 }
 
-/// Whether an operation's attributes hold the row its signature type owns, or
-/// the physical convention attribute.
-fn has_duplicate_convention_attr(
-    attrs: &[(
-        std::borrow::Cow<'_, str>,
-        trunk_ir::parser::raw::RawAttribute<'_>,
-    )],
-) -> bool {
-    attrs
-        .iter()
-        .any(|(key, _)| key == CALLING_CONVENTION_ATTR || key == ABILITY_ROW_ATTR)
+/// Whether an operation's attributes hold the row its signature type owns,
+/// or the physical convention attribute.
+fn has_duplicate_convention_attr(ctx: &IrContext, attrs: &AttributeMap) -> bool {
+    let attrs = attrs.view(ctx);
+    attrs.contains_key(CALLING_CONVENTION_ATTR) || attrs.contains_key(ABILITY_ROW_ATTR)
 }
 
-/// Parse a source function named `name`. With `on_operation`, the operation
-/// declares the convention, which it then requires; otherwise it has none.
-pub(crate) fn parse_func<'a>(
-    input: &mut &'a str,
-    results: Vec<&'a str>,
-    sym_name: Option<String>,
-    name: &'static str,
+/// ` attributes {..}`, or nothing.
+fn parse_extra_attributes(p: &mut AsmParser<'_>) -> ParseResult<AttributeMap> {
+    if p.parse_optional_keyword("attributes") {
+        p.parse_attr_dict()
+    } else {
+        Ok(AttributeMap::new())
+    }
+}
+
+/// Parse a source function. With `on_operation`, the operation declares the
+/// convention, which it then requires; otherwise it has none.
+pub(crate) fn parse_func(
+    p: &mut OpAsmParser<'_>,
+    state: &mut OperationState,
     on_operation: bool,
-) -> winnow::ModalResult<trunk_ir::parser::raw::RawOperation<'a>> {
-    use trunk_ir::parser::raw::*;
-    use winnow::combinator::opt;
-    use winnow::prelude::*;
-
-    if !results.is_empty() || sym_name.is_none() {
-        return Err(winnow::error::ErrMode::Backtrack(
-            winnow::error::ContextError::new(),
-        ));
+) -> ParseResult<()> {
+    if p.num_results() != 0 {
+        return Err(p.expected("a function without results"));
     }
-
-    let binders = parse_binders(input)?;
-    ws.parse_next(input)?;
-    let params = func_params.parse_next(input)?;
-    let result = return_type.parse_next(input)?;
-    let row = parse_row(input)?;
-    let inferred = parse_inferred(input)?;
-    let convention = parse_convention(input)?;
+    let sym_name = p.parse_symbol_name()?;
+    let binders = parse_binders(p)?;
+    let params = p.parse_entry_args()?;
+    p.parse_punct("->")?;
+    let result = p.parse_type()?;
+    let row = parse_row(p)?;
+    let inferred = parse_inferred(p)?;
+    let convention = parse_convention(p)?;
     if on_operation != convention.is_some() {
-        return Err(winnow::error::ErrMode::Backtrack(
-            winnow::error::ContextError::new(),
-        ));
+        return Err(p.expected(if on_operation {
+            "`convention(..)`"
+        } else {
+            "no `convention(..)`"
+        }));
     }
-    let attributes = opt((ws, "attributes", ws, raw_attr_dict))
-        .parse_next(input)?
-        .map(|(_, _, _, attrs)| attrs)
-        .unwrap_or_default();
-    if has_duplicate_convention_attr(&attributes)
-        || attributes.iter().any(|(key, _)| {
-            matches!(
-                key.as_ref(),
-                "sym_name" | "type" | ROW_BINDERS_ATTR | ROW_UNIONS_ATTR | INFERRED_ROW_ATTR
-            ) || (on_operation && key == tribute_cps::CONVENTION_ATTR)
-        })
+    let attributes = parse_extra_attributes(p)?;
+    let view = attributes.view(p.ctx());
+    if has_duplicate_convention_attr(p.ctx(), &attributes)
+        || [
+            "sym_name",
+            "type",
+            ROW_BINDERS_ATTR,
+            ROW_UNIONS_ATTR,
+            INFERRED_ROW_ATTR,
+        ]
+        .into_iter()
+        .any(|key| view.contains_key(key))
+        || (on_operation && view.contains_key(tribute_cps::CONVENTION_ATTR))
     {
-        return Err(winnow::error::ErrMode::Backtrack(
-            winnow::error::ContextError::new(),
-        ));
+        return Err(p.expected("attributes without the ones the header writes"));
     }
 
-    ws.parse_next(input)?;
-    let mut regions = Vec::new();
-    if input.starts_with('{') {
-        let mut region = raw_region.parse_next(input)?;
-        if !region.blocks.is_empty() {
-            let mut merged = params.clone();
-            merged.append(&mut region.blocks[0].args);
-            region.blocks[0].args = merged;
-        }
-        regions.push(region);
+    if p.peek().starts_with('{') {
+        state.regions.push(p.parse_region_with_args(&params)?);
     }
 
-    let signature = func_sig_raw_type(result, &params, row);
-    let mut attributes = attributes;
-    attributes.extend(binders);
+    let signature = func_sig_type(p, result, &params, row)?;
+    let ctx = p.ctx_mut();
+    state.add_attributes(ctx, attributes);
+    for (key, value) in binders {
+        state.add_attribute(ctx, key, value);
+    }
     if let Some(convention) = convention {
-        attributes.push((
-            tribute_cps::CONVENTION_ATTR.into(),
-            RawAttribute::String(convention.keyword().to_owned()),
-        ));
+        let convention = ctx.string_attr(convention.keyword());
+        state.add_attribute(ctx, tribute_cps::CONVENTION_ATTR, convention);
     }
     if inferred {
-        attributes.push((INFERRED_ROW_ATTR.into(), RawAttribute::Bool(true)));
+        state.add_attribute(ctx, INFERRED_ROW_ATTR, Attribute::Bool(true));
     }
-    attributes.push(("type".into(), RawAttribute::Type(signature)));
-
-    Ok(RawOperation {
-        results,
-        name,
-        sym_name,
-        func_params: vec![],
-        func_param_regions: vec![],
-        operands: vec![],
-        operand_types: Vec::new(),
-        attributes,
-        result_types: vec![],
-        fixed_results: false,
-        regions,
-        successors: vec![],
-    })
+    state.add_attribute(ctx, "type", Attribute::Type(signature));
+    let sym_name = ctx.string_attr(&sym_name);
+    state.add_attribute(ctx, "sym_name", sym_name);
+    Ok(())
 }
 
 impl trunk_ir::asm_format::OpAsmFormat for Func {
@@ -505,12 +451,8 @@ impl trunk_ir::asm_format::OpAsmFormat for Func {
         print_func(p, self.op_ref(), "tribute_control.func", None)
     }
 
-    fn parse<'a>(
-        input: &mut &'a str,
-        results: Vec<&'a str>,
-        sym_name: Option<String>,
-    ) -> winnow::ModalResult<trunk_ir::parser::raw::RawOperation<'a>> {
-        parse_func(input, results, sym_name, "tribute_control.func", false)
+    fn parse(p: &mut OpAsmParser<'_>, state: &mut OperationState) -> ParseResult<()> {
+        parse_func(p, state, false)
     }
 }
 
@@ -616,150 +558,101 @@ pub(crate) fn assign_lambda_names(namer: &mut AsmNamer<'_>, op: OpRef, entries: 
     }
 }
 
-fn parse_captures<'a>(input: &mut &'a str) -> winnow::ModalResult<Vec<&'a str>> {
-    use trunk_ir::parser::raw::{value_ref, ws};
-    use winnow::combinator::{delimited, separated};
-    use winnow::prelude::*;
-
-    ws.parse_next(input)?;
-    "captures".parse_next(input)?;
-    ws.parse_next(input)?;
-    delimited(
-        ('[', ws),
-        separated(0.., (ws, value_ref, ws).map(|(_, value, _)| value), ','),
-        (ws, ']'),
-    )
-    .parse_next(input)
-}
-
 /// `entries { <convention> { .. } ... }`, the bodies of a lambda that
-/// declares their conventions, in order.
-fn parse_entries<'a>(
-    input: &mut &'a str,
-) -> winnow::ModalResult<Vec<(CallingConvention, trunk_ir::parser::raw::RawRegion<'a>)>> {
-    use trunk_ir::parser::raw::{ident, raw_region, ws};
-    use winnow::combinator::repeat;
+/// declares their conventions, in order, each taking `params`.
+fn parse_entries(
+    p: &mut OpAsmParser<'_>,
+    params: &[Argument],
+) -> ParseResult<Vec<(CallingConvention, RegionRef)>> {
+    use trunk_ir::parser::lexer::ident;
     use winnow::prelude::*;
 
-    "entries".parse_next(input)?;
-    ws.parse_next(input)?;
-    '{'.parse_next(input)?;
-    ws.parse_next(input)?;
-    let entries = repeat(
-        1..,
-        (
-            ident.try_map(str::parse::<CallingConvention>),
-            ws,
-            raw_region,
-            ws,
-        )
-            .map(|(convention, _, region, _)| (convention, region)),
-    )
-    .parse_next(input)?;
-    '}'.parse_next(input)?;
+    p.parse_keyword("entries")?;
+    p.parse_punct("{")?;
+    let mut entries = Vec::new();
+    while let Some(convention) = p.parse_optional_token("a calling convention", |input| {
+        ident
+            .try_map(str::parse::<CallingConvention>)
+            .parse_next(input)
+    })? {
+        entries.push((convention, p.parse_region_with_args(params)?));
+    }
+    if entries.is_empty() {
+        return Err(p.expected("an entry `<convention> { .. }`"));
+    }
+    p.parse_punct("}")?;
     Ok(entries)
 }
 
-/// Parse a source lambda named `name`. With `entries`, its bodies are
-/// written under the conventions the operation declares; otherwise its one
-/// body follows the captures.
-pub(crate) fn parse_lambda<'a>(
-    input: &mut &'a str,
-    results: Vec<&'a str>,
-    sym_name: Option<String>,
-    name: &'static str,
+/// Parse a source lambda. With `entries`, its bodies are written under the
+/// conventions the operation declares; otherwise its one body follows the
+/// captures.
+pub(crate) fn parse_lambda(
+    p: &mut OpAsmParser<'_>,
+    state: &mut OperationState,
     entries: bool,
-) -> winnow::ModalResult<trunk_ir::parser::raw::RawOperation<'a>> {
-    use trunk_ir::parser::raw::*;
-    use winnow::combinator::{opt, separated};
-    use winnow::prelude::*;
-
-    if results.len() != 1 || sym_name.is_some() {
-        return Err(winnow::error::ErrMode::Backtrack(
-            winnow::error::ContextError::new(),
-        ));
+) -> ParseResult<()> {
+    if p.num_results() != 1 {
+        return Err(p.expected("a lambda with one result"));
     }
-
-    ws.parse_next(input)?;
-    let quantified: Option<Vec<u32>> = opt((
-        '[',
-        separated(
-            1..,
-            (ws, parse_binder_name, ws).map(|(_, binder, _)| binder),
-            ',',
-        ),
-        ']',
-    ))
-    .parse_next(input)?
-    .map(|(_, binders, _)| binders);
-    ws.parse_next(input)?;
-    let params = func_params.parse_next(input)?;
-    let result = return_type.parse_next(input)?;
-    let row = parse_row(input)?;
-    let captures = parse_captures(input)?;
-    let mut attributes = opt((ws, "attributes", ws, raw_attr_dict))
-        .parse_next(input)?
-        .map(|(_, _, _, attrs)| attrs)
-        .unwrap_or_default();
-    if has_duplicate_convention_attr(&attributes)
-        || attributes.iter().any(|(key, _)| {
-            key == QUANTIFIED_ROWS_ATTR || (entries && key == tribute_cps::CONVENTIONS_ATTR)
-        })
-    {
-        return Err(winnow::error::ErrMode::Backtrack(
-            winnow::error::ContextError::new(),
-        ));
-    }
-    if let Some(quantified) = quantified {
-        attributes.push((
-            QUANTIFIED_ROWS_ATTR.into(),
-            RawAttribute::List(
-                quantified
-                    .into_iter()
-                    .map(|binder| RawAttribute::Int(i128::from(binder)))
-                    .collect(),
-            ),
-        ));
-    }
-
-    ws.parse_next(input)?;
-    let mut regions = if entries {
-        let (conventions, regions): (Vec<_>, Vec<_>) = parse_entries(input)?.into_iter().unzip();
-        attributes.push((
-            tribute_cps::CONVENTIONS_ATTR.into(),
-            RawAttribute::List(
-                conventions
-                    .into_iter()
-                    .map(|convention| RawAttribute::String(convention.keyword().to_owned()))
-                    .collect(),
-            ),
-        ));
-        regions
-    } else {
-        vec![raw_region.parse_next(input)?]
-    };
-    for region in &mut regions {
-        if !region.blocks.is_empty() {
-            let mut merged = params.clone();
-            merged.append(&mut region.blocks[0].args);
-            region.blocks[0].args = merged;
+    let quantified = if p.parse_optional_punct("[") {
+        let mut binders = vec![p.parse_token("a row binder `'aN`", parse_binder_name)?];
+        while p.parse_optional_punct(",") {
+            binders.push(p.parse_token("a row binder `'aN`", parse_binder_name)?);
         }
+        p.parse_punct("]")?;
+        Some(binders)
+    } else {
+        None
+    };
+    let params = p.parse_entry_args()?;
+    p.parse_punct("->")?;
+    let result = p.parse_type()?;
+    let row = parse_row(p)?;
+    p.parse_keyword("captures")?;
+    let captures = p.parse_delimited("[", "]", |p| p.parse_operand())?;
+    let attributes = parse_extra_attributes(p)?;
+    let view = attributes.view(p.ctx());
+    if has_duplicate_convention_attr(p.ctx(), &attributes)
+        || view.contains_key(QUANTIFIED_ROWS_ATTR)
+        || (entries && view.contains_key(tribute_cps::CONVENTIONS_ATTR))
+    {
+        return Err(p.expected("attributes without the ones the header writes"));
     }
 
-    Ok(RawOperation {
-        results,
-        name,
-        sym_name,
-        func_params: vec![],
-        func_param_regions: vec![],
-        operands: captures,
-        operand_types: Vec::new(),
-        attributes,
-        result_types: vec![func_sig_raw_type(result, &params, row)],
-        fixed_results: false,
-        regions,
-        successors: vec![],
-    })
+    if entries {
+        let (conventions, regions): (Vec<_>, Vec<_>) =
+            parse_entries(p, &params)?.into_iter().unzip();
+        let conventions = conventions
+            .into_iter()
+            .map(|convention| p.ctx_mut().string_attr(convention.keyword()))
+            .collect();
+        state.add_attribute(
+            p.ctx_mut(),
+            tribute_cps::CONVENTIONS_ATTR,
+            Attribute::List(conventions),
+        );
+        state.regions = regions;
+    } else {
+        state.regions = vec![p.parse_region_with_args(&params)?];
+    }
+
+    let signature = func_sig_type(p, result, &params, row)?;
+    state.add_attributes(p.ctx_mut(), attributes);
+    if let Some(quantified) = quantified {
+        let quantified = quantified
+            .into_iter()
+            .map(|binder| Attribute::Int(i128::from(binder)))
+            .collect();
+        state.add_attribute(
+            p.ctx_mut(),
+            QUANTIFIED_ROWS_ATTR,
+            Attribute::List(quantified),
+        );
+    }
+    state.operands = captures;
+    state.result_types = vec![signature];
+    Ok(())
 }
 
 impl trunk_ir::asm_format::OpAsmFormat for Lambda {
@@ -771,11 +664,7 @@ impl trunk_ir::asm_format::OpAsmFormat for Lambda {
         assign_lambda_names(namer, self.op_ref(), false);
     }
 
-    fn parse<'a>(
-        input: &mut &'a str,
-        results: Vec<&'a str>,
-        sym_name: Option<String>,
-    ) -> winnow::ModalResult<trunk_ir::parser::raw::RawOperation<'a>> {
-        parse_lambda(input, results, sym_name, "tribute_control.lambda", false)
+    fn parse(p: &mut OpAsmParser<'_>, state: &mut OperationState) -> ParseResult<()> {
+        parse_lambda(p, state, false)
     }
 }

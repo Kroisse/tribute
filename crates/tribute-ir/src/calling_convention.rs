@@ -115,14 +115,12 @@ impl trunk_ir::attr_kind::AttrKind for CallingConvention {
         fmt::Write::write_str(p, Self::read(p.ctx(), attr).keyword())
     }
 
-    fn parse_text<'a>(
-        input: &mut &'a str,
-    ) -> winnow::ModalResult<trunk_ir::parser::raw::RawAttribute<'a>> {
-        trunk_ir::asm_format::parse_keyword(input, |word| {
+    fn parse_text(
+        p: &mut trunk_ir::parser::AsmParser<'_>,
+    ) -> trunk_ir::parser::ParseResult<Attribute> {
+        trunk_ir::asm_format::parse_keyword(p, |ctx, word| {
             let convention: Self = word.parse().ok()?;
-            Some(trunk_ir::parser::raw::RawAttribute::String(
-                convention.keyword().to_owned(),
-            ))
+            Some(ctx.string_attr(convention.keyword()))
         })
     }
 }

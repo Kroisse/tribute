@@ -163,18 +163,21 @@ pub trait SignatureCodec: DialectType {
     ) -> ParseResult<TypeRef>;
 }
 
+/// [`SignatureCodec::build`] as a [`SignatureCodecHooks`] stores it.
+pub type BuildSignature = fn(
+    &mut AsmParser<'_>,
+    Vec<(TypeRef, AttributeMap)>,
+    Vec<(TypeRef, AttributeMap)>,
+    AttributeMap,
+) -> ParseResult<TypeRef>;
+
 /// A [`SignatureCodec`]'s hooks, as a `signature` format element stores them.
 #[derive(Clone, Copy, Debug)]
 pub struct SignatureCodecHooks {
     pub decompose: for<'c> fn(&'c IrContext, TypeRef) -> Option<SignatureParts<'c>>,
     pub write_tail: fn(&mut AsmPrinter<'_>, &[(StringRef, &Attribute)]) -> fmt::Result,
     pub parse_tail: fn(&mut AsmParser<'_>) -> ParseResult<AttributeMap>,
-    pub build: fn(
-        &mut AsmParser<'_>,
-        Vec<(TypeRef, AttributeMap)>,
-        Vec<(TypeRef, AttributeMap)>,
-        AttributeMap,
-    ) -> ParseResult<TypeRef>,
+    pub build: BuildSignature,
 }
 
 impl SignatureCodecHooks {

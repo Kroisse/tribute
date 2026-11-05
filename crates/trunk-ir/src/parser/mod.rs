@@ -1,6 +1,6 @@
 //! IR text format parser.
 //!
-//! The parser reads text straight into an [`IrContext`](crate::IrContext),
+//! The parser reads text straight into an [`IrContext`],
 //! as MLIR's does. [`AsmParser`] reads types, attributes, and tokens;
 //! [`OpAsmParser`] extends it with operations, regions, and blocks, and is
 //! what an operation's custom format reads with. [`lexer`] holds the token
