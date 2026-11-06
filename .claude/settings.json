@@ -17,6 +17,28 @@
         "deny": []
     },
     "hooks": {
+        "SessionStart": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "cargo xtask runtime >/dev/null 2>&1 || true",
+                        "async": true
+                    }
+                ]
+            }
+        ],
+        "PostToolUse": [
+            {
+                "matcher": "Bash|Edit|Write",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "jq -r '.tool_input.file_path' | grep '\\.rs$' | xargs -r rustfmt --edition 2024"
+                    }
+                ]
+            }
+        ],
         "Stop": [
             {
                 "hooks": [
