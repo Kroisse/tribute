@@ -53,10 +53,22 @@ mod adt {
         name: Attr<String>,
     }
 
+    /// A new struct of layout `type` whose fields are `fields` in order.
+    ///
+    /// When the layout declares row parameters, each field operand has the
+    /// layout's field type with the layout's row binders replaced by the
+    /// `row_args` of the result's `adt.typeref`, using call-site row
+    /// substitution; see `new-plans/ir.md` § "Nominal row 인자".
     #[flags(Pure)]
     #[asm_format(fields attr_dict_bare ":" type(result))]
     fn struct_new(r#type: Attr<Type>, fields: Variadic<_>) -> Value<_> {}
 
+    /// Field `field` of the struct `ref` of layout `type`.
+    ///
+    /// When the layout declares row parameters, the result has the layout's
+    /// field type with the layout's row binders replaced by the `row_args` of
+    /// the `ref` operand's `adt.typeref`, using call-site row substitution; see
+    /// `new-plans/ir.md` § "Nominal row 인자".
     #[flags(Pure)]
     #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn struct_get(r#type: Attr<Type>, field: Attr<u32>, r#ref: Value<_>) -> Value<_> {}
@@ -64,6 +76,13 @@ mod adt {
     #[asm_format(r#ref "," value attr_dict_bare)]
     fn struct_set(r#type: Attr<Type>, field: Attr<u32>, r#ref: Value<_>, value: Value<_>) {}
 
+    /// A new value of variant `tag` of enum layout `type` whose fields are
+    /// `fields` in order.
+    ///
+    /// When the layout declares row parameters, each field operand has the
+    /// layout's field type with the layout's row binders replaced by the
+    /// `row_args` of the result's `adt.typeref`, using call-site row
+    /// substitution; see `new-plans/ir.md` § "Nominal row 인자".
     #[flags(Pure)]
     #[asm_format(fields attr_dict_bare ":" type(result))]
     fn variant_new(r#type: Attr<Type>, tag: Attr<String>, fields: Variadic<_>) -> Value<_> {}
@@ -95,10 +114,12 @@ mod adt {
     #[asm_format(r#ref attr_dict_bare)]
     fn variant_tag(r#type: Attr<Type>, r#ref: Value<_>) -> Value<Index> {}
 
-    #[flags(Pure)]
-    #[asm_format(r#ref attr_dict_bare ":" type(result))]
-    fn variant_cast(r#type: Attr<Type>, tag: Attr<String>, r#ref: Value<_>) -> Value<_> {}
-
+    /// Field `field` of `ref`, a value of variant `tag` of enum layout `type`.
+    ///
+    /// When the layout declares row parameters, the result has the layout's
+    /// field type with the layout's row binders replaced by the `row_args` of
+    /// the `ref` operand's `adt.typeref`, using call-site row substitution; see
+    /// `new-plans/ir.md` § "Nominal row 인자".
     #[flags(Pure)]
     #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn variant_get(
@@ -374,6 +395,23 @@ pub fn nominal_name_ref(ctx: &IrContext, ty: TypeRef) -> Option<StringRef> {
 /// The text of [`nominal_name_ref`].
 pub fn nominal_name(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
     nominal_name_ref(ctx, ty).map(|name| ctx.str(name))
+}
+
+/// The `adt.struct` or `adt.enum` layout of a value of type `ty`: `ty`
+/// itself when it is a layout, or the layout an `adt.typeref` names
+/// (`new-plans/ir.md` § "`adt.typeref` nominal reference type"), which the
+/// frontend publishes as the type alias of that name. `None` for any other
+/// type or a name without a published layout.
+pub fn layout_of(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> {
+    let is_layout = |ty: TypeRef| Struct::matches(ctx, ty) || Enum::matches(ctx, ty);
+    if is_layout(ty) {
+        return Some(ty);
+    }
+    if !Typeref::matches(ctx, ty) {
+        return None;
+    }
+    let layout = ctx.type_alias_by_text(nominal_name(ctx, ty)?)?;
+    is_layout(layout).then_some(layout)
 }
 
 /// A malformed `adt.struct` type.
@@ -955,6 +993,36 @@ mod tests {
         let mut reparsed = IrContext::new();
         let module = parse_module(&mut reparsed, &printed).expect("printed IR must parse");
         assert_eq!(printed, module.display(&reparsed).to_string());
+    }
+
+    #[test]
+    fn layout_of_resolves_a_typeref_to_its_published_layout() {
+        let mut ctx = IrContext::new();
+        parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !Point = adt.struct<Point(x: core.i32)>
+  !PointRef = adt.typeref<{name = "Point"}>
+  !Shape = adt.enum<Shape { Dot(), Line(core.i32) }>
+  !ShapeRef = adt.typeref<{name = "Shape"}>
+  !Number = core.i32
+  !NumberRef = adt.typeref<{name = "Number"}>
+  !MissingRef = adt.typeref<{name = "Missing"}>
+}"#,
+        );
+        let alias = |ctx: &IrContext, name| ctx.type_alias_by_text(name).expect("fixture alias");
+        let point = alias(&ctx, "Point");
+        let shape = alias(&ctx, "Shape");
+
+        assert_eq!(layout_of(&ctx, alias(&ctx, "PointRef")), Some(point));
+        assert_eq!(layout_of(&ctx, alias(&ctx, "ShapeRef")), Some(shape));
+        // A layout used as a value type is its own layout.
+        assert_eq!(layout_of(&ctx, point), Some(point));
+        // A name whose alias is not a layout, an unpublished name, and a
+        // type that is not nominal have none.
+        assert_eq!(layout_of(&ctx, alias(&ctx, "NumberRef")), None);
+        assert_eq!(layout_of(&ctx, alias(&ctx, "MissingRef")), None);
+        assert_eq!(layout_of(&ctx, alias(&ctx, "Number")), None);
     }
 
     fn array_schema_ok(body: &str) -> bool {

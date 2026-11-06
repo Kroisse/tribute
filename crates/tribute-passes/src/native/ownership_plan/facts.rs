@@ -340,9 +340,7 @@ fn build_aliases(
                 }
                 continue;
             }
-            if !(adt::RefCast::matches(ctx, op)
-                || adt::VariantCast::matches(ctx, op)
-                || core::UnrealizedConversionCast::matches(ctx, op))
+            if !(adt::RefCast::matches(ctx, op) || core::UnrealizedConversionCast::matches(ctx, op))
             {
                 continue;
             }

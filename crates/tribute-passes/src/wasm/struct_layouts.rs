@@ -76,14 +76,10 @@ pub(crate) fn convert(ctx: &mut IrContext, module: Module) {
 }
 
 /// The Wasm type of a value of the `adt.typeref` `ty`: the structural type of
-/// the user struct its exact alias names, or `wasm.structref` for an enum or
-/// an unresolved name.
+/// the user struct it names, or `wasm.structref` for an enum or an
+/// unresolved name.
 fn reference_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
-    let named = ctx
-        .type_attrs(ty)
-        .get_str("name")
-        .and_then(|name| ctx.type_alias_by_text(name));
-    named
+    tribute_ir::dialect::adt::layout_of(ctx, ty)
         .and_then(|layout| struct_type(ctx, layout))
         .unwrap_or_else(|| wasm::Structref::params().intern(ctx).as_type_ref())
 }

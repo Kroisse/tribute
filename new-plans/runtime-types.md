@@ -10,7 +10,7 @@ nominal 정보는 runtime 타입 descriptor가 소유한다. 값은 자기 descr
 | 개념 | 소유하는 사실 | 성격 |
 | ---- | ---- | ---- |
 | layout | field offset, 크기, 필드의 물리 표현 | structural. 모양이 같으면 같은 layout |
-| descriptor | 이름, 필드 이름, 필드 종류, 해제 방법, variant 소속 | nominal. 소스 타입마다 하나 |
+| descriptor | 이름, 필드 이름, 필드 종류, 해제 방법, variant 소속 | nominal. 소스 타입의 인스턴스마다 하나 |
 
 **설계 원칙:**
 
@@ -65,7 +65,10 @@ Identity를 관찰하게 만드는 기능은 이 원칙을 깬다. 포인터 동
 Descriptor는 runtime에 할당되는 값의 종류마다 하나다.
 
 - 소스 struct의 인스턴스마다 하나. 특수화된 제네릭 struct는 특수화 인자마다
-  별개의 descriptor를 가진다.
+  별개의 descriptor를 가진다. 타입 자신의 row 인자는
+  [인스턴스를 가르지 않으므로](generics.md#nominal-타입-수집과-재작성)
+  `Callback({}, Int)`와 `Callback({State(Int)}, Int)`처럼 row 인자만 다른 두 타입은
+  layout과 descriptor를 공유한다. Row는 값의 runtime 표현을 바꾸지 않는다.
 - 소스 enum의 각 variant마다 하나. 같은 enum의 variant descriptor는 같은 enum
   descriptor를 가리킨다.
 - Compiler가 할당하는 값마다 하나. Boxing된 `Bool`, `Nat`, `Int`, `Float`, runtime도

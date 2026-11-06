@@ -86,7 +86,7 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
     module.module.op().display(&ir).to_string()
 }
 
-/// Run the AST pipeline through TDNR and summarize one function body.
+/// Type check the source, which performs TDNR, and summarize one function body.
 ///
 /// This intentionally stops before IR lowering so tests can inspect calls
 /// left without a selected function.
@@ -220,7 +220,7 @@ fn parse(db: &dyn salsa::Database, source: SourceCst) {
     tribute_front::query::parsed_ast(db, source);
 }
 
-/// Run the full AST pipeline (parse -> resolve -> typecheck -> TDNR -> IR)
+/// Run the full AST pipeline (parse -> resolve -> typecheck -> IR)
 /// with the prelude loaded, and return the IR text.
 ///
 /// Panics if any parse error diagnostics were emitted for the test source.
@@ -301,7 +301,7 @@ pub fn prelude_string_type(db: &dyn salsa::Database) -> tribute_front::ast::Type
         .ty
 }
 
-/// Run the frontend through TDNR, without lowering invalid ASTs to IR.
+/// Run the frontend through type checking, without lowering invalid ASTs to IR.
 pub fn ast_pipeline_diagnostics(
     db: &dyn salsa::Database,
     source: SourceCst,

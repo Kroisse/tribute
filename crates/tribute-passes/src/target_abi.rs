@@ -1107,7 +1107,7 @@ fn validate_root_continuation_frame(
     let name = ctx.type_attrs(frame).get_str("name").ok_or_else(|| {
         TargetAbiError::new("target root bridge: worker frame lacks nominal layout identity")
     })?;
-    let layout = ctx.type_alias_by_text(name).ok_or_else(|| {
+    let layout = adt::layout_of(ctx, frame).ok_or_else(|| {
         TargetAbiError::new("target root bridge: worker frame must have an exact nominal layout")
     })?;
     let layout_struct = adt::Struct::from_type_ref(ctx, layout)
@@ -1116,17 +1116,13 @@ fn validate_root_continuation_frame(
         .ok_or_else(|| {
             TargetAbiError::new("target root bridge: worker frame layout provenance is malformed")
         })?;
+    // `continuation_frame::layout_type` places Done then Dispatch.
     let fields: Vec<_> = layout_struct.fields(ctx).collect();
-    let [(done_name, done), (dispatch_name, dispatch)] = fields.as_slice() else {
+    let [(_, done), (_, dispatch)] = fields.as_slice() else {
         return Err(TargetAbiError::new(
             "target root bridge: worker frame layout must contain done then dispatch",
         ));
     };
-    if *done_name != "done" || *dispatch_name != "dispatch" {
-        return Err(TargetAbiError::new(
-            "target root bridge: worker frame field roles must be exact Done then Dispatch",
-        ));
-    }
     validate_root_done_type(ctx, *done, source_result, physical_results)?;
     validate_root_dispatch_type(ctx, *dispatch, frame, evidence, physical_results)?;
     Ok(RootFrameContract {

@@ -414,6 +414,9 @@ fn process(data: List(Int)) -> Int {
 ### Type-Directed Resolution
 
 함수 이름이 여러 함수를 가리킬 수 있으면 호출의 인자와 결과 타입으로 해소한다.
+이 규칙을 type-directed name resolution(TDNR)이라 한다. TDNR은 별도 단계가 아니라
+타입 검사의 일부이며, 지금까지 알려진 타입으로 후보 하나가 정해지지 않으면 선택을
+제약 풀이 뒤로 미룬다.
 이 절의 `List::map`은 해소 규칙만 설명하는 illustrative API이며 별도 public API
 절에서 확정되지 않았다.
 

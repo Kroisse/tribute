@@ -218,14 +218,8 @@ fn some_dispatch(
         cast.result(ctx)
     };
     // The parameter is a reference to the published `Option` instance.
-    let option_name = ctx
-        .type_attrs(option_ty)
-        .get_str("name")
-        .expect("the Option(Dispatch) parameter is a nominal reference")
-        .to_owned();
-    let option_layout = ctx
-        .type_alias_by_text(&option_name)
-        .expect("the Option(Dispatch) layout is published");
+    let option_layout =
+        adt::layout_of(ctx, option_ty).expect("the Option(Dispatch) layout is published");
     let some = adt::VariantNew::operands([dispatch])
         .r#type(option_layout)
         .tag("Some")

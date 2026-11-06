@@ -171,16 +171,20 @@ fn logical_constructor_pattern<'p, 'db>(
         } => ctor,
         _ => panic!("unsupported logical constructor pattern at source-logical boundary"),
     };
-    let ResolvedRef::Constructor { variant, .. } = ctor.resolved.clone() else {
+    let ResolvedRef::Constructor { id, variant } = ctor.resolved.clone() else {
         panic!("non-constructor in logical constructor pattern");
     };
     let ty = super::resolve_enum_type_attr_for_constructor(ctx, ir, &ctor.resolved, ctor.ty);
     let (layout, names) = match get_struct_fields(ir, ty) {
         Some(fields) => {
-            let (names, fields) = fields
-                .into_iter()
-                .map(|(name, ty)| (Symbol::new(ir.str(name)), ty))
-                .unzip();
+            let fields = fields.into_iter().map(|(_, ty)| ty).collect();
+            let names = match &*pattern.kind {
+                PatternKind::Record { .. } => ctx
+                    .struct_field_names(id)
+                    .expect("prescan registers every struct's field names")
+                    .to_vec(),
+                _ => Vec::new(),
+            };
             (ConstructorLayout::Struct { ty, fields }, names)
         }
         None => {
@@ -301,16 +305,10 @@ fn emit_logical_variant_pattern_check<'db>(
     });
     let then_value = {
         let mut nested = IrBuilder::new(builder.ctx, builder.ir, then_block);
-        let cast = adt::VariantCast::operands(scrutinee)
-            .r#type(enum_ty)
-            .tag(variant)
-            .results(enum_ty)
-            .build(nested.ir, location);
-        nested.ir.push_op(nested.block, cast.op_ref());
         let mut conditions = Vec::with_capacity(fields.len());
         for &(index, field) in fields {
             let field_ty = variant_fields[index];
-            let get = adt::VariantGet::operands(cast.result(nested.ir))
+            let get = adt::VariantGet::operands(scrutinee)
                 .r#type(enum_ty)
                 .tag(variant)
                 .field(index as u32)
@@ -751,14 +749,8 @@ pub(super) fn bind_logical_pattern_fields<'db>(
                     tag,
                     fields: field_tys,
                 }) => {
-                    let cast = adt::VariantCast::operands(scrutinee)
-                        .r#type(ty)
-                        .tag(tag)
-                        .results(ty)
-                        .build(ir, location);
-                    ir.push_op(block, cast.op_ref());
                     for (index, field) in fields {
-                        let get = adt::VariantGet::operands(cast.result(ir))
+                        let get = adt::VariantGet::operands(scrutinee)
                             .r#type(ty)
                             .tag(tag)
                             .field(index as u32)

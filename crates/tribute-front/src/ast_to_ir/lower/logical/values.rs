@@ -449,8 +449,8 @@ pub(super) fn lower_record<'db>(
     let struct_name = super::super::extract_type_name(builder.db(), &type_name.resolved);
     let field_order = builder
         .ctx
-        .get_struct_field_order(ctor)
-        .cloned()
+        .struct_field_names(ctor)
+        .map(<[Symbol]>::to_vec)
         .unwrap_or_else(|| panic!("prescan did not register struct field order {struct_name}"));
     let layout = builder
         .ctx
