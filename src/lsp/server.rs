@@ -4074,4 +4074,95 @@ fn main() -> Nil {
         let labels = completion_labels_after(&mut harness, &uri, source, "let known = iden");
         assert!(labels.iter().any(|label| label == "identity"), "{labels:?}");
     }
+
+    mod generated_programs {
+        //! Hover and completion at every position of a generated program, or
+        //! of a prefix of one as while it is typed, answer without
+        //! panicking.
+
+        use std::cell::{Cell, RefCell};
+
+        use proptest::prelude::*;
+        use proptest::sample::Index;
+        use tribute_prop::program::program;
+
+        use super::*;
+
+        thread_local! {
+            /// One server for every case, so the prelude is checked once.
+            static HARNESS: RefCell<TestHarness> = RefCell::new(TestHarness::new());
+            static DOCUMENTS: Cell<usize> = const { Cell::new(0) };
+        }
+
+        /// Every position of `text`, including the end of each line.
+        fn positions(text: &str) -> impl Iterator<Item = lsp_types::Position> + '_ {
+            text.split('\n').enumerate().flat_map(|(line, content)| {
+                (0..=content.len()).map(move |character| lsp_types::Position {
+                    line: line as u32,
+                    character: character as u32,
+                })
+            })
+        }
+
+        fn check_positions(text: &str) -> Result<(), TestCaseError> {
+            HARNESS.with_borrow_mut(|harness| {
+                let document = DOCUMENTS.replace(DOCUMENTS.get() + 1);
+                let uri = test_uri(&format!("generated_{document}"));
+                harness.open_document(&uri, text);
+                let lines = text.split('\n').collect::<Vec<_>>();
+                for position in positions(text) {
+                    let at = TextDocumentPositionParams {
+                        text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+                        position,
+                    };
+                    let hover = harness.request::<HoverRequest>(HoverParams {
+                        text_document_position_params: at.clone(),
+                        work_done_progress_params: Default::default(),
+                    });
+                    if let Some(range) = hover.and_then(|hover| hover.range) {
+                        for end in [range.start, range.end] {
+                            prop_assert!(
+                                lines
+                                    .get(end.line as usize)
+                                    .is_some_and(|line| end.character as usize <= line.len()),
+                                "the hover at {:?} spans {:?}, outside the document\n{}",
+                                position,
+                                range,
+                                text
+                            );
+                        }
+                    }
+                    harness.request::<Completion>(CompletionParams {
+                        text_document_position: at,
+                        work_done_progress_params: Default::default(),
+                        partial_result_params: Default::default(),
+                        context: None,
+                    });
+                }
+                Ok(())
+            })
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig {
+                cases: 64,
+                max_shrink_iters: 32,
+                ..ProptestConfig::default()
+            })]
+
+            #[test]
+            fn hover_and_completion_answer_everywhere(program in program()) {
+                check_positions(&program.source())?;
+            }
+
+            #[test]
+            fn hover_and_completion_answer_while_typing(
+                program in program(),
+                end in any::<Index>(),
+            ) {
+                let text = program.source();
+                check_positions(&text[..end.index(text.len() + 1)])?;
+            }
+        }
+    }
 }
