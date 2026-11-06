@@ -171,16 +171,20 @@ fn logical_constructor_pattern<'p, 'db>(
         } => ctor,
         _ => panic!("unsupported logical constructor pattern at source-logical boundary"),
     };
-    let ResolvedRef::Constructor { variant, .. } = ctor.resolved.clone() else {
+    let ResolvedRef::Constructor { id, variant } = ctor.resolved.clone() else {
         panic!("non-constructor in logical constructor pattern");
     };
     let ty = super::resolve_enum_type_attr_for_constructor(ctx, ir, &ctor.resolved, ctor.ty);
     let (layout, names) = match get_struct_fields(ir, ty) {
         Some(fields) => {
-            let (names, fields) = fields
-                .into_iter()
-                .map(|(name, ty)| (Symbol::new(ir.str(name)), ty))
-                .unzip();
+            let fields = fields.into_iter().map(|(_, ty)| ty).collect();
+            let names = match &*pattern.kind {
+                PatternKind::Record { .. } => ctx
+                    .struct_field_names(id)
+                    .expect("prescan registers every struct's field names")
+                    .to_vec(),
+                _ => Vec::new(),
+            };
             (ConstructorLayout::Struct { ty, fields }, names)
         }
         None => {
