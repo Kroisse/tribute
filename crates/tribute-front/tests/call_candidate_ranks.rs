@@ -5,16 +5,18 @@
 
 mod common;
 
-use self::common::{TdnrCall, TdnrSummary, ast_pipeline_error_messages, tdnr_function_summary};
+use self::common::{
+    SelectedCall, SelectionSummary, ast_pipeline_error_messages, selection_summary,
+};
 use salsa_test_macros::salsa_test;
 use tribute_front::SourceCst;
 
-fn selected(targets: &[&str]) -> TdnrSummary {
-    TdnrSummary {
+fn selected(targets: &[&str]) -> SelectionSummary {
+    SelectionSummary {
         method_calls: vec![],
         calls: targets
             .iter()
-            .map(|target| TdnrCall {
+            .map(|target| SelectedCall {
                 target: if target.starts_with("std::") {
                     (*target).to_owned()
                 } else {
@@ -48,10 +50,10 @@ fn test(x: std::Option(Nat)) -> std::Option(Nat) {
     );
 
     assert_eq!(
-        tdnr_function_summary(db, source, "test"),
-        TdnrSummary {
+        selection_summary(db, source, "test"),
+        SelectionSummary {
             method_calls: vec![],
-            calls: vec![TdnrCall {
+            calls: vec![SelectedCall {
                 target: "std::Option::map".to_owned(),
                 arg_count: 2,
             }],
@@ -88,7 +90,7 @@ fn test(name: Name) -> String {{ name.text }}
     );
 
     assert_eq!(
-        tdnr_function_summary(db, source, "test"),
+        selection_summary(db, source, "test"),
         selected(&["audit::text"])
     );
     let errors = ast_pipeline_error_messages(db, source);
@@ -110,8 +112,8 @@ fn test(name: Name) -> String {{ name.text }}
     );
 
     assert_eq!(
-        tdnr_function_summary(db, source, "test"),
-        TdnrSummary {
+        selection_summary(db, source, "test"),
+        SelectionSummary {
             method_calls: vec!["text".to_owned()],
             calls: vec![],
         }
@@ -157,17 +159,17 @@ fn unknown() -> Nil {{
     );
 
     assert_eq!(
-        tdnr_function_summary(db, source, "by_nat"),
+        selection_summary(db, source, "by_nat"),
         selected(&["twice", "id"])
     );
     assert_eq!(
-        tdnr_function_summary(db, source, "by_int"),
+        selection_summary(db, source, "by_int"),
         selected(&["math::twice", "id"])
     );
     // A receiver no type ever determines leaves the direct function as the
     // highest rank that fits.
     assert_eq!(
-        tdnr_function_summary(db, source, "unknown"),
+        selection_summary(db, source, "unknown"),
         selected(&["twice"])
     );
     let errors = ast_pipeline_error_messages(db, source);
@@ -199,7 +201,7 @@ fn test(n: Int) -> Nat {
     );
 
     assert_eq!(
-        tdnr_function_summary(db, source, "test"),
+        selection_summary(db, source, "test"),
         selected(&["std::String::len"])
     );
     let errors = ast_pipeline_error_messages(db, source);
@@ -259,19 +261,19 @@ mod inner {
 "#,
     );
 
-    let map = |target: &str| TdnrSummary {
+    let map = |target: &str| SelectionSummary {
         method_calls: vec![],
-        calls: vec![TdnrCall {
+        calls: vec![SelectedCall {
             target: target.to_owned(),
             arg_count: 2,
         }],
     };
     assert_eq!(
-        tdnr_function_summary(db, prelude, "test"),
+        selection_summary(db, prelude, "test"),
         map("std::Option::map")
     );
     assert_eq!(
-        tdnr_function_summary(db, declared, "test"),
+        selection_summary(db, declared, "test"),
         map("pkg::Option::map")
     );
     for source in [prelude, declared] {

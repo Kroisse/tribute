@@ -86,20 +86,20 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
     module.module.op().display(&ir).to_string()
 }
 
-/// Run the AST pipeline through TDNR and summarize one function body.
+/// Type check the source, selecting its method calls, and summarize one function body.
 ///
 /// This intentionally stops before IR lowering so tests can inspect calls
 /// left without a selected function.
-pub fn tdnr_function_summary(
+pub fn selection_summary(
     db: &dyn salsa::Database,
     source: SourceCst,
     function_name: &str,
-) -> TdnrSummary {
+) -> SelectionSummary {
     let checked =
         *analysis::analyze(db, source, *environment(db)).expect("Should parse successfully");
     let body = function_body(checked.module(db), function_name);
-    let mut summary = TdnrSummary::default();
-    collect_tdnr_summary(db, body, &mut summary);
+    let mut summary = SelectionSummary::default();
+    collect_selection_summary(db, body, &mut summary);
     summary
 }
 
@@ -117,21 +117,21 @@ fn function_body<'db>(
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
-pub struct TdnrSummary {
+pub struct SelectionSummary {
     pub method_calls: Vec<String>,
-    pub calls: Vec<TdnrCall>,
+    pub calls: Vec<SelectedCall>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct TdnrCall {
+pub struct SelectedCall {
     pub target: String,
     pub arg_count: usize,
 }
 
-fn collect_tdnr_summary<'db>(
+fn collect_selection_summary<'db>(
     db: &'db dyn salsa::Database,
     expr: &Expr<TypedRef<'db>>,
-    summary: &mut TdnrSummary,
+    summary: &mut SelectionSummary,
 ) {
     match &*expr.kind {
         ExprKind::Call { callee, args, .. } => {
@@ -140,65 +140,65 @@ fn collect_tdnr_summary<'db>(
                 ..
             }) = &*callee.kind
             {
-                summary.calls.push(TdnrCall {
+                summary.calls.push(SelectedCall {
                     target: id.qualified(db).to_string(),
                     arg_count: args.len(),
                 });
             }
-            collect_tdnr_summary(db, callee, summary);
+            collect_selection_summary(db, callee, summary);
             for arg in args {
-                collect_tdnr_summary(db, arg, summary);
+                collect_selection_summary(db, arg, summary);
             }
         }
         ExprKind::Functions { name, .. } => summary.method_calls.push(name.to_string()),
         ExprKind::Record { fields, spread, .. } => {
             for field in fields {
-                collect_tdnr_summary(db, &field.value, summary);
+                collect_selection_summary(db, &field.value, summary);
             }
             if let Some(spread) = spread {
-                collect_tdnr_summary(db, spread, summary);
+                collect_selection_summary(db, spread, summary);
             }
         }
         ExprKind::Block { stmts, value } => {
             for stmt in stmts {
                 match stmt {
                     Stmt::Let { value, .. } | Stmt::Expr { expr: value, .. } => {
-                        collect_tdnr_summary(db, value, summary);
+                        collect_selection_summary(db, value, summary);
                     }
                 }
             }
-            collect_tdnr_summary(db, value, summary);
+            collect_selection_summary(db, value, summary);
         }
         ExprKind::BinOp { lhs, rhs, .. } => {
-            collect_tdnr_summary(db, lhs, summary);
-            collect_tdnr_summary(db, rhs, summary);
+            collect_selection_summary(db, lhs, summary);
+            collect_selection_summary(db, rhs, summary);
         }
         ExprKind::Case { scrutinee, arms } => {
-            collect_tdnr_summary(db, scrutinee, summary);
+            collect_selection_summary(db, scrutinee, summary);
             for arm in arms {
                 if let Some(guard) = &arm.guard {
-                    collect_tdnr_summary(db, guard, summary);
+                    collect_selection_summary(db, guard, summary);
                 }
-                collect_tdnr_summary(db, &arm.body, summary);
+                collect_selection_summary(db, &arm.body, summary);
             }
         }
-        ExprKind::Lambda { body, .. } => collect_tdnr_summary(db, body, summary),
+        ExprKind::Lambda { body, .. } => collect_selection_summary(db, body, summary),
         ExprKind::Handle { body, handlers } => {
-            collect_tdnr_summary(db, body, summary);
+            collect_selection_summary(db, body, summary);
             for handler in handlers {
-                collect_tdnr_summary(db, &handler.body, summary);
+                collect_selection_summary(db, &handler.body, summary);
             }
         }
-        ExprKind::Become { call } => collect_tdnr_summary(db, call, summary),
-        ExprKind::Resume { arg, .. } => collect_tdnr_summary(db, arg, summary),
+        ExprKind::Become { call } => collect_selection_summary(db, call, summary),
+        ExprKind::Resume { arg, .. } => collect_selection_summary(db, arg, summary),
         ExprKind::Tuple(elements) | ExprKind::List(elements) => {
             for element in elements {
-                collect_tdnr_summary(db, element, summary);
+                collect_selection_summary(db, element, summary);
             }
         }
         ExprKind::Cons { args, .. } => {
             for arg in args {
-                collect_tdnr_summary(db, arg, summary);
+                collect_selection_summary(db, arg, summary);
             }
         }
         ExprKind::Var(_)
@@ -220,7 +220,7 @@ fn parse(db: &dyn salsa::Database, source: SourceCst) {
     tribute_front::query::parsed_ast(db, source);
 }
 
-/// Run the full AST pipeline (parse -> resolve -> typecheck -> TDNR -> IR)
+/// Run the full AST pipeline (parse -> resolve -> typecheck -> IR)
 /// with the prelude loaded, and return the IR text.
 ///
 /// Panics if any parse error diagnostics were emitted for the test source.
@@ -301,7 +301,7 @@ pub fn prelude_string_type(db: &dyn salsa::Database) -> tribute_front::ast::Type
         .ty
 }
 
-/// Run the frontend through TDNR, without lowering invalid ASTs to IR.
+/// Run the frontend through type checking, without lowering invalid ASTs to IR.
 pub fn ast_pipeline_diagnostics(
     db: &dyn salsa::Database,
     source: SourceCst,

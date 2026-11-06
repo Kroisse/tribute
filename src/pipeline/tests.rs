@@ -1379,8 +1379,8 @@ fn test_case_lowering_bool_exhaustive(db: &salsa::DatabaseImpl) {
 }
 
 #[salsa_test]
-fn test_tdnr_struct_field_access(db: &salsa::DatabaseImpl) {
-    // Test that TDNR resolves user.name to User::name(user)
+fn test_method_selection_struct_field_access(db: &salsa::DatabaseImpl) {
+    // Test that method selection resolves user.name to User::name(user)
     let source = source_from_str(
         "test.trb",
         r#"
@@ -1397,14 +1397,14 @@ fn test_tdnr_struct_field_access(db: &salsa::DatabaseImpl) {
 
     let result = compile_with_diagnostics(db, source);
 
-    // Should compile without unresolved errors - TDNR should resolve user.name
+    // Should compile without unresolved errors - method selection should resolve user.name
     let has_unresolved_name = result
         .diagnostics
         .iter()
         .any(|d| d.message.contains("unresolved") && d.message.contains("name"));
     assert!(
         !has_unresolved_name,
-        "TDNR should resolve user.name to User::name(user), got: {:?}",
+        "method selection should resolve user.name to User::name(user), got: {:?}",
         result.diagnostics
     );
 }

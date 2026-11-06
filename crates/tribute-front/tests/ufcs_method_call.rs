@@ -1,15 +1,15 @@
 //! Tests for UFCS method call lowering.
 //!
 //! Verifies that method call arguments are correctly preserved through
-//! the pipeline: astgen → typeck → TDNR → IR lowering.
+//! the pipeline: astgen → typeck (method selection) → IR lowering.
 //!
 //! Regression tests for #582: multi-argument UFCS calls dropped extra arguments.
 
 mod common;
 
 use self::common::{
-    TdnrCall, TdnrSummary, ast_pipeline_error_messages, run_ast_pipeline, run_ast_pipeline_with_ir,
-    tdnr_function_summary,
+    SelectedCall, SelectionSummary, ast_pipeline_error_messages, run_ast_pipeline,
+    run_ast_pipeline_with_ir, selection_summary,
 };
 use insta::assert_snapshot;
 use salsa_test_macros::salsa_test;
@@ -116,9 +116,9 @@ fn test() -> Nat {
     run_ast_pipeline(db, source);
 }
 
-/// A do-arm binding receives the handled body's type before TDNR.
+/// A do-arm binding receives the handled body's type before its method calls are selected.
 #[salsa_test]
-fn test_handler_do_binding_tdnr_uses_body_type(db: &salsa::DatabaseImpl) {
+fn test_handler_do_binding_method_selection_uses_body_type(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
         "test.trb",
@@ -141,15 +141,15 @@ fn test() -> Nat {
     );
 
     assert_eq!(
-        tdnr_function_summary(db, source, "test"),
-        TdnrSummary {
+        selection_summary(db, source, "test"),
+        SelectionSummary {
             method_calls: vec![],
             calls: vec![
-                TdnrCall {
+                SelectedCall {
                     target: "pkg::pure_value".to_owned(),
                     arg_count: 0,
                 },
-                TdnrCall {
+                SelectedCall {
                     target: "std::Nat::+".to_owned(),
                     arg_count: 2,
                 },
@@ -181,11 +181,11 @@ fn test(n: Int) -> Int {
 "#,
     );
 
-    let call = |target: &str, arg_count| TdnrCall {
+    let call = |target: &str, arg_count| SelectedCall {
         target: target.to_owned(),
         arg_count,
     };
-    let summary = tdnr_function_summary(db, source, "test");
+    let summary = selection_summary(db, source, "test");
     assert_eq!(summary.method_calls, Vec::<String>::new());
     let mut calls = summary.calls;
     calls.sort_by(|a, b| (&a.target, a.arg_count).cmp(&(&b.target, b.arg_count)));
@@ -227,12 +227,12 @@ fn test(n: Int) -> Int {
 }
 
 // ========================================================================
-// TDNR AST Tests (verify each call has its function before IR lowering)
+// Method Selection AST Tests (verify each call has its function before IR lowering)
 // ========================================================================
 
 /// Covers the resolved, ambiguous, and nested-module paths.
 #[salsa_test]
-fn test_tdnr_method_resolution_cases(db: &salsa::DatabaseImpl) {
+fn test_method_selection_cases(db: &salsa::DatabaseImpl) {
     let field_accessor = SourceCst::from_source_str(
         db,
         "field_accessor.trb",
@@ -247,10 +247,10 @@ fn test(p: Point) -> Nat {
     );
 
     assert_eq!(
-        tdnr_function_summary(db, field_accessor, "test"),
-        TdnrSummary {
+        selection_summary(db, field_accessor, "test"),
+        SelectionSummary {
             method_calls: vec![],
-            calls: vec![TdnrCall {
+            calls: vec![SelectedCall {
                 target: "pkg::Point::x".to_owned(),
                 arg_count: 1,
             }],
@@ -276,10 +276,10 @@ fn test(c: Counter) -> Nat {
     );
 
     assert_eq!(
-        tdnr_function_summary(db, user_defined, "test"),
-        TdnrSummary {
+        selection_summary(db, user_defined, "test"),
+        SelectionSummary {
             method_calls: vec![],
-            calls: vec![TdnrCall {
+            calls: vec![SelectedCall {
                 target: "pkg::Counter::add".to_owned(),
                 arg_count: 2,
             }],
@@ -311,8 +311,8 @@ fn test(t: Thing) -> Nat {
     );
 
     assert_eq!(
-        tdnr_function_summary(db, ambiguous, "test"),
-        TdnrSummary {
+        selection_summary(db, ambiguous, "test"),
+        SelectionSummary {
             method_calls: vec!["pick".to_owned()],
             calls: vec![],
         }
@@ -339,10 +339,10 @@ fn test(i: Item) -> Nat {
     );
 
     assert_eq!(
-        tdnr_function_summary(db, nested_module, "test"),
-        TdnrSummary {
+        selection_summary(db, nested_module, "test"),
+        SelectionSummary {
             method_calls: vec![],
-            calls: vec![TdnrCall {
+            calls: vec![SelectedCall {
                 target: "pkg::Outer::score".to_owned(),
                 arg_count: 1,
             }],
@@ -351,7 +351,7 @@ fn test(i: Item) -> Nat {
 }
 
 #[salsa_test]
-fn test_tdnr_distinguishes_same_short_type_name_in_nested_modules(db: &salsa::DatabaseImpl) {
+fn test_method_selection_distinguishes_same_type_name_in_nested_modules(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
         "nested_same_name.trb",
@@ -372,20 +372,20 @@ fn score_b(thing: B::Thing) -> Nat { thing.score() }
     );
 
     assert_eq!(
-        tdnr_function_summary(db, source, "score_a"),
-        TdnrSummary {
+        selection_summary(db, source, "score_a"),
+        SelectionSummary {
             method_calls: vec![],
-            calls: vec![TdnrCall {
+            calls: vec![SelectedCall {
                 target: "pkg::A::score".to_owned(),
                 arg_count: 1,
             }],
         }
     );
     assert_eq!(
-        tdnr_function_summary(db, source, "score_b"),
-        TdnrSummary {
+        selection_summary(db, source, "score_b"),
+        SelectionSummary {
             method_calls: vec![],
-            calls: vec![TdnrCall {
+            calls: vec![SelectedCall {
                 target: "pkg::B::score".to_owned(),
                 arg_count: 1,
             }],
@@ -394,7 +394,7 @@ fn score_b(thing: B::Thing) -> Nat { thing.score() }
 }
 
 #[salsa_test]
-fn test_tdnr_resolves_nested_generic_nominal_receivers(db: &salsa::DatabaseImpl) {
+fn test_method_selection_resolves_nested_generic_nominal_receivers(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
         "nested_generic_nominal_identity.trb",
@@ -418,15 +418,15 @@ fn test() -> #(Nat, Nat) {
     );
 
     assert_eq!(
-        tdnr_function_summary(db, source, "test"),
-        TdnrSummary {
+        selection_summary(db, source, "test"),
+        SelectionSummary {
             method_calls: vec![],
             calls: vec![
-                TdnrCall {
+                SelectedCall {
                     target: "pkg::A::tag".to_owned(),
                     arg_count: 1,
                 },
-                TdnrCall {
+                SelectedCall {
                     target: "pkg::B::tag".to_owned(),
                     arg_count: 1,
                 },
@@ -439,7 +439,7 @@ fn test() -> #(Nat, Nat) {
 fn string_literal_method_uses_prelude_identity_when_shadowed(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
-        "shadowed_string_tdnr.trb",
+        "shadowed_string_method.trb",
         r#"
 enum String {
     Fake
@@ -456,10 +456,10 @@ fn test() -> Nat {
     );
 
     assert_eq!(
-        tdnr_function_summary(db, source, "test"),
-        TdnrSummary {
+        selection_summary(db, source, "test"),
+        SelectionSummary {
             method_calls: vec![],
-            calls: vec![TdnrCall {
+            calls: vec![SelectedCall {
                 target: "std::String::len".to_owned(),
                 arg_count: 1,
             }],

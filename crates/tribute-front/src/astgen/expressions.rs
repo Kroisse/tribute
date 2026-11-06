@@ -165,7 +165,7 @@ fn lower_binary_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<Unres
     let op_text = ctx.node_text(&op_node);
 
     // Desugar arithmetic, comparison, and concatenation operators to method calls.
-    // TDNR resolves these to type-specific intrinsic functions (e.g., Int::(+), Float::(==)).
+    // Type checking selects a type-specific intrinsic function for each (e.g., Int::(+), Float::(==)).
     // Only boolean operators (&&, ||) remain as BinOp for future short-circuit evaluation.
     let method_sym = match &*op_text {
         "+" => Some(Symbol::new("+")),

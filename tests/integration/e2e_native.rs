@@ -2164,7 +2164,7 @@ fn main() ->{Io} Nil {
 
 #[test]
 fn test_native_ufcs_string_len() {
-    // s.len() should resolve to String::len via TDNR
+    // s.len() should select String::len
     let output = compile_and_run_native(
         "ufcs_string_len.trb",
         r#"

@@ -892,7 +892,7 @@ fn main() ->{Io} Nil {
 ///
 /// `effectful_value()` resumes twice with 10, producing 21, and the result arm
 /// doubles it. This exercises nested ability operations in both a let initializer
-/// and the final value, then verifies result TDNR and native execution.
+/// and the final value, then verifies method selection on the result and native execution.
 #[test]
 fn test_handler_transforms_resumed_result() {
     let code = r#"use std::io::{Io, print_line}

@@ -6,7 +6,7 @@
 //! ## Pipeline
 //!
 //! This crate focuses on individual compiler passes and utilities.
-//! Name resolution and TDNR are handled at the AST level in `tribute-front`.
+//! Name resolution and method selection are handled at the AST level in `tribute-front`.
 
 // === TrunkIR passes ===
 pub mod abi_boundary;

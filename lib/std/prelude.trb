@@ -118,7 +118,7 @@ pub mod Result {
 // Numeric operator intrinsics
 // =============================================================================
 // Arithmetic and comparison operators for primitive numeric types.
-// These are resolved via TDNR and lowered to arith dialect operations.
+// Type checking selects these by operand type; they are lowered to arith dialect operations.
 
 pub mod Int {
     use super::{Result, String, Nat, Bytes}
