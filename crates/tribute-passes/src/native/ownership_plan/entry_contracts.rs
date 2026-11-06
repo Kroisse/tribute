@@ -219,6 +219,7 @@ fn value_is_borrowed(
         if (adt::StructGet::matches(ctx, op)
             || adt::VariantGet::matches(ctx, op)
             || adt::VariantIs::matches(ctx, op)
+            || adt::VariantTag::matches(ctx, op)
             || adt::RefIsNull::matches(ctx, op))
             && index == 0
         {

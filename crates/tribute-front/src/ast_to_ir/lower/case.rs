@@ -238,6 +238,43 @@ fn logical_constructor_pattern<'p, 'db>(
     (layout, indexed)
 }
 
+/// The enum layout and position of the variant a pattern selects when the
+/// pattern tests only the variant: it is a variant pattern, possibly bound
+/// with `as`, whose every field pattern matches any value.
+pub(super) fn variant_tag_pattern<'db>(
+    ctx: &IrLoweringCtx<'db>,
+    ir: &mut IrContext,
+    pattern: &Pattern<TypedRef<'db>>,
+) -> Option<(TypeRef, u32)> {
+    fn irrefutable<V>(pattern: &Pattern<V>) -> bool {
+        match &*pattern.kind {
+            PatternKind::Wildcard | PatternKind::Bind { .. } => true,
+            PatternKind::As { pattern, .. } => irrefutable(pattern),
+            PatternKind::Tuple(elements) => elements.iter().all(irrefutable),
+            _ => false,
+        }
+    }
+
+    match &*pattern.kind {
+        PatternKind::As { pattern, .. } => variant_tag_pattern(ctx, ir, pattern),
+        PatternKind::Variant { .. } | PatternKind::Record { .. } => {
+            let (ConstructorLayout::Variant(layout), fields) =
+                logical_constructor_pattern(ctx, ir, pattern)
+            else {
+                return None;
+            };
+            if !fields.iter().all(|(_, field)| irrefutable(field)) {
+                return None;
+            }
+            let position = get_enum_variants(ir, layout.ty)?
+                .iter()
+                .position(|(tag, _)| *tag == layout.tag)?;
+            Some((layout.ty, position as u32))
+        }
+        _ => None,
+    }
+}
+
 fn emit_logical_variant_pattern_check<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     location: Location,

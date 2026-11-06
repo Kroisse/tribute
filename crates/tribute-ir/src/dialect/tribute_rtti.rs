@@ -49,6 +49,20 @@ mod tribute_rtti {
     #[flags(Pure)]
     #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn descriptor(r#ref: Value<impl ManagedRef>) -> Value<I32> {}
+
+    /// The position, among its enum's variants in declaration order, of
+    /// the variant whose runtime type descriptor number is `descriptor`.
+    ///
+    /// ```text
+    /// %position = tribute_rtti.variant_position %descriptor
+    /// ```
+    ///
+    /// The native RTTI table records each variant's position, so this reads
+    /// it there; the pass that emits the table lowers this operation. The
+    /// result is undefined when `descriptor` is not the number of a variant.
+    #[flags(Pure)]
+    #[asm_format(descriptor attr_dict_bare)]
+    fn variant_position(descriptor: Value<I32>) -> Value<I32> {}
 }
 
 /// A managed reference: a value that points to an allocation carrying a

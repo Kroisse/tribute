@@ -27,6 +27,8 @@
 //! - `adt.variant_new` -> `wasm.struct_new` of the variant's struct type
 //! - `adt.variant_is` -> `wasm.ref_cast` to the `Described` type, a read of
 //!   its descriptor field, and a comparison with the variant's number
+//! - `adt.variant_tag` -> the same descriptor read, less the number of the
+//!   enum's first variant: an enum numbers its variants consecutively
 //! - `adt.variant_get` -> `wasm.ref_cast` to the variant's struct type and
 //!   `wasm.struct_get` of the field after the descriptor field
 //!
@@ -146,6 +148,9 @@ pub(crate) fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeCon
         .add_pattern(StructSetPattern)
         .add_pattern(VariantNewPattern {
             numbers: numbers.clone(),
+        })
+        .add_pattern(VariantTagPattern {
+            first_variants: first_variant_numbers(ctx, &numbers),
         })
         .add_pattern(VariantIsPattern { numbers })
         .add_pattern(VariantGetPattern)
@@ -358,6 +363,80 @@ impl OpRewritePattern for VariantIsPattern {
         rewriter.insert_op(descriptor.op_ref());
         rewriter.insert_op(expected.op_ref());
         rewriter.replace_op(matches.op_ref());
+        Some(())
+    }
+}
+
+/// The descriptor number of each numbered enum's first declared variant,
+/// whether or not the module allocates it: the number of a declared variant
+/// less its position.
+fn first_variant_numbers(ctx: &IrContext, numbers: &DescriptorNumbers) -> HashMap<TypeRef, u32> {
+    numbers
+        .iter()
+        .filter_map(|(&(ty, tag), &number)| {
+            let position = get_enum_variants(ctx, ty)?
+                .iter()
+                .position(|(name, _)| Some(*name) == tag)?;
+            Some((ty, number - position as u32))
+        })
+        .collect()
+}
+
+/// Pattern for `adt.variant_tag` -> the value's descriptor number less the
+/// number of its enum's first variant.
+///
+/// An enum the module never allocates has no value, so its tag is constant.
+struct VariantTagPattern {
+    first_variants: HashMap<TypeRef, u32>,
+}
+
+impl OpRewritePattern for VariantTagPattern {
+    type Op = adt::VariantTag;
+
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        variant_tag: Self::Op,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> Option<()> {
+        let loc = ctx.op(variant_tag.op_ref()).location;
+        let enum_type = canonical_enum_type(ctx, variant_tag.r#type(ctx))?;
+        let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
+        let tag = match self.first_variants.get(&enum_type) {
+            Some(&first) => {
+                let described_ty = super::type_converter::described_adt_type(ctx);
+                let described = wasm_gc_dialect::RefCast::operands(variant_tag.r#ref(ctx))
+                    .target_type(described_ty)
+                    .results(described_ty)
+                    .build(ctx, loc);
+                let descriptor = wasm_gc_dialect::StructGet::operands(described.result(ctx))
+                    .r#type(described_ty)
+                    .field_idx(0)
+                    .results(i32_ty)
+                    .build(ctx, loc);
+                let first = wasm_dialect::I32Const::operands()
+                    .value(first as i32)
+                    .results(i32_ty)
+                    .build(ctx, loc);
+                let tag = wasm_dialect::I32Sub::operands(descriptor.result(ctx), first.result(ctx))
+                    .results(i32_ty)
+                    .build(ctx, loc);
+                for op in [described.op_ref(), descriptor.op_ref(), first.op_ref()] {
+                    rewriter.insert_op(op);
+                }
+                tag.op_ref()
+            }
+            None => wasm_dialect::I32Const::operands()
+                .value(0)
+                .results(i32_ty)
+                .build(ctx, loc)
+                .op_ref(),
+        };
+        rewriter.insert_op(tag);
+        let index = core::UnrealizedConversionCast::operands(ctx.op_result(tag, 0))
+            .results(variant_tag.result_ty(ctx))
+            .build(ctx, loc);
+        rewriter.replace_op(index.op_ref());
         Some(())
     }
 }
@@ -1179,8 +1258,9 @@ mod tests {
         assert_eq!(descriptor_number(news[0]), Some(first_user));
         assert_eq!(descriptor_number(news[1]), Some(first_user));
         assert_eq!(ctx.op_operands(news[2]).len(), 1, "builtin closure");
-        assert_eq!(descriptor_number(news[3]), Some(first_user + 1));
-        assert_eq!(descriptor_number(news[4]), Some(first_user + 2));
+        // `E` numbers `None` before `Some`, though `Some` is allocated first.
+        assert_eq!(descriptor_number(news[3]), Some(first_user + 2));
+        assert_eq!(descriptor_number(news[4]), Some(first_user + 1));
         assert_eq!(
             ctx.op_operands(news[4]).len(),
             1,
@@ -1395,6 +1475,63 @@ mod tests {
         let is_other = ctx.block(block).ops[ctx.block(block).ops.len() - 2];
         let is_other = wasm::I32Const::from_op(&ctx, is_other).expect("constant result");
         assert_eq!(is_other.value(&ctx), 0);
+    }
+
+    #[test]
+    fn variant_tag_subtracts_the_number_of_the_enums_first_variant() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !ERef = adt.typeref<{name = "E"}>
+  !E = adt.enum<E { None(), Some(core.i32), Other() }>
+  !FRef = adt.typeref<{name = "F"}>
+  !F = adt.enum<F { A(), B() }>
+
+  wasm.func @main(%input: !ERef, %never: !FRef) -> core.nil {
+    %one = wasm.i32_const 1 : core.i32
+    %some = adt.variant_new %one {type = !E, tag = "Some"} : !ERef
+    %tag = adt.variant_tag %input {type = !E}
+    %unallocated = adt.variant_tag %never {type = !F}
+    wasm.return
+  }
+}"#,
+        );
+
+        lower(&mut ctx, module, TypeConverter::new());
+
+        let printed = module.op().display(&ctx).to_string();
+        assert!(!printed.contains("adt.variant_tag"), "{printed}");
+        let func = module.ops(&ctx)[0];
+        let block = ctx.region(ctx.op_region(func, 0).unwrap()).blocks[0];
+        let defining_op = |value| match ctx.value_def(value) {
+            trunk_ir::refs::ValueDef::OpResult(op, _) => op,
+            other => panic!("expected an operation result, found {other:?}"),
+        };
+        let casts: Vec<_> = ctx
+            .block(block)
+            .ops
+            .iter()
+            .filter_map(|&op| core::UnrealizedConversionCast::from_op(&ctx, op).ok())
+            .collect();
+        let [tag, unallocated] = casts[..] else {
+            panic!("two tags cast to core.index: {printed}")
+        };
+
+        let sub = wasm::I32Sub::from_op(&ctx, defining_op(tag.value(&ctx)))
+            .expect("descriptor less the first number");
+        let descriptor = wasm_gc_dialect::StructGet::from_op(&ctx, defining_op(sub.lhs(&ctx)))
+            .expect("descriptor read");
+        assert_eq!(descriptor.field_idx(&ctx), 0);
+        // `None` is never allocated, but `E` numbers it first, before `Some`.
+        let first =
+            wasm::I32Const::from_op(&ctx, defining_op(sub.rhs(&ctx))).expect("first number");
+        assert_eq!(first.value(&ctx), FIRST_USER_TYPE_IDX as i32);
+
+        // `F` has no value, so its tag is a constant.
+        let constant = wasm::I32Const::from_op(&ctx, defining_op(unallocated.value(&ctx)))
+            .expect("constant tag");
+        assert_eq!(constant.value(&ctx), 0);
     }
 
     #[test]

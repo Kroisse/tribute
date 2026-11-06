@@ -31,6 +31,9 @@ const POINTER_SIZE: usize = 8;
 pub const RECORD_SIZE: usize = 40;
 /// Offset of the release function pointer in a record.
 pub const RELEASE_FN_OFFSET: usize = 0;
+/// Offset of a variant record's `tag_index`, its position among its enum's
+/// variants.
+pub const TAG_INDEX_OFFSET: usize = 24;
 const FIELD_SIZE: usize = 12;
 
 /// The `kind` word of a descriptor record.
@@ -254,7 +257,7 @@ impl Layout {
         put_u32(&mut self.bytes, base + 12, record.fields.len() as u32);
         self.put_name(base + 16, &record.name);
         if let Some((owner, position)) = record.owner {
-            put_u32(&mut self.bytes, base + 24, position);
+            put_u32(&mut self.bytes, base + TAG_INDEX_OFFSET, position);
             put_offset(&mut self.bytes, base + 28, enum_offsets[&owner]);
         }
         if !record.fields.is_empty() {

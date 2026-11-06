@@ -378,8 +378,8 @@ registered; interfaces describe possible transfers and do not materialize a
 flat CFG.
 
 `scf.index_switch`는 MLIR의 같은 이름 operation처럼 discriminant에 대한 구조적
-다중 분기다. MLIR과 달리 discriminant는 `index`가 아니라 고정 폭 정수
-(`IntegerLike`)이다. `cases`는 서로 다른 `i64` 값의 목록이고, operation은 필수
+다중 분기다. Discriminant는 MLIR처럼 `core.index`이거나 고정 폭 정수이다
+(`IntegerOrIndex`). `cases`는 서로 다른 `i64` 값의 목록이고, operation은 필수
 `default` region 하나와 case마다 하나씩 같은 순서로 case region을 가진다.
 Discriminant가 어떤 case와 같으면 그 case region을, 아니면 `default` region을
 실행한다. 각 region은 `scf.yield` 또는 자기 terminator로 끝나며, `scf.yield`가
@@ -408,7 +408,8 @@ argument를 받지 않는다. Case는 discriminant 타입의 값이어야 한다
 있는 정수나 부호 없는 정수로 표현할 수 있어야 하고, 같은 폭에서 같은 비트열이
 되는 두 표기는 같은 값이다. Case는 서로 달라야 한다.
 Structured-to-CFG 변환은 case가 이 조건을 만족하는 정수 discriminant의
-`scf.index_switch`를 `cf.switch`로 내리고, 그렇게 표현할 수 없는 switch는 case마다
+`scf.index_switch`를 `cf.switch`로 내리고, `core.index` discriminant는 MLIR처럼
+먼저 `arith.index_cast`로 `core.i64`로 바꾼다. 그렇게 표현할 수 없는 switch는 case마다
 비교하는 `cf.cond_br` 사슬로 내린다. Case 값의 분포에 따른 분기 전략은 target
 lowering이 정한다. 형식은 MLIR `cf.switch`와 같이 discriminant 타입을 쓰고 default를
 case 목록의 첫 항목으로 쓴다.
