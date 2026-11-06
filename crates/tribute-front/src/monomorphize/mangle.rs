@@ -103,7 +103,8 @@ fn write_type_mangled(
         TypeKind::Rune => f.write_str("Rune"),
         TypeKind::Nil => f.write_str("Nil"),
         TypeKind::Never => f.write_str("Never"),
-        TypeKind::Named { id, name, args } => {
+        // A nominal type's own row arguments are not part of its instance.
+        TypeKind::Named { id, name, args, .. } => {
             nominal_mangle_base(db, *id, name.clone()).with_str(|s| f.write_str(s))?;
             if !args.is_empty() {
                 f.write_str("$0$")?;
@@ -240,6 +241,7 @@ mod tests {
             TypeKind::Named {
                 id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::new(["Text"])),
                 name: Symbol::new("Text"),
+                row_args: vec![],
                 args: vec![],
             },
         );
@@ -257,6 +259,7 @@ mod tests {
             TypeKind::Named {
                 id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::new(["Option"])),
                 name: Symbol::new("Option"),
+                row_args: vec![],
                 args: vec![int_ty],
             },
         );
@@ -274,6 +277,7 @@ mod tests {
             TypeKind::Named {
                 id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::new(["Option"])),
                 name: Symbol::new("Option"),
+                row_args: vec![],
                 args: vec![int_ty],
             },
         );
@@ -282,6 +286,7 @@ mod tests {
             TypeKind::Named {
                 id: crate::ast::TypeDefId::builtin_list(&db),
                 name: Symbol::new("List"),
+                row_args: vec![],
                 args: vec![option_int],
             },
         );
@@ -300,6 +305,7 @@ mod tests {
             TypeKind::Named {
                 id: crate::ast::TypeDefId::builtin_list(&db),
                 name: name.clone(),
+                row_args: vec![],
                 args: vec![int_ty],
             },
         );
@@ -308,6 +314,7 @@ mod tests {
             TypeKind::Named {
                 id: crate::ast::TypeDefId::source(&db, trunk_ir::SymbolPath::new([name.clone()])),
                 name,
+                row_args: vec![],
                 args: vec![int_ty],
             },
         );
@@ -333,6 +340,7 @@ mod tests {
             TypeKind::Named {
                 id: crate::ast::TypeDefId::source(&db, trunk_ir::SymbolPath::new(["A", "Thing"])),
                 name: name.clone(),
+                row_args: vec![],
                 args: vec![int_ty],
             },
         );
@@ -341,6 +349,7 @@ mod tests {
             TypeKind::Named {
                 id: crate::ast::TypeDefId::source(&db, trunk_ir::SymbolPath::new(["B", "Thing"])),
                 name,
+                row_args: vec![],
                 args: vec![int_ty],
             },
         );
@@ -365,6 +374,7 @@ mod tests {
             TypeKind::Named {
                 id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::new(["Text"])),
                 name: Symbol::new("Text"),
+                row_args: vec![],
                 args: vec![],
             },
         );
@@ -373,6 +383,7 @@ mod tests {
             TypeKind::Named {
                 id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::new(["Pair"])),
                 name: Symbol::new("Pair"),
+                row_args: vec![],
                 args: vec![int_ty, text_ty],
             },
         );
@@ -785,6 +796,7 @@ mod laws {
             TypeKind::Named {
                 id: TypeDefId::source(&db, trunk_ir::SymbolPath::new([name.clone()])),
                 name,
+                row_args: vec![],
                 args: vec![int],
             },
         );
@@ -809,6 +821,7 @@ mod laws {
                 TypeKind::Named {
                     id: TypeDefId::source(&db, trunk_ir::SymbolPath::new([name.clone()])),
                     name,
+                    row_args: vec![],
                     args,
                 },
             )
@@ -818,6 +831,7 @@ mod laws {
             TypeKind::Named {
                 id: TypeDefId::builtin_list(&db),
                 name: Symbol::new("List"),
+                row_args: vec![],
                 args: vec![int],
             },
         );

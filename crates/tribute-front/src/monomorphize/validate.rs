@@ -163,9 +163,14 @@ fn names_incomplete_nominal_argument<'db>(
 
         fn visit_type(&mut self, ty: Type<'db>) -> ControlFlow<()> {
             match ty.kind(self.db) {
-                TypeKind::Named { id, .. } if !self.in_argument && self.generic.contains(id) => {
+                TypeKind::Named {
+                    id, row_args, args, ..
+                } if !self.in_argument && self.generic.contains(id) => {
+                    // The type's own row arguments are not part of its
+                    // instance, so an open one is no argument of it.
+                    row_args.visit_with(self)?;
                     self.in_argument = true;
-                    let flow = ty.super_visit_with(self);
+                    let flow = args.visit_with(self);
                     self.in_argument = false;
                     flow
                 }

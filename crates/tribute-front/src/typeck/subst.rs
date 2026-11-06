@@ -68,6 +68,57 @@ pub fn substitute_bound_vars<'db>(
     ty.try_fold_with(&mut BoundVarSubst::new(db, subst))
 }
 
+/// Replaces a nominal declaration's row binders with the row arguments of
+/// one of its types. Each binder tail is replaced once: a row argument is
+/// caller-owned, so its own tail is not looked up again.
+struct RowBinderSubst<'a, 'db> {
+    db: &'db dyn salsa::Database,
+    binders: &'a [RowVar],
+    rows: &'a [AbilityRow<'db>],
+}
+
+impl<'db> TypeFolder<'db> for RowBinderSubst<'_, 'db> {
+    type Error = Infallible;
+
+    fn db(&self) -> &'db dyn salsa::Database {
+        self.db
+    }
+
+    fn fold_row(&mut self, row: AbilityRow<'db>) -> Result<AbilityRow<'db>, Infallible> {
+        let db = self.db;
+        let row = row.try_super_fold_with(self)?;
+        let Some(index) = row
+            .rest(db)
+            .and_then(|var| self.binders.iter().position(|binder| binder == var))
+        else {
+            return Ok(row);
+        };
+        let argument = self.rows[index];
+        let mut instances = row.instances(db).to_vec();
+        for instance in argument.instances(db) {
+            if !instances.contains(instance) {
+                instances.push(instance.clone());
+            }
+        }
+        Ok(AbilityRow::new(db, instances, argument.rest(db).copied()))
+    }
+}
+
+/// Substitute a nominal declaration's row binders in `ty` with the row
+/// arguments `rows`, one for each binder in order.
+pub fn substitute_row_binders<'db>(
+    db: &'db dyn salsa::Database,
+    ty: Type<'db>,
+    binders: &[RowVar],
+    rows: &[AbilityRow<'db>],
+) -> Type<'db> {
+    assert_eq!(binders.len(), rows.len());
+    if binders.is_empty() {
+        return ty;
+    }
+    ty.fold_with(&mut RowBinderSubst { db, binders, rows })
+}
+
 /// Substitute BoundVars within an ability row.
 ///
 /// Returns [`BoundVarOutOfBounds`] if a BoundVar index exceeds `subst.len()`.

@@ -166,6 +166,15 @@ pub struct TypeParamDecl {
     pub bounds: Vec<TypeAnnotation>,
 }
 
+/// Row parameter declaration of a struct or enum: `{e}`
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct RowParamDecl {
+    /// Node ID for span lookup.
+    pub id: NodeId,
+    /// Parameter name.
+    pub name: Symbol,
+}
+
 /// Parameter declaration in a function.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ParamDecl {
@@ -191,6 +200,8 @@ pub struct StructDecl {
     /// How many type declarations of the same name precede this one in its
     /// module. Zero unless the module redeclares the name.
     pub disambiguator: u32,
+    /// Row parameters, which precede the type parameters.
+    pub row_params: Vec<RowParamDecl>,
     /// Type parameters.
     pub type_params: Vec<TypeParamDecl>,
     /// Struct fields.
@@ -228,6 +239,8 @@ pub struct EnumDecl {
     /// How many type declarations of the same name precede this one in its
     /// module. Zero unless the module redeclares the name.
     pub disambiguator: u32,
+    /// Row parameters, which precede the type parameters.
+    pub row_params: Vec<RowParamDecl>,
     /// Type parameters.
     pub type_params: Vec<TypeParamDecl>,
     /// Enum variants.
@@ -430,6 +443,7 @@ mod tests {
             visibility: Visibility::Private,
             name: Symbol::new(name),
             disambiguator: 0,
+            row_params: vec![],
             type_params: vec![],
             fields: vec![],
         })

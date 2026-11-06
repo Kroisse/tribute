@@ -116,6 +116,7 @@ fn assert_named_args(
         id,
         name: actual,
         args: actual_args,
+        ..
     } = ty.kind(db)
     else {
         panic!("expected {name} named type, found {ty:?}");

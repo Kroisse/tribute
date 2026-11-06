@@ -305,7 +305,7 @@ impl<'db> NominalTypes<'db> {
                 logical_key("local_bound", [scope.to_string(), index.to_string()])
             }
             TypeKind::UniVar { id } => self.logical_univar_key(*id),
-            TypeKind::Named { id, name, args } => {
+            TypeKind::Named { id, name, args, .. } => {
                 let mut parts = vec![self.logical_nominal_key(*id, name)];
                 parts.extend(args.iter().map(|arg| self.logical_type_key(*arg)));
                 logical_key("named", parts)
@@ -659,6 +659,7 @@ mod tests {
                 TypeKind::Named {
                     id,
                     name: Symbol::new("Box"),
+                    row_args: vec![],
                     args: vec![nat],
                 },
             )
@@ -700,6 +701,7 @@ mod tests {
                 TypeKind::Named {
                     id: crate::ast::TypeDefId::declared(&db, path.clone(), disambiguator),
                     name: Symbol::new("A"),
+                    row_args: vec![],
                     args: vec![],
                 },
             )

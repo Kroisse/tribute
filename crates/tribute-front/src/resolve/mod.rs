@@ -988,6 +988,7 @@ mod tests {
             visibility: Visibility::Private,
             name: Symbol::new(name),
             disambiguator: 0,
+            row_params: vec![],
             type_params: vec![],
             fields: vec![FieldDecl {
                 id: fresh_node_id(),
@@ -1009,6 +1010,7 @@ mod tests {
             visibility: Visibility::Private,
             name: Symbol::new(name),
             disambiguator: 0,
+            row_params: vec![],
             type_params: vec![],
             variants: variants
                 .iter()
@@ -1287,6 +1289,7 @@ mod tests {
                 visibility: Visibility::Private,
                 name: Symbol::new("Point"),
                 disambiguator: 0,
+                row_params: vec![],
                 type_params: vec![],
                 fields: vec![
                     FieldDecl {

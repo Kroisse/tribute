@@ -241,6 +241,7 @@ impl<'db> ModuleTypeEnv<'db> {
             TypeKind::Named {
                 id: TypeDefId::builtin_list(db),
                 name: list_name.clone(),
+                row_args: vec![],
                 args: vec![list_arg],
             },
         );
@@ -256,6 +257,7 @@ impl<'db> ModuleTypeEnv<'db> {
             TypeKind::Named {
                 id: slots_id,
                 name: Symbol::new("Slots"),
+                row_args: vec![],
                 args: vec![list_arg],
             },
         );
@@ -278,6 +280,7 @@ impl<'db> ModuleTypeEnv<'db> {
             TypeKind::Named {
                 id: dispatch_id,
                 name: Symbol::new("Dispatch"),
+                row_args: Vec::new(),
                 args: Vec::new(),
             },
         );
@@ -479,35 +482,34 @@ impl<'db> ModuleTypeEnv<'db> {
             })
             .filter(|(_, owner, field)| self.struct_field(owner, field).is_some())
             .unwrap_or((FieldFunctionKind::Get, parent, leaf));
-        let (owner, parameters, field_ty) = self.struct_field(&owner_name, &field)?;
+        let (owner, declaration, field_ty) = self.struct_field(&owner_name, &field)?;
 
-        let receiver = self.named_type_with_id(
-            owner,
-            owner.qualified(self.db).clone(),
-            (0..parameters.len() as u32)
-                .map(|index| Type::new(self.db, TypeKind::BoundVar { index }))
-                .collect(),
-        );
+        // The struct's own scheme binds its row and type parameters.
+        let receiver = *declaration.body(self.db);
+        let mut row_params = declaration.effect_params(self.db).to_vec();
         let pure = AbilityRow::pure(self.db);
         let body = match kind {
             FieldFunctionKind::Get => self.func_type(vec![receiver], field_ty, pure),
             FieldFunctionKind::Set => self.func_type(vec![receiver, field_ty], receiver, pure),
             FieldFunctionKind::Modify => {
-                // A row variable the field's own type does not use.
-                let id = crate::ast::collect_row_vars(self.db, field_ty)
-                    .iter()
+                // A row variable neither the receiver nor the field uses.
+                let id = [receiver, field_ty]
+                    .into_iter()
+                    .flat_map(|ty| crate::ast::collect_row_vars(self.db, ty))
                     .map(|var| var.id + 1)
                     .max()
                     .unwrap_or(0);
-                let row = AbilityRow::open(self.db, crate::ast::RowVar { id });
+                let var = crate::ast::RowVar { id };
+                row_params.push(var);
+                let row = AbilityRow::open(self.db, var);
                 let callback = self.func_type(vec![field_ty], field_ty, row);
                 self.func_type(vec![receiver, callback], receiver, row)
             }
         };
         let scheme = TypeScheme::new(
             self.db,
-            parameters,
-            crate::ast::collect_row_vars(self.db, body),
+            declaration.type_params(self.db).to_vec(),
+            row_params,
             body,
         );
         Some(FieldFunction {
@@ -519,18 +521,18 @@ impl<'db> ModuleTypeEnv<'db> {
     }
 
     /// The named field `field` of the struct at `owner`: the struct's
-    /// identity and type parameters, and the field's type.
+    /// identity and scheme, and the field's type.
     fn struct_field(
         &self,
         owner: &[Symbol],
         field: &Symbol,
-    ) -> Option<(TypeDefId<'db>, Vec<TypeParam>, Type<'db>)> {
-        let TypeKind::Named { id, .. } = self.lookup_type_def(owner)?.body(self.db).kind(self.db)
-        else {
+    ) -> Option<(TypeDefId<'db>, TypeScheme<'db>, Type<'db>)> {
+        let declaration = self.lookup_type_def(owner)?;
+        let TypeKind::Named { id, .. } = declaration.body(self.db).kind(self.db) else {
             return None;
         };
-        let (parameters, ty) = self.lookup_struct_field(*id, field)?;
-        Some((*id, parameters.to_vec(), ty))
+        let (_, ty) = self.lookup_struct_field(*id, field)?;
+        Some((*id, declaration, ty))
     }
 
     /// The scheme of the function `id` and where it comes from: a
@@ -907,21 +909,35 @@ impl<'db> ModuleTypeEnv<'db> {
                 _ => None,
             })
             .unwrap_or_else(|| TypeDefId::synthetic(self.db, path));
-        self.named_type_with_id(id, name, args)
+        self.named_type_with_id(id, name, vec![], args)
     }
 
     pub fn named_type_with_id(
         &self,
         id: TypeDefId<'db>,
         name: Symbol,
+        row_args: Vec<AbilityRow<'db>>,
         args: Vec<Type<'db>>,
     ) -> Type<'db> {
-        Type::new(self.db, TypeKind::Named { id, name, args })
+        Type::new(
+            self.db,
+            TypeKind::Named {
+                id,
+                name,
+                row_args,
+                args,
+            },
+        )
     }
 
     pub fn canonical_list_type(&self, element: Type<'db>) -> Type<'db> {
         let name = Symbol::new("List");
-        self.named_type_with_id(TypeDefId::builtin_list(self.db), name, vec![element])
+        self.named_type_with_id(
+            TypeDefId::builtin_list(self.db),
+            name,
+            vec![],
+            vec![element],
+        )
     }
 }
 
@@ -954,7 +970,7 @@ mod tests {
         let mut env = ModuleTypeEnv::new(db);
         let name = Symbol::new("String");
         let user_id = TypeDefId::source(db, trunk_ir::SymbolPath::new([name.clone()]));
-        let user_ty = env.named_type_with_id(user_id, name.clone(), vec![]);
+        let user_ty = env.named_type_with_id(user_id, name.clone(), vec![], vec![]);
         env.register_type_def(
             trunk_ir::SymbolPath::new([name]),
             TypeScheme::mono(db, user_ty),
@@ -1234,6 +1250,7 @@ mod tests {
             TypeKind::Named {
                 id: crate::ast::TypeDefId::synthetic(db, trunk_ir::SymbolPath::new([name])),
                 name: Symbol::new(name),
+                row_args: vec![],
                 args,
             },
         )

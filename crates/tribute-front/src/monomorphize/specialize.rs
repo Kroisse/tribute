@@ -10,9 +10,9 @@ use trunk_ir::Symbol;
 use crate::ast::fold::TypeFoldable;
 use crate::ast::visit::{RefSite, Visit, VisitMut};
 use crate::ast::{
-    Decl, DeclEntry, DeclTable, EnumDecl, ExternFuncDecl, FieldDecl, FuncDecl, FuncDefId,
-    IdentityDigest, NodeId, StructDecl, Type, TypeAnnotation, TypeAnnotationKind, TypeDefId,
-    TypeKind, TypeScheme, TypedRef, VariantDecl,
+    AbilityRow, Decl, DeclEntry, DeclTable, EnumDecl, ExternFuncDecl, FieldDecl, FuncDecl,
+    FuncDefId, IdentityDigest, NodeId, StructDecl, Type, TypeAnnotation, TypeAnnotationKind,
+    TypeDefId, TypeKind, TypeScheme, TypedRef, VariantDecl,
 };
 use crate::typeck::subst::{BoundVarOutOfBounds, BoundVarSubst};
 
@@ -295,6 +295,7 @@ fn specialize_struct_decl<'db>(
         visibility: crate::ast::Visibility::Private,
         name: mangled_name,
         disambiguator: decl.disambiguator,
+        row_params: decl.row_params.clone(),
         type_params: vec![],
         fields: decl
             .fields
@@ -324,6 +325,7 @@ fn specialize_enum_decl<'db>(
         visibility: crate::ast::Visibility::Private,
         name: mangled_name,
         disambiguator: decl.disambiguator,
+        row_params: decl.row_params.clone(),
         type_params: vec![],
         variants: decl
             .variants
@@ -367,8 +369,20 @@ fn substitute_annotation<'db>(
             }
             ann.kind.clone()
         }
-        TypeAnnotationKind::App { ctor, args } => TypeAnnotationKind::App {
+        TypeAnnotationKind::App {
+            ctor,
+            row_args,
+            args,
+        } => TypeAnnotationKind::App {
             ctor: Box::new(substitute_annotation(db, ctor, param_names, type_args)),
+            row_args: row_args
+                .iter()
+                .map(|row| {
+                    row.iter()
+                        .map(|item| substitute_annotation(db, item, param_names, type_args))
+                        .collect()
+                })
+                .collect(),
             args: args
                 .iter()
                 .map(|a| substitute_annotation(db, a, param_names, type_args))
@@ -416,14 +430,30 @@ fn type_to_annotation(db: &dyn salsa::Database, ty: Type<'_>, id: NodeId) -> Typ
         TypeKind::Named {
             id: type_id,
             name,
+            row_args,
             args,
         } => {
-            if args.is_empty() {
-                TypeAnnotationKind::Named(name.clone())
+            let name = if args.is_empty() {
+                name.clone()
             } else {
                 // Use mangled name for generic types with args
-                let mangled = mangle_type_path(db, *type_id, args).to_symbol();
-                TypeAnnotationKind::Named(mangled)
+                mangle_type_path(db, *type_id, args).to_symbol()
+            };
+            if row_args.is_empty() {
+                TypeAnnotationKind::Named(name)
+            } else {
+                // The specialized declaration keeps the row parameters.
+                TypeAnnotationKind::App {
+                    ctor: Box::new(TypeAnnotation {
+                        id,
+                        kind: TypeAnnotationKind::Named(name),
+                    }),
+                    row_args: row_args
+                        .iter()
+                        .map(|row| row_to_annotations(db, *row, id))
+                        .collect(),
+                    args: vec![],
+                }
             }
         }
         TypeKind::Func {
@@ -431,54 +461,14 @@ fn type_to_annotation(db: &dyn salsa::Database, ty: Type<'_>, id: NodeId) -> Typ
             result,
             effect,
             ..
-        } => {
-            // Preserve the ability row as ability annotations. Each Effect
-            // becomes a Named (or App) annotation; a row variable (`rest`) is
-            // represented as `Infer`, matching the "effect polymorphic" encoding
-            // documented on TypeAnnotationKind::Func.
-            let mut abilities: Vec<TypeAnnotation> = effect
-                .instances(db)
+        } => TypeAnnotationKind::Func {
+            params: params
                 .iter()
-                .map(|eff| {
-                    let name = eff.ability_id.name(db);
-                    if eff.args.is_empty() {
-                        TypeAnnotation {
-                            id,
-                            kind: TypeAnnotationKind::Named(name),
-                        }
-                    } else {
-                        TypeAnnotation {
-                            id,
-                            kind: TypeAnnotationKind::App {
-                                ctor: Box::new(TypeAnnotation {
-                                    id,
-                                    kind: TypeAnnotationKind::Named(name),
-                                }),
-                                args: eff
-                                    .args
-                                    .iter()
-                                    .map(|a| type_to_annotation(db, *a, id))
-                                    .collect(),
-                            },
-                        }
-                    }
-                })
-                .collect();
-            if effect.rest(db).is_some() {
-                abilities.push(TypeAnnotation {
-                    id,
-                    kind: TypeAnnotationKind::Infer,
-                });
-            }
-            TypeAnnotationKind::Func {
-                params: params
-                    .iter()
-                    .map(|p| type_to_annotation(db, *p, id))
-                    .collect(),
-                result: Box::new(type_to_annotation(db, *result, id)),
-                abilities,
-            }
-        }
+                .map(|p| type_to_annotation(db, *p, id))
+                .collect(),
+            result: Box::new(type_to_annotation(db, *result, id)),
+            abilities: row_to_annotations(db, *effect, id),
+        },
         TypeKind::Tuple(elems) => TypeAnnotationKind::Tuple(
             elems
                 .iter()
@@ -488,6 +478,53 @@ fn type_to_annotation(db: &dyn salsa::Database, ty: Type<'_>, id: NodeId) -> Typ
         _ => TypeAnnotationKind::Infer,
     };
     TypeAnnotation { id, kind }
+}
+
+/// Convert an ability row to ability annotations. Each effect becomes a
+/// Named (or App) annotation; a row variable (`rest`) is represented as
+/// `Infer`, matching the "effect polymorphic" encoding documented on
+/// `TypeAnnotationKind::Func`.
+fn row_to_annotations(
+    db: &dyn salsa::Database,
+    row: AbilityRow<'_>,
+    id: NodeId,
+) -> Vec<TypeAnnotation> {
+    let mut abilities: Vec<TypeAnnotation> = row
+        .instances(db)
+        .iter()
+        .map(|eff| {
+            let name = eff.ability_id.name(db);
+            if eff.args.is_empty() {
+                TypeAnnotation {
+                    id,
+                    kind: TypeAnnotationKind::Named(name),
+                }
+            } else {
+                TypeAnnotation {
+                    id,
+                    kind: TypeAnnotationKind::App {
+                        ctor: Box::new(TypeAnnotation {
+                            id,
+                            kind: TypeAnnotationKind::Named(name),
+                        }),
+                        row_args: vec![],
+                        args: eff
+                            .args
+                            .iter()
+                            .map(|a| type_to_annotation(db, *a, id))
+                            .collect(),
+                    },
+                }
+            }
+        })
+        .collect();
+    if row.rest(db).is_some() {
+        abilities.push(TypeAnnotation {
+            id,
+            kind: TypeAnnotationKind::Infer,
+        });
+    }
+    abilities
 }
 
 // ============================================================================
@@ -975,6 +1012,7 @@ mod tests {
         let named = |name: &str, args| TypeKind::Named {
             id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::new([name])),
             name: Symbol::new(name),
+            row_args: vec![],
             args,
         };
         let int = Type::new(&db, TypeKind::Int);
@@ -1048,7 +1086,7 @@ mod tests {
                     other => panic!("expected Named(Console), got {:?}", other),
                 }
                 match &abilities[1].kind {
-                    TypeAnnotationKind::App { ctor, args } => {
+                    TypeAnnotationKind::App { ctor, args, .. } => {
                         match &ctor.kind {
                             TypeAnnotationKind::Named(name) => {
                                 assert_eq!(name.to_string(), "State");
@@ -1131,6 +1169,7 @@ mod tests {
             visibility: crate::ast::Visibility::Public,
             name: Symbol::new("Pair"),
             disambiguator: 0,
+            row_params: vec![],
             type_params: vec![
                 crate::ast::TypeParamDecl {
                     id: node_id(2),
@@ -1201,6 +1240,7 @@ mod tests {
             visibility: crate::ast::Visibility::Public,
             name: Symbol::new("Option"),
             disambiguator: 0,
+            row_params: vec![],
             type_params: vec![crate::ast::TypeParamDecl {
                 id: node_id(2),
                 name: Symbol::new("a"),

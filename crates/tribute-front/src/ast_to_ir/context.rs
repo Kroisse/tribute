@@ -663,6 +663,7 @@ mod tests {
                     trunk_ir::SymbolPath::new([nominal_name.clone()]),
                 ),
                 name: Symbol::new("Forward"),
+                row_args: vec![],
                 args: vec![],
             },
         );
@@ -683,6 +684,7 @@ mod tests {
                     trunk_ir::SymbolPath::new([list_name.clone()]),
                 ),
                 name: list_name.clone(),
+                row_args: vec![],
                 args: vec![],
             },
         );
@@ -691,6 +693,7 @@ mod tests {
             TypeKind::Named {
                 id: crate::ast::TypeDefId::builtin_list(&db),
                 name: list_name.clone(),
+                row_args: vec![],
                 args: vec![int],
             },
         );
@@ -767,6 +770,7 @@ mod tests {
                 TypeKind::Named {
                     id: crate::ast::TypeDefId::builtin_list(&db),
                     name: Symbol::new("Undeclared"),
+                    row_args: vec![],
                     args: vec![],
                 },
             ),

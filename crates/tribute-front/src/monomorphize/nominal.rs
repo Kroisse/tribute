@@ -377,6 +377,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
             TypeKind::Named {
                 id: hidden_id,
                 name: hidden_decl.name.clone(),
+                row_args: vec![],
                 args: vec![Type::new(db, TypeKind::BoundVar { index: 0 })],
             },
         );

@@ -3,7 +3,7 @@
 
 use trunk_ir::SymbolPath;
 
-use crate::ast::{AbilityRow, Type, TypeKind};
+use crate::ast::{AbilityRow, Type};
 use crate::typeck::checker::TypeChecker;
 use crate::typeck::func_context::FunctionInferenceContext;
 
@@ -43,22 +43,34 @@ impl<'db> TypeChecker<'db> {
                 } else if *name == "Never" {
                     ctx.never_type()
                 } else {
-                    ctx.named_type_in_scope(
+                    let ty = ctx.named_type_in_scope(
                         SymbolPath::new([name.clone()]),
                         vec![],
                         self.current_prefix(),
-                    )
+                    );
+                    self.check_nominal_arity(ann, ty, false)
                 }
             }
-            TypeAnnotationKind::Path(parts) => ctx.path_type(parts),
-            TypeAnnotationKind::App { ctor, args } => {
-                let ctor_ty = self.annotation_to_type_with_ctx(ctx, ctor);
-                if let TypeKind::Named { id, name, .. } = ctor_ty.kind(self.db()) {
+            TypeAnnotationKind::Path(parts) => {
+                let ty = ctx.path_type(parts);
+                self.check_nominal_arity(ann, ty, false)
+            }
+            TypeAnnotationKind::App {
+                ctor,
+                row_args,
+                args,
+            } => {
+                if let Some((id, name)) = self.applied_nominal(ctor) {
+                    let row_args = row_args
+                        .iter()
+                        .map(|row| self.ability_annotations_to_row_with_ctx(ctx, row))
+                        .collect();
                     let arg_types: Vec<Type<'db>> = args
                         .iter()
                         .map(|a| self.annotation_to_type_with_ctx(ctx, a))
                         .collect();
-                    ctx.named_type_with_id(*id, name.clone(), arg_types)
+                    let ty = ctx.named_type_with_id(id, name, row_args, arg_types);
+                    self.check_nominal_arity(ann, ty, true)
                 } else {
                     ctx.error_type()
                 }

@@ -29,6 +29,7 @@ fn examples(db: &dyn salsa::Database) -> Vec<(Type<'_>, &'static str)> {
     let named = |name, args| TypeKind::Named {
         id: TypeDefId::synthetic(db, trunk_ir::SymbolPath::new([name])),
         name: Symbol::new(name),
+        row_args: vec![],
         args,
     };
     let cases = vec![
@@ -117,6 +118,7 @@ fn ability_row_display_preserves_distinct_identities(db: &salsa::DatabaseImpl) {
     let named = |module| TypeKind::Named {
         id: TypeDefId::source(db, trunk_ir::SymbolPath::new([module, "T"])),
         name: Symbol::new("T"),
+        row_args: vec![],
         args: vec![],
     };
     let pairs = [
@@ -288,6 +290,7 @@ fn a_library_prints_its_own_types_without_its_name(db: &salsa::DatabaseImpl) {
             TypeKind::Named {
                 id: TypeDefId::source(db, trunk_ir::SymbolPath::new(identity.split("::"))),
                 name: Symbol::new(identity),
+                row_args: vec![],
                 args,
             },
         )

@@ -589,7 +589,7 @@ fn print_type_annotation(ty: &TypeAnnotation) -> String {
             .map(|s| s.to_string())
             .collect::<Vec<_>>()
             .join("::"),
-        TypeAnnotationKind::App { ctor, args } => {
+        TypeAnnotationKind::App { ctor, args, .. } => {
             let ctor_str = print_type_annotation(ctor);
             let args_str: Vec<_> = args.iter().map(print_type_annotation).collect();
             format!("{}({})", ctor_str, args_str.join(", "))

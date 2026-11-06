@@ -851,7 +851,10 @@ impl<'db> TypeSolver<'db> {
                     || params.iter().any(|p| self.row_occurs_in_type(var, *p))
                     || self.row_occurs_in_type(var, *result)
             }
-            TypeKind::Named { args, .. } => args.iter().any(|a| self.row_occurs_in_type(var, *a)),
+            TypeKind::Named { row_args, args, .. } => {
+                row_args.iter().any(|row| self.row_occurs_in(var, *row))
+                    || args.iter().any(|a| self.row_occurs_in_type(var, *a))
+            }
             TypeKind::Tuple(elems) => elems.iter().any(|e| self.row_occurs_in_type(var, *e)),
             TypeKind::Continuation {
                 arg,

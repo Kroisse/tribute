@@ -1524,7 +1524,7 @@ fn test_generic_type_annotation_preserved() {
     };
 
     match &ty.kind {
-        TypeAnnotationKind::App { ctor, args } => {
+        TypeAnnotationKind::App { ctor, args, .. } => {
             assert!(
                 matches!(&ctor.kind, TypeAnnotationKind::Named(n) if *n == "List"),
                 "Expected List constructor, got {:?}",
@@ -1558,7 +1558,7 @@ fn test_nested_generic_type_annotation() {
     };
 
     match &ty.kind {
-        TypeAnnotationKind::App { ctor, args } => {
+        TypeAnnotationKind::App { ctor, args, .. } => {
             assert!(
                 matches!(&ctor.kind, TypeAnnotationKind::Named(n) if *n == "List"),
                 "Expected List constructor"
@@ -1569,6 +1569,7 @@ fn test_nested_generic_type_annotation() {
             let TypeAnnotationKind::App {
                 ctor: inner_ctor,
                 args: inner_args,
+                ..
             } = &args[0].kind
             else {
                 panic!("Expected nested App type annotation");
@@ -1604,7 +1605,7 @@ fn test_return_type_annotation_preserved() {
     };
 
     match &return_ty.kind {
-        TypeAnnotationKind::App { ctor, args } => {
+        TypeAnnotationKind::App { ctor, args, .. } => {
             assert!(
                 matches!(&ctor.kind, TypeAnnotationKind::Named(n) if *n == "List"),
                 "Expected List constructor"
@@ -1939,7 +1940,7 @@ fn test_type_annotation_generic() {
         .ty
         .as_ref()
         .expect("Expected type annotation");
-    let TypeAnnotationKind::App { ctor, args } = &ty.kind else {
+    let TypeAnnotationKind::App { ctor, args, .. } = &ty.kind else {
         panic!("Expected App, got {:?}", ty.kind);
     };
     let TypeAnnotationKind::Named(name) = &ctor.kind else {
@@ -1965,7 +1966,7 @@ fn test_type_annotation_generic_multi_arg() {
         .ty
         .as_ref()
         .expect("Expected type annotation");
-    let TypeAnnotationKind::App { ctor, args } = &ty.kind else {
+    let TypeAnnotationKind::App { ctor, args, .. } = &ty.kind else {
         panic!("Expected App, got {:?}", ty.kind);
     };
     let TypeAnnotationKind::Named(name) = &ctor.kind else {
@@ -2152,7 +2153,7 @@ fn test_type_annotation_function_with_parameterized_effect() {
 
     // Effect should be App { ctor: State, args: [Int] }
     assert_eq!(abilities.len(), 1);
-    let TypeAnnotationKind::App { ctor, args } = &abilities[0].kind else {
+    let TypeAnnotationKind::App { ctor, args, .. } = &abilities[0].kind else {
         panic!(
             "Expected App for parameterized effect, got {:?}",
             abilities[0].kind
@@ -2250,7 +2251,7 @@ fn test_type_annotation_nested_generic_in_function() {
     };
     // param should be App { ctor: List, args: [a] }
     assert_eq!(params.len(), 1);
-    let TypeAnnotationKind::App { ctor, args } = &params[0].kind else {
+    let TypeAnnotationKind::App { ctor, args, .. } = &params[0].kind else {
         panic!("Expected App param, got {:?}", params[0].kind);
     };
     let TypeAnnotationKind::Named(name) = &ctor.kind else {
@@ -2260,7 +2261,7 @@ fn test_type_annotation_nested_generic_in_function() {
     assert_eq!(args.len(), 1);
 
     // result should be App { ctor: Option, args: [a] }
-    let TypeAnnotationKind::App { ctor, args } = &result.kind else {
+    let TypeAnnotationKind::App { ctor, args, .. } = &result.kind else {
         panic!("Expected App result, got {:?}", result.kind);
     };
     let TypeAnnotationKind::Named(name) = &ctor.kind else {
