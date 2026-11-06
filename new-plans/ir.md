@@ -1244,7 +1244,9 @@ adt.typeref<{name = "Callback", row_args = [{tail = 2}]}>
   Frontend는 `struct_get`, `variant_get` 결과와 `struct_new`, `variant_new` 피연산자의
   type을 이 치환으로 쓴다.
 - Row 인자는 다른 row와 같이 source-logical 경계 안에만 있다. CPS legalization은
-  `row_args`와 `row_params`를 버리며, representation/ABI 경계의 출구는 둘을 거부한다.
+  `row_args`와 `row_params`를 버리고 tuple layout을
+  [새 이름](#compiler-generated-tuple-layout)으로 다시 만들며, representation/ABI
+  경계의 출구는 `row_args`와 `row_params`를 거부한다.
 
 #### Tail의 합집합
 
@@ -1889,6 +1891,11 @@ Compiler-generated tuple layout의 이름은 원소의 logical type에서 정해
 원소가 callable type이면 그 [row](#ability-row)를 포함한다. 그래서 row만
 다른 두 tuple은 다른 layout이고, [row 치환](#row-인자와-치환)은 원소를 치환한 layout을
 같은 함수로 다시 만든다. 이 함수는 IR 계층이 소유하며 frontend와 pass가 함께 쓴다.
+Row를 버리는 CPS legalization도 tuple layout을 원소를 변환한 뒤 같은 함수로 다시
+만들고, 그 이름을 가리키는 typeref와 게시된 alias를 새 이름으로 바꾼다. 그래서 row만
+다른 tuple layout은 legalization 뒤에 하나가 된다. Nominal layout의 필드 type과,
+row 인자로 치환한 그 필드 type을 쓰는 `adt` 생성·접근 operation도 같은 tuple layout을
+가리키게 된다.
 
 특수화된 enum의 variant 필드 타입은 해당 인스턴스에 함께 치환된 constructor
 스킴에서 가져온다. 원본 generic 스킴이나 생성·패턴 표현식으로 필드 표현을
