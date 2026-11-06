@@ -2675,10 +2675,11 @@ adt.typeref<Pair[row(), row(@A | 'a0)]>
 - 저장 표현은 type 속성 `name`(문자열)과, row 매개변수를 가진 선언을 가리킬 때의
   type 속성 `row_args`([Nominal row 인자](#nominal-row-인자))다. 둘 다 전용 문법이
   소유한다. 나머지 type 속성은 `<…>` 안 마지막 원소로 둔다.
-- `row_args`의 tail은 그 type을 쓴 정의의 binder를 가리키므로, `row_args`를 가진
-  typeref는 alias 이름을 제안하지 않는다. Module 수준 alias가 되면 tail이 binder에서
-  떨어지고, 같은 이름의 typeref끼리 alias 이름이 겹치기 때문이다. `row_args`가 없는
-  typeref는 자기 `name`을 제안한다.
+- `row_args`가 없는 typeref는 자기 `name`을 alias 이름으로 제안한다. `row_args`를
+  가진 typeref는 row 인자만 다른 typeref끼리 이름이 겹치므로 제안하지 않으며, 다른
+  제안 없는 타입처럼 번호 이름을 받을 수 있다. Tail 이름은 위치에서 정해지므로 alias
+  안의 tail은 [다른 type alias](#사용자-정의-어셈블리-형식)에서처럼 그 alias를 쓴
+  정의의 binder를 가리킨다.
 
 ### `func.func_sig` function type
 
