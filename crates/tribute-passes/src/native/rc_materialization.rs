@@ -287,7 +287,7 @@ fn release_moving(
         };
         let get = adt::StructGet::from_op(ctx, op)
             .map_err(|_| OwnershipPlanError::new("moved field is not an adt.struct_get"))?;
-        if get.field(ctx) != field || alias_root(ctx, get.r#ref(ctx)) != owner {
+        if get.field(ctx) != field as usize || alias_root(ctx, get.r#ref(ctx)) != owner {
             return Err(OwnershipPlanError::new(
                 "moved field does not read its planned owner and field",
             ));
@@ -377,7 +377,7 @@ fn validate_replaced_field(
         OwnershipPlanError::new("replaced-field release anchor is not an adt.struct_set")
     })?;
     let field = set.field(ctx);
-    if set.r#ref(ctx) != object || field != destination {
+    if set.r#ref(ctx) != object || field != destination as usize {
         return Err(OwnershipPlanError::new(
             "replaced-field release does not match its planned object or field",
         ));
@@ -385,14 +385,14 @@ fn validate_replaced_field(
     let fields = get_struct_fields(ctx, set.r#type(ctx))
         .ok_or_else(|| OwnershipPlanError::new("replaced-field layout is stale"))?;
     let (_, field_ty) = fields
-        .get(field as usize)
+        .get(field)
         .ok_or_else(|| OwnershipPlanError::new("replaced-field index is stale"))?;
     if !plan.is_managed_type(ctx, *field_ty) {
         return Err(OwnershipPlanError::new(
             "replaced-field release targets an unmanaged field",
         ));
     }
-    Ok((object, set.r#type(ctx), field, *field_ty))
+    Ok((object, set.r#type(ctx), destination, *field_ty))
 }
 
 fn validate_replaced_element(
@@ -450,7 +450,7 @@ fn build_operations(ctx: &mut IrContext, action: ScheduledAction) -> (Placement,
             let location = location_for(ctx, placement);
             let get = adt::StructGet::operands(object)
                 .r#type(layout)
-                .field(field)
+                .field(field as usize)
                 .results(field_ty)
                 .build(ctx, location);
             let release = tribute_rt::Release::operands(get.result(ctx))

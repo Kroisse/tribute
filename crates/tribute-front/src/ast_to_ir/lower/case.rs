@@ -63,7 +63,7 @@ pub(super) fn emit_logical_pattern_check<'db>(
             for ((index, element), element_ty) in elements.iter().enumerate().zip(field_tys) {
                 let get = adt::StructGet::operands(scrutinee)
                     .r#type(struct_ty)
-                    .field(index as u32)
+                    .field(index)
                     .results(element_ty)
                     .build(builder.ir, location);
                 builder.ir.push_op(builder.block, get.op_ref());
@@ -96,7 +96,7 @@ pub(super) fn emit_logical_pattern_check<'db>(
                     for (index, field) in fields {
                         let get = adt::StructGet::operands(scrutinee)
                             .r#type(ty)
-                            .field(index as u32)
+                            .field(index)
                             .results(field_tys[index])
                             .build(builder.ir, location);
                         builder.ir.push_op(builder.block, get.op_ref());
@@ -270,7 +270,7 @@ fn emit_logical_variant_pattern_check<'db>(
             let get = adt::VariantGet::operands(scrutinee)
                 .r#type(enum_ty)
                 .tag(variant)
-                .field(index as u32)
+                .field(index)
                 .results(field_ty)
                 .build(nested.ir, location);
             nested.ir.push_op(nested.block, get.op_ref());
@@ -645,7 +645,7 @@ pub(super) fn bind_logical_pattern_fields<'db>(
             for ((index, element), element_ty) in elements.iter().enumerate().zip(field_tys) {
                 let get = adt::StructGet::operands(scrutinee)
                     .r#type(struct_ty)
-                    .field(index as u32)
+                    .field(index)
                     .results(element_ty)
                     .build(ir, location);
                 ir.push_op(block, get.op_ref());
@@ -689,7 +689,7 @@ pub(super) fn bind_logical_pattern_fields<'db>(
                     for (index, field) in fields {
                         let get = adt::StructGet::operands(scrutinee)
                             .r#type(ty)
-                            .field(index as u32)
+                            .field(index)
                             .results(field_tys[index])
                             .build(ir, location);
                         ir.push_op(block, get.op_ref());
@@ -712,7 +712,7 @@ pub(super) fn bind_logical_pattern_fields<'db>(
                         let get = adt::VariantGet::operands(scrutinee)
                             .r#type(ty)
                             .tag(tag)
-                            .field(index as u32)
+                            .field(index)
                             .results(field_tys[index])
                             .build(ir, location);
                         ir.push_op(block, get.op_ref());

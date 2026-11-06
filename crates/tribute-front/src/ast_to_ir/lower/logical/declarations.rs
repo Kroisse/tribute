@@ -259,7 +259,7 @@ pub(super) fn lower_struct_accessors<'db>(
         });
         let field_value = adt::StructGet::operands(ir.block_arg(entry, 0))
             .r#type(layout_type)
-            .field(index as u32)
+            .field(index)
             .results(field_type)
             .build(ir, location);
         ir.push_op(entry, field_value.op_ref());
@@ -320,7 +320,7 @@ pub(super) fn lower_struct_accessors<'db>(
             let replacement = if modifies {
                 let current = adt::StructGet::operands(subject)
                     .r#type(layout_type)
-                    .field(index as u32)
+                    .field(index)
                     .results(field_type)
                     .build(ir, location);
                 ir.push_op(entry, current.op_ref());
@@ -350,7 +350,7 @@ pub(super) fn lower_struct_accessors<'db>(
                     }
                     let get = adt::StructGet::operands(subject)
                         .r#type(layout_type)
-                        .field(other as u32)
+                        .field(other)
                         .results(*ty)
                         .build(ir, location);
                     ir.push_op(entry, get.op_ref());

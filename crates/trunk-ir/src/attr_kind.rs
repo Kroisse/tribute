@@ -135,6 +135,29 @@ macro_rules! int_kind {
 
 int_kind!(i32 => I32, i64 => I64, u32 => U32, u64 => U64);
 
+/// A position or a count, the attribute counterpart of `core.index`, as
+/// MLIR's `IndexAttr` is. Its accessor and builder setter take `usize`.
+pub struct Index;
+
+impl AttrKind for Index {
+    const KIND: AttributeKind = AttributeKind::U64;
+    type Out<'ctx> = usize;
+    type In = usize;
+
+    fn read<'ctx>(_: &'ctx IrContext, attr: &'ctx Attribute) -> usize {
+        match attr {
+            Attribute::Int(value) => {
+                usize::try_from(*value).expect("Int attribute is out of range for an index")
+            }
+            _ => panic!("expected Int attribute"),
+        }
+    }
+
+    fn write(_: &mut IrContext, value: usize) -> Attribute {
+        Attribute::Int(i128::try_from(value).expect("an index fits i128"))
+    }
+}
+
 /// Declare a keyword attribute kind: an enum stored as a string attribute
 /// holding its keyword, which a declarative format writes bare, as MLIR
 /// writes `arith.cmpi slt, %a, %b`.

@@ -502,7 +502,7 @@ fn validate_projection_contract(
         let fields = get_struct_fields(ctx, get.r#type(ctx))
             .ok_or_else(|| OwnershipPlanError::new("struct_get has invalid layout"))?;
         let (_, field_ty) = fields
-            .get(get.field(ctx) as usize)
+            .get(get.field(ctx))
             .ok_or_else(|| OwnershipPlanError::new("struct_get field is stale"))?;
         (get.r#type(ctx), *field_ty)
     } else {
@@ -516,7 +516,7 @@ fn validate_projection_contract(
             .map(|(_, fields)| fields)
             .ok_or_else(|| OwnershipPlanError::new("variant_get tag is stale"))?;
         let field_ty = fields
-            .get(get.field(ctx) as usize)
+            .get(get.field(ctx))
             .ok_or_else(|| OwnershipPlanError::new("variant_get field is stale"))?;
         (get.r#type(ctx), *field_ty)
     };

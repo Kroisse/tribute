@@ -115,12 +115,12 @@ fn lower_call(ctx: &mut IrContext, call: OpRef) {
         .build(ctx, loc);
     let data = adt::StructGet::operands(view.result(ctx))
         .r#type(bytes_ty)
-        .field(DATA_FIELD)
+        .field(DATA_FIELD as usize)
         .results(data_ty)
         .build(ctx, loc);
     let offset = adt::StructGet::operands(view.result(ctx))
         .r#type(bytes_ty)
-        .field(OFFSET_FIELD)
+        .field(OFFSET_FIELD as usize)
         .results(i32_ty)
         .build(ctx, loc);
     let at = arith::Addi::operands(offset.result(ctx), index).build(ctx, loc);

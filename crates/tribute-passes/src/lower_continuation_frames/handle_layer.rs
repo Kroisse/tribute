@@ -627,7 +627,7 @@ fn unpack_handler_payload(
         .map(|(index, ty)| {
             let get = adt::StructGet::operands(cast.result(ctx))
                 .r#type(payload_type)
-                .field(index as u32)
+                .field(index)
                 .results(anyref)
                 .build(ctx, location);
             ctx.push_op(block, get.op_ref());

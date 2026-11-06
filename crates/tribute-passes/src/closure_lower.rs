@@ -214,7 +214,7 @@ impl OpRewritePattern for LowerClosureUnpackArena {
         for (index, &ty) in capture_types.iter().enumerate() {
             let get = adt::StructGet::operands(cast.result(ctx))
                 .r#type(layout)
-                .field((base_fields + index) as u32)
+                .field(base_fields + index)
                 .results(ty)
                 .build(ctx, loc);
             rewriter.insert_op(get.op_ref());

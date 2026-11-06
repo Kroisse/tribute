@@ -81,7 +81,7 @@ fn frame_field(
     ctx: &mut IrContext,
     block: BlockRef,
     location: Location,
-    (layout, index, field_type): (TypeRef, u32, TypeRef),
+    (layout, index, field_type): (TypeRef, usize, TypeRef),
     frame_value: ValueRef,
 ) -> ValueRef {
     let field = adt::StructGet::operands(frame_value)

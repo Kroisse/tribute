@@ -2,6 +2,7 @@
 
 use crate::dialect::tribute_rtti::ManagedRefType;
 use trunk_ir::asm_format::TypeAliasHint;
+use trunk_ir::attr_kind;
 use trunk_ir::dialect::core::Index;
 use trunk_ir::op_flag::Pure;
 
@@ -79,7 +80,7 @@ mod adt {
     /// `new-plans/ir.md` § "Nominal row 인자".
     #[flags(Pure)]
     #[asm_format(r#ref custom(Field(field)) attr_dict ":" r#type "->" type(result))]
-    fn struct_get(r#type: Attr<Type>, field: Attr<u32>, r#ref: Value<_>) -> Value<_> {}
+    fn struct_get(r#type: Attr<Type>, field: Attr<attr_kind::Index>, r#ref: Value<_>) -> Value<_> {}
 
     /// Store `value` in field `field` of the struct `ref` of layout `type`.
     ///
@@ -87,7 +88,13 @@ mod adt {
     /// adt.struct_set %p[1], %y : !Point
     /// ```
     #[asm_format(r#ref custom(Field(field)) "," value attr_dict ":" r#type)]
-    fn struct_set(r#type: Attr<Type>, field: Attr<u32>, r#ref: Value<_>, value: Value<_>) {}
+    fn struct_set(
+        r#type: Attr<Type>,
+        field: Attr<attr_kind::Index>,
+        r#ref: Value<_>,
+        value: Value<_>,
+    ) {
+    }
 
     /// A new value of variant `tag` of enum layout `type` whose fields are
     /// `fields` in order.
@@ -129,7 +136,7 @@ mod adt {
     fn variant_get(
         r#type: Attr<Type>,
         tag: Attr<String>,
-        field: Attr<u32>,
+        field: Attr<attr_kind::Index>,
         r#ref: Value<_>,
     ) -> Value<_> {
     }
@@ -280,9 +287,9 @@ fn tag_text<'a>(ctx: &'a IrContext, entity: &CustomEntity<'_>) -> Option<&'a str
     }
 }
 
-fn field_position(entity: &CustomEntity<'_>) -> Option<u32> {
+fn field_position(entity: &CustomEntity<'_>) -> Option<usize> {
     match entity {
-        CustomEntity::Attribute(Some(Attribute::Int(field))) => u32::try_from(*field).ok(),
+        CustomEntity::Attribute(Some(Attribute::Int(field))) => usize::try_from(*field).ok(),
         _ => None,
     }
 }
@@ -323,15 +330,15 @@ impl OpAsmDirective for Tag {
 }
 
 impl OpAsmDirective for Field {
-    type Parts<'a> = u32;
+    type Parts<'a> = usize;
     const SPACED: bool = false;
 
-    fn decompose<'a>(_: &'a IrContext, entities: &'a [CustomEntity<'a>]) -> Option<u32> {
+    fn decompose<'a>(_: &'a IrContext, entities: &'a [CustomEntity<'a>]) -> Option<usize> {
         let [field] = entities else { return None };
         field_position(field)
     }
 
-    fn print(p: &mut OpAsmPrinter<'_>, field: u32) -> std::fmt::Result {
+    fn print(p: &mut OpAsmPrinter<'_>, field: usize) -> std::fmt::Result {
         write!(p, "[{field}]")
     }
 
@@ -341,18 +348,18 @@ impl OpAsmDirective for Field {
 }
 
 impl OpAsmDirective for VariantField {
-    type Parts<'a> = (&'a str, u32);
+    type Parts<'a> = (&'a str, usize);
     const SPACED: bool = false;
 
     fn decompose<'a>(
         ctx: &'a IrContext,
         entities: &'a [CustomEntity<'a>],
-    ) -> Option<(&'a str, u32)> {
+    ) -> Option<(&'a str, usize)> {
         let [tag, field] = entities else { return None };
         Some((tag_text(ctx, tag)?, field_position(field)?))
     }
 
-    fn print(p: &mut OpAsmPrinter<'_>, (tag, field): (&str, u32)) -> std::fmt::Result {
+    fn print(p: &mut OpAsmPrinter<'_>, (tag, field): (&str, usize)) -> std::fmt::Result {
         write!(p, ".{}[{field}]", display_name(tag))
     }
 
@@ -445,7 +452,7 @@ impl OpRewritePattern for ForwardStructGet {
         if new.r#type(ctx) != get.r#type(ctx) {
             return None;
         }
-        let &stored = ctx.op_operands(producer).get(get.field(ctx) as usize)?;
+        let &stored = ctx.op_operands(producer).get(get.field(ctx))?;
         let [result_ty] = ctx.op_result_types(get.op_ref()).as_array()?;
         if ctx.value_ty(stored) != *result_ty {
             return None;

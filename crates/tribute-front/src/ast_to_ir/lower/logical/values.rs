@@ -484,7 +484,7 @@ pub(super) fn lower_record<'db>(
                     .unwrap_or_else(|| panic!("prescanned struct layout is malformed"));
             let get = adt::StructGet::operands(base)
                 .r#type(layout)
-                .field(index as u32)
+                .field(index)
                 .results(field_types[index].1)
                 .build(builder.ir, location);
             builder.ir.push_op(builder.block, get.op_ref());

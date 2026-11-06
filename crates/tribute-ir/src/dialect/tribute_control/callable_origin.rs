@@ -55,19 +55,19 @@ fn projection_source_matches_layout(
         && nominal_identity(ctx, ctx.value_ty(source)) == layout_identity
 }
 
-fn struct_field_type(ctx: &IrContext, layout: TypeRef, field: u32) -> Option<TypeRef> {
-    adt::Struct::from_type_ref(ctx, layout)?.field_type(ctx, usize::try_from(field).ok()?)
+fn struct_field_type(ctx: &IrContext, layout: TypeRef, field: usize) -> Option<TypeRef> {
+    adt::Struct::from_type_ref(ctx, layout)?.field_type(ctx, field)
 }
 
 fn variant_field_type(
     ctx: &IrContext,
     layout: TypeRef,
     tag: StringRef,
-    field: u32,
+    field: usize,
 ) -> Option<TypeRef> {
     adt::Enum::from_type_ref(ctx, layout)?
         .variant_fields(ctx, tag)?
-        .get(usize::try_from(field).ok()?)
+        .get(field)
         .copied()
 }
 

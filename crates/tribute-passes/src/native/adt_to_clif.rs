@@ -95,7 +95,7 @@ impl OpRewritePattern for StructGetPattern {
     ) -> Option<()> {
         let op = struct_get.op_ref();
         let struct_ty = struct_get.r#type(ctx);
-        let field_idx = struct_get.field(ctx) as usize;
+        let field_idx = struct_get.field(ctx);
         let tc = rewriter.type_converter();
 
         let layout = rewriter.require(
@@ -142,7 +142,7 @@ impl OpRewritePattern for StructSetPattern {
     ) -> Option<()> {
         let op = struct_set.op_ref();
         let struct_ty = struct_set.r#type(ctx);
-        let field_idx = struct_set.field(ctx) as usize;
+        let field_idx = struct_set.field(ctx);
 
         let layout = rewriter.require(
             compute_mem_struct_layout(ctx, struct_ty),

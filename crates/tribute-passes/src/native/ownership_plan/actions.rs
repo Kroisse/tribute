@@ -259,10 +259,10 @@ impl<'a> ActionPlanner<'a> {
                 && self.has_static_size(owner)
                 && self.field_reads(owner, field) == 1
             {
-                candidates
-                    .entry(owner)
-                    .or_default()
-                    .push((*projection, field));
+                candidates.entry(owner).or_default().push((
+                    *projection,
+                    u32::try_from(field).expect("a field position fits u32"),
+                ));
             }
         }
         let first_use = |value: ValueRef| {
@@ -331,7 +331,7 @@ impl<'a> ActionPlanner<'a> {
     }
 
     /// How many projections in the function read `field` of `owner`.
-    fn field_reads(&self, owner: ValueRef, field: u32) -> usize {
+    fn field_reads(&self, owner: ValueRef, field: usize) -> usize {
         self.facts
             .projection_owners()
             .iter()
@@ -581,7 +581,7 @@ impl ActionPlanner<'_> {
         if let Ok(set) = adt::StructSet::from_op(self.ir, op) {
             let fields = get_struct_fields(self.ir, set.r#type(self.ir))
                 .ok_or_else(|| OwnershipPlanError::new("struct_set has invalid layout"))?;
-            let index = set.field(self.ir) as usize;
+            let index = set.field(self.ir);
             let (_, field_ty) = fields
                 .get(index)
                 .ok_or_else(|| OwnershipPlanError::new("struct_set field is stale"))?;

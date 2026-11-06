@@ -111,8 +111,9 @@ fn physical_variant_field_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
 type DescriptorNumbers = HashMap<(TypeRef, Option<StringRef>), u32>;
 
 /// The field index of source field `field` in a value of layout `ty`.
-fn physical_field(ctx: &IrContext, ty: TypeRef, field: u32) -> u32 {
-    field + u32::from(has_descriptor_field(ctx, ty))
+fn physical_field(ctx: &IrContext, ty: TypeRef, field: usize) -> u32 {
+    u32::try_from(field).expect("a field position fits u32")
+        + u32::from(has_descriptor_field(ctx, ty))
 }
 
 /// The descriptor field operand for a new value of the descriptor
@@ -390,7 +391,7 @@ impl OpRewritePattern for VariantGetPattern {
                     .into_iter()
                     .find(|(variant_tag, _)| *variant_tag == tag)
             })
-            .and_then(|(_, fields)| fields.get(field_idx as usize).copied())?;
+            .and_then(|(_, fields)| fields.get(field_idx).copied())?;
         let declared_field_ty = physical_variant_field_type(ctx, declared_field_ty);
         let requested_result_ty = physical_variant_field_type(ctx, variant_get.result_ty(ctx));
         // String::Leaf has the canonical bytes layout even though frontend
@@ -430,7 +431,7 @@ impl OpRewritePattern for VariantGetPattern {
         // The variant's fields follow its descriptor field.
         let new_op = wasm_gc_dialect::StructGet::operands(ref_val)
             .r#type(variant_type)
-            .field_idx(field_idx + 1)
+            .field_idx(physical_field(ctx, variant_type, field_idx))
             .results(result_ty)
             .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());

@@ -64,7 +64,7 @@ fn lower_observation(
     op: OpRef,
     list: ValueRef,
     element_ty: TypeRef,
-    field_index: u32,
+    field_index: usize,
 ) {
     let location = ctx.op(op).location;
     let result_ty = ctx.op_result_types(op)[0];
