@@ -516,13 +516,11 @@ fn emit_literal_check<'db>(
 
     match lit {
         LiteralPattern::Nat(n) => {
-            let value = super::validate_nat_i31(builder.db(), location, *n)?;
-            let literal = emit_const(builder, location, Attribute::Int(value as i128), i32_ty);
+            let literal = emit_const(builder, location, Attribute::Int(i128::from(*n)), i32_ty);
             Some(emit_cmpi_eq(builder, location, scrutinee, literal))
         }
         LiteralPattern::Int(n) => {
-            let value = super::validate_int_i31(builder.db(), location, *n)?;
-            let literal = emit_const(builder, location, Attribute::Int(value as i128), i32_ty);
+            let literal = emit_const(builder, location, Attribute::Int(i128::from(*n)), i32_ty);
             Some(emit_cmpi_eq(builder, location, scrutinee, literal))
         }
         LiteralPattern::Rune(c) => {

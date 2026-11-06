@@ -372,7 +372,9 @@ fn suffix(input: &mut Input<'_>) -> PResult<Option<(char, Range<usize>)>> {
     .parse_next(input)
 }
 
-/// An integer literal's value, or an overflow error spanning `range`.
+/// An integer literal's value, or an overflow error spanning `range` when it
+/// does not fit the current representation of its type: an unsigned 32-bit
+/// `Nat` or a signed 32-bit `Int` (`new-plans/numeric-types.md`).
 fn integer_value(
     ty: IntegerType,
     negative: bool,
@@ -380,10 +382,16 @@ fn integer_value(
     range: Range<usize>,
 ) -> PResult<NumericValue> {
     let value = magnitude.and_then(|magnitude| match ty {
-        IntegerType::Nat => Some(NumericValue::Nat(magnitude)),
-        // The magnitude of i64::MIN is one more than i64::MAX.
-        IntegerType::Int if negative => 0i64.checked_sub_unsigned(magnitude).map(NumericValue::Int),
-        IntegerType::Int => i64::try_from(magnitude).ok().map(NumericValue::Int),
+        IntegerType::Nat => u32::try_from(magnitude)
+            .ok()
+            .map(|value| NumericValue::Nat(value.into())),
+        // The magnitude of i32::MIN is one more than i32::MAX.
+        IntegerType::Int if negative => 0i32
+            .checked_sub_unsigned(u32::try_from(magnitude).ok()?)
+            .map(|value| NumericValue::Int(value.into())),
+        IntegerType::Int => i32::try_from(magnitude)
+            .ok()
+            .map(|value| NumericValue::Int(value.into())),
     });
     match value {
         Some(value) => Ok(value),
@@ -423,14 +431,14 @@ mod tests {
             ("0xDEAD_BEEF", 0xDEAD_BEEF),
             ("0x1f", 31),
             ("0x1e", 30),
-            ("1e10", 10_000_000_000),
+            ("1e9", 1_000_000_000),
             ("2E+3", 2000),
-            ("1_0e1_0", 100_000_000_000),
+            ("1_0e0_8", 1_000_000_000),
             ("1e_1", 10),
             ("0e999", 0),
             ("42n", 42),
             ("1e3n", 1000),
-            ("18446744073709551615", u64::MAX),
+            ("4294967295", u32::MAX.into()),
         ] {
             assert_eq!(value(text), NumericValue::Nat(expected), "{text}");
         }
@@ -447,8 +455,8 @@ mod tests {
             ("-42i", -42),
             ("1e3i", 1000),
             ("1_000_i", 1000),
-            ("+9223372036854775807", i64::MAX),
-            ("-9223372036854775808", i64::MIN),
+            ("+2147483647", i32::MAX.into()),
+            ("-2147483648", i32::MIN.into()),
         ] {
             assert_eq!(value(text), NumericValue::Int(expected), "{text}");
         }
@@ -576,9 +584,11 @@ mod tests {
                 },
             ),
             ("18446744073709551616", 0..20, Overflow(IntegerType::Nat)),
-            ("1e20", 0..4, Overflow(IntegerType::Nat)),
+            ("4294967296", 0..10, Overflow(IntegerType::Nat)),
+            ("1e10", 0..4, Overflow(IntegerType::Nat)),
+            ("2147483648i", 0..11, Overflow(IntegerType::Int)),
+            ("-2147483649", 0..11, Overflow(IntegerType::Int)),
             ("9223372036854775808i", 0..20, Overflow(IntegerType::Int)),
-            ("-9223372036854775809", 0..20, Overflow(IntegerType::Int)),
             ("1e999f", 0..6, FloatNotFinite),
         ] {
             let error = error(text);
