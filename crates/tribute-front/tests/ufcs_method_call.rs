@@ -1,7 +1,7 @@
 //! Tests for UFCS method call lowering.
 //!
 //! Verifies that method call arguments are correctly preserved through
-//! the pipeline: astgen → typeck → TDNR → IR lowering.
+//! the pipeline: astgen → typeck (including TDNR) → IR lowering.
 //!
 //! Regression tests for #582: multi-argument UFCS calls dropped extra arguments.
 

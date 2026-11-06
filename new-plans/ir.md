@@ -1049,7 +1049,7 @@ consumer는 nested region을 재귀적으로 순회해야 하며, "사용 없음
 ## High-Level Dialects
 
 `tribute.*` represents source-level constructs that should disappear after
-resolution, type checking, TDNR, and AST-to-IR lowering.
+resolution, type checking (including TDNR), and AST-to-IR lowering.
 
 <!-- markdownlint-disable-next-line MD033 -->
 <a id="direct-style-control"></a>
