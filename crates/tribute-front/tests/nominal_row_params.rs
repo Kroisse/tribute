@@ -135,6 +135,31 @@ fn run_logging_quietly(x: Nil) ->{} Nil { run_twice(logging(x), x) }
 }
 
 #[salsa_test]
+fn patterns_take_the_scrutinees_row_argument(db: &salsa::DatabaseImpl) {
+    let text = format!(
+        "{CALLBACK}{}",
+        r#"
+fn advance(s: Step({Log})) ->{Log} Step({Log}) {
+    case s {
+        .Next(f) -> f()
+        .Done -> .Done
+    }
+}
+fn advance_quietly(s: Step({Log})) ->{} Step({Log}) {
+    case s {
+        .Next(f) -> f()
+        .Done -> .Done
+    }
+}
+"#
+    );
+    let errors = messages(db, &text);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors[0].0, CompilationPhase::TypeChecking);
+    assert!(errors[0].1.contains("Log"), "{errors:?}");
+}
+
+#[salsa_test]
 fn row_argument_counts_are_checked(db: &salsa::DatabaseImpl) {
     let text = format!(
         "{CALLBACK}{}",

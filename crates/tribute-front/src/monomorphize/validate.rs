@@ -30,6 +30,9 @@ pub enum InstanceErrorKind {
     /// row, which specialization cannot make concrete.
     IncompleteNominalArgument,
     InconsistentCallable,
+    /// A struct or enum that declares row parameters, which lowering does
+    /// not support yet.
+    UnsupportedRowParameters,
     /// A backstop for runaway expansion that polymorphic recursion
     /// rejection does not catch.
     ExpansionLimit,
@@ -81,6 +84,9 @@ impl InstanceError {
                  a type argument that holds an open ability row; it does not specialize, so give \
                  the argument a closed row"
                 .to_owned(),
+            InstanceErrorKind::UnsupportedRowParameters => {
+                "struct and enum declarations with row parameters cannot be compiled yet".to_owned()
+            }
             InstanceErrorKind::SpecializationInvariant(violation) => format!(
                 "internal compiler error: the specialization output breaks its contract at {}: \
                  {violation:?}",
@@ -211,6 +217,21 @@ pub(super) fn validate<'db>(
         HashMap::default();
     let mut fields = HashSet::default();
     let mut generic = HashSet::default();
+    let unsupported: Vec<_> = module
+        .decls()
+        .filter_map(|decl| match decl {
+            Decl::Struct(decl) if !decl.row_params.is_empty() => Some(decl.id),
+            Decl::Enum(decl) if !decl.row_params.is_empty() => Some(decl.id),
+            _ => None,
+        })
+        .map(|node| InstanceError {
+            node,
+            kind: InstanceErrorKind::UnsupportedRowParameters,
+        })
+        .collect();
+    if !unsupported.is_empty() {
+        return unsupported;
+    }
     let tables = dependency
         .into_iter()
         .flat_map(|dependency| dependency.modules.iter().map(|&table| (table, false)))
