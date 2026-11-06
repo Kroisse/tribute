@@ -7,8 +7,6 @@ mod decl;
 mod expr;
 mod logical;
 
-use salsa::Accumulator;
-use tribute_core::diagnostic::{CompilationPhase, DiagnosticSeverity, SpanDiagnostic};
 use tribute_ir::dialect::tribute_control::{Row, RowBinder, RowUnion};
 use tribute_ir::dialect::{tribute_control, tribute_rt};
 use trunk_ir::Symbol;
@@ -305,57 +303,6 @@ pub(super) fn get_or_create_logical_tuple_type<'db>(
         .type_alias_by_text(&name)
         .expect("a logical tuple layout is registered under its name");
     Some((Symbol::new(&name), layout))
-}
-
-/// Validate that a natural number literal fits in the i31 range.
-///
-/// Returns the value as `i32` if valid, or emits a diagnostic and returns `None`.
-pub(super) fn validate_nat_i31(
-    db: &dyn salsa::Database,
-    location: Location,
-    n: u64,
-) -> Option<i32> {
-    const I31_MAX: u64 = (1 << 30) - 1;
-    if n > I31_MAX {
-        SpanDiagnostic::new(
-            format!(
-                "natural number literal {} exceeds i31 range (max: {})",
-                n, I31_MAX
-            ),
-            location.span,
-            DiagnosticSeverity::Error,
-            CompilationPhase::Lowering,
-        )
-        .accumulate(db);
-        return None;
-    }
-    Some(n as i32)
-}
-
-/// Validate that an integer literal fits in the i31 range.
-///
-/// Returns the value as `i32` if valid, or emits a diagnostic and returns `None`.
-pub(super) fn validate_int_i31(
-    db: &dyn salsa::Database,
-    location: Location,
-    n: i64,
-) -> Option<i32> {
-    const I31_MIN: i64 = -(1 << 30);
-    const I31_MAX: i64 = (1 << 30) - 1;
-    if !(I31_MIN..=I31_MAX).contains(&n) {
-        SpanDiagnostic::new(
-            format!(
-                "integer literal {} exceeds i31 range ({} to {})",
-                n, I31_MIN, I31_MAX
-            ),
-            location.span,
-            DiagnosticSeverity::Error,
-            CompilationPhase::Lowering,
-        )
-        .accumulate(db);
-        return None;
-    }
-    Some(n as i32)
 }
 
 /// Resolve the ADT (enum/struct) type attribute for a constructor.
