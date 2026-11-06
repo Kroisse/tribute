@@ -53,10 +53,22 @@ mod adt {
         name: Attr<String>,
     }
 
+    /// A new struct of layout `type` whose fields are `fields` in order.
+    ///
+    /// When the layout declares row parameters, each field operand has the
+    /// layout's field type with the layout's row binders replaced by the
+    /// `row_args` of the result's `adt.typeref`, using call-site row
+    /// substitution; see `new-plans/ir.md` § "Nominal row 인자".
     #[flags(Pure)]
     #[asm_format(fields attr_dict_bare ":" type(result))]
     fn struct_new(r#type: Attr<Type>, fields: Variadic<_>) -> Value<_> {}
 
+    /// Field `field` of the struct `ref` of layout `type`.
+    ///
+    /// When the layout declares row parameters, the result has the layout's
+    /// field type with the layout's row binders replaced by the `row_args` of
+    /// the `ref` operand's `adt.typeref`, using call-site row substitution; see
+    /// `new-plans/ir.md` § "Nominal row 인자".
     #[flags(Pure)]
     #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn struct_get(r#type: Attr<Type>, field: Attr<u32>, r#ref: Value<_>) -> Value<_> {}
@@ -64,6 +76,13 @@ mod adt {
     #[asm_format(r#ref "," value attr_dict_bare)]
     fn struct_set(r#type: Attr<Type>, field: Attr<u32>, r#ref: Value<_>, value: Value<_>) {}
 
+    /// A new value of variant `tag` of enum layout `type` whose fields are
+    /// `fields` in order.
+    ///
+    /// When the layout declares row parameters, each field operand has the
+    /// layout's field type with the layout's row binders replaced by the
+    /// `row_args` of the result's `adt.typeref`, using call-site row
+    /// substitution; see `new-plans/ir.md` § "Nominal row 인자".
     #[flags(Pure)]
     #[asm_format(fields attr_dict_bare ":" type(result))]
     fn variant_new(r#type: Attr<Type>, tag: Attr<String>, fields: Variadic<_>) -> Value<_> {}
@@ -76,6 +95,12 @@ mod adt {
     #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn variant_cast(r#type: Attr<Type>, tag: Attr<String>, r#ref: Value<_>) -> Value<_> {}
 
+    /// Field `field` of `ref`, a value of variant `tag` of enum layout `type`.
+    ///
+    /// When the layout declares row parameters, the result has the layout's
+    /// field type with the layout's row binders replaced by the `row_args` of
+    /// the `ref` operand's `adt.typeref`, using call-site row substitution; see
+    /// `new-plans/ir.md` § "Nominal row 인자".
     #[flags(Pure)]
     #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn variant_get(
