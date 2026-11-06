@@ -4,7 +4,6 @@
 use salsa_test_macros::salsa_test;
 use tribute::pipeline::{compile_frontend, run_through_cps_lowering};
 use tribute_front::SourceCst;
-use trunk_ir::printer::print_module;
 
 const SOURCE: &str = r#"
 ability State(s) {
@@ -79,7 +78,7 @@ fn assert_line(lines: &[String], op: &str, plan: &str, ir: &str) {
 fn evidence_plans_reach_source_logical_ir(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(db, "plans.trb", SOURCE);
     let (ctx, module) = compile_frontend(db, source).expect("frontend should lower");
-    let ir = print_module(&ctx, module.op());
+    let ir = module.op().display(&ctx).to_string();
     // An instance repeats the lines of its definition.
     let mut lines = planned_lines(&ir);
     lines.sort_unstable();
@@ -98,7 +97,7 @@ fn cps_legalization_carries_evidence_plans(db: &salsa::DatabaseImpl) {
     let (ctx, module) = run_through_cps_lowering(db, source)
         .expect("CPS legalization should accept frontend output")
         .expect("frontend should lower");
-    let ir = print_module(&ctx, module.op());
+    let ir = module.op().display(&ctx).to_string();
     let lines = planned_lines(&ir);
     assert_line(&lines, "call_indirect", "[{mask = ", &ir);
     assert_line(&lines, "func.tail_call ", "[{dup = ", &ir);
@@ -153,6 +152,6 @@ fn main() -> Nil {
     let (ctx, module) = run_through_cps_lowering(db, source)
         .expect("CPS legalization should accept frontend output")
         .expect("frontend should lower");
-    let ir = print_module(&ctx, module.op());
+    let ir = module.op().display(&ctx).to_string();
     assert!(planned_lines(&ir).is_empty(), "{ir}");
 }

@@ -326,7 +326,7 @@ fn scalars() -> #(Float, Bytes, Rune, Nil) {
         scalars.contains("adt.struct_new")
             && scalars.contains("core.f64")
             && scalars.contains("core.bytes")
-            && scalars.contains("value = 120")
+            && scalars.contains("arith.constant 120 :")
             && scalars.contains("core.nil"),
         "scalar tuple layout must preserve each source value type:\n{scalars}"
     );
@@ -1559,7 +1559,7 @@ fn choose_pair(pair: #(fn(Int) ->{e} Int, Bool), fallback: fn(Int) ->{e} Int) ->
     let tuple_case = checked_logical_function(ir, "choose_pair");
     assert!(
         tuple_case.contains("adt.struct_get")
-            && tuple_case.contains("arith.and")
+            && tuple_case.contains("arith.andi")
             && tuple_case.contains("scf.if"),
         "callable tuple pattern check must stay in logical aggregate IR:\n{tuple_case}"
     );
@@ -1598,7 +1598,7 @@ fn classify_list(values: List(Int)) -> Int {
     assert!(
         pair.contains("adt.variant_is")
             && pair.contains("adt.variant_cast")
-            && pair.contains("arith.and"),
+            && pair.contains("arith.andi"),
         "two-field variant checks must combine both source patterns:\n{pair}"
     );
     assert_occurrences(pair, "adt.variant_get", 8);
@@ -1660,7 +1660,7 @@ fn run() ->{Flag} Nat {
     assert_in_order(
         run,
         &[
-            "tribute_control.handler",
+            "} op @",
             "scf.if",
             "call @\"pkg::allowed\"(",
             "tribute_control.resume",
@@ -1819,7 +1819,7 @@ fn assert_handler_arm_shape(function: &str) {
     assert_in_order(
         function,
         &[
-            "tribute_control.handler",
+            "} op @",
             "call @\"pkg::read_log\"(",
             "tribute_control.resume",
         ],
@@ -1855,15 +1855,11 @@ fn assert_handler_case_resume_shape(function: &str) {
 fn assert_op_handler_shape(function: &str) {
     assert_in_order(
         function,
-        &[
-            "tribute_control.handle",
-            "tribute_control.handler op ",
-            "tribute_control.resume",
-        ],
+        &["tribute_control.handle", "} op @", "tribute_control.resume"],
     );
 }
 fn assert_fn_handler_shape(function: &str) {
-    assert!(function.contains("tribute_control.handler fn "));
+    assert!(function.contains("} fn @"));
 }
 fn assert_handle_strict_value_shape(function: &str) {
     assert_in_order(

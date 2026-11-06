@@ -13,7 +13,6 @@ use tribute::pipeline::{
 use tribute_front::SourceCst;
 use tribute_ir::calling_convention::DynConventionBearing;
 use tribute_ir::continuation_frame;
-use trunk_ir::printer::print_module;
 
 fn assert_no_diagnostics(stage: &str, diagnostics: &[Diagnostic<'_>]) {
     assert!(
@@ -36,7 +35,7 @@ fn shared_pipeline_ir(db: &dyn salsa::Database, name: &str, code: &str) -> Strin
     let (ctx, module) = compile_ast(db, source)
         .expect("shared pipeline should succeed")
         .expect("shared pipeline should produce a module when diagnostics are empty");
-    print_module(&ctx, module.op())
+    module.op().display(&ctx).to_string()
 }
 
 fn native_pipeline_ir<'db>(db: &'db dyn salsa::Database, name: &str, code: &str) -> &'db str {
@@ -387,7 +386,12 @@ fn shared_pipeline_float_comparison_predicates(db: &salsa::DatabaseImpl) {
     assert_shared_cps_contract(&ir_text);
     insta::assert_snapshot!(pipeline_contract_summary(&ir_text, false));
     for predicate in [
-        "\"oeq\"", "\"une\"", "\"olt\"", "\"ole\"", "\"ogt\"", "\"oge\"",
+        "cmpf oeq,",
+        "cmpf une,",
+        "cmpf olt,",
+        "cmpf ole,",
+        "cmpf ogt,",
+        "cmpf oge,",
     ] {
         assert!(
             ir_text.contains(predicate),

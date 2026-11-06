@@ -13,7 +13,6 @@ use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{clif, func};
 use trunk_ir::op_def::OpDef;
 use trunk_ir::ops::{DialectOp, DialectType};
-use trunk_ir::printer::print_type;
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{ConversionTarget, Module};
 use trunk_ir::symbol_table::qualified_name;
@@ -147,8 +146,8 @@ fn check_value_types(
             errors.push(format!(
                 "clif.{} {role} #{index} type mismatch: expected {}, found {}",
                 ctx.op(op).name.display(ctx),
-                print_type(ctx, ty),
-                print_type(ctx, ctx.value_ty(value))
+                ty.display(ctx),
+                ctx.value_ty(value).display(ctx)
             ));
         }
     }
@@ -614,7 +613,7 @@ mod tests {
         let error = validation_error(
             r#"core.module @test {
   clif.func @f(%x: core.i32) -> core.i64 {
-    %r = core.unrealized_conversion_cast %x : core.i64
+    %r = core.unrealized_conversion_cast %x : core.i32 to core.i64
     clif.return %r
   }
 }"#,
@@ -641,7 +640,7 @@ mod tests {
             r#"core.module @test {
   clif.func @direct_target(%value: core.i32) -> core.i32 { clif.return %value }
   clif.func @direct_caller() {
-    %value = clif.iconst {value = 1} : core.i32
+    %value = clif.iconst 1 : core.i32
     %unused = clif.call @direct_target(%value) : (core.i32) -> core.i64
     clif.return
   }
@@ -711,16 +710,16 @@ mod tests {
         let error = validation_error(
             r#"core.module @test {
   clif.func @takes_i64(%value: core.i64) -> core.i32 {
-    %result = clif.iconst {value = 1} : core.i32
+    %result = clif.iconst 1 : core.i32
     clif.return %result
   }
   clif.func @tail_target() -> core.i32 {
-    %result = clif.iconst {value = 1} : core.i32
+    %result = clif.iconst 1 : core.i32
     clif.return %result
   }
   clif.func @bad_return() -> core.i32 { clif.return }
   clif.func @bad_argument() {
-    %value = clif.iconst {value = 1} : core.i32
+    %value = clif.iconst 1 : core.i32
     %unused = clif.call @takes_i64(%value) : (core.i32) -> core.i32
     clif.return
   }

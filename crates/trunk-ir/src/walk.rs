@@ -101,12 +101,12 @@ mod tests {
         let (mut ctx, loc) = test_ctx();
         let i32_ty = i32_type(&mut ctx);
 
-        let op1_data = OperationDataBuilder::new(loc, "arith.const")
+        let op1_data = OperationDataBuilder::new(loc, "arith.constant")
             .result(i32_ty)
             .attr("value", Attribute::Int(1))
             .build(&mut ctx);
         let op1 = ctx.create_op(op1_data);
-        let op2_data = OperationDataBuilder::new(loc, "arith.const")
+        let op2_data = OperationDataBuilder::new(loc, "arith.constant")
             .result(i32_ty)
             .attr("value", Attribute::Int(2))
             .build(&mut ctx);
@@ -140,11 +140,11 @@ mod tests {
         let (mut ctx, loc) = test_ctx();
         let i32_ty = i32_type(&mut ctx);
 
-        let op1_data = OperationDataBuilder::new(loc, "arith.const")
+        let op1_data = OperationDataBuilder::new(loc, "arith.constant")
             .result(i32_ty)
             .build(&mut ctx);
         let op1 = ctx.create_op(op1_data);
-        let op2_data = OperationDataBuilder::new(loc, "arith.const")
+        let op2_data = OperationDataBuilder::new(loc, "arith.constant")
             .result(i32_ty)
             .build(&mut ctx);
         let op2 = ctx.create_op(op2_data);
@@ -180,7 +180,7 @@ mod tests {
         let i32_ty = i32_type(&mut ctx);
 
         // Inner const
-        let inner_op_data = OperationDataBuilder::new(loc, "arith.const")
+        let inner_op_data = OperationDataBuilder::new(loc, "arith.constant")
             .result(i32_ty)
             .build(&mut ctx);
         let inner_op = ctx.create_op(inner_op_data);

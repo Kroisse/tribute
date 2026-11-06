@@ -518,7 +518,7 @@ fn build_local_dispatcher_instance(
     for (arm, &arm_value) in general_arms {
         let case_block = make_block(ctx, location, &[]);
         let same_prompt = arith::Cmpi::operands(args[2], values.prompt)
-            .predicate("eq")
+            .predicate(arith::CmpiPredicate::Eq)
             .build(ctx, location);
         ctx.push_op(case_block, same_prompt.op_ref());
 
@@ -745,10 +745,6 @@ impl OpRewritePattern for ExpandHandles {
         let bindings: Vec<_> = handle.handlers(ctx).collect();
         let &[source_block] = ctx.region(handle.body(ctx)).blocks.as_array()?;
         let &[source_evidence, source_frame] = ctx.block_args(source_block).as_array()?;
-        rewriter.ensure(
-            bindings.len() == arm_values.len(),
-            "handler bindings and arms differ in number",
-        )?;
         let arms = bindings
             .into_iter()
             .zip(&arm_values)

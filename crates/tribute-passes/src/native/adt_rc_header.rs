@@ -392,7 +392,6 @@ mod tests {
     use trunk_ir::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder, RegionData};
     use trunk_ir::dialect::core;
     use trunk_ir::dialect::func;
-    use trunk_ir::printer::print_module;
     use trunk_ir::rewrite::Module;
     use trunk_ir::smallvec::smallvec;
     use trunk_ir::types::Attribute;
@@ -503,7 +502,7 @@ mod tests {
         // Run adt_rc_header pass
         lower(ctx, module, tc).unwrap();
 
-        print_module(ctx, module.op())
+        module.op().display(ctx).to_string()
     }
 
     #[test]

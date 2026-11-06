@@ -140,7 +140,6 @@ impl OpRewritePattern for MemNullPattern {
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
 
     #[test]
     fn ptr_add_lowers_to_integer_add_and_loads_keep_immediate_offsets() {
@@ -164,7 +163,7 @@ mod tests {
 
         lower(&mut ctx, module, type_converter).expect("mem ops lower to clif");
 
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(!printed.contains("mem."), "{printed}");
         assert_eq!(printed.matches("clif.load").count(), 2, "{printed}");
         assert!(printed.contains("clif.iadd"), "{printed}");
@@ -186,10 +185,7 @@ mod tests {
 
         lower(&mut ctx, module, TypeConverter::new()).expect("mem.null lowers to clif");
 
-        let printed = print_module(&ctx, module.op());
-        assert!(
-            printed.contains("clif.iconst {value = 0} : core.ptr"),
-            "{printed}"
-        );
+        let printed = module.op().display(&ctx).to_string();
+        assert!(printed.contains("clif.iconst 0 : core.ptr"), "{printed}");
     }
 }

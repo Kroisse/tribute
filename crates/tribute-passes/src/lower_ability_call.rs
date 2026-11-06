@@ -176,7 +176,6 @@ mod tests {
     use super::*;
     use trunk_ir::context::IrContext;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
 
     /// Initialize common types used by the pass.
     fn init_common_types(ctx: &mut IrContext) {
@@ -199,7 +198,7 @@ mod tests {
             &format!(
                 r#"core.module @test {{
   func.func @test_fn(%ev: {ev_ty}) -> tribute_rt.anyref attributes {{tribute.calling_convention = "evidence_direct"}} {{
-    %msg = arith.const {{value = 1}} : tribute_rt.anyref
+    %msg = arith.constant 1 : tribute_rt.anyref
     %result = ability.call @Console @print(%msg) : (tribute_rt.anyref) -> tribute_rt.anyref
     func.return %result
   }}
@@ -209,7 +208,7 @@ mod tests {
 
         lower_ability_call(&mut ctx, module);
 
-        let ir_text = print_module(&ctx, module.op());
+        let ir_text = module.op().display(&ctx).to_string();
         assert!(!ir_text.contains("ability.call"), "{ir_text}");
         assert!(ir_text.contains("effect.dispatch_tail"), "{ir_text}");
         let mut reparsed = IrContext::new();
@@ -247,9 +246,9 @@ mod tests {
 }}"#
                 ),
             );
-            let before = print_module(&ctx, module.op());
+            let before = module.op().display(&ctx).to_string();
             lower_ability_call(&mut ctx, module);
-            assert_eq!(print_module(&ctx, module.op()), before);
+            assert_eq!(module.op().display(&ctx).to_string(), before);
             assert!(crate::lower_handle_dispatch::lower_handle_dispatch(&mut ctx, module).is_err());
         }
     }
@@ -273,7 +272,7 @@ mod tests {
 
         lower_ability_call(&mut ctx, module);
 
-        let ir = print_module(&ctx, module.op());
+        let ir = module.op().display(&ctx).to_string();
         assert!(!ir.contains("ability.call"), "{ir}");
         assert!(ir.contains("effect.dispatch_tail"), "{ir}");
         assert!(ir.contains("core.i32"), "{ir}");

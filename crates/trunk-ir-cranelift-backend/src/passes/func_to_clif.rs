@@ -500,7 +500,6 @@ mod tests {
     use trunk_ir::dialect::{clif, core, func};
     use trunk_ir::ops::DialectType;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
     use trunk_ir::rewrite::TypeConverter;
     use trunk_ir::types::TypeDataBuilder;
     use trunk_ir::{Attribute, AttributeMap};
@@ -522,7 +521,7 @@ mod tests {
         let module = parse_test_module(&mut ctx, ir);
         let type_converter = TypeConverter::new();
         super::lower(&mut ctx, module, type_converter).unwrap();
-        print_module(&ctx, module.op())
+        module.op().display(&ctx).to_string()
     }
 
     #[test]
@@ -542,12 +541,12 @@ mod tests {
             } else {
                 ctx.op_attrs_mut(op).remove("type");
             }
-            let before = print_module(&ctx, module.op());
+            let before = module.op().display(&ctx).to_string();
             let regions = ctx.op_regions(op).collect::<trunk_ir::RegionList>();
             PatternApplicator::new(TypeConverter::new())
                 .add_pattern(super::FuncFuncPattern)
                 .apply_partial(&mut ctx, module);
-            assert_eq!(print_module(&ctx, module.op()), before);
+            assert_eq!(module.op().display(&ctx).to_string(), before);
             assert_eq!(module.ops(&ctx)[0], op);
             assert!(ctx.op_regions(op).eq(regions));
         }
@@ -585,7 +584,7 @@ mod tests {
 
         super::lower(&mut ctx, module, type_converter).expect("func-to-clif lowering");
 
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         let call = printed
             .lines()
             .find(|line| line.contains("clif.call"))
@@ -665,8 +664,8 @@ mod tests {
         let result = run_pass(
             r#"core.module @test {
   func.func @test_fn() -> core.i32 {
-    %0 = arith.const {value = 0} : core.i32
-    %1 = arith.const {value = 42} : core.i32
+    %0 = arith.constant 0 : core.i32
+    %1 = arith.constant 42 : core.i32
     %2 = func.call_indirect %0(%1) : (core.i32) -> core.i32
     func.return %2
   }
@@ -708,7 +707,7 @@ mod tests {
 
         super::lower(&mut ctx, module, TypeConverter::new()).expect("func-to-clif lowering");
         crate::validate_clif_ir(&ctx, module).expect("logical nil call result is valid native IR");
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(
             printed.contains("clif.call_indirect %0() : () -> core.nil"),
             "{printed}"
@@ -726,7 +725,7 @@ mod tests {
         let result = run_pass(
             r#"core.module @test {
   func.func @target() -> core.i32 {
-    %value = arith.const {value = 7} : core.i32
+    %value = arith.constant 7 : core.i32
     func.return %value
   }
   func.func @caller() -> core.i32 {
@@ -774,7 +773,7 @@ mod tests {
 
         super::lower(&mut ctx, module, type_converter).expect("func-to-clif lowering");
 
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(
             printed.contains(
                 "clif.return_call_indirect %0(%1) : (core.ptr) -> (), {call_conv = \"tail\"}"
@@ -809,7 +808,7 @@ mod tests {
         let error = super::lower(&mut ctx, module, type_converter).unwrap_err();
         assert!(error.to_string().contains("func.call_indirect"), "{error}");
 
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(
             printed.contains("clif.call_indirect %0(%1) : (core.ptr) -> core.i32"),
             "{printed}"
@@ -837,7 +836,7 @@ mod tests {
             error.to_string().contains("func.tail_call_indirect"),
             "{error}"
         );
-        let after = print_module(&ctx, module.op());
+        let after = module.op().display(&ctx).to_string();
         assert!(after.contains("func.tail_call_indirect"), "{after}");
         assert!(!after.contains("clif.return_call_indirect"), "{after}");
     }
@@ -900,7 +899,7 @@ mod tests {
             error.to_string().contains("func.tail_call_indirect"),
             "{error}"
         );
-        let after = print_module(&ctx, module.op());
+        let after = module.op().display(&ctx).to_string();
         assert!(after.contains("func.tail_call_indirect"), "{after}");
         assert!(!after.contains("clif.return_call_indirect"), "{after}");
     }
@@ -952,7 +951,7 @@ mod tests {
         );
         super::lower(&mut ctx, module, TypeConverter::new())
             .expect("a nested reference resolves in its own module");
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(printed.contains("clif.symbol_addr"), "{printed}");
         assert!(!printed.contains("func.constant"), "{printed}");
     }
@@ -1029,7 +1028,7 @@ mod tests {
             error.to_string().contains("func.tail_call_indirect"),
             "{error}"
         );
-        let after = print_module(&ctx, module.op());
+        let after = module.op().display(&ctx).to_string();
         assert!(after.contains("func.tail_call_indirect"), "{after}");
         assert!(!after.contains("clif.return_call_indirect"), "{after}");
     }

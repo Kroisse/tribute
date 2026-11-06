@@ -149,7 +149,7 @@ fn replace_with_exit_code(
     i32_ty: trunk_ir::refs::TypeRef,
     location: Location,
 ) {
-    let zero = arith::Const::operands()
+    let zero = arith::Constant::operands()
         .value(Attribute::Int(0))
         .results(i32_ty)
         .build(ctx, location);
@@ -188,13 +188,12 @@ impl trunk_ir::pass::Pass for GenerateNativeEntrypoint {
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
 
     fn adapt(input: &str, sanitize: bool) -> String {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, input);
         generate_native_entrypoint(&mut ctx, module, sanitize);
-        print_module(&ctx, module.op())
+        module.op().display(&ctx).to_string()
     }
 
     const WRAPPER_MAIN: &str = r#"core.module @test {
@@ -223,7 +222,7 @@ mod tests {
   func.func @main() -> core.i32 {
       %0 = func.call @__tribute_init() : () -> core.nil
       %1 = func.call @__tribute_main() : () -> core.nil
-      %2 = arith.const {value = 0} : core.i32
+      %2 = arith.constant 0 : core.i32
       func.return %2
   }
 }
@@ -260,7 +259,7 @@ mod tests {
     fn module_without_main_is_unchanged() {
         let input = r#"core.module @test {
   func.func @helper() -> core.i32 {
-    %one = arith.const {value = 1} : core.i32
+    %one = arith.constant 1 : core.i32
     func.return %one
   }
 }"#;

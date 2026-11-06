@@ -1,7 +1,6 @@
 use trunk_ir::op_def::OpDef;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::parser::parse_module;
-use trunk_ir::printer::print_module;
 
 use super::*;
 use crate::dialect::tribute_control;
@@ -39,7 +38,7 @@ fn parse(input: &str) -> (IrContext, trunk_ir::rewrite::Module) {
 #[test]
 fn concise_forms_write_the_operation_convention() {
     let (ctx, module) = parse(MODULE);
-    assert_eq!(print_module(&ctx, module.op()), MODULE);
+    assert_eq!(module.op().display(&ctx).to_string(), MODULE);
 
     let ops: Vec<_> = module.ops(&ctx).to_vec();
     assert_eq!(
@@ -74,7 +73,7 @@ const TWO_BODIES: &str = r#"core.module @test {
 #[test]
 fn a_lambda_writes_a_body_per_convention() {
     let (ctx, module) = parse(TWO_BODIES);
-    assert_eq!(print_module(&ctx, module.op()), TWO_BODIES);
+    assert_eq!(module.op().display(&ctx).to_string(), TWO_BODIES);
     let outer = Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
     let body = ctx.region(outer.body(&ctx)).blocks[0];
     let lambda = Lambda::from_op(&ctx, ctx.block(body).ops[0]).unwrap();
@@ -149,7 +148,11 @@ fn a_convention_must_be_a_keyword() {
         "{errors:?}"
     );
     assert!(
-        print_module(&ctx, module.op()).contains("\"tribute_cps.func\"() {"),
+        module
+            .op()
+            .display(&ctx)
+            .to_string()
+            .contains("\"tribute_cps.func\"() {"),
         "an invalid convention prints generically"
     );
 }
@@ -211,7 +214,7 @@ fn table_module(target: &str, entry: &str) -> String {
     format!(
         r#"core.module @test {{
   tribute_cps.func @target() -> core.i32 convention({target}) {{
-    %0 = arith.const {{value = 1}} : core.i32
+    %0 = arith.constant 1 : core.i32
     tribute_control.return %0
   }}
   tribute_cps.func_table @"target$8" = {{{entry} = @target}}
@@ -256,7 +259,7 @@ fn a_function_reference_names_a_function_table() {
     let errors = messages(
         r#"core.module @test {
   tribute_cps.func @target() -> core.i32 convention(direct) {
-    %0 = arith.const {value = 1} : core.i32
+    %0 = arith.constant 1 : core.i32
     tribute_control.return %0
   }
   tribute_cps.func @f() -> core.i32 convention(direct) {
@@ -313,7 +316,7 @@ fn every_body_takes_the_parameters_and_its_own_convention() {
 }
 "#;
     let (ctx, module) = parse(input);
-    assert_eq!(print_module(&ctx, module.op()), input);
+    assert_eq!(module.op().display(&ctx).to_string(), input);
     assert_eq!(messages(input), Vec::<String>::new());
 
     // A transfer in the Direct body may not be stronger than that body.
@@ -343,7 +346,7 @@ fn a_function_reference_writes_its_target_and_row_arguments() {
 }
 "#;
     let (ctx, module) = parse(input);
-    assert_eq!(print_module(&ctx, module.op()), input);
+    assert_eq!(module.op().display(&ctx).to_string(), input);
 }
 
 /// A reference and its table's targets are in one module, where
@@ -354,7 +357,7 @@ fn a_function_table_and_its_targets_are_in_the_module_of_its_references() {
         r#"core.module @test {
   core.module @inner {
     tribute_cps.func @id() -> core.i32 convention(direct) {
-      %0 = arith.const {value = 1} : core.i32
+      %0 = arith.constant 1 : core.i32
       tribute_control.return %0
     }
     tribute_cps.func_table @"id$8" = {direct = @id}
@@ -382,7 +385,7 @@ fn the_targets_of_a_function_table_share_one_source_signature() {
     let errors = messages(
         r#"core.module @test {
   tribute_cps.func @a() -> core.i32 convention(direct) {
-    %0 = arith.const {value = 1} : core.i32
+    %0 = arith.constant 1 : core.i32
     tribute_control.return %0
   }
   tribute_cps.func @b(%x: core.i32) -> core.i32 convention(cps) {

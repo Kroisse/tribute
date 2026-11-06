@@ -137,7 +137,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let text = "core.module @m {
                 wasm.func @good() -> core.i32 {
-                    %callee = wasm.i32_const {value = 0} : core.i32
+                    %callee = wasm.i32_const 0 : core.i32
                     %value = wasm.call_indirect %callee() : () -> core.i32
                     wasm.return %value
                 }
@@ -158,11 +158,11 @@ mod tests {
             &mut ctx,
             "core.module @m { wasm.func @f() { wasm.return } }",
         );
-        let before = trunk_ir::printer::print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
         let mut indices = HashMap::default();
         let added = collect_call_indirect_types(&mut ctx, module, &mut indices, 0, 0).unwrap();
         assert!(added.is_empty());
         assert!(indices.is_empty());
-        assert_eq!(trunk_ir::printer::print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
     }
 }

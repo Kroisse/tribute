@@ -1959,7 +1959,6 @@ mod tests {
     use crate::test_support::assert_unchanged_on_error;
     use tribute_ir::calling_convention::CALLING_CONVENTION_ATTR;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
     use trunk_ir::types::TypeDataBuilder;
 
     fn function(ctx: &IrContext, module: Module, name: &str) -> func::Func {
@@ -2021,7 +2020,7 @@ mod tests {
         }
         crate::closure_lower::finalize_closure_storage_layout(&mut ctx, module);
         let result = crate::wasm::lower::lower_to_wasm(&mut ctx, module, &mut Default::default());
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(result.is_ok(), "{result:?}\n{printed}");
         assert!(!printed.contains("effect.dispatch_cps"), "{printed}");
     }
@@ -2037,7 +2036,7 @@ mod tests {
                 ctx.op_attrs(dispatch).get_type("answer_type"),
                 Some(semantic_answer)
             );
-            let printed = print_module(&ctx, module.op());
+            let printed = module.op().display(&ctx).to_string();
             assert!(
                 !printed.contains(continuation_frame::RESULT_ATTR),
                 "physicalization must consume frame answer provenance:\n{printed}"
@@ -2107,7 +2106,7 @@ mod tests {
                 }
                 _ => unreachable!(),
             }
-            let before = print_module(&ctx, module.op());
+            let before = module.op().display(&ctx).to_string();
             let aliases = ctx.type_aliases().to_vec();
             let ops = collect_ops(&ctx, module.op());
             let result_types: Vec<_> = ops
@@ -2119,7 +2118,7 @@ mod tests {
             if mutation >= 7 {
                 assert!(error.to_string().contains("packed payload"), "{error}");
             }
-            assert_eq!(print_module(&ctx, module.op()), before);
+            assert_eq!(module.op().display(&ctx).to_string(), before);
             assert_eq!(ctx.type_aliases(), aliases);
             assert_eq!(collect_ops(&ctx, module.op()), ops);
             for (op, expected) in ops.into_iter().zip(result_types) {
@@ -2246,7 +2245,7 @@ mod tests {
                 expected
             );
         }
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(
             printed.contains(
                 ": (core.i32 {tribute.ownership = \"consumed\"}, tribute_rt.anyref {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}) -> (), {call_conv = \"tail\"}"
@@ -2425,7 +2424,7 @@ mod tests {
                 .iter()
                 .any(|op| adt::StructSet::from_op(&ctx, *op).is_ok())
         );
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(!printed.contains("__tribute_cps_control"), "{printed}");
         assert!(!printed.contains("Step"), "{printed}");
         assert!(!printed.contains("trampoline"), "{printed}");
@@ -2580,7 +2579,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {tribute.entry = @main} {
   func.func @main() -> core.i32 attributes {tribute.calling_convention = "direct"} {
-    %zero = arith.const {value = 0} : core.i32
+    %zero = arith.constant 0 : core.i32
     func.return %zero
   }
 }"#,
@@ -2622,7 +2621,7 @@ mod tests {
     #[test]
     fn root_bridge_creates_no_lambda_for_target_phase() {
         let (ctx, module) = compose_promoted_root();
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
 
         assert!(!printed.contains("closure.lambda"), "{printed}");
         assert!(printed.contains("adt.struct_new"), "{printed}");
@@ -2676,12 +2675,12 @@ mod tests {
             ctx.set_block_arg_type(entry, 0, evidence);
             ctx.set_block_arg_type(entry, 1, frame);
 
-            let before = print_module(&ctx, module.op());
+            let before = module.op().display(&ctx).to_string();
             let aliases = ctx.type_aliases().to_vec();
             let error = lower_cps_signatures_to_physical(&mut ctx, module).unwrap_err();
 
             assert!(error.to_string().contains(expected), "{error}");
-            assert_eq!(print_module(&ctx, module.op()), before);
+            assert_eq!(module.op().display(&ctx).to_string(), before);
             assert_eq!(ctx.type_aliases(), aliases);
         }
     }
@@ -2835,7 +2834,7 @@ mod tests {
 
         lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
 
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(
             printed.contains("func.func @defined(%0: core.i32 {tribute.ownership = \"consumed\"}, %1: !Env {tribute.ownership = \"consumed\"}, %2: core.i32 {tribute.ownership = \"consumed\"}) -> (), {call_conv = \"tail\"}")
                 && printed.contains("func.constant @defined : (core.i32 {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}) -> (), {call_conv = \"tail\"}"),
@@ -2871,7 +2870,7 @@ mod tests {
             &ctx,
             environment
         ));
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(
             printed.contains(
                 "func.constant @generated_one : (core.i32 {tribute.ownership = \"consumed\"}) -> (), {call_conv = \"tail\"}"
@@ -3048,11 +3047,11 @@ mod tests {
   }
 }"#,
         );
-        let before = print_module(&ctx, raw.op());
+        let before = raw.op().display(&ctx).to_string();
 
         lower_cps_signatures_to_physical(&mut ctx, raw).unwrap();
 
-        assert_eq!(print_module(&ctx, raw.op()), before);
+        assert_eq!(raw.op().display(&ctx).to_string(), before);
 
         let mut ctx = IrContext::new();
         let malformed = parse_test_module(
@@ -3092,7 +3091,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {tribute.entry = @main} {
   func.func @main() -> core.nil attributes {tribute.calling_convention = "direct"} {
-    %c = arith.const {value = 0, tribute.calling_convention = "direct"} : core.i32
+    %c = arith.constant {tribute.calling_convention = "direct"} 0 : core.i32
     %n = core.nil_value : core.nil
     func.return %n
   }
@@ -3101,7 +3100,7 @@ mod tests {
         let error = assert_unchanged_on_error(&mut ctx, module, lower_cps_signatures_to_physical);
         assert!(
             error.to_string().contains(
-                "arith.const: calling-convention metadata on an operation that cannot carry it"
+                "arith.constant: calling-convention metadata on an operation that cannot carry it"
             ),
             "{error}"
         );

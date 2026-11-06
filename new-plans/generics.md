@@ -302,8 +302,10 @@ signature와 본문의 값 타입이 적는 row 안의 모든 ability instance�
 않는 미해결 인자다. Ability instance의 선언은 instance마다 하나이고 그 operation
 타입은 module 수준에 있어 row tail을 가질 수 없으므로, 그런 instance는 선언할 수
 없다. 같은 이유로, 같은 함수들의 signature와 본문의 값 타입이 타입 인자를 가진
-struct·enum을 적을 때 그 인자에 열린 row가 있으면 거부한다. 특수화가 row를 치환하지
-않으므로 그 nominal 인스턴스는 구체 선언을 얻지 못한다. 지역 `let`은 data 타입
+struct·enum을 적을 때 그 타입 인자에 열린 row가 있으면 거부한다. 특수화가 row를
+치환하지 않으므로 그 nominal 인스턴스는 구체 선언을 얻지 못한다. 열린 row를 담을
+nominal 타입은 그 row를 [row 매개변수](types.md#row-매개변수)로 선언하며, row 인자의
+열린 row는 이 검사의 대상이 아니다. 지역 `let`은 data 타입
 변수를 양화하지 않으므로(`type-inference.md`), 지역 callable이 만드는 nominal 값의
 타입 인자는 그 사용처가 고른 타입이며 특수화가 다른 타입 인자처럼 다룬다. 다형적 재귀는
 정의의 성질이므로 도달하지 않는 template에서도 거부한다.
@@ -371,6 +373,14 @@ Generic 여부는 인덱스에 보관된 원본 선언의 타입 매개변수 �
 수집한다. 중복 판별은 원본 `TypeDefId`와 concrete 타입 인자 목록을 사용한다.
 생성 연산 없이 signature나 필드에서만 참조되는 인스턴스도 이 계약을 따른다.
 
+Row 인자는 인스턴스 key와 맹글링에 들어가지 않는다. Row는 타입 인자처럼 치환하지
+않고([Row 변수의 convention class](#row-변수의-convention-class)), callable 값의 표현은
+row에 따라 갈라지지 않으므로 같은 타입 인자의 인스턴스는 row 인자와 상관없이 표현이
+같다. 그래서 `Callback({}, Int)`와 `Callback({State(Int)}, Int)`는 특수화된 선언
+`Callback$Int` 하나를 공유한다. 특수화된 선언은 원본의 row 매개변수를 그대로 가지며,
+그 스킴은 타입 매개변수 없이 row binder만 양화한다. 재작성은 각 nominal 타입의 row
+인자를 바꾸지 않고 선언 identity와 타입 인자만 특수화된 선언으로 바꾼다.
+
 의존성 수집에서 치환한 스킴은 최종 constructor 메타데이터로 재사용한다.
 원본 스킴을 다시 읽어 동일 인스턴스를 재치환하지 않는다. 고정점 도달에 성공한
 뒤 맹글링한 이름으로 선언과 스킴을 게시하고, 같은 nominal rewrite map을 AST와
@@ -417,7 +427,7 @@ identity는 남긴다. Lowering은 구체 함수 정의만 받으며,
 
 - 스킴은 자기 binder 밖의 `BoundVar`를 갖지 않는다. 자기 binder를 가진 스킴은
   struct·enum 원본 선언과 그 field 함수, 본문을 병합하지 않은 의존 패키지 함수의
-  것이다.
+  것이다. Row binder는 이 검사의 대상이 아니다.
 - 함수 선언과 표현식·참조별 메타데이터에는 스킴의 `BoundVar`가 없다. 함수 인스턴스
   기록의 선언 스킴은 callee의 binder로 쓰였으므로 이 검사 대상이 아니다.
 - AST의 모든 함수 참조는 출력의 함수, extern 함수, struct field 함수, 또는 출력

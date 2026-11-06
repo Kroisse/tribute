@@ -82,17 +82,9 @@ fn final_handle_dispatch_shape(
             "final ability.handle_dispatch prompt-tag operand must have type core.i32".into(),
         ));
     }
-    let dispatchers = dispatch.dispatchers(ctx);
-    let abilities = dispatch.abilities(ctx);
-    if abilities.len() != dispatchers.len() {
-        return Err(error(format!(
-            "abilities cardinality {} does not match {} dispatcher operands",
-            abilities.len(),
-            dispatchers.len()
-        )));
-    }
-    let handled = abilities
-        .zip(dispatchers)
+    let handled = dispatch
+        .abilities(ctx)
+        .zip(dispatch.dispatchers(ctx))
         .map(|(ability, &tr_dispatch)| (ability.clone(), tr_dispatch))
         .collect();
     let body = dispatch.body(ctx);
@@ -445,7 +437,6 @@ mod tests {
     use super::*;
     use std::ops::ControlFlow;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
     use trunk_ir::walk::{WalkAction, walk_op};
 
     #[test]
@@ -475,7 +466,7 @@ mod tests {
     #[test]
     fn final_handle_dispatch_extends_each_ability_and_lowers_resultlessly() {
         let input = final_dispatch_fixture(
-            r#"ability.handle_dispatch [@State, @Console] %ev, %prompt(%tr, %tr2) {
+            r#"ability.handle_dispatch %ev, %prompt [@State: %tr, @Console: %tr2] {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
@@ -483,7 +474,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, &input);
         resolve_evidence_dispatch(&mut ctx, module).unwrap();
-        let resolved = print_module(&ctx, module.op());
+        let resolved = module.op().display(&ctx).to_string();
         assert_eq!(resolved.matches("effect.extend").count(), 2);
         assert_eq!(resolved.matches("func.call").count(), 0);
         assert!(!resolved.contains("__tribute_next_tag"));
@@ -502,7 +493,7 @@ mod tests {
             "all abilities in one delimiter must share one runtime prompt tag"
         );
         crate::lower_handle_dispatch::lower_handle_dispatch(&mut ctx, module).unwrap();
-        let lowered = print_module(&ctx, module.op());
+        let lowered = module.op().display(&ctx).to_string();
         assert!(!lowered.contains("ability."));
         assert!(!lowered.contains("__tribute_cps_control"));
         assert!(lowered.contains("func.unreachable"));
@@ -514,7 +505,10 @@ mod tests {
     /// The printed operations of `@test`, one per line. `%0`..`%3` are its
     /// parameters `%ev`, `%prompt`, `%tr`, `%tr2`.
     fn test_body(ctx: &IrContext, module: Module) -> Vec<String> {
-        print_module(ctx, module.op())
+        module
+            .op()
+            .display(ctx)
+            .to_string()
             .lines()
             .map(str::trim)
             .skip_while(|line| !line.starts_with("func.func @test"))
@@ -527,7 +521,7 @@ mod tests {
     #[test]
     fn handle_selection_masks_the_outer_evidence_before_extending() {
         let input = final_dispatch_fixture(
-            r#"ability.handle_dispatch [@State] %ev, %prompt(%tr) attributes {evidence_plan = [{mask = @State}]} {
+            r#"ability.handle_dispatch %ev, %prompt [@State: %tr] attributes {evidence_plan = [{mask = @State}]} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
@@ -620,7 +614,7 @@ mod tests {
     fn final_handle_dispatch_materializes_a_fresh_prompt_tag_once() {
         let input = final_dispatch_fixture(
             r#"%fresh = effect.fresh_prompt_tag : core.i32
-    ability.handle_dispatch [@State] %ev, %fresh(%tr) {
+    ability.handle_dispatch %ev, %fresh [@State: %tr] {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
@@ -630,7 +624,7 @@ mod tests {
 
         resolve_evidence_dispatch(&mut ctx, module).unwrap();
 
-        let resolved = print_module(&ctx, module.op());
+        let resolved = module.op().display(&ctx).to_string();
         assert!(!resolved.contains("effect.fresh_prompt_tag"), "{resolved}");
         assert_eq!(
             resolved
@@ -656,42 +650,27 @@ mod tests {
     #[test]
     fn malformed_final_handle_dispatches_fail_before_mutation() {
         let malformed = [
-            // The definition is checked before the delimiter's own rules.
             (
-                r#"ability.handle_dispatch [1] %ev, %prompt(%tr) {
-      ^body(%inner: !evidence):
-        func.unreachable
-    }"#,
-                "final ability.handle_dispatch: attribute `abilities`",
-            ),
-            (
-                r#"ability.handle_dispatch [] %ev, %tr() {
+                r#"ability.handle_dispatch %ev, %tr [] {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
                 "prompt-tag operand must have type core.i32",
             ),
             (
-                r#"ability.handle_dispatch [] %ev, %prompt(%tr) {
-      ^body(%inner: !evidence):
-        func.unreachable
-    }"#,
-                "cardinality",
-            ),
-            (
-                r#"ability.handle_dispatch [] %prompt, %prompt() {
+                r#"ability.handle_dispatch %prompt, %prompt [] {
       ^body(%inner: core.i32):
         func.unreachable
     }"#,
                 "must have the evidence type",
             ),
             (
-                r#"ability.handle_dispatch [] %ev, %prompt() {
+                r#"ability.handle_dispatch %ev, %prompt [] {
     }"#,
                 "exactly one block",
             ),
             (
-                r#"ability.handle_dispatch [] %ev, %prompt() {
+                r#"ability.handle_dispatch %ev, %prompt [] {
       ^first(%inner: !evidence):
         func.unreachable
       ^second:
@@ -700,20 +679,20 @@ mod tests {
                 "exactly one block",
             ),
             (
-                r#"ability.handle_dispatch [] %ev, %prompt() {
+                r#"ability.handle_dispatch %ev, %prompt [] {
       ^body:
         func.unreachable
     }"#,
                 "one evidence argument",
             ),
             (
-                r#"ability.handle_dispatch [] %ev, %prompt() {
+                r#"ability.handle_dispatch %ev, %prompt [] {
       ^body(%inner: !evidence):
     }"#,
                 "must end in a proper tail transfer",
             ),
             (
-                r#"ability.handle_dispatch [] %ev, %prompt() {
+                r#"ability.handle_dispatch %ev, %prompt [] {
       ^body(%inner: !evidence):
         func.return
     }"#,
@@ -724,20 +703,20 @@ mod tests {
             let input = final_dispatch_fixture(operation);
             let mut ctx = IrContext::new();
             let module = parse_test_module(&mut ctx, &input);
-            let before = print_module(&ctx, module.op());
+            let before = module.op().display(&ctx).to_string();
             let error = resolve_evidence_dispatch(&mut ctx, module).unwrap_err();
             assert!(error.to_string().contains(expected), "{error}");
             assert!(error.to_string().contains("textual-ir:0:0"), "{error}");
-            assert_eq!(print_module(&ctx, module.op()), before);
+            assert_eq!(module.op().display(&ctx).to_string(), before);
         }
     }
 
     #[test]
     fn structured_final_delimiter_is_a_valid_proper_tail_body() {
         let input = final_dispatch_fixture(
-            r#"ability.handle_dispatch [] %ev, %prompt() {
+            r#"ability.handle_dispatch %ev, %prompt [] {
       ^body(%inner: !evidence):
-        %choice = arith.const {value = 0} : core.i32
+        %choice = arith.constant 0 : core.i32
         scf.index_switch %choice : (core.i32) -> ()
         default {
           func.unreachable
@@ -752,7 +731,7 @@ mod tests {
     #[test]
     fn final_delimiter_accepts_resultless_effect_cps_dispatch() {
         let input = final_dispatch_fixture(
-            r#"ability.handle_dispatch [] %ev, %prompt() {
+            r#"ability.handle_dispatch %ev, %prompt [] {
       ^body(%inner: !evidence):
         effect.dispatch_cps @State @get(%tr2) [%inner, %tr, %tr2] -> core.i32
     }"#,
@@ -770,7 +749,7 @@ mod tests {
   func.func @plain_external() -> core.i32
   func.func @evidence_external(%ev: !evidence) -> !marker
   func.func @body(%ev: !evidence, %prompt: core.i32) -> core.never {
-    ability.handle_dispatch [] %ev, %prompt() {
+    ability.handle_dispatch %ev, %prompt [] {
       ^body(%inner: !evidence):
         func.tail_call @finish(%inner) : (!evidence) -> ()
     }
@@ -781,7 +760,7 @@ mod tests {
 
         resolve_evidence_dispatch(&mut ctx, module).unwrap();
 
-        let resolved = print_module(&ctx, module.op());
+        let resolved = module.op().display(&ctx).to_string();
         assert!(
             resolved.contains("func.func @plain_external() -> core.i32\n"),
             "plain external declaration changed or disappeared:\n{resolved}"

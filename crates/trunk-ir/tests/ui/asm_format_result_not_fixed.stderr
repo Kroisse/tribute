@@ -1,0 +1,5 @@
+error: the format does not write the type of `result`
+ --> tests/ui/asm_format_result_not_fixed.rs:6:11
+  |
+6 |         #[asm_format(value ":" type(value))]
+  |           ^^^^^^^^^^

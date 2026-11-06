@@ -2,7 +2,8 @@
 
 use crate::attr_kind::Bytes;
 use crate::attr_kind::SymbolRef;
-use crate::dialect::core::{I32, IntegerLike};
+use crate::dialect::arith;
+use crate::dialect::core::{I8, I32, IntegerLike};
 use crate::op_flag::IsolatedFromAbove;
 use crate::op_interface::{CallLike, IndirectCallLike};
 use crate::ops::{DialectOp, DialectType};
@@ -10,6 +11,67 @@ use crate::types::{Attribute, AttributeMap, TypeDataBuilder};
 use crate::{IrContext, SymbolPath};
 use itertools::Itertools;
 use rustc_hash::FxHashSet as HashSet;
+
+crate::attr_kind::keyword_kind! {
+    /// The condition of `clif.icmp`, Cranelift's `IntCC`.
+    pub enum IntCond {
+        Eq = "eq",
+        Ne = "ne",
+        Slt = "slt",
+        Sle = "sle",
+        Sgt = "sgt",
+        Sge = "sge",
+        Ult = "ult",
+        Ule = "ule",
+        Ugt = "ugt",
+        Uge = "uge",
+    }
+}
+
+crate::attr_kind::keyword_kind! {
+    /// The condition of `clif.fcmp`, the ordered comparisons and unordered
+    /// inequality of Cranelift's `FloatCC`.
+    pub enum FloatCond {
+        Eq = "eq",
+        Ne = "ne",
+        Lt = "lt",
+        Le = "le",
+        Gt = "gt",
+        Ge = "ge",
+    }
+}
+
+impl From<arith::CmpiPredicate> for IntCond {
+    fn from(predicate: arith::CmpiPredicate) -> Self {
+        use arith::CmpiPredicate as P;
+        match predicate {
+            P::Eq => Self::Eq,
+            P::Ne => Self::Ne,
+            P::Slt => Self::Slt,
+            P::Sle => Self::Sle,
+            P::Sgt => Self::Sgt,
+            P::Sge => Self::Sge,
+            P::Ult => Self::Ult,
+            P::Ule => Self::Ule,
+            P::Ugt => Self::Ugt,
+            P::Uge => Self::Uge,
+        }
+    }
+}
+
+impl From<arith::CmpfPredicate> for FloatCond {
+    fn from(predicate: arith::CmpfPredicate) -> Self {
+        use arith::CmpfPredicate as P;
+        match predicate {
+            P::Oeq => Self::Eq,
+            P::Une => Self::Ne,
+            P::Olt => Self::Lt,
+            P::Ole => Self::Le,
+            P::Ogt => Self::Gt,
+            P::Oge => Self::Ge,
+        }
+    }
+}
 
 #[trunk_ir::dialect]
 mod clif {
@@ -64,13 +126,13 @@ mod clif {
     fn r#return(values: Variadic<_>) {}
 
     // Constants
-    #[asm_format(attr_dict_bare ":" type(result))]
+    #[asm_format(attr_dict_bare value ":" type(result))]
     fn iconst(value: Attr<i64>) -> Value<_> {}
 
-    #[asm_format(attr_dict_bare ":" type(result))]
+    #[asm_format(attr_dict_bare value ":" type(result))]
     fn f32const(value: Attr<f32>) -> Value<_> {}
 
-    #[asm_format(attr_dict_bare ":" type(result))]
+    #[asm_format(attr_dict_bare value ":" type(result))]
     fn f64const(value: Attr<f64>) -> Value<_> {}
 
     // Integer arithmetic
@@ -104,11 +166,14 @@ mod clif {
     fn fneg(operand: Value<_>) -> Value<_> {}
 
     // Comparisons
-    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
-    fn icmp(cond: Attr<String>, lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    /// Compare two integers, yielding `1` or `0` as Cranelift's `icmp`
+    /// does.
+    #[asm_format(cond "," lhs "," rhs attr_dict_bare ":" type(lhs))]
+    fn icmp(cond: Attr<IntCond>, lhs: Value<_>, rhs: Value<_>) -> Value<I8> {}
 
-    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
-    fn fcmp(cond: Attr<String>, lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    /// Compare two floats, yielding `1` or `0` as Cranelift's `fcmp` does.
+    #[asm_format(cond "," lhs "," rhs attr_dict_bare ":" type(lhs))]
+    fn fcmp(cond: Attr<FloatCond>, lhs: Value<_>, rhs: Value<_>) -> Value<I8> {}
 
     // Bitwise
     #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
@@ -226,23 +291,23 @@ mod clif {
     fn symbol_addr(sym: Attr<SymbolRef>) -> Value<_> {}
 
     // Type conversions
-    #[asm_format(operand attr_dict_bare ":" type(result))]
+    #[asm_format(operand attr_dict_bare ":" type(operand) "to" type(result))]
     fn ireduce(operand: Value<_>) -> Value<_> {}
-    #[asm_format(operand attr_dict_bare ":" type(result))]
+    #[asm_format(operand attr_dict_bare ":" type(operand) "to" type(result))]
     fn uextend(operand: Value<_>) -> Value<_> {}
-    #[asm_format(operand attr_dict_bare ":" type(result))]
+    #[asm_format(operand attr_dict_bare ":" type(operand) "to" type(result))]
     fn sextend(operand: Value<_>) -> Value<_> {}
-    #[asm_format(operand attr_dict_bare ":" type(result))]
+    #[asm_format(operand attr_dict_bare ":" type(operand) "to" type(result))]
     fn fpromote(operand: Value<_>) -> Value<_> {}
-    #[asm_format(operand attr_dict_bare ":" type(result))]
+    #[asm_format(operand attr_dict_bare ":" type(operand) "to" type(result))]
     fn fdemote(operand: Value<_>) -> Value<_> {}
-    #[asm_format(operand attr_dict_bare ":" type(result))]
+    #[asm_format(operand attr_dict_bare ":" type(operand) "to" type(result))]
     fn fcvt_to_sint(operand: Value<_>) -> Value<_> {}
-    #[asm_format(operand attr_dict_bare ":" type(result))]
+    #[asm_format(operand attr_dict_bare ":" type(operand) "to" type(result))]
     fn fcvt_from_sint(operand: Value<_>) -> Value<_> {}
-    #[asm_format(operand attr_dict_bare ":" type(result))]
+    #[asm_format(operand attr_dict_bare ":" type(operand) "to" type(result))]
     fn fcvt_to_uint(operand: Value<_>) -> Value<_> {}
-    #[asm_format(operand attr_dict_bare ":" type(result))]
+    #[asm_format(operand attr_dict_bare ":" type(operand) "to" type(result))]
     fn fcvt_from_uint(operand: Value<_>) -> Value<_> {}
 }
 
@@ -380,15 +445,15 @@ crate::register_type_def!(&FUNC_SIG_DEF);
 /// The function syntax `func.func_sig` also uses, `clif.func_sig<(A) -> R>`,
 /// with any number of results.
 impl crate::asm_format::TypeAsmFormat for FuncSig {
-    fn print(&self, h: &mut crate::printer::TypePrintHelper<'_, '_>) -> std::fmt::Result {
-        super::func::print_signature_type(h, self.0)
+    fn print(&self, p: &mut crate::printer::AsmPrinter<'_>) -> std::fmt::Result {
+        super::func::print_signature_type(p, self.0)
     }
 
-    fn parse<'a>(
-        input: &mut &'a str,
-        name: &'a str,
-    ) -> winnow::ModalResult<crate::parser::raw::RawType<'a>> {
-        super::func::parse_signature_type(input, name, None)
+    fn parse(
+        p: &mut crate::parser::AsmParser<'_>,
+        name: &str,
+    ) -> crate::parser::ParseResult<Option<crate::TypeRef>> {
+        super::func::parse_signature_type(p, name, None)
     }
 }
 
@@ -401,12 +466,13 @@ impl crate::asm_format::SignatureCodec for FuncSig {
         super::func::signature_codec_parts(ctx, ty)
     }
 
-    fn build<'a>(
-        inputs: Vec<crate::parser::raw::RawParam<'a>>,
-        results: Vec<crate::parser::raw::RawParam<'a>>,
-        tail: crate::parser::raw::RawAttrDict<'a>,
-    ) -> winnow::ModalResult<crate::parser::raw::RawType<'a>> {
-        super::func::signature_from_parts("clif.func_sig", inputs, results, tail, None)
+    fn build(
+        p: &mut crate::parser::AsmParser<'_>,
+        inputs: Vec<(crate::TypeRef, crate::AttributeMap)>,
+        results: Vec<(crate::TypeRef, crate::AttributeMap)>,
+        tail: crate::AttributeMap,
+    ) -> crate::parser::ParseResult<crate::TypeRef> {
+        super::func::signature_from_parts(p, "clif.func_sig", inputs, results, tail, None)
     }
 }
 
@@ -501,11 +567,11 @@ impl crate::ops::Verify for CallIndirect {
             "results ({}) match neither the signature results ({}) nor their runtime projection",
             actual
                 .iter()
-                .map(|&ty| crate::printer::print_type(ctx, ty))
+                .map(|&ty| ty.display(ctx).to_string())
                 .format(", "),
             expected
                 .iter()
-                .map(|&ty| crate::printer::print_type(ctx, ty))
+                .map(|&ty| ty.display(ctx).to_string())
                 .format(", "),
         )
         .into())
@@ -582,43 +648,39 @@ impl crate::asm_format::OpAsmDirective for SwitchCases {
             .collect()
     }
 
-    fn print(
-        h: &mut crate::printer::OpPrintHelper<'_, '_>,
-        parts: Self::Parts<'_>,
-    ) -> std::fmt::Result {
+    fn print(p: &mut crate::printer::OpAsmPrinter<'_>, parts: Self::Parts<'_>) -> std::fmt::Result {
+        use itertools::Itertools as _;
         use std::fmt::Write as _;
 
-        for (position, (case, target)) in parts.into_iter().enumerate() {
-            if position > 0 {
-                h.write_str(", ")?;
-            }
-            let label = h.block_label(target).to_owned();
-            write!(h, "{case}: {label}")?;
-        }
-        Ok(())
+        let s = p.state();
+        let cases = parts.into_iter().format_with(", ", |(case, target), f| {
+            f(&format_args!("{case}: {}", s.block(target)))
+        });
+        write!(p, "{cases}")
     }
 
-    fn parse<'a>(
-        input: &mut &'a str,
-    ) -> winnow::ModalResult<Vec<crate::asm_format::RawCustomEntity<'a>>> {
-        use crate::asm_format::RawCustomEntity;
-        use crate::parser::raw::{RawAttribute, block_label, integer_lit, ws};
-        use winnow::Parser as _;
-        use winnow::combinator::{separated, separated_pair};
+    fn parse(
+        p: &mut crate::parser::OpAsmParser<'_>,
+    ) -> crate::parser::ParseResult<Vec<crate::asm_format::ParsedEntity>> {
+        use crate::asm_format::ParsedEntity;
+        use crate::parser::lexer::integer_lit;
 
-        let arms: Vec<(i128, &str)> = separated(
-            0..,
-            separated_pair(integer_lit, (ws, ':', ws), block_label),
-            (ws, ',', ws),
-        )
-        .parse_next(input)?;
-        let (cases, targets): (Vec<_>, Vec<_>) = arms
-            .into_iter()
-            .map(|(case, target)| (RawAttribute::Int(case), target))
-            .unzip();
+        let mut cases = Vec::new();
+        let mut targets = Vec::new();
+        let mut case = p.parse_optional_token("a case", integer_lit)?;
+        while let Some(value) = case {
+            cases.push(crate::Attribute::Int(value));
+            p.parse_punct(":")?;
+            targets.push(p.parse_successor()?);
+            case = if p.parse_optional_punct(",") {
+                Some(p.parse_integer()?)
+            } else {
+                None
+            };
+        }
         Ok(vec![
-            RawCustomEntity::Attribute(Some(RawAttribute::List(cases))),
-            RawCustomEntity::Successors(targets),
+            ParsedEntity::Attribute(Some(crate::Attribute::List(cases))),
+            ParsedEntity::Successors(targets),
         ])
     }
 }
@@ -728,7 +790,6 @@ mod tests {
     use crate::op_def::OpDef;
     use crate::op_interface::DynIndirectCallLike;
     use crate::parser::parse_test_module;
-    use crate::printer::print_module;
 
     #[test]
     fn indirect_call_interface_uses_clif_owned_sig() {
@@ -774,7 +835,7 @@ mod tests {
         }
         assert!(DynIndirectCallLike::get(&ctx, direct).is_none());
 
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(
             printed.contains("clif.call_indirect %0(%1) : (core.i32) -> core.i32"),
             "{printed}"
@@ -840,7 +901,7 @@ mod tests {
   !callable = clif.func_sig<(!scalar) -> (!scalar, !scalar), {nested = [!scalar]}>
 }"#,
         );
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(
             printed.contains(
                 "!callable = clif.func_sig<(!scalar) -> (!scalar, !scalar), {nested = [!scalar]}>"
@@ -849,7 +910,7 @@ mod tests {
         );
         let mut reparsed = crate::IrContext::new();
         let copy = parse_test_module(&mut reparsed, &printed);
-        assert_eq!(print_module(&reparsed, copy.op()), printed);
+        assert_eq!(copy.op().display(&reparsed).to_string(), printed);
     }
 
     #[test]
@@ -857,14 +918,14 @@ mod tests {
         let source = r#"core.module @test {
   clif.func @external(%arg0: core.i32) -> core.i32 attributes {abi = "C"}
   clif.func @pair(%0: core.i32) -> (core.i32, core.i64), {call_conv = "tail"} {
-      %1 = clif.iconst {value = 1} : core.i64
+      %1 = clif.iconst 1 : core.i64
       clif.return %0, %1
   }
 }
 "#;
         let mut ctx = crate::IrContext::new();
         let module = parse_test_module(&mut ctx, source);
-        assert_eq!(print_module(&ctx, module.op()), source);
+        assert_eq!(module.op().display(&ctx).to_string(), source);
     }
 
     #[test]
@@ -884,7 +945,6 @@ mod branch_table_tests {
     use super::*;
     use crate::op_def::OpDef;
     use crate::parser::parse_test_module;
-    use crate::printer::print_module;
 
     fn module(branch: &str) -> String {
         format!(
@@ -906,11 +966,11 @@ mod branch_table_tests {
     fn assert_round_trips(branch: &str, printed_branch: &str) {
         let mut ctx = crate::IrContext::new();
         let parsed = parse_test_module(&mut ctx, &module(branch));
-        let printed = print_module(&ctx, parsed.op());
+        let printed = parsed.op().display(&ctx).to_string();
         assert!(printed.contains(printed_branch), "{printed}");
         let mut reparsed_ctx = crate::IrContext::new();
         let reparsed = parse_test_module(&mut reparsed_ctx, &printed);
-        assert_eq!(print_module(&reparsed_ctx, reparsed.op()), printed);
+        assert_eq!(reparsed.op().display(&reparsed_ctx).to_string(), printed);
     }
 
     /// The violations of the `clif.switch` in [`module`], one per line.

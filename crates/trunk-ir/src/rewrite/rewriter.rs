@@ -305,7 +305,6 @@ mod tests {
     use super::*;
     use crate::dialect::func;
     use crate::parser::parse_test_module;
-    use crate::printer::print_module;
 
     #[test]
     fn require_and_ensure_record_the_rejection_reason() {
@@ -331,7 +330,7 @@ mod tests {
             let module = parse_test_module(
                 &mut ctx,
                 &format!(
-                    "core.module @test {{ func.func @main() -> core.nil {{ %v = arith.const {{value = 1}} : core.i32 func.return {} }} }}",
+                    "core.module @test {{ func.func @main() -> core.nil {{ %v = arith.constant 1 : core.i32 func.return {} }} }}",
                     if used { "%v" } else { "" },
                 ),
             );
@@ -343,14 +342,14 @@ mod tests {
             let replacement = func::Unreachable::operands().build(&mut ctx, loc).op_ref();
             let converter = TypeConverter::new();
             let mut rewriter = PatternRewriter::new(&converter);
-            let before = print_module(&ctx, module.op());
+            let before = module.op().display(&ctx).to_string();
             assert_eq!(
                 rewriter.replace_op_dropping_unused_results(&ctx, old, replacement),
                 !used
             );
             if used {
                 assert!(!rewriter.has_mutations());
-                assert_eq!(print_module(&ctx, module.op()), before);
+                assert_eq!(module.op().display(&ctx).to_string(), before);
             } else {
                 apply_mutations(&mut ctx, old, rewriter.take_mutations(), None);
                 assert_eq!(ctx.block(block).ops[0], replacement);
@@ -365,7 +364,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
-            "core.module @test { %a = arith.const {value = 1} : core.i32 %b = arith.const {value = 2} : core.i32 }",
+            "core.module @test { %a = arith.constant 1 : core.i32 %b = arith.constant 2 : core.i32 }",
         );
         let ops = &ctx.block(module.first_block(&ctx).unwrap()).ops;
         let converter = TypeConverter::new();

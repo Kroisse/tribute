@@ -5,7 +5,6 @@ use trunk_ir::op_interface::{
     Branch, BranchSuccessor, BranchSuccessors, ControlFlowInterfaceError,
 };
 use trunk_ir::parser::parse_test_module;
-use trunk_ir::printer::print_module;
 use trunk_ir::types::TypeDataBuilder;
 use trunk_ir_cranelift_backend::passes::func_to_clif;
 
@@ -128,9 +127,9 @@ fn build_without_field_moves(ir: &str) -> (IrContext, Module, NativeOwnershipPla
 fn build(ir: &str) -> (IrContext, Module, NativeOwnershipPlan) {
     let mut ctx = IrContext::new();
     let module = parse_test_module(&mut ctx, ir);
-    let before = print_module(&ctx, module.op());
+    let before = module.op().display(&ctx).to_string();
     let plan = production_plan(&ctx, module).expect("typed ownership plan");
-    assert_eq!(print_module(&ctx, module.op()), before);
+    assert_eq!(module.op().display(&ctx).to_string(), before);
     (ctx, module, plan)
 }
 
@@ -227,7 +226,7 @@ fn revalidation_rejects_a_declaration_changed_to_an_empty_body() {
         parent_op: None,
     });
     ctx.push_op_region(op, body);
-    let before = print_module(&ctx, module.op());
+    let before = module.op().display(&ctx).to_string();
     let error = plan
         .validate_against(&ctx, module)
         .expect_err("malformed declaration must not be omitted");
@@ -237,7 +236,7 @@ fn revalidation_rejects_a_declaration_changed_to_an_empty_body() {
             .contains("func.func @external: body has no entry block"),
         "{error}"
     );
-    assert_eq!(print_module(&ctx, module.op()), before);
+    assert_eq!(module.op().display(&ctx).to_string(), before);
 }
 
 #[test]
@@ -402,7 +401,7 @@ fn continuation_frame_capture_materializes_the_typed_entry_and_store_actions() {
     );
 
     materialize(&mut ctx, module, &plan).expect("typed RC materialization");
-    let materialized = print_module(&ctx, module.op());
+    let materialized = module.op().display(&ctx).to_string();
     assert_eq!(
         materialized.matches("tribute_rt.retain").count(),
         2,
@@ -431,7 +430,7 @@ fn nested_continuation_frame_closure_releases_use_exact_header_inclusive_sizes()
   !Base = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
   !_closure = adt.struct<_closure_captures(entries: tribute_rt.convention_table_ref, _0: !FrameRef), {closure_base = !Base, layout = "closure_captures"}>
   func.func @capture(%frame: !FrameRef) -> core.nil {
-    %code = arith.const {value = 0} : core.i32
+    %code = arith.constant 0 : core.i32
     %closure = adt.struct_new %code, %frame {type = !_closure} : !_closure
     func.return
   }
@@ -439,7 +438,7 @@ fn nested_continuation_frame_closure_releases_use_exact_header_inclusive_sizes()
     );
     let plan = acquiring_plan(&ctx, module).expect("typed ownership plan");
     materialize(&mut ctx, module, &plan).expect("typed RC materialization");
-    let materialized = print_module(&ctx, module.op());
+    let materialized = module.op().display(&ctx).to_string();
     // Frame: i32 payload (4) + header (8). The closure's size depends on its
     // native capture layout, so its header RTTI resolves it at release.
     assert!(materialized.contains("alloc_size = 12"), "{materialized}");
@@ -461,7 +460,7 @@ fn native_evidence_hands_the_dispatcher_to_the_runtime_as_a_managed_value() {
     func.return %ev
   }
   func.func @install(%evidence: !Evidence, %prompt: core.i32) -> !Evidence {
-    %code = arith.const {value = 0} : core.i32
+    %code = arith.constant 0 : core.i32
     %closure = adt.struct_new %code {type = !_closure} : !_closure
     %extended = effect.extend @State %evidence, %prompt, %closure, %evidence : !Evidence
     func.return %extended
@@ -480,7 +479,7 @@ fn native_evidence_hands_the_dispatcher_to_the_runtime_as_a_managed_value() {
         .unwrap();
     crate::evidence_lowering::lower_evidence_func(&mut ctx, install, &runtime).unwrap();
 
-    let lowered = print_module(&ctx, module.op());
+    let lowered = module.op().display(&ctx).to_string();
     assert!(!lowered.contains("tribute_rt.into_raw"), "{lowered}");
     let plan = production_plan(&ctx, module).expect("typed ownership plan");
     let install = plan.function(&SymbolPath::new(["install"])).unwrap();
@@ -498,10 +497,10 @@ fn internal_closure_raw_pointer_handoff_outside_native_evidence_fails_closed() {
     func.unreachable
   }
   func.func @install() -> core.nil {
-    %code = arith.const {value = 0} : core.i32
+    %code = arith.constant 0 : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
     %closure = adt.struct_new %code {type = !_closure} : !_closure
-    %raw = core.unrealized_conversion_cast %closure : core.ptr
+    %raw = core.unrealized_conversion_cast %closure : !_closure to core.ptr
     %result = func.call @escape(%raw) : (core.ptr) -> core.nil
     func.return
   }
@@ -516,7 +515,7 @@ fn into_raw_transfers_one_exact_closure_unit_without_materializing_rc() {
         r#"core.module @test {
   !_closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @install() -> core.nil {
-    %code = arith.const {value = 0} : core.i32
+    %code = arith.constant 0 : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
     %closure = adt.struct_new %code {type = !_closure} : !_closure
     %raw = tribute_rt.into_raw %closure : core.ptr
@@ -539,7 +538,7 @@ fn into_raw_transfers_one_exact_closure_unit_without_materializing_rc() {
     );
 
     materialize(&mut ctx, module, &plan).expect("typed RC materialization");
-    let materialized = print_module(&ctx, module.op());
+    let materialized = module.op().display(&ctx).to_string();
     assert!(
         materialized.contains("tribute_rt.into_raw"),
         "{materialized}"
@@ -551,7 +550,7 @@ fn into_raw_fixture(transfers: &str) -> String {
         r#"core.module @test {
   !_closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @transfers() -> core.nil {
-    %code = arith.const {value = 0} : core.i32
+    %code = arith.constant 0 : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
     %closure = adt.struct_new %code {type = !_closure} : !_closure
 "#,
@@ -653,7 +652,7 @@ fn into_raw_grouped_transfers_acquire_exact_extra_units_before_the_first_transfe
         );
 
         materialize(&mut ctx, module, &plan).expect("typed RC materialization");
-        let materialized = print_module(&ctx, module.op());
+        let materialized = module.op().display(&ctx).to_string();
         let retain = materialized
             .find("tribute_rt.retain")
             .expect("grouped transfers require a retain");
@@ -670,7 +669,7 @@ fn into_raw_group_validation_ignores_preserved_field_borrow_acquire() {
   !_closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
   !Owner = adt.struct<Owner(closure: !_closure)>
   func.func @transfers() -> core.nil {
-    %code = arith.const {value = 0} : core.i32
+    %code = arith.constant 0 : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
     %stored = adt.struct_new %code {type = !_closure} : !_closure
     %owner = adt.struct_new %stored {type = !Owner} : !Owner
@@ -717,7 +716,7 @@ fn into_raw_rejects_non_transfer_and_cross_block_uses_before_mutation() {
         r#"core.module @test {
   !_closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @later_use() -> !_closure {
-    %code = arith.const {value = 0} : core.i32
+    %code = arith.constant 0 : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
     %closure = adt.struct_new %code {type = !_closure} : !_closure
     %raw = tribute_rt.into_raw %closure : core.ptr
@@ -731,7 +730,7 @@ fn into_raw_rejects_non_transfer_and_cross_block_uses_before_mutation() {
   !_closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @cross_block() -> core.nil {
     ^entry:
-      %code = arith.const {value = 0} : core.i32
+      %code = arith.constant 0 : core.i32
       %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
       %closure = adt.struct_new %code {type = !_closure} : !_closure
       %first = tribute_rt.into_raw %closure : core.ptr
@@ -792,7 +791,7 @@ fn materialization_releases_the_exact_replaced_field_and_fails_before_mutation()
 }"#,
     );
     materialize(&mut ctx, module, &plan).expect("typed RC materialization");
-    let materialized = print_module(&ctx, module.op());
+    let materialized = module.op().display(&ctx).to_string();
     let retain = materialized.rfind("tribute_rt.retain").unwrap();
     let get = materialized.find("adt.struct_get").unwrap();
     let release = materialized.find("tribute_rt.release %").unwrap();
@@ -1172,7 +1171,7 @@ fn a_dying_owner_moves_its_field_units_through_nested_projections() {
     assert_eq!(count(store_one, ActionKind::StoreAcquire), 0);
 
     materialize(&mut ctx, module, &plan).expect("typed RC materialization");
-    let materialized = print_module(&ctx, module.op());
+    let materialized = module.op().display(&ctx).to_string();
     assert!(
         materialized.contains("release_offsets = [8]"),
         "{materialized}"
@@ -1262,7 +1261,7 @@ fn owners_released_after_the_same_operation_move_their_own_fields() {
 
     // Each moving release takes only the field its owner was read from.
     materialize(&mut ctx, module, &plan).expect("typed RC materialization");
-    let materialized = print_module(&ctx, module.op());
+    let materialized = module.op().display(&ctx).to_string();
     assert!(
         materialized
             .contains("tribute_rt.release_moving %0, %2 {alloc_size = 24, release_offsets = [8]}"),
@@ -1717,7 +1716,7 @@ fn enum_release_leaves_the_size_to_the_descriptor() {
 }"#,
     );
     materialize(&mut ctx, module, &plan).expect("typed RC materialization");
-    let materialized = print_module(&ctx, module.op());
+    let materialized = module.op().display(&ctx).to_string();
 
     // Each variant has its own allocation size, so the release of an enum
     // value carries the dynamic-size signal instead of one static size.
@@ -1892,7 +1891,7 @@ fn physical_empty_results_reject_values_before_mutation() {
         let ir = format!(
             r#"core.module @test {{
   func.func @f() -> {result} {{
-    %value = arith.const {{value = 1}} : core.i32
+    %value = arith.constant 1 : core.i32
     func.return %value
   }}
 }}"#
@@ -2006,7 +2005,7 @@ fn cfg_copy_and_tail_dying_value_actions_are_complete() {
     assert!(after_tail.validate_against(&ctx, module).is_err());
 
     materialize(&mut ctx, module, &plan).expect("branch ownership plan materializes");
-    let materialized = print_module(&ctx, module.op());
+    let materialized = module.op().display(&ctx).to_string();
     assert_eq!(materialized.matches("tribute_rt.retain").count(), 1);
     assert_eq!(materialized.matches("tribute_rt.release").count(), 4);
 }
@@ -2394,7 +2393,10 @@ fn cfg_accepts_conditional_branch_with_duplicate_successors() {
 
     materialize(&mut ctx, module, &plan).expect("duplicate-successor plan materializes");
     assert_eq!(
-        print_module(&ctx, module.op())
+        module
+            .op()
+            .display(&ctx)
+            .to_string()
             .matches("cf.cond_br")
             .count(),
         1
@@ -2488,7 +2490,7 @@ fn only_explicit_transfers_cross_between_raw_pointers_and_managed_references() {
     assert_plan_error_unchanged(
         r#"core.module @test {
   func.func @receive(%raw: core.ptr) -> core.bytes {
-    %bytes = core.unrealized_conversion_cast %raw : core.bytes
+    %bytes = core.unrealized_conversion_cast %raw : core.ptr to core.bytes
     func.return %bytes
   }
 }"#,
@@ -2497,7 +2499,7 @@ fn only_explicit_transfers_cross_between_raw_pointers_and_managed_references() {
     assert_plan_error_unchanged(
         r#"core.module @test {
   func.func @view(%bytes: core.bytes) -> core.ptr {
-    %raw = core.unrealized_conversion_cast %bytes : core.ptr
+    %raw = core.unrealized_conversion_cast %bytes : core.bytes to core.ptr
     func.return %raw
   }
 }"#,
@@ -2555,7 +2557,7 @@ fn closure_release_uses_its_compiler_generated_allocation_layout() {
 
     let plan = production_plan(&ctx, module).expect("typed ownership plan");
     materialize(&mut ctx, module, &plan).expect("typed RC materialization");
-    let materialized = print_module(&ctx, module.op());
+    let materialized = module.op().display(&ctx).to_string();
 
     // A closure value's size depends on its capture layout, so its header
     // RTTI resolves it at release.
@@ -2640,7 +2642,7 @@ fn retained_parameter_calls_balance_retains_and_releases() {
         );
     }
     materialize(&mut ctx, module, &plan).expect("typed RC materialization");
-    let materialized = print_module(&ctx, module.op());
+    let materialized = module.op().display(&ctx).to_string();
     // Each function retains only its own entry parameter. Each caller
     // releases that unit and the one the call returns.
     assert_eq!(
@@ -3045,7 +3047,7 @@ fn stale_plan_and_ambiguous_rtti_rewrites_fail_without_mutation() {
   func.func @other(%value: !R) -> !R { func.return %value }
 }"#,
     );
-    let before = print_module(&ctx, module.op());
+    let before = module.op().display(&ctx).to_string();
     plan.validate_against(&ctx, module)
         .expect("freshly built plan must validate");
     let [first, _second] = plan.rtti_types() else {
@@ -3091,7 +3093,7 @@ fn stale_plan_and_ambiguous_rtti_rewrites_fail_without_mutation() {
     let mut stale_value = plan.clone();
     stale_value.functions[0].actions[0].value = ctx.block_args(other_entry)[0];
     assert!(stale_value.validate_against(&ctx, module).is_err());
-    assert_eq!(print_module(&ctx, module.op()), before);
+    assert_eq!(module.op().display(&ctx).to_string(), before);
 }
 
 #[test]
@@ -3105,22 +3107,22 @@ fn plan_revalidation_requires_the_exact_reachable_function_set() {
 
     let mut incomplete = plan.clone();
     incomplete.functions.pop();
-    let before = print_module(&ctx, module.op());
+    let before = module.op().display(&ctx).to_string();
     let error = incomplete
         .validate_against(&ctx, module)
         .expect_err("a plan may not omit a reachable function");
     assert!(error.to_string().contains("reachable function identities"));
-    assert_eq!(print_module(&ctx, module.op()), before);
+    assert_eq!(module.op().display(&ctx).to_string(), before);
 
     let detached = plan.functions[1].operation;
     let parent = ctx.op(detached).parent_block.expect("module block");
     ctx.remove_op_from_block(parent, detached);
-    let before = print_module(&ctx, module.op());
+    let before = module.op().display(&ctx).to_string();
     let error = plan
         .validate_against(&ctx, module)
         .expect_err("a plan may not retain a detached function");
     assert!(error.to_string().contains("reachable function identities"));
-    assert_eq!(print_module(&ctx, module.op()), before);
+    assert_eq!(module.op().display(&ctx).to_string(), before);
 }
 
 #[test]
@@ -3272,7 +3274,7 @@ const ARRAYS: &str = r#"core.module @test {
     func.return %pair
   }
   func.func @first(%nodes: !Nodes) -> core.i32 {
-    %at = arith.const {value = 0} : core.index
+    %at = arith.constant 0 : core.index
     %node = adt.array_get %nodes, %at : !NodeRef
     %value = adt.struct_get %node {field = 0, type = !Node} : core.i32
     func.return %value
@@ -3351,7 +3353,7 @@ fn a_written_array_type_is_replaceable() {
   !NodeRef = adt.typeref<{name = "Node"}>
   !Nodes = adt.array<!NodeRef>
   func.func @first(%nodes: !Nodes) -> core.i32 {
-    %at = arith.const {value = 0} : core.index
+    %at = arith.constant 0 : core.index
     %node = adt.array_get %nodes, %at : !NodeRef
     %value = adt.struct_get %node {field = 0, type = !Node} : core.i32
     func.return %value
@@ -3373,7 +3375,7 @@ fn a_written_array_type_is_replaceable() {
     assert_eq!(count(replace, ActionKind::ReleaseReplacedField), 1);
 
     materialize(&mut ctx, module, &plan).expect("typed RC materialization");
-    let materialized = print_module(&ctx, module.op());
+    let materialized = module.op().display(&ctx).to_string();
     let set = materialized.find("adt.array_set").unwrap();
     let replaced = materialized[..set].rfind("adt.array_get").unwrap();
     let release = materialized[replaced..set]

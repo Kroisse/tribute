@@ -191,7 +191,7 @@ impl OpRewritePattern for VariantIsPattern {
         let result_ty = variant_is.result_ty(ctx);
         let descriptor = (variant_is.r#type(ctx), Some(variant_is.tag_ref(ctx)));
         let Some(&number) = self.numbers.get(&descriptor) else {
-            let never = arith::Const::operands()
+            let never = arith::Constant::operands()
                 .value(Attribute::Bool(false))
                 .results(result_ty)
                 .build(ctx, loc);
@@ -205,12 +205,12 @@ impl OpRewritePattern for VariantIsPattern {
         )?;
         let actual = tribute_rtti::Descriptor::operands(variant_is.r#ref(ctx)).build(ctx, loc);
         let i32_ty = ctx.value_ty(actual.result(ctx));
-        let expected = arith::Const::operands()
+        let expected = arith::Constant::operands()
             .value(Attribute::Int(i128::from(number)))
             .results(i32_ty)
             .build(ctx, loc);
         let matches = arith::Cmpi::operands(actual.result(ctx), expected.result(ctx))
-            .predicate("eq")
+            .predicate(arith::CmpiPredicate::Eq)
             .build(ctx, loc);
         rewriter.insert_op(actual.op_ref());
         rewriter.insert_op(expected.op_ref());
@@ -255,7 +255,6 @@ mod tests {
     use tribute_ir::dialect::adt::layout::{compute_mem_struct_layout, compute_struct_layout};
     use trunk_ir::dialect::core;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
 
     fn type_alias(ctx: &IrContext, name: &str) -> TypeRef {
         ctx.type_aliases()
@@ -348,7 +347,7 @@ mod tests {
             panic!("two struct accesses")
         };
         assert_eq!(point, size);
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(
             printed.contains("type = mem.struct<core.i32, core.i32>"),
             "{printed}"
@@ -371,7 +370,7 @@ mod tests {
         let [structural] = layouts[..] else {
             panic!("one struct access")
         };
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(mem::Struct::matches(&ctx, structural));
         assert!(
             printed.contains("type = mem.struct<core.i64, tribute_rt.anyref>"),
@@ -395,20 +394,17 @@ mod tests {
 }"#,
         );
 
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(!printed.contains("adt.variant_is"), "{printed}");
         assert!(
             printed.contains("tribute_rtti.descriptor %0 : core.i32"),
             "{printed}"
         );
-        assert!(
-            printed.contains("arith.const {value = 6} : core.i32"),
-            "{printed}"
-        );
+        assert!(printed.contains("arith.constant 6 : core.i32"), "{printed}");
         assert!(printed.contains("arith.cmpi"), "{printed}");
         // `Other` is never allocated, so no object has its descriptor.
         assert!(
-            printed.contains("arith.const {value = false} : core.i1"),
+            printed.contains("arith.constant false : core.i1"),
             "{printed}"
         );
     }
@@ -430,7 +426,7 @@ mod tests {
 }"#,
         );
 
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(!printed.contains("adt.variant_get"), "{printed}");
         // `Pair` is declared, `Raw` reads its fields from the ownership plan.
         let [pair, raw] = layouts[..] else {
@@ -469,7 +465,7 @@ mod tests {
 }"#,
         );
 
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(
             printed.contains("type = mem.struct<tribute_rt.anyref, core.ptr, tribute_rt.anyref>"),
             "{printed}"

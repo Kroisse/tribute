@@ -9,15 +9,12 @@
 use std::fmt;
 use std::marker::PhantomData;
 
-use winnow::{ModalResult, Parser};
-
 use smallvec::SmallVec;
 
-use crate::asm_format::expected;
 use crate::context::IrContext;
 use crate::op_schema::AttributeKind;
-use crate::parser::raw::{RawAttribute, raw_attr_value};
-use crate::printer::OpPrintHelper;
+use crate::parser::{AsmParser, ParseResult};
+use crate::printer::AsmPrinter;
 use crate::refs::TypeRef;
 use crate::symbol::SymbolPath;
 use crate::types::{Attribute, AttributeIter, AttributeKey, AttributeMap, StringArg, StringRef};
@@ -52,16 +49,14 @@ pub trait AttrKind {
     /// Write `attr`, a value `accepts` admits, as a declarative assembly
     /// format spells it: by default in generic attribute syntax. A keyword
     /// kind writes its keyword (`new-plans/ir.md`, "선언적 어셈블리 형식").
-    fn print_text(h: &mut OpPrintHelper<'_, '_>, attr: &Attribute) -> fmt::Result {
-        h.write_attribute(attr)
+    fn print_text(p: &mut AsmPrinter<'_>, attr: &Attribute) -> fmt::Result {
+        p.print_attribute(attr)
     }
 
     /// Read a value as [`Self::print_text`] writes it, as an unverified
     /// attribute that the schema checks later.
-    fn parse_text<'a>(input: &mut &'a str) -> ModalResult<RawAttribute<'a>> {
-        raw_attr_value
-            .parse_next(input)
-            .map_err(|e| e.map(|_| expected("attribute value")))
+    fn parse_text(p: &mut AsmParser<'_>) -> ParseResult<Attribute> {
+        p.parse_attribute()
     }
 
     /// Whether two values read from attributes are the same value, which
@@ -139,6 +134,97 @@ macro_rules! int_kind {
 }
 
 int_kind!(i32 => I32, i64 => I64, u32 => U32, u64 => U64);
+
+/// Declare a keyword attribute kind: an enum stored as a string attribute
+/// holding its keyword, which a declarative format writes bare, as MLIR
+/// writes `arith.cmpi slt, %a, %b`.
+macro_rules! keyword_kind {
+    (
+        $(#[$meta:meta])*
+        $vis:vis enum $name:ident {
+            $($(#[$variant_meta:meta])* $variant:ident = $word:literal),+ $(,)?
+        }
+    ) => {
+        $(#[$meta])*
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        $vis enum $name {
+            $($(#[$variant_meta])* $variant),+
+        }
+
+        impl $name {
+            /// The keyword that spells this value.
+            pub fn keyword(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $word),+
+                }
+            }
+
+            /// The value a keyword spells; `None` for any other word.
+            pub fn from_keyword(word: &str) -> Option<Self> {
+                match word {
+                    $($word => Some(Self::$variant),)+
+                    _ => None,
+                }
+            }
+
+            fn from_attribute(
+                ctx: &$crate::context::IrContext,
+                attr: &$crate::types::Attribute,
+            ) -> Option<Self> {
+                match attr {
+                    $crate::types::Attribute::String(word) => Self::from_keyword(ctx.str(*word)),
+                    _ => None,
+                }
+            }
+        }
+
+        impl ::std::fmt::Display for $name {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str(self.keyword())
+            }
+        }
+
+        impl $crate::attr_kind::AttrKind for $name {
+            const KIND: $crate::op_schema::AttributeKind = $crate::op_schema::AttributeKind::String;
+            type Out<'ctx> = $name;
+            type In = $name;
+            const DOMAIN: Option<&'static str> = Some(concat!("one of:" $(, " ", $word)+));
+
+            fn accepts(ctx: &$crate::context::IrContext, attr: &$crate::types::Attribute) -> bool {
+                Self::from_attribute(ctx, attr).is_some()
+            }
+
+            fn read<'ctx>(
+                ctx: &'ctx $crate::context::IrContext,
+                attr: &'ctx $crate::types::Attribute,
+            ) -> $name {
+                Self::from_attribute(ctx, attr)
+                    .expect(concat!("unverified ", stringify!($name), " keyword"))
+            }
+
+            fn write(ctx: &mut $crate::context::IrContext, value: $name) -> $crate::types::Attribute {
+                ctx.string_attr(value.keyword())
+            }
+
+            fn print_text(
+                p: &mut $crate::printer::AsmPrinter<'_>,
+                attr: &$crate::types::Attribute,
+            ) -> ::std::fmt::Result {
+                ::std::fmt::Write::write_str(p, Self::read(p.ctx(), attr).keyword())
+            }
+
+            fn parse_text(
+                p: &mut $crate::parser::AsmParser<'_>,
+            ) -> $crate::parser::ParseResult<$crate::types::Attribute> {
+                $crate::asm_format::parse_keyword(p, |ctx, word| {
+                    Self::from_keyword(word).map(|value| ctx.string_attr(value.keyword()))
+                })
+            }
+        }
+    };
+}
+
+pub(crate) use keyword_kind;
 
 impl AttrKind for f32 {
     const KIND: AttributeKind = AttributeKind::F32;
@@ -255,13 +341,11 @@ impl AttrKind for SymbolRef {
     }
 
     /// Only `@` begins a symbol reference, so another value is not read as one.
-    fn parse_text<'a>(input: &mut &'a str) -> ModalResult<RawAttribute<'a>> {
-        if !input.starts_with('@') {
-            return Err(winnow::error::ErrMode::Backtrack(expected("`@name`")));
+    fn parse_text(p: &mut AsmParser<'_>) -> ParseResult<Attribute> {
+        if !p.peek().starts_with('@') {
+            return Err(p.expected("`@name`"));
         }
-        raw_attr_value
-            .parse_next(input)
-            .map_err(|e| e.map(|_| expected("attribute value")))
+        p.parse_attribute()
     }
 }
 

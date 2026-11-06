@@ -778,7 +778,6 @@ fn replace_control(
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
 
     fn lower_text(ir: &str) -> String {
         let mut ctx = IrContext::new();
@@ -794,7 +793,7 @@ mod tests {
         assert!(use_chains.is_ok(), "{use_chains}");
         let verifiers = trunk_ir::validation::validate_operation_verifiers(&ctx, module);
         assert!(verifiers.is_ok(), "{verifiers}");
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(
             !output.contains("scf."),
             "residual scf operation:\n{output}"
@@ -805,7 +804,7 @@ mod tests {
     fn assert_switch_rejected_unchanged(case: &str, input: &str, reason: &str) {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, input);
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
 
         let error = lower(
             &mut ctx,
@@ -832,7 +831,7 @@ mod tests {
             "{case}: {error}"
         );
         assert!(error.to_string().contains(reason), "{case}: {error}");
-        assert_eq!(print_module(&ctx, module.op()), before, "{case}");
+        assert_eq!(module.op().display(&ctx).to_string(), before, "{case}");
     }
 
     fn assert_no_scf_switch(output: &str) {
@@ -910,7 +909,7 @@ mod tests {
         assert_no_scf_switch(&output);
         assert_eq!(output.matches("wasm.i32_eq").count(), 2, "{output}");
         assert!(
-            output.find("wasm.i32_const {value = 1}") < output.find("wasm.i32_const {value = 2}"),
+            output.find("wasm.i32_const 1") < output.find("wasm.i32_const 2"),
             "case dispatch order changed: {output}"
         );
     }
@@ -939,8 +938,7 @@ mod tests {
         assert!(!output.contains("wasm.i32_eq"), "{output}");
         assert_eq!(output.matches("wasm.i64_eq").count(), 2, "{output}");
         assert!(
-            output.find("wasm.i64_const {value = -1}")
-                < output.find("wasm.i64_const {value = 4294967296}"),
+            output.find("wasm.i64_const -1") < output.find("wasm.i64_const 4294967296"),
             "case dispatch order changed: {output}"
         );
         for line in output.lines().filter(|line| line.contains("wasm.i64_eq")) {
@@ -960,13 +958,13 @@ mod tests {
   wasm.func @choose(%choice: core.i64) -> (core.i32) {
       scf.index_switch %choice : (core.i64) -> ()
       case 4294967296 {
-        %one = wasm.i32_const {value = 1} : core.i32
+        %one = wasm.i32_const 1 : core.i32
         wasm.return %one
       }
       default {
         scf.yield
       }
-      %zero = wasm.i32_const {value = 0} : core.i32
+      %zero = wasm.i32_const 0 : core.i32
       wasm.return %zero
   }
 }"#,
@@ -1184,7 +1182,7 @@ mod tests {
 
         let use_chains = trunk_ir::validation::validate_use_chains(&ctx, module);
         assert!(use_chains.is_ok(), "{use_chains}");
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(!output.contains("scf."), "{output}");
         assert!(
             output.contains("wasm.if") && output.contains("-> (wasm.arrayref)"),
@@ -1214,7 +1212,7 @@ mod tests {
 
         let use_chains = trunk_ir::validation::validate_use_chains(&ctx, module);
         assert!(use_chains.is_ok(), "{use_chains}");
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(!output.contains("scf."), "{output}");
         assert!(
             output.contains("wasm.loop") && output.contains(": wasm.arrayref)"),
@@ -1422,7 +1420,7 @@ mod tests {
             ));
             let mut ctx = IrContext::new();
             let module = parse_test_module(&mut ctx, &input);
-            let before = print_module(&ctx, module.op());
+            let before = module.op().display(&ctx).to_string();
             let error = lower(
                 &mut ctx,
                 module,
@@ -1435,7 +1433,7 @@ mod tests {
                 error.to_string().contains("Never control requires"),
                 "{error}"
             );
-            assert_eq!(print_module(&ctx, module.op()), before, "{body}");
+            assert_eq!(module.op().display(&ctx).to_string(), before, "{body}");
         }
     }
 

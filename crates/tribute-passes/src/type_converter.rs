@@ -181,7 +181,7 @@ mod tests {
         for recover in [true, false] {
             let mut ctx = IrContext::new();
             let cast = if recover {
-                "%closure = core.unrealized_conversion_cast %erased : !Closure"
+                "%closure = core.unrealized_conversion_cast %erased : tribute_rt.anyref to !Closure"
             } else {
                 ""
             };

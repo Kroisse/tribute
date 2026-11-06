@@ -353,43 +353,38 @@ impl crate::asm_format::OpAsmDirective for SwitchArms {
     }
 
     fn print(
-        h: &mut crate::printer::OpPrintHelper<'_, '_>,
+        p: &mut crate::printer::OpAsmPrinter<'_>,
         (arms, default): Self::Parts<'_>,
     ) -> std::fmt::Result {
         use std::fmt::Write as _;
 
         for (case, region) in arms {
-            h.newline()?;
-            write!(h, "case {case} ")?;
-            h.print_region(region)?;
+            p.newline()?;
+            write!(p, "case {case} ")?;
+            p.print_region(region)?;
         }
-        h.newline()?;
-        h.write_str("default ")?;
-        h.print_region(default)
+        p.newline()?;
+        p.write_str("default ")?;
+        p.print_region(default)
     }
 
-    fn parse<'a>(
-        input: &mut &'a str,
-    ) -> winnow::ModalResult<Vec<crate::asm_format::RawCustomEntity<'a>>> {
-        use crate::asm_format::RawCustomEntity;
-        use crate::parser::raw::{RawAttribute, integer_lit, raw_region, ws};
-        use winnow::Parser as _;
-        use winnow::combinator::{preceded, repeat};
+    fn parse(
+        p: &mut crate::parser::OpAsmParser<'_>,
+    ) -> crate::parser::ParseResult<Vec<crate::asm_format::ParsedEntity>> {
+        use crate::asm_format::ParsedEntity;
 
-        let arms: Vec<(i128, _)> = repeat(
-            0..,
-            preceded((ws, "case", ws), (integer_lit, preceded(ws, raw_region))),
-        )
-        .parse_next(input)?;
-        let default = preceded((ws, "default", ws), raw_region).parse_next(input)?;
-        let (cases, regions): (Vec<_>, Vec<_>) = arms
-            .into_iter()
-            .map(|(case, region)| (RawAttribute::Int(case), region))
-            .unzip();
+        let mut cases = Vec::new();
+        let mut regions = Vec::new();
+        while p.parse_optional_keyword("case") {
+            cases.push(Attribute::Int(p.parse_integer()?));
+            regions.push(p.parse_region()?);
+        }
+        p.parse_keyword("default")?;
+        let default = p.parse_region()?;
         Ok(vec![
-            RawCustomEntity::Attribute(Some(RawAttribute::List(cases))),
-            RawCustomEntity::Regions(regions),
-            RawCustomEntity::Regions(vec![default]),
+            ParsedEntity::Attribute(Some(Attribute::List(cases))),
+            ParsedEntity::Regions(regions),
+            ParsedEntity::Regions(vec![default]),
         ])
     }
 }
@@ -476,7 +471,7 @@ use crate::refs::{OpRef, ValueRef};
 use crate::transforms::canonicalize::{Fold, FoldResult};
 use crate::types::Attribute;
 
-/// `scf.if(arith.const Int(c) : core.i1)` → splice the chosen region's
+/// `scf.if(arith.constant Int(c) : core.i1)` → splice the chosen region's
 /// body into the parent block.
 ///
 /// When the condition is a compile-time constant, exactly one branch
@@ -496,7 +491,7 @@ impl Fold for If {
         let if_op = self;
         let cond = if_op.cond(ctx);
         // Guard against malformed IR: only fold when the cond's type is
-        // `core.i1`. Without this, an `arith.const value=2 : core.i32`
+        // `core.i1`. Without this, an `arith.constant value=2 : core.i32`
         // wired into the cond slot would be treated as truthy here,
         // burning the dead branch before the validator gets to reject it.
         if !BoolLike::matches(ctx, ctx.value_ty(cond)) {
@@ -505,7 +500,7 @@ impl Fold for If {
         let cond_value = const_int_value(ctx, cond)?;
         // We've gated on cond's type being `core.i1`; the only valid
         // payloads are 0 and 1. Reject anything else (e.g.
-        // `arith.const value=2 : core.i1`) so the validator surfaces the
+        // `arith.constant value=2 : core.i1`) so the validator surfaces the
         // malformed const instead of the fold silently picking a branch.
         let active_region = match cond_value {
             0 => if_op.else_region(ctx),
@@ -535,7 +530,7 @@ impl Fold for If {
     }
 }
 
-/// `scf.index_switch(arith.const Int(c))` → splice the selected region's
+/// `scf.index_switch(arith.constant Int(c))` → splice the selected region's
 /// body into the parent block.
 ///
 /// The region is the case region whose value equals the selector, or the
@@ -598,7 +593,6 @@ impl Fold for IndexSwitch {
 mod canonicalize_tests {
     use super::*;
     use crate::parser::parse_test_module;
-    use crate::printer::print_module;
     use crate::rewrite::{ApplyResult, Module, PatternApplicator, TypeConverter};
 
     use crate::transforms::canonicalize::{FoldDispatchPattern, fold_ops_for_dialect};
@@ -644,7 +638,7 @@ mod canonicalize_tests {
 "#;
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, text);
-        assert_eq!(print_module(&ctx, module.op()), text);
+        assert_eq!(module.op().display(&ctx).to_string(), text);
     }
 
     #[test]
@@ -671,7 +665,7 @@ mod canonicalize_tests {
 "#;
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, text);
-        assert_eq!(print_module(&ctx, module.op()), text);
+        assert_eq!(module.op().display(&ctx).to_string(), text);
         let one_line = "core.module @test {\n  func.func @f(%0: core.i32) {\n    scf.index_switch %0 : (core.i32) -> () case 1 { scf.yield } default { scf.yield }\n    func.return\n  }\n}";
         let mut ctx = IrContext::new();
         parse_test_module(&mut ctx, one_line);
@@ -716,7 +710,7 @@ mod canonicalize_tests {
         );
         ctx.insert_op_before(entry, parsed.op_ref(), built.op_ref());
         ctx.remove_op_from_block(entry, parsed.op_ref());
-        assert_eq!(print_module(&ctx, module.op()), text);
+        assert_eq!(module.op().display(&ctx).to_string(), text);
     }
 
     #[test]
@@ -726,7 +720,7 @@ mod canonicalize_tests {
         // result with %a (the yield's operand).
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %t = arith.const {value = 1} : core.i1
+    %t = arith.constant 1 : core.i1
     %r = scf.if %t -> (core.i32) {
       %a = arith.addi %x, %x : core.i32
       scf.yield %a
@@ -747,7 +741,7 @@ mod canonicalize_tests {
             count_ops(&ctx, module, crate::dialect::arith::Addi::NAME),
             1
         );
-        insta::assert_snapshot!(print_module(&ctx, module.op()));
+        insta::assert_snapshot!(module.op().display(&ctx).to_string());
     }
 
     #[test]
@@ -756,7 +750,7 @@ mod canonicalize_tests {
         // region is the active one.
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %f = arith.const {value = 0} : core.i1
+    %f = arith.constant 0 : core.i1
     %r = scf.if %f -> (core.i32) {
       scf.yield %x
     } else {
@@ -807,7 +801,7 @@ mod canonicalize_tests {
         // validation rather than picking a branch by truthiness.
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %bad = arith.const {value = 2} : core.i32
+    %bad = arith.constant 2 : core.i32
     %r = scf.if %bad -> (core.i32) {
       scf.yield %x
     } else {
@@ -831,7 +825,7 @@ mod canonicalize_tests {
         // than the rewrite picking the then-branch by truthiness.
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %bad = arith.const {value = 2} : core.i1
+    %bad = arith.constant 2 : core.i1
     %r = scf.if %bad -> (core.i32) {
       scf.yield %x
     } else {
@@ -854,7 +848,7 @@ mod canonicalize_tests {
         // the if is erased and its result becomes the yield's operand.
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %t = arith.const {value = 1} : core.i1
+    %t = arith.constant 1 : core.i1
     %r = scf.if %t -> (core.i32) {
       scf.yield %x
     } else {
@@ -881,7 +875,7 @@ mod canonicalize_tests {
 
     const SWITCH_FALLTHROUGH: &str = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %sel = arith.const {value = SELECTOR} : core.i32
+    %sel = arith.constant SELECTOR : core.i32
     scf.index_switch %sel : (core.i32) -> ()
     case 0 {
       %a = arith.addi %x, %x : core.i32
@@ -920,19 +914,19 @@ mod canonicalize_tests {
 "#;
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, text);
-        assert_eq!(print_module(&ctx, module.op()), text);
+        assert_eq!(module.op().display(&ctx).to_string(), text);
         let result = crate::validation::validate_operation_verifiers(&ctx, module);
         assert!(result.is_ok(), "{result}");
 
         let folded = text.replace(
             "      %2 = scf.index_switch %0",
-            "      %4 = arith.const {value = 5} : core.i32\n      %2 = scf.index_switch %4",
+            "      %4 = arith.constant 5 : core.i32\n      %2 = scf.index_switch %4",
         );
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, &folded);
         run_scf_patterns(&mut ctx, module);
         assert_eq!(count_ops(&ctx, module, IndexSwitch::NAME), 0);
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(
             printed.contains("%3 = arith.addi %1, %1 : core.i64\n      func.return %3"),
             "{printed}"
@@ -958,7 +952,7 @@ mod canonicalize_tests {
             count_ops(&ctx, module, crate::dialect::arith::Addi::NAME),
             0
         );
-        insta::assert_snapshot!(print_module(&ctx, module.op()));
+        insta::assert_snapshot!(module.op().display(&ctx).to_string());
     }
 
     #[test]
@@ -986,7 +980,7 @@ mod canonicalize_tests {
     fn switch_terminal_arm_is_spliced_when_switch_ends_block() {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %sel = arith.const {value = 0} : core.i32
+    %sel = arith.constant 0 : core.i32
     scf.index_switch %sel : (core.i32) -> ()
     case 0 {
       func.return %x
@@ -1019,7 +1013,7 @@ mod canonicalize_tests {
     fn switch_terminal_arm_is_kept_when_ops_follow_the_switch() {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %sel = arith.const {value = 0} : core.i32
+    %sel = arith.constant 0 : core.i32
     scf.index_switch %sel : (core.i32) -> ()
     case 0 {
       func.return %x

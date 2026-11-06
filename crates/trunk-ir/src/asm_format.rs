@@ -9,13 +9,14 @@
 
 pub mod declarative;
 
-use std::fmt;
+use std::fmt::{self, Write as _};
 
 use crate::ops::{DialectOp, DialectType};
-use crate::parser::raw::{RawAttrDict, RawAttribute, RawOperation, RawParam, RawType};
-use crate::printer::{OpPrintHelper, TypePrintHelper};
+use crate::parser::{AsmParser, OpAsmParser, OperationState, ParseResult};
+use crate::printer::{AsmNamer, AsmPrinter, AsmState, OpAsmPrinter};
 use crate::types::Attribute;
 use crate::{AttributeMap, IrContext, OpRef, StringRef, TypeRef};
+use itertools::Itertools as _;
 
 // =============================================================================
 // TypeAliasHint — alias name suggestions for the printer
@@ -69,17 +70,22 @@ pub fn suggest_type_alias_name(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
 )]
 pub trait OpAsmFormat: DialectOp {
     /// Print the operation. Called instead of generic printing, after the
-    /// line's indentation and before its newline.
-    fn print(&self, h: &mut OpPrintHelper<'_, '_>) -> fmt::Result;
+    /// line's indentation and before its newline. The names it writes come
+    /// from [`Self::assign_names`], through the printer's state.
+    fn print(&self, p: &mut OpAsmPrinter<'_>) -> fmt::Result;
 
-    /// Parse the operation. Called after `dialect.op` and optional
-    /// `@sym_name` are consumed; `results` and `sym_name` are already parsed
-    /// by the caller.
-    fn parse<'a>(
-        input: &mut &'a str,
-        results: Vec<&'a str>,
-        sym_name: Option<String>,
-    ) -> winnow::ModalResult<RawOperation<'a>>;
+    /// Name the values and blocks [`Self::print`] writes, in the order it
+    /// writes them, before printing. By default the results, then each
+    /// region, with fresh numbering when the operation is isolated from
+    /// above ([`AsmNamer::default_op`]).
+    fn assign_names(&self, namer: &mut AsmNamer<'_>) {
+        namer.default_op(self.op_ref());
+    }
+
+    /// Parse the operation after its `dialect.op` into `state`, which the
+    /// parser then builds; [`OpAsmParser::num_results`] tells how many
+    /// result names the text wrote before `=`.
+    fn parse(p: &mut OpAsmParser<'_>, state: &mut OperationState) -> ParseResult<()>;
 }
 
 /// The custom assembly format an [`OpDef`](crate::OpDef) stores for an
@@ -97,13 +103,11 @@ pub enum OpAsmFormatDef {
 #[derive(Clone, Copy, Debug)]
 pub struct OpAsmHooks {
     /// Custom printer. Called instead of generic printing.
-    pub print: fn(&mut OpPrintHelper<'_, '_>, OpRef) -> fmt::Result,
-    /// Custom parser. Called after `dialect.op` and optional `@sym_name` are consumed.
-    pub parse: for<'a> fn(
-        input: &mut &'a str,
-        results: Vec<&'a str>,
-        sym_name: Option<String>,
-    ) -> winnow::ModalResult<RawOperation<'a>>,
+    pub print: fn(&mut OpAsmPrinter<'_>, OpRef) -> fmt::Result,
+    /// Names the values and blocks the printer writes, before printing.
+    pub assign_names: fn(&mut AsmNamer<'_>, OpRef),
+    /// Custom parser. Called after `dialect.op` is consumed.
+    pub parse: fn(&mut OpAsmParser<'_>, &mut OperationState) -> ParseResult<()>,
 }
 
 // =============================================================================
@@ -139,37 +143,42 @@ pub trait SignatureCodec: DialectType {
 
     /// Write the tail after the results; nothing when it is empty. By
     /// default it is a dictionary after a comma, [`write_dict_tail`].
-    fn write_tail(w: &mut dyn SignatureWriter, tail: &[(StringRef, &Attribute)]) -> fmt::Result {
-        write_dict_tail(w, tail)
+    fn write_tail(p: &mut AsmPrinter<'_>, tail: &[(StringRef, &Attribute)]) -> fmt::Result {
+        write_dict_tail(p, tail)
     }
 
     /// Parse the tail [`write_tail`](Self::write_tail) writes, or an empty
     /// one when its introducer is absent.
-    fn parse_tail<'a>(input: &mut &'a str) -> winnow::ModalResult<RawAttrDict<'a>> {
-        parse_dict_tail(input)
+    fn parse_tail(p: &mut AsmParser<'_>) -> ParseResult<AttributeMap> {
+        parse_dict_tail(p)
     }
 
-    /// Build the type's generic raw form from the parsed inputs, results,
-    /// and tail. A result count or a tail attribute the type does not allow
-    /// is an error.
-    fn build<'a>(
-        inputs: Vec<RawParam<'a>>,
-        results: Vec<RawParam<'a>>,
-        tail: RawAttrDict<'a>,
-    ) -> winnow::ModalResult<RawType<'a>>;
+    /// Build the type from the parsed inputs, results, and tail, each
+    /// parameter with its own attributes. A result count or a tail
+    /// attribute the type does not allow is an error.
+    fn build(
+        p: &mut AsmParser<'_>,
+        inputs: Vec<(TypeRef, AttributeMap)>,
+        results: Vec<(TypeRef, AttributeMap)>,
+        tail: AttributeMap,
+    ) -> ParseResult<TypeRef>;
 }
+
+/// [`SignatureCodec::build`] as a [`SignatureCodecHooks`] stores it.
+pub type BuildSignature = fn(
+    &mut AsmParser<'_>,
+    Vec<(TypeRef, AttributeMap)>,
+    Vec<(TypeRef, AttributeMap)>,
+    AttributeMap,
+) -> ParseResult<TypeRef>;
 
 /// A [`SignatureCodec`]'s hooks, as a `signature` format element stores them.
 #[derive(Clone, Copy, Debug)]
 pub struct SignatureCodecHooks {
     pub decompose: for<'c> fn(&'c IrContext, TypeRef) -> Option<SignatureParts<'c>>,
-    pub write_tail: fn(&mut dyn SignatureWriter, &[(StringRef, &Attribute)]) -> fmt::Result,
-    pub parse_tail: for<'a> fn(&mut &'a str) -> winnow::ModalResult<RawAttrDict<'a>>,
-    pub build: for<'a> fn(
-        Vec<RawParam<'a>>,
-        Vec<RawParam<'a>>,
-        RawAttrDict<'a>,
-    ) -> winnow::ModalResult<RawType<'a>>,
+    pub write_tail: fn(&mut AsmPrinter<'_>, &[(StringRef, &Attribute)]) -> fmt::Result,
+    pub parse_tail: fn(&mut AsmParser<'_>) -> ParseResult<AttributeMap>,
+    pub build: BuildSignature,
 }
 
 impl SignatureCodecHooks {
@@ -191,35 +200,18 @@ impl SignatureCodecHooks {
 /// Read a bare identifier as the attribute `attribute` makes of it, for an
 /// attribute kind whose values are keywords
 /// ([`AttrKind::parse_text`](crate::attr_kind::AttrKind::parse_text)).
-/// A word `attribute` rejects leaves the input where it was.
-pub fn parse_keyword<'a>(
-    input: &mut &'a str,
-    attribute: impl FnOnce(&str) -> Option<RawAttribute<'a>>,
-) -> winnow::ModalResult<RawAttribute<'a>> {
-    use winnow::Parser as _;
-
-    let checkpoint = *input;
-    match winnow::combinator::opt(crate::parser::raw::ident)
-        .parse_next(input)?
-        .and_then(attribute)
-    {
-        Some(value) => Ok(value),
-        None => {
-            *input = checkpoint;
-            Err(winnow::error::ErrMode::Backtrack(expected("keyword")))
-        }
-    }
-}
-
-/// A parse error that names what the input should have held.
-pub(crate) fn expected(description: &'static str) -> winnow::error::ContextError {
-    use winnow::error::{ContextError, StrContext, StrContextValue};
-
-    let mut error = ContextError::new();
-    error.push(StrContext::Expected(StrContextValue::Description(
-        description,
-    )));
-    error
+/// A word `attribute` rejects is an error at the word.
+pub fn parse_keyword(
+    p: &mut AsmParser<'_>,
+    attribute: impl FnOnce(&mut IrContext, &str) -> Option<Attribute>,
+) -> ParseResult<Attribute> {
+    p.peek();
+    let offset = p.offset();
+    let word = p
+        .parse_identifier()
+        .map_err(|_| p.error_at(offset, "expected keyword"))?;
+    attribute(p.ctx_mut(), word)
+        .ok_or_else(|| p.error_at(offset, format!("expected keyword, found `{word}`")))
 }
 
 // =============================================================================
@@ -232,7 +224,7 @@ pub(crate) fn expected(description: &'static str) -> winnow::error::ContextError
 ///
 /// The element passes the entities in the order it names them: operands,
 /// attributes, successors, and regions, each as a [`CustomEntity`] when
-/// printing and a [`RawCustomEntity`] when parsing.
+/// printing and a [`ParsedEntity`] when parsing.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is named by a `custom(..)` format element but does not implement `OpAsmDirective`",
     label = "`custom(..)` requires this implementation"
@@ -243,7 +235,7 @@ pub trait OpAsmDirective {
 
     /// Whether the printer writes a space before the directive, as before
     /// other elements. A directive that starts on its own line with
-    /// [`OpPrintHelper::newline`] writes none.
+    /// [`OpAsmPrinter::newline`] writes none.
     const SPACED: bool = true;
 
     /// The parts [`Self::print`] writes so that [`Self::parse`] reads the
@@ -255,10 +247,23 @@ pub trait OpAsmDirective {
     ) -> Option<Self::Parts<'a>>;
 
     /// Write the parts [`Self::decompose`] read.
-    fn print(h: &mut OpPrintHelper<'_, '_>, parts: Self::Parts<'_>) -> fmt::Result;
+    fn print(p: &mut OpAsmPrinter<'_>, parts: Self::Parts<'_>) -> fmt::Result;
+
+    /// Name the values and blocks [`Self::print`] writes, in the order it
+    /// writes them, before printing: by default each region the entities
+    /// hold, in order, as [`AsmNamer::region`] names it.
+    fn assign_names(namer: &mut AsmNamer<'_>, entities: &[CustomEntity<'_>]) {
+        for entity in entities {
+            if let CustomEntity::Regions(regions) = entity {
+                for &region in regions {
+                    namer.region(region);
+                }
+            }
+        }
+    }
 
     /// Read the entities back, one for each the element names, in order.
-    fn parse<'a>(input: &mut &'a str) -> winnow::ModalResult<Vec<RawCustomEntity<'a>>>;
+    fn parse(p: &mut OpAsmParser<'_>) -> ParseResult<Vec<ParsedEntity>>;
 }
 
 /// An entity a [`OpAsmDirective`] prints.
@@ -274,25 +279,27 @@ pub enum CustomEntity<'a> {
     Regions(crate::RegionList),
 }
 
-/// An entity a [`OpAsmDirective`] parses.
+/// An entity a [`OpAsmDirective`] parses: the parsing counterpart of
+/// [`CustomEntity`].
 #[derive(Clone, Debug)]
-pub enum RawCustomEntity<'a> {
-    /// Operand names, without `%`.
-    Operands(Vec<&'a str>),
+pub enum ParsedEntity {
+    /// An operand, or the operands of a variadic one.
+    Operands(Vec<crate::ValueRef>),
     /// An attribute, or `None` when it is absent.
-    Attribute(Option<RawAttribute<'a>>),
-    /// Successor labels, without `^`.
-    Successors(Vec<&'a str>),
-    /// Regions, in order.
-    Regions(Vec<crate::parser::raw::RawRegion<'a>>),
+    Attribute(Option<Attribute>),
+    /// A successor, or the successors of a variadic one.
+    Successors(Vec<crate::BlockRef>),
+    /// A region, or the regions of a variadic or optional one.
+    Regions(Vec<crate::RegionRef>),
 }
 
 /// A [`OpAsmDirective`]'s hooks, as a `custom` format element stores them.
 #[derive(Clone, Copy, Debug)]
 pub struct OpAsmDirectiveHooks {
     pub fits: fn(&IrContext, &[CustomEntity<'_>]) -> bool,
-    pub print: fn(&mut OpPrintHelper<'_, '_>, &[CustomEntity<'_>]) -> fmt::Result,
-    pub parse: for<'a> fn(&mut &'a str) -> winnow::ModalResult<Vec<RawCustomEntity<'a>>>,
+    pub print: fn(&mut OpAsmPrinter<'_>, &[CustomEntity<'_>]) -> fmt::Result,
+    pub assign_names: fn(&mut AsmNamer<'_>, &[CustomEntity<'_>]),
+    pub parse: fn(&mut OpAsmParser<'_>) -> ParseResult<Vec<ParsedEntity>>,
     pub spaced: bool,
 }
 
@@ -302,6 +309,7 @@ impl OpAsmDirectiveHooks {
         Self {
             fits: directive_fits::<T>,
             print: directive_print::<T>,
+            assign_names: T::assign_names,
             parse: T::parse,
             spaced: T::SPACED,
         }
@@ -313,134 +321,72 @@ fn directive_fits<T: OpAsmDirective>(ctx: &IrContext, entities: &[CustomEntity<'
 }
 
 fn directive_print<T: OpAsmDirective>(
-    h: &mut OpPrintHelper<'_, '_>,
+    p: &mut OpAsmPrinter<'_>,
     entities: &[CustomEntity<'_>],
 ) -> fmt::Result {
     let parts =
-        T::decompose(h.ctx(), entities).expect("the printer checked that the directive fits");
-    T::print(h, parts)
+        T::decompose(p.ctx(), entities).expect("the printer checked that the directive fits");
+    T::print(p, parts)
 }
 
-/// A printer that writes the parts of a function form: an operation's or a
-/// signature type's.
-pub trait SignatureWriter: fmt::Write {
-    fn write_type(&mut self, ty: TypeRef) -> fmt::Result;
-    fn write_attribute(&mut self, attr: &Attribute) -> fmt::Result;
-    fn write_attr_dict(
-        &mut self,
-        attrs: &mut dyn Iterator<Item = (StringRef, &Attribute)>,
-    ) -> fmt::Result;
-}
-
-impl SignatureWriter for OpPrintHelper<'_, '_> {
-    fn write_type(&mut self, ty: TypeRef) -> fmt::Result {
-        OpPrintHelper::write_type(self, ty)
-    }
-
-    fn write_attribute(&mut self, attr: &Attribute) -> fmt::Result {
-        OpPrintHelper::write_attribute(self, attr)
-    }
-
-    fn write_attr_dict(
-        &mut self,
-        attrs: &mut dyn Iterator<Item = (StringRef, &Attribute)>,
-    ) -> fmt::Result {
-        OpPrintHelper::write_attr_dict(self, attrs)
-    }
-}
-
-impl SignatureWriter for TypePrintHelper<'_, '_> {
-    fn write_type(&mut self, ty: TypeRef) -> fmt::Result {
-        TypePrintHelper::write_type(self, ty)
-    }
-
-    fn write_attribute(&mut self, attr: &Attribute) -> fmt::Result {
-        TypePrintHelper::write_attribute(self, attr)
-    }
-
-    fn write_attr_dict(
-        &mut self,
-        attrs: &mut dyn Iterator<Item = (StringRef, &Attribute)>,
-    ) -> fmt::Result {
-        TypePrintHelper::write_attr_dict(self, attrs)
-    }
-}
-
-/// Write a function form's parameter type and its attributes, `T {k = v}`.
-pub fn write_signature_param(
-    w: &mut dyn SignatureWriter,
+/// A function form's parameter type and its attributes, `T {k = v}`.
+pub fn display_signature_param<'s>(
+    s: &'s AsmState<'s>,
     ty: TypeRef,
-    attrs: &AttributeMap,
-) -> fmt::Result {
-    w.write_type(ty)?;
-    if !attrs.is_empty() {
-        w.write_char(' ')?;
-        w.write_attr_dict(&mut attrs.iter())?;
-    }
-    Ok(())
+    attrs: &'s AttributeMap,
+) -> impl fmt::Display + 's {
+    fmt::from_fn(move |f| {
+        write!(f, "{}", s.ty(ty))?;
+        if !attrs.is_empty() {
+            write!(f, " {}", s.attr_dict(attrs.iter()))?;
+        }
+        Ok(())
+    })
 }
 
-/// Write a function form's results after `->`: one result without
-/// attributes bare, and otherwise a parenthesized list, `(R {k = v})`.
-pub fn write_signature_results(
-    w: &mut dyn SignatureWriter,
-    results: &[(TypeRef, &AttributeMap)],
-) -> fmt::Result {
-    if let [(ty, attrs)] = results
-        && attrs.is_empty()
-    {
-        return w.write_type(*ty);
-    }
-    w.write_char('(')?;
-    for (index, &(ty, attrs)) in results.iter().enumerate() {
-        if index > 0 {
-            w.write_str(", ")?;
+/// A function form's results after `->`: one result without attributes
+/// bare, and otherwise a parenthesized list, `(R {k = v})`.
+pub fn display_signature_results<'s>(
+    s: &'s AsmState<'s>,
+    results: &'s [(TypeRef, &'s AttributeMap)],
+) -> impl fmt::Display + 's {
+    fmt::from_fn(move |f| match results {
+        [(ty, attrs)] if attrs.is_empty() => write!(f, "{}", s.ty(*ty)),
+        _ => {
+            let results = results
+                .iter()
+                .map(|&(ty, attrs)| display_signature_param(s, ty, attrs))
+                .format(", ");
+            write!(f, "({results})")
         }
-        write_signature_param(w, ty, attrs)?;
-    }
-    w.write_char(')')
+    })
 }
 
 /// Parse a function form's results after `->` as
-/// [`write_signature_results`] writes them.
-pub fn parse_signature_results<'a>(input: &mut &'a str) -> winnow::ModalResult<Vec<RawParam<'a>>> {
-    use crate::parser::raw::{raw_param_list, raw_type};
-    use winnow::prelude::*;
-
-    if input.starts_with('(') {
-        raw_param_list.parse_next(input)
+/// [`display_signature_results`] writes them.
+pub fn parse_signature_results(p: &mut AsmParser<'_>) -> ParseResult<Vec<(TypeRef, AttributeMap)>> {
+    if p.peek().starts_with('(') {
+        p.parse_param_list()
     } else {
-        Ok(vec![raw_type.parse_next(input)?.into()])
+        Ok(vec![(p.parse_type()?, AttributeMap::new())])
     }
 }
 
 /// Write a tail of type attributes as a dictionary after a comma,
 /// `, {k = v}`, as the `func.func_sig` family does.
-pub fn write_dict_tail(
-    w: &mut dyn SignatureWriter,
-    tail: &[(StringRef, &Attribute)],
-) -> fmt::Result {
+pub fn write_dict_tail(p: &mut AsmPrinter<'_>, tail: &[(StringRef, &Attribute)]) -> fmt::Result {
     if tail.is_empty() {
         return Ok(());
     }
-    w.write_str(", ")?;
-    w.write_attr_dict(&mut tail.iter().copied())
+    write!(p, ", {}", p.state().attr_dict(tail.iter().copied()))
 }
 
 /// Parse the tail [`write_dict_tail`] writes.
-pub fn parse_dict_tail<'a>(input: &mut &'a str) -> winnow::ModalResult<RawAttrDict<'a>> {
-    use crate::parser::raw::{raw_attr_dict, ws};
-    use winnow::prelude::*;
-
-    let checkpoint = *input;
-    ws.parse_next(input)?;
-    if !input.starts_with(',') {
-        *input = checkpoint;
-        return Ok(Vec::new());
+pub fn parse_dict_tail(p: &mut AsmParser<'_>) -> ParseResult<AttributeMap> {
+    if !p.parse_optional_punct(",") {
+        return Ok(AttributeMap::new());
     }
-    ','.parse_next(input)?;
-    ws.parse_next(input)?;
-    raw_attr_dict.parse_next(input)
+    p.parse_attr_dict()
 }
 
 // =============================================================================
@@ -462,12 +408,13 @@ pub trait TypeAsmFormat: DialectType {
     /// Print the whole type, including `dialect.name<` and the closing `>`.
     /// A type the wrapper does not accept, such as a malformed one, is left
     /// to generic printing.
-    fn print(&self, h: &mut TypePrintHelper<'_, '_>) -> fmt::Result;
+    fn print(&self, p: &mut AsmPrinter<'_>) -> fmt::Result;
 
     /// Parse the type after `dialect.name<` is consumed, including the
-    /// closing `>`, into its generic raw form, so the parser builds it like
-    /// any other type. A backtrack falls back to the generic form.
-    fn parse<'a>(input: &mut &'a str, name: &'a str) -> winnow::ModalResult<RawType<'a>>;
+    /// closing `>`. `None` tells that the text is not the custom syntax,
+    /// which the hook decides before it reads anything; the parser then
+    /// reads the generic form from the same place.
+    fn parse(p: &mut AsmParser<'_>, name: &str) -> ParseResult<Option<TypeRef>>;
 }
 
 /// The hooks a [`TypeDef`](crate::TypeDef) stores for a type with a custom
@@ -475,9 +422,9 @@ pub trait TypeAsmFormat: DialectType {
 #[derive(Clone, Copy, Debug)]
 pub struct TypeAsmHooks {
     /// Custom printer, or `None` to leave the type to generic printing.
-    pub print: fn(&mut TypePrintHelper<'_, '_>, TypeRef) -> Option<fmt::Result>,
+    pub print: fn(&mut AsmPrinter<'_>, TypeRef) -> Option<fmt::Result>,
     /// Custom parser. Called after `dialect.name<` is consumed.
-    pub parse: for<'a> fn(input: &mut &'a str, name: &'a str) -> winnow::ModalResult<RawType<'a>>,
+    pub parse: fn(&mut AsmParser<'_>, &str) -> ParseResult<Option<TypeRef>>,
 }
 
 impl TypeAsmHooks {
@@ -490,10 +437,7 @@ impl TypeAsmHooks {
     }
 }
 
-fn print_type<T: TypeAsmFormat>(
-    h: &mut TypePrintHelper<'_, '_>,
-    ty: TypeRef,
-) -> Option<fmt::Result> {
-    let ty = T::from_type_ref(h.ctx(), ty)?;
-    Some(ty.print(h))
+fn print_type<T: TypeAsmFormat>(p: &mut AsmPrinter<'_>, ty: TypeRef) -> Option<fmt::Result> {
+    let ty = T::from_type_ref(p.ctx(), ty)?;
+    Some(ty.print(p))
 }

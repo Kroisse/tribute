@@ -1,5 +1,4 @@
 use trunk_ir::parser::parse_test_module;
-use trunk_ir::printer::print_module;
 
 use super::*;
 
@@ -10,7 +9,7 @@ fn specialized(input: &str) -> String {
     let mut ctx = IrContext::new();
     let module = parse_test_module(&mut ctx, input);
     specialize(&mut ctx, module).expect("specializes");
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert_eq!(
         tribute_control::specialized(&ctx, module),
         Some(true),
@@ -265,7 +264,7 @@ fn a_lambda_has_a_body_per_class_of_its_instantiations() {
     }
     %h = tribute_control.lambda['a1]() -> core.i32 row(| 'a1) captures [%g] {
       %s = tribute_control.instantiate %g {row_args = [{tail = 1}]} : !l1
-      %c = arith.const {value = 1} : core.i32
+      %c = arith.constant 1 : core.i32
       %v = tribute_control.call_indirect %s(%c) : (core.i32) -> core.i32 row(| 'a1)
       tribute_control.return %v
     }
@@ -628,7 +627,7 @@ fn a_lambda_split_before_its_enclosing_lambda_is_one_value_in_each_copy() {
     }
     %w = tribute_control.lambda['a0]() -> core.i32 row(| 'a0) captures [%o] {
       %s = tribute_control.instantiate %o {row_args = [{tail = 0}]} : !in0
-      %c = arith.const {value = 1} : core.i32
+      %c = arith.constant 1 : core.i32
       %v = tribute_control.call_indirect %s(%c) : (core.i32) -> core.i32 row(| 'a0)
       tribute_control.return %v
     }
@@ -884,7 +883,7 @@ fn a_body_tail_outside_parameter_types_requires_nothing() {
         r#"core.module @m {
   tribute_control.func @make['a0]() -> tribute_control.func_sig<() -> core.i32 row(| 'a0)> {
     %f = tribute_control.lambda() -> core.i32 row(| 'a0) captures [] {
-      %c = arith.const {value = 7} : core.i32
+      %c = arith.constant 7 : core.i32
       tribute_control.return %c
     }
     tribute_control.return %f
@@ -916,7 +915,7 @@ fn a_body_tail_in_a_parameter_type_reads_cps() {
         r#"core.module @m {
   tribute_control.func @make['a0]() -> tribute_control.func_sig<() -> core.i32 row(| 'a0)> {
     %f = tribute_control.lambda() -> core.i32 row(| 'a0) captures [] {
-      %c = arith.const {value = 7} : core.i32
+      %c = arith.constant 7 : core.i32
       tribute_control.return %c
     }
     tribute_control.return %f

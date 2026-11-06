@@ -700,7 +700,6 @@ fn intern_funcref_type(ctx: &mut IrContext) -> TypeRef {
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
     use trunk_ir::types::Attribute;
 
     #[test]
@@ -840,7 +839,7 @@ mod tests {
             Some(&Attribute::Int(7))
         );
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(
             output.contains(
                 "wasm.func @external(%arg0: core.i32) -> core.i32 attributes {custom = 7}"
@@ -908,7 +907,7 @@ mod tests {
 
         lower(&mut ctx, module, TypeConverter::new());
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(output.contains("wasm.return_call @target(%0)"), "{output}");
         assert!(
             output.contains("wasm.return_call_indirect %0(%1) : (core.i32) -> core.nil"),
@@ -935,7 +934,7 @@ mod tests {
 
         lower(&mut ctx, module, TypeConverter::new());
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(
             output
                 .contains("\"wasm.call_indirect\"(%0) {signature = wasm.func_sig<() -> core.nil>}"),
@@ -962,11 +961,11 @@ mod tests {
 
         lower(&mut ctx, module, TypeConverter::new());
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(output.contains("wasm.table"), "{output}");
         assert!(output.contains("wasm.elem"), "{output}");
         assert!(output.contains("wasm.ref_func @target"), "{output}");
-        assert!(output.contains("wasm.i32_const {value = 0}"), "{output}");
+        assert!(output.contains("wasm.i32_const 0"), "{output}");
         assert!(output.contains("wasm.return_call_indirect"), "{output}");
     }
 
@@ -998,7 +997,7 @@ mod tests {
         });
         lower(&mut ctx, module, type_converter);
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(
             output.contains(
                 "wasm.return_call_indirect %0(%1) attributes {test.marker = 2} : (wasm.anyref) -> ()"
@@ -1054,7 +1053,7 @@ mod tests {
         });
         lower(&mut ctx, module, type_converter);
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(
             output.contains("wasm.call_indirect %0(%1) : (wasm.anyref) -> core.i32"),
             "{output}"
@@ -1090,7 +1089,7 @@ mod tests {
 
         lower(&mut ctx, module, TypeConverter::new());
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(output.contains("wasm.return_call_indirect"), "{output}");
         assert!(!output.contains("call_conv"), "{output}");
     }
@@ -1145,11 +1144,6 @@ mod tests {
                 }
             }
         }
-        assert_eq!(
-            (direct, indirect),
-            (1, 1),
-            "{}",
-            print_module(&ctx, module.op())
-        );
+        assert_eq!((direct, indirect), (1, 1), "{}", module.op().display(&ctx));
     }
 }

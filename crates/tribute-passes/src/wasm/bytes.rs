@@ -90,13 +90,13 @@ impl Pass for LowerBytesIntrinsics {
 /// Rewrite one bytes element read into reads of the bytes layout.
 ///
 /// Emits:
-///   %view   = core.unrealized_conversion_cast %bytes : !bytes
+///   %view   = core.unrealized_conversion_cast %bytes : core.bytes to !bytes
 ///   %data   = adt.struct_get %view {field = 0} : !bytes_data
 ///   %offset = adt.struct_get %view {field = 1} : core.i32
 ///   %at     = arith.addi %offset, %index : core.i32
-///   %pos    = arith.index_castui %at : core.index
+///   %pos    = arith.index_castui %at : core.i32 to core.index
 ///   %byte   = adt.array_get %data, %pos : core.i8
-///   %result = arith.extui %byte : core.i32
+///   %result = arith.extui %byte : core.i8 to core.i32
 fn lower_call(ctx: &mut IrContext, call: OpRef) {
     let [bytes, index] = ctx.op_operands(call) else {
         unreachable!("call arity is validated before lowering")
@@ -155,7 +155,6 @@ mod tests {
     use super::*;
     use tribute_ir::runtime_layout::has_runtime_layout;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
 
     #[test]
     fn layout_types_carry_their_identifiers() {
@@ -185,7 +184,7 @@ mod tests {
 
         lower(&mut ctx, module).expect("bytes intrinsic lowering");
 
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(!printed.contains("func.call"), "{printed}");
         assert!(!printed.contains("@read"), "{printed}");
         assert!(!printed.contains("tribute.compiler_intrinsic"), "{printed}");

@@ -511,7 +511,7 @@ mod tests {
     fn lowered(params: &str, body: &str) -> String {
         let (mut ctx, module) = frame_module(params, body);
         lower_continuation_frames(&mut ctx, module).expect("the frames lower");
-        let printed = trunk_ir::printer::print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(!printed.contains("ability.frame"), "{printed}");
         printed
     }
@@ -548,7 +548,7 @@ mod tests {
             r#"    ability.abort @State @fail(%arg) [%ev, %f] : (core.i32) -> ()"#,
         );
         lower_continuation_frames(&mut ctx, module).unwrap();
-        let printed = trunk_ir::printer::print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(!printed.contains("ability.abort"), "{printed}");
         assert!(!printed.contains("one_shot_state"), "{printed}");
         let mut dispatches = Vec::new();
@@ -618,18 +618,6 @@ mod tests {
         let (mut ctx, module) = frame_module(
             ", %f: !frame, %k: core.i32",
             r#"    ability.perform @State @get() [%ev, %f, %k] : () -> ()"#,
-        );
-        assert!(lower_continuation_frames(&mut ctx, module).is_err());
-    }
-
-    #[test]
-    fn a_handle_with_fewer_handlers_than_arms_is_rejected() {
-        let (mut ctx, module) = frame_module(
-            ", %exit: !frame, %done: !resume",
-            r#"    ability.handle %ev, %exit, %done(%done) attributes {handlers = []} {
-      ^body(%inner: !ev, %frame: !frame):
-        func.unreachable
-    }"#,
         );
         assert!(lower_continuation_frames(&mut ctx, module).is_err());
     }

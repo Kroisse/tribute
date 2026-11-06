@@ -217,29 +217,19 @@ impl Converter<'_> {
         Ok(())
     }
 
+    /// Lower one arm of the handle `source`, the region `source_region`
+    /// bound by `binding`.
     pub(super) fn lower_handler_arm(
         &mut self,
         source: OpRef,
+        binding: ability::HandlerBinding,
+        source_region: RegionRef,
         outer_mapping: &HashMap<ValueRef, ValueRef>,
         handle_answer: TypeRef,
     ) -> Result<(closure::Lambda, ability::HandlerBinding), TributeControlToCpsError> {
         let location = self.ctx.op(source).location;
-        let ability = self
-            .ctx
-            .op_attrs(source)
-            .get_symbol_ref("ability")
-            .cloned()
-            .unwrap();
-        let op_name = self.ctx.op_attrs(source).get_string_ref("op_name").unwrap();
-        let general = self.ctx.op_attrs(source).get_str("kind") == Some("op");
-        let operation_result = self
-            .ctx
-            .op_attrs(source)
-            .get_type("operation_result_type")
-            .unwrap();
-        let source_region = self.ctx.op_region(source, 0).ok_or_else(|| {
-            self.malformed_source(source, "tribute_control.handler requires a body region")
-        })?;
+        let general = binding.kind == ability::OperationKind::Op;
+        let operation_result = binding.operation_result_type;
         let source_block = self.ctx.region(source_region).blocks[0];
         let source_args = self.ctx.block_args(source_block).to_vec();
         let has_resume_token = source_args.last().is_some_and(|arg| {
@@ -316,14 +306,8 @@ impl Converter<'_> {
         let closure_type = physical_closure_type(self.ctx, function);
         let lambda = closure_over(self.ctx, location, region, closure_type, convention);
         let binding = ability::HandlerBinding {
-            ability,
-            op_name,
-            kind: if general {
-                ability::OperationKind::Op
-            } else {
-                ability::OperationKind::Fn
-            },
             operation_result_type: self.convert_type(operation_result),
+            ..binding
         };
         Ok((lambda, binding))
     }
@@ -363,17 +347,19 @@ impl Converter<'_> {
         let handle_frame =
             self.frame_for_suffix(block, location, handle_answer, flow, after_handle, None)?;
 
-        let Some((body_source, completion_source, handlers_region)) =
-            self.ctx.op_regions(source).collect_tuple()
-        else {
-            unreachable!("pre-CPS validation checked handle regions");
-        };
-        let handlers_block = self.ctx.region(handlers_region).blocks[0];
+        let source_handle = tribute_control::Handle::from_op(self.ctx, source)
+            .expect("lower_handle runs on a tribute_control.handle");
+        let body_source = source_handle.body(self.ctx);
+        let completion_source = source_handle.completion(self.ctx);
+        let source_arms: Vec<_> = source_handle
+            .handlers(self.ctx)
+            .zip(source_handle.arms(self.ctx))
+            .collect();
         let mut arms = Vec::new();
         let mut handlers = Vec::new();
-        let source_handlers = self.ctx.block(handlers_block).ops.clone();
-        for handler in source_handlers {
-            let (arm, binding) = self.lower_handler_arm(handler, mapping, handle_answer)?;
+        for (binding, source_arm) in source_arms {
+            let (arm, binding) =
+                self.lower_handler_arm(source, binding, source_arm, mapping, handle_answer)?;
             self.ctx.push_op(block, arm.op_ref());
             arms.push(arm.result(self.ctx));
             handlers.push(binding);

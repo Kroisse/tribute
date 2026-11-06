@@ -1,6 +1,5 @@
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::parser::parse_module;
-use trunk_ir::printer::print_module;
 use trunk_ir::rewrite::Module;
 use trunk_ir::types::TypeDataBuilder;
 use trunk_ir::{IrContext, SymbolPath};
@@ -67,7 +66,7 @@ fn rows_validate_and_round_trip_in_concise_syntax() {
     let result = validate(&ctx, module);
     assert!(result.is_ok(), "{result}");
 
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert!(
         printed.contains("@apply['a0](%0: !open, %1: core.i32) -> core.i32 row(| 'a0) {"),
         "{printed}"
@@ -76,13 +75,13 @@ fn rows_validate_and_round_trip_in_concise_syntax() {
     let mut reparsed = IrContext::new();
     let root = parse_module(&mut reparsed, &printed)
         .unwrap_or_else(|error| panic!("failed to reparse:\n{error}\n\n{printed}"));
-    assert_eq!(print_module(&reparsed, root), printed);
+    assert_eq!(root.display(&reparsed).to_string(), printed);
 }
 
 #[test]
 fn a_signature_type_writes_its_row_as_a_clause_after_the_result() {
     let (ctx, module) = parse(MODULE);
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert!(
         printed.contains("!open = tribute_control.func_sig<(core.i32) -> core.i32 row(| 'a0)>"),
         "{printed}"
@@ -93,7 +92,7 @@ fn a_signature_type_writes_its_row_as_a_clause_after_the_result() {
         "!closed = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {instances = [@A, @B]}}>",
     );
     let (ctx, module) = parse(&input);
-    assert_eq!(print_module(&ctx, module.op()), printed);
+    assert_eq!(module.op().display(&ctx).to_string(), printed);
 
     let input = MODULE.replace(
         "!closed = tribute_control.func_sig<(core.i32) -> core.i32 row(@A, @B)>",
@@ -118,7 +117,7 @@ fn concise_rows_cover_instances_tails_and_both() {
         let func = module.ops(&ctx)[0];
         let ty = ctx.op_attrs(func).get_type("type").unwrap();
         assert_eq!(FuncSig::from_type_ref(&ctx, ty).unwrap().row(&ctx), row);
-        assert!(print_module(&ctx, module.op()).contains(written));
+        assert!(module.op().display(&ctx).to_string().contains(written));
     }
 }
 
@@ -380,10 +379,10 @@ fn a_declared_row_is_an_absent_inferred_row() {
     let func = module.ops(&ctx)[0];
     let source = super::super::Func::from_op(&ctx, func).unwrap();
     assert!(!source.inferred_row(&ctx));
-    let canonical = print_module(&ctx, module.op());
+    let canonical = module.op().display(&ctx).to_string();
     ctx.op_attrs_mut(func)
         .insert(INFERRED_ROW_ATTR, trunk_ir::types::Attribute::Bool(false));
-    assert_eq!(print_module(&ctx, module.op()), canonical);
+    assert_eq!(module.op().display(&ctx).to_string(), canonical);
 }
 
 #[test]
@@ -415,7 +414,7 @@ fn binder_headers_name_kinds_unions_and_an_inferred_row() {
         ctx.op_attrs(func).get(INFERRED_ROW_ATTR),
         Some(&trunk_ir::types::Attribute::Bool(true))
     );
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert!(
         printed.contains(
             "@f['a0 = 'a1 | 'a2, ability_arg 'a1, local 'a2, body 'a3](%0: core.i32) -> core.i32 row(| 'a0) inferred {"
@@ -441,17 +440,17 @@ fn a_header_may_declare_only_unquantified_binders() {
     let input = r#"core.module @test {
   tribute_control.func @run[local 'a0, body 'a1]() -> core.i32 {
     %f = tribute_control.lambda['a0]() -> core.i32 row(| 'a0) captures [] {
-      %x = arith.const {value = 1} : core.i32
+      %x = arith.constant 1 : core.i32
       tribute_control.return %x
     }
-    %y = arith.const {value = 2} : core.i32
+    %y = arith.constant 2 : core.i32
     tribute_control.return %y
   }
 }"#;
     let (ctx, module) = parse(input);
     let result = validate(&ctx, module);
     assert!(result.is_ok(), "{result}");
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert!(
         printed.contains("@run[local 'a0, body 'a1]() -> core.i32 {"),
         "{printed}"
@@ -528,7 +527,7 @@ fn a_quantifying_lambda_round_trips_and_its_uses_instantiate_it() {
     let (ctx, module) = parse(&input);
     let result = validate(&ctx, module);
     assert!(result.is_ok(), "{result}");
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert!(
         printed.contains(
             "%1 = tribute_control.lambda['a1](%2: core.i32) -> core.i32 row(| 'a1) captures [] {"
@@ -540,7 +539,7 @@ fn a_quantifying_lambda_round_trips_and_its_uses_instantiate_it() {
         "{printed}"
     );
     let (reparsed, module) = parse(&printed);
-    assert_eq!(print_module(&reparsed, module.op()), printed);
+    assert_eq!(module.op().display(&reparsed).to_string(), printed);
 }
 
 #[test]
@@ -657,7 +656,7 @@ fn frontend_output_validates_and_round_trips() {
     let (ctx, module) = parse(FRONTEND);
     let result = validate(&ctx, module);
     assert!(result.is_ok(), "{result}");
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert!(
         printed.contains("@apply['a0](%0: !cb, %1: core.i32) -> core.i32 row(| 'a0) {")
             && printed.contains("@main[local 'a0](%0: core.i32) -> core.i32 inferred {")
@@ -666,7 +665,7 @@ fn frontend_output_validates_and_round_trips() {
         "{printed}"
     );
     let (reparsed, module) = parse(&printed);
-    assert_eq!(print_module(&reparsed, module.op()), printed);
+    assert_eq!(module.op().display(&reparsed).to_string(), printed);
 }
 
 #[test]

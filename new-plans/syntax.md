@@ -481,7 +481,8 @@ pub const VERSION = "0.1.0"
 StructDecl ::= Visibility 'struct' TypeId TypeParams? StructBody
 
 TypeParams ::= '(' TypeParam (',' TypeParam)* ','? ')'
-TypeParam  ::= LowerIdentifier
+TypeParam  ::= LowerIdentifier                // 타입 매개변수
+             | '{' LowerIdentifier '}'        // row 매개변수
 
 StructBody ::= '{' StructFields '}'
 StructFields ::= StructField (FieldSep StructField)* FieldSep?
@@ -501,9 +502,18 @@ struct Box(a) {
     value: a
 }
 
+// row 매개변수 e와 타입 매개변수 a
+struct Callback({e}, a) {
+    run: fn(a) ->{e} a
+}
+
 // 한 줄이면 쉼표 필수
 struct Point { x: Int, y: Int }
 ```
+
+Row 매개변수는 모든 타입 매개변수보다 앞에 쓴다. 문법은 두 종류를 어떤 순서로든
+받으며, 순서를 어기면 이름 해석 전에 진단한다. 한 선언의 매개변수 이름은 종류와
+상관없이 서로 달라야 한다. Ability 선언의 `TypeParams`는 row 매개변수를 갖지 않는다.
 
 ### Enum (Sum Type)
 
@@ -551,7 +561,9 @@ Type ::= TypePath TypeArgs?
 TupleType ::= '#(' TypeList ')'               // #(Int, String, Float)
 
 TypePath ::= PathPrefix? TypeId
-TypeArgs ::= '(' Type (',' Type)* ','? ')'
+TypeArgs ::= '(' TypeArg (',' TypeArg)* ','? ')'
+TypeArg  ::= Type
+           | '{' AbilityRow? '}'              // row 인자
 
 FunctionType ::= 'fn' '(' TypeList? ')' ReturnType
 TypeList ::= Type (',' Type)* ','?
@@ -583,7 +595,16 @@ fn(Int, Int) -> Int           // 암묵적 effect polymorphic
 fn(Int) ->{} Int              // 순수 함수
 fn(String) ->{Http} Response    // Http effect
 fn() ->{State(Int), e} Int    // State + row variable e
+
+Callback({State(Int)}, Int)   // row 인자 {State(Int)}, 타입 인자 Int
+Callback({}, Int)             // 빈 row
+Callback({e}, Int)            // row 변수 e
 ```
+
+Row 인자는 선언의 row 매개변수와 같은 위치, 곧 모든 타입 인자보다 앞에 쓴다. 문법은
+row 인자와 타입 인자를 어떤 순서로든 받으며, 순서를 어기면 이름 해석 전에 진단한다.
+각 인자 목록이 선언의 매개변수와 개수가 맞는지는 타입 검사가 확인한다
+([types.md](types.md#row-매개변수)). Ability item의 `TypeArgs`는 row 인자를 갖지 않는다.
 
 ---
 

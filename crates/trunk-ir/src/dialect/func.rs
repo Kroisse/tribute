@@ -6,7 +6,7 @@ use crate::op_interface::{
     self, CallableExit, CallableOwner, ControlFlowInterfaceError, IndirectCallLike,
 };
 use crate::ops::{DialectOp, DialectType};
-use crate::parser::raw::{RawAttrDict, RawAttribute, RawParam, RawType};
+use crate::parser::{AsmParser, ParseResult};
 use crate::{Attribute, AttributeMap, IrContext, SymbolPath, TypeDataBuilder, TypeRef};
 
 /// The exact callable signature retained after a typed indirect callee becomes
@@ -353,12 +353,12 @@ static FUNC_SIG_DEF: crate::type_def::TypeDef = crate::type_def::TypeDef::new("f
 crate::register_type_def!(&FUNC_SIG_DEF);
 
 impl crate::asm_format::TypeAsmFormat for FuncSig {
-    fn print(&self, h: &mut crate::printer::TypePrintHelper<'_, '_>) -> std::fmt::Result {
-        print_signature_type(h, self.0)
+    fn print(&self, p: &mut crate::printer::AsmPrinter<'_>) -> std::fmt::Result {
+        print_signature_type(p, self.0)
     }
 
-    fn parse<'a>(input: &mut &'a str, name: &'a str) -> winnow::ModalResult<RawType<'a>> {
-        parse_signature_type(input, name, Some(1))
+    fn parse(p: &mut AsmParser<'_>, name: &str) -> ParseResult<Option<TypeRef>> {
+        parse_signature_type(p, name, Some(1))
     }
 }
 
@@ -368,12 +368,13 @@ impl crate::asm_format::SignatureCodec for FuncSig {
         signature_codec_parts(ctx, ty)
     }
 
-    fn build<'a>(
-        inputs: Vec<RawParam<'a>>,
-        results: Vec<RawParam<'a>>,
-        tail: RawAttrDict<'a>,
-    ) -> winnow::ModalResult<RawType<'a>> {
-        signature_from_parts("func.func_sig", inputs, results, tail, Some(1))
+    fn build(
+        p: &mut AsmParser<'_>,
+        inputs: Vec<(TypeRef, AttributeMap)>,
+        results: Vec<(TypeRef, AttributeMap)>,
+        tail: AttributeMap,
+    ) -> ParseResult<TypeRef> {
+        signature_from_parts(p, "func.func_sig", inputs, results, tail, Some(1))
     }
 }
 
@@ -403,27 +404,31 @@ fn signature_tail_attrs<'a>(
 /// [`parse_signature_type`] in their
 /// [`TypeAsmFormat`](crate::asm_format::TypeAsmFormat).
 pub fn print_signature_type(
-    h: &mut crate::printer::TypePrintHelper<'_, '_>,
+    p: &mut crate::printer::AsmPrinter<'_>,
     ty: TypeRef,
 ) -> std::fmt::Result {
-    use crate::asm_format::{write_dict_tail, write_signature_param, write_signature_results};
+    use crate::asm_format::{display_signature_param, display_signature_results, write_dict_tail};
+    use itertools::Itertools as _;
     use std::fmt::Write;
 
-    let ctx = h.ctx();
+    let s = p.state();
+    let ctx = s.ctx();
     let data = ctx.get_type(ty);
     let parts = signature_parts(ctx, ty);
 
-    write!(h, "{}<(", data.name.display(ctx))?;
-    for (index, &(input, attrs)) in parts.inputs.iter().enumerate() {
-        if index > 0 {
-            h.write_str(", ")?;
-        }
-        write_signature_param(h, input, attrs)?;
-    }
-    h.write_str(") -> ")?;
-    write_signature_results(h, &parts.results)?;
-    write_dict_tail(h, &parts.tail)?;
-    h.write_char('>')
+    let inputs = parts
+        .inputs
+        .iter()
+        .map(|&(input, attrs)| display_signature_param(s, input, attrs))
+        .format(", ");
+    write!(
+        p,
+        "{}<({inputs}) -> {}",
+        data.name.display(ctx),
+        display_signature_results(s, &parts.results)
+    )?;
+    write_dict_tail(p, &parts.tail)?;
+    p.write_char('>')
 }
 
 /// The inputs, results, and remaining type attributes of a validated
@@ -468,93 +473,67 @@ fn signature_input_count(ctx: &IrContext, data: &crate::types::TypeData) -> usiz
         .expect("a validated signature type stores its input count") as usize
 }
 
-/// Parse the rest of `name<(inputs) -> results>` after its opening bracket
-/// into the generic form [`signature_raw_type`] builds.
+/// Parse the rest of `name<(inputs) -> results>` after its opening bracket,
+/// as [`print_signature_type`] writes it.
 ///
-/// A list that does not start with `(` backtracks to generic parsing. The
-/// type attributes and the result count are checked as for an operation's
-/// `signature` element.
-pub fn parse_signature_type<'a>(
-    input: &mut &'a str,
-    name: &'a str,
+/// A list that does not start with `(` is not this syntax, and the parser
+/// reads the generic form instead. The type attributes and the result count
+/// are checked as for an operation's `signature` element.
+pub fn parse_signature_type(
+    p: &mut AsmParser<'_>,
+    name: &str,
     max_results: Option<usize>,
-) -> winnow::ModalResult<RawType<'a>> {
-    use crate::parser::raw::{raw_param_list, ws};
-    use winnow::error::{ContextError, ErrMode};
-    use winnow::prelude::*;
-
-    if !input.starts_with('(') {
-        return Err(ErrMode::Backtrack(ContextError::new()));
+) -> ParseResult<Option<TypeRef>> {
+    if !p.peek().starts_with('(') {
+        return Ok(None);
     }
-    let inputs = raw_param_list.parse_next(input)?;
-    ws.parse_next(input)?;
-    "->".parse_next(input)?;
-    ws.parse_next(input)?;
-    let results = crate::asm_format::parse_signature_results(input)?;
-    let tail = crate::asm_format::parse_dict_tail(input)?;
-    ws.parse_next(input)?;
-    '>'.parse_next(input)?;
-    signature_from_parts(name, inputs, results, tail, max_results)
+    let inputs = p.parse_param_list()?;
+    p.parse_punct("->")?;
+    let results = crate::asm_format::parse_signature_results(p)?;
+    let tail = crate::asm_format::parse_dict_tail(p)?;
+    p.parse_punct(">")?;
+    signature_from_parts(p, name, inputs, results, tail, max_results).map(Some)
 }
 
-/// Build a signature type's generic form from its parsed parts.
+/// Build a signature type from its parsed parts.
 ///
 /// The syntax owns the delimiter counts, so type attributes that write them
 /// are rejected, as is a result count above `max_results`.
-pub fn signature_from_parts<'a>(
-    name: &'a str,
-    inputs: Vec<RawParam<'a>>,
-    results: Vec<RawParam<'a>>,
-    attrs: RawAttrDict<'a>,
+pub fn signature_from_parts(
+    p: &mut AsmParser<'_>,
+    name: &str,
+    inputs: Vec<(TypeRef, AttributeMap)>,
+    results: Vec<(TypeRef, AttributeMap)>,
+    attrs: AttributeMap,
     max_results: Option<usize>,
-) -> winnow::ModalResult<RawType<'a>> {
-    use winnow::error::{ContextError, ErrMode, StrContext, StrContextValue};
-
-    let cut = |description: &'static str| {
-        let mut error = ContextError::new();
-        error.push(StrContext::Expected(StrContextValue::Description(
-            description,
-        )));
-        ErrMode::Cut(error)
-    };
+) -> ParseResult<TypeRef> {
     if max_results.is_some_and(|max| results.len() > max) {
-        return Err(cut("no more results than the signature type allows"));
+        return Err(p.expected("no more results than the signature type allows"));
     }
-    if attrs
-        .iter()
-        .any(|(key, _)| key == NUM_INPUTS_ATTR || key == NUM_RESULTS_ATTR)
-    {
-        return Err(cut(
+    let view = attrs.view(p.ctx());
+    if view.contains_key(NUM_INPUTS_ATTR) || view.contains_key(NUM_RESULTS_ATTR) {
+        return Err(p.expected(
             "signature attributes without `num_inputs` or `num_results`, which the syntax implies",
         ));
     }
-    Ok(signature_raw_type(name, inputs, results, attrs))
+    build_signature_type(p, name, inputs, results, attrs)
 }
 
-/// The generic raw form of a signature type: its inputs then its results as
-/// parameters, with [`NUM_INPUTS_ATTR`] and [`NUM_RESULTS_ATTR`] added to
-/// `attrs`.
-pub fn signature_raw_type<'a>(
-    name: &'a str,
-    inputs: Vec<RawParam<'a>>,
-    results: Vec<RawParam<'a>>,
-    mut attrs: RawAttrDict<'a>,
-) -> RawType<'a> {
-    attrs.push((
-        NUM_INPUTS_ATTR.into(),
-        RawAttribute::Int(inputs.len() as i128),
-    ));
-    attrs.push((
-        NUM_RESULTS_ATTR.into(),
-        RawAttribute::Int(results.len() as i128),
-    ));
+/// The signature type `name` whose parameters are `inputs` then `results`,
+/// with [`NUM_INPUTS_ATTR`] and [`NUM_RESULTS_ATTR`] added to `attrs`.
+pub fn build_signature_type(
+    p: &mut AsmParser<'_>,
+    name: &str,
+    inputs: Vec<(TypeRef, AttributeMap)>,
+    results: Vec<(TypeRef, AttributeMap)>,
+    mut attrs: AttributeMap,
+) -> ParseResult<TypeRef> {
+    let mut view = attrs.view_mut(p.ctx_mut());
+    view.insert(NUM_INPUTS_ATTR, Attribute::Int(inputs.len() as i128));
+    view.insert(NUM_RESULTS_ATTR, Attribute::Int(results.len() as i128));
     let mut params = inputs;
     params.extend(results);
-    RawType::Concrete {
-        name,
-        params,
-        attrs,
-    }
+    p.build_type(name, params, attrs)
 }
 
 impl DialectType for FuncSig {
@@ -922,66 +901,54 @@ mod tests {
     use crate::op_interface::{DynCallableExit, DynIndirectCallLike};
     use crate::ops::DialectOp;
     use crate::parser::parse_test_module;
-    use crate::printer::print_module;
 
-    fn parse_raw_signature(text: &str) -> RawType<'_> {
-        use winnow::prelude::*;
-        let mut input = text;
-        let raw = crate::parser::raw::raw_type
-            .parse_next(&mut input)
-            .expect("signature should parse");
-        assert!(input.is_empty(), "unparsed: {input}");
-        raw
-    }
-
-    fn raw_count(attrs: &RawAttrDict<'_>, key: &str) -> i128 {
-        match attrs.iter().find(|(k, _)| k == key) {
-            Some((_, RawAttribute::Int(count))) => *count,
+    /// The parameter count, the attribute count of each parameter, and the
+    /// input and result counts of a signature type.
+    fn signature_layout(text: &str) -> (Vec<usize>, i128, i128, usize) {
+        let mut ctx = crate::IrContext::new();
+        let ty = crate::parser::parse_type(&mut ctx, text).expect("signature should parse");
+        let data = ctx.get_type(ty);
+        let params = data
+            .params_with_attrs(&ctx)
+            .map(|(_, attrs)| attrs.len())
+            .collect();
+        let count = |key| match ctx.type_attrs(ty).get(key) {
+            Some(Attribute::Int(count)) => *count,
             other => panic!("expected integer `{key}`, got {other:?}"),
-        }
+        };
+        let attrs = ctx
+            .type_attrs(ty)
+            .iter()
+            .filter(|(key, _)| *key != crate::types::PARAM_ATTRS_ATTR)
+            .count();
+        (
+            params,
+            count(NUM_INPUTS_ATTR),
+            count(NUM_RESULTS_ATTR),
+            attrs,
+        )
     }
 
     #[test]
     fn signature_syntax_parses_into_the_generic_form() {
-        let raw = parse_raw_signature(
+        let (params, inputs, results, attrs) = signature_layout(
             "func.func_sig<(core.i32 {a = @x}, core.ptr) -> (core.i64 {b = @y}), {call_conv = \"tail\"}>",
         );
-        let RawType::Concrete {
-            name,
-            params,
-            attrs,
-        } = raw
-        else {
-            panic!("expected the generic form")
-        };
-        assert_eq!(name, "func.func_sig");
-        assert_eq!(params.len(), 3);
-        assert_eq!(params[0].attrs.len(), 1);
-        assert!(params[1].attrs.is_empty());
-        assert_eq!(params[2].attrs.len(), 1);
-        assert_eq!(raw_count(&attrs, NUM_INPUTS_ATTR), 2);
-        assert_eq!(raw_count(&attrs, NUM_RESULTS_ATTR), 1);
-        assert_eq!(attrs.len(), 3);
+        assert_eq!(params, [1, 0, 1]);
+        assert_eq!((inputs, results), (2, 1));
+        assert_eq!(attrs, 3);
     }
 
     #[test]
     fn signature_syntax_counts_empty_and_multiple_results() {
-        let RawType::Concrete { params, attrs, .. } =
-            parse_raw_signature("func.func_sig<(core.i32) -> ()>")
-        else {
-            panic!("expected the generic form")
-        };
+        let (params, _, results, _) = signature_layout("func.func_sig<(core.i32) -> ()>");
         assert_eq!(params.len(), 1);
-        assert_eq!(raw_count(&attrs, NUM_RESULTS_ATTR), 0);
+        assert_eq!(results, 0);
 
-        let RawType::Concrete { params, attrs, .. } =
-            parse_raw_signature("wasm.func_sig<() -> (core.i32, core.i64)>")
-        else {
-            panic!("expected the generic form")
-        };
+        let (params, inputs, results, _) =
+            signature_layout("wasm.func_sig<() -> (core.i32, core.i64)>");
         assert_eq!(params.len(), 2);
-        assert_eq!(raw_count(&attrs, NUM_INPUTS_ATTR), 0);
-        assert_eq!(raw_count(&attrs, NUM_RESULTS_ATTR), 2);
+        assert_eq!((inputs, results), (0, 2));
     }
 
     #[test]
@@ -991,7 +958,7 @@ mod tests {
 }"#;
         let mut ctx = crate::IrContext::new();
         let module = parse_test_module(&mut ctx, input);
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(
             printed.contains("!generic = func.func_sig<(core.i32 {a = 1}) -> core.i64>"),
             "{printed}"
@@ -1011,11 +978,11 @@ mod tests {
         let signature = FuncSig::from_type_ref(&ctx, function.r#type(&ctx)).expect("signature");
         assert_eq!(signature.call_conv(&ctx), Some(CallConv::Tail));
 
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(printed.contains("call_conv = \"tail\""), "{printed}");
         let mut reparsed_ctx = crate::IrContext::new();
         let reparsed = parse_test_module(&mut reparsed_ctx, &printed);
-        assert_eq!(print_module(&reparsed_ctx, reparsed.op()), printed);
+        assert_eq!(reparsed.op().display(&reparsed_ctx).to_string(), printed);
     }
 
     #[test]
@@ -1106,7 +1073,7 @@ mod tests {
             "declared signature"
         );
 
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(
             printed.contains("func.call_indirect %0(%1) : (core.i32) -> core.i32"),
             "{printed}"
@@ -1207,7 +1174,6 @@ mod result_list_tests {
     use crate::SymbolPath;
     use crate::dialect::core;
     use crate::parser::parse_module;
-    use crate::printer::print_module;
     use crate::rewrite::Module;
     use crate::validation::validate_all;
 
@@ -1220,7 +1186,7 @@ mod result_list_tests {
                         format!("core.module @m {{ func.func @f({inputs}){result}{body} }}");
                     let mut ctx = IrContext::new();
                     let op = parse_module(&mut ctx, &input).unwrap();
-                    let printed = print_module(&ctx, op);
+                    let printed = op.display(&ctx).to_string();
                     let copy = parse_module(&mut ctx, &printed).unwrap();
                     let a = Module::new(&ctx, op).unwrap().ops(&ctx)[0];
                     let b = Module::new(&ctx, copy).unwrap().ops(&ctx)[0];
@@ -1228,7 +1194,7 @@ mod result_list_tests {
                         ctx.op_attrs(a).get_type("type"),
                         ctx.op_attrs(b).get_type("type")
                     );
-                    assert_eq!(print_module(&ctx, copy), printed);
+                    assert_eq!(copy.display(&ctx).to_string(), printed);
                 }
             }
         }
@@ -1238,7 +1204,7 @@ mod result_list_tests {
         ] {
             let mut ctx = IrContext::new();
             let op = parse_module(&mut ctx, input).unwrap();
-            let printed = print_module(&ctx, op);
+            let printed = op.display(&ctx).to_string();
             assert!(printed.contains("tag = @kept"), "{printed}");
             let copy = parse_module(&mut ctx, &printed).unwrap();
             let a = Module::new(&ctx, op).unwrap().ops(&ctx)[0];

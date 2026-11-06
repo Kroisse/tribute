@@ -133,9 +133,9 @@ enum ArithMapping {
     /// Binary arithmetic: addi, addf, subi, etc.
     BinaryOp(fn(&mut IrContext, Location, ValueRef, ValueRef) -> OpRef),
     /// Integer comparison with predicate.
-    CmpI(&'static str),
+    CmpI(arith::CmpiPredicate),
     /// Float comparison with predicate.
-    CmpF(&'static str),
+    CmpF(arith::CmpfPredicate),
 }
 
 /// The `arith` lowering of each arithmetic intrinsic, keyed by its path.
@@ -174,12 +174,12 @@ fn arith_intrinsic_map() -> HashMap<SymbolPath, ArithMapping> {
     binary!("std::Int::%", |ctx, loc, l, r| arith::Remsi::operands(l, r)
         .build(ctx, loc)
         .op_ref());
-    cmpi!("std::Int::==", "eq");
-    cmpi!("std::Int::!=", "ne");
-    cmpi!("std::Int::<", "slt");
-    cmpi!("std::Int::<=", "sle");
-    cmpi!("std::Int::>", "sgt");
-    cmpi!("std::Int::>=", "sge");
+    cmpi!("std::Int::==", arith::CmpiPredicate::Eq);
+    cmpi!("std::Int::!=", arith::CmpiPredicate::Ne);
+    cmpi!("std::Int::<", arith::CmpiPredicate::Slt);
+    cmpi!("std::Int::<=", arith::CmpiPredicate::Sle);
+    cmpi!("std::Int::>", arith::CmpiPredicate::Sgt);
+    cmpi!("std::Int::>=", arith::CmpiPredicate::Sge);
 
     // --- Nat (unsigned) ---
     binary!("std::Nat::+", |ctx, loc, l, r| arith::Addi::operands(l, r)
@@ -197,12 +197,12 @@ fn arith_intrinsic_map() -> HashMap<SymbolPath, ArithMapping> {
     binary!("std::Nat::%", |ctx, loc, l, r| arith::Remui::operands(l, r)
         .build(ctx, loc)
         .op_ref());
-    cmpi!("std::Nat::==", "eq");
-    cmpi!("std::Nat::!=", "ne");
-    cmpi!("std::Nat::<", "ult");
-    cmpi!("std::Nat::<=", "ule");
-    cmpi!("std::Nat::>", "ugt");
-    cmpi!("std::Nat::>=", "uge");
+    cmpi!("std::Nat::==", arith::CmpiPredicate::Eq);
+    cmpi!("std::Nat::!=", arith::CmpiPredicate::Ne);
+    cmpi!("std::Nat::<", arith::CmpiPredicate::Ult);
+    cmpi!("std::Nat::<=", arith::CmpiPredicate::Ule);
+    cmpi!("std::Nat::>", arith::CmpiPredicate::Ugt);
+    cmpi!("std::Nat::>=", arith::CmpiPredicate::Uge);
 
     // --- Float ---
     binary!("std::Float::+", |ctx, loc, l, r| arith::Addf::operands(
@@ -225,12 +225,12 @@ fn arith_intrinsic_map() -> HashMap<SymbolPath, ArithMapping> {
     )
     .build(ctx, loc)
     .op_ref());
-    cmpf!("std::Float::==", "oeq");
-    cmpf!("std::Float::!=", "une");
-    cmpf!("std::Float::<", "olt");
-    cmpf!("std::Float::<=", "ole");
-    cmpf!("std::Float::>", "ogt");
-    cmpf!("std::Float::>=", "oge");
+    cmpf!("std::Float::==", arith::CmpfPredicate::Oeq);
+    cmpf!("std::Float::!=", arith::CmpfPredicate::Une);
+    cmpf!("std::Float::<", arith::CmpfPredicate::Olt);
+    cmpf!("std::Float::<=", arith::CmpfPredicate::Ole);
+    cmpf!("std::Float::>", arith::CmpfPredicate::Ogt);
+    cmpf!("std::Float::>=", arith::CmpfPredicate::Oge);
 
     map
 }
@@ -429,7 +429,6 @@ fn exact_signature(
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
 
     #[test]
     fn intrinsic_decl_gets_real_body() {
@@ -449,7 +448,7 @@ mod tests {
 
         lower_intrinsic_to_arith(&mut ctx, module);
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         // The declaration should still exist with a real body (not erased)
         assert!(
             output.contains(r#"@"std::Nat::+""#),
@@ -489,7 +488,7 @@ mod tests {
 
         lower_intrinsic_to_arith(&mut ctx, module);
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(
             output.contains("arith.cmpi"),
             "body should have arith.cmpi:\n{output}"
@@ -519,7 +518,7 @@ mod tests {
         );
 
         lower_intrinsic_to_arith(&mut ctx, module);
-        let after = print_module(&ctx, module.op());
+        let after = module.op().display(&ctx).to_string();
 
         assert!(after.contains("arith.addi"), "{after}");
         assert!(!after.contains(r#"@"std::Nat::+""#), "{after}");
@@ -544,7 +543,7 @@ mod tests {
         );
 
         lower_intrinsic_to_arith(&mut ctx, module);
-        let after = print_module(&ctx, module.op());
+        let after = module.op().display(&ctx).to_string();
 
         assert!(
             after.contains(r#"func.func @"std::Nat::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32 attributes {abi = "intrinsic"}"#)
@@ -569,9 +568,9 @@ mod tests {
         "#,
         );
 
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
         lower_intrinsic_to_arith(&mut ctx, module);
-        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
     }
 
     #[test]
@@ -595,9 +594,9 @@ mod tests {
         "#,
         );
 
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
         lower_intrinsic_to_arith(&mut ctx, module);
-        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
     }
 
     #[test]
@@ -623,7 +622,7 @@ mod tests {
 
         lower_intrinsic_to_arith(&mut ctx, module);
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         // Direct call should be replaced by arith.addi in @caller
         assert!(
             output.contains("arith.addi"),

@@ -640,7 +640,6 @@ fn block_arg(ty: TypeRef) -> BlockArgData {
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
 
     fn op_names(ctx: &IrContext, module: Module) -> Vec<String> {
         module
@@ -662,11 +661,11 @@ mod tests {
   }
 }"#,
         );
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
 
         lower(&mut ctx, module).expect("module without writes should lower");
 
-        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
     }
 
     #[test]
@@ -743,13 +742,13 @@ mod tests {
 }}"#
                 ),
             );
-            let before = print_module(&ctx, module.op());
+            let before = module.op().display(&ctx).to_string();
 
             let error = lower(&mut ctx, module).expect_err("conflicting import must be rejected");
 
             assert_eq!(error.boundary(), IO_TO_WASM);
             assert!(error.to_string().contains("must import"), "{error}");
-            assert_eq!(print_module(&ctx, module.op()), before, "{import}");
+            assert_eq!(module.op().display(&ctx).to_string(), before, "{import}");
         }
     }
 
@@ -769,11 +768,11 @@ mod tests {
 
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, &module_text(true));
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
         let error = lower(&mut ctx, module).expect_err("memory64 must be rejected");
         assert_eq!(error.boundary(), IO_TO_WASM);
         assert!(error.to_string().contains("32-bit memory"), "{error}");
-        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
 
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, &module_text(false));

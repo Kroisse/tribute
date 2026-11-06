@@ -337,7 +337,7 @@ impl RewritePattern for LowerEffectTailOp<'_> {
         let loc = ctx.op(op).location;
         let i32_ty = effect_dispatch::i32_type(ctx);
         let mut slot = |ctx: &mut IrContext, index: u32| {
-            let slot = trunk_ir::dialect::arith::Const::operands()
+            let slot = trunk_ir::dialect::arith::Constant::operands()
                 .value(Attribute::Int(i128::from(ability::tail_slot_id(index))))
                 .results(i32_ty)
                 .build(ctx, loc);
@@ -449,7 +449,6 @@ mod tests {
     use super::*;
     use trunk_ir::SymbolPath;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
 
     /// The evidence type and stand-ins for the runtime functions.
     const RUNTIME: &str = r#"  !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
@@ -493,7 +492,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, &module_text(body));
         lower(&mut ctx, module).expect("evidence lowering");
-        print_module(&ctx, module.op())
+        module.op().display(&ctx).to_string()
     }
 
     fn calls(ctx: &IrContext, module: Module) -> Vec<(SymbolPath, usize)> {
@@ -541,7 +540,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, &module_text(SELECT));
         lower(&mut ctx, module).unwrap();
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
 
         assert_shared_dialect_only(&printed);
         assert_eq!(
@@ -556,7 +555,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, &module_text(TAIL));
         lower(&mut ctx, module).unwrap();
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
 
         assert_shared_dialect_only(&printed);
         assert_eq!(
@@ -585,7 +584,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, &module_text(EXTEND));
         lower(&mut ctx, module).unwrap();
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
 
         assert_shared_dialect_only(&printed);
         assert_eq!(

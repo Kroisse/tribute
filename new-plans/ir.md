@@ -90,7 +90,7 @@ smallest layer that can state an invariant precisely.
 
 | Layer | Responsibility | Failure timing | Examples |
 | ---- | ---- | ---- | ---- |
-| Operation verifier | Local invariants of one operation: operand/result/successor counts, operand/result/type-attribute type constraints and their equality or projection relations, required attributes, attribute domains, region shape, and terminator requirements that can be checked without global analysis. | At explicit operation validation checkpoints. Parsers, raw builders, and intermediate rewrites may temporarily violate schema constraints; only checks outside the schema, such as custom assembly parsing, may also fail at parse time. | `arith.cmpf` accepts only supported predicates; an op with regions requires the expected region count and terminator form. |
+| Operation verifier | Local invariants of one operation: operand/result/successor counts, operand/result/type-attribute type constraints and their equality or projection relations, required attributes, attribute domains, region shape, and terminator requirements that can be checked without global analysis. | At explicit operation validation checkpoints. Parsers, raw builders, and intermediate rewrites may temporarily violate schema constraints; only checks outside the schema, such as custom assembly parsing, may also fail at parse time. | `arith.cmpf` accepts only the predicates its kind lists; an op with regions requires the expected region count and terminator form. |
 | Conversion target | Dialect and type legality at a named lowering boundary. | Immediately after a pass or pass group claims a conversion boundary. Partial conversion rejects explicitly illegal operations; full conversion also rejects unknown operations. | Ability lowering leaves no `ability.perform`; backend-ready native IR contains only `clif.*` plus allowed infrastructure ops. |
 | Pass-manager verifier | Whole-IR consistency after transformations, with the offending pass identified. | After each pass registered in a `PassManager` when a verifier hook is installed. | SSA use-chain consistency, value visibility across isolated regions, or other graph-wide invariants. |
 | Operation interface and flag | Shared behavior or property queried generically across dialects. | At the consumer that needs dialect-independent behavior. Interfaces and flags should be introduced only for multiple concrete consumers or one generic transform. | `CallLike` for direct callees; the `Pure` flag for DCE removability; the `IsolatedFromAbove` flag for nested pass-manager anchoring. |
@@ -496,7 +496,10 @@ literal은 문자열 literal로 쓴다.
   parser는 형식 parser를 부르기 전에 읽는다. Result 타입은 `type(result)`나
   `types(results)`, 또는 타입을 재구성하는 `signature`로 정확히 한 번 쓴다.
   `types`는 결과 목록을 쉼표로 구분해 쓰며, 결과가 없을 수 있으면 앞의 구두점과
-  함께 선택 묶음에 둔다.
+  함께 선택 묶음에 둔다. 선언이 고정한 result 타입(`-> Value<I1>`)만은 쓰지 않아도
+  된다. 그러면 parser가 schema에서 그 타입을 가져오고, printer는 result 타입이
+  고정 타입과 같은 operation만 이 형식으로 쓴다(`arith.cmpi slt, %a, %b :
+  core.i32`의 결과 `core.i1`).
 - **`attr_dict`, `attr_dict_bare`** — 형식의 다른 원소가 쓰지 않은 모든
   attribute를 `attr_dict`는 `attributes {..}`로, `attr_dict_bare`는 keyword 없이
   `{..}`로 쓴다. 형식은 둘 중 하나만 쓴다. 남은 attribute가 없으면 아무 것도 쓰지
@@ -615,6 +618,22 @@ parser는 그 attribute가 없는 정규형으로 읽는다. 두 operation은 ac
 같다. 같은 operation을 generic 형식으로 쓴 텍스트도 같은 operation으로
 읽힌다. Parser는 operation schema를 검증하지 않는다.
 
+Parser는 텍스트를 읽으면서 바로 IR을 만들며, 중간 표현을 거치지 않는다. 값
+이름은 읽는 즉시 같은 region이나 바깥 region에서 보이는 정의로 해석한다. 정의보다
+먼저 쓰인 이름(뒤 block의 argument 등)은 자리표시 값을 받고, 정의가 그 값을
+대신한다. 끝까지 정의되지 않은 이름은 처음 쓰인 곳의 오류다. Block label은 같은
+region의 block을 가리키며, 처음 언급될 때 만들어지고 label이 정의된 곳에서
+채워진다. 형식이 쓴 operand 타입은 정의의 타입과 같아야 하고, 아직 정의되지 않은
+값이면 정의할 때 검사한다. 모든 parse 오류는 텍스트의 byte offset을 밝힌다.
+
+형식 parser는 생략 가능한 원소를 읽기 전에 다음 token으로 그 원소가 있는지
+정하고, 없으면 텍스트를 소비하지 않는다. 원소를 읽기 시작한 뒤의 실패는 오류이며
+다른 해석으로 되돌아가지 않는다. 그래서 operation, block, region, 값은 그 구성을
+읽기로 확정한 뒤에만 만들어지고, 없다고 판정된 원소는 context에 아무것도 남기지
+않는다. 타입과 문자열의 intern은 같은 값을 다시 만들지 않으므로 IR을 바꾸지
+않는다. 타입 전용 문법은 자기 문법이 아니면 아무것도 읽기 전에 그렇다고 답하고,
+parser는 그 자리에서 generic 표기를 읽는다.
+
 형식 parser의 실패는 기대한 원소를 밝힌 오류로 끝나며, 같은 입력을 generic
 형식으로 다시 읽지 않는다. 원소 사이의 공백은 token이 아니다. Keyword literal과
 `attr_dict`의 `attributes`는 식별자 전체로 읽으며, 바로 뒤에 `.`이 오면 다음
@@ -624,6 +643,13 @@ operation 이름의 일부로 보고 읽지 않는다.
 region의 entry argument에 첫 region과 같은 이름을 주고, parser는 매개변수를 모든
 region의 entry block에 되돌린다. Printer는 `IsolatedFromAbove` operation의 형식을
 쓰는 동안 값과 block 번호를 새로 매기고, 쓴 뒤에는 바깥 번호를 이어 간다.
+
+Printer는 쓰기 전에 이름을 정한다. 출력할 operation마다 pre-pass가 형식이 쓰는
+순서대로 값 번호(`%N`)와 block label(`^bbN`)을 매기고, module마다 type alias를
+정한다. 형식은 출력하는 동안 이름을 새로 매기지 않고 이 결과를 읽기만 하므로,
+타입·attribute·값 이름은 다른 텍스트 안에 그대로 쓸 수 있는 값이다. 손으로 쓴
+형식이 기본 순서(result, 그다음 region을 차례로)와 다른 순서로 이름을 쓰거나 여러
+region의 값에 이름 하나를 쓰면, 그 순서와 공유를 pre-pass에 선언한다.
 
 #### 표기 관례
 
@@ -647,8 +673,15 @@ region의 entry block에 되돌린다. Printer는 `IsolatedFromAbove` operation�
   `name(keyword)`로 쓴다(`convention(cps)`). 간접 호출은 MLIR
   `func.call_indirect`처럼 callee의 signature를 쓰고, convention은 attribute
   사전에 둔다.
-- MLIR에 대응하는 operation이 있으면 그 표기를 따른다(`scf.index_switch`의
-  `case 0 {..}`와 `default {..}`). 아래 관례는 그렇지 않은 operation에 적용한다.
+- MLIR에 대응하는 operation이 있으면 그 이름과 표기를 따른다(`scf.index_switch`의
+  `case 0 {..}`와 `default {..}`, `arith.constant 42 : core.i32`,
+  `arith.cmpi slt, %a, %b : core.i32`, `arith.extsi %a : core.i32 to core.i64`,
+  `core.unrealized_conversion_cast %v : A to B`). 같은 모양의 다른 dialect
+  operation도 같은 표기를 쓴다: 상수는 값을 자리로(`clif.iconst 0 : core.i64`,
+  `wasm.i32_const 1 : core.i32`), 비교는 조건을 keyword로 앞에 두고 operand
+  타입을 쓰며(`clif.icmp eq, %a, %b : core.i64`), 결과 타입이 연산으로 정해지지
+  않는 변환은 `: A to B`로 쓴다(`clif.uextend %a : core.i8 to core.i32`). 아래
+  관례는 그렇지 않은 operation에 적용한다.
 - 이름 붙은 본문이 여럿이면 `entries { label { .. } .. }`로 쓴다. 본문마다
   signature가 다르면 label 뒤에 그 본문의 signature를 쓴다
   (`label(%x: T) -> R { .. }`). 모든 본문이 같은 signature를 받으면 signature는
@@ -681,8 +714,8 @@ dialect 이름을 알지 못하며, `signature`는 형식이 묶은 타입 변�
 - 분해는 입력과 결과(각각의 매개변수 속성 포함), 그리고 codec이 소유하는 꼬리
   표기를 돌려준다. 손실 없이 분해할 수 없는 타입이면 분해하지 않으며, 그
   operation은 generic 형식으로 출력한다.
-- 재구성은 parser가 읽은 입력·결과와 꼬리 표기를 그 타입의 generic raw 형태로
-  만든다. Codec은 허용하는 결과 개수를 정한다.
+- 재구성은 parser가 읽은 입력·결과와 꼬리 표기로 그 타입을 만든다. Codec은
+  허용하는 결과 개수를 정한다.
 - 꼬리 표기는 결과 뒤에 오는 codec 고유의 절이며, codec이 출력과 파싱을 모두
   맡는다. `func.func_sig` 계열은 매개변수 속성을 매개변수 뒤에 `%a: A {k = v}`로
   쓰고, 두 count 밖의 type attribute를 결과 뒤에 쉼표로 이어 dictionary로 쓴다
@@ -932,7 +965,7 @@ consumer는 nested region을 재귀적으로 순회해야 하며, "사용 없음
   않으므로 이 cast는 callable의 호출 방식을 바꾸지 않으며 callable adapter를
   생성하지 않는다. 한 callable 값을 다른 convention으로 부르는 일은 그 값의
   [convention entry](#convention-entry)가 맡는다.
-- `core.nil`의 유일한 값은 속성 없는 `core.nil_value`가 만든다. `arith.const`는
+- `core.nil`의 유일한 값은 속성 없는 `core.nil_value`가 만든다. `arith.constant`는
   nil을 만들지 않는다.
 - Operation과 type의 이름은 `<dialect>.<name>` 텍스트 하나로 표기한다. Dialect
   identifier에는 점이 없으므로 첫 점이 dialect와 이름의 경계이고, 이름 쪽에는 점이
@@ -1060,8 +1093,7 @@ convention 속성과 physical `func.func_sig`나 `closure.closure` component를
 | `tribute_control.tail_call_indirect` | source `become`의 callable value 간접 proper tail call |
 | `tribute_control.return` | `func` 또는 `lambda` body의 logical result 반환 |
 | `tribute_control.perform` | source `fn` 또는 general `op` 하나를 semantic kind를 보존한 직접형으로 호출 |
-| `tribute_control.handle` | 직접형 computation, completion arm, handler table의 경계를 설정 |
-| `tribute_control.handler` | handle 안의 `fn` 또는 general `op` handler arm을 기술 |
+| `tribute_control.handle` | 직접형 computation, completion arm, handler arm의 경계를 설정. 각 arm은 처리하는 operation의 binding과 짝을 이루는 region이다 |
 | `tribute_control.resume` | resumptive general handler arm에 바인딩된 affine resumption을 소비 |
 | `tribute_control.yield` | 실행 가능한 `tribute_control` region을 logical value로 종료 |
 
@@ -1156,15 +1188,46 @@ binder가 없다. `ability_arg`는 ability instance의 symbol이 그 인자를 �
 않는다. CPS 전략의 class 특수화는 tail의 class를 binder 종류에 따라 읽는다. `param`은
 그 인스턴스가 고정한 class, `ability_arg`는 `Cps`다. `body`는 정의 안의 어느 callable
 type의 매개변수 타입에도 나타나지 않으면 요구 없음이고, 나타나면 `Cps`다
-([tail 규칙](cps-effects.md#row와-호출-규약)). 이 판정은 binder마다 정의 전체에서 한
+([tail 규칙](cps-effects.md#row와-호출-규약)). 매개변수 타입 안의 `adt.typeref` row
+인자에 나타난 것도 매개변수 타입에 나타난 것이다. 이 판정은 binder마다 정의 전체에서 한
 번 하므로 그 binder를 읽는 모든 자리가 같은 class를 읽는다. `local`의 class는 그것을
 소유한 람다의 본문마다 다르며, [convention entry](#convention-entry)의 class 읽기가
 정한다.
 
 정의 안의 모든 tail은 이 목록의 index다. Signature, 중첩된 callable type, block
-인자, operation 결과, tuple layout의 원소가 모두 같다. Type은 binder를 도입하지
-않는다. Module 수준의 type에는 둘러싼 정의가 없으므로 [`ability.operation`](../crates/tribute-ir/src/dialect/ability.rs)의
+인자, operation 결과, tuple layout의 원소, [`adt.typeref`의 row 인자](#nominal-row-인자)가
+모두 같다. Type은 binder를 도입하지 않는다. 예외는 row 매개변수를 가진 nominal
+layout 하나이며, 그 binder는 layout 안의 type에만 미친다. Module 수준의 다른 type에는
+둘러싼 정의가 없으므로 [`ability.operation`](../crates/tribute-ir/src/dialect/ability.rs)의
 type은 tail을 가질 수 없다.
+
+#### Nominal row 인자
+
+[Row 매개변수](types.md#row-매개변수)를 가진 struct·enum의 layout(`adt.struct`,
+`adt.enum`)은 자기 row binder를 type 속성 `row_params`(개수)로 선언한다. Layout
+안의 필드 type, 곧 필드의 callable type과 중첩된 `adt.typeref`의 row 인자가 쓰는
+tail은 이 binder의 index다. 이 binder는 layout 밖으로 나가지 않는다.
+
+```text
+adt.struct<Callback(run: tribute_control.func_sig<(core.i64) -> core.i64 row('a0)>),
+  {row_params = 1}>
+adt.typeref<{name = "Callback", row_args = [{instances = [@"<State(Int)>"]}]}>
+adt.typeref<{name = "Callback", row_args = [{tail = 2}]}>
+```
+
+- 그 선언의 값 type인 `adt.typeref`는 row 매개변수마다 row 하나를 type 속성
+  `row_args`에 선언 순서대로 가진다. 각 row는 `ability_row`와 같은 형식이며, tail은
+  그 type을 쓴 정의의 binder index다. Layout 안에서는 layout의 binder index다. Row
+  매개변수가 없는 선언의 typeref는 속성을 생략한다.
+- `row_args`는 typeref의 정체성에 들어간다. 같은 layout을 가리키며 row 인자만 다른
+  두 typeref는 다른 type이다. Layout의 이름과 게시된 alias는 row 인자를 담지 않으므로
+  그런 typeref들은 layout 하나를 공유한다.
+- `adt` 생성·접근 operation이 보는 필드 type은 layout의 필드 type에서 layout binder를
+  그 operation이 다루는 값의 typeref `row_args`로 [치환](#row-인자와-치환)한 것이다.
+  Frontend는 `struct_get`, `variant_get` 결과와 `struct_new`, `variant_new` 피연산자의
+  type을 이 치환으로 쓴다.
+- Row 인자는 다른 row와 같이 source-logical 경계 안에만 있다. CPS legalization은
+  `row_args`와 `row_params`를 버리며, representation/ABI 경계의 출구는 둘을 거부한다.
 
 #### Tail의 합집합
 
@@ -1228,9 +1291,10 @@ Row-polymorphic 정의를 참조하는 `call`, `tail_call`, `func_ref`는 `row_a
 가리키며, 그 convention은 인스턴스 정의의 것이다. Row 인자의 class가 인스턴스의 class와 맞는지는
 [convention class](cps-effects.md#row-변수의-convention-class) 규칙이 정한다.
 참조가 보는 callee signature는 callee의 type에 row 인자를 치환한 것이다. 치환은
-type 안의 모든 `func_sig`(자기 자신 포함)에서 tail이 양화된 binder `t`인 row
-`(I, t)`를 `(I ⊎ args[t].instances, args[t].tail)`로 바꾸고 정렬한다. 다른 속성은 바꾸지
-않는다. Tuple layout은 원소를 치환한 뒤 같은 이름 규칙으로 다시
+type 안의 모든 `func_sig`(자기 자신 포함)와 `adt.typeref`의 row 인자에서 tail이
+양화된 binder `t`인 row `(I, t)`를 `(I ⊎ args[t].instances, args[t].tail)`로 바꾸고
+정렬한다. 다른 속성은 바꾸지 않는다. Layout 안의 type은 layout의 binder를 쓰므로
+치환하지 않는다. Tuple layout은 원소를 치환한 뒤 같은 이름 규칙으로 다시
 만든다([layout 이름](#compiler-generated-tuple-layout)). `call_indirect`와
 `tail_call_indirect`의 callee type은 이미 caller의 binder로 쓰여 있으므로 row 인자가
 없다.
@@ -1750,7 +1814,7 @@ RC가 배열 operation에 두는 ownership 규칙과 제자리 쓰기의 순환 
 `adt.array_get`과 `adt.array_set`의 index, `adt.array_splice`의 `start`와 `end`,
 `adt.array_new`의 `length`, `adt.array_len`의 결과는
 [`core.index`](#coreindex-주소-폭-정수)다. 배열의 원소 개수와 위치는 target의 주소
-폭으로 센다. 고정 폭 정수에서 온 index는 `arith.index_castsi`나
+폭으로 센다. 고정 폭 정수에서 온 index는 `arith.index_cast`나
 `arith.index_castui`로 명시적으로 바꾼다.
 
 Index는 부호 없는 값으로 해석한다. Target은 각 operation이 선언한 범위 전제를
@@ -1893,11 +1957,11 @@ tail-call lowering.
 
 `arith.*` represents constants, integer and floating arithmetic, comparisons,
 bit operations, and numeric conversions.
-`arith.const`는 정수와 부동소수 값만 만든다. 정수 결과는 `Int` 속성을 받고,
+`arith.constant`는 정수와 부동소수 값만 만든다. 정수 결과는 `Int` 속성을 받고,
 `core.i1`은 `Bool` 속성도 받는다. 부동소수 결과는 `FloatBits` 속성을 받는다.
 정수 타입 `core.i{N}`은 부호가 없다(signless). 부호는 타입이 아니라 각 operation이
 정한다. 부호에 따라 결과가 달라지는 operation은 모두 부호 있는 쪽과 없는 쪽을 명시한
-쌍으로 둔다: `divsi`/`divui`, `remsi`/`remui`, `shr`/`shru`, `cmpi` predicate,
+쌍으로 둔다: `divsi`/`divui`, `remsi`/`remui`, `shrsi`/`shrui`, `cmpi` predicate,
 그리고 아래 변환이다. 부호와 무관한 operation(`addi`, `subi`, `muli`, 비트 연산)은
 하나만 둔다.
 
@@ -1908,16 +1972,16 @@ bit operations, and numeric conversions.
 | 정수 → 부동소수 | `sitofp` / `uitofp` | |
 | 부동소수 → 정수 | `fptosi` / `fptoui` | 범위 밖 값과 NaN은 trap한다 |
 | 부동소수 폭 | `extf` / `truncf` | 넓히기 / 좁히기 |
-| 정수 ↔ index | `index_castsi` / `index_castui` | 한쪽은 `core.index`, 다른 쪽은 고정 폭 정수 |
+| 정수 ↔ index | `index_cast` / `index_castui` | 한쪽은 `core.index`, 다른 쪽은 고정 폭 정수 |
 
 정수 산술(`addi`, `subi`, `muli`, `divsi`/`divui`, `remsi`/`remui`, `negi`), 비트
-연산, `cmpi`, `arith.const`는 고정 폭 정수와 함께 [`core.index`](#coreindex-주소-폭-정수)도
+연산, `cmpi`, `arith.constant`는 고정 폭 정수와 함께 [`core.index`](#coreindex-주소-폭-정수)도
 받는다(`IntegerOrIndex`). `core.index` 연산의 의미는 target의 index 폭을 가진
 고정 폭 정수의 같은 연산과 같다. 폭을 직접 다루는 연산(`extsi`/`extui`/`trunci`,
 정수와 부동소수 사이의 변환, `cf.switch`)은 고정 폭 정수만 받는다.
-`arith.const`의 `Int` 값은 index 폭으로 자른 값으로 읽는다.
+`arith.constant`의 `Int` 값은 index 폭으로 자른 값으로 읽는다.
 
-`index_castsi`와 `index_castui`는 고정 폭 정수와 `core.index` 사이를 어느 방향으로든
+`index_cast`와 `index_castui`는 고정 폭 정수와 `core.index` 사이를 어느 방향으로든
 바꾼다. 결과가 더 넓으면 각각 부호 확장과 0 확장을 하고, 더 좁으면 자르며, 폭이
 같으면 값을 그대로 둔다. Index 폭에 따라 결과가 달라지는 상수 접기는 하지 않는다.
 상수 피연산자의 cast는 index 폭과 무관하게 같은 값이 나오고 그 값이 64비트 부호 있는
@@ -1928,7 +1992,7 @@ bit operations, and numeric conversions.
 
 `arith`는 포인터를 다루지 않는다. 정수는 포인터가 되지 않으며, 포인터와 정수 사이의
 변환 operation은 없다. 포인터는 할당, runtime, `mem.data`에서 나오고 `mem.ptr_add`로만
-파생되므로 모든 포인터의 출처를 추적할 수 있다. `arith.const`는 `core.ptr` 값을 만들지
+파생되므로 모든 포인터의 출처를 추적할 수 있다. `arith.constant`는 `core.ptr` 값을 만들지
 않는다.
 
 `mem.*` represents low-level data, load, and store operations for runtime or FFI
@@ -2256,7 +2320,8 @@ Symbol 참조는 symbol table의 정의를 component path로 가리키며(`calle
 참조를 가진 operation에서 가장 가까운 module부터 해석한다. 참조가 아닌 이름 값은
 문자열이다. 비교 조건(`predicate`, `cond`), trap code, wasm value·heap
 type 이름, import의 module·name처럼 정해진 짧은 이름(atom)이 여기에 해당하며
-`predicate = "slt"`로 쓴다. Operation
+generic 형식에서는 `predicate = "slt"`로 쓴다. 비교 조건처럼 값의 집합이 정해진
+keyword 종류는 전용 형식에서 따옴표 없이 쓴다(`arith.cmpi slt, ..`). Operation
 이름(`op_name`), operation kind(`"fn"`, `"op"`), compiler intrinsic identity
 (`tribute.compiler_intrinsic`)도 symbol table의 정의가 아니므로 문자열이다. 기계 호출
 규약(`call_conv = "tail"`), 매개변수 ownership 계약(`tribute.ownership = "consumed"`),
@@ -2390,6 +2455,8 @@ adt.struct<Empty()>
   필드 수를 유지하는 변환은 필드 이름과 속성을 위치 그대로 둔다.
 - 재귀 참조는 같은 이름의 `adt.typeref`로 표현한다. `adt.struct`는 자기 자신을
   매개변수로 갖지 않는다.
+- Row 매개변수를 가진 선언의 layout은 type 속성 `row_params`를 가지며, 필드 type의
+  tail은 그 binder의 index다([Nominal row 인자](#nominal-row-인자)).
 
 #### Nominal 수준과 structural 수준
 
@@ -2556,6 +2623,7 @@ adt.enum<Never {}>
 - Variant 필드 타입이 매개변수의 매개변수이므로 일반 타입 순회와 변환은 variant
   필드 타입에 그대로 도달한다.
 - 재귀 참조는 같은 이름의 `adt.typeref`로 표현한다.
+- Row 매개변수를 가진 선언의 layout은 `adt.struct`와 같이 `row_params`를 가진다.
 
 ### `func.func_sig` function type
 

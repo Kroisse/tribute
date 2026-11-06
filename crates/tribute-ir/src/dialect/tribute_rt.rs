@@ -330,7 +330,7 @@ mod tests {
         macro_rules! check {
             ($op:ident, $accessor:ident, $operand_ty:expr, $result_ty:expr) => {{
                 let name = stringify!($op);
-                let value = trunk_ir::dialect::arith::Const::operands()
+                let value = trunk_ir::dialect::arith::Constant::operands()
                     .value(Attribute::Int(0))
                     .results($operand_ty)
                     .build(&mut ctx, loc)
@@ -354,7 +354,7 @@ mod tests {
         check!(FromRaw, ptr, ptr_ty, managed_ty);
 
         // `into_raw` infers its `core.ptr` result.
-        let managed = trunk_ir::dialect::arith::Const::operands()
+        let managed = trunk_ir::dialect::arith::Constant::operands()
             .value(Attribute::Int(0))
             .results(managed_ty)
             .build(&mut ctx, loc)
@@ -396,8 +396,8 @@ mod tests {
         let loc = dummy_location();
         let i32_ty = make_i32_type(&mut ctx);
 
-        // Create an arith.const — should not match tribute_rt ops
-        let c = trunk_ir::dialect::arith::Const::operands()
+        // Create an arith.constant — should not match tribute_rt ops
+        let c = trunk_ir::dialect::arith::Constant::operands()
             .value(Attribute::Int(1))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -455,7 +455,6 @@ mod tests {
         use trunk_ir::ops::DialectOp;
         use trunk_ir::parser::parse_test_module;
         use trunk_ir::pass::PassManager;
-        use trunk_ir::printer::print_module;
         use trunk_ir::transforms::Canonicalize;
 
         /// Canonicalize every function; the flag tells whether the IR
@@ -463,13 +462,13 @@ mod tests {
         fn run(input: &str) -> (String, bool) {
             let mut ctx = IrContext::new();
             let module = parse_test_module(&mut ctx, input);
-            let before = print_module(&ctx, module.op());
+            let before = module.op().display(&ctx).to_string();
             let root = core::Module::from_op(&ctx, module.op()).expect("core.module");
             let mut pm = PassManager::new();
             pm.nest::<func::Func>().add_pass(Canonicalize);
             pm.run(&mut ctx, root, &mut Default::default())
                 .expect("canonicalize");
-            let after = print_module(&ctx, module.op());
+            let after = module.op().display(&ctx).to_string();
             let changed = after != before;
             (after, changed)
         }

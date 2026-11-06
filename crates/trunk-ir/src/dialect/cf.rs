@@ -154,46 +154,38 @@ impl crate::asm_format::OpAsmDirective for SwitchCases {
     }
 
     fn print(
-        h: &mut crate::printer::OpPrintHelper<'_, '_>,
+        p: &mut crate::printer::OpAsmPrinter<'_>,
         (default, arms): Self::Parts<'_>,
     ) -> std::fmt::Result {
         use std::fmt::Write as _;
 
-        let label = h.block_label(default).to_owned();
-        write!(h, "default: {label}")?;
+        let s = p.state();
+        write!(p, "default: {}", s.block(default))?;
         for (case, target) in arms {
-            let label = h.block_label(target).to_owned();
-            write!(h, ", {case}: {label}")?;
+            write!(p, ", {case}: {}", s.block(target))?;
         }
         Ok(())
     }
 
-    fn parse<'a>(
-        input: &mut &'a str,
-    ) -> winnow::ModalResult<Vec<crate::asm_format::RawCustomEntity<'a>>> {
-        use crate::asm_format::RawCustomEntity;
-        use crate::parser::raw::{RawAttribute, block_label, integer_lit, ws};
-        use winnow::Parser as _;
-        use winnow::combinator::{preceded, repeat, separated_pair};
+    fn parse(
+        p: &mut crate::parser::OpAsmParser<'_>,
+    ) -> crate::parser::ParseResult<Vec<crate::asm_format::ParsedEntity>> {
+        use crate::asm_format::ParsedEntity;
 
-        let (_, default) =
-            separated_pair("default", (ws, ':', ws), block_label).parse_next(input)?;
-        let arms: Vec<(i128, &str)> = repeat(
-            0..,
-            preceded(
-                (ws, ',', ws),
-                separated_pair(integer_lit, (ws, ':', ws), block_label),
-            ),
-        )
-        .parse_next(input)?;
-        let (cases, targets): (Vec<_>, Vec<_>) = arms
-            .into_iter()
-            .map(|(case, target)| (RawAttribute::Int(case), target))
-            .unzip();
+        p.parse_keyword("default")?;
+        p.parse_punct(":")?;
+        let default = p.parse_successor()?;
+        let mut cases = Vec::new();
+        let mut targets = Vec::new();
+        while p.parse_optional_punct(",") {
+            cases.push(Attribute::Int(p.parse_integer()?));
+            p.parse_punct(":")?;
+            targets.push(p.parse_successor()?);
+        }
         Ok(vec![
-            RawCustomEntity::Successors(vec![default]),
-            RawCustomEntity::Attribute(Some(RawAttribute::List(cases))),
-            RawCustomEntity::Successors(targets),
+            ParsedEntity::Successors(vec![default]),
+            ParsedEntity::Attribute(Some(Attribute::List(cases))),
+            ParsedEntity::Successors(targets),
         ])
     }
 }
@@ -217,7 +209,6 @@ impl Branch for Switch {
 mod tests {
     use crate::IrContext;
     use crate::parser::parse_test_module;
-    use crate::printer::print_module;
 
     #[test]
     fn switch_writes_its_type_and_default_first_as_mlir_does() {
@@ -235,6 +226,6 @@ mod tests {
 "#;
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, text);
-        assert_eq!(print_module(&ctx, module.op()), text);
+        assert_eq!(module.op().display(&ctx).to_string(), text);
     }
 }

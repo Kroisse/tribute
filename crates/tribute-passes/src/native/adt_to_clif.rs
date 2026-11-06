@@ -249,8 +249,7 @@ impl OpRewritePattern for RefIsNullPattern {
             .results(ptr_ty)
             .build(ctx, loc);
         let icmp_op = clif::Icmp::operands(ref_val, null_op.result(ctx))
-            .cond("eq")
-            .results(i8_ty)
+            .cond(clif::IntCond::Eq)
             .build(ctx, loc);
         rewriter.insert_op(null_op.op_ref());
         finalize_cmp(
@@ -292,7 +291,6 @@ impl trunk_ir::pass::Pass for AdtToClif {
 mod tests {
     use trunk_ir::context::IrContext;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
     use trunk_ir::rewrite::TypeConverter;
 
     fn run_pass_result(ir: &str) -> Result<String, trunk_ir::rewrite::ConversionError> {
@@ -300,7 +298,7 @@ mod tests {
         let module = parse_test_module(&mut ctx, ir);
         let type_converter = TypeConverter::new();
         super::lower(&mut ctx, module, type_converter)?;
-        Ok(print_module(&ctx, module.op()))
+        Ok(module.op().display(&ctx).to_string())
     }
 
     fn run_pass(ir: &str) -> String {
@@ -312,7 +310,7 @@ mod tests {
         let result = run_pass(
             r#"core.module @test {
   func.func @test_fn() -> core.i32 {
-    %0 = clif.iconst {value = 0} : core.ptr
+    %0 = clif.iconst 0 : core.ptr
     %1 = adt.struct_get %0 {field = 1, type = mem.struct<core.i32, core.i32>} : core.i32
     func.return %1
   }
@@ -326,7 +324,7 @@ mod tests {
         let error = run_pass_result(
             r#"core.module @test {
   func.func @test_fn() -> core.i32 {
-    %0 = clif.iconst {value = 0} : core.ptr
+    %0 = clif.iconst 0 : core.ptr
     %1 = adt.struct_get %0 {field = 1, type = adt.struct<Point(x: core.i32, y: core.i32)>} : core.i32
     func.return %1
   }
@@ -348,8 +346,8 @@ mod tests {
         let result = run_pass(
             r#"core.module @test {
   func.func @test_fn() -> core.nil {
-    %0 = clif.iconst {value = 0} : core.ptr
-    %1 = clif.iconst {value = 42} : core.i32
+    %0 = clif.iconst 0 : core.ptr
+    %1 = clif.iconst 42 : core.i32
     adt.struct_set %0, %1 {field = 0, type = mem.struct<core.i32, core.i32>}
     func.return
   }
@@ -376,7 +374,7 @@ mod tests {
         let result = run_pass(
             r#"core.module @test {
   func.func @test_fn() -> core.ptr {
-    %0 = clif.iconst {value = 100} : core.ptr
+    %0 = clif.iconst 100 : core.ptr
     %1 = adt.ref_cast %0 {type = adt.struct<Env(x: core.i32)>} : core.ptr
     func.return %1
   }
@@ -390,7 +388,7 @@ mod tests {
         let result = run_pass(
             r#"core.module @test {
   func.func @test_fn() -> core.i32 {
-    %0 = clif.iconst {value = 42} : core.ptr
+    %0 = clif.iconst 42 : core.ptr
     %1 = adt.ref_is_null %0 : core.i32
     func.return %1
   }
@@ -404,7 +402,7 @@ mod tests {
         let result = run_pass(
             r#"core.module @test {
   func.func @test_fn() -> core.i8 {
-    %0 = clif.iconst {value = 42} : core.ptr
+    %0 = clif.iconst 42 : core.ptr
     %1 = adt.ref_is_null %0 : core.i8
     func.return %1
   }
@@ -419,7 +417,7 @@ mod tests {
         let error = run_pass_result(
             r#"core.module @test {
   func.func @test_fn() -> core.i32 {
-    %0 = clif.iconst {value = 42} : core.ptr
+    %0 = clif.iconst 42 : core.ptr
     %1 = adt.variant_get %0 {tag = "Some", field = 0, type = adt.enum<Choice { None(), Some(core.i32) }>} : core.i32
     func.return %1
   }
@@ -440,7 +438,7 @@ mod tests {
         let error = run_pass_result(
             r#"core.module @test {
   func.func @test_fn() -> core.i32 {
-    %0 = clif.iconst {value = 42} : core.ptr
+    %0 = clif.iconst 42 : core.ptr
     %1 = adt.variant_is %0 {tag = "Some", type = adt.enum<Choice { None(), Some(core.i32) }>} : core.i32
     func.return %1
   }
@@ -461,7 +459,7 @@ mod tests {
         let result = run_pass_result(
             r#"core.module @test {
   func.func @test_fn() -> core.i1 {
-    %0 = clif.iconst {value = 42} : core.ptr
+    %0 = clif.iconst 42 : core.ptr
     %1 = adt.ref_is_null %0 : core.i1
     func.return %1
   }
@@ -475,8 +473,8 @@ mod tests {
         let error = run_pass_result(
             r#"core.module @test {
   func.func @test_fn() -> core.index {
-    %0 = clif.iconst {value = 42} : core.ptr
-    %1 = core.unrealized_conversion_cast %0 : adt.array<core.i32>
+    %0 = clif.iconst 42 : core.ptr
+    %1 = core.unrealized_conversion_cast %0 : core.ptr to adt.array<core.i32>
     %2 = adt.array_len %1 : core.index
     func.return %2
   }

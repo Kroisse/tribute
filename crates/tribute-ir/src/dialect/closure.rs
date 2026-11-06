@@ -228,13 +228,15 @@ fn spells_signature(
 /// with attributes of its own, or whose inputs are not its body's
 /// parameters, prints generically.
 fn print_closure_lambda(
-    h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>,
+    p: &mut trunk_ir::printer::OpAsmPrinter<'_>,
     op: trunk_ir::OpRef,
 ) -> std::fmt::Result {
+    use itertools::Itertools as _;
     use std::fmt::Write;
     use trunk_ir::ops::{DialectOp, DialectType};
 
-    let ctx = h.ctx();
+    let s = p.state();
+    let ctx = s.ctx();
     let Some(entries) = Lambda::from_op(ctx, op)
         .ok()
         .and_then(|lambda| lambda.entries(ctx))
@@ -244,7 +246,7 @@ fn print_closure_lambda(
                 .all(|entry| spells_signature(ctx, entry.signature, entry.body))
         })
     else {
-        return h.print_generic(op);
+        return p.print_generic(op);
     };
     let result_ty = ctx.op_result_types(op)[0];
     let result_data = ctx.get_type(result_ty);
@@ -253,75 +255,43 @@ fn print_closure_lambda(
             && result_data.params.as_slice() == [entry.signature.as_type_ref()]
             && result_data.attrs.is_empty());
 
-    let results = h.ctx().op_results(op);
-    let name = h.assign_value_name(results[0]);
-    write!(h, "{name} = closure.lambda")?;
+    write!(p, "{} = closure.lambda", s.value(ctx.op_results(op)[0]))?;
 
     // " {key = val, ...}" — attributes other than the entry lists (if any)
-    let attrs: Vec<_> = h
-        .ctx()
+    let mut attrs = ctx
         .op_attrs(op)
         .iter()
         .filter(|(key, _)| *key != "signatures" && *key != "conventions")
-        .map(|(key, val)| (key.to_owned(), val.clone()))
-        .collect();
-    if !attrs.is_empty() {
-        write!(h, " {{")?;
-        for (i, (key, val)) in attrs.iter().enumerate() {
-            if i > 0 {
-                write!(h, ", ")?;
-            }
-            write!(h, "{key} = ")?;
-            h.write_attribute(val)?;
-        }
-        write!(h, "}}")?;
+        .peekable();
+    if attrs.peek().is_some() {
+        let attrs = attrs.format_with(", ", |(key, val), f| {
+            f(&format_args!("{key} = {}", s.attr(val)))
+        });
+        write!(p, " {{{attrs}}}")?;
     }
 
     // " [%x, %y]" — captures (operands)
-    let capture_names: Vec<String> = h
-        .ctx()
-        .op_operands(op)
-        .iter()
-        .map(|&v| h.get_value_name(v).to_owned())
-        .collect();
-    if !capture_names.is_empty() {
-        write!(h, " [")?;
-        for (i, name) in capture_names.iter().enumerate() {
-            if i > 0 {
-                write!(h, ", ")?;
-            }
-            write!(h, "{name}")?;
-        }
-        write!(h, "]")?;
+    let captures = ctx.op_operands(op);
+    if !captures.is_empty() {
+        write!(p, " [{}]", s.values(captures))?;
     }
 
     // " <convention>(%param: type, ...) -> ret { body }" — entry label elided
     for entry in entries {
-        let entry_args = {
-            let block = h.ctx().region(entry.body).blocks[0];
-            h.ctx().block_args(block).to_vec()
-        };
-        write!(h, " {}(", entry.convention.keyword())?;
-        for (i, &arg) in entry_args.iter().enumerate() {
-            if i > 0 {
-                write!(h, ", ")?;
-            }
-            let n = h.assign_value_name(arg);
-            let ty = h.ctx().value_ty(arg);
-            write!(h, "{n}: ")?;
-            h.write_type(ty)?;
+        write!(
+            p,
+            " {}{}",
+            entry.convention.keyword(),
+            s.entry_args(entry.body)
+        )?;
+        if let Some(return_ty) = entry.signature.single_result(ctx) {
+            write!(p, " -> {}", s.ty(return_ty))?;
         }
-        write!(h, ")")?;
-        if let Some(return_ty) = entry.signature.single_result(h.ctx()) {
-            write!(h, " -> ")?;
-            h.write_type(return_ty)?;
-        }
-        h.print_body(entry.body)?;
+        p.print_body(entry.body)?;
     }
 
     if !closure_of_signature {
-        write!(h, " : ")?;
-        h.write_type(result_ty)?;
+        write!(p, " : {}", s.ty(result_ty))?;
     }
     Ok(())
 }
@@ -344,129 +314,106 @@ fn starts_attr_dict(input: &str) -> bool {
     after_ws.starts_with('=')
 }
 
-/// Parse closure.lambda custom format back into a RawOperation.
-fn parse_closure_lambda<'a>(
-    input: &mut &'a str,
-    results: Vec<&'a str>,
-    sym_name: Option<String>,
-) -> winnow::ModalResult<trunk_ir::parser::raw::RawOperation<'a>> {
-    use trunk_ir::parser::raw::*;
-    use winnow::combinator::{delimited, opt, repeat, separated};
-    use winnow::prelude::*;
+/// Parse the `closure.lambda` custom format [`print_closure_lambda`] writes.
+fn parse_closure_lambda(
+    p: &mut trunk_ir::parser::OpAsmParser<'_>,
+    state: &mut trunk_ir::parser::OperationState,
+) -> trunk_ir::parser::ParseResult<()> {
+    use trunk_ir::parser::lexer::ident;
+    use trunk_ir::{Attribute, AttributeMap};
+    use winnow::Parser as _;
 
     // " {key = val, ...}" (optional attributes)
-    ws.parse_next(input)?;
-    let mut attributes = if starts_attr_dict(input) {
-        raw_attr_dict.parse_next(input)?
+    let attributes = if starts_attr_dict(p.peek()) {
+        p.parse_attr_dict()?
     } else {
-        vec![]
+        AttributeMap::new()
     };
-    if attributes
-        .iter()
-        .any(|(key, _)| key == "signatures" || key == "conventions")
-    {
-        return Err(winnow::error::ErrMode::Backtrack(
-            winnow::error::ContextError::new(),
-        ));
+    let view = attributes.view(p.ctx());
+    if view.contains_key("signatures") || view.contains_key("conventions") {
+        return Err(p.expected("attributes without `signatures` or `conventions`"));
     }
 
     // " [%x, %y]" (optional captures)
-    ws.parse_next(input)?;
-    let captures: Vec<&'a str> = if input.starts_with('[') {
-        delimited(
-            ('[', ws),
-            separated(0.., (ws, value_ref, ws).map(|(_, v, _)| v), ','),
-            (ws, ']'),
-        )
-        .parse_next(input)?
+    let captures = if p.peek().starts_with('[') {
+        p.parse_delimited("[", "]", |p| p.parse_operand())?
     } else {
-        vec![]
+        Vec::new()
     };
 
     // " <convention>(%param: type, ...) -> ret { body }", one or more
-    let entries: Vec<_> = repeat(
-        1..,
-        (
-            ws,
-            ident.try_map(str::parse::<CallingConvention>),
-            func_params,
-            opt(return_type),
-            ws,
-            raw_region,
-        )
-            .map(|(_, convention, params, ret_ty, _, region)| (convention, params, ret_ty, region)),
-    )
-    .parse_next(input)?;
-
-    // ": closure_type" (optional; the closure of the one signature when omitted)
-    ws.parse_next(input)?;
-    let closure_ty = opt((':', ws, raw_type).map(|(_, _, ty)| ty)).parse_next(input)?;
-
     let mut conventions = Vec::new();
     let mut signatures = Vec::new();
     let mut regions = Vec::new();
-    for (convention, params, ret_ty, mut region) in entries {
-        // Inject formal params into entry block args
-        if !params.is_empty() && !region.blocks.is_empty() {
-            let mut merged = params.clone();
-            merged.append(&mut region.blocks[0].args);
-            region.blocks[0].args = merged;
-        }
-        conventions.push(RawAttribute::String(convention.keyword().to_owned()));
+    while let Some(convention) = p.parse_optional_token("a calling convention", |input| {
+        ident
+            .try_map(str::parse::<CallingConvention>)
+            .parse_next(input)
+    })? {
+        let params = p.parse_entry_args()?;
+        let result = if p.parse_optional_punct("->") {
+            Some(p.parse_type()?)
+        } else {
+            None
+        };
+        regions.push(p.parse_region_with_args(&params)?);
+        conventions.push(p.ctx_mut().string_attr(convention.keyword()));
         // The signature is func.func_sig<(param_types...) -> return_ty>.
-        signatures.push(trunk_ir::dialect::func::signature_raw_type(
+        let signature = trunk_ir::dialect::func::build_signature_type(
+            p,
             "func.func_sig",
-            params.iter().map(|(_, ty)| ty.clone().into()).collect(),
-            ret_ty.into_iter().map(Into::into).collect(),
-            vec![],
-        ));
-        regions.push(region);
+            params
+                .iter()
+                .map(|param| (param.ty, AttributeMap::new()))
+                .collect(),
+            result
+                .into_iter()
+                .map(|ty| (ty, AttributeMap::new()))
+                .collect(),
+            AttributeMap::new(),
+        )?;
+        signatures.push(signature);
     }
-    let closure_raw_ty = match (closure_ty, &signatures[..]) {
-        (Some(ty), _) => ty,
-        (None, [signature]) => RawType::Concrete {
-            name: "closure.closure",
-            params: vec![signature.clone().into()],
-            attrs: vec![],
-        },
-        (None, _) => {
-            return Err(winnow::error::ErrMode::Cut(
-                winnow::error::ContextError::new(),
-            ));
-        }
-    };
-    attributes.push(("conventions".into(), RawAttribute::List(conventions)));
-    attributes.push((
-        "signatures".into(),
-        RawAttribute::List(signatures.into_iter().map(RawAttribute::Type).collect()),
-    ));
+    if regions.is_empty() {
+        return Err(p.expected("an entry `<convention>(..) { .. }`"));
+    }
 
-    Ok(RawOperation {
-        results,
-        name: "closure.lambda",
-        sym_name,
-        func_params: vec![],
-        func_param_regions: vec![],
-        operands: captures,
-        operand_types: Vec::new(),
-        attributes,
-        result_types: vec![closure_raw_ty],
-        regions,
-        successors: vec![],
-    })
+    // ": closure_type" (optional; the closure of the one signature when omitted)
+    let closure_ty = if p.parse_optional_punct(":") {
+        p.parse_type()?
+    } else if let [signature] = signatures[..] {
+        p.build_type(
+            "closure.closure",
+            vec![(signature, AttributeMap::new())],
+            AttributeMap::new(),
+        )?
+    } else {
+        return Err(p.expected("`: type` for a closure with several entries"));
+    };
+
+    state.add_attributes(p.ctx_mut(), attributes);
+    state.add_attribute(p.ctx_mut(), "conventions", Attribute::List(conventions));
+    state.add_attribute(
+        p.ctx_mut(),
+        "signatures",
+        Attribute::List(signatures.into_iter().map(Attribute::Type).collect()),
+    );
+    state.operands = captures;
+    state.result_types = vec![closure_ty];
+    state.regions = regions;
+    Ok(())
 }
 
 impl trunk_ir::asm_format::OpAsmFormat for Lambda {
-    fn print(&self, h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>) -> std::fmt::Result {
-        print_closure_lambda(h, self.op_ref())
+    fn print(&self, p: &mut trunk_ir::printer::OpAsmPrinter<'_>) -> std::fmt::Result {
+        print_closure_lambda(p, self.op_ref())
     }
 
-    fn parse<'a>(
-        input: &mut &'a str,
-        results: Vec<&'a str>,
-        sym_name: Option<String>,
-    ) -> winnow::ModalResult<trunk_ir::parser::raw::RawOperation<'a>> {
-        parse_closure_lambda(input, results, sym_name)
+    fn parse(
+        p: &mut trunk_ir::parser::OpAsmParser<'_>,
+        state: &mut trunk_ir::parser::OperationState,
+    ) -> trunk_ir::parser::ParseResult<()> {
+        parse_closure_lambda(p, state)
     }
 }
 
@@ -512,8 +459,8 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx);
         let closure_ty = make_closure_type(&mut ctx);
 
-        // Create an env value via arith.const
-        let env_op = trunk_ir::dialect::arith::Const::operands()
+        // Create an env value via arith.constant
+        let env_op = trunk_ir::dialect::arith::Constant::operands()
             .value(Attribute::Int(0))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -543,7 +490,7 @@ mod tests {
         let closure_ty = make_closure_type(&mut ctx);
 
         // Create a closure value
-        let env_op = trunk_ir::dialect::arith::Const::operands()
+        let env_op = trunk_ir::dialect::arith::Constant::operands()
             .value(Attribute::Int(0))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -579,7 +526,7 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx);
         let closure_ty = make_closure_type(&mut ctx);
 
-        let capture_op = trunk_ir::dialect::arith::Const::operands()
+        let capture_op = trunk_ir::dialect::arith::Constant::operands()
             .value(Attribute::Int(0))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -615,7 +562,7 @@ mod tests {
         let closure_ty = make_closure_type(&mut ctx);
 
         // Create a capture value
-        let cap_op = trunk_ir::dialect::arith::Const::operands()
+        let cap_op = trunk_ir::dialect::arith::Constant::operands()
             .value(Attribute::Int(7))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -685,8 +632,8 @@ mod tests {
         let loc = dummy_location();
         let i32_ty = make_i32_type(&mut ctx);
 
-        // Create an arith.const — should not match closure ops
-        let c = trunk_ir::dialect::arith::Const::operands()
+        // Create an arith.constant — should not match closure ops
+        let c = trunk_ir::dialect::arith::Constant::operands()
             .value(Attribute::Int(1))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -702,7 +649,7 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx);
         let closure_ty = make_closure_type(&mut ctx);
 
-        let env_op = trunk_ir::dialect::arith::Const::operands()
+        let env_op = trunk_ir::dialect::arith::Constant::operands()
             .value(Attribute::Int(0))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -730,7 +677,7 @@ mod tests {
                 e.offset, e.message, input
             );
         });
-        let printed = trunk_ir::printer::print_module(&ctx, op);
+        let printed = op.display(&ctx).to_string();
 
         let mut ctx2 = IrContext::new();
         let op2 = trunk_ir::parser::parse_module(&mut ctx2, &printed).unwrap_or_else(|e| {
@@ -739,7 +686,7 @@ mod tests {
                 e.offset, e.message, printed
             );
         });
-        let reprinted = trunk_ir::printer::print_module(&ctx2, op2);
+        let reprinted = op2.display(&ctx2).to_string();
         assert_eq!(printed, reprinted, "Round-trip mismatch:\n{printed}");
     }
 
@@ -767,7 +714,7 @@ mod tests {
                     name
                 );
             }
-            let printed = trunk_ir::printer::print_module(&ctx, module.op());
+            let printed = module.op().display(&ctx).to_string();
             assert_roundtrip(&printed);
             assert_eq!(printed.contains(" -> "), result.is_some());
         }
@@ -788,7 +735,7 @@ mod tests {
         };
         let signature = entry.signature;
         assert_eq!(signature.inputs(&ctx).len(), 2);
-        let printed = trunk_ir::printer::print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(printed.contains(" : closure.closure<"), "{printed}");
         assert_roundtrip(&printed);
     }
@@ -811,7 +758,7 @@ mod tests {
         assert_roundtrip(
             r#"core.module @test {
   func.func @main() -> core.i32 {
-    %0 = arith.const {value = 10} : core.i32
+    %0 = arith.constant 10 : core.i32
     %1 = closure.lambda [%0] direct(%2: core.i32) -> core.i32 {
         %3 = arith.addi %2, %0 : core.i32
         func.return %3
@@ -842,7 +789,7 @@ mod tests {
             r#"core.module @test {
   func.func @main() -> core.i32 {
     %0 = closure.lambda direct() -> core.i32 {
-        %1 = arith.const {value = 42} : core.i32
+        %1 = arith.constant 42 : core.i32
         func.return %1
     }
     func.return %0
@@ -912,10 +859,10 @@ mod tests {
             let text = format!(
                 r#"core.module @test {{
   %f = closure.lambda direct() -> core.i32 {{
-    %0 = arith.const {{value = 0}} : core.i32
+    %0 = arith.constant 0 : core.i32
     func.return %0
   }} cps() -> core.i32 {{
-    %1 = arith.const {{value = 1}} : core.i32
+    %1 = arith.constant 1 : core.i32
     func.return %1
   }} : closure.closure<{signature}>
 }}"#
@@ -946,8 +893,8 @@ mod tests {
         assert_roundtrip(
             r#"core.module @test {
   func.func @main() -> core.i32 {
-    %0 = arith.const {value = 1} : core.i32
-    %1 = arith.const {value = 2} : core.i32
+    %0 = arith.constant 1 : core.i32
+    %1 = arith.constant 2 : core.i32
     %2 = closure.lambda [%0, %1] direct(%3: core.i32, %4: core.i32) -> core.i32 {
         %5 = arith.addi %3, %4 : core.i32
         %6 = arith.addi %5, %0 : core.i32
@@ -1026,7 +973,7 @@ mod callable_owner_regressions {
                   %inner = closure.lambda direct(%k: func.func_sig<() -> {callee_result}>) -> core.never {{
                     func.tail_call_indirect %k() : () -> {callee_result}
                   }}
-                  %v = arith.const {{value = 0}} : core.i32
+                  %v = arith.constant 0 : core.i32
                   func.return %v
                 }}
                 func.return

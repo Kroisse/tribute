@@ -233,7 +233,6 @@ impl trunk_ir::pass::Pass for ListToNative {
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
 
     #[test]
     fn lowers_all_shared_list_ops_to_private_native_representation() {
@@ -265,7 +264,7 @@ mod tests {
 
         lower(&mut ctx, module).expect("native List lowering");
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(!output.contains("list."), "{output}");
         assert!(output.contains("adt.struct_new"), "{output}");
         assert!(output.contains("adt.ref_is_null"), "{output}");
@@ -276,7 +275,7 @@ mod tests {
         assert_eq!(output.matches("{field = 1,").count(), 2, "{output}");
         assert_eq!(output.matches("func.unreachable").count(), 4, "{output}");
         assert_eq!(output.matches("adt.ref_null").count(), 2, "{output}");
-        assert!(!output.contains("arith.const {value = 0}"), "{output}");
+        assert!(!output.contains("arith.constant 0"), "{output}");
 
         let validation = trunk_ir::validation::validate_all(&ctx, module, &mut Default::default());
         assert!(validation.is_ok(), "{:?}", validation.errors);
@@ -319,14 +318,14 @@ mod tests {
 
         lower(&mut ctx, module).expect("native List lowering");
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(!output.contains("list."), "{output}");
         assert_eq!(output.matches("func.unreachable").count(), 4, "{output}");
         assert_eq!(output.matches("cf.cond_br").count(), 4, "{output}");
         assert_eq!(output.matches("{field = 0,").count(), 2, "{output}");
         assert_eq!(output.matches("{field = 1,").count(), 2, "{output}");
         assert_eq!(output.matches("adt.ref_null").count(), 4, "{output}");
-        assert!(!output.contains("arith.const"), "{output}");
+        assert!(!output.contains("arith.constant"), "{output}");
         assert!(output.contains("element: core.i32"), "{output}");
         assert!(output.contains("element: tribute_rt.anyref"), "{output}");
 

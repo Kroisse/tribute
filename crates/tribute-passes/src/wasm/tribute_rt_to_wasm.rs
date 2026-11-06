@@ -556,7 +556,7 @@ mod tests {
 }"#,
         );
         lower(&mut ctx, module);
-        let ir = trunk_ir::printer::print_module(&ctx, module.op());
+        let ir = module.op().display(&ctx).to_string();
         assert!(
             ir.contains(r#"wasm.table {max = 4, min = 4, reftype = "funcref"}"#),
             "{ir}"
@@ -567,8 +567,8 @@ mod tests {
             .collect();
         assert!(slots.iter().all(Option::is_some), "{ir}");
         assert!(slots.is_sorted(), "{ir}");
-        assert_eq!(ir.matches("wasm.i32_const {value = 1}").count(), 3, "{ir}");
-        assert!(ir.contains("wasm.i32_const {value = 3}"), "{ir}");
+        assert_eq!(ir.matches("wasm.i32_const 1").count(), 3, "{ir}");
+        assert!(ir.contains("wasm.i32_const 3"), "{ir}");
         assert_eq!(ir.matches("wasm.i32_add").count(), 1, "{ir}");
         assert!(!ir.contains("tribute_rt."), "{ir}");
     }
@@ -586,7 +586,7 @@ mod tests {
 }"#,
         );
         lower(&mut ctx, module);
-        let ir = trunk_ir::printer::print_module(&ctx, module.op());
+        let ir = module.op().display(&ctx).to_string();
         assert!(
             ir.contains(r#"wasm.table {max = 1, min = 1, reftype = "funcref"}"#),
             "{ir}"
@@ -594,7 +594,7 @@ mod tests {
         assert!(ir.contains("wasm.elem {"), "{ir}");
         assert!(!ir.contains("offset = 0"), "{ir}");
         assert!(ir.contains("wasm.ref_func @only"), "{ir}");
-        assert!(ir.contains("wasm.i32_const {value = 0}"), "{ir}");
+        assert!(ir.contains("wasm.i32_const 0"), "{ir}");
     }
 
     #[test]

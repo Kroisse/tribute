@@ -219,7 +219,6 @@ mod tests {
     use super::*;
     use trunk_ir::Attribute;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
     use wasmparser::{Parser, Payload, Validator, WasmFeatures};
 
     /// A bodyless ordinary C helper declaration with an `(i32) -> i32` contract.
@@ -259,14 +258,14 @@ mod tests {
       wasm.return %value
   }
   wasm.func @main() -> core.i32 {
-    %one = wasm.i32_const {value = 1} : core.i32
+    %one = wasm.i32_const 1 : core.i32
     %imported = wasm.call @run(%one) : (core.i32) -> core.i32
     %local = wasm.call @c_helper(%imported) : (core.i32) -> core.i32
     wasm.return %local
   }
 }"#,
         );
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
 
         let binary = crate::emit_module_to_wasm(&mut ctx, module)
             .expect("an unused ordinary extern requires no body");
@@ -285,7 +284,7 @@ mod tests {
             "only body-bearing definitions are emitted"
         );
         assert_eq!(
-            print_module(&ctx, module.op()),
+            module.op().display(&ctx).to_string(),
             before,
             "emission disposition must not mutate the IR"
         );
@@ -311,7 +310,7 @@ mod tests {
             r#"core.module @test {{
 {UNUSED_HELPER}
   wasm.func @main(%input: core.i32) -> core.i32 {{
-    %arg = wasm.i32_const {{value = 1}} : core.i32
+    %arg = wasm.i32_const 1 : core.i32
     %result = wasm.call @helper(%arg) : (core.i32) -> core.i32
     wasm.return %result
   }}

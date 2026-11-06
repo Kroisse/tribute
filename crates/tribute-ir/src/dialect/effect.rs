@@ -170,7 +170,6 @@ impl trunk_ir::op_interface::CallableExit for DispatchCps {
 #[cfg(test)]
 mod tests {
     use trunk_ir::ops::DialectOp;
-    use trunk_ir::printer::print_op;
     use trunk_ir::refs::PathRef;
     use trunk_ir::types::{Attribute, Location};
     use trunk_ir::{IrContext, Span};
@@ -189,7 +188,7 @@ mod tests {
         ty: trunk_ir::TypeRef,
         value: i128,
     ) -> trunk_ir::ValueRef {
-        trunk_ir::dialect::arith::Const::operands()
+        trunk_ir::dialect::arith::Constant::operands()
             .value(Attribute::Int(value))
             .results(ty)
             .build(ctx, loc)
@@ -366,7 +365,7 @@ mod tests {
         assert_eq!(cps_wrapper.resume(&ctx), resume);
         assert_eq!(cps_wrapper.op_name(&ctx), "get");
 
-        let tail_printed = print_op(&ctx, tail.op_ref());
+        let tail_printed = tail.op_ref().display(&ctx).to_string();
         assert!(
             tail_printed.contains("effect.dispatch_tail @Console @print("),
             "{tail_printed}"

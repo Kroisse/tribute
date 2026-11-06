@@ -6,22 +6,19 @@ core.module @test {
   !t0 = tribute_control.func_sig<() -> core.i32 row(@"ability_2_10_pkg::State_3_int")>
 
   tribute_control.func @"pkg::run_with_state"['a0](%0: !t0) -> core.i32 row(| 'a0) inferred {
-      %1 = tribute_control.handle : core.i32 body {
+      %1 = tribute_control.handle : core.i32 {
           %2 = tribute_control.call_indirect %0() : () -> core.i32 row(@"ability_2_10_pkg::State_3_int")
           tribute_control.yield %2
-      } completion(%3: core.i32) {
+      } do(%3: core.i32) {
           tribute_control.yield %3
-      } handlers {
-          tribute_control.handler op @"ability_2_10_pkg::State_3_int" @get(%4: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
-              %5 = arith.const {value = 0} : core.i32
-              %6 = tribute_control.resume %4, %5 : core.i32
-              tribute_control.yield %6
-          }
-          tribute_control.handler op @"ability_2_10_pkg::State_3_int" @set(%7: core.i32, %8: tribute_control.resume_token<core.nil, core.i32>) : core.nil {
-              %9 = core.nil_value : core.nil
-              %10 = tribute_control.resume %8, %9 : core.i32
-              tribute_control.yield %10
-          }
+      } op @"ability_2_10_pkg::State_3_int" @get(%4: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
+          %5 = arith.constant 0 : core.i32
+          %6 = tribute_control.resume %4, %5 : core.i32
+          tribute_control.yield %6
+      } op @"ability_2_10_pkg::State_3_int" @set(%7: core.i32, %8: tribute_control.resume_token<core.nil, core.i32>) : core.nil {
+          %9 = core.nil_value : core.nil
+          %10 = tribute_control.resume %8, %9 : core.i32
+          tribute_control.yield %10
       }
       tribute_control.return %1
   }
@@ -29,7 +26,7 @@ core.module @test {
   tribute_control.func @"pkg::read_state"['a0]() -> core.i32 row(| 'a0) inferred {
       %0 = tribute_control.lambda() -> core.i32 row(@"ability_2_10_pkg::State_3_int") captures [] {
           %1 = tribute_control.perform op @"ability_2_10_pkg::State_3_int" @get() : () -> core.i32
-          %2 = arith.const {value = 1} : core.i32
+          %2 = arith.constant 1 : core.i32
           %3 = tribute_control.call @"std::Int::+"(%1, %2) : (core.i32, core.i32) -> core.i32
           %4 = tribute_control.perform op @"ability_2_10_pkg::State_3_int" @set(%3) : (core.i32) -> core.nil
           tribute_control.return %1

@@ -331,13 +331,9 @@ impl SymbolPath {
 /// separately.
 impl std::fmt::Display for SymbolPath {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for (index, component) in self.0.iter().enumerate() {
-            if index != 0 {
-                f.write_str(Self::SEPARATOR)?;
-            }
-            f.write_str(component.as_str())?;
-        }
-        Ok(())
+        use itertools::Itertools as _;
+        let components = self.0.iter().map(Symbol::as_str).format(Self::SEPARATOR);
+        write!(f, "{components}")
     }
 }
 

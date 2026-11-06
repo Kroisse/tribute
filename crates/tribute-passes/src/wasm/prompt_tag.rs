@@ -139,7 +139,6 @@ fn next_tag_function(
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
 
     #[test]
     fn next_tag_counts_in_a_global_appended_after_existing_ones() {
@@ -155,12 +154,12 @@ mod tests {
         bind_wasm_prompt_tag_runtime(&mut ctx, module);
 
         assert_eq!(
-            print_module(&ctx, module.op()),
+            module.op().display(&ctx).to_string(),
             r#"core.module @test {
   wasm.global {init = 7, mutable = false, valtype = "i32"}
   wasm.func @__tribute_next_tag() -> core.i32 {
       %0 = wasm.global_get {index = 1} : core.i32
-      %1 = wasm.i32_const {value = 1} : core.i32
+      %1 = wasm.i32_const 1 : core.i32
       %2 = wasm.i32_add %0, %1 : core.i32
       wasm.global_set %2 {index = 1}
       wasm.return %0
@@ -183,10 +182,10 @@ mod tests {
   }
 }"#,
         );
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
 
         bind_wasm_prompt_tag_runtime(&mut ctx, module);
 
-        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
     }
 }

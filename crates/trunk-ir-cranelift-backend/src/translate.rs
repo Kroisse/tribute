@@ -483,8 +483,8 @@ mod tests {
     clif.return
   }
   clif.func @pair() -> (core.i32, core.nil, core.i32) {
-    %first = clif.iconst {value = 3} : core.i32
-    %second = clif.iconst {value = 17} : core.i32
+    %first = clif.iconst 3 : core.i32
+    %second = clif.iconst 17 : core.i32
     clif.return %first, %second
   }
   clif.func @main() -> core.i32 {
@@ -494,10 +494,10 @@ mod tests {
     clif.call_indirect %sink() : () -> ()
     %callee = clif.symbol_addr @pair : core.ptr
     %other_first, %other_second = "clif.call_indirect"(%callee) {sig = clif.func_sig<() -> (core.i32, core.nil, core.i32)>} : core.i32, core.i32
-    %seven = clif.iconst {value = 7} : core.i32
-    %eleven = clif.iconst {value = 11} : core.i32
-    %thirteen = clif.iconst {value = 13} : core.i32
-    %seventeen = clif.iconst {value = 17} : core.i32
+    %seven = clif.iconst 7 : core.i32
+    %eleven = clif.iconst 11 : core.i32
+    %thirteen = clif.iconst 13 : core.i32
+    %seventeen = clif.iconst 17 : core.i32
     %direct_left = clif.imul %first, %seven : core.i32
     %direct_right = clif.imul %second, %eleven : core.i32
     %direct_pair = clif.iadd %direct_left, %direct_right : core.i32
@@ -528,11 +528,11 @@ mod tests {
                     "core.module @test {{ \"clif.func\"() {body} {{sym_name = \"helper\", type = clif.func_sig<() -> ()>{attributes}}} }}"
                 ),
             );
-            let before = trunk_ir::printer::print_module(&ctx, module.op());
+            let before = module.op().display(&ctx).to_string();
             let error = emit_module_to_native(&ctx, module).expect_err("invalid callable");
             assert!(error.to_string().contains("clif.func @helper"), "{error}");
             assert!(error.to_string().contains(expected), "{error}");
-            assert_eq!(trunk_ir::printer::print_module(&ctx, module.op()), before);
+            assert_eq!(module.op().display(&ctx).to_string(), before);
         }
     }
 
@@ -569,7 +569,7 @@ mod tests {
                     "core.module @test {{ clif.func @helper{signature} attributes {{abi = \"C\"}} }}"
                 ),
             );
-            let before = trunk_ir::printer::print_module(&ctx, module.op());
+            let before = module.op().display(&ctx).to_string();
             let error = emit_module_to_native(&ctx, module)
                 .expect_err("unsupported declarations must not be silently omitted");
             assert!(error.to_string().contains("clif.func @helper"), "{error}");
@@ -579,7 +579,7 @@ mod tests {
                     .contains("unsupported type for Cranelift: core.bytes"),
                 "{error}"
             );
-            assert_eq!(trunk_ir::printer::print_module(&ctx, module.op()), before);
+            assert_eq!(module.op().display(&ctx).to_string(), before);
         }
     }
 
@@ -592,7 +592,7 @@ mod tests {
             r#"core.module @test {
             core.module @left {
                 clif.func @helper() -> core.i32 {
-                    %value = clif.iconst {value = 1} : core.i32
+                    %value = clif.iconst 1 : core.i32
                     clif.return %value
                 }
                 clif.func @main() {
@@ -601,7 +601,7 @@ mod tests {
             }
             core.module @right {
                 clif.func @helper() -> core.i32 {
-                    %value = clif.iconst {value = 2} : core.i32
+                    %value = clif.iconst 2 : core.i32
                     clif.return %value
                 }
             }
@@ -700,7 +700,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   clif.func @main() -> core.i32 {
-    %result = clif.iconst {value = 0} : core.i32
+    %result = clif.iconst 0 : core.i32
     clif.return %result
   }
 }"#,
@@ -777,7 +777,7 @@ mod tests {
   clif.data @greeting(b"hi there") align 1
   clif.func @main() -> core.i32 {
     %greeting = clif.symbol_addr @greeting : core.ptr
-    %result = clif.iconst {value = 0} : core.i32
+    %result = clif.iconst 0 : core.i32
     clif.return %result
   }
 }"#,
@@ -815,7 +815,7 @@ mod tests {
   clif.func @main() -> core.i32 {
     %left = clif.symbol_addr @left::@text : core.ptr
     %right = clif.symbol_addr @right::@text : core.ptr
-    %result = clif.iconst {value = 0} : core.i32
+    %result = clif.iconst 0 : core.i32
     clif.return %result
   }
 }"#,
@@ -883,7 +883,7 @@ mod tests {
   }
   clif.func @main() -> core.i32 {
     %table = clif.symbol_addr @table : core.ptr
-    %result = clif.iconst {value = 0} : core.i32
+    %result = clif.iconst 0 : core.i32
     clif.return %result
   }
 }"#,
@@ -960,7 +960,7 @@ mod tests {
             (
                 r#"core.module @test {
   clif.data @table(b"\x00\x00\x00\x00\x00\x00\x00\x00") align 8 {
-    %zero = clif.iconst {value = 0} : core.i64
+    %zero = clif.iconst 0 : core.i64
   }
 }"#,
                 "relocation region holds clif.iconst",

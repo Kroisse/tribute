@@ -480,7 +480,7 @@ optimization도 exact callable contract, affine resume와 source operation kind�
 #### `op -> Never` 의미
 
 `-> Never`를 반환하는 operation은 source semantics상 resume할 수 없다.
-`tribute_control.handler`는 이 arm에 `resume_token`을 노출하지 않고, nested
+`tribute_control.handle`은 이 arm에 `resume_token`을 노출하지 않고, nested
 region을 포함한 arm body의 `tribute_control.resume`을 verifier가 거부한다.
 따라서 conversion은 source suffix를 캡처하지 않는다.
 Conversion은 resumption 없는 `ability.abort`를 만들고, frame 펼치기가

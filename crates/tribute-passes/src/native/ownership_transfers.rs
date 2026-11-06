@@ -63,14 +63,13 @@ impl RewritePattern for TransferToCast {
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
     use trunk_ir::validation::validate_op_schemas;
 
     fn run_pass(ir: &str) -> String {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, ir);
         lower(&mut ctx, module);
-        print_module(&ctx, module.op())
+        module.op().display(&ctx).to_string()
     }
 
     #[test]
@@ -117,7 +116,7 @@ mod tests {
         );
         assert!(!output.contains("tribute_rt.into_raw"), "{output}");
         assert!(
-            output.contains("core.unrealized_conversion_cast %0 : core.ptr"),
+            output.contains("core.unrealized_conversion_cast %0 : !_closure to core.ptr"),
             "{output}"
         );
     }
@@ -134,7 +133,7 @@ mod tests {
         );
         assert!(!output.contains("tribute_rt.from_raw"), "{output}");
         assert!(
-            output.contains("core.unrealized_conversion_cast %0 : core.bytes"),
+            output.contains("core.unrealized_conversion_cast %0 : core.ptr to core.bytes"),
             "{output}"
         );
     }

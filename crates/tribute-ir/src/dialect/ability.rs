@@ -1,8 +1,11 @@
 //! Ability dialect — evidence-based handler dispatch.
 
 mod frames;
+mod syntax;
 
-pub use frames::{CpsClosure, HandlerBinding, NotNever, OperationKind};
+pub use crate::dialect::tribute_control::{HandlerBinding, OperationKind};
+pub use frames::{CpsClosure, NotNever};
+pub use syntax::{Dispatchers, HandlerArms};
 
 use super::closure::Closure;
 use super::tribute_control::EvidenceStep;
@@ -87,12 +90,16 @@ mod ability {
     /// `func.unreachable`.
     ///
     /// ```text
-    /// ability.handle_dispatch [@State] %evidence, %prompt_tag(%dispatcher0, ...) {
+    /// ability.handle_dispatch %evidence, %prompt_tag [@State: %dispatcher0, @Console: %dispatcher1] {
     /// ^body(%ev: Evidence):
     ///   ...
     /// }
     /// ```
-    #[asm_format(abilities evidence "," prompt_tag "(" dispatchers ")" attr_dict region(body))]
+    ///
+    /// The format writes each ability with its dispatcher. The verifier
+    /// checks that there is one dispatcher per ability.
+    #[verify]
+    #[asm_format(evidence "," prompt_tag custom(Dispatchers(abilities, dispatchers)) attr_dict region(body))]
     #[implements(CallableExit)]
     fn handle_dispatch(
         abilities: Attr<[SymbolRef]>,
@@ -179,11 +186,17 @@ mod ability {
     /// the installed layer, whose completion is `completion`.
     ///
     /// ```text
-    /// ability.handle %outer_ev, %exit, %completion(%arm0, ...) attributes {handlers = [...]} {
+    /// ability.handle %outer_ev, %exit, %completion [
+    ///   op @State @get : core.i32 = %get,
+    ///   fn @State @peek : core.i32 = %peek
+    /// ] {
     /// ^body(%ev: Evidence, %f: !ability.frame<M>):
     ///   ...
     /// }
     /// ```
+    ///
+    /// The format writes each binding with its arm, as
+    /// `kind @Ability @op_name : operation_result_type = %arm`.
     ///
     /// A resultless terminator with one region. `evidence` is the Evidence
     /// where the handle is installed, `exit` is an `ability.frame<R>`, and
@@ -210,7 +223,7 @@ mod ability {
     /// extended Evidence and an `ability.frame<M>`, and every path ends in a
     /// proper tail transfer or `func.unreachable`.
     #[verify]
-    #[asm_format(evidence "," exit "," completion "(" arms ")" attr_dict region(body))]
+    #[asm_format(evidence "," exit "," completion custom(HandlerArms(handlers, arms)) attr_dict region(body))]
     #[implements(CallableExit)]
     fn handle<F: Frame>(
         handlers: Attr<[HandlerBinding]>,
@@ -365,15 +378,15 @@ pub fn remove_declarations(ctx: &mut IrContext, module: trunk_ir::rewrite::Modul
     }
 }
 
-/// Build an `arith.const` for the stable runtime ability ID.
+/// Build an `arith.constant` for the stable runtime ability ID.
 pub fn ability_id_const(
     ctx: &mut IrContext,
     loc: Location,
     i32_ty: TypeRef,
     ability: &SymbolPath,
-) -> arith::Const {
+) -> arith::Constant {
     let ability_id = compute_ability_id(ability);
-    arith::Const::operands()
+    arith::Constant::operands()
         .value(Attribute::Int(ability_id as i128))
         .results(i32_ty)
         .build(ctx, loc)
@@ -399,6 +412,18 @@ impl CallableExit for Perform {
                 "ability.perform CallableExit has an invalid CPS shape",
             ))
         }
+    }
+}
+
+impl trunk_ir::ops::Verify for HandleDispatch {
+    /// One dispatcher per ability.
+    fn verify(&self, ctx: &trunk_ir::IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
+        let abilities = self.abilities(ctx).len();
+        let dispatchers = self.dispatchers(ctx).len();
+        if abilities != dispatchers {
+            return Err(format!("{abilities} abilities but {dispatchers} dispatchers").into());
+        }
+        Ok(())
     }
 }
 
@@ -553,9 +578,9 @@ mod tests {
                 &format!(
                     r#"core.module @test {{
   func.func @main(%evidence: core.ptr, %prompt: core.i32) {{
-    ability.handle_dispatch {abilities} %evidence, %prompt() {{
+    "ability.handle_dispatch"(%evidence, %prompt) ({{
       func.unreachable
-    }}
+    }}) {{abilities = {abilities}}}
   }}
 }}"#
                 ),
@@ -566,5 +591,33 @@ mod tests {
 
             assert!(DynCallableExit::prove(&ctx, handle).is_err());
         }
+    }
+
+    #[test]
+    fn handle_dispatch_writes_each_ability_with_its_dispatcher() {
+        let input = r#"core.module @test {
+  func.func @main(%0: core.ptr, %1: core.i32, %2: core.ptr, %3: core.ptr) {
+      ability.handle_dispatch %0, %1 [@State: %2, @Console: %3] {
+          func.unreachable
+      }
+  }
+}
+"#;
+        let mut ctx = IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(&mut ctx, input);
+        let function =
+            trunk_ir::dialect::func::Func::from_op(&ctx, module.ops(&ctx)[0]).expect("function");
+        let entry = ctx.region(function.body(&ctx)).blocks[0];
+        let handle = HandleDispatch::from_op(&ctx, ctx.block(entry).ops[0]).expect("handle");
+        let abilities: Vec<_> = handle
+            .abilities(&ctx)
+            .map(|ability| ability.to_string())
+            .collect();
+        assert_eq!(abilities, ["State", "Console"]);
+        assert_eq!(
+            handle.dispatchers(&ctx),
+            [ctx.block_arg(entry, 2), ctx.block_arg(entry, 3)]
+        );
+        assert_eq!(module.op().display(&ctx).to_string(), input);
     }
 }

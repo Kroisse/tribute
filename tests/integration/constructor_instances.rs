@@ -72,7 +72,7 @@ fn main() -> Nil {
         }
     }
     let (ctx, module) = compile_frontend(db, source).expect("source-logical constructor IR");
-    let ir = trunk_ir::printer::print_module(&ctx, module.op());
+    let ir = module.op().display(&ctx).to_string();
     for (name, representation) in [("Boxed$Int", "core.i32"), ("Boxed$Bool", "core.i1")] {
         let layout = format!("type = !\"pkg::{name}\"");
         assert!(

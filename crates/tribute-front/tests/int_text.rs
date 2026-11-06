@@ -8,7 +8,6 @@ use salsa_test_macros::salsa_test;
 use tribute_front::SourceCst;
 use tribute_front::resolve::{NameDisplay, PackageName};
 use trunk_ir::context::IrContext;
-use trunk_ir::printer::print_module;
 
 /// The spelling of the root package, which these sources depend on nothing.
 fn root_names() -> NameDisplay {
@@ -223,7 +222,7 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
         },
     )
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());
-    let ir_text = print_module(&ir, output.module.op());
+    let ir_text = output.module.op().display(&ir).to_string();
     assert!(
         ir_text.contains("generic_intrinsic$Nat"),
         "logical lowering must resolve the concrete generic extern signature:\n{ir_text}"
@@ -271,7 +270,7 @@ fn lower_monomorphized_source(
 #[salsa::tracked]
 fn monomorphized_ir_text(db: &dyn salsa::Database, source: SourceCst) -> String {
     let (ir, output) = lower_monomorphized_source(db, source);
-    print_module(&ir, output.module.op())
+    output.module.op().display(&ir).to_string()
 }
 
 fn generic_specialization_transports_direct_callee_metadata_inner(

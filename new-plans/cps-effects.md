@@ -178,7 +178,8 @@ Ability row는 타입 인자처럼 치환하지 않는다. Row의 내용은 실�
 것이 class 변수다. 다음 가운데 하나에 해당하는 변수이며, 순서는 스킴의 row binder
 순서를 따른다.
 
-- 매개변수 타입이나 결과 타입에 포함된 함수 타입의 row tail
+- 매개변수 타입이나 결과 타입에 포함된 함수 타입의 row tail, 또는 그 타입에 포함된
+  nominal 타입의 [row 인자](types.md#row-매개변수)의 tail
 - 본문의 람다나 지역 callable 타입의 row tail
 - 본문이 참조하는 정의의 class 변수 자리나, 그 정의의 자기 tail 중 `Cps`로 읽는
   자리에 넘기는 row의 tail

@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 61328c27162af705748b938d0a2f015ca40061b466d3b11e0016680f747c2fb4 # shrinks to program = Program { checks: [Check { name: "check_0", body: Fragment { src: "{ case { case {\nlet v0 = False\n44\n} { 0 -> {\nlet v0 = 437275653\n2493033812\n}, 4 -> { 352907702 * 6 }, 44 -> { case 380808690 { 0 -> 84, _ -> 4240100330 } }, _ -> {\nlet v0 = 72\nv0\n} } } { 8 -> { { case 1075405116 { 2 -> \"a\", 7 -> \"a\", _ -> \"w__5\" } } == {\nlet v0 = \"k6gpp1\"\n\"PZ1\"\n} }, _ -> False } }", value: Bool(false), free: {} } }] }

@@ -327,7 +327,6 @@ mod tests {
     use trunk_ir::dialect::clif;
     use trunk_ir::ops::{DialectOp, DialectType};
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
 
     #[test]
     fn native_type_converter_maps_anyref_to_ptr() {
@@ -402,7 +401,7 @@ mod tests {
             .expect("definition entry");
         assert_eq!(ctx.value_ty(ctx.block_args(entry)[0]), refs.core_ptr);
 
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(!printed.contains("tribute_rt.anyref"), "{printed}");
     }
 }

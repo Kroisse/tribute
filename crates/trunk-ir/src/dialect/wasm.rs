@@ -201,7 +201,7 @@ mod wasm {
     fn global_set(index: Attr<u32>, value: Value<_>) {}
 
     // i32
-    #[asm_format(attr_dict_bare ":" type(result))]
+    #[asm_format(attr_dict_bare value ":" type(result))]
     fn i32_const(value: Attr<i32>) -> Value<_> {}
 
     #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
@@ -254,7 +254,7 @@ mod wasm {
     fn i32_shr_u(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
     // i64
-    #[asm_format(attr_dict_bare ":" type(result))]
+    #[asm_format(attr_dict_bare value ":" type(result))]
     fn i64_const(value: Attr<i64>) -> Value<_> {}
 
     #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
@@ -307,7 +307,7 @@ mod wasm {
     fn i64_shr_u(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
     // f32
-    #[asm_format(attr_dict_bare ":" type(result))]
+    #[asm_format(attr_dict_bare value ":" type(result))]
     fn f32_const(value: Attr<f32>) -> Value<_> {}
 
     #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
@@ -335,7 +335,7 @@ mod wasm {
     fn f32_ge(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
     // f64
-    #[asm_format(attr_dict_bare ":" type(result))]
+    #[asm_format(attr_dict_bare value ":" type(result))]
     fn f64_const(value: Attr<f64>) -> Value<_> {}
 
     #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
@@ -897,15 +897,15 @@ crate::register_type_def!(&FUNC_SIG_DEF);
 /// The function syntax `func.func_sig` also uses, `wasm.func_sig<(A) -> R>`,
 /// with any number of results.
 impl crate::asm_format::TypeAsmFormat for FuncSig {
-    fn print(&self, h: &mut crate::printer::TypePrintHelper<'_, '_>) -> std::fmt::Result {
-        super::func::print_signature_type(h, self.0)
+    fn print(&self, p: &mut crate::printer::AsmPrinter<'_>) -> std::fmt::Result {
+        super::func::print_signature_type(p, self.0)
     }
 
-    fn parse<'a>(
-        input: &mut &'a str,
-        name: &'a str,
-    ) -> winnow::ModalResult<crate::parser::raw::RawType<'a>> {
-        super::func::parse_signature_type(input, name, None)
+    fn parse(
+        p: &mut crate::parser::AsmParser<'_>,
+        name: &str,
+    ) -> crate::parser::ParseResult<Option<crate::TypeRef>> {
+        super::func::parse_signature_type(p, name, None)
     }
 }
 
@@ -918,12 +918,13 @@ impl crate::asm_format::SignatureCodec for FuncSig {
         super::func::signature_codec_parts(ctx, ty)
     }
 
-    fn build<'a>(
-        inputs: Vec<crate::parser::raw::RawParam<'a>>,
-        results: Vec<crate::parser::raw::RawParam<'a>>,
-        tail: crate::parser::raw::RawAttrDict<'a>,
-    ) -> winnow::ModalResult<crate::parser::raw::RawType<'a>> {
-        super::func::signature_from_parts("wasm.func_sig", inputs, results, tail, None)
+    fn build(
+        p: &mut crate::parser::AsmParser<'_>,
+        inputs: Vec<(crate::TypeRef, crate::AttributeMap)>,
+        results: Vec<(crate::TypeRef, crate::AttributeMap)>,
+        tail: crate::AttributeMap,
+    ) -> crate::parser::ParseResult<crate::TypeRef> {
+        super::func::signature_from_parts(p, "wasm.func_sig", inputs, results, tail, None)
     }
 }
 
@@ -1097,7 +1098,6 @@ mod tests {
     use super::*;
     use crate::op_interface::DynIndirectCallLike;
     use crate::parser::parse_test_module;
-    use crate::printer::print_module;
 
     #[test]
     fn structured_control_writes_its_results_only_when_present() {
@@ -1126,7 +1126,7 @@ mod tests {
 "#;
         let mut ctx = crate::IrContext::new();
         let module = parse_test_module(&mut ctx, text);
-        assert_eq!(print_module(&ctx, module.op()), text);
+        assert_eq!(module.op().display(&ctx).to_string(), text);
     }
 
     #[test]
@@ -1142,7 +1142,7 @@ mod tests {
 "#;
         let mut ctx = crate::IrContext::new();
         let module = parse_test_module(&mut ctx, text);
-        assert_eq!(print_module(&ctx, module.op()), text);
+        assert_eq!(module.op().display(&ctx).to_string(), text);
         let elems: Vec<_> = module
             .ops(&ctx)
             .iter()
@@ -1239,7 +1239,7 @@ mod tests {
         assert!(plain_call.indirect_arguments(&ctx).is_some());
         assert!(DynIndirectCallLike::get(&ctx, direct).is_none());
 
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(
             printed.contains("wasm.call_indirect %0(%1) : (core.i32) -> core.i32"),
             "{printed}"
@@ -1258,7 +1258,7 @@ mod tests {
 "#;
         let mut ctx = crate::IrContext::new();
         let module = parse_test_module(&mut ctx, text);
-        assert_eq!(print_module(&ctx, module.op()), text);
+        assert_eq!(module.op().display(&ctx).to_string(), text);
     }
 
     #[test]
@@ -1277,13 +1277,13 @@ mod tests {
         let source = r#"core.module @test {
   wasm.func @external(%arg0: core.i32) -> core.i32 attributes {abi = "C"}
   wasm.func @pair(%0: core.i32) -> (core.i32, core.i64) {
-      %1 = wasm.i64_const {value = 1} : core.i64
+      %1 = wasm.i64_const 1 : core.i64
       wasm.return %0, %1
   }
 }
 "#;
         let mut ctx = crate::IrContext::new();
         let module = parse_test_module(&mut ctx, source);
-        assert_eq!(print_module(&ctx, module.op()), source);
+        assert_eq!(module.op().display(&ctx).to_string(), source);
     }
 }

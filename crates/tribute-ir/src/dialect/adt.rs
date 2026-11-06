@@ -583,107 +583,107 @@ fn finish_struct_type(
 // Names are bare identifiers, or quoted strings when they are not identifiers.
 
 impl trunk_ir::asm_format::TypeAsmFormat for Struct {
-    fn print(&self, h: &mut trunk_ir::printer::TypePrintHelper<'_, '_>) -> std::fmt::Result {
-        write_struct_type(h, *self)
+    fn print(&self, p: &mut trunk_ir::printer::AsmPrinter<'_>) -> std::fmt::Result {
+        write_struct_type(p, *self)
     }
 
-    fn parse<'a>(
-        input: &mut &'a str,
-        name: &'a str,
-    ) -> winnow::ModalResult<trunk_ir::parser::raw::RawType<'a>> {
-        parse_struct_type(input, name)
+    fn parse(
+        p: &mut trunk_ir::parser::AsmParser<'_>,
+        name: &str,
+    ) -> trunk_ir::parser::ParseResult<Option<TypeRef>> {
+        parse_struct_type(p, name)
     }
 }
 
 fn write_struct_type(
-    h: &mut trunk_ir::printer::TypePrintHelper<'_, '_>,
+    p: &mut trunk_ir::printer::AsmPrinter<'_>,
     adt_struct: Struct,
 ) -> std::fmt::Result {
+    use itertools::Itertools as _;
     use std::fmt::Write;
+    use trunk_ir::printer::display_name;
 
-    let ctx = h.ctx();
-    h.write_str("adt.struct<")?;
-    h.write_name(adt_struct.name(ctx))?;
-    h.write_char('(')?;
-    for (index, (name, ty)) in adt_struct.fields(ctx).enumerate() {
-        if index > 0 {
-            h.write_str(", ")?;
-        }
-        h.write_name(name)?;
-        h.write_str(": ")?;
-        h.write_type(ty)?;
-        let mut attrs = adt_struct.field_attrs(ctx, index).peekable();
-        if attrs.peek().is_some() {
-            h.write_char(' ')?;
-            h.write_attr_dict(attrs)?;
-        }
-    }
-    h.write_char(')')?;
+    let s = p.state();
+    let ctx = s.ctx();
+    let fields = adt_struct
+        .fields(ctx)
+        .enumerate()
+        .format_with(", ", |(index, (name, ty)), f| {
+            f(&format_args!("{}: {}", display_name(name), s.ty(ty)))?;
+            let mut attrs = adt_struct.field_attrs(ctx, index).peekable();
+            if attrs.peek().is_some() {
+                f(&format_args!(" {}", s.attr_dict(attrs)))?;
+            }
+            Ok(())
+        });
+    write!(
+        p,
+        "adt.struct<{}({fields})",
+        display_name(adt_struct.name(ctx))
+    )?;
     let mut attrs = adt_struct.extra_attrs(ctx).peekable();
     if attrs.peek().is_some() {
-        h.write_str(", ")?;
-        h.write_attr_dict(attrs)?;
+        write!(p, ", {}", s.attr_dict(attrs))?;
     }
-    h.write_char('>')
+    p.write_char('>')
 }
 
 /// Parse the rest of `adt.struct<Name(field: type {attrs}, ...), {attrs}>`
-/// after its opening bracket into the generic form: each field's name becomes
-/// its parameter's `name` attribute, and the struct's name the type's.
+/// after its opening bracket: each field's name becomes its parameter's
+/// `name` attribute, and the struct's name the type's.
 ///
-/// The syntax owns both names, so `name` may not appear in either dictionary.
-/// Anything else, including a generic spelling, backtracks to generic parsing.
-fn parse_struct_type<'a>(
-    input: &mut &'a str,
-    name: &'a str,
-) -> winnow::ModalResult<trunk_ir::parser::raw::RawType<'a>> {
-    use trunk_ir::parser::raw::{
-        RawAttribute, RawParam, RawType, name_token, raw_attr_dict, raw_param, ws,
-    };
-    use winnow::combinator::{delimited, opt, preceded, separated};
+/// The syntax owns both names, so `name` may not appear in either
+/// dictionary. Text that does not begin as `Name(` is the generic spelling.
+fn parse_struct_type(
+    p: &mut trunk_ir::parser::AsmParser<'_>,
+    name: &str,
+) -> trunk_ir::parser::ParseResult<Option<TypeRef>> {
+    use trunk_ir::parser::lexer::{name_token, ws};
     use winnow::prelude::*;
 
-    let backtrack = || winnow::error::ErrMode::Backtrack(winnow::error::ContextError::new());
-    let struct_name = name_token.parse_next(input)?;
-    ws.parse_next(input)?;
-    let fields: Vec<(String, RawParam<'a>)> = delimited(
-        ('(', ws),
-        separated(
-            0..,
-            (ws, name_token, ws, ':', ws, raw_param, ws)
-                .map(|(_, field, _, _, _, param, _)| (field, param)),
-            ',',
-        ),
-        (ws, ')'),
-    )
-    .parse_next(input)?;
-    ws.parse_next(input)?;
-    let mut attrs = opt(preceded((',', ws), raw_attr_dict))
-        .parse_next(input)?
-        .unwrap_or_default();
-    ws.parse_next(input)?;
-    '>'.parse_next(input)?;
-
-    let is_name = |key: &str| key == STRUCT_NAME_ATTR;
-    if attrs.iter().any(|(key, _)| is_name(key)) {
-        return Err(backtrack());
+    if (name_token, ws, '(').parse_peek(p.peek()).is_err() {
+        return Ok(None);
     }
-    attrs.push((STRUCT_NAME_ATTR.into(), RawAttribute::String(struct_name)));
+    let struct_name = p.parse_token("a struct name", name_token)?;
+    let fields = p.parse_delimited("(", ")", |p| {
+        let field = p.parse_token("a field name", name_token)?;
+        p.parse_punct(":")?;
+        Ok((field, p.parse_param()?))
+    })?;
+    let attrs = parse_layout_attrs(p)?;
     let mut params = Vec::with_capacity(fields.len());
-    for (field, mut param) in fields {
-        if param.attrs.iter().any(|(key, _)| is_name(key)) {
-            return Err(backtrack());
-        }
-        param
-            .attrs
-            .push((STRUCT_NAME_ATTR.into(), RawAttribute::String(field)));
-        params.push(param);
+    for (field, (ty, attrs)) in fields {
+        params.push((ty, named(p, attrs, &field)?));
     }
-    Ok(RawType::Concrete {
-        name,
-        params,
-        attrs,
-    })
+    let attrs = named(p, attrs, &struct_name)?;
+    p.build_type(name, params, attrs).map(Some)
+}
+
+/// The type attributes after a layout's body, `, {attrs}`, and its `>`.
+fn parse_layout_attrs(
+    p: &mut trunk_ir::parser::AsmParser<'_>,
+) -> trunk_ir::parser::ParseResult<AttributeMap> {
+    let attrs = if p.parse_optional_punct(",") {
+        p.parse_attr_dict()?
+    } else {
+        AttributeMap::new()
+    };
+    p.parse_punct(">")?;
+    Ok(attrs)
+}
+
+/// `attrs` with the `name` the syntax writes, which `attrs` may not hold.
+fn named(
+    p: &mut trunk_ir::parser::AsmParser<'_>,
+    mut attrs: AttributeMap,
+    name: &str,
+) -> trunk_ir::parser::ParseResult<AttributeMap> {
+    if attrs.view(p.ctx()).contains_key(STRUCT_NAME_ATTR) {
+        return Err(p.expected("attributes without `name`, which the syntax writes"));
+    }
+    let name = p.ctx_mut().string_attr(name);
+    attrs.view_mut(p.ctx_mut()).insert(STRUCT_NAME_ATTR, name);
+    Ok(attrs)
 }
 
 // === Nominal enum layout type ===
@@ -811,147 +811,111 @@ impl Enum {
 // by the field's other attributes.
 
 impl trunk_ir::asm_format::TypeAsmFormat for Enum {
-    fn print(&self, h: &mut trunk_ir::printer::TypePrintHelper<'_, '_>) -> std::fmt::Result {
-        write_enum_type(h, *self)
+    fn print(&self, p: &mut trunk_ir::printer::AsmPrinter<'_>) -> std::fmt::Result {
+        write_enum_type(p, *self)
     }
 
-    fn parse<'a>(
-        input: &mut &'a str,
-        name: &'a str,
-    ) -> winnow::ModalResult<trunk_ir::parser::raw::RawType<'a>> {
-        parse_enum_type(input, name)
+    fn parse(
+        p: &mut trunk_ir::parser::AsmParser<'_>,
+        name: &str,
+    ) -> trunk_ir::parser::ParseResult<Option<TypeRef>> {
+        parse_enum_type(p, name)
     }
 }
 
-fn write_enum_type(
-    h: &mut trunk_ir::printer::TypePrintHelper<'_, '_>,
-    adt_enum: Enum,
-) -> std::fmt::Result {
+fn write_enum_type(p: &mut trunk_ir::printer::AsmPrinter<'_>, adt_enum: Enum) -> std::fmt::Result {
+    use itertools::Itertools as _;
     use std::fmt::Write;
+    use trunk_ir::printer::display_name;
 
-    let ctx = h.ctx();
+    let s = p.state();
+    let ctx = s.ctx();
     let data = ctx.get_type(adt_enum.as_type_ref());
-    h.write_str("adt.enum<")?;
-    h.write_name(adt_enum.name(ctx))?;
-    h.write_str(" {")?;
-    for (index, &variant) in data.params.iter().enumerate() {
-        h.write_str(if index > 0 { ", " } else { " " })?;
-        let variant_data = ctx.get_type(variant);
-        let name = variant_name(ctx, variant).expect("validated adt.enum variant");
-        h.write_name(ctx.str(name))?;
-        h.write_char('(')?;
-        for (field, &field_ty) in variant_data.params.iter().enumerate() {
-            if field > 0 {
-                h.write_str(", ")?;
-            }
-            let field_attrs = variant_data.param_attrs(ctx, field);
-            if let Some(field_name) = field_attrs.view(ctx).get_string_ref(STRUCT_NAME_ATTR) {
-                h.write_name(ctx.str(field_name))?;
-                h.write_str(": ")?;
-            }
-            h.write_type(field_ty)?;
-            let mut attrs = field_attrs
-                .iter()
-                .filter(|&(key, _)| ctx.str(key) != STRUCT_NAME_ATTR)
-                .peekable();
-            if attrs.peek().is_some() {
-                h.write_char(' ')?;
-                h.write_attr_dict(attrs)?;
-            }
-        }
-        h.write_char(')')?;
+    write!(p, "adt.enum<{} {{", display_name(adt_enum.name(ctx)))?;
+    let variants =
+        data.params.iter().format_with(", ", |&variant, f| {
+            let variant_data = ctx.get_type(variant);
+            let name = variant_name(ctx, variant).expect("validated adt.enum variant");
+            let fields = variant_data.params.iter().enumerate().format_with(
+                ", ",
+                |(field, &field_ty), f| {
+                    let field_attrs = variant_data.param_attrs(ctx, field);
+                    if let Some(field_name) = field_attrs.view(ctx).get_string_ref(STRUCT_NAME_ATTR)
+                    {
+                        f(&format_args!("{}: ", display_name(ctx.str(field_name))))?;
+                    }
+                    f(&s.ty(field_ty))?;
+                    let mut attrs = field_attrs
+                        .iter()
+                        .filter(|&(key, _)| ctx.str(key) != STRUCT_NAME_ATTR)
+                        .peekable();
+                    if attrs.peek().is_some() {
+                        f(&format_args!(" {}", s.attr_dict(attrs)))?;
+                    }
+                    Ok(())
+                },
+            );
+            f(&format_args!("{}({fields})", display_name(ctx.str(name))))
+        });
+    if !data.params.is_empty() {
+        write!(p, " {variants} ")?;
     }
-    h.write_str(if data.params.is_empty() { "}" } else { " }" })?;
+    p.write_char('}')?;
     let mut attrs = adt_enum.extra_attrs(ctx).peekable();
     if attrs.peek().is_some() {
-        h.write_str(", ")?;
-        h.write_attr_dict(attrs)?;
+        write!(p, ", {}", s.attr_dict(attrs))?;
     }
-    h.write_char('>')
+    p.write_char('>')
 }
 
 /// Parse the rest of `adt.enum<Name { Variant(field: type, ...), ... }, {attrs}>`
-/// after its opening bracket into the generic form: each variant becomes an
-/// `adt.variant` parameter named by its `name` attribute.
+/// after its opening bracket: each variant becomes an `adt.variant`
+/// parameter named by its `name` attribute.
 ///
 /// The syntax owns the names, so `name` may not appear in a dictionary.
-/// Anything else, including a generic spelling, backtracks to generic parsing.
-fn parse_enum_type<'a>(
-    input: &mut &'a str,
-    name: &'a str,
-) -> winnow::ModalResult<trunk_ir::parser::raw::RawType<'a>> {
-    use trunk_ir::parser::raw::{
-        RawAttribute, RawParam, RawType, name_token, raw_attr_dict, raw_param, ws,
-    };
-    use winnow::combinator::{delimited, opt, preceded, separated, terminated};
+/// Text that does not begin as `Name {` is the generic spelling.
+fn parse_enum_type(
+    p: &mut trunk_ir::parser::AsmParser<'_>,
+    name: &str,
+) -> trunk_ir::parser::ParseResult<Option<TypeRef>> {
+    use trunk_ir::parser::lexer::{name_token, ws};
+    use winnow::combinator::terminated;
     use winnow::prelude::*;
 
-    type Field<'a> = (Option<String>, RawParam<'a>);
-
-    let backtrack = || winnow::error::ErrMode::Backtrack(winnow::error::ContextError::new());
-    let field = |input: &mut &'a str| -> winnow::ModalResult<Field<'a>> {
-        (
-            ws,
-            opt(terminated(name_token, (ws, ':', ws))),
-            raw_param,
-            ws,
-        )
-            .map(|(_, field, param, _)| (field, param))
-            .parse_next(input)
-    };
-    let variant = |input: &mut &'a str| -> winnow::ModalResult<(String, Vec<Field<'a>>)> {
-        (
-            ws,
-            name_token,
-            ws,
-            delimited('(', separated(0.., field, ','), (ws, ')')),
-            ws,
-        )
-            .map(|(_, variant, _, fields, _)| (variant, fields))
-            .parse_next(input)
-    };
-
-    let enum_name = name_token.parse_next(input)?;
-    ws.parse_next(input)?;
-    let variants: Vec<(String, Vec<Field<'a>>)> =
-        delimited('{', separated(0.., variant, ','), (ws, '}')).parse_next(input)?;
-    ws.parse_next(input)?;
-    let mut attrs = opt(preceded((',', ws), raw_attr_dict))
-        .parse_next(input)?
-        .unwrap_or_default();
-    ws.parse_next(input)?;
-    '>'.parse_next(input)?;
-
-    let is_name = |key: &str| key == STRUCT_NAME_ATTR;
-    if attrs.iter().any(|(key, _)| is_name(key)) {
-        return Err(backtrack());
+    if (name_token, ws, '{').parse_peek(p.peek()).is_err() {
+        return Ok(None);
     }
-    attrs.push((STRUCT_NAME_ATTR.into(), RawAttribute::String(enum_name)));
+    let enum_name = p.parse_token("an enum name", name_token)?;
+    let variants = p.parse_delimited("{", "}", |p| {
+        let variant = p.parse_token("a variant name", name_token)?;
+        let fields = p.parse_delimited("(", ")", |p| {
+            let field = p.parse_optional_token("a field name", |input| {
+                terminated(name_token, (ws, ':')).parse_next(input)
+            })?;
+            Ok((field, p.parse_param()?))
+        })?;
+        Ok((variant, fields))
+    })?;
+    let attrs = parse_layout_attrs(p)?;
     let mut params = Vec::with_capacity(variants.len());
     for (variant, fields) in variants {
         let mut field_params = Vec::with_capacity(fields.len());
-        for (field, mut param) in fields {
-            if param.attrs.iter().any(|(key, _)| is_name(key)) {
-                return Err(backtrack());
-            }
-            if let Some(field) = field {
-                param
-                    .attrs
-                    .push((STRUCT_NAME_ATTR.into(), RawAttribute::String(field)));
-            }
-            field_params.push(param);
+        for (field, (ty, attrs)) in fields {
+            let attrs = match field {
+                Some(field) => named(p, attrs, &field)?,
+                None if attrs.view(p.ctx()).contains_key(STRUCT_NAME_ATTR) => {
+                    return Err(p.expected("attributes without `name`, which the syntax writes"));
+                }
+                None => attrs,
+            };
+            field_params.push((ty, attrs));
         }
-        params.push(RawParam::from(RawType::Concrete {
-            name: "adt.variant",
-            params: field_params,
-            attrs: vec![(STRUCT_NAME_ATTR.into(), RawAttribute::String(variant))],
-        }));
+        let variant_attrs = named(p, AttributeMap::new(), &variant)?;
+        let ty = p.build_type("adt.variant", field_params, variant_attrs)?;
+        params.push((ty, AttributeMap::new()));
     }
-    Ok(RawType::Concrete {
-        name,
-        params,
-        attrs,
-    })
+    let attrs = named(p, attrs, &enum_name)?;
+    p.build_type(name, params, attrs).map(Some)
 }
 
 #[cfg(test)]
@@ -959,16 +923,15 @@ mod tests {
     use super::*;
     use rustc_hash::FxHashMap as HashMap;
     use trunk_ir::parser::{parse_module, parse_test_module};
-    use trunk_ir::printer::print_module;
     use trunk_ir::rewrite::Module;
     use trunk_ir::validation::validate_operation_verifiers;
 
     /// Print `module`, parse the output, and check that it prints the same.
     fn assert_roundtrip(ctx: &IrContext, module: trunk_ir::refs::OpRef) {
-        let printed = print_module(ctx, module);
+        let printed = module.display(ctx).to_string();
         let mut reparsed = IrContext::new();
         let module = parse_module(&mut reparsed, &printed).expect("printed IR must parse");
-        assert_eq!(printed, print_module(&reparsed, module));
+        assert_eq!(printed, module.display(&reparsed).to_string());
     }
 
     fn array_schema_ok(body: &str) -> bool {
@@ -1101,7 +1064,7 @@ mod tests {
         assert_eq!(point.field_attrs(&ctx, 1).count(), 1);
         let empty = Struct::from_type_ref(&ctx, aliases["empty"]).unwrap();
         assert_eq!(empty.field_count(&ctx), 0);
-        let printed = print_module(&ctx, module);
+        let printed = module.display(&ctx).to_string();
         for expected in [
             "!point = adt.struct<Point(x: core.i32, y: core.i32 {k = @v})>",
             "adt.struct<\"Nested::Closure\"(func_ptr: func.func_sig<(core.i32) -> core.i32, {k = 1}>, env: core.tuple<core.ptr>), {layout = \"closure\"}>",
@@ -1125,7 +1088,7 @@ mod tests {
 }"#;
         let mut ctx = IrContext::new();
         let module = parse_module(&mut ctx, input).expect("struct types should parse");
-        let printed = print_module(&ctx, module);
+        let printed = module.display(&ctx).to_string();
         assert!(
             printed.contains("!_Marker = adt.struct<_Marker(a: core.i32)>"),
             "{printed}"
@@ -1181,7 +1144,7 @@ mod tests {
         );
         assert_eq!(built.variant_count(&ctx), 2);
 
-        let printed = print_module(&ctx, module);
+        let printed = module.display(&ctx).to_string();
         for expected in [
             "!option = adt.enum<Option { None(), Some(value: core.i32) }>",
             "adt.enum<\"geo::Shape\" { Dot(), Rect(core.f64, core.f64 {k = 1}), Named(label: core.ptr {k = 2}) }, {layout = \"x\"}>",
@@ -1322,12 +1285,11 @@ mod canonicalize_tests {
     use trunk_ir::ops::DialectOp;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::pass::PassManager;
-    use trunk_ir::printer::print_module;
     use trunk_ir::rewrite::Module;
     use trunk_ir::transforms::Canonicalize;
 
     fn count(ctx: &IrContext, module: Module, name: &str) -> usize {
-        print_module(ctx, module.op()).matches(name).count()
+        module.op().display(ctx).to_string().matches(name).count()
     }
 
     /// Forward struct reads and canonicalize; the flag tells whether the IR
@@ -1335,7 +1297,7 @@ mod canonicalize_tests {
     fn fold(input: &str) -> (IrContext, Module, bool) {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, input);
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
         let root = core::Module::from_op(&ctx, module.op()).expect("core.module");
         let mut pm = PassManager::new();
         pm.add_pass(ForwardStructGets)
@@ -1343,7 +1305,7 @@ mod canonicalize_tests {
             .add_pass(Canonicalize);
         pm.run(&mut ctx, root, &mut Default::default())
             .expect("fold passes");
-        let changed = print_module(&ctx, module.op()) != before;
+        let changed = module.op().display(&ctx).to_string() != before;
         (ctx, module, changed)
     }
 
@@ -1361,7 +1323,13 @@ mod canonicalize_tests {
         let (ctx, module, changed) = fold(PAIR);
         assert!(changed);
         assert_eq!(count(&ctx, module, "adt.struct_get"), 0);
-        assert!(print_module(&ctx, module.op()).contains("func.return %1"));
+        assert!(
+            module
+                .op()
+                .display(&ctx)
+                .to_string()
+                .contains("func.return %1")
+        );
     }
 
     #[test]

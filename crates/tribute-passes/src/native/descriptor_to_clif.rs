@@ -73,7 +73,6 @@ mod tests {
     use super::*;
     use trunk_ir::ops::DialectOp;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
     use trunk_ir::validation::validate_op_schemas;
 
     #[test]
@@ -92,7 +91,7 @@ mod tests {
 
         lower(&mut ctx, module);
 
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         // The RTTI index sits in the RC header, 4 bytes before the payload.
         assert!(
             printed.contains("clif.load %0 {offset = -4} : core.i32"),
@@ -128,7 +127,7 @@ mod tests {
             .run(&mut ctx, core_module, &mut AnalysisCache::new())
             .expect("descriptor lowering");
 
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert_eq!(printed.matches("clif.load").count(), 2, "{printed}");
         assert!(!printed.contains("tribute_rtti."), "{printed}");
     }

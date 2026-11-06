@@ -123,7 +123,7 @@ CTL
     %h = tribute_cps.lambda['a1]() -> core.i32 row(| 'a1) captures [%g] entries {
       direct {
         %s = tribute_control.instantiate %g {row_args = [{tail = 1}]} : !l1
-        %c = arith.const {value = 1} : core.i32
+        %c = arith.constant 1 : core.i32
         %v = tribute_cps.call_indirect %s(%c) attributes {convention = "direct"} : (core.i32) -> core.i32 row(| 'a1)
         tribute_control.return %v
       }

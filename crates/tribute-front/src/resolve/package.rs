@@ -163,13 +163,11 @@ impl NameDisplay {
         };
         let shown = &path[usize::from(own)..];
         fmt::from_fn(move |f| {
-            for (index, component) in shown.iter().enumerate() {
-                if index > 0 {
-                    f.write_str("::")?;
-                }
-                component.with_str(|text| f.write_str(text))?;
-            }
-            Ok(())
+            use itertools::Itertools as _;
+            let components = shown
+                .iter()
+                .format_with("::", |component, f| component.with_str(|text| f(&text)));
+            write!(f, "{components}")
         })
     }
 }
