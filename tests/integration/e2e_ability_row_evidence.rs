@@ -83,6 +83,40 @@ fn main() ->{Io} Nil {
     assert_program("handler_in_two_positions.trb", code, "11");
 }
 
+/// A callback's explicit instance that the caller's row argument also names
+/// goes to the handler of the callee whose row names it, for a lambda and for
+/// a named function.
+#[test]
+fn test_callback_instance_also_named_by_the_row_argument() {
+    let code = r#"
+ability Logger {
+    fn log(n: Int) -> Int
+}
+
+fn use_cb(f: fn() ->{e, Logger} Int) ->{e} Int {
+    handle f() {
+        do r { r }
+        fn Logger::log(n) { n + +1 }
+    }
+}
+
+fn outer_logger(comp: fn() ->{e, Logger} a) ->{e} a {
+    handle comp() {
+        do r { r }
+        fn Logger::log(n) { n + +100 }
+    }
+}
+
+fn five() ->{Logger} Int { Logger::log(+5) }
+
+fn main() ->{Io} Nil {
+    show(outer_logger(fn() { use_cb(fn() { Logger::log(+5) }) }))
+    show(outer_logger(fn() { use_cb(five) }))
+}
+"#;
+    assert_program("instance_named_by_row_argument.trb", code, "6\n6");
+}
+
 /// An `op` arm's own operations go to the handler outside its handle, and the
 /// computation it resumes stays under the arm's handle. The outer handler
 /// reinstalls itself while the arm runs.

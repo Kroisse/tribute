@@ -1597,7 +1597,7 @@ fn whole_ir_rejects_outer_token_resumed_in_nested_handler() {
 }
 
 #[test]
-fn tail_call_arms_must_belong_to_a_one_result_if_in_tail_position() {
+fn tail_call_arms_must_belong_to_a_one_result_if_or_switch_in_tail_position() {
     let validate_body = |body: &str| {
         let (ctx, module) = parse_fixture(&format!(
             r#"core.module @test {{
@@ -1631,6 +1631,33 @@ fn tail_call_arms_must_belong_to_a_one_result_if_in_tail_position() {
     tribute_control.return %n"#,
     );
     assert!(resultless_if.contains("tail position"), "{resultless_if}");
+
+    let tail_switch = validate_body(
+        r#"    %value = scf.index_switch %n : (core.i32) -> core.i32
+    case 0 {
+      tribute_control.tail_call @f(%n) : (core.i32) -> ()
+    }
+    default {
+      scf.yield %n
+    }
+    tribute_control.return %value"#,
+    );
+    assert!(!tail_switch.contains("tail position"), "{tail_switch}");
+
+    let resultless_switch = validate_body(
+        r#"    scf.index_switch %n : (core.i32) -> ()
+    case 0 {
+      tribute_control.tail_call @f(%n) : (core.i32) -> ()
+    }
+    default {
+      scf.yield
+    }
+    tribute_control.return %n"#,
+    );
+    assert!(
+        resultless_switch.contains("tail position"),
+        "{resultless_switch}"
+    );
 
     let loop_arm = validate_body(
         r#"    %value = scf.loop(%n) -> (core.i32) {

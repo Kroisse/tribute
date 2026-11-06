@@ -354,8 +354,8 @@ mod tribute_control {
     ///   result shape. Whole-IR verification checks symbol resolution; that
     ///   the result equals the target type with `row_args` substituted
     ///   (`new-plans/ir.md`, "Row 인자와 치환") apart from the outer row; and
-    ///   that the outer row holds each instance of the substituted row at
-    ///   least as many times and, if that row has a tail, the same tail.
+    ///   that the outer row holds each instance of the substituted row and,
+    ///   if that row has a tail, the same tail.
     /// - **Ownership and value flow:** the result is an ordinary SSA value.
     /// - **Flags:** `SourceFuncRef`, shared with `tribute_cps.func_ref`.
     /// - **Location:** the source reference span that uses the named function
@@ -447,12 +447,14 @@ mod tribute_control {
     ///   `CallableExit`.
     /// - **Placement:** it may end the body of a `tribute_control.func` or
     ///   `lambda`, and in place of `scf.yield` it may end an arm of a
-    ///   one-result `scf.if` in tail position. That arm is a terminal region,
-    ///   and only the arms that end in `scf.yield` produce the operation's
-    ///   result. An `scf.if` is in tail position when its result flows
-    ///   directly into the terminator of the enclosing region: the `return`
-    ///   of a callable body, or the `scf.yield` of an outer arm that is
-    ///   itself in tail position. It is invalid inside a
+    ///   one-result operation that selects one region
+    ///   (`DynRegionBranch::selects_one_region`), such as `scf.if` or
+    ///   `scf.index_switch`, in tail position. That arm is a terminal
+    ///   region, and only the arms that end in `scf.yield` produce the
+    ///   operation's result. Such an operation is in tail position when its
+    ///   result flows directly into the terminator of the enclosing region:
+    ///   the `return` of a callable body, or the `scf.yield` of an outer arm
+    ///   that is itself in tail position. It is invalid inside a
     ///   `tribute_control.handle` body or arm.
     /// - **Meaning:** a proper tail call of a named source callable. When the
     ///   call finishes, the callee's result becomes the enclosing callable's

@@ -17,6 +17,7 @@ mod e2e_ability_row;
 mod e2e_ability_row_evidence;
 mod e2e_add;
 mod e2e_become;
+mod e2e_case_switch;
 mod e2e_effect_instances;
 mod e2e_field_lenses;
 mod e2e_float;

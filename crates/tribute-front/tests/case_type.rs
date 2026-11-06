@@ -40,6 +40,49 @@ fn classify(x: Nat) -> Nat {
     assert_snapshot!(ir_text);
 }
 
+/// A rune case selects by the rune's code point. A value an earlier arm
+/// selects is not a case of a later arm, an `as` binding binds the scrutinee
+/// in its arm, and a catch-all binding is the default.
+#[salsa_test]
+fn test_case_rune_literal_switch(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn kind(c: Rune) -> Rune {
+    case c {
+        ?a -> ?x
+        ?b as found -> found
+        ?a -> ?y
+        other -> other
+    }
+}
+"#,
+    );
+
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert_snapshot!(ir_text);
+}
+
+/// A case lowers to a switch only when every arm but a final catch-all
+/// selects by an unguarded integer literal and two values or more are
+/// selected; the others stay a chain of `scf.if`.
+#[salsa_test]
+fn test_case_without_a_literal_switch_stays_a_chain(db: &salsa::DatabaseImpl) {
+    for body in [
+        "case x {\n        0 && flag -> 1\n        1 -> 2\n        _ -> 3\n    }",
+        "case x {\n        0 -> 1\n        _ -> 2\n    }",
+        "case flag {\n        True -> 1\n        False -> 2\n    }",
+        "case x {\n        0 -> 1\n        n && n > 5 -> n\n        1 -> 2\n        _ -> 3\n    }",
+    ] {
+        let text = format!("fn pick(x: Nat, flag: Bool) -> Nat {{\n    {body}\n}}\n");
+        let source = SourceCst::from_source_str(db, "test.trb", &text);
+        let ir_text = run_ast_pipeline_with_ir(db, source);
+        assert!(!ir_text.contains("scf.index_switch"), "{ir_text}");
+        assert!(ir_text.contains("scf.if"), "{ir_text}");
+    }
+}
+
 /// Test case expression with Int literals (negative numbers).
 /// Pattern type (Int) should unify with scrutinee type (Int).
 #[salsa_test]

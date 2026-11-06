@@ -243,9 +243,10 @@ impl Converter<'_> {
         }))
     }
 
-    /// Lower an `scf.if` whose arms each end the callable: by a tail call, or
-    /// by running the tail join's continuation in place of their yield.
-    fn lower_tail_structured_if(
+    /// Lower a region-selecting operation whose arms each end the callable:
+    /// by a tail call, or by running the tail join's continuation in place
+    /// of their yield.
+    fn lower_tail_structured(
         &mut self,
         source: OpRef,
         join: TailJoin,
@@ -254,20 +255,13 @@ impl Converter<'_> {
         flow: &Flow,
     ) -> Result<(), TributeControlToCpsError> {
         let location = self.ctx.op(source).location;
-        let source_regions = self
+        let mut converted_regions = trunk_ir::RegionList::new();
+        for source_region in self
             .ctx
             .op_regions(source)
-            .collect::<trunk_ir::RegionList>();
-        let mut converted_regions = trunk_ir::RegionList::new();
-        for source_region in source_regions {
-            let [source_block] = self.ctx.region(source_region).blocks.as_slice() else {
-                return Err(TributeControlToCpsError::post_op(
-                    source,
-                    location,
-                    "effectful scf.if regions must contain one block",
-                ));
-            };
-            let source_block = *source_block;
+            .collect::<trunk_ir::RegionList>()
+        {
+            let source_block = self.single_arm_block(source_region);
             let block_location = self.ctx.block(source_block).location;
             let converted_block = make_block(self.ctx, block_location, &[]);
             let mut branch_mapping = mapping.clone();
@@ -285,26 +279,52 @@ impl Converter<'_> {
             )?;
             converted_regions.push(single_block_region(self.ctx, location, converted_block));
         }
-        let [then_region, else_region] = converted_regions.as_slice() else {
-            return Err(TributeControlToCpsError::post_op(
-                source,
-                location,
-                "scf.if requires exactly two regions",
-            ));
-        };
-        let condition = self.ctx.op_operands(source)[0];
-        let condition = mapping.get(&condition).copied().unwrap_or(condition);
         let never = self.never_type();
-        let lowered = scf::If::operands(condition)
-            .results(never)
-            .regions(*then_region, *else_region)
-            .build(self.ctx, location);
-        self.copy_extra_attrs(source, lowered.op_ref(), &[]);
-        self.ctx.push_op(block, lowered.op_ref());
+        let lowered = self.rebuild_structured(source, mapping, [never], converted_regions);
+        self.ctx.push_op(block, lowered);
         Ok(())
     }
 
-    pub(super) fn lower_structured_if(
+    /// The single block of one arm of an operation that
+    /// `DynRegionBranch::selects_one_region` accepted.
+    fn single_arm_block(&self, region: RegionRef) -> BlockRef {
+        let [block] = self.ctx.region(region).blocks.as_slice() else {
+            panic!("an operation that selects one region has one block in each region")
+        };
+        *block
+    }
+
+    /// `source` with its operands remapped, its attributes kept, and the
+    /// given results and converted regions, in its region order.
+    fn rebuild_structured(
+        &mut self,
+        source: OpRef,
+        mapping: &HashMap<ValueRef, ValueRef>,
+        results: impl IntoIterator<Item = TypeRef>,
+        regions: trunk_ir::RegionList,
+    ) -> OpRef {
+        let location = self.ctx.op(source).location;
+        let mut builder = OperationDataBuilder::new(location, self.ctx.op(source).name);
+        for &operand in self.ctx.op_operands(source) {
+            builder = builder.operand(mapping.get(&operand).copied().unwrap_or(operand));
+        }
+        for result in results {
+            builder = builder.result(result);
+        }
+        for region in regions {
+            builder = builder.region(region);
+        }
+        let data = builder.build(self.ctx);
+        let lowered = self.ctx.create_op(data);
+        self.copy_extra_attrs(source, lowered, &[]);
+        lowered
+    }
+
+    /// Lower an operation that selects one region, such as `scf.if` or
+    /// `scf.index_switch`, whose arms contain source control. Inside a CPS callable, each arm continues with the suffix
+    /// after the operation; elsewhere the operation keeps its results and
+    /// its arms keep their `scf.yield`.
+    pub(super) fn lower_structured(
         &mut self,
         source: OpRef,
         rest: Rest<'_>,
@@ -313,18 +333,21 @@ impl Converter<'_> {
         flow: &Flow,
     ) -> Result<(), TributeControlToCpsError> {
         if let Some(join) = self.tail_join(source, rest, flow)? {
-            return self.lower_tail_structured_if(source, join, block, mapping, flow);
+            return self.lower_tail_structured(source, join, block, mapping, flow);
         }
         let result_types = self.ctx.op_result_types(source).to_vec();
         let is_cps = flow.convention == CallingConvention::Cps;
+        let location = self.ctx.op(source).location;
         if is_cps && result_types.len() > 1 {
             return Err(TributeControlToCpsError::post_op(
                 source,
-                self.ctx.op(source).location,
-                "effectful scf.if requires zero or one result inside a CPS callable",
+                location,
+                format!(
+                    "effectful {} requires zero or one result inside a CPS callable",
+                    self.ctx.op(source).name.display(self.ctx)
+                ),
             ));
         }
-        let location = self.ctx.op(source).location;
         let continuation = if is_cps {
             Some(if let [source_result_type] = result_types.as_slice() {
                 self.build_suffix_continuation(
@@ -349,23 +372,16 @@ impl Converter<'_> {
             self.ctx.push_op(block, continuation_op);
         }
 
-        let mut converted_regions = Vec::new();
-        let source_regions = self
+        let mut converted_regions = trunk_ir::RegionList::new();
+        for source_region in self
             .ctx
             .op_regions(source)
-            .collect::<trunk_ir::RegionList>();
-        for source_region in source_regions {
-            let source_blocks = self.ctx.region(source_region).blocks.clone();
-            let [source_block] = source_blocks.as_slice() else {
-                return Err(TributeControlToCpsError::post_op(
-                    source,
-                    location,
-                    "effectful scf.if regions must contain one block",
-                ));
-            };
+            .collect::<trunk_ir::RegionList>()
+        {
+            let source_block = self.single_arm_block(source_region);
             let source_arg_types = self
                 .ctx
-                .block_args(*source_block)
+                .block_args(source_block)
                 .iter()
                 .map(|arg| self.ctx.value_ty(*arg))
                 .collect::<Vec<_>>();
@@ -374,11 +390,11 @@ impl Converter<'_> {
                 .map(|ty| self.convert_type(ty))
                 .collect::<Vec<_>>();
             let converted_block =
-                make_block(self.ctx, self.ctx.block(*source_block).location, &arg_types);
+                make_block(self.ctx, self.ctx.block(source_block).location, &arg_types);
             let mut branch_mapping = mapping.clone();
             for (old, new) in self
                 .ctx
-                .block_args(*source_block)
+                .block_args(source_block)
                 .iter()
                 .copied()
                 .zip(self.ctx.block_args(converted_block).iter().copied())
@@ -416,7 +432,7 @@ impl Converter<'_> {
                 },
             };
             self.convert_sequence(
-                self.ctx.block(*source_block).ops.clone(),
+                self.ctx.block(source_block).ops.clone(),
                 0,
                 converted_block,
                 &mut branch_mapping,
@@ -424,36 +440,18 @@ impl Converter<'_> {
             )?;
             converted_regions.push(single_block_region(self.ctx, location, converted_block));
         }
-        let [then_region, else_region] = converted_regions.as_slice() else {
-            return Err(TributeControlToCpsError::post_op(
-                source,
-                location,
-                "scf.if requires exactly two regions",
-            ));
-        };
-        let condition = self.ctx.op_operands(source)[0];
-        let condition = mapping.get(&condition).copied().unwrap_or(condition);
         if continuation.is_some() {
             let never = self.never_type();
-            let lowered = scf::If::operands(condition)
-                .results(never)
-                .regions(*then_region, *else_region)
-                .build(self.ctx, location);
-            self.copy_extra_attrs(source, lowered.op_ref(), &[]);
-            self.ctx.push_op(block, lowered.op_ref());
+            let lowered = self.rebuild_structured(source, mapping, [never], converted_regions);
+            self.ctx.push_op(block, lowered);
             return Ok(());
         }
 
-        let mut builder = OperationDataBuilder::new(location, "scf.if").operand(condition);
-        for result_type in result_types {
-            builder = builder.result(self.convert_type(result_type));
-        }
-        let data = builder
-            .region(*then_region)
-            .region(*else_region)
-            .build(self.ctx);
-        let lowered = self.ctx.create_op(data);
-        self.copy_extra_attrs(source, lowered, &[]);
+        let converted_types = result_types
+            .into_iter()
+            .map(|ty| self.convert_type(ty))
+            .collect::<Vec<_>>();
+        let lowered = self.rebuild_structured(source, mapping, converted_types, converted_regions);
         self.ctx.push_op(block, lowered);
         for (old, new) in self
             .ctx
@@ -465,81 +463,5 @@ impl Converter<'_> {
             mapping.insert(old, new);
         }
         self.convert_sequence(OpList::from(rest.ops), rest.start, block, mapping, flow)
-    }
-
-    pub(super) fn lower_structured_switch(
-        &mut self,
-        source: OpRef,
-        rest: Rest<'_>,
-        block: BlockRef,
-        mapping: &HashMap<ValueRef, ValueRef>,
-        flow: &Flow,
-    ) -> Result<(), TributeControlToCpsError> {
-        if flow.convention != CallingConvention::Cps || !self.ctx.op_result_types(source).is_empty()
-        {
-            return Err(TributeControlToCpsError::post_op(
-                source,
-                self.ctx.op(source).location,
-                "effectful scf.index_switch must be resultless inside a CPS callable",
-            ));
-        }
-        let location = self.ctx.op(source).location;
-        let continuation = self.build_void_suffix_continuation(rest, mapping, flow, location)?;
-        let continuation_op = match self.ctx.value_def(continuation) {
-            trunk_ir::ValueDef::OpResult(op, _) => op,
-            _ => unreachable!("structured continuation is a closure.lambda"),
-        };
-        self.ctx.push_op(block, continuation_op);
-
-        let switch = scf::IndexSwitch::from_op(self.ctx, source)
-            .map_err(|_| self.malformed_source(source, "expected scf.index_switch"))?;
-        let cases: Vec<i64> = switch.cases(self.ctx).collect();
-        let mut converted_regions = Vec::new();
-        for source_region in switch.arm_regions(self.ctx) {
-            let source_case_blocks = &self.ctx.region(source_region).blocks;
-            let [source_case_block] = source_case_blocks.as_slice() else {
-                return Err(TributeControlToCpsError::post_op(
-                    source,
-                    location,
-                    "scf.index_switch region requires exactly one block",
-                ));
-            };
-            let case_location = self.ctx.block(*source_case_block).location;
-            let source_case_ops = self.ctx.block(*source_case_block).ops.clone();
-            let converted_block = make_block(self.ctx, case_location, &[]);
-            let mut case_mapping = mapping.clone();
-            let case_flow = Flow {
-                void_exit_k: Some(continuation),
-                ..flow.clone()
-            };
-            self.convert_sequence(
-                source_case_ops,
-                0,
-                converted_block,
-                &mut case_mapping,
-                &case_flow,
-            )?;
-            converted_regions.push(single_block_region(
-                self.ctx,
-                case_location,
-                converted_block,
-            ));
-        }
-        let default_region = converted_regions
-            .pop()
-            .expect("arm_regions ends with the default region");
-        let discriminant = switch.discriminant(self.ctx);
-        let discriminant = mapping.get(&discriminant).copied().unwrap_or(discriminant);
-        let lowered = scf::IndexSwitch::build_with_arms(
-            self.ctx,
-            location,
-            discriminant,
-            [],
-            cases.into_iter().zip(converted_regions),
-            default_region,
-        );
-        self.copy_extra_attrs(source, lowered.op_ref(), &[]);
-        self.ctx.push_op(block, lowered.op_ref());
-        Ok(())
     }
 }

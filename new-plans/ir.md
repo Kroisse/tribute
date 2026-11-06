@@ -300,7 +300,18 @@ region or back to the parent operation. `RegionBranchTerminator` describes the
 values a terminator forwards along such a region transfer. Region branch points
 and successors are explicit values: a point is either `Parent` or a concrete
 nested-region terminator, and a successor is either a concrete region or
-`Parent`.
+`Parent`. As MLIR's `getRegionInvocationBounds`, `RegionBranch` also declares
+how many times each region may run per execution of the operation; the
+default bound is unknown.
+
+An operation *selects one region* when its entry reaches only regions, each
+region runs at most once by its declared bounds, and each region's single
+block ends either in a terminator whose only successor is `Parent` or in a
+proven `CallableExit`. `scf.if` and `scf.index_switch` select one region;
+`scf.loop` does not, since its body may run again, even when the body ends
+in a callable exit and its successor graph shows no back edge. Like MLIR's
+`hasLoop`, the property is derived from these interface answers, not
+declared by operation name, and a failed query means it does not hold.
 
 `CallableExit` is a separate dialect-registered operation interface for an
 operation that ends execution of the current callable and therefore cannot
@@ -309,12 +320,12 @@ terminator marker: `scf.yield`, `scf.break`, and `scf.continue` transfer within
 structured control flow and do not satisfy it. Dialects register only their
 verified callable exits, including ordinary `func.return`, proper tail
 transfers, and unreachable control flow. An arm of a result-producing
-`scf.if` may end with a verified `CallableExit` instead of `scf.yield`; such
-an arm produces no value and the operation's results come from its yielding
-arms. Source `become` ends a tail-position arm this way. The typed model and
-its dynamic query are fallible. An unregistered operation, malformed
-registered operation, or query error is never evidence that a region is
-terminal.
+operation that selects one region may end with a verified `CallableExit`
+instead of `scf.yield`; such an arm produces no value and the operation's
+results come from its yielding arms. Source `become` ends a tail-position arm
+this way. The typed model and its dynamic query are fallible. An unregistered
+operation, malformed registered operation, or query error is never evidence
+that a region is terminal.
 
 Structured-to-CFG lowering may use `CallableExit` only after preserving its
 own structural rules: the region must have one block, the exit must be that
@@ -1153,9 +1164,11 @@ tribute_control.func_sig<(T) -> R row(@"<instance A>", @"<instance B>" | 'a1)>
   [`ability.decl`](../crates/tribute-ir/src/dialect/ability.rs)에 대한 symbol
   참조 목록이고
   `tail`은 둘러싼 정의의 [row binder](#row-binder) index다. 둘 다 없으면 닫힌 빈
-  row이며 속성을 생략해 쓴다. `instances`는 symbol 경로 순서로 정렬한다. 같은
-  instance가 두 번 나오면 두 번 둔다. Evidence 선택이 instance의 위치 수를 세기
-  때문이다.
+  row이며 속성을 생략해 쓴다. `instances`는 symbol 경로 순서로 정렬하며 같은
+  instance를 한 번만 둔다. Row는 [instance의 집합](type-inference.md#기본-규칙)이다.
+  명시 label과 tail이 같은 instance를 담는 호출에서 어느 위치가 어느 handler를 받는지는
+  type이 아니라 typechecking이 인스턴스화에서 계산한
+  [evidence 선택](#evidence-선택-속성)이 담는다.
 - **정체성:** signature의 정체성은 입력, 결과, row의 조합이다. Convention은
   signature에 들어가지 않는다. 같은 row도 인스턴스가 고정한 class에 따라 다른
   convention으로 불릴 수 있다([cps-effects.md](cps-effects.md#row와-호출-규약)).
@@ -1296,7 +1309,7 @@ Row-polymorphic 정의를 참조하는 `call`, `tail_call`, `func_ref`는 `row_a
 [convention class](cps-effects.md#row-변수의-convention-class) 규칙이 정한다.
 참조가 보는 callee signature는 callee의 type에 row 인자를 치환한 것이다. 치환은
 type 안의 모든 `func_sig`(자기 자신 포함)와 `adt.typeref`의 row 인자에서 tail이
-양화된 binder `t`인 row `(I, t)`를 `(I ⊎ args[t].instances, args[t].tail)`로 바꾸고
+양화된 binder `t`인 row `(I, t)`를 `(I ∪ args[t].instances, args[t].tail)`로 바꾸고
 정렬한다. 다른 속성은 바꾸지 않는다. Layout 안의 type은 layout의 binder를 쓰므로
 치환하지 않는다. Tuple layout은 원소를 치환한 뒤 같은 이름 규칙으로 다시
 만든다([layout 이름](#compiler-generated-tuple-layout)). `call_indirect`와
