@@ -1201,7 +1201,7 @@ mod tests {
         assert!(error.to_string().contains("scf-to-wasm"), "{error}");
         assert!(
             error.to_string().contains(
-                "unsupported discriminant type `core.i16`; expected `core.i32` or `core.i64`"
+                "unsupported discriminant type `core.i16`; expected `core.i32`, `core.i64`, or `core.index`"
             ),
             "{error}"
         );

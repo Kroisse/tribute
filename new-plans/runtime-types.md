@@ -161,7 +161,10 @@ WasmGC 객체에는 header가 없으므로 객체가 descriptor를 필드로 가
 - Builtin layout(bytes, closure, boxing된 scalar)은 지금처럼
   예약 GC 타입을 쓰며, descriptor 필드를 두지 않는다. 이 값들의 descriptor 번호는
   자기 예약 GC 타입 index다. 사용자 struct와 variant의 번호는 예약 GC 타입 index
-  범위 다음부터 할당 순서대로 정한다. Closure를 제외한 builtin layout은 layout마다 필드와
+  범위 다음부터 할당 순서대로 정한다. 단, enum은 처음 할당되는 variant의 순서에서
+  선언된 variant 수만큼 연속된 번호를 선언 순서대로 받는다. 따라서 variant의
+  선언 위치는 그 번호에서 enum의 첫 번호를 뺀 값이다. 할당되지 않는 variant의
+  번호는 비워 둔다. Closure를 제외한 builtin layout은 layout마다 필드와
   해제 동작이 하나로 고정되어 있으므로 descriptor도 layout마다 하나다.
 - Closure는 capture layout마다 GC 타입이 다르다. Wasm은 해제 정보가 필요 없고
   capture는 runtime 검사 대상이 아니므로, capture layout마다 descriptor를 두지 않고
@@ -181,6 +184,10 @@ WasmGC 객체에는 header가 없으므로 객체가 descriptor를 필드로 가
   비교한다. Payload에는 tag 필드를 두지 않고, variant 객체는 자기 필드만 가진다.
 - 프로그램이 할당하지 않는 variant는 descriptor 번호가 없으며, 그 variant에 대한
   판별은 두 target 모두에서 항상 거짓이다.
+- 값의 variant가 enum 선언에서 몇 번째인지(`adt.variant_tag`)도 descriptor로
+  구한다. Wasm은 descriptor 필드에서 enum의 첫 번호를 뺀다. Native는
+  [RTTI table](rc.md#rtti-table)에서 그 descriptor 레코드의 `tag_index`를 읽는다.
+  두 target 모두 할당 여부와 관계없이 선언 위치를 낸다.
 - Variant 판별의 대상은 enum 값이며 null이 아니다. Null 참조에 대한 판별의 동작은
   정의하지 않는다. Target은 참조를 읽다가 fault할 수도, 읽지 않고 거짓을 낼 수도
   있다.

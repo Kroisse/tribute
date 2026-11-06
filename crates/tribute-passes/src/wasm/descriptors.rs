@@ -6,10 +6,16 @@
 //! stores the number as the object's first field and erases the
 //! declarations. Builtin layouts carry no descriptor field; their reserved GC
 //! type index is their descriptor number, and user numbers follow it.
+//!
+//! An enum takes one number per declared variant, consecutive in
+//! declaration order, when its first variant is allocated, so a variant's
+//! position is its number minus the enum's first. A variant the module never
+//! allocates keeps its number undeclared.
 
-use rustc_hash::FxHashSet as HashSet;
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::ops::ControlFlow;
 
+use tribute_ir::dialect::adt::layout::get_enum_variants;
 use tribute_ir::dialect::tribute_rtti::{
     self, FieldKind, allocation_descriptor, descriptor_field_types,
 };
@@ -27,7 +33,8 @@ pub fn has_descriptor_field(ctx: &IrContext, ty: TypeRef) -> bool {
     builtin_type_idx(ctx, ty).is_none() && !crate::closure_lower::is_closure_layout(ctx, ty)
 }
 
-/// Declare the module's user allocation descriptors in allocation order.
+/// Declare the module's user allocation descriptors in allocation order,
+/// each enum's variants in one block.
 pub(crate) fn declare(ctx: &mut IrContext, module: Module) {
     let mut descriptors = Vec::new();
     let mut seen = HashSet::default();
@@ -46,12 +53,32 @@ pub(crate) fn declare(ctx: &mut IrContext, module: Module) {
         return;
     };
     let location = ctx.op(module.op()).location;
-    let mut index = FIRST_USER_TYPE_IDX;
+    let mut next = FIRST_USER_TYPE_IDX;
+    let mut enum_blocks: HashMap<TypeRef, u32> = HashMap::default();
     for (ty, tag) in descriptors {
         // An allocation whose type does not resolve to its layout stays
         // undeclared; `adt_to_wasm` leaves it for the backend boundary to reject.
         let Ok(field_types) = descriptor_field_types(ctx, ty, tag) else {
             continue;
+        };
+        let index = match tag {
+            None => {
+                next += 1;
+                next - 1
+            }
+            Some(tag) => {
+                let variants = get_enum_variants(ctx, ty)
+                    .expect("a variant descriptor's layout is an adt.enum");
+                let position = variants
+                    .iter()
+                    .position(|(name, _)| *name == tag)
+                    .expect("a variant descriptor names a variant of its enum");
+                let first = *enum_blocks.entry(ty).or_insert_with(|| {
+                    next += variants.len() as u32;
+                    next - variants.len() as u32
+                });
+                first + position as u32
+            }
         };
         let fields = field_types
             .into_iter()
@@ -59,7 +86,6 @@ pub(crate) fn declare(ctx: &mut IrContext, module: Module) {
             .collect::<Vec<_>>();
         let layout = tribute_rtti::Layout::declare(ctx, location, ty, tag, index, &fields);
         ctx.push_op(module_block, layout.op_ref());
-        index += 1;
     }
 }
 
@@ -132,12 +158,12 @@ mod tests {
             summary,
             [
                 (
-                    FIRST_USER_TYPE_IDX,
+                    FIRST_USER_TYPE_IDX + 1,
                     Some("Some"),
                     vec![FieldKind::Float { width: 64 }]
                 ),
                 (
-                    FIRST_USER_TYPE_IDX + 1,
+                    FIRST_USER_TYPE_IDX + 2,
                     None,
                     vec![
                         FieldKind::Managed,
@@ -153,7 +179,7 @@ mod tests {
     }
 
     #[test]
-    fn unresolved_descriptors_are_skipped_without_a_gap() {
+    fn unresolved_descriptors_are_skipped() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
@@ -179,8 +205,42 @@ mod tests {
         assert_eq!(
             summary,
             [
-                (FIRST_USER_TYPE_IDX, Some("Some")),
-                (FIRST_USER_TYPE_IDX + 1, None),
+                (FIRST_USER_TYPE_IDX + 1, Some("Some")),
+                (FIRST_USER_TYPE_IDX + 2, None),
+            ]
+        );
+    }
+
+    #[test]
+    fn each_enum_numbers_its_variants_in_declaration_order() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !S = adt.struct<S(x: core.f64)>
+  !E = adt.enum<E { A(), B(core.f64), C(), D(core.f64) }>
+  wasm.func @main(%x: core.f64) -> core.nil {
+    %d = adt.variant_new %x {type = !E, tag = "D"} : !E
+    %s = adt.struct_new %x {type = !S} : !S
+    %b = adt.variant_new %x {type = !E, tag = "B"} : !E
+    wasm.return
+  }
+}"#,
+        );
+
+        declare(&mut ctx, module);
+
+        let summary = tribute_rtti::Layout::declared(&ctx, module)
+            .iter()
+            .map(|layout| (layout.index(&ctx), layout.tag(&ctx)))
+            .collect::<Vec<_>>();
+        // `A` and `C` are never allocated but keep their numbers.
+        assert_eq!(
+            summary,
+            [
+                (FIRST_USER_TYPE_IDX + 3, Some("D")),
+                (FIRST_USER_TYPE_IDX + 4, None),
+                (FIRST_USER_TYPE_IDX + 1, Some("B")),
             ]
         );
     }

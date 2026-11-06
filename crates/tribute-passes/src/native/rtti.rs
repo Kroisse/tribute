@@ -25,6 +25,9 @@
 //! growing the reserved range otherwise needs no compatibility step; user
 //! indices simply start after it.
 //!
+//! The pass also lowers each `tribute_rtti.variant_position` to a read of
+//! the variant position its descriptor's record holds.
+//!
 //! ## Pipeline Position
 //!
 //! Runs before `adt_rc_header` (Phase 1.95), which stores the declared
@@ -41,7 +44,9 @@ use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::clif;
 use trunk_ir::location::Span;
 use trunk_ir::ops::{DialectOp, DialectType};
-use trunk_ir::rewrite::{Module, TypeConverter};
+use trunk_ir::rewrite::{
+    Module, OpRewritePattern, PatternApplicator, PatternRewriter, TypeConverter,
+};
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::Location;
 use trunk_ir::{BlockRef, OpRef, RegionRef, StringRef, TypeRef, ValueRef};
@@ -276,7 +281,61 @@ pub(crate) fn generate_rtti(
     let deep_release = generate_deep_release_function(ctx, loc);
     ctx.push_op(module_block, deep_release);
 
+    PatternApplicator::new(TypeConverter::new())
+        .add_pattern(VariantPositionPattern)
+        .apply_partial(ctx, module);
+
     Ok(())
+}
+
+/// `tribute_rtti.variant_position` -> a load of the position from the
+/// descriptor's record in `__tribute_rtti`.
+struct VariantPositionPattern;
+
+impl OpRewritePattern for VariantPositionPattern {
+    type Op = tribute_rtti::VariantPosition;
+
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        position: Self::Op,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> Option<()> {
+        let loc = ctx.op(position.op_ref()).location;
+        let tys = ClifTypes::intern(ctx);
+        let index = clif::Uextend::operands(position.descriptor(ctx))
+            .results(tys.i64)
+            .build(ctx, loc);
+        let record_size = clif::Iconst::operands()
+            .value(descriptor_records::RECORD_SIZE as i64)
+            .results(tys.i64)
+            .build(ctx, loc);
+        let offset = clif::Imul::operands(index.result(ctx), record_size.result(ctx))
+            .results(tys.i64)
+            .build(ctx, loc);
+        let table = clif::SymbolAddr::operands()
+            .sym(SymbolPath::new([RTTI_TABLE]))
+            .results(tys.ptr)
+            .build(ctx, loc);
+        let record = clif::Iadd::operands(table.result(ctx), offset.result(ctx))
+            .results(tys.ptr)
+            .build(ctx, loc);
+        let value = clif::Load::operands(record.result(ctx))
+            .offset(descriptor_records::TAG_INDEX_OFFSET as i32)
+            .results(tys.i32)
+            .build(ctx, loc);
+        for op in [
+            index.op_ref(),
+            record_size.op_ref(),
+            offset.op_ref(),
+            table.op_ref(),
+            record.op_ref(),
+        ] {
+            rewriter.insert_op(op);
+        }
+        rewriter.replace_op(value.op_ref());
+        Some(())
+    }
 }
 
 /// The release function of an RTTI index.
@@ -1186,6 +1245,49 @@ mod tests {
             .expect("boxed Float must have a reserved RTTI release entry");
         assert!(float_release.contains("clif.iconst 16 :"));
         assert!(float_release.contains("call @__tribute_dealloc("));
+    }
+
+    #[test]
+    fn variant_position_loads_the_position_from_the_descriptors_record() {
+        let mut ctx = IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @f(%descriptor: core.i32) -> core.i32 {
+    %position = tribute_rtti.variant_position %descriptor
+    func.return %position
+  }
+}"#,
+        );
+        let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
+        generate_rtti(&mut ctx, module, &tc).expect("no declared layouts");
+
+        let output = module.op().display(&ctx).to_string();
+        let body = output
+            .split("func.func @f(")
+            .nth(1)
+            .and_then(|rest| rest.split("func.return").next())
+            .expect("function body");
+        assert!(!body.contains("variant_position"), "{body}");
+        assert!(
+            body.contains("clif.uextend %0 : core.i32 to core.i64"),
+            "{body}"
+        );
+        assert!(
+            body.contains(&format!(
+                "clif.iconst {} : core.i64",
+                descriptor_records::RECORD_SIZE
+            )),
+            "{body}"
+        );
+        assert!(body.contains("clif.symbol_addr @__tribute_rtti"), "{body}");
+        assert!(
+            body.contains(&format!(
+                "{{offset = {}}} : core.i32",
+                descriptor_records::TAG_INDEX_OFFSET
+            )),
+            "{body}"
+        );
     }
 
     #[test]

@@ -72,6 +72,29 @@ mod adt {
     #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn variant_is(r#type: Attr<Type>, tag: Attr<String>, r#ref: Value<_>) -> Value<_> {}
 
+    /// The position of `ref`'s variant among the variants of the
+    /// `adt.enum` `type`, in declaration order.
+    ///
+    /// ```text
+    /// %tag = adt.variant_tag %value {type = !Shape}
+    /// ```
+    ///
+    /// - **Shape:** `type` is the enum layout of `ref`, and the result is a
+    ///   `core.index`.
+    /// - **Meaning:** `0` for the first declared variant, `1` for the next,
+    ///   and so on. A variant the program never allocates still keeps its
+    ///   position, so the result never depends on which variants a program
+    ///   allocates. `ref` is an enum value and is not null; reading a null
+    ///   reference is undefined, as for `adt.variant_is`.
+    /// - **Ownership:** borrows `ref`.
+    /// - **Location:** a case that selects by variant switches on this
+    ///   position (`new-plans/types.md` § "망라성과 도달 불가 arm"); each target
+    ///   computes it from the value's runtime type descriptor
+    ///   (`new-plans/runtime-types.md` § "Variant 판별").
+    #[flags(Pure)]
+    #[asm_format(r#ref attr_dict_bare)]
+    fn variant_tag(r#type: Attr<Type>, r#ref: Value<_>) -> Value<Index> {}
+
     #[flags(Pure)]
     #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn variant_cast(r#type: Attr<Type>, tag: Attr<String>, r#ref: Value<_>) -> Value<_> {}

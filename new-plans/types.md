@@ -630,7 +630,16 @@ arm이 실패하는 경로는 lowering 결과에 남지 않으며, 망라성 판
 리터럴 패턴(`as` 바인딩 포함)이고, 마지막 arm이 guard 없는 `_`나 바인딩 패턴이며,
 서로 다른 값이 둘 이상일 때다. 각 리터럴 arm은 그 값의 case region이 되고 마지막
 arm은 default region이 된다. 앞선 arm이 고른 값을 다시 고르는 arm은 도달할 수
-없으므로 case가 되지 않는다. 그 밖의 `case`는 연쇄로 남는다.
+없으므로 case가 되지 않는다.
+
+Variant로 고르는 `case`도 `scf.index_switch` 하나로 lowering하며, 판별값은
+scrutinee variant의 선언 위치(`adt.variant_tag`)다. 마지막을 뺀 모든 arm이 guard
+없는 variant 패턴(`as` 바인딩 포함)이고, 그 필드 패턴이 모두 어떤 값에나 맞으며
+(`_`, 바인딩, 그런 패턴의 튜플), 서로 다른 variant가 둘 이상일 때다. 각 arm은 자기
+variant 위치의 case region이 된다. 마지막 arm은 guard가 없으면 패턴과 관계없이
+default region이 된다. 연쇄의 마지막 arm이 검사 없이 실행되는 것과 같다. 앞선
+arm이 고른 variant를 다시 고르는 arm은 case가 되지 않는다. 그 밖의 `case`는
+연쇄로 남는다.
 
 ---
 

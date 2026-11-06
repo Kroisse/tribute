@@ -63,6 +63,7 @@ fn adt_to_clif_target() -> ConversionTarget {
         .legal_dialect(clif::DIALECT_NAME)
         .illegal_dialect(adt::DIALECT_NAME)
         .illegal_op("tribute_rtti.descriptor")
+        .illegal_op("tribute_rtti.variant_position")
         .legal_op("adt.struct_new")
         .legal_op("adt.variant_new")
         .legal_op("adt.string_const")
@@ -451,6 +452,27 @@ mod tests {
                 .operations()
                 .iter()
                 .any(|illegal| illegal.name == "adt.variant_is")
+        );
+    }
+
+    #[test]
+    fn variant_tag_left_for_adt_to_clif_is_rejected() {
+        let error = run_pass_result(
+            r#"core.module @test {
+  func.func @test_fn() -> core.index {
+    %0 = clif.iconst 42 : core.ptr
+    %1 = adt.variant_tag %0 {type = adt.enum<Choice { None(), Some(core.i32) }>}
+    func.return %1
+  }
+}"#,
+        )
+        .expect_err("struct_to_mem must run first");
+
+        assert!(
+            error
+                .operations()
+                .iter()
+                .any(|illegal| illegal.name == "adt.variant_tag")
         );
     }
 
