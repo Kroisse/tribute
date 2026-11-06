@@ -73,6 +73,7 @@ fn test_case_without_a_literal_switch_stays_a_chain(db: &salsa::DatabaseImpl) {
         "case x {\n        0 && flag -> 1\n        1 -> 2\n        _ -> 3\n    }",
         "case x {\n        0 -> 1\n        _ -> 2\n    }",
         "case flag {\n        True -> 1\n        False -> 2\n    }",
+        "case x {\n        0 -> 1\n        n && n > 5 -> n\n        1 -> 2\n        _ -> 3\n    }",
     ] {
         let text = format!("fn pick(x: Nat, flag: Bool) -> Nat {{\n    {body}\n}}\n");
         let source = SourceCst::from_source_str(db, "test.trb", &text);
