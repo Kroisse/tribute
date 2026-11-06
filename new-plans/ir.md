@@ -1213,7 +1213,7 @@ row를 layout 이름에 담고 둘러싼 정의의 binder를 쓰지만, nominal 
 binder를 소유하므로 row 인자와 상관없이 하나다.
 
 ```text
-adt.struct<Callback(run: tribute_control.func_sig<(core.i64) -> core.i64 row('a0)>),
+adt.struct<Callback(run: tribute_control.func_sig<(core.i64) -> core.i64 row(| 'a0)>),
   {row_params = 1}>
 adt.typeref<{name = "Callback", row_args = [{instances = [@"<State(Int)>"]}]}>
 adt.typeref<{name = "Callback", row_args = [{tail = 2}]}>

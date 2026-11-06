@@ -200,10 +200,11 @@ struct Logged({e}) { run: fn() ->{Log, e} Nil }     // tail 앞에 ability를 �
 
 ```rust
 fn run_twice(cb: Callback({e}, Int), x: Int) ->{e} Int {
-    cb.run(cb.run(x))
+    let run = cb.run
+    run(run(x))
 }
 
-let pure: Callback({}, Int) = Callback { run: fn(x) { x + 1 } }
+let pure: Callback({}, Int) = Callback { run: fn(x) { x + 1i } }
 let counting: Callback({State(Int)}, Int) = Callback { run: fn(x) { State::get() + x } }
 ```
 
@@ -237,9 +238,7 @@ enum Step { Next(fn() ->{State(Int)} Nil), Done }    // 구체적 ability는 허
 struct Bad { run: fn(Int) ->{e} Int }                // Error: e가 묶이지 않음
 ```
 
-열린 row의 callback을 필드에 담으려면 그 row를 row 매개변수로 선언한다. 함수
-시그니처의 생략된 row는 fresh 변수이므로, row 매개변수가 없는 필드에 담을 callback은
-시그니처에서 `->{}`로 명시한다.
+열린 row의 callback을 필드에 담으려면 그 row를 row 매개변수로 선언한다.
 
 ---
 
