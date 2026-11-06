@@ -75,7 +75,7 @@ fn format_box(value: Int) -> String {
         .expect("Box payload must be passed to Int::to_string");
     assert!(
         format_box[construct..int_to_string].contains(
-            r#"adt.variant_get %9 {field = 0, tag = "Box", type = !"pkg::Boxed$Int"} : core.i32"#
+            r#"adt.variant_get %1 {field = 0, tag = "Box", type = !"pkg::Boxed$Int"} : core.i32"#
         ),
         "pattern use must read the Int payload from the specialized layout:\n{format_box}"
     );

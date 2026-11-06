@@ -27,8 +27,8 @@
 //! - `adt.variant_new` -> `wasm.struct_new` of the variant's struct type
 //! - `adt.variant_is` -> `wasm.ref_cast` to the `Described` type, a read of
 //!   its descriptor field, and a comparison with the variant's number
-//! - `adt.variant_cast` -> `wasm.ref_cast` (casts to specific variant type)
-//! - `adt.variant_get` -> `wasm.struct_get` (field access after the descriptor field)
+//! - `adt.variant_get` -> `wasm.ref_cast` to the variant's struct type and
+//!   `wasm.struct_get` of the field after the descriptor field
 //!
 //! ## Array Operations
 //! - `adt.array_new` -> `wasm.array_new`
@@ -151,7 +151,6 @@ pub(crate) fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeCon
             numbers: numbers.clone(),
         })
         .add_pattern(VariantIsPattern { numbers })
-        .add_pattern(VariantCastPattern)
         .add_pattern(VariantGetPattern)
         .add_pattern(ArrayNewPattern)
         .add_pattern(ArrayOfPattern)
@@ -366,43 +365,8 @@ impl OpRewritePattern for VariantIsPattern {
     }
 }
 
-/// Pattern for `adt.variant_cast` -> `wasm.ref_cast`
-///
-/// Casts a variant reference to a specific variant type after pattern matching.
-struct VariantCastPattern;
-
-impl OpRewritePattern for VariantCastPattern {
-    type Op = adt::VariantCast;
-
-    fn match_and_rewrite(
-        &self,
-        ctx: &mut IrContext,
-        variant_cast: Self::Op,
-        rewriter: &mut PatternRewriter<'_>,
-    ) -> Option<()> {
-        let op = variant_cast.op_ref();
-        let loc = ctx.op(op).location;
-        let tag = variant_cast.tag_ref(ctx);
-        let ref_val = variant_cast.r#ref(ctx);
-
-        let enum_type = canonical_enum_type(ctx, variant_cast.r#type(ctx))?;
-
-        let variant_type = variant_type(ctx, enum_type, tag)?;
-
-        let new_op = wasm_gc_dialect::RefCast::operands(ref_val)
-            .target_type(variant_type)
-            .results(variant_type)
-            .build(ctx, loc);
-        rewriter.replace_op(new_op.op_ref());
-        Some(())
-    }
-}
-
-/// Pattern for `adt.variant_get` -> `wasm.struct_get`
-///
-/// With WasmGC subtyping, variant structs no longer have a tag field,
-/// so field indices are used directly without offset.
-/// The type for struct.get comes from the operand (the variant_cast result).
+/// Pattern for `adt.variant_get` -> `wasm.ref_cast` to the variant's struct
+/// type, then `wasm.struct_get` of the field after the descriptor field.
 struct VariantGetPattern;
 
 impl OpRewritePattern for VariantGetPattern {
@@ -441,13 +405,8 @@ impl OpRewritePattern for VariantGetPattern {
         )?;
         let result_ty = declared_field_ty;
         let variant_type = variant_type(ctx, enum_type, tag)?;
-        // An operand that already has a struct type is a cast to this
-        // variant's layout; a logical reference must name this enum.
+        // A logical reference must name this enum.
         let operand_ty = ctx.value_ty(ref_val);
-        rewriter.ensure(
-            !(wasm_gc_dialect::Struct::matches(ctx, operand_ty) && operand_ty != variant_type),
-            "operand is another variant's struct",
-        )?;
         let operand_data = ctx.get_type(operand_ty);
         rewriter.ensure(
             !(operand_data.name == tribute_ir::dialect::adt::Typeref::NAME
@@ -455,6 +414,19 @@ impl OpRewritePattern for VariantGetPattern {
             "operand typeref names another enum",
         )?;
 
+        // `struct.get` reads a reference of the variant's own struct type. A
+        // value built as another variant reaches here only on a path its
+        // variant test excludes, so the cast never fails.
+        let ref_val = if operand_ty == variant_type {
+            ref_val
+        } else {
+            let cast = wasm_gc_dialect::RefCast::operands(ref_val)
+                .target_type(variant_type)
+                .results(variant_type)
+                .build(ctx, loc);
+            rewriter.insert_op(cast.op_ref());
+            cast.result(ctx)
+        };
         // The variant's fields follow its descriptor field.
         let new_op = wasm_gc_dialect::StructGet::operands(ref_val)
             .r#type(variant_type)
@@ -1098,8 +1070,7 @@ mod tests {
 
     %variant = adt.variant_new %one {type = !E, tag = "Some"} : !ERef
     %is_some = adt.variant_is %variant {type = !E, tag = "Some"} : core.i32
-    %cast = adt.variant_cast %variant {type = !E, tag = "Some"} : !ERef
-    %payload = adt.variant_get %cast {type = !E, tag = "Some", field = 0} : core.i32
+    %payload = adt.variant_get %variant {type = !E, tag = "Some", field = 0} : core.i32
 
     %at = arith.constant 0 : core.index
     %count = arith.constant 2 : core.index
@@ -1136,7 +1107,7 @@ mod tests {
                 .iter()
                 .filter(|&&op| ctx.op(op).name.dialect(&ctx) == wasm_gc_dialect::DIALECT_NAME)
                 .count(),
-            15
+            14
         );
         let variant_get = ctx
             .block(block)
@@ -1269,8 +1240,7 @@ mod tests {
     %empty = adt.variant_new {type = !List, tag = "Empty"} : !ListRef
     %list = adt.variant_new %zero, %empty {type = !List, tag = "Cons"} : !ListRef
     %is_cons = adt.variant_is %input {type = !List, tag = "Cons"} : core.i1
-    %cast = adt.variant_cast %input {type = !List, tag = "Cons"} : !ListRef
-    %tail = adt.variant_get %cast {type = !List, tag = "Cons", field = 1} : !ListRef
+    %tail = adt.variant_get %input {type = !List, tag = "Cons", field = 1} : !ListRef
     wasm.return
   }
 }"#,
@@ -1431,7 +1401,7 @@ mod tests {
     }
 
     #[test]
-    fn variant_get_with_mismatched_variant_provenance_stays_unlowered() {
+    fn variant_get_casts_its_operand_unless_a_typeref_names_another_enum() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
@@ -1465,20 +1435,19 @@ mod tests {
             .iter()
             .filter(|&&op| adt::VariantGet::from_op(&ctx, op).is_ok())
             .count();
-        assert_eq!(remaining_variant_gets, 3);
-        let lowered_variant_gets: Vec<_> = ctx
+        assert_eq!(remaining_variant_gets, 1, "only the !BRef operand stays");
+        let casts: Vec<_> = ctx
             .block(block)
             .ops
             .iter()
-            .copied()
-            .filter(|&op| wasm_gc_dialect::StructGet::from_op(&ctx, op).is_ok())
+            .filter_map(|&op| wasm_gc_dialect::RefCast::from_op(&ctx, op).ok())
             .collect();
-        assert_eq!(lowered_variant_gets.len(), 1);
-        assert_eq!(
-            ctx.op_operands(lowered_variant_gets[0])[0],
-            function_args[0],
-            "only the matching !ARef operand lowers",
-        );
+        assert_eq!(casts.len(), 3);
+        assert_eq!(casts[0].r#ref(&ctx), function_args[0]);
+        let some = ctx.intern_str("Some");
+        let a = ctx.type_alias_by_text("A").expect("A layout");
+        let some_ty = variant_type(&mut ctx, a, some).expect("Some layout");
+        assert!(casts.iter().all(|cast| cast.target_type(&ctx) == some_ty));
     }
 
     #[test]
