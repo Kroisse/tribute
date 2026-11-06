@@ -297,7 +297,7 @@ mod tests {
             r#"core.module @test {
   !Mixed = adt.struct<Mixed(flag: core.i8, count: tribute_rt.int, any: tribute_rt.anyref, byte: core.i8, raw: core.ptr, ratio: tribute_rt.float, small: core.i16)>
   func.func @read(%mixed: adt.typeref<{name = "Mixed"}>) -> core.i8 {
-    %flag = adt.struct_get %mixed {field = 0, type = !Mixed} : core.i8
+    %flag = adt.struct_get %mixed[0] : !Mixed -> core.i8
     func.return %flag
   }
 }"#,
@@ -336,8 +336,8 @@ mod tests {
   !Point = adt.struct<Point(x: core.i32, y: core.i32)>
   !Size = adt.struct<Size(width: core.i32, height: core.i32)>
   func.func @read(%point: !Point, %size: !Size) -> core.i32 {
-    %x = adt.struct_get %point {field = 0, type = !Point} : core.i32
-    adt.struct_set %size, %x {field = 1, type = !Size}
+    %x = adt.struct_get %point[0] : !Point -> core.i32
+    adt.struct_set %size[1], %x : !Size
     func.return %x
   }
 }"#,
@@ -349,7 +349,7 @@ mod tests {
         assert_eq!(point, size);
         let printed = module.op().display(&ctx).to_string();
         assert!(
-            printed.contains("type = mem.struct<core.i32, core.i32>"),
+            printed.contains(": mem.struct<core.i32, core.i32> ->"),
             "{printed}"
         );
     }
@@ -361,7 +361,7 @@ mod tests {
   !Pair = adt.struct<Pair(code: core.i64, env: core.ptr)>
   tribute_rtti.layout {fields = ["raw", "dynamic"], index = 5, type = !Pair}
   func.func @read(%pair: core.ptr) -> core.ptr {
-    %env = adt.struct_get %pair {field = 1, type = !Pair} : core.ptr
+    %env = adt.struct_get %pair[1] : !Pair -> core.ptr
     func.return %env
   }
 }"#,
@@ -373,7 +373,7 @@ mod tests {
         let printed = module.op().display(&ctx).to_string();
         assert!(mem::Struct::matches(&ctx, structural));
         assert!(
-            printed.contains("type = mem.struct<core.i64, tribute_rt.anyref>"),
+            printed.contains(": mem.struct<core.i64, tribute_rt.anyref> ->"),
             "{printed}"
         );
     }
@@ -387,8 +387,8 @@ mod tests {
   tribute_rtti.layout {fields = [], index = 5, type = !Choice, tag = "None"}
   tribute_rtti.layout {fields = ["u32"], index = 6, type = !Choice, tag = "Some"}
   func.func @test(%choice: !ChoiceRef) -> core.i1 {
-    %is_some = adt.variant_is %choice {tag = "Some", type = !Choice} : core.i1
-    %is_other = adt.variant_is %choice {tag = "Other", type = !Choice} : core.i1
+    %is_some = adt.variant_is %choice, Some : !Choice -> core.i1
+    %is_other = adt.variant_is %choice, Other : !Choice -> core.i1
     func.return %is_some
   }
 }"#,
@@ -419,8 +419,8 @@ mod tests {
   !Choice = adt.enum<Choice { None(), Pair(core.i8, !ChildRef), Raw(core.ptr, core.i64) }>
   tribute_rtti.layout {fields = ["u8", "managed"], index = 6, type = !Choice, tag = "Pair"}
   func.func @test(%choice: !ChoiceRef) -> !ChildRef {
-    %child = adt.variant_get %choice {tag = "Pair", field = 1, type = !Choice} : !ChildRef
-    %raw = adt.variant_get %choice {tag = "Raw", field = 1, type = !Choice} : core.i64
+    %child = adt.variant_get %choice.Pair[1] : !Choice -> !ChildRef
+    %raw = adt.variant_get %choice.Raw[1] : !Choice -> core.i64
     func.return %child
   }
 }"#,
@@ -433,11 +433,11 @@ mod tests {
             panic!("two variant accesses: {printed}")
         };
         assert!(
-            printed.contains("{field = 1, type = mem.struct<core.i8, tribute_rt.anyref>}"),
+            printed.contains("[1] : mem.struct<core.i8, tribute_rt.anyref> ->"),
             "{printed}"
         );
         assert!(
-            printed.contains("{field = 1, type = mem.struct<core.ptr, core.i64>}"),
+            printed.contains("[1] : mem.struct<core.ptr, core.i64> ->"),
             "{printed}"
         );
         // Fields start at the payload, with no tag before them.
@@ -459,7 +459,7 @@ mod tests {
   !ChildRef = adt.typeref<{name = "Child"}>
   !Parent = adt.struct<Parent(child: !ChildRef, raw: core.ptr, bytes: core.bytes)>
   func.func @read(%parent: adt.typeref<{name = "Parent"}>) -> !ChildRef {
-    %child = adt.struct_get %parent {field = 0, type = !Parent} : !ChildRef
+    %child = adt.struct_get %parent[0] : !Parent -> !ChildRef
     func.return %child
   }
 }"#,
@@ -467,7 +467,7 @@ mod tests {
 
         let printed = module.op().display(&ctx).to_string();
         assert!(
-            printed.contains("type = mem.struct<tribute_rt.anyref, core.ptr, tribute_rt.anyref>"),
+            printed.contains(": mem.struct<tribute_rt.anyref, core.ptr, tribute_rt.anyref> ->"),
             "{printed}"
         );
     }

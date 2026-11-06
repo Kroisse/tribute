@@ -758,8 +758,8 @@ mod tests {
   !Frame = adt.struct<Frame()>
   !Env = adt.struct<Env(closure: !Closure, evidence: !Evidence, frame: !Frame)>
   wasm.func @worker(%evidence: !Evidence, %closure: !Closure, %frame: !Frame) {
-    %env = adt.struct_new %closure, %evidence, %frame {type = !Env} : !Env
-    %loaded = adt.struct_get %env {field = 1, type = !Env} : !Evidence
+    %env = adt.struct_new(%closure, %evidence, %frame) : !Env -> !Env
+    %loaded = adt.struct_get %env[1] : !Env -> !Evidence
     wasm.return
   }
 }"#,
@@ -1121,7 +1121,7 @@ mod tests {
             r#"core.module @test {
   !String = adt.enum<String { Leaf(core.bytes), Branch(tribute_rt.anyref, tribute_rt.anyref, core.i32) }>
   func.func @main() -> core.nil {
-    %string = adt.string_const {value = "wrong"} : core.i32
+    %string = adt.string_const "wrong" : core.i32
     func.return
   }
 }"#,
@@ -1215,9 +1215,9 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @run(%newline: core.i1) -> core.nil {
-    %first = adt.bytes_const {value = b"first"} : core.bytes
-    %second = adt.bytes_const {value = b"second"} : core.bytes
-    %again = adt.bytes_const {value = b"first"} : core.bytes
+    %first = adt.bytes_const b"first" : core.bytes
+    %second = adt.bytes_const b"second" : core.bytes
+    %again = adt.bytes_const b"first" : core.bytes
     %write = tribute_io.write %first, %newline : core.nil
     %rewrite = tribute_io.write %again, %newline : core.nil
     func.return

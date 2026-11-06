@@ -91,8 +91,8 @@ impl Pass for LowerBytesIntrinsics {
 ///
 /// Emits:
 ///   %view   = core.unrealized_conversion_cast %bytes : core.bytes to !bytes
-///   %data   = adt.struct_get %view {field = 0} : !bytes_data
-///   %offset = adt.struct_get %view {field = 1} : core.i32
+///   %data   = adt.struct_get %view[0] : !bytes -> !bytes_data
+///   %offset = adt.struct_get %view[1] : !bytes -> core.i32
 ///   %at     = arith.addi %offset, %index : core.i32
 ///   %pos    = arith.index_castui %at : core.i32 to core.index
 ///   %byte   = adt.array_get %data, %pos : core.i8

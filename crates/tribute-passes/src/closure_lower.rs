@@ -1681,8 +1681,8 @@ mod tests {
   }}
   func.func @run(%callee: !outer, %evidence: {evidence}, %done: core.i32) -> core.never attributes {{tribute.calling_convention = "cps"}} {{
     %function = func.constant @actual_fn : ({evidence}, core.i32, core.i1) -> core.never
-    %environment = adt.ref_null {{type = tribute_rt.anyref}} : tribute_rt.anyref
-    %pack = adt.struct_new %function, %environment {{type = !_closure}} : !_closure
+    %environment = adt.ref_null : tribute_rt.anyref -> tribute_rt.anyref
+    %pack = adt.struct_new(%function, %environment) : !_closure -> !_closure
     %argument = core.unrealized_conversion_cast %pack : !_closure to !actual
     func.tail_call_indirect %callee(%evidence, %done, %argument) attributes {{tribute.calling_convention = "cps"}} : ({evidence}, core.i32, !expected) -> core.never
   }}

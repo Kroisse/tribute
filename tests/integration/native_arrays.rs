@@ -53,25 +53,25 @@ fn run(body: &str, expected: i32) -> Output {
 /// Builds, copies, and replaces managed and scalar elements, and sums what it
 /// reads back.
 const ARRAY_OPERATIONS: &str = r#"
-      %a = adt.struct_new %one {type = !Node} : !NodeRef
-      %b = adt.struct_new %two {type = !Node} : !NodeRef
-      %pair = adt.array_of %a, %b {type = !Nodes} : !Nodes
-      %filled = adt.array_new %i3, %a {type = !Nodes} : !Nodes
-      %inserted = adt.array_splice %pair[%i1, %i1](%b) attributes {type = !Nodes} : !Nodes
-      %trimmed = adt.array_splice %inserted[%i0, %i1]() attributes {type = !Nodes} : !Nodes
-      %replaced = adt.array_splice %filled[%i0, %i2](%b, %a, %b) attributes {type = !Nodes} : !Nodes
+      %a = adt.struct_new(%one) : !Node -> !NodeRef
+      %b = adt.struct_new(%two) : !Node -> !NodeRef
+      %pair = adt.array_of %a, %b : !Nodes
+      %filled = adt.array_new %i3, %a : !Nodes
+      %inserted = adt.array_splice %pair[%i1, %i1](%b) : !Nodes
+      %trimmed = adt.array_splice %inserted[%i0, %i1]() : !Nodes
+      %replaced = adt.array_splice %filled[%i0, %i2](%b, %a, %b) : !Nodes
       adt.array_set %filled, %i1, %b
       %t0 = adt.array_get %trimmed, %i0 : !NodeRef
-      %v0 = adt.struct_get %t0 {field = 0, type = !Node} : core.i32
+      %v0 = adt.struct_get %t0[0] : !Node -> core.i32
       %f1 = adt.array_get %filled, %i1 : !NodeRef
-      %v1 = adt.struct_get %f1 {field = 0, type = !Node} : core.i32
+      %v1 = adt.struct_get %f1[0] : !Node -> core.i32
       %f2 = adt.array_get %filled, %i2 : !NodeRef
-      %v2 = adt.struct_get %f2 {field = 0, type = !Node} : core.i32
+      %v2 = adt.struct_get %f2[0] : !Node -> core.i32
       %r3 = adt.array_get %replaced, %i3 : !NodeRef
-      %v3 = adt.struct_get %r3 {field = 0, type = !Node} : core.i32
-      %ints = adt.array_of %one, %two {type = !Ints} : !Ints
-      %more = adt.array_new %i2, %two {type = !Ints} : !Ints
-      %joined = adt.array_splice %ints[%i2, %i2](%one) attributes {type = !Ints} : !Ints
+      %v3 = adt.struct_get %r3[0] : !Node -> core.i32
+      %ints = adt.array_of %one, %two : !Ints
+      %more = adt.array_new %i2, %two : !Ints
+      %joined = adt.array_splice %ints[%i2, %i2](%one) : !Ints
       adt.array_set %more, %i0, %one
       %w0 = adt.array_get %joined, %i2 : core.i32
       %w1 = adt.array_get %more, %i0 : core.i32
@@ -109,12 +109,12 @@ fn assert_traps_without_access(body: &str) {
 fn an_index_at_the_length_traps_before_the_access() {
     assert_traps_without_access(
         r#"
-      %ints = adt.array_of %one, %two {type = !Ints} : !Ints
+      %ints = adt.array_of %one, %two : !Ints
       %sum = adt.array_get %ints, %i2 : core.i32"#,
     );
     assert_traps_without_access(
         r#"
-      %ints = adt.array_new %i2, %one {type = !Ints} : !Ints
+      %ints = adt.array_new %i2, %one : !Ints
       adt.array_set %ints, %i3, %two
       %sum = arith.constant 0 : core.i32"#,
     );
@@ -124,14 +124,14 @@ fn an_index_at_the_length_traps_before_the_access() {
 fn a_splice_range_outside_the_source_traps() {
     assert_traps_without_access(
         r#"
-      %ints = adt.array_of %one, %two {type = !Ints} : !Ints
-      %spliced = adt.array_splice %ints[%i1, %i3]() attributes {type = !Ints} : !Ints
+      %ints = adt.array_of %one, %two : !Ints
+      %spliced = adt.array_splice %ints[%i1, %i3]() : !Ints
       %sum = arith.constant 0 : core.i32"#,
     );
     assert_traps_without_access(
         r#"
-      %ints = adt.array_of %one, %two {type = !Ints} : !Ints
-      %spliced = adt.array_splice %ints[%i2, %i1]() attributes {type = !Ints} : !Ints
+      %ints = adt.array_of %one, %two : !Ints
+      %spliced = adt.array_splice %ints[%i2, %i1]() : !Ints
       %sum = arith.constant 0 : core.i32"#,
     );
 }

@@ -813,10 +813,10 @@ mod tests {
   !NodeRef = adt.typeref<{name = "Node"}>
   !Nodes = adt.array<!NodeRef>
   func.func @build(%a: !NodeRef, %b: !NodeRef, %at: core.index) -> !Nodes {
-    %pair = adt.array_of %a, %b {type = !Nodes} : !Nodes
-    %filled = adt.array_new %at, %a {type = !Nodes} : !Nodes
-    %again = adt.array_new %at, %b {type = !Nodes} : !Nodes
-    %spliced = adt.array_splice %pair[%at, %at](%b) attributes {type = !Nodes} : !Nodes
+    %pair = adt.array_of %a, %b : !Nodes
+    %filled = adt.array_new %at, %a : !Nodes
+    %again = adt.array_new %at, %b : !Nodes
+    %spliced = adt.array_splice %pair[%at, %at](%b) : !Nodes
     func.return %spliced
   }
 }"#,
@@ -836,9 +836,9 @@ mod tests {
             r#"core.module @test {
   !Ints = adt.array<core.i32>
   func.func @build(%value: core.i32, %count: core.index) -> !Ints {
-    %filled = adt.array_new %count, %value {type = !Ints} : !Ints
+    %filled = adt.array_new %count, %value : !Ints
     %zero = arith.constant 0 : core.index
-    %trimmed = adt.array_splice %filled[%zero, %count]() attributes {type = !Ints} : !Ints
+    %trimmed = adt.array_splice %filled[%zero, %count]() : !Ints
     func.return %trimmed
   }
 }"#,

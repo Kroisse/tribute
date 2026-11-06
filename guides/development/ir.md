@@ -222,10 +222,12 @@ where
   list, and writes results that may be absent in an optional group that ends
   the format or comes before a literal, as `(":" types(..)^)?` or
   `("->" "(" types(..)^ ")")?`. A format need not write a result type the
-  declaration fixes; the parser then takes it from the schema, and the
-  printer uses the format only for operations whose results have that
-  type, as `arith.cmpi slt, %a, %b : core.i32` leaves out its `core.i1`
-  result. An
+  attributes determine: one the declaration fixes, or a variable a required
+  `Attr<TypeOf<S>>` binds, or a projection of one. The parser then derives
+  it from the schema and the attributes it read, and the printer uses the
+  format only for operations whose results have that type, as
+  `arith.cmpi slt, %a, %b : core.i32` leaves out its `core.i1` result and
+  `adt.array_of %a, %b : !A` its `!A`. An
   operand list stays on its line, so an empty one does not read the next
   line's `%r = ..`.
   The macro reports a broken rule, a missing entity, or one written twice at

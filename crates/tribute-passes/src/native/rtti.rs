@@ -1198,8 +1198,8 @@ mod tests {
             r#"core.module @test {
   !Choice = adt.enum<Choice { None(), Pair(core.i32, tribute_rt.anyref) }>
   func.func @f(%n: core.i32, %v: tribute_rt.anyref) -> core.nil {
-    %none = adt.variant_new {type = !Choice, tag = "None"} : !Choice
-    %pair = adt.variant_new %n, %v {type = !Choice, tag = "Pair"} : !Choice
+    %none = adt.variant_new None() : !Choice -> !Choice
+    %pair = adt.variant_new Pair(%n, %v) : !Choice -> !Choice
     func.return
   }
 }"#,
@@ -1276,11 +1276,11 @@ mod tests {
   !Nodes = adt.array<!NodeRef>
   !Shorts = adt.array<core.i16>
   func.func @nodes(%node: !NodeRef) -> !Nodes {
-    %nodes = adt.array_of %node {type = !Nodes} : !Nodes
+    %nodes = adt.array_of %node : !Nodes
     func.return %nodes
   }
   func.func @shorts(%short: core.i16) -> !Shorts {
-    %shorts = adt.array_of %short {type = !Shorts} : !Shorts
+    %shorts = adt.array_of %short : !Shorts
     func.return %shorts
   }
 }"#,

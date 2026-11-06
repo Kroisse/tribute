@@ -858,11 +858,12 @@ fn check(
         .map(Entity::Operand)
         .chain((0..format.regions.len()).map(Entity::Region))
         .chain((0..format.successors.len()).map(Entity::Successor))
-        // The parser takes fixed result types from the schema.
+        // The parser derives fixed result types, and those the attributes
+        // bind, from the schema.
         .chain(
             format
                 .result_name()
-                .filter(|_| !crate::codegen::results_fixed(op))
+                .filter(|_| !crate::codegen::results_derivable(op))
                 .map(|_| Entity::Results),
         )
         .chain(

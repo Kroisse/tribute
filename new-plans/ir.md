@@ -507,10 +507,13 @@ literal은 문자열 literal로 쓴다.
   parser는 형식 parser를 부르기 전에 읽는다. Result 타입은 `type(result)`나
   `types(results)`, 또는 타입을 재구성하는 `signature`로 정확히 한 번 쓴다.
   `types`는 결과 목록을 쉼표로 구분해 쓰며, 결과가 없을 수 있으면 앞의 구두점과
-  함께 선택 묶음에 둔다. 선언이 고정한 result 타입(`-> Value<I1>`)만은 쓰지 않아도
-  된다. 그러면 parser가 schema에서 그 타입을 가져오고, printer는 result 타입이
-  고정 타입과 같은 operation만 이 형식으로 쓴다(`arith.cmpi slt, %a, %b :
-  core.i32`의 결과 `core.i1`).
+  함께 선택 묶음에 둔다. Attribute만으로 정해지는 result 타입은 쓰지 않아도 된다.
+  선언이 고정한 타입(`-> Value<I1>`), 필수 `Attr<TypeOf<S>>` attribute가 바인딩한
+  변수, 그 변수의 projection이 여기에 해당한다. 그러면 parser가 schema와 읽은
+  attribute에서 그 타입을 정하고, printer는 result 타입이 그렇게 정한 타입과 같은
+  operation만 이 형식으로 쓴다(`arith.cmpi slt, %a, %b : core.i32`의 결과
+  `core.i1`, `adt.array_of %a, %b : !A`의 결과 `!A`). Operand가 바인딩한 변수는
+  여기에 들지 않는다.
 - **`attr_dict`, `attr_dict_bare`** — 형식의 다른 원소가 쓰지 않은 모든
   attribute를 `attr_dict`는 `attributes {..}`로, `attr_dict_bare`는 keyword 없이
   `{..}`로 쓴다. 형식은 둘 중 하나만 쓴다. 남은 attribute가 없으면 아무 것도 쓰지

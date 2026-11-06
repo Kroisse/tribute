@@ -1,6 +1,5 @@
 ---
 source: crates/tribute-passes/src/native/adapt_closure_layout.rs
-assertion_line: 437
 expression: result
 ---
 core.module @test {
@@ -10,10 +9,10 @@ core.module @test {
 
   clif.func @test_fn(%0: core.ptr) -> core.i32 {
       %1 = clif.symbol_addr @__tribute_convention_table_0 : core.ptr
-      %2 = adt.struct_new %1, %0 {type = !_closure_captures} : !_closure_captures
+      %2 = adt.struct_new(%1, %0) : !_closure_captures -> !_closure_captures
       %3 = core.unrealized_conversion_cast %2 : !_closure_captures to core.ptr
-      %4 = adt.struct_get %3 {field = 0, type = !_closure_captures} : core.ptr
-      %5 = adt.struct_get %3 {field = 1, type = !_closure_captures} : tribute_rt.anyref
+      %4 = adt.struct_get %3[0] : !_closure_captures -> core.ptr
+      %5 = adt.struct_get %3[1] : !_closure_captures -> tribute_rt.anyref
       %6 = clif.load %4 {offset = 0} : core.i64
       %7 = core.unrealized_conversion_cast %5 : tribute_rt.anyref to core.ptr
       %8 = clif.call_indirect %6(%7) : (core.ptr) -> core.i32

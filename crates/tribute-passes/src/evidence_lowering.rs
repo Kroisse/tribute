@@ -459,7 +459,7 @@ mod tests {
     func.return %id
   }
   func.func @"std::runtime::evidence::lookup_tr"(%ev: !Evidence, %id: core.i32) -> !Closure {
-    %f = adt.ref_null {type = !Closure} : !Closure
+    %f = adt.ref_null : !Closure -> !Closure
     func.return %f
   }
   func.func @"std::runtime::evidence::extend"(%ev: !Evidence, %id: core.i32, %prompt: core.i32, %tr: !OptionRef, %outer: !Evidence) -> !Evidence {
@@ -592,10 +592,7 @@ mod tests {
             [(runtime_callee("extend"), 5)],
             "{printed}"
         );
-        assert!(
-            printed.contains(r#"adt.variant_new %2 {tag = "Some""#),
-            "{printed}"
-        );
+        assert!(printed.contains("adt.variant_new Some(%2)"), "{printed}");
     }
 
     #[test]

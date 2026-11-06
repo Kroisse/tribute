@@ -271,8 +271,8 @@ mod tests {
         assert!(output.contains("adt.struct_get"), "{output}");
         assert!(output.contains("element: core.i32"), "{output}");
         assert!(output.contains("element: tribute_rt.anyref"), "{output}");
-        assert_eq!(output.matches("{field = 0,").count(), 2, "{output}");
-        assert_eq!(output.matches("{field = 1,").count(), 2, "{output}");
+        assert_eq!(output.matches("[0] :").count(), 2, "{output}");
+        assert_eq!(output.matches("[1] :").count(), 2, "{output}");
         assert_eq!(output.matches("func.unreachable").count(), 4, "{output}");
         assert_eq!(output.matches("adt.ref_null").count(), 2, "{output}");
         assert!(!output.contains("arith.constant 0"), "{output}");
@@ -322,8 +322,8 @@ mod tests {
         assert!(!output.contains("list."), "{output}");
         assert_eq!(output.matches("func.unreachable").count(), 4, "{output}");
         assert_eq!(output.matches("cf.cond_br").count(), 4, "{output}");
-        assert_eq!(output.matches("{field = 0,").count(), 2, "{output}");
-        assert_eq!(output.matches("{field = 1,").count(), 2, "{output}");
+        assert_eq!(output.matches("[0] :").count(), 2, "{output}");
+        assert_eq!(output.matches("[1] :").count(), 2, "{output}");
         assert_eq!(output.matches("adt.ref_null").count(), 4, "{output}");
         assert!(!output.contains("arith.constant"), "{output}");
         assert!(output.contains("element: core.i32"), "{output}");

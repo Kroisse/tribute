@@ -1001,15 +1001,27 @@ fn gen_attr_setter(crate_path: &TokenStream, attr: &AttrDef) -> TokenStream {
 /// constraint on such a variable, or a projection of such a variable. Must
 /// agree with `OpSchema::infer_result_types`.
 fn results_inferable(op: &OperationDef) -> bool {
+    results_bound(op, true)
+}
+
+/// Whether every result type follows from the attributes alone, as for
+/// [`results_inferable`] without operands, so a declarative format may leave
+/// it unwritten. Must agree with `OpSchema::derive_results`.
+pub(crate) fn results_derivable(op: &OperationDef) -> bool {
+    results_bound(op, false)
+}
+
+fn results_bound(op: &OperationDef, by_operands: bool) -> bool {
     let mut bound: Vec<bool> = (0..op.type_vars.len())
         .map(|var| {
             op.attrs
                 .iter()
                 .any(|attr| attr.binds == Some(var) && !attr.optional)
-                || op.operands.iter().any(|operand| {
-                    !operand.variadic
-                        && matches!(operand.constraint, ValueExpr::Each(TypeExpr::Var(v)) if v == var)
-                })
+                || by_operands
+                    && op.operands.iter().any(|operand| {
+                        !operand.variadic
+                            && matches!(operand.constraint, ValueExpr::Each(TypeExpr::Var(v)) if v == var)
+                    })
         })
         .collect();
     loop {
@@ -1036,20 +1048,6 @@ fn results_inferable(op: &OperationDef) -> bool {
         (ResultDef::Single(_), ValueExpr::Each(expr)) => one(expr),
         (ResultDef::Variadic(_), ValueExpr::List(ListExpr::Types(exprs))) => exprs.iter().all(one),
         (ResultDef::Variadic(_), ValueExpr::List(ListExpr::Proj(proj))) => bound[proj.var],
-        _ => false,
-    }
-}
-
-/// Whether every result type is one fixed type (`-> Value<I1>`), which a
-/// declarative format may leave unwritten. Must agree with
-/// `OpSchema::fixed_results`.
-pub(crate) fn results_fixed(op: &OperationDef) -> bool {
-    let fixed = |expr: &TypeExpr| matches!(expr, TypeExpr::Exact(_));
-    match (&op.results, &op.result_constraint) {
-        (ResultDef::Single(_), ValueExpr::Each(expr)) => fixed(expr),
-        (ResultDef::Variadic(_), ValueExpr::List(ListExpr::Types(exprs))) => {
-            exprs.iter().all(fixed)
-        }
         _ => false,
     }
 }

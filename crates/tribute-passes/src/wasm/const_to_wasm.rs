@@ -365,9 +365,7 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(index, value)| {
-                format!(
-                    "    %value{index} = adt.string_const {{value = \"{value}\"}} : tribute_rt.anyref"
-                )
+                format!("    %value{index} = adt.string_const \"{value}\" : tribute_rt.anyref")
             })
             .collect::<Vec<_>>()
             .join("\n");
@@ -410,8 +408,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.func @main() -> core.nil {
-    %string = adt.string_const {value = "shared"} : tribute_rt.anyref
-    %bytes = adt.bytes_const {value = b"shared"} : core.bytes
+    %string = adt.string_const "shared" : tribute_rt.anyref
+    %bytes = adt.bytes_const b"shared" : core.bytes
     wasm.return
   }
 }"#,
@@ -430,7 +428,7 @@ mod tests {
             r#"core.module @test {
   !String = adt.enum<String { Leaf(core.bytes), Branch(wasm.anyref, wasm.anyref, core.i32) }>
   wasm.func @main() -> core.nil {
-    %string = adt.string_const {value = "hello"} : wasm.anyref
+    %string = adt.string_const "hello" : wasm.anyref
     wasm.return
   }
 }"#,
@@ -446,7 +444,7 @@ mod tests {
         assert!(!output.contains("adt.string_const"), "{output}");
         assert!(output.contains("wasm.bytes_from_data"), "{output}");
         assert!(output.contains("adt.variant_new"), "{output}");
-        assert!(output.contains("tag = \"Leaf\""), "{output}");
+        assert!(output.contains("adt.variant_new Leaf("), "{output}");
     }
 
     #[test]
@@ -456,7 +454,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.func @main() -> core.nil {
-    %string = adt.string_const {value = "hello"} : wasm.anyref
+    %string = adt.string_const "hello" : wasm.anyref
     wasm.return
   }
 }"#,
@@ -478,7 +476,7 @@ mod tests {
   !PreludeString = adt.enum<String { Leaf(core.bytes), Branch(wasm.anyref, wasm.anyref, core.i32) }>
   !UserString = adt.enum<"user::String" { Leaf(core.bytes), Branch(wasm.anyref, wasm.anyref, core.i32) }>
   wasm.func @main() -> core.nil {
-    %string = adt.string_const {value = "hello"} : wasm.anyref
+    %string = adt.string_const "hello" : wasm.anyref
     wasm.return
   }
 }"#,
@@ -501,7 +499,7 @@ mod tests {
             r#"core.module @test {
   !String = adt.enum<String { Leaf(core.bytes), Branch(wasm.anyref, wasm.anyref, core.i32) }>
   wasm.func @main() -> core.nil {
-    %string = adt.string_const {value = "hello"} : wasm.anyref
+    %string = adt.string_const "hello" : wasm.anyref
     wasm.return
   }
 }"#,
@@ -578,9 +576,9 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.func @main() -> core.nil {
-    %first = adt.bytes_const {value = b"first"} : core.bytes
-    %second = adt.bytes_const {value = b"second"} : core.bytes
-    %again = adt.bytes_const {value = b"first"} : core.bytes
+    %first = adt.bytes_const b"first" : core.bytes
+    %second = adt.bytes_const b"second" : core.bytes
+    %again = adt.bytes_const b"first" : core.bytes
     wasm.return
   }
 }"#,
@@ -610,9 +608,9 @@ mod tests {
   wasm.data(b"active") offset 0
   wasm.data(b"kept") offset 0 passive
   wasm.func @main() -> core.nil {
-    %new = adt.bytes_const {value = b"new"} : core.bytes
-    %kept = adt.bytes_const {value = b"kept"} : core.bytes
-    %active = adt.bytes_const {value = b"active"} : core.bytes
+    %new = adt.bytes_const b"new" : core.bytes
+    %kept = adt.bytes_const b"kept" : core.bytes
+    %active = adt.bytes_const b"active" : core.bytes
     wasm.return
   }
 }"#,

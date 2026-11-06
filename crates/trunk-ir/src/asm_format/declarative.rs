@@ -17,7 +17,7 @@ use crate::asm_format::{
 };
 use crate::op_def::OpDef;
 use crate::op_flag::IsolatedFromAbove;
-use crate::op_schema::{Arity, OpSchema, ResultSchema};
+use crate::op_schema::{Arity, DerivedResult, OpSchema, ResultSchema};
 use crate::parser::{Argument, OpAsmParser, Operand, OperationState, ParseResult, lexer};
 use crate::printer::{AsmNamer, OpAsmPrinter, display_symbol_text};
 use crate::types::Attribute;
@@ -754,7 +754,7 @@ fn printable(ctx: &IrContext, op: OpRef, schema: &OpSchema, format: &OpFormat) -
         && (schema.regions.last().is_some_and(|region| region.variadic)
             || region_count <= schema.regions.len());
     if !results_fit
-        || !fixed_results_fit(ctx, op, schema, format)
+        || !derived_results_fit(ctx, op, schema, format)
         || !count_fits(operands, ctx.op_operands(op).len())
         || !count_fits(successors, ctx.op_successor_count(op))
         || !regions_fit
@@ -854,8 +854,8 @@ fn signature_fits(
 }
 
 /// Whether the result types a format does not write are the ones the schema
-/// fixes, so that the parser restores them.
-fn fixed_results_fit(ctx: &IrContext, op: OpRef, schema: &OpSchema, format: &OpFormat) -> bool {
+/// derives from the attributes, so that the parser restores them.
+fn derived_results_fit(ctx: &IrContext, op: OpRef, schema: &OpSchema, format: &OpFormat) -> bool {
     if !leaves_results_unwritten(schema, format) {
         return true;
     }
@@ -866,17 +866,26 @@ fn fixed_results_fit(ctx: &IrContext, op: OpRef, schema: &OpSchema, format: &OpF
         let data = ctx.get_type(ty);
         data.params.is_empty() && data.attrs.is_empty()
     };
-    schema.fixed_results().is_some_and(|bounds| {
-        bounds.len() == results.len()
-            && bounds
+    let attrs = ctx.op_attrs(op);
+    let attrs: Vec<_> = schema
+        .attributes
+        .iter()
+        .map(|attr| (attr.name, attrs.get(attr.name)))
+        .collect();
+    schema.derive_results(ctx, &attrs).is_some_and(|derived| {
+        derived.len() == results.len()
+            && derived
                 .iter()
                 .zip(results.iter())
-                .all(|(bound, &ty)| (bound.matches)(ctx, ty) && bare(ty))
+                .all(|(derived, &ty)| match *derived {
+                    DerivedResult::Fixed(bound) => (bound.matches)(ctx, ty) && bare(ty),
+                    DerivedResult::Type(derived) => derived == ty,
+                })
     })
 }
 
 /// Whether `format` leaves the operation's result types unwritten, which the
-/// macro accepts only when the schema fixes them.
+/// macro accepts only when the schema derives them from the attributes.
 fn leaves_results_unwritten(schema: &OpSchema, format: &OpFormat) -> bool {
     let has_results = match schema.results {
         ResultSchema::Fixed(names) => !names.is_empty(),
@@ -991,13 +1000,31 @@ pub(crate) fn parse(
     state.attributes = attributes;
     state.result_types = result_types.into_iter().flatten().collect();
     // A format that does not write the result types leaves them to the
-    // schema, which fixes them.
-    if leaves_results_unwritten(schema, format)
-        && let Some(bounds) = schema.fixed_results()
-    {
-        state.result_types = bounds
+    // schema, which derives them from the attributes.
+    if leaves_results_unwritten(schema, format) {
+        let attrs: Vec<(&str, Option<Attribute>)> = {
+            let view = state.attributes.view(p.ctx());
+            schema
+                .attributes
+                .iter()
+                .map(|attr| (attr.name, view.get(attr.name).cloned()))
+                .collect()
+        };
+        let attrs: Vec<_> = attrs
             .iter()
-            .map(|bound| (bound.fixed.expect("fixed result bounds construct a type"))(p.ctx_mut()))
+            .map(|(name, attr)| (*name, attr.as_ref()))
+            .collect();
+        let derived = schema
+            .derive_results(p.ctx(), &attrs)
+            .ok_or_else(|| p.error("expected the attributes that determine the result types"))?;
+        state.result_types = derived
+            .into_iter()
+            .map(|derived| match derived {
+                DerivedResult::Fixed(bound) => {
+                    (bound.fixed.expect("fixed result bounds construct a type"))(p.ctx_mut())
+                }
+                DerivedResult::Type(ty) => ty,
+            })
             .collect();
     }
     state.regions = regions.into_iter().flatten().collect();
@@ -1388,6 +1415,9 @@ mod tests {
         #[asm_format(target ("note" note^)? ":" type(result))]
         fn reference(target: Attr<SymbolRef>, note: Option<Attr<String>>) -> Value<_> {}
 
+        #[asm_format("of" r#type)]
+        fn typed<T>(r#type: Attr<TypeOf<T>>) -> Value<T> {}
+
         #[asm_format("now" ("quick" quick^)? ("with" "(" args^ ")")? attr_dict)]
         fn mark(quick: Option<Attr<bool>>, args: Variadic<_>) {}
 
@@ -1739,6 +1769,34 @@ mod tests {
   asm_format_test.fun @f(%0: core.i32, %1: core.i32) {
       %2 = "asm_format_test.compare"(%0, %1) : core.i32
       %3 = "asm_format_test.make_token"() : asm_format_test.token<{note = 1}>
+  }
+}
+"#;
+        assert_eq!(print(text), text);
+    }
+
+    #[test]
+    fn result_types_an_attribute_binds_come_from_the_attribute() {
+        assert_round_trip(
+            r#"core.module @m {
+  asm_format_test.fun @f() {
+      %0 = asm_format_test.typed of core.i64
+  }
+}
+"#,
+        );
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            "core.module @m {\n  %0 = asm_format_test.typed of core.i64\n}",
+        );
+        let typed = module.ops(&ctx)[0];
+        let i64_ty = crate::dialect::core::I64::type_ref(&mut ctx);
+        assert_eq!(ctx.op_result_types(typed)[0], i64_ty);
+        // A result other than the attribute's type prints generically.
+        let text = r#"core.module @m {
+  asm_format_test.fun @f() {
+      %0 = "asm_format_test.typed"() {type = core.i64} : core.i32
   }
 }
 "#;

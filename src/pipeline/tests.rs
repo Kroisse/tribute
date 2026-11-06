@@ -108,7 +108,7 @@ fn source_logical_root_defers_closure_storage_until_target_finalization() {
 fn empty_result_cps_root_executes_native_done_continuation() {
     let (mut ctx, module) = source_logical_cps_root_module(
         r#"
-            %done = adt.struct_get %frame {field = 0, type = !__tribute_continuation_frame_root_nil} : !Done
+            %done = adt.struct_get %frame[0] : !__tribute_continuation_frame_root_nil -> !Done
             %nil = core.nil_value : core.nil
             func.tail_call_indirect %done(%nil) attributes {tribute.calling_convention = "cps"} : (core.nil) -> core.never
         "#,
@@ -169,9 +169,9 @@ fn root_dispatch_definition_matches_fixed_wasm_tail_signature_and_validates_bina
     use trunk_ir::dialect::wasm;
     let (mut ctx, module) = source_logical_cps_root_module(
         r#"
-            %dispatch = adt.struct_get %frame {field = 1, type = !__tribute_continuation_frame_root_nil} : !Dispatch
-            %resume = adt.ref_null {type = !Resume} : !Resume
-            %product = adt.struct_new {type = !Payload} : !Payload
+            %dispatch = adt.struct_get %frame[1] : !__tribute_continuation_frame_root_nil -> !Dispatch
+            %resume = adt.ref_null : !Resume -> !Resume
+            %product = adt.struct_new() : !Payload -> !Payload
             %payload = core.unrealized_conversion_cast %product : !Payload to tribute_rt.anyref
             effect.dispatch_cps @State @get(%payload) [%evidence, %dispatch, %resume] -> core.nil
         "#,
@@ -757,12 +757,12 @@ fn native_one_shot_wrapper_traps_on_second_invocation() {
   !state = adt.struct<OneShotState(consumed: core.i1)>
 
   func.func @one_shot_wrapper(%state: !state, %value: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
-    %consumed = adt.struct_get %state {field = 0, type = !state} : core.i1
+    %consumed = adt.struct_get %state[0] : !state -> core.i1
     %answer = scf.if %consumed -> (core.i32) {
       func.unreachable
     } else {
       %consumed_true = arith.constant 1 : core.i1
-      adt.struct_set %state, %consumed_true {field = 0, type = !state}
+      adt.struct_set %state[0], %consumed_true : !state
       scf.yield %value
     }
     func.return %answer
@@ -770,7 +770,7 @@ fn native_one_shot_wrapper_traps_on_second_invocation() {
 
   func.func @main() -> core.i32 attributes {tribute.calling_convention = "direct"} {
     %not_consumed = arith.constant 0 : core.i1
-    %state = adt.struct_new %not_consumed {type = !state} : !state
+    %state = adt.struct_new(%not_consumed) : !state -> !state
     %input = arith.constant 0 : core.i32
     %first = func.call @one_shot_wrapper(%state, %input) attributes {tribute.calling_convention = "direct"} : (!state, core.i32) -> core.i32
     %second = func.call @one_shot_wrapper(%state, %first) attributes {tribute.calling_convention = "direct"} : (!state, core.i32) -> core.i32

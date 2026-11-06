@@ -1846,8 +1846,8 @@ fn managed_defined_boundaries_null_and_compatible_cast_are_valid() {
   !S = adt.struct<S()>
   !R = adt.typeref<{name = "S"}>
   tribute_control.func @managed(%value: !R) -> !R {
-    %null = adt.ref_null {type = !R} : !R
-    %cast = adt.ref_cast %null {type = !R} : !R
+    %null = adt.ref_null : !R -> !R
+    %cast = adt.ref_cast %null : !R -> !R
     tribute_control.return %cast
   }
 }"#,
@@ -1917,7 +1917,7 @@ fn ref_cast_rejects_distinct_nominal_managed_references() {
   !RS = adt.typeref<{name = "S"}>
   !RT = adt.typeref<{name = "T"}>
   tribute_control.func @incompatible(%value: !RS) -> !RT {
-    %cast = adt.ref_cast %value {type = !RT} : !RT
+    %cast = adt.ref_cast %value : !RT -> !RT
     tribute_control.return %cast
   }
 }"#,
@@ -2296,9 +2296,9 @@ fn exact_adt_callable_projections_have_semantic_provenance() {
   !Choice = adt.enum<Choice { Some(!F) }>
   !ChoiceRef = adt.typeref<{name = "Choice"}>
   tribute_control.func @caller(%tuple: !TupleRef, %choice: !ChoiceRef, %value: core.i32) -> core.i32 {
-    %tuple_callee = adt.struct_get %tuple {type = !Tuple, field = 0} : !F
+    %tuple_callee = adt.struct_get %tuple[0] : !Tuple -> !F
     %tuple_result = tribute_control.call_indirect %tuple_callee(%value) : (core.i32) -> core.i32
-    %choice_callee = adt.variant_get %choice {type = !Choice, tag = "Some", field = 0} : !F
+    %choice_callee = adt.variant_get %choice.Some[0] : !Choice -> !F
     %choice_result = tribute_control.call_indirect %choice_callee(%tuple_result) : (core.i32) -> core.i32
     tribute_control.return %choice_result
   }
@@ -2319,9 +2319,9 @@ fn adt_callable_projection_requires_matching_declared_field_type() {
   !Choice = adt.enum<Choice { Some(core.i32) }>
   !ChoiceRef = adt.typeref<{name = "Choice"}>
   tribute_control.func @caller(%tuple: !TupleRef, %choice: !ChoiceRef, %value: core.i32) -> core.i32 {
-    %tuple_callee = adt.struct_get %tuple {type = !Tuple, field = 0} : !F
+    %tuple_callee = adt.struct_get %tuple[0] : !Tuple -> !F
     %tuple_result = tribute_control.call_indirect %tuple_callee(%value) : (core.i32) -> core.i32
-    %choice_callee = adt.variant_get %choice {type = !Choice, tag = "Some", field = 0} : !F
+    %choice_callee = adt.variant_get %choice.Some[0] : !Choice -> !F
     %choice_result = tribute_control.call_indirect %choice_callee(%tuple_result) : (core.i32) -> core.i32
     tribute_control.return %choice_result
   }
@@ -2345,8 +2345,8 @@ fn duplicate_nominal_layout_rejects_callable_projection_spoofing() {
   !Spoofed = adt.struct<Tuple(callee: !F)>
   !TupleRef = adt.typeref<{name = "Tuple"}>
   tribute_control.func @caller(%tuple: !TupleRef, %value: core.i32) -> core.i32 {
-    %canonical = adt.struct_new %value {type = !Canonical} : !TupleRef
-    %callee = adt.struct_get %tuple {type = !Spoofed, field = 0} : !F
+    %canonical = adt.struct_new(%value) : !Canonical -> !TupleRef
+    %callee = adt.struct_get %tuple[0] : !Spoofed -> !F
     %result = tribute_control.call_indirect %callee(%value) : (core.i32) -> core.i32
     tribute_control.return %result
   }

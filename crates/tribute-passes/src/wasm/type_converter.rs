@@ -787,8 +787,8 @@ mod tests {
   !Option = adt.enum<Option { None(), Some(tribute_rt.anyref) }>
   !Sample = adt.struct<Sample(count: tribute_rt.nat, delta: tribute_rt.int, flag: tribute_rt.bool, ratio: tribute_rt.float, small: tribute_rt.intref, any: tribute_rt.anyref)>
   func.func @f(%sample: !Sample, %callee: core.i32, %value: tribute_rt.anyref) -> tribute_rt.int {
-    %null = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-    %some = adt.variant_new %null {tag = "Some", type = !Option} : !Option
+    %null = adt.ref_null : tribute_rt.anyref -> tribute_rt.anyref
+    %some = adt.variant_new Some(%null) : !Option -> !Option
     %result = func.call_indirect %callee(%value) : (tribute_rt.anyref) -> tribute_rt.int
     func.return %result
   }

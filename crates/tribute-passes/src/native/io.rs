@@ -340,10 +340,16 @@ mod tests {
             output.contains("func.call @__tribute_io_read_line("),
             "{output}"
         );
-        assert!(output.contains("tag = \"ReadLine\""), "{output}");
-        assert!(output.contains("tag = \"ReadEndOfFile\""), "{output}");
-        assert!(output.contains("tag = \"ReadInvalidEncoding\""), "{output}");
-        assert!(output.contains("tag = \"ReadSystem\""), "{output}");
+        assert!(output.contains("adt.variant_new ReadLine("), "{output}");
+        assert!(
+            output.contains("adt.variant_new ReadEndOfFile("),
+            "{output}"
+        );
+        assert!(
+            output.contains("adt.variant_new ReadInvalidEncoding("),
+            "{output}"
+        );
+        assert!(output.contains("adt.variant_new ReadSystem("), "{output}");
 
         let validation = trunk_ir::validation::validate_value_integrity(&ctx, module);
         assert!(validation.is_ok(), "{:?}", validation.errors);

@@ -150,6 +150,16 @@ pub enum ResultSchema {
     Optional(&'static str),
 }
 
+/// A result type that follows from an operation's attributes
+/// ([`OpSchema::derive_results`]).
+#[derive(Clone, Copy, Debug)]
+pub enum DerivedResult {
+    /// The one type a bound fixes, as `-> Value<I1>` does.
+    Fixed(&'static ConstraintDesc),
+    /// The type a required `Attr<TypeOf<..>>` binds, or a projection of it.
+    Type(TypeRef),
+}
+
 /// Static description of one declared region.
 #[derive(Debug)]
 pub struct RegionSchema {
@@ -951,18 +961,46 @@ impl OpSchema {
         }
     }
 
-    /// The bound that fixes each result's type, when every result has one,
-    /// as `-> Value<I1>` does. A declarative format may leave these result
-    /// types unwritten.
-    pub fn fixed_results(&self) -> Option<Vec<&'static ConstraintDesc>> {
-        let fixed = |spec: &TypeSpec| match *spec {
-            TypeSpec::Anon(bounds) => bounds.iter().copied().find(|bound| bound.fixed.is_some()),
-            _ => None,
+    /// Each result type as the attributes `attrs` determine it, when every
+    /// result is a fixed type (`-> Value<I1>`), a variable a required
+    /// `Attr<TypeOf<..>>` binds, or a projection of one. A declarative format
+    /// may leave these result types unwritten. `None` when a result does not
+    /// follow from the attributes, or an attribute it needs is missing.
+    pub fn derive_results(
+        &self,
+        ctx: &IrContext,
+        attrs: &[(&str, Option<&Attribute>)],
+    ) -> Option<Vec<DerivedResult>> {
+        let bindings = self.infer_bindings(ctx, &[], attrs);
+        let project = |p: ProjectionRef| -> Option<Vec<TypeRef>> {
+            match self.project(ctx, p, bindings[p.var]?)? {
+                Projected::One(ty) => Some(vec![ty]),
+                Projected::List(types) => Some(types.to_vec()),
+            }
+        };
+        let derive = |spec: &TypeSpec| -> Option<DerivedResult> {
+            match *spec {
+                TypeSpec::Var(v) => bindings[v].map(DerivedResult::Type),
+                TypeSpec::Proj(p) => match project(p)?.as_slice() {
+                    [ty] => Some(DerivedResult::Type(*ty)),
+                    _ => None,
+                },
+                TypeSpec::Anon(bounds) => bounds
+                    .iter()
+                    .copied()
+                    .find(|bound| bound.fixed.is_some())
+                    .map(DerivedResult::Fixed),
+                TypeSpec::Any => None,
+            }
         };
         match (&self.results, &self.result_constraint) {
-            (ResultSchema::Fixed([_]), ValueConstraint::Each(spec)) => fixed(spec).map(|b| vec![b]),
+            (ResultSchema::Fixed([]), _) => Some(Vec::new()),
+            (ResultSchema::Fixed([_]), ValueConstraint::Each(spec)) => Some(vec![derive(spec)?]),
             (ResultSchema::Variadic(_), ValueConstraint::List(ListSpec::Types(specs))) => {
-                specs.iter().map(fixed).collect()
+                specs.iter().map(derive).collect()
+            }
+            (ResultSchema::Variadic(_), ValueConstraint::List(ListSpec::Proj(p))) => {
+                Some(project(*p)?.into_iter().map(DerivedResult::Type).collect())
             }
             _ => None,
         }
