@@ -243,13 +243,12 @@ impl Converter<'_> {
         }))
     }
 
-    /// Lower an `scf.if` or `scf.index_switch` whose arms each end the
-    /// callable: by a tail call, or by running the tail join's continuation
-    /// in place of their yield.
+    /// Lower a region-selecting operation whose arms each end the callable:
+    /// by a tail call, or by running the tail join's continuation in place
+    /// of their yield.
     fn lower_tail_structured(
         &mut self,
         source: OpRef,
-        shape: StructuredArms,
         join: TailJoin,
         block: BlockRef,
         mapping: &HashMap<ValueRef, ValueRef>,
@@ -257,7 +256,11 @@ impl Converter<'_> {
     ) -> Result<(), TributeControlToCpsError> {
         let location = self.ctx.op(source).location;
         let mut converted_regions = trunk_ir::RegionList::new();
-        for source_region in shape.source_regions(self.ctx, source) {
+        for source_region in self
+            .ctx
+            .op_regions(source)
+            .collect::<trunk_ir::RegionList>()
+        {
             let source_block = self.single_arm_block(source_region);
             let block_location = self.ctx.block(source_block).location;
             let converted_block = make_block(self.ctx, block_location, &[]);
@@ -277,24 +280,48 @@ impl Converter<'_> {
             converted_regions.push(single_block_region(self.ctx, location, converted_block));
         }
         let never = self.never_type();
-        let lowered = shape.build(self.ctx, location, mapping, [never], converted_regions);
-        self.copy_extra_attrs(source, lowered, &[]);
+        let lowered = self.rebuild_structured(source, mapping, [never], converted_regions);
         self.ctx.push_op(block, lowered);
         Ok(())
     }
 
-    /// The single block of one arm of an effectful structured operation.
-    /// `scf.if` declares one block per region, and pre-CPS validation
-    /// requires one for each `scf.index_switch` arm.
+    /// The single block of one arm of a region-selecting operation, which
+    /// `SelectsOneRegion` promises.
     fn single_arm_block(&self, region: RegionRef) -> BlockRef {
         let [block] = self.ctx.region(region).blocks.as_slice() else {
-            panic!("pre-CPS validation leaves one block in each structured arm")
+            panic!("a SelectsOneRegion operation has one block in each region")
         };
         *block
     }
 
-    /// Lower an `scf.if` or `scf.index_switch` whose arms contain source
-    /// control. Inside a CPS callable, each arm continues with the suffix
+    /// `source` with its operands remapped, its attributes kept, and the
+    /// given results and converted regions, in its region order.
+    fn rebuild_structured(
+        &mut self,
+        source: OpRef,
+        mapping: &HashMap<ValueRef, ValueRef>,
+        results: impl IntoIterator<Item = TypeRef>,
+        regions: trunk_ir::RegionList,
+    ) -> OpRef {
+        let location = self.ctx.op(source).location;
+        let mut builder = OperationDataBuilder::new(location, self.ctx.op(source).name);
+        for &operand in self.ctx.op_operands(source) {
+            builder = builder.operand(mapping.get(&operand).copied().unwrap_or(operand));
+        }
+        for result in results {
+            builder = builder.result(result);
+        }
+        for region in regions {
+            builder = builder.region(region);
+        }
+        let data = builder.build(self.ctx);
+        let lowered = self.ctx.create_op(data);
+        self.copy_extra_attrs(source, lowered, &[]);
+        lowered
+    }
+
+    /// Lower a `SelectsOneRegion` operation, such as `scf.if` or
+    /// `scf.index_switch`, whose arms contain source control. Inside a CPS callable, each arm continues with the suffix
     /// after the operation; elsewhere the operation keeps its results and
     /// its arms keep their `scf.yield`.
     pub(super) fn lower_structured(
@@ -305,10 +332,8 @@ impl Converter<'_> {
         mapping: &mut HashMap<ValueRef, ValueRef>,
         flow: &Flow,
     ) -> Result<(), TributeControlToCpsError> {
-        let shape = StructuredArms::of(self.ctx, source)
-            .expect("only an scf.if or scf.index_switch is lowered as structured arms");
         if let Some(join) = self.tail_join(source, rest, flow)? {
-            return self.lower_tail_structured(source, shape, join, block, mapping, flow);
+            return self.lower_tail_structured(source, join, block, mapping, flow);
         }
         let result_types = self.ctx.op_result_types(source).to_vec();
         let is_cps = flow.convention == CallingConvention::Cps;
@@ -348,7 +373,11 @@ impl Converter<'_> {
         }
 
         let mut converted_regions = trunk_ir::RegionList::new();
-        for source_region in shape.source_regions(self.ctx, source) {
+        for source_region in self
+            .ctx
+            .op_regions(source)
+            .collect::<trunk_ir::RegionList>()
+        {
             let source_block = self.single_arm_block(source_region);
             let source_arg_types = self
                 .ctx
@@ -413,8 +442,7 @@ impl Converter<'_> {
         }
         if continuation.is_some() {
             let never = self.never_type();
-            let lowered = shape.build(self.ctx, location, mapping, [never], converted_regions);
-            self.copy_extra_attrs(source, lowered, &[]);
+            let lowered = self.rebuild_structured(source, mapping, [never], converted_regions);
             self.ctx.push_op(block, lowered);
             return Ok(());
         }
@@ -423,14 +451,7 @@ impl Converter<'_> {
             .into_iter()
             .map(|ty| self.convert_type(ty))
             .collect::<Vec<_>>();
-        let lowered = shape.build(
-            self.ctx,
-            location,
-            mapping,
-            converted_types,
-            converted_regions,
-        );
-        self.copy_extra_attrs(source, lowered, &[]);
+        let lowered = self.rebuild_structured(source, mapping, converted_types, converted_regions);
         self.ctx.push_op(block, lowered);
         for (old, new) in self
             .ctx
@@ -442,85 +463,5 @@ impl Converter<'_> {
             mapping.insert(old, new);
         }
         self.convert_sequence(OpList::from(rest.ops), rest.start, block, mapping, flow)
-    }
-}
-
-/// The structured operations whose arms CPS conversion lowers one by one.
-enum StructuredArms {
-    If {
-        condition: ValueRef,
-    },
-    Switch {
-        discriminant: ValueRef,
-        cases: Vec<i64>,
-    },
-}
-
-impl StructuredArms {
-    fn of(ctx: &IrContext, op: OpRef) -> Option<Self> {
-        if let Ok(if_op) = scf::If::from_op(ctx, op) {
-            return Some(Self::If {
-                condition: if_op.cond(ctx),
-            });
-        }
-        let switch = scf::IndexSwitch::from_op(ctx, op).ok()?;
-        Some(Self::Switch {
-            discriminant: switch.discriminant(ctx),
-            cases: switch.cases(ctx).collect(),
-        })
-    }
-
-    /// The arms in the order `build` takes them: then and else, or the
-    /// cases and then the default.
-    fn source_regions(&self, ctx: &IrContext, op: OpRef) -> trunk_ir::RegionList {
-        match self {
-            Self::If { .. } => ctx.op_regions(op).collect(),
-            Self::Switch { .. } => scf::IndexSwitch::from_op(ctx, op)
-                .expect("StructuredArms::Switch is built from an scf.index_switch")
-                .arm_regions(ctx),
-        }
-    }
-
-    /// The same operation over the converted arms, its operand remapped.
-    fn build(
-        self,
-        ctx: &mut IrContext,
-        location: Location,
-        mapping: &HashMap<ValueRef, ValueRef>,
-        results: impl IntoIterator<Item = TypeRef>,
-        mut regions: trunk_ir::RegionList,
-    ) -> OpRef {
-        let remap = |value: ValueRef| mapping.get(&value).copied().unwrap_or(value);
-        match self {
-            Self::If { condition } => {
-                let [then_region, else_region] = regions[..] else {
-                    unreachable!("scf.if has a then and an else region")
-                };
-                let mut builder =
-                    OperationDataBuilder::new(location, scf::If::NAME).operand(remap(condition));
-                for result in results {
-                    builder = builder.result(result);
-                }
-                let data = builder.region(then_region).region(else_region).build(ctx);
-                ctx.create_op(data)
-            }
-            Self::Switch {
-                discriminant,
-                cases,
-            } => {
-                let default_region = regions
-                    .pop()
-                    .expect("an scf.index_switch ends with its default region");
-                scf::IndexSwitch::build_with_arms(
-                    ctx,
-                    location,
-                    remap(discriminant),
-                    results,
-                    cases.into_iter().zip(regions),
-                    default_region,
-                )
-                .op_ref()
-            }
-        }
     }
 }

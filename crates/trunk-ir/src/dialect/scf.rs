@@ -4,6 +4,7 @@
 mod scf {
     #[asm_format(cond ("->" "(" type(result)^ ")")? attr_dict region(then_region) "else" region(else_region))]
     #[implements(RegionBranch, Fold)]
+    #[flags(SelectsOneRegion)]
     fn r#if(cond: Value<_>) -> Option<Value<_>> {
         #[region(then_region)]
         {}
@@ -39,6 +40,7 @@ mod scf {
     #[verify]
     #[asm_format(discriminant attr_dict ":" functional_type(discriminant, results) custom(SwitchArms(cases, case_regions, default_region)))]
     #[implements(RegionBranch, Fold)]
+    #[flags(SelectsOneRegion)]
     fn index_switch(cases: Attr<[i64]>, discriminant: Value<impl IntegerLike>) -> Variadic<_> {
         #[region(default_region)]
         {}
@@ -80,6 +82,7 @@ mod scf {
 // Control-flow interfaces
 // =========================================================================
 
+use crate::op_flag::SelectsOneRegion;
 use crate::op_interface::{
     ControlFlowInterfaceError, ForwardedValues, RegionBranch, RegionBranchPoint,
     RegionBranchTerminator, RegionSuccessor, RegionSuccessors,

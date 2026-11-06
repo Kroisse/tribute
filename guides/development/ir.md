@@ -505,10 +505,10 @@ rule, so it lives with the interface or with the operation.
 
 ### Operation Flags
 
-An operation flag is a property without behavior, such as `Pure` and
-`IsolatedFromAbove` in `trunk_ir::op_flag`. An operation lists its flags in
-`#[flags(..)]`; they are stored in its `OpDef`, so a flag has no `impl` and
-no registry:
+An operation flag is a property without behavior, such as `Pure`,
+`IsolatedFromAbove`, and `SelectsOneRegion` in `trunk_ir::op_flag`. An
+operation lists its flags in `#[flags(..)]`; they are stored in its `OpDef`, so
+a flag has no `impl` and no registry:
 
 ```rust
 #[trunk_ir::dialect]

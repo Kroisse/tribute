@@ -642,9 +642,9 @@ operation을 왼쪽에서 오른쪽으로 소비한다:
 
 일반 structured control은 기존 `scf.*` dialect에 남고
 `tribute_control_to_cps`가 region과 suffix를 재귀적으로 변환한다.
-`tribute_control.if`는 추가하지 않는다. `scf.if`, `scf.index_switch`, case
-lowering, guarded arm, short-circuit selection의 각 실행 branch는 독립적으로
-변환한다. 각 branch의 exit
+`tribute_control.if`는 추가하지 않는다. `SelectsOneRegion` operation(`scf.if`,
+`scf.index_switch`)과 case lowering, guarded arm, short-circuit selection의 각
+실행 branch는 독립적으로 변환한다. 각 branch의 exit
 continuation은 먼저 structured merge에 도달한 뒤 enclosing suffix를 실행한다.
 Condition, scrutinee, 앞선 strict value는 source 순서로 한 번만 평가하며 선택된
 branch, guard, 오른쪽 항만 실행한다.

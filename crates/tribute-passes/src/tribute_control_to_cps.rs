@@ -19,6 +19,7 @@ use trunk_ir::OpList;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{core, func, scf};
+use trunk_ir::op_flag::{OpFlag, SelectsOneRegion};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
@@ -262,9 +263,7 @@ impl<'a> Converter<'a> {
                 self.emit_exit(block, location, value, flow)?;
                 return Ok(());
             }
-            if (name == scf::If::NAME || name == scf::IndexSwitch::NAME)
-                && self.contains_tribute_control(source)
-            {
+            if SelectsOneRegion::is_set(self.ctx, source) && self.contains_tribute_control(source) {
                 self.lower_structured(source, rest, block, mapping, flow)?;
                 return Ok(());
             }
