@@ -86,20 +86,20 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
     module.module.op().display(&ir).to_string()
 }
 
-/// Type check the source, selecting its method calls, and summarize one function body.
+/// Type check the source, which performs TDNR, and summarize one function body.
 ///
 /// This intentionally stops before IR lowering so tests can inspect calls
 /// left without a selected function.
-pub fn selection_summary(
+pub fn tdnr_function_summary(
     db: &dyn salsa::Database,
     source: SourceCst,
     function_name: &str,
-) -> SelectionSummary {
+) -> TdnrSummary {
     let checked =
         *analysis::analyze(db, source, *environment(db)).expect("Should parse successfully");
     let body = function_body(checked.module(db), function_name);
-    let mut summary = SelectionSummary::default();
-    collect_selection_summary(db, body, &mut summary);
+    let mut summary = TdnrSummary::default();
+    collect_tdnr_summary(db, body, &mut summary);
     summary
 }
 
@@ -117,21 +117,21 @@ fn function_body<'db>(
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
-pub struct SelectionSummary {
+pub struct TdnrSummary {
     pub method_calls: Vec<String>,
-    pub calls: Vec<SelectedCall>,
+    pub calls: Vec<TdnrCall>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct SelectedCall {
+pub struct TdnrCall {
     pub target: String,
     pub arg_count: usize,
 }
 
-fn collect_selection_summary<'db>(
+fn collect_tdnr_summary<'db>(
     db: &'db dyn salsa::Database,
     expr: &Expr<TypedRef<'db>>,
-    summary: &mut SelectionSummary,
+    summary: &mut TdnrSummary,
 ) {
     match &*expr.kind {
         ExprKind::Call { callee, args, .. } => {
@@ -140,65 +140,65 @@ fn collect_selection_summary<'db>(
                 ..
             }) = &*callee.kind
             {
-                summary.calls.push(SelectedCall {
+                summary.calls.push(TdnrCall {
                     target: id.qualified(db).to_string(),
                     arg_count: args.len(),
                 });
             }
-            collect_selection_summary(db, callee, summary);
+            collect_tdnr_summary(db, callee, summary);
             for arg in args {
-                collect_selection_summary(db, arg, summary);
+                collect_tdnr_summary(db, arg, summary);
             }
         }
         ExprKind::Functions { name, .. } => summary.method_calls.push(name.to_string()),
         ExprKind::Record { fields, spread, .. } => {
             for field in fields {
-                collect_selection_summary(db, &field.value, summary);
+                collect_tdnr_summary(db, &field.value, summary);
             }
             if let Some(spread) = spread {
-                collect_selection_summary(db, spread, summary);
+                collect_tdnr_summary(db, spread, summary);
             }
         }
         ExprKind::Block { stmts, value } => {
             for stmt in stmts {
                 match stmt {
                     Stmt::Let { value, .. } | Stmt::Expr { expr: value, .. } => {
-                        collect_selection_summary(db, value, summary);
+                        collect_tdnr_summary(db, value, summary);
                     }
                 }
             }
-            collect_selection_summary(db, value, summary);
+            collect_tdnr_summary(db, value, summary);
         }
         ExprKind::BinOp { lhs, rhs, .. } => {
-            collect_selection_summary(db, lhs, summary);
-            collect_selection_summary(db, rhs, summary);
+            collect_tdnr_summary(db, lhs, summary);
+            collect_tdnr_summary(db, rhs, summary);
         }
         ExprKind::Case { scrutinee, arms } => {
-            collect_selection_summary(db, scrutinee, summary);
+            collect_tdnr_summary(db, scrutinee, summary);
             for arm in arms {
                 if let Some(guard) = &arm.guard {
-                    collect_selection_summary(db, guard, summary);
+                    collect_tdnr_summary(db, guard, summary);
                 }
-                collect_selection_summary(db, &arm.body, summary);
+                collect_tdnr_summary(db, &arm.body, summary);
             }
         }
-        ExprKind::Lambda { body, .. } => collect_selection_summary(db, body, summary),
+        ExprKind::Lambda { body, .. } => collect_tdnr_summary(db, body, summary),
         ExprKind::Handle { body, handlers } => {
-            collect_selection_summary(db, body, summary);
+            collect_tdnr_summary(db, body, summary);
             for handler in handlers {
-                collect_selection_summary(db, &handler.body, summary);
+                collect_tdnr_summary(db, &handler.body, summary);
             }
         }
-        ExprKind::Become { call } => collect_selection_summary(db, call, summary),
-        ExprKind::Resume { arg, .. } => collect_selection_summary(db, arg, summary),
+        ExprKind::Become { call } => collect_tdnr_summary(db, call, summary),
+        ExprKind::Resume { arg, .. } => collect_tdnr_summary(db, arg, summary),
         ExprKind::Tuple(elements) | ExprKind::List(elements) => {
             for element in elements {
-                collect_selection_summary(db, element, summary);
+                collect_tdnr_summary(db, element, summary);
             }
         }
         ExprKind::Cons { args, .. } => {
             for arg in args {
-                collect_selection_summary(db, arg, summary);
+                collect_tdnr_summary(db, arg, summary);
             }
         }
         ExprKind::Var(_)

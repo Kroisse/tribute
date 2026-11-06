@@ -2315,7 +2315,7 @@ impl<'db> TypeChecker<'db> {
 
                 // Bind lambda parameters so that references to them in the body
                 // resolve to their concrete types (not fresh UniVars). Without this,
-                // method selection cannot determine receiver types for method calls inside lambdas.
+                // TDNR cannot determine receiver types for method calls inside lambdas.
                 let param_types = ctx
                     .get_node_type(expr_id)
                     .and_then(|ty| match ty.kind(self.db()) {
@@ -3553,7 +3553,7 @@ impl<'db> TypeChecker<'db> {
     ///
     /// This ensures handler arm pattern bindings (e.g., `x`, `y` in
     /// `op Multi::combine(x, y)`) are constrained to the operation's declared
-    /// parameter types (e.g., `Nat, Nat`), so method selection can select operators
+    /// parameter types (e.g., `Nat, Nat`), enabling TDNR to resolve operators
     /// like `x + y`.
     fn constrain_handler_params(
         &self,

@@ -377,7 +377,7 @@ pub enum CallSyntax {
 /// Binary operators.
 ///
 /// Only boolean operators remain here. Arithmetic and comparison operators
-/// are desugared to calls of the operator's name in astgen and selected by type checking.
+/// are desugared to calls of the operator's name in astgen and resolved via TDNR.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum BinOpKind {
     And,

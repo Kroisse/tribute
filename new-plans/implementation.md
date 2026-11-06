@@ -737,7 +737,7 @@ flowchart TB
 
     subgraph frontend["Frontend"]
         parse["parse / prelude / resolve"]
-        typecheck["typecheck / method selection"]
+        typecheck["typecheck (incl. TDNR)"]
         direct["검증된 tribute_control callable/control IR"]
     end
 

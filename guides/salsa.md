@@ -7,7 +7,7 @@ queries use Salsa; shared and target IR passes operate in a mutable arena.
 
 ```text
 SourceCst (URI + Rope + tree-sitter CST)
-    → tracked parsing, name resolution, typechecking and method selection
+    → tracked parsing, name resolution, typechecking (including TDNR)
     → prepared typed AST and semantic metadata
     → fresh arena IrContext + source-logical Module
     → shared CPS and target passes

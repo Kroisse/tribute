@@ -101,7 +101,7 @@ Two-phase resolution:
 
 1. **Basic resolution**: Resolves names and paths, builds `PackageEnv`, and
    records on each call the functions its scope names
-2. **Method selection**: Type checking selects one of them by the call's
+2. **Type-directed (TDNR)**: Type checking selects one of them by the call's
    types (`expr.method(args)` → `Type::method(expr, args)`), deferring the
    choice until solving when the types known so far do not pick one. A method
    call is an `ExprKind::Call` whose callee is `ExprKind::Functions`; the

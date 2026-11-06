@@ -97,7 +97,7 @@ Nominal 타입의 의존 인스턴스 수집과 확장 한도는 아래의
 ### 파이프라인 위치
 
 ```text
-Type inference + method selection
+Type inference (including TDNR)
     → checked function instances
     → frontend preparation + monomorphization
     → source-logical AST-to-IR lowering
@@ -253,7 +253,7 @@ Monomorphization은 `tribute-front`의 typed AST와 명시적인 함수 인스�
 
 ### 파이프라인의 책임
 
-`parse_and_lower_ast()`는 이름 해석과 타입 추론·method 선택을 수행하고, 선택된
+`parse_and_lower_ast()`는 이름 해석과 타입 추론(TDNR 포함)을 수행하고, 선택된
 함수 인스턴스와 semantic 메타데이터를 반환한다. 타입 검사는 의존 패키지 `std`의
 선언을 의존성 표로 조회하며, 그 결과에는 사용자 패키지의 선언만 담긴다.
 패키지의 특수화는 그 패키지와 의존 패키지들의 checked 결과에만 의존하는 tracked
@@ -266,7 +266,7 @@ IR lowering은 이 준비 단계가 성공한 결과만 소비하며, 타입 검
 입력을 만드는 경로는 없다.
 
 ```text
-parse_and_lower_ast: 해석·타입 추론·method 선택·인스턴스 기록
+parse_and_lower_ast: 해석·타입 추론(TDNR 포함)·인스턴스 기록
     ↓                       의존 패키지 특수화: 패키지마다 검증·특수화
     ↓                       (자기와 의존 패키지의 checked 결과에만 의존)
     ↓                       ↓
