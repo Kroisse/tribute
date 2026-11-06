@@ -253,8 +253,9 @@ where
   which `IrContext::type_body` reads. Its `TypeAsmFormat` writes the body
   where `AsmPrinter::identified_body` returns one, and reads a written body
   with `AsmParser::bind_type_body`; the printer gives every identified type
-  a module reaches an alias, and `validation::validate_type_bodies` rejects
-  one without a body.
+  a module reaches an alias, named by its alias hint, so register one that
+  names the key. `validation::validate_type_bodies` rejects an identified
+  type without a body.
 - The function syntax `<(inputs) -> results, {attrs}>` belongs to the
   signature types that register it: their `TypeAsmFormat` calls
   `func::print_signature_type` and `func::parse_signature_type`, which

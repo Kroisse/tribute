@@ -354,6 +354,18 @@ mod tests {
     }
 
     #[test]
+    fn every_identified_type_registers_an_assembly_format() {
+        // Generic syntax cannot write a body.
+        for TypeDefRegistration(def) in inventory::iter::<TypeDefRegistration> {
+            assert!(
+                !def.identified || def.asm_format.is_some(),
+                "{} is identified without an assembly format",
+                def.name.as_str()
+            );
+        }
+    }
+
+    #[test]
     fn every_registered_type_name_has_one_handle() {
         let mut ctx = IrContext::new();
         for TypeDefRegistration(def) in inventory::iter::<TypeDefRegistration> {
@@ -583,6 +595,33 @@ mod identified_tests {
             tree.display(&ctx).to_string(),
             r#"test.ident<"Tree", test.cell<test.ident<"Node">>>"#
         );
+    }
+
+    #[test]
+    fn a_type_reached_only_through_an_alias_definition_keeps_its_body() {
+        // `B` appears only inside the body of the context alias `A`, where it
+        // is written as its key, so it needs an alias line of its own.
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !A = test.ident<"A", test.cell<test.ident<"B">>>
+}"#,
+        );
+        let b = Ident::key(&mut ctx, "B");
+        let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
+        ctx.bind_type_body(b, i32_ty).unwrap();
+
+        let printed = module.op().display(&ctx).to_string();
+        assert!(
+            printed.contains(r#"!B = test.ident<"B", core.i32>"#),
+            "{printed}"
+        );
+        let mut reparsed = IrContext::new();
+        let reparsed_module = parse_test_module(&mut reparsed, &printed);
+        let b = Ident::key(&mut reparsed, "B");
+        assert!(reparsed.type_body(b).is_some(), "{printed}");
+        assert!(validate_type_bodies(&reparsed, reparsed_module).is_ok());
     }
 
     #[test]

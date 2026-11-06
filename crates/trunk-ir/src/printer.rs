@@ -1019,8 +1019,9 @@ fn generate_auto_aliases(
     // Every identified type the module reaches gets an alias, whose
     // definition is the one place its body is written.
     let mut identified = HashSet::default();
-    for &ty in counts.keys() {
-        collect_identified(ctx, ty, &mut HashSet::default(), &mut identified);
+    let mut seen = HashSet::default();
+    for &ty in counts.keys().chain(existing.keys()) {
+        collect_identified(ctx, ty, &mut seen, &mut identified);
     }
     for &ty in &identified {
         counts.entry(ty).or_default();
