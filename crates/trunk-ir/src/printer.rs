@@ -21,6 +21,7 @@
 
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
+use std::cell::Cell;
 use std::fmt;
 use std::fmt::Write;
 use std::ops::{ControlFlow, Deref, DerefMut};
@@ -58,6 +59,9 @@ pub struct AsmState<'a> {
     aliases: HashMap<TypeRef, String>,
     /// The state of each module printed inside this scope.
     modules: HashMap<OpRef, ModuleState<'a>>,
+    /// How many identified types' bodies are being written. Inside one, an
+    /// identified type is written as its key.
+    identified_depth: Cell<u32>,
 }
 
 /// A module's type alias definitions and the state of its body.
@@ -99,6 +103,7 @@ impl<'a> AsmState<'a> {
             names: Rc::default(),
             aliases: HashMap::default(),
             modules: HashMap::default(),
+            identified_depth: Cell::new(0),
         }
     }
 
@@ -112,6 +117,7 @@ impl<'a> AsmState<'a> {
                 .map(|(name, ty)| (*ty, name.to_string()))
                 .collect(),
             modules: HashMap::default(),
+            identified_depth: Cell::new(0),
         };
         if root_is_module {
             state.add_module(root);
@@ -157,6 +163,7 @@ impl<'a> AsmState<'a> {
                     names: self.names.clone(),
                     aliases: aliases.clone(),
                     modules: HashMap::default(),
+                    identified_depth: Cell::new(0),
                 });
                 aliases.insert(ty, name.clone());
                 ManualAlias { name, ty, state }
@@ -174,6 +181,7 @@ impl<'a> AsmState<'a> {
             names: self.names.clone(),
             aliases,
             modules: HashMap::default(),
+            identified_depth: Cell::new(0),
         };
         if let Some(region) = region {
             body.add_modules_in(region);
@@ -292,6 +300,27 @@ fn visible_type_attrs<'b>(
 // AsmPrinter — writes types, attributes, and symbols
 // ============================================================================
 
+/// The body an identified type's occurrence writes
+/// ([`AsmPrinter::identified_body`]). Identified types are written as their
+/// keys until it is dropped.
+pub struct IdentifiedBody<'a> {
+    body: TypeRef,
+    depth: &'a Cell<u32>,
+}
+
+impl IdentifiedBody<'_> {
+    /// The body to write.
+    pub fn ty(&self) -> TypeRef {
+        self.body
+    }
+}
+
+impl Drop for IdentifiedBody<'_> {
+    fn drop(&mut self) {
+        self.depth.set(self.depth.get() - 1);
+    }
+}
+
 /// Writes the printed form to a [`fmt::Write`], as MLIR's `AsmPrinter`
 /// does: types, attributes, and symbols, and through `write!` any
 /// [`Display`](fmt::Display) of its [`AsmState`].
@@ -345,12 +374,32 @@ impl<'a> AsmPrinter<'a> {
         self.state.ctx
     }
 
-    /// Write a type, as its alias when it has one in scope.
+    /// Write a type, as its alias when it has one in scope. Inside an
+    /// identified type's body, an identified type is written as its key
+    /// (`new-plans/ir.md` § "식별 타입").
     pub fn print_type(&mut self, ty: TypeRef) -> fmt::Result {
-        if let Some(alias) = self.state.aliases.get(&ty) {
+        let in_body = self.state.identified_depth.get() > 0;
+        if !(in_body && crate::type_def::is_identified(self.ctx(), ty))
+            && let Some(alias) = self.state.aliases.get(&ty)
+        {
             return write!(self, "{}", display_alias(alias));
         }
         self.print_type_expanded(ty)
+    }
+
+    /// The body this occurrence of the identified type `ty` writes: `Some`
+    /// when `ty` has a body and no identified type's body is being written.
+    /// While the returned guard lives, identified types are written as their
+    /// keys, which ends recursion. An identified type's assembly format
+    /// writes its body through this.
+    pub fn identified_body(&self, ty: TypeRef) -> Option<IdentifiedBody<'a>> {
+        let depth = &self.state.identified_depth;
+        if depth.get() > 0 {
+            return None;
+        }
+        let body = self.ctx().type_body(ty)?;
+        depth.set(depth.get() + 1);
+        Some(IdentifiedBody { body, depth })
     }
 
     fn print_type_expanded(&mut self, ty: TypeRef) -> fmt::Result {
@@ -966,7 +1015,16 @@ fn generate_auto_aliases(
     region: RegionRef,
     existing: &HashMap<TypeRef, String>,
 ) -> Vec<(String, TypeRef)> {
-    let counts = collect_module_types(ctx, region);
+    let mut counts = collect_module_types(ctx, region);
+    // Every identified type the module reaches gets an alias, whose
+    // definition is the one place its body is written.
+    let mut identified = HashSet::default();
+    for &ty in counts.keys() {
+        collect_identified(ctx, ty, &mut HashSet::default(), &mut identified);
+    }
+    for &ty in &identified {
+        counts.entry(ty).or_default();
+    }
     let mut candidates: Vec<(TypeRef, usize, usize, String)> = Vec::new();
 
     for (&ty, &count) in &counts {
@@ -978,11 +1036,12 @@ fn generate_auto_aliases(
         // Types with a dialect-provided name hint (e.g. named structs) are
         // alias-eligible when used often enough. Types without a hint need
         // sufficient complexity to justify a fallback name like t0, t1.
-        let eligible = if has_hint {
-            count >= MIN_ALIAS_USES || complexity >= MIN_ALIAS_COMPLEXITY
-        } else {
-            count >= MIN_ALIAS_USES && complexity >= MIN_ALIAS_COMPLEXITY
-        };
+        let eligible = identified.contains(&ty)
+            || if has_hint {
+                count >= MIN_ALIAS_USES || complexity >= MIN_ALIAS_COMPLEXITY
+            } else {
+                count >= MIN_ALIAS_USES && complexity >= MIN_ALIAS_COMPLEXITY
+            };
         if eligible {
             // `TypeRef` is an allocation detail. The alias-free type printer
             // gives equivalent types the same stable structural ordering.
@@ -1010,6 +1069,32 @@ fn generate_auto_aliases(
     topological_sort_aliases(ctx, &mut result);
 
     result
+}
+
+/// Collect the identified types `ty` reaches: through its parameters, the
+/// types in its attributes, and the bodies of identified types.
+fn collect_identified(
+    ctx: &IrContext,
+    ty: TypeRef,
+    seen: &mut HashSet<TypeRef>,
+    identified: &mut HashSet<TypeRef>,
+) {
+    if !seen.insert(ty) {
+        return;
+    }
+    if crate::type_def::is_identified(ctx, ty) {
+        identified.insert(ty);
+    }
+    let data = ctx.get_type(ty);
+    for &param in &data.params {
+        collect_identified(ctx, param, seen, identified);
+    }
+    for attr in data.attrs.values() {
+        attr.visit_types(&mut |nested| collect_identified(ctx, nested, seen, identified));
+    }
+    if let Some(body) = ctx.type_body(ty) {
+        collect_identified(ctx, body, seen, identified);
+    }
 }
 
 /// Choose an alias name for a type.
@@ -1057,6 +1142,10 @@ fn topological_sort_aliases(ctx: &IrContext, aliases: &mut Vec<(String, TypeRef)
         .map(|(_, ty)| {
             let mut deps = HashSet::default();
             collect_type_deps(ctx, *ty, &alias_set, &mut deps);
+            // An identified type's definition also writes its body.
+            if let Some(body) = ctx.type_body(*ty) {
+                collect_body_deps(ctx, body, &alias_set, &mut deps);
+            }
             deps
         })
         .collect();
@@ -1105,6 +1194,29 @@ fn collect_type_deps(
     // Also check types embedded in attributes
     for attr in data.attrs.values() {
         collect_attr_type_deps(ctx, attr, alias_set, deps);
+    }
+}
+
+/// Collect the aliased types an identified type's body writes as aliases:
+/// every one but the identified types, which a body writes as keys.
+fn collect_body_deps(
+    ctx: &IrContext,
+    ty: TypeRef,
+    alias_set: &HashSet<TypeRef>,
+    deps: &mut HashSet<TypeRef>,
+) {
+    if crate::type_def::is_identified(ctx, ty) {
+        return;
+    }
+    if alias_set.contains(&ty) {
+        deps.insert(ty);
+    }
+    let data = ctx.get_type(ty);
+    for &param in &data.params {
+        collect_body_deps(ctx, param, alias_set, deps);
+    }
+    for attr in data.attrs.values() {
+        attr.visit_types(&mut |nested| collect_body_deps(ctx, nested, alias_set, deps));
     }
 }
 

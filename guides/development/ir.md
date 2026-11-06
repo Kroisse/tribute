@@ -247,6 +247,14 @@ where
   the type when it generates aliases; a hand-written `TypeDef` adds it with
   `with_alias_hint`. `#[implements(..)]` on a type registers the wrapper's
   [type interfaces](#type-interfaces).
+- A hand-written `TypeDef` declares an
+  [identified type](../../new-plans/ir.md#식별-타입) with `.identified()`:
+  its data is a key, and `IrContext::bind_type_body` binds its body once,
+  which `IrContext::type_body` reads. Its `TypeAsmFormat` writes the body
+  where `AsmPrinter::identified_body` returns one, and reads a written body
+  with `AsmParser::bind_type_body`; the printer gives every identified type
+  a module reaches an alias, and `validation::validate_type_bodies` rejects
+  one without a body.
 - The function syntax `<(inputs) -> results, {attrs}>` belongs to the
   signature types that register it: their `TypeAsmFormat` calls
   `func::print_signature_type` and `func::parse_signature_type`, which

@@ -157,6 +157,21 @@ pub struct RegionData {
     pub parent_op: Option<OpRef>,
 }
 
+/// Why [`IrContext::bind_type_body`] refused a body.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, derive_more::Display, derive_more::Error)]
+pub enum TypeBodyError {
+    /// The type's definition does not declare it identified.
+    #[display("the type is not identified")]
+    NotIdentified,
+    /// The type already has another body.
+    #[display("the type already has another body")]
+    Conflicting {
+        /// The body already bound.
+        #[error(not(source))]
+        bound: TypeRef,
+    },
+}
+
 // ============================================================================
 // IrContext
 // ============================================================================
@@ -204,6 +219,8 @@ pub struct IrContext {
     type_alias_by_name: HashMap<Symbol, TypeRef>,
     /// Reverse lookup: type → alias name (for printer).
     type_alias_by_type: HashMap<TypeRef, Symbol>,
+    /// The body bound to each identified type ([`IrContext::bind_type_body`]).
+    type_bodies: HashMap<TypeRef, TypeRef>,
 
     /// Diagnostics collected during validation and transformation passes.
     diagnostics: RefCell<Vec<Diagnostic>>,
@@ -268,6 +285,7 @@ impl Clone for IrContext {
             type_aliases: self.type_aliases.clone(),
             type_alias_by_name: self.type_alias_by_name.clone(),
             type_alias_by_type: self.type_alias_by_type.clone(),
+            type_bodies: self.type_bodies.clone(),
             diagnostics: self.diagnostics.clone(),
         }
     }
@@ -302,6 +320,7 @@ impl IrContext {
             type_aliases: Vec::new(),
             type_alias_by_name: HashMap::default(),
             type_alias_by_type: HashMap::default(),
+            type_bodies: HashMap::default(),
             diagnostics: RefCell::new(Vec::new()),
         }
     }
@@ -330,6 +349,7 @@ impl IrContext {
             type_aliases: self.type_aliases.clone(),
             type_alias_by_name: self.type_alias_by_name.clone(),
             type_alias_by_type: self.type_alias_by_type.clone(),
+            type_bodies: self.type_bodies.clone(),
             diagnostics: self.diagnostics.clone(),
         }
     }
@@ -577,6 +597,33 @@ impl IrContext {
     /// Get the ordered list of type aliases.
     pub fn type_aliases(&self) -> &[(Symbol, TypeRef)] {
         &self.type_aliases
+    }
+
+    // ========================================================================
+    // Identified type bodies
+    // ========================================================================
+
+    /// The body bound to the identified type `ty`, or `None` when `ty` is not
+    /// identified or has no body yet (`new-plans/ir.md` § "식별 타입").
+    pub fn type_body(&self, ty: TypeRef) -> Option<TypeRef> {
+        self.type_bodies.get(&ty).copied()
+    }
+
+    /// Bind `body` to the identified type `ty`. Binding the body `ty` already
+    /// has does nothing; a body is never replaced.
+    pub fn bind_type_body(&mut self, ty: TypeRef, body: TypeRef) -> Result<(), TypeBodyError> {
+        if !crate::type_def::is_identified(self, ty) {
+            return Err(TypeBodyError::NotIdentified);
+        }
+        match self.type_bodies.get(&ty) {
+            Some(&bound) if bound == body => Ok(()),
+            Some(&bound) => Err(TypeBodyError::Conflicting { bound }),
+            None => {
+                self.bump_revision();
+                self.type_bodies.insert(ty, body);
+                Ok(())
+            }
+        }
     }
 
     // ========================================================================

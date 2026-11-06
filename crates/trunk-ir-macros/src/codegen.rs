@@ -1218,6 +1218,7 @@ fn gen_type_struct_and_trait(
             verifier: #verifier,
             asm_format: #asm_format,
             alias_hint: #alias_hint,
+            identified: false,
         };
 
         #crate_path::__private::inventory::submit! {
