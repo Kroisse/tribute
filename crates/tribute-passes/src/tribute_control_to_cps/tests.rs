@@ -2254,6 +2254,188 @@ fn textual_scf_switch_reenters_the_shared_suffix() {
     assert!(!printed.contains("tribute_control."));
 }
 
+/// Declare `State.get` and `State.set`, both `(core.i32) -> core.i32`,
+/// convert `module` to CPS, and lower its continuation frames. Returns the
+/// module printed after conversion and after frame lowering.
+fn convert_state_fixture(ctx: &mut IrContext, module: Module) -> (String, String) {
+    let ability = first_ability(ctx, module);
+    let i32_type = ctx
+        .types()
+        .iter()
+        .find_map(|(ty, data)| (data.name.is(ctx, "core.i32")).then_some(ty))
+        .unwrap();
+    let declarations = ["get", "set"].map(|name| {
+        tribute_control::OperationDeclaration::new(
+            ability.clone(),
+            ctx.intern_str(name),
+            ctx.intern_str("op"),
+            [i32_type],
+            i32_type,
+        )
+    });
+    tribute_control::declare_operations(ctx, module, &declarations);
+    tribute_control_to_cps(ctx, module, &[], &mut Default::default()).unwrap();
+    let converted = module.op().display(ctx).to_string();
+    lower_continuation_frames(ctx, module).unwrap();
+    (converted, module.op().display(ctx).to_string())
+}
+
+/// The result type of each `scf.index_switch` under `op`, as its name.
+fn collect_switch_results(ctx: &IrContext, op: OpRef, results: &mut Vec<String>) {
+    if trunk_ir::dialect::scf::IndexSwitch::matches(ctx, op) {
+        for &ty in ctx.op_result_types(op) {
+            results.push(ctx.get_type(ty).name.display(ctx).to_string());
+        }
+    }
+    for region in ctx.op_regions(op) {
+        for &block in &ctx.region(region).blocks {
+            for &child in &ctx.block(block).ops {
+                collect_switch_results(ctx, child, results);
+            }
+        }
+    }
+}
+
+#[test]
+fn textual_scf_switch_result_reenters_the_shared_suffix() {
+    let input = r#"core.module @test {
+  tribute_cps.func @switching(%input: core.i32) -> core.i32 convention(cps) {
+    %selected = scf.index_switch %input : (core.i32) -> core.i32
+    case 0 {
+      %got = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
+      scf.yield %got
+    }
+    case 1 {
+      %set = tribute_control.perform op @State @set(%input) : (core.i32) -> core.i32
+      scf.yield %set
+    }
+    default {
+      %fallback = arith.constant 7 : core.i32
+      scf.yield %fallback
+    }
+    %one = arith.constant 1 : core.i32
+    %sum = arith.addi %selected, %one : core.i32
+    tribute_control.return %sum
+  }
+}"#;
+    let (mut ctx, module) = parse(input);
+    let (converted, printed) = convert_state_fixture(&mut ctx, module);
+    let mut switch_results = Vec::new();
+    collect_switch_results(&ctx, module.op(), &mut switch_results);
+    assert_eq!(switch_results, ["core.never"], "{printed}");
+    assert!(printed.contains("case 1"), "{printed}");
+    assert_eq!(
+        converted.matches("ability.perform").count(),
+        2,
+        "{converted}"
+    );
+    assert_eq!(printed.matches("arith.addi").count(), 1, "{printed}");
+    assert!(!printed.contains("tribute_control."), "{printed}");
+}
+
+#[test]
+fn textual_direct_scf_switch_keeps_its_result() {
+    let input = r#"core.module @test {
+  tribute_cps.func @identity(%value: core.i32) -> core.i32 convention(direct) {
+    tribute_control.return %value
+  }
+  tribute_cps.func @switching(%input: core.i32) -> core.i32 convention(cps) {
+    %direct = tribute_cps.lambda(%value: core.i32) -> core.i32 captures [] entries {
+      direct {
+        %selected = scf.index_switch %value : (core.i32) -> core.i32
+        case 0 {
+          %called = tribute_control.call @identity(%value) : (core.i32) -> core.i32
+          scf.yield %called
+        }
+        default {
+          scf.yield %value
+        }
+        tribute_control.return %selected
+      }
+    }
+    %performed = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
+    tribute_control.return %performed
+  }
+}"#;
+    let (mut ctx, module) = parse(input);
+    let (_, printed) = convert_state_fixture(&mut ctx, module);
+    let mut switch_results = Vec::new();
+    collect_switch_results(&ctx, module.op(), &mut switch_results);
+    assert_eq!(switch_results, ["core.i32"], "{printed}");
+    assert!(printed.contains("func.call"), "{printed}");
+    assert!(!printed.contains("tribute_control."), "{printed}");
+}
+
+#[test]
+fn textual_scf_switch_arm_may_end_with_a_tail_call() {
+    let input = r#"core.module @test {
+  tribute_cps.func @callee(%value: core.i32) -> core.i32 convention(cps) {
+    %got = tribute_control.perform op @State @get(%value) : (core.i32) -> core.i32
+    tribute_control.return %got
+  }
+  tribute_cps.func @switching(%input: core.i32) -> core.i32 convention(cps) {
+    %selected = scf.index_switch %input : (core.i32) -> core.i32
+    case 0 {
+      tribute_control.tail_call @callee(%input) : (core.i32) -> ()
+    }
+    case 1 {
+      %set = tribute_control.perform op @State @set(%input) : (core.i32) -> core.i32
+      scf.yield %set
+    }
+    default {
+      scf.yield %input
+    }
+    tribute_control.return %selected
+  }
+}"#;
+    let (mut ctx, module) = parse(input);
+    let (_, printed) = convert_state_fixture(&mut ctx, module);
+    let mut switch_results = Vec::new();
+    collect_switch_results(&ctx, module.op(), &mut switch_results);
+    assert_eq!(switch_results, ["core.never"], "{printed}");
+    assert!(printed.contains("func.tail_call @callee"), "{printed}");
+    assert!(!printed.contains("tribute_control."), "{printed}");
+}
+
+#[test]
+fn multi_result_effectful_scf_switch_is_rejected_inside_a_cps_callable() {
+    let input = r#"core.module @test {
+  tribute_cps.func @broken(%input: core.i32) -> core.i32 convention(cps) {
+    %left, %right = scf.index_switch %input : (core.i32) -> (core.i32, core.i32)
+    case 0 {
+      %got = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
+      scf.yield %got, %input
+    }
+    default {
+      scf.yield %input, %input
+    }
+    tribute_control.return %left
+  }
+}"#;
+    let (mut ctx, module) = parse(input);
+    let ability = first_ability(&ctx, module);
+    let i32_type = ctx
+        .types()
+        .iter()
+        .find_map(|(ty, data)| (data.name.is(&ctx, "core.i32")).then_some(ty))
+        .unwrap();
+    let declarations = [tribute_control::OperationDeclaration::new(
+        ability.clone(),
+        ctx.intern_str("get"),
+        ctx.intern_str("op"),
+        [i32_type],
+        i32_type,
+    )];
+    tribute_control::declare_operations(&mut ctx, module, &declarations);
+    let error = tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap_err();
+    assert!(
+        error.to_string().contains(
+            "effectful scf.index_switch requires zero or one result inside a CPS callable"
+        ),
+        "{error}"
+    );
+}
+
 #[cfg(test)]
 mod shared_contract_boundary_regressions {
     use super::verify_tribute_control_post_cps;

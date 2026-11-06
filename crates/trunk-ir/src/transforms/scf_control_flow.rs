@@ -46,12 +46,6 @@ impl Analysis for StructuredControlAnalysis {
                     analysis.terminal_regions.insert(region);
                 }
             }
-            if !(scf::If::matches(ir, op)
-                || scf::Loop::matches(ir, op)
-                || scf::IndexSwitch::matches(ir, op))
-            {
-                continue;
-            }
             let Some(interface) = DynRegionBranch::get(ir, op) else {
                 continue;
             };
@@ -120,10 +114,7 @@ impl StructuredControlAnalysis {
         let Some(&last) = ctx.block(*block).ops.last() else {
             return false;
         };
-        if scf::If::matches(ctx, last)
-            || scf::Loop::matches(ctx, last)
-            || scf::IndexSwitch::matches(ctx, last)
-        {
+        if DynRegionBranch::is_implemented(ctx, last) {
             self.has_terminal_unused_never_result(last)
                 || (ctx.op_results(last).is_empty()
                     && self.has_only_terminal_region_successors(last))

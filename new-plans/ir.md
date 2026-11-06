@@ -300,7 +300,18 @@ region or back to the parent operation. `RegionBranchTerminator` describes the
 values a terminator forwards along such a region transfer. Region branch points
 and successors are explicit values: a point is either `Parent` or a concrete
 nested-region terminator, and a successor is either a concrete region or
-`Parent`.
+`Parent`. As MLIR's `getRegionInvocationBounds`, `RegionBranch` also declares
+how many times each region may run per execution of the operation; the
+default bound is unknown.
+
+An operation *selects one region* when its entry reaches only regions, each
+region runs at most once by its declared bounds, and each region's single
+block ends either in a terminator whose only successor is `Parent` or in a
+proven `CallableExit`. `scf.if` and `scf.index_switch` select one region;
+`scf.loop` does not, since its body may run again, even when the body ends
+in a callable exit and its successor graph shows no back edge. Like MLIR's
+`hasLoop`, the property is derived from these interface answers, not
+declared by operation name, and a failed query means it does not hold.
 
 `CallableExit` is a separate dialect-registered operation interface for an
 operation that ends execution of the current callable and therefore cannot
@@ -309,12 +320,12 @@ terminator marker: `scf.yield`, `scf.break`, and `scf.continue` transfer within
 structured control flow and do not satisfy it. Dialects register only their
 verified callable exits, including ordinary `func.return`, proper tail
 transfers, and unreachable control flow. An arm of a result-producing
-`scf.if` may end with a verified `CallableExit` instead of `scf.yield`; such
-an arm produces no value and the operation's results come from its yielding
-arms. Source `become` ends a tail-position arm this way. The typed model and
-its dynamic query are fallible. An unregistered operation, malformed
-registered operation, or query error is never evidence that a region is
-terminal.
+operation that selects one region may end with a verified `CallableExit`
+instead of `scf.yield`; such an arm produces no value and the operation's
+results come from its yielding arms. Source `become` ends a tail-position arm
+this way. The typed model and its dynamic query are fallible. An unregistered
+operation, malformed registered operation, or query error is never evidence
+that a region is terminal.
 
 Structured-to-CFG lowering may use `CallableExit` only after preserving its
 own structural rules: the region must have one block, the exit must be that

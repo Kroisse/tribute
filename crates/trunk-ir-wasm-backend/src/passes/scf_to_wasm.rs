@@ -15,6 +15,7 @@ use trunk_ir::context::{BlockData, IrContext, OpList, RegionData};
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::scf;
 use trunk_ir::dialect::wasm as wasm_dialect;
+use trunk_ir::op_interface::DynRegionBranch;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, RegionRef, ValueRef};
 use trunk_ir::rewrite::{
@@ -106,9 +107,7 @@ fn validate_structured_control(
 ) -> Result<(), ConversionError> {
     validate_lowerable_switches(ctx, module)?;
     let result = walk_op(ctx, module.op(), &mut |op| {
-        let has_never = (scf::If::matches(ctx, op)
-            || scf::Loop::matches(ctx, op)
-            || scf::IndexSwitch::matches(ctx, op))
+        let has_never = DynRegionBranch::is_implemented(ctx, op)
             && ctx.op_results(op).iter().any(|&value| {
                 let ty = ctx.get_type(ctx.value_ty(value));
                 ty.name.is(ctx, "core.never")
