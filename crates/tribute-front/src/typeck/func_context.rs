@@ -44,6 +44,15 @@ pub(crate) struct HandleContext<'db> {
     pub evidence_body: Option<usize>,
 }
 
+/// One name bound by a generalized `let` pattern.
+#[derive(Clone, Debug)]
+pub(crate) struct LetSchemeBinding<'db> {
+    pub name: Symbol,
+    pub local_id: Option<LocalId>,
+    pub scope: NodeId,
+    pub scheme: TypeScheme<'db>,
+}
+
 /// Function-level type inference context.
 ///
 /// Each function body is type-checked with its own `FunctionInferenceContext`,
@@ -60,15 +69,6 @@ pub(crate) struct HandleContext<'db> {
 /// Scoping: Bindings are stored in a stack of scopes. When entering a new
 /// scope (e.g., lambda body, case arm), push_scope() creates a new scope.
 /// When exiting, pop_scope() removes it. Lookups search from innermost to
-/// One name bound by a generalized `let` pattern.
-#[derive(Clone, Debug)]
-pub(crate) struct LetSchemeBinding<'db> {
-    pub name: Symbol,
-    pub local_id: Option<LocalId>,
-    pub scope: NodeId,
-    pub scheme: TypeScheme<'db>,
-}
-
 /// outermost scope.
 pub struct FunctionInferenceContext<'a, 'db> {
     db: &'db dyn salsa::Database,
