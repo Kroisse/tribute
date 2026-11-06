@@ -3,7 +3,6 @@
 //! This pass converts ADT operations to their Cranelift equivalents:
 //! - `adt.struct_get(ref, field)` -> `clif.load(ref + offset)`
 //! - `adt.struct_set(ref, value, field)` -> `clif.store(value, ref + offset)`
-//! - `adt.variant_cast(ref, type, tag)` -> identity (native pointers are untyped)
 //! - `adt.ref_null(type)` -> `clif.iconst(0)` (null pointer)
 //! - `adt.ref_cast(ref, type)` -> identity (native pointers are untyped)
 //! - `adt.ref_is_null(ref)` -> `clif.icmp(eq, ref, 0)`
@@ -49,7 +48,6 @@ fn lower(
         .with_auto_type_conversion(true)
         .add_pattern(StructGetPattern)
         .add_pattern(StructSetPattern)
-        .add_pattern(VariantCastPattern)
         .add_pattern(RefNullPattern)
         .add_pattern(RefCastPattern)
         .add_pattern(RefIsNullPattern)
@@ -165,23 +163,6 @@ impl OpRewritePattern for StructSetPattern {
             .offset(offset)
             .build(ctx, loc);
         rewriter.replace_op(store_op.op_ref());
-        Some(())
-    }
-}
-
-struct VariantCastPattern;
-
-impl OpRewritePattern for VariantCastPattern {
-    type Op = adt::VariantCast;
-
-    fn match_and_rewrite(
-        &self,
-        ctx: &mut IrContext,
-        variant_cast: Self::Op,
-        rewriter: &mut PatternRewriter<'_>,
-    ) -> Option<()> {
-        let ref_val = variant_cast.r#ref(ctx);
-        rewriter.erase_op(vec![ref_val]);
         Some(())
     }
 }

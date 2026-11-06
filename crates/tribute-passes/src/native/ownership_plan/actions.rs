@@ -857,9 +857,7 @@ fn is_closure_alias(ctx: &IrContext, value: ValueRef) -> bool {
     let ValueDef::OpResult(op, _) = ctx.value_def(value) else {
         return false;
     };
-    adt::RefCast::matches(ctx, op)
-        || adt::VariantCast::matches(ctx, op)
-        || core::UnrealizedConversionCast::matches(ctx, op)
+    adt::RefCast::matches(ctx, op) || core::UnrealizedConversionCast::matches(ctx, op)
 }
 
 impl ActionPlanner<'_> {

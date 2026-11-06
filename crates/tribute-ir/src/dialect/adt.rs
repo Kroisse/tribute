@@ -91,10 +91,6 @@ mod adt {
     #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn variant_is(r#type: Attr<Type>, tag: Attr<String>, r#ref: Value<_>) -> Value<_> {}
 
-    #[flags(Pure)]
-    #[asm_format(r#ref attr_dict_bare ":" type(result))]
-    fn variant_cast(r#type: Attr<Type>, tag: Attr<String>, r#ref: Value<_>) -> Value<_> {}
-
     /// Field `field` of `ref`, a value of variant `tag` of enum layout `type`.
     ///
     /// When the layout declares row parameters, the result has the layout's

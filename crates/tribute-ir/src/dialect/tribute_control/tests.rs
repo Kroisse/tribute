@@ -2298,8 +2298,7 @@ fn exact_adt_callable_projections_have_semantic_provenance() {
   tribute_control.func @caller(%tuple: !TupleRef, %choice: !ChoiceRef, %value: core.i32) -> core.i32 {
     %tuple_callee = adt.struct_get %tuple {type = !Tuple, field = 0} : !F
     %tuple_result = tribute_control.call_indirect %tuple_callee(%value) : (core.i32) -> core.i32
-    %some = adt.variant_cast %choice {type = !Choice, tag = "Some"} : !Choice
-    %choice_callee = adt.variant_get %some {type = !Choice, tag = "Some", field = 0} : !F
+    %choice_callee = adt.variant_get %choice {type = !Choice, tag = "Some", field = 0} : !F
     %choice_result = tribute_control.call_indirect %choice_callee(%tuple_result) : (core.i32) -> core.i32
     tribute_control.return %choice_result
   }
@@ -2322,8 +2321,7 @@ fn adt_callable_projection_requires_matching_declared_field_type() {
   tribute_control.func @caller(%tuple: !TupleRef, %choice: !ChoiceRef, %value: core.i32) -> core.i32 {
     %tuple_callee = adt.struct_get %tuple {type = !Tuple, field = 0} : !F
     %tuple_result = tribute_control.call_indirect %tuple_callee(%value) : (core.i32) -> core.i32
-    %some = adt.variant_cast %choice {type = !Choice, tag = "Some"} : !Choice
-    %choice_callee = adt.variant_get %some {type = !Choice, tag = "Some", field = 0} : !F
+    %choice_callee = adt.variant_get %choice {type = !Choice, tag = "Some", field = 0} : !F
     %choice_result = tribute_control.call_indirect %choice_callee(%tuple_result) : (core.i32) -> core.i32
     tribute_control.return %choice_result
   }
