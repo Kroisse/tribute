@@ -354,8 +354,8 @@ mod tribute_control {
     ///   result shape. Whole-IR verification checks symbol resolution; that
     ///   the result equals the target type with `row_args` substituted
     ///   (`new-plans/ir.md`, "Row 인자와 치환") apart from the outer row; and
-    ///   that the outer row holds each instance of the substituted row at
-    ///   least as many times and, if that row has a tail, the same tail.
+    ///   that the outer row holds each instance of the substituted row and,
+    ///   if that row has a tail, the same tail.
     /// - **Ownership and value flow:** the result is an ordinary SSA value.
     /// - **Flags:** `SourceFuncRef`, shared with `tribute_cps.func_ref`.
     /// - **Location:** the source reference span that uses the named function
