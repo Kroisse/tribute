@@ -84,17 +84,14 @@ fn canonical_enum_type(ctx: &IrContext, attr_ty: TypeRef) -> Option<TypeRef> {
     get_enum_variants(ctx, attr_ty).map(|_| attr_ty)
 }
 
-/// Resolve a logical ADT reference through its exact type alias to an enum
-/// layout. A typeref's `name` attribute is its nominal declaration link; do
-/// not fall back to structural or same-name equivalence here.
+/// Resolve a logical ADT reference to the enum layout it names. A typeref's
+/// `name` attribute is its nominal declaration link; do not fall back to
+/// structural or same-name equivalence here.
 fn canonical_typeref_enum_type(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> {
-    let data = ctx.get_type(ty);
-    if data.name != tribute_ir::dialect::adt::Typeref::NAME {
+    if !adt::Typeref::matches(ctx, ty) {
         return None;
     }
-    let name = ctx.type_attrs(ty).get_str("name")?;
-    let enum_ty = ctx.type_alias_by_text(name)?;
-    canonical_enum_type(ctx, enum_ty)
+    canonical_enum_type(ctx, adt::layout_of(ctx, ty)?)
 }
 
 /// Convert a logical ADT reference that remains in enum attributes to its
