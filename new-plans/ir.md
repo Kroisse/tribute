@@ -1153,9 +1153,11 @@ tribute_control.func_sig<(T) -> R row(@"<instance A>", @"<instance B>" | 'a1)>
   [`ability.decl`](../crates/tribute-ir/src/dialect/ability.rs)에 대한 symbol
   참조 목록이고
   `tail`은 둘러싼 정의의 [row binder](#row-binder) index다. 둘 다 없으면 닫힌 빈
-  row이며 속성을 생략해 쓴다. `instances`는 symbol 경로 순서로 정렬한다. 같은
-  instance가 두 번 나오면 두 번 둔다. Evidence 선택이 instance의 위치 수를 세기
-  때문이다.
+  row이며 속성을 생략해 쓴다. `instances`는 symbol 경로 순서로 정렬하며 같은
+  instance를 한 번만 둔다. Row는 [instance의 집합](type-inference.md#기본-규칙)이다.
+  명시 label과 tail이 같은 instance를 담는 호출에서 어느 위치가 어느 handler를 받는지는
+  type이 아니라 typechecking이 인스턴스화에서 계산한
+  [evidence 선택](#evidence-선택-속성)이 담는다.
 - **정체성:** signature의 정체성은 입력, 결과, row의 조합이다. Convention은
   signature에 들어가지 않는다. 같은 row도 인스턴스가 고정한 class에 따라 다른
   convention으로 불릴 수 있다([cps-effects.md](cps-effects.md#row와-호출-규약)).
@@ -1261,7 +1263,7 @@ Row-polymorphic 정의를 참조하는 `call`, `tail_call`, `func_ref`는 `row_a
 [convention class](cps-effects.md#row-변수의-convention-class) 규칙이 정한다.
 참조가 보는 callee signature는 callee의 type에 row 인자를 치환한 것이다. 치환은
 type 안의 모든 `func_sig`(자기 자신 포함)에서 tail이 양화된 binder `t`인 row
-`(I, t)`를 `(I ⊎ args[t].instances, args[t].tail)`로 바꾸고 정렬한다. 다른 속성은 바꾸지
+`(I, t)`를 `(I ∪ args[t].instances, args[t].tail)`로 바꾸고 정렬한다. 다른 속성은 바꾸지
 않는다. Tuple layout은 원소를 치환한 뒤 같은 이름 규칙으로 다시
 만든다([layout 이름](#compiler-generated-tuple-layout)). `call_indirect`와
 `tail_call_indirect`의 callee type은 이미 caller의 binder로 쓰여 있으므로 row 인자가

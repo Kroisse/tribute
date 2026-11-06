@@ -243,6 +243,40 @@ fn main() -> Nil {}
     assert_not_cast(logical_function(&ir, "forward"), value_name(&lambda));
 }
 
+/// A lambda passed where the callee's row and its row argument both name
+/// `Logger` already has the parameter's callable type: the substituted row
+/// names `Logger` once.
+#[salsa_test]
+fn lambda_value_matches_a_row_that_its_argument_also_names(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "logical_lambda_shared_instance.trb",
+        r#"
+ability Logger {
+    fn log(n: Int) -> Int
+}
+fn handled(f: fn() ->{e, Logger} Int) ->{e} Int {
+    handle f() {
+        do r { r }
+        fn Logger::log(n) { n + +1 }
+    }
+}
+fn forward() -> Int {
+    handled(fn() { handled(fn() { Logger::log(+5) }) })
+}
+fn main() -> Nil {}
+"#,
+    );
+
+    let ir = common::specialized_frontend_ir(db, source);
+    let forward = logical_function(&ir, "forward");
+    let inner = lambda_headers(forward)
+        .into_iter()
+        .nth(1)
+        .expect("logical lowering must materialize the inner callback lambda");
+    assert_not_cast(forward, value_name(&inner));
+}
+
 /// A named function bound by `let` and passed on at another callable type
 /// leaves no reference unused.
 #[salsa_test]

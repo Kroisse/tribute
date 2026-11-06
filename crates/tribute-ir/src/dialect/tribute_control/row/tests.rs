@@ -175,6 +175,52 @@ fn rows_must_be_sorted_and_not_written_when_closed_and_empty() {
 }
 
 #[test]
+fn a_row_names_each_instance_once() {
+    assert_rejects(
+        &MODULE.replace("row(@A, @B) {", "row(@A, @A, @B) {"),
+        "malformed tribute_control.func_sig: Row",
+    );
+    let a = SymbolPath::new(["A"]);
+    let b = SymbolPath::new(["B"]);
+    assert_eq!(
+        Row::new([b.clone(), a.clone(), b.clone()], None),
+        Row::new([a, b], None)
+    );
+}
+
+/// A row argument that names an instance the callee's row also names merges
+/// with it, so the substituted parameter type is the argument's own type.
+#[test]
+fn substitution_merges_an_instance_named_by_the_row_and_its_argument() {
+    let (ctx, module) = parse(
+        r#"core.module @test {
+  ability.decl @A {
+    ability.operation {kind = "fn", op_name = "get", param_types = [], result_type = core.i32}
+  }
+  tribute_control.func @apply['a0](%f: tribute_control.func_sig<(core.i32) -> core.i32 row(@A | 'a0)>, %x: core.i32) -> core.i32 row(| 'a0) {
+    tribute_control.return %x
+  }
+  tribute_control.func @main(%x: core.i32) -> core.i32 row(@A) {
+    %f = tribute_control.lambda(%y: core.i32) -> core.i32 row(@A) captures [] {
+      tribute_control.return %y
+    }
+    %r = tribute_control.call @apply(%f, %x) attributes {row_args = [{instances = [@A]}]} : (tribute_control.func_sig<(core.i32) -> core.i32 row(@A)>, core.i32) -> core.i32
+    tribute_control.return %r
+  }
+}"#,
+    );
+    let result = validate(&ctx, module);
+    assert!(result.errors.is_empty(), "{result}");
+
+    let a = SymbolPath::new(["A"]);
+    let row = Row::new([a.clone()], Some(0));
+    assert_eq!(
+        row.substitute(&[Row::new([a.clone()], None)]),
+        Some(Row::new([a], None))
+    );
+}
+
+#[test]
 fn a_tail_names_a_binder_of_the_enclosing_definition() {
     assert_rejects(
         &MODULE.replace(
@@ -482,14 +528,14 @@ fn a_function_reference_may_widen_the_row_of_its_target() {
 }
 
 #[test]
-fn row_inclusion_counts_instances_and_keeps_the_tail() {
+fn row_inclusion_keeps_the_tail() {
     let a = SymbolPath::new(["A"]);
     let b = SymbolPath::new(["B"]);
-    let wide = Row::new([a.clone(), a.clone(), b.clone()], Some(1));
+    let wide = Row::new([a.clone(), b.clone()], Some(1));
     assert!(wide.includes(&Row::new([a.clone(), b.clone()], None)));
     assert!(wide.includes(&Row::new([a.clone()], Some(1))));
     assert!(!wide.includes(&Row::new([a.clone()], Some(0))));
-    assert!(!Row::new([a.clone()], None).includes(&Row::new([a.clone(), a], None)));
+    assert!(!Row::new([a.clone()], None).includes(&Row::new([a.clone(), b.clone()], None)));
     assert!(!Row::new([b], None).includes(&Row::new([], Some(1))));
 }
 
