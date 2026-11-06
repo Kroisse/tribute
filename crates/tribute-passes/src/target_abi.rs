@@ -1107,7 +1107,7 @@ fn validate_root_continuation_frame(
     let name = ctx.type_attrs(frame).get_str("name").ok_or_else(|| {
         TargetAbiError::new("target root bridge: worker frame lacks nominal layout identity")
     })?;
-    let layout = ctx.type_alias_by_text(name).ok_or_else(|| {
+    let layout = adt::layout_of(ctx, frame).ok_or_else(|| {
         TargetAbiError::new("target root bridge: worker frame must have an exact nominal layout")
     })?;
     let layout_struct = adt::Struct::from_type_ref(ctx, layout)

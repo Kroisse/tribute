@@ -297,10 +297,9 @@ pub(super) fn get_or_create_logical_tuple_type<'db>(
         .iter()
         .map(|ty| ctx.convert_logical_type(ir, *ty))
         .collect();
-    tribute_control::logical_tuple_type(ir, &elements);
+    let tuple = tribute_control::logical_tuple_type(ir, &elements);
     let name = tribute_control::logical_tuple_name(ir, &elements);
-    let layout = ir
-        .type_alias_by_text(&name)
+    let layout = tribute_ir::dialect::adt::layout_of(ir, tuple)
         .expect("a logical tuple layout is registered under its name");
     Some((Symbol::new(&name), layout))
 }

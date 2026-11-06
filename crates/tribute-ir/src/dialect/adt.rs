@@ -374,6 +374,23 @@ pub fn nominal_name(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
     nominal_name_ref(ctx, ty).map(|name| ctx.str(name))
 }
 
+/// The `adt.struct` or `adt.enum` layout of a value of type `ty`: `ty`
+/// itself when it is a layout, or the layout an `adt.typeref` names
+/// (`new-plans/ir.md` § "`adt.typeref` nominal reference type"), which the
+/// frontend publishes as the type alias of that name. `None` for any other
+/// type or a name without a published layout.
+pub fn layout_of(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> {
+    let is_layout = |ty: TypeRef| Struct::matches(ctx, ty) || Enum::matches(ctx, ty);
+    if is_layout(ty) {
+        return Some(ty);
+    }
+    if !Typeref::matches(ctx, ty) {
+        return None;
+    }
+    let layout = ctx.type_alias_by_text(nominal_name(ctx, ty)?)?;
+    is_layout(layout).then_some(layout)
+}
+
 /// A malformed `adt.struct` type.
 #[derive(Clone, Debug, PartialEq, Eq, derive_more::Display, derive_more::Error)]
 pub enum StructTypeError {
@@ -953,6 +970,36 @@ mod tests {
         let mut reparsed = IrContext::new();
         let module = parse_module(&mut reparsed, &printed).expect("printed IR must parse");
         assert_eq!(printed, module.display(&reparsed).to_string());
+    }
+
+    #[test]
+    fn layout_of_resolves_a_typeref_to_its_published_layout() {
+        let mut ctx = IrContext::new();
+        parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !Point = adt.struct<Point(x: core.i32)>
+  !PointRef = adt.typeref<{name = "Point"}>
+  !Shape = adt.enum<Shape { Dot(), Line(core.i32) }>
+  !ShapeRef = adt.typeref<{name = "Shape"}>
+  !Number = core.i32
+  !NumberRef = adt.typeref<{name = "Number"}>
+  !MissingRef = adt.typeref<{name = "Missing"}>
+}"#,
+        );
+        let alias = |ctx: &IrContext, name| ctx.type_alias_by_text(name).expect("fixture alias");
+        let point = alias(&ctx, "Point");
+        let shape = alias(&ctx, "Shape");
+
+        assert_eq!(layout_of(&ctx, alias(&ctx, "PointRef")), Some(point));
+        assert_eq!(layout_of(&ctx, alias(&ctx, "ShapeRef")), Some(shape));
+        // A layout used as a value type is its own layout.
+        assert_eq!(layout_of(&ctx, point), Some(point));
+        // A name whose alias is not a layout, an unpublished name, and a
+        // type that is not nominal have none.
+        assert_eq!(layout_of(&ctx, alias(&ctx, "NumberRef")), None);
+        assert_eq!(layout_of(&ctx, alias(&ctx, "MissingRef")), None);
+        assert_eq!(layout_of(&ctx, alias(&ctx, "Number")), None);
     }
 
     fn array_schema_ok(body: &str) -> bool {
