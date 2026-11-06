@@ -83,6 +83,67 @@ fn test_case_without_a_literal_switch_stays_a_chain(db: &salsa::DatabaseImpl) {
     }
 }
 
+/// Literal patterns accept the whole current representation of their type,
+/// as literal expressions do. A `Nat` case of 2^31 or more is its 32-bit
+/// pattern.
+#[salsa_test]
+fn test_case_literals_span_the_32_bit_representation(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn nat(x: Nat) -> Nat {
+    case x {
+        1073741824 -> 1
+        4294967295 -> 2
+        _ -> 0
+    }
+}
+
+fn int(x: Int) -> Int {
+    case x {
+        -2147483648 -> +1
+        2147483647i -> +2
+        _ -> +0
+    }
+}
+"#,
+    );
+
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert_snapshot!(ir_text);
+}
+
+/// A literal outside the current representation of its type is reported in
+/// a pattern and in an expression alike.
+#[salsa_test]
+fn test_out_of_range_literals_are_reported(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn pattern(x: Nat) -> Nat {
+    case x {
+        4294967296 -> 1
+        _ -> 0
+    }
+}
+
+fn expression() -> Int {
+    -2147483649
+}
+"#,
+    );
+
+    assert_eq!(
+        ast_pipeline_error_messages(db, source),
+        [
+            "integer literal exceeds the current implementation limit for `Nat`",
+            "integer literal exceeds the current implementation limit for `Int`",
+        ]
+    );
+}
+
 /// Test case expression with Int literals (negative numbers).
 /// Pattern type (Int) should unify with scrutinee type (Int).
 #[salsa_test]

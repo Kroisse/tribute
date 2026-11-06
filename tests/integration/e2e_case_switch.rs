@@ -76,3 +76,53 @@ fn main() ->{Io} Nil {
         "zero\none\ntwo is 2\nmany 7\nminus one\nzero\nother\n5\n40\n41\n9",
     );
 }
+
+/// Literal patterns accept every value of the current 32-bit
+/// representations, as literal expressions do; a `Nat` of 2^31 or more is
+/// matched by its 32-bit pattern.
+#[test]
+fn literal_patterns_span_the_32_bit_representation_on_both_targets() {
+    assert_output_on_both_targets(
+        "literal_pattern_range.trb",
+        r#"
+use std::io::{Io, print_line}
+
+fn nat(x: Nat) -> String {
+    case x {
+        1073741824 -> "2^30"
+        3717208003 -> "big"
+        4294967295 -> "max"
+        _ -> "other"
+    }
+}
+
+fn int(x: Int) -> String {
+    case x {
+        -2147483648 -> "min"
+        2147483647i -> "max"
+        _ -> "other"
+    }
+}
+
+fn single(x: Nat) -> String {
+    case x {
+        4294967295 -> "max"
+        _ -> "other"
+    }
+}
+
+fn main() ->{Io} Nil {
+    print_line(nat(1073741824))
+    print_line(nat(3717208003))
+    print_line(nat(4294967295))
+    print_line(nat(7))
+    print_line(int(-2147483648))
+    print_line(int(2147483647i))
+    print_line(int(+0))
+    print_line(single(4294967295))
+    print_line(single(1))
+}
+"#,
+        "2^30\nbig\nmax\nother\nmin\nmax\nother\nmax\nother",
+    );
+}
