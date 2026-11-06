@@ -285,11 +285,11 @@ impl Converter<'_> {
         Ok(())
     }
 
-    /// The single block of one arm of a region-selecting operation, which
-    /// `SelectsOneRegion` promises.
+    /// The single block of one arm of an operation that
+    /// `DynRegionBranch::selects_one_region` accepted.
     fn single_arm_block(&self, region: RegionRef) -> BlockRef {
         let [block] = self.ctx.region(region).blocks.as_slice() else {
-            panic!("a SelectsOneRegion operation has one block in each region")
+            panic!("an operation that selects one region has one block in each region")
         };
         *block
     }
@@ -320,7 +320,7 @@ impl Converter<'_> {
         lowered
     }
 
-    /// Lower a `SelectsOneRegion` operation, such as `scf.if` or
+    /// Lower an operation that selects one region, such as `scf.if` or
     /// `scf.index_switch`, whose arms contain source control. Inside a CPS callable, each arm continues with the suffix
     /// after the operation; elsewhere the operation keeps its results and
     /// its arms keep their `scf.yield`.

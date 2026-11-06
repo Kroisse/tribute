@@ -124,8 +124,8 @@ interface와 같다. Type interface의 메서드는 그 타입의 wrapper로 호
 하므로 type definition의 flag가 아니라 interface로 정의한다.
 
 Operation flag는 동작 없이 operation 정의가 선언하는 예/아니오 성질이다
-(`Pure`, `IsolatedFromAbove`, `SelectsOneRegion`). 어느 crate든 `#[op_flag]`를
-붙인 unit struct로 flag를 선언한다. Flag는 구현을 갖지 않고 operation definition에 직접 들어가므로 registry
+(`Pure`, `IsolatedFromAbove`). 어느 crate든 `#[op_flag]`를 붙인 unit struct로 flag를
+선언한다. Flag는 구현을 갖지 않고 operation definition에 직접 들어가므로 registry
 없이 조회한다. Interface와 달리 닫혀 있어서, operation을
 정의한 dialect만 그 operation의 flag를 정할 수 있다. 메서드가 없더라도 다른 crate가
 남의 operation에 붙여야 하는 성질은 flag가 아니라 interface로 정의한다.
@@ -300,7 +300,18 @@ region or back to the parent operation. `RegionBranchTerminator` describes the
 values a terminator forwards along such a region transfer. Region branch points
 and successors are explicit values: a point is either `Parent` or a concrete
 nested-region terminator, and a successor is either a concrete region or
-`Parent`.
+`Parent`. As MLIR's `getRegionInvocationBounds`, `RegionBranch` also declares
+how many times each region may run per execution of the operation; the
+default bound is unknown.
+
+An operation *selects one region* when its entry reaches only regions, each
+region runs at most once by its declared bounds, and each region's single
+block ends either in a terminator whose only successor is `Parent` or in a
+proven `CallableExit`. `scf.if` and `scf.index_switch` select one region;
+`scf.loop` does not, since its body may run again, even when the body ends
+in a callable exit and its successor graph shows no back edge. Like MLIR's
+`hasLoop`, the property is derived from these interface answers, not
+declared by operation name, and a failed query means it does not hold.
 
 `CallableExit` is a separate dialect-registered operation interface for an
 operation that ends execution of the current callable and therefore cannot
@@ -309,8 +320,7 @@ terminator marker: `scf.yield`, `scf.break`, and `scf.continue` transfer within
 structured control flow and do not satisfy it. Dialects register only their
 verified callable exits, including ordinary `func.return`, proper tail
 transfers, and unreachable control flow. An arm of a result-producing
-operation that runs one of its regions (the `SelectsOneRegion` flag, such as
-`scf.if` and `scf.index_switch`) may end with a verified `CallableExit`
+operation that selects one region may end with a verified `CallableExit`
 instead of `scf.yield`; such an arm produces no value and the operation's
 results come from its yielding arms. Source `become` ends a tail-position arm
 this way. The typed model and its dynamic query are fallible. An unregistered

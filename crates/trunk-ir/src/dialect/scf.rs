@@ -4,7 +4,6 @@
 mod scf {
     #[asm_format(cond ("->" "(" type(result)^ ")")? attr_dict region(then_region) "else" region(else_region))]
     #[implements(RegionBranch, Fold)]
-    #[flags(SelectsOneRegion)]
     fn r#if(cond: Value<_>) -> Option<Value<_>> {
         #[region(then_region)]
         {}
@@ -40,7 +39,6 @@ mod scf {
     #[verify]
     #[asm_format(discriminant attr_dict ":" functional_type(discriminant, results) custom(SwitchArms(cases, case_regions, default_region)))]
     #[implements(RegionBranch, Fold)]
-    #[flags(SelectsOneRegion)]
     fn index_switch(cases: Attr<[i64]>, discriminant: Value<impl IntegerLike>) -> Variadic<_> {
         #[region(default_region)]
         {}
@@ -82,9 +80,10 @@ mod scf {
 // Control-flow interfaces
 // =========================================================================
 
-use crate::op_flag::SelectsOneRegion;
+use smallvec::SmallVec;
+
 use crate::op_interface::{
-    ControlFlowInterfaceError, ForwardedValues, RegionBranch, RegionBranchPoint,
+    ControlFlowInterfaceError, ForwardedValues, InvocationBounds, RegionBranch, RegionBranchPoint,
     RegionBranchTerminator, RegionSuccessor, RegionSuccessors,
 };
 
@@ -166,6 +165,12 @@ impl RegionBranch for If {
                 "successor is not an scf.if entry region",
             )),
         }
+    }
+
+    fn region_invocation_bounds(&self, ctx: &IrContext) -> SmallVec<[InvocationBounds; 4]> {
+        ctx.op_regions(self.op_ref())
+            .map(|_| InvocationBounds::AT_MOST_ONCE)
+            .collect()
     }
 }
 
@@ -313,6 +318,12 @@ impl RegionBranch for IndexSwitch {
                 "successor is not an scf.index_switch region",
             )),
         }
+    }
+
+    fn region_invocation_bounds(&self, ctx: &IrContext) -> SmallVec<[InvocationBounds; 4]> {
+        ctx.op_regions(self.op_ref())
+            .map(|_| InvocationBounds::AT_MOST_ONCE)
+            .collect()
     }
 }
 
@@ -1074,5 +1085,84 @@ mod canonicalize_tests {
             count_ops(&ctx, module, crate::dialect::scf::IndexSwitch::NAME),
             1
         );
+    }
+}
+
+#[cfg(test)]
+mod region_selection_tests {
+    use crate::IrContext;
+    use crate::op_interface::DynRegionBranch;
+    use crate::parser::parse_test_module;
+    use crate::walk::{WalkAction, walk_op};
+    use std::ops::ControlFlow;
+
+    /// `selects_one_region` for each operation named `name`, in walk order.
+    fn selects(input: &str, name: &str) -> Vec<bool> {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+        let mut answers = Vec::new();
+        let _ = walk_op::<()>(&ctx, module.op(), &mut |op| {
+            if ctx.op(op).name.is(&ctx, name) {
+                answers.push(DynRegionBranch::selects_one_region(&ctx, op));
+            }
+            ControlFlow::Continue(WalkAction::Advance)
+        });
+        answers
+    }
+
+    #[test]
+    fn if_and_switch_arms_that_yield_or_exit_select_one_region() {
+        let input = r#"core.module @test {
+  func.func @f(%x: core.i32, %c: core.i1) -> core.i32 {
+    %a = scf.if %c -> (core.i32) {
+      func.return %x
+    } else {
+      scf.yield %x
+    }
+    %b = scf.index_switch %a : (core.i32) -> core.i32
+    case 0 {
+      scf.yield %a
+    }
+    default {
+      func.unreachable
+    }
+    func.return %b
+  }
+}"#;
+        assert_eq!(selects(input, "scf.if"), [true]);
+        assert_eq!(selects(input, "scf.index_switch"), [true]);
+    }
+
+    #[test]
+    fn a_loop_does_not_select_one_region_even_without_a_back_edge() {
+        let input = r#"core.module @test {
+  func.func @f(%x: core.i32) -> core.i32 {
+    %r = scf.loop(%x) -> (core.i32) {
+    ^bb0(%i: core.i32):
+      func.return %i
+    }
+    func.return %r
+  }
+}"#;
+        assert_eq!(selects(input, "scf.loop"), [false]);
+    }
+
+    #[test]
+    fn an_arm_ending_in_a_nested_operation_does_not_select_one_region() {
+        let input = r#"core.module @test {
+  func.func @f(%x: core.i32, %c: core.i1) -> core.i32 {
+    %a = scf.if %c -> (core.i32) {
+      %inner = scf.if %c -> (core.i32) {
+        scf.yield %x
+      } else {
+        scf.yield %x
+      }
+    } else {
+      scf.yield %x
+    }
+    func.return %a
+  }
+}"#;
+        assert_eq!(selects(input, "scf.if"), [false, true]);
     }
 }

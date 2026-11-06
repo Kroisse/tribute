@@ -9,7 +9,7 @@ use rustc_hash::FxHashSet as HashSet;
 use std::fmt;
 use std::ops::ControlFlow;
 use trunk_ir::attr_kind::SymbolRef;
-use trunk_ir::op_flag::{IsolatedFromAbove, OpFlag, Pure, SelectsOneRegion};
+use trunk_ir::op_flag::{IsolatedFromAbove, OpFlag, Pure};
 
 use crate::calling_convention::{CALLING_CONVENTION_ATTR, CallingConvention};
 use crate::dialect::{adt, tribute_cps};
@@ -447,7 +447,8 @@ mod tribute_control {
     ///   `CallableExit`.
     /// - **Placement:** it may end the body of a `tribute_control.func` or
     ///   `lambda`, and in place of `scf.yield` it may end an arm of a
-    ///   one-result `SelectsOneRegion` operation, such as `scf.if` or
+    ///   one-result operation that selects one region
+    ///   (`DynRegionBranch::selects_one_region`), such as `scf.if` or
     ///   `scf.index_switch`, in tail position. That arm is a terminal
     ///   region, and only the arms that end in `scf.yield` produce the
     ///   operation's result. Such an operation is in tail position when its

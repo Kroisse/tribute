@@ -58,18 +58,3 @@ pub struct Pure;
 /// - `closure.new` - closure creation
 #[op_flag]
 pub struct IsolatedFromAbove;
-
-/// Structured operations that run exactly one of their regions.
-///
-/// Entering the operation runs one region its operands select, once. Each
-/// region has one block without arguments and ends either by returning to
-/// the operation with its results (`scf.yield`) or by a `CallableExit`, so
-/// every region is an arm and the operation's results come from the arm
-/// that ran. A transform may therefore treat the regions as independent
-/// arms in declaration order and rebuild the operation from its name,
-/// operands, attributes, and converted regions.
-///
-/// Examples: `scf.if`, `scf.index_switch`. `scf.loop` is not one: its body
-/// runs repeatedly.
-#[op_flag]
-pub struct SelectsOneRegion;

@@ -18,7 +18,4 @@ help: the following other types implement trait `OpFlag`
 ...
   | #[op_flag]
   | ^^^^^^^^^^ `IsolatedFromAbove`
-...
-  | #[op_flag]
-  | ^^^^^^^^^^ `SelectsOneRegion`
   = note: this error originates in the attribute macro `op_flag` (in Nightly builds, run with -Z macro-backtrace for more info)

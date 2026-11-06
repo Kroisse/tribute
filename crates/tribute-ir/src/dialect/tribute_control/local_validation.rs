@@ -118,7 +118,7 @@ pub(super) fn tail_call_owner(
         // A structured arm may end with a tail call only when the structured
         // operation selects one region and has one result, whose value flows
         // straight into its own block's terminator.
-        if !SelectsOneRegion::is_set(ctx, owner) || ctx.op_results(owner).len() != 1 {
+        if !DynRegionBranch::selects_one_region(ctx, owner) || ctx.op_results(owner).len() != 1 {
             return Err("must be in tail position of its callable");
         }
         let Some(block) = ctx.op(owner).parent_block else {

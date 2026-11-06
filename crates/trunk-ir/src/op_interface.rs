@@ -348,9 +348,84 @@ pub trait RegionBranch: DialectOp {
         ctx: &IrContext,
         successor: RegionSuccessor,
     ) -> Result<ForwardedValues, ControlFlowInterfaceError>;
+
+    /// How many times each region may run per execution of the operation,
+    /// in region order, as MLIR's `getRegionInvocationBounds` declares it.
+    /// The default leaves every bound unknown.
+    fn region_invocation_bounds(&self, ctx: &IrContext) -> SmallVec<[InvocationBounds; 4]> {
+        ctx.op_regions(self.op_ref())
+            .map(|_| InvocationBounds::UNKNOWN)
+            .collect()
+    }
+}
+
+/// The least and the most times a region runs per execution of its
+/// operation; `max` is `None` when no bound is known.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InvocationBounds {
+    pub min: u32,
+    pub max: Option<u32>,
+}
+
+impl InvocationBounds {
+    pub const UNKNOWN: Self = Self { min: 0, max: None };
+    /// A region that runs once or not at all, as one arm of a selection.
+    pub const AT_MOST_ONCE: Self = Self {
+        min: 0,
+        max: Some(1),
+    };
 }
 
 impl DynRegionBranch {
+    /// Whether `op` runs exactly one of its regions, once, and each region
+    /// is an arm that either returns to `op` with its results or leaves the
+    /// callable, as `scf.if` and `scf.index_switch` do.
+    ///
+    /// Entry reaches only regions, every region runs at most once by
+    /// [`RegionBranch::region_invocation_bounds`], and each region's single
+    /// block ends in a terminator whose only successor is the parent or in
+    /// a proven [`CallableExit`]. The bounds exclude a loop whose body ends
+    /// in a callable exit and so shows no back edge; the terminator rule
+    /// excludes an operation that branches from one region to another. A
+    /// failed query answers `false`.
+    pub fn selects_one_region(ctx: &IrContext, op: OpRef) -> bool {
+        let Some(interface) = DynRegionBranch::get(ctx, op) else {
+            return false;
+        };
+        let entry_reaches_regions = interface
+            .successors(ctx, RegionBranchPoint::Parent)
+            .is_ok_and(|successors| {
+                !successors.as_slice().is_empty()
+                    && successors
+                        .as_slice()
+                        .iter()
+                        .all(|successor| matches!(successor, RegionSuccessor::Region(_)))
+            });
+        if !entry_reaches_regions
+            || interface
+                .region_invocation_bounds(ctx)
+                .iter()
+                .any(|bounds| bounds.max.is_none_or(|max| max > 1))
+        {
+            return false;
+        }
+        ctx.op_regions(op).all(|region| {
+            let [block] = ctx.region(region).blocks.as_slice() else {
+                return false;
+            };
+            let Some(&last) = ctx.block(*block).ops.last() else {
+                return false;
+            };
+            if DynRegionBranchTerminator::is_implemented(ctx, last) {
+                interface
+                    .successors(ctx, RegionBranchPoint::Terminator(last))
+                    .is_ok_and(|successors| successors.as_slice() == [RegionSuccessor::Parent])
+            } else {
+                DynCallableExit::prove(ctx, last).is_ok()
+            }
+        })
+    }
+
     /// Build the named value transfer for one already-reported successor.
     pub fn value_transfer(
         ctx: &IrContext,
