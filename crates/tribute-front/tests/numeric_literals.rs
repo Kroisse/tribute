@@ -56,7 +56,7 @@ fn valid_numeric_literals_are_accepted(db: &salsa::DatabaseImpl) {
         r#"fn main() -> Nil {
     let a = 1_000_000
     let b = 0x_FF_FF
-    let c = 1e10
+    let c = 1e9
     let d = -1e3
     let e = 1.5e-3
     let f = 42i
@@ -101,9 +101,9 @@ fn invalid_numeric_literals_are_rejected(db: &salsa::DatabaseImpl) {
         ),
         // overflowing literal is rejected
         (
-            "fn main() -> Nil { 1e20 }",
-            "1e20",
-            "1e20",
+            "fn main() -> Nil { 1e10 }",
+            "1e10",
+            "1e10",
             "exceeds the current implementation limit for `Nat`",
         ),
         // suffix on hexadecimal literal is rejected

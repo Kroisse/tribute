@@ -629,18 +629,20 @@ struct CaseSwitch<'a, 'db> {
 /// The switch an exhaustive case lowers to when every arm but the last is an
 /// unguarded `Nat`, `Int`, or `Rune` literal, possibly bound with `as`, and
 /// the last is an unguarded catch-all. A value an earlier arm selects is not
-/// a case of a later one. A case with fewer than two values, a literal
-/// outside the i31 range, or a scrutinee that is not `core.i32` stays a chain.
+/// a case of a later one. A case value is the literal's 32-bit pattern, so a
+/// `Nat` of 2^31 or more is a negative case. A case with fewer than two values
+/// or a scrutinee that is not `core.i32` stays a chain.
 fn literal_case_switch<'a, 'db>(
     builder: &mut IrBuilder<'_, 'db>,
     scrutinee: ValueRef,
     arms: &'a [Arm<TypedRef<'db>>],
 ) -> Option<CaseSwitch<'a, 'db>> {
-    const I31: std::ops::RangeInclusive<i64> = -(1 << 30)..=(1 << 30) - 1;
     fn literal_value<V>(pattern: &Pattern<V>) -> Option<i64> {
         match &*pattern.kind {
-            PatternKind::Literal(LiteralPattern::Nat(n)) => i64::try_from(*n).ok(),
-            PatternKind::Literal(LiteralPattern::Int(n)) => Some(*n),
+            PatternKind::Literal(LiteralPattern::Nat(n)) => {
+                u32::try_from(*n).ok().map(|n| i64::from(n as i32))
+            }
+            PatternKind::Literal(LiteralPattern::Int(n)) => i32::try_from(*n).ok().map(i64::from),
             PatternKind::Literal(LiteralPattern::Rune(c)) => Some(i64::from(*c as i32)),
             PatternKind::As { pattern, .. } => literal_value(pattern),
             _ => None,
@@ -666,7 +668,7 @@ fn literal_case_switch<'a, 'db>(
         if arm.guard.is_some() {
             return None;
         }
-        let value = literal_value(&arm.pattern).filter(|value| I31.contains(value))?;
+        let value = literal_value(&arm.pattern)?;
         if cases.iter().all(|&(seen, _)| seen != value) {
             cases.push((value, arm));
         }
