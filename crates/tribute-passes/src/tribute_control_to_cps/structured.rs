@@ -258,7 +258,7 @@ impl Converter<'_> {
         let location = self.ctx.op(source).location;
         let mut converted_regions = trunk_ir::RegionList::new();
         for source_region in shape.source_regions(self.ctx, source) {
-            let source_block = self.single_arm_block(source, source_region)?;
+            let source_block = self.single_arm_block(source_region);
             let block_location = self.ctx.block(source_block).location;
             let converted_block = make_block(self.ctx, block_location, &[]);
             let mut branch_mapping = mapping.clone();
@@ -284,22 +284,13 @@ impl Converter<'_> {
     }
 
     /// The single block of one arm of an effectful structured operation.
-    fn single_arm_block(
-        &self,
-        source: OpRef,
-        region: RegionRef,
-    ) -> Result<BlockRef, TributeControlToCpsError> {
-        match self.ctx.region(region).blocks.as_slice() {
-            [block] => Ok(*block),
-            _ => Err(TributeControlToCpsError::post_op(
-                source,
-                self.ctx.op(source).location,
-                format!(
-                    "effectful {} regions must contain one block",
-                    self.ctx.op(source).name.display(self.ctx)
-                ),
-            )),
-        }
+    /// `scf.if` declares one block per region, and pre-CPS validation
+    /// requires one for each `scf.index_switch` arm.
+    fn single_arm_block(&self, region: RegionRef) -> BlockRef {
+        let [block] = self.ctx.region(region).blocks.as_slice() else {
+            panic!("pre-CPS validation leaves one block in each structured arm")
+        };
+        *block
     }
 
     /// Lower an `scf.if` or `scf.index_switch` whose arms contain source
@@ -315,7 +306,7 @@ impl Converter<'_> {
         flow: &Flow,
     ) -> Result<(), TributeControlToCpsError> {
         let shape = StructuredArms::of(self.ctx, source)
-            .ok_or_else(|| self.malformed_source(source, "expected scf.if or scf.index_switch"))?;
+            .expect("only an scf.if or scf.index_switch is lowered as structured arms");
         if let Some(join) = self.tail_join(source, rest, flow)? {
             return self.lower_tail_structured(source, shape, join, block, mapping, flow);
         }
@@ -358,7 +349,7 @@ impl Converter<'_> {
 
         let mut converted_regions = trunk_ir::RegionList::new();
         for source_region in shape.source_regions(self.ctx, source) {
-            let source_block = self.single_arm_block(source, source_region)?;
+            let source_block = self.single_arm_block(source_region);
             let source_arg_types = self
                 .ctx
                 .block_args(source_block)

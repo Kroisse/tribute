@@ -2397,6 +2397,45 @@ fn textual_scf_switch_arm_may_end_with_a_tail_call() {
     assert!(!printed.contains("tribute_control."), "{printed}");
 }
 
+#[test]
+fn multi_result_effectful_scf_switch_is_rejected_inside_a_cps_callable() {
+    let input = r#"core.module @test {
+  tribute_cps.func @broken(%input: core.i32) -> core.i32 convention(cps) {
+    %left, %right = scf.index_switch %input : (core.i32) -> (core.i32, core.i32)
+    case 0 {
+      %got = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
+      scf.yield %got, %input
+    }
+    default {
+      scf.yield %input, %input
+    }
+    tribute_control.return %left
+  }
+}"#;
+    let (mut ctx, module) = parse(input);
+    let ability = first_ability(&ctx, module);
+    let i32_type = ctx
+        .types()
+        .iter()
+        .find_map(|(ty, data)| (data.name.is(&ctx, "core.i32")).then_some(ty))
+        .unwrap();
+    let declarations = [tribute_control::OperationDeclaration::new(
+        ability.clone(),
+        ctx.intern_str("get"),
+        ctx.intern_str("op"),
+        [i32_type],
+        i32_type,
+    )];
+    tribute_control::declare_operations(&mut ctx, module, &declarations);
+    let error = tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap_err();
+    assert!(
+        error.to_string().contains(
+            "effectful scf.index_switch requires zero or one result inside a CPS callable"
+        ),
+        "{error}"
+    );
+}
+
 #[cfg(test)]
 mod shared_contract_boundary_regressions {
     use super::verify_tribute_control_post_cps;
