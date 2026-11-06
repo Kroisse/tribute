@@ -1201,15 +1201,60 @@ binder가 없다. `ability_arg`는 ability instance의 symbol이 그 인자를 �
 않는다. CPS 전략의 class 특수화는 tail의 class를 binder 종류에 따라 읽는다. `param`은
 그 인스턴스가 고정한 class, `ability_arg`는 `Cps`다. `body`는 정의 안의 어느 callable
 type의 매개변수 타입에도 나타나지 않으면 요구 없음이고, 나타나면 `Cps`다
-([tail 규칙](cps-effects.md#row와-호출-규약)). 이 판정은 binder마다 정의 전체에서 한
+([tail 규칙](cps-effects.md#row와-호출-규약)). 매개변수 타입 안의 `adt.typeref` row
+인자에 나타난 것도 매개변수 타입에 나타난 것이다. 이 판정은 binder마다 정의 전체에서 한
 번 하므로 그 binder를 읽는 모든 자리가 같은 class를 읽는다. `local`의 class는 그것을
 소유한 람다의 본문마다 다르며, [convention entry](#convention-entry)의 class 읽기가
 정한다.
 
 정의 안의 모든 tail은 이 목록의 index다. Signature, 중첩된 callable type, block
-인자, operation 결과, tuple layout의 원소가 모두 같다. Type은 binder를 도입하지
-않는다. Module 수준의 type에는 둘러싼 정의가 없으므로 [`ability.operation`](../crates/tribute-ir/src/dialect/ability.rs)의
+인자, operation 결과, tuple layout의 원소, [`adt.typeref`의 row 인자](#nominal-row-인자)가
+모두 같다. Type은 binder를 도입하지 않는다. 예외는 row 매개변수를 가진 nominal
+layout 하나이며, 그 binder는 layout 안의 type에만 미친다. Module 수준의 다른 type에는
+둘러싼 정의가 없으므로 [`ability.operation`](../crates/tribute-ir/src/dialect/ability.rs)의
 type은 tail을 가질 수 없다.
+
+#### Nominal row 인자
+
+[Row 매개변수](types.md#row-매개변수)를 가진 struct·enum의 layout(`adt.struct`,
+`adt.enum`)은 자기 row binder를 type 속성 `row_params`(개수)로 선언한다. Layout
+안의 필드 type, 곧 필드의 callable type과 중첩된 `adt.typeref`의 row 인자가 쓰는
+tail은 이 binder의 index다. 이 binder는 layout 밖으로 나가지 않는다. Binder는 모두
+선언이 양화한 row 매개변수이므로 `func`의 `row_binders`와 달리 종류 없이 개수만 둔다.
+[Tuple layout](#compiler-generated-tuple-layout)은 binder를 소유할 선언이 없으므로
+row를 layout 이름에 담고 둘러싼 정의의 binder를 쓰지만, nominal layout은 선언이
+binder를 소유하므로 row 인자와 상관없이 하나다.
+
+```text
+adt.struct<Callback['a0](run: tribute_control.func_sig<(core.i64) -> core.i64 row(| 'a0)>)>
+adt.typeref<Callback[row(@"<State(Int)>")]>
+adt.typeref<Callback[row(| 'a2)]>
+adt.typeref<Callback[row()]>
+```
+
+Textual form은 layout의 binder를 이름 바로 뒤에 [정의 header의 binder 목록](#row-binder)과
+같은 `['a0, 'a1, ...]`로 쓰고, typeref의 row 인자를 이름 바로 뒤에 `[row(...), ...]`로
+쓴다. 필드 안의 tail이 그 앞에 선언된 binder를 가리키도록 binder 목록은 필드보다 먼저
+온다. Binder는 종류 keyword와 합집합(`=`)을 쓰지 않으며 `'a0`부터 차례로 번호를 붙인다.
+Row 인자 하나는 `func_sig`의 row와 같은 `row(...)`이지만, row 인자는 위치마다 하나씩
+있어야 하므로 빈 row도 생략하지 않고 `row()`로 쓴다. Row 매개변수가 없으면 `[...]`를
+쓰지 않는다. 이 문법으로 쓸 수 없는 속성 값은 일반 형태로 출력한다.
+
+- 그 선언의 값 type인 `adt.typeref`는 row 매개변수마다 row 하나를 type 속성
+  `row_args`에 선언 순서대로 가진다. 각 row는 `ability_row`와 같은 형식이며, tail은
+  그 type을 쓴 정의의 binder index다. Layout 안에서는 layout의 binder index다. Row
+  매개변수가 없는 선언의 typeref는 속성을 생략한다.
+- `row_args`는 typeref의 정체성에 들어간다. 같은 layout을 가리키며 row 인자만 다른
+  두 typeref는 다른 type이다. Layout의 이름과 게시된 alias는 row 인자를 담지 않으므로
+  그런 typeref들은 layout 하나를 공유한다.
+- `adt` 생성·접근 operation이 보는 필드 type은 layout의 필드 type에서 layout binder를
+  그 operation이 다루는 값의 typeref `row_args`로 [치환](#row-인자와-치환)한 것이다.
+  Frontend는 `struct_get`, `variant_get` 결과와 `struct_new`, `variant_new` 피연산자의
+  type을 이 치환으로 쓴다.
+- Row 인자는 다른 row와 같이 source-logical 경계 안에만 있다. CPS legalization은
+  `row_args`와 `row_params`를 버리고 tuple layout을
+  [새 이름](#compiler-generated-tuple-layout)으로 다시 만들며, representation/ABI
+  경계의 출구는 `row_args`와 `row_params`를 거부한다.
 
 #### Tail의 합집합
 
@@ -1273,9 +1318,10 @@ Row-polymorphic 정의를 참조하는 `call`, `tail_call`, `func_ref`는 `row_a
 가리키며, 그 convention은 인스턴스 정의의 것이다. Row 인자의 class가 인스턴스의 class와 맞는지는
 [convention class](cps-effects.md#row-변수의-convention-class) 규칙이 정한다.
 참조가 보는 callee signature는 callee의 type에 row 인자를 치환한 것이다. 치환은
-type 안의 모든 `func_sig`(자기 자신 포함)에서 tail이 양화된 binder `t`인 row
-`(I, t)`를 `(I ∪ args[t].instances, args[t].tail)`로 바꾸고 정렬한다. 다른 속성은 바꾸지
-않는다. Tuple layout은 원소를 치환한 뒤 같은 이름 규칙으로 다시
+type 안의 모든 `func_sig`(자기 자신 포함)와 `adt.typeref`의 row 인자에서 tail이
+양화된 binder `t`인 row `(I, t)`를 `(I ∪ args[t].instances, args[t].tail)`로 바꾸고
+정렬한다. 다른 속성은 바꾸지 않는다. Layout 안의 type은 layout의 binder를 쓰므로
+치환하지 않는다. Tuple layout은 원소를 치환한 뒤 같은 이름 규칙으로 다시
 만든다([layout 이름](#compiler-generated-tuple-layout)). `call_indirect`와
 `tail_call_indirect`의 callee type은 이미 caller의 binder로 쓰여 있으므로 row 인자가
 없다.
@@ -1853,6 +1899,11 @@ Compiler-generated tuple layout의 이름은 원소의 logical type에서 정해
 원소가 callable type이면 그 [row](#ability-row)를 포함한다. 그래서 row만
 다른 두 tuple은 다른 layout이고, [row 치환](#row-인자와-치환)은 원소를 치환한 layout을
 같은 함수로 다시 만든다. 이 함수는 IR 계층이 소유하며 frontend와 pass가 함께 쓴다.
+Row를 버리는 CPS legalization도 tuple layout을 원소를 변환한 뒤 같은 함수로 다시
+만들고, 그 이름을 가리키는 typeref와 게시된 alias를 새 이름으로 바꾼다. 그래서 row만
+다른 tuple layout은 legalization 뒤에 하나가 된다. Nominal layout의 필드 type과,
+row 인자로 치환한 그 필드 type을 쓰는 `adt` 생성·접근 operation도 같은 tuple layout을
+가리키게 된다.
 
 특수화된 enum의 variant 필드 타입은 해당 인스턴스에 함께 치환된 constructor
 스킴에서 가져온다. 원본 generic 스킴이나 생성·패턴 표현식으로 필드 표현을
@@ -2258,7 +2309,7 @@ WasmGC 배열 명령의 index와 길이는 memory의 index type과 관계없이 
 core.i32
 core.tuple<core.i32, core.ptr {k = "v"}>
 core.ref<core.i32, {nullable = true}>
-adt.typeref<{name = "Point"}>
+adt.typeref<Point>
 func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> core.i64, {call_conv = "tail"}>
 ```
 
@@ -2414,7 +2465,7 @@ Struct 이름과 필드 이름은 타입 이름공간의 이름이며 symbol tab
 
 ```text
 adt.struct<Point(x: core.i32, y: core.i32)>
-adt.struct<Node(value: core.i32 {k = "v"}, next: adt.typeref<{name = "Node"}>)>
+adt.struct<Node(value: core.i32 {k = "v"}, next: adt.typeref<Node>)>
 adt.struct<_closure(entries: core.ptr), {layout = "closure"}>
 adt.struct<_closure_captures(entries: core.ptr, _0: core.i32),
   {layout = "closure_captures",
@@ -2436,6 +2487,10 @@ adt.struct<Empty()>
   필드 수를 유지하는 변환은 필드 이름과 속성을 위치 그대로 둔다.
 - 재귀 참조는 같은 이름의 `adt.typeref`로 표현한다. `adt.struct`는 자기 자신을
   매개변수로 갖지 않는다.
+- Row 매개변수를 가진 선언의 layout은 type 속성 `row_params`를 가지며, 필드 type의
+  tail은 그 binder의 index다([Nominal row 인자](#nominal-row-인자)). Textual form은
+  binder를 이름과 필드 목록 사이에 쓴다: `adt.struct<Callback['a0](run: ...)>`.
+  `row_params`도 전용 문법이 소유한다.
 
 #### Nominal 수준과 structural 수준
 
@@ -2575,7 +2630,7 @@ textual 문법을 쓴다. 이름 표기 규칙은 `adt.struct`와 같다.
 
 ```text
 adt.enum<Option { None(), Some(value: T) }>
-adt.enum<List { Empty(), Cons(core.i32, adt.typeref<{name = "List"}>) }>
+adt.enum<List { Empty(), Cons(core.i32, adt.typeref<List>) }>
 adt.enum<"geo::Shape" { Dot(), Rect(core.f64, core.f64 {k = 1}) }, {layout = "x"}>
 adt.enum<Never {}>
 ```
@@ -2602,6 +2657,29 @@ adt.enum<Never {}>
 - Variant 필드 타입이 매개변수의 매개변수이므로 일반 타입 순회와 변환은 variant
   필드 타입에 그대로 도달한다.
 - 재귀 참조는 같은 이름의 `adt.typeref`로 표현한다.
+- Row 매개변수를 가진 선언의 layout은 `adt.struct`와 같이 `row_params`를 가지며,
+  binder를 이름과 variant 목록 사이에 쓴다: `adt.enum<Step['a0] { ... }>`.
+
+### `adt.typeref` nominal reference type
+
+`adt.typeref`는 이름으로 nominal layout을 가리키는 값 type이며 전용 textual 문법을
+쓴다. 이름 표기 규칙은 `adt.struct`와 같다.
+
+```text
+adt.typeref<Point>
+adt.typeref<"geo::Shape">
+adt.typeref<Callback[row(@"<State(Int)>")]>
+adt.typeref<Pair[row(), row(@A | 'a0)]>
+```
+
+- 저장 표현은 type 속성 `name`(문자열)과, row 매개변수를 가진 선언을 가리킬 때의
+  type 속성 `row_args`([Nominal row 인자](#nominal-row-인자))다. 둘 다 전용 문법이
+  소유한다. 나머지 type 속성은 `<…>` 안 마지막 원소로 둔다.
+- `row_args`가 없는 typeref는 자기 `name`을 alias 이름으로 제안한다. `row_args`를
+  가진 typeref는 row 인자만 다른 typeref끼리 이름이 겹치므로 제안하지 않으며, 다른
+  제안 없는 타입처럼 번호 이름을 받을 수 있다. Tail 이름은 위치에서 정해지므로 alias
+  안의 tail은 [다른 type alias](#사용자-정의-어셈블리-형식)에서처럼 그 alias를 쓴
+  정의의 binder를 가리킨다.
 
 ### `func.func_sig` function type
 
