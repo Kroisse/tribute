@@ -262,12 +262,10 @@ impl<'a> Converter<'a> {
                 self.emit_exit(block, location, value, flow)?;
                 return Ok(());
             }
-            if name == scf::IndexSwitch::NAME && self.contains_tribute_control(source) {
-                self.lower_structured_switch(source, rest, block, mapping, flow)?;
-                return Ok(());
-            }
-            if name == scf::If::NAME && self.contains_tribute_control(source) {
-                self.lower_structured_if(source, rest, block, mapping, flow)?;
+            if (name == scf::If::NAME || name == scf::IndexSwitch::NAME)
+                && self.contains_tribute_control(source)
+            {
+                self.lower_structured(source, rest, block, mapping, flow)?;
                 return Ok(());
             }
             if !is_source_logical(self.ctx, source) {

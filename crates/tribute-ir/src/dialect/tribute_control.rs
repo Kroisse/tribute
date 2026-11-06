@@ -447,13 +447,13 @@ mod tribute_control {
     ///   `CallableExit`.
     /// - **Placement:** it may end the body of a `tribute_control.func` or
     ///   `lambda`, and in place of `scf.yield` it may end an arm of a
-    ///   one-result `scf.if` in tail position. That arm is a terminal region,
-    ///   and only the arms that end in `scf.yield` produce the operation's
-    ///   result. An `scf.if` is in tail position when its result flows
-    ///   directly into the terminator of the enclosing region: the `return`
-    ///   of a callable body, or the `scf.yield` of an outer arm that is
-    ///   itself in tail position. It is invalid inside a
-    ///   `tribute_control.handle` body or arm.
+    ///   one-result `scf.if` or `scf.index_switch` in tail position. That
+    ///   arm is a terminal region, and only the arms that end in `scf.yield`
+    ///   produce the operation's result. Such an operation is in tail
+    ///   position when its result flows directly into the terminator of the
+    ///   enclosing region: the `return` of a callable body, or the
+    ///   `scf.yield` of an outer arm that is itself in tail position. It is
+    ///   invalid inside a `tribute_control.handle` body or arm.
     /// - **Meaning:** a proper tail call of a named source callable. When the
     ///   call finishes, the callee's result becomes the enclosing callable's
     ///   result, and no caller frame remains.

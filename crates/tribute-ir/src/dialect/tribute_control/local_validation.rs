@@ -116,9 +116,11 @@ pub(super) fn tail_call_owner(
             return Err("must not be inside a tribute_control.handle body or arm");
         }
         // A structured arm may end with a tail call only when the structured
-        // operation is a one-result `scf.if` whose value flows straight into
-        // its own block's terminator.
-        if !trunk_ir::dialect::scf::If::matches(ctx, owner) || ctx.op_results(owner).len() != 1 {
+        // operation is a one-result `scf.if` or `scf.index_switch` whose
+        // value flows straight into its own block's terminator.
+        let structured = trunk_ir::dialect::scf::If::matches(ctx, owner)
+            || trunk_ir::dialect::scf::IndexSwitch::matches(ctx, owner);
+        if !structured || ctx.op_results(owner).len() != 1 {
             return Err("must be in tail position of its callable");
         }
         let Some(block) = ctx.op(owner).parent_block else {
