@@ -1226,11 +1226,19 @@ row를 layout 이름에 담고 둘러싼 정의의 binder를 쓰지만, nominal 
 binder를 소유하므로 row 인자와 상관없이 하나다.
 
 ```text
-adt.struct<Callback(run: tribute_control.func_sig<(core.i64) -> core.i64 row(| 'a0)>),
-  {row_params = 1}>
-adt.typeref<{name = "Callback", row_args = [{instances = [@"<State(Int)>"]}]}>
-adt.typeref<{name = "Callback", row_args = [{tail = 2}]}>
+adt.struct<Callback['a0](run: tribute_control.func_sig<(core.i64) -> core.i64 row(| 'a0)>)>
+adt.typeref<Callback[row(@"<State(Int)>")]>
+adt.typeref<Callback[row(| 'a2)]>
+adt.typeref<Callback[row()]>
 ```
+
+Textual form은 layout의 binder를 이름 바로 뒤에 [정의 header의 binder 목록](#row-binder)과
+같은 `['a0, 'a1, ...]`로 쓰고, typeref의 row 인자를 이름 바로 뒤에 `[row(...), ...]`로
+쓴다. 필드 안의 tail이 그 앞에 선언된 binder를 가리키도록 binder 목록은 필드보다 먼저
+온다. Binder는 종류 keyword와 합집합(`=`)을 쓰지 않으며 `'a0`부터 차례로 번호를 붙인다.
+Row 인자 하나는 `func_sig`의 row와 같은 `row(...)`이지만, row 인자는 위치마다 하나씩
+있어야 하므로 빈 row도 생략하지 않고 `row()`로 쓴다. Row 매개변수가 없으면 `[...]`를
+쓰지 않는다. 이 문법으로 쓸 수 없는 속성 값은 일반 형태로 출력한다.
 
 - 그 선언의 값 type인 `adt.typeref`는 row 매개변수마다 row 하나를 type 속성
   `row_args`에 선언 순서대로 가진다. 각 row는 `ability_row`와 같은 형식이며, tail은
@@ -2301,7 +2309,7 @@ WasmGC 배열 명령의 index와 길이는 memory의 index type과 관계없이 
 core.i32
 core.tuple<core.i32, core.ptr {k = "v"}>
 core.ref<core.i32, {nullable = true}>
-adt.typeref<{name = "Point"}>
+adt.typeref<Point>
 func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> core.i64, {call_conv = "tail"}>
 ```
 
@@ -2457,7 +2465,7 @@ Struct 이름과 필드 이름은 타입 이름공간의 이름이며 symbol tab
 
 ```text
 adt.struct<Point(x: core.i32, y: core.i32)>
-adt.struct<Node(value: core.i32 {k = "v"}, next: adt.typeref<{name = "Node"}>)>
+adt.struct<Node(value: core.i32 {k = "v"}, next: adt.typeref<Node>)>
 adt.struct<_closure(entries: core.ptr), {layout = "closure"}>
 adt.struct<_closure_captures(entries: core.ptr, _0: core.i32),
   {layout = "closure_captures",
@@ -2480,7 +2488,9 @@ adt.struct<Empty()>
 - 재귀 참조는 같은 이름의 `adt.typeref`로 표현한다. `adt.struct`는 자기 자신을
   매개변수로 갖지 않는다.
 - Row 매개변수를 가진 선언의 layout은 type 속성 `row_params`를 가지며, 필드 type의
-  tail은 그 binder의 index다([Nominal row 인자](#nominal-row-인자)).
+  tail은 그 binder의 index다([Nominal row 인자](#nominal-row-인자)). Textual form은
+  binder를 이름과 필드 목록 사이에 쓴다: `adt.struct<Callback['a0](run: ...)>`.
+  `row_params`도 전용 문법이 소유한다.
 
 #### Nominal 수준과 structural 수준
 
@@ -2620,7 +2630,7 @@ textual 문법을 쓴다. 이름 표기 규칙은 `adt.struct`와 같다.
 
 ```text
 adt.enum<Option { None(), Some(value: T) }>
-adt.enum<List { Empty(), Cons(core.i32, adt.typeref<{name = "List"}>) }>
+adt.enum<List { Empty(), Cons(core.i32, adt.typeref<List>) }>
 adt.enum<"geo::Shape" { Dot(), Rect(core.f64, core.f64 {k = 1}) }, {layout = "x"}>
 adt.enum<Never {}>
 ```
@@ -2647,7 +2657,28 @@ adt.enum<Never {}>
 - Variant 필드 타입이 매개변수의 매개변수이므로 일반 타입 순회와 변환은 variant
   필드 타입에 그대로 도달한다.
 - 재귀 참조는 같은 이름의 `adt.typeref`로 표현한다.
-- Row 매개변수를 가진 선언의 layout은 `adt.struct`와 같이 `row_params`를 가진다.
+- Row 매개변수를 가진 선언의 layout은 `adt.struct`와 같이 `row_params`를 가지며,
+  binder를 이름과 variant 목록 사이에 쓴다: `adt.enum<Step['a0] { ... }>`.
+
+### `adt.typeref` nominal reference type
+
+`adt.typeref`는 이름으로 nominal layout을 가리키는 값 type이며 전용 textual 문법을
+쓴다. 이름 표기 규칙은 `adt.struct`와 같다.
+
+```text
+adt.typeref<Point>
+adt.typeref<"geo::Shape">
+adt.typeref<Callback[row(@"<State(Int)>")]>
+adt.typeref<Pair[row(), row(@A | 'a0)]>
+```
+
+- 저장 표현은 type 속성 `name`(문자열)과, row 매개변수를 가진 선언을 가리킬 때의
+  type 속성 `row_args`([Nominal row 인자](#nominal-row-인자))다. 둘 다 전용 문법이
+  소유한다. 나머지 type 속성은 `<…>` 안 마지막 원소로 둔다.
+- `row_args`의 tail은 그 type을 쓴 정의의 binder를 가리키므로, `row_args`를 가진
+  typeref는 alias 이름을 제안하지 않는다. Module 수준 alias가 되면 tail이 binder에서
+  떨어지고, 같은 이름의 typeref끼리 alias 이름이 겹치기 때문이다. `row_args`가 없는
+  typeref는 자기 `name`을 제안한다.
 
 ### `func.func_sig` function type
 
