@@ -516,7 +516,7 @@ mod mechanics {
         let i32_ty = i32_type(&mut ctx);
 
         let helper = build_func(&mut ctx, loc, "helper", &[], i32_ty, |ctx, entry, _args| {
-            let c = crate::dialect::arith::Const::operands()
+            let c = crate::dialect::arith::Constant::operands()
                 .value(Attribute::Int(42))
                 .results(i32_ty)
                 .build(ctx, loc);
@@ -540,7 +540,7 @@ mod mechanics {
         let call_op = find_call_in(&ctx, caller);
         inline_single_call(&mut ctx, call_op, helper).expect("inline should succeed");
 
-        // Walk caller body, confirm no func.call remains, arith.const present.
+        // Walk caller body, confirm no func.call remains, arith.constant present.
         let body = ctx.op_region(caller, 0).unwrap();
         let (has_call, has_const) = scan_body(&ctx, body);
         assert!(!has_call, "call should be gone after inlining");
@@ -561,7 +561,7 @@ mod mechanics {
             &[i32_ty],
             i32_ty,
             |ctx, entry, args| {
-                let one = crate::dialect::arith::Const::operands()
+                let one = crate::dialect::arith::Constant::operands()
                     .value(Attribute::Int(1))
                     .results(i32_ty)
                     .build(ctx, loc);
@@ -580,7 +580,7 @@ mod mechanics {
         );
 
         let caller = build_func(&mut ctx, loc, "caller", &[], i32_ty, |ctx, entry, _args| {
-            let c = crate::dialect::arith::Const::operands()
+            let c = crate::dialect::arith::Constant::operands()
                 .value(Attribute::Int(10))
                 .results(i32_ty)
                 .build(ctx, loc);
@@ -643,7 +643,7 @@ mod mechanics {
                 ctx.push_op(then_b, ret_then.op_ref());
 
                 // else: return 0
-                let zero = crate::dialect::arith::Const::operands()
+                let zero = crate::dialect::arith::Constant::operands()
                     .value(Attribute::Int(0))
                     .results(i32_ty)
                     .build(ctx, loc);
@@ -665,7 +665,7 @@ mod mechanics {
         ctx.block_mut(else_b).parent_region = Some(body);
 
         let caller = build_func(&mut ctx, loc, "caller", &[], i32_ty, |ctx, entry, _args| {
-            let c = crate::dialect::arith::Const::operands()
+            let c = crate::dialect::arith::Constant::operands()
                 .value(Attribute::Int(5))
                 .results(i32_ty)
                 .build(ctx, loc);
@@ -696,7 +696,7 @@ mod mechanics {
         let i32_ty = i32_type(&mut ctx);
 
         let helper = build_func(&mut ctx, loc, "helper", &[], i32_ty, |ctx, entry, _args| {
-            let c = crate::dialect::arith::Const::operands()
+            let c = crate::dialect::arith::Constant::operands()
                 .value(Attribute::Int(42))
                 .results(i32_ty)
                 .build(ctx, loc);
@@ -775,7 +775,7 @@ mod mechanics {
             if func::Call::matches(ctx, op) || func::TailCall::matches(ctx, op) {
                 has_call = true;
             }
-            if ctx.op(op).name.is(ctx, "arith.const") {
+            if ctx.op(op).name.is(ctx, "arith.constant") {
                 has_const = true;
             }
             ControlFlow::Continue(WalkAction::Advance)
@@ -909,7 +909,7 @@ mod pass {
         let i32_ty = i32_type(&mut ctx);
 
         let helper = build_func(&mut ctx, loc, "helper", &[], i32_ty, |ctx, entry, _args| {
-            let c = crate::dialect::arith::Const::operands()
+            let c = crate::dialect::arith::Constant::operands()
                 .value(Attribute::Int(42))
                 .results(i32_ty)
                 .build(ctx, loc);
@@ -942,20 +942,20 @@ mod pass {
             &mut ctx,
             r#"core.module @root {
   func.func @main() -> core.i32 {
-    %0 = func.call {callee = @inner::@helper} : core.i32
+    %0 = func.call @inner::@helper() : () -> core.i32
     func.return %0
   }
   core.module @inner {
     func.func @helper() -> core.i32 {
-      %0 = arith.const {value = 42} : core.i32
+      %0 = arith.constant 42 : core.i32
       func.return %0
     }
     func.func @caller() -> core.i32 {
-      %0 = func.call {callee = @local} : core.i32
+      %0 = func.call @local() : () -> core.i32
       func.return %0
     }
     func.func @local() -> core.i32 {
-      %0 = arith.const {value = 7} : core.i32
+      %0 = arith.constant 7 : core.i32
       func.return %0
     }
   }
@@ -1020,7 +1020,7 @@ mod pass {
         let i32_ty = i32_type(&mut ctx);
 
         let helper = build_func(&mut ctx, loc, "helper", &[], i32_ty, |ctx, entry, _args| {
-            let c = crate::dialect::arith::Const::operands()
+            let c = crate::dialect::arith::Constant::operands()
                 .value(Attribute::Int(42))
                 .results(i32_ty)
                 .build(ctx, loc);
@@ -1035,11 +1035,11 @@ mod pass {
 
         let other = build_func(&mut ctx, loc, "other", &[], i32_ty, |ctx, entry, _args| {
             let c = func::Constant::operands()
-                .func_ref(SymbolPath::new(["helper"]))
+                .value(SymbolPath::new(["helper"]))
                 .results(helper_fn_ty)
                 .build(ctx, loc);
             ctx.push_op(entry, c.op_ref());
-            let z = crate::dialect::arith::Const::operands()
+            let z = crate::dialect::arith::Constant::operands()
                 .value(Attribute::Int(0))
                 .results(i32_ty)
                 .build(ctx, loc);
@@ -1075,10 +1075,10 @@ mod pass {
         let i32_ty = i32_type(&mut ctx);
 
         let helper = build_func(&mut ctx, loc, "helper", &[], i32_ty, |ctx, entry, _args| {
-            // Chain 18 arith.const ops + 1 dummy + 1 return = 20 ops
+            // Chain 18 arith.constant ops + 1 dummy + 1 return = 20 ops
             let mut last = None;
             for i in 0..19 {
-                let c = crate::dialect::arith::Const::operands()
+                let c = crate::dialect::arith::Constant::operands()
                     .value(Attribute::Int(i as i128))
                     .results(i32_ty)
                     .build(ctx, loc);
@@ -1128,7 +1128,7 @@ mod pass {
             ops: smallvec![],
             parent_region: None,
         });
-        let c = crate::dialect::arith::Const::operands()
+        let c = crate::dialect::arith::Constant::operands()
             .value(Attribute::Int(1))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -1177,11 +1177,11 @@ mod pass {
         // rewrite drops the cached CallGraph.
         let input = r#"core.module @test {
   func.func @helper() -> core.i32 {
-    %0 = arith.const {value = 42} : core.i32
+    %0 = arith.constant 42 : core.i32
     func.return %0
   }
   func.func @main() -> core.i32 {
-    %0 = func.call {callee = @helper} : core.i32
+    %0 = func.call @helper() : () -> core.i32
     func.return %0
   }
 }"#;
@@ -1214,7 +1214,7 @@ mod pass {
         // the cached graph should still be valid.
         let input = r#"core.module @test {
   func.func @helper() -> core.i32 {
-    %0 = func.call {callee = @helper} : core.i32
+    %0 = func.call @helper() : () -> core.i32
     func.return %0
   }
 }"#;
@@ -1251,25 +1251,23 @@ mod pass {
         let mut input = String::from(
             "core.module @test {\n\
   func.func @a() -> core.i32 {\n\
-    %0 = func.call {callee = @wrapper} : core.i32\n\
+    %0 = func.call @wrapper() : () -> core.i32\n\
     func.return %0\n\
   }\n\
   func.func @b() -> core.i32 {\n\
-    %0 = func.call {callee = @wrapper} : core.i32\n\
+    %0 = func.call @wrapper() : () -> core.i32\n\
     func.return %0\n\
   }\n\
   func.func @wrapper() -> core.i32 {\n\
-    %0 = func.call {callee = @large} : core.i32\n\
+    %0 = func.call @large() : () -> core.i32\n\
     func.return %0\n\
   }\n\
   func.func @large() -> core.i32 {\n",
         );
         // Push `large` above the default size threshold (16) with 18
-        // `arith.const` ops + the `func.return`.
+        // `arith.constant` ops + the `func.return`.
         for i in 0..18 {
-            input.push_str(&format!(
-                "    %{i} = arith.const {{value = {i}}} : core.i32\n"
-            ));
+            input.push_str(&format!("    %{i} = arith.constant {i} : core.i32\n"));
         }
         input.push_str("    func.return %17\n  }\n}");
 
@@ -1318,15 +1316,15 @@ mod pass {
         // a fixed point that eliminates both `func.call` sites in one run.
         let input = r#"core.module @test {
   func.func @inner() -> core.i32 {
-    %0 = arith.const {value = 1} : core.i32
+    %0 = arith.constant 1 : core.i32
     func.return %0
   }
   func.func @helper() -> core.i32 {
-    %0 = func.call {callee = @inner} : core.i32
+    %0 = func.call @inner() : () -> core.i32
     func.return %0
   }
   func.func @main() -> core.i32 {
-    %0 = func.call {callee = @helper} : core.i32
+    %0 = func.call @helper() : () -> core.i32
     func.return %0
   }
 }"#;

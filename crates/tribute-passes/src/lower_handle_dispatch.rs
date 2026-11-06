@@ -105,7 +105,6 @@ mod tests {
 
     use trunk_ir::context::IrContext;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
     use trunk_ir::rewrite::LegalityCheck;
 
     #[test]
@@ -115,7 +114,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @run() -> core.i32 {
-    %value = arith.const {value = 42} : core.i32
+    %value = arith.constant 42 : core.i32
     func.return %value
   }
 }"#,
@@ -132,16 +131,16 @@ mod tests {
             r#"core.module @test {
   func.func @selected() -> core.never {
     %ev = mem.null : core.ptr
-    %prompt = arith.const {value = 1} : core.i32
-    ability.handle_dispatch %ev, %prompt {abilities = []} {
-      func.tail_call {callee = @finish}
+    %prompt = arith.constant 1 : core.i32
+    ability.handle_dispatch %ev, %prompt [] {
+      func.tail_call @finish() : () -> ()
     }
   }
   func.func @untouched() -> core.never {
     %ev = mem.null : core.ptr
-    %prompt = arith.const {value = 2} : core.i32
-    ability.handle_dispatch %ev, %prompt {abilities = []} {
-      func.tail_call {callee = @finish}
+    %prompt = arith.constant 2 : core.i32
+    ability.handle_dispatch %ev, %prompt [] {
+      func.tail_call @finish() : () -> ()
     }
   }
 }"#,
@@ -156,12 +155,21 @@ mod tests {
 
         lower_handle_dispatch(&mut ctx, selected).unwrap();
 
-        let ir_text = print_module(&ctx, module.op());
+        let ir_text = module.op().display(&ctx).to_string();
         assert_eq!(ir_text.matches("ability.handle_dispatch").count(), 1);
         assert!(ir_text.contains("func.func @untouched"));
-        assert!(trunk_ir::printer::print_op(&ctx, selected.op_ref()).contains("func.tail_call"));
         assert!(
-            !trunk_ir::printer::print_op(&ctx, selected.op_ref())
+            selected
+                .op_ref()
+                .display(&ctx)
+                .to_string()
+                .contains("func.tail_call")
+        );
+        assert!(
+            !selected
+                .op_ref()
+                .display(&ctx)
+                .to_string()
                 .contains("ability.handle_dispatch")
         );
     }
@@ -172,9 +180,12 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @run(%k: tribute_rt.anyref) -> tribute_rt.anyref {
-    %result = ability.perform %k {ability = @State, op_name = "get"} : tribute_rt.anyref
-    func.return %result
+  !marker = adt.typeref<{name = "std::runtime::evidence::Marker"}>
+  !ev = adt.array<!marker>
+  !frame = ability.frame<core.i32>
+  !resume = closure.closure<func.func_sig<(!ev, !frame, core.i32) -> core.never>>
+  func.func @run(%ev: !ev, %f: !frame, %k: !resume, %arg: core.i32) -> core.never {
+    ability.perform @State @set(%arg) [%ev, %f, %k] : (core.i32) -> ()
   }
 }"#,
         );
@@ -191,15 +202,15 @@ mod tests {
     #[test]
     fn malformed_final_delimiters_are_not_structurally_spliced() {
         let malformed = [
-            r#"ability.handle_dispatch %ev {abilities = []} {
+            r#"ability.handle_dispatch %ev, %prompt [] {
       ^first(%inner: !evidence):
         func.unreachable
       ^second:
         func.unreachable
     }"#,
-            r#"ability.handle_dispatch %ev {abilities = []} {
+            r#"ability.handle_dispatch %ev, %prompt [] {
       ^body(%inner: !evidence):
-        test.consume %inner
+        "test.consume"(%inner)
         func.unreachable
     }"#,
         ];
@@ -211,16 +222,16 @@ mod tests {
                     r#"core.module @test {{
   !marker = adt.typeref<{{name = "std::runtime::evidence::Marker"}}>
   !evidence = adt.array<!marker>
-  func.func @run(%ev: !evidence) -> core.never {{
+  func.func @run(%ev: !evidence, %prompt: core.i32) -> core.never {{
     {operation}
   }}
 }}"#
                 ),
             );
-            let before = print_module(&ctx, module.op());
+            let before = module.op().display(&ctx).to_string();
             let error = lower_handle_dispatch(&mut ctx, module).unwrap_err();
             assert_eq!(error.boundary(), "ability-lowered");
-            assert_eq!(print_module(&ctx, module.op()), before);
+            assert_eq!(module.op().display(&ctx).to_string(), before);
         }
     }
 }

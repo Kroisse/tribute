@@ -80,40 +80,23 @@ pub(super) fn lower_evidence_step<'db>(
     }
 }
 
-/// Lower a named function value at its exact source-logical callable contract.
-///
-/// A `func_ref` may take a callable type whose row includes its target's, but
-/// it must preserve the source parameter and result types. This is the only
-/// callable adaptation accepted at the source-logical boundary: a generic
-/// `unrealized_conversion_cast` cannot change a callable ABI.
+/// Lower a named function value at its exact source-logical callable contract:
+/// the target's signature with the rows `reference` passes. A use that
+/// expects a wider row adapts the value in `IrBuilder::cast_if_needed`.
 pub(super) fn lower_function_ref<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     location: Location,
     name: SymbolPath,
     reference: RowArguments,
     declarations: &Declarations<'db>,
-    expected_ty: Option<TypeRef>,
 ) -> ValueRef {
     let signature = FuncSignature::lookup_logical(builder.ctx, builder.ir, &name)
         .unwrap_or_else(|| panic!("missing logical signature for function reference {name}"));
     ensure_prelude_declaration(builder, location, &name, &signature);
     let args = reference.rows(builder.ctx, declarations, &name, &signature);
-    let worker_ty = signature
+    let ty = signature
         .instantiate(builder.ir, &args)
         .callable_type(builder.ir);
-    let ty = expected_ty
-        .filter(|expected_ty| {
-            let Some(expected) = tribute_control::FuncSig::from_type_ref(builder.ir, *expected_ty)
-            else {
-                return false;
-            };
-            let worker = tribute_control::FuncSig::from_type_ref(builder.ir, worker_ty)
-                .expect("worker function reference must have a logical callable type");
-            expected.result(builder.ir) == worker.result(builder.ir)
-                && expected.inputs(builder.ir) == worker.inputs(builder.ir)
-                && expected.row(builder.ir).includes(&worker.row(builder.ir))
-        })
-        .unwrap_or(worker_ty);
     let symbol = builder.ctx.function_symbol(&name);
     let row_args = FuncSignature::row_args_attribute(builder.ir, &args);
     let op = op(
@@ -124,7 +107,7 @@ pub(super) fn lower_function_ref<'db>(
         |builder| {
             let builder = builder
                 .result(ty)
-                .attr("func_ref", Attribute::SymbolRef(SymbolPath::new([symbol])));
+                .attr("value", Attribute::SymbolRef(SymbolPath::new([symbol])));
             match row_args {
                 Some(row_args) => builder.attr(tribute_control::ROW_ARGS_ATTR, row_args),
                 None => builder,
@@ -133,6 +116,32 @@ pub(super) fn lower_function_ref<'db>(
     );
     builder.ctx.record_function_ref(op, name);
     result(builder.ir, op)
+}
+
+/// Reference the function the named-function alias `local` stands for,
+/// with the rows its use `node` passes (`new-plans/ir.md`, 지역 람다의
+/// 양화와 인스턴스화), or `None` if `local` is no such alias.
+pub(super) fn lower_alias_reference<'db>(
+    builder: &mut IrBuilder<'_, 'db>,
+    node: crate::ast::NodeId,
+    local: crate::ast::LocalId,
+    declarations: &Declarations<'db>,
+) -> Option<ValueRef> {
+    let (function, rows) =
+        declarations
+            .aliases
+            .reference(builder.ctx.db, local, node, declarations)?;
+    let rows = rows
+        .into_iter()
+        .map(|row| builder.ctx.ability_row(row))
+        .collect();
+    Some(lower_function_ref(
+        builder,
+        builder.location(node),
+        function.path(builder.ctx.db).clone(),
+        RowArguments::Rows(rows),
+        declarations,
+    ))
 }
 
 /// Where a reference finds the row arguments it passes to its callee.
@@ -176,10 +185,11 @@ impl RowArguments {
     }
 }
 
-/// Lower a named function value under a callable parameter's exact contract.
+/// Lower an argument passed to a parameter of type `expected_ty`.
 ///
-/// This deliberately creates a fresh `func_ref`; a source value may be used
-/// under more than one callable type in the same function.
+/// A lambda is emitted at the parameter's callable type when `lower_lambda`
+/// allows it. Any other argument is an ordinary value, which the call adapts
+/// to the parameter.
 pub(super) fn lower_expr_for_callable_parameter<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     expr: Expr<TypedRef<'db>>,
@@ -187,46 +197,7 @@ pub(super) fn lower_expr_for_callable_parameter<'db>(
     declarations: &mut Declarations<'db>,
 ) -> Option<ValueRef> {
     match &*expr.kind {
-        ExprKind::Var(reference) => {
-            if let ResolvedRef::Local { id, .. } = reference.resolved {
-                if local_callables::lookup(builder.ctx, expr.id, declarations).is_some() {
-                    return lower_local_reference(builder, expr.id, id, declarations);
-                }
-                if let Some(value) = builder.ctx.lookup(id)
-                    && let trunk_ir::refs::ValueDef::OpResult(producer, _) =
-                        builder.ir.value_def(value)
-                    && let Some(name) = builder.ctx.function_ref_path(producer).cloned()
-                {
-                    let rows = tribute_control::row_args(builder.ir, producer)
-                        .expect("a lowered func_ref has well-formed row arguments");
-                    return Some(lower_function_ref(
-                        builder,
-                        builder.location(expr.id),
-                        name,
-                        RowArguments::Rows(rows),
-                        declarations,
-                        Some(expected_ty),
-                    ));
-                }
-                return lower_expr(builder, expr, declarations);
-            }
-            let ResolvedRef::Function { id } = reference.resolved else {
-                return lower_expr(builder, expr, declarations);
-            };
-            tribute_control::FuncSig::from_type_ref(builder.ir, expected_ty)
-                .map(|_| {
-                    lower_function_ref(
-                        builder,
-                        builder.location(expr.id),
-                        id.path(builder.ctx.db).clone(),
-                        RowArguments::Instance(expr.id),
-                        declarations,
-                        Some(expected_ty),
-                    )
-                })
-                .or_else(|| lower_expr(builder, expr, declarations))
-        }
-        ExprKind::Lambda { params, body } => {
+        ExprKind::Lambda { params, body, .. } => {
             let signature = declarations
                 .lambda_signatures
                 .get(&expr.id)
@@ -354,7 +325,7 @@ pub(super) fn row_effects<'db>(
             && let Some(scheme) =
                 ctx.lookup_function_type(&entry.module.child(function.name.clone()))
         {
-            visit(db, scheme.body(db), &mut found);
+            visit(db, *scheme.body(db), &mut found);
         }
     }
     for ty in ctx.node_types().values() {
@@ -364,33 +335,6 @@ pub(super) fn row_effects<'db>(
         visit(db, instance.callable, &mut found);
     }
     found
-}
-
-/// Plan the local callables of every function. A plan gives a pure use of a
-/// lambda its own instance where it can; a use it leaves alone reads the
-/// lambda as it was written.
-pub(super) fn plan_local_callables<'db>(
-    ctx: &mut IrLoweringCtx<'db>,
-    ir: &mut IrContext,
-    entries: &[DeclEntry<TypedRef<'db>>],
-    declarations: &mut Declarations<'db>,
-) {
-    for entry in entries {
-        let prefix = &entry.module;
-        let Decl::Function(function) = &entry.decl else {
-            continue;
-        };
-        let name = prefix.child(function.name.clone());
-        if ctx.lookup_function_type(&name).is_none() {
-            continue;
-        }
-        let outer = ctx.enter_definition(&name);
-        let plan = local_callables::Plan::collect(ctx, ir, &function.body, declarations);
-        ctx.leave_definition(outer);
-        declarations
-            .function_local_callables
-            .insert(function.id, plan);
-    }
 }
 
 pub(super) fn lower_function<'db>(
@@ -434,12 +378,7 @@ pub(super) fn lower_function<'db>(
             }
         }
         declarations.local_uses = local_instantiations(scope.db, &function, declarations);
-        declarations.local_callables = declarations
-            .function_local_callables
-            .remove(&function.id)
-            .unwrap_or_else(|| {
-                local_callables::Plan::collect(&mut scope, ir, &function.body, declarations)
-            });
+        declarations.aliases = local_callables::Aliases::collect(&function.body);
         let value = lower_expr(
             &mut IrBuilder::new(&mut scope, ir, entry),
             function.body,
@@ -946,9 +885,13 @@ pub(super) fn lower_lambda<'db>(
     let result_type = builder
         .ctx
         .convert_logical_type(builder.ir, *signature_result);
-    // The lambda takes the expected callable type when that type's row
-    // requires at least the class of its own: the row includes its own, or
-    // its tail is a binder whose class is always `Cps`.
+    // Type checking gives a lambda the row its parameter expects, so the two
+    // differ only where the parameter's row tail is a binder that keeps no
+    // instantiation: a parameter of a generalized computation result, or an
+    // ability argument. Such a tail occurs in a parameter type of that value
+    // and reads `Cps` (`new-plans/cps-effects.md`, Row와 호출 규약). The
+    // lambda takes that row, since a conversion cast cannot change a callable
+    // ABI. At any other parameter the two rows are already the same.
     let row = expected_ty
         .and_then(|expected_ty| {
             let expected = tribute_control::FuncSig::from_type_ref(builder.ir, expected_ty)?;
@@ -961,10 +904,10 @@ pub(super) fn lower_lambda<'db>(
                         matches!(binder, RowBinder::Body | RowBinder::AbilityArg)
                     })
             });
-            (expected.result(builder.ir) == result_type
-                && expected.inputs(builder.ir) == param_types
-                && (always_cps || row.includes(&own_row)))
-            .then_some(row)
+            (always_cps
+                && expected.result(builder.ir) == result_type
+                && expected.inputs(builder.ir) == param_types)
+                .then_some(row)
         })
         .unwrap_or(own_row);
     let entry = builder.ir.create_block(BlockData {
@@ -1110,58 +1053,52 @@ pub(super) fn lower_handle<'db>(
         blocks: trunk_ir::smallvec::smallvec![completion_block],
         parent_op: None,
     });
-    let handlers_block = builder.ir.create_block(BlockData {
-        location,
-        args: vec![],
-        ops: Default::default(),
-        parent_region: None,
-    });
+    let mut bindings = Vec::new();
+    let mut arms = Vec::new();
     for arm in handlers
         .into_iter()
         .filter(|arm| !matches!(arm.kind, HandlerKind::Do { .. }))
     {
-        lower_handler(
+        let (binding, arm) = lower_handler(
             builder.ctx,
             builder.ir,
-            handlers_block,
             location,
             result_ty,
             arm,
             declarations,
         )
         .expect("typechecked handler failed logical IR metadata lowering");
+        bindings.push(binding.to_attribute(builder.ir));
+        arms.push(arm);
     }
-    let handlers_region = builder.ir.create_region(RegionData {
-        location,
-        blocks: trunk_ir::smallvec::smallvec![handlers_block],
-        parent_op: None,
-    });
     let handle = op(
         builder.ir,
         builder.block,
         location,
         tribute_control::Handle::DEF,
         |builder| {
-            builder
+            let builder = builder
+                .attr("handlers", Attribute::List(bindings))
                 .result(result_ty)
                 .region(body_region)
-                .region(completion_region)
-                .region(handlers_region)
+                .region(completion_region);
+            arms.into_iter()
+                .fold(builder, |builder, arm| builder.region(arm))
         },
     );
     attach_evidence_plan(builder.ctx, builder.ir, handle, handle_id, declarations);
     Some(result(builder.ir, handle))
 }
 
+/// Lower one operation arm of a handle to its binding and arm region.
 pub(super) fn lower_handler<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     ir: &mut IrContext,
-    table: BlockRef,
     location: Location,
     answer_ty: TypeRef,
     arm: HandlerArm<TypedRef<'db>>,
     declarations: &mut Declarations<'db>,
-) -> Option<()> {
+) -> Option<(tribute_control::HandlerBinding, trunk_ir::refs::RegionRef)> {
     let (ability, operation, kind, params, resume) = match arm.kind {
         HandlerKind::Fn {
             ability,
@@ -1174,7 +1111,7 @@ pub(super) fn lower_handler<'db>(
             params,
             resume_local_id,
         } => (ability, op, OpDeclKind::Op, params, resume_local_id),
-        HandlerKind::Do { .. } => return Some(()),
+        HandlerKind::Do { .. } => panic!("a completion arm is not an operation arm"),
     };
     let ability_id = match ability.resolved {
         ResolvedRef::Ability { id } => id,
@@ -1241,6 +1178,15 @@ pub(super) fn lower_handler<'db>(
     let operation_result = ctx.convert_logical_type(ir, expected_result);
     let op_name = ir.intern_symbol_text(&operation);
     let kind_name = ir.intern_str(operation_kind_text(kind));
+    let binding = tribute_control::HandlerBinding {
+        ability: instance.clone(),
+        op_name,
+        kind: match kind {
+            OpDeclKind::Op => tribute_control::OperationKind::Op,
+            OpDeclKind::Fn => tribute_control::OperationKind::Fn,
+        },
+        operation_result_type: operation_result,
+    };
     let declaration = OperationDeclaration::new(
         instance.clone(),
         op_name,
@@ -1310,19 +1256,5 @@ pub(super) fn lower_handler<'db>(
         blocks: trunk_ir::smallvec::smallvec![block],
         parent_op: None,
     });
-    op(
-        ir,
-        table,
-        location,
-        tribute_control::Handler::DEF,
-        |builder| {
-            builder
-                .attr("ability", Attribute::SymbolRef(instance))
-                .attr("op_name", Attribute::String(op_name))
-                .attr("kind", Attribute::String(kind_name))
-                .attr("operation_result_type", Attribute::Type(operation_result))
-                .region(region)
-        },
-    );
-    Some(())
+    Some((binding, region))
 }

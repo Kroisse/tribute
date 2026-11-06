@@ -15,6 +15,7 @@ derive_more.workspace = true
 fluent-uri.workspace = true
 itertools.workspace = true
 salsa.workspace = true
+siphasher.workspace = true
 ropey.workspace = true
 hashbrown.workspace = true
 rustc-hash.workspace = true
@@ -34,4 +35,5 @@ insta.workspace = true
 proptest.workspace = true
 proptest-state-machine.workspace = true
 salsa-test-macros = { workspace = true }
+tribute-prop.workspace = true
 tribute-front = { path = ".", features = ["testing"] }

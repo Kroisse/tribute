@@ -94,7 +94,7 @@ fn main() ->{Io} Nil {
     };
     let messages: Vec<String> = diagnostics
         .iter()
-        .map(|diagnostic| diagnostic.inner.message.clone())
+        .map(|diagnostic| diagnostic.message.to_owned())
         .collect();
     assert!(
         messages
@@ -228,8 +228,8 @@ fn test_execute_dynamic_bytes_write_boundary() {
   func.func @main() -> core.nil {{
     %left = adt.bytes_const {{value = b"{left}"}} : core.bytes
     %right = adt.bytes_const {{value = b"{right}"}} : core.bytes
-    %joined = func.call %left, %right {{callee = @__tribute_bytes_concat}} : core.bytes
-    %newline = arith.const {{value = 1}} : core.i1
+    %joined = func.call @__tribute_bytes_concat(%left, %right) : (core.bytes, core.bytes) -> core.bytes
+    %newline = arith.constant 1 : core.i1
     %result = tribute_io.write %joined, %newline : core.nil
     func.return
   }}

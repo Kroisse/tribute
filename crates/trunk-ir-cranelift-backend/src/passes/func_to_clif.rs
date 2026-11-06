@@ -273,6 +273,7 @@ impl OpRewritePattern for FuncCallIndirectPattern {
                     .all(|(&param, &arg)| param == ctx.value_ty(arg)),
             "arguments do not match the indirect call signature",
         )?;
+        // The converted results must still match the converted signature.
         rewriter.ensure(
             result_types.as_slice() == callable.results(ctx)
                 || result_types == runtime_result_types,
@@ -470,7 +471,7 @@ impl OpRewritePattern for FuncConstantPattern {
         rewriter: &mut PatternRewriter<'_>,
     ) -> Option<()> {
         let op = const_op.op_ref();
-        let func_ref = const_op.func_ref(ctx).clone();
+        let func_ref = const_op.value(ctx).clone();
         if let &[result] = ctx.op_result_types(op)
             && func::FuncSig::matches(ctx, result)
             && self
@@ -499,7 +500,6 @@ mod tests {
     use trunk_ir::dialect::{clif, core, func};
     use trunk_ir::ops::DialectType;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
     use trunk_ir::rewrite::TypeConverter;
     use trunk_ir::types::TypeDataBuilder;
     use trunk_ir::{Attribute, AttributeMap};
@@ -509,10 +509,10 @@ mod tests {
     func.return
   }
   func.func @direct_caller(%value: core.i32) -> (), {call_conv = "tail"} {
-    func.tail_call %value {callee = @direct_target}
+    func.tail_call @direct_target(%value) : (core.i32) -> ()
   }
   func.func @indirect_caller(%callee: core.ptr, %value: core.i32) -> (), {call_conv = "tail"} {
-    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> (), {call_conv = "tail"}>}
+    func.tail_call_indirect %callee(%value) : (core.i32) -> (), {call_conv = "tail"}
   }
 }"#;
 
@@ -521,7 +521,7 @@ mod tests {
         let module = parse_test_module(&mut ctx, ir);
         let type_converter = TypeConverter::new();
         super::lower(&mut ctx, module, type_converter).unwrap();
-        print_module(&ctx, module.op())
+        module.op().display(&ctx).to_string()
     }
 
     #[test]
@@ -541,12 +541,12 @@ mod tests {
             } else {
                 ctx.op_attrs_mut(op).remove("type");
             }
-            let before = print_module(&ctx, module.op());
+            let before = module.op().display(&ctx).to_string();
             let regions = ctx.op_regions(op).collect::<trunk_ir::RegionList>();
             PatternApplicator::new(TypeConverter::new())
                 .add_pattern(super::FuncFuncPattern)
                 .apply_partial(&mut ctx, module);
-            assert_eq!(print_module(&ctx, module.op()), before);
+            assert_eq!(module.op().display(&ctx).to_string(), before);
             assert_eq!(module.ops(&ctx)[0], op);
             assert!(ctx.op_regions(op).eq(regions));
         }
@@ -572,7 +572,7 @@ mod tests {
             r#"core.module @test {
   func.func @callee() -> test.anyref
   func.func @caller() -> test.anyref {
-    %result = func.call {callee = @callee} : test.anyref
+    %result = func.call @callee() : () -> test.anyref
     func.return %result
   }
 }"#,
@@ -584,12 +584,12 @@ mod tests {
 
         super::lower(&mut ctx, module, type_converter).expect("func-to-clif lowering");
 
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         let call = printed
             .lines()
             .find(|line| line.contains("clif.call"))
             .expect("lowered direct call");
-        assert!(call.contains(": core.ptr"), "{printed}");
+        assert!(call.contains("-> core.ptr"), "{printed}");
         assert!(!call.contains("test.anyref"), "{printed}");
     }
 
@@ -664,9 +664,9 @@ mod tests {
         let result = run_pass(
             r#"core.module @test {
   func.func @test_fn() -> core.i32 {
-    %0 = arith.const {value = 0} : core.i32
-    %1 = arith.const {value = 42} : core.i32
-    %2 = func.call_indirect %0, %1 {signature = func.func_sig<(core.i32) -> core.i32>} : core.i32
+    %0 = arith.constant 0 : core.i32
+    %1 = arith.constant 42 : core.i32
+    %2 = func.call_indirect %0(%1) : (core.i32) -> core.i32
     func.return %2
   }
 }"#,
@@ -679,14 +679,14 @@ mod tests {
         let result = run_pass(
             r#"core.module @test {
   func.func @test_fn(%callee: core.ptr) -> core.nil {
-    func.call_indirect %callee {signature = func.func_sig<() -> core.nil>}
+    "func.call_indirect"(%callee) {signature = func.func_sig<() -> core.nil>}
     func.return
   }
 }"#,
         );
 
         assert!(
-            result.contains("clif.call_indirect %0 {sig = clif.func_sig<() -> core.nil>}"),
+            result.contains("\"clif.call_indirect\"(%0) {sig = clif.func_sig<() -> core.nil>}"),
             "{result}"
         );
         assert!(!result.contains("func.call_indirect"), "{result}");
@@ -699,7 +699,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @caller(%callee: core.ptr) -> core.nil {
-    %unit = func.call_indirect %callee {signature = func.func_sig<() -> core.nil>} : core.nil
+    %unit = func.call_indirect %callee() : () -> core.nil
     func.return %unit
   }
 }"#,
@@ -707,10 +707,9 @@ mod tests {
 
         super::lower(&mut ctx, module, TypeConverter::new()).expect("func-to-clif lowering");
         crate::validate_clif_ir(&ctx, module).expect("logical nil call result is valid native IR");
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(
-            printed
-                .contains("clif.call_indirect %0 {sig = clif.func_sig<() -> core.nil>} : core.nil"),
+            printed.contains("clif.call_indirect %0() : () -> core.nil"),
             "{printed}"
         );
         assert!(printed.contains("clif.return %1"), "{printed}");
@@ -722,70 +721,26 @@ mod tests {
     }
 
     #[test]
-    fn indirect_call_without_exact_signature_is_rejected_before_mutation() {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  func.func @caller(%callee: core.ptr) -> core.nil {
-    %unit = func.call_indirect %callee : core.nil
-    func.return %unit
-  }
-}"#,
-        );
-
-        let error = super::lower(&mut ctx, module, TypeConverter::new()).unwrap_err();
-        assert!(error.to_string().contains("func.call_indirect"), "{error}");
-        let printed = print_module(&ctx, module.op());
-        assert!(printed.contains("func.call_indirect"), "{printed}");
-        assert!(!printed.contains("clif.call_indirect"), "{printed}");
-    }
-
-    #[test]
-    fn indirect_call_does_not_equate_nil_contract_with_no_result() {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  func.func @caller(%callee: core.ptr) -> core.nil {
-    %unit = func.call_indirect %callee {signature = func.func_sig<() -> ()>} : core.nil
-    func.return %unit
-  }
-}"#,
-        );
-
-        let error = super::lower(&mut ctx, module, TypeConverter::new()).unwrap_err();
-        assert!(error.to_string().contains("func.call_indirect"), "{error}");
-        let printed = print_module(&ctx, module.op());
-        assert!(printed.contains("func.call_indirect"), "{printed}");
-        assert!(!printed.contains("clif.call_indirect"), "{printed}");
-    }
-
-    #[test]
     fn callable_value_is_erased_while_its_exact_contract_stays_target_owned() {
         let result = run_pass(
             r#"core.module @test {
   func.func @target() -> core.i32 {
-    %value = arith.const {value = 7} : core.i32
+    %value = arith.constant 7 : core.i32
     func.return %value
   }
   func.func @caller() -> core.i32 {
-    %callee = func.constant {func_ref = @target} : func.func_sig<() -> core.i32>
-    %value = func.call_indirect %callee {signature = func.func_sig<() -> core.i32>} : core.i32
+    %callee = func.constant @target : () -> core.i32
+    %value = func.call_indirect %callee() : () -> core.i32
     func.return %value
   }
 }"#,
         );
         assert!(
-            result.contains("clif.symbol_addr {sym = @target} : core.ptr"),
+            result.contains("clif.symbol_addr @target : core.ptr"),
             "{result}"
         );
         assert!(
-            result.contains("clif.call_indirect %0 {sig = !t0} : core.i32"),
-            "{result}"
-        );
-        assert!(
-            result.contains("!t0 = clif.func_sig<() -> core.i32>"),
+            result.contains("clif.call_indirect %0() : () -> core.i32"),
             "{result}"
         );
         assert!(!result.contains("func.func_sig"), "{result}");
@@ -805,7 +760,7 @@ mod tests {
             r#"core.module @test {
   !evidence = core.array<core.i32>
   func.func @caller(%callee: core.ptr, %evidence: !evidence) -> (), {call_conv = "tail"} {
-    func.tail_call_indirect %callee, %evidence {signature = func.func_sig<(!evidence) -> (), {call_conv = "tail"}>}
+    func.tail_call_indirect %callee(%evidence) : (!evidence) -> (), {call_conv = "tail"}
   }
 }"#,
         );
@@ -818,17 +773,14 @@ mod tests {
 
         super::lower(&mut ctx, module, type_converter).expect("func-to-clif lowering");
 
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(
-            printed.contains("clif.return_call_indirect")
-                && printed
-                    .contains("sig = clif.func_sig<(core.ptr) -> (), {call_conv = \"tail\"}>"),
+            printed.contains(
+                "clif.return_call_indirect %0(%1) : (core.ptr) -> (), {call_conv = \"tail\"}"
+            ),
             "{printed}"
         );
-        assert!(
-            !printed.contains("sig = clif.func_sig<(!evidence) -> ()>"),
-            "{printed}"
-        );
+        assert!(!printed.contains("(!evidence) -> ()"), "{printed}");
     }
 
     #[test]
@@ -839,11 +791,11 @@ mod tests {
             r#"core.module @test {
   !evidence = core.array<core.i32>
   func.func @physical(%callee: core.ptr, %evidence: core.ptr) -> core.i32 {
-    %result = func.call_indirect %callee, %evidence {signature = func.func_sig<(!evidence) -> core.i32>} : core.i32
+    %result = func.call_indirect %callee(%evidence) : (!evidence) -> core.i32
     func.return %result
   }
   func.func @mismatch(%callee: core.ptr, %value: core.i32) -> core.i32 {
-    %result = func.call_indirect %callee, %value {signature = func.func_sig<(!evidence) -> core.i32>} : core.i32
+    %result = func.call_indirect %callee(%value) : (!evidence) -> core.i32
     func.return %result
   }
 }"#,
@@ -856,16 +808,13 @@ mod tests {
         let error = super::lower(&mut ctx, module, type_converter).unwrap_err();
         assert!(error.to_string().contains("func.call_indirect"), "{error}");
 
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(
-            printed.contains("clif.call_indirect")
-                && printed.contains("sig = clif.func_sig<(core.ptr) -> core.i32>"),
+            printed.contains("clif.call_indirect %0(%1) : (core.ptr) -> core.i32"),
             "{printed}"
         );
         assert!(
-            printed.contains(
-                "func.call_indirect %0, %1 {signature = func.func_sig<(!evidence) -> core.i32>} : core.i32"
-            ),
+            printed.contains("func.call_indirect %0(%1) : (!evidence) -> core.i32"),
             "the mismatched call must remain unchanged: {printed}"
         );
     }
@@ -877,7 +826,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @caller(%callee: core.ptr, %value: core.i32) -> core.nil {
-    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i64) -> core.nil>}
+    func.tail_call_indirect %callee(%value) : (core.i64) -> core.nil
   }
 }"#,
         );
@@ -887,7 +836,7 @@ mod tests {
             error.to_string().contains("func.tail_call_indirect"),
             "{error}"
         );
-        let after = print_module(&ctx, module.op());
+        let after = module.op().display(&ctx).to_string();
         assert!(after.contains("func.tail_call_indirect"), "{after}");
         assert!(!after.contains("clif.return_call_indirect"), "{after}");
     }
@@ -903,30 +852,11 @@ mod tests {
     }
 
     #[test]
-    fn tail_call_indirect_without_exact_signature_is_rejected() {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  func.func @caller(%callee: core.ptr, %value: core.i32) -> core.nil {
-    func.tail_call_indirect %callee, %value
-  }
-}"#,
-        );
-
-        let error = super::lower(&mut ctx, module, TypeConverter::new()).unwrap_err();
-        assert!(
-            error.to_string().contains("func.tail_call_indirect"),
-            "{error}"
-        );
-    }
-
-    #[test]
     fn value_tail_call_indirect_returns_the_callers_result() {
         let output = run_pass(
             r#"core.module @test {
   func.func @caller(%callee: core.ptr, %value: core.i32) -> core.i32, {call_conv = "tail"} {
-    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> core.i32, {call_conv = "tail"}>}
+    func.tail_call_indirect %callee(%value) : (core.i32) -> core.i32, {call_conv = "tail"}
   }
 }"#,
         );
@@ -941,7 +871,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @caller(%callee: core.ptr, %value: core.i32) -> core.nil {
-    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> core.i32>}
+    func.tail_call_indirect %callee(%value) : (core.i32) -> core.i32
   }
 }"#,
         );
@@ -960,7 +890,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @caller(%callee: core.ptr, %value: core.i32) -> core.nil {
-    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> core.nil>}
+    func.tail_call_indirect %callee(%value) : (core.i32) -> core.nil
   }
 }"#,
         );
@@ -969,7 +899,7 @@ mod tests {
             error.to_string().contains("func.tail_call_indirect"),
             "{error}"
         );
-        let after = print_module(&ctx, module.op());
+        let after = module.op().display(&ctx).to_string();
         assert!(after.contains("func.tail_call_indirect"), "{after}");
         assert!(!after.contains("clif.return_call_indirect"), "{after}");
     }
@@ -986,7 +916,7 @@ mod tests {
     func.return
   }}
   func.func @take() {{
-    %reference = func.constant {{func_ref = @target}} : {reference}
+    %reference = "func.constant"() {{value = @target}} : {reference}
     func.return
   }}
 }}"#
@@ -1013,7 +943,7 @@ mod tests {
       func.return
     }
     func.func @take() {
-      %reference = func.constant {func_ref = @helper} : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
+      %reference = func.constant @helper : (core.i32) -> (), {call_conv = "tail"}
       func.return
     }
   }
@@ -1021,7 +951,7 @@ mod tests {
         );
         super::lower(&mut ctx, module, TypeConverter::new())
             .expect("a nested reference resolves in its own module");
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(printed.contains("clif.symbol_addr"), "{printed}");
         assert!(!printed.contains("func.constant"), "{printed}");
     }
@@ -1040,7 +970,7 @@ mod tests {
         let unknown = lower(
             r#"core.module @test {
   func.func @take() {
-    %reference = func.constant {func_ref = @missing} : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
+    %reference = func.constant @missing : (core.i32) -> (), {call_conv = "tail"}
     func.return
   }
 }"#,
@@ -1057,7 +987,7 @@ mod tests {
       func.return
     }
     func.func @take() {
-      %reference = func.constant {func_ref = @left::@helper} : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
+      %reference = func.constant @left::@helper : (core.i32) -> (), {call_conv = "tail"}
       func.return
     }
   }
@@ -1071,7 +1001,7 @@ mod tests {
     func.return
   }
   func.func @take() {
-    %reference = func.constant {func_ref = @target} : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
+    %reference = func.constant @target : (core.i32) -> (), {call_conv = "tail"}
     func.return
   }
 }"#,
@@ -1089,7 +1019,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @caller(%callee: core.ptr, %value: core.i32) {
-    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> ()>}
+    func.tail_call_indirect %callee(%value) : (core.i32) -> ()
   }
 }"#,
         );
@@ -1098,7 +1028,7 @@ mod tests {
             error.to_string().contains("func.tail_call_indirect"),
             "{error}"
         );
-        let after = print_module(&ctx, module.op());
+        let after = module.op().display(&ctx).to_string();
         assert!(after.contains("func.tail_call_indirect"), "{after}");
         assert!(!after.contains("clif.return_call_indirect"), "{after}");
     }

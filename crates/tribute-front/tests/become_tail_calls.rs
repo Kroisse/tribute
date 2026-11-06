@@ -64,6 +64,26 @@ fn countdown(n: Int) -> Int {
     assert_snapshot!(run_ast_pipeline_with_ir(db, source));
 }
 
+/// A `become` ends an arm of a case that lowers to `scf.index_switch` in
+/// place of the arm's yield.
+#[salsa_test]
+fn become_ends_a_literal_switch_arm(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn step(n: Nat) -> Nat {
+    case n {
+        0 -> 0
+        1 -> become step(0)
+        _ -> become step(n - 1)
+    }
+}
+"#,
+    );
+    assert_snapshot!(run_ast_pipeline_with_ir(db, source));
+}
+
 #[salsa_test]
 fn become_outside_tail_position_is_rejected(db: &salsa::DatabaseImpl) {
     let messages = errors(

@@ -12,7 +12,7 @@ fn checked(db: &dyn salsa::Database, source: SourceCst) -> TypeCheckOutput<'_> {
     *analysis::analyze(db, source, *analysis::builtins(db)).unwrap()
 }
 
-fn diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<&Diagnostic> {
+fn diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<Diagnostic<'_>> {
     analysis::diagnostics(db, source, *analysis::builtins(db))
 }
 

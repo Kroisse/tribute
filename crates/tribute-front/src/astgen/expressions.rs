@@ -560,9 +560,21 @@ fn lower_lambda_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<Unres
     let params = params_node
         .map(|n| lower_param_list(ctx, n))
         .unwrap_or_default();
+    let return_type_node = node.child_by_field_name("return_type");
+    let return_ty =
+        return_type_node.and_then(|n| super::declarations::lower_type_annotation(ctx, n));
+    let effects = return_type_node.and_then(|rta| {
+        rta.child_by_field_name("abilities")
+            .map(|abilities_node| super::declarations::lower_ability_row(ctx, abilities_node))
+    });
     let body = lower_expr(ctx, body_node);
 
-    ExprKind::Lambda { params, body }
+    ExprKind::Lambda {
+        params,
+        return_ty,
+        effects,
+        body,
+    }
 }
 
 fn lower_param_list(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<Param> {

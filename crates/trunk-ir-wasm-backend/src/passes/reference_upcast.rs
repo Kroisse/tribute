@@ -72,7 +72,6 @@ fn is_abstract_gc_reference(ctx: &IrContext, ty: TypeRef) -> bool {
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
     use trunk_ir::rewrite::{Module, PatternApplicator, TypeConverter};
 
     fn upcast(ctx: &mut IrContext, module: Module, tc: TypeConverter) {
@@ -87,8 +86,8 @@ mod tests {
         let mut expected_ctx = IrContext::new();
         let expected_module = parse_test_module(&mut expected_ctx, expected);
         assert_eq!(
-            print_module(ctx, module.op()),
-            print_module(&expected_ctx, expected_module.op())
+            module.op().display(ctx).to_string(),
+            expected_module.op().display(&expected_ctx).to_string()
         );
     }
 
@@ -101,12 +100,12 @@ mod tests {
   !Closure = test.layout<core.i32, wasm.anyref, {layout = "closure"}>
   !Ref = wasm_gc.struct<core.i32>
   func.func @f(%c: !Closure, %r: !Ref, %s: wasm.structref, %a: wasm_gc.array<core.i32>) {
-    %c_struct = core.unrealized_conversion_cast %c : wasm.structref
-    %c_any = core.unrealized_conversion_cast %c : wasm.anyref
-    %r_struct = core.unrealized_conversion_cast %r : wasm.structref
-    %s_any = core.unrealized_conversion_cast %s : wasm.anyref
-    %a_array = core.unrealized_conversion_cast %a : wasm.arrayref
-    func.call %c_struct, %c_any, %r_struct, %s_any, %a_array {callee = @use}
+    %c_struct = core.unrealized_conversion_cast %c : !Closure to wasm.structref
+    %c_any = core.unrealized_conversion_cast %c : !Closure to wasm.anyref
+    %r_struct = core.unrealized_conversion_cast %r : !Ref to wasm.structref
+    %s_any = core.unrealized_conversion_cast %s : wasm.structref to wasm.anyref
+    %a_array = core.unrealized_conversion_cast %a : wasm_gc.array<core.i32> to wasm.arrayref
+    func.call @use(%c_struct, %c_any, %r_struct, %s_any, %a_array) : (wasm.structref, wasm.anyref, wasm.structref, wasm.anyref, wasm.arrayref) -> ()
     func.return
   }
 }"#,
@@ -126,7 +125,7 @@ mod tests {
     %r_struct = wasm.ref_upcast %r : wasm.structref
     %s_any = wasm.ref_upcast %s : wasm.anyref
     %a_array = wasm.ref_upcast %a : wasm.arrayref
-    func.call %c_struct, %c_any, %r_struct, %s_any, %a_array {callee = @use}
+    func.call @use(%c_struct, %c_any, %r_struct, %s_any, %a_array) : (wasm.structref, wasm.anyref, wasm.structref, wasm.anyref, wasm.arrayref) -> ()
     func.return
   }
 }"#,
@@ -138,9 +137,9 @@ mod tests {
         let input = r#"core.module @test {
   !Plain = test.opaque<core.i32>
   func.func @f(%any: wasm.anyref, %plain: !Plain) {
-    %down = core.unrealized_conversion_cast %any : wasm.structref
-    %plain_struct = core.unrealized_conversion_cast %plain : wasm.structref
-    func.call %down, %plain_struct {callee = @use}
+    %down = core.unrealized_conversion_cast %any : wasm.anyref to wasm.structref
+    %plain_struct = core.unrealized_conversion_cast %plain : !Plain to wasm.structref
+    func.call @use(%down, %plain_struct) : (wasm.structref, wasm.structref) -> ()
     func.return
   }
 }"#;
@@ -157,8 +156,8 @@ mod tests {
         let input = r#"core.module @test {
   !Closure = test.layout<core.i32, wasm.anyref, {layout = "closure"}>
   func.func @f(%c: !Closure) {
-    %r = core.unrealized_conversion_cast %c : wasm.structref
-    func.call %r {callee = @use}
+    %r = core.unrealized_conversion_cast %c : !Closure to wasm.structref
+    func.call @use(%r) : (wasm.structref) -> ()
     func.return
   }
 }"#;

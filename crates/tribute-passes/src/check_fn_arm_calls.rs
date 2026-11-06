@@ -18,6 +18,7 @@ use tribute_ir::dialect::tribute_cps;
 use tribute_ir::runtime_items::RUNTIME_ITEMS;
 use trunk_ir::SymbolPath;
 use trunk_ir::context::IrContext;
+use trunk_ir::op_flag::OpFlag;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, RegionRef};
 use trunk_ir::rewrite::Module;
@@ -25,8 +26,7 @@ use trunk_ir::types::Location;
 use trunk_ir::walk::{WalkAction, walk_region};
 
 use crate::convention_classes::{
-    Class, Function, Locals, Reader, func_tables, reference_callee, requirements,
-    settle_class_variables,
+    Class, Function, Reader, func_tables, reference_callee, requirements, settle_class_variables,
 };
 use crate::unreferenced_source_functions::source_dce_config;
 
@@ -121,10 +121,12 @@ pub fn check(ctx: &IrContext, module: Module) -> Vec<FnArmCall> {
             continue;
         };
         let _ = walk_region::<()>(ctx, body, &mut |op| {
-            if let Ok(handler) = tribute_control::Handler::from_op(ctx, op)
-                && handler.kind(ctx) == "fn"
-            {
-                instance.check_arm(handler, &instances, &mut calls);
+            if let Ok(handle) = tribute_control::Handle::from_op(ctx, op) {
+                for (binding, arm) in handle.handlers(ctx).zip(handle.arms(ctx)) {
+                    if binding.kind == tribute_control::OperationKind::Fn {
+                        instance.check_arm(&binding, arm, &instances, &mut calls);
+                    }
+                }
             }
             ControlFlow::Continue(WalkAction::Advance)
         });
@@ -176,12 +178,10 @@ impl<'a> Instance<'a> {
                 .clone()
                 .unwrap_or_else(|| vec![Class::CPS; variables.len()])
         };
-        let mut reader = Reader {
-            binders: function.binders.clone(),
+        let mut reader = function.reader(
             requirements,
-            params: variables.iter().copied().zip(claimed).collect(),
-            locals: Locals::default(),
-        };
+            variables.iter().copied().zip(claimed).collect(),
+        );
         if let Some(body) = ctx.op_region(function.op, 0) {
             reader.settle_locals(ctx, body);
         }
@@ -209,12 +209,13 @@ impl<'a> Instance<'a> {
 
     fn check_arm(
         &self,
-        handler: tribute_control::Handler,
+        binding: &tribute_control::HandlerBinding,
+        arm: RegionRef,
         instances: &[Instance],
         calls: &mut Vec<FnArmCall>,
     ) {
-        let op_name = handler.op_name(self.ctx);
-        self.check_region(handler.body(self.ctx), &[], &mut |call, tail| {
+        let op_name = self.ctx.str(binding.op_name);
+        self.check_region(arm, &[], &mut |call, tail| {
             let mut origins = Vec::new();
             if let Some(tail) = tail {
                 let mut seen = Vec::new();
@@ -298,22 +299,18 @@ impl<'a> Instance<'a> {
     ) {
         let ctx = self.ctx;
         // A lambda's body runs where it is called, under its own convention.
-        if tribute_control::is_lambda(ctx, op) {
+        if tribute_control::SourceLambda::is_set(ctx, op) {
             return;
         }
         if let Ok(handle) = tribute_control::Handle::from_op(ctx, op) {
             let mut inner = handled.to_vec();
             let mut arms = Vec::new();
-            for &block in &ctx.region(handle.handlers(ctx)).blocks {
-                for &entry in &ctx.block(block).ops {
-                    if let Ok(handler) = tribute_control::Handler::from_op(ctx, entry) {
-                        inner.push(handler.ability(ctx).clone());
-                        // A nested `fn` arm is checked as an arm of its own.
-                        if handler.kind(ctx) != "fn" {
-                            arms.push(handler.body(ctx));
-                        }
-                    }
+            for (binding, arm) in handle.handlers(ctx).zip(handle.arms(ctx)) {
+                // A nested `fn` arm is checked as an arm of its own.
+                if binding.kind != tribute_control::OperationKind::Fn {
+                    arms.push(arm);
                 }
+                inner.push(binding.ability);
             }
             self.check_region(handle.body(ctx), &inner, report);
             self.check_region(handle.completion(ctx), handled, report);
@@ -356,8 +353,8 @@ impl<'a> Instance<'a> {
                 tribute_cps::declared_convention(ctx, callee.op),
                 Row::new(instances, tail),
             )
-        } else if tribute_control::is_call_indirect(ctx, op)
-            || tribute_control::is_tail_call_indirect(ctx, op)
+        } else if tribute_control::SourceCallIndirect::is_set(ctx, op)
+            || tribute_control::SourceTailCallIndirect::is_set(ctx, op)
         {
             let &callee = ctx.op_operands(op).first()?;
             let signature = FuncSig::from_type_ref(ctx, ctx.value_ty(callee))?;

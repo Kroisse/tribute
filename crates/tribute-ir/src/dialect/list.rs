@@ -6,18 +6,23 @@ use trunk_ir::op_flag::Pure;
 #[trunk_ir::dialect]
 mod list {
     #[flags(Pure)]
+    #[asm_format(attr_dict_bare ":" type(result))]
     fn empty(element_type: Attr<Type>) -> Value<_> {}
 
     #[flags(Pure)]
+    #[asm_format(element "," tail attr_dict_bare ":" type(result))]
     fn prepend<L>(element_type: Attr<Type>, element: Value<_>, tail: Value<L>) -> Value<L> {}
 
     #[flags(Pure)]
+    #[asm_format(list attr_dict_bare ":" type(result))]
     fn is_empty(element_type: Attr<Type>, list: Value<_>) -> Value<_> {}
 
     #[flags(Pure)]
+    #[asm_format(list attr_dict_bare ":" type(result))]
     fn head<T>(element_type: Attr<TypeOf<T>>, list: Value<_>) -> Value<T> {}
 
     #[flags(Pure)]
+    #[asm_format(list attr_dict_bare ":" type(result))]
     fn tail<L>(element_type: Attr<Type>, list: Value<L>) -> Value<L> {}
 }
 
@@ -41,7 +46,7 @@ mod tests {
             .intern(&mut ctx)
             .as_type_ref();
         let bool_ty = TypeDataBuilder::new("core.i1").intern(&mut ctx);
-        let element = trunk_ir::dialect::arith::Const::operands()
+        let element = trunk_ir::dialect::arith::Constant::operands()
             .value(Attribute::Int(1))
             .results(element_ty)
             .build(&mut ctx, loc)

@@ -9,6 +9,7 @@ mod matrix;
 
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
+use salsa::Accumulator;
 
 use super::NodeDiagnostic;
 use itertools::Itertools;
@@ -152,7 +153,8 @@ impl<'db> TypeChecker<'db> {
     }
 
     fn report_case(&self, node: NodeId, message: &str, severity: DiagnosticSeverity) {
-        NodeDiagnostic::new(message, node, severity, CompilationPhase::TypeChecking).report(self);
+        NodeDiagnostic::new(message, node, severity, CompilationPhase::TypeChecking)
+            .accumulate(self.db());
     }
 }
 
@@ -353,7 +355,7 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
         let body = self.checker.env.lookup_constructor(id)?.body(db);
         Some(match body.kind(db) {
             TypeKind::Func { params, result, .. } => (params.len(), *result),
-            _ => (0, body),
+            _ => (0, *body),
         })
     }
 }

@@ -2,14 +2,18 @@
 //! string and bytes literals.
 
 use salsa_test_macros::salsa_test;
-use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_core::diagnostic::{CompilationPhase, DiagnosticSeverity, SpanDiagnostic};
 use tribute_front::SourceCst;
 
-/// Error diagnostics produced while parsing and lowering `text`.
-fn lowering_errors(db: &dyn salsa::Database, text: &str) -> Vec<Diagnostic> {
-    let source = SourceCst::from_source_str(db, "block_literals.trb", text);
+#[salsa::tracked]
+fn parse(db: &dyn salsa::Database, source: SourceCst) {
     tribute_front::query::parsed_ast(db, source);
-    tribute_front::query::parsed_ast::accumulated::<Diagnostic>(db, source)
+}
+
+/// Error diagnostics produced while parsing and lowering `text`.
+fn lowering_errors(db: &dyn salsa::Database, text: &str) -> Vec<SpanDiagnostic> {
+    let source = SourceCst::from_source_str(db, "block_literals.trb", text);
+    parse::accumulated::<SpanDiagnostic>(db, source)
         .into_iter()
         .filter(|d| d.inner.severity == DiagnosticSeverity::Error)
         .cloned()

@@ -962,7 +962,7 @@ mod tests {
                 r#"core.module @test {{
   !A = adt.array<core.i32>
   wasm.func @splice(%source: !A, %start: core.index, %end: core.index, %x: core.i32, %y: core.i32) -> !A {{
-    %result = adt.array_splice %source, %start, %end{elements} {{type = !A}} : !A
+    %result = adt.array_splice %source[%start, %end]({elements}) attributes {{type = !A}} : !A
     wasm.return %result
   }}
 }}"#
@@ -986,7 +986,7 @@ mod tests {
 
     #[test]
     fn array_splice_fills_with_its_first_element_and_copies_the_kept_ranges() {
-        let (ctx, ops, returned) = lower_splice(", %x, %y");
+        let (ctx, ops, returned) = lower_splice("%x, %y");
 
         assert_eq!(
             op_names(&ctx, &ops),
@@ -1090,8 +1090,8 @@ mod tests {
   !A = adt.array<core.i32>
 
   wasm.func @main() -> core.nil {
-    %zero = wasm.i32_const {value = 0} : core.i32
-    %one = wasm.i32_const {value = 1} : core.i32
+    %zero = wasm.i32_const 0 : core.i32
+    %one = wasm.i32_const 1 : core.i32
     %struct = adt.struct_new %zero {type = !S} : !S
     %field = adt.struct_get %struct {type = !S, field = 0} : core.i32
     adt.struct_set %struct, %field {type = !S, field = 0}
@@ -1101,8 +1101,8 @@ mod tests {
     %cast = adt.variant_cast %variant {type = !E, tag = "Some"} : !ERef
     %payload = adt.variant_get %cast {type = !E, tag = "Some", field = 0} : core.i32
 
-    %at = arith.const {value = 0} : core.index
-    %count = arith.const {value = 2} : core.index
+    %at = arith.constant 0 : core.index
+    %count = arith.constant 2 : core.index
     %empty = adt.array_of {type = !A} : !A
     %filled = adt.array_new %count, %zero {type = !A} : !A
     %array = adt.array_of %one, %zero {type = !A} : !A
@@ -1169,7 +1169,7 @@ mod tests {
   !E = adt.enum<E { None(), Some(core.i32) }>
 
   wasm.func @main(%env: wasm.anyref) -> core.nil {
-    %one = wasm.i32_const {value = 1} : core.i32
+    %one = wasm.i32_const 1 : core.i32
     %first = adt.struct_new %one {type = !S} : !S
     %second = adt.struct_new %one {type = !S} : !S
     %field = adt.struct_get %first {type = !S, field = 0} : core.i32
@@ -1240,7 +1240,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.func @read(%bytes: adt.array<core.i8>, %words: adt.array<core.i32>) -> core.nil {
-    %zero = arith.const {value = 0} : core.index
+    %zero = arith.constant 0 : core.index
     %byte = adt.array_get %bytes, %zero : core.i8
     %word = adt.array_get %words, %zero : core.i32
     wasm.return
@@ -1250,7 +1250,7 @@ mod tests {
 
         lower(&mut ctx, module, TypeConverter::new());
 
-        let output = trunk_ir::printer::print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert_eq!(output.matches("wasm_gc.array_get_u").count(), 1, "{output}");
         assert_eq!(output.matches("wasm_gc.array_get ").count(), 1, "{output}");
     }
@@ -1265,7 +1265,7 @@ mod tests {
   !List = adt.enum<List { Empty(), Cons(core.i32, !ListRef) }>
 
   wasm.func @main(%input: !ListRef) -> core.nil {
-    %zero = wasm.i32_const {value = 0} : core.i32
+    %zero = wasm.i32_const 0 : core.i32
     %empty = adt.variant_new {type = !List, tag = "Empty"} : !ListRef
     %list = adt.variant_new %zero, %empty {type = !List, tag = "Cons"} : !ListRef
     %is_cons = adt.variant_is %input {type = !List, tag = "Cons"} : core.i1
@@ -1377,7 +1377,7 @@ mod tests {
   !E = adt.enum<E { None(), Some(core.i32), Other() }>
 
   wasm.func @main(%input: !ERef) -> core.nil {
-    %one = wasm.i32_const {value = 1} : core.i32
+    %one = wasm.i32_const 1 : core.i32
     %none = adt.variant_new {type = !E, tag = "None"} : !ERef
     %some = adt.variant_new %one {type = !E, tag = "Some"} : !ERef
     %is_some = adt.variant_is %input {type = !E, tag = "Some"} : core.i32
@@ -1389,7 +1389,7 @@ mod tests {
 
         lower(&mut ctx, module, TypeConverter::new());
 
-        let printed = trunk_ir::printer::print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(!printed.contains("ref_test"), "{printed}");
         assert!(!printed.contains("adt.variant_is"), "{printed}");
         let func = module.ops(&ctx)[0];

@@ -5,13 +5,13 @@
 //!
 //! Before:
 //! ```text
-//! %closure = closure.new %captures... {entries = [@lifted_func]}
+//! %closure = closure.new [@lifted_func] %captures...
 //! %result = func.call_indirect %closure, %args...
 //! ```
 //!
 //! After:
 //! ```text
-//! %closure = closure.new %captures... {entries = [@lifted_func]}
+//! %closure = closure.new [@lifted_func] %captures...
 //! %entry = closure.entry %closure {index = 0}
 //! %result = func.call_indirect %entry, %closure, %args...
 //! ```
@@ -143,7 +143,7 @@ impl OpRewritePattern for LowerClosureNewArena<'_> {
         let captures = closure_new.captures(ctx).to_vec();
         let result_ty = ctx.op_result_types(op)[0];
 
-        // %table = tribute_rt.convention_table {entries = [...]}
+        // %table = tribute_rt.convention_table [...]
         let table_ty = tribute_rt::ConventionTableRef::params()
             .intern(ctx)
             .as_type_ref();
@@ -165,7 +165,7 @@ impl OpRewritePattern for LowerClosureNewArena<'_> {
             .r#type(struct_ty)
             .results(struct_ty)
             .build(ctx, loc);
-        // %closure = core.unrealized_conversion_cast %pack : closure.closure<...>
+        // %closure = core.unrealized_conversion_cast %pack : adt.struct<..> to closure.closure<..>
         let cast = core::UnrealizedConversionCast::operands(struct_new_op.result(ctx))
             .results(result_ty)
             .build(ctx, loc);
@@ -954,7 +954,6 @@ impl Pass for LowerPreparedClosures {
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
     use trunk_ir::walk::{WalkAction, walk_op};
 
     #[test]
@@ -989,7 +988,7 @@ mod tests {
         let canonical = closure_struct_type_ref(&mut ctx);
         let printed = format!(
             "core.module @test {{\n  !C = {}\n}}",
-            trunk_ir::printer::print_type(&ctx, canonical)
+            canonical.display(&ctx)
         );
         assert!(printed.contains("layout = \"closure\""), "{printed}");
 
@@ -1026,14 +1025,14 @@ mod tests {
   }}
 
   func.func @selected(%ev: {ev_ty}, %payload: tribute_rt.anyref) -> tribute_rt.anyref {{
-      %closure = closure.new {{entries = [@trap_direct, @callee, @trap_cps]}} : !closure
-      %result = func.call_indirect %closure, %ev, %payload {{tribute.calling_convention = "evidence_direct", signature = func.func_sig<({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref>}} : tribute_rt.anyref
+      %closure = closure.new [@trap_direct, @callee, @trap_cps] : !closure
+      %result = func.call_indirect %closure(%ev, %payload) attributes {{tribute.calling_convention = "evidence_direct"}} : ({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref
       func.return %result
   }}
 
   func.func @untouched(%ev: {ev_ty}, %payload: tribute_rt.anyref) -> tribute_rt.anyref {{
-      %closure = closure.new {{entries = [@trap_direct, @callee, @trap_cps]}} : !closure
-      %result = func.call_indirect %closure, %ev, %payload {{tribute.calling_convention = "evidence_direct", signature = func.func_sig<({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref>}} : tribute_rt.anyref
+      %closure = closure.new [@trap_direct, @callee, @trap_cps] : !closure
+      %result = func.call_indirect %closure(%ev, %payload) attributes {{tribute.calling_convention = "evidence_direct"}} : ({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref
       func.return %result
   }}
 }}"#
@@ -1102,8 +1101,8 @@ mod tests {
 
   func.func @outer(%outer_ev: {ev_ty}, %payload: tribute_rt.anyref) -> tribute_rt.anyref {{
       func.func @inner(%inner_ev: {ev_ty}, %inner_payload: tribute_rt.anyref) -> tribute_rt.anyref {{
-          %closure = closure.new {{entries = [@trap_direct, @callee, @trap_cps]}} : !closure
-          %result = func.call_indirect %closure, %inner_ev, %inner_payload {{tribute.calling_convention = "evidence_direct", signature = func.func_sig<({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref>}} : tribute_rt.anyref
+          %closure = closure.new [@trap_direct, @callee, @trap_cps] : !closure
+          %result = func.call_indirect %closure(%inner_ev, %inner_payload) attributes {{tribute.calling_convention = "evidence_direct"}} : ({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref
           func.return %result
       }}
       func.return %payload
@@ -1134,18 +1133,22 @@ mod tests {
 
         lower_prepared_closures(&mut ctx, module).unwrap();
 
-        let ir = print_module(&ctx, module.op());
+        let ir = module.op().display(&ctx).to_string();
         assert!(
             !ir.contains("closure.new"),
             "module entrypoint should lower closure.new:\n{ir}"
         );
         assert!(
-            !ir.contains("closure.func") && !ir.contains("closure.unpack"),
+            !ir.contains("closure.entry") && !ir.contains("closure.unpack"),
             "module entrypoint should lower closure accessors:\n{ir}"
         );
+        let exact_calls = collect_ops(&ctx, module.op())
+            .into_iter()
+            .filter_map(|op| func::CallIndirect::from_op(&ctx, op).ok())
+            .filter(|call| func::FuncSig::from_type_ref(&ctx, call.signature(&ctx)).is_some())
+            .count();
         assert_eq!(
-            ir.matches("signature").count(),
-            2,
+            exact_calls, 2,
             "each lowered indirect call must retain an exact signature:\n{ir}"
         );
 
@@ -1174,13 +1177,13 @@ mod tests {
         assert_module_is_structurally_valid(&ctx, module);
 
         let inner = func_by_name_recursive(&ctx, module, "inner");
-        let inner_ir = print_module(&ctx, inner.op_ref());
+        let inner_ir = inner.op_ref().display(&ctx).to_string();
         assert!(
             !inner_ir.contains("closure.new"),
             "module lowering must revisit nested functions:\n{inner_ir}"
         );
         assert!(
-            !inner_ir.contains("closure.func") && !inner_ir.contains("closure.unpack"),
+            !inner_ir.contains("closure.entry") && !inner_ir.contains("closure.unpack"),
             "nested closure accessors must be fully lowered:\n{inner_ir}"
         );
         let inner_calls = call_indirect_operands_in_func(&ctx, inner);
@@ -1200,68 +1203,52 @@ mod tests {
             r#"core.module @test {
             !Cps = closure.closure<func.func_sig<(core.i32) -> core.never>>
             func.func @invalid(%callee: !Cps, %value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-                func.tail_call_indirect %callee, %value
+                func.tail_call_indirect %callee(%value) : (core.i32) -> core.never
             }
             func.func @otherwise_lowerable(%callee: !Cps) -> core.i32 {
-                %code = closure.func %callee : core.i32
+                %code = closure.entry %callee {index = 0} : core.i32
                 func.return %code
             }
         }"#,
         );
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
         let ops = collect_ops(&ctx, module.op());
         assert!(lower_prepared_closures(&mut ctx, module).is_err());
-        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
         assert_eq!(collect_ops(&ctx, module.op()), ops);
     }
 
     #[test]
     fn ordinary_closure_call_result_counts_are_checked_before_mutation() {
-        for (signature_results, call, supported) in [
+        for (call, supported) in [
             (
-                "core.i32",
-                "func.call_indirect %callee {tribute.calling_convention = \"direct\"}",
+                "func.call_indirect %callee() attributes {tribute.calling_convention = \"direct\"} : () -> ()",
                 false,
             ),
             (
-                "core.i32",
-                "%first, %extra = func.call_indirect %callee {tribute.calling_convention = \"direct\"} : core.i32, core.i32",
-                false,
-            ),
-            (
-                "()",
-                "func.call_indirect %callee {tribute.calling_convention = \"direct\"}",
-                false,
-            ),
-            (
-                "core.i32",
-                "%result = func.call_indirect %callee {tribute.calling_convention = \"direct\"} : core.i32",
+                "%result = func.call_indirect %callee() attributes {tribute.calling_convention = \"direct\"} : () -> core.i32",
                 true,
             ),
         ] {
-            // The transfer carries its entry signature; the closure type's
-            // callable is not one.
-            let call = call.replace("{tribute", "{signature = !Entry, tribute");
             let mut ctx = IrContext::new();
             let module = parse_test_module(
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
-            !Entry = func.func_sig<() -> {signature_results}>
             !Callback = closure.closure<func.func_sig<() -> core.i32>>
             func.func @invalid(%callee: !Callback) -> core.i32 {{
                 {call}
-                %zero = arith.constant {{value = 0}} : core.i32
+                %zero = arith.constant 0 : core.i32
                 func.return %zero
             }}
             func.func @otherwise_lowerable(%callee: !Callback) -> core.i32 {{
-                %code = closure.func %callee : core.i32
+                %code = closure.entry %callee {{index = 0}} : core.i32
                 func.return %code
             }}
         }}"#,
                 ),
             );
-            let before = print_module(&ctx, module.op());
+            let before = module.op().display(&ctx).to_string();
             let ops = collect_ops(&ctx, module.op());
             let invalid = func_by_name(&ctx, module, "invalid");
             if supported {
@@ -1273,7 +1260,15 @@ mod tests {
                     .unwrap();
                 assert_eq!(ctx.op_result_types(call).len(), 1);
                 assert_eq!(ctx.op_operands(call).len(), 2);
-                assert!(print_module(&ctx, invalid.op_ref()).contains("signature"));
+                assert!(
+                    func::FuncSig::from_type_ref(
+                        &ctx,
+                        func::CallIndirect::from_op(&ctx, call)
+                            .unwrap()
+                            .signature(&ctx)
+                    )
+                    .is_some()
+                );
                 continue;
             }
             let error = lower_prepared_closures(&mut ctx, module).unwrap_err();
@@ -1281,11 +1276,11 @@ mod tests {
                 error.to_string(),
                 "closure lowering: exact caller/callee/indirect result contract mismatch"
             );
-            assert_eq!(print_module(&ctx, module.op()), before);
+            assert_eq!(module.op().display(&ctx).to_string(), before);
             assert_eq!(collect_ops(&ctx, module.op()), ops);
             // The rewrite pattern must also decline unsupported arities safely.
             rewrite_validated_closures_in_func(&mut ctx, invalid, &SymbolTable::default());
-            assert_eq!(print_module(&ctx, module.op()), before);
+            assert_eq!(module.op().display(&ctx).to_string(), before);
             assert_eq!(collect_ops(&ctx, module.op()), ops);
         }
     }
@@ -1302,7 +1297,7 @@ mod tests {
         assert_module_is_structurally_valid(&ctx, module);
 
         let inner = func_by_name_recursive(&ctx, module, "inner");
-        let inner_ir = print_module(&ctx, inner.op_ref());
+        let inner_ir = inner.op_ref().display(&ctx).to_string();
         assert!(
             !inner_ir.contains("closure.new"),
             "prepared module worklist must lower nested functions:\n{inner_ir}"
@@ -1318,8 +1313,8 @@ mod tests {
   !closure = closure.closure<func.func_sig<(core.i32) -> core.i32>>
   !nested = core.tuple<!closure>
   func.func @run(%callback: !closure) -> !nested {
-    %created = closure.new {entries = [@callback]} : !closure
-    %packed = core.tuple_pack %created : !nested
+    %created = closure.new [@callback] : !closure
+    %packed = core.unrealized_conversion_cast %created : !closure to !nested
     func.return %packed
   }
 }"#,
@@ -1344,7 +1339,7 @@ mod tests {
             physical
         );
         assert_eq!(ctx.op_result_types(pack), [physical]);
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(printed.contains("!closure = adt.struct"), "{printed}");
         assert!(
             printed.contains("!nested = core.tuple<!closure>"),
@@ -1361,7 +1356,7 @@ mod tests {
                 r#"core.module @test {{
   !cps = closure.closure<func.func_sig<({ev}, core.i32, core.i32, core.i32) -> core.never>>
   func.func @run(%callee: !cps, %evidence: {ev}, %done: core.i32, %dispatch: core.i32, %value: core.i32) -> core.never attributes {{tribute.calling_convention = "cps"}} {{
-    func.tail_call_indirect %callee, %evidence, %done, %dispatch, %value {{tribute.calling_convention = "cps", signature = func.func_sig<({ev}, core.i32, core.i32, core.i32) -> core.never>}}
+    func.tail_call_indirect %callee(%evidence, %done, %dispatch, %value) attributes {{tribute.calling_convention = "cps"}} : ({ev}, core.i32, core.i32, core.i32) -> core.never
   }}
 }}"#
             ),
@@ -1431,17 +1426,17 @@ mod tests {
     func.unreachable
   }}
   func.func @run(%evidence: {evidence}, %done: core.i32) -> core.never attributes {{tribute.calling_convention = "cps"}} {{
-    %callee = closure.new {{entries = [@callee]}} : !cps
-    func.tail_call_indirect %callee, %evidence, %done
+    %callee = closure.new [@callee] : !cps
+    func.tail_call_indirect %callee(%evidence, %done) : ({evidence}, core.i32) -> core.never
   }}
 }}"#
             ),
         );
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
 
         assert!(lower_prepared_closures(&mut ctx, module).is_err());
 
-        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
     }
 
     #[test]
@@ -1453,11 +1448,11 @@ mod tests {
   func.func @external(%value: core.i32) -> core.i32
 }"#,
         );
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
 
         lower_prepared_closures(&mut ctx, module).unwrap();
 
-        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
     }
 
     #[test]
@@ -1468,17 +1463,17 @@ mod tests {
             r#"core.module @test {
   func.func @external(%value: core.i32) -> core.i32
   func.func @caller(%value: core.i32) -> core.i32 {
-    %callee = func.constant {func_ref = @external} : func.func_sig<(core.i32) -> core.i32>
-    %result = func.call_indirect %callee, %value : core.i32
+    %callee = func.constant @external : (core.i32) -> core.i32
+    %result = func.call_indirect %callee(%value) : (core.i32) -> core.i32
     func.return %result
   }
 }"#,
         );
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
 
         lower_prepared_closures(&mut ctx, module).unwrap();
 
-        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
     }
 
     #[test]
@@ -1488,7 +1483,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @caller(%callee: func.func_sig<(core.i32) -> core.i32>, %value: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
-    %result = func.call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> core.i32>, tribute.calling_convention = "direct"} : core.i32
+    %result = func.call_indirect %callee(%value) attributes {tribute.calling_convention = "direct"} : (core.i32) -> core.i32
     func.return %result
   }
 }"#,
@@ -1529,7 +1524,7 @@ mod tests {
     func.unreachable
   }}
   func.func @make(%first: core.i64, %second: core.i32) -> !closure {{
-    %created = closure.new %first, %second {{entries = [@code, @trap_evidence_direct, @trap_cps]}} : !closure
+    %created = closure.new [@code, @trap_evidence_direct, @trap_cps] %first, %second : !closure
     func.return %created
   }}
 }}"#
@@ -1613,7 +1608,7 @@ mod tests {
         }
 
         finalize_closure_storage_layout(&mut ctx, module);
-        let ir = print_module(&ctx, module.op());
+        let ir = module.op().display(&ctx).to_string();
         assert!(!ir.contains("core.unrealized_conversion_cast"), "{ir}");
         assert!(!ir.contains("closure.closure"), "{ir}");
     }
@@ -1631,7 +1626,7 @@ mod tests {
   }}
   core.module @right {{
     func.func @helper(%env: !closure, %value: core.i64) -> core.i32 {{
-      %zero = arith.const {{value = 0}} : core.i32
+      %zero = arith.constant 0 : core.i32
       func.return %zero
     }}
   }}
@@ -1642,7 +1637,7 @@ mod tests {
     func.unreachable
   }}
   func.func @make() -> !closure {{
-    %created = closure.new {{entries = [{reference}, @trap_evidence_direct, @trap_cps]}} : !closure
+    %created = closure.new [{reference}, @trap_evidence_direct, @trap_cps] : !closure
     func.return %created
   }}
 }}"#
@@ -1652,10 +1647,10 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, &source("@left::@helper"));
         lower_prepared_closures(&mut ctx, module).unwrap();
-        let ir = print_module(&ctx, module.op());
+        let ir = module.op().display(&ctx).to_string();
         assert!(!ir.contains("closure.new"), "{ir}");
         assert!(
-            ir.contains(r#"tribute_rt.convention_table {entries = [@left::@helper, @trap_evidence_direct, @trap_cps]} : tribute_rt.convention_table_ref"#),
+            ir.contains(r#"tribute_rt.convention_table [@left::@helper, @trap_evidence_direct, @trap_cps] : tribute_rt.convention_table_ref"#),
             "{ir}"
         );
 
@@ -1663,7 +1658,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, &source("@helper"));
         lower_prepared_closures(&mut ctx, module).unwrap();
-        let ir = print_module(&ctx, module.op());
+        let ir = module.op().display(&ctx).to_string();
         assert!(ir.contains("closure.new"), "{ir}");
         assert!(!ir.contains("tribute_rt.convention_table"), "{ir}");
     }
@@ -1685,19 +1680,19 @@ mod tests {
     func.unreachable
   }}
   func.func @run(%callee: !outer, %evidence: {evidence}, %done: core.i32) -> core.never attributes {{tribute.calling_convention = "cps"}} {{
-    %function = func.constant {{func_ref = @actual_fn}} : func.func_sig<({evidence}, core.i32, core.i1) -> core.never>
+    %function = func.constant @actual_fn : ({evidence}, core.i32, core.i1) -> core.never
     %environment = adt.ref_null {{type = tribute_rt.anyref}} : tribute_rt.anyref
     %pack = adt.struct_new %function, %environment {{type = !_closure}} : !_closure
-    %argument = core.unrealized_conversion_cast %pack : !actual
-    func.tail_call_indirect %callee, %evidence, %done, %argument {{tribute.calling_convention = "cps"}}
+    %argument = core.unrealized_conversion_cast %pack : !_closure to !actual
+    func.tail_call_indirect %callee(%evidence, %done, %argument) attributes {{tribute.calling_convention = "cps"}} : ({evidence}, core.i32, !expected) -> core.never
   }}
 }}"#
             ),
         );
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
 
         assert!(lower_prepared_closures(&mut ctx, module).is_err());
 
-        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
     }
 }

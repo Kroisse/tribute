@@ -11,18 +11,17 @@ use trunk_ir::refs::{BlockRef, TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, Location};
 
 use crate::ast::{
-    AbilityRow, Arm, Expr, ExprKind, FieldInit, Pattern, PatternKind, ResolvedRef, Stmt, TypeKind,
-    TypedRef,
+    AbilityRow, Arm, Expr, ExprKind, FieldInit, LiteralPattern, Pattern, PatternKind, ResolvedRef,
+    Stmt, TypeKind, TypedRef,
 };
 use crate::ast_to_ir::context::IrLoweringCtx;
 use crate::ast_to_ir::lower::IrBuilder;
 
 use super::callable::{
-    CallPosition, RowArguments, attach_evidence_plan, ends_with_tail_call, lower_become,
-    lower_call, lower_function_ref, lower_handle, lower_lambda,
+    CallPosition, RowArguments, attach_evidence_plan, ends_with_tail_call, lower_alias_reference,
+    lower_become, lower_call, lower_function_ref, lower_handle, lower_lambda,
 };
 use super::declarations::Declarations;
-use super::local_callables;
 use super::nominal::expr_type_for_id;
 
 pub(super) fn lower_expr<'db>(
@@ -34,7 +33,7 @@ pub(super) fn lower_expr<'db>(
     match *expr.kind {
         ExprKind::NatLit(value) => {
             let ty = builder.ctx.i32_type(builder.ir);
-            let value = arith::Const::operands()
+            let value = arith::Constant::operands()
                 .value(Attribute::Int(value as i128))
                 .results(ty)
                 .build(builder.ir, location);
@@ -43,7 +42,7 @@ pub(super) fn lower_expr<'db>(
         }
         ExprKind::IntLit(value) => {
             let ty = builder.ctx.i32_type(builder.ir);
-            let value = arith::Const::operands()
+            let value = arith::Constant::operands()
                 .value(Attribute::Int(value as i128))
                 .results(ty)
                 .build(builder.ir, location);
@@ -52,7 +51,7 @@ pub(super) fn lower_expr<'db>(
         }
         ExprKind::BoolLit(value) => {
             let ty = builder.ctx.bool_type(builder.ir);
-            let value = arith::Const::operands()
+            let value = arith::Constant::operands()
                 .value(Attribute::Bool(value))
                 .results(ty)
                 .build(builder.ir, location);
@@ -61,7 +60,7 @@ pub(super) fn lower_expr<'db>(
         }
         ExprKind::FloatLit(value) => {
             let ty = builder.ctx.f64_type(builder.ir);
-            let value = arith::Const::operands()
+            let value = arith::Constant::operands()
                 .value(Attribute::FloatBits(value.value().to_bits()))
                 .results(ty)
                 .build(builder.ir, location);
@@ -71,7 +70,7 @@ pub(super) fn lower_expr<'db>(
         ExprKind::Nil => Some(builder.emit_nil(location)),
         ExprKind::RuneLit(value) => {
             let ty = builder.ctx.i32_type(builder.ir);
-            let value = arith::Const::operands()
+            let value = arith::Constant::operands()
                 .value(Attribute::Int(value as i32 as i128))
                 .results(ty)
                 .build(builder.ir, location);
@@ -110,7 +109,6 @@ pub(super) fn lower_expr<'db>(
                     name.clone(),
                     RowArguments::Instance(expr.id),
                     declarations,
-                    None,
                 ))
             }
             ResolvedRef::AbilityOp { .. } => {
@@ -204,7 +202,7 @@ pub(super) fn lower_expr<'db>(
             )
         }
         ExprKind::Become { call } => lower_become(builder, location, call, declarations),
-        ExprKind::Lambda { params, body } => {
+        ExprKind::Lambda { params, body, .. } => {
             let signature = declarations
                 .lambda_signatures
                 .get(&expr.id)
@@ -269,6 +267,16 @@ pub(super) fn lower_expr<'db>(
                 Some(last) if exhaustive => &arms[..=last],
                 _ => &arms[..],
             };
+            if exhaustive && let Some(switch) = literal_case_switch(builder, scrutinee, arms) {
+                return lower_case_switch(
+                    builder,
+                    location,
+                    scrutinee,
+                    result_ty,
+                    switch,
+                    declarations,
+                );
+            }
             lower_case_chain(
                 builder,
                 location,
@@ -611,6 +619,106 @@ pub(super) fn lower_case_chain<'db>(
     }
 }
 
+/// The arms of a case that selects by integer literal: each case value with
+/// the first arm it selects, and the catch-all arm.
+struct CaseSwitch<'a, 'db> {
+    cases: Vec<(i64, &'a Arm<TypedRef<'db>>)>,
+    default: &'a Arm<TypedRef<'db>>,
+}
+
+/// The switch an exhaustive case lowers to when every arm but the last is an
+/// unguarded `Nat`, `Int`, or `Rune` literal, possibly bound with `as`, and
+/// the last is an unguarded catch-all. A value an earlier arm selects is not
+/// a case of a later one. A case value is the literal's 32-bit pattern, so a
+/// `Nat` of 2^31 or more is a negative case. A case with fewer than two values
+/// or a scrutinee that is not `core.i32` stays a chain.
+fn literal_case_switch<'a, 'db>(
+    builder: &mut IrBuilder<'_, 'db>,
+    scrutinee: ValueRef,
+    arms: &'a [Arm<TypedRef<'db>>],
+) -> Option<CaseSwitch<'a, 'db>> {
+    fn literal_value<V>(pattern: &Pattern<V>) -> Option<i64> {
+        match &*pattern.kind {
+            PatternKind::Literal(LiteralPattern::Nat(n)) => {
+                u32::try_from(*n).ok().map(|n| i64::from(n as i32))
+            }
+            PatternKind::Literal(LiteralPattern::Int(n)) => i32::try_from(*n).ok().map(i64::from),
+            PatternKind::Literal(LiteralPattern::Rune(c)) => Some(i64::from(*c as i32)),
+            PatternKind::As { pattern, .. } => literal_value(pattern),
+            _ => None,
+        }
+    }
+    fn catch_all<V>(pattern: &Pattern<V>) -> bool {
+        match &*pattern.kind {
+            PatternKind::Wildcard | PatternKind::Bind { .. } => true,
+            PatternKind::As { pattern, .. } => catch_all(pattern),
+            _ => false,
+        }
+    }
+
+    if builder.ir.value_ty(scrutinee) != builder.ctx.i32_type(builder.ir) {
+        return None;
+    }
+    let (default, selecting) = arms.split_last()?;
+    if default.guard.is_some() || !catch_all(&default.pattern) {
+        return None;
+    }
+    let mut cases: Vec<(i64, &Arm<TypedRef<'db>>)> = Vec::with_capacity(selecting.len());
+    for arm in selecting {
+        if arm.guard.is_some() {
+            return None;
+        }
+        let value = literal_value(&arm.pattern)?;
+        if cases.iter().all(|&(seen, _)| seen != value) {
+            cases.push((value, arm));
+        }
+    }
+    (cases.len() >= 2).then_some(CaseSwitch { cases, default })
+}
+
+/// Lower a case that selects by integer literal to one `scf.index_switch`
+/// on its scrutinee, each arm in its own region and the catch-all arm as
+/// the default.
+fn lower_case_switch<'db>(
+    builder: &mut IrBuilder<'_, 'db>,
+    location: Location,
+    scrutinee: ValueRef,
+    result_ty: TypeRef,
+    switch: CaseSwitch<'_, 'db>,
+    declarations: &mut Declarations<'db>,
+) -> Option<ValueRef> {
+    let mut arm_region = |builder: &mut IrBuilder<'_, 'db>, arm| {
+        build_case_arm_region(
+            builder.ctx,
+            builder.ir,
+            CaseArmRequest {
+                location,
+                scrutinee,
+                arm,
+                rest: &[],
+                result_ty,
+                exhaustive: true,
+            },
+            declarations,
+        )
+    };
+    let mut cases = Vec::with_capacity(switch.cases.len());
+    for (value, arm) in switch.cases {
+        cases.push((value, arm_region(builder, arm)?));
+    }
+    let default_region = arm_region(builder, switch.default)?;
+    let lowered = scf::IndexSwitch::build_with_arms(
+        builder.ir,
+        location,
+        scrutinee,
+        [result_ty],
+        cases,
+        default_region,
+    );
+    builder.ir.push_op(builder.block, lowered.op_ref());
+    Some(builder.ir.op_result(lowered.op_ref(), 0))
+}
+
 pub(super) struct CaseArmRequest<'a, 'db> {
     pub(super) location: Location,
     pub(super) scrutinee: ValueRef,
@@ -761,7 +869,7 @@ pub(super) fn emit_bool(
     value: bool,
 ) -> ValueRef {
     let ty = builder.ctx.bool_type(builder.ir);
-    let op = arith::Const::operands()
+    let op = arith::Constant::operands()
         .value(Attribute::Bool(value))
         .results(ty)
         .build(builder.ir, location);
@@ -813,8 +921,10 @@ pub(super) fn lower_local_reference<'db>(
     local: crate::ast::LocalId,
     declarations: &Declarations<'db>,
 ) -> Option<ValueRef> {
-    let value = local_callables::lookup(builder.ctx, node, declarations)
-        .or_else(|| builder.ctx.lookup(local))?;
+    if let Some(value) = lower_alias_reference(builder, node, local, declarations) {
+        return Some(value);
+    }
+    let value = builder.ctx.lookup(local)?;
     let trunk_ir::refs::ValueDef::OpResult(lambda, _) = builder.ir.value_def(value) else {
         return Some(value);
     };
@@ -855,17 +965,20 @@ pub(super) fn lower_statement<'db>(
 ) {
     match statement {
         Stmt::Let { pattern, value, .. } => {
-            let lowered = local_callables::materialize(builder, &pattern, &value, declarations)
-                .or_else(|| {
-                    let lambda = matches!(&*value.kind, ExprKind::Lambda { .. });
-                    let lowered = lower_expr(builder, value, declarations)?;
-                    if lambda {
-                        quantify_local_rows(builder, pattern.id, lowered, declarations);
-                    }
-                    Some(lowered)
-                });
-            if let Some(value) = lowered {
-                bind_pattern(builder, &pattern, value);
+            if let PatternKind::Bind {
+                local_id: Some(local),
+                ..
+            } = &*pattern.kind
+                && declarations.aliases.contains(*local)
+            {
+                return;
+            }
+            let lambda = matches!(&*value.kind, ExprKind::Lambda { .. });
+            if let Some(lowered) = lower_expr(builder, value, declarations) {
+                if lambda {
+                    quantify_local_rows(builder, pattern.id, lowered, declarations);
+                }
+                bind_pattern(builder, &pattern, lowered);
             }
         }
         Stmt::Expr { expr, .. } => {

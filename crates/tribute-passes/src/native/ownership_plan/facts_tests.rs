@@ -7,7 +7,6 @@ use std::sync::Arc;
 
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::parser::parse_test_module;
-use trunk_ir::printer::print_module;
 
 use super::*;
 
@@ -22,7 +21,7 @@ const BORROW_FIXTURE: &str = r#"core.module @test {
   }
   func.func @load(%owner: !BoxRef) -> core.i32 {
     %child = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
-    %value = func.call %child {callee = @observe} : core.i32
+    %value = func.call @observe(%child) : (!ChildRef) -> core.i32
     func.return %value
   }
 }"#;
@@ -115,7 +114,7 @@ fn entry_contract_views_share_one_proof_and_keep_declared_borrows() {
   !Layout = adt.struct<R(value: core.i32)>
   func.func @foreign(%value: !R) -> core.i32 attributes {abi = "C"}
   func.func @observe(%value: !R) -> core.i32 {
-    %result = func.call %value {callee = @foreign} : core.i32
+    %result = func.call @foreign(%value) : (!R) -> core.i32
     func.return %result
   }
   func.func @escape(%value: !R) -> !R {
@@ -264,7 +263,7 @@ fn malformed_projection_fails_closed_without_publishing_facts() {
     );
     let op = function_op(&ctx, module, "load");
     let mut cache = AnalysisCache::new();
-    let before = print_module(&ctx, module.op());
+    let before = module.op().display(&ctx).to_string();
 
     // The module boundary still validates; only the function contract fails.
     assert!(
@@ -280,7 +279,7 @@ fn malformed_projection_fails_closed_without_publishing_facts() {
     );
     // A retry revalidates from scratch instead of reusing a partial result.
     assert!(cache.get::<NativeOwnershipFunctionFacts>(&ctx, op).is_err());
-    assert_eq!(print_module(&ctx, module.op()), before);
+    assert_eq!(module.op().display(&ctx).to_string(), before);
 }
 
 #[test]

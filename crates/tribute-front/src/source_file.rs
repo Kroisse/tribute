@@ -58,9 +58,8 @@ pub struct SourceFiles {
 /// creating a file it looked for invalidates it.
 #[salsa::input(debug)]
 pub struct FileEntry {
-    #[returns(ref)]
     pub uri: Uri<String>,
-    #[returns(copy)]
+    #[returns(as_ref)]
     pub source: Option<SourceCst>,
 }
 
@@ -113,7 +112,7 @@ impl FileProvider {
 
     /// The source of the requested or set file whose URI has the source id
     /// `source`, the id its spans carry.
-    pub fn find(&self, db: &dyn salsa::Database, source: u64) -> Option<SourceCst> {
+    pub fn find<'db>(&self, db: &'db dyn salsa::Database, source: u64) -> Option<&'db SourceCst> {
         let entries = self.entries.lock().expect("file entries lock");
         entries
             .iter()
@@ -138,7 +137,7 @@ impl FileProvider {
             return source;
         };
         match (entry.source(db), text) {
-            (Some(source), Some(text)) => {
+            (Some(&source), Some(text)) => {
                 let tree = parse_rope(&text, None);
                 source.set_text(db).to(text);
                 source.set_tree(db).to(tree);
@@ -169,7 +168,7 @@ impl std::fmt::Debug for FileProvider {
 /// The source of the file at `uri`, or `None` if there is none or the
 /// database has no [`SourceFiles`]. Inside a query, records a dependency on
 /// whether the file exists.
-pub fn source_at(db: &dyn salsa::Database, uri: &Uri<String>) -> Option<SourceCst> {
+pub fn source_at<'db>(db: &'db dyn salsa::Database, uri: &Uri<String>) -> Option<&'db SourceCst> {
     file_at(db, uri)?.source(db)
 }
 

@@ -40,6 +40,110 @@ fn classify(x: Nat) -> Nat {
     assert_snapshot!(ir_text);
 }
 
+/// A rune case selects by the rune's code point. A value an earlier arm
+/// selects is not a case of a later arm, an `as` binding binds the scrutinee
+/// in its arm, and a catch-all binding is the default.
+#[salsa_test]
+fn test_case_rune_literal_switch(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn kind(c: Rune) -> Rune {
+    case c {
+        ?a -> ?x
+        ?b as found -> found
+        ?a -> ?y
+        other -> other
+    }
+}
+"#,
+    );
+
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert_snapshot!(ir_text);
+}
+
+/// A case lowers to a switch only when every arm but a final catch-all
+/// selects by an unguarded integer literal and two values or more are
+/// selected; the others stay a chain of `scf.if`.
+#[salsa_test]
+fn test_case_without_a_literal_switch_stays_a_chain(db: &salsa::DatabaseImpl) {
+    for body in [
+        "case x {\n        0 && flag -> 1\n        1 -> 2\n        _ -> 3\n    }",
+        "case x {\n        0 -> 1\n        _ -> 2\n    }",
+        "case flag {\n        True -> 1\n        False -> 2\n    }",
+        "case x {\n        0 -> 1\n        n && n > 5 -> n\n        1 -> 2\n        _ -> 3\n    }",
+    ] {
+        let text = format!("fn pick(x: Nat, flag: Bool) -> Nat {{\n    {body}\n}}\n");
+        let source = SourceCst::from_source_str(db, "test.trb", &text);
+        let ir_text = run_ast_pipeline_with_ir(db, source);
+        assert!(!ir_text.contains("scf.index_switch"), "{ir_text}");
+        assert!(ir_text.contains("scf.if"), "{ir_text}");
+    }
+}
+
+/// Literal patterns accept the whole current representation of their type,
+/// as literal expressions do. A `Nat` case of 2^31 or more is its 32-bit
+/// pattern.
+#[salsa_test]
+fn test_case_literals_span_the_32_bit_representation(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn nat(x: Nat) -> Nat {
+    case x {
+        1073741824 -> 1
+        4294967295 -> 2
+        _ -> 0
+    }
+}
+
+fn int(x: Int) -> Int {
+    case x {
+        -2147483648 -> +1
+        2147483647i -> +2
+        _ -> +0
+    }
+}
+"#,
+    );
+
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert_snapshot!(ir_text);
+}
+
+/// A literal outside the current representation of its type is reported in
+/// a pattern and in an expression alike.
+#[salsa_test]
+fn test_out_of_range_literals_are_reported(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn pattern(x: Nat) -> Nat {
+    case x {
+        4294967296 -> 1
+        _ -> 0
+    }
+}
+
+fn expression() -> Int {
+    -2147483649
+}
+"#,
+    );
+
+    assert_eq!(
+        ast_pipeline_error_messages(db, source),
+        [
+            "integer literal exceeds the current implementation limit for `Nat`",
+            "integer literal exceeds the current implementation limit for `Int`",
+        ]
+    );
+}
+
 /// Test case expression with Int literals (negative numbers).
 /// Pattern type (Int) should unify with scrutinee type (Int).
 #[salsa_test]
@@ -433,8 +537,8 @@ fn exhaustiveness_outcome(
     let source = SourceCst::from_source_str(db, "test.trb", source);
     let messages = common::ast_pipeline_diagnostics(db, source)
         .into_iter()
-        .filter(|diagnostic| diagnostic.inner.severity == severity)
-        .map(|diagnostic| diagnostic.inner.message)
+        .filter(|diagnostic| diagnostic.severity == severity)
+        .map(|diagnostic| diagnostic.message.to_owned())
         .collect();
     let exhaustive = tribute_front::query::type_check_output(db, source)
         .expect("type checking should produce output")
@@ -808,9 +912,9 @@ fn errors_without_prelude(db: &salsa::DatabaseImpl, source: &str) -> Vec<String>
     tribute_front::analysis::diagnostics(db, source, *tribute_front::analysis::builtins(db))
         .into_iter()
         .filter(|diagnostic| {
-            diagnostic.inner.severity == tribute_core::diagnostic::DiagnosticSeverity::Error
+            diagnostic.severity == tribute_core::diagnostic::DiagnosticSeverity::Error
         })
-        .map(|diagnostic| diagnostic.inner.message.clone())
+        .map(|diagnostic| diagnostic.message.to_owned())
         .collect()
 }
 
@@ -856,6 +960,37 @@ fn unused(value: a, name: String) -> Nat {
 }
 "#,
     );
+    assert_eq!(
+        ast_pipeline_error_messages(db, source),
+        Vec::<String>::new()
+    );
+}
+
+/// An arithmetic operator in a `case` arm whose operands are both `case`
+/// results is selected by the operands' common results.
+#[salsa_test]
+fn test_operator_on_case_results_in_case_arm(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn add() -> Nat {
+    case 1 { _ -> { case 9 { _ -> 5 } } + { case 9 { _ -> 5 } } }
+}
+
+fn mul() -> Nat {
+    case 1 { _ -> { case 9 { _ -> 5 } } * { case 9 { _ -> 5 } } }
+}
+
+fn block_operand() -> Nat {
+    case 1 { _ -> { {
+        let v0 = 0
+        { case 9 { _ -> 5 } }
+    } + { case 9 { _ -> 5 } } } }
+}
+"#,
+    );
+
     assert_eq!(
         ast_pipeline_error_messages(db, source),
         Vec::<String>::new()

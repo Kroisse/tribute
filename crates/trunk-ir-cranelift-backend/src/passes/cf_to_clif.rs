@@ -164,7 +164,6 @@ pub fn rebuild_op_as(
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
 
     #[test]
     fn unsigned_cases_are_the_bit_patterns_clif_switch_can_hold() {
@@ -177,18 +176,18 @@ mod tests {
     #[test]
     fn switch_cases_become_bit_patterns_of_the_discriminant_width() {
         for (discriminant_ty, expected) in [
-            ("core.i8", "[7, 255]"),
-            ("core.i32", "[7, 4294967295]"),
-            ("core.i64", "[7, 18446744073709551615]"),
+            ("core.i8", "7: ^bb2, 255: ^bb3"),
+            ("core.i32", "7: ^bb2, 4294967295: ^bb3"),
+            ("core.i64", "7: ^bb2, 18446744073709551615: ^bb3"),
         ] {
             let mut ctx = IrContext::new();
             let module = parse_test_module(
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
-  clif.func {{sym_name = "select", type = clif.func_sig<({discriminant_ty}) -> ()>}} {{
-    ^entry(%choice: {discriminant_ty}):
-      cf.switch %choice [^fallback, ^first, ^second] {{cases = [7, -1]}}
+  clif.func @select(%choice: {discriminant_ty}) {{
+    ^entry:
+      cf.switch %choice : {discriminant_ty}, [default: ^fallback, 7: ^first, -1: ^second]
     ^fallback:
       clif.return
     ^first:
@@ -202,11 +201,9 @@ mod tests {
 
             lower(&mut ctx, module, TypeConverter::new()).expect("cf.switch lowers");
 
-            let printed = print_module(&ctx, module.op());
+            let printed = module.op().display(&ctx).to_string();
             assert!(
-                printed.contains(&format!(
-                    "clif.switch %0 [^bb1, ^bb2, ^bb3] {{cases = {expected}}}"
-                )),
+                printed.contains(&format!("clif.switch %0, ^bb1 [{expected}]")),
                 "{printed}"
             );
         }

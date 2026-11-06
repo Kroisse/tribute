@@ -143,7 +143,7 @@ fn analyze_consts(ctx: &IrContext, module: Module) -> NativeConstAnalysis {
 /// ```text
 /// %data_ptr = clif.symbol_addr @__tribute_rodata_0
 /// %len = clif.iconst 5
-/// %raw = clif.call @__tribute_alloc(40)  // RC(8) + ptr, len, owner, cap
+/// %raw = clif.call @__tribute_alloc(40) : (core.i64) -> core.ptr  // RC(8) + ptr, len, owner, cap
 /// // Store RC header
 /// clif.store 1, %raw, offset=0          // refcount
 /// clif.store 0, %raw, offset=4          // rtti_idx
@@ -638,8 +638,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  clif.data {sym_name = "__tribute_rodata_0", bytes = b"kept", align = 1}
-  clif.data {sym_name = "aligned", bytes = b"wide", align = 8}
+  clif.data @__tribute_rodata_0(b"kept") align 1
+  clif.data @aligned(b"wide") align 8
   func.func @__tribute_rodata_1() -> core.nil {
     func.return
   }

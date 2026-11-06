@@ -90,7 +90,7 @@ fn main() -> Nil {}
     );
     let errors: Vec<_> = frontend_diagnostics(db, source)
         .into_iter()
-        .filter(|diagnostic| diagnostic.inner.severity == DiagnosticSeverity::Error)
+        .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
         .collect();
     assert!(
         !errors.is_empty(),
@@ -99,7 +99,7 @@ fn main() -> Nil {}
     assert!(
         errors
             .iter()
-            .any(|diagnostic| diagnostic.inner.message.contains("ability row mismatch")),
+            .any(|diagnostic| diagnostic.message.contains("ability row mismatch")),
         "{errors:?}"
     );
 }
@@ -145,18 +145,52 @@ fn main() ->{{Io}} Nil {{ print_line(run().to_string) }}
     }
 }
 
+/// A `let` shares its data type with every use, so direct calls of one
+/// local identity at `Int` and `Bool` are rejected.
+#[salsa_test]
+fn local_direct_calls_share_one_data_type(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "local_direct_calls.trb",
+        &format!(
+            "{}\n{}",
+            common::PRINT_EXTERNS,
+            r#"
+use std::io::{Io, print_line}
+fn main() ->{Io} Nil {
+    let identity = fn(x) x
+    print_line(identity(+3).to_string)
+    case identity(True) {
+        True -> print_line({ +4 }.to_string)
+        False -> print_line({ +0 }.to_string)
+    }
+}
+"#
+        ),
+    );
+    let errors: Vec<_> = frontend_diagnostics(db, source)
+        .into_iter()
+        .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
+        .map(|diagnostic| diagnostic.message.to_string())
+        .collect();
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("expected `Bool`, found `Int`")
+                || error.contains("expected `Int`, found `Bool`")),
+        "{errors:?}"
+    );
+}
+
 #[test]
-fn existing_generalized_local_direct_calls() {
+fn local_direct_calls_at_one_data_type_run() {
     assert_native(
         r#"
 use std::io::{Io, print_line}
 fn main() ->{Io} Nil {
     let identity = fn(x) x
     print_line(identity(+3).to_string)
-    case identity(True) {
-        True -> print_line({{ +4 }}.to_string)
-        False -> print_line({{ +0 }}.to_string)
-    }
+    print_line(identity(+4).to_string)
 }
 "#,
         b"3\n4\n",
@@ -265,19 +299,60 @@ fn local_helper_with_a_nested_callable_signature() {
     );
 }
 
+/// An alias of a helper is not a lambda: its uses share one row, which the
+/// pure callback leaves open.
 #[test]
-fn local_helper_alias_and_capture_keep_their_rows() {
+fn local_helper_alias_and_capture_share_one_row() {
     assert_state_program(
         r#"fn body() ->{State(Int)} Int {
     let k = +100
     let twice = fn(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(f(x + k)) }
     let alias = twice
-    let a = alias(fn(x: Int) ->{} Int { x + +1 }, +1)
+    let a = alias(fn(x: Int) { x + +1 }, +1)
     alias(fn(x: Int) { State::set(State::get() + x)
                        State::get() }, a)
 }"#,
         "426",
     );
+}
+
+/// Uses of a value that is not a lambda or a function reference share its
+/// rows, so a callback closed to `{}` fixes the row every other use sees.
+#[salsa_test]
+fn shared_row_rejects_callbacks_with_different_rows(db: &salsa::DatabaseImpl) {
+    for (name, binding) in [
+        (
+            "alias.trb",
+            "let helper = fn(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(f(x)) }\n    let twice = helper",
+        ),
+        ("factory.trb", "let twice = make()"),
+    ] {
+        let text = format!(
+            r#"
+ability State(s) {{ fn get() -> s }}
+fn make() ->{{}} fn(fn(Int) ->{{e}} Int, Int) ->{{e}} Int {{
+    fn(f: fn(Int) ->{{e}} Int, x: Int) ->{{e}} Int {{ f(f(x)) }}
+}}
+fn body() ->{{State(Int)}} Int {{
+    {binding}
+    let a = twice(fn(x: Int) ->{{}} Int {{ x + +1 }}, +1)
+    twice(fn(x: Int) {{ State::get() + x }}, a)
+}}
+fn main() -> Nil {{}}
+"#
+        );
+        let source = SourceCst::from_source_str(db, name, &text);
+        let errors: Vec<_> = frontend_diagnostics(db, source)
+            .into_iter()
+            .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
+            .collect();
+        assert!(
+            errors
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("ability row mismatch")),
+            "{name}: {errors:?}"
+        );
+    }
 }
 
 #[test]
@@ -356,16 +431,32 @@ fn main() ->{Io} Nil {
     );
 }
 
-/// A pure factory's result is generalized like a lambda but stays one value.
+/// Sibling helpers that write one row name quantify rows of their own.
 #[test]
-fn local_helper_from_a_factory_takes_callbacks_with_different_rows() {
+fn sibling_local_helpers_with_one_row_name_keep_their_own_rows() {
+    assert_state_program(
+        r#"fn call(f: fn() ->{e} Int) ->{e} Int { f() }
+fn body() ->{State(Int)} Int {
+    let wrap = fn(k: fn() ->{e} Int) { fn() { k() } }
+    let reference = fn(k: fn() ->{e} Int) { call }
+    let pure = wrap(fn() ->{} Int { +2 })
+    let named = reference(fn() { State::get() })
+    pure() + named(fn() ->{} Int { +4 })
+}"#,
+        "6",
+    );
+}
+
+/// A factory's result is one value whose uses share its row.
+#[test]
+fn local_helper_from_a_factory_shares_one_row() {
     assert_state_program(
         r#"fn make() ->{} fn(fn(Int) ->{e} Int, Int) ->{e} Int {
     fn(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(f(x)) }
 }
 fn body() ->{State(Int)} Int {
     let twice = make()
-    let a = twice(fn(x: Int) ->{} Int { x + +1 }, +1)
+    let a = twice(fn(x: Int) { x + +1 }, +1)
     twice(fn(x: Int) { State::set(State::get() + x)
                        State::get() }, a)
 }"#,
@@ -496,5 +587,207 @@ fn body() ->{State(Int)} Int {
                  State::get() })
 }"#,
         "11",
+    );
+}
+
+/// Named functions, closed and open, passed to a generalized computation
+/// result run through the factory's helper.
+#[test]
+fn named_functions_passed_to_a_generalized_result_run() {
+    common::assert_output_on_both_targets(
+        "generalized_named_arguments.trb",
+        r#"
+use std::io::{Io, print_line}
+fn make() ->{} fn(fn(Int) ->{e} Int, Int) ->{e} Int {
+    fn(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(f(x)) }
+}
+fn inc(x: Int) ->{} Int { x + +1 }
+fn add_two(x: Int) -> Int { x + +2 }
+fn main() ->{Io} Nil {
+    let twice = make()
+    print_line(twice(inc, +1).to_string)
+    print_line(twice(add_two, +1).to_string)
+}
+"#,
+        "3\n5",
+    );
+}
+
+/// A `let` shares its data-type variables with every use: a local callable
+/// whose parameter carries no annotation takes the type its uses select.
+#[test]
+fn unannotated_local_builds_the_instance_of_its_uses() {
+    common::assert_output_on_both_targets(
+        "local_nominal.trb",
+        &format!(
+            "{}\n{}",
+            common::PRINT_EXTERNS,
+            r#"
+use std::io::{Io, print_line}
+enum Boxed(a) { Box(a), EmptyBox }
+fn main() ->{Io} Nil {
+    let mk = fn(x) { Boxed::Box(x) }
+    let first = case mk(+41) {
+        .Box(n) -> n
+        .EmptyBox -> +0
+    }
+    let second = case mk(+1) {
+        .Box(n) -> n
+        .EmptyBox -> +0
+    }
+    print_line(first.to_string)
+    print_line(second.to_string)
+}
+"#
+        ),
+        "41\n1",
+    );
+}
+
+/// An ability data argument of a `let`-bound callable is shared, so the
+/// use's row fixes it.
+#[test]
+fn local_reader_takes_the_state_of_its_use() {
+    common::assert_output_on_both_targets(
+        "local_reader.trb",
+        &format!(
+            "{}\n{}",
+            common::PRINT_EXTERNS,
+            r#"
+use std::io::{Io, print_line}
+ability State(s) { op get() -> s }
+fn run() ->{State(Int)} Int {
+    let read = fn() { State::get() }
+    read() + read() + +1
+}
+fn main() ->{Io} Nil {
+    let value = handle run() {
+        do result { result }
+        op State::get() { resume +20 }
+    }
+    print_line(value.to_string)
+}
+"#
+        ),
+        "41",
+    );
+}
+
+/// A local callable keeps using the enclosing function's type parameter at
+/// each specialization of that function.
+#[test]
+fn local_using_an_enclosing_parameter_follows_its_specialization() {
+    common::assert_output_on_both_targets(
+        "local_enclosing.trb",
+        &format!(
+            "{}\n{}",
+            common::PRINT_EXTERNS,
+            r#"
+use std::io::{Io, print_line}
+fn twice(x: a, f: fn(a) ->{} a) -> a {
+    let step = fn(v) { f(v) }
+    step(step(x))
+}
+fn main() ->{Io} Nil {
+    print_line(twice(+3, fn(n: Int) { n + +1 }).to_string)
+    print_line(twice("a", fn(s: String) { s <> "b" }))
+}
+"#
+        ),
+        "5\nabb",
+    );
+}
+
+/// Row variables of a pure `let` are still quantified: one local callable
+/// runs callbacks with different rows.
+#[test]
+fn row_polymorphic_local_runs_callbacks_of_different_rows() {
+    common::assert_output_on_both_targets(
+        "local_rows.trb",
+        &format!(
+            "{}\n{}",
+            common::PRINT_EXTERNS,
+            r#"
+use std::io::{Io, print_line}
+fn main() ->{Io} Nil {
+    let run = fn(f) { f() }
+    let pure = run(fn() { +1 })
+    let printed = run(fn() {
+        print_line("effect")
+        +2
+    })
+    print_line({ pure + printed }.to_string)
+}
+"#
+        ),
+        "effect\n3",
+    );
+}
+
+/// A local whose uses fix none of its data types lowers on both targets:
+/// the variables nothing fixes stay owned by the function body.
+#[test]
+fn unused_generic_locals_lower() {
+    common::assert_output_on_both_targets(
+        "unused_locals.trb",
+        &format!(
+            "{}\n{}",
+            common::PRINT_EXTERNS,
+            r#"
+use std::io::{Io, print_line}
+enum Boxed(a) { Box(a), EmptyBox }
+fn main() ->{Io} Nil {
+    let mk = fn(x) { Boxed::Box(x) }
+    let id = fn(x) x
+    let empty = Boxed::EmptyBox
+    print_line("ok")
+}
+"#
+        ),
+        "ok",
+    );
+}
+
+/// A computed value whose row occurs in a parameter type takes the row its
+/// use fixes, so a site with a weaker class calls the entry it was built for.
+#[test]
+fn computed_value_takes_the_row_of_a_pure_use() {
+    common::assert_output_on_both_targets(
+        "computed_value_pure_use.trb",
+        r#"
+use std::io::{Io, print_line}
+
+fn make() ->{} fn(fn() ->{e} Int) ->{e} Int {
+    fn(k: fn() ->{e} Int) ->{e} Int { k() }
+}
+
+fn apply_pure(f: fn(fn() ->{} Int) ->{} Int) -> Int {
+    f(fn() { +3 })
+}
+
+fn main() ->{Io} Nil {
+    let h = make()
+    let r = apply_pure(h)
+    print_line(r.to_string)
+}
+"#,
+        "3",
+    );
+}
+
+/// A chain of named-function aliases references the function again at each
+/// use, so a use closed to `{}` leaves the other use its own row.
+#[test]
+fn named_function_alias_chain_takes_callbacks_with_different_rows() {
+    assert_state_program(
+        r#"fn twice(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(f(x)) }
+fn body() ->{State(Int)} Int {
+    let f = twice
+    let g = f
+    let a = g(fn(x: Int) ->{} Int { x + +1 }, +1)
+    g(fn(x: Int) { State::set(State::get() + x)
+                   State::get() }, a)
+}"#,
+        "26",
     );
 }

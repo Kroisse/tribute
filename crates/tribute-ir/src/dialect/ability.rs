@@ -1,8 +1,11 @@
 //! Ability dialect — evidence-based handler dispatch.
 
 mod frames;
+mod syntax;
 
-pub use frames::{CpsClosure, HandlerBinding, NotNever, OperationKind};
+pub use crate::dialect::tribute_control::{HandlerBinding, OperationKind};
+pub use frames::{CpsClosure, NotNever};
+pub use syntax::{Dispatchers, HandlerArms};
 
 use super::closure::Closure;
 use super::tribute_control::EvidenceStep;
@@ -13,7 +16,7 @@ mod ability {
     /// One ability instance the module names, and its operations.
     ///
     /// ```text
-    /// ability.decl {sym_name = "<instance key>"} {
+    /// ability.decl @State {
     ///   ability.operation {kind = "op", op_name = "get", param_types = [], result_type = ResultType}
     ///   ability.operation {kind = "op", op_name = "set", param_types = [ValueType], result_type = core.nil}
     /// }
@@ -54,6 +57,7 @@ mod ability {
     ///   naming the instance remains. The target's evidence lowering consumes
     ///   the last reference and removes the declaration. A declaration is not
     ///   a callable definition, so global DCE does not remove it.
+    #[asm_format(symbol(sym_name) attr_dict region(operations))]
     fn decl(sym_name: Attr<String>) {
         #[region(operations)]
         {}
@@ -66,6 +70,7 @@ mod ability {
     /// `param_types: [Type]`, and `result_type: Type`: the parameter types in
     /// source declaration order and the result type. These types are at
     /// module level, so they cannot have a row tail.
+    #[asm_format(attr_dict_bare)]
     fn operation(
         op_name: Attr<String>,
         kind: Attr<String>,
@@ -83,6 +88,18 @@ mod ability {
     /// runtime-unique prompt identity for the delimiter and shares it across
     /// every instance. The body entry block receives the extended evidence. Every body path ends in a proper tail transfer or
     /// `func.unreachable`.
+    ///
+    /// ```text
+    /// ability.handle_dispatch %evidence, %prompt_tag [@State: %dispatcher0, @Console: %dispatcher1] {
+    /// ^body(%ev: Evidence):
+    ///   ...
+    /// }
+    /// ```
+    ///
+    /// The format writes each ability with its dispatcher. The verifier
+    /// checks that there is one dispatcher per ability.
+    #[verify]
+    #[asm_format(evidence "," prompt_tag custom(Dispatchers(abilities, dispatchers)) attr_dict region(body))]
     #[implements(CallableExit)]
     fn handle_dispatch(
         abilities: Attr<[SymbolRef]>,
@@ -100,11 +117,11 @@ mod ability {
     /// The result flows inline — no CPS transformation is needed.
     ///
     /// ```text
-    /// %result = ability.call %args...
-    ///   { ability = @State, op_name = "get" }
+    /// %result = ability.call @State @get(%args...) : (ArgType, ...) -> ResultType
     /// ```
     ///
     /// Lowered to: evidence lookup → tr_dispatch_fn(op_idx, value) → result.
+    #[asm_format(ability symbol(op_name) "(" values ")" attr_dict ":" functional_type(values, result))]
     fn call(ability: Attr<SymbolRef>, op_name: Attr<String>, values: Variadic<_>) -> Value<_> {}
 
     // === Abstract continuation frames ===
@@ -137,6 +154,7 @@ mod ability {
     /// A frame for a structured branch has none. The produced frame's type is
     /// not inferred: it is built from the continuation's value type.
     #[verify]
+    #[asm_format(evidence "," outer "," continuation attr_dict_bare ":" type(result))]
     fn suffix_frame<F: Frame, C, G: Frame>(
         evidence_plan: Option<Attr<[EvidenceStep]>>,
         evidence: Value<Evidence>,
@@ -158,6 +176,7 @@ mod ability {
     /// of type `R`. It appears only in a `Cps` callable, a completion, or a
     /// generated continuation body.
     #[implements(CallableExit)]
+    #[asm_format(frame "," value attr_dict_bare)]
     fn exit<F: Frame>(frame: Value<F>, value: Value<F::Result>) {}
 
     /// Install one layer of a handle around `body`, exiting to `exit`.
@@ -167,11 +186,17 @@ mod ability {
     /// the installed layer, whose completion is `completion`.
     ///
     /// ```text
-    /// ability.handle %outer_ev, %exit, %completion, %arm0, ... {handlers = [...]} {
+    /// ability.handle %outer_ev, %exit, %completion [
+    ///   op @State @get : core.i32 = %get,
+    ///   fn @State @peek : core.i32 = %peek
+    /// ] {
     /// ^body(%ev: Evidence, %f: !ability.frame<M>):
     ///   ...
     /// }
     /// ```
+    ///
+    /// The format writes each binding with its arm, as
+    /// `kind @Ability @op_name : operation_result_type = %arm`.
     ///
     /// A resultless terminator with one region. `evidence` is the Evidence
     /// where the handle is installed, `exit` is an `ability.frame<R>`, and
@@ -198,6 +223,7 @@ mod ability {
     /// extended Evidence and an `ability.frame<M>`, and every path ends in a
     /// proper tail transfer or `func.unreachable`.
     #[verify]
+    #[asm_format(evidence "," exit "," completion custom(HandlerArms(handlers, arms)) attr_dict region(body))]
     #[implements(CallableExit)]
     fn handle<F: Frame>(
         handlers: Attr<[HandlerBinding]>,
@@ -218,12 +244,14 @@ mod ability {
     /// operation adds the check.
     ///
     /// ```text
-    /// ability.perform %ev, %f, %resumption, %arg0, ... {ability = @State, op_name = "get"}
+    /// ability.perform @State @get(%arg0, ...) [%ev, %f, %resumption]
+    ///   : (ArgType, ...) -> ()
     /// ```
     ///
     /// A resultless terminator that takes Evidence, an `ability.frame<R>`, a
     /// raw `ResumeExact<I, R>`, and the operation arguments. `I` is not
     /// `core.never`.
+    #[asm_format(ability symbol(op_name) "(" values ")" "[" evidence "," frame "," resumption "]" attr_dict ":" functional_type(values))]
     #[implements(CallableExit)]
     fn perform<F: Frame, C>(
         ability: Attr<SymbolRef>,
@@ -241,11 +269,12 @@ mod ability {
     /// dispatcher, with no resumption.
     ///
     /// ```text
-    /// ability.abort %ev, %f, %arg0, ... {ability = @Fail, op_name = "fail"}
+    /// ability.abort @Fail @fail(%arg0, ...) [%ev, %f] : (ArgType, ...) -> ()
     /// ```
     ///
     /// The shape of `ability.perform` without the resumption, used only for
     /// source `op -> Never`.
+    #[asm_format(ability symbol(op_name) "(" values ")" "[" evidence "," frame "]" attr_dict ":" functional_type(values))]
     #[implements(CallableExit)]
     fn abort<F: Frame>(
         ability: Attr<SymbolRef>,
@@ -270,6 +299,7 @@ mod ability {
     /// evidence. It is not a terminator and appears only in a flow that is
     /// not `Cps`. Frame expansion lowers it to `effect.delimit` with the same
     /// operands and result.
+    #[asm_format(body "," evidence attr_dict_bare ":" type(result))]
     fn delimit<C, F: Frame>(body: Value<C>, evidence: Value<Evidence>) -> Value<F::Result>
     where
         C: CpsClosure<Inputs = (Evidence, F)>,
@@ -348,15 +378,15 @@ pub fn remove_declarations(ctx: &mut IrContext, module: trunk_ir::rewrite::Modul
     }
 }
 
-/// Build an `arith.const` for the stable runtime ability ID.
+/// Build an `arith.constant` for the stable runtime ability ID.
 pub fn ability_id_const(
     ctx: &mut IrContext,
     loc: Location,
     i32_ty: TypeRef,
     ability: &SymbolPath,
-) -> arith::Const {
+) -> arith::Constant {
     let ability_id = compute_ability_id(ability);
-    arith::Const::operands()
+    arith::Constant::operands()
         .value(Attribute::Int(ability_id as i128))
         .results(i32_ty)
         .build(ctx, loc)
@@ -382,6 +412,18 @@ impl CallableExit for Perform {
                 "ability.perform CallableExit has an invalid CPS shape",
             ))
         }
+    }
+}
+
+impl trunk_ir::ops::Verify for HandleDispatch {
+    /// One dispatcher per ability.
+    fn verify(&self, ctx: &trunk_ir::IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
+        let abilities = self.abilities(ctx).len();
+        let dispatchers = self.dispatchers(ctx).len();
+        if abilities != dispatchers {
+            return Err(format!("{abilities} abilities but {dispatchers} dispatchers").into());
+        }
+        Ok(())
     }
 }
 
@@ -536,9 +578,9 @@ mod tests {
                 &format!(
                     r#"core.module @test {{
   func.func @main(%evidence: core.ptr, %prompt: core.i32) {{
-    ability.handle_dispatch %evidence, %prompt {{abilities = {abilities}}} {{
+    "ability.handle_dispatch"(%evidence, %prompt) ({{
       func.unreachable
-    }}
+    }}) {{abilities = {abilities}}}
   }}
 }}"#
                 ),
@@ -549,5 +591,33 @@ mod tests {
 
             assert!(DynCallableExit::prove(&ctx, handle).is_err());
         }
+    }
+
+    #[test]
+    fn handle_dispatch_writes_each_ability_with_its_dispatcher() {
+        let input = r#"core.module @test {
+  func.func @main(%0: core.ptr, %1: core.i32, %2: core.ptr, %3: core.ptr) {
+      ability.handle_dispatch %0, %1 [@State: %2, @Console: %3] {
+          func.unreachable
+      }
+  }
+}
+"#;
+        let mut ctx = IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(&mut ctx, input);
+        let function =
+            trunk_ir::dialect::func::Func::from_op(&ctx, module.ops(&ctx)[0]).expect("function");
+        let entry = ctx.region(function.body(&ctx)).blocks[0];
+        let handle = HandleDispatch::from_op(&ctx, ctx.block(entry).ops[0]).expect("handle");
+        let abilities: Vec<_> = handle
+            .abilities(&ctx)
+            .map(|ability| ability.to_string())
+            .collect();
+        assert_eq!(abilities, ["State", "Console"]);
+        assert_eq!(
+            handle.dispatchers(&ctx),
+            [ctx.block_arg(entry, 2), ctx.block_arg(entry, 3)]
+        );
+        assert_eq!(module.op().display(&ctx).to_string(), input);
     }
 }

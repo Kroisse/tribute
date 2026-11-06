@@ -170,7 +170,7 @@ fn main() -> Nil {
     let (ctx, module) = compile_specialized_frontend(db, source)
         .expect("class specialization accepts frontend output")
         .expect("production frontend should lower");
-    let ir = trunk_ir::printer::print_module(&ctx, module.op());
+    let ir = module.op().display(&ctx).to_string();
     let main = ir
         .split("tribute_cps.func @\"pkg::main\"")
         .nth(1)
@@ -180,7 +180,7 @@ fn main() -> Nil {
         main.starts_with("['a0]() -> core.nil row(| 'a0) inferred convention(direct)"),
         "{main}"
     );
-    assert!(main.contains("callee = @\"pkg::apply$9D\""), "{main}");
+    assert!(main.contains("call @\"pkg::apply$9D\"("), "{main}");
     assert!(
         main.contains("tribute_cps.lambda") && !is_cps(main),
         "{main}"
@@ -216,16 +216,16 @@ fn main() ->{Io} Nil {
     let (ctx, module) = compile_specialized_frontend(db, source)
         .expect("class specialization accepts frontend output")
         .expect("production frontend should lower");
-    let ir = trunk_ir::printer::print_module(&ctx, module.op());
+    let ir = module.op().display(&ctx).to_string();
     let main = ir
         .split("tribute_cps.func @\"pkg::main\"")
         .nth(1)
         .and_then(|rest| rest.split("\n  }\n").next())
         .expect("root main");
     // `both` is used with a pure and with an `Io` callback.
-    assert!(main.contains("callee = @\"pkg::app$9D\""), "{main}");
-    assert!(main.contains("callee = @\"pkg::app$9E\""), "{main}");
-    assert!(!main.contains("callee = @\"pkg::app\"}"), "{main}");
+    assert!(main.contains("call @\"pkg::app$9D\"("), "{main}");
+    assert!(main.contains("call @\"pkg::app$9E\"("), "{main}");
+    assert!(!main.contains("call @\"pkg::app\"("), "{main}");
     // `step` is used at an empty row, so it and `each` need no Cps control.
     let each = ir
         .split("tribute_cps.func @\"pkg::each\"")
@@ -270,8 +270,8 @@ fn main() -> Nil {
     let (ctx, module) = compile_specialized_frontend(db, source)
         .expect("class specialization accepts frontend output")
         .expect("production frontend should lower");
-    let ir = trunk_ir::printer::print_module(&ctx, module.op());
-    assert!(ir.contains("callee = @\"pkg::countdown$9D\""), "{ir}");
+    let ir = module.op().display(&ctx).to_string();
+    assert!(ir.contains("call @\"pkg::countdown$9D\"("), "{ir}");
     let instance = ir
         .split("tribute_cps.func @\"pkg::countdown$9D\"")
         .nth(1)
@@ -337,7 +337,7 @@ fn main() ->{Io} Nil {
     let (ctx, module) = compile_specialized_frontend(db, source)
         .expect("class specialization accepts frontend output")
         .expect("production frontend should lower");
-    let ir = trunk_ir::printer::print_module(&ctx, module.op());
+    let ir = module.op().display(&ctx).to_string();
     let function = |name: &str| {
         ir.split(&format!("tribute_cps.func @\"{name}\""))
             .nth(1)
@@ -345,9 +345,9 @@ fn main() ->{Io} Nil {
             .unwrap_or_else(|| panic!("{name} in\n{ir}"))
     };
     let run = function("pkg::m::run");
-    assert!(run.contains("callee = @\"pkg::m::app$9D\""), "{run}");
-    assert!(run.contains("callee = @\"pkg::m::app$9E\""), "{run}");
-    assert!(!run.contains("callee = @\"pkg::m::app\"}"), "{run}");
+    assert!(run.contains("call @\"pkg::m::app$9D\"("), "{run}");
+    assert!(run.contains("call @\"pkg::m::app$9E\"("), "{run}");
+    assert!(!run.contains("call @\"pkg::m::app\"("), "{run}");
     let each = function("pkg::m::each");
     assert!(
         each.starts_with("['a0](%0: core.i32) -> core.i32 row(| 'a0) inferred convention(direct)"),
@@ -394,7 +394,7 @@ fn main() ->{Io} Nil {
     let (ctx, module) = compile_specialized_frontend(db, source)
         .expect("class specialization accepts frontend output")
         .expect("production frontend should lower");
-    let ir = trunk_ir::printer::print_module(&ctx, module.op());
+    let ir = module.op().display(&ctx).to_string();
     let function = |name: &str| {
         ir.split(&format!("tribute_cps.func {name}["))
             .nth(1)
@@ -430,7 +430,7 @@ fn main() ->{Io} Nil {
 }
 
 /// An alias of a let-bound lambda is a value that is not a lambda: the alias
-/// instantiates the lambda once, and its own rows are body rows.
+/// instantiates the lambda once, at the row its uses share.
 #[salsa_test]
 fn an_alias_of_a_let_bound_lambda_instantiates_it_once(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
@@ -453,28 +453,72 @@ fn main() ->{Io} Nil {
     let (ctx, module) = compile_specialized_frontend(db, source)
         .expect("class specialization accepts frontend output")
         .expect("production frontend should lower");
-    let ir = trunk_ir::printer::print_module(&ctx, module.op());
+    let ir = module.op().display(&ctx).to_string();
     let main = ir
         .split("tribute_cps.func @\"pkg::main\"[")
         .nth(1)
         .and_then(|rest| rest.split("\n  }\n").next())
         .expect("root main");
-    assert!(main.starts_with("local 'a0, body 'a1]"), "{main}");
+    assert!(main.starts_with("local 'a0]"), "{main}");
     assert_eq!(
         main.matches("tribute_control.instantiate").count(),
         1,
         "{main}"
     );
     assert!(
-        main.contains("tribute_control.instantiate %0 {row_args = [{tail = 1}]}"),
+        main.contains(
+            "tribute_control.instantiate %0 {row_args = [{instances = [@\"ability_1_11_std::io::Io\"]}]}"
+        ),
         "{main}"
     );
 }
 
-/// A let-bound lambda lowered once for the type each use needs carries only
-/// instantiated rows, so it quantifies nothing and its rows are body rows.
+/// Sibling let-bound lambdas that write one row name quantify binders of
+/// their own.
 #[salsa_test]
-fn a_lambda_materialized_per_use_quantifies_no_rows(db: &salsa::DatabaseImpl) {
+fn sibling_let_bound_lambdas_quantify_their_own_binders(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn call(f: fn() ->{e} Int) ->{e} Int { f() }
+
+fn main() -> Nil {
+    let wrap = fn(k: fn() ->{e} Int) { fn() { k() } }
+    let reference = fn(k: fn() ->{e} Int) { call }
+    let pure = wrap(fn() ->{} Int { +2 })
+    let named = reference(fn() ->{} Int { +0 })
+    let _ = named(pure)
+    Nil
+}
+"#,
+    );
+    let (ctx, module) = compile_specialized_frontend(db, source)
+        .expect("class specialization accepts frontend output")
+        .expect("production frontend should lower");
+    let ir = module.op().display(&ctx).to_string();
+    // `main` has no class variables, so each lambda appears once.
+    let quantified: Vec<Vec<&str>> = ir
+        .split("tribute_cps.lambda[")
+        .skip(1)
+        .filter_map(|rest| rest.split(']').next())
+        .map(|binders| binders.split(", ").collect())
+        .collect();
+    assert!(quantified.len() >= 2, "{ir}");
+    for (index, binders) in quantified.iter().enumerate() {
+        for other in &quantified[index + 1..] {
+            assert!(
+                binders.iter().all(|binder| !other.contains(binder)),
+                "two lambdas quantify one binder: {quantified:?}\n{ir}"
+            );
+        }
+    }
+}
+
+/// A let-bound lambda with a closed row quantifies nothing: it is one lambda,
+/// which a pure and an open consumer both take as it is.
+#[salsa_test]
+fn a_closed_lambda_used_by_two_consumers_is_one_value(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
         "test.trb",
@@ -495,13 +539,13 @@ fn main() -> Nil {
     let (ctx, module) = compile_specialized_frontend(db, source)
         .expect("class specialization accepts frontend output")
         .expect("production frontend should lower");
-    let ir = trunk_ir::printer::print_module(&ctx, module.op());
+    let ir = module.op().display(&ctx).to_string();
     let run = ir
         .split("tribute_cps.func @\"pkg::run\"")
         .nth(1)
         .and_then(|rest| rest.split("\n  }\n").next())
         .expect("run");
-    assert!(run.contains("tribute_cps.lambda("), "{run}");
+    assert_eq!(run.matches("tribute_cps.lambda(").count(), 1, "{run}");
     assert!(
         !run.contains("lambda['") && !run.contains("instantiate") && !run.contains("local '"),
         "{run}"
@@ -533,7 +577,7 @@ fn main() -> Nil {
     let (ctx, module) = compile_specialized_frontend(db, source)
         .expect("class specialization accepts frontend output")
         .expect("production frontend should lower");
-    let ir = trunk_ir::printer::print_module(&ctx, module.op());
+    let ir = module.op().display(&ctx).to_string();
     let run = ir
         .split("tribute_cps.func @\"pkg::run$9D\"")
         .nth(1)
@@ -638,14 +682,14 @@ fn main() -> Nil {
         tribute_passes::check_convention_classes::check(&ctx, module),
         []
     );
-    let ir = trunk_ir::printer::print_module(&ctx, module.op());
+    let ir = module.op().display(&ctx).to_string();
     let after = ir
         .split("tribute_cps.func @\"pkg::after$9D\"")
         .nth(1)
         .and_then(|rest| rest.split("\n  }\n").next())
         .unwrap_or_else(|| panic!("after$9D in\n{ir}"));
     assert!(
-        after.contains("callee = @\"pkg::app$std::String$9D\"") && !is_cps(after),
+        after.contains("call @\"pkg::app$std::String$9D\"(") && !is_cps(after),
         "{after}"
     );
 }

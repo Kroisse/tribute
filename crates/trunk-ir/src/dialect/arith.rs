@@ -10,107 +10,148 @@
 mod arith {
     #[verify]
     #[flags(Pure)]
-    fn r#const(value: Attr<_>) -> Value<impl NumericLike> {}
+    #[asm_format(attr_dict_bare value ":" type(result))]
+    fn constant(value: Attr<_>) -> Value<impl NumericLike> {}
 
     // Integer arithmetic
     #[implements(Fold)]
     #[flags(Pure)]
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn addi<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[implements(Fold)]
     #[flags(Pure)]
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn subi<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[implements(Fold)]
     #[flags(Pure)]
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn muli<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[implements(Fold)]
     #[flags(Pure)]
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn divsi<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[implements(Fold)]
     #[flags(Pure)]
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn divui<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[implements(Fold)]
     #[flags(Pure)]
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn remsi<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[implements(Fold)]
     #[flags(Pure)]
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn remui<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[flags(Pure)]
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn negi<T: IntegerOrIndex>(operand: Value<T>) -> Value<T> {}
 
     // Float arithmetic
     #[flags(Pure)]
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn addf<T: FloatLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[flags(Pure)]
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn subf<T: FloatLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[flags(Pure)]
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn mulf<T: FloatLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[flags(Pure)]
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn divf<T: FloatLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[flags(Pure)]
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn negf<T: FloatLike>(operand: Value<T>) -> Value<T> {}
 
     // Comparisons
     #[flags(Pure)]
-    fn cmpi<T: IntegerOrIndex>(predicate: Attr<String>, lhs: Value<T>, rhs: Value<T>) -> Value<I1> {
+    #[asm_format(predicate "," lhs "," rhs attr_dict_bare ":" type(lhs))]
+    fn cmpi<T: IntegerOrIndex>(
+        predicate: Attr<CmpiPredicate>,
+        lhs: Value<T>,
+        rhs: Value<T>,
+    ) -> Value<I1> {
     }
 
-    #[verify]
     #[flags(Pure)]
-    fn cmpf<T: FloatLike>(predicate: Attr<String>, lhs: Value<T>, rhs: Value<T>) -> Value<I1> {}
+    #[asm_format(predicate "," lhs "," rhs attr_dict_bare ":" type(lhs))]
+    fn cmpf<T: FloatLike>(
+        predicate: Attr<CmpfPredicate>,
+        lhs: Value<T>,
+        rhs: Value<T>,
+    ) -> Value<I1> {
+    }
 
     // Bitwise (integer-only)
     #[implements(Fold)]
     #[flags(Pure)]
-    fn and<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
+    fn andi<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[implements(Fold)]
     #[flags(Pure)]
-    fn or<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
+    fn ori<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[implements(Fold)]
     #[flags(Pure)]
-    fn xor<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
+    fn xori<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[flags(Pure)]
-    fn shl<T: IntegerOrIndex>(value: Value<T>, amount: Value<T>) -> Value<T> {}
+    #[asm_format(value "," amount attr_dict_bare ":" type(result))]
+    fn shli<T: IntegerOrIndex>(value: Value<T>, amount: Value<T>) -> Value<T> {}
     #[flags(Pure)]
-    fn shr<T: IntegerOrIndex>(value: Value<T>, amount: Value<T>) -> Value<T> {}
+    #[asm_format(value "," amount attr_dict_bare ":" type(result))]
+    fn shrsi<T: IntegerOrIndex>(value: Value<T>, amount: Value<T>) -> Value<T> {}
     #[flags(Pure)]
-    fn shru<T: IntegerOrIndex>(value: Value<T>, amount: Value<T>) -> Value<T> {}
+    #[asm_format(value "," amount attr_dict_bare ":" type(result))]
+    fn shrui<T: IntegerOrIndex>(value: Value<T>, amount: Value<T>) -> Value<T> {}
 
     // Conversions. Integers are signless; each sign-dependent conversion is
     // an explicit signed/unsigned pair.
     #[verify]
     #[flags(Pure)]
+    #[asm_format(operand attr_dict_bare ":" type(operand) "to" type(result))]
     fn extsi(operand: Value<impl IntegerLike>) -> Value<impl IntegerLike> {}
     #[verify]
     #[flags(Pure)]
+    #[asm_format(operand attr_dict_bare ":" type(operand) "to" type(result))]
     fn extui(operand: Value<impl IntegerLike>) -> Value<impl IntegerLike> {}
     #[verify]
     #[flags(Pure)]
+    #[asm_format(operand attr_dict_bare ":" type(operand) "to" type(result))]
     fn trunci(operand: Value<impl IntegerLike>) -> Value<impl IntegerLike> {}
     #[flags(Pure)]
+    #[asm_format(operand attr_dict_bare ":" type(operand) "to" type(result))]
     fn sitofp(operand: Value<impl IntegerLike>) -> Value<impl FloatLike> {}
     #[flags(Pure)]
+    #[asm_format(operand attr_dict_bare ":" type(operand) "to" type(result))]
     fn uitofp(operand: Value<impl IntegerLike>) -> Value<impl FloatLike> {}
     /// Traps on out-of-range values and NaN.
+    #[asm_format(operand attr_dict_bare ":" type(operand) "to" type(result))]
     fn fptosi(operand: Value<impl FloatLike>) -> Value<impl IntegerLike> {}
     /// Traps on out-of-range values and NaN.
+    #[asm_format(operand attr_dict_bare ":" type(operand) "to" type(result))]
     fn fptoui(operand: Value<impl FloatLike>) -> Value<impl IntegerLike> {}
     /// Convert between a fixed-width integer and `core.index`, in either
     /// direction, extending the sign when the result is wider.
     #[verify]
     #[implements(Fold)]
     #[flags(Pure)]
-    fn index_castsi(operand: Value<impl IntegerOrIndex>) -> Value<impl IntegerOrIndex> {}
+    #[asm_format(operand attr_dict_bare ":" type(operand) "to" type(result))]
+    fn index_cast(operand: Value<impl IntegerOrIndex>) -> Value<impl IntegerOrIndex> {}
     /// Convert between a fixed-width integer and `core.index`, in either
     /// direction, extending with zeros when the result is wider.
     #[verify]
     #[implements(Fold)]
     #[flags(Pure)]
+    #[asm_format(operand attr_dict_bare ":" type(operand) "to" type(result))]
     fn index_castui(operand: Value<impl IntegerOrIndex>) -> Value<impl IntegerOrIndex> {}
     #[verify]
     #[flags(Pure)]
+    #[asm_format(operand attr_dict_bare ":" type(operand) "to" type(result))]
     fn extf(operand: Value<impl FloatLike>) -> Value<impl FloatLike> {}
     #[verify]
     #[flags(Pure)]
+    #[asm_format(operand attr_dict_bare ":" type(operand) "to" type(result))]
     fn truncf(operand: Value<impl FloatLike>) -> Value<impl FloatLike> {}
 }
 
@@ -130,12 +171,37 @@ use crate::ops::DialectOp;
 use crate::refs::{OpRef, TypeRef, ValueDef, ValueRef};
 use crate::transforms::canonicalize::{Fold, FoldResult};
 use crate::types::Attribute;
-use itertools::Itertools;
 
-/// `arith.cmpf` predicates that every backend lowers.
-const SUPPORTED_CMPF_PREDICATES: [&str; 6] = ["oeq", "une", "olt", "ole", "ogt", "oge"];
+crate::attr_kind::keyword_kind! {
+    /// How `arith.cmpi` compares its signless integer operands.
+    pub enum CmpiPredicate {
+        Eq = "eq",
+        Ne = "ne",
+        Slt = "slt",
+        Sle = "sle",
+        Sgt = "sgt",
+        Sge = "sge",
+        Ult = "ult",
+        Ule = "ule",
+        Ugt = "ugt",
+        Uge = "uge",
+    }
+}
 
-impl crate::ops::Verify for Const {
+crate::attr_kind::keyword_kind! {
+    /// How `arith.cmpf` compares its float operands: the ordered predicates
+    /// and unordered inequality, the ones every backend lowers.
+    pub enum CmpfPredicate {
+        Oeq = "oeq",
+        Une = "une",
+        Olt = "olt",
+        Ole = "ole",
+        Ogt = "ogt",
+        Oge = "oge",
+    }
+}
+
+impl crate::ops::Verify for Constant {
     fn verify(&self, ctx: &IrContext) -> Result<(), crate::ops::VerificationError> {
         let ty = ctx.value_ty(self.result(ctx));
         let accepted = match self.value(ctx) {
@@ -150,24 +216,10 @@ impl crate::ops::Verify for Const {
             Err(format!(
                 "value {:?} does not fit result type {}",
                 self.value(ctx),
-                crate::printer::print_type(ctx, ty)
+                ty.display(ctx)
             )
             .into())
         }
-    }
-}
-
-impl crate::ops::Verify for Cmpf {
-    fn verify(&self, ctx: &IrContext) -> Result<(), crate::ops::VerificationError> {
-        let predicate = self.predicate(ctx);
-        if SUPPORTED_CMPF_PREDICATES.contains(&predicate) {
-            return Ok(());
-        }
-        Err(format!(
-            "unsupported predicate '{predicate}'; supported predicates are {}",
-            SUPPORTED_CMPF_PREDICATES.iter().format(", "),
-        )
-        .into())
     }
 }
 
@@ -229,13 +281,13 @@ fn verify_index_cast(ctx: &IrContext, op: OpRef) -> Result<(), String> {
     } else {
         Err(format!(
             "index cast converts between core.index and a fixed-width integer, not {} to {}",
-            crate::printer::print_type(ctx, from),
-            crate::printer::print_type(ctx, to)
+            from.display(ctx),
+            to.display(ctx)
         ))
     }
 }
 
-impl crate::ops::Verify for IndexCastsi {
+impl crate::ops::Verify for IndexCast {
     fn verify(&self, ctx: &IrContext) -> Result<(), crate::ops::VerificationError> {
         Ok(verify_index_cast(ctx, self.op_ref())?)
     }
@@ -315,7 +367,7 @@ impl Fold for Muli {
     }
 }
 
-/// `arith.divsi const(a), const(b)` → `arith.const(a/b)` at the result width.
+/// `arith.divsi const(a), const(b)` → `arith.constant(a/b)` at the result width.
 ///
 /// Conservative bailouts that leave the op intact:
 /// - `b == 0`: backend trap (Cranelift `sdiv`, WASM `i32.div_s`) defines
@@ -343,7 +395,7 @@ impl Fold for Divsi {
     }
 }
 
-/// `arith.divui const(a), const(b)` → `arith.const(a/b)` at the result
+/// `arith.divui const(a), const(b)` → `arith.constant(a/b)` at the result
 /// width, interpreting both operands as unsigned `N`-bit values.
 /// Bails when the unsigned divisor is zero.
 impl Fold for Divui {
@@ -364,7 +416,7 @@ impl Fold for Divui {
     }
 }
 
-/// `arith.remsi const(a), const(b)` → `arith.const(a%b)` at the result width.
+/// `arith.remsi const(a), const(b)` → `arith.constant(a%b)` at the result width.
 ///
 /// Mirrors the `arith.divsi` fold: bails on `b == 0` and on `INT_MIN % -1` (which
 /// also traps on Cranelift `srem` and WASM `i32.rem_s`).
@@ -386,7 +438,7 @@ impl Fold for Remsi {
     }
 }
 
-/// `arith.remui const(a), const(b)` → `arith.const(a%b)` at the result
+/// `arith.remui const(a), const(b)` → `arith.constant(a%b)` at the result
 /// width, interpreting both operands as unsigned `N`-bit values.
 /// Bails when the unsigned divisor is zero.
 impl Fold for Remui {
@@ -407,14 +459,14 @@ impl Fold for Remui {
     }
 }
 
-/// `arith.and` folds:
+/// `arith.andi` folds:
 /// - `x & 0` / `0 & x` → `const 0` (short-circuit before width-extraction
 ///   so the fold still applies even if the result type is non-standard).
 /// - `x & -1` / `-1 & x` → `x`. `-1` is the all-ones bit pattern in any
 ///   width, since `Attribute::Int` values are stored sign-extended in
 ///   `i128`.
 /// - `const(a) & const(b)` → `const(wrap(a&b))` at the result width.
-impl Fold for And {
+impl Fold for Andi {
     fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
         let op = self.op_ref();
         let (lhs, rhs) = two_operands(ctx, op)?;
@@ -435,12 +487,12 @@ impl Fold for And {
     }
 }
 
-/// `arith.or` folds:
+/// `arith.ori` folds:
 /// - `x | 0` / `0 | x` → `x`.
 /// - `x | -1` / `-1 | x` → `const -1` (all-ones; same value in any
 ///   width when interpreted as a sign-extended `i128`).
 /// - `const(a) | const(b)` → `const(wrap(a|b))` at the result width.
-impl Fold for Or {
+impl Fold for Ori {
     fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
         let op = self.op_ref();
         let (lhs, rhs) = two_operands(ctx, op)?;
@@ -461,14 +513,14 @@ impl Fold for Or {
     }
 }
 
-/// `arith.xor` folds:
+/// `arith.xori` folds:
 /// - `x ^ 0` / `0 ^ x` → `x`.
 /// - `const(a) ^ const(b)` → `const(wrap(a^b))` at the result width.
 ///
 /// `x ^ x → 0` would require same-operand detection and is left for a
 /// later pass that handles same-operand peepholes uniformly across
 /// the dialect (see `subi`, which doesn't fold `x - x → 0` either).
-impl Fold for Xor {
+impl Fold for Xori {
     fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
         let op = self.op_ref();
         let (lhs, rhs) = two_operands(ctx, op)?;
@@ -486,7 +538,7 @@ impl Fold for Xor {
     }
 }
 
-impl Fold for IndexCastsi {
+impl Fold for IndexCast {
     fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
         fold_index_cast(ctx, self.op_ref(), true)
     }
@@ -498,7 +550,7 @@ impl Fold for IndexCastui {
     }
 }
 
-/// Folds of `arith.index_castsi` (`signed`) and `arith.index_castui`
+/// Folds of `arith.index_cast` (`signed`) and `arith.index_castui`
 /// that hold at every index width of at least [`Index::MIN_WIDTH`] bits:
 ///
 /// - A constant fixed-width operand becomes the index constant of its
@@ -516,7 +568,7 @@ fn fold_index_cast(ctx: &IrContext, op: OpRef, signed: bool) -> Option<FoldResul
     }
     let width = IntegerLike::width(ctx, result_ty)?;
     if let ValueDef::OpResult(producer, _) = ctx.value_def(operand)
-        && (IndexCastsi::matches(ctx, producer) || IndexCastui::matches(ctx, producer))
+        && (IndexCast::matches(ctx, producer) || IndexCastui::matches(ctx, producer))
         && let Some(&original) = ctx.op_operands(producer).first()
         && ctx.value_ty(original) == result_ty
         && width <= Index::MIN_WIDTH
@@ -577,7 +629,7 @@ fn single_result_type(ctx: &IrContext, op: OpRef) -> Option<TypeRef> {
     }
 }
 
-/// If `value` is the result of an `arith.const {value = Int(_)}`, return
+/// If `value` is the result of an `arith.constant Int(_)`, return
 /// its raw integer attribute.
 ///
 /// Uses the dialect-generated `Const` typed wrapper so the match is
@@ -588,7 +640,7 @@ pub(crate) fn const_int_value(ctx: &IrContext, value: ValueRef) -> Option<i128> 
         ValueDef::OpResult(op, _) => op,
         ValueDef::BlockArg(_, _) => return None,
     };
-    let const_op = Const::from_op(ctx, producer).ok()?;
+    let const_op = Constant::from_op(ctx, producer).ok()?;
     match const_op.value(ctx) {
         Attribute::Int(v) => Some(v),
         _ => None,
@@ -648,7 +700,6 @@ mod canonicalize_tests {
     use super::*;
 
     use crate::parser::parse_test_module;
-    use crate::printer::print_module;
     use crate::rewrite::{ApplyResult, Module, PatternApplicator, TypeConverter};
     use crate::transforms::canonicalize::{FoldDispatchPattern, fold_ops_for_dialect};
     use crate::walk::{WalkAction, walk_op};
@@ -678,7 +729,7 @@ mod canonicalize_tests {
     }
 
     /// Walk `module` and return the `Attribute::Int` carried by the
-    /// `arith.const` that the first `func.return` returns. Returns
+    /// `arith.constant` that the first `func.return` returns. Returns
     /// `None` if no return is found, or if its operand is not produced
     /// by a const-int op. Lets value-shaped tests assert the folded
     /// constant directly without going through textual snapshots.
@@ -713,12 +764,12 @@ mod canonicalize_tests {
 
     #[test]
     fn index_cast_of_a_fixed_width_constant_folds_to_its_extended_value() {
-        for (op, expected) in [("index_castsi", -1), ("index_castui", 0xffff_ffff)] {
+        for (op, expected) in [("index_cast", -1), ("index_castui", 0xffff_ffff)] {
             let (_, _, value) = fold_function(
                 "",
                 "core.index",
                 &format!(
-                    "    %c = arith.const {{value = -1}} : core.i32\n    %r = arith.{op} %c : core.index\n    func.return %r"
+                    "    %c = arith.constant -1 : core.i32\n    %r = \"arith.{op}\"(%c) : core.index\n    func.return %r"
                 ),
             );
             assert_eq!(value, Some(expected), "{op}");
@@ -727,7 +778,7 @@ mod canonicalize_tests {
         let (ctx, module, value) = fold_function(
             "",
             "core.index",
-            "    %c = arith.const {value = -1} : core.i64\n    %r = arith.index_castui %c : core.index\n    func.return %r",
+            "    %c = arith.constant -1 : core.i64\n    %r = arith.index_castui %c : core.i64 to core.index\n    func.return %r",
         );
         assert_eq!(value, None);
         assert_eq!(
@@ -743,21 +794,21 @@ mod canonicalize_tests {
                 "",
                 ty,
                 &format!(
-                    "    %c = arith.const {{value = {value}}} : core.index\n    %r = arith.{op} %c : {ty}\n    func.return %r"
+                    "    %c = arith.constant {value} : core.index\n    %r = \"arith.{op}\"(%c) : {ty}\n    func.return %r"
                 ),
             )
             .2
         };
-        assert_eq!(fold("index_castsi", -5, "core.i64"), Some(-5));
+        assert_eq!(fold("index_cast", -5, "core.i64"), Some(-5));
         assert_eq!(
             fold("index_castui", 0xffff_ffff, "core.i64"),
             Some(0xffff_ffff)
         );
         // Truncation to at most the minimum index width ignores the higher bits.
-        assert_eq!(fold("index_castsi", 1 << 40, "core.i32"), Some(0));
+        assert_eq!(fold("index_cast", 1 << 40, "core.i32"), Some(0));
         assert_eq!(fold("index_castui", -1, "core.i8"), Some(-1));
         // A 32-bit index would have dropped these bits before extending.
-        assert_eq!(fold("index_castsi", 1 << 40, "core.i64"), None);
+        assert_eq!(fold("index_cast", 1 << 40, "core.i64"), None);
         assert_eq!(fold("index_castui", -1, "core.i64"), None);
     }
 
@@ -768,10 +819,10 @@ mod canonicalize_tests {
                 &format!("%x: {ty}"),
                 ty,
                 &format!(
-                    "    %i = arith.index_castui %x : core.index\n    %r = arith.index_castsi %i : {ty}\n    func.return %r"
+                    "    %i = arith.index_castui %x : {ty} to core.index\n    %r = arith.index_cast %i : core.index to {ty}\n    func.return %r"
                 ),
             );
-            count_ops(&ctx, module, crate::dialect::arith::IndexCastsi::NAME)
+            count_ops(&ctx, module, crate::dialect::arith::IndexCast::NAME)
         };
         assert_eq!(round_trip("core.i32"), 0);
         assert_eq!(round_trip("core.i64"), 1);
@@ -782,7 +833,7 @@ mod canonicalize_tests {
         let (ctx, module, _) = fold_function(
             "%x: core.index",
             "core.index",
-            "    %z = arith.const {value = 0} : core.index\n    %r = arith.addi %x, %z : core.index\n    func.return %r",
+            "    %z = arith.constant 0 : core.index\n    %r = arith.addi %x, %z : core.index\n    func.return %r",
         );
         assert_eq!(
             count_ops(&ctx, module, crate::dialect::arith::Addi::NAME),
@@ -791,7 +842,7 @@ mod canonicalize_tests {
         let (ctx, module, value) = fold_function(
             "",
             "core.index",
-            "    %a = arith.const {value = 2147483647} : core.index\n    %b = arith.const {value = 1} : core.index\n    %r = arith.addi %a, %b : core.index\n    func.return %r",
+            "    %a = arith.constant 2147483647 : core.index\n    %b = arith.constant 1 : core.index\n    %r = arith.addi %a, %b : core.index\n    func.return %r",
         );
         assert_eq!(
             count_ops(&ctx, module, crate::dialect::arith::Addi::NAME),
@@ -804,7 +855,7 @@ mod canonicalize_tests {
     fn add_zero_fold_rhs_zero() {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %z = arith.const {value = 0} : core.i32
+    %z = arith.constant 0 : core.i32
     %r = arith.addi %x, %z : core.i32
     func.return %r
   }
@@ -818,14 +869,14 @@ mod canonicalize_tests {
             count_ops(&ctx, module, crate::dialect::arith::Addi::NAME),
             0
         );
-        insta::assert_snapshot!(print_module(&ctx, module.op()));
+        insta::assert_snapshot!(module.op().display(&ctx).to_string());
     }
 
     #[test]
     fn add_zero_fold_lhs_zero() {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %z = arith.const {value = 0} : core.i32
+    %z = arith.constant 0 : core.i32
     %r = arith.addi %z, %x : core.i32
     func.return %r
   }
@@ -864,7 +915,7 @@ mod canonicalize_tests {
     fn mul_one_fold_rhs_one() {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %one = arith.const {value = 1} : core.i32
+    %one = arith.constant 1 : core.i32
     %r = arith.muli %x, %one : core.i32
     func.return %r
   }
@@ -884,7 +935,7 @@ mod canonicalize_tests {
     fn mul_zero_fold_replaces_with_const_zero() {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %z = arith.const {value = 0} : core.i32
+    %z = arith.constant 0 : core.i32
     %r = arith.muli %x, %z : core.i32
     func.return %r
   }
@@ -899,17 +950,17 @@ mod canonicalize_tests {
             0
         );
         assert_eq!(
-            count_ops(&ctx, module, crate::dialect::arith::Const::NAME),
+            count_ops(&ctx, module, crate::dialect::arith::Constant::NAME),
             2
         );
-        insta::assert_snapshot!(print_module(&ctx, module.op()));
+        insta::assert_snapshot!(module.op().display(&ctx).to_string());
     }
 
     #[test]
     fn sub_zero_fold_rhs_zero() {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %z = arith.const {value = 0} : core.i32
+    %z = arith.constant 0 : core.i32
     %r = arith.subi %x, %z : core.i32
     func.return %r
   }
@@ -929,7 +980,7 @@ mod canonicalize_tests {
     fn sub_zero_fold_does_not_match_lhs_zero() {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %z = arith.const {value = 0} : core.i32
+    %z = arith.constant 0 : core.i32
     %r = arith.subi %z, %x : core.i32
     func.return %r
   }
@@ -949,8 +1000,8 @@ mod canonicalize_tests {
     fn int_const_fold_addi() {
         let input = r#"core.module @test {
   func.func @f() -> core.i32 {
-    %a = arith.const {value = 2} : core.i32
-    %b = arith.const {value = 3} : core.i32
+    %a = arith.constant 2 : core.i32
+    %b = arith.constant 3 : core.i32
     %r = arith.addi %a, %b : core.i32
     func.return %r
   }
@@ -964,17 +1015,17 @@ mod canonicalize_tests {
             count_ops(&ctx, module, crate::dialect::arith::Addi::NAME),
             0
         );
-        insta::assert_snapshot!(print_module(&ctx, module.op()));
+        insta::assert_snapshot!(module.op().display(&ctx).to_string());
     }
 
     #[test]
     fn int_const_fold_subi_and_muli() {
         let input = r#"core.module @test {
   func.func @f() -> core.i32 {
-    %a = arith.const {value = 10} : core.i32
-    %b = arith.const {value = 4} : core.i32
+    %a = arith.constant 10 : core.i32
+    %b = arith.constant 4 : core.i32
     %s = arith.subi %a, %b : core.i32
-    %c = arith.const {value = 3} : core.i32
+    %c = arith.constant 3 : core.i32
     %r = arith.muli %s, %c : core.i32
     func.return %r
   }
@@ -998,8 +1049,8 @@ mod canonicalize_tests {
     fn int_const_fold_skips_widths_above_128() {
         let input = r#"core.module @test {
   func.func @f() -> core.i129 {
-    %a = arith.const {value = 1} : core.i129
-    %b = arith.const {value = 2} : core.i129
+    %a = arith.constant 1 : core.i129
+    %b = arith.constant 2 : core.i129
     %r = arith.addi %a, %b : core.i129
     func.return %r
   }
@@ -1019,8 +1070,8 @@ mod canonicalize_tests {
     fn int_const_fold_skips_non_i_prefixed_type() {
         let input = r#"core.module @test {
   func.func @f() -> core.foo {
-    %a = arith.const {value = 1} : core.foo
-    %b = arith.const {value = 2} : core.foo
+    %a = arith.constant 1 : core.foo
+    %b = arith.constant 2 : core.foo
     %r = arith.addi %a, %b : core.foo
     func.return %r
   }
@@ -1040,7 +1091,7 @@ mod canonicalize_tests {
     fn int_const_fold_does_not_match_when_only_one_operand_is_const() {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %a = arith.const {value = 7} : core.i32
+    %a = arith.constant 7 : core.i32
     %r = arith.addi %x, %a : core.i32
     func.return %r
   }
@@ -1065,8 +1116,8 @@ mod canonicalize_tests {
         // `1 / 0` must NOT fold — backend trap defines runtime behavior.
         let input = r#"core.module @test {
   func.func @f() -> core.i32 {
-    %a = arith.const {value = 1} : core.i32
-    %b = arith.const {value = 0} : core.i32
+    %a = arith.constant 1 : core.i32
+    %b = arith.constant 0 : core.i32
     %r = arith.divsi %a, %b : core.i32
     func.return %r
   }
@@ -1088,8 +1139,8 @@ mod canonicalize_tests {
         // the fold must leave the op alone so IR semantics match.
         let input = r#"core.module @test {
   func.func @f() -> core.i32 {
-    %a = arith.const {value = -2147483648} : core.i32
-    %b = arith.const {value = -1} : core.i32
+    %a = arith.constant -2147483648 : core.i32
+    %b = arith.constant -1 : core.i32
     %r = arith.divsi %a, %b : core.i32
     func.return %r
   }
@@ -1105,14 +1156,14 @@ mod canonicalize_tests {
         );
     }
 
-    // ---------- arith.and ----------
+    // ---------- arith.andi ----------
 
     #[test]
     fn and_zero_fold_replaces_with_const_zero() {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %z = arith.const {value = 0} : core.i32
-    %r = arith.and %x, %z : core.i32
+    %z = arith.constant 0 : core.i32
+    %r = arith.andi %x, %z : core.i32
     func.return %r
   }
 }"#;
@@ -1121,7 +1172,10 @@ mod canonicalize_tests {
 
         let result = run_arith_patterns(&mut ctx, module);
         assert!(result.total_changes >= 1);
-        assert_eq!(count_ops(&ctx, module, crate::dialect::arith::And::NAME), 0);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Andi::NAME),
+            0
+        );
         assert_eq!(return_value_int_const(&ctx, module), Some(0));
     }
 
@@ -1129,8 +1183,8 @@ mod canonicalize_tests {
     fn and_all_ones_fold_forwards_x() {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %m = arith.const {value = -1} : core.i32
-    %r = arith.and %x, %m : core.i32
+    %m = arith.constant -1 : core.i32
+    %r = arith.andi %x, %m : core.i32
     func.return %r
   }
 }"#;
@@ -1139,17 +1193,20 @@ mod canonicalize_tests {
 
         let result = run_arith_patterns(&mut ctx, module);
         assert!(result.total_changes >= 1);
-        assert_eq!(count_ops(&ctx, module, crate::dialect::arith::And::NAME), 0);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Andi::NAME),
+            0
+        );
     }
 
-    // ---------- arith.or ----------
+    // ---------- arith.ori ----------
 
     #[test]
     fn or_zero_fold_forwards_x() {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %z = arith.const {value = 0} : core.i32
-    %r = arith.or %x, %z : core.i32
+    %z = arith.constant 0 : core.i32
+    %r = arith.ori %x, %z : core.i32
     func.return %r
   }
 }"#;
@@ -1158,15 +1215,15 @@ mod canonicalize_tests {
 
         let result = run_arith_patterns(&mut ctx, module);
         assert!(result.total_changes >= 1);
-        assert_eq!(count_ops(&ctx, module, crate::dialect::arith::Or::NAME), 0);
+        assert_eq!(count_ops(&ctx, module, crate::dialect::arith::Ori::NAME), 0);
     }
 
     #[test]
     fn or_all_ones_fold_replaces_with_const_neg_one() {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %m = arith.const {value = -1} : core.i32
-    %r = arith.or %x, %m : core.i32
+    %m = arith.constant -1 : core.i32
+    %r = arith.ori %x, %m : core.i32
     func.return %r
   }
 }"#;
@@ -1175,18 +1232,18 @@ mod canonicalize_tests {
 
         let result = run_arith_patterns(&mut ctx, module);
         assert!(result.total_changes >= 1);
-        assert_eq!(count_ops(&ctx, module, crate::dialect::arith::Or::NAME), 0);
+        assert_eq!(count_ops(&ctx, module, crate::dialect::arith::Ori::NAME), 0);
         assert_eq!(return_value_int_const(&ctx, module), Some(-1));
     }
 
-    // ---------- arith.xor ----------
+    // ---------- arith.xori ----------
 
     #[test]
     fn xor_zero_fold_forwards_x() {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %z = arith.const {value = 0} : core.i32
-    %r = arith.xor %x, %z : core.i32
+    %z = arith.constant 0 : core.i32
+    %r = arith.xori %x, %z : core.i32
     func.return %r
   }
 }"#;
@@ -1195,16 +1252,19 @@ mod canonicalize_tests {
 
         let result = run_arith_patterns(&mut ctx, module);
         assert!(result.total_changes >= 1);
-        assert_eq!(count_ops(&ctx, module, crate::dialect::arith::Xor::NAME), 0);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Xori::NAME),
+            0
+        );
     }
 
     #[test]
     fn bitwise_fold_does_not_match_when_operands_are_not_const() {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32, %y: core.i32) -> core.i32 {
-    %a = arith.and %x, %y : core.i32
-    %b = arith.or %a, %y : core.i32
-    %r = arith.xor %b, %x : core.i32
+    %a = arith.andi %x, %y : core.i32
+    %b = arith.ori %a, %y : core.i32
+    %r = arith.xori %b, %x : core.i32
     func.return %r
   }
 }"#;
@@ -1213,9 +1273,15 @@ mod canonicalize_tests {
 
         let result = run_arith_patterns(&mut ctx, module);
         assert_eq!(result.total_changes, 0);
-        assert_eq!(count_ops(&ctx, module, crate::dialect::arith::And::NAME), 1);
-        assert_eq!(count_ops(&ctx, module, crate::dialect::arith::Or::NAME), 1);
-        assert_eq!(count_ops(&ctx, module, crate::dialect::arith::Xor::NAME), 1);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Andi::NAME),
+            1
+        );
+        assert_eq!(count_ops(&ctx, module, crate::dialect::arith::Ori::NAME), 1);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Xori::NAME),
+            1
+        );
     }
 
     // ---------------------------------------------------------------------
@@ -1235,9 +1301,9 @@ mod canonicalize_tests {
             "arith.divui",
             "arith.remsi",
             "arith.remui",
-            "arith.and",
-            "arith.or",
-            "arith.xor",
+            "arith.andi",
+            "arith.ori",
+            "arith.xori",
         ];
 
         /// Native Rust integer widths, so the expected value comes straight
@@ -1255,9 +1321,9 @@ mod canonicalize_tests {
             let input = format!(
                 "core.module @test {{
   func.func @f() -> core.i{width} {{
-    %a = arith.const {{value = {a}}} : core.i{width}
-    %b = arith.const {{value = {b}}} : core.i{width}
-    %r = {op} %a, %b : core.i{width}
+    %a = arith.constant {a} : core.i{width}
+    %b = arith.constant {b} : core.i{width}
+    %r = \"{op}\"(%a, %b) : core.i{width}
     func.return %r
   }}
 }}"
@@ -1293,9 +1359,9 @@ mod canonicalize_tests {
                         "arith.remsi" => a.checked_rem(b).map(|r| r as i128),
                         "arith.divui" => ua.checked_div(ub).map(|r| r as $s as i128),
                         "arith.remui" => ua.checked_rem(ub).map(|r| r as $s as i128),
-                        "arith.and" => Some((a & b) as i128),
-                        "arith.or" => Some((a | b) as i128),
-                        "arith.xor" => Some((a ^ b) as i128),
+                        "arith.andi" => Some((a & b) as i128),
+                        "arith.ori" => Some((a | b) as i128),
+                        "arith.xori" => Some((a ^ b) as i128),
                         _ => unreachable!("unknown op {op}"),
                     }
                 }};
@@ -1386,9 +1452,9 @@ mod canonicalize_tests {
                     "arith.remsi" => (!signed_trap).then(|| a.wrapping_rem(b)),
                     "arith.divui" => (unsigned(b) != 0).then(|| (unsigned(a) / unsigned(b)) as i128),
                     "arith.remui" => (unsigned(b) != 0).then(|| (unsigned(a) % unsigned(b)) as i128),
-                    "arith.and" => Some(a & b),
-                    "arith.or" => Some(a | b),
-                    "arith.xor" => Some(a ^ b),
+                    "arith.andi" => Some(a & b),
+                    "arith.ori" => Some(a | b),
+                    "arith.xori" => Some(a ^ b),
                     _ => unreachable!("unknown op {op}"),
                 }
                 .map(|r| reference_wrap(r, width));
@@ -1432,18 +1498,18 @@ mod schema_tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f(%n: core.i32, %w: core.i64, %x: core.f32, %y: core.f64, %p: core.ptr) {
-    %ok_extsi = arith.extsi %n : core.i64
-    %ok_extui = arith.extui %n : core.i64
-    %ok_trunci = arith.trunci %w : core.i32
-    %ok_sitofp = arith.sitofp %n : core.f64
-    %ok_fptoui = arith.fptoui %y : core.i64
-    %ok_extf = arith.extf %x : core.f64
-    %ok_truncf = arith.truncf %y : core.f32
-    %bad_extsi = arith.extsi %w : core.i32
-    %bad_trunci = arith.trunci %n : core.i64
-    %bad_extf = arith.extf %y : core.f32
-    %bad_ptr = arith.extui %p : core.i64
-    %bad_float = arith.sitofp %x : core.f64
+    %ok_extsi = arith.extsi %n : core.i32 to core.i64
+    %ok_extui = arith.extui %n : core.i32 to core.i64
+    %ok_trunci = arith.trunci %w : core.i64 to core.i32
+    %ok_sitofp = arith.sitofp %n : core.i32 to core.f64
+    %ok_fptoui = arith.fptoui %y : core.f64 to core.i64
+    %ok_extf = arith.extf %x : core.f32 to core.f64
+    %ok_truncf = arith.truncf %y : core.f64 to core.f32
+    %bad_extsi = arith.extsi %w : core.i64 to core.i32
+    %bad_trunci = arith.trunci %n : core.i32 to core.i64
+    %bad_extf = arith.extf %y : core.f64 to core.f32
+    %bad_ptr = arith.extui %p : core.ptr to core.i64
+    %bad_float = arith.sitofp %x : core.f32 to core.f64
     func.return
   }
 }"#,
@@ -1462,15 +1528,15 @@ mod schema_tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f() {
-    %ok_int = arith.const {value = 7} : core.i32
-    %ok_bool = arith.const {value = true} : core.i1
-    %ok_float = arith.const {value = 1.5} : core.f64
+    %ok_int = arith.constant 7 : core.i32
+    %ok_bool = arith.constant true : core.i1
+    %ok_float = arith.constant 1.5 : core.f64
     %nil = core.nil_value : core.nil
-    %bad_nil = arith.const {value = unit} : core.nil
-    %bad_ptr = arith.const {value = 0} : core.ptr
-    %bad_bool = arith.const {value = true} : core.i32
-    %bad_float = arith.const {value = 1.5} : core.i32
-    %bad_int = arith.const {value = 1} : core.f32
+    %bad_nil = arith.constant unit : core.nil
+    %bad_ptr = arith.constant 0 : core.ptr
+    %bad_bool = arith.constant true : core.i32
+    %bad_float = arith.constant 1.5 : core.i32
+    %bad_int = arith.constant 1 : core.f32
     func.return
   }
 }"#,
@@ -1490,10 +1556,10 @@ mod schema_tests {
             r#"core.module @test {
   func.func @f(%a: core.i32, %b: core.i64, %x: core.f64) {
     %sub = arith.subi %a, %b : core.i32
-    %shl = arith.shl %a, %b : core.i32
+    %shl = arith.shli %a, %b : core.i32
     %mul = arith.mulf %x, %a : core.f64
     %neg = arith.negi %x : core.f64
-    %and = arith.and %a, %a : core.i64
+    %and = arith.andi %a, %a : core.i64
     %ok = arith.divsi %a, %a : core.i32
     func.return
   }
@@ -1503,10 +1569,10 @@ mod schema_tests {
         let messages = result.to_string();
         for op in [
             "arith.subi",
-            "arith.shl",
+            "arith.shli",
             "arith.mulf",
             "arith.negi",
-            "arith.and",
+            "arith.andi",
         ] {
             assert!(messages.contains(op), "missing {op}: {messages}");
         }
@@ -1522,17 +1588,17 @@ mod schema_tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f(%i: core.index, %n: core.i32, %w: core.i64, %x: core.f64) {
-    %ok_const = arith.const {value = 4} : core.index
+    %ok_const = arith.constant 4 : core.index
     %ok_add = arith.addi %i, %ok_const : core.index
-    %ok_cmp = arith.cmpi %i, %ok_add {predicate = "ult"} : core.i1
-    %ok_si = arith.index_castsi %n : core.index
-    %ok_ui = arith.index_castui %i : core.i64
+    %ok_cmp = arith.cmpi ult, %i, %ok_add : core.index
+    %ok_si = arith.index_cast %n : core.i32 to core.index
+    %ok_ui = arith.index_castui %i : core.index to core.i64
     %bad_mixed = arith.addi %i, %n : core.index
-    %bad_extsi = arith.extsi %i : core.i64
-    %bad_float = arith.sitofp %i : core.f64
-    %bad_fixed = arith.index_castsi %n : core.i64
-    %bad_same = arith.index_castui %i : core.index
-    %bad_cast_float = arith.index_castsi %x : core.index
+    %bad_extsi = arith.extsi %i : core.index to core.i64
+    %bad_float = arith.sitofp %i : core.index to core.f64
+    %bad_fixed = arith.index_cast %n : core.i32 to core.i64
+    %bad_same = arith.index_castui %i : core.index to core.index
+    %bad_cast_float = arith.index_cast %x : core.f64 to core.index
     func.return
   }
 }"#,
@@ -1543,7 +1609,7 @@ mod schema_tests {
             "arith.addi",
             "arith.extsi",
             "arith.sitofp",
-            "arith.index_castsi",
+            "arith.index_cast",
             "arith.index_castui",
         ] {
             assert!(messages.contains(op), "missing {op}: {messages}");
@@ -1553,6 +1619,67 @@ mod schema_tests {
             "{messages}"
         );
         assert!(!messages.contains("arith.cmpi"), "{messages}");
-        assert!(!messages.contains("arith.const"), "{messages}");
+        assert!(!messages.contains("arith.constant"), "{messages}");
+    }
+}
+
+#[cfg(test)]
+mod format_tests {
+    use crate::context::IrContext;
+    use crate::parser::parse_test_module;
+
+    fn round_trip(body: &str) -> String {
+        let input = format!(
+            "core.module @test {{\n  func.func @f(%a: core.i32, %b: core.i32, %x: core.f64) -> core.nil {{\n{body}\n    func.return\n  }}\n}}"
+        );
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, &input);
+        let printed = module.op().display(&ctx).to_string();
+        let mut reparsed = IrContext::new();
+        let module = parse_test_module(&mut reparsed, &printed);
+        assert_eq!(module.op().display(&reparsed).to_string(), printed);
+        printed
+    }
+
+    #[test]
+    fn operations_are_written_as_mlir_writes_them() {
+        let body = "      %0 = arith.constant -1 : core.i32
+      %1 = arith.constant true : core.i1
+      %2 = arith.constant 1.5 : core.f64
+      %3 = arith.cmpi slt, %a, %b : core.i32
+      %4 = arith.cmpf oge, %x, %2 : core.f64
+      %5 = arith.extsi %a : core.i32 to core.i64
+      %6 = arith.index_cast %a : core.i32 to core.index
+      %7 = arith.andi %a, %b : core.i32
+      %8 = arith.shrsi %a, %b : core.i32";
+        let printed = round_trip(body);
+        assert!(
+            printed.contains("%3 = arith.constant -1 : core.i32"),
+            "{printed}"
+        );
+        assert!(
+            printed.contains("%6 = arith.cmpi slt, %0, %1 : core.i32"),
+            "{printed}"
+        );
+        assert!(
+            printed.contains("%7 = arith.cmpf oge, %2, %5 : core.f64"),
+            "{printed}"
+        );
+        assert!(
+            printed.contains("arith.extsi %0 : core.i32 to core.i64"),
+            "{printed}"
+        );
+    }
+
+    #[test]
+    fn comparisons_take_only_their_predicates() {
+        let mut ctx = IrContext::new();
+        let error = crate::parser::parse_module(
+            &mut ctx,
+            "core.module @test {\n  func.func @f(%a: core.i32) -> core.nil {\n    %c = arith.cmpi lt, %a, %a : core.i32\n    func.return\n  }\n}",
+        )
+        .map(|_| ())
+        .expect_err("`lt` is no integer predicate");
+        assert!(error.to_string().contains("keyword"), "{error}");
     }
 }

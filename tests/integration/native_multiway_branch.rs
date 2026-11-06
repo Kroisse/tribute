@@ -12,9 +12,8 @@ use crate::common::NativeTestBinary;
 struct Selection<'a> {
     /// The type of the index.
     index_ty: &'a str,
-    /// The operation name and, for `clif.switch`, its attributes.
-    operation: &'a str,
-    attributes: &'a str,
+    /// The cases of a `clif.switch`, or `None` for a `clif.br_table`.
+    cases: Option<&'a [u64]>,
     /// The number of successors after the default.
     targets: usize,
     /// Inputs with the 1-based position of the successor each selects, or 0
@@ -28,50 +27,61 @@ struct Selection<'a> {
 fn selection_module(selection: &Selection<'_>) -> String {
     let Selection {
         index_ty,
-        operation,
-        attributes,
+        cases,
         targets,
         expected,
     } = *selection;
+    let mut arms = String::new();
+    for target in 1..=targets {
+        if target > 1 {
+            arms.push_str(", ");
+        }
+        match cases {
+            Some(cases) => write!(arms, "{}: ^target{target}", cases[target - 1]),
+            None => write!(arms, "^target{target}"),
+        }
+        .unwrap();
+    }
+    let operation = if cases.is_some() {
+        "clif.switch"
+    } else {
+        "clif.br_table"
+    };
     let mut text = String::from("core.module @test {\n");
     writeln!(
         text,
-        r#"  clif.func {{sym_name = "select", type = clif.func_sig<({index_ty}) -> core.i32>}} {{
-    ^entry(%index: {index_ty}):
-      {operation} %index [^default{}]{attributes}
+        r#"  clif.func @select(%index: {index_ty}) -> core.i32 {{
+    ^entry:
+      {operation} %index, ^default [{arms}]
     ^default:
-      %default = clif.iconst {{value = 0}} : core.i32
-      clif.return %default"#,
-        (1..=targets).fold(String::new(), |mut labels, target| {
-            write!(labels, ", ^target{target}").unwrap();
-            labels
-        })
+      %default = clif.iconst 0 : core.i32
+      clif.return %default"#
     )
     .unwrap();
     for target in 1..=targets {
         writeln!(
             text,
             r#"    ^target{target}:
-      %result{target} = clif.iconst {{value = {target}}} : core.i32
+      %result{target} = clif.iconst {target} : core.i32
       clif.return %result{target}"#
         )
         .unwrap();
     }
-    text.push_str("  }\n");
-    text.push_str(r#"  clif.func {sym_name = "main", type = clif.func_sig<() -> core.i32>} {"#);
+    writeln!(text, r#"  }}"#).unwrap();
+    text.push_str("  clif.func @main() -> core.i32 {");
     text.push('\n');
     for (position, (input, result)) in expected.iter().enumerate() {
         let next = position + 1;
         writeln!(
             text,
             r#"    ^check{position}:
-      %input{position} = clif.iconst {{value = {input}}} : {index_ty}
-      %actual{position} = clif.call %input{position} {{callee = @select}} : core.i32
-      %expected{position} = clif.iconst {{value = {result}}} : core.i32
-      %matches{position} = clif.icmp %actual{position}, %expected{position} {{cond = "eq"}} : core.i8
+      %input{position} = clif.iconst {input} : {index_ty}
+      %actual{position} = clif.call @select(%input{position}) : ({index_ty}) -> core.i32
+      %expected{position} = clif.iconst {result} : core.i32
+      %matches{position} = clif.icmp eq, %actual{position}, %expected{position} : core.i32
       clif.brif %matches{position} [^check{next}, ^fail{position}]
     ^fail{position}:
-      %code{position} = clif.iconst {{value = {next}}} : core.i32
+      %code{position} = clif.iconst {next} : core.i32
       clif.return %code{position}"#
         )
         .unwrap();
@@ -79,7 +89,7 @@ fn selection_module(selection: &Selection<'_>) -> String {
     writeln!(
         text,
         r#"    ^check{}:
-      %success = clif.iconst {{value = 0}} : core.i32
+      %success = clif.iconst 0 : core.i32
       clif.return %success
   }}
 }}"#,
@@ -104,8 +114,7 @@ fn assert_selects(selection: Selection<'_>) {
 fn br_table<'a>(targets: usize, expected: &'a [(i64, i32)]) -> Selection<'a> {
     Selection {
         index_ty: "core.i32",
-        operation: "clif.br_table",
-        attributes: "",
+        cases: None,
         targets,
         expected,
     }
@@ -137,8 +146,7 @@ fn br_table_without_entries_always_selects_the_default() {
 fn switch_dense_cases_select_their_targets() {
     assert_selects(Selection {
         index_ty: "core.i64",
-        operation: "clif.switch",
-        attributes: " {cases = [0, 1, 2, 3]}",
+        cases: Some(&[0, 1, 2, 3]),
         targets: 4,
         expected: &[
             (0, 1),
@@ -156,8 +164,7 @@ fn switch_dense_cases_select_their_targets() {
 fn switch_sparse_and_offset_cases_select_their_targets() {
     assert_selects(Selection {
         index_ty: "core.i64",
-        operation: "clif.switch",
-        attributes: " {cases = [7, 100, 18446744073709551615, 4294967296, 8, 101, 102]}",
+        cases: Some(&[7, 100, u64::MAX, 1 << 32, 8, 101, 102]),
         targets: 7,
         expected: &[
             (7, 1),
@@ -180,8 +187,7 @@ fn switch_sparse_and_offset_cases_select_their_targets() {
 fn switch_without_cases_always_selects_the_default() {
     assert_selects(Selection {
         index_ty: "core.i32",
-        operation: "clif.switch",
-        attributes: " {cases = []}",
+        cases: Some(&[]),
         targets: 0,
         expected: &[(0, 0), (5, 0)],
     });

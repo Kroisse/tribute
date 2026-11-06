@@ -677,8 +677,8 @@ mod tests {
             r#"core.module @test {
   !Closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @f(%c: !Closure) {
-    %erased = core.unrealized_conversion_cast %c : tribute_rt.anyref
-    func.call %erased {callee = @use}
+    %erased = core.unrealized_conversion_cast %c : !Closure to tribute_rt.anyref
+    func.call @use(%erased) : (tribute_rt.anyref) -> ()
     func.return
   }
 }"#,
@@ -695,7 +695,7 @@ mod tests {
             .unwrap();
 
         assert!(result.reached_fixpoint);
-        let printed = trunk_ir::printer::print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(!printed.contains("unrealized_conversion_cast"), "{printed}");
         assert!(
             printed.contains("wasm.ref_upcast %0 : wasm.anyref"),
@@ -739,7 +739,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f(%value: wasm.anyref) -> core.nil {
-    %unit = core.unrealized_conversion_cast %value : core.nil
+    %unit = core.unrealized_conversion_cast %value : wasm.anyref to core.nil
     func.return %unit
   }
 }"#,
@@ -750,7 +750,7 @@ mod tests {
             .add_pattern(trunk_ir::conversion::UnrealizedCastConversionPattern)
             .apply_partial(&mut ctx, module);
 
-        let printed = trunk_ir::printer::print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(!printed.contains("unrealized_conversion_cast"), "{printed}");
         assert!(printed.contains("wasm.nop"), "{printed}");
     }
@@ -789,7 +789,7 @@ mod tests {
   func.func @f(%sample: !Sample, %callee: core.i32, %value: tribute_rt.anyref) -> tribute_rt.int {
     %null = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
     %some = adt.variant_new %null {tag = "Some", type = !Option} : !Option
-    %result = func.call_indirect %callee, %value {signature = func.func_sig<(tribute_rt.anyref) -> tribute_rt.int>} : tribute_rt.int
+    %result = func.call_indirect %callee(%value) : (tribute_rt.anyref) -> tribute_rt.int
     func.return %result
   }
 }"#,
@@ -797,7 +797,7 @@ mod tests {
 
         convert_builtin_layouts(&mut ctx, module);
 
-        let printed = trunk_ir::printer::print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(!printed.contains("tribute_rt."), "{printed}");
         assert!(
             printed.contains(
@@ -806,10 +806,7 @@ mod tests {
             "{printed}"
         );
         assert!(printed.contains("Some(wasm.anyref)"), "{printed}");
-        assert!(
-            printed.contains("func.func_sig<(wasm.anyref) -> core.i32>"),
-            "{printed}"
-        );
+        assert!(printed.contains(": (wasm.anyref) -> core.i32"), "{printed}");
     }
 
     #[test]

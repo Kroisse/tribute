@@ -526,8 +526,8 @@ mod tests {
         tribute_control.return %x
       }
     }
-    %a = tribute_cps.call_indirect %f, %y {convention = "direct"} : core.i32
-    %b = tribute_cps.call_indirect %g, %a {convention = "direct"} : core.i32
+    %a = tribute_cps.call_indirect %f(%y) attributes {convention = "direct"} : (core.i32) -> core.i32
+    %b = tribute_cps.call_indirect %g(%a) attributes {convention = "direct"} : (core.i32) -> core.i32
     tribute_control.return %b
   }
   tribute_cps.func @evidence(%y: core.i32) -> core.i32 convention(evidence_direct) {
@@ -536,7 +536,7 @@ mod tests {
         tribute_control.return %x
       }
     }
-    %r = tribute_cps.call_indirect %h, %y {convention = "evidence_direct"} : core.i32
+    %r = tribute_cps.call_indirect %h(%y) attributes {convention = "evidence_direct"} : (core.i32) -> core.i32
     tribute_control.return %r
   }
 }"#,
@@ -549,14 +549,14 @@ mod tests {
         )
         .unwrap();
         // The lambdas name their adapters, and the text round trips.
-        let printed = trunk_ir::printer::print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(printed.contains("adapters = {"), "{printed}");
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, &printed);
-        assert_eq!(trunk_ir::printer::print_module(&ctx, module.op()), printed);
+        assert_eq!(module.op().display(&ctx).to_string(), printed);
         // Frame expansion lowers the exits of the `Cps` adapters.
         crate::lower_continuation_frames::lower_continuation_frames(&mut ctx, module).unwrap();
-        let expanded = trunk_ir::printer::print_module(&ctx, module.op());
+        let expanded = module.op().display(&ctx).to_string();
         assert!(!expanded.contains("ability.exit"), "{expanded}");
         lower_closure_lambda(&mut ctx, module);
         let tables = tables(&ctx, module);

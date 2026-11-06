@@ -90,12 +90,17 @@ impl CallingConvention {
     }
 }
 
-/// `Attr<CallingConvention>`: a keyword string. The schema checks only that
-/// the value is a string; an operation declaring it verifies the keyword.
+/// `Attr<CallingConvention>`: a keyword string, which the schema checks.
 impl trunk_ir::attr_kind::AttrKind for CallingConvention {
     const KIND: trunk_ir::op_schema::AttributeKind = trunk_ir::op_schema::AttributeKind::String;
     type Out<'ctx> = CallingConvention;
     type In = CallingConvention;
+    const DOMAIN: Option<&'static str> =
+        Some("one of \"direct\", \"evidence_direct\", and \"cps\"");
+
+    fn accepts(ctx: &IrContext, attr: &Attribute) -> bool {
+        Self::from_attribute(ctx, attr).is_some()
+    }
 
     fn read<'ctx>(ctx: &'ctx IrContext, attr: &'ctx Attribute) -> CallingConvention {
         Self::from_attribute(ctx, attr).expect("unverified calling convention keyword")
@@ -103,6 +108,20 @@ impl trunk_ir::attr_kind::AttrKind for CallingConvention {
 
     fn write(ctx: &mut IrContext, value: CallingConvention) -> Attribute {
         value.to_attribute(ctx)
+    }
+
+    /// A convention is written as its keyword, `cps`.
+    fn print_text(p: &mut trunk_ir::printer::AsmPrinter<'_>, attr: &Attribute) -> fmt::Result {
+        fmt::Write::write_str(p, Self::read(p.ctx(), attr).keyword())
+    }
+
+    fn parse_text(
+        p: &mut trunk_ir::parser::AsmParser<'_>,
+    ) -> trunk_ir::parser::ParseResult<Attribute> {
+        trunk_ir::asm_format::parse_keyword(p, |ctx, word| {
+            let convention: Self = word.parse().ok()?;
+            Some(ctx.string_attr(convention.keyword()))
+        })
     }
 }
 
@@ -353,8 +372,8 @@ mod tests {
     func.return
   }
   func.func @calls() -> core.nil attributes {tribute.calling_convention = "evidence_direct"} {
-    %r = func.call {callee = @direct, tribute.calling_convention = "direct"} : core.nil
-    %c = arith.const {value = 0, tribute.calling_convention = "direct"} : core.i32
+    %r = func.call @direct() attributes {tribute.calling_convention = "direct"} : () -> core.nil
+    %c = arith.constant {tribute.calling_convention = "direct"} 0 : core.i32
     func.return
   }
 }"#;
@@ -391,8 +410,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f(%x: core.i32) -> core.nil {
-    %r = func.call %x {callee = @f} : core.nil
-    func.tail_call %x {callee = @f}
+    %r = func.call @f(%x) : (core.i32) -> core.nil
+    func.tail_call @f(%x) : (core.i32) -> ()
   }
 }"#,
         );
@@ -441,8 +460,8 @@ mod tests {
     func.return %x
   }
   func.func @agrees(%x: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
-    %c = closure.new {entries = [@callee, @callee, @callee]} : !closure
-    %r = func.call_indirect %c, %x {signature = !fn, tribute.calling_convention = "direct"} : core.i32
+    %c = closure.new [@callee, @callee, @callee] : !closure
+    %r = func.call_indirect %c(%x) attributes {tribute.calling_convention = "direct"} : (core.i32) -> core.i32
     func.return %r
   }
 }"#;
@@ -459,7 +478,7 @@ mod tests {
             [
                 ("func.func".to_owned(), ConventionError::Malformed),
                 ("func.func".to_owned(), ConventionError::Malformed),
-                ("arith.const".to_owned(), ConventionError::Unregistered),
+                ("arith.constant".to_owned(), ConventionError::Unregistered),
             ]
         );
     }
@@ -493,7 +512,7 @@ mod tests {
             );
             assert_eq!(DynConventionBearing::of(&ctx, op), None);
         }
-        let constant = named(&ctx, module, "arith.const");
+        let constant = named(&ctx, module, "arith.constant");
         assert_eq!(
             DynConventionBearing::exact(&ctx, constant),
             Err(ConventionError::Unregistered)
@@ -528,7 +547,7 @@ mod tests {
     fn setting_a_convention_on_an_unregistered_operation_panics() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, CONVENTIONS);
-        let constant = named(&ctx, module, "arith.const");
+        let constant = named(&ctx, module, "arith.constant");
         DynConventionBearing::set(&mut ctx, constant, CallingConvention::Direct);
     }
 
@@ -546,7 +565,16 @@ mod tests {
                 Some(convention)
             );
             assert_eq!(convention.to_string().parse(), Ok(convention));
+            let mut p = trunk_ir::parser::AsmParser::new(&mut ctx, convention.keyword());
+            let parsed = <CallingConvention as trunk_ir::attr_kind::AttrKind>::parse_text(&mut p)
+                .expect("a convention keyword");
+            assert_eq!(
+                CallingConvention::from_attribute(&ctx, &parsed),
+                Some(convention)
+            );
         }
+        let mut p = trunk_ir::parser::AsmParser::new(&mut ctx, "tail");
+        assert!(<CallingConvention as trunk_ir::attr_kind::AttrKind>::parse_text(&mut p).is_err());
 
         assert!("Cps".parse::<CallingConvention>().is_err());
         let unknown = ctx.string_attr("tail");

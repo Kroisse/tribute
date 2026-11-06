@@ -640,7 +640,6 @@ fn block_arg(ty: TypeRef) -> BlockArgData {
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
 
     fn op_names(ctx: &IrContext, module: Module) -> Vec<String> {
         module
@@ -662,11 +661,11 @@ mod tests {
   }
 }"#,
         );
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
 
         lower(&mut ctx, module).expect("module without writes should lower");
 
-        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
     }
 
     #[test]
@@ -704,7 +703,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  wasm.import_func {module = "wasi_snapshot_preview1", name = "fd_write", sym_name = "fd_write", type = wasm.func_sig<(core.i32, core.i32, core.i32, core.i32) -> core.i32>}
+  wasm.import_func @fd_write from "wasi_snapshot_preview1" "fd_write" : (core.i32, core.i32, core.i32, core.i32) -> core.i32
   wasm.memory {min = 0, max = 0, shared = false, memory64 = false}
   func.func @main(%bytes: core.bytes, %newline: core.i1) -> core.nil {
     %write = tribute_io.write %bytes, %newline : core.nil
@@ -726,9 +725,9 @@ mod tests {
     #[test]
     fn lowering_rejects_a_conflicting_fd_write_import() {
         for import in [
-            "wasm.import_func {module = \"env\", name = \"fd_write\", sym_name = \"fd_write\", type = wasm.func_sig<(core.i32, core.i32, core.i32, core.i32) -> core.i32>}",
-            "wasm.import_func {module = \"wasi_snapshot_preview1\", name = \"fd_read\", sym_name = \"fd_write\", type = wasm.func_sig<(core.i32, core.i32, core.i32, core.i32) -> core.i32>}",
-            "wasm.import_func {module = \"wasi_snapshot_preview1\", name = \"fd_write\", sym_name = \"fd_write\", type = wasm.func_sig<(core.i32) -> core.i32>}",
+            "wasm.import_func @fd_write from \"env\" \"fd_write\" : (core.i32, core.i32, core.i32, core.i32) -> core.i32",
+            "wasm.import_func @fd_write from \"wasi_snapshot_preview1\" \"fd_read\" : (core.i32, core.i32, core.i32, core.i32) -> core.i32",
+            "wasm.import_func @fd_write from \"wasi_snapshot_preview1\" \"fd_write\" : (core.i32) -> core.i32",
         ] {
             let mut ctx = IrContext::new();
             let module = parse_test_module(
@@ -743,13 +742,13 @@ mod tests {
 }}"#
                 ),
             );
-            let before = print_module(&ctx, module.op());
+            let before = module.op().display(&ctx).to_string();
 
             let error = lower(&mut ctx, module).expect_err("conflicting import must be rejected");
 
             assert_eq!(error.boundary(), IO_TO_WASM);
             assert!(error.to_string().contains("must import"), "{error}");
-            assert_eq!(print_module(&ctx, module.op()), before, "{import}");
+            assert_eq!(module.op().display(&ctx).to_string(), before, "{import}");
         }
     }
 
@@ -769,11 +768,11 @@ mod tests {
 
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, &module_text(true));
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
         let error = lower(&mut ctx, module).expect_err("memory64 must be rejected");
         assert_eq!(error.boundary(), IO_TO_WASM);
         assert!(error.to_string().contains("32-bit memory"), "{error}");
-        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
 
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, &module_text(false));

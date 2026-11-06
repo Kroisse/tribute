@@ -1,6 +1,5 @@
-use trunk_ir::ops::DialectType;
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::parser::parse_module;
-use trunk_ir::printer::print_module;
 use trunk_ir::rewrite::Module;
 use trunk_ir::types::TypeDataBuilder;
 use trunk_ir::{IrContext, SymbolPath};
@@ -13,22 +12,22 @@ const MODULE: &str = r#"core.module @test {
   !closed = tribute_control.func_sig<(core.i32) -> core.i32 row(@A, @B)>
   !applied = tribute_control.func_sig<(!closed, core.i32) -> core.i32 row(@A, @B)>
 
-  ability.decl {sym_name = "A"} {
+  ability.decl @A {
     ability.operation {kind = "fn", op_name = "get", param_types = [], result_type = core.i32}
   }
-  ability.decl {sym_name = "B"} {
+  ability.decl @B {
     ability.operation {kind = "op", op_name = "put", param_types = [core.i32], result_type = core.i32}
   }
   tribute_control.func @apply['a0](%f: !open, %x: core.i32) -> core.i32 row(| 'a0) {
-    %r = tribute_control.call_indirect %f, %x : core.i32
+    %r = tribute_control.call_indirect %f(%x) : (core.i32) -> core.i32 row(| 'a0)
     tribute_control.return %r
   }
   tribute_control.func @main(%x: core.i32) -> core.i32 row(@A, @B) {
     %f = tribute_control.lambda(%y: core.i32) -> core.i32 row(@A, @B) captures [] {
       tribute_control.return %y
     }
-    %g = tribute_control.func_ref {func_ref = @apply, row_args = [{instances = [@A, @B]}]} : !applied
-    %r = tribute_control.call %f, %x {callee = @apply, row_args = [{instances = [@A, @B]}]} : core.i32
+    %g = tribute_control.func_ref @apply rows [{instances = [@A, @B]}] : !applied
+    %r = tribute_control.call @apply(%f, %x) attributes {row_args = [{instances = [@A, @B]}]} : (tribute_control.func_sig<(core.i32) -> core.i32 row(@A, @B)>, core.i32) -> core.i32
     tribute_control.return %r
   }
 }"#;
@@ -67,7 +66,7 @@ fn rows_validate_and_round_trip_in_concise_syntax() {
     let result = validate(&ctx, module);
     assert!(result.is_ok(), "{result}");
 
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert!(
         printed.contains("@apply['a0](%0: !open, %1: core.i32) -> core.i32 row(| 'a0) {"),
         "{printed}"
@@ -76,13 +75,13 @@ fn rows_validate_and_round_trip_in_concise_syntax() {
     let mut reparsed = IrContext::new();
     let root = parse_module(&mut reparsed, &printed)
         .unwrap_or_else(|error| panic!("failed to reparse:\n{error}\n\n{printed}"));
-    assert_eq!(print_module(&reparsed, root), printed);
+    assert_eq!(root.display(&reparsed).to_string(), printed);
 }
 
 #[test]
 fn a_signature_type_writes_its_row_as_a_clause_after_the_result() {
     let (ctx, module) = parse(MODULE);
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert!(
         printed.contains("!open = tribute_control.func_sig<(core.i32) -> core.i32 row(| 'a0)>"),
         "{printed}"
@@ -93,7 +92,7 @@ fn a_signature_type_writes_its_row_as_a_clause_after_the_result() {
         "!closed = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {instances = [@A, @B]}}>",
     );
     let (ctx, module) = parse(&input);
-    assert_eq!(print_module(&ctx, module.op()), printed);
+    assert_eq!(module.op().display(&ctx).to_string(), printed);
 
     let input = MODULE.replace(
         "!closed = tribute_control.func_sig<(core.i32) -> core.i32 row(@A, @B)>",
@@ -118,7 +117,7 @@ fn concise_rows_cover_instances_tails_and_both() {
         let func = module.ops(&ctx)[0];
         let ty = ctx.op_attrs(func).get_type("type").unwrap();
         assert_eq!(FuncSig::from_type_ref(&ctx, ty).unwrap().row(&ctx), row);
-        assert!(print_module(&ctx, module.op()).contains(written));
+        assert!(module.op().display(&ctx).to_string().contains(written));
     }
 }
 
@@ -138,15 +137,15 @@ fn concise_syntax_does_not_write_the_closed_empty_row() {
 fn a_row_argument_that_changes_the_callee_signature_is_rejected() {
     assert_rejects(
         &MODULE.replace(
-            "{callee = @apply, row_args = [{instances = [@A, @B]}]}",
-            "{callee = @apply, row_args = [{instances = [@A]}]}",
+            "attributes {row_args = [{instances = [@A, @B]}]}",
+            "attributes {row_args = [{instances = [@A]}]}",
         ),
         "call argument types do not match the logical signature",
     );
     assert_rejects(
         &MODULE.replace(
-            "{func_ref = @apply, row_args = [{instances = [@A, @B]}]}",
-            "{func_ref = @apply, row_args = [{instances = [@B]}]}",
+            "@apply rows [{instances = [@A, @B]}]",
+            "@apply rows [{instances = [@B]}]",
         ),
         "func_ref result source signature does not match its target",
     );
@@ -155,10 +154,7 @@ fn a_row_argument_that_changes_the_callee_signature_is_rejected() {
 #[test]
 fn a_reference_passes_one_row_for_each_quantified_binder() {
     assert_rejects(
-        &MODULE.replace(
-            ", row_args = [{instances = [@A, @B]}]} : core.i32",
-            "} : core.i32",
-        ),
+        &MODULE.replace(" attributes {row_args = [{instances = [@A, @B]}]} :", " :"),
         "passes 0 row arguments, but its target quantifies 1 row binders",
     );
 }
@@ -175,6 +171,52 @@ fn rows_must_be_sorted_and_not_written_when_closed_and_empty() {
             "!closed = tribute_control.func_sig<(core.i32) -> core.i32, {ability_row = {}}>",
         ),
         "malformed tribute_control.func_sig: Row",
+    );
+}
+
+#[test]
+fn a_row_names_each_instance_once() {
+    assert_rejects(
+        &MODULE.replace("row(@A, @B) {", "row(@A, @A, @B) {"),
+        "malformed tribute_control.func_sig: Row",
+    );
+    let a = SymbolPath::new(["A"]);
+    let b = SymbolPath::new(["B"]);
+    assert_eq!(
+        Row::new([b.clone(), a.clone(), b.clone()], None),
+        Row::new([a, b], None)
+    );
+}
+
+/// A row argument that names an instance the callee's row also names merges
+/// with it, so the substituted parameter type is the argument's own type.
+#[test]
+fn substitution_merges_an_instance_named_by_the_row_and_its_argument() {
+    let (ctx, module) = parse(
+        r#"core.module @test {
+  ability.decl @A {
+    ability.operation {kind = "fn", op_name = "get", param_types = [], result_type = core.i32}
+  }
+  tribute_control.func @apply['a0](%f: tribute_control.func_sig<(core.i32) -> core.i32 row(@A | 'a0)>, %x: core.i32) -> core.i32 row(| 'a0) {
+    tribute_control.return %x
+  }
+  tribute_control.func @main(%x: core.i32) -> core.i32 row(@A) {
+    %f = tribute_control.lambda(%y: core.i32) -> core.i32 row(@A) captures [] {
+      tribute_control.return %y
+    }
+    %r = tribute_control.call @apply(%f, %x) attributes {row_args = [{instances = [@A]}]} : (tribute_control.func_sig<(core.i32) -> core.i32 row(@A)>, core.i32) -> core.i32
+    tribute_control.return %r
+  }
+}"#,
+    );
+    let result = validate(&ctx, module);
+    assert!(result.errors.is_empty(), "{result}");
+
+    let a = SymbolPath::new(["A"]);
+    let row = Row::new([a.clone()], Some(0));
+    assert_eq!(
+        row.substitute(&[Row::new([a.clone()], None)]),
+        Some(Row::new([a], None))
     );
 }
 
@@ -223,14 +265,14 @@ fn row_binders_put_quantified_binders_first() {
 }
 
 const UNIONS: &str = r#"core.module @test {
-  ability.decl {sym_name = "A"} {
+  ability.decl @A {
     ability.operation {kind = "op", op_name = "get", param_types = [], result_type = core.i32}
   }
   tribute_control.func @join['a0 = 'a1 | 'a2, 'a1, 'a2](%x: core.i32) -> core.i32 row(| 'a0) {
     tribute_control.return %x
   }
   tribute_control.func @caller['a0 = 'a1 | 'a2, 'a1, 'a2](%x: core.i32) -> core.i32 row(| 'a0) {
-    %r = tribute_control.call %x {callee = @join, evidence_plan = PLAN, row_args = [{tail = 0}, {tail = 1}, {tail = 2}]} : core.i32
+    %r = tribute_control.call @join(%x) attributes {evidence_plan = PLAN, row_args = [{tail = 0}, {tail = 1}, {tail = 2}]} : (core.i32) -> core.i32
     tribute_control.return %r
   }
 }"#;
@@ -372,6 +414,24 @@ fn tuple_names_keep_symbol_path_components_apart() {
 }
 
 #[test]
+fn a_declared_row_is_an_absent_inferred_row() {
+    let (mut ctx, module) = parse(
+        r#"core.module @test {
+  tribute_control.func @f(%x: core.i32) -> core.i32 {
+    tribute_control.return %x
+  }
+}"#,
+    );
+    let func = module.ops(&ctx)[0];
+    let source = super::super::Func::from_op(&ctx, func).unwrap();
+    assert!(!source.inferred_row(&ctx));
+    let canonical = module.op().display(&ctx).to_string();
+    ctx.op_attrs_mut(func)
+        .insert(INFERRED_ROW_ATTR, trunk_ir::types::Attribute::Bool(false));
+    assert_eq!(module.op().display(&ctx).to_string(), canonical);
+}
+
+#[test]
 fn binder_headers_name_kinds_unions_and_an_inferred_row() {
     let input = r#"core.module @test {
   tribute_control.func @f['a0 = 'a1 | 'a2, ability_arg 'a1, local 'a2, body 'a3](%x: core.i32) -> core.i32 row(| 'a0) inferred {
@@ -400,7 +460,7 @@ fn binder_headers_name_kinds_unions_and_an_inferred_row() {
         ctx.op_attrs(func).get(INFERRED_ROW_ATTR),
         Some(&trunk_ir::types::Attribute::Bool(true))
     );
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert!(
         printed.contains(
             "@f['a0 = 'a1 | 'a2, ability_arg 'a1, local 'a2, body 'a3](%0: core.i32) -> core.i32 row(| 'a0) inferred {"
@@ -426,17 +486,17 @@ fn a_header_may_declare_only_unquantified_binders() {
     let input = r#"core.module @test {
   tribute_control.func @run[local 'a0, body 'a1]() -> core.i32 {
     %f = tribute_control.lambda['a0]() -> core.i32 row(| 'a0) captures [] {
-      %x = arith.const {value = 1} : core.i32
+      %x = arith.constant 1 : core.i32
       tribute_control.return %x
     }
-    %y = arith.const {value = 2} : core.i32
+    %y = arith.constant 2 : core.i32
     tribute_control.return %y
   }
 }"#;
     let (ctx, module) = parse(input);
     let result = validate(&ctx, module);
     assert!(result.is_ok(), "{result}");
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert!(
         printed.contains("@run[local 'a0, body 'a1]() -> core.i32 {"),
         "{printed}"
@@ -450,8 +510,8 @@ fn a_header_may_declare_only_unquantified_binders() {
 #[test]
 fn a_function_reference_may_widen_the_row_of_its_target() {
     let input = MODULE.replace(
-        "{func_ref = @apply, row_args = [{instances = [@A, @B]}]}",
-        "{func_ref = @apply, row_args = [{instances = [@A]}]}",
+        "@apply rows [{instances = [@A, @B]}]",
+        "@apply rows [{instances = [@A]}]",
     );
     let narrowed = input.replace(
         "!applied = tribute_control.func_sig<(!closed, core.i32) -> core.i32 row(@A, @B)>",
@@ -468,34 +528,43 @@ fn a_function_reference_may_widen_the_row_of_its_target() {
 }
 
 #[test]
-fn row_inclusion_counts_instances_and_keeps_the_tail() {
+fn row_inclusion_keeps_the_tail() {
     let a = SymbolPath::new(["A"]);
     let b = SymbolPath::new(["B"]);
-    let wide = Row::new([a.clone(), a.clone(), b.clone()], Some(1));
+    let wide = Row::new([a.clone(), b.clone()], Some(1));
     assert!(wide.includes(&Row::new([a.clone(), b.clone()], None)));
     assert!(wide.includes(&Row::new([a.clone()], Some(1))));
     assert!(!wide.includes(&Row::new([a.clone()], Some(0))));
-    assert!(!Row::new([a.clone()], None).includes(&Row::new([a.clone(), a], None)));
+    assert!(!Row::new([a.clone()], None).includes(&Row::new([a.clone(), b.clone()], None)));
     assert!(!Row::new([b], None).includes(&Row::new([], Some(1))));
 }
 
 const LOCALS: &str = r#"core.module @test {
   !step = tribute_control.func_sig<(core.i32) -> core.i32 row(| 'a1)>
   !step0 = tribute_control.func_sig<(core.i32) -> core.i32 row(| 'a0)>
-  ability.decl {sym_name = "A"} {
+  ability.decl @A {
   }
   tribute_control.func @f['a0, local 'a1](%x: core.i32) -> core.i32 row(| 'a0) {
     %g = tribute_control.lambda['a1](%y: core.i32) -> core.i32 row(| 'a1) captures [] {
       tribute_control.return %y
     }
     %s = tribute_control.instantiate %g {row_args = [ARGS]} : RESULT
-    %r = tribute_control.call_indirect %s, %x : core.i32
+    %r = tribute_control.call_indirect %s(%x) : CALLTY
     tribute_control.return %r
   }
 }"#;
 
 fn locals(args: &str, result: &str) -> String {
-    LOCALS.replace("ARGS", args).replace("RESULT", result)
+    let callee = match result {
+        "!step0" => "(core.i32) -> core.i32 row(| 'a0)",
+        "!step" => "(core.i32) -> core.i32 row(| 'a1)",
+        "!closed" => "(core.i32) -> core.i32 row(@A)",
+        other => panic!("unknown callee type {other}"),
+    };
+    LOCALS
+        .replace("ARGS", args)
+        .replace("RESULT", result)
+        .replace("CALLTY", callee)
 }
 
 #[test]
@@ -504,7 +573,7 @@ fn a_quantifying_lambda_round_trips_and_its_uses_instantiate_it() {
     let (ctx, module) = parse(&input);
     let result = validate(&ctx, module);
     assert!(result.is_ok(), "{result}");
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert!(
         printed.contains(
             "%1 = tribute_control.lambda['a1](%2: core.i32) -> core.i32 row(| 'a1) captures [] {"
@@ -516,7 +585,7 @@ fn a_quantifying_lambda_round_trips_and_its_uses_instantiate_it() {
         "{printed}"
     );
     let (reparsed, module) = parse(&printed);
-    assert_eq!(print_module(&reparsed, module.op()), printed);
+    assert_eq!(module.op().display(&reparsed).to_string(), printed);
 }
 
 #[test]
@@ -571,8 +640,8 @@ fn a_lambda_quantifies_local_binders_it_alone_owns() {
     );
     assert_rejects(
         &locals("{tail = 0}", "!step0").replace(
-            "tribute_control.call_indirect %s, %x",
-            "tribute_control.call_indirect %g, %x",
+            "tribute_control.call_indirect %s(%x) : (core.i32) -> core.i32 row(| 'a0)",
+            "tribute_control.call_indirect %g(%x) : (core.i32) -> core.i32 row(| 'a1)",
         ),
         "a lambda that quantifies rows is used only through instantiate",
     );
@@ -582,19 +651,21 @@ fn a_lambda_quantifies_local_binders_it_alone_owns() {
 fn a_lambda_captured_by_another_is_instantiated_in_its_body() {
     let nested = |use_: &str| {
         locals("{tail = 0}", "!step0").replace(
-            "    %s = tribute_control.instantiate %g {row_args = [{tail = 0}]} : !step0\n    %r = tribute_control.call_indirect %s, %x : core.i32\n",
+            "    %s = tribute_control.instantiate %g {row_args = [{tail = 0}]} : !step0\n    %r = tribute_control.call_indirect %s(%x) : (core.i32) -> core.i32 row(| 'a0)\n",
             &format!(
-                "    %h = tribute_control.lambda(%z: core.i32) -> core.i32 row(| 'a0) captures [%g] {{\n{use_}      tribute_control.return %r\n    }}\n    %r = tribute_control.call_indirect %h, %x : core.i32\n"
+                "    %h = tribute_control.lambda(%z: core.i32) -> core.i32 row(| 'a0) captures [%g] {{\n{use_}      tribute_control.return %r\n    }}\n    %r = tribute_control.call_indirect %h(%x) : (core.i32) -> core.i32 row(| 'a0)\n"
             ),
         )
     };
     let (ctx, module) = parse(&nested(
-        "      %s = tribute_control.instantiate %g {row_args = [{tail = 0}]} : !step0\n      %r = tribute_control.call_indirect %s, %z : core.i32\n",
+        "      %s = tribute_control.instantiate %g {row_args = [{tail = 0}]} : !step0\n      %r = tribute_control.call_indirect %s(%z) : (core.i32) -> core.i32 row(| 'a0)\n",
     ));
     let result = validate(&ctx, module);
     assert!(result.is_ok(), "{result}");
     assert_rejects(
-        &nested("      %r = tribute_control.call_indirect %g, %z : core.i32\n"),
+        &nested(
+            "      %r = tribute_control.call_indirect %g(%z) : (core.i32) -> core.i32 row(| 'a1)\n",
+        ),
         "a lambda that quantifies rows is used only through instantiate",
     );
 }
@@ -605,11 +676,11 @@ const FRONTEND: &str = r#"core.module @test {
   !pure = tribute_control.func_sig<(core.i32) -> core.i32>
   !applied = tribute_control.func_sig<(!pure, core.i32) -> core.i32>
   tribute_control.func @apply['a0](%f: !cb, %x: core.i32) -> core.i32 row(| 'a0) {
-    %r = tribute_control.call_indirect %f, %x : core.i32
+    %r = tribute_control.call_indirect %f(%x) : (core.i32) -> core.i32 row(| 'a0)
     tribute_control.return %r
   }
   tribute_control.func @forward['a0](%f: !cb, %x: core.i32) -> core.i32 row(| 'a0) {
-    tribute_control.tail_call_indirect %f, %x
+    tribute_control.tail_call_indirect %f(%x) : (core.i32) -> core.i32 row(| 'a0)
   }
   tribute_control.func @main[local 'a0](%x: core.i32) -> core.i32 inferred {
     %g = tribute_control.lambda(%y: core.i32) -> core.i32 captures [] {
@@ -619,9 +690,9 @@ const FRONTEND: &str = r#"core.module @test {
       tribute_control.return %z
     }
     %s = tribute_control.instantiate %h {row_args = [{}]} : !pure
-    %a = tribute_control.func_ref {func_ref = @apply, row_args = [{}]} : !applied
-    %v = tribute_control.call_indirect %s, %x : core.i32
-    %r = tribute_control.call_indirect %a, %g, %v : core.i32
+    %a = tribute_control.func_ref @apply rows [{}] : !applied
+    %v = tribute_control.call_indirect %s(%x) : (core.i32) -> core.i32
+    %r = tribute_control.call_indirect %a(%g, %v) : (!pure, core.i32) -> core.i32
     tribute_control.return %r
   }
 }"#;
@@ -631,7 +702,7 @@ fn frontend_output_validates_and_round_trips() {
     let (ctx, module) = parse(FRONTEND);
     let result = validate(&ctx, module);
     assert!(result.is_ok(), "{result}");
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert!(
         printed.contains("@apply['a0](%0: !cb, %1: core.i32) -> core.i32 row(| 'a0) {")
             && printed.contains("@main[local 'a0](%0: core.i32) -> core.i32 inferred {")
@@ -640,7 +711,7 @@ fn frontend_output_validates_and_round_trips() {
         "{printed}"
     );
     let (reparsed, module) = parse(&printed);
-    assert_eq!(print_module(&reparsed, module.op()), printed);
+    assert_eq!(module.op().display(&reparsed).to_string(), printed);
 }
 
 #[test]

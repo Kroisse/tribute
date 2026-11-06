@@ -101,9 +101,8 @@ pub(crate) fn extract_function_def(
         .unwrap_or_else(|| SymbolPath::new([func_op.sym_name(ctx)]));
     let ty = func_op.r#type(ctx);
 
-    let function = wasm_dialect::FuncSig::from_type_ref(ctx, ty).ok_or_else(|| {
-        CompilationError::type_error("wasm.func requires valid wasm.func_sig type")
-    })?;
+    let function = wasm_dialect::FuncSig::from_type_ref(ctx, ty)
+        .expect("schema-verified wasm.func has a wasm.func_sig type");
 
     if let Some(result_ty) = function.single_result(ctx) {
         let result_data = ctx.get_type(result_ty);
@@ -138,12 +137,6 @@ pub(crate) fn extract_import_def(
     let sym = qualified_name(ctx, import_op.op_ref())
         .unwrap_or_else(|| SymbolPath::new([import_op.sym_name(ctx)]));
     let ty = import_op.r#type(ctx);
-
-    if wasm_dialect::FuncSig::from_type_ref(ctx, ty).is_none() {
-        return Err(CompilationError::type_error(
-            "wasm.import_func requires valid wasm.func_sig type",
-        ));
-    }
 
     Ok(ImportFuncDef {
         sym,
@@ -232,8 +225,8 @@ pub(crate) fn extract_element_def(
     ctx: &IrContext,
     elem_op: wasm_dialect::Elem,
 ) -> CompilationResult<ElementDef> {
-    let table = elem_op.table(ctx).unwrap_or(0);
-    let raw_offset = elem_op.offset(ctx).unwrap_or(0);
+    let table = elem_op.table(ctx);
+    let raw_offset = elem_op.offset(ctx);
     let offset = i32::try_from(raw_offset)
         .map_err(|_| CompilationError::invalid_module("element segment offset exceeds i32::MAX"))?;
 
@@ -244,7 +237,7 @@ pub(crate) fn extract_element_def(
         for &inner_op in &ctx.block(block_ref).ops {
             // Look for func.constant or wasm.ref_func operations
             if let Ok(const_op) = func::Constant::from_op(ctx, inner_op) {
-                funcs.push(const_op.func_ref(ctx).clone());
+                funcs.push(const_op.value(ctx).clone());
             } else if let Ok(ref_func_op) = wasm_dialect::RefFunc::from_op(ctx, inner_op) {
                 funcs.push(ref_func_op.func_name(ctx).clone());
             }
@@ -293,33 +286,4 @@ pub(crate) fn extract_global_def(
         mutable,
         init,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use trunk_ir::Span;
-    use trunk_ir::refs::PathRef;
-    use trunk_ir::types::{Location, TypeDataBuilder};
-
-    #[test]
-    fn import_function_requires_valid_func_sig_counts() {
-        let mut ctx = IrContext::new();
-        let location = Location::new(PathRef::from_u32(0), Span::default());
-        let malformed = TypeDataBuilder::new("wasm.func_sig").intern(&mut ctx);
-        let import = wasm_dialect::ImportFunc::operands()
-            .module("env")
-            .name("run")
-            .sym_name("run")
-            .r#type(malformed)
-            .build(&mut ctx, location);
-
-        let error = extract_import_def(&ctx, import).expect_err("malformed import signature");
-        assert!(
-            error
-                .to_string()
-                .contains("requires valid wasm.func_sig type"),
-            "{error}"
-        );
-    }
 }

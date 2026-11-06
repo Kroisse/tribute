@@ -26,7 +26,7 @@ pub const QUANTIFIED_ROWS_ATTR: &str = "quantified_rows";
 
 const LOGICAL_TUPLE_PREFIX: &str = "__logical_tuple_";
 
-/// An ability row: ability instances, sorted by path with repetitions kept,
+/// An ability row: a set of ability instances, sorted by path without repeats,
 /// and an optional tail naming a row binder of the enclosing definition.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Row {
@@ -35,10 +35,12 @@ pub struct Row {
 }
 
 impl Row {
-    /// A row of `instances`, in canonical order, over `tail`.
+    /// A row of `instances`, in canonical order and with repeats merged,
+    /// over `tail`.
     pub fn new(instances: impl IntoIterator<Item = SymbolPath>, tail: Option<u32>) -> Self {
         let mut instances: Vec<_> = instances.into_iter().collect();
         instances.sort();
+        instances.dedup();
         Self { instances, tail }
     }
 
@@ -74,8 +76,8 @@ impl Row {
                 _ => Err(format!("a row has no entry '{key}'")),
             })?;
         }
-        if !row.instances.is_sorted() {
-            return Err("row instances must be sorted by path".into());
+        if !row.instances.is_sorted_by(|a, b| a < b) {
+            return Err("row instances must be sorted by path without repeats".into());
         }
         Ok(row)
     }
@@ -124,8 +126,8 @@ impl Row {
     }
 
     /// Whether a callable of this row may stand for one of `other`: it names
-    /// every instance `other` names, as often, over the same tail if
-    /// `other` has one. Both rows' instances are in canonical order.
+    /// every instance `other` names, over the same tail if `other` has one.
+    /// Both rows' instances are in canonical order.
     pub fn includes(&self, other: &Row) -> bool {
         if other.tail.is_some() && other.tail != self.tail {
             return false;

@@ -13,7 +13,7 @@
 //!
 //! - [`FoldResult::Forward`] — RAUW the op's result with an existing
 //!   value.
-//! - [`FoldResult::ArithConst`] — replace with a fresh `arith.const`
+//! - [`FoldResult::ArithConst`] — replace with a fresh `arith.constant`
 //!   of the op's result type.
 //! - [`FoldResult::Splice`] — splice a body of ops into the parent
 //!   block before the matched op and RAUW its results with the
@@ -27,7 +27,7 @@
 //!   `x*0`, `x*1`) and constant folding at the result type's bit-width.
 //! - `core.unrealized_conversion_cast` — identity (same source/target
 //!   type) and round-trip elimination (`A → B → A`).
-//! - `scf.if` / `scf.switch` with a constant condition or selector — splice
+//! - `scf.if` / `scf.index_switch` with a constant condition or selector — splice
 //!   the chosen arm.
 //! - `adt.struct_get` of an `adt.struct_new`, and identity `adt.ref_cast`.
 //! - `tribute_rt.unbox_*` of the matching `box_*`.
@@ -63,12 +63,12 @@ use crate::types::Attribute;
 pub enum FoldResult {
     /// RAUW the op's single result with this existing value.
     Forward(ValueRef),
-    /// Replace with a freshly-built `arith.const` of the op's result type,
+    /// Replace with a freshly-built `arith.constant` of the op's result type,
     /// carrying this attribute. The driver materializes the const op.
     ///
     /// Specifically named `ArithConst` (not `Const`) so that future
     /// const-producing dialects require an explicit new variant — the
-    /// driver currently knows only how to build `arith.const`.
+    /// driver currently knows only how to build `arith.constant`.
     ArithConst(Attribute),
     /// Splice a sequence of body ops into the matched op's parent block
     /// (in order, immediately before the matched op), then erase the
@@ -155,7 +155,7 @@ impl RewritePattern for FoldDispatchPattern {
                     [t] => *t,
                     _ => return None,
                 };
-                let new_const = arith::Const::operands()
+                let new_const = arith::Constant::operands()
                     .value(attr)
                     .results(result_ty)
                     .build(ctx, loc);
@@ -341,11 +341,11 @@ mod tests {
         // to fire.
         let input = r#"core.module @test {
   func.func @f(%cond: core.i1, %x: core.i32) -> core.i32 {
-    %r = scf.if %cond : core.i32 {
-      %z = arith.const {value = 0} : core.i32
+    %r = scf.if %cond -> (core.i32) {
+      %z = arith.constant 0 : core.i32
       %s = arith.addi %x, %z : core.i32
       scf.yield %s
-    } {
+    } else {
       scf.yield %x
     }
     func.return %r
@@ -368,7 +368,7 @@ mod tests {
         // call. The applicator iterates until no pattern fires.
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %z = arith.const {value = 0} : core.i32
+    %z = arith.constant 0 : core.i32
     %t = arith.addi %x, %z : core.i32
     %r = arith.addi %t, %z : core.i32
     func.return %r
@@ -390,12 +390,12 @@ mod tests {
     fn canonicalize_rewrites_only_selected_function_scope() {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %z = arith.const {value = 0} : core.i32
+    %z = arith.constant 0 : core.i32
     %r = arith.addi %x, %z : core.i32
     func.return %r
   }
   func.func @g(%x: core.i32) -> core.i32 {
-    %z = arith.const {value = 0} : core.i32
+    %z = arith.constant 0 : core.i32
     %r = arith.addi %x, %z : core.i32
     func.return %r
   }
@@ -433,11 +433,11 @@ mod tests {
         // `5`, then the same fold (on the outer addi) erases `_ + 0`.
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %a = arith.const {value = 2} : core.i32
-    %b = arith.const {value = 3} : core.i32
+    %a = arith.constant 2 : core.i32
+    %b = arith.constant 3 : core.i32
     %s = arith.addi %a, %b : core.i32
     %m = arith.muli %s, %x : core.i32
-    %z = arith.const {value = 0} : core.i32
+    %z = arith.constant 0 : core.i32
     %r = arith.addi %m, %z : core.i32
     func.return %r
   }
@@ -468,13 +468,13 @@ mod tests {
         // with the erased `scf.if` op.
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %t = arith.const {value = 1} : core.i1
-    %r = scf.if %t : core.i32 {
-      %z = arith.const {value = 0} : core.i32
+    %t = arith.constant 1 : core.i1
+    %r = scf.if %t -> (core.i32) {
+      %z = arith.constant 0 : core.i32
       %a = arith.addi %x, %z : core.i32
       scf.yield %a
-    } {
-      %two = arith.const {value = 2} : core.i32
+    } else {
+      %two = arith.constant 2 : core.i32
       %m = arith.muli %x, %two : core.i32
       scf.yield %m
     }
@@ -531,7 +531,7 @@ mod tests {
         // `Canonicalize` logs about.
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %z = arith.const {value = 0} : core.i32
+    %z = arith.constant 0 : core.i32
     %t = arith.addi %x, %z : core.i32
     %r = arith.addi %t, %z : core.i32
     func.return %r

@@ -276,7 +276,6 @@ impl OpRewritePattern for AdaptClosureStructGet {
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
 
     #[test]
     fn adapts_closure_allocations_and_their_rtti_declaration() {
@@ -330,7 +329,7 @@ mod tests {
         );
         assert_eq!(layouts[1].r#type(&ctx), native_base);
         assert_eq!(layouts[2].r#type(&ctx), other);
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(!output.contains("type = !Captures}"), "{output}");
     }
 
@@ -340,34 +339,31 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  clif.data {align = 1, bytes = b"\0", sym_name = "__tribute_convention_table_0"}
+  clif.data @__tribute_convention_table_0(b"\0") align 1
   func.func @make() -> core.nil {
-    %a = tribute_rt.convention_table {entries = [@first]} : tribute_rt.convention_table_ref
-    %b = tribute_rt.convention_table {entries = [@second, @first]} : tribute_rt.convention_table_ref
-    %c = tribute_rt.convention_table {entries = [@first]} : tribute_rt.convention_table_ref
+    %a = tribute_rt.convention_table [@first] : tribute_rt.convention_table_ref
+    %b = tribute_rt.convention_table [@second, @first] : tribute_rt.convention_table_ref
+    %c = tribute_rt.convention_table [@first] : tribute_rt.convention_table_ref
     %d = tribute_rt.convention_entry %b {index = 1} : core.i32
     func.return
   }
 }"#,
         );
         lower(&mut ctx, module);
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert_eq!(output.matches("clif.data").count(), 3, "{output}");
         assert_eq!(
             output
-                .matches("clif.symbol_addr {sym = @__tribute_convention_table_1}")
+                .matches("clif.symbol_addr @__tribute_convention_table_1")
                 .count(),
             2,
             "{output}"
         );
         assert!(
-            output.contains("clif.symbol_addr {sym = @__tribute_convention_table_2}"),
+            output.contains("clif.symbol_addr @__tribute_convention_table_2"),
             "{output}"
         );
-        assert!(
-            output.contains("clif.func_reloc {func = @first, offset = 8}"),
-            "{output}"
-        );
+        assert!(output.contains("clif.func_reloc @first at 8"), "{output}");
         assert!(output.contains("clif.load %"), "{output}");
         assert!(output.contains("{offset = 8} : core.i64"), "{output}");
         assert!(!output.contains("tribute_rt."), "{output}");
@@ -393,7 +389,7 @@ mod tests {
             &mut trunk_ir::analysis::AnalysisCache::new(),
         )
         .unwrap();
-        print_module(&ctx, module.op())
+        module.op().display(&ctx).to_string()
     }
 
     #[test]
@@ -403,13 +399,13 @@ mod tests {
   !Base = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
   !Captures = adt.struct<_closure_captures(entries: tribute_rt.convention_table_ref, _0: core.ptr), {closure_base = !Base, layout = "closure_captures"}>
   func.func @test_fn() -> core.i32 {
-    %0 = tribute_rt.convention_table {entries = [@lifted_fn]} : tribute_rt.convention_table_ref
+    %0 = tribute_rt.convention_table [@lifted_fn] : tribute_rt.convention_table_ref
     %1 = mem.null : core.ptr
     %2 = adt.struct_new %0, %1 {type = !Captures} : !Captures
     %3 = adt.struct_get %2 {field = 0, type = !Captures} : tribute_rt.convention_table_ref
     %4 = adt.struct_get %2 {field = 1, type = !Captures} : core.ptr
     %6 = tribute_rt.convention_entry %3 {index = 0} : core.i32
-    %5 = func.call_indirect %6, %4 {signature = func.func_sig<(core.ptr) -> core.i32>} : core.i32
+    %5 = func.call_indirect %6(%4) : (core.ptr) -> core.i32
     func.return %5
   }
 }"#,
@@ -424,12 +420,12 @@ mod tests {
   !Base = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
   !Captures = adt.struct<_closure_captures(entries: tribute_rt.convention_table_ref, _0: tribute_rt.anyref), {closure_base = !Base, layout = "closure_captures"}>
   func.func @test_fn(%1: tribute_rt.anyref) -> core.i32 {
-    %0 = tribute_rt.convention_table {entries = [@lifted_fn]} : tribute_rt.convention_table_ref
+    %0 = tribute_rt.convention_table [@lifted_fn] : tribute_rt.convention_table_ref
     %2 = adt.struct_new %0, %1 {type = !Captures} : !Captures
     %3 = adt.struct_get %2 {field = 0, type = !Captures} : tribute_rt.convention_table_ref
     %4 = adt.struct_get %2 {field = 1, type = !Captures} : tribute_rt.anyref
     %6 = tribute_rt.convention_entry %3 {index = 0} : core.i32
-    %5 = func.call_indirect %6, %4 {signature = func.func_sig<(core.ptr) -> core.i32>} : core.i32
+    %5 = func.call_indirect %6(%4) : (core.ptr) -> core.i32
     func.return %5
   }
 }"#,

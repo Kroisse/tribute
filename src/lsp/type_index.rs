@@ -7,9 +7,9 @@ use std::collections::BTreeMap;
 
 use trunk_ir::Span;
 
+use tribute::AnalysisUnit;
 use tribute_front::ast::visit::{RefSite, Visit, walk_decl_table, walk_expr};
 use tribute_front::ast::{Expr, ExprKind, NodeId, SpanMap, Type, TypeKind, TypedRef, UniVarSource};
-use tribute_front::query as ast_query;
 use tribute_front::resolve::NameDisplay;
 use tribute_front::typeck::TypeCheckOutput;
 use tribute_front::{SortedMap, SourceCst};
@@ -41,7 +41,7 @@ pub fn print_ast_type(db: &dyn salsa::Database, names: &NameDisplay, ty: Type<'_
         TypeKind::UniVar { id } => {
             // Unification variables are displayed as lowercase letters
             // Use the index for polymorphic sources, or the counter for anonymous/function-local sources
-            let display_index = match id.source(db) {
+            let display_index = match *id.source(db) {
                 UniVarSource::FunctionLocal { index, .. } => index as u32 + id.index(db),
                 UniVarSource::Anonymous(counter) => counter as u32 + id.index(db),
                 UniVarSource::Solver { index } => index as u32 + id.index(db),
@@ -157,7 +157,6 @@ pub struct AstTypeEntry<'db> {
 #[salsa::tracked]
 pub struct AstTypeIndex<'db> {
     /// Entries sorted by span start for efficient lookup.
-    #[returns(deref)]
     entries: Vec<AstTypeEntry<'db>>,
     /// Map from NodeId to index for direct lookup.
     by_node_id: BTreeMap<NodeId, usize>,
@@ -267,18 +266,20 @@ impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for TypeCollector<'_, 'db> {
 // Salsa Queries
 // =============================================================================
 
-/// Build an AST-based type index for a source file.
+/// Build an AST-based type index for the file `source`, as `unit`'s
+/// analysis types it.
 ///
 /// This is a Salsa tracked query that returns an index mapping source
 /// positions to type information. The index is invalidated when the
 /// typed AST changes.
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked(returns(as_ref))]
 pub fn type_index<'db>(
     db: &'db dyn salsa::Database,
+    unit: AnalysisUnit,
     source: SourceCst,
 ) -> Option<AstTypeIndex<'db>> {
-    let typed = tribute::parse_and_lower_ast(db, source)?;
-    let span_map = ast_query::span_map(db, source)?;
+    let typed = unit.typed(db)?;
+    let span_map = unit.span_map(db, source)?;
 
     Some(AstTypeIndex::build(db, typed, span_map))
 }
@@ -355,7 +356,7 @@ mod tests {
         let db = salsa::DatabaseImpl::default();
         let source = make_source(&db, "fn main() -> Nil { 42 }");
 
-        let index = type_index(&db, source);
+        let index = type_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
 
         let index = index.unwrap();
@@ -372,7 +373,7 @@ mod tests {
         let db = salsa::DatabaseImpl::default();
         let text = "fn f(error: Int::ParseError) -> Nat {\n    let value = case error {\n        Int::ParseError::InvalidSyntax -> .Some(1)\n        Int::ParseError::OutOfRange -> .None\n    }\n    let other = value\n    0\n}\n";
         let source = make_source(&db, text);
-        let index = type_index(&db, source).expect("type index");
+        let index = type_index(&db, AnalysisUnit::Executable(source), source).expect("type index");
         let offset = text.rfind("value").unwrap();
         let entry = index.type_at(&db, offset).expect("type of `value`");
         assert_eq!(
@@ -388,7 +389,7 @@ mod tests {
         let db = salsa::DatabaseImpl::default();
         let text = "struct Point { x: Nat }\nfn f() -> Nat {\n    let point = Point { x: 1 }\n    point.x\n}\n";
         let source = make_source(&db, text);
-        let index = type_index(&db, source).expect("type index");
+        let index = type_index(&db, AnalysisUnit::Executable(source), source).expect("type index");
         let entry = index
             .type_at(&db, text.rfind("point").unwrap())
             .expect("type of `point`");
@@ -411,7 +412,7 @@ mod tests {
         //                    0123456789012345678901234567
         let source = make_source(&db, "fn foo(x: Int): Int { x }");
 
-        let index = type_index(&db, source);
+        let index = type_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
 
         let index = index.unwrap();
@@ -450,7 +451,10 @@ mod tests {
     fn test_print_ast_type_local_bound_var() {
         let db = salsa::DatabaseImpl::default();
         let source = make_source(&db, "fn main() -> Nil { Nil }");
-        let scope = ast_query::parsed_ast(&db, source).unwrap().module(&db).id;
+        let scope = tribute_front::query::parsed_ast(&db, source)
+            .unwrap()
+            .module(&db)
+            .id;
         for (index, expected) in [(0, "a"), (1, "b"), (26, "t26")] {
             let ty = Type::new(&db, TypeKind::LocalBoundVar { scope, index });
             assert_eq!(print_ast_type(&db, &NameDisplay::identity(), ty), expected);
@@ -554,7 +558,7 @@ mod tests {
 }"#,
         );
 
-        let index = type_index(&db, source);
+        let index = type_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
     }
 
@@ -573,7 +577,7 @@ fn test(opt: Option) -> Int {
 }"#,
         );
 
-        let index = type_index(&db, source);
+        let index = type_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
     }
 
@@ -587,7 +591,7 @@ fn test(opt: Option) -> Int {
 }"#,
         );
 
-        let index = type_index(&db, source);
+        let index = type_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
     }
 
@@ -603,7 +607,7 @@ fn test(opt: Option) -> Int {
 }"#,
         );
 
-        let index = type_index(&db, source);
+        let index = type_index(&db, AnalysisUnit::Executable(source), source);
         assert!(index.is_some());
     }
 
@@ -625,7 +629,7 @@ fn test(opt: Option) -> Int {
         // Rune literal ?a in the source
         let source = make_source(&db, "fn main() -> Rune { ?a }");
 
-        let index = type_index(&db, source);
+        let index = type_index(&db, AnalysisUnit::Executable(source), source);
         assert!(
             index.is_some(),
             "Type index should be available for valid source"

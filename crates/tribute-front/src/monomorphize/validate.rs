@@ -1,14 +1,15 @@
 //! Validate checker-selected instances on executable reference paths before erasure.
 use super::{Dependency, Expressions, collect::is_concrete_type};
-use crate::ast::fold::TypeFoldable;
+use crate::ast::fold::{TypeFoldable, TypeVisitable, TypeVisitor};
 use crate::ast::{
-    Decl, DeclTable, ExprKind, FuncDecl, FuncDefId, NodeId, ResolvedRef, SpanMaps, Type,
-    TypeScheme, TypedRef,
+    AbilityRow, Decl, DeclTable, ExprKind, FuncDecl, FuncDefId, NodeId, ResolvedRef, SpanMaps,
+    Type, TypeDefId, TypeKind, TypeScheme, TypedRef,
 };
 use crate::typeck::subst::BoundVarSubst;
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
-use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use std::ops::ControlFlow;
+use tribute_core::diagnostic::{CompilationPhase, DiagnosticSeverity, SpanDiagnostic};
 use trunk_ir::SymbolPath;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -25,6 +26,9 @@ pub enum InstanceErrorKind {
     },
     IncompleteTypeArgument,
     IncompleteAbilityArgument,
+    /// A generic struct or enum named at an argument that holds an open
+    /// row, which specialization cannot make concrete.
+    IncompleteNominalArgument,
     InconsistentCallable,
     /// A backstop for runaway expansion that polymorphic recursion
     /// rejection does not catch.
@@ -52,7 +56,7 @@ pub struct InstanceError {
 impl InstanceError {
     /// The source diagnostic of this error, at the reference whose instance
     /// is invalid.
-    pub fn diagnostic(&self, spans: &SpanMaps<'_>) -> Diagnostic {
+    pub fn diagnostic(&self, spans: &SpanMaps<'_>) -> SpanDiagnostic {
         let message = match &self.kind {
             InstanceErrorKind::ExpansionLimit => "specialization did not terminate: generic \
                  definitions keep requiring instances at new type arguments"
@@ -73,6 +77,10 @@ impl InstanceError {
                 "`{caller}` calls `{callee}` of its own recursive group at `{instantiation}`; \
                  polymorphic recursion is not supported"
             ),
+            InstanceErrorKind::IncompleteNominalArgument => "a generic struct or enum is used at \
+                 a type argument that holds an open ability row; it does not specialize, so give \
+                 the argument a closed row"
+                .to_owned(),
             InstanceErrorKind::SpecializationInvariant(violation) => format!(
                 "internal compiler error: the specialization output breaks its contract at {}: \
                  {violation:?}",
@@ -80,7 +88,7 @@ impl InstanceError {
             ),
             kind => format!("invalid specialization instance at {}: {kind:?}", self.node),
         };
-        Diagnostic::new(
+        SpanDiagnostic::new(
             message,
             spans.get_or_default(self.node),
             DiagnosticSeverity::Error,
@@ -98,6 +106,90 @@ fn substitute<'db>(
         .ok()
 }
 
+/// Whether a row that `ty` spells, at the type arguments `arguments`, names
+/// an ability instance whose argument is not concrete. A row variable is
+/// never substituted, so an open row inside an ability argument stays
+/// unresolved.
+fn names_incomplete_ability_argument<'db>(
+    db: &'db dyn salsa::Database,
+    ty: Type<'db>,
+    arguments: &[Type<'db>],
+) -> bool {
+    struct Incomplete<'db> {
+        db: &'db dyn salsa::Database,
+    }
+    impl<'db> TypeVisitor<'db> for Incomplete<'db> {
+        type Break = ();
+
+        fn db(&self) -> &'db dyn salsa::Database {
+            self.db
+        }
+
+        fn visit_row(&mut self, row: AbilityRow<'db>) -> ControlFlow<()> {
+            if row
+                .instances(self.db)
+                .iter()
+                .flat_map(|ability| &ability.args)
+                .any(|argument| !is_concrete_type(self.db, *argument))
+            {
+                return ControlFlow::Break(());
+            }
+            row.super_visit_with(self)
+        }
+    }
+    substitute(db, ty, arguments).is_some_and(|ty| ty.visit_with(&mut Incomplete { db }).is_break())
+}
+
+/// Whether `ty`, at the type arguments `arguments`, names a generic struct
+/// or enum at an argument holding an open row. A row variable is not
+/// substituted, so the instance would get no specialized declaration.
+fn names_incomplete_nominal_argument<'db>(
+    db: &'db dyn salsa::Database,
+    generic: &HashSet<TypeDefId<'db>>,
+    ty: Type<'db>,
+    arguments: &[Type<'db>],
+) -> bool {
+    struct Incomplete<'a, 'db> {
+        db: &'db dyn salsa::Database,
+        generic: &'a HashSet<TypeDefId<'db>>,
+        in_argument: bool,
+    }
+    impl<'db> TypeVisitor<'db> for Incomplete<'_, 'db> {
+        type Break = ();
+
+        fn db(&self) -> &'db dyn salsa::Database {
+            self.db
+        }
+
+        fn visit_type(&mut self, ty: Type<'db>) -> ControlFlow<()> {
+            match ty.kind(self.db) {
+                TypeKind::Named { id, .. } if !self.in_argument && self.generic.contains(id) => {
+                    self.in_argument = true;
+                    let flow = ty.super_visit_with(self);
+                    self.in_argument = false;
+                    flow
+                }
+                _ => ty.super_visit_with(self),
+            }
+        }
+
+        fn visit_row(&mut self, row: AbilityRow<'db>) -> ControlFlow<()> {
+            if self.in_argument && row.rest(self.db).is_some() {
+                return ControlFlow::Break(());
+            }
+            row.super_visit_with(self)
+        }
+    }
+    substitute(db, ty, arguments).is_some_and(|ty| {
+        ty.visit_with(&mut Incomplete {
+            db,
+            generic,
+            in_argument: false,
+        })
+        .is_break()
+    })
+}
+
 /// Validate the instances reached from every monomorphic function `module`
 /// declares. A reference into `dependency` is followed only to an instance
 /// of its generics; the dependency's specialization validates its own
@@ -113,6 +205,7 @@ pub(super) fn validate<'db>(
     let mut functions: HashMap<FuncDefId<'db>, (&FuncDecl<TypedRef<'db>>, bool)> =
         HashMap::default();
     let mut fields = HashSet::default();
+    let mut generic = HashSet::default();
     let tables = dependency
         .into_iter()
         .flat_map(|dependency| dependency.modules.iter().map(|&table| (table, false)))
@@ -127,12 +220,19 @@ pub(super) fn validate<'db>(
             }
             Decl::Struct(decl) => {
                 let name = entry.module.child(decl.name.clone());
-                let owner = crate::ast::TypeDefId::declared(db, name, decl.disambiguator);
+                let owner = TypeDefId::declared(db, name, decl.disambiguator);
+                if !decl.type_params.is_empty() {
+                    generic.insert(owner);
+                }
                 for field in &decl.fields {
                     if let Some(name) = field.name.clone() {
                         fields.insert((owner, name));
                     }
                 }
+            }
+            Decl::Enum(decl) if !decl.type_params.is_empty() => {
+                let name = entry.module.child(decl.name.clone());
+                generic.insert(TypeDefId::declared(db, name, decl.disambiguator));
             }
             _ => {}
         }
@@ -166,7 +266,43 @@ pub(super) fn validate<'db>(
         }
         let mut nodes = Vec::new();
         func.body.for_each(|node| nodes.push(node));
+        let mut nominal_reported = false;
+        if let Some(scheme) = schemes.get(id.path(db)) {
+            if names_incomplete_ability_argument(db, *scheme.body(db), &arguments) {
+                errors.push(InstanceError {
+                    node: func.id,
+                    kind: InstanceErrorKind::IncompleteAbilityArgument,
+                });
+            }
+            nominal_reported =
+                names_incomplete_nominal_argument(db, &generic, *scheme.body(db), &arguments);
+            if nominal_reported {
+                errors.push(InstanceError {
+                    node: func.id,
+                    kind: InstanceErrorKind::IncompleteNominalArgument,
+                });
+            }
+        }
         for expr in nodes {
+            if let Some(ty) = expressions.get(|table| &table.node_types, &expr.id) {
+                if names_incomplete_ability_argument(db, *ty, &arguments) {
+                    errors.push(InstanceError {
+                        node: expr.id,
+                        kind: InstanceErrorKind::IncompleteAbilityArgument,
+                    });
+                }
+                // One argument shows up in every type that names it, so
+                // only its first occurrence in a function is reported.
+                if !nominal_reported
+                    && names_incomplete_nominal_argument(db, &generic, *ty, &arguments)
+                {
+                    nominal_reported = true;
+                    errors.push(InstanceError {
+                        node: expr.id,
+                        kind: InstanceErrorKind::IncompleteNominalArgument,
+                    });
+                }
+            }
             if let Some(op) = expressions.get(|table| &table.perform_operations, &expr.id)
                 && op.ability_args.iter().any(|ty| {
                     substitute(db, *ty, &arguments).is_none_or(|ty| !is_concrete_type(db, ty))

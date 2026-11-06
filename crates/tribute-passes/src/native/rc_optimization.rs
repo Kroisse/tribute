@@ -136,7 +136,6 @@ impl trunk_ir::pass::Pass for EliminatePairedRc {
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
     use trunk_ir::validation::validate_use_chains;
 
     fn run_pass(ir: &str) -> (IrContext, Module) {
@@ -148,7 +147,7 @@ mod tests {
 
     fn printed_after_pass(ir: &str) -> String {
         let (ctx, module) = run_pass(ir);
-        print_module(&ctx, module.op())
+        module.op().display(&ctx).to_string()
     }
 
     #[test]
@@ -163,7 +162,7 @@ mod tests {
   }
 }"#,
         );
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(!output.contains("tribute_rt.retain"));
         assert!(!output.contains("tribute_rt.release"));
         assert!(output.contains("clif.load %0"));
@@ -228,7 +227,7 @@ mod tests {
   clif.func @f(%0: core.ptr) -> core.nil {
   ^bb0:
     %1 = tribute_rt.retain %0 : core.ptr
-    %2 = clif.call %0 {callee = @consume} : core.nil
+    %2 = clif.call @consume(%0) : (core.ptr) -> core.nil
     tribute_rt.release %0 {alloc_size = 12}
     clif.return
   }
@@ -262,7 +261,7 @@ mod tests {
             r#"core.module @test {
   clif.func @f(%0: core.ptr) -> core.nil {
     %1 = tribute_rt.retain %0 : core.ptr
-    %2 = core.unrealized_conversion_cast %0 : core.ptr
+    %2 = core.unrealized_conversion_cast %0 : core.ptr to core.ptr
     tribute_rt.release %0 {alloc_size = 12}
     clif.return
   }
@@ -334,8 +333,8 @@ mod tests {
 }"#,
         );
         eliminate_paired_rc(&mut ctx, module);
-        let once = print_module(&ctx, module.op());
+        let once = module.op().display(&ctx).to_string();
         eliminate_paired_rc(&mut ctx, module);
-        assert_eq!(once, print_module(&ctx, module.op()));
+        assert_eq!(once, module.op().display(&ctx).to_string());
     }
 }

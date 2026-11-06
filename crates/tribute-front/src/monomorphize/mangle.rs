@@ -188,9 +188,9 @@ fn write_ability_row_mangled(
         Some(var) => {
             let index = row_vars
                 .iter()
-                .position(|seen| *seen == var)
+                .position(|seen| seen == var)
                 .unwrap_or_else(|| {
-                    row_vars.push(var);
+                    row_vars.push(*var);
                     row_vars.len() - 1
                 });
             write!(f, "$3${index}$")

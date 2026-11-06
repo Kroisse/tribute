@@ -101,14 +101,13 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// and conversion so phantom arguments and callable field rows stay linked.
     constructor_reference_types: HashMap<NodeId, Type<'db>>,
 
-    /// Function-local quantifiers introduced by pure `let` generalization.
-    /// These are distinct from the enclosing function scheme's binders when
-    /// the solved typed body and callable metadata are materialized.
-    local_generalizations: HashMap<UniVarId<'db>, (NodeId, u32)>,
-
     /// The schemes each generalized `let` pattern bound on its first visit,
     /// rebound unchanged when inference and conversion revisit it.
     let_schemes: HashMap<NodeId, Vec<LetSchemeBinding<'db>>>,
+
+    /// The locals a `let` binds to a named function, directly or through
+    /// another such local. Their schemes quantify rows.
+    function_aliases: HashSet<LocalId>,
 
     /// The solved function type selected for each direct call callee.
     function_instances: HashMap<NodeId, super::FunctionInstance<'db>>,
@@ -335,8 +334,8 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             checked_lambdas: HashMap::default(),
             checked_record_shapes: HashSet::default(),
             constructor_reference_types: HashMap::default(),
-            local_generalizations: HashMap::default(),
             let_schemes: HashMap::default(),
+            function_aliases: HashSet::default(),
             function_instances: HashMap::default(),
             quantified_local_reference_types: HashMap::default(),
             local_binding_owners: HashMap::default(),
@@ -706,28 +705,6 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         std::mem::take(&mut self.node_types)
     }
 
-    /// Record the local quantifiers owned by one generalized `let` pattern.
-    ///
-    /// A variable free in the environment is never generalized, so no
-    /// variable can be owned by two `let`s; the first owner is kept if one is.
-    pub fn record_local_generalization(
-        &mut self,
-        scope: NodeId,
-        mapping: HashMap<UniVarId<'db>, u32>,
-    ) {
-        for (var, index) in mapping {
-            let owner = *self
-                .local_generalizations
-                .entry(var)
-                .or_insert((scope, index));
-            debug_assert_eq!(
-                owner,
-                (scope, index),
-                "local quantifier {var:?} is owned by two let patterns"
-            );
-        }
-    }
-
     /// Record the schemes a `let` pattern bound when it was generalized.
     /// The first visit decides; a revisit must not generalize again.
     pub(crate) fn record_let_schemes(
@@ -738,13 +715,17 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         self.let_schemes.entry(pattern).or_insert(bindings);
     }
 
+    pub(crate) fn record_function_alias(&mut self, local: LocalId) {
+        self.function_aliases.insert(local);
+    }
+
+    pub(crate) fn is_function_alias(&self, local: LocalId) -> bool {
+        self.function_aliases.contains(&local)
+    }
+
     /// The schemes `pattern` bound on its first visit, if it was generalized.
     pub(crate) fn let_schemes(&self, pattern: NodeId) -> Option<Vec<LetSchemeBinding<'db>>> {
         self.let_schemes.get(&pattern).cloned()
-    }
-
-    pub fn take_local_generalizations(&mut self) -> HashMap<UniVarId<'db>, (NodeId, u32)> {
-        std::mem::take(&mut self.local_generalizations)
     }
 
     pub fn get_function_reference_type(&self, node: NodeId) -> Option<Type<'db>> {
@@ -770,12 +751,10 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         {
             return Some(instance.callable);
         }
-        if scheme.type_params(self.db).is_empty()
-            && matches!(
-                scheme.body(self.db).kind(self.db),
-                crate::ast::TypeKind::Func { .. }
-            )
-            && let Some(binding) = self.local_binding_owners.get(&local).copied()
+        if matches!(
+            scheme.body(self.db).kind(self.db),
+            crate::ast::TypeKind::Func { .. }
+        ) && let Some(binding) = self.local_binding_owners.get(&local).copied()
         {
             let instance = self.instantiate_scheme_details(scheme);
             let callable = instance.ty;
@@ -783,7 +762,6 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
                 node,
                 super::LocalCallableInstance {
                     binding,
-                    local,
                     scheme,
                     row_arguments: instance.row_args,
                     callable,
@@ -791,7 +769,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             );
             return Some(callable);
         }
-        if !scheme.type_params(self.db).is_empty() || !scheme.effect_params(self.db).is_empty() {
+        if !scheme.effect_params(self.db).is_empty() {
             if let Some(ty) = self.quantified_local_reference_types.get(&node).copied() {
                 return Some(ty);
             }
@@ -1146,6 +1124,19 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
     pub(crate) fn annotation_type_parameters(&self) -> impl Iterator<Item = Type<'db>> + '_ {
         self.annotation_type_parameters.values().copied()
+    }
+
+    /// The row names annotations have bound so far, which a `let` keeps
+    /// visible after it ends.
+    pub(crate) fn annotation_row_names(&self) -> HashSet<Symbol> {
+        self.annotation_rows.keys().cloned().collect()
+    }
+
+    /// End the scope of the row names a `let` introduced: names outside
+    /// `outer` name fresh rows again after it (`new-plans/type-inference.md`,
+    /// row variables).
+    pub(crate) fn end_let_row_scope(&mut self, outer: &HashSet<Symbol>) {
+        self.annotation_rows.retain(|name, _| outer.contains(name));
     }
 
     pub(crate) fn annotation_row(&mut self, name: Symbol) -> RowVar {
@@ -1996,7 +1987,7 @@ mod merge_effect_tests {
                     ));
                 }
                 (a, b) => {
-                    proptest::prop_assert_eq!(result.rest(&db), a.or(b).map(|id| RowVar { id }));
+                    proptest::prop_assert_eq!(result.rest(&db).map(|var| var.id), a.or(b));
                     proptest::prop_assert!(constraints.is_empty());
                 }
             }

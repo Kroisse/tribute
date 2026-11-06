@@ -87,9 +87,9 @@ fn queries_dispatch_to_each_implementation() {
         &mut ctx,
         r#"core.module @test {
   func.func @main(%a: core.i32, %b: core.i32) -> core.i32 {
-    probe.pair %a, %b
+    "probe.pair"(%a, %b)
     %sum = arith.addi %a, %b : core.i32
-    probe.other
+    "probe.other"()
     func.return %sum
   }
 }"#,

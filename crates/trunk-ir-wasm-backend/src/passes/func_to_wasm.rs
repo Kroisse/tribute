@@ -177,7 +177,7 @@ fn collect_refs_in_region(ctx: &IrContext, region: RegionRef, refs: &mut Vec<Sym
         for &op in ctx.block(block).ops.iter() {
             // Check for func.constant
             if let Ok(const_op) = func::Constant::from_op(ctx, op) {
-                refs.push(const_op.func_ref(ctx).clone());
+                refs.push(const_op.value(ctx).clone());
             }
 
             // Recurse into nested regions
@@ -233,10 +233,8 @@ fn add_function_table(ctx: &mut IrContext, module: Module, funcs: &[SymbolPath],
         parent_op: None,
     });
 
-    // Create wasm.elem with table 0 and offset 0
+    // Create wasm.elem at the default table 0 and offset 0
     let elem_op = wasm_dialect::Elem::operands()
-        .table(Some(0))
-        .offset(Some(0))
         .regions(funcs_region)
         .build(ctx, location);
 
@@ -484,9 +482,8 @@ impl OpRewritePattern for FuncCallIndirectPattern {
     ) -> Option<()> {
         let op = call.op_ref();
         let loc = ctx.op(op).location;
-        let all_operands = std::iter::once(call.callee(ctx))
-            .chain(CallLike::call_args(&call, ctx).iter().copied())
-            .collect::<Vec<_>>();
+        let callee = call.callee(ctx);
+        let args = CallLike::call_args(&call, ctx).to_vec();
         let result_types = rewriter.result_types(ctx, op);
 
         let signature = call.exact_signature(ctx)?;
@@ -505,10 +502,8 @@ impl OpRewritePattern for FuncCallIndirectPattern {
         ) {
             return rewriter.no_match(error.to_string());
         }
-        let new_op = wasm_dialect::CallIndirect::operands(all_operands)
-            .type_idx(0)
-            .table(0)
-            .signature(Some(signature))
+        let new_op = wasm_dialect::CallIndirect::operands(callee, args)
+            .signature(signature)
             .results(result_types)
             .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
@@ -609,19 +604,16 @@ impl OpRewritePattern for FuncTailCallIndirectPattern {
             return rewriter.no_match(error.to_string());
         }
 
-        let operands = std::iter::once(tail.callee(ctx))
-            .chain(CallLike::call_args(&tail, ctx).iter().copied())
-            .collect::<Vec<_>>();
+        let callee = tail.callee(ctx);
+        let args = CallLike::call_args(&tail, ctx).to_vec();
         rewriter.ensure(
             TailCallLike::is_resultless(&tail, ctx),
             "tail call has results",
         )?;
 
         let loc = ctx.op(op).location;
-        let new_op = wasm_dialect::ReturnCallIndirect::operands(operands)
-            .type_idx(0)
-            .table(0)
-            .signature(Some(signature))
+        let new_op = wasm_dialect::ReturnCallIndirect::operands(callee, args)
+            .signature(signature)
             .build(ctx, loc);
         ctx.op_attrs_mut(new_op.op_ref()).extend(converted_attrs);
         rewriter.replace_op(new_op.op_ref());
@@ -668,7 +660,7 @@ impl OpRewritePattern for FuncConstantPattern {
         rewriter: &mut PatternRewriter<'_>,
     ) -> Option<()> {
         let op = const_op.op_ref();
-        let func_ref = const_op.func_ref(ctx);
+        let func_ref = const_op.value(ctx);
 
         // All func.constant operations must be registered in the function table.
         // They are collected by collect_func_constant_refs before pattern application.
@@ -708,7 +700,6 @@ fn intern_funcref_type(ctx: &mut IrContext) -> TypeRef {
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
     use trunk_ir::types::Attribute;
 
     #[test]
@@ -746,7 +737,7 @@ mod tests {
     func.return %f
   }
   func.func @caller(%f: func.func_sig<() -> core.nil>) -> func.func_sig<() -> core.nil> {
-    %result = func.call %f {callee = @identity} : func.func_sig<() -> core.nil>
+    %result = func.call @identity(%f) : (func.func_sig<() -> core.nil>) -> func.func_sig<() -> core.nil>
     func.return %result
   }
 }"#,
@@ -848,14 +839,15 @@ mod tests {
             Some(&Attribute::Int(7))
         );
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(
-            output.contains("!t0 = wasm.func_sig<(core.i32) -> core.i32>")
-                && output.contains("wasm.func {custom = 7, sym_name = \"external\", type = !t0}"),
+            output.contains(
+                "wasm.func @external(%arg0: core.i32) -> core.i32 attributes {custom = 7}"
+            ),
             "{output}"
         );
         assert!(
-            output.contains("wasm.func {sym_name = \"defined\""),
+            output.contains("wasm.func @defined(%0: core.i32) -> core.i32 {"),
             "{output}"
         );
         assert!(output.contains("wasm.return %0"), "{output}");
@@ -901,13 +893,13 @@ mod tests {
     func.return
   }
   func.func @direct(%value: core.i32) -> core.nil {
-    func.tail_call %value {callee = @target}
+    func.tail_call @target(%value) : (core.i32) -> ()
   }
   func.func @indirect(%table_index: core.i32, %value: core.i32) -> core.nil {
-    func.tail_call_indirect %table_index, %value {signature = func.func_sig<(core.i32) -> core.nil>}
+    func.tail_call_indirect %table_index(%value) : (core.i32) -> core.nil
   }
   func.func @ordinary(%table_index: core.i32, %value: core.i32) -> core.i32 {
-    %result = func.call_indirect %table_index, %value {signature = func.func_sig<(core.i32) -> core.i32>} : core.i32
+    %result = func.call_indirect %table_index(%value) : (core.i32) -> core.i32
     func.return %result
   }
 }"#,
@@ -915,39 +907,16 @@ mod tests {
 
         lower(&mut ctx, module, TypeConverter::new());
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
+        assert!(output.contains("wasm.return_call @target(%0)"), "{output}");
         assert!(
-            output.contains("wasm.return_call %0 {callee = @target}"),
+            output.contains("wasm.return_call_indirect %0(%1) : (core.i32) -> core.nil"),
             "{output}"
         );
         assert!(
-            output.contains("wasm.return_call_indirect %0, %1"),
+            output.contains(" = wasm.call_indirect %0(%1) : (core.i32) -> core.i32"),
             "{output}"
         );
-        assert!(output.contains(" = wasm.call_indirect "), "{output}");
-        assert!(
-            output.contains("!t0 = wasm.func_sig<(core.i32) -> core.nil>")
-                && output.contains("signature = !t0"),
-            "{output}"
-        );
-    }
-
-    #[test]
-    fn indirect_call_without_exact_signature_is_not_lowered() {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  func.func @caller(%table_index: core.i32, %value: core.i32) -> core.i32 {
-    %result = func.call_indirect %table_index, %value : core.i32
-    func.return %result
-  }
-}"#,
-        );
-        lower(&mut ctx, module, TypeConverter::new());
-        let output = print_module(&ctx, module.op());
-        assert!(output.contains("func.call_indirect"), "{output}");
-        assert!(!output.contains("wasm.call_indirect"), "{output}");
     }
 
     #[test]
@@ -957,7 +926,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @caller(%table_index: core.i32) -> core.nil {
-    func.call_indirect %table_index {signature = func.func_sig<() -> core.nil>}
+    "func.call_indirect"(%table_index) {signature = func.func_sig<() -> core.nil>}
     func.return
   }
 }"#,
@@ -965,11 +934,10 @@ mod tests {
 
         lower(&mut ctx, module, TypeConverter::new());
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(
-            output.contains(
-                "wasm.call_indirect %0 {signature = wasm.func_sig<() -> core.nil>, table = 0, type_idx = 0}"
-            ),
+            output
+                .contains("\"wasm.call_indirect\"(%0) {signature = wasm.func_sig<() -> core.nil>}"),
             "{output}"
         );
         assert!(!output.contains("func.call_indirect"), "{output}");
@@ -985,22 +953,19 @@ mod tests {
     func.return
   }
   func.func @caller(%value: core.i32) -> core.nil {
-    %table_index = func.constant {func_ref = @target} : core.i32
-    func.tail_call_indirect %table_index, %value {signature = func.func_sig<(core.i32) -> core.nil>}
+    %table_index = func.constant @target : (core.i32) -> core.nil
+    func.tail_call_indirect %table_index(%value) : (core.i32) -> core.nil
   }
 }"#,
         );
 
         lower(&mut ctx, module, TypeConverter::new());
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(output.contains("wasm.table"), "{output}");
         assert!(output.contains("wasm.elem"), "{output}");
-        assert!(
-            output.contains("wasm.ref_func {func_name = @target}"),
-            "{output}"
-        );
-        assert!(output.contains("wasm.i32_const {value = 0}"), "{output}");
+        assert!(output.contains("wasm.ref_func @target"), "{output}");
+        assert!(output.contains("wasm.i32_const 0"), "{output}");
         assert!(output.contains("wasm.return_call_indirect"), "{output}");
     }
 
@@ -1011,10 +976,10 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @physical(%table_index: core.i32, %value: wasm.anyref) {
-    func.tail_call_indirect %table_index, %value {signature = func.func_sig<(tribute_rt.anyref) -> ()>, table = 7, test.marker = 2, type_idx = 9}
+    func.tail_call_indirect %table_index(%value) attributes {table = 7, test.marker = 2, type_idx = 9} : (tribute_rt.anyref) -> ()
   }
   func.func @mismatch(%table_index: core.i32, %value: core.i32) {
-    func.tail_call_indirect %table_index, %value {signature = func.func_sig<(tribute_rt.float) -> ()>, test.marker = 2}
+    func.tail_call_indirect %table_index(%value) attributes {test.marker = 2} : (tribute_rt.float) -> ()
   }
 }"#,
         );
@@ -1032,27 +997,28 @@ mod tests {
         });
         lower(&mut ctx, module, type_converter);
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(
             output.contains(
-                "wasm.return_call_indirect %0, %1 {signature = wasm.func_sig<(wasm.anyref) -> ()>"
+                "wasm.return_call_indirect %0(%1) attributes {test.marker = 2} : (wasm.anyref) -> ()"
             ),
             "{output}"
         );
         assert!(
-            output.contains("wasm.return_call_indirect %0, %1 {signature = wasm.func_sig<(wasm.anyref) -> ()>, table = 0, test.marker = 2, type_idx = 0}"),
+            output.contains(
+                "wasm.return_call_indirect %0(%1) attributes {test.marker = 2} : (wasm.anyref) -> ()"
+            ),
             "the converted transfer must retain its calling convention: {output}"
         );
-        assert!(
-            !output.contains("signature = func.func_sig<(tribute_rt.anyref) -> ()>"),
-            "{output}"
-        );
+        assert!(!output.contains("(tribute_rt.anyref) -> ()"), "{output}");
         assert!(
             !output.contains("table = 7") && !output.contains("type_idx = 9"),
             "stale source table metadata must not reach Wasm: {output}"
         );
         assert!(
-            output.contains("func.tail_call_indirect %0, %1 {signature = func.func_sig<(tribute_rt.float) -> ()>, test.marker = 2}"),
+            output.contains(
+                "func.tail_call_indirect %0(%1) attributes {test.marker = 2} : (tribute_rt.float) -> ()"
+            ),
             "the mismatched transfer must remain unchanged: {output}"
         );
     }
@@ -1064,11 +1030,11 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @physical(%table_index: core.i32, %value: wasm.anyref) -> core.i32 {
-    %result = func.call_indirect %table_index, %value {signature = func.func_sig<(tribute_rt.anyref) -> core.i32>, table = 7, type_idx = 9} : core.i32
+    %result = func.call_indirect %table_index(%value) attributes {table = 7, type_idx = 9} : (tribute_rt.anyref) -> core.i32
     func.return %result
   }
   func.func @mismatch(%table_index: core.i32, %value: core.i32) -> core.i32 {
-    %result = func.call_indirect %table_index, %value {signature = func.func_sig<(tribute_rt.float) -> core.i32>} : core.i32
+    %result = func.call_indirect %table_index(%value) : (tribute_rt.float) -> core.i32
     func.return %result
   }
 }"#,
@@ -1087,11 +1053,9 @@ mod tests {
         });
         lower(&mut ctx, module, type_converter);
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(
-            output.contains(
-                "wasm.call_indirect %0, %1 {signature = wasm.func_sig<(wasm.anyref) -> core.i32>, table = 0, type_idx = 0}"
-            ),
+            output.contains("wasm.call_indirect %0(%1) : (wasm.anyref) -> core.i32"),
             "{output}"
         );
         assert!(
@@ -1099,13 +1063,11 @@ mod tests {
             "stale source table metadata must not reach Wasm: {output}"
         );
         assert!(
-            !output.contains("signature = func.func_sig<(tribute_rt.anyref) -> core.i32>"),
+            !output.contains("(tribute_rt.anyref) -> core.i32"),
             "{output}"
         );
         assert!(
-            output.contains(
-                "func.call_indirect %0, %1 {signature = func.func_sig<(tribute_rt.float) -> core.i32>} : core.i32"
-            ),
+            output.contains("func.call_indirect %0(%1) : (tribute_rt.float) -> core.i32"),
             "the mismatched call must remain unchanged: {output}"
         );
     }
@@ -1117,7 +1079,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @transfer(%table_index: core.i32, %value: core.i32) -> (), {call_conv = "tail"} {
-    func.tail_call_indirect %table_index, %value {signature = func.func_sig<(core.i32) -> (), {call_conv = "tail"}>}
+    func.tail_call_indirect %table_index(%value) : (core.i32) -> (), {call_conv = "tail"}
   }
   func.func @nested(%callee: func.func_sig<(core.i32) -> (), {call_conv = "tail"}>) {
     func.return
@@ -1127,35 +1089,9 @@ mod tests {
 
         lower(&mut ctx, module, TypeConverter::new());
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(output.contains("wasm.return_call_indirect"), "{output}");
         assert!(!output.contains("call_conv"), "{output}");
-    }
-
-    #[test]
-    fn leaves_indirect_tail_transfers_without_an_exact_signature_unconverted() {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  func.func @indirect(%table_index: core.i32, %value: core.i32) -> core.nil {
-    func.tail_call_indirect %table_index, %value
-  }
-  func.func @malformed(%table_index: core.i32, %value: core.i32) -> core.nil {
-    func.tail_call_indirect %table_index, %value {signature = core.i32}
-  }
-}"#,
-        );
-
-        lower(&mut ctx, module, TypeConverter::new());
-
-        let output = print_module(&ctx, module.op());
-        assert_eq!(
-            output.matches("func.tail_call_indirect").count(),
-            2,
-            "{output}"
-        );
-        assert!(!output.contains("wasm.return_call_indirect"), "{output}");
     }
 
     #[test]
@@ -1168,11 +1104,11 @@ mod tests {
     func.return
   }
   func.func @direct(%value: core.i32) -> test.ref {
-    %result = func.call %value {callee = @target} : test.ref
+    %result = func.call @target(%value) : (core.i32) -> test.ref
     func.return %result
   }
   func.func @indirect(%table_index: core.i32, %value: core.i32) -> test.ref {
-    %result = func.call_indirect %table_index, %value {signature = func.func_sig<(core.i32) -> test.ref>} : test.ref
+    %result = func.call_indirect %table_index(%value) : (core.i32) -> test.ref
     func.return %result
   }
 }"#,
@@ -1208,11 +1144,6 @@ mod tests {
                 }
             }
         }
-        assert_eq!(
-            (direct, indirect),
-            (1, 1),
-            "{}",
-            print_module(&ctx, module.op())
-        );
+        assert_eq!((direct, indirect), (1, 1), "{}", module.op().display(&ctx));
     }
 }

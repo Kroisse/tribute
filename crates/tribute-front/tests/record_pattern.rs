@@ -13,8 +13,8 @@ fn messages(db: &dyn salsa::Database, text: &str, severity: DiagnosticSeverity) 
     let source = SourceCst::from_source_str(db, "record_pattern.trb", text);
     ast_pipeline_diagnostics(db, source)
         .into_iter()
-        .filter(|diagnostic| diagnostic.inner.severity == severity)
-        .map(|diagnostic| diagnostic.inner.message)
+        .filter(|diagnostic| diagnostic.severity == severity)
+        .map(|diagnostic| diagnostic.message.to_owned())
         .collect()
 }
 

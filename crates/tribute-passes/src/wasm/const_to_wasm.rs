@@ -442,7 +442,7 @@ mod tests {
         validate_for_wasm(&ctx, module, &analysis).expect("canonical String result type");
         lower(&mut ctx, module, &analysis);
 
-        let output = trunk_ir::printer::print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(!output.contains("adt.string_const"), "{output}");
         assert!(output.contains("wasm.bytes_from_data"), "{output}");
         assert!(output.contains("adt.variant_new"), "{output}");
@@ -509,7 +509,7 @@ mod tests {
         let string_ty = type_alias(&ctx, "String");
         attach_string_type(&mut ctx, module, string_ty);
 
-        let printed = trunk_ir::printer::print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         let mut reparsed_ctx = IrContext::new();
         let reparsed = parse_test_module(&mut reparsed_ctx, &printed);
         let analysis = analyze_consts(&reparsed_ctx, reparsed);
@@ -589,7 +589,7 @@ mod tests {
 
         lower(&mut ctx, module, &analysis);
 
-        let output = trunk_ir::printer::print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert_eq!(
             data_segments(&ctx, module),
             [b"first".to_vec(), b"second".to_vec()]
@@ -607,8 +607,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  wasm.data {offset = 0, bytes = b"active", passive = false}
-  wasm.data {offset = 0, bytes = b"kept", passive = true}
+  wasm.data(b"active") offset 0
+  wasm.data(b"kept") offset 0 passive
   wasm.func @main() -> core.nil {
     %new = adt.bytes_const {value = b"new"} : core.bytes
     %kept = adt.bytes_const {value = b"kept"} : core.bytes
@@ -621,7 +621,7 @@ mod tests {
 
         lower(&mut ctx, module, &analysis);
 
-        let output = trunk_ir::printer::print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert_eq!(
             data_segments(&ctx, module),
             [

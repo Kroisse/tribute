@@ -8,7 +8,6 @@ use salsa_test_macros::salsa_test;
 use tribute_front::SourceCst;
 use tribute_front::resolve::{NameDisplay, PackageName};
 use trunk_ir::context::IrContext;
-use trunk_ir::printer::print_module;
 
 /// The spelling of the root package, which these sources depend on nothing.
 fn root_names() -> NameDisplay {
@@ -72,7 +71,7 @@ fn format_box(value: Int) -> String {
         .find(r#"adt.variant_new %0 {tag = "Box", type = !"pkg::Boxed$Int"}"#)
         .expect("Box(value) must construct the specialized pkg::Boxed$Int");
     let int_to_string = format_box
-        .find("callee = @\"std::Int::to_string\"")
+        .find("call @\"std::Int::to_string\"(")
         .expect("Box payload must be passed to Int::to_string");
     assert!(
         format_box[construct..int_to_string].contains(
@@ -205,9 +204,7 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
                 ast,
                 tribute_front::resolve::Dependencies::none(),
             ),
-            parsed.span_map(db),
         ),
-        parsed.span_map(db),
         root_names(),
     );
     let mono = tribute_front::monomorphize::monomorphize_functions(
@@ -225,7 +222,7 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
         },
     )
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());
-    let ir_text = print_module(&ir, output.module.op());
+    let ir_text = output.module.op().display(&ir).to_string();
     assert!(
         ir_text.contains("generic_intrinsic$Nat"),
         "logical lowering must resolve the concrete generic extern signature:\n{ir_text}"
@@ -249,9 +246,7 @@ fn lower_monomorphized_source(
                 ast,
                 tribute_front::resolve::Dependencies::none(),
             ),
-            parsed.span_map(db),
         ),
-        parsed.span_map(db),
         root_names(),
     );
     let mono = tribute_front::monomorphize::monomorphize_functions(
@@ -272,13 +267,17 @@ fn lower_monomorphized_source(
     (ir, output)
 }
 
-#[salsa::tracked(returns(clone))]
+#[salsa::tracked]
+fn monomorphized_ir_text(db: &dyn salsa::Database, source: SourceCst) -> String {
+    let (ir, output) = lower_monomorphized_source(db, source);
+    output.module.op().display(&ir).to_string()
+}
+
 fn generic_specialization_transports_direct_callee_metadata_inner(
     db: &dyn salsa::Database,
     source: SourceCst,
-) -> String {
-    let (ir, output) = lower_monomorphized_source(db, source);
-    let ir_text = print_module(&ir, output.module.op());
+) -> &str {
+    let ir_text = monomorphized_ir_text(db, source);
     assert!(
         ir_text.contains("tribute_control.func @\"pkg::apply$Int\""),
         "the specialized generic function must preserve its checked concrete call type:\n{ir_text}"
@@ -297,9 +296,8 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
         db,
         ast,
         &tribute_front::resolve::build_env(db, ast, tribute_front::resolve::Dependencies::none()),
-        span_map,
     );
-    let checked = tribute_front::typeck::typecheck_module(db, &resolved, span_map, root_names());
+    let checked = tribute_front::typeck::typecheck_module(db, &resolved, root_names());
     let mono = tribute_front::monomorphize::monomorphize_functions(
         db,
         tribute_front::monomorphize::SpecializationInput::new(db, checked, None, root_names()),
@@ -436,7 +434,12 @@ fn use_bool() ->{} Bool { apply(True) }
 "#,
     );
     assert_outer_local_signatures(db, source);
-    let errors = assert_outer_local_signatures::accumulated::<tribute_core::Diagnostic>(db, source);
+    let errors =
+        assert_outer_local_signatures::accumulated::<tribute_core::SpanDiagnostic>(db, source);
+    assert!(errors.is_empty(), "{errors:?}");
+    let errors = assert_outer_local_signatures::accumulated::<tribute_front::ast::NodeDiagnostic>(
+        db, source,
+    );
     assert!(errors.is_empty(), "{errors:?}");
 }
 

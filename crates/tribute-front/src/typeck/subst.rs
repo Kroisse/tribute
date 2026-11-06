@@ -120,7 +120,7 @@ impl<'db> TypeFolder<'db> for Instantiate<'_, 'db> {
     fn fold_row(&mut self, row: AbilityRow<'db>) -> Result<AbilityRow<'db>, Infallible> {
         let db = self.types.db;
         let row = row.try_super_fold_with(self)?;
-        Ok(match row.rest(db).and_then(|var| self.rows.get(&var)) {
+        Ok(match row.rest(db).and_then(|var| self.rows.get(var)) {
             Some(fresh) => AbilityRow::new(db, row.instances(db).to_vec(), Some(*fresh)),
             None => row,
         })
@@ -177,7 +177,7 @@ pub fn instantiate_scheme_details_for_solver<'db>(
     scheme: TypeScheme<'db>,
     solver: &mut super::solver::TypeSolver<'db>,
 ) -> SchemeInstance<'db> {
-    solver.reserve_row_vars_in_type(scheme.body(db));
+    solver.reserve_row_vars_in_type(*scheme.body(db));
     for union in scheme.row_unions(db) {
         for row in union.sources.iter().chain(std::iter::once(&union.result)) {
             solver.reserve_row_vars_in_row(*row);
@@ -280,7 +280,7 @@ mod tests {
                 .chain(instance.row_unions[0].sources.iter())
                 .chain(std::iter::once(&instance.row_unions[0].result))
             {
-                assert_eq!(row.rest(db), Some(fresh));
+                assert_eq!(row.rest(db), Some(&fresh));
                 assert_eq!(row.instances(db)[0].args, vec![callback]);
             }
         }
@@ -360,7 +360,7 @@ mod tests {
                     let TypeKind::Func { effect, .. } = element.kind(db) else {
                         panic!("tuple element should remain a function");
                     };
-                    effect.rest(db).expect("ability row should remain open")
+                    *effect.rest(db).expect("ability row should remain open")
                 })
                 .collect::<Vec<_>>()
         };

@@ -59,14 +59,16 @@ Spread는 동일한 선언 identity와 호환되는 타입 인자를 요구한�
 값을 덮어써도 spread의 타입 검사를 생략하지 않는다. 필드 타입에 나타나지 않는
 phantom 인자도 nominal 타입의 일부이므로 기대 타입이나 spread를 통해 연결된다.
 기대 타입이 없는 생성은 기존 순수 let 및 함수 일반화 규칙을 따른다. 레코드 생성
-인스턴스를 공유하는 것은 일반화한 binding의 각 사용 위치를 하나의 인스턴스로
-합치는 것이 아니다. 일반화한 값의 사용 위치는 기존대로 독립적으로 instantiate한다.
+인스턴스를 공유하는 것과 별개로, `let`에 묶은 값의 사용 위치는 그 binding의 data
+타입 변수를 공유하고 binding이 양화한 row 변수만 독립적으로 instantiate한다
+([Generalization](#generalization)).
 
 Enum variant 생성자도 값 참조의 `NodeId`별로 하나의 전체 constructor 인스턴스를
 유지한다. `Box(+42)`의 인자 검사에서 선택한 `fn(Int) -> Boxed(Int)`를 typed AST의
 생성자 참조까지 전달한다. 생성 결과 타입만 보존하고 변환 단계에서 생성자 자체를
 새로 instantiate하면, 생성과 패턴 추출이 서로 다른 generic/specialized 레이아웃을
-선택할 수 있다. 서로 다른 생성 위치와 일반화한 생성자 값의 사용 위치는 독립적이다.
+선택할 수 있다. 서로 다른 생성 위치는 독립적이다. 생성자 값을 `let`에 묶으면 그
+사용 위치들은 binding의 data 타입 변수를 공유한다.
 
 Variant patterns preserve the constructor type constrained against the matched
 value. This applies to let destructuring as well as case arms: conversion must
@@ -165,10 +167,10 @@ Answer의 재귀 참조는 의존성이며, 독립적인 정상 반환 경로가
 결정한다. 순환 밖에 미해결 producer가 있으면 이 결정을 미룬다.
 
 지역 `let`의 임시 solver에도 같은 규칙을 적용한다. Effect 인자와 row를 통한
-의존성을 포함하여 미해결 관계에 연결된 변수는 일반화에서 제외한다. 순수 binding의
-관련 없는 변수는 계속 일반화할 수 있으며, 미해결 관계 하나 때문에 binding 전체를
-monomorphic하게 바꾸지 않는다. 추론 변수를 지역 quantifier로 변환하면서 미해결
-제약을 지워서는 안 된다.
+의존성을 포함하여 미해결 관계에 연결된 row 변수는 일반화에서 제외한다. 순수
+binding의 관련 없는 row 변수는 계속 일반화할 수 있으며, 미해결 관계 하나 때문에
+binding 전체를 monomorphic하게 바꾸지 않는다. Row 변수를 양화하면서 미해결 제약을
+지워서는 안 된다.
 임시 solver에서 생성한 row 변수의 identity도 이후 함수 추론과 지연된 메서드
 해석의 fresh 변수 할당과 충돌하지 않아야 한다.
 
@@ -297,9 +299,10 @@ come from the exact ability declaration, regardless of row merge order.
 
 Unsolved union relations survive substitution and deferred method resolution.
 Generalization of a local scheme retains the relations in the type scheme and
-quantifies their variables together with the body. Instantiation freshens the
-body and relations with one shared mapping. Variables connected to the
-surrounding environment or an unresolved producer are not independently
+quantifies their row variables together with the body. Instantiation freshens
+those row variables in the body and relations with one shared mapping; their
+data-type variables stay shared with the binding. Row variables connected to
+the surrounding environment or an unresolved producer are not independently
 generalized. Handler subtraction must not reintroduce its consumed instance into
 the outward row.
 
@@ -540,11 +543,19 @@ unify({State(Int), Choice(Bool) | e₁}, {State(a), Choice(a) | e₂})
 // Error: a를 Int와 Bool로 동시에 정할 수 없다
 ```
 
-Named row variables have declaration-scoped identity: repeated names share an
-identity and distinct names do not. Multiple row names denote their union.
+Named row variables have scope-wide identity: within the scope that introduces
+a name, repeated names share an identity and distinct names do not. The scope
+is the declaration, or the `let` that first writes the name. Multiple row names
+denote their union.
 
 지역 타입 주석도 선언의 row 이름 환경을 사용한다. 같은 함수 선언의 서명과 본문에서
-같은 이름은 같은 row를 가리키고, 다른 이름은 독립적으로 유지한다. `{e1, e2}`는
+같은 이름은 같은 row를 가리키고, 다른 이름은 독립적으로 유지한다. 다만 `let`의
+주석과 오른쪽 식에서 처음 나온 이름은 그 `let`의 범위에 속한다. 그 `let`이 끝나면
+이름은 다시 쓸 수 있고, 다른 `let`이나 뒤의 주석에서 같은 이름은 새 row다. 오른쪽
+식이 row를 일반화하지 않는 `let`도 같다. 그래서
+`let`이 일반화한 row는 그 `let`만 소유하며, 형제 `let` 둘이 같은 이름을 적어도
+서로 다른 row를 양화한다. 서명이나 바깥 범위에 이미 있는 이름은 그 row를
+가리키므로 `let`이 일반화하지 않는다. `{e1, e2}`는
 두 row를 하나로 대체하지 않고 합집합 관계로 보존한다. 같은 annotation 노드를
 재방문할 때는 처음 변환한 타입을 재사용하며, 생략된 row나 `_`는 해당 주석 위치의
 새 변수로 유지한다.
@@ -722,6 +733,26 @@ escaping 값에 저장되거나 open-effect consumer에 전달되어 open callab
 `handle`이 처리한 ability는 이 row에 남지 않는다. 실행 전략이 정하는 호출 규약은 이
 남은 row에서만 나온다([cps-effects.md](cps-effects.md#row와-호출-규약)).
 
+#### 람다 주석
+
+```text
+Γ, x : A ⊢ body ⇐ B ; E
+───────────────────────────────────────
+Γ ⊢ fn(x) ->{E} B body ⇒ fn(A) ->{E} B ; {}
+```
+
+람다에 적은 반환 타입 `B`는 람다의 결과 타입이며, 본문은 `B`에 대해 검사한다.
+본문의 타입이 `B`와 맞지 않으면 타입 오류이다. 적은 row `E`는 위의 Check 규칙에서
+문맥이 준 row와 같은 자리에 선다. 본문에서 얻은 람다의 row를 `E`와 같게 제약하며,
+본문이 `E`보다 적은 effect를 수행해도 넓히지 않는다. `->{}`는 닫힌 빈 row를 적은
+것이다. Row를 생략한 `-> B`는 결과 타입만 정하고 row는 앞의 규칙대로 추론한다.
+Named 함수의 생략한 row처럼 fresh row 변수가 되지는 않는다.
+
+람다를 함수 타입을 기대하는 자리에서 검사하면 주석과 문맥이 모두 적용된다.
+주석이 람다의 signature이고, 문맥의 파라미터와 결과 타입, row는 그 signature와
+같은 방식으로 맞춘다. 주석의 소문자 row 이름은 다른 타입 주석의 row 이름과 같은
+범위를 따른다.
+
 #### 함수 적용 (Infer)
 
 ```text
@@ -813,71 +844,118 @@ unify_row(ρ₁, ρ₂):
       unify_row(e, ρ)
 ```
 
+Row unification은 대칭인 동치이며, 닫힌 빈 row `{}`도 effect를 적은 row와
+unify되지 않는다. 더 적은 effect를 가진 callee를 부르는 호출은 unification이 아니라
+호출의 effect 관계로 표현한다. 함수 타입 안의 row는 불변 위치이므로, `fn() ->{} Int`
+값을 `fn() ->{State(Int)} Int` 자리에 넘기면 타입 오류다.
+
 ### Generalization
 
-Let generalization distinguishes the effect of **evaluating the right-hand
-side now** from effects latent in a function value. After solving the
-constraints generated up to the binding, `let p = e` generalizes variables in
-the type of `e` exactly when evaluating `e` has the closed-empty effect `{}`.
-Variables free in the surrounding environment are never generalized.
+`let`은 사용마다 row를 고를 수 있는 오른쪽 식에서만 ability-row 변수를 일반화한다.
+그런 식은 두 가지다.
+
+- 람다 literal. Lowering은 람다를 한 번 만들고 사용마다 그 사용의 row로
+  인스턴스화한다.
+- 이름 붙은 함수를 가리키는 참조, 또는 그런 binding을 가리키는 참조를 그대로 이름 하나에
+  묶은 별칭. 사용은 묶인 값을 읽지 않고 함수를 다시 참조하며, 그 참조가 사용의 row를
+  넘긴다.
+
+`let p = e`는 binding까지 생성된 제약을 푼 뒤, `e`가 이 둘 중 하나이면 `e`의 타입에
+남은 row 변수를 일반화한다. 둘 다 평가에 효과가 없다. 주변 환경에 자유로운 row
+변수는 일반화하지 않는다. 다른 모든 `let`(호출 결과, 람다를 다시 묶은 별칭,
+destructuring, 람다를 감싼 block)은 row 변수도 양화하지 않으므로, 그 binding의 모든
+사용이 data 타입 변수처럼 row 변수를 공유한다. 그런 값은 한 번 만들어진 callable
+하나이고 사용마다 다른 row로 인스턴스화할 수 없기 때문이다. 사용이 row를 고정하면
+값을 만드는 쪽도 그 row로 만들어지고, 아무 사용도 고정하지 않은 row는 함수 본문이
+소유한다.
+
+`let`은 data 타입 변수를 양화하지 않는다. `let`의 값 타입에 남은 data 타입
+변수는 그 binding의 모든 사용이 공유하며, 지역 참조는 그 변수를 사용마다 새로
+instantiate하지 않는다. 그래서 같은 binding을 서로 다른 data 타입으로 쓰면 타입
+오류이고, 같은 data 타입으로 여러 번 쓰는 것은 매개변수 주석 없이 허용된다.
+이 규칙은 일반 binding, 별칭, destructuring, `as` 패턴에 똑같이 적용되며, ability의
+data 인자도 data 타입이다. 이미 있는 `State(s)`의 `s`는 사용마다 따로 고를 수 없다.
+Data 타입의 다형성은 generic 함수 선언이 제공한다.
 
 앞의 lambda inference 규칙으로 얻은 callable ability row는 lambda literal을
 평가하는 효과와 구별한다. 따라서 local callable의 generalization은 실제로 추론된
-type과 row의 변수만 대상으로 하며, generalization을 위해 새 open tail을 만들지
-않는다.
+row의 변수만 대상으로 하며, generalization을 위해 새 open tail을 만들지 않는다.
 
-This is an effect-based value restriction, not a restriction to a syntactic
-class of values. A lambda evaluates purely, so its type can be generalized even
-when calling the resulting function later performs effects:
+람다의 row는 결과 함수를 나중에 호출할 때 효과가 있더라도 일반화된다. 람다를
+평가하는 일 자체는 순수하기 때문이다.
 
 다음은 toplevel function 본문 안의 local `let` binding이다.
 
 ```rust
 fn example() ->{State(Int)} Nil {
     let id = fn(x) x
-    // id : forall a. fn(a) ->{} a
+    // id : fn(a) ->{} a, where `a` is shared by every use of `id`
+    let n = id(1)
+    // `a` is now `Nat`; `id(True)` would be a type error
 
     let read = fn() State::get()
     // evaluating the lambda is pure; State is a latent call effect
-    // read : forall s. fn() ->{State(s)} s
+    // read : fn() ->{State(s)} s, where `s` is shared by every use
+    let m = read()
+    // the enclosing row `{State(Int)}` fixes `s` to `Int`
+
+    let run = fn(f) f()
+    // run : forall e. fn(fn() ->{e} r) ->{e} r
+    // each use chooses its own row `e`; `r` is shared
 
     let current = State::get()
-    // evaluating the RHS performs State, so current remains monomorphic
+    // not a lambda or a function reference: current is monomorphic
+
+    let r = run
+    // an alias of a lambda: r : fn(fn() ->{e'} r) ->{e'} r, where the
+    // `let r` instantiates `run` once and every use of `r` shares `e'`
     Nil
 }
 ```
 
-For a destructuring pattern, each introduced name receives the corresponding
-component scheme under the same decision. Function parameters, handler
-continuations, and pattern bindings not introduced by `let` are monomorphic.
+`let`의 data 타입 변수는 binding의 사용들이 고정하므로, 지역 callable이 만드는
+타입 인자를 가진 struct·enum 값도 사용처가 고른 인스턴스다.
+`let mk = fn(x) { Option::Some(x) }`를 `mk(41)`로 쓰면 `x`는 `Nat`이 되고, 람다는
+`Option(Nat)`을 만든다. 사용하는 곳이 없어 아무것도 고정하지 않은 변수는 함수 본문이
+소유한 existential로 남는다(아래). 다만 그런 변수가 ability 인자에 남으면 특수화 전
+인스턴스 검증이 미해결 ability 인자로 거부한다(`generics.md`).
 
-A type scheme quantifies both type variables and ability-row variables:
+Row 사용처 간 독립성은 각 row 인스턴스가 자기의 구체 ability나 그 ability의 타입
+인자를 가질 수 있다는 뜻이다. 이것이 binding에 이미 있는 공유 data 타입 변수를
+사용마다 새로 만들 근거가 되지는 않는다.
+
+Destructuring 패턴의 오른쪽 식은 위 두 형태가 아니므로 각 이름은 단형 타입을 받는다.
+Function parameters, handler continuations, and pattern bindings not introduced
+by `let` are monomorphic.
+
+A function declaration's type scheme quantifies both type variables and
+ability-row variables:
 
 ```text
 sigma ::= forall a1 ... an, e1 ... em. tau
 ```
 
-Only variables not free in the surrounding environment are quantified. Every
-lookup instantiates every quantified type variable and row variable freshly;
-repeated occurrences of one quantified variable remain shared within that
-single instantiation. Variables in a monomorphic scheme are not freshened.
+A local `let` scheme quantifies only ability-row variables (`n = 0`). Only
+variables not free in the surrounding environment are quantified. Every lookup
+instantiates every quantified type variable and row variable freshly; repeated
+occurrences of one quantified variable remain shared within that single
+instantiation. Variables a scheme does not quantify are not freshened.
 
-### 지역 quantifier의 소유권
+### 본문이 소유한 existential
 
-한 `let`이 일반화한 type 변수는 그 `let`의 패턴 전체가 소유한다. 검사된 본문
-type과 callable metadata에서 이 변수는 `LocalBoundVar { scope, index }`로
-나타난다. `scope`는 `let` 패턴 루트의 NodeId이고, `index`는 그 `let` 안에서
-변수마다 한 번 부여하는 번호다.
+함수 본문의 type 변수 중 함수 signature도, 보존된 row 관계도 적지 않는 변수는 그
+함수 본문이 소유한다. 사용하지 않은 지역 람다의 매개변수 타입이나 사용처가 아무
+것도 고정하지 않은 생성자 인자가 그 예다. 검사된 본문 type과 callable metadata에서
+이 변수는 `LocalBoundVar { scope, index }`로 나타난다. `scope`는 그 함수 선언의
+NodeId이고, `index`는 그 함수 안에서 변수마다 한 번 부여하는 번호다.
 
-- destructuring이나 `as` 패턴이 여러 이름에 같은 변수를 나누어 주더라도
-  (`let f as g = fn(v) v`) 이름마다 scheme은 따로 가지지만 그 변수의
-  `LocalBoundVar`는 하나다. RHS는 한 번만 검사되므로 그 본문 type이 가리키는
-  소유자도 하나여야 한다.
-- 이름별 scheme의 quantifier 번호(`BoundVar`)는 그 scheme 안에서만 의미가 있고
-  `LocalBoundVar`의 번호와 대응하지 않는다.
+- `let`은 data 타입 변수를 양화하지 않으므로, destructuring이나 `as` 패턴이 여러
+  이름에 나누어 준 변수(`let f as g = fn(v) v`)도 이름마다 같은 solver 변수이고,
+  남으면 하나의 `LocalBoundVar`가 된다.
+- 이 소유자는 enclosing 함수 하나이므로 서로 다른 `let`이 한 변수의 소유를 다툴 수
+  없다. 형제 `let`이 같은 row 변수를 양화하지 않는다는 규칙은
+  [지역 타입 주석](#ability-row-syntax)의 row 이름 범위가 정한다.
 - 이 소유권은 지역 callable 인스턴스가 사용하는 이름별 binding identity와 별개다.
-- 환경에 자유로운 변수는 일반화하지 않으므로, 서로 다른 `let`이 같은 변수를
-  소유하는 기록은 컴파일러 내부 오류다.
 
 ### 지역 callable 인스턴스의 전달
 
@@ -887,21 +965,20 @@ type과 callable metadata에서 이 변수는 `LocalBoundVar { scope, index }`�
 치환을 적용한다. 부모 매개변수를 별도의 nominal 타입 이름으로 해석하지 않는다.
 
 지역 binding의 scheme과 참조별 instantiation은 서로 다른 정보다. 타입 검사는
-binding의 NodeId와 LocalId, scheme, 참조별 타입·row 인자와 선택된 callable 타입을
+binding의 NodeId와 LocalId, scheme, 참조별 row 인자와 선택된 callable 타입을
 함께 전달한다. 동일 참조의 재검사는 같은 인스턴스를 사용하며, 특수화는 enclosing
 함수의 복제와 함께 binding identity 및 이 메타데이터를 갱신한다.
 
-데이터 매개변수·결과·capture 타입이 고정된 source lambda는 검사된 지역 row
-인스턴스로 생성할 수 있다. 여기서 고정 타입에는 부모 함수가 소유한 타입
-매개변수도 포함된다. 특수화 전 generic 본문에서도 이 변수는 같은 부모 binder를
-참조하며, 지역 사용처마다 새로 인스턴스화하지 않는다. 이 과정은 binding이
-소유한 row만 치환하고 환경의
-자유 변수나 다른 지역 scheme을 닫지 않는다. Lowering은 lambda 본문 형상이나
-비어 있는 explicit effect 목록으로 purity를 다시 추론하지 않는다.
+부모 함수가 소유한 타입 매개변수는 특수화 전 generic 본문에서도 같은 부모
+binder를 참조하며, 지역 사용처마다 새로 인스턴스화하지 않는다. 지역 사용의
+인스턴스화는 binding이 소유한 row만 치환하고 환경의 자유 변수나 다른 지역 scheme을
+닫지 않는다. Lowering은 lambda 본문 형상이나 비어 있는 explicit effect 목록으로
+purity를 다시 추론하지 않는다.
 
-지역 callable 생성은 원래 binding 위치의 값을 사용한다. 같은 인스턴스와 호출
-계약은 생성물을 공유할 수 있지만, 첫 사용의 타입을 다른 사용 전체에 적용해서는
-안 된다. 임의의 callable-producing RHS를 사용처마다 다시 평가하지 않는다.
+Lowering은 `let`에 묶인 람다를 원래 binding 위치에서 한 번만 만들고, 사용마다
+그 사용의 row 인자로 인스턴스화한다([IR 계약](ir.md#지역-람다의-양화와-인스턴스화)).
+사용처의 타입에 맞춘 람다를 따로 만들지 않으며, 첫 사용의 타입을 다른 사용 전체에
+적용하지도 않는다. 임의의 callable-producing RHS를 사용처마다 다시 평가하지 않는다.
 
 ---
 

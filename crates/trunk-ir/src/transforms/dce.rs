@@ -200,7 +200,6 @@ mod tests {
     use crate::location::Span;
     use crate::ops::DialectOp;
     use crate::parser::parse_test_module;
-    use crate::printer::print_module;
     use crate::rewrite::Module;
 
     use crate::*;
@@ -283,14 +282,14 @@ mod tests {
 
         let func_op = build_func(&mut ctx, loc, "main", |ctx, loc, entry| {
             // dead: result is never used
-            let _dead = arith::Const::operands()
+            let _dead = arith::Constant::operands()
                 .value(Attribute::Int(42))
                 .results(i32_ty)
                 .build(ctx, loc);
             ctx.push_op(entry, _dead.op_ref());
 
             // alive: used by return
-            let alive = arith::Const::operands()
+            let alive = arith::Constant::operands()
                 .value(Attribute::Int(1))
                 .results(i32_ty)
                 .build(ctx, loc);
@@ -337,7 +336,7 @@ mod tests {
 
         let func_op = build_func(&mut ctx, loc, "main", |ctx, loc, entry| {
             // Chain: a -> b -> c (all unused)
-            let a = arith::Const::operands()
+            let a = arith::Constant::operands()
                 .value(Attribute::Int(1))
                 .results(i32_ty)
                 .build(ctx, loc);
@@ -367,12 +366,12 @@ mod tests {
         let i32_ty = i32_type(&mut ctx);
 
         let func_op = build_func(&mut ctx, loc, "main", |ctx, loc, entry| {
-            let a = arith::Const::operands()
+            let a = arith::Constant::operands()
                 .value(Attribute::Int(1))
                 .results(i32_ty)
                 .build(ctx, loc);
             ctx.push_op(entry, a.op_ref());
-            let b = arith::Const::operands()
+            let b = arith::Constant::operands()
                 .value(Attribute::Int(2))
                 .results(i32_ty)
                 .build(ctx, loc);
@@ -396,11 +395,11 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @selected() -> core.nil {
-    %dead = arith.const {value = 1} : core.i32
+    %dead = arith.constant 1 : core.i32
     func.return
   }
   func.func @untouched() -> core.nil {
-    %dead = arith.const {value = 2} : core.i32
+    %dead = arith.constant 2 : core.i32
     func.return
   }
 }"#,
@@ -421,7 +420,7 @@ mod tests {
         let untouched_block = ctx.region(untouched.body(&ctx)).blocks[0];
         assert_eq!(ctx.block(selected_block).ops.len(), 1);
         assert_eq!(ctx.block(untouched_block).ops.len(), 2);
-        insta::assert_snapshot!(print_module(&ctx, module.op()));
+        insta::assert_snapshot!(module.op().display(&ctx).to_string());
     }
 
     #[test]
@@ -431,11 +430,11 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @first() -> core.nil {
-    %dead = arith.const {value = 1} : core.i32
+    %dead = arith.constant 1 : core.i32
     func.return
   }
   func.func @second() -> core.nil {
-    %dead = arith.const {value = 2} : core.i32
+    %dead = arith.constant 2 : core.i32
     func.return
   }
 }"#,
@@ -460,7 +459,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f() -> core.nil {
-    %dead = arith.const {value = 1} : core.i32
+    %dead = arith.constant 1 : core.i32
     func.return
   }
 }"#,
@@ -501,7 +500,7 @@ mod tests {
         // Build a func that contains another region (simulated with a generic op)
         let func_op = build_func(&mut ctx, loc, "main", |ctx, loc, entry| {
             // Inner region with a dead const
-            let inner_dead = arith::Const::operands()
+            let inner_dead = arith::Constant::operands()
                 .value(Attribute::Int(99))
                 .results(i32_ty)
                 .build(ctx, loc);
@@ -552,7 +551,7 @@ mod tests {
         // This scenario doesn't actually need multiple iterations since
         // reverse sweep handles cascades. But test the config path.
         let func_op = build_func(&mut ctx, loc, "main", |ctx, loc, entry| {
-            let a = arith::Const::operands()
+            let a = arith::Constant::operands()
                 .value(Attribute::Int(1))
                 .results(i32_ty)
                 .build(ctx, loc);
@@ -578,7 +577,7 @@ mod tests {
 
         let func_op = build_func(&mut ctx, loc, "main", |ctx, loc, entry| {
             // Inner region with a dead const
-            let inner_dead = arith::Const::operands()
+            let inner_dead = arith::Constant::operands()
                 .value(Attribute::Int(99))
                 .results(i32_ty)
                 .build(ctx, loc);

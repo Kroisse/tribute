@@ -1,7 +1,6 @@
 use trunk_ir::op_def::OpDef;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::parser::parse_module;
-use trunk_ir::printer::print_module;
 
 use super::*;
 use crate::dialect::tribute_control;
@@ -13,7 +12,7 @@ const MODULE: &str = r#"core.module @test {
   tribute_cps.func @declared(%arg0: core.i32) -> core.i32 convention(direct)
   tribute_cps.func_table @"declared$8" = {direct = @declared}
   tribute_cps.func @apply(%0: !t0, %1: core.i32) -> core.i32 convention(direct) {
-      %2 = tribute_cps.call_indirect %0, %1 {convention = "direct"} : core.i32
+      %2 = tribute_cps.call_indirect %0(%1) attributes {convention = "direct"} : (core.i32) -> core.i32
       tribute_control.return %2
   }
   tribute_cps.func @outer['a0](%0: core.i32) -> core.i32 row(| 'a0) convention(cps) attributes {visibility = "private"} {
@@ -23,7 +22,7 @@ const MODULE: &str = r#"core.module @test {
         }
       }
       %3 = tribute_cps.func_ref @"declared$8" : !t0
-      tribute_cps.tail_call_indirect %1, %0 {convention = "cps"}
+      tribute_cps.tail_call_indirect %1(%0) attributes {convention = "cps"} : (core.i32) -> core.i32 row(| 'a0)
   }
 }
 "#;
@@ -39,7 +38,7 @@ fn parse(input: &str) -> (IrContext, trunk_ir::rewrite::Module) {
 #[test]
 fn concise_forms_write_the_operation_convention() {
     let (ctx, module) = parse(MODULE);
-    assert_eq!(print_module(&ctx, module.op()), MODULE);
+    assert_eq!(module.op().display(&ctx).to_string(), MODULE);
 
     let ops: Vec<_> = module.ops(&ctx).to_vec();
     assert_eq!(
@@ -66,7 +65,7 @@ const TWO_BODIES: &str = r#"core.module @test {
             tribute_control.return %2
         }
       }
-      tribute_cps.tail_call_indirect %1, %0 {convention = "cps"}
+      tribute_cps.tail_call_indirect %1(%0) attributes {convention = "cps"} : (core.i32) -> core.i32
   }
 }
 "#;
@@ -74,7 +73,7 @@ const TWO_BODIES: &str = r#"core.module @test {
 #[test]
 fn a_lambda_writes_a_body_per_convention() {
     let (ctx, module) = parse(TWO_BODIES);
-    assert_eq!(print_module(&ctx, module.op()), TWO_BODIES);
+    assert_eq!(module.op().display(&ctx).to_string(), TWO_BODIES);
     let outer = Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
     let body = ctx.region(outer.body(&ctx)).blocks[0];
     let lambda = Lambda::from_op(&ctx, ctx.block(body).ops[0]).unwrap();
@@ -135,7 +134,7 @@ fn a_concise_function_must_write_its_convention() {
 fn a_convention_must_be_a_keyword() {
     let (ctx, module) = parse(
         r#"core.module @test {
-  tribute_cps.func {convention = "fast", sym_name = "f", type = tribute_control.func_sig<() -> core.i32>}
+  "tribute_cps.func"() {convention = "fast", sym_name = "f", type = tribute_control.func_sig<() -> core.i32>}
 }
 "#,
     );
@@ -145,11 +144,15 @@ fn a_convention_must_be_a_keyword() {
     assert!(
         errors[0]
             .to_string()
-            .contains("`convention` must be one of"),
+            .contains("attribute `convention` must be one of"),
         "{errors:?}"
     );
     assert!(
-        print_module(&ctx, module.op()).contains("tribute_cps.func {"),
+        module
+            .op()
+            .display(&ctx)
+            .to_string()
+            .contains("\"tribute_cps.func\"() {"),
         "an invalid convention prints generically"
     );
 }
@@ -194,7 +197,7 @@ fn an_indirect_tail_call_is_not_stronger_than_its_callable() {
     let errors = messages(
         r#"core.module @test {
   tribute_cps.func @f(%k: tribute_control.func_sig<() -> core.i32>) -> core.i32 convention(direct) {
-    tribute_cps.tail_call_indirect %k {convention = "cps"}
+    tribute_cps.tail_call_indirect %k() attributes {convention = "cps"} : () -> core.i32
   }
 }
 "#,
@@ -211,13 +214,13 @@ fn table_module(target: &str, entry: &str) -> String {
     format!(
         r#"core.module @test {{
   tribute_cps.func @target() -> core.i32 convention({target}) {{
-    %0 = arith.const {{value = 1}} : core.i32
+    %0 = arith.constant 1 : core.i32
     tribute_control.return %0
   }}
   tribute_cps.func_table @"target$8" = {{{entry} = @target}}
   tribute_cps.func @f() -> core.i32 convention(direct) {{
-    %0 = tribute_cps.func_ref {{func_ref = @"target$8"}} : tribute_control.func_sig<() -> core.i32>
-    %1 = tribute_cps.call_indirect %0 {{convention = "direct"}} : core.i32
+    %0 = tribute_cps.func_ref @"target$8" : tribute_control.func_sig<() -> core.i32>
+    %1 = tribute_cps.call_indirect %0() attributes {{convention = "direct"}} : () -> core.i32
     tribute_control.return %1
   }}
 }}
@@ -256,12 +259,12 @@ fn a_function_reference_names_a_function_table() {
     let errors = messages(
         r#"core.module @test {
   tribute_cps.func @target() -> core.i32 convention(direct) {
-    %0 = arith.const {value = 1} : core.i32
+    %0 = arith.constant 1 : core.i32
     tribute_control.return %0
   }
   tribute_cps.func @f() -> core.i32 convention(direct) {
-    %0 = tribute_cps.func_ref {func_ref = @target} : tribute_control.func_sig<() -> core.i32>
-    %1 = tribute_cps.call_indirect %0 {convention = "direct"} : core.i32
+    %0 = tribute_cps.func_ref @target : tribute_control.func_sig<() -> core.i32>
+    %1 = tribute_cps.call_indirect %0() attributes {convention = "direct"} : () -> core.i32
     tribute_control.return %1
   }
 }
@@ -304,7 +307,7 @@ fn every_body_takes_the_parameters_and_its_own_convention() {
             tribute_control.return %0
         }
         cps {
-            %3 = tribute_cps.call_indirect %2 {convention = "cps"} : core.i32
+            %3 = tribute_cps.call_indirect %2() attributes {convention = "cps"} : () -> core.i32
             tribute_control.return %3
         }
       }
@@ -313,13 +316,13 @@ fn every_body_takes_the_parameters_and_its_own_convention() {
 }
 "#;
     let (ctx, module) = parse(input);
-    assert_eq!(print_module(&ctx, module.op()), input);
+    assert_eq!(module.op().display(&ctx).to_string(), input);
     assert_eq!(messages(input), Vec::<String>::new());
 
     // A transfer in the Direct body may not be stronger than that body.
     let stronger = input.replace(
         "direct {\n            tribute_control.return %0",
-        "direct {\n            tribute_cps.tail_call_indirect %2 {convention = \"cps\"}",
+        "direct {\n            tribute_cps.tail_call_indirect %2() attributes {convention = \"cps\"} : () -> core.i32",
     );
     assert!(
         messages(&stronger)
@@ -338,12 +341,12 @@ fn a_function_reference_writes_its_target_and_row_arguments() {
   tribute_cps.func @f['a0]() -> core.i32 row(| 'a0) convention(cps) {
       %0 = tribute_cps.func_ref @inner::@"g$8" rows [{tail = 0}] : !t0
       %1 = tribute_control.func_ref @h : !t0
-      tribute_cps.tail_call_indirect %0 {convention = "cps"}
+      tribute_cps.tail_call_indirect %0() attributes {convention = "cps"} : () -> core.i32 row(| 'a0)
   }
 }
 "#;
     let (ctx, module) = parse(input);
-    assert_eq!(print_module(&ctx, module.op()), input);
+    assert_eq!(module.op().display(&ctx).to_string(), input);
 }
 
 /// A reference and its table's targets are in one module, where
@@ -354,7 +357,7 @@ fn a_function_table_and_its_targets_are_in_the_module_of_its_references() {
         r#"core.module @test {
   core.module @inner {
     tribute_cps.func @id() -> core.i32 convention(direct) {
-      %0 = arith.const {value = 1} : core.i32
+      %0 = arith.constant 1 : core.i32
       tribute_control.return %0
     }
     tribute_cps.func_table @"id$8" = {direct = @id}
@@ -362,7 +365,7 @@ fn a_function_table_and_its_targets_are_in_the_module_of_its_references() {
   tribute_cps.func_table @"outer$8" = {direct = @inner::@id}
   tribute_cps.func @f() -> core.i32 convention(direct) {
     %0 = tribute_cps.func_ref @inner::@"id$8" : tribute_control.func_sig<() -> core.i32>
-    %1 = tribute_cps.call_indirect %0 {convention = "direct"} : core.i32
+    %1 = tribute_cps.call_indirect %0() attributes {convention = "direct"} : () -> core.i32
     tribute_control.return %1
   }
 }
@@ -382,7 +385,7 @@ fn the_targets_of_a_function_table_share_one_source_signature() {
     let errors = messages(
         r#"core.module @test {
   tribute_cps.func @a() -> core.i32 convention(direct) {
-    %0 = arith.const {value = 1} : core.i32
+    %0 = arith.constant 1 : core.i32
     tribute_control.return %0
   }
   tribute_cps.func @b(%x: core.i32) -> core.i32 convention(cps) {

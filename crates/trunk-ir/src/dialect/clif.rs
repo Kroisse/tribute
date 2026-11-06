@@ -2,7 +2,8 @@
 
 use crate::attr_kind::Bytes;
 use crate::attr_kind::SymbolRef;
-use crate::dialect::core::{I32, IntegerLike};
+use crate::dialect::arith;
+use crate::dialect::core::{I8, I32, IntegerLike};
 use crate::op_flag::IsolatedFromAbove;
 use crate::op_interface::{CallLike, IndirectCallLike};
 use crate::ops::{DialectOp, DialectType};
@@ -11,9 +12,71 @@ use crate::{IrContext, SymbolPath};
 use itertools::Itertools;
 use rustc_hash::FxHashSet as HashSet;
 
+crate::attr_kind::keyword_kind! {
+    /// The condition of `clif.icmp`, Cranelift's `IntCC`.
+    pub enum IntCond {
+        Eq = "eq",
+        Ne = "ne",
+        Slt = "slt",
+        Sle = "sle",
+        Sgt = "sgt",
+        Sge = "sge",
+        Ult = "ult",
+        Ule = "ule",
+        Ugt = "ugt",
+        Uge = "uge",
+    }
+}
+
+crate::attr_kind::keyword_kind! {
+    /// The condition of `clif.fcmp`, the ordered comparisons and unordered
+    /// inequality of Cranelift's `FloatCC`.
+    pub enum FloatCond {
+        Eq = "eq",
+        Ne = "ne",
+        Lt = "lt",
+        Le = "le",
+        Gt = "gt",
+        Ge = "ge",
+    }
+}
+
+impl From<arith::CmpiPredicate> for IntCond {
+    fn from(predicate: arith::CmpiPredicate) -> Self {
+        use arith::CmpiPredicate as P;
+        match predicate {
+            P::Eq => Self::Eq,
+            P::Ne => Self::Ne,
+            P::Slt => Self::Slt,
+            P::Sle => Self::Sle,
+            P::Sgt => Self::Sgt,
+            P::Sge => Self::Sge,
+            P::Ult => Self::Ult,
+            P::Ule => Self::Ule,
+            P::Ugt => Self::Ugt,
+            P::Uge => Self::Uge,
+        }
+    }
+}
+
+impl From<arith::CmpfPredicate> for FloatCond {
+    fn from(predicate: arith::CmpfPredicate) -> Self {
+        use arith::CmpfPredicate as P;
+        match predicate {
+            P::Oeq => Self::Eq,
+            P::Une => Self::Ne,
+            P::Olt => Self::Lt,
+            P::Ole => Self::Le,
+            P::Ogt => Self::Gt,
+            P::Oge => Self::Ge,
+        }
+    }
+}
+
 #[trunk_ir::dialect]
 mod clif {
     // Module
+    #[asm_format(symbol(sym_name) signature(r#type, body) attr_dict region(body))]
     #[flags(IsolatedFromAbove)]
     fn func<S: FuncSig>(sym_name: Attr<String>, r#type: Attr<TypeOf<S>>) {
         #[region(body?)]
@@ -27,6 +90,13 @@ mod clif {
     /// pointer-width ranges must fit in `bytes` and must not overlap;
     /// emission checks both against the target pointer width.
     #[verify]
+    ///
+    /// ```text
+    /// clif.data @table(b"\0\0\0\0\0\0\0\0") align 8 {
+    ///   clif.func_reloc @f at 0
+    /// }
+    /// ```
+    #[asm_format(symbol(sym_name) "(" bytes ")" "align" align attr_dict region(relocs))]
     fn data(sym_name: Attr<String>, bytes: Attr<Bytes>, align: Attr<u32>) {
         #[region(relocs?)]
         {}
@@ -35,12 +105,15 @@ mod clif {
     /// Asks the linker to write the address of `func` over the pointer-sized
     /// bytes at `offset` of the enclosing `data`. Only a `data` region holds it.
     #[verify]
+    #[asm_format(func "at" offset attr_dict)]
     fn func_reloc(offset: Attr<u32>, func: Attr<SymbolRef>) {}
 
     #[implements(CallLike)]
+    #[asm_format(callee "(" args ")" attr_dict ":" functional_type(args, results))]
     fn call(callee: Attr<SymbolRef>, args: Variadic<_>) -> Variadic<_> {}
 
     #[verify]
+    #[asm_format(callee "(" args ")" attr_dict ":" signature(sig))]
     #[implements(IndirectCallLike)]
     fn call_indirect<S: FuncSig>(
         sig: Attr<TypeOf<S>>,
@@ -49,46 +122,75 @@ mod clif {
     ) -> Variadic<_> {
     }
 
+    #[asm_format(values attr_dict_bare)]
     fn r#return(values: Variadic<_>) {}
 
     // Constants
+    #[asm_format(attr_dict_bare value ":" type(result))]
     fn iconst(value: Attr<i64>) -> Value<_> {}
 
+    #[asm_format(attr_dict_bare value ":" type(result))]
     fn f32const(value: Attr<f32>) -> Value<_> {}
 
+    #[asm_format(attr_dict_bare value ":" type(result))]
     fn f64const(value: Attr<f64>) -> Value<_> {}
 
     // Integer arithmetic
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn iadd(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn isub(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn imul(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn sdiv(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn udiv(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn srem(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn urem(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn ineg(operand: Value<_>) -> Value<_> {}
 
     // Float arithmetic
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn fadd(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn fsub(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn fmul(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn fdiv(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn fneg(operand: Value<_>) -> Value<_> {}
 
     // Comparisons
-    fn icmp(cond: Attr<String>, lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    /// Compare two integers, yielding `1` or `0` as Cranelift's `icmp`
+    /// does.
+    #[asm_format(cond "," lhs "," rhs attr_dict_bare ":" type(lhs))]
+    fn icmp(cond: Attr<IntCond>, lhs: Value<_>, rhs: Value<_>) -> Value<I8> {}
 
-    fn fcmp(cond: Attr<String>, lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    /// Compare two floats, yielding `1` or `0` as Cranelift's `fcmp` does.
+    #[asm_format(cond "," lhs "," rhs attr_dict_bare ":" type(lhs))]
+    fn fcmp(cond: Attr<FloatCond>, lhs: Value<_>, rhs: Value<_>) -> Value<I8> {}
 
     // Bitwise
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn band(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn bor(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn bxor(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn ishl(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn sshr(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn ushr(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
     // Control flow
+    #[asm_format(cond "[" successor(then_dest) "," successor(else_dest) "]" attr_dict_bare)]
     fn brif(cond: Value<_>) {
         #[successor(then_dest)]
         {}
@@ -96,6 +198,7 @@ mod clif {
         {}
     }
 
+    #[asm_format(args "[" successor(dest) "]" attr_dict_bare)]
     fn jump(args: Variadic<_>) {
         #[successor(dest)]
         {}
@@ -106,6 +209,11 @@ mod clif {
     /// `index` is an unsigned 32-bit position in `table`. Control transfers
     /// to the successor at that position, or to `default` when the index is
     /// out of bounds. Successors take no block arguments.
+    ///
+    /// ```text
+    /// clif.br_table %index, ^default [^first, ^second]
+    /// ```
+    #[asm_format(index "," successor(default) "[" successors(table) "]" attr_dict)]
     fn br_table(index: Value<I32>) {
         #[successor(default)]
         {}
@@ -119,7 +227,14 @@ mod clif {
     /// `cases` holds the unsigned value of `index`, or to `default` when no
     /// case matches. Cases may be sparse and need not start at 0. Successors
     /// take no block arguments.
+    ///
+    /// Each case is written with its target:
+    ///
+    /// ```text
+    /// clif.switch %index, ^default [0: ^first, 5: ^second]
+    /// ```
     #[verify]
+    #[asm_format(index "," successor(default) "[" custom(SwitchCases(cases, targets)) "]" attr_dict)]
     fn switch(cases: Attr<[u64]>, index: Value<impl IntegerLike>) {
         #[successor(default)]
         {}
@@ -127,17 +242,21 @@ mod clif {
         {}
     }
 
+    #[asm_format(attr_dict_bare)]
     fn trap(code: Attr<String>) {}
 
     /// Traps when `cond` is non-zero and otherwise continues with the next
     /// operation, like Cranelift's `trapnz`. It is not a terminator, so a
     /// lowering can guard an access without splitting its block. `code`
     /// names the failed check, as `trap`'s does.
+    #[asm_format(cond attr_dict_bare)]
     fn trapnz(code: Attr<String>, cond: Value<impl IntegerLike>) {}
 
     #[implements(CallLike)]
+    #[asm_format(callee "(" args ")" attr_dict ":" functional_type(args))]
     fn return_call(callee: Attr<SymbolRef>, args: Variadic<_>) {}
 
+    #[asm_format(callee "(" args ")" attr_dict ":" signature(sig))]
     #[implements(IndirectCallLike)]
     fn return_call_indirect<S: FuncSig>(
         sig: Attr<TypeOf<S>>,
@@ -147,10 +266,13 @@ mod clif {
     }
 
     // Memory
+    #[asm_format(addr attr_dict_bare ":" type(result))]
     fn load(offset: Attr<i32>, addr: Value<_>) -> Value<_> {}
 
+    #[asm_format(value "," addr attr_dict_bare)]
     fn store(offset: Attr<i32>, value: Value<_>, addr: Value<_>) {}
 
+    #[asm_format(addr "," value attr_dict_bare ":" type(result))]
     fn atomic_rmw(
         bin_op: Attr<String>,
         offset: Attr<i32>,
@@ -159,21 +281,33 @@ mod clif {
     ) -> Value<_> {
     }
 
+    #[asm_format(attr_dict_bare ":" type(result))]
     fn stack_slot(size: Attr<u32>, align: Attr<u32>) -> Value<_> {}
 
+    #[asm_format(slot attr_dict_bare ":" type(result))]
     fn stack_addr(slot: Value<_>) -> Value<_> {}
 
+    #[asm_format(sym attr_dict ":" type(result))]
     fn symbol_addr(sym: Attr<SymbolRef>) -> Value<_> {}
 
     // Type conversions
+    #[asm_format(operand attr_dict_bare ":" type(operand) "to" type(result))]
     fn ireduce(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(operand) "to" type(result))]
     fn uextend(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(operand) "to" type(result))]
     fn sextend(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(operand) "to" type(result))]
     fn fpromote(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(operand) "to" type(result))]
     fn fdemote(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(operand) "to" type(result))]
     fn fcvt_to_sint(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(operand) "to" type(result))]
     fn fcvt_from_sint(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(operand) "to" type(result))]
     fn fcvt_to_uint(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(operand) "to" type(result))]
     fn fcvt_from_uint(operand: Value<_>) -> Value<_> {}
 }
 
@@ -311,15 +445,34 @@ crate::register_type_def!(&FUNC_SIG_DEF);
 /// The function syntax `func.func_sig` also uses, `clif.func_sig<(A) -> R>`,
 /// with any number of results.
 impl crate::asm_format::TypeAsmFormat for FuncSig {
-    fn print(&self, h: &mut crate::printer::TypePrintHelper<'_, '_>) -> std::fmt::Result {
-        super::func::print_signature_type(h, self.0)
+    fn print(&self, p: &mut crate::printer::AsmPrinter<'_>) -> std::fmt::Result {
+        super::func::print_signature_type(p, self.0)
     }
 
-    fn parse<'a>(
-        input: &mut &'a str,
-        name: &'a str,
-    ) -> winnow::ModalResult<crate::parser::raw::RawType<'a>> {
-        super::func::parse_signature_type(input, name, None)
+    fn parse(
+        p: &mut crate::parser::AsmParser<'_>,
+        name: &str,
+    ) -> crate::parser::ParseResult<Option<crate::TypeRef>> {
+        super::func::parse_signature_type(p, name, None)
+    }
+}
+
+impl crate::asm_format::SignatureCodec for FuncSig {
+    fn decompose(
+        ctx: &crate::IrContext,
+        ty: crate::TypeRef,
+    ) -> Option<crate::asm_format::SignatureParts<'_>> {
+        Self::from_type_ref(ctx, ty)?;
+        super::func::signature_codec_parts(ctx, ty)
+    }
+
+    fn build(
+        p: &mut crate::parser::AsmParser<'_>,
+        inputs: Vec<(crate::TypeRef, crate::AttributeMap)>,
+        results: Vec<(crate::TypeRef, crate::AttributeMap)>,
+        tail: crate::AttributeMap,
+    ) -> crate::parser::ParseResult<crate::TypeRef> {
+        super::func::signature_from_parts(p, "clif.func_sig", inputs, results, tail, None)
     }
 }
 
@@ -414,11 +567,11 @@ impl crate::ops::Verify for CallIndirect {
             "results ({}) match neither the signature results ({}) nor their runtime projection",
             actual
                 .iter()
-                .map(|&ty| crate::printer::print_type(ctx, ty))
+                .map(|&ty| ty.display(ctx).to_string())
                 .format(", "),
             expected
                 .iter()
-                .map(|&ty| crate::printer::print_type(ctx, ty))
+                .map(|&ty| ty.display(ctx).to_string())
                 .format(", "),
         )
         .into())
@@ -459,6 +612,76 @@ impl crate::ops::Verify for Switch {
             Some(case) => Err(format!("duplicate case {case}").into()),
             None => Ok(()),
         }
+    }
+}
+
+/// The cases of a `clif.switch` paired with their targets, as
+/// `0: ^first, 5: ^second`.
+pub struct SwitchCases;
+
+impl crate::asm_format::OpAsmDirective for SwitchCases {
+    /// Each case with its target.
+    type Parts<'a> = Vec<(i128, crate::BlockRef)>;
+
+    fn decompose<'a>(
+        _ctx: &'a crate::IrContext,
+        entities: &'a [crate::asm_format::CustomEntity<'a>],
+    ) -> Option<Self::Parts<'a>> {
+        use crate::asm_format::CustomEntity;
+        let [
+            CustomEntity::Attribute(Some(Attribute::List(cases))),
+            CustomEntity::Successors(targets),
+        ] = entities
+        else {
+            return None;
+        };
+        if cases.len() != targets.len() {
+            return None;
+        }
+        cases
+            .iter()
+            .zip(targets)
+            .map(|(case, &target)| match *case {
+                Attribute::Int(case) => Some((case, target)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn print(p: &mut crate::printer::OpAsmPrinter<'_>, parts: Self::Parts<'_>) -> std::fmt::Result {
+        use itertools::Itertools as _;
+        use std::fmt::Write as _;
+
+        let s = p.state();
+        let cases = parts.into_iter().format_with(", ", |(case, target), f| {
+            f(&format_args!("{case}: {}", s.block(target)))
+        });
+        write!(p, "{cases}")
+    }
+
+    fn parse(
+        p: &mut crate::parser::OpAsmParser<'_>,
+    ) -> crate::parser::ParseResult<Vec<crate::asm_format::ParsedEntity>> {
+        use crate::asm_format::ParsedEntity;
+        use crate::parser::lexer::integer_lit;
+
+        let mut cases = Vec::new();
+        let mut targets = Vec::new();
+        let mut case = p.parse_optional_token("a case", integer_lit)?;
+        while let Some(value) = case {
+            cases.push(crate::Attribute::Int(value));
+            p.parse_punct(":")?;
+            targets.push(p.parse_successor()?);
+            case = if p.parse_optional_punct(",") {
+                Some(p.parse_integer()?)
+            } else {
+                None
+            };
+        }
+        Ok(vec![
+            ParsedEntity::Attribute(Some(crate::Attribute::List(cases))),
+            ParsedEntity::Successors(targets),
+        ])
     }
 }
 
@@ -564,9 +787,9 @@ pub fn set_indirect_call_signature(
 mod tests {
     use super::*;
     use crate::dialect::func;
+    use crate::op_def::OpDef;
     use crate::op_interface::DynIndirectCallLike;
     use crate::parser::parse_test_module;
-    use crate::printer::print_module;
 
     #[test]
     fn indirect_call_interface_uses_clif_owned_sig() {
@@ -575,11 +798,11 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   clif.func @ordinary(%callee: core.ptr, %value: core.i32) -> core.i32 {
-    %result = clif.call_indirect %callee, %value {sig = clif.func_sig<(core.i32) -> core.i32>} : core.i32
+    %result = clif.call_indirect %callee(%value) : (core.i32) -> core.i32
     clif.return %result
   }
   clif.func @tail(%callee: core.ptr, %value: core.i32) -> core.nil {
-    clif.return_call_indirect %callee, %value {sig = clif.func_sig<(core.i32) -> core.nil>}
+    clif.return_call_indirect %callee(%value) : (core.i32) -> core.nil
   }
   clif.func @direct() -> core.nil {
     clif.return
@@ -612,9 +835,60 @@ mod tests {
         }
         assert!(DynIndirectCallLike::get(&ctx, direct).is_none());
 
-        let printed = print_module(&ctx, module.op());
-        assert!(printed.contains("clif.call_indirect"));
-        assert!(printed.contains("sig = clif.func_sig<(core.i32) -> core.i32>"));
+        let printed = module.op().display(&ctx).to_string();
+        assert!(
+            printed.contains("clif.call_indirect %0(%1) : (core.i32) -> core.i32"),
+            "{printed}"
+        );
+    }
+
+    #[test]
+    fn indirect_call_results_match_the_signature_or_its_runtime_projection() {
+        let violations = |call: &str| {
+            let mut ctx = crate::IrContext::new();
+            let module = parse_test_module(
+                &mut ctx,
+                &format!(
+                    r#"core.module @test {{
+  clif.func @caller(%callee: core.ptr) {{
+    {call}
+    clif.return
+  }}
+}}"#
+                ),
+            );
+            let mut found = String::new();
+            let _ = crate::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
+                if CallIndirect::matches(&ctx, op) {
+                    found = OpDef::of(&ctx, op)
+                        .expect("clif.call_indirect is registered")
+                        .verify(&ctx, op)
+                        .iter()
+                        .format("\n")
+                        .to_string();
+                }
+                std::ops::ControlFlow::Continue(crate::walk::WalkAction::Advance)
+            });
+            found
+        };
+
+        assert_eq!(
+            violations("%a, %b = clif.call_indirect %callee() : () -> (core.i32, core.i64)"),
+            ""
+        );
+        assert_eq!(
+            violations(
+                r#"%a = "clif.call_indirect"(%callee) {sig = clif.func_sig<() -> (core.nil, core.i32)>} : core.i32"#
+            ),
+            ""
+        );
+        let mismatch = violations(
+            r#"%a, %b = "clif.call_indirect"(%callee) {sig = clif.func_sig<() -> (core.i32, core.i64)>} : core.i64, core.i32"#,
+        );
+        assert!(
+            mismatch.contains("results (core.i64, core.i32) match neither"),
+            "{mismatch}"
+        );
     }
 
     #[test]
@@ -627,7 +901,7 @@ mod tests {
   !callable = clif.func_sig<(!scalar) -> (!scalar, !scalar), {nested = [!scalar]}>
 }"#,
         );
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(
             printed.contains(
                 "!callable = clif.func_sig<(!scalar) -> (!scalar, !scalar), {nested = [!scalar]}>"
@@ -636,7 +910,22 @@ mod tests {
         );
         let mut reparsed = crate::IrContext::new();
         let copy = parse_test_module(&mut reparsed, &printed);
-        assert_eq!(print_module(&reparsed, copy.op()), printed);
+        assert_eq!(copy.op().display(&reparsed).to_string(), printed);
+    }
+
+    #[test]
+    fn func_writes_its_signature_in_the_function_form() {
+        let source = r#"core.module @test {
+  clif.func @external(%arg0: core.i32) -> core.i32 attributes {abi = "C"}
+  clif.func @pair(%0: core.i32) -> (core.i32, core.i64), {call_conv = "tail"} {
+      %1 = clif.iconst 1 : core.i64
+      clif.return %0, %1
+  }
+}
+"#;
+        let mut ctx = crate::IrContext::new();
+        let module = parse_test_module(&mut ctx, source);
+        assert_eq!(module.op().display(&ctx).to_string(), source);
     }
 
     #[test]
@@ -656,14 +945,13 @@ mod branch_table_tests {
     use super::*;
     use crate::op_def::OpDef;
     use crate::parser::parse_test_module;
-    use crate::printer::print_module;
 
     fn module(branch: &str) -> String {
         format!(
             r#"core.module @test {{
-  clif.func {{sym_name = "select", type = clif.func_sig<(core.i32) -> ()>}} {{
-    ^entry(%index: core.i32):
-      clif.{branch}
+  clif.func @select(%index: core.i32) {{
+    ^entry:
+      {branch}
     ^default:
       clif.return
     ^first:
@@ -678,11 +966,11 @@ mod branch_table_tests {
     fn assert_round_trips(branch: &str, printed_branch: &str) {
         let mut ctx = crate::IrContext::new();
         let parsed = parse_test_module(&mut ctx, &module(branch));
-        let printed = print_module(&ctx, parsed.op());
+        let printed = parsed.op().display(&ctx).to_string();
         assert!(printed.contains(printed_branch), "{printed}");
         let mut reparsed_ctx = crate::IrContext::new();
         let reparsed = parse_test_module(&mut reparsed_ctx, &printed);
-        assert_eq!(print_module(&reparsed_ctx, reparsed.op()), printed);
+        assert_eq!(reparsed.op().display(&reparsed_ctx).to_string(), printed);
     }
 
     /// The violations of the `clif.switch` in [`module`], one per line.
@@ -705,19 +993,29 @@ mod branch_table_tests {
     #[test]
     fn branch_tables_round_trip() {
         assert_round_trips(
-            "br_table %index [^default, ^first, ^second]",
-            "clif.br_table %0 [^bb1, ^bb2, ^bb3]",
+            "clif.br_table %index, ^default [^first, ^second]",
+            "clif.br_table %0, ^bb1 [^bb2, ^bb3]",
         );
         assert_round_trips(
-            "switch %index [^default, ^first, ^second] {cases = [0, 5]}",
-            "clif.switch %0 [^bb1, ^bb2, ^bb3] {cases = [0, 5]}",
+            "clif.br_table %index, ^default []",
+            "clif.br_table %0, ^bb1 []",
+        );
+        assert_round_trips(
+            "clif.switch %index, ^default [0: ^first, 18446744073709551615: ^second]",
+            "clif.switch %0, ^bb1 [0: ^bb2, 18446744073709551615: ^bb3]",
+        );
+        assert_round_trips("clif.switch %index, ^default []", "clif.switch %0, ^bb1 []");
+        // A switch whose cases and targets disagree has no custom form.
+        assert_round_trips(
+            r#""clif.switch"(%index)[^default, ^first] {cases = [0, 5]}"#,
+            "\"clif.switch\"(%0)[^bb1, ^bb2] {cases = [0, 5]}",
         );
     }
 
     #[test]
     fn branch_table_builders_take_the_default_then_the_rest() {
         let mut ctx = crate::IrContext::new();
-        let parsed = parse_test_module(&mut ctx, &module("br_table %index [^default]"));
+        let parsed = parse_test_module(&mut ctx, &module("clif.br_table %index, ^default []"));
         let func = Func::from_op(&ctx, parsed.ops(&ctx)[0]).unwrap();
         let blocks = ctx.region(func.body(&ctx)).blocks.clone();
         let index = ctx.block_args(blocks[0])[0];
@@ -741,17 +1039,14 @@ mod branch_table_tests {
     #[test]
     fn switch_requires_one_target_per_distinct_case() {
         assert_eq!(
-            switch_violations("switch %index [^default, ^first, ^second] {cases = [0, 5]}"),
+            switch_violations("clif.switch %index, ^default [0: ^first, 5: ^second]"),
             ""
         );
-        assert_eq!(
-            switch_violations("switch %index [^default] {cases = []}"),
-            ""
-        );
-        let mismatch = switch_violations("switch %index [^default, ^first] {cases = [0, 5]}");
+        assert_eq!(switch_violations("clif.switch %index, ^default []"), "");
+        let mismatch =
+            switch_violations(r#""clif.switch"(%index)[^default, ^first] {cases = [0, 5]}"#);
         assert!(mismatch.contains("2 case(s) but 1 target(s)"), "{mismatch}");
-        let duplicate =
-            switch_violations("switch %index [^default, ^first, ^second] {cases = [5, 5]}");
+        let duplicate = switch_violations("clif.switch %index, ^default [5: ^first, 5: ^second]");
         assert!(duplicate.contains("duplicate case 5"), "{duplicate}");
     }
 }

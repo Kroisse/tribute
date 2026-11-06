@@ -2,15 +2,19 @@
 //!
 //! `Attr<K>` in a `#[dialect]` declaration names a Rust type `K` implementing
 //! [`AttrKind`]. The kind defines the schema domain of the attribute, the
-//! value its accessor returns, and the value its builder setter takes; the
-//! macro emits `<K as AttrKind>` without interpreting `K`.
+//! value its accessor returns, the value its builder setter takes, and how a
+//! declarative assembly format spells its values; the macro emits
+//! `<K as AttrKind>` without interpreting `K`.
 
+use std::fmt;
 use std::marker::PhantomData;
 
 use smallvec::SmallVec;
 
 use crate::context::IrContext;
 use crate::op_schema::AttributeKind;
+use crate::parser::{AsmParser, ParseResult};
+use crate::printer::AsmPrinter;
 use crate::refs::TypeRef;
 use crate::symbol::SymbolPath;
 use crate::types::{Attribute, AttributeIter, AttributeKey, AttributeMap, StringArg, StringRef};
@@ -29,6 +33,41 @@ pub trait AttrKind {
     fn read<'ctx>(ctx: &'ctx IrContext, attr: &'ctx Attribute) -> Self::Out<'ctx>;
 
     fn write(ctx: &mut IrContext, value: Self::In) -> Attribute;
+
+    /// The values `accepts` admits, as a schema violation names them, when
+    /// they are narrower than `KIND`'s domain.
+    const DOMAIN: Option<&'static str> = None;
+
+    /// Whether `attr` is a value of this kind, which the schema checks: by
+    /// default, whether it is in `KIND`'s domain. A narrower kind, such as a
+    /// keyword, also checks the rest and names it in `DOMAIN`.
+    fn accepts(ctx: &IrContext, attr: &Attribute) -> bool {
+        let _ = ctx;
+        Self::KIND.accepts(attr)
+    }
+
+    /// Write `attr`, a value `accepts` admits, as a declarative assembly
+    /// format spells it: by default in generic attribute syntax. A keyword
+    /// kind writes its keyword (`new-plans/ir.md`, "선언적 어셈블리 형식").
+    fn print_text(p: &mut AsmPrinter<'_>, attr: &Attribute) -> fmt::Result {
+        p.print_attribute(attr)
+    }
+
+    /// Read a value as [`Self::print_text`] writes it, as an unverified
+    /// attribute that the schema checks later.
+    fn parse_text(p: &mut AsmParser<'_>) -> ParseResult<Attribute> {
+        p.parse_attribute()
+    }
+
+    /// Whether two values read from attributes are the same value, which
+    /// tells a stored `#[default(v)]` from another value. Floating-point
+    /// kinds compare bits, so `-0.0` is not the default `0.0`.
+    fn same<'ctx>(a: &Self::Out<'ctx>, b: &Self::Out<'ctx>) -> bool
+    where
+        Self::Out<'ctx>: PartialEq,
+    {
+        a == b
+    }
 }
 
 /// A kind whose value is a pooled handle, read without borrowing the context.
@@ -96,6 +135,97 @@ macro_rules! int_kind {
 
 int_kind!(i32 => I32, i64 => I64, u32 => U32, u64 => U64);
 
+/// Declare a keyword attribute kind: an enum stored as a string attribute
+/// holding its keyword, which a declarative format writes bare, as MLIR
+/// writes `arith.cmpi slt, %a, %b`.
+macro_rules! keyword_kind {
+    (
+        $(#[$meta:meta])*
+        $vis:vis enum $name:ident {
+            $($(#[$variant_meta:meta])* $variant:ident = $word:literal),+ $(,)?
+        }
+    ) => {
+        $(#[$meta])*
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        $vis enum $name {
+            $($(#[$variant_meta])* $variant),+
+        }
+
+        impl $name {
+            /// The keyword that spells this value.
+            pub fn keyword(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $word),+
+                }
+            }
+
+            /// The value a keyword spells; `None` for any other word.
+            pub fn from_keyword(word: &str) -> Option<Self> {
+                match word {
+                    $($word => Some(Self::$variant),)+
+                    _ => None,
+                }
+            }
+
+            fn from_attribute(
+                ctx: &$crate::context::IrContext,
+                attr: &$crate::types::Attribute,
+            ) -> Option<Self> {
+                match attr {
+                    $crate::types::Attribute::String(word) => Self::from_keyword(ctx.str(*word)),
+                    _ => None,
+                }
+            }
+        }
+
+        impl ::std::fmt::Display for $name {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str(self.keyword())
+            }
+        }
+
+        impl $crate::attr_kind::AttrKind for $name {
+            const KIND: $crate::op_schema::AttributeKind = $crate::op_schema::AttributeKind::String;
+            type Out<'ctx> = $name;
+            type In = $name;
+            const DOMAIN: Option<&'static str> = Some(concat!("one of:" $(, " ", $word)+));
+
+            fn accepts(ctx: &$crate::context::IrContext, attr: &$crate::types::Attribute) -> bool {
+                Self::from_attribute(ctx, attr).is_some()
+            }
+
+            fn read<'ctx>(
+                ctx: &'ctx $crate::context::IrContext,
+                attr: &'ctx $crate::types::Attribute,
+            ) -> $name {
+                Self::from_attribute(ctx, attr)
+                    .expect(concat!("unverified ", stringify!($name), " keyword"))
+            }
+
+            fn write(ctx: &mut $crate::context::IrContext, value: $name) -> $crate::types::Attribute {
+                ctx.string_attr(value.keyword())
+            }
+
+            fn print_text(
+                p: &mut $crate::printer::AsmPrinter<'_>,
+                attr: &$crate::types::Attribute,
+            ) -> ::std::fmt::Result {
+                ::std::fmt::Write::write_str(p, Self::read(p.ctx(), attr).keyword())
+            }
+
+            fn parse_text(
+                p: &mut $crate::parser::AsmParser<'_>,
+            ) -> $crate::parser::ParseResult<$crate::types::Attribute> {
+                $crate::asm_format::parse_keyword(p, |ctx, word| {
+                    Self::from_keyword(word).map(|value| ctx.string_attr(value.keyword()))
+                })
+            }
+        }
+    };
+}
+
+pub(crate) use keyword_kind;
+
 impl AttrKind for f32 {
     const KIND: AttributeKind = AttributeKind::F32;
     type Out<'ctx> = f32;
@@ -110,6 +240,13 @@ impl AttrKind for f32 {
 
     fn write(_: &mut IrContext, value: f32) -> Attribute {
         Attribute::FloatBits(f64::from(value).to_bits())
+    }
+
+    fn same<'ctx>(a: &f32, b: &f32) -> bool
+    where
+        Self::Out<'ctx>: PartialEq,
+    {
+        a.to_bits() == b.to_bits()
     }
 }
 
@@ -127,6 +264,13 @@ impl AttrKind for f64 {
 
     fn write(_: &mut IrContext, value: f64) -> Attribute {
         Attribute::FloatBits(value.to_bits())
+    }
+
+    fn same<'ctx>(a: &f64, b: &f64) -> bool
+    where
+        Self::Out<'ctx>: PartialEq,
+    {
+        a.to_bits() == b.to_bits()
     }
 }
 
@@ -195,6 +339,14 @@ impl AttrKind for SymbolRef {
     fn write(_: &mut IrContext, value: SymbolPath) -> Attribute {
         Attribute::SymbolRef(value)
     }
+
+    /// Only `@` begins a symbol reference, so another value is not read as one.
+    fn parse_text(p: &mut AsmParser<'_>) -> ParseResult<Attribute> {
+        if !p.peek().starts_with('@') {
+            return Err(p.expected("`@name`"));
+        }
+        p.parse_attribute()
+    }
 }
 
 /// A byte string attribute.
@@ -229,6 +381,14 @@ impl<K: AttrKind> AttrKind for [K] {
     const KIND: AttributeKind = AttributeKind::List(&K::KIND);
     type Out<'ctx> = ListIter<'ctx, K>;
     type In = Vec<K::In>;
+    const DOMAIN: Option<&'static str> = K::DOMAIN;
+
+    fn accepts(ctx: &IrContext, attr: &Attribute) -> bool {
+        match attr {
+            Attribute::List(items) => items.iter().all(|item| K::accepts(ctx, item)),
+            _ => false,
+        }
+    }
 
     fn read<'ctx>(ctx: &'ctx IrContext, attr: &'ctx Attribute) -> ListIter<'ctx, K> {
         ListIter {
@@ -266,6 +426,14 @@ impl<V: AttrKind + ?Sized> AttrKind for Dict<V> {
     const KIND: AttributeKind = AttributeKind::Dict(&V::KIND);
     type Out<'ctx> = DictView<'ctx, V>;
     type In = Vec<(StringArg, V::In)>;
+    const DOMAIN: Option<&'static str> = V::DOMAIN;
+
+    fn accepts(ctx: &IrContext, attr: &Attribute) -> bool {
+        match attr {
+            Attribute::Dict(entries) => entries.values().all(|value| V::accepts(ctx, value)),
+            _ => false,
+        }
+    }
 
     fn read<'ctx>(ctx: &'ctx IrContext, attr: &'ctx Attribute) -> DictView<'ctx, V> {
         match attr {

@@ -1,6 +1,5 @@
 ---
 source: crates/tribute-front/tests/lambda_effect_type.rs
-assertion_line: 313
 expression: ir_text
 ---
 core.module @test {
@@ -9,38 +8,34 @@ core.module @test {
 
   tribute_control.func @"pkg::run_with_state"['a0](%0: !t1) -> core.i32 row(| 'a0) inferred {
       %1 = tribute_control.handle : core.i32 {
-          %2 = tribute_control.call_indirect %0 : core.i32
+          %2 = tribute_control.call_indirect %0() : () -> core.i32 row(@"ability_2_10_pkg::State_3_int")
           tribute_control.yield %2
-      } {
-        ^bb2(%3: core.i32):
+      } do(%3: core.i32) {
           tribute_control.yield %3
-      } {
-          tribute_control.handler {ability = @"ability_2_10_pkg::State_3_int", kind = "op", op_name = "get", operation_result_type = core.i32} {
-            ^bb4(%4: tribute_control.resume_token<core.i32, core.i32>):
-              %5 = arith.const {value = 99} : core.i32
-              %6 = tribute_control.resume %4, %5 : core.i32
-              tribute_control.yield %6
-          }
+      } op @"ability_2_10_pkg::State_3_int" @get(%4: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
+          %5 = arith.constant 99 : core.i32
+          %6 = tribute_control.resume %4, %5 : core.i32
+          tribute_control.yield %6
       }
       tribute_control.return %1
   }
   tribute_control.func @"pkg::apply_thunk"['a0](%0: !t0) -> core.i32 row(| 'a0) {
-      %1 = tribute_control.call_indirect %0 : core.i32
+      %1 = tribute_control.call_indirect %0() : () -> core.i32 row(| 'a0)
       tribute_control.return %1
   }
   tribute_control.func @"pkg::read_state"['a0]() -> core.i32 row(| 'a0) inferred {
       %0 = tribute_control.lambda() -> core.i32 row(| 'a0) captures [] {
           %1 = tribute_control.lambda() -> core.i32 row(@"ability_2_10_pkg::State_3_int") captures [] {
-              %2 = tribute_control.perform {ability = @"ability_2_10_pkg::State_3_int", op_name = "get", operation_kind = "op"} : core.i32
+              %2 = tribute_control.perform op @"ability_2_10_pkg::State_3_int" @get() : () -> core.i32
               tribute_control.return %2
           }
-          %3 = tribute_control.call %1 {callee = @"pkg::run_with_state", row_args = [{tail = 0}]} : core.i32
+          %3 = tribute_control.call @"pkg::run_with_state"(%1) attributes {row_args = [{tail = 0}]} : (!t1) -> core.i32
           tribute_control.return %3
       }
-      %4 = tribute_control.call %0 {callee = @"pkg::apply_thunk", row_args = [{tail = 0}]} : core.i32
+      %4 = tribute_control.call @"pkg::apply_thunk"(%0) attributes {row_args = [{tail = 0}]} : (!t0) -> core.i32
       tribute_control.return %4
   }
-  ability.decl {sym_name = "ability_2_10_pkg::State_3_int"} {
+  ability.decl @"ability_2_10_pkg::State_3_int" {
       ability.operation {kind = "op", op_name = "get", param_types = [], result_type = core.i32}
   }
 }

@@ -113,25 +113,31 @@ dialect lowering은 `effect.*`를 보지 않는다.
 호출 후에는 마지막 결과가 스택 맨 위에 있으므로 지역 변수에 역순으로 저장한다.
 입력이나 값 위치의 `core.nil`은 생략하지 않고 널을 허용하는 참조로 표현한다.
 모든 `wasm.call_indirect`와 `wasm.return_call_indirect`는 exact `wasm.func_sig`를
-명시한다. Signature가 없으면 lowering과 emission이 실패하며 operand/result 타입,
-상위 함수의 return 또는 `type_idx`로 대체 시그니처를 추론하지 않는다.
+필수 attribute로 명시한다. Signature가 없으면 lowering과 emission이 실패하며
+operand/result 타입이나 상위 함수의 return으로 대체 시그니처를 추론하지 않는다.
+두 operation의 callee는 함수 테이블의 `core.i32` 인덱스이며 첫 operand로 둔다.
+인덱스는 실행 중에 정해지는 값이고, 테이블 번호는 명령어의 즉치값이므로
+`table` attribute로 두며 없으면 테이블 0이다. 함수 타입 인덱스는 operation에
+담지 않고 emitter가 signature를 등록한 결과에서 얻는다.
 Wasm 코드 생성기는 함수 본문이나 테이블 인덱스에서 CPS 여부를 추론하지 않는다.
 
 ### Switch 지원 조건
 
-`scf_to_wasm`은 결과 없는 `scf.switch`를 case 순서대로 중첩된 비교와
+`scf_to_wasm`은 `scf.index_switch`를 case 순서대로 중첩된 비교와
 `wasm.if`로 낮춘다. Wasm이 정수를 직접 비교하는 폭은 `i32`와 `i64`뿐이므로
 discriminant는 `core.i32` 또는 `core.i64`여야 하고, 각각 `wasm.i32_eq`와
 `wasm.i64_eq`로 비교한다. 두 비교 모두 `core.i32` 조건을 만든다. 모든 case
-값은 정수 attribute이고 discriminant 타입의 부호 있는 범위에 들어가야 한다.
-다른 discriminant 타입, 정수가 아닌 case 값, 범위를 벗어난 case 값은 변환을
-시작하기 전에 해당 switch와 이유를 담은 conversion 오류로 거부한다.
+값은 discriminant 타입의 부호 있는 범위에 들어가야 한다. 다른 discriminant 타입과
+범위를 벗어난 case 값은 변환을 시작하기 전에 해당 switch와 이유를 담은
+conversion 오류로 거부한다. 결과가 있는 switch는 각 `wasm.if`가 그 결과 타입을
+선언하고, 안쪽 `wasm.if`의 결과를 바깥 region이 `wasm.yield`로 넘긴다.
+`scf.yield` 변환과 같이 결과는 하나까지만 낮춘다.
 
 ### Terminal structured-control 결과
 
 `scf_to_wasm`은 결과가 정확히 하나의 `core.never`이고 사용되지 않으며 블록의
-마지막 operation인 `scf.if`와 `scf.loop`를 zero-result Wasm 제어 연산으로
-낮춘다. 모든 진입 successor의 region은 단일 블록이고, 마지막 operation이
+마지막 operation인 `scf.if`, `scf.loop`, `scf.index_switch`를 zero-result Wasm
+제어 연산으로 낮춘다. 모든 진입 successor의 region은 단일 블록이고, 마지막 operation이
 검증된 `CallableExit` 또는 같은 terminal 판정을 만족하는 중첩 if/loop/switch여야
 한다. Native structured-to-CFG lowering과 같은 `RegionBranch`/`CallableExit`
 판정을 사용하며, parent 복귀, 불완전한 interface 응답, 오류는 terminal 증거가
@@ -225,8 +231,7 @@ Wasm source handler 지원은 shared/native handler 실행 지원이 아니라 W
 시그니처를 명시한다. `env`는 dispatch closure 자신이다. Evidence와 반환 표현은 정확히
 일치해야 하며 packed payload는 검증된 GC widening만 허용한다. Lowering은
 operand로 ABI를 재추론하지 않고 이 고정 시그니처를 `wasm.call_indirect`에
-보존한다. Emitter는 최종 모듈 등록 결과에서 함수 타입 인덱스를 얻으며,
-lowering의 placeholder `type_idx`가 그 결과를 덮어쓰지 않는다.
+보존한다. Emitter는 최종 모듈 등록 결과에서 함수 타입 인덱스를 얻는다.
 
 ### Nil 값과 callable result의 구분
 
@@ -542,13 +547,13 @@ Wasm에는 `i8`과 `i16` 값 타입이 없다. `core.i8`과 `core.i16` 값은 `i
 상위 비트는 정하지 않는다. 값을 읽는 쪽이 필요한 만큼 정규화한다.
 
 - 상위 비트가 결과의 하위 비트에 영향을 주지 않는 연산(`addi`, `subi`, `muli`,
-  `and`/`or`/`xor`, `shl`, 상수)은 정규화 없이 `i32` 명령으로 낮출 수 있다.
+  `andi`/`ori`/`xori`, `shli`, 상수)은 정규화 없이 `i32` 명령으로 낮출 수 있다.
 - `extui`는 폭만큼의 mask(`i32.and`)로, `extsi`는 `i32.extend8_s`/`i32.extend16_s`로
   정규화한다. 결과가 `i64`면 그 뒤에 `i64.extend_i32_u`/`i64.extend_i32_s`를 둔다.
   `trunci`는 `i64` 입력이면 `i32.wrap_i64`로, `i32` 입력이면 결과 폭의 mask로
   낮춘다.
 - 상위 비트가 결과에 영향을 주는 연산(`cmpi`, `divsi`/`divui`, `remsi`/`remui`,
-  `shr`/`shru`, `sitofp`/`uitofp`)은 좁은 정수에서 낮추지 않는다. 이 연산은
+  `shrsi`/`shrui`, `sitofp`/`uitofp`)은 좁은 정수에서 낮추지 않는다. 이 연산은
   target 변환 경계에서 거부된다.
 - Packed 배열(`adt.array<core.i8>`, `adt.array<core.i16>`)의 원소 읽기는
   `array.get_u`로 낮춘다. 상위 비트를 정하지 않으므로 `array.get_s`도 맞지만 하나로

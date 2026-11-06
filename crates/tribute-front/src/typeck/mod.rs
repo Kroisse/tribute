@@ -37,7 +37,6 @@ pub use constraint::{Constraint, ConstraintSet};
 pub use context::{AbilityInfo, AbilityOpInfo, MethodEntry, ModuleTypeEnv, parameter_type_matches};
 
 use crate::SortedMap;
-use crate::ast::SpanMap;
 use crate::resolve::NameDisplay;
 pub use func_context::FunctionInferenceContext;
 use rustc_hash::FxHashMap as HashMap;
@@ -242,10 +241,11 @@ pub struct FunctionInstance<'db> {
     pub callable: Type<'db>,
 }
 
+/// The instantiation chosen for one use of a let-bound callable local, whose
+/// `let` pattern is `binding`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct LocalCallableInstance<'db> {
     pub binding: NodeId,
-    pub local: crate::ast::LocalId,
     /// Only schemes without local data-type quantifiers are exported here.
     pub scheme: TypeScheme<'db>,
     pub row_arguments: Vec<crate::ast::AbilityRow<'db>>,
@@ -459,36 +459,28 @@ impl<'db> TypeCheckOutput<'db> {
 #[salsa::tracked]
 pub struct PackageExports<'db> {
     /// Function type schemes keyed by FuncDefId.
-    #[returns(deref)]
     pub function_types: Vec<(FuncDefId<'db>, TypeScheme<'db>)>,
 
     /// Functions declared `extern`, sorted by fully qualified name.
-    #[returns(deref)]
     pub extern_functions: Vec<FuncDefId<'db>>,
 
     /// Constructor type schemes keyed by CtorId.
-    #[returns(deref)]
     pub constructor_types: Vec<(CtorId<'db>, TypeScheme<'db>)>,
 
     /// Type definitions keyed by name.
-    #[returns(deref)]
     pub type_defs: Vec<(SymbolPath, TypeScheme<'db>)>,
 
     /// Struct field definitions keyed by nominal declaration identity.
-    #[returns(deref)]
     pub struct_fields: Vec<(TypeDefId<'db>, (Vec<TypeParam>, Vec<(Symbol, Type<'db>)>))>,
 
     /// Enum variant information: enum_name → [variant_names].
-    #[returns(deref)]
     pub enum_variants: Vec<(SymbolPath, Vec<Symbol>)>,
 
     /// Field names of constructors whose fields are all named.
-    #[returns(deref)]
     pub constructor_field_names: Vec<(CtorId<'db>, Vec<Symbol>)>,
 
     /// Ability operation schemas exported by the prelude as deterministic
     /// vectors (a dependent module's environment indexes them for lookup).
-    #[returns(deref)]
     pub ability_definitions: Vec<(
         AbilityId<'db>,
         Vec<TypeParam>,
@@ -505,10 +497,9 @@ pub struct PackageExports<'db> {
 pub fn typecheck_module<'db>(
     db: &'db dyn salsa::Database,
     module: &DeclTable<ResolvedRef<'db>>,
-    span_map: SpanMap<'db>,
     names: NameDisplay,
 ) -> TypeCheckOutput<'db> {
-    let checker = TypeChecker::new(db, span_map, names);
+    let checker = TypeChecker::new(db, names);
     TypeCheckOutput::from_check(db, checker.check_module(module))
 }
 

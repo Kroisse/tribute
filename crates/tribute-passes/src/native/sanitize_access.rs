@@ -16,10 +16,10 @@
 //! ```text
 //! %v = clif.load %p {offset = 8} : core.i32
 //! // becomes
-//! %o = clif.iconst {value = 8} : core.i64
+//! %o = clif.iconst 8 : core.i64
 //! %a = clif.iadd %p, %o : core.ptr
-//! %n = clif.iconst {value = 4} : core.i64
-//! %_ = clif.call %a, %n {callee = @__tribute_asan_load} : core.nil
+//! %n = clif.iconst 4 : core.i64
+//! %_ = clif.call @__tribute_asan_load(%a, %n) : (core.ptr, core.i64) -> core.nil
 //! %v = clif.load %p {offset = 8} : core.i32
 //! ```
 
@@ -268,7 +268,6 @@ mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::pass::{PassManager, PassResult};
-    use trunk_ir::printer::print_module;
 
     fn instrument(ctx: &mut IrContext, module: Module) -> PassResult {
         let mut pm = PassManager::new();
@@ -282,7 +281,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, ir);
         instrument(&mut ctx, module).expect("instrumentation");
-        print_module(&ctx, module.op())
+        module.op().display(&ctx).to_string()
     }
 
     #[test]
@@ -292,7 +291,7 @@ mod tests {
   clif.func @f(%p: core.ptr, %v: core.i64) -> core.i32 {
     %field = clif.load %p {offset = 8} : core.i32
     clif.store %v, %p {offset = 0}
-    %one = clif.iconst {value = 1} : core.i32
+    %one = clif.iconst 1 : core.i32
     %old = clif.atomic_rmw %p, %one {bin_op = "add", offset = -8} : core.i32
     clif.return %field
   }
@@ -327,7 +326,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, &once);
         instrument(&mut ctx, module).expect("instrumentation");
-        assert_eq!(print_module(&ctx, module.op()), once);
+        assert_eq!(module.op().display(&ctx).to_string(), once);
     }
 
     #[test]

@@ -99,13 +99,12 @@ fn ensure_runtime_declaration(ctx: &mut IrContext, module: Module) {
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
 
     fn lower_text(ir: &str) -> String {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, ir);
         lower(&mut ctx, module).expect("bytes intrinsic lowering");
-        print_module(&ctx, module.op())
+        module.op().display(&ctx).to_string()
     }
 
     #[test]
@@ -114,7 +113,7 @@ mod tests {
             r#"core.module @test {
   func.func @read(%bytes: core.bytes, %index: core.i32) -> core.i32 attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::__bytes_get_or_panic"}
   func.func @user(%bytes: core.bytes, %index: core.i32) -> core.i32 {
-    %byte = func.call %bytes, %index {callee = @read} : core.i32
+    %byte = func.call @read(%bytes, %index) : (core.bytes, core.i32) -> core.i32
     func.return %byte
   }
 }"#,
@@ -130,7 +129,7 @@ mod tests {
         );
         assert!(
             printed
-                .contains("func.call %0, %1 {callee = @__tribute_bytes_get_or_panic} : core.i32"),
+                .contains("func.call @__tribute_bytes_get_or_panic(%0, %1) : (core.bytes, core.i32) -> core.i32"),
             "{printed}"
         );
         assert!(!printed.contains("mem."), "{printed}");

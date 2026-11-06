@@ -44,6 +44,7 @@ salsa = "0.28.4"
 salsa-test-macros = { path = "crates/salsa-test-macros" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
+siphasher = "1.0.4"
 smallvec = { version = "1.16", features = ["union", "const_generics", "const_new", "serde"] }
 strsim = "0.11"
 target-lexicon = "0.13"
@@ -59,6 +60,7 @@ tribute-rc = { path = "crates/tribute-rc" }
 tribute-front = { path = "crates/tribute-front" }
 tribute-ir = { path = "crates/tribute-ir" }
 tribute-passes = { path = "crates/tribute-passes" }
+tribute-prop = { path = "crates/tribute-prop" }
 trunk-ir = { path = "crates/trunk-ir" }
 trunk-ir-macros = { path = "crates/trunk-ir-macros" }
 tribute-runtime = { path = "crates/tribute-runtime" }
@@ -111,8 +113,10 @@ tribute-front = { workspace = true, features = ["testing"] }
 trunk-ir = { workspace = true, features = ["salsa", "symbol-stats"] }
 wasmparser.workspace = true
 insta.workspace = true
+proptest.workspace = true
 salsa-test-macros = { path = "crates/salsa-test-macros" }
 serde.workspace = true
+tribute-prop.workspace = true
 
 # Dev and test builds keep debug assertions, including the per-pass IR
 # verifier, but optimize lightly: unoptimized IR walks dominated test time.

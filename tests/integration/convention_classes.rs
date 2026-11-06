@@ -243,6 +243,40 @@ fn main() -> Nil {}
     assert_not_cast(logical_function(&ir, "forward"), value_name(&lambda));
 }
 
+/// A lambda passed where the callee's row and its row argument both name
+/// `Logger` already has the parameter's callable type: the substituted row
+/// names `Logger` once.
+#[salsa_test]
+fn lambda_value_matches_a_row_that_its_argument_also_names(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "logical_lambda_shared_instance.trb",
+        r#"
+ability Logger {
+    fn log(n: Int) -> Int
+}
+fn handled(f: fn() ->{e, Logger} Int) ->{e} Int {
+    handle f() {
+        do r { r }
+        fn Logger::log(n) { n + +1 }
+    }
+}
+fn forward() -> Int {
+    handled(fn() { handled(fn() { Logger::log(+5) }) })
+}
+fn main() -> Nil {}
+"#,
+    );
+
+    let ir = common::specialized_frontend_ir(db, source);
+    let forward = logical_function(&ir, "forward");
+    let inner = lambda_headers(forward)
+        .into_iter()
+        .nth(1)
+        .expect("logical lowering must materialize the inner callback lambda");
+    assert_not_cast(forward, value_name(&inner));
+}
+
 /// A named function bound by `let` and passed on at another callable type
 /// leaves no reference unused.
 #[salsa_test]
@@ -417,7 +451,7 @@ fn main() -> Nil {
         "root main must contain the direct worker call:\n{main}"
     );
     assert!(
-        main.contains("callee = @\"pkg::forward_open$Int$Int$9D\""),
+        main.contains("call @\"pkg::forward_open$Int$Int$9D\"("),
         "root main must call the Direct instance of the monomorphized forward_open worker:\n{main}"
     );
     assert!(
@@ -426,7 +460,7 @@ fn main() -> Nil {
     );
     assert!(
         logical_function(&ir_text, "pkg::Nested::unwrap$Int")
-            .contains("callee = @\"pkg::Nested::Box$Int::value\""),
+            .contains("call @\"pkg::Nested::Box$Int::value\"("),
         "nested worker must call the exact qualified accessor:\n{ir_text}"
     );
     assert!(
@@ -686,7 +720,7 @@ fn main() -> Nil {{}}
         // type is the one `pure` takes.
         let entry = logical_function(&ir, "entry");
         assert_eq!(entry.matches("tribute_cps.lambda").count(), 1, "{ir}");
-        assert!(entry.contains("callee = @\"pkg::open$9D\""), "{ir}");
+        assert!(entry.contains("call @\"pkg::open$9D\"("), "{ir}");
         assert!(!entry.contains("unrealized_conversion_cast"), "{ir}");
     }
 }
@@ -719,8 +753,11 @@ fn main() -> Nil {}
     );
 }
 
+/// A use of a named-function alias references the function again with the
+/// rows of that use, so a pure use calls its `Direct` instance and takes the
+/// closed lambda as it is.
 #[salsa_test]
-fn local_named_consumer_retains_its_worker_parameter_convention(db: &salsa::DatabaseImpl) {
+fn a_named_alias_references_its_function_with_the_rows_of_its_use(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
         "local_consumer.trb",
@@ -736,9 +773,12 @@ fn main() -> Nil {}
 "#,
     );
     let ir = common::specialized_frontend_ir(db, source);
+    let entry = logical_function(&ir, "entry");
     assert!(
-        !logical_function(&ir, "entry").contains("unrealized_conversion_cast"),
-        "{ir}"
+        entry.contains("tribute_cps.func_ref @\"pkg::open$9D$8\" rows [{}]")
+            && entry.contains("convention(direct)")
+            && !entry.contains("unrealized_conversion_cast"),
+        "{entry}"
     );
 }
 
@@ -799,10 +839,10 @@ fn main() -> Nil {}
 }
 
 #[salsa_test]
-fn returned_callback_keeps_its_cps_convention_after_pure_let(db: &salsa::DatabaseImpl) {
+fn returned_callback_through_a_body_tail_is_direct_after_pure_let(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
-        "returned_callback_preserves_cps_convention_after_pure_let.trb",
+        "returned_callback_through_body_tail_after_pure_let.trb",
         r#"
 fn consume(value: Nat) -> Nil { Nil }
 
@@ -825,22 +865,23 @@ fn main() -> Nil {
         main.contains("convention(direct)"),
         "main keeps the convention of its row around the returned callback call:\n{ir}"
     );
-    // The lambda's row is a body binder of `main` that its closed row does not
-    // fix, so its class stays `Cps` while `main` itself is `Direct`.
+    // The lambda's row is a body binder of `main` that occurs in no parameter
+    // type, so it requires nothing: the lambda and the call through `f` are
+    // both `Direct`.
     let main_body = logical_function(&ir, "main");
     let lambda = lambda_headers(main_body)
         .into_iter()
         .find(|line| line.contains("tribute_cps.lambda("))
         .expect("IR must contain the callback lambda");
     assert!(
-        lambda.ends_with(" cps {"),
-        "the callback lambda must retain its CPS convention:\n{ir}"
+        lambda.ends_with(" direct {"),
+        "the callback lambda must have a direct body:\n{ir}"
     );
     assert!(
-        main_body
-            .lines()
-            .any(|line| line.contains("tribute_cps.call_indirect")),
-        "the returned callback must use an indirect call:\n{ir}"
+        main_body.lines().any(|line| {
+            line.contains("tribute_cps.call_indirect") && line.contains("convention = \"direct\"")
+        }),
+        "the returned callback must use a direct indirect call:\n{ir}"
     );
 }
 
@@ -902,5 +943,50 @@ fn main() -> Nil {}
         .unwrap_or_else(|| panic!("the helper makes a closure:\n{both}"))..];
     for body in ["direct {", "evidence_direct {", "cps {"] {
         assert!(closure.contains(body), "missing body `{body}`:\n{both}");
+    }
+}
+
+/// A named function passed to a computation result whose parameter row no
+/// use fixes, directly or through an alias, takes the parameter's row, whose
+/// tail is a body binder, by a function reference at that type rather than a
+/// conversion cast.
+#[salsa_test]
+fn a_named_function_passed_at_an_unfixed_row_takes_its_row(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "generalized_consumer.trb",
+        r#"
+fn make() ->{} fn(fn(Int) ->{e} Int, Int) ->{e} Int {
+    fn(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(f(x)) }
+}
+fn inc(x: Int) ->{e} Int { x + +1 }
+fn keep(f: fn() ->{e} Int) ->{} Int { +0 }
+fn direct() ->{} Int {
+    let twice = make()
+    keep(fn() twice(inc, +1))
+}
+fn aliased() ->{} Int {
+    let twice = make()
+    let step = inc
+    keep(fn() twice(step, +1))
+}
+fn main() -> Nil {}
+"#,
+    );
+    let ir = common::specialized_frontend_ir(db, source);
+    for name in ["direct", "aliased"] {
+        let function = logical_function(&ir, name);
+        let reference = function
+            .lines()
+            .find(|line| line.contains("tribute_cps.func_ref @\"pkg::inc$8\""))
+            .unwrap_or_else(|| panic!("{function}"));
+        let alias = reference.rsplit(" : ").next().unwrap();
+        assert!(
+            ir.contains(&format!(
+                "{alias} = tribute_control.func_sig<(core.i32) -> core.i32 row(| 'a0)>"
+            )) && function.matches("tribute_cps.func_ref").count() == 1
+                && !function.contains("unrealized_conversion_cast"),
+            "{ir}"
+        );
     }
 }

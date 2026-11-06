@@ -25,34 +25,45 @@ mod tribute_rt {
     struct ConventionTableRef;
 
     #[flags(Pure)]
+    #[asm_format(value attr_dict_bare ":" type(result))]
     fn box_int(value: Value<_>) -> Value<_> {}
     #[implements(Fold)]
     #[flags(Pure)]
+    #[asm_format(value attr_dict_bare ":" type(result))]
     fn unbox_int(value: Value<_>) -> Value<_> {}
     #[flags(Pure)]
+    #[asm_format(value attr_dict_bare ":" type(result))]
     fn box_nat(value: Value<_>) -> Value<_> {}
     #[implements(Fold)]
     #[flags(Pure)]
+    #[asm_format(value attr_dict_bare ":" type(result))]
     fn unbox_nat(value: Value<_>) -> Value<_> {}
     #[flags(Pure)]
+    #[asm_format(value attr_dict_bare ":" type(result))]
     fn box_float(value: Value<_>) -> Value<_> {}
     #[implements(Fold)]
     #[flags(Pure)]
+    #[asm_format(value attr_dict_bare ":" type(result))]
     fn unbox_float(value: Value<_>) -> Value<_> {}
     #[flags(Pure)]
+    #[asm_format(value attr_dict_bare ":" type(result))]
     fn box_bool(value: Value<_>) -> Value<_> {}
     #[implements(Fold)]
     #[flags(Pure)]
+    #[asm_format(value attr_dict_bare ":" type(result))]
     fn unbox_bool(value: Value<_>) -> Value<_> {}
 
+    #[asm_format(ptr attr_dict_bare ":" type(result))]
     fn retain(ptr: Value<_>) -> Value<_> {}
 
+    #[asm_format(ptr attr_dict_bare)]
     fn release(alloc_size: Attr<u64>, ptr: Value<_>) {}
 
     /// Release one unit of `ptr` and move the units of the fields `moved`
     /// were read from into `moved`. A unique owner releases only the managed
     /// fields at `release_offsets` before it is freed; a shared one acquires
     /// a unit for each moved value before it is released.
+    #[asm_format(ptr ("," moved^)? attr_dict_bare)]
     fn release_moving(
         alloc_size: Attr<u64>,
         release_offsets: Attr<[i32]>,
@@ -63,11 +74,13 @@ mod tribute_rt {
 
     /// Consume one managed ownership unit while crossing a native raw-pointer
     /// representation boundary. This is deliberately not a pure operation.
+    #[asm_format(value attr_dict_bare ":" type(result))]
     fn into_raw(value: Value<impl ManagedRef>) -> Value<Ptr> {}
 
     /// Receive one managed ownership unit from a raw pointer to a
     /// reference-counted object. The inverse of `into_raw`, and like it not a
     /// pure operation: dropping it would leak the unit.
+    #[asm_format(ptr attr_dict_bare ":" type(result))]
     fn from_raw(ptr: Value<Ptr>) -> Value<impl ManagedRef> {}
 
     /// A reference to the static convention table holding the entry
@@ -79,12 +92,13 @@ mod tribute_rt {
     /// the reference. See the closure storage layout in `new-plans/ir.md`.
     ///
     /// ```text
-    /// %table = tribute_rt.convention_table {entries = [@f]} : tribute_rt.convention_table_ref
+    /// %table = tribute_rt.convention_table [@f] : tribute_rt.convention_table_ref
     /// ```
     ///
     /// Its result is a `convention_table_ref` until the target converts that
     /// type, so the schema leaves it unconstrained.
     #[flags(Pure)]
+    #[asm_format(entries attr_dict ":" type(result))]
     fn convention_table(entries: Attr<[SymbolRef]>) -> Value<_> {}
 
     /// The entry function at `index` of the convention table `table`, as an
@@ -98,6 +112,7 @@ mod tribute_rt {
     /// `table` is a `convention_table_ref` until the target converts that
     /// type, so the schema leaves it unconstrained.
     #[flags(Pure)]
+    #[asm_format(table attr_dict_bare ":" type(result))]
     fn convention_entry(index: Attr<u32>, table: Value<_>) -> Value<_> {}
 }
 
@@ -315,7 +330,7 @@ mod tests {
         macro_rules! check {
             ($op:ident, $accessor:ident, $operand_ty:expr, $result_ty:expr) => {{
                 let name = stringify!($op);
-                let value = trunk_ir::dialect::arith::Const::operands()
+                let value = trunk_ir::dialect::arith::Constant::operands()
                     .value(Attribute::Int(0))
                     .results($operand_ty)
                     .build(&mut ctx, loc)
@@ -339,7 +354,7 @@ mod tests {
         check!(FromRaw, ptr, ptr_ty, managed_ty);
 
         // `into_raw` infers its `core.ptr` result.
-        let managed = trunk_ir::dialect::arith::Const::operands()
+        let managed = trunk_ir::dialect::arith::Constant::operands()
             .value(Attribute::Int(0))
             .results(managed_ty)
             .build(&mut ctx, loc)
@@ -381,8 +396,8 @@ mod tests {
         let loc = dummy_location();
         let i32_ty = make_i32_type(&mut ctx);
 
-        // Create an arith.const — should not match tribute_rt ops
-        let c = trunk_ir::dialect::arith::Const::operands()
+        // Create an arith.constant — should not match tribute_rt ops
+        let c = trunk_ir::dialect::arith::Constant::operands()
             .value(Attribute::Int(1))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -440,7 +455,6 @@ mod tests {
         use trunk_ir::ops::DialectOp;
         use trunk_ir::parser::parse_test_module;
         use trunk_ir::pass::PassManager;
-        use trunk_ir::printer::print_module;
         use trunk_ir::transforms::Canonicalize;
 
         /// Canonicalize every function; the flag tells whether the IR
@@ -448,13 +462,13 @@ mod tests {
         fn run(input: &str) -> (String, bool) {
             let mut ctx = IrContext::new();
             let module = parse_test_module(&mut ctx, input);
-            let before = print_module(&ctx, module.op());
+            let before = module.op().display(&ctx).to_string();
             let root = core::Module::from_op(&ctx, module.op()).expect("core.module");
             let mut pm = PassManager::new();
             pm.nest::<func::Func>().add_pass(Canonicalize);
             pm.run(&mut ctx, root, &mut Default::default())
                 .expect("canonicalize");
-            let after = print_module(&ctx, module.op());
+            let after = module.op().display(&ctx).to_string();
             let changed = after != before;
             (after, changed)
         }
@@ -470,8 +484,8 @@ mod tests {
                 let (text, changed) = run(&format!(
                     r#"core.module @test {{
   func.func @f(%x: {ty}) -> {ty} {{
-    %b = tribute_rt.{boxed} %x : tribute_rt.anyref
-    %u = tribute_rt.{unboxed} %b : {ty}
+    %b = "tribute_rt.{boxed}"(%x) : tribute_rt.anyref
+    %u = "tribute_rt.{unboxed}"(%b) : {ty}
     func.return %u
   }}
 }}"#

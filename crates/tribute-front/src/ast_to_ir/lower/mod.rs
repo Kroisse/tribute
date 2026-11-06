@@ -7,8 +7,6 @@ mod decl;
 mod expr;
 mod logical;
 
-use salsa::Accumulator;
-use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_ir::dialect::tribute_control::{Row, RowBinder, RowUnion};
 use tribute_ir::dialect::{tribute_control, tribute_rt};
 use trunk_ir::Symbol;
@@ -211,7 +209,11 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
 
     /// `value` again as a reference to the same function under the callable
     /// type `target_ty`, if `value` is a function reference and `target_ty`
-    /// has its parameters and result under a convention at least as strong.
+    /// has its parameters and result under a row that includes its own.
+    ///
+    /// This is the only callable adaptation accepted at the source-logical
+    /// boundary: a generic `unrealized_conversion_cast` cannot change a
+    /// callable ABI.
     fn function_ref_as(
         &mut self,
         location: Location,
@@ -230,14 +232,14 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
         {
             return None;
         }
-        let function = named.func_ref(self.ir).clone();
+        let function = named.value(self.ir).clone();
         let row_args = self
             .ir
             .op_attrs(producer)
             .get(tribute_control::ROW_ARGS_ATTR)
             .cloned();
         let reference = tribute_control::FuncRef::operands()
-            .func_ref(function)
+            .value(function)
             .results(target_ty)
             .build(self.ir, location);
         if let Some(row_args) = row_args {
@@ -301,57 +303,6 @@ pub(super) fn get_or_create_logical_tuple_type<'db>(
         .type_alias_by_text(&name)
         .expect("a logical tuple layout is registered under its name");
     Some((Symbol::new(&name), layout))
-}
-
-/// Validate that a natural number literal fits in the i31 range.
-///
-/// Returns the value as `i32` if valid, or emits a diagnostic and returns `None`.
-pub(super) fn validate_nat_i31(
-    db: &dyn salsa::Database,
-    location: Location,
-    n: u64,
-) -> Option<i32> {
-    const I31_MAX: u64 = (1 << 30) - 1;
-    if n > I31_MAX {
-        Diagnostic::new(
-            format!(
-                "natural number literal {} exceeds i31 range (max: {})",
-                n, I31_MAX
-            ),
-            location.span,
-            DiagnosticSeverity::Error,
-            CompilationPhase::Lowering,
-        )
-        .accumulate(db);
-        return None;
-    }
-    Some(n as i32)
-}
-
-/// Validate that an integer literal fits in the i31 range.
-///
-/// Returns the value as `i32` if valid, or emits a diagnostic and returns `None`.
-pub(super) fn validate_int_i31(
-    db: &dyn salsa::Database,
-    location: Location,
-    n: i64,
-) -> Option<i32> {
-    const I31_MIN: i64 = -(1 << 30);
-    const I31_MAX: i64 = (1 << 30) - 1;
-    if !(I31_MIN..=I31_MAX).contains(&n) {
-        Diagnostic::new(
-            format!(
-                "integer literal {} exceeds i31 range ({} to {})",
-                n, I31_MIN, I31_MAX
-            ),
-            location.span,
-            DiagnosticSeverity::Error,
-            CompilationPhase::Lowering,
-        )
-        .accumulate(db);
-        return None;
-    }
-    Some(n as i32)
 }
 
 /// Resolve the ADT (enum/struct) type attribute for a constructor.

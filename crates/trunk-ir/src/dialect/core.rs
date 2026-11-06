@@ -12,11 +12,12 @@ mod core {
     }
 
     #[implements(Fold)]
-
+    #[asm_format(value attr_dict_bare ":" type(value) "to" type(result))]
     fn unrealized_conversion_cast(value: Value<_>) -> Value<_> {}
 
     /// The only value of `core.nil`.
     #[flags(Pure)]
+    #[asm_format(attr_dict_bare ":" type(result))]
     fn nil_value() -> Value<Nil> {}
 
     struct Nil;
@@ -372,7 +373,6 @@ mod canonicalize_tests {
     use crate::SymbolPath;
     use crate::dialect::func::{FuncSig, NUM_INPUTS_ATTR, NUM_RESULTS_ATTR};
     use crate::parser::parse_test_module;
-    use crate::printer::print_module;
     use crate::rewrite::{ApplyResult, Module, PatternApplicator, TypeConverter};
     use crate::walk::{WalkAction, walk_op};
     use crate::{Attribute, AttributeMap};
@@ -429,7 +429,7 @@ mod canonicalize_tests {
     fn unrealized_cast_identity_drops_same_type_cast() {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
-    %r = core.unrealized_conversion_cast %x : core.i32
+    %r = core.unrealized_conversion_cast %x : core.i32 to core.i32
     func.return %r
   }
 }"#;
@@ -446,14 +446,14 @@ mod canonicalize_tests {
             ),
             0
         );
-        insta::assert_snapshot!(print_module(&ctx, module.op()));
+        insta::assert_snapshot!(module.op().display(&ctx).to_string());
     }
 
     #[test]
     fn unrealized_cast_identity_does_not_match_when_types_differ() {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i64 {
-    %r = core.unrealized_conversion_cast %x : core.i64
+    %r = core.unrealized_conversion_cast %x : core.i32 to core.i64
     func.return %r
   }
 }"#;
@@ -476,8 +476,8 @@ mod canonicalize_tests {
     fn unrealized_cast_round_trip_collapses_pair() {
         let input = r#"core.module @test {
   func.func @f(%x: core.i64) -> core.i64 {
-    %a = core.unrealized_conversion_cast %x : core.i32
-    %b = core.unrealized_conversion_cast %a : core.i64
+    %a = core.unrealized_conversion_cast %x : core.i64 to core.i32
+    %b = core.unrealized_conversion_cast %a : core.i32 to core.i64
     func.return %b
   }
 }"#;
@@ -495,15 +495,15 @@ mod canonicalize_tests {
             ),
             1
         );
-        insta::assert_snapshot!(print_module(&ctx, module.op()));
+        insta::assert_snapshot!(module.op().display(&ctx).to_string());
     }
 
     #[test]
     fn unrealized_cast_round_trip_does_not_match_three_step_chain() {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i64 {
-    %a = core.unrealized_conversion_cast %x : core.i16
-    %b = core.unrealized_conversion_cast %a : core.i64
+    %a = core.unrealized_conversion_cast %x : core.i32 to core.i16
+    %b = core.unrealized_conversion_cast %a : core.i16 to core.i64
     func.return %b
   }
 }"#;
@@ -600,26 +600,23 @@ mod scalar_category_tests {
     fn index_round_trips_through_text() {
         let input = r#"core.module @test {
   func.func @f(%i: core.index, %n: core.i32) -> core.index {
-    %c = arith.index_castsi %n : core.index
+    %c = arith.index_cast %n : core.i32 to core.index
     %r = arith.addi %i, %c : core.index
     func.return %r
   }
 }"#;
         let mut ctx = IrContext::new();
         let module = crate::parser::parse_test_module(&mut ctx, input);
-        let printed = crate::printer::print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(
             printed.contains("(%0: core.index, %1: core.i32) -> core.index"),
             "{printed}"
         );
-        assert!(printed.contains("arith.index_castsi"), "{printed}");
+        assert!(printed.contains("arith.index_cast"), "{printed}");
         let mut reparsed_ctx = IrContext::new();
         let reparsed = crate::parser::parse_test_module(&mut reparsed_ctx, &printed);
-        assert_eq!(
-            crate::printer::print_module(&reparsed_ctx, reparsed.op()),
-            printed
-        );
+        assert_eq!(reparsed.op().display(&reparsed_ctx).to_string(), printed);
         let index = core::Index::type_ref(&mut ctx);
-        assert_eq!(crate::printer::print_type(&ctx, index), "core.index");
+        assert_eq!(index.display(&ctx).to_string(), "core.index");
     }
 }

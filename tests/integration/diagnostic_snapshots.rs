@@ -7,7 +7,7 @@
 
 use salsa::Database;
 use salsa_test_macros::salsa_test;
-use tribute::Diagnostic;
+use tribute::SpanDiagnostic;
 use tribute::pipeline::{compile_ast, compile_with_diagnostics};
 use tribute_core::diagnostic::{CompilationPhase, DiagnosticSeverity};
 use tribute_front::SourceCst;
@@ -401,7 +401,7 @@ fn invalid_record_shapes_block_public_compilation_apis(db: &salsa::DatabaseImpl)
         let expected: Vec<_> = messages
             .iter()
             .map(|message| {
-                Diagnostic::new(
+                SpanDiagnostic::new(
                     *message,
                     Span::new(start, start + record.len()).in_source(source_id),
                     DiagnosticSeverity::Error,
@@ -411,6 +411,7 @@ fn invalid_record_shapes_block_public_compilation_apis(db: &salsa::DatabaseImpl)
             .collect();
         // Public diagnostics retain phase/span/message sorting, including mixed errors.
         // Exact equality also rejects spurious missing-field diagnostics.
+        let expected: Vec<_> = expected.iter().map(SpanDiagnostic::view).collect();
         assert_eq!(result.diagnostics, expected, "{record}");
         assert!(!result.produced_module, "{record}");
         assert!(tribute::compile_frontend(db, source).is_none(), "{record}");
@@ -434,10 +435,10 @@ fn invalid(base: Pair(Int, Bool)) -> Pair(Int, Int) {
     assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
     let diagnostic = &result.diagnostics[0];
     assert_eq!(diagnostic.phase, CompilationPhase::TypeChecking);
-    assert_eq!(diagnostic.inner.severity, DiagnosticSeverity::Error);
-    assert!(diagnostic.inner.message.contains("type error"));
-    assert!(diagnostic.inner.message.contains("Int"));
-    assert!(diagnostic.inner.message.contains("Bool"));
+    assert_eq!(diagnostic.severity, DiagnosticSeverity::Error);
+    assert!(diagnostic.message.contains("type error"));
+    assert!(diagnostic.message.contains("Int"));
+    assert!(diagnostic.message.contains("Bool"));
     assert!(!result.produced_module);
     assert!(tribute::compile_frontend(db, source).is_none());
     assert!(matches!(compile_ast(db, source), Ok(None)));
@@ -724,7 +725,11 @@ fn test() ->{State(Int), State(Int)} Nil {
     let compile = || {
         salsa::DatabaseImpl::default().attach(|db| {
             let source = SourceCst::from_source_str(db, "test.trb", SOURCE);
-            compile_with_diagnostics(db, source).diagnostics
+            compile_with_diagnostics(db, source)
+                .diagnostics
+                .iter()
+                .map(|diagnostic| format!("{diagnostic:?}"))
+                .collect::<Vec<_>>()
         })
     };
 
@@ -760,7 +765,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
         result
             .diagnostics
             .iter()
-            .any(|d| d.inner.message.contains("missing an arm for `set`")),
+            .any(|d| d.message.contains("missing an arm for `set`")),
         "expected a missing handler arm diagnostic, got: {:?}",
         result.diagnostics
     );
@@ -1031,6 +1036,52 @@ fn limited(f: fn() ->{e} Int, comp: fn() ->{e, Counter} Int) ->{e} Int {
 
 fn main() -> Nil {
     let _ = handle limited(fn() Stop::stop(), fn() count()) {
+        op Stop::stop() { +0 }
+    }
+    Nil
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+/// A `fn` arm that passes a callable with an `op` operation to a generalized
+/// value whose row variable occurs in a parameter type is rejected: each use
+/// of the value instantiates the row variable, so the argument's row reaches
+/// the arm.
+#[salsa_test]
+fn diag_fn_arm_passes_op_callback_to_generalized_value(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability Counter {
+    fn next() -> Int
+}
+
+ability Stop {
+    op stop() -> Never
+}
+
+fn make() ->{} fn(fn() ->{e} Int) ->{e} Int {
+    fn(k: fn() ->{e} Int) ->{e} Int { k() }
+}
+
+fn stopper() ->{Stop} Int { Stop::stop() }
+
+fn run(comp: fn() ->{Counter} Int) ->{Stop} Int {
+    handle comp() {
+        fn Counter::next() {
+            let h = make()
+            h(stopper)
+        }
+    }
+}
+
+fn main() -> Nil {
+    let _ = handle run(fn() { Counter::next() }) {
         op Stop::stop() { +0 }
     }
     Nil

@@ -141,7 +141,6 @@ impl RewritePattern for IndirectCallSignaturePattern {
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
     use trunk_ir::validation::validate_op_schemas;
 
     #[test]
@@ -151,13 +150,13 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @transfer(%callee: core.i32, %value: tribute_rt.anyref) {
-    func.tail_call_indirect %callee, %value {signature = func.func_sig<(tribute_rt.anyref) -> ()>}
+    func.tail_call_indirect %callee(%value) : (tribute_rt.anyref) -> ()
   }
 }"#,
         );
         lower(&mut ctx, module);
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(!output.contains("tribute_rt.anyref"), "{output}");
         let schemas = validate_op_schemas(&ctx, module.op());
         assert!(schemas.is_ok(), "{schemas}\n{output}");
@@ -170,13 +169,13 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @transfer(%callee: core.i32, %value: core.i32) {
-    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> ()>}
+    func.tail_call_indirect %callee(%value) : (core.i32) -> ()
   }
 }"#,
         );
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
         lower(&mut ctx, module);
 
-        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
     }
 }

@@ -7,7 +7,6 @@
 
 use trunk_ir::IrContext;
 use trunk_ir::dialect::wasm as wasm_dialect;
-use trunk_ir::op_interface::DynIndirectCallLike;
 use trunk_ir::refs::OpRef;
 use wasm_encoder::{Function, Instruction};
 
@@ -55,25 +54,7 @@ pub(crate) fn handle_call_indirect(
     // WebAssembly expects: [arg1, arg2, ..., argN, table_idx]
 
     // The callee (i32 table index) is the FIRST operand, followed by args.
-    let call = DynIndirectCallLike::get(ctx, op).ok_or_else(|| {
-        CompilationError::invalid_module("wasm.call_indirect is not an indirect call")
-    })?;
-    let first_operand = call.indirect_callee(ctx).ok_or_else(|| {
-        CompilationError::invalid_module("wasm.call_indirect requires a table index operand")
-    })?;
-    let args = call.indirect_arguments(ctx).ok_or_else(|| {
-        CompilationError::invalid_module("wasm.call_indirect has malformed operands")
-    })?;
-    let first_operand_ty = helpers::value_type(ctx, first_operand);
-
-    // All call_indirect operations must use i32 table index
-    if !trunk_ir::dialect::core::I32::matches(ctx, first_operand_ty) {
-        let data = ctx.get_type(first_operand_ty);
-        return Err(CompilationError::invalid_module(format!(
-            "call_indirect first operand must be i32 table index, got {}",
-            data.name.display(ctx)
-        )));
-    }
+    let (first_operand, args) = helpers::indirect_call_operands(ctx, op);
 
     let signature = helpers::exact_call_indirect_signature(ctx, op)?;
     let type_index = module_info
@@ -148,15 +129,7 @@ pub(crate) fn handle_return_call_indirect(
         .map(|_| attr_u32(ctx, &ctx.op(op).attributes, "table"))
         .transpose()?
         .unwrap_or(0);
-    let call = DynIndirectCallLike::get(ctx, op).ok_or_else(|| {
-        CompilationError::invalid_module("wasm.return_call_indirect is not an indirect call")
-    })?;
-    let table_index_value = call.indirect_callee(ctx).ok_or_else(|| {
-        CompilationError::invalid_module("wasm.return_call_indirect requires a table index operand")
-    })?;
-    let args = call.indirect_arguments(ctx).ok_or_else(|| {
-        CompilationError::invalid_module("wasm.return_call_indirect has malformed operands")
-    })?;
+    let (table_index_value, args) = helpers::indirect_call_operands(ctx, op);
 
     // WebAssembly evaluates arguments before the table index.
     for &arg in args {

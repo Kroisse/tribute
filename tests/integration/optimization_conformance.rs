@@ -68,11 +68,11 @@ fn temporary_borrow_options(temporary_borrows: TemporaryBorrowPolicy) -> Optimiz
     }
 }
 
-/// The `@name` of a generic `clif.func` line, whose name prints as `sym_name = "name"`.
+/// The `@name` of a `clif.func` line, `clif.func @name(..) -> ..`.
 fn clif_func_symbol(line: &str) -> Option<String> {
-    line.split_once("sym_name = \"")
-        .and_then(|(_, rest)| rest.split('"').next())
-        .map(|name| format!("@{name}"))
+    line.strip_prefix("clif.func ")
+        .and_then(|rest| rest.split('(').next())
+        .map(str::to_owned)
 }
 
 fn focused_rc_ops(ir: &str) -> String {
@@ -477,7 +477,7 @@ fn field_moves_from_shared_and_unique_owners_use_moving_releases(db: &salsa::Dat
     // pair keeps two more references, and `pair.right.name` moves out of
     // the unique pair and then out of its holder.
     let (_, main) = ir
-        .split_once("sym_name = \"__tribute_main\"")
+        .split_once("clif.func @__tribute_main(")
         .expect("main in the module");
     let main = main.split("clif.func ").next().unwrap();
     assert!(

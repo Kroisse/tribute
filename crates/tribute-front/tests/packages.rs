@@ -3,7 +3,7 @@
 
 use rustc_hash::FxHashMap as HashMap;
 use salsa::Setter;
-use tribute_core::diagnostic::Diagnostic;
+use tribute_core::diagnostic::SpanDiagnostic;
 use tribute_front::SourceCst;
 use tribute_front::analysis::{self, DependencyTable, Package};
 use tribute_front::ast::SpanMaps;
@@ -71,7 +71,7 @@ impl Build {
     fn diagnostics(&self) -> Vec<String> {
         analysis::diagnostics(&self.db, self.app, self.environment)
             .into_iter()
-            .map(|diagnostic: &Diagnostic| diagnostic.inner.message.clone())
+            .map(|diagnostic| diagnostic.message.to_owned())
             .collect()
     }
 
@@ -132,10 +132,11 @@ fn a_package_that_depends_on_itself_is_rejected() {
     table.set_packages(&mut build.db).to(packages);
 
     assert!(analysis::package_env(&build.db, build.lib).is_none());
-    let messages: Vec<_> = analysis::package_env::accumulated::<Diagnostic>(&build.db, build.lib)
-        .into_iter()
-        .map(|diagnostic| diagnostic.inner.message.clone())
-        .collect();
+    let messages: Vec<_> =
+        analysis::package_env::accumulated::<SpanDiagnostic>(&build.db, build.lib)
+            .into_iter()
+            .map(|diagnostic| diagnostic.inner.message.clone())
+            .collect();
     assert_eq!(
         messages,
         ["package `lib` depends on itself through its dependency table"]
@@ -200,7 +201,7 @@ fn the_program_specializes_the_library_bodies() {
         &mut Default::default(),
     );
     assert!(validation.is_ok(), "the program validates: {validation}");
-    let ir = trunk_ir::printer::print_module(&ir, module.module.op());
+    let ir = module.module.op().display(&ir).to_string();
     for function in ["lib::origin", "lib::x_of", "pkg::run"] {
         assert!(
             ir.contains(&format!("tribute_control.func @\"{function}\"")),
@@ -243,7 +244,7 @@ fn type_checking_reads_the_exports_of_indirect_dependencies() {
     let environment = DependencyTable::new(&db, vec![outer, std]);
     let messages: Vec<_> = analysis::diagnostics(&db, app, environment)
         .into_iter()
-        .map(|diagnostic| diagnostic.inner.message.clone())
+        .map(|diagnostic| diagnostic.message)
         .collect();
     assert_eq!(messages, Vec::<String>::new());
 }
@@ -280,7 +281,7 @@ fn a_path_continues_through_a_re_export_of_an_indirect_dependency() {
         let app = db.source("app.trb", text);
         analysis::diagnostics(&db, app, environment)
             .into_iter()
-            .map(|diagnostic| diagnostic.inner.message.clone())
+            .map(|diagnostic| diagnostic.message.to_owned())
             .collect()
     };
     assert_eq!(
@@ -451,7 +452,7 @@ fn merging_a_diamond_matches_specializing_every_body_at_once() {
     assert_eq!(
         analysis::diagnostics(db, diamond.app, diamond.environment)
             .into_iter()
-            .map(|diagnostic: &Diagnostic| diagnostic.inner.message.clone())
+            .map(|diagnostic| diagnostic.message.to_owned())
             .collect::<Vec<_>>(),
         Vec::<String>::new()
     );
@@ -604,7 +605,7 @@ fn merging_keeps_the_metadata_of_the_instance_it_keeps() {
     assert_eq!(
         analysis::diagnostics(&db, app, environment)
             .into_iter()
-            .map(|diagnostic: &Diagnostic| diagnostic.inner.message.clone())
+            .map(|diagnostic| diagnostic.message.to_owned())
             .collect::<Vec<_>>(),
         Vec::<String>::new()
     );

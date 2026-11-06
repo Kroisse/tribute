@@ -13,10 +13,10 @@ use tribute_ir::calling_convention::CallingConvention;
 use tribute_ir::dialect::tribute_control::{FuncSig, Row, RowBinder};
 use tribute_ir::dialect::{ability, tribute_control, tribute_cps};
 use trunk_ir::context::IrContext;
+use trunk_ir::op_flag::OpFlag;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
 use trunk_ir::rewrite::Module;
-use trunk_ir::types::Attribute;
 use trunk_ir::walk::{WalkAction, walk_region};
 use trunk_ir::{Symbol, SymbolPath};
 
@@ -208,12 +208,16 @@ pub(crate) struct Function {
     pub(crate) claimed: Option<Vec<Class>>,
     pub(crate) binders: Vec<RowBinder>,
     pub(crate) ty: TypeRef,
-    pub(crate) inferred: bool,
     /// Whether the root module names this function as its entry point.
     pub(crate) root_entry: bool,
     /// Tails that select a class variable without looking at callees.
     pub(crate) selecting: HashSet<u32>,
+    /// Tails that occur in a parameter type of a callable type in its
+    /// signature or body, at any depth.
+    pub(crate) parameter_tails: HashSet<u32>,
     pub(crate) references: Vec<Reference>,
+    /// Its own tail where that tail reads `Cps` without a class variable.
+    pub(crate) cps_tail: Option<u32>,
     /// The selected class variables, by binder index.
     pub(crate) selected: Vec<u32>,
 }
@@ -224,7 +228,7 @@ impl Function {
         op: OpRef,
         tables: &HashMap<String, OpRef>,
     ) -> Option<Self> {
-        if !tribute_control::is_func(ctx, op) {
+        if !tribute_control::SourceFunc::is_set(ctx, op) {
             return None;
         }
         let name = ctx.op_attrs(op).get_str("sym_name")?.to_owned();
@@ -233,10 +237,6 @@ impl Function {
         let ty = ctx.op_attrs(op).get_type("type")?;
         let signature = FuncSig::from_type_ref(ctx, ty)?;
         let binders = tribute_control::row_binders(ctx, op).ok()?;
-        let inferred = matches!(
-            ctx.op_attrs(op).get(tribute_control::INFERRED_ROW_ATTR),
-            Some(Attribute::Bool(true))
-        );
         let root_entry = tribute_ir::metadata::is_root_entry(ctx, op);
         let mut selecting = HashSet::default();
         let mut tail_of = |ty: TypeRef| {
@@ -249,6 +249,7 @@ impl Function {
                 }
             });
         };
+        let mut parameter_tails = HashSet::default();
         let mut references = Vec::new();
         // A definition without a body is one external symbol with one ABI,
         // so it has no class variables.
@@ -256,8 +257,10 @@ impl Function {
             for &ty in signature.inputs(ctx).iter().chain(signature.results(ctx)) {
                 tail_of(ty);
             }
+            parameter_tails_in(ctx, ty, &mut parameter_tails);
             for ty in body_value_types(ctx, body) {
                 tail_of(ty);
+                parameter_tails_in(ctx, ty, &mut parameter_tails);
             }
             let _ = walk_region::<()>(ctx, body, &mut |inner| {
                 let rows = tribute_control::row_args(ctx, inner).unwrap_or_default();
@@ -281,19 +284,72 @@ impl Function {
                 ControlFlow::Continue(WalkAction::Advance)
             });
         }
-        Some(Self {
+        let mut function = Self {
             op,
             name,
             base,
             claimed,
             binders,
             ty,
-            inferred,
             root_entry,
             selecting,
+            parameter_tails,
             references,
+            cps_tail: None,
             selected: Vec::new(),
-        })
+        };
+        function.cps_tail = function.own_row(ctx, op, |_| false).tail;
+        Some(function)
+    }
+
+    /// The own row of `op`, an instance of this definition, read with its
+    /// own tail only where that tail may reach a callable in it: a class variable, a union of tails,
+    /// a binder that is not `param`, or any tail of a definition without a
+    /// body. Any other own tail reaches no callable, so it requires
+    /// nothing, whether the row was written or inferred
+    /// (`new-plans/cps-effects.md`, "Row와 호출 규약").
+    pub(crate) fn own_row(
+        &self,
+        ctx: &IrContext,
+        op: OpRef,
+        is_class_variable: impl Fn(u32) -> bool,
+    ) -> Row {
+        let ty = ctx
+            .op_attrs(op)
+            .get_type("type")
+            .expect("a definition has a signature");
+        let mut row = FuncSig::from_type_ref(ctx, ty)
+            .expect("a definition's signature is a func_sig")
+            .row(ctx);
+        let requires_nothing = |tail: u32| {
+            self.is_candidate(tail)
+                && !is_class_variable(tail)
+                && ctx.op_region(op, 0).is_some()
+                && !tribute_control::row_unions(ctx, op)
+                    .unwrap_or_default()
+                    .iter()
+                    .any(|union| union.result == tail)
+        };
+        if row.tail.is_some_and(requires_nothing) {
+            row.tail = None;
+        }
+        row
+    }
+
+    /// How an instance of this definition reads rows, with `params` the
+    /// classes of its class variables.
+    pub(crate) fn reader<'a>(
+        &'a self,
+        requirements: &'a HashMap<SymbolPath, CallingConvention>,
+        params: HashMap<u32, Class>,
+    ) -> Reader<'a> {
+        Reader {
+            binders: self.binders.clone(),
+            parameter_tails: &self.parameter_tails,
+            requirements,
+            params,
+            locals: Locals::default(),
+        }
     }
 
     /// Whether binder `index` may be a class variable.
@@ -308,7 +364,7 @@ impl Function {
 /// The name a `call`, `tail_call`, or `tribute_control.func_ref` refers to.
 pub(crate) fn reference_callee(ctx: &IrContext, op: OpRef) -> Option<String> {
     let key = if tribute_control::FuncRef::matches(ctx, op) {
-        "func_ref"
+        "value"
     } else if tribute_control::Call::matches(ctx, op) || tribute_control::TailCall::matches(ctx, op)
     {
         "callee"
@@ -342,13 +398,43 @@ fn table_callee(
     tables: &HashMap<String, OpRef>,
 ) -> Option<(String, Vec<String>)> {
     let reference = tribute_cps::FuncRef::from_op(ctx, op).ok()?;
-    let name = reference.func_ref(ctx).as_simple()?.as_str();
+    let name = reference.value(ctx).as_simple()?.as_str();
     let table = *tables.get(name)?;
     let targets = tribute_cps::table_entries(ctx, table)?
         .into_iter()
         .map(|(_, target)| Some(target.leaf()?.to_string()))
         .collect::<Option<Vec<_>>>()?;
     Some((name.strip_suffix(TABLE_SUFFIX)?.to_owned(), targets))
+}
+
+/// Add to `tails` the tails of the rows `ty` holds in a parameter type of a
+/// callable type, at any depth: every row inside a callable's input, and
+/// those the callables in its results and elements hold.
+fn parameter_tails_in(ctx: &IrContext, ty: TypeRef, tails: &mut HashSet<u32>) {
+    let mut seen = HashSet::default();
+    let mut pending = vec![ty];
+    while let Some(ty) = pending.pop() {
+        if !seen.insert(ty) {
+            continue;
+        }
+        if let Some(signature) = FuncSig::from_type_ref(ctx, ty) {
+            for &input in signature.inputs(ctx).iter() {
+                tribute_control::visit_rows(ctx, input, &mut |row| {
+                    if let Ok(Row {
+                        tail: Some(tail), ..
+                    }) = row
+                    {
+                        tails.insert(tail);
+                    }
+                });
+            }
+            pending.extend(signature.results(ctx));
+        } else if let Some(elements) = tribute_control::logical_tuple_elements(ctx, ty) {
+            pending.extend(elements);
+        } else {
+            pending.extend(ctx.get_type(ty).params.iter().copied());
+        }
+    }
 }
 
 /// The types of every value a body defines: operation results and block
@@ -375,9 +461,14 @@ pub(crate) fn body_value_types(ctx: &IrContext, body: RegionRef) -> Vec<TypeRef>
 /// Select the class variables of every definition: a `param` binder that is
 /// the tail of a callable type in its signature or body, of a row it
 /// instantiates a let-bound lambda with, or of a row it passes for a class
-/// variable of a definition it references. Returns the class variable
-/// positions of each base definition.
+/// variable of a definition it references or for that definition's own tail
+/// that reads `Cps`. Returns the class variable positions of each base
+/// definition.
 pub(crate) fn settle_class_variables(functions: &mut [Function]) -> HashMap<String, Vec<u32>> {
+    let cps_tails: HashMap<String, u32> = functions
+        .iter()
+        .filter_map(|function| Some((function.base.clone(), function.cps_tail?)))
+        .collect();
     for function in functions.iter_mut() {
         let mut selected: Vec<u32> = function
             .selecting
@@ -395,7 +486,8 @@ pub(crate) fn settle_class_variables(functions: &mut [Function]) -> HashMap<Stri
             let mut added = Vec::new();
             for reference in &function.references {
                 let (callee, _) = split_name(&reference.callee);
-                for &position in positions.get(callee).into_iter().flatten() {
+                let cps_tail = cps_tails.get(callee);
+                for &position in positions.get(callee).into_iter().flatten().chain(cps_tail) {
                     let tail = usize::try_from(position)
                         .ok()
                         .and_then(|position| reference.rows.get(position))
@@ -439,6 +531,8 @@ pub(crate) fn class_positions(functions: &[Function]) -> HashMap<String, Vec<u32
 /// bodies.
 pub(crate) struct Reader<'a> {
     pub(crate) binders: Vec<RowBinder>,
+    /// The tails of its definition that occur in a parameter type.
+    pub(crate) parameter_tails: &'a HashSet<u32>,
     pub(crate) requirements: &'a HashMap<SymbolPath, CallingConvention>,
     pub(crate) params: HashMap<u32, Class>,
     pub(crate) locals: Locals,
@@ -480,7 +574,11 @@ impl Reader<'_> {
     }
 
     /// The class of binder `tail` at `at`. A local binder not yet settled
-    /// reads as `Direct`, the start of their least fixed point.
+    /// reads as `Direct`, the start of their least fixed point. A `body`
+    /// binder that occurs in no parameter type requires nothing: every value
+    /// whose row has it was made with it abstract, and no argument of
+    /// another row reaches it (`new-plans/cps-effects.md`, "Row와 호출
+    /// 규약").
     fn tail(&self, ctx: &IrContext, tail: u32, at: OpRef) -> Class {
         let kind = usize::try_from(tail)
             .ok()
@@ -488,6 +586,7 @@ impl Reader<'_> {
         let class = match kind {
             Some(RowBinder::Param) => self.params.get(&tail).copied().unwrap_or(Class::CPS),
             Some(RowBinder::Local) => self.locals.get(ctx, tail, at).unwrap_or(Class::DIRECT),
+            Some(RowBinder::Body) if !self.parameter_tails.contains(&tail) => Class::DIRECT,
             _ => Class::CPS,
         };
         narrowed(ctx, tail, at, class)

@@ -92,7 +92,7 @@ fn addi<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
 fn i32_add(lhs: Value<I32>, rhs: Value<I32>) -> Value<I32> {}
 
 fn cmpi<T: IntegerLike>(
-    predicate: Attr<String>,
+    predicate: Attr<CmpiPredicate>,
     lhs: Value<T>,
     rhs: Value<T>,
 ) -> Value<I1> {}
@@ -116,15 +116,29 @@ where
 ```
 
 - Parameters are `Value<C>`, `Variadic<C>`, `Values<L>`, `Attr<K>`,
-  `Attr<[K]>` (a list whose every element has kind `K`), and
-  `Option<Attr<..>>`. Results are `Value<C>` or `Option<Value<C>>` (accessor
+  `Attr<[K]>` (a list whose every element has kind `K`),
+  `Option<Attr<..>>`, and `#[default(v)] name: Attr<K>`, an optional
+  attribute whose absence means `v`. `v` is an expression of the kind's
+  accessor type that also converts into its builder type, and the accessor
+  type must implement `PartialEq`. `AttrKind::same` decides equality, comparing
+  floating-point values by their bits, so `-0.0` is not the default `0.0`.
+  The accessor returns `v` when the
+  attribute is absent, and the builder, the parser, and the printer drop a
+  value equal to `v`, so absence is the canonical form. Type attributes take
+  no default. Results are `Value<C>` or `Option<Value<C>>` (accessor
   `result`) or `Variadic<C>` / `Values<L>` (accessor `results`).
 - Attribute kinds are Rust types implementing `attr_kind::AttrKind`, resolved
   in the dialect's scope like bounds: primitives (`bool`, `i32`, `i64`, `u32`,
   `u64`, `f32`, `f64`), `String`, and the markers
-  `attr_kind::{Type, SymbolRef, Bytes}`. A kind defines its schema domain
-  and the values its accessor returns and its builder setter takes, so a
-  dialect adds a kind by implementing the trait. `_` accepts any attribute.
+  `attr_kind::{Type, SymbolRef, Bytes}`. A kind defines its schema domain,
+  the values its accessor returns and its builder setter takes, and how a
+  declarative format writes and reads its values, so a dialect adds a kind
+  by implementing the trait. A kind narrower than its
+  `KIND`, such as a keyword, checks the rest in `AttrKind::accepts` and names
+  its values in `DOMAIN`, as `CallingConvention` does. Inside trunk-ir,
+  `attr_kind::keyword_kind!` declares such a kind as an enum stored as its
+  keyword string, as `arith::CmpiPredicate` and `clif::IntCond` are. `_`
+  accepts any attribute.
 - `Attr<TypeOf<V>>` is a type attribute whose value binds the type variable
   `V`. `V` needs no bound.
 - A list attribute's accessor iterates its elements, and its builder setter
@@ -173,25 +187,56 @@ where
 
   String literals are keywords and punctuation, a bare name is an operand
   or attribute, and `symbol(..)`, `type(..)`/`types(..)`, `attr_dict`
-  (`attributes {..}`), `region(..)`/`regions(..)`, and
+  (`attributes {..}`) or `attr_dict_bare` (`{..}`, not before a region),
+  `region(..)`/`regions(..)`, and
   `successor(..)`/`successors(..)` write the other entities.
-  `signature(t, body)` writes the `Attr<TypeOf<S>>` attribute `t` as
+  An attribute is written with its kind's syntax, `AttrKind::print_text`
+  and `AttrKind::parse_text`, which default to the attribute syntax; a
+  keyword kind writes a bare identifier, read back with
+  `asm_format::parse_keyword`, as `tribute_control.perform` writes its
+  `operation_kind`. `custom(D(a, b))` leaves the
+  operands, attributes, successors, and regions it names to `D`'s
+  `asm_format::OpAsmDirective`, as MLIR's `custom<D>` does; `clif.switch`
+  writes each case with its target as `[0: ^first, 5: ^second]` this way,
+  `scf.index_switch` writes each case with its region on its own line
+  through `OpAsmPrinter::newline`, and `tribute_control.handle` writes
+  each arm after its binding with the arm's entry block arguments, through
+  `AsmState::entry_args` and `OpAsmParser::parse_region_with_entry`.
+  `type(x)` on a single operand writes its type, which the parser checks
+  against the operand's definition.
+  `signature(t, body)` writes the type of `t`, an `Attr<TypeOf<S>>`
+  attribute, a fixed `Value<S>` operand, or a `Value<S>` result, as
   `(%a: A) -> R`, through the `asm_format::SignatureCodec` of `S`'s bound,
   with the inputs as the entry block arguments of `body`, which then elides
-  its entry block, as `func.func` does. `("kw" .. x^)?`
+  its entry block, as `func.func` does. `args(r)` writes the entry block
+  arguments of region `r` as `(%a: A, ..)` with their own types, and `r`
+  elides its entry block. `functional_type(xs, results)` writes the types
+  of operand `xs` and of the results as `(A, B) -> R`, as MLIR's
+  `functional-type` does for `func.call @f(%a) : (A) -> R`; an operation
+  without results names only `xs` and writes `-> ()`. The parser rejects
+  written operand types that differ from the operands' types. `("kw" .. x^)?`
   opens with a literal and is written only when its anchor `x` is present;
   an optional `bool` anchor is a flag the group's literals stand for. A
-  format begins with a literal (after any `symbol(..)` or symbol reference,
-  or a `signature(..)` after them),
-  closes each variadic
-  list with `")"` or `"]"`, and ends with `(":" types(..)^)?` for results
-  that may be absent. The macro reports a broken rule, a missing entity, or
-  one written twice at the element at fault. An operation the format cannot
-  spell without loss prints generically.
+  format may begin with any element, closes each variadic successor list
+  with `")"` or `"]"`, writes no operand or `,` right after a variadic operand
+  list, and writes results that may be absent in an optional group that ends
+  the format or comes before a literal, as `(":" types(..)^)?` or
+  `("->" "(" types(..)^ ")")?`. A format need not write a result type the
+  declaration fixes; the parser then takes it from the schema, and the
+  printer uses the format only for operations whose results have that
+  type, as `arith.cmpi slt, %a, %b : core.i32` leaves out its `core.i1`
+  result. An
+  operand list stays on its line, so an empty one does not read the next
+  line's `%r = ..`.
+  The macro reports a broken rule, a missing entity, or one written twice at
+  the element at fault. An operation the format cannot spell without loss
+  prints generically, as `"dialect.op"(%a)` with a quoted name.
 - `#[asm_format]` without elements on an operation requires
   `trunk_ir::asm_format::OpAsmFormat` for its wrapper, which prints and
   parses the operation's custom syntax by hand. Generic syntax stays
-  readable for every operation.
+  readable for every operation. See [printing](#printing) and
+  [parsing](#parsing) for the printer and parser a custom format works
+  through.
 - On a type `struct`, `#[verify]` requires `trunk_ir::type_verifier::VerifyType`
   and `#[asm_format]` requires `trunk_ir::asm_format::TypeAsmFormat`. A
   hand-written `TypeDef` adds the same hooks with `with_verifier` and
@@ -205,7 +250,7 @@ where
 - The function syntax `<(inputs) -> results, {attrs}>` belongs to the
   signature types that register it: their `TypeAsmFormat` calls
   `func::print_signature_type` and `func::parse_signature_type`, which
-  map it to the generic form with `num_inputs`/`num_results`. The core
+  store it in the generic form with `num_inputs`/`num_results`. The core
   printer and parser have no function syntax of their own, so another
   dialect's `*.func_sig` uses the generic form unless it registers the same
   hooks.
@@ -220,7 +265,7 @@ declarations above:
 ```rust
 let sum = arith::Addi::operands(lhs, rhs).build(ctx, loc); // result is `T`
 let cmp = arith::Cmpi::operands(lhs, rhs) // or `Op::operands()` without operands
-    .predicate("slt")                      // attributes by name
+    .predicate(CmpiPredicate::Slt)         // attributes by name
     .build(ctx, loc);                       // result is `core.i1`
 let resumed = Resume::operands(token, value).build(ctx, loc); // `T::Answer`
 ```
@@ -244,10 +289,13 @@ variable bindings, then projections and type lists. `OpDef::verify` adds the
 `#[verify]` hook after them; each stage runs only if the earlier ones passed.
 `validate_operation_verifiers` runs `OpDef::verify` on each operation.
 Remaining operation-specific checks run afterwards and may assume the
-declared shape. The `tribute_control` local validator and the native backend
-boundary (`validate_clif_ir`) run `OpDef::verify` the same way before their
-own checks, so those checks cover only what the definition cannot express,
-such as symbol lookups, enclosing callables, and region contents. A check
+declared shape. The `tribute_control` local validator and the native and Wasm
+backend boundaries (`validate_clif_ir`, `validate_wasm_ir`) run
+`OpDef::verify` the same way before their own checks, so those checks
+cover only what the definition cannot express, such as symbol lookups,
+enclosing callables, and region contents. Passes and backends assume
+schema-valid input and do not repeat these checks; a test does not write a
+schema-violating operation in generic form to exercise a pass. A check
 that reads only the operation itself belongs in its `#[verify]` hook; the
 `tribute_control` local validator reaches each operation's checks on its
 placement and regions through the `LocalValidation` interface.
@@ -279,6 +327,113 @@ inspect the operation before calling the accessor. An interface queried on
 unverified IR, such as `Branch` for the validator, reads attributes fallibly
 and reports failure in its result; an interface queried only on IR that
 satisfies its schema, such as `CallLike`, reads through the accessors.
+
+### Printing
+
+The printer is split as MLIR's is. A pre-pass builds an immutable
+`printer::AsmState` before anything is written: the name of every value
+(`%N`) and block label (`^bbN`) the printed operation writes, numbered in
+the order the printer writes them, and the type aliases of each module.
+The mutable `printer::AsmPrinter` writes to any `fmt::Write` and owns the
+indentation: it writes the current indentation before the first character
+of each line, so text written through it is indented and an empty line
+stays empty. `printer::OpAsmPrinter` dereferences to it and adds the
+structure of operations: regions, a region whose entry block the format
+wrote (`print_region_without_entry`, `print_body`), new lines, and generic
+form. `TypeAsmFormat::print`, `AttrKind::print_text`, and
+`SignatureCodec::write_tail` take an `AsmPrinter`; `OpAsmFormat::print` and
+`OpAsmDirective::print` take an `OpAsmPrinter`.
+
+The leaves of the printed form are `Display` values of the state, written
+with `write!` and the `Itertools::format` adapters
+([code conventions](conventions.md#formatting-utilities)):
+
+```rust
+fn print(&self, p: &mut OpAsmPrinter<'_>) -> fmt::Result {
+    let s = p.state();
+    write!(p, "{} = my.op {} : {}", s.value(result), s.values(operands), s.ty(ty))?;
+    write!(p, " {}", s.entry_args(body))?;
+    p.print_region_without_entry(body)
+}
+```
+
+`AsmState` offers `ty`, `attr`, `attr_dict`, `value`, `values`, `block`,
+and `entry_args`; `printer::display_symbol_ref`, `display_symbol_text`, and
+`display_name` need no state. A format names nothing while printing. The
+pre-pass, `printer::AsmNamer`, names each operation as its format writes it:
+generic form names the results, then each region; a declarative format
+follows its elements; a hand-written format names by default its results,
+then each region in order, with fresh numbering for an operation isolated
+from above. A hand-written format that writes names in another order, or
+writes one name for values of several regions, overrides
+`OpAsmFormat::assign_names` (or `OpAsmDirective::assign_names`), as
+`tribute_control.lambda` shares each parameter across its bodies with
+`AsmNamer::share`.
+
+The entry points are `Display` values rather than functions that return a
+`String`, as `Path::display` is: `op.display(ctx)` writes an operation, a
+module with its type aliases, and runs the pre-pass for it on each write;
+`ty.display(ctx)` writes a type in full. Write them with `write!` or
+`format!`, and call `to_string()` only where a `String` is the result. A
+tool that keeps the state across writes builds `AsmState::new(ctx, op)` and
+writes through `OpAsmPrinter::new(&state, &mut out)`.
+
+### Parsing
+
+The parser reads text straight into the `IrContext`, as MLIR's does, with
+no intermediate tree. `parser::AsmParser` reads types, attributes, symbols,
+and tokens; `parser::OpAsmParser` dereferences to it and adds operands,
+successors, block arguments, regions, and operations. Each piece is the
+counterpart of the printer's piece that writes the same thing, and returns
+IR: `parse_operand` (`AsmState::value`) a `ValueRef`, `parse_type` a
+`TypeRef`, `parse_attribute` and `parse_attr::<K>` an `Attribute`,
+`parse_attr_dict` an `AttributeMap`, `parse_successor` (`AsmState::block`)
+a `BlockRef`, `parse_entry_args` (`AsmState::entry_args`) the `Argument`s a
+header writes, and `parse_region`, `parse_region_with_args`
+(`print_region_without_entry`), and `parse_region_with_entry` a
+`RegionRef`. `TypeAsmFormat::parse`, `AttrKind::parse_text`, and
+`SignatureCodec::{parse_tail, build}` take an `AsmParser`;
+`OpAsmFormat::parse` and `OpAsmDirective::parse` take an `OpAsmParser`.
+
+```rust
+fn parse(p: &mut OpAsmParser<'_>, state: &mut OperationState) -> ParseResult<()> {
+    let callee = p.parse_operand()?;
+    let args = p.parse_delimited("(", ")", |p| p.parse_operand())?;
+    p.parse_punct(":")?;
+    state.result_types.push(p.parse_type()?);
+    let params = p.parse_entry_args()?;
+    state.regions.push(p.parse_region_with_args(&params)?);
+    state.operands = std::iter::once(callee).chain(args).collect();
+    Ok(())
+}
+```
+
+An `OpAsmFormat` fills the `parser::OperationState`; the parser creates the
+operation, reads a declared default as absent, and names the results the
+text wrote before `=` (`OpAsmParser::num_results` tells how many). A
+format reads its own `@name`. An `OpAsmDirective` returns one
+`ParsedEntity` for each entity its element names. A `TypeAsmFormat` that
+finds text that is not its syntax returns `None` before it reads anything,
+and the parser reads the generic form instead.
+
+Names resolve as they are read: a value name in this or an enclosing
+region, a block label in the same region. A block is created at its first
+mention and filled where its label is defined; a value used before its
+definition, such as a later block's argument, gets a placeholder that the
+definition replaces. Every error carries its byte offset in the text,
+including an undefined name, which is reported at its first use.
+
+A piece does not backtrack. `parse_*` reads its construct or fails;
+`parse_optional_*` returns `None`, leaving the text as it was, when the
+construct is absent, and fails like `parse_*` once it has begun. A format
+tells its alternatives apart with optional pieces before it reads further.
+Operations, blocks, regions, and values are created only after a piece
+has committed to its construct, so an absent one leaves nothing in the
+context; types and strings interned on the way are content-addressed and
+change no IR. `parse_token` and `parse_optional_token` read a token of a
+format's own with a `parser::lexer` function or another winnow parser of
+text. `parser::parse_module`, `parse_type`, and `parse_attribute` read a
+whole text.
 
 ## Operation Interfaces
 
@@ -446,8 +601,8 @@ let value: &str = string_const.value(ctx); // generated accessor
 
 A builder setter for a string attribute takes a `StringArg`: a `StringRef`,
 or text as a `Cow<'static, str>` (a `&'static str` or an owned `String`).
-The builder interns text when it creates the operation, so
-`.predicate("slt")` and `.sym_name("main")` need no context. Pass text directly
+The builder interns text when it creates the operation, so `.code("oob")`
+and `.sym_name("main")` need no context. Pass text directly
 instead of constructing a `Symbol` solely for a string attribute. For a borrowed
 runtime name, pass `ctx.intern_str(name)`. `Symbol` and `SymbolPath` do not convert
 to a string argument automatically. For an existing symbol, pass
@@ -606,7 +761,7 @@ the same ownership contract as the callable's other inputs.
 Operations are created with their builders:
 
 ```rust
-let c = arith::Const::operands()
+let c = arith::Constant::operands()
     .value(Attribute::Int(42))
     .results(i32_ty)
     .build(&mut ctx, loc);

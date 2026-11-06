@@ -24,7 +24,7 @@ fn canonical_invalid_source_has_stable_unresolved_name_diagnostic(db: &salsa::Da
     let matching: Vec<_> = result
         .diagnostics
         .iter()
-        .filter(|diagnostic| diagnostic.inner.message == "unresolved name `missing_value`")
+        .filter(|diagnostic| diagnostic.message == "unresolved name `missing_value`")
         .collect();
     assert_eq!(
         matching.len(),
@@ -35,9 +35,9 @@ fn canonical_invalid_source_has_stable_unresolved_name_diagnostic(db: &salsa::Da
 
     let diagnostic = matching[0];
     assert_eq!(diagnostic.phase, CompilationPhase::NameResolution);
-    assert_eq!(diagnostic.inner.severity, DiagnosticSeverity::Error);
+    assert_eq!(diagnostic.severity, DiagnosticSeverity::Error);
 
-    let span = diagnostic.inner.span;
+    let span = diagnostic.span;
     let primary_source = INVALID_SOURCE
         .get(span.range())
         .expect("diagnostic span must be a valid UTF-8 source range");

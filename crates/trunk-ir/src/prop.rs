@@ -20,7 +20,6 @@ use smallvec::smallvec;
 
 use crate::dialect::{arith, cf, core, func, wasm};
 use crate::location::Span;
-use crate::printer::print_module;
 use crate::rewrite::Module;
 use crate::symbol::SymbolPath;
 use crate::{
@@ -44,7 +43,7 @@ pub(crate) struct Built<S> {
 impl<S: fmt::Debug> fmt::Debug for Built<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "{:?}", self.spec)?;
-        f.write_str(&print_module(&self.ctx, self.module.op()))
+        f.write_str(&self.module.op().display(&self.ctx).to_string())
     }
 }
 
@@ -138,7 +137,7 @@ fn build_body(
                 .build(ctx, loc)
                 .op_ref(),
             &[then_dest, else_dest] => {
-                let cond = arith::Const::operands()
+                let cond = arith::Constant::operands()
                     .value(Attribute::Int(1))
                     .results(i1)
                     .build(ctx, loc);
@@ -150,7 +149,7 @@ fn build_body(
                     .op_ref()
             }
             [default, cases @ ..] => {
-                let discriminant = arith::Const::operands()
+                let discriminant = arith::Constant::operands()
                     .value(Attribute::Int(0))
                     .results(i32_ty)
                     .build(ctx, loc);
@@ -179,9 +178,9 @@ fn build_body(
 /// How a function body refers to its target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RefKind {
-    /// `func.call {callee = @target}`.
+    /// `func.call @target()`.
     Call,
-    /// `func.constant {func_ref = @target}`.
+    /// `func.constant @target`.
     Constant,
     /// `test.ref {callee = @target}`: `callee` on an operation that is not a
     /// registered call.
@@ -465,7 +464,7 @@ fn build_reference(
             .build(ctx, loc)
             .op_ref(),
         RefKind::Constant => func::Constant::operands()
-            .func_ref(target)
+            .value(target)
             .results(sig)
             .build(ctx, loc)
             .op_ref(),

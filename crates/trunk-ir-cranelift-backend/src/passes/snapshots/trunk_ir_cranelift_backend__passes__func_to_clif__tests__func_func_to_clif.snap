@@ -3,7 +3,7 @@ source: crates/trunk-ir-cranelift-backend/src/passes/func_to_clif.rs
 expression: result
 ---
 core.module @test {
-  clif.func {sym_name = "test_fn", type = clif.func_sig<() -> core.nil>} {
+  clif.func @test_fn() -> core.nil {
       clif.return
   }
 }

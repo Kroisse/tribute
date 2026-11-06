@@ -219,8 +219,15 @@ pub enum ExprKind<V> {
         arms: Vec<Arm<V>>,
     },
 
-    /// Lambda expression: `|x, y| expr` or `|x, y| { stmts }`
-    Lambda { params: Vec<Param>, body: Expr<V> },
+    /// Lambda expression: `fn(x, y) expr` or `fn(x) ->{E} T { stmts }`
+    Lambda {
+        params: Vec<Param>,
+        /// Return type annotation (optional, can be inferred).
+        return_ty: Option<TypeAnnotation>,
+        /// Ability row annotation (optional); `Some(vec![])` is `->{}`.
+        effects: Option<Vec<TypeAnnotation>>,
+        body: Expr<V>,
+    },
 
     /// Handle expression: `handle expr { handlers }`
     Handle {
@@ -270,6 +277,25 @@ pub enum Stmt<V> {
 
     /// Expression statement: `expr;`
     Expr { id: NodeId, expr: Expr<V> },
+}
+
+/// The local a `let` binds, by name alone, to a reference, and that
+/// reference. A named-function alias has this shape; its uses reference the
+/// function again (`new-plans/type-inference.md`, Generalization).
+pub fn reference_binding<'a, V>(
+    pattern: &Pattern<V>,
+    value: &'a Expr<V>,
+) -> Option<(LocalId, &'a V)> {
+    match (&*pattern.kind, &*value.kind) {
+        (
+            super::pattern::PatternKind::Bind {
+                local_id: Some(local),
+                ..
+            },
+            ExprKind::Var(reference),
+        ) => Some((*local, reference)),
+        _ => None,
+    }
 }
 
 /// A case arm in pattern matching.

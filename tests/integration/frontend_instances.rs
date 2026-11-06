@@ -1,14 +1,14 @@
 //! The tracked public specialization query rejects damaged instance evidence.
 use salsa_test_macros::salsa_test;
 use tribute::pipeline::{frontend_diagnostics, parse_and_lower_ast, prepare_frontend_for_lowering};
-use tribute_core::diagnostic::Diagnostic;
+use tribute_core::diagnostic::SpanDiagnostic;
 use tribute_front::{
     SourceCst,
     ast::{FuncDefId, Type, TypeKind},
     typeck::TypeCheckOutput,
 };
 
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked]
 fn prepare_damaged(db: &dyn salsa::Database, source: SourceCst, damage: u8) -> bool {
     let typed = parse_and_lower_ast(db, source).unwrap();
     let mut metadata = typed.expression_types(db).clone();
@@ -81,7 +81,7 @@ fn damaged_instances_are_tracked_diagnostics(db: &salsa::DatabaseImpl) {
             !prepare_damaged(db, source, damage),
             "damage {damage} must not produce a lowered frontend"
         );
-        let messages: Vec<_> = prepare_damaged::accumulated::<Diagnostic>(db, source, damage)
+        let messages: Vec<_> = prepare_damaged::accumulated::<SpanDiagnostic>(db, source, damage)
             .iter()
             .map(|diagnostic| diagnostic.inner.message.to_string())
             .collect();
@@ -121,7 +121,7 @@ fn inconsistent_effect_instances_block_lowering(db: &salsa::DatabaseImpl) {
         (8, "IncompleteAbilityArgument"),
     ] {
         assert!(!prepare_damaged(db, source, damage));
-        let errors = prepare_damaged::accumulated::<Diagnostic>(db, source, damage);
+        let errors = prepare_damaged::accumulated::<SpanDiagnostic>(db, source, damage);
         assert!(
             errors
                 .iter()
@@ -176,7 +176,7 @@ fn effect_only_nominal_instance_matches_handlers_and_performs(db: &salsa::Databa
     }));
 }
 
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked]
 fn prepares(db: &dyn salsa::Database, source: SourceCst) -> bool {
     let typed = parse_and_lower_ast(db, source).unwrap();
     prepare_frontend_for_lowering(db, typed, source).is_some()
@@ -198,7 +198,7 @@ fn incomplete_instances_are_rejected_whether_or_not_reached(db: &salsa::Database
             ),
         );
         assert!(!prepares(db, source), "{main}");
-        let messages: Vec<_> = prepares::accumulated::<Diagnostic>(db, source)
+        let messages: Vec<_> = prepares::accumulated::<SpanDiagnostic>(db, source)
             .iter()
             .map(|diagnostic| diagnostic.inner.message.to_string())
             .collect();
@@ -208,6 +208,113 @@ fn incomplete_instances_are_rejected_whether_or_not_reached(db: &salsa::Database
                 .any(|message| message.contains("IncompleteTypeArgument")),
             "{main}: {messages:?}"
         );
+    }
+}
+
+/// Rows are not specialized, so a row variable inside an ability argument
+/// stays unresolved. A function whose signature names such an instance is
+/// rejected even when nothing performs or handles that instance.
+#[salsa_test]
+fn an_open_row_inside_an_ability_argument_is_rejected(db: &salsa::DatabaseImpl) {
+    for row in ["Hold(fn() ->{e} Int), e", "Hold(fn() ->{e} Int)"] {
+        let source = SourceCst::from_source_str(
+            db,
+            "open_ability_argument.trb",
+            &format!(
+                r#"
+ability Hold(a) {{
+    fn held() -> a
+}}
+
+fn g() ->{{{row}}} Int {{ +1 }}
+
+fn apply(f: fn() ->{{Hold(fn() ->{{}} Int)}} Int) -> Int {{
+    handle f() {{
+        do result {{ result }}
+        fn Hold::held() {{ fn() {{ +2 }} }}
+    }}
+}}
+
+fn main() -> Nil {{
+    let _ = apply(g)
+}}
+"#
+            ),
+        );
+        assert!(!prepares(db, source), "{row}");
+        let messages: Vec<_> = prepares::accumulated::<SpanDiagnostic>(db, source)
+            .iter()
+            .map(|diagnostic| diagnostic.inner.message.to_string())
+            .collect();
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("IncompleteAbilityArgument")),
+            "{row}: {messages:?}"
+        );
+    }
+}
+
+/// A row variable is not specialized, so a generic struct or enum named at
+/// an argument holding one gets no specialized declaration. Such a program
+/// is rejected; the same program with a closed row is accepted.
+#[salsa_test]
+fn nominal_arguments_that_do_not_specialize_are_rejected(db: &salsa::DatabaseImpl) {
+    let program = |item: &str| {
+        format!(
+            r#"
+enum Boxed(a) {{ Box(a), EmptyBox }}
+{item}
+fn main() -> Nil {{
+    let _ = wrap(fn() {{ 41 }})
+}}
+"#
+        )
+    };
+    let rejected = "fn wrap(f: fn() ->{e} Nat) -> Boxed(fn() ->{e} Nat) { Boxed::Box(f) }";
+    let source = SourceCst::from_source_str(db, "nominal.trb", &program(rejected));
+    assert!(!prepares(db, source));
+    let messages: Vec<_> = prepares::accumulated::<SpanDiagnostic>(db, source)
+        .iter()
+        .map(|diagnostic| diagnostic.inner.message.to_string())
+        .collect();
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("it does not specialize")),
+        "{messages:?}"
+    );
+    let accepted = "fn wrap(f: fn() ->{} Nat) -> Boxed(fn() ->{} Nat) { Boxed::Box(f) }";
+    let source = SourceCst::from_source_str(db, "nominal.trb", &program(accepted));
+    assert!(prepares(db, source));
+}
+
+/// A `let` shares its data-type variables with every use, so a generic
+/// struct or enum that a `let`-bound callable builds is the instance its uses
+/// select, with no parameter annotation.
+#[salsa_test]
+fn let_bound_callables_build_the_nominal_instance_of_their_uses(db: &salsa::DatabaseImpl) {
+    for body in [
+        "let mk = fn(x) { Boxed::Box(x) }\n    let _ = mk(41)",
+        "let mk = fn(x) { Cell { v: x } }\n    let _ = mk(41).v",
+        "let mk = { fn(x) { Boxed::Box(x) } }\n    let _ = mk(41)",
+        "let p = #(fn(x) { Boxed::Box(x) }, 0)\n    let #(mk, _) = p\n    let _ = mk(41)",
+        "let empty = Boxed::EmptyBox\n    let _ = case empty {\n        .Box(n) -> n + 1\n        .EmptyBox -> 0\n    }",
+    ] {
+        let source = SourceCst::from_source_str(
+            db,
+            "nominal.trb",
+            &format!(
+                r#"
+enum Boxed(a) {{ Box(a), EmptyBox }}
+struct Cell(a) {{ v: a }}
+fn main() -> Nil {{
+    {body}
+}}
+"#
+            ),
+        );
+        assert!(prepares(db, source), "{body}");
     }
 }
 
@@ -255,4 +362,28 @@ fn main() -> Nil { let _ = identity(5) }
             .iter()
             .all(|(path, _)| *path != ["identity"] && *path != ["unreached"])
     );
+}
+
+/// A lambda's result annotation fixes the ability argument of the operation
+/// its body performs, so specialization sees a complete instance.
+#[salsa_test]
+fn annotated_lambda_fixes_its_ability_argument(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "annotated_lambda.trb",
+        r#"
+ability State(s) { op get() -> s }
+fn run() ->{State(Int)} Int {
+    let read = fn() -> Int { State::get() }
+    read() + +1
+}
+fn main() -> Nil {
+    let _ = handle run() {
+        do value { value }
+        op State::get() { resume +0 }
+    }
+}
+"#,
+    );
+    assert!(prepares(db, source));
 }

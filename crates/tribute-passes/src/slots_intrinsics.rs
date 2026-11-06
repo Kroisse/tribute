@@ -237,7 +237,7 @@ impl Lowering<'_, '_> {
     /// The index after `at`.
     fn successor(&mut self, at: ValueRef) -> ValueRef {
         let index_ty = self.index_type();
-        let one = arith::Const::operands()
+        let one = arith::Constant::operands()
             .value(Attribute::Int(1))
             .results(index_ty)
             .build(self.ctx, self.location);
@@ -288,7 +288,6 @@ impl OpRewritePattern for SlotsDeclarationPattern<'_> {
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
 
     fn lower(input: &str) -> String {
         let mut ctx = IrContext::new();
@@ -297,7 +296,7 @@ mod tests {
         LowerSlotsIntrinsics
             .run(&mut ctx, core, &mut Default::default())
             .unwrap();
-        print_module(&ctx, module.op())
+        module.op().display(&ctx).to_string()
     }
 
     #[test]
@@ -312,12 +311,12 @@ mod tests {
   func.func @"std::runtime::Slots::replace$Nat"(%s: adt.array<core.i32>, %at: core.i32, %v: core.i32) -> adt.array<core.i32> attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::runtime::Slots::replace"}
   func.func @"std::runtime::Slots::empty"() -> adt.array<tribute_rt.anyref> attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::runtime::Slots::empty"}
   func.func @run(%at: core.i32, %v: core.i32) -> core.i32 {
-    %0 = func.call {callee = @"std::runtime::Slots::empty$Nat"} : adt.array<core.i32>
-    %1 = func.call %0, %at, %v {callee = @"std::runtime::Slots::insert$Nat"} : adt.array<core.i32>
-    %2 = func.call %1, %at, %v {callee = @"std::runtime::Slots::replace$Nat"} : adt.array<core.i32>
-    %3 = func.call %2, %at {callee = @"std::runtime::Slots::remove$Nat"} : adt.array<core.i32>
-    %4 = func.call %1, %at {callee = @"std::runtime::Slots::get$Nat"} : core.i32
-    %5 = func.call %3 {callee = @"std::runtime::Slots::len$Nat"} : core.i32
+    %0 = func.call @"std::runtime::Slots::empty$Nat"() : () -> adt.array<core.i32>
+    %1 = func.call @"std::runtime::Slots::insert$Nat"(%0, %at, %v) : (adt.array<core.i32>, core.i32, core.i32) -> adt.array<core.i32>
+    %2 = func.call @"std::runtime::Slots::replace$Nat"(%1, %at, %v) : (adt.array<core.i32>, core.i32, core.i32) -> adt.array<core.i32>
+    %3 = func.call @"std::runtime::Slots::remove$Nat"(%2, %at) : (adt.array<core.i32>, core.i32) -> adt.array<core.i32>
+    %4 = func.call @"std::runtime::Slots::get$Nat"(%1, %at) : (adt.array<core.i32>, core.i32) -> core.i32
+    %5 = func.call @"std::runtime::Slots::len$Nat"(%3) : (adt.array<core.i32>) -> core.i32
     func.return %5
   }
 }"#,
@@ -354,19 +353,19 @@ mod tests {
             r#"core.module @test {
   func.func @"std::runtime::Slots::len$Nat"(%s: adt.array<core.i32>) -> core.i32 attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::runtime::Slots::len"}
   func.func @run(%s: adt.array<core.i32>) -> core.i32 {
-    %0 = func.call %s {callee = @"std::runtime::Slots::len$Nat"} : core.i32
-    %f = func.constant {func_ref = @"std::runtime::Slots::len$Nat"} : func.func_sig<(adt.array<core.i32>) -> core.i32>
+    %0 = func.call @"std::runtime::Slots::len$Nat"(%s) : (adt.array<core.i32>) -> core.i32
+    %f = func.constant @"std::runtime::Slots::len$Nat" : (adt.array<core.i32>) -> core.i32
     func.return %0
   }
 }"#,
         );
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
         let core = core::Module::from_op(&ctx, module.op()).expect("core.module");
         let error = LowerSlotsIntrinsics
             .run(&mut ctx, core, &mut Default::default())
             .expect_err("a function value is rejected");
         assert!(error.to_string().contains("func.constant"), "{error}");
-        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
     }
 
     #[test]
@@ -377,19 +376,19 @@ mod tests {
             r#"core.module @test {
   func.func @"std::runtime::Slots::len$Nat"(%s: adt.array<core.i32>) -> core.i32 attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::runtime::Slots::len"}
   func.func @run(%s: adt.array<core.i32>, %n: core.i32) -> core.i32 {
-    %0 = func.call %s {callee = @"std::runtime::Slots::len$Nat"} : core.i32
-    %1 = func.call %s, %n {callee = @"std::runtime::Slots::len$Nat"} : core.i32
+    %0 = func.call @"std::runtime::Slots::len$Nat"(%s) : (adt.array<core.i32>) -> core.i32
+    %1 = func.call @"std::runtime::Slots::len$Nat"(%s, %n) : (adt.array<core.i32>, core.i32) -> core.i32
     func.return %0
   }
 }"#,
         );
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
         let core = core::Module::from_op(&ctx, module.op()).expect("core.module");
         let error = LowerSlotsIntrinsics
             .run(&mut ctx, core, &mut Default::default())
             .expect_err("a call of another shape is rejected");
         assert!(error.to_string().contains("func.call"), "{error}");
-        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
     }
 
     #[test]
@@ -400,7 +399,7 @@ mod tests {
     func.return %n
   }
   func.func @run(%n: core.i32) -> core.i32 {
-    %0 = func.call %n {callee = @"std::runtime::Slots::len"} : core.i32
+    %0 = func.call @"std::runtime::Slots::len"(%n) : (core.i32) -> core.i32
     func.return %0
   }
 }"#,

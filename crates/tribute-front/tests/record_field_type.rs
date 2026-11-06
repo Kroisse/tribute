@@ -18,20 +18,27 @@ use tribute_front::{
 };
 use trunk_ir::Span;
 
-fn diagnostics(db: &dyn salsa::Database, text: &str) -> Vec<Diagnostic> {
+fn diagnostics<'db>(db: &'db dyn salsa::Database, text: &str) -> Vec<Diagnostic<'db>> {
     let source = SourceCst::from_source_str(db, "record_shape.trb", text);
     ast_pipeline_diagnostics(db, source)
 }
 
-fn shape_error(text: &str, record: &str, occurrence: usize, message: &str) -> Diagnostic {
+fn shape_error<'a>(
+    text: &str,
+    record: &str,
+    occurrence: usize,
+    message: &'a str,
+) -> Diagnostic<'a> {
     let start = text.match_indices(record).nth(occurrence).unwrap().0;
     let source = source_hash(path_to_uri("record_shape.trb".as_ref()).as_str());
-    Diagnostic::new(
+    Diagnostic {
         message,
-        Span::new(start, start + record.len()).in_source(source),
-        DiagnosticSeverity::Error,
-        CompilationPhase::TypeChecking,
-    )
+        span: Span::new(start, start + record.len()).in_source(source),
+        severity: DiagnosticSeverity::Error,
+        labels: Default::default(),
+        note: None,
+        phase: CompilationPhase::TypeChecking,
+    }
 }
 
 fn typed_function_body<'a, 'db>(
@@ -286,12 +293,9 @@ fn record_shape_errors_preserve_rhs_type_errors(db: &salsa::DatabaseImpl) {
         assert_eq!(errors.len(), 2, "{errors:#?}");
         assert_eq!(errors[0], shape_error(&text, &record, 0, shape_message));
         assert_eq!(errors[1].phase, CompilationPhase::TypeChecking);
-        assert_eq!(errors[1].inner.severity, DiagnosticSeverity::Error);
+        assert_eq!(errors[1].severity, DiagnosticSeverity::Error);
         assert!(
-            errors[1]
-                .inner
-                .message
-                .contains("expected `Int`, found `Bool`"),
+            errors[1].message.contains("expected `Int`, found `Bool`"),
             "{errors:#?}"
         );
     }
@@ -313,7 +317,6 @@ fn record_shape_unknown_field_preserves_nominal_spread_error(db: &salsa::Databas
     assert_eq!(errors[1].phase, CompilationPhase::TypeChecking);
     assert!(
         errors[1]
-            .inner
             .message
             .contains("expected `Point`, found `Other`"),
         "{errors:#?}"
@@ -517,10 +520,7 @@ fn bad() -> Same(Int) { Same { first: +1, second: True } }
     assert_eq!(errors.len(), 1, "{errors:#?}");
     assert_eq!(errors[0].phase, CompilationPhase::TypeChecking);
     assert!(
-        errors[0]
-            .inner
-            .message
-            .contains("expected `Int`, found `Bool`"),
+        errors[0].message.contains("expected `Int`, found `Bool`"),
         "{errors:#?}"
     );
 }
@@ -550,7 +550,7 @@ fn full(base: Pair(Bool, Int)) -> Pair(Int, Bool) {
     for error in errors {
         assert_eq!(error.phase, CompilationPhase::TypeChecking);
         assert!(
-            error.inner.message.contains("expected `Int`, found `Bool`"),
+            error.message.contains("expected `Int`, found `Bool`"),
             "{error:#?}"
         );
     }
@@ -669,14 +669,30 @@ fn tagged() -> Tagged(Int) { Tagged { value: 1 } }
     assert_named_args(db, *result, tagged_id, "Tagged", &expected);
 }
 
+/// A pure `let` of a phantom record shares its type argument with every use:
+/// uses at `Tag(Int)` and `Tag(Bool)` are rejected, repeated uses at
+/// `Tag(Int)` take that instance.
 #[salsa_test]
-fn pure_let_phantom_record_remains_polymorphic(db: &salsa::DatabaseImpl) {
-    let source = SourceCst::from_source_str(
+fn pure_let_phantom_record_is_monomorphic(db: &salsa::DatabaseImpl) {
+    let rejected = SourceCst::from_source_str(
         db,
         "pure_let_phantom_record.trb",
         r#"
 struct Tag(a) {}
 fn tags() -> #(Tag(Int), Tag(Bool)) {
+    let tag = Tag {}
+    #(tag, tag)
+}
+"#,
+    );
+    assert!(!ast_pipeline_diagnostics(db, rejected).is_empty());
+
+    let source = SourceCst::from_source_str(
+        db,
+        "pure_let_phantom_record.trb",
+        r#"
+struct Tag(a) {}
+fn tags() -> #(Tag(Int), Tag(Int)) {
     let tag = Tag {}
     #(tag, tag)
 }
@@ -691,20 +707,15 @@ fn tags() -> #(Tag(Int), Tag(Bool)) {
         panic!("tags must end in a tuple");
     };
     assert_eq!(uses.len(), 2);
-    assert_named_args(
-        db,
-        node_type(checked.expression_types(db), &uses[0]),
-        tag_id,
-        "Tag",
-        &[TypeKind::Int],
-    );
-    assert_named_args(
-        db,
-        node_type(checked.expression_types(db), &uses[1]),
-        tag_id,
-        "Tag",
-        &[TypeKind::Bool],
-    );
+    for use_ in uses {
+        assert_named_args(
+            db,
+            node_type(checked.expression_types(db), use_),
+            tag_id,
+            "Tag",
+            &[TypeKind::Int],
+        );
+    }
 }
 
 #[salsa_test]
@@ -716,10 +727,7 @@ fn tag_bad(base: Tag(Bool)) -> Tag(Int) { Tag { ..base } }
     let errors = diagnostics(db, invalid);
     assert_eq!(errors.len(), 1, "{errors:#?}");
     assert!(
-        errors[0]
-            .inner
-            .message
-            .contains("expected `Int`, found `Bool`"),
+        errors[0].message.contains("expected `Int`, found `Bool`"),
         "{errors:#?}"
     );
 }
@@ -732,12 +740,7 @@ fn mapper_bad() -> Mapper(Int, Bool) { Mapper { map: fn(value) { +1 } } }
 "#;
     let errors = diagnostics(db, invalid);
     assert_eq!(errors.len(), 1, "{errors:#?}");
-    assert!(
-        errors[0]
-            .inner
-            .message
-            .contains("expected `Bool`, found `Int`")
-    );
+    assert!(errors[0].message.contains("expected `Bool`, found `Int`"));
 }
 
 #[salsa_test]
@@ -757,10 +760,7 @@ fn bad() -> Box(Never) { Box { value: 1 } }
     let errors = diagnostics(db, invalid);
     assert_eq!(errors.len(), 1, "{errors:#?}");
     assert!(
-        errors[0]
-            .inner
-            .message
-            .contains("expected `Never`, found `Nat`"),
+        errors[0].message.contains("expected `Never`, found `Nat`"),
         "{errors:#?}"
     );
 }
@@ -1046,8 +1046,8 @@ fn wrap() -> Wrap(Nat) { .Box { tagged: False, value: 1 } }
 "#;
     let errors: Vec<_> = diagnostics(db, valid)
         .into_iter()
-        .filter(|diagnostic| diagnostic.inner.severity == DiagnosticSeverity::Error)
-        .map(|diagnostic| diagnostic.inner.message)
+        .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
+        .map(|diagnostic| diagnostic.message)
         .collect();
     assert!(errors.is_empty(), "{errors:?}");
 
@@ -1065,8 +1065,8 @@ fn positional() -> Shape { .Dot { value: 1 } }
 "#;
     let errors: Vec<_> = diagnostics(db, invalid)
         .into_iter()
-        .filter(|diagnostic| diagnostic.inner.severity == DiagnosticSeverity::Error)
-        .map(|diagnostic| diagnostic.inner.message)
+        .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
+        .map(|diagnostic| diagnostic.message)
         .collect();
     for expected in [
         "unknown field `depth` for variant `Shape::Rect`",
@@ -1075,7 +1075,7 @@ fn positional() -> Shape { .Dot { value: 1 } }
         "`Shape::Dot` has positional fields; construct it with `.Dot(...)`",
     ] {
         assert!(
-            errors.iter().any(|error| error == expected),
+            errors.contains(&expected),
             "missing {expected:?} in {errors:?}"
         );
     }

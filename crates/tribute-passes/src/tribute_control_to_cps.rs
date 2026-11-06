@@ -4,7 +4,6 @@
 //! `ability` surface. It does not run closure extraction, evidence lowering,
 //! or target-specific conversion.
 
-use itertools::Itertools;
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 use std::error::Error;
@@ -20,6 +19,7 @@ use trunk_ir::OpList;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{core, func, scf};
+use trunk_ir::op_interface::DynRegionBranch;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
@@ -263,12 +263,10 @@ impl<'a> Converter<'a> {
                 self.emit_exit(block, location, value, flow)?;
                 return Ok(());
             }
-            if name == scf::Switch::NAME && self.contains_tribute_control(source) {
-                self.lower_structured_switch(source, rest, block, mapping, flow)?;
-                return Ok(());
-            }
-            if name == scf::If::NAME && self.contains_tribute_control(source) {
-                self.lower_structured_if(source, rest, block, mapping, flow)?;
+            if DynRegionBranch::selects_one_region(self.ctx, source)
+                && self.contains_tribute_control(source)
+            {
+                self.lower_structured(source, rest, block, mapping, flow)?;
                 return Ok(());
             }
             if !is_source_logical(self.ctx, source) {
@@ -421,7 +419,7 @@ fn collect_callable_graph(ctx: &IrContext, module: Module, symbols: &SymbolTable
     let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
         if let Ok(reference) = tribute_cps::FuncRef::from_op(ctx, op)
             && let Some(table) = symbols
-                .resolve(ctx, op, reference.func_ref(ctx))
+                .resolve(ctx, op, reference.value(ctx))
                 .filter(|&table| tribute_cps::FuncTable::matches(ctx, table))
         {
             let entries = tribute_cps::table_entries(ctx, table)
@@ -441,7 +439,7 @@ fn collect_callable_graph(ctx: &IrContext, module: Module, symbols: &SymbolTable
         if let Some(target) = attributes
             .view(ctx)
             .get_symbol_ref("callee")
-            .or_else(|| attributes.view(ctx).get_symbol_ref("func_ref"))
+            .or_else(|| attributes.view(ctx).get_symbol_ref("value"))
             .and_then(|reference| symbols.resolve(ctx, op, reference))
             .filter(|target| funcs.contains_key(target))
         {

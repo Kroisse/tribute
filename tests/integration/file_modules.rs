@@ -10,7 +10,6 @@ use tribute_front::ast::{Decl, ModuleItem, UnresolvedName};
 use tribute_front::source_tree::{PackageFile, source_tree_of};
 use tribute_front::testing::LoggingDb;
 use trunk_ir::SymbolPath;
-use trunk_ir::printer::print_module;
 
 const ROOT: &str = "/pkg/src/main.trb";
 
@@ -78,7 +77,7 @@ fn located_diagnostics(db: &LoggingDb, root: SourceCst) -> Vec<String> {
         .diagnostics
         .iter()
         .map(|diagnostic| {
-            let span = diagnostic.inner.span;
+            let span = diagnostic.span;
             let file = tree
                 .file(span.source)
                 .expect("a file of the package")
@@ -88,7 +87,7 @@ fn located_diagnostics(db: &LoggingDb, root: SourceCst) -> Vec<String> {
                 file.uri(db).path(),
                 span.start,
                 span.end,
-                diagnostic.inner.message
+                diagnostic.message
             )
         })
         .collect()
@@ -100,12 +99,12 @@ fn file_modules_lower_like_inline_modules() {
     let root = package(&mut db);
     assert_eq!(located_diagnostics(&db, root), Vec::<String>::new());
     let (ctx, module) = compile_frontend(&db, root).expect("frontend output");
-    let files = print_module(&ctx, module.op());
+    let files = module.op().display(&ctx).to_string();
 
     let mut db = LoggingDb::default();
     let root = db.file(ROOT, INLINE);
     let (ctx, module) = compile_frontend(&db, root).expect("frontend output");
-    let inline = print_module(&ctx, module.op());
+    let inline = module.op().display(&ctx).to_string();
 
     assert_eq!(files, inline);
 }
@@ -203,7 +202,7 @@ fn the_tree_finds_the_files_under_a_module() {
         "SpanMap { files: 4, .. }"
     );
     let root_spans = format!("{:?}", tree.root().parsed.span_map(&db));
-    assert!(root_spans.starts_with("SpanMap { spans: "), "{root_spans}");
+    assert!(root_spans.starts_with("SpanMap { items: "), "{root_spans}");
 }
 
 #[test]

@@ -18,6 +18,7 @@ use crate::continuation_frame::FrameRef;
 mod effect {
     /// Allocate the runtime-unique prompt token for one dynamic handler
     /// installation. `resolve_evidence` lowers this before target lowering.
+    #[asm_format(attr_dict_bare ":" type(result))]
     fn fresh_prompt_tag() -> Value<I32> {}
 
     /// Extend the current evidence with a handler for one ability.
@@ -28,7 +29,12 @@ mod effect {
     /// - `tr_dispatch_fn`: tail-resumptive dispatch closure.
     /// - `outer`: the evidence the handler is installed on, before the
     ///   installation's selection.
+    ///
+    /// ```text
+    /// %extended = effect.extend @State %ev, %prompt, %dispatch, %ev : !Evidence
+    /// ```
     #[flags(Pure)]
+    #[asm_format(ability evidence "," prompt_tag "," tr_dispatch_fn "," outer attr_dict ":" type(result))]
     fn extend<E: Evidence>(
         ability: Attr<SymbolRef>,
         evidence: Value<E>,
@@ -41,29 +47,35 @@ mod effect {
     /// Remove the top handler of one ability from the evidence, exposing the
     /// handler it shadows.
     #[flags(Pure)]
+    #[asm_format(ability evidence attr_dict ":" type(result))]
     fn mask<E: Evidence>(ability: Attr<SymbolRef>, evidence: Value<E>) -> Value<E> {}
 
     /// Push a copy of the top handler of one ability onto the evidence.
     #[flags(Pure)]
+    #[asm_format(ability evidence attr_dict ":" type(result))]
     fn dup<E: Evidence>(ability: Attr<SymbolRef>, evidence: Value<E>) -> Value<E> {}
 
     /// The evidence the top handler of one ability was installed on.
     #[flags(Pure)]
+    #[asm_format(ability evidence attr_dict ":" type(result))]
     fn outer<E: Evidence>(ability: Attr<SymbolRef>, evidence: Value<E>) -> Value<E> {}
 
     /// The evidence of the row tail `index` of the callable that received
     /// `evidence`, or `evidence` itself when it holds no such row tail.
     #[flags(Pure)]
+    #[asm_format(evidence attr_dict_bare ":" type(result))]
     fn tail<E: Evidence>(index: Attr<u32>, evidence: Value<E>) -> Value<E> {}
 
     /// Set the evidence of the row tail `index` that a callee receives with
     /// `evidence`.
     #[flags(Pure)]
+    #[asm_format(evidence "," tail attr_dict_bare ":" type(result))]
     fn with_tail<E: Evidence>(index: Attr<u32>, evidence: Value<E>, tail: Value<E>) -> Value<E> {}
 
     /// Push the top handler that `source` holds for one ability onto
     /// `evidence`.
     #[flags(Pure)]
+    #[asm_format(ability evidence "," source attr_dict ":" type(result))]
     fn push<E: Evidence>(
         ability: Attr<SymbolRef>,
         evidence: Value<E>,
@@ -77,6 +89,11 @@ mod effect {
     /// while the backend chooses the concrete lookup and callable layout.
     /// `payload` is the packed operation argument erased to `anyref`, and the
     /// result is the operation's result erased the same way.
+    ///
+    /// ```text
+    /// %result = effect.dispatch_tail @Console @read(%payload) [%ev] : tribute_rt.anyref
+    /// ```
+    #[asm_format(ability symbol(op_name) "(" payload ")" "[" evidence "]" attr_dict ":" type(result))]
     fn dispatch_tail<E: Evidence>(
         ability: Attr<SymbolRef>,
         op_name: Attr<String>,
@@ -91,7 +108,12 @@ mod effect {
     /// types. `payload` is the single packed operation argument value, erased
     /// to `anyref`. The operation is resultless: backend lowering performs the
     /// final proper tail transfer.
+    ///
+    /// ```text
+    /// effect.dispatch_cps @State @get(%payload) [%ev, %dispatch, %resume] -> core.i32
+    /// ```
     #[implements(CallableExit)]
+    #[asm_format(ability symbol(op_name) "(" payload ")" "[" evidence "," dispatch "," resume "]" attr_dict "->" answer_type)]
     fn dispatch_cps<E: Evidence>(
         ability: Attr<SymbolRef>,
         op_name: Attr<String>,
@@ -106,6 +128,7 @@ mod effect {
     /// The evidence a computation starts on when no handler is installed
     /// around it: the root entry's, and a value delimiter's in a `Direct`
     /// flow, whose callable receives none. The target ABI boundary builds it.
+    #[asm_format(attr_dict_bare ":" type(result))]
     fn initial_evidence() -> Value<impl Evidence> {}
 
     /// Run the CPS computation `body` to completion in a flow that is not
@@ -116,6 +139,7 @@ mod effect {
     /// `core.never` result and the frame's answer; the target ABI boundary
     /// replaces the operation right after it, building the completion cell
     /// and the terminal frame.
+    #[asm_format(body "," evidence attr_dict_bare ":" type(result))]
     fn delimit<C, F: FrameRef>(body: Value<C>, evidence: Value<Evidence>) -> Value<F::Result>
     where
         C: CpsClosure<Inputs = (Evidence, F)>,
@@ -146,7 +170,6 @@ impl trunk_ir::op_interface::CallableExit for DispatchCps {
 #[cfg(test)]
 mod tests {
     use trunk_ir::ops::DialectOp;
-    use trunk_ir::printer::print_op;
     use trunk_ir::refs::PathRef;
     use trunk_ir::types::{Attribute, Location};
     use trunk_ir::{IrContext, Span};
@@ -165,7 +188,7 @@ mod tests {
         ty: trunk_ir::TypeRef,
         value: i128,
     ) -> trunk_ir::ValueRef {
-        trunk_ir::dialect::arith::Const::operands()
+        trunk_ir::dialect::arith::Constant::operands()
             .value(Attribute::Int(value))
             .results(ty)
             .build(ctx, loc)
@@ -306,7 +329,7 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_ops_round_trip_and_print_generically() {
+    fn dispatch_ops_round_trip_and_print_their_operation() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
         let anyref_ty = crate::dialect::tribute_rt::Anyref::params()
@@ -342,9 +365,10 @@ mod tests {
         assert_eq!(cps_wrapper.resume(&ctx), resume);
         assert_eq!(cps_wrapper.op_name(&ctx), "get");
 
-        let tail_printed = print_op(&ctx, tail.op_ref());
-        assert!(tail_printed.contains("effect.dispatch_tail"));
-        assert!(tail_printed.contains("ability"));
-        assert!(tail_printed.contains("op_name = \"print\""));
+        let tail_printed = tail.op_ref().display(&ctx).to_string();
+        assert!(
+            tail_printed.contains("effect.dispatch_tail @Console @print("),
+            "{tail_printed}"
+        );
     }
 }

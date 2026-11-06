@@ -144,13 +144,8 @@ fn library_module_reference(db: &dyn salsa::Database, source: SourceCst) -> Vec<
     let parsed = tribute_front::query::parsed_ast(db, source).unwrap();
     let module = parsed.module(db);
     let env = build_package_env(db, module, &PackageName::std(), &Dependencies::none());
-    let resolved = tribute_front::resolve::resolve_library_with_env(
-        db,
-        module,
-        &env,
-        &Dependencies::none(),
-        parsed.span_map(db),
-    );
+    let resolved =
+        tribute_front::resolve::resolve_library_with_env(db, module, &env, &Dependencies::none());
     let body = resolved
         .decls()
         .find_map(|decl| match decl {

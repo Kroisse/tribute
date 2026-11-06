@@ -1,0 +1,11 @@
+---
+source: tests/integration/diagnostic_snapshots.rs
+expression: result.diagnostics
+---
+- message: "`fn` handler arm for `Counter::next` cannot perform effects that suspend or abort: Stop"
+  span:
+    start: 299
+    end: 379
+    source: 9659900100624592365
+  severity: Error
+  phase: TypeChecking

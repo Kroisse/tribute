@@ -3,6 +3,7 @@
 
 use super::*;
 use tribute_ir::calling_convention::DynConventionBearing;
+use trunk_ir::op_def::OpDef;
 
 pub const PRE_CPS_BOUNDARY: &str = "tribute-control-pre-cps";
 pub const POST_CPS_BOUNDARY: &str = "tribute-control-post-cps";
@@ -84,7 +85,7 @@ pub fn tribute_control_pre_cps_target() -> ConversionTarget {
         .illegal_op(tribute_control::FuncRef::NAME)
         .illegal_op(tribute_control::CallIndirect::NAME)
         .illegal_op(tribute_control::TailCallIndirect::NAME)
-        .legal_dialect(trunk_ir::dialect::scf::DIALECT_NAME)
+        .legal_dialect(scf::DIALECT_NAME)
         .legal_dialect(trunk_ir::dialect::arith::DIALECT_NAME)
         .legal_dialect(tribute_ir::dialect::adt::DIALECT_NAME)
         .legal_dialect(tribute_ir::dialect::list::DIALECT_NAME)
@@ -308,7 +309,7 @@ fn enclosing_func_result(ctx: &IrContext, op: OpRef) -> Option<TypeRef> {
             let ty = function.r#type(ctx);
             return func::FuncSig::from_type_ref(ctx, ty)?.single_result(ctx);
         }
-        if ctx.op(owner).name.dialect(ctx) != trunk_ir::dialect::scf::DIALECT_NAME {
+        if ctx.op(owner).name.dialect(ctx) != scf::DIALECT_NAME {
             return None;
         }
         current = owner;
@@ -483,8 +484,11 @@ pub(super) fn verify_source_conversion_shapes(
         }
     }
 
+    fn satisfies_definition(ctx: &IrContext, op: OpRef) -> bool {
+        OpDef::of(ctx, op).is_none_or(|def| def.verify(ctx, op).is_empty())
+    }
+
     fn visit(ctx: &IrContext, op: OpRef, failures: &mut Vec<BoundaryFailure>) {
-        let data = ctx.op(op);
         if ctx.op_has_successors(op) {
             failures.push(failure(
                 ctx,
@@ -492,58 +496,19 @@ pub(super) fn verify_source_conversion_shapes(
                 "tribute-control-pre-cps is structured and forbids block successors",
             ));
         }
-        if data.name.is(ctx, "scf.switch") {
-            let body_region =
-                ctx.op_regions(op).exactly_one().ok().filter(|_| {
-                    ctx.op_operands(op).len() == 1 && ctx.op_result_types(op).is_empty()
-                });
-            if let Some(body_region) = body_region {
-                let blocks = &ctx.region(body_region).blocks;
-                if let [body] = blocks.as_slice() {
-                    for arm in ctx.block(*body).ops.iter().copied() {
-                        let arm_data = ctx.op(arm);
-                        let is_case = arm_data.name.is(ctx, "scf.case");
-                        let is_default = arm_data.name.is(ctx, "scf.default");
-                        if !is_case && !is_default {
-                            failures.push(failure(
-                                ctx,
-                                arm,
-                                "scf.switch body may contain only scf.case and scf.default",
-                            ));
-                            continue;
-                        }
-                        if is_case && !ctx.op_attrs(arm).contains_key("value") {
-                            failures.push(failure(ctx, arm, "scf.case requires a value attribute"));
-                        }
-                        if let Ok(region) = ctx.op_regions(arm).exactly_one() {
-                            if ctx.region(region).blocks.len() != 1 {
-                                failures.push(failure(
-                                    ctx,
-                                    arm,
-                                    "scf switch arm region requires exactly one block",
-                                ));
-                            }
-                        } else {
-                            failures.push(failure(
-                                ctx,
-                                arm,
-                                "scf switch arm requires exactly one region",
-                            ));
-                        }
-                    }
-                } else {
+        // `validate_all` reports an operation that breaks its definition; the
+        // rules below read only well-formed ones.
+        if let Ok(switch) = scf::IndexSwitch::from_op(ctx, op)
+            && satisfies_definition(ctx, op)
+        {
+            for region in switch.arm_regions(ctx) {
+                if ctx.region(region).blocks.len() != 1 {
                     failures.push(failure(
                         ctx,
                         op,
-                        "scf.switch body region requires exactly one block",
+                        "scf.index_switch region requires exactly one block",
                     ));
                 }
-            } else {
-                failures.push(failure(
-                    ctx,
-                    op,
-                    "scf.switch requires one discriminant, no results, and one body region",
-                ));
             }
         }
         for region in ctx.op_regions(op) {

@@ -744,7 +744,6 @@ mod tests {
     use trunk_ir::Span;
     use trunk_ir::dialect::wasm_gc;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
     use trunk_ir::refs::PathRef;
     use trunk_ir::rewrite::LegalityCheck;
 
@@ -854,7 +853,7 @@ mod tests {
             r#"core.module @test {
   wasm.memory {min = 1, max = 0, shared = false, memory64 = false}
   func.func @run() -> core.i32 {
-    %value = arith.const {value = 1} : core.i32
+    %value = arith.constant 1 : core.i32
     func.return %value
   }
 }"#,
@@ -945,7 +944,7 @@ mod tests {
             .build(&mut ctx, location);
         ctx.push_op(module_block, memory_func.op_ref());
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert_eq!(output.matches("wasm.memory").count(), 1, "{output}");
         assert_eq!(output.matches("wasm.export_memory").count(), 1, "{output}");
 
@@ -1042,7 +1041,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.func @main() -> core.nil {
-    %value = arith.const {value = 1} : core.i32
+    %value = arith.constant 1 : core.i32
     wasm.return
   }
 }"#,
@@ -1058,7 +1057,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @run(%ev: wasm.arrayref, %payload: wasm.anyref) -> wasm.anyref {
-    %result = effect.dispatch_tail %ev, %payload {ability = @Console, op_name = "read"} : wasm.anyref
+    %result = effect.dispatch_tail @Console @read(%payload) [%ev] : wasm.anyref
     func.return %result
   }
 }"#,
@@ -1080,7 +1079,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @run() -> core.i32 {
-    %value = arith.const {value = 1} : core.i32
+    %value = arith.constant 1 : core.i32
     func.return %value
   }
 }"#,
@@ -1097,7 +1096,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.func @main(%x: core.i32) -> core.i64 {
-    %r = core.unrealized_conversion_cast %x : core.i64
+    %r = core.unrealized_conversion_cast %x : core.i32 to core.i64
     wasm.return %r
   }
 }"#,
@@ -1156,16 +1155,16 @@ mod tests {
             r#"core.module @test {
   func.func @main(%bytes: core.bytes, %cond: core.i1) -> core.nil {
     %write = tribute_io.write %bytes, %cond : core.nil
-    %never = scf.if %cond : core.never {
+    %never = scf.if %cond -> (core.never) {
       func.unreachable
-    } {
+    } else {
       func.unreachable
     }
     func.return %never
   }
 }"#,
         );
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
         let error = lower_to_wasm(&mut ctx, module, &mut Default::default())
             .expect_err("used Never must reject");
         assert_eq!(error.pass_name(), "check-lowerable-structured-control");
@@ -1174,7 +1173,7 @@ mod tests {
             error.to_string().contains("Never control requires"),
             "{error}"
         );
-        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
     }
 
     #[test]
@@ -1185,15 +1184,14 @@ mod tests {
             r#"core.module @test {
   func.func @main(%bytes: core.bytes, %newline: core.i1, %choice: core.i16) -> core.nil {
     %write = tribute_io.write %bytes, %newline : core.nil
-    scf.switch %choice {
-      scf.case {value = 0} { scf.yield }
-      scf.default { scf.yield }
-    }
+    scf.index_switch %choice : (core.i16) -> ()
+    case 0 { scf.yield }
+    default { scf.yield }
     func.return
   }
 }"#,
         );
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
         assert!(before.contains("tribute_io.write"), "{before}");
 
         let error = lower_to_wasm(&mut ctx, module, &mut Default::default())
@@ -1207,7 +1205,7 @@ mod tests {
             ),
             "{error}"
         );
-        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_eq!(module.op().display(&ctx).to_string(), before);
     }
 
     #[test]
@@ -1230,7 +1228,7 @@ mod tests {
         lower_to_wasm(&mut ctx, module, &mut Default::default())
             .expect("module with output and constants should lower to wasm");
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert_eq!(output.matches("wasm.import_func").count(), 1, "{output}");
         assert_eq!(output.matches("wasm.memory {").count(), 1, "{output}");
         assert_eq!(output.matches("wasm.export_memory").count(), 1, "{output}");

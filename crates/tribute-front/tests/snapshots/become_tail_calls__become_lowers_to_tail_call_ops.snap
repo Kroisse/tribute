@@ -1,6 +1,5 @@
 ---
 source: crates/tribute-front/tests/become_tail_calls.rs
-assertion_line: 64
 expression: "run_ast_pipeline_with_ir(db, source)"
 ---
 core.module @test {
@@ -12,71 +11,71 @@ core.module @test {
   tribute_control.func @"std::Int::-"(%arg0: core.i32, %arg1: core.i32) -> core.i32
   tribute_control.func @"std::Int::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32
   tribute_control.func @"pkg::sum"['a0](%0: core.i32, %1: core.i32) -> core.i32 row(| 'a0) inferred {
-      %2 = arith.const {value = 0} : core.i32
-      %3 = tribute_control.call %0, %2 {callee = @"std::Int::=="} : core.i1
-      %4 = arith.const {value = true} : core.i1
-      %5 = arith.cmpi %3, %4 {predicate = "eq"} : core.i1
-      %6 = scf.if %5 : core.i32 {
+      %2 = arith.constant 0 : core.i32
+      %3 = tribute_control.call @"std::Int::=="(%0, %2) : (core.i32, core.i32) -> core.i1
+      %4 = arith.constant true : core.i1
+      %5 = arith.cmpi eq, %3, %4 : core.i1
+      %6 = scf.if %5 -> (core.i32) {
           scf.yield %1
-      } {
-          %7 = arith.const {value = 1} : core.i32
-          %8 = tribute_control.call %0, %7 {callee = @"std::Int::-"} : core.i32
-          %9 = arith.const {value = 1} : core.i32
-          %10 = tribute_control.call %1, %9 {callee = @"std::Int::+"} : core.i32
-          tribute_control.tail_call %8, %10 {callee = @"pkg::sum", row_args = [{tail = 0}]}
+      } else {
+          %7 = arith.constant 1 : core.i32
+          %8 = tribute_control.call @"std::Int::-"(%0, %7) : (core.i32, core.i32) -> core.i32
+          %9 = arith.constant 1 : core.i32
+          %10 = tribute_control.call @"std::Int::+"(%1, %9) : (core.i32, core.i32) -> core.i32
+          tribute_control.tail_call @"pkg::sum"(%8, %10) attributes {row_args = [{tail = 0}]} : (core.i32, core.i32) -> ()
       }
       tribute_control.return %6
   }
   tribute_control.func @"pkg::is_even"['a0](%0: core.i32) -> core.i1 row(| 'a0) inferred {
-      %1 = arith.const {value = 0} : core.i32
-      %2 = tribute_control.call %0, %1 {callee = @"std::Int::=="} : core.i1
-      %3 = arith.const {value = true} : core.i1
-      %4 = arith.cmpi %2, %3 {predicate = "eq"} : core.i1
-      %5 = scf.if %4 : core.i1 {
-          %6 = arith.const {value = true} : core.i1
+      %1 = arith.constant 0 : core.i32
+      %2 = tribute_control.call @"std::Int::=="(%0, %1) : (core.i32, core.i32) -> core.i1
+      %3 = arith.constant true : core.i1
+      %4 = arith.cmpi eq, %2, %3 : core.i1
+      %5 = scf.if %4 -> (core.i1) {
+          %6 = arith.constant true : core.i1
           scf.yield %6
-      } {
-          %7 = arith.const {value = 1} : core.i32
-          %8 = tribute_control.call %0, %7 {callee = @"std::Int::-"} : core.i32
-          tribute_control.tail_call %8 {callee = @"pkg::is_odd", row_args = [{tail = 0}]}
+      } else {
+          %7 = arith.constant 1 : core.i32
+          %8 = tribute_control.call @"std::Int::-"(%0, %7) : (core.i32, core.i32) -> core.i32
+          tribute_control.tail_call @"pkg::is_odd"(%8) attributes {row_args = [{tail = 0}]} : (core.i32) -> ()
       }
       tribute_control.return %5
   }
   tribute_control.func @"pkg::is_odd"['a0](%0: core.i32) -> core.i1 row(| 'a0) inferred {
-      %1 = arith.const {value = 0} : core.i32
-      %2 = tribute_control.call %0, %1 {callee = @"std::Int::=="} : core.i1
-      %3 = arith.const {value = true} : core.i1
-      %4 = arith.cmpi %2, %3 {predicate = "eq"} : core.i1
-      %5 = scf.if %4 : core.i1 {
-          %6 = arith.const {value = false} : core.i1
+      %1 = arith.constant 0 : core.i32
+      %2 = tribute_control.call @"std::Int::=="(%0, %1) : (core.i32, core.i32) -> core.i1
+      %3 = arith.constant true : core.i1
+      %4 = arith.cmpi eq, %2, %3 : core.i1
+      %5 = scf.if %4 -> (core.i1) {
+          %6 = arith.constant false : core.i1
           scf.yield %6
-      } {
-          %7 = arith.const {value = 1} : core.i32
-          %8 = tribute_control.call %0, %7 {callee = @"std::Int::-"} : core.i32
-          tribute_control.tail_call %8 {callee = @"pkg::is_even", row_args = [{tail = 0}]}
+      } else {
+          %7 = arith.constant 1 : core.i32
+          %8 = tribute_control.call @"std::Int::-"(%0, %7) : (core.i32, core.i32) -> core.i32
+          tribute_control.tail_call @"pkg::is_even"(%8) attributes {row_args = [{tail = 0}]} : (core.i32) -> ()
       }
       tribute_control.return %5
   }
   tribute_control.func @"pkg::apply"['a0](%0: !t0, %1: core.i32) -> core.i32 row(| 'a0) {
-      tribute_control.tail_call_indirect %0, %1
+      tribute_control.tail_call_indirect %0(%1) : (core.i32) -> core.i32 row(| 'a0)
   }
   tribute_control.func @"pkg::countdown"['a0, local 'a1](%0: core.i32) -> core.i32 row(| 'a0) inferred {
       %1 = tribute_control.lambda['a1](%2: core.i32) -> core.i32 row(| 'a1) captures [] {
-          %3 = arith.const {value = 0} : core.i32
-          %4 = tribute_control.call %2, %3 {callee = @"std::Int::=="} : core.i1
-          %5 = arith.const {value = true} : core.i1
-          %6 = arith.cmpi %4, %5 {predicate = "eq"} : core.i1
-          %7 = scf.if %6 : core.i32 {
+          %3 = arith.constant 0 : core.i32
+          %4 = tribute_control.call @"std::Int::=="(%2, %3) : (core.i32, core.i32) -> core.i1
+          %5 = arith.constant true : core.i1
+          %6 = arith.cmpi eq, %4, %5 : core.i1
+          %7 = scf.if %6 -> (core.i32) {
               scf.yield %2
-          } {
-              %8 = arith.const {value = 1} : core.i32
-              %9 = tribute_control.call %2, %8 {callee = @"std::Int::-"} : core.i32
-              tribute_control.tail_call %9 {callee = @"pkg::countdown", row_args = [{tail = 1}]}
+          } else {
+              %8 = arith.constant 1 : core.i32
+              %9 = tribute_control.call @"std::Int::-"(%2, %8) : (core.i32, core.i32) -> core.i32
+              tribute_control.tail_call @"pkg::countdown"(%9) attributes {row_args = [{tail = 1}]} : (core.i32) -> ()
           }
           tribute_control.return %7
       }
       %10 = tribute_control.instantiate %1 {row_args = [{tail = 0}]} : !t0
-      %11 = tribute_control.call_indirect %10, %0 : core.i32
+      %11 = tribute_control.call_indirect %10(%0) : (core.i32) -> core.i32 row(| 'a0)
       tribute_control.return %11
   }
 }

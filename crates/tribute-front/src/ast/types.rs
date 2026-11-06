@@ -59,10 +59,8 @@ pub enum UniVarSource<'db> {
 #[salsa::interned(debug)]
 pub struct UniVarId<'db> {
     /// The source of this type variable.
-    #[returns(copy)]
     pub source: UniVarSource<'db>,
     /// Index within the type scheme's parameters (0, 1, 2, ...).
-    #[returns(copy)]
     pub index: u32,
 }
 
@@ -93,11 +91,13 @@ pub enum TypeKind<'db> {
     /// Index 0 refers to the innermost binder, following De Bruijn convention.
     BoundVar { index: u32 },
 
-    /// Type variable quantified by a local `let` binding.
+    /// Body-local existential type variable: one that a function body uses
+    /// but that neither its signature nor a retained relation names. `scope`
+    /// is the function that owns it.
     ///
-    /// Local binders have no enclosing `TypeScheme`, so their owner must remain
-    /// part of typed-body metadata instead of being confused with a function
-    /// scheme's `BoundVar`.
+    /// It has no enclosing `TypeScheme`, so its owner must remain part of
+    /// typed-body metadata instead of being confused with a function scheme's
+    /// `BoundVar`.
     LocalBoundVar { scope: NodeId, index: u32 },
 
     /// Unification variable (unknown during inference).
@@ -198,18 +198,13 @@ pub struct TypeScheme<'db> {
     /// Type parameters (universally quantified).
     ///
     /// The order matters: `type_params[0]` corresponds to `BoundVar { index: 0 }`.
-    #[returns(deref)]
     pub type_params: Vec<TypeParam>,
     /// Ability-row variables quantified by this scheme.
-    #[returns(deref)]
     pub effect_params: Vec<RowVar>,
     /// Retained exact effect unions, quantified together with the body.
-    #[returns(deref)]
     pub row_unions: Vec<RowUnion<'db>>,
-    #[returns(deref)]
     pub row_removals: Vec<RowRemoval<'db>>,
     /// The body type with BoundVar references to type_params.
-    #[returns(copy)]
     pub body: Type<'db>,
 }
 
@@ -283,7 +278,7 @@ impl<'db> TypeScheme<'db> {
             effect_params: Cow::Borrowed(self.effect_params(db)),
             row_unions: Cow::Borrowed(self.row_unions(db)),
             row_removals: Cow::Borrowed(self.row_removals(db)),
-            body: self.body(db),
+            body: *self.body(db),
         }
     }
 
@@ -384,13 +379,12 @@ impl TypeParam {
 #[salsa::interned(debug)]
 pub struct AbilityRow<'db> {
     /// The ability instances the row names.
-    #[returns(deref)]
     pub instances: Vec<AbilityInstance<'db>>,
     /// The row variable of an open row.
     ///
     /// If Some, the row may hold further unknown instances.
     /// If None, the row is closed: exactly the listed instances.
-    #[returns(copy)]
+    #[returns(as_ref)]
     pub rest: Option<RowVar>,
 }
 
@@ -408,6 +402,15 @@ impl<'db> AbilityRow<'db> {
     /// Create an open row variable (unknown effects).
     pub fn open(db: &'db dyn salsa::Database, var: RowVar) -> Self {
         Self::new(db, Vec::new(), Some(var))
+    }
+
+    /// The row that names `instances` and keeps this row's tail.
+    pub fn with_instances(
+        self,
+        db: &'db dyn salsa::Database,
+        instances: Vec<AbilityInstance<'db>>,
+    ) -> Self {
+        Self::new(db, instances, self.rest(db).copied())
     }
 
     /// Check if this row is pure (no effects and closed).
@@ -448,9 +451,9 @@ pub fn collect_row_vars<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> Vec
         fn visit_row(&mut self, row: AbilityRow<'db>) -> ControlFlow<Infallible> {
             row.super_visit_with(self)?;
             if let Some(var) = row.rest(self.db)
-                && !self.vars.contains(&var)
+                && !self.vars.contains(var)
             {
-                self.vars.push(var);
+                self.vars.push(*var);
             }
             ControlFlow::Continue(())
         }

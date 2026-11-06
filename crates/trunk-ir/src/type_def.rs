@@ -164,22 +164,18 @@ mod tests {
     }
 
     impl crate::asm_format::TypeAsmFormat for Custom {
-        fn print(&self, h: &mut crate::printer::TypePrintHelper<'_, '_>) -> std::fmt::Result {
+        fn print(&self, p: &mut crate::printer::AsmPrinter<'_>) -> std::fmt::Result {
             use std::fmt::Write;
-            h.write_str("type_hooks_test.custom<!>")
+            p.write_str("type_hooks_test.custom<!>")
         }
 
-        fn parse<'a>(
-            input: &mut &'a str,
-            name: &'a str,
-        ) -> winnow::ModalResult<crate::parser::raw::RawType<'a>> {
-            use winnow::prelude::*;
-            "!>".parse_next(input)?;
-            Ok(crate::parser::raw::RawType::Concrete {
-                name,
-                params: Vec::new(),
-                attrs: Default::default(),
-            })
+        fn parse(
+            p: &mut crate::parser::AsmParser<'_>,
+            name: &str,
+        ) -> crate::parser::ParseResult<Option<crate::TypeRef>> {
+            p.parse_punct("!")?;
+            p.parse_punct(">")?;
+            p.build_type(name, Vec::new(), Default::default()).map(Some)
         }
     }
 
@@ -233,20 +229,9 @@ mod tests {
         assert!(Checked::from_type_ref(&ctx, good).is_some());
 
         let ty = crate::TypeDataBuilder::new(Custom::NAME).intern(&mut ctx);
-        assert_eq!(
-            crate::printer::print_type(&ctx, ty),
-            "type_hooks_test.custom<!>"
-        );
-        let mut input = "type_hooks_test.custom<!>";
-        let raw = crate::parser::raw::raw_type(&mut input).unwrap();
-        assert!(input.is_empty());
-        assert!(matches!(
-            raw,
-            crate::parser::raw::RawType::Concrete {
-                name: "type_hooks_test.custom",
-                ..
-            }
-        ));
+        assert_eq!(ty.display(&ctx).to_string(), "type_hooks_test.custom<!>");
+        let parsed = crate::parser::parse_type(&mut ctx, "type_hooks_test.custom<!>").unwrap();
+        assert_eq!(parsed, ty);
     }
 
     #[test]

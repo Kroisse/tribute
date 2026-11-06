@@ -21,7 +21,9 @@ use trunk_ir::refs::{RegionRef, ValueRef};
 use crate::calling_convention::CallingConvention;
 use crate::dialect::tribute_control::{
     self, CallableArgumentOrigin, CallableQuery, CallableResultOrigin, EvidencePlanSite,
-    EvidenceStep, FuncSig, LocalValidation, Row, RowBinder, RowUnion, ValidationError,
+    EvidenceStep, FuncSig, LocalValidation, Row, RowBinder, RowUnion, SourceCallIndirect,
+    SourceCallable, SourceFunc, SourceFuncRef, SourceLambda, SourceTailCallIndirect,
+    ValidationError,
 };
 
 /// The attribute that holds a `tribute_cps` operation's convention.
@@ -50,17 +52,20 @@ mod tribute_cps {
     ///   instance's classes (`new-plans/cps-effects.md`, "Row와 호출 규약").
     ///   The signature, row, and body keep the meaning they have on
     ///   `tribute_control.func`.
-    /// - **Verification:** the local verifier checks the convention keyword.
+    /// - **Verification:** the schema checks the convention keyword.
     ///   Otherwise as `tribute_control.func`.
     /// - **Ownership and value flow:** as `tribute_control.func`.
     /// - **Symbol:** as `tribute_control.func`.
+    /// - **Signature:** a `SourceCallable` whose signature is `type`.
+    /// - **Flags:** `SourceFunc`, shared with `tribute_control.func`.
     /// - **Location:** the source function's span.
     #[verify]
     #[asm_format]
-    #[flags(IsolatedFromAbove)]
+    #[flags(IsolatedFromAbove, SourceFunc)]
     #[implements(
         CallableArgumentOrigin,
         LocalValidation,
+        SourceCallable,
         trunk_ir::op_interface::SymbolDefinition
     )]
     fn func<S: FuncSig>(
@@ -69,7 +74,7 @@ mod tribute_cps {
         convention: Attr<CallingConvention>,
         row_binders: Option<Attr<[RowBinder]>>,
         row_unions: Option<Attr<[RowUnion]>>,
-        inferred_row: Option<Attr<bool>>,
+        #[default(false)] inferred_row: Attr<bool>,
     ) {
         #[region(body?)]
         {}
@@ -108,11 +113,18 @@ mod tribute_cps {
     ///   Otherwise as `tribute_control.lambda`, for each body.
     /// - **Ownership and value flow:** as `tribute_control.lambda`; the
     ///   captures are shared by every body.
+    /// - **Signature:** a `SourceCallable` whose signature is its result type.
+    /// - **Flags:** `SourceLambda`, shared with `tribute_control.lambda`.
     /// - **Location:** the source lambda's span.
     #[verify]
     #[asm_format]
-    #[flags(Pure)]
-    #[implements(CallableResultOrigin, CallableArgumentOrigin, LocalValidation)]
+    #[flags(Pure, SourceLambda)]
+    #[implements(
+        CallableResultOrigin,
+        CallableArgumentOrigin,
+        LocalValidation,
+        SourceCallable
+    )]
     fn lambda(
         conventions: Attr<[CallingConvention]>,
         quantified_rows: Option<Attr<[u32]>>,
@@ -129,23 +141,24 @@ mod tribute_cps {
     /// %f = tribute_cps.func_ref @"id$9e$8" : !Callable
     /// ```
     ///
-    /// - **Shape:** `tribute_control.func_ref` whose `func_ref` names a
+    /// - **Shape:** `tribute_control.func_ref` whose `value` names a
     ///   `tribute_cps.func_table` instead of a function.
     /// - **Meaning:** the callable value whose convention entries are the
     ///   table's. References that share a table share its entries.
     /// - **Verification:** the local verifier checks the attributes.
-    ///   Whole-IR verification checks that `func_ref` names a
+    ///   Whole-IR verification checks that `value` names a
     ///   `tribute_cps.func_table` of the reference's own module by one name,
     ///   and checks the source signature against each of its targets as for
     ///   `tribute_control.func_ref`. Legalization builds the table's entries
     ///   in that module.
     /// - **Ownership and value flow:** the result is an ordinary SSA value.
+    /// - **Flags:** `SourceFuncRef`, shared with `tribute_control.func_ref`.
     /// - **Location:** the source reference span.
     #[verify]
-    #[asm_format(func_ref ("rows" row_args^)? ":" type(result))]
-    #[flags(Pure)]
+    #[asm_format(value ("rows" row_args^)? ":" type(result))]
+    #[flags(Pure, SourceFuncRef)]
     #[implements(CallableResultOrigin)]
-    fn func_ref(func_ref: Attr<SymbolRef>, row_args: Option<Attr<[Row]>>) -> Value<impl FuncSig> {}
+    fn func_ref(value: Attr<SymbolRef>, row_args: Option<Attr<[Row]>>) -> Value<impl FuncSig> {}
 
     /// The convention table of a named function for one set of class
     /// arguments, with a target instance per convention its row reads.
@@ -199,7 +212,7 @@ mod tribute_cps {
     /// An indirect call through one convention.
     ///
     /// ```text
-    /// %result = tribute_cps.call_indirect %callee, %arg0, ... {convention = "direct"} : Result
+    /// %result = tribute_cps.call_indirect %callee(%arg0, ...) attributes {convention = "direct"} : (Arg0, ...) -> Result
     /// ```
     ///
     /// - **Shape:** `tribute_control.call_indirect` with a required
@@ -207,11 +220,14 @@ mod tribute_cps {
     /// - **Meaning:** calls the callee's convention entry of `convention`,
     ///   which class specialization computed from the callee type's row
     ///   with the enclosing instance's classes.
-    /// - **Verification:** the local verifier checks the convention keyword.
+    /// - **Verification:** the schema checks the convention keyword.
     ///   Otherwise as `tribute_control.call_indirect`.
     /// - **Ownership and value flow:** as `tribute_control.call_indirect`.
+    /// - **Flags:** `SourceCallIndirect`, shared with `tribute_control.call_indirect`.
     /// - **Location:** the source indirect-call span.
     #[verify]
+    #[asm_format(callee "(" args ")" attr_dict ":" signature(callee))]
+    #[flags(SourceCallIndirect)]
     #[implements(CallableResultOrigin)]
     fn call_indirect<S: FuncSig>(
         convention: Attr<CallingConvention>,
@@ -224,7 +240,7 @@ mod tribute_cps {
     /// A proper tail call of a callable value through one convention.
     ///
     /// ```text
-    /// tribute_cps.tail_call_indirect %callee, %arg0, ... {convention = "cps"}
+    /// tribute_cps.tail_call_indirect %callee(%arg0, ...) attributes {convention = "cps"} : (Arg0, ...) -> Result
     /// ```
     ///
     /// - **Shape:** `tribute_control.tail_call_indirect` with a required
@@ -232,13 +248,17 @@ mod tribute_cps {
     /// - **Placement:** as `tribute_control.tail_call`.
     /// - **Meaning:** a proper tail call of the callee's convention entry of
     ///   `convention`.
-    /// - **Verification:** the local verifier checks the convention keyword,
-    ///   and that `convention` is not stronger than the enclosing callable's.
+    /// - **Verification:** the schema checks the convention keyword, and the
+    ///   local verifier that `convention` is not stronger than the enclosing
+    ///   callable's.
     ///   Otherwise as `tribute_control.tail_call_indirect`.
     /// - **Ownership and value flow:** as
     ///   `tribute_control.tail_call_indirect`.
+    /// - **Flags:** `SourceTailCallIndirect`, shared with `tribute_control.tail_call_indirect`.
     /// - **Location:** the source span including the `become` keyword.
     #[verify]
+    #[asm_format(callee "(" args ")" attr_dict ":" signature(callee))]
+    #[flags(SourceTailCallIndirect)]
     #[implements(CallableExit, LocalValidation)]
     fn tail_call_indirect<S: FuncSig>(
         convention: Attr<CallingConvention>,
@@ -248,11 +268,6 @@ mod tribute_cps {
     ) {
     }
 }
-
-/// Why a `tribute_cps` operation's convention is not one.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, derive_more::Display, derive_more::Error)]
-#[display("`convention` must be one of \"direct\", \"evidence_direct\", and \"cps\"")]
-pub struct MalformedConvention;
 
 /// The convention `op` declares, when it is a `tribute_cps` operation with a
 /// valid one. A `tribute_cps.lambda` declares one per body instead; see
@@ -322,7 +337,7 @@ pub fn table_entries(
 pub fn func_ref_table(ctx: &IrContext, op: trunk_ir::refs::OpRef) -> Option<trunk_ir::refs::OpRef> {
     let name = FuncRef::from_op(ctx, op)
         .ok()?
-        .func_ref(ctx)
+        .value(ctx)
         .as_simple()?
         .clone();
     let mut current = op;
@@ -434,19 +449,8 @@ pub fn replace_control_op(
     replacement
 }
 
-fn verify_convention(
-    ctx: &IrContext,
-    op: trunk_ir::refs::OpRef,
-) -> Result<(), trunk_ir::ops::VerificationError> {
-    match declared_convention(ctx, op) {
-        Some(_) => Ok(()),
-        None => Err(MalformedConvention.into()),
-    }
-}
-
 impl trunk_ir::ops::Verify for Func {
     fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
-        verify_convention(ctx, self.op_ref())?;
         Ok(tribute_control::verify_row_declarations(
             ctx,
             self.op_ref(),
@@ -480,7 +484,6 @@ impl trunk_ir::ops::Verify for FuncTable {
 
 impl trunk_ir::ops::Verify for CallIndirect {
     fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
-        verify_convention(ctx, self.op_ref())?;
         Ok(tribute_control::verify_evidence_plan(
             ctx,
             self.op_ref(),
@@ -491,7 +494,6 @@ impl trunk_ir::ops::Verify for CallIndirect {
 
 impl trunk_ir::ops::Verify for TailCallIndirect {
     fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
-        verify_convention(ctx, self.op_ref())?;
         tribute_control::verify_resolved_types(ctx, self.op_ref())?;
         Ok(tribute_control::verify_evidence_plan(
             ctx,
@@ -502,43 +504,46 @@ impl trunk_ir::ops::Verify for TailCallIndirect {
 }
 
 impl trunk_ir::asm_format::OpAsmFormat for Func {
-    fn print(&self, h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>) -> std::fmt::Result {
-        match declared_convention(h.ctx(), self.op_ref()) {
+    fn print(&self, p: &mut trunk_ir::printer::OpAsmPrinter<'_>) -> std::fmt::Result {
+        match declared_convention(p.ctx(), self.op_ref()) {
             Some(convention) => {
-                tribute_control::print_func(h, self.op_ref(), "tribute_cps.func", Some(convention))
+                tribute_control::print_func(p, self.op_ref(), "tribute_cps.func", Some(convention))
             }
-            None => h.print_generic(self.op_ref()),
+            None => p.print_generic(self.op_ref()),
         }
     }
 
-    fn parse<'a>(
-        input: &mut &'a str,
-        results: Vec<&'a str>,
-        sym_name: Option<String>,
-    ) -> winnow::ModalResult<trunk_ir::parser::raw::RawOperation<'a>> {
-        tribute_control::parse_func(input, results, sym_name, "tribute_cps.func", true)
+    fn parse(
+        p: &mut trunk_ir::parser::OpAsmParser<'_>,
+        state: &mut trunk_ir::parser::OperationState,
+    ) -> trunk_ir::parser::ParseResult<()> {
+        tribute_control::parse_func(p, state, true)
     }
 }
 
 impl trunk_ir::asm_format::OpAsmFormat for Lambda {
-    fn print(&self, h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>) -> std::fmt::Result {
-        match body_conventions(h.ctx(), self.op_ref()) {
+    fn print(&self, p: &mut trunk_ir::printer::OpAsmPrinter<'_>) -> std::fmt::Result {
+        match body_conventions(p.ctx(), self.op_ref()) {
             Some(conventions) => tribute_control::print_lambda(
-                h,
+                p,
                 self.op_ref(),
                 "tribute_cps.lambda",
                 Some(&conventions),
             ),
-            None => h.print_generic(self.op_ref()),
+            None => p.print_generic(self.op_ref()),
         }
     }
 
-    fn parse<'a>(
-        input: &mut &'a str,
-        results: Vec<&'a str>,
-        sym_name: Option<String>,
-    ) -> winnow::ModalResult<trunk_ir::parser::raw::RawOperation<'a>> {
-        tribute_control::parse_lambda(input, results, sym_name, "tribute_cps.lambda", true)
+    fn assign_names(&self, namer: &mut trunk_ir::printer::AsmNamer<'_>) {
+        let entries = body_conventions(namer.ctx(), self.op_ref()).is_some();
+        tribute_control::assign_lambda_names(namer, self.op_ref(), entries);
+    }
+
+    fn parse(
+        p: &mut trunk_ir::parser::OpAsmParser<'_>,
+        state: &mut trunk_ir::parser::OperationState,
+    ) -> trunk_ir::parser::ParseResult<()> {
+        tribute_control::parse_lambda(p, state, true)
     }
 }
 
@@ -556,6 +561,18 @@ impl trunk_ir::op_interface::SymbolDefinition for Func {
 impl trunk_ir::op_interface::SymbolDefinition for FuncTable {
     fn is_declaration(&self, _ctx: &IrContext) -> bool {
         false
+    }
+}
+
+impl SourceCallable for Func {
+    fn callable_signature(&self, ctx: &IrContext) -> Option<trunk_ir::refs::TypeRef> {
+        ctx.op_attrs(self.op_ref()).get_type("type")
+    }
+}
+
+impl SourceCallable for Lambda {
+    fn callable_signature(&self, ctx: &IrContext) -> Option<trunk_ir::refs::TypeRef> {
+        ctx.op_result_types(self.op_ref()).first().copied()
     }
 }
 
@@ -586,7 +603,7 @@ impl CallableArgumentOrigin for Func {
         argument: ValueRef,
         _query: &mut CallableQuery<'q>,
     ) -> bool {
-        let signature = ctx.op_attrs(self.op_ref()).get_type("type");
+        let signature = self.callable_signature(ctx);
         tribute_control::is_signature_parameter(
             ctx,
             self.op_ref(),
@@ -618,7 +635,7 @@ impl CallableArgumentOrigin for Lambda {
         argument: ValueRef,
         _query: &mut CallableQuery<'q>,
     ) -> bool {
-        let signature = ctx.op_result_types(self.op_ref()).first().copied();
+        let signature = self.callable_signature(ctx);
         tribute_control::is_signature_parameter(
             ctx,
             self.op_ref(),
@@ -638,7 +655,7 @@ impl CallableResultOrigin for FuncRef {
         query: &mut CallableQuery<'q>,
     ) -> bool {
         ctx.op_attrs(self.op_ref())
-            .get_symbol_ref("func_ref")
+            .get_symbol_ref("value")
             .is_some_and(|symbol| query.names_verified_table(ctx, self.op_ref(), symbol))
     }
 }

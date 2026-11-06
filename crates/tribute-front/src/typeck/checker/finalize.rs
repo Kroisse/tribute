@@ -63,8 +63,8 @@ pub(super) struct Substitution<'a, 'db> {
 
 impl<'db> Substitution<'_, 'db> {
     /// Resolve `ty` and turn its remaining variables into the function's
-    /// binders: interface variables become `BoundVar`, variables of a local
-    /// generalized scheme become `LocalBoundVar`.
+    /// binders: interface variables become `BoundVar`, body-local existentials
+    /// become `LocalBoundVar`.
     pub(super) fn apply(&self, ty: Type<'db>) -> Type<'db> {
         let substituted = self.type_subst.apply_with_rows(self.db, ty, self.row_subst);
         self.type_subst.apply_generalization_with_local_vars(

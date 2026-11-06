@@ -9,7 +9,7 @@ use salsa::Database;
 use tribute::TributeDatabaseImpl;
 
 /// Examples that must fail, each with a message its diagnostics contain.
-const EXPECTED_FAILURES: &[(&str, &str)] = &[
+pub(crate) const EXPECTED_FAILURES: &[(&str, &str)] = &[
     // The canonical invalid example.
     (
         "invalid_unresolved_name.trb",
@@ -26,7 +26,7 @@ const EXPECTED_FAILURES: &[(&str, &str)] = &[
     ),
 ];
 
-fn examples(dir: &Path, root: &Path, out: &mut Vec<PathBuf>) {
+pub(crate) fn examples(dir: &Path, root: &Path, out: &mut Vec<PathBuf>) {
     for entry in std::fs::read_dir(dir).expect("lang-examples directory") {
         let path = entry.expect("directory entry").path();
         if path.is_dir() {
@@ -48,11 +48,11 @@ fn examples(dir: &Path, root: &Path, out: &mut Vec<PathBuf>) {
 
 fn frontend_messages(path: &Path) -> Vec<String> {
     let db = TributeDatabaseImpl::default();
-    let source = db.input(path.to_path_buf()).expect("example source");
+    let &source = db.input(path.to_path_buf()).expect("example source");
     db.attach(|db| {
         tribute::pipeline::frontend_diagnostics(db, source)
             .into_iter()
-            .map(|diagnostic| diagnostic.inner.message.clone())
+            .map(|diagnostic| diagnostic.message.to_owned())
             .collect()
     })
 }

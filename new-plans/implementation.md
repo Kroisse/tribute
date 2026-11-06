@@ -464,9 +464,11 @@ operation 호출 지점은 continuation을 capture하지 않는다.
 ### Operation kind와 dispatch
 
 `fn` operation은 pre-CPS frontend IR에서
-`tribute_control.perform { operation_kind = "fn" }`이다. Shared CPS conversion은
-continuation을 capture하지 않고 `ability.call`을 만든다. Shared dispatch lowering이
-이를 `effect.dispatch_tail`로 바꾸고 target이 evidence lookup과 ordinary indirect
+`operation_kind`가 `fn`인
+`tribute_control.perform`(`tribute_control.perform fn @Ability @name(..)`)이다.
+Shared CPS conversion은 continuation을 capture하지 않고
+`ability.call`을 만든다. Shared dispatch lowering이 이를
+`effect.dispatch_tail`로 바꾸고 target이 evidence lookup과 ordinary indirect
 call로 내린다. 이것은 선언된 operation kind의 의미이며 body-shape optimization이
 아니다.
 
@@ -478,7 +480,7 @@ optimization도 exact callable contract, affine resume와 source operation kind�
 #### `op -> Never` 의미
 
 `-> Never`를 반환하는 operation은 source semantics상 resume할 수 없다.
-`tribute_control.handler`는 이 arm에 `resume_token`을 노출하지 않고, nested
+`tribute_control.handle`은 이 arm에 `resume_token`을 노출하지 않고, nested
 region을 포함한 arm body의 `tribute_control.resume`을 verifier가 거부한다.
 따라서 conversion은 source suffix를 캡처하지 않는다.
 Conversion은 resumption 없는 `ability.abort`를 만들고, frame 펼치기가
@@ -709,6 +711,20 @@ frontend 경계까지 전달한다. AST-to-IR은 declaration identity로 exact T
 라이브러리 source 뒤에 덧붙인 source를 패키지 `std`의 일부로 compile해, 사용자 패키지가 가리킬 수 없는 패키지 내부 항목
 (`std::runtime`)을 사용자 프로그램이 부를 수 있는 함수로 감싸 시험한다.
 
+### 출력 결정성
+
+같은 compiler binary에 같은 입력(source와 `CompilationConfig`)을 주면 target의
+representation/ABI 경계 출구의 IR text와 두 target의 산출물 바이트가 같다. 새
+database에서 compile하든, 다른 process에서 compile하든 결과는 달라지지 않는다.
+
+- Pass는 시간, 메모리 주소, thread 스케줄에 기대어 결정하지 않는다. 최적화
+  예산은 시간이 아니라 fuel이나 반복 횟수로 센다.
+- 순서 없는 컨테이너의 순회 순서는 출력에 드러내지 않는다. 그런 컨테이너를
+  출력에 반영할 때는 정렬하거나, 삽입 순서가 결정적인 컨테이너를 쓴다.
+- 병렬로 계산한 결과는 완료 순서가 아니라 정해진 순서로 합친다.
+
+다른 기계나 OS 사이의 재현성과 source 경로의 정규화는 이 계약에 포함하지 않는다.
+
 ### 파이프라인 구조
 
 직접형 callable/control부터 backend-ready 검증까지의 topology는 다음과 같다:
@@ -803,9 +819,13 @@ single instantiation.
 
 Local scopes store `TypeScheme` bindings. At each `let`, the checker solves the
 constraint prefix through that binding and separately tracks the effect of
-evaluating the right-hand side. A closed-pure evaluation generalizes type and
+evaluating the right-hand side. A closed-pure evaluation generalizes the
 ability-row variables not free in the surrounding local environment; an
-effectful evaluation stores a monomorphic scheme. Latent effects inside a
+effectful evaluation stores a monomorphic scheme. A local scheme never
+quantifies data-type variables: they stay solver variables that every use of
+the binding shares, and the function's solve fixes them. Those its uses leave
+unconstrained become body-owned existentials (`LocalBoundVar` scoped to the
+function). Latent effects inside a
 lambda's function type do not make evaluation of the lambda effectful.
 
 Constraints produced from calls, lambdas, and handler boundaries retain their
@@ -1021,13 +1041,15 @@ representation/ABI 경계)의 실패는 source 진단이 아니라 compiler 내�
   query는 서로를 순환 호출하지 않는다.
 - 같은 디렉토리를 가리키는 의존성은 같은 매니페스트 경로가 되므로 같은 query 결과,
   즉 같은 패키지 입력을 받는다.
-- 실행 파일 루트의 의존성 표는 source 파일의 경로가 아니라 그 source를 루트로
-  고른 도구가 정한다. Database마다 하나인 singleton 입력이 루트 source마다 그
-  패키지의 매니페스트 파일 입력을 가지며, 등록된 루트는 그 매니페스트의 의존성
-  표로, 등록되지 않은 루트는 암묵적 의존성 표로 분석한다. CLI는 패키지 디렉토리를
-  컴파일할 때 그 `src/main.trb`를 등록하고 source 파일 입력은 등록하지 않는다.
-  Language server는 문서가 속한 패키지의 루트를 등록한다
-  ([Language Server](lsp.md#문서가-속한-패키지)).
+- 실행 파일 루트의 의존성 표는 frontend가 source 파일의 경로로 정하지 않고, 그
+  source를 루트로 고른 도구가 정한다. Database마다 하나인 singleton 입력이 루트
+  source마다 그 패키지의 매니페스트 파일 입력을 가지며, 등록된 루트는 그
+  매니페스트의 의존성 표로 분석한다. CLI는 패키지 디렉토리를 컴파일할 때 그
+  `src/main.trb`를 등록하고 source 파일 입력은 등록하지 않으므로, 등록되지 않은
+  루트는 암묵적 의존성 표로 분석한다. Language server는 같은 입력에서 경로로 찾기를
+  켜며, 등록되지 않은 루트는 경로가 정하는 패키지의 의존성 표로 분석한다. 이 찾기는
+  매니페스트 후보 경로의 입력을 읽는 query이므로, 매니페스트가 생기거나 사라지면
+  다시 계산된다([Language Server](lsp.md#문서가-속한-패키지)).
 
 **빌드 입력 파일.** 빌드가 읽는 파일 목록은 파일 시스템을 훑어 만들지 않고, 위
 query가 경로별 입력에 물어본 경로에서 만든다. 목록에는 아직 없는 경로도 들어간다.
@@ -1085,10 +1107,12 @@ Parse와 이름 해석은 모듈 단위 query이다. Type check는 모듈 수준
 - **재검사 조건:** 함수 본문만 바뀐 편집은 그 함수의 resolved 선언만 바꾸므로 그
   함수만 다시 검사한다. 시그니처나 타입 선언이 바뀌면 선언 환경이 바뀌어 모든
   함수를 다시 검사한다.
-- **위치:** 함수 검사 query는 span map을 읽지 않는다. 그 진단은 위치를 `NodeId`로
-  가지며, 모듈 query가 결과를 모을 때 span map으로 절대 위치를 정해 보고한다.
-  따라서 다른 item이 옮겨져도 함수 검사 결과는 재사용되고, 진단 위치는 현재
-  source를 따른다.
+- **위치:** 이름 해석과 type check는 span map을 읽지 않는다. 그 진단은 위치를
+  `NodeId`로 가진 채 Salsa accumulator로 보고된다. 위치는 query 밖에서 진단을
+  읽는 쪽이 정한다. 그 source의 package와 의존 package의 span map을 함께 보고,
+  노드의 source hash로 파일을 찾는다. 따라서 코드를 옮기기만 한 편집은 진단이
+  있어도 이름 해석과 함수 검사 결과를 재사용하고, 진단 위치는 현재 source를
+  따른다.
 - **모듈 결과:** 모듈 query는 각 함수의 typed 선언과 노드 메타데이터를 선언 순서로
   합친다. Specialization과 lowering은 이 모듈 결과를 입력으로 받으며 함수 단위로
   재사용하지 않는다.

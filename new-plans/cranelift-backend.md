@@ -155,7 +155,7 @@ operation은 이 dialect에 두지 않는다. 전체 연산 목록은
 `clif.br_table`은 Cranelift의 `br_table` 명령과 같은 의미를 가진다.
 
 ```text
-clif.br_table %index [^default, ^entry0, ^entry1, ^entry2]
+"clif.br_table"(%index)[^default, ^entry0, ^entry1, ^entry2]
 ```
 
 - Successor는 `default`가 먼저이고, 그 뒤가 0번부터의 table 항목이다.
@@ -171,7 +171,7 @@ clif.br_table %index [^default, ^entry0, ^entry1, ^entry2]
 `clif.switch`는 `cranelift_frontend::Switch`와 같은 의미를 가진다.
 
 ```text
-clif.switch %index [^default, ^a, ^b, ^c] {cases = [0, 1, 7]}
+"clif.switch"(%index)[^default, ^a, ^b, ^c] {cases = [0, 1, 7]}
 ```
 
 - Successor는 `default`가 먼저이고, 그 뒤로 `cases`의 값마다 하나씩 같은 순서로
@@ -223,7 +223,7 @@ data object를 같은 단계에서 `clif.data`로 선언하며, 같은 내용과
 표현하며, 모듈 수준 선언을 위한 별도 dialect를 두지 않는다.
 
 `clif.data`의 선택적 region은 재배치 선언 목록이다. Region 안의 각
-`clif.func_reloc {offset, func}`는 cranelift-module `DataDescription`의 함수
+`clif.func_reloc @func at offset`는 cranelift-module `DataDescription`의 함수
 재배치와 같은 의미를 갖는다. 바이트는 object의 실제 내용이고, 링커가 offset의
 포인터 폭 바이트를 `func` 함수의 주소로 덮어쓴다. 이 region은 실행되는 코드가 아니므로
 재배치 선언만 담으며, `clif.func_reloc`은 `clif.data` region 밖에 올 수 없다.

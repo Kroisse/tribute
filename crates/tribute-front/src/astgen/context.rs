@@ -9,8 +9,8 @@ use salsa::Accumulator;
 use tree_sitter::Node;
 use trunk_ir::{Span, Symbol, SymbolPath};
 
-use crate::ast::{ItemSpans, ModuleItem, NodeId, SpanMapBuilder, UnresolvedName, owner_hash};
-use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use crate::ast::{IdentityDigest, ItemSpans, ModuleItem, NodeId, SpanMapBuilder, UnresolvedName};
+use tribute_core::diagnostic::{CompilationPhase, DiagnosticSeverity, SpanDiagnostic};
 
 /// Context for lowering CST to AST.
 pub struct AstLoweringCtx<'db> {
@@ -137,7 +137,13 @@ impl<'db> AstLoweringCtx<'db> {
             .or_default();
         let occurrence = *count;
         *count += 1;
-        let item = owner_hash((path_text(&self.module_path), kind, name, occurrence));
+        let item = IdentityDigest::new()
+            .u64(ITEM_OWNER)
+            .strs(self.module_path.iter().map(Symbol::as_str))
+            .str(kind)
+            .str(name)
+            .u64(occurrence as u64)
+            .finish();
         self.span_builder.set_start(item, start);
         let outer = std::mem::replace(&mut self.owner, item);
         let outer_occurrence = std::mem::replace(&mut self.occurrence, occurrence);
@@ -161,7 +167,7 @@ impl<'db> AstLoweringCtx<'db> {
     /// Emit a diagnostic error.
     pub fn error(&mut self, span: Span, message: impl Into<String>) {
         if let Some(db) = self.db {
-            Diagnostic::new(
+            SpanDiagnostic::new(
                 message,
                 span.in_source(self.source_hash),
                 DiagnosticSeverity::Error,
@@ -174,7 +180,7 @@ impl<'db> AstLoweringCtx<'db> {
     /// Emit a parse error diagnostic for syntax errors.
     pub fn parse_error(&mut self, span: Span, message: impl Into<String>) {
         if let Some(db) = self.db {
-            Diagnostic::new(
+            SpanDiagnostic::new(
                 message,
                 span.in_source(self.source_hash),
                 DiagnosticSeverity::Error,
@@ -272,12 +278,15 @@ pub struct LoweredItem {
     pub spans: ItemSpans,
 }
 
+/// The owner hash of an item's nodes starts with this tag.
+const ITEM_OWNER: u64 = 0;
+/// The owner hash of a module's module-level nodes starts with this tag.
+const MODULE_OWNER: u64 = 1;
+
 /// The owner of the module-level nodes of the module at `path`.
 fn module_owner(path: &[Symbol]) -> u64 {
-    owner_hash(("mod", path_text(path)))
-}
-
-/// The text of a module path, which owner hashes are computed from.
-fn path_text(path: &[Symbol]) -> Vec<&str> {
-    path.iter().map(Symbol::as_str).collect()
+    IdentityDigest::new()
+        .u64(MODULE_OWNER)
+        .strs(path.iter().map(Symbol::as_str))
+        .finish()
 }

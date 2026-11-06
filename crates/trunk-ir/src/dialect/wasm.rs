@@ -20,16 +20,37 @@ mod wasm {
     struct Externref;
 
     // Control flow
+    /// ```text
+    /// %r = wasm.block -> (core.i32) {
+    ///   wasm.br {target = 0}
+    /// }
+    /// ```
+    #[asm_format(("->" "(" types(results)^ ")")? attr_dict region(body))]
     fn block() -> Variadic<_> {
         #[region(body)]
         {}
     }
 
+    /// ```text
+    /// wasm.loop(%init) {
+    ///   ^body(%acc: core.i32):
+    ///     wasm.br {target = 0}
+    /// }
+    /// ```
+    #[asm_format("(" init ")" ("->" "(" types(results)^ ")")? attr_dict region(body))]
     fn r#loop(init: Variadic<_>) -> Variadic<_> {
         #[region(body)]
         {}
     }
 
+    /// ```text
+    /// %r = wasm.if %cond -> (core.i32) {
+    ///   wasm.yield %a
+    /// } else {
+    ///   wasm.yield %b
+    /// }
+    /// ```
+    #[asm_format(cond ("->" "(" types(results)^ ")")? attr_dict region(then_region) "else" region(else_region))]
     fn r#if(cond: Value<_>) -> Variadic<_> {
         #[region(then_region)]
         {}
@@ -37,189 +58,341 @@ mod wasm {
         {}
     }
 
+    #[asm_format(attr_dict_bare)]
     fn br(target: Attr<u32>) {}
 
+    #[asm_format(cond attr_dict_bare)]
     fn br_if(target: Attr<u32>, cond: Value<_>) {}
 
+    #[asm_format(values attr_dict_bare)]
     fn r#return(values: Variadic<_>) {}
+    #[asm_format(value attr_dict_bare)]
     fn r#yield(value: Value<_>) {}
+    #[asm_format(value attr_dict_bare)]
     fn drop(value: Value<_>) {}
 
     // Functions
     #[implements(CallLike)]
+    #[asm_format(callee "(" args ")" attr_dict ":" functional_type(args, results))]
     fn call(callee: Attr<SymbolRef>, args: Variadic<_>) -> Variadic<_> {}
 
+    /// Call the function at a table index through its exact signature.
+    ///
+    /// ```text
+    /// %result = wasm.call_indirect %index(%arg0, ...) table 1 : (A, ...) -> R
+    /// ```
+    ///
+    /// - **Shape:** `callee` is the `core.i32` index into the function table
+    ///   `table`, table 0 when absent; `args` are the call's arguments, and
+    ///   `signature` is the callee's `wasm.func_sig`.
+    /// - **Meaning:** Wasm `call_indirect` with the type `signature`, which
+    ///   traps when the table entry has another type. Emission pushes the
+    ///   arguments, then the index.
+    /// - **Verification:** emission checks that each argument is physically
+    ///   assignable to its parameter and that the results are the
+    ///   signature's, or none for a signature whose one result is
+    ///   `core.nil`.
+    /// - **Ownership and value flow:** the index and arguments are ordinary
+    ///   SSA uses.
+    #[asm_format(callee "(" args ")" ("table" table^)? attr_dict ":" signature(signature))]
     #[implements(IndirectCallLike)]
-    fn call_indirect(
-        type_idx: Attr<u32>,
-        table: Attr<u32>,
-        signature: Option<Attr<Type>>,
+    fn call_indirect<S: FuncSig>(
+        #[default(0)] table: Attr<u32>,
+        signature: Attr<TypeOf<S>>,
+        callee: Value<I32>,
         args: Variadic<_>,
     ) -> Variadic<_> {
     }
 
     #[implements(CallLike)]
+    #[asm_format(callee "(" args ")" attr_dict ":" functional_type(args))]
     fn return_call(callee: Attr<SymbolRef>, args: Variadic<_>) {}
 
+    /// A tail call of the function at a table index through its exact
+    /// signature.
+    ///
+    /// ```text
+    /// wasm.return_call_indirect %index(%arg0, ...) : (A, ...) -> R
+    /// ```
+    ///
+    /// - **Shape:** as `wasm.call_indirect`, without results.
+    /// - **Meaning:** Wasm `return_call_indirect`.
+    /// - **Verification:** as for `wasm.call_indirect`'s arguments; the
+    ///   signature's results are the enclosing function's.
+    /// - **Ownership and value flow:** as `wasm.call_indirect`.
+    #[asm_format(callee "(" args ")" ("table" table^)? attr_dict ":" signature(signature))]
     #[implements(IndirectCallLike)]
-    fn return_call_indirect(
-        type_idx: Attr<u32>,
-        table: Attr<u32>,
-        signature: Option<Attr<Type>>,
+    fn return_call_indirect<S: FuncSig>(
+        #[default(0)] table: Attr<u32>,
+        signature: Attr<TypeOf<S>>,
+        callee: Value<I32>,
         args: Variadic<_>,
     ) {
     }
 
+    #[asm_format(attr_dict_bare)]
     fn unreachable() {}
+    #[asm_format(attr_dict_bare ":" type(result))]
     fn nop() -> Value<_> {}
 
     // Module
+    #[asm_format(symbol(sym_name) signature(r#type, body) attr_dict region(body))]
     #[flags(IsolatedFromAbove)]
-    fn func(sym_name: Attr<String>, r#type: Attr<Type>) {
+    fn func<S: FuncSig>(sym_name: Attr<String>, r#type: Attr<TypeOf<S>>) {
         #[region(body?)]
         {}
     }
 
-    fn import_func(
+    #[asm_format(symbol(sym_name) "from" module name attr_dict ":" signature(r#type))]
+    fn import_func<S: FuncSig>(
         module: Attr<String>,
         name: Attr<String>,
         sym_name: Attr<String>,
-        r#type: Attr<Type>,
+        r#type: Attr<TypeOf<S>>,
     ) {
     }
 
+    #[asm_format(func "as" name attr_dict)]
     fn export_func(name: Attr<String>, func: Attr<SymbolRef>) {}
 
+    #[asm_format(attr_dict_bare)]
     fn export_memory(name: Attr<String>, index: Attr<u32>) {}
 
+    #[asm_format(attr_dict_bare)]
     fn memory(min: Attr<u32>, max: Attr<u32>, shared: Attr<bool>, memory64: Attr<bool>) {}
 
-    fn data(offset: Attr<u32>, bytes: Attr<Bytes>, passive: Attr<bool>) {}
+    /// A data segment holding `bytes`. An active segment is copied to
+    /// `offset` of the memory at instantiation; a passive one is not.
+    ///
+    /// ```text
+    /// wasm.data(b"active") offset 16
+    /// wasm.data(b"kept") offset 0 passive
+    /// ```
+    #[asm_format("(" bytes ")" "offset" offset ("passive" passive^)? attr_dict)]
+    fn data(offset: Attr<u32>, bytes: Attr<Bytes>, #[default(false)] passive: Attr<bool>) {}
 
+    #[asm_format(attr_dict_bare)]
     fn table(reftype: Attr<String>, min: Attr<u32>, max: Option<Attr<u32>>) {}
 
-    fn elem(table: Option<Attr<u32>>, offset: Option<Attr<u32>>) {
+    /// An active element segment that writes the functions its `funcs` region
+    /// names, in order, to `table` from `offset` at instantiation.
+    ///
+    /// ```text
+    /// wasm.elem {
+    ///   wasm.ref_func @f : wasm.funcref
+    /// }
+    /// wasm.elem table 1 offset 4 {
+    ///   wasm.ref_func @g : wasm.funcref
+    /// }
+    /// ```
+    #[asm_format(("table" table^)? ("offset" offset^)? attr_dict region(funcs))]
+    fn elem(#[default(0)] table: Attr<u32>, #[default(0)] offset: Attr<u32>) {
         #[region(funcs)]
         {}
     }
 
+    #[asm_format(attr_dict_bare)]
     fn global(valtype: Attr<String>, mutable: Attr<bool>, init: Attr<_>) {}
 
+    #[asm_format(attr_dict_bare ":" type(result))]
     fn global_get(index: Attr<u32>) -> Value<_> {}
 
+    #[asm_format(value attr_dict_bare)]
     fn global_set(index: Attr<u32>, value: Value<_>) {}
 
     // i32
+    #[asm_format(attr_dict_bare value ":" type(result))]
     fn i32_const(value: Attr<i32>) -> Value<_> {}
 
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i32_add(lhs: Value<I32>, rhs: Value<I32>) -> Value<I32> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i32_sub(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i32_mul(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i32_div_s(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i32_div_u(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i32_rem_s(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i32_rem_u(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i32_eq(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i32_ne(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i32_lt_s(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i32_lt_u(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i32_le_s(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i32_le_u(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i32_gt_s(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i32_gt_u(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i32_ge_s(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i32_ge_u(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i32_and(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i32_or(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i32_xor(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i32_shl(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i32_shr_s(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i32_shr_u(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
     // i64
+    #[asm_format(attr_dict_bare value ":" type(result))]
     fn i64_const(value: Attr<i64>) -> Value<_> {}
 
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i64_add(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i64_sub(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i64_mul(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i64_div_s(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i64_div_u(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i64_rem_s(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i64_rem_u(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i64_eq(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i64_ne(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i64_lt_s(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i64_lt_u(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i64_le_s(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i64_le_u(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i64_gt_s(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i64_gt_u(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i64_ge_s(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i64_ge_u(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i64_and(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i64_or(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i64_xor(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i64_shl(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i64_shr_s(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn i64_shr_u(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
     // f32
+    #[asm_format(attr_dict_bare value ":" type(result))]
     fn f32_const(value: Attr<f32>) -> Value<_> {}
 
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn f32_add(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn f32_sub(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn f32_mul(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn f32_div(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn f32_neg(operand: Value<_>) -> Value<_> {}
 
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn f32_eq(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn f32_ne(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn f32_lt(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn f32_le(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn f32_gt(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn f32_ge(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
     // f64
+    #[asm_format(attr_dict_bare value ":" type(result))]
     fn f64_const(value: Attr<f64>) -> Value<_> {}
 
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn f64_add(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn f64_sub(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn f64_mul(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn f64_div(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn f64_neg(operand: Value<_>) -> Value<_> {}
 
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn f64_eq(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn f64_ne(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn f64_lt(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn f64_le(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn f64_gt(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn f64_ge(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
     // Local variables
+    #[asm_format(attr_dict_bare ":" type(result))]
     fn local_get(index: Attr<u32>) -> Value<_> {}
 
+    #[asm_format(value attr_dict_bare)]
     fn local_set(index: Attr<u32>, value: Value<_>) {}
 
+    #[asm_format(value attr_dict_bare ":" type(result))]
     fn local_tee(index: Attr<u32>, value: Value<_>) -> Value<_> {}
 
     // GC structs
+    #[asm_format(fields attr_dict_bare ":" type(result))]
     fn struct_new(type_idx: Attr<u32>, fields: Variadic<_>) -> Value<_> {}
 
+    #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn struct_get(type_idx: Attr<u32>, field_idx: Attr<u32>, r#ref: Value<_>) -> Value<_> {}
 
+    #[asm_format(r#ref "," value attr_dict_bare)]
     fn struct_set(type_idx: Attr<u32>, field_idx: Attr<u32>, r#ref: Value<_>, value: Value<_>) {}
 
     // GC arrays
+    #[asm_format(size "," init attr_dict_bare ":" type(result))]
     fn array_new(type_idx: Attr<u32>, size: Value<I32>, init: Value<_>) -> Value<_> {}
 
+    #[asm_format(size attr_dict_bare ":" type(result))]
     fn array_new_default(type_idx: Attr<u32>, size: Value<I32>) -> Value<_> {}
 
+    #[asm_format(elements attr_dict_bare ":" type(result))]
     fn array_new_fixed(type_idx: Attr<u32>, elements: Variadic<_>) -> Value<_> {}
 
+    #[asm_format(offset "," size attr_dict_bare ":" type(result))]
     fn array_new_data(
         type_idx: Attr<u32>,
         data_idx: Attr<u32>,
@@ -228,18 +401,25 @@ mod wasm {
     ) -> Value<_> {
     }
 
+    #[asm_format(attr_dict_bare ":" type(result))]
     fn bytes_from_data(data_idx: Attr<u32>, offset: Attr<u32>, len: Attr<u32>) -> Value<_> {}
 
+    #[asm_format(r#ref "," index attr_dict_bare ":" type(result))]
     fn array_get(type_idx: Attr<u32>, r#ref: Value<_>, index: Value<I32>) -> Value<_> {}
 
+    #[asm_format(r#ref "," index attr_dict_bare ":" type(result))]
     fn array_get_s(type_idx: Attr<u32>, r#ref: Value<_>, index: Value<I32>) -> Value<_> {}
 
+    #[asm_format(r#ref "," index attr_dict_bare ":" type(result))]
     fn array_get_u(type_idx: Attr<u32>, r#ref: Value<_>, index: Value<I32>) -> Value<_> {}
 
+    #[asm_format(r#ref "," index "," value attr_dict_bare)]
     fn array_set(type_idx: Attr<u32>, r#ref: Value<_>, index: Value<I32>, value: Value<_>) {}
 
+    #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn array_len(r#ref: Value<_>) -> Value<I32> {}
 
+    #[asm_format(dst "," dst_offset "," src "," src_offset "," len attr_dict_bare)]
     fn array_copy(
         dst_type_idx: Attr<u32>,
         src_type_idx: Attr<u32>,
@@ -252,12 +432,16 @@ mod wasm {
     }
 
     // References
+    #[asm_format(attr_dict_bare ":" type(result))]
     fn ref_null(heap_type: Attr<String>, type_idx: Option<Attr<u32>>) -> Value<_> {}
 
+    #[asm_format(func_name attr_dict ":" type(result))]
     fn ref_func(func_name: Attr<SymbolRef>) -> Value<_> {}
 
+    #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn ref_is_null(r#ref: Value<_>) -> Value<_> {}
 
+    #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn ref_cast(target_type: Attr<Type>, type_idx: Option<Attr<u32>>, r#ref: Value<_>) -> Value<_> {
     }
 
@@ -279,59 +463,94 @@ mod wasm {
     /// %wide = wasm.ref_upcast %narrow : wasm.structref
     /// ```
     #[verify]
+    #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn ref_upcast(r#ref: Value<_>) -> Value<_> {}
 
+    #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn ref_test(target_type: Attr<Type>, type_idx: Option<Attr<u32>>, r#ref: Value<_>) -> Value<_> {
     }
 
     // i31ref
+    #[asm_format(value attr_dict_bare ":" type(result))]
     fn ref_i31(value: Value<_>) -> Value<_> {}
+    #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn i31_get_s(r#ref: Value<_>) -> Value<_> {}
+    #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn i31_get_u(r#ref: Value<_>) -> Value<_> {}
 
     // Type conversions (integer)
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn i32_wrap_i64(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn i64_extend_i32_s(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn i64_extend_i32_u(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn i32_extend8_s(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn i32_extend16_s(operand: Value<_>) -> Value<_> {}
 
     // Type conversions (float to int)
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn i32_trunc_f32_s(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn i32_trunc_f32_u(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn i32_trunc_f64_s(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn i32_trunc_f64_u(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn i64_trunc_f32_s(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn i64_trunc_f32_u(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn i64_trunc_f64_s(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn i64_trunc_f64_u(operand: Value<_>) -> Value<_> {}
 
     // Type conversions (int to float)
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn f32_convert_i32_s(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn f32_convert_i32_u(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn f32_convert_i64_s(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn f32_convert_i64_u(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn f64_convert_i32_s(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn f64_convert_i32_u(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn f64_convert_i64_s(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn f64_convert_i64_u(operand: Value<_>) -> Value<_> {}
 
     // Float conversions
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn f32_demote_f64(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn f64_promote_f32(operand: Value<_>) -> Value<_> {}
 
     // Bitcast
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn i32_reinterpret_f32(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn i64_reinterpret_f64(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn f32_reinterpret_i32(operand: Value<_>) -> Value<_> {}
+    #[asm_format(operand attr_dict_bare ":" type(result))]
     fn f64_reinterpret_i64(operand: Value<_>) -> Value<_> {}
 
     // Linear memory
+    #[asm_format(attr_dict_bare ":" type(result))]
     fn memory_size(memory: Attr<u32>) -> Value<_> {}
 
+    #[asm_format(delta attr_dict_bare ":" type(result))]
     fn memory_grow(memory: Attr<u32>, delta: Value<_>) -> Value<_> {}
 
     // Memory loads (full width)
+    #[asm_format(addr attr_dict_bare ":" type(result))]
     fn i32_load(
         offset: Attr<u32>,
         align: Attr<u32>,
@@ -340,6 +559,7 @@ mod wasm {
     ) -> Value<_> {
     }
 
+    #[asm_format(addr attr_dict_bare ":" type(result))]
     fn i64_load(
         offset: Attr<u32>,
         align: Attr<u32>,
@@ -348,6 +568,7 @@ mod wasm {
     ) -> Value<_> {
     }
 
+    #[asm_format(addr attr_dict_bare ":" type(result))]
     fn f32_load(
         offset: Attr<u32>,
         align: Attr<u32>,
@@ -356,6 +577,7 @@ mod wasm {
     ) -> Value<_> {
     }
 
+    #[asm_format(addr attr_dict_bare ":" type(result))]
     fn f64_load(
         offset: Attr<u32>,
         align: Attr<u32>,
@@ -365,6 +587,7 @@ mod wasm {
     }
 
     // Memory loads (partial width i32)
+    #[asm_format(addr attr_dict_bare ":" type(result))]
     fn i32_load8_s(
         offset: Attr<u32>,
         align: Attr<u32>,
@@ -373,6 +596,7 @@ mod wasm {
     ) -> Value<_> {
     }
 
+    #[asm_format(addr attr_dict_bare ":" type(result))]
     fn i32_load8_u(
         offset: Attr<u32>,
         align: Attr<u32>,
@@ -381,6 +605,7 @@ mod wasm {
     ) -> Value<_> {
     }
 
+    #[asm_format(addr attr_dict_bare ":" type(result))]
     fn i32_load16_s(
         offset: Attr<u32>,
         align: Attr<u32>,
@@ -389,6 +614,7 @@ mod wasm {
     ) -> Value<_> {
     }
 
+    #[asm_format(addr attr_dict_bare ":" type(result))]
     fn i32_load16_u(
         offset: Attr<u32>,
         align: Attr<u32>,
@@ -398,6 +624,7 @@ mod wasm {
     }
 
     // Memory loads (partial width i64)
+    #[asm_format(addr attr_dict_bare ":" type(result))]
     fn i64_load8_s(
         offset: Attr<u32>,
         align: Attr<u32>,
@@ -406,6 +633,7 @@ mod wasm {
     ) -> Value<_> {
     }
 
+    #[asm_format(addr attr_dict_bare ":" type(result))]
     fn i64_load8_u(
         offset: Attr<u32>,
         align: Attr<u32>,
@@ -414,6 +642,7 @@ mod wasm {
     ) -> Value<_> {
     }
 
+    #[asm_format(addr attr_dict_bare ":" type(result))]
     fn i64_load16_s(
         offset: Attr<u32>,
         align: Attr<u32>,
@@ -422,6 +651,7 @@ mod wasm {
     ) -> Value<_> {
     }
 
+    #[asm_format(addr attr_dict_bare ":" type(result))]
     fn i64_load16_u(
         offset: Attr<u32>,
         align: Attr<u32>,
@@ -430,6 +660,7 @@ mod wasm {
     ) -> Value<_> {
     }
 
+    #[asm_format(addr attr_dict_bare ":" type(result))]
     fn i64_load32_s(
         offset: Attr<u32>,
         align: Attr<u32>,
@@ -438,6 +669,7 @@ mod wasm {
     ) -> Value<_> {
     }
 
+    #[asm_format(addr attr_dict_bare ":" type(result))]
     fn i64_load32_u(
         offset: Attr<u32>,
         align: Attr<u32>,
@@ -447,6 +679,7 @@ mod wasm {
     }
 
     // Memory stores (full width)
+    #[asm_format(addr "," value attr_dict_bare)]
     fn i32_store(
         offset: Attr<u32>,
         align: Attr<u32>,
@@ -456,6 +689,7 @@ mod wasm {
     ) {
     }
 
+    #[asm_format(addr "," value attr_dict_bare)]
     fn i64_store(
         offset: Attr<u32>,
         align: Attr<u32>,
@@ -465,6 +699,7 @@ mod wasm {
     ) {
     }
 
+    #[asm_format(addr "," value attr_dict_bare)]
     fn f32_store(
         offset: Attr<u32>,
         align: Attr<u32>,
@@ -474,6 +709,7 @@ mod wasm {
     ) {
     }
 
+    #[asm_format(addr "," value attr_dict_bare)]
     fn f64_store(
         offset: Attr<u32>,
         align: Attr<u32>,
@@ -484,6 +720,7 @@ mod wasm {
     }
 
     // Memory stores (partial width)
+    #[asm_format(addr "," value attr_dict_bare)]
     fn i32_store8(
         offset: Attr<u32>,
         align: Attr<u32>,
@@ -493,6 +730,7 @@ mod wasm {
     ) {
     }
 
+    #[asm_format(addr "," value attr_dict_bare)]
     fn i32_store16(
         offset: Attr<u32>,
         align: Attr<u32>,
@@ -502,6 +740,7 @@ mod wasm {
     ) {
     }
 
+    #[asm_format(addr "," value attr_dict_bare)]
     fn i64_store8(
         offset: Attr<u32>,
         align: Attr<u32>,
@@ -511,6 +750,7 @@ mod wasm {
     ) {
     }
 
+    #[asm_format(addr "," value attr_dict_bare)]
     fn i64_store16(
         offset: Attr<u32>,
         align: Attr<u32>,
@@ -520,6 +760,7 @@ mod wasm {
     ) {
     }
 
+    #[asm_format(addr "," value attr_dict_bare)]
     fn i64_store32(
         offset: Attr<u32>,
         align: Attr<u32>,
@@ -656,15 +897,34 @@ crate::register_type_def!(&FUNC_SIG_DEF);
 /// The function syntax `func.func_sig` also uses, `wasm.func_sig<(A) -> R>`,
 /// with any number of results.
 impl crate::asm_format::TypeAsmFormat for FuncSig {
-    fn print(&self, h: &mut crate::printer::TypePrintHelper<'_, '_>) -> std::fmt::Result {
-        super::func::print_signature_type(h, self.0)
+    fn print(&self, p: &mut crate::printer::AsmPrinter<'_>) -> std::fmt::Result {
+        super::func::print_signature_type(p, self.0)
     }
 
-    fn parse<'a>(
-        input: &mut &'a str,
-        name: &'a str,
-    ) -> winnow::ModalResult<crate::parser::raw::RawType<'a>> {
-        super::func::parse_signature_type(input, name, None)
+    fn parse(
+        p: &mut crate::parser::AsmParser<'_>,
+        name: &str,
+    ) -> crate::parser::ParseResult<Option<crate::TypeRef>> {
+        super::func::parse_signature_type(p, name, None)
+    }
+}
+
+impl crate::asm_format::SignatureCodec for FuncSig {
+    fn decompose(
+        ctx: &crate::IrContext,
+        ty: crate::TypeRef,
+    ) -> Option<crate::asm_format::SignatureParts<'_>> {
+        Self::from_type_ref(ctx, ty)?;
+        super::func::signature_codec_parts(ctx, ty)
+    }
+
+    fn build(
+        p: &mut crate::parser::AsmParser<'_>,
+        inputs: Vec<(crate::TypeRef, crate::AttributeMap)>,
+        results: Vec<(crate::TypeRef, crate::AttributeMap)>,
+        tail: crate::AttributeMap,
+    ) -> crate::parser::ParseResult<crate::TypeRef> {
+        super::func::signature_from_parts(p, "wasm.func_sig", inputs, results, tail, None)
     }
 }
 
@@ -757,9 +1017,17 @@ pub fn func_sig_with_attrs(
 
 const INDIRECT_CALL_SIGNATURE_ATTR: &str = "signature";
 
+/// The `wasm.func_sig` an indirect transfer declares, read without assuming
+/// its schema holds.
+fn exact_indirect_signature(ctx: &crate::IrContext, op: crate::OpRef) -> Option<crate::TypeRef> {
+    ctx.op_attrs(op)
+        .get_type(INDIRECT_CALL_SIGNATURE_ATTR)
+        .filter(|&ty| FuncSig::from_type_ref(ctx, ty).is_some())
+}
+
 impl IndirectCallLike for CallIndirect {
     fn exact_signature(&self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
-        self.signature(ctx)
+        exact_indirect_signature(ctx, self.op_ref())
     }
 
     fn set_exact_signature(&self, ctx: &mut crate::IrContext, signature: crate::TypeRef) -> bool {
@@ -769,7 +1037,7 @@ impl IndirectCallLike for CallIndirect {
 
 impl IndirectCallLike for ReturnCallIndirect {
     fn exact_signature(&self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
-        self.signature(ctx)
+        exact_indirect_signature(ctx, self.op_ref())
     }
 
     fn set_exact_signature(&self, ctx: &mut crate::IrContext, signature: crate::TypeRef) -> bool {
@@ -830,7 +1098,59 @@ mod tests {
     use super::*;
     use crate::op_interface::DynIndirectCallLike;
     use crate::parser::parse_test_module;
-    use crate::printer::print_module;
+
+    #[test]
+    fn structured_control_writes_its_results_only_when_present() {
+        let text = r#"core.module @test {
+  wasm.func @f(%0: core.i32) -> core.i32 {
+      %1 = wasm.if %0 -> (core.i32) {
+          wasm.yield %0
+      } else {
+          wasm.yield %0
+      }
+      wasm.if %0 {
+          wasm.unreachable
+      } else {
+          wasm.unreachable
+      }
+      %2 = wasm.block -> (core.i32) {
+          wasm.yield %1
+      }
+      wasm.loop(%2) {
+        ^bb6(%3: core.i32):
+          wasm.br {target = 0}
+      }
+      wasm.return %2
+  }
+}
+"#;
+        let mut ctx = crate::IrContext::new();
+        let module = parse_test_module(&mut ctx, text);
+        assert_eq!(module.op().display(&ctx).to_string(), text);
+    }
+
+    #[test]
+    fn elem_writes_only_a_non_default_table_and_offset() {
+        let text = r#"core.module @test {
+  wasm.elem {
+      %0 = wasm.ref_func @f : wasm.funcref
+  }
+  wasm.elem table 1 offset 4 {
+      %0 = wasm.ref_func @g : wasm.funcref
+  }
+}
+"#;
+        let mut ctx = crate::IrContext::new();
+        let module = parse_test_module(&mut ctx, text);
+        assert_eq!(module.op().display(&ctx).to_string(), text);
+        let elems: Vec<_> = module
+            .ops(&ctx)
+            .iter()
+            .map(|&op| Elem::from_op(&ctx, op).unwrap())
+            .collect();
+        assert_eq!((elems[0].table(&ctx), elems[0].offset(&ctx)), (0, 0));
+        assert_eq!((elems[1].table(&ctx), elems[1].offset(&ctx)), (1, 4));
+    }
 
     #[test]
     fn ref_upcast_result_is_an_abstract_gc_reference() {
@@ -881,15 +1201,15 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.func @ordinary(%table: core.i32, %value: core.i32) -> core.i32 {
-    %result = wasm.call_indirect %table, %value {signature = wasm.func_sig<(core.i32) -> core.i32>, table = 0, type_idx = 0} : core.i32
+    %result = wasm.call_indirect %table(%value) : (core.i32) -> core.i32
     wasm.return %result
   }
   wasm.func @plain(%table: core.i32, %value: core.i32) -> core.i32 {
-    %result = wasm.call_indirect %table, %value {table = 0, type_idx = 0} : core.i32
+    %result = "wasm.call_indirect"(%table, %value) : core.i32
     wasm.return %result
   }
   wasm.func @tail(%table: core.i32, %value: core.i32) -> core.nil {
-    wasm.return_call_indirect %table, %value {signature = wasm.func_sig<(core.i32) -> core.nil>, table = 0, type_idx = 0}
+    wasm.return_call_indirect %table(%value) : (core.i32) -> core.nil
   }
   wasm.func @direct() -> core.nil {
     wasm.return
@@ -919,9 +1239,26 @@ mod tests {
         assert!(plain_call.indirect_arguments(&ctx).is_some());
         assert!(DynIndirectCallLike::get(&ctx, direct).is_none());
 
-        let printed = print_module(&ctx, module.op());
-        assert!(printed.contains("wasm.call_indirect"));
-        assert!(printed.contains("signature = wasm.func_sig<(core.i32) -> core.i32>"));
+        let printed = module.op().display(&ctx).to_string();
+        assert!(
+            printed.contains("wasm.call_indirect %0(%1) : (core.i32) -> core.i32"),
+            "{printed}"
+        );
+    }
+
+    #[test]
+    fn indirect_calls_write_the_index_as_their_callee() {
+        let text = r#"core.module @test {
+  wasm.func @calls(%0: core.i32, %1: core.i64) -> core.i32 {
+      %2 = wasm.call_indirect %0(%1) : (core.i64) -> core.i32
+      %3, %4 = wasm.call_indirect %0() table 1 : () -> (core.i32, core.i64)
+      wasm.return_call_indirect %0(%1, %2) table 2 attributes {extra = 1} : (core.i64, core.i32) -> core.i32
+  }
+}
+"#;
+        let mut ctx = crate::IrContext::new();
+        let module = parse_test_module(&mut ctx, text);
+        assert_eq!(module.op().display(&ctx).to_string(), text);
     }
 
     #[test]
@@ -933,5 +1270,20 @@ mod tests {
             .view_mut(&mut ctx)
             .insert(NUM_INPUTS_ATTR, crate::Attribute::Int(0));
         let _ = func_sig_with_attrs(&mut ctx, [], [], attrs);
+    }
+
+    #[test]
+    fn func_writes_its_signature_in_the_function_form() {
+        let source = r#"core.module @test {
+  wasm.func @external(%arg0: core.i32) -> core.i32 attributes {abi = "C"}
+  wasm.func @pair(%0: core.i32) -> (core.i32, core.i64) {
+      %1 = wasm.i64_const 1 : core.i64
+      wasm.return %0, %1
+  }
+}
+"#;
+        let mut ctx = crate::IrContext::new();
+        let module = parse_test_module(&mut ctx, source);
+        assert_eq!(module.op().display(&ctx).to_string(), source);
     }
 }

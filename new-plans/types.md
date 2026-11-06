@@ -624,6 +624,14 @@ arm 뒤의 arm은 도달할 수 없고 `unreachable pattern` 경고를 받는다
 arm이 실패하는 경로는 lowering 결과에 남지 않으며, 망라성 판정은 중첩 패턴까지
 정확해야 한다.
 
+`case`는 arm마다 패턴 검사와 guard를 두는 `scf.if` 연쇄로 lowering한다. 정수
+리터럴로 고르는 `case`는 예외로, scrutinee를 판별값으로 하는 `scf.index_switch`
+하나로 lowering한다. 마지막을 뺀 모든 arm이 guard 없는 `Nat`, `Int`, `Rune`
+리터럴 패턴(`as` 바인딩 포함)이고, 마지막 arm이 guard 없는 `_`나 바인딩 패턴이며,
+서로 다른 값이 둘 이상일 때다. 각 리터럴 arm은 그 값의 case region이 되고 마지막
+arm은 default region이 된다. 앞선 arm이 고른 값을 다시 고르는 arm은 도달할 수
+없으므로 case가 되지 않는다. 그 밖의 `case`는 연쇄로 남는다.
+
 ---
 
 ## Named vs Positional Fields

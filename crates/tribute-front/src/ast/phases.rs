@@ -192,7 +192,6 @@ pub enum TypeOrigin {
 /// names are identical.
 #[salsa::interned(debug)]
 pub struct TypeDefId<'db> {
-    #[returns(copy)]
     pub origin: TypeOrigin,
     /// The enclosing modules' names, then the type's own (e.g.
     /// `[std, Option]`).
@@ -251,15 +250,15 @@ impl<'db> TypeDefId<'db> {
     }
 
     pub fn is_builtin_list(self, db: &'db dyn salsa::Database) -> bool {
-        self.origin(db) == TypeOrigin::Builtin(BuiltinType::List)
+        *self.origin(db) == TypeOrigin::Builtin(BuiltinType::List)
     }
 
     pub fn is_builtin_slots(self, db: &'db dyn salsa::Database) -> bool {
-        self.origin(db) == TypeOrigin::Builtin(BuiltinType::Slots)
+        *self.origin(db) == TypeOrigin::Builtin(BuiltinType::Slots)
     }
 
     pub fn is_builtin_dispatch(self, db: &'db dyn salsa::Database) -> bool {
-        self.origin(db) == TypeOrigin::Builtin(BuiltinType::Dispatch)
+        *self.origin(db) == TypeOrigin::Builtin(BuiltinType::Dispatch)
     }
 
     /// Returns the unqualified type name (last segment).
@@ -317,7 +316,6 @@ pub enum AbilityOrigin {
 /// name always produce the same AbilityId, regardless of where it's created.
 #[salsa::interned(debug)]
 pub struct AbilityId<'db> {
-    #[returns(copy)]
     pub origin: AbilityOrigin,
     /// The enclosing modules' names, then the ability's own (e.g.
     /// `[std, state, State]`).
@@ -358,7 +356,7 @@ impl<'db> AbilityId<'db> {
     }
 
     pub fn is_builtin_io(self, db: &'db dyn salsa::Database) -> bool {
-        self.origin(db) == AbilityOrigin::Builtin(BuiltinAbility::Io)
+        *self.origin(db) == AbilityOrigin::Builtin(BuiltinAbility::Io)
     }
 
     /// Returns the unqualified ability name (last segment).
@@ -371,7 +369,6 @@ impl<'db> AbilityId<'db> {
 #[salsa::tracked(debug)]
 pub struct ModulePath<'db> {
     /// The path segments (e.g., ["std", "collections", "List"])
-    #[returns(deref)]
     pub segments: Vec<Symbol>,
 }
 

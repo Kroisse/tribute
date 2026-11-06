@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use tree_sitter::{InputEdit, Parser, Point};
 use tribute::pipeline::compile_with_diagnostics;
 use tribute::{SourceCst, TributeDatabaseImpl, compile_frontend};
-use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity, SpanDiagnostic};
 use tribute_front::ast::{Decl, ExprKind, ModuleItem, NodeId, source_hash};
 use tribute_ir::dialect::tribute_control;
 use trunk_ir::Span;
@@ -63,7 +63,7 @@ fn returned_constant(ctx: &IrContext, module: &Module, name: &str) -> i128 {
     let ValueDef::OpResult(op, _) = ctx.value_def(returned.value(ctx)) else {
         panic!("expected returned constant");
     };
-    let constant = arith::Const::from_op(ctx, op).expect("returned value must be constant");
+    let constant = arith::Constant::from_op(ctx, op).expect("returned value must be constant");
     let Attribute::Int(value) = constant.value(ctx) else {
         panic!("expected integer");
     };
@@ -73,7 +73,7 @@ fn returned_constant(ctx: &IrContext, module: &Module, name: &str) -> i128 {
 fn compile_frontend_with_diagnostics(
     db: &dyn salsa::Database,
     source: SourceCst,
-) -> Result<(IrContext, Module), Vec<&Diagnostic>> {
+) -> Result<(IrContext, Module), Vec<Diagnostic<'_>>> {
     compile_frontend(db, source).ok_or_else(|| tribute::pipeline::frontend_diagnostics(db, source))
 }
 
@@ -179,7 +179,7 @@ fn test_salsa_incremental_computation_detailed() {
 
 static FUNCTION_COUNT_EXECUTIONS: AtomicUsize = AtomicUsize::new(0);
 
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked]
 fn observed_function_count(db: &dyn salsa::Database, source: SourceCst) -> usize {
     FUNCTION_COUNT_EXECUTIONS.fetch_add(1, Ordering::SeqCst);
     tribute_front::query::func_names(db, source).len()
@@ -201,19 +201,19 @@ fn equal_query_results_do_not_reexecute_downstream() {
     );
     FUNCTION_COUNT_EXECUTIONS.store(0, Ordering::SeqCst);
 
-    assert_eq!(observed_function_count(&db, source), 1);
+    assert_eq!(*observed_function_count(&db, source), 1);
     assert_eq!(FUNCTION_COUNT_EXECUTIONS.load(Ordering::SeqCst), 1);
 
     let same_names = "fn one() { 1 }";
     source.set_text(&mut db).to(same_names.into());
     source.set_tree(&mut db).to(parser.parse(same_names, None));
-    assert_eq!(observed_function_count(&db, source), 1);
+    assert_eq!(*observed_function_count(&db, source), 1);
     assert_eq!(FUNCTION_COUNT_EXECUTIONS.load(Ordering::SeqCst), 1);
 
     let added_name = "fn one() { 1 }\nfn two() {}";
     source.set_text(&mut db).to(added_name.into());
     source.set_tree(&mut db).to(parser.parse(added_name, None));
-    assert_eq!(observed_function_count(&db, source), 2);
+    assert_eq!(*observed_function_count(&db, source), 2);
     assert_eq!(FUNCTION_COUNT_EXECUTIONS.load(Ordering::SeqCst), 2);
 }
 
@@ -262,13 +262,17 @@ fn record_shape_diagnostics_follow_incremental_declaration_edits_slow() {
     let changed_diagnostics: Vec<_> = ["missing field: z", "unknown field `y` for struct `Point`"]
         .into_iter()
         .map(|message| {
-            Diagnostic::new(
+            SpanDiagnostic::new(
                 message,
                 record_span,
                 DiagnosticSeverity::Error,
                 CompilationPhase::TypeChecking,
             )
         })
+        .collect();
+    let changed_diagnostics: Vec<_> = changed_diagnostics
+        .iter()
+        .map(SpanDiagnostic::view)
         .collect();
 
     for (revision, text) in [ORIGINAL, changed.as_str(), ORIGINAL]

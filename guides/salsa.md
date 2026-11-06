@@ -80,21 +80,23 @@ positions of several sources, such as lowering the module merged with package
 `std`, looks them up through `SpanMaps`, which borrows each source's
 `SpanMap`.
 
-A parse keeps positions in two tracked fields. `item_spans` holds each node's
-span relative to the start of the item that owns it (a `fn`, a type, an
-ability, a `mod` or a `use` declaration). `item_layout` holds where each item
-starts and the span of the root `Module`, which no item owns. Moving items
-without changing them changes only `item_layout`; since the root spans the
-whole source, so does any edit that changes the source's length. No node's
-span covers another item, so an inline `mod` declaration's span is its
-header. `SpanMap` borrows both and computes absolute spans, so a query that
-reads it still reruns when an item moves.
+A parse hands out each item as a `ParsedItem` tracked struct, identified by
+its owner key, with its declarations, the items of an inline module's body,
+and its nodes' spans relative to the item's start as tracked fields. An item
+is a `fn`, a type, an ability, a `mod` or a `use` declaration. A query that
+reads one item's fields reruns only when that item changes, while `module`
+is assembled from every item.
 
-The parse also hands out each item as a `ParsedItem` tracked struct,
-identified by its owner key, with its declarations, the items of an inline
-module's body, and its relative spans as tracked fields. A query that reads
-one item's fields reruns only when that item changes, while `module` and
-`item_spans` are assembled from every item.
+The parse keeps the rest of its positions in two tracked fields.
+`items_by_owner` indexes every item, nested ones included, by its owner key;
+it changes only when items are added, removed or renamed. `item_layout` holds
+where each item starts and the span of the root `Module`, which no item owns.
+Moving items without changing them changes only `item_layout`; since the root
+spans the whole source, so does any edit that changes the source's length. No
+node's span covers another item, so an inline `mod` declaration's span is its
+header. `SpanMap` finds a node's item by the owner its `NodeId` carries and
+adds the item's start to its relative span, so it reads only the items whose
+nodes it looks up, but a query that reads it still reruns when an item moves.
 
 ## Creating a Source Input
 
@@ -128,22 +130,30 @@ tracked inputs by themselves.
 
 ## Diagnostics
 
-Use `tribute_core::diagnostic::Diagnostic` and its `CompilationPhase` for
-source diagnostics. `Diagnostic::new` accepts a message, span, severity and
-phase; the builder also supports secondary labels and notes.
+Report a source diagnostic as `tribute_core::diagnostic::SpanDiagnostic`
+with its `CompilationPhase`. `SpanDiagnostic::new` accepts a message, span,
+severity and phase; the builder also supports secondary labels and notes.
+Name resolution and type checking report `tribute_front::ast::NodeDiagnostic`
+instead, positioned at nodes, so their queries do not read the span map.
 
-`Diagnostic::accumulate(db)` requires an active `#[salsa::tracked]` query.
+`SpanDiagnostic::accumulate(db)` requires an active `#[salsa::tracked]` query.
 Attaching a database alone does not create a query context. Accumulate in the
 existing frontend query path, then retrieve diagnostics through that query or
 `compile_with_diagnostics`.
 
-```rust
-use tribute_core::diagnostic::Diagnostic;
+Readers see both kinds as `tribute_core::diagnostic::Diagnostic<'db>`, a view
+that borrows its text from the accumulated values. Read accumulated values
+outside any query: reading them inside one is an untracked read.
+`tribute_front::ast::locate_diagnostics` locates the node diagnostics against
+the span maps and chains them after the span diagnostics:
 
-let diagnostics: Vec<Diagnostic> =
-    tribute::pipeline::parse_and_lower_ast::accumulated::<Diagnostic>(db, source)
+```rust
+use tribute_core::diagnostic::{Diagnostic, SpanDiagnostic};
+
+let diagnostics: Vec<Diagnostic<'_>> =
+    tribute::pipeline::parse_and_lower_ast::accumulated::<SpanDiagnostic>(db, source)
         .into_iter()
-        .cloned()
+        .map(SpanDiagnostic::view)
         .collect();
 ```
 

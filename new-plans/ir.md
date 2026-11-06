@@ -90,7 +90,7 @@ smallest layer that can state an invariant precisely.
 
 | Layer | Responsibility | Failure timing | Examples |
 | ---- | ---- | ---- | ---- |
-| Operation verifier | Local invariants of one operation: operand/result/successor counts, operand/result/type-attribute type constraints and their equality or projection relations, required attributes, attribute domains, region shape, and terminator requirements that can be checked without global analysis. | At explicit operation validation checkpoints. Parsers, raw builders, and intermediate rewrites may temporarily violate schema constraints; only checks outside the schema, such as custom assembly parsing, may also fail at parse time. | `arith.cmpf` accepts only supported predicates; an op with regions requires the expected region count and terminator form. |
+| Operation verifier | Local invariants of one operation: operand/result/successor counts, operand/result/type-attribute type constraints and their equality or projection relations, required attributes, attribute domains, region shape, and terminator requirements that can be checked without global analysis. | At explicit operation validation checkpoints. Parsers, raw builders, and intermediate rewrites may temporarily violate schema constraints; only checks outside the schema, such as custom assembly parsing, may also fail at parse time. | `arith.cmpf` accepts only the predicates its kind lists; an op with regions requires the expected region count and terminator form. |
 | Conversion target | Dialect and type legality at a named lowering boundary. | Immediately after a pass or pass group claims a conversion boundary. Partial conversion rejects explicitly illegal operations; full conversion also rejects unknown operations. | Ability lowering leaves no `ability.perform`; backend-ready native IR contains only `clif.*` plus allowed infrastructure ops. |
 | Pass-manager verifier | Whole-IR consistency after transformations, with the offending pass identified. | After each pass registered in a `PassManager` when a verifier hook is installed. | SSA use-chain consistency, value visibility across isolated regions, or other graph-wide invariants. |
 | Operation interface and flag | Shared behavior or property queried generically across dialects. | At the consumer that needs dialect-independent behavior. Interfaces and flags should be introduced only for multiple concrete consumers or one generic transform. | `CallLike` for direct callees; the `Pure` flag for DCE removability; the `IsolatedFromAbove` flag for nested pass-manager anchoring. |
@@ -145,11 +145,20 @@ format과 선언적 rewrite 도구는 operation 정의를 중복하지 않고 �
   `Variadic<C>`는 같은 제약을 만족하는 0개 이상의 operand, `Values<L>`는
   타입 목록 `L`과 개수·순서·타입이 정확히 일치하는 operand 목록이다.
   `Attr<K>`는 attribute이고, `Option<Attr<K>>`는 선택 attribute다.
+  `#[default(v)] name: Attr<K>`는 기본값이 있는 operation attribute로, schema에서는
+  선택 attribute와 같다. 없는 attribute는 `v`를 뜻하므로 accessor는 `v`를 돌려준다.
+  `v`를 저장한 attribute는 없는 것과 같은 값이며, 정규형은 저장하지 않는 것이다.
+  Builder와 parser는 `v`와 같은 값을 저장하지 않고, printer는 `v`와 같은 값을 쓰지
+  않는다. 같은 값인지는 attribute 종류가 정하며, 부동소수점 종류는 비트로 비교하므로
+  기본값이 `0.0`일 때 `-0.0`은 저장된다. 목록 attribute, 선택 attribute, 타입
+  변수를 묶는 attribute, 타입 속성에는 기본값을 줄 수 없다. 타입은 속성으로 intern되므로 기본값을 저장한 타입과 저장하지
+  않은 타입이 다른 타입이 되기 때문이다.
   가변 operand 구간은 operand 중 마지막 하나만 허용한다.
 - Attribute 종류 `K`는 bound와 마찬가지로 Rust 타입이다. 종류는 schema가
   검사하는 값 영역, accessor가 돌려주는 값, builder가 받는 값을 스스로
-  정의하며, 정의 문법은 종류의 이름을 해석하지 않는다. 새 종류는 그 타입을
-  정의하는 것으로 추가된다. `[K]`는 모든 원소가 종류 `K`인 목록 종류이고,
+  정의하며, 정의 문법은 종류의 이름을 해석하지 않는다. Keyword처럼 기본 attribute
+  영역보다 좁은 종류는 그 영역도 스스로 검사하므로, 그 값을 operation verifier가
+  다시 검사하지 않는다. 새 종류는 그 타입을 정의하는 것으로 추가된다. `[K]`는 모든 원소가 종류 `K`인 목록 종류이고,
   원소 종류는 이름 있는 종류여야 한다. `Dict<V>`는 모든 값이 종류 `V`인
   dictionary 종류다. `_`는 모든 attribute 값을 받는다.
   문자열 종류만 예외로, 정의 문법이 알아보고 pool handle을 돌려주는 accessor를
@@ -223,7 +232,11 @@ exact bound 충돌)는 컴파일 시점에 거부한다. 다른 crate의 dialect
 선언적 제약은 verifier checkpoint에서만 강제한다. Parser, raw operation
 builder, operation clone, 결과 타입 재지정은 제약을 우회할 수 있으며, rewrite
 중간 상태가 일시적으로 제약을 위반하는 것도 허용한다. Pass 경계는 checkpoint다.
-각 pass가 끝나면 IR은 선언된 제약을 다시 만족해야 한다. 값의 타입만 먼저 바꾸는
+각 pass가 끝나면 IR은 선언된 제약을 다시 만족해야 한다. 따라서 pass와 backend는
+입력이 선언된 제약과 `#[verify]` hook을 만족한다고 가정하며, 그 검사를 자기
+코드에서 반복하지 않는다. Target 경계처럼 IR을 받아 검증하는 validator는
+operation별 검사 전에 정의의 검증을 먼저 수행하고, 자기 검사는 정의가 표현하지
+못하는 계약(symbol 해석, enclosing callable, region 내용 등)만 맡는다. 값의 타입만 먼저 바꾸는
 부분 변환은 `core.unrealized_conversion_cast`로 use가 선언한 타입을 유지하며,
 target 타입 변환이 양쪽 타입을 같게 만든 뒤에 cast를 해소한다. 표현이 같다는
 이유만으로 타입이 다른 값을 cast 없이 대입하지 않는다.
@@ -287,7 +300,18 @@ region or back to the parent operation. `RegionBranchTerminator` describes the
 values a terminator forwards along such a region transfer. Region branch points
 and successors are explicit values: a point is either `Parent` or a concrete
 nested-region terminator, and a successor is either a concrete region or
-`Parent`.
+`Parent`. As MLIR's `getRegionInvocationBounds`, `RegionBranch` also declares
+how many times each region may run per execution of the operation; the
+default bound is unknown.
+
+An operation *selects one region* when its entry reaches only regions, each
+region runs at most once by its declared bounds, and each region's single
+block ends either in a terminator whose only successor is `Parent` or in a
+proven `CallableExit`. `scf.if` and `scf.index_switch` select one region;
+`scf.loop` does not, since its body may run again, even when the body ends
+in a callable exit and its successor graph shows no back edge. Like MLIR's
+`hasLoop`, the property is derived from these interface answers, not
+declared by operation name, and a failed query means it does not hold.
 
 `CallableExit` is a separate dialect-registered operation interface for an
 operation that ends execution of the current callable and therefore cannot
@@ -296,12 +320,12 @@ terminator marker: `scf.yield`, `scf.break`, and `scf.continue` transfer within
 structured control flow and do not satisfy it. Dialects register only their
 verified callable exits, including ordinary `func.return`, proper tail
 transfers, and unreachable control flow. An arm of a result-producing
-`scf.if` may end with a verified `CallableExit` instead of `scf.yield`; such
-an arm produces no value and the operation's results come from its yielding
-arms. Source `become` ends a tail-position arm this way. The typed model and
-its dynamic query are fallible. An unregistered operation, malformed
-registered operation, or query error is never evidence that a region is
-terminal.
+operation that selects one region may end with a verified `CallableExit`
+instead of `scf.yield`; such an arm produces no value and the operation's
+results come from its yielding arms. Source `become` ends a tail-position arm
+this way. The typed model and its dynamic query are fallible. An unregistered
+operation, malformed registered operation, or query error is never evidence
+that a region is terminal.
 
 Structured-to-CFG lowering may use `CallableExit` only after preserving its
 own structural rules: the region must have one block, the exit must be that
@@ -353,13 +377,30 @@ view must likewise reject operations for which the applicable interface is not
 registered; interfaces describe possible transfers and do not materialize a
 flat CFG.
 
-`scf.switch` keeps its existing textual container region of `scf.case` and
-`scf.default` wrapper operations. That container is declarative rather than an
-executable successor. The switch's `RegionBranch` successors are the case and
-default body regions derived from those direct wrappers (or `Parent` for the
-implicit unmatched path when no default exists). The wrappers also expose
-their own parent/body boundary, so generic nested-region walkers never need to
-decode the switch's container shape themselves.
+`scf.index_switch`는 MLIR의 같은 이름 operation처럼 discriminant에 대한 구조적
+다중 분기다. MLIR과 달리 discriminant는 `index`가 아니라 고정 폭 정수
+(`IntegerLike`)이다. `cases`는 서로 다른 `i64` 값의 목록이고, operation은 필수
+`default` region 하나와 case마다 하나씩 같은 순서로 case region을 가진다.
+Discriminant가 어떤 case와 같으면 그 case region을, 아니면 `default` region을
+실행한다. 각 region은 `scf.yield` 또는 자기 terminator로 끝나며, `scf.yield`가
+넘기는 값이 operation의 결과가 된다. 결과는 없거나 여럿일 수 있다. 형식은
+`func.call`처럼 discriminant와 결과의 타입을 `: (A) -> R`로 쓰고, 결과가 없으면
+`-> ()`로 쓴다. `RegionBranch` successor는 case region들과 `default` region이며,
+각 region의 `scf.yield`는 `Parent`로 돌아간다. 선택할 region이 항상 있으므로
+parent에서 바로 `Parent`로 가는 경로는 없다.
+
+```text
+%r = scf.index_switch %x : (core.i32) -> core.i32
+case 0 {
+    scf.yield %a
+}
+case 7 {
+    scf.yield %b
+}
+default {
+    scf.yield %c
+}
+```
 
 `cf.switch`는 정수 타입(`IntegerLike`) discriminant에 대한 CFG 수준의 다중 분기다. Successor는
 `default`가 먼저이고 그 뒤로 `cases`의 값마다 하나씩 같은 순서로 오며, block
@@ -367,9 +408,40 @@ argument를 받지 않는다. Case는 discriminant 타입의 값이어야 한다
 있는 정수나 부호 없는 정수로 표현할 수 있어야 하고, 같은 폭에서 같은 비트열이
 되는 두 표기는 같은 값이다. Case는 서로 달라야 한다.
 Structured-to-CFG 변환은 case가 이 조건을 만족하는 정수 discriminant의
-`scf.switch`를 `cf.switch`로 내리고, 그렇게 표현할 수 없는 switch는 case마다
+`scf.index_switch`를 `cf.switch`로 내리고, 그렇게 표현할 수 없는 switch는 case마다
 비교하는 `cf.cond_br` 사슬로 내린다. Case 값의 분포에 따른 분기 전략은 target
-lowering이 정한다.
+lowering이 정한다. 형식은 MLIR `cf.switch`와 같이 discriminant 타입을 쓰고 default를
+case 목록의 첫 항목으로 쓴다.
+
+```text
+cf.switch %flag : core.i32, [default: ^bb1, 42: ^bb2, -1: ^bb3]
+```
+
+### Generic 형식
+
+모든 operation은 generic 형식으로 읽고 쓸 수 있다. Generic 형식은 MLIR의 generic
+형식을 따른다.
+
+```text
+%r = "test.op"(%a, %b)[^bb1] ({
+  ...
+}, {
+}) {attr = 1} : core.i32
+```
+
+- Operation 이름은 문자열로 쓴다. 따옴표 없는 이름 뒤에는 그 operation의 전용
+  형식이 오며, 전용 형식이 없는 operation은 generic 형식으로만 쓴다.
+  `core.module`은 printer와 parser가 따로 다루는 전용 형식을 가진다.
+- Operand는 언제나 괄호 안에 쓰며, 없으면 `()`다. Successor는 그 뒤에
+  `[^bb..]`로 쓴다.
+- Region은 attribute 사전 앞에 괄호로 감싸 쉼표로 나열한다. 그래서 attribute
+  자리의 `{`는 언제나 사전이며, block 없는 region도 빈 사전과 헷갈리지 않는다.
+- Attribute 사전은 비어 있으면 쓰지 않는다. `sym_name`도 사전에 쓴다.
+- Region의 entry block은 argument가 없으면 MLIR처럼 label을 생략하고, 다른
+  block은 그 뒤에 label과 함께 쓴다. 비어 있거나 같은 region의 branch가
+  successor로 가리키는 entry block은 label을 쓴다.
+- Result 타입은 `: types`로 쓴다. MLIR과 달리 operand 타입은 쓰지 않는다.
+  Operand는 정의에서 타입을 얻는다.
 
 ### 선언적 어셈블리 형식
 
@@ -418,32 +490,61 @@ literal은 문자열 literal로 쓴다.
 - **Operand** — `%name`으로 쓰고, 가변 operand는 쉼표로 구분한 목록이다. 목록을
   감싸는 괄호는 literal로 쓴다. Operand 타입은 쓰지 않는다. Generic 형식처럼
   parser는 SSA 이름으로 값을 찾고 값에서 타입을 얻는다.
-- **Attribute** — 그 attribute 종류의 textual 형식으로 쓴다. 기본은 generic
-  attribute 문법(`"text"`, `@sym`, `[..]`, `42`)이다. `keyword(attr)`는 종류가
-  keyword codec을 정의한 attribute를 따옴표 없는 식별자로 쓴다(예: calling
-  convention의 `cps`). `symbol(attr)`는 문자열 attribute를 정의 이름 `@name`으로
-  쓴다.
+- **Attribute** — 그 attribute 종류가 정한 textual 형식으로 쓴다(MLIR이
+  attribute 변수를 그 attribute의 문법으로 쓰는 것과 같다). 모든 종류는 자기 값의
+  출력과 파싱을 정의하며, 철자는 종류가 정하므로 operation마다 따로 지정하지
+  않는다. 따로 정의하지 않은 종류는 attribute 문법(`"text"`, `@sym`, `[..]`,
+  `42`)으로 쓴다. Keyword 종류는 값을 따옴표 없는 식별자로 쓴다(예: calling
+  convention의 `cps`). 저장 형태는 종류가 정하므로 문자열이 아니어도 되고,
+  parser는 그 종류가 받지 않는 식별자를 거부한다. 형식이 쓰는 값은 종류의
+  schema가 받는 값이며, 받지 않는 값을 가진 operation은 generic 형식으로 쓴다.
+  `symbol(attr)`는
+  문자열 attribute를 정의 이름 `@name`으로 쓴다.
+- **Operand 타입** — `type(x)`는 하나뿐인 operand `x`의 타입을 쓴다
+  (`cf.switch %flag : core.i32, ..`). Operand는 자기 원소가 따로 쓴다. Parser는
+  `functional_type`처럼 읽은 타입이 operand 정의의 타입과 같은지 확인한다.
 - **Result** — Result 이름과 `=`(`%r =`)은 형식에 쓰지 않는다. Printer가 앞에 쓰고,
   parser는 형식 parser를 부르기 전에 읽는다. Result 타입은 `type(result)`나
   `types(results)`, 또는 타입을 재구성하는 `signature`로 정확히 한 번 쓴다.
   `types`는 결과 목록을 쉼표로 구분해 쓰며, 결과가 없을 수 있으면 앞의 구두점과
-  함께 선택 묶음에 둔다.
-- **`attr_dict`** — 형식의 다른 원소가 쓰지 않은 모든 attribute를
-  `attributes {..}`로 쓴다. Keyword 없는 `{..}`는 region이나 generic 형식과
-  첫 token이 겹치므로 쓰지 않는다. 남은 attribute가 없으면 아무
-  것도 쓰지 않는다. 다른 원소가 쓰는 attribute는 자동으로 제외하며, parser는 그런
-  key를 dictionary에서 만나면 거부한다.
+  함께 선택 묶음에 둔다. 선언이 고정한 result 타입(`-> Value<I1>`)만은 쓰지 않아도
+  된다. 그러면 parser가 schema에서 그 타입을 가져오고, printer는 result 타입이
+  고정 타입과 같은 operation만 이 형식으로 쓴다(`arith.cmpi slt, %a, %b :
+  core.i32`의 결과 `core.i1`).
+- **`attr_dict`, `attr_dict_bare`** — 형식의 다른 원소가 쓰지 않은 모든
+  attribute를 `attr_dict`는 `attributes {..}`로, `attr_dict_bare`는 keyword 없이
+  `{..}`로 쓴다. 형식은 둘 중 하나만 쓴다. 남은 attribute가 없으면 아무 것도 쓰지
+  않는다. 다른 원소가 쓰는 attribute는 자동으로 제외하며, parser는 그런 key를
+  dictionary에서 만나면 거부한다.
 - **`signature(t, regions..)`** — 함수 형태 `(%a: A, %b: B) -> R`을 쓴다. `t`는
-  필수 `Attr<TypeOf<S>>` attribute나 `Value<S>` result이고, `S`는 bound를
-  하나만 가지며 그 bound가 signature codec을 구현해야 한다. 나머지 인자는 이 signature의 매개변수를 entry block
-  argument로 받는 region이다. 결과는 [타입 textual form](#타입-textual-form)의
-  함수 형태처럼 쓰되, 결과도 꼬리 표기도 없으면 화살표를 쓰지 않는다. 매개변수
-  이름은 첫 region의 entry block argument 이름이고, region이 없으면 `%arg0`,
-  `%arg1`, …이다.
+  필수 `Attr<TypeOf<S>>` attribute, `Value<S>` result, 고정 `Value<S>` operand 중
+  하나이고, `S`는 bound를 하나만 가지며 그 bound가 signature codec을 구현해야
+  한다. Operand는 자기 원소가 따로 쓰고 `signature`는 그 타입만 쓴다. Parser는
+  operand의 타입을 그 정의에서 얻으므로, 읽은 signature로는 result 타입만
+  재구성한다(`func.call_indirect %f(%x) : (A) -> R`). 나머지 인자는 이
+  signature의 매개변수를 entry block argument로 받는 region이다. 결과는 [타입 textual form](#타입-textual-form)의
+  함수 형태처럼 쓰되, region을 나열한 형식은 결과도 꼬리 표기도 없으면 화살표를
+  쓰지 않는다. 매개변수 이름은 첫 region의 entry block argument 이름이고, 그
+  region이 없으면 `%arg0`, `%arg1`, …이다. 형식이 region을 나열하지 않으면 함수
+  타입처럼 매개변수 이름 없이 타입만 쓰고 화살표를 생략하지 않는다
+  (`(A, B) -> R`, `(A) -> ()`). Operation이 result를 선언하면 signature의 결과가
+  곧 그 result 타입이므로, `signature`가 result 타입을 쓴 것으로 센다.
+- **`functional_type(xs, results)`** — operand `xs`의 타입과 result 타입을 함수
+  타입으로 쓴다(MLIR `functional-type`, `func.call @f(%a) : (A) -> R`). Result가
+  하나면 괄호 없이, 없거나 여럿이면 괄호로 묶어 쓴다(`-> ()`, `-> (R, S)`).
+  Result를 선언하지 않은 operation은 operand만 나열하고 `-> ()`를 쓴다. Operand
+  타입은 그 정의에서 얻으므로 parser는 읽은 operand 타입이 operand마다 하나씩
+  있고 정의의 타입과 같은지 확인하며, 다르면 거부한다(MLIR과 같다). Result
+  타입은 읽은 대로 재구성한다.
+- **`args(r)`** — region `r`의 entry block argument를 `(%a: A, %b: B)`로 쓰고,
+  `r`은 entry block label을 생략한다. `signature`와 같은 방식이지만 타입은 block
+  argument에서 읽는다. `r`은 고정 region이며, 형식은 entry argument를 header로
+  쓰는 원소(`args`나 region을 나열한 `signature`)를 하나만 둔다. Region에 entry
+  block이 없으면 형식으로 출력하지 않는다.
 - **`region(r)`, `regions(rs)`** — `{ .. }`로 쓴다. `signature`가 entry
-  argument를 쓰는 region은 entry block label을 생략하고, parser가 signature의
-  매개변수를 entry block argument로 되돌린다. 다른 region은 entry label과 argument를
-  generic처럼 쓴다. 선택 region이 없으면 아무것도 쓰지 않는다.
+  argument를 쓰는 region은 block이 여럿이어도 entry block label을 생략하고, parser가
+  signature의 매개변수를 entry block argument로 되돌린다. 다른 region은 entry
+  label과 argument를 generic처럼 쓴다. 선택 region이 없으면 아무것도 쓰지 않는다.
   `labelled_regions(rs, attr)`는 `{ label { .. } label { .. } }`로 쓰고 label은
   목록 attribute `attr`의 원소를 keyword로 쓴 것이다. 이 원소는 region 목록과
   `attr`를 함께 쓴다.
@@ -455,18 +556,21 @@ literal은 문자열 literal로 쓴다.
   묶음에서 값을 쓰지 않으면 표시 flag다. `true`면 묶음을 쓰고 parser는 묶음을
   만나면 `true`를 저장한다.
 - **`custom(D(entities..))`** — 선언적으로 쓸 수 없는 부분을 Rust 타입 `D`에
-  맡긴다. `D`는 `OpAsmDirective`를 구현하며, 나열한 entity의 출력, 손실 없는
-  출력 가능 여부 판정, 파싱을 맡는다. 형식 검증은 나열한 entity를 이 directive가
+  맡긴다(MLIR `custom<D>`). `D`는 `OpAsmDirective`를 구현하며, 나열한 entity의
+  출력, 손실 없는 출력 가능 여부 판정, 파싱을 맡는다. 나열할 수 있는 entity는
+  operand, attribute, successor, region이다. 예를 들어 `clif.switch`는 case 값과
+  그 successor를 짝지어 `[0: ^first, 5: ^second]`로 쓰고, `scf.index_switch`는
+  case 값과 그 region을 짝지어 줄마다 `case 0 {..}`로 쓴다. 형식 검증은 나열한 entity를 이 directive가
   쓴 것으로 센다. Parser는 directive가 나열하지 않은 entity의 값을 돌려주면
   거부한다.
 
-Operation 이름 뒤의 입력은 모두 형식 parser가 읽는다. Generic 형식이 operation
-이름 뒤의 `@name`을 `sym_name`으로 읽는 축약은 손으로 쓴 형식과 generic 형식에만
-해당하며, 선언적 형식에서는 `symbol(sym_name)`이나 symbol 참조 attribute처럼 `@`로
-시작하는 원소가 그 자리를 읽는다.
+Operation 이름 뒤의 입력은 모두 형식 parser가 읽는다. Operation 이름 뒤의
+`@name`을 `sym_name`으로 읽는 축약은 손으로 쓴 형식에만 해당한다. 선언적
+형식에서는 `symbol(sym_name)`이나 symbol 참조 attribute처럼 `@`로 시작하는 원소가
+그 자리를 읽고, generic 형식은 `sym_name`을 attribute 사전에 쓴다.
 
 공백은 원소 사이에 하나 쓴다. `(`, `[` 뒤와 `)`, `]`, `,` 앞에는 쓰지 않고,
-`signature`와 `"("`는 앞 원소에 붙여 쓴다. Parser는 원소 사이의 공백을 무시한다.
+`signature`와 `"("`는 앞 원소에 붙여 쓰되, 구두점 literal 뒤에서는 한 칸 띄운다. Parser는 원소 사이의 공백을 무시한다.
 
 #### 컴파일 시점 검증
 
@@ -478,24 +582,26 @@ Macro는 형식 기술을 선언과 대조해 다음을 어기면 그 원소를 
   세지 않는다.
 - Attribute는 많아야 한 번 명시하고, 명시하지 않은 attribute가 있으면
   `attr_dict`가 있어야 한다. 같은 entity를 두 원소가 쓰지 않는다.
-- 형식은 원소를 하나 이상 쓰고, `symbol`과 symbol 참조 attribute로 시작할 수
-  있다. Generic 형식은 `@`로 시작하지 않기 때문이다. 그 뒤, 또는 그런 원소가
-  없으면 처음에는 literal이 온다. 앞에 symbol이 있으면 이 literal로 여는 선택
-  묶음이나 `(`로 시작하는 `signature`도 된다. 이 literal은 `{`, `%`, `:`, `[`,
-  `^`, `}`로 시작하지 않는다. 앞의 넷은 generic 형식이 operation 이름 뒤에 쓰는
-  것이고, 나머지는 operation 이름만 쓴 generic 형식 뒤의 다음 줄이 시작할 수 있는
-  것이다.
+- 형식은 원소를 하나 이상 쓴다. 첫 원소는 어느 원소든 될 수 있다. Generic
+  형식은 따옴표로 쓴 이름으로 시작하므로, 따옴표 없는 이름 뒤는 언제나 그
+  operation의 형식이 읽는다.
 - 선택 묶음은 여는 literal로 시작하고, 그 뒤에는 literal과 anchor 하나만 둔다.
   여는 literal은 keyword(값이 시작하는 `true`, `false`, `unit`, `loc`, `b`는
   제외)이거나 값, `attr_dict`, 다음 줄이 시작할 수 없는 구두점이며, 형식의 다른
   literal과 같지 않고 구두점끼리는 접두사도 겹치지 않는다. Parser는 여는 literal을
   읽으면 묶음이 있다고 정한다.
 - Anchor는 선택 attribute, 가변 operand, 가변 result 중 하나다.
-- 가변 result나 선택 result의 타입은 `(":" types(..)^)?`처럼 선택 묶음의
-  마지막에 쓰고, 그 묶음은 형식의 마지막 원소다.
-- 가변 operand·successor 목록 바로 뒤에는 선택 묶음이 아닌 닫는 literal `")"`나
-  `"]"`가 온다. 빈 목록이 뒤의 원소를 읽거나 목록이 쉼표를 자기 구분자로 읽는
-  일이 없게 하기 위해서다.
+- 가변 result나 선택 result의 타입은 선택 묶음 안에 쓴다. 타입 목록 바로 뒤에는
+  `,`가 아닌 literal이 오거나, 형식을 끝내는 묶음의 끝이 온다
+  (`(":" types(..)^)?`, `("->" "(" types(..)^ ")")?`).
+- 가변 successor 목록 바로 뒤에는 선택 묶음이 아닌 닫는 literal `")"`나 `"]"`가
+  온다. 가변 operand 목록 바로 뒤에는 operand나 `,`로 시작하는 literal이 오지
+  않는다. 목록이 쉼표를 자기 구분자로 읽거나 뒤의 operand를 제 항목으로 읽는 일이
+  없게 하기 위해서다. Printer는 operand 목록을 한 줄에 쓰고, parser는 줄바꿈 뒤의
+  operand를 목록의 첫 항목으로 읽지 않는다. 그래서 빈 목록은 다음 줄의
+  `%r = ..`를 읽지 않는다.
+- `attr_dict_bare` 뒤에서 선택 묶음을 건너뛴 첫 원소는 region이 아니다. Region도
+  `{`로 시작하기 때문이다.
 - 선택 region과 가변 region 목록 뒤에서 선택 묶음을 건너뛴 첫 원소는 없거나
   `{`로 시작하지 않는 literal이다.
 - Literal `attributes`는 `attr_dict`만 쓴다.
@@ -513,23 +619,48 @@ Printer는 쓰기 전에 operation이 형식으로 손실 없이 표현되는지
 - `attr_dict`가 없으면 선언하지 않은 attribute가 없다.
 - Signature codec이 타입을 분해할 수 있고, `signature`가 entry argument를 쓰는
   각 region의 entry block argument 타입이 codec의 입력 타입과 같다. 여러 region이면
-  모든 region이 같은 매개변수를 받는다.
+  모든 region이 같은 매개변수를 받는다. `signature`가 result 타입을 쓰면
+  operation의 result 타입이 codec이 분해한 결과 타입과 같다.
 - 각 custom directive가 출력 가능하다고 판정한다.
 
 이 판정을 통과한 operation은 parser가 같은 operation으로 다시 읽고, 다시 출력하면
-같은 텍스트가 된다. 같은 operation을 generic 형식으로 쓴 텍스트도 같은 operation으로
+같은 텍스트가 된다. 기본값을 저장한 attribute는 예외로, printer가 쓰지 않으므로
+parser는 그 attribute가 없는 정규형으로 읽는다. 두 operation은 accessor가 보기에
+같다. 같은 operation을 generic 형식으로 쓴 텍스트도 같은 operation으로
 읽힌다. Parser는 operation schema를 검증하지 않는다.
 
-Parser는 `symbol`이 아닌 원소가 첫 token을 읽기 전에만 backtrack하고, 그 뒤의
-실패는 기대한 원소를 밝힌 오류로 끝낸다. 원소 사이의 공백은 token이 아니다. Keyword
-literal과 `attr_dict`의 `attributes`는 식별자 전체로 읽으며, 바로 뒤에 `.`이 오면
-다음 operation 이름의 일부로 보고 읽지 않는다. 첫 token에서 backtrack한 입력은 generic
-형식으로 다시 읽는다.
+Parser는 텍스트를 읽으면서 바로 IR을 만들며, 중간 표현을 거치지 않는다. 값
+이름은 읽는 즉시 같은 region이나 바깥 region에서 보이는 정의로 해석한다. 정의보다
+먼저 쓰인 이름(뒤 block의 argument 등)은 자리표시 값을 받고, 정의가 그 값을
+대신한다. 끝까지 정의되지 않은 이름은 처음 쓰인 곳의 오류다. Block label은 같은
+region의 block을 가리키며, 처음 언급될 때 만들어지고 label이 정의된 곳에서
+채워진다. 형식이 쓴 operand 타입은 정의의 타입과 같아야 하고, 아직 정의되지 않은
+값이면 정의할 때 검사한다. 모든 parse 오류는 텍스트의 byte offset을 밝힌다.
+
+형식 parser는 생략 가능한 원소를 읽기 전에 다음 token으로 그 원소가 있는지
+정하고, 없으면 텍스트를 소비하지 않는다. 원소를 읽기 시작한 뒤의 실패는 오류이며
+다른 해석으로 되돌아가지 않는다. 그래서 operation, block, region, 값은 그 구성을
+읽기로 확정한 뒤에만 만들어지고, 없다고 판정된 원소는 context에 아무것도 남기지
+않는다. 타입과 문자열의 intern은 같은 값을 다시 만들지 않으므로 IR을 바꾸지
+않는다. 타입 전용 문법은 자기 문법이 아니면 아무것도 읽기 전에 그렇다고 답하고,
+parser는 그 자리에서 generic 표기를 읽는다.
+
+형식 parser의 실패는 기대한 원소를 밝힌 오류로 끝나며, 같은 입력을 generic
+형식으로 다시 읽지 않는다. 원소 사이의 공백은 token이 아니다. Keyword literal과
+`attr_dict`의 `attributes`는 식별자 전체로 읽으며, 바로 뒤에 `.`이 오면 다음
+operation 이름의 일부로 보고 읽지 않는다.
 
 `signature`가 entry argument를 쓰는 region이 여럿이면 printer는 둘째 이후
 region의 entry argument에 첫 region과 같은 이름을 주고, parser는 매개변수를 모든
 region의 entry block에 되돌린다. Printer는 `IsolatedFromAbove` operation의 형식을
 쓰는 동안 값과 block 번호를 새로 매기고, 쓴 뒤에는 바깥 번호를 이어 간다.
+
+Printer는 쓰기 전에 이름을 정한다. 출력할 operation마다 pre-pass가 형식이 쓰는
+순서대로 값 번호(`%N`)와 block label(`^bbN`)을 매기고, module마다 type alias를
+정한다. 형식은 출력하는 동안 이름을 새로 매기지 않고 이 결과를 읽기만 하므로,
+타입·attribute·값 이름은 다른 텍스트 안에 그대로 쓸 수 있는 값이다. 손으로 쓴
+형식이 기본 순서(result, 그다음 region을 차례로)와 다른 순서로 이름을 쓰거나 여러
+region의 값에 이름 하나를 쓰면, 그 순서와 공유를 pre-pass에 선언한다.
 
 #### 표기 관례
 
@@ -539,16 +670,38 @@ region의 entry block에 되돌린다. Printer는 `IsolatedFromAbove` operation�
 
 - Symbol을 정의하는 operation은 operation 이름 바로 뒤에 `symbol(sym_name)`으로
   `@name`을 쓴다.
+- Symbol을 참조하는 필수 attribute는 attribute 사전에 두지 않고 위치로 쓴다.
+  직접 호출은 MLIR `func.call`처럼 `@callee(%args) : (A) -> R`로 쓰고, 그 밖의
+  참조는 operand보다 앞에 쓴다(`clif.symbol_addr @f`). Operation 종류를
+  keyword로 쓰는 operation은 그 keyword 뒤에 쓴다
+  (`tribute_control.perform fn @State @get(..)`). 참조 목록도 종류의 문법
+  `[@a, @b]`로 같은 자리에 쓴다. 선택 attribute 안의 참조(`evidence_plan`,
+  `adapters`)는 attribute 사전에 남는다.
 - 남은 attribute는 `attr_dict`로 region 바로 앞에 쓰고, region이 없으면 끝에
-  쓴다.
+  쓴다. Region이 없는 operation은 `attr_dict_bare`로 `{..}`만 쓸 수 있다.
 - Capture operand 목록은 비어 있어도 `captures [..]`로 쓴다.
-- Convention처럼 keyword로 쓰는 attribute 하나는 `name(keyword)`로 쓴다
-  (`convention(cps)`).
+- Callable 정의의 convention처럼 keyword로 쓰는 attribute 하나는
+  `name(keyword)`로 쓴다(`convention(cps)`). 간접 호출은 MLIR
+  `func.call_indirect`처럼 callee의 signature를 쓰고, convention은 attribute
+  사전에 둔다.
+- MLIR에 대응하는 operation이 있으면 그 이름과 표기를 따른다(`scf.index_switch`의
+  `case 0 {..}`와 `default {..}`, `arith.constant 42 : core.i32`,
+  `arith.cmpi slt, %a, %b : core.i32`, `arith.extsi %a : core.i32 to core.i64`,
+  `core.unrealized_conversion_cast %v : A to B`). 같은 모양의 다른 dialect
+  operation도 같은 표기를 쓴다: 상수는 값을 자리로(`clif.iconst 0 : core.i64`,
+  `wasm.i32_const 1 : core.i32`), 비교는 조건을 keyword로 앞에 두고 operand
+  타입을 쓰며(`clif.icmp eq, %a, %b : core.i64`), 결과 타입이 연산으로 정해지지
+  않는 변환은 `: A to B`로 쓴다(`clif.uextend %a : core.i8 to core.i32`). 아래
+  관례는 그렇지 않은 operation에 적용한다.
 - 이름 붙은 본문이 여럿이면 `entries { label { .. } .. }`로 쓴다. 본문마다
   signature가 다르면 label 뒤에 그 본문의 signature를 쓴다
   (`label(%x: T) -> R { .. }`). 모든 본문이 같은 signature를 받으면 signature는
   header에 한 번만 쓴다.
 - `signature`로 재구성되지 않는 result 타입은 형식의 끝에 `: type`으로 쓴다.
+- 간접 호출은 MLIR의 `func.call_indirect`처럼 `%callee(%args)`로 쓴다. 호출
+  signature를 attribute로 가지면 `: signature(t)`로 끝에 쓰고, 결과 타입은 그
+  signature에서 재구성한다. Callee 타입이 signature이면 operand 타입에서 얻으므로
+  result 타입만 `: type`으로 쓴다.
 
 ```text
 %f = closure.lambda captures [%y] attributes {adapters = {evidence_direct = @a0}} entries {
@@ -572,8 +725,8 @@ dialect 이름을 알지 못하며, `signature`는 형식이 묶은 타입 변�
 - 분해는 입력과 결과(각각의 매개변수 속성 포함), 그리고 codec이 소유하는 꼬리
   표기를 돌려준다. 손실 없이 분해할 수 없는 타입이면 분해하지 않으며, 그
   operation은 generic 형식으로 출력한다.
-- 재구성은 parser가 읽은 입력·결과와 꼬리 표기를 그 타입의 generic raw 형태로
-  만든다. Codec은 허용하는 결과 개수를 정한다.
+- 재구성은 parser가 읽은 입력·결과와 꼬리 표기로 그 타입을 만든다. Codec은
+  허용하는 결과 개수를 정한다.
 - 꼬리 표기는 결과 뒤에 오는 codec 고유의 절이며, codec이 출력과 파싱을 모두
   맡는다. `func.func_sig` 계열은 매개변수 속성을 매개변수 뒤에 `%a: A {k = v}`로
   쓰고, 두 count 밖의 type attribute를 결과 뒤에 쉼표로 이어 dictionary로 쓴다
@@ -823,7 +976,7 @@ consumer는 nested region을 재귀적으로 순회해야 하며, "사용 없음
   않으므로 이 cast는 callable의 호출 방식을 바꾸지 않으며 callable adapter를
   생성하지 않는다. 한 callable 값을 다른 convention으로 부르는 일은 그 값의
   [convention entry](#convention-entry)가 맡는다.
-- `core.nil`의 유일한 값은 속성 없는 `core.nil_value`가 만든다. `arith.const`는
+- `core.nil`의 유일한 값은 속성 없는 `core.nil_value`가 만든다. `arith.constant`는
   nil을 만들지 않는다.
 - Operation과 type의 이름은 `<dialect>.<name>` 텍스트 하나로 표기한다. Dialect
   identifier에는 점이 없으므로 첫 점이 dialect와 이름의 경계이고, 이름 쪽에는 점이
@@ -853,7 +1006,7 @@ consumer는 nested region을 재귀적으로 순회해야 하며, "사용 없음
   이름을 읽기만 하는 곳은 `&Symbol`을 받는다.
 - Symbol 해석은 MLIR 규칙을 따른다. `core.module`은 symbol table이며, 정의는 자기를
   직접 감싼 module에 `sym_name`을 등록한다. 이름 있는 `core.module`은 부모 table의
-  symbol이기도 하다. 함수 symbol 참조(`callee`, `func_ref`, target dialect의 직접
+  symbol이기도 하다. 함수 symbol 참조(`callee`, 함수 참조의 `value`, target dialect의 직접
   호출과 주소 참조)의 첫 component는 참조하는 operation을 감싼 가장 가까운 module의
   table에서 찾는다. 찾지 못해도 바깥 module로 올라가지 않는다. 나머지 component는 앞
   component가 가리킨 module의 table로 차례로 내려가며 찾으므로, 마지막이 아닌
@@ -951,8 +1104,7 @@ convention 속성과 physical `func.func_sig`나 `closure.closure` component를
 | `tribute_control.tail_call_indirect` | source `become`의 callable value 간접 proper tail call |
 | `tribute_control.return` | `func` 또는 `lambda` body의 logical result 반환 |
 | `tribute_control.perform` | source `fn` 또는 general `op` 하나를 semantic kind를 보존한 직접형으로 호출 |
-| `tribute_control.handle` | 직접형 computation, completion arm, handler table의 경계를 설정 |
-| `tribute_control.handler` | handle 안의 `fn` 또는 general `op` handler arm을 기술 |
+| `tribute_control.handle` | 직접형 computation, completion arm, handler arm의 경계를 설정. 각 arm은 처리하는 operation의 binding과 짝을 이루는 region이다 |
 | `tribute_control.resume` | resumptive general handler arm에 바인딩된 affine resumption을 소비 |
 | `tribute_control.yield` | 실행 가능한 `tribute_control` region을 logical value로 종료 |
 
@@ -1012,9 +1164,11 @@ tribute_control.func_sig<(T) -> R row(@"<instance A>", @"<instance B>" | 'a1)>
   [`ability.decl`](../crates/tribute-ir/src/dialect/ability.rs)에 대한 symbol
   참조 목록이고
   `tail`은 둘러싼 정의의 [row binder](#row-binder) index다. 둘 다 없으면 닫힌 빈
-  row이며 속성을 생략해 쓴다. `instances`는 symbol 경로 순서로 정렬한다. 같은
-  instance가 두 번 나오면 두 번 둔다. Evidence 선택이 instance의 위치 수를 세기
-  때문이다.
+  row이며 속성을 생략해 쓴다. `instances`는 symbol 경로 순서로 정렬하며 같은
+  instance를 한 번만 둔다. Row는 [instance의 집합](type-inference.md#기본-규칙)이다.
+  명시 label과 tail이 같은 instance를 담는 호출에서 어느 위치가 어느 handler를 받는지는
+  type이 아니라 typechecking이 인스턴스화에서 계산한
+  [evidence 선택](#evidence-선택-속성)이 담는다.
 - **정체성:** signature의 정체성은 입력, 결과, row의 조합이다. Convention은
   signature에 들어가지 않는다. 같은 row도 인스턴스가 고정한 class에 따라 다른
   convention으로 불릴 수 있다([cps-effects.md](cps-effects.md#row와-호출-규약)).
@@ -1045,7 +1199,10 @@ binder가 없다. `ability_arg`는 ability instance의 symbol이 그 인자를 �
 값이 람다가 아닌 binding은 한 번 계산되므로 그 지역 scheme의 변수를 인스턴스화하는
 사용이 없고, 그 변수는 `body`다. Binder 종류는 row의 구조만 기록하며 실행 전략을 담지
 않는다. CPS 전략의 class 특수화는 tail의 class를 binder 종류에 따라 읽는다. `param`은
-그 인스턴스가 고정한 class, `ability_arg`와 `body`는 `Cps`다. `local`의 class는 그것을
+그 인스턴스가 고정한 class, `ability_arg`는 `Cps`다. `body`는 정의 안의 어느 callable
+type의 매개변수 타입에도 나타나지 않으면 요구 없음이고, 나타나면 `Cps`다
+([tail 규칙](cps-effects.md#row와-호출-규약)). 이 판정은 binder마다 정의 전체에서 한
+번 하므로 그 binder를 읽는 모든 자리가 같은 class를 읽는다. `local`의 class는 그것을
 소유한 람다의 본문마다 다르며, [convention entry](#convention-entry)의 class 읽기가
 정한다.
 
@@ -1083,12 +1240,28 @@ binder를 공유하며, entry마다 그 binder에 class를 하나씩 고정한�
 식은 `tribute_control.lambda` 하나이고, 사용처마다 따로 만들지 않는다. Class
 특수화도 람다를 값 하나로 두며 [본문](#convention-entry)만 class마다 늘린다. 쓰이지 않는
 람다는 양화할 사용이 없으므로 그 변수는 `body`다. 다른 `let`의 값으로 람다를 다시
-묶는 별칭은 람다가 아닌 값이다. 별칭 자리에서 람다를 한 번 인스턴스화하며, 별칭의
-지역 scheme이 양화한 변수는 `body`다. 람다가 아닌 binding의 사용은 `instantiate`를
-거치지 않으므로, 타입 검사가 사용마다 그 scheme을 새로 인스턴스화하더라도 IR의 값
-type에는 그 `body` binder가 그대로 남는다. 그래서 별칭이나 일반화된 계산 결과를 통한
-간접 이전은 그 자리를 `Cps`로 읽고, 별칭 자리의 인스턴스화도 `Cps`를 고르므로 값은
-그 entry를 가진다.
+묶는 별칭은 람다가 아닌 값이다. 별칭 자리에서 람다를 한 번 인스턴스화한다.
+람다나 함수 참조가 아닌 `let`은 row 변수를 양화하지 않으므로
+([일반화](type-inference.md#generalization)), 그런 binding의 모든 사용은 값을 만든
+쪽과 같은 row를 본다. 사용이 고정한 row는 값의 type에도 그대로 들어가고, 아무 사용도
+고정하지 않은 row 변수만 `body` binder로 남는다. 그래서 별칭이나 계산 결과를 통한
+간접 이전과 별칭 자리의 인스턴스화는 그 binder를 같은
+[tail 규칙](cps-effects.md#row와-호출-규약)으로 읽어 같은 class를 고르며, 값은 그
+entry를 가진다. 그 binder가 정의 안의 어느 매개변수 타입에도 나타나지 않으면 둘 다
+요구 없음으로 읽는다. 값은 binder를 추상 변수로 두고 만들어졌고, binder가 정체를 잃는
+매개변수 자리가 없으므로 그 binder를 통해 어떤 operation에도 닿지 못한다. 나타나면
+둘 다 `Cps`로 읽는다. 그런 값의 매개변수 row tail이 그 `body` binder이면, 그 자리에
+넘기는 람다는 매개변수의 callable type으로 만들고, 함수 참조는 그 type의
+`tribute_control.func_ref`로 다시 만든다. Conversion cast는 callable의 ABI를 바꿀 수
+없기 때문이다.
+
+람다의 별칭과 달리, 이름 붙은 함수를 그대로 묶은 binding과 그런 binding을 다시
+묶은 별칭은 값을 묶지 않는다. 함수 참조는 할당도 효과도 없으므로, 그 binding의
+사용은 묶인 값을 읽지 않고 함수를 다시 참조한다. 그 `tribute_control.func_ref`는
+타입 검사가 그 사용에 고른 인스턴스의 row를 넘긴다. 별칭마다 scheme을 인스턴스화한
+row를 사용 쪽에서부터 거슬러 대입해 함수 참조 자리의 row 인자를 얻는다. 그래서
+순수한 사용은 `body` binder 대신 그 사용의 row를 보고, 닫힌 row의 람다를 그대로
+넘길 수 있다.
 
 #### Row 인자와 치환
 
@@ -1101,7 +1274,7 @@ Row-polymorphic 정의를 참조하는 `call`, `tail_call`, `func_ref`는 `row_a
 [convention class](cps-effects.md#row-변수의-convention-class) 규칙이 정한다.
 참조가 보는 callee signature는 callee의 type에 row 인자를 치환한 것이다. 치환은
 type 안의 모든 `func_sig`(자기 자신 포함)에서 tail이 양화된 binder `t`인 row
-`(I, t)`를 `(I ⊎ args[t].instances, args[t].tail)`로 바꾸고 정렬한다. 다른 속성은 바꾸지
+`(I, t)`를 `(I ∪ args[t].instances, args[t].tail)`로 바꾸고 정렬한다. 다른 속성은 바꾸지
 않는다. Tuple layout은 원소를 치환한 뒤 같은 이름 규칙으로 다시
 만든다([layout 이름](#compiler-generated-tuple-layout)). `call_indirect`와
 `tail_call_indirect`의 callee type은 이미 caller의 binder로 쓰여 있으므로 row 인자가
@@ -1227,8 +1400,8 @@ convention entry들이 adapter 하나를 공유하게 할 수 있다.
 trap하는 함수이며, target은 signature가 같은 trap entry들이 하나를 공유하게 한다.
 Trap entry는 실행되지 않는다. 값이 놓이는 자리의 class는 그 값의 실제 class보다
 약하지 않고, 값은 실제 class부터 자기가 읽힌 상한까지의 본문을 모두 갖기 때문이다.
-Class는 row의 tail에서 계산하고, 값이 tail의 정체를 잃는 자리(별칭, class 없는
-tail)는 `Cps`로만 읽는다. Class 특수화는 확인할 수 있는 것을 확인한다. 모든 간접
+Class는 row의 tail에서 계산하고, 값이 tail의 정체를 잃을 수 있는 자리(`ability_arg`
+tail, 매개변수 타입에 나타나는 `body` tail)는 `Cps`로만 읽는다. Class 특수화는 확인할 수 있는 것을 확인한다. 모든 간접
 이전의 convention은 그 이전을 담은 인스턴스와 본문의 class 읽기로 callee type을 읽은
 class(상한이면 상한)와 같아야 하며, 다르면 컴파일 오류다. Trap entry는 값의 흐름을 따라가야만 드러나는
 위반을 실행 중에 멈추게 하는 안전망이다.
@@ -1622,7 +1795,7 @@ RC가 배열 operation에 두는 ownership 규칙과 제자리 쓰기의 순환 
 `adt.array_get`과 `adt.array_set`의 index, `adt.array_splice`의 `start`와 `end`,
 `adt.array_new`의 `length`, `adt.array_len`의 결과는
 [`core.index`](#coreindex-주소-폭-정수)다. 배열의 원소 개수와 위치는 target의 주소
-폭으로 센다. 고정 폭 정수에서 온 index는 `arith.index_castsi`나
+폭으로 센다. 고정 폭 정수에서 온 index는 `arith.index_cast`나
 `arith.index_castui`로 명시적으로 바꾼다.
 
 Index는 부호 없는 값으로 해석한다. Target은 각 operation이 선언한 범위 전제를
@@ -1765,11 +1938,11 @@ tail-call lowering.
 
 `arith.*` represents constants, integer and floating arithmetic, comparisons,
 bit operations, and numeric conversions.
-`arith.const`는 정수와 부동소수 값만 만든다. 정수 결과는 `Int` 속성을 받고,
+`arith.constant`는 정수와 부동소수 값만 만든다. 정수 결과는 `Int` 속성을 받고,
 `core.i1`은 `Bool` 속성도 받는다. 부동소수 결과는 `FloatBits` 속성을 받는다.
 정수 타입 `core.i{N}`은 부호가 없다(signless). 부호는 타입이 아니라 각 operation이
 정한다. 부호에 따라 결과가 달라지는 operation은 모두 부호 있는 쪽과 없는 쪽을 명시한
-쌍으로 둔다: `divsi`/`divui`, `remsi`/`remui`, `shr`/`shru`, `cmpi` predicate,
+쌍으로 둔다: `divsi`/`divui`, `remsi`/`remui`, `shrsi`/`shrui`, `cmpi` predicate,
 그리고 아래 변환이다. 부호와 무관한 operation(`addi`, `subi`, `muli`, 비트 연산)은
 하나만 둔다.
 
@@ -1780,16 +1953,16 @@ bit operations, and numeric conversions.
 | 정수 → 부동소수 | `sitofp` / `uitofp` | |
 | 부동소수 → 정수 | `fptosi` / `fptoui` | 범위 밖 값과 NaN은 trap한다 |
 | 부동소수 폭 | `extf` / `truncf` | 넓히기 / 좁히기 |
-| 정수 ↔ index | `index_castsi` / `index_castui` | 한쪽은 `core.index`, 다른 쪽은 고정 폭 정수 |
+| 정수 ↔ index | `index_cast` / `index_castui` | 한쪽은 `core.index`, 다른 쪽은 고정 폭 정수 |
 
 정수 산술(`addi`, `subi`, `muli`, `divsi`/`divui`, `remsi`/`remui`, `negi`), 비트
-연산, `cmpi`, `arith.const`는 고정 폭 정수와 함께 [`core.index`](#coreindex-주소-폭-정수)도
+연산, `cmpi`, `arith.constant`는 고정 폭 정수와 함께 [`core.index`](#coreindex-주소-폭-정수)도
 받는다(`IntegerOrIndex`). `core.index` 연산의 의미는 target의 index 폭을 가진
 고정 폭 정수의 같은 연산과 같다. 폭을 직접 다루는 연산(`extsi`/`extui`/`trunci`,
 정수와 부동소수 사이의 변환, `cf.switch`)은 고정 폭 정수만 받는다.
-`arith.const`의 `Int` 값은 index 폭으로 자른 값으로 읽는다.
+`arith.constant`의 `Int` 값은 index 폭으로 자른 값으로 읽는다.
 
-`index_castsi`와 `index_castui`는 고정 폭 정수와 `core.index` 사이를 어느 방향으로든
+`index_cast`와 `index_castui`는 고정 폭 정수와 `core.index` 사이를 어느 방향으로든
 바꾼다. 결과가 더 넓으면 각각 부호 확장과 0 확장을 하고, 더 좁으면 자르며, 폭이
 같으면 값을 그대로 둔다. Index 폭에 따라 결과가 달라지는 상수 접기는 하지 않는다.
 상수 피연산자의 cast는 index 폭과 무관하게 같은 값이 나오고 그 값이 64비트 부호 있는
@@ -1800,7 +1973,7 @@ bit operations, and numeric conversions.
 
 `arith`는 포인터를 다루지 않는다. 정수는 포인터가 되지 않으며, 포인터와 정수 사이의
 변환 operation은 없다. 포인터는 할당, runtime, `mem.data`에서 나오고 `mem.ptr_add`로만
-파생되므로 모든 포인터의 출처를 추적할 수 있다. `arith.const`는 `core.ptr` 값을 만들지
+파생되므로 모든 포인터의 출처를 추적할 수 있다. `arith.constant`는 `core.ptr` 값을 만들지
 않는다.
 
 `mem.*` represents low-level data, load, and store operations for runtime or FFI
@@ -2128,7 +2301,8 @@ Symbol 참조는 symbol table의 정의를 component path로 가리키며(`calle
 참조를 가진 operation에서 가장 가까운 module부터 해석한다. 참조가 아닌 이름 값은
 문자열이다. 비교 조건(`predicate`, `cond`), trap code, wasm value·heap
 type 이름, import의 module·name처럼 정해진 짧은 이름(atom)이 여기에 해당하며
-`predicate = "slt"`로 쓴다. Operation
+generic 형식에서는 `predicate = "slt"`로 쓴다. 비교 조건처럼 값의 집합이 정해진
+keyword 종류는 전용 형식에서 따옴표 없이 쓴다(`arith.cmpi slt, ..`). Operation
 이름(`op_name`), operation kind(`"fn"`, `"op"`), compiler intrinsic identity
 (`tribute.compiler_intrinsic`)도 symbol table의 정의가 아니므로 문자열이다. 기계 호출
 규약(`call_conv = "tail"`), 매개변수 ownership 계약(`tribute.ownership = "consumed"`),

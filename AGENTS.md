@@ -55,6 +55,27 @@ cargo run -- --log=debug compile file.trb
 cargo run -- --log=tribute_front::typeck=trace compile file.trb
 ```
 
+## Design principles
+
+- Prefer principled, general mechanisms modeled on MLIR, LLVM, or rustc
+  (e.g., RegionBranch-style interface queries, op traits) over hardcoded
+  op-name checks or ad-hoc flags.
+- Avoid `Rc<RefCell<...>>` shared-state designs. Prefer explicit ownership or
+  borrowing (`&mut`).
+- Prefer idiomatic Rust APIs (`Display`, `returns(as_ref)` for Option queries)
+  over String-returning helpers.
+- Package boundaries are isolation boundaries. Do not let passes such as
+  specialization cross them implicitly.
+
+## PRs and edits
+
+- Base new PRs on origin/main by default. Only stack on an unmerged PR if the
+  user asks.
+- Use the Edit tool rather than `sed` for source changes, to avoid touching
+  unrelated lines.
+- When the user asks for a specific small change, make it first, then share
+  any concerns about its value.
+
 ## Review guidelines
 
 - Flag code that contradicts `new-plans/`, and rule changes that do not update

@@ -20,15 +20,14 @@ use crate::common::NativeTestBinary;
 fn program(body: &str) -> String {
     format!(
         r#"core.module @test {{
-  clif.func {{abi = "C", sym_name = "__asan_init", type = clif.func_sig<() -> core.nil>}}
-  clif.func {{sym_name = "main", type = clif.func_sig<() -> core.i32>}} {{
-    ^entry:
-      %init = clif.call {{callee = @__asan_init}} : core.nil
-      %size = clif.iconst {{value = 16}} : core.i64
-      %object = clif.call %size {{callee = @__tribute_alloc}} : core.ptr
-      %value = clif.iconst {{value = 7}} : core.i64
+  clif.func @__asan_init() -> core.nil attributes {{abi = "C"}}
+  clif.func @main() -> core.i32 {{
+      %init = clif.call @__asan_init() : () -> core.nil
+      %size = clif.iconst 16 : core.i64
+      %object = clif.call @__tribute_alloc(%size) : (core.i64) -> core.ptr
+      %value = clif.iconst 7 : core.i64
 {body}
-      %code = clif.iconst {{value = 0}} : core.i32
+      %code = clif.iconst 0 : core.i32
       clif.return %code
   }}
 }}"#
@@ -61,8 +60,7 @@ fn assert_reports(body: &str, report: &str) {
     assert!(stderr.contains(report), "stderr: {stderr}");
 }
 
-const FREE: &str =
-    "      %freed = clif.call %object, %size {callee = @__tribute_dealloc} : core.nil";
+const FREE: &str = "      %freed = clif.call @__tribute_dealloc(%object, %size) : (core.ptr, core.i64) -> core.nil";
 
 #[test]
 fn accesses_inside_a_live_allocation_pass() {
@@ -112,7 +110,7 @@ fn access_after_free_reports_at_the_access() {
     assert_reports(
         &format!(
             r#"{FREE}
-      %one = clif.iconst {{value = 1}} : core.i32
+      %one = clif.iconst 1 : core.i32
       %old = clif.atomic_rmw %object, %one {{bin_op = "add", offset = 0}} : core.i32"#
         ),
         "WRITE of size 4",
@@ -124,16 +122,15 @@ fn access_after_free_reports_at_the_access() {
 fn run_to_exit_check(body: &str) -> Output {
     let source = format!(
         r#"core.module @test {{
-  clif.func {{abi = "C", sym_name = "__asan_init", type = clif.func_sig<() -> core.nil>}}
-  clif.func {{abi = "C", sym_name = "__asan_exit", type = clif.func_sig<() -> core.nil>}}
-  clif.func {{sym_name = "main", type = clif.func_sig<() -> core.i32>}} {{
-    ^entry:
-      %init = clif.call {{callee = @__asan_init}} : core.nil
-      %size = clif.iconst {{value = 16}} : core.i64
-      %object = clif.call %size {{callee = @__tribute_alloc}} : core.ptr
+  clif.func @__asan_init() -> core.nil attributes {{abi = "C"}}
+  clif.func @__asan_exit() -> core.nil attributes {{abi = "C"}}
+  clif.func @main() -> core.i32 {{
+      %init = clif.call @__asan_init() : () -> core.nil
+      %size = clif.iconst 16 : core.i64
+      %object = clif.call @__tribute_alloc(%size) : (core.i64) -> core.ptr
 {body}
-      %exit = clif.call {{callee = @__asan_exit}} : core.nil
-      %code = clif.iconst {{value = 0}} : core.i32
+      %exit = clif.call @__asan_exit() : () -> core.nil
+      %code = clif.iconst 0 : core.i32
       clif.return %code
   }}
 }}"#

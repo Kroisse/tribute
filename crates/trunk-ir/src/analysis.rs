@@ -176,14 +176,14 @@ impl AnalysisCycle {
 
 impl fmt::Display for AnalysisCycle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "analysis construction cycle: ")?;
-        for (index, query) in self.queries.iter().enumerate() {
-            if index != 0 {
-                write!(f, " -> ")?;
-            }
-            write!(f, "{} for {}", query.analysis_type, query.target)?;
-        }
-        Ok(())
+        use itertools::Itertools as _;
+        let queries = self.queries.iter().format_with(" -> ", |query, f| {
+            f(&format_args!(
+                "{} for {}",
+                query.analysis_type, query.target
+            ))
+        });
+        write!(f, "analysis construction cycle: {queries}")
     }
 }
 

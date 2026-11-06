@@ -1698,7 +1698,7 @@ mod tests {
         let loc = test_location(&mut ctx);
         let i32_ty = i32_type(&mut ctx);
 
-        let data = OperationDataBuilder::new(loc, "arith.const")
+        let data = OperationDataBuilder::new(loc, "arith.constant")
             .result(i32_ty)
             .attr("value", Attribute::Int(42))
             .build(&mut ctx);
@@ -1707,7 +1707,7 @@ mod tests {
 
         assert_eq!(
             ctx.op(op).name,
-            <crate::dialect::arith::Const as crate::ops::DialectOp>::NAME
+            <crate::dialect::arith::Constant as crate::ops::DialectOp>::NAME
         );
         assert_eq!(ctx.op_result_types(op), &[i32_ty]);
         assert_eq!(ctx.op_attrs(op).get("value"), Some(&Attribute::Int(42)));
@@ -1788,7 +1788,7 @@ mod tests {
         });
 
         // Create an op
-        let data = OperationDataBuilder::new(loc, "arith.const")
+        let data = OperationDataBuilder::new(loc, "arith.constant")
             .result(i32_ty)
             .build(&mut ctx);
         let op = ctx.create_op(data);
@@ -2200,26 +2200,25 @@ mod tests {
 
     fn assert_clone_is_independent(clone_context: fn(&IrContext) -> IrContext) {
         use crate::parser::parse_test_module;
-        use crate::printer::print_module;
 
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
   func.func @f() -> core.i32 {
-    %0 = arith.const {value = 1} : core.i32
-    %1 = arith.const {value = 2} : core.i32
+    %0 = arith.constant 1 : core.i32
+    %1 = arith.constant 2 : core.i32
     %2 = arith.negi %0 : core.i32
     func.return %2
   }
 }"#,
         );
-        let original_text = print_module(&ctx, module.op());
+        let original_text = module.op().display(&ctx).to_string();
 
         let mut clone = clone_context(&ctx);
         assert_ne!(clone.analysis_stamp().0, ctx.analysis_stamp().0);
         assert_eq!(clone.analysis_stamp().1, ctx.analysis_stamp().1);
-        assert_eq!(print_module(&clone, module.op()), original_text);
+        assert_eq!(module.op().display(&clone).to_string(), original_text);
 
         // Redirect the negation to the other constant in the clone only.
         let func_body = clone.op_region(module.op(), 0).unwrap();
@@ -2233,19 +2232,18 @@ mod tests {
         clone.replace_all_uses(one, two);
         TypeDataBuilder::new("core.i64").intern(&mut clone);
 
-        assert_eq!(print_module(&ctx, module.op()), original_text);
+        assert_eq!(module.op().display(&ctx).to_string(), original_text);
         assert_eq!(ctx.uses(one).len(), 1);
         assert!(ctx.uses(two).is_empty());
         assert!(clone.uses(one).is_empty());
         assert_eq!(clone.uses(two).len(), 1);
-        assert_ne!(print_module(&clone, module.op()), original_text);
+        assert_ne!(module.op().display(&clone).to_string(), original_text);
     }
 
     /// Helper: parse IR, clone the first func's body region, add the
     /// clone as a new func, and print the whole module.
     fn clone_first_func_region(input: &str, new_name: &'static str) -> String {
         use crate::parser::parse_test_module;
-        use crate::printer::print_module;
 
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, input);
@@ -2280,7 +2278,7 @@ mod tests {
         let module_block = ctx.region(module_region).blocks[0];
         ctx.push_op(module_block, new_func_op);
 
-        print_module(&ctx, module.op())
+        module.op().display(&ctx).to_string()
     }
 
     #[test]
@@ -2288,7 +2286,7 @@ mod tests {
         let output = clone_first_func_region(
             r#"core.module @test {
   func.func @original() -> core.i32 {
-    %0 = arith.const {value = 7} : core.i32
+    %0 = arith.constant 7 : core.i32
     %1 = arith.negi %0 : core.i32
     func.return %1
   }
@@ -2303,11 +2301,11 @@ mod tests {
         let output = clone_first_func_region(
             r#"core.module @test {
   func.func @original(%0: core.i1) -> core.i32 {
-    %1 = scf.if %0 : core.i32 {
-      %2 = arith.const {value = 1} : core.i32
+    %1 = scf.if %0 -> (core.i32) {
+      %2 = arith.constant 1 : core.i32
       scf.yield %2
-    } {
-      %3 = arith.const {value = 2} : core.i32
+    } else {
+      %3 = arith.constant 2 : core.i32
       scf.yield %3
     }
     func.return %1
@@ -2324,7 +2322,7 @@ mod tests {
             r#"core.module @test {
   func.func @original() -> core.i32 {
   ^bb0:
-    %0 = arith.const {value = 1} : core.i32
+    %0 = arith.constant 1 : core.i32
     cf.br %0 [^bb1]
   ^bb1(%1: core.i32):
     func.return %1
@@ -2339,13 +2337,12 @@ mod tests {
     fn clone_external_values_passthrough() {
         // External values (defined outside the cloned region) pass through
         // unchanged. We test this by cloning a flat op directly.
-        use crate::printer::print_op;
 
         let mut ctx = IrContext::new();
         let loc = test_location(&mut ctx);
         let i32_ty = i32_type(&mut ctx);
 
-        let ext_data = OperationDataBuilder::new(loc, "arith.const")
+        let ext_data = OperationDataBuilder::new(loc, "arith.constant")
             .result(i32_ty)
             .build(&mut ctx);
         let ext_op = ctx.create_op(ext_data);
@@ -2364,7 +2361,10 @@ mod tests {
         assert_eq!(ctx.op_operands(cloned), &[ext_val]);
 
         // Both original and clone should print the same textual form
-        assert_eq!(print_op(&ctx, op), print_op(&ctx, cloned));
+        assert_eq!(
+            op.display(&ctx).to_string(),
+            cloned.display(&ctx).to_string()
+        );
     }
 
     #[test]

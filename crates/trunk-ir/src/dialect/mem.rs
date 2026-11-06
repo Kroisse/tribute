@@ -14,22 +14,27 @@ mod mem {
 
     /// The address of immutable data holding `bytes`.
     #[flags(Pure)]
+    #[asm_format(attr_dict_bare ":" type(result))]
     fn data(bytes: Attr<Bytes>) -> Value<Ptr> {}
 
     /// The null pointer, the only pointer constant. It has no provenance and
     /// must not be dereferenced.
     #[flags(Pure)]
+    #[asm_format(attr_dict_bare ":" type(result))]
     fn null() -> Value<Ptr> {}
 
     /// Load a scalar from `ptr` plus an immediate byte `offset`.
+    #[asm_format(ptr attr_dict_bare ":" type(result))]
     fn load(offset: Attr<u32>, ptr: Value<Ptr>) -> Value<impl ScalarLike> {}
 
     /// Store a scalar `value` at `ptr` plus an immediate byte `offset`.
+    #[asm_format(ptr "," value attr_dict_bare)]
     fn store(offset: Attr<u32>, ptr: Value<Ptr>, value: Value<impl ScalarLike>) {}
 
     /// Add a byte `offset` to `base`, keeping `base`'s provenance. No
     /// element-size scaling is applied.
     #[flags(Pure)]
+    #[asm_format(base "," offset attr_dict_bare ":" type(result))]
     fn ptr_add(base: Value<Ptr>, offset: Value<Index>) -> Value<Ptr> {}
 }
 
@@ -75,7 +80,7 @@ mod tests {
         assert_eq!(pair.fields(&ctx), [i32_ty, ptr_ty]);
         let empty = super::Struct::from_type_ref(&ctx, alias(&ctx, "Empty")).expect("mem.struct");
         assert!(empty.fields(&ctx).is_empty());
-        let printed = crate::printer::print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         assert!(
             printed.contains("mem.struct<core.i32, core.ptr>"),
             "{printed}"

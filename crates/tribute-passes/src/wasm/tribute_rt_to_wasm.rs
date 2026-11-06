@@ -169,7 +169,7 @@ fn function_table(ctx: &mut IrContext, module: Module) -> Option<(wasm_dialect::
     let elem = ops
         .iter()
         .filter_map(|&op| wasm_dialect::Elem::from_op(ctx, op).ok())
-        .find(|elem| elem.table(ctx).unwrap_or(0) == 0 && elem.offset(ctx).unwrap_or(0) == 0);
+        .find(|elem| elem.table(ctx) == 0 && elem.offset(ctx) == 0);
     if let (Some(table), Some(elem)) = (table, elem) {
         let funcs = ctx.region(elem.funcs(ctx)).blocks[0];
         return Some((table, funcs));
@@ -192,8 +192,6 @@ fn function_table(ctx: &mut IrContext, module: Module) -> Option<(wasm_dialect::
         parent_op: None,
     });
     let elem = wasm_dialect::Elem::operands()
-        .table(Some(0))
-        .offset(Some(0))
         .regions(region)
         .build(ctx, location);
     if let Some(&first) = ops.first() {
@@ -544,13 +542,13 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.table {reftype = "funcref", min = 1, max = 1}
-  wasm.elem {table = 0, offset = 0} {
-    %r = wasm.ref_func {func_name = @constant} : wasm.funcref
+  wasm.elem {
+    %r = wasm.ref_func @constant : wasm.funcref
   }
   func.func @f() -> core.nil {
-    %a = tribute_rt.convention_table {entries = [@first, @second]} : tribute_rt.convention_table_ref
-    %b = tribute_rt.convention_table {entries = [@third]} : tribute_rt.convention_table_ref
-    %c = tribute_rt.convention_table {entries = [@first, @second]} : tribute_rt.convention_table_ref
+    %a = tribute_rt.convention_table [@first, @second] : tribute_rt.convention_table_ref
+    %b = tribute_rt.convention_table [@third] : tribute_rt.convention_table_ref
+    %c = tribute_rt.convention_table [@first, @second] : tribute_rt.convention_table_ref
     %d = tribute_rt.convention_entry %a {index = 0} : core.i32
     %e = tribute_rt.convention_entry %c {index = 1} : core.i32
     func.return
@@ -558,19 +556,19 @@ mod tests {
 }"#,
         );
         lower(&mut ctx, module);
-        let ir = trunk_ir::printer::print_module(&ctx, module.op());
+        let ir = module.op().display(&ctx).to_string();
         assert!(
             ir.contains(r#"wasm.table {max = 4, min = 4, reftype = "funcref"}"#),
             "{ir}"
         );
         let slots: Vec<_> = ["@constant", "@first", "@second", "@third"]
             .into_iter()
-            .map(|name| ir.find(&format!("func_name = {name}")))
+            .map(|name| ir.find(&format!("wasm.ref_func {name}")))
             .collect();
         assert!(slots.iter().all(Option::is_some), "{ir}");
         assert!(slots.is_sorted(), "{ir}");
-        assert_eq!(ir.matches("wasm.i32_const {value = 1}").count(), 3, "{ir}");
-        assert!(ir.contains("wasm.i32_const {value = 3}"), "{ir}");
+        assert_eq!(ir.matches("wasm.i32_const 1").count(), 3, "{ir}");
+        assert!(ir.contains("wasm.i32_const 3"), "{ir}");
         assert_eq!(ir.matches("wasm.i32_add").count(), 1, "{ir}");
         assert!(!ir.contains("tribute_rt."), "{ir}");
     }
@@ -582,20 +580,21 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f() -> core.nil {
-    %a = tribute_rt.convention_table {entries = [@only]} : tribute_rt.convention_table_ref
+    %a = tribute_rt.convention_table [@only] : tribute_rt.convention_table_ref
     func.return
   }
 }"#,
         );
         lower(&mut ctx, module);
-        let ir = trunk_ir::printer::print_module(&ctx, module.op());
+        let ir = module.op().display(&ctx).to_string();
         assert!(
             ir.contains(r#"wasm.table {max = 1, min = 1, reftype = "funcref"}"#),
             "{ir}"
         );
-        assert!(ir.contains("wasm.elem {offset = 0, table = 0}"), "{ir}");
-        assert!(ir.contains("func_name = @only"), "{ir}");
-        assert!(ir.contains("wasm.i32_const {value = 0}"), "{ir}");
+        assert!(ir.contains("wasm.elem {"), "{ir}");
+        assert!(!ir.contains("offset = 0"), "{ir}");
+        assert!(ir.contains("wasm.ref_func @only"), "{ir}");
+        assert!(ir.contains("wasm.i32_const 0"), "{ir}");
     }
 
     #[test]

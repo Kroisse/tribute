@@ -1,130 +1,16 @@
 //! Verification of the abstract continuation frame operations.
 
 use rustc_hash::FxHashSet as HashSet;
+use trunk_ir::IrContext;
 use trunk_ir::dialect::core::Never;
 use trunk_ir::dialect::func;
 use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{TypeRef, ValueRef};
-use trunk_ir::types::{Attribute, AttributeMap, StringRef};
-use trunk_ir::{IrContext, SymbolPath};
 
 use super::{Frame, Handle, SuffixFrame, is_evidence_type_ref};
-use crate::dialect::tribute_control::{EvidencePlanSite, verify_evidence_plan};
-
-/// Declared kind of a handled operation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum OperationKind {
-    /// `fn`: tail-resumptive; the arm returns the operation result.
-    Fn,
-    /// `op`: general; the arm receives resume tokens unless the operation
-    /// result is `core.never`.
-    Op,
-}
-
-impl OperationKind {
-    pub fn keyword(self) -> &'static str {
-        match self {
-            Self::Fn => "fn",
-            Self::Op => "op",
-        }
-    }
-
-    fn from_keyword(keyword: &str) -> Option<Self> {
-        match keyword {
-            "fn" => Some(Self::Fn),
-            "op" => Some(Self::Op),
-            _ => None,
-        }
-    }
-}
-
-/// One element of `ability.handle`'s `handlers`: the operation an arm handles.
-///
-/// Written `{ability = @State, op_name = "get", kind = "op",
-/// operation_result_type = core.i32}`.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct HandlerBinding {
-    pub ability: SymbolPath,
-    pub op_name: StringRef,
-    pub kind: OperationKind,
-    pub operation_result_type: TypeRef,
-}
-
-impl HandlerBinding {
-    /// Decode one binding, or say why it is malformed.
-    pub fn from_attribute(ctx: &IrContext, attr: &Attribute) -> Result<Self, String> {
-        let Attribute::Dict(entries) = attr else {
-            return Err("handlers element must be a dictionary".into());
-        };
-        if entries.len() != 4 {
-            return Err(format!(
-                "handlers element must have exactly ability, op_name, kind, and \
-                 operation_result_type, found {} entries",
-                entries.len()
-            ));
-        }
-        let ability = match entries.view(ctx).get("ability") {
-            Some(Attribute::SymbolRef(ability)) => ability.clone(),
-            _ => return Err("handlers ability must be a symbol reference".into()),
-        };
-        let op_name = match entries.view(ctx).get("op_name") {
-            Some(Attribute::String(name)) => *name,
-            _ => return Err("handlers op_name must be a string".into()),
-        };
-        let kind = match entries.view(ctx).get("kind") {
-            Some(Attribute::String(kind)) => OperationKind::from_keyword(ctx.str(*kind))
-                .ok_or_else(|| "handlers kind must be fn or op".to_string())?,
-            _ => return Err("handlers kind must be fn or op".into()),
-        };
-        let operation_result_type = match entries.view(ctx).get("operation_result_type") {
-            Some(Attribute::Type(ty)) => *ty,
-            _ => return Err("handlers operation_result_type must be a type".into()),
-        };
-        Ok(Self {
-            ability,
-            op_name,
-            kind,
-            operation_result_type,
-        })
-    }
-
-    pub fn to_attribute(&self, ctx: &mut IrContext) -> Attribute {
-        let kind = ctx.string_attr(self.kind.keyword());
-        Attribute::Dict(AttributeMap::from_entries(
-            ctx,
-            [
-                ("ability", Attribute::SymbolRef(self.ability.clone())),
-                ("op_name", Attribute::String(self.op_name)),
-                ("kind", kind),
-                (
-                    "operation_result_type",
-                    Attribute::Type(self.operation_result_type),
-                ),
-            ],
-        ))
-    }
-
-    /// Whether the arm receives resume tokens.
-    pub fn is_resumptive(&self, ctx: &IrContext) -> bool {
-        self.kind == OperationKind::Op && !is_never(ctx, self.operation_result_type)
-    }
-}
-
-impl trunk_ir::attr_kind::AttrKind for HandlerBinding {
-    const KIND: trunk_ir::op_schema::AttributeKind =
-        trunk_ir::op_schema::AttributeKind::Dict(&trunk_ir::op_schema::AttributeKind::Any);
-    type Out<'ctx> = HandlerBinding;
-    type In = HandlerBinding;
-
-    fn read<'ctx>(ctx: &'ctx IrContext, attr: &'ctx Attribute) -> HandlerBinding {
-        Self::from_attribute(ctx, attr)
-            .unwrap_or_else(|error| panic!("unverified handlers element: {error}"))
-    }
-
-    fn write(ctx: &mut IrContext, value: HandlerBinding) -> Attribute {
-        value.to_attribute(ctx)
-    }
-}
+use crate::dialect::tribute_control::{
+    EvidencePlanSite, HandlerBinding, OperationKind, verify_evidence_plan,
+};
 
 fn is_never(ctx: &IrContext, ty: TypeRef) -> bool {
     Never::from_type_ref(ctx, ty).is_some()
@@ -248,13 +134,8 @@ impl trunk_ir::ops::Verify for Handle {
     fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
         let op = self.op_ref();
         verify_evidence_plan(ctx, op, EvidencePlanSite::Handle)?;
-        let Some(Attribute::List(items)) = ctx.op_attrs(op).get("handlers") else {
-            return Err("ability.handle requires a handlers list".into());
-        };
-        let bindings = items
-            .iter()
-            .map(|item| HandlerBinding::from_attribute(ctx, item))
-            .collect::<Result<Vec<_>, _>>()?;
+        let bindings = HandlerBinding::list(ctx, ctx.op_attrs(op).get("handlers"))
+            .map_err(|error| format!("ability.handle {error}"))?;
         let mut seen = HashSet::default();
         for binding in &bindings {
             if !seen.insert((binding.ability.clone(), binding.op_name)) {
@@ -380,7 +261,6 @@ fn is_resume_exact(ctx: &IrContext, ty: TypeRef, frame: TypeRef, input: TypeRef)
 mod tests {
     use trunk_ir::IrContext;
     use trunk_ir::parser::parse_module;
-    use trunk_ir::printer::print_module;
     use trunk_ir::rewrite::Module;
     use trunk_ir::validation::validate_operation_verifiers;
 
@@ -430,13 +310,20 @@ mod tests {
         )
     }
 
+    /// A handle in generic syntax, which writes bindings and arms that do
+    /// not pair up.
     fn handle(handlers: &[String], arms: &str, attrs: &str) -> String {
+        let arms = if arms.is_empty() {
+            String::new()
+        } else {
+            format!(", {arms}")
+        };
         format!(
-            r#"    ability.handle %ev, %exit, %done{arms} {{handlers = [{}]{attrs}}} {{
+            r#"    "ability.handle"(%ev, %exit, %done{arms}) ({{
       ^body(%inner: !ev, %frame: !frame_nil):
         %unit = core.nil_value : core.nil
         ability.exit %frame, %unit
-    }}"#,
+    }}) {{handlers = [{}]{attrs}}}"#,
             handlers.join(", ")
         )
     }
@@ -452,7 +339,7 @@ mod tests {
                     binding("op", "fail", "core.never"),
                     binding("fn", "peek", "core.i32"),
                 ],
-                ", %get, %fail, %peek",
+                "%get, %fail, %peek",
                 "",
             ),
         )
@@ -463,16 +350,41 @@ mod tests {
         let text = module(
             ", %k: !completion, %arg: core.i32",
             r#"    %frame = ability.suffix_frame %ev, %exit, %k {evidence_plan = [{mask = @State}]} : !frame_nil
-    ability.abort %ev, %exit, %arg {ability = @State, op_name = "fail"}"#,
+    ability.abort @State @fail(%arg) [%ev, %exit] : (core.i32) -> ()"#,
         );
         let (ctx, module) = parse(&text);
         let result = validate_operation_verifiers(&ctx, module);
         assert!(result.is_ok(), "{result}");
 
-        let printed = print_module(&ctx, module.op());
+        let printed = module.op().display(&ctx).to_string();
         let (reparsed, reparsed_module) = parse(&printed);
-        assert_eq!(printed, print_module(&reparsed, reparsed_module.op()));
+        assert_eq!(printed, reparsed_module.op().display(&reparsed).to_string());
         assert_eq!(errors(&valid_handle()), "");
+    }
+
+    #[test]
+    fn handle_writes_each_binding_with_its_arm() {
+        let (ctx, module) = parse(&valid_handle());
+        let printed = module.op().display(&ctx).to_string();
+        let handle = printed
+            .lines()
+            .skip_while(|line| !line.contains("ability.handle"))
+            .take(5)
+            .map(str::trim)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            handle,
+            [
+                "ability.handle %0, %1, %5 [",
+                "op @State @get : core.i32 = %2,",
+                "op @State @fail : core.never = %3,",
+                "fn @State @peek : core.i32 = %4",
+                "] {",
+            ],
+            "{printed}"
+        );
+        let (reparsed, reparsed_module) = parse(&printed);
+        assert_eq!(printed, reparsed_module.op().display(&reparsed).to_string());
     }
 
     #[test]
@@ -481,15 +393,15 @@ mod tests {
             module(
                 params,
                 &format!(
-                    r#"    ability.perform %ev, %exit, {resumption}, %arg {{ability = @State, op_name = "set"}}"#
+                    r#"    ability.perform @State @set(%arg) [%ev, %exit, {resumption}] : (core.i32) -> ()"#
                 ),
             )
         };
         let valid = perform(", %k: !resume, %arg: core.i32", "%k");
         let (ctx, parsed) = parse(&valid);
-        let printed = print_module(&ctx, parsed.op());
+        let printed = parsed.op().display(&ctx).to_string();
         let (reparsed, reparsed_module) = parse(&printed);
-        assert_eq!(printed, print_module(&reparsed, reparsed_module.op()));
+        assert_eq!(printed, reparsed_module.op().display(&reparsed).to_string());
         assert_eq!(errors(&valid), "");
 
         const NEVER: &str =
@@ -542,7 +454,7 @@ mod tests {
         // function argument of the operation would.
         let text = module(
             ARMS,
-            &handle(&[binding("op", "get", "core.never")], ", %get", ""),
+            &handle(&[binding("op", "get", "core.never")], "%get", ""),
         );
         assert_eq!(errors(&text), "");
     }
@@ -589,7 +501,7 @@ mod tests {
                     ARMS,
                     &handle(
                         &[binding("op", "get", "core.i32"), binding("op", "get", "core.i32")],
-                        ", %get, %get",
+                        "%get, %get",
                         "",
                     ),
                 ),
@@ -602,22 +514,22 @@ mod tests {
             ),
             (
                 "fn binding with a cps arm",
-                module(ARMS, &handle(&[binding("fn", "get", "core.i32")], ", %get", "")),
+                module(ARMS, &handle(&[binding("fn", "get", "core.i32")], "%get", "")),
                 "must return the operation result",
             ),
             (
                 "fn arm with the wrong result",
-                module(ARMS, &handle(&[binding("fn", "peek", "core.nil")], ", %peek", "")),
+                module(ARMS, &handle(&[binding("fn", "peek", "core.nil")], "%peek", "")),
                 "must return the operation result",
             ),
             (
                 "op binding with a fn arm",
-                module(ARMS, &handle(&[binding("op", "peek", "core.i32")], ", %peek", "")),
+                module(ARMS, &handle(&[binding("op", "peek", "core.i32")], "%peek", "")),
                 "must return core.never",
             ),
             (
                 "resumptive arm without tokens",
-                module(ARMS, &handle(&[binding("op", "fail", "core.i32")], ", %fail", "")),
+                module(ARMS, &handle(&[binding("op", "fail", "core.i32")], "%fail", "")),
                 "must end with two resumptions",
             ),
             (
@@ -626,7 +538,7 @@ mod tests {
                     ARMS,
                     &handle(
                         &[binding("op", "get", "core.i32")],
-                        ", %get",
+                        "%get",
                         ", evidence_plan = [{dup = @State}]",
                     ),
                 ),
@@ -638,7 +550,7 @@ mod tests {
                     ARMS,
                     &handle(
                         &[r#"{ability = @State, kind = "ctl", op_name = "get", operation_result_type = core.i32}"#.to_string()],
-                        ", %get",
+                        "%get",
                         "",
                     ),
                 ),
@@ -697,12 +609,12 @@ mod tests {
             with_extra(&arms, &handle(&[binding(kind, "get", result)], arm, ""))
         };
         let raw_binding =
-            |entries: &str| with_extra(&arms, &handle(&[format!("{{{entries}}}")], ", %get", ""));
+            |entries: &str| with_extra(&arms, &handle(&[format!("{{{entries}}}")], "%get", ""));
         let body = |args: &str| {
             with_extra(
                 &arms,
                 &format!(
-                    r#"    ability.handle %ev, %exit, %done {{handlers = []}} {{
+                    r#"    ability.handle %ev, %exit, %done [] {{
       ^body({args}):
         func.unreachable
     }}"#
@@ -712,17 +624,17 @@ mod tests {
         let cases = [
             (
                 "non-closure fn arm",
-                one("fn", "core.i32", ", %value"),
+                one("fn", "core.i32", "%value"),
                 "`arms`: expected closure.closure",
             ),
             (
                 "returning cps arm",
-                one("op", "core.i32", ", %returning"),
+                one("op", "core.i32", "%returning"),
                 "must return core.never",
             ),
             (
                 "fn arm without evidence",
-                one("fn", "core.i32", ", %no_evidence"),
+                one("fn", "core.i32", "%no_evidence"),
                 "must take the evidence first",
             ),
             (
@@ -780,7 +692,7 @@ mod tests {
             ),
             (
                 "binding that is not a dictionary",
-                with_extra(&arms, &handle(&["1".to_string()], ", %get", "")),
+                with_extra(&arms, &handle(&["1".to_string()], "%get", "")),
                 "must be a [Dict<any>] attribute",
             ),
         ];

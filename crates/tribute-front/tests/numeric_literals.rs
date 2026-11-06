@@ -1,14 +1,18 @@
 //! Diagnostics for numeric literal separators, exponents, and suffixes.
 
 use salsa_test_macros::salsa_test;
-use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_core::diagnostic::{CompilationPhase, DiagnosticSeverity, SpanDiagnostic};
 use tribute_front::SourceCst;
 
-/// Error diagnostics produced while parsing and lowering `text`.
-fn lowering_errors(db: &dyn salsa::Database, text: &str) -> Vec<Diagnostic> {
-    let source = SourceCst::from_source_str(db, "numeric_literals.trb", text);
+#[salsa::tracked]
+fn parse(db: &dyn salsa::Database, source: SourceCst) {
     tribute_front::query::parsed_ast(db, source);
-    tribute_front::query::parsed_ast::accumulated::<Diagnostic>(db, source)
+}
+
+/// Error diagnostics produced while parsing and lowering `text`.
+fn lowering_errors(db: &dyn salsa::Database, text: &str) -> Vec<SpanDiagnostic> {
+    let source = SourceCst::from_source_str(db, "numeric_literals.trb", text);
+    parse::accumulated::<SpanDiagnostic>(db, source)
         .into_iter()
         .filter(|d| d.inner.severity == DiagnosticSeverity::Error)
         .cloned()
@@ -52,7 +56,7 @@ fn valid_numeric_literals_are_accepted(db: &salsa::DatabaseImpl) {
         r#"fn main() -> Nil {
     let a = 1_000_000
     let b = 0x_FF_FF
-    let c = 1e10
+    let c = 1e9
     let d = -1e3
     let e = 1.5e-3
     let f = 42i
@@ -97,9 +101,9 @@ fn invalid_numeric_literals_are_rejected(db: &salsa::DatabaseImpl) {
         ),
         // overflowing literal is rejected
         (
-            "fn main() -> Nil { 1e20 }",
-            "1e20",
-            "1e20",
+            "fn main() -> Nil { 1e10 }",
+            "1e10",
+            "1e10",
             "exceeds the current implementation limit for `Nat`",
         ),
         // suffix on hexadecimal literal is rejected

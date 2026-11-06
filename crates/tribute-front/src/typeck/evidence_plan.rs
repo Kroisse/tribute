@@ -100,8 +100,8 @@ pub(crate) struct EvidenceTracker<'db> {
 /// them, and the row tails that tail is a declared union of.
 struct ScopeEvidence<'db> {
     explicit: Vec<AbilityInstance<'db>>,
-    tail: Option<RowVar>,
-    tails: Vec<RowVar>,
+    tail: Option<&'db RowVar>,
+    tails: Vec<&'db RowVar>,
 }
 
 impl<'db> EvidenceTracker<'db> {
@@ -277,9 +277,9 @@ impl<'db> EvidenceTracker<'db> {
     fn declared_tails(
         &self,
         db: &'db dyn salsa::Database,
-        tail: Option<RowVar>,
+        tail: Option<&'db RowVar>,
         resolve: &impl Fn(AbilityRow<'db>) -> AbilityRow<'db>,
-    ) -> Vec<RowVar> {
+    ) -> Vec<&'db RowVar> {
         let Some(tail) = tail else {
             return Vec::new();
         };
@@ -318,8 +318,8 @@ impl<'db> EvidenceTracker<'db> {
         db: &'db dyn salsa::Database,
         scope: usize,
         resolve: &impl Fn(AbilityRow<'db>) -> AbilityRow<'db>,
-        memo: &mut HashMap<usize, (Vec<AbilityInstance<'db>>, Option<RowVar>)>,
-    ) -> (Vec<AbilityInstance<'db>>, Option<RowVar>) {
+        memo: &mut HashMap<usize, (Vec<AbilityInstance<'db>>, Option<&'db RowVar>)>,
+    ) -> (Vec<AbilityInstance<'db>>, Option<&'db RowVar>) {
         if let Some(found) = memo.get(&scope) {
             return found.clone();
         }
@@ -354,14 +354,14 @@ fn callee_positions<'db>(
     db: &'db dyn salsa::Database,
     callee: AbilityRow<'db>,
     resolve: &impl Fn(AbilityRow<'db>) -> AbilityRow<'db>,
-) -> (Vec<AbilityInstance<'db>>, Option<RowVar>) {
+) -> (Vec<AbilityInstance<'db>>, Option<&'db RowVar>) {
     // Resolve the declared instances and the tail separately so an instance
     // named by both keeps both positions. Within one part, an instance takes
     // one position however many times solving left it in the row.
     let declared = resolve(AbilityRow::new(db, callee.instances(db).to_vec(), None));
     let mut positions = unique(declared.instances(db).iter().cloned());
     let tail = callee.rest(db).and_then(|tail| {
-        let tail = resolve(AbilityRow::open(db, tail));
+        let tail = resolve(AbilityRow::open(db, *tail));
         positions.extend(unique(tail.instances(db).iter().cloned()));
         tail.rest(db)
     });
@@ -387,7 +387,7 @@ impl<'db> ScopeEvidence<'db> {
     fn select(
         &self,
         positions: &[AbilityInstance<'db>],
-        target: Option<RowVar>,
+        target: Option<&'db RowVar>,
     ) -> Vec<EvidenceStep<'db>> {
         let index = target.and_then(|target| self.tails.iter().position(|tail| *tail == target));
         let Some(index) = index else {
@@ -410,7 +410,7 @@ impl<'db> ScopeEvidence<'db> {
 }
 
 /// Whether operations through a callee's row tail reach the caller's tail.
-fn opens_into(callee_tail: Option<RowVar>, caller_tail: Option<RowVar>) -> bool {
+fn opens_into(callee_tail: Option<&RowVar>, caller_tail: Option<&RowVar>) -> bool {
     callee_tail.is_some() && callee_tail == caller_tail
 }
 

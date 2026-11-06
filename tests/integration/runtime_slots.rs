@@ -152,9 +152,9 @@ fn errors(source: &str) -> Vec<String> {
             .diagnostics
             .iter()
             .filter(|diagnostic| {
-                diagnostic.inner.severity == tribute_core::diagnostic::DiagnosticSeverity::Error
+                diagnostic.severity == tribute_core::diagnostic::DiagnosticSeverity::Error
             })
-            .map(|diagnostic| diagnostic.inner.message.clone())
+            .map(|diagnostic| diagnostic.message.to_owned())
             .collect()
     })
 }

@@ -1,19 +1,17 @@
 ---
 source: crates/trunk-ir/src/context.rs
-assertion_line: 1618
+assertion_line: 2335
 expression: output
 ---
 core.module @test {
   func.func @original() -> core.i32 {
-    ^bb0:
-      %0 = arith.const {value = 1} : core.i32
+      %0 = arith.constant 1 : core.i32
       cf.br %0 [^bb1]
     ^bb1(%1: core.i32):
       func.return %1
   }
   func.func @cloned() -> core.i32 {
-    ^bb0:
-      %0 = arith.const {value = 1} : core.i32
+      %0 = arith.constant 1 : core.i32
       cf.br %0 [^bb1]
     ^bb1(%1: core.i32):
       func.return %1

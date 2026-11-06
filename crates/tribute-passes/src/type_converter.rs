@@ -181,7 +181,7 @@ mod tests {
         for recover in [true, false] {
             let mut ctx = IrContext::new();
             let cast = if recover {
-                "%closure = core.unrealized_conversion_cast %erased : !Closure"
+                "%closure = core.unrealized_conversion_cast %erased : tribute_rt.anyref to !Closure"
             } else {
                 ""
             };
@@ -193,7 +193,7 @@ mod tests {
                 !Closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {{layout = "closure"}}>
                 func.func @transfer(%index: core.i32, %erased: tribute_rt.anyref) {{
                     {cast}
-                    func.tail_call_indirect %index, {arg} {{signature = func.func_sig<(!Closure) -> ()>, tribute.calling_convention = "cps"}}
+                    func.tail_call_indirect %index({arg}) attributes {{tribute.calling_convention = "cps"}} : (!Closure) -> ()
                 }}
             }}"#
                 ),

@@ -40,10 +40,12 @@ use super::completion_index::{
     find_callee_signature, function_signatures, module_at,
 };
 use super::definition_index::{
-    AstDefinitionEntry, definition_index, package_identifiers, validate_identifier,
+    AstDefinitionEntry, AstDefinitionIndex, definition_index, package_identifiers,
+    validate_identifier,
 };
 use super::type_index::{AstTypeIndex, print_ast_type, type_index as ast_type_index};
-use tribute::{TributeDatabaseImpl, root_environment};
+use itertools::Itertools;
+use tribute::{AnalysisUnit, TributeDatabaseImpl, document_units};
 use tribute_front::SourceCst;
 use tribute_front::analysis::Package;
 use tribute_front::ast::source_hash;
@@ -81,7 +83,7 @@ impl LspServer {
             .unwrap_or(false);
         Self {
             connection,
-            db: TributeDatabaseImpl::default(),
+            db: TributeDatabaseImpl::language_server(),
             parser: new_parser(),
             watches_files,
             watched: Vec::new(),
@@ -340,12 +342,15 @@ impl LspServer {
     /// file, as one of their file modules or as a file of a package they
     /// depend on.
     fn dependent_documents(&self, uri: &Uri) -> Vec<Uri> {
-        self.documents_reading(uri, |db, root, changed| {
-            reads_file(db, root, changed)
-                || root_environment(db, root)
-                    .packages(db)
-                    .iter()
-                    .any(|package| package_reads_file(db, *package, changed))
+        self.documents_reading(uri, |db, document, changed| {
+            document_units(db, document).iter().any(|unit| {
+                unit.reads(db, changed)
+                    || unit
+                        .dependencies(db)
+                        .packages(db)
+                        .iter()
+                        .any(|package| package_reads_file(db, *package, changed))
+            })
         })
         .into_iter()
         .filter_map(|(key, _)| key.parse().ok())
@@ -404,17 +409,31 @@ impl LspServer {
         let source_cst = self.db.source_cst(uri)?;
 
         let (contents, span) = self.db.attach(|db| {
-            if let Some(entry) = ast_type_index(db, source_cst)?.type_at(db, offset) {
-                return Some((
-                    format!(
-                        "```tribute\n{}\n```",
-                        print_ast_type(db, &tribute::diagnostic_names(db, source_cst), entry.ty)
-                    ),
-                    entry.span,
-                ));
+            // Each package the document is in may type it differently.
+            let units = document_units(db, source_cst);
+            let mut types: Vec<(String, trunk_ir::Span)> = Vec::new();
+            for &unit in units {
+                let Some(index) = ast_type_index(db, unit, source_cst) else {
+                    continue;
+                };
+                let Some(entry) = index.type_at(db, offset) else {
+                    continue;
+                };
+                let ty = print_ast_type(db, &unit.names(db), entry.ty);
+                if !types.iter().any(|(seen, _)| *seen == ty) {
+                    types.push((ty, entry.span));
+                }
+            }
+            if let Some(&(_, span)) = types.first() {
+                let contents = types.iter().format_with("\n\n", |(ty, _), f| {
+                    f(&format_args!("```tribute\n{ty}\n```"))
+                });
+                return Some((contents.to_string(), span));
             }
 
-            let entry = builtin_at(builtin_symbols(db, source_cst), offset)?;
+            let entry = units
+                .iter()
+                .find_map(|&unit| builtin_at(builtin_symbols(db, unit, source_cst), offset))?;
             Some((
                 format!(
                     "```tribute\nability {}\n```\n\nCompiler-owned ambient ability `{}`.",
@@ -454,8 +473,11 @@ impl LspServer {
 
         // Run Salsa compilation and build definition index
         let definition = self.db.attach(|db| {
-            let index = definition_index(db, source_cst)?;
-            index.definition_at(db, offset).cloned()
+            document_units(db, source_cst).iter().find_map(|&unit| {
+                definition_index(db, unit, source_cst)?
+                    .definition_at(db, offset)
+                    .cloned()
+            })
         })?;
 
         tracing::debug!(
@@ -490,29 +512,35 @@ impl LspServer {
         let source_cst = self.db.source_cst(uri)?;
 
         let locations = self.db.attach(|db| {
-            let index = definition_index(db, source_cst)?;
+            let mut spans = Vec::new();
+            for &unit in document_units(db, source_cst) {
+                let Some(index) = definition_index(db, unit, source_cst) else {
+                    continue;
+                };
+                let Some((target, refs)) = index.references_at(db, offset) else {
+                    continue;
+                };
 
-            let (target, refs) = index.references_at(db, offset)?;
-
-            let mut locations = Vec::new();
-
-            // Optionally include the definition itself (using target for precise matching)
-            if include_declaration && let Some(def) = index.definition_of_target(db, &target) {
-                locations.push(Location {
-                    uri: uri.clone(),
-                    range: span_to_range(&rope, def.span),
-                });
+                // Optionally include the definition itself (using target for precise matching)
+                if include_declaration && let Some(def) = index.definition_of_target(db, &target) {
+                    spans.push(def.span);
+                }
+                spans.extend(refs.iter().map(|reference| reference.span));
             }
-
-            // Add all references
-            for reference in refs {
-                locations.push(Location {
-                    uri: uri.clone(),
-                    range: span_to_range(&rope, reference.span),
-                });
+            if spans.is_empty() {
+                return None;
             }
-
-            Some(locations)
+            spans.sort_by_key(|span| (span.start, span.end));
+            spans.dedup();
+            Some(
+                spans
+                    .into_iter()
+                    .map(|span| Location {
+                        uri: uri.clone(),
+                        range: span_to_range(&rope, span),
+                    })
+                    .collect::<Vec<_>>(),
+            )
         })?;
 
         tracing::debug!(count = locations.len(), "Found references");
@@ -536,13 +564,8 @@ impl LspServer {
         let containing = self.containing_packages(uri);
 
         let result = self.db.attach(|db| {
-            let index = definition_index(db, source_cst)?;
-
-            // Check if rename is possible at this position
+            let index = renamable_index(db, source_cst, offset, &containing)?;
             let (def, span) = index.can_rename(db, offset)?;
-            if used_by_containing_packages(db, def, source_cst, &containing) {
-                return None;
-            }
 
             let range = span_to_range(&rope, span);
             let placeholder = def.name.to_string();
@@ -574,13 +597,8 @@ impl LspServer {
         let containing = self.containing_packages(uri);
 
         let text_edits = self.db.attach(|db| {
-            let index = definition_index(db, source_cst)?;
-
-            // Get definition and validate
+            let index = renamable_index(db, source_cst, offset, &containing)?;
             let (def, _) = index.can_rename(db, offset)?;
-            if used_by_containing_packages(db, def, source_cst, &containing) {
-                return None;
-            }
 
             // Validate new name
             if validate_identifier(new_name, def.kind.clone()).is_err() {
@@ -664,32 +682,47 @@ impl LspServer {
             dot_context(&rope, tree, offset - prefix.len())
         });
         let items = self.db.attach(|db| {
-            let module = module_at(db, source_cst, offset);
-            // After the `.` of an implicit constructor, constructors fit;
-            // both a module's own and the prelude's are candidates.
-            let constructors = || {
-                filter_completions(completion_index::constructor_items(db, source_cst), &prefix)
-                    .filter(|item| item.module.as_ref().is_none_or(|own| *own == module))
-                    .cloned()
-                    .collect::<Vec<_>>()
-            };
-            if dot == DotContext::ImplicitConstructor {
-                return Some(constructors());
-            }
-            let all_items = completion_items(db, source_cst);
+            let mut completions = Vec::new();
+            for &unit in document_units(db, source_cst) {
+                let module = module_at(db, unit, source_cst, offset);
+                // After the `.` of an implicit constructor, constructors fit;
+                // both a module's own and the prelude's are candidates.
+                let constructors = || {
+                    filter_completions(completion_index::constructor_items(db, unit), &prefix)
+                        .filter(|item| item.module.as_ref().is_none_or(|own| *own == module))
+                        .cloned()
+                        .collect::<Vec<_>>()
+                };
+                if dot == DotContext::ImplicitConstructor {
+                    completions.extend(constructors());
+                    continue;
+                }
+                let all_items = completion_items(db, unit);
 
-            // Offer what the cursor's module names, filtered by prefix
-            let in_scope: Vec<_> = completions_in(all_items, &module).cloned().collect();
-            let mut completions: Vec<_> = filter_completions(&in_scope, &prefix).cloned().collect();
+                // Offer what the cursor's module names, filtered by prefix
+                let in_scope: Vec<_> = completions_in(all_items, &module).cloned().collect();
+                completions.extend(filter_completions(&in_scope, &prefix).cloned());
+
+                // A line-leading `.` either continues the line before it or
+                // starts an implicit constructor.
+                if dot == DotContext::Either {
+                    completions.extend(constructors());
+                }
+            }
 
             // Add keyword completions
-            completions.extend(complete_keywords(&prefix));
-
-            // A line-leading `.` either continues the line before it or
-            // starts an implicit constructor.
-            if dot == DotContext::Either {
-                completions.extend(constructors());
+            if dot != DotContext::ImplicitConstructor {
+                completions.extend(complete_keywords(&prefix));
             }
+            let mut seen = Vec::new();
+            completions.retain(|item| {
+                let key = (item.name.clone(), item.kind, item.detail.clone());
+                let new = !seen.contains(&key);
+                if new {
+                    seen.push(key);
+                }
+                new
+            });
 
             Some(completions)
         })?;
@@ -764,26 +797,27 @@ impl LspServer {
 
         // Collect diagnostics and type information for code action generation
         let actions = self.db.attach(|db| {
-            let result = tribute::compile_with_diagnostics(db, source_cst);
-            let type_index = ast_type_index(db, source_cst);
+            let units = document_units(db, source_cst);
+            let diagnostics = document_diagnostics(db, source_cst);
+            let type_index = units
+                .iter()
+                .find_map(|&unit| ast_type_index(db, unit, source_cst));
             let document = source_hash(source_cst.uri(db).as_str());
 
             let mut actions = Vec::new();
 
             // Find diagnostics that overlap with the requested range
-            for diag in &result.diagnostics {
+            for diag in &diagnostics {
                 // Check if diagnostic overlaps with range in this document
-                if !in_document(diag.inner.span, document)
-                    || (diag.inner.span.end as usize) < start_offset
-                    || diag.inner.span.start as usize > end_offset
+                if !in_document(diag.span, document)
+                    || (diag.span.end as usize) < start_offset
+                    || diag.span.start as usize > end_offset
                 {
                     continue;
                 }
 
                 // Generate code actions based on diagnostic type
-                if let Some(action) =
-                    self.action_for_diagnostic(db, diag, &rope, uri, type_index.as_ref())
-                {
+                if let Some(action) = self.action_for_diagnostic(db, diag, &rope, uri, type_index) {
                     actions.push(CodeActionOrCommand::CodeAction(action));
                 }
             }
@@ -805,27 +839,26 @@ impl LspServer {
     fn action_for_diagnostic(
         &self,
         db: &dyn salsa::Database,
-        diag: &tribute_core::diagnostic::Diagnostic,
+        diag: &tribute_core::diagnostic::Diagnostic<'_>,
         rope: &Rope,
         uri: &Uri,
         type_index: Option<&AstTypeIndex<'_>>,
     ) -> Option<CodeAction> {
         // Pattern: "top-level function `{name}` must have an explicit return type annotation"
         if diag
-            .inner
             .message
             .contains("must have an explicit return type annotation")
         {
             // Try to find the inferred type at the diagnostic location
             let type_index = type_index?;
-            if let Some(entry) = type_index.type_at(db, diag.inner.span.start as usize) {
+            if let Some(entry) = type_index.type_at(db, diag.span.start as usize) {
                 // The annotation is inserted into source, where only the full
                 // identity path names the type from every module.
                 let type_str = print_ast_type(db, &NameDisplay::identity(), entry.ty);
 
                 // Find the position after the closing parenthesis of parameters
                 // We need to insert ": Type" before the function body
-                let insert_pos = self.find_return_type_insert_position(rope, diag.inner.span)?;
+                let insert_pos = self.find_return_type_insert_position(rope, diag.span)?;
                 let (line, char) = position_from_offset(rope, insert_pos);
                 let pos = lsp_types::Position {
                     line,
@@ -852,8 +885,8 @@ impl LspServer {
                     title: format!("Add return type annotation: {}", type_str),
                     kind: Some(CodeActionKind::QUICKFIX),
                     diagnostics: Some(vec![Diagnostic {
-                        range: span_to_range(rope, diag.inner.span),
-                        severity: Some(match diag.inner.severity {
+                        range: span_to_range(rope, diag.span),
+                        severity: Some(match diag.severity {
                             tribute_core::diagnostic::DiagnosticSeverity::Error => {
                                 DiagnosticSeverity::ERROR
                             }
@@ -864,7 +897,7 @@ impl LspServer {
                                 DiagnosticSeverity::INFORMATION
                             }
                         }),
-                        message: diag.inner.message.clone(),
+                        message: diag.message.to_string(),
                         source: Some("tribute".to_string()),
                         ..Default::default()
                     }]),
@@ -880,10 +913,9 @@ impl LspServer {
 
         // Pattern: "parameter N of top-level function `{name}` must have an explicit type annotation"
         if diag
-            .inner
             .message
             .contains("must have an explicit type annotation")
-            && diag.inner.message.contains("parameter")
+            && diag.message.contains("parameter")
         {
             // For parameter annotations, we would need to find the parameter location
             // and its inferred type. This is more complex as we need to parse the message
@@ -991,7 +1023,10 @@ impl LspServer {
         let active_param = call_info.active_param;
 
         let result = self.db.attach(|db| {
-            let signatures = function_signatures(db, source_cst);
+            let signatures: Vec<_> = document_units(db, source_cst)
+                .iter()
+                .flat_map(|&unit| function_signatures(db, unit, source_cst))
+                .collect();
             let sig = find_callee_signature(&signatures, &callee_name)?;
 
             Some(super::pretty::format_ast_signature(
@@ -1010,67 +1045,63 @@ impl LspServer {
         };
         let rope = source_cst.text(&self.db);
 
-        // Run Salsa compilation
-        let diags = self
-            .db
-            .attach(|db| tribute::compile_with_diagnostics(db, source_cst).diagnostics);
-
         // Convert to LSP diagnostics. A span in a file module's file rather
         // than this document is not shown in it.
         let document = source_hash(source_cst.uri(&self.db).as_str());
         let lsp_uri = uri.clone();
-        let diagnostics: Vec<Diagnostic> = diags
-            .iter()
-            .filter(|d| in_document(d.inner.span, document))
-            .map(|d| {
-                let range = span_to_range(rope, d.inner.span);
+        let diagnostics: Vec<Diagnostic> = self.db.attach(|db| {
+            document_diagnostics(db, source_cst)
+                .iter()
+                .filter(|d| in_document(d.span, document))
+                .map(|d| {
+                    let range = span_to_range(rope, d.span);
 
-                // Convert secondary labels to related information
-                let related_information = if d.inner.labels.is_empty() {
-                    None
-                } else {
-                    Some(
-                        d.inner
-                            .labels
-                            .iter()
-                            .filter(|label| in_document(label.span, document))
-                            .map(|label| DiagnosticRelatedInformation {
-                                location: Location {
-                                    uri: lsp_uri.clone(),
-                                    range: span_to_range(rope, label.span),
-                                },
-                                message: label.message.to_string(),
-                            })
-                            .collect(),
-                    )
-                };
+                    // Convert secondary labels to related information
+                    let related_information = if d.labels.is_empty() {
+                        None
+                    } else {
+                        Some(
+                            d.labels
+                                .iter()
+                                .filter(|label| in_document(label.span, document))
+                                .map(|label| DiagnosticRelatedInformation {
+                                    location: Location {
+                                        uri: lsp_uri.clone(),
+                                        range: span_to_range(rope, label.span),
+                                    },
+                                    message: label.message.to_string(),
+                                })
+                                .collect(),
+                        )
+                    };
 
-                // Append note to message if present
-                let message = match &d.inner.note {
-                    Some(note) => format!("{}\nnote: {note}", d.inner.message),
-                    None => d.inner.message.clone(),
-                };
+                    // Append note to message if present
+                    let message = match d.note {
+                        Some(note) => format!("{}\nnote: {note}", d.message),
+                        None => d.message.to_string(),
+                    };
 
-                Diagnostic {
-                    range,
-                    severity: Some(match d.inner.severity {
-                        tribute_core::diagnostic::DiagnosticSeverity::Error => {
-                            DiagnosticSeverity::ERROR
-                        }
-                        tribute_core::diagnostic::DiagnosticSeverity::Warning => {
-                            DiagnosticSeverity::WARNING
-                        }
-                        tribute_core::diagnostic::DiagnosticSeverity::Info => {
-                            DiagnosticSeverity::INFORMATION
-                        }
-                    }),
-                    message,
-                    source: Some("tribute".to_string()),
-                    related_information,
-                    ..Default::default()
-                }
-            })
-            .collect();
+                    Diagnostic {
+                        range,
+                        severity: Some(match d.severity {
+                            tribute_core::diagnostic::DiagnosticSeverity::Error => {
+                                DiagnosticSeverity::ERROR
+                            }
+                            tribute_core::diagnostic::DiagnosticSeverity::Warning => {
+                                DiagnosticSeverity::WARNING
+                            }
+                            tribute_core::diagnostic::DiagnosticSeverity::Info => {
+                                DiagnosticSeverity::INFORMATION
+                            }
+                        }),
+                        message,
+                        source: Some("tribute".to_string()),
+                        related_information,
+                        ..Default::default()
+                    }
+                })
+                .collect()
+        });
 
         let params = PublishDiagnosticsParams {
             uri: uri.clone(),
@@ -1215,6 +1246,41 @@ fn glob_literal(path: &Path) -> String {
     pattern
 }
 
+/// The diagnostics of every package the document `source` is analyzed
+/// in, each once.
+fn document_diagnostics(
+    db: &dyn salsa::Database,
+    source: SourceCst,
+) -> Vec<tribute::Diagnostic<'_>> {
+    let mut diagnostics: Vec<_> = document_units(db, source)
+        .iter()
+        .flat_map(|unit| unit.diagnostics(db))
+        .collect();
+    diagnostics.sort_by(tribute_core::diagnostic::compare_diagnostics);
+    diagnostics.into_iter().unique().collect()
+}
+
+/// The definition index to rename the symbol at `offset` of `source` with,
+/// if every package `source` is analyzed in, and every open package in
+/// `containing` that reads it, lets a rename that edits only `source`
+/// rename it.
+fn renamable_index<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+    offset: usize,
+    containing: &[SourceCst],
+) -> Option<AstDefinitionIndex<'db>> {
+    let mut indexes = document_units(db, source)
+        .iter()
+        .map(|&unit| definition_index(db, unit, source));
+    let first = indexes.next()??;
+    for index in indexes {
+        index?.can_rename(db, offset)?;
+    }
+    let (def, _) = first.can_rename(db, offset)?;
+    (!used_by_containing_packages(db, def, source, containing)).then_some(*first)
+}
+
 /// Whether the source tree of the package whose root is `root` reads
 /// `file`.
 fn reads_file(db: &dyn salsa::Database, root: SourceCst, file: SourceCst) -> bool {
@@ -1242,9 +1308,9 @@ fn used_by_containing_packages(
     containing: &[SourceCst],
 ) -> bool {
     def.local_id.is_none()
-        && containing
-            .iter()
-            .any(|root| package_identifiers(db, *root, source).contains(&def.name))
+        && containing.iter().any(|root| {
+            package_identifiers(db, AnalysisUnit::Executable(*root), source).contains(&def.name)
+        })
 }
 
 /// Whether `span` is in the document whose source hash is `document`. A span
@@ -2648,6 +2714,125 @@ mod tests {
     /// an open root of that package.
     /// Editing a dependency's buffer republishes the open packages that
     /// depend on it.
+    /// A package in a temporary directory, with the manifest of package
+    /// `shapes` and each of `files` under `src/`.
+    fn package_dir(files: &[(&str, &str)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("temporary package directory");
+        std::fs::write(
+            dir.path().join("tribute.toml"),
+            "[package]\nname = \"shapes\"\n",
+        )
+        .expect("write the manifest");
+        std::fs::create_dir(dir.path().join("src")).expect("create src");
+        for (path, text) in files {
+            std::fs::write(dir.path().join("src").join(path), text).expect("write the file");
+        }
+        dir
+    }
+
+    fn file_uri(dir: &tempfile::TempDir, path: &str) -> Uri {
+        tribute_front::path_to_uri(&dir.path().join(path))
+            .as_str()
+            .parse()
+            .unwrap()
+    }
+
+    /// A file module's document is analyzed in the tree of the root that
+    /// reads it, so it names the root's declarations.
+    #[test]
+    fn a_file_module_is_analyzed_in_the_root_that_reads_it() {
+        let dir = package_dir(&[(
+            "main.trb",
+            "mod shared\n\nfn helper() -> Nat { 1 }\n\nfn main() -> Nil { let _ = shared::size() }\n",
+        )]);
+        let shared = file_uri(&dir, "src/shared.trb");
+
+        let mut harness = TestHarness::new();
+        let published = harness
+            .open_document_with_diagnostics(&shared, "pub fn size() -> Nat { pkg::helper() }\n");
+        assert_eq!(published.diagnostics, Vec::new());
+    }
+
+    /// A file module both roots read is analyzed in each: `helper` is only
+    /// the library's, and `extra` is both roots'.
+    #[test]
+    fn a_file_module_is_analyzed_in_every_root_that_reads_it() {
+        let dir = package_dir(&[
+            (
+                "lib.trb",
+                "mod shared\n\npub fn helper() -> Nat { 1 }\n\npub fn extra() -> Nat { 2 }\n",
+            ),
+            (
+                "main.trb",
+                "mod shared\n\nfn extra() -> Nat { 2 }\n\nfn main() -> Nil { let _ = shared::size() }\n",
+            ),
+        ]);
+        let shared = file_uri(&dir, "src/shared.trb");
+
+        let mut harness = TestHarness::new();
+        let published = harness.open_document_with_diagnostics(
+            &shared,
+            "pub fn size() -> Nat { pkg::helper() + pkg::extra() }\n",
+        );
+        let messages: Vec<_> = published
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect();
+        assert_eq!(messages.len(), 1, "{messages:?}");
+        assert!(messages[0].contains("helper"), "{messages:?}");
+    }
+
+    /// An error both roots of a file module report is published once.
+    #[test]
+    fn an_error_both_roots_report_is_published_once() {
+        let dir = package_dir(&[
+            ("lib.trb", "mod shared\n"),
+            (
+                "main.trb",
+                "mod shared\n\nfn main() -> Nil { let _ = shared::size() }\n",
+            ),
+        ]);
+        let shared = file_uri(&dir, "src/shared.trb");
+
+        let mut harness = TestHarness::new();
+        let published =
+            harness.open_document_with_diagnostics(&shared, "pub fn size() -> Nat { missing }\n");
+        assert_eq!(
+            published.diagnostics.len(),
+            1,
+            "{:?}",
+            published.diagnostics
+        );
+    }
+
+    /// Hover in an open `src/lib.trb` reads the library package's analysis.
+    #[test]
+    fn hover_in_a_library_root_reads_the_library() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/packages/geometry/src/lib.trb");
+        let uri: Uri = tribute_front::path_to_uri(&path).as_str().parse().unwrap();
+
+        let mut harness = TestHarness::new();
+        let published =
+            harness.open_document_with_diagnostics(&uri, &std::fs::read_to_string(&path).unwrap());
+        assert_eq!(published.diagnostics, Vec::new());
+
+        let hover = harness
+            .request::<HoverRequest>(HoverParams {
+                text_document_position_params: TextDocumentPositionParams {
+                    text_document: lsp_types::TextDocumentIdentifier { uri },
+                    position: lsp_types::Position {
+                        line: 2,
+                        character: 33, // `rect` in the body of `area`
+                    },
+                },
+                work_done_progress_params: Default::default(),
+            })
+            .expect("the type of `rect`");
+        assert_eq!(extract_hover_type(&hover), Some("Rect"));
+    }
+
     #[test]
     fn an_open_dependency_buffer_republishes_its_dependents() {
         let packages =
@@ -2962,6 +3147,38 @@ mod tests {
             list.items[0].kind,
             Some(lsp_types::CompletionItemKind::CONSTRUCTOR)
         );
+    }
+
+    #[test]
+    fn test_completion_after_a_dot_offers_a_manifest_dependency_constructor() {
+        let packages =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/packages");
+        let uri: Uri = tribute_front::path_to_uri(&packages.join("app/src/main.trb"))
+            .as_str()
+            .parse()
+            .unwrap();
+        let mut harness = TestHarness::new();
+        harness.open_document(&uri, "use geometry::Rect\nfn pick() -> Rect { .R }");
+
+        let params = CompletionParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri },
+                position: lsp_types::Position {
+                    line: 1,
+                    character: 22, // After `.R`
+                },
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            context: None,
+        };
+
+        let result: Option<lsp_types::CompletionResponse> = harness.request::<Completion>(params);
+        let Some(lsp_types::CompletionResponse::List(list)) = result else {
+            panic!("Should return a completion list");
+        };
+        let labels: Vec<_> = list.items.iter().map(|item| item.label.as_str()).collect();
+        assert_eq!(labels, ["Rect"]);
     }
 
     #[test]
@@ -3856,5 +4073,96 @@ fn main() -> Nil {
         );
         let labels = completion_labels_after(&mut harness, &uri, source, "let known = iden");
         assert!(labels.iter().any(|label| label == "identity"), "{labels:?}");
+    }
+
+    mod generated_programs {
+        //! Hover and completion at every position of a generated program, or
+        //! of a prefix of one as while it is typed, answer without
+        //! panicking.
+
+        use std::cell::{Cell, RefCell};
+
+        use proptest::prelude::*;
+        use proptest::sample::Index;
+        use tribute_prop::program::program;
+
+        use super::*;
+
+        thread_local! {
+            /// One server for every case, so the prelude is checked once.
+            static HARNESS: RefCell<TestHarness> = RefCell::new(TestHarness::new());
+            static DOCUMENTS: Cell<usize> = const { Cell::new(0) };
+        }
+
+        /// Every position of `text`, including the end of each line.
+        fn positions(text: &str) -> impl Iterator<Item = lsp_types::Position> + '_ {
+            text.split('\n').enumerate().flat_map(|(line, content)| {
+                (0..=content.len()).map(move |character| lsp_types::Position {
+                    line: line as u32,
+                    character: character as u32,
+                })
+            })
+        }
+
+        fn check_positions(text: &str) -> Result<(), TestCaseError> {
+            HARNESS.with_borrow_mut(|harness| {
+                let document = DOCUMENTS.replace(DOCUMENTS.get() + 1);
+                let uri = test_uri(&format!("generated_{document}"));
+                harness.open_document(&uri, text);
+                let lines = text.split('\n').collect::<Vec<_>>();
+                for position in positions(text) {
+                    let at = TextDocumentPositionParams {
+                        text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+                        position,
+                    };
+                    let hover = harness.request::<HoverRequest>(HoverParams {
+                        text_document_position_params: at.clone(),
+                        work_done_progress_params: Default::default(),
+                    });
+                    if let Some(range) = hover.and_then(|hover| hover.range) {
+                        for end in [range.start, range.end] {
+                            prop_assert!(
+                                lines
+                                    .get(end.line as usize)
+                                    .is_some_and(|line| end.character as usize <= line.len()),
+                                "the hover at {:?} spans {:?}, outside the document\n{}",
+                                position,
+                                range,
+                                text
+                            );
+                        }
+                    }
+                    harness.request::<Completion>(CompletionParams {
+                        text_document_position: at,
+                        work_done_progress_params: Default::default(),
+                        partial_result_params: Default::default(),
+                        context: None,
+                    });
+                }
+                Ok(())
+            })
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig {
+                cases: 64,
+                max_shrink_iters: 32,
+                ..ProptestConfig::default()
+            })]
+
+            #[test]
+            fn hover_and_completion_answer_everywhere(program in program()) {
+                check_positions(&program.source())?;
+            }
+
+            #[test]
+            fn hover_and_completion_answer_while_typing(
+                program in program(),
+                end in any::<Index>(),
+            ) {
+                let text = program.source();
+                check_positions(&text[..end.index(text.len() + 1)])?;
+            }
+        }
     }
 }

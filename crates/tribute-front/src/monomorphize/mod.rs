@@ -947,7 +947,6 @@ mod tests {
                     origin,
                     crate::typeck::LocalCallableInstance {
                         binding: NodeId::from_raw(2),
-                        local: crate::ast::LocalId::new(7),
                         scheme: TypeScheme::mono(&db, function),
                         callable: function,
                         row_arguments: vec![],
@@ -1001,9 +1000,8 @@ mod tests {
             local.binding,
             NodeId::from_raw(2).with_variant(key.variant())
         );
-        assert_eq!(local.local, crate::ast::LocalId::new(7));
         assert_eq!(local.callable, specialized_function);
-        assert_eq!(local.scheme.body(&db), specialized_function);
+        assert_eq!(*local.scheme.body(&db), specialized_function);
         assert_eq!(
             metadata
                 .expressions

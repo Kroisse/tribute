@@ -10,6 +10,7 @@
 
 use itertools::Itertools;
 use rustc_hash::FxHashMap as HashMap;
+use salsa::Accumulator;
 use tribute_core::{CompilationPhase, DiagnosticSeverity};
 
 use crate::ast::visit::{Visit, walk_expr, walk_handler_arm};
@@ -70,7 +71,7 @@ impl<'db> TypeChecker<'db> {
             DiagnosticSeverity::Error,
             CompilationPhase::TypeChecking,
         )
-        .report(self);
+        .accumulate(self.db());
     }
 
     /// Whether an ability declares an `op` operation, which may suspend.

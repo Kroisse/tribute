@@ -499,14 +499,13 @@ mod tests {
     use super::*;
     use trunk_ir::context::IrContext;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
 
     fn run_pass(ir: &str) -> String {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, ir);
         let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
         lower(&mut ctx, module, tc).unwrap();
-        print_module(&ctx, module.op())
+        module.op().display(&ctx).to_string()
     }
 
     #[test]
@@ -520,7 +519,7 @@ mod tests {
             let boxed = run_pass(&format!(
                 r#"core.module @test {{
   func.func @f(%0: {scalar}) -> core.ptr {{
-    %1 = tribute_rt.box_{kind} %0 : core.ptr
+    %1 = "tribute_rt.box_{kind}"(%0) : core.ptr
     func.return %1
   }}
 }}"#
@@ -530,7 +529,7 @@ mod tests {
             let unboxed = run_pass(&format!(
                 r#"core.module @test {{
   func.func @f(%0: core.ptr) -> {scalar} {{
-    %1 = tribute_rt.unbox_{kind} %0 : {scalar}
+    %1 = "tribute_rt.unbox_{kind}"(%0) : {scalar}
     func.return %1
   }}
 }}"#
@@ -553,7 +552,7 @@ mod tests {
         let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
         lower(&mut ctx, module, tc).unwrap();
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(
             output.contains("tribute_rt.retain"),
             "retain should be preserved"

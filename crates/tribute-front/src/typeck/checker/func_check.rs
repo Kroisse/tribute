@@ -6,6 +6,7 @@
 
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
+use salsa::Accumulator;
 
 use itertools::Itertools;
 use tribute_core::{CompilationPhase, DiagnosticSeverity};
@@ -84,7 +85,7 @@ impl<'db> TypeChecker<'db> {
                     .iter()
                     .position(|row| row == original)
                     .expect("named signature row must be quantified");
-                let row = instance.row_args[index]
+                let &row = instance.row_args[index]
                     .rest(self.db())
                     .expect("fresh signature row must be open");
                 ctx.bind_annotation_row(name.clone(), row);
@@ -163,7 +164,6 @@ impl<'db> TypeChecker<'db> {
         let func_handler_operations = ctx.take_handler_operations();
         let func_perform_operations = ctx.take_perform_operations();
         let func_lambda_signatures = ctx.take_lambda_signatures();
-        let local_generalizations = ctx.take_local_generalizations();
         // Save the accumulated ability row from the body before dropping ctx
         let body_ability_row = ctx.current_effect();
         // Take deferred methods for post-solve resolution
@@ -174,7 +174,6 @@ impl<'db> TypeChecker<'db> {
         let next_row_var = ctx.next_row_var();
         // Drop ctx now to release the borrow of self.env
         drop(ctx);
-        checked.local_generalizations = local_generalizations;
 
         let mut solver = TypeSolver::new(self.db());
         solver.reserve_row_vars(next_row_var);
@@ -268,7 +267,7 @@ impl<'db> TypeChecker<'db> {
             }
             // The declared rows name the function's row parameters in every
             // finalized type, whichever alias the solver chose for them.
-            solver.make_row_representatives(scheme.effect_params(self.db()).iter().copied());
+            solver.make_row_representatives(scheme.effect_params(self.db()));
         }
         // No later type can decide an effect equality left ambiguous here.
         if !solve_failed && let Some(error) = solver.unsettled_ambiguity() {
@@ -288,24 +287,6 @@ impl<'db> TypeChecker<'db> {
         // The declared signature is the function's type; the body is checked
         // against it and never refines it.
         let inferred_func_ty = instantiated_func_ty;
-
-        // Solver aliases can point at a representative created after a local
-        // scheme was generalized. Preserve both spellings before collecting
-        // body and deferred metadata variables for finalization.
-        for (var, binding) in checked.local_generalizations.clone() {
-            let resolved = type_subst.apply_with_rows(
-                self.db(),
-                Type::new(self.db(), TypeKind::UniVar { id: var }),
-                row_subst,
-            );
-            if let TypeKind::UniVar { id } = resolved.kind(self.db()) {
-                let owner = *checked.local_generalizations.entry(*id).or_insert(binding);
-                debug_assert_eq!(
-                    owner, binding,
-                    "solver representative {id:?} aliases local quantifiers of two owners"
-                );
-            }
-        }
 
         // Only interface and retained-relation variables are function binders.
         // Body-local existentials (for example an unused constructor argument)
@@ -390,7 +371,7 @@ impl<'db> TypeChecker<'db> {
                 DiagnosticSeverity::Error,
                 CompilationPhase::TypeChecking,
             )
-            .report(self);
+            .accumulate(self.db());
         }
 
         if let Some(declared) = declared_effect {
@@ -431,7 +412,7 @@ impl<'db> TypeChecker<'db> {
                         DiagnosticSeverity::Error,
                         CompilationPhase::TypeChecking,
                     )
-                    .report(self);
+                    .accumulate(self.db());
                 }
             }
         }
@@ -468,7 +449,7 @@ impl<'db> TypeChecker<'db> {
             debug_assert!(
                 solve_failed
                     || reported_error
-                    || (declared.body(self.db()) == generalized
+                    || (*declared.body(self.db()) == generalized
                         && declared.type_params(self.db()).len() == var_to_index.len()),
                 "checked type of `{}` differs from its declaration:\n  declared: {:?}\n  checked:  {:?}",
                 func.name,
@@ -743,7 +724,7 @@ impl<'db> TypeChecker<'db> {
                         DiagnosticSeverity::Error,
                         CompilationPhase::TypeChecking,
                     )
-                    .report(self),
+                    .accumulate(self.db()),
                 }
             }
             deferred = remaining;
@@ -947,7 +928,7 @@ impl<'db> TypeChecker<'db> {
             DiagnosticSeverity::Error,
             CompilationPhase::TypeChecking,
         )
-        .report(self);
+        .accumulate(self.db());
     }
 
     /// Concrete effects of `body` that `declared` does not name.
@@ -1001,7 +982,7 @@ impl<'db> TypeChecker<'db> {
                 DiagnosticSeverity::Error,
                 CompilationPhase::TypeChecking,
             )
-            .report(self);
+            .accumulate(self.db());
         }
     }
 
@@ -1049,7 +1030,7 @@ impl<'db> TypeChecker<'db> {
         for union in retained {
             if let Some(result) = tail(&union.result) {
                 for source in union.sources.iter().filter_map(tail) {
-                    flows.entry(source).or_default().push(result);
+                    flows.entry(*source).or_default().push(*result);
                 }
             }
         }
@@ -1057,7 +1038,7 @@ impl<'db> TypeChecker<'db> {
             let mut seen = [start].into_iter().collect::<HashSet<_>>();
             let mut pending = vec![start];
             while let Some(row) = pending.pop() {
-                if row == own {
+                if row == *own {
                     return true;
                 }
                 for next in flows.get(&row).into_iter().flatten() {
@@ -1072,7 +1053,7 @@ impl<'db> TypeChecker<'db> {
         let mut reported = HashSet::default();
         for (index, row) in instance.row_args.iter().enumerate() {
             let Some(row) = tail(row) else { continue };
-            if declared.contains(&row) || !reaches_own(row) || !reported.insert(row) {
+            if declared.contains(&row) || !reaches_own(*row) || !reported.insert(row) {
                 continue;
             }
             NodeDiagnostic::new(
@@ -1086,7 +1067,7 @@ impl<'db> TypeChecker<'db> {
                 DiagnosticSeverity::Error,
                 CompilationPhase::TypeChecking,
             )
-            .report(self);
+            .accumulate(self.db());
         }
         !reported.is_empty()
     }
@@ -1105,8 +1086,8 @@ impl<'db> TypeChecker<'db> {
     ) -> bool {
         let db = self.db();
         let scheme = *scheme;
-        let row_name = |var: Option<crate::ast::RowVar>| match var
-            .and_then(|var| scheme.effect_params(db).iter().position(|p| *p == var))
+        let row_name = |var: Option<&crate::ast::RowVar>| match var
+            .and_then(|var| scheme.effect_params(db).iter().position(|p| p == var))
         {
             Some(index) => self.signature_row_name(func_id, scheme, index),
             None => "an inferred ability row".to_owned(),
@@ -1175,7 +1156,7 @@ impl<'db> TypeChecker<'db> {
                 DiagnosticSeverity::Error,
                 CompilationPhase::TypeChecking,
             )
-            .report(self);
+            .accumulate(self.db());
         }
         !messages.is_empty()
     }
@@ -1247,7 +1228,7 @@ impl<'db> TypeChecker<'db> {
             duplicate.first_annotation_id,
             "first matching ability annotation is here",
         )
-        .report(self);
+        .accumulate(self.db());
         true
     }
 
@@ -1276,7 +1257,7 @@ impl<'db> TypeChecker<'db> {
                 DiagnosticSeverity::Error,
                 CompilationPhase::TypeChecking,
             )
-            .report(self);
+            .accumulate(self.db());
         };
 
         let type_names: HashMap<u32, Symbol> = self
@@ -1349,7 +1330,7 @@ impl<'db> TypeChecker<'db> {
                 ));
                 continue;
             };
-            if let Some(first) = seen_rows.insert(tail, index) {
+            if let Some(first) = seen_rows.insert(*tail, index) {
                 report(format!(
                     "{} and {} in the signature of `{}` are the same row in its body",
                     row_name(first),

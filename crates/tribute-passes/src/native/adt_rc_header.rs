@@ -142,7 +142,7 @@ pub(super) fn rc_allocation(
 /// Generates:
 /// ```text
 /// %size      = clif.iconst(layout.total_size + 8)
-/// %raw_ptr   = clif.call @__tribute_alloc(%size)
+/// %raw_ptr   = clif.call @__tribute_alloc(%size) : (core.i64) -> core.ptr
 /// %rc_one    = clif.iconst(1)
 /// clif.store(%rc_one, %raw_ptr, offset=0)        // refcount
 /// %rtti_idx  = clif.iconst(<rtti_idx>)
@@ -256,7 +256,7 @@ impl OpRewritePattern for StructNewPattern {
 /// Generates:
 /// ```text
 /// %size      = clif.iconst(variant_layout.total_size + 8)
-/// %raw_ptr   = clif.call @__tribute_alloc(%size)
+/// %raw_ptr   = clif.call @__tribute_alloc(%size) : (core.i64) -> core.ptr
 /// %rc_one    = clif.iconst(1)
 /// clif.store(%rc_one, %raw_ptr, offset=0)        // refcount
 /// %rtti_idx  = clif.iconst(<rtti_idx>)
@@ -392,7 +392,6 @@ mod tests {
     use trunk_ir::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder, RegionData};
     use trunk_ir::dialect::core;
     use trunk_ir::dialect::func;
-    use trunk_ir::printer::print_module;
     use trunk_ir::rewrite::Module;
     use trunk_ir::smallvec::smallvec;
     use trunk_ir::types::Attribute;
@@ -503,7 +502,7 @@ mod tests {
         // Run adt_rc_header pass
         lower(ctx, module, tc).unwrap();
 
-        print_module(ctx, module.op())
+        module.op().display(ctx).to_string()
     }
 
     #[test]

@@ -24,23 +24,20 @@ pub(crate) fn is_nil_type(ctx: &IrContext, ty: TypeRef) -> bool {
     ty.name.is(ctx, "core.nil") && ty.params.is_empty()
 }
 
-/// Parse a condition symbol into a Cranelift integer condition code.
-fn parse_int_cc(s: &str) -> CompilationResult<cl_ir::condcodes::IntCC> {
+/// The Cranelift condition code of a `clif.icmp` condition.
+fn int_cc(cond: clif::IntCond) -> cl_ir::condcodes::IntCC {
     use cl_ir::condcodes::IntCC;
-    match s {
-        "eq" => Ok(IntCC::Equal),
-        "ne" => Ok(IntCC::NotEqual),
-        "slt" => Ok(IntCC::SignedLessThan),
-        "sle" => Ok(IntCC::SignedLessThanOrEqual),
-        "sgt" => Ok(IntCC::SignedGreaterThan),
-        "sge" => Ok(IntCC::SignedGreaterThanOrEqual),
-        "ult" => Ok(IntCC::UnsignedLessThan),
-        "ule" => Ok(IntCC::UnsignedLessThanOrEqual),
-        "ugt" => Ok(IntCC::UnsignedGreaterThan),
-        "uge" => Ok(IntCC::UnsignedGreaterThanOrEqual),
-        other => Err(CompilationError::codegen(format!(
-            "unknown integer comparison condition: {other}"
-        ))),
+    match cond {
+        clif::IntCond::Eq => IntCC::Equal,
+        clif::IntCond::Ne => IntCC::NotEqual,
+        clif::IntCond::Slt => IntCC::SignedLessThan,
+        clif::IntCond::Sle => IntCC::SignedLessThanOrEqual,
+        clif::IntCond::Sgt => IntCC::SignedGreaterThan,
+        clif::IntCond::Sge => IntCC::SignedGreaterThanOrEqual,
+        clif::IntCond::Ult => IntCC::UnsignedLessThan,
+        clif::IntCond::Ule => IntCC::UnsignedLessThanOrEqual,
+        clif::IntCond::Ugt => IntCC::UnsignedGreaterThan,
+        clif::IntCond::Uge => IntCC::UnsignedGreaterThanOrEqual,
     }
 }
 
@@ -64,19 +61,16 @@ fn parse_atomic_rmw_op(s: &str) -> CompilationResult<cl_ir::AtomicRmwOp> {
     }
 }
 
-/// Parse a condition symbol into a Cranelift float condition code.
-fn parse_float_cc(s: &str) -> CompilationResult<cl_ir::condcodes::FloatCC> {
+/// The Cranelift condition code of a `clif.fcmp` condition.
+fn float_cc(cond: clif::FloatCond) -> cl_ir::condcodes::FloatCC {
     use cl_ir::condcodes::FloatCC;
-    match s {
-        "eq" => Ok(FloatCC::Equal),
-        "ne" => Ok(FloatCC::NotEqual),
-        "lt" => Ok(FloatCC::LessThan),
-        "le" => Ok(FloatCC::LessThanOrEqual),
-        "gt" => Ok(FloatCC::GreaterThan),
-        "ge" => Ok(FloatCC::GreaterThanOrEqual),
-        other => Err(CompilationError::codegen(format!(
-            "unknown float comparison condition: {other}"
-        ))),
+    match cond {
+        clif::FloatCond::Eq => FloatCC::Equal,
+        clif::FloatCond::Ne => FloatCC::NotEqual,
+        clif::FloatCond::Lt => FloatCC::LessThan,
+        clif::FloatCond::Le => FloatCC::LessThanOrEqual,
+        clif::FloatCond::Gt => FloatCC::GreaterThan,
+        clif::FloatCond::Ge => FloatCC::GreaterThanOrEqual,
     }
 }
 
@@ -510,7 +504,7 @@ impl<'a> FunctionTranslator<'a> {
 
         // === Comparisons ===
         if let Ok(o) = clif::Icmp::from_op(ctx, op) {
-            let cond = parse_int_cc(o.cond(ctx))?;
+            let cond = int_cc(o.cond(ctx));
             let operands = ctx.op_operands(op);
             let lhs = self.lookup(operands[0])?;
             let rhs = self.lookup(operands[1])?;
@@ -520,7 +514,7 @@ impl<'a> FunctionTranslator<'a> {
             return Ok(());
         }
         if let Ok(o) = clif::Fcmp::from_op(ctx, op) {
-            let cond = parse_float_cc(o.cond(ctx))?;
+            let cond = float_cc(o.cond(ctx));
             let operands = ctx.op_operands(op);
             let lhs = self.lookup(operands[0])?;
             let rhs = self.lookup(operands[1])?;

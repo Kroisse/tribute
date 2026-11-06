@@ -6,7 +6,6 @@ use tribute_ir::dialect::{adt, effect};
 use trunk_ir::SymbolPath;
 use trunk_ir::ops::DialectType;
 use trunk_ir::parser::parse_test_module;
-use trunk_ir::printer::print_module;
 use trunk_ir::symbol_table::nearest_table;
 
 use crate::lower_continuation_frames::lower_continuation_frames;
@@ -164,6 +163,22 @@ fn collect_lambdas(ctx: &IrContext, op: OpRef, lambdas: &mut Vec<OpRef>) {
     }
 }
 
+/// The result type of each `scf.if` under `op`, as its name.
+fn collect_if_results(ctx: &IrContext, op: OpRef, results: &mut Vec<String>) {
+    if trunk_ir::dialect::scf::If::matches(ctx, op) {
+        for &ty in ctx.op_result_types(op) {
+            results.push(ctx.get_type(ty).name.display(ctx).to_string());
+        }
+    }
+    for region in ctx.op_regions(op) {
+        for &block in &ctx.region(region).blocks {
+            for &child in &ctx.block(block).ops {
+                collect_if_results(ctx, child, results);
+            }
+        }
+    }
+}
+
 fn collect_cps_tail_calls(ctx: &IrContext, op: OpRef, tails: &mut Vec<OpRef>) {
     if func::TailCallIndirect::matches(ctx, op)
         && DynConventionBearing::of(ctx, op) == Some(CallingConvention::Cps)
@@ -202,7 +217,7 @@ fn textual_callable_graph_converts_and_reparses() {
     tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
     lower_continuation_frames(&mut ctx, module).unwrap();
     verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert!(!printed.contains("tribute_control.func "));
     assert!(!printed.contains("tribute_control.func_ref "));
     assert!(!printed.contains("tribute_control.call_indirect "));
@@ -250,25 +265,25 @@ fn textual_direct_evidence_and_cps_transfers_preserve_exact_abis() {
   tribute_cps.func_table @"evidence$8" = {evidence_direct = @evidence}
   tribute_cps.func_table @"cps$8" = {cps = @cps}
   tribute_cps.func @exercise(%value: core.i32) -> core.i32 convention(cps) {
-    %direct_result = tribute_control.call %value {callee = @direct} : core.i32
-    %evidence_result = tribute_control.call %direct_result {callee = @evidence} : core.i32
-    %direct_ref = tribute_cps.func_ref {func_ref = @"direct$8"} : !direct
-    %direct_indirect = tribute_cps.call_indirect %direct_ref, %evidence_result {convention = "direct"} : core.i32
-    %evidence_ref = tribute_cps.func_ref {func_ref = @"evidence$8"} : !evidence
-    %evidence_indirect = tribute_cps.call_indirect %evidence_ref, %direct_indirect {convention = "evidence_direct"} : core.i32
-    %cps_ref = tribute_cps.func_ref {func_ref = @"cps$8"} : !cps
-    %cps_indirect = tribute_cps.call_indirect %cps_ref, %evidence_indirect {convention = "cps"} : core.i32
+    %direct_result = tribute_control.call @direct(%value) : (core.i32) -> core.i32
+    %evidence_result = tribute_control.call @evidence(%direct_result) : (core.i32) -> core.i32
+    %direct_ref = tribute_cps.func_ref @"direct$8" : !direct
+    %direct_indirect = tribute_cps.call_indirect %direct_ref(%evidence_result) attributes {convention = "direct"} : (core.i32) -> core.i32
+    %evidence_ref = tribute_cps.func_ref @"evidence$8" : !evidence
+    %evidence_indirect = tribute_cps.call_indirect %evidence_ref(%direct_indirect) attributes {convention = "evidence_direct"} : (core.i32) -> core.i32
+    %cps_ref = tribute_cps.func_ref @"cps$8" : !cps
+    %cps_indirect = tribute_cps.call_indirect %cps_ref(%evidence_indirect) attributes {convention = "cps"} : (core.i32) -> core.i32
     tribute_control.return %cps_indirect
   }
   tribute_cps.func @known_cps(%value: core.i32) -> core.i32 convention(cps) {
-    %result = tribute_control.call %value {callee = @cps} : core.i32
+    %result = tribute_control.call @cps(%value) : (core.i32) -> core.i32
     tribute_control.return %result
   }
 }"#;
     let (mut ctx, module) = parse(input);
     tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
     lower_continuation_frames(&mut ctx, module).unwrap();
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert!(printed.contains("func.call "));
     assert!(printed.contains("func.call_indirect"));
     assert!(printed.contains("func.tail_call "));
@@ -295,7 +310,7 @@ fn textual_direct_evidence_and_cps_transfers_preserve_exact_abis() {
     assert!(ctx.get_type(closure_ty).attrs.is_empty());
     crate::lower_closure_lambda::lower_closure_lambda(&mut ctx, module);
     crate::closure_lower::lower_prepared_closures(&mut ctx, module).unwrap();
-    let lowered = print_module(&ctx, module.op());
+    let lowered = module.op().display(&ctx).to_string();
     assert!(
         !lowered.contains("closure.lambda") && !lowered.contains("closure.new"),
         "{lowered}"
@@ -340,13 +355,13 @@ fn source_data_indirect_calls_carry_their_exact_signature() {
     tribute_control.return %left
   }
   tribute_cps.func @pure(%f: !direct, %left: core.i32, %right: core.i32) -> core.i32 convention(direct) {
-    %result = tribute_cps.call_indirect %f, %left, %right {convention = "direct"} : core.i32
+    %result = tribute_cps.call_indirect %f(%left, %right) attributes {convention = "direct"} : (core.i32, core.i32) -> core.i32
     tribute_control.return %result
   }
   tribute_cps.func_table @"add$8" = {direct = @add}
   tribute_cps.func @named_ref(%left: core.i32, %right: core.i32) -> core.i32 convention(direct) {
-    %ref = tribute_cps.func_ref {func_ref = @"add$8"} : !direct
-    %called = tribute_cps.call_indirect %ref, %left, %right {convention = "direct"} : core.i32
+    %ref = tribute_cps.func_ref @"add$8" : !direct
+    %called = tribute_cps.call_indirect %ref(%left, %right) attributes {convention = "direct"} : (core.i32, core.i32) -> core.i32
     tribute_control.return %called
   }
   tribute_cps.func @capturing(%captured: core.i32, %value: core.i32) -> core.i32 convention(direct) {
@@ -356,11 +371,11 @@ fn source_data_indirect_calls_carry_their_exact_signature() {
         tribute_control.return %sum
       }
     }
-    %called = tribute_cps.call_indirect %lambda, %value {convention = "direct"} : core.i32
+    %called = tribute_cps.call_indirect %lambda(%value) attributes {convention = "direct"} : (core.i32) -> core.i32
     tribute_control.return %called
   }
   tribute_cps.func @thunk(%f: !evidence, %value: core.i32) -> core.i32 convention(evidence_direct) {
-    %called = tribute_cps.call_indirect %f, %value {convention = "evidence_direct"} : core.i32
+    %called = tribute_cps.call_indirect %f(%value) attributes {convention = "evidence_direct"} : (core.i32) -> core.i32
     tribute_control.return %called
   }
 }"#;
@@ -396,7 +411,7 @@ fn source_data_indirect_calls_carry_their_exact_signature() {
             CallingConvention::EvidenceDirect,
         ],
         "every source-data indirect call must convert: {}",
-        print_module(&ctx, module.op())
+        module.op().display(&ctx)
     );
 
     for transfer in &transfers {
@@ -418,7 +433,7 @@ fn source_data_indirect_calls_carry_their_exact_signature() {
             (&entry.inputs(&ctx)[hidden..], entry.results(&ctx)),
             (source.inputs(&ctx), source.results(&ctx)),
             "{convention:?} transfer must carry its exact entry contract: {}",
-            print_module(&ctx, module.op())
+            module.op().display(&ctx)
         );
     }
 
@@ -441,7 +456,7 @@ fn nested_textual_module_converts_its_callable_graph_atomically() {
     let (mut ctx, module) = parse(input);
     tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
     lower_continuation_frames(&mut ctx, module).unwrap();
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert!(printed.contains("core.module @inner"));
     assert!(printed.contains("func.func @nested"));
     assert!(printed.contains("func.tail_call_indirect"));
@@ -459,7 +474,7 @@ fn nested_modules_resolve_same_named_callables_in_their_own_module() {
     tribute_control.return %value
   }
   tribute_cps.func @outer_call(%value: core.i32) -> core.i32 convention(direct) {
-    %result = tribute_control.call %value {callee = @same} : core.i32
+    %result = tribute_control.call @same(%value) : (core.i32) -> core.i32
     tribute_control.return %result
   }
   core.module @inner {
@@ -467,7 +482,7 @@ fn nested_modules_resolve_same_named_callables_in_their_own_module() {
       tribute_control.return %value
     }
     tribute_cps.func @inner_call(%value: core.i1) -> core.i1 convention(evidence_direct) {
-      %result = tribute_control.call %value {callee = @same} : core.i1
+      %result = tribute_control.call @same(%value) : (core.i1) -> core.i1
       tribute_control.return %result
     }
   }
@@ -475,7 +490,7 @@ fn nested_modules_resolve_same_named_callables_in_their_own_module() {
     let (mut ctx, module) = parse(input);
     tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
     verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert_eq!(printed.matches("func.func @same").count(), 2, "{printed}");
     assert!(printed.contains("func.func @outer_call"), "{printed}");
     assert!(printed.contains("func.func @inner_call"), "{printed}");
@@ -498,7 +513,7 @@ fn textual_nested_attribute_types_convert_atomically() {
 }"#;
     let (mut ctx, module) = parse(input);
     tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert!(printed.contains("adt.struct<CallbackRecord("));
     assert!(
         printed.contains("closure.closure<func.func_sig<(core.i32) -> core.i32, {metadata"),
@@ -521,17 +536,17 @@ fn source_signature_metadata_roundtrips_before_conversion() {
   !inner = tribute_control.func_sig<(core.i32) -> core.i32>
   !outer = tribute_control.func_sig<() -> core.i32, {metadata = [[!inner, @function]]}>
   !lambda = tribute_control.func_sig<() -> core.i32, {metadata = [[!inner, @lambda]]}>
-  tribute_cps.func {convention = "direct", sym_name = "outer", type = !outer} {
-    %lambda = tribute_cps.lambda {conventions = ["direct"]} : !lambda {
-      %inner = arith.const {value = 1} : core.i32
+  "tribute_cps.func"() ({
+    %lambda = "tribute_cps.lambda"() ({
+      %inner = arith.constant 1 : core.i32
       tribute_control.return %inner
-    }
-    %result = arith.const {value = 2} : core.i32
+    }) {conventions = ["direct"]} : !lambda
+    %result = arith.constant 2 : core.i32
     tribute_control.return %result
-  }
+  }) {convention = "direct", sym_name = "outer", type = !outer}
 }"#;
     let (ctx, module) = parse(source);
-    let printed_source = print_module(&ctx, module.op());
+    let printed_source = module.op().display(&ctx).to_string();
     assert!(
         printed_source.contains(
             "!outer = tribute_control.func_sig<() -> core.i32, {metadata = [[!inner, @function]]}>"
@@ -614,7 +629,7 @@ fn source_signature_metadata_roundtrips_before_conversion() {
 fn malformed_pre_boundary_is_atomic() {
     let input = r#"core.module @test {
   tribute_cps.func @broken(%value: core.i32) -> core.i32 convention(direct) {
-    %illegal = func.call %value {callee = @broken} : core.i32
+    %illegal = func.call @broken(%value) : (core.i32) -> core.i32
     tribute_control.return %illegal
   }
 }"#;
@@ -665,20 +680,20 @@ fn malformed_or_retired_source_signatures_fail_before_conversion() {
         ctx.op_attrs_mut(function)
             .insert("type", Attribute::Type(malformed));
 
-        let before = print_module(&ctx, module.op());
+        let before = module.op().display(&ctx).to_string();
         let error =
             tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap_err();
         assert_eq!(error.boundary, PRE_CPS_BOUNDARY, "{name}: {error}");
         assert!(error.to_string().contains(expected), "{name}: {error}");
-        assert_eq!(print_module(&ctx, module.op()), before, "{name}");
+        assert_eq!(module.op().display(&ctx).to_string(), before, "{name}");
     }
 }
 
 #[test]
 fn raw_malformed_source_signature_storage_fails_before_conversion() {
     let input = r#"core.module @test {
-  tribute_control.func {sym_name = "broken", type = tribute_control.func_sig<core.i32, {num_inputs = 2, num_results = 1}>}
-  %lambda = tribute_control.lambda : tribute_control.func_sig<core.i32, {num_inputs = 2, num_results = 1}>
+  "tribute_control.func"() {sym_name = "broken", type = tribute_control.func_sig<core.i32, {num_inputs = 2, num_results = 1}>}
+  %lambda = "tribute_control.lambda"() : tribute_control.func_sig<core.i32, {num_inputs = 2, num_results = 1}>
 }"#;
     let (mut ctx, module) = parse(input);
     let error = assert_unchanged_on_error(&mut ctx, module, run_pre_cps);
@@ -693,53 +708,15 @@ fn raw_malformed_source_signature_storage_fails_before_conversion() {
 
 #[test]
 fn malformed_lookup_inputs_fail_before_conversion_and_remain_unchanged() {
-    let malformed = [
-        (
-            r#"core.module @test {
+    let malformed = [(
+        r#"core.module @test {
   tribute_cps.func @broken(%value: core.i32) -> core.i32 convention(direct) {
-    %result = tribute_control.call %value : core.i32
+    %result = tribute_control.call @missing(%value) : (core.i32) -> core.i32
     tribute_control.return %result
   }
 }"#,
-            "missing required attribute `callee`",
-        ),
-        (
-            r#"core.module @test {
-  tribute_cps.func @broken(%value: core.i32) -> core.i32 convention(direct) {
-    %result = tribute_control.call %value {callee = @missing} : core.i32
-    tribute_control.return %result
-  }
-}"#,
-            "unresolved callee @missing",
-        ),
-        (
-            r#"core.module @test {
-  tribute_cps.func @broken(%value: core.i32) -> core.i32 convention(direct) {
-    %result = tribute_cps.call_indirect %value, %value {convention = "direct"} : core.i32
-    tribute_control.return %result
-  }
-}"#,
-            "expected S: tribute_control.func_sig",
-        ),
-        (
-            r#"core.module @test {
-  tribute_cps.func @broken(%value: core.i32) -> core.i32 convention(cps) {
-    %result = tribute_control.perform %value : core.i32
-    tribute_control.return %result
-  }
-}"#,
-            "missing required attribute `ability`",
-        ),
-        (
-            r#"core.module @test {
-  tribute_cps.func @broken(%value: core.i32) -> core.i32 convention(cps) {
-    %result = tribute_control.handle : core.i32
-    tribute_control.return %result
-  }
-}"#,
-            "expected 3 region(s)",
-        ),
-    ];
+        "unresolved callee @missing",
+    )];
     for (input, expected) in malformed {
         let (mut ctx, module) = parse(input);
         let error = assert_unchanged_on_error(&mut ctx, module, run_pre_cps);
@@ -752,7 +729,7 @@ fn malformed_lookup_inputs_fail_before_conversion_and_remain_unchanged() {
 fn source_successors_fail_before_conversion_and_leave_ir_unchanged() {
     let input = r#"core.module @test {
   ^entry:
-    scf.br [^exit]
+    "scf.br"()[^exit]
   ^exit:
 }"#;
     let (mut ctx, module) = parse(input);
@@ -765,101 +742,19 @@ fn source_successors_fail_before_conversion_and_leave_ir_unchanged() {
 }
 
 #[test]
-fn malformed_switch_case_fails_before_conversion_and_is_atomic() {
-    let input = r#"core.module @test {
-  tribute_cps.func @broken(%value: core.i32) -> core.i32 convention(cps) {
-    scf.switch %value {
-      scf.case {
-        %identity = tribute_cps.lambda(%nested: core.i32) -> core.i32 captures [] entries {
-          direct {
-            tribute_control.return %nested
-          }
-        }
-        scf.yield
-      }
-    }
-    tribute_control.return %value
-  }
-}"#;
-    let (mut ctx, module) = parse(input);
-    let error = assert_unchanged_on_error(&mut ctx, module, run_pre_cps);
-    assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
-    assert!(
-        error.to_string().contains("scf.case requires a value"),
-        "{error}"
-    );
-}
-
-#[test]
 fn source_shape_validation_rejects_every_malformed_switch_component() {
-    let malformed = [
-        (
-            r#"core.module @test {
-  %value = arith.const {value = 0} : core.i32
-  scf.switch {
-    scf.default {
-      scf.yield
-    }
-  }
-}"#,
-            "one discriminant, no results, and one body region",
-        ),
-        (
-            r#"core.module @test {
-  %value = arith.const {value = 0} : core.i32
-  %result = scf.switch %value : core.i32 {
-    scf.default {
-      scf.yield
-    }
-  }
-}"#,
-            "one discriminant, no results, and one body region",
-        ),
-        (
-            r#"core.module @test {
-  %value = arith.const {value = 0} : core.i32
-  scf.switch %value {
+    let malformed = [(
+        r#"core.module @test {
+  %value = arith.constant 0 : core.i32
+  scf.index_switch %value : (core.i32) -> ()
+  default {
     ^first:
-      scf.default {
-        scf.yield
-      }
+      scf.yield
     ^second:
   }
 }"#,
-            "body region requires exactly one block",
-        ),
-        (
-            r#"core.module @test {
-  %value = arith.const {value = 0} : core.i32
-  scf.switch %value {
-    %invalid = arith.const {value = 1} : core.i32
-  }
-}"#,
-            "body may contain only scf.case and scf.default",
-        ),
-        (
-            r#"core.module @test {
-  %value = arith.const {value = 0} : core.i32
-  scf.switch %value {
-    scf.case {value = 0}
-  }
-}"#,
-            "arm requires exactly one region",
-        ),
-        (
-            r#"core.module @test {
-  %value = arith.const {value = 0} : core.i32
-  scf.switch %value {
-    scf.default {
-      ^first:
-        scf.yield
-      ^second:
-    }
-  }
-}"#,
-            "arm region requires exactly one block",
-        ),
-    ];
+        "scf.index_switch region requires exactly one block",
+    )];
 
     for (input, expected) in malformed {
         let (ctx, module) = parse(input);
@@ -882,7 +777,7 @@ fn post_candidate_failure_restores_alias_maps_and_canonical_ir() {
   }
 }"#;
     let (mut ctx, candidate) = parse(input);
-    let before = print_module(&ctx, candidate.op());
+    let before = candidate.op().display(&ctx).to_string();
     let source_aliases = ctx.type_aliases().to_vec();
     let (alias_name, source_type) = source_aliases[0].clone();
     let converted_type = TypeDataBuilder::new("core.i32").intern(&mut ctx);
@@ -899,14 +794,14 @@ fn post_candidate_failure_restores_alias_maps_and_canonical_ir() {
     assert_eq!(ctx.type_alias_by_name(&alias_name), Some(source_type));
     assert_eq!(ctx.type_alias_by_type(source_type), Some(alias_name));
     assert_eq!(ctx.type_alias_by_type(converted_type), None);
-    assert_eq!(print_module(&ctx, candidate.op()), before);
+    assert_eq!(candidate.op().display(&ctx).to_string(), before);
 }
 
 #[test]
 fn named_boundaries_report_local_and_core_validation_errors() {
     let local_input = r#"core.module @test {
   tribute_cps.func @broken(%value: core.i32) -> core.i32 convention(direct) {
-    tribute_control.return
+    "tribute_control.return"()
   }
 }"#;
     let (ctx, module) = parse(local_input);
@@ -916,7 +811,7 @@ fn named_boundaries_report_local_and_core_validation_errors() {
 
     let core_input = r#"core.module @test {
   tribute_cps.func @broken(%value: core.i32) -> core.i32 convention(direct) {
-    func.tail_call_indirect
+    "func.tail_call_indirect"()
     tribute_control.return %value
   }
 }"#;
@@ -932,7 +827,7 @@ fn named_boundaries_report_local_and_core_validation_errors() {
 
     let post_input = r#"core.module @test {
   func.func @broken() -> core.never attributes {tribute.calling_convention = "cps"} {
-    func.tail_call_indirect
+    "func.tail_call_indirect"()
   }
 }"#;
     let (ctx, module) = parse(post_input);
@@ -946,16 +841,19 @@ fn named_boundaries_report_local_and_core_validation_errors() {
 
     let malformed_delimiter = r#"core.module @test {
   !evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
-  func.func @broken() -> core.never attributes {tribute.calling_convention = "cps"} {
-    ability.handle_dispatch {abilities = []} {
-      ^body(%inner: !evidence):
+  func.func @broken(%ev: !evidence, %prompt: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
+    ability.handle_dispatch %ev, %prompt [] {
+      ^body:
         func.unreachable
     }
   }
 }"#;
     let (ctx, module) = parse(malformed_delimiter);
     let error = verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap_err();
-    assert!(error.to_string().contains("requires an evidence operand"));
+    assert!(
+        error.to_string().contains("one evidence argument"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -1007,18 +905,7 @@ fn post_boundary_rejects_malformed_physical_callable_transfers() {
     func.unreachable
   }
   func.func @caller(%value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-    func.tail_call %value {tribute.calling_convention = "cps"}
-  }
-}"#,
-            "requires a resolved callee symbol",
-        ),
-        (
-            r#"core.module @test {
-  func.func @callee(%value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-    func.unreachable
-  }
-  func.func @caller(%value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-    func.tail_call %value {callee = @callee}
+    func.tail_call @callee(%value) : (core.i32) -> ()
   }
 }"#,
             "func.tail_call must carry exact Direct, EvidenceDirect, or Cps metadata",
@@ -1026,7 +913,7 @@ fn post_boundary_rejects_malformed_physical_callable_transfers() {
         (
             r#"core.module @test {
   func.func @caller(%value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-    func.tail_call %value {callee = @missing, tribute.calling_convention = "cps"}
+    func.tail_call @missing(%value) attributes {tribute.calling_convention = "cps"} : (core.i32) -> ()
   }
 }"#,
             "unresolved callee @missing",
@@ -1037,7 +924,7 @@ fn post_boundary_rejects_malformed_physical_callable_transfers() {
     func.unreachable
   }
   func.func @caller(%value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-    func.tail_call %value {callee = @callee, tribute.calling_convention = "cps"}
+    func.tail_call @callee(%value) attributes {tribute.calling_convention = "cps"} : (core.i32) -> ()
   }
 }"#,
             "operands do not match the target signature",
@@ -1048,7 +935,7 @@ fn post_boundary_rejects_malformed_physical_callable_transfers() {
     func.return %value
   }
   func.func @caller(%value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-    func.tail_call %value {callee = @callee, tribute.calling_convention = "cps"}
+    func.tail_call @callee(%value) attributes {tribute.calling_convention = "cps"} : (core.i32) -> ()
   }
 }"#,
             "target must have core.never result",
@@ -1059,7 +946,7 @@ fn post_boundary_rejects_malformed_physical_callable_transfers() {
     func.unreachable
   }
   func.func @caller(%value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-    func.tail_call %value {callee = @callee, tribute.calling_convention = "cps"}
+    func.tail_call @callee(%value) attributes {tribute.calling_convention = "cps"} : (core.i32) -> ()
   }
 }"#,
             "must preserve exact Cps metadata",
@@ -1067,7 +954,7 @@ fn post_boundary_rejects_malformed_physical_callable_transfers() {
         (
             r#"core.module @test {
   func.func @caller(%callee: closure.closure<func.func_sig<(core.i32) -> core.never>>, %value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-    func.tail_call_indirect %callee, %value
+    func.tail_call_indirect %callee(%value) : (core.i32) -> core.never
   }
 }"#,
             "func.tail_call_indirect must carry exact Direct, EvidenceDirect, or Cps metadata",
@@ -1078,7 +965,7 @@ fn post_boundary_rejects_malformed_physical_callable_transfers() {
     func.return %value
   }
   func.func @caller(%value: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
-    %result = func.call %value {callee = @callee, tribute.calling_convention = "evidence_direct"} : core.i32
+    %result = func.call @callee(%value) attributes {tribute.calling_convention = "evidence_direct"} : (core.i32) -> core.i32
     func.return %result
   }
 }"#,
@@ -1087,7 +974,7 @@ fn post_boundary_rejects_malformed_physical_callable_transfers() {
         (
             r#"core.module @test {
   func.func @caller(%value: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
-    %result = func.call %value {callee = @missing, tribute.calling_convention = "direct"} : core.i32
+    %result = func.call @missing(%value) attributes {tribute.calling_convention = "direct"} : (core.i32) -> core.i32
     func.return %result
   }
 }"#,
@@ -1096,7 +983,7 @@ fn post_boundary_rejects_malformed_physical_callable_transfers() {
         (
             r#"core.module @test {
   func.func @caller(%callee: closure.closure<func.func_sig<(core.i32) -> core.never>>, %value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
-    %result = func.call_indirect %callee, %value {tribute.calling_convention = "cps"} : core.never
+    %result = func.call_indirect %callee(%value) attributes {tribute.calling_convention = "cps"} : (core.i32) -> core.never
     func.unreachable
   }
 }"#,
@@ -1117,7 +1004,7 @@ fn post_boundary_rejects_nonphysical_dispatchers_and_residual_control_ops() {
   !evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
   !tr = closure.closure<func.func_sig<(!evidence, core.i32, tribute_rt.anyref) -> tribute_rt.anyref>>
   func.func @caller(%ev: !evidence, %prompt: core.i32, %tr: !tr) -> core.never attributes {tribute.calling_convention = "cps"} {
-    ability.handle_dispatch %ev, %prompt, %tr {abilities = [@State]} {
+    ability.handle_dispatch %ev, %prompt [@State: %tr] {
       ^body(%inner: !evidence):
         func.unreachable
     }
@@ -1138,7 +1025,7 @@ fn post_boundary_rejects_nonphysical_dispatchers_and_residual_control_ops() {
     %tr = closure.lambda evidence_direct(%inner: !evidence) -> tribute_rt.anyref {
       func.unreachable
     }
-    ability.handle_dispatch %ev, %prompt, %tr {abilities = [@State]} {
+    ability.handle_dispatch %ev, %prompt [@State: %tr] {
       ^body(%inner: !evidence):
         func.unreachable
     }
@@ -1158,7 +1045,7 @@ fn post_boundary_rejects_nonphysical_dispatchers_and_residual_control_ops() {
     %tr = closure.lambda direct(%inner: !evidence, %op_idx: core.i32, %payload: tribute_rt.anyref) -> tribute_rt.anyref {
       func.unreachable
     }
-    ability.handle_dispatch %ev, %prompt, %tr {abilities = [@State]} {
+    ability.handle_dispatch %ev, %prompt [@State: %tr] {
       ^body(%inner: !evidence):
         func.unreachable
     }
@@ -1198,17 +1085,13 @@ fn textual_resumptive_handle_emits_one_resultless_delimiter() {
     let input = r#"core.module @test {
   tribute_cps.func @run(%input: core.i32) -> core.i32 convention(cps) {
     %handled = tribute_control.handle : core.i32 {
-      %performed = tribute_control.perform %input {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
+      %performed = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
       tribute_control.yield %performed
-    } {
-      ^completion(%value: core.i32):
+    } do(%value: core.i32) {
         tribute_control.yield %value
-    } {
-      tribute_control.handler {ability = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
-        ^arm(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
-          %resumed = tribute_control.resume %token, %argument : core.i32
-          tribute_control.yield %resumed
-      }
+    } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
+        %resumed = tribute_control.resume %token, %argument : core.i32
+        tribute_control.yield %resumed
     }
     tribute_control.return %handled
   }
@@ -1218,8 +1101,8 @@ fn textual_resumptive_handle_emits_one_resultless_delimiter() {
     fn find_ability(ctx: &IrContext, region: RegionRef, found: &mut Option<SymbolPath>) {
         for block in ctx.region(region).blocks.iter().copied() {
             for op in ctx.block(block).ops.iter().copied() {
-                if tribute_control::Handler::matches(ctx, op) {
-                    *found = ctx.op_attrs(op).get_symbol_ref("ability").cloned();
+                if let Ok(handle) = tribute_control::Handle::from_op(ctx, op) {
+                    *found = handle.handlers(ctx).next().map(|binding| binding.ability);
                 }
                 for nested in ctx.op_regions(op) {
                     find_ability(ctx, nested, found);
@@ -1269,7 +1152,7 @@ fn textual_resumptive_handle_emits_one_resultless_delimiter() {
     assert!(
         tribute_ir::dialect::tribute_rt::Anyref::matches(&ctx, erased.inputs(&ctx)[2]),
         "ability.perform must receive Resume<anyref, R>, not the exact continuation: {}",
-        print_module(&ctx, module.op())
+        module.op().display(&ctx)
     );
     let trunk_ir::ValueDef::OpResult(wrapper_op, _) = ctx.value_def(perform_resume) else {
         panic!("ability.perform resume must be the one-shot adapter closure");
@@ -1285,7 +1168,7 @@ fn textual_resumptive_handle_emits_one_resultless_delimiter() {
                 })
         }),
         "the erased adapter must capture the declared ResumeExact<I, R>: {}",
-        print_module(&ctx, module.op())
+        module.op().display(&ctx)
     );
     let mut consumed_get = None;
     let mut consumed_set = None;
@@ -1322,12 +1205,12 @@ fn textual_resumptive_handle_emits_one_resultless_delimiter() {
     find_one_shot_state_ops(&ctx, module.op(), &mut consumed_get, &mut consumed_set);
     assert_eq!(consumed_get, consumed_set);
     assert!(consumed_get.is_some(), "one-shot state was not emitted");
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     // One installation under a fresh prompt, and one more in the function
     // every resumption of the handle shares to install the layer again.
     assert_eq!(printed.matches("effect.fresh_prompt_tag").count(), 1);
     assert_eq!(printed.matches("ability.handle_dispatch").count(), 2);
-    assert!(printed.contains("abilities = [@State]"), "{printed}");
+    assert!(printed.contains(" [@State: %"), "{printed}");
     assert!(printed.contains("func.tail_call_indirect"));
     assert!(printed.contains("adt.struct_set"));
     assert!(!printed.contains("tribute_control."));
@@ -1341,22 +1224,16 @@ fn multiple_arms_for_one_ability_emit_one_dispatcher() {
     let input = r#"core.module @test {
   tribute_cps.func @run(%input: core.i32) -> core.i32 convention(cps) {
     %handled = tribute_control.handle : core.i32 {
-      %performed = tribute_control.perform %input {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
+      %performed = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
       tribute_control.yield %performed
-    } {
-      ^completion(%value: core.i32):
+    } do(%value: core.i32) {
         tribute_control.yield %value
-    } {
-      tribute_control.handler {ability = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
-        ^get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
-          %resumed = tribute_control.resume %token, %argument : core.i32
-          tribute_control.yield %resumed
-      }
-      tribute_control.handler {ability = @State, kind = "op", op_name = "set", operation_result_type = core.i32} {
-        ^set(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
-          %fallback = arith.const {value = 9} : core.i32
-          tribute_control.yield %fallback
-      }
+    } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
+        %resumed = tribute_control.resume %token, %argument : core.i32
+        tribute_control.yield %resumed
+    } op @State @set(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
+        %fallback = arith.constant 9 : core.i32
+        tribute_control.yield %fallback
     }
     tribute_control.return %handled
   }
@@ -1415,8 +1292,8 @@ fn multiple_arms_for_one_ability_emit_one_dispatcher() {
         };
         assert_eq!(abilities.len(), 1);
     }
-    let printed = print_module(&ctx, module.op());
-    assert!(printed.contains("value = 9"));
+    let printed = module.op().display(&ctx).to_string();
+    assert!(printed.contains("arith.constant 9 :"));
     assert!(printed.contains("func.tail_call_indirect"));
     assert!(
         printed.contains("@__tribute_make_dispatch_adapter_"),
@@ -1451,15 +1328,15 @@ fn multiple_arms_for_one_ability_emit_one_dispatcher() {
 fn textual_scf_branch_captures_only_the_selected_suffix() {
     let input = r#"core.module @test {
   tribute_cps.func @branch(%input: core.i32) -> core.i32 convention(cps) {
-    %condition = arith.const {value = true} : core.i1
-    %selected = scf.if %condition : core.i32 {
-      %performed = tribute_control.perform %input {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
+    %condition = arith.constant true : core.i1
+    %selected = scf.if %condition -> (core.i32) {
+      %performed = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
       scf.yield %performed
-    } {
-      %fallback = arith.const {value = 7} : core.i32
+    } else {
+      %fallback = arith.constant 7 : core.i32
       scf.yield %fallback
     }
-    %one = arith.const {value = 1} : core.i32
+    %one = arith.constant 1 : core.i32
     %sum = arith.addi %selected, %one : core.i32
     tribute_control.return %sum
   }
@@ -1483,11 +1360,11 @@ fn textual_scf_branch_captures_only_the_selected_suffix() {
         tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default())
     }
     .unwrap();
-    let converted = print_module(&ctx, module.op());
+    let converted = module.op().display(&ctx).to_string();
     lower_continuation_frames(&mut ctx, module).unwrap();
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert!(printed.contains("scf.if"));
-    assert!(printed.contains(" : core.never"));
+    assert!(printed.contains("-> (core.never)"));
     assert!(converted.contains("ability.perform"));
     assert!(printed.contains("func.tail_call_indirect"));
     assert!(printed.contains("arith.addi"));
@@ -1503,20 +1380,20 @@ fn textual_zero_result_cps_and_direct_scf_branches_lower() {
   tribute_cps.func @branch(%input: core.i32, %condition: core.i1) -> core.i32 convention(cps) {
     %direct = tribute_cps.lambda(%value: core.i32) -> core.i32 captures [%condition] entries {
       direct {
-        %selected = scf.if %condition : core.i32 {
-          %called = tribute_control.call %value {callee = @identity} : core.i32
+        %selected = scf.if %condition -> (core.i32) {
+          %called = tribute_control.call @identity(%value) : (core.i32) -> core.i32
           scf.yield %called
-        } {
+        } else {
           scf.yield %value
         }
         tribute_control.return %selected
       }
     }
     scf.if %condition {
-      %performed = tribute_control.perform %input {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
+      %performed = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
       scf.yield
-    } {
-      %performed = tribute_control.perform %input {ability = @State, op_name = "set", operation_kind = "op"} : core.i32
+    } else {
+      %performed = tribute_control.perform op @State @set(%input) : (core.i32) -> core.i32
       scf.yield
     }
     tribute_control.return %input
@@ -1550,22 +1427,14 @@ fn textual_zero_result_cps_and_direct_scf_branches_lower() {
         tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default())
     }
     .unwrap();
-    let converted = print_module(&ctx, module.op());
+    let converted = module.op().display(&ctx).to_string();
     lower_continuation_frames(&mut ctx, module).unwrap();
-    let printed = print_module(&ctx, module.op());
-    let scf_ifs: Vec<_> = printed
-        .lines()
-        .filter(|line| line.contains("scf.if"))
-        .collect();
-    let value_if_count = scf_ifs
-        .iter()
-        .filter(|line| line.contains(": core.i32"))
-        .count();
+    let printed = module.op().display(&ctx).to_string();
+    let mut if_results = Vec::new();
+    collect_if_results(&ctx, module.op(), &mut if_results);
+    let value_if_count = if_results.iter().filter(|ty| *ty == "core.i32").count();
     assert_eq!(value_if_count, 1, "{printed}");
-    assert!(
-        scf_ifs.iter().any(|line| line.contains(": core.never")),
-        "{printed}"
-    );
+    assert!(if_results.iter().any(|ty| ty == "core.never"), "{printed}");
     assert_eq!(
         converted.matches("ability.perform").count(),
         2,
@@ -1622,12 +1491,22 @@ fn textual_zero_result_cps_and_direct_scf_branches_lower() {
     assert!(generated_param_counts.contains(&2), "{printed}");
 
     crate::lower_closure_lambda::lower_closure_lambda(&mut ctx, module);
-    let lifted = print_module(&ctx, module.op());
+    let lifted = module.op().display(&ctx).to_string();
     assert!(!lifted.contains("closure.lambda"), "{lifted}");
     crate::closure_lower::lower_prepared_closures(&mut ctx, module).unwrap();
-    let lowered = print_module(&ctx, module.op());
+    let lowered = module.op().display(&ctx).to_string();
     assert!(!lowered.contains("closure.new"), "{lowered}");
-    assert!(lowered.contains("signature"), "{lowered}");
+    let mut exact_transfers = 0;
+    let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
+        if trunk_ir::op_interface::DynIndirectCallLike::get(&ctx, op)
+            .and_then(|call| call.exact_signature(&ctx))
+            .is_some()
+        {
+            exact_transfers += 1;
+        }
+        std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+    });
+    assert!(exact_transfers > 0, "{lowered}");
 }
 
 #[test]
@@ -1644,7 +1523,7 @@ fn cps_indirect_tail_without_a_provenance_bearing_closure_fails_before_insertion
     let never = core::Never::params().intern(&mut ctx).as_type_ref();
     let raw_type = func::func_sig(&mut ctx, [], [never]).as_type_ref();
     let raw = func::Constant::operands()
-        .func_ref(SymbolPath::new(["raw"]))
+        .value(SymbolPath::new(["raw"]))
         .results(raw_type)
         .build(&mut ctx, location);
     let before = ctx.block(module_block).ops.clone();
@@ -1664,10 +1543,10 @@ fn cps_indirect_tail_without_a_provenance_bearing_closure_fails_before_insertion
 fn malformed_multi_result_effectful_scf_if_remains_unchanged() {
     let input = r#"core.module @test {
   tribute_cps.func @broken(%input: core.i32, %condition: core.i1) -> core.i32 convention(cps) {
-    %left, %right = scf.if %condition : core.i32, core.i32 {
-      %performed = tribute_control.perform %input {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
+    %left, %right = scf.if %condition -> (core.i32, core.i32) {
+      %performed = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
       scf.yield %performed, %input
-    } {
+    } else {
       scf.yield %input, %input
     }
     tribute_control.return %left
@@ -1688,7 +1567,7 @@ fn malformed_multi_result_effectful_scf_if_remains_unchanged() {
         i32_type,
     )];
     tribute_control::declare_operations(&mut ctx, module, &declarations);
-    let before = print_module(&ctx, module.op());
+    let before = module.op().display(&ctx).to_string();
     let error = tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap_err();
     assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
     assert!(
@@ -1697,7 +1576,7 @@ fn malformed_multi_result_effectful_scf_if_remains_unchanged() {
             .contains("scf.if (op3): expected 0 to 1 result(s), found 2"),
         "{error}"
     );
-    assert_eq!(print_module(&ctx, module.op()), before);
+    assert_eq!(module.op().display(&ctx).to_string(), before);
 }
 
 /// A function reference called through a stronger convention than its
@@ -1711,14 +1590,14 @@ fn stronger_func_ref_builds_a_cps_adapter_without_a_null_environment() {
   }
   tribute_cps.func_table @"id$8" = {direct = @id}
   tribute_cps.func @run(%value: core.i32) -> core.i32 convention(cps) {
-    %callee = tribute_cps.func_ref {func_ref = @"id$8"} : !cps
-    %result = tribute_cps.call_indirect %callee, %value {convention = "cps"} : core.i32
+    %callee = tribute_cps.func_ref @"id$8" : !cps
+    %result = tribute_cps.call_indirect %callee(%value) attributes {convention = "cps"} : (core.i32) -> core.i32
     tribute_control.return %result
   }
 }"#;
     let (mut ctx, module) = parse(input);
     tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert!(printed.contains("__tribute_func_ref_adapter"));
     assert!(printed.contains("closure.new"));
     assert!(printed.contains("func.tail_call_indirect"));
@@ -1738,8 +1617,8 @@ fn parameter_attributes_follow_their_parameters_to_the_physical_abi() {
   }
   tribute_cps.func_table @"id$8" = {cps = @id}
   tribute_cps.func @run(%value: core.i32) -> core.i32 convention(cps) {
-    %callee = tribute_cps.func_ref {func_ref = @"id$8"} : !cps
-    %result = tribute_cps.call_indirect %callee, %value {convention = "cps"} : core.i32
+    %callee = tribute_cps.func_ref @"id$8" : !cps
+    %result = tribute_cps.call_indirect %callee(%value) attributes {convention = "cps"} : (core.i32 {k = @v}) -> (core.i32 {r = @x})
     tribute_control.return %result
   }
 }"#;
@@ -1812,7 +1691,7 @@ fn parameter_attributes_follow_their_parameters_to_the_physical_abi() {
         references,
         [physical.as_type_ref(), physical.as_type_ref()],
         "{}",
-        print_module(&ctx, module.op())
+        module.op().display(&ctx)
     );
 }
 
@@ -1837,19 +1716,19 @@ fn references_sharing_a_table_share_its_entries() {
   tribute_cps.func_table @"evidence$8" = {evidence_direct = @evidence}
   tribute_cps.func_table @"cps$8" = {cps = @cps}
   tribute_cps.func @refs(%value: core.i32) -> core.i32 convention(cps) {
-    %direct_direct = tribute_cps.func_ref {func_ref = @"direct$8"} : !direct
-    %direct_evidence = tribute_cps.func_ref {func_ref = @"direct$8"} : !evidence
-    %direct_cps = tribute_cps.func_ref {func_ref = @"direct$8"} : !cps
-    %evidence_evidence = tribute_cps.func_ref {func_ref = @"evidence$8"} : !evidence
-    %evidence_cps = tribute_cps.func_ref {func_ref = @"evidence$8"} : !cps
-    %cps_cps = tribute_cps.func_ref {func_ref = @"cps$8"} : !cps
+    %direct_direct = tribute_cps.func_ref @"direct$8" : !direct
+    %direct_evidence = tribute_cps.func_ref @"direct$8" : !evidence
+    %direct_cps = tribute_cps.func_ref @"direct$8" : !cps
+    %evidence_evidence = tribute_cps.func_ref @"evidence$8" : !evidence
+    %evidence_cps = tribute_cps.func_ref @"evidence$8" : !cps
+    %cps_cps = tribute_cps.func_ref @"cps$8" : !cps
     tribute_control.return %value
   }
 }"#;
     let (mut ctx, module) = parse(input);
     tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
     verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert_eq!(
         printed
             .matches("func.func @__tribute_func_ref_adapter")
@@ -1887,14 +1766,14 @@ fn a_table_of_two_targets_enters_each_through_its_convention() {
   }
   tribute_cps.func_table @"id$8" = {direct = @direct, evidence_direct = @evidence}
   tribute_cps.func @refs(%value: core.i32) -> core.i32 convention(cps) {
-    %reference = tribute_cps.func_ref {func_ref = @"id$8"} : !callable
+    %reference = tribute_cps.func_ref @"id$8" : !callable
     tribute_control.return %value
   }
 }"#;
     let (mut ctx, module) = parse(input);
     tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
     verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     let mut tables = Vec::new();
     let _ = walk_op::<()>(&ctx, module.op(), &mut |op| {
         if let Ok(closure) = closure::New::from_op(&ctx, op) {
@@ -1920,7 +1799,7 @@ fn a_table_of_two_targets_enters_each_through_its_convention() {
             .find(|function| function.starts_with(entry.as_str()))
             .unwrap_or_else(|| panic!("{entry}: {printed}"));
         let body = function.split("\n  }").next().unwrap();
-        assert!(body.contains(&format!("callee = {target}")), "{body}");
+        assert!(body.contains(&format!("{target}(")), "{body}");
     }
 }
 
@@ -1936,7 +1815,7 @@ fn func_ref_in_a_nested_module_is_adapted_in_that_module() {
     }
     tribute_cps.func_table @"id$8" = {direct = @id}
     tribute_cps.func @refs(%value: core.i32) -> core.i32 convention(direct) {
-      %reference = tribute_cps.func_ref {func_ref = @"id$8"} : !direct
+      %reference = tribute_cps.func_ref @"id$8" : !direct
       tribute_control.return %value
     }
   }
@@ -1980,7 +1859,7 @@ fn a_table_entry_weaker_than_its_cps_target_is_rejected_before_mutation() {
   }
   tribute_cps.func_table @"cps$8" = {evidence_direct = @cps}
   tribute_cps.func @broken(%value: core.i32) -> core.i32 convention(evidence_direct) {
-    %callee = tribute_cps.func_ref {func_ref = @"cps$8"} : !evidence
+    %callee = tribute_cps.func_ref @"cps$8" : !evidence
     tribute_control.return %value
   }
 }"#;
@@ -2001,8 +1880,8 @@ fn raw_pointer_managed_masquerade_is_rejected_before_mutation() {
   !S = adt.struct<S()>
   !R = adt.typeref<{name = "S"}>
   tribute_cps.func @broken(%raw: core.ptr) -> !R convention(direct) {
-    %middle = core.unrealized_conversion_cast %raw : core.i64
-    %managed = core.unrealized_conversion_cast %middle : !R
+    %middle = core.unrealized_conversion_cast %raw : core.ptr to core.i64
+    %managed = core.unrealized_conversion_cast %middle : core.i64 to !R
     tribute_control.return %managed
   }
 }"#;
@@ -2019,31 +1898,25 @@ fn handles_stay_abstract_until_the_frames_are_lowered() {
     %outer = tribute_control.handle : core.i32 {
       %inner = tribute_control.handle : core.i32 {
         tribute_control.yield %input
-      } {
-        ^inner_completion(%value: core.i32):
+      } do(%value: core.i32) {
           tribute_control.yield %value
-      } {
-        ^inner_handlers:
       }
       tribute_control.yield %inner
-    } {
-      ^outer_completion(%value: core.i32):
+    } do(%value: core.i32) {
         tribute_control.yield %value
-    } {
-      ^outer_handlers:
     }
     tribute_control.return %outer
   }
 }"#;
     let (mut ctx, module) = parse(input);
     tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
-    let printed = print_module(&ctx, module.op());
-    assert_eq!(printed.matches("ability.handle ").count(), 2, "{printed}");
+    let printed = module.op().display(&ctx).to_string();
+    assert_eq!(printed.matches("ability.handle %").count(), 2, "{printed}");
     assert!(!printed.contains("ability.handle_dispatch"), "{printed}");
     assert!(!printed.contains("effect.fresh_prompt_tag"), "{printed}");
     assert!(!printed.contains("adt.struct_new"), "{printed}");
     lower_continuation_frames(&mut ctx, module).unwrap();
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert!(!printed.contains("ability.handle "), "{printed}");
     assert!(!printed.contains("ability.frame"), "{printed}");
 }
@@ -2055,18 +1928,12 @@ fn nested_textual_handles_keep_distinct_delimiters() {
     %outer = tribute_control.handle : core.i32 {
       %inner = tribute_control.handle : core.i32 {
         tribute_control.yield %input
-      } {
-        ^inner_completion(%value: core.i32):
+      } do(%value: core.i32) {
           tribute_control.yield %value
-      } {
-        ^inner_handlers:
       }
       tribute_control.yield %inner
-    } {
-      ^outer_completion(%value: core.i32):
+    } do(%value: core.i32) {
         tribute_control.yield %value
-    } {
-      ^outer_handlers:
     }
     tribute_control.return %outer
   }
@@ -2074,7 +1941,7 @@ fn nested_textual_handles_keep_distinct_delimiters() {
     let (mut ctx, module) = parse(input);
     tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
     lower_continuation_frames(&mut ctx, module).unwrap();
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     // Each handle is installed in place, and again in the layer a
     // resumed continuation rebuilds.
     assert_eq!(printed.matches("effect.fresh_prompt_tag").count(), 2);
@@ -2089,29 +1956,21 @@ fn nested_same_ability_resumes_rebuild_the_dynamic_frame_dispatcher() {
   tribute_cps.func @nested_same(%input: core.i32) -> core.i32 convention(cps) {
     %outer = tribute_control.handle : core.i32 {
       %inner = tribute_control.handle : core.i32 {
-        %performed = tribute_control.perform %input {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
+        %performed = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
         tribute_control.yield %performed
-      } {
-        ^inner_completion(%value: core.i32):
+      } do(%value: core.i32) {
           tribute_control.yield %value
-      } {
-        tribute_control.handler {ability = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
-          ^inner_arm(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
-            %resumed = tribute_control.resume %token, %argument : core.i32
-            tribute_control.yield %resumed
-        }
-      }
-      %performed = tribute_control.perform %inner {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
-      tribute_control.yield %performed
-    } {
-      ^outer_completion(%value: core.i32):
-        tribute_control.yield %value
-    } {
-      tribute_control.handler {ability = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
-        ^outer_arm(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
+      } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
           %resumed = tribute_control.resume %token, %argument : core.i32
           tribute_control.yield %resumed
       }
+      %performed = tribute_control.perform op @State @get(%inner) : (core.i32) -> core.i32
+      tribute_control.yield %performed
+    } do(%value: core.i32) {
+        tribute_control.yield %value
+    } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
+        %resumed = tribute_control.resume %token, %argument : core.i32
+        tribute_control.yield %resumed
     }
     tribute_control.return %outer
   }
@@ -2123,9 +1982,9 @@ fn nested_same_ability_resumes_rebuild_the_dynamic_frame_dispatcher() {
         tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default())
     }
     .unwrap();
-    let converted = print_module(&ctx, module.op());
+    let converted = module.op().display(&ctx).to_string();
     lower_continuation_frames(&mut ctx, module).unwrap();
-    assert_nested_resume_frames(&converted, &print_module(&ctx, module.op()));
+    assert_nested_resume_frames(&converted, &module.op().display(&ctx).to_string());
 }
 
 #[test]
@@ -2134,29 +1993,21 @@ fn nested_cross_ability_resumes_rebuild_the_dynamic_frame_dispatcher() {
   tribute_cps.func @nested_cross(%input: core.i32) -> core.i32 convention(cps) {
     %outer = tribute_control.handle : core.i32 {
       %inner = tribute_control.handle : core.i32 {
-        %performed = tribute_control.perform %input {ability = @Console, op_name = "read", operation_kind = "op"} : core.i32
+        %performed = tribute_control.perform op @Console @read(%input) : (core.i32) -> core.i32
         tribute_control.yield %performed
-      } {
-        ^inner_completion(%value: core.i32):
+      } do(%value: core.i32) {
           tribute_control.yield %value
-      } {
-        tribute_control.handler {ability = @Console, kind = "op", op_name = "read", operation_result_type = core.i32} {
-          ^inner_arm(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
-            %resumed = tribute_control.resume %token, %argument : core.i32
-            tribute_control.yield %resumed
-        }
-      }
-      %performed = tribute_control.perform %inner {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
-      tribute_control.yield %performed
-    } {
-      ^outer_completion(%value: core.i32):
-        tribute_control.yield %value
-    } {
-      tribute_control.handler {ability = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
-        ^outer_arm(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
+      } op @Console @read(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
           %resumed = tribute_control.resume %token, %argument : core.i32
           tribute_control.yield %resumed
       }
+      %performed = tribute_control.perform op @State @get(%inner) : (core.i32) -> core.i32
+      tribute_control.yield %performed
+    } do(%value: core.i32) {
+        tribute_control.yield %value
+    } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
+        %resumed = tribute_control.resume %token, %argument : core.i32
+        tribute_control.yield %resumed
     }
     tribute_control.return %outer
   }
@@ -2168,27 +2019,23 @@ fn nested_cross_ability_resumes_rebuild_the_dynamic_frame_dispatcher() {
         tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default())
     }
     .unwrap();
-    let converted = print_module(&ctx, module.op());
+    let converted = module.op().display(&ctx).to_string();
     lower_continuation_frames(&mut ctx, module).unwrap();
-    assert_nested_resume_frames(&converted, &print_module(&ctx, module.op()));
+    assert_nested_resume_frames(&converted, &module.op().display(&ctx).to_string());
 }
 #[test]
 fn op_to_never_uses_a_typed_zero_capture_reject_continuation() {
     let input = r#"core.module @test {
   tribute_cps.func @abortable(%input: core.i32) -> core.i32 convention(cps) {
     %handled = tribute_control.handle : core.i32 {
-      %never = tribute_control.perform %input {ability = @Abort, op_name = "abort", operation_kind = "op"} : core.never
-      %unreachable_suffix = arith.const {value = 99} : core.i32
+      %never = tribute_control.perform op @Abort @abort(%input) : (core.i32) -> core.never
+      %unreachable_suffix = arith.constant 99 : core.i32
       tribute_control.yield %unreachable_suffix
-    } {
-      ^completion(%value: core.i32):
+    } do(%value: core.i32) {
         tribute_control.yield %value
-    } {
-      tribute_control.handler {ability = @Abort, kind = "op", op_name = "abort", operation_result_type = core.never} {
-        ^arm(%argument: core.i32):
-          %fallback = arith.const {value = 7} : core.i32
-          tribute_control.yield %fallback
-      }
+    } op @Abort @abort(%argument: core.i32) : core.never {
+        %fallback = arith.constant 7 : core.i32
+        tribute_control.yield %fallback
     }
     tribute_control.return %handled
   }
@@ -2262,7 +2109,7 @@ fn op_to_never_uses_a_typed_zero_capture_reject_continuation() {
     let body = ctx.region(body).blocks[0];
     assert!(func::Unreachable::matches(&ctx, ctx.block(body).ops[0]));
     crate::lower_ability_call::lower_ability_call(&mut ctx, module);
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert!(!printed.contains("ability.perform"), "{printed}");
     assert!(printed.contains("effect.dispatch_cps"), "{printed}");
     let mut dispatch_cps = None;
@@ -2289,7 +2136,7 @@ fn op_to_never_uses_a_typed_zero_capture_reject_continuation() {
         Some(i32_type)
     );
     assert!(printed.contains("func.unreachable"));
-    assert!(!printed.contains("value = 99"));
+    assert!(!printed.contains("arith.constant 99 :"));
     assert!(!printed.contains("tribute.ownership"));
     assert!(!printed.contains("adt.struct_set"));
     assert!(!printed.contains("adt.ref_null"));
@@ -2300,16 +2147,12 @@ fn fn_operation_stays_evidence_direct_without_continuation_capture() {
     let input = r#"core.module @test {
   tribute_cps.func @read(%input: core.i32) -> core.i32 convention(cps) {
     %handled = tribute_control.handle : core.i32 {
-      %value = tribute_control.perform %input {ability = @Reader, op_name = "read", operation_kind = "fn"} : core.i32
+      %value = tribute_control.perform fn @Reader @read(%input) : (core.i32) -> core.i32
       tribute_control.yield %value
-    } {
-      ^completion(%value: core.i32):
+    } do(%value: core.i32) {
         tribute_control.yield %value
-    } {
-      tribute_control.handler {ability = @Reader, kind = "fn", op_name = "read", operation_result_type = core.i32} {
-        ^arm(%argument: core.i32):
-          tribute_control.yield %argument
-      }
+    } fn @Reader @read(%argument: core.i32) : core.i32 {
+        tribute_control.yield %argument
     }
     tribute_control.return %handled
   }
@@ -2334,7 +2177,7 @@ fn fn_operation_stays_evidence_direct_without_continuation_capture() {
     }
     .unwrap();
     lower_continuation_frames(&mut ctx, module).unwrap();
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert!(printed.contains("ability.call"));
     assert!(!printed.contains("ability.perform"));
     assert!(!printed.contains("tribute.ownership"));
@@ -2372,15 +2215,14 @@ fn fn_operation_stays_evidence_direct_without_continuation_capture() {
 fn textual_scf_switch_reenters_the_shared_suffix() {
     let input = r#"core.module @test {
   tribute_cps.func @switching(%input: core.i32) -> core.i32 convention(cps) {
-    %choice = arith.const {value = 0} : core.i32
-    scf.switch %choice {
-      scf.case {value = 0} {
-        %performed = tribute_control.perform %input {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
-        scf.yield
-      }
-      scf.default {
-        scf.yield
-      }
+    %choice = arith.constant 0 : core.i32
+    scf.index_switch %choice : (core.i32) -> ()
+    case 0 {
+      %performed = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
+      scf.yield
+    }
+    default {
+      scf.yield
     }
     tribute_control.return %input
   }
@@ -2404,12 +2246,194 @@ fn textual_scf_switch_reenters_the_shared_suffix() {
         tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default())
     }
     .unwrap();
-    let printed = print_module(&ctx, module.op());
-    assert!(printed.contains("scf.switch"));
-    assert!(printed.contains("scf.case"));
+    let printed = module.op().display(&ctx).to_string();
+    assert!(printed.contains("scf.index_switch"));
+    assert!(printed.contains("case 0"));
     assert!(printed.contains("ability.perform"));
     assert!(printed.matches("func.tail_call_indirect").count() >= 2);
     assert!(!printed.contains("tribute_control."));
+}
+
+/// Declare `State.get` and `State.set`, both `(core.i32) -> core.i32`,
+/// convert `module` to CPS, and lower its continuation frames. Returns the
+/// module printed after conversion and after frame lowering.
+fn convert_state_fixture(ctx: &mut IrContext, module: Module) -> (String, String) {
+    let ability = first_ability(ctx, module);
+    let i32_type = ctx
+        .types()
+        .iter()
+        .find_map(|(ty, data)| (data.name.is(ctx, "core.i32")).then_some(ty))
+        .unwrap();
+    let declarations = ["get", "set"].map(|name| {
+        tribute_control::OperationDeclaration::new(
+            ability.clone(),
+            ctx.intern_str(name),
+            ctx.intern_str("op"),
+            [i32_type],
+            i32_type,
+        )
+    });
+    tribute_control::declare_operations(ctx, module, &declarations);
+    tribute_control_to_cps(ctx, module, &[], &mut Default::default()).unwrap();
+    let converted = module.op().display(ctx).to_string();
+    lower_continuation_frames(ctx, module).unwrap();
+    (converted, module.op().display(ctx).to_string())
+}
+
+/// The result type of each `scf.index_switch` under `op`, as its name.
+fn collect_switch_results(ctx: &IrContext, op: OpRef, results: &mut Vec<String>) {
+    if trunk_ir::dialect::scf::IndexSwitch::matches(ctx, op) {
+        for &ty in ctx.op_result_types(op) {
+            results.push(ctx.get_type(ty).name.display(ctx).to_string());
+        }
+    }
+    for region in ctx.op_regions(op) {
+        for &block in &ctx.region(region).blocks {
+            for &child in &ctx.block(block).ops {
+                collect_switch_results(ctx, child, results);
+            }
+        }
+    }
+}
+
+#[test]
+fn textual_scf_switch_result_reenters_the_shared_suffix() {
+    let input = r#"core.module @test {
+  tribute_cps.func @switching(%input: core.i32) -> core.i32 convention(cps) {
+    %selected = scf.index_switch %input : (core.i32) -> core.i32
+    case 0 {
+      %got = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
+      scf.yield %got
+    }
+    case 1 {
+      %set = tribute_control.perform op @State @set(%input) : (core.i32) -> core.i32
+      scf.yield %set
+    }
+    default {
+      %fallback = arith.constant 7 : core.i32
+      scf.yield %fallback
+    }
+    %one = arith.constant 1 : core.i32
+    %sum = arith.addi %selected, %one : core.i32
+    tribute_control.return %sum
+  }
+}"#;
+    let (mut ctx, module) = parse(input);
+    let (converted, printed) = convert_state_fixture(&mut ctx, module);
+    let mut switch_results = Vec::new();
+    collect_switch_results(&ctx, module.op(), &mut switch_results);
+    assert_eq!(switch_results, ["core.never"], "{printed}");
+    assert!(printed.contains("case 1"), "{printed}");
+    assert_eq!(
+        converted.matches("ability.perform").count(),
+        2,
+        "{converted}"
+    );
+    assert_eq!(printed.matches("arith.addi").count(), 1, "{printed}");
+    assert!(!printed.contains("tribute_control."), "{printed}");
+}
+
+#[test]
+fn textual_direct_scf_switch_keeps_its_result() {
+    let input = r#"core.module @test {
+  tribute_cps.func @identity(%value: core.i32) -> core.i32 convention(direct) {
+    tribute_control.return %value
+  }
+  tribute_cps.func @switching(%input: core.i32) -> core.i32 convention(cps) {
+    %direct = tribute_cps.lambda(%value: core.i32) -> core.i32 captures [] entries {
+      direct {
+        %selected = scf.index_switch %value : (core.i32) -> core.i32
+        case 0 {
+          %called = tribute_control.call @identity(%value) : (core.i32) -> core.i32
+          scf.yield %called
+        }
+        default {
+          scf.yield %value
+        }
+        tribute_control.return %selected
+      }
+    }
+    %performed = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
+    tribute_control.return %performed
+  }
+}"#;
+    let (mut ctx, module) = parse(input);
+    let (_, printed) = convert_state_fixture(&mut ctx, module);
+    let mut switch_results = Vec::new();
+    collect_switch_results(&ctx, module.op(), &mut switch_results);
+    assert_eq!(switch_results, ["core.i32"], "{printed}");
+    assert!(printed.contains("func.call"), "{printed}");
+    assert!(!printed.contains("tribute_control."), "{printed}");
+}
+
+#[test]
+fn textual_scf_switch_arm_may_end_with_a_tail_call() {
+    let input = r#"core.module @test {
+  tribute_cps.func @callee(%value: core.i32) -> core.i32 convention(cps) {
+    %got = tribute_control.perform op @State @get(%value) : (core.i32) -> core.i32
+    tribute_control.return %got
+  }
+  tribute_cps.func @switching(%input: core.i32) -> core.i32 convention(cps) {
+    %selected = scf.index_switch %input : (core.i32) -> core.i32
+    case 0 {
+      tribute_control.tail_call @callee(%input) : (core.i32) -> ()
+    }
+    case 1 {
+      %set = tribute_control.perform op @State @set(%input) : (core.i32) -> core.i32
+      scf.yield %set
+    }
+    default {
+      scf.yield %input
+    }
+    tribute_control.return %selected
+  }
+}"#;
+    let (mut ctx, module) = parse(input);
+    let (_, printed) = convert_state_fixture(&mut ctx, module);
+    let mut switch_results = Vec::new();
+    collect_switch_results(&ctx, module.op(), &mut switch_results);
+    assert_eq!(switch_results, ["core.never"], "{printed}");
+    assert!(printed.contains("func.tail_call @callee"), "{printed}");
+    assert!(!printed.contains("tribute_control."), "{printed}");
+}
+
+#[test]
+fn multi_result_effectful_scf_switch_is_rejected_inside_a_cps_callable() {
+    let input = r#"core.module @test {
+  tribute_cps.func @broken(%input: core.i32) -> core.i32 convention(cps) {
+    %left, %right = scf.index_switch %input : (core.i32) -> (core.i32, core.i32)
+    case 0 {
+      %got = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
+      scf.yield %got, %input
+    }
+    default {
+      scf.yield %input, %input
+    }
+    tribute_control.return %left
+  }
+}"#;
+    let (mut ctx, module) = parse(input);
+    let ability = first_ability(&ctx, module);
+    let i32_type = ctx
+        .types()
+        .iter()
+        .find_map(|(ty, data)| (data.name.is(&ctx, "core.i32")).then_some(ty))
+        .unwrap();
+    let declarations = [tribute_control::OperationDeclaration::new(
+        ability.clone(),
+        ctx.intern_str("get"),
+        ctx.intern_str("op"),
+        [i32_type],
+        i32_type,
+    )];
+    tribute_control::declare_operations(&mut ctx, module, &declarations);
+    let error = tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap_err();
+    assert!(
+        error.to_string().contains(
+            "effectful scf.index_switch requires zero or one result inside a CPS callable"
+        ),
+        "{error}"
+    );
 }
 
 #[cfg(test)]
@@ -2422,7 +2446,7 @@ mod shared_contract_boundary_regressions {
             func.return %x
           }
           func.func @caller(%x: core.i32) -> core.i32 attributes {tribute.calling_convention = \"direct\"} {
-            %r = func.call %x {callee = @identity, tribute.calling_convention = \"direct\"} : core.i32
+            %r = func.call @identity(%x) attributes {tribute.calling_convention = \"direct\"} : (core.i32) -> core.i32
             func.return %r
           }
         }";
@@ -2430,7 +2454,11 @@ mod shared_contract_boundary_regressions {
         let module = trunk_ir::parser::parse_test_module(&mut ctx, valid);
         verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
         for (from, to, expected) in [
-            ("} : core.i32", "} : core.nil", "call result list mismatch"),
+            (
+                "} : (core.i32) -> core.i32",
+                "} : (core.i32) -> core.nil",
+                "call result list mismatch",
+            ),
             ("func.return %x", "func.return", "return count mismatch"),
         ] {
             let mut ctx = trunk_ir::IrContext::new();
@@ -2474,11 +2502,11 @@ fn a_cps_call_in_a_callable_that_is_not_cps_runs_under_a_value_delimiter() {
     tribute_control.return %value
   }
   tribute_cps.func @direct(%value: core.i32) -> core.i32 convention(direct) {
-    %answer = tribute_control.call %value {callee = @cps_identity} : core.i32
+    %answer = tribute_control.call @cps_identity(%value) : (core.i32) -> core.i32
     tribute_control.return %answer
   }
   tribute_cps.func @with_evidence(%value: core.i32) -> core.i32 convention(evidence_direct) {
-    %answer = tribute_control.call %value {callee = @cps_identity} : core.i32
+    %answer = tribute_control.call @cps_identity(%value) : (core.i32) -> core.i32
     tribute_control.return %answer
   }
 }"#;
@@ -2493,7 +2521,7 @@ fn a_cps_call_in_a_callable_that_is_not_cps_runs_under_a_value_delimiter() {
         delimiters(&ctx, module, "with_evidence"),
         [(false, i32_type)]
     );
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     assert!(!printed.contains("ability.frame"), "{printed}");
 }
 
@@ -2502,17 +2530,13 @@ fn a_handle_in_a_direct_callable_runs_under_a_value_delimiter() {
     let input = r#"core.module @test {
   tribute_cps.func @run(%input: core.i32) -> core.i32 convention(direct) {
     %handled = tribute_control.handle : core.i32 {
-      %performed = tribute_control.perform %input {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
+      %performed = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
       tribute_control.yield %performed
-    } {
-      ^completion(%value: core.i32):
+    } do(%value: core.i32) {
         tribute_control.yield %value
-    } {
-      tribute_control.handler {ability = @State, kind = "op", op_name = "get", operation_result_type = core.i32} {
-        ^arm(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
-          %resumed = tribute_control.resume %token, %argument : core.i32
-          tribute_control.yield %resumed
-      }
+    } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
+        %resumed = tribute_control.resume %token, %argument : core.i32
+        tribute_control.yield %resumed
     }
     tribute_control.return %handled
   }
@@ -2528,7 +2552,7 @@ fn a_handle_in_a_direct_callable_runs_under_a_value_delimiter() {
     verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
     let i32_type = TypeDataBuilder::new("core.i32").intern(&mut ctx);
     assert_eq!(delimiters(&ctx, module, "run"), [(true, i32_type)]);
-    let printed = print_module(&ctx, module.op());
+    let printed = module.op().display(&ctx).to_string();
     // The handle and its operation are in the delimited Cps closure.
     assert!(printed.contains("ability.handle_dispatch"), "{printed}");
     assert!(printed.contains("effect.dispatch_cps"), "{printed}");
@@ -2538,7 +2562,7 @@ fn a_handle_in_a_direct_callable_runs_under_a_value_delimiter() {
 fn a_general_operation_outside_a_handle_is_rejected_in_a_direct_callable() {
     let input = r#"core.module @test {
   tribute_cps.func @run(%input: core.i32) -> core.i32 convention(direct) {
-    %performed = tribute_control.perform %input {ability = @State, op_name = "get", operation_kind = "op"} : core.i32
+    %performed = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
     tribute_control.return %performed
   }
 }"#;
@@ -2560,11 +2584,11 @@ fn a_general_operation_outside_a_handle_is_rejected_in_a_direct_callable() {
 fn legalization_drops_ability_rows_and_row_metadata() {
     let with_rows = r#"core.module @test {
   !open = tribute_control.func_sig<(core.i32) -> core.i32 row(| 'a0)>
-  ability.decl {sym_name = "A"} {
+  ability.decl @A {
     ability.operation {kind = "fn", op_name = "get", param_types = [], result_type = core.i32}
   }
   tribute_cps.func @apply['a0 = 'a1, body 'a1](%f: !open, %x: core.i32) -> core.i32 row(| 'a0) inferred convention(cps) {
-    %r = tribute_cps.call_indirect %f, %x {convention = "cps"} : core.i32
+    %r = tribute_cps.call_indirect %f(%x) attributes {convention = "cps"} : (core.i32) -> core.i32 row(| 'a0)
     tribute_control.return %r
   }
   tribute_cps.func @main(%x: core.i32) -> core.i32 row(@A) convention(cps) {
@@ -2573,7 +2597,7 @@ fn legalization_drops_ability_rows_and_row_metadata() {
         tribute_control.return %y
       }
     }
-    %r = tribute_control.call %f, %x {callee = @apply, row_args = [{instances = [@A]}]} : core.i32
+    %r = tribute_control.call @apply(%f, %x) attributes {row_args = [{instances = [@A]}]} : (tribute_control.func_sig<(core.i32) -> core.i32 row(@A)>, core.i32) -> core.i32
     tribute_control.return %r
   }
 }"#;
@@ -2582,12 +2606,12 @@ fn legalization_drops_ability_rows_and_row_metadata() {
         .replace("['a0 = 'a1, body 'a1]", "")
         .replace(" row(| 'a0) inferred", "")
         .replace(" row(@A)", "")
-        .replace(", row_args = [{instances = [@A]}]", "");
+        .replace(" attributes {row_args = [{instances = [@A]}]}", "");
     let legalize = |input: &str| {
         let (mut ctx, module) = parse(input);
         run_pre_cps(&mut ctx, module).unwrap();
         verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
-        print_module(&ctx, module.op())
+        module.op().display(&ctx).to_string()
     };
     assert_eq!(legalize(with_rows), legalize(&without_rows));
 }
@@ -2616,15 +2640,15 @@ fn instantiate_legalizes_to_its_lambda() {
     let legalized = |input: String| {
         let (mut ctx, module) = parse(&input);
         run_pre_cps(&mut ctx, module).expect("legalizes");
-        print_module(&ctx, module.op())
+        module.op().display(&ctx).to_string()
     };
     let instantiated = legalized(module(
         "['a1]",
-        "%s = tribute_control.instantiate %g {row_args = [{tail = 0}]} : !step0\n    %r = tribute_cps.call_indirect %s, %x {convention = \"direct\"} : core.i32",
+        "%s = tribute_control.instantiate %g {row_args = [{tail = 0}]} : !step0\n    %r = tribute_cps.call_indirect %s(%x) attributes {convention = \"direct\"} : (core.i32) -> core.i32 row(| 'a0)",
     ));
     let direct = legalized(module(
         "",
-        "%r = tribute_cps.call_indirect %g, %x {convention = \"direct\"} : core.i32",
+        "%r = tribute_cps.call_indirect %g(%x) attributes {convention = \"direct\"} : (core.i32) -> core.i32 row(| 'a1)",
     ));
     assert_eq!(instantiated, direct);
     assert!(!instantiated.contains("quantified_rows"), "{instantiated}");
@@ -2666,7 +2690,7 @@ fn a_lambda_with_two_bodies_lifts_an_entry_per_body() {
         tribute_control.return %captured
       }
     }
-    %called = tribute_cps.call_indirect %lambda, %value {convention = "cps"} : core.i32
+    %called = tribute_cps.call_indirect %lambda(%value) attributes {convention = "cps"} : (core.i32) -> core.i32
     tribute_control.return %called
   }
 }"#,
@@ -2705,7 +2729,7 @@ fn a_lambda_with_two_bodies_lifts_an_entry_per_body() {
     assert_eq!(ctx.op_operands(source.op_ref()).len(), 1);
 
     crate::lower_closure_lambda::lower_closure_lambda(&mut ctx, module);
-    let lifted = print_module(&ctx, module.op());
+    let lifted = module.op().display(&ctx).to_string();
     assert!(!lifted.contains("closure.lambda"), "{lifted}");
     let mut news = Vec::new();
     let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
@@ -2728,6 +2752,6 @@ fn a_lambda_with_two_bodies_lifts_an_entry_per_body() {
     );
     assert_eq!(ctx.op_operands(new.op_ref()).len(), 1, "{lifted}");
     crate::closure_lower::lower_prepared_closures(&mut ctx, module).unwrap();
-    let lowered = print_module(&ctx, module.op());
+    let lowered = module.op().display(&ctx).to_string();
     assert!(!lowered.contains("closure.new"), "{lowered}");
 }

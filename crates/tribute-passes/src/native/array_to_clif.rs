@@ -256,14 +256,12 @@ impl Emitter<'_> {
     fn icmp(
         &mut self,
         ctx: &mut IrContext,
-        cond: &'static str,
+        cond: clif::IntCond,
         lhs: ValueRef,
         rhs: ValueRef,
     ) -> ValueRef {
-        let i8_ty = core::I8::type_ref(ctx);
         let op = clif::Icmp::operands(lhs, rhs)
             .cond(cond)
-            .results(i8_ty)
             .build(ctx, self.loc);
         self.push(op).result(ctx)
     }
@@ -272,7 +270,7 @@ impl Emitter<'_> {
     fn trap_if(
         &mut self,
         ctx: &mut IrContext,
-        cond: &'static str,
+        cond: clif::IntCond,
         lhs: ValueRef,
         rhs: ValueRef,
         code: &'static str,
@@ -325,7 +323,13 @@ impl Emitter<'_> {
     fn check_index(&mut self, ctx: &mut IrContext, array: ValueRef, index: ValueRef) {
         let i64_ty = core::I64::type_ref(ctx);
         let len = self.load(ctx, array, LEN_OFFSET, i64_ty);
-        self.trap_if(ctx, "uge", index, len, INDEX_OUT_OF_BOUNDS_TRAP);
+        self.trap_if(
+            ctx,
+            clif::IntCond::Uge,
+            index,
+            len,
+            INDEX_OUT_OF_BOUNDS_TRAP,
+        );
     }
 
     /// Allocate an array of `len` elements of `descriptor` and store `len`,
@@ -337,7 +341,7 @@ impl Emitter<'_> {
         descriptor: ArrayDescriptor,
     ) -> ValueRef {
         let max_len = self.i64(ctx, descriptor.max_len());
-        self.trap_if(ctx, "ugt", len, max_len, SIZE_OVERFLOW_TRAP);
+        self.trap_if(ctx, clif::IntCond::Ugt, len, max_len, SIZE_OVERFLOW_TRAP);
         let stride = self.i64(ctx, i64::from(descriptor.stride));
         let elements = self.imul(ctx, len, stride);
         let fixed = self.i64(ctx, FIXED_ALLOC_SIZE as i64);
@@ -588,7 +592,7 @@ fn counted_loop(
 
     let mut ops = Vec::new();
     let mut emit = Emitter { loc, ops: &mut ops };
-    let more = emit.icmp(ctx, "ult", index, to);
+    let more = emit.icmp(ctx, clif::IntCond::Ult, index, to);
     let branch = clif::Brif::operands(more)
         .successors(body_block, exit)
         .build(ctx, loc);
@@ -685,13 +689,19 @@ fn array_splice_function(ctx: &mut IrContext, descriptor: ArrayDescriptor, loc: 
     let mut ops = Vec::new();
     let mut emit = Emitter { loc, ops: &mut ops };
     let len = emit.load(ctx, source, LEN_OFFSET, i64_ty);
-    emit.trap_if(ctx, "ugt", start, end, SPLICE_OUT_OF_BOUNDS_TRAP);
-    emit.trap_if(ctx, "ugt", end, len, SPLICE_OUT_OF_BOUNDS_TRAP);
+    emit.trap_if(
+        ctx,
+        clif::IntCond::Ugt,
+        start,
+        end,
+        SPLICE_OUT_OF_BOUNDS_TRAP,
+    );
+    emit.trap_if(ctx, clif::IntCond::Ugt, end, len, SPLICE_OUT_OF_BOUNDS_TRAP);
     let removed = emit.isub(ctx, end, start);
     let kept = emit.isub(ctx, len, removed);
     let new_len = emit.iadd(ctx, kept, count, i64_ty);
     // `kept + count` wraps only past every representable length.
-    emit.trap_if(ctx, "ult", new_len, kept, SIZE_OVERFLOW_TRAP);
+    emit.trap_if(ctx, clif::IntCond::Ult, new_len, kept, SIZE_OVERFLOW_TRAP);
     let payload = emit.allocate(ctx, new_len, descriptor);
     let zero = emit.i64(ctx, 0);
 
@@ -747,7 +757,6 @@ mod tests {
     use trunk_ir::ops::DialectOp;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::pass::PassManager;
-    use trunk_ir::printer::print_module;
 
     use crate::native::adt_rc_header::AdtRcHeader;
     use crate::native::clif_lowering::{CfToClif, FuncToClif};
@@ -777,9 +786,9 @@ mod tests {
 
         let mut kept = String::new();
         let mut keeping = false;
-        for line in print_module(&ctx, module.op()).lines() {
-            if let Some(header) = line.strip_prefix("  clif.func {sym_name = \"") {
-                keeping = keep(header.split('"').next().unwrap());
+        for line in module.op().display(&ctx).to_string().lines() {
+            if let Some(header) = line.strip_prefix("  clif.func @") {
+                keeping = keep(header.split('(').next().unwrap());
             }
             if keeping {
                 kept.push_str(line);
@@ -807,7 +816,7 @@ mod tests {
     %pair = adt.array_of %a, %b {type = !Nodes} : !Nodes
     %filled = adt.array_new %at, %a {type = !Nodes} : !Nodes
     %again = adt.array_new %at, %b {type = !Nodes} : !Nodes
-    %spliced = adt.array_splice %pair, %at, %at, %b {type = !Nodes} : !Nodes
+    %spliced = adt.array_splice %pair[%at, %at](%b) attributes {type = !Nodes} : !Nodes
     func.return %spliced
   }
 }"#,
@@ -815,7 +824,7 @@ mod tests {
         );
         // One helper of each kind serves every operation on the descriptor.
         assert_eq!(
-            lowered.matches("sym_name = \"__tribute_array_new_").count(),
+            lowered.matches("clif.func @__tribute_array_new_").count(),
             1
         );
         insta::assert_snapshot!(lowered);
@@ -828,8 +837,8 @@ mod tests {
   !Ints = adt.array<core.i32>
   func.func @build(%value: core.i32, %count: core.index) -> !Ints {
     %filled = adt.array_new %count, %value {type = !Ints} : !Ints
-    %zero = arith.const {value = 0} : core.index
-    %trimmed = adt.array_splice %filled, %zero, %count {type = !Ints} : !Ints
+    %zero = arith.constant 0 : core.index
+    %trimmed = adt.array_splice %filled[%zero, %count]() attributes {type = !Ints} : !Ints
     func.return %trimmed
   }
 }"#,
@@ -837,14 +846,11 @@ mod tests {
         );
         assert!(!lowered.contains("tribute_rt.retain"), "{lowered}");
         assert!(
-            lowered.contains("clif.func_sig<(core.i64, core.i32) -> core.ptr>"),
+            lowered.contains("(%0: core.i64, %1: core.i32) -> core.ptr {"),
             "{lowered}"
         );
         // An `i32` element is four bytes wide.
-        assert!(
-            lowered.contains("clif.iconst {value = 4} : core.i64"),
-            "{lowered}"
-        );
+        assert!(lowered.contains("clif.iconst 4 : core.i64"), "{lowered}");
     }
 
     #[test]

@@ -173,6 +173,8 @@ fn sample() -> Module<u32> {
                                             ty: None,
                                             local_id: None,
                                         }],
+                                        return_ty: None,
+                                        effects: None,
                                         body: expr(
                                             38,
                                             ExprKind::Tuple(vec![expr(

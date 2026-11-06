@@ -296,7 +296,17 @@ source-logical IR의 pass가 맡는다.
 인스턴스 검증은 타입 매개변수가 없는 모든 함수에서 출발한다. 이 함수들은 도달
 여부와 상관없이 그대로 lowering되기 때문이다. 이 함수들과 그 함수들이 구체 타입
 인자로 도달하는 인스턴스에서 함수 인스턴스나 ability 인자가 미해결이면 특수화 전에
-거부한다. 다형적 재귀는 정의의 성질이므로 도달하지 않는 template에서도 거부한다.
+거부한다. 검사하는 ability 인자는 perform 지점과 handler arm의 것, 그리고 그 함수의
+signature와 본문의 값 타입이 적는 row 안의 모든 ability instance의 것이다. Row 변수는
+타입 인자처럼 치환되지 않으므로, ability 인자 안의 열린 row는 특수화로 해결되지
+않는 미해결 인자다. Ability instance의 선언은 instance마다 하나이고 그 operation
+타입은 module 수준에 있어 row tail을 가질 수 없으므로, 그런 instance는 선언할 수
+없다. 같은 이유로, 같은 함수들의 signature와 본문의 값 타입이 타입 인자를 가진
+struct·enum을 적을 때 그 인자에 열린 row가 있으면 거부한다. 특수화가 row를 치환하지
+않으므로 그 nominal 인스턴스는 구체 선언을 얻지 못한다. 지역 `let`은 data 타입
+변수를 양화하지 않으므로(`type-inference.md`), 지역 callable이 만드는 nominal 값의
+타입 인자는 그 사용처가 고른 타입이며 특수화가 다른 타입 인자처럼 다룬다. 다형적 재귀는
+정의의 성질이므로 도달하지 않는 template에서도 거부한다.
 
 ### 타입 순회와 binder별 치환
 
@@ -316,8 +326,9 @@ ability row로 내려가며, row 안에서는 각 ability 인자의 타입 인�
   변수는 인스턴스화의 row 변수 재명명을 받지 않는다.
 - `UniVar`는 solver가 자신의 치환으로 해석한다. 치환된 타입은 다시 해석하며, row는
   solver의 row 치환을 먼저 적용한 뒤 그 ability 인자를 해석한다. 일반화는 남은
-  `UniVar`를 함수 스킴의 `BoundVar` 또는 지역 스킴의 `LocalBoundVar`로 바꾼다.
-- `LocalBoundVar`는 지역 binder를 소유한 typed-body 메타데이터가 해석한다. 스킴
+  `UniVar`를 함수 스킴의 `BoundVar` 또는 본문이 소유한 existential의
+  `LocalBoundVar`로 바꾼다.
+- `LocalBoundVar`는 그 변수를 소유한 함수 본문의 typed-body 메타데이터가 해석한다. 스킴
   인스턴스화와 solver 치환은 이를 바꾸지 않고 통과시킨다.
 
 특수화가 typed 메타데이터에 하는 세 작업, 즉 clone의 타입 인자 치환, nominal
@@ -396,11 +407,11 @@ identity는 남긴다. Lowering은 구체 함수 정의만 받으며,
 제외는 nominal 수집보다 먼저 하므로, template 안에서만 쓰인 nominal 인스턴스는
 생성하지 않는다.
 
-타입 매개변수가 있는 struct와 enum의 원본 선언은 출력에 남는다. Row는 특수화하지
-않으므로, 타입 인자에 열린 ability row가 있는 nominal 인스턴스(예:
-`Boxed(fn() ->{e} Bool)`)는 구체 선언을 얻지 못하고 원본 선언의 표현을 쓴다. 같은
-이유로 원본 struct의 field 함수도 lowering되며, 이것이 타입 변수를 표현 하나로
-소거하는 유일한 함수다.
+타입 매개변수가 있는 struct와 enum의 원본 선언은 출력에 남는다. 원본 선언의 표현은
+타입 변수를 표현 하나로 소거하므로 같은 타입의 구체 선언과 표현이 다르고, 두 표현
+사이를 오가는 값을 변환하지 않는다. 그래서 구체 선언을 얻지 못하는 nominal
+인스턴스(예: `Boxed(fn() ->{e} Bool)`)는 인스턴스 검증이 거부한다. 원본 struct의 field 함수도 lowering되며,
+이것이 타입 변수를 표현 하나로 소거하는 유일한 함수다.
 
 출력은 다음 불변식을 지킨다.
 
@@ -477,4 +488,5 @@ Function quantifiers cover the callable interface and retained semantic row
 relations. Inference variables occurring only in the checked body remain
 body-owned local existentials; they do not add phantom arguments to callers.
 The pre-erasure ability-instance check still rejects unresolved local
-existentials in reachable handler or perform ability arguments.
+existentials in reachable handler or perform ability arguments, and in the
+ability arguments of any row that a reachable function's types name.

@@ -86,13 +86,15 @@
 //! ## Diagnostics
 //!
 //! Diagnostics are collected using Salsa accumulators. Each stage can emit
-//! diagnostics via `Diagnostic::new(...).accumulate(db)`, which are then
+//! diagnostics via `SpanDiagnostic::new(...).accumulate(db)`, which are then
 //! collected at the end of compilation.
 
 use crate::SourceCst;
+use crate::frontend::frontend_spans;
 use salsa::Accumulator;
 use std::ops::RangeInclusive;
-use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity, SpanDiagnostic};
+use tribute_front::ast::{NodeDiagnostic, locate_diagnostics};
 use tribute_front::resolve::NameDisplay;
 use trunk_ir::Span;
 use trunk_ir::analysis::AnalysisCache;
@@ -125,10 +127,8 @@ impl From<PassError> for DumpIrError {
 #[salsa::input]
 pub struct CompilationConfig {
     /// Enable AddressSanitizer instrumentation.
-    #[returns(copy)]
     pub sanitize_address: bool,
     /// Stage-specific optimization policies.
-    #[returns(copy)]
     pub optimizations: OptimizationOptions,
 }
 
@@ -178,11 +178,11 @@ use trunk_ir_wasm_backend::{
 };
 
 /// Result of diagnostic compilation through the shared pipeline.
-pub struct CompilationResult {
+pub struct CompilationResult<'db> {
     /// Whether the shared pipeline produced a module.
     pub produced_module: bool,
     /// Diagnostics collected during compilation.
-    pub diagnostics: Vec<Diagnostic>,
+    pub diagnostics: Vec<Diagnostic<'db>>,
 }
 
 // =============================================================================
@@ -779,7 +779,7 @@ fn emit_native(ctx: &mut IrContext, m: Module) -> NativeCompilationResult<Vec<u8
 ///
 /// Optimization options apply to the native portion of the pipeline.
 /// Native emission is intentionally skipped.
-#[salsa::tracked(returns(as_deref))]
+#[salsa::tracked(returns(as_ref))]
 pub fn dump_native_ir_at_stage(
     db: &dyn salsa::Database,
     source: SourceCst,
@@ -808,7 +808,7 @@ pub fn dump_native_ir_at_stage(
 /// A module that violates the exit contract is an error.
 /// Returns the IR text borrowed from the database, or an error. Diagnostics are
 /// accumulated.
-#[salsa::tracked(returns(as_deref))]
+#[salsa::tracked(returns(as_ref))]
 pub fn dump_ir(
     db: &dyn salsa::Database,
     source: SourceCst,
@@ -835,13 +835,10 @@ pub fn dump_ir(
 fn dump_staged(db: &dyn salsa::Database, staged: StagedCompilation) -> Result<String, DumpIrError> {
     report_context_diagnostics(db, &staged.context);
     staged.result?;
-    Ok(trunk_ir::printer::print_module(
-        &staged.context,
-        staged.module.op(),
-    ))
+    Ok(staged.module.op().display(&staged.context).to_string())
 }
 
-#[salsa::tracked(returns(as_deref))]
+#[salsa::tracked(returns(as_ref))]
 fn compile_to_wasm_binary_tracked(db: &dyn salsa::Database, source: SourceCst) -> Option<Vec<u8>> {
     let (mut ctx, m) = run_stages_from_source(
         db,
@@ -869,15 +866,50 @@ fn compile_to_wasm_binary_tracked(db: &dyn salsa::Database, source: SourceCst) -
 pub fn compile_to_wasm_binary(
     db: &dyn salsa::Database,
     source: SourceCst,
-) -> Result<&[u8], Vec<&Diagnostic>> {
+) -> Result<&[u8], Vec<Diagnostic<'_>>> {
     compile_to_wasm_binary_tracked(db, source)
-        .ok_or_else(|| compile_to_wasm_binary_tracked::accumulated::<Diagnostic>(db, source))
+        .map(Vec::as_slice)
+        .ok_or_else(|| wasm_binary_diagnostics(db, source))
 }
 
 /// Diagnostics accumulated by [`compile_to_wasm_binary`], including the
 /// warnings of a successful compilation.
-pub fn wasm_binary_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<&Diagnostic> {
-    compile_to_wasm_binary_tracked::accumulated::<Diagnostic>(db, source)
+pub fn wasm_binary_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<Diagnostic<'_>> {
+    locate_diagnostics(
+        compile_to_wasm_binary_tracked::accumulated::<SpanDiagnostic>(db, source),
+        compile_to_wasm_binary_tracked::accumulated::<NodeDiagnostic>(db, source),
+        frontend_spans(db, source),
+    )
+    .collect()
+}
+
+/// The diagnostics [`dump_ir`] reports.
+pub fn dump_ir_diagnostics(
+    db: &dyn salsa::Database,
+    source: SourceCst,
+    native: bool,
+) -> Vec<Diagnostic<'_>> {
+    locate_diagnostics(
+        dump_ir::accumulated::<SpanDiagnostic>(db, source, native),
+        dump_ir::accumulated::<NodeDiagnostic>(db, source, native),
+        frontend_spans(db, source),
+    )
+    .collect()
+}
+
+/// The diagnostics [`compile_to_native_binary`] reports, including the
+/// warnings of a successful compilation.
+pub fn native_binary_diagnostics(
+    db: &dyn salsa::Database,
+    source: SourceCst,
+    config: CompilationConfig,
+) -> Vec<Diagnostic<'_>> {
+    locate_diagnostics(
+        compile_to_native_binary::accumulated::<SpanDiagnostic>(db, source, config),
+        compile_to_native_binary::accumulated::<NodeDiagnostic>(db, source, config),
+        frontend_spans(db, source),
+    )
+    .collect()
 }
 
 /// Compile to native object bytes.
@@ -886,7 +918,7 @@ pub fn wasm_binary_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> V
 /// in a single arena session, avoiding Salsa↔Arena round-trips after ast_to_ir.
 ///
 /// Returns `None` if compilation fails, with diagnostics accumulated.
-#[salsa::tracked(returns(as_deref))]
+#[salsa::tracked(returns(as_ref))]
 pub fn compile_to_native_binary(
     db: &dyn salsa::Database,
     source: SourceCst,
@@ -894,7 +926,7 @@ pub fn compile_to_native_binary(
 ) -> Option<Vec<u8>> {
     let stages = StageConfig {
         native: NativeLowering {
-            sanitize: config.sanitize_address(db),
+            sanitize: *config.sanitize_address(db),
             optimizations: config.optimizations(db).native,
             stop_after: None,
         },
@@ -915,12 +947,12 @@ pub fn compile_to_native_binary(
 /// Pass the diagnostics the stages reported to the context on to Salsa.
 fn report_context_diagnostics(db: &dyn salsa::Database, ctx: &IrContext) {
     for diag in ctx.diagnostics().iter() {
-        Diagnostic::from_ir(diag.clone(), CompilationPhase::Lowering).accumulate(db);
+        SpanDiagnostic::from_ir(diag.clone(), CompilationPhase::Lowering).accumulate(db);
     }
 }
 
 fn report_emission_error(db: &dyn salsa::Database, message: String) {
-    Diagnostic::new(
+    SpanDiagnostic::new(
         message,
         Span::new(0, 0),
         DiagnosticSeverity::Error,
@@ -939,7 +971,7 @@ fn report_pass_error(db: &dyn salsa::Database, names: &NameDisplay, error: &Pass
             call.origins
                 .iter()
                 .fold(
-                    Diagnostic::builder(
+                    SpanDiagnostic::builder(
                         call.message(|function| names.text(function)),
                         call.location.span,
                         DiagnosticSeverity::Error,
@@ -957,7 +989,7 @@ fn report_pass_error(db: &dyn salsa::Database, names: &NameDisplay, error: &Pass
         }
         return;
     }
-    Diagnostic::new(
+    SpanDiagnostic::new(
         format!("Pipeline failed: {error}"),
         Span::new(0, 0),
         DiagnosticSeverity::Error,
@@ -973,7 +1005,7 @@ fn report_pass_error(db: &dyn salsa::Database, names: &NameDisplay, error: &Pass
 /// during compilation can be collected via `compile_ast_tracked::accumulated`.
 /// Returns `false` if the frontend fails or a pass fails; pass failures are
 /// converted to accumulated diagnostics. Otherwise returns `true`.
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked]
 fn compile_ast_tracked(db: &dyn salsa::Database, source: SourceCst) -> bool {
     // Diagnostics are accumulated as side effects
     run_stages_from_source(
@@ -1008,20 +1040,24 @@ pub fn compile_ast(
 /// Run compilation and return detailed results including diagnostics.
 ///
 /// Diagnostics are collected using Salsa accumulators from all compilation stages.
-pub fn compile_with_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> CompilationResult {
+pub fn compile_with_diagnostics(
+    db: &dyn salsa::Database,
+    source: SourceCst,
+) -> CompilationResult<'_> {
     // Run the tracked function to collect diagnostics
     let produced_module = compile_ast_tracked(db, source);
 
     // Collect all accumulated diagnostics from the compilation
-    let mut diagnostics: Vec<Diagnostic> =
-        compile_ast_tracked::accumulated::<Diagnostic>(db, source)
-            .into_iter()
-            .cloned()
-            .collect();
+    let mut diagnostics: Vec<_> = locate_diagnostics(
+        compile_ast_tracked::accumulated::<SpanDiagnostic>(db, source),
+        compile_ast_tracked::accumulated::<NodeDiagnostic>(db, source),
+        frontend_spans(db, source),
+    )
+    .collect();
     diagnostics.sort_by(tribute_core::diagnostic::compare_diagnostics);
 
     CompilationResult {
-        produced_module,
+        produced_module: *produced_module,
         diagnostics,
     }
 }

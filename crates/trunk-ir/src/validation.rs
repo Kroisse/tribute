@@ -1082,7 +1082,7 @@ pub fn is_proper_tail_terminator(ctx: &IrContext, op: OpRef) -> bool {
             ))
         || name.is(ctx, "effect.dispatch_cps")
         || scf::If::matches(ctx, op)
-        || scf::Switch::matches(ctx, op)
+        || scf::IndexSwitch::matches(ctx, op)
 }
 
 fn validate_scf_if_structure(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
@@ -1292,8 +1292,8 @@ pub fn link_name_conflicts(ctx: &IrContext, module: Module) -> Vec<String> {
                 Some((first, first_ty)) if *first_ty != ty => errors.push(format!(
                     "declarations @{first} and @{path} link as `{name}` with different \
                      signatures {} and {}",
-                    crate::printer::print_type(ctx, *first_ty),
-                    crate::printer::print_type(ctx, ty),
+                    first_ty.display(ctx),
+                    ty.display(ctx),
                 )),
                 Some(_) => {}
                 None => {
@@ -1573,7 +1573,7 @@ mod tests {
         if_op: super::super::refs::OpRef,
     ) -> Module {
         ctx.push_op(entry, if_op);
-        let zero = arith::Const::operands()
+        let zero = arith::Constant::operands()
             .value(Attribute::Int(0))
             .results(i32_ty)
             .build(ctx, loc);
@@ -1624,14 +1624,14 @@ mod tests {
             parent_region: None,
         });
 
-        let c0 = arith::Const::operands()
+        let c0 = arith::Constant::operands()
             .value(Attribute::Int(40))
             .results(i32_ty)
             .build(ctx, loc);
         ctx.push_op(entry_block, c0.op_ref());
         let c0_val = c0.result(ctx);
 
-        let c1 = arith::Const::operands()
+        let c1 = arith::Constant::operands()
             .value(Attribute::Int(2))
             .results(i32_ty)
             .build(ctx, loc);
@@ -1700,7 +1700,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let const_a = arith::Const::operands()
+        let const_a = arith::Constant::operands()
             .value(Attribute::Int(99))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -1767,7 +1767,7 @@ mod tests {
         let stale_errors = stale_value_errors(&result);
         assert_eq!(stale_errors.len(), 1);
         assert_eq!(stale_errors[0].0, "func_b");
-        assert!(stale_errors[0].2.contains("arith.const"));
+        assert!(stale_errors[0].2.contains("arith.constant"));
 
         // In debug builds the check pass rejects the module.
         if cfg!(debug_assertions) {
@@ -1907,7 +1907,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let c1 = arith::Const::operands()
+        let c1 = arith::Constant::operands()
             .value(Attribute::Int(1))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -1929,7 +1929,7 @@ mod tests {
 
         // Create a bool condition
         let i1_ty = TypeDataBuilder::new("core.i1").intern(&mut ctx);
-        let cond = arith::Const::operands()
+        let cond = arith::Constant::operands()
             .value(Attribute::Int(1))
             .results(i1_ty)
             .build(&mut ctx, loc);
@@ -2001,7 +2001,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let const_a = arith::Const::operands()
+        let const_a = arith::Constant::operands()
             .value(Attribute::Int(42))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -2028,7 +2028,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let local = arith::Const::operands()
+        let local = arith::Constant::operands()
             .value(Attribute::Int(1))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -2094,7 +2094,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let const_a = arith::Const::operands()
+        let const_a = arith::Constant::operands()
             .value(Attribute::Int(99))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -2187,7 +2187,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let inner_const = arith::Const::operands()
+        let inner_const = arith::Constant::operands()
             .value(Attribute::Int(42))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -2211,7 +2211,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let else_const = arith::Const::operands()
+        let else_const = arith::Constant::operands()
             .value(Attribute::Int(0))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -2229,7 +2229,7 @@ mod tests {
         });
 
         // Condition
-        let cond_op = arith::Const::operands()
+        let cond_op = arith::Constant::operands()
             .value(Attribute::Int(1))
             .results(i1_ty)
             .build(&mut ctx, loc);
@@ -2306,8 +2306,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @f(%x: core.i32, %y: core.i32) {
-    func.call %x {callee = @consume}
-    func.call %y {callee = @consume}
+    func.call @consume(%x) : (core.i32) -> ()
+    func.call @consume(%y) : (core.i32) -> ()
     func.return
   }
   func.func @consume(%value: core.i32)
@@ -2339,7 +2339,7 @@ mod tests {
                     &mut ctx,
                     r#"core.module @test {
   func.func @f(%x: core.i32) {
-    %unused = arith.const {value = 0} : core.i32
+    %unused = arith.constant 0 : core.i32
     func.return
   }
 }"#,
@@ -2389,7 +2389,7 @@ mod tests {
     fn tail_call_indirect_typed_cps_transfer_passes() {
         let input = r#"core.module @test {
   func.func @main(%k: core.ptr, %value: core.i32) -> core.never {
-    func.tail_call_indirect %k, %value {signature = func.func_sig<(core.i32) -> core.never>}
+    func.tail_call_indirect %k(%value) : (core.i32) -> core.never
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -2402,7 +2402,7 @@ mod tests {
     fn tail_call_indirect_rejects_non_cps_result_and_bad_arguments() {
         let input = r#"core.module @test {
   func.func @main(%k: core.ptr, %value: core.i1) -> core.never {
-    func.tail_call_indirect %k, %value {signature = func.func_sig<(core.i32) -> core.i32>}
+    func.tail_call_indirect %k(%value) : (core.i32) -> core.i32
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -2421,30 +2421,21 @@ mod tests {
         let input = r#"core.module @test {
   !never = func.func_sig<() -> core.never>
   !unary = func.func_sig<(core.i32) -> core.never>
-  func.func @result(%k: !never) -> core.never {
-    %bad = func.tail_call_indirect %k {signature = !never} : core.i32
-  }
   func.func @not_last(%k: !never) -> core.never {
-    func.tail_call_indirect %k {signature = !never}
+    func.tail_call_indirect %k() : () -> core.never
     func.unreachable
   }
-  func.func @missing() -> core.never {
-    func.tail_call_indirect {signature = !never}
-  }
-  func.func @unsigned(%k: !never) -> core.never {
-    func.tail_call_indirect %k
-  }
   func.func @mismatched(%k: !unary) -> core.never {
-    func.tail_call_indirect %k {signature = !never}
+    func.tail_call_indirect %k() : () -> core.never
   }
   func.func @erased(%k: core.ptr) -> core.never {
-    func.tail_call_indirect %k {signature = !never}
+    func.tail_call_indirect %k() : () -> core.never
   }
   func.func @direct_function(%k: !never) -> core.never {
-    func.tail_call_indirect %k {signature = !never}
+    func.tail_call_indirect %k() : () -> core.never
   }
   func.func @arity(%k: core.ptr) -> core.never {
-    func.tail_call_indirect %k {signature = !unary}
+    func.tail_call_indirect %k() : (core.i32) -> core.never
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -2452,29 +2443,26 @@ mod tests {
         let result = validate_operation_verifiers(&ctx, module);
         let text = result.to_string();
         for expected in [
-            "expected 0 result(s), found 1",
             "must terminate its block",
-            "expected at least 1 operand(s), found 0",
-            "missing required attribute `signature`",
             "exact indirect signature differs from typed callee",
             "operands `args`: expected S::Inputs = (core.i32), found ()",
         ] {
             assert!(text.contains(expected), "missing `{expected}`:\n{text}");
         }
-        assert_eq!(result.errors.len(), 6, "{text}");
+        assert_eq!(result.errors.len(), 3, "{text}");
     }
 
     #[test]
     fn scf_never_regions_accept_every_proper_tail_surface() {
         let input = r#"core.module @test {
   func.func @main(%cond: core.i1) -> core.never {
-    %outer = scf.if %cond : core.never {
-      ability.perform
-    } {
-      %nested = scf.if %cond : core.never {
+    %outer = scf.if %cond -> (core.never) {
+      "ability.perform"()
+    } else {
+      %nested = scf.if %cond -> (core.never) {
         func.unreachable
-      } {
-        ability.handle_dispatch
+      } else {
+        "ability.handle_dispatch"()
       }
     }
   }
@@ -2491,7 +2479,7 @@ mod tests {
   func.func @main(%cond: core.i1) {
     scf.if %cond {
       func.unreachable
-    } {
+    } else {
       func.unreachable
     }
     func.return
@@ -2526,8 +2514,8 @@ mod tests {
     func.return %2
   }
   func.func @main() -> core.i32 {
-    %0 = arith.const {value = 1} : core.i32
-    %1 = func.call %0 {callee = @add} : core.i32
+    %0 = arith.constant 1 : core.i32
+    %1 = func.call @add(%0) : (core.i32) -> core.i32
     func.return %1
   }
 }"#,
@@ -2569,8 +2557,8 @@ mod tests {
     func.return %2
   }
   func.func @main() -> core.i32 {
-    %0 = arith.const {value = 1} : core.i32
-    %1 = func.call %0 {callee = @add} : core.i32
+    %0 = arith.constant 1 : core.i32
+    %1 = func.call @add(%0) : (core.i32) -> core.i32
     func.return %1
   }
 }"#,
@@ -2583,10 +2571,10 @@ mod tests {
     func.return %0
   }
   func.func @main() -> core.i32 {
-    %0 = arith.const {value = 1} : core.i32
-    %1 = arith.const {value = 2} : core.i32
-    %2 = arith.const {value = 3} : core.i32
-    %3 = func.call %0, %1, %2 {callee = @add} : core.i32
+    %0 = arith.constant 1 : core.i32
+    %1 = arith.constant 2 : core.i32
+    %2 = arith.constant 3 : core.i32
+    %3 = func.call @add(%0, %1, %2) : (core.i32, core.i32, core.i32) -> core.i32
     func.return %3
   }
 }"#,
@@ -2600,8 +2588,8 @@ mod tests {
     func.return %2
   }
   func.func @main() -> core.i32 {
-    %0 = arith.const {value = 1} : core.i32
-    func.tail_call %0 {callee = @add}
+    %0 = arith.constant 1 : core.i32
+    func.tail_call @add(%0) : (core.i32) -> ()
   }
 }"#,
                 &["add", "1 argument(s), expected 2"],
@@ -2610,12 +2598,12 @@ mod tests {
                 "args passed to a zero-param function",
                 r#"core.module @test {
   func.func @unit() -> core.i32 {
-    %0 = arith.const {value = 0} : core.i32
+    %0 = arith.constant 0 : core.i32
     func.return %0
   }
   func.func @main() -> core.i32 {
-    %0 = arith.const {value = 1} : core.i32
-    %1 = func.call %0 {callee = @unit} : core.i32
+    %0 = arith.constant 1 : core.i32
+    %1 = func.call @unit(%0) : (core.i32) -> core.i32
     func.return %1
   }
 }"#,
@@ -2629,9 +2617,9 @@ mod tests {
     func.return %2
   }
   func.func @main() -> core.i32 {
-    %0 = arith.const {value = 40} : core.i32
-    %1 = arith.const {value = 2} : core.i32
-    %2 = func.call %0, %1 {callee = @add} : core.i32
+    %0 = arith.constant 40 : core.i32
+    %1 = arith.constant 2 : core.i32
+    %2 = func.call @add(%0, %1) : (core.i32, core.i32) -> core.i32
     func.return %2
   }
 }"#,
@@ -2641,8 +2629,8 @@ mod tests {
                 "callee not defined in this module is skipped",
                 r#"core.module @test {
   func.func @main() -> core.i32 {
-    %0 = arith.const {value = 1} : core.i32
-    %1 = func.call %0 {callee = @extern_fn} : core.i32
+    %0 = arith.constant 1 : core.i32
+    %1 = func.call @extern_fn(%0) : (core.i32) -> core.i32
     func.return %1
   }
 }"#,
@@ -2680,7 +2668,7 @@ mod tests {
     fn cmpf_subset_predicate_passes() {
         let input = r#"core.module @test {
   func.func @main(%0: core.f64, %1: core.f64) -> core.i1 {
-    %2 = arith.cmpf %0, %1 {predicate = "une"} : core.i1
+    %2 = arith.cmpf une, %0, %1 : core.f64
     func.return %2
   }
 }"#;
@@ -2699,17 +2687,17 @@ mod tests {
                 "arith.cmpf",
                 r#"core.module @test {
   func.func @main(%0: core.f64, %1: core.f64) -> core.i1 {
-    %2 = arith.cmpf %0, %1 {predicate = "ueq"} : core.i1
+    %2 = "arith.cmpf"(%0, %1) {predicate = "ueq"} : core.i1
     func.return %2
   }
 }"#,
-                &["unsupported predicate 'ueq'"],
+                &["attribute `predicate` must be one of: oeq une olt ole ogt oge"],
             ),
             (
                 "arith.cmpf",
                 r#"core.module @test {
   func.func @main(%0: core.f64, %1: core.f64) -> core.i1 {
-    %2 = arith.cmpf %0, %1 : core.i1
+    %2 = "arith.cmpf"(%0, %1) : core.i1
     func.return %2
   }
 }"#,
@@ -2719,9 +2707,9 @@ mod tests {
                 "scf.if",
                 r#"core.module @test {
   func.func @main(%cond: core.i1, %x: core.i32) -> core.i32 {
-    %r = scf.if %cond : core.i32 {
+    %r = scf.if %cond -> (core.i32) {
       scf.yield
-    } {
+    } else {
       scf.yield %x
     }
     func.return %r
@@ -2733,9 +2721,9 @@ mod tests {
                 "scf.if",
                 r#"core.module @test {
   func.func @main(%cond: core.i1, %x: core.i32) -> core.i32 {
-    %r = scf.if %cond : core.i32 {
-      %zero = arith.const {value = 0} : core.i32
-    } {
+    %r = scf.if %cond -> (core.i32) {
+      %zero = arith.constant 0 : core.i32
+    } else {
       scf.yield %x
     }
     func.return %r
@@ -2794,12 +2782,12 @@ mod tests {
 
     #[test]
     fn cf_switch_interface_reports_the_default_and_every_target() {
-        let module_text = |cases: &str, successors: &str| {
+        let module_text = |arms: &str| {
             format!(
                 r#"core.module @test {{
   func.func @main(%choice: core.i32) {{
     ^entry:
-      cf.switch %choice [{successors}] {{cases = {cases}}}
+      cf.switch %choice : core.i32, [default: ^fallback, {arms}]
     ^fallback:
       func.return
     ^first:
@@ -2811,10 +2799,8 @@ mod tests {
             )
         };
         let mut ctx = IrContext::new();
-        let module = crate::parser::parse_test_module(
-            &mut ctx,
-            &module_text("[4, -1]", "^fallback, ^first, ^second"),
-        );
+        let module =
+            crate::parser::parse_test_module(&mut ctx, &module_text("4: ^first, -1: ^second"));
 
         let result = validate_operation_verifiers(&ctx, module);
         assert!(result.is_ok(), "{result}");
@@ -2833,23 +2819,19 @@ mod tests {
                 .all(|(edge, &block)| edge.block == block && edge.forwarded.is_empty())
         );
 
-        for (cases, successors, expected) in [
-            ("[4, -1]", "^fallback, ^first", "2 case(s) but 1 target(s)"),
-            ("[4, 4]", "^fallback, ^first, ^second", "duplicate case 4"),
+        for (arms, expected) in [
+            ("4: ^first, 4: ^second", "duplicate case 4"),
             (
-                "[-1, 4294967295]",
-                "^fallback, ^first, ^second",
+                "-1: ^first, 4294967295: ^second",
                 "duplicate case 4294967295",
             ),
             (
-                "[4, 4294967296]",
-                "^fallback, ^first, ^second",
+                "4: ^first, 4294967296: ^second",
                 "case 4294967296 is not a value of a 32-bit integer",
             ),
         ] {
             let mut ctx = IrContext::new();
-            let module =
-                crate::parser::parse_test_module(&mut ctx, &module_text(cases, successors));
+            let module = crate::parser::parse_test_module(&mut ctx, &module_text(arms));
             let result = validate_operation_verifiers(&ctx, module);
             let errors = operation_error_messages(&result);
             assert!(
@@ -2931,14 +2913,14 @@ mod tests {
     fn region_branch_interfaces_cover_nested_if_forwarding() {
         let input = r#"core.module @test {
   func.func @main(%cond: core.i1, %x: core.i32) -> core.i32 {
-    %outer = scf.if %cond : core.i32 {
-      %inner = scf.if %cond : core.i32 {
+    %outer = scf.if %cond -> (core.i32) {
+      %inner = scf.if %cond -> (core.i32) {
         scf.yield %x
-      } {
+      } else {
         scf.yield %x
       }
       scf.yield %inner
-    } {
+    } else {
       scf.yield %x
     }
     func.return %outer
@@ -2970,7 +2952,7 @@ mod tests {
     fn region_branch_interfaces_cover_loop_entry_backedge_and_exit() {
         let input = r#"core.module @test {
   func.func @main(%init: core.i32) -> core.i32 {
-    %result = scf.loop %init : core.i32 {
+    %result = scf.loop(%init) -> (core.i32) {
       ^header(%iter: core.i32):
         scf.continue %iter
       ^exit_path(%value: core.i32):
@@ -3023,16 +3005,15 @@ mod tests {
     }
 
     #[test]
-    fn region_branch_interfaces_cover_switch_case_and_default() {
+    fn region_branch_interfaces_cover_every_switch_region() {
         let input = r#"core.module @test {
   func.func @main(%discriminant: core.i32) -> core.nil {
-    scf.switch %discriminant {
-      scf.case {value = 0} {
-        scf.yield
-      }
-      scf.default {
-        scf.yield
-      }
+    scf.index_switch %discriminant : (core.i32) -> ()
+    case 0 {
+      scf.yield
+    }
+    default {
+      scf.yield
     }
     %unit = core.nil_value : core.nil
     func.return %unit
@@ -3043,7 +3024,7 @@ mod tests {
 
         let result = validate_operation_verifiers(&ctx, module);
         assert!(result.is_ok(), "{result}");
-        let switches = operations_named(&ctx, module, crate::dialect::scf::Switch::NAME);
+        let switches = operations_named(&ctx, module, crate::dialect::scf::IndexSwitch::NAME);
         assert_eq!(switches.len(), 1);
         let switch = switches[0];
         let interface = DynRegionBranch::get(&ctx, switch).unwrap();
@@ -3057,46 +3038,35 @@ mod tests {
                 .iter()
                 .all(|successor| matches!(successor, RegionSuccessor::Region(_)))
         );
-        for wrapper in operations_named(&ctx, module, crate::dialect::scf::Case::NAME)
-            .into_iter()
-            .chain(operations_named(
-                &ctx,
-                module,
-                crate::dialect::scf::Default::NAME,
-            ))
-        {
-            assert!(DynRegionBranch::get(&ctx, wrapper).is_some());
-        }
     }
 
     #[test]
     fn typed_region_models_fail_closed_for_invalid_semantic_queries() {
         let input = r#"core.module @test {
   func.func @main(%cond: core.i1, %discriminant: core.i32, %value: core.i32) -> core.i32 {
-    %selected = scf.if %cond : core.i32 {
+    %selected = scf.if %cond -> (core.i32) {
       scf.yield %value
-    } {
+    } else {
       scf.yield %value
     }
-    scf.switch %discriminant {
-      scf.case {value = 0} {
-        scf.yield
-      }
-      scf.default {
-        scf.yield
-      }
+    scf.index_switch %discriminant : (core.i32) -> ()
+    case 0 {
+      scf.yield
     }
-    %looped = scf.loop %value : core.i32 {
+    default {
+      scf.yield
+    }
+    %looped = scf.loop(%value) -> (core.i32) {
       ^continue_path(%continue_value: core.i32):
         scf.continue %continue_value
       ^break_path(%break_value: core.i32):
         scf.break %break_value
     }
-    scf.loop %value {
+    scf.loop(%value) {
       ^resultless_break_path(%resultless_value: core.i32):
         scf.break %resultless_value
     }
-    %zero = arith.const {value = 0} : core.i32
+    %zero = arith.constant 0 : core.i32
     func.return %selected
   }
   func.func @stray(%value: core.i32) {
@@ -3116,9 +3086,7 @@ mod tests {
         };
 
         let if_op = operations_named(&ctx, module, crate::dialect::scf::If::NAME)[0];
-        let switch = operations_named(&ctx, module, crate::dialect::scf::Switch::NAME)[0];
-        let case = operations_named(&ctx, module, crate::dialect::scf::Case::NAME)[0];
-        let default = operations_named(&ctx, module, crate::dialect::scf::Default::NAME)[0];
+        let switch = operations_named(&ctx, module, crate::dialect::scf::IndexSwitch::NAME)[0];
         let yields = operations_named(&ctx, module, crate::dialect::scf::Yield::NAME);
         let if_yield = *yields
             .iter()
@@ -3126,7 +3094,7 @@ mod tests {
             .unwrap();
         let case_yield = *yields
             .iter()
-            .find(|&&op| direct_owner(op) == Some(case))
+            .find(|&&op| direct_owner(op) == Some(switch))
             .unwrap();
 
         let if_interface = DynRegionBranch::get(&ctx, if_op).unwrap();
@@ -3160,21 +3128,6 @@ mod tests {
                 .entry_successor_operands(&ctx, RegionSuccessor::Parent)
                 .is_err()
         );
-
-        for wrapper in [case, default] {
-            let interface = DynRegionBranch::get(&ctx, wrapper).unwrap();
-            assert!(
-                interface
-                    .successors(&ctx, RegionBranchPoint::Terminator(if_yield),)
-                    .unwrap_err()
-                    .is_not_applicable()
-            );
-            assert!(
-                interface
-                    .entry_successor_operands(&ctx, RegionSuccessor::Parent)
-                    .is_err()
-            );
-        }
 
         let loops = operations_named(&ctx, module, crate::dialect::scf::Loop::NAME);
         let result_loop = *loops
@@ -3219,7 +3172,7 @@ mod tests {
                 .successor_operands(&ctx, RegionSuccessor::Parent)
                 .is_err()
         );
-        let unrelated_region = ctx.op_region(case, 0).unwrap();
+        let unrelated_region = ctx.op_region(switch, 0).unwrap();
         assert!(
             DynRegionBranchTerminator::get(&ctx, continue_op)
                 .unwrap()
@@ -3283,7 +3236,7 @@ mod tests {
                 .contains("no enclosing scf.loop")
         );
 
-        let constant = operations_named(&ctx, module, crate::dialect::arith::Const::NAME)[0];
+        let constant = operations_named(&ctx, module, crate::dialect::arith::Constant::NAME)[0];
         assert!(
             DynRegionBranch::value_transfer(
                 &ctx,
@@ -3316,31 +3269,21 @@ mod tests {
       cf.cond_br %cond [^left, ^right]
     ^left:
       cf.br %value [^merge]
-      %after_branch = arith.const {value = 0} : core.i32
+      %after_branch = arith.constant 0 : core.i32
     ^right:
       cf.br %value [^merge]
     ^merge(%forwarded: core.i32):
-      %selected = scf.if %cond : core.i32 {
+      %selected = scf.if %cond -> (core.i32) {
         scf.yield %forwarded
-      } {
+      } else {
         scf.yield %forwarded
       }
-      scf.switch %discriminant {
-        scf.case {value = 0} { scf.yield }
+      scf.index_switch %discriminant : (core.i32) -> ()
+      case 1 {
+        ^empty_case:
       }
-      scf.switch %discriminant {
-        scf.case {value = 1} {
-          ^empty_case:
-        }
-      }
-      scf.switch %discriminant {
-        %unsupported = arith.const {value = 2} : core.i32
-      }
-      scf.switch %discriminant {
-        scf.default { scf.yield }
-        scf.default { scf.yield }
-      }
-      %looped = scf.loop %forwarded : core.i32 {
+      default { scf.yield }
+      %looped = scf.loop(%forwarded) -> (core.i32) {
         ^loop_exit(%loop_value: core.i32):
           scf.break %loop_value
       }
@@ -3358,8 +3301,6 @@ mod tests {
         for expected in [
             "Branch operation must be the final operation in its block",
             "contains an empty block",
-            "body contains unsupported operation",
-            "contains multiple default regions",
             "has no complete owning RegionBranch mapping",
         ] {
             assert!(
@@ -3370,9 +3311,7 @@ mod tests {
 
         let branch = operations_named(&ctx, module, crate::dialect::cf::Br::NAME)[0];
         let cond_branch = operations_named(&ctx, module, crate::dialect::cf::CondBr::NAME)[0];
-        let switches = operations_named(&ctx, module, crate::dialect::scf::Switch::NAME);
         let loop_op = operations_named(&ctx, module, crate::dialect::scf::Loop::NAME)[0];
-        let case = operations_named(&ctx, module, crate::dialect::scf::Case::NAME)[0];
         let break_op = operations_named(&ctx, module, crate::dialect::scf::Break::NAME)[0];
 
         ctx.truncate_op_successors(branch, 0);
@@ -3397,28 +3336,6 @@ mod tests {
                 .successors(&ctx, RegionBranchPoint::Parent)
                 .is_err()
         );
-        ctx.remove_op_operand(switches[0], 0);
-        assert!(
-            DynRegionBranch::get(&ctx, switches[0])
-                .unwrap()
-                .successors(&ctx, RegionBranchPoint::Parent)
-                .is_err()
-        );
-        let second_switch_body = ctx.op_region(switches[1], 0).unwrap();
-        ctx.region_mut(second_switch_body).blocks.clear();
-        assert!(
-            DynRegionBranch::get(&ctx, switches[1])
-                .unwrap()
-                .successors(&ctx, RegionBranchPoint::Parent)
-                .is_err()
-        );
-        ctx.clear_op_regions(case);
-        assert!(
-            DynRegionBranch::get(&ctx, case)
-                .unwrap()
-                .successors(&ctx, RegionBranchPoint::Parent)
-                .is_err()
-        );
         ctx.remove_op_operand(break_op, 0);
         assert!(
             DynRegionBranchTerminator::get(&ctx, break_op)
@@ -3432,7 +3349,7 @@ mod tests {
     fn region_branch_interfaces_reject_incomplete_loop_mappings() {
         let input = r#"core.module @test {
   func.func @main(%init: core.i32) -> core.i32 {
-    %result = scf.loop %init : core.i32 {
+    %result = scf.loop(%init) -> (core.i32) {
       ^header(%iter: core.i32, %extra: core.i32):
         scf.continue
       ^exit_path(%value: core.i32):
@@ -3461,9 +3378,9 @@ mod tests {
     fn region_branch_interface_rejects_textual_forwarding_type_mismatch() {
         let input = r#"core.module @test {
   func.func @main(%cond: core.i1, %x: core.i32) -> core.i32 {
-    %result = scf.if %cond : core.i32 {
+    %result = scf.if %cond -> (core.i32) {
       scf.yield %cond
-    } {
+    } else {
       scf.yield %x
     }
     func.return %result
@@ -3541,7 +3458,7 @@ mod tests {
             });
             let mut if_op = OperationDataBuilder::new(loc, "scf.if");
             for index in 0..condition_count {
-                let cond = arith::Const::operands()
+                let cond = arith::Constant::operands()
                     .value(Attribute::Int(i128::from(1 - index)))
                     .results(i1_ty)
                     .build(&mut ctx, loc);
@@ -3572,7 +3489,7 @@ mod tests {
     }
 
     #[test]
-    fn scf_loop_and_switch_result_arity_is_rejected() {
+    fn scf_loop_result_arity_is_rejected() {
         let mut ctx = IrContext::new();
         let loc = test_location(&mut ctx);
         let i32_ty = make_i32_type(&mut ctx);
@@ -3601,30 +3518,6 @@ mod tests {
             .build(&mut ctx);
         let loop_op = ctx.create_op(loop_data);
         ctx.push_op(entry, loop_op);
-
-        let discriminant = arith::Const::operands()
-            .value(Attribute::Int(0))
-            .results(i32_ty)
-            .build(&mut ctx, loc);
-        ctx.push_op(entry, discriminant.op_ref());
-        let switch_body = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        let switch_region = ctx.create_region(RegionData {
-            location: loc,
-            blocks: smallvec![switch_body],
-            parent_op: None,
-        });
-        let switch_data = OperationDataBuilder::new(loc, "scf.switch")
-            .operand(discriminant.result(&ctx))
-            .result(i32_ty)
-            .region(switch_region)
-            .build(&mut ctx);
-        let switch_op = ctx.create_op(switch_data);
-        ctx.push_op(entry, switch_op);
 
         let ret = func::Return::operands(std::iter::empty()).build(&mut ctx, loc);
         ctx.push_op(entry, ret.op_ref());
@@ -3658,20 +3551,15 @@ mod tests {
 
         let result = validate_operation_verifiers(&ctx, module);
         let messages = operation_error_messages(&result);
-        assert_eq!(messages.len(), 2, "{result}");
+        assert_eq!(messages.len(), 1, "{result}");
         assert!(messages.iter().any(|message| message.contains("scf.loop")));
-        assert!(
-            messages
-                .iter()
-                .any(|message| message.contains("scf.switch"))
-        );
     }
 
     #[test]
-    fn validate_all_includes_cmpf_predicate_errors() {
+    fn validate_all_includes_attribute_domain_errors() {
         let input = r#"core.module @test {
   func.func @main(%0: core.f64, %1: core.f64) -> core.i1 {
-    %2 = arith.cmpf %0, %1 {predicate = "one"} : core.i1
+    %2 = "arith.cmpf"(%0, %1) {predicate = "one"} : core.i1
     func.return %2
   }
 }"#;
@@ -3689,7 +3577,7 @@ mod tests {
         // callee whose function type differs from `signature`.
         let input = r#"core.module @test {
   func.func @main(%f: func.func_sig<(core.i32) -> core.i32>, %x: core.i64) -> core.i64 {
-    %r = func.call_indirect %f, %x {signature = func.func_sig<(core.i64) -> core.i64>} : core.i64
+    %r = func.call_indirect %f(%x) : (core.i64) -> core.i64
     func.return %r
   }
 }"#;
@@ -3712,7 +3600,7 @@ mod tests {
     fn operation_verifiers_reject_a_symbol_reference_to_the_root_module() {
         let input = r#"core.module @test {
   func.func @main() -> core.i32 {
-    %r = func.call {callee = @main} : core.i32
+    %r = func.call @main() : () -> core.i32
     func.return %r
   }
 }"#;
@@ -3751,7 +3639,7 @@ mod tests {
       func.return %value
     }}
     func.func @caller(%value: core.i32) -> core.i32 {{
-      %result = func.call %value {{callee = {callee}}} : core.i32
+      %result = func.call {callee}(%value) : (core.i32) -> core.i32
       func.return %result
     }}
   }}

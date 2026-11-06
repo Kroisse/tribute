@@ -5,7 +5,6 @@ use trunk_ir::op_interface::{
     Branch, BranchSuccessor, BranchSuccessors, ControlFlowInterfaceError,
 };
 use trunk_ir::parser::parse_test_module;
-use trunk_ir::printer::print_module;
 use trunk_ir::types::TypeDataBuilder;
 use trunk_ir_cranelift_backend::passes::func_to_clif;
 
@@ -128,9 +127,9 @@ fn build_without_field_moves(ir: &str) -> (IrContext, Module, NativeOwnershipPla
 fn build(ir: &str) -> (IrContext, Module, NativeOwnershipPlan) {
     let mut ctx = IrContext::new();
     let module = parse_test_module(&mut ctx, ir);
-    let before = print_module(&ctx, module.op());
+    let before = module.op().display(&ctx).to_string();
     let plan = production_plan(&ctx, module).expect("typed ownership plan");
-    assert_eq!(print_module(&ctx, module.op()), before);
+    assert_eq!(module.op().display(&ctx).to_string(), before);
     (ctx, module, plan)
 }
 
@@ -159,7 +158,7 @@ fn bodyless_scalar_declarations_need_no_target_binding_or_ownership_actions() {
         r#"core.module @test {
         func.func @external(%value: core.i32) -> core.i32
         func.func @caller(%value: core.i32) -> core.i32 {
-            %result = func.call %value {callee = @external} : core.i32
+            %result = func.call @external(%value) : (core.i32) -> core.i32
             func.return %result
         }
     }"#,
@@ -176,15 +175,11 @@ fn bodyless_scalar_declarations_need_no_target_binding_or_ownership_actions() {
         r#"core.module @test {
             func.func @external(%value: core.i32) -> core.i32
             func.func @caller() -> core.i32 {
-                %result = func.call {callee = @external} : core.i32
+                %result = func.call @external() : () -> core.i32
                 func.return %result
             }
         }"#,
         "call arguments differ from the exact callable signature",
-    );
-    assert_plan_error_unchanged(
-        "core.module @test { func.func {sym_name = \"bad\", type = core.i32} }",
-        "bodyless function lacks exact signature",
     );
     assert_plan_error_unchanged(
         "core.module @test { func.func @managed(%value: tribute_rt.anyref) -> tribute_rt.anyref }",
@@ -195,13 +190,13 @@ fn bodyless_scalar_declarations_need_no_target_binding_or_ownership_actions() {
 #[test]
 fn malformed_callable_bodies_fail_before_ownership_analysis_without_mutation() {
     assert_plan_error_unchanged(
-        "core.module @test { func.func {sym_name = \"empty\", type = func.func_sig<() -> ()>} {} }",
+        "core.module @test { \"func.func\"() ({}) {sym_name = \"empty\", type = func.func_sig<() -> ()>} }",
         "func.func @empty: body has no entry block",
     );
     let mut ctx = IrContext::new();
     let module = parse_test_module(
         &mut ctx,
-        "core.module @test { func.func {sym_name = \"extra\", type = func.func_sig<() -> ()>} { func.return } }",
+        "core.module @test { func.func @extra() { func.return } }",
     );
     let op = module.ops(&ctx)[0];
     let extra = ctx.create_region(trunk_ir::RegionData {
@@ -223,9 +218,7 @@ fn malformed_callable_bodies_fail_before_ownership_analysis_without_mutation() {
 
 #[test]
 fn revalidation_rejects_a_declaration_changed_to_an_empty_body() {
-    let (mut ctx, module, plan) = build(
-        "core.module @test { func.func {sym_name = \"external\", type = func.func_sig<() -> ()>} }",
-    );
+    let (mut ctx, module, plan) = build("core.module @test { func.func @external() }");
     let op = module.ops(&ctx)[0];
     let body = ctx.create_region(trunk_ir::RegionData {
         location: ctx.op(op).location,
@@ -233,7 +226,7 @@ fn revalidation_rejects_a_declaration_changed_to_an_empty_body() {
         parent_op: None,
     });
     ctx.push_op_region(op, body);
-    let before = print_module(&ctx, module.op());
+    let before = module.op().display(&ctx).to_string();
     let error = plan
         .validate_against(&ctx, module)
         .expect_err("malformed declaration must not be omitted");
@@ -243,7 +236,7 @@ fn revalidation_rejects_a_declaration_changed_to_an_empty_body() {
             .contains("func.func @external: body has no entry block"),
         "{error}"
     );
-    assert_eq!(print_module(&ctx, module.op()), before);
+    assert_eq!(module.op().display(&ctx).to_string(), before);
 }
 
 #[test]
@@ -288,12 +281,12 @@ fn typed_plan_options_preserve_or_elide_only_proven_parameter_and_field_borrows(
     func.return %value
   }
   func.func @forward(%child: !ChildRef) -> core.i32 {
-    %value = func.call %child {callee = @observe} : core.i32
+    %value = func.call @observe(%child) : (!ChildRef) -> core.i32
     func.return %value
   }
   func.func @load(%owner: !BoxRef) -> core.i32 {
     %child = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
-    %value = func.call %child {callee = @observe} : core.i32
+    %value = func.call @observe(%child) : (!ChildRef) -> core.i32
     func.return %value
   }
 }"#;
@@ -408,7 +401,7 @@ fn continuation_frame_capture_materializes_the_typed_entry_and_store_actions() {
     );
 
     materialize(&mut ctx, module, &plan).expect("typed RC materialization");
-    let materialized = print_module(&ctx, module.op());
+    let materialized = module.op().display(&ctx).to_string();
     assert_eq!(
         materialized.matches("tribute_rt.retain").count(),
         2,
@@ -437,7 +430,7 @@ fn nested_continuation_frame_closure_releases_use_exact_header_inclusive_sizes()
   !Base = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
   !_closure = adt.struct<_closure_captures(entries: tribute_rt.convention_table_ref, _0: !FrameRef), {closure_base = !Base, layout = "closure_captures"}>
   func.func @capture(%frame: !FrameRef) -> core.nil {
-    %code = arith.const {value = 0} : core.i32
+    %code = arith.constant 0 : core.i32
     %closure = adt.struct_new %code, %frame {type = !_closure} : !_closure
     func.return
   }
@@ -445,7 +438,7 @@ fn nested_continuation_frame_closure_releases_use_exact_header_inclusive_sizes()
     );
     let plan = acquiring_plan(&ctx, module).expect("typed ownership plan");
     materialize(&mut ctx, module, &plan).expect("typed RC materialization");
-    let materialized = print_module(&ctx, module.op());
+    let materialized = module.op().display(&ctx).to_string();
     // Frame: i32 payload (4) + header (8). The closure's size depends on its
     // native capture layout, so its header RTTI resolves it at release.
     assert!(materialized.contains("alloc_size = 12"), "{materialized}");
@@ -467,9 +460,9 @@ fn native_evidence_hands_the_dispatcher_to_the_runtime_as_a_managed_value() {
     func.return %ev
   }
   func.func @install(%evidence: !Evidence, %prompt: core.i32) -> !Evidence {
-    %code = arith.const {value = 0} : core.i32
+    %code = arith.constant 0 : core.i32
     %closure = adt.struct_new %code {type = !_closure} : !_closure
-    %extended = effect.extend %evidence, %prompt, %closure, %evidence {ability = @State} : !Evidence
+    %extended = effect.extend @State %evidence, %prompt, %closure, %evidence : !Evidence
     func.return %extended
   }
 }"#,
@@ -486,7 +479,7 @@ fn native_evidence_hands_the_dispatcher_to_the_runtime_as_a_managed_value() {
         .unwrap();
     crate::evidence_lowering::lower_evidence_func(&mut ctx, install, &runtime).unwrap();
 
-    let lowered = print_module(&ctx, module.op());
+    let lowered = module.op().display(&ctx).to_string();
     assert!(!lowered.contains("tribute_rt.into_raw"), "{lowered}");
     let plan = production_plan(&ctx, module).expect("typed ownership plan");
     let install = plan.function(&SymbolPath::new(["install"])).unwrap();
@@ -504,11 +497,11 @@ fn internal_closure_raw_pointer_handoff_outside_native_evidence_fails_closed() {
     func.unreachable
   }
   func.func @install() -> core.nil {
-    %code = arith.const {value = 0} : core.i32
+    %code = arith.constant 0 : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
     %closure = adt.struct_new %code {type = !_closure} : !_closure
-    %raw = core.unrealized_conversion_cast %closure : core.ptr
-    %result = func.call %raw {callee = @escape} : core.nil
+    %raw = core.unrealized_conversion_cast %closure : !_closure to core.ptr
+    %result = func.call @escape(%raw) : (core.ptr) -> core.nil
     func.return
   }
 }"#,
@@ -522,7 +515,7 @@ fn into_raw_transfers_one_exact_closure_unit_without_materializing_rc() {
         r#"core.module @test {
   !_closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @install() -> core.nil {
-    %code = arith.const {value = 0} : core.i32
+    %code = arith.constant 0 : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
     %closure = adt.struct_new %code {type = !_closure} : !_closure
     %raw = tribute_rt.into_raw %closure : core.ptr
@@ -545,7 +538,7 @@ fn into_raw_transfers_one_exact_closure_unit_without_materializing_rc() {
     );
 
     materialize(&mut ctx, module, &plan).expect("typed RC materialization");
-    let materialized = print_module(&ctx, module.op());
+    let materialized = module.op().display(&ctx).to_string();
     assert!(
         materialized.contains("tribute_rt.into_raw"),
         "{materialized}"
@@ -557,7 +550,7 @@ fn into_raw_fixture(transfers: &str) -> String {
         r#"core.module @test {
   !_closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @transfers() -> core.nil {
-    %code = arith.const {value = 0} : core.i32
+    %code = arith.constant 0 : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
     %closure = adt.struct_new %code {type = !_closure} : !_closure
 "#,
@@ -590,7 +583,7 @@ fn nested_field_borrow_keeps_the_outer_owner_alive_through_the_last_use() {
     %erased = adt.ref_cast %loaded {type = tribute_rt.anyref} : tribute_rt.anyref
     %restored = adt.ref_cast %erased {type = !InnerRef} : !InnerRef
     %nested = adt.struct_get %restored {field = 0, type = !Inner} : !ChildRef
-    %value = func.call %nested {callee = @observe} : core.i32
+    %value = func.call @observe(%nested) : (!ChildRef) -> core.i32
     func.return
   }
 }"#,
@@ -659,7 +652,7 @@ fn into_raw_grouped_transfers_acquire_exact_extra_units_before_the_first_transfe
         );
 
         materialize(&mut ctx, module, &plan).expect("typed RC materialization");
-        let materialized = print_module(&ctx, module.op());
+        let materialized = module.op().display(&ctx).to_string();
         let retain = materialized
             .find("tribute_rt.retain")
             .expect("grouped transfers require a retain");
@@ -676,7 +669,7 @@ fn into_raw_group_validation_ignores_preserved_field_borrow_acquire() {
   !_closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
   !Owner = adt.struct<Owner(closure: !_closure)>
   func.func @transfers() -> core.nil {
-    %code = arith.const {value = 0} : core.i32
+    %code = arith.constant 0 : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
     %stored = adt.struct_new %code {type = !_closure} : !_closure
     %owner = adt.struct_new %stored {type = !Owner} : !Owner
@@ -723,7 +716,7 @@ fn into_raw_rejects_non_transfer_and_cross_block_uses_before_mutation() {
         r#"core.module @test {
   !_closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @later_use() -> !_closure {
-    %code = arith.const {value = 0} : core.i32
+    %code = arith.constant 0 : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
     %closure = adt.struct_new %code {type = !_closure} : !_closure
     %raw = tribute_rt.into_raw %closure : core.ptr
@@ -737,7 +730,7 @@ fn into_raw_rejects_non_transfer_and_cross_block_uses_before_mutation() {
   !_closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @cross_block() -> core.nil {
     ^entry:
-      %code = arith.const {value = 0} : core.i32
+      %code = arith.constant 0 : core.i32
       %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
       %closure = adt.struct_new %code {type = !_closure} : !_closure
       %first = tribute_rt.into_raw %closure : core.ptr
@@ -798,7 +791,7 @@ fn materialization_releases_the_exact_replaced_field_and_fails_before_mutation()
 }"#,
     );
     materialize(&mut ctx, module, &plan).expect("typed RC materialization");
-    let materialized = print_module(&ctx, module.op());
+    let materialized = module.op().display(&ctx).to_string();
     let retain = materialized.rfind("tribute_rt.retain").unwrap();
     let get = materialized.find("adt.struct_get").unwrap();
     let release = materialized.find("tribute_rt.release %").unwrap();
@@ -886,7 +879,7 @@ const LAST_USE_MOVES: &str = r#"core.module @test {
   }
   func.func @store_then_call(%child: !ChildRef) -> !BoxRef {
     %box = adt.struct_new %child {type = !Box} : !BoxRef
-    func.call %child {callee = @sink}
+    func.call @sink(%child) : (!ChildRef) -> ()
     func.return %box
   }
   func.func @store_owner_then_read(%child: !ChildRef) -> core.i32 {
@@ -897,7 +890,7 @@ const LAST_USE_MOVES: &str = r#"core.module @test {
     func.return %value
   }
   func.func @consumed_and_kept(%child: !ChildRef) -> core.nil {
-    func.call %child, %child {callee = @sink_and_keep}
+    func.call @sink_and_keep(%child, %child) : (!ChildRef, !ChildRef) -> ()
     func.return
   }
   func.func @self_store(%node: !NodeRef) -> core.nil {
@@ -909,7 +902,7 @@ const LAST_USE_MOVES: &str = r#"core.module @test {
       %box = adt.struct_new %child {type = !Box} : !BoxRef
       cf.cond_br %condition [^use, ^skip]
     ^use:
-      func.call %child {callee = @sink}
+      func.call @sink(%child) : (!ChildRef) -> ()
       func.return %box
     ^skip:
       func.return %box
@@ -1101,7 +1094,7 @@ const FIELD_MOVES: &str = r#"core.module @test {
   func.func @nested(%outer: !OuterRef {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
     %inner = adt.struct_get %outer {field = 0, type = !Outer} : !InnerRef
     %env = adt.struct_get %inner {field = 0, type = !Inner} : !EnvRef
-    func.tail_call %env {callee = @sink}
+    func.tail_call @sink(%env) : (!EnvRef) -> ()
   }
   func.func @store_one(%pair: !PairRef {tribute.ownership = "consumed"}) -> !WrapperRef {
     %left = adt.struct_get %pair {field = 0, type = !Pair} : !EnvRef
@@ -1178,7 +1171,7 @@ fn a_dying_owner_moves_its_field_units_through_nested_projections() {
     assert_eq!(count(store_one, ActionKind::StoreAcquire), 0);
 
     materialize(&mut ctx, module, &plan).expect("typed RC materialization");
-    let materialized = print_module(&ctx, module.op());
+    let materialized = module.op().display(&ctx).to_string();
     assert!(
         materialized.contains("release_offsets = [8]"),
         "{materialized}"
@@ -1241,7 +1234,7 @@ fn owners_released_after_the_same_operation_move_their_own_fields() {
   func.func @both(%first: !PairRef {tribute.ownership = "consumed"}, %second: !PairRef {tribute.ownership = "consumed"}) -> !PairRef {
     %left = adt.struct_get %first {field = 0, type = !Pair} : !EnvRef
     %right = adt.struct_get %second {field = 1, type = !Pair} : !EnvRef
-    func.call %first, %second {callee = @peek}
+    func.call @peek(%first, %second) : (!PairRef, !PairRef) -> ()
     %pair = adt.struct_new %left, %right {type = !Pair} : !PairRef
     func.return %pair
   }
@@ -1268,7 +1261,7 @@ fn owners_released_after_the_same_operation_move_their_own_fields() {
 
     // Each moving release takes only the field its owner was read from.
     materialize(&mut ctx, module, &plan).expect("typed RC materialization");
-    let materialized = print_module(&ctx, module.op());
+    let materialized = module.op().display(&ctx).to_string();
     assert!(
         materialized
             .contains("tribute_rt.release_moving %0, %2 {alloc_size = 24, release_offsets = [8]}"),
@@ -1501,11 +1494,11 @@ fn borrowed_projection_proper_tail_transfer_acquires_before_the_owner_dies() {
   }
   func.func @owner_dies(%owner: !BoxRef {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
     %child = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
-    func.tail_call %child {callee = @sink}
+    func.tail_call @sink(%child) : (!ChildRef) -> ()
   }
   func.func @owner_moves(%owner: !BoxRef {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
     %child = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
-    func.tail_call %owner, %child {callee = @sink_both}
+    func.tail_call @sink_both(%owner, %child) : (!BoxRef, !ChildRef) -> ()
   }
 }"#,
     );
@@ -1580,7 +1573,7 @@ fn borrowed_projection_ordinary_call_to_a_consumed_parameter_acquires_its_unit()
   func.func @load(%child: !ChildRef) -> core.nil {
     %owner = adt.struct_new %child {type = !Box} : !BoxRef
     %loaded = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
-    func.call %loaded {callee = @sink}
+    func.call @sink(%loaded) : (!ChildRef) -> ()
     func.return
   }
 }"#,
@@ -1723,7 +1716,7 @@ fn enum_release_leaves_the_size_to_the_descriptor() {
 }"#,
     );
     materialize(&mut ctx, module, &plan).expect("typed RC materialization");
-    let materialized = print_module(&ctx, module.op());
+    let materialized = module.op().display(&ctx).to_string();
 
     // Each variant has its own allocation size, so the release of an enum
     // value carries the dynamic-size signal instead of one static size.
@@ -1777,23 +1770,6 @@ fn compatible_cast_and_enum_projection_preserve_borrowed_ownership() {
 }
 
 #[test]
-fn malformed_projection_arity_fails_before_mutation() {
-    assert_plan_error_unchanged(
-        r#"core.module @test {
-  !Child = adt.struct<Child(value: core.i32)>
-  !ChildRef = adt.typeref<{name = "Child"}>
-  !Box = adt.struct<Box(child: !ChildRef)>
-  !BoxRef = adt.typeref<{name = "Box"}>
-  func.func @load(%owner: !BoxRef) -> !ChildRef {
-    %child, %extra = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef, !ChildRef
-    func.return %child
-  }
-}"#,
-        "ADT projection must have exactly one result",
-    );
-}
-
-#[test]
 fn mismatched_projection_managed_types_fail_before_mutation() {
     for (source_ty, result_ty) in [("!BoxRef", "!BoxRef"), ("!ChildRef", "!ChildRef")] {
         assert_plan_error_unchanged(
@@ -1826,7 +1802,7 @@ fn early_native_terminators_and_successors_fail_before_mutation() {
         r#"core.module @test {
   func.func @f() -> core.nil {
     ^entry:
-      test.jump [^exit]
+      "test.jump"()[^exit]
       func.return
     ^exit:
       func.return
@@ -1847,7 +1823,7 @@ fn branch_interfaces_fail_closed_before_mutation() {
             r#"core.module @test {
   func.func @f() -> core.nil {
     ^entry:
-      test.incomplete_branch [^exit]
+      "test.incomplete_branch"()[^exit]
     ^exit:
       func.return
   }
@@ -1858,7 +1834,7 @@ fn branch_interfaces_fail_closed_before_mutation() {
             r#"core.module @test {
   func.func @f() -> core.nil {
     ^entry:
-      test.unregistered_branch [^exit]
+      "test.unregistered_branch"()[^exit]
     ^exit:
       func.return
   }
@@ -1869,7 +1845,7 @@ fn branch_interfaces_fail_closed_before_mutation() {
             r#"core.module @test {
   func.func @f() -> core.nil {
     ^entry:
-      test.missing_edge_branch [^exit]
+      "test.missing_edge_branch"()[^exit]
     ^exit:
       func.return
   }
@@ -1880,7 +1856,7 @@ fn branch_interfaces_fail_closed_before_mutation() {
             r#"core.module @test {
   func.func @f() -> core.nil {
     ^entry:
-      test.reversed_branch [^left, ^right]
+      "test.reversed_branch"()[^left, ^right]
     ^left:
       func.return
     ^right:
@@ -1895,7 +1871,7 @@ fn branch_interfaces_fail_closed_before_mutation() {
   !Layout = adt.struct<R(x: core.i32)>
   func.func @f(%value: !R) -> core.nil {
     ^entry:
-      test.multi_forwarding_branch %value [^left, ^right]
+      "test.multi_forwarding_branch"(%value)[^left, ^right]
     ^left(%left: !R):
       func.return
     ^right(%right: !R):
@@ -1915,7 +1891,7 @@ fn physical_empty_results_reject_values_before_mutation() {
         let ir = format!(
             r#"core.module @test {{
   func.func @f() -> {result} {{
-    %value = arith.const {{value = 1}} : core.i32
+    %value = arith.constant 1 : core.i32
     func.return %value
   }}
 }}"#
@@ -1945,7 +1921,7 @@ fn cross_block_borrowed_load_keeps_owner_alive_without_releasing_the_load() {
       %loaded = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
       cf.br [^next]
     ^next:
-      %seen = func.call %loaded {callee = @observe} : core.i32
+      %seen = func.call @observe(%loaded) : (!ChildRef) -> core.i32
       func.return
   }
 }"#,
@@ -1990,7 +1966,7 @@ fn cfg_copy_and_tail_dying_value_actions_are_complete() {
       func.unreachable
   }
   func.func @tail(%sent: !R {tribute.ownership = "consumed"}, %dying: !R {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
-    func.tail_call %sent {callee = @sink}
+    func.tail_call @sink(%sent) : (!R) -> ()
   }
   func.func @sink(%value: !R {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
     func.unreachable
@@ -2029,7 +2005,7 @@ fn cfg_copy_and_tail_dying_value_actions_are_complete() {
     assert!(after_tail.validate_against(&ctx, module).is_err());
 
     materialize(&mut ctx, module, &plan).expect("branch ownership plan materializes");
-    let materialized = print_module(&ctx, module.op());
+    let materialized = module.op().display(&ctx).to_string();
     assert_eq!(materialized.matches("tribute_rt.retain").count(), 1);
     assert_eq!(materialized.matches("tribute_rt.release").count(), 4);
 }
@@ -2054,7 +2030,7 @@ fn branch_transfer_of_a_value_live_afterwards_acquires_the_destination_unit() {
       %value = adt.struct_new %child {type = !Box} : !BoxRef
       cf.br %value [^next]
     ^next(%moved: !BoxRef):
-      func.call %value {callee = @sink}
+      func.call @sink(%value) : (!BoxRef) -> ()
       func.return
   }
   func.func @projection_used_after(%child: !ChildRef) -> core.nil {
@@ -2063,7 +2039,7 @@ fn branch_transfer_of_a_value_live_afterwards_acquires_the_destination_unit() {
       %loaded = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
       cf.br %owner [^next]
     ^next(%moved: !BoxRef):
-      %seen = func.call %loaded {callee = @observe} : core.i32
+      %seen = func.call @observe(%loaded) : (!ChildRef) -> core.i32
       func.return
   }
   func.func @moved(%child: !ChildRef) -> core.nil {
@@ -2161,7 +2137,7 @@ const EDGE_DEATHS: &str = r#"core.module @test {
       %value = adt.struct_new %child {type = !Box} : !BoxRef
       cf.cond_br %condition [^use, ^skip]
     ^use:
-      func.call %value {callee = @sink}
+      func.call @sink(%value) : (!BoxRef) -> ()
       cf.br [^join]
     ^skip:
       cf.br [^join]
@@ -2175,7 +2151,7 @@ const EDGE_DEATHS: &str = r#"core.module @test {
     ^inside:
       cf.cond_br %inner [^use, ^inner_skip]
     ^use:
-      func.call %value {callee = @sink}
+      func.call @sink(%value) : (!BoxRef) -> ()
       cf.br [^join]
     ^inner_skip:
       cf.br [^join]
@@ -2189,7 +2165,7 @@ const EDGE_DEATHS: &str = r#"core.module @test {
       %value = adt.struct_new %child {type = !Box} : !BoxRef
       cf.br [^loop]
     ^loop:
-      func.call %value {callee = @sink}
+      func.call @sink(%value) : (!BoxRef) -> ()
       cf.cond_br %condition [^loop, ^exit]
     ^exit:
       func.return
@@ -2200,7 +2176,7 @@ const EDGE_DEATHS: &str = r#"core.module @test {
       %loaded = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
       cf.cond_br %condition [^use, ^skip]
     ^use:
-      %seen = func.call %loaded {callee = @observe} : core.i32
+      %seen = func.call @observe(%loaded) : (!ChildRef) -> core.i32
       cf.br [^join]
     ^skip:
       cf.br [^join]
@@ -2353,7 +2329,7 @@ fn value_dying_on_an_edge_into_a_shared_successor_is_rejected() {
     ^inside:
       cf.cond_br %inner [^join, ^use]
     ^use:
-      func.call %value {callee = @sink}
+      func.call @sink(%value) : (!BoxRef) -> ()
       cf.br [^join]
     ^other:
       cf.br [^join]
@@ -2387,7 +2363,7 @@ fn value_dying_on_a_back_edge_to_the_entry_block_is_rejected() {
     ^back:
       cf.cond_br %again [^entry, ^use]
     ^use:
-      func.call %value {callee = @sink}
+      func.call @sink(%value) : (!BoxRef) -> ()
       func.return
   }
 }"#,
@@ -2417,7 +2393,10 @@ fn cfg_accepts_conditional_branch_with_duplicate_successors() {
 
     materialize(&mut ctx, module, &plan).expect("duplicate-successor plan materializes");
     assert_eq!(
-        print_module(&ctx, module.op())
+        module
+            .op()
+            .display(&ctx)
+            .to_string()
             .matches("cf.cond_br")
             .count(),
         1
@@ -2511,7 +2490,7 @@ fn only_explicit_transfers_cross_between_raw_pointers_and_managed_references() {
     assert_plan_error_unchanged(
         r#"core.module @test {
   func.func @receive(%raw: core.ptr) -> core.bytes {
-    %bytes = core.unrealized_conversion_cast %raw : core.bytes
+    %bytes = core.unrealized_conversion_cast %raw : core.ptr to core.bytes
     func.return %bytes
   }
 }"#,
@@ -2520,7 +2499,7 @@ fn only_explicit_transfers_cross_between_raw_pointers_and_managed_references() {
     assert_plan_error_unchanged(
         r#"core.module @test {
   func.func @view(%bytes: core.bytes) -> core.ptr {
-    %raw = core.unrealized_conversion_cast %bytes : core.ptr
+    %raw = core.unrealized_conversion_cast %bytes : core.bytes to core.ptr
     func.return %raw
   }
 }"#,
@@ -2567,8 +2546,8 @@ fn closure_release_uses_its_compiler_generated_allocation_layout() {
     func.return
   }
   func.func @main() -> core.nil {
-    %closure = closure.new {entries = [@target, @trap_evidence_direct, @trap_cps]} : !Closure
-    func.call %closure {callee = @consume} : core.nil
+    %closure = closure.new [@target, @trap_evidence_direct, @trap_cps] : !Closure
+    func.call @consume(%closure) : (!Closure) -> core.nil
     func.return
   }
 }"#,
@@ -2578,7 +2557,7 @@ fn closure_release_uses_its_compiler_generated_allocation_layout() {
 
     let plan = production_plan(&ctx, module).expect("typed ownership plan");
     materialize(&mut ctx, module, &plan).expect("typed RC materialization");
-    let materialized = print_module(&ctx, module.op());
+    let materialized = module.op().display(&ctx).to_string();
 
     // A closure value's size depends on its capture layout, so its header
     // RTTI resolves it at release.
@@ -2599,13 +2578,13 @@ fn direct_indirect_return_and_tail_contracts_are_typed() {
     func.return %seen
   }
   func.func @caller(%value: !R, %callee: func.func_sig<(!R) -> !R>) -> !R {
-    %seen = func.call %value {callee = @observe} : core.i32
-    %direct = func.call %value {callee = @ordinary} : !R
-    %indirect = func.call_indirect %callee, %direct {signature = func.func_sig<(!R) -> !R>} : !R
+    %seen = func.call @observe(%value) : (!R) -> core.i32
+    %direct = func.call @ordinary(%value) : (!R) -> !R
+    %indirect = func.call_indirect %callee(%direct) : (!R) -> !R
     func.return %indirect
   }
   func.func @tail(%value: !R {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
-    func.tail_call %value {callee = @sink}
+    func.tail_call @sink(%value) : (!R) -> ()
   }
   func.func @sink(%value: !R {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
     func.unreachable
@@ -2638,12 +2617,12 @@ fn retained_parameter_calls_balance_retains_and_releases() {
     func.return %value
   }
   func.func @direct(%value: !R) -> core.i32 {
-    %kept = func.call %value {callee = @keep} : !R
+    %kept = func.call @keep(%value) : (!R) -> !R
     %seen = adt.struct_get %kept {field = 0, type = !Layout} : core.i32
     func.return %seen
   }
   func.func @indirect(%value: !R, %callee: func.func_sig<(!R) -> !R>) -> core.i32 {
-    %kept = func.call_indirect %callee, %value {signature = func.func_sig<(!R) -> !R>} : !R
+    %kept = func.call_indirect %callee(%value) : (!R) -> !R
     %seen = adt.struct_get %kept {field = 0, type = !Layout} : core.i32
     func.return %seen
   }
@@ -2663,7 +2642,7 @@ fn retained_parameter_calls_balance_retains_and_releases() {
         );
     }
     materialize(&mut ctx, module, &plan).expect("typed RC materialization");
-    let materialized = print_module(&ctx, module.op());
+    let materialized = module.op().display(&ctx).to_string();
     // Each function retains only its own entry parameter. Each caller
     // releases that unit and the one the call returns.
     assert_eq!(
@@ -2689,7 +2668,7 @@ fn signature_consumed_contracts_drive_entries_and_call_sites() {
     func.unreachable
   }
   func.func @direct(%value: !R) -> core.i32 {
-    func.call %value, %value {callee = @pair}
+    func.call @pair(%value, %value) : (!R, !R) -> ()
     %seen = adt.struct_get %value {field = 0, type = !Layout} : core.i32
     func.return %seen
   }
@@ -2697,15 +2676,15 @@ fn signature_consumed_contracts_drive_entries_and_call_sites() {
     func.return
   }
   func.func @indirect(%value: !R, %callee: !Consuming, %count: core.i32) -> core.i32 {
-    func.call_indirect %callee, %value, %count {signature = !Consuming}
+    func.call_indirect %callee(%value, %count) : (!R {tribute.ownership = "consumed"}, core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}
     %seen = adt.struct_get %value {field = 0, type = !Layout} : core.i32
     func.return %seen
   }
   func.func @tail(%value: !R {tribute.ownership = "consumed"}, %callee: !Consuming {tribute.ownership = "consumed"}, %count: core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
-    func.tail_call_indirect %callee, %value, %count {signature = !Consuming}
+    func.tail_call_indirect %callee(%value, %count) : (!R {tribute.ownership = "consumed"}, core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}
   }
   func.func @duplicate(%value: !R {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
-    func.tail_call %value, %value {callee = @pair_tail}
+    func.tail_call @pair_tail(%value, %value) : (!R, !R) -> ()
   }
   func.func @pair_tail(%left: !R {tribute.ownership = "consumed"}, %right: !R {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
     func.unreachable
@@ -2756,7 +2735,7 @@ fn proper_tail_edges_without_a_consumed_contract_are_rejected() {
   !R = adt.typeref<{name = "R"}>
   !Layout = adt.struct<R(x: core.i32)>
   func.func @tail(%value: !R {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
-    func.tail_call %value {callee = @sink}
+    func.tail_call @sink(%value) : (!R) -> ()
   }
   func.func @sink(%value: !R) -> (), {call_conv = "tail"} {
     func.unreachable
@@ -2770,7 +2749,7 @@ fn proper_tail_edges_without_a_consumed_contract_are_rejected() {
   !Layout = adt.struct<R(x: core.i32)>
   !Unmarked = func.func_sig<(!R) -> (), {call_conv = "tail"}>
   func.func @tail(%value: !R {tribute.ownership = "consumed"}, %callee: !Unmarked {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
-    func.tail_call_indirect %callee, %value {signature = !Unmarked}
+    func.tail_call_indirect %callee(%value) : (!R) -> (), {call_conv = "tail"}
   }
 }"#,
         "proper-tail managed parameter is not consumed",
@@ -2799,7 +2778,7 @@ fn bodyless_c_ffi_borrows_managed_arguments_and_transfers_managed_results() {
   !Layout = adt.struct<R(value: core.i32)>
   func.func @foreign(%value: !R) -> !R attributes {abi = "C"}
   func.func @caller(%value: !R) -> !R {
-    %result = func.call %value {callee = @foreign} : !R
+    %result = func.call @foreign(%value) : (!R) -> !R
     func.return %result
   }
 }"#,
@@ -2820,8 +2799,12 @@ fn stale_identity_unsupported_regions_and_malformed_calls_fail_unchanged() {
         r#"core.module @test {
   !R = adt.typeref<{name = "R"}>
   !Layout = adt.struct<R(x: core.i32)>
-  func.func @f(%value: !R) -> !R {
-    %x = scf.if %value : !R { func.return %value }
+  func.func @f(%value: !R, %cond: core.i1) -> !R {
+    %x = scf.if %cond -> (!R) {
+      scf.yield %value
+    } else {
+      scf.yield %value
+    }
     func.return %x
   }
 }"#,
@@ -2829,7 +2812,7 @@ fn stale_identity_unsupported_regions_and_malformed_calls_fail_unchanged() {
   !R = adt.typeref<{name = "R"}>
   !Layout = adt.struct<R(x: core.i32)>
   func.func @f(%value: !R, %callee: func.func_sig<(!R) -> !R>) -> !R {
-    %x = func.call_indirect %callee {signature = func.func_sig<(!R) -> !R>} : !R
+    %x = func.call_indirect %callee() : (!R) -> !R
     func.return %x
   }
 }"#,
@@ -2866,7 +2849,7 @@ fn stale_identity_unsupported_regions_and_malformed_calls_fail_unchanged() {
   !R = adt.typeref<{name = "R"}>
   !Layout = adt.struct<R(x: core.i32)>
   func.func @f(%value: !R) -> !R {
-    %result = func.call %value {callee = @missing} : !R
+    %result = func.call @missing(%value) : (!R) -> !R
     func.return %result
   }
 }"#,
@@ -2879,14 +2862,6 @@ fn stale_identity_unsupported_regions_and_malformed_calls_fail_unchanged() {
   func.func @f(%value: !BRef) -> core.nil {
     %env = adt.struct_new %value {type = !Env} : !Env
     func.return
-  }
-}"#,
-        r#"core.module @test {
-  !R = adt.typeref<{name = "R"}>
-  !Layout = adt.struct<R(x: core.i32)>
-  func.func @f(%value: !R, %callee: func.func_sig<(!R) -> !R>) -> !R {
-    %result = func.call_indirect %callee, %value : !R
-    func.return %result
   }
 }"#,
         r#"core.module @test {
@@ -3072,7 +3047,7 @@ fn stale_plan_and_ambiguous_rtti_rewrites_fail_without_mutation() {
   func.func @other(%value: !R) -> !R { func.return %value }
 }"#,
     );
-    let before = print_module(&ctx, module.op());
+    let before = module.op().display(&ctx).to_string();
     plan.validate_against(&ctx, module)
         .expect("freshly built plan must validate");
     let [first, _second] = plan.rtti_types() else {
@@ -3118,7 +3093,7 @@ fn stale_plan_and_ambiguous_rtti_rewrites_fail_without_mutation() {
     let mut stale_value = plan.clone();
     stale_value.functions[0].actions[0].value = ctx.block_args(other_entry)[0];
     assert!(stale_value.validate_against(&ctx, module).is_err());
-    assert_eq!(print_module(&ctx, module.op()), before);
+    assert_eq!(module.op().display(&ctx).to_string(), before);
 }
 
 #[test]
@@ -3132,22 +3107,22 @@ fn plan_revalidation_requires_the_exact_reachable_function_set() {
 
     let mut incomplete = plan.clone();
     incomplete.functions.pop();
-    let before = print_module(&ctx, module.op());
+    let before = module.op().display(&ctx).to_string();
     let error = incomplete
         .validate_against(&ctx, module)
         .expect_err("a plan may not omit a reachable function");
     assert!(error.to_string().contains("reachable function identities"));
-    assert_eq!(print_module(&ctx, module.op()), before);
+    assert_eq!(module.op().display(&ctx).to_string(), before);
 
     let detached = plan.functions[1].operation;
     let parent = ctx.op(detached).parent_block.expect("module block");
     ctx.remove_op_from_block(parent, detached);
-    let before = print_module(&ctx, module.op());
+    let before = module.op().display(&ctx).to_string();
     let error = plan
         .validate_against(&ctx, module)
         .expect_err("a plan may not retain a detached function");
     assert!(error.to_string().contains("reachable function identities"));
-    assert_eq!(print_module(&ctx, module.op()), before);
+    assert_eq!(module.op().display(&ctx).to_string(), before);
 }
 
 #[test]
@@ -3248,8 +3223,8 @@ fn nested_same_named_functions_are_distinct_qualified_definitions() {
     }
   }
   func.func @main(%value: core.i32) -> core.i32 {
-    %left = func.call %value {callee = @left::@helper} : core.i32
-    %right = func.call %left {callee = @right::@helper} : core.i32
+    %left = func.call @left::@helper(%value) : (core.i32) -> core.i32
+    %right = func.call @right::@helper(%left) : (core.i32) -> core.i32
     func.return %right
   }
 }"#,
@@ -3270,7 +3245,7 @@ fn nested_callers_use_the_contract_of_the_callee_their_module_names() {
       func.return %value
     }
     func.func @caller(%value: adt.typeref<{name = "R"}>) -> adt.typeref<{name = "R"}> {
-      %kept = func.call %value {callee = @observe} : adt.typeref<{name = "R"}>
+      %kept = func.call @observe(%value) : (adt.typeref<{name = "R"}>) -> adt.typeref<{name ="R"}>
       func.return %kept
     }
   }
@@ -3299,13 +3274,13 @@ const ARRAYS: &str = r#"core.module @test {
     func.return %pair
   }
   func.func @first(%nodes: !Nodes) -> core.i32 {
-    %at = arith.const {value = 0} : core.index
+    %at = arith.constant 0 : core.index
     %node = adt.array_get %nodes, %at : !NodeRef
     %value = adt.struct_get %node {field = 0, type = !Node} : core.i32
     func.return %value
   }
   func.func @insert(%nodes: !Nodes, %at: core.index, %node: !NodeRef) -> !Nodes {
-    %inserted = adt.array_splice %nodes, %at, %at, %node {type = !Nodes} : !Nodes
+    %inserted = adt.array_splice %nodes[%at, %at](%node) attributes {type = !Nodes} : !Nodes
     func.return %inserted
   }
   func.func @fill(%node: !NodeRef, %count: core.index) -> !Nodes {
@@ -3378,7 +3353,7 @@ fn a_written_array_type_is_replaceable() {
   !NodeRef = adt.typeref<{name = "Node"}>
   !Nodes = adt.array<!NodeRef>
   func.func @first(%nodes: !Nodes) -> core.i32 {
-    %at = arith.const {value = 0} : core.index
+    %at = arith.constant 0 : core.index
     %node = adt.array_get %nodes, %at : !NodeRef
     %value = adt.struct_get %node {field = 0, type = !Node} : core.i32
     func.return %value
@@ -3400,7 +3375,7 @@ fn a_written_array_type_is_replaceable() {
     assert_eq!(count(replace, ActionKind::ReleaseReplacedField), 1);
 
     materialize(&mut ctx, module, &plan).expect("typed RC materialization");
-    let materialized = print_module(&ctx, module.op());
+    let materialized = module.op().display(&ctx).to_string();
     let set = materialized.find("adt.array_set").unwrap();
     let replaced = materialized[..set].rfind("adt.array_get").unwrap();
     let release = materialized[replaced..set]
@@ -3434,7 +3409,7 @@ fn malformed_array_operations_are_rejected() {
         )
     };
     assert_plan_error_unchanged(
-        &module("%copy = adt.array_splice %others, %at, %at {type = !Nodes} : !Nodes"),
+        &module("%copy = adt.array_splice %others[%at, %at]() attributes {type = !Nodes} : !Nodes"),
         "array_splice source differs from its array type",
     );
     assert_plan_error_unchanged(

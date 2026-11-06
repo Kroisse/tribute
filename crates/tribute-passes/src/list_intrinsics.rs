@@ -170,7 +170,6 @@ impl OpRewritePattern for PrependDeclarationPattern<'_> {
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::printer::print_module;
 
     #[test]
     fn lowers_specialized_prepend_and_removes_declaration() {
@@ -186,7 +185,7 @@ mod tests {
                 }
                 func.func @caller(%0: tribute_rt.anyref, %1: tribute_rt.anyref) -> tribute_rt.anyref {
                 ^bb0:
-                    %2 = func.call %0, %1 {callee = @"std::collections::List::__tribute_list_prepend_intrinsic$String"} : tribute_rt.anyref
+                    %2 = func.call @"std::collections::List::__tribute_list_prepend_intrinsic$String"(%0, %1) : (tribute_rt.anyref, tribute_rt.anyref) -> tribute_rt.anyref
                     func.return %2
                 }
             }
@@ -198,7 +197,7 @@ mod tests {
             .run(&mut ctx, core, &mut Default::default())
             .unwrap();
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(output.contains("list.prepend"), "{output}");
         assert!(
             !output.contains("std::collections::List::__tribute_list_prepend_intrinsic"),
@@ -219,7 +218,7 @@ mod tests {
                 }
                 func.func @caller(%0: tribute_rt.int, %1: tribute_rt.int) -> tribute_rt.int {
                 ^bb0:
-                    %2 = func.call %0, %1 {callee = @"List::prepend"} : tribute_rt.int
+                    %2 = func.call @"List::prepend"(%0, %1) : (tribute_rt.int, tribute_rt.int) -> tribute_rt.int
                     func.return %2
                 }
             }
@@ -231,7 +230,7 @@ mod tests {
             .run(&mut ctx, core, &mut Default::default())
             .unwrap();
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(!output.contains("list.prepend"), "{output}");
         assert!(output.contains("List::prepend"), "{output}");
     }
@@ -250,7 +249,7 @@ mod tests {
                 }
                 func.func @caller(%0: tribute_rt.int, %1: tribute_rt.int) -> tribute_rt.int {
                 ^bb0:
-                    %2 = func.call %0, %1 {callee = @"std::collections::List::__tribute_list_prepend_intrinsic"} : tribute_rt.int
+                    %2 = func.call @"std::collections::List::__tribute_list_prepend_intrinsic"(%0, %1) : (tribute_rt.int, tribute_rt.int) -> tribute_rt.int
                     func.return %2
                 }
             }
@@ -262,7 +261,7 @@ mod tests {
             .run(&mut ctx, core, &mut Default::default())
             .unwrap();
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(!output.contains("list.prepend"), "{output}");
         assert!(
             output.contains("std::collections::List::__tribute_list_prepend_intrinsic"),
@@ -288,7 +287,7 @@ mod tests {
                 }
                 func.func @caller(%0: tribute_rt.anyref, %1: tribute_rt.anyref) -> tribute_rt.anyref {
                 ^bb0:
-                    %2 = func.call %0, %1 {callee = @"std::collections::List::__tribute_list_prepend_intrinsic$String"} : tribute_rt.anyref
+                    %2 = func.call @"std::collections::List::__tribute_list_prepend_intrinsic$String"(%0, %1) : (tribute_rt.anyref, tribute_rt.anyref) -> tribute_rt.anyref
                     func.return %2
                 }
             }
@@ -300,7 +299,7 @@ mod tests {
             .run(&mut ctx, core, &mut Default::default())
             .unwrap();
 
-        let output = print_module(&ctx, module.op());
+        let output = module.op().display(&ctx).to_string();
         assert!(!output.contains("list.prepend"), "{output}");
         assert!(output.contains("func.call"), "{output}");
         assert!(

@@ -65,11 +65,11 @@ pub(super) fn prescan_logical_nominal_layouts<'db>(
                                 .expect("missing specialized enum variant schema");
                             let result = match scheme.body(ctx.db).kind(ctx.db) {
                                 TypeKind::Func { result, .. } => *result,
-                                _ => scheme.body(ctx.db),
+                                _ => *scheme.body(ctx.db),
                             };
                             assert!(matches!(result.kind(ctx.db), TypeKind::Named { id, args, .. }
                                 if args.is_empty() && *id.path(ctx.db) == qualified
-                                    && id.origin(ctx.db) == crate::ast::TypeOrigin::Source { disambiguator: enumeration.disambiguator }),
+                                    && *id.origin(ctx.db) == crate::ast::TypeOrigin::Source { disambiguator: enumeration.disambiguator }),
                                 "specialized enum variant schema has wrong owner");
                             constructor_schema_fields(ctx, scheme, variant.fields.len())
                         } else {

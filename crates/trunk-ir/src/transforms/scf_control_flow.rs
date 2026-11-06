@@ -46,12 +46,6 @@ impl Analysis for StructuredControlAnalysis {
                     analysis.terminal_regions.insert(region);
                 }
             }
-            if !(scf::If::matches(ir, op)
-                || scf::Loop::matches(ir, op)
-                || scf::Switch::matches(ir, op))
-            {
-                continue;
-            }
             let Some(interface) = DynRegionBranch::get(ir, op) else {
                 continue;
             };
@@ -80,7 +74,7 @@ impl Analysis for StructuredControlAnalysis {
             {
                 analysis.unused_never_controls.insert(op);
             }
-            if scf::Switch::matches(ir, op) && results.is_empty() {
+            if scf::IndexSwitch::matches(ir, op) && results.is_empty() {
                 analysis.terminal_switches.insert(op);
             }
         }
@@ -120,12 +114,10 @@ impl StructuredControlAnalysis {
         let Some(&last) = ctx.block(*block).ops.last() else {
             return false;
         };
-        if scf::If::matches(ctx, last) || scf::Loop::matches(ctx, last) {
+        if DynRegionBranch::is_implemented(ctx, last) {
             self.has_terminal_unused_never_result(last)
                 || (ctx.op_results(last).is_empty()
                     && self.has_only_terminal_region_successors(last))
-        } else if scf::Switch::matches(ctx, last) {
-            self.is_terminal_resultless_switch(last)
         } else {
             DynCallableExit::prove(ctx, last).is_ok()
         }
@@ -143,12 +135,11 @@ mod tests {
 
     const NESTED_CONTROL: &str = r#"core.module @test {
   func.func @first(%cond: core.i1, %tag: core.i32) -> core.nil {
-    %never = scf.if %cond : core.never {
-      scf.switch %tag {
-        scf.case {value = 0} { func.return }
-        scf.default { func.unreachable }
-      }
-    } { func.unreachable }
+    %never = scf.if %cond -> (core.never) {
+      scf.index_switch %tag : (core.i32) -> ()
+      case 0 { func.return }
+      default { func.unreachable }
+    } else { func.unreachable }
   }
   func.func @second() -> core.nil { func.return }
 }"#;
@@ -171,7 +162,7 @@ mod tests {
         let _ = walk_op::<()>(&ctx, first.op_ref(), &mut |op| {
             if scf::If::matches(&ctx, op) {
                 assert!(scoped.has_terminal_unused_never_result(op));
-            } else if scf::Switch::matches(&ctx, op) {
+            } else if scf::IndexSwitch::matches(&ctx, op) {
                 assert!(scoped.is_terminal_resultless_switch(op));
                 assert!(scoped.has_only_terminal_region_successors(op));
             }

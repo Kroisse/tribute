@@ -20,7 +20,7 @@ use trunk_ir::rewrite::Module;
 use trunk_ir::walk::{WalkAction, walk_region};
 
 use crate::convention_classes::{
-    Class, Function, Locals, Reader, class_suffix, func_tables, instantiation, requirements,
+    Class, Function, Reader, class_suffix, func_tables, instantiation, requirements,
     settle_class_variables, split_name,
 };
 
@@ -145,12 +145,10 @@ impl<'a> Instance<'a> {
                 None => vec![Class::CPS; variables.len()],
             }
         };
-        let mut reader = Reader {
-            binders: function.binders.clone(),
+        let mut reader = function.reader(
             requirements,
-            params: variables.iter().copied().zip(claimed).collect(),
-            locals: Locals::default(),
-        };
+            variables.iter().copied().zip(claimed).collect(),
+        );
         if let Some(body) = ctx.op_region(function.op, 0) {
             reader.settle_locals(ctx, body);
         }
@@ -179,20 +177,11 @@ impl<'a> Instance<'a> {
         self.check_body(disagreements);
     }
 
-    /// A definition's own convention reads its row tail only when that tail
-    /// is a class variable, if the row was inferred.
+    /// A definition's own convention is the class of its own row.
     fn check_own_convention(&self, disagreements: &mut Vec<Disagreement>) {
-        let Some(signature) = FuncSig::from_type_ref(self.ctx, self.function.ty) else {
-            return;
-        };
-        let mut row = signature.row(self.ctx);
-        if self.function.inferred
-            && row
-                .tail
-                .is_some_and(|tail| !self.reader.params.contains_key(&tail))
-        {
-            row.tail = None;
-        }
+        let row = self.function.own_row(self.ctx, self.function.op, |tail| {
+            self.reader.params.contains_key(&tail)
+        });
         let expected = self.class(&row, self.function.op).bound();
         let actual = tribute_cps::declared_convention(self.ctx, self.function.op);
         if Some(expected) != actual {
@@ -303,7 +292,7 @@ impl<'a> Instance<'a> {
         let expected = self.conventions(&signature.row(self.ctx), op)[0];
         let weakest = tribute_cps::FuncRef::from_op(self.ctx, op)
             .ok()
-            .and_then(|reference| reference.func_ref(self.ctx).as_simple().cloned())
+            .and_then(|reference| reference.value(self.ctx).as_simple().cloned())
             .and_then(|name| self.tables.get(name.as_str()))
             .and_then(|&table| tribute_cps::table_entries(self.ctx, table))
             .and_then(|entries| entries.first().map(|&(convention, _)| convention));

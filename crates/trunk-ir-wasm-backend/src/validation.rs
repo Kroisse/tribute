@@ -9,6 +9,7 @@ use trunk_ir::IrContext;
 use trunk_ir::Module;
 use trunk_ir::SymbolPath;
 use trunk_ir::dialect::wasm as wasm_dialect;
+use trunk_ir::op_def::OpDef;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::symbol_table::{SymbolTable, qualified_name};
@@ -92,6 +93,21 @@ fn validate_operation(
             op_data.name.display(ctx)
         ));
     }
+    // Operation-specific checks below assume the declared schema.
+    if let Some(def) = OpDef::of(ctx, op) {
+        let violations = def.verify(ctx, op);
+        if !violations.is_empty() {
+            errors.extend(
+                violations
+                    .iter()
+                    .map(|violation| format!("{}: {violation}", op_data.name.display(ctx))),
+            );
+            for region in ctx.op_regions(op) {
+                validate_region(ctx, region, depth + 1, symbols, errors);
+            }
+            return;
+        }
+    }
     if wasm_dialect::CallIndirect::matches(ctx, op)
         && let Err(error) = crate::emit::helpers::exact_call_indirect_signature(ctx, op)
     {
@@ -107,22 +123,11 @@ fn validate_operation(
     }
 }
 
-/// A `wasm.ref_upcast` must satisfy its definition and widen its operand
-/// without a runtime cast.
+/// A `wasm.ref_upcast` must widen its operand without a runtime cast.
 fn validate_ref_upcast(ctx: &IrContext, op: OpRef, errors: &mut Vec<String>) {
     let Ok(upcast) = wasm_dialect::RefUpcast::from_op(ctx, op) else {
         return;
     };
-    // The assignability check below reads the declared operand and result.
-    let violations = <wasm_dialect::RefUpcast as DialectOp>::DEF.verify(ctx, op);
-    if !violations.is_empty() {
-        errors.extend(
-            violations
-                .iter()
-                .map(|violation| format!("wasm.ref_upcast: {violation}")),
-        );
-        return;
-    }
     let operand = ctx.value_ty(upcast.r#ref(ctx));
     let result = upcast.result_ty(ctx);
     if !crate::is_wasm_physical_argument_assignable(ctx, operand, result) {
@@ -278,13 +283,10 @@ fn validate_direct_callable_contracts(
     if !is_direct {
         return;
     }
-    let Some(callee) = ctx.op_attrs(op).get_symbol_ref("callee") else {
-        errors.push(format!(
-            "wasm.{} requires a symbol callee attribute",
-            ctx.op(op).name.display(ctx)
-        ));
-        return;
-    };
+    let callee = ctx
+        .op_attrs(op)
+        .get_symbol_ref("callee")
+        .expect("schema-verified direct call has a symbol callee");
     let Some(resolved) = resolve_wasm_callee(ctx, symbols, op, callee) else {
         return;
     };
@@ -355,25 +357,23 @@ fn validate_return_call_indirect(ctx: &IrContext, op: OpRef, errors: &mut Vec<St
     if !wasm_dialect::ReturnCallIndirect::matches(ctx, op) {
         return;
     }
-    if let Err(error) = crate::emit::helpers::exact_return_call_indirect_signature(ctx, op) {
-        errors.push(error.to_string());
-        return;
-    }
+    let signature = match crate::emit::helpers::exact_return_call_indirect_signature(ctx, op) {
+        Ok(signature) => signature,
+        Err(error) => {
+            errors.push(error.to_string());
+            return;
+        }
+    };
     let Some(caller) = enclosing_wasm_func_signature(ctx, op) else {
         errors.push(
             "wasm.return_call_indirect requires a valid enclosing wasm.func signature".into(),
         );
         return;
     };
-    let Some(signature) = ctx
-        .op_attrs(op)
-        .get_type("signature")
-        .and_then(|ty| wasm_dialect::FuncSig::from_type_ref(ctx, ty))
-    else {
-        // The exact helper above already produced the local diagnostic.
-        return;
-    };
-    if !tail_results_agree(ctx, caller.results(ctx), signature.results(ctx)) {
+    let signature = crate::emit::helpers::func_type_parts(ctx, signature)
+        .map(|(_, results)| results)
+        .expect("schema-verified wasm.return_call_indirect has a wasm.func_sig signature");
+    if !tail_results_agree(ctx, caller.results(ctx), signature) {
         errors.push("wasm.return_call_indirect tail caller/callee result lists differ".into());
     }
 }
@@ -434,10 +434,10 @@ mod tests {
     wasm.return
   }
   wasm.func @direct(%value: core.i32) -> core.nil {
-    wasm.return_call %value {callee = @target}
+    wasm.return_call @target(%value) : (core.i32) -> ()
   }
   wasm.func @indirect(%table_index: core.i32, %value: core.i32) -> core.nil {
-    wasm.return_call_indirect %table_index, %value {signature = wasm.func_sig<(core.i32) -> ()>, table = 0, type_idx = 0}
+    wasm.return_call_indirect %table_index(%value) : (core.i32) -> ()
   }
 }"#,
         );
@@ -456,25 +456,7 @@ mod tests {
         rejects(
             r#"core.module @test {
   wasm.func @caller(%table_index: core.i32, %value: core.i32) -> core.nil {
-    wasm.return_call_indirect %table_index, %value {table = 0, type_idx = 0}
-  }
-}"#,
-            "lacks signature",
-        );
-
-        rejects(
-            r#"core.module @test {
-  wasm.func @caller(%table_index: core.i32, %value: core.i32) -> core.nil {
-    wasm.return_call_indirect %table_index, %value {signature = core.i32, table = 0, type_idx = 0}
-  }
-}"#,
-            "signature must be wasm.func_sig",
-        );
-
-        rejects(
-            r#"core.module @test {
-  wasm.func @caller(%table_index: core.i32, %value: core.i32) -> core.nil {
-    wasm.return_call_indirect %table_index, %value {signature = wasm.func_sig<(core.i32) -> core.i32>, table = 0, type_idx = 0}
+    wasm.return_call_indirect %table_index(%value) : (core.i32) -> core.i32
   }
 }"#,
             "tail caller/callee result lists differ",
@@ -482,26 +464,17 @@ mod tests {
 
         rejects(
             r#"core.module @test {
-  wasm.func @caller() -> core.nil {
-    wasm.return_call_indirect {signature = wasm.func_sig<() -> core.nil>, table = 0, type_idx = 0}
-  }
-}"#,
-            "requires a table index operand",
-        );
-
-        rejects(
-            r#"core.module @test {
   wasm.func @caller(%table_index: core.i64, %value: core.i32) -> core.nil {
-    wasm.return_call_indirect %table_index, %value {signature = wasm.func_sig<(core.i32) -> core.nil>, table = 0, type_idx = 0}
+    wasm.return_call_indirect %table_index(%value) : (core.i32) -> core.nil
   }
 }"#,
-            "first operand must be an i32 table index",
+            "wasm.return_call_indirect:",
         );
 
         rejects(
             r#"core.module @test {
   wasm.func @caller(%table_index: core.i32, %value: core.i64) -> core.nil {
-    wasm.return_call_indirect %table_index, %value {signature = wasm.func_sig<(core.i32) -> core.nil>, table = 0, type_idx = 0}
+    wasm.return_call_indirect %table_index(%value) : (core.i32) -> core.nil
   }
 }"#,
             "operands do not match its exact signature",
@@ -517,16 +490,16 @@ mod tests {
   !Array = wasm_gc.array<core.i32>
   !Struct = wasm_gc.struct<core.i32>
   wasm.func @structref(%table_index: core.i32, %value: wasm.structref) -> core.nil {
-    wasm.return_call_indirect %table_index, %value {signature = wasm.func_sig<(wasm.anyref) -> core.nil>, table = 0, type_idx = 0}
+    wasm.return_call_indirect %table_index(%value) : (wasm.anyref) -> core.nil
   }
   wasm.func @struct(%table_index: core.i32, %value: !Struct) -> core.nil {
-    wasm.return_call_indirect %table_index, %value {signature = wasm.func_sig<(wasm.anyref) -> core.nil>, table = 0, type_idx = 0}
+    wasm.return_call_indirect %table_index(%value) : (wasm.anyref) -> core.nil
   }
   wasm.func @array(%table_index: core.i32, %value: !Array) -> core.nil {
-    wasm.return_call_indirect %table_index, %value {signature = wasm.func_sig<(wasm.arrayref) -> core.nil>, table = 0, type_idx = 0}
+    wasm.return_call_indirect %table_index(%value) : (wasm.arrayref) -> core.nil
   }
   wasm.func @i31(%table_index: core.i32, %value: wasm.i31ref) -> core.nil {
-    wasm.return_call_indirect %table_index, %value {signature = wasm.func_sig<(wasm.anyref) -> core.nil>, table = 0, type_idx = 0}
+    wasm.return_call_indirect %table_index(%value) : (wasm.anyref) -> core.nil
   }
 }"#,
         );
@@ -544,7 +517,7 @@ mod tests {
             assert_rejects_tail_signature(&format!(
                 r#"core.module @test {{
   wasm.func @caller(%table_index: core.i32, %value: {value_ty}) -> core.nil {{
-    wasm.return_call_indirect %table_index, %value {{signature = wasm.func_sig<({parameter_ty}) -> core.nil>, table = 0, type_idx = 0}}
+    wasm.return_call_indirect %table_index(%value) : ({parameter_ty}) -> core.nil
   }}
 }}"#
             ));
@@ -557,7 +530,7 @@ mod tests {
             r#"core.module @test {
   !Struct = test.opaque<core.i32>
   wasm.func @caller(%table_index: core.i32, %value: !Struct) -> core.nil {
-    wasm.return_call_indirect %table_index, %value {signature = wasm.func_sig<(wasm.structref) -> core.nil>, table = 0, type_idx = 0}
+    wasm.return_call_indirect %table_index(%value) : (wasm.structref) -> core.nil
   }
 }"#,
         );
@@ -616,7 +589,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.func @widen() -> core.nil {
-    %wide = wasm.ref_upcast : wasm.structref
+    %wide = "wasm.ref_upcast"() : wasm.structref
     wasm.return
   }
 }"#,
@@ -638,10 +611,10 @@ mod tests {
   wasm.func @byRef(%value: wasm.structref) -> core.nil { wasm.return }
   wasm.func @byArray(%value: wasm.arrayref) -> core.nil { wasm.return }
   wasm.func @caller(%leaf: !Leaf, %bytes: !Bytes, %closure: !Closure, %data: !Data) -> core.nil {
-    wasm.call %leaf {callee = @byRef}
-    wasm.call %bytes {callee = @byRef}
-    wasm.call %closure {callee = @byRef}
-    wasm.call %data {callee = @byArray}
+    wasm.call @byRef(%leaf) : (!Leaf) -> ()
+    wasm.call @byRef(%bytes) : (!Bytes) -> ()
+    wasm.call @byRef(%closure) : (!Closure) -> ()
+    wasm.call @byArray(%data) : (!Data) -> ()
     wasm.return
   }
 }"#,
@@ -662,10 +635,10 @@ mod tests {
   !Bytes = test.layout<!Data, core.i32, core.i32, {layout = "bytes"}>
   wasm.func @byAny(%value: wasm.anyref) -> core.nil { wasm.return }
   wasm.func @caller(%bytes: !Bytes, %data: !Data, %array: !Array, %structural: wasm_gc.struct<core.i32>) -> core.nil {
-    wasm.call %bytes {callee = @byAny}
-    wasm.call %data {callee = @byAny}
-    wasm.call %array {callee = @byAny}
-    wasm.call %structural {callee = @byAny}
+    wasm.call @byAny(%bytes) : (!Bytes) -> ()
+    wasm.call @byAny(%data) : (!Data) -> ()
+    wasm.call @byAny(%array) : (!Array) -> ()
+    wasm.call @byAny(%structural) : (wasm_gc.struct<core.i32>) -> ()
     wasm.return
   }
 }"#,
@@ -686,7 +659,7 @@ mod tests {
   !Unregistered = test.opaque<core.i32>
   wasm.func @byAny(%value: wasm.anyref) -> core.nil {{ wasm.return }}
   wasm.func @caller(%value: {value_ty}) -> core.nil {{
-    wasm.call %value {{callee = @byAny}}
+    wasm.call @byAny(%value) : ({value_ty}) -> ()
     wasm.return
   }}
 }}"#
@@ -725,7 +698,7 @@ mod tests {
   !Bytes = test.layout<!Data, core.i32, core.i32, {{layout = "bytes"}}>
   wasm.func @callee(%value: {parameter_ty}) -> core.nil {{ wasm.return }}
   wasm.func @caller(%value: {value_ty}) -> core.nil {{
-    wasm.call %value {{callee = @callee}}
+    wasm.call @callee(%value) : ({value_ty}) -> ()
     wasm.return
   }}
 }}"#
@@ -750,7 +723,7 @@ mod tests {
   !Leaf = wasm_gc.struct<core.i32>
   wasm.func @produces(%leaf: !Leaf) -> !Leaf { wasm.return %leaf }
   wasm.func @caller(%leaf: !Leaf) -> core.nil {
-    %value = wasm.call %leaf {callee = @produces} : wasm.structref
+    %value = wasm.call @produces(%leaf) : (!Leaf) -> wasm.structref
     wasm.return
   }
 }"#,
@@ -765,7 +738,7 @@ mod tests {
   !Leaf = wasm_gc.struct<core.i32>
   wasm.func @produces(%value: wasm.structref) -> wasm.structref { wasm.return %value }
   wasm.func @caller(%value: wasm.structref) -> core.nil {
-    %leaf = wasm.call %value {callee = @produces} : !Leaf
+    %leaf = wasm.call @produces(%value) : (wasm.structref) -> !Leaf
     wasm.return
   }
 }"#,
@@ -790,11 +763,11 @@ mod tests {
         rejects(
             r#"core.module @test {
   wasm.func @callee() -> core.i32 {
-    %value = wasm.i32_const {value = 1} : core.i32
+    %value = wasm.i32_const 1 : core.i32
     wasm.return %value
   }
   wasm.func @caller() -> core.nil {
-    %value = wasm.call {callee = @callee} : core.i64
+    %value = wasm.call @callee() : () -> core.i64
     wasm.return
   }
 }"#,
@@ -803,7 +776,7 @@ mod tests {
         rejects(
             r#"core.module @test {
   wasm.func @caller() -> core.i32 {
-    %value = wasm.i64_const {value = 1} : core.i64
+    %value = wasm.i64_const 1 : core.i64
     wasm.return %value
   }
 }"#,
@@ -816,7 +789,7 @@ mod tests {
             r#"core.module @test {
   wasm.func @unit() -> core.nil { wasm.return }
   wasm.func @caller() -> core.nil {
-    wasm.call {callee = @unit}
+    wasm.call @unit() : () -> ()
     wasm.return
   }
 }"#,
@@ -825,7 +798,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_direct_result_narrowing_and_missing_callee_contracts() {
+    fn rejects_direct_result_narrowing() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
@@ -835,7 +808,7 @@ mod tests {
     wasm.return %value
   }
   wasm.func @caller() -> wasm.structref {
-    %value = wasm.call {callee = @source} : wasm.structref
+    %value = wasm.call @source() : () -> wasm.structref
     wasm.return %value
   }
 }"#,
@@ -852,28 +825,6 @@ mod tests {
             error.to_string().contains("wasm.call result list mismatch"),
             "{error}"
         );
-
-        for callee in ["", " {callee = 0}"] {
-            let mut ctx = IrContext::new();
-            let module = parse_test_module(
-                &mut ctx,
-                &format!(
-                    "core.module @test {{
-  wasm.func @caller() -> core.nil {{
-    wasm.call{callee}
-    wasm.return
-  }}
-}}"
-                ),
-            );
-            let error = validate_wasm_ir(&ctx, module).expect_err("callee must be a symbol");
-            assert!(
-                error
-                    .to_string()
-                    .contains("wasm.call requires a symbol callee attribute"),
-                "{error}"
-            );
-        }
     }
 
     #[test]
@@ -905,10 +856,10 @@ mod tests {
             format!(
                 r#"core.module @test {{
   core.module @a {{
-    wasm.func {{abi = "C", link_name = "abs", sym_name = "abs", type = wasm.func_sig<(core.i32) -> core.i32>}}
+    wasm.func @abs(%0: core.i32) -> core.i32 attributes {{abi = "C", link_name = "abs"}}
   }}
   core.module @b {{
-    wasm.func {{abi = "C", link_name = "abs", sym_name = "abs", type = {second}}}
+    "wasm.func"() {{abi = "C", link_name = "abs", sym_name = "abs", type = {second}}}
   }}
 }}"#
             )
@@ -938,12 +889,12 @@ mod tests {
             format!(
                 r#"core.module @outer {{
   wasm.func @target() -> core.i32 {{
-    %value = wasm.i32_const {{value = 1}} : core.i32
+    %value = wasm.i32_const 1 : core.i32
     wasm.return %value
   }}
   core.module @inner {{
     wasm.func @target() -> core.nil {{ wasm.return }}
-    wasm.func @caller() -> core.i32 {{ wasm.return_call {{callee = {callee}}} }}
+    wasm.func @caller() -> core.i32 {{ wasm.return_call {callee}() : () -> () }}
   }}
 }}"#
             )
@@ -970,7 +921,7 @@ mod tests {
             r#"core.module @outer {
   core.module @inner {
     wasm.func @caller(%index: core.i32) -> core.i32 {
-      wasm.return_call_indirect %index {signature = wasm.func_sig<() -> core.nil>, table = 0, type_idx = 0}
+      wasm.return_call_indirect %index() : () -> core.nil
     }
   }
 }"#,

@@ -54,6 +54,7 @@
 
 mod decl;
 mod expr;
+mod node_diagnostic;
 pub(crate) mod node_id;
 mod pattern;
 mod phases;
@@ -66,6 +67,7 @@ pub mod visit;
 // Re-export core types
 pub use decl::*;
 pub use expr::*;
+pub use node_diagnostic::{NodeDiagnostic, locate_diagnostics};
 pub use node_id::*;
 pub use pattern::*;
 pub use phases::*;

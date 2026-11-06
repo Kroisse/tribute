@@ -332,7 +332,7 @@ mod tests {
   !B = wasm_gc.struct<core.i32, core.i32>
 
   wasm.func @main() -> core.nil {
-    %zero = wasm.i32_const {value = 0} : core.i32
+    %zero = wasm.i32_const 0 : core.i32
     %a = wasm_gc.struct_new %zero, %zero {type = !A} : !A
     %b = wasm_gc.struct_new %zero, %zero {type = !B} : !B
     wasm.return
@@ -373,7 +373,7 @@ mod tests {
   !A = wasm_gc.array<core.i32>
 
   wasm.func @main(%param: !Param) -> core.nil {
-    %zero = wasm.i32_const {value = 0} : core.i32
+    %zero = wasm.i32_const 0 : core.i32
     %array = wasm_gc.array_new_default %zero {type = !A} : !A
     %outer = wasm_gc.ref_null {target_type = !Outer} : !Outer
     wasm.return
@@ -405,7 +405,7 @@ mod tests {
   !data = wasm_gc.array<core.i8, {layout = "bytes_data"}>
   !bytes = test.layout<!data, core.i32, core.i32, {layout = "bytes"}>
   wasm.func @main() -> core.nil {
-    %zero = wasm.i32_const {value = 0} : core.i32
+    %zero = wasm.i32_const 0 : core.i32
     %bytes = wasm_gc.struct_new %zero {type = !bytes} : !bytes
     wasm.return
   }
@@ -522,8 +522,8 @@ mod tests {
   !B = wasm_gc.array<core.i32>
 
   wasm.func @main() -> core.nil {
-    %zero = wasm.i32_const {value = 0} : core.i32
-    %one = wasm.i32_const {value = 1} : core.i32
+    %zero = wasm.i32_const 0 : core.i32
+    %one = wasm.i32_const 1 : core.i32
     %struct = wasm_gc.struct_new %one {type = !S} : !S
     %field = wasm_gc.struct_get %struct {type = !S, field_idx = 3} : core.i32
     wasm_gc.struct_set %struct, %field {type = !S, field_idx = 4}
