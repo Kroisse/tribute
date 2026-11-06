@@ -453,16 +453,6 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
-    /// Extract the ability ID from a ResolvedRef.
-    ///
-    /// Used by handle expression to determine which abilities are being handled.
-    /// Returns None for references that don't represent abilities.
-    /// Report each handled ability whose operations lack a handler arm.
-    ///
-    /// An ability with at least one `fn`/`op` arm in a `handle` must provide
-    /// an arm for every declared operation; a missing arm is never an
-    /// implicit forward. Abilities without arms are not handled and need no
-    /// check. Missing operations are listed in name order.
     /// Report every `do` arm after the first, and every arm for an
     /// operation that an earlier arm of the same `handle` already handles.
     pub(super) fn report_duplicate_handler_arms(
@@ -506,6 +496,12 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
+    /// Report each handled ability whose operations lack a handler arm.
+    ///
+    /// An ability with at least one `fn`/`op` arm in a `handle` must provide
+    /// an arm for every declared operation; a missing arm is never an
+    /// implicit forward. Abilities without arms are not handled and need no
+    /// check. Missing operations are listed in name order.
     pub(super) fn report_missing_handler_arms(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
@@ -569,6 +565,10 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
+    /// Extract the ability ID from a ResolvedRef.
+    ///
+    /// Used by handle expression to determine which abilities are being handled.
+    /// Returns None for references that don't represent abilities.
     pub(in crate::typeck::checker) fn extract_ability_id_from_ref(
         &self,
         resolved: &ResolvedRef<'db>,

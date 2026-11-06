@@ -97,7 +97,6 @@ impl<'db> TypeChecker<'db> {
             .collect()
     }
 
-    /// Infer the type of a variable reference.
     /// Report a module named where `expected` is required, once per node.
     pub(super) fn report_module_reference(
         &self,
@@ -121,6 +120,7 @@ impl<'db> TypeChecker<'db> {
         ctx.error_type()
     }
 
+    /// Infer the type of a variable reference.
     pub(super) fn infer_var_with_ctx(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
