@@ -377,6 +377,18 @@ impl InvocationBounds {
 }
 
 impl DynRegionBranch {
+    /// Whether `op` declares that each of its regions runs at most once per
+    /// execution, so no region repeats as a loop body does. An operation
+    /// without `RegionBranch` answers `false`.
+    pub fn runs_each_region_at_most_once(ctx: &IrContext, op: OpRef) -> bool {
+        DynRegionBranch::get(ctx, op).is_some_and(|interface| {
+            interface
+                .region_invocation_bounds(ctx)
+                .iter()
+                .all(|bounds| bounds.max.is_some_and(|max| max <= 1))
+        })
+    }
+
     /// Whether `op` runs exactly one of its regions, once, and each region
     /// is an arm that either returns to `op` with its results or leaves the
     /// callable, as `scf.if` and `scf.index_switch` do.
@@ -392,6 +404,9 @@ impl DynRegionBranch {
         let Some(interface) = DynRegionBranch::get(ctx, op) else {
             return false;
         };
+        if !Self::runs_each_region_at_most_once(ctx, op) {
+            return false;
+        }
         let entry_reaches_regions = interface
             .successors(ctx, RegionBranchPoint::Parent)
             .is_ok_and(|successors| {
@@ -401,12 +416,7 @@ impl DynRegionBranch {
                         .iter()
                         .all(|successor| matches!(successor, RegionSuccessor::Region(_)))
             });
-        if !entry_reaches_regions
-            || interface
-                .region_invocation_bounds(ctx)
-                .iter()
-                .any(|bounds| bounds.max.is_none_or(|max| max > 1))
-        {
+        if !entry_reaches_regions {
             return false;
         }
         ctx.op_regions(op).all(|region| {

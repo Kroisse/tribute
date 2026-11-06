@@ -37,6 +37,7 @@ use super::scf_control_flow::StructuredControlAnalysis;
 use crate::analysis::AnalysisCache;
 use crate::context::{BlockArgData, BlockData, IrContext};
 use crate::dialect::{arith, cf, func, scf};
+use crate::op_interface::DynRegionBranch;
 use crate::ops::DialectOp;
 use crate::pass::{Pass, PassRunResult};
 use crate::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
@@ -96,7 +97,7 @@ fn lower_region(ctx: &mut IrContext, target: OpRef, body: RegionRef, analyses: &
         without_merge: HashSet::default(),
     };
     let _ = walk_op::<()>(ctx, target, &mut |op| {
-        if ((scf::If::matches(ctx, op) || scf::IndexSwitch::matches(ctx, op))
+        if (DynRegionBranch::runs_each_region_at_most_once(ctx, op)
             && analysis.has_terminal_unused_never_result(op))
             || analysis.is_terminal_resultless_switch(op)
         {
