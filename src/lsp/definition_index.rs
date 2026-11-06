@@ -1732,13 +1732,13 @@ fn f(p: Point) -> Int {
         let source = make_source(
             &db,
             r#"
-enum Option(T) {
-    Some(T),
+enum Option(a) {
+    Some(a),
     None
 }
-enum Result(T, E) {
-    Ok(T),
-    Err(E)
+enum Result(a, e) {
+    Ok(a),
+    Err(e)
 }
 "#,
         );
