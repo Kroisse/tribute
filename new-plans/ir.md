@@ -1206,7 +1206,11 @@ type은 tail을 가질 수 없다.
 [Row 매개변수](types.md#row-매개변수)를 가진 struct·enum의 layout(`adt.struct`,
 `adt.enum`)은 자기 row binder를 type 속성 `row_params`(개수)로 선언한다. Layout
 안의 필드 type, 곧 필드의 callable type과 중첩된 `adt.typeref`의 row 인자가 쓰는
-tail은 이 binder의 index다. 이 binder는 layout 밖으로 나가지 않는다.
+tail은 이 binder의 index다. 이 binder는 layout 밖으로 나가지 않는다. Binder는 모두
+선언이 양화한 row 매개변수이므로 `func`의 `row_binders`와 달리 종류 없이 개수만 둔다.
+[Tuple layout](#compiler-generated-tuple-layout)은 binder를 소유할 선언이 없으므로
+row를 layout 이름에 담고 둘러싼 정의의 binder를 쓰지만, nominal layout은 선언이
+binder를 소유하므로 row 인자와 상관없이 하나다.
 
 ```text
 adt.struct<Callback(run: tribute_control.func_sig<(core.i64) -> core.i64 row('a0)>),

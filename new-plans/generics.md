@@ -304,8 +304,10 @@ signature와 본문의 값 타입이 적는 row 안의 모든 ability instance�
 없다. 같은 이유로, 같은 함수들의 signature와 본문의 값 타입이 타입 인자를 가진
 struct·enum을 적을 때 그 타입 인자에 열린 row가 있으면 거부한다. 특수화가 row를
 치환하지 않으므로 그 nominal 인스턴스는 구체 선언을 얻지 못한다. 열린 row를 담을
-nominal 타입은 그 row를 [row 매개변수](types.md#row-매개변수)로 선언하며, row 인자의
-열린 row는 이 검사의 대상이 아니다. 지역 `let`은 data 타입
+nominal 타입은 그 row를 [row 매개변수](types.md#row-매개변수)로 선언하며, 그 nominal
+타입 자신의 row 인자에 있는 열린 row는 이 검사의 대상이 아니다. 다른 타입 인자 안에
+든 nominal 타입의 row 인자는 그 타입 인자의 일부이므로 이 검사와 함수 인스턴스의 타입
+인자 검사를 받는다. 지역 `let`은 data 타입
 변수를 양화하지 않으므로(`type-inference.md`), 지역 callable이 만드는 nominal 값의
 타입 인자는 그 사용처가 고른 타입이며 특수화가 다른 타입 인자처럼 다룬다. 다형적 재귀는
 정의의 성질이므로 도달하지 않는 template에서도 거부한다.
@@ -313,7 +315,7 @@ nominal 타입은 그 row를 [row 매개변수](types.md#row-매개변수)로 �
 ### 타입 순회와 binder별 치환
 
 Frontend의 타입 순회와 치환은 하나의 구조적 순회를 공유한다. 순회는 `Named`의
-타입 인자, 함수의 매개변수·결과·ability row, tuple 원소, continuation의 인자·결과·
+row 인자와 타입 인자(이 순서), 함수의 매개변수·결과·ability row, tuple 원소, continuation의 인자·결과·
 ability row로 내려가며, row 안에서는 각 ability 인자의 타입 인자로 내려간다. 스킴을
 순회하면 본문에 이어 보존된 합집합 제약(각 source, 그다음 result)과 차집합 제약
 (source, removed, result)의 row를 같은 규칙으로 순회한다. 순서는 이 나열 순서이며,
@@ -373,13 +375,20 @@ Generic 여부는 인덱스에 보관된 원본 선언의 타입 매개변수 �
 수집한다. 중복 판별은 원본 `TypeDefId`와 concrete 타입 인자 목록을 사용한다.
 생성 연산 없이 signature나 필드에서만 참조되는 인스턴스도 이 계약을 따른다.
 
-Row 인자는 인스턴스 key와 맹글링에 들어가지 않는다. Row는 타입 인자처럼 치환하지
+Nominal 타입 자신의 row 인자는 그 인스턴스의 key와 맹글링에 들어가지 않는다. Row는
+타입 인자처럼 치환하지
 않고([Row 변수의 convention class](#row-변수의-convention-class)), callable 값의 표현은
 row에 따라 갈라지지 않으므로 같은 타입 인자의 인스턴스는 row 인자와 상관없이 표현이
 같다. 그래서 `Callback({}, Int)`와 `Callback({State(Int)}, Int)`는 특수화된 선언
 `Callback$Int` 하나를 공유한다. 특수화된 선언은 원본의 row 매개변수를 그대로 가지며,
 그 스킴은 타입 매개변수 없이 row binder만 양화한다. 재작성은 각 nominal 타입의 row
 인자를 바꾸지 않고 선언 identity와 타입 인자만 특수화된 선언으로 바꾼다.
+
+타입 인자 안에 든 nominal 타입의 row 인자는 그 타입 인자의 일부이므로 바깥 인스턴스의
+key와 맹글링에 들어간다. `Option(Callback({}, Int))`와
+`Option(Callback({State(Int)}, Int))`는 다른 `Option` 인스턴스이며, 함수 인스턴스의
+타입 인자도 같다. 이런 row 인자는 닫힌 row여야 하고, 맹글링은 함수 타입의 닫힌 row와
+같은 형식으로 쓴다.
 
 의존성 수집에서 치환한 스킴은 최종 constructor 메타데이터로 재사용한다.
 원본 스킴을 다시 읽어 동일 인스턴스를 재치환하지 않는다. 고정점 도달에 성공한

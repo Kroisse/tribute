@@ -210,9 +210,12 @@ let counting: Callback({State(Int)}, Int) = Callback { run: fn(x) { State::get()
 - 인자 목록은 선언의 매개변수 목록과 종류마다 개수가 같아야 한다. Row 인자를 생략하면
   개수 오류이며, 빈 row나 fresh row 변수로 채우지 않는다. 매개변수의 종류는 표기에서
   보인다.
-- Row 매개변수는 필드 함수 타입의 row tail에만 쓴다. Ability 인자 안이나 다른 nominal
-  타입의 타입 인자 안에 있는 함수 타입에는 쓸 수 없다. 다른 nominal 타입의 row
-  인자로는 쓸 수 있다(`Step({e})`).
+- Row 매개변수는 필드 타입 안의 row tail로 쓴다. 필드 함수 타입의 매개변수·결과 안의
+  함수 타입, tuple 원소, 다른 nominal 타입의 row 인자(`Step({e})`)에도 쓸 수 있다.
+  Ability 인자 안과 다른 nominal 타입의 타입 인자 안에는 쓸 수 없다. 그런 row는
+  특수화가 구체 선언을 만들지 못하는 열린 row다
+  ([generics.md](generics.md#함수-인스턴스-수집과-특수화)).
+- 필드 type에 나타나지 않는 row 매개변수도 허용하며, 그 row 인자도 타입의 일부다.
 - 같은 선언과 같은 타입 인자에 다른 row 인자를 넘긴 두 타입은 다른 타입이다.
   `Callback({}, Int)`와 `Callback({State(Int)}, Int)`는 서로 단일화되지 않는다.
   Row 인자의 단일화는 row 단일화와 같은

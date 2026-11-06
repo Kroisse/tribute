@@ -571,9 +571,10 @@ TypeList ::= Type (',' Type)* ','?
 ReturnType ::= '->' Type                      // 암묵적 effect polymorphic (타입 선언 안에서는 빈 row)
              | '->' '{' AbilityRow? '}' Type   // 명시적 effect
 
-AbilityRow ::= EffectItem (',' EffectItem)* EffectTail? ','?
+AbilityRow ::= EffectItem (',' EffectItem)* (',' EffectTail)? ','?
+             | EffectTail ','?
 EffectItem ::= TypePath TypeArgs?
-EffectTail ::= ',' LowerIdentifier            // row variable
+EffectTail ::= LowerIdentifier                // row variable
 ```
 
 **예시:**
