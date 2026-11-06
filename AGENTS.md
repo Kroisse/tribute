@@ -18,6 +18,7 @@ Key design docs:
 - `new-plans/types.md`
 - `new-plans/io.md`
 - `new-plans/host-interface.md`
+- `new-plans/std-abilities.md`
 - `new-plans/modules.md`
 - `new-plans/abilities.md`
 - `new-plans/type-inference.md`
