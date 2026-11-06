@@ -17,6 +17,27 @@
         "deny": []
     },
     "hooks": {
+        "SessionStart": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "cargo build -p tribute-runtime --quiet 2>/dev/null || true"
+                    }
+                ]
+            }
+        ],
+        "PostToolUse": [
+            {
+                "matcher": "Bash|Edit|Write",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "jq -r '.tool_input.file_path' | grep '\\.rs$' | xargs -r rustfmt --edition 2024"
+                    }
+                ]
+            }
+        ],
         "Stop": [
             {
                 "hooks": [
