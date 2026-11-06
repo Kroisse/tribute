@@ -11,8 +11,8 @@ use trunk_ir::refs::{BlockRef, TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, Location};
 
 use crate::ast::{
-    AbilityRow, Arm, Expr, ExprKind, FieldInit, Pattern, PatternKind, ResolvedRef, Stmt, TypeKind,
-    TypedRef,
+    AbilityRow, Arm, Expr, ExprKind, FieldInit, LiteralPattern, Pattern, PatternKind, ResolvedRef,
+    Stmt, TypeKind, TypedRef,
 };
 use crate::ast_to_ir::context::IrLoweringCtx;
 use crate::ast_to_ir::lower::IrBuilder;
@@ -267,6 +267,16 @@ pub(super) fn lower_expr<'db>(
                 Some(last) if exhaustive => &arms[..=last],
                 _ => &arms[..],
             };
+            if exhaustive && let Some(switch) = literal_case_switch(builder, scrutinee, arms) {
+                return lower_case_switch(
+                    builder,
+                    location,
+                    scrutinee,
+                    result_ty,
+                    switch,
+                    declarations,
+                );
+            }
             lower_case_chain(
                 builder,
                 location,
@@ -607,6 +617,104 @@ pub(super) fn lower_case_chain<'db>(
             Some(branch.result(builder.ir))
         }
     }
+}
+
+/// The arms of a case that selects by integer literal: each case value with
+/// the first arm it selects, and the catch-all arm.
+struct CaseSwitch<'a, 'db> {
+    cases: Vec<(i64, &'a Arm<TypedRef<'db>>)>,
+    default: &'a Arm<TypedRef<'db>>,
+}
+
+/// The switch an exhaustive case lowers to when every arm but the last is an
+/// unguarded `Nat`, `Int`, or `Rune` literal, possibly bound with `as`, and
+/// the last is an unguarded catch-all. A value an earlier arm selects is not
+/// a case of a later one. A case with fewer than two values, a literal
+/// outside the i31 range, or a scrutinee that is not `core.i32` stays a chain.
+fn literal_case_switch<'a, 'db>(
+    builder: &mut IrBuilder<'_, 'db>,
+    scrutinee: ValueRef,
+    arms: &'a [Arm<TypedRef<'db>>],
+) -> Option<CaseSwitch<'a, 'db>> {
+    const I31: std::ops::RangeInclusive<i64> = -(1 << 30)..=(1 << 30) - 1;
+    fn literal_value<V>(pattern: &Pattern<V>) -> Option<i64> {
+        match &*pattern.kind {
+            PatternKind::Literal(LiteralPattern::Nat(n)) => i64::try_from(*n).ok(),
+            PatternKind::Literal(LiteralPattern::Int(n)) => Some(*n),
+            PatternKind::Literal(LiteralPattern::Rune(c)) => Some(i64::from(*c as i32)),
+            PatternKind::As { pattern, .. } => literal_value(pattern),
+            _ => None,
+        }
+    }
+    fn catch_all<V>(pattern: &Pattern<V>) -> bool {
+        match &*pattern.kind {
+            PatternKind::Wildcard | PatternKind::Bind { .. } => true,
+            PatternKind::As { pattern, .. } => catch_all(pattern),
+            _ => false,
+        }
+    }
+
+    if builder.ir.value_ty(scrutinee) != builder.ctx.i32_type(builder.ir) {
+        return None;
+    }
+    let (default, selecting) = arms.split_last()?;
+    if default.guard.is_some() || !catch_all(&default.pattern) {
+        return None;
+    }
+    let mut cases: Vec<(i64, &Arm<TypedRef<'db>>)> = Vec::with_capacity(selecting.len());
+    for arm in selecting {
+        if arm.guard.is_some() {
+            return None;
+        }
+        let value = literal_value(&arm.pattern).filter(|value| I31.contains(value))?;
+        if cases.iter().all(|&(seen, _)| seen != value) {
+            cases.push((value, arm));
+        }
+    }
+    (cases.len() >= 2).then_some(CaseSwitch { cases, default })
+}
+
+/// Lower a case that selects by integer literal to one `scf.index_switch`
+/// on its scrutinee, each arm in its own region and the catch-all arm as
+/// the default.
+fn lower_case_switch<'db>(
+    builder: &mut IrBuilder<'_, 'db>,
+    location: Location,
+    scrutinee: ValueRef,
+    result_ty: TypeRef,
+    switch: CaseSwitch<'_, 'db>,
+    declarations: &mut Declarations<'db>,
+) -> Option<ValueRef> {
+    let mut arm_region = |builder: &mut IrBuilder<'_, 'db>, arm| {
+        build_case_arm_region(
+            builder.ctx,
+            builder.ir,
+            CaseArmRequest {
+                location,
+                scrutinee,
+                arm,
+                rest: &[],
+                result_ty,
+                exhaustive: true,
+            },
+            declarations,
+        )
+    };
+    let mut cases = Vec::with_capacity(switch.cases.len());
+    for (value, arm) in switch.cases {
+        cases.push((value, arm_region(builder, arm)?));
+    }
+    let default_region = arm_region(builder, switch.default)?;
+    let lowered = scf::IndexSwitch::build_with_arms(
+        builder.ir,
+        location,
+        scrutinee,
+        [result_ty],
+        cases,
+        default_region,
+    );
+    builder.ir.push_op(builder.block, lowered.op_ref());
+    Some(builder.ir.op_result(lowered.op_ref(), 0))
 }
 
 pub(super) struct CaseArmRequest<'a, 'db> {
