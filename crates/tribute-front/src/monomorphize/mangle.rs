@@ -15,8 +15,9 @@ use crate::ast::{AbilityOrigin, AbilityRow, BuiltinAbility, RowVar, Type, TypeDe
 /// `$6` starts a function type, `$7` a tuple, `$8$n` the `n`th bound type
 /// variable, and `$5` a compiler-owned nominal type or ability. Before its
 /// result, a function type writes its ability row between `$2` and `$1`, or
-/// `$3$n` for the `n`th row variable of an open row. Distinct type argument
-/// lists get distinct names:
+/// `$3$n` for the `n`th row variable of an open row. A nominal type argument
+/// writes its row arguments the same way, before its type arguments. Distinct
+/// type argument lists get distinct names:
 ///
 /// - `identity + [Int]`              → `identity$Int`
 /// - `first + [Int, Text]`           → `first$Int$Text`
@@ -27,6 +28,8 @@ use crate::ast::{AbilityOrigin, AbilityRow, BuiltinAbility, RowVar, Type, TypeDe
 /// - `apply + [fn() ->{Ask} Nat]`    → `apply$6$0$$1$2$Ask$1$Nat`
 /// - `apply + [fn() ->{State(Int), e} Nat]`
 ///   → `apply$6$0$$1$2$State$0$Int$1$3$0$Nat`
+/// - `wrap + [Callback({Ask}, Int)]` → `wrap$Callback$0$2$Ask$1$Int$1`
+/// - `wrap + [Step({})]`             → `wrap$Step$0$2$1$$1`
 pub fn mangle_name(db: &dyn salsa::Database, base: &Symbol, type_args: &[Type<'_>]) -> Symbol {
     let mut buf = String::new();
     let mut row_vars = Vec::new();
@@ -103,11 +106,20 @@ fn write_type_mangled(
         TypeKind::Rune => f.write_str("Rune"),
         TypeKind::Nil => f.write_str("Nil"),
         TypeKind::Never => f.write_str("Never"),
-        // A nominal type's own row arguments are not part of its instance.
-        TypeKind::Named { id, name, args, .. } => {
+        // A nominal type written here is part of a type argument, so its row
+        // arguments distinguish the outer instance.
+        TypeKind::Named {
+            id,
+            name,
+            row_args,
+            args,
+        } => {
             nominal_mangle_base(db, *id, name.clone()).with_str(|s| f.write_str(s))?;
-            if !args.is_empty() {
+            if !row_args.is_empty() || !args.is_empty() {
                 f.write_str("$0$")?;
+                for row in row_args {
+                    write_ability_row_mangled(db, *row, row_vars, f)?;
+                }
                 write_type_mangled_list(db, args, row_vars, f)?;
                 f.write_str("$1")?;
             }
@@ -557,6 +569,44 @@ mod tests {
 
         assert_eq!(mangle("Ask"), "Holder$6$0$$1$2$Ask$1$Nat");
         assert_eq!(mangle("Tell"), "Holder$6$0$$1$2$Tell$1$Nat");
+    }
+
+    #[test]
+    fn test_nominal_type_arguments_mangle_row_arguments_distinctly() {
+        let db = TestDb::default();
+        let base = Symbol::new("wrap");
+        let int_ty = Type::new(&db, TypeKind::Int);
+        let named = |name: &str, row_args, args| {
+            Type::new(
+                &db,
+                TypeKind::Named {
+                    id: TypeDefId::synthetic(&db, trunk_ir::SymbolPath::new([name])),
+                    name: Symbol::new(name),
+                    row_args,
+                    args,
+                },
+            )
+        };
+        let ask = AbilityRow::single(&db, ability(&db, "Ask", vec![]));
+        let pure = AbilityRow::pure(&db);
+        let mangle = |ty| mangle_name(&db, &base, &[ty]).to_string();
+
+        assert_eq!(
+            mangle(named("Callback", vec![ask], vec![int_ty])),
+            "wrap$Callback$0$2$Ask$1$Int$1"
+        );
+        assert_eq!(
+            mangle(named("Callback", vec![pure], vec![int_ty])),
+            "wrap$Callback$0$2$1$Int$1"
+        );
+        assert_eq!(
+            mangle(named("Step", vec![pure], vec![])),
+            "wrap$Step$0$2$1$$1"
+        );
+        assert_eq!(
+            mangle(named("Pair", vec![pure, ask], vec![])),
+            "wrap$Pair$0$2$1$2$Ask$1$$1"
+        );
     }
 
     #[test]

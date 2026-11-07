@@ -589,9 +589,20 @@ fn print_type_annotation(ty: &TypeAnnotation) -> String {
             .map(|s| s.to_string())
             .collect::<Vec<_>>()
             .join("::"),
-        TypeAnnotationKind::App { ctor, args, .. } => {
+        TypeAnnotationKind::App {
+            ctor,
+            row_args,
+            args,
+        } => {
             let ctor_str = print_type_annotation(ctor);
-            let args_str: Vec<_> = args.iter().map(print_type_annotation).collect();
+            let args_str: Vec<_> = row_args
+                .iter()
+                .map(|row| {
+                    let row_str: Vec<_> = row.iter().map(print_type_annotation).collect();
+                    format!("{{{}}}", row_str.join(", "))
+                })
+                .chain(args.iter().map(print_type_annotation))
+                .collect();
             format!("{}({})", ctor_str, args_str.join(", "))
         }
         TypeAnnotationKind::Func { params, result, .. } => {
@@ -1035,6 +1046,27 @@ mod tests {
         assert_eq!(sig.params[0].1, Some("Int".to_string()));
         assert_eq!(sig.params[1].1, Some("Int".to_string()));
         assert_eq!(sig.return_ty, Some("Int".to_string()));
+    }
+
+    #[test]
+    fn test_function_signatures_print_row_arguments() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(
+            &db,
+            "struct Callback({e}, a) { run: fn(a) ->{e} a }\n\
+             fn run(cb: Callback({State(Int), e}, Nil)) -> Callback({}, Nil) { cb }",
+        );
+
+        let signatures = function_signatures(&db, AnalysisUnit::Executable(source), source);
+        let sig = signatures
+            .iter()
+            .find(|sig| sig.name == "run")
+            .expect("run has a signature");
+        assert_eq!(
+            sig.params[0].1,
+            Some("Callback({State(Int), e}, Nil)".to_string())
+        );
+        assert_eq!(sig.return_ty, Some("Callback({}, Nil)".to_string()));
     }
 
     #[test]
