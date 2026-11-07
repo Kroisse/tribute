@@ -1225,6 +1225,96 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_specialize_struct_decl_keeps_row_arguments() {
+        let db = TestDb::default();
+        let log = crate::ast::AbilityInstance {
+            ability_id: crate::ast::AbilityId::source(&db, SymbolPath::new(["Log"])),
+            args: vec![],
+        };
+        let thunk = Type::new(
+            &db,
+            TypeKind::Named {
+                id: TypeDefId::synthetic(&db, SymbolPath::new(["Thunk"])),
+                name: Symbol::new("Thunk"),
+                row_args: vec![AbilityRow::new(&db, vec![log], None)],
+                args: vec![],
+            },
+        );
+        let named = |n, name: &str| TypeAnnotation {
+            id: node_id(n),
+            kind: TypeAnnotationKind::Named(Symbol::new(name)),
+        };
+
+        // struct Holder(a) { value: a, callback: Callback({Log}, a) }
+        let decl = StructDecl {
+            id: node_id(1),
+            visibility: crate::ast::Visibility::Public,
+            name: Symbol::new("Holder"),
+            disambiguator: 0,
+            row_params: vec![],
+            type_params: vec![crate::ast::TypeParamDecl {
+                id: node_id(2),
+                name: Symbol::new("a"),
+                bounds: vec![],
+            }],
+            fields: vec![
+                FieldDecl {
+                    id: node_id(3),
+                    name_id: node_id(3),
+                    is_pub: false,
+                    name: Some(Symbol::new("value")),
+                    ty: named(4, "a"),
+                },
+                FieldDecl {
+                    id: node_id(5),
+                    name_id: node_id(5),
+                    is_pub: false,
+                    name: Some(Symbol::new("callback")),
+                    ty: TypeAnnotation {
+                        id: node_id(6),
+                        kind: TypeAnnotationKind::App {
+                            ctor: Box::new(named(7, "Callback")),
+                            row_args: vec![vec![named(8, "Log")]],
+                            args: vec![named(9, "a")],
+                        },
+                    },
+                },
+            ],
+        };
+
+        let mangled = mangle_name(&db, &Symbol::new("Holder"), &[thunk]);
+        let specialized = specialize_struct_decl(&db, &decl, &[thunk], mangled);
+
+        // `value: Thunk({Log})`
+        let TypeAnnotationKind::App {
+            ctor,
+            row_args,
+            args,
+        } = &specialized.fields[0].ty.kind
+        else {
+            panic!("expected App, got {:?}", specialized.fields[0].ty.kind);
+        };
+        assert!(matches!(&ctor.kind, TypeAnnotationKind::Named(name) if *name == "Thunk"));
+        let [row] = row_args.as_slice() else {
+            panic!("expected one row argument, got {row_args:?}");
+        };
+        assert!(
+            matches!(row.as_slice(), [log] if matches!(&log.kind, TypeAnnotationKind::Named(name) if *name == "Log"))
+        );
+        assert!(args.is_empty());
+
+        // `callback: Callback({Log}, Thunk({Log}))`
+        let TypeAnnotationKind::App { row_args, args, .. } = &specialized.fields[1].ty.kind else {
+            panic!("expected App, got {:?}", specialized.fields[1].ty.kind);
+        };
+        assert_eq!(row_args.len(), 1);
+        assert!(matches!(
+            args.as_slice(),
+            [arg] if matches!(&arg.kind, TypeAnnotationKind::App { .. })
+        ));
+    }
+
     // ========================================================================
     // specialize_enum_decl tests
     // ========================================================================

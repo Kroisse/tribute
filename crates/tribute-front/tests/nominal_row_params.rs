@@ -24,9 +24,10 @@ fn messages(db: &dyn salsa::Database, text: &str) -> Vec<(CompilationPhase, Stri
 
 const CALLBACK: &str = r#"
 ability Log { op log() -> Nil }
+ability Tick { op tick() -> Nil }
 struct Callback({e}, a) { run: fn(a) ->{e} a }
 enum Step({e}) { Next(fn() ->{e} Step({e})), Done }
-struct Logged({e}) { run: fn() ->{Log, e} Nil }
+struct Logged({e}) { run: fn() ->{Log, e} Nil, quiet: fn() -> Nil }
 "#;
 
 #[salsa_test]
@@ -52,9 +53,31 @@ fn logged(l: Logged({})) ->{Log} Nil {
     let run = l.run
     run()
 }
+fn ticked(l: Logged({Tick})) ->{Log, Tick} Nil {
+    let quiet = l.quiet
+    quiet()
+    let run = l.run
+    run()
+}
 "#
     );
     assert_eq!(messages(db, &text), vec![]);
+}
+
+#[salsa_test]
+fn receiver_row_entries_join_the_field_row(db: &salsa::DatabaseImpl) {
+    let text = format!(
+        "{CALLBACK}{}",
+        r#"
+fn ticked(l: Logged({Tick})) ->{Log} Nil {
+    let run = l.run
+    run()
+}
+"#
+    );
+    let errors = messages(db, &text);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].1.contains("Tick"), "{errors:?}");
 }
 
 #[salsa_test]

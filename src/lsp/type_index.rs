@@ -557,6 +557,33 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_print_ast_type_named_with_row_arguments() {
+        use tribute_front::ast::{AbilityId, AbilityInstance, AbilityRow, RowVar};
+
+        let db = salsa::DatabaseImpl::default();
+
+        let int_ty = Type::new(&db, TypeKind::Int);
+        let state = AbilityInstance {
+            ability_id: AbilityId::source(&db, trunk_ir::SymbolPath::new(["State"])),
+            args: vec![int_ty],
+        };
+        let open = AbilityRow::new(&db, vec![state], Some(RowVar { id: 1 }));
+        let callback_ty = Type::new(
+            &db,
+            TypeKind::Named {
+                id: TypeDefId::synthetic(&db, trunk_ir::SymbolPath::new(["Callback"])),
+                name: trunk_ir::Symbol::new("Callback"),
+                row_args: vec![open, AbilityRow::pure(&db)],
+                args: vec![int_ty],
+            },
+        );
+        assert_eq!(
+            print_ast_type(&db, &NameDisplay::identity(), callback_ty),
+            "Callback({State(Int) | e}, {}, Int)"
+        );
+    }
+
     // Type Collection Tests
 
     #[test]

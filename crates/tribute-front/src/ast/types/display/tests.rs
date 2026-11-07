@@ -64,6 +64,24 @@ fn examples(db: &dyn salsa::Database) -> Vec<(Type<'_>, &'static str)> {
         (named("Int", vec![bool_ty]), "Int(Bool)"),
         (named("é", vec![int]), "é(Int)"),
         (named("효과", vec![]), "효과"),
+        (
+            TypeKind::Named {
+                id: TypeDefId::synthetic(db, trunk_ir::SymbolPath::new(["Callback"])),
+                name: Symbol::new("Callback"),
+                row_args: vec![AbilityRow::new(db, vec![effect(db, "Log", vec![])], None)],
+                args: vec![int],
+            },
+            "Callback({Log}, Int)",
+        ),
+        (
+            TypeKind::Named {
+                id: TypeDefId::synthetic(db, trunk_ir::SymbolPath::new(["Step"])),
+                name: Symbol::new("Step"),
+                row_args: vec![pure],
+                args: vec![],
+            },
+            "Step({})",
+        ),
         (TypeKind::Tuple(vec![]), "#()"),
         (TypeKind::Tuple(vec![int, bool_ty]), "#(Int, Bool)"),
         (
