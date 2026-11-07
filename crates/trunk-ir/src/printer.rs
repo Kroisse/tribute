@@ -69,20 +69,24 @@ struct ModuleState<'a> {
     /// The context's aliases, which every module defines, in the order it
     /// writes them, each with the state its definition is written in when
     /// it differs from the enclosing scope's.
-    manual: Vec<ManualAlias<'a>>,
+    manual: Vec<AliasDef<'a>>,
     /// The aliases the printer generates for this module's body, in the
-    /// order it writes them.
-    auto: Vec<(String, TypeRef)>,
+    /// order it writes them, each with the state its definition is written
+    /// in when it differs from the body's.
+    auto: Vec<AliasDef<'a>>,
     body: AsmState<'a>,
 }
 
-/// A manual alias definition of a module.
-struct ManualAlias<'a> {
+/// An alias definition of a module.
+struct AliasDef<'a> {
     name: String,
     ty: TypeRef,
-    /// Each definition makes its alias the one later lines use, so when
-    /// two aliases name one type, a definition after the first is written
-    /// with that alias.
+    /// The aliases defined before this one, when the definition may use only
+    /// those: each manual definition makes its alias the one later lines
+    /// use, so when two aliases name one type, a definition after the first
+    /// is written with that alias; definitions whose dependencies form a
+    /// cycle, which only an identified type's body can close, write a later
+    /// alias in full.
     state: Option<AsmState<'a>>,
 }
 
@@ -153,8 +157,12 @@ impl<'a> AsmState<'a> {
             .map(|(name, ty)| (name.to_string(), *ty))
             .collect();
         manual.sort_by(|a, b| a.0.cmp(&b.0));
-        topological_sort_aliases(ctx, &mut manual);
         let mut aliases = self.aliases.clone();
+        if !topological_sort_aliases(ctx, &mut manual) {
+            for (_, ty) in &manual {
+                aliases.remove(ty);
+            }
+        }
         let manual: Vec<_> = manual
             .into_iter()
             .map(|(name, ty)| {
@@ -166,16 +174,27 @@ impl<'a> AsmState<'a> {
                     identified_depth: Cell::new(0),
                 });
                 aliases.insert(ty, name.clone());
-                ManualAlias { name, ty, state }
+                AliasDef { name, ty, state }
             })
             .collect();
         let region = ctx.op_region(module, 0);
-        let auto = region
+        let (auto, ordered) = region
             .map(|region| generate_auto_aliases(ctx, region, &aliases))
-            .unwrap_or_default();
-        for (name, ty) in &auto {
-            aliases.insert(*ty, name.clone());
-        }
+            .unwrap_or((Vec::new(), true));
+        let auto = auto
+            .into_iter()
+            .map(|(name, ty)| {
+                let state = (!ordered).then(|| Self {
+                    ctx,
+                    names: self.names.clone(),
+                    aliases: aliases.clone(),
+                    modules: HashMap::default(),
+                    identified_depth: Cell::new(0),
+                });
+                aliases.insert(ty, name.clone());
+                AliasDef { name, ty, state }
+            })
+            .collect();
         let mut body = Self {
             ctx,
             names: self.names.clone(),
@@ -773,12 +792,13 @@ impl<'a> OpAsmPrinter<'a> {
                 scope.ty_expanded(alias.ty)
             )?;
         }
-        for (name, ty) in &module.auto {
+        for alias in &module.auto {
+            let scope = alias.state.as_ref().unwrap_or(&module.body);
             writeln!(
                 self,
                 "{} = {}",
-                display_alias(name),
-                module.body.ty_expanded(*ty)
+                display_alias(&alias.name),
+                scope.ty_expanded(alias.ty)
             )?;
         }
         if !module.manual.is_empty() || !module.auto.is_empty() {
@@ -1009,12 +1029,13 @@ fn count_attr_types(counts: &mut HashMap<TypeRef, usize>, attr: &Attribute) {
     attr.visit_types(&mut |ty| *counts.entry(ty).or_default() += 1);
 }
 
-/// Generate auto aliases for types that are used frequently and are complex enough.
+/// Generate auto aliases for types that are used frequently and are complex
+/// enough, and whether each one depends only on the ones before it.
 fn generate_auto_aliases(
     ctx: &IrContext,
     region: RegionRef,
     existing: &HashMap<TypeRef, String>,
-) -> Vec<(String, TypeRef)> {
+) -> (Vec<(String, TypeRef)>, bool) {
     let mut counts = collect_module_types(ctx, region);
     // Every identified type the module reaches gets an alias, whose
     // definition is the one place its body is written.
@@ -1067,9 +1088,9 @@ fn generate_auto_aliases(
     }
 
     // Topological sort: if type A references type B, B must come first
-    topological_sort_aliases(ctx, &mut result);
+    let ordered = topological_sort_aliases(ctx, &mut result);
 
-    result
+    (result, ordered)
 }
 
 /// Collect the identified types `ty` reaches: through its parameters, the
@@ -1133,7 +1154,8 @@ fn choose_alias_name(
 }
 
 /// Topological sort: ensure that if type A references type B, B's alias appears first.
-fn topological_sort_aliases(ctx: &IrContext, aliases: &mut Vec<(String, TypeRef)>) {
+/// Returns `false`, keeping the original order, when the dependencies form a cycle.
+fn topological_sort_aliases(ctx: &IrContext, aliases: &mut Vec<(String, TypeRef)>) -> bool {
     // Build a set of aliased types for quick lookup
     let alias_set: HashSet<TypeRef> = aliases.iter().map(|(_, ty)| *ty).collect();
 
@@ -1173,9 +1195,11 @@ fn topological_sort_aliases(ctx: &IrContext, aliases: &mut Vec<(String, TypeRef)
     }
 
     // If we placed everything, use sorted order; otherwise keep original (cycle)
-    if sorted.len() == n {
-        *aliases = sorted;
+    if sorted.len() != n {
+        return false;
     }
+    *aliases = sorted;
+    true
 }
 
 /// Collect all TypeRefs within `ty` that are in `alias_set` (direct type params only).

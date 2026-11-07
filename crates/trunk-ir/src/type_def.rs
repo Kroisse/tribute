@@ -625,6 +625,39 @@ mod identified_tests {
     }
 
     #[test]
+    fn a_generated_alias_in_an_identified_body_round_trips() {
+        // The body of `A` is a generated alias that writes `A` again, so the
+        // two definitions depend on each other.
+        let cell = r#"test.cell<test.ident<"A">, core.i64, core.i64, core.i64>"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            &format!(
+                "core.module @test {{\n  func.func @f(%0: {cell}, %1: {cell}) {{\n      func.return\n  }}\n}}"
+            ),
+        );
+        let a = Ident::key(&mut ctx, "A");
+        let entry = ctx.region(module.body(&ctx).unwrap()).blocks[0];
+        let func = ctx.block(entry).ops[0];
+        let body = ctx
+            .get_type(ctx.op_attrs(func).get_type("type").unwrap())
+            .params[0];
+        ctx.bind_type_body(a, body).unwrap();
+
+        let printed = module.op().display(&ctx).to_string();
+        assert!(printed.contains("!t0 = "), "{printed}");
+        // Reparsed, the definitions are the context's aliases, whose cycle
+        // the printer breaks the same way.
+        let mut reparsed = IrContext::new();
+        let reparsed_module = parse_test_module(&mut reparsed, &printed);
+        assert!(validate_type_bodies(&reparsed, reparsed_module).is_ok());
+        let reprinted = reparsed_module.op().display(&reparsed).to_string();
+        let mut again = IrContext::new();
+        let again_module = parse_test_module(&mut again, &reprinted);
+        assert_eq!(again_module.op().display(&again).to_string(), reprinted);
+    }
+
+    #[test]
     fn a_module_must_bind_every_identified_type_it_reaches() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
