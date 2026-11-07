@@ -37,6 +37,10 @@ pub struct TypeDef {
     /// Calls the wrapper's [`TypeAliasHint`]
     /// impl for types that suggest printer alias names.
     pub alias_hint: Option<TypeAliasHook>,
+    /// Whether the type is identified: its data is a key, and the context
+    /// binds its body once ([`IrContext::bind_type_body`]). An identified
+    /// type registers an assembly format, which writes its body.
+    pub identified: bool,
 }
 
 /// A type verifier, calling the wrapper's [`VerifyType`] impl.
@@ -50,6 +54,7 @@ impl TypeDef {
             verifier: None,
             asm_format: None,
             alias_hint: None,
+            identified: false,
         }
     }
 
@@ -79,6 +84,15 @@ impl TypeDef {
         }
     }
 
+    /// This definition, declared identified (`new-plans/ir.md` § "식별
+    /// 타입"). Its assembly format must write the body.
+    pub const fn identified(self) -> Self {
+        Self {
+            identified: true,
+            ..self
+        }
+    }
+
     /// The registered definition written `dialect.name`.
     pub fn lookup(name: &str) -> Option<&'static TypeDef> {
         REGISTRY.get(name)
@@ -98,6 +112,12 @@ impl Definition for TypeDef {
     fn lookup(name: &str) -> Option<&'static Self> {
         REGISTRY.get(name)
     }
+}
+
+/// Whether `ty` is an identified type: its definition declares it so
+/// ([`TypeDef::identified`]).
+pub fn is_identified(ctx: &IrContext, ty: TypeRef) -> bool {
+    TypeDef::of(ctx, ty).is_some_and(|def| def.identified)
 }
 
 /// Inventory entry registering a [`TypeDef`].
@@ -334,6 +354,18 @@ mod tests {
     }
 
     #[test]
+    fn every_identified_type_registers_an_assembly_format() {
+        // Generic syntax cannot write a body.
+        for TypeDefRegistration(def) in inventory::iter::<TypeDefRegistration> {
+            assert!(
+                !def.identified || def.asm_format.is_some(),
+                "{} is identified without an assembly format",
+                def.name.as_str()
+            );
+        }
+    }
+
+    #[test]
     fn every_registered_type_name_has_one_handle() {
         let mut ctx = IrContext::new();
         for TypeDefRegistration(def) in inventory::iter::<TypeDefRegistration> {
@@ -349,5 +381,317 @@ mod tests {
             i32_ty,
             crate::TypeDataBuilder::new(crate::dialect::core::I32::NAME).intern(&mut ctx)
         );
+    }
+}
+
+#[cfg(test)]
+mod identified_tests {
+    use std::fmt::Write as _;
+
+    use crate::asm_format::{TypeAliasHint, TypeAsmFormat};
+    use crate::ops::DialectType;
+    use crate::parser::{AsmParser, ParseResult, parse_module, parse_test_module};
+    use crate::printer::AsmPrinter;
+    use crate::types::Attribute;
+    use crate::validation::validate_type_bodies;
+    use crate::{IrContext, TypeBodyError, TypeDataBuilder, TypeRef};
+
+    use super::TypeDef;
+
+    /// `test.ident<"Key">`, or `test.ident<"Key", BODY>` where it writes its
+    /// body: an identified type whose key is its `key` attribute.
+    #[derive(Clone, Copy)]
+    struct Ident(TypeRef);
+
+    static IDENT_DEF: TypeDef = TypeDef::new("test.ident")
+        .with_asm_format::<Ident>()
+        .with_alias_hint::<Ident>()
+        .identified();
+
+    crate::register_type_def!(&IDENT_DEF);
+
+    impl Ident {
+        fn key(ctx: &mut IrContext, key: &str) -> TypeRef {
+            let key = ctx.string_attr(key);
+            TypeDataBuilder::new("test.ident")
+                .attr("key", key)
+                .intern(ctx)
+        }
+
+        fn key_text(self, ctx: &IrContext) -> Option<&str> {
+            ctx.type_attrs(self.0).get_str("key")
+        }
+    }
+
+    impl DialectType for Ident {
+        const DEF: &'static TypeDef = &IDENT_DEF;
+
+        fn from_type_ref(ctx: &IrContext, ty: TypeRef) -> Option<Self> {
+            Self::matches(ctx, ty).then_some(Self(ty))
+        }
+
+        fn as_type_ref(&self) -> TypeRef {
+            self.0
+        }
+    }
+
+    impl TypeAliasHint for Ident {
+        fn alias_hint<'a>(&self, ctx: &'a IrContext) -> Option<&'a str> {
+            self.key_text(ctx)
+        }
+    }
+
+    impl TypeAsmFormat for Ident {
+        fn print(&self, p: &mut AsmPrinter<'_>) -> std::fmt::Result {
+            let key = self.key_text(p.ctx()).ok_or(std::fmt::Error)?;
+            write!(p, "test.ident<{key:?}")?;
+            if let Some(body) = p.identified_body(self.0) {
+                p.write_str(", ")?;
+                p.print_type(body.ty())?;
+            }
+            p.write_char('>')
+        }
+
+        fn parse(p: &mut AsmParser<'_>, _name: &str) -> ParseResult<Option<TypeRef>> {
+            let key = p.parse_string()?;
+            let ty = Ident::key(p.ctx_mut(), &key);
+            if p.parse_optional_punct(",") {
+                let offset = p.offset();
+                let body = p.parse_type()?;
+                p.bind_type_body(ty, body, offset)?;
+            }
+            p.parse_punct(">")?;
+            Ok(Some(ty))
+        }
+    }
+
+    const LIST: &str = r#"core.module @test {
+  !List = test.ident<"List", test.cell<core.i32, test.ident<"List">>>
+
+  func.func @f(%0: !List) -> !List {
+      func.return %0
+  }
+}
+"#;
+
+    #[test]
+    fn a_key_and_a_written_body_name_one_type_with_that_body() {
+        let mut ctx = IrContext::new();
+        parse_test_module(&mut ctx, LIST);
+        let list = Ident::key(&mut ctx, "List");
+        assert_eq!(ctx.type_alias_by_text("List"), Some(list));
+        let body = ctx.type_body(list).expect("the alias line binds the body");
+        // The body refers to the identified type itself, by its key.
+        assert_eq!(ctx.get_type(body).params[1], list);
+    }
+
+    #[test]
+    fn a_body_is_bound_once() {
+        let mut ctx = IrContext::new();
+        let list = Ident::key(&mut ctx, "List");
+        let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
+        let i64_ty = TypeDataBuilder::new("core.i64").intern(&mut ctx);
+        assert_eq!(ctx.bind_type_body(list, i32_ty), Ok(()));
+        assert_eq!(ctx.bind_type_body(list, i32_ty), Ok(()));
+        assert_eq!(
+            ctx.bind_type_body(list, i64_ty),
+            Err(TypeBodyError::Conflicting { bound: i32_ty })
+        );
+        assert_eq!(ctx.type_body(list), Some(i32_ty));
+        // Only an identified type takes a body.
+        assert_eq!(
+            ctx.bind_type_body(i32_ty, i64_ty),
+            Err(TypeBodyError::NotIdentified)
+        );
+    }
+
+    #[test]
+    fn a_differing_body_is_a_parse_error() {
+        let mut ctx = IrContext::new();
+        let error = parse_module(
+            &mut ctx,
+            r#"core.module @test {
+  !A = test.ident<"A", core.i32>
+  !B = test.ident<"A", core.i64>
+}"#,
+        )
+        .expect_err("a second body for one key");
+        assert!(error.message.contains("differs"), "{}", error.message);
+    }
+
+    #[test]
+    fn identified_types_round_trip_with_their_bodies_on_alias_lines() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, LIST);
+        assert_eq!(module.op().display(&ctx).to_string(), LIST);
+
+        // Mutual recursion: each body writes the other type as its key, so
+        // the alias lines need no particular order.
+        let text = r#"core.module @test {
+  !A = test.ident<"A", test.cell<test.ident<"B">>>
+  !B = test.ident<"B", test.cell<test.ident<"A">>>
+
+  func.func @f(%0: !A, %1: !B) {
+      func.return
+  }
+}
+"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, text);
+        assert_eq!(module.op().display(&ctx).to_string(), text);
+    }
+
+    #[test]
+    fn the_printer_aliases_every_identified_type_a_module_reaches() {
+        // Built without aliases: `Node` is reached only through the body of
+        // `Tree`, and still gets the alias line that writes its body.
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @f(%0: core.i32) {
+      func.return
+  }
+}"#,
+        );
+        let tree = Ident::key(&mut ctx, "Tree");
+        let node = Ident::key(&mut ctx, "Node");
+        let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
+        let node_body = TypeDataBuilder::new("test.cell")
+            .param(i32_ty)
+            .param(tree)
+            .intern(&mut ctx);
+        let tree_body = TypeDataBuilder::new("test.cell")
+            .param(node)
+            .intern(&mut ctx);
+        ctx.bind_type_body(node, node_body).unwrap();
+        ctx.bind_type_body(tree, tree_body).unwrap();
+        let entry = ctx.region(module.body(&ctx).unwrap()).blocks[0];
+        let func = ctx.block(entry).ops[0];
+        ctx.op_attrs_mut(func).insert("tree", Attribute::Type(tree));
+
+        let printed = module.op().display(&ctx).to_string();
+        assert!(
+            printed
+                .contains(r#"!Node = test.ident<"Node", test.cell<core.i32, test.ident<"Tree">>>"#),
+            "{printed}"
+        );
+        assert!(
+            printed.contains(r#"!Tree = test.ident<"Tree", test.cell<test.ident<"Node">>>"#),
+            "{printed}"
+        );
+        // The printed text binds both bodies again.
+        let mut reparsed = IrContext::new();
+        let reparsed_module = parse_test_module(&mut reparsed, &printed);
+        assert!(validate_type_bodies(&reparsed, reparsed_module).is_ok());
+        let reprinted = reparsed_module.op().display(&reparsed).to_string();
+        let mut again = IrContext::new();
+        let again_module = parse_test_module(&mut again, &reprinted);
+        assert_eq!(again_module.op().display(&again).to_string(), reprinted);
+
+        // Without aliases, the outermost occurrence writes the body and the
+        // types inside it are keys.
+        assert_eq!(
+            tree.display(&ctx).to_string(),
+            r#"test.ident<"Tree", test.cell<test.ident<"Node">>>"#
+        );
+    }
+
+    #[test]
+    fn a_type_reached_only_through_an_alias_definition_keeps_its_body() {
+        // `B` appears only inside the body of the context alias `A`, where it
+        // is written as its key, so it needs an alias line of its own.
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !A = test.ident<"A", test.cell<test.ident<"B">>>
+}"#,
+        );
+        let b = Ident::key(&mut ctx, "B");
+        let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
+        ctx.bind_type_body(b, i32_ty).unwrap();
+
+        let printed = module.op().display(&ctx).to_string();
+        assert!(
+            printed.contains(r#"!B = test.ident<"B", core.i32>"#),
+            "{printed}"
+        );
+        let mut reparsed = IrContext::new();
+        let reparsed_module = parse_test_module(&mut reparsed, &printed);
+        let b = Ident::key(&mut reparsed, "B");
+        assert!(reparsed.type_body(b).is_some(), "{printed}");
+        assert!(validate_type_bodies(&reparsed, reparsed_module).is_ok());
+    }
+
+    #[test]
+    fn a_generated_alias_in_an_identified_body_round_trips() {
+        // The body of `A` is a generated alias that writes `A` again, so the
+        // two definitions depend on each other.
+        let cell = r#"test.cell<test.ident<"A">, core.i64, core.i64, core.i64>"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            &format!(
+                "core.module @test {{\n  func.func @f(%0: {cell}, %1: {cell}) {{\n      func.return\n  }}\n}}"
+            ),
+        );
+        let a = Ident::key(&mut ctx, "A");
+        let entry = ctx.region(module.body(&ctx).unwrap()).blocks[0];
+        let func = ctx.block(entry).ops[0];
+        let body = ctx
+            .get_type(ctx.op_attrs(func).get_type("type").unwrap())
+            .params[0];
+        ctx.bind_type_body(a, body).unwrap();
+
+        let printed = module.op().display(&ctx).to_string();
+        assert!(printed.contains("!t0 = "), "{printed}");
+        // Reparsed, the definitions are the context's aliases, whose cycle
+        // the printer breaks the same way.
+        let mut reparsed = IrContext::new();
+        let reparsed_module = parse_test_module(&mut reparsed, &printed);
+        assert!(validate_type_bodies(&reparsed, reparsed_module).is_ok());
+        let reprinted = reparsed_module.op().display(&reparsed).to_string();
+        let mut again = IrContext::new();
+        let again_module = parse_test_module(&mut again, &reprinted);
+        assert_eq!(again_module.op().display(&again).to_string(), reprinted);
+    }
+
+    #[test]
+    fn a_module_must_bind_every_identified_type_it_reaches() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @f(%0: test.cell<test.ident<"Orphan">>) {
+      func.return
+  }
+}"#,
+        );
+        let result = validate_type_bodies(&ctx, module);
+        assert_eq!(result.errors.len(), 1, "{result}");
+        assert!(
+            result.to_string().contains(r#"test.ident<"Orphan">"#),
+            "{result}"
+        );
+
+        let orphan = Ident::key(&mut ctx, "Orphan");
+        let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
+        ctx.bind_type_body(orphan, i32_ty).unwrap();
+        assert!(validate_type_bodies(&ctx, module).is_ok());
+    }
+
+    #[test]
+    fn attribute_types_reach_identified_types() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @f() attributes {t = test.ident<"Loose">} {
+      func.return
+  }
+}"#,
+        );
+        assert!(!validate_type_bodies(&ctx, module).is_ok());
     }
 }
