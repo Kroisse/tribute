@@ -9,7 +9,9 @@ use trunk_ir::Span;
 
 use tribute::AnalysisUnit;
 use tribute_front::ast::visit::{RefSite, Visit, walk_decl_table, walk_expr};
-use tribute_front::ast::{Expr, ExprKind, NodeId, SpanMap, Type, TypeKind, TypedRef, UniVarSource};
+use tribute_front::ast::{
+    AbilityRow, Expr, ExprKind, NodeId, SpanMap, Type, TypeKind, TypedRef, UniVarSource,
+};
 use tribute_front::resolve::NameDisplay;
 use tribute_front::typeck::TypeCheckOutput;
 use tribute_front::{SortedMap, SourceCst};
@@ -54,13 +56,21 @@ pub fn print_ast_type(db: &dyn salsa::Database, names: &NameDisplay, ty: Type<'_
             name.unwrap_or_else(|| format!("?{}", display_index))
         }
 
-        TypeKind::Named { name, args, .. } => {
+        TypeKind::Named {
+            name,
+            row_args,
+            args,
+            ..
+        } => {
             let name = name.with_str(|name| names.text(name).to_owned());
-            if args.is_empty() {
+            if row_args.is_empty() && args.is_empty() {
                 name
             } else {
-                let args_str: Vec<String> =
-                    args.iter().map(|t| print_ast_type(db, names, *t)).collect();
+                let args_str: Vec<String> = row_args
+                    .iter()
+                    .map(|row| format!("{{{}}}", print_ast_row(db, names, *row)))
+                    .chain(args.iter().map(|t| print_ast_type(db, names, *t)))
+                    .collect();
                 format!("{}({})", name, args_str.join(", "))
             }
         }
@@ -77,44 +87,15 @@ pub fn print_ast_type(db: &dyn salsa::Database, names: &NameDisplay, ty: Type<'_
                 .collect();
             let result_str = print_ast_type(db, names, *result);
 
-            let effects = effect.instances(db);
-            let has_rest = effect.rest(db).is_some();
-
-            if effects.is_empty() && !has_rest {
+            if effect.instances(db).is_empty() && effect.rest(db).is_none() {
                 // Pure function
                 format!("fn({}) -> {}", params_str.join(", "), result_str)
             } else {
                 // Function with effects
-                let effect_strs: Vec<String> = effects
-                    .iter()
-                    .map(|e| {
-                        if e.args.is_empty() {
-                            e.ability_id.name(db).to_string()
-                        } else {
-                            let args_str: Vec<String> = e
-                                .args
-                                .iter()
-                                .map(|t| print_ast_type(db, names, *t))
-                                .collect();
-                            format!("{}({})", e.ability_id.name(db), args_str.join(", "))
-                        }
-                    })
-                    .collect();
-
-                let effect_str = if has_rest {
-                    if effect_strs.is_empty() {
-                        "e".to_string()
-                    } else {
-                        format!("{} | e", effect_strs.join(", "))
-                    }
-                } else {
-                    effect_strs.join(", ")
-                };
-
                 format!(
                     "fn({}) ->{{{}}} {}",
                     params_str.join(", "),
-                    effect_str,
+                    print_ast_row(db, names, *effect),
                     result_str
                 )
             }
@@ -132,6 +113,36 @@ pub fn print_ast_type(db: &dyn salsa::Database, names: &NameDisplay, ty: Type<'_
 
         // Primitives are handled by early return above
         _ => unreachable!(),
+    }
+}
+
+/// Pretty-print the entries of an ability row, without its braces.
+fn print_ast_row(db: &dyn salsa::Database, names: &NameDisplay, row: AbilityRow<'_>) -> String {
+    let effect_strs: Vec<String> = row
+        .instances(db)
+        .iter()
+        .map(|e| {
+            if e.args.is_empty() {
+                e.ability_id.name(db).to_string()
+            } else {
+                let args_str: Vec<String> = e
+                    .args
+                    .iter()
+                    .map(|t| print_ast_type(db, names, *t))
+                    .collect();
+                format!("{}({})", e.ability_id.name(db), args_str.join(", "))
+            }
+        })
+        .collect();
+
+    if row.rest(db).is_some() {
+        if effect_strs.is_empty() {
+            "e".to_string()
+        } else {
+            format!("{} | e", effect_strs.join(", "))
+        }
+    } else {
+        effect_strs.join(", ")
     }
 }
 
@@ -320,6 +331,7 @@ mod tests {
             TypeKind::Named {
                 id: TypeDefId::builtin_list(&db),
                 name: trunk_ir::Symbol::new("List"),
+                row_args: vec![],
                 args: vec![int_ty],
             },
         );
@@ -542,6 +554,33 @@ mod tests {
         assert_eq!(
             print_ast_type(&db, &NameDisplay::identity(), func_ty),
             "fn(Int) ->{IO} Int"
+        );
+    }
+
+    #[test]
+    fn test_print_ast_type_named_with_row_arguments() {
+        use tribute_front::ast::{AbilityId, AbilityInstance, AbilityRow, RowVar};
+
+        let db = salsa::DatabaseImpl::default();
+
+        let int_ty = Type::new(&db, TypeKind::Int);
+        let state = AbilityInstance {
+            ability_id: AbilityId::source(&db, trunk_ir::SymbolPath::new(["State"])),
+            args: vec![int_ty],
+        };
+        let open = AbilityRow::new(&db, vec![state], Some(RowVar { id: 1 }));
+        let callback_ty = Type::new(
+            &db,
+            TypeKind::Named {
+                id: TypeDefId::synthetic(&db, trunk_ir::SymbolPath::new(["Callback"])),
+                name: trunk_ir::Symbol::new("Callback"),
+                row_args: vec![open, AbilityRow::pure(&db)],
+                args: vec![int_ty],
+            },
+        );
+        assert_eq!(
+            print_ast_type(&db, &NameDisplay::identity(), callback_ty),
+            "Callback({State(Int) | e}, {}, Int)"
         );
     }
 

@@ -70,13 +70,25 @@ fn write_kind<'db>(
         TypeKind::Rune => f.write_str("Rune"),
         TypeKind::Nil => f.write_str("Nil"),
         TypeKind::Never => f.write_str("Never"),
-        TypeKind::Named { name, args, .. } => {
+        TypeKind::Named {
+            name,
+            row_args,
+            args,
+            ..
+        } => {
             name.with_str(|s| f.write_str(names.text(s)))?;
-            if !args.is_empty() {
-                write!(f, "({})", list(db, args, params, names))
-            } else {
-                Ok(())
+            if row_args.is_empty() && args.is_empty() {
+                return Ok(());
             }
+            let rows = row_args
+                .iter()
+                .format_with(", ", |row, f| f(&row.display(db, names)));
+            let separator = if row_args.is_empty() || args.is_empty() {
+                ""
+            } else {
+                ", "
+            };
+            write!(f, "({rows}{separator}{})", list(db, args, params, names))
         }
         TypeKind::Func {
             params: inputs,

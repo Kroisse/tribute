@@ -190,15 +190,20 @@ impl<'db> TypeFolder<'db> for NominalRewrite<'_, 'db> {
         // not the recursively rewritten ones. Types not in the map still
         // have their arguments rewritten (for nested generics like
         // List(Option(Int)) where the outer ctor is non-generic).
-        if let TypeKind::Named { id, args, .. } = ty.kind(self.db)
+        if let TypeKind::Named {
+            id, row_args, args, ..
+        } = ty.kind(self.db)
             && !args.is_empty()
             && let Some(mangled) = find_mangled(self.db, self.map, *id, args)
         {
+            // The specialized declaration keeps the row parameters.
+            let row_args = row_args.clone().fold_with(self);
             return Ok(Type::new(
                 self.db,
                 TypeKind::Named {
                     id: id.with_path(self.db, mangled.clone()),
                     name: mangled.to_symbol(),
+                    row_args,
                     args: vec![],
                 },
             ));
@@ -334,6 +339,7 @@ mod tests {
             TypeKind::Named {
                 id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::new(["Option"])),
                 name: Symbol::new("Option"),
+                row_args: vec![],
                 args: vec![int],
             },
         );
@@ -398,6 +404,7 @@ mod tests {
                 TypeKind::Named {
                     id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::new([name])),
                     name: Symbol::new(name),
+                    row_args: vec![],
                     args,
                 },
             )
@@ -421,6 +428,7 @@ mod tests {
             TypeKind::Named {
                 id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::new(["Option"])),
                 name: Symbol::new("Option"),
+                row_args: vec![],
                 args: vec![int],
             },
         );
@@ -463,6 +471,7 @@ mod tests {
             TypeKind::Named {
                 id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::new(["Option"])),
                 name: Symbol::new("Option"),
+                row_args: vec![],
                 args: vec![int],
             },
         );
@@ -471,6 +480,7 @@ mod tests {
             TypeKind::Named {
                 id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::new(["Pair"])),
                 name: Symbol::new("Pair"),
+                row_args: vec![],
                 args: vec![option_int, bool_ty],
             },
         );

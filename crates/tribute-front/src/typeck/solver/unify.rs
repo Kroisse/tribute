@@ -51,20 +51,25 @@ impl<'db> TypeSolver<'db> {
             (
                 &TypeKind::Named {
                     id: i1,
+                    row_args: ref r1,
                     args: ref a1,
                     ..
                 },
                 &TypeKind::Named {
                     id: i2,
+                    row_args: ref r2,
                     args: ref a2,
                     ..
                 },
             ) => {
-                if i1 != i2 || a1.len() != a2.len() {
+                if i1 != i2 || r1.len() != r2.len() || a1.len() != a2.len() {
                     return Err(SolveError::TypeMismatch {
                         expected: t1,
                         actual: t2,
                     });
+                }
+                for (r1, r2) in r1.iter().zip(r2.iter()) {
+                    self.unify_rows(*r1, *r2)?;
                 }
                 for (a1, a2) in a1.iter().zip(a2.iter()) {
                     self.unify_types(*a1, *a2)?;
@@ -166,7 +171,12 @@ impl<'db> TypeSolver<'db> {
                         .get(*id)
                         .is_some_and(|bound| self.occurs_in(var, bound))
             }
-            TypeKind::Named { args, .. } => args.iter().any(|a| self.occurs_in(var, *a)),
+            TypeKind::Named { row_args, args, .. } => {
+                row_args
+                    .iter()
+                    .any(|row| self.occurs_in_ability_row(var, *row))
+                    || args.iter().any(|a| self.occurs_in(var, *a))
+            }
             TypeKind::Func {
                 params,
                 result,
@@ -249,13 +259,21 @@ impl<'db> TypeSolver<'db> {
             | (TypeKind::Nil, TypeKind::Nil) => true,
             (
                 TypeKind::Named {
-                    id: i1, args: a1, ..
+                    id: i1,
+                    row_args: r1,
+                    args: a1,
+                    ..
                 },
                 TypeKind::Named {
-                    id: i2, args: a2, ..
+                    id: i2,
+                    row_args: r2,
+                    args: a2,
+                    ..
                 },
             ) => {
+                // Like a function's row, a row argument does not decide.
                 i1 == i2
+                    && r1.len() == r2.len()
                     && a1.len() == a2.len()
                     && a1
                         .iter()

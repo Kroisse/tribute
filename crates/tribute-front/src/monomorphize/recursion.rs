@@ -197,6 +197,7 @@ mod tests {
                 TypeKind::Named {
                     id: TypeDefId::synthetic(db, SymbolPath::new(["Pair"])),
                     name: Symbol::new("Pair"),
+                    row_args: vec![],
                     args,
                 },
             )
