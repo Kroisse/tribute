@@ -4,8 +4,8 @@
 코드, 테스트, 다른 문서가 이 문서들과 어긋나면 이 문서들을 따르고 구현을 맞춘다.
 Operation 하나의 계약은 그 `#[dialect]` 선언의 doc comment가 정하며, 이 문서들은
 여러 operation에 걸친 규칙을 적는다. 현재 target 지원과 실행 증거는
-[capabilities.md](capabilities.md)가 기록하고, 구현 작업과 진행 상황은 GitHub
-Issues에서 추적한다.
+[docs/capabilities.md](../docs/capabilities.md)가 기록하고, 구현 작업과 진행
+상황은 GitHub Issues에서 추적한다.
 
 ## 언어
 
@@ -45,9 +45,8 @@ Issues에서 추적한다.
 | [runtime-types.md](runtime-types.md) | Runtime 타입 descriptor와 layout |
 | [linking.md](linking.md) | 컴파일 단위와 linking |
 
-## 도구와 현황
+## 도구
 
 | 문서 | 범위 |
 | ---- | ---- |
 | [lsp.md](lsp.md) | Language server |
-| [capabilities.md](capabilities.md) | 현재 compiler가 실제로 지원하는 범위와 그 증거 |
