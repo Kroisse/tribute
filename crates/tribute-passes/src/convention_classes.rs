@@ -26,7 +26,7 @@ pub(crate) const CLASS_MARKER: &str = "$9";
 
 /// A convention class as class specialization reads a row: exact, or an
 /// upper bound, which says the row may require any class no stronger than
-/// it at run time (`new-plans/ir.md`, "Convention entry"). The upper bound
+/// it at run time (`new-plans/tribute-dialects.md`, "Convention entry"). The upper bound
 /// `Direct` is the exact `Direct`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct Class {
@@ -594,7 +594,7 @@ impl Reader<'_> {
 
     /// Settle the class of each local binder of `body` in each body of its
     /// lambda: the merge of the classes the instantiations that select that
-    /// body pass for it (`new-plans/ir.md`, "Convention entry"). An
+    /// body pass for it (`new-plans/tribute-dialects.md`, "Convention entry"). An
     /// instantiation selects every body its made row may require, so an
     /// instantiation whose row is an upper bound reaches the bodies from
     /// that row's lower bound up to the bound.
@@ -649,7 +649,7 @@ impl Reader<'_> {
 
 /// `class`, the class of binder `tail`, as read at `at`: each
 /// `tribute_cps.lambda` body around `at` whose lambda's own row has that
-/// tail reads it narrowed to the body's convention (`new-plans/ir.md`,
+/// tail reads it narrowed to the body's convention (`new-plans/tribute-dialects.md`,
 /// "Convention entry").
 fn narrowed(ctx: &IrContext, tail: u32, at: OpRef, mut class: Class) -> Class {
     let mut current = at;

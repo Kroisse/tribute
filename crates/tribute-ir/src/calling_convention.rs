@@ -56,7 +56,7 @@ impl CallingConvention {
     pub const ALL: [Self; 3] = [Self::Direct, Self::EvidenceDirect, Self::Cps];
 
     /// The position of this convention's entry in a closure's convention
-    /// table (`new-plans/ir.md`, "Convention entry").
+    /// table (`new-plans/tribute-dialects.md`, "Convention entry").
     pub fn slot(self) -> u32 {
         match self {
             Self::Direct => 0,

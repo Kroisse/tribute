@@ -35,7 +35,7 @@ mod closure {
     ///   `Cps`), and any number of captures.
     /// - **Meaning:** the entry at a convention's slot is the physical
     ///   callable a transfer of that convention enters: a body, an adapter,
-    ///   or a trap entry (`new-plans/ir.md`, "Convention entry"). Every entry
+    ///   or a trap entry (`new-plans/tribute-dialects.md`, "Convention entry"). Every entry
     ///   function receives the closure itself as its environment, at the
     ///   environment index of its slot's convention, and reads the captures
     ///   with `unpack`.
@@ -95,7 +95,7 @@ mod closure {
     ///   from every signature. `adapters` names, by convention keyword, the
     ///   adapter entry functions of a source lambda's stronger convention
     ///   table slots without a body, and a trap entry fills each other slot
-    ///   (`new-plans/ir.md`, "Convention entry"). A generated closure, whose
+    ///   (`new-plans/tribute-dialects.md`, "Convention entry"). A generated closure, whose
     ///   closure type's callable is its own entry, has one body and no
     ///   adapters.
     /// - **Verification:** the verifier checks that the conventions are

@@ -1,6 +1,6 @@
 //! Representation/ABI boundary exit verification.
 //!
-//! The boundary exit contract (`new-plans/ir.md`, "Representation/ABI 경계")
+//! The boundary exit contract (`new-plans/abi-boundary.md`, "Representation/ABI 경계")
 //! forbids upper-level control operations, types, and semantic metadata past
 //! the point where target dialect lowering begins. This module reports every
 //! violation of that contract, and the pipeline rejects a module with any.

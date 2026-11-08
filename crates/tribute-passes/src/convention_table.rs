@@ -1,6 +1,6 @@
 //! The convention tables that `closure.new` names: one entry function per
 //! calling convention, at its slot. A slot the closure does not implement
-//! holds a shared adapter or trap entry (`new-plans/ir.md`, "Convention
+//! holds a shared adapter or trap entry (`new-plans/tribute-dialects.md`, "Convention
 //! entry").
 
 use rustc_hash::FxHashMap as HashMap;
@@ -65,7 +65,7 @@ impl EntryLayout for ExpandedFrames {
 }
 
 /// The convention tables of the closures a pass makes, and the adapters and
-/// trap entries that fill their slots (`new-plans/ir.md`, "Convention
+/// trap entries that fill their slots (`new-plans/tribute-dialects.md`, "Convention
 /// entry"). Both are shared in each symbol table block by what determines
 /// them.
 pub(crate) struct ConventionTables<L> {

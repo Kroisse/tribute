@@ -128,7 +128,7 @@ Runtime 함수는 `Bytes` argument를 호출 동안 빌리고, `Bytes` 결과는
 
 ### Array
 
-[`adt.array<E>`](ir.md#adt-배열) 값은 compiler가 할당하는 RC object다.
+[`adt.array<E>`](tribute-dialects.md#adt-배열) 값은 compiler가 할당하는 RC object다.
 
 ```text
 Array: [len: i64] [element: E...]
@@ -660,7 +660,7 @@ the tail terminator. No RC operation may follow `clif.return_call` or
 Native ownership plan은 module-local direct symbol과 complete signature를 정확히
 resolve한다. Indirect edge는 exact callable signature가 필요하고 proper tail은
 signature가 명시한 `consumed` 매개변수 계약도 필요하다. 이 계약은
-[representation/ABI 경계](ir.md#representationabi-경계) 출구의 physical signature에서
+[representation/ABI 경계](abi-boundary.md#representationabi-경계) 출구의 physical signature에서
 읽으며 의미적 호출 규약에서 추론하지 않는다. Borrowed forwarding은 direct call graph의
 monotone fixed point이며 recursive SCC, external/indirect/unknown call과 escape는
 conservative retained ownership을 선택한다. 이 정보는 textual attribute가 아니라

@@ -48,10 +48,11 @@ on its declaration in
 [`tribute_control`](../../crates/tribute-ir/src/dialect/tribute_control.rs),
 [`tribute_cps`](../../crates/tribute-ir/src/dialect/tribute_cps.rs), and
 [`ability`](../../crates/tribute-ir/src/dialect/ability.rs). See
-[the IR contract](../../new-plans/ir.md) for the rules that span operations, and
-[the shared pipeline](../../new-plans/cps-effects.md#shared-middle-end-pipeline).
+[the high-level dialect rules](../../new-plans/tribute-dialects.md) for the rules
+that span operations, and
+[the pipeline order](../../new-plans/lowering.md#pipeline-order).
 
-The target [representation/ABI boundary](../../new-plans/ir.md#representationabi-경계)
+The target [representation/ABI boundary](../../new-plans/abi-boundary.md#representationabi-경계)
 ends with an exit verification that rejects any violation in every build; later
 passes read only the physical contracts it checked. After the frontend, the
 pipeline is one ordered chain of stages that `stage_passes` in
