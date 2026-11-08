@@ -139,7 +139,7 @@ binder의 종류를 나타내는 문자열이다. 속성이 없으면 binder가 
 
 | 종류 | 뜻 |
 | ---- | ---- |
-| `param` | 정의의 scheme이 양화한 row 변수 |
+| `param` | 정의의 scheme이 양화한(∀로 묶은) row 변수 |
 | `ability_arg` | scheme이 양화했고 signature나 본문의 ability 인자 안에 나타나는 row 변수 |
 | `local` | 값이 람다인 `let`의 지역 scheme이 양화한 row 변수. 그 람다의 type이 적는 변수이며 람다가 [소유](#지역-람다의-양화와-인스턴스화)한다 |
 | `body` | 어느 scheme도 양화하지 않은 row 변수, 또는 지역 scheme이 양화했지만 [양화하는 람다가 없는](#지역-람다의-양화와-인스턴스화) row 변수 |
