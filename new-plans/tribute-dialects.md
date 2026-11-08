@@ -60,9 +60,12 @@ attribute로 바꾼다. 이 type과 convention의 전체 규칙은
 | `tribute_control.resume` | resumptive general handler arm에 바인딩된 affine resumption을 소비 |
 | `tribute_control.yield` | 실행 가능한 `tribute_control` region을 logical value로 종료 |
 
-Class 특수화가 만드는 `tribute_cps` operation은 다음과 같다. `func_table`을 뺀
-각각은 같은 이름의 `tribute_control` operation에 convention을 더한 것이고,
-`func_table`은 `func_ref`가 가리키는 convention table 정의다.
+Class 특수화가 만드는 `tribute_cps` operation은 다음과 같다. `func`,
+`call_indirect`, `tail_call_indirect`는 같은 이름의 `tribute_control`
+operation에 convention 하나를 더한 것이다. `lambda`는 convention 하나 대신
+convention entry마다의 본문 목록을 가지고, `func_ref`는 convention 대신
+`func_table` 참조를 가지며, `func_table`은 그 참조가 가리키는 convention table
+정의다.
 
 | Operation | 용도 |
 | ---- | ---- |
@@ -314,7 +317,7 @@ operation으로 바꾼다.
   convention entry마다 그 entry로 들어갈 대상 인스턴스를 가진다.
 
 나머지 `tribute_control` operation(`call`, `tail_call`, `return`, `instantiate`,
-`perform`, `handle`, `handler`, `resume`, `yield`)은 그대로 남아 `tribute_cps`
+`perform`, `handle`, `resume`, `yield`)은 그대로 남아 `tribute_cps`
 callable의 본문 안에서 쓰인다.
 
 이 변환은 full conversion이다. Class 특수화 뒤에는 위 다섯 operation의

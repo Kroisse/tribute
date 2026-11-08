@@ -96,7 +96,8 @@ Wasm 대상 변환 경계는 공통 함수 시그니처와 그 안의 중첩 타
 ## 직접형 제어 소유권
 
 구조와 의미의 source of truth는
-[ir.md](tribute-dialects.md#direct-style-control), conversion 규칙은
+[tribute-dialects.md](tribute-dialects.md#direct-style-control), conversion
+규칙은
 [cps-effects.md](cps-effects.md#direct-style-control-boundary)이다.
 
 Dependency direction은 다음과 같이 고정한다:
@@ -132,7 +133,8 @@ tribute        -> tribute-front + tribute-passes
 검증 책임은 구현 계층과 분리한다:
 
 - Frontend 경계는 `tribute-ir` validator와 generic SSA/use-chain validation을
-  함께 호출한다. 세부 검증 계약은 [ir.md](tribute-dialects.md#direct-style-control)를 따른다.
+  함께 호출한다. 세부 검증 계약은
+  [tribute-dialects.md](tribute-dialects.md#direct-style-control)를 따른다.
 - Whole-IR verifier는 static affine path를, converted resumption runtime은
   closure 재호출에 대한 dynamic one-shot enforcement를 소유한다.
 - 대상별 최종 경계는 보존된

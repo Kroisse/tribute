@@ -1,7 +1,8 @@
 # 직접형 제어와 CPS 효과 처리 파이프라인
 
 이 문서는 직접형 IR을 CPS로 바꾸는 conversion source of truth다. Operation
-구조와 verifier 계약은 [ir.md](tribute-dialects.md#direct-style-control), 계층별 소유권과
+구조와 verifier 계약은
+[tribute-dialects.md](tribute-dialects.md#direct-style-control), 계층별 소유권과
 pipeline 조합은 [implementation.md](implementation.md#직접형-제어-소유권)를
 따른다.
 
@@ -462,7 +463,8 @@ proper tail transfer로 내린다. Native의 호출 규약과 소유권 조건�
 
 ### CPS 변환의 호출 대상 형상
 
-입력 형상은 [ir.md](tribute-dialects.md#direct-style-control)의 operation/type 계약을 따른다.
+입력 형상은 [tribute-dialects.md](tribute-dialects.md#direct-style-control)의
+operation/type 계약을 따른다.
 입력은 [`tribute_cps`](tribute-dialects.md#convention과-class-특수화) callable과 남은
 `tribute_control` operation이다. Callable 값의
 logical type은 source parameter/result만 사용하며 evidence, environment,
@@ -772,7 +774,8 @@ completion과 handler arm이 어떤 closure인지, 각 transfer가 어떤 eviden
 갖는지가 여기에 속한다. Frame이 operation을 바깥 handle로 전달하고 재개될 때 자기
 층을 다시 만드는 runtime 장치는 정하지 않는다. 그 사이의 계약이 `ability` dialect의
 추상 frame 표면이며, operation과 verifier 계약은
-[ir.md](tribute-dialects.md#ability-continuation-frame-표면)를 따른다.
+[tribute-dialects.md](tribute-dialects.md#ability-continuation-frame-표면)를
+따른다.
 
 | 표면 | 뜻 |
 | --- | --- |
@@ -1028,7 +1031,8 @@ Handle 하나는 실행 중 여러 번 설치될 수 있다. 처음 설치한 �
 `resolve_evidence`는 explicit handler delimiter의 prompt와 dispatch closure를
 소비하여 `effect.extend`를 만든다. Fresh prompt placeholder는 해당 delimiter에서
 한 번만 materialize하며, body의 evidence 인자 사용을 확장된 값으로 치환한다.
-호출이 가진 evidence 선택(`evidence_plan`, [ir.md](tribute-dialects.md#direct-style-control))은
+호출이 가진 evidence 선택(`evidence_plan`,
+[tribute-dialects.md](tribute-dialects.md#direct-style-control))은
 같은 pass가 그 호출의 evidence operand 앞에 `effect.mask`/`effect.dup`/
 `effect.outer`와 `effect.tail`/`effect.push`/`effect.with_tail`로 만들고 속성을
 지운다. Delimiter의 선택은 extend 전에 바깥 evidence에 적용한다.

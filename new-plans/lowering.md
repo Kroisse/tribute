@@ -176,13 +176,13 @@ LowerRuntimeCalls   target bytes intrinsic bridge
 ExitBoundary        closure storage layout, value integrity check, global
                     DCE, canonicalization, boundary exit verification
 ── target dialect lowering ──
-LowerTarget         Wasm or native lowering (next two sections), then
-                    emission
+LowerTarget         Wasm or native lowering (next two sections)
 ```
 
 The [representation/ABI boundary](abi-boundary.md#representationabi-경계)
 spans `EnterTarget` through `ExitBoundary`; every later pass consumes only its
-exit contract.
+exit contract. Emission (`emit_wasm`, `emit_native`) is not a stage: the
+compiler runs it after the stage chain returns.
 
 ## Wasm Lowering
 
