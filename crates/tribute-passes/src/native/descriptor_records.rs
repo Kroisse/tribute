@@ -415,8 +415,8 @@ mod tests {
     const DECLARED: &str = r#"core.module @test {
   !Pair = adt.struct<Pair(a: core.i32, b: core.i32)>
   !Choice = adt.enum<Choice { None(), Some(tribute_rt.anyref) }>
-  adt.struct_decl "Pair" {fields = ["left", "right"]}
-  adt.enum_decl "Choice" {variants = ["Nothing", "Just"]}
+  adt.struct_decl "Pair" (left, right)
+  adt.enum_decl "Choice" [Nothing, Just]
 }"#;
 
     #[test]
@@ -452,7 +452,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !Pair = adt.struct<Pair(a: core.i32, b: core.i32)>
-  adt.struct_decl "Pair" {fields = ["left"]}
+  adt.struct_decl "Pair" (left)
 }"#,
         );
         let decls = NominalDecls::collect(&ctx, module);

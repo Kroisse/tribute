@@ -1,5 +1,9 @@
 //! Arena-based adt dialect.
 
+mod syntax;
+
+pub use syntax::{FieldNames, VariantNames};
+
 use crate::dialect::tribute_rtti::ManagedRefType;
 use trunk_ir::asm_format::TypeAliasHint;
 use trunk_ir::dialect::core::Index;
@@ -133,7 +137,7 @@ mod adt {
     /// The source names of the struct layout named `name`.
     ///
     /// ```text
-    /// adt.struct_decl "geo::Point" {fields = ["x", "y"]}
+    /// adt.struct_decl "geo::Point" (x, y)
     /// ```
     ///
     /// - **Shape:** a module-level operation. `name` is the `name` of the
@@ -145,13 +149,13 @@ mod adt {
     /// - **Location:** the frontend emits it with the layout of each source
     ///   struct; the target pass that lowers `adt` operations erases it
     ///   (`new-plans/ir.md` § "Nominal 선언").
-    #[asm_format(name attr_dict_bare)]
+    #[asm_format(name custom(FieldNames(fields)) attr_dict)]
     fn struct_decl(name: Attr<String>, fields: Attr<[String]>) {}
 
     /// The source names of the enum layout named `name`.
     ///
     /// ```text
-    /// adt.enum_decl "geo::Shape" {variants = ["Dot", "Rect"]}
+    /// adt.enum_decl "geo::Shape" [Dot, Rect]
     /// ```
     ///
     /// - **Shape:** a module-level operation. `name` is the `name` of the
@@ -163,7 +167,7 @@ mod adt {
     /// - **Location:** the frontend emits it with the layout of each source
     ///   enum and each specialized enum instance; the target pass that
     ///   lowers `adt` operations erases it (`new-plans/ir.md` § "Nominal 선언").
-    #[asm_format(name attr_dict_bare)]
+    #[asm_format(name custom(VariantNames(variants)) attr_dict)]
     fn enum_decl(name: Attr<String>, variants: Attr<[String]>) {}
 
     /// A `length`-element array whose every element is `initial`.
@@ -1097,9 +1101,10 @@ mod tests {
   !Point = adt.struct<Point(x: core.i32, y: core.i32)>
   !Empty = adt.struct<Empty()>
   !Never = adt.enum<Never {}>
-  adt.struct_decl "Point" {fields = ["x", "y"]}
-  adt.struct_decl "Empty" {fields = []}
-  adt.enum_decl "Never" {variants = []}
+  adt.struct_decl "Point" (x, y)
+  adt.struct_decl "Empty" ()
+  adt.enum_decl "Never" []
+  adt.struct_decl "Quoted" ("0", "a b")
 }"#,
         );
         assert_roundtrip(&ctx, module.op());

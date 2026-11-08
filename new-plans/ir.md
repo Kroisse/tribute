@@ -2716,13 +2716,17 @@ Source가 선언한 struct와 enum은 각각 module 최상위의 선언 operatio
 이름을 읽는다. LLVM의 debug metadata가 source 이름을 타입과 따로 두는 것과 같다.
 
 ```text
-adt.struct_decl "geo::Point" {fields = ["x", "y"]}
-adt.enum_decl "geo::Shape" {variants = ["Dot", "Rect"]}
+adt.struct_decl "geo::Point" (x, y)
+adt.enum_decl "geo::Shape" [Dot, Rect]
 ```
 
 - `adt.struct_decl`은 struct의 필드 이름을, `adt.enum_decl`은 enum의 variant
   이름을 선언 순서대로 담는다. 그 수는 layout의 필드 수, variant 수와 같다.
   Variant의 필드 이름은 담지 않는다.
+- 선언은 이름만 담고 타입은 담지 않는다. 필드와 variant의 타입은 layout이 소유하며,
+  layout을 변환하는 pass는 선언을 고치지 않는다. 텍스트 형식은 이름 목록을 그것이
+  이름 붙이는 layout의 위치 목록과 같은 괄호로 쓴다. 필드는 `(..)`, variant는
+  `[..]`로 쓰며, 식별자가 아닌 이름은 따옴표로 쓴다.
 - 선언은 layout을 그 이름으로 가리킨다. 이름은 frontend가 게시한 alias와 layout의
   `name`, 그 layout을 가리키는 `adt.typeref`의 `name`과 같다. Layout을 변환하는
   pass가 변환한 layout을 같은 이름으로 다시 게시하므로 선언은 변환을 따라갈 필요가
