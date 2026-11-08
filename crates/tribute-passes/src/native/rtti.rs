@@ -210,6 +210,7 @@ pub(crate) fn generate_rtti(
 ) -> Result<(), RttiError> {
     let mut layouts = tribute_rtti::Layout::declared(ctx, module);
     validate_declarations(ctx, module, &layouts)?;
+    let decls = tribute_ir::dialect::adt::NominalDecls::collect(ctx, module);
     let primitive_releases = primitive_release_entries(ctx, module);
 
     // Phase 2: Generate per-type release functions and append to module
@@ -274,7 +275,10 @@ pub(crate) fn generate_rtti(
             )
         };
         ctx.push_op(module_block, func_op);
-        records.push((rtti_idx, DescriptorRecord::of_layout(ctx, ty, tag, fields)));
+        records.push((
+            rtti_idx,
+            DescriptorRecord::of_layout(ctx, &decls, ty, tag, fields),
+        ));
     }
     descriptor_records::generate(ctx, module_block, records, &release_fns, loc);
 

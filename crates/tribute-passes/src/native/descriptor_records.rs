@@ -12,6 +12,7 @@ use rustc_hash::FxHashMap as HashMap;
 use crate::collections;
 
 use tribute_ir::dialect::adt;
+use tribute_ir::dialect::adt::NominalDecls;
 use tribute_ir::dialect::adt::layout::get_enum_variants;
 use tribute_ir::dialect::tribute_rtti::FieldKind;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
@@ -58,9 +59,18 @@ pub struct DescriptorRecord {
 }
 
 impl DescriptorRecord {
-    /// The record of the descriptor `(ty, tag)`, read from its nominal layout.
+    /// The record of the descriptor `(ty, tag)`, read from its nominal layout
+    /// and the layout's declaration in `decls` (`new-plans/ir.md` § "Nominal
+    /// 선언").
+    ///
+    /// # Panics
+    ///
+    /// If the declaration names a different number of fields or variants
+    /// than the layout has: a shorter list would leave fields out of the
+    /// record and so out of its release.
     pub fn of_layout(
         ctx: &IrContext,
+        decls: &NominalDecls,
         ty: TypeRef,
         tag: Option<StringRef>,
         fields: Vec<FieldKind>,
@@ -77,21 +87,52 @@ impl DescriptorRecord {
             None => {
                 let layout = adt::Struct::from_type_ref(ctx, ty)
                     .expect("a struct descriptor has an adt.struct layout");
-                let names = layout.fields(ctx).map(|(name, _)| name.to_owned());
+                // A compiler-built layout has no declaration and records the
+                // names it carries itself.
+                let names: Vec<String> = match decls.of_struct(ctx, layout) {
+                    Some(decl) => decl.fields(ctx).map(str::to_owned).collect(),
+                    None => layout
+                        .fields(ctx)
+                        .map(|(name, _)| name.to_owned())
+                        .collect(),
+                };
+                assert_eq!(
+                    names.len(),
+                    fields.len(),
+                    "the declaration of {} names each of its fields",
+                    layout.name(ctx),
+                );
                 Self {
                     kind: RecordKind::Struct,
                     name: layout.name(ctx).to_owned(),
                     owner: None,
-                    fields: names.zip(fields).collect(),
+                    fields: names.into_iter().zip(fields).collect(),
                 }
             }
             Some(tag) => {
+                let layout = adt::Enum::from_type_ref(ctx, ty)
+                    .expect("a variant descriptor has an adt.enum layout");
                 let position = get_enum_variants(ctx, ty)
                     .and_then(|variants| variants.iter().position(|(name, _)| *name == tag))
                     .expect("a variant descriptor names a variant of its adt.enum layout");
+                let name = match decls.of_enum(ctx, layout) {
+                    Some(decl) => {
+                        assert_eq!(
+                            decl.variants(ctx).len(),
+                            layout.variant_count(ctx),
+                            "the declaration of {} names each of its variants",
+                            layout.name(ctx),
+                        );
+                        decl.variants(ctx)
+                            .nth(position)
+                            .expect("the declaration names each variant")
+                            .to_owned()
+                    }
+                    None => ctx.str(tag).to_owned(),
+                };
                 Self {
                     kind: RecordKind::Variant,
-                    name: ctx.str(tag).to_owned(),
+                    name,
                     owner: Some((ty, position as u32)),
                     fields: positional(fields),
                 }
@@ -349,10 +390,68 @@ mod tests {
             width: 16,
             signed: false,
         };
-        let record = DescriptorRecord::of_layout(&ctx, shorts, None, vec![element]);
+        let record = DescriptorRecord::of_layout(
+            &ctx,
+            &NominalDecls::default(),
+            shorts,
+            None,
+            vec![element],
+        );
         assert_eq!(record.kind, RecordKind::Array);
         assert_eq!(record.owner, None);
         assert_eq!(record.fields, [("0".to_owned(), element)]);
+    }
+
+    const DECLARED: &str = r#"core.module @test {
+  !Pair = adt.struct<Pair(a: core.i32, b: core.i32)>
+  !Choice = adt.enum<Choice { None(), Some(tribute_rt.anyref) }>
+  adt.struct_decl "Pair" {fields = ["left", "right"]}
+  adt.enum_decl "Choice" {variants = ["Nothing", "Just"]}
+}"#;
+
+    #[test]
+    fn records_read_names_from_declarations() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, DECLARED);
+        let decls = NominalDecls::collect(&ctx, module);
+        let pair = ctx.type_alias_by_text("Pair").unwrap();
+        let int = FieldKind::Int {
+            width: 32,
+            signed: true,
+        };
+        let record = DescriptorRecord::of_layout(&ctx, &decls, pair, None, vec![int, int]);
+        assert_eq!(record.name, "Pair");
+        assert_eq!(
+            record.fields,
+            [("left".to_owned(), int), ("right".to_owned(), int)]
+        );
+
+        let choice = ctx.type_alias_by_text("Choice").unwrap();
+        let some = ctx.intern_str("Some");
+        let record =
+            DescriptorRecord::of_layout(&ctx, &decls, choice, Some(some), vec![FieldKind::Dynamic]);
+        assert_eq!(record.name, "Just");
+        assert_eq!(record.owner, Some((choice, 1)));
+    }
+
+    #[test]
+    #[should_panic(expected = "names each of its fields")]
+    fn a_declaration_must_name_every_field() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !Pair = adt.struct<Pair(a: core.i32, b: core.i32)>
+  adt.struct_decl "Pair" {fields = ["left"]}
+}"#,
+        );
+        let decls = NominalDecls::collect(&ctx, module);
+        let pair = ctx.type_alias_by_text("Pair").unwrap();
+        let int = FieldKind::Int {
+            width: 32,
+            signed: true,
+        };
+        DescriptorRecord::of_layout(&ctx, &decls, pair, None, vec![int, int]);
     }
 
     #[test]
@@ -369,8 +468,13 @@ mod tests {
         );
         let choice = ctx.type_alias_by_text("Choice").expect("Choice alias");
         let some = ctx.intern_str("Some");
-        let record =
-            DescriptorRecord::of_layout(&ctx, choice, Some(some), vec![FieldKind::Dynamic]);
+        let record = DescriptorRecord::of_layout(
+            &ctx,
+            &NominalDecls::default(),
+            choice,
+            Some(some),
+            vec![FieldKind::Dynamic],
+        );
         assert_eq!(record.kind, RecordKind::Variant);
         assert_eq!(record.name, "Some");
         assert_eq!(record.owner, Some((choice, 1)));

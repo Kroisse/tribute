@@ -10,6 +10,7 @@ core.module @test {
   !t0 = tribute_control.func_sig<(!"pkg::Point_1", !t2) -> !"pkg::Point_1" row(| 'a0)>
   !t3 = tribute_control.func_sig<(!"pkg::Point_1") -> core.i32>
 
+  adt.struct_decl "pkg::Point" {fields = ["x", "y"]}
   tribute_control.func @"pkg::Point::x"(%0: !"pkg::Point_1") -> core.i32 {
       %1 = adt.struct_get %0 {field = 0, type = !"pkg::Point"} : core.i32
       tribute_control.return %1

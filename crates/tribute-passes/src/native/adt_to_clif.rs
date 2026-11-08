@@ -51,6 +51,7 @@ fn lower(
         .add_pattern(RefNullPattern)
         .add_pattern(RefCastPattern)
         .add_pattern(RefIsNullPattern)
+        .add_pattern(adt::EraseNominalDecls)
         .with_target(adt_to_clif_target());
     applicator.apply_partial_conversion(ctx, module, "adt-to-clif")?;
     Ok(())

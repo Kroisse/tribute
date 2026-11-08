@@ -112,8 +112,8 @@ Descriptor는 runtime에 할당되는 값의 종류마다 하나다.
 ## IR에서의 표현
 
 Nominal IR에는 descriptor 선언이 없다. Descriptor의 identity는 할당 operation이
-가리키는 nominal layout 타입과 variant tag의 쌍이다. 이름과 필드 이름의 출처는
-`adt.struct`와 `adt.enum` 하나뿐이다.
+가리키는 nominal layout 타입과 variant tag의 쌍이다. Source가 선언한 타입의 이름,
+필드 이름, variant 이름의 출처는 그 타입의 [nominal 선언](ir.md#nominal-선언)이다.
 
 - Nominal layout을 마지막으로 해석하는 target 경계가 descriptor를 소유한다. 이
   경계는 `(layout 타입, tag)`마다 번호와 필드 종류를 정해 module 수준

@@ -130,6 +130,42 @@ mod adt {
     ) -> Value<_> {
     }
 
+    /// The source names of the struct layout named `name`.
+    ///
+    /// ```text
+    /// adt.struct_decl "geo::Point" {fields = ["x", "y"]}
+    /// ```
+    ///
+    /// - **Shape:** a module-level operation. `name` is the `name` of the
+    ///   `adt.struct` layout the frontend publishes under that alias, and
+    ///   `fields` has one name per field of that layout, in declaration
+    ///   order.
+    /// - **Meaning:** names only; no value depends on it. Native RTTI
+    ///   records the struct's name and field names from it.
+    /// - **Location:** the frontend emits it with the layout of each source
+    ///   struct; the target pass that lowers `adt` operations erases it
+    ///   (`new-plans/ir.md` § "Nominal 선언").
+    #[asm_format(name attr_dict_bare)]
+    fn struct_decl(name: Attr<String>, fields: Attr<[String]>) {}
+
+    /// The source names of the enum layout named `name`.
+    ///
+    /// ```text
+    /// adt.enum_decl "geo::Shape" {variants = ["Dot", "Rect"]}
+    /// ```
+    ///
+    /// - **Shape:** a module-level operation. `name` is the `name` of the
+    ///   `adt.enum` layout the frontend publishes under that alias, and
+    ///   `variants` has one name per variant of that layout, in declaration
+    ///   order.
+    /// - **Meaning:** names only; no value depends on it. Native RTTI
+    ///   records the enum's name and its variants' names from it.
+    /// - **Location:** the frontend emits it with the layout of each source
+    ///   enum and each specialized enum instance; the target pass that
+    ///   lowers `adt` operations erases it (`new-plans/ir.md` § "Nominal 선언").
+    #[asm_format(name attr_dict_bare)]
+    fn enum_decl(name: Attr<String>, variants: Attr<[String]>) {}
+
     /// A `length`-element array whose every element is `initial`.
     #[flags(Pure)]
     #[asm_format(length "," initial attr_dict_bare ":" type(result))]
@@ -362,6 +398,7 @@ impl Fold for RefCast {
 
 // === Nominal struct layout type ===
 
+use rustc_hash::FxHashMap as HashMap;
 use trunk_ir::attr_kind::{Bytes, Type};
 use trunk_ir::context::IrContext;
 use trunk_ir::ops::DialectType;
@@ -412,6 +449,62 @@ pub fn layout_of(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> {
     }
     let layout = ctx.type_alias_by_text(nominal_name(ctx, ty)?)?;
     is_layout(layout).then_some(layout)
+}
+
+/// The nominal declarations of a module, by the name of the layout each one
+/// declares (`new-plans/ir.md` § "Nominal 선언").
+#[derive(Debug, Default)]
+pub struct NominalDecls {
+    structs: HashMap<StringRef, StructDecl>,
+    enums: HashMap<StringRef, EnumDecl>,
+}
+
+impl NominalDecls {
+    /// The declarations at the top level of `module`.
+    pub fn collect(ctx: &IrContext, module: trunk_ir::rewrite::Module) -> Self {
+        let mut decls = Self::default();
+        let Some(block) = module.first_block(ctx) else {
+            return decls;
+        };
+        for &op in &ctx.block(block).ops {
+            if let Ok(decl) = StructDecl::from_op(ctx, op) {
+                decls.structs.insert(decl.name_ref(ctx), decl);
+            } else if let Ok(decl) = EnumDecl::from_op(ctx, op) {
+                decls.enums.insert(decl.name_ref(ctx), decl);
+            }
+        }
+        decls
+    }
+
+    /// The declaration of the struct layout `layout`.
+    pub fn of_struct(&self, ctx: &IrContext, layout: Struct) -> Option<StructDecl> {
+        self.structs.get(&layout.name_ref(ctx)).copied()
+    }
+
+    /// The declaration of the enum layout `layout`.
+    pub fn of_enum(&self, ctx: &IrContext, layout: Enum) -> Option<EnumDecl> {
+        self.enums.get(&layout.name_ref(ctx)).copied()
+    }
+}
+
+/// Erases `adt.struct_decl` and `adt.enum_decl`, for the target pass that
+/// lowers `adt` operations.
+pub struct EraseNominalDecls;
+
+impl trunk_ir::rewrite::RewritePattern for EraseNominalDecls {
+    fn roots(&self) -> Option<&[trunk_ir::OpName]> {
+        Some(&[StructDecl::NAME, EnumDecl::NAME])
+    }
+
+    fn match_and_rewrite(
+        &self,
+        _ctx: &mut IrContext,
+        _op: trunk_ir::OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> Option<()> {
+        rewriter.erase_op(vec![]);
+        Some(())
+    }
 }
 
 /// A malformed `adt.struct` type.

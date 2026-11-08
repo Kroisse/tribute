@@ -2709,6 +2709,32 @@ adt.typeref<Pair[row(), row(@A | 'a0)]>
   안의 tail은 [다른 type alias](#사용자-정의-어셈블리-형식)에서처럼 그 alias를 쓴
   정의의 binder를 가리킨다.
 
+### Nominal 선언
+
+Source가 선언한 struct와 enum은 각각 module 최상위의 선언 operation 하나를 가진다.
+선언은 source 이름을 소유하며, 이름이 필요한 단계는 layout 타입이 아니라 선언에서
+이름을 읽는다. LLVM의 debug metadata가 source 이름을 타입과 따로 두는 것과 같다.
+
+```text
+adt.struct_decl "geo::Point" {fields = ["x", "y"]}
+adt.enum_decl "geo::Shape" {variants = ["Dot", "Rect"]}
+```
+
+- `adt.struct_decl`은 struct의 필드 이름을, `adt.enum_decl`은 enum의 variant
+  이름을 선언 순서대로 담는다. 그 수는 layout의 필드 수, variant 수와 같다.
+  Variant의 필드 이름은 담지 않는다.
+- 선언은 layout을 그 이름으로 가리킨다. 이름은 frontend가 게시한 alias와 layout의
+  `name`, 그 layout을 가리키는 `adt.typeref`의 `name`과 같다. Layout을 변환하는
+  pass가 변환한 layout을 같은 이름으로 다시 게시하므로 선언은 변환을 따라갈 필요가
+  없다.
+- Frontend는 nominal layout을 게시할 때 그 선언을 함께 내보낸다. 특수화된 enum은
+  인스턴스마다 layout과 선언을 가진다. Compiler가 만든 layout(closure 저장,
+  continuation frame, tuple layout 등)은 선언이 없다.
+- Native RTTI 생성은 struct·enum의 이름, struct의 필드 이름, variant 이름을 선언에서
+  읽는다([RTTI Table](rc.md#rtti-table)). 선언이 없는 layout의 레코드는 compiler가 정한
+  이름을 쓴다. 선언은 값의 의미를 바꾸지 않으며, `adt` operation을 내리는 target
+  pass가 지운다.
+
 ### `func.func_sig` function type
 
 `func.func_sig` stores inputs and results as separate logical lists. It keeps a

@@ -392,6 +392,84 @@ fn wasm_boundary_exit_programs_meet_the_contract(db: &crate::TributeDatabaseImpl
     );
 }
 
+/// The nominal declarations of source types reach native RTTI generation,
+/// each naming the layout published under its name, including layouts whose
+/// fields CPS legalization converts.
+#[salsa_test]
+fn nominal_declarations_reach_the_native_boundary_exit(db: &crate::TributeDatabaseImpl) {
+    use tribute_ir::dialect::adt;
+
+    let source = source_from_str(
+        "nominal_declarations.trb",
+        r#"
+struct Point { x: Int, y: Int }
+struct Handler { run: fn(Int) -> Int }
+enum Shape { Dot, Circle(Point, Int), Rect(Point, Point) }
+enum Maybe(a) { Just(a), Nothing }
+
+fn area(shape: Shape) -> Int {
+    case shape {
+        .Dot -> +0
+        .Circle(_, r) -> r * r
+        .Rect(a, b) -> b.x - a.x
+    }
+}
+
+fn apply(h: Handler, value: Maybe(Int)) -> Int {
+    case value {
+        .Just(v) -> {
+            let run = h.run
+            run(v)
+        }
+        .Nothing -> +0
+    }
+}
+
+fn main() -> Nil {
+    let h = Handler { run: fn(v) { v + area(Shape::Circle(Point { x: +0, y: +0 }, v)) } }
+    let _ = apply(h, Maybe::Just(+2))
+}
+"#,
+    );
+    let (mut ctx, module) = run_shared_pipeline(db, source)
+        .expect("shared pipeline must succeed")
+        .expect("the program lowers");
+    run_target_to_boundary_exit(
+        &mut ctx,
+        module,
+        tribute_passes::abi_boundary::TargetKind::Native,
+    )
+    .unwrap_or_else(|error| panic!("native boundary failed: {error}"));
+
+    let block = module.first_block(&ctx).expect("module body");
+    let mut declared = Vec::new();
+    for &op in &ctx.block(block).ops {
+        if let Ok(decl) = adt::StructDecl::from_op(&ctx, op) {
+            let layout = ctx
+                .type_alias_by_text(decl.name(&ctx))
+                .and_then(|ty| adt::Struct::from_type_ref(&ctx, ty))
+                .unwrap_or_else(|| panic!("{} names a published struct", decl.name(&ctx)));
+            assert_eq!(decl.fields(&ctx).len(), layout.fields(&ctx).count());
+            declared.push(decl.name(&ctx).to_owned());
+        } else if let Ok(decl) = adt::EnumDecl::from_op(&ctx, op) {
+            let layout = ctx
+                .type_alias_by_text(decl.name(&ctx))
+                .and_then(|ty| adt::Enum::from_type_ref(&ctx, ty))
+                .unwrap_or_else(|| panic!("{} names a published enum", decl.name(&ctx)));
+            assert_eq!(decl.variants(&ctx).len(), layout.variant_count(&ctx));
+            declared.push(decl.name(&ctx).to_owned());
+        }
+    }
+    for name in ["Point", "Handler", "Shape", "Maybe$Int"] {
+        assert!(
+            declared
+                .iter()
+                .any(|declared| declared.rsplit("::").next() == Some(name)),
+            "{name} is declared: {declared:?}"
+        );
+    }
+}
+
 #[test]
 fn boundary_exit_enforcement_rejects_any_violation() {
     let mut ctx = IrContext::new();
