@@ -464,12 +464,12 @@ use trunk_ir::types::{
 
 pub mod layout;
 
-/// Type attribute holding an `adt.struct`'s name, and the parameter attribute
-/// holding each field's name. Both are strings.
+/// Type attribute holding a nominal layout's or an `adt.typeref`'s name, a
+/// string.
 pub const STRUCT_NAME_ATTR: &str = "name";
 
-/// Whether `ty` is an `adt.struct`, `adt.enum` or `adt.typeref`: a type
-/// named by its `name` attribute.
+/// Whether `ty` is an `adt.struct`, `adt.enum` or `adt.typeref`. A nominal
+/// one is named by its `name` attribute; a literal `adt.struct` has none.
 pub fn is_nominal(ctx: &IrContext, ty: TypeRef) -> bool {
     let name = ctx.get_type(ty).name;
     name == <Struct as DialectType>::NAME
