@@ -89,7 +89,7 @@ WebAssembly Binary
 
 Shared ability lowering은 `effect.*`를 만들며 Marker field 번호나 closure layout을
 검사하지 않는다. 두 target이 공유하는 evidence lowering(`evidence_lowering`)이
-[representation/ABI 경계](ir.md#representationabi-경계) 안에서 `effect.*`를 공유
+[representation/ABI 경계](abi-boundary.md#representationabi-경계) 안에서 `effect.*`를 공유
 value/control dialect로 낮춘다. Evidence 조회와 확장은
 [evidence runtime 항목](cps-effects.md#handle-evidence-extension--handler-closures)을
 `func.call`로 호출한다. Canonical closure layout은 `adt.struct_get`으로
@@ -125,9 +125,11 @@ Wasm 코드 생성기는 함수 본문이나 테이블 인덱스에서 CPS 여�
 
 `scf_to_wasm`은 `scf.index_switch`를 case 순서대로 중첩된 비교와
 `wasm.if`로 낮춘다. Wasm이 정수를 직접 비교하는 폭은 `i32`와 `i64`뿐이므로
-discriminant는 `core.i32` 또는 `core.i64`여야 하고, 각각 `wasm.i32_eq`와
-`wasm.i64_eq`로 비교한다. 두 비교 모두 `core.i32` 조건을 만든다. 모든 case
-값은 discriminant 타입의 부호 있는 범위에 들어가야 한다. 다른 discriminant 타입과
+discriminant는 `core.i32`, `core.i64`, `core.index` 중 하나여야 한다.
+`core.i64`는 `wasm.i64_eq`로 비교하고, 나머지는 `wasm.i32_eq`로 비교한다.
+`core.index`는 Wasm에서 `core.i32`이다. 두 비교 모두 `core.i32` 조건을
+만든다. 모든 case 값은 discriminant 타입의 부호 있는 범위에 들어가야 한다. 다른
+discriminant 타입과
 범위를 벗어난 case 값은 변환을 시작하기 전에 해당 switch와 이유를 담은
 conversion 오류로 거부한다. 결과가 있는 switch는 각 `wasm.if`가 그 결과 타입을
 선언하고, 안쪽 `wasm.if`의 결과를 바깥 region이 `wasm.yield`로 넘긴다.
@@ -190,7 +192,7 @@ signature를 still-unconverted operation과 맞대지 않는다.
 The frontend accepts `main` only when its declared result is `Nil`. A frontend
 error is terminal, so the Wasm backend never receives a valid program whose
 `main` returns an `Int`, `Nat`, or another user value. Entry bridge composition
-inside the [representation/ABI boundary](ir.md#representationabi-경계) turns
+inside the [representation/ABI boundary](abi-boundary.md#representationabi-경계) turns
 every root `main` into a worker and synthesizes a parameterless, unreferenced
 wrapper `main` that supplies the worker's convention-specific inputs, such as
 target-provided initial evidence. Wasm lowering exports that wrapper directly
@@ -218,7 +220,7 @@ module-level mutable `i32` global 하나를 카운터로 쓰며, 현재 값을 �
 더해 저장한다. 따라서 tag는 native runtime과 같이 0부터 호출 순서대로 발급된다.
 카운터 global은 기존 global 뒤에 추가하므로 기존 global index를 바꾸지 않는다.
 Wasm target이 구현을 제공하지 않는 C helper를 참조하면
-[representation/ABI 경계](ir.md#representationabi-경계)의 출구 검증이 모듈을
+[representation/ABI 경계](abi-boundary.md#representationabi-경계)의 출구 검증이 모듈을
 거부한다. 아래의 bodyless 선언 규칙은 경계를 우회한 입력에 대한 emission의 마지막
 방어선이다.
 Wasm source handler 지원은 shared/native handler 실행 지원이 아니라 Wasm 실행
@@ -406,7 +408,7 @@ ADT lowering은 `adt` 배열 operation의 `core.index`를 이 폭에 맞춘다.
 - 32비트 memory에서는 `core.index`가 이미 `i32`이므로 그대로 넘긴다.
 - memory64에서 index, `start`, `end`, 길이는 `i32`의 부호 없는 범위를 넘으면 trap한
   뒤 `i32`로 좁힌다. GC 배열의 길이는 이 범위 안에 있으므로 좁힐 수 없는 index는
-  어차피 범위 밖이고, trap은 [`adt` 배열](ir.md#adt-배열)의 범위 계약과 같다.
+  어차피 범위 밖이고, trap은 [`adt` 배열](tribute-dialects.md#adt-배열)의 범위 계약과 같다.
 - `array.len`의 결과는 0 확장으로 `core.index`가 된다.
 
 ### Structural GC 타입과 descriptor 필드
@@ -490,7 +492,7 @@ layout들로 이루어진다.
 
 - Closure base(`layout = "closure"`)는 예약 index 3의 `{ entries: i32 }`이며 final이
   아니다. Entries 필드는 immutable이며 function table 안의
-  [convention table](ir.md#convention-entry) 시작 index다. Function table은
+  [convention table](tribute-dialects.md#convention-entry) 시작 index다. Function table은
   `func.constant`가 가리키는 함수와 convention table이 함께 쓰는 table 하나이며,
   `tribute_rt.convention_table` lowering이 entry 함수 목록마다 연속한 칸을 그 element
   segment 끝에 더한다. 한 entry 함수 목록은 function

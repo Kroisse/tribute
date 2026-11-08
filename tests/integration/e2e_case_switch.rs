@@ -1,5 +1,5 @@
 //! End-to-end coverage for `case` expressions that select by integer
-//! literal and lower to `scf.index_switch`, on both targets.
+//! literal or by variant and lower to `scf.index_switch`, on both targets.
 
 use crate::common;
 
@@ -124,5 +124,90 @@ fn main() ->{Io} Nil {
 }
 "#,
         "2^30\nbig\nmax\nother\nmin\nmax\nother\nmax\nother",
+    );
+}
+
+/// A variant case switches on the variant's position, whichever variants
+/// the program allocates: `Shape::Unused` is never built, and `Shape::Dot`
+/// is built only after a variant declared after it.
+#[test]
+fn variant_case_switch_runs_on_both_targets() {
+    assert_output_on_both_targets(
+        "variant_case_switch.trb",
+        r#"
+use std::io::{Io, print_line}
+
+ability Ask {
+    op ask() -> Nat
+}
+
+enum Shape {
+    Unused,
+    Circle(Nat),
+    Rect { width: Nat, height: Nat },
+    Dot,
+    Line(Nat, Nat),
+}
+
+fn name(shape: Shape) -> String {
+    case shape {
+        .Circle(r) -> "circle " <> r.to_string
+        .Rect { width, height } -> "rect " <> { width * height }.to_string
+        .Dot -> "dot"
+        .Unused -> "unused"
+        .Line(a, b) -> "line " <> { a + b }.to_string
+    }
+}
+
+fn kind(shape: Shape) -> String {
+    case shape {
+        .Dot -> "small"
+        .Line(_, _) as line -> "long " <> name(line)
+        _ -> "other"
+    }
+}
+
+fn count(shape: Shape, acc: Nat) -> Nat {
+    case shape {
+        .Line(a, _) -> become count(Shape::Circle(a), acc + 1)
+        .Circle(r) -> become count(Shape::Dot, acc + r)
+        .Dot -> acc
+        _ -> acc + 100
+    }
+}
+
+fn asked(shape: Shape) ->{Ask} Nat {
+    case shape {
+        .Circle(r) -> Ask::ask() + r
+        .Dot -> Ask::ask()
+        _ -> 0
+    }
+}
+
+fn answer(shape: Shape) -> Nat {
+    handle asked(shape) {
+        do value { value }
+        op Ask::ask() { resume 40 }
+    }
+}
+
+fn main() ->{Io} Nil {
+    let line = Shape::Line(2, 3)
+    let dot = Shape::Dot
+    print_line(name(line))
+    print_line(name(Shape::Circle(4)))
+    print_line(name(Shape::Rect { width: 2, height: 5 }))
+    print_line(name(dot))
+    print_line(kind(dot))
+    print_line(kind(line))
+    print_line(kind(Shape::Circle(1)))
+    print_line(count(line, 0).to_string)
+    print_line(count(Shape::Rect { width: 1, height: 1 }, 0).to_string)
+    print_line(answer(Shape::Circle(2)).to_string)
+    print_line(answer(dot).to_string)
+    print_line(answer(line).to_string)
+}
+"#,
+        "line 5\ncircle 4\nrect 10\ndot\nsmall\nlong line 5\nother\n3\n100\n42\n40\n0",
     );
 }

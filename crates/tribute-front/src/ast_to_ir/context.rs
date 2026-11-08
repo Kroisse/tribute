@@ -366,7 +366,7 @@ impl<'db> IrLoweringCtx<'db> {
         self.module_path.child(name.clone())
     }
 
-    /// Register struct field order for lowering Record expressions.
+    /// Register the field names of a struct.
     pub fn register_struct_fields(&mut self, ctor_id: CtorId<'db>, field_names: Vec<Symbol>) {
         self.nominal.register_struct_fields(ctor_id, field_names)
     }
@@ -387,9 +387,9 @@ impl<'db> IrLoweringCtx<'db> {
         self.nominal.variant_field_names(layout, tag)
     }
 
-    /// Get struct field order (for lowering Record → adt.struct_new).
-    pub fn get_struct_field_order(&self, ctor_id: CtorId<'db>) -> Option<&Vec<Symbol>> {
-        self.nominal.get_struct_field_order(ctor_id)
+    /// Field names of a struct in declaration order.
+    pub fn struct_field_names(&self, ctor_id: CtorId<'db>) -> Option<&[Symbol]> {
+        self.nominal.struct_field_names(ctor_id)
     }
 
     /// Register a type (named struct, tuple, etc.) in the type map.
@@ -663,6 +663,7 @@ mod tests {
                     trunk_ir::SymbolPath::new([nominal_name.clone()]),
                 ),
                 name: Symbol::new("Forward"),
+                row_args: vec![],
                 args: vec![],
             },
         );
@@ -683,6 +684,7 @@ mod tests {
                     trunk_ir::SymbolPath::new([list_name.clone()]),
                 ),
                 name: list_name.clone(),
+                row_args: vec![],
                 args: vec![],
             },
         );
@@ -691,6 +693,7 @@ mod tests {
             TypeKind::Named {
                 id: crate::ast::TypeDefId::builtin_list(&db),
                 name: list_name.clone(),
+                row_args: vec![],
                 args: vec![int],
             },
         );
@@ -767,6 +770,7 @@ mod tests {
                 TypeKind::Named {
                     id: crate::ast::TypeDefId::builtin_list(&db),
                     name: Symbol::new("Undeclared"),
+                    row_args: vec![],
                     args: vec![],
                 },
             ),

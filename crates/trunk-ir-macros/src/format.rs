@@ -1,6 +1,6 @@
 //! `#[asm_format(..)]`: check an operation's format elements against its
 //! declaration and emit the `OpFormat` table the printer and parser
-//! interpret, following `new-plans/ir.md`, "선언적 어셈블리 형식". A rule the
+//! interpret, following `design/ir.md`, "선언적 어셈블리 형식". A rule the
 //! format breaks is reported at the element that breaks it.
 
 use proc_macro2::{Delimiter, Span, TokenStream, TokenTree};

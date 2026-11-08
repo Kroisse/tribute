@@ -1,6 +1,6 @@
 //! Tribute TrunkIR crate.
 //!
-//! `new-plans/ir.md` defines TrunkIR as the compiler's central multi-level dialect IR.
+//! `design/ir.md` defines TrunkIR as the compiler's central multi-level dialect IR.
 //! This crate provides IR definitions for the multi-level dialect system.
 
 #![recursion_limit = "512"]
@@ -94,7 +94,7 @@ pub use smallvec::smallvec as idvec;
 // Re-exports from submodules (previously from arena/mod.rs)
 pub use context::{
     BlockArgData, BlockData, BlockList, IrContext, OpList, OperationData, OperationDataBuilder,
-    RegionData, RegionList, Regions, Successors, Use, ValueData,
+    RegionData, RegionList, Regions, Successors, TypeBodyError, Use, ValueData,
 };
 pub use ir_mapping::IrMapping;
 pub use refs::{BlockRef, OpRef, PathRef, RegionRef, TypeRef, ValueDef, ValueRef};

@@ -1,5 +1,5 @@
 //! Tests that an edit rechecks only the functions whose declarations it
-//! changed (`new-plans/implementation.md`, "함수 단위 type check 재사용").
+//! changed (`design/implementation.md`, "함수 단위 type check 재사용").
 
 use tribute_front::SourceCst;
 use tribute_front::analysis::{self, builtins};

@@ -201,6 +201,7 @@ fn test_unify_named_types_rejects_builtin_and_source_with_same_spelling() {
         TypeKind::Named {
             id: TypeDefId::builtin_list(&db),
             name: name.clone(),
+            row_args: vec![],
             args: vec![int_ty],
         },
     );
@@ -209,6 +210,7 @@ fn test_unify_named_types_rejects_builtin_and_source_with_same_spelling() {
         TypeKind::Named {
             id: TypeDefId::source(&db, trunk_ir::SymbolPath::new([name.clone()])),
             name,
+            row_args: vec![],
             args: vec![int_ty],
         },
     );
@@ -230,6 +232,7 @@ fn test_unify_named_types_rejects_same_spelled_source_declarations() {
         TypeKind::Named {
             id: TypeDefId::source(&db, trunk_ir::SymbolPath::new(["A", "Thing"])),
             name: name.clone(),
+            row_args: vec![],
             args: vec![int_ty],
         },
     );
@@ -238,6 +241,7 @@ fn test_unify_named_types_rejects_same_spelled_source_declarations() {
         TypeKind::Named {
             id: TypeDefId::source(&db, trunk_ir::SymbolPath::new(["B", "Thing"])),
             name,
+            row_args: vec![],
             args: vec![int_ty],
         },
     );
@@ -302,6 +306,7 @@ fn test_never_in_named_type_args() {
         TypeKind::Named {
             id: TypeDefId::builtin_list(&db),
             name: Symbol::new("List"),
+            row_args: vec![],
             args: vec![never_ty],
         },
     );
@@ -310,6 +315,7 @@ fn test_never_in_named_type_args() {
         TypeKind::Named {
             id: TypeDefId::builtin_list(&db),
             name: Symbol::new("List"),
+            row_args: vec![],
             args: vec![int_ty],
         },
     );

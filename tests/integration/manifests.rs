@@ -1,4 +1,4 @@
-//! Packages loaded from their manifests (`new-plans/modules.md` §
+//! Packages loaded from their manifests (`design/modules.md` §
 //! 매니페스트 (`tribute.toml`)): `tribute compile` builds a package
 //! directory, and the manifest paths it follows do not depend on the working
 //! directory.

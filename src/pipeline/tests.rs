@@ -392,6 +392,147 @@ fn wasm_boundary_exit_programs_meet_the_contract(db: &crate::TributeDatabaseImpl
     );
 }
 
+/// The nominal declarations of source types reach native RTTI generation,
+/// each naming the layout published under its name, including layouts whose
+/// fields CPS legalization converts, and the RTTI table takes its names from
+/// them.
+#[salsa_test]
+fn nominal_declarations_name_native_rtti_records(db: &crate::TributeDatabaseImpl) {
+    use tribute_ir::dialect::adt;
+    use trunk_ir::types::Attribute;
+
+    let source = source_from_str(
+        "nominal_declarations.trb",
+        r#"
+struct Point { x: Int, y: Int }
+struct Handler { run: fn(Int) -> Int }
+enum Shape { Dot, Circle(Point, Int), Rect(Point, Point) }
+enum Maybe(a) { Just(a), Nothing }
+
+fn area(shape: Shape) -> Int {
+    case shape {
+        .Dot -> +0
+        .Circle(_, r) -> r * r
+        .Rect(a, b) -> b.x - a.x
+    }
+}
+
+fn apply(h: Handler, value: Maybe(Int)) -> Int {
+    case value {
+        .Just(v) -> {
+            let run = h.run
+            run(v)
+        }
+        .Nothing -> +0
+    }
+}
+
+fn main() -> Nil {
+    let h = Handler { run: fn(v) { v + area(Shape::Circle(Point { x: +0, y: +0 }, v)) } }
+    let _ = apply(h, Maybe::Just(+2))
+}
+"#,
+    );
+    let (mut ctx, module) = run_shared_pipeline(db, source)
+        .expect("shared pipeline must succeed")
+        .expect("the program lowers");
+    run_target_to_boundary_exit(
+        &mut ctx,
+        module,
+        tribute_passes::abi_boundary::TargetKind::Native,
+    )
+    .unwrap_or_else(|error| panic!("native boundary failed: {error}"));
+
+    let block = module.first_block(&ctx).expect("module body");
+    let mut declared = Vec::new();
+    for &op in &ctx.block(block).ops {
+        if let Ok(decl) = adt::StructDecl::from_op(&ctx, op) {
+            let layout = ctx
+                .type_alias_by_text(decl.name(&ctx))
+                .and_then(|ty| adt::Struct::from_type_ref(&ctx, ty))
+                .unwrap_or_else(|| panic!("{} names a published struct", decl.name(&ctx)));
+            assert_eq!(decl.fields(&ctx).len(), layout.fields(&ctx).count());
+            declared.push(decl.name(&ctx).to_owned());
+        } else if let Ok(decl) = adt::EnumDecl::from_op(&ctx, op) {
+            let layout = ctx
+                .type_alias_by_text(decl.name(&ctx))
+                .and_then(|ty| adt::Enum::from_type_ref(&ctx, ty))
+                .unwrap_or_else(|| panic!("{} names a published enum", decl.name(&ctx)));
+            assert_eq!(decl.variants(&ctx).len(), layout.variant_count(&ctx));
+            declared.push(decl.name(&ctx).to_owned());
+        }
+    }
+    let declared_as = |name: &str| {
+        declared
+            .iter()
+            .find(|declared| declared.rsplit("::").next() == Some(name))
+            .unwrap_or_else(|| panic!("{name} is declared: {declared:?}"))
+            .clone()
+    };
+    let decls = adt::NominalDecls::collect(&ctx, module);
+    for name in ["Point", "Handler"] {
+        let layout = ctx.type_alias_by_text(&declared_as(name)).unwrap();
+        let layout = adt::Struct::from_type_ref(&ctx, layout).unwrap();
+        assert!(decls.of_struct(&ctx, layout).is_some(), "{name}");
+    }
+    for name in ["Shape", "Maybe$Int"] {
+        let layout = ctx.type_alias_by_text(&declared_as(name)).unwrap();
+        let layout = adt::Enum::from_type_ref(&ctx, layout).unwrap();
+        assert!(decls.of_enum(&ctx, layout).is_some(), "{name}");
+    }
+
+    // The RTTI table takes its names from the declarations: renamed there,
+    // the names reach the table although the layouts still carry the old
+    // ones.
+    let point = declared_as("Point");
+    let shape = declared_as("Shape");
+    for &op in &ctx.block(block).ops.clone() {
+        if adt::StructDecl::from_op(&ctx, op).is_ok_and(|decl| decl.name(&ctx) == point) {
+            let fields = ["declared_x", "declared_y"].map(|name| ctx.string_attr(name));
+            ctx.op_attrs_mut(op)
+                .insert("fields", Attribute::List(fields.into()));
+        } else if adt::EnumDecl::from_op(&ctx, op).is_ok_and(|decl| decl.name(&ctx) == shape) {
+            let variants =
+                ["DeclaredDot", "DeclaredCircle", "DeclaredRect"].map(|name| ctx.string_attr(name));
+            ctx.op_attrs_mut(op)
+                .insert("variants", Attribute::List(variants.into()));
+        }
+    }
+    let config = StageConfig {
+        native: NativeLowering {
+            sanitize: false,
+            optimizations: NativeOptimizationOptions::production(),
+            stop_after: Some(NativePipelineStage::AfterRcInsertion),
+        },
+        ..StageConfig::target(tribute_passes::abi_boundary::TargetKind::Native)
+    };
+    run_stages(
+        &mut ctx,
+        module,
+        config,
+        Stage::LowerTarget..=Stage::LowerTarget,
+    )
+    .expect("native lowering");
+    let table = module
+        .ops(&ctx)
+        .iter()
+        .find_map(|&op| {
+            clif::Data::from_op(&ctx, op).ok().filter(|data| {
+                data.sym_name(&ctx) == tribute_passes::native::descriptor_records::RTTI_TABLE
+            })
+        })
+        .expect("the RTTI table");
+    let bytes = table.bytes(&ctx);
+    for name in ["declared_x", "declared_y", "DeclaredCircle"] {
+        assert!(
+            bytes
+                .windows(name.len())
+                .any(|window| window == name.as_bytes()),
+            "{name} is in the RTTI table"
+        );
+    }
+}
+
 #[test]
 fn boundary_exit_enforcement_rejects_any_violation() {
     let mut ctx = IrContext::new();

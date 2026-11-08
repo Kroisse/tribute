@@ -18,10 +18,27 @@
 
 ### Nominal Type Equality
 
-Named types unify only when their resolved declaration identities match and
-their type arguments unify pairwise. The source spelling is diagnostic
-presentation, not semantic identity. Substitution and generalization preserve
-the declaration identity of every named type.
+Named types unify only when their resolved declaration identities match,
+their row arguments unify pairwise as rows, and their type arguments unify
+pairwise. The source spelling is diagnostic presentation, not semantic
+identity. Substitution and generalization preserve the declaration identity of
+every named type.
+
+### Row 매개변수를 가진 nominal 타입
+
+[Row 매개변수](types.md#row-매개변수)를 선언한 struct·enum의 타입은 row 인자 목록과
+타입 인자 목록을 따로 가진다. 두 목록은 선언의 매개변수 목록과 순서·개수가 같다.
+
+- 선언의 스킴은 row 매개변수를 선언 순서대로 row binder로 양화한다. 생성자와 필드
+  함수(`get`, `set`, `modify`)의 스킴은 그 binder를 같은 순서로 먼저 양화하고, 필드
+  함수가 따로 만드는 row 변수(`modify` callback의 row 등)를 그 뒤에 둔다. 생성자를
+  instantiate하면 row 매개변수마다 fresh row 변수를 만든다.
+- Row 매개변수는 생성자와 필드 함수의 호출 row에 들어가지 않는다. 필드에 담긴
+  callable을 부르는 호출이 그 callable의 row를 수행한다.
+- Annotation의 row 인자는 함수 타입의 ability annotation과 같은 규칙으로 읽는다.
+  시그니처에서 이름 붙은 row 변수는 그 시그니처의 row 변수이고, 본문에서는 감싼
+  함수의 것이다. `{}`는 닫힌 빈 row다.
+- Occurs check와 대입 적용은 row 인자 안으로도 내려간다.
 
 ### 레코드 생성 검사
 
@@ -976,7 +993,7 @@ binder를 참조하며, 지역 사용처마다 새로 인스턴스화하지 않�
 purity를 다시 추론하지 않는다.
 
 Lowering은 `let`에 묶인 람다를 원래 binding 위치에서 한 번만 만들고, 사용마다
-그 사용의 row 인자로 인스턴스화한다([IR 계약](ir.md#지역-람다의-양화와-인스턴스화)).
+그 사용의 row 인자로 인스턴스화한다([IR 계약](tribute-dialects.md#지역-람다의-양화와-인스턴스화)).
 사용처의 타입에 맞춘 람다를 따로 만들지 않으며, 첫 사용의 타입을 다른 사용 전체에
 적용하지도 않는다. 임의의 callable-producing RHS를 사용처마다 다시 평가하지 않는다.
 

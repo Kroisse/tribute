@@ -262,7 +262,7 @@ MLIR의 dialect 개념을 차용하여 여러 수준의 연산이 한 모듈 내
 
 ```text
 Source → CST → AST
-    → 이름 해석·타입 추론·TDNR
+    → 이름 해석·타입 추론(TDNR 포함)
     → intrinsic 검증·패키지별 monomorphization·결과 병합
     → source-logical tribute_control IR
     → class 특수화(tribute_cps)·pre-CPS 검증·tribute_control_to_cps
@@ -276,8 +276,9 @@ Source → CST → AST
 
 Frontend는 source의 결과 타입과 operation kind를 보존한다. Continuation과 hidden
 ABI 인자는 shared CPS legalization이 만들고, target 경계가 callable 결과 목록과
-closure 저장소를 물리화한다. 구체적인 pass 순서와 검증 경계는
-[implementation.md](implementation.md)와 [cps-effects.md](cps-effects.md)를 따른다.
+closure 저장소를 물리화한다. 구체적인 pass 순서는
+[lowering.md](lowering.md#pipeline-order), 검증 경계는
+[abi-boundary.md](abi-boundary.md)를 따른다.
 
 ---
 

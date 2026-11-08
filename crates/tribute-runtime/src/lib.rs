@@ -147,7 +147,7 @@ pub extern "C" fn __tribute_print_float(value: f64) {
 ///
 /// `ptr` and `len` are the range this value reads. `cap` bytes are stored
 /// right after these fields, and `owner` is the `Bytes` that stores the range
-/// when this value does not. See `new-plans/rc.md` (Bytes).
+/// when this value does not. See `design/rc.md` (Bytes).
 ///
 /// Compiler passes emit code that stores this layout after the RC header.
 /// Runtime functions receive a pointer to this payload area (not the raw allocation).

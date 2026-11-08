@@ -3,7 +3,7 @@
 //! Inserts a runtime check before every `clif.load`, `clif.store` and
 //! `clif.atomic_rmw`. The check receives the effective address and the access
 //! width; the runtime decides whether the range is valid. See
-//! `new-plans/cranelift-backend.md` (Sanitizer).
+//! `design/cranelift-backend.md` (Sanitizer).
 //!
 //! ## Pipeline Position
 //!

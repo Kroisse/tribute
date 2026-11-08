@@ -41,7 +41,7 @@ const DELIMIT_DONE_PREFIX: &str = "__tribute_delimit_done";
 const DELIMIT_UNHANDLED_PREFIX: &str = "__tribute_delimit_unhandled";
 
 /// Per-parameter attribute recording a physical callable's entry ownership
-/// contract; see `new-plans/rc.md` (proper-tail ownership transfer).
+/// contract; see `design/rc.md` (proper-tail ownership transfer).
 pub(crate) const OWNERSHIP_ATTR: &str = "tribute.ownership";
 /// The [`OWNERSHIP_ATTR`] value: the caller supplies one ownership unit.
 pub(crate) const CONSUMED: &str = "consumed";
@@ -1107,7 +1107,7 @@ fn validate_root_continuation_frame(
     let name = ctx.type_attrs(frame).get_str("name").ok_or_else(|| {
         TargetAbiError::new("target root bridge: worker frame lacks nominal layout identity")
     })?;
-    let layout = ctx.type_alias_by_text(name).ok_or_else(|| {
+    let layout = adt::layout_of(ctx, frame).ok_or_else(|| {
         TargetAbiError::new("target root bridge: worker frame must have an exact nominal layout")
     })?;
     let layout_struct = adt::Struct::from_type_ref(ctx, layout)
@@ -1116,17 +1116,13 @@ fn validate_root_continuation_frame(
         .ok_or_else(|| {
             TargetAbiError::new("target root bridge: worker frame layout provenance is malformed")
         })?;
+    // `continuation_frame::layout_type` places Done then Dispatch.
     let fields: Vec<_> = layout_struct.fields(ctx).collect();
-    let [(done_name, done), (dispatch_name, dispatch)] = fields.as_slice() else {
+    let [(_, done), (_, dispatch)] = fields.as_slice() else {
         return Err(TargetAbiError::new(
             "target root bridge: worker frame layout must contain done then dispatch",
         ));
     };
-    if *done_name != "done" || *dispatch_name != "dispatch" {
-        return Err(TargetAbiError::new(
-            "target root bridge: worker frame field roles must be exact Done then Dispatch",
-        ));
-    }
     validate_root_done_type(ctx, *done, source_result, physical_results)?;
     validate_root_dispatch_type(ctx, *dispatch, frame, evidence, physical_results)?;
     Ok(RootFrameContract {
@@ -1801,7 +1797,7 @@ impl<'a> PhysicalTypeConverter<'a> {
     /// Physicalize a closure type's callable. It is the closure's identity,
     /// not an entry ABI, so it takes no convention: its components are
     /// converted, and a logical `core.never` result becomes the physical
-    /// empty result (`new-plans/cps-effects.md`, "Closure type의 callable").
+    /// empty result (`design/cps-effects.md`, "Closure type의 callable").
     fn convert_closure_callable(&mut self, ty: TypeRef) -> Result<TypeRef, TargetAbiError> {
         let callable = func::FuncSig::from_type_ref(self.ctx, ty).ok_or_else(|| {
             TargetAbiError::new("target ABI: closure callable is not a valid func.func_sig")

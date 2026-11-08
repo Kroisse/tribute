@@ -184,14 +184,56 @@ let opt: Option(String) = .Some("hello")
 let res: Result(Int, String) = .Ok { value: 42 }
 ```
 
+### Row 매개변수
+
+Struct와 enum은 타입 매개변수 앞에 row 매개변수를 선언할 수 있다. Row 매개변수는
+중괄호로 감싼 row 변수 하나이며, 그 선언의 필드에 쓴 함수 타입의 row tail로 쓴다:
+
+```rust
+struct Callback({e}, a) { run: fn(a) ->{e} a }
+enum Step({e}) { Next(fn() ->{e} Step({e})), Done }
+struct Logged({e}) { run: fn() ->{Log, e} Nil }     // tail 앞에 ability를 더할 수 있음
+```
+
+사용하는 쪽은 row 매개변수마다 row 인자 하나를 같은 위치에 쓴다. Row 인자는 함수
+타입의 ability annotation과 같은 형식의 row다:
+
+```rust
+fn run_twice(cb: Callback({e}, Int), x: Int) ->{e} Int {
+    let run = cb.run
+    run(run(x))
+}
+
+let pure: Callback({}, Int) = Callback { run: fn(x) { x + 1i } }
+let counting: Callback({State(Int)}, Int) = Callback { run: fn(x) { State::get() + x } }
+```
+
+- 인자 목록은 선언의 매개변수 목록과 종류마다 개수가 같아야 한다. Row 인자를 생략하면
+  개수 오류이며, 빈 row나 fresh row 변수로 채우지 않는다. 매개변수의 종류는 표기에서
+  보인다.
+- Row 매개변수는 필드 타입 안의 row tail로 쓴다. 필드 함수 타입의 매개변수·결과 안의
+  함수 타입, tuple 원소, 다른 nominal 타입의 row 인자(`Step({e})`)에도 쓸 수 있다.
+  Ability 인자 안과 다른 nominal 타입의 타입 인자 안에는 쓸 수 없다. 그런 row는
+  특수화가 구체 선언을 만들지 못하는 열린 row다
+  ([generics.md](generics.md#함수-인스턴스-수집과-특수화)).
+- 필드 type에 나타나지 않는 row 매개변수도 허용하며, 그 row 인자도 타입의 일부다.
+- 같은 선언과 같은 타입 인자에 다른 row 인자를 넘긴 두 타입은 다른 타입이다.
+  `Callback({}, Int)`와 `Callback({State(Int)}, Int)`는 서로 단일화되지 않는다.
+  Row 인자의 단일화는 row 단일화와 같은
+  [대칭 동치](type-inference.md#row-unification)다.
+
 ### 선언 안의 함수 타입
 
-타입 선언에는 row를 묶는 매개변수가 없다. 그래서 struct·enum 필드와 ability
+선언이 묶지 않은 row 변수는 쓸 수 없다. 그래서 struct·enum 필드와 ability
 operation의 매개변수·결과에 쓴 함수 타입은 함수 시그니처와 달리 fresh row 변수를
 만들지 않는다:
 
 - Ability annotation을 생략하면 빈 row이다. `fn(a) -> b`는 `fn(a) ->{} b`와 같다.
-- Row 변수를 쓰면 묶이지 않은 변수이므로 컴파일 에러다.
+- Row 매개변수가 아닌 row 변수를 쓰면 묶이지 않은 변수이므로 컴파일 에러다.
+  Ability 선언은 row 매개변수를 갖지 않는다.
+- 선언 안의 row는 tail을 하나까지 가진다. 시그니처의 `{e1, e2}`는 두 row의
+  [합집합 관계](type-inference.md#여러-tail의-합집합인-row)를 만들지만, 선언의 필드 타입은 그
+  관계를 담지 않으므로 여러 row 매개변수를 한 row에 쓰면 컴파일 에러다.
 
 ```rust
 struct Handler { run: fn(Int) -> Int }               // fn(Int) ->{} Int
@@ -199,8 +241,7 @@ enum Step { Next(fn() ->{State(Int)} Nil), Done }    // 구체적 ability는 허
 struct Bad { run: fn(Int) ->{e} Int }                // Error: e가 묶이지 않음
 ```
 
-열린 row의 callback은 순수 필드에 담을 수 없다. 함수 시그니처의 생략된 row는
-fresh 변수이므로, 필드에 담을 callback은 시그니처에서 `->{}`로 명시한다.
+열린 row의 callback을 필드에 담으려면 그 row를 row 매개변수로 선언한다.
 
 ---
 
@@ -351,7 +392,7 @@ Generic struct의 spread는 생성할 타입과 같은 선언 및 일치하는 �
 `Slots(a)`는 [compiler 소유 runtime 모듈](modules.md#compiler-소유-runtime-모듈)만
 쓰는 고정 길이 불변 배열이다. 패키지 `std` 밖에서는 보이지 않으며 사용자 언어의
 collection이 아니다. 타입 identity는 compiler 소유이며 같은 이름의 source 선언과
-구별된다. IR에서는 원소 타입이 `a`인 [`adt.array`](ir.md#adt-배열)다. 원소가
+구별된다. IR에서는 원소 타입이 `a`인 [`adt.array`](tribute-dialects.md#adt-배열)다. 원소가
 aggregate이면 배열은 그 object에 대한 managed 참조를 담는다.
 
 연산은 `std::runtime::Slots`의 compiler intrinsic이며 각각 `adt` 배열 operation
@@ -630,7 +671,16 @@ arm이 실패하는 경로는 lowering 결과에 남지 않으며, 망라성 판
 리터럴 패턴(`as` 바인딩 포함)이고, 마지막 arm이 guard 없는 `_`나 바인딩 패턴이며,
 서로 다른 값이 둘 이상일 때다. 각 리터럴 arm은 그 값의 case region이 되고 마지막
 arm은 default region이 된다. 앞선 arm이 고른 값을 다시 고르는 arm은 도달할 수
-없으므로 case가 되지 않는다. 그 밖의 `case`는 연쇄로 남는다.
+없으므로 case가 되지 않는다.
+
+Variant로 고르는 `case`도 `scf.index_switch` 하나로 lowering하며, 판별값은
+scrutinee variant의 선언 위치(`adt.variant_tag`)다. 마지막을 뺀 모든 arm이 guard
+없는 variant 패턴(`as` 바인딩 포함)이고, 그 필드 패턴이 모두 어떤 값에나 맞으며
+(`_`, 바인딩, 그런 패턴의 튜플), 서로 다른 variant가 둘 이상일 때다. 각 arm은 자기
+variant 위치의 case region이 된다. 마지막 arm은 guard가 없으면 패턴과 관계없이
+default region이 된다. 연쇄의 마지막 arm이 검사 없이 실행되는 것과 같다. 앞선
+arm이 고른 variant를 다시 고르는 arm은 case가 되지 않는다. 그 밖의 `case`는
+연쇄로 남는다.
 
 ---
 

@@ -1319,6 +1319,59 @@ pub fn validate_all(
     errors.extend(ops.errors);
     let symbols = analyses.require::<SymbolTable>(ctx, module.op());
     errors.extend(function_contracts(ctx, module, &symbols).errors);
+    errors.extend(validate_type_bodies(ctx, module).errors);
+    ValidationResult { errors }
+}
+
+/// Check that every identified type `module` reaches has a body
+/// (`design/ir.md` § "식별 타입"): the types of its values and in its
+/// attributes, their parameters, and the bodies of identified types.
+pub fn validate_type_bodies(ctx: &IrContext, module: Module) -> ValidationResult {
+    fn reach(
+        ctx: &IrContext,
+        ty: crate::TypeRef,
+        seen: &mut HashSet<crate::TypeRef>,
+        errors: &mut Vec<ValidationError>,
+    ) {
+        if !seen.insert(ty) {
+            return;
+        }
+        let data = ctx.get_type(ty);
+        for &param in &data.params {
+            reach(ctx, param, seen, errors);
+        }
+        for attr in data.attrs.values() {
+            attr.visit_types(&mut |nested| reach(ctx, nested, seen, errors));
+        }
+        if !crate::type_def::is_identified(ctx, ty) {
+            return;
+        }
+        match ctx.type_body(ty) {
+            Some(body) => reach(ctx, body, seen, errors),
+            None => errors.push(ValidationError::Operation {
+                message: format!("identified type {} has no body", ty.display(ctx)),
+            }),
+        }
+    }
+
+    let mut seen = HashSet::default();
+    let mut errors = Vec::new();
+    let _ = walk::walk_op::<std::convert::Infallible>(ctx, module.op(), &mut |op| {
+        for &ty in ctx.op_result_types(op) {
+            reach(ctx, ty, &mut seen, &mut errors);
+        }
+        for (_, attr) in ctx.op(op).attributes.iter() {
+            attr.visit_types(&mut |ty| reach(ctx, ty, &mut seen, &mut errors));
+        }
+        for region in ctx.op_regions(op) {
+            for &block in &ctx.region(region).blocks {
+                for arg in &ctx.block(block).args {
+                    reach(ctx, arg.ty, &mut seen, &mut errors);
+                }
+            }
+        }
+        std::ops::ControlFlow::Continue(walk::WalkAction::Advance)
+    });
     ValidationResult { errors }
 }
 

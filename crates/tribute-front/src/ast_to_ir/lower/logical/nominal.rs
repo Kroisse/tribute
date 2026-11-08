@@ -1,8 +1,9 @@
 //! Nominal layouts and the logical types of signatures and expressions.
 
 use rustc_hash::FxHashMap as HashMap;
+use tribute_ir::dialect::adt;
 use trunk_ir::context::IrContext;
-use trunk_ir::refs::TypeRef;
+use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::SortedMap;
@@ -45,6 +46,15 @@ pub(super) fn prescan_logical_nominal_layouts<'db>(
                     .collect::<Vec<_>>();
                 let name = super::super::qualified_type_name(ctx.db, &ctor);
                 let layout = ctx.adt_struct_type(ir, &name, &fields);
+                let field_names: Vec<_> = fields
+                    .iter()
+                    .map(|(field, _)| ir.intern_symbol_text(field))
+                    .collect();
+                let decl = adt::StructDecl::operands()
+                    .name(ir.intern_symbol_text(&name))
+                    .fields(field_names)
+                    .build(ir, ctx.location(structure.id));
+                declare(ctx, ir, decl.op_ref());
                 ctx.register_type(name.clone(), layout);
                 ir.register_type_alias(name, layout);
                 if let Some(path) = ctx.runtime_type_path(structure.id) {
@@ -93,6 +103,15 @@ pub(super) fn prescan_logical_nominal_layouts<'db>(
                 } else {
                     ctx.adt_enum_type(ir, &name, &variants)
                 };
+                let variant_names: Vec<_> = variants
+                    .iter()
+                    .map(|(variant, _)| ir.intern_symbol_text(variant))
+                    .collect();
+                let decl = adt::EnumDecl::operands()
+                    .name(ir.intern_symbol_text(&name))
+                    .variants(variant_names)
+                    .build(ir, location);
+                declare(ctx, ir, decl.op_ref());
                 ctx.register_type(name.clone(), layout);
                 ir.register_type_alias(name, layout);
                 for variant in &enumeration.variants {
@@ -112,6 +131,14 @@ pub(super) fn prescan_logical_nominal_layouts<'db>(
             _ => {}
         }
     }
+}
+
+/// Add the nominal declaration `decl` to the module body.
+fn declare(ctx: &IrLoweringCtx<'_>, ir: &mut IrContext, decl: OpRef) {
+    let block = ctx
+        .module_block()
+        .expect("the module block exists before the nominal prescan");
+    ir.push_op(block, decl);
 }
 
 /// First phase of logical nominal prescan. All identities must be known before

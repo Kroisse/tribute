@@ -735,7 +735,7 @@ pub mod io {
 // =============================================================================
 
 // Every module, including those of package `std`, sees the `pub` items of
-// `prelude::v0` under their short names (`new-plans/modules.md`). Its paths
+// `prelude::v0` under their short names (`design/modules.md`). Its paths
 // start with `pkg` so that the prelude does not rely on itself.
 pub mod prelude {
     pub mod v0 {
@@ -749,7 +749,7 @@ pub mod prelude {
 // Compiler-owned Runtime
 // =============================================================================
 
-// Runtime code the compiler's lowering relies on (`new-plans/modules.md`).
+// Runtime code the compiler's lowering relies on (`design/modules.md`).
 // Programs outside the package `std` cannot name it.
 pub(pkg) mod runtime {
     // The operations of the compiler-owned fixed-size array `Slots(a)`.
@@ -767,7 +767,7 @@ pub(pkg) mod runtime {
     }
 
     // The evidence runtime both targets call by canonical path
-    // (`new-plans/cps-effects.md`). Evidence is `Slots(Marker)` sorted by
+    // (`design/cps-effects.md`). Evidence is `Slots(Marker)` sorted by
     // `ability_id`, one slot per ability holding its top marker. Every
     // operation builds a new evidence and leaves its arguments as they were.
     // A missing ability is a compiler bug; reading it ends the execution with

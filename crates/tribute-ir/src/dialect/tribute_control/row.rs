@@ -585,10 +585,7 @@ pub fn logical_tuple_elements(ctx: &IrContext, ty: TypeRef) -> Option<&[TypeRef]
     if !name.starts_with(LOGICAL_TUPLE_PREFIX) {
         return None;
     }
-    let layout = ctx.type_alias_by_text(name)?;
-    if !ctx.get_type(layout).name.is(ctx, "adt.struct") {
-        return None;
-    }
+    let layout = adt::layout_of(ctx, ty)?;
     adt::Struct::from_type_ref(ctx, layout).map(|layout| layout.field_types(ctx))
 }
 

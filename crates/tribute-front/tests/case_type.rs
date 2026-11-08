@@ -211,6 +211,70 @@ fn unwrap_or(opt: Option(Nat), default: Nat) -> Nat {
     assert_snapshot!(ir_text);
 }
 
+/// A case whose arms test only the variant switches on the variant's
+/// position. `area` names every variant, so its last arm is the default and
+/// not a case; `kind` ends with a catch-all, and a brace-form pattern, an
+/// `as` binding, and a variant an earlier arm selects take part as in a
+/// literal switch.
+#[salsa_test]
+fn test_case_variant_switch(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+enum Shape {
+    Circle(Nat),
+    Rect { width: Nat, height: Nat },
+    Dot,
+    Line(Nat, Nat),
+}
+
+fn area(shape: Shape) -> Nat {
+    case shape {
+        .Circle(r) -> r * r
+        .Rect { width, height } -> width * height
+        .Dot -> 0
+        .Line(_, _) -> 1
+    }
+}
+
+fn kind(shape: Shape) -> Nat {
+    case shape {
+        .Dot -> 0
+        .Line(a, b) as line -> a + b
+        .Dot -> 9
+        .Circle(_) -> 1
+        _ -> 2
+    }
+}
+"#,
+    );
+
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert_snapshot!(ir_text);
+}
+
+/// A variant case stays a chain when an arm has a guard or tests a field,
+/// or when it selects fewer than two variants.
+#[salsa_test]
+fn test_case_without_a_variant_switch_stays_a_chain(db: &salsa::DatabaseImpl) {
+    for body in [
+        "case shape {\n        .A(n) && n > 1 -> 1\n        .B -> 2\n        _ -> 3\n    }",
+        "case shape {\n        .A(0) -> 1\n        .B -> 2\n        _ -> 3\n    }",
+        "case shape {\n        .A(_) -> 1\n        _ -> 2\n    }",
+        "case opt {\n        .Some(n) -> n\n        .None -> 0\n    }",
+    ] {
+        let text = format!(
+            "enum Shape {{ A(Nat), B, C }}\nenum Opt {{ Some(Nat), None }}\n\n\
+             fn pick(shape: Shape, opt: Opt) -> Nat {{\n    {body}\n}}\n"
+        );
+        let source = SourceCst::from_source_str(db, "test.trb", &text);
+        let ir_text = run_ast_pipeline_with_ir(db, source);
+        assert!(!ir_text.contains("scf.index_switch"), "{ir_text}");
+        assert!(ir_text.contains("scf.if"), "{ir_text}");
+    }
+}
+
 /// Test case expression result type unification.
 /// All arm body types should unify with the case expression's result type.
 #[salsa_test]

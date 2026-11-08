@@ -53,6 +53,37 @@ impl SignatureVariables<'_> {
     }
 }
 
+/// The parameters a type annotation in a declaration may name.
+#[derive(Clone, Copy)]
+struct DeclarationScope<'a> {
+    /// Each type parameter's name and BoundVar index.
+    type_params: &'a [(Symbol, u32)],
+    /// Each row parameter's name and row binder.
+    row_params: &'a [(Symbol, RowVar)],
+    /// Whether a row written here may end in a row parameter: not inside an
+    /// ability argument or a type argument.
+    row_tails: bool,
+}
+
+impl DeclarationScope<'_> {
+    fn without_row_tails(self) -> Self {
+        Self {
+            row_tails: false,
+            ..self
+        }
+    }
+}
+
+/// The row binders of a declaration's row parameters, in declaration order.
+/// Zero is the implicit row of an omitted annotation, so they start at one.
+fn row_param_binders(params: &[crate::ast::RowParamDecl]) -> Vec<(Symbol, RowVar)> {
+    params
+        .iter()
+        .zip(1..)
+        .map(|(param, id)| (param.name.clone(), RowVar { id }))
+        .collect()
+}
+
 impl<'db> TypeChecker<'db> {
     // =========================================================================
     // Declaration collection (Phase 1)
@@ -159,10 +190,20 @@ impl<'db> TypeChecker<'db> {
             self.prefix = entry.module.clone();
             match &entry.decl {
                 Decl::Struct(s) => {
-                    self.predeclare_nominal_type(&s.name, s.disambiguator, &s.type_params);
+                    self.declare_nominal_type(
+                        &s.name,
+                        s.disambiguator,
+                        &s.row_params,
+                        &s.type_params,
+                    );
                 }
                 Decl::Enum(e) => {
-                    self.predeclare_nominal_type(&e.name, e.disambiguator, &e.type_params);
+                    self.declare_nominal_type(
+                        &e.name,
+                        e.disambiguator,
+                        &e.row_params,
+                        &e.type_params,
+                    );
                 }
                 _ => {}
             }
@@ -170,16 +211,28 @@ impl<'db> TypeChecker<'db> {
         self.prefix = SymbolPath::root();
     }
 
-    fn predeclare_nominal_type(
+    /// Register a nominal declaration's scheme: it quantifies the row
+    /// parameters as row binders and the type parameters as BoundVars, in
+    /// declaration order, and its body is the declared type applied to them.
+    fn declare_nominal_type(
         &mut self,
         name: &Symbol,
         disambiguator: u32,
+        row_params: &[crate::ast::RowParamDecl],
         params: &[crate::ast::TypeParamDecl],
-    ) {
+    ) -> TypeScheme<'db> {
         let qualified = self.current_prefix().child(name.clone());
         let type_params: Vec<TypeParam> = params
             .iter()
             .map(|param| TypeParam::named(param.name.clone()))
+            .collect();
+        let row_binders: Vec<RowVar> = row_param_binders(row_params)
+            .into_iter()
+            .map(|(_, var)| var)
+            .collect();
+        let row_args = row_binders
+            .iter()
+            .map(|var| AbilityRow::open(self.db(), *var))
             .collect();
         let args = (0..type_params.len() as u32)
             .map(|index| Type::new(self.db(), TypeKind::BoundVar { index }))
@@ -187,12 +240,12 @@ impl<'db> TypeChecker<'db> {
         let ty = self.env.named_type_with_id(
             crate::ast::TypeDefId::declared(self.db(), qualified.clone(), disambiguator),
             qualified.to_symbol(),
+            row_args,
             args,
         );
-        self.env.register_type_def(
-            qualified,
-            TypeScheme::new(self.db(), type_params, Vec::new(), ty),
-        );
+        let scheme = TypeScheme::new(self.db(), type_params, row_binders, ty);
+        self.env.register_type_def(qualified, scheme);
+        scheme
     }
 
     /// Collect a function's type signature.
@@ -314,7 +367,7 @@ impl<'db> TypeChecker<'db> {
 
         let type_params = vars.type_params();
         // One external symbol cannot serve instances of different
-        // representations (`new-plans/modules.md`, "모듈 선언과 Use").
+        // representations (`design/modules.md`, "모듈 선언과 Use").
         if !type_params.is_empty() && func.abi != "intrinsic" {
             NodeDiagnostic::new(
                 format!(
@@ -355,11 +408,10 @@ impl<'db> TypeChecker<'db> {
     fn collect_struct_def(&mut self, s: &StructDecl) {
         let name = s.name.clone();
         let qualified_name = self.current_prefix().child(name.clone());
-        let type_params: Vec<TypeParam> = s
-            .type_params
-            .iter()
-            .map(|tp| TypeParam::named(tp.name.clone()))
-            .collect();
+        let scheme =
+            self.declare_nominal_type(&name, s.disambiguator, &s.row_params, &s.type_params);
+        let type_params = scheme.type_params(self.db()).to_vec();
+        let struct_ty = *scheme.body(self.db());
 
         // Build name → BoundVar index lookup for field type resolution
         let type_param_indices: Vec<(Symbol, u32)> = s
@@ -368,26 +420,19 @@ impl<'db> TypeChecker<'db> {
             .enumerate()
             .map(|(i, tp)| (tp.name.clone(), i as u32))
             .collect();
-
-        // The struct type itself
-        let args: Vec<Type<'db>> = (0..type_params.len() as u32)
-            .map(|i| Type::new(self.db(), TypeKind::BoundVar { index: i }))
-            .collect();
-        let struct_ty = self.env.named_type_with_id(
-            crate::ast::TypeDefId::declared(self.db(), qualified_name.clone(), s.disambiguator),
-            qualified_name.to_symbol(),
-            args,
-        );
-
-        let scheme = TypeScheme::new(self.db(), type_params.clone(), Vec::new(), struct_ty);
-        self.env.register_type_def(qualified_name.clone(), scheme);
+        let row_params = row_param_binders(&s.row_params);
+        let scope = DeclarationScope {
+            type_params: &type_param_indices,
+            row_params: &row_params,
+            row_tails: true,
+        };
 
         // Register struct constructor
         // Constructor type is: fn(field_types...) -> StructType
         let field_types: Vec<Type<'db>> = s
             .fields
             .iter()
-            .map(|f| self.annotation_to_type_for_ctor(&f.ty, &type_param_indices))
+            .map(|f| self.annotation_to_type_for_ctor(&f.ty, scope))
             .collect();
         let fields: Vec<(Symbol, Type<'db>)> = s
             .fields
@@ -405,7 +450,8 @@ impl<'db> TypeChecker<'db> {
             self.env.func_type(field_types, struct_ty, effect)
         };
 
-        let effect_params = collect_row_vars(self.db(), ctor_ty);
+        // A declaration's rows end only in its row parameters.
+        let effect_params = scheme.effect_params(self.db()).to_vec();
         let ctor_scheme = TypeScheme::new(self.db(), type_params.clone(), effect_params, ctor_ty);
         let ctor_id = CtorId::new(self.db(), qualified_name.clone());
         self.env.register_constructor(ctor_id, ctor_scheme);
@@ -425,24 +471,10 @@ impl<'db> TypeChecker<'db> {
     fn collect_enum_def(&mut self, e: &EnumDecl) {
         let name = e.name.clone();
         let qualified_name = self.current_prefix().child(name.clone());
-        let type_params: Vec<TypeParam> = e
-            .type_params
-            .iter()
-            .map(|tp| TypeParam::named(tp.name.clone()))
-            .collect();
-
-        // The enum type itself
-        let args: Vec<Type<'db>> = (0..type_params.len() as u32)
-            .map(|i| Type::new(self.db(), TypeKind::BoundVar { index: i }))
-            .collect();
-        let enum_ty = self.env.named_type_with_id(
-            crate::ast::TypeDefId::declared(self.db(), qualified_name.clone(), e.disambiguator),
-            qualified_name.to_symbol(),
-            args,
-        );
-
-        let scheme = TypeScheme::new(self.db(), type_params.clone(), Vec::new(), enum_ty);
-        self.env.register_type_def(qualified_name.clone(), scheme);
+        let scheme =
+            self.declare_nominal_type(&name, e.disambiguator, &e.row_params, &e.type_params);
+        let type_params = scheme.type_params(self.db()).to_vec();
+        let enum_ty = *scheme.body(self.db());
 
         // Register enum variant names for exhaustiveness checking
         let variant_names: Vec<Symbol> = e.variants.iter().map(|v| v.name.clone()).collect();
@@ -457,6 +489,14 @@ impl<'db> TypeChecker<'db> {
             .enumerate()
             .map(|(i, tp)| (tp.name.clone(), i as u32))
             .collect();
+        let row_params = row_param_binders(&e.row_params);
+        let scope = DeclarationScope {
+            type_params: &type_param_indices,
+            row_params: &row_params,
+            row_tails: true,
+        };
+        // A declaration's rows end only in its row parameters.
+        let effect_params = scheme.effect_params(self.db()).to_vec();
 
         for variant in &e.variants {
             let ctor_ty = if variant.fields.is_empty() {
@@ -467,15 +507,18 @@ impl<'db> TypeChecker<'db> {
                 let field_types: Vec<Type<'db>> = variant
                     .fields
                     .iter()
-                    .map(|f| self.annotation_to_type_for_ctor(&f.ty, &type_param_indices))
+                    .map(|f| self.annotation_to_type_for_ctor(&f.ty, scope))
                     .collect();
                 let effect = AbilityRow::pure(self.db());
                 self.env.func_type(field_types, enum_ty, effect)
             };
 
-            let effect_params = collect_row_vars(self.db(), ctor_ty);
-            let ctor_scheme =
-                TypeScheme::new(self.db(), type_params.clone(), effect_params, ctor_ty);
+            let ctor_scheme = TypeScheme::new(
+                self.db(),
+                type_params.clone(),
+                effect_params.clone(),
+                ctor_ty,
+            );
             let ctor_id = CtorId::new(self.db(), qualified_name.child(variant.name.clone()));
             self.env.register_constructor(ctor_id, ctor_scheme);
             if let Some(names) = field_names(&variant.fields) {
@@ -506,6 +549,11 @@ impl<'db> TypeChecker<'db> {
             .enumerate()
             .map(|(i, tp)| (tp.name.clone(), i as u32))
             .collect();
+        let scope = DeclarationScope {
+            type_params: &type_param_indices,
+            row_params: &[],
+            row_tails: true,
+        };
 
         // Collect operation signatures
         let mut operations = HashMap::default();
@@ -515,12 +563,12 @@ impl<'db> TypeChecker<'db> {
                 .iter()
                 .map(|p| {
                     p.ty.as_ref()
-                        .map(|ann| self.annotation_to_type_for_ctor(ann, &type_param_indices))
+                        .map(|ann| self.annotation_to_type_for_ctor(ann, scope))
                         .unwrap_or_else(|| self.env.error_type())
                 })
                 .collect();
 
-            let return_type = self.annotation_to_type_for_ctor(&op.return_ty, &type_param_indices);
+            let return_type = self.annotation_to_type_for_ctor(&op.return_ty, scope);
 
             operations.insert(
                 op.name.clone(),
@@ -569,16 +617,30 @@ impl<'db> TypeChecker<'db> {
                     Type::new(self.db(), TypeKind::BoundVar { index })
                 }
             }
-            TypeAnnotationKind::Named(name) => self.primitive_or_named_type(name.clone()),
-            TypeAnnotationKind::Path(parts) => self.env.path_type(parts),
-            TypeAnnotationKind::App { ctor, args } => {
-                let ctor_ty = self.annotation_to_type_for_sig(ctor, vars);
-                if let TypeKind::Named { id, name, .. } = ctor_ty.kind(self.db()) {
+            TypeAnnotationKind::Named(name) => {
+                let ty = self.primitive_or_named_type(name.clone());
+                self.check_nominal_arity(ann, ty, false)
+            }
+            TypeAnnotationKind::Path(parts) => {
+                let ty = self.env.path_type(parts);
+                self.check_nominal_arity(ann, ty, false)
+            }
+            TypeAnnotationKind::App {
+                ctor,
+                row_args,
+                args,
+            } => {
+                if let Some((id, name)) = self.applied_nominal(ctor) {
+                    let row_args = row_args
+                        .iter()
+                        .map(|row| self.effects_for_signature(row, vars).row)
+                        .collect();
                     let arg_types: Vec<Type<'db>> = args
                         .iter()
                         .map(|a| self.annotation_to_type_for_sig(a, vars))
                         .collect();
-                    self.env.named_type_with_id(*id, name.clone(), arg_types)
+                    let ty = self.env.named_type_with_id(id, name, row_args, arg_types);
+                    self.check_nominal_arity(ann, ty, true)
                 } else {
                     self.env.error_type()
                 }
@@ -666,30 +728,44 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
-    /// Convert a type annotation for constructor field types, using BoundVars for type parameters.
+    /// Convert a type annotation written in a declaration (a struct or enum
+    /// field, or an ability operation), using BoundVars for type parameters
+    /// and the declaration's row binders for row parameters.
     fn annotation_to_type_for_ctor(
         &self,
         ann: &crate::ast::TypeAnnotation,
-        type_param_indices: &[(Symbol, u32)],
+        scope: DeclarationScope<'_>,
     ) -> Type<'db> {
         use crate::ast::TypeAnnotationKind;
 
         match &ann.kind {
             TypeAnnotationKind::Named(name) => {
                 // Check if this name is a type parameter
-                if let Some(&(_, index)) = type_param_indices.iter().find(|(n, _)| n == name) {
+                if let Some(&(_, index)) = scope.type_params.iter().find(|(n, _)| n == name) {
                     return Type::new(self.db(), TypeKind::BoundVar { index });
                 }
-                self.primitive_or_named_type(name.clone())
+                let ty = self.primitive_or_named_type(name.clone());
+                self.check_nominal_arity(ann, ty, false)
             }
-            TypeAnnotationKind::App { ctor, args } => {
-                let ctor_ty = self.annotation_to_type_for_ctor(ctor, type_param_indices);
-                if let TypeKind::Named { id, name, .. } = ctor_ty.kind(self.db()) {
+            TypeAnnotationKind::App {
+                ctor,
+                row_args,
+                args,
+            } => {
+                if let Some((id, name)) = self.applied_nominal(ctor) {
+                    let row_args = row_args
+                        .iter()
+                        .map(|row| self.declaration_row(row, scope))
+                        .collect();
+                    // A row parameter inside a type argument would make the
+                    // argument an open row the declaration cannot specialize.
+                    let arg_scope = scope.without_row_tails();
                     let arg_types: Vec<Type<'db>> = args
                         .iter()
-                        .map(|a| self.annotation_to_type_for_ctor(a, type_param_indices))
+                        .map(|a| self.annotation_to_type_for_ctor(a, arg_scope))
                         .collect();
-                    self.env.named_type_with_id(*id, name.clone(), arg_types)
+                    let ty = self.env.named_type_with_id(id, name, row_args, arg_types);
+                    self.check_nominal_arity(ann, ty, true)
                 } else {
                     self.env.error_type()
                 }
@@ -701,48 +777,160 @@ impl<'db> TypeChecker<'db> {
             } => {
                 let param_types: Vec<Type<'db>> = params
                     .iter()
-                    .map(|p| self.annotation_to_type_for_ctor(p, type_param_indices))
+                    .map(|p| self.annotation_to_type_for_ctor(p, scope))
                     .collect();
-                let result_ty = self.annotation_to_type_for_ctor(result, type_param_indices);
-                // A declaration has no parameter to name a row with, so an
-                // omitted row is empty and a named one is unbound.
-                let abilities: Vec<_> = abilities
-                    .iter()
-                    .filter(|ann| match &ann.kind {
-                        TypeAnnotationKind::Infer => false,
-                        TypeAnnotationKind::Named(name) if is_type_variable(name) => {
-                            NodeDiagnostic::new(
-                                format!("row variable `{name}` is not bound in this declaration"),
-                                ann.id,
-                                DiagnosticSeverity::Error,
-                                CompilationPhase::TypeChecking,
-                            )
-                            .accumulate(self.db());
-                            false
-                        }
-                        _ => true,
-                    })
-                    .cloned()
-                    .collect();
-                let effect = crate::ast::abilities_to_ability_row(
-                    self.db(),
-                    &abilities,
-                    self.current_prefix(),
-                    &mut |a| self.annotation_to_type_for_ctor(a, type_param_indices),
-                    || unreachable!("a declaration's row has no tail"),
-                );
+                let result_ty = self.annotation_to_type_for_ctor(result, scope);
+                let effect = self.declaration_row(abilities, scope);
                 self.env.func_type(param_types, result_ty, effect)
             }
             TypeAnnotationKind::Tuple(elems) => {
                 let elem_types: Vec<Type<'db>> = elems
                     .iter()
-                    .map(|e| self.annotation_to_type_for_ctor(e, type_param_indices))
+                    .map(|e| self.annotation_to_type_for_ctor(e, scope))
                     .collect();
                 self.env.tuple_type(elem_types)
             }
-            TypeAnnotationKind::Path(parts) => self.env.path_type(parts),
+            TypeAnnotationKind::Path(parts) => {
+                let ty = self.env.path_type(parts);
+                self.check_nominal_arity(ann, ty, false)
+            }
             TypeAnnotationKind::Infer | TypeAnnotationKind::Error => self.env.error_type(),
         }
+    }
+
+    /// Convert an ability row written in a declaration. A declaration
+    /// creates no row variables, so an omitted row is empty, and its only
+    /// tail is one of its row parameters.
+    fn declaration_row(
+        &self,
+        abilities: &[crate::ast::TypeAnnotation],
+        scope: DeclarationScope<'_>,
+    ) -> AbilityRow<'db> {
+        use crate::ast::TypeAnnotationKind;
+
+        let report = |ann: &crate::ast::TypeAnnotation, message: String| {
+            NodeDiagnostic::new(
+                message,
+                ann.id,
+                DiagnosticSeverity::Error,
+                CompilationPhase::TypeChecking,
+            )
+            .accumulate(self.db());
+        };
+        let mut rest = None;
+        let mut concrete = Vec::new();
+        for ann in abilities {
+            match &ann.kind {
+                TypeAnnotationKind::Infer => {}
+                TypeAnnotationKind::Named(name) if is_type_variable(name) => {
+                    let Some(&(_, var)) = scope.row_params.iter().find(|(n, _)| n == name) else {
+                        report(
+                            ann,
+                            format!("row variable `{name}` is not bound in this declaration"),
+                        );
+                        continue;
+                    };
+                    if !scope.row_tails {
+                        report(
+                            ann,
+                            format!(
+                                "row parameter `{name}` cannot be used inside an ability \
+                                 argument or a type argument"
+                            ),
+                        );
+                    } else if rest.is_some_and(|tail| tail != var) {
+                        report(
+                            ann,
+                            format!(
+                                "a row in a declaration has at most one row parameter, \
+                                 but `{name}` is a second one"
+                            ),
+                        );
+                    } else {
+                        rest = Some(var);
+                    }
+                }
+                _ => concrete.push(ann.clone()),
+            }
+        }
+        let arg_scope = scope.without_row_tails();
+        let row = crate::ast::abilities_to_ability_row(
+            self.db(),
+            &concrete,
+            self.current_prefix(),
+            &mut |a| self.annotation_to_type_for_ctor(a, arg_scope),
+            || unreachable!("concrete abilities have no tail"),
+        );
+        AbilityRow::new(self.db(), row.instances(self.db()).to_vec(), rest)
+    }
+
+    /// The nominal declaration the constructor of an applied type annotation
+    /// names, without checking its arguments.
+    pub(super) fn applied_nominal(
+        &self,
+        ctor: &crate::ast::TypeAnnotation,
+    ) -> Option<(crate::ast::TypeDefId<'db>, Symbol)> {
+        use crate::ast::TypeAnnotationKind;
+
+        let ty = match &ctor.kind {
+            TypeAnnotationKind::Named(name) => self.primitive_or_named_type(name.clone()),
+            TypeAnnotationKind::Path(parts) => self.env.path_type(parts),
+            _ => return None,
+        };
+        match ty.kind(self.db()) {
+            TypeKind::Named { id, name, .. } => Some((*id, name.clone())),
+            _ => None,
+        }
+    }
+
+    /// Check that the nominal type `ty`, written at `ann`, has one argument
+    /// for each parameter of its declaration, of each kind. `written` is
+    /// whether the annotation writes an argument list; a bare name is checked
+    /// only for its row arguments. Returns the error type after reporting a
+    /// mismatch.
+    pub(super) fn check_nominal_arity(
+        &self,
+        ann: &crate::ast::TypeAnnotation,
+        ty: Type<'db>,
+        written: bool,
+    ) -> Type<'db> {
+        let TypeKind::Named {
+            id, row_args, args, ..
+        } = ty.kind(self.db())
+        else {
+            return ty;
+        };
+        let Some(declaration) = self.env.lookup_type_def(id.path(self.db())) else {
+            return ty;
+        };
+        let rows = declaration.effect_params(self.db()).len();
+        let types = declaration.type_params(self.db()).len();
+        let name = id.name(self.db());
+        let mut mismatches = Vec::new();
+        if row_args.len() != rows {
+            mismatches.push(("row", rows, row_args.len()));
+        }
+        if written && args.len() != types {
+            mismatches.push(("type", types, args.len()));
+        }
+        if mismatches.is_empty() {
+            return ty;
+        }
+        for (kind, expected, found) in mismatches {
+            let plural = |count| if count == 1 { "" } else { "s" };
+            NodeDiagnostic::new(
+                format!(
+                    "`{name}` takes {expected} {kind} argument{}, but {found} {} written",
+                    plural(expected),
+                    if found == 1 { "is" } else { "are" },
+                ),
+                ann.id,
+                DiagnosticSeverity::Error,
+                CompilationPhase::TypeChecking,
+            )
+            .accumulate(self.db());
+        }
+        self.env.error_type()
     }
 
     /// Convert a type name to a primitive type or named type.

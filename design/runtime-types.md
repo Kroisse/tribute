@@ -10,7 +10,7 @@ nominal 정보는 runtime 타입 descriptor가 소유한다. 값은 자기 descr
 | 개념 | 소유하는 사실 | 성격 |
 | ---- | ---- | ---- |
 | layout | field offset, 크기, 필드의 물리 표현 | structural. 모양이 같으면 같은 layout |
-| descriptor | 이름, 필드 이름, 필드 종류, 해제 방법, variant 소속 | nominal. 소스 타입마다 하나 |
+| descriptor | 이름, 필드 이름, 필드 종류, 해제 방법, variant 소속 | nominal. 소스 타입의 인스턴스마다 하나 |
 
 **설계 원칙:**
 
@@ -65,7 +65,10 @@ Identity를 관찰하게 만드는 기능은 이 원칙을 깬다. 포인터 동
 Descriptor는 runtime에 할당되는 값의 종류마다 하나다.
 
 - 소스 struct의 인스턴스마다 하나. 특수화된 제네릭 struct는 특수화 인자마다
-  별개의 descriptor를 가진다.
+  별개의 descriptor를 가진다. 타입 자신의 row 인자는
+  [인스턴스를 가르지 않으므로](generics.md#nominal-타입-수집과-재작성)
+  `Callback({}, Int)`와 `Callback({State(Int)}, Int)`처럼 row 인자만 다른 두 타입은
+  layout과 descriptor를 공유한다. Row는 값의 runtime 표현을 바꾸지 않는다.
 - 소스 enum의 각 variant마다 하나. 같은 enum의 variant descriptor는 같은 enum
   descriptor를 가리킨다.
 - Compiler가 할당하는 값마다 하나. Boxing된 `Bool`, `Nat`, `Int`, `Float`, runtime도
@@ -109,14 +112,14 @@ Descriptor는 runtime에 할당되는 값의 종류마다 하나다.
 ## IR에서의 표현
 
 Nominal IR에는 descriptor 선언이 없다. Descriptor의 identity는 할당 operation이
-가리키는 nominal layout 타입과 variant tag의 쌍이다. 이름과 필드 이름의 출처는
-`adt.struct`와 `adt.enum` 하나뿐이다.
+가리키는 nominal layout 타입과 variant tag의 쌍이다. Source가 선언한 타입의 이름,
+필드 이름, variant 이름의 출처는 그 타입의 [nominal 선언](ir.md#nominal-선언)이다.
 
 - Nominal layout을 마지막으로 해석하는 target 경계가 descriptor를 소유한다. 이
   경계는 `(layout 타입, tag)`마다 번호와 필드 종류를 정해 module 수준
   `tribute_rtti.layout` 선언으로 남긴다. Native 배열의 descriptor는
   `(adt.array 타입, tag 없음)`이다. 할당 operation(`adt.struct_new`,
-  `adt.variant_new`, native에서 배열을 만드는 [`adt` 배열 operation](ir.md#adt-배열))을
+  `adt.variant_new`, native에서 배열을 만드는 [`adt` 배열 operation](tribute-dialects.md#adt-배열))을
   내리는 pass는 번호를 스스로 정하지 않고 이 선언에서 읽어 할당에 새긴 뒤 선언을
   지운다. Native는 RC header의 RTTI index, Wasm은 사용자 struct와 variant 객체의
   첫 필드에 새긴다.
@@ -161,7 +164,10 @@ WasmGC 객체에는 header가 없으므로 객체가 descriptor를 필드로 가
 - Builtin layout(bytes, closure, boxing된 scalar)은 지금처럼
   예약 GC 타입을 쓰며, descriptor 필드를 두지 않는다. 이 값들의 descriptor 번호는
   자기 예약 GC 타입 index다. 사용자 struct와 variant의 번호는 예약 GC 타입 index
-  범위 다음부터 할당 순서대로 정한다. Closure를 제외한 builtin layout은 layout마다 필드와
+  범위 다음부터 할당 순서대로 정한다. 단, enum은 처음 할당되는 variant의 순서에서
+  선언된 variant 수만큼 연속된 번호를 선언 순서대로 받는다. 따라서 variant의
+  선언 위치는 그 번호에서 enum의 첫 번호를 뺀 값이다. 할당되지 않는 variant의
+  번호는 비워 둔다. Closure를 제외한 builtin layout은 layout마다 필드와
   해제 동작이 하나로 고정되어 있으므로 descriptor도 layout마다 하나다.
 - Closure는 capture layout마다 GC 타입이 다르다. Wasm은 해제 정보가 필요 없고
   capture는 runtime 검사 대상이 아니므로, capture layout마다 descriptor를 두지 않고
@@ -181,6 +187,10 @@ WasmGC 객체에는 header가 없으므로 객체가 descriptor를 필드로 가
   비교한다. Payload에는 tag 필드를 두지 않고, variant 객체는 자기 필드만 가진다.
 - 프로그램이 할당하지 않는 variant는 descriptor 번호가 없으며, 그 variant에 대한
   판별은 두 target 모두에서 항상 거짓이다.
+- 값의 variant가 enum 선언에서 몇 번째인지(`adt.variant_tag`)도 descriptor로
+  구한다. Wasm은 descriptor 필드에서 enum의 첫 번호를 뺀다. Native는
+  [RTTI table](rc.md#rtti-table)에서 그 descriptor 레코드의 `tag_index`를 읽는다.
+  두 target 모두 할당 여부와 관계없이 선언 위치를 낸다.
 - Variant 판별의 대상은 enum 값이며 null이 아니다. Null 참조에 대한 판별의 동작은
   정의하지 않는다. Target은 참조를 읽다가 fault할 수도, 읽지 않고 거짓을 낼 수도
   있다.

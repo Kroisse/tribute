@@ -180,7 +180,7 @@ lowering이 쓰는 runtime 항목 경로의 집합을 가진다.
   않는다는 규칙은 그대로다.
 - Runtime 타입의 IR 표현은 pass를 거치며 바뀌므로 이름으로 찾지 않는다.
   Frontend는 `std::String`처럼 root `core.module`의 dictionary 속성
-  `tribute.types`([IR 계약](ir.md)에 정의)에 canonical 경로를 key로 그
+  `tribute.types`([IR 계약](tribute-dialects.md)에 정의)에 canonical 경로를 key로 그
   `TypeRef`를 게시하고, lowering은 이 항목을 읽는다.
 
 **제약.** `std::runtime`과 하위 모듈에서 본문이 있는 source 함수는 runtime
@@ -413,6 +413,9 @@ fn process(data: List(Int)) -> Int {
 ### Type-Directed Resolution
 
 함수 이름이 여러 함수를 가리킬 수 있으면 호출의 인자와 결과 타입으로 해소한다.
+이 규칙을 type-directed name resolution(TDNR)이라 한다. TDNR은 별도 단계가 아니라
+타입 검사의 일부이며, 지금까지 알려진 타입으로 후보 하나가 정해지지 않으면 선택을
+제약 풀이 뒤로 미룬다.
 이 절의 `List::map`은 해소 규칙만 설명하는 illustrative API이며 별도 public API
 절에서 확정되지 않았다.
 

@@ -128,7 +128,7 @@ Runtime 함수는 `Bytes` argument를 호출 동안 빌리고, `Bytes` 결과는
 
 ### Array
 
-[`adt.array<E>`](ir.md#adt-배열) 값은 compiler가 할당하는 RC object다.
+[`adt.array<E>`](tribute-dialects.md#adt-배열) 값은 compiler가 할당하는 RC object다.
 
 ```text
 Array: [len: i64] [element: E...]
@@ -660,7 +660,7 @@ the tail terminator. No RC operation may follow `clif.return_call` or
 Native ownership plan은 module-local direct symbol과 complete signature를 정확히
 resolve한다. Indirect edge는 exact callable signature가 필요하고 proper tail은
 signature가 명시한 `consumed` 매개변수 계약도 필요하다. 이 계약은
-[representation/ABI 경계](ir.md#representationabi-경계) 출구의 physical signature에서
+[representation/ABI 경계](abi-boundary.md#representationabi-경계) 출구의 physical signature에서
 읽으며 의미적 호출 규약에서 추론하지 않는다. Borrowed forwarding은 direct call graph의
 monotone fixed point이며 recursive SCC, external/indirect/unknown call과 escape는
 conservative retained ownership을 선택한다. 이 정보는 textual attribute가 아니라
@@ -910,8 +910,9 @@ __tribute_rtti: [record; max_index + 1]
 `__tribute_rtti`는 8바이트 정렬의 데이터 하나다. Index 레코드 배열 뒤에 index를
 받지 않는 enum 레코드, 필드 배열, 이름 바이트를 둔다. 레코드 안의 참조는
 `__tribute_rtti` 시작 기준의 `u32` offset이며, `0`은 참조가 없음을 뜻한다. 이름은
-UTF-8 바이트이고 NUL로 끝나지 않는다. 링크 시점에야 정해지는 값은 release 함수
-주소뿐이다.
+UTF-8 바이트이고 NUL로 끝나지 않는다. Source가 선언한 struct·enum·variant의 이름과
+struct의 필드 이름은 그 타입의 [nominal 선언](ir.md#nominal-선언)에서 읽는다.
+링크 시점에야 정해지는 값은 release 함수 주소뿐이다.
 
 ```text
 record:  ptr release_fn_or_null | u32 kind | u32 field_count | u32 name

@@ -303,7 +303,7 @@ pub(super) fn collect_from_type<'db>(
 /// A nominal type's name is only how a reference spelled it, so instances
 /// are keyed by this form: one spelled `ParseError` inside its module and
 /// `std::Int::ParseError` outside it is one instance
-/// (`new-plans/implementation.md`).
+/// (`design/implementation.md`).
 pub(super) fn canonical_args<'db>(
     db: &'db dyn salsa::Database,
     args: &[Type<'db>],
@@ -344,11 +344,17 @@ impl<'db> TypeFolder<'db> for CanonicalNames<'db> {
         }
         let folded = ty.try_super_fold_with(self)?;
         let canonical = match folded.kind(self.db) {
-            TypeKind::Named { id, name, args } if *name != id.qualified(self.db) => Type::new(
+            TypeKind::Named {
+                id,
+                name,
+                row_args,
+                args,
+            } if *name != id.qualified(self.db) => Type::new(
                 self.db,
                 TypeKind::Named {
                     id: *id,
                     name: id.qualified(self.db),
+                    row_args: row_args.clone(),
                     args: args.clone(),
                 },
             ),
@@ -531,6 +537,7 @@ mod tests {
                 TypeKind::Named {
                     id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::SymbolPath::new([name])),
                     name: trunk_ir::Symbol::new(name),
+                    row_args: vec![],
                     args,
                 },
             )
@@ -624,6 +631,7 @@ mod tests {
                     visibility: crate::ast::Visibility::Private,
                     name: Symbol::new(name),
                     disambiguator: 0,
+                    row_params: vec![],
                     type_params: (0..arity)
                         .map(|p| crate::ast::TypeParamDecl {
                             id: NodeId::from_raw(100 + i * 2 + p),
@@ -665,6 +673,7 @@ mod tests {
                 TypeKind::Named {
                     id,
                     name: id.qualified(&db).clone(),
+                    row_args: vec![],
                     args,
                 },
             )
@@ -751,6 +760,7 @@ mod tests {
                 TypeKind::Named {
                     id,
                     name: id.qualified(&db).clone(),
+                    row_args: vec![],
                     args: vec![int],
                 },
             );

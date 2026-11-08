@@ -1,7 +1,7 @@
 //! Reject a call in a `fn` handler arm that reaches a `Cps` callee once
 //! class specialization has fixed the classes of an instance.
 //!
-//! The rules are those of `new-plans/cps-effects.md` ("`fn` arm 호출 검사"). A
+//! The rules are those of `design/cps-effects.md` ("`fn` arm 호출 검사"). A
 //! `fn` arm runs without a continuation frame, so a callee that may suspend
 //! or abort breaks the guarantee of the `fn` declaration. Typechecking
 //! rejects what the arm's definition shows; this check covers the calls

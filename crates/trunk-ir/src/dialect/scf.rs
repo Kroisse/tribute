@@ -24,10 +24,9 @@ mod scf {
     /// }
     /// ```
     ///
-    /// - **Shape:** a fixed-width integer discriminant, distinct `cases`, the
-    ///   required `default_region`, one `case_regions` entry per case in the
-    ///   same order, and any number of results. Unlike MLIR's, the
-    ///   discriminant is not `index`.
+    /// - **Shape:** a fixed-width integer or `core.index` discriminant,
+    ///   distinct `cases`, the required `default_region`, one `case_regions`
+    ///   entry per case in the same order, and any number of results.
     /// - **Meaning:** runs the case region whose value equals the
     ///   discriminant, or `default_region` when none does. Each region ends
     ///   in `scf.yield`, whose values become the results, or in its own
@@ -39,7 +38,7 @@ mod scf {
     #[verify]
     #[asm_format(discriminant attr_dict ":" functional_type(discriminant, results) custom(SwitchArms(cases, case_regions, default_region)))]
     #[implements(RegionBranch, Fold)]
-    fn index_switch(cases: Attr<[i64]>, discriminant: Value<impl IntegerLike>) -> Variadic<_> {
+    fn index_switch(cases: Attr<[i64]>, discriminant: Value<impl IntegerOrIndex>) -> Variadic<_> {
         #[region(default_region)]
         {}
         #[regions(case_regions)]
@@ -479,7 +478,7 @@ impl RegionBranchTerminator for Break {
 
 use crate::context::IrContext;
 use crate::dialect::arith::const_int_value;
-use crate::dialect::core::{BoolLike, IntegerLike};
+use crate::dialect::core::{BoolLike, IntegerOrIndex};
 use crate::ops::DialectOp;
 use crate::refs::{OpRef, ValueRef};
 use crate::transforms::canonicalize::{Fold, FoldResult};

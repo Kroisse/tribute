@@ -3,7 +3,7 @@
 //! The grammar lexes a numeric literal together with every identifier
 //! character that follows it, so digit separators, radix digits, exponents,
 //! and type suffixes all arrive here as one token. This module checks that
-//! token against the literal rules in `new-plans/syntax.md` and decides its
+//! token against the literal rules in `design/syntax.md` and decides its
 //! final type from its shape and suffix.
 
 use std::ops::Range;
@@ -374,7 +374,7 @@ fn suffix(input: &mut Input<'_>) -> PResult<Option<(char, Range<usize>)>> {
 
 /// An integer literal's value, or an overflow error spanning `range` when it
 /// does not fit the current representation of its type: an unsigned 32-bit
-/// `Nat` or a signed 32-bit `Int` (`new-plans/numeric-types.md`).
+/// `Nat` or a signed 32-bit `Int` (`design/numeric-types.md`).
 fn integer_value(
     ty: IntegerType,
     negative: bool,

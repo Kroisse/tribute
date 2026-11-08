@@ -48,10 +48,11 @@ on its declaration in
 [`tribute_control`](../../crates/tribute-ir/src/dialect/tribute_control.rs),
 [`tribute_cps`](../../crates/tribute-ir/src/dialect/tribute_cps.rs), and
 [`ability`](../../crates/tribute-ir/src/dialect/ability.rs). See
-[the IR contract](../../new-plans/ir.md) for the rules that span operations, and
-[the shared pipeline](../../new-plans/cps-effects.md#shared-middle-end-pipeline).
+[the high-level dialect rules](../../design/tribute-dialects.md) for the rules
+that span operations, and
+[the pipeline order](../../design/lowering.md#pipeline-order).
 
-The target [representation/ABI boundary](../../new-plans/ir.md#representationabi-경계)
+The target [representation/ABI boundary](../../design/abi-boundary.md#representationabi-경계)
 ends with an exit verification that rejects any violation in every build; later
 passes read only the physical contracts it checked. After the frontend, the
 pipeline is one ordered chain of stages that `stage_passes` in
@@ -71,8 +72,8 @@ The doc comment on an operation or type declaration is copied onto its
 generated wrapper. It states that one entity's contract: its shape, meaning,
 verification, ownership and value flow, and location, with its textual form
 in a `text` code block. It is authoritative for that entity; rules that span
-entities stay in [`new-plans/`](../../new-plans/). Write it in English and
-refer to `new-plans/` sections by file and heading rather than Markdown links,
+entities stay in [`design/`](../../design/). Write it in English and
+refer to `design/` sections by file and heading rather than Markdown links,
 which rustdoc cannot resolve.
 
 - `struct` definitions generate typed type wrappers. IR type parameters are
@@ -83,7 +84,7 @@ which rustdoc cannot resolve.
   parameters and attributes.
 - `fn` definitions declare operations. The signature declares each entity and
   its type constraint, following
-  [the declarative schema contract](../../new-plans/ir.md#선언적-operation-schema).
+  [the declarative schema contract](../../design/ir.md#선언적-operation-schema).
   `_` leaves an entity unconstrained. For example:
 
 ```rust
@@ -178,7 +179,7 @@ where
   every generated check passed.
 - `#[asm_format(..)]` on an operation lists its custom syntax as format
   elements, which the shared printer and parser both interpret
-  ([declarative assembly format](../../new-plans/ir.md#선언적-어셈블리-형식)):
+  ([declarative assembly format](../../design/ir.md#선언적-어셈블리-형식)):
 
   ```rust
   #[asm_format("call" callee "(" args ")" attr_dict (":" types(results)^)?)]
@@ -247,6 +248,15 @@ where
   the type when it generates aliases; a hand-written `TypeDef` adds it with
   `with_alias_hint`. `#[implements(..)]` on a type registers the wrapper's
   [type interfaces](#type-interfaces).
+- A hand-written `TypeDef` declares an
+  [identified type](../../design/ir.md#식별-타입) with `.identified()`:
+  its data is a key, and `IrContext::bind_type_body` binds its body once,
+  which `IrContext::type_body` reads. Its `TypeAsmFormat` writes the body
+  where `AsmPrinter::identified_body` returns one, and reads a written body
+  with `AsmParser::bind_type_body`; the printer gives every identified type
+  a module reaches an alias, named by its alias hint, so register one that
+  names the key. `validation::validate_type_bodies` rejects an identified
+  type without a body.
 - The function syntax `<(inputs) -> results, {attrs}>` belongs to the
   signature types that register it: their `TypeAsmFormat` calls
   `func::print_signature_type` and `func::parse_signature_type`, which
@@ -705,7 +715,7 @@ A compiler-owned runtime item is identified by its canonical path under
 `tribute_ir::runtime_items::RuntimeFunction::lookup` and a runtime type with
 `runtime_items::runtime_type`, which reads the root module's `tribute.types`
 dictionary through `tribute_ir::metadata`. See
-[the runtime module](../../new-plans/modules.md#compiler-소유-runtime-모듈).
+[the runtime module](../../design/modules.md#compiler-소유-runtime-모듈).
 
 A direct call operation implements the `CallLike`
 [operation interface](#operation-interfaces), declared with
@@ -727,7 +737,7 @@ Every other reference an operation holds takes its target's address, which
 the call graph records as an escape.
 
 Per-parameter attributes (`param_attrs`, see
-[the type model](../../new-plans/ir.md#타입-매개변수-속성)) are built with the
+[the type model](../../design/ir.md#타입-매개변수-속성)) are built with the
 parameter they describe and read back by position:
 
 ```rust
@@ -779,7 +789,7 @@ if func::Call::matches(&ctx, op) { ... }
 
 `OperationData::name` is an `OpName` and `TypeData::name` a `TypeName`, one
 handle for the dialect and the name together, as MLIR's `OperationName`
-is (see [the IR contract](../../new-plans/ir.md)). A name declared by
+is (see [the IR contract](../../design/ir.md)). A name declared by
 `#[dialect]` is registered: its handle points to the `static` definition the
 declaration emits (`OpDef`, `TypeDef`), so it is valid in every context and
 compares by address. A typed wrapper's `NAME` is that handle, and `matches`

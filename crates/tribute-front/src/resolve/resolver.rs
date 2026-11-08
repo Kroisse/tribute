@@ -875,8 +875,15 @@ impl<'e, 'db> Resolver<'e, 'db> {
                     }
                 }
             }
-            TypeAnnotationKind::App { ctor, args } => {
+            TypeAnnotationKind::App {
+                ctor,
+                row_args,
+                args,
+            } => {
                 self.resolve_annotation_paths(ctor);
+                row_args
+                    .iter_mut()
+                    .for_each(|row| self.resolve_effect_annotations(row));
                 args.iter_mut()
                     .for_each(|arg| self.resolve_annotation_paths(arg));
             }

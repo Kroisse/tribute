@@ -54,8 +54,9 @@ where
 /// conversion of source types into logical IR types.
 pub(crate) struct NominalTypes<'db> {
     db: &'db dyn salsa::Database,
-    /// Struct field order: CtorId → [field_names in definition order].
-    /// Used for lowering Record expressions to adt.struct_new.
+    /// Field names of each struct: CtorId → [field names in declaration
+    /// order], `_` for a positional field. Used to place record fields and
+    /// to match brace-form constructor patterns by name.
     struct_fields: HashMap<CtorId<'db>, Vec<Symbol>>,
     /// Field names of named-field enum variants: (enum layout, tag) →
     /// [field names in declaration order]. Used to match brace-form
@@ -163,7 +164,7 @@ impl<'db> NominalTypes<'db> {
             .collect()
     }
 
-    /// Register struct field order for lowering Record expressions.
+    /// Register the field names of a struct.
     pub(crate) fn register_struct_fields(
         &mut self,
         ctor_id: CtorId<'db>,
@@ -187,9 +188,9 @@ impl<'db> NominalTypes<'db> {
         self.variant_field_names.get(&(layout, tag)).cloned()
     }
 
-    /// Get struct field order (for lowering Record → adt.struct_new).
-    pub(crate) fn get_struct_field_order(&self, ctor_id: CtorId<'db>) -> Option<&Vec<Symbol>> {
-        self.struct_fields.get(&ctor_id)
+    /// Field names of a struct in declaration order.
+    pub(crate) fn struct_field_names(&self, ctor_id: CtorId<'db>) -> Option<&[Symbol]> {
+        self.struct_fields.get(&ctor_id).map(Vec::as_slice)
     }
 
     /// Register a type (named struct, tuple, etc.) in the type map.
@@ -304,7 +305,7 @@ impl<'db> NominalTypes<'db> {
                 logical_key("local_bound", [scope.to_string(), index.to_string()])
             }
             TypeKind::UniVar { id } => self.logical_univar_key(*id),
-            TypeKind::Named { id, name, args } => {
+            TypeKind::Named { id, name, args, .. } => {
                 let mut parts = vec![self.logical_nominal_key(*id, name)];
                 parts.extend(args.iter().map(|arg| self.logical_type_key(*arg)));
                 logical_key("named", parts)
@@ -658,6 +659,7 @@ mod tests {
                 TypeKind::Named {
                     id,
                     name: Symbol::new("Box"),
+                    row_args: vec![],
                     args: vec![nat],
                 },
             )
@@ -699,6 +701,7 @@ mod tests {
                 TypeKind::Named {
                     id: crate::ast::TypeDefId::declared(&db, path.clone(), disambiguator),
                     name: Symbol::new("A"),
+                    row_args: vec![],
                     args: vec![],
                 },
             )

@@ -1281,6 +1281,23 @@ fn main() -> Nil { Nil }
     insta::assert_yaml_snapshot!(result.diagnostics);
 }
 
+/// A checked declaration with row parameters stops before lowering.
+#[salsa_test]
+fn diag_row_parameters_before_lowering(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+struct Callback({e}, a) { run: fn(a) ->{e} a }
+
+fn main() -> Nil { Nil }
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
 /// A field's omitted row is empty, so an open callback cannot fill it.
 #[salsa_test]
 fn diag_open_callback_in_pure_field(db: &salsa::DatabaseImpl) {

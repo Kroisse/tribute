@@ -529,6 +529,20 @@ impl SwitchDispatch<'_> {
             insert_before,
         } = self;
 
+        // `cf.switch` takes a fixed-width integer, so an index discriminant
+        // becomes a `core.i64` first, as MLIR casts it for `cf.switch`.
+        let discriminant = if !cases.is_empty()
+            && crate::dialect::core::Index::matches(ctx, ctx.value_ty(discriminant))
+        {
+            let i64_ty = crate::dialect::core::I64::type_ref(ctx);
+            let cast = arith::IndexCast::operands(discriminant)
+                .results(i64_ty)
+                .build(ctx, loc);
+            ctx.push_op(block, cast.op_ref());
+            cast.result(ctx)
+        } else {
+            discriminant
+        };
         // Get the discriminant type for comparisons
         let disc_ty = ctx.value_ty(discriminant);
 
@@ -2013,6 +2027,33 @@ mod tests {
         let operation_verifiers = crate::validation::validate_operation_verifiers(&ctx, module);
         assert!(operation_verifiers.is_ok(), "{operation_verifiers}");
         module.op().display(&ctx).to_string()
+    }
+
+    #[test]
+    fn index_switch_casts_its_discriminant_for_cf_switch() {
+        let printed = lower_switch_function(
+            r#"core.module @test {
+  func.func @main(%choice: core.index) {
+    scf.index_switch %choice : (core.index) -> ()
+    case 0 {
+      scf.yield
+    }
+    case 2 {
+      scf.yield
+    }
+    default {
+      scf.yield
+    }
+    func.return
+  }
+}"#,
+        );
+
+        assert!(
+            printed.contains("%1 = arith.index_cast %0 : core.index to core.i64"),
+            "{printed}"
+        );
+        assert!(printed.contains("cf.switch %1 : core.i64"), "{printed}");
     }
 
     #[test]

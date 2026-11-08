@@ -44,6 +44,15 @@ pub(crate) struct HandleContext<'db> {
     pub evidence_body: Option<usize>,
 }
 
+/// One name bound by a generalized `let` pattern.
+#[derive(Clone, Debug)]
+pub(crate) struct LetSchemeBinding<'db> {
+    pub name: Symbol,
+    pub local_id: Option<LocalId>,
+    pub scope: NodeId,
+    pub scheme: TypeScheme<'db>,
+}
+
 /// Function-level type inference context.
 ///
 /// Each function body is type-checked with its own `FunctionInferenceContext`,
@@ -60,15 +69,6 @@ pub(crate) struct HandleContext<'db> {
 /// Scoping: Bindings are stored in a stack of scopes. When entering a new
 /// scope (e.g., lambda body, case arm), push_scope() creates a new scope.
 /// When exiting, pop_scope() removes it. Lookups search from innermost to
-/// One name bound by a generalized `let` pattern.
-#[derive(Clone, Debug)]
-pub(crate) struct LetSchemeBinding<'db> {
-    pub name: Symbol,
-    pub local_id: Option<LocalId>,
-    pub scope: NodeId,
-    pub scheme: TypeScheme<'db>,
-}
-
 /// outermost scope.
 pub struct FunctionInferenceContext<'a, 'db> {
     db: &'db dyn salsa::Database,
@@ -79,6 +79,30 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// Function definition ID (used in UniVarSource for globally unique IDs).
     func_id: FuncDefId<'db>,
 
+    /// Lexical bindings visible to the body.
+    scope: LocalScope<'db>,
+
+    /// The effect row and the frames of the enclosing callables and handlers.
+    effects: EffectFrames<'db>,
+
+    /// Inference variables, constraints, and deferred selections the solver
+    /// takes.
+    solve: SolveInputs<'db>,
+
+    /// What the first visit of a node decided, reused by later visits.
+    memo: RevisitMemo<'db>,
+
+    /// Per-node results handed to the typed AST and its metadata.
+    results: InferenceResults<'db>,
+
+    pub(crate) effect_contract: Option<AbilityRow<'db>>,
+
+    /// Evidence scopes and the calls and resumes made in them.
+    pub(crate) evidence: super::evidence_plan::EvidenceTracker<'db>,
+}
+
+/// Lexical bindings visible to the body.
+struct LocalScope<'db> {
     /// Types of local variables (by LocalId), organized as a stack of scopes.
     /// The last element is the innermost (current) scope.
     local_scopes: Vec<HashMap<LocalId, TypeScheme<'db>>>,
@@ -87,9 +111,68 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// The last element is the innermost (current) scope.
     name_scopes: Vec<HashMap<Symbol, TypeScheme<'db>>>,
 
-    /// Types of AST nodes (for TypedRef construction).
-    node_types: HashMap<NodeId, Type<'db>>,
+    /// The schemes each generalized `let` pattern bound on its first visit,
+    /// rebound unchanged when inference and conversion revisit it.
+    let_schemes: HashMap<NodeId, Vec<LetSchemeBinding<'db>>>,
 
+    /// The locals a `let` binds to a named function, directly or through
+    /// another such local. Their schemes quantify rows.
+    function_aliases: HashSet<LocalId>,
+
+    local_binding_owners: HashMap<LocalId, NodeId>,
+
+    /// Named rows share the function declaration's annotation scope.
+    annotation_rows: HashMap<Symbol, RowVar>,
+    /// Parent signature parameters are shared by all body annotations.
+    annotation_type_parameters: HashMap<Symbol, Type<'db>>,
+}
+
+/// The effect row and the frames of the enclosing callables and handlers.
+struct EffectFrames<'db> {
+    /// Current accumulated effects.
+    current_effect: AbilityRow<'db>,
+
+    /// Continuation effect rows captured while checking active lambdas.
+    lambda_resume_effects: Vec<Option<AbilityRow<'db>>>,
+
+    /// Result types of the enclosing callables, innermost last. A `become`
+    /// call must produce exactly this type. An inferred lambda has no result
+    /// type until its body is checked, so its entry is created on demand.
+    callable_results: Vec<Option<Type<'db>>>,
+
+    /// Stack of handle expression contexts.
+    ///
+    /// Pushed during the infer phase of a handle expression and
+    /// popped during the convert phase, so that handler arms can
+    /// assign the body's ability row to continuation variables.
+    handle_ctx_stack: Vec<HandleContext<'db>>,
+}
+
+/// Inference variables, constraints, and deferred selections the solver
+/// takes.
+struct SolveInputs<'db> {
+    /// Counter for fresh type variables (local to this function).
+    next_type_var: u64,
+
+    /// Counter for fresh ability row variables (local to this function).
+    next_row_var: u64,
+
+    /// Generated constraints for this function.
+    constraints: ConstraintSet<'db>,
+
+    /// One common-result relation per source expression, shared by infer/check visits.
+    result_joins: HashMap<NodeId, Constraint<'db>>,
+
+    /// Deferred UFCS method calls whose receiver type is still a UniVar.
+    /// Resolved after constraint solving when UniVars have been substituted.
+    deferred_methods: Vec<DeferredMethodCall<'db>>,
+    /// Deferred method calls resolved before the function was solved.
+    resolved_deferred_methods: Vec<(DeferredMethodCall<'db>, FuncDefId<'db>, Type<'db>)>,
+}
+
+/// What the first visit of a node decided, reused by later visits.
+#[derive(Default)]
+struct RevisitMemo<'db> {
     /// Completed lambda checks, shared by inference and typed AST conversion.
     checked_lambdas: HashMap<NodeId, (Option<Type<'db>>, Expr<TypedRef<'db>>)>,
 
@@ -101,39 +184,10 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// and conversion so phantom arguments and callable field rows stay linked.
     constructor_reference_types: HashMap<NodeId, Type<'db>>,
 
-    /// The schemes each generalized `let` pattern bound on its first visit,
-    /// rebound unchanged when inference and conversion revisit it.
-    let_schemes: HashMap<NodeId, Vec<LetSchemeBinding<'db>>>,
-
-    /// The locals a `let` binds to a named function, directly or through
-    /// another such local. Their schemes quantify rows.
-    function_aliases: HashSet<LocalId>,
-
-    /// The solved function type selected for each direct call callee.
-    function_instances: HashMap<NodeId, super::FunctionInstance<'db>>,
-
     /// Inference-time instances for quantified local reference occurrences.
     /// Conversion reuses only these polymorphic instances; monomorphic locals
     /// are deliberately looked up again.
     quantified_local_reference_types: HashMap<NodeId, Type<'db>>,
-    local_binding_owners: HashMap<LocalId, NodeId>,
-    local_instances: HashMap<NodeId, super::LocalCallableInstance<'db>>,
-
-    /// Fully instantiated operation metadata for handler arms.
-    handler_operations: HashMap<NodeId, InstantiatedHandlerOperation<'db>>,
-
-    /// Handler validation is revisited during conversion; report each error once.
-    reported_handler_errors: HashSet<(NodeId, &'static str)>,
-
-    /// Synthetic `resume` locals of `op` arms whose operation returns `Never`,
-    /// mapped to the ability and operation names for diagnostics.
-    non_resumptive_resume_locals: HashMap<LocalId, (Symbol, Symbol)>,
-
-    /// Module references in value position, each reported once.
-    reported_module_values: HashSet<NodeId>,
-
-    /// Exact instantiated metadata for ability-operation call expressions.
-    perform_operations: HashMap<NodeId, InstantiatedPerformOperation<'db>>,
 
     /// Inference-time types for ability-operation callees. This is deliberately
     /// separate from `node_types`: conversion revisits the callee and must be
@@ -141,70 +195,56 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// concrete expression node-type table.
     ability_op_callee_types: HashMap<NodeId, Type<'db>>,
 
-    /// Source-logical callable signatures for lambda nodes.
-    lambda_signatures: HashMap<NodeId, LambdaSignature<'db>>,
-
-    /// Generated constraints for this function.
-    constraints: ConstraintSet<'db>,
-
-    /// One common-result relation per source expression, shared by infer/check visits.
-    result_joins: HashMap<NodeId, Constraint<'db>>,
-
-    /// Counter for fresh type variables (local to this function).
-    next_type_var: u64,
-
-    /// Counter for fresh ability row variables (local to this function).
-    next_row_var: u64,
-
-    /// Named rows share the function declaration's annotation scope.
-    annotation_rows: HashMap<Symbol, RowVar>,
-    /// Parent signature parameters are shared by all body annotations.
-    annotation_type_parameters: HashMap<Symbol, Type<'db>>,
     /// Annotation revisits must not allocate unrelated inference variables.
     annotation_types: HashMap<NodeId, Type<'db>>,
 
-    /// Current accumulated effects.
-    current_effect: AbilityRow<'db>,
-    pub(crate) effect_contract: Option<AbilityRow<'db>>,
+    /// Handler validation is revisited during conversion; report each error once.
+    reported_handler_errors: HashSet<(NodeId, &'static str)>,
 
-    /// Continuation effect rows captured while checking active lambdas.
-    lambda_resume_effects: Vec<Option<AbilityRow<'db>>>,
+    /// Module references in value position, each reported once.
+    reported_module_values: HashSet<NodeId>,
 
-    /// Result types of the enclosing callables, innermost last. A `become`
-    /// call must produce exactly this type. An inferred lambda has no result
-    /// type until its body is checked, so its entry is created on demand.
-    callable_results: Vec<Option<Type<'db>>>,
+    /// Calls whose number of arguments was reported; inference may visit a
+    /// call more than once.
+    reported_arities: HashSet<NodeId>,
+}
+
+/// Per-node results handed to the typed AST and its metadata.
+#[derive(Default)]
+struct InferenceResults<'db> {
+    /// Types of AST nodes (for TypedRef construction).
+    node_types: HashMap<NodeId, Type<'db>>,
+
+    /// The solved function type selected for each direct call callee.
+    function_instances: HashMap<NodeId, super::FunctionInstance<'db>>,
+
+    local_instances: HashMap<NodeId, super::LocalCallableInstance<'db>>,
+
+    /// Fully instantiated operation metadata for handler arms.
+    handler_operations: HashMap<NodeId, InstantiatedHandlerOperation<'db>>,
+
+    /// Exact instantiated metadata for ability-operation call expressions.
+    perform_operations: HashMap<NodeId, InstantiatedPerformOperation<'db>>,
+
+    /// Source-logical callable signatures for lambda nodes.
+    lambda_signatures: HashMap<NodeId, LambdaSignature<'db>>,
+
+    /// Resolved UFCS methods: NodeId → (FuncDefId, instantiated callee type).
+    /// Populated during inference phase, consumed during conversion phase.
+    resolved_methods: HashMap<NodeId, (FuncDefId<'db>, Type<'db>)>,
+    /// The calls written as `x.f(y)`, for diagnostics.
+    method_syntax_calls: HashSet<NodeId>,
 
     /// `become` operands written as method calls. Their callee is known only
     /// after method selection, which may be deferred until solving.
     become_method_operands: Vec<NodeId>,
 
-    /// Stack of handle expression contexts.
-    ///
-    /// Pushed during the infer phase of a handle expression and
-    /// popped during the convert phase, so that handler arms can
-    /// assign the body's ability row to continuation variables.
-    handle_ctx_stack: Vec<HandleContext<'db>>,
-
-    /// Resolved UFCS methods: NodeId → (FuncDefId, instantiated callee type).
-    /// Populated during inference phase, consumed during conversion phase.
-    resolved_methods: HashMap<NodeId, (FuncDefId<'db>, Type<'db>)>,
-    /// Calls whose number of arguments was reported; inference may visit a
-    /// call more than once.
-    reported_arities: HashSet<NodeId>,
-    /// The calls written as `x.f(y)`, for diagnostics.
-    method_syntax_calls: HashSet<NodeId>,
-
-    /// Deferred UFCS method calls whose receiver type is still a UniVar.
-    /// Resolved after constraint solving when UniVars have been substituted.
-    deferred_methods: Vec<DeferredMethodCall<'db>>,
-    /// Deferred method calls resolved before the function was solved.
-    resolved_deferred_methods: Vec<(DeferredMethodCall<'db>, FuncDefId<'db>, Type<'db>)>,
     /// The implicit constructors decided at each expression or pattern.
     implicit_constructors: HashMap<NodeId, ImplicitConstructor<'db>>,
 
-    /// Evidence scopes and the calls and resumes made in them.
-    pub(crate) evidence: super::evidence_plan::EvidenceTracker<'db>,
+    /// Synthetic `resume` locals of `op` arms whose operation returns `Never`,
+    /// mapped to the ability and operation names for diagnostics.
+    non_resumptive_resume_locals: HashMap<LocalId, (Symbol, Symbol)>,
 }
 
 /// A UFCS method call deferred until after constraint solving.
@@ -327,47 +367,35 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             db,
             env,
             func_id,
-            // Start with one scope (the function's top-level scope)
-            local_scopes: vec![HashMap::default()],
-            name_scopes: vec![HashMap::default()],
-            node_types: HashMap::default(),
-            checked_lambdas: HashMap::default(),
-            checked_record_shapes: HashSet::default(),
-            constructor_reference_types: HashMap::default(),
-            let_schemes: HashMap::default(),
-            function_aliases: HashSet::default(),
-            function_instances: HashMap::default(),
-            quantified_local_reference_types: HashMap::default(),
-            local_binding_owners: HashMap::default(),
-            local_instances: HashMap::default(),
-            handler_operations: HashMap::default(),
-            reported_handler_errors: HashSet::default(),
-            non_resumptive_resume_locals: HashMap::default(),
-            reported_module_values: HashSet::default(),
-            perform_operations: HashMap::default(),
-            ability_op_callee_types: HashMap::default(),
-            lambda_signatures: HashMap::default(),
-            constraints: ConstraintSet::new(),
-            result_joins: HashMap::default(),
-            next_type_var: 0,
-            // Start from 1 to avoid collision with RowVar { id: 0 } placeholder
-            // used in collect.rs for function signature effect rows
-            next_row_var: 1,
-            annotation_rows: HashMap::default(),
-            annotation_type_parameters: HashMap::default(),
-            annotation_types: HashMap::default(),
-            current_effect: AbilityRow::pure(db),
+            scope: LocalScope {
+                // Start with one scope (the function's top-level scope)
+                local_scopes: vec![HashMap::default()],
+                name_scopes: vec![HashMap::default()],
+                let_schemes: HashMap::default(),
+                function_aliases: HashSet::default(),
+                local_binding_owners: HashMap::default(),
+                annotation_rows: HashMap::default(),
+                annotation_type_parameters: HashMap::default(),
+            },
+            effects: EffectFrames {
+                current_effect: AbilityRow::pure(db),
+                lambda_resume_effects: Vec::new(),
+                callable_results: Vec::new(),
+                handle_ctx_stack: Vec::new(),
+            },
+            solve: SolveInputs {
+                next_type_var: 0,
+                // Start from 1 to avoid collision with RowVar { id: 0 } placeholder
+                // used in collect.rs for function signature effect rows
+                next_row_var: 1,
+                constraints: ConstraintSet::new(),
+                result_joins: HashMap::default(),
+                deferred_methods: Vec::new(),
+                resolved_deferred_methods: Vec::new(),
+            },
+            memo: RevisitMemo::default(),
+            results: InferenceResults::default(),
             effect_contract: None,
-            lambda_resume_effects: Vec::new(),
-            callable_results: Vec::new(),
-            become_method_operands: Vec::new(),
-            handle_ctx_stack: Vec::new(),
-            resolved_methods: HashMap::default(),
-            reported_arities: HashSet::default(),
-            method_syntax_calls: HashSet::default(),
-            deferred_methods: Vec::new(),
-            resolved_deferred_methods: Vec::new(),
-            implicit_constructors: HashMap::default(),
             evidence: Default::default(),
         }
     }
@@ -382,7 +410,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         node: NodeId,
         expected: Option<Type<'db>>,
     ) -> Option<Expr<TypedRef<'db>>> {
-        let (previous_expected, expr) = self.checked_lambdas.get(&node)?;
+        let (previous_expected, expr) = self.memo.checked_lambdas.get(&node)?;
         (expected.is_none()
             || expected == *previous_expected
             || expected == self.get_node_type(node))
@@ -394,11 +422,11 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         expected: Option<Type<'db>>,
         expr: Expr<TypedRef<'db>>,
     ) {
-        self.checked_lambdas.insert(expr.id, (expected, expr));
+        self.memo.checked_lambdas.insert(expr.id, (expected, expr));
     }
 
     pub(crate) fn mark_handler_error(&mut self, arm: NodeId, reason: &'static str) -> bool {
-        self.reported_handler_errors.insert((arm, reason))
+        self.memo.reported_handler_errors.insert((arm, reason))
     }
 
     /// Record that `local` is the `resume` of an arm for `ability::op`, which
@@ -409,28 +437,35 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         ability: Symbol,
         op: Symbol,
     ) {
-        self.non_resumptive_resume_locals
+        self.results
+            .non_resumptive_resume_locals
             .insert(local, (ability, op));
     }
 
     pub(crate) fn non_resumptive_resume_op(&self, local: LocalId) -> Option<(Symbol, Symbol)> {
-        self.non_resumptive_resume_locals.get(&local).cloned()
+        self.results
+            .non_resumptive_resume_locals
+            .get(&local)
+            .cloned()
     }
 
     pub(crate) fn mark_module_value_reported(&mut self, node: NodeId) -> bool {
-        self.reported_module_values.insert(node)
+        self.memo.reported_module_values.insert(node)
     }
 
     pub(crate) fn mark_record_shape_checked(&mut self, record: NodeId) -> bool {
-        self.checked_record_shapes.insert(record)
+        self.memo.checked_record_shapes.insert(record)
     }
 
     pub(crate) fn get_constructor_reference_type(&self, node: NodeId) -> Option<Type<'db>> {
-        self.constructor_reference_types.get(&node).copied()
+        self.memo.constructor_reference_types.get(&node).copied()
     }
 
     pub(crate) fn record_constructor_reference_type(&mut self, node: NodeId, ty: Type<'db>) {
-        self.constructor_reference_types.entry(node).or_insert(ty);
+        self.memo
+            .constructor_reference_types
+            .entry(node)
+            .or_insert(ty);
     }
 
     /// Get the module type environment.
@@ -447,8 +482,8 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     /// UniVar IDs are globally unique because they include the function ID
     /// and a local index. This prevents collisions across different functions.
     pub fn fresh_type_var(&mut self) -> Type<'db> {
-        let index = self.next_type_var;
-        self.next_type_var += 1;
+        let index = self.solve.next_type_var;
+        self.solve.next_type_var += 1;
         let source = UniVarSource::FunctionLocal {
             func_id: self.func_id,
             index,
@@ -459,8 +494,8 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
     /// Generate a fresh ability row variable.
     pub fn fresh_row_var(&mut self) -> RowVar {
-        let id = self.next_row_var;
-        self.next_row_var += 1;
+        let id = self.solve.next_row_var;
+        self.solve.next_row_var += 1;
         RowVar { id }
     }
 
@@ -476,16 +511,16 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
     /// Push a new scope. Call this when entering a lambda body or case arm.
     pub fn push_scope(&mut self) {
-        self.local_scopes.push(HashMap::default());
-        self.name_scopes.push(HashMap::default());
+        self.scope.local_scopes.push(HashMap::default());
+        self.scope.name_scopes.push(HashMap::default());
     }
 
     /// Pop the current scope. Call this when exiting a lambda body or case arm.
     pub fn pop_scope(&mut self) {
         // Never pop the last scope (function's top-level scope)
-        if self.local_scopes.len() > 1 {
-            self.local_scopes.pop();
-            self.name_scopes.pop();
+        if self.scope.local_scopes.len() > 1 {
+            self.scope.local_scopes.pop();
+            self.scope.name_scopes.pop();
         }
     }
 
@@ -513,7 +548,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
     /// Bind a local variable to a type scheme in the current scope.
     pub fn bind_local_scheme(&mut self, local: LocalId, scheme: TypeScheme<'db>) {
-        if let Some(scope) = self.local_scopes.last_mut() {
+        if let Some(scope) = self.scope.local_scopes.last_mut() {
             scope.insert(local, scheme);
         }
     }
@@ -527,7 +562,8 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     }
 
     fn local_scheme(&self, local: LocalId) -> Option<TypeScheme<'db>> {
-        self.local_scopes
+        self.scope
+            .local_scopes
             .iter()
             .rev()
             .find_map(|scope| scope.get(&local).copied())
@@ -540,7 +576,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
     /// Bind a local variable by name to a type scheme in the current scope.
     pub fn bind_local_scheme_by_name(&mut self, name: Symbol, scheme: TypeScheme<'db>) {
-        if let Some(scope) = self.name_scopes.last_mut() {
+        if let Some(scope) = self.scope.name_scopes.last_mut() {
             scope.insert(name, scheme);
         }
     }
@@ -554,7 +590,8 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     }
 
     fn local_scheme_by_name(&self, name: &Symbol) -> Option<TypeScheme<'db>> {
-        self.name_scopes
+        self.scope
+            .name_scopes
             .iter()
             .rev()
             .find_map(|scope| scope.get(name).copied())
@@ -566,12 +603,12 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
     /// Record the type of an AST node.
     pub fn record_node_type(&mut self, node: NodeId, ty: Type<'db>) {
-        self.node_types.insert(node, ty);
+        self.results.node_types.insert(node, ty);
     }
 
     /// Get the type of an AST node.
     pub fn get_node_type(&self, node: NodeId) -> Option<Type<'db>> {
-        self.node_types.get(&node).copied()
+        self.results.node_types.get(&node).copied()
     }
 
     /// Record a resolved UFCS method for later conversion to Call.
@@ -581,19 +618,21 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         func_id: FuncDefId<'db>,
         callee_ty: Type<'db>,
     ) {
-        self.resolved_methods.insert(node, (func_id, callee_ty));
+        self.results
+            .resolved_methods
+            .insert(node, (func_id, callee_ty));
     }
 
     /// Remember how the call at `node` was written, for its diagnostics.
     pub fn note_call_syntax(&mut self, node: NodeId, syntax: crate::ast::CallSyntax) {
         if syntax == crate::ast::CallSyntax::Method {
-            self.method_syntax_calls.insert(node);
+            self.results.method_syntax_calls.insert(node);
         }
     }
 
     /// How the call at `node` was written.
     pub fn call_syntax(&self, node: NodeId) -> crate::ast::CallSyntax {
-        if self.method_syntax_calls.contains(&node) {
+        if self.results.method_syntax_calls.contains(&node) {
             crate::ast::CallSyntax::Method
         } else {
             crate::ast::CallSyntax::Call
@@ -603,21 +642,23 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     /// Whether the number of arguments of the call at `node` is reported
     /// now for the first time.
     pub fn report_arity_once(&mut self, node: NodeId) -> bool {
-        self.reported_arities.insert(node)
+        self.memo.reported_arities.insert(node)
     }
 
     /// Get a resolved UFCS method by node ID.
     pub fn get_resolved_method(&self, node: NodeId) -> Option<(FuncDefId<'db>, Type<'db>)> {
-        self.resolved_methods.get(&node).copied()
+        self.results.resolved_methods.get(&node).copied()
     }
 
     /// Record a deferred UFCS method call for post-solve resolution.
     pub fn record_deferred_method(&mut self, deferred: DeferredMethodCall<'db>) {
         if let Some(existing) = self
+            .solve
             .deferred_methods
             .iter()
             .chain(
-                self.resolved_deferred_methods
+                self.solve
+                    .resolved_deferred_methods
                     .iter()
                     .map(|(method, ..)| method),
             )
@@ -640,23 +681,25 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
                 );
             }
         } else {
-            self.deferred_methods.push(deferred);
+            self.solve.deferred_methods.push(deferred);
         }
     }
 
     /// Add constraints built outside the context.
     pub fn constrain_all(&mut self, constraints: impl IntoIterator<Item = Constraint<'db>>) {
         for constraint in constraints {
-            self.constraints.add(constraint);
+            self.solve.constraints.add(constraint);
         }
     }
 
     /// The row a deferred method call was given on an earlier visit.
     pub fn deferred_method_effect(&self, node: NodeId) -> Option<AbilityRow<'db>> {
-        self.deferred_methods
+        self.solve
+            .deferred_methods
             .iter()
             .chain(
-                self.resolved_deferred_methods
+                self.solve
+                    .resolved_deferred_methods
                     .iter()
                     .map(|(method, ..)| method),
             )
@@ -672,12 +715,14 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         callee_ty: Type<'db>,
     ) {
         if let Some(index) = self
+            .solve
             .deferred_methods
             .iter()
             .position(|method| method.node_id == node)
         {
-            let method = self.deferred_methods.remove(index);
-            self.resolved_deferred_methods
+            let method = self.solve.deferred_methods.remove(index);
+            self.solve
+                .resolved_deferred_methods
                 .push((method, function, callee_ty));
         }
     }
@@ -686,7 +731,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     pub fn take_resolved_deferred_methods(
         &mut self,
     ) -> HashMap<NodeId, (FuncDefId<'db>, Type<'db>)> {
-        std::mem::take(&mut self.resolved_deferred_methods)
+        std::mem::take(&mut self.solve.resolved_deferred_methods)
             .into_iter()
             .map(|(method, function, callee_ty)| (method.node_id, (function, callee_ty)))
             .collect()
@@ -694,7 +739,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
     /// Take ownership of deferred method calls.
     pub fn take_deferred_methods(&mut self) -> Vec<DeferredMethodCall<'db>> {
-        std::mem::take(&mut self.deferred_methods)
+        std::mem::take(&mut self.solve.deferred_methods)
     }
 
     /// Take ownership of the node_types map.
@@ -702,7 +747,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     /// This consumes the node_types, leaving an empty map.
     /// Used for collecting all node types after type checking a function.
     pub fn take_node_types(&mut self) -> HashMap<NodeId, Type<'db>> {
-        std::mem::take(&mut self.node_types)
+        std::mem::take(&mut self.results.node_types)
     }
 
     /// Record the schemes a `let` pattern bound when it was generalized.
@@ -712,24 +757,25 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         pattern: NodeId,
         bindings: Vec<LetSchemeBinding<'db>>,
     ) {
-        self.let_schemes.entry(pattern).or_insert(bindings);
+        self.scope.let_schemes.entry(pattern).or_insert(bindings);
     }
 
     pub(crate) fn record_function_alias(&mut self, local: LocalId) {
-        self.function_aliases.insert(local);
+        self.scope.function_aliases.insert(local);
     }
 
     pub(crate) fn is_function_alias(&self, local: LocalId) -> bool {
-        self.function_aliases.contains(&local)
+        self.scope.function_aliases.contains(&local)
     }
 
     /// The schemes `pattern` bound on its first visit, if it was generalized.
     pub(crate) fn let_schemes(&self, pattern: NodeId) -> Option<Vec<LetSchemeBinding<'db>>> {
-        self.let_schemes.get(&pattern).cloned()
+        self.scope.let_schemes.get(&pattern).cloned()
     }
 
     pub fn get_function_reference_type(&self, node: NodeId) -> Option<Type<'db>> {
-        self.function_instances
+        self.results
+            .function_instances
             .get(&node)
             .map(|instance| instance.callable)
     }
@@ -747,18 +793,18 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         }
         .or_else(|| self.local_scheme_by_name(name))?;
         if !scheme.effect_params(self.db).is_empty()
-            && let Some(instance) = self.local_instances.get(&node)
+            && let Some(instance) = self.results.local_instances.get(&node)
         {
             return Some(instance.callable);
         }
         if matches!(
             scheme.body(self.db).kind(self.db),
             crate::ast::TypeKind::Func { .. }
-        ) && let Some(binding) = self.local_binding_owners.get(&local).copied()
+        ) && let Some(binding) = self.scope.local_binding_owners.get(&local).copied()
         {
             let instance = self.instantiate_scheme_details(scheme);
             let callable = instance.ty;
-            self.local_instances.insert(
+            self.results.local_instances.insert(
                 node,
                 super::LocalCallableInstance {
                     binding,
@@ -770,11 +816,16 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             return Some(callable);
         }
         if !scheme.effect_params(self.db).is_empty() {
-            if let Some(ty) = self.quantified_local_reference_types.get(&node).copied() {
+            if let Some(ty) = self
+                .memo
+                .quantified_local_reference_types
+                .get(&node)
+                .copied()
+            {
                 return Some(ty);
             }
             let ty = self.instantiate_scheme(scheme);
-            self.quantified_local_reference_types.insert(node, ty);
+            self.memo.quantified_local_reference_types.insert(node, ty);
             Some(ty)
         } else {
             Some(self.instantiate_scheme(scheme))
@@ -783,13 +834,13 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
     /// Retain the lexical owner when a let scheme is introduced.
     pub(crate) fn record_local_binding_owner(&mut self, local: LocalId, binding: NodeId) {
-        self.local_binding_owners.insert(local, binding);
+        self.scope.local_binding_owners.insert(local, binding);
     }
 
     pub(crate) fn take_local_instances(
         &mut self,
     ) -> HashMap<NodeId, super::LocalCallableInstance<'db>> {
-        std::mem::take(&mut self.local_instances)
+        std::mem::take(&mut self.results.local_instances)
     }
 
     /// Record the exact semantic operation selected for a handler arm.
@@ -798,14 +849,14 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         arm: NodeId,
         operation: InstantiatedHandlerOperation<'db>,
     ) {
-        self.handler_operations.insert(arm, operation);
+        self.results.handler_operations.insert(arm, operation);
     }
 
     /// Take handler operation metadata collected for this function.
     pub fn take_handler_operations(
         &mut self,
     ) -> HashMap<NodeId, InstantiatedHandlerOperation<'db>> {
-        std::mem::take(&mut self.handler_operations)
+        std::mem::take(&mut self.results.handler_operations)
     }
 
     pub fn record_perform_operation(
@@ -813,28 +864,37 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         call: NodeId,
         operation: InstantiatedPerformOperation<'db>,
     ) {
-        self.perform_operations.entry(call).or_insert(operation);
+        self.results
+            .perform_operations
+            .entry(call)
+            .or_insert(operation);
     }
 
     pub fn take_perform_operations(
         &mut self,
     ) -> HashMap<NodeId, InstantiatedPerformOperation<'db>> {
-        std::mem::take(&mut self.perform_operations)
+        std::mem::take(&mut self.results.perform_operations)
     }
 
     /// Preserve the type selected for an ability-operation callee while the
     /// expression is converted into its typed form.
     pub fn record_ability_op_callee_type(&mut self, callee: NodeId, ty: Type<'db>) {
-        self.ability_op_callee_types.entry(callee).or_insert(ty);
+        self.memo
+            .ability_op_callee_types
+            .entry(callee)
+            .or_insert(ty);
     }
 
     /// Return the inference-time type selected for an ability-operation callee.
     pub fn get_ability_op_callee_type(&self, callee: NodeId) -> Option<Type<'db>> {
-        self.ability_op_callee_types.get(&callee).copied()
+        self.memo.ability_op_callee_types.get(&callee).copied()
     }
 
     pub fn record_lambda_signature(&mut self, lambda: NodeId, signature: LambdaSignature<'db>) {
-        self.lambda_signatures.entry(lambda).or_insert(signature);
+        self.results
+            .lambda_signatures
+            .entry(lambda)
+            .or_insert(signature);
     }
 
     /// Replace an inference-time lambda seed with the contextual function
@@ -845,11 +905,11 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         lambda: NodeId,
         signature: LambdaSignature<'db>,
     ) {
-        self.lambda_signatures.insert(lambda, signature);
+        self.results.lambda_signatures.insert(lambda, signature);
     }
 
     pub fn take_lambda_signatures(&mut self) -> HashMap<NodeId, LambdaSignature<'db>> {
-        std::mem::take(&mut self.lambda_signatures)
+        std::mem::take(&mut self.results.lambda_signatures)
     }
 
     // =========================================================================
@@ -888,7 +948,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         node: NodeId,
         function: FuncDefId<'db>,
     ) -> Option<Type<'db>> {
-        if let Some(instance) = self.function_instances.get(&node) {
+        if let Some(instance) = self.results.function_instances.get(&node) {
             assert_eq!(
                 instance.function, function,
                 "one reference cannot select two declarations"
@@ -898,7 +958,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         let (scheme, origin) = self.env.function_scheme(function)?;
         let instance = self.instantiate_scheme_details(scheme);
         let callable = instance.ty;
-        self.function_instances.insert(
+        self.results.function_instances.insert(
             node,
             super::FunctionInstance {
                 origin,
@@ -913,7 +973,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     }
 
     pub fn take_function_instances(&mut self) -> HashMap<NodeId, super::FunctionInstance<'db>> {
-        std::mem::take(&mut self.function_instances)
+        std::mem::take(&mut self.results.function_instances)
     }
 
     /// Instantiate a type scheme with fresh type variables.
@@ -972,11 +1032,13 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         let instance = subst::instantiate_with_arguments(self.db, scheme, types, rows);
         self.evidence.record_unions(&instance.row_unions);
         for union in &instance.row_unions {
-            self.constraints
+            self.solve
+                .constraints
                 .add(super::constraint::Constraint::RowUnion(union.clone(), None));
         }
         for removal in &instance.row_removals {
-            self.constraints
+            self.solve
+                .constraints
                 .add(Constraint::RowRemoval(removal.clone(), None));
         }
         instance
@@ -988,7 +1050,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
     /// Add a type equality constraint.
     pub fn constrain_eq(&mut self, t1: Type<'db>, t2: Type<'db>) {
-        self.constraints.add_type_eq(t1, t2);
+        self.solve.constraints.add_type_eq(t1, t2);
     }
 
     pub fn constrain_coerce(&mut self, actual: Type<'db>, expected: Type<'db>, node_id: NodeId) {
@@ -1002,21 +1064,24 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         node_id: NodeId,
         kind: ConstraintOriginKind,
     ) {
-        self.constraints
-            .add_type_coerce(actual, expected, ConstraintOrigin { node_id, kind });
+        self.solve.constraints.add_type_coerce(
+            actual,
+            expected,
+            ConstraintOrigin { node_id, kind },
+        );
     }
 
     /// Reuse the result identity while collecting this source node's candidates.
     pub fn begin_result_join(&mut self, node_id: NodeId) -> Type<'db> {
         if let Some(Constraint::TypeJoin {
             result, complete, ..
-        }) = self.result_joins.get_mut(&node_id)
+        }) = self.solve.result_joins.get_mut(&node_id)
         {
             *complete = false;
             return *result;
         }
         let result = self.fresh_type_var();
-        self.result_joins.insert(
+        self.solve.result_joins.insert(
             node_id,
             Constraint::TypeJoin {
                 sources: Vec::new(),
@@ -1032,7 +1097,8 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     }
 
     pub fn add_result_source(&mut self, owner: NodeId, source: NodeId, actual: Type<'db>) {
-        let Some(Constraint::TypeJoin { sources, .. }) = self.result_joins.get_mut(&owner) else {
+        let Some(Constraint::TypeJoin { sources, .. }) = self.solve.result_joins.get_mut(&owner)
+        else {
             unreachable!("result group must be opened before adding a candidate");
         };
         if let Some((existing, _)) = sources.iter().find(|(_, origin)| origin.node_id == source) {
@@ -1050,7 +1116,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     }
 
     pub fn finish_result_join(&mut self, node_id: NodeId) {
-        let Some(Constraint::TypeJoin { complete, .. }) = self.result_joins.get_mut(&node_id)
+        let Some(Constraint::TypeJoin { complete, .. }) = self.solve.result_joins.get_mut(&node_id)
         else {
             unreachable!("result group must be opened before completion");
         };
@@ -1058,12 +1124,12 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     }
 
     pub fn deferred_methods(&self) -> &[DeferredMethodCall<'db>] {
-        &self.deferred_methods
+        &self.solve.deferred_methods
     }
 
     /// The implicit constructor decided at `node`.
     pub fn implicit_constructor(&self, node: NodeId) -> Option<&ImplicitConstructor<'db>> {
-        self.implicit_constructors.get(&node)
+        self.results.implicit_constructors.get(&node)
     }
 
     /// Record the implicit constructor decided at `node`.
@@ -1072,12 +1138,13 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         node: NodeId,
         constructor: ImplicitConstructor<'db>,
     ) {
-        self.implicit_constructors.insert(node, constructor);
+        self.results.implicit_constructors.insert(node, constructor);
     }
 
     /// The implicit constructors still to be selected, in source order.
     pub fn deferred_constructors(&self) -> Vec<&DeferredConstructor<'db>> {
         let mut deferred: Vec<_> = self
+            .results
             .implicit_constructors
             .values()
             .filter_map(|constructor| match constructor {
@@ -1091,7 +1158,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
     /// Take the implicit constructors still to be selected, in source order.
     pub fn take_deferred_constructors(&mut self) -> Vec<DeferredConstructor<'db>> {
-        let mut deferred: Vec<_> = std::mem::take(&mut self.implicit_constructors)
+        let mut deferred: Vec<_> = std::mem::take(&mut self.results.implicit_constructors)
             .into_values()
             .filter_map(|constructor| match constructor {
                 ImplicitConstructor::Deferred(deferred) => Some(deferred),
@@ -1103,65 +1170,71 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     }
 
     pub(crate) fn next_row_var(&self) -> u64 {
-        self.next_row_var
+        self.solve.next_row_var
     }
 
     pub(crate) fn reserve_row_vars(&mut self, next: u64) {
-        self.next_row_var = self.next_row_var.max(next);
+        self.solve.next_row_var = self.solve.next_row_var.max(next);
     }
 
     pub(crate) fn bind_annotation_row(&mut self, name: Symbol, row: RowVar) {
-        self.annotation_rows.insert(name, row);
+        self.scope.annotation_rows.insert(name, row);
     }
 
     pub(crate) fn bind_annotation_type_parameter(&mut self, name: Symbol, ty: Type<'db>) {
-        self.annotation_type_parameters.insert(name, ty);
+        self.scope.annotation_type_parameters.insert(name, ty);
     }
 
     pub(crate) fn annotation_type_parameter(&self, name: &Symbol) -> Option<Type<'db>> {
-        self.annotation_type_parameters.get(name).copied()
+        self.scope.annotation_type_parameters.get(name).copied()
     }
 
     pub(crate) fn annotation_type_parameters(&self) -> impl Iterator<Item = Type<'db>> + '_ {
-        self.annotation_type_parameters.values().copied()
+        self.scope.annotation_type_parameters.values().copied()
     }
 
     /// The row names annotations have bound so far, which a `let` keeps
     /// visible after it ends.
     pub(crate) fn annotation_row_names(&self) -> HashSet<Symbol> {
-        self.annotation_rows.keys().cloned().collect()
+        self.scope.annotation_rows.keys().cloned().collect()
     }
 
     /// End the scope of the row names a `let` introduced: names outside
-    /// `outer` name fresh rows again after it (`new-plans/type-inference.md`,
+    /// `outer` name fresh rows again after it (`design/type-inference.md`,
     /// row variables).
     pub(crate) fn end_let_row_scope(&mut self, outer: &HashSet<Symbol>) {
-        self.annotation_rows.retain(|name, _| outer.contains(name));
+        self.scope
+            .annotation_rows
+            .retain(|name, _| outer.contains(name));
     }
 
     pub(crate) fn annotation_row(&mut self, name: Symbol) -> RowVar {
-        if let Some(row) = self.annotation_rows.get(&name) {
+        if let Some(row) = self.scope.annotation_rows.get(&name) {
             return *row;
         }
         let row = self.fresh_row_var();
-        self.annotation_rows.insert(name, row);
+        self.scope.annotation_rows.insert(name, row);
         row
     }
 
     pub(crate) fn annotation_type(&self, node: NodeId) -> Option<Type<'db>> {
-        self.annotation_types.get(&node).copied()
+        self.memo.annotation_types.get(&node).copied()
     }
 
     pub(crate) fn record_annotation_type(&mut self, node: NodeId, ty: Type<'db>) {
-        self.annotation_types.insert(node, ty);
+        self.memo.annotation_types.insert(node, ty);
     }
 
     pub(crate) fn constrain_row_union(&mut self, union: crate::ast::RowUnion<'db>) {
-        self.constraints.add(Constraint::RowUnion(union, None));
+        self.solve
+            .constraints
+            .add(Constraint::RowUnion(union, None));
     }
 
     pub(crate) fn constrain_row_removal(&mut self, removal: crate::ast::RowRemoval<'db>) {
-        self.constraints.add(Constraint::RowRemoval(removal, None));
+        self.solve
+            .constraints
+            .add(Constraint::RowRemoval(removal, None));
     }
 
     /// Add a type equality constraint tied to a source AST node.
@@ -1172,13 +1245,14 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         node_id: NodeId,
         kind: ConstraintOriginKind,
     ) {
-        self.constraints
+        self.solve
+            .constraints
             .add_type_eq_at(t1, t2, ConstraintOrigin { node_id, kind });
     }
 
     /// Add an ability row equality constraint.
     pub fn constrain_row_eq(&mut self, r1: AbilityRow<'db>, r2: AbilityRow<'db>) {
-        self.constraints.add_row_eq(r1, r2);
+        self.solve.constraints.add_row_eq(r1, r2);
     }
 
     /// Add an ability row equality constraint tied to a source AST node.
@@ -1189,7 +1263,8 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         node_id: NodeId,
         kind: ConstraintOriginKind,
     ) {
-        self.constraints
+        self.solve
+            .constraints
             .add_row_eq_at(r1, r2, ConstraintOrigin { node_id, kind });
     }
 
@@ -1210,13 +1285,13 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     ) {
         // For simplicity, use row equality.
         // A more sophisticated system would handle row extension/subsumption.
-        self.constraints.add_row_eq(inferred, expected);
+        self.solve.constraints.add_row_eq(inferred, expected);
     }
 
     /// Take the constraint set, leaving an empty set.
     pub fn take_constraints(&mut self) -> ConstraintSet<'db> {
-        let mut constraints = std::mem::take(&mut self.constraints);
-        for (_, join) in self.result_joins.drain() {
+        let mut constraints = std::mem::take(&mut self.solve.constraints);
+        for (_, join) in self.solve.result_joins.drain() {
             constraints.add(join);
         }
         constraints
@@ -1224,8 +1299,8 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
     /// Clone constraints generated so far for prefix solving at a let binding.
     pub fn constraints_snapshot(&self) -> ConstraintSet<'db> {
-        let mut constraints = self.constraints.clone();
-        for join in self.result_joins.values() {
+        let mut constraints = self.solve.constraints.clone();
+        for join in self.solve.result_joins.values() {
             constraints.add(join.clone());
         }
         constraints
@@ -1233,7 +1308,8 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
     /// Return all schemes visible in the local environment.
     pub fn visible_local_schemes(&self) -> Vec<TypeScheme<'db>> {
-        self.local_scopes
+        self.scope
+            .local_scopes
             .iter()
             .flat_map(|scope| scope.values().copied())
             .collect()
@@ -1245,33 +1321,35 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
     /// Get the current ability row.
     pub fn current_effect(&self) -> AbilityRow<'db> {
-        self.current_effect
+        self.effects.current_effect
     }
 
     /// Set the current ability row.
     pub fn set_current_effect(&mut self, effect: AbilityRow<'db>) {
-        self.current_effect = effect;
+        self.effects.current_effect = effect;
     }
 
     pub(crate) fn enter_lambda(&mut self) {
-        self.lambda_resume_effects.push(None);
+        self.effects.lambda_resume_effects.push(None);
     }
 
     pub(crate) fn exit_lambda(&mut self) -> Option<AbilityRow<'db>> {
-        self.lambda_resume_effects
+        self.effects
+            .lambda_resume_effects
             .pop()
             .expect("lambda resume effect stack must be balanced")
     }
 
     /// Enter a callable whose result type is `result`, or not yet known.
     pub(crate) fn push_callable_result(&mut self, result: Option<Type<'db>>) {
-        self.callable_results.push(result);
+        self.effects.callable_results.push(result);
     }
 
     /// Leave the innermost callable, returning the result type a `become`
     /// in it required, if any.
     pub(crate) fn pop_callable_result(&mut self) -> Option<Type<'db>> {
-        self.callable_results
+        self.effects
+            .callable_results
             .pop()
             .expect("callable result stack must be balanced")
     }
@@ -1279,38 +1357,38 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     /// The result type of the innermost callable, which a `become` call must
     /// produce.
     pub(crate) fn become_result_type(&mut self) -> Option<Type<'db>> {
-        if self.callable_results.last()?.is_none() {
+        if self.effects.callable_results.last()?.is_none() {
             let fresh = self.fresh_type_var();
-            *self.callable_results.last_mut()? = Some(fresh);
+            *self.effects.callable_results.last_mut()? = Some(fresh);
         }
-        *self.callable_results.last()?
+        *self.effects.callable_results.last()?
     }
 
     pub(crate) fn record_become_method_operand(&mut self, node: NodeId) {
-        if !self.become_method_operands.contains(&node) {
-            self.become_method_operands.push(node);
+        if !self.results.become_method_operands.contains(&node) {
+            self.results.become_method_operands.push(node);
         }
     }
 
     pub(crate) fn take_become_method_operands(&mut self) -> Vec<NodeId> {
-        std::mem::take(&mut self.become_method_operands)
+        std::mem::take(&mut self.results.become_method_operands)
     }
 
     /// Record the continuation row selected by a resume in the active lambda.
     pub(crate) fn record_lambda_resume_effect(&mut self, effect: AbilityRow<'db>) {
-        if let Some(slot) = self.lambda_resume_effects.last_mut() {
+        if let Some(slot) = self.effects.lambda_resume_effects.last_mut() {
             *slot = Some(effect);
         }
     }
 
     /// Push a handle context onto the stack.
     pub(crate) fn push_handle_ctx(&mut self, ctx: HandleContext<'db>) {
-        self.handle_ctx_stack.push(ctx);
+        self.effects.handle_ctx_stack.push(ctx);
     }
 
     /// Pop the most recent handle context from the stack.
     pub(crate) fn pop_handle_ctx(&mut self) -> Option<HandleContext<'db>> {
-        self.handle_ctx_stack.pop()
+        self.effects.handle_ctx_stack.pop()
     }
 
     /// Merge an effect into the current ability row.
@@ -1351,7 +1429,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         origin: Option<ConstraintOrigin>,
     ) {
         let db = self.db;
-        let current = self.current_effect;
+        let current = self.effects.current_effect;
 
         // Pure effect doesn't change anything
         if effect.is_pure(db) {
@@ -1360,7 +1438,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
         // If current is pure, just use the new effect
         if current.is_pure(db) {
-            self.current_effect = effect;
+            self.effects.current_effect = effect;
             return;
         }
 
@@ -1399,9 +1477,11 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         }
         let (result, relation) =
             super::ability_row::union(db, current, effect, || self.fresh_row_var());
-        self.current_effect = result;
+        self.effects.current_effect = result;
         if let Some(relation) = relation {
-            self.constraints.add(Constraint::RowUnion(relation, origin));
+            self.solve
+                .constraints
+                .add(Constraint::RowUnion(relation, origin));
         }
     }
 
@@ -1498,9 +1578,10 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         &self,
         id: crate::ast::TypeDefId<'db>,
         name: Symbol,
+        row_args: Vec<AbilityRow<'db>>,
         args: Vec<Type<'db>>,
     ) -> Type<'db> {
-        self.env.named_type_with_id(id, name, args)
+        self.env.named_type_with_id(id, name, row_args, args)
     }
 
     /// Construct the compiler-owned canonical `List(element)` type.
@@ -1790,6 +1871,7 @@ mod tests {
             TypeKind::Named {
                 id: TypeDefId::synthetic(db, trunk_ir::SymbolPath::new([type_name.clone()])),
                 name: type_name.clone(),
+                row_args: vec![],
                 args: vec![bound_var],
             },
         );

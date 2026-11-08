@@ -267,7 +267,13 @@ pub(super) fn lower_expr<'db>(
                 Some(last) if exhaustive => &arms[..=last],
                 _ => &arms[..],
             };
-            if exhaustive && let Some(switch) = literal_case_switch(builder, scrutinee, arms) {
+            let switch = exhaustive
+                .then(|| {
+                    literal_case_switch(builder, scrutinee, arms)
+                        .or_else(|| variant_case_switch(builder, arms))
+                })
+                .flatten();
+            if let Some(switch) = switch {
                 return lower_case_switch(
                     builder,
                     location,
@@ -443,8 +449,8 @@ pub(super) fn lower_record<'db>(
     let struct_name = super::super::extract_type_name(builder.db(), &type_name.resolved);
     let field_order = builder
         .ctx
-        .get_struct_field_order(ctor)
-        .cloned()
+        .struct_field_names(ctor)
+        .map(<[Symbol]>::to_vec)
         .unwrap_or_else(|| panic!("prescan did not register struct field order {struct_name}"));
     let layout = builder
         .ctx
@@ -619,9 +625,12 @@ pub(super) fn lower_case_chain<'db>(
     }
 }
 
-/// The arms of a case that selects by integer literal: each case value with
-/// the first arm it selects, and the catch-all arm.
+/// The arms of a case that selects by integer literal or by variant: each
+/// case value with the first arm it selects, and the default arm.
 struct CaseSwitch<'a, 'db> {
+    /// The enum layout whose variant position a variant switch selects by;
+    /// a literal switch selects by the scrutinee itself.
+    variant_of: Option<TypeRef>,
     cases: Vec<(i64, &'a Arm<TypedRef<'db>>)>,
     default: &'a Arm<TypedRef<'db>>,
 }
@@ -673,12 +682,53 @@ fn literal_case_switch<'a, 'db>(
             cases.push((value, arm));
         }
     }
-    (cases.len() >= 2).then_some(CaseSwitch { cases, default })
+    (cases.len() >= 2).then_some(CaseSwitch {
+        variant_of: None,
+        cases,
+        default,
+    })
 }
 
-/// Lower a case that selects by integer literal to one `scf.index_switch`
-/// on its scrutinee, each arm in its own region and the catch-all arm as
-/// the default.
+/// The switch on the variant position an exhaustive case lowers to when
+/// every arm but the last is an unguarded variant pattern that tests only
+/// the variant, possibly bound with `as`. The last arm is the default, as
+/// the last arm of a chain runs without a test, so a variant it names is
+/// not a case. A variant an earlier arm selects is not a case of a later
+/// one. A case with fewer than two variants stays a chain.
+fn variant_case_switch<'a, 'db>(
+    builder: &mut IrBuilder<'_, 'db>,
+    arms: &'a [Arm<TypedRef<'db>>],
+) -> Option<CaseSwitch<'a, 'db>> {
+    let (default, selecting) = arms.split_last()?;
+    if default.guard.is_some() {
+        return None;
+    }
+    let mut variant_of = None;
+    let mut cases: Vec<(i64, &Arm<TypedRef<'db>>)> = Vec::with_capacity(selecting.len());
+    for arm in selecting {
+        if arm.guard.is_some() {
+            return None;
+        }
+        let (enum_ty, position) =
+            super::super::case::variant_tag_pattern(builder.ctx, builder.ir, &arm.pattern)?;
+        if *variant_of.get_or_insert(enum_ty) != enum_ty {
+            return None;
+        }
+        let value = i64::from(position);
+        if cases.iter().all(|&(seen, _)| seen != value) {
+            cases.push((value, arm));
+        }
+    }
+    (cases.len() >= 2).then_some(CaseSwitch {
+        variant_of,
+        cases,
+        default,
+    })
+}
+
+/// Lower a case that selects by integer literal or by variant to one
+/// `scf.index_switch` on its scrutinee or on its `adt.variant_tag`, each arm
+/// in its own region and the default arm as the default.
 fn lower_case_switch<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     location: Location,
@@ -707,10 +757,20 @@ fn lower_case_switch<'db>(
         cases.push((value, arm_region(builder, arm)?));
     }
     let default_region = arm_region(builder, switch.default)?;
+    let discriminant = match switch.variant_of {
+        Some(enum_ty) => {
+            let tag = adt::VariantTag::operands(scrutinee)
+                .r#type(enum_ty)
+                .build(builder.ir, location);
+            builder.ir.push_op(builder.block, tag.op_ref());
+            tag.result(builder.ir)
+        }
+        None => scrutinee,
+    };
     let lowered = scf::IndexSwitch::build_with_arms(
         builder.ir,
         location,
-        scrutinee,
+        discriminant,
         [result_ty],
         cases,
         default_region,

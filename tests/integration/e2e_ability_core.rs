@@ -51,7 +51,7 @@ fn compile_and_check(code: &str, name: &str) -> Vec<Reported> {
     })
 }
 
-/// Helper to run only frontend stages (parse, resolve, typecheck, TDNR) and collect diagnostics.
+/// Helper to run only frontend stages (parse, resolve, typecheck) and collect diagnostics.
 ///
 /// Use this instead of `compile_and_check` when testing for frontend errors that would
 /// cause later pipeline stages to panic.

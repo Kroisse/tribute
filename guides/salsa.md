@@ -7,7 +7,7 @@ queries use Salsa; shared and target IR passes operate in a mutable arena.
 
 ```text
 SourceCst (URI + Rope + tree-sitter CST)
-    → tracked parsing, name resolution, typechecking and TDNR
+    → tracked parsing, name resolution, typechecking (including TDNR)
     → prepared typed AST and semantic metadata
     → fresh arena IrContext + source-logical Module
     → shared CPS and target passes
@@ -205,4 +205,4 @@ Arena analyses have their own cache scope and preservation/invalidation
 contract. A pass that changes IR must invalidate affected analyses or declare
 only analyses it actually preserves. Salsa's source-query invalidation cannot
 repair a stale arena analysis. See the analysis and pass contracts in
-[`new-plans/ir.md`](../new-plans/ir.md).
+[`design/ir.md`](../design/ir.md).

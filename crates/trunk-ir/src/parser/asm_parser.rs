@@ -87,6 +87,24 @@ impl<'a> AsmParser<'a> {
         }
     }
 
+    /// Bind `body`, which the text wrote at `offset`, to the identified type
+    /// `ty`, as an identified type's assembly format does for an occurrence
+    /// that writes a body (`design/ir.md` § "식별 타입").
+    pub fn bind_type_body(&mut self, ty: TypeRef, body: TypeRef, offset: usize) -> ParseResult<()> {
+        self.ctx
+            .bind_type_body(ty, body)
+            .map_err(|error| match error {
+                crate::TypeBodyError::NotIdentified => self.error_at(
+                    offset,
+                    "a body is written for a type that is not identified",
+                ),
+                crate::TypeBodyError::Conflicting { .. } => self.error_at(
+                    offset,
+                    "the body differs from the one this identified type already has",
+                ),
+            })
+    }
+
     /// An error saying what the text should have held at the current offset.
     pub fn expected(&self, what: &str) -> ParseError {
         self.error(format!("expected {what}"))

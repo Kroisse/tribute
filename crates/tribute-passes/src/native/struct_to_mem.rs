@@ -27,6 +27,9 @@
 //! never allocates has no number, and its test
 //! is constant false without reading the reference. A variant test of a null
 //! reference is undefined, so that path need not fault as a header read does.
+//!
+//! Each `adt.variant_tag` becomes a `tribute_rtti.variant_position` of the
+//! value's descriptor: the RTTI record of a variant holds its position.
 
 use rustc_hash::FxHashMap as HashMap;
 use std::ops::ControlFlow;
@@ -136,6 +139,7 @@ pub(crate) fn lower(
     let numbers = tribute_rtti::Layout::declared_indices(ctx, module);
     PatternApplicator::new(TypeConverter::new())
         .add_pattern(VariantIsPattern { numbers })
+        .add_pattern(VariantTagPattern)
         .add_pattern(VariantGetPattern {
             layouts: variant_layouts,
         })
@@ -215,6 +219,34 @@ impl OpRewritePattern for VariantIsPattern {
         rewriter.insert_op(actual.op_ref());
         rewriter.insert_op(expected.op_ref());
         rewriter.replace_op(matches.op_ref());
+        Some(())
+    }
+}
+
+/// `adt.variant_tag` -> the `tribute_rtti.variant_position` of the value's
+/// `tribute_rtti.descriptor`, as a `core.index`.
+struct VariantTagPattern;
+
+impl OpRewritePattern for VariantTagPattern {
+    type Op = adt::VariantTag;
+
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        variant_tag: Self::Op,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> Option<()> {
+        let loc = ctx.op(variant_tag.op_ref()).location;
+        let descriptor = tribute_rtti::Descriptor::operands(variant_tag.r#ref(ctx)).build(ctx, loc);
+        let position =
+            tribute_rtti::VariantPosition::operands(descriptor.result(ctx)).build(ctx, loc);
+        let index_ty = core::Index::type_ref(ctx);
+        let tag = arith::IndexCastui::operands(position.result(ctx))
+            .results(index_ty)
+            .build(ctx, loc);
+        rewriter.insert_op(descriptor.op_ref());
+        rewriter.insert_op(position.op_ref());
+        rewriter.replace_op(tag.op_ref());
         Some(())
     }
 }
@@ -405,6 +437,36 @@ mod tests {
         // `Other` is never allocated, so no object has its descriptor.
         assert!(
             printed.contains("arith.constant false : core.i1"),
+            "{printed}"
+        );
+    }
+
+    #[test]
+    fn variant_tag_reads_the_position_of_the_descriptor() {
+        let (ctx, module, _layouts) = lower_module(
+            r#"core.module @test {
+  !ChoiceRef = adt.typeref<{name = "Choice"}>
+  !Choice = adt.enum<Choice { None(), Some(core.i32), Other() }>
+  tribute_rtti.layout {fields = ["u32"], index = 5, type = !Choice, tag = "Some"}
+  func.func @test(%choice: !ChoiceRef) -> core.index {
+    %tag = adt.variant_tag %choice {type = !Choice}
+    func.return %tag
+  }
+}"#,
+        );
+
+        let printed = module.op().display(&ctx).to_string();
+        assert!(!printed.contains("adt.variant_tag"), "{printed}");
+        assert!(
+            printed.contains("%1 = tribute_rtti.descriptor %0 : core.i32"),
+            "{printed}"
+        );
+        assert!(
+            printed.contains("%2 = tribute_rtti.variant_position %1"),
+            "{printed}"
+        );
+        assert!(
+            printed.contains("arith.index_castui %2 : core.i32 to core.index"),
             "{printed}"
         );
     }

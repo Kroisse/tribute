@@ -4,7 +4,7 @@
 //! target. It lowers `effect.extend`, the evidence selection operations,
 //! `effect.dispatch_tail`, and `effect.dispatch_cps` to calls of the evidence
 //! runtime written in Tribute source, `std::runtime::evidence`
-//! (`new-plans/cps-effects.md`), which it finds by canonical path. The runtime
+//! (`design/cps-effects.md`), which it finds by canonical path. The runtime
 //! functions are compiled like any other source function; marker
 //! construction and field access stay inside them. The lowering is the same
 //! on every target.
@@ -218,14 +218,8 @@ fn some_dispatch(
         cast.result(ctx)
     };
     // The parameter is a reference to the published `Option` instance.
-    let option_name = ctx
-        .type_attrs(option_ty)
-        .get_str("name")
-        .expect("the Option(Dispatch) parameter is a nominal reference")
-        .to_owned();
-    let option_layout = ctx
-        .type_alias_by_text(&option_name)
-        .expect("the Option(Dispatch) layout is published");
+    let option_layout =
+        adt::layout_of(ctx, option_ty).expect("the Option(Dispatch) layout is published");
     let some = adt::VariantNew::operands([dispatch])
         .r#type(option_layout)
         .tag("Some")

@@ -325,7 +325,7 @@ fn load_package_dir(db: &TributeDatabaseImpl, dir: &Path, target: &str) -> Packa
 }
 
 /// A source file is compiled without a manifest even if it is a package's
-/// root file (`new-plans/modules.md` § 매니페스트 (`tribute.toml`)); point
+/// root file (`design/modules.md` § 매니페스트 (`tribute.toml`)); point
 /// out the package directory that compiles it with its dependencies.
 fn note_package_root_file(path: &Path) {
     let Ok(path) = path.canonicalize() else {
@@ -344,7 +344,7 @@ fn note_package_root_file(path: &Path) {
     );
 }
 
-/// Print the files the build of `input` reads (`new-plans/implementation.md`
+/// Print the files the build of `input` reads (`design/implementation.md`
 /// § 패키지 source 트리와 파일 입력): with `candidates`, also the paths with
 /// no file yet.
 fn list_files(input: &Path, deps: bool, candidates: bool) {

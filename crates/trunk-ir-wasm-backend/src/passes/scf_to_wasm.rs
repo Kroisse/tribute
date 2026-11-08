@@ -201,7 +201,7 @@ impl std::fmt::Display for SwitchLoweringReason {
             Self::UnsupportedDiscriminantType(ty) => {
                 write!(
                     f,
-                    "unsupported discriminant type `{ty}`; expected `core.i32` or `core.i64`"
+                    "unsupported discriminant type `{ty}`; expected `core.i32`, `core.i64`, or `core.index`"
                 )
             }
             Self::CaseValueOutsideRange(SwitchWidth::I32) => {
@@ -225,7 +225,8 @@ impl std::fmt::Display for SwitchLoweringReason {
 
 fn switch_width(ctx: &IrContext, value: ValueRef) -> Option<SwitchWidth> {
     let ty = ctx.value_ty(value);
-    if core::I32::matches(ctx, ty) {
+    // A Wasm `core.index` is a `core.i32`.
+    if core::I32::matches(ctx, ty) || core::Index::matches(ctx, ty) {
         Some(SwitchWidth::I32)
     } else if core::I64::matches(ctx, ty) {
         Some(SwitchWidth::I64)
@@ -408,7 +409,15 @@ impl OpRewritePattern for ScfSwitchPattern<'_> {
             return Some(());
         }
 
-        let discriminant = arms.discriminant;
+        let mut discriminant = arms.discriminant;
+        if core::Index::matches(ctx, ctx.value_ty(discriminant)) {
+            let i32_ty = core::I32::type_ref(ctx);
+            let cast = core::UnrealizedConversionCast::operands(discriminant)
+                .results(i32_ty)
+                .build(ctx, loc);
+            rewriter.insert_op(cast.op_ref());
+            discriminant = cast.result(ctx);
+        }
         let discriminant_ty = ctx.value_ty(discriminant);
         let condition_ty = core::I32::type_ref(ctx);
         let case_count = arms.cases.len();
@@ -914,6 +923,34 @@ mod tests {
     }
 
     #[test]
+    fn index_switch_compares_its_discriminant_as_i32() {
+        let output = lower_text(
+            r#"core.module @test {
+  func.func @main(%choice: core.index) -> core.nil {
+    scf.index_switch %choice : (core.index) -> ()
+    case 0 {
+      scf.yield
+    }
+    case 2 {
+      scf.yield
+    }
+    default {
+      scf.yield
+    }
+    func.return
+  }
+}"#,
+        );
+
+        assert_no_scf_switch(&output);
+        assert!(
+            output.contains("core.unrealized_conversion_cast %0 : core.index to core.i32"),
+            "{output}"
+        );
+        assert_eq!(output.matches("wasm.i32_eq").count(), 2, "{output}");
+    }
+
+    #[test]
     fn lowers_i64_switch_cases_with_i64_comparisons() {
         let output = lower_text(
             r#"core.module @test {
@@ -1055,7 +1092,7 @@ mod tests {
     func.return
   }
 }"#,
-                "unsupported discriminant type `core.i16`; expected `core.i32` or `core.i64`",
+                "unsupported discriminant type `core.i16`; expected `core.i32`, `core.i64`, or `core.index`",
             ),
             (
                 "rejects shape valid out of range case without mutating",

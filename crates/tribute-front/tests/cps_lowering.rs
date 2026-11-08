@@ -1596,9 +1596,7 @@ fn classify_list(values: List(Int)) -> Int {
     let ir = run_ast_pipeline_with_ir(db, source);
     let pair = checked_logical_function(ir, "classify_pair");
     assert!(
-        pair.contains("adt.variant_is")
-            && pair.contains("adt.variant_cast")
-            && pair.contains("arith.andi"),
+        pair.contains("adt.variant_is") && pair.contains("arith.andi"),
         "two-field variant checks must combine both source patterns:\n{pair}"
     );
     assert_occurrences(pair, "adt.variant_get", 8);
