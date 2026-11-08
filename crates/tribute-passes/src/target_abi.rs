@@ -36,7 +36,6 @@ const ROOT_DONE_K_SYMBOL: &str = "__tribute_done_k";
 const ROOT_UNHANDLED_SYMBOL: &str = "__tribute_unhandled";
 const ROOT_COMPLETION_CELL_NAME: &str = "__tribute_completion_cell";
 const ERASED_COMPLETION_CELL_NAME: &str = "__tribute_erased_completion_cell";
-const ROOT_COMPLETION_CELL_VALUE_FIELD: &str = "value";
 const DELIMIT_DONE_PREFIX: &str = "__tribute_delimit_done";
 const DELIMIT_UNHANDLED_PREFIX: &str = "__tribute_delimit_unhandled";
 
@@ -979,13 +978,7 @@ fn completion_cell_type(ctx: &mut IrContext, value_ty: TypeRef) -> TypeRef {
     } else {
         ERASED_COMPLETION_CELL_NAME
     };
-    adt::Struct::from_fields(
-        ctx,
-        name,
-        [(ROOT_COMPLETION_CELL_VALUE_FIELD, value_ty)],
-        AttributeMap::new(),
-    )
-    .as_type_ref()
+    adt::Struct::from_fields(ctx, name, [value_ty], AttributeMap::new()).as_type_ref()
 }
 
 /// Recover semantic R only from authenticated callable and nominal frame metadata.
@@ -1117,8 +1110,7 @@ fn validate_root_continuation_frame(
             TargetAbiError::new("target root bridge: worker frame layout provenance is malformed")
         })?;
     // `continuation_frame::layout_type` places Done then Dispatch.
-    let fields: Vec<_> = layout_struct.fields(ctx).collect();
-    let [(_, done), (_, dispatch)] = fields.as_slice() else {
+    let [done, dispatch] = layout_struct.fields(ctx) else {
         return Err(TargetAbiError::new(
             "target root bridge: worker frame layout must contain done then dispatch",
         ));
@@ -1985,7 +1977,7 @@ mod tests {
             !Done = closure.closure<func.func_sig<(!Answer) -> core.never>>
             !Resume = closure.closure<func.func_sig<(!Evidence, !Frame, tribute_rt.anyref) -> core.never>>
             !Dispatch = closure.closure<func.func_sig<(!Evidence, !Resume, core.i32, core.i32, core.i32, tribute_rt.anyref) -> core.never>>
-            !{frame_name} = adt.struct<{frame_name}(done: !Done, dispatch: !Dispatch), {{tribute.cps_continuation_frame_result = !Answer}}>
+            !{frame_name} = adt.struct<{frame_name}, (!Done, !Dispatch), {{tribute.cps_continuation_frame_result = !Answer}}>
             func.func @run(%ev: !Evidence, %dispatch: !Dispatch, %resume: !Resume, %payload: tribute_rt.anyref) -> core.never attributes {{tribute.calling_convention = "cps"}} {{
                 effect.dispatch_cps @State @get(%payload) [%ev, %dispatch, %resume] -> !Answer
             }}
@@ -2373,15 +2365,12 @@ mod tests {
         let frame_layout = ctx
             .type_alias_by_text(frame_name)
             .expect("worker frame must retain its exact nominal layout");
-        let fields: Vec<_> = adt::Struct::from_type_ref(&ctx, frame_layout)
+        let fields = adt::Struct::from_type_ref(&ctx, frame_layout)
             .expect("frame layout must be a valid adt.struct")
-            .fields(&ctx)
-            .collect();
-        let [(done_name, done_ty), (dispatch_name, dispatch_ty)] = fields.as_slice() else {
+            .fields(&ctx);
+        let [done_ty, dispatch_ty] = fields else {
             panic!("frame must have distinct Done and Dispatch fields");
         };
-        assert_eq!(*done_name, Symbol::new("done"));
-        assert_eq!(*dispatch_name, Symbol::new("dispatch"));
         assert_ne!(*worker_frame, *done_ty);
         assert_ne!(*done_ty, *dispatch_ty);
         assert!(wrapper_ops.iter().any(|op| {
@@ -2655,13 +2644,8 @@ mod tests {
                 if frame_result { nil } else { i32_ty },
             );
             if malformed_layout {
-                let wrong = adt::Struct::from_fields::<String>(
-                    &mut ctx,
-                    frame_name,
-                    [],
-                    AttributeMap::new(),
-                )
-                .as_type_ref();
+                let wrong = adt::Struct::from_fields(&mut ctx, frame_name, [], AttributeMap::new())
+                    .as_type_ref();
                 ctx.register_type_alias(Symbol::new(frame_name), wrong);
             }
             let worker = func::func_sig(&mut ctx, [evidence, frame], [never]).as_type_ref();
@@ -2796,7 +2780,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !semantic = closure.closure<func.func_sig<() -> core.i32>>
-  !_closure = adt.struct<_closure(func_ptr: core.i32, env: tribute_rt.anyref)>
+  !_closure = adt.struct<_closure, (core.i32, tribute_rt.anyref)>
   func.func @factory(%callback: !semantic) -> core.i32 attributes {tribute.calling_convention = "direct"} {
     func.unreachable
   }

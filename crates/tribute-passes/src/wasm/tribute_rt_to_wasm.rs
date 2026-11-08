@@ -51,7 +51,7 @@ fn f64_type(ctx: &mut IrContext) -> TypeRef {
 }
 
 /// Get the BoxedF64 struct type:
-/// `adt.struct<_BoxedF64(value: core.f64), {layout = "boxed_f64"}>`
+/// `adt.struct<_BoxedF64, (core.f64), {layout = "boxed_f64"}>`
 fn boxed_f64_type(ctx: &mut IrContext) -> TypeRef {
     let f64_ty = f64_type(ctx);
     let mut attrs = AttributeMap::new();
@@ -59,7 +59,7 @@ fn boxed_f64_type(ctx: &mut IrContext) -> TypeRef {
     attrs
         .view_mut(ctx)
         .insert(tribute_ir::runtime_layout::LAYOUT_ATTR, layout);
-    adt::Struct::from_fields(ctx, "_BoxedF64", [("value", f64_ty)], attrs).as_type_ref()
+    adt::Struct::from_fields(ctx, "_BoxedF64", [f64_ty], attrs).as_type_ref()
 }
 
 /// Create i31 unbox operations (ref_cast to i31ref + i31_get_s/u).

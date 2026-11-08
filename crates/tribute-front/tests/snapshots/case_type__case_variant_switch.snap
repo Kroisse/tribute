@@ -3,7 +3,7 @@ source: crates/tribute-front/tests/case_type.rs
 expression: ir_text
 ---
 core.module @test {
-  !"pkg::Shape" = adt.enum<"pkg::Shape" { Circle(core.i32), Rect(core.i32, core.i32), Dot(), Line(core.i32, core.i32) }>
+  !"pkg::Shape" = adt.enum<"pkg::Shape", [(core.i32), (core.i32, core.i32), (), (core.i32, core.i32)]>
   !t1 = tribute_control.func_sig<(core.i32, core.i32) -> core.i32>
   !"pkg::Shape_1" = adt.typeref<{name = "pkg::Shape"}>
   !t0 = tribute_control.func_sig<(!"pkg::Shape_1") -> core.i32 row(| 'a0)>

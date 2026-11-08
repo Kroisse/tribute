@@ -511,8 +511,7 @@ mod tests {
         let i32_ty = core::I32::type_ref(&mut ctx);
 
         // Point(x: i32, y: i32) - two scalar fields
-        let point_ty =
-            crate::native::rtti::make_struct_type(&mut ctx, &[("x", i32_ty), ("y", i32_ty)]);
+        let point_ty = crate::native::rtti::make_struct_type(&mut ctx, &[i32_ty, i32_ty]);
         let output = build_and_lower(&mut ctx, loc, point_ty, &[i32_ty, i32_ty]);
         insta::assert_snapshot!(output);
     }

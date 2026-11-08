@@ -1407,7 +1407,7 @@ Compiler가 소유하는 runtime 저장 layout은 예약 type 속성 `layout`으
   같은 의미의 값이라도 저장 layout이 다르면 이 속성으로 구별하지 않는다.
 - 일반 type 속성처럼 interning identity에 참여한다. `layout`이 없는 같은 모양의
   타입과는 다른 타입이다. Textual form은 일반 type 속성과 같다:
-  `adt.struct<_closure(entries: core.ptr), {layout = "closure"}>`.
+  `adt.struct<_closure, (core.ptr), {layout = "closure"}>`.
 - 속성은 그 layout을 만드는 compiler의 canonical 생성자만 붙인다. Frontend와
   소스에서 온 타입은 이 속성을 갖지 않는다. 그래서 사용자 타입이 같은 이름이나
   모양을 가져도 compiler layout으로 취급되지 않는다.
@@ -1421,46 +1421,45 @@ Compiler가 소유하는 runtime 저장 layout은 예약 type 속성 `layout`으
 
 ### `adt.struct` nominal layout type
 
-`adt.struct`는 이름 있는 nominal struct layout이다. 이름과 필드 이름을 항상 가지며
-전용 textual 문법을 쓴다. 이름은 식별자(`[A-Za-z_][A-Za-z0-9_]*`)면 그대로 쓰고,
-아니면 따옴표 문자열로 쓴다(`adt.struct<"Nested::Closure"(…)>`, `"0": core.i32`).
-Struct 이름과 필드 이름은 타입 이름공간의 이름이며 symbol table의 정의가
-아니므로 `@`를 붙이지 않는다.
+`adt.struct`는 이름 있는 nominal struct layout이다. 이름과 필드 타입의 위치 목록을
+가지며 전용 textual 문법을 쓴다. 필드 이름은 layout이 아니라 source 선언의
+[nominal 선언](#nominal-선언)이 소유하며, 필드는 위치로만
+가리킨다. 이름은 식별자(`[A-Za-z_][A-Za-z0-9_]*`)면 그대로 쓰고, 아니면 따옴표
+문자열로 쓴다(`adt.struct<"Nested::Closure", (…)>`). Struct 이름은 타입 이름공간의
+이름이며 symbol table의 정의가 아니므로 `@`를 붙이지 않는다.
 
 ```text
-adt.struct<Point(x: core.i32, y: core.i32)>
-adt.struct<Node(value: core.i32 {k = "v"}, next: adt.typeref<Node>)>
-adt.struct<_closure(entries: core.ptr), {layout = "closure"}>
-adt.struct<_closure_captures(entries: core.ptr, _0: core.i32),
+adt.struct<Point, (core.i32, core.i32)>
+adt.struct<Node, (core.i32 {k = "v"}, adt.typeref<Node>)>
+adt.struct<_closure, (core.ptr), {layout = "closure"}>
+adt.struct<_closure_captures, (core.ptr, core.i32),
   {layout = "closure_captures",
-   closure_base = adt.struct<_closure(entries: core.ptr), {layout = "closure"}>}>
-adt.struct<Empty()>
+   closure_base = adt.struct<_closure, (core.ptr), {layout = "closure"}>}>
+adt.struct<Empty, ()>
 ```
 
-- 저장 표현은 다음과 같다. 필드 타입은 `params`에 선언 순서대로 둔다. 필드 이름은
-  각 필드의 [매개변수 속성](#타입-매개변수-속성) `name`(문자열)이고, struct 이름은
-  type 속성 `name`(문자열)이다. 필드 하나의 다른 속성은 같은 매개변수 속성
-  dictionary에 함께 둔다.
-- 이름과 모든 필드 이름은 필수이고, 필드 이름은 struct 안에서 겹치지 않는다.
-  매개변수가 없으면 필드가 없는 struct다. 필드 목록을 담는 별도 type 속성은 없다.
-  Type verifier가 이 규칙을 모든 interned `adt.struct`에 적용한다.
-- 필드 속성 안의 `name`과 type 속성의 `name`, `param_attrs`는 전용 문법이
-  소유한다. Textual form의 필드 속성과 type 속성 dictionary에는 쓰지 않는다.
-  `layout` 같은 나머지 type 속성은 `<…>` 안 마지막 원소로 둔다.
+- 저장 표현은 다음과 같다. 필드 타입은 `params`에 선언 순서대로 두고, struct
+  이름은 type 속성 `name`(문자열)이다. 필드 하나의 속성은 그 필드의
+  [매개변수 속성](#타입-매개변수-속성)이며, textual form은 필드 타입 뒤에 쓴다.
+- 이름은 필수다. 매개변수가 없으면 필드가 없는 struct다. 필드 목록을 담는 별도
+  type 속성은 없다. Type verifier가 이 규칙을 모든 interned `adt.struct`에 적용한다.
+- Type 속성의 `name`과 `param_attrs`는 전용 문법이 소유한다. Textual form의 type
+  속성 dictionary에는 쓰지 않는다. `layout` 같은 나머지 type 속성은 `<…>` 안 마지막
+  원소로 둔다.
 - 필드 타입이 매개변수이므로 일반 타입 순회와 변환은 필드 타입에 그대로 도달한다.
-  필드 수를 유지하는 변환은 필드 이름과 속성을 위치 그대로 둔다.
+  필드 수를 유지하는 변환은 필드 속성을 위치 그대로 둔다.
 - 재귀 참조는 같은 이름의 `adt.typeref`로 표현한다. `adt.struct`는 자기 자신을
   매개변수로 갖지 않는다.
 - Row 매개변수를 가진 선언의 layout은 type 속성 `row_params`를 가지며, 필드 type의
   tail은 그 binder의 index다
   ([Nominal row 인자](tribute-dialects.md#nominal-row-인자)). Textual form은
-  binder를 이름과 필드 목록 사이에 쓴다: `adt.struct<Callback['a0](run: ...)>`.
+  binder를 이름 바로 뒤에 쓴다: `adt.struct<Callback['a0], (...)>`.
   `row_params`도 전용 문법이 소유한다.
 
 #### Nominal 수준과 structural 수준
 
-Struct 이름과 필드 이름은 IR에서 nominal layout을 해석하는 단계까지만 의미를
-가진다. `adt.typeref`를 같은 이름의 layout으로 해석하는 단계, ownership 계획, ABI
+Struct 이름은 IR에서 nominal layout을 해석하는 단계까지만 의미를 가진다.
+`adt.typeref`를 같은 이름의 layout으로 해석하는 단계, ownership 계획, ABI
 검증, frontend의 record pattern 해석이 여기에 속한다. 그 아래의 target lowering은
 필드의 물리 표현과 순서만 사용한다. 이름이 필요한 runtime 동작(해제, 값 출력,
 variant 판별)은 [runtime 타입 descriptor](runtime-types.md)가 맡는다. Nominal
@@ -1549,7 +1548,7 @@ Closure 저장 layout은 두 종류다.
 - `closure_base`는 closure 저장 계약이 소유하는 속성이다. `layout`처럼 canonical
   생성자만 붙이고 interning identity에 참여하며, 필드 타입을 바꾸는 타입 변환은
   이 속성 안의 base도 같은 변환으로 바꾼다. Capture layout의 앞부분 필드는 base의
-  필드와 타입과 이름이 같다. Type verifier가 이 규칙을 `"closure_captures"` layout에
+  필드와 타입과 속성이 같다. Type verifier가 이 규칙을 `"closure_captures"` layout에
   적용한다. 이 속성은 저장 표현만 설명하며, Tribute 소스와 의미적 타입 검사에는
   subtyping이 없다.
 - Capture layout 값은 변환 없이 base 자리에 놓인다(upcast). Base 값을 capture
@@ -1558,8 +1557,8 @@ Closure 저장 layout은 두 종류다.
   `closure_base`로만 정하고, 필드 모양이 prefix처럼 보인다는 사실에서 추론하지
   않는다.
 - Capture layout의 identity는 base와 capture 필드 타입 목록이다. Capture 타입 목록이
-  같은 두 closure는 같은 layout을 쓴다. 필드 이름과 struct 이름은 canonical
-  생성자가 정하며 의미를 갖지 않는다.
+  같은 두 closure는 같은 layout을 쓴다. Struct 이름은 canonical 생성자가 정하며
+  의미를 갖지 않는다.
 - Convention table 필드의 타입은 경계 안에서 `tribute_rt.convention_table_ref`이고,
   target이 자기 정적 table 참조 표현으로 바꾼다. 이 필드는 managed 참조가 아니며
   해제하지 않는다. Target은 closure의 callable type `S`마다 base를
@@ -1595,30 +1594,30 @@ storage 확정은 다음 변환을 함께 적용한다.
 
 ### `adt.enum` nominal layout type
 
-`adt.enum`은 이름 있는 nominal enum layout이다. 이름과 variant 목록을 가지며 전용
-textual 문법을 쓴다. 이름 표기 규칙은 `adt.struct`와 같다.
+`adt.enum`은 이름 있는 nominal enum layout이다. 이름과 variant의 위치 목록을
+가지며 전용 textual 문법을 쓴다. Variant 이름과 필드 이름은 source 선언의
+[nominal 선언](#nominal-선언)이 소유한다. 이름 표기 규칙은
+`adt.struct`와 같다.
 
 ```text
-adt.enum<Option { None(), Some(value: T) }>
-adt.enum<List { Empty(), Cons(core.i32, adt.typeref<List>) }>
-adt.enum<"geo::Shape" { Dot(), Rect(core.f64, core.f64 {k = 1}) }, {layout = "x"}>
-adt.enum<Never {}>
+adt.enum<Option, [(), (T)]>
+adt.enum<List, [(), (core.i32, adt.typeref<List>)]>
+adt.enum<"geo::Shape", [(), (core.f64, core.f64 {k = 1})], {layout = "x"}>
+adt.enum<Never, []>
 ```
 
-- Variant는 이름과 괄호로 감싼 필드 목록이다. 필드가 없어도 괄호를 쓴다. 필드는
-  `name: type` 또는 이름 없이 `type`이며, 어느 쪽이든 그 필드의 다른 속성
-  dictionary가 뒤따를 수 있다.
+- Variant는 괄호로 감싼 필드 타입 목록이다. 필드가 없어도 괄호를 쓴다. 필드 타입
+  뒤에 그 필드의 속성 dictionary가 뒤따를 수 있다.
 - 저장 표현은 다음과 같다. Variant 하나가 `adt.enum`의 타입 매개변수 하나이며 선언
-  순서대로 놓인다. Variant는 `adt.variant` 타입이고, 그 `params`가 필드 타입, type
-  속성 `name`(문자열)이 variant 이름이다. 필드 이름이 있으면 그 필드의
-  [매개변수 속성](#타입-매개변수-속성) `name`(문자열)이다. Enum 이름은 `adt.enum`의
-  type 속성 `name`(문자열)이다.
-- Enum 이름과 모든 variant 이름은 필수이고, variant 이름은 enum 안에서 겹치지
-  않는다. 매개변수가 없으면 variant가 없는 enum이다. Variant 목록을 담는 별도 type
-  속성은 없다. Type verifier가 이 규칙을 모든 interned `adt.enum`에 적용한다.
-- Variant와 필드의 `name`, enum type 속성의 `name`은 전용 문법이 소유한다. Textual
-  form의 속성 dictionary에는 쓰지 않는다. 나머지 type 속성은 `<…>` 안 마지막
-  원소로 둔다.
+  순서대로 놓인다. Variant는 `adt.variant` 타입이고, 그 `params`가 필드 타입이다.
+  필드의 속성은 그 필드의 [매개변수 속성](#타입-매개변수-속성)이다. Enum 이름은
+  `adt.enum`의 type 속성 `name`(문자열)이다. 필드가 같은 두 variant는 같은
+  `adt.variant` 타입이며, variant는 위치로만 구별한다.
+- Enum 이름은 필수다. 매개변수가 없으면 variant가 없는 enum이다. Variant 목록을
+  담는 별도 type 속성은 없다. Type verifier가 이 규칙을 모든 interned `adt.enum`에
+  적용한다.
+- Enum type 속성의 `name`은 전용 문법이 소유한다. Textual form의 속성
+  dictionary에는 쓰지 않는다. 나머지 type 속성은 `<…>` 안 마지막 원소로 둔다.
 - Variant 매개변수는 [매개변수 속성](#타입-매개변수-속성)을 갖지 않는다. 전용 문법에
   그것을 쓸 자리가 없으므로 `adt.enum`의 `param_attrs`는 type verifier가 거부한다.
   필드의 속성은 그 variant(`adt.variant`)의 매개변수 속성이다.
@@ -1629,7 +1628,7 @@ adt.enum<Never {}>
   필드 타입에 그대로 도달한다.
 - 재귀 참조는 같은 이름의 `adt.typeref`로 표현한다.
 - Row 매개변수를 가진 선언의 layout은 `adt.struct`와 같이 `row_params`를 가지며,
-  binder를 이름과 variant 목록 사이에 쓴다: `adt.enum<Step['a0] { ... }>`.
+  binder를 이름 바로 뒤에 쓴다: `adt.enum<Step['a0], [...]>`.
 
 ### `adt.typeref` nominal reference type
 
@@ -1683,8 +1682,9 @@ adt.enum_decl "geo::Shape" [Dot, Rect]
   `Option`의 `Some`, `std::io::ReadLineResult`의 각 variant)를 만드는 pass는 그
   위치를 선언에서 이름으로 찾는다.
 - Native RTTI 생성은 struct·enum의 이름, struct의 필드 이름, variant 이름을 선언에서
-  읽는다([RTTI Table](rc.md#rtti-table)). 선언이 없는 layout의 레코드는 compiler가 정한
-  이름을 쓴다. 선언은 값의 의미를 바꾸지 않으며, `adt` operation을 내리는 target
+  읽는다([RTTI Table](rc.md#rtti-table)). 선언이 없는 layout의 레코드는 layout의
+  이름과 위치 번호(`"0"`, `"1"`, ...)를 필드와 variant의 이름으로 쓴다. 선언은
+  값의 의미를 바꾸지 않으며, `adt` operation을 내리는 target
   pass가 지운다.
 
 ### `func.func_sig` function type

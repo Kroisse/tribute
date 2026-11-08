@@ -912,6 +912,7 @@ __tribute_rtti: [record; max_index + 1]
 `__tribute_rtti` 시작 기준의 `u32` offset이며, `0`은 참조가 없음을 뜻한다. 이름은
 UTF-8 바이트이고 NUL로 끝나지 않는다. Source가 선언한 struct·enum·variant의 이름과
 struct의 필드 이름은 그 타입의 [nominal 선언](ir.md#nominal-선언)에서 읽는다.
+선언이 없는 compiler 생성 layout은 layout 이름과 위치 번호를 이름으로 쓴다.
 링크 시점에야 정해지는 값은 release 함수 주소뿐이다.
 
 ```text

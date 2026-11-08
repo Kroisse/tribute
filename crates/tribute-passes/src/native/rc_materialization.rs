@@ -303,7 +303,7 @@ fn release_moving(
         .iter()
         .zip(&offsets)
         .enumerate()
-        .filter(|&(index, ((_, ty), _))| {
+        .filter(|&(index, (ty, _))| {
             plan.is_managed_type(ctx, *ty)
                 && !moved.iter().any(|&(_, field)| field as usize == index)
         })
@@ -384,7 +384,7 @@ fn validate_replaced_field(
     }
     let fields = get_struct_fields(ctx, set.r#type(ctx))
         .ok_or_else(|| OwnershipPlanError::new("replaced-field layout is stale"))?;
-    let (_, field_ty) = fields
+    let field_ty = fields
         .get(field as usize)
         .ok_or_else(|| OwnershipPlanError::new("replaced-field index is stale"))?;
     if !plan.is_managed_type(ctx, *field_ty) {

@@ -9,9 +9,9 @@ use trunk_ir::parser::parse_test_module;
 use super::*;
 
 const CROSS_BLOCK_BORROW: &str = r#"core.module @test {
-  !Child = adt.struct<Child(value: core.i32)>
+  !Child = adt.struct<Child, (core.i32)>
   !ChildRef = adt.typeref<{name = "Child"}>
-  !Box = adt.struct<Box(child: !ChildRef)>
+  !Box = adt.struct<Box, (!ChildRef)>
   !BoxRef = adt.typeref<{name = "Box"}>
   func.func @observe(%child: !ChildRef) -> core.i32 {
     %value = adt.struct_get %child {field = 0, type = !Child} : core.i32
@@ -30,7 +30,7 @@ const CROSS_BLOCK_BORROW: &str = r#"core.module @test {
 
 const BRANCH_LOOP: &str = r#"core.module @test {
   !R = adt.typeref<{name = "R"}>
-  !Layout = adt.struct<R(x: core.i32)>
+  !Layout = adt.struct<R, (core.i32)>
   func.func @flow(%condition: core.i1, %value: !R) -> core.nil {
     ^entry:
       cf.cond_br %condition [^left, ^right]
@@ -49,9 +49,9 @@ const BRANCH_LOOP: &str = r#"core.module @test {
 }"#;
 
 const ALIAS_PROJECTION: &str = r#"core.module @test {
-  !Child = adt.struct<Child(value: core.i32)>
+  !Child = adt.struct<Child, (core.i32)>
   !ChildRef = adt.typeref<{name = "Child"}>
-  !Choice = adt.enum<Choice { Some(!ChildRef) }>
+  !Choice = adt.enum<Choice, [(!ChildRef)]>
   !ChoiceRef = adt.typeref<{name = "Choice"}>
   func.func @load(%choice: !ChoiceRef) -> !ChildRef {
     ^entry:
@@ -65,11 +65,11 @@ const ALIAS_PROJECTION: &str = r#"core.module @test {
 }"#;
 
 const NESTED_PROJECTION: &str = r#"core.module @test {
-  !Child = adt.struct<Child(value: core.i32)>
+  !Child = adt.struct<Child, (core.i32)>
   !ChildRef = adt.typeref<{name = "Child"}>
-  !Inner = adt.struct<Inner(child: !ChildRef)>
+  !Inner = adt.struct<Inner, (!ChildRef)>
   !InnerRef = adt.typeref<{name = "Inner"}>
-  !Box = adt.struct<Box(inner: !InnerRef)>
+  !Box = adt.struct<Box, (!InnerRef)>
   func.func @observe(%child: !ChildRef) -> core.i32 {
     %value = adt.struct_get %child {field = 0, type = !Child} : core.i32
     func.return %value
@@ -422,7 +422,7 @@ fn failed_facts_lookup_does_not_publish_liveness() {
         &mut ctx,
         r#"core.module @test {
   !R = adt.typeref<{name = "R"}>
-  !Layout = adt.struct<R(x: core.i32)>
+  !Layout = adt.struct<R, (core.i32)>
   func.func @bad(%value: !R) -> core.i32 {
     %field = adt.struct_get %value {field = 1, type = !Layout} : core.i32
     func.return %field

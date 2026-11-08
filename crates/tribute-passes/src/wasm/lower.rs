@@ -754,9 +754,9 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
-  !Closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
-  !Frame = adt.struct<Frame()>
-  !Env = adt.struct<Env(closure: !Closure, evidence: !Evidence, frame: !Frame)>
+  !Closure = adt.struct<_closure, (tribute_rt.convention_table_ref), {layout = "closure"}>
+  !Frame = adt.struct<Frame, ()>
+  !Env = adt.struct<Env, (!Closure, !Evidence, !Frame)>
   wasm.func @worker(%evidence: !Evidence, %closure: !Closure, %frame: !Frame) {
     %env = adt.struct_new %closure, %evidence, %frame {type = !Env} : !Env
     %loaded = adt.struct_get %env {field = 1, type = !Env} : !Evidence
@@ -1119,7 +1119,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !String = adt.enum<String { Leaf(core.bytes), Branch(tribute_rt.anyref, tribute_rt.anyref, core.i32) }>
+  !String = adt.enum<String, [(core.bytes), (tribute_rt.anyref, tribute_rt.anyref, core.i32)]>
   adt.enum_decl "String" [Leaf, Branch]
   func.func @main() -> core.nil {
     %string = adt.string_const {value = "wrong"} : core.i32

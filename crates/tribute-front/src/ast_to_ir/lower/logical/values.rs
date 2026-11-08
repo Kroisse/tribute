@@ -341,7 +341,8 @@ pub(super) fn lower_constructor<'db>(
     );
     let values =
         super::super::expr::cast_variant_args(builder, location, values, type_attr, &variant);
-    let (tag, _) = super::super::expr::constructor_variant(builder.ir, type_attr, &variant);
+    let (tag, _) =
+        super::super::expr::constructor_variant(builder.ctx, builder.ir, type_attr, &variant);
     let variant = adt::VariantNew::operands(values)
         .r#type(type_attr)
         .tag(tag)
@@ -491,7 +492,7 @@ pub(super) fn lower_record<'db>(
             let get = adt::StructGet::operands(base)
                 .r#type(layout)
                 .field(index as u32)
-                .results(field_types[index].1)
+                .results(field_types[index])
                 .build(builder.ir, location);
             builder.ir.push_op(builder.block, get.op_ref());
             ordered.push(get.result(builder.ir));
@@ -543,7 +544,8 @@ pub(super) fn lower_variant_record<'db>(
     let ordered =
         super::super::expr::cast_variant_args(builder, location, ordered, layout, variant);
     let result_ty = expr_type_for_id(builder, id);
-    let (tag, _) = super::super::expr::constructor_variant(builder.ir, layout, variant);
+    let (tag, _) =
+        super::super::expr::constructor_variant(builder.ctx, builder.ir, layout, variant);
     let value = adt::VariantNew::operands(ordered)
         .r#type(layout)
         .tag(tag)

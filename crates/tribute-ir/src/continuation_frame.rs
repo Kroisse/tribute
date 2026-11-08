@@ -46,8 +46,7 @@ pub fn layout_type(
     attrs
         .view_mut(ctx)
         .insert(RESULT_ATTR, Attribute::Type(result));
-    adt::Struct::from_fields(ctx, name, [("done", done), ("dispatch", dispatch)], attrs)
-        .as_type_ref()
+    adt::Struct::from_fields(ctx, name, [done, dispatch], attrs).as_type_ref()
 }
 
 /// A frame reference that carries its result type: the frame of a CPS
@@ -95,11 +94,11 @@ mod tests {
         assert_eq!(result_type(&ctx, frame), Some(i32_ty));
         assert_eq!(result_type(&ctx, layout), Some(i32_ty));
         assert_eq!(adt::nominal_name(&ctx, frame), Some(name));
-        itertools::assert_equal(
+        assert_eq!(
             adt::Struct::from_type_ref(&ctx, layout)
                 .unwrap()
                 .fields(&ctx),
-            [("done", done), ("dispatch", dispatch)],
+            [done, dispatch]
         );
     }
 

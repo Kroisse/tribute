@@ -526,8 +526,8 @@ mod tests {
         parse_test_module(
             ctx,
             r#"core.module @test {
-  !PreludeString = adt.enum<String { Leaf(core.bytes), Branch(tribute_rt.anyref, tribute_rt.anyref, core.i32) }>
-  !UserString = adt.enum<"user::String" { Leaf(core.bytes), Branch(tribute_rt.anyref, tribute_rt.anyref, core.i32) }>
+  !PreludeString = adt.enum<String, [(core.bytes), (tribute_rt.anyref, tribute_rt.anyref, core.i32)]>
+  !UserString = adt.enum<"user::String", [(core.bytes), (tribute_rt.anyref, tribute_rt.anyref, core.i32)]>
   adt.enum_decl "String" [Leaf, Branch]
   adt.enum_decl "user::String" [Leaf, Branch]
   func.func @main() -> core.nil {

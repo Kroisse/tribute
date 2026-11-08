@@ -60,7 +60,7 @@ fn format_box(value: Int) -> String {
 
     let ir = run_ast_pipeline_with_ir(db, source);
     assert!(
-        ir.contains(r#"!"pkg::Boxed$Int" = adt.enum<"pkg::Boxed$Int" { Empty(), Box(core.i32) }>"#),
+        ir.contains(r#"!"pkg::Boxed$Int" = adt.enum<"pkg::Boxed$Int", [(), (core.i32)]>"#),
         "Boxed(Int) must be specialized to a layout with an Int field:\n{ir}"
     );
     let format_box = ir

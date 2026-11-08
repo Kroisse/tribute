@@ -5,7 +5,7 @@
 //! extracted inside the matched region.
 
 use tribute_ir::dialect::adt;
-use tribute_ir::dialect::adt::layout::{get_enum_variants, get_struct_fields};
+use tribute_ir::dialect::adt::layout::get_struct_fields;
 use tribute_ir::dialect::list;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{arith, scf};
@@ -31,11 +31,8 @@ fn logical_tuple_pattern_layout<'db>(
     let struct_ty = super::get_or_create_logical_tuple_type(ctx, ir, pattern)
         .unwrap_or_else(|| panic!("missing typechecked logical tuple layout"))
         .1;
-    let field_tys = get_struct_fields(ir, struct_ty)
-        .expect("logical tuple layout must be an adt.struct")
-        .into_iter()
-        .map(|(_, ty)| ty)
-        .collect();
+    let field_tys =
+        get_struct_fields(ir, struct_ty).expect("logical tuple layout must be an adt.struct");
     (struct_ty, field_tys)
 }
 
@@ -177,7 +174,6 @@ fn logical_constructor_pattern<'p, 'db>(
     let ty = super::resolve_enum_type_attr_for_constructor(ctx, ir, &ctor.resolved, ctor.ty);
     let (layout, names) = match get_struct_fields(ir, ty) {
         Some(fields) => {
-            let fields = fields.into_iter().map(|(_, ty)| ty).collect();
             let names = match &*pattern.kind {
                 PatternKind::Record { .. } => ctx
                     .struct_field_names(id)
@@ -188,14 +184,7 @@ fn logical_constructor_pattern<'p, 'db>(
             (ConstructorLayout::Struct { ty, fields }, names)
         }
         None => {
-            let (tag, fields) = get_enum_variants(ir, ty)
-                .expect("logical constructor layout must be a struct or an enum")
-                .into_iter()
-                .enumerate()
-                .find_map(|(position, (tag, fields))| {
-                    (variant == ir.str(tag)).then_some((position as u32, fields))
-                })
-                .expect("resolved logical enum variant must exist");
+            let (tag, fields) = super::expr::constructor_variant(ctx, ir, ty, &variant);
             let names = match &*pattern.kind {
                 PatternKind::Record { .. } => ctx
                     .variant_field_names(ty, variant.clone())

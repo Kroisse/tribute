@@ -498,7 +498,7 @@ impl ActionPlanner<'_> {
                 ))
             })?;
             validate_allocation_result(self.ir, op, new.r#type(self.ir), self.managed_layouts)?;
-            return self.plan_owning_operands(op, 0, fields.iter().map(|(_, ty)| *ty));
+            return self.plan_owning_operands(op, 0, fields.iter().copied());
         }
         if let Ok(new) = adt::VariantNew::from_op(self.ir, op) {
             let fields = adt::Enum::from_type_ref(self.ir, new.r#type(self.ir))
@@ -579,7 +579,7 @@ impl ActionPlanner<'_> {
             let fields = get_struct_fields(self.ir, set.r#type(self.ir))
                 .ok_or_else(|| OwnershipPlanError::new("struct_set has invalid layout"))?;
             let index = set.field(self.ir) as usize;
-            let (_, field_ty) = fields
+            let field_ty = fields
                 .get(index)
                 .ok_or_else(|| OwnershipPlanError::new("struct_set field is stale"))?;
             if !types_compatible(

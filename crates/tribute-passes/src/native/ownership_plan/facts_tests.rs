@@ -11,9 +11,9 @@ use trunk_ir::parser::parse_test_module;
 use super::*;
 
 const BORROW_FIXTURE: &str = r#"core.module @test {
-  !Child = adt.struct<Child(value: core.i32)>
+  !Child = adt.struct<Child, (core.i32)>
   !ChildRef = adt.typeref<{name = "Child"}>
-  !Box = adt.struct<Box(child: !ChildRef)>
+  !Box = adt.struct<Box, (!ChildRef)>
   !BoxRef = adt.typeref<{name = "Box"}>
   func.func @observe(%child: !ChildRef) -> core.i32 {
     %value = adt.struct_get %child {field = 0, type = !Child} : core.i32
@@ -27,9 +27,9 @@ const BORROW_FIXTURE: &str = r#"core.module @test {
 }"#;
 
 const CAST_FIXTURE: &str = r#"core.module @test {
-  !Child = adt.struct<Child(value: core.i32)>
+  !Child = adt.struct<Child, (core.i32)>
   !ChildRef = adt.typeref<{name = "Child"}>
-  !Choice = adt.enum<Choice { Some(!ChildRef) }>
+  !Choice = adt.enum<Choice, [(!ChildRef)]>
   !ChoiceRef = adt.typeref<{name = "Choice"}>
   func.func @load(%choice: !ChoiceRef) -> !ChildRef {
     %erased = adt.ref_cast %choice {type = tribute_rt.anyref} : tribute_rt.anyref
@@ -111,7 +111,7 @@ fn entry_contract_views_share_one_proof_and_keep_declared_borrows() {
         &mut ctx,
         r#"core.module @test {
   !R = adt.typeref<{name = "R"}>
-  !Layout = adt.struct<R(value: core.i32)>
+  !Layout = adt.struct<R, (core.i32)>
   func.func @foreign(%value: !R) -> core.i32 attributes {abi = "C"}
   func.func @observe(%value: !R) -> core.i32 {
     %result = func.call @foreign(%value) : (!R) -> core.i32
@@ -253,7 +253,7 @@ fn malformed_projection_fails_closed_without_publishing_facts() {
     let module = parse_test_module(
         &mut ctx,
         r#"core.module @test {
-  !Child = adt.struct<Child(value: core.i32)>
+  !Child = adt.struct<Child, (core.i32)>
   !ChildRef = adt.typeref<{name = "Child"}>
   func.func @load(%child: !ChildRef) -> core.i32 {
     %value = adt.struct_get %child {field = 1, type = !Child} : core.i32

@@ -190,7 +190,7 @@ mod tests {
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
-                !Closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {{layout = "closure"}}>
+                !Closure = adt.struct<_closure, (tribute_rt.convention_table_ref), {{layout = "closure"}}>
                 func.func @transfer(%index: core.i32, %erased: tribute_rt.anyref) {{
                     {cast}
                     func.tail_call_indirect %index({arg}) attributes {{tribute.calling_convention = "cps"}} : (!Closure) -> ()
@@ -265,7 +265,7 @@ mod tests {
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !S = adt.struct<S(x: core.i32)>
+  !S = adt.struct<S, (core.i32)>
   func.func @f(%x: core.i32, %s: !S, %any: tribute_rt.anyref) { func.return }
 }"#,
         );

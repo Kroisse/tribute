@@ -62,7 +62,7 @@ pub fn described_adt_type(ctx: &mut IrContext) -> TypeRef {
     attrs
         .view_mut(ctx)
         .insert(tribute_ir::runtime_layout::LAYOUT_ATTR, layout);
-    adt::Struct::from_fields(ctx, "_described", [("descriptor", i32_ty)], attrs).as_type_ref()
+    adt::Struct::from_fields(ctx, "_described", [i32_ty], attrs).as_type_ref()
 }
 
 /// Get the Evidence type of the WASM representation.
@@ -675,7 +675,7 @@ mod tests {
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
+  !Closure = adt.struct<_closure, (tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @f(%c: !Closure) {
     %erased = core.unrealized_conversion_cast %c : !Closure to tribute_rt.anyref
     func.call @use(%erased) : (tribute_rt.anyref) -> ()
@@ -784,8 +784,8 @@ mod tests {
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Option = adt.enum<Option { None(), Some(tribute_rt.anyref) }>
-  !Sample = adt.struct<Sample(count: tribute_rt.nat, delta: tribute_rt.int, flag: tribute_rt.bool, ratio: tribute_rt.float, small: tribute_rt.intref, any: tribute_rt.anyref)>
+  !Option = adt.enum<Option, [(), (tribute_rt.anyref)]>
+  !Sample = adt.struct<Sample, (tribute_rt.nat, tribute_rt.int, tribute_rt.bool, tribute_rt.float, tribute_rt.intref, tribute_rt.anyref)>
   func.func @f(%sample: !Sample, %callee: core.i32, %value: tribute_rt.anyref) -> tribute_rt.int {
     %null = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
     %some = adt.variant_new %null {tag = 1, type = !Option} : !Option
@@ -801,11 +801,11 @@ mod tests {
         assert!(!printed.contains("tribute_rt."), "{printed}");
         assert!(
             printed.contains(
-                "Sample(count: core.i32, delta: core.i32, flag: core.i32, ratio: core.f64, small: wasm.i31ref, any: wasm.anyref)"
+                "Sample, (core.i32, core.i32, core.i32, core.f64, wasm.i31ref, wasm.anyref)"
             ),
             "{printed}"
         );
-        assert!(printed.contains("Some(wasm.anyref)"), "{printed}");
+        assert!(printed.contains("Option, [(), (wasm.anyref)]"), "{printed}");
         assert!(printed.contains(": (wasm.anyref) -> core.i32"), "{printed}");
     }
 
@@ -827,11 +827,11 @@ mod tests {
         assert_eq!(converter.convert_type_or_identity(&ctx, near), near);
         assert_eq!(converter.convert_type_or_identity(&ctx, generic), generic);
         let i32_ty = core::I32::type_ref(&mut ctx);
-        itertools::assert_equal(
+        assert_eq!(
             adt::Struct::from_type_ref(&ctx, target)
                 .unwrap()
                 .fields(&ctx),
-            [("entries", i32_ty)],
+            [i32_ty],
         );
     }
 }

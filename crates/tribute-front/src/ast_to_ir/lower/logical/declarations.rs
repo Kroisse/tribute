@@ -169,7 +169,7 @@ pub(super) fn prescan_struct_accessor_signatures<'db>(
                 .child(field_name.clone());
             let field_type = layout_fields
                 .get(index)
-                .map(|(_, ty)| *ty)
+                .copied()
                 .unwrap_or_else(|| panic!("missing logical struct accessor field type"));
             let closed = |param_types, return_type| LogicalGeneratedSignature {
                 param_types,
@@ -246,7 +246,7 @@ pub(super) fn lower_struct_accessors<'db>(
             .child(declaration.name.clone())
             .child(field_name.clone());
         let field_type = tribute_ir::dialect::adt::layout::get_struct_fields(ir, layout_type)
-            .and_then(|fields| fields.get(index).map(|(_, ty)| *ty))
+            .and_then(|fields| fields.get(index).copied())
             .unwrap_or_else(|| panic!("missing logical struct accessor field type"));
         let entry = ir.create_block(BlockData {
             location,
@@ -289,10 +289,7 @@ pub(super) fn lower_struct_accessors<'db>(
         }
         let field_types: Vec<TypeRef> =
             tribute_ir::dialect::adt::layout::get_struct_fields(ir, layout_type)
-                .unwrap_or_else(|| panic!("malformed logical struct layout"))
-                .iter()
-                .map(|(_, ty)| *ty)
-                .collect();
+                .unwrap_or_else(|| panic!("malformed logical struct layout"));
         let [setter_name, modifier_name] = field_update_names(&getter_name);
         let callback_row = Row::new([], Some(0));
         let callback = tribute_control::FuncSig::params([field_type], field_type)

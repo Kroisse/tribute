@@ -3,8 +3,8 @@ source: crates/tribute-front/tests/case_type.rs
 expression: ir_text
 ---
 core.module @test {
-  !"pkg::Option" = adt.enum<"pkg::Option" { Some(tribute_rt.anyref), None() }>
-  !"pkg::Option$Nat" = adt.enum<"pkg::Option$Nat" { Some(core.i32), None() }>
+  !"pkg::Option" = adt.enum<"pkg::Option", [(tribute_rt.anyref), ()]>
+  !"pkg::Option$Nat" = adt.enum<"pkg::Option$Nat", [(core.i32), ()]>
 
   adt.enum_decl "pkg::Option" [Some, None]
   adt.enum_decl "pkg::Option$Nat" [Some, None]

@@ -1703,9 +1703,9 @@ fn keep_first(first: First) -> First { first }
     let ir = run_ast_pipeline_with_ir(db, source);
     assert_logical_boundary(ir);
     for field in [
-        "!\"pkg::Node\" = adt.struct<\"pkg::Node\"(next: adt.typeref<{name = \"pkg::Node\"}>)>",
-        "!\"pkg::First\" = adt.struct<\"pkg::First\"(second: adt.typeref<{name = \"pkg::Second\"}>)>",
-        "!\"pkg::Second\" = adt.struct<\"pkg::Second\"(first: adt.typeref<{name = \"pkg::First\"}>)>",
+        "!\"pkg::Node\" = adt.struct<\"pkg::Node\", (adt.typeref<{name = \"pkg::Node\"}>)>",
+        "!\"pkg::First\" = adt.struct<\"pkg::First\", (adt.typeref<{name = \"pkg::Second\"}>)>",
+        "!\"pkg::Second\" = adt.struct<\"pkg::Second\", (adt.typeref<{name = \"pkg::First\"}>)>",
     ] {
         assert!(
             ir.contains(field),

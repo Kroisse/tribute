@@ -68,10 +68,7 @@ fn native_closure_layout(ctx: &mut IrContext, ty: TypeRef) -> Option<TypeRef> {
         return None;
     }
     let ptr_ty = core::Ptr::params().intern(ctx).as_type_ref();
-    let fields: Vec<TypeRef> = adt::Struct::from_type_ref(ctx, ty)?
-        .fields(ctx)
-        .map(|(_, field)| field)
-        .collect();
+    let fields: Vec<TypeRef> = adt::Struct::from_type_ref(ctx, ty)?.fields(ctx).to_vec();
     let (&entries, captures) = fields.split_first()?;
     if entries == ptr_ty {
         return None;
@@ -283,9 +280,9 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Base = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
-  !Captures = adt.struct<_closure_captures(entries: tribute_rt.convention_table_ref, _0: tribute_rt.anyref), {closure_base = !Base, layout = "closure_captures"}>
-  !Other = adt.struct<Other(value: tribute_rt.anyref)>
+  !Base = adt.struct<_closure, (tribute_rt.convention_table_ref), {layout = "closure"}>
+  !Captures = adt.struct<_closure_captures, (tribute_rt.convention_table_ref, tribute_rt.anyref),{closure_base = !Base, layout = "closure_captures"}>
+  !Other = adt.struct<Other, (tribute_rt.anyref)>
   tribute_rtti.layout {type = !Captures, index = 32, fields = ["raw", "dynamic"]}
   tribute_rtti.layout {type = !Base, index = 33, fields = ["raw"]}
   tribute_rtti.layout {type = !Other, index = 34, fields = ["dynamic"]}
@@ -396,8 +393,8 @@ mod tests {
     fn test_closure_struct_adaptation() {
         let result = adapt_then_lower_func(
             r#"core.module @test {
-  !Base = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
-  !Captures = adt.struct<_closure_captures(entries: tribute_rt.convention_table_ref, _0: core.ptr), {closure_base = !Base, layout = "closure_captures"}>
+  !Base = adt.struct<_closure, (tribute_rt.convention_table_ref), {layout = "closure"}>
+  !Captures = adt.struct<_closure_captures, (tribute_rt.convention_table_ref, core.ptr),{closure_base = !Base, layout = "closure_captures"}>
   func.func @test_fn() -> core.i32 {
     %0 = tribute_rt.convention_table [@lifted_fn] : tribute_rt.convention_table_ref
     %1 = mem.null : core.ptr
@@ -417,8 +414,8 @@ mod tests {
     fn test_closure_struct_anyref_adaptation() {
         let result = adapt_then_lower_func(
             r#"core.module @test {
-  !Base = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
-  !Captures = adt.struct<_closure_captures(entries: tribute_rt.convention_table_ref, _0: tribute_rt.anyref), {closure_base = !Base, layout = "closure_captures"}>
+  !Base = adt.struct<_closure, (tribute_rt.convention_table_ref), {layout = "closure"}>
+  !Captures = adt.struct<_closure_captures, (tribute_rt.convention_table_ref, tribute_rt.anyref),{closure_base = !Base, layout = "closure_captures"}>
   func.func @test_fn(%1: tribute_rt.anyref) -> core.i32 {
     %0 = tribute_rt.convention_table [@lifted_fn] : tribute_rt.convention_table_ref
     %2 = adt.struct_new %0, %1 {type = !Captures} : !Captures
