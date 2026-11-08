@@ -121,6 +121,18 @@ operand/result 타입이나 상위 함수의 return으로 대체 시그니처를
 담지 않고 emitter가 signature를 등록한 결과에서 얻는다.
 Wasm 코드 생성기는 함수 본문이나 테이블 인덱스에서 CPS 여부를 추론하지 않는다.
 
+### Loop 탈출 분기
+
+`scf_to_wasm`은 `scf.loop`를 탈출 label이 되는 `wasm.block` 안의 `wasm.loop`로
+낮춘다. Wasm 분기는 대상 label을 그 사이에 있는 `block`, `loop`, `if` label의
+수로 가리키므로, loop의 `scf.continue`와 `scf.break`는 그 loop를 낮출 때 함께
+낮춘다. 이때 loop 본문 안의 `scf.if`, `scf.index_switch`, `scf.loop`는 이미
+Wasm 구조이고, 안쪽 loop의 탈출은 그 loop가 맡는다.
+`scf.continue`는 가장 가까운 `wasm.loop`까지의 label 수를, `scf.break`는
+그보다 하나 바깥인 탈출 `wasm.block`까지의 label 수를 `wasm.br`의 target으로
+쓴다. 따라서 탈출 분기는 loop 본문 바로 아래뿐 아니라 중첩된 if나 switch arm
+안에 있어도 된다.
+
 ### Switch 지원 조건
 
 `scf_to_wasm`은 `scf.index_switch`를 case 순서대로 중첩된 비교와
