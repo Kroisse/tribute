@@ -17,7 +17,7 @@ familiar syntax.
 - **Multiple Targets**: Cranelift (native) and WasmGC
 
 Current implementation support is narrower than the language design. See the
-[compiler capability matrix](design/capabilities.md) for audited frontend,
+[compiler capabilities document](docs/capabilities.md) for audited frontend,
 native, and WasmGC status. Compilation alone is not execution evidence.
 
 ## Quick Example
@@ -155,7 +155,7 @@ coverage, and platform checks; require successful CI before merging.
 ## Design Documents
 
 The `design/` directory contains the authoritative language and compiler
-design. [`design/capabilities.md`](design/capabilities.md) separately
+design. [`docs/capabilities.md`](docs/capabilities.md) separately
 records what the current implementation has demonstrated; design intent alone
 is not a support claim.
 
