@@ -8,6 +8,7 @@ core.module @test {
   !"pkg::Shape_1" = adt.typeref<{name = "pkg::Shape"}>
   !t0 = tribute_control.func_sig<(!"pkg::Shape_1") -> core.i32 row(| 'a0)>
 
+  adt.enum_decl "pkg::Shape" [Circle, Rect, Dot, Line]
   tribute_control.func @"std::Nat::*"(%arg0: core.i32, %arg1: core.i32) -> core.i32
   tribute_control.func @"pkg::area"['a0](%0: !"pkg::Shape_1") -> core.i32 row(| 'a0) inferred {
       %1 = adt.variant_tag %0 {type = !"pkg::Shape"}

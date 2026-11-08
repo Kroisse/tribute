@@ -162,7 +162,8 @@ pub(crate) fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeCon
         .add_pattern(ArrayLenPattern)
         .add_pattern(RefNullPattern)
         .add_pattern(RefIsNullPattern)
-        .add_pattern(RefCastPattern);
+        .add_pattern(RefCastPattern)
+        .add_pattern(adt::EraseNominalDecls);
     applicator.apply_partial(ctx, module);
     for layout in tribute_rtti::Layout::declared(ctx, module) {
         trunk_ir::rewrite::erase_op(ctx, layout.op_ref());
