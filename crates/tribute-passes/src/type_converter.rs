@@ -338,10 +338,7 @@ mod tests {
     }
 
     fn nominal_reference_type(ctx: &mut IrContext) -> TypeRef {
-        tribute_ir::dialect::adt::Typeref::params()
-            .name("String")
-            .intern(ctx)
-            .as_type_ref()
+        tribute_ir::dialect::adt::Typeref::named(ctx, "String", []).as_type_ref()
     }
 
     fn struct_type(ctx: &mut IrContext) -> TypeRef {

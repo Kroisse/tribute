@@ -4,6 +4,9 @@ mod syntax;
 
 pub use syntax::{FieldNames, VariantNames};
 
+use crate::dialect::tribute_control::{
+    ROW_ARGS_ATTR, ROW_PARAMS_ATTR, Row, display_layout_binders, parse_layout_binders,
+};
 use crate::dialect::tribute_rtti::ManagedRefType;
 use trunk_ir::asm_format::TypeAliasHint;
 use trunk_ir::dialect::core::Index;
@@ -15,12 +18,20 @@ mod adt {
     ///
     /// Field types are the type's parameters, each field's name is its parameter's
     /// `name` attribute, and the struct's name is the type's `name` attribute.
+    /// A layout whose declaration has row parameters counts its row binders
+    /// in `row_params`; a row tail inside its field types is the index of one
+    /// of them (`new-plans/ir.md` § "Nominal row 인자").
+    ///
+    /// ```text
+    /// adt.struct<Callback['a0](run: tribute_control.func_sig<(core.i64) -> core.i64 row(| 'a0)>)>
+    /// ```
     #[verify]
     #[asm_format]
     #[alias_hint]
     #[implements(ManagedRefType)]
     struct Struct<#[rest] FieldTypes> {
         name: Attr<String>,
+        row_params: Option<Attr<u32>>,
     }
 
     /// Validated wrapper for a nominal `adt.enum` layout type.
@@ -28,20 +39,42 @@ mod adt {
     /// Each variant is one type parameter: an `adt.variant` whose parameters are
     /// the variant's field types and whose `name` attribute is the variant's
     /// name. A field may carry a `name` parameter attribute. The enum's name is
-    /// the type's `name` attribute.
+    /// the type's `name` attribute. Its `row_params` are those of
+    /// [`Struct`].
+    ///
+    /// ```text
+    /// adt.enum<Step['a0] { Next(tribute_control.func_sig<() -> core.i64 row(| 'a0)>), Done() }>
+    /// ```
     #[verify]
     #[asm_format]
     #[alias_hint]
     #[implements(ManagedRefType)]
     struct Enum<#[rest] VariantTypes> {
         name: Attr<String>,
+        row_params: Option<Attr<u32>>,
     }
 
     /// `adt.typeref`: a reference to a nominal layout by its `name`.
+    ///
+    /// When the layout has row parameters, `row_args` holds one row for each
+    /// of them in order, each in the form of a callable's ability row. A
+    /// tail names a row binder of the definition that writes the type, or of
+    /// the layout inside a layout. Row arguments are part of the type's
+    /// identity, but the layout is one for all of them
+    /// (`new-plans/ir.md` § "Nominal row 인자").
+    ///
+    /// ```text
+    /// adt.typeref<Point>
+    /// adt.typeref<Callback[row(@"<State(Int)>")]>
+    /// adt.typeref<Pair[row(), row(@A | 'a0)]>
+    /// ```
+    #[verify]
+    #[asm_format]
     #[alias_hint]
     #[implements(ManagedRefType)]
     struct Typeref {
         name: Attr<String>,
+        row_args: Option<Attr<[Row]>>,
     }
 
     /// `adt.array`: a managed reference to an array object whose elements
@@ -269,9 +302,11 @@ impl TypeAliasHint for Enum {
     }
 }
 
+// Typerefs that differ only in their row arguments would share the name, so
+// one with row arguments suggests none.
 impl TypeAliasHint for Typeref {
     fn alias_hint<'a>(&self, ctx: &'a IrContext) -> Option<&'a str> {
-        Some(self.name(ctx))
+        (!ctx.type_attrs(self.0).contains_key(ROW_ARGS_ATTR)).then(|| self.name(ctx))
     }
 }
 
@@ -455,6 +490,173 @@ pub fn layout_of(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> {
     is_layout(layout).then_some(layout)
 }
 
+// === Nominal reference type ===
+
+/// A malformed `adt.typeref` type.
+#[derive(Clone, Debug, PartialEq, Eq, derive_more::Display, derive_more::Error)]
+pub enum TyperefTypeError {
+    #[display("`{ROW_ARGS_ATTR}` must be a nonempty list of rows")]
+    MalformedRowArgs,
+    #[display("row argument {index} is malformed: {reason}")]
+    MalformedRowArg { index: usize, reason: String },
+}
+
+impl trunk_ir::type_verifier::VerifyType for Typeref {
+    fn verify(ctx: &IrContext, ty: TypeRef) -> Result<Self, trunk_ir::ops::VerificationError> {
+        if let Some(args) = ctx.type_attrs(ty).get(ROW_ARGS_ATTR) {
+            let Attribute::List(rows) = args else {
+                return Err(TyperefTypeError::MalformedRowArgs.into());
+            };
+            if rows.is_empty() {
+                return Err(TyperefTypeError::MalformedRowArgs.into());
+            }
+            for (index, row) in rows.iter().enumerate() {
+                Row::from_attribute(ctx, row)
+                    .map_err(|reason| TyperefTypeError::MalformedRowArg { index, reason })?;
+            }
+        }
+        Ok(Self(ty))
+    }
+}
+
+impl Typeref {
+    /// A reference to the layout named `name`, passing `row_args` for its
+    /// row parameters in order.
+    pub fn named(
+        ctx: &mut IrContext,
+        name: impl Into<StringArg>,
+        row_args: impl IntoIterator<Item = Row>,
+    ) -> Self {
+        let row_args: Vec<_> = row_args.into_iter().collect();
+        let builder = Self::params().name(name);
+        let builder = if row_args.is_empty() {
+            builder
+        } else {
+            builder.row_args(row_args)
+        };
+        builder
+            .intern(ctx)
+            .unwrap_or_else(|error| panic!("adt.typeref: {error}"))
+    }
+
+    /// The row arguments, one for each row parameter of the layout; empty
+    /// when it has none.
+    pub fn rows(self, ctx: &IrContext) -> Vec<Row> {
+        match ctx.type_attrs(self.0).get(ROW_ARGS_ATTR) {
+            Some(Attribute::List(rows)) => rows
+                .iter()
+                .map(|row| Row::from_attribute(ctx, row).expect("verified adt.typeref row"))
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// The type attributes other than the name and the row arguments.
+    pub fn extra_attrs(
+        self,
+        ctx: &IrContext,
+    ) -> impl Iterator<Item = (StringRef, &Attribute)> + '_ {
+        ctx.get_type(self.0)
+            .attrs
+            .iter()
+            .filter(|&(key, _)| ![STRUCT_NAME_ATTR, ROW_ARGS_ATTR].contains(&ctx.str(key)))
+    }
+}
+
+/// The type of field `field` of a value of type `value_ty`, a nominal struct:
+/// the layout's field type, with the layout's row binders replaced by the
+/// value type's row arguments (`new-plans/ir.md` § "Nominal row 인자").
+/// `None` when `value_ty` has no struct layout or no such field.
+pub fn field_type(ctx: &mut IrContext, value_ty: TypeRef, field: usize) -> Option<TypeRef> {
+    let layout = Struct::from_type_ref(ctx, layout_of(ctx, value_ty)?)?;
+    let ty = layout.field_type(ctx, field)?;
+    substitute_layout_binders(ctx, layout.row_params(ctx), value_ty, ty)
+}
+
+/// `ty`, written in a layout with `row_params` binders, as seen through a
+/// value of type `value_ty`.
+fn substitute_layout_binders(
+    ctx: &mut IrContext,
+    row_params: Option<u32>,
+    value_ty: TypeRef,
+    ty: TypeRef,
+) -> Option<TypeRef> {
+    if row_params.is_none() {
+        return Some(ty);
+    }
+    let rows = Typeref::from_type_ref(ctx, value_ty)?.rows(ctx);
+    crate::dialect::tribute_control::substitute_rows(ctx, ty, &rows)
+}
+
+/// `adt.typeref<Name[row(..), ..], {attrs}>`.
+impl trunk_ir::asm_format::TypeAsmFormat for Typeref {
+    fn print(&self, p: &mut trunk_ir::printer::AsmPrinter<'_>) -> std::fmt::Result {
+        use itertools::Itertools as _;
+        use std::fmt::Write;
+        use trunk_ir::printer::display_name;
+
+        let s = p.state();
+        let ctx = s.ctx();
+        write!(p, "adt.typeref<{}", display_name(self.name(ctx)))?;
+        let rows = self.rows(ctx);
+        if !rows.is_empty() {
+            let rows = rows
+                .iter()
+                .map(crate::dialect::tribute_control::display_row_argument)
+                .format(", ");
+            write!(p, "[{rows}]")?;
+        }
+        let mut attrs = self.extra_attrs(ctx).peekable();
+        if attrs.peek().is_some() {
+            write!(p, ", {}", s.attr_dict(attrs))?;
+        }
+        p.write_char('>')
+    }
+
+    fn parse(
+        p: &mut trunk_ir::parser::AsmParser<'_>,
+        name: &str,
+    ) -> trunk_ir::parser::ParseResult<Option<TypeRef>> {
+        use trunk_ir::parser::lexer::{name_token, ws};
+        use winnow::combinator::alt;
+        use winnow::prelude::*;
+
+        if (name_token, ws, alt(('[', ',', '>')))
+            .parse_peek(p.peek())
+            .is_err()
+        {
+            return Ok(None);
+        }
+        let layout = p.parse_token("a layout name", name_token)?;
+        let rows = if p.parse_optional_punct("[") {
+            let mut rows = Vec::new();
+            loop {
+                rows.push(crate::dialect::tribute_control::parse_row_argument(p)?);
+                if !p.parse_optional_punct(",") {
+                    break;
+                }
+            }
+            p.parse_punct("]")?;
+            rows
+        } else {
+            Vec::new()
+        };
+        let attrs = parse_layout_attrs(p)?;
+        let mut attrs = named(p, attrs, &layout)?;
+        if !rows.is_empty() {
+            if attrs.view(p.ctx()).contains_key(ROW_ARGS_ATTR) {
+                return Err(p.expected("attributes without `row_args`, which the syntax writes"));
+            }
+            let ctx = p.ctx_mut();
+            let rows = rows.iter().map(|row| row.to_attribute(ctx)).collect();
+            attrs
+                .view_mut(ctx)
+                .insert(ROW_ARGS_ATTR, Attribute::List(rows));
+        }
+        p.build_type(name, Vec::new(), attrs).map(Some)
+    }
+}
+
 /// The nominal declarations of a module, by the name of the layout each one
 /// declares (`new-plans/ir.md` § "Nominal 선언").
 #[derive(Debug, Default)]
@@ -568,8 +770,53 @@ impl trunk_ir::type_verifier::VerifyType for Struct {
                 return Err(StructTypeError::ClosureBasePrefix.into());
             }
         }
+        verify_row_params(ctx, ty, data.params.iter().copied())?;
         Ok(Self(ty))
     }
+}
+
+/// A layout's `row_params` that do not bind its field types' tails.
+#[derive(Clone, Debug, PartialEq, Eq, derive_more::Display, derive_more::Error)]
+pub enum LayoutRowError {
+    #[display("`{ROW_PARAMS_ATTR}` counts at least one row binder")]
+    NoBinders,
+    #[display("row tail 'a{_0} names no binder of the layout")]
+    UnboundTail(#[error(not(source))] u32),
+    #[display("a field row is malformed: {_0}")]
+    MalformedRow(#[error(not(source))] String),
+}
+
+/// Check that a layout with `row_params` binders writes only those binders
+/// as tails in `fields` (`new-plans/ir.md` § "Nominal row 인자").
+fn verify_row_params(
+    ctx: &IrContext,
+    layout: TypeRef,
+    fields: impl Iterator<Item = TypeRef>,
+) -> Result<(), LayoutRowError> {
+    let Some(binders) = ctx.type_attrs(layout).get(ROW_PARAMS_ATTR) else {
+        return Ok(());
+    };
+    let binders = match binders {
+        Attribute::Int(count) if *count > 0 => *count,
+        _ => return Err(LayoutRowError::NoBinders),
+    };
+    let mut error = None;
+    for field in fields {
+        crate::dialect::tribute_control::visit_rows(ctx, field, &mut |row| {
+            let checked =
+                row.map_err(LayoutRowError::MalformedRow)
+                    .and_then(|row| match row.tail {
+                        Some(tail) if i128::from(tail) >= binders => {
+                            Err(LayoutRowError::UnboundTail(tail))
+                        }
+                        _ => Ok(()),
+                    });
+            if let Err(found) = checked {
+                error.get_or_insert(found);
+            }
+        });
+    }
+    error.map_or(Ok(()), Err)
 }
 
 impl Struct {
@@ -619,15 +866,15 @@ impl Struct {
             .filter(|&(key, _)| ctx.str(key) != STRUCT_NAME_ATTR)
     }
 
-    /// The type attributes other than the name and the field attributes.
+    /// The type attributes other than the name, the row binders, and the
+    /// field attributes.
     pub fn extra_attrs(
         self,
         ctx: &IrContext,
     ) -> impl Iterator<Item = (StringRef, &Attribute)> + '_ {
-        ctx.get_type(self.0)
-            .attrs
-            .iter()
-            .filter(|&(key, _)| ![STRUCT_NAME_ATTR, PARAM_ATTRS_ATTR].contains(&ctx.str(key)))
+        ctx.get_type(self.0).attrs.iter().filter(|&(key, _)| {
+            ![STRUCT_NAME_ATTR, ROW_PARAMS_ATTR, PARAM_ATTRS_ATTR].contains(&ctx.str(key))
+        })
     }
 
     /// Each field as an owned `(name, type, attributes)` triple, for rebuilding
@@ -776,8 +1023,9 @@ fn write_struct_type(
         });
     write!(
         p,
-        "adt.struct<{}({fields})",
-        display_name(adt_struct.name(ctx))
+        "adt.struct<{}{}({fields})",
+        display_name(adt_struct.name(ctx)),
+        display_layout_binders(adt_struct.row_params(ctx).unwrap_or(0)),
     )?;
     let mut attrs = adt_struct.extra_attrs(ctx).peekable();
     if attrs.peek().is_some() {
@@ -786,23 +1034,30 @@ fn write_struct_type(
     p.write_char('>')
 }
 
-/// Parse the rest of `adt.struct<Name(field: type {attrs}, ...), {attrs}>`
+/// Parse the rest of `adt.struct<Name['a0](field: type {attrs}, ...), {attrs}>`
 /// after its opening bracket: each field's name becomes its parameter's
-/// `name` attribute, and the struct's name the type's.
+/// `name` attribute, the struct's name the type's, and the binder list, if
+/// any, its `row_params`.
 ///
-/// The syntax owns both names, so `name` may not appear in either
-/// dictionary. Text that does not begin as `Name(` is the generic spelling.
+/// The syntax owns the names and the binders, so neither may appear in a
+/// dictionary. Text that does not begin as `Name(` or `Name[` is the
+/// generic spelling.
 fn parse_struct_type(
     p: &mut trunk_ir::parser::AsmParser<'_>,
     name: &str,
 ) -> trunk_ir::parser::ParseResult<Option<TypeRef>> {
     use trunk_ir::parser::lexer::{name_token, ws};
+    use winnow::combinator::alt;
     use winnow::prelude::*;
 
-    if (name_token, ws, '(').parse_peek(p.peek()).is_err() {
+    if (name_token, ws, alt(('(', '[')))
+        .parse_peek(p.peek())
+        .is_err()
+    {
         return Ok(None);
     }
     let struct_name = p.parse_token("a struct name", name_token)?;
+    let binders = parse_layout_binders(p)?;
     let fields = p.parse_delimited("(", ")", |p| {
         let field = p.parse_token("a field name", name_token)?;
         p.parse_punct(":")?;
@@ -814,7 +1069,26 @@ fn parse_struct_type(
         params.push((ty, named(p, attrs, &field)?));
     }
     let attrs = named(p, attrs, &struct_name)?;
+    let attrs = with_binders(p, attrs, binders)?;
     p.build_type(name, params, attrs).map(Some)
+}
+
+/// `attrs` with the `row_params` a layout's binder list writes, which
+/// `attrs` may not hold.
+fn with_binders(
+    p: &mut trunk_ir::parser::AsmParser<'_>,
+    mut attrs: AttributeMap,
+    binders: u32,
+) -> trunk_ir::parser::ParseResult<AttributeMap> {
+    if attrs.view(p.ctx()).contains_key(ROW_PARAMS_ATTR) {
+        return Err(p.expected("attributes without `row_params`, which the syntax writes"));
+    }
+    if binders > 0 {
+        attrs
+            .view_mut(p.ctx_mut())
+            .insert(ROW_PARAMS_ATTR, Attribute::Int(i128::from(binders)));
+    }
+    Ok(attrs)
 }
 
 /// The type attributes after a layout's body, `, {attrs}`, and its `>`.
@@ -885,6 +1159,7 @@ impl trunk_ir::type_verifier::VerifyType for Enum {
             }
             names.push(name);
         }
+        verify_row_params(ctx, ty, data.params.iter().copied())?;
         Ok(Self(ty))
     }
 }
@@ -911,7 +1186,7 @@ impl Enum {
             .find_map(|(name, fields)| (name == tag).then_some(fields))
     }
 
-    /// The type attributes other than the name.
+    /// The type attributes other than the name and the row binders.
     pub fn extra_attrs(
         self,
         ctx: &IrContext,
@@ -919,7 +1194,7 @@ impl Enum {
         ctx.get_type(self.0)
             .attrs
             .iter()
-            .filter(|&(key, _)| ctx.str(key) != STRUCT_NAME_ATTR)
+            .filter(|&(key, _)| ![STRUCT_NAME_ATTR, ROW_PARAMS_ATTR].contains(&ctx.str(key)))
     }
 }
 
@@ -989,7 +1264,12 @@ fn write_enum_type(p: &mut trunk_ir::printer::AsmPrinter<'_>, adt_enum: Enum) ->
     let s = p.state();
     let ctx = s.ctx();
     let data = ctx.get_type(adt_enum.as_type_ref());
-    write!(p, "adt.enum<{} {{", display_name(adt_enum.name(ctx)))?;
+    write!(
+        p,
+        "adt.enum<{}{} {{",
+        display_name(adt_enum.name(ctx)),
+        display_layout_binders(adt_enum.row_params(ctx).unwrap_or(0)),
+    )?;
     let variants =
         data.params.iter().format_with(", ", |&variant, f| {
             let variant_data = ctx.get_type(variant);
@@ -1040,10 +1320,14 @@ fn parse_enum_type(
     use winnow::combinator::terminated;
     use winnow::prelude::*;
 
-    if (name_token, ws, '{').parse_peek(p.peek()).is_err() {
+    if (name_token, ws, winnow::combinator::alt(('{', '[')))
+        .parse_peek(p.peek())
+        .is_err()
+    {
         return Ok(None);
     }
     let enum_name = p.parse_token("an enum name", name_token)?;
+    let binders = parse_layout_binders(p)?;
     let variants = p.parse_delimited("{", "}", |p| {
         let variant = p.parse_token("a variant name", name_token)?;
         let fields = p.parse_delimited("(", ")", |p| {
@@ -1073,6 +1357,7 @@ fn parse_enum_type(
         params.push((ty, AttributeMap::new()));
     }
     let attrs = named(p, attrs, &enum_name)?;
+    let attrs = with_binders(p, attrs, binders)?;
     p.build_type(name, params, attrs).map(Some)
 }
 
@@ -1080,6 +1365,7 @@ fn parse_enum_type(
 mod tests {
     use super::*;
     use rustc_hash::FxHashMap as HashMap;
+    use trunk_ir::SymbolPath;
     use trunk_ir::parser::{parse_module, parse_test_module};
     use trunk_ir::rewrite::Module;
     use trunk_ir::validation::validate_operation_verifiers;
@@ -1366,7 +1652,7 @@ mod tests {
             "!option = adt.enum<Option { None(), Some(value: core.i32) }>",
             "adt.enum<\"geo::Shape\" { Dot(), Rect(core.f64, core.f64 {k = 1}), Named(label: core.ptr {k = 2}) }, {layout = \"x\"}>",
             "!never = adt.enum<Never {}>",
-            "adt.enum<List { Empty(), Cons(core.i32, adt.typeref<{name = \"List\"}>) }>",
+            "adt.enum<List { Empty(), Cons(core.i32, adt.typeref<List>) }>",
         ] {
             assert!(printed.contains(expected), "{expected}\n{printed}");
         }
@@ -1404,6 +1690,130 @@ mod tests {
             assert!(Enum::from_type_ref(&ctx, alias).is_none(), "{spelling}");
             let result = validate_operation_verifiers(&ctx, Module::new(&ctx, module).unwrap());
             assert!(!result.is_ok(), "{spelling}");
+        }
+    }
+
+    const ROW_LAYOUTS: &str = r#"core.module @test {
+  !Callback = adt.struct<Callback['a0](run: tribute_control.func_sig<(core.i64) -> core.i64 row(@Log | 'a0)>)>
+  !Step = adt.enum<Step['a0] { Next(tribute_control.func_sig<() -> adt.typeref<Step[row(| 'a0)]> row(| 'a0)>), Done() }>
+  !Pair = adt.struct<Pair['a0, 'a1](first: tribute_control.func_sig<() -> core.i64 row(| 'a0)>, second: tribute_control.func_sig<() -> core.i64 row(| 'a1)>)>
+  !Pure = adt.typeref<Callback[row()]>
+  !Ticked = adt.typeref<Callback[row(@Tick)]>
+  !Open = adt.typeref<Pair[row(), row(@A | 'a0)]>
+}"#;
+
+    #[test]
+    fn row_binders_and_row_arguments_round_trip() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, ROW_LAYOUTS);
+        let alias = |ctx: &IrContext, name| ctx.type_alias_by_text(name).expect("fixture alias");
+        let callback = Struct::from_type_ref(&ctx, alias(&ctx, "Callback")).unwrap();
+        assert_eq!(callback.row_params(&ctx), Some(1));
+        let step = Enum::from_type_ref(&ctx, alias(&ctx, "Step")).unwrap();
+        assert_eq!(step.row_params(&ctx), Some(1));
+        let open = Typeref::from_type_ref(&ctx, alias(&ctx, "Open")).unwrap();
+        assert_eq!(
+            open.rows(&ctx),
+            [Row::default(), Row::new([SymbolPath::new(["A"])], Some(0))]
+        );
+        // Typerefs that differ only in their row arguments are distinct
+        // types over one layout.
+        assert_ne!(alias(&ctx, "Pure"), alias(&ctx, "Ticked"));
+        assert_eq!(
+            layout_of(&ctx, alias(&ctx, "Pure")),
+            Some(callback.as_type_ref())
+        );
+        assert_eq!(
+            layout_of(&ctx, alias(&ctx, "Ticked")),
+            Some(callback.as_type_ref())
+        );
+
+        let printed = module.op().display(&ctx).to_string();
+        for expected in [
+            "adt.struct<Callback['a0](run:",
+            "adt.enum<Step['a0] { Next(",
+            "adt.typeref<Step[row(| 'a0)]>",
+            "adt.typeref<Callback[row()]>",
+            "adt.typeref<Callback[row(@Tick)]>",
+            "adt.typeref<Pair[row(), row(@A | 'a0)]>",
+        ] {
+            assert!(printed.contains(expected), "{expected}\n{printed}");
+        }
+        assert_roundtrip(&ctx, module.op());
+    }
+
+    #[test]
+    fn a_typeref_with_row_arguments_suggests_no_alias() {
+        let mut ctx = IrContext::new();
+        let plain = Typeref::named(&mut ctx, "Point", []);
+        let rowed = Typeref::named(&mut ctx, "Callback", [Row::default()]);
+        assert_eq!(plain.alias_hint(&ctx), Some("Point"));
+        assert_eq!(rowed.alias_hint(&ctx), None);
+    }
+
+    #[test]
+    fn field_types_take_the_value_types_row_arguments() {
+        let mut ctx = IrContext::new();
+        parse_test_module(&mut ctx, ROW_LAYOUTS);
+        let alias = |ctx: &IrContext, name| ctx.type_alias_by_text(name).expect("fixture alias");
+        let row = |ctx: &IrContext, ty| {
+            crate::dialect::tribute_control::FuncSig::from_type_ref(ctx, ty)
+                .expect("field is a callable")
+                .row(ctx)
+        };
+        let path = |name| SymbolPath::new([name]);
+
+        let [pure, ticked, open] = ["Pure", "Ticked", "Open"].map(|name| alias(&ctx, name));
+
+        let field = field_type(&mut ctx, pure, 0).unwrap();
+        assert_eq!(row(&ctx, field), Row::new([path("Log")], None));
+        let field = field_type(&mut ctx, ticked, 0).unwrap();
+        assert_eq!(
+            row(&ctx, field),
+            Row::new([path("Log"), path("Tick")], None)
+        );
+        let field = field_type(&mut ctx, open, 1).unwrap();
+        assert_eq!(row(&ctx, field), Row::new([path("A")], Some(0)));
+        assert_eq!(field_type(&mut ctx, open, 2), None);
+    }
+
+    #[test]
+    fn malformed_row_binders_and_row_arguments_fail_validation() {
+        for spelling in [
+            // A tail inside a layout names one of its binders.
+            "adt.struct<C['a0](run: tribute_control.func_sig<() -> core.i64 row(| 'a1)>)>",
+            "adt.struct<{name = \"C\", row_params = 0}>",
+            "adt.enum<{name = \"E\", row_params = 0}>",
+            "adt.typeref<{name = \"C\", row_args = []}>",
+            "adt.typeref<{name = \"C\", row_args = [1]}>",
+        ] {
+            let mut ctx = IrContext::new();
+            let input = format!("core.module @test {{ !bad = {spelling} }}");
+            let module = parse_module(&mut ctx, &input).expect(spelling);
+            let alias = ctx.type_aliases()[0].1;
+            assert!(
+                Struct::from_type_ref(&ctx, alias).is_none()
+                    && Enum::from_type_ref(&ctx, alias).is_none()
+                    && Typeref::from_type_ref(&ctx, alias).is_none(),
+                "{spelling}"
+            );
+            let result = validate_operation_verifiers(&ctx, Module::new(&ctx, module).unwrap());
+            assert!(!result.is_ok(), "{spelling}");
+        }
+    }
+
+    #[test]
+    fn row_binders_and_row_arguments_in_a_dictionary_are_parse_errors() {
+        for spelling in [
+            "adt.struct<C['a0](), {row_params = 1}>",
+            "adt.enum<E['a0] { A() }, {row_params = 1}>",
+            "adt.typeref<C[row()], {row_args = [{}]}>",
+            "adt.struct<C['a1]()>",
+            "adt.typeref<C[]>",
+        ] {
+            let mut ctx = IrContext::new();
+            let input = format!("core.module @test {{ !bad = {spelling} }}");
+            parse_module(&mut ctx, &input).expect_err(spelling);
         }
     }
 

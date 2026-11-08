@@ -582,7 +582,7 @@ impl<'db> NominalTypes<'db> {
     /// Create an `adt.typeref` type — a reference to a named type.
     pub(crate) fn adt_typeref(&self, ir: &mut IrContext, name: &Symbol) -> TypeRef {
         let name = ir.intern_symbol_text(name);
-        adt::Typeref::params().name(name).intern(ir).as_type_ref()
+        adt::Typeref::named(ir, name, []).as_type_ref()
     }
 }
 
